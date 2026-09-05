@@ -11,7 +11,7 @@ description: Thin Organizer(唯一 intake 前门 + ship gate, 分诊想法给 So
 ## 触发后
 
 1. 读 `multi-model-dispatch` skill（路由表 + effort/orchestration + 红线类别）。
-2. 要派活时读 `docs/dispatch/ACTIVE.md`（在飞任务 + scope 锁）。台账超过 7 天未更新或单条超 300 字，先整理再派。
+2. 要派活时才读 `docs/dispatch/ACTIVE.md`（在飞任务 + scope 锁）。每条 ≤ 300 字、不留 merged、不开 `###` 增量段，由 `scripts/ci/check_dispatch_active.py` 钉住；详情与增量日志写 `docs/dispatch/archive/<日期>-*.md`。台账超过 7 天未更新先整理再派。
 3. 汇报台账状态（N 在飞 / 几个 blocked / 哪些 scope 锁），然后直接接任务，不等确认。
 
 ## 为什么要单一前门 + 单一出货闸

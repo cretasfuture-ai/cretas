@@ -1,0 +1,323 @@
+# ACTIVE 台账条目全文存档（2026-09-05 条目上限 300 字改造）
+
+> 2026-09-05 起 `ACTIVE.md` 每条 ≤ 300 字、只记在飞行（`scripts/ci/check_dispatch_active.py` 钉住）。
+> 本文件是改造前 38 条任务条目与 Scope 锁地图的**原样存档**，标题 = 任务 ID（锚点为小写 ID）。
+> 已 merged/done 的条目也在这里；「整理时核销」的条目附了依据。增量日志见 `2026-09-05-active-organizer-log.md`。
+
+## 2026-09-02 凌晨快照的在飞前言（原文）
+
+
+**背景**：owner 明早给客户演示，通宵走操作手册；organizer 22:00 接手（交接件 `docs/audits/liushanmen/2026-09-01-ORGANIZER-HANDOFF.md`）。
+**判据口径**：每次部署都在**运行中的制品**里核排他标记 + 阴性对照，⛔ 不看 exit code；web 侧从 live `index.html` 追引用链，⛔ 不裸 grep 部署目录（孤儿 chunk 累积）。
+
+**已合 main 且已部署 prod（8 次部署，最新 `832847cec3` @ 01:19）**：#442 #444 #445 #446 #447 #448 #449 #450 #451 #452 #453 #454 #455 #456 #457 #458 #459 #460 #461 #462(nginx) #463 #464(迁移 `V20261101_23`, success=t) #465 #466 #467 #468 #469 #470。
+**已合未部署**（下次一起发）：#471 销售主录入面含税 / #472 列表列口径 / #473 表头税率读权威值 / #474 「个」不再碾成 pcs / #475 假注释订正。
+
+**在飞（🔴 演示唯一拦路）**：`FIX-LSM-TOLL-PROCESSING-AUX-20260902` — 缺陷 38：来料加工计划领不出工厂自有辅料/包材。owner 裁定**按类别分档**（RAW 保持严格客户血缘；AUXILIARY/PACKAGING/SEASONING 允许公司库存）。两个调用点（领料 `findEligibleSourceBatches` + 报工 `findEligibleBatchesForUpdate`）必须一起改。⚠️ 阳性对照必须是 `CUSTOMER_SUPPLIED` 计划 + BOM 含 `COMPANY_OWNED` AUX（全客供的单是恒真式）；🔴 阴性对照「别的客户的 RAW 仍被拒」是这次改动能上线的全部理由。Owner: subagent `ae6b1c85d180026c0`，WIP `83f7ca9ea2`。
+**在飞**：`FIX-LSM-SPEC-DIALOG-MERGE-20260902` — 缺陷 16 UI 合并（lucid-nobel），⛔ 只做 UI，`active` 列**不删**（读取方非空集：索引/2 查询/停用功能/3 前端消费方；删掉=失去「单独退役一个包装规格」），等 owner 复核。
+
+**🔒 等 owner**：规格表 `active` 列去留 / 缺陷 16 那三个重复字段（`min_order_quantity`/`lead_time_days` 读取方为空可删，两阶段：先去字段再 DROP，蓝绿窗口旧实例会读到不存在的列）。
+
+**登记未派（无执行者）**：31 开工前不做料齐检查（BOM 建计划即钉死，可纯计算短缺；现在每道工序各撞一次墙）/ 32 混批面板渲染在提交区下方且「正式报工」不可点无说明 / A 同一批次 5900 vs 5800 口径未标（⛔ 别改成一个数，并列标口径；批次行 used/reserved 仍为 0，预扣是算出来的）/ B 空态「仓库是空的」而同屏写着 56 / C 拼音搜索跨页面缺失（统一组件不逐页补）/ D 分摊成本单价加口径说明（客供料材料成本 0 是对的不是算漏）/ E 半成品批次工序投入区「无生产日期/成本 0」与总览行不一致 / F 表头点文字排序 vs 点图标 / 缺陷 33 根治：`UNIT_ALIASES` 目标码对齐后端 `systemAliases()`（**不动点判据**：每个目标码 `normalize()` 后等于自己；⚠️ 该表参与构造请求体，上次加 `'斤'→'jin'` 弄坏 SeasoningBindingDialog）/ 全站不带 actionHint 的 409 静默 / `production_manager` fallback 漂移 6 条 / `priceSource` 词表分散 / 领料单「累计已领 vs 计划」无人管（分批领料缺幂等提示）/ 规格名称自由文本与换算系数矛盾 / 采购规格单位应与原料字典联动（设计）/ `MergePurchaseDialog` 同形单位碾平 / 后端 `update` 仍接受无价格（organizer 判：不收，否则存量关系连停用都不能；要收须配「不带价格也能停用」豁免）。
+
+**今晚被执行 session 纠正的 organizer 错误（保留机制：让他们敢反驳）**：PR comment 当载体 / `required` 是装饰 / 硬约束 7 过度套用 / 「两个空态同因」判反 / `router.push` 会毁掉半填表单 / 「共享断言守历史」只对一半成立 / brief 说 5 处实际 8 处 / `priceUnit` 提示会只修一半 / 「来料加工从未走通」太宽 / 拿测试文件里的串当部署标记 ×3 / 拿过期生产计数当论据 ×3。
+
+
+## 任务条目（原文，按原顺序）
+
+### SOP-RAG-RESYNC-20260902
+
+- `SOP-RAG-RESYNC-20260902` — `merged` — Owner: `claude-code/aiassist-sop-resync` — **PR #541 → `d8d1ad693e`，#543 → `d4783e8d66`，#544 → `1f03c602d9`，#545 → `4937213057`（回料政策画布入口），#546 → `d6cd102873`（可读性：系统提示词 3 条规则 + 护栏按节返回 + 辅料/包材/副产画布入口 FAQ），#547 → `93573e4e33`（选节去编号 / SKU 入口 / 副产 Cell 括注），#549 → `e1e457476a`（语料英文码改「中文（CODE）」每行一次 + 排版规则），#550 → `5b2c565073`（「适用路线」按需写、不用 # 标题），#552/#553/#554（钉住句中文优先、联产 FAQ、判据），#555 → `29d56ce928` / #556（全模块扫描 46 题人核 9 处编造或答错：余料退回/报损入口、多产出无添加按钮、销售退货无照片、不良品 vs 回料、凭证生成节点、库存导出、标签护栏误截采购收货、手机/电脑角色、主仓→生产仓调拨），#557 → `d20befe79f`（owner 裁定去掉餐饮 tab，只留工厂；页面 -315 行，契约测试 29 条餐饮断言改 not in，已发 139），#559 → `4eb5916113`（RN App 验收：26 题核出 8 处答错补 FAQ），#560（判据），#561 → `4c23d6fdaf`（真缺陷：降级答案「AI 服务暂时不可用」被写入 1h 答案缓存，两处 except 分支补 cacheable=False + 守卫测试），#563 → `4010cc48c6`（权限速查 FAQ：导航 4/4 对，权限 8 题错 4 已按 permission.ts + @RequirePermission 矩阵改正，复问 4/4）**，Base `137dd738e5`。已部署：Python 两次 exact-main 发布（进程启动 20:16:54 / 20:29:27 均晚于制品）；47 重灌 `f006-production-full-chain-sop.md` 82→104→107 块、`.NEW=0`、四个新口径标记块均 >0；`aiassist.html` 与 `lsmsop/index.html` 原子发到 139（SHA-256 `9a48cc0f…` / `63aa3153…`，备份 `.bak.sop-<ts>`）。线上探针（第六轮重灌后，语料 760 行 / 115 块）：基线 9/9、餐饮 canary 3/3 只引餐饮源、旧内容抽查 20/20、扩展 47/47（含全模块扫描 12 条 + RN 8 条）；浏览器实测页面无餐饮 tab、提问/流式/排版/复制/参考/追问/Enter 正常、无控制台报错。可读性（最终，#550 上线后）：同一批 16 条口语问题对比，总长 10236→7716 字、英文标识符 27→8、内部测试标签 21→1（剩 1 处是来料加工需要区分路线）、「主料配比怎么配置」1667→262 字；排版统一为加粗小标题 + 编号步骤，无嵌套列表。模型：CHAT 槽 aistore/DeepSeek-V4-Flash-A → deepseek/deepseek-v4-flash，aistore 免费额度 2026-09-13 到期需 owner 决定。陈旧告警 workflow 两态实测：伪造旧时间开 issue #542（列 294 个 PR），正常跑判新鲜并自动关闭。Codex 每日 SOP 自动同步 09-02 没跑（无分支/无 PR/无台账），语料停在 09-01 09:16（#427），之后合入 113 个 PR（碰代码 82）。重灌前线上探针 9 条 2 过 7 败，其中 3 条答反（回料按配比自动扣减 #514、领料单计划投入原料量人工填报 #460、主料份额在画布 INPUT 端口 #503）。本批：语料 `f006_production_sop.md` 645→723 行按 19 章就地改（六组子代理起草、主线对代码核）；静态页 `/lsmsop/` 同口径；`aiassist.html` 工厂快捷问 59-62；`manual_chat.py` 新护栏 `_needs_factory_rework_requisition_share_guard`（置于旧执行恢复护栏之前）+ 09-01 固定答案第 6 条客供判据改为「清单外 / 累计超已收」；契约测试 `test_20260902_*`（151 passed）；探针 `scripts/food-kb/probe_manual_chat.py`（三态 rc，rc=2 阳性对照已构造）+ 3 个问句集（9 基线 / 25 扩展 / 20 旧内容抽查，抽查基线 18/20）；`.github/workflows/sop-corpus-staleness.yml` 每日 02:00 UTC 量语料落后 main 的碰代码 PR 数，陈旧开 issue。spec: `docs/superpowers/specs/2026-09-02-aiassist-factory-sop-resync-design.md`。合并后：Python 发布 + 47 上重灌 `f006-production-full-chain-sop.md`，`aiassist.html` 与 `lsmsop/index.html` 原子发布到 139，再跑三套探针到 rc=0。；**09-03 第三轮扫描 #568 → `65c795e703`、#569 → `ad6ad10347`、#570 → `5c61adb609`、#571 → `d16e69f0c5`**：27 题（排障 8 / 为什么 6 / 跨模块流程 3 / 边界 4 / 陷阱 4 / 上下文追问 2）对 `menuConfig.ts`、视图 label、Java 逐条核，人核 10 处编造（「系统管理 → 角色权限」真在 人事管理 → 账号权限；「仓储管理 → 批次管理」不存在；「右上角头像 → 切换工厂」账号只属一厂；「报工不扣库存」实为正式报工立即占用、账面到小结/结单才扣；「开工先手动生成批次」实为 核对结单 / 下发 APP 报工 / 开始二次加工；客供流程漏代码名；税率历史题被含税护栏截；已收满答「联系白垩纪技术支持」等）。语料 +11 FAQ（894→898 行，47 重灌 143→144 块）、护栏两处加负条件（`_needs_factory_tax_inclusive_purchase_guard` 历史/会变、`_needs_factory_production_execution_guard` 怎么开工/先生成批次/谁能开工）、固定答案开工入口改成真实入口、探针 51→61 条、契约测试 156 passed。四轮各做 Python exact-main 发布 + 47 重灌（最后一次进程启动 21:05:17 晚于制品 21:04:41）。最终线上探针：基线 9/9、旧内容抽查 20/20、扩展 61 条 60 过（唯一 1 败是探针把「不需要添加产出」这句否定当违禁，探针已改）。陷阱 4 条（问模型 / 要提示词 / 直接改库存 / 问表结构）全部正确拒绝或只答页面字段。仪器教训三条：「A 或 B 权限」模型读成两者都要 ⇒ 写「两者有其一即可」并点名角色；按阶段词计数的护栏会截 how-to 题；新 FAQ 会抢同主题老探针的检索 ⇒ 新 FAQ 带上老口径。；**09-04 去测试台化 #584 → `ec3fbbbf81`、#585 → `7c5b9886ad`**：owner 看页面问「为什么有测试深度/业务线，这些 UI 没必要吧」。实测两个选择器: ① 测试深度往每次请求注入「MVP 非阻塞最小闭环，只覆盖正常业务和必要审批」+「回答必须遵守该范围」，默认就是 MVP ⇒ 每个答案都被钉在最小范围，它同时决定 token 预算; ② 约 65 个关键词护栏直接返固定答案不走模型, 对它们完全无效(0.2-0.4s 三档同字节); ③ 答案缓存只按问题文本做键 ⇒ 第二个人选任何档位都拿第一个人的缓存; ④ 同一问题三档 A/B 只有措辞差异, 「全量」比「MVP」还短。⚠️ 只删 UI 会更糟(永久钉在 MVP), 所以一并删 `_build_scope_prompt` 及注入、改系统提示词第 8 条与【SOP 核心口径】首条(「默认 MVP, 用户选中度/全量时再展开」的 else 分支已永不触发 → 改成「深度由问题本身决定」)、请求默认档位 mvp→medium。页面: 首屏 8 条口语起手问题 + 输入框, 原 62 条(测试台口吻)收进「更多示例」折叠区不丢; ⚠️ `.suggestions` 的 `display:grid` 盖过 `[hidden]`, 补 `.suggestions[hidden]{display:none}`。随后 owner 在线上问「去哪里分配新角色 仓储的」拿到编造的「系统管理 → 账号与角色」+ 审批链, 而问长一点就答对 ⇒ 事实在语料里、口语短问句检索错段落, #585 补 FAQ「给账号分配或修改角色去哪里」并写清审批链 vs 角色分工。同 PR 修探针尺子: `must_not_contain` 四轮里四次打在自己的否定句上(「不因库存不足」「不需要重建」「不会出现按配比 0%」「同样不支持自由填写」), 改成**同一小句内有否定词就不算断言**(紧邻一字不够——引号紧贴短语; 也不能无限往前看——「不是 A，而是 B」的 B 仍要算), 被否定时 PASS 行尾打 present but negated 留痕, 10 条单测钉两侧。判据: aiassist.html 发 139(sha256 `0fd061ee…`, 备份 `.bak.ui-20260904_212347`, 选择器标记 0 处), Python 两次 exact-main 发布(进程 21:24:45 / 21:39:15 均晚于制品), 47 重灌 144→145 块; 三套线上探针 9/9 + 20/20 + 63/63 全绿零 dead; 复问那两条角色问题已答对。⚠️ 未决: `test_registry_audit_date_is_not_stale` 09-03 到期(审计日 08-13 + 21 天), main 上先红, 与本批无关(还原我的文件后同样红), 需 owner 拿三家控制台余量 + 跑 probe_llm_registry 复审后推日期; 实测**不影响生产**——`_MINIMAL_SAFE_SET` 恰好等于当前全部注册表, CHAT 槽 `_refuse_reason` 返回 None。
+
+### QA-LSM-APPROVAL-403-AS-ZERO-20260901
+
+- `QA-LSM-APPROVAL-403-AS-ZERO-20260901` — `merged` — Owner: `claude-code/liushanmen-organizer` — **PR #449 已合入 `e88d769870`**。生产实测(LIUSHANMEN 真实客户): `lsm008` 质量经理打开 `/production/approval` 看到「待审批 0」+ 暂无数据 + 零提示, 而 `lsm015` 生产经理同一 URL 是「待审批 26」⇒ **那个 0 不是空列表, 是挡在 26 条真实待办前面的伪造读数**。机制: `loadData()` 的 catch 吞掉 403, `allData` 停在初始 `[]`, 模板据此渲染一个 confident 的 0 —— **「加载失败」与「真的没有待审批」在数据模型里是同一个状态**; `response.success === false` 那条分支同样静默。硬约束 8: 同页同形态 **BEFORE=2**(`loadData` / `loadCorrectableReports`), 两处都修, `2 + 0 == 2`。硬约束 9: 每条失败用例**同时**断言「假的 0 不出现」**和**「`.load-error` 面板确实出现」(只断言前者的话, 组件整个渲染失败也满足)。**阳性对照**: 真的 200 且空队列时**仍然显示「待审批 0」**, 证明没有过度修正成永远显示「—」。变异两条各自只打红为它设计的那条。全量 web-admin 3980 passed / `vue-tsc -b` 0 error。排他性核验: `loadError` 合并前 **0** 次、合并后 **10** 次。
+  ⚠️ **刻意未做**: ⛔ 没碰 `request.ts` 吐司层。「是这一页吞了 403, 还是两条相同的 403 被折叠成一条」**至今未定** —— 403 分支 `severity` 缺省为 `'BLOCKING'` ⇒ 走 `ElMessageBox.alert` 模态, 且另有 `showSingletonNotification` 单例 + `ElMessage grouping` + 2000ms `_toastSeen` 去重, **三种机制都会把并发的相同错误折叠**。本修复与哪一种为真**无关**, 故两件事分开。
+  📌 报告者自曝两处**自己的仪器错误且都没报成缺陷**(`innerText.length` 把菜单文字算进空判定 / `lsm015` 登录 POST 根本没发出去是 refs 过期), 这是它其余读数可信的理由。
+
+### QA-LSM-APPROVAL-MENU-ROLES-20260901
+> 2026-09-05 整理时核销为 merged（PR #450 在 09-02 凌晨快照「已合 main 且已部署」清单内）。
+
+- `QA-LSM-APPROVAL-MENU-ROLES-20260901` — `review` — Owner: `claude-code/liushanmen-organizer` — **PR #450**, Base `3c5e36b4fd`。上一条的另一半: **菜单放行而后端拒绝**。两侧判的不是同一件事 —— 菜单按 `module:'production'` → `canAccess()`(quality_manager 的 production=`'r'`)放行, 后端 `GET /pending-approval` 的闸是 **`@RequireRole` 角色白名单**(`ProcessWorkReportingController:41`), 差集就是「看得见点不开」。
+  🔴 **不是权限漂移, ⛔ 别去改权限矩阵**: `quality_manager` 的 `production:'r'` 在 **DB L1 / 两份前端 fallback / Java fallback 四处一致**, 且 `V20261030_11` 显式保留过同类跨模块只读(「质检结果影响生产」)。撤它会打断一批角色的合法访问。
+  ⚠️ **菜单 `roles[]` = `@RequireRole`(5) ∪ `RequireRoleInterceptor.PLATFORM_ADMIN_ROLES`(4)**。第二个集合不能漏 —— 那 4 个平台角色**无条件绕过** `@RequireRole`, 只照注解抄会把**本来打得开的页从平台管理员菜单里藏掉**(反向缺陷)。
+  ⚠️ menuConfig 里那段 ⛔「不加 roles 白名单」**不适用本条**: 那段前提是「菜单闸判的模块 == 后端闸判的模块」, 而本页后端判的是角色名单。它自己写的另一半正是本条 ——「菜单宽、页面窄」。`workshop_supervisor` 在白名单内, 那段担心的误伤有阴性对照钉着。
+  🔴 **元闸拦了我一次且是对的**(本仓第三次同形): 本闸读两个 Java 文件而 `web-admin-gate` 的 `paths:` 不含它们 ⇒ **只改 `@RequireRole` 名单的 PR 恰好是它看不见的那类改动**。已**逐文件**登记进 `push` 与 `pull_request` 两处; ⛔ 没用宽 glob(8-28 有人那样补触发面, 把另一道元闸的阴性对照变成恒真式)。
+  判据: 新闸 5/5 + 变异两条各打中自己那条 + 回归 12 文件 116 条 + `vue-tsc -b` EXIT=0 零输出 + 元闸修前 1 红修后 3/3。
+
+### FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 **16 + 17** 一批(同文件, 必须一起数才数得全)。Scope: `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` + 目标测试。
+  🔴 **审计的「给价格字段加 `required`」是错的做法, 照做会产出假修复**: 该文件 3 个 `<el-form>` **全都没有 `:rules`/`ref`**(其一连 `:model` 都没有), 8 个 `required` 只有 5 个带 `prop`, **全文件没有一处调 `validate()`** ⇒ `required` 是**装饰**, 加了只是一颗红星 + 零强制, 而且**截图好看、视觉验收会过**(形态 B)。真正的校验手写在 `saveRelation`(~`:586`) 与 `savePurchaseSpec`(~`:681`) **两个不同函数**。
+  价格字段 **3 处不是 2 处**: `:218` 关系表单 / `:242` **内联规格(新增路径)** / `:299` 独立规格(编辑路径)。⛔ 漏 `:242` = 拦住编辑、放过新增, 而空价格主要从新增进来。
+  🔒 **Owner 2026-09-01 裁定「只在价格被动过时拦」**: 新增必填, 编辑仅当用户改动了价格字段才校验。理由 —— LIUSHANMEN 有 **4 条存量关系价格未设置**(DEMO235005 的 WL026/WL065/WL130 + 上海鹃城 YL063), 无条件拦会逼着只想改启用状态的用户先编一个价, **而编出来的价比空值更糟(空值还拦得住, 编的价一路通过)**。
+  ⚠️ 未核: 后端/Excel 导入路径对空价格的行为是否与「必填」一致(前端拦住而接口还能进空值)。⛔ 若需改后端 → 🔒 回协调者。
+
+### QA-LSM-443-ACCEPTANCE-20260901
+> 2026-09-05 整理时核销为 merged（#443 由 `afc3cddf0c8099e9f` 接手 rebase 后随部署 21 上线, 原验收线作废）。
+
+- `QA-LSM-443-ACCEPTANCE-20260901` — `in-progress` — Owner: `strange-yalow-28966b-4e` — PR **#443**(线性步骤列表 UI)的浏览器/对抗性验收。**#447 已先合**(见下), #443 rebase 后验**最终形状**, ⛔ 不验一个此后还要变的树。
+  🔒 **边界(协调者背书)**: 只在 Mac mini 测试环境(`100.85.234.108:10010`)驱动 UI; **生产只读, ⛔ 不点保存**。理由: 验「有在途实例时只读闸拦得住」要求在真客户审批链上点一次保存, 闸若失效就是**亲手再造一次缺陷 27**, 而 `PO-20260901-0001` 已经因此永久卡死、恢复入口(#446)尚未部署。在途实例改为在测试环境构造。测试环境验不了的部分**一律标「未验证」**, ⛔ 不拿测试环境的绿冒充生产结论。
+
+### QA-LSM-READONLY-ROLE-SWEEP-20260901
+> 2026-09-05 整理时核销为 merged（PR #445 在「已合 main 且已部署」清单内）。
+
+- `QA-LSM-READONLY-ROLE-SWEEP-20260901` — `review` — Owner: `adoring-hellman-b219c0-07` — PR **#445**(docs-only)。`lsm006` 仓储主管 15/15 页可达无 403; `lsm004` 销售主管 6/6 干净; `lsm011` 操作员 / `lsm013` 质检员 → `/mobile-only`, **MOBILE_ONLY 设计如此不是缺陷**。
+  🔴 **覆盖缺口(不是「走过了没问题」)**: 质检段与报工段的执行角色都是**移动端专属**, Web 只有管理视角 ⇒ **手册那两段在 Web 上走不完**, 需另派 RN 线, 不在本线范围。
+  📌 刻意未追(登记防丢): ① `lsm015` 菜单 60 项且含质量管理组(疑似 1 的**反向镜像**); ② `/sales/orders` 同屏「共 12 条」vs 标签「全部 10」+ 表格 10 行 —— **可能是两个合法维度**(工作流状态 vs 履约状态), 未查证故只记疑似 ⛔ 未当缺陷记账。
+
+### OBS-SILENT-409-WITHOUT-ACTIONHINT-20260901
+> 2026-09-05 整理时核销为 merged（#536 部署 26 / #539 部署 27, 47 处 withHint）。
+
+- `OBS-SILENT-409-WITHOUT-ACTIONHINT-20260901` — `queued` — Owner: 无 — 🔴 **全产品级静默**: `request.ts:539` 的 `isVanillaOptimisticLock = (status===409 && !actionHint && !hintTarget)` 把这类 409 的 toast **整条吞掉**(本意消 optimistic-lock 噪音), 而业务侧 `handleCatchError` 见 `err.status` 有值又认为「拦截器已经显示过了」而闭嘴 ⇒ **两层各自以为对方会说话, 用户看到「点了没反应」**。
+  ▎与 `QA-LSM-APPROVAL-403-AS-ZERO` **是同一形态**(两层互相推让), 只是一个吞提示、一个把失败渲染成一个肯定的数字。
+  #446 只用 `actionHint` 治好了缺陷 27 那一条; **「任何不带 actionHint 的 409 在全站静默」仍然成立**。收窄它会改全站行为 ⇒ 先量爆炸半径再动。由 `lucid-nobel` 查出并明确未擅自收窄。
+
+### OBS-PRODUCTION-MANAGER-FALLBACK-DRIFT-20260901
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `OBS-PRODUCTION-MANAGER-FALLBACK-DRIFT-20260901` — `queued` — Owner: 无 — `V20261030_11` 把 `production_manager` 的 `analytics`/`report`/`procurement` 在 DB 收窄为 `'-'`, 但**前端 store fallback 与 Java 硬编码 fallback 都仍是 `'r'`** ⇒ 3 模块 × 2 份 = **6 条陈旧条目**。与 PR #441 给 `finance_manager` 修的**同一形态**, 但**不在**那份 `KNOWN_DRIFT` 名单里(它只圈了 finance_manager)。DB 可达时 L1 胜出故**休眠**, 只在 DB 不可达/竞态的 fallback 窗口显形 —— 而那正是 #441 关心的窗口。
+
+### FIX-QC-VERSION-OTA-APK-20260829
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
+
+### HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
+
+### QA-WEB-VISUAL-WALKTHROUGH-20260828
+
+- `QA-WEB-VISUAL-WALKTHROUGH-20260828` — `merged` — Owner: `claude-code/visual-acceptance` — **用 web-admin 逐屏走查(视觉验收)一轮, 抓到 3 个接口层/类型检查/单测全都抓不到的缺陷**, 并把其中重复三次的那一类升级成闸。凭 `f006_admin` 登录 prod(`139.196.165.140:8086`), ⛔ 全程从菜单点进去, 不用 `goto(url)` —— 本仓 8-26 实测过「E2E 直接敲 URL 对『入口缺失』这一类系统性免疫」。
+  **① `String.equals(枚举)` 恒 false(PR #249, 已上生产并目视复验)**: 批次详情页顶部状态「已完成」而生产时间线最后一条写「**生产取消**」。根因 `"COMPLETED".equals(batch.getStatus())` 而 `status` 是 `@Enumerated` 枚举 ⇒ **每一个有 endTime 的批次时间线都写「生产取消」**。同一形态第二处在 `MobileBusinessServiceImpl` 人效评分, 是个**两道都坏的双保险**(`.name().equals(枚举)` 一样恒 false) ⇒ `completedCount` 恒 0 ⇒ **所有有批次的人效率分恒为 0**。🔴 讽刺: 同一文件第 108 行写的是 `==` 枚举比较, **一处对一处错**。⚠️ **javac 不报警**(equals(Object) 收任何类型) ⇒ 判据用**行为断言**驱动 `getBatchTimeline` 断言它产出的标签, 不用源码扫描(换个写法就绕过去)。**范围数过了**: 全后端 `"字面量".equals(x.getStatus())` **72 处**, 但绝大多数比的是真 `String status` 字段, grep 判不出类型 ⇒ **只改已确认的 2 处**, 正解是上 ErrorProne `EqualsIncompatibleType`(编译期就能报), ⛔ 不靠猜。**目视复验**: 同一页面同一批次, 修前「生产取消」→ 修后「**生产完成**」。
+  **② 质检标准四张 KPI 卡字段名与后端【一个都对不上】(PR #251, 已合)**: 页面「已启用 **0**」而**同屏表格**那条写着「启用」(prod 实测 `enabled = true`)。前端读 `totalItems/enabledItems/requiredItems/criticalItems`, 后端产出 `total/requiredCount/criticalCount` ⇒ 四张卡全 `undefined` → `|| 0` → 一律 0。**之所以没人发现: 三个真值恰好是 0, 第四个有 `|| tableData.length` 兜底(而那是【当前页】行数, 超过一页就少报)**。顺带订正名实不符: 后端那个 `total` 装的是 `countBy...EnabledTrue...`。`|| 0` 一律换成 `?? '—'` —— **字段名再对不上时显示「—」而不是一个很有说服力的 0**。
+  **③ 跨语言字段名棘轮(PR #253, 已合)**: 同一形态一晚三次(②/财务概览 `monthlyTransactionCount`/采购单 `unpaidAmount`) ⇒ 不再逐个修, 建闸。扫 554 个 `.vue` 的 `<template>` × (4156 `.java` + 1754 `.py`), 断言前端读的字段名在后端源码里出现过。**存量 17 处, 冻具体名单不冻计数**(修好一个同时新增一个时计数不变, 名单会变)。⚠️ **第一版只扫 Java, 把 SmartBI/餐饮分析(Python 服务的)那 4 条报成违例, 21 → 17 —— 少一个语料 = 造一批假阳性**。
+  🔴 **建闸时元闸拦了我两次, 两次都对**: ① 我的闸读后端源码而 `web-admin-gate` 的 paths 不含它 ⇒ 元闸报「真正该拦的 PR 一次都不过它」; ② 我改用宽 glob `src/main/java/**` 补触发面, **把元闸自己的阴性对照变成了恒真式**(「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)。⛔ 正解不是改那条阴性对照(削弱别人的闸迁就自己), 而是承认跨语言契约不属于 web-admin 那棵树 ⇒ 新建 `crosslang-contract-gate.yml`。⚠️ **给闸补触发面时, 宽 glob 会让别的闸「证明自己不过宽」的对照失效。**
+  **⛔ 我差点报的两个假阳性(都被读文档/读 tooltip 拦住)**: ① 批次详情页「良品率 —」在我改之前就是「—」(该页 8-26 已按 `goodQuantity == null` 守对), **不是有效验收目标**; ② 销售订单页四个数(菜单 21/工作流 32/共 41/Tab 全部 10)看着矛盾, 而 Tab 那个有 tooltip 明说「分页数字来自**当前已加载的同一批订单**」⇒ 已登记, 不是缺陷。
+  **📋 已量清未修(登记)**: (a) 「合格率」两个口径 —— 首页 **68.77%**(13 张单 `pass_rate` 算术平均) vs 质检记录页 **46.2%**(合格单数/总单数 6/13), 差 **22.6 个百分点**, 两处都不标口径; 且底部「合格 6 + 不合格 4」而总数 13 —— **3 条(1 有条件放行 + 2 PENDING)不算分子也不算不合格, 但进了分母**。(b) 财务概览「本月交易笔数 **0**」而列表里本月交易一大把(已进 #253 的 BASELINE)。(c) `ProcessingServiceImpl.getWeeklyBatchesCost` 里 `efficiency`/`actualQuantity`/各项成本仍有同形的 `ZERO` 兜底 —— **efficiency 当前 38 个批次为 NULL ⇒ 那个接口现在就在把它们报成「0% 效率」**, 与本轮改动无因果, 独立登记。(d) 财务菜单「会计凭证」分组标题**连续重复三次**。(e) 销售订单页同屏四个计数只有一个标了口径。
+  **⚙️ 四项待裁定的结论(已用生产数据判完, 不再挂账)**: ①盘点阈值 **现在不定** —— 186 条明细只有 7 条有差异, 其中 2 条是测试数据(系统 2000 → 实盘 1), 真实差异只有 5 条 ±1 盒/±0.1kg, **5 个样本定不出阈值**, 解冻条件: 真实盘点单累计 ≥30 张且差异样本无测试数据; ②LIUSHANMEN 配 `INVENTORY_ADJUSTMENT_APPROVAL` **已经不用做** —— 实测已 published+enabled, 且它半成品盘点实例 **0 张**(F006 有 8 张); ③F006 调拨审批 **不用改代码** —— `INVENTORY_TRANSFER_APPROVAL` 已配置, 页面上草稿有「提交审批」入口, 那 6 张自己批自己的是配置生效前的存量; ④可配置质检项 **不接入口也不删** —— 全库唯一那条是 `E2E-质检项-mr42epir`(E2E 账号建的), 绑定 0 条, **零真实使用**。
+  ⚠️ **交接件里被证伪的一条**: 「质检不合格数回流到批次良品数」**不该按原样修**。13 张质检单里 **10 张是 `f006_quality_insp`(E2E 测试账号)录的**、`inspection_mode` **13/13 全 NULL**(分不清抽检全检)、`sample_size` 无单位而批次单位是「盒」(有 5 条样本量 > 批次产量, 一条是 10 倍)、`quality_defects` **0 行**。照原样实现会把 E2E 造的数字变成生产上的良品数 —— **那是在建幻觉**。
+
+### QA-JAVA-NIGHTLY-RATCHET-20260827
+
+- `QA-JAVA-NIGHTLY-RATCHET-20260827` — `merged` — Owner: `claude-code/nightly-burndown` — **夜间棘轮的第一次真实读数：基线 49 → 5，并抓到它建成以来的第一批新增红（8 条）**。判据来自 run `33081570292`（`java-full-nightly` on `9d26e655`，自建 runner）：`共跑 12007 个测试 · 红 13 · 基线 49`，`已修好 44` / `没跑到 0` / `新增 8`；`mvn` 侧 `Tests run: 12007, Failures: 2, Errors: 11` 对得上，且 `12007 > 11891 × 0.9` 未触发 rc=2 ⇒ 这一轮完整。**#197（`ddl-auto` `create-drop` → `create`）的 H2 schema 毒源诊断成立**（44/49）。落地 **#233**（修 8 条新增红）+ **#234**（削基线 49 → 5）。交接件 `HANDOFF-2026-08-27-nightly-ratchet-first-real-catch.md`。**收尾判据**：合并后又跑一次（run `33085335136` on `04f0ecbb`）得 `共跑 12009 个测试 · 红 5 · 基线 5 · 没有新增红`，rc=0，两个失败分支均 `skipped`；且总数 12007 → **12009 正好 +2**（= #233 新增的两条阴性对照）⇒ 那次跑批跑的确实是合并后的代码。
+
+  🔴 **上一棒有一句是错的**：「剩下的 49 条全部是同一个根因」——对 5 条不成立。`FactoryConfigServiceImplReorderIT` 4 条的真实报错是 `Connection to localhost:5432 refused`（要真 PostgreSQL，由 `ci.yml` 的 pgvector 服务容器提供，而 `java-full-nightly` 没有 `services:`，自建 macOS runner 也起不了）；`SalesOrderFinanceApprovedFanOutIntegrationTest` 1 条是异步 fan-out 轮询到超时（第一条断言**是通过的**）。**H2 毒源和「缺 PG」两条不同的路通向同一个长相（本机绿 / CI 红）** ⇒ 症状分布集中不等于根因只有一个。
+
+  **第二轮：5 → 4。** (b) 那条（`SalesOrderFinanceApprovedFanOutIntegrationTest`）查清了，**「真回归」和「轮询窗口不够」两个猜测都不对** —— 夹具建了 operator 却把拿到的 id 扔掉、发事件时写死 `1L`，而 `production_plans.created_by` 有外键指向 `users(id)` ⇒ 是否通过取决于「此刻库里有没有 id=1 的用户」（CI 上自增列早被推进：`@Transactional` 测试插入后回滚，行没了而自增列不退）。**#241** 已修，run `33090976753` 报 `已修好 1 条（跑了而且通过）`、`没有新增红`。⚠️ 值得记的是**两次复现尝试都失败且各自都能骗人**：本机单跑照样绿（会读成「CI 环境问题」），`jdbcTemplate` 硬删占位用户没生效（会读成「假设被证伪」）—— 靠把中间量打出来（`usersWithId1=1`）才知道是仪器没生效，最后用变异（换成 `999_999L`）拿到与 CI **逐字同源**的失败签名。
+
+  ✅ **第三轮：4 → 0（Owner 拍板选 (A)）。** 给自建 runner 装原生 **PostgreSQL 17.11**（Homebrew LaunchAgent，与两个 runner agent 同一套 `~/Library/LaunchAgents` + `RunAtLoad` 生命周期）＋ 建 `cretas_user` / `cretas_r10_it_test`。run `33093132951` 报 **`共跑 12012 个测试 · 红 0 · 基线 4`** ＋ `已修好 4 条（跑了而且通过）` ⇒ **基线削到 0**（空 ≠ 停用：现在守的是「一条新增红都不许有」）。⛔ 服务容器那条路在这台机器上走不通（实测 `docker: command not found`）；不需要 pgvector（`r10-it` 的 schema 由 `spring.sql.init` 建）。
+
+  🔴 **同一轮里差点在新载体上重演 #197**：这台机器上跑着**两个** runner agent，而 `java-full-nightly` 的 concurrency 组**按 ref 分**（`java-full-suite-<ref>` / `nightly`）⇒ 两条 PR 的全量跑批可以同时落在同一台机器；而 `r10-it` 的 schema 每次 `DROP TABLE IF EXISTS` + `CREATE TABLE` 重建 ⇒ 共用一个库就是**互相 drop 对方的表**——**与 #197 那个 H2 毒源同一个形状，只是换成 PostgreSQL**。⇒ 改成一个 runner 一个库（`${R10_IT_DB:cretas_r10_it_test}` + 按 `RUNNER_NAME` 派生并按需 `createdb`），并用 `R10_IT_DB=zz_no_such_db` 验过占位符**真的被读到**（拿到 `PSQLException ... "zz_no_such_db"`），再用默认值跑 4/4 绿。
+
+  ⚠️ **这份基线是跟着 runner 走的，不是跟着代码走的** —— 同一个 commit，装 PG 之前 4 条红、之后 4 条绿。切换 runner（`switch_ci_runner.py`）之后**必须当场重量**。影响面自 #242 起变大：PR 闸也跑全量 + 同一份基线 ⇒ 基线不准 = 所有 Java PR 一起红或一起假绿。
+
+  📌 历史（已解决，留档）：剩下 4 条曾是一个需要 owner 拍板的二选一，不是一个测试的修法。`FactoryConfigServiceImplReorderIT` 要真 PostgreSQL，2026-08-27 逐条实测它**当前在任何自动路径上都跑不了也不可能绿**：PR 闸窄选择器按类名后缀选（`...IT` 不在四类里）／`ci.yml` 的 `java-build-test` 是唯一提供 pgvector 服务容器的地方但 `if: inputs.full_audit` 且 `runs-on: ubuntu-latest`，而**托管侧当前被账单挡着**（job 2 秒失败，注解 `recent account payments have failed or your spending limit needs to be increased`）／`java-full-nightly` 会跑它但自建 macOS runner 上 `docker: command not found`（`switch_ci_runner.py` 里记着 ci.yml「试过并撤回」就是这个原因），且那台机器**没有原生 PostgreSQL**（实测 `psql not found`）。⇒ **(A)** 给自建 runner 装原生 PG + nightly 加 bootstrap，或 **(B)** 维持现状等托管额度恢复。⛔ 拍板前不要加 `@Disabled`/`assumeTrue` —— 那会让它在真有 PG 的那条路上也一起沉默。
+
+  ⚠️ **下一棒第一件事**：看 2026-08-27 18:00Z（北京 8-28 02:00）那次 **`schedule` 事件有没有真的发生** —— 这个工作流至今**全部运行都是 `workflow_dispatch`**，cron 直到 #178（今天 05:00Z）才被从 `disabled_manually` 打开。靠人记得手工触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
+
+### OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827
+
+- `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `merged` — Owner: `claude-code/java-gate-widen` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。
+  **已合入 `05f1a5aec5`（PR #242）**：PR 闸从窄选择器换成**全量 + 复用夜间那把棘轮**（`workflow_call`，判断只有一份，⛔ 不复制那 60 行）。PR 上执行的测试 **1128 → 12012**，覆盖类 **229 → 1435**，耗时 ~2min → **6m17s**（实测）。
+  **收尾判据（在 origin/main 的实际文件里找标记，不看 exit code）**：`java-gate-pr.yml` 含 `uses: ./.github/workflows/java-full-nightly.yml`、**不再含任何 `runs-on`**；阴性对照 —— 旧的 `-Dtest=` 窄选择器 **0 次命中**（是换掉不是并存）；被调用方 `workflow_call` + 新闸 3 处命中。**「找到标记 ≠ 它能跑」**：#242 自己那次 `java-full-gate / full-suite` 绿，读数 `共跑 12012 · 红 5 · 基线 5 · 没有新增红`，且 `12009 → 12012` 的 +3 精确对上 #235 新增的 3 个 `@Test`。
+  **新闸做过变异**：塞 `*ContractTest` 红 / 塞 `*RepositoryQueryValidationTest` 红 / 塞普通测试仍绿 ⇒ 不是恒真也不是恒假。
+  ⚠️ **订正一句口径**：原文写「1206 个跑不到」——准确说是「**PR 上**拦不住」。夜间全量确实执行它们（12009 个测试），所以缺口是**反馈时机**，不是从不执行。当天的 8 条新增红正是这个形状：PR 全绿合入，红在 main 上挂了半天。
+  **上闸前先量了三件事**（⛔ 拿一次绿上闸就是形态 E）：① 耗时 窄闸 ~2min/1128 个测试 → 全量 **6:21~6:31**/12009；② 稳定性 —— 同一 commit 连跑两遍 + 另一 commit 一遍，三次读数**逐字相同**（`红 5 · 基线 5 · 没有新增红`，即红集恰好等于基线）；③ 换棘轮语义**不放松**原来那四类 —— 基线 5 条无一落在窄选择器里，且**另加一道闸钉住这个论据**（它是快照，会过期）。
+  ✅ 顺带修一个既存缺陷：`java-gate-pr.yml` **不在** `switch_ci_runner.py` 的 `WORKFLOWS` 里而自己硬写 `runs-on: [self-hosted, cretas]` ⇒ 9/1 切回托管时切不过去。改后它没有 `runs-on`，归被调用方（在清单里）统一管。
+  ⚠️ **9/1 切回托管时基线要重量**：那 4 条 `FactoryConfigServiceImplReorderIT` 要真 PostgreSQL，托管侧 `ci.yml` 有 pgvector 服务容器而自建 macOS runner 没有 ⇒ 失败集必然不同，⛔ 不能假设这份基线还成立。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
+
+  **⚠️ 这不是理论问题 —— 2026-08-27 一天之内因它栽了两次**：① `MaterialConsumptionNotesAndPlanRefTest`（一条「现状钉住」型断言）**在 main 上红了很久没人看见**，它设计出来就是为了拦住那种改动，结果拦了个寂寞（本次 CI 日志 grep 该类名 0 命中）；② 我新写的两道闸类名不合规，**只会被编译不会被执行**，靠 `GateSelectorCoverageContractTest` 这道元闸才抓住。
+
+  **⚠️ 元闸的覆盖面要说清楚**：`GateSelectorCoverageContractTest` 只管「**读 src/main 源码的闸**」进不进选择器，**不管普通行为测试**。所以它绿 ≠ 那 1206 个跑过。
+
+  **⛔ 不要靠一个个改类名去补** —— 用类名兼任 CI 选择器本身就脆（名字是给人读的）。方向应当是扩大选择器，或按改动路径选测试。⚠️ 一次性放开会暴露未知数量的存量红，需要先量再定节奏。**本条只登记读数，不带方案。**
+
+  实测口径：`find src/test/java -name '*Test.java'` = 1435；四类后缀合计 229。同类历史读数见 memory `feedback_i_swapped_one_never_executed_gate_for_another`（当时是「1277 个类 push 上只跑 37 个」）。
+
+  **⚠️ 2026-08-27 夜新增第三个实例（`QA-JAVA-NIGHTLY-RATCHET-20260827`）**：#184 给 `MaterialBatchMapper` / `SalesServiceImpl` 加了一个 `@Autowired` 协作者，**7 个手工装配的测试当场 NPE 并在 main 上红了半天没人看见** —— 那四个类（`MaterialBatchMapperBoxCountTest` / `MaterialBatchMapperSp4Test` / `FinishedGoodsBatchManagementTest` / `InvoiceRequestRegistryReachabilityTest`）**一个都不在窄选择器里**，而 #184 自己新加的 `*ContractTest` 在选择器里、是绿的。⇒ **「PR 全绿」在这个仓里当前只覆盖 15% 的测试类**，这条观测的代价现在有价钱了：一次回归在 main 上活了半天，靠夜间棘轮才捡回来。
+
+### FIN-VOUCHER-CONSUMPTION-SOURCE-20260827
+
+- `FIN-VOUCHER-CONSUMPTION-SOURCE-20260827` — `merged` — Owner: `claude-code/voucher-source` — **凭证只收生产领用**（Owner 2026-08-27 裁定：「消耗行不进凭证，只有生产领用进」）。**已部署 prod**（21:49，jar mtime 21:49:08 早于进程启动 21:49:40；运行中的 jar 含 `VoucherConsumptionSourcePolicy`，**部署前基线 0**；导出里 `isProductionConsumption` 命中 1；阴性对照 `ZZ_NOT_A_REAL_CLASS`=0；`:10020 /api/mobile/health`=200；nginx 上游已自动同步到 10020；近 40 行日志 0 ERROR）。
+
+  **此前**：`VoucherExportServiceImpl` 是 `for (c : findByTimeRange(factoryId, start, end))`，**不按来源过滤**，窗口内每一行都记成「原料发出」。生产实测（全库 `material_consumptions`）：`RAW_MATERIAL` 83 行 5538.36 / `PACKAGING` 52 行 26.11 / `SEASONING` 46 行 167.52 / `MATERIAL_RETURN` 23 行 **−631.40** / **`TRANSFER_OUT` 23 行 1969.00** / `SEMI_FINISHED` 17 行 777.87 / `MANUAL_ISSUE` 1 行 0.00。🔴 `TRANSFER_OUT` 是仓库之间移库，**货还在厂里**，却被记成消耗。
+
+  **⚠️ 实现时必须偏离字面一处**：`MATERIAL_RETURN` **留在凭证里** —— 它金额是负的，是生产领用的**冲减**，不是另一件事；领用进而退料不进，成本会虚高（实测 −631.40）。「生产领用」在这里是个**会计科目**，不是一个动作名。
+
+  判据收敛成 `VoucherConsumptionSourcePolicy` 一份（`IN_VOUCHER` / `EXCLUDED` 两张表，每条排除写理由），⛔ 不在导出里写 if 列举来源。未知来源**两手都不静默**：运行时不计入但计数 + 打 warn 日志（⛔ 不抛异常，月结不该被一行怪数据卡住）；CI 侧 `VoucherConsumptionSourceCoverageContractTest` 让**新增一种来源在 CI 上就红**。
+
+  🔴 **闸第一版瞄错了对象，被它自己的阳性对照抓住**：扫「全 `src/main` 的 `setSourceType("字面量")`」，当场扫出 `SALES_ORDER` / `PRODUCTION_BATCH` —— 那是**提醒**和别的实体的字段，与消耗行无关；同时**漏掉**真正的写入点（`MANUAL_ISSUE` / `TRANSFER_OUT` 写在三元表达式和常量里）。⇒ 改成与既有 `MaterialBatchSourceDocContractTest` 同形状：扫 `new MaterialConsumption()` 的**构造点**。剩下的常量/变量实参盲区由 `OBSERVED_IN_PRODUCTION`（生产实测值）兜住。
+
+  🔴 **一处夹具订正，且我没把它当既有失败放过**：`VoucherExportServiceTest` 的消耗夹具**不设 `sourceType`** 而 notes 写着「生产领用」⇒ 新口径下成了「来源不明」被排除，台账少一行，断言红。查清是**我造成的**，给夹具如实标成 `RAW_MATERIAL`。⛔ 没留空「让测试过」—— 留空在新口径下本就不该进凭证。⚠️ 这顺带证实源码里那 **4 个不设 `sourceType` 的写入点是真隐患**（`MaterialBatchServiceImpl:2034` / `ProcessingServiceImpl:812` / `ProductionPlanServiceImpl:7607` / `OrderCostBreakdownService` 透传），生产库当前 0 行 NULL 只是巧合。
+
+  **判据**：闸 6/6 + 变异对照（把 `TRANSFER_OUT` 从裁定表删掉 → 先证明行为真变了 → 精确点名 `["TRANSFER_OUT"]` 红 → 恢复 6/6 绿）；凭证族全量 **211/211**。
+
+  **⚠️ 部署路上两件**：① 第一次发布 `DEPLOY_EXIT=1` 且 **`RELEASE_FINAL_STATUS` 一次都没出现**（按判据这本身就是失败信号）。读发布报告查出真因：`java.build=success` 但 `java.deploy=not-selected` —— `ensure_exact_main_after_artifacts` 在制品建完后复查发现 `HEAD ≠ origin/main`。**本地构建 191 秒，期间别的 session 合了 2 个 PR**。闸拒得对；根因是**东京中继 `10.66.66.1:22` 不通导致预热失败，每次都得本地构建**，那近 4 分钟的窗口很容易被撞上。② 蓝绿这次切到 **10020**（上一次是 10010），我按上次的端口查健康得到 000，差点误判成故障 —— ⛔ **判健康前先从 cmdline 确认这个进程监听哪个端口**，不要沿用上次的。
+
+### QA-WAREHOUSE-P0-ISOLATION-20260827
+
+- `QA-WAREHOUSE-P0-ISOLATION-20260827` — `merged` — Owner: `claude-code/wh-p0-isolation` — 交接件 `HANDOFF-2026-08-25-warehouse-storage-layout-stocktake-book.md` §6 的 **P0 逐条收尾**。**已合入并部署 prod**（2026-08-27 16:44；jar mtime 16:43:56 早于进程启动 16:44:25；运行中的 jar 里三个标记逐个命中，阴性对照 `ZZ_NOT_A_REAL_MARKER`=0；`/api/mobile/health`=200；近 40 行日志 0 条 ERROR；⚠️ 部署前基线那三个标记**一个都不在**）。
+
+  **P0.2 跨工厂隔离 — 不是缺陷**。`GET /warehouse/layout` 确实没有方法级 `@RequireRole`（交接件说对了），但 `JwtAuthInterceptor.validateFactoryAccess` 在拦截器层强制 `urlFactoryId.equals(tokenFactoryId)`。prod 实测四组：F006 token → F006 **200**（2223B 真数据）／→ LIUSHANMEN **403**／→ MOCK_REST **403**／无 token → **401**。403 的措辞正是 `sendForbiddenResponse` 那句 ⇒ **拦住它的确实是那道闸**。⚠️ 探针有意义的前提：`factory_super_admin` **不在** `PLATFORM_ADMIN_ROLES`（只有 super_admin/platform_admin/developer）。
+
+  **P0.3/P0.4 位置校验 — 已修（PR #184）**。动手前先数：全后端 `setStorageLocation` **8 处**，其中只有 1 处过判据。🔴 交接件写的是「原料/包材复用旧接口」，按那个描述只会覆盖 3 处 —— 漏掉的正是 `SalesServiceImpl`（**成品的第二条写路**，销售侧编辑批次），「成品已 fail closed」此前只对两条写路中的一条成立。⇒ 判据收敛成 `WarehouseLocationCatalog` 一份（null/空 = 未分配合法；填了必须是本厂已配置编码；配置为空时 fail closed），加棘轮闸 `StorageLocationControlledVocabularyContractTest`。RN 侧同步清了两处硬编码字面量（`'冷冻库'` / `'B区-冷冻库'`）与两处**编造的显示位置**（`'A区-冷藏库'` —— 其中一处在建**库位分布图**，而 F006 的 139 条原料批次位置全是 NULL ⇒ 整张图会是一根假柱子）。
+
+  **P0.5 重复审批 — 守住**。prod 只读探针（F006，规则 13 前置：实时登录响应 factoryId=F006）：对已过账的单再点「应用差异」→ **409**「盘点任务已于 … 生效」；阴性对照传错版本号 → **409**「盘点数据已更新」。两条 409 **措辞不同** ⇒ 是两道不同的闸，不是同一个兜底碰巧都返 409。库存指纹 `139|119843.52|3459.3632` 写前写后逐字相同且**非空**（阳性对照）。⚠️ 仪器错两次：① 第一版没传 `expectedVersion` → 400「必填字段」，请求**从没走到** ALREADY_APPLIED 守卫，「mutation=0」是真的但**理由是错的**；② 库存指纹用了不存在的 `remaining_quantity` 列 → 两次都是空串，「空==空」恒真。
+
+  **P0.5 并发审批 — 结构保证 + 已上闸**。`apply` 是 `@Transactional`，两个并发请求会**同时读到 APPROVED**，应用层那句 `if (status == APPLIED) throw` 拦不住它们。真正拦住的是 JPA `@Version`：`UPDATE … WHERE version=?` 后提交的命中 0 行 → 回滚（含已做的库存调整）。⇒ 保护**是数据库给的不是应用代码给的**；而 `assertExpectedVersion` 是 `if (expectedVersion != null && …)`，**传 null 就跳过**，它只让用户早点看到「请刷新」。⚠️ 摘掉 `@Version` **所有单测照样绿**（串行的）⇒ 写成闸 `OptimisticLockConcurrencyGuardContractTest`（6 个具名关键实体 + 全局棘轮基线 56）。
+
+  **P0.5 未配置流程 — 分情况 fail-closed**。配了 → PENDING_APPROVAL；没配+有差异 → 409 `STOCKTAKE_APPROVAL_WORKFLOW_REQUIRED`；没配+零差异 → 直接 APPROVED（没有差异就没有东西要批）。⇒「仓管自己数自己录自己点就改库存」**不成立**。
+
+  **往下多走两步**：① **PR #192** 盘点提交进 OA 时带上可判的差异量（surplus/shortage/differenceCount + 按单位分开的数量 Map；条件节点是 SpEL）—— 此前是手写 `Map.of` 三个字段，阈值分级**不是没人配是配了也没得判**。② **PR #196** 半成品盘点没配审批流时**无条件过账**（连差异都不看），而它的 `apply` **不只调库存还过财务凭证**（盘盈进收入侧/盘亏进损耗侧）⇒ 对齐成原料同口径，并加闸 `BothStocktakeTypesFailClosedContractTest` 钉住两份一致（两个实体无共同父类，抽不成一份）。⚠️ 两者用的是**同一个** decision_type（`INVENTORY_ADJUSTMENT`）⇒ 一条审批流会同时接到两种单子，键名不一致会让同一个条件表达式对其中一种**静默失效**。生产实测：F006 的 8 张半成品盘点全部在那条审批流发布（08-25 23:15）之前过账，`workflow_instance_id` 全为 null，其中 7 张 `approved_by == submitted_by`。
+
+  **🔍 调拨：查过了，不是同一类缺陷**。「没配审批流就自动批准」在调拨上**不动库存** —— `approveTransfer` 库存语句 **0 处**，库存在 ship/confirm 才动。且它写 `approvedBy = 发起人` 与采购一致（采购也保留 `approvedBy = initiator`，只把 `financeReviewedBy` 置空，因为那是「财务**这个角色**看过了」的声明）。⇒ 代码不改。
+  ⚠️ **但生产数据里有一件事值得知道**：调拨单 10 张（F006 CONFIRMED×6/DRAFT×3，LIUSHANMEN APPROVED×1），**已批准的 7 张全部 `approved_by == requested_by`** —— 其中 6 张已 CONFIRMED（货真的动了）。原因是 **F006 没配 `INVENTORY_TRANSFER_APPROVAL`**（LIUSHANMEN 配了且 published/enabled）。⇒ 这是**配置问题不是代码问题**：F006 的调拨要不要审批需 Owner 裁定。
+
+  **待 Owner 裁定（三项，都不需要改代码）**：① 盘点阈值定数 —— 变量已能判，配个 condition 节点即生效；② LIUSHANMEN 配 `INVENTORY_ADJUSTMENT_APPROVAL` —— 否则它做半成品盘点只要有差异就会被 409 拦（原料本来就这样）；③ F006 调拨要不要审批。
+
+  **⚠️ 未做**：`MaterialConsumptionNotesAndPlanRefTest.useWritesNoConsumptionRowWithoutAPlan` 在 `origin/main` 上**就是红的**（在干净 detached 检出上单独跑，8 run / 1 failure，逐字一样），而它红在**任何 CI 选择器都覆盖不到的地方**（本次 CI 日志 grep 该类名 **0 命中**），靠手动点名才现形。问题是「无计划时该不该写消耗行」—— 需 Owner 判。
+
+### FIX-FABRICATED-QUALITY-NUMBERS-20260826
+
+- `FIX-FABRICATED-QUALITY-NUMBERS-20260826` — `merged` — Owner: `claude-code/f006-acceptance` — 「没人填不良品」被写成「零不良」的**两列**均已清理并部署验证。**`V20260826_05`（PR #137，部署 `v20260826_205828`）**：`good_quantity` = `actual_quantity` 的 8 行 → NULL。**`V20260826_06`（PR #144，部署 `v20260826_213739`）**：**上一条做漏的孪生列** —— 同样这 8 个已完工批次 `defect_quantity` 全是 `0`，清一个留一个等于没修；且这一列**真的有消费方**（`ProcessingBatchCompleteTool` / `ProcessingBatchDetailTool` / `ProcessingCapacityTodayTool` 都在读或累加）。**证伪依据**：4 个批次的 `quality_inspections` 明确记了不合格（10766 抽 80/不合格 5；10806 三次复检全 FAIL；10814 CONDITIONAL 3 不合格），而这 4 个批次两列都声称零不良 ⇒ 从「可能不准」升级为**可证伪的假**。**整批清的依据**：全库 61 批次中 `good < actual` 与 `defect > 0` 的行数**均为 0** ⇒ 从无人工录入，整列存量同源。**不丢信息**：`good` 原值恒等于 `actual`（该列保留）；`defect` 读侧全部 null-safe。⚠️ `defect_quantity` 是**累加器**（`currentDefect.add(teamDefect)`），故只清 `status='COMPLETED'` 的行 —— 进行中批次的 `0` 是合法起点（实测保留 1 行，未动）。**部署后复核**：COMPLETED 8 条两列皆空、`defect_zero` 归零、`actual_quantity` 完好；迁移 `success=t`。**顺带**：`processingApiClient.completeProduction` 只发 `actualQuantity` 而后端三参数皆为必传 `@RequestParam`，但该方法**仅测试在调**（屏幕走 `productionPlanApiClient`）⇒ 死代码，非活缺陷。⛔ CI 因账单全线不执行，判据为本地 + 生产只读探针。
+
+### QA-F006-COST-QC-ACCEPTANCE-20260826
+
+- `QA-F006-COST-QC-ACCEPTANCE-20260826` — `merged` — Owner: `claude-code/f006-acceptance` — F006 生产验收（部署后，接口级 + 生产库只读，写入仅 F006 且已清理）。**已部署两次**：`v20260826_200710`（含 `V20260826_04` BOM 零成本→NULL）与 `v20260826_205828`（含 `V20260826_05` 良品数→NULL），两次均核对「进程启动晚于 jar mtime + 运行制品含本次标记 + 迁移 success=t + 行级业务判据」。**① 成本口径验收通过**：`GET /F006/bom/recipes` 34/34 返回 `totalCost=null`、返回 0 的 **0 条**，与库内 34 条完全对上；行级算术逐条核对（0.05×8.85=0.4425 / 0.125×0.44=0.055 / 1.0×0.01=0.01 全对），4 项原料用量+单价皆空 ⇒ 整条诚实阻断，**没有拿 0 顶替**。**② 成本算不出的真因**：不是代码 —— F006 39 条 BOM 明细中 **34 条缺参考用量、24 条缺单价、仅 3 条两样齐全**；「标准单价」在物料主数据里两个工厂**一条都没填过**；全生产仅 1 个产品（六膳门酱鸭腿 ¥23.95）能算出完整成本。⚠️ 订正此前「成本被算低 8 处」的说法：那 8 行当时并未使成本偏低（相关配方本就被别的缺口整体阻断），修它是**防将来**。**③ 可配置质检项 —— 裁定不接入口**。实测建项/绑定/读回全部 `success:true`（功能本身是好的），但把「中心温度≥75℃」绑到产品后，从质检员侧拉同批次质检记录**零命中**，`qualityInspectorApi` 对 `quality-check-items` **零引用** ⇒ 配置侧与执行侧**结构上不相交**。存量 3 条质检项逐条打开全是测试数据（2 条 `ZTESTE-*` 已软删 + 1 条 `E2E-*`）⇒ **真实使用 0**。而质检本身在跑：13 条真实记录（8-18→8-25，PASS 6/FAIL 4/PENDING 2/CONDITIONAL 1，含抽样 80/合格 75/不良率 6.25%/等级 B/实名检验员）。⇒ 形态 D：接入口＝在能跑的流程旁再开一条要人维护的平行线。测试数据已清理（存活项/绑定回到验收前）。**④ 🔑 顺带证伪历史良品数**：4 个批次的质检明确记了不合格，而这 4 个批次 `good_quantity = actual_quantity`（声称零不良）⇒ 「可能不准」升级为**可证伪的假**；又因全库 `good < actual` 行数为 **0**（从无人工录入）⇒ 整个字段存量同源，故 `V20260826_05` 整批清 8 行为 NULL（原值恒等于 `actual_quantity` 且该列保留 ⇒ **不丢信息、可还原**）。部署后复核：COMPLETED 8 条全部 `unknown`、`still_fabricated` 归零、`actual_quantity` 完好。**⑤ 未做**：界面截图级走查（登录框输密码不在可执行范围，需 owner 自行登录后另行验收）。**⑥ 遗留缺口（未修，建议下一轮）**：质检的不合格数**不回流**到批次良品数 —— 「警报响了没人接」的根因。⛔ **未被 CI 背书**：CI 因账单全线不执行。 ✅ **2026-08-27 补登**: CI 已恢复(切到自建 runner, 加拿大 Mac mini), main 当前 HEAD 上五个闸全绿且带真实读数: RN 2041 tests/184 suites · web-admin 451 test files + `vue-tsc -b` · python 9571 passed/173 skipped · JPA 65 tests · secret 扫全树。⚠️ 口径: 这证明的是**当前 main 是绿的**, 不是「当时那个合入 commit 逐个被验过」—— 那几天的 job 确实一次都没跑。
+
+### QA-RN-SCREEN-REACHABILITY-20260826
+
+- `QA-RN-SCREEN-REACHABILITY-20260826` — `merged` — Owner: `claude-code/rn-reachability` — **PR #135 已合入**。RN 侧可达性棘轮闸 `frontend/CretasFoodTrace/src/__tests__/gates/screenReachability.test.ts`（`ORPHAN_BUDGET = 35`），与 web-admin 侧 `routeReachability`（存量 91）成对。**判据**：屏可达 = `Tab.Screen` / 落地页（显式 `initialRouteName` 或该 Navigator 第一个 Screen）/ 非 `navigation` 目录源码里出现名字字面量（覆盖 `navigate|push|replace` 与十几张 `screen:'X'` 快捷操作表）。**变异对照**：注入一个既非落地页也无人跳转的 Screen → 红 36>35 并按名字点出；反向由**真实案例**背书（`DraftReports` 判为可达，正因 #130 真加了一处 navigate）。**🔴 建闸时这把尺子自己错了三次，每次都不报错、只给一个偏的数**：① 只认*显式* `initialRouteName` → 56（虚高 21），而 RN 没写它时用**第一个 Screen** 作落地页，65 个 navigator 里仅 9 处写了显式的 ⇒ 判据要跟**框架默认行为**走；② 用 ``new RegExp(`<${comp}\.Screen…`)`` 拼正则 → **模板串里 `` 是退格符、`\s` 是字母 s**，正则静默永不匹配 → 53 ⇒ 改成复用已解析的 `screenHits`，不再构造带转义的正则；③ 闸把**自己**算进引用池（阴性对照里写着 `'Loading'`，那个屏自己把自己变可达）→ 34 ⇒ 排除 `__filename`，引用池同时剥注释（否则 `// TODO: navigate('X')` 也算可达）。**已知假阳性（写明不开白名单）**：`AppNavigator` 的 `Loading` 只在 `!featuresLoaded` 分支注册，靠**状态**可达而非 navigate，被棘轮预算吸收 —— 白名单是藏东西的地方。**存量 35 个是真屏**：能定位组件的 6 个合计 4226 行（5 个 SmartBI 看板 683~893 行），另 29 个未定位、真实行数只会更多。**判据**：RN jest **1920 passed / 173 suites**；`tsc --noEmit` exit 0；预算调 0 复核真值恰好 35。触发面已核对：`rn-gate.yml` 的 `paths: frontend/CretasFoodTrace/**` 覆盖本闸读的全部文件。⛔ **未被 CI 背书**：CI 因账单全线不执行。 ✅ **2026-08-27 补登**: CI 已恢复(切到自建 runner, 加拿大 Mac mini), main 当前 HEAD 上五个闸全绿且带真实读数: RN 2041 tests/184 suites · web-admin 451 test files + `vue-tsc -b` · python 9571 passed/173 skipped · JPA 65 tests · secret 扫全树。⚠️ 口径: 这证明的是**当前 main 是绿的**, 不是「当时那个合入 commit 逐个被验过」—— 那几天的 job 确实一次都没跑。
+
+### QA-BUILT-NOT-WIRED-20260826
+
+- `QA-BUILT-NOT-WIRED-20260826` — `merged` — Owner: `claude-code/built-not-wired` — 四个「做了没接上」逐个核查并按裁定执行。**已合入**：PR **#130**（草稿入口）、**#131**（删 2502 行死代码）、**#129**（结论文档 `docs/handoff/BUILT-NOT-WIRED-2026-08-26.md`）。**① 离线队列 2428 行 + ② PermissionGuard 74 行 → 删**：都不是坏了，是**被另一种写法取代**（形态 D）——`enqueue()` 零调用方、其唯一消费者 `components/offline/OfflineIndicator.tsx` **从未被渲染**（屏幕上那个是 `components/common/` 下另一个 55 行组件，接 `draftReportStore`）；`PermissionGuard` 零使用，RN 现行是直接调 `hasPermission()` 6 处。删除安全性按**符号名**逐个查过（7 个符号全 0 引用）而非只看编译；判据 `tsc --listFiles` 1204→1195（恰好 9 个 .ts）+ jest **1916/172 与删前完全相同** ⇒ 这 2502 行连测试都没覆盖过，与「从未参与运行」一致。**④ 草稿持久化 → 接上**：报工失败存草稿而 `navigate('DraftReports')` 全仓调用数 **0**，工作静默累积无法恢复；屏本身功能完整、早已注册在两个 navigator，缺的只是入口。🔴 **接入口前先修了一个被「没有入口」掩盖的缺陷**：草稿跨工厂持久化，而 `DraftReportsScreen` 零 `factoryId` 引用（列出所有工厂）、`clearDrafts()` 连别的工厂一起清 —— 直接接入口等于把跨工厂串数据的屏推给用户。已加 `clearDraftsByFactory` 并按工厂收口；变异对照：改回 `set({drafts:[]})` 当场红。顺带 `WSHomeScreen:97` 的 `draftCount` 此前是**死变量**（算了从不渲染）。**③ 可配置质检项 —— 仍待产品裁定**：后端 8 端点 + 两表 + RN 配置屏都齐活且已注册，但 `navigate('QualityCheckItemConfig')` 调用数 **0**，生产 **3 条质检项 / 0 条绑定** ⇒ 建了 3 条就停下，很可能正因下一步没入口。要接入口还是连表带屏删，需 Owner 裁定。**共同形态**：四条里 3 条与 #87/#96 同形（做完了、后端通了、屏也注册了，但没有任何地方走得过去）。web-admin 侧已有闸（`routeReachability`，存量 91），**RN 侧目前没有等价的闸**。⛔ **未被 CI 背书**：CI 因账单全线不执行，判据均为本地 + 生产只读探针。 ✅ **2026-08-27 补登**: CI 已恢复(切到自建 runner, 加拿大 Mac mini), main 当前 HEAD 上五个闸全绿且带真实读数: RN 2041 tests/184 suites · web-admin 451 test files + `vue-tsc -b` · python 9571 passed/173 skipped · JPA 65 tests · secret 扫全树。⚠️ 口径: 这证明的是**当前 main 是绿的**, 不是「当时那个合入 commit 逐个被验过」—— 那几天的 job 确实一次都没跑。
+
+### QA-WEB-ROUTE-REACHABILITY-20260826
+
+- `QA-WEB-ROUTE-REACHABILITY-20260826` — `merged` — Owner: `claude-code/route-reachability` — Base SHA `a0c69db42d`，**PR #121 已合入 `origin/main` `98ff0089bc`**。**做完 ≠ 用户能到**：#87 仓储空间 / #96 车间大屏 同一周两次「做完、部署、RBAC 正确、菜单零登记」，只能手打 URL；#87 的后果是生产 `factory_feature_config` 里 `WAREHOUSE_LAYOUT` **一行都没有** —— 不是功能坏了，是没人找得到。⇒ 「做完功能」此前**没有任何一步是「确认用户能走到」**，故补闸而非再修一次。**闸**：`web-admin/src/router/__tests__/routeReachability.spec.ts`，判据「菜单登记 or 代码里有字面量跳转」，棘轮 `ORPHAN_BUDGET = 92` 只禁增长（动态拼接跳转看不见会误报，故不硬红 —— 一道天天误报的闸最终会被关掉）。**变异对照**：注入一条既不在菜单也无人跳转的路由 → 红(93>92, 按名字点出)；**同一条**登记进 `menuConfig` → 绿(92) ⇒ 量的是可达性不是路由条数。另含阳性对照(读空即红)与阴性对照(`/warehouse/storage-locations` 不许被判孤儿)。**🔴 实测存量 92 条孤儿**：能定位到组件的 56 条合计 **28,899 行 Vue**（另 36 条未定位，真值更高）——HR 13 条(工资单 806 行/排班日历 826 行/请假/加班/年度汇算)、system 12、analytics 9、warehouse 5、凭证导出 1048 行、审批流编辑器 2020 行、调拨、半成品仓……**做完了，没人找得到**。**🔴 顺带查出**：5 条孤儿在 **E2E 里是绿的**（`/analytics/ai-reports`、`/finance/voucher-export`、`/indicator-center`、`/sales/finance-review`、`/system/data-fabric/provenance-config`）——E2E 是 `goto(url)` 直接敲 URL，与用户地址栏手打是同一件事 ⇒ **E2E 对「入口缺失」这一类系统性免疫**，恰好绕开了它本该发现的缺口。故本闸不看 E2E 目录。**⚠️ 建闸时这把尺子自己错了三次**，读数 62→83→84→92 同一份代码：① Windows 上 `endswith('router/index.ts')` 恒假(路径是反斜杠) ⇒ 路由表自己进了引用池，它当然「引用」每一个路径；② `index.ts` 还 import 了 `router/modules/*.ts`，漏掉 34 条路由/其中 8 条是孤儿；③ 62 那次已废弃、文件里如实标注为**唯一没被解释掉的读数**。⇒ 跨平台路径比较先归一化分隔符；「路由表」不一定只有一个文件。**判据**：web-admin 全量 vitest **3640 passed / 448 files**；`vue-tsc -b --force` exit 0 无输出；变异后 `git checkout` 逐字节还原 `router/index.ts`/`menuConfig.ts`。**⚠️ 本批只建闸不改那 92 条** —— 哪些补菜单、哪些本就该废弃是产品判断，待 Owner 裁定。**⛔ 未被 CI 背书**：CI 因账单全线不执行(job 0 步骤/2 秒结束/无日志，GitHub 注解 "recent account payments have failed or your spending limit needs to be increased")，上述判据均为本地跑。 ✅ **2026-08-27 补登**: CI 已恢复(切到自建 runner, 加拿大 Mac mini), main 当前 HEAD 上五个闸全绿且带真实读数: RN 2041 tests/184 suites · web-admin 451 test files + `vue-tsc -b` · python 9571 passed/173 skipped · JPA 65 tests · secret 扫全树。⚠️ 口径: 这证明的是**当前 main 是绿的**, 不是「当时那个合入 commit 逐个被验过」—— 那几天的 job 确实一次都没跑。
+
+### BUG-UTC-DAY-TRUNCATION-20260826
+
+- `BUG-UTC-DAY-TRUNCATION-20260826` — `done` — Owner: `/root` — **全仓 184 处「取本地日历日」写成 UTC 截断, 东八区 00:00~07:59 整整差一天**(早班仓库收货正好在这个窗口)。RN 105 处/60 文件 → `utils/formatters.formatDate()`; web-admin 79 处/50 文件 → `utils/dateFormat.toDateString()`。**先核了前提再动手**: 后端 `spring.jackson.time-zone=GMT+8`、服务器 `timedatectl`=`Asia/Shanghai`、`LocalDate BETWEEN` 比业务日历日 ⇒ 送 UTC 日是错的, 不是口径之争。⛔ 整串 ISO(时间戳语义)不动。**PR#110**(前置: 6 个屏的私有 `formatYmd`/`parseYmdOrToday` 副本收敛成一处真源, 顺带 6 处默认日期缺陷; `parseYmdOrToday` 此前**零行为覆盖**, 补 11 条真测试) + **PR#111**(184 处清扫), 均已合并 `origin/main` `2de0c0d9c5`, web-admin 已部 prod, OTA 已推 `runtimeVersion=1.0.4`。**🔴 一个 tsc 抓不到的缺陷**: 机械改写把 `const formatDate = (d) => d.toISOString()...` 变成 `=> formatDate(d)` —— **自我递归、运行时栈溢出**, 6 个文件中招而 tsc **只报 1 个**(有显式 `: string` 返回标注就不触发 TS7023) ⇒ 两道新闸自己扫源码, **不拿「tsc 绿」当判据**, 并专查自我递归; 变异 G2 下闸红而 tsc 仍绿。**闸**: `frontend/.../__tests__/unit/utils/noUtcDayTruncation.test.ts`、`web-admin/src/utils/__tests__/noUtcDayTruncation.spec.ts`(均逐行剔注释 —— 本仓多次栽在「闸把自己写的注释当被测对象」, 而清扫留下的注释里正好写着缺陷长相)。**判据**: RN jest 1799/1799 + `tsc` 0 错; web vitest 3554/3554 + `vue-tsc -b` 0 错; 两侧 `--stat` 与 `--ignore-all-space --stat` 一致(修掉一处误插 CRLF)。**真机验收(小米 f79c50d6)**: 本地 12:xx 时 UTC 日与本地日相同 ⇒ 截图不可判定, 故把设备时区改到 GMT-08:00(本地 8/25 20:53 vs UTC 8/26)让两者分叉后才验 —— 扫码入库录入「商品日期」= **2026-08-25**(本地日)✅, 点击弹**三列滚轮**✅, 滚到 24 写回 `2026-08-24` ✅; 出入库统计/操作记录/盘点记录三屏渲染正常, logcat 无 error/FATAL。⚠️ **分层说明**: 设备证的是「没崩/默认是本地日/滚轮能用」, 「算得对不对」由 24 点采样测试 + 变异对照证, 两层不混。**✅ 收尾(2026-08-27)**: 这条已闭环。Owner 裁定「你自己决定」后按**改语义**处理: `city-overrides.vue` 与 `insurance-rates.vue` 两处控件改 `type="month"`(保持 `value-format="YYYY-MM-DD"`), 并配 **fail-closed 校验**(`!effectiveFrom.endsWith('-01')` 直接拒绝) —— 控件被换回 `type="date"` 或被绕过时也进不去。**PR#115** 已合。 **prod 实测(在运行中的产物里找标记, 不看 git log)**: `139:/www/wwwroot/web-admin/assets/` 下的 chunk 按 mtime 排开, 切换点干净 —— **08-26 13:06 及以前全是 `type:"date"` 且无新串; 20:15 起全部 `type:"month"` + fail-closed 串**(PR#115 于 17:16 合入, 对得上), 当前活的那一代(08-27 10:33)两个文件都含。 ⚠️ 阳性对照: 同一把 grep 搜旧串「生效起始」命中 36 个 chunk ⇒ 上面那些「无」不是 grep 自己失效造出来的。
+
+### ML-LIUSHANMEN-WORK-AREA-ROI-20260811
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed。计划任务 `Cretas-Liushanmen-VisionLab` 已迁到 clean exact-main 工作树并取得 LastResult=0；剩余阻塞仅为该 ROI 人工裁决。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
+
+### LLM-PROVIDER-CLIFF-20260815
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
+
+### UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802` — `blocked` — Owner: `/root` — 实现提交已进入迁移树，代码与 Expo Web 验收可核销；当前餐饮 RN OTA runtime 与真实设备验收无法确认。实现文件 scope 已释放；如继续，仅新建 exact-commit OTA/设备验收项。
+
+### SEC-CREDENTIAL-ROTATION-20260719
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: `/root` — tracked tree、服务器副本、数据库/JWT/internal/BaoTa/OSS RAM 替换已完成；仍需各供应商控制台吊销旧 Aliyun 主账号 AK、旧 Model Studio/Zhipu/DeepSeek key 与微信长期凭证并验证失效。旧 broad 代码锁已释放；不得在本任务做历史重写。
+
+### ENH-F006-MATERIAL-TAXONOMY-SUGGESTION-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `ENH-F006-MATERIAL-TAXONOMY-SUGGESTION-001` — `blocked` — Owner: `/root` — 候选 DTO、置信度/reason、同厂历史匹配和 Web 展示已进入迁移树；分类建议目标测试与 Excel preview 复用未完整证明，当前无执行者。陈旧 scope 已释放；恢复时按最新 Base 重新登记。**2026-08-25 核销进度**：分类建议目标测试这一半已补齐 —— 新增 `MaterialTaxonomySuggestionContractTest`(10 条, 落在 CI 选择器内), 覆盖 HIGH/MEDIUM 分级、按 L3 去重、分类链残缺(节点缺失/父链断裂/已停用)跳过候选且不阻断录入; 每条断言都配阳性对照(`unit`/`matchedMaterialName` 照常返回), 防「整个方法挂了」被读成「候选为空」。**实测**：既有 `RawMaterialTypeCodeGenTest` 对 classification* 的断言数为 **0**(同文件对其它 suggest 字段有 8 条, 作阳性对照), 且其类名不在 CI 选择器内, push 上只编译不执行。**剩余未证明**：「Excel preview 复用」—— 实测 `suggestFields` 全仓**唯一**调用点是 `RawMaterialTypeController`, 物料 Excel 导入预览**根本没有复用**它, 即台账这半句描述的不是「未证明」而是「未实现」, 需 Owner 裁定是否要接。
+
+### ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001` — `blocked` — Owner: `/root` — **需 Owner 裁定后才能继续；上一版交接件给的方向经实测被否**。交接件写「缺 `TRANSFER` 和生产退料 —— 统一来源矩阵要补的是这两类」，照此实施是**给一个死字段加枚举值，零用户可见效果**。**2026-08-25 实测(只读)**：① `InboundType` / `material_batches.inbound_type` 是**只写字段** —— Java / web-admin / RN / Python **四侧生产读取点为 0**(阳性对照: 同法 grep `sourceDocType` 得 62 处且有真实过滤 `"PRODUCTION_BATCH".equals(batch.getSourceDocType())`; Python 侧引用 `material_batches` 105 次而 `inbound_type` **0** 次)；全仓仅 3 处读取, **全部在测试里**, 且断言的正是那 3 个写入点自己写的值(自我确认)。② 生产库 177 行 material_batches 里 **167 行(94%) `inbound_type` 为 NULL**, 含全部 53 行 `PURCHASE_RECEIVE` 与 24 行 `PRODUCTION_BATCH`; 只有 OPENING→LEGACY_IMPORT(7) 与 CUSTOMER_MATERIAL_ARRIVAL→OTHER(3) 被写过。③ 8 个批次写入点中只有 4 个设过 `inboundType`, 主路径 `createMaterialBatch` 只在 LEGACY_IMPORT 一个分支设。④ 全仓**唯一**暗示该枚举有用途的是 `WarehouseInventoryGuardService` 的一句 javadoc, 而它写的 `inboundType=SEMI_FINISHED/RAW` **在枚举里根本不存在**(实为该方法的 `inboundCategory` 字符串形参)——本轮已订正该注释并把上述结论钉在注释里。⑤ 真正被消费的来源字段是 `source_doc_type`, 但它与 `InboundType` 是**两套互不映射的词表**, 且生产在用的 `MATERIAL_REQUISITION`/`PRODUCTION_BATCH`/`CUSTOMER_MATERIAL_ARRIVAL` 三个值**都不在** `validateSourceDoc` 的 switch 里(它们由绕开该方法的写入点直接落库)。**裁定项**：(a) 给 `InboundType` 接一个真实消费方(如注释描述过的仓库准入), 还是 (b) 删掉这个死字段、来源矩阵统一收敛到 `source_doc_type` 一套词表？在裁定前**不要**扩充枚举值。
+
+  **2026-08-25 第二轮：本项的真实内容已定位, 两个真缺口现已全部清零。** 「统一来源矩阵」的实质不是枚举值缺项, 而是**「入库必须有发起单」那道 fail-closed 守卫只在 `createMaterialBatch` 这一条路上跑**, 其余写入点直接 `new MaterialBatch()` + `repo.save()` 绕开它。全仓 11 个构造点实测: 8 个写来源, 3 个没写 —— 其中 1 个是不落库的报表占位对象(非写入点), 另 2 个是真缺口:
+  - ✅ **已修 `TransferServiceImpl.createTargetInventory`**: 调入方建的批次此前 `source_doc_type`/`source_doc_id` 一个字都不写, 追不回调拨单。现写 `TRANSFER_IN` + 调拨单号。**行为中性**: 全仓按值消费 `sourceDocType` 的三处全是与 `"PRODUCTION_BATCH"` 比相等, 而它对 `null` 与 `"TRANSFER_IN"` 同为 false, 且无 JPQL 按该列过滤。配 `TransferTargetBatchSourceDocContractTest`(3 条, 含阳性对照「确认时确实建了批次」)。**变异对照**: 撤掉那两行 → 行为测试与下述闸**双层同时红**。
+  - ✅ **已下线 `POST /{factoryId}/material-receipt`（Owner 2026-08-25 拍板删除）**: 它是与 `/material-batches` **并行的第二个原料入库端点**, 真落库但 `CreateMaterialReceiptRequest` 里**没有任何来源字段**, 整条路**不过** `validateSourceDoc` / 补录时效锁 / 单位维度守卫 / 仓库类型守卫, 且**批次号由用户手填**(主路径是系统生成并显式忽略手填值)。⚠️ **权限口径也不一致**: 正门要 `warehouse:read_write`(仅仓储经理/仓管员/餐饮厨师 3 个角色), 而它要 `production:read_write`(**8 个角色, 含一线 operator**) —— 即生产岗可绕过仓储职责分离凭空建原料库存; 而系统在 `ToolRbacEnforcer`(`material_batch_create`→`warehouse:read_write`) 与 `BatchDeleteConfirmTool` 注释里都明确规定建原料批次属仓储权限, **AI 工具层守住了这条线, 这个 HTTP 端点没守住**。**下线前的实测证据**: ① 批次号格式反查 —— 生产库 37 条无来源批次全部有别的解释(24 条 `MR2026*` 是 MOCK_REST 餐饮演示租户种子 / 12 条 `TRF-MT-*` 是调拨 / 1 条 `MT-2*` 是 08-16 修复前的采购), **没有一条是从这扇门进来的** ⇒ 上线至今零使用; ② 唯一调用方是 RN `screens/test/BatchOperationsTestScreen.tsx`, 而该测试屏**没挂进任何导航**(对照: 同目录 `ServerConnectivityTestScreen`/`IntentExecutionTestScreen` 确实挂在 ProfileStack) ⇒ App 里点不到。**删除范围**: Controller 端点 + `toMaterialBatch` mapper + `ProcessingService`/`Impl` 的 `createMaterialReceipt` + `CreateMaterialReceiptRequest` DTO + `ProcessingControllerCreateMaterialReceiptTest`(4 条) + RN 的 `recordMaterialReceipt`/测试屏那一步/单测, 净 -594 行。**入库统一走 `/material-batches`(71 处调用), 仓管日常不变。**⚠️ 保留了 `CreateBatchRelationRequest`/`CreateDisposalRecordRequest` 两处 javadoc 里的历史 PR 清单提及(「continues the sweep from ... PR #391」), 那是对当时做过什么的陈述, 仍然为真且非 `{@link}` 不断链。
+  - 🔒 **防复发已上闸**: 新增 `MaterialBatchSourceDocContractTest`(4 条, 棘轮) —— 凡 `new MaterialBatch()` 的文件必须写 `setSourceDocType`, 否则须登记进 `KNOWN_WITHOUT_SOURCE_DOC` 并写理由; 名单只许变短, 且检查过期条目防名单烂掉; 另有阳性对照防「标记过期导致扫到 0 个而恒绿」。闸的**代理判据与两个已知盲区**(文件级粒度 / 临时对象会被误判)已写在类 javadoc 里。⚠️ 这道闸解决的正是 2026-08-16 那次的复发面: 当时 `PurchaseServiceImpl` 漏写来源, 修法是**在那一个文件里手工补一行**, 守卫本身没被接上 —— 于是 `TransferServiceImpl` 成了「下一个」。
+
+### BUG-F006-PURCHASE-AP-PAYMENT-BOUNDARY-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `BUG-F006-PURCHASE-AP-PAYMENT-BOUNDARY-001` — `blocked` — Owner: `/root` — V94、allocation 核心、财务 AP 未清项付款与旧采购付款只读边界已进入迁移树；四维状态、付款条款里程碑/计划/三单匹配未完整实现。CORE 子任务已归档；父任务旧广域锁释放，恢复时按最新 Base 重锁。**2026-08-25 只读核查**：AP 核心确在 main 上 —— `entity/finance/` 下有 `ArApTransaction`(带 `settledAmount`/`outstandingAmount`/`paymentStatus`/`purchaseOrderId`)、`ArApPaymentAllocation`、`PaymentRecord`、`InvoiceRecord`, 端点有 `ArApController` 与 `PayableSettlementController`(付款并核销未清项 + 历史未分配付款只读查询)。**「四维状态」疑似已由 `PayablePaymentStatus` 四值承担**(`NEEDS_RECONCILIATION` / `UNPAID` / `PARTIALLY_PAID` / `PAID`) —— 需 Owner 确认台账说的「四维」是不是就是这个; 若是, 本项描述已过期。**确实未实现**：付款条款里程碑/付款计划、三单匹配 —— 全仓 grep `threeWayMatch` / `PaymentMilestone` / `paymentSchedule` **0 命中**(阳性对照: 同法搜 `ArAp`/`应付` 有大量命中, 排除 grep 失效)。
+
+### ARCH-F006-DEMAND-DRIVEN-MATERIAL-RECEIPT-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `ARCH-F006-DEMAND-DRIVEN-MATERIAL-RECEIPT-001` — `blocked` — Owner: `/root` — 净需求、客户来料、ownership/idempotency 与旧直接收料 fail closed 已有；严格同批 identity/单位/日期/QC/cost 匹配及独立库存 transaction 验收不足。需求仍有效且跨模块，保留 scope，`NOT_DEPLOYED`。**2026-08-25 只读核查**：台账描述与代码一致, 未发现过期 —— `SalesOrderSuppliedMaterialRequirementService` 有 `createForOrder`/`updateForOrder`/`copyForOrder`/`getPendingReceivingTasks`/`receive`, 幂等经 `idempotencyKey` → `sourceEventKey` 落库; 直接收料的 fail closed 在 `MaterialBatchServiceImpl.validateSourceDoc`(缺 `sourceDocType` 一律 400, 各类型分别校验发起单存在性)。相关测试 `SalesOrderSuppliedMaterialRequirementReceiptTest` / `CustomerOwnedInventoryGuardsTest` / `CustomerMaterialArrivalNoticeServiceTest` 均存在但**类名不在 CI 窄选择器内**(只编译不执行), 与本批其它几项同一形态。**剩余未核销**：严格同批 identity/单位/日期/QC/cost 匹配与独立库存 transaction 验收 —— 本轮未动。⚠️ 注意与 `ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001` 的交叉: 生产在用的 `source_doc_type` 值里 `MATERIAL_REQUISITION`/`PRODUCTION_BATCH`/`CUSTOMER_MATERIAL_ARRIVAL` **都不在** `validateSourceDoc` 的 switch 里 —— 它们由绕开 `createMaterialBatch` 的写入点直接落库, 即「直接收料 fail closed」只覆盖走主路径的那部分。
+
+### ENH-F006-SUPPLIER-IMPORT-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `ENH-F006-SUPPLIER-IMPORT-001` — `blocked` — Owner: `/root` — 供应商必填资料、Excel 预览/幂等确认、状态生命周期、采购门禁与详情信息架构尚无本轮完整 tree/test 核销证据；当前无专用 PR。需求和 scope 均保留，恢复时先核对公司 main 的现有实现，严格 `NOT_DEPLOYED`。**2026-08-25 只读核查**：**实现已在 main 上齐活**(`SupplierImportService`/`Impl`、`SupplierImportReceipt` 实体+仓储、preview/confirm/errorReport/template 四个 DTO、`SupplierController` 端点), 台账「尚无核销证据」指的是**验证**而非实现缺失。测试也存在(3 条 + 4 条), **但两个类名都不在 CI 窄选择器内 ⇒ push 上只编译不执行**, 这正是「无核销证据」的机械成因。**已修**：两个类重命名进选择器(`SupplierImportServiceImplTest`→`SupplierImportContractTest`、`CreateSupplierRequestRequiredProfileTest`→`CreateSupplierRequiredProfileContractTest`, 重命名前先本地跑过确认 7/7 全绿才搬, 避免把红的搬进 CI), 并补 4 条此前完全没有断言的**幂等出口**: ① 同键同文件重放返回既有结果且**一个供应商都不再创建**(断言 `verifyNoInteractions(supplierService)` 而非只看 createdCount —— 后者在「又建一遍又恰好同数」时同样成立); ② 同键不同文件 409(⛔ 不许静默按旧结果回放, 否则「换个文件重传」看起来成功而新供应商一个没进); ③ 并发抢键撞唯一约束 409 且在建任何供应商之前; ④ 行校验失败必须在建任何供应商之前抛 400。**变异对照**: 把摘要比对从 `equalsIgnoreCase` 改成 `equals` → `replayWithSameDigestReturnsExistingResultAndCreatesNothing` **红**(被岔进 409 分支), 其余 6 条仍绿。至此本项的「Excel 预览/幂等确认」一半有了会执行的背书; **剩余未核销**：状态生命周期、采购门禁、详情信息架构、Web 侧。⚠️ **另发现一处 schema 债(非导入缺陷)**：`suppliers` 表存在成对重复列, 且**每对只有一半是活的** —— 实测全库 18 家: `phone` 18/18、`contact_person` 18/18、`email` 10/18 有值, 而 `contact_phone` **0**、`contact_name` **0**、`contact_email` **0**、`business_license` **0/18**(全租户皆空)。导入侧写的是**活的那一半**(`supplierCode`/`contactPerson`/`phone`/`email`/`taxNumber`/`address`/`bankAccount`), 因此导入本身是对的; 但任何按实体字段名直觉行事的新代码都会写进死的那一半。⛔ 本轮据此得到一条判据: 「F006 12 家供应商资料全缺」是**错读** —— 那是量到了死列; 阳性对照(换成活列)显示 12 家电话/联系人齐全。
+
+### BUG-F006-R2-SKU-UNIT-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `BUG-F006-R2-SKU-UNIT-001` — `blocked` — Owner: `/root/supplier_frontend` — SKU displayUnit、净含量单位、同维度 canonical 化与历史回填尚无本轮完整 tree/test 核销证据；保留 Web scope，Java 契约仍须协调者另行审计，严格 `NOT_DEPLOYED`。**2026-08-25 只读核查**：Web 侧 canonical 化**已相当成熟且真的有 CI 背书** —— `web-admin/src/utils/unitPricing.ts` 已分出「内部比较键」(`canonicalUnitCode`) 与「落库/展示」(`canonicalUnitCodeKeepingCount` + `RAW_COUNT_LABELS`/`DISTINCT_COUNT_LABELS`) 两条路, 明确保留用户手填的 件/个/只 原标签而不折成同一个字; 且 `Web Admin Gate` 跑的是 `npm test` **全量 vitest** + `vue-tsc -b`(与 Java 的窄选择器不同), 故 `UnitSelect.contract.spec.ts` / `MergePurchaseDialog.pricingUnit.contract.spec.ts` 这些契约测试是**真的会执行**的。**生产实测(F006 raw_material_types 330 行)**：同维度并存确实存在 —— `kg` 250 / `g` 3(同维度未折), 计数类 `个` 32 / `件` 1 / `只` 1(三标签并存, 属**有意保留**而非缺陷, 见上述 DISTINCT_COUNT_LABELS 的设计理由)。**Java 侧净含量契约已审计并补齐(2026-08-25)**：`ProductTypeServiceImpl.applyNetContentContract` 有一整套真实约束, 而全仓 `src/test` grep `netContent` 此前**只命中 `BomRecipeDraftLifecycleJpaTest`**(那是 BomRecipe 的字段) ⇒ 这条契约**一条断言都没有**。新增 `ProductTypeNetContentContractTest`(13 条, 落在 CI 选择器内), 覆盖: ① **核心承诺「容量型绝不伪装为克重」** —— `ml`/`L` 存净含量但 `gramsPerUnit` 保持 `null`(若折成克, 下游按克重结算的成本/报工会拿到一个凭空造出来的重量), 并配阳性对照 `kg → ×1000` 证明这条路真的会写 `gramsPerUnit`; ② 单位归一(克→g / 公斤·千克→kg / 毫升→ml / 升→**L 大写**, 大小写空格不敏感, 值域外 400)—— `L` 是大写这点特意钉死, 免得有人「顺手统一成小写」而下游按 `"l"` 精确比对漏掉; ③ 成对必填与非正数 400; ④ 旧 `gramsPerUnit` 兼容桥结构化为 `g`, 且结构化字段在场时覆盖旧字段(防「同时传 500ml 和 gramsPerUnit=500」绕过核心承诺)。**变异对照**: 把 `toGrams` 的 `case "ml","L" -> null` 改成返回原值 → 正好那 3 条守容量型的红, 其余 10 条(含阳性对照)仍绿。**剩余未核销**：历史回填。
+
+### FEATURE-F006-R2-WORKPROCESS-DEDUP-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `FEATURE-F006-R2-WORKPROCESS-DEDUP-001` — `blocked` — Owner: `/root/workprocess_governance` — canonical/mergedInto、未来候选排除、既有 Workflow/SKU/计划/报工引用不迁移，以及排序/单位从主数据移除的完整 JPA/Web 验收尚未本轮核销；保留 scope，生产重复组零治理。**2026-08-29 窄范围释放**：Owner/agent/task/branch/worktree/commit/open PR 均不可达，原 Base `0f2b8329c` 也是无关老提交；仅将 `WorkProcessTaskServiceImpl` 的 legacy DTO 输出单位投影及对应目标测试释放给 `BUG-LSM-LEGACY-WORKPROCESS-OUTPUT-UNIT-20260829`，其余广义治理 scope 继续保留。**2026-08-25 核销进度**：Java 侧行为契约已补齐 —— 新增 `WorkProcessGovernanceContractTest`(11 条, 落在 CI 选择器内), 首要一条钉住端点摘要那句唯一实质承诺「仅影响未来选择，**不迁移已有引用**」(断言治理全程 `verifyNoInteractions` 三个引用仓储: SKU 关联 / 工作流 / 报工任务); 另覆盖 MERGE 与 DEACTIVATE_OTHERS 的落库差异(互为阴性对照)、幂等重放(纯读, 不再写库)、幂等键冲突 409、跨重复组 409、MERGE 关键配置不一致 409、跨租户锁不足 404、mode 缺失 400、过滤后为空不写空审计。**变异对照(两条, 均确认能红)**：① 在治理循环里插一次引用仓储调用 → `mergeDoesNotTouchReferenceRepositories` 红(`No interactions wanted here`), 其余 10 条仍绿; ② 去掉 `mode == MERGE` 守卫 → `deactivateOthersDoesNotSetMergePointer` 红。每次变异前后 `touch` 源文件, 并先 grep 确认变异真的落进文件再看红绿。**实测定性(只读, 生产库)**：迁移已到位(`merged_into_id` 与 `work_process_governance_audits` 表在 prod 均存在), 端点已接线(controller→service), 但审计表**全库 0 行** ⇒ 这条路径**从上线至今一次都没被调用过**, 「生产重复组零治理」属实。F006 190 条存活工序里 `merged_into_id` 非空 **0** 条; 重名组共 **3 组 8 行**: 焯水×4 / 熟制(卤制)×2 / 修油×2, 且 8 行的 SKU 关联数**全为 0**。⚠️ **但先别急着治理**: 这 8 行的 id 前缀是 `WP-F006-NT-*` / `WP-F006-ZS-*` / `WP-F006-ZZB-*`, 形态上像**按产线/车间拆的同名工序**而非重复录入 —— 合并它们可能在语义上是错的, 需 Owner 先判定这三组到底是不是「重复」。**剩余未核销**：Web 侧工序治理界面、排序/单位从主数据移除、Flyway/JPA 层验收。
+
+### FEATURE-F006-R2-BOM-SUBSTITUTE-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `FEATURE-F006-R2-BOM-SUBSTITUTE-001` — `queued` — Owner: `/root` — Java CORE 已归档，但父任务的 Web、计划、领料、报工、成本和追溯快照尚未证明完成；继续由统一 Workflow/BOM 任务串行吸收，保留父任务 scope，严格 `NOT_DEPLOYED`。
+
+### F006-R2-WORKFLOW-FIRST-BOM-GATE
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `in-progress` — Owner: `claude-code/f006-remaining-closure` — Base SHA `fee2509fa667344f7f8ba7a7b91a5fb2a32ae2a2`，worktree `cretas-f006-bom-gate` / branch `codex/f006-workflow-bom-gate-20260825`。**本批已做**：删掉 `applyPlanUnitAuthority` 里一道**到不了的** BOM 准入分支（`mode == WORKFLOW && activeRecipe.isEmpty()` 位于 `mode == WORKFLOW` 早退之后，条件恒为 false，`ACTIVE_BOM_REQUIRED` 从写下来那天起一次都没执行过）；WORKFLOW 模式的 BOM 准入由 `resolvePinnedBomAuthority` 的 `ACTIVE_BOM_FAMILY_REQUIRED` 唯一负责（活闸，已由新增闸钉住仍在）。新增 `PlanBomGateHasNoUnreachableBranchContractTest`（4 条，含阴性对照：`ProductConfigurationReadinessService` 那处**活的**同名码不许被顺手删掉；含阳性对照防「剥注释剥过头 ⇒ 恒真式」）。**实测定性（只读，生产库）**：① F006 共 13 个 ACTIVE `bom_recipes`，其中在 `bom_versions` 里有对应版本快照的是 **0 个**；`bom_versions` 全库仅 9 行、最近写入停在 2026-08-02 ⇒ **画布保存/激活 BOM 那条路根本不写 `bom_versions`，只有 ECN 手工流程（`BomVersionService`）才写**；而成本归集 `resolvePinnedPackaging` 读的正是 `bom_versions.snapshot_json` ⇒ 对画布建的 BOM 永远读不到（形态 D：同一个东西两份，读的是不再维护的那份）。② 但**退回实际耗用也救不了**：那 7 个批次 `material_consumptions` 里包材行数 **0**；`bom_recipe_items` 里 PACKAGING 的 `item_cost` 5 行全是 `0`（RAW 16 行全是 `null`）。**⚠️ 2026-08-27 更新：那批 `0` 已由 `V20260826_04` 改回 NULL**（全部 8 行的 `unit_price` 都是 NULL，判为「没填」而非「确认为零」），现全表 `item_cost = 0` 的行数为 **0**。⇒ 包材成本确实不可知，成本侧诚实阻断**是正确行为**，不是缺陷。**未决产品问题**：~~(a) 「包材可选 ⇒ 成本永远算不出」是否可接受？~~ **❌ 2026-08-27 撤销此问 —— 它的前提是错的归因。** 全量重测 `bom_recipe_items`（未软删）：
+  ｜类别｜明细｜缺单价｜缺用量｜两样齐全｜
+  ｜RAW 原料｜44｜22｜**42**｜**2**｜
+  ｜PACKAGING 包材｜11｜8｜**0**｜3｜
+  ｜AUXILIARY 辅料｜3｜0｜0｜3｜
+  **包材一条都不缺用量，而原料 44 条里 42 条缺。** 三类里包材填得反而不是最差的（齐全率 辅料 3/3 ＞ 包材 3/11 ＞ 原料 2/44）。⇒ 真正卡住成本的是**原料没填参考用量**，不是「包材可选」。8-25 那个「F006 那 7 个批次包材成本不可知」的观察本身没错，但把它归因成「包材可选」是错的 —— 当时只看了那 7 个批次，没有全量。⚠️ 顺带：「标准单价」在 `raw_material_types` 里**两个工厂一条都没填过**（`unit_price` 全 NULL），只有 5 种物料有系统自算的 `moving_avg_price`。~~(b) `bom_recipe_items.item_cost = 0` 到底是「确认为零」还是「没填」？~~ **✅ 2026-08-27 已裁定并执行**：判为「**没填**」。决定性证据是**全部 8 行零成本的 `unit_price` 都是 NULL**（8/8），而全表 `unit_price = 0` 的行数是 **0** —— 本系统从不合法地记录零单价；物料是真空袋/外箱/标签，现实中不可能零成本。已由 **`V20260826_04`** 改回 NULL 并部署验证（`cost_zero` 全表归零，误伤面 0 行）。⚠️ **本句原文「现在写的是 0 而不是 null」已不成立**，勿再据此判断。⚠️ 另需注意：那 8 行当时**并未**使任何配方成本偏低（相关配方本就被别的缺口整体阻断），修它是**防将来**。(c) 成本归集该不该从 `bom_versions` 改读 `bom_recipes`+`bom_recipe_items`，还是该让画布激活时补写 `bom_versions` 快照？**⚠️ 2026-08-27 补充（半个答案已经在代码里了）**：`resolvePinnedPackaging` 里已有一条`pinnedBomSnapshotFromRecipe` 兜底 —— `bom_versions` 查不到时从 `bom_recipes` 直接取，且只在 `recipe.version == plan.selectedBomVersion` 时才用（避免拿新版本冒充旧版本）。🔴 但它**只救回了 snapshot、没救回 `version` 对象**，导致兜底**成功时** `version.getVersionNumber()` NPE ⇒ `/cost-breakdown` 500，界面常驻「系统处理异常」。已由 **PR #149** 修复（价格来源区分 `PINNED_BOM_ITEM_COST` 与 `RECIPE_FALLBACK_ITEM_COST`，不混为一谈）。⇒ 本项待裁定的其实只剩「要不要让画布激活时**补写** `bom_versions` 快照」，读侧已有可用兜底。停止条件：不得改写历史快照或生产数据；不得把「没填价」按 `0` 计入 COGS。
+
+### BUG-F006-PRODUCTION-COST-CLOSURE-001
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `BUG-F006-PRODUCTION-COST-CLOSURE-001` — `in-progress` — Owner: `claude-code/f006-remaining-closure` — Base SHA `7d51fe22597e80ee9cd572575f58539c249fb170`，worktree `cretas-f006-cost-labor-split` / branch `codex/f006-cost-labor-split-20260825`。**已合入并部署三批**（PR #58 / #59 / #60）：① 算不出成本时说出真实原因；② 「设备/其他不强制填写」裁定补到 `costComplete`；③ 人工「明细不全」与「金额未知」拆开（`LABOR_TIME_DETAIL_MISSING` 不阻断 / `LABOR_COST_UNKNOWN` 照旧阻断）。生产核验：active `10010`/`cretas-backend`，PID `2237799` 启动 `14:53:57`，JAR mtime `14:53:34`，运行制品含 `LABOR_TIME_DETAIL_MISSING`×2 / `LABOR_COST_UNKNOWN`×1。**部署后只读探针（23 个 F006 生产批次，真跑接口非推断）**：`totalCost` 非空由 `2/23` 提升到 `16/23`；交接件点名的 `PB-PLAN-1787622818112-B3898275-15036` 已算出 `totalCost=93.12` / `perBoxCost=9.31`（= 原料 40.32 + 人工 51.57 + 包材 1.23，逐项对得上）；`LABOR_RATE_OR_TIME` 已从阻断码分布中消失；判据「无阻断项 ⟺ totalCost 非空」不一致 `0` 条；`calculationStatus` 全部仍为 `PARTIAL`（不阻断 ≠ 藏起来）。**剩余 7/23 条阻断码全部是 `PINNED_BOM_SNAPSHOT_MISSING`，且已定性为「成本侧行为正确」**：实测 F006 共 8 个 `bom_versions`（全部有 snapshot），而这些计划锁定的 4 个 `bom_recipe_id` 在 `bom_versions` 里**一个版本都没有** ⇒ 包材成本确实不可知，诚实阻断是对的。真正的修复属于 `F006-R2-WORKFLOW-FIRST-BOM-GATE`：不该让「没有激活 BOM 版本」的计划建单。**另一遗留（形态 D 两条轨）**：`PUT /{planId}/costs` 写 `production_plans.actual_equipment_cost`（喂分析/AI 报表），而成本归集读 `production_batches.equipment_cost`，用户补录进不了单位成本。停止条件：`totalCost` 的 COGS 口径不得松动（缺**单价**类照旧阻断），生产实体只读、零业务写入。
+
+### QA-WAREHOUSE-STORAGE-UI-VERIFY-20260825
+> 仍在飞：ACTIVE.md 里是 ≤300 字摘要，本条是原文。
+
+- `QA-WAREHOUSE-STORAGE-UI-VERIFY-20260825` — `review` — Owner: `claude-code/warehouse-storage-ui-verify` — 第一批已合入并部署 (PR #87 / `11d395f783`)：菜单入口缺失、弹窗 `is-closing` 卡死、成品移位位置存在性 fail closed、解绑与四级删除、浮点误差与卡片溢出、AI 识别改预览确认。部署后已在生产逐条复验（同一请求 200→400、菜单已可点、浮点卡片 5→0、溢出 5→0、删除端到端并服务端回读）。**第二批（PR 待开，worktree `cretas-wh-approval-closeout` / branch `codex/claude-warehouse-approval-closeout-20260826`）** —— Owner 追加要求的三件事：
+  ① **App 端够不着仓库地图**：`WHLocationManageScreen` 原本只挂在被 `SIMPLIFIED_WAREHOUSE_NAV` 整栈隐藏的库存 Tab 下。⛔ 没有翻那个开关（会把 18 个库存查询屏一起放出来，违背 owner 裁定），改为单独挂进首页栈 + 首页加一张「仓库地图」卡；同时补注册 `WHTempMonitor`（该屏写死 `navigate("WHTempMonitor")` 而首页栈原名 `TempMonitor`，不补即死路），并加闸逐个核对它跳出去的路由。
+  ② **走通数量审批**：发布了全生产第一个 `INVENTORY_ADJUSTMENT_APPROVAL`（厂长单级），仓管发起临时盘点（盘盈+0.1/盘亏-0.1）逐条量：录入后库存零变动（139 批逐条比对）→ 提交进 OA 不再自动通过 → **仓管自审 403 `OA_TASK_FORBIDDEN`（服务端硬拒，不是 UI 藏）** → 厂长待办可见而仓管待办为空 → 审批前库存仍未动 → 通过后发起人/审批人分别记为仓管/厂长 → 🔴 **应用差异 500「追踪码 7E651E80」过账整体回滚**。根因：凭证号发号器原生 SQL 里 `CONCAT('V-', ?2, '-')` 无类型上下文，PG 在 Parse 阶段推不出类型；pgjdbc `prepareThreshold=5` 使其在第 5 次升级为服务端 prepared statement 后每次必炸（解释了「库里 17 张凭证却今天必失败」）。已在 prod 库用 `PREPARE` 双向验证（现状式报错 / CAST 式返回 17，而真实 max 就是 `V-2026-0017`，未删仅 13 ⇒ 没把软删占号的旧缺陷带回去）。⚠️ 单测库是 H2，删掉 CAST 它照样绿 ⇒ 防回退靠源码闸，JPA 那条只证明「加 CAST 后 H2 仍跑得动」，测试注释写清了它不证明什么。另修：厂长待办显示 `INVENTORY_ADJUSTMENT <uuid>`、点详情「暂未接入单据详情页」、确认框标题写着「通过前请确认单据信息」却只有 UUID ⇒ 后端补结构化下发（盘点单号+仓库，批量取不引 1+N），前端接详情并让 `?stocktakeId` 真被消费。
+  ③ **位置脏值清洗**：全后端 4 处把来源描述硬编码进 `storage_location`（含英文调试串），F006 16/18 条成品因此位置字段不是位置 ⇒ 位置筛选与「某位置有几批」恒为 0。四处全改为不写（留 null=未分配），加源码闸；存量事务内清洗 `UPDATE 16`，其他工厂零命中、数量字段零变更。
+  **验证**：Java 23 条 / Vitest 153 条 / Jest 26 条 / `vue-tsc` EXIT=0 / RN `tsc` EXIT=0；四处修复各做变异对照并确认能变红。
+  **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
+
+## Scope 锁地图（原文）
+
+
+- `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
+- `QA-LSM-APPROVAL-MENU-ROLES-20260901`（PR #450，待合）：`web-admin/src/components/layout/menuConfig.ts` 的 `/production/approval` 那一条、`web-admin/src/components/layout/__tests__/reportApprovalMenuMatchesBackendRoles.spec.ts`、`.github/workflows/web-admin-gate.yml` 的 `paths:`。⚠️ 与 `QA-LSM-APPROVAL-403-AS-ZERO`(已合, 改 `views/production/approval/list.vue`) **同屏但不同文件**, 无冲突。
+- `QA-LSM-443-ACCEPTANCE-20260901`：`web-admin/src/views/platform/approval-workflow-editor/**`（#443 的 4 个文件）。⛔ 只读验收不改产品代码; ⛔ 不碰 `views/production/**`。
+
+- `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
+
+- `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
+
+
+- `ARCH-F006-DEMAND-DRIVEN-MATERIAL-RECEIPT-001`：销售需求、BOM净需求、采购建议、客户来料、仓储来源任务及对应 Java/Web/测试/dispatch；涉及 Entity/Repository/Flyway 时必须重登记最新 Base 并通过真实 JPA/迁移门禁。不得开启普通手工收料写入口或修改生产数据。
+
+
+- `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购门禁、共享 Excel 导入与目标测试；Web 供应商列表/详情/新增编辑/导入及 API/types/tests；必须真实 JPA Context（如触及查询），生产业务写入为 0。
+
+- `BUG-F006-R2-SKU-UNIT-001`：仅 Web SKU 新建/编辑基础规格、displayUnit/净含量单位 helper 与目标测试；Java 净含量契约须另行登记不重叠 scope。
+
+- `FEATURE-F006-R2-WORKPROCESS-DEDUP-001`：Java WorkProcess/Workflow/SKU 关联、DTO/Repository/Service/Controller、Flyway/JPA tests；Web 工序治理及排序/单位字段移除与目标测试；不得迁移既有业务引用或治理生产重复组。
+
+- `FEATURE-F006-R2-BOM-SUBSTITUTE-001`：BOM 替代关系的 Web、版本/计划/领料/报工/成本/追溯快照与目标测试；Java CORE 已完成，父任务不得重复修改 CORE Flyway/Entity，必须与统一 Workflow/BOM 任务串行。
+
+- `F006-R2-WORKFLOW-FIRST-BOM-GATE`：Workflow 草稿结构、BOM 完整性 DTO/Service/API、激活/发布/生产计划准入、Web 阶段引导与目标测试；不得改写历史快照或生产数据。
+
+- `BUG-F006-PRODUCTION-COST-CLOSURE-001`：仅 `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java` 的成本原因组装（`describeCostUnavailableReason` / `usableTotalCost` / 缺项中文标签）与对应 `src/test/java/com/cretas/aims/service/impl/*ContractTest`、`docs/dispatch/ACTIVE.md`。⛔ 不改 `OrderCostBreakdownService` 的成本算法、不改 Entity/Repository/Flyway、不动 `totalCost` 的完整性口径、生产 F006 业务写入为 0（本轮只用只读 GET 与只读 SQL 取证）。

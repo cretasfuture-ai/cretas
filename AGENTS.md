@@ -257,7 +257,7 @@ frontend/CretasFoodTrace/src/
 
 ### 子代理协作约束
 
-1. **单一台账写者** - 只有当前协调者可以修改 `docs/dispatch/ACTIVE.md`；子代理不得直接修改台账，只能回传结构化回执。
+1. **单一台账写者** - 只有当前协调者可以修改 `docs/dispatch/ACTIVE.md`；子代理不得直接修改台账，只能回传结构化回执。台账每条 ≤ 300 字、只留在飞行、不开 `###` 增量段（`scripts/ci/check_dispatch_active.py` 钉住，Source Hygiene 与 fastlane 都跑）；判据读数与增量日志写 `docs/dispatch/archive/`，派活时才读台账。台账每条 ≤ 300 字、只留在飞行、不开 `###` 增量段（`scripts/ci/check_dispatch_active.py` 钉住，Source Hygiene 与 fastlane 都跑）；判据读数与增量日志写 `docs/dispatch/archive/`，派活时才读台账。
 2. **派工前置条件** - 每个交给代码子代理的任务必须先登记唯一任务 ID、`Base SHA`、允许修改的文件/目录 scope 锁、Owner 与验收命令；没有 scope 锁不得启动代码子代理。`DIRECT` 任务不为形式登记子任务，但仍须遵守现有 worktree、scope 和验证门禁。
 3. **固定状态机** - 任务状态只使用 `queued`、`claimed`、`in-progress`、`review`、`merged`、`blocked`。合并完成时，协调者必须在同一收尾中将任务归档并释放 scope 锁。
 4. **结构化回执** - 子代理完成或阻塞时必须返回：任务 ID、base SHA、实际修改文件、验证命令与结果、commit/PR、阻塞原因、下一动作。协调者在 commit、合并或发布前核对适用回执；缺少这些字段不得进入 review，也不得用口头“已完成”替代证据。
