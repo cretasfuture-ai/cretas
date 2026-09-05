@@ -141,6 +141,11 @@ class CustomerListToolAiPathPermissionTest {
         TOOL_TO_HTTP_METHOD.put("customer_by_type", "getCustomersByType");                 // /by-type
         TOOL_TO_HTTP_METHOD.put("customer_purchase_history", "getCustomerPurchaseHistory");// /{id}/purchase-history
         TOOL_TO_HTTP_METHOD.put("customer_price_memory_query", "getCustomerPriceMemory");  // /{id}/price-memory
+        // 🔴 这条不在派活的清单里 —— 按硬约束 8 grep「谁调 CustomerService 的名单方法」才捞出来的。
+        //    它名字像「查单个客户的 CRM 状态」, 但传 customerName 走 searchCustomersByName,
+        //    多条命中时把整份 candidates(完整 CustomerDTO 列表) 原样返回 ⇒ 一次名单导出。
+        //    对位取 getCustomerById (它的 customerId 分支); 与 /search 的码逐字相同, 取哪个都一样。
+        TOOL_TO_HTTP_METHOD.put("customer_crm_status_query", "getCustomerById");           // /{id} + /search
     }
 
     @ParameterizedTest(name = "🔴 裁定后果 (AI 面): production_manager 用 {0} 要客户数据 → 拒绝")
@@ -243,14 +248,14 @@ class CustomerListToolAiPathPermissionTest {
     }
 
     /**
-     * 硬约束 8 的收尾: 受裁定管的 AI 工具<b>恰好 6 个</b>。
+     * 硬约束 8 的收尾: 受裁定管的 AI 工具<b>恰好 7 个</b>。
      *
      * <p>这条不是重复计数 —— 它守的是「有人新加了一个 CRM 只读工具却没登记」:
      * 那种工具会安静地成为第 7 条绕行路，而上面每一条断言都不会红 (它们只看表里已有的)。</p>
      */
     @Test
-    @DisplayName("硬约束 8: TOOL_PERMISSION_MAP 里挂裁定四码的工具恰好 6 个 (新增 CRM 只读工具必须回来登记)")
-    void exactlySixToolsCarryTheRulingCodes() {
+    @DisplayName("硬约束 8: TOOL_PERMISSION_MAP 里挂裁定四码的工具恰好 7 个 (新增 CRM 只读工具必须回来登记)")
+    void exactlySevenToolsCarryTheRulingCodes() {
         Set<String> rulingCodes = Set.of(
                 "sales:read_write", "sales:read", "finance:read_write", "finance:read");
         List<String> carriers = ToolRbacEnforcer.TOOL_PERMISSION_MAP.entrySet().stream()

@@ -88,9 +88,16 @@ class CustomerControllerRemainingReadPathsPermissionTest {
     /** 裁定落成的那四个权限码 —— 改这行等于改裁定。 */
     private static final Set<String> ROSTER_CODES = new LinkedHashSet<>(Arrays.asList(
             "sales:read_write", "sales:read", "finance:read_write", "finance:read"));
-    /** 仓储最小口子的两个码 —— 与那个页面自己的模块闸同宽。 */
-    private static final Set<String> WAREHOUSE_CODES = new LinkedHashSet<>(Arrays.asList(
-            "warehouse:read_write", "warehouse:read"));
+    /**
+     * 仓储最小口子的<b>唯一</b>权限码。
+     *
+     * <p>🔴 ⛔ 这里<b>不是</b> {@code warehouse:read}: L1 上 {@code warehouse='r'} 的角色里有
+     * {@code production_manager}，而 #615 <b>刻意</b>让它看不到客户名单。挂 read 等于给它一个
+     * 侧门把名字拿回去 —— 那会把 #615 撤销掉。由
+     * {@link #productionManagerCannotUseTheWarehouseSideDoor} 钉住。</p>
+     */
+    private static final Set<String> WAREHOUSE_CODES = new LinkedHashSet<>(
+            List.of("warehouse:read_write"));
 
     // L1 实测持码 (只列本测试用得到的模块)
     private static final Set<String> SALES_MANAGER_CODES = Set.of("sales:read_write", "sales:read");
@@ -315,6 +322,29 @@ class CustomerControllerRemainingReadPathsPermissionTest {
     }
 
     /**
+     * 🔴🔴 本票<b>最要紧</b>的一条断言 —— 它守的是「新开的口子没有把 #615 撤销掉」。
+     *
+     * <p>{@code production_manager} 在 L1 上 {@code sales='-' finance='-'} <b>而
+     * {@code warehouse='r'}</b>。如果这个口子按「与页面模块闸同宽」写成
+     * {@code warehouse:read}，它就能从这里把客户名单拿回去 —— 而 #615 刚刚<b>刻意</b>
+     * 让它拿不到 (它的生产计划客户下拉因此变空, owner 被告知且未推翻)。</p>
+     *
+     * <p>⛔ 谁想把这个口子放宽到 {@code warehouse:read}「让更多仓储角色能用」，
+     * 会先弄红这一条。那时请回去读 owner 裁定与 #615，而不是改这条断言。</p>
+     */
+    @Test
+    @DisplayName("🔴 仓储口子不是侧门: production_manager (L1 warehouse='r', sales/finance='-') → 403")
+    void productionManagerCannotUseTheWarehouseSideDoor() throws Exception {
+        stubRole(4106L, "production_manager", PRODUCTION_MANAGER_CODES);
+
+        buildMockMvc().perform(get(BASE + "/warehouse-options").requestAttr("userId", 4106L))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verifyNoInteractions(customerService);
+    }
+
+    /**
      * ⛔ 仓储口子<b>不许</b>被当成一条通用客户下拉再长回去。
      *
      * <p>{@link CustomerOptionDTO} 恰好 2 个分量; 加第 3 个 (比如联系人/电话) 会弄红这条 ——
@@ -358,18 +388,23 @@ class CustomerControllerRemainingReadPathsPermissionTest {
     }
 
     @Test
-    @DisplayName("仓储口子的注解恰好是 warehouse 两个码 —— ⛔ 不许把裁定码混进来")
+    @DisplayName("仓储口子的注解恰好是 warehouse:read_write 单码 —— ⛔ 不许混进裁定码, ⛔ 也不许放宽到 :read")
     void warehouseOptionsCarriesOnlyWarehouseCodes() {
         RequirePermission ann =
                 uniqueMethod("getWarehouseCustomerOptions").getAnnotation(RequirePermission.class);
 
         assertThat(ann).isNotNull();
         assertThat(new LinkedHashSet<>(Arrays.asList(ann.value())))
-                .as("与那个页面自己的模块闸 (meta.module='warehouse') 同宽 —— 不多一个")
+                .as("判据是「谁能打开那个含下拉的弹窗」(warehouse_manager + 平台/工厂管理员), "
+                        + "不是「谁能打开那个页面」—— 后者含 warehouse='r' 的 production_manager")
                 .isEqualTo(WAREHOUSE_CODES);
         assertThat(Arrays.asList(ann.value()))
                 .as("⛔ 混进 sales/finance 码 = 又造出一条绕过裁定的路")
                 .noneMatch(code -> code.startsWith("sales:") || code.startsWith("finance:"));
+        assertThat(Arrays.asList(ann.value()))
+                .as("⛔ warehouse:read 会放行 production_manager (L1 warehouse='r') —— "
+                        + "那正是 #615 刻意挡住的角色")
+                .doesNotContain("warehouse:read");
     }
 
     /**

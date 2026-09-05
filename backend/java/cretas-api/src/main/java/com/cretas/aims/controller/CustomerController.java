@@ -121,13 +121,21 @@ public class CustomerController {
     public static final String ROSTER_FINANCE_R = "finance:read";
 
     /**
-     * 仓储模块权限码 —— <b>只给 {@link #getWarehouseCustomerOptions} 用</b>。
-     * ⛔ 不要拿它去开别的客户端点: 它放行的是 warehouse_manager / warehouse_worker,
-     * 而它们在 owner 裁定的四类之外。
+     * 仓储模块<b>写</b>权限码 —— 只给 {@link #getWarehouseCustomerOptions} 用。
+     *
+     * <p>🔴 为什么是 {@code read_write} 而不是 {@code read}: L1 上 {@code warehouse='r'} 的角色里
+     * 有 {@code production_manager} —— 而 #615 <b>刻意</b>让它看不到客户名单
+     * (它的生产计划客户下拉因此变空, owner 被告知且未推翻)。
+     * 挂 {@code warehouse:read} 会让它从这个侧门把名字拿回去, <b>等于把 #615 撤销掉</b>。</p>
+     *
+     * <p>而 {@code read_write} 不会误伤任何真实用户: 用到这个下拉的是「新建/编辑原料类型」
+     * 弹窗, 而那个弹窗由 {@code MATERIAL_TYPE_WRITE_ROLES} + 后端 {@code @RequireRole} 限定为
+     * {@code warehouse_manager} + 平台/工厂管理员 —— 前者 L1 {@code warehouse='rw'},
+     * 后者走超管分支。⇒ <b>能打开那个表单的角色 100% 覆盖, 一个都不少。</b></p>
+     *
+     * <p>⛔ 不要拿它去开别的客户端点。</p>
      */
     public static final String WAREHOUSE_RW = "warehouse:read_write";
-    /** 见 {@link #WAREHOUSE_RW}。 */
-    public static final String WAREHOUSE_R = "warehouse:read";
 
     /**
      * 创建客户
@@ -343,17 +351,31 @@ public class CustomerController {
      *       是把全厂客户的电话/税号/信用额度/余额继续对<b>同厂任何已登录用户</b>开放。</li>
      *   <li>❌ <b>改调已经带门的 {@code GET /customers}</b> —— 仓储角色现在拿到的是 403
      *       (从前是 {@code @DataScope} 下的 0 条), 页面上的下拉照样是空的, 只是坏得更响。</li>
-     *   <li>✅ <b>本端点</b> —— 权限码 <b>与那个页面自己的模块闸完全同宽</b>
-     *       ({@code meta.module='warehouse'} ⇒ {@code permissionStore.canAccess('warehouse')}):
-     *       打得开那个页面的角色恰好放行，打不开的一个都不放行。⛔ 不多一个。</li>
+     *   <li>❌ <b>{@code warehouse:read}</b> (= 与那个页面自己的模块闸同宽) —— 差一点就这么写了。
+     *       实测 L1: {@code warehouse='r'} 的角色里有 <b>{@code production_manager}</b>,
+     *       而 #615 <b>刻意</b>让它看不到客户名单 (它的生产计划客户下拉因此变空)。
+     *       挂 read 等于给它开一个侧门, <b>把 #615 撤销掉</b>。</li>
+     *   <li>✅ <b>{@code warehouse:read_write} 单码</b> —— 判据不是「谁能打开这个页面」，
+     *       而是<b>「谁能打开那个含下拉的弹窗」</b>: 新建/编辑原料类型受
+     *       {@code MATERIAL_TYPE_WRITE_ROLES} + 后端 {@code @RequireRole} 限定为
+     *       {@code warehouse_manager} + 平台/工厂管理员。前者 L1 {@code warehouse='rw'},
+     *       后者走超管分支 ⇒ <b>能打开表单的角色 100% 覆盖</b>,
+     *       而 {@code production_manager}/{@code production_clerk}/{@code team_leader}/
+     *       {@code viewer}/{@code dispatcher}/{@code workshop_supervisor} 等
+     *       {@code warehouse='r'} 的角色一个都进不来。</li>
      * </ul>
      *
      * <h3>⚠️ 这是裁定的一个显式例外，登记在此而不是豁免</h3>
-     * <p>仓储角色仍然会看到<b>客户名</b>。这一步无法再收窄 —— 数据里不存在「不显示名字
-     * 也能选对客户」这种状态。⛔ 谁想把这个端点扩到别的模块/别的字段, 请先回去读裁定:
-     * 它现在的宽度是「一个仓储数据录入字段所需的最小值」, 不是一个通用客户下拉。</p>
+     * <p>{@code warehouse_manager} 仍然会看到<b>客户名</b>。这一步无法再用权限码收窄 ——
+     * 数据里不存在「不显示名字也能选对客户」这种状态。
+     * ⚠️ 另有一处已知的宽余: {@code warehouse_worker} L1 也是 {@code 'rw'}, 所以它<b>能调到
+     * 这个端点</b>, 尽管它打不开那个表单 (被 {@code @RequireRole} 白名单挡在写侧)。
+     * 再收窄需要引入角色白名单 —— 那是另一套机制, 不在本票范围内, <b>登记而非豁免</b>。</p>
+     *
+     * <p>⛔ 谁想把这个端点扩到别的模块/别的字段, 请先回去读裁定: 它现在的宽度是
+     * 「一个仓储数据录入字段所需的最小值」, 不是一个通用客户下拉。</p>
      */
-    @RequirePermission({WAREHOUSE_RW, WAREHOUSE_R})
+    @RequirePermission({WAREHOUSE_RW})
     @GetMapping("/warehouse-options")
     @Operation(summary = "仓储模块客户下拉 (最小字段)",
             description = "只返回 {id, name}。供仓储「原料类型字典」页的「包材关联固定客户」下拉使用。"

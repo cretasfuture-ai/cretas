@@ -58,7 +58,7 @@ public class ToolRbacEnforcer {
      * <ul>
      *   <li>CustomerController <b>写</b> → finance/sales:read_write;
      *       <b>读(客户名单)</b> → sales:read_write|sales:read|finance:read_write|finance:read
-     *       (owner 2026-09-06 裁定, 见下表 CRM 段那 6 条只读工具)</li>
+     *       (owner 2026-09-06 裁定, 见下表 CRM 段那 7 条只读工具)</li>
      *   <li>InvoiceController → finance/sales:read_write</li>
      *   <li>TransferController → inventory:write</li>
      *   <li>UserController → hr:read_write</li>
@@ -69,7 +69,7 @@ public class ToolRbacEnforcer {
      */
     static final Map<String, Set<String>> TOOL_PERMISSION_MAP = Map.ofEntries(
             // ===== CRM: 客户/订单/供应商 (删改建均敏感) =====
-            // ⚠️ 下面这 6 条是本表里**仅有的只读工具**。它们在这儿不是因为"写敏感",
+            // ⚠️ 下面这 7 条是本表里**仅有的只读工具**。它们在这儿不是因为"写敏感",
             // 而是因为 owner 2026-09-06 裁定「客户名单只有 销售/财务/工厂管理员/运营 能看」——
             // 客户名单本身成了受控数据。CustomerListTool 直接调
             // CustomerService#getCustomerList, ⛔ 不经过 CustomerController,
@@ -79,9 +79,9 @@ public class ToolRbacEnforcer {
             // 由 CustomerListToolAiPathPermissionTest 钉住两边不许漂)。
             //
             // 🔴 2026-09-06 第二票 (SEC-CUSTOMER-ROSTER-REMAINING-PATHS): #615 只关了
-            //    customer_list 一个, 而 CRM 下还有 5 个只读工具走**同样的 CustomerService
-            //    方法**、同样不经过 controller。只关一个等于把绕行入口从 1 个减到 5 个。
-            //    这 6 条的权限码由 CustomerListToolAiPathPermissionTest 逐条反射读
+            //    customer_list 一个, 而 CRM 下还有 6 个只读工具走**同样的 CustomerService
+            //    方法**、同样不经过 controller。只关一个等于把绕行入口从 7 个减到 6 个。
+            //    这 7 条的权限码由 CustomerListToolAiPathPermissionTest 逐条反射读
             //    CustomerController 上对应方法的 @RequirePermission 钉住 —— ⛔ 两边不许漂,
             //    也不许在这里手抄第二份口径 (形态 D)。
             //
@@ -93,6 +93,12 @@ public class ToolRbacEnforcer {
             //    | customer_by_type             | getCustomersByType            | /by-type              |
             //    | customer_purchase_history    | getCustomerPurchaseHistory    | /{id}/purchase-history|
             //    | customer_price_memory_query  | CustomerPriceMemoryService    | /{id}/price-memory    |
+            //    | customer_crm_status_query    | searchCustomersByName         | /{id} + /search       |
+            //
+            // 🔴 最后那条不在派活的清单里 —— 是按硬约束 8 grep「谁调 CustomerService 的名单方法」
+            //    才捞出来的 (⛔ 数调用点, 不是数别人给的工具名)。它看着像「查单个客户的 CRM 状态」,
+            //    但传 customerName 走的是 searchCustomersByName, 且**多条命中时把整份
+            //    candidates(完整 CustomerDTO 列表) 原样返回** ⇒ customerName="a" 就是一次名单导出。
             //
             // ⛔ 故意**没有**映射 customer_stats: 它的默认分支 (不传 customerId) 走的是
             //    getOverallCustomerStatistics + 两张分布表 —— 那三个 HTTP 端点按档 C
@@ -100,7 +106,11 @@ public class ToolRbacEnforcer {
             //    正好破坏本组测试要守的那条「两面逐字相同」不变式。
             //    ⚠️ 残余风险登记在案: customer_stats(customerId=X) 与已关的
             //    /{id}/statistics 同源。它需要调用方**先拿到一个 customerId**, 而产出
-            //    customerId 的 5 条路 (list/active/search/by_type/purchase_history) 现在都关了。
+            //    customerId 的那 6 条路现在都关了。
+            //
+            // ⛔ 同样**故意没有**映射 customer_tracking_recent_query: 它走 CustomerRepository
+            //    而不是 CustomerService 的名单方法, 且必须**先有 customerId** 才能反查出一个名字
+            //    (⛔ 不能枚举)。它的主载荷是跟进记录, 属另一个域, HTTP 侧也不在本票范围。登记而非豁免。
             Map.entry("customer_list",
                     Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
             Map.entry("customer_active",
@@ -112,6 +122,8 @@ public class ToolRbacEnforcer {
             Map.entry("customer_purchase_history",
                     Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
             Map.entry("customer_price_memory_query",
+                    Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
+            Map.entry("customer_crm_status_query",
                     Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
             Map.entry("customer_create", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("customer_update", Set.of("sales:read_write", "finance:read_write")),
