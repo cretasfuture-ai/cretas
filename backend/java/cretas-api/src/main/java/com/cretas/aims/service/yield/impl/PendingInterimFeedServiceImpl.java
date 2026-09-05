@@ -1,8 +1,10 @@
 package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.PendingInterimFeedService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,6 +34,8 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
     private final ProcessSheetRowRepository rowRepository;
     private final WipInventoryService wipInventoryService;
     private final ObjectMapper objectMapper;
+    /** 只用来回答「这一行的计划还结不结得掉」—— 见 {@link #reachablePlanStatuses}。 */
+    private final ProductionPlanRepository planRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -45,7 +49,50 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
         Map<String, BigDecimal> out = new HashMap<>();
         Set<String> unresolved = new HashSet<>();
         List<ProcessSheetRow> rows = rowRepository.findUnsettledStockFeedRows(factoryId);
+
+        // 🔴🔒 幽灵预扣根修 (BUG-GHOST-PENDING-FEED-DELETED-PLANS, 2026-09-06):
+        //   findUnsettledStockFeedRows 的谓词只问「这一行结了没有」, 从来不问「这一行还结不结得掉」。
+        //   计划被删掉 (硬删/软删) 或已取消之后, 小结与结单两条打戳路径都够不着它 ⇒
+        //   interim_settled_at 永久 IS NULL ⇒ 它贡献的待扣量【永远不会清】, 而没有任何操作能释放,
+        //   于是那个批次的可用量被永久压低。这不是"暂时预扣", 是账面漏洞。
+        //   ⇒ 在这里 (唯一的遍历点, 三个消费方都从这儿拿数) 一次性剔掉, 并把剔了什么留痕。
+        Map<String, ProductionPlanStatus> reachablePlans = reachablePlanStatuses(factoryId, rows);
+        int orphanRows = 0;
+        int cancelledRows = 0;
+        Set<String> orphanPlanIds = new HashSet<>();
+        Set<String> cancelledPlanIds = new HashSet<>();
+        Set<String> anomalousTerminalPlanIds = new HashSet<>();
+
         for (ProcessSheetRow row : rows) {
+            String planId = row.getPlanId();
+            //   ① 计划够不着 (硬删: 没有行; 软删: @Where 挡掉) —— 两条结算路径都 load 不到它。
+            if (planId == null || !reachablePlans.containsKey(planId)) {
+                orphanRows++;
+                if (planId != null) {
+                    orphanPlanIds.add(planId);
+                }
+                continue;
+            }
+            ProductionPlanStatus planStatus = reachablePlans.get(planId);
+            //   ② CANCELLED —— 小结显式拒绝 (InterimSettleServiceImpl 计划状态守卫), 结单只收
+            //      IN_PROGRESS/PENDING (validateSettlementRequest) ⇒ 同样永远盖不上戳。
+            //      且取消审批路径 (reverseBatchReportsForApprovedCancel) 已把库存冲销恢复,
+            //      再算一次待扣 = 对同一笔货预扣两遍。
+            if (planStatus == ProductionPlanStatus.CANCELLED) {
+                cancelledRows++;
+                cancelledPlanIds.add(planId);
+                continue;
+            }
+            //   ③ COMPLETED / PENDING_APPROVAL 上还有未结行 —— ⛔【不剔】, 只记账。
+            //      结单会在同一事务里给本计划全部未结行盖戳, 所以出现未结行只有两种可能:
+            //      (a) 盖戳漏了 → 是缺陷, 剔掉就把它藏起来了;
+            //      (b) 被撤回冲销后重新变回待结 → 待扣是【真的】(货已退回库存等重结), 剔掉就是幻库存。
+            //      两种都不该静默丢, 所以照常计入待扣, 只把计划 id 喊出来。
+            if (planStatus == ProductionPlanStatus.COMPLETED
+                    || planStatus == ProductionPlanStatus.PENDING_APPROVAL) {
+                anomalousTerminalPlanIds.add(planId);
+            }
+
             ProcessSheetRowRequest req = parse(row.getRowPayload());
             if (req == null || req.getUpstreamSources() == null) {
                 continue;
@@ -91,7 +138,56 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
                 out.merge(srcBatchNo, qtyInSourceUnit, BigDecimal::add);
             }
         }
-        return new Snapshot(Map.copyOf(out), Set.copyOf(unresolved));
+
+        UnsettlablePlans excluded = new UnsettlablePlans(
+                orphanRows, Set.copyOf(orphanPlanIds),
+                cancelledRows, Set.copyOf(cancelledPlanIds),
+                Set.copyOf(anomalousTerminalPlanIds));
+        // 🔴 每次快照打一行 —— 「剔掉了 N 行」必须是个能读到的数, 否则静默剔除与「本来就没有这些行」
+        //    完全同形 (验证「X 没发生」要配一个「Y 一定会发生」的读数)。⛔ 不许无条件打「(空)」之类
+        //    的硬编码结论, 下面每个数都是实际算出来的。
+        if (!excluded.isSilent()) {
+            log.warn("[pending-feed] 待扣遍历剔除结不掉的行: factory={}, 扫描 {} 行, "
+                            + "ghostRowsExcluded={} (计划够不着 {} 行 plans={}; 计划已取消 {} 行 plans={}), "
+                            + "终态计划仍有未结行(未剔, 需人工核对) plans={}",
+                    factoryId, rows.size(), excluded.totalExcludedRows(),
+                    excluded.orphanRowCount(), excluded.orphanPlanIds(),
+                    excluded.cancelledRowCount(), excluded.cancelledPlanIds(),
+                    excluded.anomalousTerminalPlanIds());
+        }
+        return new Snapshot(Map.copyOf(out), Set.copyOf(unresolved), excluded);
+    }
+
+    /**
+     * 取这批行涉及的计划里<b>还够得着</b>的那些的状态。
+     *
+     * <p>走 JPQL ⇒ {@code ProductionPlan} 上的 {@code @Where(deleted_at IS NULL)} 生效,
+     * 软删计划不会回来; 硬删计划本来就没有行。⇒ <b>请求了却没回来的 id = 结算路径够不着的计划</b>,
+     * 与 {@code settleProduction} / {@code interimSettle} 用 {@code findByIdAndFactoryId} 时看到的
+     * 是同一个可见性口径 —— 这一点正是本方法唯一的用处, ⛔ 不要为了"顺便区分硬删/软删"改成 nativeQuery。
+     *
+     * <p>factory-scoped: 跨租户的 planId 不会解析成功 ⇒ 落进 orphan 被剔除并留痕 (fail-closed)。
+     */
+    private Map<String, ProductionPlanStatus> reachablePlanStatuses(
+            String factoryId, List<ProcessSheetRow> rows) {
+        Set<String> planIds = new HashSet<>();
+        for (ProcessSheetRow row : rows) {
+            if (row.getPlanId() != null) {
+                planIds.add(row.getPlanId());
+            }
+        }
+        if (planIds.isEmpty()) {
+            return Map.of();   // IN () 在 JPQL 上不合法, 而且没行可查
+        }
+        Map<String, ProductionPlanStatus> byId = new HashMap<>();
+        for (Object[] tuple : planRepository.findPlanStatusesByFactoryIdAndIdIn(factoryId, planIds)) {
+            if (tuple == null || tuple.length < 2 || tuple[0] == null) {
+                continue;
+            }
+            // status 可能为 null (历史行) —— 保留 key, 让它按「够得着但状态未知」处理 = 不剔除。
+            byId.put((String) tuple[0], (ProductionPlanStatus) tuple[1]);
+        }
+        return byId;
     }
 
     private ProcessSheetRowRequest parse(String payload) {

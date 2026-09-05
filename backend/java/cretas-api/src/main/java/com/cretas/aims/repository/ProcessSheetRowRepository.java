@@ -77,6 +77,16 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
      * {@link #stampInterimSettledForPlan} 打戳 → {@code interim_settled_at IS NOT NULL} 天然落谓词外, 不双减;
      * SAFETY_STOCK 经小结打戳同理。故 IS NULL 现对所有族统一 = 「尚未结算、待扣」。Factory-scoped 防跨租户。
      */
+    /*
+     * 🔴🔒 本查询只回答「这一行结了没有」, ⛔ 不回答「这一行还结不结得掉」
+     * (BUG-GHOST-PENDING-FEED-DELETED-PLANS, 2026-09-06)。计划被硬删/软删/取消之后, 小结与结单
+     * 两条打戳路径都够不着这些行 ⇒ 它们永久 interim_settled_at IS NULL ⇒ 贡献的待扣量【永远不会清】,
+     * 而没有任何操作能释放它 —— 那个批次的可用量被永久压低。
+     * ⇒ 这一层【刻意不加】计划连接: 排除必须【连同计数一起】发生, 否则静默剔除与「本来就没有这些行」
+     * 完全同形。排除谓词与留痕都在唯一消费方 PendingInterimFeedServiceImpl#pendingSemiFeedSnapshot 里,
+     * 由 PendingFeedGhostPlanExclusionContractTest 钉住「本方法只有那一个生产调用方」。
+     * ⛔ 新增调用方之前先读那道闸 —— 直接用本方法的原始结果 = 把幽灵预扣再造一遍。
+     */
     @Query("SELECT r FROM ProcessSheetRow r "
             + "WHERE r.factoryId = :factoryId AND r.interimSettledAt IS NULL")
     List<ProcessSheetRow> findUnsettledStockFeedRows(@org.springframework.data.repository.query.Param("factoryId") String factoryId);
