@@ -1,7 +1,7 @@
 ---
 paths:
-  - "tests/**"
-  - "**/*.spec.ts"
+  - "tests/e2e*/**"
+  - "scripts/e2e/**"
   - "**/playwright.config.*"
 ---
 

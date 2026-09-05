@@ -6,7 +6,8 @@
   },
   "enabledPlugins": {
     "playwright@claude-plugins-official": true,
-    "ralph-loop@claude-plugins-official": false
+    "ralph-loop@claude-plugins-official": false,
+    "superpowers@claude-plugins-official": false
   },
   "hooks": {
     "PostToolUse": [

@@ -70,7 +70,7 @@ npm run report
 | `LOOPS` | `0` (无限) | Ralph Loop 最大轮数 |
 | `PAUSE_ON_ERROR` | `false` | 错误时暂停 |
 
-**生产环境测试**: `BASE_URL=http://47.100.235.168:8088 npm test`
+**生产环境测试**: `BASE_URL=http://139.196.165.140:8086 npm test`（web-admin 在 139 网关 / admin.cretaceousfuture.com，不在 47）
 
 ## 测试数据
 

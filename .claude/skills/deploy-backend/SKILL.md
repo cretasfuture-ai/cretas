@@ -83,7 +83,7 @@ CRETAS_TOKYO_SSH_HOST='ubuntu@52.196.123.155' CRETAS_TOKYO_CACHE_ENDPOINT='http:
 - **蓝绿槽位**：prod Java 的 `10010` 与 `10020` **交替成为 active**。部署/核对前必须读 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某槽永久停用。
 - `deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` 保留为**单组件发布与故障排查入口**（下方 Phase 1-3），适用：只动 Python、紧急单点修复、排查部署链路本身。
 
-> ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）。下文 `--env test` / 10011 相关内容暂留作历史参考；部 prod 后"防御 ping test"的警告可忽略。
+> ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）；`--env test` / 10011 / 8084 不再可用。部 prod 后脚本若仍打印"防御 ping test 异常"，忽略即可。
 
 **从 GitHub 取制品送上服务器**：走
 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1`，链路
@@ -122,11 +122,7 @@ CRETAS_TOKYO_SSH_HOST='ubuntu@52.196.123.155' CRETAS_TOKYO_CACHE_ENDPOINT='http:
 | "重启服务"、"restart" | 仅重启 (不构建) |
 | 仅说 "部署" | 默认 Java 后端 |
 
-如果判断不了，用 AskUserQuestion 确认：
-- Java 后端 (构建+部署 JAR)
-- Python 服务 (同步代码+重启)
-- Web 前端 (构建+上传 dist)
-- 全部
+判断不了就走 `release-cretas.sh --phase deploy`（自动检测 Java/Web 变更范围），不要停下来问；只动 Python 时走 `deploy-smartbi-python.sh`。
 
 ---
 
@@ -138,29 +134,15 @@ CRETAS_TOKYO_SSH_HOST='ubuntu@52.196.123.155' CRETAS_TOKYO_CACHE_ENDPOINT='http:
 | **SSH** | `root@47.100.235.168` |
 | **旧服务器** | `139.196.165.140` — 仅 Nginx 反代 + 静态文件 |
 
-### 双环境 (生产 + 测试)
+### 生产环境
 
-| 服务 | 生产端口 | 测试端口 | 路径 |
-|------|----------|----------|------|
-| Java 后端 | 10010 | 10011 | `/www/wwwroot/cretas/` |
-| Python 服务 | 8083 | 8084 | `/www/wwwroot/cretas/code/backend/python/` |
-| Web 前端 | 8088 | - | `/www/wwwroot/web-admin/` |
+| 服务 | 端口 | 路径 |
+|------|------|------|
+| Java 后端 | 10010 / 10020 蓝绿交替（active 看 139 upstream） | `/www/wwwroot/cretas/` |
+| Python 服务 | 8083 | `/www/wwwroot/cretas/code/backend/python/` |
+| Web 前端 | 139:8086 / admin.cretaceousfuture.com | `139:/www/wwwroot/web-admin/` |
 
-| 环境 | 主库 | SmartBI 库 |
-|------|------|-----------|
-| 生产 | `cretas_prod_db` | `smartbi_prod_db` |
-| 测试 | `cretas_db` | `smartbi_db` |
-
-两套环境**共享同一份 JAR**, 通过环境变量区分数据库. 但**进程独立** — 默认 `--env prod` 不会重启 test, **test 容易长期落后甚至宕机不被察觉** (Apr 7 教训).
-
-**推荐工作流**:
-```bash
-./scripts/deploy/deploy-backend.sh --env test       # 先部 test
-# smoke test 验证
-./scripts/deploy/deploy-backend.sh --env prod       # 满意后部 prod
-```
-
-紧急 hotfix: `--env all` 一次部两套. v4.2 已加防御 ping (部 prod 后顺便 ping test, 反之亦然).
+主库 `cretas_prod_db`，SmartBI 库 `smartbi_prod_db`。
 
 ---
 
@@ -169,12 +151,10 @@ CRETAS_TOKYO_SSH_HOST='ubuntu@52.196.123.155' CRETAS_TOKYO_CACHE_ENDPOINT='http:
 ### 方式 A: 一键脚本 (推荐, ~2 分钟)
 
 ```bash
-./scripts/deploy/deploy-backend.sh                  # 部署到生产 (默认)
-./scripts/deploy/deploy-backend.sh --env test       # 部署到测试
-./scripts/deploy/deploy-backend.sh --env all        # 部署后重启两套
+./scripts/deploy/deploy-backend.sh --env prod
 ```
 
-脚本 v5.0 自动完成: Maven 打包 → rsync 主 (scp 兜底) 上传 → 服务器备份 → Blue-Green 部署 → 重启 → 健康检查 (30次重试) + **防御 ping 另一环境**.
+脚本 v5.0 自动完成: Maven 打包 → rsync 主 (scp 兜底) 上传 → 服务器备份 → Blue-Green 部署 → 重启 → 健康检查 (30次重试).
 
 可选参数:
 ```bash
@@ -224,9 +204,9 @@ ssh root@47.100.235.168 "
 - **JAR 命名**: 本地构建 `cretas-backend-system-1.0.0.jar`, 服务器运行名 `aims-0.0.1-SNAPSHOT.jar`
 - **JAVA_HOME**: 本地 Zulu 21 (`C:/Program Files/Zulu/zulu-21`), 服务器 Dragonwell 21 (默认 javac 是 17, 必须显式 export)
 - **Test 编译会失败**: `ProcessWorkReportingServiceImplTest` 方法签名不匹配, 必须用 `-Dmaven.test.skip=true` (不能用 `-DskipTests`, 后者只跳执行不跳编译)
-- **Profile**: 生产 `pg-prod`, 测试 `pg`
+- **Profile**: 生产 `pg-prod`（本地开发 `pg`）
 - **环境变量**: `DB_PASSWORD`, `SMARTBI_DB_PASSWORD`, `JWT_SECRET` 在服务器 `.env.prod` (systemd EnvironmentFile)
-- **启动时间**: prod ~20s, test ~75s (768MB 堆 GC 频繁)
+- **启动时间**: prod ~20s
 - **回滚**: `--rollback` 自动恢复最近 timestamp 备份
 
 ### ⚠️ 本地 Java 启动方式 (CRITICAL)
@@ -237,7 +217,7 @@ ssh root@47.100.235.168 "
 
 ```bash
 cd backend/java/cretas-api && \
-DB_PASSWORD=cretas_pass POSTGRES_SMARTBI_PASSWORD=smartbi_pass \
+DB_PASSWORD="$DB_PASSWORD" POSTGRES_SMARTBI_PASSWORD="$POSTGRES_SMARTBI_PASSWORD" \
 JAVA_HOME="C:/Program Files/Zulu/zulu-21" \
 SPRING_PROFILES_ACTIVE=pg,dev SPRING_JPA_HIBERNATE_DDL_AUTO=none \
 SPRING_DATASOURCE_URL="jdbc:postgresql://localhost:5432/cretas_db?sslmode=disable" \
@@ -253,22 +233,17 @@ SERVER_PORT=10010 \
 ## Phase 2: Python 服务部署
 
 ```bash
-# 方式 A: 使用脚本
-./scripts/deploy/deploy-smartbi-python.sh                # 部署到生产 (默认)
-./scripts/deploy/deploy-smartbi-python.sh --env test     # 部署到测试
-./scripts/deploy/deploy-smartbi-python.sh --env all      # 部署后重启两套
+./scripts/deploy/deploy-smartbi-python.sh --env prod
 ```
 
 ### Python 部署验证
 
 ```bash
-curl -s http://47.100.235.168:8083/health    # 生产
-curl -s http://47.100.235.168:8084/health    # 测试
+curl -s http://47.100.235.168:8083/health
 ```
 
 ### Python 注意事项
 
-- **两套 Python 共享代码目录**: rsync 一次，通过环境变量区分数据库
 - **虚拟环境**: 服务器使用 `/www/wwwroot/cretas/code/backend/python/venv38/`
 - **依赖更新**: 脚本自动 `pip install -r requirements.txt`
 - **.env 不要覆盖**: 服务器有自己的 `.env` (含 LLM API Key)
@@ -295,45 +270,25 @@ curl -s http://47.100.235.168:8084/health    # 测试
 
 ## Phase 4: 仅重启 (不构建)
 
+手工重启只用于明确的故障处置，先读 139 upstream 确认 active 槽位；常规发布与切流走发布脚本。
+
 ```bash
-# 重启全部 (生产+测试, Java+Python)
-ssh root@47.100.235.168 "cd /www/wwwroot/cretas && bash restart.sh all"
-
-# 仅重启生产
-ssh root@47.100.235.168 "cd /www/wwwroot/cretas && bash restart.sh prod"
-
-# 仅重启测试
-ssh root@47.100.235.168 "cd /www/wwwroot/cretas && bash restart.sh test"
-
-# 仅检查状态
-ssh root@47.100.235.168 "ps aux | grep -E 'java|uvicorn' | grep -v grep"
+ssh root@47.100.235.168 "systemctl restart cretas-python"
+ssh root@47.100.235.168 "systemctl status cretas-backend cretas-backend-green cretas-python cretas-embedding --no-pager"
 ```
 
 ---
 
 ## Phase 5: 部署后验证
 
-**每次部署后必须执行的健康检查：**
+统一入口已调 `verify-release.sh` 写入回执；回执完整且成功时不重复手工检查。单独验证：
 
 ```bash
-# 生产环境
-curl -s http://47.100.235.168:10010/api/mobile/health   # Java 生产
-curl -s http://47.100.235.168:8083/health                # Python 生产
-
-# 测试环境
-curl -s http://47.100.235.168:10011/api/mobile/health   # Java 测试
-curl -s http://47.100.235.168:8084/health                # Python 测试
-
-# Web 前端
-curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8088/
-
-# 全部一起检查
-echo "=== Health Check ===" && \
-echo -n "Java Prod:   " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:10010/api/mobile/health && echo "" && \
-echo -n "Java Test:   " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:10011/api/mobile/health && echo "" && \
-echo -n "Python Prod: " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8083/health && echo "" && \
-echo -n "Python Test: " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8084/health && echo "" && \
-echo -n "Web:         " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8088/
+./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod
+# 手工核对时 Java 先读 upstream 再 curl active 槽 (直连 10010 可能正是停用槽):
+ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.conf'
+curl -s http://47.100.235.168:8083/health
+curl -s -o /dev/null -w "%{http_code}" http://139.196.165.140:8086/
 ```
 
 向用户报告部署结果，包括：
@@ -397,23 +352,13 @@ EOF
 
 **阶段 2**: 服务器 MD5 验证 + 备份 + Blue-Green 替换 + systemctl restart + 健康检查
 
-**阶段 3**: 防御性 ping 另一环境 (DEPLOY_ENV=prod 时 ping test, 反之亦然)
-
-### 健康检查 + 防御 ping
+### 健康检查
 
 部署完显示:
 ```
 🔍 [4/4] 验证部署...
    [生产] 检查 10010...
    ✓ 服务正常 (HTTP 200, 等待 16s)
-   ✓ [防御检查] test 10011 同步运行
-```
-
-如果另一环境挂了:
-```
-   ⚠️  [防御检查] test 10011 异常 (HTTP 000)
-      恢复: ssh root@47.100.235.168 'cd /www/wwwroot/cretas && bash restart.sh test'
-      或下次用: ./scripts/deploy/deploy-backend.sh --env all
 ```
 
 详见 memory `feedback_deploy_pipeline.md`.
