@@ -72,6 +72,18 @@
           </el-tooltip>
           <!-- #12b: 版本浏览 (查看之前发布过的版本) -->
           <el-button data-testid="browse-versions" :disabled="!productTypeId" @click="openVersionDrawer">生产版本记录</el-button>
+          <!--
+            导出工艺与 BOM (2026-09-05)。会上被问了三次 ([14:18]/[14:48]/[28:07]):
+            「好多客户他是要一个这种 Excel 表格, 自己作为线下的存档备份」。
+            画布对**维护**是好的, 但对**核对和存档**不是 —— 演示时就出现过找不到某项配置在哪。
+            ⛔ 只读投影, 不接受回写: 会上还提过「再复制一个模块」, 那会做出两份可编辑的配方。
+          -->
+          <el-button
+            data-testid="export-workflow-bom"
+            :disabled="!productTypeId"
+            :loading="exportingBom"
+            @click="exportWorkflowBomToExcel"
+          >导出Excel</el-button>
           <el-button
             v-if="activation?.enabled"
             data-testid="deactivate-workflow"
@@ -1085,6 +1097,7 @@ import {
 import {
   bomRecipeApi,
   bomSeasoningApi,
+  exportWorkflowBom,
   type BomItemSubstituteView,
   type BomRecipeItemView,
   type BomRecipeSummary,
@@ -1093,6 +1106,7 @@ import {
   type SeasoningWorkspace,
 } from '@/api/bom';
 import { bigCategoryOf } from '@/utils/materialCategory';
+import { toDateString } from '@/utils/dateFormat';
 import {
   selectAuxiliaryMaterials,
   selectByproductMaterials,
@@ -2649,6 +2663,47 @@ async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
 // 2026-08-07: goToBomManagement 已删除。BOM 就在本画布的辅料 / 包材 cell 上,
 // 旧 BOM 菜单入口 8-05 已摘, 画布内也不再保留任何跳去那个页面的通道。
 // 反向断言见 __tests__/legacyBomEntryRetired.source.spec.ts。
+
+/**
+ * 导出工艺与 BOM 为 Excel（2026-09-05，会议 [14:18]/[14:48]/[28:07] 要了三次）。
+ *
+ * ⛔ 只导**当前这一个成品**已发布的那一版 —— 与画布上正看着的是同一个对象。
+ *    导全厂是后端 API 的能力（不传 productTypeIds），但从画布点的时候，
+ *    人期待拿到的是眼前这张图，⛔ 不是一份全厂大表。
+ */
+const exportingBom = ref(false);
+async function exportWorkflowBomToExcel(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  if (!identity) return;
+  exportingBom.value = true;
+  try {
+    const resp = await exportWorkflowBom(identity.factoryId, [identity.productTypeId]);
+    const blob = new Blob([resp.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    // ⛔ 不用 toISOString().slice(0,10): 那是 UTC 日。后端全线 GMT+8, 本地 9-06 00:30
+    //    导出会写成 2026-09-05 —— 差一天, 而客户是拿这个文件名当存档日期的。
+    //    (这一处是 noUtcDayTruncation 那道棘轮闸抓到的, 不是我自己看出来的)
+    a.download = `工艺与BOM_${toDateString(new Date())}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success('已导出');
+  } catch (error) {
+    console.error('[ProductProcessWorkflow] exportWorkflowBom failed', error);
+    // ⛔ 不吞错: 导出失败而界面无反应, 用户会以为浏览器拦了下载, 然后反复点
+    ElMessage({
+      message: `导出失败：${(error as Error)?.message || error}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    exportingBom.value = false;
+  }
+}
 
 // #12b: 版本记录浏览
 async function openVersionDrawer(): Promise<void> {

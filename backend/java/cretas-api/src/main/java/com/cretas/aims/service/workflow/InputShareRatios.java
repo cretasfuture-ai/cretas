@@ -63,8 +63,28 @@ public final class InputShareRatios {
     }
 
     /**
+     * {@link #parsePercent} 的「不抛」版本：非法 ⇒ 返回 {@code null} 并 WARN。
+     *
+     * <p>给<b>只读展示/导出</b>用（2026-09-05 工艺 BOM 导出）。判定仍然是
+     * {@link #parsePercent} 那一个 —— ⛔ 不在调用方各写一遍 try/catch，
+     * 否则「什么算合法份额」会长出第二个答案（本仓形态 D）。</p>
+     *
+     * <p>⚠️ 返回 {@code null} 表示<b>这个端口没有可用份额</b>，
+     * ⛔ 不是 0：0 在推算里是「不参与」，是另一个意思。</p>
+     */
+    public static BigDecimal parsePercentQuiet(Object value) {
+        try {
+            return parsePercent(value);
+        } catch (IllegalArgumentException e) {
+            log.warn("[input-share] inputShareRatio={} 非法 ({}), 按无份额处理", value, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 调用点登记 (硬约束 8): ① FactoryMaterialRequisitionServiceImpl.resolveInputShares —— 只在计划还没有物化的
      * 运行时实例 (转批次前) 时走这里; 有实例一律读编译列 workflow_task_ports.input_share_ratio。② 本类。
+     * ③ WorkflowBomExportService (只读导出, 走 parsePercentQuiet)。
      */
     public static Map<String, BigDecimal> fromNodesJson(String nodesJson) {
         Map<String, BigDecimal> out = new LinkedHashMap<>();
