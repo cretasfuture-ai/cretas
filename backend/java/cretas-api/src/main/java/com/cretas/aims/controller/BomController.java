@@ -167,14 +167,23 @@ public class BomController {
     }
 
     /**
-     * 批量应用用户选中行 (写操作, 需 production:read_write).
+     * 批量应用用户选中行 (写操作, 需 bom:yield_standard:write).
      * POST /api/mobile/{factoryId}/bom/yield-estimate/recalculate-apply
      * body: [ { recipeId, yieldRate }, ... ]
+     *
+     * <p>🔴 2026-09-05: 权限从 {@code production:read_write} 收窄到
+     * {@code bom:yield_standard:write}。前者实测<b>9 个角色</b>都有 (含 operator /
+     * yield_operator / 班组长) —— 用它守「标准出成率」等于没有门。白名单与理由见
+     * {@code PermissionServiceImpl#YIELD_STANDARD_WRITE_ROLES}。
+     *
+     * <p>这是标准出成率<b>唯一</b>的写入口 (自动回写已于同日删除, 见
+     * {@code BomYieldSuggestionServiceImpl#generateForProduct} 的说明)。
      */
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"bom:yield_standard:write"})
     @PostMapping("/yield-estimate/recalculate-apply")
     @Operation(summary = "BOM 出成率批量应用 (写)",
-            description = "将用户选中的系统出成率更新写入 bom_recipes.overall_yield_rate, 每个配方记录 BomChangeLog. 需 production:read_write.")
+            description = "将用户选中的出成率写入 bom_recipes.overall_yield_rate, 每个配方记录 BomChangeLog. "
+                    + "需 bom:yield_standard:write (仅超管; production:read_write 不再够)。")
     public ApiResponse<BomYieldApplyResultDTO> recalculateApply(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @Valid @RequestBody List<@Valid BomYieldApplyRequest> requests) {
@@ -186,7 +195,11 @@ public class BomController {
 
     @GetMapping("/yield-suggestions")
     @Operation(summary = "BOM 出成率自学习建议列表",
-            description = "只读展示 PENDING/APPLIED/REJECTED 建议. 自动生成不会覆盖 BOM.")
+            description = "只读展示 PENDING/APPLIED/REJECTED 建议。生成建议不写 BOM —— "
+                    + "⚠️ 这句话在 2026-09-05 之前是假的: 当时 BomYieldSuggestionServiceImpl "
+                    + "会自动把建议写回 bom_recipes.overall_yield_rate (生产上改过 12 次, "
+                    + "appliedBy=SYSTEM), 而这段描述一直写着不会覆盖, 没人去核。自动回写已删除, "
+                    + "现在它才成立。要改标准只有一条路: recalculate-apply (需 bom:yield_standard:write)。")
     public ApiResponse<List<BomYieldSuggestion>> listYieldSuggestions(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam(required = false) @Parameter(description = "状态: PENDING/APPLIED/REJECTED; 空返回全部") String status) {
