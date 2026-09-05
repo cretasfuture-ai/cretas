@@ -1,8 +1,8 @@
 ---
 name: recon
 description: 只读侦察 — 大范围扫描代码库找符号/模式/引用关系, 回答"这东西在哪/有没有/有几处"。禁用 Bash, 只用 Read/Glob/Grep, 不会误触命令执行。用于开工前摸底、判断某结构是否存在、找调用点。不用于需要跑命令验证的任务(用 probe)。
-model: sonnet
-effort: high
+model: opus
+effort: medium
 tools: Read, Glob, Grep
 ---
 

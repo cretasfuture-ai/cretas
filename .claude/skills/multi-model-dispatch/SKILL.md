@@ -1,22 +1,30 @@
 ---
 name: multi-model-dispatch
-description: 多模型分发路由规范(Opus/Sonnet/Codex/Composer)。触发场景: 计划含 ≥2 个可并行块或用户要派活时产「分发卡」; 决定某个任务派给哪个模型、什么 effort、什么 orchestration(三轴); 写自包含 brief 卡给 Codex/Composer; 审查分层(例行 vs 🔒 risky 终审); 🔒 红线任务的收尾约束。凡涉及"派活给哪个模型 / 多 chat 并行分工 / brief 卡"必读。
+description: 多模型分发路由规范(in-harness 全 Opus + Fable organizer / Codex / Composer)。触发场景: 计划含 ≥2 个可并行块或用户要派活时产「分发卡」; 决定某个任务派给哪个模型、什么 effort、什么 orchestration(三轴); 写自包含 brief 卡给 Codex/Composer; 审查分层(例行 vs 🔒 risky 终审); 🔒 红线任务的收尾约束。凡涉及"派活给哪个模型 / 多 chat 并行分工 / brief 卡"必读。
 ---
 
 # 多模型分发路由 (Multi-Model Dispatch)
 
-模型轴两档 `Sonnet 5 → Opus 5`（2026-08-17 Steve 拍板）。Opus 卡住换手段不换模型：对抗式 fan-out、换仪器重新量、把问题拆小 —— 本仓实测卡住基本都是量错了东西。`earned-not-predicted`：默认 Sonnet 能做的就给 Sonnet，⛔ 不许「为了保险用最好的模型」（2026-08-17 四个 subagent 全继承 Opus、一次没量过，就是这个反模式）。
+**in-harness 只用 Opus 5（2026-09-06 Steve 拍板，取代 8-17 的「Sonnet → Opus 两档」）。** organizer 会话跑 Fable 5.1，执行/取证/侦察三条车道一律 Opus。
+
+⇒ **成本旋钮从「模型轴」整个挪到了「effort 轴」。** 8-17 那条 `earned-not-predicted`（⛔ 不许「为了保险用最好的模型」）**没有作废，只是换了对象**：现在是「⛔ 不许为了保险默认蹲高 effort」。`cost = agents × effort` 仍然是乘。
+
+⚠️ 为什么可以放弃 Sonnet 一档：本仓实测「机械小改」几乎都带陷阱（2026-09-05 一天内：抄 `toDateString` 抄成 `toISOString`、抄 `authStore.user?.role` 抄了个不存在的字段、合并冲突选错会把刚做的权限文档退回去、份额 30/70 的样本对真 bug 恒真）—— 这些在便宜模型手里**全会一路绿灯过去**，症状要么在真机上、要么在几周后。
+
+⚠️ 但同一天的证据也划出了 effort 的边界：那天所有失误**没有一个是「想得不够深」**，全是「量错了东西」（判据撞上自己的注释 ×4、grep 大小写、退出码被 `echo` 替换、读了落后 600 commit 的 worktree、grep 到孤儿 chunk）。**提高 effort 抓不到这一类** —— 那要靠判据和对照，不靠算力。⇒ effort 只买「要不要多想一步」。
+
+Opus 卡住换手段不换模型：对抗式 fan-out、换仪器重新量、把问题拆小 —— 本仓实测卡住基本都是量错了东西。
 
 ## 执行层
 
-| 执行者 | 擅长 | 通道 |
-|---|---|---|
-| Sonnet 5 | 主力工蜂：机械 / 规则重 / 判断密集 / 大部分 bug 修复（`.claude/rules` 自动可见，独立对抗审计把关） | in-harness：organizer 直接 spawn |
-| Opus 5 | 需求框架 / 难架构 / 🔒 终审 / 出货闸 / 最硬红线代码（成本财务口径 · prod 迁移/Flyway · 权限/RLS/多租户/业态 · 撤回 · 资金） | 本体 |
-| Codex（GPT） | 可 brief 的纯后端 / CLI / E2E / 构建 / TDD / 第二审查 | out-of-harness：organizer 出卡 → Steve courier |
-| Composer（Cursor） | 独立 UI / 样式 / lint / 补测试 | out-of-harness |
+| 执行者 | 擅长 | 通道 | 车道 / effort |
+|---|---|---|---|
+| Opus 5 | in-harness 全部：改代码 / 取证 / 侦察 / 需求框架 / 难架构 / 🔒 终审 / 出货闸 / 最硬红线代码（成本财务口径 · prod 迁移/Flyway · 权限/RLS/多租户/业态 · 撤回 · 资金） | organizer spawn，或本体 | `executor` high · `probe` high · `recon` medium |
+| Fable 5.1 | organizer 本身：统筹 / 台账 / 追 PR / 汇总读数 / 审计 —— 判断轻、吞吐重 | 会话级（用户 `/model` 选） | 会话 effort |
+| Codex（GPT） | 可 brief 的纯后端 / CLI / E2E / 构建 / TDD / 第二审查 | out-of-harness：organizer 出卡 → Steve courier | brief 里建议，设不了 |
+| Composer（Cursor） | 独立 UI / 样式 / lint / 补测试 | out-of-harness | brief 里建议，设不了 |
 
-Out-of-harness 看不到 `.claude/rules`，brief 卡必须内联相关规则摘要；Java Tool-Skill / Python parity（12 条硬规则）这类规则重任务优先 Sonnet in-harness。预算：Claude Max 20x + GPT 10x（小桶）+ Cursor 三个都是 flat，铺开用、别撑爆 GPT。
+Out-of-harness 看不到 `.claude/rules`，brief 卡必须内联相关规则摘要；Java Tool-Skill / Python parity（12 条硬规则）这类规则重任务优先 in-harness (Opus, 规则自动可见)。预算：Claude Max 20x + GPT 10x（小桶）+ Cursor 三个都是 flat，铺开用、别撑爆 GPT。
 
 ## 三条铁律
 
@@ -39,8 +47,8 @@ Out-of-harness 看不到 `.claude/rules`，brief 卡必须内联相关规则摘�
 |---|---|
 | 改页面 / 组件 / 样式 · 普通 bug · 补 lint/类型/测试 · 照文档批量小改 | Composer |
 | 跨模块 bug · 查日志 · headed E2E · 构建排查 · 仓库级检查 | Codex（构建 / CI / 部署脚本问题：Codex 执行 + Opus 审） |
-| 规则重 in-harness（新 Java Tool / Flyway 编号 / rule-aware review / parity 机械修复）· 判断密集 / 一般 🔒（DB 事务 / Hibernate 语义 / 报工模型 / 常规写库） | Sonnet 5 |
-| Java Tool-Skill 意图路由 / parity port 首次判断 | Opus，或 Opus 写死 brief 后给 Sonnet/Codex |
+| 规则重 in-harness（新 Java Tool / Flyway 编号 / rule-aware review / parity 机械修复）· 判断密集 / 一般 🔒（DB 事务 / Hibernate 语义 / 报工模型 / 常规写库） | `executor` (Opus/high) |
+| Java Tool-Skill 意图路由 / parity port 首次判断 | Opus 本体，或写死 brief 后给 `executor`/Codex |
 | 🔒 四类 · 🔒🔒 最硬红线代码 | Opus 把关 / 自做 |
 | 某模型修 2 轮没好 / 改乱了 | 停，切 Opus root-cause，别盲改 |
 
@@ -51,21 +59,21 @@ Out-of-harness 看不到 `.claude/rules`，brief 卡必须内联相关规则摘�
 | 日常 Opus | `high`（coding/agentic 可起步 `xhigh` 再往下扫；`low`/`medium` 强得反常，例行活别默认蹲 high） |
 | 单个难 turn | 该 prompt 加 `ultrathink`（只点一轮） |
 | 长自主 session / 真模糊架构 | `xhigh`；`max` ⛔ 破玻璃 |
-| Sonnet 5 | 默认 `high`，最硬 coding 可 `xhigh`；子代理 effort 只能在 `.claude/agents/<name>.md` frontmatter 预设（Agent 调用没有 effort 参数，默认继承会话） |
+| 子代理 | effort **只能**在 `.claude/agents/<name>.md` frontmatter 预设 —— 官方文档明写 Agent 调用**没有 effort 参数**（2026-09-06 复核 code.claude.com/docs/en/sub-agents）。要不同档位就**多定义一个 agent 变体**。`model` 反过来**可以**按次传（优先级：调用参数 > frontmatter > 环境变量 > 会话） |
 | Codex / Composer | brief 里建议，设不了 |
 
 降 effort 不缩短输出长度，嫌啰嗦在 prompt 里明说。Organizer 是 effort 分配者不是满载消费者：常驻 max 做廉价分诊 = 烧周额度最快。
 
-Orchestration 从便宜到贵：`inline`（默认）→ 单 subagent（隔离 / 污染性输出）→ workflow（10+ agent 交叉核验）→ ultracode。fan-out 时 workers 跑 Sonnet + 低 effort，只编排者 high —— `cost = agents × effort` 是乘；编排者蹲 xhigh 时 workers 也继承 xhigh，要在 agents frontmatter 压住。`ultrathink`（深化一个脑）≠ `ultracode`（开很多脑）；概念咨询 / 单点问题 → inline。Opus 5 的已知缺陷是过度委派 subagent，fan-out 编排要主动装刹车。
+Orchestration 从便宜到贵：`inline`（默认）→ 单 subagent（隔离 / 污染性输出）→ workflow（10+ agent 交叉核验）→ ultracode。fan-out 时 workers 压低 effort（`medium`/`low`），只编排者 `high` —— 全 Opus 之后这是**唯一**的成本旋钮 —— `cost = agents × effort` 是乘；编排者蹲 xhigh 时 workers 也继承 xhigh，要在 agents frontmatter 压住。`ultrathink`（深化一个脑）≠ `ultracode`（开很多脑）；概念咨询 / 单点问题 → inline。Opus 5 的已知缺陷是过度委派 subagent，fan-out 编排要主动装刹车。
 
 | 任务 | 模型 | effort | orchestration |
 |---|---|---|---|
 | Codex / Composer 执行（有 spec） | Codex / Composer | default | inline |
-| Sonnet in-harness 执行 | Sonnet 5 | high | inline |
+| in-harness 执行（有计划） | `executor` (Opus) | high | 单 subagent（worktree 隔离） |
 | 需求 framing（低歧义） | Opus | high | inline |
 | 架构决策（真有疑问） | Opus | xhigh | inline |
 | 高风险门控 review | Opus | xhigh | 单 subagent（read-only 隔离） |
-| 广覆盖审计 / 迁移 | Opus 编排 + Sonnet workers | xhigh / high | workflow |
+| 广覆盖审计 / 迁移 | Opus 编排 + Opus workers（workers 压 `medium`） | xhigh / medium | workflow |
 
 ## 分发卡（计划含 ≥2 个可并行块或用户要派活时产）
 
@@ -73,7 +81,7 @@ Orchestration 从便宜到贵：`inline`（默认）→ 单 subagent（隔离 / 
 ## 🚦 分发总览
 | # | 任务 | 推荐模型 | 可否并行 | worktree 分支 | 🔒红线 |
 
-## 卡N → 贴给 {Composer | Codex | Sonnet subagent | Opus 自留}
+## 卡N → 贴给 {Composer | Codex | executor/probe/recon subagent | Opus 自留}
 **目标**: 一句话 + 推荐这个模型的理由
 **worktree**: git worktree add -b feat/<task> ../cretas-<task> origin/main
 **允许改**: <越窄越好>   **禁改**: <锁死区>
@@ -87,7 +95,7 @@ brief 卡自包含：别的 chat 看不到本 chat 上下文。交接靠 brief �
 
 ## 审查分层
 
-例行 review（样式 / lint / 补测试 / 无红线依赖）→ Sonnet；🔒 risky review（权限 / RLS / 迁移 / 业态 / 架构 / 上线前 diff）→ Opus 本体，不可外包。
+例行 review（样式 / lint / 补测试 / 无红线依赖）→ `recon`/`executor` subagent；🔒 risky review（权限 / RLS / 迁移 / 业态 / 架构 / 上线前 diff）→ Opus 本体，不可外包。
 
 ## 反 pattern
 
@@ -98,4 +106,4 @@ brief 卡自包含：别的 chat 看不到本 chat 上下文。交接靠 brief �
 - 按额度比例硬塞 Opus 做低价值执行 / 硬塞 Composer 做高风险决策
 - Opus 常驻 max effort 做路由分诊
 - Java Tool-Skill / parity port 直接派 Codex（无规则上下文）
-- fan-out 时 workers 也跑 Opus / xhigh
+- fan-out 时 workers 也蹲 `high`/`xhigh`（全 Opus 之后模型已不是旋钮，effort 是；`cost = agents × effort` 仍然是乘）

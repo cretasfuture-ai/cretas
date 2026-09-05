@@ -1,8 +1,8 @@
 ---
 name: executor
 description: 隔离执行车道 — 在独立 git worktree 里按计划改代码、写测试、跑构建。用于已经框清需求、要真正落地代码的任务。不做 fan-out(没有 Agent 工具), 不接部署任务。
-model: inherit
-effort: xhigh
+model: opus
+effort: high
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill, TodoWrite
 isolation: worktree
 ---
