@@ -69,7 +69,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `ai-intent-tool-skill-architecture.md` - AI Tool-Skill 架构（backend/java）
 - `database-entity-sync.md` - PostgreSQL 与 Entity 同步（backend/java）
 - `python-services-architecture.md` - Python 统一进程规范（backend/python）
-- `python-java-port.md` - Java→Python parity port 12 rules（backend）
+- `python-java-port.md` - Java→Python parity port 12 rules（只在 backend/python/smartbi_compat 加载；案例库 `docs/rules-casebook/python-java-port-cases.md`）
 - `coding-conventions.md` - 响应格式/TS 类型/字段命名/JWT（代码目录）
 - `fool-proof-design.md` - 防呆设计 5 规则（frontend/web-admin）
 - `playwright-headed-mode.md` - E2E headed 强制（tests）
