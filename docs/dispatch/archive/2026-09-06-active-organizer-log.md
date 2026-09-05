@@ -122,3 +122,13 @@
 - 额外：`ToolRbacEnforcer` 加 `customer_list` 同四码（否则问 AI 就能绕过 HTTP 门），parity 测试钉两门同码。变异：去注解 ⇒ javap 见 `RequirePermission` 10→9 ⇒ 7/7 红、production_manager 403→200；去 map 项 ⇒ 常量池 `customer_list` 3→0（对照 `customer_delete` 仍 3）⇒ 2/3 红。
 - 两条待裁定：(1)「恰好四类」用权限码表达不出——`department_admin`/`dispatcher`/`viewer` 因 L1 本有 sales 或 finance 读权而过，收窄要改 L1（属未来权限总页的事）；(2) 客户名单 12 条读路径只关 1 条，余下已登记 `SEC-CUSTOMER-ROSTER-REMAINING-PATHS-20260906`。
 - 顺手修的 `Promise.all` 同族：`ShipmentManagementScreen.tsx`、web-admin `plans/list.vue`、`system/products/index.vue`。
+
+
+## 2026-09-06 04:11 `SEC-CUSTOMER-LIST-GATE-20260906` 归档 — #615 发 38 上线
+
+原条目：- `SEC-CUSTOMER-LIST-GATE-20260906` — `review` — Owner: executor（organizer 派） — PR #615：`getCustomerList` 加 sales/finance 四码 + AI 工具 `customer_list` 同码；L1 23 角色 11 过/12 挡。⚠️「恰好四类」权限码表达不出（三个角色因 L1 本有读权而过）；12 条读路径只关 1 条，余下另开票。🔒 终审中。
+
+- **终审可合**：12 条读路径只关 1 条是硬约束 8 本尊，但本票范围正确；三个搭便车角色（viewer 全模块只读设计、dispatcher 有 bug #45 原始理由「审 SO 要看客户」、department_admin 带销售读写）**按权限模型本来就该通过**——「恰好四类」是业务语言，模型粒度是模块，对不齐是表达力问题不是缺陷；AI 门委托 `permissionService.hasAnyPermission`（同一判定链），parity 钉的是两门同码；负向测试钉在真实 L1 角色 production_manager（sales=-、finance=-）；#590 的 `allSettled` 在位未被动坏。
+- **下一票必带**（已写进 `SEC-CUSTOMER-ROSTER-REMAINING-PATHS`）：`/active` 的调用方有 `web-admin/src/views/warehouse/material-types/list.vue:272`，注释逐字写「后端另有专门为下拉场景准备的 `/customers/active`（无 DataScope 限制）」——有人特意迁过去绕范围；warehouse_* 角色 sales=-、finance=- ⇒ 照抄四码会打断仓库物料类型页。优先级：`/export`（全表）与 `/{id}/price-memory`（议价史）高于 `/by-industry` 之类。
+- **发 38**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 04:08:31 < 启动 04:08:50；javap 按方法块：`getCustomerList` 带 `RequirePermission`=True、`createCustomer` True（阳性）、`getActiveCustomers` False（阴性，本票故意未动）；`ToolRbacEnforcer` 常量池 `customer_list` 1；health 200。
+- ⚠️ RN 侧改动（`ShipmentManagementScreen` `Promise.all`→`allSettled`、`settleAllIndependently` 注释）**未推 OTA**，与 #590 的 RN 半一起攒着，等 owner 定「OTA 是否改自动应用」后一并推；⛔ OTA 导出用独立 worktree，别弄脏部署树。
