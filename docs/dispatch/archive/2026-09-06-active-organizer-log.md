@@ -152,3 +152,13 @@
 - **发 39**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 05:37:20 < 启动 05:37:41、`isLegacyInLegCompensation` 1 / `V20261101_33` 在 jar 1 / 假串 0、health 200。**库内**：`flyway 20261101.33 success 05:37:51`；txn 141→23919 / 142→23921 / 143→23923（恰三行）、145/146 原样、遗留负号无章 REVERSE 剩 **0**、REVERSE 总数 13 不变。
 - 登记：378（`interim-settle-reverse-in:`）与 F006 343/344 不动；`WIP_LEDGER_INCOMPLETE` 锁 F006 331/342/343/344 是另一缺陷（盘点 ADJUST）；探针接 cron 时基线按 `NO_LEDGER`/`PRODUCED_OFF` 成因过滤 + 配计数读数，⛔ 不硬编码 id。
 - ⚠️ 运维：**子代理共用 organizer 的 scratchpad 目录**——#618 执行者的 `pr_body.md` 被 #620 执行者覆盖（它重新从 GitHub 拉 body 写到唯一命名文件）。以后 brief 里让执行者用带任务 ID 的文件名。
+
+
+## 2026-09-06 06:01 probe 回报 `ARCH-PRODUCTION-PLAN-HARD-DELETE-PATH`（只读；全部标 [RUN]/[INF]）
+
+- **层①代码**：`ProductionPlan`/`ProcessSheetRow`/`ProductionBatch` 均 `@Where ✅ @SQLDelete ❌`；全仓 610 实体、`@SQLDelete` 23、`@Where` 342——`BaseEntity` 注释记着 `@Where` 在 `@MappedSuperclass` 上被忽略而批量补过，`@SQLDelete` 从没补。实证：`operation_logs` 里 3 条成功的 `PRODUCTION_PLAN/DELETE` ⇒ 行全 ROW_ABSENT；4 条失败的 ⇒ SOFT_DELETED（同一秒，API 409 后两分钟的手工 SQL）。`SalesServiceImpl.deleteDraft` 早已独立发现并显式 `softDelete()`。🔴 `SoftDeleteBlindSpotContractTest` docstring 粗体「全仓每一次 delete() 都是软删」为假且承重。
+- **层②运维**：5 个孤儿计划（`39d06069/4d78ef7d/5c711e0b/7b19614a/d769a248`，08-29 03:12–10:08 活跃，全部走完开工→结单）**无任何 API/日志痕迹**（oplog 0 / 日志 0，阳性对照各 11 / 10；日志窗口 08-07→09-06 全覆盖）；同日 LIUSHANMEN `production_batches` 只剩 2、`material_consumptions` 0、5 张关联销售订单也物理消失且无 oplog ⇒ **手工多表清理漏了 `process_sheet_rows`**（形状与 `docs/audits/liushanmen/2026-06-12-prod-demo-cleanup-proposal.md` 21 表清单一致，该清单从未提 `process_sheet_rows`）。且非一次：`V20261029_43` 软删保留的 8 计划 + 14 行台账后来也被物理清掉。具体命令不可追（无 psql_history）。
+- **悬空**（44 个 plan_id 列全扫，阳性对照活计划 9 列非零）：`process_sheet_rows` 56 + `_change_log` 56 + `business_links` 15 = **127 行**；引用 `production_plans` 的 FK 仅 3 条全 NO ACTION，`process_sheet_rows.plan_id` 无 FK。row 1500 = 全 prod 唯一 `semiFinished:true`（首轮 LIKE 模式无空格读 0 是假零——prod JSON 冒号后有空格，阳性对照 93 抓的）。
+- **监控**：`soft-delete-orphans-watch.sh`（cron 04:30）08-22 起 16 天 `INSTRUMENT_DEAD no-backend-pid` + `STALE sql-older-than-jar`；其 60 对表不含本对。⇒ 死 + 盲。
+- **修法选项**：(a) `ProductionPlan` 加 `@SQLDelete` + 改假 docstring + 「`@Where`⇒`@SQLDelete`」**棘轮**（起点 320 违例，⛔ 硬闸即死）；副作用：`PP-AUTO` 计数改为单调，反而修了潜在撞号。(b) FK `process_sheet_rows.plan_id → production_plans`——建议 `NOT VALID`（容存量 56、拦新增），否则先清 56（它们是那天生产唯一幸存记录，⛔ 不该删）；会打断 `tests/v1-e2e/scripts/seed-and-reset.sh:151`（它删 plans 不删 rows）。(c) 级联删 ⇒ 销毁唯一幸存记录，否。(d) 只靠 #620 读侧 ⇒ 不拦新增、不盖 43 列。**独立最便宜的赢**：救活 cron + 登记该对（已开 `OPS-SOFT-DELETE-ORPHAN-WATCH-DEAD`）。
+- 给 owner 的一句话：**有人在生产库上手工跑多表 DELETE**，且不止一次；这是纪律问题不是代码问题，代码侧能做的是让它下次响。
