@@ -394,6 +394,34 @@ public class PermissionServiceImpl implements PermissionService {
     private static final String PRICE_VIEW_PERMISSION = "procurement:price:view";
 
     /**
+     * 角色白名单 — 允许改写「标准出成率」({@code bom_recipes.overall_yield_rate}, 2026-09-05).
+     *
+     * <p><b>为什么不复用 {@code production:read_write}</b>: 实测那个权限
+     * <b>9 个角色</b>都有 —— dispatcher / production_manager / production_clerk /
+     * workshop_supervisor / team_leader / group_leader / <b>operator</b> /
+     * <b>yield_operator</b> / department_admin。即「车间任何一个报工账号都能改标准」。
+     * 而标准出成率是报价、备料、成本对账共同的基准线, owner 的要求是
+     * 「只能人为改, 而且只有指定的人能改」。
+     *
+     * <p>⚠️ 与本类里 {@code hr:self_wage:view} <b>故意不设白名单</b>的理由正好相反, 两者要一起读:
+     * 那里漏掉一个角色的症状是「某个岗位看不到自己工资」——<b>看不到的人不会来报 bug</b>;
+     * 这里放宽一个角色的症状是「标准被人悄悄改了」——<b>改动同样没人会来报</b>, 但它会污染
+     * 所有下游的备料与成本对账。⇒ 收紧的代价是有人来要权限(可见、好补),
+     * 放宽的代价是基准线静默漂移(不可见)。两害相权取可见的那个。
+     *
+     * <p>今天名单里只有超管: {@code platform_admin} / {@code factory_super_admin}
+     * 在 {@link #hasPermission} 的超管分支已经放行, 这里显式列出是为了让「谁能改」
+     * 在一处读得到, ⛔ 不要让读者去别处拼。要放开给生产经理等角色, 在这里加一行即可。
+     */
+    private static final Set<FactoryUserRole> YIELD_STANDARD_WRITE_ROLES = Set.of(
+            FactoryUserRole.factory_super_admin,
+            FactoryUserRole.platform_admin
+    );
+
+    /** 标准出成率改写权限代码 (与 BomController#recalculateApply 上的 @RequirePermission 一致). */
+    public static final String YIELD_STANDARD_WRITE_PERMISSION = "bom:yield_standard:write";
+
+    /**
      * 角色白名单 — 允许查看财务待审采购单 (Issue #736 fix, 2026-05-17).
      *
      * <p>{@code /procurement/finance-review} 列表暴露 PENDING_FINANCE_REVIEW 状态的采购订单，
@@ -443,6 +471,13 @@ public class PermissionServiceImpl implements PermissionService {
         // 走独立角色白名单, 不复用 module:action 矩阵 (该矩阵只支持 read/write 二元).
         if (PRICE_VIEW_PERMISSION.equals(permissionCode)) {
             return PRICE_VIEW_ROLES.contains(role);
+        }
+
+        // bom:yield_standard:write — 改写标准出成率 (2026-09-05 owner 裁定「标准只能人改」).
+        // 同样走独立白名单: production:read_write 有 9 个角色 (含 operator / yield_operator),
+        // 用它当门等于没有门。理由与名单见 YIELD_STANDARD_WRITE_ROLES 的注释。
+        if (YIELD_STANDARD_WRITE_PERMISSION.equals(permissionCode)) {
+            return YIELD_STANDARD_WRITE_ROLES.contains(role);
         }
 
         // procurement:finance_review:view — 财务待审采购单查看 (Issue #736 fix).

@@ -31,9 +31,7 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
 
     static final int MIN_SAMPLES = 3;
     static final BigDecimal MAX_OFFSET_PERCENTAGE_POINTS = new BigDecimal("30.00");
-    static final BigDecimal AUTO_APPLY_MAX_RELATIVE_CHANGE = new BigDecimal("0.30");
     static final String SYSTEM_GENERATOR = "SYSTEM_AUTO_YIELD_SELF_LEARN";
-    static final String SYSTEM_APPLIER = "SYSTEM";
 
     private final ProductionBatchRepository productionBatchRepository;
     private final BomRecipeRepository bomRecipeRepository;
@@ -91,34 +89,22 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
         suggestion.setGeneratedBy(SYSTEM_GENERATOR);
         suggestion.setGeneratedAt(LocalDateTime.now());
 
-        BomYieldSuggestion saved = bomYieldSuggestionRepository.save(suggestion);
-        autoApplyIfGuarded(saved, recipe);
-        return Optional.of(saved);
-    }
-
-    private void autoApplyIfGuarded(BomYieldSuggestion suggestion, BomRecipe recipe) {
-        if (suggestion.getStatus() != BomYieldSuggestion.Status.PENDING
-                || suggestion.getSampleCount() == null
-                || suggestion.getSampleCount() < MIN_SAMPLES
-                || !isPositive(suggestion.getSuggestedYieldRate())) {
-            return;
-        }
-        if (isPositive(suggestion.getPreviousYieldRate())) {
-            BigDecimal relativeChange = suggestion.getSuggestedYieldRate()
-                    .subtract(suggestion.getPreviousYieldRate())
-                    .abs()
-                    .divide(suggestion.getPreviousYieldRate(), 6, RoundingMode.HALF_UP);
-            if (relativeChange.compareTo(AUTO_APPLY_MAX_RELATIVE_CHANGE) > 0) {
-                return;
-            }
-        }
-        BigDecimal appliedRate = suggestion.getSuggestedYieldRate().setScale(2, RoundingMode.HALF_UP);
-        recipe.setOverallYieldRate(appliedRate);
-        bomRecipeRepository.save(recipe);
-        suggestion.setStatus(BomYieldSuggestion.Status.APPLIED);
-        suggestion.setAppliedAt(LocalDateTime.now());
-        suggestion.setAppliedBy(SYSTEM_APPLIER);
-        bomYieldSuggestionRepository.save(suggestion);
+        // ⛔ 生成到 PENDING 就结束 —— 建议**不再**自动写回 bom_recipes.overall_yield_rate。
+        //
+        // 2026-09-05 owner 裁定「标准只能人改」。删掉的那段 autoApplyIfGuarded 在生产上
+        // 已经改过 12 次 (F006 黄油鸡, appliedBy=SYSTEM), 轨迹:
+        //     (空) → 93.75 → 93.75 → 93.75 → 96.88 → 100.00 → 之后 6 次全停在 100.00
+        //
+        // 🔴 它不是「漂了两个点」, 是漂到了一个**让机制静默失效**的值:
+        //    100.00 同时是 ProductionPlanServiceImpl#resolveEffectiveProductYieldRate 与
+        //    #isMainMaterialCandidate 里「视为未配置」的哨兵 ⇒ 自学习一旦把值推到 100,
+        //    缺料预警就再也不按出成率折算主料了。自学习把自己学没了。
+        //    ⚠️ 教训: 一个**合法取值**同时被当哨兵用, 任何能到达它的过程都会静默关掉依赖它的机制。
+        //
+        // 人工写入那条路仍在, 且本来就带留痕: BomYieldEstimateServiceImpl#recalculateApply
+        // (记 BomChangeLog + 操作人 + 过期校验), 权限见
+        // PermissionServiceImpl#YIELD_STANDARD_WRITE_PERMISSION。
+        return Optional.of(bomYieldSuggestionRepository.save(suggestion));
     }
 
     private List<BigDecimal> collectYieldPercentSamples(String factoryId, String productTypeId) {
@@ -150,10 +136,6 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
                 : sorted.get(size / 2 - 1).add(sorted.get(size / 2))
                         .divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
         return median.setScale(2, RoundingMode.HALF_UP);
-    }
-
-    private boolean isPositive(BigDecimal value) {
-        return value != null && value.compareTo(BigDecimal.ZERO) > 0;
     }
 
     private boolean isBlank(String value) {
