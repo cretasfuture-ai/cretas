@@ -1,4 +1,4 @@
--- generated-from 6b5b0fa2f247 2026-09-05 22:27:34Z
+-- generated-from 8a6a9dc4b97c 2026-09-05 22:52:19Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 SELECT * FROM (
@@ -41,10 +41,8 @@ SELECT * FROM (
   UNION ALL SELECT 'opportunity_stage_history.opportunity_id -> sales_opportunities' AS assoc, count(*) AS bad FROM public.opportunity_stage_history x WHERE x.deleted_at IS NULL AND x.opportunity_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.sales_opportunities y WHERE y.id::text = x.opportunity_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'piece_rate_rules.factory_id -> factories' AS assoc, count(*) AS bad FROM public.piece_rate_rules x WHERE x.deleted_at IS NULL AND x.factory_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.factories y WHERE y.id::text = x.factory_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'piece_rate_rules.work_type_id -> work_types' AS assoc, count(*) AS bad FROM public.piece_rate_rules x WHERE x.deleted_at IS NULL AND x.work_type_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.work_types y WHERE y.id::text = x.work_type_id::text AND y.deleted_at IS NULL)
-  UNION ALL SELECT 'process_sheet_rows.plan_id -> production_plans' AS assoc, count(*) AS bad FROM public.process_sheet_rows x WHERE x.deleted_at IS NULL AND x.plan_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.production_plans y WHERE y.id::text = x.plan_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'quality_check_item_bindings.quality_check_item_id -> quality_check_items' AS assoc, count(*) AS bad FROM public.quality_check_item_bindings x WHERE x.deleted_at IS NULL AND x.quality_check_item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.quality_check_items y WHERE y.id::text = x.quality_check_item_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'raw_material_types.factory_id -> factories' AS assoc, count(*) AS bad FROM public.raw_material_types x WHERE x.deleted_at IS NULL AND x.factory_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.factories y WHERE y.id::text = x.factory_id::text AND y.deleted_at IS NULL)
-  UNION ALL SELECT 'report_reversal_logs.plan_id -> production_plans' AS assoc, count(*) AS bad FROM public.report_reversal_logs x WHERE x.deleted_at IS NULL AND x.plan_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.production_plans y WHERE y.id::text = x.plan_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'rework_records.material_batch_id -> material_batches' AS assoc, count(*) AS bad FROM public.rework_records x WHERE x.deleted_at IS NULL AND x.material_batch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.material_batches y WHERE y.id::text = x.material_batch_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'rework_records.production_batch_id -> production_batches' AS assoc, count(*) AS bad FROM public.rework_records x WHERE x.deleted_at IS NULL AND x.production_batch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.production_batches y WHERE y.id::text = x.production_batch_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'rework_records.quality_inspection_id -> quality_inspections' AS assoc, count(*) AS bad FROM public.rework_records x WHERE x.deleted_at IS NULL AND x.quality_inspection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.quality_inspections y WHERE y.id::text = x.quality_inspection_id::text AND y.deleted_at IS NULL)
@@ -64,4 +62,8 @@ SELECT * FROM (
   UNION ALL SELECT 'whitelists.added_by -> users' AS assoc, count(*) AS bad FROM public.whitelists x WHERE x.deleted_at IS NULL AND x.added_by IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.users y WHERE y.id::text = x.added_by::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'whitelists.factory_id -> factories' AS assoc, count(*) AS bad FROM public.whitelists x WHERE x.deleted_at IS NULL AND x.factory_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.factories y WHERE y.id::text = x.factory_id::text AND y.deleted_at IS NULL)
   UNION ALL SELECT 'work_types.factory_id -> factories' AS assoc, count(*) AS bad FROM public.work_types x WHERE x.deleted_at IS NULL AND x.factory_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.factories y WHERE y.id::text = x.factory_id::text AND y.deleted_at IS NULL)
+-- BEGIN_MANUAL_SECTION 以下由 check-soft-delete-orphans.sh 的 MANUAL_PAIRS 合入
+  UNION ALL SELECT 'process_sheet_rows.plan_id -> production_plans' AS assoc, count(*) AS bad FROM public.process_sheet_rows x WHERE x.deleted_at IS NULL AND x.plan_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.production_plans y WHERE y.id::text = x.plan_id::text AND y.deleted_at IS NULL)
+  UNION ALL SELECT 'report_reversal_logs.plan_id -> production_plans' AS assoc, count(*) AS bad FROM public.report_reversal_logs x WHERE x.deleted_at IS NULL AND x.plan_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.production_plans y WHERE y.id::text = x.plan_id::text AND y.deleted_at IS NULL)
+-- END_MANUAL_SECTION
 ) q WHERE bad > 0 ORDER BY bad DESC;

@@ -58,11 +58,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENTITY_ROOT="$REPO_ROOT/backend/java/cretas-api/src/main/java/com/cretas/aims/entity"
 SSH_HOST="${CRETAS_SSH_HOST:-root@47.100.235.168}"
 REPO_SQL="$REPO_ROOT/scripts/cron/soft-delete-orphans.sql"
+# 「哪些表有 deleted_at」的快照。它是这个生成器**唯一**的数据库输入 ——
+# 快照下来之后, 生成就成了纯函数(实体源码 + 这份快照 → SQL), CI 里不连库也能复现。
+# ⚠️ 它是**读数**不是配置: 只能由 --write 从 prod 抓, ⛔ 不要手工编辑。
+REPO_HASDEL="$REPO_ROOT/scripts/cron/soft-delete-orphans.hasdel.txt"
 SQL_ONLY=0
 WRITE_MODE=0
+OFFLINE=0
 case "${1:-}" in
   --sql-only) SQL_ONLY=1 ;;
   --write)    SQL_ONLY=1; WRITE_MODE=1 ;;
+  # 用快照离线重放一次生成, 打到 stdout。给 CI 的漂移闸用, ⛔ 不连库、不改任何文件。
+  --regen-offline) SQL_ONLY=1; OFFLINE=1 ;;
   "")         ;;
   *) echo "⛔ 未知参数: $1 (用法见文件头)" >&2; exit 2 ;;
 esac
@@ -116,7 +123,19 @@ export PGPASSWORD="$DB_PASSWORD"'
 
 # ⚠️ --sql-only 也要连库取「哪些表有 deleted_at」—— 它的用途是生成一份**能独立跑**的 SQL,
 #    不过滤的话会混进无 deleted_at 的表(实测 ai_usage_log), 拿去跑当场报错。
-if true; then
+if [ "$OFFLINE" -eq 1 ]; then
+  # 离线重放: 用仓库里的快照当 hasdel。
+  # ⛔ 快照缺失/太小一律 exit 2, 不许「没有过滤名单就不过滤」—— 那会静默产出一份
+  #    多几十对、且拿去跑会报错的 SQL, 而漂移闸会把它当成「仓库份过期了」。
+  #    (硬约束 4: 没量到就说没量到, 别装成读数。)
+  [ -s "$REPO_HASDEL" ] || { echo "⛔ 快照不存在: $REPO_HASDEL (跑一次 --write 抓下来)"; exit 2; }
+  cp "$REPO_HASDEL" "$WORK/hasdel.txt"
+  HASDEL_COUNT=$(grep -c . "$WORK/hasdel.txt" || true)
+  if [ "${HASDEL_COUNT:-0}" -lt 50 ]; then
+    echo "⛔ 快照阳性对照失败: 只有 $HASDEL_COUNT 行 (预期数百张)。"
+    exit 2
+  fi
+elif true; then
   ssh "$SSH_HOST" "$REMOTE_ENV"'
 psql -h localhost -U "${DB_USERNAME:-cretas_user}" -d "$DB_NAME" -tAc \
   "SELECT table_name FROM information_schema.columns
@@ -227,11 +246,22 @@ def clause(t, c, tt):
             f"WHERE x.deleted_at IS NULL AND x.{c} IS NOT NULL AND NOT EXISTS "
             f"(SELECT 1 FROM public.{tt} y WHERE y.id::text = x.{c}::text AND y.deleted_at IS NULL)")
 
-parts = [clause(t, c, tt) for t, c, tt in sorted(found)]
+# 🔴 扫描出来的和手工登记的**分段输出**, 中间用起止标记界定。
+# 为什么要分段: 仓库里那份 SQL 与「生成器现在会产出什么」是两份东西, 早晚会漂
+# (形态 D)。守它的闸要拿生成器重跑一次逐字比对, 而**出处戳每次都不同** ——
+# 不给标记就只能靠猜哪几行该剔除。⇒ 让产出自己说清哪一段是哪一段。
+# ⚠️ UNION ALL 的顺序不影响结果(外面有 ORDER BY), 分段是纯排版。
 print(prov_stamp)
 print(f"-- 关联 {len(found)} 对 = 注解扫描 {scanned} + 手工登记新增 {len(added)}")
 print("-- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。")
-print("SELECT * FROM (\n  " + "\n  UNION ALL ".join(parts) + "\n) q WHERE bad > 0 ORDER BY bad DESC;")
+print("SELECT * FROM (")
+scan_only = sorted(p for p in found if p not in set(manual))
+print("  " + "\n  UNION ALL ".join(clause(*p) for p in scan_only))
+print("-- BEGIN_MANUAL_SECTION 以下由 check-soft-delete-orphans.sh 的 MANUAL_PAIRS 合入")
+for p in sorted(added):
+    print("  UNION ALL " + clause(*p))
+print("-- END_MANUAL_SECTION")
+print(") q WHERE bad > 0 ORDER BY bad DESC;")
 sys.stderr.write(f"SCANNED={scanned} MANUAL={len(manual)} MANUAL_ADDED={len(added)} TOTAL={len(found)}\n")
 PYEOF
 PY_RC=$?
@@ -252,7 +282,10 @@ fi
 if [ "$WRITE_MODE" -eq 1 ]; then
   mkdir -p "$(dirname "$REPO_SQL")"
   cp "$WORK/scan.sql" "$REPO_SQL"
+  # 快照和 SQL 必须**同一次**写出去 —— 分两次写就又是两份会漂的东西。
+  LC_ALL=C sort -u "$WORK/hasdel.txt" | tr -d '\r' > "$REPO_HASDEL"
   echo "✓ 已写回 $REPO_SQL ($ASSOC_COUNT 条关联)"
+  echo "✓ 已写回 $REPO_HASDEL ($(grep -c . "$REPO_HASDEL") 张带 deleted_at 的表)"
   echo "  下一步: 提 PR 合进 main, 再由 scripts/deploy/install-server-scripts.sh 装到服务器。"
   exit 0
 fi
