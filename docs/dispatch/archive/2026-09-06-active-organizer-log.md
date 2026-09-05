@@ -162,3 +162,15 @@
 - **监控**：`soft-delete-orphans-watch.sh`（cron 04:30）08-22 起 16 天 `INSTRUMENT_DEAD no-backend-pid` + `STALE sql-older-than-jar`；其 60 对表不含本对。⇒ 死 + 盲。
 - **修法选项**：(a) `ProductionPlan` 加 `@SQLDelete` + 改假 docstring + 「`@Where`⇒`@SQLDelete`」**棘轮**（起点 320 违例，⛔ 硬闸即死）；副作用：`PP-AUTO` 计数改为单调，反而修了潜在撞号。(b) FK `process_sheet_rows.plan_id → production_plans`——建议 `NOT VALID`（容存量 56、拦新增），否则先清 56（它们是那天生产唯一幸存记录，⛔ 不该删）；会打断 `tests/v1-e2e/scripts/seed-and-reset.sh:151`（它删 plans 不删 rows）。(c) 级联删 ⇒ 销毁唯一幸存记录，否。(d) 只靠 #620 读侧 ⇒ 不拦新增、不盖 43 列。**独立最便宜的赢**：救活 cron + 登记该对（已开 `OPS-SOFT-DELETE-ORPHAN-WATCH-DEAD`）。
 - 给 owner 的一句话：**有人在生产库上手工跑多表 DELETE**，且不止一次；这是纪律问题不是代码问题，代码侧能做的是让它下次响。
+
+
+## 2026-09-06 06:13 probe 回报 `OPS-SOFT-DELETE-ORPHAN-WATCH-DEAD`（只读；brief 的两个猜测都错）
+
+- **真因 [RUN]**：脚本 :44 用 `ss -lntp` 按端口找 PID（蓝绿两端口都覆盖，方法正确）；但 job 在 root **用户 crontab**（无 `PATH=`，cronie 编译默认 `/usr/bin:/bin`，`strings /usr/sbin/crond` 验过），`ss` 只在 `/usr/sbin` ⇒ 找不到；`2>/dev/null` 把 `command not found` 吞掉 ⇒ 空串 ⇒ `no-backend-pid`。对照：09-06 04:30 那分钟后端日志 20 行、`/var/log/cron` 显示 job 跑了、`soft-delete-orphans.cron.log` 0 字节。蓝绿**不是**原因（手工跑同一行取到 PID 2592002）。
+- **第二层潜伏 [RUN]**：`grep '^DB_'` 取凭证，绿单元 environ 只有 `DB_NAME`/`DB_PASSWORD`，密码在 `POSTGRES_PASSWORD`，`DB_USERNAME` 缺被静默兜底 `cretas_user`——修 PATH 后会撞到这里。
+- **STALE [RUN]**：`[ jar -nt sql ]` mtime 比较，jar 每次部署都换 ⇒ 每次部署后必响（16/32 条台账行是它）；生成的 `.sql` 零注释无 provenance，且**不在仓库**（只在服务器）。
+- **rc=2 去哪 [RUN]**：写进 `soft-delete-orphans.alert`（写对了），但 **11 个 `*alert*` 文件 / 13 个 cron 脚本 / 零消费方**：`/var/spool/mail/root` 不存在、postfix inactive、`MAILTO` 只在 `/etc/crontab`、crontab 行 `>> cron.log 2>&1`。⇒ 喊在没人的地方，系统性。
+- **治理 [RUN]**：三份 md5 相同无漂移；但不在 `server-script-inventory.conf`（12 条全是 deploy 链），`test-server-script-drift.sh` 规则 6 只扫 `scripts/deploy/{lightsail,ecs}/*`；它是唯一从手工 scp 的 `/www/wwwroot/cretas/scripts/` 跑的 cron；服务器 `code/` checkout 停在 05-07（4 个月）。
+- **登记盲区 [RUN]**：`check-soft-delete-orphans.sh` 只认 `@ManyToOne` 关联字段，`ProcessSheetRow.planId` 是 `String` 标量 ⇒ 结构性隐形。`NOT EXISTS` 模式对**缺失父行**有效（实跑该对 = 56 = 全部硬删父，软删父 0，阳性 132 = 76 + 56）。
+- 🔴 **口径打架**：前一 probe 的「44 个 plan_id 列 / 43 个 0 行」不复现——`public` 8 个（`tenant_purge_68` 5 个），6 个无 FK 里 4 个有悬空：`scheduling_alerts` 170 / `_change_log` 67 / `process_sheet_rows` 56 / `report_reversal_logs` 10。建议只登记后两对（前两个是日志表，机制不同，登记会成噪音）。
+- **修法**：`/usr/sbin/ss` 绝对路径或 crontab 加 `PATH=`；去 `2>/dev/null`；凭证 `^(DB_|POSTGRES_)` 且用户名缺=rc=2 不兜底；rc=2 原因可区分（`ss-not-found` vs `no-listener`）；STALE 改为 `-- generated-from <commit>` 头对比或删；`.sql` 入库；登记两对；脚本进 inventory + 规则 6 扩到 `scripts/cron/*`；**修完主动把 ss 从 PATH 拿掉一次验 rc=2 到人**。投递渠道是全仓问题 ⇒ 另开票待 owner。
