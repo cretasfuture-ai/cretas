@@ -72,18 +72,65 @@ assert_exit 2 bash "$TOOL" --host nosuchhost
 assert_contains "$LIB" 'size_mismatch_declared'
 assert_contains "$LIB" "printf 'PRESENT %s"
 
-# ---- 6. 清单完整性: 每个仓库跟踪的服务器脚本都必须在清单里登记 ----
+# ---- 6. 清单完整性: 每个仓库跟踪的服务器脚本都必须在清单里表态 ----
 # 这条不需要 ssh, 是这个测试里唯一能防"仓库侧新增脚本却忘了登记"的闸。
 # 忘了登记 = 工具永远不检查它 = 又一个"机制存在但没人在检查脱节"。
+#
+# 🔴 2026-09-06 扩面到 scripts/cron/*。它原来只扫 scripts/deploy/{lightsail,ecs}/*,
+#    于是 soft-delete-orphans-watch.sh **结构上不在射程内** —— 它被手 scp 到
+#    /www/wwwroot/cretas/scripts/, 仓库/服务器/服务器 checkout 三份副本, 一份都没人比。
+#
+# ⚠️ 扩面不能只是把 glob 加宽: scripts/cron/ 下 14 个脚本里, **只有 1 个**是装到固定
+#    路径的, 另外 13 个从服务器上那份 git checkout 直接跑(实测 crontab -l), 没有漂移面。
+#    直接要求它们全部登记 = 造 13 条误报 = 这道闸当天被关掉(形态 E)。
+# ⇒ 表态有三种, 都得是显式的:
+#      · 登记进清单                            —— 装在固定路径, 要查漂移
+#      · `# NOT_INSTALLED <路径>  <理由>`      —— 在跑, 但没有第二份副本(从 checkout 跑)
+#      · `# NOT_SCHEDULED <路径>  <理由>`      —— 根本没在跑(crontab 里没有)
+#    ⛔ 沉默不算表态。
+#    ⚠️ 后两者第一版合成了一个 NOT_INSTALLED, 审查者当场读混 —— "没有部署副本" 与
+#       "压根没运行" 长得一样, 而后者是个待办(形态 B: 机制在、没接上)。
 missing_registration=""
 while IFS= read -r tracked; do
     base=$(basename "$tracked")
-    grep -Fq "|$tracked|" "$INVENTORY" || missing_registration="$missing_registration $base"
+    grep -Fq "|$tracked|" "$INVENTORY" && continue
+    grep -Eq "^# NOT_(INSTALLED|SCHEDULED)[[:space:]]+$tracked([[:space:]]|$)" "$INVENTORY" && continue
+    missing_registration="$missing_registration $base"
 done < <(
-    cd "$ROOT_DIR" && git ls-files 'scripts/deploy/lightsail/*' 'scripts/deploy/ecs/*'
+    cd "$ROOT_DIR" && git ls-files 'scripts/deploy/lightsail/*' 'scripts/deploy/ecs/*' 'scripts/cron/*'
 )
 [ -z "$missing_registration" ] || \
-    fail "以下服务器脚本已被仓库跟踪但未登记进 check-server-script-drift.sh 清单:$missing_registration"
+    fail "以下服务器脚本已被仓库跟踪但未在清单里表态(登记 / # NOT_INSTALLED / # NOT_SCHEDULED):$missing_registration"
+
+# ---- 6b. 两类豁免各自校验 ----
+# 一条没有理由的豁免和静默跳过没有区别; 一条指向已删文件的豁免会一直"保护"着空气,
+# 而下一个同名文件出现时它会**替那个新文件豁免掉**。
+n_ni=0 n_ns=0
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    kind=$(printf '%s\n' "$line" | awk '{print $2}')
+    path=$(printf '%s\n' "$line" | awk '{print $3}')
+    reason=$(printf '%s\n' "$line" | cut -d' ' -f4-)
+    [ -n "${reason// /}" ] || fail "$kind 缺理由: $line"
+    [ -f "$ROOT_DIR/$path" ] || fail "$kind 指向不存在的文件: $path"
+    # ⛔ 同一个文件不许同时挂两类 —— 那等于两个互相矛盾的状态声明都成立。
+    n=$(grep -cE "^# NOT_(INSTALLED|SCHEDULED)[[:space:]]+$path([[:space:]]|$)" "$INVENTORY")
+    [ "$n" = 1 ] || fail "$path 被声明了 $n 次(NOT_INSTALLED 与 NOT_SCHEDULED 只能挑一个)"
+    # 已登记进清单的不该再挂豁免。
+    grep -Fq "|$path|" "$INVENTORY" && fail "$path 既登记进清单又挂了 $kind"
+    case "$kind" in
+        NOT_INSTALLED) n_ni=$((n_ni + 1)) ;;
+        NOT_SCHEDULED) n_ns=$((n_ns + 1)) ;;
+        *) fail "无法识别的豁免类别: $kind" ;;
+    esac
+done < <(grep -E '^# NOT_(INSTALLED|SCHEDULED)[[:space:]]' "$INVENTORY" || true)
+# 阳性对照: 两类都得真的解析到东西。如果哪一类归零而文件里明明写着, 说明上面的
+# 正则或 awk 取字段错位了 —— 那时"全都合规"是个假绿。
+grep -qE '^# NOT_INSTALLED[[:space:]]' "$INVENTORY" && [ "$n_ni" -gt 0 ] \
+    || fail "文件里有 NOT_INSTALLED 行但解析到 $n_ni 条 —— 解析器坏了"
+grep -qE '^# NOT_SCHEDULED[[:space:]]' "$INVENTORY" && [ "$n_ns" -gt 0 ] \
+    || fail "文件里有 NOT_SCHEDULED 行但解析到 $n_ns 条 —— 解析器坏了"
+echo "  inventory: NOT_INSTALLED=$n_ni  NOT_SCHEDULED=$n_ns"
 
 # ---- 7. 结构性噪音必须被忽略 ----
 # 安装备份 (.bak.<ts>) 与 __pycache__ 是正常产物, 不是漂移。ECS 上现有 5 个 .bak。

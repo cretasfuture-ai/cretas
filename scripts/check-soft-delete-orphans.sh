@@ -36,6 +36,14 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #   ./scripts/check-soft-delete-orphans.sh                 # 扫 prod
 #   ./scripts/check-soft-delete-orphans.sh --sql-only      # 只打印 SQL, 不连库
+#   ./scripts/check-soft-delete-orphans.sh --write         # 生成并写回仓库里那份 SQL
+#
+# 仓库里那份是 scripts/cron/soft-delete-orphans.sql —— 它是**装到服务器上给 cron 用的
+# 那一份的源**。以前它只在服务器上存在(手 scp 上去的), 于是「跑的到底是哪一版」没人
+# 答得出来, 而 watch 脚本只能靠比 mtime 猜(形态 D: 同一个东西有两份, 它一定会漂)。
+#
+# 生成的 SQL 头部会盖一行 `-- generated-from <commit> <UTC>` —— watch 脚本读它来判
+# 扫描面的出处, ⛔ 不再比 mtime(jar 每次部署都变新, 那个判据永远为真)。
 #
 # ⚠️ **删任何东西之前跑一次** —— 账号、客户、供应商、单据都算。
 #
@@ -49,29 +57,106 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENTITY_ROOT="$REPO_ROOT/backend/java/cretas-api/src/main/java/com/cretas/aims/entity"
 SSH_HOST="${CRETAS_SSH_HOST:-root@47.100.235.168}"
+REPO_SQL="$REPO_ROOT/scripts/cron/soft-delete-orphans.sql"
+# 「哪些表有 deleted_at」的快照。它是这个生成器**唯一**的数据库输入 ——
+# 快照下来之后, 生成就成了纯函数(实体源码 + 这份快照 → SQL), CI 里不连库也能复现。
+# ⚠️ 它是**读数**不是配置: 只能由 --write 从 prod 抓, ⛔ 不要手工编辑。
+REPO_HASDEL="$REPO_ROOT/scripts/cron/soft-delete-orphans.hasdel.txt"
 SQL_ONLY=0
-[ "${1:-}" = "--sql-only" ] && SQL_ONLY=1
+WRITE_MODE=0
+OFFLINE=0
+case "${1:-}" in
+  --sql-only) SQL_ONLY=1 ;;
+  --write)    SQL_ONLY=1; WRITE_MODE=1 ;;
+  # 用快照离线重放一次生成, 打到 stdout。给 CI 的漂移闸用, ⛔ 不连库、不改任何文件。
+  --regen-offline) SQL_ONLY=1; OFFLINE=1 ;;
+  "")         ;;
+  *) echo "⛔ 未知参数: $1 (用法见文件头)" >&2; exit 2 ;;
+esac
 
 [ -d "$ENTITY_ROOT" ] || { echo "⛔ 找不到实体目录: $ENTITY_ROOT" >&2; exit 2; }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 手工登记的关联对 —— 扫描器**结构上看不见**的那些
+# ═══════════════════════════════════════════════════════════════════════════
+# 上面那个扫描器认的是 `@ManyToOne` 字段。**标量外键列(`@Column private String xxxId`)
+# 对它完全不存在** —— 不是漏扫, 是它按定义就看不到。
+#
+# ⛔ 不要为此去改注解扫描器: 「哪些 String 字段其实是外键」在源码里没有可判定的标记,
+#    照名字猜(`*Id` 结尾)会把 factoryId / batchNumber 这类一起卷进来, 做出一个误报
+#    满地的闸, 然后被人关掉(形态 E)。
+# ⇒ 显式登记, 每条写清**为什么它该在这儿**。登记是留痕, 不是豁免。
+#
+# ⚠️ 加一条之前先在 prod 上量一次「坏行数 / 总行数」, 把两个数都写进理由里 ——
+#    只有坏行数看不出这条判据有没有区分度(形态 B⁴: 全是坏行的闸和恒真式一样没用)。
+#
+# 格式: 子表|外键列|父表|理由
+# BEGIN_MANUAL_PAIRS
+MANUAL_PAIRS='
+process_sheet_rows|plan_id|production_plans|ProcessSheetRow.planId 是 @Column 标量 String, 不是 @ManyToOne ⇒ 注解扫描器看不见。prod 2026-09-06 实测 56 坏 / 132 总。
+report_reversal_logs|plan_id|production_plans|ReportReversalLog.planId 同为 @Column 标量 String。prod 2026-09-06 实测 10 坏 / 15 总。
+'
+# END_MANUAL_PAIRS
+#
+# ⛔ 明确**不**登记(登记「故意不改」也是留痕):
+#   · scheduling_alerts.plan_id           (prod 170 条) —— 告警日志表
+#   · process_sheet_row_change_log.plan_id (prod  67 条) —— 变更日志表
+#   这两张是**日志/审计**类: 指向一条后来被删掉的计划是它们的**正常状态**, 不是缺陷
+#   (那正是「审计字段」那一档)。把它们登记进来等于每天报一次不需要行动的孤儿,
+#   而天天误报的闸最后会被关掉。要收它们需要各自的理由和各自的修法。
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 抓快照的那条 SQL —— **全系统唯一口径**
+# ═══════════════════════════════════════════════════════════════════════════
+# 它会被**原样写进快照文件头部**, 而 watch 脚本在线上是从那个头部读出来再执行一次,
+# 拿结果跟快照体对账。⇒ 只有一处真相, 跟着数据一起走。
+#
+# ⛔ 不许在 watch 脚本里另写一条「意思一样」的 —— 哪怕只是把 `current_schema()`
+#    换成 `'public'`, 只要哪天两者不等价, **第一次线上跑就 rc=2**, 而那是个假故障。
+#    (2026-09-06 实测: 这两种写法在 prod 上都返回 384 张、差集 0 —— 现在等价,
+#     但「现在等价」不是「永远等价」, 那正是形态 D 的定义。)
+HASDEL_SQL="SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'"
+
 # ── 1. 问活进程要 DB 名 ────────────────────────────────────────────────────
 #    ⛔ 不要用配置里的默认值: prod 是 cretas_prod_db, 而 properties 默认写的是
 #       ${DB_NAME:cretas_db} —— 本仓已经因此误报过「迁移失败」。
-REMOTE_ENV='PID=$(ss -lntp 2>/dev/null | grep -E ":(10010|10020)" | grep -oP "pid=\K[0-9]+" | head -1)
+# 🔴 PATH 要自己钉: `ss` 只在 /usr/sbin, 而非交互式 shell 的 PATH 不保证含它。
+#    姊妹脚本 scripts/cron/soft-delete-orphans-watch.sh 就是栽在这上面 ——
+#    cron 默认 PATH=/usr/bin:/bin ⇒ `ss: command not found` ⇒ 连续 15 天 rc=2。
+REMOTE_ENV='export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+command -v ss >/dev/null || { echo "NO_SS" >&2; exit 2; }
+PID=$(ss -lntp | grep -E ":(10010|10020)" | grep -oP "pid=\K[0-9]+" | head -1)
 [ -n "$PID" ] || { echo "NO_PID" >&2; exit 2; }
 eval "$(tr "\0" "\n" < /proc/$PID/environ | grep -E "^DB_" | sed "s/^/export /")"
 export PGPASSWORD="$DB_PASSWORD"'
 
 # ⚠️ --sql-only 也要连库取「哪些表有 deleted_at」—— 它的用途是生成一份**能独立跑**的 SQL,
 #    不过滤的话会混进无 deleted_at 的表(实测 ai_usage_log), 拿去跑当场报错。
-if true; then
-  ssh "$SSH_HOST" "$REMOTE_ENV"'
-psql -h localhost -U "${DB_USERNAME:-cretas_user}" -d "$DB_NAME" -tAc \
-  "SELECT table_name FROM information_schema.columns
-   WHERE table_schema = current_schema() AND column_name = '"'"'deleted_at'"'"'"' \
+if [ "$OFFLINE" -eq 1 ]; then
+  # 离线重放: 用仓库里的快照当 hasdel。
+  # ⛔ 快照缺失/太小一律 exit 2, 不许「没有过滤名单就不过滤」—— 那会静默产出一份
+  #    多几十对、且拿去跑会报错的 SQL, 而漂移闸会把它当成「仓库份过期了」。
+  #    (硬约束 4: 没量到就说没量到, 别装成读数。)
+  [ -s "$REPO_HASDEL" ] || { echo "⛔ 快照不存在: $REPO_HASDEL (跑一次 --write 抓下来)"; exit 2; }
+  # 头部的 `-- ` 行是元数据(含那条口径 SQL), 不是表名。
+  grep -vE '^--|^[[:space:]]*$' "$REPO_HASDEL" > "$WORK/hasdel.txt"
+  HASDEL_COUNT=$(grep -c . "$WORK/hasdel.txt" || true)
+  if [ "${HASDEL_COUNT:-0}" -lt 50 ]; then
+    echo "⛔ 快照阳性对照失败: 只有 $HASDEL_COUNT 行 (预期数百张)。"
+    exit 2
+  fi
+elif true; then
+  # ⚠️ 用 base64 把那条 SQL 送过去, ⛔ 不再手工嵌套引号。
+  #    SQL 里有 'deleted_at' 的单引号, 塞进单引号 ssh 串要写成 '"'"' —— 那种写法
+  #    改一次错一次, 而且**没法**跟 $HASDEL_SQL 共用同一份文本(那就又是两份了)。
+  #    base64 输出只有 [A-Za-z0-9+/=], 放进单引号绝对安全。
+  HASDEL_SQL_B64=$(printf '%s' "$HASDEL_SQL" | base64 | tr -d '\n')
+  ssh "$SSH_HOST" "$REMOTE_ENV
+SDO_SQL=\$(printf '%s' '$HASDEL_SQL_B64' | base64 -d)
+psql -h localhost -U \"\${DB_USERNAME:-cretas_user}\" -d \"\$DB_NAME\" -tAc \"\$SDO_SQL\"" \
     > "$WORK/hasdel.txt" 2>"$WORK/err.txt" || { echo "⛔ 连库失败:"; cat "$WORK/err.txt"; exit 2; }
   HASDEL_COUNT=$(grep -c . "$WORK/hasdel.txt" || true)
   # 阳性对照: 带软删的表应该有几百张。个位数 = 查询本身出问题了。
@@ -83,10 +168,25 @@ psql -h localhost -U "${DB_USERNAME:-cretas_user}" -d "$DB_NAME" -tAc \
 fi
 
 # ── 2. 扫实体, 生成 SQL ───────────────────────────────────────────────────
-python - "$ENTITY_ROOT" "$WORK/hasdel.txt" "$SQL_ONLY" > "$WORK/scan.sql" <<'PYEOF'
+# 出处戳。⚠️ 工作树脏就带 -dirty 后缀 —— 那样它**永远匹配不上任何 jar 的 commit**,
+# watch 脚本会报 STALE, 这正是想要的(一份从未提交的实体状态生成的 SQL 本来就说不清出处)。
+PROV_COMMIT=$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- "$ENTITY_ROOT" 2>/dev/null)" ]; then
+  PROV_COMMIT="$PROV_COMMIT-dirty"
+fi
+PROV_STAMP="-- generated-from $PROV_COMMIT $(date -u '+%F %TZ')"
+
+printf '%s\n' "$MANUAL_PAIRS" > "$WORK/manual.txt"
+
+python - "$ENTITY_ROOT" "$WORK/hasdel.txt" "$SQL_ONLY" "$WORK/manual.txt" "$PROV_STAMP" > "$WORK/scan.sql" <<'PYEOF'
 import io, os, re, sys
+# ⛔ Windows 上 print 默认吐 CRLF —— 生成物会带着 \r 进仓库、再被装到 Linux 服务器上。
+# 本仓已经因为「生成脚本自己造 CRLF」被打回过两个 PR(形态 C⁗)。⇒ 显式钉 LF。
+sys.stdout.reconfigure(newline="\n")
 entity_root, hasdel_path, sql_only = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
-hasdel = set(l.strip() for l in io.open(hasdel_path, encoding="utf-8") if l.strip())
+manual_path, prov_stamp = sys.argv[4], sys.argv[5]
+hasdel = set(l.strip() for l in io.open(hasdel_path, encoding="utf-8")
+              if l.strip() and not l.startswith("--"))
 
 soft, ents = set(), {}
 for dp, _, fs in os.walk(entity_root):
@@ -136,18 +236,58 @@ for cls, s in ents.items():
 if not found:
     sys.stderr.write("NO_ASSOC\n")
     sys.exit(0)
+scanned = len(found)
 
-parts = [
-    f"SELECT '{t}.{c} -> {tt}' AS assoc, count(*) AS bad FROM public.{t} x "
-    f"WHERE x.deleted_at IS NULL AND x.{c} IS NOT NULL AND NOT EXISTS "
-    f"(SELECT 1 FROM public.{tt} y WHERE y.id::text = x.{c}::text AND y.deleted_at IS NULL)"
-    for t, c, tt in sorted(found)
-]
-print("SELECT * FROM (\n  " + "\n  UNION ALL ".join(parts) + "\n) q WHERE bad > 0 ORDER BY bad DESC;")
-sys.stderr.write(f"SCANNED={len(found)}\n")
+# ── 手工登记的标量外键对 ──────────────────────────────────────────────────
+# ⛔ 被 hasdel 过滤掉的手工对是**硬错**, 不是静默跳过: 登记进来就是断言「这一对
+#    该被扫」, 它落不进 SQL 说明登记本身写错了 —— 静默丢掉等于登记了个寂寞。
+manual = []
+for raw in io.open(manual_path, encoding="utf-8"):
+    raw = raw.strip()
+    if not raw or raw.startswith("#"):
+        continue
+    bits = raw.split("|")
+    if len(bits) < 4:
+        sys.stderr.write(f"BAD_MANUAL_ROW={raw}\n")
+        sys.exit(2)
+    t, c, tt = bits[0].strip(), bits[1].strip(), bits[2].strip()
+    if hasdel and (t not in hasdel or tt not in hasdel):
+        sys.stderr.write(f"MANUAL_PAIR_NO_DELETED_AT={t}.{c}->{tt}\n")
+        sys.exit(2)
+    manual.append((t, c, tt))
+
+added = [p for p in manual if p not in found]
+found.update(manual)
+
+def clause(t, c, tt):
+    return (f"SELECT '{t}.{c} -> {tt}' AS assoc, count(*) AS bad FROM public.{t} x "
+            f"WHERE x.deleted_at IS NULL AND x.{c} IS NOT NULL AND NOT EXISTS "
+            f"(SELECT 1 FROM public.{tt} y WHERE y.id::text = x.{c}::text AND y.deleted_at IS NULL)")
+
+# 🔴 扫描出来的和手工登记的**分段输出**, 中间用起止标记界定。
+# 为什么要分段: 仓库里那份 SQL 与「生成器现在会产出什么」是两份东西, 早晚会漂
+# (形态 D)。守它的闸要拿生成器重跑一次逐字比对, 而**出处戳每次都不同** ——
+# 不给标记就只能靠猜哪几行该剔除。⇒ 让产出自己说清哪一段是哪一段。
+# ⚠️ UNION ALL 的顺序不影响结果(外面有 ORDER BY), 分段是纯排版。
+print(prov_stamp)
+print(f"-- 关联 {len(found)} 对 = 注解扫描 {scanned} + 手工登记新增 {len(added)}")
+print("-- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。")
+print("SELECT * FROM (")
+scan_only = sorted(p for p in found if p not in set(manual))
+print("  " + "\n  UNION ALL ".join(clause(*p) for p in scan_only))
+print("-- BEGIN_MANUAL_SECTION 以下由 check-soft-delete-orphans.sh 的 MANUAL_PAIRS 合入")
+for p in sorted(added):
+    print("  UNION ALL " + clause(*p))
+print("-- END_MANUAL_SECTION")
+print(") q WHERE bad > 0 ORDER BY bad DESC;")
+sys.stderr.write(f"SCANNED={scanned} MANUAL={len(manual)} MANUAL_ADDED={len(added)} TOTAL={len(found)}\n")
 PYEOF
 PY_RC=$?
-[ "$PY_RC" -eq 0 ] || { echo "⛔ 扫描实体失败 (rc=$PY_RC)"; exit 2; }
+[ "$PY_RC" -eq 0 ] || {
+  echo "⛔ 扫描实体失败 (rc=$PY_RC)"
+  echo "   rc=2 且上面打了 MANUAL_PAIR_NO_DELETED_AT / BAD_MANUAL_ROW ⇒ 是 MANUAL_PAIRS 登记错了。"
+  exit 2
+}
 
 ASSOC_COUNT=$(grep -c "UNION ALL" "$WORK/scan.sql" 2>/dev/null || echo 0)
 ASSOC_COUNT=$((ASSOC_COUNT + 1))
@@ -155,6 +295,25 @@ if [ ! -s "$WORK/scan.sql" ]; then
   echo "⛔ 一条关联都没扫到 —— 仪器坏了, 本次读数作废。"
   echo "   (正常应有数十条。实体目录结构变了? 注解写法变了?)"
   exit 2
+fi
+
+if [ "$WRITE_MODE" -eq 1 ]; then
+  mkdir -p "$(dirname "$REPO_SQL")"
+  cp "$WORK/scan.sql" "$REPO_SQL"
+  # 快照和 SQL 必须**同一次**写出去 —— 分两次写就又是两份会漂的东西。
+  # 头部把那条口径 SQL 原样带上: watch 脚本在线上从这里读出来再执行一次做对账,
+  # ⇒ 「抓的时候用什么口径」和「对账时用什么口径」物理上是同一个字符串。
+  {
+    printf -- '-- 这是生成物。由 scripts/check-soft-delete-orphans.sh --write 从 prod 抓取。\n'
+    printf -- '-- ⛔ 不要手工编辑: 它是一份**读数**(prod 上哪些表有 deleted_at), 不是配置。\n'
+    printf -- '-- captured-at %s\n' "$(date -u '+%F %TZ')"
+    printf -- '-- capture-sql %s\n' "$HASDEL_SQL"
+    LC_ALL=C sort -u "$WORK/hasdel.txt" | tr -d '\r'
+  } > "$REPO_HASDEL"
+  echo "✓ 已写回 $REPO_SQL ($ASSOC_COUNT 条关联)"
+  echo "✓ 已写回 $REPO_HASDEL ($(grep -cvE "^--|^$" "$REPO_HASDEL") 张带 deleted_at 的表)"
+  echo "  下一步: 提 PR 合进 main, 再由 scripts/deploy/install-server-scripts.sh 装到服务器。"
+  exit 0
 fi
 
 if [ "$SQL_ONLY" -eq 1 ]; then
