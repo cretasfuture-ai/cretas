@@ -57,8 +57,33 @@ public class WipRowDTO {
     /** 已被下道领走 (Σ 下道引用本 WIP 的 input)。 */
     private BigDecimal consumedQuantity;
 
-    /** 余额 = produced − consumed (G7 结余; 下道领用 :max)。 */
+    /**
+     * 余额 = produced − consumed (G7 结余; 下道领用 :max)，<b>已减去 {@link #pendingFeedQuantity}</b>。
+     *
+     * <p>🔴 2026-09-06 起这一栏是「现在还能领多少」，不是「账面还剩多少」。两者的差就是
+     * {@code pendingFeedQuantity} —— 别的计划已经录进逐道投料、但要到小结/结单才真的扣的那部分。
+     * 要拿账面原值请用 {@code producedQuantity − consumedQuantity}（再加 adjustment），
+     * 或把这一栏加回 {@code pendingFeedQuantity}。
+     */
     private BigDecimal availableQuantity;
+
+    /**
+     * 已被别的计划录入、但尚未结算扣减的投料量（本行原生单位；无待扣 = 0，不是 null）。
+     *
+     * <p>它是 {@code availableQuantity} 被减掉的那个数，单独端出来是为了让界面能解释
+     * 「为什么这个批次余量比昨天少 / 为什么是 0」。⛔ 它<b>不是</b>一笔占用：没有人持有它、
+     * 也没有释放动作，它只是「已经承诺出去的量」的即时投影。
+     */
+    private BigDecimal pendingFeedQuantity;
+
+    /**
+     * 这一行至少有一条待扣投料<b>折算不出来</b>（计数单位来源缺每盒克重 / 引用批次已消失）。
+     *
+     * <p>🔴 为真时 {@code availableQuantity} 是<b>偏高</b>的：那部分待扣量既没算进
+     * {@code pendingFeedQuantity}，也没从余量里减掉 —— 因为诚实地说，我们不知道它是多少。
+     * ⚠️ {@code false} 说的是「没有算不出来的引用」，不是「余量一定准」。
+     */
+    private boolean pendingFeedUnresolved;
 
     /** 单位。 */
     private String unit;

@@ -35,6 +35,7 @@ import com.cretas.aims.service.wip.WipCostAllocation;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.wip.WipLedgerEntries;
 import com.cretas.aims.service.wip.WipSemiOutputPlan;
+import com.cretas.aims.service.yield.PendingInterimFeedService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -87,6 +88,30 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Autowired
     @Lazy
     private WipInventoryServiceImpl self;
+
+    /**
+     * 🔴 跨计划预扣可见性 (2026-09-06): 让<b>下拉里的余量</b>减去「已录入但还没扣减」的投料量。
+     *
+     * <p>问题的形状: 文员逐道录入是<b>延迟扣减</b> —— 计划 A 把某个半成品批次录进 upstreamSources 之后,
+     * SFI 的 {@code availableQuantity} 要到「小结 / 结单」才真的减 (见 {@link PendingInterimFeedService}
+     * 的 Javadoc)。在那之前, 计划 B 的操作员在下拉里看到的是<b>计划 A 已经承诺掉的那部分货</b>,
+     * 于是两个计划各自录满, 到结算时后一个撞 {@code SFI_INSUFFICIENT} 409 —— 而那时活已经干完了。
+     *
+     * <p><b>这是可见性, 不是占用。</b>它不写任何一行、不加锁、不建台账: 唯一的效果是
+     * 下拉里的数字变成「现在还能领多少」。⛔ 刻意<b>不</b>做硬占用 ——
+     * 见 {@code WorkshopReportReservationService} 的 Javadoc: 只占不放比不占更糟,
+     * 而释放有三条路 (驳回/冲销/结算)。本仓已有两套占用机制
+     * ({@code material_batches.reserved_quantity} / {@code fg_reservation_ledger}),
+     * 第三套没有对称释放的占用是净负债。
+     *
+     * <p>{@code @Lazy} + {@code required=false}: {@code PendingInterimFeedServiceImpl} 反向依赖本类
+     * (它要 {@code resolveSemiFeedQtyInSourceUnit} 做折算) ⇒ 构造期循环, 必须惰性代理打断;
+     * {@code required=false} 让 {@code @InjectMocks} 的既有单测不注入时回退旧口径 (减 0),
+     * 与 {@code SemiFinishedStocktakeServiceImpl} 同一写法。
+     */
+    @Autowired(required = false)
+    @Lazy
+    private PendingInterimFeedService pendingInterimFeedService;
 
     @Override
     public SemiFinishedInventory validateSourceWip(
@@ -1719,10 +1744,94 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
     /**
      * SP2 二次加工 — 列出工厂所有可用 WIP。
+     *
+     * <p>🔴 余量按<b>预扣</b>口径给 (见 {@link #pendingInterimFeedService}): 别的计划已经录进
+     * {@code upstreamSources} 但还没结算扣减的量, 在这里先减掉 —— 否则这个下拉会把同一批货
+     * 卖给两个计划。减到 0 的行直接不出现在列表里 (repo 的 {@code availableQuantity > 0} 只看得见账面,
+     * 预扣是账面之外的, 所以过滤必须在这一层再做一次)。
+     *
+     * <p>⚠️ 被调整过的行返回的是<b>脱管副本</b>, ⛔ 不是持久化上下文里那一行 ——
+     * 改被管着的实体等于在一个只读查询里写库存。没有待扣的行原样返回 (同一个实例)。
      */
     @Override
     public List<SemiFinishedInventory> listAvailableWip(String factoryId) {
-        return wipRepo.findAvailableByFactory(factoryId);
+        return applyPendingFeedVisibility(factoryId, wipRepo.findAvailableByFactory(factoryId));
+    }
+
+    /**
+     * 取整厂「待扣投料」读数; 服务未接线 (单测 / 未注入) → 空读数 = 减 0 (旧口径)。
+     *
+     * <p>⚠️ 空读数和「整厂确实没有待扣」是同一个返回值 —— 这一层分不开, 也不需要分开:
+     * 两种情况下正确行为都是不减。要分开的是<b>另一件事</b> (某个批次的待扣量算不出来),
+     * 那个走 {@link PendingInterimFeedService.Snapshot#unresolvedBatchNos()}。
+     */
+    private PendingInterimFeedService.Snapshot pendingFeedSnapshot(String factoryId) {
+        if (pendingInterimFeedService == null) {
+            return PendingInterimFeedService.Snapshot.empty();
+        }
+        PendingInterimFeedService.Snapshot snapshot = pendingInterimFeedService.pendingSemiFeedSnapshot(factoryId);
+        return snapshot == null ? PendingInterimFeedService.Snapshot.empty() : snapshot;
+    }
+
+    /**
+     * 预扣可见量 = {@code max(0, availableQuantity − 待扣投料)}。
+     *
+     * <p><b>单位</b>: 两边都是<b>这一行自己的原生单位</b> —— 待扣量由
+     * {@code resolveSemiFeedQtyInSourceUnit} 折算, 而那个方法是拿
+     * {@code (factoryId, intermediateBatchNo)} 去查<b>同一行</b>、再用同一段
+     * {@code toSourceUnit} 折的 (库上 {@code (factory_id, intermediate_batch_no)} 对未软删行唯一,
+     * 2026-09-06 prod 实测 0 条重复)。⛔ 不要在这里再折算一次 —— #496 三次复发都是「折算有两份」。
+     *
+     * <p>🔴 {@code 待扣 > 可用} <b>不是</b>四舍五入误差, 是账实漂移 (超投 / 有一笔扣减丢了 /
+     * 待扣被算重了)。floor 到 0 是为了不给下拉一个负数, 但<b>必须留声</b>: 打 WARN 并把两个数都点名。
+     * ⛔ 静默 clamp 会把一次库存事故压成「这个批次没货了」。
+     */
+    private List<SemiFinishedInventory> applyPendingFeedVisibility(
+            String factoryId, List<SemiFinishedInventory> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return rows == null ? List.of() : rows;
+        }
+        PendingInterimFeedService.Snapshot snapshot = pendingFeedSnapshot(factoryId);
+        if (snapshot.pendingByBatchNo().isEmpty()) {
+            return rows;   // 阴性对照的默认路径: 没有待扣 → 原样返回, 连副本都不造
+        }
+        List<SemiFinishedInventory> out = new ArrayList<>(rows.size());
+        for (SemiFinishedInventory row : rows) {
+            BigDecimal pending = snapshot.pendingOf(row.getIntermediateBatchNo());
+            if (pending.signum() <= 0) {
+                out.add(row);   // 无待扣 → 原实例, 不动
+                continue;
+            }
+            BigDecimal visible = visibleAfterPendingFeed(factoryId, row, pending);
+            if (visible.signum() <= 0) {
+                continue;       // 已被别的计划全部认领 → 不该再出现在选料下拉里
+            }
+            out.add(row.toBuilder().availableQuantity(visible).build());
+        }
+        return out;
+    }
+
+    /** {@link #applyPendingFeedVisibility} 与 {@code listWipByFactory} 共用的那一次减法 (⛔ 不要各写一遍)。 */
+    private BigDecimal visibleAfterPendingFeed(
+            String factoryId, SemiFinishedInventory row, BigDecimal pending) {
+        if (pending == null || pending.signum() <= 0) {
+            // 阴性对照的默认路径 —— 原值原样返回, 连 null 都不兜成 0
+            // (兜底的默认值会把「这一行没有可用量数据」翻译成「可用量是 0」)。
+            return row.getAvailableQuantity();
+        }
+        BigDecimal available = nz(row.getAvailableQuantity());
+        BigDecimal visible = available.subtract(pending);
+        if (visible.signum() < 0) {
+            log.warn("[wip] 预扣超过账面可用 —— 账实漂移, 不是舍入: factory={}, batchNo={}, available={}{}, pendingFeed={}{}, 差={}",
+                    factoryId, row.getIntermediateBatchNo(), available, nzUnit(row), pending, nzUnit(row),
+                    visible);
+            return BigDecimal.ZERO;
+        }
+        return visible;
+    }
+
+    private static String nzUnit(SemiFinishedInventory row) {
+        return row.getUnit() == null ? "" : row.getUnit();
     }
 
     // ==================== C3: 工厂级半成品重量库存视图 ====================
@@ -1873,6 +1982,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // ② 批次下拉补 生产日期 / 成本: 仅逐道 SFI 投料下拉 (picker context = 带 productTypeId 过滤) 填充,
         //    无参 (看板/盘点) 快照不暴露成本 (C3 "只做重量库存" 口径不变)。
         final boolean pickerContext = filterFamily;
+        // 🔴 预扣可见量 (2026-09-06): availableQuantity 减去别的计划已录入但未结算扣减的投料量。
+        //    与 listAvailableWip 同一段减法 (visibleAfterPendingFeed), ⛔ 不另写一遍。
+        //    ⚠️ 这里【不】丢弃减到 0 的行: 本视图刻意含 DEPLETED/RETURNED 全状态 (C3 看板口径),
+        //    余量 0 的行本来就要出现。picker 侧靠 pendingFeedQuantity/…Unresolved 两栏解释为什么是 0。
+        final PendingInterimFeedService.Snapshot pendingSnapshot = pendingFeedSnapshot(factoryId);
         return rows.stream().map(w -> WipRowDTO.builder()
                 .intermediateBatchNo(w.getIntermediateBatchNo())
                 .sourceWorkProcessTaskId(w.getSourceWorkProcessTaskId())
@@ -1882,7 +1996,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .productTypeId(w.getProductTypeId())
                 .producedQuantity(w.getProducedQuantity())
                 .consumedQuantity(w.getConsumedQuantity())
-                .availableQuantity(w.getAvailableQuantity())
+                .availableQuantity(visibleAfterPendingFeed(
+                        factoryId, w, pendingSnapshot.pendingOf(w.getIntermediateBatchNo())))
+                .pendingFeedQuantity(pendingSnapshot.pendingOf(w.getIntermediateBatchNo()))
+                .pendingFeedUnresolved(pendingSnapshot.isUnresolved(w.getIntermediateBatchNo()))
                 .unit(w.getUnit())
                 .status(w.getStatus())
                 .productTypeName(ptNameMap.get(w.getProductTypeId()))   // null if no match

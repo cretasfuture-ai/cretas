@@ -3762,6 +3762,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withHint("请重新选择仍有库存的半成品批次")
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
+                    assertLiveSemiSourceStatus(source, ur.getSourceBatchNumber(), req.getProcessCode());
                     assertWorkflowSourceSku(ur.getSourceBatchNumber(), ur.getSkuId(), source.getProductTypeId());
                     continue;
                 }
@@ -3824,6 +3825,44 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withSeverity("BLOCKING"));
         ProcessSheetRowRequest sourceRequest = parsePayloadQuiet(sourceRow.getRowPayload());
         return sourceRequest == null ? null : sourceRequest.getProductTypeId();
+    }
+
+    /**
+     * 跨计划投料的早期校验 (2026-09-06): 普通半成品来源必须是<b>还活着</b> 的库存行 (status=AVAILABLE)。
+     *
+     * <h3>它补的是哪一段</h3>
+     *
+     * <p>存在性早就在管了 (上面那句 {@code orElseThrow} SFI_NOT_FOUND, 覆盖 create / re-save /
+     * 多产出三条路)。<b>没在管的是状态</b>: 一个已经被别的计划领空的批次 (DEPLETED) 或已退回总仓的
+     * 批次 (RETURNED) 在这里照样过, 一路留到「小结 / 结单」才撞 {@code SFI_INSUFFICIENT} ——
+     * 那时活已经干完了, 操作员面对的是一个改不动的 409。跨计划共用半成品之后, 这个窗口从"少见"
+     * 变成"日常"。
+     *
+     * <p>⛔ <b>只判状态, 不判数量。</b> 逐道录入的扣减是<b>刻意延迟</b>的 (见 InterimSettleServiceImpl §②A);
+     * 在保存这一刻拿 {@code availableQuantity} 去比投料量, 等于把一次没有释放动作的软占用塞进保存路径 ——
+     * 两个人同时保存照样都过, 只是把 409 从结算挪到保存, 并没有真的解决超领。真正的可见性收敛在
+     * 下拉那一侧 (预扣, {@code WipInventoryServiceImpl#listAvailableWip})。
+     *
+     * <p>⚠️ 回料 ({@code isRework}) <b>不走这道闸</b>: 它在正式报工事务内就被严格扣减了
+     * ({@code consumeReworkInputs}), 扣完当场变 DEPLETED —— 拿 AVAILABLE 卡它, 会让"提交完再重存一次"
+     * 这种正常动作 409。回料的可选性由纯度闸 + {@code consumeClerkSemiStrict} 自己管。
+     */
+    private static void assertLiveSemiSourceStatus(
+            SemiFinishedInventory source, String sourceBatchNumber, String processCode) {
+        if (Boolean.TRUE.equals(source.getIsRework())) {
+            return;
+        }
+        if (SemiFinishedInventory.Status.AVAILABLE.equals(source.getStatus())) {
+            return;
+        }
+        String state = SemiFinishedInventory.Status.RETURNED.equals(source.getStatus())
+                ? "已退回总仓" : "已被领用完";
+        throw new BusinessException(409,
+                "半成品批次 " + sourceBatchNumber + " " + state + "，不能再作为投料来源")
+                .withCode("SFI_SOURCE_NOT_AVAILABLE")
+                .withHint("该批次可能已被其它计划领用，请刷新半成品下拉并改选仍有余量的批次")
+                .withSeverity("BLOCKING")
+                .withHintTarget(processCode);
     }
 
     private static void assertWorkflowSourceSku(

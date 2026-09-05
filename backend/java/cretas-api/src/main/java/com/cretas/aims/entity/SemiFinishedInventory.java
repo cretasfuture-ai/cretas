@@ -50,7 +50,11 @@ import java.util.Map;
                 columnNames = {"factory_id", "intermediate_batch_no"})
 })
 @Data
-@Builder
+// toBuilder: 只服务一个用途 —— 投料下拉要给「预扣后的可见余量」造一个【脱管】副本
+// (WipInventoryServiceImpl#listAvailableWip)。⛔ 绝不能改被 Hibernate 管着的那一行的
+// availableQuantity: 那是只读查询里的脏检查写库, 属于库存事故。逐字段手抄同样能做到,
+// 但字段一多就会漏 —— 让 Lombok 跟着字段走。
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class SemiFinishedInventory {
