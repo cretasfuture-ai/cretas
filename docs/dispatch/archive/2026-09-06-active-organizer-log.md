@@ -89,3 +89,15 @@
 - 非阻塞建议：超扣给 DTO 布尔；结单 409 的 hint 要说清「被别人待扣占掉」。
 - 登记：(b) 幽灵预扣 → 开票 `BUG-GHOST-PENDING-FEED-DELETED-PLANS-20260906`；(c) PENDING SP2 计划聚合器看不见 → 已知覆盖缺口，写进特性说明。
 - executor 抓到的 CI 盲区：`java-gate-pr.yml` 只跑 `*ContractTest`，`*Test` 类编译不执行（已记 memory）；全量要 `java-full-ready` 标签，本票已打。
+
+
+## 2026-09-06 03:37 `RECON-LEGAL-VALUE-SENTINEL-20260906` 归档 — #612 发 36 上线
+
+原条目：- `RECON-LEGAL-VALUE-SENTINEL-20260906` — `queued` — Owner: 无（等执行槽位） — **坐实**：prod 144 条配方行 yield_rate 全 100.00 ⇒ `mainMaterialCount=0` ⇒ 解析器读头级前返回 null 且无日志；#599 叠在这道门上 ⇒ 上线三小时一次没算出数。修法已定：头级为唯一来源（NULL=未填，100 合法）、拆主料计数门（主料按端口份额）、删读 APPLIED 建议分支、迁移置空 F006 那条 SYSTEM 100.00、放宽 `chk_br_yield`。🔒
+
+- **终审可合**：迁移谓词两侧证据（SYSTEM APPLIED 100.00 且无 `changed_by` 非空的变更记录），人手优先、失败方向是少清；prod 实测只动 1 行；`f006_clear_71` 影子 schema 不受影响（Flyway 走 `public`）；留 10 处 `getYieldRate()` 的三个克隆点是纯搬运无分支；`calculateRuntimeRequiredQuantity` 双门**删了**而非登记（折算收归 `spreadToPorts` 一处）；静默 null 补了按 (factoryId, productTypeId) 节流 10 分钟的 INFO；回滚判据测试断言真实 `spreadToPorts` 产出（100 ÷ 0.9375 = 106.666667）带空表阳性对照。
+- **终审留的一条**：「标准出成率」页面建议列会不会变空——recon（无 Bash）追链：列由 `recalculatePreview` 从完工批次 `cumulativeYieldRate` 中位数算出，链路五个仓库均不含 `BomYieldSuggestion`；被删分支的仓库方法在 `src/main` 唯一调用点就是解析器。我补跑 diff：#612 碰了 `BomYieldEstimateServiceImpl`(+46) 与 `YieldStandardView.vue`(+33/−7)，hunk 全是**写入侧**（`assertYieldRateInRange` 区间守卫、审计文案「系统更新」→「人工设置」、前端上限 100→300），不碰 preview ⇒ 列不受影响。
+- ⚠️ **我的仪器错一次**：按 `service/impl/` 路径 diff `ProductionPlanStartValidationTest` 得到空，差点读成「删除没落到位」；实际文件在 `service/production/`，改动 +52/−34，APPLIED 建议的 mock 与「50.00 驱动 requiredQuantity=400」断言整段删除。靠 PR 文件清单交叉核对抓到（形态 A⁴：空读数先问「我看的是不是那个东西」）。
+- **发 36**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 03:33:43 < 启动 03:34:02、`assertYieldRateInRange` 1 / `YIELD_RATE_MAX_INCLUSIVE` 1 / `V20261101_32` 在 jar 1 / 假串 0、health 200、web 入口 03:30:52。**库内效果**：`flyway 20261101.32 success 03:34:10`；`chk_br_yield = (IS NULL) OR (>0 AND <=300)`；F006 `SOP-20260817-01-黄油鸡` `overall_yield_rate` 100.00 → **NULL**；`bom_recipe_items` 144 条 100.00 未动（设计）。（分布查询一条 SQL 写错 GROUP BY 未取到，决定性读数已齐，未重跑。）
+- 登记：`BomYieldSuggestionRepository` 那个 `latestApplied` 方法现 0 个 `src/main` 调用点，仓库保留由契约测试登记；`GET /yield-suggestions` 端点无任何前端调用方（RN/web 均 0）。
+- CI 盲区第二例：executor 的新闸类名不匹配选择器被 `GateSelectorCoverageContractTest` 抓住（已有元判据），改名；全量 12980/0/0。
