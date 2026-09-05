@@ -4,7 +4,7 @@
 
 原则（Anthropic 对 Fable 5.1 的说明）：为前代模型写的逐步指令、脚本化措辞、大量"必须/禁止"会压低输出质量。清理方向是**保留意图、边界、验证钩子；删掉步骤级 micromanage、历史叙事、已失效内容**。真正的安全护栏（prod 部署口令、F006 写入范围、凭证、迁移/RLS 红线、只从 main 部署、锁文件、stash）全部保留。
 
-状态（2026-09-05）：Phase 1 已落地（PR #595 + 脱敏 `52e68c2566`）；Phase 2 已落地（`10c42b46e4` 拆 measurement-and-wiring、`b5b3087267` skills/rules 压缩重写、PR #596 AGENTS.md 发布段）。常驻加载量 ≈100 KB → ≈47 KB（含上游新增的 standing-authorization 与 ci-runner-routing 两份常驻 rule 约 12 KB）。未做：R-5 的 python-java-port 正文压缩（paths 已收窄）、G-2 全局 PreToolUse hook、G-5/G-6 全局 design 路由与第三方 skill 触发面、Phase 3：superpowers 已选 A 本仓库关闭（#595）；`.codex/rules` 已选 A 改指针（PR #597，14 个指针 + 闸守目标有效）；ACTIVE.md 已选「每条 ≤300 字、派活时才读」（PR #598：全文存档到 archive、薄台账 14 KB、`scripts/ci/check_dispatch_active.py` 在 Source Hygiene 与 fastlane 钉住）。Phase 3 三项决策全部落地。
+状态（2026-09-05）：Phase 1 已落地（PR #595 + 脱敏 `52e68c2566`）；Phase 2 已落地（`10c42b46e4` 拆 measurement-and-wiring、`b5b3087267` skills/rules 压缩重写、PR #596 AGENTS.md 发布段）。常驻加载量 ≈100 KB → ≈47 KB（含上游新增的 standing-authorization 与 ci-runner-routing 两份常驻 rule 约 12 KB）。R-5 正文压缩已做（`dda5e234e3`，37.7 KB → 7.7 KB，全文存档 `docs/rules-casebook/python-java-port-cases.md`）；G-2 全局 hook 已压成一句；G-5 design 路由已去停顿点 / superpowers 词汇 / changelog / Route 2 fallback 并声明唯一入口（全局 skills 仓）；G-6 第二步（给第三方设计 skill 加 `disable-model-invocation`）未做——那会让 design 路由也无法通过 Skill 工具调用它们。Phase 3：superpowers 已选 A 本仓库关闭（#595）；`.codex/rules` 已选 A 改指针（PR #597，14 个指针 + 闸守目标有效）；ACTIVE.md 已选「每条 ≤300 字、派活时才读」（PR #598：全文存档到 archive、薄台账 14 KB、`scripts/ci/check_dispatch_active.py` 在 Source Hygiene 与 fastlane 钉住）。Phase 3 三项决策全部落地。
 
 ---
 
