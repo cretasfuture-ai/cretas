@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import org.hibernate.type.SqlTypes;
 import jakarta.persistence.*;
@@ -20,6 +21,13 @@ import jakarta.persistence.*;
 @EqualsAndHashCode(callSuper = true)
 @Entity
 @Table(name = "process_sheet_rows")
+// 见 ProductionPlan 上的同一条说明: BaseEntity(@MappedSuperclass) 的 @SQLDelete 被
+// Hibernate 静默忽略, 必须显式声明在子类上。
+// 普查 (2026-09-06): 全仓对 ProcessSheetRowRepository 的 delete/deleteById/deleteAll
+// **0 处调用**, 也没有任何 CascadeType.REMOVE/ALL 关联指向 ProcessSheetRow
+// ⇒ 本注解今天是防御性的(运行时零行为变化)。这张表正是 2026-08-29 那次带外 SQL 清理
+// 漏删而留下 56 行孤儿的表, 所以它尤其不该有一条静默的物理删路径。
+@SQLDelete(sql = "UPDATE process_sheet_rows SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProcessSheetRow extends BaseEntity {
 

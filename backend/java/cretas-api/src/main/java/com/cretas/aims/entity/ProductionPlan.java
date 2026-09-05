@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 /**
@@ -44,6 +45,15 @@ import org.hibernate.annotations.Where;
            columnNames = {"factory_id", "created_by", "client_request_id"}
        )
 )
+// 🔴 R68 后遗症修复 (2026-09-06, ARCH-PRODUCTION-PLAN-HARD-DELETE-PATH):
+// BaseEntity 上那句 @SQLDelete 挂在 @MappedSuperclass 上, 与它旁边的 @Where 一样
+// **被 Hibernate 静默忽略** —— 而 R68-FIX-A 当年只把 @Where 批量补进了 342 个子类,
+// @SQLDelete **没有跟着批量补** (改之前全仓只有 20 个实体带它)。
+// 于是 productionPlanRepository.delete(plan) 一直是**物理 DELETE**:
+//   - operation_logs 里 3 条成功的 PRODUCTION_PLAN/DELETE, 对应 3 行全部 ROW_ABSENT;
+//   - process_sheet_rows.plan_id 没有 FK, 计划行被物理删掉之后那些工单行就成了孤儿。
+// 显式声明在子类上才生效 (与 LogisticsStoreMaster / SalesTarget 等 20 个实体同一写法)。
+@SQLDelete(sql = "UPDATE production_plans SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProductionPlan extends BaseEntity {
 

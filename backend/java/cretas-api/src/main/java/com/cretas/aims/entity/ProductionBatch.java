@@ -21,6 +21,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 /**
  * 生产批次实体
@@ -43,6 +44,12 @@ import org.hibernate.annotations.Where;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+// 见 ProductionPlan 上的同一条说明: BaseEntity(@MappedSuperclass) 的 @SQLDelete 被
+// Hibernate 静默忽略, 必须显式声明在子类上。
+// 普查 (2026-09-06): 全仓对 ProductionBatchRepository 的 delete/deleteById/deleteAll
+// **0 处调用**, 也没有任何 CascadeType.REMOVE/ALL 关联指向 ProductionBatch
+// ⇒ 本注解今天是防御性的(运行时零行为变化), 守的是「以后谁写了 delete() 不会变成物理删」。
+@SQLDelete(sql = "UPDATE production_batches SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProductionBatch extends BaseEntity {
     @Id
