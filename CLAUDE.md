@@ -60,7 +60,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `concurrent-edit-safety.md` - 并发编辑安全（共享文件修改前必读）
 - `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署
 - `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量
-- `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上
+- `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（硬约束 1–9 + 形态 A–E 判据；全部实测案例在 `docs/rules-casebook/measurement-and-wiring-cases.md`，编号一致）
 - `ci-runner-routing.md` - CI 默认走托管, 额度耗尽切自建(加拿大 Mac mini); 切换用 `python scripts/ci/switch_ci_runner.py self-hosted|hosted` 然后提交。⛔ 别用组织变量 `${{ vars.X }}` —— 实测在 `runs-on` 里读到的是空。与 `.codex/rules/` 同名文件**逐字相同**, 有闸钉着
 
 `.codex/rules/` 是 Codex 侧副本，Claude 以本目录为准（`ci-runner-routing.md` 两侧由 `scripts/ci/check_shared_agent_rules.py` 钉逐字相同）。superpowers 插件在本仓库已关闭（`.claude/settings.json`），规划/调试/评审只用本仓库自己的 skill 与 rules。
