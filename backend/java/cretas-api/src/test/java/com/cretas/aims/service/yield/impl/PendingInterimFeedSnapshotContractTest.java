@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
  * </ol>
  */
 @DisplayName("PendingInterimFeed Snapshot — 待扣读数 + 读数的来源标记")
-class PendingInterimFeedSnapshotTest {
+class PendingInterimFeedSnapshotContractTest {
 
     private static final String F = "F006";
 

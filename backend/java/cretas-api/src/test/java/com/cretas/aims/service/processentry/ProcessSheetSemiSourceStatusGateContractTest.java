@@ -69,7 +69,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("投料来源状态早校验 — 领空/退库的半成品在保存时就拦下")
-class ProcessSheetSemiSourceStatusGateTest {
+class ProcessSheetSemiSourceStatusGateContractTest {
 
     private static final String FACTORY = "F006";
     private static final String PLAN = "PLAN-CROSS-SEMI";

@@ -62,7 +62,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("投料下拉预扣可见性 — 别的计划已承诺的量不再出现在余量里")
-class WipPickerPendingFeedVisibilityTest {
+class WipPickerPendingFeedVisibilityContractTest {
 
     private static final String FACTORY_ID = "F006";
 
