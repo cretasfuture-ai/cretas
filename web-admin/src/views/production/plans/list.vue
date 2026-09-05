@@ -2864,7 +2864,16 @@ async function handleRecalculateSettledCost(row: TableRow) {
     if (d.customerSuppliedNote) {
       successMessage += `；${d.customerSuppliedNote}`;
     }
-    ElMessage({ message: successMessage, type: 'success', duration: d.customerSuppliedNote ? 8000 : 3000, showClose: true });
+    // 辅料先估（owner 裁定，2026-09-06）：这次总成本里含按 BOM 配比估出来的辅料时必须说出来——
+    // 估的和实际领用的在同一个数字里长得一模一样。同上：直接展示后端拼好的 estimatedAuxNote。
+    // ⛔ 那个中文标签的字面量只许存在于后端常量 OrderCostBreakdownService.ESTIMATED_AUX_LABEL；
+    //    本文件里连注释都不写它，好让 settledCostRecalculation.source.spec.ts 的阴性对照
+    //    （断言本文件搜不到那个字面量）真的能红（本仓形态 D）。
+    if (d.estimatedAuxNote) {
+      successMessage += `；${d.estimatedAuxNote}`;
+    }
+    const hasCaveat = Boolean(d.customerSuppliedNote || d.estimatedAuxNote);
+    ElMessage({ message: successMessage, type: 'success', duration: hasCaveat ? 8000 : 3000, showClose: true });
     await loadSettlementStatuses([row]);
   } catch (error) {
     if (String(error).includes('cancel')) return;

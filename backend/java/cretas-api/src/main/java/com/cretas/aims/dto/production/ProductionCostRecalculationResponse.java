@@ -42,4 +42,18 @@ public class ProductionCostRecalculationResponse {
 
     /** 上面那份清单的人话版, 直接可以展示；本轮没有客供料按口径记 0 时为 {@code null}。 */
     private String customerSuppliedNote;
+
+    /**
+     * 🔴 辅料先估（owner 裁定，2026-09-06）：本次重算里按「BOM 配比 × 实际主料投入」估出来的
+     * 辅料/调料逐条明细（与 {@link OrderCostBreakdownDTO#getEstimatedAuxItems()} 同一份数据，
+     * ⛔ 不新造 DTO —— 本仓形态 D）。
+     *
+     * <p>这些金额<b>已经计入</b> {@link #authoritativeTotalCost}，所以必须摆出来：审阅者要看得到
+     * 「这个总数里有多少是估的、按什么配比、拿哪个主料投入量当基数」，⛔ 不能让估算值混在
+     * 实际领用里静默参与定价/毛利。每条自带 {@code basis = 按配比估算} 标签。
+     */
+    private List<OrderCostBreakdownDTO.EstimatedAuxItem> estimatedAuxItems;
+
+    /** 上面那份清单的人话版, 直接可以展示；本轮没有按配比估算的辅料时为 {@code null}。 */
+    private String estimatedAuxNote;
 }

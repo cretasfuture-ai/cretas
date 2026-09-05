@@ -5532,7 +5532,28 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         allocateWorkflowOutputCostsFromTotal(totalCost, lines);
         // 成本算出来了, 但「不强制填写」的桶如果没录, 仍然要说一声 ——
         // 否则用户会以为这个单位成本已经含了设备/其他成本。
-        return describeUncollectedOptionalCostNote(breakdown);
+        // 🔴 辅料先估 (2026-09-06): 成本【算出来了】这条路上同样要说 ——
+        //    describeCostUnavailableReason 只在算不出时才被调到, 光挂在那边等于
+        //    「估算成功时反而不告诉人这是估的」(本仓形态 B: 机制在, 没接到成功那条路上)。
+        return joinCostNotes(describeUncollectedOptionalCostNote(breakdown),
+                describeEstimatedAuxNote(breakdown));
+    }
+
+    /**
+     * 把几句「给用户看的口径说明」拼成一句。全为 {@code null} 时返回 {@code null}(无需多嘴)。
+     *
+     * <p>⛔ 不在 {@link #describeUncollectedOptionalCostNote} 内部塞第二个主题 —— 那个方法
+     * 讲的是「未录的可选成本桶」, 把辅料估算也塞进去会让它的名字开始说谎(本仓形态 B⁵:
+     * 描述过期比没有描述更糟)。组合在调用点做。
+     */
+    static String joinCostNotes(String... notes) {
+        StringBuilder sb = new StringBuilder();
+        for (String note : notes) {
+            if (note != null && !note.isBlank()) {
+                sb.append(note);
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
     }
 
     /**
@@ -5656,6 +5677,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (customerSuppliedNote != null) {
             sb.append(customerSuppliedNote);
         }
+        // 🔴 辅料先估 (2026-09-06): 即便这次因为别的缺项算不出总成本, 已经估出来的那部分辅料
+        //    也要说清楚 —— 否则用户补完缺项再看, 会以为那些辅料是实际领用记录来的。
+        String estimatedAuxNote = describeEstimatedAuxNote(breakdown);
+        if (estimatedAuxNote != null) {
+            sb.append(estimatedAuxNote);
+        }
         sb.append("下一步: 请先补录上述缺项, 再到成本核算处重新核对本计划成本。");
         return sb.toString();
     }
@@ -5728,6 +5755,106 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 + batchNames + "。";
     }
 
+    /**
+     * 🔴 辅料先估（owner 裁定，2026-09-06）：这批的辅料/调料<b>没有实际耗用记录</b>，成本是按
+     * 「BOM 配比 × 实际主料投入」估出来的 —— 这句话把它说给人看。
+     *
+     * <p>⛔ 不能让估算值静默混进 {@code totalCost} 再被拿去定价/算毛利：估的和实际领用的
+     * 在同一个「调料成本」数字里长得一模一样，唯一的区别就是有没有人说出来
+     * （本仓形态 A¹³：每条读数都要带来源标记）。
+     *
+     * <p>措辞里的「{@value com.cretas.aims.service.yield.OrderCostBreakdownService#ESTIMATED_AUX_LABEL}」
+     * 取自服务侧的常量，⛔ 不在这里重新写一遍那四个字（本仓形态 D）。
+     *
+     * @return {@code null} = 本次没有按配比估算的辅料, 无需多嘴
+     */
+    public static String describeEstimatedAuxNote(
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
+        if (breakdown == null) {
+            return null;
+        }
+        List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO.EstimatedAuxItem> items =
+                breakdown.getEstimatedAuxItems() == null
+                        ? List.of() : breakdown.getEstimatedAuxItems();
+        List<String> partiallyRecorded = breakdown.getPartiallyRecordedAuxItems() == null
+                ? List.of() : breakdown.getPartiallyRecordedAuxItems();
+        if (items.isEmpty() && partiallyRecorded.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (items.isEmpty()) {
+            // 只有「部分记录」没有估算行 —— 直接说那一段, 见本方法末尾。
+            return describePartiallyRecordedAux(partiallyRecorded);
+        }
+        sb.append("含").append(com.cretas.aims.service.yield.OrderCostBreakdownService.ESTIMATED_AUX_LABEL)
+                .append("的辅料 ").append(items.size()).append(" 项(无实际耗用记录, 按 BOM 配比 × 实际主料投入折算)");
+        int shown = 0;
+        for (com.cretas.aims.dto.yield.OrderCostBreakdownDTO.EstimatedAuxItem item : items) {
+            if (shown >= MAX_LISTED_MISSING_COST_ITEMS) {
+                sb.append("; 等共 ").append(items.size()).append(" 项");
+                break;
+            }
+            sb.append(shown == 0 ? ": " : "; ");
+            sb.append(item.getMaterialName() == null ? item.getMaterialCode() : item.getMaterialName());
+            if (item.getQuantity() != null) {
+                sb.append(" ").append(item.getQuantity().stripTrailingZeros().toPlainString())
+                        .append(item.getUnit() == null ? "" : item.getUnit());
+            }
+            // ⛔ 金额可能因脱敏被抹成 null —— 那时只说量, 不编一个 ¥。
+            if (item.getAmount() != null) {
+                sb.append(" ¥").append(item.getAmount().stripTrailingZeros().toPlainString());
+            }
+            shown++;
+        }
+        sb.append("。这部分是估算值, 不是实际领用记录; 要拿到实际成本请补录辅料领用后重新核算。");
+        String partial = describePartiallyRecordedAux(partiallyRecorded);
+        if (partial != null) {
+            sb.append(partial);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 🔴 辅料<b>部分记录</b>的那一句（2026-09-06 终审补）。
+     *
+     * <p>本批<b>有</b>辅料实耗记录, 但同一张 BOM 里还有几种<b>一条记录都没有</b> ——
+     * 按「信记录不补差」口径这几种<b>不估</b>, 于是本批调料成本只含已记录的那几种。
+     * <b>不说出来就是静默少算</b>: 成本非 null、看起来完整, 实际短了这几种的钱。
+     *
+     * <p>⛔ 措辞里不要写成「缺项」或「算不出」—— 它<b>不阻断</b>成本, 说的是<b>口径</b>:
+     * 这个数就是「按已记录的算出来的」, 用户要更全的数就去补录。
+     *
+     * @return {@code null} = 本次没有部分记录的辅料, 无需多嘴
+     */
+    static String describePartiallyRecordedAux(List<String> partiallyRecorded) {
+        if (partiallyRecorded == null || partiallyRecorded.isEmpty()) {
+            return null;
+        }
+        List<String> names = partiallyRecorded.stream()
+                .map(item -> {
+                    int sep = item.indexOf(':');
+                    return sep < 0 ? item : item.substring(sep + 1);
+                })
+                .toList();
+        StringBuilder sb = new StringBuilder();
+        sb.append("另有 ").append(names.size())
+                .append(" 项辅料本批没有任何耗用记录, 按「以实际记录为准、不补差」口径未计入成本(所以这个成本是偏低的下限): ");
+        int shown = 0;
+        for (String name : names) {
+            if (shown >= MAX_LISTED_MISSING_COST_ITEMS) {
+                sb.append("; 等共 ").append(names.size()).append(" 项");
+                break;
+            }
+            if (shown > 0) {
+                sb.append("、");
+            }
+            sb.append(name);
+            shown++;
+        }
+        sb.append("。要把它们算进来, 请补录这几项的辅料领用后重新核算。");
+        return sb.toString();
+    }
+
     /** 最多列几项 —— 全部展开会把提示拉成几千字。 */
     private static final int MAX_LISTED_MISSING_COST_ITEMS = 5;
 
@@ -5779,6 +5906,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             case "LABOR_RATE_OR_TIME":
                 // 历史码: 2026-08-25 拆成上面两个后不再产出, 保留是为了读旧数据不丢项。
                 return "工序 " + detail + " 缺工时段或人工成本";
+            // 🔴 辅料先估 (2026-09-06) 的三个码 —— ⛔ 三条都不是「可选成本桶」,
+            //    它们会阻断 totalCost: 缺配比/缺单价时按 0 计就是把辅料成本白送掉。
+            case "ESTIMATED_AUX_RATIO_MISSING":
+                return "辅料 " + detail + " 无实际耗用记录, BOM 里也没有配比(g/kg), 估不出成本";
+            case "ESTIMATED_AUX_PRICE_MISSING":
+                return "辅料 " + detail + " 无实际耗用记录, BOM 里没有可用单价, 估不出成本";
+            case "ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE":
+                return "生产批次 " + detail + " 的主料投入量折不成 kg(计数单位或批次不可解析), "
+                        + "辅料无法按配比估算";
             case "NO_COST_COLLECTED":
                 return "本计划还没有归集到任何成本(没有领用、报工或投料记录)";
             case "SEMI_FINISHED_OR_FINISHED_FEED_PRICE":
@@ -7595,11 +7731,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 🔴 客供主料成本口径 (a)（2026-09-04）: 显式说出「这次重算含客供料 N 项按加工口径记 0」——
         // 见类上方 describeCustomerSuppliedNote javadoc, ⛔ 不能只报一个总成本让人猜为什么比预期低。
         String customerSuppliedNote = describeCustomerSuppliedNote(breakdown);
+        // 🔴 辅料先估 (2026-09-06): 同理 —— 这个 totalCost 里含估算值, ⛔ 不说就等于没说。
+        String estimatedAuxNote = describeEstimatedAuxNote(breakdown);
         log.info("结单成本重算完成 factory={} plan={} settlement={} total={} unit={} outputs={} fg={} rework={}"
-                        + " customerSuppliedItems={}",
+                        + " customerSuppliedItems={} estimatedAuxItems={}",
                 factoryId, planId, settlement.getId(), totalCost, sharedUnitCost,
                 lines.size(), finishedGoodsCount, reworkRows.size(),
-                breakdown.getCustomerSuppliedItemCount());
+                breakdown.getCustomerSuppliedItemCount(), breakdown.getEstimatedAuxItemCount());
         return com.cretas.aims.dto.production.ProductionCostRecalculationResponse.builder()
                 .productionPlanId(planId)
                 .settlementId(settlement.getId())
@@ -7613,6 +7751,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .costContributions(breakdown.getSources())
                 .customerSuppliedItems(breakdown.getCustomerSuppliedItems())
                 .customerSuppliedNote(customerSuppliedNote)
+                .estimatedAuxItems(breakdown.getEstimatedAuxItems())
+                .estimatedAuxNote(estimatedAuxNote)
                 .build();
     }
 
