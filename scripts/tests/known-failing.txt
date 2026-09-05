@@ -1,0 +1,32 @@
+# scripts/ci/run-script-tests.sh 的棘轮基线 —— **存量**红用例。
+#
+# 格式: <用例文件名>  # <原因>
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 这份名单只许**变短**
+# ═══════════════════════════════════════════════════════════════════════════
+# 下面 11 条在 2026-09-06 之前**从没在 CI 里跑过**(全仓 22 个 workflow 一个都不引用
+# scripts/tests/), 是这道闸接上的第一天照出来的。它们分属 deploy / release 等
+# 🔒 共享结构, 不在本票 scope 内 ⇒ 记账, ⛔ 不在这里修。
+#
+# ⛔ 名单里的用例**照常执行**, 不是 skip —— skip 会让「已经修好了」永远发现不了。
+#    三条判定(见 run-script-tests.sh):
+#      · 不在名单 且 rc≠0        ⇒ 红(任何非 0, 含 126/127 —— 退出码是开放集合,
+#                                    ⛔ 不枚举失败码, 硬约束 4)
+#      · 在名单   且 rc=0        ⇒ 红「已修好, 请从 known-failing.txt 删掉」
+#      · 名单里的文件不存在      ⇒ 红「测试被删了不是修好了」
+#        (2026-08-27 实测: 棘轮把「删掉一个红测试」报成了「已修好」)
+#
+# ⚠️ 加一条进来之前问一句: 这是**存量**, 还是我这次改红的? 后者不许进名单。
+
+test-deploy-backend-optimization.sh       # 疑似真回归: ci.yml 制品名与脚本期待的对不上
+test-deploy-backend-post-switch-probe.sh  # 疑似环境: 切换后探针重试 3 次都 HTTP=empty/systemd=empty, 然后断言「重试成功后应停止」不成立
+test-deploy-lock-staleness.sh             # 疑似环境: A2「活 PID 应该被拒绝」实得 rc=0(容器里 PID 语义/sleep 被 Killed)
+test-deploy-mutex-coverage.sh             # 疑似环境: 「owner died 后锁应释放」在容器里不成立
+test-deploy-web-admin-entry-chunk.sh      # 疑似环境: 用例自己说「本测试的前提在此环境不成立」—— 它断言 LC_ALL=C 下没有 grep -P, 而 ubuntu-latest 的 GNU grep 有
+test-private-repo-readiness.sh            # 疑似真回归: deploy-embedding.sh 里缺 rsync -az --progress "$JAR_PATH" ... 那一行
+test-release-artifacts-failfast.sh        # 疑似环境: 「preflight 拒绝了当前可用的 JDK」—— runner 的 JDK 版本与预检期待不同
+test-release-ci-artifact.sh               # 疑似真回归: ci.yml 的 push paths 未覆盖整个 backend/java/cretas-api/**
+test-release-parallel-fastlane.sh         # 疑似真回归: rc=126, scripts/deploy/release-java-preflight.sh 在 git 里没有执行位(Windows 检出看不出来)
+test-release-pipeline-acceleration.sh     # 存量红, CI 日志里未打出断言明细, 待单独查
+test-smartbi-python-deploy-epipe.sh       # 疑似真回归: deploy-smartbi-python.sh:401 仍有管道进 grep

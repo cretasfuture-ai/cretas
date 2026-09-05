@@ -12,7 +12,7 @@ on:
     paths:
       - 'scripts/tests/**'
       - 'scripts/ci/run-script-tests.sh'
-      - 'scripts/ci/script-tests-skip.conf'
+      - 'scripts/tests/known-failing.txt'
       - 'scripts/cron/**'
       - 'scripts/check-soft-delete-orphans.sh'
       - 'scripts/deploy/server-script-inventory.conf'
