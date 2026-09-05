@@ -113,3 +113,12 @@
 - **发 37**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 03:54:16 < 启动 03:54:33、`pendingFeedExceedsAvailable` 1 / `assertLiveSemiSourceStatus` 1 / `SFI_SOURCE_NOT_AVAILABLE` 1 / 假串 0、health 200。⚠️ prod 今天预扣读数为 0（无未结算 semiFinished 引用行），**「余量没变」不能当验收**；验收靠 F006 形状的 fixture。
 - 登记：(c) PENDING SP2 计划对聚合器结构性不可见 —— 已知覆盖缺口，非缺陷；(b) 幽灵预扣已开票 `BUG-GHOST-PENDING-FEED-DELETED-PLANS-20260906`。
 - 附：发 37 启动日志两条 `Startup warmup semanticIntentMatcher/intentEmbeddingCache FAILED: Embedding service unavailable`——9090 在线且 active，发 34 也出现过 3 次、35/36 没有 ⇒ 预热先于嵌入客户端就绪的启动竞态，非持续故障，登记不追。
+
+
+## 2026-09-06 04:02 #615 客户名单门交付（终审中）
+
+- 注解 `{sales:read_write, sales:read, finance:read_write, finance:read}`；`operations_coordinator` L1 已 `sales=r` 故未加 `operations:*`；超管 `PermissionServiceImpl:462` 短路。prod L1 23 活跃角色：**11 过 / 12 挡**（挡：production_manager、workshop_supervisor、operator、yield_operator、quality_inspector/manager、warehouse_manager/worker、procurement_manager、equipment_admin、hr_admin、permission_admin）；L2 覆盖 0 行；`restaurant_*` 通过但只在 MOCK_REST（0 客户）且无客户屏。
+- production_manager 后果实测不变（7/20 计划挂客户）：403、下拉空、屏存活（`settleAllIndependently`）、只记日志无 toast。
+- 额外：`ToolRbacEnforcer` 加 `customer_list` 同四码（否则问 AI 就能绕过 HTTP 门），parity 测试钉两门同码。变异：去注解 ⇒ javap 见 `RequirePermission` 10→9 ⇒ 7/7 红、production_manager 403→200；去 map 项 ⇒ 常量池 `customer_list` 3→0（对照 `customer_delete` 仍 3）⇒ 2/3 红。
+- 两条待裁定：(1)「恰好四类」用权限码表达不出——`department_admin`/`dispatcher`/`viewer` 因 L1 本有 sales 或 finance 读权而过，收窄要改 L1（属未来权限总页的事）；(2) 客户名单 12 条读路径只关 1 条，余下已登记 `SEC-CUSTOMER-ROSTER-REMAINING-PATHS-20260906`。
+- 顺手修的 `Promise.all` 同族：`ShipmentManagementScreen.tsx`、web-admin `plans/list.vue`、`system/products/index.vue`。
