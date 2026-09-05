@@ -69,3 +69,14 @@
 ## 2026-09-06 01:24 `COST-AUX-ESTIMATED-LABEL` executor 被 Opus 403 打断
 
 `Failed to authenticate. API Error: 403 Request not allowed (model claude-opus-5)`，发生在变异测试起步。分支已有 2 commit，无 PR；同时另一条 Opus executor 仍在跑 ⇒ 疑单次/额度型拒绝而非全局。已 SendMessage 续派（先撤未提交的疑似变异）。若再 403 ⇒ 升 owner（Opus 额度/权限），⛔ 不擅自降 Sonnet。
+
+
+## 2026-09-06 02:43 `COST-AUX-ESTIMATED-LABEL-20260906` 归档 — #608 发 35 上线
+
+原条目：- `COST-AUX-ESTIMATED-LABEL-20260906` — `in-progress` — Owner: executor（organizer 派；01:2x 被 Opus 403 打断，已续派） — 分支 `worktree-agent-aa2581e8120356c3f` 已有 2 commit（主代码 + 16 条测试含 8 阴性对照），未开 PR；worktree 里有一处未提交改动疑为变异，续做时先撤。🔒 成本口径。
+
+- **终审**（🔒 成本口径）：爆炸半径实测 **1 个**已结单计划会从「静默少算」变「诚实空」（上限 5；执行者自报 36 是把未结单也数了，且第二次复核又用了 `material_consumptions.production_plan_id` 这条只填 140/370 的路径——形态 A 两次）；两道门不是串联（门② 只在门① 放行即贡献恰为 0 时可达）；估算基数与主料成本同一份去重并集；`SeasoningRatioContract` 抽取单位集逐条一致、未走 `crossLanguageCode`。
+- **需改已补**（`0d85baab9d`）：部分记录（两种调料只记一种）原本静默少算 ⇒ 加非阻断 `AUX_PARTIALLY_RECORDED:<辅料名>`，走独立清单结构上进不了 `missingCostItems`；报工只记总量的批次不打标记（防形态 E 噪音）。变异 M7/M8 先打印产出再红。
+- **发 35**：首次 `unified release requires a clean worktree`——部署树里 `frontend/CretasFoodTrace/yarn.lock` 被 09-05 OTA 导出时的 `npm install` 改了。清理规则：先列脏项、只在全部是构建/安装产物时才清、否则停手。重发 `DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 02:40:39 < 启动 02:40:58、`estimateAuxByBomRatio` 5 / `AUX_PARTIALLY_RECORDED` 1 / `SeasoningRatioContract.class` 1 / 假串 0、health 200；web 458 chunk `estimatedAuxNote` 1 / 对照 1 / 假串 0。
+- 登记：`ESTIMATED_AUX_RATIO_MISSING` 与 `ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE` 在 prod 今天触发不了（0 条缺 dosage、126 个原料批次全 kg）；`AUX_PARTIALLY_RECORDED` 当前命中 0（17 个有记录计划辅料全覆盖），守的是缺口不是今天的数据。
+- ⚠️ 运维：**从部署树做 OTA 导出会弄脏它**（`npm install` 改 lockfile、`expo export` 落 dist）——下次 OTA 用独立 worktree，或导出后立刻 `git checkout -- yarn.lock && git clean -fd dist`。
