@@ -163,6 +163,11 @@ const rawMenuConfig: MenuItem[] = [
       //   后端要的那个, 再叠 roles 只会把车间主管挡在外面 —— 那是把问题反着修一遍。
       { path: '/dashboard/production-progress', title: '生产进度大屏', icon: '', module: 'production' },
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
+      // 标准出成率 (2026-09-05) —— 备料计算的基准线, 唯一的人工写入口。
+      // ⛔ 不加 roles 白名单: 与上面 /dashboard/production-progress 同一个理由 ——
+      //   页面本身对无权者是**可读**的 (只是改按钮置灰 + 明示找谁改), 菜单挡住反而
+      //   让人看不到当前标准填没填。写权限的真门在后端 bom:yield_standard:write。
+      { path: '/production/yield-standard', title: '标准出成率', icon: '', module: 'production' },
       // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 19 条合并为 ~9 条。
       // 生产看板 hub = 未完成计划队列 + 备货看板 + 交货预警 (el-tabs 承载, 组件
       // 原样未改动)。3 个旧路径 (/production/pending-queue、/production/restock-board、

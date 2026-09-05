@@ -350,6 +350,17 @@ const businessRoutes: RouteRecordRaw[] = [
             redirect: (to) => buildProductionAnalysisRedirect(to, 'bom-achievement'),
             meta: { requiresAuth: true, title: 'BOM达成率分析', module: 'production' }
           },
+          // 标准出成率维护 (2026-09-05) —— 唯一的人工写入口。
+          // 自动回写已删除 (owner 裁定「标准只能人改」), 而 recalculate-apply 端点
+          // 此前在整个 web-admin 里 0 个调用方 ⇒ 不补这一页, 这条基准线就是谁也改不了。
+          // ⛔ 不做进工艺画布: 画布那层 BOM 是只读投影 (bomOverlay.ts), 挂写操作会让
+          //    「标准存在哪」长出第二个答案。
+          {
+            path: 'yield-standard',
+            name: 'YieldStandard',
+            component: () => import('@/views/production/YieldStandardView.vue'),
+            meta: { requiresAuth: true, title: '标准出成率', module: 'production' }
+          },
           {
             path: 'process-io',
             name: 'ProcessIOComparison',
