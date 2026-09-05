@@ -43,6 +43,14 @@ import java.util.Map;
  * Bug #318 fix (2026-04-18): @RequirePermission added only on write methods
  * (POST/PUT/DELETE) — reads stay open to any authenticated user (matches
  * pre-fix behavior, no regression). Prevents dispatcher/operator越权 POST/PUT/DELETE.
+ *
+ * <p>⚠️ 上面那句「reads stay open」<b>2026-09-06 起只对本类的其余读端点成立</b>:
+ * owner 裁定「客户名单只有 销售/财务/工厂管理员/运营 能看」之后，
+ * {@link #getCustomerList} 已经加上 {@code @RequirePermission}(理由与角色表见该方法的注释)。
+ * 其余 8 个吐名单的读端点 ({@code /active} {@code /search} {@code /by-type}
+ * {@code /by-industry} {@code /vip} {@code /outstanding-balance} {@code /export}
+ * {@code /{customerId}}) 仍然对同厂任何已登录用户开放 —— 那是<b>显式登记的未完成部分</b>，
+ * ⛔ 不是「裁定已完整落地」。</p>
  */
 @Slf4j
 @RestController
