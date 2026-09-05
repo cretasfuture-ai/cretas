@@ -319,7 +319,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         recipe.setVersion(recipeRepo.findMaxVersion(factoryId, req.getProductTypeId()) + 1);
         // 草稿不占用“当前生效”槽位；只有 activateRecipe 能设置 isCurrent=true。
         recipe.setIsCurrent(false);
-        // 整体出成率由正式批次报工历史自动学习，配方头不接收人工初始值。
+        // 🔴 2026-09-06 订正: 新建配方头不接收整体出成率初始值 —— null 就是「还没配」。
+        // ⛔ 旧注释写「由正式批次报工历史自动学习」, #594 删掉自动 apply 之后已经不成立:
+        //    要填只能去「标准出成率」页面人工写(BomYieldEstimateServiceImpl#recalculateApply)。
         recipe.setOverallYieldRate(null);
         applyProductOutputSnapshot(recipe, product);
         recipe.setStatus(BomRecipe.Status.DRAFT);
@@ -354,7 +356,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         assertPinnedDraft(factoryId, recipe);
 
         if (req.getProductName() != null) recipe.setProductName(req.getProductName());
-        // overallYieldRate 是系统学习字段，草稿编辑不可人工覆盖。
+        // 🔴 2026-09-06 订正: overallYieldRate 不是「系统学习字段」(#594 之后系统只出 PENDING 建议)。
+        // 它是人工维护的标准值, 只是**不在这个入口**改 —— 走「标准出成率」页面
+        // (BomYieldEstimateServiceImpl#recalculateApply, 带 BomChangeLog + 操作人 + 乐观锁)。
         ProductType product = loadProductForUpdate(factoryId, recipe.getProductTypeId());
         validateProductOutputMetadata(product);
         applyProductOutputSnapshot(recipe, product);
@@ -2913,8 +2917,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     /** Apply DTO fields to entity (used by add + update). */
     private void applyDtoToItem(BomRecipeItemDTO dto, BomRecipeItem item) {
         item.setStandardQuantity(dto.getStandardQuantity());
-        // 出成率是同工厂、同 SKU 正式批次的系统统计，不再让 BOM 单行人工反推。
-        // 旧列保留 100% 中性值，以兼容存量成本公式和 NOT NULL 约束。
+        // 🔴 行级出成率已废弃: 出成率的权威载体是配方头 bom_recipes.overall_yield_rate,
+        //    ⛔ 不再让 BOM 单行人工反推。旧列保留 100% 中性值, 兼容存量成本公式和 NOT NULL 约束。
+        // ⚠️ 2026-09-06: 因为这里恒写 100.00, prod 上 bom_recipe_items 144/144 行全是 100.00 ——
+        //    ProductionPlanServiceImpl 里那个「行级出成率 != 100 ⇒ 主料」的判据因此恒为假,
+        //    把缺料预警的出成率折算静默关了三周。该判据已删除 (主料身份改由 workflow
+        //    INPUT 端口份额 PlanInputShareResolver 定义)。⛔ 不要再拿这一列当主料标记。
         item.setYieldRate(new BigDecimal("100.00"));
         item.setUnit(dto.getUnit());
         item.setUnitPrice(dto.getUnitPrice());
