@@ -168,6 +168,25 @@ public class OrderCostBreakdownDTO {
     private Integer estimatedAuxItemCount;
     private List<EstimatedAuxItem> estimatedAuxItems;
 
+    /**
+     * 🔴 辅料<b>部分记录</b>留痕（2026-09-06 终审补）：本批<b>有</b>辅料实耗记录，但同一张 BOM 里
+     * 还有几种<b>一条记录都没有</b> —— 按「信记录不补差」口径这几种<b>不估</b>（见
+     * {@code OrderCostBreakdownService#estimateAuxByBomRatio} 决定 ①-b），于是本批的
+     * {@link #seasoningCost} 只含<b>已记录</b>的那几种。
+     *
+     * <p>⛔ 不说出来就又是一次「静默少算」：成本非 null、{@link #costComplete} 为 true，
+     * 看起来完整，实际短了这几种的钱 —— 那正是本轮改动要消灭的东西，不能在这条路上原样活着。
+     *
+     * <p>{@code AUX_PARTIALLY_RECORDED:<辅料名>} 形态，与 {@link #customerSuppliedItems} 同一套约定。
+     * <b>非阻断</b>：它<b>不</b>进 {@link #missingCostItems}，所以「阻断不了」是结构上的保证，
+     * 不是靠记得把它登记进 {@code OPTIONAL_COST_ITEM_CODES}。
+     *
+     * <p>⚠️ 只在「确实有辅料被逐物料记录过」时才产出。调料成本整个来自报工侧一笔总额时
+     * <b>不</b>产出 —— 那是「按批次粒度记录」，对逐物料覆盖度无法断言。
+     */
+    private Integer partiallyRecordedAuxItemCount;
+    private List<String> partiallyRecordedAuxItems;
+
     /** Auditable quantity x price/rate ledgers. */
     private List<RawMaterialDetail> rawMaterialDetails;
     private List<PackagingDetail> packagingDetails;

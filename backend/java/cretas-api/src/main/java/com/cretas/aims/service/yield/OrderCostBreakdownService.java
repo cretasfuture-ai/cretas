@@ -201,6 +201,10 @@ public class OrderCostBreakdownService {
         // 🔴 辅料先估 (owner 裁定 2026-09-06): 无实际耗用记录的辅料, 按 BOM 配比 × 实际主料投入
         //    折算成本, 每条标「按配比估算」。金额进 seasoning 桶(它就是调料成本), 明细挂这里。
         List<OrderCostBreakdownDTO.EstimatedAuxItem> estimatedAuxItems = new ArrayList<>();
+        // 🔴 部分记录留痕 (2026-09-06 终审): 本批【有】辅料实耗记录、但 BOM 里还有几种
+        //    一条记录都没有 —— 按「信记录不补差」不估它们, 但必须说出来, 否则成本看起来完整
+        //    而实际短了这几种。⛔ 非阻断, 独立清单, 不进 missingCostItems。
+        List<String> partiallyRecordedAuxItems = new ArrayList<>();
         // 同一产品的多个批次, 各自绑的 BOM 版本 —— 用来发现「期间改过配方」。
         // 不一致时这几批的成本/毛利【不可横向比较】: 「这批毛利低」会被读成生产问题,
         // 而实际是换了配方。⇒ 必须提示, 不能让人默默地比。
@@ -487,7 +491,7 @@ public class OrderCostBreakdownService {
                     factoryId, b, plan, recordedMaterialTypeIds,
                     seasoning.subtract(seasoningAtBatchStart),
                     batchRawInputConvertible ? batchRawInputKg : null,
-                    estimatedAuxItems, missingCostItems));
+                    estimatedAuxItems, partiallyRecordedAuxItems, missingCostItems));
         }
 
         // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
@@ -503,6 +507,8 @@ public class OrderCostBreakdownService {
         }
         missingCostItems = missingCostItems.stream().distinct().collect(Collectors.toCollection(ArrayList::new));
         customerSuppliedItems = customerSuppliedItems.stream().distinct()
+                .collect(Collectors.toCollection(ArrayList::new));
+        partiallyRecordedAuxItems = partiallyRecordedAuxItems.stream().distinct()
                 .collect(Collectors.toCollection(ArrayList::new));
         // ── 2026-08-25: 「不强制填写」这条裁定原来只落到了 knownCostSubtotal 上 ──────────────
         //   2026-07-30 owner 拍板「设备/其他成本不强制填写, 填了就算进去」。当时只让
@@ -636,6 +642,8 @@ public class OrderCostBreakdownService {
                 //    这份清单是它们的【来源标记】—— 不摆出来就分不清估的和实际领用的。
                 .estimatedAuxItemCount(estimatedAuxItems.size())
                 .estimatedAuxItems(estimatedAuxItems)
+                .partiallyRecordedAuxItemCount(partiallyRecordedAuxItems.size())
+                .partiallyRecordedAuxItems(partiallyRecordedAuxItems)
                 .rawMaterialDetails(rawMaterialDetails)
                 .packagingDetails(packagingDetails)
                 .laborDetails(laborDetails)
@@ -694,7 +702,7 @@ public class OrderCostBreakdownService {
      * <h2>四条决定 (⛔ 改之前请连同这段一起改, 否则描述会先于代码过期)</h2>
      *
      * <h3>① 什么叫「没有实际耗用记录」</h3>
-     * <b>两层都要成立</b>, 任何一层有东西就不估:
+     * 两层, 任何一层有东西就不估:
      * <ul>
      *   <li><b>批级</b>: 本批的调料桶贡献必须<b>恰好为 0</b>({@code seasoningAlreadyCollected}) ——
      *       报工侧 SEASONING 桶的 {@code materialCost}、实际耗用行、上游 WIP 链带来的调料,
@@ -703,6 +711,16 @@ public class OrderCostBreakdownService {
      *   <li><b>物料级</b>: 该辅料的 {@code materialTypeId} 不得出现在本批<b>任何类别</b>的耗用行里
      *       (辅料被人记成 {@code RAW_MATERIAL} 是存量里会有的形态)。</li>
      * </ul>
+     * 🔴 <b>两层不是「串联的两道闸」——第二层的实际作用面比它读起来窄得多。</b>
+     * 一条<b>有量</b>的辅料耗用行会先把调料桶顶成非 0, 批级那层就已经返回了, 物料级根本够不着。
+     * ⇒ 物料级<b>独有</b>的作用面只剩两种形态:
+     * <ol>
+     *   <li>那条记录的 {@code quantity = 0}(成本贡献仍是 0, 批级放行) —— 见下一段;</li>
+     *   <li>辅料被记在<b>别的 {@code sourceType}</b> 下(例如 {@code RAW_MATERIAL}),
+     *       所以它没进调料桶、批级同样放行。</li>
+     * </ol>
+     * ⛔ 不要把这两层描述成「双保险」: 变异实测(去掉物料级过滤)只让 {@code quantity = 0}
+     * 那个场景变红, 有量的实际记录场景<b>纹丝不动</b> —— 因为那一条本来就由批级挡着。
      * <b>⚠️ {@code quantity = 0} 的记录算记录 —— 不估。</b> 0 是操作员明确说的「这次没用」,
      * 而 null/无行才是「还不知道」。本仓已经就这条定过案(缺陷43 零值行不删「0 是明确的事实」、
      * {@code confirmPickingAuxDerive.ts}「0 = 明确这次不领, null = 还不知道」)。拿估算去覆盖一个
@@ -711,13 +729,19 @@ public class OrderCostBreakdownService {
      * <b>各 0 条</b>(F006 337 行 / LIUSHANMEN 33 行) ⇒ 这一分支目前只在测试桩上到得了,
      * 生产行为不受它影响。
      *
-     * <h3>① - b 部分记录 (有的工序记了、有的没记) → <b>整条按已记录处理, 不估余量</b></h3>
+     * <h3>① - b 部分记录 (有的记了、有的没记) → <b>按已记录处理, 不估余量; 但必须留痕</b></h3>
      * 「余量 = BOM 应耗 − 已记录」这个减法的前提是「BOM 配比是真值、记录是残缺的」。
      * 实际同样可能是「这次就是少放了」。在一条<b>真实记录</b>之上再加一段估算, 会把成本推高而且
      * 无法证伪 —— 保守读法是<b>信记录</b>, 只在<b>完全沉默</b>的地方补估。
      * <p>⚠️ 与 {@code settlementConsumptionsFor} 的 {@code max(0, 结单量 − 已耗用量)} 不同源:
      * 那里两侧都是<b>对同一件事的记录</b>(结单领用 vs 逐道耗用), 取差是对账; 这里一侧是记录、
      * 另一侧是<b>计划</b>, 取差是拿计划去否定记录。
+     * <p>🔴 <b>不补差 ≠ 不出声。</b> 只做到「不补差」就还是一次<b>静默少算</b>:
+     * BOM 里两种调料只记了一种时, 已记录的那种给出非 null 成本 ⇒ {@code costComplete=true}、
+     * 成本看起来完整, 而它实际短了未记录那几种的钱。⇒ 批级门触发且<b>确实有辅料被逐物料记录过</b>时,
+     * 给每一条无记录的辅料写一条 {@code AUX_PARTIALLY_RECORDED:<名称>} 进
+     * {@link OrderCostBreakdownDTO#getPartiallyRecordedAuxItems()} ——
+     * ⛔ 非阻断、⛔ 不进 {@code missingCostItems}、⛔ 不改策略, 只是让人看得见。
      *
      * <h3>② 单价用哪个</h3>
      * BOM 调料行自己的 {@code priceSource1}(优先) / {@code priceSource2}, 走
@@ -739,6 +763,17 @@ public class OrderCostBreakdownService {
      * <p>{@code estimatedAuxItems} 里<b>只放估出来了的行</b> —— 让这份清单只表达一件事
      * (「这些是估的」); 没估出来的那些在 {@code missingCostItems} 里, 由
      * {@code ProductionPlanServiceImpl#missingCostItemLabel} 翻成人话。
+     * <p>📌 三个码在生产库上的实际触发面(2026-09-06 只读实测):
+     * <ul>
+     *   <li>{@code ESTIMATED_AUX_PRICE_MISSING} —— 全厂 {@code bom_seasoning_items} 134 行里
+     *       <b>64 行无价</b>; 落到已结单计划上只命中 <b>1 个</b>
+     *       ({@code LIUSHANMEN / PP-AUTO-20260829-0007}, 7 条辅料里 6 条无价)。</li>
+     *   <li>{@code ESTIMATED_AUX_RATIO_MISSING} —— <b>当前触发不了</b>: 134 行
+     *       {@code dosage_per_kg_g} <b>0 条缺失</b>。它守的是「以后有人把配比删空」,
+     *       ⛔ 不要因为它现在不亮就把它删掉。</li>
+     *   <li>{@code ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE} —— 同样触发不了:
+     *       126 行主料耗用的批次单位<b>全是 kg</b>。</li>
+     * </ul>
      *
      * <h3>④ 单位一致性</h3>
      * <ul>
@@ -769,12 +804,10 @@ public class OrderCostBreakdownService {
             BigDecimal seasoningAlreadyCollected,
             BigDecimal rawInputKg,
             List<OrderCostBreakdownDTO.EstimatedAuxItem> out,
+            List<String> partiallyRecordedOut,
             List<String> missingCostItems) {
         if (bomSeasoningItemRepository == null || batch == null) {
             return BigDecimal.ZERO;   // 依赖缺失(纯 Mockito 单测) → 整块跳过, 零回归
-        }
-        if (nz(seasoningAlreadyCollected).signum() != 0) {
-            return BigDecimal.ZERO;   // ① 批级: 已经归集过辅料成本, 再估就是双计
         }
         BatchBomBinding.Resolved binding = BatchBomBinding.resolve(batch, plan);
         if (!binding.pinned()) {
@@ -794,20 +827,55 @@ public class OrderCostBreakdownService {
         }
         // ⚠️ findByRecipeIdOrderBySeqAsc 不带 factoryId —— 这里自己收租户口径,
         //    与本类其它查询 (findByIdAndFactoryId / findByFactoryIdAnd…) 同一条纪律。
-        List<com.cretas.aims.entity.bom.BomSeasoningItem> candidates = rows.stream()
+        // 这一步只做「本租户 + 算进调料成本 + 绑了物料档案」三个过滤, 先【不】剔已有耗用记录的 ——
+        // 下面判「部分记录」要拿完整集合去问「这张 BOM 的辅料里有没有【任何一条】被逐物料记过」。
+        // ⛔ 没绑物料档案的调料行只是配方文本, 领不出实物也估不出成本 —— 整条跳过且不报缺
+        //    (与 appendSeasoningItems 同一条口径: 它本来就不是一笔可发生的成本)。
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> costCountingRows = rows.stream()
                 .filter(Objects::nonNull)
                 .filter(s -> factoryId.equals(s.getFactoryId()))
                 .filter(com.cretas.aims.service.bom.SeasoningRatioContract::countsTowardSeasoningCost)
-                // 没绑物料档案的调料行只是配方文本, 领不出实物也估不出成本 —— 整条跳过,
-                // ⛔ 也不报缺 (与 appendSeasoningItems 同一条口径: 它本来就不是一笔可发生的成本)。
                 .filter(s -> s.getMaterialTypeId() != null && !s.getMaterialTypeId().isBlank())
+                .collect(Collectors.toList());
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> candidates = costCountingRows.stream()
                 .filter(s -> !recordedMaterialTypeIds.contains(s.getMaterialTypeId()))
                 .collect(Collectors.toList());
         if (candidates.isEmpty()) {
-            return BigDecimal.ZERO;
+            return BigDecimal.ZERO;   // 这张 BOM 的辅料条条都有记录 —— 没有缺口, 也没有可估的
         }
         String batchLabel = batch.getBatchNumber() != null
                 ? batch.getBatchNumber() : String.valueOf(batch.getId());
+        // ── ① 批级门: 本批已经归集过调料成本 ⇒ 不估 (再估就是双计) ──────────────────────
+        //   🔴 2026-09-06 终审抠下来的洞: 这条 return 之前是【静默】的。
+        //   BOM 里两种调料、实耗只记了一种 ⇒ 本门直接返回, 第二种既不估也不喊,
+        //   而已记录的那一种给出非 null 成本 ⇒ 成本【看起来完整】、实际短了未记录的那几种。
+        //   那正是本 PR 要消灭的「静默少算」, 在这条路上原样活着。
+        //
+        //   ⛔ 修法只加【留痕】, 不改策略: 仍然不补差(「信记录不补差」见上方 ①-b),
+        //   仍然不阻断 costComplete —— marker 走独立的 partiallyRecordedAuxItems 清单,
+        //   【不】进 missingCostItems。这样「它阻断不了」是【结构上】保证的, 而不是靠记得把它
+        //   登记进 OPTIONAL_COST_ITEM_CODES(那个集合的 javadoc 明令禁止加「缺价」类的项)。
+        //
+        //   ⚠️ 只在【确实有辅料被逐物料记录过】时才写 marker。否则那不叫「部分记录」:
+        //   调料成本也可能整个来自报工侧的一笔总额(或上游 WIP 链), 那是「按批次粒度记录」,
+        //   对逐物料覆盖度无法断言 —— 给每一条辅料都挂 marker 就是噪声(本仓形态 E:
+        //   宁可窄而可信, 不要宽而被关掉)。
+        //   📌 实测(2026-09-06): 22 个已结单计划里 17 个有 SEASONING 记录, 这 17 个的
+        //   BOM 辅料【条条都有记录】(would_get_marker 全 0) ⇒ 本 marker 当前零触发,
+        //   它守的是缺口, 不是现状。
+        boolean anyAuxRecorded = costCountingRows.stream()
+                .anyMatch(s -> recordedMaterialTypeIds.contains(s.getMaterialTypeId()));
+        if (nz(seasoningAlreadyCollected).signum() != 0) {
+            if (anyAuxRecorded) {
+                for (com.cretas.aims.entity.bom.BomSeasoningItem s : candidates) {
+                    partiallyRecordedOut.add("AUX_PARTIALLY_RECORDED:" + auxLabel(s));
+                }
+                log.info("[M67CostBreakdown] 辅料部分记录: {} 项无耗用记录且按「信记录不补差」未估算"
+                                + " factory={} batch={} recipe={}",
+                        candidates.size(), factoryId, batchLabel, binding.recipeId());
+            }
+            return BigDecimal.ZERO;
+        }
         if (rawInputKg == null) {
             missingCostItems.add("ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE:" + batchLabel);
             return BigDecimal.ZERO;
@@ -817,8 +885,7 @@ public class OrderCostBreakdownService {
         }
         BigDecimal total = BigDecimal.ZERO;
         for (com.cretas.aims.entity.bom.BomSeasoningItem s : candidates) {
-            String label = s.getName() != null && !s.getName().isBlank()
-                    ? s.getName() : s.getMaterialTypeId();
+            String label = auxLabel(s);
             BigDecimal grams = com.cretas.aims.service.bom.SeasoningRatioContract
                     .requiredGrams(s, rawInputKg);
             if (grams == null) {
@@ -863,6 +930,16 @@ public class OrderCostBreakdownService {
                     out.size(), total, factoryId, batchLabel, binding.recipeId(), rawInputKg);
         }
         return total;
+    }
+
+    /**
+     * 一条 BOM 调料行在提示里怎么称呼 —— 有名字用名字, 没有才退回 materialTypeId。
+     *
+     * <p>三个 {@code ESTIMATED_AUX_*} 码与 {@code AUX_PARTIALLY_RECORDED} 共用它, 保证同一条
+     * 辅料在四种提示里是<b>同一个称呼</b> (本仓形态 D: 同一个东西有两份必定漂)。
+     */
+    private static String auxLabel(com.cretas.aims.entity.bom.BomSeasoningItem s) {
+        return s.getName() != null && !s.getName().isBlank() ? s.getName() : s.getMaterialTypeId();
     }
 
     /**
@@ -1940,6 +2017,7 @@ public class OrderCostBreakdownService {
                 .missingCostItemCount(0).missingCostItems(List.of())
                 .customerSuppliedItemCount(0).customerSuppliedItems(List.of())
                 .estimatedAuxItemCount(0).estimatedAuxItems(List.of())
+                .partiallyRecordedAuxItemCount(0).partiallyRecordedAuxItems(List.of())
                 .sources(List.of()).byproducts(List.of())
                 .rawMaterialDetails(List.of()).packagingDetails(List.of()).laborDetails(List.of())
                 .build();

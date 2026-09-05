@@ -55,7 +55,11 @@ import static org.mockito.Mockito.when;
  * <ol>
  *   <li>估出来了、金额对、并且带「按配比估算」标签（阳性）</li>
  *   <li><b>有</b>实际耗用记录的辅料<b>不</b>估（阴性对照，三种形态：有量的记录 / 量=0 的记录 /
- *       报工侧已归集的调料成本）—— 少一条这三者里的任何一条都会造成双计</li>
+ *       报工侧已归集的调料成本）—— 少一条这三者里的任何一条都会造成双计。
+ *       ⚠️ 这两层<b>不是串联的双保险</b>: 有量的记录先把调料桶顶成非 0, 批级门就返回了,
+ *       物料级过滤根本够不着 —— 它独有的作用面只有「量=0 的记录」和「记在别的 sourceType 下」</li>
+ *   <li>批级门触发但 BOM 里还有<b>一条记录都没有</b>的辅料 ⇒ 写
+ *       {@code AUX_PARTIALLY_RECORDED} marker（非阻断），⛔ 否则就是「静默少算」</li>
  *   <li>缺配比 / 缺单价 ⇒ 进 {@code missingCostItems} 并<b>阻断</b>，⛔ 不按 0 计（阴性对照）</li>
  *   <li>主料投入量折不成 kg ⇒ 整批不估并报缺，⛔ 不拿「能折的那部分」当基数</li>
  *   <li>#580 客供主料逻辑<b>零回归</b>：客供料仍然计 ¥0，但它的<b>物理投入量照样进估算基数</b></li>
@@ -258,6 +262,62 @@ class EstimatedAuxByBomRatioContractTest {
         // 只有实际耗用的 0.5×3.00, ⛔ 不是 1.50+1.60
         assertThat(dto.getSeasoningCost()).isEqualByComparingTo("1.50");
         assertThat(dto.getMissingCostItems()).noneMatch(i -> i.startsWith("ESTIMATED_AUX_"));
+        // BOM 里就这一条辅料, 而它有记录 ⇒ 没有缺口 ⇒ ⛔ 不该有「部分记录」marker
+        assertThat(dto.getPartiallyRecordedAuxItems()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("🔴 部分记录留痕: BOM 两种调料只记了一种 ⇒ 成本仍按记录算(不补差), "
+            + "但未记录的那种要写 AUX_PARTIALLY_RECORDED marker —— 否则成本看起来完整、实际短了它")
+    void partiallyRecordedAuxIsMarkedInsteadOfSilentlyDropped() {
+        stubBatch(List.of(consumption("MB-SALT", "MT-SALT", "SEASONING", "0.5", "3.00")));
+        stubMaterialBatch("MB-SALT", "食用盐-0001", "kg", "3.00", InventoryOwnership.COMPANY_OWNED);
+        stubBom(seasoning("MT-SALT", "食用盐", "10", "2.00", null),
+                seasoning("MT-PEPPER", "黑胡椒粉", "5", "40.00", null));
+
+        OrderCostBreakdownDTO dto = compute();
+
+        // 策略没变: 不补差 —— 成本仍然只含已记录的那 0.5×3.00
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("1.50");
+        assertThat(dto.getEstimatedAuxItems()).isEmpty();
+        // ...但缺口要看得见, 且【不阻断】
+        assertThat(dto.getPartiallyRecordedAuxItems())
+                .containsExactly("AUX_PARTIALLY_RECORDED:黑胡椒粉");
+        assertThat(dto.getPartiallyRecordedAuxItemCount()).isEqualTo(1);
+        assertThat(dto.isCostComplete()).isTrue();
+        assertThat(dto.getTotalCost()).isNotNull();
+        // ⛔ marker 绝不能混进 missingCostItems —— 那会把它变成阻断项
+        assertThat(dto.getMissingCostItems()).noneMatch(i -> i.startsWith("AUX_PARTIALLY_RECORDED"));
+
+        // 人话版要说出来, 并且说清它是「按已记录算的下限」而不是「算不出」
+        String note = ProductionPlanServiceImpl.describeEstimatedAuxNote(dto);
+        assertThat(note).isNotNull();
+        assertThat(note).contains("黑胡椒粉").contains("没有任何耗用记录").contains("下限");
+        assertThat(note).doesNotContain("算不出");
+    }
+
+    @Test
+    @DisplayName("阴性对照⑨: 调料成本整个来自报工侧一笔总额(没有任何逐物料记录) ⇒ ⛔ 不写 marker —— "
+            + "那是「按批次粒度记录」, 对逐物料覆盖度无法断言, 逐条挂 marker 就是噪声")
+    void reportedLumpSeasoningDoesNotProducePartialRecordMarkers() {
+        BatchYieldDTO reported = BatchYieldDTO.builder()
+                .totalLaborCost(BigDecimal.ZERO)
+                .steps(List.of(
+                        StepYieldDTO.builder().processOrder(1).costCategory("RAW_MATERIAL")
+                                .materialCost(BigDecimal.ZERO).build(),
+                        StepYieldDTO.builder().processOrder(2).costCategory("SEASONING")
+                                .materialCost(new BigDecimal("42.00")).build()))
+                .build();
+        stubBatch(List.of(), reported);
+        stubBom(seasoning("MT-SALT", "食用盐", "10", "2.00", null),
+                seasoning("MT-PEPPER", "黑胡椒粉", "5", "40.00", null));
+
+        OrderCostBreakdownDTO dto = compute();
+
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("42.00");
+        assertThat(dto.getEstimatedAuxItems()).isEmpty();
+        assertThat(dto.getPartiallyRecordedAuxItems()).isEmpty();
+        assertThat(ProductionPlanServiceImpl.describeEstimatedAuxNote(dto)).isNull();
     }
 
     @Test
@@ -436,9 +496,16 @@ class EstimatedAuxByBomRatioContractTest {
 
         // 阴性对照: 没有估算行就不该多这一句 (否则每次重算都挂一句无意义的话)
         OrderCostBreakdownDTO none = OrderCostBreakdownDTO.builder()
-                .estimatedAuxItems(List.of()).build();
+                .estimatedAuxItems(List.of()).partiallyRecordedAuxItems(List.of()).build();
         assertThat(ProductionPlanServiceImpl.describeEstimatedAuxNote(none)).isNull();
         assertThat(ProductionPlanServiceImpl.describeEstimatedAuxNote(null)).isNull();
+        // 两份清单都空才闭嘴; 只有 marker 也要说话 (⛔ 否则静默少算又回来了)
+        OrderCostBreakdownDTO onlyMarker = OrderCostBreakdownDTO.builder()
+                .estimatedAuxItems(List.of())
+                .partiallyRecordedAuxItems(List.of("AUX_PARTIALLY_RECORDED:黑胡椒粉")).build();
+        assertThat(ProductionPlanServiceImpl.describeEstimatedAuxNote(onlyMarker))
+                .isNotNull()
+                .contains("黑胡椒粉");
     }
 
     // ──────────────────── 共享口径 (形态 D) ────────────────────

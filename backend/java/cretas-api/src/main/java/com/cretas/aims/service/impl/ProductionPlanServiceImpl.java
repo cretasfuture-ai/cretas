@@ -5770,13 +5770,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     public static String describeEstimatedAuxNote(
             com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
-        if (breakdown == null || breakdown.getEstimatedAuxItems() == null
-                || breakdown.getEstimatedAuxItems().isEmpty()) {
+        if (breakdown == null) {
             return null;
         }
         List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO.EstimatedAuxItem> items =
-                breakdown.getEstimatedAuxItems();
+                breakdown.getEstimatedAuxItems() == null
+                        ? List.of() : breakdown.getEstimatedAuxItems();
+        List<String> partiallyRecorded = breakdown.getPartiallyRecordedAuxItems() == null
+                ? List.of() : breakdown.getPartiallyRecordedAuxItems();
+        if (items.isEmpty() && partiallyRecorded.isEmpty()) {
+            return null;
+        }
         StringBuilder sb = new StringBuilder();
+        if (items.isEmpty()) {
+            // 只有「部分记录」没有估算行 —— 直接说那一段, 见本方法末尾。
+            return describePartiallyRecordedAux(partiallyRecorded);
+        }
         sb.append("含").append(com.cretas.aims.service.yield.OrderCostBreakdownService.ESTIMATED_AUX_LABEL)
                 .append("的辅料 ").append(items.size()).append(" 项(无实际耗用记录, 按 BOM 配比 × 实际主料投入折算)");
         int shown = 0;
@@ -5798,6 +5807,51 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             shown++;
         }
         sb.append("。这部分是估算值, 不是实际领用记录; 要拿到实际成本请补录辅料领用后重新核算。");
+        String partial = describePartiallyRecordedAux(partiallyRecorded);
+        if (partial != null) {
+            sb.append(partial);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 🔴 辅料<b>部分记录</b>的那一句（2026-09-06 终审补）。
+     *
+     * <p>本批<b>有</b>辅料实耗记录, 但同一张 BOM 里还有几种<b>一条记录都没有</b> ——
+     * 按「信记录不补差」口径这几种<b>不估</b>, 于是本批调料成本只含已记录的那几种。
+     * <b>不说出来就是静默少算</b>: 成本非 null、看起来完整, 实际短了这几种的钱。
+     *
+     * <p>⛔ 措辞里不要写成「缺项」或「算不出」—— 它<b>不阻断</b>成本, 说的是<b>口径</b>:
+     * 这个数就是「按已记录的算出来的」, 用户要更全的数就去补录。
+     *
+     * @return {@code null} = 本次没有部分记录的辅料, 无需多嘴
+     */
+    static String describePartiallyRecordedAux(List<String> partiallyRecorded) {
+        if (partiallyRecorded == null || partiallyRecorded.isEmpty()) {
+            return null;
+        }
+        List<String> names = partiallyRecorded.stream()
+                .map(item -> {
+                    int sep = item.indexOf(':');
+                    return sep < 0 ? item : item.substring(sep + 1);
+                })
+                .toList();
+        StringBuilder sb = new StringBuilder();
+        sb.append("另有 ").append(names.size())
+                .append(" 项辅料本批没有任何耗用记录, 按「以实际记录为准、不补差」口径未计入成本(所以这个成本是偏低的下限): ");
+        int shown = 0;
+        for (String name : names) {
+            if (shown >= MAX_LISTED_MISSING_COST_ITEMS) {
+                sb.append("; 等共 ").append(names.size()).append(" 项");
+                break;
+            }
+            if (shown > 0) {
+                sb.append("、");
+            }
+            sb.append(name);
+            shown++;
+        }
+        sb.append("。要把它们算进来, 请补录这几项的辅料领用后重新核算。");
         return sb.toString();
     }
 
