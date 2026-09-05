@@ -140,3 +140,15 @@
 - 普查：`findUnsettledStockFeedRows` 1 调用方改 1；`PendingInterimFeedService` 2 消费方经单点继承；`Snapshot` 构造 3 处改 2 留 1；`DeferredDeductionCompensationContractTest` 未动且绿。五个变异先打印再红（含「保留排除但静默计数器」M5）。47/0/0。
 - prod：LSM 56 活行在 5 个硬删计划上、全已结算；**全 prod 唯一一条 `semiFinished:true`（row 1500，`CLK-SEMI-5c711e0b-c76f35be`）正坐在其中一个硬删计划上**（08-29 已结算）⇒ 今天 0 是运气。⚠️ 订正：F006「8 行在软删计划上」自身就是软删行（`@Where` 已排），活行在已删计划上 = 0；但 F006 有 **2 条未结算行挂在 1 个 COMPLETED 计划上**——漏盖章 vs 冲销后重新待结算，两种成因读数相同，PR 选择浮出。
 - 登记：删除侧缺口——硬删 `production_plans` 不级联 `process_sheet_rows`；本仓 `@SQLDelete` 软删全局，这 5 个计划为何是硬删、谁在硬删，待查。56 行不清理（全已结算，修后贡献 0，清理纯风险）。
+
+
+## 2026-09-06 05:40 `BUG-SFI-REVERSE-CLASSIFIER-LOCKOUT-20260906` 归档 — #618 发 39 上线
+
+原条目：- `BUG-SFI-REVERSE-CLASSIFIER-LOCKOUT-20260906` — `review` — Owner: executor（organizer 派） — PR #618：分类器加符号 + `isLegacyInLegCompensation` 按冲销日志认领判遗留补偿；迁移 `_33` 只回填 141/142/143（歧义拒猜，docker 六态）；对账契约测试 + 三态探针（活 prod 29 测/25 对/4 已知差）。REVERSE 读者普查 10 改 2 留 8。🔒 终审中。
+
+- **终审可合**：迁移谓词逐段判（`reverted_txn_ids @> to_jsonb(id)`、`n_logs=1` 歧义拒猜、IN 腿四重约束、`HAVING COUNT(*)=1`、幂等），prod dry-run 恰 3 行；分类器双路径按符号互斥、顺序无关；378 仍 409 是有意克制；四象限「不是替代关系」成立（代码修类、迁移修账）；探针基线按成因非 id。需改两条已补（`44f210c6b5`）：认领日志加 `deleted_at IS NULL`（今天 18 条日志全未软删，零变化；docker 第六态 + 变异 M3）；三份对账口径加可执行对拍（`crossCheckAgainstReplayMovingAverage` 反射调权威 `replayMovingAverage`，变异 C2 红）。
+- 🔴 **执行者自抓一个假对拍**：第一版把账面种成正确答案，「两边相等」也可能是「两边都没跑」；改成故意错的种子 `2.50/0.00/2.50`（且须 ≤ ΣIN，否则权威先抛 `WIP_LEDGER_INCOMPLETE`——那个异常反过来证明权威真的执行了）。
+- 全量套件 13031/0/0（7m04s），三个新类在 CI 各执行 5/4/6，`XCHECK` 行在 CI 日志里打出来了。
+- **发 39**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 05:37:20 < 启动 05:37:41、`isLegacyInLegCompensation` 1 / `V20261101_33` 在 jar 1 / 假串 0、health 200。**库内**：`flyway 20261101.33 success 05:37:51`；txn 141→23919 / 142→23921 / 143→23923（恰三行）、145/146 原样、遗留负号无章 REVERSE 剩 **0**、REVERSE 总数 13 不变。
+- 登记：378（`interim-settle-reverse-in:`）与 F006 343/344 不动；`WIP_LEDGER_INCOMPLETE` 锁 F006 331/342/343/344 是另一缺陷（盘点 ADJUST）；探针接 cron 时基线按 `NO_LEDGER`/`PRODUCED_OFF` 成因过滤 + 配计数读数，⛔ 不硬编码 id。
+- ⚠️ 运维：**子代理共用 organizer 的 scratchpad 目录**——#618 执行者的 `pr_body.md` 被 #620 执行者覆盖（它重新从 GitHub 拉 body 写到唯一命名文件）。以后 brief 里让执行者用带任务 ID 的文件名。
