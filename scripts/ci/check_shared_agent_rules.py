@@ -101,7 +101,7 @@ def main() -> int:
         print("  (以 .claude/rules/ 为源覆盖 .codex/rules/)")
         return 1
 
-    print("shared-rules: PASS (%d 条共享规则两侧逐字相同)" % checked)
+    print("shared-rules: PASS (%d 条共享规则两侧逐字相同, %d 个 .codex 指针目标有效)" % (checked, pointer_checked))
     return 0
 
 
