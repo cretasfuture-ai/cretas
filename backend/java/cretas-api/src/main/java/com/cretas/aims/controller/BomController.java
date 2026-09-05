@@ -49,6 +49,7 @@ public class BomController {
     private final BomService bomService;
     private final RecursiveBomExpansionService recursiveBomExpansionService;
     private final BomYieldEstimateService bomYieldEstimateService;
+    private final com.cretas.aims.service.bom.WorkflowBomExportService workflowBomExportService;
 
     /** P1-9 BOM 变更痕迹查询 Repository (可选注入, 老环境未部署 migration 时不阻塞) */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -164,6 +165,36 @@ public class BomController {
         return ApiResponse.success(
                 bomYieldEstimateService.recalculatePreview(factoryId,
                         (productTypeIds != null && !productTypeIds.isEmpty()) ? productTypeIds : null));
+    }
+
+    /**
+     * 工艺 / BOM 导出 Excel (只读)。
+     * GET /api/mobile/{factoryId}/bom/workflow-export?productTypeIds=a,b
+     *
+     * <p>会上被问了三次 ({@code [14:18]}/{@code [14:48]}/{@code [28:07]}):
+     * 「好多客户他是要一个这种 Excel 表格，自己作为线下的存档备份」。</p>
+     *
+     * <p>⛔ 只读投影, 不接受回写 —— 会上还提过「再复制一个模块」,
+     * 那会做出两份可编辑的配方, 而同一个东西有两份一定会漂。</p>
+     */
+    @GetMapping("/workflow-export")
+    @Operation(summary = "工艺/BOM 导出 Excel (只读)",
+            description = "把工艺画布与 BOM 摊成一张平表: 成品/工序号/工序/投入产出/物料/标准用量/份额%/单位/标准出成率/工艺版本/备注。"
+                    + "只导已发布的工艺版本 (草稿不导)。算不出的项留空并在备注写明, 不填 0。")
+    public void exportWorkflowBom(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestParam(required = false) @Parameter(description = "成品ID, 逗号分隔; 不传=全厂") List<String> productTypeIds,
+            jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        log.info("[WorkflowBomExport] factoryId={}, productTypeIds size={}",
+                factoryId, productTypeIds == null ? 0 : productTypeIds.size());
+        byte[] data = workflowBomExportService.export(factoryId, productTypeIds);
+        String filename = java.net.URLEncoder.encode(
+                "工艺与BOM.xlsx", java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"workflow-bom.xlsx\"; filename*=UTF-8''" + filename);
+        response.getOutputStream().write(data);
+        response.getOutputStream().flush();
     }
 
     /**

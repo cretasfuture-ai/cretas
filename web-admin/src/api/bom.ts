@@ -7,7 +7,7 @@
  * Base URL is /api/mobile (set in request.ts baseURL).
  * Endpoint prefix: /{factoryId}/bom/recipes/{recipeId}/...
  */
-import { del, get, post, put } from './request';
+import request, { del, get, post, put } from './request';
 
 // =========================================================================
 // BOM Recipe — status types + activate API
@@ -825,4 +825,28 @@ export interface SeasoningBindingMutation {
 export interface SeasoningBindingMutationResponse {
   seasoningRevision: number;
   binding: SeasoningBindingView;
+}
+
+// =========================================================================
+// 工艺 / BOM 导出 Excel (只读投影)
+//
+// 会议 2026-09-05 被问了三次 ([14:18]/[14:48]/[28:07]):
+// 「好多客户他是要一个这种 Excel 表格, 自己作为线下的存档备份」。
+//
+// ⛔ 只读, 不接受回写 —— 会上还提过「再复制一个模块」, 那会做出两份可编辑的
+//    配方, 而同一个东西有两份一定会漂。导出解决的是「看不清 / 要存档」,
+//    不是「换个地方维护」。
+// =========================================================================
+
+/**
+ * 导出工艺与 BOM (Blob)。
+ * @param productTypeIds 不传 = 全厂所有有工艺的成品
+ */
+export function exportWorkflowBom(factoryId: string, productTypeIds?: string[]) {
+  return request.get(`/${factoryId}/bom/workflow-export`, {
+    params: productTypeIds && productTypeIds.length
+      ? { productTypeIds: productTypeIds.join(',') }
+      : {},
+    responseType: 'blob',
+  });
 }
