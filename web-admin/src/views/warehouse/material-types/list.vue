@@ -252,16 +252,32 @@ function isPackagingCategory(category: string | null | undefined): boolean {
 const isPackagingMaterial = computed(() => isPackagingCategory(form.value.category));
 
 // P8: 客户列表 (用于 associatedCustomerId 下拉)
-// 客户张权反馈 (2026-07-02): "关联固定客户" 下拉显示"没有数据"。根因排查 (headed + curl F006 对比):
-// 之前调的 GET /{factoryId}/customers 是 CRM 客户列表页用的接口, 服务端加了
-// @DataScope("created_by") (Sprint 6 W2-B RBAC 第2维数据权限) — SELF/SELF_AND_BELOW/DEPT_AND_BELOW
-// 数据域的角色只能看到"自己创建过的客户", 仓库管理员角色几乎从没建过客户记录, 所以这个接口对他们
-// 合法返回 0 条 (不是 bug, 是 CRM 列表页故意的数据域隔离), 但拿来给"关联固定客户"这种引用型下拉用
-// 就是错的接口 — 后端另有专门为下拉场景准备的 GET /{factoryId}/customers/active
-// (CustomerController.getActiveCustomers, 无 DataScope 限制, 文档原话"用于下拉选择等场景"),
-// 跟本文件"关联原料"下拉复用的 /raw-material-types/active 是同一套设计模式。改调这个接口即修复
-// (curl 对比: F006 /customers 对 factory_super_admin 返 17 条能"凑巧"验证通过, 但换 DataScope=SELF
-// 角色会是 0 条; /customers/active 两种角色都稳定返回全部 17 条)。
+//
+// 客户张权反馈 (2026-07-02): "关联固定客户" 下拉显示"没有数据"。根因: 当时调的
+// GET /{factoryId}/customers 是 CRM 客户列表页用的接口, 服务端加了 @DataScope("created_by")
+// (Sprint 6 W2-B RBAC 第2维数据权限) — SELF/SELF_AND_BELOW/DEPT_AND_BELOW 数据域的角色只能看到
+// "自己创建过的客户", 仓库管理员几乎从没建过客户记录, 所以对他们合法返回 0 条。
+// 拿它给"关联固定客户"这种**引用型下拉**用就是错的接口。
+//
+// 🔴 2026-09-06 第二次改这一行 (SEC-CUSTOMER-ROSTER-REMAINING-PATHS)。7-02 那次改成了
+//    GET /customers/active, 当时写下的理由原话是「无 DataScope 限制…两种角色都稳定返回全部
+//    17 条」—— 也就是说, 它是**因为那个端点没有任何权限门**才被选中的。
+//    owner 2026-09-06 裁定「客户名单只有 销售/财务/工厂管理员/运营 能看」之后, /active 按裁定
+//    关到 sales|finance 四个码, 而 warehouse_manager / warehouse_worker 在 L1 上
+//    sales='-' finance='-' ⇒ 这个下拉会 403。
+//    ⛔ 解法**不是**把 /active 继续开着 (那等于让一个仓储下拉决定全厂客户名单的可见性),
+//    而是给这个下拉一个刚好够用的口子:
+//
+//      GET /{factoryId}/customers/warehouse-options
+//        · 只返回 { id, name } —— ⛔ 没有电话/邮箱/税号/信用额度/余额/累计销售额
+//          (那些字段今天经 /active 是**全部**吐给仓库员的);
+//        · @RequirePermission({"warehouse:read_write","warehouse:read"}) —— 与本页自己的
+//          路由模块闸 (meta.module='warehouse' ⇒ permissionStore.canAccess('warehouse'))
+//          **完全同宽**: 打得开本页的角色恰好放行, 打不开的一个都不放行;
+//        · 无 @DataScope —— 引用型下拉必须给全集, 这一点与 7-02 的判断一致。
+//
+//    ⚠️ 下一个人想给这个下拉加字段 (比如显示联系人/电话) 之前请先读那个端点的注释:
+//    它现在的宽度是「一个仓储录入字段所需的最小值」, 不是一个通用客户下拉。
 interface CustomerItem { id: string; name: string }
 const customerOptions = ref<CustomerItem[]>([]);
 const customerOptionsLoaded = ref(false);
@@ -269,7 +285,7 @@ async function loadCustomers() {
   if (!factoryId.value || customerOptions.value.length > 0) return;
   try {
     const res = await get<CustomerItem[] | { content?: CustomerItem[] }>(
-      `/${factoryId.value}/customers/active`,
+      `/${factoryId.value}/customers/warehouse-options`,
     );
     const data = res.data;
     customerOptions.value = Array.isArray(data) ? data : (data as { content?: CustomerItem[] })?.content ?? [];
