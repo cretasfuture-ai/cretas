@@ -27,6 +27,15 @@ import jakarta.persistence.*;
 // **0 处调用**, 也没有任何 CascadeType.REMOVE/ALL 关联指向 ProcessSheetRow
 // ⇒ 本注解今天是防御性的(运行时零行为变化)。这张表正是 2026-08-29 那次带外 SQL 清理
 // 漏删而留下 56 行孤儿的表, 所以它尤其不该有一条静默的物理删路径。
+//
+// 🔴 谁将来第一次给这张表写 delete() 路径, 必须同时收紧 uk_sheet_row:
+//   prod 上它是 UNIQUE (factory_id, plan_id, process_code, client_row_id), 谓词里
+//   **没有** deleted_at IS NULL ⇒ 软删行会继续占着这个自然键, 而 upsert 前的存在性查询
+//   (派生查询, 被类级 @Where 过滤) 看不见它 ⇒ 查不到就 INSERT ⇒ 23505 永久撞。
+//   这正是 SoftDeleteBlindSpotContractTest 记的那一类。今天不改, 是因为普查下来
+//   ProcessSheetRowRepository 一处 delete 都没有 ⇒ 不可能产生软删行(登记, 不是豁免)。
+//   同型的 uk_production_plan_create_request 已经在 V20261101_34 里收紧了 ——
+//   因为 ProductionPlan **有**删除路径, 那一条是真会咬人的。
 @SQLDelete(sql = "UPDATE process_sheet_rows SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProcessSheetRow extends BaseEntity {
