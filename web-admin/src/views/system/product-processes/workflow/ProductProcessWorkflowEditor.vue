@@ -1106,6 +1106,7 @@ import {
   type SeasoningWorkspace,
 } from '@/api/bom';
 import { bigCategoryOf } from '@/utils/materialCategory';
+import { toDateString } from '@/utils/dateFormat';
 import {
   selectAuxiliaryMaterials,
   selectByproductMaterials,
@@ -2683,7 +2684,10 @@ async function exportWorkflowBomToExcel(): Promise<void> {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `工艺与BOM_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    // ⛔ 不用 toISOString().slice(0,10): 那是 UTC 日。后端全线 GMT+8, 本地 9-06 00:30
+    //    导出会写成 2026-09-05 —— 差一天, 而客户是拿这个文件名当存档日期的。
+    //    (这一处是 noUtcDayTruncation 那道棘轮闸抓到的, 不是我自己看出来的)
+    a.download = `工艺与BOM_${toDateString(new Date())}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
     ElMessage.success('已导出');
