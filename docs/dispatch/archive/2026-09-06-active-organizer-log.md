@@ -80,3 +80,12 @@
 - **发 35**：首次 `unified release requires a clean worktree`——部署树里 `frontend/CretasFoodTrace/yarn.lock` 被 09-05 OTA 导出时的 `npm install` 改了。清理规则：先列脏项、只在全部是构建/安装产物时才清、否则停手。重发 `DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 02:40:39 < 启动 02:40:58、`estimateAuxByBomRatio` 5 / `AUX_PARTIALLY_RECORDED` 1 / `SeasoningRatioContract.class` 1 / 假串 0、health 200；web 458 chunk `estimatedAuxNote` 1 / 对照 1 / 假串 0。
 - 登记：`ESTIMATED_AUX_RATIO_MISSING` 与 `ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE` 在 prod 今天触发不了（0 条缺 dosage、126 个原料批次全 kg）；`AUX_PARTIALLY_RECORDED` 当前命中 0（17 个有记录计划辅料全覆盖），守的是缺口不是今天的数据。
 - ⚠️ 运维：**从部署树做 OTA 导出会弄脏它**（`npm install` 改 lockfile、`expo export` 落 dist）——下次 OTA 用独立 worktree，或导出后立刻 `git checkout -- yarn.lock && git clean -fd dist`。
+
+
+## 2026-09-06 02:59 #609 终审（半成品可见性预扣 + 来源状态早校验）
+
+- 🔴 需改：`@Autowired(required=false) @Lazy PendingInterimFeedService` —— 三个测试类全 `MockitoExtension`，字段永远非 null ⇒ 原理上测不出接线失败；prod 今天预扣 0 ⇒「没扣」与「没接上」读数相同；M8 证明环真实存在。⇒ 必须补真实 Spring 上下文断言（`*ContractTest`）。
+- 可合：`stockConsumedAtSubmit` drift fix 修的是盘点侧重复减账（与 `InterimSettleServiceImpl:293` / `ProductionPlanServiceImpl:6830` 两条既有跳过对齐，聚合器是第三份），今天 0 行；单位有钉子（盒/kg）、超扣 WARN 点名两数、折算不出标 `pendingFeedUnresolved`；早校验只查 AVAILABLE 不查量——量的防线在 picker，保存点查量会造假拒，接受。
+- 非阻塞建议：超扣给 DTO 布尔；结单 409 的 hint 要说清「被别人待扣占掉」。
+- 登记：(b) 幽灵预扣 → 开票 `BUG-GHOST-PENDING-FEED-DELETED-PLANS-20260906`；(c) PENDING SP2 计划聚合器看不见 → 已知覆盖缺口，写进特性说明。
+- executor 抓到的 CI 盲区：`java-gate-pr.yml` 只跑 `*ContractTest`，`*Test` 类编译不执行（已记 memory）；全量要 `java-full-ready` 标签，本票已打。
