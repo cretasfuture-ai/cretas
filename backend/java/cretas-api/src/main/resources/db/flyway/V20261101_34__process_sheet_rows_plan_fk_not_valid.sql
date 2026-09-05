@@ -52,7 +52,20 @@
 --   `DELETE FROM production_plans WHERE factory_id = 'F_E2E_TEST'`, 在 RESTRICT 下会被
 --   拒绝。同一个 PR 已给它补上先删 process_sheet_rows / report_reversal_logs。
 --
--- 幂等: 两个 DO 块都先查 pg_constraint / information_schema, 重复执行是 no-op。
+-- 🔴 第三块 uk_production_plan_create_request 是**连带必须做的**, 不是顺手优化:
+--   把 productionPlanRepository.delete() 从物理删换成软删, 会让被删的那一行**继续占着**
+--   幂等键。而查幂等键那一步 (ProductionPlanServiceImpl:2125 ->
+--   findByFactoryIdAndCreatedByAndClientRequestId) 是 Spring Data 派生查询,
+--   类级 @Where(deleted_at IS NULL) 会被拼进去 —— 它**看不见**软删行。
+--   两边口径不一致 ⇒ 「查不到 -> INSERT -> 撞唯一索引 23505」, 正是
+--   SoftDeleteBlindSpotContractTest 记的那一类缺陷 (uk_cache_key / uk_voucher_factory_number
+--   都是这个形状), 只是这次由本 PR 亲手把它从潜伏变成可达。
+--   ⇒ 让索引与查询口径对齐: 索引也只管活行。
+--   实测 (2026-09-06 prod): production_plans 61 行, 8 行软删、其中 **7 行带
+--   client_request_id 正占着索引**; 活行里带 client_request_id 的 41 行, 按新谓词分组
+--   **零重复** ⇒ 收紧谓词只会从索引里去掉行, 不可能建不出来。
+--
+-- 幂等: 三个 DO 块都先查 pg_constraint / pg_indexes / information_schema, 重复执行是 no-op。
 -- ============================================================
 
 -- ── process_sheet_rows.plan_id ──────────────────────────────────────────────
@@ -109,4 +122,30 @@ BEGIN
             ON DELETE RESTRICT
             NOT VALID;
     END IF;
+END $$;
+
+-- ── uk_production_plan_create_request: 索引口径与查询口径对齐, 只管活行 ─────
+DO $$
+DECLARE
+    current_def text;
+BEGIN
+    SELECT indexdef INTO current_def
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = 'uk_production_plan_create_request';
+
+    IF current_def IS NULL THEN
+        RAISE NOTICE 'uk_production_plan_create_request 不存在, 跳过';
+        RETURN;
+    END IF;
+
+    IF position('deleted_at IS NULL' in current_def) > 0 THEN
+        RAISE NOTICE 'uk_production_plan_create_request 已经只管活行, 跳过';
+        RETURN;
+    END IF;
+
+    DROP INDEX uk_production_plan_create_request;
+    CREATE UNIQUE INDEX uk_production_plan_create_request
+        ON production_plans (factory_id, created_by, client_request_id)
+        WHERE client_request_id IS NOT NULL AND deleted_at IS NULL;
 END $$;
