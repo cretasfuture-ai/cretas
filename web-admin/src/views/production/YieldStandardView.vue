@@ -43,7 +43,25 @@ const authStore = useAuthStore();
  * ⛔ 反过来不成立 —— 不要因为这里灰了就以为后端安全。
  */
 const WRITE_ROLES = ['platform_admin', 'factory_super_admin'];
-const canEdit = computed(() => WRITE_ROLES.includes(String(authStore.user?.role ?? '')));
+/**
+ * 🔴 2026-09-05 部署后打开页面才发现: 原来写的是 `authStore.user?.role`，
+ * 而 `cretas_user` 对象**根本没有 role 这个键**（实测键为
+ * id/username/fullName/email/isActive/createdAt/updatedAt/userType/factoryUser）——
+ * 角色在 `user.factoryUser.role`（工厂账号）或 `user.platformUser.role`（平台账号）。
+ *
+ * <p>后果是<b>反的</b>：`canEdit` 恒 false ⇒ 连 `factory_super_admin` 都点不了，
+ * 页面顶上还挂着「你的账号只能查看」。用 `liushanmen_admin`
+ * (factory_super_admin) 实测：三个「填写」按钮全部 disabled=true。</p>
+ *
+ * <p>⇒ 一律用 `authStore.currentRole`：它是 store 里那个<b>唯一</b>的归一化出口，
+ * 处理平台/工厂两种账号形状，还把「super_admin 且无 factoryId」归一成 platform_admin。
+ * ⛔ 不要再从 user 对象里自己挖 role —— 那正是这个 bug。</p>
+ *
+ * <p>⚠️ 这是「抄了形状没抄判据」：我照抄 CalibrationListView.vue 的
+ * `authStore.user?.role === 'platform_admin'`，而<b>那一处本身就是坏的</b>（恒 false）。
+ * 全仓另有 3 处同病，见 yieldStandardUsesNormalizedRole.source.spec.ts 里的登记。</p>
+ */
+const canEdit = computed(() => WRITE_ROLES.includes(String(authStore.currentRole ?? '')));
 const factoryId = computed(() => authStore.factoryId);
 
 const loading = ref(false);
