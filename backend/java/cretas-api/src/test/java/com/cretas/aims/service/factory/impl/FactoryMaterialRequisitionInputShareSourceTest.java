@@ -79,6 +79,17 @@ class FactoryMaterialRequisitionInputShareSourceTest {
         ReflectionTestUtils.setField(service, "workflowRevisionRepository", workflowRevisionRepository);
         ReflectionTestUtils.setField(service, "workflowClerkSheetService", workflowClerkSheetService);
 
+        // 🔴 2026-09-05: 那段两级解析已从本 service 的 private 方法抽到 PlanInputShareResolver
+        //    (缺料预警要用同一份份额, 复制过去必漂)。本测试守的三条 ①②③ 一条没变, 只是
+        //    接缝挪了 —— 所以这里装一个**真的** resolver, 把同样的两个 mock 喂给它,
+        //    ⛔ 不 mock 掉 resolver: mock 掉就等于把本测试真正要守的那段逻辑跳过去了,
+        //    四条断言会变成恒真式。
+        com.cretas.aims.service.workflow.PlanInputShareResolver shareResolver =
+                new com.cretas.aims.service.workflow.PlanInputShareResolver();
+        ReflectionTestUtils.setField(shareResolver, "workflowClerkSheetService", workflowClerkSheetService);
+        ReflectionTestUtils.setField(shareResolver, "workflowRevisionRepository", workflowRevisionRepository);
+        ReflectionTestUtils.setField(service, "planInputShareResolver", shareResolver);
+
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
         plan.setFactoryId(FACTORY_ID);
@@ -173,7 +184,12 @@ class FactoryMaterialRequisitionInputShareSourceTest {
     @Test
     @DisplayName("老装配 (没接 WorkflowClerkSheetService) ⇒ 只走 nodesJson, 行为与 #503 一致")
     void withoutClerkSheetServiceStillReadsRevision() {
+        // 老装配 = 没接 WorkflowClerkSheetService。2026-09-05 起这个依赖在 PlanInputShareResolver 上,
+        // 所以要置空的是它那一份 —— 置 service 上的那个已经不起作用了 (它不再参与份额解析)。
         ReflectionTestUtils.setField(service, "workflowClerkSheetService", null);
+        ReflectionTestUtils.setField(
+                ReflectionTestUtils.getField(service, "planInputShareResolver"),
+                "workflowClerkSheetService", null);
 
         FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L);
 

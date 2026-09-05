@@ -307,6 +307,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private BomYieldSuggestionRepository bomYieldSuggestionRepository;
 
+    /**
+     * 主原料份额 → 建计划时的投入量。与领料单共用同一份解析 (形态 D: 两份一定会漂)。
+     * 见 {@link com.cretas.aims.service.workflow.PlanInputShareResolver}。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.PlanInputShareResolver planInputShareResolver;
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
@@ -1269,14 +1276,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    于是缺料预警对这个计划的原料**从来没生效过**, 而界面说「暂无缺料预警」。
         List<String> byReporting = new ArrayList<>();
         List<String> uncomputable = new ArrayList<>();
+
+        // 🔴 2026-09-05 第 2 步「建计划时按标准算料」: 绑了 workflow 投料端口的主料行
+        //    没有 standardQuantity (那是设计, 配比在画布端口上), 原来一律跳过 ⇒ 六膳门
+        //    25 条 ACTIVE BOM 明细里 16 条绑端口, 缺料预警对主料**从来没算过一次**。
+        //
+        //    现在: 有份额 + 有标准出成率 ⇒ 按 计划产出 ÷ 出成率 × 端口份额 摊出投入量。
+        //    ⚠️ 两个前提缺任何一个都算不出, 那时仍旧走下面的 byReporting 留痕 ——
+        //       ⛔ 不能拿 0 顶替: 「需要 0kg 主料」是个看起来很确定的假答案。
+        //
+        //    份额解析走 PlanInputShareResolver (与领料单同一份, 见该类注释)。
+        //    建计划这一刻**必然**还没转批次, 所以走的是「读计划钉住的修订 nodesJson」那条。
+        Map<String, BigDecimal> portRequirements = planInputShareResolver == null
+                ? Map.of()
+                : planInputShareResolver.spreadToPorts(
+                        planInputShareResolver.resolve(factoryId, plan),
+                        plannedQty,
+                        effectiveProductYieldRate);
+
         for (BomRecipeItem item : bomItems) {
-            if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
+            String portId = item.getWorkflowInputPortId();
+            boolean boundToPort = portId != null && !portId.isBlank();
+            BigDecimal portRequired = boundToPort ? portRequirements.get(portId) : null;
+
+            if (item.getMaterialTypeId() == null
+                    || (item.getStandardQuantity() == null && portRequired == null)) {
                 String skippedName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
                 // ⚠️ 分两类, 措辞完全不同 —— 绑了 workflow 投料端口的行【本来就没有计划用量】,
                 //    投多少由报工当场决定。把它说成「未配标准用量」等于诬告用户的数据坏了。
                 //    实测: 全库 ACTIVE BOM 里 12 条空标准量的行 **无一例外** 都绑着端口
                 //    (标准量为空 && 未绑端口 的组合是 0 条) ⇒ 这是设计, 不是缺失。
-                if (item.getWorkflowInputPortId() != null && !item.getWorkflowInputPortId().isBlank()) {
+                if (boundToPort) {
                     byReporting.add(skippedName);
                 } else {
                     uncomputable.add(skippedName);
@@ -1284,8 +1314,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
-            BigDecimal perUnitRequired = calculateRuntimeRequiredQuantity(item, effectiveProductYieldRate);
-            BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
+            // 端口份额算出来的是**总投入量**(已含出成率折算), 与下面 BOM 标准量那条路算出来的
+            // totalRequiredBom 同口径; 两者互斥, 端口优先 —— 绑了端口的行 standardQuantity 恒为 null。
+            BigDecimal totalRequiredBom = portRequired != null
+                    ? portRequired
+                    : calculateRuntimeRequiredQuantity(item, effectiveProductYieldRate).multiply(plannedQty);
 
             BigDecimal available = resolveAvailableRawStock(factoryId, plan, item.getMaterialTypeId());
             if (available == null) {
