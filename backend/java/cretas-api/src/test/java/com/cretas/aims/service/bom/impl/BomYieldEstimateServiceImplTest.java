@@ -9,6 +9,7 @@ import com.cretas.aims.entity.bom.BomChangeLog;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.exception.BomYieldStaleException;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomChangeLogRepository;
@@ -28,6 +29,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -122,6 +125,113 @@ class BomYieldEstimateServiceImplTest {
                         .expectedCurrentYieldRate(new BigDecimal("80.00"))
                         .build())));
 
+        verify(bomRecipeRepository, never()).save(any());
+        verify(bomChangeLogRepository, never()).save(any());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // 🔴 标准出成率的合法区间 (0, 300] —— RECON-LEGAL-VALUE-SENTINEL-20260906
+    //
+    //  · 100.00 是**合法**的零损耗值。2026-09-06 之前它被 ProductionPlanServiceImpl
+    //    当成「未配置」哨兵, 前端还专门拦下来教用户填 99.99 —— 那条路已经拆掉。
+    //  · > 100 合法: 保水/腌制工序天然超过 100 (六膳门猪舌保水实测 105–126%)。
+    //  · 300 是防手滑上限, 与 DTO @DecimalMax、前端 YIELD_RATE_MAX_PERCENT、
+    //    DB chk_br_yield (V20261101_32) 是同一条规则的三层(形态 D)。
+    // ────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void applyAccepts100BecauseItIsALegalZeroLossValue() {
+        BomRecipe recipe = activeRecipe(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
+        when(bomChangeLogRepository.save(any(BomChangeLog.class))).thenAnswer(invocation -> {
+            BomChangeLog log = invocation.getArgument(0);
+            log.setId("LOG-100");
+            return log;
+        });
+
+        BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(
+                BomYieldApplyRequest.builder()
+                        .recipeId(RECIPE_ID)
+                        .yieldRate(new BigDecimal("100.00"))
+                        .expectedCurrentYieldRate(new BigDecimal("80.00"))
+                        .build()));
+
+        assertEquals(1, result.getApplied(), "100.00 被拒 ⇒ 那个哨兵又回来了");
+        assertEquals(new BigDecimal("100.00"), recipe.getOverallYieldRate());
+    }
+
+    @Test
+    void applyAccepts126BecauseBrineWorkStepsExceed100() {
+        BomRecipe recipe = activeRecipe(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
+        when(bomChangeLogRepository.save(any(BomChangeLog.class))).thenAnswer(invocation -> {
+            BomChangeLog log = invocation.getArgument(0);
+            log.setId("LOG-126");
+            return log;
+        });
+
+        BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(
+                BomYieldApplyRequest.builder()
+                        .recipeId(RECIPE_ID)
+                        .yieldRate(new BigDecimal("126.00"))
+                        .expectedCurrentYieldRate(new BigDecimal("80.00"))
+                        .build()));
+
+        assertEquals(1, result.getApplied(), "126% 被拒 ⇒ 保水/腌制工序填不进去");
+        assertEquals(new BigDecimal("126.00"), recipe.getOverallYieldRate());
+    }
+
+    @Test
+    void applyRejectsZeroWithAHintedError() {
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.recalculateApply(FACTORY, List.of(
+                        BomYieldApplyRequest.builder()
+                                .recipeId(RECIPE_ID)
+                                .yieldRate(BigDecimal.ZERO)
+                                .build())));
+
+        assertEquals(400, error.getCode());
+        assertEquals("BOM_YIELD_RATE_OUT_OF_RANGE", error.getErrorCode());
+        // 阴性对照: 拒了要说清楚下一步做什么, ⛔ 不是干巴巴一句「不合法」
+        assertNotNull(error.getActionHint(), "拒绝没带 actionHint —— 用户不知道该改成什么");
+        // ⛔ 拒之前一行都不许写
+        verify(bomRecipeRepository, never()).save(any());
+        verify(bomChangeLogRepository, never()).save(any());
+    }
+
+    @Test
+    void applyRejects301AsATypoCeiling() {
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.recalculateApply(FACTORY, List.of(
+                        BomYieldApplyRequest.builder()
+                                .recipeId(RECIPE_ID)
+                                .yieldRate(new BigDecimal("301"))
+                                .build())));
+
+        assertEquals(400, error.getCode());
+        assertEquals("BOM_YIELD_RATE_OUT_OF_RANGE", error.getErrorCode());
+        assertTrue(error.getMessage().contains("300"),
+                "报错里没说上限是多少: " + error.getMessage());
+        verify(bomRecipeRepository, never()).save(any());
+        verify(bomChangeLogRepository, never()).save(any());
+    }
+
+    @Test
+    void applyRejectsAnOutOfRangeRowBeforeWritingTheGoodRowsInTheSameBatch() {
+        // 区间校验在整批的最前面跑完 —— 否则第一行写进去了第二行才被拒,
+        // 事务虽然会回滚, 但「先写后校验」这个形状迟早会被拆出事务边界。
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.recalculateApply(FACTORY, List.of(
+                        BomYieldApplyRequest.builder()
+                                .recipeId(RECIPE_ID)
+                                .yieldRate(new BigDecimal("93.75"))
+                                .build(),
+                        BomYieldApplyRequest.builder()
+                                .recipeId("RECIPE-2")
+                                .yieldRate(new BigDecimal("500"))
+                                .build())));
+
+        assertEquals("BOM_YIELD_RATE_OUT_OF_RANGE", error.getErrorCode());
         verify(bomRecipeRepository, never()).save(any());
         verify(bomChangeLogRepository, never()).save(any());
     }

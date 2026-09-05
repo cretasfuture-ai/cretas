@@ -16,16 +16,20 @@ import { describe, expect, it } from 'vitest';
  * 「一键采纳全部建议」按钮** —— 那等于把同一个缺陷换个位置重新实现一遍，
  * 而且这次是用户自己点的，看起来还很合理。</p>
  *
- * <h2>第二条：100 这个哨兵</h2>
+ * <h2>第二条：100 不再是哨兵（2026-09-06 改写）</h2>
  *
- * <p>{@code 100.00} 同时是「出成率 100%」这个<b>合法值</b>，
- * 又是 {@code ProductionPlanServiceImpl#resolveEffectiveProductYieldRate} 与
- * {@code #isMainMaterialCandidate} 里「视为未配置」的<b>哨兵</b>。
- * F006 黄油鸡就是被自学习一路推到 100 之后，缺料预警再也没按出成率折算过主料 ——
- * 不报错、不留痕。</p>
+ * <p>这一条<b>原来</b>断言「必须拦住 100」，理由是 {@code 100.00} 同时被
+ * {@code ProductionPlanServiceImpl#resolveEffectiveProductYieldRate} /
+ * {@code #isMainMaterialCandidate} 当成「视为未配置」的哨兵。</p>
  *
- * <p>⇒ 人手填的时候必须拦住 100，否则我们只是把「机器推到哨兵值」换成了
- * 「人填到哨兵值」，症状一模一样。</p>
+ * <p>🔴 那个哨兵已经<b>从后端拆掉</b>（RECON-LEGAL-VALUE-SENTINEL-20260906）：
+ * 表头 {@code overall_yield_rate} 现在 {@code NULL} 才是「没配」，{@code 100.00}
+ * 是合法的零损耗值，{@code > 100} 也合法（保水/腌制，六膳门猪舌 105–126%）。</p>
+ *
+ * <p>⚠️ 这是<b>形态 C‴</b>：断言没坏、也不是变异没生效，是<b>需求变了</b>。
+ * 症状是「红得理直气壮」，最容易被读成「我改错了」然后把改动回退掉。
+ * ⛔ 改断言不等于删断言 —— 把守的东西从「拦住 100 这个字面」抬到
+ * 「有一个说得清的上限，且 100 不在拒绝之列」，并保留阴性对照钉住旧行为不回来。</p>
  */
 
 const SCREEN = resolve(__dirname, '../YieldStandardView.vue');
@@ -60,14 +64,32 @@ describe('标准出成率维护页', () => {
     expect(src).toContain('recalculateApply');
   });
 
-  it('拦住 100 —— 它是「视为未配置」的哨兵值, 填进去等于把备料折算静默关掉', () => {
-    const src = source();
-    // 判据落在**校验逻辑**上, 不是落在某句文案上
-    expect(src, '缺少对 100 的拦截 ⇒ 人可以手填到哨兵值, 与自学习推到 100 后果相同')
-      .toMatch(/v\s*===\s*100/);
-    // 阴性对照: 拦下来时要说清为什么 + 给真出路, ⛔ 不是干巴巴一句「不合法」
-    expect(src).toContain('未配置');
-    expect(src).toMatch(/99\.99/);
+  it('有下界(>0)和一个具名的上界常量 —— 上限是防手滑, 不是工艺上限', () => {
+    const code = codeOnly();
+    // 阳性对照: 剥完注释还剩真代码, 否则下面几条都是恒真式
+    expect(code.length, '剥注释剥过头 ⇒ 下面的断言无意义').toBeGreaterThan(1500);
+
+    expect(code, '没有下界 ⇒ 0 或负数能提交, PG 的 chk_br_yield 会 500')
+      .toMatch(/v\s*<=\s*0/);
+    // 上限必须是**具名常量**: 三层(UI / DTO+服务 / DB CHECK)共用一条规则,
+    // 散落的字面量会让「改一处」变成制造一份漂移(形态 D / 硬约束 8)
+    expect(code, '上限写成了裸字面量或压根没有 ⇒ 三层规则对不齐时没人看得出来')
+      .toMatch(/YIELD_RATE_MAX_PERCENT\s*=\s*300/);
+    expect(code, '校验里没有用那个常量 ⇒ 常量只是摆设')
+      .toMatch(/v\s*>\s*YIELD_RATE_MAX_PERCENT/);
+  });
+
+  it('🔴 阴性对照: 100 不再被拒 —— 那个哨兵已从后端拆掉, 教用户填 99.99 是在教错的绕法', () => {
+    const code = codeOnly();
+    expect(code.length).toBeGreaterThan(1500);
+
+    expect(code, 'v === 100 的拒绝回来了 ⇒ 100% 零损耗这个合法值又被挡住了')
+      .not.toMatch(/v\s*===\s*100/);
+    expect(code, '「填 99.99」这条绕法回来了 ⇒ 它存在的前提(100 是哨兵)已经不成立')
+      .not.toMatch(/99\.99/);
+    // > 100 的旧上限也不许回来: 保水/腌制工序(六膳门猪舌 105–126%) 本来就 > 100
+    expect(code, 'v > 100 的旧上限回来了 ⇒ 保水/腌制工序又填不进去了')
+      .not.toMatch(/v\s*>\s*100\b/);
   });
 
   it('没有「一键采纳全部建议」那类批量写入口 —— 那是把已删除的自动回写换个位置重来', () => {
