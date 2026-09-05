@@ -60,6 +60,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -1176,14 +1177,76 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 && txn.getSourceRef().startsWith(com.cretas.aims.service.wip.WipLedgerEntries.CLERK_OUT_REF_PREFIX);
     }
 
+    /**
+     * 「外部领用<b>还回</b>」—— {@link #isExternalConsumptionOut} 的逆。
+     *
+     * <p>🔴 <b>必须是正量</b> (BUG-SFI-REVERSE-CLASSIFIER-LOCKOUT-20260906)。
+     * 「还回领用」按定义就是 OUT 的逆 ⇒ 正量 (见 {@code WipLedgerEntries.settlementRestoreRow}
+     * 与 {@code replayMovingAverage} 的符号表: 负量 REVERSE = 退回产出, 正量 REVERSE = 还回领用)。
+     * 本方法原来<b>只看前缀不看符号</b>, 于是把一类<b>负量</b>行也认成「还回」:
+     *
+     * <p>{@code e774ebf298} (#391) 之前的整单撤回代码路径写 IN 腿补偿时<b>不写 report_id</b>
+     * (它当时把 {@code reportId=null} 当成「血缘由 sourceRef 承担」), sourceRef 正是
+     * {@code reversal-log:<id>} ⇒ 这些行同时满足「REVERSE + REVERSAL + reportId 为 null +
+     * reversal-log: 前缀」, 被误判成外部领用还回, 随即撞
+     * {@link #validateFullWipLedgersBeforeMutation} 里那句 {@code signum() <= 0} 守卫,
+     * 抛 {@code PARTIAL_COMPENSATION}「外部领用还回流水数量非法」——
+     * <b>该 SFI 此后任何一次整单撤回都 409</b>。
+     *
+     * <p>实测锁死 (LIUSHANMEN {@code cretas_prod_db}, 2026-09-06 只读): sfi 370/371/372
+     * (批次 …B10888-S1/S2/S3), 流水 141/142/143 = 负量 REVERSE + reportId 为 null +
+     * {@code reversal-log:18}。
+     *
+     * <p>⛔ 修法<b>不是</b>把前缀白名单再放宽一条 —— 那正是形态 E (代理判据不断加启发式,
+     * 直到有人把闸关掉)。加的是<b>符号</b>这一维: 它是这两种语义在账本上<b>本来就有</b>的区分,
+     * 不是又一条猜测。负量那一支交给 {@link #isLegacyInLegCompensation} 按<b>撤回日志</b>认领。
+     */
     static boolean isExternalConsumptionReverse(SemiFinishedInventoryTransaction txn) {
         return txn != null
                 && SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())
                 && SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(txn.getSourceType())
                 && txn.getReportId() == null
+                // 🔴 还回领用 = OUT 的逆 ⇒ 正量。⛔ 去掉这一维, 负量的遗留 IN 腿补偿会被
+                //    重新误判成「还回」并把整条 SFI 锁死 (见方法 javadoc)。
+                && txn.getQuantity() != null
+                && txn.getQuantity().signum() > 0
                 && txn.getSourceRef() != null
                 && (txn.getSourceRef().startsWith("reversal-log:")
                         || txn.getSourceRef().startsWith("interim-settle-reverse-out:"));
+    }
+
+    /**
+     * 「遗留 IN 腿补偿」—— {@code e774ebf298} (#391) 之前写下的、<b>没有 report_id 的负量 REVERSE</b>。
+     *
+     * <p>🔴 <b>判据是「有没有撤回日志认领它」, 不是 sourceRef 长什么样。</b>
+     * {@code report_reversal_logs.reverted_txn_ids} 是整单撤回自己写下的权威清单
+     * (见 {@code executeReversal} ②: 每写一条 REVERSE 就 {@code revertedTxnIds.add(saved.getId())}),
+     * 它<b>直接说出</b>「这条流水是那次撤回记的账」。前缀只是个代理 ——
+     * 代理判据会同时造出假阳性和假阴性 (形态 E), 而这份清单不会。
+     *
+     * <p>这类行没有 report_id ⇒ 进不了 {@link #matchExistingCompensations} 的配对 multiset
+     * (配对键的第一维就是 reportId)。但它<b>真的冲减过产出</b> ⇒ 余额必须照算。
+     * 所以调用方的处理是「不进配对、计入 rawProduced」, 与
+     * {@link #isExternalConsumptionOut} / {@link #isExternalConsumptionReverse} 同一条纪律。
+     *
+     * <p>⚠️ 这是<b>运行时兜底</b>, 与 {@code V20261101_33} 的数据回填互不替代:
+     * 回填能证明出确切 report_id 的行 (回填后它们走正常配对路径), 兜底覆盖回填证明不出来的行。
+     * 两者都证明不了的, 照旧 fail-closed 拦住。
+     *
+     * @param claimedTxnIds 本工厂所有<b>未软删</b>撤回日志认领过的流水 id 并集
+     */
+    static boolean isLegacyInLegCompensation(SemiFinishedInventoryTransaction txn,
+                                             Set<Long> claimedTxnIds) {
+        return txn != null
+                && SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())
+                && SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(txn.getSourceType())
+                && txn.getReportId() == null
+                // 负量 = 退回产出 (IN 的逆)。正量那一支是「还回领用」, 归 isExternalConsumptionReverse。
+                && txn.getQuantity() != null
+                && txn.getQuantity().signum() < 0
+                && txn.getId() != null
+                && claimedTxnIds != null
+                && claimedTxnIds.contains(txn.getId());
     }
 
     private record CompensationKey(Long reportId, Long semiFinishedId,
@@ -1244,6 +1307,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (involvedSfiIds == null || reportTxns == null) {
             throw malformedWipTransaction("无法读取完整半成品流水", "WIP_LEDGER_INVALID");
         }
+        // 撤回日志认领过的流水 id 并集 —— 只在真的读到「无 report_id 的负量 REVERSE」时才去查库,
+        // 且整次校验只查一次 (工厂级日志条数是每批次一条, 量级很小)。
+        // ⛔ 不写 jsonb @> 原生查询: 那样 H2 测试跑不动, 而这里的候选集小到在 Java 里扫完全够。
+        Map<String, Set<Long>> claimedCache = new HashMap<>();
+        Supplier<Set<Long>> claimedTxnIds =
+                () -> claimedCache.computeIfAbsent(factoryId, this::loadClaimedTxnIds);
         for (Long sfiId : new TreeSet<>(involvedSfiIds)) {
             if (sfiId == null) {
                 throw malformedWipTransaction("半成品流水缺少库存 ID", "WIP_LEDGER_INVALID");
@@ -1295,10 +1364,21 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     originals.add(txn);
                     rawConsumed = rawConsumed.add(txn.getQuantity().abs());
                 } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())) {
-                    if (!SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(txn.getSourceType())
-                            || txn.getReportId() == null) {
+                    if (!SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(txn.getSourceType())) {
                         throw malformedWipTransaction("存在孤立或非法来源的 REVERSE 流水",
                                 "PARTIAL_COMPENSATION");
+                    }
+                    if (txn.getReportId() == null) {
+                        // 遗留 IN 腿补偿 (#391 之前的写法, 无 report_id): 血缘由撤回日志的
+                        // reverted_txn_ids 认领 —— 认领得到就照算余额, 认领不到照旧 fail-closed。
+                        if (!isLegacyInLegCompensation(txn, claimedTxnIds.get())) {
+                            throw malformedWipTransaction("存在孤立或非法来源的 REVERSE 流水",
+                                    "PARTIAL_COMPENSATION");
+                        }
+                        // ⛔ 不进 reversals: 没有 reportId 就配不成对 (CompensationKey 第一维就是它)。
+                        //    但它确实冲减过产出 ⇒ rawProduced 照算 (负量相加 = 减)。
+                        rawProduced = rawProduced.add(txn.getQuantity());
+                        continue;
                     }
                     reversals.add(txn);
                     if (txn.getQuantity().signum() < 0) {
@@ -1334,6 +1414,30 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .withCode("PARTIAL_COMPENSATION");
             }
         }
+    }
+
+    /**
+     * 本工厂所有<b>未软删</b>撤回日志认领过的流水 id 并集 —— {@link #isLegacyInLegCompensation} 的证据源。
+     *
+     * <p>⚠️ 软删掉的日志不算认领 (fail-closed): 一条被撤销的撤回不该继续为流水背书。
+     */
+    private Set<Long> loadClaimedTxnIds(String factoryId) {
+        Set<Long> claimed = new HashSet<>();
+        List<ReportReversalLog> logs =
+                reversalLogRepo.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+        if (logs == null) {
+            return claimed;
+        }
+        for (ReportReversalLog claimant : logs) {
+            if (claimant != null && claimant.getRevertedTxnIds() != null) {
+                for (Long claimedId : claimant.getRevertedTxnIds()) {
+                    if (claimedId != null) {
+                        claimed.add(claimedId);
+                    }
+                }
+            }
+        }
+        return claimed;
     }
 
     private static CompensationKey compensationKey(Long reportId, Long semiFinishedId, BigDecimal quantity) {
