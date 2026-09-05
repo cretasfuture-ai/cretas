@@ -105,6 +105,20 @@ changed_files=$(git diff --name-only "$BASE_SHA..$head_sha")
 [[ -n "$changed_files" ]] || fail "no committed changes to publish"
 git -c core.whitespace=cr-at-eol diff --check "$BASE_SHA..$head_sha"
 
+# The ledger has a hard shape (each in-flight row <= 300 chars, no ### journal
+# sections, no merged rows). Push-time is the only moment a fastlane batch is
+# seen before it lands on main, so run the same check CI runs. Skipped when the
+# checker is absent (test harness repos copy only this script).
+if grep -qx 'docs/dispatch/ACTIVE.md' <<<"$changed_files" && [[ -f scripts/ci/check_dispatch_active.py ]]; then
+    ledger_py=""
+    for c in python3 python; do
+        if command -v "$c" >/dev/null 2>&1; then ledger_py="$c"; break; fi
+    done
+    [[ -n "$ledger_py" ]] || fail "docs/dispatch/ACTIVE.md changed but no python is available to run scripts/ci/check_dispatch_active.py"
+    "$ledger_py" scripts/ci/check_dispatch_active.py --repo . \
+        || fail "docs/dispatch/ACTIVE.md violates the ledger cap (<= 300 chars per row, no ### sections, no merged rows, <= 20 KB); move detail to docs/dispatch/archive/"
+fi
+
 # Docs-only batches are not ledger-registered work; the ACTIVE gate exists so a
 # coordinator archives its OWN batch in the same commit. Skip it when every
 # changed file is docs-class AND none touches the ledger itself. High-risk path

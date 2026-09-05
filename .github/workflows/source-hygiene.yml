@@ -167,12 +167,49 @@ jobs:
           echo "::error title=定时 cron 落在整点::GitHub 整点高负载时 schedule 易延迟或丢失，见上方精确位置。"
           exit 1
 
+      # ── dispatch 台账体量 ──────────────────────────────────────────────
+      #
+      # 2026-09-05: ACTIVE.md 长到 175 KB / 570 行, 在飞段里嵌着 27 段增量日志,
+      # 38 条里 19 条早已 merged。organizer 每次派活前都该读它 ≈ 60K token ⇒ 没人读
+      # ⇒「精简 ACTIVE 是真值」空了。Owner 裁定每条 ≤ 300 字, 派活时才读。
+      # 同款: 纯标准库、三态、不装包。
+      - name: dispatch 台账每条 ≤ 300 字
+        id: dispatch_active
+        run: |
+          PY=""
+          for c in python3 python python3.12 python3.11 python3.10; do
+            if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+          done
+          if [ -z "$PY" ]; then
+            echo "✗ 这台 runner 上一个 python 都找不到 —— 本次没量到"
+            echo "rc=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          set +e
+          "$PY" scripts/ci/check_dispatch_active.py --repo .
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 判定 —— 台账本次没量到
+        if: steps.dispatch_active.outputs.rc == '2'
+        run: |
+          echo "::error title=dispatch 台账没量到::docs/dispatch/ACTIVE.md 缺失、结构认不出或 0 条在飞, 本次读数作废。"
+          exit 1
+
+      - name: 判定 —— 台账违反条目上限
+        if: steps.dispatch_active.outputs.rc == '1'
+        run: |
+          echo "::error title=dispatch 台账超限::每条 ≤ 300 字、不留 merged/done、不开 ### 增量段、全文 ≤ 20 KB。详情写 docs/dispatch/archive/。见上方清单。"
+          exit 1
+
       - name: 判定 —— 扫描退出码不是 0/1/2
         if: >-
           (steps.scan.outputs.rc != '0' && steps.scan.outputs.rc != '1' && steps.scan.outputs.rc != '2')
           || (steps.artifact_policy.outputs.rc != '0' && steps.artifact_policy.outputs.rc != '1' && steps.artifact_policy.outputs.rc != '2')
           || (steps.scheduled_cron.outputs.rc != '0' && steps.scheduled_cron.outputs.rc != '1' && steps.scheduled_cron.outputs.rc != '2')
+          || (steps.dispatch_active.outputs.rc != '0' && steps.dispatch_active.outputs.rc != '1' && steps.dispatch_active.outputs.rc != '2')
+          || (steps.dispatch_active.outputs.rc != '0' && steps.dispatch_active.outputs.rc != '1' && steps.dispatch_active.outputs.rc != '2')
         run: |
-          echo "::error title=退出码不在三态里::scan=${{ steps.scan.outputs.rc }} artifact_policy=${{ steps.artifact_policy.outputs.rc }} scheduled_cron=${{ steps.scheduled_cron.outputs.rc }}"
+          echo "::error title=退出码不在三态里::scan=${{ steps.scan.outputs.rc }} artifact_policy=${{ steps.artifact_policy.outputs.rc }} scheduled_cron=${{ steps.scheduled_cron.outputs.rc }} dispatch_active=${{ steps.dispatch_active.outputs.rc }}"
           echo "三态判定只列了 0/1/2, 任何第四种退出码都会两条判定都不命中 ⇒ 静默落进绿。"
           exit 1
