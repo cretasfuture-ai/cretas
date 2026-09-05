@@ -210,6 +210,10 @@ class WipPickerPendingFeedVisibilityContractTest {
         assertThat(dto.getProducedQuantity())
                 .as("账面原值仍可从 produced−consumed 还原 (没被这次调整改掉)")
                 .isEqualByComparingTo("10");
+        assertThat(dto.isPendingFeedExceedsAvailable())
+                .as("🔴 界面不能指望有人去读 WARN 日志 —— availableQuantity=0 与「这批货正好领完了」"
+                        + "长得一模一样, 靠这一位把「要去查账」和「换个批次继续干」分开")
+                .isTrue();
     }
 
     // ── ③ 单位一致性 ────────────────────────────────────────────────────
@@ -225,6 +229,9 @@ class WipPickerPendingFeedVisibilityContractTest {
         WipRowDTO dto = dtoOf(service.listWipByFactory(FACTORY_ID), "IB-BOX");
 
         assertThat(dto.getUnit()).isEqualTo("盒");
+        assertThat(dto.isPendingFeedExceedsAvailable())
+                .as("阴性对照: 待扣 40 < 可用 100, 这是正常预扣不是漂移 —— 标了就是误报")
+                .isFalse();
         assertThat(dto.getAvailableQuantity())
                 .as("100盒 − 40盒 = 60盒。若这层误把 40 当 kg 再折一次, 结果会是 100−80=20")
                 .isEqualByComparingTo("60");
@@ -268,5 +275,6 @@ class WipPickerPendingFeedVisibilityContractTest {
         assertThat(dto.getAvailableQuantity()).isEqualByComparingTo("100");
         assertThat(dto.getPendingFeedQuantity()).isEqualByComparingTo("0");
         assertThat(dto.isPendingFeedUnresolved()).isFalse();
+        assertThat(dto.isPendingFeedExceedsAvailable()).isFalse();
     }
 }

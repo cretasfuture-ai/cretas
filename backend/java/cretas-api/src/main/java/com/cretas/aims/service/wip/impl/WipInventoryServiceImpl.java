@@ -859,7 +859,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     + " 余" + available.stripTrailingZeros().toPlainString() + u
                     + " 需" + deductQty.stripTrailingZeros().toPlainString() + u)
                     .withCode("SFI_INSUFFICIENT")
-                    .withHint("请减少投料量或选择其他半成品批次")
+                    // ⛔ 这里【不能】说「被别的计划占掉了」—— 到扣减这一刻我们并没有量过成因
+                    //    (也可能是当初就录多了; 保存时刻意不校验数量)。断言一个没量过的成因,
+                    //    正是「一个会误报的提示比没有提示更糟」那条: 店长照着去查, 查完发现不是,
+                    //    以后这类提示就都不看了。⇒ 只说【下一步做什么】+ 一句关于下拉的事实。
+                    .withHint("请刷新半成品下拉后改选批次, 或减少投料量 —— 下拉里的余量已扣除其它计划已录入、尚未结算的待扣部分")
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
@@ -1830,6 +1834,22 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return visible;
     }
 
+    /**
+     * 待扣是否已经<b>超过</b>账面可用 —— {@link #visibleAfterPendingFeed} 那次 floor 的<b>判据本身</b>,
+     * 单独端出来给 DTO ({@code pendingFeedExceedsAvailable})。
+     *
+     * <p>🔴 为什么不能只留 WARN: 日志里那一行没人读。本仓反复踩的形状是「把一次账实漂移
+     * 压成一个看起来正常的 0」—— 界面上 {@code availableQuantity=0} 与「这批货领完了」
+     * 长得一模一样, 而两者要做的事完全不同 (后者换批次, 前者要去查账)。
+     * ⛔ 判据只算一次: 这里和 floor 用同一个比较, 不允许两处各写一遍。
+     */
+    private static boolean pendingExceedsAvailable(SemiFinishedInventory row, BigDecimal pending) {
+        if (pending == null || pending.signum() <= 0) {
+            return false;
+        }
+        return pending.compareTo(nz(row.getAvailableQuantity())) > 0;
+    }
+
     private static String nzUnit(SemiFinishedInventory row) {
         return row.getUnit() == null ? "" : row.getUnit();
     }
@@ -2000,6 +2020,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                         factoryId, w, pendingSnapshot.pendingOf(w.getIntermediateBatchNo())))
                 .pendingFeedQuantity(pendingSnapshot.pendingOf(w.getIntermediateBatchNo()))
                 .pendingFeedUnresolved(pendingSnapshot.isUnresolved(w.getIntermediateBatchNo()))
+                .pendingFeedExceedsAvailable(
+                        pendingExceedsAvailable(w, pendingSnapshot.pendingOf(w.getIntermediateBatchNo())))
                 .unit(w.getUnit())
                 .status(w.getStatus())
                 .productTypeName(ptNameMap.get(w.getProductTypeId()))   // null if no match

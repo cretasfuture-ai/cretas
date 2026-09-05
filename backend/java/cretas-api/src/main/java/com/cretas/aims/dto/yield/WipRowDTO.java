@@ -85,6 +85,17 @@ public class WipRowDTO {
      */
     private boolean pendingFeedUnresolved;
 
+    /**
+     * 待扣量<b>超过</b>了账面可用量 —— 账实漂移，不是舍入误差。
+     *
+     * <p>成因只有三种：超投、有一笔扣减丢了、待扣被算重了。三种都要人去查账，⛔ 不是「换个批次继续干」。
+     *
+     * <p>🔴 为真时 {@code availableQuantity} 被 floor 到 0，而 <b>0 和「这批货正好领完了」长得一模一样</b>。
+     * 这一栏就是把两者分开的那个位：真正被承诺掉的量在 {@link #pendingFeedQuantity} 里，
+     * 它比账面可用量还大。后端同时打了 WARN，但界面不能指望有人去读日志。
+     */
+    private boolean pendingFeedExceedsAvailable;
+
     /** 单位。 */
     private String unit;
 
