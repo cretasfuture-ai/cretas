@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Repository 上那个方法<b>故意保留</b>(供出成率页面/审计追溯), 它本身不是缺陷载体 ——
  * 这条登记见本类 {@link #repositoryMethodItselfIsDeliberatelyKept()}。
  */
-class YieldResolverHasNoAppliedSuggestionBackdoorTest {
+class YieldResolverHasNoAppliedSuggestionBackdoorContractTest {
 
     private static final Path SERVICE = Path.of(
             "src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java");
