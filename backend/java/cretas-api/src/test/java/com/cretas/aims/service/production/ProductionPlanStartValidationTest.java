@@ -3,7 +3,6 @@ package com.cretas.aims.service.production;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
-import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
@@ -15,7 +14,6 @@ import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
-import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -95,7 +93,6 @@ class ProductionPlanStartValidationTest {
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private BomRecipeRepository bomRecipeRepository;
-    @Mock private BomYieldSuggestionRepository bomYieldSuggestionRepository;
     @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
     @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
 
@@ -111,7 +108,6 @@ class ProductionPlanStartValidationTest {
                 salesOrderRepository, salesOrderItemRepository);
         setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         setField(service, "bomRecipeRepository", bomRecipeRepository);
-        setField(service, "bomYieldSuggestionRepository", bomYieldSuggestionRepository);
         // 2026-08-02: 开工现在会把批次一起建出来 (两个「开工」入口收敛), 所以这条路径
         // 需要工序任务服务。此前 startProduction 只翻状态, 不碰它。
         setField(service, "workProcessTaskService", workProcessTaskService);
@@ -386,59 +382,81 @@ class ProductionPlanStartValidationTest {
         assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
     }
 
+    /*
+     * ┌──────────────────────────────────────────────────────────────────────────────┐
+     * │ 🔴 2026-09-06 RECON-LEGAL-VALUE-SENTINEL-20260906 —— 下面两条是**改写**的     │
+     * └──────────────────────────────────────────────────────────────────────────────┘
+     *
+     * 原来这两条叫 materialAdvisory_appliedSuggestion_scalesMainMaterialAtRuntime /
+     * materialAdvisory_noAppliedSuggestion_usesRecipeOverallYield, 守的是
+     * 「行级 yieldRate != 100 的那一行 = 主料, 拿 APPLIED 建议或配方头出成率去折算它」。
+     *
+     * ⚠️ 形态 C‴: 它们没坏、也不是恒真式 —— 是**需求变了**。那套口径已判定为缺陷:
+     *   · 行级出成率废弃(写入侧硬写 100.00), prod 144/144 行都是 100.00
+     *     ⇒ 「!= 100 的那一行」恒不存在 ⇒ 整条自学习折算三周没跑过一次;
+     *   · 出成率折算的唯一位置改成 PlanInputShareResolver#spreadToPorts(按端口份额摊),
+     *     ⛔ 两处都折会对绑端口的行折两遍(形态 D)。
+     *
+     * ⛔ 改断言不等于删断言: 这两条改成守新口径, 并各自带一个「旧口径回来就红」的数值。
+     */
+
     @Test
-    @DisplayName("yield self-learning: material advisory uses latest APPLIED suggestion for the main material")
-    void materialAdvisory_appliedSuggestion_scalesMainMaterialAtRuntime() {
+    @DisplayName("🔴 表头没配出成率 ⇒ 不折算, 需求量就是 标准量 × 计划量 (⛔ 不拿任何值兜底)")
+    void materialAdvisory_noHeadLevelYield_doesNotFoldAnything() {
         ProductionPlan plan = pendingPlan(new BigDecimal("2"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
-        BomRecipeItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
+        // prod 真实形状: 行级 yieldRate 恒为 100.00 (applyDtoToItem 硬写)
+        BomRecipeItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("100.00"), "kg");
         when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
-        BomYieldSuggestion applied = new BomYieldSuggestion();
-        applied.setSuggestedYieldRate(new BigDecimal("50.00"));
-        applied.setStatus(BomYieldSuggestion.Status.APPLIED);
-        when(bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
-                FACTORY_ID, PRODUCT_TYPE_ID, BomYieldSuggestion.Status.APPLIED))
-                .thenReturn(Optional.of(applied));
+        BomRecipe recipe = activeRecipe(null);   // 表头 NULL = 没配
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
         when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
-                .thenReturn(new BigDecimal("300"));
+                .thenReturn(new BigDecimal("150"));
 
         ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
 
         assertTrue(advisory.isHasWarning());
         ProductionPlanMaterialAdvisoryDTO.Item warning = advisory.getWarnings().get(0);
-        assertTrue(new BigDecimal("400.000000").compareTo(warning.getRequiredQuantity()) == 0);
-        assertTrue(new BigDecimal("100.000000").compareTo(warning.getShortageQuantity()) == 0);
-        assertTrue(new BigDecimal("80.00").compareTo(main.getYieldRate()) == 0);
+        // 100 × 2 = 200。⛔ 不是 400(旧口径拿 APPLIED 建议 50% 折), 也不是 250(拿表头 80% 折)。
+        assertTrue(new BigDecimal("200").compareTo(warning.getRequiredQuantity()) == 0,
+                "需求量 " + warning.getRequiredQuantity() + " (期望 200 = 标准量100 × 计划量2)");
+        assertTrue(new BigDecimal("50").compareTo(warning.getShortageQuantity()) == 0);
     }
 
     @Test
-    @DisplayName("yield self-learning: material advisory reads current Recipe overall yield when no suggestion exists")
-    void materialAdvisory_noAppliedSuggestion_usesRecipeOverallYield() {
+    @DisplayName("🔴 表头配了 80% 也**不**折进非端口行 —— 出成率折算只在 spreadToPorts 那一处发生")
+    void materialAdvisory_headLevelYield_doesNotFoldIntoNonPortBoundRows() {
         ProductionPlan plan = pendingPlan(new BigDecimal("2"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
-        BomRecipeItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
+        BomRecipeItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("100.00"), "kg");
         when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
-        when(bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
-                FACTORY_ID, PRODUCT_TYPE_ID, BomYieldSuggestion.Status.APPLIED))
-                .thenReturn(Optional.empty());
+        BomRecipe recipe = activeRecipe(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
+                .thenReturn(new BigDecimal("150"));
+
+        ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
+
+        assertTrue(advisory.isHasWarning());
+        ProductionPlanMaterialAdvisoryDTO.Item warning = advisory.getWarnings().get(0);
+        // 仍是 200 —— 这一行没绑 workflow 投料端口, 不参与端口份额摊分。
+        // 若哪天有人把「表头出成率折进普通 BOM 行」加回来, 这里会读到 250, 当场红。
+        assertTrue(new BigDecimal("200").compareTo(warning.getRequiredQuantity()) == 0,
+                "需求量 " + warning.getRequiredQuantity()
+                        + " (期望 200; 读到 250 说明表头出成率又被折进非端口行了)");
+    }
+
+    /** ACTIVE + isCurrent 的配方头, 只有出成率不同 —— 上面两条用它做「配了 / 没配」的对照。 */
+    private BomRecipe activeRecipe(BigDecimal overallYieldRate) {
         BomRecipe recipe = new BomRecipe();
         recipe.setId("RECIPE-" + PRODUCT_TYPE_ID);
         recipe.setFactoryId(FACTORY_ID);
         recipe.setProductTypeId(PRODUCT_TYPE_ID);
         recipe.setStatus(BomRecipe.Status.ACTIVE);
         recipe.setIsCurrent(true);
-        recipe.setOverallYieldRate(new BigDecimal("80.00"));
-        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
-        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
-                .thenReturn(new BigDecimal("200"));
-
-        ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
-
-        assertTrue(advisory.isHasWarning());
-        ProductionPlanMaterialAdvisoryDTO.Item warning = advisory.getWarnings().get(0);
-        assertTrue(new BigDecimal("250.000000").compareTo(warning.getRequiredQuantity()) == 0);
-        assertTrue(new BigDecimal("50.000000").compareTo(warning.getShortageQuantity()) == 0);
-        assertTrue(new BigDecimal("80.00").compareTo(main.getYieldRate()) == 0);
+        recipe.setOverallYieldRate(overallYieldRate);
+        return recipe;
     }
 }

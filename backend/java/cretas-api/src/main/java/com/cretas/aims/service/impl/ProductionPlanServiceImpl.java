@@ -28,7 +28,6 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.service.bom.PlanBomItems;
 import com.cretas.aims.entity.bom.BomItemSubstitute;
-import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,7 +47,6 @@ import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomItemSubstituteRepository;
-import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -304,8 +302,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private BomYieldSuggestionRepository bomYieldSuggestionRepository;
+    // 🔴 2026-09-06 移除 bomYieldSuggestionRepository —— 见 resolveEffectiveProductYieldRate 注释:
+    //    #594 之后 bom_yield_suggestions 只产 PENDING(喂「标准出成率」页面给人看), 不再自动 apply。
+    //    prod 上残留的 12 条 APPLIED 全是 applied_by=SYSTEM、最后 6 条都是 100.00 —— 那是被删掉的
+    //    自动 apply 循环留下的, 让它回流进解析器等于把「自学习把自己学没了」那条路重新接上。
+    //    ⚠️ Repository 上那个 findFirstBy...APPLIED 查询方法**保留**(供出成率页面/审计追溯), 只是
+    //    生产计划这一侧不再读它 —— 全仓 grep 确认它在 src/main 里已零调用点。
 
     /**
      * 主原料份额 → 建计划时的投入量。与领料单共用同一份解析 (形态 D: 两份一定会漂)。
@@ -1268,7 +1270,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity();
-        BigDecimal effectiveProductYieldRate = resolveEffectiveProductYieldRate(factoryId, plan.getProductTypeId(), bomItems);
+        BigDecimal effectiveProductYieldRate = resolveEffectiveProductYieldRate(factoryId, plan.getProductTypeId());
         List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
         // 🔴 2026-08-18: 没有标准用量的行**算不出需求量**, 只能跳过 —— 但跳过的条数必须留痕,
         //    否则「一条预警都没有」会同时表示「都够」和「一行都没算」(硬约束 4 的同一个坑)。
@@ -1318,7 +1320,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             // totalRequiredBom 同口径; 两者互斥, 端口优先 —— 绑了端口的行 standardQuantity 恒为 null。
             BigDecimal totalRequiredBom = portRequired != null
                     ? portRequired
-                    : calculateRuntimeRequiredQuantity(item, effectiveProductYieldRate).multiply(plannedQty);
+                    : calculateRuntimeRequiredQuantity(item).multiply(plannedQty);
 
             BigDecimal available = resolveAvailableRawStock(factoryId, plan, item.getMaterialTypeId());
             if (available == null) {
@@ -1585,56 +1587,92 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * @param snapshotName   BOM 快照名称 (fallback)
      * @return 优先返回主数据真名; 快照名次选; 兜底 "原料 {id}"
      */
-    private BigDecimal resolveEffectiveProductYieldRate(String factoryId, String productTypeId, List<BomRecipeItem> bomItems) {
-        if (productTypeId == null || bomItems == null) {
+    /**
+     * 成品的<b>标准出成率</b>(%) —— 唯一来源是 {@code bom_recipes.overall_yield_rate}(表头)。
+     *
+     * <h3>口径(2026-09-06 owner 裁定, RECON-LEGAL-VALUE-SENTINEL-20260906)</h3>
+     * <ul>
+     *   <li>{@code NULL} = <b>没配</b>。默认值早在 {@code V20261028_69} 就被摘掉了。</li>
+     *   <li>🔴 {@code 100.00} 是<b>合法取值</b>(零损耗), <b>不再</b>当哨兵。</li>
+     *   <li>&gt; 100 也合法(保水/腌制, 六膳门猪舌实测 105–126%), 上限见
+     *       {@link com.cretas.aims.dto.bom.BomYieldApplyRequest#getYieldRate()}。</li>
+     * </ul>
+     *
+     * <h3>🔴 为什么删掉了「恰好一个主料」那道闸</h3>
+     *
+     * <p>它数的是 {@code BomRecipeItem.yieldRate != 100.00}, 而<b>行级出成率已经废弃</b>:
+     * 实体默认 100.00, {@code BomRecipeServiceImpl#applyDtoToItem}(add/update 共用) 与
+     * {@code #createInputSkeleton} 都<b>硬写</b> 100.00, DTO 上也标着 deprecated/ignored。
+     * 2026-09-06 直查 prod: {@code bom_recipe_items} <b>144/144 行</b>(两个租户, 含软删)
+     * 全是 {@code 100.00} ⇒ 这个计数<b>恒为 0</b> ⇒ 恒不等于 1 ⇒ 这个方法在 prod 上
+     * <b>永远在读表头之前就 return null</b>, 且 {@code log.warn} 只在 count &gt; 1 时开口,
+     * 所以连一行日志都没有。级联: PR #599 的
+     * {@code PlanInputShareResolver#spreadToPorts} 在 {@code yieldRatePercent == null}
+     * 时返回 {@code Map.of()} ⇒ 那个功能<b>一次都没算过</b>。
+     *
+     * <p>主料身份的权威定义是 <b>workflow INPUT 端口份额</b>
+     * ({@link com.cretas.aims.service.workflow.PlanInputShareResolver}), 不是行级出成率。
+     *
+     * <p>⚠️ 出成率折算<b>只在一处</b>发生 —— {@code spreadToPorts}。⛔ 不要在
+     * {@link #calculateRuntimeRequiredQuantity} 里再折一次, 那会对绑端口的行折两遍。
+     *
+     * @return 配置了就返回它(含 100.00、含 &gt; 100); 没配返回 {@code null} —— ⛔ 不兜底成
+     *         某个数字, 「需要 0kg 主料」是个看起来很确定的假答案(形态 A¹⁰)。
+     */
+    private BigDecimal resolveEffectiveProductYieldRate(String factoryId, String productTypeId) {
+        if (productTypeId == null || bomRecipeRepository == null) {
             return null;
         }
-        long mainMaterialCount = bomItems.stream()
-                .filter(this::isMainMaterialCandidate)
-                .count();
-        if (mainMaterialCount != 1) {
-            if (mainMaterialCount > 1) {
-                log.warn("Material advisory yield self-learning skipped: multiple main materials factoryId={}, productTypeId={}, count={}",
-                        factoryId, productTypeId, mainMaterialCount);
-            }
-            return null;
+        Optional<BomRecipe> recipe = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+        if (recipe.isPresent() && isPositive(recipe.get().getOverallYieldRate())) {
+            return recipe.get().getOverallYieldRate();
         }
-        if (bomYieldSuggestionRepository != null) {
-            Optional<BomYieldSuggestion> latestApplied =
-                    bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
-                            factoryId, productTypeId, BomYieldSuggestion.Status.APPLIED);
-            if (latestApplied.isPresent() && isPositive(latestApplied.get().getSuggestedYieldRate())) {
-                return latestApplied.get().getSuggestedYieldRate();
-            }
-        }
-        if (bomRecipeRepository != null) {
-            Optional<BomRecipe> recipe = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                    factoryId, productTypeId, BomRecipe.Status.ACTIVE);
-            if (recipe.isPresent()
-                    && isPositive(recipe.get().getOverallYieldRate())
-                    && recipe.get().getOverallYieldRate().compareTo(new BigDecimal("100.00")) != 0) {
-                return recipe.get().getOverallYieldRate();
-            }
-        }
+        // ⛔ 不许静默 return null —— 「没配出成率」和「配了但算不出」在下游长得一模一样,
+        //    而这正是本次缺陷藏了这么久的原因。留一条可观测的痕, 带上是哪个配方。
+        logMissingYieldStandardThrottled(factoryId, productTypeId,
+                recipe.map(BomRecipe::getProductName).orElse(null));
         return null;
     }
 
-    private BigDecimal calculateRuntimeRequiredQuantity(BomRecipeItem item, BigDecimal effectiveProductYieldRate) {
+    /** 「没配标准出成率」的节流日志键 → 上次打印时刻(ms)。缺料预警每开一次界面就调一遍, 不节流会刷屏。 */
+    private static final Map<String, Long> MISSING_YIELD_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long MISSING_YIELD_LOG_INTERVAL_MS = 10L * 60 * 1000;
+    /** 键数量上限 —— 租户 × SKU 无界, 满了就整体清空重新计时, ⛔ 不让日志节流表变成内存泄漏。 */
+    private static final int MISSING_YIELD_LOG_MAX_KEYS = 2000;
+
+    private void logMissingYieldStandardThrottled(String factoryId, String productTypeId, String productName) {
+        String key = factoryId + "|" + productTypeId;
+        long now = System.currentTimeMillis();
+        Long last = MISSING_YIELD_LOG_AT.get(key);
+        if (last != null && now - last < MISSING_YIELD_LOG_INTERVAL_MS) {
+            return;
+        }
+        if (MISSING_YIELD_LOG_AT.size() >= MISSING_YIELD_LOG_MAX_KEYS) {
+            MISSING_YIELD_LOG_AT.clear();
+        }
+        MISSING_YIELD_LOG_AT.put(key, now);
+        log.info("[MaterialAdvisory] 标准出成率未配置, 主料投入量按端口份额摊不出来: "
+                        + "factoryId={}, productTypeId={}, productName={} —— 请在「标准出成率」页面填写",
+                factoryId, productTypeId, productName);
+    }
+
+    /**
+     * 单位计划产出所需的这一行原料量。
+     *
+     * <p>⚠️ 只走行级口径 {@link BomRecipeItem#calculateActualQuantity()}
+     * ({@code standardQuantity / (yieldRate/100)}, 与成本侧 {@code BomServiceImpl} 同一份公式)。
+     *
+     * <p>🔴 这里<b>不</b>再按成品标准出成率折算 —— 那件事已经由
+     * {@link com.cretas.aims.service.workflow.PlanInputShareResolver#spreadToPorts} 独占,
+     * 绑端口的行走那一条(它们 {@code standardQuantity} 恒为 null, 根本到不了这个方法)。
+     * 两处都折 = 同一个折算有两份(形态 D), 对绑端口的行会折两遍。
+     */
+    private BigDecimal calculateRuntimeRequiredQuantity(BomRecipeItem item) {
         if (item == null || item.getStandardQuantity() == null) {
             return BigDecimal.ZERO;
         }
-        if (effectiveProductYieldRate != null && isMainMaterialCandidate(item)) {
-            return item.getStandardQuantity().divide(
-                    effectiveProductYieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP),
-                    6, RoundingMode.HALF_UP);
-        }
         return item.calculateActualQuantity();
-    }
-
-    private boolean isMainMaterialCandidate(BomRecipeItem item) {
-        return item != null
-                && item.getYieldRate() != null
-                && item.getYieldRate().compareTo(new BigDecimal("100.00")) != 0;
     }
 
     private boolean isPositive(BigDecimal value) {

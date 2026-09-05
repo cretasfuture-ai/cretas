@@ -84,7 +84,19 @@ public class BomRecipe extends BaseEntity {
     @Builder.Default
     private Boolean isCurrent = false;
 
-    /** 系统根据正式批次历史自动学习的整产品级出成率；无足够样本时为 null。 */
+    /**
+     * 成品级<b>标准出成率</b>(%) —— 备料折算的<b>唯一</b>来源。
+     *
+     * <p>🔴 2026-09-06 订正: 旧注释写的是「系统根据正式批次历史自动学习」, #594 删掉自动
+     * apply 之后已经不成立。现在自学习只产 PENDING 建议(喂「标准出成率」页面), 写入这一列
+     * <b>只能由人</b>走 {@code POST /bom/yield-estimate/recalculate-apply}。
+     *
+     * <ul>
+     *   <li>{@code null} = <b>没配</b>(列默认值已在 {@code V20261028_69} 摘掉)</li>
+     *   <li>{@code 100.00} 是<b>合法取值</b>(零损耗) —— ⛔ 2026-09-06 起不再当「未配置」哨兵</li>
+     *   <li>&gt; 100 也合法(保水/腌制), 上限 300, 见 {@code chk_br_yield}({@code V20261101_32})</li>
+     * </ul>
+     */
     @Column(name = "overall_yield_rate", precision = 6, scale = 2)
     private BigDecimal overallYieldRate;
 

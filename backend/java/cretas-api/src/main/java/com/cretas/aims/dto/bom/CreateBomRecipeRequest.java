@@ -38,7 +38,13 @@ public class CreateBomRecipeRequest {
     @Size(max = 200, message = "产品名称长度不能超过200个字符")
     private String productName;
 
-    @Schema(description = "已废弃：整体出成率由正式批次历史自动计算，人工传值会被忽略", deprecated = true)
+    // 🔴 2026-09-06 订正: 「整体出成率由正式批次历史自动计算」这句话在 #594 之后就假了 ——
+    //    那个 PR 删掉了 autoApplyIfGuarded, 自学习现在只产 PENDING 建议喂「标准出成率」页面,
+    //    写入 bom_recipes.overall_yield_rate 只能由人走
+    //    POST /api/mobile/{factoryId}/bom/yield-estimate/recalculate-apply。
+    //    建配方这一侧「忽略人工传值」没变, 变的是「被忽略之后由谁来填」。
+    @Schema(description = "已废弃：建配方时不接收整体出成率，人工传值会被忽略；请到「标准出成率」页面填写",
+            deprecated = true)
     private BigDecimal overallYieldRate;
 
     @Schema(description = "已废弃：每单位产出由服务端按 SKU 基本单位固定为 1", deprecated = true)

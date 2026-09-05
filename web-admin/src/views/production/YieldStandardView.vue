@@ -43,6 +43,22 @@ const authStore = useAuthStore();
  * ⛔ 反过来不成立 —— 不要因为这里灰了就以为后端安全。
  */
 const WRITE_ROLES = ['platform_admin', 'factory_super_admin'];
+
+/**
+ * 标准出成率的防手滑上限(%)。
+ *
+ * 🔴 2026-09-06 (RECON-LEGAL-VALUE-SENTINEL-20260906): 这一层原来拒绝 `>100` 且额外
+ * 拒绝 `===100`（说 100 会被当成「未配置」）。两条都作废了：
+ *
+ * · `100` 是**合法**的零损耗值 —— 后端已删掉那个把 100.00 当哨兵的判据；
+ * · `>100` 本来就合法（保水/腌制，六膳门猪舌实测 105–126%），旧上限把它们挡死了。
+ *
+ * ⚠️ **三层一条规则**，改这个数就要同时改另外两处，否则会有一层先说不行(形态 D)：
+ *   ① 本文件这个常量（UI 输入校验）
+ *   ② `BomYieldApplyRequest` 上的 `@DecimalMax("300.00")` + `BomYieldEstimateServiceImpl#assertYieldRateInRange`
+ *   ③ DB 的 `bom_recipes.chk_br_yield`（`V20261101_32` 放宽到 `<= 300`）
+ */
+const YIELD_RATE_MAX_PERCENT = 300;
 /**
  * 🔴 2026-09-05 部署后打开页面才发现: 原来写的是 `authStore.user?.role`，
  * 而 `cretas_user` 对象**根本没有 role 这个键**（实测键为
@@ -124,12 +140,17 @@ async function handleEdit(row: RecalculatePreviewRow) {
           const v = Number(value);
           if (!value || Number.isNaN(v)) return '请输入数字';
           if (v <= 0) return '出成率必须大于 0';
-          if (v > 100) return '出成率不能超过 100%';
-          // 🔴 100 是 resolveEffectiveProductYieldRate / isMainMaterialCandidate 里
-          //    「视为未配置」的哨兵值 —— 填成 100 等于把备料折算静默关掉。
-          //    F006 黄油鸡就是被自学习推到 100 之后，缺料预警再也没折算过主料。
-          if (v === 100) {
-            return '100% 会被系统当成「未配置」，备料就不再按出成率折算了。零损耗请填 99.99';
+          // 🔴 2026-09-06 (RECON-LEGAL-VALUE-SENTINEL-20260906): 放开 >100 与 ===100 两条拒绝。
+          //    · 100% 现在是**合法**的零损耗值 —— 后端已不再把它当「未配置」哨兵
+          //      (ProductionPlanServiceImpl#resolveEffectiveProductYieldRate 那道
+          //       isMainMaterialCandidate 闸已删除)。旧提示教用户填 99.99 是在教一个错误的绕法。
+          //    · 保水/腌制工序出成率天然 >100 (六膳门猪舌 105–126%), 原来的 ≤100 把它们挡死了。
+          // ⚠️ 三层同一条规则, 改这里必须同时改另外两处(形态 D):
+          //    BomYieldApplyRequest 的 @DecimalMin/@DecimalMax、
+          //    BomYieldEstimateServiceImpl#assertYieldRateInRange、
+          //    DB 的 bom_recipes.chk_br_yield (V20261101_32 放宽到 300)。
+          if (v > YIELD_RATE_MAX_PERCENT) {
+            return `出成率不能超过 ${YIELD_RATE_MAX_PERCENT}%（超过通常是小数点点错了，请核对）`;
           }
           return true;
         },
