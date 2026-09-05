@@ -41,7 +41,7 @@ mk legacy-red.sh 1
 printf 'legacy-red.sh  # 存量红, 另立任务\n' > "$TMP/scripts/tests/known-failing.txt"
 run
 [ "$RC" = 0 ] || { cat "$TMP/out"; fail "基线应为绿"; }
-grep -q 'TOTAL=3 PASS=2 FAIL=0 KNOWN_FAILING=1 FIXED=0' "$TMP/out" || { cat "$TMP/out"; fail "基线汇总不对"; }
+grep -q 'TOTAL=3 PASS=2 FAIL=0 KNOWN_FAILING=1 FIXED=0 FLAKY=0' "$TMP/out" || { cat "$TMP/out"; fail "基线汇总不对"; }
 grep -q 'NO_NEW_FAILURES' "$TMP/out" || fail "缺少 NO_NEW_FAILURES"
 ok "基线: 存量红记账后整体绿"
 
@@ -102,6 +102,31 @@ run
 [ "$RC" != 0 ] || fail "没有理由的名单条目竟然放行"
 grep -q 'known_failing_entry_without_reason' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
 ok "名单条目缺理由 ⇒ 红"
+
+# ── 第四态 FLAKY: 时红时绿的用例两边都不算 ────────────────────────────────
+# 放进 known-failing ⇒ 它偶然变绿那次报 FIXED 而红; 拿出来 ⇒ 它红那次报
+# NEW_FAILURE。**两边都会让闸随机变红**, 而随机红的闸活不过一周(形态 E)。
+mk legacy-red.sh 1
+mk flip.sh 1
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh  # 读数不可判定, 见 run 33997837202(rc=1) 与 33998506319(rc=0)\n' \
+    > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" = 0 ] || { cat "$TMP/out"; fail "FLAKY 用例红的那次不该弄红整个闸"; }
+grep -qE 'rc=1 +flip\.sh +FLAKY' "$TMP/out" || { cat "$TMP/out"; fail "rc 没照常打印出来"; }
+mk flip.sh 0
+run
+[ "$RC" = 0 ] || { cat "$TMP/out"; fail "FLAKY 用例绿的那次也不该弄红整个闸"; }
+grep -qE 'rc=0 +flip\.sh +FLAKY' "$TMP/out" || fail "绿的那次没标 FLAKY"
+grep -q 'FLAKY=1' "$TMP/out" || fail "汇总里没单独计数 FLAKY"
+ok "第四态: rc=0 和 rc=1 都不参与判定, 但 rc 照常打印且单独计数"
+
+# ⛔ FLAKY 不能是一张自己发给自己的豁免 —— 必须贴出观察到相反结果的 run id。
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh  # 我觉得这个有点 flaky\n' > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "没有 run id 证据的 FLAKY 竟然放行"; }
+grep -q 'FLAKY-缺run-id证据' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+ok "FLAKY 缺 run id 证据 ⇒ 红"
+rm -f "$TMP/scripts/tests/flip.sh"
 
 # ── 硬约束 9: 一个用例都没通过时不许报绿 ──────────────────────────────────
 # 「FAIL=0」在没跑到任何东西时与「全绿」长得一模一样。

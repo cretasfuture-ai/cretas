@@ -41,18 +41,28 @@ mkdir -p "$LOG_DIR"
 # ⛔ 不用「筛掉不匹配的行」那种写法 —— 一条写错的条目会静默从名单里消失,
 #    而它守的那个用例就变成了「不在名单」⇒ 一红就红, 或者更糟, 反过来。
 #    (本 PR 里另一个闸刚栽过这个: 筛子把「写错了」变成了「我没看见」, 形态 A⁴)
-declare -a LISTED=()
+declare -a LISTED=() FLAKY_LIST=()
 missing_listed=""
 bad_entry=""
 while IFS= read -r raw; do
-    line="${raw%%#*}"
-    line="$(printf '%s' "$line" | tr -d '[:space:]')"
-    [ -n "$line" ] || continue
+    body="${raw%%#*}"
+    body="$(printf '%s' "$body" | tr -d '[:space:]')"
+    [ -n "$body" ] || continue
     reason="${raw#*#}"
     [ "$reason" != "$raw" ] && [ -n "$(printf '%s' "$reason" | tr -d '[:space:]')" ] \
-        || bad_entry="$bad_entry $line"
-    [ -f "$TESTS_DIR/$line" ] || missing_listed="$missing_listed $line"
-    LISTED+=("$line")
+        || bad_entry="$bad_entry $body"
+    if [ "${body#FLAKY}" != "$body" ]; then
+        # 第四态: 读数不可判定。⛔ 必须贴出观察到相反结果的 run id, 否则它就是
+        #    一张自己发给自己的豁免。
+        name="${body#FLAKY}"
+        printf '%s' "$reason" | grep -qE '[0-9]{8,}' \
+            || bad_entry="$bad_entry ${name}(FLAKY-缺run-id证据)"
+        [ -f "$TESTS_DIR/$name" ] || missing_listed="$missing_listed $name"
+        FLAKY_LIST+=("$name")
+    else
+        [ -f "$TESTS_DIR/$body" ] || missing_listed="$missing_listed $body"
+        LISTED+=("$body")
+    fi
 done < "$KNOWN"
 
 [ -z "$bad_entry" ] || { echo "error=known_failing_entry_without_reason$bad_entry" >&2; exit 2; }
@@ -68,8 +78,13 @@ is_listed() {
     for x in ${LISTED[@]+"${LISTED[@]}"}; do [ "$x" = "$1" ] && return 0; done
     return 1
 }
+is_flaky() {
+    local x
+    for x in ${FLAKY_LIST[@]+"${FLAKY_LIST[@]}"}; do [ "$x" = "$1" ] && return 0; done
+    return 1
+}
 
-n_total=0 n_pass=0 n_fail=0 n_known=0 n_fixed=0
+n_total=0 n_pass=0 n_fail=0 n_known=0 n_fixed=0 n_flaky=0
 declare -a FAILED=() FIXED=()
 
 for f in "$TESTS_DIR"/*.sh; do
@@ -81,7 +96,11 @@ for f in "$TESTS_DIR"/*.sh; do
     timeout "$PER_TEST_TIMEOUT" bash "$f" > "$LOG_DIR/$base.log" 2>&1
     rc=$?
 
-    if is_listed "$base"; then
+    if is_flaky "$base"; then
+        # rc 照常打印(⛔ 不藏), 但不参与红绿判定 —— 它的读数在这台机器上不可判定。
+        printf 'rc=%-5s %-45s FLAKY(读数不可判定, 不参与判定)\n' "$rc" "$base"
+        n_flaky=$((n_flaky + 1))
+    elif is_listed "$base"; then
         if [ "$rc" -eq 0 ]; then
             printf 'rc=%-5s %-45s FIXED — 请从 known-failing.txt 删掉\n' "$rc" "$base"
             n_fixed=$((n_fixed + 1)); FIXED+=("$base")
@@ -99,11 +118,11 @@ for f in "$TESTS_DIR"/*.sh; do
 done
 
 echo
-echo "TOTAL=$n_total PASS=$n_pass FAIL=$n_fail KNOWN_FAILING=$n_known FIXED=$n_fixed"
+echo "TOTAL=$n_total PASS=$n_pass FAIL=$n_fail KNOWN_FAILING=$n_known FIXED=$n_fixed FLAKY=$n_flaky"
 
 # 硬约束 9: 「没有新失败」必须配一个「一定会发生」的读数。glob 没命中 / 目录空
 # 在 FAIL=0 上与「全绿」长得一模一样。
-[ "$((n_pass + n_fail + n_known + n_fixed))" -eq "$n_total" ] \
+[ "$((n_pass + n_fail + n_known + n_fixed + n_flaky))" -eq "$n_total" ] \
     || { echo "error=census_mismatch —— 计数器和实际循环对不上, 本次读数作废" >&2; exit 2; }
 [ "$n_pass" -gt 0 ] \
     || { echo "error=zero_tests_actually_passed —— FAIL=0 在这里没有意义" >&2; exit 2; }
@@ -129,5 +148,5 @@ if [ "$n_fixed" -gt 0 ]; then
     rc_final=1
 fi
 
-[ "$rc_final" -eq 0 ] && echo "NO_NEW_FAILURES (存量红 $n_known 条已记账)"
+[ "$rc_final" -eq 0 ] && echo "NO_NEW_FAILURES (存量红 $n_known 条已记账, 读数不可判定 $n_flaky 条)"
 exit "$rc_final"
