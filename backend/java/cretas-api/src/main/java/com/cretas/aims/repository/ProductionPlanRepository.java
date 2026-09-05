@@ -645,4 +645,26 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     List<ProductionPlan> findByFactoryIdAndSourceOrderIdsContaining(
             @Param("factoryId") String factoryId,
             @Param("soIdJson") String soIdJson);   // caller passes: "[\"<soId>\"]"
+
+    /**
+     * 🔴🔒 幽灵预扣根修 (BUG-GHOST-PENDING-FEED-DELETED-PLANS, 2026-09-06): 批量取
+     * {@code (planId, status)} —— 给 {@code PendingInterimFeedServiceImpl} 判断一条待结投料行
+     * 「将来还结不结得掉」。
+     *
+     * <p><b>只返回「还够得着」的计划</b>: 走 JPQL ⇒ 实体上的
+     * {@code @Where(deleted_at IS NULL)} 自动生效, 软删计划天然不在结果里; 硬删计划本来就没有行。
+     * ⇒ <b>请求的 id 没在返回里 = 这个计划任何结算路径都够不着了</b> (两种成因在此不可区分,
+     * 也不需要区分 —— 行为后果完全相同, 见调用方 javadoc)。
+     *
+     * <p>⛔ 不要改成 nativeQuery 「顺便把软删的也捞回来」: 那会让本方法的返回集与
+     * {@code settleProduction} / {@code interimSettle} 实际能加载到的计划集<b>不一致</b>,
+     * 而这两者一致正是本方法唯一的用处。
+     *
+     * @return 每行 {@code [String planId, ProductionPlanStatus status]}
+     */
+    @Query("SELECT p.id, p.status FROM ProductionPlan p "
+            + "WHERE p.factoryId = :factoryId AND p.id IN :planIds")
+    List<Object[]> findPlanStatusesByFactoryIdAndIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("planIds") Collection<String> planIds);
 }

@@ -2,7 +2,9 @@ package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -32,6 +35,7 @@ class PendingInterimFeedServiceImplTest {
 
     private ProcessSheetRowRepository rowRepository;
     private WipInventoryService wipInventoryService;
+    private ProductionPlanRepository planRepository;
     private PendingInterimFeedServiceImpl service;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -41,7 +45,19 @@ class PendingInterimFeedServiceImplTest {
     void setUp() {
         rowRepository = mock(ProcessSheetRowRepository.class);
         wipInventoryService = mock(WipInventoryService.class);
-        service = new PendingInterimFeedServiceImpl(rowRepository, wipInventoryService, objectMapper);
+        planRepository = mock(ProductionPlanRepository.class);
+        // 默认: 每个被问到的 planId 都存在且 IN_PROGRESS (= 还结得掉) —— 保持本文件既有用例的口径不变。
+        // ⚠️ 不桩的话 Mockito 返回空列表 ⇒ 所有行都被当成「计划够不着」剔掉, 本文件每条断言都会变成
+        //    恒真式 (pendingByBatchNo 恒空), 那是「量错了东西」而不是「行为对了」。
+        when(planRepository.findPlanStatusesByFactoryIdAndIdIn(eq(F), any()))
+                .thenAnswer(inv -> {
+                    Collection<String> ids = inv.getArgument(1);
+                    return ids.stream()
+                            .map(id -> new Object[] {id, ProductionPlanStatus.IN_PROGRESS})
+                            .collect(java.util.stream.Collectors.toList());
+                });
+        service = new PendingInterimFeedServiceImpl(
+                rowRepository, wipInventoryService, objectMapper, planRepository);
     }
 
     /** 构造一条待小结行, payload 含给定 upstream refs。 */

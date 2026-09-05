@@ -53,10 +53,21 @@ public interface PendingInterimFeedService {
      * @param pendingByBatchNo   已折算到来源 SFI 原生单位的待扣量 (恒 &gt; 0); 无待扣的批次不在其中
      * @param unresolvedBatchNos 折算返回诚实 null 的来源批次 (计数单位缺每盒克重 / 批次已不存在) ——
      *                           这些批次的待扣量是<b>未知</b>, 不是 0
+     * @param unsettlablePlans   本次遍历里<b>因为计划永远结不掉而被排除</b>的行 (及那些计划的 id)。
+     *                           ⛔ 不要把它并进 {@code unresolvedBatchNos} —— 那一栏说的是
+     *                           「这个批次的待扣量算不出来」(未知), 这一栏说的是
+     *                           「这些行的待扣量确定是 0」(已排除)。两件相反的事。
      */
-    record Snapshot(Map<String, BigDecimal> pendingByBatchNo, Set<String> unresolvedBatchNos) {
+    record Snapshot(Map<String, BigDecimal> pendingByBatchNo,
+                    Set<String> unresolvedBatchNos,
+                    UnsettlablePlans unsettlablePlans) {
 
         private static final Snapshot EMPTY = new Snapshot(Map.of(), Set.of());
+
+        /** 旧的两参构造 —— 既有调用方 (测试桩等) 不必知道排除栏。 */
+        public Snapshot(Map<String, BigDecimal> pendingByBatchNo, Set<String> unresolvedBatchNos) {
+            this(pendingByBatchNo, unresolvedBatchNos, UnsettlablePlans.none());
+        }
 
         /** 服务未注入 (单测 / 未接线) 时的空读数 —— 与「整厂没有待扣」同义 (旧口径, 向后兼容)。 */
         public static Snapshot empty() {
@@ -72,6 +83,53 @@ public interface PendingInterimFeedService {
         /** 该批次至少有一条投料引用折算不出来 ⇒ 它的待扣量<b>不完整</b>, 可用量不可当作干净读数。 */
         public boolean isUnresolved(String intermediateBatchNo) {
             return intermediateBatchNo != null && unresolvedBatchNos.contains(intermediateBatchNo);
+        }
+    }
+
+    /**
+     * 🔴🔒 幽灵预扣的<b>留痕栏</b> (BUG-GHOST-PENDING-FEED-DELETED-PLANS, 2026-09-06)。
+     *
+     * <p><b>为什么这一栏必须存在</b>: 修法本身是「把结不掉的行从待扣里剔出去」, 而
+     * <b>静默剔除与从来没有过这些行长得一模一样</b>。真出问题时 (比如误删计划把一整批在产的行剔掉了),
+     * 唯一能看出来的读数就是这里的计数。⛔ 只加 JOIN 不加计数 = 把一个可观测的缺陷换成一个不可观测的。
+     *
+     * @param orphanRowCount    因<b>计划够不着</b>(硬删无行 / 软删 deleted_at IS NOT NULL) 被排除的行数。
+     *                          两种成因不区分: 经 {@code @Where} 的仓库查询里它们本就是同一个读数,
+     *                          而且后果相同 —— 小结与结单都加载不到该计划, 这些行永远盖不上戳。
+     * @param orphanPlanIds     上述行指向的计划 id (排重), 供人工核对是不是误删。
+     * @param cancelledRowCount 因计划 {@code CANCELLED} 被排除的行数。取消是<b>终态</b>:
+     *                          小结显式拒绝 CANCELLED, 结单只收 IN_PROGRESS/PENDING ⇒ 同样永远盖不上戳;
+     *                          且取消审批路径本身已冲销并恢复过库存, 再算一次待扣就是重复预扣。
+     * @param cancelledPlanIds  上述计划 id (排重)。
+     * @param anomalousTerminalPlanIds
+     *                          {@code COMPLETED / PENDING_APPROVAL} 计划上<b>仍然</b>有未结行 ——
+     *                          🔴 <b>这些行没有被排除</b>, 照常计入待扣。此栏只是把异常喊出来:
+     *                          正常结单会同事务给本计划全部未结行盖戳, 所以出现在这里就意味着
+     *                          「结单没盖到」或「被撤回冲销后重新变回待结」。后者待扣是<b>真的</b>
+     *                          (冲销已把货退回库存, 等着重新结算), 所以⛔ 不能顺手剔掉。
+     */
+    record UnsettlablePlans(int orphanRowCount,
+                            Set<String> orphanPlanIds,
+                            int cancelledRowCount,
+                            Set<String> cancelledPlanIds,
+                            Set<String> anomalousTerminalPlanIds) {
+
+        private static final UnsettlablePlans NONE =
+                new UnsettlablePlans(0, Set.of(), 0, Set.of(), Set.of());
+
+        /** 一行都没排除。 */
+        public static UnsettlablePlans none() {
+            return NONE;
+        }
+
+        /** 本次遍历一共剔掉了几行 (两类之和)。 */
+        public int totalExcludedRows() {
+            return orphanRowCount + cancelledRowCount;
+        }
+
+        /** 有没有任何值得记一笔的事 —— 决定要不要打那行日志。 */
+        public boolean isSilent() {
+            return totalExcludedRows() == 0 && anomalousTerminalPlanIds.isEmpty();
         }
     }
 }
