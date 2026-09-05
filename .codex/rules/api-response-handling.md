@@ -1,43 +1,7 @@
-# API 响应处理规范
+# API 响应处理（指针）
 
-**最后更新**: 2026-02-22
+POINTER: .claude/rules/coding-conventions.md
 
-### 后端规模统计 (更新于 2026-02-22)
+本文件不含规则正文。Codex 请直接读上面的权威文件 —— Claude 与 Codex 共用同一份规则，避免两份各自漂移（2026-09-05 收敛；此前 `.codex/rules` 是各自演化的旧快照，9 个同名文件全部与 `.claude/rules` 不一致）。
 
-- Controller: **114 个**
-- API 端点: **~1442 个**
-
----
-
-## 统一响应格式
-
-```json
-{ "success": true, "data": {...}, "message": "操作成功" }
-{ "success": false, "data": null, "message": "错误信息", "code": "ERROR_CODE" }
-{ "success": true, "data": { "content": [], "totalElements": 100, "totalPages": 10 } }
-```
-
-## 前端解析
-
-```typescript
-const response = await apiClient.get('/endpoint');
-if (!response.success) throw new ApiError(response.message, response.code);
-return response.data;
-```
-
-## 错误处理
-
-```typescript
-import { isAxiosError } from 'axios';
-
-catch (error) {
-  if (isAxiosError(error)) {
-    const status = error.response?.status;
-    if (status === 401) handleAuthExpired();
-    else if (status === 403) Alert.alert('权限不足');
-    else Alert.alert('请求失败', error.response?.data?.message);
-  }
-}
-
-// ❌ 禁止: catch (error: any), 静默失败, 返回假数据
-```
+四条编码规范（API 响应 / TypeScript / 字段命名 / JWT）已于 2026-07-28 合并为一份。

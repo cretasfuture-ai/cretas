@@ -19,7 +19,7 @@ description: 低技术素养用户屏幕的 UX Flow Gate。Use before proposing 
 
 ### 执行顺序
 
-1. 读取 `.codex/rules/fool-proof-design.md`，对照 5 条规则逐一检查
+1. 读取 `.claude/rules/fool-proof-design.md`，对照 5 条规则逐一检查
 2. 应用内联 UX 规则（见下方「内联 UX 规则」）对屏幕功能逐项评估
 3. 产出强制 spec 章节（格式见下方「强制 spec 章节格式」）
 4. 门控检查：进入 writing-plans 前，spec 必须包含完整的「UX Flow Analysis」章节

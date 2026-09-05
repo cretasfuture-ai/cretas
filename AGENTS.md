@@ -72,7 +72,7 @@ uvicorn main:app --port 8083     # 启动服务
 
 ### 部署到服务器
 
-GitHub 不可用时按 `.codex/rules/worktree-and-main-only-deploy.md` 的离线协议执行（本地 `main` 汇合、detached worktree + `SKIP_GIT_CHECK=1` 部署、恢复后各分支走 PR）；GitHub 可用时下方常规规则生效。
+GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离线协议执行（本地 `main` 汇合、detached worktree + `SKIP_GIT_CHECK=1` 部署、恢复后各分支走 PR）；GitHub 可用时下方常规规则生效。
 
 ```bash
 # 正常 Java/Web 发布优先使用统一入口；Base SHA 必须来自 dispatch 登记
@@ -210,15 +210,16 @@ frontend/CretasFoodTrace/src/
 
 ### 代码质量原则
 
-详见 `.codex/rules/` 目录下的规范文件：
-- `ai-intent-tool-skill-architecture.md` - **AI Tool-Skill 架构规范（核心）**
-- `api-response-handling.md` - API 响应处理
-- `typescript-type-safety.md` - TypeScript 类型安全
-- `jwt-token-handling.md` - JWT Token 处理
-- `database-entity-sync.md` - 数据库同步
-- `field-naming-convention.md` - 字段命名
-- `concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
-- `ci-runner-routing.md` - **CI runner 路由**：默认托管，额度耗尽时 `python scripts/ci/switch_ci_runner.py self-hosted` 切到加拿大 Mac mini；恢复就 `... hosted`（一条命令改三个工作流，有闸钉着三处一致）。⛔ 别用组织变量 `${{ vars.X }}` 做路由 —— 实测 job 被派成 `labels=ubuntu-latest`，即 `vars` 在 `runs-on` 求值时读到的是空。本文件与 `.claude/rules/` 同名文件**必须逐字相同**（`scripts/ci/check_shared_agent_rules.py` 钉着，PR 上跑）
+规范文件的权威版本在 `.claude/rules/`（Claude 与 Codex 共用一份；`.codex/rules/` 下同名文件只是指针，`ci-runner-routing.md` 例外为逐字副本，由 `scripts/ci/check_shared_agent_rules.py` 钉住）。Codex 直接读：
+- `.claude/rules/ai-intent-tool-skill-architecture.md` - **AI Tool-Skill 架构规范（核心）**
+- `.claude/rules/coding-conventions.md` - API 响应 / TypeScript 类型 / 字段命名 / JWT（原四条已合并）
+- `.claude/rules/database-entity-sync.md` - 数据库同步
+- `.claude/rules/concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
+- `.claude/rules/worktree-and-main-only-deploy.md` - worktree 隔离 + 只从 main 部署
+- `.claude/rules/measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（案例库 `docs/rules-casebook/`）
+- `.claude/rules/standing-authorization-and-visual-acceptance.md` - 常设授权：直接做完，不设人肉闸门
+- `.claude/rules/ci-runner-routing.md` - **CI runner 路由**：默认托管，额度耗尽时 `python scripts/ci/switch_ci_runner.py self-hosted` 切到加拿大 Mac mini；恢复就 `... hosted`。⛔ 别用组织变量 `${{ vars.X }}` 做路由 —— 实测在 `runs-on` 里读到的是空
+- 服务器运维 / 部署 / 凭证位置：`.claude/skills/server-operations/SKILL.md`；`.codex/rules/*-credentials.md`（gitignored）是 Codex 侧凭证真值
 
 ### Superpowers 禁用规则（强制）
 

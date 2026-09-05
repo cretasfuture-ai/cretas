@@ -1,49 +1,7 @@
-# TypeScript 类型安全规范
+# TypeScript 类型安全（指针）
 
-**最后更新**: 2026-02-22
+POINTER: .claude/rules/coding-conventions.md
 
-### 统计现状 (更新于 2026-02-22)
+本文件不含规则正文。Codex 请直接读上面的权威文件 —— Claude 与 Codex 共用同一份规则，避免两份各自漂移（2026-09-05 收敛；此前 `.codex/rules` 是各自演化的旧快照，9 个同名文件全部与 `.claude/rules` 不一致）。
 
-当前项目存在 **273 处** `as any` 类型断言，需逐步清理。
-
----
-
-## 禁止 `as any`
-
-```typescript
-// ❌ BAD
-const data = response as any;
-catch (error: any) { ... }
-
-// ✅ GOOD - 类型守卫
-function isApiResponse<T>(obj: unknown): obj is ApiResponse<T> {
-  return typeof obj === 'object' && obj !== null && 'success' in obj;
-}
-```
-
-**例外**（必须注释）:
-```typescript
-// @ts-expect-error - 第三方库类型不完整
-const theme = useTheme() as any;
-```
-
-## 组件 Props
-
-```typescript
-// ❌ BAD
-const MyComponent = (props: any) => { ... };
-
-// ✅ GOOD
-interface Props { title: string; onPress: () => void; }
-const MyComponent: React.FC<Props> = ({ title, onPress }) => { ... };
-```
-
-## 导航参数
-
-```typescript
-// ❌ BAD
-const route = useRoute<any>();
-
-// ✅ GOOD
-const route = useRoute<RouteProp<StackParamList, 'Detail'>>();
-```
+四条编码规范已合并为一份，见目标文件 §TypeScript。

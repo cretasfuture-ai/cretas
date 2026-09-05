@@ -5,7 +5,7 @@ description: 检查和更新 Codex Rules 内容。包括格式检查、统计数
 
 # Rules 维护 Skill
 
-维护 `.codex/rules/` 目录中的规则文件。`.claude/rules/` 可作为历史来源读取，但 Codex 的可引用规则应落在 `.codex/rules/`。
+规则的权威版本在 `.claude/rules/`（Claude 与 Codex 共用）；`.codex/rules/` 下同名文件是指针（`POINTER: <目标>`），只有 `ci-runner-routing.md` 与 `*.example.md` 保留正文。改规则改 `.claude/rules/`，新增规则时在 `.codex/rules/` 加一个指针文件。
 
 ## Claude-only 边界
 
