@@ -497,6 +497,33 @@
 
 **CI 侧**：自建 runner 出过一次 `ENOENT .git/objects/e5` 的 checkout 失败，重跑即过。⚠️ 重跑后立刻读 `gh pr checks` 会看到**行数变少的假绿**（重跑的 job 尚未登记）——判据加了「行数 ≥ N 且 pending=0」。
 
+### 📌 2026-09-05 12:09 增量（系统时钟）· OTA 送达链断了三天 —— 证书续了但没推给 CDN
+
+**发现路径**：02:03 推完 OTA，按「回执 ≠ 送达」去包里找标记，下载被 `SEC_E_CERT_EXPIRED` 拦下。⇒ **不是下载失败，是线上证书过期。**
+
+```
+dl.cretaceousfuture.com    notAfter Sep  2 02:12:18 2026 GMT   ← 已过期(发现时 9-4 18:04 UTC)
+ota.cretaceousfuture.com   notAfter Nov  7 2026                ← 好的
+```
+
+🔴 **两个域名证书状态不同，正是它藏得住的原因**：`updates.url` 指 **ota.**（有效）⇒ 清单 200、`push-bundle.sh` 六步回执全绿；而 `launchAsset` 与全部 assets 指 **dl.**（过期）⇒ 安卓 TLS 握手失败 ⇒ 零送达。
+
+**受影响面三条**（同一张证书）：OTA 包、OTA 素材首拉、**APK 直链**（`MobileBusinessServiceImpl:80` 的 `app.version.android.download-base` 默认就是该域且 prod 未覆盖 ⇒ 新设备装不上）。⚠️ **运行时素材不在内**（已验伪）：RN 源码只在一个测试文件里引用该域，上传走 OSS 另一域，prod 三张素材表的 http URL 合计 0 条（阳性对照：`batch_evidence_photos` 本身 0 行、`payment_records` 55 行但 0 行存 URL）。
+
+🔴 **根因订正（我最初判断是错的）**：我在 **47** 上查「有没有续期机制」，查不到就报「6-04 手工签、从没续过」。**acme.sh 在 139 上**，`dns_ali` DNS-01、`0 19 * * *` 天天跑、管 8 个域名，全部正常续 —— **9-01 就签好一张 11-30 到期的证书，在磁盘上躺了四天**。断的是域名 conf 里 `Le_DeployHook` 为空，**续完没推给 CDN**。
+▎**判据没错，量错了机器。** 且「有续期」与「续期结果送到了」是两件事，与「回执 ≠ 送达」同构 —— 判据要落在**客户端看到的那张证书的到期日**。
+
+**已修（f006 执行，owner 授权；我独立复核）**：`dl.` 与 `download-cdn.vitaglobal.icu` 各补 `--deploy-hook ali_cdn` + `DEPLOY_ALI_CDN_DOMAIN`（后者线上 serial == 磁盘 serial ⇒ 7-29 那次是手工推的，10-27 必然重演）；`admin.` 补 `Le_ReloadCmd='nginx -s reload'`（此前靠**搭邻居 reload 的便车**，偶然不是设计）。**新闸** `/root/check-live-certs.sh` 两台每天跑，量**客户端实际看到的证书剩余天数**而非「acme 跑没跑」，域名清单从 `acme.sh --list` 的 Main+SAN **推导**（新域名自动进，`dl.` 正是作为 `download.` 的 SAN 被覆盖）；三态退出码**三态各构造过一次**，两条 rc=2 措辞互不相同，另有 ledger 每次必追加一行作「必发生」对照。
+✅ **复核**：闸文件在、cron `30 21` 排在 acme `0 19` 之后、`Le_DeployHook='ali_cdn,'` + `SAVED_DEPLOY_ALI_CDN_DOMAIN` 存住、`admin` 的 reload 已补。
+⚠️ **已知盲区（不藏）**：清单只覆盖 acme.sh 管的域名；手工传 CDN 或别处签发的证书不在内。
+
+**恢复核验**（11:39，不加 `-k`）：证书 `Sep 1 → Nov 30`、SAN 含 `dl.`；包 `http=200 size=6,725,456 ssl_verify=0`；APK `http=206 ssl_verify=0`。⇒ **02:03 那次推送本身是成功的，不用重推**，清单仍指同一包（`/production/1788544899864/`）。
+
+**包内容也证到了**（此前被证书挡着做不了）：⚠️ `.hbc` 是 **gzip 压过的**（头 `1f8b`），解压前 grep **全 0、含阳性对照** —— 是阳性对照跟着归零才认出仪器坏，否则会得出「包里没有我的改动」这个**反向**结论。`gunzip` 后 15,259,839 字节、头 `c61fbc03`=Hermes：`SHORT_CLOSED` 1 / `settleAllIndependently` 1（#581/#590 都在）、假串 0、阳性 9 与 32。
+⛔ **最后一跳仍未证**：设备真去拉并应用（`checkAutomatically: NEVER`，App 只在代码显式调用时查更新）⇒ 需真机开一次，看短交结案显示中文而非 `SHORT_CLOSED` 字面。已转 owner。
+
+📌 **本轮方法学**：① 判据没错也可能量错机器；② 有机制 ≠ 结果送到了；③ **扫描条数与已知总数对不上时先怀疑仪器**（f006 按目录名找 conf，acme 的 EC 目录带 `_ecc` 后缀 ⇒ 8 个漏 7 个，是「只印 1 行」这个数不对才认出来）；④ 阳性对照的价值在**它跟着一起归零**的那一刻。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
