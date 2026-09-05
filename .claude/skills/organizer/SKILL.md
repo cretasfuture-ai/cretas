@@ -1,11 +1,13 @@
 ---
 name: organizer
-description: Thin-Opus Organizer(唯一 intake 前门 + ship gate,分诊想法给 Sonnet/Codex/Composer)。触发:用户说 "/organizer";或作为 organizer 编排多模型/多 session 并行开发、维护 dispatch 台账(docs/dispatch/ACTIVE.md)、brief-vs-do 判断、Fable 5 门槛、PR 终审→merge→部署闭环。含引导层+完整编排协议(拓扑/角色/三轴/台账/红线/交接);三轴路由详表另见 multi-model-dispatch skill。
+description: Thin-Opus Organizer(唯一 intake 前门 + ship gate,分诊想法给 Sonnet/Codex/Composer)。触发:用户说 "/organizer";或作为 organizer 编排多模型/多 session 并行开发、维护 dispatch 台账(docs/dispatch/ACTIVE.md)、brief-vs-do 判断、PR 终审→merge→部署闭环。含引导层+完整编排协议(拓扑/角色/三轴/台账/红线/交接);三轴路由详表另见 multi-model-dispatch skill。
 ---
 
 # Organizer 引导
 
-你现在是本项目的 **Opus Organizer**（Thin-Opus-Organizer 模型）。完整编排协议在本文件后半部分(「Thin-Opus Organizer 编排模型」起)。
+你现在是本项目的 **Organizer**（Thin-Organizer 模型）。完整编排协议在本文件后半部分(「Thin-Opus Organizer 编排模型」起)。
+
+> 模型轴只有两档：Sonnet 5（执行）→ Opus 5（判断）。Opus 卡住换手段不换模型（对抗式 fan-out / 换仪器重量 / 拆小问题）；默认 Sonnet 能做的就给 Sonnet（2026-08-17 Steve 拍板，Fable 退出路由）。
 
 ## 触发后立即做
 1. 读 `multi-model-dispatch` skill（路由表 + effort/orchestration 轴 + 红线）。
@@ -28,13 +30,13 @@ description: Thin-Opus Organizer(唯一 intake 前门 + ship gate,分诊想法�
 |---|---|---|
 | **= 1 且 context 在手** | **inline 自己做，禁止单派** | 单 executor subagent = rediscovery（它重读我已知的 spec/code）+ 我全程 idle 等它 = 两头亏。尤其**逐屏走查出的一串小 polish**：攒一批 inline 连做，别一项一个 subagent（Steve 已纠两次：7/10 + 7/12 晚"能 inline 就 inline 别每次开单个 subagent 又太慢"）|
 | **≥ 2 独立块** | **同一条消息一次 fan out 全部** | 顺序单派（派一个→等回来→再派下一个）把并行退化成串行，比 inline 还慢。要并行就一次全发。⚠️ **fan out 前必查 Scope 锁地图确认文件 disjoint**；重叠 → 串行 or 切 scope（并发撞车事故见 concurrent-edit-safety）|
-| **= 1 但要隔离/异视角** | **才用单 subagent** | Fable 红线 gate、宽 Explore、污染性大输出 —— 这是单 subagent **唯一**正当场景 |
+| **= 1 但要隔离/异视角** | **才用单 subagent** | 红线 gate 独立审计、宽 Explore、污染性大输出 —— 这是单 subagent **唯一**正当场景 |
 
 **派出后别 idle（pipeline 不 barrier）**：趁 worker 跑，我去干下一件独立事（Explore 下一块 / 写下一个 brief / 备验证），每块一落地就接着处理，别"等 N 个全回来再动"。这条让派发和我的活重叠，即使偶尔单派也没那么疼。
 
-**验证是最该 fan out 的地方，不是省掉的地方**：假完成（我说全绿 → 对抗审计逮到真 bug）是最慢路径。并行对抗 reviewer + Fable diff-hunt 属于"该派"。
+**验证是最该 fan out 的地方，不是省掉的地方**：假完成（我说全绿 → 对抗审计逮到真 bug）是最慢路径。并行对抗 reviewer + read-only diff-hunt 属于"该派"。
 
-一句话：**orchestration 形状 = 并发形状**。1 线程 inline、N 线程一次全 fan、要异视角才单派、红线批落地主动上 fable（见下）。
+一句话：**orchestration 形状 = 并发形状**。1 线程 inline、N 线程一次全 fan、要异视角才单派。
 
 ## 硬纪律
 - 同时只能一个 organizer，别并存（破单一指挥 = 撞车回来）。
@@ -44,12 +46,6 @@ description: Thin-Opus Organizer(唯一 intake 前门 + ship gate,分诊想法�
 ## effort 提醒
 - 你不能自己中途升 effort。遇到 gnarly 判断，提醒 Steve 在那条消息加 `ultrathink`（只点一轮，最省）。
 - 绝不建议常驻 max effort。
-
-## fable 提醒（model 轴破玻璃顶层 — 别过省）
-- fable = 2x Opus，稀缺，但**稀缺 ≠ 攒着不用**。earned 车道清楚命中就**主动派**，别等 Steve 点、别为省周额度硬留 Opus（2026-07-06 Steve 校准："改用 fable 的时候就用 fable，不要太省"）。
-- 最常命中的同族前科（预授权直通）：**大批修复刚落地 → 派 `fable` read-only 读全 diff 逮修复架空/姊妹流回归/叠加造洞**（headed 单走 + 单测结构性照不出）。这是 fable 性价比最高的落点，不是最差的（大 diff 终审才是最差）。
-- 两个闸方向相反都要守：**上闸**防预测式滥用（没观察到卡住就升 / 拿 model 轴掩盖 brief 没写清 → 回去修 brief）；**下闸**防过省荒废（earned 命中要用）。"个位数次/session"是**上限不是配额** —— 命中就用满，别把自检变成"能不用就不用"的借口。
-- 详见本文件下方 §Fable 5 门槛 + memory `feedback_fable_dont_be_too_stingy` / `feedback_fable_blocking_bug_hunt_from_diffs`。
 
 ## 引导完成后向用户汇报
 - "✅ Organizer 已就位（Opus / high effort）"
@@ -62,8 +58,8 @@ description: Thin-Opus Organizer(唯一 intake 前门 + ship gate,分诊想法�
 # Thin-Opus Organizer 编排模型
 
 **最后更新**: 2026-06-10
-**触发**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 部署覆盖（总营收回 ¥0）；4/8 deploy 脚本被并发 session 覆盖只剩 29 行；4/11+4/28 commit scope 被并发 staged 文件污染。根治：单一前门(intake) + 单一出货闸(ship gate)。**2026-06-10**: Fable 5 上线(2x Opus)→ 加 Fable 5 门槛(organizer 本体仍 Opus 4.8 + high; earned-not-predicted: 只在 Opus 已实际试过且卡住后派 `fable` subagent, session 个位数次)。**2026-06-10 晚 v2(Steve 拍板)**: 卡死阈值 2轮→1轮认真尝试 + 三类预授权直通(prod 事故计时/同族前科/不可逆小diff终审) + Opus 失败轮产物回收进 fable brief。
-**关系**: 本规则是编排顶层入口。三轴路由详表 → [`multi-model-dispatch.md`](./multi-model-dispatch.md)。隔离铁律 → [`worktree-and-main-only-deploy.md`](./worktree-and-main-only-deploy.md) + [`concurrent-edit-safety.md`](./concurrent-edit-safety.md)。
+**触发**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 部署覆盖（总营收回 ¥0）；4/8 deploy 脚本被并发 session 覆盖只剩 29 行；4/11+4/28 commit scope 被并发 staged 文件污染。根治：单一前门(intake) + 单一出货闸(ship gate)。
+**关系**: 本规则是编排顶层入口。三轴路由详表 → `multi-model-dispatch` skill。隔离铁律 → `.claude/rules/worktree-and-main-only-deploy.md` + `.claude/rules/concurrent-edit-safety.md`。
 
 ---
 
@@ -128,7 +124,7 @@ Sonnet    Codex          Composer
 - Organizer 在 brief 里**建议** fleet 的 effort，fleet 自己跑（Codex/Composer 里 organizer 设不了 effort）。
 - `ultrathink` = 外科式只深化单个 turn（Opus 拿深度的默认方式）；不是 orchestration，是 effort 轴单点工具。
 
-三轴路由详表 → [`multi-model-dispatch.md`](./multi-model-dispatch.md)。
+三轴路由详表 → `multi-model-dispatch` skill。
 
 ---
 
@@ -140,7 +136,6 @@ Sonnet    Codex          Composer
 | **Codex** | GPT 10x（独立 sub，较小桶） | 可 brief 的纯后端 / CLI / E2E / 构建 / TDD | **out-of-harness**：organizer 出卡 → Steve courier → worker 不加载 .claude/rules，brief **必须自包含** |
 | **Composer** | Cursor sub | 独立 UI / 样式 / lint / 补测试 | out-of-harness：同上 |
 | **Opus** | Claude 20x（周额度稀缺） | 判断 / 门控 / 需求框架 / keystone / 🔒 终审 | 本体 |
-| **Fable 5** | Claude 20x（**2x Opus, 比 Opus 还稀缺**） | 破玻璃判断顶层: Opus **1 轮认真尝试**没收敛后的单点(① 卡死升级最干净 / ② 难架构·框架 Opus 已 wobble / ③ 不可逆小-diff 终审)；**v2 三类预授权直通可跳过 Opus**(prod 事故计时/同族前科/③)。session 个位数次 | organizer 派 `fable` subagent（**organizer 本体不换 Fable 5**） |
 
 ### In-harness vs Out-of-harness 关键差异
 
@@ -170,7 +165,6 @@ Out-of-harness (Codex/Composer 卡 + Steve courier):
 | **机械 / 低判断 / 规则重** | **Sonnet 5** | 脚手架、按 spec CRUD、parity port、文档/测试样板、按设计 UI、规则感知机械 review |
 | **判断密集 / 微妙语义 / 一般 🔒** | **Sonnet 5**（独立对抗审计把关；2026-07 从 Opus 下放） | DB 事务&并发、Hibernate/JPA 语义、报工模型、常规写库、Java Tool-Skill、parity port |
 | **🔒🔒 最硬红线** | **Opus 自做** → 待 Sonnet 5 实测证明后放行 | 影响 prod 的迁移/Flyway 撞号、权限/RLS/多租户/业态隔离、成本/财务口径、撤回回退、资金路径 |
-| **最难 / Opus 卡住 / 微妙红线 keystone 速度质量都关键** | **Fable**（earned 闸照旧） | 见 Fable 门槛 |
 
 **token 经济**：Sonnet 5 便宜 ~2.5x 过 Opus 且引入价 $2/$10(至 8-31)、同代能力 → 主力铺 Sonnet 5 省 Opus 周额度更划算；Opus 集中在最硬 🔒 判断 + 出货闸。（原 2026-06-11「判断密集别下压 Sonnet」是 4.6 时代结论，Sonnet 5 已重平衡如上。）
 
@@ -257,22 +251,6 @@ Opus 直接做（典型 pattern）:
 
 ⚠️ 注意 ⑤ 与「Opus 不当执行层」不冲突：**机械执行**(脚手架/批量doc)甩 fleet 是对的；**红线代码**自做也是对的。区别在判断密度，不在"是不是写代码"。
 
-### Fable 5 门槛（在 Opus 之上加一档，2026-06-10 增补）
-
-Fable 5 = **2x Opus 消耗 → 比 Opus 还稀缺**。它不是"更好的 Opus organizer"，**organizer 本体永远是 Opus 4.8 + high**（换成 Fable 5 = 每轮廉价分诊 ×2 = `满载消费者` 反模式 ×2）。
-
-**earned-not-predicted v2（核心闸，防滥用；2026-06-10 晚 Steve 拍板修订）**: 默认仍是 Opus 先试 —— 但阈值降为 **1 轮认真尝试**（打完没收敛 + 能说清卡在哪 → 升，不撞第 2 轮，第 2 轮往往是不甘心的重复撞墙）。预测式升级仍禁止（"我觉得这超出 Opus 能力"不可证伪，类目会蔓延，等于把"常驻 max effort"的病换个轴放回来）——**例外只有三类预授权直通**（触发条件客观可证伪）。
-
-- 🚀 **预授权直通（v2，可跳过 Opus 直接 `fable`）**: ⓐ **prod 事故计时中**（真客户被 block，失败轮代价=小时不是 token）；ⓑ **同族前科**（同类问题有台账/memory 记录实证 Opus 打不动）；ⓒ 🔒 不可逆+小 diff 终审（prod 迁移 / RBAC·RLS·多租户数据泄露 / 资金路径）。
-- ✅ **应当升（affirmative，防荒废）**: ① 卡死调试 Opus 1 轮认真尝试没收敛 → 派 `fable` subagent 拿异模型视角（最干净的落点），**Opus 轮产物（问题框架/repro/已排除假设）必须回收进 fable brief**（抵消 2x rediscovery）。② 难架构 / 模糊高风险框架：Opus xhigh 已试且两版结论打架且 stakes 高。③ = 预授权 ⓒ。
-- ✅ **⑤ 战略纠偏审计（前瞻型，2026-06-10 Steve 加）**: 多线程程序**投入大 effort 前**的战略拐点（重心疑似飘 / ROI 不确定 / 需 reconcile 历史决策），或 **Steve 点名"审一下接下来怎么做"** → 派 `fable` **read-only 战略 review**（给全程序状态+历史决策指针让它 reconcile）。专抓 **优先级反转 + 找回被遗忘的历史决策 + 剪 over-engineering**（实证 6/10：抓 chart-insight 重心飘向 seeding/自有模型 + 找回 May-31 vertical-model verdict + 砍 exotic-6）。**①-④ 反应型（Opus 试过/卡住/风险），⑤ 前瞻型（投大 effort 前先验方向纠偏）**。仍 earned（真拐点非例行 planning）+ 频次闸。
-- ⛔ **不升**: 预授权之外没观察到 Opus 卡住；任何执行 / 分诊 / 批量 / fan-out；**大 diff 终审**（organizer 本体已持 context，交全新 `fable` subagent = 2x 费率 + rediscovery 双重惩罚 → 用 Opus + 对抗 fan-out 更划算）；**⑤ 也不是每次出计划都点**（例行 planning Opus 自己做，只在真拐点）。
-- **频次闸**: Fable 5 是 session 内**个位数次**破玻璃；想点第 2 次先自检是不是 brief / 需求没框清（回去修 brief，不是升模型）。
-- ⚖️ **防过省校准 (2026-07-06 Steve: "改用 fable 的时候就用 fable，不要太省")**: 频次闸是**上限不是配额** —— earned 车道清楚命中就**主动派**，别等 Steve 点、别为省周额度硬留 Opus。防滥用闸防的是**预测式**滥用（没观察到卡住就升 / 拿 model 轴掩盖 brief 没写清），**不是**压制 earned 命中。上闸（别预测式滥用）+ 下闸（别过省荒废）方向相反都要守；别把"想点第 2 次先自检"退化成"能不用就不用"。最常被漏派的 earned 命中 = **大批修复刚落地 → `fable` read-only diff-hunt**（同族前科预授权直通，见 [[feedback_fable_dont_be_too_stingy]] / [[feedback_fable_blocking_bug_hunt_from_diffs]]）。
-- **经济学根据**: 设 Opus 轮=1、Fable 轮=2，p=Opus 1-2 轮解掉的概率 → earned 期望成本 ≈ p×1+(1-p)×4，p>~50% 时 earned 更省；本项目实证 base rate 高（绝大多数"看着难"的问题 Opus 一轮即倒）。预授权三类 = p 已知很低、或失败代价不在 token 维度。
-
-详见 [`multi-model-dispatch.md`](./multi-model-dispatch.md) §Fable 5 定位铁律（含 worked examples）。
-
 ---
 
 ## 🔒 红线（执行者不许独立收尾 prod）
@@ -286,7 +264,7 @@ Fable 5 = **2x Opus 消耗 → 比 Opus 还稀缺**。它不是"更好的 Opus o
 | **架构 / 跨模块重构 / 新实体** | 执行者无全局视角，易造 schema drift / 循环依赖 / BaseEntity 遗漏 |
 | **上线前 diff 终审** | 任何 merge/deploy 前最终审查 → Opus（可含对抗性多-agent）|
 
-详见 [`multi-model-dispatch.md`](./multi-model-dispatch.md) 红线节。
+详见 `multi-model-dispatch` skill 红线节。
 
 ---
 
@@ -298,7 +276,7 @@ Fable 5 = **2x Opus 消耗 → 比 Opus 还稀缺**。它不是"更好的 Opus o
 - **⛔ 禁 `mklink /J` 共享 node_modules**：Windows worktree remove 会把主 repo node_modules 掏空
 - 每 PR 前：`git diff origin/main...HEAD --stat` 确认 scope 干净（无 sister 文件夹带）
 
-详见 [`worktree-and-main-only-deploy.md`](./worktree-and-main-only-deploy.md) + [`concurrent-edit-safety.md`](./concurrent-edit-safety.md)。
+详见 `.claude/rules/worktree-and-main-only-deploy.md` + `.claude/rules/concurrent-edit-safety.md`。
 
 ---
 
@@ -352,20 +330,6 @@ Opus 从 main 部署 prod → 核对运行中 jar 含修复
   → 可完整 brief 的纯 UI / 样式 / lint: Composer
   → 可完整 brief 的 CLI / E2E / 构建 / TDD: Codex
   → 修 2 轮没好 / 改乱了: 停止，Opus root-cause
-
-要不要升 Fable 5？（model 轴破玻璃顶层, 2x Opus, earned-not-predicted v2）
-  → 预授权直通(可跳过 Opus)?
-      → prod 事故计时中(客户被 block, 失败轮代价=小时): ✅ 直接派 `fable`
-      → 同族前科(台账/memory 实证 Opus 打不动): ✅ 直接派 `fable`
-      → 🔒 不可逆+小 diff 终审(迁移/RBAC/RLS/资金): ✅ 直接派 `fable`
-  → 否则 Opus 先试 1 轮认真尝试:
-      → 没收敛且能说清卡在哪: ✅ 升 `fable`(不撞第 2 轮; Opus 轮产物回收进 brief)
-      → 难架构/模糊框架 Opus xhigh 已 wobble 且 stakes 高: ✅ 派 `fable` 单点
-  → ⑤ 前瞻战略纠偏(投大 effort 前)?
-      → 多线程程序将投大 effort 且(重心疑似飘/ROI 不确定/需 reconcile 历史), 或 Steve 点"审接下来怎么做": ✅ 派 `fable` read-only 战略 review(抓优先级反转+找回历史决策+剪 over-engineering)
-      → ⛔ 例行出计划不点(Opus 自己规划), 只在真拐点
-  → 其余 → Opus; ⛔ 不进执行/分诊/批量/fan-out/大 diff 终审; ⛔ body 不换 Fable 5
-  → 频次闸: session 个位数次; 想点第 2 次 → 先疑 brief 没写清
 
 Organizer 用多少 effort？
   → 日常: high（默认）

@@ -17,7 +17,7 @@ This file provides guidance to Claude Code when working with this repository.
 | Service | Port | URL |
 |---------|------|-----|
 | React Native | 3010 | `http://localhost:3010` |
-| Cretas 后端 (Java) | 10010 | `http://47.100.235.168:10010` |
+| Cretas 后端 (Java) | 10010 / 10020 | prod 蓝绿双槽交替 active；哪槽在跑只看 139 网关 `_upstream_cretas.conf`，不要写死 10010 |
 | Python 服务 | 8083 | `http://localhost:8083` |
 | Embedding 服务 | 9090 | gRPC |
 | Mall 后端 | 8080 | `http://139.196.165.140:8080` |
@@ -63,6 +63,8 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上
 - `ci-runner-routing.md` - CI 默认走托管, 额度耗尽切自建(加拿大 Mac mini); 切换用 `python scripts/ci/switch_ci_runner.py self-hosted|hosted` 然后提交。⛔ 别用组织变量 `${{ vars.X }}` —— 实测在 `runs-on` 里读到的是空。与 `.codex/rules/` 同名文件**逐字相同**, 有闸钉着
 
+`.codex/rules/` 是 Codex 侧副本，Claude 以本目录为准（`ci-runner-routing.md` 两侧由 `scripts/ci/check_shared_agent_rules.py` 钉逐字相同）。superpowers 插件在本仓库已关闭（`.claude/settings.json`），规划/调试/评审只用本仓库自己的 skill 与 rules。
+
 **按路径加载**（`paths:` frontmatter，涉及对应文件时自动加载）：
 - `ai-intent-tool-skill-architecture.md` - AI Tool-Skill 架构（backend/java）
 - `database-entity-sync.md` - PostgreSQL 与 Entity 同步（backend/java）
@@ -74,16 +76,15 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 
 ## UX Flow Gate（低技术素养用户屏幕）
 
-任何涉及以下角色/路径/功能的 RN 屏幕设计，**brainstorming 阶段必须在 propose approaches 之前先 invoke `ux-flow` skill**：
+任何涉及以下角色/路径/功能的 RN 屏幕设计，**提出方案之前先用 `ux-flow` skill 产出「UX Flow Analysis」**：
 
 - **角色词**：operator、操作员、仓管、warehouse_worker、quality_inspector、质检员
 - **路径词**：screens/processing、screens/warehouse、screens/quality-inspector
 - **功能词**：报工、入库、出库、盘点、质检、扫码收货
 
-`ux-flow` Phase 1 产出的「UX Flow Analysis」是 spec 强制组成部分，缺失不进入 writing-plans。
+`ux-flow` Phase 1 产出的「UX Flow Analysis」是 spec 强制组成部分，缺失不进入实现。
 
 ## Documentation
 
 - [PRD-功能与文件映射-v3.0.md](./docs/prd/PRD-功能与文件映射-v3.0.md)
 - [PRD-完整业务流程与界面设计-v5.0.md](./docs/prd/PRD-完整业务流程与界面设计-v5.0.md)
-- [QUICK_START.md](./QUICK_START.md)

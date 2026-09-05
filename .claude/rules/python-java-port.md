@@ -1,7 +1,6 @@
 ---
 paths:
-  - "backend/python/**"
-  - "backend/java/**"
+  - "backend/python/smartbi_compat/**"
   - "tests/fixtures/java-smartbi-golden/**"
   - "scripts/record-java-golden.sh"
 ---
