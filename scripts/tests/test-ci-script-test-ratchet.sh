@@ -100,7 +100,7 @@ ok "判定③: 名单指向已删文件 ⇒ 红"
 printf 'legacy-red.sh\n' > "$TMP/scripts/tests/known-failing.txt"
 run
 [ "$RC" != 0 ] || fail "没有理由的名单条目竟然放行"
-grep -q 'known_failing_entry_without_reason' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+grep -q 'known_failing_entry_invalid' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
 ok "名单条目缺理由 ⇒ 红"
 
 # ── 第四态 FLAKY: 时红时绿的用例两边都不算 ────────────────────────────────
