@@ -84,6 +84,11 @@ class PendingInterimFeedSnapshotTest {
     void reworkConsumedAtSubmit_isNotPending() {
         when(rowRepository.findUnsettledStockFeedRows(F)).thenReturn(List.of(
                 row(semiRef("SFI-REWORK", "3", true))));
+        // ⚠️ 折算必须桩上, 否则 Mockito 默认 null ⇒ 去掉跳过之后这一条会落进 unresolved 而不是
+        //    pendingByBatchNo —— 上面那条「不算作待扣」的断言就成了恒真式 (变异打上去也不红)。
+        //    2026-09-06 实测: 第一版没桩, M1 变异红的是下面那条 unresolved, 不是这一条。
+        when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(F, "SFI-REWORK", new BigDecimal("3")))
+                .thenReturn(new BigDecimal("3"));
 
         PendingInterimFeedService.Snapshot snapshot = service.pendingSemiFeedSnapshot(F);
 
