@@ -9,7 +9,7 @@ paths:
 
 ## 架构概览
 
-AI 意图系统采用 **Tool-Skill 架构**，所有业务逻辑通过 Tool 和 Skill 实现（337+ Tool，16 内置 Skill）。
+AI 意图系统采用 **Tool-Skill 架构**，所有业务逻辑通过 Tool 和 Skill 实现。
 
 ```
 用户输入 → IntentExecutorServiceImpl.execute()

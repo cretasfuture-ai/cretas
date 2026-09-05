@@ -127,11 +127,6 @@ JPQL **parameter-side** `IS NULL` 检查在 PG 上失败，因为 PG 严格类�
 grep -rn ':[a-zA-Z][a-zA-Z0-9]* IS NULL' backend/java/cretas-api/src/main/java --include='*.java'
 ```
 
-**修复历史**：
-- PR #120 (`839ef9df57`) — `RawMaterialTypeRepository.findSimilarByNameAndCategory` 首次踩 + 修
-- PR after #169 (May 9 2026) — `MaterialRequisitionRepository.findByFilters` + `WastageRecordRepository.findByFilters` 同样问题（CI H2 mock 漏报，PG test env deploy 后才暴）
-- 已知 dead code 同模式: `ProductionPlanRepository.findByFactoryIdWithFilters` (0 callers, 不修)
-
 ---
 
 ## 推荐配置

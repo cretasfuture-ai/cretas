@@ -379,3 +379,16 @@ For each test, ask: **"What code path does this test trigger?"**
 3. Write at least 1 matching deep test to replace each
 4. Update summary schema to show depth distribution
 5. Never again claim smoke tests hit the spec §8.2 L4 threshold
+
+## Detector: is this suite compromised?
+
+```bash
+F=tests/e2e-comprehensive/e2e-L3L4-flows.mjs
+grep -c "depth:" $F                                        # 0 → no depth labels (Rule 1 violated)
+grep -c "submitAndCheckResponse\|submitBtn.click" $F      # / total L4 count; < 50% → suspicious
+grep -c "navigateTo.*detail\|/detail/\|click.*row.*edit" $F   # 0 → no deep tests exist
+grep -c "innerText.*includes\|text.includes\|textContent.*includes" $F   # high → shallow keyword checks
+grep -c "checkDropdownContains(" $F                        # 0 while defined → dead code / facade
+```
+
+Any check failing means the suite has the shallow-padding problem and needs remediation (relabel as `smoke`, add deep tests alongside, report depth honestly).

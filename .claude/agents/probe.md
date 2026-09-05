@@ -2,7 +2,7 @@
 name: probe
 description: 带 Bash 的诊断车道 — 跑命令/查数据库/连服务器取证据, 回答"实际发生了什么"。可以 ssh 到服务器、跑 SQL、起探针脚本。不做代码修改, 只取证。用于线上排障、跨样本读数、部署后核对。危险操作仍会触发正常权限确认。
 model: sonnet
-effort: xhigh
+effort: high
 tools: Read, Glob, Grep, Bash
 ---
 

@@ -6,7 +6,7 @@ paths:
 
 # 防呆设计 (Fool-Proof Design) 规范
 
-**最后更新**: 2026-05-17
+**最后更新**: 2026-09-05（删过期的 Sprint 现状 audit；规则未变）
 **触发**: 客户原话 (六扇门 F006 仓管员场景): "做仓管的他年纪都比较大文化素质很低, 你不能太依赖他们, 最好的方法就是你告诉他这个东西你要收多少就行了"
 
 ---
@@ -139,30 +139,6 @@ const showMessage = async (message, type) => {
 | 完成生产 | Rule 1 (计划数量 max) + Rule 2 (品名) + Rule 3 (产量 / 合格数联动) |
 | 任何"流程未配置" placeholder | Rule 5 (跳到配置页) |
 | 错误 toast | 4 位一体 全 4 项 |
-
----
-
-## Cretas 现状 Audit
-
-按本规范 audit Cretas web-admin / RN 现有写操作场景:
-- ✅ 完成生产 dialog 已有品名 (Sprint 3 改进)
-- ✅ error toast sticky 已实施 (per QA prompt v2.4 Rule 8)
-- ⚠️ 大部分 cancel reason 仍 textarea (Sprint 4 W2 audit 抓)
-- ⚠️ 出库幂等 check 漏 (BR-13 历史 bug)
-- ⚠️ "未配置" placeholder 多处 dead-end (Sprint 4 应改 next action)
-
-Sprint 4 W2 + Wave 1 9 chat dispatch 必须按本规范设计.
-
----
-
-## 何时 audit 本规范
-
-- 任何 PR 含 dialog / form / write op → 必 4 位一体 check (per QA prompt v2.4)
-- 任何"新建/编辑/审核/取消"button → 必 Rule 1 (max display) + Rule 2 (context) + Rule 4 (幂等)
-- 任何 "其他原因" textarea → 必 Rule 3 (改 dropdown)
-- 任何空状态 / placeholder → 必 Rule 5 (next action)
-
-PR review 时如发现违反, 阻塞 merge 直到修.
 
 ---
 
