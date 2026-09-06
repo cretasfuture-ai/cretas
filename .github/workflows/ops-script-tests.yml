@@ -8,6 +8,13 @@ name: Ops script tests
 #    阴性对照变成了恒真式。新闸该有自己的 workflow。
 
 on:
+  # 🔴 2026-09-06 加 push:main —— 此前只在 pull_request 跑, main 自己从不跑。#660 合并后
+  #    main 在 test-soft-delete-orphans-sql-drift.sh 上红了半天没人看见, 直到下一个无关 PR
+  #    (#658) 撞上才发现: 「main 是绿的」当时是没人量过的假设。
+  #    ⚠️ 这里刻意**不带 paths**: GitHub Actions 不支持 YAML 锚点, 再抄一份 12 条的清单就是
+  #    第二份会漂的副本(形态 D); 一次 main 跑批 ~1 分钟, 每次都跑比漏一次便宜。
+  push:
+    branches: [main]
   pull_request:
     paths:
       - 'scripts/tests/**'
