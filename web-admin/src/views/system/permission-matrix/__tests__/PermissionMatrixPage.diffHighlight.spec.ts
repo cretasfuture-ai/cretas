@@ -16,6 +16,10 @@ import type { PermissionMatrixView } from '@/api/permissionMatrixApi';
 vi.mock('@/store/modules/auth', () => ({
   useAuthStore: () => ({ factoryId: 'F006' }),
 }));
+// step-2 R2: 页面读 permissionStore.canWrite('system') 决定编辑态; 本 spec 只看高亮, 给个恒 true 的替身
+vi.mock('@/store/modules/permission', () => ({
+  usePermissionStore: () => ({ canWrite: () => true }),
+}));
 
 const getPermissionMatrix = vi.fn();
 vi.mock('@/api/permissionMatrixApi', () => ({

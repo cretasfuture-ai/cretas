@@ -24,9 +24,12 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import {
   getPermissionMatrix,
+  writePermissionMatrixCell,
   type MatrixDiff,
+  type MatrixLevel,
   type PermissionMatrixView,
 } from '@/api/permissionMatrixApi';
 import {
@@ -104,6 +107,68 @@ function cellTitle(c: MatrixCell | null): string {
   return parts.join(' / ');
 }
 
+// ==================== step-2: 编辑态 (owner 2026-09-06 裁定) ====================
+//
+// 只写 L1 一格; 写完**重新 GET** 矩阵 (N9) —— 页面上显示的永远是回读的 L1, 不是请求体。
+// 餐饮角色 / 餐饮模块的格只读 (Steve: 餐饮不管); 后端同样 400, 这里不发请求是为了不让用户看到一个必败的按钮。
+// ⚠️ L1 是全平台表: 一次写入影响所有工厂, 表头明示。
+const LEVELS: MatrixLevel[] = ['rw', 'r', 'w', '-'];
+const LEVEL_LABELS: Record<MatrixLevel, string> = { rw: '读写', r: '只读', w: '只写', '-': '无' };
+
+/** 正在编辑的格 (role/module); null = 没有格在编辑 */
+const editing = ref<{ role: string; module: string; level: MatrixLevel; reason: string } | null>(null);
+const saving = ref(false);
+const saveError = ref<string | null>(null);
+const lastWrite = ref<{ role: string; module: string; oldLevel: MatrixLevel | null; level: MatrixLevel; auditId: number } | null>(null);
+
+function isRestaurantCell(role: string, module: string): boolean {
+  return role.startsWith('restaurant_') || module.startsWith('restaurant');
+}
+
+// R2 (终审): 只读角色 (system=r 的 department_admin / dispatcher) 看得到页面但写会 403 ——
+// 前端先判 canWrite('system'), 不给他们一个必败的编辑器 (fool-proof: 预先显示边界, 不要事后报错)。
+// ⚠️ 这不是权限判定, 后端 @RequirePermission 仍是真值; 这里只决定要不要出编辑态。
+const permissionStore = usePermissionStore();
+const canWriteSystem = computed(() => permissionStore.canWrite('system'));
+
+function isEditable(role: string, module: string): boolean {
+  if (!view.value) return false;
+  if (!canWriteSystem.value) return false;
+  if (role === 'unactivated') return false;
+  return !isRestaurantCell(role, module);
+}
+
+function beginEdit(role: string, module: string): void {
+  if (!isEditable(role, module)) return;
+  const c = cell(role, module);
+  editing.value = { role, module, level: (c?.l1 ?? c?.display ?? '-') as MatrixLevel, reason: '' };
+  saveError.value = null;
+}
+
+function cancelEdit(): void {
+  editing.value = null;
+  saveError.value = null;
+}
+
+async function saveEdit(): Promise<void> {
+  if (!editing.value || !factoryId.value) return;
+  const { role, module, level, reason } = editing.value;
+  saving.value = true;
+  saveError.value = null;
+  try {
+    const result = await writePermissionMatrixCell(factoryId.value, role, module, level, reason || undefined);
+    lastWrite.value = result;
+    editing.value = null;
+    // N9: 回读 —— 不本地改格, 重新拉整张矩阵
+    await load();
+  } catch (e) {
+    // ⛔ 不吞: 400 (餐饮/白名单/防锁死) / 403 都原样显示
+    saveError.value = (e as Error)?.message || '写入失败';
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function load(): Promise<void> {
   if (!factoryId.value) {
     loadError.value = '当前账号没有 factoryId, 无法读取工厂级 (L2) 表头';
@@ -130,10 +195,13 @@ onMounted(() => {
 <template>
   <div class="permission-matrix-page">
       <header class="pm-header">
-        <h2>权限矩阵 (只读)</h2>
+        <h2>权限矩阵</h2>
         <p class="pm-sub">
           L1 <code>platform_role_permissions</code> 是权威; 硬编码兜底矩阵只在 L1 没有那一行时生效。
-          <b>本页不提供任何编辑</b> —— owner 2026-09-06 裁定 step 1 只看不改。
+        </p>
+        <p class="pm-sub pm-global-warning" data-testid="pm-global-warning">
+          ⚠️ <b>全平台生效</b>: 这里改的是 L1, 一次写入影响<b>所有工厂</b>的该角色; 每次改动写审计 (谁 / 何时 / 从哪个工厂 / 由什么改成什么)。
+          点一格进入编辑; 餐饮角色与餐饮模块的格<b>只读</b> (餐饮侧待定)。
         </p>
         <p class="pm-sub">
           模块轴 = <b>侧边栏实际渲染用的那份清单</b> (共 {{ axis.length }} 个, 从
@@ -157,6 +225,12 @@ onMounted(() => {
           <span class="pm-stat">角色 {{ view.roles.length }} 个</span>
           <span class="pm-stat">工厂 {{ view.factoryId }}</span>
         </section>
+
+        <p v-if="saveError" class="pm-error" data-testid="pm-save-error">写入失败: {{ saveError }}</p>
+        <p v-if="lastWrite" class="pm-note pm-last-write" data-testid="pm-last-write">
+          已写入 (回读 L1): <code>{{ lastWrite.role }}</code> × <code>{{ lastWrite.module }}</code>
+          {{ lastWrite.oldLevel ?? '(无行)' }} → <b>{{ lastWrite.level }}</b>, 审计 #{{ lastWrite.auditId }}
+        </p>
 
         <p v-if="offAxis.length" class="pm-note" data-testid="pm-offaxis">
           ⚠️ 有 L1/L2/兜底数据、但侧边栏<b>没有任何入口</b>的模块 (不在下表列里):
@@ -200,12 +274,32 @@ onMounted(() => {
                   <td
                     v-for="m in axis"
                     :key="m"
-                    :class="cellClass(cell(role.code, m))"
-                    :title="cellTitle(cell(role.code, m))"
+                    :class="[...cellClass(cell(role.code, m)), isEditable(role.code, m) ? 'pm-cell--editable' : 'pm-cell--readonly']"
+                    :title="cellTitle(cell(role.code, m)) || (isEditable(role.code, m) ? '点击编辑 (全平台生效)' : '餐饮侧待定, 只读')"
                     :data-cell="`${role.code}/${m}`"
+                    :data-editable="isEditable(role.code, m) ? 'true' : 'false'"
+                    @click="beginEdit(role.code, m)"
                   >
-                    <span class="pm-chip">{{ cell(role.code, m)?.display }}</span>
-                    <span v-if="cell(role.code, m)?.fallback" class="pm-fallback-mark">兜底</span>
+                    <template v-if="editing && editing.role === role.code && editing.module === m">
+                      <div class="pm-editor" data-testid="pm-editor" @click.stop>
+                        <select v-model="editing.level" data-testid="pm-editor-level">
+                          <option v-for="lv in LEVELS" :key="lv" :value="lv">{{ lv }} {{ LEVEL_LABELS[lv] }}</option>
+                        </select>
+                        <input
+                          v-model="editing.reason"
+                          class="pm-editor-reason"
+                          data-testid="pm-editor-reason"
+                          maxlength="200"
+                          placeholder="原因 (可选)"
+                        >
+                        <button type="button" data-testid="pm-editor-save" :disabled="saving" @click="saveEdit">保存</button>
+                        <button type="button" data-testid="pm-editor-cancel" :disabled="saving" @click="cancelEdit">取消</button>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <span class="pm-chip">{{ cell(role.code, m)?.display }}</span>
+                      <span v-if="cell(role.code, m)?.fallback" class="pm-fallback-mark">兜底</span>
+                    </template>
                   </td>
                 </tr>
               </template>
@@ -239,4 +333,12 @@ onMounted(() => {
 .pm-cell--l2-off { color: #c0c4cc; }
 .pm-cell--l2-override { border-bottom: 2px solid #409eff; }
 .pm-fallback-mark { display: block; font-size: 9px; color: #e6a23c; }
+.pm-global-warning { color: #e6a23c; }
+.pm-last-write { color: #67c23a; }
+.pm-cell--editable { cursor: pointer; }
+.pm-cell--editable:hover { outline: 1px solid #409eff; }
+.pm-cell--readonly { cursor: not-allowed; color: #909399; background: #fafafa; }
+.pm-editor { display: flex; gap: 4px; align-items: center; }
+.pm-editor select, .pm-editor input, .pm-editor button { font-size: 12px; }
+.pm-editor-reason { width: 120px; }
 </style>

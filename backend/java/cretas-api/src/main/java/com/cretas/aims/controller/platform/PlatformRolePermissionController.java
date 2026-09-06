@@ -2,7 +2,11 @@ package com.cretas.aims.controller.platform;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.permission.PlatformRolePermissionWriteService;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.MobileService;
@@ -57,6 +61,9 @@ public class PlatformRolePermissionController {
     private final PlatformRolePermissionRepository repo;
     private final PermissionService permissionService;
     private final MobileService mobileService;
+    /** step-2: L1 的唯一写入口 (校验 / 守卫 / 审计 / 缓存失效都在它里面). */
+    private final PlatformRolePermissionWriteService writeService;
+    private final UserRepository userRepository;
 
     @GetMapping("/api/admin/role-permissions")
     @Operation(summary = "获取全平台 role × module 权限矩阵 (L1) — 所有认证用户可读")
@@ -73,46 +80,22 @@ public class PlatformRolePermissionController {
             @RequestParam String level,
             @RequestHeader("Authorization") String authorization) {
 
-        validateModule(module);
-        validateLevel(level);
-
-        // Circular lockout guards
-        if ("platform_admin".equals(role) && "system".equals(module) && !"rw".equals(level)) {
-            throw new IllegalArgumentException("禁止降低 platform_admin 对 system 的权限 (会锁死管理 UI)");
-        }
-        if ("factory_super_admin".equals(role) && "system".equals(module) && !"rw".equals(level)) {
-            throw new IllegalArgumentException("禁止降低 factory_super_admin 对 system 的权限");
-        }
-
-        Long userId = null;
+        // step-2 (2026-09-06): 校验 / 防锁死守卫 / L1 写 / 同事务审计 / 缓存失效 全部委托给唯一的写服务,
+        // 这里不再保留第二份守卫 (形态 D)。行为差异: 以前 token 取不到 userId 就写 updated_by=NULL,
+        // 现在拒绝写 (审计行 changed_by NOT NULL) —— 这是有意的, 见 PlatformRolePermissionWriteService。
+        User actor = null;
         try {
-            userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+            Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+            actor = userId == null ? null : userRepository.findById(userId).orElse(null);
         } catch (Exception e) {
-            log.warn("无法从 token 获取 userId: {}", e.getMessage());
+            log.warn("无法从 token 获取操作人, 拒绝写 L1: {}", e.getMessage());
         }
-
-        PlatformRolePermission saved = repo.findByRoleCodeAndModuleCodeAndDeletedAtIsNull(role, module)
-            .map(p -> {
-                p.setPermissionLevel(level);
-                p.setUpdatedBy(null);
-                return p;
-            })
-            .orElseGet(() -> {
-                PlatformRolePermission p = new PlatformRolePermission();
-                p.setRoleCode(role);
-                p.setModuleCode(module);
-                p.setPermissionLevel(level);
-                return p;
-            });
-        saved.setUpdatedBy(userId);
-        saved = repo.save(saved);
-
-        // Invalidate permission cache
-        if (permissionService instanceof PermissionServiceImpl) {
-            ((PermissionServiceImpl) permissionService).invalidateCache();
+        if (actor == null) {
+            throw new BusinessException(403, "无法确认操作人, 拒绝写入权限");
         }
-
-        return ApiResponse.success(saved);
+        PlatformRolePermissionWriteService.WriteResult result =
+                writeService.write(actor, null, role, module, level, null);
+        return ApiResponse.success(result.row());
     }
 
     private void validateModule(String module) {
