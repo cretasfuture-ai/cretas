@@ -255,6 +255,8 @@ export function AlertDetailScreen() {
 
   // 处理提交
   const handleSubmit = async () => {
+    // ⚠️ 防御性双保险, **不是**用户会看到的防呆: 「确认处理」在 !selectedSolution 时就是 disabled,
+    //    这条 appAlert 用户永远触发不到。真正告诉他缺什么的是按钮上方那行 (testID=alert-submit-hint)。
     if (!selectedSolution) {
       appAlert("提示", "请选择处理方案");
       return;
@@ -629,6 +631,13 @@ export function AlertDetailScreen() {
           ))}
         </View>
 
+        {/* 2026-09-07: 按钮 disabled 时要说明缺什么 —— 方案列表在上方, 工人只看到灰按钮不知道为什么点不动 */}
+        {!selectedSolution && !processing && (
+          <Text style={styles.submitHint} testID="alert-submit-hint">
+            请先在上方选择一个处理方案
+          </Text>
+        )}
+
         {/* 操作按钮 */}
         <View style={styles.actionButtons}>
           <Button
@@ -967,6 +976,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     gap: 12,
   },
+  submitHint: { fontSize: 13, color: "#E6A23C", paddingHorizontal: 16, marginTop: 16, textAlign: "center" },
   actionBtnSecondary: {
     flex: 1,
     borderRadius: 8,
