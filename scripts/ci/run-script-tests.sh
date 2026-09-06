@@ -166,8 +166,32 @@ for f in "$TESTS_DIR"/*.sh; do
     [ "$base" = "test-helpers.sh" ] && continue
     n_total=$((n_total + 1))
 
-    timeout "$PER_TEST_TIMEOUT" bash "$f" > "$LOG_DIR/$base.log" 2>&1
+    # ── 单个用例的超时覆盖: 文件头 40 行内一行 `# SCRIPT_TEST_TIMEOUT=<秒>` ──────────
+    # 2026-09-06 (卡 C 任务 5): test-release-cretas.sh 在 Windows 本地 ~470s (43 次 fixture 发布,
+    # 每次 git init+push+fetch 约 2s 加 release 本体; CI ubuntu 8s), 全局 300s 把它砍成 rc=124,
+    # 而它本身是绿的。⛔ 不把全局阈值抬到 900 —— 那会让别的用例挂死 15 分钟才报; 只让**这一个**
+    # 文件自己声明, 理由写在它头部。⛔ 也不给「无标记的用例」任何默认放宽。
+    # 标记写错 (非整数 / 超 3600) ⇒ 红, ⛔ 不静默退回默认 —— 那是「机制在、没接上」的形状。
+    this_timeout=$PER_TEST_TIMEOUT
+    marker=$(head -40 "$f" | grep -oE '^# SCRIPT_TEST_TIMEOUT=[^ ]*' | head -1 | cut -d= -f2)
+    if [ -n "$marker" ]; then
+        case "$marker" in
+            ''|*[!0-9]*) printf 'rc=%-5s %-45s NEW_FAILURE(SCRIPT_TEST_TIMEOUT 标记不是整数: %s)\n' "?" "$base" "$marker"
+                         n_fail=$((n_fail + 1)); FAILED+=("$base 标记无效"); : > "$LOG_DIR/$base.log"; continue ;;
+        esac
+        if [ "$marker" -lt 1 ] || [ "$marker" -gt 3600 ]; then
+            printf 'rc=%-5s %-45s NEW_FAILURE(SCRIPT_TEST_TIMEOUT 超出 1..3600: %s)\n' "?" "$base" "$marker"
+            n_fail=$((n_fail + 1)); FAILED+=("$base 标记越界"); : > "$LOG_DIR/$base.log"; continue
+        fi
+        this_timeout=$marker
+    fi
+
+    timeout "$this_timeout" bash "$f" > "$LOG_DIR/$base.log" 2>&1
     rc=$?
+    # 口径: 用了覆盖值就追进该用例的日志 (下面 print_readings 会把 READING: 行贴出来),
+    # 绿的时候也能看见这个用例是按哪个阈值量的。
+    [ "$this_timeout" = "$PER_TEST_TIMEOUT" ] \
+        || echo "READING: TIMEOUT_OVERRIDE=$this_timeout default=$PER_TEST_TIMEOUT" >> "$LOG_DIR/$base.log"
 
     if is_flaky "$base"; then
         # rc 照常打印(⛔ 不藏), 但不参与红绿判定 —— 它的读数在这台机器上不可判定。

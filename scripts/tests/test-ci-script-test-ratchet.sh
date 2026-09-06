@@ -45,6 +45,30 @@ grep -q 'TOTAL=3 PASS=2 FAIL=0 KNOWN_FAILING=1 FIXED=0 FLAKY=0 SKIPPED=0' "$TMP/
 grep -q 'NO_NEW_FAILURES' "$TMP/out" || fail "缺少 NO_NEW_FAILURES"
 ok "基线: 存量红记账后整体绿"
 
+# ── 单用例超时覆盖 `# SCRIPT_TEST_TIMEOUT=<秒>` (2026-09-06 卡 C 任务 5) ────────────
+# 阳性: 带标记 (10s) 的慢用例 (sleep 3) 在全局 1s 下仍绿; 阴性对照: 同一个用例去掉标记 ⇒ rc=124 红
+# —— 没有阴性对照, 「标记生效」和「全局阈值本来就够」长得一样。标记写错 ⇒ 红, ⛔ 不静默退回默认。
+printf '#!/usr/bin/env bash\n# SCRIPT_TEST_TIMEOUT=10\nsleep 3\necho slow-ok\nexit 0\n' > "$TMP/scripts/tests/slow-marked.sh"
+chmod +x "$TMP/scripts/tests/slow-marked.sh"
+( cd "$TMP" && SCRIPT_TESTS_TIMEOUT=1 bash scripts/ci/run-script-tests.sh ) > "$TMP/out" 2>&1; RC=$?
+echo "    $(grep -E '^TOTAL=' "$TMP/out")   rc=$RC"
+[ "$RC" = 0 ] || { cat "$TMP/out"; fail "带 SCRIPT_TEST_TIMEOUT=10 的 3s 用例在全局 1s 下应绿"; }
+grep -q 'READING: TIMEOUT_OVERRIDE=10 default=1' "$TMP/out" || fail "覆盖值要作为 READING 打出来"
+printf '#!/usr/bin/env bash\nsleep 3\necho slow-ok\nexit 0\n' > "$TMP/scripts/tests/slow-marked.sh"
+( cd "$TMP" && SCRIPT_TESTS_TIMEOUT=1 bash scripts/ci/run-script-tests.sh ) > "$TMP/out" 2>&1; RC=$?
+echo "    $(grep -E '^TOTAL=' "$TMP/out")   rc=$RC"
+[ "$RC" != 0 ] || fail "阴性对照: 去掉标记后 3s 用例在全局 1s 下应 rc=124 红"
+grep -qE 'rc=124 +slow-marked.sh +NEW_FAILURE' "$TMP/out" || fail "阴性对照没读到 rc=124: $(grep slow-marked "$TMP/out")"
+printf '#!/usr/bin/env bash\n# SCRIPT_TEST_TIMEOUT=lots\nexit 0\n' > "$TMP/scripts/tests/slow-marked.sh"
+run
+[ "$RC" != 0 ] || fail "标记不是整数应红"
+grep -q 'SCRIPT_TEST_TIMEOUT 标记不是整数' "$TMP/out" || fail "标记无效的措辞没打出来"
+printf '#!/usr/bin/env bash\n# SCRIPT_TEST_TIMEOUT=99999\nexit 0\n' > "$TMP/scripts/tests/slow-marked.sh"
+run
+[ "$RC" != 0 ] || fail "标记超 3600 应红"
+rm -f "$TMP/scripts/tests/slow-marked.sh"
+ok "SCRIPT_TEST_TIMEOUT 标记: 生效 (阳性) / 去掉即 124 (阴性) / 写错即红"
+
 # ── 判定① 不在名单且 rc≠0 ⇒ 红。逐个退出码验, ⛔ 不枚举失败码 ─────────────
 # 126(没有执行位) / 127(找不到命令) / 124(timeout) 都必须算红 —— 2026-08-27
 # 那次假绿就是因为判定只认 1 和 2。
