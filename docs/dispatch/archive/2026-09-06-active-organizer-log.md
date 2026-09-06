@@ -242,3 +242,10 @@
 - **测试侧**：`lock-staleness` A2 只编码了 PID 文件那套互斥，flock 下「PID 活但没人持 flock」正是 9-02 PID 复用假阳性（同文件 A5 的另一面）；`private-repo-readiness`/`release-ci-artifact` 陈旧字面量（打包已由 `e0f7a6dbcb35`/#175 移到 `java-artifact.yml`，其 paths 覆盖整棵 `backend/java/cretas-api/**`，不变量更强——原 ci.yml 只列 src/main+pom+lib 时最近 120 个 main commit 里 3 个漏触发）；`web-admin-entry-chunk` 禁令未动、变异改为可移植的「塞 `grep -oP`」；`post-switch-probe` 断言数字未动、错的是桩；JDK 前提在 workflow 修而非 skip；runner 加 rc=77 `SKIPPED`（无 `SKIPPED:` 行 ⇒ 红；名单内 77 ⇒ 红）；`ops-script-tests.yml` paths 补 `scripts/deploy/**`、`scripts/lib/**`。13 个变异各先绿后红；一个原本守空气的（`grep -F 'retention-days: 1'` 也匹配 14）改锚行尾。
 - **踩坑登记**：`git commit -- <paths>` 丢索引 mode 变更（`core.fileMode=false`），第一次 +x 提交显示 8 文件实际 1 个 ⇒ 用 `git add` + `git diff --cached --summary` 证 `mode change`；`test-release-cretas.sh` Windows 本地 ~340s 超 300s 限（CI 8s），改前基线同量级，未改超时。
 - **合并后 [RUN]**：origin/main `git ls-tree` `release-java-preflight.sh`/`release-cretas.sh`/`soft-delete-orphans-watch.sh` 均 100755。锁改动只在 flock 分支，Windows 发布走 PID 文件分支不受影响；下一次 `release-cretas.sh` 实跑即验证。
+
+
+## 2026-09-06 14:45 owner 五项裁定 + OTA 推送
+
+- **裁定**：① 告警渠道暂不做留票；② 权限矩阵 step-1 按推荐（L1 只读矩阵页）；③ validate 按推荐（修通、测试环境证明、不改 prod 参数）；④ 销售账号 = `lsm004`（六膳门销售主管，sales_manager，最近登录 09-04）已给 owner，owner 已在小米上登录；⑤ OTA 直接推。
+- **OTA 推送 [RUN]**：deploy worktree detach `b65a7d4312`（`frontend` 与 `19093e274f` 无差异），`push-bundle.sh production android` `PUSH_EXIT=0`，82s，新包 `ts=1788676646980`（`createdAt 2026-09-06T06:38:37Z`），manifest 已切换，CDN `dl.` 上 hbc 200（6.7MB gzip）。现网前一包 `1788544899864`（09-05 02:03）**已含 #590**（`settleAllIndependently` before=1），本次新增只有 #615 的 RN 改动（`ShipmentManagementScreen` 三路独立 settle + util 14 行）。⚠️ 标识符层面正反两向都量不出（#615 全是复用已有符号；Hermes 字符串表去重），新旧 hbc md5 不同 + manifest ts 是仅有的制品证据；**送达**只能靠真机读 update id + 行为（probe `PROBE-XIAOMI-OTA-AND-SHORT-CLOSE` 在跑）。deploy worktree 推后 `git status` 干净（dist 未入树）。
+- 同轮派出：`PROBE-XIAOMI-OTA-AND-SHORT-CLOSE-20260906`（读 OTA 送达 + `DLV-20260904-4086` 的「短交结案」按钮，只读不点）。
