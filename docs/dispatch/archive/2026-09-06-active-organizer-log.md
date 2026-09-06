@@ -264,3 +264,14 @@
 
 - **Mac mini 测试环境后端刷到 main [RUN]**：此前 jar 8-28（早于 #581 端点，#640 验收 POST 404 没量到）。mini 无 mvn、java 不在 PATH ⇒ 传本机发 42 可信 jar（`build_commit=ae86d1606f`，Java 与 origin/main 零差异，sha256 `6884df5d…` 两侧一致，直连 scp 158s）；备份 `…jar.bak.20260906T073511Z`，`launchctl kickstart`，30s 后 health 200，pid 54329；Flyway 在测试库打了 `_32/_33/_34`（15:35:16 同秒 success），两条 NOT VALID FK 在；`f006_sales_mgr` token 下 `close-short-shipment` 假 id 返回控制器 404 文案（路由存在），`/cancel` 对照同 404；java.err 0 ERROR。刷新流程已写进 memory。
 - **#640 终审可合**：RN `hasModulePermission` 读内置矩阵；prod L1 逐角色对照——sales_manager rw/rw 一致；viewer/cashier/运营 r ⇒ 隐藏+403 一致；dispatcher/restaurant_owner/super_admin 有权无按钮（允许方向，且导航器不注册该屏）；⚠️ `permission_admin` RN rw vs L1 `-`（存量漂移，屏不可达故不阻断）→ 开票。对话框字段 `quantity/deliveredQuantity` 与后端实体同名、缺口算法同式；`SHORT_CLOSED` 隐藏；错误 message+actionHint 经 `getErrorMsg` 到用户；按钮与 DRAFT 确认/取消同 actionBar；无新依赖，`closeShortShipment` 基线 0 命中可作 Hermes 标记；prod jar 08:53 已含路由串。审查者未验：真发 POST（正在测试环境量）、Alert 在 web 是 no-op、阴性对照用的 `f006_admin` 是 observer 闸不是权限闸（建议 viewer）。
+
+
+## 2026-09-06 15:52 `BUG-SHORT-CLOSE-BUTTON-NOT-WIRED-20260906` 归档 — #640 合并 `dbb43c03ce`，OTA `1788680841522` 已推
+
+原条目：- `BUG-SHORT-CLOSE-BUTTON-NOT-WIRED-20260906` — `review` — Owner: executor（organizer 派） — PR #640（RN 接线；web-admin 早已接在 `orders/detail.vue:1263`，brief 查错路径）终审可合。测试环境后端已刷到 main（`ae86d1606f`），执行者正在量「真结案」。合后推 OTA + 真机复验。🔒 RN/OTA。
+
+- **改动**（RN 6 文件）：`utils/salesOrderShortClose.ts`（可见性谓词、逐行缺口、阻塞项、确认文案）、`salesApiClient.closeShortShipment`（与 `cancelOrder` 并列，axios 错误原样上抛）、`SalesOrderDetailScreen` 按钮 + 对话框（逐行 订购/已发/短交、原因单选、备注、ack 勾选后才可确认），客户端门 `hasModulePermission(user,'sales','write')`；⛔ 未进 `rowActionsConfig`（无 sales rw 轴，底部单不能装原因+ack）。web-admin 早已接在 `orders/detail.vue:1263`（brief 查的 `frontend/web-admin/src` 不存在，真路径根目录 `web-admin/`）。单测 22+3，全量 jest 217 套件/2267 绿，tsc 0；变异翻状态守卫 ⇒ 打印 `status=COMPLETED role=sales_manager => true` 后 2 红（`console.log` 被 setup 静音，要用 `console.warn`，否则读成「变异没落地」）。
+- **终审可合**：RN↔prod L1 逐角色对照一致（`permission_admin` RN rw vs L1 `-` 存量漂移 → 票 `BUG-RN-PERMISSION-MATRIX-DRIFTS-FROM-L1`）；字段 `quantity/deliveredQuantity` 同名、算法同式；错误 message+actionHint 到用户；无新依赖。
+- **测试环境验收 [RUN]**（后端刷到 main 后）：`SO-20260820-0001` PARTIAL_DELIVERED 5/4 → 对话框 5/4/1 → POST 200「订单已按短交结案」→ `SHORT_CLOSED`、`shortClosedQuantity=1.0`、`shortClosedBy=1556`、`version` 6→7；幂等重放不同 payload 200 且 version/reason 不变；阴性：`f006_admin` 同屏无按钮（observer 闸）、`f006_finance_mgr` GET 200 / POST 403 `meta.requiredPermissions=[{module:sales,action:read_write}]`（结构化对象，不是字面串）。
+- **OTA [RUN]**：`push-bundle.sh` 100s，`ts=1788680841522`，manifest 切换，CDN 200（6.7MB）；hbc 标记 `closeShortShipment`/`canShortCloseSalesOrder`/`sales-order-short-close-button` 0→1，对照 1，假串 0。真机复验 probe `PROBE-XIAOMI-SHORT-CLOSE-AFTER-OTA` 在跑（只看不点）。
+- **登记**：`Alert.alert` 在 react-native-web 是 no-op（全 App 既有形态，另票候选）；F006 测试环境只有 15 个活跃账号且每人一个模块通配，没有 `sales:read` 只读账号可做权限维度阴性（用财务 rw 替代）。
