@@ -35,27 +35,10 @@ TARGET_TESTS='ReleaseDecisionToolTest'
 #    量得了的部分照常量, 量不了的部分在文末以 rc=77 + `SKIPPED:` 如实上报。
 #    ⛔ 不 return 0 假装绿, ⛔ 也不整份跳过。
 # ---------------------------------------------------------------------------
-probe_release_jdk_major() {
-    local java_cmd= raw
-    if [ -n "${JAVA_HOME:-}" ]; then
-        if [ -x "$JAVA_HOME/bin/java" ]; then java_cmd="$JAVA_HOME/bin/java"
-        elif [ -x "$JAVA_HOME/bin/java.exe" ]; then java_cmd="$JAVA_HOME/bin/java.exe"
-        else echo "none JAVA_HOME=$JAVA_HOME(无可执行 bin/java)"; return; fi
-    elif command -v java >/dev/null 2>&1; then
-        java_cmd=$(command -v java)
-    else
-        echo "none 无 JAVA_HOME 且 PATH 上没有 java"; return
-    fi
-    raw=$("$java_cmd" -version 2>&1 | sed -nE '1s/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
-    case "$raw" in ''|*[!0-9]*) echo "none $java_cmd(版本读不出来)"; return ;; esac
-    echo "$raw $java_cmd"
-}
-read -r JDK_MAJOR JDK_WHERE <<<"$(probe_release_jdk_major)"
-echo "JDK_PROBE=major=$JDK_MAJOR where=$JDK_WHERE"
+# shellcheck source=scripts/tests/lib/release-jdk-probe.sh
+. "$ROOT_DIR/scripts/tests/lib/release-jdk-probe.sh"
 SKIP_REASON=""
-if [ "$JDK_MAJOR" = "none" ] || [ "$JDK_MAJOR" -lt 21 ] 2>/dev/null; then
-    SKIP_REASON="发布级 JDK 不可用 (探到 major=$JDK_MAJOR, 需要 >=21; $JDK_WHERE) —— 预检的阳性对照与 locale 段在此环境不可判定"
-fi
+ensure_release_jdk || SKIP_REASON="$RELEASE_JDK_SKIP_REASON"
 
 # ---------------------------------------------------------------- JDK preflight
 # A bogus JAVA_HOME must be rejected by the read-only preflight, not by Maven
@@ -72,8 +55,8 @@ grep -Fq 'JAVA_HOME' "$TMP_ROOT/jdk.log" \
 if [ -z "$SKIP_REASON" ]; then
     # The real environment must still pass, otherwise the guard is useless noise.
     bash "$JAVA_PREFLIGHT" --repo-root "$ROOT_DIR" --tests "$TARGET_TESTS" >/dev/null 2>&1 \
-        || fail "preflight rejected the current, working JDK (JDK_PROBE major=$JDK_MAJOR)"
-    echo "  ok - 阳性对照: 当前 JDK $JDK_MAJOR 能过预检"
+        || fail "preflight rejected the current, working JDK (见上面那行 JDK_PROBE=)"
+    echo "  ok - 阳性对照: 当前 JDK 能过预检 (JAVA_HOME=${JAVA_HOME:-<unset>})"
 else
     echo "  -- 跳过阳性对照: $SKIP_REASON"
 fi

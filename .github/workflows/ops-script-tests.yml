@@ -50,7 +50,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), ⛔ 不编译、不需要 JDK。
+      # 🔴 2026-09-06 订正: 原来这里写「⛔ 不编译、不需要 JDK」—— 那句话是错的。
+      #    test-release-artifacts-failfast.sh 与 test-release-parallel-fastlane.sh
+      #    **真跑** scripts/deploy/release-java-preflight.sh, 而它硬性要求 JDK 21+。
+      #    runner 的默认 JAVA_HOME 是 **Temurin 17**(image readme: `17.0.20+1 (default)`),
+      #    于是这两个用例在 CI 上分别报
+      #      "preflight rejected the current, working JDK"
+      #      "ERROR: release requires JDK 21 or newer, found 17"
+      #    —— 把「这台机器的 JDK 太老」说成了「预检坏了」。
+      #    ⇒ 显式装 21。⛔ 不是让用例去迁就 17(那等于把发布预检的判据改松)。
+      #    ⚠️ 装不上也不至于假绿: 两个用例都会探测前提, 探不到 21 就 rc=77 +
+      #       `SKIPPED:`(见 scripts/tests/lib/release-jdk-probe.sh), 而 SKIPPED
+      #       在 run-script-tests.sh 里**不计进 PASS**。
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Prove the release JDK landed
+        run: |
+          set -euo pipefail
+          echo "JAVA_HOME=$JAVA_HOME"
+          "$JAVA_HOME/bin/java" -version
+          major=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -nE '1s/.*version "([0-9]+).*/\1/p')
+          echo "JAVA_MAJOR=$major"
+          # ⛔ 只断言下限, 不钉死 21 —— 装了更新的版本不该把这一步弄红。
+          [ "$major" -ge 21 ]
+
+      # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), 不编译。
       - name: Show interpreter versions
         run: |
           set -euo pipefail
