@@ -12,8 +12,34 @@
 # (scripts/cron/soft-delete-orphans.sql), 装机时随本脚本一起推上来。
 # **实体改了要重新生成并重推**, 见下面的出处检查。
 #
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 契约: 两类孤儿严重度不同, SQL 出**两列**, 只有一类配得上「可能 500」
+# ═══════════════════════════════════════════════════════════════════════════
+# 扫描 SQL 每对出 `assoc|absent|soft_deleted` 三列(见 check-soft-delete-orphans.sh):
+#   absent       —— 父行**不存在**(悬空引用)。@ManyToOne 代理解析不到 ⇒ 真的会 500。
+#   soft_deleted —— 父行在, 只是 deleted_at 非空。父软删没级联到子表; 只有子表被
+#                   **独立读取**且无 @NotFound 时才可能炸, 没有那条读路径就零影响。
+#
+# 旧版只有一个 `bad` 列, 而告警对**全部**行断言「下面每一条现在都可能让对应页面 500」。
+# 实测(prod 2026-09-06): 最响的那一条 semi_finished_stocktake_items.stocktake_id
+# 3262 行**全是 soft_deleted**, absent=0, 且该表无独立读路径 ⇒ 那句话是假的;
+# 而同一次跑批里真正的悬空引用(process_sheet_rows 56 / report_reversal_logs 10)
+# 被它淹掉了。⇒ 一条会说假话的最响的告警, 比没有告警更糟(形态 D′)。
+#
+# ── 台账行格式(契约, 一次运行恰好一条判决行) ─────────────────────────────
+#   <时间> ORPHANS_FOUND absent=<N> soft-deleted=<M> pairs-absent=<K> <CTX>   rc=1
+#   <时间> OK soft-deleted-only soft-deleted=<M> pairs=<K> <CTX>              rc=0
+#   <时间> OK no-orphans <CTX>                                               rc=0
+#   <时间> INSTRUMENT_DEAD reason=<键>                                        rc=2
+# 判决行之外, soft_deleted>0 的每一对再各写一行(⛔ 不是静默 —— 它是那条「必发生」
+# 的读数, 硬约束 9):
+#   <时间> INFO parent-soft-deleted-children-live <assoc> count=<n> 父软删未级联; 子表若无独立读路径则无用户影响
+#
+# ⛔ **告警文件只收 absent>0 那一类**(可行动的)。soft_deleted 只进台账 ——
+#    把不需要行动的东西写进告警, 就是 16 天没人读的那条路(形态 E)。
+#
 # 退出码是三态(⛔ 不是两态):
-#   0 没孤儿 / 1 有孤儿 / 2 **没量到**(仪器故障, 本次读数作废)
+#   0 没有悬空引用(含「只有父软删未级联」) / 1 有悬空引用 / 2 **没量到**(读数作废)
 # rc=2 用**与 rc=1 不同的措辞**告警 —— 把「没量到」从「没问题」里拆出来。
 #
 # ═══════════════════════════════════════════════════════════════════════════
@@ -257,24 +283,55 @@ fi
 note "INFO hasdel-in-sync tables=$SNAP_N"
 
 # ── 6. 执行 ───────────────────────────────────────────────────────────────
-OUT=$(PSQL -f "$SQL_FILE" 2>&1)
+# ⚠️ `-At -F '|'` 取机器可读的三列, ⛔ 不用默认对齐表格。旧版靠 `(0 rows)` 尾巴判空、
+#    靠 `sed -n '3,$p'` 切表头 —— 那种切法对「有几列」一无所知, 加一列它照样"能跑",
+#    只是把新列当成文本贴进告警。分类判据必须落在 absent 那一列本身上。
+OUT=$(PSQL -At -F '|' -f "$SQL_FILE" 2>&1)
 RC=$?
 if [ "$RC" -ne 0 ]; then
     dead "psql-failed" "rc=$RC $CTX" "$(printf '%s\n' "$OUT" | head -5 | tr '\n' ' ')"
 fi
 
-if printf '%s\n' "$OUT" | grep -qE '^\(0 rows\)'; then
-    verdict "OK no-orphans $CTX"
+# 形状闸。⛔ 「解析不出来」不许静默退化成「0 行孤儿」——
+# 装了旧版单列 SQL(assoc|3262)时正好落在这里, 报 rc=2 而不是半个读数(硬约束 4)。
+printf '%s\n' "$OUT" | grep -vE '^[[:space:]]*$' > "$WORK/rows.txt" || true
+BAD_SHAPE=$(grep -cvE '^[a-z0-9_]+\.[a-z0-9_]+ -> [a-z0-9_]+\|[0-9]+\|[0-9]+$' "$WORK/rows.txt" || true)
+if [ "${BAD_SHAPE:-0}" -ne 0 ]; then
+    dead result-shape-unexpected \
+        "结果不是 assoc|absent|soft_deleted 三列 —— 装的 SQL 版本对不上? $CTX" \
+        "$(head -3 "$WORK/rows.txt" | tr '\n' ' ')"
+fi
+
+ABSENT_TOTAL=$(awk -F'|' '{s += $2} END {print s+0}' "$WORK/rows.txt")
+SOFT_TOTAL=$(awk -F'|' '{s += $3} END {print s+0}' "$WORK/rows.txt")
+ABSENT_PAIRS=$(awk -F'|' '$2+0 > 0' "$WORK/rows.txt" | grep -c . || true)
+SOFT_PAIRS=$(awk -F'|' '$3+0 > 0' "$WORK/rows.txt" | grep -c . || true)
+
+# soft_deleted 的 INFO 行**先写**, 与 rc 无关 —— 它是那条「必发生」的读数。
+# ⛔ 措辞里不许出现 500: 没有独立读路径的子表, 父软删对用户零影响。
+while IFS='|' read -r assoc _absent soft; do
+    [ "${soft:-0}" -gt 0 ] 2>/dev/null || continue
+    note "INFO parent-soft-deleted-children-live $assoc count=$soft 父软删未级联; 子表若无独立读路径则无用户影响"
+done < "$WORK/rows.txt"
+
+if [ "$ABSENT_TOTAL" -eq 0 ]; then
+    if [ "$SOFT_TOTAL" -gt 0 ]; then
+        verdict "OK soft-deleted-only soft-deleted=$SOFT_TOTAL pairs=$SOFT_PAIRS $CTX"
+    else
+        verdict "OK no-orphans $CTX"
+    fi
     exit 0
 fi
 
-verdict "ORPHANS_FOUND $CTX"
+verdict "ORPHANS_FOUND absent=$ABSENT_TOTAL soft-deleted=$SOFT_TOTAL pairs-absent=$ABSENT_PAIRS $CTX"
 {
-    echo "$STAMP SOFT-DELETE-ORPHANS 发现孤儿 — 下面每一条现在都可能让对应页面 500:"
-    printf '%s\n' "$OUT" | sed -n '3,$p' | grep -v '^(' | sed 's/^/        /'
+    echo "$STAMP SOFT-DELETE-ORPHANS 悬空引用 — 下面每一条的父行**不存在**, 可能让对应页面 500:"
+    awk -F'|' '$2+0 > 0 {printf "        %s  absent=%s\n", $1, $2}' "$WORK/rows.txt"
     echo "        修法看情况, ⛔ 不要一刀切:"
     echo "          · 子表指向父表 → 多半是软删父行时没级联, 应补级联"
     echo "          · 审计字段     → 加 @NotFound(IGNORE)"
     echo "          · 测试残留     → 清数据即可"
+    [ "$SOFT_TOTAL" -gt 0 ] && \
+        echo "        另有 $SOFT_TOTAL 行属「父软删但子行还活着」($SOFT_PAIRS 对) — INFO 级, 不在本告警里, 见台账。"
 } >> "$ALERTS"
 exit 1

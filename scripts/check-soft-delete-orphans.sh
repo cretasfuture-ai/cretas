@@ -47,10 +47,33 @@
 #
 # ⚠️ **删任何东西之前跑一次** —— 账号、客户、供应商、单据都算。
 #
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 两类孤儿, 严重度**不同**, 所以出两列 (2026-09-06 修, 契约)
+# ═══════════════════════════════════════════════════════════════════════════
+# 旧版每对只出一个 `bad` = 「没有活着的父行的子行数」, 它把两件事折叠成一个数,
+# 而告警文案对**全部**行断言「下面每一条现在都可能让对应页面 500」:
+#
+#   absent        父行**根本不存在**(硬删/从没有过) —— 悬空引用。
+#                 Hibernate 解析 @ManyToOne 代理时抛 EntityNotFoundException
+#                 ⇒ **真的会 500**。⚠️ 只可能出现在没建 FK 约束的那些对上。
+#   soft_deleted  父行在, 只是 deleted_at 非空 —— 父软删没级联到子表。
+#                 只有当子表被**独立读取**(不经过父)且没有 @NotFound 时才可能炸;
+#                 没有那条读路径就**对用户零影响**。
+#
+# ▎实测(prod 2026-09-06): semi_finished_stocktake_items.stocktake_id 的 3262 行
+# ▎**全部**是 soft_deleted(absent=0), 而该表的 findByStocktakeId 是死代码 ——
+# ▎「每一条都可能 500」是**假的**, 而那句假的最响的话在告警文件里躺了 16 天没人读。
+# ▎同一次跑批里 process_sheet_rows.plan_id(56) 与 report_reversal_logs.plan_id(10)
+# ▎则是 absent=56 / 10, soft_deleted=0 —— 那两条该升级, 而它们被 3262 淹掉了。
+#
+# ⇒ 契约: 只有 absent > 0 才配「可能 500 / 悬空引用」那套措辞与 rc=1;
+#   soft_deleted > 0 报 INFO(parent-soft-deleted-children-live), rc=0。
+#   ⛔ INFO 不等于静默 —— 它是那条「必发生」的读数(硬约束 9)。
+#
 # 退出码 (三态, ⛔ 不是两态):
-#   0  没有孤儿
-#   1  找到孤儿 (读数有效, 且指向缺陷)
-#   2  **没量到** —— 连不上库 / 一条关联都没扫到 / 阳性对照失败。
+#   0  没有悬空引用 (含「只有父软删未级联」那一类 —— 它走 INFO, ⛔ 不静默)
+#   1  找到**悬空引用** (absent > 0; 读数有效, 且指向缺陷)
+#   2  **没量到** —— 连不上库 / 一条关联都没扫到 / 阳性对照失败 / 结果列形状不对。
 #      ⛔ 不要把 2 读成 0。
 set -uo pipefail
 
@@ -259,10 +282,20 @@ for raw in io.open(manual_path, encoding="utf-8"):
 added = [p for p in manual if p not in found]
 found.update(manual)
 
+# 🔴 每一对出**两列**, ⛔ 不是一个 `bad`。理由见文件头「两类孤儿」那一节:
+#   absent       —— 父行**不存在**(悬空引用)。@ManyToOne 代理解析不到 ⇒ 真的会 500。
+#   soft_deleted —— 父行在, 只是 deleted_at 非空。只有当子表被**独立读取**时才可能炸。
+# 判据是 LEFT JOIN 之后 y.id 在不在, ⛔ 不是两条各自独立的 NOT EXISTS ——
+# 那样两个数会各自扫一遍、口径可能不一致(同一个东西两份, 形态 D)。
+# y.id 是主键 ⇒ 至多命中一行 ⇒ 不会把子行数放大。
+# 外层 WHERE 与旧版**逐字同义**(「没有活着的父行」), 所以 absent+soft_deleted 恒等于旧的 bad。
 def clause(t, c, tt):
-    return (f"SELECT '{t}.{c} -> {tt}' AS assoc, count(*) AS bad FROM public.{t} x "
-            f"WHERE x.deleted_at IS NULL AND x.{c} IS NOT NULL AND NOT EXISTS "
-            f"(SELECT 1 FROM public.{tt} y WHERE y.id::text = x.{c}::text AND y.deleted_at IS NULL)")
+    return (f"SELECT '{t}.{c} -> {tt}' AS assoc, "
+            f"count(*) FILTER (WHERE y.id IS NULL) AS absent, "
+            f"count(*) FILTER (WHERE y.id IS NOT NULL) AS soft_deleted "
+            f"FROM public.{t} x LEFT JOIN public.{tt} y ON y.id::text = x.{c}::text "
+            f"WHERE x.deleted_at IS NULL AND x.{c} IS NOT NULL "
+            f"AND (y.id IS NULL OR y.deleted_at IS NOT NULL)")
 
 # 🔴 扫描出来的和手工登记的**分段输出**, 中间用起止标记界定。
 # 为什么要分段: 仓库里那份 SQL 与「生成器现在会产出什么」是两份东西, 早晚会漂
@@ -279,7 +312,7 @@ print("-- BEGIN_MANUAL_SECTION 以下由 check-soft-delete-orphans.sh 的 MANUAL
 for p in sorted(added):
     print("  UNION ALL " + clause(*p))
 print("-- END_MANUAL_SECTION")
-print(") q WHERE bad > 0 ORDER BY bad DESC;")
+print(") q WHERE absent > 0 OR soft_deleted > 0 ORDER BY absent DESC, soft_deleted DESC;")
 sys.stderr.write(f"SCANNED={scanned} MANUAL={len(manual)} MANUAL_ADDED={len(added)} TOTAL={len(found)}\n")
 PYEOF
 PY_RC=$?
@@ -324,21 +357,48 @@ fi
 echo "扫到 $ASSOC_COUNT 条「会被序列化且无容错」的关联, 开始查坏行…"
 
 # ── 3. 执行 ───────────────────────────────────────────────────────────────
+# ⚠️ 用 `-At -F '|'` 取**机器可读**的三列(assoc|absent|soft_deleted), ⛔ 不用默认
+#    的对齐表格 —— 那种输出要靠数横线和 `(N rows)` 尾巴来切, 而分类判据必须落在
+#    absent 那一列本身上。姊妹脚本 scripts/cron/soft-delete-orphans-watch.sh
+#    用**同一个**口径读同一份 SQL(形态 D: 两个读者对同一份数据不许有两套解释)。
 scp -q "$WORK/scan.sql" "$SSH_HOST:/tmp/.sdo_scan.sql" || { echo "⛔ 上传 SQL 失败"; exit 2; }
 ssh "$SSH_HOST" "$REMOTE_ENV"'
-psql -h localhost -U "${DB_USERNAME:-cretas_user}" -d "$DB_NAME" -f /tmp/.sdo_scan.sql
+psql -h localhost -U "${DB_USERNAME:-cretas_user}" -d "$DB_NAME" -At -F "|" -f /tmp/.sdo_scan.sql
 rm -f /tmp/.sdo_scan.sql' > "$WORK/out.txt" 2>&1
 RC=$?
-cat "$WORK/out.txt"
-[ "$RC" -eq 0 ] || { echo "⛔ 查询执行失败 —— 本次读数作废"; exit 2; }
+[ "$RC" -eq 0 ] || { cat "$WORK/out.txt"; echo "⛔ 查询执行失败 —— 本次读数作废"; exit 2; }
 
-if grep -qE "^\(0 rows\)" "$WORK/out.txt"; then
+# 形状闸: 每一行都必须是 `<assoc>|<数>|<数>`。
+# ⛔ 形状不对一律 rc=2, ⛔ 不许「解析不出来就当 0 行」—— 那正是把「没量到」翻译成
+#    「没问题」(硬约束 4)。装了旧版单列 SQL 时也会落在这里, 而不是被读成半个读数。
+grep -vE '^[[:space:]]*$' "$WORK/out.txt" > "$WORK/rows.txt" || true
+BAD_SHAPE=$(grep -cvE '^[a-z0-9_]+\.[a-z0-9_]+ -> [a-z0-9_]+\|[0-9]+\|[0-9]+$' "$WORK/rows.txt" || true)
+if [ "${BAD_SHAPE:-0}" -ne 0 ]; then
+  echo "⛔ 结果列形状不对(期望 assoc|absent|soft_deleted), 本次读数作废:"
+  head -5 "$WORK/rows.txt"
+  exit 2
+fi
+
+ABSENT_ROWS=$(awk -F'|' '$2+0 > 0' "$WORK/rows.txt")
+SOFT_ROWS=$(awk -F'|' '$3+0 > 0' "$WORK/rows.txt")
+ABSENT_TOTAL=$(awk -F'|' '{s += $2} END {print s+0}' "$WORK/rows.txt")
+SOFT_TOTAL=$(awk -F'|' '{s += $3} END {print s+0}' "$WORK/rows.txt")
+echo "读数: absent=$ABSENT_TOTAL soft_deleted=$SOFT_TOTAL (共 $(grep -c . "$WORK/rows.txt" || true) 对有非零计数)"
+
+if [ -n "$SOFT_ROWS" ]; then
   echo
-  echo "✓ 没有软删孤儿。"
+  echo "ℹ️ INFO parent-soft-deleted-children-live —— 父软删未级联; 子表若无独立读路径则无用户影响:"
+  printf '%s\n' "$SOFT_ROWS" | awk -F'|' '{printf "     %s  soft_deleted=%s\n", $1, $3}'
+fi
+
+if [ -z "$ABSENT_ROWS" ]; then
+  echo
+  echo "✓ 没有悬空引用 (absent=0)。"
   exit 0
 fi
 echo
-echo "🔴 找到软删孤儿 —— 上面每一条现在都可能让对应页面 500。"
+echo "🔴 悬空引用 —— 下面每一条的父行**不存在**, 可能让对应页面 500:"
+printf '%s\n' "$ABSENT_ROWS" | awk -F'|' '{printf "     %s  absent=%s\n", $1, $2}'
 echo "   修法看情况, ⛔ 不要一刀切:"
 echo "     · 子表指向父表(明细/单据)  → 多半是**软删父行时没级联**, 应补级联, ⛔ 不是加 @NotFound"
 echo "     · 审计字段(created_by 等)  → 加 @NotFound(IGNORE)。那个人离职/注销是常态,"

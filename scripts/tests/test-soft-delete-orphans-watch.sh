@@ -16,6 +16,22 @@
 #
 # ⚠️ 每条断言之前先把台账那一行**打出来**(形态 C″): 变异不红有两种相反的成因,
 #    「断言在守空气」和「变异没打进去」, 不看实际读数就分不清。
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-09-06 追加: absent / soft_deleted 分列契约(用例 9 / 9b / 9c / 9d / 13b)
+# ═══════════════════════════════════════════════════════════════════════════
+# 旧版每对只出一个 `bad` 列, 告警对**全部**行断言「每一条都可能让对应页面 500」。
+# 而 09-06 实测里最响的那一条(semi_finished_stocktake_items.stocktake_id, 3262 行)
+# absent=0 —— 父行都在, 只是软删了, 且该子表无独立读路径 ⇒ **那句话是假的**,
+# 同时它把真正的悬空引用(56 + 10)淹掉了。
+#
+# ⚠️ 阳性对照全部来自 psql 桩, ⛔ 不从 prod 取: organizer 正在把那 3262 行的
+#    deleted_at 对齐到父行, prod 上这一对随时会读成 0 —— 拿它当对照, 对照会自己消失。
+#
+# 两次变异实测(先确认变异真的进了代码, 再看断言红不红):
+#   ① 判据折叠回 `ABSENT_TOTAL + SOFT_TOTAL`  ⇒ [9b] 红
+#      (台账当场变成 `ORPHANS_FOUND absent=0 soft-deleted=3262`, 变异确已生效)
+#   ② 告警明细去掉 `$2+0 > 0` 过滤          ⇒ [9c] 红(3262 又混进「可能 500」那一段)
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -70,21 +86,34 @@ make_ss() {  # $1 = 输出内容
     [ -n "$out" ] || fail "ss 桩输出为空 —— 它会被误读成「端口上没人」"
 }
 # psql 桩要回答**两个**查询, ⛔ 不能一个输出应付到底:
-#   · `-At -c <capture-sql>`  → hasdel 对账, 回 $TMP_ROOT/hasdel_live.txt
-#   · `-f <scan.sql>`         → 孤儿扫描, 回调用方给的那份
-# 混成一个的话, 对账那一步会拿到孤儿结果表格当表名, 于是**每个用例都 stale** ——
+#   · `-At -c <capture-sql>`      → hasdel 对账, 回 $TMP_ROOT/hasdel_live.txt
+#   · `-At -F | -f <scan.sql>`    → 孤儿扫描, 回调用方给的那份
+# 混成一个的话, 对账那一步会拿到孤儿结果当表名, 于是**每个用例都 stale** ——
 # 那看起来会像「新加的闸到处误报」, 而不是「我的桩写错了」(形态 A: 错的是尺子)。
-make_psql() {  # $1 = 退出码, $2 = stdout
+#
+# 🔴 分派键从 `-At` 换成 `-f`: 2026-09-06 起**两个调用都带 -At**(扫描改成机器可读的
+#    三列输出)。还按 `-At` 分派的话, 扫描那次会被当成对账、回一份表名清单, 而形状闸
+#    会把它报成 result-shape-unexpected —— 一个**桩的 bug 长成被测脚本的读数**。
+make_psql() {  # $1 = 退出码, $2 = 扫描 stdout
     {
         printf '#!/bin/sh\n'
         printf 'printf "%%s\\n" "PGPASSWORD=$PGPASSWORD" > "%s"\n' "$TMP_ROOT/psql.env"
         printf 'printf "%%s\\n" "$*" >> "%s"\n' "$TMP_ROOT/psql.env"
-        printf 'case "$*" in\n  *-At*) cat "%s"; exit 0 ;;\nesac\n' "$TMP_ROOT/hasdel_live.txt"
+        printf 'case "$*" in\n  *" -f "*) ;;\n  *) cat "%s"; exit 0 ;;\nesac\n' "$TMP_ROOT/hasdel_live.txt"
         printf 'cat <<'"'"'PQEOF'"'"'\n%s\nPQEOF\n' "$2"
         printf 'exit %s\n' "$1"
     } > "$FAKEBIN/psql"
     chmod +x "$FAKEBIN/psql"
+    # 🔴 桩的自检(同 make_ss): 证明两条分派都真的走到不同的答案上。
+    # ⛔ 不自检的话「两条都回同一份」在被测脚本眼里是一个合理读数, 不是一个错误。
+    local a b
+    a=$(PATH="$FAKEBIN" "$FAKEBIN/psql" -At -c "SELECT 1" 2>&1)
+    b=$(PATH="$FAKEBIN" "$FAKEBIN/psql" -At -F '|' -f /dev/null 2>&1)
+    [ "$a" = "$b" ] && [ -n "$a" ] && fail "psql 桩两条分派回了同一份内容 —— 分派键失效"
+    return 0
 }
+# 扫描输出的行格式(与生成器的 SQL 出的列一致): assoc|absent|soft_deleted
+scan_row() { printf '%s|%s|%s\n' "$1" "$2" "$3"; }
 
 # 快照(装在服务器上那份)与「真库实测」两侧。默认两侧一致 ⇒ 对账通过。
 CAPTURE_SQL="SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'"
@@ -145,7 +174,7 @@ make_hasdel "$BASE_TABLES"
 #    于是每天的告警都指着一个**没有发生**的故障。
 echo "[1] ss-not-found (PATH 里没有 ss)"
 rm -f "$FAKEBIN/ss"
-make_psql 0 '(0 rows)'
+make_psql 0 ''   # -At 下「一条孤儿都没有」就是**空输出**, ⛔ 不再是 `(0 rows)` 尾巴
 make_environ "${GOOD_ENV[@]}"
 run_watch
 assert_rc 2 "ss-not-found"
@@ -207,9 +236,7 @@ ok "reason=psql-failed"
 # 形态 A¹³: 每条读数带来源标记。prod 上 DB_PASSWORD 与 POSTGRES_PASSWORD 是**两个
 # 不同的值**(实测只有前者能连上), 不记 pw= 就分不清「密码错」和「拿错了变量」。
 echo "[7] rc=0 no-orphans + 来源标记"
-make_psql 0 ' assoc | bad
--------+-----
-(0 rows)'
+make_psql 0 ''
 run_watch
 assert_rc 0 "no-orphans"
 assert_ledger "OK no-orphans db=cretas_prod_db user=cretas_user(src=app-default) pw=DB_PASSWORD" "来源标记"
@@ -226,25 +253,79 @@ assert_ledger "db=other_db user=someone_else(src=DB_USERNAME) pw=POSTGRES_PASSWO
 grep -Fq "PGPASSWORD=onlypg" "$TMP_ROOT/psql.env" || fail "没回退到 POSTGRES_PASSWORD"
 ok "三个标记全部随环境改变 —— 它们不是写死的"
 
-# ═════════ 9. rc=1 有孤儿 ═════════════════════════════════════════════════
-echo "[9] rc=1 orphans-found"
+# ═════════ 9. absent>0 ⇒ rc=1 + 「可能 500」升级 ═════════════════════════
+# 契约的**升级侧**: 父行不存在 = 悬空引用 = @ManyToOne 代理解析不到 ⇒ 真的会 500。
+# prod 2026-09-06 实测 process_sheet_rows.plan_id absent=56 / soft_deleted=0。
+echo "[9] absent>0 ⇒ rc=1 + 升级措辞"
 make_environ "${GOOD_ENV[@]}"
-make_psql 0 '                 assoc                  | bad
-----------------------------------------+------
- process_sheet_rows.plan_id -> production_plans | 56
-(1 row)'
+make_psql 0 "$(scan_row 'process_sheet_rows.plan_id -> production_plans' 56 0)"
 run_watch
-assert_rc 1 "orphans"
-assert_ledger "ORPHANS_FOUND" "orphans"
-grep -Fq "process_sheet_rows.plan_id" "$ALERTS" || fail "告警里没列出孤儿行"
-ok "rc=1 且孤儿明细进了告警"
+assert_rc 1 "absent>0"
+assert_ledger "ORPHANS_FOUND absent=56 soft-deleted=0 pairs-absent=1" "absent>0"
+grep -Fq "process_sheet_rows.plan_id" "$ALERTS" || fail "告警里没列出悬空引用行"
+grep -Fq "absent=56" "$ALERTS" || fail "告警里没带 absent 计数"
+grep -q "可能让对应页面 500" "$ALERTS" || fail "absent>0 必须带 500 升级措辞"
+assert_no_ledger "parent-soft-deleted-children-live" "soft_deleted=0 时不许写 INFO 行"
+ok "absent>0 ⇒ rc=1 + 明细进告警 + 500 升级措辞"
+
+# ═════════ 9b. 🔴 soft_deleted>0 且 absent=0 ⇒ rc=0 + INFO, ⛔ 不喊 500 ═══
+# 🔴 这是本次改动守的**那个**行为。旧版每对只有一个 `bad` 列, 3262 行父软删被
+#    和 56 行悬空引用折叠成同一个数, 告警对全部行断言「每一条都可能让页面 500」——
+#    而 semi_finished_stocktake_items 没有独立读路径(findByStocktakeId 是死代码),
+#    那句最响的话是**假的**, 在告警文件里躺了 16 天没人读(形态 D′)。
+# ⚠️ 阳性对照来自桩, ⛔ 不从 prod 取: organizer 正在把那 3262 行的 deleted_at
+#    对齐到父行, prod 上这一对随时会读成 0 —— 拿它当对照等于对照会自己消失。
+echo "[9b] soft_deleted>0 且 absent=0 ⇒ rc=0 + INFO 行, 且**不出现** 500"
+make_psql 0 "$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262)"
+run_watch
+assert_rc 0 "soft-deleted-only"
+assert_ledger "OK soft-deleted-only soft-deleted=3262 pairs=1" "soft-deleted-only 判决行"
+assert_ledger "INFO parent-soft-deleted-children-live semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes count=3262" "INFO 行"
+assert_ledger "父软删未级联; 子表若无独立读路径则无用户影响" "INFO 行要带提示语"
+# 阴性对照(两条, 缺一条这个用例就只是在证明「有东西写出来了」):
+assert_no_ledger "ORPHANS_FOUND" "只有父软删时不许报 ORPHANS_FOUND"
+grep -q "500" "$LEDGER" && fail "父软删那一类不许出现「500」字样"
+[ ! -s "$ALERTS" ] || fail "父软删那一类不许写告警文件(它不可行动): $(cat "$ALERTS")"
+ok "rc=0 + INFO 行(⛔ 不静默) + 台账无 500 + 告警文件空"
+
+# ═════════ 9c. 两类同时存在 ⇒ rc=1, 但 3262 不许混进 500 那一段 ═══════════
+# 🔴 这一条守的是 09-06 那次真实读数的形状: 同一次跑批里 3262(父软删)把
+#    56 + 10(悬空)淹掉了。分列之后, 告警段里**只能**有悬空那两对。
+echo "[9c] absent>0 + soft_deleted>0 ⇒ rc=1, 告警段只收 absent 那一类"
+make_psql 0 "$(scan_row 'process_sheet_rows.plan_id -> production_plans' 56 0)
+$(scan_row 'report_reversal_logs.plan_id -> production_plans' 10 0)
+$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262)"
+run_watch
+assert_rc 1 "两类同时"
+assert_ledger "ORPHANS_FOUND absent=66 soft-deleted=3262 pairs-absent=2" "两类同时"
+assert_ledger "INFO parent-soft-deleted-children-live semi_finished_stocktake_items" "两类同时也要有 INFO 行"
+grep -Fq "process_sheet_rows.plan_id" "$ALERTS" || fail "告警里缺 process_sheet_rows"
+grep -Fq "report_reversal_logs.plan_id" "$ALERTS" || fail "告警里缺 report_reversal_logs"
+# 阴性对照: 3262 那一对**不许**出现在「可能 500」的明细里。
+awk '/可能让对应页面 500/{s=1;next} /修法看情况/{s=0} s' "$ALERTS" \
+    | grep -q "semi_finished_stocktake_items" \
+    && fail "3262 那一对又混进「可能 500」的明细里了"
+grep -Fq "另有 3262 行属" "$ALERTS" || fail "告警里应有一行交叉引用, 说清 3262 去了台账"
+ok "rc=1; 明细只有 2 对悬空引用, 3262 只留一行交叉引用"
+
+# ═════════ 9d. 结果列形状不对 ⇒ rc=2, ⛔ 不许静默读成 0 行 ════════════════
+# 装机是 3 个文件一起装(sql / hasdel / watch), 但装到一半、或有人手 scp 了旧版
+# 单列 SQL 时, 输出会是 `assoc|3262` 两列。⛔ 「解析不出来」不许退化成
+# 「今天没孤儿」—— 那正是硬约束 4 说的把「没量到」翻译成「没问题」。
+echo "[9d] 旧版单列输出 ⇒ rc=2 result-shape-unexpected"
+make_psql 0 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes|3262'
+run_watch
+assert_rc 2 "形状不对"
+assert_ledger "INSTRUMENT_DEAD reason=result-shape-unexpected" "形状不对"
+assert_no_ledger "OK no-orphans" "形状不对绝不许落进「没有孤儿」"
+ok "两列输出 ⇒ rc=2, ⛔ 不是 rc=0"
 
 # ═════════ 10. 出处检查取代 mtime ═════════════════════════════════════════
 # 🔴 旧判据是 `[ "$JAR" -nt "$SQL_FILE" ]` —— **每次部署 jar 都变新**, 于是它
 #    32 行台账里占了 16 行, 全部无信息量(形态 E: 天天喊的闸最后会被无视)。
 #    这里是那条的**回归闸**: jar 比 SQL 新, 但 STALE 不许再出现。
 echo "[10] jar 比 SQL 新 ⇒ ⛔ 不再报 STALE(旧 mtime 判据的回归闸)"
-make_psql 0 '(0 rows)'
+make_psql 0 ''   # -At 下「一条孤儿都没有」就是**空输出**, ⛔ 不再是 `(0 rows)` 尾巴
 sleep 1
 touch "$JAR"          # jar 明确比 SQL 新
 [ "$JAR" -nt "$SQL" ] || fail "构造失败: jar 并不比 SQL 新, 这条对照无意义"
@@ -272,7 +353,7 @@ ok "provenance-missing 是 INFO"
 #    只有在线上对着真库才量得到。⇒ 强制构造一次。
 echo "[11b] prod 新加了一张带 deleted_at 的表 ⇒ hasdel-snapshot-stale"
 printf -- '-- generated-from deadbeefcafe 2026-09-06 00:00:00Z\nSELECT 1;\n' > "$SQL"
-make_psql 0 '(0 rows)'
+make_psql 0 ''   # -At 下「一条孤儿都没有」就是**空输出**, ⛔ 不再是 `(0 rows)` 尾巴
 make_environ "${GOOD_ENV[@]}"
 # 实测比快照多一张 —— 这正是「新表加了 deleted_at, 而扫描面还不知道」。
 NEW_TABLE_LIST=$(printf '%s\nbrand_new_soft_deleted_table\n' "$BASE_TABLES")
@@ -327,12 +408,26 @@ ok "reason=sql-missing"
 # **上面每一次运行台账都涨了** —— 12 个用例里没有一次是「静默什么都没写」。
 echo "[13] 每一条路径都写了判决行"
 printf -- '-- generated-from deadbeefcafe 2026-09-06 00:00:00Z\nSELECT 1;\n' > "$SQL"
-make_psql 0 '(0 rows)'
+make_psql 0 ''   # -At 下「一条孤儿都没有」就是**空输出**, ⛔ 不再是 `(0 rows)` 尾巴
+VERDICT_RE='INSTRUMENT_DEAD|OK no-orphans|OK soft-deleted-only|ORPHANS_FOUND'
 run_watch
-n=$(grep -cE 'INSTRUMENT_DEAD|OK no-orphans|ORPHANS_FOUND' "$LEDGER")
+n=$(grep -cE "$VERDICT_RE" "$LEDGER")
 [ "$n" = "1" ] || fail "一次运行应恰好写 1 行判决, 实得 $n"
 grep -Fq "aborted-before-verdict" "$WATCH" || fail "崩在判决之前的兜底行不见了"
 ok "恰好 1 行判决 + 保留了 aborted-before-verdict 兜底"
+
+# 新增的第 4 种判决(soft-deleted-only)也必须**恰好一条** —— ⛔ INFO 行不许把它顶掉,
+# 也不许它自己变成两条。硬约束 9: 「台账涨了」不等于「判决写了」。
+echo "[13b] soft-deleted-only 路径也是恰好 1 行判决 + N 行 INFO"
+make_psql 0 "$(scan_row 'a_items.p_id -> a_parents' 0 7)
+$(scan_row 'b_items.p_id -> b_parents' 0 5)"
+run_watch
+n=$(grep -cE "$VERDICT_RE" "$LEDGER")
+[ "$n" = "1" ] || fail "soft-deleted-only 应恰好 1 行判决, 实得 $n"
+ni=$(grep -c 'INFO parent-soft-deleted-children-live' "$LEDGER")
+[ "$ni" = "2" ] || fail "两对父软删应写 2 行 INFO, 实得 $ni"
+assert_ledger "OK soft-deleted-only soft-deleted=12 pairs=2" "两对合计 12"
+ok "1 行判决 + 2 行 INFO, 合计数按对求和"
 
 echo
 echo "PASS: test-soft-delete-orphans-watch.sh ($PASSED 项)"
