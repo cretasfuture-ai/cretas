@@ -1,0 +1,70 @@
+name: Merge PR base into the checked-out head
+description: >
+  把 PR 的 base 显式合进已检出的 head, 让闸跑在【合并结果】而不是 PR 分支自己上。
+  非 pull_request 事件(schedule / workflow_dispatch)整步跳过, 树保持原样。
+
+# 🔴 2026-09-07 (票 CI-JAVA-GATE-CHECKS-PR-HEAD-NOT-MERGE-RESULT):
+#
+# java-gate-pr.yml 的两处 checkout 与 java-full-nightly.yml 的一处都显式写了
+# `ref: ${{ github.event.pull_request.head.sha }}`, 覆盖了 GitHub 默认的 merge ref
+# ⇒ Java 闸跑的是 PR 分支自己, 不是「合进 base 之后」的树。
+# 实测(organizer, #693): full-suite 的 run_head 恰好等于 PR head; #682 在该 run 触发前
+# 31 秒合进 main, 而那次 34 万行日志里 #682 新增的 SoftDeleteBatch1ContractTest 出现 0 次。
+#
+# ⚠️ 那三行 `ref:` **不是历史包袱**, 是刻意写的 —— 两处注释写着意图:
+#   java-gate-pr.yml:9  「不能拿旧 HEAD 的绿灯冒充最终候选」
+#   java-full-nightly.yml:82「PR 调用绑定原始 head」
+# 即「这块绿精确归属于哪一个 commit」。所以**不删** `ref:`(那是拿一个正确性属性换另一个),
+# 而是保留 head 绑定, 再显式把 base 合进来 —— 两个属性都要。
+#
+# ⛔ 合的是 `github.event.pull_request.base.sha`, **不写死 main**:
+#    base 不是 main 的 PR(例如本票的阴性对照 PR)会因此合错树。
+#
+# 本仓有大量【全仓扫描型】契约闸(软删棘轮 / @SQLDelete+@Version 源码闸 / 模块清单闸 /
+# NUL 字节闸…), 它们的作用域是整棵树, 而 CI 给的树只是 PR 分支 ⇒「两个 PR 各自绿、
+# 合起来红」在本仓反复出现过。
+
+runs:
+  using: composite
+  steps:
+    - name: Merge PR base into head (pull_request only)
+      if: ${{ github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        git config user.email "ci@cretas.local"
+        git config user.name "cretas-ci"
+
+        # base 对象必须在本地才能合。调用方给了 fetch-depth: 0 就已经有了;
+        # 万一没有(浅克隆)就单独取一次, 取不到直接红 —— ⛔ 不静默跳过合并,
+        # 那会退化成「跑的还是 PR 分支自己」而读数看起来一切正常。
+        if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          git fetch --no-tags origin "$BASE_SHA" \
+            || { echo "::error::取不到 base 提交 $BASE_SHA —— 调用方需要 fetch-depth: 0"; exit 1; }
+        fi
+
+        # 🔴 硬约束 9: 只打 merged_ok=yes 分不出两种成因 ——
+        #   (a) 真把 base 合进来了(这道修复在工作)
+        #   (b) base 已经是 head 的祖先(PR 刚 rebase 过), merge 是 no-op
+        # 两者读数完全相同, 而只有 (a) 证明闸看到了「别人合进 base 的东西」。
+        # ⇒ 再打两个【设计上必然会变】的读数: 合之前 base 领先我多少个 commit, 以及树变没变。
+        BEHIND=$(git rev-list --count "HEAD..$BASE_SHA" 2>/dev/null || echo unknown)
+        TREE_BEFORE=$(git rev-parse 'HEAD^{tree}')
+        if git merge --no-edit "$BASE_SHA"; then
+          TREE_AFTER=$(git rev-parse 'HEAD^{tree}')
+          if [ "$TREE_BEFORE" = "$TREE_AFTER" ]; then TREE_CHANGED=no; else TREE_CHANGED=yes; fi
+          echo "READING: GATE_TREE=merge head=$HEAD_SHA base=$BASE_SHA merged_ok=yes" \
+               "merged_in_commits=$BEHIND tree_changed=$TREE_CHANGED tree=$TREE_AFTER"
+          # merged_in_commits=0 不是错误(PR 刚 rebase 过就是这样), 但它意味着这一趟【没有】
+          # 证明任何事 —— 说出来, ⛔ 不让它长得和「真的合进来了」一样。
+          if [ "$BEHIND" = "0" ]; then
+            echo "READING: GATE_TREE_NOTE=base_already_ancestor (本次 merge 是 no-op; 这一趟证明不了闸能看见 base 的新东西)"
+          fi
+        else
+          echo "READING: GATE_TREE=conflict head=$HEAD_SHA base=$BASE_SHA merged_ok=no"
+          echo "::error::PR 与 base 冲突, 闸无法在合并结果上运行 —— 先解冲突再推(反正这样也合不进去)。"
+          exit 1
+        fi
