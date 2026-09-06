@@ -95,6 +95,11 @@ regen > "$AFTER" || { cat "$TMP/err.txt" >&2; fail "A: 加了新实体之后生�
 norm "$AFTER" > "$TMP/after.norm"
 DIFF_LINES=$(diff -u "$TMP/before.norm" "$TMP/after.norm" | grep -c '^[-+][^-+]' || true)
 echo "READING: DRIFT_DIFF_LINES=$DIFF_LINES (新增一个带 deleted_at 的实体之后)"
+# ⚠️ 这个信号目前**骑在生成物的统计头那一行**上(「带 @Table 的实体 N 个 …」), 而不是新增了一个
+#    UNION ALL 扫描块 —— 探针实体的 @ManyToOne 没有产生新块(#705 终审实测)。闸断的是**全文件相等**,
+#    所以今天成立; 但哪天有人把那段统计从生成物头部去掉, 本组变异就会**静默**。
+#    ✅ 失败模式是安全的: 那时 DIFF_LINES=0, 下面这条断言自己会响。⇒ 换了生成物格式之后,
+#    回来确认这条变异**还动得起来**, ⛔ 别只看它是不是绿的。
 [ "$DIFF_LINES" -gt 0 ] \
     || fail "A: 新增一个带 deleted_at 的实体, 生成器产出**一点没变** —— 那这道闸对这类改动是瞎的(而它正是 #665/#685 两次的成因)"
 ok "新增带 deleted_at 的实体 ⇒ 生成器产出变了 $DIFF_LINES 行 (权威检查会红)"
@@ -119,15 +124,31 @@ REPO_REL=$(grep -E '^REPOSITORY_ROOT=' "$GEN" | sed -E 's|.*JAVA_SRC/||; s|"||g'
 [ -n "$ENTITY_REL" ] && [ -n "$REPO_REL" ] \
     || fail "B: 从生成器里读不出 ENTITY_ROOT / REPOSITORY_ROOT(它改写法了?) —— 读不出就不能假装钉住了"
 echo "READING: GENERATOR_SCAN_ROOTS=$ENTITY_REL,$REPO_REL"
+# ⚠️ 只在**解析出来的 `paths:` 块**里找, ⛔ 不 grep 整个 workflow 文件 ——
+#    将来某条注释里出现字面量 `com/cretas/aims/entity/**`, 下面两组就会恒真
+#    (与本文件后面那处 `|| true` 检查同一个坑: 那里已经先 sed 剥了注释, 这里补齐, 免得用得不均匀)。
+PATHS_BLOCK=$(awk '
+    /^[[:space:]]*paths:[[:space:]]*$/ { inb = 1; next }
+    inb && /^[[:space:]]*-[[:space:]]/ { sub(/#.*$/, ""); print; next }
+    inb && /^[[:space:]]*#/           { next }          # 块内的整行注释: 跳过, 不算条目
+    inb && NF                          { inb = 0 }      # 块结束(下一个键)
+' "$WORKFLOW")
+PATHS_COUNT=$(printf '%s\n' "$PATHS_BLOCK" | grep -c . || true)
+echo "READING: PATHS_ENTRIES=$PATHS_COUNT"
+[ "$PATHS_COUNT" -ge 5 ] \
+    || fail "B: 解析 on.pull_request.paths 只得到 $PATHS_COUNT 条 —— 解析器和 workflow 对不上了, 后面两组的读数作废"
+
+in_paths() { printf '%s\n' "$PATHS_BLOCK" | grep -q -- "$1"; }
+
 for rel in "$ENTITY_REL" "$REPO_REL"; do
-    grep -q "com/cretas/aims/$rel/\*\*" "$WORKFLOW" \
-        || fail "B: workflow 的 paths 没覆盖生成器扫描的 '$rel/' —— 改那半棵树时闸静默不触发(与闸不存在同形)"
+    in_paths "com/cretas/aims/$rel/\*\*" \
+        || fail "B: paths 没覆盖生成器扫描的 '$rel/' —— 改那半棵树时闸静默不触发(与闸不存在同形)"
 done
-ok "paths 覆盖生成器扫描的两个根 ($ENTITY_REL, $REPO_REL)"
+ok "paths 覆盖生成器扫描的两个根 ($ENTITY_REL, $REPO_REL); 判据只看解析出的 paths 块"
 
 for p in scripts/check-soft-delete-orphans.sh scripts/cron/soft-delete-orphans.sql \
          scripts/cron/soft-delete-orphans.hasdel.txt; do
-    grep -q "$p" "$WORKFLOW" || fail "B: paths 少了 $p —— 改它自己时这道闸不跑"
+    in_paths "$p" || fail "B: paths 少了 $p —— 改它自己时这道闸不跑"
 done
 ok "生成器与两份快照也在 paths 里"
 
