@@ -108,6 +108,8 @@ const roles = ref<TableRow[]>([]);
 const rolesLoading = ref(false);
 /** 取角色清单失败的原因。非空 = 这次没读到, ⛔ 与「这个工厂没有角色」不是一回事。 */
 const rolesError = ref('');
+/** 取用户数失败的原因。非空 = 用户数这一列没读到, ⛔ 与「每个角色 0 人」不是一回事。 */
+const userCountsError = ref('');
 
 // 2026-09-07: 这里原本把 level 映射成「超级管理 / 主管级 / 主任级 / 员工级」四档,
 // 而那套 1-4 的刻度**全仓只有这一页有** —— 权威 `FactoryUserRole.level` 是
@@ -139,7 +141,9 @@ async function loadRoles() {
     roles.value = res.data
       // Steve「餐饮不管」—— 见 roles 上方的注释。⛔ 别顺手放出来。
       .filter((r) => r.department !== 'restaurant')
-      .map((r) => ({ ...r, userCount: 0 })) as unknown as TableRow[];
+      // ⛔ 不种 0: 用户数还没读到时种 0, 会和「这个角色真的没有用户」在页面上长成同一个样子。
+      //    null = 还没读到; 数字 = 读到了 (含真实的 0)。
+      .map((r) => ({ ...r, userCount: null as number | null })) as unknown as TableRow[];
   } catch (error) {
     roles.value = [];
     rolesError.value = error instanceof Error ? error.message : '请求失败';
@@ -150,8 +154,20 @@ async function loadRoles() {
 
 // Fetch real user count per role (Apr 21 2026): previously hardcoded
 // 2/3/5/8 for every factory which looked like cross-tenant leak to users.
+/**
+ * 每个角色的用户数。
+ *
+ * 🔴 2026-09-07: 这里原本**两处吞掉失败** (`if (!resp.success) return` 与
+ * `catch { console.warn }`), 而每行的 userCount 种的是 `0` ⇒ 读不到时页面给每个角色
+ * 印「0 人」, **与「这个角色真的没有用户」不可区分**。那是本 PR 上面两个函数
+ * (`loadRoles` / `handleViewPermissions`) 刚刚做对的同一件事, 这里漏掉了。
+ *
+ * ⇒ 三态分开: 还没读到 = `null` (渲染「—」+ 页面上说明原因) / 读到了 = 数字 (含真实的 0)。
+ * ⚠️ `_silent` 保留 —— 不弹红 toast, 但**必须在页面上留痕**, 否则又变成静默吞。
+ */
 async function loadRoleUserCounts() {
   if (!factoryId.value) return;
+  userCountsError.value = '';
   try {
     // Backend requires page>=1 (1-indexed); using 0 triggers 409 "页码必须大于0"
     // _silent suppresses red toast when API is unavailable for new factories.
@@ -159,7 +175,10 @@ async function loadRoleUserCounts() {
       `/${factoryId.value}/users`,
       { params: { page: 1, size: 500 }, _silent: true } as never
     );
-    if (!resp.success || !resp.data) return;
+    if (!resp.success || !resp.data) {
+      userCountsError.value = resp.message || '接口没有返回用户列表';
+      return;
+    }
     const list = resp.data.content || [];
     const countMap: Record<string, number> = {};
     for (const u of list) {
@@ -167,10 +186,10 @@ async function loadRoleUserCounts() {
       if (code) countMap[code] = (countMap[code] || 0) + 1;
     }
     roles.value.forEach(r => {
-      r.userCount = countMap[r.name] || 0;
+      r.userCount = countMap[r.name] || 0;   // 这里的 0 是**读到了且确实没有**, 与 null 不同
     });
-  } catch (e) {
-    console.warn('loadRoleUserCounts failed', e);
+  } catch (error) {
+    userCountsError.value = error instanceof Error ? error.message : '请求失败';
   }
 }
 
@@ -186,10 +205,9 @@ onMounted(async () => {
       <template #header>
         <div class="card-header">
           <span>角色权限</span>
-          <!-- 2026-09-07: 这里原本写死「共 14 种工厂角色」, 而下面那张表实际渲染 17 行 ——
+          <!-- 2026-09-07: 这里原本写死「共 14 种工厂角色」, 而那张表当时渲染 17 行 ——
                页面上一个可以直接数出来的假话 (screensMustNotShowFalsehoods 那一族)。
-               ⚠️ 数字算出来了, 但 roles 数组本身仍是写死的 17 条; 真正的修法是拉
-               GET /{factoryId}/roles (端点早就有, RoleControllerListRolesTest 钉着) —— 单独一刀。 -->
+               现在数字由 roles.length 算出, 而 roles 本身来自 GET /{factoryId}/roles。 -->
           <el-tag type="info" data-testid="role-count-badge">共 {{ roles.length }} 种工厂角色</el-tag>
         </div>
       </template>
@@ -209,7 +227,20 @@ onMounted(async () => {
         <el-button size="small" type="primary" @click="loadRoles">重试</el-button>
       </el-alert>
 
-      <el-table v-else v-loading="rolesLoading" :data="roles" stripe>
+      <!-- 用户数没读到就说出来 —— ⛔ 不靠一列「—」让人自己猜。 -->
+      <el-alert
+        v-if="!rolesError && userCountsError"
+        type="warning"
+        :closable="false"
+        title="用户数这一列没有读到"
+        data-testid="user-counts-error"
+        style="margin-bottom: 12px"
+      >
+        <p>{{ userCountsError }}</p>
+        <p>角色与权限不受影响；「用户数」列显示「—」表示没读到，不是 0 人。</p>
+      </el-alert>
+
+      <el-table v-if="!rolesError" v-loading="rolesLoading" :data="roles" stripe>
         <el-table-column prop="displayName" label="角色名称" width="120" />
         <el-table-column prop="name" label="角色标识" width="180">
           <template #default="{ row }">
@@ -226,7 +257,9 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="userCount" label="用户数" width="100">
           <template #default="{ row }">
-            <el-tag>{{ row.userCount }} 人</el-tag>
+            <!-- null = 还没读到, 渲染「—」而不是「0 人」。0 只在真的读到 0 时出现。 -->
+            <el-tag v-if="row.userCount === null" type="info" data-testid="user-count-unknown">—</el-tag>
+            <el-tag v-else>{{ row.userCount }} 人</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
