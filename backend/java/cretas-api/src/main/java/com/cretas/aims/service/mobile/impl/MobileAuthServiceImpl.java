@@ -14,6 +14,7 @@ import com.cretas.aims.repository.PlatformAdminRepository;
 import com.cretas.aims.repository.SessionRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WhitelistRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.TempTokenService;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.service.mobile.MobileAuthService;
@@ -52,6 +53,8 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     private final TempTokenService tempTokenService;
     private final TokenBlacklistService tokenBlacklistService;
     private final MobileDeviceService mobileDeviceService;
+    /** 登录响应 modulePermissions 的唯一来源 —— 与 @RequirePermission 同一条解析链. */
+    private final PermissionService permissionService;
 
     // 演示账号配置 (路演免密登录). cretas.demo.enabled=true 开启.
     @Value("${cretas.demo.enabled:false}")
@@ -202,6 +205,8 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                 .businessDomain(BusinessDomainUtils.resolveDomain(factoryType))
                 .role(user.getRole())
                 .permissions(parsePermissions(user.getPermissions()))
+                // L2 → L1 → 硬编码 逐格解析; RN hasModulePermission 读它, 不再自带矩阵
+                .modulePermissions(permissionService.resolveModuleLevels(user))
                 .token(token)
                 .refreshToken(refreshToken)
                 .expiresIn(3600L) // 1小时

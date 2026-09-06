@@ -37,6 +37,11 @@ export interface UnifiedLoginResponseData {
     position?: string;
   };
   permissions: string[];
+  /**
+   * module → rw|r|w|- , 后端 MobileDTO.LoginResponse.modulePermissions (L2→L1→硬编码 逐格解析)。
+   * 工厂用户有 (可为空对象), 平台管理员为 null。旧后端不带 ⇒ undefined。
+   */
+  modulePermissions?: Record<string, string> | null;
   lastLoginTime?: string;
   createdAt?: string;
   updatedAt?: string;

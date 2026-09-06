@@ -89,6 +89,14 @@ public class MobileDTO {
         private String businessDomain;
         private String role;
         private List<String> permissions;
+        /**
+         * 该账号在每个模块上的<b>有效</b>权限级别 (module → rw|r|w|-), 由
+         * {@link com.cretas.aims.service.PermissionService#resolveModuleLevels} 按
+         * L2 → L1 → 硬编码 解析, 与 {@code @RequirePermission} 判定逐格一致。超管带 {@code "*": "rw"}。
+         * 工厂用户必有 (可为空 map); 平台管理员为 null (RN 端对平台管理员短路放行, 不读它)。
+         * RN {@code hasModulePermission} 读这里, 不再自带一份会与 L1 漂移的矩阵。
+         */
+        private Map<String, String> modulePermissions;
         private String token;
         private String refreshToken;
         private Long expiresIn;

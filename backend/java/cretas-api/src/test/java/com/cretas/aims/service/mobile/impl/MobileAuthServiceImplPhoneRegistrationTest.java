@@ -11,6 +11,7 @@ import com.cretas.aims.repository.PlatformAdminRepository;
 import com.cretas.aims.repository.SessionRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WhitelistRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.TempTokenService;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.service.mobile.MobileDeviceService;
@@ -46,6 +47,9 @@ class MobileAuthServiceImplPhoneRegistrationTest {
     @Mock TokenBlacklistService tokenBlacklistService;
     @Mock MobileDeviceService mobileDeviceService;
 
+    @Mock
+    private PermissionService permissionService;
+
     private MobileAuthServiceImpl service;
 
     @BeforeEach
@@ -53,7 +57,7 @@ class MobileAuthServiceImplPhoneRegistrationTest {
         service = new MobileAuthServiceImpl(
                 userRepository, sessionRepository, platformAdminRepository, whitelistRepository,
                 passwordEncoder, jwtUtil, userMapper, tempTokenService, tokenBlacklistService,
-                mobileDeviceService);
+                mobileDeviceService, permissionService);
     }
 
     @Test

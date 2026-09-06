@@ -4,6 +4,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -123,4 +124,23 @@ public interface PermissionService {
      * @return 权限代码集合
      */
     Set<String> getRolePermissions(FactoryUserRole role);
+
+    /**
+     * 解析该用户在每个已知模块上的<b>有效</b>权限级别 ({@code rw} / {@code r} / {@code w} / {@code -})。
+     *
+     * <p>解析链与 {@link #hasPermission} <b>逐格一致</b>: 超管 ({@code factory_super_admin} /
+     * {@code platform_admin}) 全 {@code rw} 并带一个 {@code "*"} 键; 其余角色按
+     * L2 工厂覆盖 → L1 {@code platform_role_permissions} → 硬编码兜底 取第一个命中。
+     * 模块全集 = 三层里任一层为该角色登记过的模块的并集 (不挑「哪一份清单是真的」)。
+     *
+     * <p>用途: 登录响应 {@code modulePermissions}。RN 端 {@code hasModulePermission} 读它,
+     * 不再自带一份会与 L1 漂移的矩阵 (BUG-RN-PERMISSION-MATRIX-DRIFTS-FROM-L1-20260906)。
+     * 契约: 对返回 map 里的每一格, {@code hasPermission(user, module + ":read")} 与
+     * {@code hasPermission(user, module + ":write")} 的答案必须与该格级别一致 —— 见
+     * {@code PermissionServiceImplResolveModuleLevelsContractTest}。
+     *
+     * @param user 用户 (null / 未激活 → 空 map)
+     * @return module → rw|r|w|-; 永不为 null
+     */
+    Map<String, String> resolveModuleLevels(User user);
 }

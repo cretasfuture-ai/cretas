@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { hasModulePermission } from '../../../utils/permissionHelper';
 
 const screenSource = fs.readFileSync(
   path.resolve(__dirname, '../../../screens/operations/OperationsHomeScreen.tsx'),
@@ -32,11 +33,20 @@ describe('operations coordinator mobile boundary', () => {
   });
 
   it('matches the backend role matrix: operations write, adjacent modules read', () => {
-    expect(permissionSource).toContain('operations_coordinator: {');
-    expect(permissionSource).toContain("operations: 'read_write'");
-    expect(permissionSource).toContain("warehouse: 'read'");
-    expect(permissionSource).toContain("procurement: 'read'");
-    expect(permissionSource).toContain("sales: 'read'");
+    // 2026-09-06: RN 不再自带手写矩阵 (BUG-RN-PERMISSION-MATRIX-DRIFTS-FROM-L1-20260906),
+    // 真相来自登录响应 modulePermissions, 旧会话退到 prod L1 快照。这里守的是**性质**
+    // (运营协调员: operations 可写, 相邻模块只读), 不再守矩阵字面量。
+    expect(permissionSource).not.toContain('operations_coordinator: {');
+    const coordinator = {
+      id: 1, username: 'ops', email: '', createdAt: '', updatedAt: '', isActive: true,
+      userType: 'factory' as const,
+      factoryUser: { role: 'operations_coordinator' as const, factoryId: 'F006', permissions: [] },
+    };
+    expect(hasModulePermission(coordinator, 'operations', 'write')).toBe(true);
+    for (const module of ['warehouse', 'procurement', 'sales']) {
+      expect(hasModulePermission(coordinator, module, 'read')).toBe(true);
+      expect(hasModulePermission(coordinator, module, 'write')).toBe(false);
+    }
   });
 
   it('states that warehouse owns material and quantity receipt facts', () => {
