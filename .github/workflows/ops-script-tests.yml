@@ -16,6 +16,20 @@ on:
       - 'scripts/cron/**'
       - 'scripts/check-soft-delete-orphans.sh'
       - 'scripts/deploy/server-script-inventory.conf'
+      # 🔴 2026-09-06 补: 这 48 个用例守的**被测对象**原本一个都不在 paths 里 ——
+      #    改 scripts/deploy/*.sh 或 scripts/lib/deploy-common.sh 的 PR, 这道闸
+      #    一次都不跑。那正是它自己刚照出来的那类缺陷(形态 B: 机制在, 没接上):
+      #    · release-java-preflight.sh 少一个执行位 ⇒ 发布链 rc=126
+      #    · acquire_deploy_lock 在判定前截断锁文件 ⇒ 锁永久卡住
+      #    两处都在 scripts/deploy|lib 下, 改它们的那个 PR 不会触发本闸。
+      #    ⚠️ 这里加宽的是**本闸自己的** paths, ⛔ 不是往别人的 workflow 里塞
+      #    (2026-08-28 教训: 给别人加宽 glob 会把那边的阴性对照变成恒真式)。
+      - 'scripts/deploy/**'
+      - 'scripts/lib/**'
+      # 三个用例现在断言 ci.yml / java-artifact.yml 的结构(打包住在哪、push paths
+      # 覆不覆盖整棵 backend 树、制品保留几天), 所以改这两个文件也要跑一遍。
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/java-artifact.yml'
       - '.github/workflows/ops-script-tests.yml'
   workflow_dispatch:
 

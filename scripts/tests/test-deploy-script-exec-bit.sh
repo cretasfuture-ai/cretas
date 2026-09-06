@@ -35,9 +35,19 @@ cd "$ROOT_DIR"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-command -v git >/dev/null 2>&1 || fail "没有 git, 问不到索引里的 mode"
-git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-    || fail "不在 git 工作树里, 索引 mode 无从谈起"
+# 前提: 判据问的是 **git 索引里的 mode**, 所以没有 git / 不在工作树里就是
+# **这次量不了**, ⛔ 既不是「全都合规」也不是「有人少了执行位」(硬约束 4 的三态)。
+# ⇒ rc=77 + `SKIPPED:` 由 scripts/ci/run-script-tests.sh 判成 SKIPPED(不计进 PASS)。
+# 实测会走到这里的场景: 从 tar 解出来的树、或 vendored 副本。CI 的 actions/checkout
+# 一定是工作树, 所以那边不会跳。
+if ! command -v git >/dev/null 2>&1; then
+    echo "SKIPPED:没有 git, 问不到索引里的 mode(判据只能问索引, ⛔ 不能问工作区)"
+    exit 77
+fi
+if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "SKIPPED:$ROOT_DIR 不在 git 工作树里(例如从 tar 解出来的副本), 索引 mode 无从谈起"
+    exit 77
+fi
 
 # ── 采集: 命令位上的 "$SCRIPT_DIR/<x>.sh" ────────────────────────────────
 # 前缀允许 `if ` / `! ` / `&& ` / `|| ` —— 这些之后仍然是命令位。
