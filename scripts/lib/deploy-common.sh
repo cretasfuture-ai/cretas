@@ -444,7 +444,47 @@ acquire_deploy_lock() {
 
     if command -v flock >/dev/null 2>&1; then
         # flock 模式 (POSIX advisory lock, Linux/Mac/Git Bash)
-        exec 200>"$lock_file"
+        #
+        # 🔴 ⛔ 不能写 `exec 200>"$lock_file"` —— `>` 在**判定之前**就把文件截断了,
+        #    持有者的 PID 当场被抹掉。两个后果都实测到过(2026-09-06, ubuntu):
+        #      ① 拒绝日志退化成 "PID , cmdline: unknown", 操作者无从判断该不该手删 ——
+        #         而「日志要带 cmdline / mtime, 不是光秃秃一个 PID」正是 2026-09-02
+        #         那次凌晨事故之后加的要求。
+        #      ② 更要命: 下一次调用读到**空** stale_pid, 而 stale 回收那段要求
+        #         `[ -n "$stale_pid" ]` ⇒ 整段被跳过。与此同时 flock 还被持有者的
+        #         **子进程**按着(子进程继承了 fd 200, 父进程死了它没死), 于是这把锁
+        #         **永久卡住**, 后续每一次部署都被拒。CI 里
+        #         test-deploy-mutex-coverage.sh 报的 "lock stayed held after its
+        #         owner died; deploys would be permanently blocked" 就是这条路径。
+        #    ⚠️ Windows Git Bash **没有 flock**, 走下面的 PID 文件分支 —— 所以这个
+        #       缺陷在开发机上一直是绿的, 只有 Linux/macOS 上才看得见。
+        # `<>` 是 O_RDWR|O_CREAT 且**不截断**: 文件不存在照样建, 已有内容原样保留。
+        #
+        # 🔴🔴 ⚠️ 这个改法**绕过**了遗留子进程持锁, ⛔ 没有消除它 —— 别把它读成
+        #    「已解决」(#635 终审提出, 如实登记):
+        #      · flock 挂在**打开文件描述**上, 子进程继承 fd 200 就一起持有它。
+        #        父进程死了、子进程(rsync / ssh / mvn 之类)还在, 锁就还在。
+        #      · 现在能往下走, 是因为 stale 回收 `rm -f` 了那个**路径**, 随后
+        #        `exec 200<>` 建了一个**新 inode**。于是同一时刻有两个持有者:
+        #        新持有者按着新 inode 的锁, 而遗留子进程仍按着那个**已被 unlink
+        #        的旧 inode** 的锁 —— 两把锁互不可见, 互斥在这一刻是**失效的**。
+        #      · 它比原来好, 只是因为原来的形态是「永久卡死, 每次部署都被拒」,
+        #        而现在是「持有者已死 + 只剩孤儿子进程」这一个窄窗口里互斥失效。
+        #        ⛔ 但那仍然是 5/30 事故的形状(两个 deploy 同时写共享 jar)。
+        #
+        #    一行修法(**只评估, 本 PR 不改**): bash 没有 FD_CLOEXEC 的内建写法,
+        #    但调用方在 fork 出后台任务 / 子 shell 之前可以显式关掉这个 fd:
+        #        ( exec 200>&- ; 那个后台任务 ) &
+        #    即在 release-cretas.sh / deploy-cretas-parallel.sh 起并行子任务的那几处
+        #    加 `200>&-`。为什么不在本 PR 做:
+        #      ① 它要改的是**发布编排**的并发路径, 不是锁原语, 与本票的 scope 不同;
+        #      ② 漏掉任何一处 fork 点, 读数与「改好了」完全同形(形态 B), 必须先有一条
+        #         能把「子进程仍持锁」量出来的断言, 而现在的用例量不到它 ——
+        #         test-deploy-mutex-coverage 的第二次获取之所以成功, 走的正是上面那条
+        #         「rm 掉旧 inode」的路, 它对遗留子进程持锁**不敏感**;
+        #      ③ 先得决定语义: 孤儿子进程还在跑的时候, 到底该放行还是该挡。挡住更安全,
+        #         但那正是 2026-09-02 「陈旧锁拒掉健康部署」那次投诉的另一面。
+        exec 200<>"$lock_file"
         if ! flock -n 200; then
             local holder_pid holder_cmdline
             holder_pid=$(cat "$lock_file" 2>/dev/null)
@@ -458,6 +498,10 @@ acquire_deploy_lock() {
             return 1
         fi
         # 写 PID 进 lock 文件, 让下次 precheck 能验证 (flock fd 在 SIGKILL 时不一定释放).
+        # ⚠️ 截断挪到**拿到锁之后**: 上面改成不截断的 `<>` 之后, 旧内容比新 PID 长时
+        #    会留下尾巴(旧 1234567 + 新 999 = "9994567"), 而那串垃圾会被下一次
+        #    precheck 当成 PID 去问死活。
+        : >"$lock_file"
         deploy_lock_pid >&200
         # fd 200 保持打开, 进程退出时 flock 自动释放
         log "DEBUG" "获取 flock: $lock_file (PID $$)"

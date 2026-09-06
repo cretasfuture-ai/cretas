@@ -75,9 +75,51 @@ done
 
 # ---- 4. 变异检验: 证明上面的断言不是空转 ----
 # 先断言"变异本身生效"再看结果 —— 本仓库反复栽在跳过这一步上。
-old_form=$(LC_ALL=C grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' "$tmp_index" 2>/dev/null | head -1 || true)
-[ -z "$old_form" ] \
-    || fail "本机 LC_ALL=C 下 grep -P 竟然可用 —— 本测试的前提在此环境不成立, 需重新评估"
-ok "变异检验: 旧写法 grep -oP 在 LC_ALL=C 下确实提取为空(缺陷可复现)"
+#
+# ⚠️ 2026-09-06 订正。原来这里只有一条运行时演示: 「LC_ALL=C 下 grep -oP 提取为空」,
+# 不成立就 fail「本测试的前提在此环境不成立」。而它**依赖 grep 的版本**, 实测:
+#     Git Bash  GNU grep 3.0  : LC_ALL=C grep -oP → rc=2 "supports only unibyte
+#                               and UTF-8 locales"  ⇒ 前提成立
+#     ubuntu-24 GNU grep 3.11 : LC_ALL=C grep -oP → rc=0, 正常输出         ⇒ 不成立
+# 于是这个用例在 CI 上恒红, 而它守的东西(第 1 节那道静态禁令)一直是好的。
+#
+# 问题出在**变异打错了地方**(形态 C): 第 1 节是一道**静态扫描**, 它的变异应该是
+# 「往被扫的脚本里塞一句 grep -oP, 看扫描器红不红」—— 那在哪台机器上都成立。
+# 至于「用了 -P 会不会真的提取为空」, 那是**发布机 grep 版本**的属性, 只在能复现
+# 的机器上演示, ⛔ 不能拿它当整个用例的通过条件。
+#
+# 4a. 可移植变异: 让静态扫描器面对一份含 grep -oP 的脚本, 它必须报出来。
+MUTANT=$(mktemp)
+{
+    cat "$DEPLOY_SCRIPT"
+    echo '# 下面这行是变异注入的, 不是真实代码'
+    echo "LOCAL_ENTRY_HASH=\$(LC_ALL=C grep -oP 'assets/index-[A-Za-z0-9_-]+\\.js' \"\$TMP_INDEX\")"
+} > "$MUTANT"
+mutant_hits=$(grep -cE "(^|[^[:alnum:]_-])grep([[:space:]]+-[[:alnum:]]*P)" "$MUTANT" || true)
+baseline_hits=$(grep -cE "(^|[^[:alnum:]_-])grep([[:space:]]+-[[:alnum:]]*P)" "$DEPLOY_SCRIPT" || true)
+echo "  变异到达确认: 注入后 grep -P 命中 $mutant_hits 处 (原脚本 $baseline_hits 处)"
+[ "$mutant_hits" -gt "$baseline_hits" ] || fail "变异没打进去 —— 后面的红绿不可判定"
+mutant_offenders=$(grep -nE '(^|[^[:alnum:]_-])grep([[:space:]]+-[[:alnum:]]*P)' "$MUTANT" \
+    | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+[ -n "$mutant_offenders" ] \
+    || fail "静态禁令扫不出注入的 grep -oP —— 第 1 节那条断言是空转的"
+rm -f "$MUTANT"
+ok "变异检验(可移植): 往脚本里塞一句 grep -oP, 静态禁令能扫出来"
+
+# 4b. 运行时演示: 这台机器的 grep 在 C locale 下拒不拒 -P。
+#     ⚠️ 这一条**只报告**, 不作为通过条件 —— 它量的是本机 grep 的版本属性,
+#     而不是被测脚本的行为。判据仍然是 4a。
+grep_version=$(grep --version 2>/dev/null | head -1)
+old_form=$(LC_ALL=C grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' "$tmp_index" 2>/dev/null || true)
+old_form=${old_form%%$'\n'*}
+if [ -z "$old_form" ]; then
+    ok "运行时演示: 本机 LC_ALL=C 下 grep -oP 提取为空(缺陷可复现) — $grep_version"
+else
+    echo "  note - 本机 LC_ALL=C 下 grep -oP 可用(提取到 '$old_form'), 缺陷在此环境**演示不出来**。"
+    echo "         $grep_version"
+    echo "         ⇒ 这不代表禁令过时: 发布机上的 GNU grep 3.0 会拒 -P(实测 rc=2"
+    echo "           \"supports only unibyte and UTF-8 locales\"), 而 release-cretas.sh"
+    echo "           必须以 LC_ALL=C 运行。判据由 4a 承担。"
+fi
 
 echo "PASS: ${pass_count} 项断言全部通过"

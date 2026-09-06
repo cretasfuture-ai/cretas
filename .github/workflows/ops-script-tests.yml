@@ -16,6 +16,20 @@ on:
       - 'scripts/cron/**'
       - 'scripts/check-soft-delete-orphans.sh'
       - 'scripts/deploy/server-script-inventory.conf'
+      # 🔴 2026-09-06 补: 这 48 个用例守的**被测对象**原本一个都不在 paths 里 ——
+      #    改 scripts/deploy/*.sh 或 scripts/lib/deploy-common.sh 的 PR, 这道闸
+      #    一次都不跑。那正是它自己刚照出来的那类缺陷(形态 B: 机制在, 没接上):
+      #    · release-java-preflight.sh 少一个执行位 ⇒ 发布链 rc=126
+      #    · acquire_deploy_lock 在判定前截断锁文件 ⇒ 锁永久卡住
+      #    两处都在 scripts/deploy|lib 下, 改它们的那个 PR 不会触发本闸。
+      #    ⚠️ 这里加宽的是**本闸自己的** paths, ⛔ 不是往别人的 workflow 里塞
+      #    (2026-08-28 教训: 给别人加宽 glob 会把那边的阴性对照变成恒真式)。
+      - 'scripts/deploy/**'
+      - 'scripts/lib/**'
+      # 三个用例现在断言 ci.yml / java-artifact.yml 的结构(打包住在哪、push paths
+      # 覆不覆盖整棵 backend 树、制品保留几天), 所以改这两个文件也要跑一遍。
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/java-artifact.yml'
       - '.github/workflows/ops-script-tests.yml'
   workflow_dispatch:
 
@@ -36,7 +50,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), ⛔ 不编译、不需要 JDK。
+      # 🔴 2026-09-06 订正: 原来这里写「⛔ 不编译、不需要 JDK」—— 那句话是错的。
+      #    test-release-artifacts-failfast.sh 与 test-release-parallel-fastlane.sh
+      #    **真跑** scripts/deploy/release-java-preflight.sh, 而它硬性要求 JDK 21+。
+      #    runner 的默认 JAVA_HOME 是 **Temurin 17**(image readme: `17.0.20+1 (default)`),
+      #    于是这两个用例在 CI 上分别报
+      #      "preflight rejected the current, working JDK"
+      #      "ERROR: release requires JDK 21 or newer, found 17"
+      #    —— 把「这台机器的 JDK 太老」说成了「预检坏了」。
+      #    ⇒ 显式装 21。⛔ 不是让用例去迁就 17(那等于把发布预检的判据改松)。
+      #    ⚠️ 装不上也不至于假绿: 两个用例都会探测前提, 探不到 21 就 rc=77 +
+      #       `SKIPPED:`(见 scripts/tests/lib/release-jdk-probe.sh), 而 SKIPPED
+      #       在 run-script-tests.sh 里**不计进 PASS**。
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Prove the release JDK landed
+        run: |
+          set -euo pipefail
+          echo "JAVA_HOME=$JAVA_HOME"
+          "$JAVA_HOME/bin/java" -version
+          major=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -nE '1s/.*version "([0-9]+).*/\1/p')
+          echo "JAVA_MAJOR=$major"
+          # ⛔ 只断言下限, 不钉死 21 —— 装了更新的版本不该把这一步弄红。
+          [ "$major" -ge 21 ]
+
+      # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), 不编译。
       - name: Show interpreter versions
         run: |
           set -euo pipefail
