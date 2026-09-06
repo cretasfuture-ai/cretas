@@ -26,7 +26,9 @@ PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 # shellcheck source=scripts/lib/server-script-common.sh
 . "$PROJECT_ROOT/scripts/lib/server-script-common.sh"
 
-REPO=${CRETAS_RELEASE_REPO:-Stevenjxie/cretas}
+# 🔴 2026-09-07: 与 release-ci-artifact.sh 同一处缺陷 —— 默认值原来是旧 fork `Stevenjxie/cretas`,
+#    它 main 上没有本仓的制品 ⇒ 候选列表恒空。两个脚本的默认值必须一致(测试里钉了)。
+REPO=${CRETAS_RELEASE_REPO:-cretasfuture-ai/cretas}
 SIGNER_WORKFLOW="$REPO/.github/workflows/web-dist.yml"
 STAGER=${CRETAS_WEB_STAGER:-/usr/local/sbin/github-web-artifact-stage}
 CACHE_ENDPOINT=${CRETAS_TOKYO_CACHE_ENDPOINT:-http://10.66.66.1:18081/artifacts}

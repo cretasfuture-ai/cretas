@@ -41,6 +41,9 @@ registered in `docs/dispatch/ACTIVE.md`:
 
 # Post-merge, BEFORE releasing: prewarm the CI artifact. Idempotent and safe to
 # background; it waits until CI has produced the artifact (Java ~4 min, web-dist ~84s).
+# PREWARM=unavailable (rc=3) means the lane is structurally dead in this org (private
+# repo => no attestation => ECS refuses by design): release anyway, the build just falls
+# back to local Maven. Do NOT re-run prewarm and do NOT stop here.
 ./scripts/deploy/prewarm-main-artifact.sh \
   --tests '<same MavenTestSelector>' \
   --wait 420

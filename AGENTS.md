@@ -87,6 +87,8 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
 # 不预热则构建段 204s(本地 fallback) vs 25s(命中 CI 制品)，且 200s+ 构建期间常有
 # 并发 session 推进 origin/main → 构建全成功却被 exact-main 复检整体作废。
 # --tests 与下一步同选择器或更窄（判据是集合包含）。看到 PREWARM=done / already-warm 再往下。
+# PREWARM=unavailable（rc=3）= 本组织这条车道结构性不可用（私有仓签不上 attestation）：照常往下
+# 发布，只是构建走本地 Maven。⛔ 不要重跑预热，也不要停在这一步。
 ./scripts/deploy/prewarm-main-artifact.sh \
   --tests '<本次目标测试>' \
   --wait 420

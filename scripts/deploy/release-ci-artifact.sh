@@ -22,7 +22,11 @@ PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 # shellcheck source=scripts/deploy/release-jar-manifest.sh
 . "$SCRIPT_DIR/release-jar-manifest.sh"
 
-REPO=${CRETAS_RELEASE_REPO:-Stevenjxie/cretas}
+# 🔴 2026-09-07: 默认值原来是 `Stevenjxie/cretas` —— 那是**旧 fork**, 它 main 上 `cretas-java-*`
+#    制品是 0 个。本机没人设 CRETAS_RELEASE_REPO ⇒ 候选列表恒空 ⇒ 每次发布都报
+#    `no_main_artifact_listed` 然后静默回退本地 Maven(发 44–49 六次全是这样, 一次都没复用过)。
+#    实测: 旧 fork main 未过期制品 0 个, `cretasfuture-ai/cretas` 39 个。
+REPO=${CRETAS_RELEASE_REPO:-cretasfuture-ai/cretas}
 DEST_PREFIX=${CRETAS_RELEASE_OSS_PREFIX:-deploy/backend/}
 DESCRIPTOR_FORMAT="cretas-remote-artifact-v1"
 PUBLISH_PS1="$SCRIPT_DIR/Publish-GitHubArtifactViaLightsailOss.ps1"
@@ -50,6 +54,13 @@ usage: release-ci-artifact.sh --tests <MavenTestSelector> [--descriptor <path>]
   --prewarm     合并后立即跑, 把运输挪出发布窗口。语义与不带它时【完全相同】, 唯一区别是
                 「CI 还没构建完 / 还没有匹配制品」不算失败(退 0 并打 pending) —— 合并后
                 几分钟内 CI 通常还在跑, 那不是错误, 只是还没轮到。
+
+退出码:
+  0  可用(或 --prewarm 下「还没轮到」)
+  1  这一趟没成(传输失败/验签不过/选择器覆盖不足/无制品且非 prewarm)
+  2  用法错误
+  3  **本组织这条车道结构性不可用** —— 候选制品里没有 attestation bundle, ECS 会按设计拒收。
+     ⛔ 这一种重试/等待都没有意义(⇒ --prewarm 也不把它当 pending), 调用方应直接走本地构建。
 EOF
     exit 2
 }
@@ -70,6 +81,23 @@ case "$TESTS" in *$'\n'*|*$'\r'*) echo "ERROR: --tests 不得含换行" >&2; exi
 [ -n "$DESCRIPTOR" ] || DESCRIPTOR="$(release_manifest_cache_root)/current/release-jar.remote"
 
 fail() { echo "CI_ARTIFACT_UNAVAILABLE reason=$1" >&2; exit 1; }
+
+# 「这条车道在本组织根本通不了」——与 fail() 的区别是**等下去没有意义**, 所以它连
+# --prewarm 都不放宽(见下面 fail_unless_prewarm 的对照)。exit 3, ⛔ 不复用 2(那是用法错误)。
+lane_unavailable() {
+    echo "CI_ARTIFACT_LANE_UNAVAILABLE reason=$1" >&2
+    cat >&2 <<'EOF'
+  这份候选制品里【没有】attestation bundle ⇒ ECS 的 oss-verify-artifact.sh 会按设计拒收
+  (trust_reason=manifest_consistent_but_unauthenticated), 再等、再重试都不会变。
+  已知成因(见 .github/workflows/java-artifact.yml 里 attest 那步的注释): GitHub 的 artifact
+  attestations 只对【公开仓】可用, 私有仓要 Enterprise Cloud; 本组织 plan=free / visibility=private
+  ⇒ 签不上, `Ship attestation bundle` 那一步恒 skipped, ZIP 里没有 bundle。
+  ⇒ 发布会走本地 Maven 构建(慢约 4 分钟, 但正确)。这不是故障, 是本组织的边界。
+  ⛔ 不要为了省这几分钟去放宽 ECS 那道信任闸: manifest 与 jar 在同一个 ZIP 里, 谁造得出 ZIP
+     谁就能自己写「测试通过了」—— 那道闸 fail-closed 是对的。
+EOF
+    exit 3
+}
 
 # --prewarm 下, 「还没有可用制品」不是失败 —— 合并后几分钟 CI 通常还在跑。其它任何原因
 # (传输失败/验签不过/选择器覆盖不足)仍然是硬失败: 预热是把工作提前, 不是把标准放松。
@@ -200,18 +228,19 @@ candidates=$(GH_HTTP_TIMEOUT=20 gh api \
           | select(.expired == false)
           | select(.workflow_run.head_branch == "main")
           | select(.name == "cretas-java-" + .workflow_run.head_sha)
-          | [(.id | tostring), .workflow_run.head_sha]
+          | [(.id | tostring), .workflow_run.head_sha, (.workflow_run.id | tostring)]
           | @tsv' 2>/dev/null) \
     || fail gh_api_failed
 [ -n "$candidates" ] || fail_unless_prewarm no_main_artifact_listed
 
-ARTIFACT_ID="" ARTIFACT_COMMIT=""
+ARTIFACT_ID="" ARTIFACT_COMMIT="" ARTIFACT_RUN_ID=""
 checked=0
-while IFS=$'\t' read -r cand_id cand_sha; do
+while IFS=$'\t' read -r cand_id cand_sha cand_run; do
     # 防御性剥 CR: 这条链路上任何一环(gh / jq / 未来某个中间工具)在 Windows 上多写一个 \r,
     # 都会让长度校验静默失败, 而失败长得像"没有可用制品"。
     cand_id=${cand_id%$'\r'}
     cand_sha=${cand_sha%$'\r'}
+    cand_run=${cand_run%$'\r'}
     [ -n "${cand_id:-}" ] || continue
     [ "$checked" -lt "$MAX_CANDIDATES" ] || break
     checked=$((checked + 1))
@@ -223,6 +252,7 @@ while IFS=$'\t' read -r cand_id cand_sha; do
     [ "$cand_tree" = "$CURRENT_TREE" ] || continue
     ARTIFACT_ID=$cand_id
     ARTIFACT_COMMIT=$cand_sha
+    ARTIFACT_RUN_ID=$cand_run
     break
 done <<< "$candidates"
 
@@ -230,6 +260,37 @@ done <<< "$candidates"
 [ -n "$ARTIFACT_COMMIT" ] || fail no_artifact_commit
 
 echo "CI_ARTIFACT_CANDIDATE id=$ARTIFACT_ID commit=$ARTIFACT_COMMIT backend_tree=$CURRENT_TREE"
+
+# ---- 2c. 这份候选带签名 bundle 吗 —— 不带就别再往下走 (2026-09-07) ----
+#
+# 为什么在这里就问: 不问的话, 这条路要跑完整趟跨境运输(实测 61s)才在 ECS 那道闸上撞死,
+# 而 --prewarm 更糟 —— 它把 `no_main_artifact_listed` 读成「CI 还没构建完」, 于是每 30s
+# 轮询一次、等满 --wait(实测 7 分钟), 然后照样回退本地构建。等待对这种成因**没有意义**。
+#
+# 判据取【产出这份制品的那次 run】里 `Ship attestation bundle …` 那一步的结论 ——
+# 它是 `if: steps.attest.outcome == 'success'` 守着的, 签不上就 skipped, ZIP 里也就没有 bundle。
+# ⚠️ 不能匹配「名字里有 attest」的第一步: 同一个 job 里 `Attest deploy artifact provenance`
+#    的结论是 **success**(它自己 continue-on-error), 而 Ship 那步是 **skipped** —— 两步结论相反,
+#    取第一个会得出完全相反的结论。所以只认名字里带 `attestation bundle` 的那一步。
+# 🔴 三态, ⛔ 不猜: 读到 success 才继续; 读到别的结论(skipped/failure)才判车道不可用;
+#    步骤找不到 / gh 出错 / 空 ⇒ unknown ⇒ **照旧往下走**(维持改动前的行为), 只把读数打出来。
+#    (步骤改名会落进 unknown —— 由 test-release-ci-artifact-prewarm.sh 的漂移闸钉住名字。)
+ATTEST_BUNDLE=unknown
+if [ -n "$ARTIFACT_RUN_ID" ]; then
+    ATTEST_BUNDLE=$(GH_HTTP_TIMEOUT=20 gh api \
+        "repos/$REPO/actions/runs/$ARTIFACT_RUN_ID/jobs" \
+        --jq '[ .jobs[]?.steps[]?
+                | select(.name | ascii_downcase | contains("attestation bundle"))
+                | .conclusion ] | first // "absent"' 2>/dev/null) || ATTEST_BUNDLE=unknown
+    ATTEST_BUNDLE=${ATTEST_BUNDLE%$'\r'}
+    [ -n "$ATTEST_BUNDLE" ] || ATTEST_BUNDLE=unknown
+fi
+echo "READING: ATTEST_BUNDLE_STEP=$ATTEST_BUNDLE run_id=${ARTIFACT_RUN_ID:-none}"
+case "$ATTEST_BUNDLE" in
+    success)         ;;   # 签上了 —— 照常走完运输与验签
+    unknown|absent)  ;;   # 没量到 ⇒ 不下结论, 让后面的硬断言去判(fail closed 仍在)
+    *) lane_unavailable "attestation_bundle_not_shipped(step=$ATTEST_BUNDLE)" ;;
+esac
 
 # --probe-only 到此为止。刻意【只】保证「存在 backend_tree 匹配的候选」——
 # 选择器覆盖与 attestation 都要等制品真的送到才能判, 探测不做也不假装做。
