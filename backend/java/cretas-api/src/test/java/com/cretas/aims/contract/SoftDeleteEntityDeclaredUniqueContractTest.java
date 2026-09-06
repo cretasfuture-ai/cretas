@@ -72,6 +72,12 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
             // ── 类别 A：prod 也是全量键，业务上标识故意不释放 ⇒ 实体声明与 prod 一致，保留 ────────────
             Map.entry("SalesTarget#uk_sales_target_unique",
                     "prod: uk_sales_target_unique (factory_id,owner_id,period,year,period_num) 全量；逐列一致"),
+            // ── 软删批 3-A（#712）新补 @SQLDelete 的实体，本闸因此报红并要求逐个分类 ────────────────
+            // ⚠️ 这两条是「本闸按设计工作」的产物，不是缺陷：#712 给它们补了 @SQLDelete，而它们各自
+            //    声明着唯一约束 ⇒ 闸要求先去看 prod 上那个索引的形状再定。两条的 prod 形状都是现查的。
+            Map.entry("RawMaterialType#cols:factory_id,code",
+                    "prod: ukoddtjujjj3qfsb0o2nyqvcddi (factory_id,code) 全量、逐列一致；"
+                            + "业务口径「编码不回收」——权威查重路径 findCodeConflictIncludingDeleted 也把已删的算进冲突"),
 
             // ── 类别 A′：prod 也是全量键、逐列一致，但那个键把 deleted_at 写进了键列 ────────────────
             // 🔴 2026-09-07 实测：PG 里 NULL 互不相等，(device_id, channel_id, deleted_at) 这种键
@@ -97,7 +103,11 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
                     "prod: production_batches 上只有 pkey 和 uk_production_batch_runtime_owner(id,factory_id,product_type_id)，"
                             + "batch_number 没有任何唯一索引 ⇒ 待裁定"),
             Map.entry("ScaleProtocolConfig#column:protocol_code",
-                    "prod: scale_protocol_configs 上只有 pkey，protocol_code 没有任何唯一索引 ⇒ 待裁定")
+                    "prod: scale_protocol_configs 上只有 pkey，protocol_code 没有任何唯一索引 ⇒ 待裁定"),
+            Map.entry("MaterialBatch#column:batch_number",
+                    "prod: material_batches 上只有 pkey 和 uq_material_batch_source_event"
+                            + "(factory_id,source_doc_type,source_event_key)——那是**别的列**上的键，"
+                            + "batch_number 没有任何唯一索引 ⇒ 待裁定（与上面三条并成一组，共 4 个字段）")
     ));
 
     @Test
