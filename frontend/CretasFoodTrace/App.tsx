@@ -73,7 +73,7 @@ export default function App() {
       <Toast />
       {/* 全局弹窗宿主 (2026-09-06, Alert.alert codemod 第一刀): appAlert / appPrompt / appChoose 的承载。
           react-native-web 上 Alert.alert 是 no-op (1672 处调用在 Expo Web 上什么都不显示),
-          这个宿主让同一个调用在 web 与真机上都渲染成 RN Modal。屏内还挂着的 14 个 <AppDialogHost /> 是栈,
+          这个宿主让同一个调用在 web 与真机上都渲染成 RN Modal。屏内还各自挂着的 <AppDialogHost />（十几个, 数量以 grep 为准, ⛔ 不在注释里手写）是栈,
           它们卸载时不会把这个根宿主摘掉。⚠️ 放在错误边界外面: 兜底 UI 出现时仍然要能弹提示。 */}
       <AppDialogHost />
     </>

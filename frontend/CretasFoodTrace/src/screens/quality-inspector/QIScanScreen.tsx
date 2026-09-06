@@ -4,13 +4,12 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { appAlert } from '../../components/ui/AppDialog';
+import { appAlert, appPrompt } from '../../components/ui/AppDialog';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -88,33 +87,28 @@ export default function QIScanScreen() {
   };
 
   const handleManualInput = () => {
-    // Alert.prompt is iOS only, navigate to list on Android
-    if (typeof Alert.prompt === 'function') {
-      Alert.prompt(
-        t('scan.enterBatchNumber'),
-        t('scan.pleaseEnterBatchNumber'),
-        async (text) => {
-          if (text) {
-            setLoading(true);
-            try {
-              const batch = await qualityInspectorApi.getBatchByQRCode(text);
-              navigation.replace('QIForm', {
-                batchId: batch.id,
-                batchNumber: batch.batchNumber,
-              });
-            } catch (error) {
-              appAlert(t('scan.scanFailed'), t('scan.batchNotFound'));
-            } finally {
-              setLoading(false);
-            }
-          }
-        },
-        'plain-text'
-      );
-    } else {
-      // Android: navigate to batch list for selection
-      navigation.navigate('QIInspectList');
-    }
+    // 2026-09-06 (行为增强, organizer 裁定): 原来 Alert.prompt 只有 iOS 有, Android 退到跳批次列表 ——
+    // 质检员在 Android 上根本没有「手输批次号」这条路。appPrompt 三端一致, Android 也能手输。
+    // 输入为空时 appPrompt 的确定按钮置灰 (required 默认 true), 不会提交空串。
+    appPrompt(
+      t('scan.enterBatchNumber'),
+      t('scan.pleaseEnterBatchNumber'),
+      async (text) => {
+        setLoading(true);
+        try {
+          const batch = await qualityInspectorApi.getBatchByQRCode(text.trim());
+          navigation.replace('QIForm', {
+            batchId: batch.id,
+            batchNumber: batch.batchNumber,
+          });
+        } catch (error) {
+          appAlert(t('scan.scanFailed'), t('scan.batchNotFound'));
+        } finally {
+          setLoading(false);
+        }
+      },
+      { placeholder: t('scan.enterBatchNumber') },
+    );
   };
 
   if (!permission) {
