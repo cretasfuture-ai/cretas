@@ -24,11 +24,14 @@ ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rerank-advisor-alerts.
 # shellcheck source=scripts/cron/cron-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
 cron_pin_path
-cron_require_cmds "$ALERTS" "LLM RERANK" systemctl psql tr grep sed date
-eval "$(systemctl show cretas-python -p Environment | tr ' ' '\n' \
-        | grep -E '^POSTGRES_(PASSWORD|USER|HOST)=' \
-        | sed -E "s/^([^=]+)=(.*)$/export \1='\2'/")"
-export PGPASSWORD="${POSTGRES_PASSWORD:-}"
+cron_require_cmds "$ALERTS" "LLM RERANK" systemctl psql grep date
+# 🔴 密钥源 (2026-09-06 终审实测): `systemctl show -p Environment` 看不见 EnvironmentFile=.env.prod
+#    里的 POSTGRES_PASSWORD (07-20 起搬进去的) ⇒ 7 周空密码 ⇒ psql 认证失败, 而下面的 python 又不查
+#    subprocess 的 returncode ⇒ 空 stdout ⇒「✅ 无重排建议」exit 0 = 假绿。⇒ 问活进程要 (形态 A′)。
+cron_export_service_env cretas-python "$ALERTS" "LLM RERANK" '^POSTGRES_(PASSWORD|USER|HOST)$'
+[ -n "${POSTGRES_PASSWORD:-}" ] || cron_dead "$ALERTS" "LLM RERANK" "no-db-password-in-service-environ" \
+    "cretas-python 的 environ 里没有非空 POSTGRES_PASSWORD —— psql 必然认证失败, 不发假绿"
+export PGPASSWORD="$POSTGRES_PASSWORD"
 cd "$PYDIR" || cron_dead "$ALERTS" "LLM RERANK" "pydir-missing" "no $PYDIR"
 cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "LLM RERANK"
 python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 7) else 1)' \
@@ -57,6 +60,11 @@ GROUP BY 1,2;
 out = subprocess.run(["psql","-h",os.environ["PGHOST"],"-U",os.environ["PGUSER"],
                       "-d","smartbi_prod_db","-X","-t","-A","-F","|","-c",SQL],
                      capture_output=True, text=True)
+# 🔴 2026-09-06: 原来不查 returncode —— psql 认证失败时 stdout 为空, health={} ⇒ 每个 slot 都
+#    「无近期数据」⇒「✅ 无重排建议」exit 0 (07-20 起 7 周的假绿)。psql 失败 = 没量到 = rc 2。
+if out.returncode != 0:
+    print(f"INSTRUMENT DEAD: psql rc={out.returncode}: {out.stderr.strip()[:200]}")
+    sys.exit(2)
 health = {}   # (provider, model) -> (calls, ok%, p50ms)
 for line in out.stdout.strip().splitlines():
     p = line.split("|")
@@ -95,7 +103,8 @@ print("\n读法: demote/promote 仅是建议; 由人 review 后手动调 SLOT_MO
 print("数据新鲜度: per-account 维度需 2026-07-01 归因修复后 ~1 周数据才可信。")
 PY
 rc=$?
-# 顾问是只读建议, 正常退出 0; 非 0 只可能是 python 自己崩(import/psql 子进程) ⇒ 没量到。
+# 顾问是只读建议, 正常退出 0; 2 = python 自报 psql 失败 (没量到); 其它非 0 = python 自己崩 ⇒ 也是没量到。
+[ "$rc" -ne 2 ] || cron_dead "$ALERTS" "LLM RERANK" "psql-failed" "python 里的 psql 子进程 rc≠0 (认证/连接), 见 crontab 指向的日志"
 [ "$rc" -eq 0 ] || cron_dead "$ALERTS" "LLM RERANK" "python-failed" "python rc=$rc, 见 crontab 指向的日志"
 exit 0
 

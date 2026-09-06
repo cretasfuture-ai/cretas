@@ -30,7 +30,8 @@ ALERTS="$TMP/alerts.log"
 RC=0; ERR=""
 run_lib() {  # $1 = 要在 source 之后执行的 bash 片段
     rm -f "$ALERTS"
-    ERR=$(CRON_BIN_PATH="$FAKEBIN" bash -c ". '$LIB'; cron_pin_path; $1" 2>&1 >/dev/null); RC=$?
+    # CRON_PROC_ROOT 指到假目录: CI runner 上真有 pid 4242 时 /proc/4242/environ 可读, 会把「读不了」用例变绿。
+    ERR=$(CRON_BIN_PATH="$FAKEBIN" CRON_PROC_ROOT="$TMP/proc" bash -c ". '$LIB'; cron_pin_path; $1" 2>&1 >/dev/null); RC=$?
     echo "    rc=$RC alerts: $( [ -f "$ALERTS" ] && tr '\n' '|' < "$ALERTS" || echo '<no file>')"
 }
 assert_alert() { grep -Fq -- "$1" "$ALERTS" || fail "$2: 告警文件里没有 [$1]"; }
@@ -83,5 +84,26 @@ case "$ERR" in *"reason=cmd-not-found:ss"*) ;; *) fail "[7] stderr 里没有 rea
 case "$ERR" in *"no-such-dir"*) ;; *) fail "[7] 写不进告警文件的错误被吞了: $ERR" ;; esac
 ok "告警目录不在 ⇒ rc=2, stderr 同时有 reason 与写文件错误"
 
-echo "READING: RC2_REASONS_CONSTRUCTED=3 [cmd-not-found venv-missing python-missing-after-activate]"
+# ── 8-10. cron_export_service_env: 从活进程 environ 取, 只取匹配前缀的; 服务没跑 / environ 读不了 ⇒ rc=2 ──
+PROC="$TMP/proc"; mkdir -p "$PROC/4242"
+printf 'LLM_A_API_KEY=k\0POSTGRES_PASSWORD=p\0PATH=/leak\0NOEQ\0' > "$PROC/4242/environ"
+printf '#!/bin/sh\ncase "$*" in *MainPID*) cat "%s/mainpid" 2>/dev/null || echo 4242;; *) echo "Environment=POSTGRES_HOST=h";; esac\n' "$TMP" > "$FAKEBIN/systemctl"
+chmod +x "$FAKEBIN/systemctl"
+ERR=$(CRON_BIN_PATH="$FAKEBIN" CRON_PROC_ROOT="$PROC" bash -c ". '$LIB'; cron_pin_path; cron_export_service_env svc '$ALERTS' XXX '^LLM_'; echo \"K=\${LLM_A_API_KEY:-unset} P=\${POSTGRES_PASSWORD:-unset} PATH=\$PATH\"" 2>&1); RC=$?
+echo "    rc=$RC out: $ERR"
+[ "$RC" = 0 ] || fail "[8] 期望 rc=0 实得 $RC: $ERR"
+case "$ERR" in *"K=k P=unset PATH=$FAKEBIN"*) ;; *) fail "[8] 应只 export LLM_ 前缀 (K=k P=unset), 且 PATH 不被 environ 里的 PATH 冲掉: $ERR" ;; esac
+case "$ERR" in *"service-env exported=1 match=^LLM_ pid=4242"*) ;; *) fail "[8] 缺 INFO 计数行: $ERR" ;; esac
+ok "cron_export_service_env 只 export 匹配前缀的 1 个, PATH 不泄"
+printf '0' > "$TMP/mainpid"
+run_lib "cron_export_service_env svc '$ALERTS' XXX '^LLM_'"
+[ "$RC" = 2 ] || fail "[9] 期望 rc=2 实得 $RC"; assert_alert "reason=service-not-running:svc" "[9]"
+rm -f "$TMP/mainpid"
+ok "MainPID=0 ⇒ rc=2 service-not-running"
+rm -f "$PROC/4242/environ"
+run_lib "cron_export_service_env svc '$ALERTS' XXX '^LLM_'"
+[ "$RC" = 2 ] || fail "[10] 期望 rc=2 实得 $RC"; assert_alert "reason=service-environ-unreadable:svc" "[10]"
+ok "environ 读不了 ⇒ rc=2 service-environ-unreadable"
+
+echo "READING: RC2_REASONS_CONSTRUCTED=5 [cmd-not-found venv-missing python-missing-after-activate service-not-running service-environ-unreadable]"
 echo "PASS: test-cron-common.sh ($PASSED 组断言)"

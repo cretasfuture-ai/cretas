@@ -62,6 +62,33 @@ cron_require_cmds() {
         "cron 默认 PATH 只有 /usr/bin:/bin; 本脚本已自己钉 PATH, 还报这个说明机器上真的没装"
 }
 
+# 从**活服务进程**的 environ 取变量 (形态 A′: 问活进程要真相)。
+# ⛔ 不用 `systemctl show <svc> -p Environment`: 它只列 unit 文件里 inline 的 `Environment=`,
+#    **看不见 `EnvironmentFile=` 里的东西**。47 上 2026-07-20 起 POSTGRES_PASSWORD 与全部
+#    LLM_*_API_KEY 都搬进了 EnvironmentFile=.env.prod, inline 只剩 5 个非密钥变量 ⇒ 三个
+#    llm-router 周报从那天起一直读到**空密钥**: canary 每行 NO-KEY(81 entries · 0 billing-safe),
+#    heatmap/rerank psql `password authentication failed` —— 7 周, 而它们自己都没喊过「没量到」。
+# 只 export 键名匹配 $4(ERE)的那几个: ⛔ 不 eval 整份 environ (会冲掉 PATH; 密码里的 / 引号会被
+# shell 解释, 本仓栽过)。
+cron_export_service_env() {  # $1 service, $2 alerts, $3 prefix, $4 键名 ERE (如 '^(LLM_|POSTGRES_)')
+    local svc=$1 alerts=$2 prefix=$3 re=$4 pid environ kv n=0
+    pid=$(systemctl show -p MainPID --value "$svc" 2>&1) || pid=""
+    case "$pid" in ''|0|*[!0-9]*)
+        cron_dead "$alerts" "$prefix" "service-not-running:$svc" \
+            "systemctl show -p MainPID --value $svc 给了 '${pid:-}' —— 服务没在跑, 拿不到它的 environ" ;;
+    esac
+    environ="${CRON_PROC_ROOT:-/proc}/$pid/environ"
+    [ -r "$environ" ] || cron_dead "$alerts" "$prefix" "service-environ-unreadable:$svc" \
+        "$environ (pid=$pid) 读不了 —— 非 root? /proc 没挂?"
+    while IFS= read -r -d '' kv; do
+        case "$kv" in *=*) ;; *) continue ;; esac
+        if printf '%s\n' "${kv%%=*}" | grep -Eq "$re"; then
+            export "${kv?}"; n=$((n + 1))
+        fi
+    done < "$environ"
+    echo "INFO service-env exported=$n match=$re pid=$pid"
+}
+
 # venv 不在就停, ⛔ 不许静默掉回系统 python(3.6.8, 连 from __future__ annotations 都不认)。
 cron_activate_venv() {
     local activate=$1 alerts=$2 prefix=$3

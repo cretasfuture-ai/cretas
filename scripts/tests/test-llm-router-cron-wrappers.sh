@@ -7,11 +7,22 @@
 # canary 与 rerank 原来 `source venv38/bin/activate` —— venv38 早已不在。`set -u` 无 `-e`
 # 下 source 失败**不中止**, 掉回系统 python 3.6.8, `from __future__ import annotations`
 # SyntaxError。日志里各 5 个 SyntaxError(2026-08-03 ~ 08-31, 每周一一次), 而 crontab 那行
-# `|| echo "LLM canary FLAGGED"` 把 5 次崩溃写成了 5 次账单告警。heatmap 只用 psql, 是三个里
-# 唯一还活着的。
+# `|| echo "LLM canary FLAGGED"` 把 5 次崩溃写成了 5 次账单告警。
+#
+# 🔴 终审订正 (同日): venv 是必要不充分。三个脚本**共同的根因是密钥源** —— 它们用
+# `systemctl show cretas-python -p Environment` 取密钥, 而那只列 unit 里 inline 的 5 个非密钥变量,
+# 看不见 EnvironmentFile=.env.prod (07-20 起密钥全在那里)。于是 07-20 起: canary 每行 NO-KEY
+# (81 entries · 0 billing-safe, 仍 rc=1 ⇒ 假账单告警); heatmap 7 次 psql 认证失败 (第一版本测试头
+# 写它「还活着」是**错的**); rerank 空 stdout ⇒「✅ 无重排建议」exit 0 = 假绿。
+# ⇒ 密钥改从 /proc/<MainPID>/environ 读 (cron_export_service_env), 读不到 ⇒ rc=2。
 #
 # 这里测的是 shell wrapper 的三态: 假 venv(activate 只把假 python 放进 PATH) + 假
-# systemctl/psql, ⛔ 不跑真 httpx/真库。每种 rc=2 各构造一次。
+# systemctl(prod 形状: Environment 里没密钥) + 假 /proc environ + 假 psql, ⛔ 不跑真 httpx/真库。
+# 每种 rc=2 各构造一次。
+#
+# 变异 (2026-09-06, 先证到达再看红): canary 密钥源改回 `eval "$(systemctl show … -p Environment …)"`
+# ⇒ [k1]/[c1] 都红 (桩的 Environment 里没密钥, 于是 no-llm-keys); rerank 去掉 returncode 判定的
+# python 层只能静态断言 [k9]; 去掉 wrapper 的 password 存在性 ⇒ [k2] 红。
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -40,11 +51,25 @@ for t in date mktemp rm grep head cut tr sed cat dirname awk mkdir; do
     printf '#!/bin/sh\nexec %s "$@"\n' "$abs" > "$FAKEBIN/$t"; chmod +x "$FAKEBIN/$t"
 done
 export STUB
+# 🔴 systemctl 桩按 **prod 现状**的形状 (2026-09-06 终审): `-p Environment` 只回 unit 里 inline 的
+#    5 个非密钥变量 —— 密钥在 EnvironmentFile=.env.prod, 只在活进程的 /proc/<MainPID>/environ 里。
+#    第一版桩把密钥塞进 Environment= 的输出, 于是「从 -p Environment 读密钥」这条**已经断了 7 周**
+#    的路在测试里是通的 (形态 B: 桩的形状在生产上不存在)。
 cat > "$FAKEBIN/systemctl" <<'S'
 #!/bin/sh
 echo "systemctl $*" >> "$STUB/calls.log"
-echo "Environment=LLM_ALIYUN_A_API_KEY=k POSTGRES_PASSWORD=p POSTGRES_USER=u POSTGRES_HOST=h"
+case "$*" in
+  *"-p MainPID"*) [ -f "$STUB/mainpid" ] && cat "$STUB/mainpid" || echo 4242 ;;
+  *"-p Environment"*) echo "Environment=POSTGRES_DB=smartbi_prod_db POSTGRES_ENABLED=true POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=smartbi_user" ;;
+esac
 S
+# 活进程 environ 夹具 (NUL 分隔, 与真 /proc/<pid>/environ 一样)。PATH 也放进去: 证明只 export 匹配前缀的。
+PROC="$TMP/proc"; mkdir -p "$PROC/4242"
+make_environ() {  # 参数 = KEY=VAL...
+    : > "$PROC/4242/environ"; local kv
+    for kv in "$@"; do printf '%s\0' "$kv" >> "$PROC/4242/environ"; done
+}
+FULL_ENVIRON=(LLM_ALIYUN_A_API_KEY=k LLM_TENCENT_API_KEY=k2 POSTGRES_PASSWORD=p POSTGRES_USER=u POSTGRES_HOST=h PATH=/should/not/leak)
 cat > "$FAKEBIN/psql" <<'S'
 #!/bin/sh
 echo "psql $*" >> "$STUB/calls.log"
@@ -73,11 +98,16 @@ ALERTS="$TMP/alerts.log"; RC=0
 run_it() {  # $1 = 脚本
     rm -f "$ALERTS" "$STUB/calls.log"
     # env -i 之后 PATH 只剩假目录, bash 自己要用绝对路径调。
-    env -i PATH="$FAKEBIN" HOME="$TMP" STUB="$STUB" CRON_BIN_PATH="$FAKEBIN" \
+    env -i PATH="$FAKEBIN" HOME="$TMP" STUB="$STUB" CRON_BIN_PATH="$FAKEBIN" CRON_PROC_ROOT="$PROC" \
         LLM_ROUTER_PYDIR="$PYDIR" LLM_ROUTER_ALERTS="$ALERTS" "$BASH_ABS" "$1" > "$TMP/out" 2>&1; RC=$?
     echo "    $(basename "$1") rc=$RC alerts: $( [ -f "$ALERTS" ] && head -c 200 "$ALERTS" | tr '\n' '|' || echo '<none>')"
 }
-reset() { rm -f "$STUB"/*; }
+reset() { rm -f "$STUB"/*; make_environ "${FULL_ENVIRON[@]}"; }
+# 三个脚本都不许再从 `systemctl show … -p Environment` 取密钥 (非注释行)。
+for s in "$CANARY" "$RERANK" "$HEATMAP"; do
+    grep -vE '^[[:space:]]*#' "$s" | grep -q 'show cretas-python -p Environment' \
+        && fail "$(basename "$s") 仍从 systemctl show -p Environment 取密钥 —— 那看不见 EnvironmentFile"
+done
 calls() { [ -f "$STUB/calls.log" ] && cat "$STUB/calls.log" || true; }
 assert_alert() { grep -Fq -- "$1" "$ALERTS" || fail "$2: 告警里没有 [$1]"; }
 RC2=""
@@ -147,6 +177,49 @@ reset; mv "$FAKEBIN/psql" "$TMP/psql.bak"; run_it "$HEATMAP"
 [ "$RC" = 2 ] || fail "[h3] 期望 rc=2 实得 $RC"; assert_alert "reason=cmd-not-found:psql" "[h3]"
 mv "$TMP/psql.bak" "$FAKEBIN/psql"
 ok "heatmap 假 PATH 缺 psql ⇒ rc=2"
+
+# ═════════ 密钥源 (2026-09-06 终审四条) ═══════════════════════════════════
+# 探针在 environ 只有非密钥变量时 (= prod 07-20 ~ 09-06 的真实状态) 必须 rc=2, ⛔ 不是 FLAGGED / 假绿。
+reset; make_environ POSTGRES_USER=u POSTGRES_HOST=h PATH=/x; run_it "$CANARY"
+[ "$RC" = 2 ] || fail "[k1] 期望 rc=2 实得 $RC"; assert_alert "reason=no-llm-keys-in-service-environ" "[k1]"
+grep -qx 'python -' "$STUB/calls.log" && fail "[k1] 没密钥不该发探针"
+note_rc2 no-llm-keys-in-service-environ
+ok "🔴 canary: environ 无 LLM_*_API_KEY (prod 7 周的真实状态) ⇒ rc=2, 不是 FLAGGED"
+reset; make_environ LLM_ALIYUN_A_API_KEY=k POSTGRES_USER=u; run_it "$RERANK"
+[ "$RC" = 2 ] || fail "[k2] 期望 rc=2 实得 $RC"; assert_alert "reason=no-db-password-in-service-environ" "[k2]"
+grep -qx 'python -' "$STUB/calls.log" && fail "[k2] 没密码不该跑 python"
+note_rc2 no-db-password-in-service-environ
+ok "🔴 rerank: environ 无 POSTGRES_PASSWORD ⇒ rc=2 (原来空密码 → psql 失败 → 假绿)"
+reset; make_environ LLM_ALIYUN_A_API_KEY=k POSTGRES_USER=u; run_it "$HEATMAP"
+[ "$RC" = 2 ] || fail "[k3] 期望 rc=2 实得 $RC"; assert_alert "reason=no-db-password-in-service-environ" "[k3]"
+assert_no_call_psql() { case "$(calls)" in *psql*) fail "[k3] 没密码不该去撞 psql 认证" ;; esac; }; assert_no_call_psql
+ok "🔴 heatmap: environ 无 POSTGRES_PASSWORD ⇒ rc=2, 不带空密码撞认证"
+reset; printf '0' > "$STUB/mainpid"; run_it "$CANARY"
+[ "$RC" = 2 ] || fail "[k4] 期望 rc=2 实得 $RC"; assert_alert "reason=service-not-running:cretas-python" "[k4]"
+note_rc2 service-not-running
+ok "canary: MainPID=0 ⇒ rc=2 service-not-running"
+reset; rm -f "$PROC/4242/environ"; run_it "$RERANK"
+[ "$RC" = 2 ] || fail "[k5] 期望 rc=2 实得 $RC"; assert_alert "reason=service-environ-unreadable:cretas-python" "[k5]"
+note_rc2 service-environ-unreadable
+ok "rerank: /proc/<pid>/environ 读不了 ⇒ rc=2 service-environ-unreadable"
+reset; printf '2' > "$STUB/python.rc"; run_it "$CANARY"
+[ "$RC" = 2 ] || fail "[k6] 期望 rc=2 实得 $RC"; assert_alert "reason=probe-reported-dead" "[k6]"
+grep -q 'FLAGGED' "$ALERTS" && fail "[k6] python 自报仪器死不许写成 FLAGGED"
+note_rc2 probe-reported-dead
+ok "canary: python 探针 exit 2 (全部 NO-KEY) ⇒ rc=2 probe-reported-dead, 不是 FLAGGED"
+reset; printf '2' > "$STUB/python.rc"; run_it "$RERANK"
+[ "$RC" = 2 ] || fail "[k7] 期望 rc=2 实得 $RC"; assert_alert "reason=psql-failed" "[k7]"
+ok "rerank: python 自报 psql 失败 (exit 2) ⇒ rc=2 psql-failed"
+# 只 export 匹配前缀的: 夹具里的 PATH=/should/not/leak 不许进脚本环境 (进了的话 python 桩就找不到了)。
+reset; run_it "$CANARY"
+[ "$RC" = 0 ] || fail "[k8] 期望 rc=0 实得 $RC: $(cat "$TMP/out")"
+grep -q 'service-env exported=2 match=' "$TMP/out" || fail "[k8] 应只 export 2 个 LLM_*_API_KEY: $(grep service-env "$TMP/out")"
+ok "canary: 只 export 匹配前缀的 2 个键, environ 里的 PATH 没泄进来"
+# python 层 (heredoc 里) 的两处改动 —— 全 NO-KEY ⇒ sys.exit(2) / psql returncode ⇒ sys.exit(2) ——
+# 这里只能读代码断言存在, ⛔ 桩 python 跑不到真 heredoc:
+grep -q 'no_key == len(pairs)' "$CANARY" || fail "[k9] canary python 层缺「全部 NO-KEY ⇒ exit 2」"
+grep -q 'if out.returncode != 0' "$RERANK" || fail "[k9] rerank python 层缺 returncode 判定"
+ok "python 层两处守卫存在 (静态断言; 真 heredoc 需要 httpx/真库, 登记为只读代码验证)"
 
 n=$(printf '%s' "$RC2" | wc -w | tr -d ' ')
 echo "READING: RC2_REASONS_CONSTRUCTED=$n [${RC2# }]"

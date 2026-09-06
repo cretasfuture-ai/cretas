@@ -15,17 +15,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rules-gap-heatmap-alerts.log}"
-# 2026-09-06 审计: 这一个不用 venv(纯 psql), 所以它是三个 llm-router 周报里唯一还活着的。
-# 同样自己钉 PATH + 缺命令/psql 失败走 rc=2, ⛔ 不让 `eval "$(systemctl …)"` 在找不到
-# systemctl 时静默展开成空串(那样 PGPASSWORD 为空, psql 报 auth 失败, 看起来像密码轮换了)。
+# 2026-09-06 审计 (终审订正): 这一个不用 venv, 但**它也不是活的** —— 最后一次好跑是 07-13, 之后 7 次
+# 全是 `FATAL: password authentication failed`。三个 llm-router 周报的共同根因是**密钥源**:
+# 原来 `eval "$(systemctl show cretas-python -p Environment …)"` 只列 unit 里 inline 的 Environment=,
+# 看不见 EnvironmentFile=.env.prod (07-20 起 POSTGRES_PASSWORD 与全部 LLM_*_API_KEY 都在那里) ⇒
+# PGPASSWORD 恒空。⇒ 问活进程要 (形态 A′); 密码拿不到 ⇒ rc=2, ⛔ 不带空密码去撞认证。
 # shellcheck source=scripts/cron/cron-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
 cron_pin_path
-cron_require_cmds "$ALERTS" "LLM RULES-GAP" systemctl psql tr grep sed date
-eval "$(systemctl show cretas-python -p Environment | tr ' ' '\n' \
-        | grep -E '^POSTGRES_(PASSWORD|USER|HOST)=' \
-        | sed -E "s/^([^=]+)=(.*)$/export \1='\2'/")"
-export PGPASSWORD="${POSTGRES_PASSWORD:-}"
+cron_require_cmds "$ALERTS" "LLM RULES-GAP" systemctl psql grep date
+cron_export_service_env cretas-python "$ALERTS" "LLM RULES-GAP" '^POSTGRES_(PASSWORD|USER|HOST)$'
+[ -n "${POSTGRES_PASSWORD:-}" ] || cron_dead "$ALERTS" "LLM RULES-GAP" "no-db-password-in-service-environ" \
+    "cretas-python 的 environ 里没有非空 POSTGRES_PASSWORD —— psql 必然认证失败"
+export PGPASSWORD="$POSTGRES_PASSWORD"
 PSQL=(psql -h "${POSTGRES_HOST:-localhost}" -U "${POSTGRES_USER:-smartbi_user}" -d smartbi_prod_db -X)
 
 echo "# LLM router → 规则缺口热力图   $(date '+%Y-%m-%d %H:%M')"
@@ -75,7 +77,7 @@ psql_rc=$?
 # psql 连不上/认证失败 = 这周的热力图**没量到**, ⛔ 不是「没有缺口」。
 [ "$psql_rc" -eq 0 ] || cron_dead "$ALERTS" "LLM RULES-GAP" "psql-failed" \
     "psql rc=$psql_rc host=${POSTGRES_HOST:-localhost} user=${POSTGRES_USER:-smartbi_user} db=smartbi_prod_db" \
-    "凭证来自 systemctl show cretas-python -p Environment; PGPASSWORD 为空多半是服务单元没带 POSTGRES_PASSWORD"
+    "凭证来自活进程 /proc/<MainPID>/environ (cron_export_service_env); 认证失败多半是密码轮换了而服务没重启"
 
 cat <<'LEGEND'
 
