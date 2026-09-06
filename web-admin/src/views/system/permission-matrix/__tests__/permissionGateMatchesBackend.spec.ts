@@ -60,13 +60,28 @@ describe('权限矩阵页门禁 = 后端权限码', () => {
     expect(java).not.toMatch(/@RequirePermission\(\{"(?!system:)/);
   });
 
-  it('⛔ 后端没有任何写入端点 (step 1 只读)', () => {
+  it('step 2: 唯一的写入端点是 PUT /matrix/{role}/{module}, 门禁恰好是 system:read_write; 没有别的写映射', () => {
+    // 2026-09-06 step 1 这里钉的是「没有任何写入端点」(守历史, 形态 C‴); owner 裁定 step 2 可写,
+    // 抬成「有且只有这一个写端点, 且门禁是 system:read_write」—— 写端点多一个或门禁变宽都红。
     const java = readFileSync(CONTROLLER_SRC, 'utf-8');
     expect(java).not.toContain('@PostMapping');
-    expect(java).not.toContain('@PutMapping');
     expect(java).not.toContain('@PatchMapping');
     expect(java).not.toContain('@DeleteMapping');
-    // 阳性对照: GET 是有的, 否则「一个映射都没有」也能让上面四条全绿
+    const puts = java.match(/@PutMapping\(/g) ?? [];
+    expect(puts).toHaveLength(1);
+    expect(java).toContain('@PutMapping("/matrix/{role}/{module}")');
+    // 紧跟在 PUT 后面的那条 @RequirePermission 只能是 system:read_write (不含 system:read —— 只读角色不能写)
+    const afterPut = java.slice(java.indexOf('@PutMapping("/matrix/{role}/{module}")'));
+    const gate = /@RequirePermission\(\{([^}]*)\}\)/.exec(afterPut)?.[1] ?? '';
+    expect(gate.trim()).toBe('"system:read_write"');
+    // 阳性对照: GET 是有的, 否则「一个映射都没有」也能让上面几条全绿
     expect(java).toContain('@GetMapping("/matrix")');
+    // 前端 API 只调这一个写端点, 不走 /api/platform (permission_admin 走不到那里)
+    // ⚠️ 剥注释再查 —— 文件头的说明里恰恰**提到**了 /api/platform (解释为什么不走它), 不剥就把自己的注释当成被测对象
+    const api = readFileSync(resolve(__dirname, '../../../../api/permissionMatrixApi.ts'), 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(api).toContain('/permissions/matrix/${encodeURIComponent(role)}/${encodeURIComponent(module)}');
+    expect(api).not.toContain('/api/platform/');
   });
 });

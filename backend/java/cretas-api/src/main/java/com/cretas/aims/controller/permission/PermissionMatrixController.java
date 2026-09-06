@@ -3,12 +3,19 @@ package com.cretas.aims.controller.permission;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.permission.PermissionMatrixView;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.permission.PermissionMatrixViewService;
+import com.cretas.aims.service.permission.PlatformRolePermissionWriteService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -42,11 +49,46 @@ import org.springframework.web.bind.annotation.RestController;
 public class PermissionMatrixController {
 
     private final PermissionMatrixViewService permissionMatrixViewService;
+    private final PlatformRolePermissionWriteService writeService;
+    private final UserRepository userRepository;
 
     @GetMapping("/matrix")
     @Operation(summary = "角色 × 模块 权限矩阵 (L1 权威 + 硬编码兜底 + 分歧列表), 只读")
     @RequirePermission({"system:read", "system:read_write"})
     public ApiResponse<PermissionMatrixView> matrix(@PathVariable String factoryId) {
         return ApiResponse.success(permissionMatrixViewService.build(factoryId));
+    }
+
+    /** 写一格的请求体. level ∈ rw/r/w/-; reason 可选 (≤200). */
+    public record WriteCellRequest(String level, String reason) {}
+
+    /** 写一格的响应: 写后从 L1 回读的值 (不是请求体) + 审计 id. */
+    public record WriteCellResponse(String role, String module, String oldLevel, String level, Long auditId) {}
+
+    /**
+     * step-2 (owner 2026-09-06 裁定): 只写 L1 一格, 同事务写审计, 写后缓存全清。
+     *
+     * <p>门禁 {@code system:read_write}: permission_admin 由 {@code V20261101_37} 提到 rw 后走得到;
+     * factory_super_admin / platform_admin 走超管短路。⚠️ L1 是全平台表, 一次写入影响所有工厂 —— 前端明示。
+     * 餐饮角色 / 餐饮模块的格 400 (Steve: 餐饮不管)。守卫全在 {@link PlatformRolePermissionWriteService}, 这里不抄。
+     */
+    @PutMapping("/matrix/{role}/{module}")
+    @Operation(summary = "写 L1 一格 (全平台生效), 同事务审计, 写后缓存失效")
+    @RequirePermission({"system:read_write"})
+    public ApiResponse<WriteCellResponse> writeCell(@PathVariable String factoryId,
+                                                    @PathVariable String role,
+                                                    @PathVariable String module,
+                                                    @RequestBody WriteCellRequest body,
+                                                    @RequestAttribute(value = "userId", required = false) Long userId) {
+        // 操作人从 JwtAuthInterceptor 放进来的 userId 取; 取不到 ⇒ 403, ⛔ 不写 changed_by=NULL
+        User actor = userId == null ? null : userRepository.findById(userId).orElse(null);
+        if (actor == null) {
+            throw new BusinessException(403, "无法确认操作人, 拒绝写入权限");
+        }
+        PlatformRolePermissionWriteService.WriteResult result = writeService.write(
+                actor, factoryId, role, module,
+                body == null ? null : body.level(), body == null ? null : body.reason());
+        return ApiResponse.success(new WriteCellResponse(
+                role, module, result.oldLevel(), result.row().getPermissionLevel(), result.auditId()));
     }
 }

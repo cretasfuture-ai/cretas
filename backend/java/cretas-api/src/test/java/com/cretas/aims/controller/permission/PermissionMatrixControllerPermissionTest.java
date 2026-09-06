@@ -10,7 +10,9 @@ import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.service.permission.PermissionMatrixViewService;
+import com.cretas.aims.service.permission.PlatformRolePermissionWriteService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.MediaType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +32,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -55,12 +58,14 @@ class PermissionMatrixControllerPermissionTest {
     @Mock private UserRepository userRepository;
     @Mock private PlatformRolePermissionRepository platformRolePermissionRepository;
     @Mock private FactoryModuleConfigRepository factoryModuleConfigRepository;
+    @Mock private PlatformRolePermissionWriteService writeService;
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        PermissionMatrixController controller = new PermissionMatrixController(matrixViewService);
+        PermissionMatrixController controller =
+                new PermissionMatrixController(matrixViewService, writeService, userRepository);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(
                         permissionService, userRepository, new ObjectMapper()))
@@ -173,6 +178,97 @@ class PermissionMatrixControllerPermissionTest {
         // 阳性对照: 同一条解析链上必须有人是 true, 否则「全 false」也可能是仪器坏了
         assertThat(real.hasPermission(user(2005L, "department_admin"), "system:read")).isTrue();
         assertThat(real.hasPermission(user(2003L, "factory_super_admin"), "system:read")).isTrue();
+    }
+
+    // ==================== step-2: PUT /matrix/{role}/{module} ====================
+
+    private static final String WRITE_URL = "/api/mobile/F006/permissions/matrix/sales_manager/warehouse";
+
+    @Test
+    void salesManagerCannotWriteAndTheRejectionNamesTheSystemReadWriteGate() throws Exception {
+        User user = user(2002L, "sales_manager");
+        when(userRepository.findById(2002L)).thenReturn(Optional.of(user));
+        when(permissionService.hasAnyPermission(user, "system:read_write")).thenReturn(false);
+
+        mockMvc.perform(put(WRITE_URL).requestAttr("userId", 2002L)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"rw\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.meta.role").value("sales_manager"))
+                .andExpect(jsonPath("$.meta.requiredPermissions.length()").value(1))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].module").value("system"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].action").value("read_write"));
+
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void productionManagerCannotWriteEither() throws Exception {
+        User user = user(2001L, "production_manager");
+        when(userRepository.findById(2001L)).thenReturn(Optional.of(user));
+        when(permissionService.hasAnyPermission(user, "system:read_write")).thenReturn(false);
+
+        mockMvc.perform(put(WRITE_URL).requestAttr("userId", 2001L)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"-\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.meta.module").value("system"));
+
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anonymousWriteIs401() throws Exception {
+        mockMvc.perform(put(WRITE_URL).contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"rw\"}"))
+                .andExpect(status().isUnauthorized());
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void permissionAdminWithSystemReadWriteReachesTheWriterAndGetsTheRereadValue() throws Exception {
+        User admin = user(2004L, "permission_admin");
+        when(userRepository.findById(2004L)).thenReturn(Optional.of(admin));
+        when(permissionService.hasAnyPermission(admin, "system:read_write")).thenReturn(true);
+        PlatformRolePermission reread = new PlatformRolePermission();
+        reread.setRoleCode("sales_manager");
+        reread.setModuleCode("warehouse");
+        reread.setPermissionLevel("r");
+        when(writeService.write(eq(admin), eq("F006"), eq("sales_manager"), eq("warehouse"), eq("r"), eq("仓管协同")))
+                .thenReturn(new PlatformRolePermissionWriteService.WriteResult(reread, 501L, "-"));
+
+        mockMvc.perform(put(WRITE_URL).requestAttr("userId", 2004L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"level\":\"r\",\"reason\":\"仓管协同\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("sales_manager"))
+                .andExpect(jsonPath("$.data.module").value("warehouse"))
+                .andExpect(jsonPath("$.data.oldLevel").value("-"))
+                .andExpect(jsonPath("$.data.level").value("r"))
+                .andExpect(jsonPath("$.data.auditId").value(501));
+
+        verify(writeService).write(admin, "F006", "sales_manager", "warehouse", "r", "仓管协同");
+    }
+
+    /**
+     * V20261101_37 之后的 prod 形状: permission_admin × system = 'rw'。用真的 PermissionServiceImpl
+     * 证明 permission_admin 现在两道门 (只读 system:read / 写 system:read_write) 都过得去,
+     * 而上面那条 '-' 的测试仍然钉着「种子不改就进不来」—— 两条一起读: 变的是数据, 不是判定链。
+     */
+    @Test
+    void afterFlyway37PermissionAdminPassesBothGates() {
+        PermissionServiceImpl real = new PermissionServiceImpl();
+        ReflectionTestUtils.setField(real, "platformRepo", platformRolePermissionRepository);
+        ReflectionTestUtils.setField(real, "factoryConfigRepo", factoryModuleConfigRepository);
+        when(factoryModuleConfigRepository.findByFactoryIdAndConfigVersion(eq("F006"), eq(1)))
+                .thenReturn(List.of());
+        stubL1("permission_admin", "system", "rw");
+        stubL1("sales_manager", "system", "-");
+
+        User admin = user(2004L, "permission_admin");
+        assertThat(real.hasPermission(admin, "system:read")).isTrue();
+        assertThat(real.hasPermission(admin, "system:read_write")).isTrue();
+        assertThat(real.hasAnyPermission(admin, "system:read_write")).isTrue();
+        // 阴性对照: 同一条链上销售主管仍然两道都不过
+        assertThat(real.hasPermission(user(2002L, "sales_manager"), "system:read_write")).isFalse();
     }
 
     private void stubL1(String role, String module, String level) {

@@ -1,12 +1,13 @@
 /**
- * 权限矩阵**只读**视图 API (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906 step 1)。
+ * 权限矩阵视图 API (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。
  *
- * 后端: `GET /api/mobile/{factoryId}/permissions/matrix`
- * (`PermissionMatrixController`, 门禁 `@RequirePermission({"system:read","system:read_write"})`)。
- *
- * ⛔ 本文件**没有写入函数**, 而且不许加 —— owner 2026-09-06 裁定 step 1 只读。
- * 要改 L1 请走已有的 `permissionApi.updatePlatformPermission`(platform_admin 专用),
- * 那是另一条链, 有它自己的循环锁死校验。
+ * 后端 `PermissionMatrixController`:
+ * - step 1: `GET /api/mobile/{factoryId}/permissions/matrix`
+ *   (门禁 `@RequirePermission({"system:read","system:read_write"})`)
+ * - step 2 (owner 2026-09-06 裁定): `PUT /api/mobile/{factoryId}/permissions/matrix/{role}/{module}`
+ *   (门禁 `@RequirePermission("system:read_write")`), 只写 L1 一格, 同事务审计, 写后缓存失效。
+ *   ⚠️ L1 是全平台表, 一次写入影响所有工厂。餐饮角色/模块的格后端 400 (Steve: 餐饮不管)。
+ *   ⛔ 不走 `permissionApi.updatePlatformPermission` (`/api/platform/**` 只放平台管理员, permission_admin 走不到)。
  */
 import request from './request';
 import type { ApiResponse } from '@/types/api';
@@ -75,5 +76,34 @@ export async function getPermissionMatrix(factoryId: string): Promise<Permission
     //    而后者在本系统里不可能发生 (兜底矩阵恒非空)。让它炸, 页面显示错误。
     throw new Error('权限矩阵接口返回了空 data');
   }
+  return data;
+}
+
+/** step-2 写一格的响应: 后端**回读** L1 之后的值 (不是请求体) + 审计行 id。 */
+export interface MatrixWriteResult {
+  role: string;
+  module: string;
+  oldLevel: MatrixLevel | null;
+  level: MatrixLevel;
+  auditId: number;
+}
+
+/**
+ * step-2: 写 L1 一格 (全平台生效)。
+ * 调用方写完必须**重新 GET 矩阵**再渲染 (N9): 页面显示的是回读的 L1, 不是本地改的格。
+ */
+export async function writePermissionMatrixCell(
+  factoryId: string,
+  role: string,
+  module: string,
+  level: MatrixLevel,
+  reason?: string,
+): Promise<MatrixWriteResult> {
+  const res = await request.put<ApiResponse<MatrixWriteResult>>(
+    `/${factoryId}/permissions/matrix/${encodeURIComponent(role)}/${encodeURIComponent(module)}`,
+    { level, reason: reason || null },
+  );
+  const data = (res as unknown as ApiResponse<MatrixWriteResult>).data;
+  if (!data) throw new Error('写入权限格后接口返回了空 data');
   return data;
 }
