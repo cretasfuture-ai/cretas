@@ -371,8 +371,11 @@ on_exit() {
     # deploy 10 自己正常退出(rc=0), release lock 却留在 /tmp 里没人删, 下一次
     # deploy(11)一上来就被"自己已经不存在的进程"拒掉, 只能人工删锁重发。
     # deploy-backend.sh 的 cleanup() 早就在自己的 trap 里这么补过一次, 这里照抄
-    # 同一个兜底: 显式清一次锁, 不依赖上游那条已经被这里覆盖掉的 trap。
-    rm -f "${ACQUIRED_DEPLOY_LOCK_FILE:-/tmp/cretas-release.lock}" 2>/dev/null || true
+    # 同一个兜底: 显式释放一次锁, 不依赖上游那条已经被这里覆盖掉的 trap。
+    # ⛔ 不再自己 `rm -f` 路径 (2026-09-06): flock 模式下 rm 会造出第二把互不可见的锁,
+    #    而被拒那次退出还会删掉别人正持有的锁文件 —— release_deploy_lock 按模式分叉,
+    #    没拿到锁时什么都不做 (test-deploy-lock-orphan-holder.sh D/E 读数)。
+    release_deploy_lock
 }
 trap on_exit EXIT
 

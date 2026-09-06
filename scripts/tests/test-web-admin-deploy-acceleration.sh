@@ -28,6 +28,8 @@ check_git_sync() { :; }
 # Web 部署自己拿一把互斥锁, 免得两个 session 交错做 dist 交换。fixture 里记录一下就够,
 # 不真去拿机器级 flock。
 acquire_deploy_lock() { printf 'DEPLOY_LOCK %s\n' "${1:-}" >>"${MOCK_LOCK_LOG:-/dev/null}"; return 0; }
+# 2026-09-07: 调用方 EXIT trap 改调 release_deploy_lock (不再自己 rm 锁文件), 桩必须一起打全。
+release_deploy_lock() { return 0; }
 COMMON
     printf '{"name":"fixture","lockfileVersion":3,"packages":{}}\n' > "$fixture/web-admin/package-lock.json"
 cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'

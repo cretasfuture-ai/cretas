@@ -62,6 +62,8 @@ setup_repo() {
 # Token deliberately avoids the substring "DEPLOY": other cases assert that it
 # never appears when no component deployment should have run.
 acquire_deploy_lock() { printf 'MUTEX %s\n' "${1:-}" >>"$MOCK_CALL_LOG"; return 0; }
+# 2026-09-07: 调用方 EXIT trap 改调 release_deploy_lock (不再自己 rm 锁文件), 桩必须一起打全。
+release_deploy_lock() { return 0; }
 EOF
     printf 'java baseline\n' >"$CASE_REPO/backend/java/cretas-api/baseline.txt"
     printf 'web baseline\n' >"$CASE_REPO/web-admin/baseline.txt"

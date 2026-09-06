@@ -28,7 +28,7 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 
 - prod Java `10010` / `10020` 交替 active，部署 / 核对前必读 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某槽永久停用。
 - `deploy-backend.sh` 的 idle readiness 判据三态：`UP:*` 健康；`TIMEOUT` / `RESTART_LIMIT:*` 真失败；空串 = ssh 断线没量到（脚本先换连接重试，再独立核验；2026-09-02 曾把断线当挂了触发回滚）。
-- 三把本机锁：`cretas-release` / `cretas-backend-deploy` / `cretas-web-admin-deploy`。遇到「另一个 deploy 进程持有锁」⛔ 不反射性 `rm`：`acquire_deploy_lock` 已自动清理 stale PID，还报错大概率真有并发；先 `kill -0` 确认 PID 与 Maven/Vite 孙进程都退出了再清。
+- 三把本机锁：`cretas-release` / `cretas-backend-deploy` / `cretas-web-admin-deploy`（flock 模式，Linux/macOS；Windows Git Bash 无 flock 走 PID 文件模式，那里 stale PID 自动回收）。被拒时看拒绝信息分两种：(a)「另一个 deploy 进程持有锁, PID x 活着」= 真并发，等它；(b)「登记持有者已死 / 已正常释放, 但锁仍被按着」= 它的孤儿子进程（rsync/ssh/mvn）继承了 fd 200 还没退，拒绝信息会逐行列出 `pid:cmdline`，并给出可直接复制的 `kill <pids>` 与一行复核（打印 `checked` 且无 `still alive` 即可重发）。逃生路：先看每行 cmdline 里 rsync/ssh 的目标，确认孤儿不再写生产制品，再复制那条 `kill`，跑复核，然后重发。⛔ 任何模式下都不要 `rm` 锁文件：flock 模式 rm 只会造出第二把互不可见的锁（5/30 形状）；正常释放由 `release_deploy_lock` 只关 fd、不 unlink。
 - 默认安全串行；只有显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES` 且迁移 / Entity / Security / 跨端契约风险检测全部未命中才并行。
 
 ## 单组件 / 排查入口

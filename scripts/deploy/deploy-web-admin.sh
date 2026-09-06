@@ -257,9 +257,12 @@ web_deploy_on_exit() {
     # `acquire_deploy_lock "cretas-web-admin-deploy"` 注册的清锁 trap —— bash 的
     # trap 不叠加, 后设的赢。不清的话, 正常退出(rc=0)也会留下锁文件, 下一次部署
     # 被"自己已经不存在的进程"拒掉(2026-09-02 凌晨实测: 01:21 的 web 锁把部署 9
-    # 的 web 半程直接拒了), 只能人工删锁重发。这里显式清一次, 不依赖那条已被
+    # 的 web 半程直接拒了), 只能人工删锁重发。这里显式释放一次, 不依赖那条已被
     # 覆盖的 trap。
-    rm -f "${ACQUIRED_DEPLOY_LOCK_FILE:-/tmp/cretas-web-admin-deploy.lock}" 2>/dev/null || true
+    # ⛔ 不再自己 `rm -f` 路径 (2026-09-06): flock 模式下 rm 会造出第二把互不可见的锁,
+    #    而被拒那次退出还会删掉别人正持有的锁文件 —— release_deploy_lock 按模式分叉,
+    #    没拿到锁时什么都不做 (test-deploy-lock-orphan-holder.sh D/E 读数)。
+    release_deploy_lock
 }
 trap web_deploy_on_exit EXIT
 
