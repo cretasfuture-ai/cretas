@@ -25,7 +25,20 @@ for t in date mktemp rm grep head tail cut tr sed cat cp dirname basename awk mk
     abs=$(command -v "$t") || { [ "$t" = hostname ] && continue; fail "本机缺 $t"; }
     printf '#!/bin/sh\nexec %s "$@"\n' "$abs" > "$FAKEBIN/$t"; chmod +x "$FAKEBIN/$t"
 done
-if abs=$(command -v python); then printf '#!/bin/sh\nexec %s "$@"\n' "$abs" > "$FAKEBIN/python"; chmod +x "$FAKEBIN/python"; HAVE_PY=1; else HAVE_PY=0; fi
+# 🔴 python 桩要指向一个**真的解释器**, 不是垫片 (2026-09-06 CI 首跑就栽在这里): ubuntu runner 上
+#    `command -v python` 给的是 workflow 装的 ~/.local/bin/python 垫片, 它 `exec python3` —— 而 python3
+#    不在受限 PATH 里 ⇒ 垫片死 ⇒ payload 写不出 ⇒ 被测脚本读成 sink-failed, 与真投递失败同形 (形态 A:
+#    错的是尺子)。Windows 上 python3 又是 Store 的假存根。⇒ 逐个真跑一次 `-c` 探测, 谁能跑用谁。
+HAVE_PY=0
+for c in python3 python; do
+    abs=$(command -v "$c" 2>/dev/null) || continue
+    "$abs" -c 'import sys, json; sys.exit(0)' >/dev/null 2>&1 || continue
+    printf '#!/bin/sh\nexec %s "$@"\n' "$abs" > "$FAKEBIN/python"; chmod +x "$FAKEBIN/python"
+    # 桩自检: 在**受限 PATH** 下它真的能跑 (垫片 exec 别的名字时这里就会露馅)。
+    if PATH="$FAKEBIN" python -c 'import json' >/dev/null 2>&1; then HAVE_PY=1; break; fi
+    rm -f "$FAKEBIN/python"
+done
+echo "READING: PYTHON_STUB=$([ "$HAVE_PY" = 1 ] && cat "$FAKEBIN/python" | tail -1 || echo none)"
 export STUB
 cat > "$FAKEBIN/curl" <<'S'
 #!/bin/sh
