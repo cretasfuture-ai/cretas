@@ -143,4 +143,22 @@ public interface PermissionService {
      * @return module → rw|r|w|-; 永不为 null
      */
     Map<String, String> resolveModuleLevels(User user);
+
+    /**
+     * 同一条解析链的<b>角色级</b>入口: 不需要具体用户, 只要「哪个工厂 + 哪个角色」。
+     *
+     * <p>{@link #resolveModuleLevels(User)} 就是它加一层「从 user 取 factoryId/role」的壳 ——
+     * 两条路径共用同一份链、同一个模块全集口径, ⛔ 不是第二份实现。
+     *
+     * <p>用途: 「角色管理 → 查看权限」页 ({@code RoleController})。它此前读的是
+     * {@link #getRolePermissions(FactoryUserRole)} —— 那个方法<b>只读硬编码兜底矩阵,
+     * 一格 L1 都不查</b>, 所以页面显示的不是系统实际在执行的权限。2026-09-07 实测:
+     * 30 个角色 × 11 个模块共 294 格里 <b>31 格</b>与 L1 不一致 (含 permission_admin 11 格
+     * 全是「页面说 rw / L1 说 -」)。
+     *
+     * @param factoryId L2 工厂覆盖所属工厂; null = 无工厂上下文, 从 L1 起算
+     * @param role      角色 (null / unactivated → 空 map)
+     * @return module → rw|r|w|-; 超管额外带一个 {@code "*"} 键; 永不为 null
+     */
+    Map<String, String> resolveRoleModuleLevels(String factoryId, FactoryUserRole role);
 }

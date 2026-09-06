@@ -8,7 +8,11 @@ import { sidebarModuleAxis } from '@/views/system/permission-matrix/moduleAxis';
  *
  * ## 演进
  * - v1 (#657): 8 份清单两两对称差, 棘轮基线 203 —— 那时还没人拍「哪一份是真的」。
- * - v2 (本版): owner 拍了 **L1 为准, 其它份向它收敛; 餐饮不管**。于是轴换成 L1 的模块码集合,
+ * - v2.1 (2026-09-07 刀 D): 角色权限页那**两份**清单 (`RoleController.DISPLAY_MODULES` 与
+ *   `roles/list.vue` 的 `allPermissionModules`) 已删除 —— 那一页的列改成后端三层现算。
+ *   清单数 8 → 6。⚠️ 「两份逐字相同」那条断言随之失去比较对象, ⛔ 没有留成恒真式:
+ *   换成「这两份不许长回来」, 并给判据本身配了正反两个对照。
+ * - v2: owner 拍了 **L1 为准, 其它份向它收敛; 餐饮不管**。于是轴换成 L1 的模块码集合,
  *   每份清单只报两个数: 「L1 有它没有」(missing) 与 「它有 L1 没有」(extra); 棘轮量的是这两个数的总和。
  *   ⛔ 两两比对不再是判据 —— 8 份互相一致但一起偏离 L1 也是错的。
  *
@@ -80,18 +84,12 @@ function javaL2Allowed(): ModuleList {
   return { key: 'java.L2.ALLOWED_MODULES', where: 'FactoryRoleModuleOverrideController.java',
     modules: stringLiterals(between(src, /ALLOWED_MODULES\s*=\s*Set\.of\(([\s\S]*?)\);/)) };
 }
-function javaDisplayModules(): ModuleList {
-  const src = stripComments(read(resolve(JAVA, 'controller/RoleController.java')));
-  return { key: 'java.DISPLAY_MODULES', where: 'RoleController.java',
-    modules: [...src.matchAll(/DISPLAY_MODULES\.put\("([A-Za-z_][A-Za-z0-9_]*)"/g)].map((m) => m[1]) };
-}
-function webRolesPageModules(): ModuleList {
-  // RoleController.DISPLAY_MODULES 的前端镜像 (roles/list.vue 的 allPermissionModules) —— 两份必须同步
-  const src = stripComments(read(resolve(SRC, 'views/system/roles/list.vue')));
-  const block = between(src, /const allPermissionModules\s*=\s*\[([\s\S]*?)\];/);
-  return { key: 'web.rolesPage.allPermissionModules', where: 'views/system/roles/list.vue',
-    modules: [...block.matchAll(/key:\s*'([A-Za-z_][A-Za-z0-9_]*)'/g)].map((m) => m[1]) };
-}
+// 2026-09-07 刀 D: `java.DISPLAY_MODULES` 与它的前端镜像 `web.rolesPage.allPermissionModules`
+// 两份清单**都已删除** —— 角色权限页的列改成后端三层现算 (resolveRoleModuleLevels),
+// 中文名走 PermissionModuleCatalog。⇒ 它们的提取器从 LISTS 里摘掉 (留着会读到 0 条 →
+// 撞 LIST_SIZE_FLOOR 报 INSTRUMENT DEAD, 那是**假的**仪器故障)。
+// 原来钉它俩「逐字相同」的那条断言没有第二份可比了 ⇒ ⛔ 不留恒真, 换成
+// 「这两份清单不许长回来」+ 判据自身的阳性对照, 见下方 hardcodedModuleListSignals。
 function webModulePermissionsKeys(): ModuleList {
   const src = stripComments(read(resolve(SRC, 'store/modules/permission.ts')));
   const block = between(src, /interface ModulePermissions \{([\s\S]*?)\n\}/);
@@ -115,12 +113,24 @@ const LISTS: ModuleList[] = [
   javaAllModules(),
   javaL1Allowed(),
   javaL2Allowed(),
-  javaDisplayModules(),
-  webRolesPageModules(),
   webModulePermissionsKeys(),
   webSidebarAxis(),
   webStoreAccessibleModules(),
 ];
+
+/**
+ * 刀 D 删掉的那两份清单「有没有长回来」的判据。
+ *
+ * ⚠️ 它必须能红: 下面 `判据自身的阳性对照` 拿一段合成源码喂给同一个函数, 证明
+ * 「返回空数组」是真的没有, ⛔ 不是我读错了文件或正则失效 (形态 A: 截断把「没有」
+ * 变成「我没看到」)。
+ */
+function hardcodedModuleListSignals(javaSrc: string, vueSrc: string): string[] {
+  const found: string[] = [];
+  if (/DISPLAY_MODULES\s*\.\s*put\s*\(/.test(javaSrc)) found.push('RoleController.DISPLAY_MODULES.put(...)');
+  if (/const\s+allPermissionModules\s*=/.test(vueSrc)) found.push('roles/list.vue: const allPermissionModules');
+  return found;
+}
 
 /** 任何一份真实清单都不会短于这个数; 低于它 = 提取器打空, 不是清单变短。 */
 const LIST_SIZE_FLOOR = 8;
@@ -167,10 +177,16 @@ function renderTable(devs: Deviation[]): string {
  * 棘轮基线 = 与 L1 轴的偏离总条数 (extra + 非投影清单的 missing)。
  * 2026-09-06 v2 首次实测见 PR body; ⛔ 只许往下调, 每收敛一份就降一次。
  */
-// 2026-09-06 v2 首测 29 → 删 ai 27 (#675) → 刀 A 删 utils/permission.ts 21 (#690) → 刀 B 补 operations 19 (#695)。
+// 2026-09-06 v2 首测 29 → 删 ai 27 (#675) → 刀 A 删 utils/permission.ts 21 (#690) → 刀 B 补 operations 19 (#695)
+// → 刀 D 删角色权限页两份清单 7。
 // ⚠️ 棘轮是 `<=`, 所以「CI 绿」只证明 ≤ 基线, **不证明恰好等于**。每次下调都要把减法算出来:
-//    刀 B 给 L1/L2 两份写白名单各补了 operations ⇒ 各自的 missing 从 1 变 0 ⇒ 21 − 2 = 19 (2026-09-07 实测一致)。
-const DEVIATION_BASELINE = 19;
+//    刀 B 给 L1/L2 两份写白名单各补了 operations ⇒ 各自的 missing 从 1 变 0 ⇒ 21 − 2 = 19 (实测一致)。
+//    刀 D 删掉的两份清单各有 11 个码、全部落在 17 个码的轴上 ⇒ 各自 missing = 17 − 11 = 6, extra = 0
+//    ⇒ 各计 6 ⇒ 19 − 6 − 6 = 7 (2026-09-07 实测一致)。
+// 🔴 这个数变小有两种成因: 某份清单真的向 L1 收敛了 / 某份清单**整份不存在了**。
+//    刀 D 是后者 —— 偏离条数少了 12, 但那 12 条不是被修好的, 是连同载体一起删的。
+//    读数相同而含义不同 ⇒ 报数必须连成因一起报。
+const DEVIATION_BASELINE = 7;
 
 describe('module lists converge to L1 (ratchet, source-scan)', () => {
   const devs = LISTS.map(deviation);
@@ -190,10 +206,32 @@ describe('module lists converge to L1 (ratchet, source-scan)', () => {
     expect([...l1.modules].sort()).toEqual([...l2.modules].sort());
   });
 
-  it('角色权限页两份 (RoleController.DISPLAY_MODULES / roles/list.vue) 必须相等 (形态 D′)', () => {
-    const j = LISTS.find((l) => l.key === 'java.DISPLAY_MODULES')!;
-    const w = LISTS.find((l) => l.key === 'web.rolesPage.allPermissionModules')!;
-    expect([...w.modules].sort()).toEqual([...j.modules].sort());
+  // 刀 D 之前这里是「角色权限页两份必须逐字相等」。两份都删了 ⇒ 那条断言没有第二份可比,
+  // 留着就是恒真式 (形态 B′)。换成「不许长回来」——它守的是同一件事的下一个状态。
+  it('刀 D: 角色权限页那两份写死清单不许长回来', () => {
+    const javaSrc = stripComments(read(resolve(JAVA, 'controller/RoleController.java')));
+    const vueSrc = stripComments(read(resolve(SRC, 'views/system/roles/list.vue')));
+
+    // 阳性对照: 两个文件都读到了, 而且读到的是刀 D 之后那一版 (不是空串、不是别的文件)
+    expect(javaSrc, 'INSTRUMENT DEAD — RoleController.java 没读到改后那版')
+      .toContain('resolveRoleModuleLevels');
+    expect(vueSrc, 'INSTRUMENT DEAD — roles/list.vue 没读到改后那版')
+      .toContain('rolePermissions');
+
+    const found = hardcodedModuleListSignals(javaSrc, vueSrc);
+    expect(
+      found,
+      `角色权限页的模块清单又被写死了: ${found.join('; ')}。`
+        + '列由后端 resolveRoleModuleLevels 现算, 中文名由 PermissionModuleCatalog 下发, ⛔ 不要再抄一份。',
+    ).toEqual([]);
+  });
+
+  it('判据自身的阳性对照: 清单真长回来时上面那条会红', () => {
+    const fakeJava = 'static { DISPLAY_MODULES.put("production", "生产管理"); }';
+    const fakeVue = "const allPermissionModules = [{ key: 'production', label: '生产管理' }];";
+    expect(hardcodedModuleListSignals(fakeJava, fakeVue)).toHaveLength(2);
+    // 反向: 干净的源码不许被判成「长回来了」(否则闸会天天误报, 形态 E)
+    expect(hardcodedModuleListSignals('class RoleController {}', 'const rolePermissions = ref([]);')).toEqual([]);
   });
 
   it('偏离表 + 棘轮: 与 L1 轴的偏离总条数不许增长 (餐饮码 / 内部码 / 侧边栏缺项 逐条登记, 不计)', () => {

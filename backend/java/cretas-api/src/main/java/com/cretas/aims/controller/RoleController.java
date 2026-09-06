@@ -3,7 +3,9 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.permission.PermissionModuleCatalog;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.impl.PermissionServiceImpl;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -30,25 +32,12 @@ public class RoleController {
 
     private final PermissionService permissionService;
 
-    /**
-     * 前端显示的功能模块列表 (与 web-admin/src/views/system/roles/list.vue 保持一致)
-     */
-    private static final Map<String, String> DISPLAY_MODULES = new LinkedHashMap<>();
-    static {
-        DISPLAY_MODULES.put("production", "生产管理");
-        DISPLAY_MODULES.put("quality", "质检管理");
-        DISPLAY_MODULES.put("warehouse", "仓库管理");
-        DISPLAY_MODULES.put("procurement", "采购管理");
-        DISPLAY_MODULES.put("sales", "销售管理");
-        DISPLAY_MODULES.put("hr", "人事管理");
-        DISPLAY_MODULES.put("equipment", "设备管理");
-        DISPLAY_MODULES.put("finance", "财务管理");
-        DISPLAY_MODULES.put("system", "系统设置");
-        // 2026-09-06 清单向 L1 收敛 (owner 裁定): 删掉 "ai" —— 全仓 0 处 @RequirePermission 用它,
-        // prod L1 0 行, 只在这张展示清单与 roles/list.vue 里存在: 一列永远显示 '-' 的幽灵模块。
-        DISPLAY_MODULES.put("report", "报表中心");
-        DISPLAY_MODULES.put("dashboard", "数据看板");
-    }
+    // 2026-09-07 刀 D: 这里原本是一份写死 11 条的 DISPLAY_MODULES (code → 中文名), 与
+    // web-admin/src/views/system/roles/list.vue 的 allPermissionModules 逐字重复 (形态 D)。
+    // 两份都已删除:
+    //   · 列 = 三层现算 (permissionService.resolveRoleModuleLevels), ⛔ 不再有第二份清单;
+    //   · 中文名 = PermissionModuleCatalog (全仓唯一一份), ⛔ 不在这里再写一遍;
+    //   · 列序 = PermissionModuleCatalog.columnOrder (侧边栏顺序)。
 
     /**
      * 获取某个角色在各功能模块上的权限明细.
@@ -56,15 +45,24 @@ public class RoleController {
      * 返回格式 (前端 list.vue `rolePermissions` 期望的结构):
      * <pre>
      * [
-     *   { "module": "production", "label": "生产管理", "access": "rw" },
-     *   { "module": "quality",    "label": "质检管理", "access": "r"  },
+     *   { "module": "dashboard",  "label": "首页",     "access": "rw" },
+     *   { "module": "production", "label": "生产管理", "access": "r"  },
      *   ...
      * ]
      * </pre>
      *
      * access 值含义: rw=读写 / r=只读 / w=只写 / -=无权限
      *
-     * @param factoryId 工厂ID (路径占位,当前版本仅用于路由匹配,未做工厂隔离校验)
+     * <p><b>2026-09-07 刀 D 之前这里是错的</b>: 它读
+     * {@code permissionService.getRolePermissions(role)} —— 那个方法<b>只读硬编码兜底矩阵</b>,
+     * 一格 L1 都不查, 而 L1 才是权威。实测 30 个角色 × 11 个模块的 294 格里 <b>31 格</b>
+     * 与 L1 不一致 (例: {@code permission_admin} 11 格全是「页面说 rw / L1 说 -」;
+     * {@code quality_controller} 的 production/quality/warehouse 页面说「无权限」而 L1 给了 r/rw/r)。
+     * 现在走 {@link PermissionService#resolveRoleModuleLevels} —— 与
+     * {@code @RequirePermission} 实际执行的是同一条链。
+     *
+     * @param factoryId 工厂ID。<b>参与解析</b>: L2 {@code factory_module_configs} 的
+     *                  role×module 覆盖按它取 (2026-09-07 前这个参数只是路由占位)。
      * @param roleName  角色代码 (必须与 {@link FactoryUserRole} 枚举一致,如 factory_super_admin)
      */
     /**
@@ -118,47 +116,25 @@ public class RoleController {
         log.debug("getRolePermissions: factoryId={}, roleName={}", factoryId, roleName);
 
         FactoryUserRole role = FactoryUserRole.fromRoleCode(roleName);
-        Set<String> flatPerms = permissionService.getRolePermissions(role);
 
-        // 将 "module:read" / "module:write" 的扁平集合反向汇总为每个模块的 access 字符串
-        Map<String, Boolean> hasRead = new HashMap<>();
-        Map<String, Boolean> hasWrite = new HashMap<>();
-        for (String p : flatPerms) {
-            int idx = p.indexOf(':');
-            if (idx <= 0) continue;
-            String module = p.substring(0, idx);
-            String action = p.substring(idx + 1);
-            if ("read".equals(action)) {
-                hasRead.put(module, true);
-            } else if ("write".equals(action)) {
-                hasWrite.put(module, true);
-            }
-        }
+        // 三层解析链 (L2 → L1 → 硬编码兜底) —— 与 @RequirePermission 实际执行的是同一条链。
+        // ⛔ 不再走 getRolePermissions(role): 那个方法只读硬编码兜底矩阵, 一格 L1 都不查。
+        Map<String, String> levels = permissionService.resolveRoleModuleLevels(factoryId, role);
 
         List<Map<String, Object>> result = new ArrayList<>();
-        for (Map.Entry<String, String> entry : DISPLAY_MODULES.entrySet()) {
-            String module = entry.getKey();
-            String label = entry.getValue();
-
-            boolean r = Boolean.TRUE.equals(hasRead.get(module));
-            boolean w = Boolean.TRUE.equals(hasWrite.get(module));
-            String access;
-            if (r && w) {
-                access = "rw";
-            } else if (r) {
-                access = "r";
-            } else if (w) {
-                access = "w";
-            } else {
-                access = "-";
-            }
-
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("module", module);
-            row.put("label", label);
-            row.put("access", access);
-            result.add(row);
-        }
+        levels.entrySet().stream()
+                // 超管的 "*" 通配键是给 RN 端判「任何模块都 rw」用的, 它不是一个模块, 不进表格。
+                .filter(e -> !PermissionServiceImpl.MODULE_LEVEL_WILDCARD.equals(e.getKey()))
+                .sorted(Comparator
+                        .comparingInt((Map.Entry<String, String> e) -> PermissionModuleCatalog.columnOrder(e.getKey()))
+                        .thenComparing(Map.Entry::getKey))
+                .forEach(e -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("module", e.getKey());
+                    row.put("label", PermissionModuleCatalog.label(e.getKey()));
+                    row.put("access", e.getValue());
+                    result.add(row);
+                });
 
         return ApiResponse.success(result);
     }
