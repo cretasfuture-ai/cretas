@@ -83,6 +83,7 @@ REMOTE_PATH="${RTB_REMOTE_PATH:-/opt/homebrew/bin:/opt/homebrew/opt/openjdk@21/b
 
 CONFIRM=""
 ALLOW_STALE_MAIN=0
+ALLOW_NEW_INSTALL=0
 
 usage() {
     cat >&2 <<'EOF'
@@ -97,6 +98,8 @@ usage: refresh-testenv-backend.sh [--confirm YES-TESTENV] [--jar-dir <dir>] [--t
   --health-timeout <s>    kickstart 后等 health 200 的上限 (默认 150)
   --allow-stale-main      `git fetch origin main` 失败时用本地缓存的 origin/main 继续
                           (⚠️ 会在判决行里标 main_ref=stale; 离线时才用)
+  --allow-new-install     远端目标目录里**没有** jar 时也装 (默认 REFUSED: 目录在而 jar 不在,
+                          多半 launchd 跑的是别处的 jar, 覆盖这里什么都不会变)
 
 退出码: 0 REFRESHED|DRY_RUN|ALREADY_CURRENT / 1 PROBLEM / 2 INSTRUMENT_DEAD(没量到) / 3 REFUSED
 EOF
@@ -110,6 +113,7 @@ while (($#)); do
         --target) (($# >= 2)) || usage; SSH_TARGET=$2; shift 2 ;;
         --health-timeout) (($# >= 2)) || usage; HEALTH_TIMEOUT=$2; shift 2 ;;
         --allow-stale-main) ALLOW_STALE_MAIN=1; shift ;;
+        --allow-new-install) ALLOW_NEW_INSTALL=1; shift ;;
         --dry-run) CONFIRM=""; shift ;;
         -h|--help) usage ;;
         *) echo "error=unknown_argument $1" >&2; usage ;;
@@ -230,7 +234,11 @@ BUILT_TREE=$(git -C "$REPO_ROOT" rev-parse "${BUILD_COMMIT}:$RELEASE_BACKEND_PAT
 CTX="$CTX main=${MAIN_SHA:0:10} main_ref=$MAIN_STATE"
 
 # 判据 ②。⚠️ 用 backend/java 而不是 backend/java/cretas-api: embedding-service 也在里面。
-if ! git -C "$REPO_ROOT" diff --quiet "$BUILD_COMMIT" "$MAIN_SHA" -- backend/java 2>"$WORK/diff.err"; then
+# `git diff --quiet` 的 rc 是三态: 0 无差异 / 1 有差异 / 其它 = git 自己出错(128 …)。
+# ⛔ 只有 1 才是「落后 main」; 其它非 0 是「没量到」, 不许折叠进 REFUSED。
+git -C "$REPO_ROOT" diff --quiet "$BUILD_COMMIT" "$MAIN_SHA" -- backend/java 2>"$WORK/diff.err"
+DIFF_RC=$?
+if [ "$DIFF_RC" -eq 1 ]; then
     git -C "$REPO_ROOT" diff --stat "$BUILD_COMMIT" "$MAIN_SHA" -- backend/java > "$WORK/diff.stat" 2>&1
     N_FILES=$(grep -c '|' "$WORK/diff.stat" || true)
     CTX="$CTX java_diff_files=$N_FILES"
@@ -238,8 +246,9 @@ if ! git -C "$REPO_ROOT" diff --quiet "$BUILD_COMMIT" "$MAIN_SHA" -- backend/jav
         "jar 构建自 ${BUILD_COMMIT:0:10}, 而 $MAIN_REF=${MAIN_SHA:0:10}, backend/java 相差 $N_FILES 个文件:" \
         "$(tail -1 "$WORK/diff.stat")" \
         "⇒ 先在 main 上重跑 release 链 (prewarm-main-artifact.sh) 产出新 jar, 再来刷"
+elif [ "$DIFF_RC" -ne 0 ]; then
+    dead "git-ref-unresolvable" "git diff rc=$DIFF_RC: $(head -1 "$WORK/diff.err")"
 fi
-[ -s "$WORK/diff.err" ] && dead "git-ref-unresolvable" "git diff 出错: $(head -1 "$WORK/diff.err")"
 say "✅ 本机 jar 自洽且等于 $MAIN_REF 的 Java 树: build_commit=${BUILD_COMMIT:0:10} main=${MAIN_SHA:0:10} sha256=${JAR_SHA:0:12} size=$JAR_SIZE"
 
 # ── 远端步骤: 一律 `ssh <host> "RTB_STEP=<name> bash -s"` + 脚本走 stdin ───
@@ -247,10 +256,12 @@ say "✅ 本机 jar 自洽且等于 $MAIN_REF 的 Java 树: build_commit=${BUILD
 # 它只是远端 bash 的一个环境变量。脚本走 stdin 是为了在 macOS 的 zsh 登录壳下
 # 仍然由 bash 执行 (zsh 会把 `==` 之类当展开)。
 REMOTE_JAR="$REMOTE_TARGET_DIR/$RELEASE_JAR_NAME"
-REMOTE_TMP="/tmp/cretas-main-${BUILD_COMMIT:0:8}.jar"
+REMOTE_TMP="${RTB_REMOTE_TMP:-/tmp/cretas-main-${BUILD_COMMIT:0:8}.jar}"
 remote_step() {  # $1 = step 名, stdin = 脚本; stdout 收进 $WORK/<step>.out, rc 返回
     local step=$1
-    ssh -o BatchMode=yes -o ConnectTimeout=25 "$SSH_TARGET" "RTB_STEP=$step bash -s" \
+    # ServerAlive: Tailscale 上 health 轮询那一跳可能几分钟没输出, 别让中间设备静默掐断。
+    ssh -o BatchMode=yes -o ConnectTimeout=25 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+        "$SSH_TARGET" "RTB_STEP=$step bash -s" \
         > "$WORK/$step.out" 2> "$WORK/$step.err"
 }
 kv() {  # $1 = step, $2 = key → 值 (第一处), 没有则空串
@@ -263,7 +274,10 @@ export PATH="$REMOTE_PATH"
 D="$REMOTE_TARGET_DIR"; J="$REMOTE_JAR"; T="$REMOTE_TMP"; L="$LAUNCHD_LABEL"; P="$REMOTE_PLIST"; U="$HEALTH_URL"
 sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "\$1" | awk '{print \$1}'; else sha256sum "\$1" | awk '{print \$1}'; fi; }
 uid_=\$(id -u); echo "rtb_uid=\$uid_"
-lpid() { launchctl print "gui/\$uid_/\$L" 2>/dev/null | awk '/^[[:space:]]*pid = /{print \$3; exit}'; }
+# ⛔ lpid 不再 2>/dev/null: 「Could not find service」被吞掉 ⇒ pid 空 ⇒ 预检过 ⇒ 覆盖之后才发现
+#    标签不存在。标签存在性由 llabel 单独判 (rc, 不是 pid 空不空)。
+llabel() { if launchctl print "gui/\$uid_/\$L" >/dev/null 2>"\$HOME/.rtb-llabel.err"; then echo ok; else echo "missing rc=\$? \$(head -1 "\$HOME/.rtb-llabel.err" | tr -d '\r')"; fi; }
+lpid() { launchctl print "gui/\$uid_/\$L" 2>&1 | awk '/^[[:space:]]*pid = /{print \$3; exit}'; }
 health() { local c; c=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "\$U" 2>/dev/null || true); printf '%s\n' "\${c:-000}"; }
 flyway() {
     local pw dbn user row
@@ -290,6 +304,11 @@ done
 if [ -f "$J" ]; then echo "remote_jar_sha256=$(sha "$J")"; echo "remote_jar_size=$(wc -c < "$J" | tr -d ' ')"; else echo "remote_jar_sha256=none"; fi
 if [ -f "$J.manifest" ]; then echo "remote_sidecar_build_commit=$(awk -F= '$1=="build_commit"{print $2; exit}' "$J.manifest")"; else echo "remote_sidecar_build_commit=none"; fi
 if [ -f "$T" ]; then echo "remote_tmp_sha256=$(sha "$T")"; else echo "remote_tmp_sha256=none"; fi
+# launchd 标签在不在 (B): 用 launchctl print 的 rc, ⛔ 不用「pid 空不空」—— 那两个长得一样。
+echo "launchd_label=$(llabel)"
+# plist ↔ jar 钉住 (A): launchd 真的在跑 $J 这个文件吗? ⚠️ 用 xml1 而不是 json —— json 会把 / 转义成 \/,
+# 字面 grep 永远 0 (2026-09-06 在真 plist 上实测)。
+if plutil -extract ProgramArguments xml1 -o - "$P" 2>/dev/null | grep -qF "$J"; then echo "plist_refers_jar=yes"; else echo "plist_refers_jar=no"; fi
 echo "pid_before=$(lpid)"
 echo "health_before=$(health)"
 flyway || true
@@ -311,6 +330,21 @@ done
 { [ "$(kv precheck tool_shasum)" = ok ] || [ "$(kv precheck tool_sha256sum)" = ok ]; } || MISSING_TOOLS="$MISSING_TOOLS shasum|sha256sum"
 [ -z "$MISSING_TOOLS" ] || dead "remote-tool-missing" "远端 PATH=$REMOTE_PATH 下缺:$MISSING_TOOLS"
 [ "$(kv precheck target_dir)" = ok ] || dead "remote-target-dir-missing" "远端没有 $REMOTE_TARGET_DIR"
+# (B) launchd 标签不在 ⇒ 没有东西可以 kickstart, 覆盖了也白覆盖 —— 在**任何写之前**停。
+LABEL_STATE=$(kv precheck launchd_label)
+[ "$LABEL_STATE" = ok ] || dead "launchd-label-missing" \
+    "launchctl print gui/<uid>/$LAUNCHD_LABEL: ${LABEL_STATE:-<no reading>}" \
+    "标签名或 plist 不对; 装 plist 之前别刷 jar"
+# (A) 目录在而 jar 不在 ⇒ launchd 多半在跑别处的 jar, 覆盖这里什么都不会变 ⇒ REFUSED,
+#     除非显式 --allow-new-install。plist 里的 ProgramArguments 必须字面引用 $J, 否则同样拒绝。
+[ "$(kv precheck plist_refers_jar)" = yes ] || refuse "plist-jar-mismatch" \
+    "$REMOTE_PLIST 的 ProgramArguments 里没有 $REMOTE_JAR" \
+    "launchd 跑的不是这个文件 —— 刷了也不会生效; 先对齐 RTB_REMOTE_TARGET_DIR / RTB_LAUNCHD_LABEL"
+if [ "$(kv precheck remote_jar_sha256)" = none ] && [ "$ALLOW_NEW_INSTALL" != 1 ]; then
+    refuse "remote-jar-missing" \
+        "$REMOTE_JAR 不存在 (目录在)。这不是常态 —— 要么路径错, 要么有人挪走了" \
+        "确认是首次安装再加 --allow-new-install"
+fi
 FLYWAY_ERR=$(kv precheck flyway_error)
 [ -z "$FLYWAY_ERR" ] || dead "flyway-unreadable" "前读数拿不到 flyway_schema_history: $FLYWAY_ERR" \
     "⛔ 没有前读数就没有前后对比, 「新迁移打上了没有」会变成不可判定"
@@ -373,7 +407,7 @@ ATTEMPTS=$(( HEALTH_TIMEOUT / HEALTH_INTERVAL )); [ "$ATTEMPTS" -ge 1 ] || ATTEM
 {
     remote_preamble
     cat <<EOF
-BAK="\$J.bak.$BAK_TS"; ATTEMPTS=$ATTEMPTS; INTERVAL=$HEALTH_INTERVAL; EXPECT="$JAR_SHA"
+BAK="\$J.bak.$BAK_TS"; ATTEMPTS=$ATTEMPTS; INTERVAL=$HEALTH_INTERVAL; EXPECT="$JAR_SHA"; PID_BEFORE="$PID_BEFORE"
 echo "install_stage=backup"
 if [ -f "\$J" ]; then cp -p "\$J" "\$BAK" || { echo "install_failed=backup"; exit 0; }; echo "backup=\$BAK"; else echo "backup=none-no-previous-jar"; fi
 echo "install_stage=copy"
@@ -386,13 +420,19 @@ echo "install_stage=kickstart"
 launchctl kickstart -k "gui/\$uid_/\$L" 2>&1 | sed 's/^/kickstart_out=/'
 echo "kickstart_rc=\${PIPESTATUS[0]}"
 echo "install_stage=health"
-i=0; code=000
+# (C) 配对读数 (硬约束 9): 每一轮**先读 pid, 再探 health**, 只有「pid 已不是 PID_BEFORE
+# 且这一轮 200」才算新进程答了。⛔ 不是「先等到 200, 事后再读一次 pid」—— 旧进程在
+# kickstart -k 生效前那几百毫秒还会答 200, 事后读到的 pid 又已经翻了, 两个读数各自为真,
+# 合起来是假的 (审查者在桩下构造出来过)。
+i=0; code=000; p=""; paired=no
 while [ "\$i" -lt "\$ATTEMPTS" ]; do
-    i=\$((i+1)); sleep "\$INTERVAL"; code=\$(health); echo "health_attempt=\$i code=\$code"
-    [ "\$code" = 200 ] && break
+    i=\$((i+1)); sleep "\$INTERVAL"
+    p=\$(lpid); code=\$(health)
+    echo "health_attempt=\$i pid=\${p:-none} code=\$code"
+    if [ "\$code" = 200 ] && [ -n "\$p" ] && [ "\$p" != "\$PID_BEFORE" ]; then paired=yes; break; fi
 done
-echo "health_after=\$code"; echo "health_attempts=\$i"
-echo "pid_after=\$(lpid)"
+echo "health_after=\$code"; echo "health_attempts=\$i"; echo "health_paired=\$paired"
+echo "pid_after=\$p"
 echo "install_stage=readback"
 [ -f "\$J.manifest" ] && echo "sidecar_after=\$(awk -F= '\$1=="build_commit"{print \$2; exit}' "\$J.manifest")" || echo "sidecar_after=none"
 if unzip -p "\$J" BOOT-INF/classes/git.properties 2>/dev/null | grep -m1 -oE 'git\.commit\.id(\.full)?=[0-9a-f]{7,40}' >/dev/null; then
@@ -422,18 +462,29 @@ FAILED_AT=$(kv install install_failed)
     "远端在 $FAILED_AT 这一步失败, installed_sha256=$(kv install installed_sha256)" \
     "备份: $BACKUP"
 HEALTH_AFTER=$(kv install health_after); ATT=$(kv install health_attempts)
+PAIRED=$(kv install health_paired)
 PID_AFTER=$(kv install pid_after)
+KICK_RC=$(kv install kickstart_rc)
 SIDECAR_AFTER=$(kv install sidecar_after)
 GITPROPS=$(kv install git_properties)
 FLY_ERR_AFTER=$(kv install flyway_error)
 FLY_MAX_AFTER=$(kv install flyway_max); FLY_N_AFTER=$(kv install flyway_count)
-CTX="$CTX health=$HEALTH_AFTER attempts=$ATT pid_before=${PID_BEFORE:-none} pid_after=${PID_AFTER:-none}"
+CTX="$CTX health=$HEALTH_AFTER attempts=$ATT paired=${PAIRED:-none} pid_before=${PID_BEFORE:-none} pid_after=${PID_AFTER:-none}"
+# (B) kickstart 自己失败了 (标签在预检时还在, 现在不在 / 权限) —— 打了 rc 就要判它。
+[ "${KICK_RC:-0}" = 0 ] || problem "kickstart-failed" \
+    "launchctl kickstart -k rc=$KICK_RC: $(grep '^kickstart_out=' "$WORK/install.out" | head -2 | cut -d= -f2- | tr '\n' ' ')" \
+    "jar 已覆盖但进程没重启, 跑的还是旧 jar; 备份: $BACKUP"
 if [ "$HEALTH_AFTER" != 200 ]; then
     problem "health-timeout" \
         "kickstart 后 $((ATT * HEALTH_INTERVAL))s 内 health 没到 200 (最后 $HEALTH_AFTER), kickstart_rc=$(kv install kickstart_rc)" \
         "看: ssh $SSH_TARGET 'tail -50 ~/testenv-logs/java.err'" \
         "回滚: ssh $SSH_TARGET 'cp \"$BACKUP\" \"$REMOTE_JAR\" && launchctl kickstart -k gui/\$(id -u)/$LAUNCHD_LABEL'"
 fi
+# (C) 200 必须来自新 pid: 远端循环里「同一轮 pid≠PID_BEFORE 且 200」才置 paired=yes。
+#     ⛔ 「health=200 且事后 pid 变了」不是同一件事 —— 旧进程答的 200 + 事后翻的 pid 也长这样。
+[ "$PAIRED" = yes ] || problem "health-not-paired-with-new-pid" \
+    "远端循环 $ATT 轮内没有一轮同时满足 pid≠$PID_BEFORE 且 200 (最后 pid=${PID_AFTER:-none} code=$HEALTH_AFTER)" \
+    "看: ssh $SSH_TARGET 'tail -50 ~/testenv-logs/java.err'; 备份: $BACKUP"
 # 判据 ⑤ 的后半: health 200 在**没重启**时也成立。pid 变化才证明 kickstart 真的发生了。
 if [ -n "$PID_BEFORE" ] && [ "$PID_BEFORE" = "$PID_AFTER" ]; then
     problem "pid-unchanged-after-kickstart" \

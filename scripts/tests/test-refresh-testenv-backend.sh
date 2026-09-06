@@ -19,9 +19,18 @@
 # ⚠️ 每条断言前先把判决行打出来 (形态 C″): 变异不红有两种相反的成因, 不看读数分不清。
 #
 # 变异实测 (2026-09-06, 先确认变异真的进了代码, 再看哪条红):
-#   ① 去掉 `git diff --quiet … -- backend/java` 那道拒绝  ⇒ [2] 红 (判决行变成 DRY_RUN)
+#   ① 去掉 `git diff --quiet … -- backend/java` 那道拒绝  ⇒ [2] 红 (不再 REFUSED, 走到远端后 rc=2)
 #   ② 去掉传输后 `[ "$TMP_SHA" = "$JAR_SHA" ]` 的比对       ⇒ [3] 红 (install 被调了)
 #   ③ 去掉 pid_before = pid_after 的判定                     ⇒ [12] 红 (判决行变成 REFRESHED)
+#   ④ 远端循环改回「只看 200 就 break」                       ⇒ [C-replay] 红 (attempts 1, 旧 pid 的 200 被收下)
+#   ⑤ 去掉 launchd_label≠ok 的 dead                          ⇒ [B1] 红 (scp 在标签不在时照传)
+#   ⑥ 去掉 remote_jar_sha256=none 的 refuse                  ⇒ [A1] 红 (jar 不在照装)
+#
+# 2026-09-06 organizer 终审补的三条 (A/B/C), 每条各有一个桩用例 + 一次变异:
+#   A 目录在 jar 不在 ⇒ REFUSED remote-jar-missing (除非 --allow-new-install); plist 不引用 $J ⇒ REFUSED
+#   B launchd 标签不在 ⇒ 预检就 rc=2, 一个字节都不传; kickstart rc≠0 ⇒ rc=1
+#   C health 200 必须与「同一轮读到的 pid ≠ pid_before」配对; 生成的 install.sh 在假 launchctl/curl
+#     下真跑一遍 (旧进程先答 200、pid 随后才翻 —— 审查者构造的那个竞态)
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -129,6 +138,8 @@ remote_jar_sha256=$1
 remote_jar_size=100
 remote_sidecar_build_commit=$2
 remote_tmp_sha256=$7
+launchd_label=${PRE_LABEL:-ok}
+plist_refers_jar=${PRE_PLIST:-yes}
 pid_before=$3
 health_before=$4
 flyway_db=cretas_testenv
@@ -145,17 +156,18 @@ install_out() {  # health pid_after sidecar_after flyway_max flyway_count [extra
     cat <<EOF
 rtb_uid=501
 install_stage=backup
-backup=/Users/rex/x/target/cretas-backend-system-1.0.0.jar.bak.20260906T000000Z
+backup=${INST_BACKUP:-/Users/rex/x/target/cretas-backend-system-1.0.0.jar.bak.20260906T000000Z}
 install_stage=copy
 install_stage=verify
 installed_sha256=$JAR_SHA
 install_stage=kickstart
-kickstart_rc=0
+kickstart_rc=${INST_KICK:-0}
 install_stage=health
-health_attempt=1 code=000
-health_attempt=2 code=$1
+health_attempt=1 pid=100 code=000
+health_attempt=2 pid=$2 code=$1
 health_after=$1
 health_attempts=2
+health_paired=${INST_PAIRED:-yes}
 pid_after=$2
 install_stage=readback
 sidecar_after=$3
@@ -366,6 +378,99 @@ PATH="$FAKEBIN:$PATH" RTB_REPO_ROOT="$REPO" RTB_JAR_DIR="$JARDIR" RTB_LEDGER="$L
 [ "$rc" = 2 ] || fail "[16] --health-timeout 非整数应 rc=2, 实得 $rc"
 ok "用法错 ⇒ rc=2"
 
+# ═════════ A. 目录在、jar 不在 ⇒ REFUSED (除非 --allow-new-install); plist 不引用 $J ⇒ REFUSED ═
+make_manifest "$B_SHA" "$TREE_B"; reset_stubs
+precheck_out none none "" 000 20261101.34 695 none > "$STUB_DIR/precheck.out"
+run_it --confirm YES-TESTENV
+assert_rc 3 "[A1]"; assert_line "REFUSED reason=remote-jar-missing" "[A1]"
+[ "$(calls)" = "ssh precheck" ] || fail "[A1] jar 不在时不该传/装, 实际: $(calls | tr '\n' ';')"
+ok "远端 jar 不在 ⇒ rc=3 remote-jar-missing, 零写入"
+reset_stubs; precheck_out none none "" 000 20261101.34 695 none > "$STUB_DIR/precheck.out"
+INST_BACKUP=none-no-previous-jar install_out 200 101 "$B_SHA" 20261101.35 696 > "$STUB_DIR/install.out"
+run_it --confirm YES-TESTENV --allow-new-install
+assert_rc 0 "[A1b]"; assert_line "REFRESHED" "[A1b]"; assert_line "backup=none-no-previous-jar" "[A1b]"
+ok "--allow-new-install ⇒ 首次安装放行, 判决行 backup=none-no-previous-jar"
+reset_stubs; PRE_PLIST=no precheck_out oldsha000 "$A_SHA" 100 200 20261101.34 695 none > "$STUB_DIR/precheck.out"
+run_it --confirm YES-TESTENV
+assert_rc 3 "[A2]"; assert_line "REFUSED reason=plist-jar-mismatch" "[A2]"
+[ "$(calls)" = "ssh precheck" ] || fail "[A2] plist 不引用 jar 时不该传/装"
+ok "plist ProgramArguments 不引用 \$J ⇒ rc=3 plist-jar-mismatch"
+grep -q 'plutil -extract ProgramArguments xml1' "$STUB_DIR/precheck.stdin" || fail "[A2] 远端要用 xml1 取 ProgramArguments (json 会把 / 转义成 \\/, 字面 grep 恒 0)"
+ok "远端 plist 断言用 xml1 (json 转义会让读数恒 0)"
+
+# ═════════ B. launchd 标签不在 ⇒ 预检 rc=2, 零写入; kickstart rc≠0 ⇒ rc=1 ══════
+reset_stubs; PRE_LABEL='missing rc=113 Could not find service' precheck_out oldsha000 "$A_SHA" "" 200 20261101.34 695 none > "$STUB_DIR/precheck.out"
+run_it --confirm YES-TESTENV
+assert_rc 2 "[B1]"; assert_line "INSTRUMENT_DEAD reason=launchd-label-missing" "[B1]"; note_rc2
+assert_out "Could not find service" "[B1] launchctl 的 stderr 要贴出来"
+[ "$(calls)" = "ssh precheck" ] || fail "[B1] 标签不在时不该传/装, 实际: $(calls | tr '\n' ';')"
+grep -q 'lpid() { launchctl print "gui/$uid_/$L" 2>/dev/null' "$STUB_DIR/precheck.stdin" && fail "[B1] lpid 仍在吞 launchctl 的 stderr"
+ok "launchd 标签不在 ⇒ rc=2 launchd-label-missing, 零写入 (原来: pid 空 ⇒ 预检过 ⇒ 覆盖后才 rc=1)"
+reset_stubs; INST_KICK=1 install_out 200 101 "$B_SHA" 20261101.35 696 'kickstart_out=Could not find service' > "$STUB_DIR/install.out"
+run_it --confirm YES-TESTENV
+assert_rc 1 "[B2]"; assert_line "PROBLEM reason=kickstart-failed" "[B2]"; assert_out "Could not find service" "[B2]"
+ok "kickstart rc=1 ⇒ rc=1 kickstart-failed (kickstart_rc 打了就要判)"
+
+# ═════════ C. 200 必须与同一轮的新 pid 配对 ════════════════════════════════
+reset_stubs; INST_PAIRED=no install_out 200 101 "$B_SHA" 20261101.35 696 > "$STUB_DIR/install.out"
+run_it --confirm YES-TESTENV
+assert_rc 1 "[C1]"; assert_line "PROBLEM reason=health-not-paired-with-new-pid" "[C1]"
+ok "health=200 且事后 pid 变了但没配对 ⇒ rc=1 (原来这正是 REFRESHED 假绿)"
+
+# ── C-replay: 把生成的远端 install.sh 在假 launchctl/curl 下**真跑**一遍 ──────────
+# 竞态: 旧进程在第 1 轮答 200; pid 在第 1 次探测之后才翻成 101。
+# 正确的循环要到第 2 轮 (pid=101 且 200) 才收; 「只看 200」的循环第 1 轮就收了旧进程的 200。
+RB="$TMP/rbin"; RSTUB="$TMP/rstub"; RT="$TMP/remote/target"; mkdir -p "$RB" "$RSTUB" "$RT"
+for t in cp awk sed grep head tr wc cat cut mkdir rm mv sha256sum; do
+    abs=$(command -v "$t") || fail "本机缺 $t"; printf '#!/bin/sh\nexec %s "$@"\n' "$abs" > "$RB/$t"; chmod +x "$RB/$t"
+done
+printf '#!/bin/sh\nexit 0\n' > "$RB/sleep"; printf '#!/bin/sh\necho 501\n' > "$RB/id"; printf '#!/bin/sh\nexit 1\n' > "$RB/unzip"
+cat > "$RB/curl" <<'S'
+#!/bin/sh
+n=0; [ -f "$RSTUB/curl.calls" ] && n=$(cat "$RSTUB/curl.calls"); n=$((n+1)); echo "$n" > "$RSTUB/curl.calls"
+printf '200'
+S
+cat > "$RB/launchctl" <<'S'
+#!/bin/sh
+case "$1" in
+  print) n=0; [ -f "$RSTUB/curl.calls" ] && n=$(cat "$RSTUB/curl.calls")
+         if [ "$n" -ge 1 ]; then echo "	pid = 101"; else echo "	pid = 100"; fi ;;
+  kickstart) echo "kickstart $*" >> "$RSTUB/calls.log" ;;
+esac
+exit 0
+S
+cat > "$RB/plutil" <<'S'
+#!/bin/sh
+case "$*" in *DB_PASSWORD*) echo pw ;; *DB_NAME*) echo cretas_testenv ;; *DB_USERNAME*) exit 1 ;; *) echo "<string>$REPLAY_J</string>" ;; esac
+S
+printf '#!/bin/sh\necho "20261101.35|696|2026-09-06 15:53:37"\n' > "$RB/psql"
+chmod +x "$RB"/*
+export RSTUB
+# 先用假 ssh 桩跑一次主路径, 拿到**生成的** install.sh (它带着 EXPECT/PID_BEFORE/路径)。
+reset_stubs
+printf 'fake-jar-bytes-%s\n' "$B_SHA" > "$TMP/remote/tmp.jar"; cp "$JARDIR/release-jar.manifest" "$TMP/remote/tmp.jar.manifest"
+printf 'old-jar\n' > "$RT/cretas-backend-system-1.0.0.jar"
+RTB_REMOTE_TARGET_DIR="$RT" RTB_REMOTE_TMP="$TMP/remote/tmp.jar" RTB_REMOTE_PLIST="$TMP/remote/plist" RTB_REMOTE_PATH="$RB" \
+    run_it --confirm YES-TESTENV
+assert_rc 0 "[C-gen]"
+GEN="$STUB_DIR/install.stdin"; [ -s "$GEN" ] || fail "[C-replay] 没拿到生成的 install.sh"
+grep -q 'PID_BEFORE="100"' "$GEN" || fail "[C-replay] 生成的 install.sh 没带 PID_BEFORE"
+export REPLAY_J="$RT/cretas-backend-system-1.0.0.jar"
+rm -f "$RSTUB/curl.calls" "$RSTUB/calls.log"
+HOME="$TMP" RTB_STEP=install bash "$GEN" > "$TMP/replay.out" 2> "$TMP/replay.err"; rrc=$?
+echo "    replay rc=$rrc: $(grep -E '^(health_attempt|health_after|health_attempts|health_paired|pid_after|installed_sha256|install_done)=' "$TMP/replay.out" | tr '\n' ' ')"
+[ "$rrc" = 0 ] || fail "[C-replay] 生成脚本自己跑挂了: $(head -3 "$TMP/replay.err")"
+grep -q '^install_done=1$' "$TMP/replay.out" || fail "[C-replay] 没跑到 install_done"
+grep -q '^health_attempt=1 pid=100 code=200$' "$TMP/replay.out" || fail "[C-replay] 第 1 轮应是旧 pid=100 答 200 (竞态没构造出来)"
+grep -q '^health_paired=yes$' "$TMP/replay.out" || fail "[C-replay] 应在 pid 翻成 101 后配对成功"
+grep -q '^health_attempts=2$' "$TMP/replay.out" || fail "[C-replay] 应在第 2 轮才收 —— 第 1 轮那个 200 是旧进程的"
+grep -q '^pid_after=101$' "$TMP/replay.out" || fail "[C-replay] pid_after 应是 101"
+grep -q "^installed_sha256=$JAR_SHA$" "$TMP/replay.out" || fail "[C-replay] 覆盖后 sha 不对"
+grep -q 'kickstart -k gui/501/com.cretas.testenv.backend' "$RSTUB/calls.log" || fail "[C-replay] kickstart 没被调"
+ls "$RT"/cretas-backend-system-1.0.0.jar.bak.* >/dev/null 2>&1 || fail "[C-replay] 没有备份"
+[ "$(cat "$RT/cretas-backend-system-1.0.0.jar.manifest" | grep -c "build_commit=$B_SHA")" = 1 ] || fail "[C-replay] sidecar 没装上"
+ok "C-replay: 生成的 install.sh 真跑 —— 旧 pid 的 200 不收, 第 2 轮 pid=101 才配对; 备份/覆盖/sidecar/kickstart 都到位"
+
 # ═════════ 17. 只有 0 是绿: 每种非 0 判决都不含 REFRESHED ════════════════
 grep -E 'rc=[123]$' "$LEDGER" | grep -q 'REFRESHED' && fail "[17] 有非 0 的判决行写着 REFRESHED"
 grep -E 'rc=0$' "$LEDGER" | grep -qvE '^[^ ]+ (REFRESHED|DRY_RUN|ALREADY_CURRENT) ' && fail "[17] 有 rc=0 的判决行不是三种绿之一"
@@ -374,5 +479,5 @@ ok "台账里 rc 与判决词一一对应"
 N_RC2=$(printf '%s' "$RC2_REASONS" | wc -w | tr -d ' ')
 echo "READING: RC2_REASONS_CONSTRUCTED=$N_RC2 [${RC2_REASONS# }]"
 echo "READING: CASES=$PASSED"
-[ "$N_RC2" -ge 9 ] || fail "rc=2 原因只构造到 $N_RC2 种 (期望 ≥ 9) —— 三态的价值全在第三态"
+[ "$N_RC2" -ge 12 ] || fail "rc=2 原因只构造到 $N_RC2 种 (期望 ≥ 12) —— 三态的价值全在第三态"
 echo "PASS: test-refresh-testenv-backend.sh ($PASSED 组断言)"
