@@ -275,3 +275,11 @@
 - **测试环境验收 [RUN]**（后端刷到 main 后）：`SO-20260820-0001` PARTIAL_DELIVERED 5/4 → 对话框 5/4/1 → POST 200「订单已按短交结案」→ `SHORT_CLOSED`、`shortClosedQuantity=1.0`、`shortClosedBy=1556`、`version` 6→7；幂等重放不同 payload 200 且 version/reason 不变；阴性：`f006_admin` 同屏无按钮（observer 闸）、`f006_finance_mgr` GET 200 / POST 403 `meta.requiredPermissions=[{module:sales,action:read_write}]`（结构化对象，不是字面串）。
 - **OTA [RUN]**：`push-bundle.sh` 100s，`ts=1788680841522`，manifest 切换，CDN 200（6.7MB）；hbc 标记 `closeShortShipment`/`canShortCloseSalesOrder`/`sales-order-short-close-button` 0→1，对照 1，假串 0。真机复验 probe `PROBE-XIAOMI-SHORT-CLOSE-AFTER-OTA` 在跑（只看不点）。
 - **登记**：`Alert.alert` 在 react-native-web 是 no-op（全 App 既有形态，另票候选）；F006 测试环境只有 15 个活跃账号且每人一个模块通配，没有 `sales:read` 只读账号可做权限维度阴性（用财务 rw 替代）。
+
+
+## 2026-09-06 16:02 `PROBE-XIAOMI-SHORT-CLOSE-AFTER-OTA-20260906` 回报（只读，未点结案）
+
+- **OTA 送达 ✅**：15:50:19 Check（节流已过）→ CheckCompleteAvailable → DownloadComplete 1.2s → 点「立即更新」15:51:14 Restart → `Running "main"` → 再 Check → **CheckCompleteUnavailable**；设备 `launchAsset` 指向 `production/1788680841522/…index-7c6f5740….hbc`（全日志只有这一个 ts），`createdAt 07:48:48Z`（注册时刻，比目录 ts 晚 87s，自洽）。lsm004 会话跨重载存活。
+- **按钮 ✅**：`SO-20260902-0001`（部分发货 10kg/9.8）与 `SO-20260802-0001`（部分发货 102/100）详情页都有「短交结案」`android.widget.Button enabled=true`（同 dump 里状态 chip 是 `enabled=false`，证明 enabled 不是常量）；`SO-20260902-0002`（财务已批准）与 `SO-20260804-0001`（已完成）0 个节点，且节点数 86 vs 89（Δ3 = 按钮+文本+容器），屏是完整渲染的。两阴性在状态机两侧。
+- **仪器备注**：adb 不在 bash PATH（`%%LOCALAPPDATA%%/Android/Sdk/platform-tools/adb.exe`）；`uiautomator dump /sdcard/...` 在 Git Bash 下要 `MSYS_NO_PATHCONV=1`，否则路径被改写而命令仍 exit 0、pull 拿不到文件。
+- **附带疑点** → `BUG-SALES-ORDER-LIST-STATUS-TAB-DOES-NOT-REFILTER`：已完成 tab 后底部 5 条/¥4,926.92 而卡片未重筛，单点采样。
