@@ -1,4 +1,9 @@
 {
+  "hint": "Notice",
+  "confirmDelete": "Confirm Delete",
+  "deleteFailed": "Delete failed",
+  "uncategorized": "Uncategorized",
+  "pleaseSelect": "Please select",
   "cancel": "Cancel",
   "confirm": "Confirm",
   "buttons": {
