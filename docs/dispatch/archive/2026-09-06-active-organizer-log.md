@@ -387,3 +387,10 @@
 - **#674**（批 3，`probe-llm-registry` 两态→三态）organizer 自审可合 → 合并 `7d3b14de1b` → rsync `cron/`，md5 一致；NOT_SCHEDULED，接 crontab 另票。
 - **Line A**：#672 三条小改（R1–R3）尚未推（head 仍 `5611a5d7eb`），已提醒；#675（清单收敛第一刀：闸换轴到 L1 模块码 − 餐饮码 = 17，棘轮 29→27，删 `ai` 两处镜像）窄终审在跑；订正：`Alert.prompt` 全仓只剩 QIScan 一处且带守卫 ⇒ 无需单独 PR，②b 从 `AppDialogHost` 挂根 + 三个工人屏目录 codemod 开始（ux-flow gate），QIScan Android 分支换 `appPrompt` 同 PR。
 - **台账自身**：`ACTIVE.md` 触顶 20KB——「最后更新」行把历史全串在后面占 8KB，改为只保留最近三次；脚本重复插入两条已去重。
+
+## 2026-09-06 23:05 #675 / #678 / #679 合并；#679「挡」裁定
+
+- **#675 可合 → `44b09578a4`**：`ai` 在后端闸/菜单/RN/L1/L2 全 0，只剩两处镜像（角色权限对话框少一**行**）；餐饮剔除恰 6 码；轴（快照 − 餐饮）= 17 且与今日 prod L1 一致（23 码/488 行）；棘轮 27 只减；登记：快照与 prod 相等无 CI 闸（靠 gen 脚本刷新，exportedAt 每次打印）。
+- **#678 可合 → `ee9b45e22b`**：三目录 285 处归一化后多重集逐字相同；`AppDialog` 保 style/onPress；宿主栈按身份弹出、栈测试 CI 真跑；0 宿主时原生回退保参数；棘轮读真源码（files=983 total=1387 buckets=30，`screens/restaurant=51` 只 warn 未断言）；scope 63 屏 + 5 文件；jest 224/2320；rn-gate 无 tsc 步；19 文件留未用 `Alert` import。OTA 推送中（标记 `registeredDialogHostCount` 基线 0）。
+- **#679 可合 → `7b353c5065`**（裁定「挡」）：flock 分支 `exec 200<>`→`flock -n`→读 PID→`kill -0`→死则 `/proc` 扫 fd 200 点名→关 fd→`return 1`，全路径无 rm；竞态扫不到照拒；Windows PID 文件分支逐字未动；CI 59/59；变异回退复现旧读数。登记（Line C）：释放侧 EXIT trap 仍 `rm -f`——正常退出留活子进程时「挡」失效（WSL 实测 rc=0）+ TOCTOU 微秒窗口 ⇒ flock 模式释放只关 fd；`deploy_lock_holders` 每 fd 一次 readlink；注释两处不实。
+- **Line A 提醒三次**：#672 的 R1–R3 仍未推（队列消息似未被处理，已请 Steve 看窗口）。
