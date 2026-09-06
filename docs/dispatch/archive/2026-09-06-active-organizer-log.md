@@ -258,3 +258,9 @@
 - **#615 阳性对照 ✅**：销售看客户管理 6/6/0 显示名称非 ID；新建订单客户选择器 6 个全列；阴性对照退出后订单列表仍 14 条 / ¥102,684.20 未产生草稿。
 - **附带**：首页「功能模块」对 sales_manager 全空（截图 01/03）→ 开票 `BUG-HOME-MODULES-EMPTY-FOR-SALES`。截图 9 张 + logcat 原件在 scratchpad `PROBE-XIAOMI-OTA-*`。
 - **执行者中断**：权限矩阵与 validate 两个执行者被 Opus 403 掐断；权限矩阵在原树续作（已有端点 commit `5715510400`）；validate 原树是别人的旧分支（`codex/claude-rn-product-md` 109 脏文件，未动）⇒ 新树重开、复用 scratchpad 里的 schema dump/枚举脚本。
+
+
+## 2026-09-06 15:50 测试环境刷新 + #640 终审
+
+- **Mac mini 测试环境后端刷到 main [RUN]**：此前 jar 8-28（早于 #581 端点，#640 验收 POST 404 没量到）。mini 无 mvn、java 不在 PATH ⇒ 传本机发 42 可信 jar（`build_commit=ae86d1606f`，Java 与 origin/main 零差异，sha256 `6884df5d…` 两侧一致，直连 scp 158s）；备份 `…jar.bak.20260906T073511Z`，`launchctl kickstart`，30s 后 health 200，pid 54329；Flyway 在测试库打了 `_32/_33/_34`（15:35:16 同秒 success），两条 NOT VALID FK 在；`f006_sales_mgr` token 下 `close-short-shipment` 假 id 返回控制器 404 文案（路由存在），`/cancel` 对照同 404；java.err 0 ERROR。刷新流程已写进 memory。
+- **#640 终审可合**：RN `hasModulePermission` 读内置矩阵；prod L1 逐角色对照——sales_manager rw/rw 一致；viewer/cashier/运营 r ⇒ 隐藏+403 一致；dispatcher/restaurant_owner/super_admin 有权无按钮（允许方向，且导航器不注册该屏）；⚠️ `permission_admin` RN rw vs L1 `-`（存量漂移，屏不可达故不阻断）→ 开票。对话框字段 `quantity/deliveredQuantity` 与后端实体同名、缺口算法同式；`SHORT_CLOSED` 隐藏；错误 message+actionHint 经 `getErrorMsg` 到用户；按钮与 DRAFT 确认/取消同 actionBar；无新依赖，`closeShortShipment` 基线 0 命中可作 Hermes 标记；prod jar 08:53 已含路由串。审查者未验：真发 POST（正在测试环境量）、Alert 在 web 是 no-op、阴性对照用的 `f006_admin` 是 observer 闸不是权限闸（建议 viewer）。
