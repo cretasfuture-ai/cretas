@@ -184,3 +184,15 @@
 - 全量套件 6m40s 绿；12/2/2 + 4 个相关类在 CI 实际执行。
 - **发 40**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 06:26:25 < 启动 06:26:46、`shouldAnnounce` 1 / `UnsettlablePlans` 5 / 假串 0（合并前后 0→5 / 0→10）、health 200。⚠️ prod 今天该分支剔除 0 行（LSM 56 孤儿行全已结算），验收靠 F006 形状 fixture；F006 2 条 COMPLETED 计划上的未结算行会被浮出（WARN 一次）。
 - 执行者自伤记一笔：变异脚本开头 `git checkout -- <src>` 把**未提交**的节流实现回滚了，重做后改为先提交再变异。
+
+
+## 2026-09-06 08:05 `OPS-SOFT-DELETE-ORPHAN-WATCH-DEAD-20260906` 归档 — #627 合并 `3cdd6d441c`，47 上装机并手跑验证
+
+原条目：- `OPS-SOFT-DELETE-ORPHAN-WATCH-DEAD-20260906` — `in-progress` — Owner: executor（organizer 派） — 修 watcher（PATH/去吞错/凭证 `^(DB_|POSTGRES_)`/可区分 rc=2/provenance 替代 mtime），`.sql` 入库 + 手工对段登记两对，进 inventory + drift 规则 6 扩到 `scripts/cron/*`，并**主动构造 rc=2**。⛔ 不建投递渠道（另票）。服务器安装由 organizer 走 installer。🔒 运维。
+
+- **真因确认**（执行者订正 probe）：只改 PATH 即复活；`DB_PASSWORD`+`cretas_user` 在 prod 直接能连，`POSTGRES_PASSWORD` 反而连不上——brief 里「第二层凭证潜伏」不成立。用户名缺回落应用默认并标 `src=app-default`（终审核 pg_hba 无 trust，peer/md5 下错用户名只会认证失败，假 0 不可达）。
+- **三轮终审**：① `.sql` 入库两份 ⇒ 加离线重放比对闸（剔 provenance 与 MANUAL_SECTION；变异加 `@ManyToOne` 62→63 红 / 删快照拒绝 / 去标记红）；② `scripts/tests/*` 0/22 无 CI ⇒ 新 `ops-script-tests.yml`，第一次跑 48 个 12 红（1 条本 PR 自伤：`hasdel.txt` 入库未登记，已登记；11 条存量烂测试）⇒ 棘轮 `known-failing.txt`：不在名单红 / 在名单 rc=0 红「FIXED 请删」/ 文件不存在红 / 无理由红，退出码开放集合只测 `-eq 0`；CI 变异 A 删一行 `NEW_FAILURE`(33998380030)、B 加绿测试 `FIXED`(33998506319)；③ FLAKY 第四态出口：双向 run id（rc=0 与 rc≠0 各一、不得相同）+ 14 天过期，CI 变异 C 过期红(33999698318)、D 同 id 红(33999745657)；④ 快照 vs prod 对账：watch 线上读快照头的 `capture-sql` 原句重查，≠ ⇒ `rc=2 reason=hasdel-snapshot-stale`，prod 实测 A 同步 rc=1 `hasdel-in-sync tables=384`、B 强制去一张表 ⇒ rc=2 `only-live=[accounts]`。连带：快照必须装到服务器 ⇒ 安装 3 文件。
+- **装机 [RUN]**：deploy worktree detach 到 origin/main `3cdd6d441c`，dry-run 与 PR 预期逐字一致（2 `REFUSED_DRIFT` + 1 `WOULD_INSTALL_NEW`）；`--accept-overwrite-drift --confirm YES-INSTALL` 三次，旧版备份 `*.bak.20260905T2357*Z`；自证 `MATCH=5 DRIFTED=0 MISSING_ON_SERVER=0`（`MISSING_IN_REPO=6` 是安装前就有的未登记服务器文件：backup-db.sh 等，非本次）；md5 仓库/服务器 3/3 相同；crontab 行与 inventory REMOTE_PATH 逐字相同未改。
+- **手跑 [RUN]**：rc=1，台账 35→38 行：`INFO provenance-unknown sql-commit=f4fe4ea17f81`（分支 SHA 被 squash 抹掉，INFO 非告警，登记）/ `INFO hasdel-in-sync tables=384` / `ORPHANS_FOUND db=cretas_prod_db user=cretas_user(src=app-default) pw=DB_PASSWORD`。告警文件本次：`semi_finished_stocktake_items→semi_finished_stocktakes 3262` / `process_sheet_rows.plan_id→production_plans 56` / `report_reversal_logs.plan_id 10`。
+- **未做**：告警投递渠道（`OPS-CRON-ALERT-FILES-HAVE-NO-CONSUMER`）；两个日志表对显式不登记；11 条存量红测试另票 `OPS-SCRIPT-TESTS-11-LEGACY-RED`（5 疑似真回归 / 5 疑似环境 / 1 未分类 `test-release-pipeline-acceleration`）；`m67_demo_seed.sql` 等不动。
+- 执行者自伤两笔：本地绿是因为在 `git add` 前跑（`git ls-files` 看不见未跟踪文件）；受限 PATH 缺 `sort`/`comm` 时症状不是报错而是「快照陈旧」这个像样的结论——每个工具逐个证明可用而不是信清单。
