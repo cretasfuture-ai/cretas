@@ -18,7 +18,6 @@
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-ACTION="$ROOT_DIR/.github/actions/merge-pr-base/action.yml"
 GATE="$ROOT_DIR/.github/workflows/java-gate-pr.yml"
 NIGHTLY="$ROOT_DIR/.github/workflows/java-full-nightly.yml"
 TMP=$(mktemp -d)
@@ -27,17 +26,20 @@ PASSED=0
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { PASSED=$((PASSED + 1)); echo "  ok  [$PASSED] $*"; }
 
-[ -s "$ACTION" ] || fail "$ACTION 不存在"
+[ -s "$GATE" ] || fail "$GATE 不存在"
 
 # ---------------------------------------------------------------------------
 # A. 行为: 抽出 action 里的 run: 脚本, 真跑
 # ---------------------------------------------------------------------------
 SCRIPT="$TMP/merge-step.sh"
-python - "$ACTION" "$SCRIPT" <<'PY'
+python - "$GATE" "$SCRIPT" <<'PY'
 import sys, textwrap
 src, dst = sys.argv[1], sys.argv[2]
 lines = open(src, encoding="utf-8").read().splitlines()
-i = next(k for k, l in enumerate(lines) if l.strip() == "run: |")
+# 定位到「Merge PR base into head」那一步的 run 块 —— 文件里还有别的 run: |,
+# ⛔ 不能取第一个(那会抽到别的步骤, 而且抽错了照样"能跑", 属于最难查的那种)。
+step = next(k for k, l in enumerate(lines) if "name: Merge PR base into head" in l)
+i = next(k for k in range(step, len(lines)) if lines[k].strip() == "run: |")
 indent = len(lines[i]) - len(lines[i].lstrip())
 body = []
 for l in lines[i + 1:]:
@@ -49,7 +51,7 @@ assert "git merge" in text, "抽出来的不是那段 merge 脚本"
 open(dst, "w", encoding="utf-8", newline="\n").write(text)
 print(f"READING: EXTRACTED_LINES={len(body)}")
 PY
-[ -s "$SCRIPT" ] || fail "没能从 action.yml 抽出 run 脚本"
+[ -s "$SCRIPT" ] || fail "没能从 workflow 里抽出那段内联 merge 脚本"
 
 # 临时仓库: base 上有一个「违规」文件, head 上没有 —— 这正是「分支自己绿 / 合起来红」的形状。
 FIX="$TMP/repo"
@@ -130,29 +132,65 @@ cd "$ROOT_DIR"
 # ---------------------------------------------------------------------------
 # B. 结构: 三处 pin 都要配上 merge action + fetch-depth: 0
 # ---------------------------------------------------------------------------
-PINS=$(grep -c 'pull_request\.head\.sha' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
-CALLS=$(grep -c 'merge-pr-base' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
-DEPTH=$(grep -c 'fetch-depth: 0' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
-echo "READING: HEAD_SHA_PINS=$PINS MERGE_ACTION_CALLS=$CALLS FETCH_DEPTH0=$DEPTH (三者必须相等且为 3)"
+# ⚠️ 必须**锚到结构行**: 内联之后, `pull_request.head.sha` 还会出现在 env 的 HEAD_SHA 行和
+#    注释里(实测把 3 数成 9) —— 又是「闸把自己的文本数进去」。只数 checkout 的 `ref:` 那一行。
+PINS=$(grep -cE '^[[:space:]]*ref:.*pull_request\.head\.sha' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
+CALLS=$(grep -c 'name: Merge PR base into head' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
+DEPTH=$(grep -cE '^[[:space:]]*fetch-depth: 0[[:space:]]*$' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
+echo "READING: HEAD_SHA_PINS=$PINS INLINE_MERGE_STEPS=$CALLS FETCH_DEPTH0=$DEPTH (三者必须相等且为 3)"
+
+# 🔴 回归闸(2026-09-07 P0): ⛔ 这一步不许再写成本地 composite action。
+#    pull_request 下 workflow 定义从 base 读, 而 `uses: ./…` 的 action 从**工作区**读, 而工作区
+#    checkout 的是 PR **head** ⇒ head 不含那个目录的 PR(旧分支)这一步必死 9 秒红, 且长得像
+#    「CI 没测出问题」。实测炸掉了当时所有在飞 PR 的 Java 闸。
+# ⚠️ 先剥整行注释再查 —— 本文件与 workflow 的说明文字里都写着这个字符串(闸把自己的注释数进去, 又一次)。
+LOCAL_ACTION_REFS=$(sed -E 's/^[[:space:]]*#.*$//' "$GATE" "$NIGHTLY" \
+    | grep -cE 'uses:[[:space:]]*\./\.github/actions/' || true)
+echo "READING: LOCAL_COMPOSITE_ACTION_REFS=$LOCAL_ACTION_REFS (必须 0)"
+[ "$LOCAL_ACTION_REFS" -eq 0 ] \
+    || fail "B: 又出现了 \`uses: ./.github/actions/…\` —— head 不含该目录的 PR 会 9 秒红(P0 回归)"
 [ "$PINS" -eq 3 ] || fail "B: 预期 3 处 pin head.sha, 实得 $PINS —— 新增的那处也要配 merge action"
 [ "$CALLS" -eq "$PINS" ] \
-    || fail "B: pin 了 $PINS 处但只有 $CALLS 处调 merge-pr-base ⇒ 有闸仍然跑在 PR 分支自己上"
+    || fail "B: pin 了 $PINS 处但只有 $CALLS 处内联了 merge 步骤 ⇒ 有闸仍然跑在 PR 分支自己上"
 [ "$DEPTH" -eq "$PINS" ] \
     || fail "B: pin 了 $PINS 处但只有 $DEPTH 处 fetch-depth: 0 ⇒ 浅克隆合不了 base"
-ok "三处 pin 各自配齐 merge action 与 fetch-depth: 0"
+ok "三处 pin 各自配齐内联 merge 步骤与 fetch-depth: 0"
+
+# 内联的代价是**三份会漂**(形态 D)。这条闸是那个代价的对价: 三段 run 体必须逐字相同。
+python - "$GATE" "$NIGHTLY" <<'PY' || fail "B: 三处内联的 run 体不完全相同 —— 它们会各自漂走"
+import sys, textwrap
+bodies = []
+for path in sys.argv[1:]:
+    lines = open(path, encoding="utf-8").read().splitlines()
+    for k, l in enumerate(lines):
+        if "name: Merge PR base into head" not in l:
+            continue
+        i = next(j for j in range(k, len(lines)) if lines[j].strip() == "run: |")
+        ind = len(lines[i]) - len(lines[i].lstrip())
+        body = []
+        for m in lines[i + 1:]:
+            if m.strip() and (len(m) - len(m.lstrip())) <= ind:
+                break
+            body.append(m)
+        bodies.append(textwrap.dedent("\n".join(body)).rstrip())
+print(f"READING: INLINE_BODIES={len(bodies)} identical={len(set(bodies)) == 1}")
+sys.exit(0 if len(bodies) == 3 and len(set(bodies)) == 1 else 1)
+PY
+ok "三处内联的 run 体逐字相同"
 
 # ⛔ 不许写死 main: base 不是 main 的 PR 会被合错树。
-grep -qE "base\.sha" "$ACTION" || fail "B: action 没有用 pull_request.base.sha"
+grep -qE "base\.sha" "$GATE" || fail "B: 内联步骤没有用 pull_request.base.sha"
 # ⚠️ 先剥注释再 grep: 注释里本来就会提到 main。原先写的是 `grep -n … | grep -v '^\s*#'`,
 #    而 `grep -n` 的输出带 "12:" 前缀 ⇒ `^\s*#` 永远匹配不上, 那个过滤器等于没有
 #    (本仓反复踩的「闸把自己的注释数进去」同款, 只是方向相反)。
-if sed 's/#.*//' "$ACTION" | grep -qE "origin/main|refs/heads/main|'main'|\"main\""; then
+if sed -n '/name: Merge PR base into head/,/^      - /p' "$GATE" | sed 's/#.*//' \
+     | grep -qE "origin/main|refs/heads/main|'main'|\"main\""; then
     fail "B: action 里出现写死的 main —— base 不是 main 的 PR 会合错树"
 fi
 ok "合的是 pull_request.base.sha, 没有写死 main"
 
 # 非 pull_request 事件必须整步跳过, 否则 schedule 跑批会去合一个不存在的 base。
-grep -q "github.event_name == 'pull_request'" "$ACTION" \
+grep -q "github.event_name == 'pull_request'" "$GATE" \
     || fail "B: action 缺 pull_request 守卫 —— schedule / dispatch 会合一个不存在的 base"
 ok "非 pull_request 事件整步跳过"
 
