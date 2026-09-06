@@ -72,19 +72,19 @@ public class WorkerAllocationFeedback extends BaseEntity {
     /**
      * 分配时的上下文特征 (JSON数组)
      */
-    @Column(name = "context_features", columnDefinition = "JSON", nullable = false)
+    @Column(name = "context_features", columnDefinition = "jsonb", nullable = false)
     private String contextFeatures;
 
     /**
      * 任务特征 (JSON)
      */
-    @Column(name = "task_features", columnDefinition = "JSON")
+    @Column(name = "task_features", columnDefinition = "jsonb")
     private String taskFeatures;
 
     /**
      * 工人特征 (JSON)
      */
-    @Column(name = "worker_features", columnDefinition = "JSON")
+    @Column(name = "worker_features", columnDefinition = "jsonb")
     private String workerFeatures;
 
     /**
@@ -183,7 +183,7 @@ public class WorkerAllocationFeedback extends BaseEntity {
      * 记录同一任务的所有参与工人，用于个人效率分解
      * 格式: [1, 2, 3, 4, 5]
      */
-    @Column(name = "team_composition", columnDefinition = "JSON")
+    @Column(name = "team_composition", columnDefinition = "jsonb")
     private String teamComposition;
 
     // ==================== 辅助方法 ====================

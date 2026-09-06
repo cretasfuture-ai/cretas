@@ -61,7 +61,7 @@ public class FactoryHomeLayout extends BaseEntity {
      *   ]
      * }
      */
-    @Column(name = "modules_config", columnDefinition = "JSON", nullable = false)
+    @Column(name = "modules_config", columnDefinition = "jsonb", nullable = false)
     private String modulesConfig;
 
     /**
@@ -74,7 +74,7 @@ public class FactoryHomeLayout extends BaseEntity {
      *   "cardRadius": 8
      * }
      */
-    @Column(name = "theme_config", columnDefinition = "JSON")
+    @Column(name = "theme_config", columnDefinition = "jsonb")
     private String themeConfig;
 
     /**
@@ -131,19 +131,19 @@ public class FactoryHomeLayout extends BaseEntity {
     /**
      * 早间布局 (6-12点) JSON
      */
-    @Column(name = "morning_layout", columnDefinition = "JSON")
+    @Column(name = "morning_layout", columnDefinition = "jsonb")
     private String morningLayout;
 
     /**
      * 午间布局 (12-18点) JSON
      */
-    @Column(name = "afternoon_layout", columnDefinition = "JSON")
+    @Column(name = "afternoon_layout", columnDefinition = "jsonb")
     private String afternoonLayout;
 
     /**
      * 晚间布局 (18-24点) JSON
      */
-    @Column(name = "evening_layout", columnDefinition = "JSON")
+    @Column(name = "evening_layout", columnDefinition = "jsonb")
     private String eveningLayout;
 
     // ==================== 行为学习 ====================
@@ -156,7 +156,7 @@ public class FactoryHomeLayout extends BaseEntity {
      *   "lastUpdated": "2026-01-14T10:30:00"
      * }
      */
-    @Column(name = "usage_stats", columnDefinition = "JSON")
+    @Column(name = "usage_stats", columnDefinition = "jsonb")
     private String usageStats;
 
     /**

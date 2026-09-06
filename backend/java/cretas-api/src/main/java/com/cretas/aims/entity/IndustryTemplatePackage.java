@@ -62,7 +62,7 @@ public class IndustryTemplatePackage extends BaseEntity {
      *   "PRODUCTION_BATCH": { "properties": { ... } }
      * }
      */
-    @Column(name = "templates_json", columnDefinition = "JSON")
+    @Column(name = "templates_json", columnDefinition = "jsonb")
     private String templatesJson;
 
     /**

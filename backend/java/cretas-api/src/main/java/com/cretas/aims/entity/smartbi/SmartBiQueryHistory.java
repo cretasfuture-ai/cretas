@@ -73,14 +73,14 @@ public class SmartBiQueryHistory extends BaseEntity {
      * Extracted parameters JSON
      * Structure: { "timeRange": "last_month", "department": "sales", ... }
      */
-    @Column(name = "parameters", columnDefinition = "JSON")
+    @Column(name = "parameters", columnDefinition = "jsonb")
     private String parameters;
 
     /**
      * Conversation context JSON
      * Structure: { "previousQueries": [...], "filters": {...} }
      */
-    @Column(name = "context", columnDefinition = "JSON")
+    @Column(name = "context", columnDefinition = "jsonb")
     private String context;
 
     /**
@@ -93,7 +93,7 @@ public class SmartBiQueryHistory extends BaseEntity {
      * Generated chart config if any
      * Structure: { "type": "line", "data": {...}, "options": {...} }
      */
-    @Column(name = "chart_config", columnDefinition = "JSON")
+    @Column(name = "chart_config", columnDefinition = "jsonb")
     private String chartConfig;
 
     /**

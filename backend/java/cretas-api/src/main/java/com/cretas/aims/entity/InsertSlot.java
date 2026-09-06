@@ -67,7 +67,7 @@ public class InsertSlot extends BaseEntity {
      * 受影响的计划列表 (JSON格式)
      * 格式: [{"planId": "xxx", "delayMinutes": 30}, ...]
      */
-    @Column(name = "impacted_plans", columnDefinition = "JSON")
+    @Column(name = "impacted_plans", columnDefinition = "jsonb")
     private String impactedPlans;
 
     /**

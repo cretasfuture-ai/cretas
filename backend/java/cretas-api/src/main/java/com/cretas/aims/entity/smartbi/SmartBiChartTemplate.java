@@ -91,7 +91,7 @@ public class SmartBiChartTemplate extends BaseEntity {
      * 适用的指标代码列表（JSON 数组格式）
      * 如：["sales_amount", "order_count", "avg_order_value"]
      */
-    @Column(name = "applicable_metrics", columnDefinition = "JSON")
+    @Column(name = "applicable_metrics", columnDefinition = "jsonb")
     private String applicableMetrics;
 
     /**
@@ -99,7 +99,7 @@ public class SmartBiChartTemplate extends BaseEntity {
      * 包含 ECharts 或其他图表库的配置项
      * 如：{"title": {"show": true}, "legend": {"position": "bottom"}}
      */
-    @Column(name = "chart_options", columnDefinition = "JSON")
+    @Column(name = "chart_options", columnDefinition = "jsonb")
     private String chartOptions;
 
     /**
@@ -107,7 +107,7 @@ public class SmartBiChartTemplate extends BaseEntity {
      * 定义数据字段与图表维度的映射关系
      * 如：{"xAxis": "date", "yAxis": "value", "series": "category"}
      */
-    @Column(name = "data_mapping", columnDefinition = "JSON")
+    @Column(name = "data_mapping", columnDefinition = "jsonb")
     private String dataMapping;
 
     /**
@@ -115,7 +115,7 @@ public class SmartBiChartTemplate extends BaseEntity {
      * 定义图表在仪表板中的位置和大小
      * 如：{"width": 6, "height": 4, "minWidth": 3, "minHeight": 2}
      */
-    @Column(name = "layout_config", columnDefinition = "JSON")
+    @Column(name = "layout_config", columnDefinition = "jsonb")
     private String layoutConfig;
 
     /**

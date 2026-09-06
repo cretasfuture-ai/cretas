@@ -105,7 +105,7 @@ public class SmartBiFieldDefinition extends BaseEntity {
      * Compatible chart types for this field (JSON array)
      * Example: ["line", "bar", "pie", "kpi_card"]
      */
-    @Column(name = "chart_types", columnDefinition = "JSON")
+    @Column(name = "chart_types", columnDefinition = "jsonb")
     private String chartTypes;
 
     /**

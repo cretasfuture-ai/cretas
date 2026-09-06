@@ -70,7 +70,7 @@ public class ToolEmbedding {
      * 关键词列表 (用于快速过滤)
      * 存储为 JSON 数组
      */
-    @Column(name = "keywords", columnDefinition = "json")
+    @Column(name = "keywords", columnDefinition = "jsonb")
     @Convert(converter = StringListConverter.class)
     private List<String> keywords;
 

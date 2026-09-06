@@ -74,15 +74,15 @@ public class SampleCluster {
     @Column(name = "dominant_intent_ratio", precision = 5, scale = 4)
     private BigDecimal dominantIntentRatio;
 
-    @Column(name = "intent_distribution", columnDefinition = "JSON")
+    @Column(name = "intent_distribution", columnDefinition = "jsonb")
     private String intentDistribution;
 
     // ==================== Keyword Analysis ====================
 
-    @Column(name = "common_keywords", columnDefinition = "JSON")
+    @Column(name = "common_keywords", columnDefinition = "jsonb")
     private String commonKeywords;
 
-    @Column(name = "suggested_keywords", columnDefinition = "JSON")
+    @Column(name = "suggested_keywords", columnDefinition = "jsonb")
     private String suggestedKeywords;
 
     // ==================== Status ====================

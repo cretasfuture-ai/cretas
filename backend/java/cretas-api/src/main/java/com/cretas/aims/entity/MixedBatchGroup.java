@@ -82,7 +82,7 @@ public class MixedBatchGroup extends BaseEntity {
     /**
      * 合并的订单ID列表 (JSON数组)
      */
-    @Column(name = "order_ids", columnDefinition = "JSON", nullable = false)
+    @Column(name = "order_ids", columnDefinition = "jsonb", nullable = false)
     private String orderIds;
 
     /**

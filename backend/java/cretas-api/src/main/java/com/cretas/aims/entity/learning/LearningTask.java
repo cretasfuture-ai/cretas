@@ -78,10 +78,10 @@ public class LearningTask {
 
     // ==================== Task Parameters & Result ====================
 
-    @Column(name = "parameters", columnDefinition = "JSON")
+    @Column(name = "parameters", columnDefinition = "jsonb")
     private String parameters;
 
-    @Column(name = "result", columnDefinition = "JSON")
+    @Column(name = "result", columnDefinition = "jsonb")
     private String result;
 
     @Column(name = "error_message", columnDefinition = "TEXT")

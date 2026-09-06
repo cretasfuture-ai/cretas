@@ -113,7 +113,7 @@ public class MixedBatchRule extends BaseEntity {
      * 通知配置 (JSON)
      * 配置谁在什么情况下收到通知
      */
-    @Column(name = "notification_config", columnDefinition = "JSON")
+    @Column(name = "notification_config", columnDefinition = "jsonb")
     private String notificationConfig;
 
     /**

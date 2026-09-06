@@ -43,7 +43,7 @@ public class ToolCallCache {
     @Column(name = "parameters_hash", length = 64, nullable = false)
     private String parametersHash;
 
-    @Column(name = "cached_result", columnDefinition = "JSON")
+    @Column(name = "cached_result", columnDefinition = "jsonb")
     private String cachedResult;
 
     @Column(name = "original_call_id", nullable = false)

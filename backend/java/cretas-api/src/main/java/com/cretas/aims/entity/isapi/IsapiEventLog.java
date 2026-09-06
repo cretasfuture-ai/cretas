@@ -67,10 +67,10 @@ public class IsapiEventLog {
 
     // ==================== 事件详情 ====================
 
-    @Column(name = "event_data", columnDefinition = "JSON")
+    @Column(name = "event_data", columnDefinition = "jsonb")
     private String eventDataJson;
 
-    @Column(name = "detection_region", columnDefinition = "JSON")
+    @Column(name = "detection_region", columnDefinition = "jsonb")
     private String detectionRegionJson;
 
     // ==================== 图片证据 ====================

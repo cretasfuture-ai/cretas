@@ -382,7 +382,7 @@ public class ProductionPlan extends BaseEntity {
      * 混批关联订单 (JSON格式)
      * 格式: ["ORD-001", "ORD-002", "ORD-003"]
      */
-    @Column(name = "related_orders", columnDefinition = "JSON")
+    @Column(name = "related_orders", columnDefinition = "jsonb")
     private String relatedOrders;
 
     // ==================== 紧急状态监控字段 ====================

@@ -323,7 +323,7 @@ public class ProductionBatch extends BaseEntity {
      * 已完成拍照的环节列表 (JSON数组)
      * 格式: ["RECEIVING", "SLICING", "PACKAGING"]
      */
-    @Column(name = "photo_completed_stages", columnDefinition = "JSON")
+    @Column(name = "photo_completed_stages", columnDefinition = "jsonb")
     private String photoCompletedStages;
 
     // ==================== AI Onboarding: Custom Fields ====================

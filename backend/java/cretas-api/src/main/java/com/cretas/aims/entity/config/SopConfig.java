@@ -127,7 +127,7 @@ public class SopConfig extends BaseEntity {
      *   ...
      * ]
      */
-    @Column(name = "steps_json", columnDefinition = "JSON")
+    @Column(name = "steps_json", columnDefinition = "jsonb")
     private String stepsJson;
 
     /**
@@ -139,7 +139,7 @@ public class SopConfig extends BaseEntity {
      *   "crossStep": ["rule-check-temp-chain"]
      * }
      */
-    @Column(name = "validation_rules_json", columnDefinition = "JSON")
+    @Column(name = "validation_rules_json", columnDefinition = "jsonb")
     private String validationRulesJson;
 
     // ==================== Sprint 2 S2-4: 拍照证据配置 ====================
@@ -154,7 +154,7 @@ public class SopConfig extends BaseEntity {
      *   "maxPhotosPerStage": 5
      * }
      */
-    @Column(name = "photo_config_json", columnDefinition = "JSON")
+    @Column(name = "photo_config_json", columnDefinition = "jsonb")
     private String photoConfigJson;
 
     // ==================== 版本与状态 ====================

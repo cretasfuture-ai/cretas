@@ -40,7 +40,7 @@ import java.util.UUID;
 public class ProductionInterimSettlement extends BaseEntity {
 
     @Id
-    @Column(name = "id", nullable = false, length = 191)
+    @Column(name = "id", nullable = false, length = 191, columnDefinition = "uuid")
     private String id;
 
     @Column(name = "factory_id", nullable = false, length = 50)

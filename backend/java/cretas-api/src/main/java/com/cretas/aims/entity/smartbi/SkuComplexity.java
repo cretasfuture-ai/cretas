@@ -110,7 +110,7 @@ public class SkuComplexity extends BaseEntity {
      *   "estimatedMinutes": 45
      * }
      */
-    @Column(name = "analysis_detail_json", columnDefinition = "JSON")
+    @Column(name = "analysis_detail_json", columnDefinition = "jsonb")
     private String analysisDetailJson;
 
     /**

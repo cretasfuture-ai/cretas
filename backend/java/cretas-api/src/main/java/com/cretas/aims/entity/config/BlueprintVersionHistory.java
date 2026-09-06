@@ -62,13 +62,13 @@ public class BlueprintVersionHistory extends BaseEntity {
     /**
      * 版本快照 (完整蓝图数据JSON)
      */
-    @Column(name = "snapshot_data", columnDefinition = "JSON")
+    @Column(name = "snapshot_data", columnDefinition = "jsonb")
     private String snapshotData;
 
     /**
      * 变更内容摘要 (与上一版本的差异)
      */
-    @Column(name = "change_summary", columnDefinition = "JSON")
+    @Column(name = "change_summary", columnDefinition = "jsonb")
     private String changeSummary;
 
     /**

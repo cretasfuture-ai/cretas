@@ -104,28 +104,28 @@ public class ProductType extends BaseEntity {
      * Processing steps as JSON array
      * Format: [{"stageType": "SLICING", "orderIndex": 1, "requiredSkillLevel": 3, "estimatedMinutes": 30}, ...]
      */
-    @Column(name = "processing_steps", columnDefinition = "JSON")
+    @Column(name = "processing_steps", columnDefinition = "jsonb")
     private String processingSteps;
 
     /**
      * Skill requirements as JSON object
      * Format: {"minLevel": 2, "preferredLevel": 4, "specialSkills": ["knife_handling"]}
      */
-    @Column(name = "skill_requirements", columnDefinition = "JSON")
+    @Column(name = "skill_requirements", columnDefinition = "jsonb")
     private String skillRequirements;
 
     /**
      * Required equipment IDs as JSON array
      * Format: ["EQ-001", "EQ-002"]
      */
-    @Column(name = "equipment_ids", columnDefinition = "JSON")
+    @Column(name = "equipment_ids", columnDefinition = "jsonb")
     private String equipmentIds;
 
     /**
      * Associated quality check item IDs as JSON array
      * Format: ["QC-001", "QC-002"]
      */
-    @Column(name = "quality_check_ids", columnDefinition = "JSON")
+    @Column(name = "quality_check_ids", columnDefinition = "jsonb")
     private String qualityCheckIds;
 
     /**

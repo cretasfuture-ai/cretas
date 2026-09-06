@@ -128,7 +128,7 @@ public class IsapiDevice extends BaseEntity {
     @Builder.Default
     private Boolean supportsSmart = false;
 
-    @Column(name = "device_capabilities", columnDefinition = "JSON")
+    @Column(name = "device_capabilities", columnDefinition = "jsonb")
     private String deviceCapabilitiesJson;
 
     // ==================== 状态信息 ====================
@@ -153,7 +153,7 @@ public class IsapiDevice extends BaseEntity {
     @Builder.Default
     private Boolean alertSubscribed = false;
 
-    @Column(name = "subscribed_events", columnDefinition = "JSON")
+    @Column(name = "subscribed_events", columnDefinition = "jsonb")
     private String subscribedEventsJson;
 
     // ==================== 位置信息 ====================

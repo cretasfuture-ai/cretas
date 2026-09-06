@@ -126,13 +126,13 @@ public class IntentMatchRecord extends BaseEntity {
     /**
      * Top-N候选意图列表 [{intentCode, confidence, matchScore}]
      */
-    @Column(name = "top_candidates", columnDefinition = "JSON")
+    @Column(name = "top_candidates", columnDefinition = "jsonb")
     private String topCandidates;
 
     /**
      * 匹配到的关键词列表
      */
-    @Column(name = "matched_keywords", columnDefinition = "JSON")
+    @Column(name = "matched_keywords", columnDefinition = "jsonb")
     private String matchedKeywords;
 
     // ==================== 信号判断 ====================

@@ -93,7 +93,7 @@ public class Factory extends BaseEntity {
     private Integer factoryYear;
     @Column(name = "industry_code")
     private String industryCode;
-    @Column(name = "inference_data", columnDefinition = "json")
+    @Column(name = "inference_data", columnDefinition = "jsonb")
     private String inferenceData;
     @Column(name = "legacy_id")
     private String legacyId;

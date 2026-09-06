@@ -101,7 +101,7 @@ public class User extends BaseEntity {
     @Column(name = "contract_end_date")
     private LocalDate contractEndDate;  // 合同到期日（临时工）
 
-    @Column(name = "skill_levels", columnDefinition = "JSON")
+    @Column(name = "skill_levels", columnDefinition = "jsonb")
     private String skillLevels;  // 技能等级 JSON: {"切片": 3, "质检": 2}
 
     @Column(name = "hourly_rate", precision = 10, scale = 2)

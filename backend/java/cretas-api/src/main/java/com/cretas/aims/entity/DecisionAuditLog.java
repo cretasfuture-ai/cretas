@@ -47,13 +47,13 @@ public class DecisionAuditLog {
     private String factoryId;
 
     // 决策上下文 (JSON字段)
-    @Column(name = "input_context", columnDefinition = "JSON")
+    @Column(name = "input_context", columnDefinition = "jsonb")
     private String inputContext;
 
-    @Column(name = "output_result", columnDefinition = "JSON")
+    @Column(name = "output_result", columnDefinition = "jsonb")
     private String outputResult;
 
-    @Column(name = "rules_applied", columnDefinition = "JSON")
+    @Column(name = "rules_applied", columnDefinition = "jsonb")
     private String rulesApplied;
 
     // 规则版本追踪
@@ -124,7 +124,7 @@ public class DecisionAuditLog {
     @Builder.Default
     private Boolean isReplayable = true;
 
-    @Column(name = "replay_data", columnDefinition = "JSON")
+    @Column(name = "replay_data", columnDefinition = "jsonb")
     private String replayData;
 
     @Column(name = "checksum", length = 64)

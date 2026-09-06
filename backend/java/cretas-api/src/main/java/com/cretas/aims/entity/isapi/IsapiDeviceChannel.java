@@ -101,7 +101,7 @@ public class IsapiDeviceChannel extends BaseEntity {
     @Builder.Default
     private Boolean smartEnabled = false;
 
-    @Column(name = "enabled_events", columnDefinition = "JSON")
+    @Column(name = "enabled_events", columnDefinition = "jsonb")
     private String enabledEventsJson;
 
     // ==================== 枚举定义 ====================

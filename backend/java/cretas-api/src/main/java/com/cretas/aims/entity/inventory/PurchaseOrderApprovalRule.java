@@ -41,7 +41,7 @@ import java.util.UUID;
 public class PurchaseOrderApprovalRule extends BaseEntity {
 
     @Id
-    @Column(name = "id", nullable = false, length = 36)
+    @Column(name = "id", nullable = false, length = 36, columnDefinition = "uuid")
     private String id;
 
     @PrePersist

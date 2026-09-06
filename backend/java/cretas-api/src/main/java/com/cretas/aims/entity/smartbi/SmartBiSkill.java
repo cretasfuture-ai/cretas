@@ -73,21 +73,21 @@ public class SmartBiSkill extends BaseEntity {
      * Trigger phrases/patterns that activate this skill (JSON array)
      * Example: ["show sales trend", "how are sales doing", "sales performance"]
      */
-    @Column(name = "triggers", columnDefinition = "JSON")
+    @Column(name = "triggers", columnDefinition = "jsonb")
     private String triggers;
 
     /**
      * Tools this skill can use (JSON array)
      * Example: ["query_database", "generate_chart", "calculate_metrics"]
      */
-    @Column(name = "tools", columnDefinition = "JSON")
+    @Column(name = "tools", columnDefinition = "jsonb")
     private String tools;
 
     /**
      * Context data needed for this skill (JSON array)
      * Example: ["timeRange", "productCategory", "region"]
      */
-    @Column(name = "context_needed", columnDefinition = "JSON")
+    @Column(name = "context_needed", columnDefinition = "jsonb")
     private String contextNeeded;
 
     /**
@@ -107,7 +107,7 @@ public class SmartBiSkill extends BaseEntity {
      *   "cacheTimeout": 3600
      * }
      */
-    @Column(name = "config", columnDefinition = "JSON")
+    @Column(name = "config", columnDefinition = "jsonb")
     private String config;
 
     /**

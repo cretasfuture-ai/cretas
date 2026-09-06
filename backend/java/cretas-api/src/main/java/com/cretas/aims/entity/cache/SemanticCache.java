@@ -89,14 +89,14 @@ public class SemanticCache extends BaseEntity {
      * 意图识别完整结果 (JSON)
      * 包含 IntentMatchResult 的序列化数据
      */
-    @Column(name = "intent_result", columnDefinition = "JSON")
+    @Column(name = "intent_result", columnDefinition = "jsonb")
     private String intentResult;
 
     /**
      * 意图执行结果 (JSON)
      * 包含 IntentExecuteResponse 的序列化数据
      */
-    @Column(name = "execution_result", columnDefinition = "JSON")
+    @Column(name = "execution_result", columnDefinition = "jsonb")
     private String executionResult;
 
     /**

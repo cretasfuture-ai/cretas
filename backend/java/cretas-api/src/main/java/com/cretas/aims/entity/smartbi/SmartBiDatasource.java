@@ -93,7 +93,7 @@ public class SmartBiDatasource extends BaseEntity {
      * - API: { "url": "...", "headers": {...}, "auth": {...} }
      * - DB: { "host": "...", "port": 3306, "database": "...", "table": "..." }
      */
-    @Column(name = "connection_config", columnDefinition = "JSON")
+    @Column(name = "connection_config", columnDefinition = "jsonb")
     private String connectionConfig;
 
     /**
