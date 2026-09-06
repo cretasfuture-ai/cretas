@@ -21,8 +21,20 @@ import java.util.Map;
  *
  * <p><b>措辞按侧边栏定, 不按谁先写</b>: 5 处冲突里侧边栏 (`menuConfig.ts` 的顶层 `title`)
  * 逐条站在 {@code moduleLabel} 一边。所以本表逐字采用 {@code moduleLabel} 的措辞 ⇒
- * 403 文案<b>一个字都不变</b> ({@code PermissionModuleCatalogRefactorIsLosslessTest} 钉住),
- * 变的只有角色权限页那 5 个标签, 而且是<b>向用户已经在看的那份靠拢</b>。
+ * 那 17 个既有 case 的 403 文案<b>逐字不变</b>, 变的只有角色权限页那 5 个标签,
+ * 而且是<b>向用户已经在看的那份靠拢</b>。
+ *
+ * <h3>🔴 有<b>一处</b> 403 文案确实变了, 登记在此</h3>
+ * {@code operations} 在原来那个 switch 里<b>没有 case</b>, 走 {@code default: return moduleCode}
+ * ⇒ 403 body 里印的是 {@code [operations] 模块}。本表给了它中文名, 于是变成 {@code [运营协调] 模块}。
+ * 它<b>不是死码</b>: {@code CustomerMaterialArrivalNoticeController} 有 3 处
+ * {@code @RequirePermission({"operations:…"})} (:39/:49/:61), 这些 403 是活的。
+ *
+ * <p>⚠️ 这一处最初被我漏报成「一个字都没变」, 而漏报的成因有普遍性:
+ * 钉住旧措辞的那张表<b>是从旧 switch 的 case 抄来的</b>, 所以它覆盖的恰好是
+ * <b>不会变</b>的那些码 —— 对「原本走 default、现在有名字了」的码<b>按构造是盲的</b>。
+ * ⇒ {@code PermissionModuleCatalogTest.catalogCodesAreEitherPinnedOrRegistered} 把这个洞补上:
+ * 本表的码集必须恰好等于「17 个既有 case ∪ 显式登记的新增」, 加码不登记就红。
  *
  * <h3>⛔ 这里不是「第 N 份模块清单」</h3>
  * 本表<b>不决定</b>哪些模块存在 —— 那由 L1 {@code platform_role_permissions} ∪ 硬编码兜底 ∪ L2

@@ -35,7 +35,9 @@ public class RoleController {
     // 2026-09-07 刀 D: 这里原本是一份写死 11 条的 DISPLAY_MODULES (code → 中文名), 与
     // web-admin/src/views/system/roles/list.vue 的 allPermissionModules 逐字重复 (形态 D)。
     // 两份都已删除:
-    //   · 列 = 三层现算 (permissionService.resolveRoleModuleLevels), ⛔ 不再有第二份清单;
+    //   · 列 = permissionService.knownModuleAxis() 现算 (L1 出现过的 ∪ 硬编码声明的),
+    //     与角色无关的稳定轴 ⇒ 每个角色列数一致, ⛔ 不再有第二份清单;
+    //   · 值 = permissionService.resolveRoleModuleLevels(factoryId, role) 三层现算;
     //   · 中文名 = PermissionModuleCatalog (全仓唯一一份), ⛔ 不在这里再写一遍;
     //   · 列序 = PermissionModuleCatalog.columnOrder (侧边栏顺序)。
 
@@ -55,8 +57,8 @@ public class RoleController {
      *
      * <p><b>2026-09-07 刀 D 之前这里是错的</b>: 它读
      * {@code permissionService.getRolePermissions(role)} —— 那个方法<b>只读硬编码兜底矩阵</b>,
-     * 一格 L1 都不查, 而 L1 才是权威。实测 30 个角色 × 11 个模块的 294 格里 <b>31 格</b>
-     * 与 L1 不一致 (例: {@code permission_admin} 11 格全是「页面说 rw / L1 说 -」;
+     * 一格 L1 都不查, 而 L1 才是权威。实测 30 个角色 × 11 个模块的 294 格里 <b>30 格</b>
+     * 与 L1 不一致 (例: {@code permission_admin} 10 格全是「页面说 rw / L1 说 -」;
      * {@code quality_controller} 的 production/quality/warehouse 页面说「无权限」而 L1 给了 r/rw/r)。
      * 现在走 {@link PermissionService#resolveRoleModuleLevels} —— 与
      * {@code @RequirePermission} 实际执行的是同一条链。
@@ -134,18 +136,27 @@ public class RoleController {
         // ⛔ 不再走 getRolePermissions(role): 那个方法只读硬编码兜底矩阵, 一格 L1 都不查。
         Map<String, String> levels = permissionService.resolveRoleModuleLevels(factoryId, role);
 
+        // 超管的 "*" 通配键: 它不是一个模块, 不进表格 —— 但它是「没单独列出的模块也是 rw」的意思,
+        // 所以要当作轴上其余格的取值。⛔ 漏了它会让超管的表格出现一堆 '-', 而 hasPermission 说 true。
+        String wildcard = levels.get(PermissionServiceImpl.MODULE_LEVEL_WILDCARD);
+        String absent = wildcard != null ? wildcard : "-";
+
         List<Map<String, Object>> result = new ArrayList<>();
-        levels.entrySet().stream()
-                // 超管的 "*" 通配键是给 RN 端判「任何模块都 rw」用的, 它不是一个模块, 不进表格。
-                .filter(e -> !PermissionServiceImpl.MODULE_LEVEL_WILDCARD.equals(e.getKey()))
+        permissionService.knownModuleAxis().stream()
+                // Steve 2026-09-06「餐饮不管」: 餐饮码不进这张工厂角色表 —— 与刀 D 之前的 11 列一致
+                // (那份也没有餐饮列), 所以这不是新增的隐藏, 是保持原状。⛔ 别在这里顺手把它们放出来:
+                // 实测轴上有 6 个餐饮码, 放出来会让 29 个角色里 26 个多出「餐饮管理」等列。
+                .filter(module -> !module.startsWith("restaurant"))
                 .sorted(Comparator
-                        .comparingInt((Map.Entry<String, String> e) -> PermissionModuleCatalog.columnOrder(e.getKey()))
-                        .thenComparing(Map.Entry::getKey))
-                .forEach(e -> {
+                        .comparingInt(PermissionModuleCatalog::columnOrder)
+                        .thenComparing(module -> module))
+                .forEach(module -> {
                     Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("module", e.getKey());
-                    row.put("label", PermissionModuleCatalog.label(e.getKey()));
-                    row.put("access", e.getValue());
+                    row.put("module", module);
+                    row.put("label", PermissionModuleCatalog.label(module));
+                    // 轴上有而该角色三层都没登记 ⇒ 有效值就是 '-' (checkAction(null,…) 恒 false),
+                    // 这是可被 hasPermission 证伪的真实读数, ⛔ 不是兜底默认值。
+                    row.put("access", levels.getOrDefault(module, absent));
                     result.add(row);
                 });
 

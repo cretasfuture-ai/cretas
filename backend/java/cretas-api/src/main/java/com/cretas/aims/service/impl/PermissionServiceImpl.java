@@ -595,6 +595,25 @@ public class PermissionServiceImpl implements PermissionService {
     }
 
     @Override
+    public List<String> knownModuleAxis() {
+        Set<String> axis = new TreeSet<>(ALL_MODULES);
+        if (platformRepo != null) {
+            try {
+                for (PlatformRolePermission row : platformRepo.findByDeletedAtIsNull()) {
+                    if (row.getModuleCode() != null) {
+                        axis.add(row.getModuleCode());
+                    }
+                }
+            } catch (Exception e) {
+                // ⛔ 不吞成「轴就是硬编码那份」就完事: 读数少了一截而调用方看不出来。
+                //    实践上硬编码 ALL_MODULES 是 L1 非餐饮码的超集, 所以结果通常不变 —— 但那是实测, 不是保证。
+                log.warn("L1 模块轴读取失败, 退回只用硬编码清单 (轴可能少了 L1 独有的码): {}", e.getMessage());
+            }
+        }
+        return List.copyOf(axis);
+    }
+
+    @Override
     public Map<String, String> resolveRoleModuleLevels(String factoryId, FactoryUserRole role) {
         if (role == null || role == FactoryUserRole.unactivated) {
             return Collections.emptyMap();

@@ -153,7 +153,7 @@ public interface PermissionService {
      * <p>用途: 「角色管理 → 查看权限」页 ({@code RoleController})。它此前读的是
      * {@link #getRolePermissions(FactoryUserRole)} —— 那个方法<b>只读硬编码兜底矩阵,
      * 一格 L1 都不查</b>, 所以页面显示的不是系统实际在执行的权限。2026-09-07 实测:
-     * 30 个角色 × 11 个模块共 294 格里 <b>31 格</b>与 L1 不一致 (含 permission_admin 11 格
+     * 30 个角色 × 11 个模块共 294 格里 <b>30 格</b>与 L1 不一致 (含 permission_admin 10 格
      * 全是「页面说 rw / L1 说 -」)。
      *
      * @param factoryId L2 工厂覆盖所属工厂; null = 无工厂上下文, 从 L1 起算
@@ -161,4 +161,23 @@ public interface PermissionService {
      * @return module → rw|r|w|-; 超管额外带一个 {@code "*"} 键; 永不为 null
      */
     Map<String, String> resolveRoleModuleLevels(String factoryId, FactoryUserRole role);
+
+    /**
+     * 系统已知的模块码全集 = L1 {@code platform_role_permissions} 里出现过的 ∪ 硬编码兜底声明的。
+     *
+     * <p>用途: 给「角色 × 模块」这类表格提供一条<b>与角色无关的稳定列轴</b>。
+     * {@link #resolveRoleModuleLevels} 返回的是<b>某个角色</b>登记过的模块, 逐角色不同 ——
+     * 拿它直接当列会让每个角色的表格列数都不一样 (实测 3 ~ 23 列), 而且
+     * 「这个角色没有这一行」与「这个模块不存在」在页面上分不开。
+     *
+     * <p>⚠️ 轴上有而该角色没有登记的格, 有效值就是 {@code -}: 三层全没命中时
+     * {@code resolveEffectiveLevel} 返回 null, {@code checkAction(null, …)} 一律 false。
+     * ⛔ 这不是兜底默认值, 是可以被 {@code hasPermission} 证伪的真实读数。
+     *
+     * <p>L1 读失败时退回「只有硬编码那份」并记 WARN。实践上不改变结果 ——
+     * 硬编码 {@code ALL_MODULES} 是 L1 非餐饮码的超集 —— 但这一点是<b>实测</b>而非设计保证。
+     *
+     * @return 模块码, 字典序; 永不为空 (至少是硬编码那份)
+     */
+    List<String> knownModuleAxis();
 }

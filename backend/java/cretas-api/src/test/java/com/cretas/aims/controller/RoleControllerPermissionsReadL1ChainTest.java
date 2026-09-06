@@ -40,7 +40,9 @@ import static org.mockito.Mockito.when;
  *
  * <p>改之前的实测 (临时探针, 已删; 表在 PR #715 body 里): 拿 {@code getRolePermissions} 的
  * 结果与仓里的 L1 快照 {@code permissionMatrix.l1Snapshot.json} 逐格比,
- * 30 个角色 × 11 个模块共 294 格里 <b>31 格</b>不一致, 另有 6 个 L1 模块页面上根本没有列。
+ * 30 个角色 × 11 个模块共 294 格里 <b>30 格</b>不一致, 另有 6 个 L1 模块页面上根本没有列。
+ * ⚠️ 口径: 30 是按 <b>prod 今天</b>的 L1 数的。仓里那份 2026-09-06 快照不含 #699 的
+ * {@code V20261101_37}(permission_admin × system 提到 rw), 按快照数出来是 31 —— 同一件事两把尺子。
  * 要复现: 按同样口径比一次 —— ⛔ 别用 {@code FactoryUserRole.fromRoleCode} 做角色映射,
  * 它对未知码静默返回 {@code unactivated}, 会把「枚举里没有这个角色」变成一个真读数。
  */
@@ -64,7 +66,15 @@ class RoleControllerPermissionsReadL1ChainTest {
         return levels;
     }
 
+    /**
+     * 假的列轴。含一个餐饮码 (必须被滤掉) 与一个该角色没登记的码 {@code finance} (必须渲染成 '-')。
+     * ⛔ 不用真实的 17 个码: 那会让「轴来自 knownModuleAxis」与「轴恰好是那 17 个」分不开。
+     */
+    private static final List<String> AXIS = List.of(
+            "dashboard", "production", "quality", "finance", "work_report", "operations", "restaurant");
+
     private RoleController controller() {
+        when(permissionService.knownModuleAxis()).thenReturn(AXIS);
         when(permissionService.resolveRoleModuleLevels(eq(FACTORY), any())).thenReturn(chainLevels());
         // 兜底那条路故意给一组不同的答案: 实现若改回读它, 下面每条断言都会红
         when(permissionService.getRolePermissions(any()))
@@ -78,17 +88,38 @@ class RoleControllerPermissionsReadL1ChainTest {
     }
 
     @Test
-    @DisplayName("列 = 三层链返回的模块集, ⛔ 不是任何一份写死清单")
-    void columnsComeFromTheChain() {
+    @DisplayName("列 = knownModuleAxis (与角色无关的稳定轴), ⛔ 不是任何一份写死清单")
+    void columnsComeFromTheAxis() {
         List<Map<String, Object>> rows = rows(controller().getRolePermissions(FACTORY, "quality_controller"));
 
         assertThat(rows.stream().map(r -> r.get("module")))
-                .as("列必须逐一来自 resolveRoleModuleLevels")
-                .containsExactlyInAnyOrder("dashboard", "production", "quality", "work_report", "operations");
+                .as("列必须逐一来自 knownModuleAxis (餐饮码除外)")
+                .containsExactlyInAnyOrder("dashboard", "production", "quality", "finance", "work_report", "operations");
         assertThat(rows.stream().map(r -> (String) r.get("module")))
-                .as("旧 DISPLAY_MODULES 独有的列不该凭空出现")
-                .doesNotContain("equipment", "sales", "hr", "finance");
+                .as("轴里没有的码不该凭空出现 —— 旧 DISPLAY_MODULES 独有的那些正是这一类")
+                .doesNotContain("equipment", "sales", "hr", "system", "report");
         verify(permissionService, never()).getRolePermissions(any());
+    }
+
+    @Test
+    @DisplayName("轴上有而该角色三层都没登记 ⇒ '-' (真实有效值, 不是兜底默认)")
+    void modulesTheRoleNeverRegisteredRenderAsDash() {
+        Map<String, Object> finance = rows(controller().getRolePermissions(FACTORY, "quality_controller"))
+                .stream().filter(r -> "finance".equals(r.get("module"))).findFirst().orElseThrow();
+        assertThat(finance.get("access"))
+                .as("finance 不在假的三层链里 ⇒ resolveEffectiveLevel 返回 null ⇒ checkAction 恒 false ⇒ '-'")
+                .isEqualTo("-");
+    }
+
+    @Test
+    @DisplayName("餐饮码不进这张工厂角色表 (Steve「餐饮不管」, 与刀 D 之前的 11 列一致)")
+    void restaurantCodesAreFilteredOut() {
+        List<Map<String, Object>> rows = rows(controller().getRolePermissions(FACTORY, "quality_controller"));
+        assertThat(rows.stream().map(r -> (String) r.get("module")))
+                .as("轴里确实有 restaurant (见 AXIS), 它被滤掉了 —— 这条不是恒真式")
+                .doesNotContain("restaurant");
+        assertThat(AXIS).as("阳性对照: 轴里本来就有餐饮码, 否则上面那条什么都没检查")
+                .contains("restaurant");
     }
 
     @Test
@@ -109,10 +140,11 @@ class RoleControllerPermissionsReadL1ChainTest {
     }
 
     @Test
-    @DisplayName("超管的 \"*\" 通配键不是模块, 不进表格")
-    void wildcardKeyIsNotAColumn() {
+    @DisplayName("超管的 \"*\" 通配键: 不当列, 但要当作「没单独列出的模块」的取值")
+    void wildcardIsNotAColumnButIsTheDefaultForTheRest() {
         Map<String, String> withWildcard = new LinkedHashMap<>(chainLevels());
         withWildcard.put(PermissionServiceImpl.MODULE_LEVEL_WILDCARD, "rw");
+        when(permissionService.knownModuleAxis()).thenReturn(AXIS);
         when(permissionService.resolveRoleModuleLevels(eq(FACTORY), any())).thenReturn(withWildcard);
 
         List<Map<String, Object>> rows =
@@ -120,6 +152,14 @@ class RoleControllerPermissionsReadL1ChainTest {
         assertThat(rows.stream().map(r -> r.get("module")))
                 .doesNotContain(PermissionServiceImpl.MODULE_LEVEL_WILDCARD);
         assertThat(rows).as("过滤通配键不能把整张表滤空").isNotEmpty();
+
+        Map<String, Object> finance = rows.stream()
+                .filter(r -> "finance".equals(r.get("module"))).findFirst().orElseThrow();
+        assertThat(finance.get("access"))
+                .as("🔴 finance 没在超管的 map 里单独列出, 但 \"*\"=rw 说「任何模块都 rw」。"
+                        + "这里若是 '-', 页面就会说超管没有 finance 权限, 而 hasPermission 说有 —— "
+                        + "正是刀 D 要消灭的那种「页面与执行不一致」")
+                .isEqualTo("rw");
     }
 
     @Test
@@ -146,22 +186,23 @@ class RoleControllerPermissionsReadL1ChainTest {
     @Test
     @DisplayName("中文名与列序来自 PermissionModuleCatalog (侧边栏顺序), 未登记的码排最后且原样显示")
     void labelsAndOrderComeFromTheCatalog() {
-        Map<String, String> withUnknown = new LinkedHashMap<>(chainLevels());
-        withUnknown.put("module_nobody_registered", "r");
-        when(permissionService.resolveRoleModuleLevels(eq(FACTORY), any())).thenReturn(withUnknown);
+        List<String> axisWithUnknown = new java.util.ArrayList<>(AXIS);
+        axisWithUnknown.add("module_nobody_registered");
+        when(permissionService.knownModuleAxis()).thenReturn(axisWithUnknown);
+        when(permissionService.resolveRoleModuleLevels(eq(FACTORY), any())).thenReturn(chainLevels());
 
         List<Map<String, Object>> rows =
                 rows(new RoleController(permissionService).getRolePermissions(FACTORY, "quality_controller"));
 
         assertThat(rows.stream().map(r -> (String) r.get("module")).toList())
-                .as("侧边栏顺序: 首页 → 生产 → 质量 → …; 未登记的排最后")
-                .containsExactly("dashboard", "production", "quality", "work_report", "operations",
+                .as("侧边栏顺序: 首页 → 生产 → 质量 → 财务 → …; catalog 里没登记的排最后")
+                .containsExactly("dashboard", "production", "quality", "finance", "work_report", "operations",
                         "module_nobody_registered");
         assertThat(rows.get(0).get("label")).isEqualTo("首页");
         assertThat(rows.get(2).get("label"))
                 .as("质量管理 —— 刀 D 前这里写的是「质检管理」, 而侧边栏一直叫「质量管理」")
                 .isEqualTo("质量管理");
-        assertThat(rows.get(5).get("label"))
+        assertThat(rows.get(6).get("label"))
                 .as("没有中文名的码原样显示, ⛔ 不编造")
                 .isEqualTo("module_nobody_registered");
     }

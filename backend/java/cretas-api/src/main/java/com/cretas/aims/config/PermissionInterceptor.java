@@ -193,8 +193,13 @@ public class PermissionInterceptor implements HandlerInterceptor {
      * 2026-09-07 刀 D: 这里原本是一份 17 条的私有 switch —— 全仓第三份模块中文名表, 且与
      * {@code RoleController.DISPLAY_MODULES} 在 5 个码上已经漂了。措辞逐字搬进
      * {@link PermissionModuleCatalog} (它采用的正是本方法的措辞, 因为 5 处冲突里侧边栏
-     * 逐条站在这一边) ⇒ <b>本方法的返回值一个字都没变</b>,
-     * {@code PermissionModuleCatalogRefactorIsLosslessTest} 逐码钉住。
+     * 逐条站在这一边) ⇒ <b>那 17 个 case 的返回值逐字不变</b>,
+     * {@code PermissionModuleCatalogTest} 逐码钉住。
+     *
+     * <p>🔴 有一处<b>变了</b>: {@code operations} 原本没有 case、走 {@code default} 返回码本身,
+     * 现在有中文名 ⇒ 那 3 个活的 {@code operations:*} 403 从 {@code [operations] 模块}
+     * 变成 {@code [运营协调] 模块}。这是有意的, 登记在 catalog 的 javadoc 与
+     * {@code CODES_NEWLY_LABELLED_BY_CUT_D} 里。
      */
     private String moduleLabel(String moduleCode) {
         return PermissionModuleCatalog.label(moduleCode);

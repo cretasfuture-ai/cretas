@@ -124,6 +124,12 @@ const LISTS: ModuleList[] = [
  * ⚠️ 它必须能红: 下面 `判据自身的阳性对照` 拿一段合成源码喂给同一个函数, 证明
  * 「返回空数组」是真的没有, ⛔ 不是我读错了文件或正则失效 (形态 A: 截断把「没有」
  * 变成「我没看到」)。
+ *
+ * 🔴 **它守的是那两个名字, 不是「不许手工维护清单」这个性质** —— 换个变量名或换个文件
+ * 就绕过去了。⛔ 别在 PR 说明里把它说大。真正与名字无关的兜底在另一头:
+ * `RoleControllerPermissionsReadL1ChainTest` 的 `verify(never()).getRolePermissions(any())`
+ * 加上那组「假的三层链故意返回与旧清单不同的模块集」—— 任何一份写死清单只要真的
+ * 被用来出列, 那里就红, 不管它叫什么名字。本条是**便宜的第一道**, 不是唯一一道。
  */
 function hardcodedModuleListSignals(javaSrc: string, vueSrc: string): string[] {
   const found: string[] = [];
