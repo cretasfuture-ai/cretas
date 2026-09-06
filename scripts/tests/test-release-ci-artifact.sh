@@ -239,22 +239,37 @@ fi
 contains "$CI_SCRIPT" 'not_attested'
 contains "$CI_SCRIPT" 'not_trusted'
 
-# ---- ci.yml 的 push paths 必须覆盖【整个】 backend_tree 路径 ----
-# 需要成立的不变量: 「那棵树变了 ⟺ CI 被触发」。paths 比 RELEASE_BACKEND_PATH 窄, 就会有
+# ---- 制品工作流的 push paths 必须覆盖【整个】 backend_tree 路径 ----
+# 需要成立的不变量: 「那棵树变了 ⟺ 打包被触发」。paths 比 RELEASE_BACKEND_PATH 窄, 就会有
 # 一类 commit 改变了 backend_tree 却没有对应制品 —— 那个 commit 上永远取不到匹配制品,
 # 发布只能回退本地构建。实测这个洞命中过 13% 的 backend commit(全是纯测试改动)。
 #
-# 而且不只是效率: 制品的 vouching 是「ci.yml 在打包之前跑过那组测试」, 测试源就在这棵树里。
+# 而且不只是效率: 制品的 vouching 是「打包之前跑过那组测试」, 测试源就在这棵树里。
 # 测试改了却复用旧制品 = 拿旧测试的结论给新测试背书。
-CI_YML="$ROOT_DIR/.github/workflows/ci.yml"
-[ -f "$CI_YML" ] || fail "找不到 ci.yml"
+#
+# ⚠️ 2026-08-27 commit e0f7a6dbcb35 (#175) 把打包/上传从 ci.yml 搬到了
+# java-artifact.yml(ci.yml 那个 job 被一个 push 路径上用不到的 postgres 服务容器
+# 困在托管 runner 上), ci.yml 从此**连 push 触发都没有**。旧断言钉死 ci.yml, 于是
+# 它守的其实是一个空文件。⇒ 这里改成**反查制品的产出方**并断言全仓恰好一份
+# (⛔ 两份就是形态 D), 下次再搬家断言自动跟过去。
+ARTIFACT_NAME_LITERAL='name: cretas-java-${{ github.sha }}'
+artifact_owners=$(grep -Fl -- "$ARTIFACT_NAME_LITERAL" "$ROOT_DIR"/.github/workflows/*.yml 2>/dev/null | LC_ALL=C sort || true)
+artifact_owner_count=$(printf '%s' "$artifact_owners" | grep -c . || true)
+[ "$artifact_owner_count" = "1" ] \
+    || fail "恰好应有 1 个 workflow 上传 '$ARTIFACT_NAME_LITERAL', 实际 $artifact_owner_count 个: $(printf '%s' "$artifact_owners" | tr '\n' ' ')"
+CI_YML="$artifact_owners"
+echo "ARTIFACT_WORKFLOW=$(basename "$CI_YML")"
+# 阴性对照: 这个不变量要成立, 那个 workflow 必须真的有 push 触发 —— 否则
+# 「paths 覆盖了」是在一个根本不会被 push 触发的文件上量的, 恒真。
+grep -qE '^[[:space:]]*push:' "$CI_YML" \
+    || fail "$(basename "$CI_YML") 没有 push 触发 —— 「树变了⟺触发」这条不变量无从谈起"
 # shellcheck source=scripts/deploy/release-jar-manifest.sh
 backend_path=$(sed -n 's/^RELEASE_BACKEND_PATH="\(.*\)"$/\1/p' \
     "$ROOT_DIR/scripts/deploy/release-jar-manifest.sh" | head -1)
 [ -n "$backend_path" ] || fail "取不到 RELEASE_BACKEND_PATH"
 # ⚠️ 必须 `--`: 模式以 '-' 开头, 否则 grep 当成选项报 "unknown option"(踩过)。
 grep -Fq -- "- '$backend_path/**'" "$CI_YML" \
-    || fail "ci.yml 的 push paths 未覆盖整个 $backend_path/** —— 存在改树却不触发 CI 的 commit"
+    || fail "$(basename "$CI_YML") 的 push paths 未覆盖整个 $backend_path/** —— 存在改树却不触发打包的 commit"
 
 # ---- --prefer-ci-artifact 默认开, 且必须有一个显式关闭出口 ----
 # 2026-07-31 Steve 拍板翻成默认开: 默认关的时候整条 CI 制品链路对日常发布形同不存在
@@ -271,9 +286,12 @@ contains "$RELEASE_SCRIPT" 'export CRETAS_RELEASE_PREFER_CI_ARTIFACT=0'
 contains "$RELEASE_SCRIPT" 'export CRETAS_RELEASE_PREFER_CI_ARTIFACT=1'
 
 # 反向: 仍然不许把 web-admin 塞进来。on.push.paths 是 workflow 级的, 加进来会让
-# java-build-test 被纯前端改动触发, 白跑 4~5 分钟(web 有自己的 web-dist.yml)。
+# 打包被纯前端改动触发, 白跑 4~5 分钟(web 有自己的 web-dist.yml)。
+# ⚠️ 这条以前也钉在 ci.yml 上 —— 而 ci.yml 早就没有 push paths 了, 所以它是一条
+#    **恒真**的阴性对照(形态 B′: 无论谁改了什么它都不会红)。跟着上面一起挪到
+#    真正带 push paths 的那个 workflow 上, 它才重新有守的东西。
 if grep -Eq "^[[:space:]]*-[[:space:]]*'?web-admin/" "$CI_YML"; then
-    fail "web-admin 被加进了 ci.yml 的 push paths —— 会触发无意义的 Java 构建"
+    fail "web-admin 被加进了 $(basename "$CI_YML") 的 push paths —— 会触发无意义的 Java 构建"
 fi
 
 echo "PASS: test-release-ci-artifact.sh"
