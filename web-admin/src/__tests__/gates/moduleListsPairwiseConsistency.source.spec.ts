@@ -232,6 +232,45 @@ describe('module lists converge to L1 (ratchet, source-scan)', () => {
     ).toEqual([]);
   });
 
+  /**
+   * 刀 D 视觉验收 (2026-09-07) 抓到的缺陷类: 角色权限页把 `restaurantFinance` 这种
+   * **英文驼峰码**直接渲染在中文标签旁边给用户看。成因是 `PermissionModuleCatalog` 的
+   * 「查不到就原样返回码」兜底 —— 那个兜底方向是对的 (⛔ 不编造)，但它意味着
+   * **只要轴上出现一个没登记中文名的码，用户就会看到裸码**。
+   *
+   * ⇒ 这道闸守的是「轴上每个码都有中文名」。它放在这里而不是 Java 侧, 因为轴的两个来源
+   * (L1 快照 / Java `ALL_MODULES`) 本闸已经都读着了, ⛔ 不需要再造一条跨包读取。
+   *
+   * ⚠️ 代理性: 它按 `m.put("code", "label")` 的字面量读 catalog。catalog 改成运行时拼装
+   * 就会读到 0 条 —— 所以下面先断言读到的条数不低于地板 (打空 ≠ 一致)。
+   */
+  it('轴上每个模块码都必须有中文名 —— 否则用户会看到英文裸码', () => {
+    const catalogSrc = stripComments(read(resolve(JAVA, 'permission/PermissionModuleCatalog.java')));
+    const labelled = new Map(
+      [...catalogSrc.matchAll(/m\.put\("([A-Za-z_][A-Za-z0-9_]*)"\s*,\s*"([^"]+)"\)/g)]
+        .map((m) => [m[1], m[2]] as const),
+    );
+    expect(labelled.size, 'INSTRUMENT DEAD — 没从 PermissionModuleCatalog 读到 put 字面量')
+      .toBeGreaterThanOrEqual(LIST_SIZE_FLOOR);
+
+    // 轴 = 后端 knownModuleAxis 的同口径 (L1 出现过的 ∪ 兜底声明的), 减去餐饮码 ——
+    // 餐饮码被 RoleController 过滤掉、也不出现在任何 @RequirePermission 里, 见 PR #715。
+    const javaAll = javaAllModules().modules;
+    const axis = [...new Set([...L1_ALL, ...javaAll])].filter((m) => !isRestaurantCode(m)).sort();
+    expect(axis.length, 'INSTRUMENT DEAD — 轴读到空').toBeGreaterThanOrEqual(LIST_SIZE_FLOOR);
+
+    const naked = axis.filter((m) => !labelled.has(m));
+    expect(
+      naked,
+      `这些码会在角色权限页上以英文原样显示给中文用户: ${naked.join(' ')}。`
+        + '给它们在 PermissionModuleCatalog 补中文名 (措辞取 menuConfig.ts 的顶层 title), '
+        + '并按 CODES_NEWLY_LABELLED_BY_CUT_D 的纪律登记「哪处文案因此变了」。',
+    ).toEqual([]);
+
+    // 判据自身的阳性对照: 拿一个确定不在 catalog 里的码, 证明上面那条真会挑出东西
+    expect(labelled.has('module_nobody_registered')).toBe(false);
+  });
+
   it('判据自身的阳性对照: 清单真长回来时上面那条会红', () => {
     const fakeJava = 'static { DISPLAY_MODULES.put("production", "生产管理"); }';
     const fakeVue = "const allPermissionModules = [{ key: 'production', label: '生产管理' }];";

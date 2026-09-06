@@ -64,7 +64,9 @@ function routeGet(permissions: unknown) {
  */
 const STUBS = {
   'router-link': { template: '<a><slot /></a>' },
-  'el-card': { template: '<div><slot /></div>' },
+  // ⚠️ 必须渲染具名 header 插槽: 只写 <slot /> 会把卡片头整段吞掉, 于是「徽标不见了」
+  //    与「徽标写错了」在断言里长得一模一样 —— 那是桩的故障, 不是产品的。
+  'el-card': { template: '<div><header><slot name="header" /></header><slot /></div>' },
   'el-tooltip': { template: '<div><slot /></div>' },
   'el-text': { template: '<span><slot /></span>' },
   'el-tag': { template: '<span class="el-tag"><slot /></span>' },
@@ -144,6 +146,18 @@ describe('角色权限弹窗的三态', () => {
     expect(html).toContain('role-permissions-error');
     expect(html, 'fool-proof Rule 5: 不留死路, 要有下一步').toContain('重试');
     expect(html, '必须说清「不代表没有权限」').toContain('这不代表该角色没有权限');
+  });
+
+  it('⑤ 角色数徽标必须与实际渲染的行数一致 (它此前写死「共 14 种」而表里有 17 行)', async () => {
+    routeGet({ success: true, data: BACKEND_ROWS });
+    const wrapper = mount(RolesList, { global: { stubs: STUBS } });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { roles: unknown[] };
+
+    // 阳性对照: 真实条数不是 14 —— 否则「写死 14」与「算出来」在页面上一模一样,
+    // 这条断言就分不出它俩 (那正是这个缺陷藏了这么久的原因)。
+    expect(vm.roles.length, '角色条数恰好是 14 时这条断言无法区分写死与现算').not.toBe(14);
+    expect(wrapper.html()).toContain(`共 ${vm.roles.length} 种工厂角色`);
   });
 
   it('④ 编辑弹窗里没有权限编辑器 (它此前提交给一个不存在的端点)', async () => {

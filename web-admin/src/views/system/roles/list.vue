@@ -324,7 +324,11 @@ onMounted(loadRoleUserCounts);
       <template #header>
         <div class="card-header">
           <span>角色权限</span>
-          <el-tag type="info">共 14 种工厂角色</el-tag>
+          <!-- 2026-09-07: 这里原本写死「共 14 种工厂角色」, 而下面那张表实际渲染 17 行 ——
+               页面上一个可以直接数出来的假话 (screensMustNotShowFalsehoods 那一族)。
+               ⚠️ 数字算出来了, 但 roles 数组本身仍是写死的 17 条; 真正的修法是拉
+               GET /{factoryId}/roles (端点早就有, RoleControllerListRolesTest 钉着) —— 单独一刀。 -->
+          <el-tag type="info" data-testid="role-count-badge">共 {{ roles.length }} 种工厂角色</el-tag>
         </div>
       </template>
 
