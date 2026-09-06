@@ -80,12 +80,65 @@ echo "READING: CHECKED=$checked"
 [ "$checked" -eq "$callee_count" ] \
     || fail "census_mismatch: 采到 $callee_count 个却只查了 $checked 个, 本次读数作废"
 
-if [ -n "$offenders" ]; then
-    echo "FAIL: 下列脚本在发布链上被直接执行, 但 git 索引里没有执行位:" >&2
-    for o in $offenders; do echo "  - $o" >&2; done
+# ═══════════════════════════════════════════════════════════════════════════
+# 第二组: 被安装到服务器、并在那边**按名字直调**的脚本
+# ═══════════════════════════════════════════════════════════════════════════
+# 来源事故 (#635 终审提出): scripts/cron/soft-delete-orphans-watch.sh 在 git 索引里
+# 是 100644, 而 prod root crontab **直调**它(无 `bash` 前缀), 且 #627 刚把它纳进
+# scripts/deploy/install-server-scripts.sh。
+#
+# ⚠️ 实测下来「下次安装它就是不可执行的」这个担心**不成立**, 但结论要如实写:
+#    install-server-scripts.sh 第 108 行是
+#        install -o root -g root -m $REMOTE_MODE '$tmp' '$remote'   (REMOTE_MODE=0750)
+#    —— 它**写死 0750**, ⛔ 不透传索引 mode。所以服务器上那份无论如何都是可执行的。
+#    ⇒ 本组是**双保险**, 不是「不修就会炸」。真正会咬人的是另一类: 从 checkout 直接
+#      跑(清单里 10 个 NOT_INSTALLED 的 cron 脚本就是这么跑的), 那时索引 mode 说了算。
+#
+# 🔴 代理判据, 已标出并可替换 (形态 E):
+#    我**想**知道的是「哪些远端路径被 crontab / 远端命令按名字直调」——
+#    那个事实**不在仓库里**(要读 prod crontab), 所以这里退一步用
+#        「清单里 REPO_PATH != '-' 且源文件有 shebang」
+#    当代理。理由: 带 shebang 又被装到服务器路径上的文件, 就是打算按名字执行的;
+#    .sql / .txt 这种数据文件天然没有 shebang, 自动排除(实测 11 行里正好排掉 2 行)。
+#    ⛔ 不写死一张文件名清单 —— 那是形态 D, 清单一定会跟 inventory 漂。
+INVENTORY="$ROOT_DIR/scripts/deploy/server-script-inventory.conf"
+if [ ! -f "$INVENTORY" ]; then
+    echo "SKIPPED:找不到 $INVENTORY, 第二组的取材面无从谈起" 
+    exit 77
+fi
+
+inv_rows=$(awk -F'|' '/^(tokyo|ecs)\|/ && $3 != "-" {print $3}' "$INVENTORY" || true)
+inv_row_count=$(printf '%s' "$inv_rows" | grep -c . || true)
+# 硬约束 9: 采集为空时「全都合规」与「awk 没匹配上」同形。
+[ "$inv_row_count" -ge 5 ]     || fail "清单里只采到 $inv_row_count 行可安装条目 —— 取材大概率失效了, 本次读数作废"
+
+inv_exec=0 inv_data=0 inv_offenders=""
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ "$(head -c 2 "$ROOT_DIR/$f" 2>/dev/null)" != '#!' ]; then
+        inv_data=$((inv_data + 1))
+        continue
+    fi
+    inv_exec=$((inv_exec + 1))
+    entry=$(git -C "$ROOT_DIR" ls-files -s -- "$f" || true)
+    [ -n "$entry" ] || fail "$f 登记在清单里但不在 git 索引里"
+    mode=${entry%% *}
+    [ "$mode" = "100755" ] || inv_offenders="$inv_offenders$f(mode=$mode) "
+done <<< "$inv_rows"
+
+echo "READING: INVENTORY_ROWS=$inv_row_count WITH_SHEBANG=$inv_exec DATA_FILES=$inv_data"
+[ "$((inv_exec + inv_data))" -eq "$inv_row_count" ]     || fail "census_mismatch: 清单 $inv_row_count 行, 只分类了 $((inv_exec + inv_data)) 行"
+[ "$inv_exec" -ge 1 ]     || fail "清单里一个带 shebang 的都没采到 —— 第二组等于没跑"
+
+if [ -n "$offenders" ] || [ -n "$inv_offenders" ]; then
+    echo "FAIL: 下列脚本会被按名字直接执行, 但 git 索引里没有执行位:" >&2
+    for o in $offenders; do echo "  - [发布链] $o" >&2; done
+    for o in $inv_offenders; do echo "  - [服务器清单] $o" >&2; done
     echo "  ⇒ POSIX 检出上会 rc=126 Permission denied; Windows 检出**看不出来**。" >&2
-    echo "  ⇒ 修法: git update-index --chmod=+x <path> && git commit" >&2
+    echo "  ⇒ 修法: git update-index --chmod=+x <path>, 然后 git add + git commit," >&2
+    echo "     并用 git diff --cached --summary 确认 'mode change' 真的进了索引 ——" >&2
+    echo "     ⛔ git commit -- <paths> 会把只存在于索引里的 mode 变更静默丢掉。" >&2
     exit 1
 fi
 
-echo "PASS: 发布链上 $checked 个被直接执行的脚本在 git 索引里都有执行位"
+echo "PASS: 发布链 $checked 个 + 服务器清单 $inv_exec 个, 在 git 索引里都有执行位"
