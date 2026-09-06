@@ -11,28 +11,20 @@ const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
-// Permission modules
-const allPermissionModules = [
-  { key: 'production', label: '生产管理' },
-  { key: 'quality', label: '质检管理' },
-  { key: 'warehouse', label: '仓库管理' },
-  { key: 'procurement', label: '采购管理' },
-  { key: 'sales', label: '销售管理' },
-  { key: 'hr', label: '人事管理' },
-  { key: 'equipment', label: '设备管理' },
-  { key: 'finance', label: '财务管理' },
-  { key: 'system', label: '系统设置' },
-  // 2026-09-06 清单向 L1 收敛: 删掉 'ai' (后端 0 处闸、L1 0 行, 只是一列永远 '-' 的幽灵模块)。
-  // 与 RoleController.DISPLAY_MODULES 必须逐字相同 —— moduleListsPairwiseConsistency 闸钉着。
-  { key: 'report', label: '报表中心' },
-  { key: 'dashboard', label: '数据看板' },
-];
+// 2026-09-07 刀 D: 这里原本是 `allPermissionModules` —— 11 条写死的「模块码 + 中文名」,
+// 与后端 RoleController.DISPLAY_MODULES 逐字重复 (形态 D)。两份都已删除。
+// 现在模块列、中文名、列序全部由后端 `/{factoryId}/roles/{role}/permissions` 下发,
+// 后端那一侧是三层现算 (L2 → L1 → 兜底) + PermissionModuleCatalog。
+// ⛔ 不要在这里再抄一份 —— 前面几张同形私有表 (单位别名 #2079、OA MODULE_LABELS #2147、
+//    员工档案角色 #2172、白名单角色名) 的修法都一样: 只保留码, 名字委托权威表。
 
 // View permissions dialog
 const viewDialogVisible = ref(false);
 const viewingRole = ref<TableRow | null>(null);
 const rolePermissions = ref<TableRow[]>([]);
 const permissionsLoading = ref(false);
+/** 取权限失败时的原因。非空 = 这次没读到, ⛔ 与「这个角色真的没有权限」不是同一件事。 */
+const permissionsError = ref('');
 
 // Sprint 5 Track G: 数据权限 tab (read-only stub, edit defer Sprint 6)
 const viewTab = ref<'function' | 'data'>('function');
@@ -52,7 +44,6 @@ const editingRole = ref<TableRow | null>(null);
 const editForm = reactive({
   displayName: '',
   description: '',
-  permissions: {} as Record<string, string>, // module -> 'rw' | 'r' | 'w' | '-'
 });
 const editSubmitting = ref(false);
 
@@ -62,31 +53,31 @@ async function handleViewPermissions(row: TableRow) {
   viewTab.value = 'function';  // 默认显功能权限 tab
   dataScopeStub.value = deriveDataScope(row.name);  // Sprint 5 Track G stub
   permissionsLoading.value = true;
+  permissionsError.value = '';
   try {
     const res = await get(`/${factoryId.value}/roles/${row.name}/permissions`);
     if (res.success && res.data) {
       rolePermissions.value = res.data;
     } else {
-      // Fallback: derive from role level
-      rolePermissions.value = derivePermissions(row);
+      rolePermissions.value = [];
+      permissionsError.value = res.message || '接口没有返回权限数据';
     }
-  } catch {
-    // Fallback for missing API
-    rolePermissions.value = derivePermissions(row);
+  } catch (error) {
+    rolePermissions.value = [];
+    permissionsError.value = error instanceof Error ? error.message : '请求失败';
   } finally {
     permissionsLoading.value = false;
   }
 }
 
-function derivePermissions(role: TableRow) {
-  // Sensible defaults based on level
-  return allPermissionModules.map(m => {
-    let access = '-';
-    if (role.level === 1) access = 'rw'; // super admin
-    else if (role.name.includes(m.key.replace('ment', '').replace('管理', ''))) access = 'rw';
-    else if (role.level <= 2) access = 'r';
-    return { module: m.key, label: m.label, access };
-  });
+// 2026-09-07 刀 D: 这里原本是 `derivePermissions(role)` —— 取不到接口就**按角色等级和一个
+// 字符串匹配现编一张权限表**填进弹窗 (`role.name.includes(m.key.replace('ment',''))`)。
+// 那违反核心原则 1「禁止降级处理, 不返回假数据, 明确显示错误」: 编出来的权限与系统实际
+// 执行的权限没有任何关系, 而管理员会照着它做判断。⇒ 取不到就说取不到, 并给重试。
+async function retryPermissions() {
+  if (viewingRole.value) {
+    await handleViewPermissions(viewingRole.value);
+  }
 }
 
 function getAccessTag(access: string) {
@@ -103,12 +94,6 @@ function handleEdit(row: TableRow) {
   editingRole.value = row;
   editForm.displayName = row.displayName;
   editForm.description = row.description;
-  // Init permissions from current view or defaults
-  const perms = derivePermissions(row);
-  editForm.permissions = {};
-  perms.forEach(p => {
-    editForm.permissions[p.module] = p.access;
-  });
   editDialogVisible.value = true;
 }
 
@@ -123,7 +108,6 @@ async function handleEditSubmit() {
     const payload = {
       displayName: editForm.displayName,
       description: editForm.description,
-      permissions: editForm.permissions,
     };
     const res = await put(`/${factoryId.value}/roles/${editingRole.value.name}`, payload);
     if (res && res.success === false) {
@@ -340,7 +324,11 @@ onMounted(loadRoleUserCounts);
       <template #header>
         <div class="card-header">
           <span>角色权限</span>
-          <el-tag type="info">共 14 种工厂角色</el-tag>
+          <!-- 2026-09-07: 这里原本写死「共 14 种工厂角色」, 而下面那张表实际渲染 17 行 ——
+               页面上一个可以直接数出来的假话 (screensMustNotShowFalsehoods 那一族)。
+               ⚠️ 数字算出来了, 但 roles 数组本身仍是写死的 17 条; 真正的修法是拉
+               GET /{factoryId}/roles (端点早就有, RoleControllerListRolesTest 钉着) —— 单独一刀。 -->
+          <el-tag type="info" data-testid="role-count-badge">共 {{ roles.length }} 种工厂角色</el-tag>
         </div>
       </template>
 
@@ -378,7 +366,21 @@ onMounted(loadRoleUserCounts);
       <el-tabs v-model="viewTab" type="border-card">
         <!-- Tab 1: 功能权限 (existing) -->
         <el-tab-pane label="功能权限" name="function">
-          <el-table :data="rolePermissions" v-loading="permissionsLoading" stripe border>
+          <!-- 取不到就说取不到 (核心原则 1)。⛔ 这里以前会现编一张表填进去,
+               而「编出来的权限」与「这个角色真的没有权限」在页面上长得一模一样。 -->
+          <el-alert
+            v-if="permissionsError"
+            type="error"
+            :closable="false"
+            title="没有读到这个角色的权限"
+            data-testid="role-permissions-error"
+            style="margin-bottom: 12px"
+          >
+            <p>{{ permissionsError }}</p>
+            <p>这不代表该角色没有权限，只代表这次没读到。</p>
+            <el-button size="small" type="primary" @click="retryPermissions">重试</el-button>
+          </el-alert>
+          <el-table v-else :data="rolePermissions" v-loading="permissionsLoading" stripe border>
             <el-table-column prop="label" label="功能模块" width="140" />
             <el-table-column prop="access" label="权限" width="120" align="center">
               <template #default="{ row }">
@@ -432,20 +434,20 @@ onMounted(loadRoleUserCounts);
         <el-form-item label="描述">
           <el-input v-model="editForm.description" type="textarea" :rows="2" placeholder="请输入描述" />
         </el-form-item>
+        <!-- 2026-09-07 刀 D: 这里原本是一张 11 行的权限单选表, 数据来自本文件里写死的
+             allPermissionModules, 初值来自现编的 derivePermissions, 提交给一个
+             **全仓不存在的** PUT /{factoryId}/roles/{role} 端点 —— 也就是说它从来没有
+             保存过任何权限。真正能改权限的是权限矩阵页 (写 L1, 带审计)。
+             fool-proof Rule 5: 不留死路, 指到能办成这件事的地方。 -->
         <el-form-item label="权限配置">
-          <el-table :data="allPermissionModules" stripe border size="small" style="width: 100%">
-            <el-table-column prop="label" label="功能模块" width="120" />
-            <el-table-column label="权限" align="center">
-              <template #default="{ row }">
-                <el-radio-group v-model="editForm.permissions[row.key]" size="small">
-                  <el-radio-button value="rw">读写</el-radio-button>
-                  <el-radio-button value="r">只读</el-radio-button>
-                  <el-radio-button value="w">只写</el-radio-button>
-                  <el-radio-button value="-">无</el-radio-button>
-                </el-radio-group>
-              </template>
-            </el-table-column>
-          </el-table>
+          <el-alert type="info" :closable="false" data-testid="role-edit-permission-pointer">
+            <p>角色的模块权限不在这里改。</p>
+            <p>
+              到
+              <router-link :to="{ name: 'SystemPermissionMatrix' }">系统管理 → 权限矩阵</router-link>
+              按「角色 × 模块」逐格修改，改的是平台级 L1 并留审计记录。
+            </p>
+          </el-alert>
         </el-form-item>
       </el-form>
       <template #footer>
