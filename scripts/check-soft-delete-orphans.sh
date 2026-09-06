@@ -66,19 +66,66 @@
 # ▎同一次跑批里 process_sheet_rows.plan_id(56) 与 report_reversal_logs.plan_id(10)
 # ▎则是 absent=56 / 10, soft_deleted=0 —— 那两条该升级, 而它们被 3262 淹掉了。
 #
-# ⇒ 契约: 只有 absent > 0 才配「可能 500 / 悬空引用」那套措辞与 rc=1;
-#   soft_deleted > 0 报 INFO(parent-soft-deleted-children-live), rc=0。
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 第三列 escalate_soft_deleted —— ⛔ 「软删一律降级」是把假阳换成假阴
+# ═══════════════════════════════════════════════════════════════════════════
+# 「父软删 ⇒ 一律 INFO」这条**是错的**: 只要子表**有独立读路径**(不经过父关联去读
+# 子行)且那个 FK 关联上**没有** @NotFound(IGNORE), 父软删子活照样是
+# EntityNotFoundException 风险 —— 而降级之后它零信号, 残留停在没人读的台账里。
+# ▎假阳(喊 500 但不会炸)和假阴(会炸但不喊)是两个方向的错, ⛔ 不能用一个换另一个。
+#
+# ⇒ 每对**算**一个标记, ⛔ 不手抄白名单。两项依据都是源码里可判定的:
+#   ① repo=<接口名>  子实体有自己的 `*Repository extends JpaRepository<子实体, …>`
+#                    ⇒ 存在「不经过父」读到子行的可能。
+#   ② notfound=yes   该 FK 关联字段上有 @NotFound(action = NotFoundAction.IGNORE)
+#                    ⇒ Hibernate 解析不到时给 null 而不是抛异常。
+#   escalate = (repo 存在) AND NOT (notfound)
+#
+# ⚠️ ①**是保守的代理判据**: Repository 接口存在 ≠ 真的有人调它。实测
+#    SemiFinishedStocktakeItemRepository 在 main 里一次都没被调用
+#    (findByStocktakeId 是死代码), 但接口在 ⇒ 按本规则它**被标 escalate**。
+#    ⛔ 不要为了让某一对变成 INFO 而加特例 —— 代理判据宁可宽一点也不能靠人肉名单
+#    (形态 E: 代理判据要标出来并可替换, ⛔ 不靠加启发式逼近「面向用户」)。
+#
+# ⚠️ **区分度实测(必须连读数一起看, ⛔ 不许只说「闸建好了」)**: 依据 ② 在当前语料上
+#    **恒为假** —— 注解扫描器在收集阶段就 `continue` 掉了带 NotFound 的关联(条件 A),
+#    而手工登记那一段按定义是标量列(没有 @JoinColumn, 由 manual-pairs 闸钉着)。
+#    ⇒ 今天 62 对里 notfound=yes 的有 **0** 对, 这一项的区分度是 **0/62**。
+#    它仍然**算**而不是**假设为假**, 并由 test-soft-delete-orphans-escalation-classify.sh
+#    在一棵合成实体树上做阳性/阴性对照 —— 否则它就是个恒真式(形态 B′)。
+#
+# ⇒ 契约:
+#   · absent > 0                    → rc=1, 「悬空引用, 可能让对应页面 500」
+#   · soft_deleted > 0 且 escalate  → rc=1, 「父软删但子表有独立读路径,
+#                                    可能 EntityNotFoundException」(措辞与上面区分)
+#   · soft_deleted > 0 且非 escalate → rc=0, INFO(parent-soft-deleted-children-live)
 #   ⛔ INFO 不等于静默 —— 它是那条「必发生」的读数(硬约束 9)。
 #
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠️ 同义性的前提: 右侧 join 键必须是父表主键
+# ═══════════════════════════════════════════════════════════════════════════
+# `LEFT JOIN 父 y ON y.id::text = x.fk::text` 与旧的 NOT EXISTS 逐例等价, **前提是
+# y.id 至多命中一行**。id 不是主键的话 LEFT JOIN 会把子行放大, 两列都虚高而不报错。
+# ⇒ 生成期断言每个父实体的 @Id 落在 `id` 列上, 不是就**生成失败**(⛔ 不静默跳过)。
+#
 # 退出码 (三态, ⛔ 不是两态):
-#   0  没有悬空引用 (含「只有父软删未级联」那一类 —— 它走 INFO, ⛔ 不静默)
-#   1  找到**悬空引用** (absent > 0; 读数有效, 且指向缺陷)
-#   2  **没量到** —— 连不上库 / 一条关联都没扫到 / 阳性对照失败 / 结果列形状不对。
-#      ⛔ 不要把 2 读成 0。
+#   0  没有悬空引用、也没有 escalate 的父软删
+#   1  absent > 0 或 (soft_deleted > 0 且 escalate)
+#   2  **没量到** —— 连不上库 / 一条关联都没扫到 / 阳性对照失败 / 结果列形状不对
+#      / 父实体主键不是 id。⛔ 不要把 2 读成 0。
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENTITY_ROOT="$REPO_ROOT/backend/java/cretas-api/src/main/java/com/cretas/aims/entity"
+# ── 测试注入点(唯一一个) ──────────────────────────────────────────────────
+# SDO_REPO_ROOT 只改变「去哪里找东西」, ⛔ 不改变任何判定逻辑 —— 下面三个路径
+# (实体 / 仓库接口 / hasdel 快照) 全从它派生, 所以合成树只要照抄目录结构就行。
+# 存在的理由: escalate 分类里 `@NotFound(IGNORE)` 那一项在**真实语料上恒为假**
+# (见下面「⚠️ 区分度实测」), 不搭一棵合成树就没法证明那个探测器真的能用 ——
+# 而「变异不红」会同时被读成「断言在守空气」和「变异没生效」(形态 C″)。
+REPO_ROOT="${SDO_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+JAVA_SRC="$REPO_ROOT/backend/java/cretas-api/src/main/java/com/cretas/aims"
+ENTITY_ROOT="$JAVA_SRC/entity"
+# escalate 判据的依据 ①: 子实体有没有自己的 *Repository 接口(= 可能被独立读取)。
+REPOSITORY_ROOT="$JAVA_SRC/repository"
 SSH_HOST="${CRETAS_SSH_HOST:-root@47.100.235.168}"
 REPO_SQL="$REPO_ROOT/scripts/cron/soft-delete-orphans.sql"
 # 「哪些表有 deleted_at」的快照。它是这个生成器**唯一**的数据库输入 ——
@@ -98,6 +145,7 @@ case "${1:-}" in
 esac
 
 [ -d "$ENTITY_ROOT" ] || { echo "⛔ 找不到实体目录: $ENTITY_ROOT" >&2; exit 2; }
+[ -d "$REPOSITORY_ROOT" ] || { echo "⛔ 找不到仓库接口目录: $REPOSITORY_ROOT" >&2; exit 2; }
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 手工登记的关联对 —— 扫描器**结构上看不见**的那些
@@ -201,13 +249,14 @@ PROV_STAMP="-- generated-from $PROV_COMMIT $(date -u '+%F %TZ')"
 
 printf '%s\n' "$MANUAL_PAIRS" > "$WORK/manual.txt"
 
-python - "$ENTITY_ROOT" "$WORK/hasdel.txt" "$SQL_ONLY" "$WORK/manual.txt" "$PROV_STAMP" > "$WORK/scan.sql" <<'PYEOF'
+python - "$ENTITY_ROOT" "$WORK/hasdel.txt" "$SQL_ONLY" "$WORK/manual.txt" "$PROV_STAMP" "$REPOSITORY_ROOT" > "$WORK/scan.sql" <<'PYEOF'
 import io, os, re, sys
 # ⛔ Windows 上 print 默认吐 CRLF —— 生成物会带着 \r 进仓库、再被装到 Linux 服务器上。
 # 本仓已经因为「生成脚本自己造 CRLF」被打回过两个 PR(形态 C⁗)。⇒ 显式钉 LF。
 sys.stdout.reconfigure(newline="\n")
 entity_root, hasdel_path, sql_only = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 manual_path, prov_stamp = sys.argv[4], sys.argv[5]
+repository_root = sys.argv[6]
 hasdel = set(l.strip() for l in io.open(hasdel_path, encoding="utf-8")
               if l.strip() and not l.startswith("--"))
 
@@ -221,6 +270,83 @@ for dp, _, fs in os.walk(entity_root):
         # 软删来源有两种: 类级 @Where(deleted_at ...) 或继承 BaseEntity
         if re.search(r'@Where\s*\(\s*clause\s*=\s*"[^"]*deleted_at', s) or re.search(r"extends\s+BaseEntity", s):
             soft.add(fn[:-5])
+
+# 表名 → 实体类名。手工登记那一段只给表名, 分类要靠它反查回实体。
+table_of_class, class_of_table = {}, {}
+for cls, s in ents.items():
+    mt = re.search(r'@Table\s*\(\s*name\s*=\s*"([^"]+)"', s)
+    if mt:
+        table_of_class[cls] = mt.group(1)
+        class_of_table.setdefault(mt.group(1), cls)
+
+# ── escalate 依据 ①: 子实体有没有自己的 *Repository 接口 ────────────────────
+# 判据是 `extends <任意>Repository<实体类名,` —— 全仓 429 个接口全是
+# `extends JpaRepository<X, …>`(实测), 这里放宽到任意 *Repository 基接口, 因为
+# 「换个基接口」不该让分类静默变松(那正是形态 D: 判据和现实各走各的)。
+repo_iface_of_entity = {}
+for dp, _, fs in os.walk(repository_root):
+    for fn in fs:
+        if not fn.endswith(".java"):
+            continue
+        s = io.open(os.path.join(dp, fn), encoding="utf-8", errors="replace").read()
+        # ⚠️ `[\w.]*` 而不是 `\w*`: 基接口可以写成全限定名
+        # (`org.springframework.data.jpa.repository.JpaRepository<X, …>`)。
+        # 只认短名的话, 换个写法就静默漏掉一整个实体 —— 而漏掉的后果是 escalate=0,
+        # 也就是**往「不喊」的方向错**(假阴), ⛔ 那正是这一列要修的东西。
+        for m in re.finditer(r"extends\s+[\w.]*Repository\s*<\s*([A-Za-z_]\w*)\s*,", s):
+            repo_iface_of_entity.setdefault(m.group(1), fn[:-5])
+
+# ── escalate 依据 ②: 这个 FK 关联字段上有没有 @NotFound ────────────────────
+# 🔴 **独立重算**, ⛔ 不复用上面收集阶段那个 `continue`。收集阶段 continue 掉的东西
+#    永远走不到这里, 于是「复用它」= 这一项恒为假 = 恒真式(形态 B′)。
+#    这里从子实体源码里按 @JoinColumn(name="<col>") 反找注解块, 自己判一次。
+def has_notfound(child_cls, col):
+    src = ents.get(child_cls)
+    if not src:
+        return False
+    lines = src.split("\n")
+    for i, line in enumerate(lines):
+        if not re.search(r'@JoinColumn\s*\(\s*name\s*=\s*"%s"' % re.escape(col), line):
+            continue
+        # 注解块 = 该行上下各收到最近的语句/块边界为止(注解可以写在 @JoinColumn 前或后)
+        blk, j = [line], i - 1
+        while j >= 0 and not re.search(r"[;}]\s*$", lines[j].strip()):
+            blk.append(lines[j]); j -= 1
+            if i - j > 12:
+                break
+        k = i + 1
+        while k < len(lines) and not re.search(r";\s*$", lines[k].strip()):
+            blk.append(lines[k]); k += 1
+            if k - i > 12:
+                break
+        if k < len(lines):
+            blk.append(lines[k])
+        if re.search(r"@(\w+\.)*NotFound\s*\(", "\n".join(blk)):
+            return True
+    return False
+
+# ── 同义性前提: 父实体的 @Id 必须落在 `id` 列上 ────────────────────────────
+# LEFT JOIN 写法只有在「y.id 至多命中一行」时才与 NOT EXISTS 等价。不是主键的话
+# 子行会被放大, 两列都虚高**而不报错** ⇒ 生成期就得拦住(⛔ 不静默跳过)。
+def id_is_pk(parent_cls):
+    src = ents.get(parent_cls)
+    if not src:
+        return False, "找不到实体源码"
+    lines = src.split("\n")
+    for i, line in enumerate(lines):
+        if not re.match(r"\s*@Id\s*$", line):
+            continue
+        col_name = None
+        for k in range(i + 1, min(i + 8, len(lines))):
+            mc = re.search(r'@Column\s*\(\s*name\s*=\s*"([^"]+)"', lines[k])
+            if mc:
+                col_name = mc.group(1)
+            mf = re.match(r"\s*(?:private|protected|public)\s+[\w.<>\[\]]+\s+(\w+)\s*[;=]", lines[k])
+            if mf:
+                return ((col_name or mf.group(1)) == "id",
+                        "@Id -> 列 %s" % (col_name or mf.group(1)))
+        return False, "@Id 后 8 行内没找到字段声明"
+    return False, "没有 @Id"
 
 found = set()
 for cls, s in ents.items():
@@ -240,11 +366,18 @@ for cls, s in ents.items():
         if "@ManyToOne" not in ann:
             continue
         # 条件 A: 有 @JsonIgnore 就不会被序列化 -> 代理不解析 -> 不会炸
-        if "JsonIgnore" in ann or "NotFound" in ann:
+        if "JsonIgnore" in ann:
             continue
         col = re.search(r'name\s*=\s*"([^"]+)"', ann)
         tt = re.search(r'@Table\s*\(\s*name\s*=\s*"([^"]+)"', ents.get(m.group(1), ""))
         if not (tbl and col and tt):
+            continue
+        # 条件 A 的另一半: @NotFound(IGNORE) 让 Hibernate 解析不到时给 null 而不是抛,
+        # 所以这种关联**根本不会炸**, 连收都不该收(收了就是每天报一次不需要行动的孤儿)。
+        # 🔴 与 escalate 分类**共用同一个** has_notfound —— 两处各写一遍必漂(形态 D:
+        #    「收集时判它有 NotFound」和「分类时判它有 NotFound」是同一个问题,
+        #    答案不许有两份)。⇒ 分类里那一项也就结构上不可能与收集不一致。
+        if has_notfound(cls, col.group(1)):
             continue
         # ⛔ 只查两端都有 deleted_at 列的 —— 否则 SQL 直接报错(实测 ai_usage_log)。
         # ⚠️ --sql-only 也必须过滤: 第一版这里写的是 `if not sql_only and ...`,
@@ -282,17 +415,50 @@ for raw in io.open(manual_path, encoding="utf-8"):
 added = [p for p in manual if p not in found]
 found.update(manual)
 
-# 🔴 每一对出**两列**, ⛔ 不是一个 `bad`。理由见文件头「两类孤儿」那一节:
+# ── 分类 + 同义性前提断言 ────────────────────────────────────────────────
+# ⛔ 两样都**算**出来, 不手抄名单; 算不出来就报错退出, ⛔ 不静默给默认值
+#    (形态 A¹⁰: 兜底默认值会把「不知道」翻译成一个会被当真的读数)。
+CLASS = {}          # (t,c,tt) -> (escalate, repo_iface_or_None, notfound_bool)
+pk_bad = []
+for (t, c, tt) in sorted(found):
+    child_cls = class_of_table.get(t)
+    parent_cls = class_of_table.get(tt)
+    if child_cls is None:
+        sys.stderr.write(f"NO_ENTITY_FOR_TABLE={t} (pair {t}.{c}->{tt})\n")
+        sys.exit(2)
+    if parent_cls is None:
+        sys.stderr.write(f"NO_ENTITY_FOR_TABLE={tt} (pair {t}.{c}->{tt})\n")
+        sys.exit(2)
+    ok, why = id_is_pk(parent_cls)
+    if not ok:
+        pk_bad.append(f"{tt}({parent_cls}): {why}")
+    iface = repo_iface_of_entity.get(child_cls)
+    nf = has_notfound(child_cls, c)
+    CLASS[(t, c, tt)] = (bool(iface) and not nf, iface, nf)
+
+if pk_bad:
+    # 🔴 同义性(LEFT JOIN ≡ NOT EXISTS)靠「y.id 至多命中一行」。前提不成立时
+    #    两列都会虚高**而不报错** —— 那是最难发现的一种错。⇒ 生成期就停。
+    sys.stderr.write("PK_ASSUMPTION_VIOLATED=" + "; ".join(pk_bad) + "\n")
+    sys.exit(2)
+
+# 🔴 每一对出**三列 + 一个分类标记**, ⛔ 不是一个 `bad`。理由见文件头:
 #   absent       —— 父行**不存在**(悬空引用)。@ManyToOne 代理解析不到 ⇒ 真的会 500。
-#   soft_deleted —— 父行在, 只是 deleted_at 非空。只有当子表被**独立读取**时才可能炸。
+#   soft_deleted —— 父行在, 只是 deleted_at 非空。
+#   escalate_soft_deleted —— soft_deleted 那一类是否也该升级(子表有独立读路径且
+#                    该 FK 无 @NotFound)。⛔ 「软删一律降级」是把假阳换成假阴。
 # 判据是 LEFT JOIN 之后 y.id 在不在, ⛔ 不是两条各自独立的 NOT EXISTS ——
 # 那样两个数会各自扫一遍、口径可能不一致(同一个东西两份, 形态 D)。
-# y.id 是主键 ⇒ 至多命中一行 ⇒ 不会把子行数放大。
+# y.id 是主键(上面已断言) ⇒ 至多命中一行 ⇒ 不会把子行数放大。
 # 外层 WHERE 与旧版**逐字同义**(「没有活着的父行」), 所以 absent+soft_deleted 恒等于旧的 bad。
+# ⚠️ 标记写成 0/1 整数字面量, ⛔ 不用 boolean —— psql -At 把 boolean 印成 t/f,
+#    形状闸就得认两种字符集; 数字让「四列全是数」这条闸保持一句话说得清。
 def clause(t, c, tt):
+    esc = 1 if CLASS[(t, c, tt)][0] else 0
     return (f"SELECT '{t}.{c} -> {tt}' AS assoc, "
             f"count(*) FILTER (WHERE y.id IS NULL) AS absent, "
-            f"count(*) FILTER (WHERE y.id IS NOT NULL) AS soft_deleted "
+            f"count(*) FILTER (WHERE y.id IS NOT NULL) AS soft_deleted, "
+            f"{esc} AS escalate_soft_deleted "
             f"FROM public.{t} x LEFT JOIN public.{tt} y ON y.id::text = x.{c}::text "
             f"WHERE x.deleted_at IS NULL AND x.{c} IS NOT NULL "
             f"AND (y.id IS NULL OR y.deleted_at IS NOT NULL)")
@@ -302,9 +468,42 @@ def clause(t, c, tt):
 # (形态 D)。守它的闸要拿生成器重跑一次逐字比对, 而**出处戳每次都不同** ——
 # 不给标记就只能靠猜哪几行该剔除。⇒ 让产出自己说清哪一段是哪一段。
 # ⚠️ UNION ALL 的顺序不影响结果(外面有 ORDER BY), 分段是纯排版。
+n_esc = sum(1 for v in CLASS.values() if v[0])
+n_nf = sum(1 for v in CLASS.values() if v[2])
+# 🔴 两项依据各自的**区分度**也要印出来。62/62 全 escalate 与「探测器匹配一切」
+#    读数完全相同(形态 A‴: 近 0% 或近 100% 先怀疑仪器)。⇒ 让产出自己说清
+#    「这个探测器在这份语料上分得开吗」, ⛔ 不许只报结论。
+n_tabled = len([c for c, s in ents.items() if re.search(r'@Table\s*\(\s*name\s*=\s*"', s)])
+n_norepo = len([c for c, s in ents.items()
+                if re.search(r'@Table\s*\(\s*name\s*=\s*"', s) and c not in repo_iface_of_entity])
 print(prov_stamp)
 print(f"-- 关联 {len(found)} 对 = 注解扫描 {scanned} + 手工登记新增 {len(added)}")
 print("-- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。")
+print("--")
+print("-- ── escalate_soft_deleted 分类表(第 4 列的出处) ──────────────────────────")
+print("-- escalate = (子实体有自己的 *Repository 接口) AND NOT (该 FK 上有 @NotFound)")
+print("-- ⚠️ repo 存在**只是「可能有独立读路径」的保守代理判据** —— 接口在 ≠ 真的有人调它")
+print("--    (实测 SemiFinishedStocktakeItemRepository 在 main 里一次都没被调用, 仍标 escalate)。")
+print("--    ⛔ 不要为了让某一对变成 INFO 而加特例; 要换判据就整体换掉这个代理。")
+print("--")
+print("-- 🔴 区分度实测(⛔ 不许只报结论 —— 近 100% 与「探测器匹配一切」读数相同, 形态 A‴):")
+print(f"--    依据 ① repo: 带 @Table 的实体 {n_tabled} 个, 其中**没有** Repository 接口的只有")
+print(f"--       {n_norepo} 个 ⇒ 探测器分得开(不是恒真), 但在本语料上几乎人人有 Repository。")
+print(f"--    依据 ② notfound: yes 的有 {n_nf}/{len(found)} 对。为 0 是**预期**的 ——")
+print("--       带 @NotFound 的关联在收集阶段(条件 A)就被 continue 掉了, 根本走不到这里;")
+print("--       手工登记那一段按定义是标量列(无 @JoinColumn)。这一项仍**算**而不是假设为假,")
+print("--       由 test-soft-delete-orphans-escalation-classify.sh 在合成实体树上做阳/阴对照。")
+print(f"-- ⇒ 汇总: escalate=1 有 {n_esc} 对 / escalate=0 有 {len(found) - n_esc} 对。")
+if n_esc == len(found):
+    print("--    ⚠️ **本语料上这一列当前不改变任何 rc 判决**(全部 escalate) —— 它今天买到的是")
+    print("--       **措辞区分**(悬空引用 vs 父软删有独立读路径)和一条可审计的分类依据,")
+    print("--       ⛔ 不是「筛掉了一批噪声」。哪天有实体真的没有 Repository / 真的加了")
+    print("--       @NotFound, 它才开始筛。读这份文件的人必须知道这一点。")
+for (t, c, tt) in sorted(found):
+    esc, iface, nf = CLASS[(t, c, tt)]
+    print("-- class %s.%s -> %s escalate=%d repo=%s notfound=%s"
+          % (t, c, tt, 1 if esc else 0, iface or "none", "yes" if nf else "no"))
+print("--")
 print("SELECT * FROM (")
 scan_only = sorted(p for p in found if p not in set(manual))
 print("  " + "\n  UNION ALL ".join(clause(*p) for p in scan_only))
@@ -313,7 +512,8 @@ for p in sorted(added):
     print("  UNION ALL " + clause(*p))
 print("-- END_MANUAL_SECTION")
 print(") q WHERE absent > 0 OR soft_deleted > 0 ORDER BY absent DESC, soft_deleted DESC;")
-sys.stderr.write(f"SCANNED={scanned} MANUAL={len(manual)} MANUAL_ADDED={len(added)} TOTAL={len(found)}\n")
+sys.stderr.write(f"SCANNED={scanned} MANUAL={len(manual)} MANUAL_ADDED={len(added)} TOTAL={len(found)}"
+                 f" ESCALATE={n_esc} NOTFOUND={n_nf}\n")
 PYEOF
 PY_RC=$?
 [ "$PY_RC" -eq 0 ] || {
@@ -372,33 +572,43 @@ RC=$?
 # ⛔ 形状不对一律 rc=2, ⛔ 不许「解析不出来就当 0 行」—— 那正是把「没量到」翻译成
 #    「没问题」(硬约束 4)。装了旧版单列 SQL 时也会落在这里, 而不是被读成半个读数。
 grep -vE '^[[:space:]]*$' "$WORK/out.txt" > "$WORK/rows.txt" || true
-BAD_SHAPE=$(grep -cvE '^[a-z0-9_]+\.[a-z0-9_]+ -> [a-z0-9_]+\|[0-9]+\|[0-9]+$' "$WORK/rows.txt" || true)
+BAD_SHAPE=$(grep -cvE '^[a-z0-9_]+\.[a-z0-9_]+ -> [a-z0-9_]+\|[0-9]+\|[0-9]+\|[01]$' "$WORK/rows.txt" || true)
 if [ "${BAD_SHAPE:-0}" -ne 0 ]; then
-  echo "⛔ 结果列形状不对(期望 assoc|absent|soft_deleted), 本次读数作废:"
+  echo "⛔ 结果列形状不对(期望 assoc|absent|soft_deleted|escalate), 本次读数作废:"
   head -5 "$WORK/rows.txt"
   exit 2
 fi
 
 ABSENT_ROWS=$(awk -F'|' '$2+0 > 0' "$WORK/rows.txt")
-SOFT_ROWS=$(awk -F'|' '$3+0 > 0' "$WORK/rows.txt")
+SOFT_ESC_ROWS=$(awk -F'|' '$3+0 > 0 && $4+0 == 1' "$WORK/rows.txt")
+SOFT_INFO_ROWS=$(awk -F'|' '$3+0 > 0 && $4+0 == 0' "$WORK/rows.txt")
 ABSENT_TOTAL=$(awk -F'|' '{s += $2} END {print s+0}' "$WORK/rows.txt")
-SOFT_TOTAL=$(awk -F'|' '{s += $3} END {print s+0}' "$WORK/rows.txt")
-echo "读数: absent=$ABSENT_TOTAL soft_deleted=$SOFT_TOTAL (共 $(grep -c . "$WORK/rows.txt" || true) 对有非零计数)"
+SOFT_ESC_TOTAL=$(awk -F'|' '$4+0 == 1 {s += $3} END {print s+0}' "$WORK/rows.txt")
+SOFT_INFO_TOTAL=$(awk -F'|' '$4+0 == 0 {s += $3} END {print s+0}' "$WORK/rows.txt")
+echo "读数: absent=$ABSENT_TOTAL soft_deleted(escalate)=$SOFT_ESC_TOTAL soft_deleted(info)=$SOFT_INFO_TOTAL (共 $(grep -c . "$WORK/rows.txt" || true) 对有非零计数)"
 
-if [ -n "$SOFT_ROWS" ]; then
+if [ -n "$SOFT_INFO_ROWS" ]; then
   echo
   echo "ℹ️ INFO parent-soft-deleted-children-live —— 父软删未级联; 子表若无独立读路径则无用户影响:"
-  printf '%s\n' "$SOFT_ROWS" | awk -F'|' '{printf "     %s  soft_deleted=%s\n", $1, $3}'
+  printf '%s\n' "$SOFT_INFO_ROWS" | awk -F'|' '{printf "     %s  soft_deleted=%s\n", $1, $3}'
 fi
 
-if [ -z "$ABSENT_ROWS" ]; then
+if [ -n "$SOFT_ESC_ROWS" ]; then
   echo
-  echo "✓ 没有悬空引用 (absent=0)。"
+  echo "🔴 父软删但子表有独立读路径, 可能 EntityNotFoundException:"
+  printf '%s\n' "$SOFT_ESC_ROWS" | awk -F'|' '{printf "     %s  soft_deleted=%s\n", $1, $3}'
+fi
+
+if [ -z "$ABSENT_ROWS" ] && [ -z "$SOFT_ESC_ROWS" ]; then
+  echo
+  echo "✓ 没有悬空引用, 也没有 escalate 的父软删。"
   exit 0
 fi
-echo
-echo "🔴 悬空引用 —— 下面每一条的父行**不存在**, 可能让对应页面 500:"
-printf '%s\n' "$ABSENT_ROWS" | awk -F'|' '{printf "     %s  absent=%s\n", $1, $2}'
+if [ -n "$ABSENT_ROWS" ]; then
+  echo
+  echo "🔴 悬空引用 —— 下面每一条的父行**不存在**, 可能让对应页面 500:"
+  printf '%s\n' "$ABSENT_ROWS" | awk -F'|' '{printf "     %s  absent=%s\n", $1, $2}'
+fi
 echo "   修法看情况, ⛔ 不要一刀切:"
 echo "     · 子表指向父表(明细/单据)  → 多半是**软删父行时没级联**, 应补级联, ⛔ 不是加 @NotFound"
 echo "     · 审计字段(created_by 等)  → 加 @NotFound(IGNORE)。那个人离职/注销是常态,"

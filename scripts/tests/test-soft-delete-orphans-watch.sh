@@ -112,8 +112,11 @@ make_psql() {  # $1 = 退出码, $2 = 扫描 stdout
     [ "$a" = "$b" ] && [ -n "$a" ] && fail "psql 桩两条分派回了同一份内容 —— 分派键失效"
     return 0
 }
-# 扫描输出的行格式(与生成器的 SQL 出的列一致): assoc|absent|soft_deleted
-scan_row() { printf '%s|%s|%s\n' "$1" "$2" "$3"; }
+# 扫描输出的行格式(与生成器的 SQL 出的列一致):
+#   assoc|absent|soft_deleted|escalate_soft_deleted
+# 第 4 个参数不给就默认 0(非 escalate) —— ⚠️ 默认值只是为了让「悬空引用」那几条
+# 用例读起来短, 凡是**要考 escalate 的用例必须显式写出来**, ⛔ 不许靠默认值蒙对。
+scan_row() { printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "${4:-0}"; }
 
 # 快照(装在服务器上那份)与「真库实测」两侧。默认两侧一致 ⇒ 对账通过。
 CAPTURE_SQL="SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'"
@@ -261,12 +264,14 @@ make_environ "${GOOD_ENV[@]}"
 make_psql 0 "$(scan_row 'process_sheet_rows.plan_id -> production_plans' 56 0)"
 run_watch
 assert_rc 1 "absent>0"
-assert_ledger "ORPHANS_FOUND absent=56 soft-deleted=0 pairs-absent=1" "absent>0"
+assert_ledger "ORPHANS_FOUND absent=56 soft-deleted-escalated=0 soft-deleted-info=0 pairs-absent=1 pairs-soft-escalated=0" "absent>0"
 grep -Fq "process_sheet_rows.plan_id" "$ALERTS" || fail "告警里没列出悬空引用行"
 grep -Fq "absent=56" "$ALERTS" || fail "告警里没带 absent 计数"
 grep -q "可能让对应页面 500" "$ALERTS" || fail "absent>0 必须带 500 升级措辞"
 assert_no_ledger "parent-soft-deleted-children-live" "soft_deleted=0 时不许写 INFO 行"
-ok "absent>0 ⇒ rc=1 + 明细进告警 + 500 升级措辞"
+assert_no_ledger "SOFT_DELETED_ESCALATED" "soft_deleted=0 时不许写 escalate 行"
+grep -q "EntityNotFoundException" "$ALERTS" && fail "只有悬空引用时不该出现 EntityNotFoundException 那一段"
+ok "absent>0 ⇒ rc=1 + 明细进告警 + 500 升级措辞(且不混入另一段)"
 
 # ═════════ 9b. 🔴 soft_deleted>0 且 absent=0 ⇒ rc=0 + INFO, ⛔ 不喊 500 ═══
 # 🔴 这是本次改动守的**那个**行为。旧版每对只有一个 `bad` 列, 3262 行父软删被
@@ -275,29 +280,51 @@ ok "absent>0 ⇒ rc=1 + 明细进告警 + 500 升级措辞"
 #    那句最响的话是**假的**, 在告警文件里躺了 16 天没人读(形态 D′)。
 # ⚠️ 阳性对照来自桩, ⛔ 不从 prod 取: organizer 正在把那 3262 行的 deleted_at
 #    对齐到父行, prod 上这一对随时会读成 0 —— 拿它当对照等于对照会自己消失。
-echo "[9b] soft_deleted>0 且 absent=0 ⇒ rc=0 + INFO 行, 且**不出现** 500"
-make_psql 0 "$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262)"
+echo "[9b] soft_deleted>0 且 absent=0 且**非 escalate** ⇒ rc=0 + INFO 行, 且**不出现** 500"
+make_psql 0 "$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262 0)"
 run_watch
 assert_rc 0 "soft-deleted-only"
 assert_ledger "OK soft-deleted-only soft-deleted=3262 pairs=1" "soft-deleted-only 判决行"
 assert_ledger "INFO parent-soft-deleted-children-live semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes count=3262" "INFO 行"
 assert_ledger "父软删未级联; 子表若无独立读路径则无用户影响" "INFO 行要带提示语"
-# 阴性对照(两条, 缺一条这个用例就只是在证明「有东西写出来了」):
+# 阴性对照(三条, 缺一条这个用例就只是在证明「有东西写出来了」):
 assert_no_ledger "ORPHANS_FOUND" "只有父软删时不许报 ORPHANS_FOUND"
+assert_no_ledger "SOFT_DELETED_ESCALATED" "非 escalate 不许写 escalate 台账键"
 grep -q "500" "$LEDGER" && fail "父软删那一类不许出现「500」字样"
 [ ! -s "$ALERTS" ] || fail "父软删那一类不许写告警文件(它不可行动): $(cat "$ALERTS")"
 ok "rc=0 + INFO 行(⛔ 不静默) + 台账无 500 + 告警文件空"
 
+# ═════════ 9b-esc. 🔴 同样是 soft_deleted>0, 但 escalate=1 ⇒ rc=1 ═════════
+# 🔴 这是终审加的那条合并条件: **「父软删一律降级」= 把假阳换成假阴**。
+#    子表有自己的 Repository(可能被独立读取)且 FK 上没有 @NotFound 时,
+#    父软删子活就是实打实的 EntityNotFoundException 风险。
+# ⚠️ 与 9b **只差第 4 列**, 其余输入逐字相同 —— 这就是这条用例的变异对照:
+#    读数变了只可能是 escalate 那一位造成的。
+echo "[9b-esc] soft_deleted>0 且 escalate=1 ⇒ rc=1 + EntityNotFoundException 措辞"
+make_psql 0 "$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262 1)"
+run_watch
+assert_rc 1 "soft-deleted escalate"
+assert_ledger "ORPHANS_FOUND absent=0 soft-deleted-escalated=3262 soft-deleted-info=0 pairs-absent=0 pairs-soft-escalated=1" "escalate 判决行"
+assert_ledger "SOFT_DELETED_ESCALATED semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes count=3262" "escalate 台账行"
+assert_ledger "子表有独立读路径且 FK 无 @NotFound" "escalate 台账行要带依据"
+grep -q "可能 EntityNotFoundException" "$ALERTS" || fail "escalate 必须用它自己的措辞"
+grep -Fq "soft_deleted=3262" "$ALERTS" || fail "告警里没带 soft_deleted 计数"
+# 阴性对照(措辞必须与 absent 那一段**区分开**, 否则又回到一句话罩住两种风险):
+grep -q "可能让对应页面 500" "$ALERTS" && fail "escalate 段不许用 absent 的 500 措辞"
+grep -q "悬空引用" "$ALERTS" && fail "absent=0 时不许出现「悬空引用」那一段"
+assert_no_ledger "parent-soft-deleted-children-live" "escalate 的那对不许同时写 INFO 键"
+ok "只翻第 4 列 ⇒ rc 0→1, 措辞换成 EntityNotFoundException 且与 500 段互斥"
+
 # ═════════ 9c. 两类同时存在 ⇒ rc=1, 但 3262 不许混进 500 那一段 ═══════════
 # 🔴 这一条守的是 09-06 那次真实读数的形状: 同一次跑批里 3262(父软删)把
 #    56 + 10(悬空)淹掉了。分列之后, 告警段里**只能**有悬空那两对。
-echo "[9c] absent>0 + soft_deleted>0 ⇒ rc=1, 告警段只收 absent 那一类"
-make_psql 0 "$(scan_row 'process_sheet_rows.plan_id -> production_plans' 56 0)
-$(scan_row 'report_reversal_logs.plan_id -> production_plans' 10 0)
-$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262)"
+echo "[9c] absent>0 + 非 escalate 的 soft_deleted>0 ⇒ rc=1, 告警段只收 absent 那一类"
+make_psql 0 "$(scan_row 'process_sheet_rows.plan_id -> production_plans' 56 0 0)
+$(scan_row 'report_reversal_logs.plan_id -> production_plans' 10 0 0)
+$(scan_row 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes' 0 3262 0)"
 run_watch
 assert_rc 1 "两类同时"
-assert_ledger "ORPHANS_FOUND absent=66 soft-deleted=3262 pairs-absent=2" "两类同时"
+assert_ledger "ORPHANS_FOUND absent=66 soft-deleted-escalated=0 soft-deleted-info=3262 pairs-absent=2 pairs-soft-escalated=0" "两类同时"
 assert_ledger "INFO parent-soft-deleted-children-live semi_finished_stocktake_items" "两类同时也要有 INFO 行"
 grep -Fq "process_sheet_rows.plan_id" "$ALERTS" || fail "告警里缺 process_sheet_rows"
 grep -Fq "report_reversal_logs.plan_id" "$ALERTS" || fail "告警里缺 report_reversal_logs"
@@ -310,15 +337,32 @@ ok "rc=1; 明细只有 2 对悬空引用, 3262 只留一行交叉引用"
 
 # ═════════ 9d. 结果列形状不对 ⇒ rc=2, ⛔ 不许静默读成 0 行 ════════════════
 # 装机是 3 个文件一起装(sql / hasdel / watch), 但装到一半、或有人手 scp 了旧版
-# 单列 SQL 时, 输出会是 `assoc|3262` 两列。⛔ 「解析不出来」不许退化成
-# 「今天没孤儿」—— 那正是硬约束 4 说的把「没量到」翻译成「没问题」。
+# SQL 时, 输出会少列。⛔ 「解析不出来」不许退化成「今天没孤儿」——
+# 那正是硬约束 4 说的把「没量到」翻译成「没问题」。
+# ⚠️ 三种少列/错列各构造一次: 少列的两种是**真会发生的装机偏差**,
+#    第三种(escalate 印成 t/f)是「换了个 psql 输出口径」那一类。
 echo "[9d] 旧版单列输出 ⇒ rc=2 result-shape-unexpected"
 make_psql 0 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes|3262'
 run_watch
-assert_rc 2 "形状不对"
-assert_ledger "INSTRUMENT_DEAD reason=result-shape-unexpected" "形状不对"
+assert_rc 2 "形状不对(2 列)"
+assert_ledger "INSTRUMENT_DEAD reason=result-shape-unexpected" "形状不对(2 列)"
 assert_no_ledger "OK no-orphans" "形状不对绝不许落进「没有孤儿」"
 ok "两列输出 ⇒ rc=2, ⛔ 不是 rc=0"
+
+echo "[9d-3] 上一版三列输出(无 escalate 列) ⇒ 同样 rc=2"
+make_psql 0 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes|0|3262'
+run_watch
+assert_rc 2 "形状不对(3 列)"
+assert_ledger "INSTRUMENT_DEAD reason=result-shape-unexpected" "形状不对(3 列)"
+assert_no_ledger "OK soft-deleted-only" "缺 escalate 列时⛔ 不许当成非 escalate 放行"
+ok "三列输出 ⇒ rc=2 (⛔ 不许把「缺这一列」默认成 escalate=0)"
+
+echo "[9d-tf] escalate 印成 t/f ⇒ 同样 rc=2"
+make_psql 0 'semi_finished_stocktake_items.stocktake_id -> semi_finished_stocktakes|0|3262|t'
+run_watch
+assert_rc 2 "形状不对(t/f)"
+assert_ledger "INSTRUMENT_DEAD reason=result-shape-unexpected" "形状不对(t/f)"
+ok "boolean 字面量 ⇒ rc=2 (生成器写的是 0/1 整数)"
 
 # ═════════ 10. 出处检查取代 mtime ═════════════════════════════════════════
 # 🔴 旧判据是 `[ "$JAR" -nt "$SQL_FILE" ]` —— **每次部署 jar 都变新**, 于是它
@@ -419,8 +463,8 @@ ok "恰好 1 行判决 + 保留了 aborted-before-verdict 兜底"
 # 新增的第 4 种判决(soft-deleted-only)也必须**恰好一条** —— ⛔ INFO 行不许把它顶掉,
 # 也不许它自己变成两条。硬约束 9: 「台账涨了」不等于「判决写了」。
 echo "[13b] soft-deleted-only 路径也是恰好 1 行判决 + N 行 INFO"
-make_psql 0 "$(scan_row 'a_items.p_id -> a_parents' 0 7)
-$(scan_row 'b_items.p_id -> b_parents' 0 5)"
+make_psql 0 "$(scan_row 'a_items.p_id -> a_parents' 0 7 0)
+$(scan_row 'b_items.p_id -> b_parents' 0 5 0)"
 run_watch
 n=$(grep -cE "$VERDICT_RE" "$LEDGER")
 [ "$n" = "1" ] || fail "soft-deleted-only 应恰好 1 行判决, 实得 $n"
@@ -428,6 +472,25 @@ ni=$(grep -c 'INFO parent-soft-deleted-children-live' "$LEDGER")
 [ "$ni" = "2" ] || fail "两对父软删应写 2 行 INFO, 实得 $ni"
 assert_ledger "OK soft-deleted-only soft-deleted=12 pairs=2" "两对合计 12"
 ok "1 行判决 + 2 行 INFO, 合计数按对求和"
+
+# ═════════ 13c. escalate 与非 escalate 混在一起时, 两侧分别求和 ════════════
+# 🔴 阴性对照的关键: 12 与 7 必须**分别**落进 soft-deleted-escalated 与
+#    soft-deleted-info, ⛔ 不许两侧共用一个总数(那等于第 4 列没被读)。
+echo "[13c] escalate 与非 escalate 混在一起 ⇒ 两个合计数分开"
+make_psql 0 "$(scan_row 'esc_items.p_id -> esc_parents' 0 12 1)
+$(scan_row 'info_items.p_id -> info_parents' 0 7 0)"
+run_watch
+assert_rc 1 "混合"
+assert_ledger "ORPHANS_FOUND absent=0 soft-deleted-escalated=12 soft-deleted-info=7 pairs-absent=0 pairs-soft-escalated=1" "两侧分别求和"
+assert_ledger "SOFT_DELETED_ESCALATED esc_items.p_id -> esc_parents count=12" "escalate 那对"
+assert_ledger "INFO parent-soft-deleted-children-live info_items.p_id -> info_parents count=7" "非 escalate 那对"
+n=$(grep -cE "$VERDICT_RE" "$LEDGER")
+[ "$n" = "1" ] || fail "混合路径应恰好 1 行判决, 实得 $n"
+# 阴性对照: 非 escalate 那对不许进告警明细。
+awk '/可能 EntityNotFoundException/{s=1;next} /修法看情况/{s=0} s' "$ALERTS" \
+    | grep -q "info_items" && fail "非 escalate 那对混进了 EntityNotFoundException 明细"
+grep -Fq "另有 7 行属" "$ALERTS" || fail "告警里应有交叉引用说清 7 行去了台账"
+ok "12 → escalated / 7 → info, 两侧不串"
 
 echo
 echo "PASS: test-soft-delete-orphans-watch.sh ($PASSED 项)"
