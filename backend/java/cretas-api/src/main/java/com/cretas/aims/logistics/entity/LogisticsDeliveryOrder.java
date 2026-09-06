@@ -11,6 +11,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -36,6 +37,7 @@ import java.util.UUID;
                 @Index(name = "idx_ldo_batch", columnList = "batch_id"),
                 @Index(name = "idx_ldo_factory", columnList = "factory_id")
         })
+@SQLDelete(sql = "UPDATE logistics_delivery_orders SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 @Data
 @EqualsAndHashCode(callSuper = true)

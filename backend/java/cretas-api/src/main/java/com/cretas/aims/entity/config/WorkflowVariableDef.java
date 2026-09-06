@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.GenericGenerator;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -22,6 +23,7 @@ import org.hibernate.annotations.Where;
  */
 @Entity
 @Table(name = "workflow_variable_def")
+@SQLDelete(sql = "UPDATE workflow_variable_def SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

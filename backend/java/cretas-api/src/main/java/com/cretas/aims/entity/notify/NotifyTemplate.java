@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.util.*;
@@ -35,6 +36,7 @@ import java.util.*;
            @Index(name = "idx_notify_templates_factory",
                   columnList = "factory_id")
        })
+@SQLDelete(sql = "UPDATE notify_templates SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

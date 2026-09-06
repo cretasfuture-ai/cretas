@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.time.LocalDateTime;
@@ -36,6 +37,7 @@ import java.util.UUID;
 @Table(name = "scheduled_tasks", indexes = {
         @Index(name = "idx_scheduled_tasks_enabled", columnList = "enabled")
 })
+@SQLDelete(sql = "UPDATE scheduled_tasks SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

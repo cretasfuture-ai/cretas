@@ -8,6 +8,7 @@ import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.GenericGenerator;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.util.ArrayList;
@@ -46,6 +47,7 @@ import java.util.List;
  */
 @Entity
 @Table(name = "voucher_templates")
+@SQLDelete(sql = "UPDATE voucher_templates SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter
