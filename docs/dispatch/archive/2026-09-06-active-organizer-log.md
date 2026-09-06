@@ -319,3 +319,11 @@
 - **窄终审可合**：新闸用 AST 从 `AppNavigator` 解析角色分派、从各导航器解析 `Screen` 名并 BFS 嵌套，CI 读数「校验过的 route 数=26」= main 8 + sales 5 + procurement 5 + finance 1 + cashier 2 + viewer 5；手工核 sales/finance 集每条路由都在对应导航器；`CommonActions.navigate({name: tab, params:{screen}})` 嵌套形态由 RNTL 钉住；权限：各集 `requiredPermissions` 都能被该角色登录 `<prefix>:*` 满足，cashier 的 `CashierPaymentTab` 与卡片 `requiredRoles:['cashier']` 同用 `getUserRole`；模块集由导航器 `initialParams` 选定（不是按权限猜），闸「每个挂载点显式声明 moduleSet」堵住漏传回落。i18n 12 键 × 2 语言，新闸查 88 次缺 0。`MAIN_HOME_MODULES` 与旧内联 5 项逐字段相同。`git merge-tree` 干净。两条 follow-up（Line A）：`home-modules-before-probe.spec.ts` 红-by-design 但未被任何配置排除，建议 `test.skip(!process.env.VSHOT_BEFORE_PROBE)`；非初始嵌套目标首次 tap 无返回箭头，考虑 `initial:false`。
 - **OTA [RUN]**：`push-bundle.sh` 88s，`ts=1788685466861`，manifest 切换，CDN 200（6.7MB）；hbc `HOME_MODULE_SETS_V1_NAVIGATOR_AWARE` 0→1、`closeShortShipment` 1（上一包已含）、对照 1、假串 0。真机复验 `PROBE-XIAOMI-HOME-AND-LIST-TAB-AFTER-OTA` 在跑。
 - **登记（交 Line A）**：`equipment_admin`/`quality_manager` 仍空（MainNavigator 无任何屏；是否加考勤卡待定）；`platform_admin` 账号角色串是 `super_admin` ⇒ 落 `RestrictedRoleNavigator`（既有分派缺陷）；`trace:read`/`system:read` 全角色不可达；`PlatformRole` 发 `system:all`；`isModuleEnabled('processing')` 与特性表 `production` id 不一致。
+
+
+## 2026-09-06 17:15 `PROBE-XIAOMI-HOME-AND-LIST-TAB-AFTER-OTA-20260906` 回报（只读）
+
+- **OTA 送达 ✅**：17:07:10 Check → CheckCompleteAvailable（`createdAt 09:05:43Z`）→ DownloadComplete 2.1s → 17:08:11 点「立即更新」Restart → `Running "main"` → Check → CheckCompleteUnavailable；launchAsset `production/1788685466861/…index-6e33ed8c….hbc` 精确匹配。
+- **#652 ✅**：销售首页 `CARD_COUNT=5`（结构计数：5 卡 + 4 tab + 1 铃 = 10 clickable）：销售订单 / 客户管理 / 应收应付 / 价格表 / 退货单；点客户管理落 客户管理 屏（6/6/0），返回后 5 卡仍在。
+- **#648 ✅**：全部 共 14 条 混合状态；已确认 共 0 条 + 空态「暂无销售单」（不再是 0 条 + 4 卡）；已完成 共 5 条 = 全滚动 5 张唯一卡全为 已完成，金额 15+6+62+10+4833.92=4926.92 与页脚逐字相等（页脚聚合的是 tab 自己的集合，不是全部）。
+- 仪器：第一次芯片计数误把 tab 栏标签算进去（y=459），按 y>500 重量；崩溃扫描 0 命中且配阳性对照（同窗口 app 日志 28 行、同正则在基线文件命中 4 次——两次 OTA 重启各 4 条 RN 软异常，既有形态）。
