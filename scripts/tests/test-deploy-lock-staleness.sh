@@ -37,7 +37,11 @@ on_test_exit() {
         [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
     done
     rm -f /tmp/lockstale-a1.lock /tmp/lockstale-a2.lock /tmp/lockstale-a3.lock \
+          /tmp/lockstale-a4.lock /tmp/lockstale-a4b.lock \
           /tmp/lockstale-a5.lock /tmp/lockstale-a6.lock
+    # A4 的临时调用方脚本写在 scripts/tests/ 下; 中途 fail 时也要收掉, 不然会留成未跟踪文件
+    # (2026-09-07 变异跑红一次就漏了一个 .tmp-lock-caller-<pid>.sh)。
+    rm -f "$ROOT_DIR/scripts/tests/.tmp-lock-caller-$$.sh" "$ROOT_DIR/scripts/tests/.tmp-lock-caller-buggy-$$.sh"
 }
 trap on_test_exit EXIT
 
@@ -186,8 +190,13 @@ rm -f /tmp/lockstale-a3.lock
 
 # ---------------------------------------------------------------------------
 # A4: 调用方在 acquire_deploy_lock 之后再设一次 EXIT trap 时(release-cretas.sh /
-#     deploy-web-admin.sh 都是这个形状), 必须用 $ACQUIRED_DEPLOY_LOCK_FILE 自己
-#     清锁, 否则正常退出后锁文件会留在 /tmp 里。
+#     deploy-web-admin.sh / deploy-backend.sh 都是这个形状), 必须自己调
+#     release_deploy_lock 兜底, 否则正常退出后锁会以「stale」的样子留下来。
+#     2026-09-06 (#679 终审) 起释放按模式分叉, 读数也分开:
+#       · flock 模式: 文件**保留**(⛔ 不 unlink —— rm 会造出第二把互不可见的锁,
+#         orphan-holder 测试的 D 读数), 但登记 PID 被截掉; 下一次获取成功且**不**报
+#         reclaiming (正常释放不是 stale)。
+#       · PID 文件模式 (Windows Git Bash): 文件就是锁, 必须消失。
 # ---------------------------------------------------------------------------
 CALLER_SCRIPT="$ROOT_DIR/scripts/tests/.tmp-lock-caller-$$.sh"
 cat > "$CALLER_SCRIPT" <<CALLERSH
@@ -197,7 +206,7 @@ source "$COMMON"
 acquire_deploy_lock "lockstale-a4" || exit 1
 my_exit() {
     local rc=\$?
-    rm -f "\${ACQUIRED_DEPLOY_LOCK_FILE:-/tmp/lockstale-a4.lock}" 2>/dev/null || true
+    release_deploy_lock
 }
 trap my_exit EXIT
 exit 0
@@ -205,15 +214,30 @@ CALLERSH
 chmod +x "$CALLER_SCRIPT"
 rm -f /tmp/lockstale-a4.lock
 bash "$CALLER_SCRIPT"
-[ ! -f /tmp/lockstale-a4.lock ] \
-    || fail "A4: 调用方自己的 EXIT trap 清了锁, 但锁文件仍在 —— 测试自身有问题"
-rm -f "$CALLER_SCRIPT"
-echo "PASS A4 (正例): 调用方自己清锁 -> 锁文件按预期消失"
+if command -v flock >/dev/null 2>&1; then
+    [ -f /tmp/lockstale-a4.lock ] \
+        || fail "A4 (flock): release_deploy_lock 不该 unlink 锁文件 —— rm 路径会造出第二把互不可见的锁"
+    [ ! -s /tmp/lockstale-a4.lock ] \
+        || fail "A4 (flock): 正常释放应把登记 PID 截掉, 文件里还有: $(cat /tmp/lockstale-a4.lock)"
+    A4_LOG=$(bash -c "source '$COMMON'; acquire_deploy_lock lockstale-a4" 2>&1); A4_RC=$?
+    [ "$A4_RC" -eq 0 ] \
+        || fail "A4 (flock): 正常释放后下一次获取应成功, 实得 rc=$A4_RC: $A4_LOG"
+    echo "$A4_LOG" | grep -q reclaiming \
+        && fail "A4 (flock): 正常释放不是 stale, 不该报 reclaiming: $A4_LOG"
+    echo "READING: A4_MODE=flock lockfile_kept_empty=yes next_acquire_rc=$A4_RC"
+    echo "PASS A4 (正例, flock): 调用方 release_deploy_lock -> 文件保留但清空, 下次获取成功且不报 reclaiming"
+else
+    [ ! -f /tmp/lockstale-a4.lock ] \
+        || fail "A4 (pidfile): 调用方自己的 EXIT trap 释放了锁, 但锁文件仍在 —— PID 文件模式下文件就是锁"
+    echo "READING: A4_MODE=pidfile lockfile_removed=yes"
+    echo "PASS A4 (正例, pidfile): 调用方 release_deploy_lock -> 锁文件按预期消失"
+fi
+rm -f "$CALLER_SCRIPT" /tmp/lockstale-a4.lock
 
 # 反例(证明 A4 的断言真的在守东西, 不是空气): 调用方后设的 EXIT trap
-# 【不】清锁 —— 复现 release-cretas.sh / deploy-web-admin.sh 修复前的原始形状,
-# 锁文件必须留下来。这一段本身不是"新增断言", 是用来证明上面那条断言并非
-# 对任何调用方模式都恒为 true。
+# 【不】释放锁 —— 复现 release-cretas.sh / deploy-web-admin.sh 修复前的原始形状。
+# flock 模式: 登记 PID 留在文件里, 下一次获取会报 reclaiming (正例断言的「不报」由此不是空气);
+# PID 文件模式: 锁文件留下来。
 BUGGY_CALLER_SCRIPT="$ROOT_DIR/scripts/tests/.tmp-lock-caller-buggy-$$.sh"
 cat > "$BUGGY_CALLER_SCRIPT" <<CALLERSH
 #!/usr/bin/env bash
@@ -221,7 +245,7 @@ set -euo pipefail
 source "$COMMON"
 acquire_deploy_lock "lockstale-a4b" || exit 1
 my_exit() {
-    :  # 复现修复前的 on_exit: 只写报告, 不清锁 —— bash 的 trap 不叠加,
+    :  # 复现修复前的 on_exit: 只写报告, 不释放锁 —— bash 的 trap 不叠加,
        # 这一条会整个替换掉 acquire_deploy_lock 注册的清锁 trap。
 }
 trap my_exit EXIT
@@ -232,7 +256,16 @@ rm -f /tmp/lockstale-a4b.lock
 bash "$BUGGY_CALLER_SCRIPT"
 [ -f /tmp/lockstale-a4b.lock ] \
     || fail "A4 反例: 预期复现'调用方后设 trap 覆盖清锁 trap'这个原始 bug, 但锁文件却被清掉了 —— 说明上面 A4 的断言没有守住任何东西(它对任何调用方形状都会通过)"
-echo "PASS A4 (反例): 不清锁的调用方形状确实会漏留锁文件 -- 证明正例的断言不是空气"
+if command -v flock >/dev/null 2>&1; then
+    [ -s /tmp/lockstale-a4b.lock ] \
+        || fail "A4 反例 (flock): 不释放的调用方应把登记 PID 留在文件里, 文件却是空的"
+    A4B_LOG=$(bash -c "source '$COMMON'; acquire_deploy_lock lockstale-a4b" 2>&1); A4B_RC=$?
+    echo "$A4B_LOG" | grep -q reclaiming \
+        || fail "A4 反例 (flock): 留下死 PID 的锁, 下一次获取应报 reclaiming (否则正例的「不报 reclaiming」是空气), 实得 rc=$A4B_RC: $A4B_LOG"
+    echo "PASS A4 (反例, flock): 不释放的调用方留下死 PID -> 下次获取报 reclaiming; 正例的「不报」不是空气"
+else
+    echo "PASS A4 (反例, pidfile): 不释放的调用方形状确实会漏留锁文件 -- 证明正例的断言不是空气"
+fi
 rm -f "$BUGGY_CALLER_SCRIPT" /tmp/lockstale-a4b.lock
 
 # ---------------------------------------------------------------------------
@@ -315,18 +348,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 结构闸: 真实的 release-cretas.sh / deploy-web-admin.sh 必须落在 A4 的"正例"
-# 那个形状里, 不是"反例"那个形状 —— 光测试模式对不代表真文件真的改了。
+# 结构闸: 真实的 release-cretas.sh / deploy-web-admin.sh / deploy-backend.sh 必须落在
+# A4 的"正例"那个形状里 (EXIT trap 里调 release_deploy_lock), 不是"反例"那个形状 ——
+# 光测试模式对不代表真文件真的改了。同时**禁止**旧写法 `rm -f "${ACQUIRED_DEPLOY_LOCK_FILE…`
+# 回潮: flock 模式下它 unlink 路径 = 造出第二把互不可见的锁; 被拒那次退出还会删掉别人的锁
+# (orphan-holder 测试的 D / E 读数)。只看非注释行 —— 闸不能把自己的注释数进去。
 # ---------------------------------------------------------------------------
-grep -Pzo '(?s)on_exit\(\).*?\n\}' "$RELEASE" | tr -d '\0' \
-    | grep -q 'rm -f "\${ACQUIRED_DEPLOY_LOCK_FILE' \
-    || fail "结构闸: release-cretas.sh 的 on_exit() 里没找到用 \$ACQUIRED_DEPLOY_LOCK_FILE 清锁的那一行"
-echo "PASS 结构闸: release-cretas.sh on_exit() 含清锁兜底"
-
-grep -Pzo '(?s)web_deploy_on_exit\(\).*?\n\}' "$WEB" | tr -d '\0' \
-    | grep -q 'rm -f "\${ACQUIRED_DEPLOY_LOCK_FILE' \
-    || fail "结构闸: deploy-web-admin.sh 的 web_deploy_on_exit() 里没找到用 \$ACQUIRED_DEPLOY_LOCK_FILE 清锁的那一行"
-echo "PASS 结构闸: deploy-web-admin.sh web_deploy_on_exit() 含清锁兜底"
+BACKEND="$ROOT_DIR/scripts/deploy/deploy-backend.sh"
+check_caller_release() {   # $1=文件 $2=函数名 $3=说明
+    local body
+    body=$(grep -Pzo "(?s)\n$2\(\) \{.*?\n\}" "$1" | tr -d '\0' | grep -v '^\s*#')
+    [ -n "$body" ] || fail "结构闸: $3 里没找到 $2() 的定义"
+    echo "$body" | grep -q 'release_deploy_lock' \
+        || fail "结构闸: $3 的 $2() 里没调 release_deploy_lock 兜底"
+    echo "$body" | grep -q 'rm -f "\${ACQUIRED_DEPLOY_LOCK_FILE' \
+        && fail "结构闸: $3 的 $2() 里还有旧写法 rm -f \"\${ACQUIRED_DEPLOY_LOCK_FILE…}\" —— flock 模式下 unlink 会造出第二把互不可见的锁"
+    echo "PASS 结构闸: $3 $2() 走 release_deploy_lock, 无 rm 路径"
+}
+check_caller_release "$RELEASE" on_exit           "release-cretas.sh"
+check_caller_release "$WEB"     web_deploy_on_exit "deploy-web-admin.sh"
+check_caller_release "$BACKEND" cleanup           "deploy-backend.sh"
+CALLER_RM_COUNT=$(grep -v '^\s*#' "$RELEASE" "$WEB" "$BACKEND" | grep -c 'rm -f "\${ACQUIRED_DEPLOY_LOCK_FILE' || true)
+echo "READING: CALLER_RM_LOCK_LINES=$CALLER_RM_COUNT (硬约束 8: 改前 3, 改后必须 0)"
+[ "$CALLER_RM_COUNT" -eq 0 ] || fail "结构闸: 三个调用方里仍有 $CALLER_RM_COUNT 处 rm -f \"\${ACQUIRED_DEPLOY_LOCK_FILE…}\""
 
 # A5 的真实布线闸: recover_from_main_drift() 必须真的在 exec 之前设了这个
 # 环境变量 —— 光有 A5 那个原语级测试不够, 原语对了不代表真实调用点接上了

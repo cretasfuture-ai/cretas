@@ -350,34 +350,6 @@ deploy_pid_alive() {
 # deploy_pid_cmdline <pid>
 # 尽力而为取一条给人看的「这是谁的进程」线索(可执行路径/命令行), 只用于日志,
 # 取不到就是 "unknown" —— 不让这条辅助信息拖累主判据 (deploy_pid_alive 才是判据)。
-# deploy_lock_holders <lock_file>
-# 列出所有把 <lock_file> 打开着的进程 (pid:cmdline), 空格分隔。⛔ 不只看锁文件里登记的那个 PID:
-# 持有者死后, 按着锁的是它的孤儿子进程, 它们的 pid 只在 /proc/*/fd 里能找到。
-# Linux 扫 /proc (锁文件若已被 unlink, readlink 会带 " (deleted)" 后缀, 同样算); 没有 /proc 时退回 lsof。
-deploy_lock_holders() {
-    local lock_file="$1" fd target pid out=""
-    [ -n "$lock_file" ] || return 0
-    if [ -d /proc/self/fd ]; then
-        for fd in /proc/[0-9]*/fd/*; do
-            target=$(readlink "$fd" 2>/dev/null) || continue
-            case "$target" in
-                "$lock_file"|"$lock_file (deleted)")
-                    pid=${fd#/proc/}; pid=${pid%%/*}
-                    # 跳过自己: 本函数几乎总在 $(…) 里被调, 那个子 shell 也继承了 fd 200 ——
-                    # $$ 是主 shell, $BASHPID 才是子 shell 自己 (2026-09-06 实测漏掉过后者)。
-                    [ "$pid" = "$$" ] && continue
-                    [ "$pid" = "${BASHPID:-}" ] && continue
-                    case " $out " in *" $pid:"*) continue ;; esac
-                    out="$out $pid:$(deploy_pid_cmdline "$pid" | cut -c1-60)"
-                    ;;
-            esac
-        done
-    elif command -v lsof >/dev/null 2>&1; then
-        out=$(lsof -t "$lock_file" 2>/dev/null | tr '\n' ' ')
-    fi
-    printf '%s' "${out# }"
-}
-
 deploy_pid_cmdline() {
     local pid="$1"
     [ -n "$pid" ] || { echo "unknown"; return; }
@@ -411,9 +383,74 @@ deploy_pid_cmdline() {
     esac
 }
 
+# deploy_lock_holders <lock_file>
+# 列出所有把 <lock_file> 打开着的进程, **每行一个** `pid:cmdline` (cmdline 截到 160 字符 ——
+# 要够看见 rsync/ssh 的目标主机与路径, 操作者凭它判断「这个孤儿还在写生产制品吗」)。
+# ⛔ 不只看锁文件里登记的那个 PID: 持有者死后, 按着锁的是它的孤儿子进程, 它们的 pid
+# 只在 /proc/*/fd 里能找到。Linux 扫 /proc (锁文件若已被 unlink, readlink 会带
+# " (deleted)" 后缀, 同样算); 没有 /proc 时退回 lsof (只有 pid, cmdline 记 unknown)。
+deploy_lock_holders() {
+    local lock_file="$1" fd target pid out="" seen=" "
+    [ -n "$lock_file" ] || return 0
+    if [ -d /proc/self/fd ]; then
+        for fd in /proc/[0-9]*/fd/*; do
+            target=$(readlink "$fd" 2>/dev/null) || continue
+            case "$target" in
+                "$lock_file"|"$lock_file (deleted)")
+                    pid=${fd#/proc/}; pid=${pid%%/*}
+                    # 跳过自己: 本函数几乎总在 $(…) 里被调, 那个子 shell 也继承了 fd 200 ——
+                    # $$ 是主 shell, $BASHPID 才是子 shell 自己 (2026-09-06 实测漏掉过后者)。
+                    [ "$pid" = "$$" ] && continue
+                    [ "$pid" = "${BASHPID:-}" ] && continue
+                    case "$seen" in *" $pid "*) continue ;; esac
+                    seen="$seen$pid "
+                    out="${out:+$out
+}$pid:$(deploy_pid_cmdline "$pid" | cut -c1-160)"
+                    ;;
+            esac
+        done
+    elif command -v lsof >/dev/null 2>&1; then
+        out=$(lsof -t "$lock_file" 2>/dev/null | sed 's/$/:unknown/')
+    fi
+    printf '%s' "$out"
+}
+
 # acquire_deploy_lock 成功获取锁后把锁文件路径写进这个全局变量, 供调用方自己的
 # EXIT trap 兜底清理用 —— 见下面 "调用方必须自己兜底" 那段注释, 这不是可选项。
+# ⚠️ 兜底要调 release_deploy_lock, ⛔ 不要自己 `rm -f` 这个路径 (见该函数注释)。
 ACQUIRED_DEPLOY_LOCK_FILE=""
+# 与之配对: 这把锁是怎么拿到的 —— flock | pidfile。释放动作按它分叉。
+ACQUIRED_DEPLOY_LOCK_MODE=""
+
+# release_deploy_lock
+# 调用方 EXIT trap 里的清锁兜底。三个调用方 (release-cretas.sh / deploy-backend.sh /
+# deploy-web-admin.sh) 都在 acquire 之后再设自己的 EXIT trap, 而 bash 的 trap 不叠加 ——
+# acquire 里注册的那条不会跑, 必须由它们显式调这里 (R43)。
+# 🔴 2026-09-06 起按模式分叉, ⛔ 不再 `rm -f` 路径:
+#   · flock 模式: 先把登记的 PID 截掉 (正常释放不是 stale, 下一次不该报 reclaiming),
+#     再只关 fd 200。内核在**最后一个**持有 fd 的进程退出时放锁 —— 若我们的子进程
+#     (rsync/ssh/mvn) 还没退, 锁**应该**留在它们手里, 那正是下一次 acquire 要挡的。
+#     `rm -f` 会把路径摘掉: 下一次 acquire `exec 200<>` 建的是**新 inode**, 孤儿按着旧的,
+#     两把锁互不可见 = 互斥失效 (test-deploy-lock-orphan-holder.sh 的 D 读数就是这个窗口)。
+#   · PID 文件模式 (没有 flock, Windows Git Bash): 文件本身就是锁, 必须 rm。
+#   · 没拿到锁 (被拒 / 还没 acquire) ⇒ 什么都不做。⛔ 旧写法 `rm -f "${ACQUIRED:-/tmp/x.lock}"`
+#     在**被拒那次**退出时会把别人正持有的锁文件删掉 (同一测试的 E 读数)。
+release_deploy_lock() {
+    local lock_file="${ACQUIRED_DEPLOY_LOCK_FILE:-}"
+    [ -n "$lock_file" ] || return 0
+    case "${ACQUIRED_DEPLOY_LOCK_MODE:-pidfile}" in
+        flock)
+            : >"$lock_file" 2>/dev/null || true
+            { exec 200>&-; } 2>/dev/null || true
+            ;;
+        *)
+            rm -f "$lock_file" 2>/dev/null || true
+            ;;
+    esac
+    ACQUIRED_DEPLOY_LOCK_FILE=""
+    ACQUIRED_DEPLOY_LOCK_MODE=""
+    return 0
+}
 
 acquire_deploy_lock() {
     local lock_name="${1:-cretas-deploy}"
@@ -453,6 +490,8 @@ acquire_deploy_lock() {
         && [ "${CRETAS_DEPLOY_REENTRY_PID:-}" = "$$" ]; then
         log "DEBUG" "已持有锁 (自我重入, PID $my_pid): $lock_file"
         ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
+        # exec 保留 fd 200, 所以重入后锁的模式与第一次相同: 有 flock 就是 flock 模式。
+        if command -v flock >/dev/null 2>&1; then ACQUIRED_DEPLOY_LOCK_MODE=flock; else ACQUIRED_DEPLOY_LOCK_MODE=pidfile; fi
         return 0
     fi
 
@@ -520,17 +559,41 @@ acquire_deploy_lock() {
             #      继承了 fd 200 还没退出。这时候放行 = 与一个可能还在写共享 jar 的 rsync 并发
             #      (5/30 形状); 所以**挡**, 并把按着锁的 pid 逐个点名 —— 操作者决定等还是杀。
             #      ⛔ 不 rm 锁文件: 那只会造出第二把互不可见的锁 (见上)。
-            local holder_pid holder_cmdline holders
-            holder_pid=$(cat "$lock_file" 2>/dev/null)
+            local holder_pid holder_cmdline holders holder_pids holder_line orphaned=0
+            holder_pid=$(cat "$lock_file" 2>/dev/null | tr -d '[:space:]')
             holders=$(deploy_lock_holders "$lock_file")
+            holder_pids=$(printf '%s\n' "$holders" | cut -d: -f1 | tr '\n' ' ')
+            holder_pids=${holder_pids% }
             if [ -n "$holder_pid" ] && deploy_pid_alive "$holder_pid"; then
                 holder_cmdline=$(deploy_pid_cmdline "$holder_pid")
                 log "ERROR" "另一个 deploy 进程持有锁 ($lock_file), PID $holder_pid, cmdline: $holder_cmdline. 等它完成后重试."
+            elif [ -n "$holder_pid" ]; then
+                orphaned=1
+                log "ERROR" "锁 ($lock_file) 的登记持有者 PID $holder_pid 已死, 但锁仍被按着 —— 是它的孤儿子进程还没退出 (继承了 fd 200)."
             else
-                log "ERROR" "锁 ($lock_file) 的登记持有者 PID ${holder_pid:-?} 已死, 但锁仍被按着 —— 是它的孤儿子进程还没退出 (继承了 fd 200)."
-                log "ERROR" "  等它们退出, 或确认它们不再写生产制品后 kill 掉; ⛔ 不要 rm 锁文件 —— 那会造出第二把互不可见的锁."
+                orphaned=1
+                log "ERROR" "锁 ($lock_file) 的登记持有者已正常释放, 但锁仍被按着 —— 是它留下的孤儿子进程 (继承了 fd 200) 还没退出."
             fi
-            log "ERROR" "  按着锁 (fd 200) 的进程: ${holders:-<扫不到, 试 lsof $lock_file>}"
+            if [ -n "$holders" ]; then
+                log "ERROR" "  按着锁 (fd 200) 的进程 (pid:cmdline):"
+                while IFS= read -r holder_line; do
+                    [ -n "$holder_line" ] && log "ERROR" "    $holder_line"
+                done <<<"$holders"
+            else
+                log "ERROR" "  按着锁 (fd 200) 的进程: <扫不到, 试 lsof $lock_file>"
+            fi
+            if [ "$orphaned" -eq 1 ]; then
+                # 逃生路要能直接复制: 上面每行 cmdline 里就有 rsync/ssh 的目标, 先看它们还在不在写
+                # 生产制品; 都不在了就 kill; 复核那行全部退出后直接重发, ⛔ 不 rm 锁文件。
+                if [ -n "$holder_pids" ]; then
+                    log "ERROR" "  处置 —— 逐条看上面的 cmdline, 确认孤儿 rsync/ssh 不再写生产制品后:"
+                    log "ERROR" "    kill $holder_pids"
+                    log "ERROR" "  复核 (打印 checked 且没有 'still alive' 就直接重发; ⛔ 不要 rm $lock_file —— 那会造出第二把互不可见的锁):"
+                    log "ERROR" "    for p in $holder_pids; do kill -0 \$p 2>/dev/null && echo \"still alive: \$p\"; done; echo checked"
+                else
+                    log "ERROR" "  处置 —— 先找到按着锁的进程: lsof $lock_file ; 确认它们不再写生产制品后 kill; ⛔ 不要 rm 锁文件 —— 那会造出第二把互不可见的锁."
+                fi
+            fi
             # ⛔ 失败要把自己这个 fd 关掉 —— 否则我们自己的子进程也会带着一个多余的锁 fd 出去。
             exec 200>&-
             return 1
@@ -546,15 +609,18 @@ acquire_deploy_lock() {
             prev_mtime=$(stat -c '%y' "$lock_file" 2>/dev/null || echo unknown)
             log "WARN" "stale lock from PID $prev_pid (dead), mtime $prev_mtime — reclaiming ($lock_file, flock released by kernel)"
         fi
-        # 写 PID 进 lock 文件, 让下次 precheck 能验证 (flock fd 在 SIGKILL 时不一定释放).
+        # 写 PID 进 lock 文件 —— ⛔ 它不是互斥判据 (互斥是内核的 flock, SIGKILL 也会释放),
+        # 只给三件事用: ① 拒绝信息里点名「登记持有者是谁、活没活」; ② 拿到锁时判要不要记一条
+        # reclaiming 日志; ③ release-cretas.sh 的自我重入判据 (文件里的 PID == 我 + 重入凭证)。
         # ⚠️ 截断挪到**拿到锁之后**: 上面改成不截断的 `<>` 之后, 旧内容比新 PID 长时
-        #    会留下尾巴(旧 1234567 + 新 999 = "9994567"), 而那串垃圾会被下一次
-        #    precheck 当成 PID 去问死活。
+        #    会留下尾巴(旧 1234567 + 新 999 = "9994567"), 而那串垃圾会被上面那段
+        #    prev_pid 判活当成 PID 去问死活。
         : >"$lock_file"
         deploy_lock_pid >&200
-        # fd 200 保持打开, 进程退出时 flock 自动释放
+        # fd 200 保持打开; 正常退出走 release_deploy_lock (只关 fd), 被杀时内核自动释放。
         log "DEBUG" "获取 flock: $lock_file (PID $$)"
         ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
+        ACQUIRED_DEPLOY_LOCK_MODE=flock
     else
         # PID 文件模式 (fallback)
         if [ -f "$lock_file" ]; then
@@ -582,6 +648,7 @@ acquire_deploy_lock() {
         trap 'rm -f "'"$lock_file"'" 2>/dev/null; true' EXIT
         log "DEBUG" "获取 PID 锁: $lock_file (PID $$)"
         ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
+        ACQUIRED_DEPLOY_LOCK_MODE=pidfile
     fi
 
     return 0

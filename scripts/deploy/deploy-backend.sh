@@ -962,10 +962,12 @@ cleanup() {
     rm -rf "$UPLOAD_STATUS_DIR"
     # R43 fix: 也清 deploy lock — 否则 trap cleanup 会覆盖 acquire_deploy_lock
     # 注册的 lock cleanup trap, 导致 stale lock leak. 反复出现"另一deploy进程在跑".
-    # 用 $ACQUIRED_DEPLOY_LOCK_FILE (acquire_deploy_lock 在 deploy-common.sh 里写的)
-    # 而不是重复硬编码路径字符串 —— 硬编码的那份和这里注册的锁名早晚会漂
-    # (release-cretas.sh / deploy-web-admin.sh 2026-09-02 同款修复一起改成这个变量)。
-    rm -f "${ACQUIRED_DEPLOY_LOCK_FILE:-/tmp/cretas-backend-deploy.lock}" 2>/dev/null || true
+    # 走 release_deploy_lock (deploy-common.sh), 它读 acquire 写下的 $ACQUIRED_DEPLOY_LOCK_FILE
+    # 而不是重复硬编码路径字符串 —— 硬编码的那份和这里注册的锁名早晚会漂。
+    # ⛔ 不再自己 `rm -f` 路径 (2026-09-06): flock 模式下 rm 会造出第二把互不可见的锁,
+    #    而被拒那次退出还会删掉别人正持有的锁文件 —— release_deploy_lock 按模式分叉,
+    #    没拿到锁时什么都不做 (test-deploy-lock-orphan-holder.sh D/E 读数)。
+    release_deploy_lock
     return "$exit_code"
 }
 trap cleanup EXIT
