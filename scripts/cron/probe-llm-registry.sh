@@ -29,38 +29,63 @@
 #
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-ENV_FILE=/www/wwwroot/cretas/.env.prod
-LOG=/www/wwwroot/cretas/logs/probe-llm-registry.log
-ALERTS=/www/wwwroot/cretas/logs/probe-llm-registry-alerts.log
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态)。
+PYDIR="${PROBE_LLM_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+ENV_FILE="${PROBE_LLM_ENV_FILE:-/www/wwwroot/cretas/.env.prod}"
+LOG="${PROBE_LLM_LOG:-/www/wwwroot/cretas/logs/probe-llm-registry.log}"
+ALERTS="${PROBE_LLM_ALERTS:-/www/wwwroot/cretas/logs/probe-llm-registry-alerts.log}"
+PFX="PROBE LLM REGISTRY"
+
+# 2026-09-06 审计批 3 (docs/ops/cron-scripts-path-audit-2026-09-06.md 表 #7): 两态 → 三态。
+# 原来 `rc!=0 就是真实漂移` —— 但 python 未捕获异常 (import 崩 / 连不上 / 密钥没配) 的默认 rc
+# 也是 1, 会被写成「FOUND DEAD ENTRIES」; 而 canary 首跑的 KeyError 就是这么变成假账单告警的。
+# 判据: python 只在跑到判定那一步才打 `[probe] <date> 共探 N 个` 抬头 —— 抬头没打就是崩在
+# 判定之前 (rc=2), 共探 0 个也是没量到 (rc=2), 只有「抬头在 + rc=1」才是真的 dead 条目。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh" || {
+    echo "$PFX INSTRUMENT DEAD $(date '+%F %T') reason=cron-common-missing — scripts/cron/cron-common.sh 不在本脚本旁边 (3d 整目录同步应一起到), 本次读数作废" >> "$ALERTS"
+    echo "$PFX INSTRUMENT DEAD reason=cron-common-missing" >&2; exit 2; }
+cron_pin_path
 
 mkdir -p "$(dirname "$LOG")"
 
 {
   echo "=== $(date '+%F %T') probe_llm_registry ==="
-  cd "$PYDIR"
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "$PFX" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "$PFX"
 
   # 凭证只从 .env.prod 注入, 绝不落进仓库(与 refresh-demo-rest.sh 同一规范)。
-  [[ -r "$ENV_FILE" ]] || { echo "Required server environment file is unavailable" >&2; exit 1; }
+  # 文件不在 ⇒ rc=2 (原来 exit 1, 与「有 dead 条目」同码)。
+  [ -r "$ENV_FILE" ] || cron_dead "$ALERTS" "$PFX" "env-file-missing:$(basename "$ENV_FILE")" "$ENV_FILE 不存在或不可读"
   set -a
   # shellcheck disable=SC1090
-  source "$ENV_FILE"
+  . "$ENV_FILE"
   set +a
 
-  PYTHONIOENCODING=utf-8 python -X utf8 -m scripts.probe_llm_registry
+  out=$(PYTHONIOENCODING=utf-8 python -X utf8 -m scripts.probe_llm_registry 2>&1)
   rc=$?
+  printf '%s\n' "$out"
   echo "=== done (rc=$rc) ==="
 
-  # 只有「dead」(注册表说活、实测不可用)才翻转 rc(见 probe_llm_registry.main()
-  # 内的判据), 所以这里 rc!=0 就是真实漂移, 值得每天都告警一次 —— 与
-  # restaurant-ai-eval.sh 的 alerts 约定一致: 报告是 best-effort, 告警文件
-  # 只在真失败时追加, 不会因为"7 天内到期"或"已过期待清理"这类预期内的信号
-  # 而天天写, 不会重蹈飞轮日报"天天炸=没人看"的覆辙。
-  if [ "$rc" -ne 0 ]; then
-    echo "PROBE LLM REGISTRY FOUND DEAD ENTRIES rc=$rc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
-  fi
+  # ── 三态 ──────────────────────────────────────────────────────────────
+  case "$out" in
+    *"[probe] "*) ;;
+    *) cron_dead "$ALERTS" "$PFX" "probe-crashed" \
+         "python rc=$rc, 没打出 [probe] 抬头 —— 崩在判定之前 (import / 密钥 / 网络), 见 $LOG" ;;
+  esac
+  probed=$(printf '%s\n' "$out" | grep -oE '共探 [0-9]+ 个' | head -1 | grep -oE '[0-9]+')
+  [ "${probed:-0}" -gt 0 ] || cron_dead "$ALERTS" "$PFX" "no-samples" \
+      "共探 ${probed:-?} 个 —— 注册表空或探针一个请求都没发, 「0 个 dead」在这里没有意义"
 
-  exit "$rc"
+  case "$rc" in
+    0) exit 0 ;;
+    1)
+      # 只有「dead」(注册表说活、实测不可用)才翻转 rc(见 probe_llm_registry.main()
+      # 内的判据), 所以抬头在 + rc=1 就是真实漂移, 值得每天都告警一次 —— 告警文件
+      # 只在真失败时追加, 不会因为"7 天内到期"或"已过期待清理"这类预期内的信号
+      # 而天天写, 不会重蹈飞轮日报"天天炸=没人看"的覆辙。
+      echo "$PFX FOUND DEAD ENTRIES rc=1 $(date '+%F %T') — 共探 $probed 个, 见 $LOG" >> "$ALERTS"
+      exit 1 ;;
+    *) cron_dead "$ALERTS" "$PFX" "unexpected-rc:$rc" "probe_llm_registry 只应退 0/1, 实得 $rc, 见 $LOG" ;;
+  esac
 } >> "$LOG" 2>&1
