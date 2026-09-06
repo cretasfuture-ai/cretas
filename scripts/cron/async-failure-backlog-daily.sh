@@ -30,8 +30,11 @@ PSQL_BIN="${ASYNC_FAILURE_PSQL:-psql}"
 #    `ss` 只在 /usr/sbin, 而原来 `ss -lntp 2>/dev/null` 把 `command not found` 吞掉,
 #    PID 为空 ⇒ 静默落到默认库名/空密码 ⇒ psql 失败 ⇒ 被记成「台账读不到」。
 #    「找不到 ss」和「台账读不到」是两种修法, 不能长成同一行。
+# ⛔ source 失败必须停: 无 -e 下 cron_* 逐个 command not found 后照跑, 空密码去连库 ⇒ 记成「台账读不到」。
 # shellcheck source=scripts/cron/cron-common.sh
-. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh" || {
+    echo "XXX INSTRUMENT DEAD $(date '+%F %T') reason=cron-common-missing — scripts/cron/cron-common.sh 不在本脚本旁边 (3d 整目录同步应一起到), 本次读数作废" >> "$ALERTS"
+    echo "XXX INSTRUMENT DEAD reason=cron-common-missing" >&2; exit 2; }
 cron_pin_path
 cron_require_cmds "$ALERTS" "XXX" ss "$PSQL_BIN"
 

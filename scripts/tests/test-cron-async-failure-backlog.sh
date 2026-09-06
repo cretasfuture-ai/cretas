@@ -126,5 +126,17 @@ run_it ASYNC_FAILURE_DB_PASS=pw
 [ "$RC" = 2 ] || fail "[6] 期望 rc=2 实得 $RC"; assert_alert "台账读不到" "[6]"
 ok "psql 失败 ⇒ rc=2 台账读不到 (与「缺 ss」措辞不同)"
 
-echo "READING: RC2_REASONS_CONSTRUCTED=4 [cmd-not-found:ss no-listener-on-ports cmd-not-found:psql psql-failed]"
+# ── 7. cron-common.sh 不在本脚本旁边 ⇒ rc=2 reason=cron-common-missing (复制到没有库的目录跑) ──
+NOCOMMON="$TMP/nocommon/cron"; mkdir -p "$NOCOMMON"; cp "$SCRIPT" "$NOCOMMON/"
+[ ! -e "$NOCOMMON/cron-common.sh" ] || fail "[7] 夹具坏了"
+reset; rm -f "$ALERTS" "$STUB/calls.log"
+env -i PATH="$FAKEBIN" HOME="$TMP" STUB="$STUB" CRON_BIN_PATH="$FAKEBIN" ASYNC_FAILURE_ALERTS="$ALERTS" ASYNC_FAILURE_DB_PASS=pw \
+    "$BASH_ABS" "$NOCOMMON/$(basename "$SCRIPT")" > "$TMP/out" 2>&1; RC=$?
+echo "    rc=$RC alerts: $( [ -f "$ALERTS" ] && head -c 160 "$ALERTS" | tr '\n' '|' || echo '<none>')"
+[ "$RC" = 2 ] || fail "[7] 期望 rc=2 实得 $RC: $(head -3 "$TMP/out")"
+assert_alert "reason=cron-common-missing" "[7]"
+case "$(calls)" in *psql*) fail "[7] 库不在不该去连库" ;; esac
+ok "cron-common.sh 不在 ⇒ rc=2 reason=cron-common-missing, 未连库"
+
+echo "READING: RC2_REASONS_CONSTRUCTED=5 [cmd-not-found:ss no-listener-on-ports cmd-not-found:psql psql-failed cron-common-missing]"
 echo "PASS: test-cron-async-failure-backlog.sh ($PASSED 组断言)"

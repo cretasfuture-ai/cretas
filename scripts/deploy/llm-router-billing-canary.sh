@@ -23,8 +23,13 @@ ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-canary-alerts.log}"
 #    每周崩一次(日志里 5 个 SyntaxError), 而 crontab 那行 `|| echo "LLM canary FLAGGED"`
 #    把崩溃写成了账单告警。⇒ venv 用 venv-current, 不在就 rc=2 说清楚; 三态措辞由本脚本
 #    自己写进 $ALERTS, crontab 那个 `|| echo` 应当去掉(见审计文档)。
+# ⛔ source 失败必须停: `set -uo pipefail` 无 -e, 不守的话五个 cron_* 逐个 command not found,
+#    heredoc 落到 cron 默认 PATH 的 python 3.6.8 ⇒ SyntaxError ⇒ rc=1 ⇒ 写成「FLAGGED rc=1」
+#    (终审实测复现)。47 上 cron-common.sh 随 3d 同步、本脚本走 installer, 装序错一次就是这条路。
 # shellcheck source=scripts/cron/cron-common.sh
-. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh" || {
+    echo "LLM CANARY INSTRUMENT DEAD $(date '+%F %T') reason=cron-common-missing — scripts/cron/cron-common.sh 没装 (装序: 先 cron/ 再本脚本), 本次读数作废" >> "$ALERTS"
+    echo "LLM CANARY INSTRUMENT DEAD reason=cron-common-missing" >&2; exit 2; }
 cron_pin_path
 cron_require_cmds "$ALERTS" "LLM CANARY" systemctl grep date
 cd "$PYDIR" || cron_dead "$ALERTS" "LLM CANARY" "pydir-missing" "no $PYDIR"

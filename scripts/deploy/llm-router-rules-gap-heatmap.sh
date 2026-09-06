@@ -20,8 +20,11 @@ ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rules-gap-heatmap-aler
 # 原来 `eval "$(systemctl show cretas-python -p Environment …)"` 只列 unit 里 inline 的 Environment=,
 # 看不见 EnvironmentFile=.env.prod (07-20 起 POSTGRES_PASSWORD 与全部 LLM_*_API_KEY 都在那里) ⇒
 # PGPASSWORD 恒空。⇒ 问活进程要 (形态 A′); 密码拿不到 ⇒ rc=2, ⛔ 不带空密码去撞认证。
+# ⛔ source 失败必须停 (无 -e 下五个 cron_* 逐个 command not found 后照跑, 空密码去撞认证)。
 # shellcheck source=scripts/cron/cron-common.sh
-. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh" || {
+    echo "LLM RULES-GAP INSTRUMENT DEAD $(date '+%F %T') reason=cron-common-missing — scripts/cron/cron-common.sh 没装 (装序: 先 cron/ 再本脚本), 本次读数作废" >> "$ALERTS"
+    echo "LLM RULES-GAP INSTRUMENT DEAD reason=cron-common-missing" >&2; exit 2; }
 cron_pin_path
 cron_require_cmds "$ALERTS" "LLM RULES-GAP" systemctl psql grep date
 cron_export_service_env cretas-python "$ALERTS" "LLM RULES-GAP" '^POSTGRES_(PASSWORD|USER|HOST)$'

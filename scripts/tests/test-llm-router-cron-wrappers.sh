@@ -221,6 +221,22 @@ grep -q 'no_key == len(pairs)' "$CANARY" || fail "[k9] canary python 层缺「�
 grep -q 'if out.returncode != 0' "$RERANK" || fail "[k9] rerank python 层缺 returncode 判定"
 ok "python 层两处守卫存在 (静态断言; 真 heredoc 需要 httpx/真库, 登记为只读代码验证)"
 
+# ═════════ cron-common.sh 不在 (装序错 / 47 上 3d 还没同步) ⇒ rc=2, ⛔ 不许滑到 3.6.8 ═══════
+# 构造法: 把 wrapper 复制到一棵**没有 ../cron/cron-common.sh** 的树里跑 (它按自己的位置解析
+# 库路径), ⛔ 不动仓库里的真文件。终审实测: 没守卫时五个 cron_* 逐个 command not found, heredoc
+# 落到 cron 默认 PATH 的 python ⇒ rc=1 ⇒「LLM CANARY FLAGGED rc=1」—— 正是要消灭的读数。
+NOCOMMON="$TMP/nocommon/deploy"; mkdir -p "$NOCOMMON"
+[ ! -e "$TMP/nocommon/cron/cron-common.sh" ] || fail "[m0] 夹具坏了: 不该有 cron-common.sh"
+for s in "$CANARY" "$RERANK" "$HEATMAP"; do
+    cp "$s" "$NOCOMMON/"; reset; run_it "$NOCOMMON/$(basename "$s")"
+    [ "$RC" = 2 ] || fail "[m1 $(basename "$s")] 期望 rc=2 实得 $RC: $(head -3 "$TMP/out")"
+    assert_alert "INSTRUMENT DEAD" "[m1 $(basename "$s")]"; assert_alert "reason=cron-common-missing" "[m1 $(basename "$s")]"
+    grep -q 'FLAGGED' "$ALERTS" && fail "[m1 $(basename "$s")] 库不在不许写成 FLAGGED"
+    case "$(calls)" in *python*) fail "[m1 $(basename "$s")] 库不在不该跑到 python" ;; esac
+done
+note_rc2 cron-common-missing
+ok "🔴 三个 wrapper: cron-common.sh 不在 ⇒ rc=2 reason=cron-common-missing, 不写 FLAGGED, 不碰 python"
+
 n=$(printf '%s' "$RC2" | wc -w | tr -d ' ')
 echo "READING: RC2_REASONS_CONSTRUCTED=$n [${RC2# }]"
 echo "PASS: test-llm-router-cron-wrappers.sh ($PASSED 组断言)"

@@ -21,8 +21,11 @@ ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rerank-advisor-alerts.
 # 🔴 2026-09-06 审计: 与 llm-router-billing-canary.sh 同款 —— `source venv38/bin/activate`
 #    的 venv38 早已不在, 掉回系统 python 3.6.8, 每周 SyntaxError(日志里 5 次)。
 #    ⇒ venv-current + 不在就 rc=2; 缺 systemctl/psql 也 rc=2 并说出缺哪个。
+# ⛔ source 失败必须停 (同 canary: 无 -e 下会一路滑到系统 python 3.6.8 的 SyntaxError, 写成假读数)。
 # shellcheck source=scripts/cron/cron-common.sh
-. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh" || {
+    echo "LLM RERANK INSTRUMENT DEAD $(date '+%F %T') reason=cron-common-missing — scripts/cron/cron-common.sh 没装 (装序: 先 cron/ 再本脚本), 本次读数作废" >> "$ALERTS"
+    echo "LLM RERANK INSTRUMENT DEAD reason=cron-common-missing" >&2; exit 2; }
 cron_pin_path
 cron_require_cmds "$ALERTS" "LLM RERANK" systemctl psql grep date
 # 🔴 密钥源 (2026-09-06 终审实测): `systemctl show -p Environment` 看不见 EnvironmentFile=.env.prod
