@@ -23,6 +23,8 @@ export type AppPromptOptions = {
   /** 为 true 时空输入不允许提交（确定按钮置灰）。默认 true —— 驳回原因这类场景不该允许空提交。 */
   required?: boolean;
   multiline?: boolean;
+  /** 输入框的 testID (e2e / 真机 uiautomator 定位用; 也是 OTA 基线为 0 的标记载体). */
+  testID?: string;
 };
 
 type PromptState = AppPromptOptions & { onSubmit: (value: string) => void };
@@ -282,7 +284,7 @@ export const AppDialogHost: React.FC = () => {
             <Text style={styles.title}>{state.title}</Text>
             {!!state.message && <Text style={styles.message}>{state.message}</Text>}
             <TextInput
-              testID="app-dialog-input"
+              testID={p.testID ?? 'app-dialog-input'}
               style={[styles.input, p.multiline && styles.inputMultiline]}
               value={inputValue}
               onChangeText={setInputValue}

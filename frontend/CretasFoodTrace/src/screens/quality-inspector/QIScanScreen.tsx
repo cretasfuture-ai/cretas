@@ -107,7 +107,8 @@ export default function QIScanScreen() {
           setLoading(false);
         }
       },
-      { placeholder: t('scan.enterBatchNumber') },
+      // testID 同时是本 PR 的 OTA 基线为 0 标记 (真机 uiautomator dump 能看到 resource-id)
+      { placeholder: t('scan.enterBatchNumber'), testID: 'qiscan-manual-batch-input' },
     );
   };
 
