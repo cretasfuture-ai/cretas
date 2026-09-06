@@ -25,8 +25,19 @@ export type RootStackParamList = {
 
 // ==================== 主Tab导航参数 ====================
 
+/**
+ * 共享首页（`screens/main/HomeScreen.tsx`）的路由参数。
+ *
+ * `moduleSet` 由**注册这块首页的那个导航器**用 `initialParams` 指定，
+ * 决定「功能模块」宫格里发哪一组卡（见 `screens/main/homeModules.ts`）。
+ * ⚠️ 这里刻意写成 `string` 而不是 import `HomeModuleSetId` —— 那会让
+ * types/navigation 与 screens/main/homeModules 互相 import。取值由
+ * `toHomeModuleSetId()` 在运行时收敛，认不出来退回 `main`。
+ */
+export type HomeTabParams = { moduleSet?: string } | undefined;
+
 export type MainTabParamList = {
-  HomeTab: undefined;
+  HomeTab: HomeTabParams;
   ProcessingTab: NavigatorScreenParams<ProcessingStackParamList>;
   AttendanceTab: NavigatorScreenParams<AttendanceStackParamList>;  // ✅ 统一命名：TimeClockTab → AttendanceTab
   AdminTab: NavigatorScreenParams<AdminStackParamList>;

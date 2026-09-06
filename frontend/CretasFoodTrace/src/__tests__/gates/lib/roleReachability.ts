@@ -108,7 +108,17 @@ const PERMISSIONS_BY_ROLE: Record<string, string[]> = {
   yield_operator: ['production:*'],
   warehouse_worker: ['warehouse:*'],
   viewer: ['view:*'],
-  permission_admin: [],
+  // 🔴 2026-09-06 订正：`permission_admin` 原来写的是 `[]`，而后端
+  // `FactoryUserRole.getPermissionPrefix()` 把它和 platform_admin /
+  // factory_super_admin 放在同一个 case 里返回 `"*"` ⇒ 实发 `*:*`。
+  // 写成空数组等于让分析器以为这个角色**什么权限都没有**，
+  // 所有 `hasPermission(user, …)` 分支在它身上恒假 —— 而它恰好是
+  // MainNavigator 那棵树上少数几个可达角色之一。
+  permission_admin: ['*:*'],
+  // ⚠️ `department_admin` 命中 `default: return "none"` ⇒ 实发 `none:*`，
+  // 与 `[]` 在 `hasPermission` 下行为一致（都匹配不上任何业务前缀）。
+  // 故意保持原值，⛔ 不顺手改：它走 WorkshopSupervisorNavigator，
+  // 不在本次改动的射程内，改了会平白扰动棘轮读数。
   department_admin: [],
 };
 
@@ -906,6 +916,14 @@ export interface ScreenRegistration {
   /** 该 Screen 外面所有条件渲染守卫的合取。 */
   guard: Expr;
   componentRef: ts.Expression | null;
+  /**
+   * `initialParams={{ … }}` 里的**字符串字面量**键值对。
+   *
+   * 只收字面量：`initialParams={x}` / 非字符串值一律不进来（读不出来就是读不出来，
+   * ⛔ 不猜）。`homeModulesNonEmptyPerRole.test.ts` 用它把「哪个导航器给首页派了
+   * 哪个模块集」从**导航器源码**里读出来，而不是在测试里再抄一份对照表（形态 D）。
+   */
+  initialParams: Record<string, string>;
 }
 
 export interface ScopeKey {
@@ -986,6 +1004,7 @@ export function screensIn(key: ScopeKey): ScreenRegistration[] {
     if (!tag.endsWith('.Screen')) return;
     let screenName: string | null = null;
     let componentRef: ts.Expression | null = null;
+    const initialParams: Record<string, string> = {};
     for (const attr of open.attributes.properties) {
       if (!ts.isJsxAttribute(attr) || !ts.isIdentifier(attr.name)) continue;
       const an = attr.name.text;
@@ -998,6 +1017,24 @@ export function screensIn(key: ScopeKey): ScreenRegistration[] {
       if (an === 'component' && init && ts.isJsxExpression(init) && init.expression) {
         componentRef = init.expression;
       }
+      if (an === 'initialParams' && init && ts.isJsxExpression(init) && init.expression) {
+        const obj = unwrap(init.expression);
+        if (ts.isObjectLiteralExpression(obj)) {
+          for (const prop of obj.properties) {
+            if (!ts.isPropertyAssignment(prop)) continue;
+            const pname = ts.isIdentifier(prop.name)
+              ? prop.name.text
+              : ts.isStringLiteral(prop.name)
+                ? prop.name.text
+                : null;
+            if (!pname) continue;
+            const pval = unwrap(prop.initializer);
+            if (ts.isStringLiteral(pval) || ts.isNoSubstitutionTemplateLiteral(pval)) {
+              initialParams[pname] = pval.text;
+            }
+          }
+        }
+      }
     }
     if (!screenName) return;
     out.push({
@@ -1006,6 +1043,7 @@ export function screensIn(key: ScopeKey): ScreenRegistration[] {
       line: lineOf(open),
       guard: guardsAbove(node, body, ctx),
       componentRef,
+      initialParams,
     });
   };
 
