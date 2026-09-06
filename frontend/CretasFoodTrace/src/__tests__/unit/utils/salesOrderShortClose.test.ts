@@ -54,8 +54,10 @@ describe('canShortCloseSalesOrder — 状态 × 权限 四格矩阵', () => {
   it.each(cells)('$name → $expected', ({ status, user, expected }) => {
     const actual = canShortCloseSalesOrder({ ...SHORT_ORDER, status }, user);
     // 变异验证时先看这一行: 打印实际判定, 确认「变异真的打进了代码」再看断言红不红。
+    // ⚠️ 必须用 console.warn —— src/__tests__/setup.ts 把 console.log/debug/info 静默掉了,
+    //    用 log 的话这个「可观测量」永远打不出来 (读数是空, 与「变异没生效」同形)。
     // eslint-disable-next-line no-console
-    console.log(`[short-close predicate] status=${status} role=${(user as any).factoryUser.role} => ${actual}`);
+    console.warn(`[short-close predicate] status=${status} role=${(user as any).factoryUser.role} => ${actual}`);
     expect(actual).toBe(expected);
   });
 
