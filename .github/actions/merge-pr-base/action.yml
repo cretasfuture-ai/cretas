@@ -46,8 +46,23 @@ runs:
             || { echo "::error::取不到 base 提交 $BASE_SHA —— 调用方需要 fetch-depth: 0"; exit 1; }
         fi
 
+        # 🔴 硬约束 9: 只打 merged_ok=yes 分不出两种成因 ——
+        #   (a) 真把 base 合进来了(这道修复在工作)
+        #   (b) base 已经是 head 的祖先(PR 刚 rebase 过), merge 是 no-op
+        # 两者读数完全相同, 而只有 (a) 证明闸看到了「别人合进 base 的东西」。
+        # ⇒ 再打两个【设计上必然会变】的读数: 合之前 base 领先我多少个 commit, 以及树变没变。
+        BEHIND=$(git rev-list --count "HEAD..$BASE_SHA" 2>/dev/null || echo unknown)
+        TREE_BEFORE=$(git rev-parse 'HEAD^{tree}')
         if git merge --no-edit "$BASE_SHA"; then
-          echo "READING: GATE_TREE=merge head=$HEAD_SHA base=$BASE_SHA merged_ok=yes tree=$(git rev-parse 'HEAD^{tree}')"
+          TREE_AFTER=$(git rev-parse 'HEAD^{tree}')
+          if [ "$TREE_BEFORE" = "$TREE_AFTER" ]; then TREE_CHANGED=no; else TREE_CHANGED=yes; fi
+          echo "READING: GATE_TREE=merge head=$HEAD_SHA base=$BASE_SHA merged_ok=yes" \
+               "merged_in_commits=$BEHIND tree_changed=$TREE_CHANGED tree=$TREE_AFTER"
+          # merged_in_commits=0 不是错误(PR 刚 rebase 过就是这样), 但它意味着这一趟【没有】
+          # 证明任何事 —— 说出来, ⛔ 不让它长得和「真的合进来了」一样。
+          if [ "$BEHIND" = "0" ]; then
+            echo "READING: GATE_TREE_NOTE=base_already_ancestor (本次 merge 是 no-op; 这一趟证明不了闸能看见 base 的新东西)"
+          fi
         else
           echo "READING: GATE_TREE=conflict head=$HEAD_SHA base=$BASE_SHA merged_ok=no"
           echo "::error::PR 与 base 冲突, 闸无法在合并结果上运行 —— 先解冲突再推(反正这样也合不进去)。"
