@@ -34,17 +34,19 @@ import org.hibernate.annotations.Where;
 @NoArgsConstructor
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
+// 🔴 实体不再声明这张表的业务唯一键 (2026-09-07, FIX-ENTITY-FULL-UNIQUE-VS-PROD-PARTIAL):
+// prod 上是 uk_production_plan_create_request —— `WHERE deleted_at IS NULL` 的**部分**唯一索引; 而 JPA 表达不了部分唯一,
+// 实体里的 @UniqueConstraint 只能在 H2 建出**全量**键 ⇒ H2 比 prod 严。
+// 补 @SQLDelete 之后「软删一行再建同键」在 prod 合法、在 H2 撞键, 表现为测试红而线上是对的
+// (#701 合入后 logistics 三个测试类 4 个 error 就是这么来的, 全部只在 H2 复现)。
+// ⇒ 唯一键以 prod 的部分索引为准, 实体侧不再重复声明。
+// ⚠️ 代价: H2 里这张表**没有**唯一性保护 —— 与 #712 对 material_product_conversions 的处置一致。
 @Table(name = "production_plans",
        indexes = {
            @Index(name = "idx_plan_factory", columnList = "factory_id"),
            @Index(name = "idx_plan_status", columnList = "status"),
            @Index(name = "idx_plan_date", columnList = "planned_date")
-       },
-       uniqueConstraints = @UniqueConstraint(
-           name = "uk_production_plan_create_request",
-           columnNames = {"factory_id", "created_by", "client_request_id"}
-       )
-)
+       })
 // 🔴 R68 后遗症修复 (2026-09-06, ARCH-PRODUCTION-PLAN-HARD-DELETE-PATH):
 // BaseEntity 上那句 @SQLDelete 挂在 @MappedSuperclass 上, 与它旁边的 @Where 一样
 // **被 Hibernate 静默忽略** —— 而 R68-FIX-A 当年只把 @Where 批量补进了 342 个子类,

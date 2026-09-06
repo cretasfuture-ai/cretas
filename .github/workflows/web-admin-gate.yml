@@ -74,6 +74,9 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
+      # 刀 D (#715): 模块码 -> 中文名的唯一来源。moduleListsPairwiseConsistency 读它,
+      #   断言「轴上每个码都有中文名」—— 没有就会在角色权限页上给用户看英文裸码。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/PermissionModuleCatalog.java'
       # 🔴 2026-09-06 v2: 同一道闸的轴换成 L1 (RN 侧从 prod 只读导出的快照), 读这个 JSON。
       #    刷新快照 = 轴变了 = 偏离读数变了, 不登记它就是「改了轴而闸不跑」。
       - 'frontend/CretasFoodTrace/src/utils/permissionMatrix.l1Snapshot.json'
@@ -163,6 +166,9 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
+      # 刀 D (#715): 模块码 -> 中文名的唯一来源。moduleListsPairwiseConsistency 读它,
+      #   断言「轴上每个码都有中文名」—— 没有就会在角色权限页上给用户看英文裸码。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/PermissionModuleCatalog.java'
       # 🔴 2026-09-06 v2: 同一道闸的轴换成 L1 (RN 侧从 prod 只读导出的快照), 读这个 JSON。
       #    刷新快照 = 轴变了 = 偏离读数变了, 不登记它就是「改了轴而闸不跑」。
       - 'frontend/CretasFoodTrace/src/utils/permissionMatrix.l1Snapshot.json'

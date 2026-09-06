@@ -549,7 +549,7 @@ public class PermissionServiceImpl implements PermissionService {
 
         // 按 L2 → L1 → hardcoded fallback 顺序解析 permission level —— 唯一的一份链, 登录响应
         // modulePermissions (resolveModuleLevels) 也走它, ⛔ 不要在别处再抄一遍这三步。
-        String permType = resolveEffectiveLevel(user, role, module);
+        String permType = resolveEffectiveLevel(user.getFactoryId(), role, module);
 
         boolean result = checkAction(permType, action);
         resolveCache.put(cacheKey, new long[]{now + CACHE_TTL_MS});
@@ -591,13 +591,40 @@ public class PermissionServiceImpl implements PermissionService {
         if (role == null || role == FactoryUserRole.unactivated) {
             return Collections.emptyMap();
         }
+        return resolveRoleModuleLevels(user.getFactoryId(), role);
+    }
+
+    @Override
+    public List<String> knownModuleAxis() {
+        Set<String> axis = new TreeSet<>(ALL_MODULES);
+        if (platformRepo != null) {
+            try {
+                for (PlatformRolePermission row : platformRepo.findByDeletedAtIsNull()) {
+                    if (row.getModuleCode() != null) {
+                        axis.add(row.getModuleCode());
+                    }
+                }
+            } catch (Exception e) {
+                // ⛔ 不吞成「轴就是硬编码那份」就完事: 读数少了一截而调用方看不出来。
+                //    实践上硬编码 ALL_MODULES 是 L1 非餐饮码的超集, 所以结果通常不变 —— 但那是实测, 不是保证。
+                log.warn("L1 模块轴读取失败, 退回只用硬编码清单 (轴可能少了 L1 独有的码): {}", e.getMessage());
+            }
+        }
+        return List.copyOf(axis);
+    }
+
+    @Override
+    public Map<String, String> resolveRoleModuleLevels(String factoryId, FactoryUserRole role) {
+        if (role == null || role == FactoryUserRole.unactivated) {
+            return Collections.emptyMap();
+        }
 
         // 预取 (#663 终审 follow-up): 登录一次只查 L2 一次 + L1 一次, 两张 map 传进唯一的解析链。
         // 之前每格重跑 L2 list 查询 + JSONB 反序列化 + L1 单行 ⇒ 一次登录 20+ 次往返。
         // ⚠️ 这两张 map 只是「同一张表的一次性快照」, 链的顺序仍然只写在 resolveEffectiveLevel 里;
         //    hasPermission 走的是同一个方法的 snapshot == null 分支 (逐格查, 有 5 分钟缓存)。
         LayerSnapshot snapshot = new LayerSnapshot(
-                user.getFactoryId() == null ? Collections.emptyMap() : layer2LevelsForRole(user.getFactoryId(), role.name()),
+                factoryId == null ? Collections.emptyMap() : layer2LevelsForRole(factoryId, role.name()),
                 layer1LevelsForRole(role.name()));
 
         // 模块全集: 三层里任一层为该角色登记过的模块。owner 2026-09-06 已裁定「以 L1 模块码为准」(#675/#689),
@@ -619,7 +646,7 @@ public class PermissionServiceImpl implements PermissionService {
         }
 
         for (String module : modules) {
-            String level = normalizeLevel(resolveEffectiveLevel(user, role, module, snapshot));
+            String level = normalizeLevel(resolveEffectiveLevel(factoryId, role, module, snapshot));
             if (level == null) continue;
             levels.put(module, level);
         }
@@ -633,8 +660,8 @@ public class PermissionServiceImpl implements PermissionService {
     private record LayerSnapshot(Map<String, String> l2, Map<String, String> l1) {}
 
     /** hasPermission 用的逐格版本: 每层各查一次 (外面有 5 分钟缓存)。 */
-    private String resolveEffectiveLevel(User user, FactoryUserRole role, String module) {
-        return resolveEffectiveLevel(user, role, module, null);
+    private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module) {
+        return resolveEffectiveLevel(factoryId, role, module, null);
     }
 
     /**
@@ -643,15 +670,16 @@ public class PermissionServiceImpl implements PermissionService {
      * {@link #hasPermission} 与 {@link #resolveModuleLevels} 都只调它 —— 两条路径不可能各漂各的。
      * ⚠️ 不含超管分支、不含特例权限码 (price:view 等)、不含缓存: 那些留在 hasPermission 里。
      *
+     * @param factoryId L2 覆盖所属工厂; null = 没有工厂上下文, 直接从 L1 起算
      * @param snapshot 非 null 时 L2/L1 从快照取 (登录路径, 一次调用只查两次); null 时逐格查 (鉴权路径)
      */
-    private String resolveEffectiveLevel(User user, FactoryUserRole role, String module, LayerSnapshot snapshot) {
+    private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module, LayerSnapshot snapshot) {
         String permType = null;
 
         // L2: factory-level override
-        if (user.getFactoryId() != null && factoryConfigRepo != null) {
+        if (factoryId != null && factoryConfigRepo != null) {
             permType = snapshot != null ? snapshot.l2().get(module)
-                    : resolveLayer2(user.getFactoryId(), role.name(), module);
+                    : resolveLayer2(factoryId, role.name(), module);
         }
 
         // L1: platform global default (from DB, seeded by Flyway V20260419_01)
