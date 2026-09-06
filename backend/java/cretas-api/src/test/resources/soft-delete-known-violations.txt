@@ -348,7 +348,6 @@ com.cretas.aims.entity.workflow.OaActionIdempotencyLedger
 com.cretas.aims.entity.workflow.ProductionWorkflowInstance
 com.cretas.aims.entity.workflow.WorkflowTaskPort
 com.cretas.aims.entity.workprocess.WorkProcessTask
-com.cretas.aims.entity.workreport.EmployeeProcessSegment
 com.cretas.aims.logistics.entity.LogisticsDeliveryOrder
 com.cretas.aims.logistics.entity.LogisticsDistanceEdge
 com.cretas.aims.logistics.entity.LogisticsDriver

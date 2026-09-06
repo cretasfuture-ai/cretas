@@ -5,13 +5,13 @@
  * The RN scan (clockin/clockout) is deferred (hardware-gated). This spec covers:
  *
  *   Test 1: Production management page (/production/batches) — accessible + shows table
- *   Test 2: Employee process segments API — GET /workreport/segments/active returns valid response
+ *   (Test 2 removed 2026-09-06: the employee process segments API was deleted with the entity —
+ *    the table never existed in any database and the RN client was retired on 2026-08-15, PR #660)
  *   Test 3: Production approval page (/production/approval) — supervisor can view work reports
  *
  * Auth: super_admin (factory_super_admin — has full permissions; workshop_supervisor is MOBILE_ONLY
  *       per guards.ts, cannot log in to web-admin).
  *
- * API route: /api/mobile/{factoryId}/workreport/segments/active
  * Factory: F_E2E_TEST
  */
 
@@ -52,33 +52,6 @@ test.describe('J9 员工工序片段 Web 主管视图 @post-deploy', () => {
     // Table container should appear (may be empty if no batches seeded)
     const table = page.locator(S.table.root).first();
     await expect(table).toBeVisible({ timeout: 15_000 });
-
-    await expectNoErrors(page);
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Test 2: Employee process segments API returns valid response
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  test('员工工序片段 API GET /workreport/segments/active 返回成功', async ({ page }) => {
-    // Navigate to any authenticated page to ensure auth cookies are active
-    await page.goto('/production/plans');
-    await page.waitForLoadState('networkidle');
-
-    // Directly call the employee process segments API via fetch in page context.
-    // The installApiProxy in restoreAuth will forward /api/mobile/** to :10010.
-    const result = await page.evaluate(async (factoryId) => {
-      const resp = await fetch(`/api/mobile/${factoryId}/workreport/segments/active`, {
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
-      const json = await resp.json();
-      return { status: resp.status, success: json.success, hasData: Array.isArray(json.data) };
-    }, FACTORY_ID);
-
-    expect(result.status, `API 返回 HTTP ${result.status}, 期望 200`).toBe(200);
-    expect(result.success, `API success 应为 true, 返回: ${JSON.stringify(result)}`).toBe(true);
-    expect(result.hasData, 'API data 应为数组 (active segments list)').toBe(true);
 
     await expectNoErrors(page);
   });
