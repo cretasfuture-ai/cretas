@@ -33,6 +33,25 @@ const getActionErrorMessage = (error: unknown) => {
   return actionHint ? `${message}\n${actionHint}` : message;
 };
 
+/**
+ * 列表加载失败的文案。
+ *
+ * 与 getActionErrorMessage 的差别是**故意的**: 这里 ⛔ 不读 `error.message`。
+ * 网络层错误(超时/断网)的 `error.message` 是 axios 原文案 "Network Error" /
+ * "Request failed with status code 500", 摆在列表页上不如一句「加载销售单失败」。
+ * 只有后端真给了业务文案时才原样展示 —— 目前唯一会走到这里的业务 403 是
+ * SalesController.listOrdersByStatus 对 PENDING_FINANCE_REVIEW 的 RBAC 分支
+ * (「无权查看待财审销售单」)。当前 4 个 tab 走不到它, 但将来加「待财务审核」tab 时,
+ * 用户必须看到**那句话**而不是被一句通用的「加载销售单失败」误导成系统故障。
+ */
+const getLoadErrorMessage = (error: unknown) => {
+  const apiError = error as ApiActionError;
+  const backendMessage = apiError?.response?.data?.message;
+  if (typeof backendMessage !== 'string' || backendMessage.trim() === '') return '加载销售单失败';
+  const actionHint = apiError.response?.data?.actionHint;
+  return actionHint ? `${backendMessage}\n${actionHint}` : backendMessage;
+};
+
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   DRAFT: { label: '草稿', color: '#909399' },
   CONFIRMED: { label: '已确认', color: '#409eff' },
@@ -59,15 +78,26 @@ export default function SalesOrderListScreen() {
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
 
+  // BUG-SALES-ORDER-LIST-STATUS-TAB (2026-09-06): 状态 tab 从来没筛过列表。
+  //
+  // 旧写法是 `const params: any = {...}; if (statusFilter !== 'all') params.status = statusFilter;`
+  // 然后打 GET /orders —— 而 SalesController.listOrders(factoryId, keyword, page, size)
+  // **没有 status 形参**, Spring 把这个 query param 静默丢掉 ⇒ 列表恒为全量。
+  // `: any` 正是让它编译得过的那一层: 去掉它, `params.status` 当场是类型错误。
+  //
+  // 而底部合计走 ListSummaryServiceImpl(按 filterConditions.status 过滤, 真筛了)
+  // ⇒ 两侧口径不一致, 用户在「已确认」上看到「共 0 条 / ¥0.00」配着 4 张卡片。
+  // 按状态筛必须打 /orders/by-status(采购列表 PurchaseOrderListScreen 一直是这么做的)。
   const loadOrders = useCallback(async () => {
     try {
-      const params: any = { page: 1, size: 50 };
-      if (statusFilter !== 'all') params.status = statusFilter;
-      const res = await salesApiClient.getOrders(params);
+      const params = { page: 1, size: 50 };
+      const res = statusFilter !== 'all'
+        ? await salesApiClient.getOrdersByStatus(statusFilter as SalesOrder['status'], params)
+        : await salesApiClient.getOrders(params);
       if (res.success && res.data) {
         setOrders(res.data.content || []);
       }
-    } catch { Alert.alert('错误', '加载销售单失败'); }
+    } catch (error) { Alert.alert('错误', getLoadErrorMessage(error)); }
     finally { setLoading(false); setRefreshing(false); }
   }, [statusFilter]);
 
@@ -183,14 +213,18 @@ export default function SalesOrderListScreen() {
       </Appbar.Header>
 
       <View style={styles.filterRow}>
+        {/* testID 是 ASCII 且逐 tab 唯一 —— E2E/单测靠它点中确定的那一档,
+            也是本次改动在制品里的核验标记(中文标记会被 strings 吞掉)。
+            ⚠️ value 必须逐字等于后端 SalesOrderStatus 的枚举名: /orders/by-status
+            把它绑成 SalesOrderStatus, 拼错不是「筛不到」而是 400。 */}
         <SegmentedButtons
           value={statusFilter}
           onValueChange={setStatusFilter}
           buttons={[
-            { value: 'all', label: '全部' },
-            { value: 'DRAFT', label: '草稿' },
-            { value: 'CONFIRMED', label: '已确认' },
-            { value: 'COMPLETED', label: '已完成' },
+            { value: 'all', label: '全部', testID: 'sales-order-list-status-all' },
+            { value: 'DRAFT', label: '草稿', testID: 'sales-order-list-status-DRAFT' },
+            { value: 'CONFIRMED', label: '已确认', testID: 'sales-order-list-status-CONFIRMED' },
+            { value: 'COMPLETED', label: '已完成', testID: 'sales-order-list-status-COMPLETED' },
           ]}
         />
       </View>
