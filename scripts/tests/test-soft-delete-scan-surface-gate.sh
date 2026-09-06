@@ -58,7 +58,7 @@ norm() { grep -v -E '^-- (生成|provenance|generated|来源)' "$1" | sed -E 's/
 norm "$BEFORE" > "$TMP/before.norm"
 norm "$ROOT_DIR/scripts/cron/soft-delete-orphans.sql" > "$TMP/repo.norm"
 if ! diff -q "$TMP/before.norm" "$TMP/repo.norm" >/dev/null; then
-    echo "READING: BASELINE_DIFF_LINES=$(diff -u "$TMP/repo.norm" "$TMP/before.norm" | grep -c '^[-+][^-+]' || true)"
+    echo "READING: BASELINE_DIFF_LINES=$(diff "$TMP/repo.norm" "$TMP/before.norm" | grep -cE '^[<>]' || true)"
     fail "A 阳性对照: 临时根重放的产出与仓库里那份不一致 —— 要么 main 上本来就漂着(先跑 --write), 要么这套 harness 不忠实, 两种都让下面的读数作废"
 fi
 echo "READING: BASELINE_LINES=$BEFORE_LINES baseline_matches_repo=yes"
@@ -93,7 +93,11 @@ printf 'probe_scan_surface_drift\n' >> "$FAKE_ROOT/scripts/cron/soft-delete-orph
 AFTER="$TMP/after.sql"
 regen > "$AFTER" || { cat "$TMP/err.txt" >&2; fail "A: 加了新实体之后生成器跑不起来"; }
 norm "$AFTER" > "$TMP/after.norm"
-DIFF_LINES=$(diff -u "$TMP/before.norm" "$TMP/after.norm" | grep -c '^[-+][^-+]' || true)
+# ⚠️ ⛔ 不用 `diff -u | grep -c '^[-+][^-+]'` 数差异行: 生成物是 SQL, **内容行以 `--` 开头**,
+#    于是 `+--` 会被那个模式当成「标记 + 标记」而**漏数**(自己交代的读数缺陷, 2026-09-07)。
+#    那个测试当时仍然有效, 只因为它同时改了 hasdel、真内容行被数到了 —— 属于「结论对而读数不可靠」。
+#    ⇒ 改用普通 diff 的 `<` / `>` 标记, 与 SQL 的 `--` 不撞。
+DIFF_LINES=$(diff "$TMP/before.norm" "$TMP/after.norm" | grep -cE '^[<>]' || true)
 echo "READING: DRIFT_DIFF_LINES=$DIFF_LINES (新增一个带 deleted_at 的实体之后)"
 # ⚠️ 这个信号目前**骑在生成物的统计头那一行**上(「带 @Table 的实体 N 个 …」), 而不是新增了一个
 #    UNION ALL 扫描块 —— 探针实体的 @ManyToOne 没有产生新块(#705 终审实测)。闸断的是**全文件相等**,

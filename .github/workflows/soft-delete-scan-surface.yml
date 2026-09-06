@@ -27,6 +27,12 @@ on:
       # 生成器扫描的两个根 —— 与 ENTITY_ROOT / REPOSITORY_ROOT 逐一对应
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/repository/**'
+      # 🔴 扫描根**之外**的整棵树也要触发 —— 否则「有人在新子树里加了个软删实体」这件事
+      #    在 PR 上一次都不会被看见(而那正是 test-soft-delete-scan-root-covers-entities.sh
+      #    唯一要守的东西: logistics/entity/ 那 11 个就是这么长出来的, 谁都没红过)。
+      #    ⚠️ 上面两条**不能**因为这条更宽就删掉: 它们是与生成器扫描根逐一对应的锚点,
+      #       test-soft-delete-scan-surface-gate.sh 按它们比对(⛔ 别为了"去重"把锚点删了)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/**'
       # 生成器本身与它的两份产出/输入快照
       - 'scripts/check-soft-delete-orphans.sh'
       - 'scripts/cron/soft-delete-orphans.sql'
@@ -90,3 +96,8 @@ jobs:
       # 用例失败时自带下一步命令(`./scripts/check-soft-delete-orphans.sh --write` 后提交)。
       - name: Scan surface must match the committed SQL
         run: bash scripts/tests/test-soft-delete-orphans-sql-drift.sh
+
+      # 扫描**根**本身盖不盖得住所有软删实体 —— 与上一步是两件事:
+      # 上一步问「生成物跟不跟得上源」, 这一步问「源里有没有它根本没看过的东西」。
+      - name: Scan roots must cover every soft-deletable entity
+        run: bash scripts/tests/test-soft-delete-scan-root-covers-entities.sh
