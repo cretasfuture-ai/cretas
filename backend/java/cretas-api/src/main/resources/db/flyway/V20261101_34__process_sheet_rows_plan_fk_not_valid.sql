@@ -125,9 +125,18 @@ BEGIN
 END $$;
 
 -- ── uk_production_plan_create_request: 索引口径与查询口径对齐, 只管活行 ─────
+-- ⚠️ 同一个名字可能是**两种对象**, 拆开处理(2026-09-06 #629 终审提出, 实测两侧都跑过):
+--   · prod 上它是**独立的部分唯一 INDEX**(V20261029_05 用 CREATE UNIQUE INDEX 建的),
+--     pg_constraint 里查不到 ⇒ 只能 DROP INDEX。
+--   · 而 ProductionPlan 实体上写着 @Table(uniqueConstraints = @UniqueConstraint(
+--     name = "uk_production_plan_create_request", ...)) ⇒ 任何由 Hibernate
+--     ddl-auto=create/update 建起来的库(全新环境/切片测试)上它是 **UNIQUE CONSTRAINT**。
+--     那种情况下 DROP INDEX 会直接报「cannot drop index ... because constraint ... requires it」。
+--   ⇒ 先按约束查, 查到就 ALTER TABLE ... DROP CONSTRAINT; 否则才 DROP INDEX。
 DO $$
 DECLARE
     current_def text;
+    is_constraint boolean;
 BEGIN
     SELECT indexdef INTO current_def
     FROM pg_indexes
@@ -144,7 +153,20 @@ BEGIN
         RETURN;
     END IF;
 
-    DROP INDEX uk_production_plan_create_request;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'uk_production_plan_create_request'
+          AND conrelid = 'production_plans'::regclass
+    ) INTO is_constraint;
+
+    IF is_constraint THEN
+        RAISE NOTICE '它是 UNIQUE CONSTRAINT(Hibernate ddl-auto 建的), 走 DROP CONSTRAINT';
+        ALTER TABLE production_plans DROP CONSTRAINT uk_production_plan_create_request;
+    ELSE
+        RAISE NOTICE '它是独立 UNIQUE INDEX(prod 形态), 走 DROP INDEX';
+        DROP INDEX uk_production_plan_create_request;
+    END IF;
+
     CREATE UNIQUE INDEX uk_production_plan_create_request
         ON production_plans (factory_id, created_by, client_request_id)
         WHERE client_request_id IS NOT NULL AND deleted_at IS NULL;
