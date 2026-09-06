@@ -48,6 +48,19 @@ Opus 稀缺额度优先级：① 模糊高风险需求框架（防建错东西�
 
 单一写者 = Organizer，worker 只回传结构化回执（任务 ID / base SHA / 实际改动文件 / 验证命令与结果 / commit·PR / 阻塞 / 下一动作）。In-flight 表列：ID / 任务 / model / effort / orchestration / 分支 / scope 锁 / 状态 / PR / 阻塞。Scope 锁地图：文件或目录 → 锁定 task → 预计解锁。派活前查地图，重叠 → 串行或切 scope。合并后的 task 归档进 `archive/`。
 
+## Sister chat vs subagent（2026-09-06 Steve 裁定，两种模式接的任务要分清）
+
+subagent 每次都是**新上下文**，且 organizer 的 `SendMessage` 可能被收走（今天就发生了，之后连续问同一个 subagent 都做不到）；执行者还会被 API 403 掐断丢掉全部进度。所以：
+
+| 派给 | 判据（满足任一即该模式） | 例 |
+|---|---|---|
+| **subagent**（executor / probe / recon / 终审） | 一次性、边界清楚、**≤1 个 PR**、不需要记住上一轮；brief 能自包含写完；产出靠回执落台账 | 只读取证、代码侦察、单文件小修、对抗式终审、真机截图 |
+| **sister chat**（独立 session + 自己的 worktree + 自己的记忆） | 同一批文件要**≥2 个 PR 连续改**；需要**积累环境**（docker 底座 / schema dump / 真机 / 服务器状态）；设计要来回商量；任务会跨天；或需要在 organizer 之外保留一份记忆 | 权限模块 step-1→step-2、schema validate 系列、运维脚本系列 |
+
+- 开 sister chat 的载体是 `docs/dispatch/briefs/<日期>-line-<X>-*.md`：自包含（基 SHA、已验事实、在飞与禁改区、按序任务、回执格式、入口文件），推上 main 后用 `spawn_task` 卡片开 session（用户点一下），或用户手工开 chat 贴卡。
+- 两种模式共同的边界不变：都只到 PR 停；🔒 合并 / 部署 / OTA / 装服务器只由 organizer；两个 chat 不改同一文件（查台账 scope 锁）。
+- fresh context 有它的价值：今天 brief 里三处错（web-admin 路径、凭证名、`vars` 路由）都是新人不带成见去量才抓出来的 ⇒ sister chat 交付的 🔒 PR 仍然要过独立的对抗式终审 subagent。
+- 判据反过来读：一个任务如果第二次被派 subagent 还要重读同一批文件，就该转成 sister chat；一个 sister chat 如果一周只出一个 PR，就该收回成 subagent。
 ## 硬纪律
 
 - 同时只能一个 organizer，别并存。
