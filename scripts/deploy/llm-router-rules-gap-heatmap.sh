@@ -14,6 +14,14 @@
 # Reuses the Layer-5 attribution fix (aliyun_c no longer mislabeled) for clean caller rows.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rules-gap-heatmap-alerts.log}"
+# 2026-09-06 审计: 这一个不用 venv(纯 psql), 所以它是三个 llm-router 周报里唯一还活着的。
+# 同样自己钉 PATH + 缺命令/psql 失败走 rc=2, ⛔ 不让 `eval "$(systemctl …)"` 在找不到
+# systemctl 时静默展开成空串(那样 PGPASSWORD 为空, psql 报 auth 失败, 看起来像密码轮换了)。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "LLM RULES-GAP" systemctl psql tr grep sed date
 eval "$(systemctl show cretas-python -p Environment | tr ' ' '\n' \
         | grep -E '^POSTGRES_(PASSWORD|USER|HOST)=' \
         | sed -E "s/^([^=]+)=(.*)$/export \1='\2'/")"
@@ -63,6 +71,11 @@ GROUP BY 1 ORDER BY samples DESC LIMIT 10;
 SELECT coalesce(teacher_model,'?')  AS teacher_model, count(*) AS samples
 FROM smart_bi_distillation_samples GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 SQL
+psql_rc=$?
+# psql 连不上/认证失败 = 这周的热力图**没量到**, ⛔ 不是「没有缺口」。
+[ "$psql_rc" -eq 0 ] || cron_dead "$ALERTS" "LLM RULES-GAP" "psql-failed" \
+    "psql rc=$psql_rc host=${POSTGRES_HOST:-localhost} user=${POSTGRES_USER:-smartbi_user} db=smartbi_prod_db" \
+    "凭证来自 systemctl show cretas-python -p Environment; PGPASSWORD 为空多半是服务单元没带 POSTGRES_PASSWORD"
 
 cat <<'LEGEND'
 

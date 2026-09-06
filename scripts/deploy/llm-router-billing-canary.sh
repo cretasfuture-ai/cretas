@@ -15,10 +15,23 @@
 # Manual run:  bash /www/wwwroot/cretas/code/scripts/deploy/llm-router-billing-canary.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
-PYDIR=/www/wwwroot/cretas/code/backend/python
-cd "$PYDIR" || { echo "[canary] no $PYDIR"; exit 2; }
-# shellcheck disable=SC1091
-source venv38/bin/activate
+PYDIR="${LLM_ROUTER_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-canary-alerts.log}"
+# 🔴 2026-09-06 审计: 原来 `source venv38/bin/activate` —— venv38 早已不在(现在只有
+#    venv311 与 venv-current 链接), `set -u` 无 `-e` 下 source 失败**不中止**, 掉回系统
+#    python 3.6.8, `from __future__ import annotations` SyntaxError。实测从 2026-08-03 起
+#    每周崩一次(日志里 5 个 SyntaxError), 而 crontab 那行 `|| echo "LLM canary FLAGGED"`
+#    把崩溃写成了账单告警。⇒ venv 用 venv-current, 不在就 rc=2 说清楚; 三态措辞由本脚本
+#    自己写进 $ALERTS, crontab 那个 `|| echo` 应当去掉(见审计文档)。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "LLM CANARY" systemctl sed tr grep date
+cd "$PYDIR" || cron_dead "$ALERTS" "LLM CANARY" "pydir-missing" "no $PYDIR"
+cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "LLM CANARY"
+# llm_router.py 用 `from __future__ import annotations`(3.7+); 系统 python 是 3.6.8。
+python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 7) else 1)' \
+    || cron_dead "$ALERTS" "LLM CANARY" "python-too-old" "$(command -v python): $(python --version 2>&1)"
 # Load the running service's LLM keys (never hardcode — they rotate).
 eval "$(systemctl show cretas-python -p Environment | sed 's/^Environment=//' \
         | tr ' ' '\n' | grep -E '^LLM_(ALIYUN|TENCENT|ZHIPU)' \
@@ -93,7 +106,15 @@ print("👉 also eyeball the Aliyun 账单 (DashScope/百炼) — client-side lo
       "console-level paid charge; that bill = the true backstop.")
 sys.exit(rc)
 PY
-# ── crontab (install on server 47, weekly Mon 09:00, log + non-zero = review) ──
+rc=$?
+# 三态措辞写在这里, ⛔ 不在 crontab 里: 0 全部 billing-safe / 1 有 FLAGGED / 3 注册表过期 /
+# 2 仪器故障(上面 cron_dead 已写过告警行并退出, 到不了这里)。
+if [ "$rc" -ne 0 ]; then
+    echo "LLM CANARY FLAGGED rc=$rc $(date '+%F %T') — $([ "$rc" -eq 3 ] && echo '注册表快照过期(>21d), 重扫控制台' || echo '有条目非 billing-safe, 看日志逐条核对')" >> "$ALERTS"
+fi
+exit "$rc"
+# ── crontab (install on server 47, weekly Mon 09:00) ──
 #   0 9 * * 1 bash /www/wwwroot/cretas/code/scripts/deploy/llm-router-billing-canary.sh \
-#     >> /www/wwwroot/cretas/logs/llm-canary.log 2>&1 || echo "LLM canary FLAGGED $(date)" \
-#     >> /www/wwwroot/cretas/logs/llm-canary-alerts.log
+#     >> /www/wwwroot/cretas/logs/llm-canary.log 2>&1
+#   ⛔ 不要再接 `|| echo "LLM canary FLAGGED"`: 那会把 rc=2(崩了/venv 不在)和 rc=1(真 FLAGGED)
+#      写成同一句话 —— 2026-08-03 ~ 08-31 就是这么把 5 次崩溃记成 5 次账单告警的。

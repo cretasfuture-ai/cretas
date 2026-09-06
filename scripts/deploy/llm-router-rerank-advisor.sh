@@ -16,13 +16,23 @@
 # give it ~1 week of data before trusting per-account rows; model-level signal is live now.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+PYDIR="${LLM_ROUTER_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rerank-advisor-alerts.log}"
+# 🔴 2026-09-06 审计: 与 llm-router-billing-canary.sh 同款 —— `source venv38/bin/activate`
+#    的 venv38 早已不在, 掉回系统 python 3.6.8, 每周 SyntaxError(日志里 5 次)。
+#    ⇒ venv-current + 不在就 rc=2; 缺 systemctl/psql 也 rc=2 并说出缺哪个。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "LLM RERANK" systemctl psql tr grep sed date
 eval "$(systemctl show cretas-python -p Environment | tr ' ' '\n' \
         | grep -E '^POSTGRES_(PASSWORD|USER|HOST)=' \
         | sed -E "s/^([^=]+)=(.*)$/export \1='\2'/")"
 export PGPASSWORD="${POSTGRES_PASSWORD:-}"
-cd /www/wwwroot/cretas/code/backend/python || exit 2
-# shellcheck disable=SC1091
-source venv38/bin/activate
+cd "$PYDIR" || cron_dead "$ALERTS" "LLM RERANK" "pydir-missing" "no $PYDIR"
+cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "LLM RERANK"
+python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 7) else 1)' \
+    || cron_dead "$ALERTS" "LLM RERANK" "python-too-old" "$(command -v python): $(python --version 2>&1)"
 
 PGHOST="${POSTGRES_HOST:-localhost}" PGUSER="${POSTGRES_USER:-smartbi_user}" python - <<'PY'
 import os, sys, types, subprocess, datetime
@@ -84,6 +94,10 @@ if suggestions == 0:
 print("\n读法: demote/promote 仅是建议; 由人 review 后手动调 SLOT_MODELS 顺序 (绝不动 _SAFE_MODELS)。")
 print("数据新鲜度: per-account 维度需 2026-07-01 归因修复后 ~1 周数据才可信。")
 PY
+rc=$?
+# 顾问是只读建议, 正常退出 0; 非 0 只可能是 python 自己崩(import/psql 子进程) ⇒ 没量到。
+[ "$rc" -eq 0 ] || cron_dead "$ALERTS" "LLM RERANK" "python-failed" "python rc=$rc, 见 crontab 指向的日志"
+exit 0
 
 # ── crontab (weekly Mon 10:00, after canary+heatmap) ──
 #   0 10 * * 1 bash /www/wwwroot/cretas/code/scripts/deploy/llm-router-rerank-advisor.sh \
