@@ -96,8 +96,18 @@ public class SkuAssembleTool extends AbstractBusinessTool {
                 if (match.isPresent()) {
                     customerId = match.get().getId();
                 } else {
+                    // 🔴 SEC-CUSTOMER-ROSTER-REMAINING-PATHS-20260906: 这里原本返回
+                    //    availableCustomers = 全部活跃客户的**名字列表** —— 一次
+                    //    customerName="zzz" 的失败匹配就是一份完整客户名录, 而本工具
+                    //    (sku_assemble) 不在任何名单门后面。
+                    //    owner 2026-09-06 裁定「客户名单只有 销售/财务/工厂管理员/运营 能看」。
+                    //    ⛔ 修法**不是**给整个工具挂上销售/财务权限码 —— 那会改变「谁能建 SKU」
+                    //    这件与裁定无关的事 (没有任何裁定支持那个收紧)。
+                    //    最窄的修法是把泄漏本身去掉: 只回一个计数 + 指向已带门的 customer_list。
                     return buildSimpleResult("未找到客户: " + customerName,
-                        Map.of("availableCustomers", customers.stream().map(Customer::getName).collect(Collectors.toList())));
+                        Map.of("activeCustomerCount", customers.size(),
+                               "actionHint", "请提供 customerId; 或先用 customer_list 查客户名单"
+                                       + "(该工具需 销售/财务 读权限 —— owner 2026-09-06 裁定)"));
                 }
             }
             // customerId can be null (optional for some factories)
