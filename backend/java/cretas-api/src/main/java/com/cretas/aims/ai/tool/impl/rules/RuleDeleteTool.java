@@ -19,9 +19,11 @@ import java.util.Map;
  * Spec: docs/superpowers/specs/2026-05-18-canvas-rules-phase4a-spec.md §5
  *
  * <p>Uses BaseEntity soft delete — BusinessRule is annotated with
- * {@code @SQLDelete(sql = "UPDATE business_rules SET deleted_at = NOW() WHERE id = ?")}
+ * {@code @SQLDelete(sql = "UPDATE business_rules SET deleted_at = NOW() WHERE id = ? AND version = ?")}
  * and {@code @Where(clause = "deleted_at IS NULL")} so the rule disappears from
  * RuleEngine evaluation and can be restored via DB ops.
+ * （version 占位符 2026-09-07 补上：{@code @Version} 实体的自定义删除语句 Hibernate 绑两个参数，
+ * 少一个就绑不上——这正是下面 Bug #4 那条注释当年撞到、并选择绕开的坑。）
  *
  * @author Cretas Team
  * @version 1.0.0
