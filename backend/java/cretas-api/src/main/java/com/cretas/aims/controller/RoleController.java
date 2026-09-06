@@ -107,8 +107,21 @@ public class RoleController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 🔴 2026-09-07 刀 D 补的门禁: 本端点此前<b>一个鉴权注解都没有</b>
+     * ({@code PermissionInterceptor.preHandle}: 「没有注解，放行」), 而同一个 controller 的
+     * 角色列表端点有 {@code @RequirePermission}。任何已登录用户都能读任意角色的权限矩阵。
+     *
+     * <p>为什么在本 PR 里补而不是另开一刀: 刀 D <b>放大了这个口子</b> —— 端点从「11 列陈旧的
+     * 硬编码值」变成「17 列 L1 真实值」, 泄露面变大了。⇒ 由本次改动引出的门禁缺口, 在本次补上。
+     *
+     * <p>权限码与列表端点<b>逐字相同</b>, 也与唯一调用方所在路由的 {@code meta.module = 'system'}
+     * ({@code router/index.ts:1439} 「角色权限」页) 一致 ⇒ 走得到这个页面的人都过得了这道闸,
+     * ⛔ 不会把原本能用的人挡在外面。
+     */
     @GetMapping("/{roleName}/permissions")
     @Operation(summary = "查询角色权限", description = "返回角色在各功能模块的读写权限明细")
+    @RequirePermission({"system:read_write", "system:read"})
     public ApiResponse<List<Map<String, Object>>> getRolePermissions(
             @PathVariable String factoryId,
             @PathVariable String roleName) {

@@ -1,5 +1,6 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.PermissionService;
@@ -114,6 +115,27 @@ class RoleControllerPermissionsReadL1ChainTest {
         assertThat(rows.stream().map(r -> r.get("module")))
                 .doesNotContain(PermissionServiceImpl.MODULE_LEVEL_WILDCARD);
         assertThat(rows).as("过滤通配键不能把整张表滤空").isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("门禁: 权限明细端点必须有 @RequirePermission, 且与同 controller 的列表端点同码")
+    void permissionsEndpointIsGuarded() throws NoSuchMethodException {
+        RequirePermission detail = RoleController.class
+                .getMethod("getRolePermissions", String.class, String.class)
+                .getAnnotation(RequirePermission.class);
+        RequirePermission list = RoleController.class
+                .getMethod("listRoles", String.class)
+                .getAnnotation(RequirePermission.class);
+
+        // 阳性对照: 列表端点本来就有注解 —— 它证明这条断言读得到注解, 不是恒真
+        assertThat(list).as("INSTRUMENT DEAD — 连列表端点的注解都读不到").isNotNull();
+        assertThat(detail)
+                .as("权限明细端点没有鉴权注解 ⇒ PermissionInterceptor 直接放行, "
+                        + "任何已登录用户都能读任意角色的权限矩阵")
+                .isNotNull();
+        assertThat(detail.value())
+                .as("两个端点的权限码不许各漂各的 (形态 D′)")
+                .containsExactlyInAnyOrder(list.value());
     }
 
     @Test
