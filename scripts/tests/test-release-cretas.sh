@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# SCRIPT_TEST_TIMEOUT=900
+# ↑ 只对本文件生效的超时覆盖 (scripts/ci/run-script-tests.sh 读文件头 40 行内的这一行)。
+#   理由 (2026-09-06 卡 C 任务 5 实测): 慢的不是没桩的 maven/npm —— fixture 把 release-jar-manifest.sh
+#   整个换成了桩; 慢在 Windows 上 43 次顶层 run_release + 风险矩阵循环, 每次 git init/push/fetch 一个
+#   临时仓库约 2s 再跑一遍 release-cretas.sh, 合计 ~470s (同一台机器 WSL Ubuntu 实测 15s, CI ubuntu 8s)。
+#   全局 300s 只在 Windows 本地把它砍成 rc=124; 抬全局阈值会让别的用例挂死更久才报, 所以只放本文件。
 #
 # ⏱️ 这个套件本机跑 **约 470–480 秒**, 这是正常的, 不是卡住。
 #
