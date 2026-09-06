@@ -44,7 +44,8 @@ public class RoleController {
         DISPLAY_MODULES.put("equipment", "设备管理");
         DISPLAY_MODULES.put("finance", "财务管理");
         DISPLAY_MODULES.put("system", "系统设置");
-        DISPLAY_MODULES.put("ai", "AI 分析");
+        // 2026-09-06 清单向 L1 收敛 (owner 裁定): 删掉 "ai" —— 全仓 0 处 @RequirePermission 用它,
+        // prod L1 0 行, 只在这张展示清单与 roles/list.vue 里存在: 一列永远显示 '-' 的幽灵模块。
         DISPLAY_MODULES.put("report", "报表中心");
         DISPLAY_MODULES.put("dashboard", "数据看板");
     }

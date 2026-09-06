@@ -22,7 +22,8 @@ const allPermissionModules = [
   { key: 'equipment', label: '设备管理' },
   { key: 'finance', label: '财务管理' },
   { key: 'system', label: '系统设置' },
-  { key: 'ai', label: 'AI 分析' },
+  // 2026-09-06 清单向 L1 收敛: 删掉 'ai' (后端 0 处闸、L1 0 行, 只是一列永远 '-' 的幽灵模块)。
+  // 与 RoleController.DISPLAY_MODULES 必须逐字相同 —— moduleListsPairwiseConsistency 闸钉着。
   { key: 'report', label: '报表中心' },
   { key: 'dashboard', label: '数据看板' },
 ];
