@@ -172,6 +172,19 @@ export interface PlatformUser extends BaseUser {
 // 工厂类型
 export type FactoryType = 'FACTORY' | 'RESTAURANT' | 'HEADQUARTERS' | 'BRANCH' | 'CENTRAL_KITCHEN';
 
+/**
+ * 模块权限级别 —— 与后端 `platform_role_permissions.permission_level` 的 CHECK 约束同一套值。
+ * rw 读写 / r 只读 / w 只写 / - 无。
+ */
+export type ModulePermissionLevel = 'rw' | 'r' | 'w' | '-';
+
+/**
+ * 登录响应 `modulePermissions`: module → 级别, 由后端按 L2 工厂覆盖 → L1 platform_role_permissions
+ * → 硬编码兜底 逐格解析, 与 `@RequirePermission` 判定一致。超管带 `"*": "rw"`。
+ * `hasModulePermission` 读这里; 缺席 (OTA 之前登录的旧会话) 才退到本地 L1 快照。
+ */
+export type ModulePermissions = Record<string, ModulePermissionLevel>;
+
 // 工厂用户接口 (User表)
 export interface FactoryUser extends BaseUser {
   userType: 'factory';
@@ -182,6 +195,8 @@ export interface FactoryUser extends BaseUser {
     department?: Department;
     position?: string;
     permissions: string[];
+    /** 见 {@link ModulePermissions}。undefined = 登录响应没带 (旧会话), 不是「没权限」。 */
+    modulePermissions?: ModulePermissions;
   };
   // Optional platform properties (always undefined for factory users)
   platformUser?: undefined;

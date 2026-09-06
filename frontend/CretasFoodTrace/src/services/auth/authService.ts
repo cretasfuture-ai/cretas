@@ -40,6 +40,7 @@ import {
   ApiErrorResponse
 } from '../../types/apiResponses';
 import { transformBackendUser, getUserRole } from '../../utils/roleMapping';
+import { parseModulePermissions } from '../../utils/permissionHelper';
 import { logger } from '../../utils/logger';
 
 // 创建AuthService专用logger
@@ -230,7 +231,9 @@ export class AuthService {
             factoryType: (backendUser.factoryType || 'FACTORY').toUpperCase(),
             department: backendUser.department as Department,
             position: backendUser.position,
-            permissions: backendUser.permissions
+            permissions: backendUser.permissions,
+            // L2→L1→硬编码 逐格解析结果; 旧后端不带 ⇒ undefined ⇒ hasModulePermission 退到本地 L1 快照
+            modulePermissions: parseModulePermissions(data.modulePermissions)
           }
         } as FactoryUser;
       } else {

@@ -1,4 +1,14 @@
-import { User, FACTORY_ROLES, PLATFORM_ROLES, ROLE_METADATA, RoleMetadata } from '../types/auth';
+import {
+  User,
+  FACTORY_ROLES,
+  PLATFORM_ROLES,
+  ROLE_METADATA,
+  RoleMetadata,
+  ModulePermissions,
+  ModulePermissionLevel,
+} from '../types/auth';
+// 离线兜底快照 (生成物, 见下方「模块权限检查」一节与 scripts/gen-permission-l1-snapshot.js)
+import l1Snapshot from './permissionMatrix.l1Snapshot.json';
 
 /**
  * 权限检查工具函数
@@ -217,64 +227,60 @@ export function isDepartmentAdmin(user: User | null | undefined): boolean {
 // ==================== 模块权限检查 ====================
 
 /**
- * 权限矩阵 - 与后端 PermissionServiceImpl 保持同步
+ * 离线兜底: prod L1 `platform_role_permissions` 的只读快照 (生成物, ⛔ 不要手改)。
+ *
+ * BUG-RN-PERMISSION-MATRIX-DRIFTS-FROM-L1-20260906: 这里以前是一份手写矩阵, 与 prod L1
+ * 量出 29 格漂移 (permission_admin.sales RN rw / L1 -, operator.production RN w / L1 rw, …)。
+ * 现在真相来自**登录响应** `factoryUser.modulePermissions` (后端 L2→L1→硬编码 逐格解析,
+ * 与 `@RequirePermission` 判定一致); 快照只给「OTA 之前登录、还没重新登录」的旧会话兜底。
+ * 刷新方式见 `scripts/gen-permission-l1-snapshot.js` 头部。(JSON 在文件顶部 import。)
  */
-const PERMISSION_MATRIX: Record<string, Record<string, string>> = {
-  factory_super_admin: {
-    dashboard: 'read_write', production: 'read_write', warehouse: 'read_write',
-    quality: 'read_write', procurement: 'read_write', sales: 'read_write',
-    hr: 'read_write', equipment: 'read_write', finance: 'read_write', system: 'read_write'
-  },
-  production_manager: {
-    dashboard: 'read_write', production: 'read_write', warehouse: 'read',
-    quality: 'read', procurement: 'read', hr: 'read', equipment: 'read', system: 'read'
-  },
-  operations_coordinator: {
-    dashboard: 'read', operations: 'read_write', production: 'read',
-    warehouse: 'read', procurement: 'read', sales: 'read'
-  },
-  quality_manager: { dashboard: 'read', production: 'read', quality: 'read_write' },
-  workshop_supervisor: {
-    dashboard: 'read', production: 'read_write', warehouse: 'read',
-    quality: 'write', hr: 'read', equipment: 'read'
-  },
-  quality_inspector: { dashboard: 'read', production: 'read', quality: 'write' },
-  operator: { dashboard: 'read', production: 'write' },
-  warehouse_manager: { dashboard: 'read_write', warehouse: 'read_write', production: 'read' },
-  warehouse_worker: { dashboard: 'read', warehouse: 'write' },
-  hr_admin: { dashboard: 'read', hr: 'read_write' },
-  equipment_admin: { dashboard: 'read', equipment: 'read_write' },
-  procurement_manager: { dashboard: 'read', procurement: 'read_write', warehouse: 'read' },
-  sales_manager: { dashboard: 'read', sales: 'read_write', warehouse: 'read' },
-  finance_manager: {
-    dashboard: 'read', finance: 'read_write',
-    production: 'read', procurement: 'read', sales: 'read'
-  },
-  cashier: {
-    dashboard: 'read', finance: 'read_write',
-    procurement: 'read', sales: 'read'
-  },
-  viewer: {
-    dashboard: 'read', production: 'read', warehouse: 'read', quality: 'read',
-    procurement: 'read', sales: 'read', hr: 'read', equipment: 'read'
-  },
-  // 向后兼容
-  permission_admin: {
-    dashboard: 'read_write', production: 'read_write', warehouse: 'read_write',
-    quality: 'read_write', procurement: 'read_write', sales: 'read_write',
-    hr: 'read_write', equipment: 'read_write', finance: 'read_write', system: 'read_write'
-  },
-  department_admin: {
-    dashboard: 'read_write', production: 'read_write', warehouse: 'read',
-    quality: 'read', procurement: 'read', hr: 'read', equipment: 'read', system: 'read'
+
+/** 超管通配键, 与后端 PermissionServiceImpl.MODULE_LEVEL_WILDCARD 同一个字面量。 */
+export const MODULE_LEVEL_WILDCARD = '*';
+
+const VALID_LEVELS: ReadonlySet<string> = new Set(['rw', 'r', 'w', '-']);
+
+export const L1_SNAPSHOT_EXPORTED_AT: string = l1Snapshot.exportedAt;
+
+const L1_SNAPSHOT_LEVELS: Record<string, Record<string, string>> = l1Snapshot.levels;
+
+/**
+ * 把登录响应里的 `modulePermissions` 收成 {@link ModulePermissions}。
+ * 不是对象 / 为 null ⇒ undefined (旧后端或平台管理员); 值不合法的格**丢弃并告警**, 不猜。
+ * ⚠️ 返回 undefined 与返回 {} 语义不同: 前者「没带」→ 退到快照, 后者「带了但一格都没有」→ 全 deny。
+ */
+export function parseModulePermissions(raw: unknown): ModulePermissions | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: ModulePermissions = {};
+  for (const [module, level] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof level === 'string' && VALID_LEVELS.has(level)) {
+      out[module] = level as ModulePermissionLevel;
+    } else if (__DEV__) {
+      console.warn(`[permissionHelper] 丢弃非法模块权限格 ${module}=${String(level)}`);
+    }
   }
-};
+  return out;
+}
+
+/** 级别 → 动作: 与后端 PermissionServiceImpl.checkAction 的 read/write 分支同口径。 */
+export function levelAllows(level: string | undefined, action: 'read' | 'write'): boolean {
+  if (!level) return false;
+  if (action === 'read') return level === 'rw' || level === 'r';
+  return level === 'rw' || level === 'w';
+}
 
 /**
  * 检查用户是否有指定模块的权限
  * @param user 用户对象
  * @param module 模块名称 (dashboard, production, warehouse, quality, etc.)
  * @param action 动作类型 (read, write)
+ *
+ * 判定顺序:
+ *   1. 平台管理员 → true (与后端 platform_admin 超管分支同口径)
+ *   2. 登录响应 `factoryUser.modulePermissions` 存在 → 只看它 (缺格看 "*" 通配, 再缺 = 无权限)
+ *   3. 否则 (旧会话) → 本地 L1 快照
  */
 export function hasModulePermission(
   user: User | null | undefined,
@@ -286,22 +292,15 @@ export function hasModulePermission(
   // 平台管理员拥有所有权限
   if (isPlatformAdmin(user)) return true;
 
+  const fromLogin = user.userType === 'factory' ? user.factoryUser?.modulePermissions : undefined;
+  if (fromLogin) {
+    return levelAllows(fromLogin[module] ?? fromLogin[MODULE_LEVEL_WILDCARD], action);
+  }
+
   const roleCode = getRoleCode(user);
-  const rolePerms = PERMISSION_MATRIX[roleCode];
-
+  const rolePerms = L1_SNAPSHOT_LEVELS[roleCode];
   if (!rolePerms) return false;
-
-  const permType = rolePerms[module];
-  if (!permType || permType === 'none') return false;
-
-  if (action === 'read') {
-    return permType.includes('read');
-  }
-  if (action === 'write') {
-    return permType.includes('write');
-  }
-
-  return false;
+  return levelAllows(rolePerms[module], action);
 }
 
 /**
@@ -458,13 +457,14 @@ export function getAccessibleModules(user: User | null | undefined): string[] {
             'sales', 'hr', 'equipment', 'finance', 'system'];
   }
 
-  const roleCode = getRoleCode(user);
-  const rolePerms = PERMISSION_MATRIX[roleCode];
+  // 与 hasModulePermission 同一优先级: 登录响应 → 本地 L1 快照
+  const fromLogin = user.userType === 'factory' ? user.factoryUser?.modulePermissions : undefined;
+  const rolePerms: Record<string, string> | undefined = fromLogin ?? L1_SNAPSHOT_LEVELS[getRoleCode(user)];
 
   if (!rolePerms) return [];
 
   return Object.entries(rolePerms)
-    .filter(([, permType]) => permType && permType !== 'none')
+    .filter(([module, level]) => module !== MODULE_LEVEL_WILDCARD && level !== '-')
     .map(([module]) => module);
 }
 

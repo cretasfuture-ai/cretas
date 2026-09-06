@@ -569,6 +569,91 @@ public class PermissionServiceImpl implements PermissionService {
         return null;
     }
 
+    /** 超管在 {@link #resolveModuleLevels} 里的通配键: 任何模块都是 rw, 与 hasPermission 的超管分支同口径. */
+    public static final String MODULE_LEVEL_WILDCARD = "*";
+
+    @Override
+    public Map<String, String> resolveModuleLevels(User user) {
+        if (user == null) {
+            return Collections.emptyMap();
+        }
+        FactoryUserRole role = user.getRoleEnum();
+        if (role == null || role == FactoryUserRole.unactivated) {
+            return Collections.emptyMap();
+        }
+
+        // 模块全集: 三层里任一层为该角色登记过的模块 (不挑「哪一份清单是真的」, 见 7 份清单收敛任务)
+        Map<String, String> l1 = layer1LevelsForRole(role.name());
+        Map<String, String> l2 = user.getFactoryId() == null ? Collections.emptyMap()
+                : layer2LevelsForRole(user.getFactoryId(), role.name());
+        Map<String, String> hardcoded = PERMISSION_MATRIX.getOrDefault(role, Collections.emptyMap());
+
+        Set<String> modules = new TreeSet<>();
+        modules.addAll(l2.keySet());
+        modules.addAll(l1.keySet());
+        modules.addAll(hardcoded.keySet());
+
+        Map<String, String> levels = new LinkedHashMap<>();
+
+        // 超管: hasPermission 对任何 permissionCode 都 return true —— 这里同样不看三层的值
+        if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
+            levels.put(MODULE_LEVEL_WILDCARD, "rw");
+            for (String module : modules) {
+                levels.put(module, "rw");
+            }
+            return levels;
+        }
+
+        for (String module : modules) {
+            // 与 hasPermission 相同的优先级: L2 → L1 → 硬编码兜底
+            String level = l2.get(module);
+            if (level == null) level = l1.get(module);
+            if (level == null) level = normalizeLevel(hardcoded.get(module));
+            if (level == null) continue;
+            levels.put(module, level);
+        }
+        return levels;
+    }
+
+    /** L1 该角色的全部有效行 (一次查询), 值已 normalize 成 rw/r/w/-. 查询失败 → 空 map (与 resolveLayer1 的 null 同义). */
+    private Map<String, String> layer1LevelsForRole(String roleCode) {
+        if (platformRepo == null) return Collections.emptyMap();
+        try {
+            Map<String, String> out = new HashMap<>();
+            for (PlatformRolePermission row : platformRepo.findByRoleCodeAndDeletedAtIsNull(roleCode)) {
+                if (row.getModuleCode() == null) continue;
+                out.put(row.getModuleCode(), normalizeLevel(row.getPermissionLevel()));
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("L1 list resolve failed for role={}: {}", roleCode, e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /** L2 该工厂对该角色的全部覆盖格 (与 resolveLayer2 同一数据源、同一「第一个配置命中」顺序). */
+    private Map<String, String> layer2LevelsForRole(String factoryId, String roleCode) {
+        if (factoryConfigRepo == null) return Collections.emptyMap();
+        try {
+            Map<String, String> out = new HashMap<>();
+            List<FactoryModuleConfig> configs = factoryConfigRepo.findByFactoryIdAndConfigVersion(factoryId, 1);
+            for (FactoryModuleConfig cfg : configs) {
+                Map<String, Map<String, String>> override = cfg.getRoleModuleOverride();
+                if (override == null || override.isEmpty()) continue;
+                Map<String, String> roleOverrides = override.get(roleCode);
+                if (roleOverrides == null) continue;
+                for (Map.Entry<String, String> e : roleOverrides.entrySet()) {
+                    if (e.getValue() == null) continue;
+                    out.putIfAbsent(e.getKey(), normalizeLevel(e.getValue()));
+                }
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("L2 list resolve failed for factory={}, role={}: {}", factoryId, roleCode, e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
     /**
      * L1 查询: platform_role_permissions 表.
      * 返回 legacy-format level (read_write/read/write/none) 或 null.

@@ -3,6 +3,7 @@
  */
 
 import { User } from '../types/auth';
+import { parseModulePermissions } from './permissionHelper';
 
 function requirePermissions(value: unknown): string[] {
   if (!Array.isArray(value) || value.some(permission => typeof permission !== 'string')) {
@@ -71,6 +72,7 @@ export function transformBackendUser(backendUser: any): User {
       department: backendUser.department,
       position: backendUser.position,
       permissions: requirePermissions(backendUser.permissions),
+      modulePermissions: parseModulePermissions(backendUser.modulePermissions),
     },
   };
 
