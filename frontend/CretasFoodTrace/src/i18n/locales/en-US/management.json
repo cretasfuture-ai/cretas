@@ -432,6 +432,10 @@
     }
   },
   "customerManagement": {
+    "modal": {
+      "createTitle": "New Customer",
+      "editTitle": "Edit Customer"
+    },
     "title": "Customer Management",
     "searchPlaceholder": "Search customer name, code, contact",
     "filter": {

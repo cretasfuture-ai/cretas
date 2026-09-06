@@ -205,11 +205,11 @@ export default function CustomerManagementScreen() {
   const handleSave = async () => {
     // 验证必填项 — backend requires name, contactPerson, phone, shippingAddress (@NotBlank)
     if (!formData.name?.trim() || !formData.phone?.trim()) {
-      Alert.alert(t('common.hint'), t('customerManagement.messages.requiredFields'));
+      Alert.alert(t('common:hint'), t('customerManagement.messages.requiredFields'));
       return;
     }
     if (!formData.contactPerson?.trim() || !formData.shippingAddress?.trim()) {
-      Alert.alert(t('common.hint'), t('customerManagement.messages.requiredFields'));
+      Alert.alert(t('common:hint'), t('customerManagement.messages.requiredFields'));
       return;
     }
 
@@ -249,7 +249,7 @@ export default function CustomerManagementScreen() {
 
   const handleDelete = (customerId: string, customerName: string) => {
     Alert.alert(
-      t('common.confirmDelete'),
+      t('common:confirmDelete'),
       t('customerManagement.messages.deleteConfirm', { name: customerName }),
       [
         { text: t('common.cancel'), style: 'cancel' },
@@ -270,7 +270,7 @@ export default function CustomerManagementScreen() {
                 customerId,
                 customerName,
               });
-              Alert.alert(t('common.error'), getErrorMsg(error) || t('common.deleteFailed'));
+              Alert.alert(t('common.error'), getErrorMsg(error) || t('common:deleteFailed'));
             }
           },
         },
@@ -290,7 +290,7 @@ export default function CustomerManagementScreen() {
         customerId,
         newStatus: !currentStatus ? '启用' : '停用',
       });
-      Alert.alert(t('common.success'), currentStatus ? t('customerManagement.messages.disabled') : t('customerManagement.messages.enabled'));
+      Alert.alert(t('common.success'), currentStatus ? t('customerManagement.messages.statusDeactivated') : t('customerManagement.messages.statusActivated'));
       loadCustomers();
     } catch (error) {
       customerLogger.error('切换客户状态失败', error as Error, {
@@ -309,7 +309,7 @@ export default function CustomerManagementScreen() {
       case 'direct': return t('customerManagement.customerTypes.direct');
       case 'enterprise': return t('customerManagement.customerTypes.distributor');
       case 'other': return t('customerManagement.customerTypes.other');
-      default: return type || t('common.uncategorized');
+      default: return type || t('common:uncategorized');
     }
   };
 
@@ -320,7 +320,7 @@ export default function CustomerManagementScreen() {
       case 'ecommerce': return t('customerManagement.industries.ecommerce');
       case 'food_processing': return t('customerManagement.industries.foodProcessing');
       case 'other': return t('customerManagement.industries.other');
-      default: return industry || t('common.uncategorized');
+      default: return industry || t('common:uncategorized');
     }
   };
 
@@ -622,7 +622,7 @@ export default function CustomerManagementScreen() {
                     contentStyle={{ justifyContent: 'space-between' }}
                     style={styles.selectButton}
                   >
-                    {customerTypeOptions.find(o => o.value === formData.customerType)?.label || t('common.pleaseSelect')}
+                    {customerTypeOptions.find(o => o.value === formData.customerType)?.label || t('common:pleaseSelect')}
                   </Button>
                 }
               >
@@ -653,7 +653,7 @@ export default function CustomerManagementScreen() {
                     contentStyle={{ justifyContent: 'space-between' }}
                     style={styles.selectButton}
                   >
-                    {industryOptions.find(o => o.value === formData.industry)?.label || t('common.pleaseSelect')}
+                    {industryOptions.find(o => o.value === formData.industry)?.label || t('common:pleaseSelect')}
                   </Button>
                 }
               >
