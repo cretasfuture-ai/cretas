@@ -70,6 +70,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@code /active} 没有门才去调它」的仓储页面所用的角色。它在名单门上必须 403,
  * 在新口子上必须 200 —— 两条一起才说明「收窄了但没把页面弄坏」。</p>
  *
+ * <h3>🔴 403 的「出处」也要断言 —— 不然 8-18 那个坑会原样复发</h3>
+ * <p>{@code verifyNoInteractions(customerService)} 只证明「没走到 service」，
+ * <b>证明不了是哪一道闸拦的</b>。本仓 2026-08-18 的教训: 同一前缀上两道闸时
+ * <b>外面那道说了算，里面那道成了到不了的代码</b>，而两者的读数一模一样。
+ * 这里同时存在三道可能抢先返回 403/400 的拦截器:</p>
+ * <pre>
+ *   PermissionInterceptor   403 code="FORBIDDEN" + **meta.requiredPermissions** + actionHint(含「模块权限」)
+ *   RequireRoleInterceptor  403 code="FORBIDDEN" —— ⚠️ code 一模一样, 但**没有 meta**
+ *   ModuleEnabledInterceptor 400 code=400 "模块 X 未启用"
+ * </pre>
+ * <p>⇒ 判据取 {@code meta.requiredPermissions}: 只有 {@code PermissionInterceptor} 写它，
+ * 而且写进去的就是<b>本方法注解上那四个码</b>。断言它 = 同时证明了「谁拦的」和「按什么口径拦的」。</p>
+ *
  * <h3>⛔ 阳性对照不是摆设</h3>
  * <p>每条 403 断言都配了一条同路径的 200 (同一个 {@code MockMvc}、同一条 URL,
  * 只换角色)。没有它，「403」分不清是「门拦住了」还是「这条 URL 根本没注册 / 路由写错了」。</p>
@@ -264,7 +277,22 @@ class CustomerControllerRemainingReadPathsPermissionTest {
         buildMockMvc().perform(get(path.url())
                         .header("Authorization", "Bearer test-token")
                         .requestAttr("userId", userId))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden())
+                // 🔴 403 的**出处**必须是 @RequirePermission 那一层, 见 assertDeniedByRequirePermission
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.meta.requireAll").value(false))
+                .andExpect(jsonPath("$.meta.requiredPermissions.length()").value(4))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].module").value("sales"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].action").value("read_write"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[1].module").value("sales"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[1].action").value("read"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[2].module").value("finance"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[2].action").value("read_write"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[3].module").value("finance"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[3].action").value("read"))
+                .andExpect(jsonPath("$.actionHint").value(
+                        org.hamcrest.Matchers.containsString("模块权限")));
 
         // 「403」还不够 —— 必须证明 service 一次都没被叫到 (⛔ 不许算出名单再扔掉)。
         verifyNoInteractions(customerService);
@@ -316,7 +344,11 @@ class CustomerControllerRemainingReadPathsPermissionTest {
 
         buildMockMvc().perform(get(BASE + "/warehouse-options").requestAttr("userId", 4105L))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                // 出处: 这一条必须是 warehouse 那道 @RequirePermission 拦的
+                .andExpect(jsonPath("$.meta.requiredPermissions.length()").value(1))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].module").value("warehouse"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].action").value("read_write"));
 
         verifyNoInteractions(customerService);
     }
@@ -339,7 +371,10 @@ class CustomerControllerRemainingReadPathsPermissionTest {
 
         buildMockMvc().perform(get(BASE + "/warehouse-options").requestAttr("userId", 4106L))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.meta.requiredPermissions.length()").value(1))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].module").value("warehouse"))
+                .andExpect(jsonPath("$.meta.requiredPermissions[0].action").value("read_write"));
 
         verifyNoInteractions(customerService);
     }

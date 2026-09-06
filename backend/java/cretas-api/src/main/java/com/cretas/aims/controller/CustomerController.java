@@ -891,9 +891,31 @@ public class CustomerController {
     /**
      * 获取客户总体统计
      *
-     * <p>🔵 档 C —— <b>显式登记「故意不关」</b>: 总客户数 / 活跃数 / 信用额度汇总,
-     * 全是聚合标量, 无客户身份。
-     * ⚠️ 与 {@code /{customerId}/statistics}(档 B, 已关) 的区别是<b>有没有 customerId 这一维</b>:
+     * <p>🔵 档 C —— <b>显式登记「故意不关」</b>。
+     *
+     * <p>⚠️ 返回类型是 {@code Map<String, Object>} —— 这个签名<b>装得下任何东西</b>，
+     * 「它只是聚合」<b>读不出来</b>，必须去读实现。
+     * {@link com.cretas.aims.service.impl.CustomerServiceImpl#getOverallCustomerStatistics}
+     * 实测<b>恰好 8 个 key</b>:</p>
+     * <pre>
+     *   totalCustomers           long                客户总数
+     *   activeCustomers          long                活跃客户数
+     *   averageRating            Double              平均评级
+     *   totalOutstandingBalance  BigDecimal          总欠款 (全厂合计, 不分客户)
+     *   totalCreditLimit         BigDecimal          总信用额度 (全厂合计)
+     *   typeDistribution         Map(String,Long)    客户类型 -&gt; 计数
+     *   industryDistribution     Map(String,Long)    行业     -&gt; 计数
+     *   ratingDistribution       Map(Integer,Long)   评级     -&gt; 计数
+     * </pre>
+     * <p>⇒ <b>没有客户名 / 客户 id / top-N 客户</b>。三张嵌套分布表实测也都只 put
+     * 「维度 -&gt; 计数」(type/industry 为 null 时归到字面量 {@code "未分类"}，
+     * rating 为 null 时归到 {@code 0}，⛔ 不带任何客户身份)。故留在档 C。</p>
+     *
+     * <p>🔴 这个 key 集合由 {@code CustomerOverallStatisticsKeysContractTest} 钉住。
+     * 谁加了 {@code topCustomers} / {@code largestCustomerName} 之类的 key，那条会当场红 ——
+     * ⛔ 那时请把本端点<b>改判档 A 并挂上裁定四码</b>，而不是把新 key 加进断言。</p>
+     *
+     * <p>⚠️ 与 {@code /{customerId}/statistics}(档 B, 已关) 的区别是<b>有没有 customerId 这一维</b>:
      * 有, 就是「这一家客户给我们贡献了多少钱」; 没有, 就是一个总数。</p>
      */
     @GetMapping("/overall-statistics")

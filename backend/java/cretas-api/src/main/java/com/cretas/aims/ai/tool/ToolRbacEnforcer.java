@@ -58,7 +58,7 @@ public class ToolRbacEnforcer {
      * <ul>
      *   <li>CustomerController <b>写</b> → finance/sales:read_write;
      *       <b>读(客户名单)</b> → sales:read_write|sales:read|finance:read_write|finance:read
-     *       (owner 2026-09-06 裁定, 见下表 CRM 段那 7 条只读工具)</li>
+     *       (owner 2026-09-06 裁定, 见下表 CRM 段那 8 条只读工具)</li>
      *   <li>InvoiceController → finance/sales:read_write</li>
      *   <li>TransferController → inventory:write</li>
      *   <li>UserController → hr:read_write</li>
@@ -69,7 +69,7 @@ public class ToolRbacEnforcer {
      */
     static final Map<String, Set<String>> TOOL_PERMISSION_MAP = Map.ofEntries(
             // ===== CRM: 客户/订单/供应商 (删改建均敏感) =====
-            // ⚠️ 下面这 7 条是本表里**仅有的只读工具**。它们在这儿不是因为"写敏感",
+            // ⚠️ 下面这 8 条是本表里**仅有的只读工具**。它们在这儿不是因为"写敏感",
             // 而是因为 owner 2026-09-06 裁定「客户名单只有 销售/财务/工厂管理员/运营 能看」——
             // 客户名单本身成了受控数据。CustomerListTool 直接调
             // CustomerService#getCustomerList, ⛔ 不经过 CustomerController,
@@ -79,9 +79,9 @@ public class ToolRbacEnforcer {
             // 由 CustomerListToolAiPathPermissionTest 钉住两边不许漂)。
             //
             // 🔴 2026-09-06 第二票 (SEC-CUSTOMER-ROSTER-REMAINING-PATHS): #615 只关了
-            //    customer_list 一个, 而 CRM 下还有 6 个只读工具走**同样的 CustomerService
-            //    方法**、同样不经过 controller。只关一个等于把绕行入口从 7 个减到 6 个。
-            //    这 7 条的权限码由 CustomerListToolAiPathPermissionTest 逐条反射读
+            //    customer_list 一个, 而 CRM/workdesk 下还有 7 个只读工具走**同样的 CustomerService
+            //    方法**、同样不经过 controller。只关一个等于把绕行入口从 8 个减到 7 个。
+            //    这 8 条的权限码由 CustomerListToolAiPathPermissionTest 逐条反射读
             //    CustomerController 上对应方法的 @RequirePermission 钉住 —— ⛔ 两边不许漂,
             //    也不许在这里手抄第二份口径 (形态 D)。
             //
@@ -111,6 +111,21 @@ public class ToolRbacEnforcer {
             // ⛔ 同样**故意没有**映射 customer_tracking_recent_query: 它走 CustomerRepository
             //    而不是 CustomerService 的名单方法, 且必须**先有 customerId** 才能反查出一个名字
             //    (⛔ 不能枚举)。它的主载荷是跟进记录, 属另一个域, HTTP 侧也不在本票范围。登记而非豁免。
+            //
+            // ⛔ customer_quality_standard —— 登记不挂门。必须先有 customerId (⛔ 不能枚举),
+            //    只回那一个客户的 name/type/industry + 质检标准。它的使用者是 quality_inspector
+            //    (L1 sales='-' finance='-'), 挂四码会**打断质检取标准这条业务链**, 而没有任何裁定
+            //    支持那个收紧。⚠️ 与已关的 HTTP /{id} 的差别: 那条回整份 CustomerDTO
+            //    (电话/税号/信用额度/余额), 这条只回名字 + 行业 + 质检标准。
+            //
+            // ⛔ sku_assemble —— 登记不挂门, 但**泄漏本身已在工具里改掉**:
+            //    它原来在「按名字没匹配上」的分支里回 availableCustomers = 全部活跃客户名字,
+            //    等于一份名录。给整个工具挂销售/财务码会改变「谁能建 SKU」(裁定不管这件事),
+            //    所以改成只回 activeCustomerCount + 指向已带门的 customer_list。
+            //
+            // ⚠️ 上面这 4 条「登记不挂门」由 CustomerListToolAiPathPermissionTest 的
+            //    REGISTERED_NOT_GATED 表钉住 —— 那张表和本注释是同一件事的两处表述, 但
+            //    测试那份是**可执行**的: 新增一个碰客户数据的工具而不登记, 它当场红。
             Map.entry("customer_list",
                     Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
             Map.entry("customer_active",
@@ -125,6 +140,29 @@ public class ToolRbacEnforcer {
                     Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
             Map.entry("customer_crm_status_query",
                     Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
+            // 🔴🔴 第二把尺子 (「声明了 CustomerService / CustomerRepository 字段」) 才量出来的:
+            //    上面 7 条是按「谁调 CustomerService 的名单方法」枚举的, 而 workdesk 下的
+            //    customer_priority_query **直接走 CustomerRepository**, 那把尺子看不见它。
+            //    它分页拉活跃客户 (limit 最大 200) 并逐条回 customerId + customerName +
+            //    customerCode + contactPerson + **contactPhone** ⇒ 比 /active 还多两列联系方式。
+            //    ⛔ 它没有 HTTP 对位方法 (workdesk 专用工具), 所以钉一致性那条断言按
+            //    「等于裁定四码」直接断言, 而不是反射某个 controller 方法。
+            Map.entry("customer_priority_query",
+                    Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
+            //
+            // 🔴🔴 第二把尺子 (「声明了 CustomerService / CustomerRepository 字段」) 补量出来的 CRM 工具。
+            //    第一把尺子只看「调 CustomerService 名单方法」, 下面这几个走各自的
+            //    CRM 记录仓库 (通话/商机/微信) 再**逐行反查客户名**, 那把尺子完全看不见它们,
+            //    而它们都是**全厂枚举**: findByFactoryId...(factoryId) 取全部记录, 每行回 customerName
+            //    ⇒ 有多少个有 CRM 活动的客户就吐多少个名字。
+            Map.entry("call_record_followup_pending", Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
+            Map.entry("opportunity_stage_alert", Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
+            Map.entry("wechat_record_recent_query", Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
+            // 同域的两个**写**工具: 按本表既有的 customer_create 口径挂 sales:read_write
+            // (⛔ 不挂只读码 —— 只读码会让 sales:read 的角色写 CRM 记录)。
+            // 它们的码是裁定四码的子集, 所以完备性断言认它们「已挂门」。
+            Map.entry("opportunity_transition_stage", Set.of("sales:read_write")),
+            Map.entry("wechat_record_create", Set.of("sales:read_write")),
             Map.entry("customer_create", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("customer_update", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("customer_delete", Set.of("sales:read_write", "finance:read_write")),
