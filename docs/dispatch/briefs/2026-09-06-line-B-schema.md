@@ -43,3 +43,10 @@
 - 契约测试：`.../contract/SoftDeleteAnnotationCoverageRatchetContractTest.java`、`EntityColumnDefinitionIsPostgresTypeContractTest.java`（#643）、`*RepositoryQueryValidationTest`（H2，93 个）、`NotNullColumnsHaveEntityDefaultsContractTest`
 - #643 的 docker 底座与 dump 在 organizer 的 scratchpad（`…/scratchpad/sv/`，`sv_base` 库保留）；你自己重建一份，dump ⛔ 不入库。
 - 台账：`docs/dispatch/ACTIVE.md`；今日详情 `docs/dispatch/archive/2026-09-06-active-organizer-log.md`
+
+## 交接协议（2026-09-06 Steve 定，三条线同样）
+
+- **每到一个停点——PR 开好、被阻塞、一条任务收工、需要裁定——立刻 `send_message` 给 organizer session（标题含「organizer」），不要等被问。** 消息带：任务 ID、PR 号 + head SHA、一句话结论、下一步打算。
+- organizer 的合并 / 发布 / 退回意见也会 `send_message` 回来；PR 评论是备份不是主渠道。
+- 收到退回意见：改在同一 PR，推后再发一条消息（带新 head SHA）。
+- 一条任务收工后**不要空等**：接卡里与在审 PR 文件不重叠的下一条，并在消息里说明接了哪条。

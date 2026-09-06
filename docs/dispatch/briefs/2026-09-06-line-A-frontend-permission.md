@@ -48,3 +48,10 @@
 - 权限：`backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java`、`.../interceptor/PermissionInterceptor.java`、`.../security/DataScopeResolver.java`；RN `src/utils/permissionHelper.ts`、`src/types/auth.ts`；web-admin `src/stores/permission*`
 - RN 导航：`frontend/CretasFoodTrace/src/navigation/*Navigator.tsx`；可达性闸 `src/__tests__/gates/roleReachability.ts`、`screenReachability.test.ts`
 - OTA：`scripts/ota/push-bundle.sh`（只 organizer 跑）；`src/services/otaUpdateService.ts`
+
+## 交接协议（2026-09-06 Steve 定，三条线同样）
+
+- **每到一个停点——PR 开好、被阻塞、一条任务收工、需要裁定——立刻 `send_message` 给 organizer session（标题含「organizer」），不要等被问。** 消息带：任务 ID、PR 号 + head SHA、一句话结论、下一步打算。
+- organizer 的合并 / 发布 / 退回意见也会 `send_message` 回来；PR 评论是备份不是主渠道。
+- 收到退回意见：改在同一 PR，推后再发一条消息（带新 head SHA）。
+- 一条任务收工后**不要空等**：接卡里与在审 PR 文件不重叠的下一条，并在消息里说明接了哪条。
