@@ -29,6 +29,13 @@ usage: prewarm-main-artifact.sh --tests <MavenTestSelector> [--wait <seconds>]
   --wait    制品还没出现时最多等多少秒(默认 0 = 不等, 直接报 pending 退 0)。
             CI 构建 Java 制品约 4 分钟, 合并后立刻跑建议 --wait 420。
 
+退出码:
+  0  预热好了 / 还在 pending(发布时会自行重试) / 链路不通(跳过, 不阻断任何事)
+  1  这一趟真失败了(传输失败/验签不过)
+  2  用法错误
+  3  **本组织这条车道结构性不可用** —— 候选制品没有 attestation bundle(私有仓签不上),
+     ⛔ 不会进轮询, 也不要重跑; 发布走本地 Maven 构建。
+
 退出码: 0 = 已预热 / 仍 pending(都不算失败, 这是纯优化)；非 0 = 真出错(验签不过、
 传输失败、选择器覆盖不足等), 那些【不】因为是预热就放宽。
 EOF
@@ -88,9 +95,21 @@ while :; do
     attempt=$((attempt + 1))
     # --prewarm 的语义: 「还没有匹配制品」退 0 并打 pending; 其它任何原因仍是硬失败。
     # 所以这里【不能】把非 0 当成"还没好"吞掉 —— 那会把验签失败伪装成正常等待。
-    if ! "$SCRIPT_DIR/release-ci-artifact.sh" --prewarm --tests "$TESTS" >"$log" 2>&1; then
+    #
+    # ⚠️ rc 必须显式接: `if ! cmd; then rc=$?` 读到的是【取反的结果】不是 cmd 的退出码。
+    rc=0
+    "$SCRIPT_DIR/release-ci-artifact.sh" --prewarm --tests "$TESTS" >"$log" 2>&1 || rc=$?
+    # rc=3: 车道在本组织结构性不可用(候选制品没有签名 bundle)。等下去没有意义 ——
+    # ⛔ 不进轮询, 立刻说清楚并原样退 3, 让调用方知道这不是「还没轮到」。
+    if [ "$rc" -eq 3 ]; then
         cat "$log" >&2
-        echo "PREWARM=failed attempt=$attempt" >&2
+        echo "PREWARM=unavailable reason=ci_artifact_lane_unavailable_in_this_org attempts=$attempt"
+        echo "发布会直接走本地 Maven 构建 —— 这不是失败, 只是慢。⛔ 不要重跑预热。" >&2
+        exit 3
+    fi
+    if [ "$rc" -ne 0 ]; then
+        cat "$log" >&2
+        echo "PREWARM=failed attempt=$attempt rc=$rc" >&2
         exit 1
     fi
     cat "$log"

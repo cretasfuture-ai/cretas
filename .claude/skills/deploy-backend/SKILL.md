@@ -13,6 +13,8 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 # ① 合并前（干净的已审查候选 worktree）：唯一一次构建 + Java 制品预上传，不安装 / 不重启 / 不切流
 ./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<Maven 选择器>' --stage-backend YES-STAGE
 # ② 合并后先预热（幂等，可丢后台）：把 CI 制品的跨境运输挪出发布窗口；看到 PREWARM=done / already-warm 再往下
+#    ⚠️ PREWARM=unavailable（rc=3）= 本组织这条车道结构性不可用（私有仓签不上 attestation，ECS 按设计拒收）：
+#       **照常往下发布**，构建走本地 Maven（慢约 4 分钟但正确）。⛔ 不要重跑预热、也不要因此停下。
 ./scripts/deploy/prewarm-main-artifact.sh --tests '<同③选择器或更窄>' --wait 420
 # ③ 发布：自动检测 Java/Web 范围，复用 manifest / tree cache / CI 制品，部署或安全 no-op，输出 JSON 回执
 ./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
