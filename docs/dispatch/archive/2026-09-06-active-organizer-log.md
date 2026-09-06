@@ -327,3 +327,15 @@
 - **#652 ✅**：销售首页 `CARD_COUNT=5`（结构计数：5 卡 + 4 tab + 1 铃 = 10 clickable）：销售订单 / 客户管理 / 应收应付 / 价格表 / 退货单；点客户管理落 客户管理 屏（6/6/0），返回后 5 卡仍在。
 - **#648 ✅**：全部 共 14 条 混合状态；已确认 共 0 条 + 空态「暂无销售单」（不再是 0 条 + 4 卡）；已完成 共 5 条 = 全滚动 5 张唯一卡全为 已完成，金额 15+6+62+10+4833.92=4926.92 与页脚逐字相等（页脚聚合的是 tab 自己的集合，不是全部）。
 - 仪器：第一次芯片计数误把 tab 栏标签算进去（y=459），按 y>500 重量；崩溃扫描 0 命中且配阳性对照（同窗口 app 日志 28 行、同正则在基线文件命中 4 次——两次 OTA 重启各 4 条 RN 软异常，既有形态）。
+
+
+## 2026-09-06 20:52 sister line 首批 PR：#654（A）发 45、#657（A）、#651（B）合并、#650（C）需改
+
+原条目：- `BUG-RN-PERMISSION-MATRIX-DRIFTS-FROM-L1-20260906` — `queued` — Owner: 无 — #640 终审：RN 内置 `PERMISSION_MATRIX`（`permissionHelper.ts:222`）与 prod L1 漂移，`permission_admin` sales 在 RN 是 rw、L1 是 `-`（今天被「屏不可达」掩盖）。形态 D：RN 该读登录响应/L1，或加一致性闸。与 `ARCH-PERMISSION-ADMIN` 同源。
+原条目：- `OPS-SMARTBI-ENTITIES-IN-PRIMARY-PERSISTENCE-UNIT-20260906` — `queued` — Owner: Line B（sister chat） — 4 张 `smart_bi_*` 实体的表在 `smartbi_prod_db`，`PrimaryDataSourceConfig` 却扫该包并注释「因 ddl-auto=none 不会建」⇒ 主库 validate 永远过不了；另 `employee_process_segments`/`tool_metadata` 任何库都没建过。见 brief 卡 B 任务 1/2。🔒 架构。
+
+- **#654 终审可合 → 发 45 [RUN]**：登录响应 `modulePermissions` 计算链超管→L2→L1→硬编码与 `hasPermission` 同序（`hasPermission` 未动，diff 1 hunk 纯追加）；缺字段退到 `permissionMatrix.l1Snapshot.json`（与 prod L1 488 行逐格相等）、`{}` 全 deny；任一发布顺序不会多显示。prod 翻转：`lsm001` 三个写按钮 true→false（修的正是它）、dispatcher `sales:write` false→true（后端一直允许）；`sales_manager`/`warehouse_manager`/`production_manager` 无翻转。CI：Java 7+2、RN 220 套件/2303。发 45：`DEPLOY_EXIT=0`、FINAL 1 次、绿槽 pid 2857611 jar 20:45:37 < 启动 20:45:58、`resolveModuleLevels` 1、假串 0、health 200。登记（Line A）：`resolveModuleLevels` 是第二份解析实现（靠 prod UNIQUE + 逐格契约守）；快照模式缺硬编码独有格；biometric/device-login 嵌套形状拿不到 map。RN 半随 OTA（发 46 后推）。
+- **#657 可合（organizer 自审）→ 合并 `cc56859891`**：一个 spec + `web-admin-gate.yml` 逐文件加 4 个 Java 清单文件（无宽 glob，push/PR 两块一致）；8 份清单现算两两比对，对称差 203 钉棘轮只许往下；提取器打空或 <8 份 ⇒ INSTRUMENT DEAD 单独断言；变异 MA（Java 加无人登记模块）⇒ 210 红。
+- **#651 两份终审均可合 → 合并 `ff54aec6d6`**：5 个 pg 实体（含 `SmartBiQueryTemplate`，表两库都有）只被 `SmartBIPostgresRepositoryConfig` 绑定；主单元正则排除 + `removeIf` 后处理器（spring-orm 6.1.15 `postProcessPersistenceUnitInfo` 确认生效、Boot 3.2.12 无其它后处理器被覆盖）；无跨单元关联；契约测试打真 metamodel，变异去后处理器 ⇒ 2 红；prod `smartbi.postgres.enabled=true`、4 表只在 `smartbi_prod_db`、30 天日志 0 条 smart_bi 缺表 ⇒ 运行时零变化。登记（Line B）：`SmartBIUploadFlowServiceImpl` 两处默认 TM 跨库不原子；`SmartBIPostgresDataSourceConfig` 写死 `hbm2ddl.auto=update`；`smart_bi_query_templates` 两库都有且 Python 侧写哪个库未查。⚠️ 审查者报「prod 30 天 10 条 `employee_process_segments` 缺表」——**Line B 重数订正**：全部 147 个日志文件不带 head，10 = 8-15 同一 correlation id 的 5 个事件 × 主流/error 流（memory 两份流各记一遍），8-16 起 0 命中，唯一调用方 RN 屏已退役；「今天在炸」撤回。
+- **#650 终审需改**（审查者把生成的远端脚本在本地桩下真跑）：A 远端 jar 不存在仍安装 `REFRESHED rc=0`；B `lpid()` `2>/dev/null` 吞掉「Could not find service」⇒ 先覆盖后 `no-pid-after-restart`；C health 循环只看 200 不配对新 pid。次要：`git diff --quiet` rc≠1 落 refuse；无 `ServerAliveInterval`；测试头注释与 body 不一致。可合项：不可能误伤 47、三态只 0 成功、25 桩例 + 11 个 rc=2、CI `TOTAL=52 PASS=52`、`# LOCAL_ONLY` 对 drift 闸惰性、100755。
+- **测试环境**：手工刷到 `fd51460da1`（含 #654 Java 半）并 curl 登录验 `modulePermissions`（在跑）。
