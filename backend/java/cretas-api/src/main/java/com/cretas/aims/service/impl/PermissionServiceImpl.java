@@ -547,26 +547,9 @@ public class PermissionServiceImpl implements PermissionService {
             if (cached != null) return cached;
         }
 
-        // 按 L2 → L1 → hardcoded fallback 顺序解析 permission level
-        String permType = null;
-
-        // L2: factory-level override
-        if (user.getFactoryId() != null && factoryConfigRepo != null) {
-            permType = resolveLayer2(user.getFactoryId(), role.name(), module);
-        }
-
-        // L1: platform global default (from DB, seeded by Flyway V20260419_01)
-        if (permType == null && platformRepo != null) {
-            permType = resolveLayer1(role.name(), module);
-        }
-
-        // Fallback: hardcoded PERMISSION_MATRIX (safety net)
-        if (permType == null) {
-            Map<String, String> rolePerms = PERMISSION_MATRIX.get(role);
-            if (rolePerms != null) {
-                permType = rolePerms.get(module);
-            }
-        }
+        // 按 L2 → L1 → hardcoded fallback 顺序解析 permission level —— 唯一的一份链, 登录响应
+        // modulePermissions (resolveModuleLevels) 也走它, ⛔ 不要在别处再抄一遍这三步。
+        String permType = resolveEffectiveLevel(user, role, module);
 
         boolean result = checkAction(permType, action);
         resolveCache.put(cacheKey, new long[]{now + CACHE_TTL_MS});
@@ -609,16 +592,15 @@ public class PermissionServiceImpl implements PermissionService {
             return Collections.emptyMap();
         }
 
-        // 模块全集: 三层里任一层为该角色登记过的模块 (不挑「哪一份清单是真的」, 见 7 份清单收敛任务)
-        Map<String, String> l1 = layer1LevelsForRole(role.name());
-        Map<String, String> l2 = user.getFactoryId() == null ? Collections.emptyMap()
-                : layer2LevelsForRole(user.getFactoryId(), role.name());
-        Map<String, String> hardcoded = PERMISSION_MATRIX.getOrDefault(role, Collections.emptyMap());
-
+        // 模块全集: 三层里任一层为该角色登记过的模块 (不挑「哪一份清单是真的」, 见 7 份清单收敛任务)。
+        // ⚠️ 下面两个 helper **只负责列键**, 每一格的级别一律由 resolveEffectiveLevel 决定 ——
+        //    与 hasPermission 是同一个函数, 不是第二份解析实现 (#654 终审登记项 ①)。
         Set<String> modules = new TreeSet<>();
-        modules.addAll(l2.keySet());
-        modules.addAll(l1.keySet());
-        modules.addAll(hardcoded.keySet());
+        if (user.getFactoryId() != null) {
+            modules.addAll(layer2ModulesForRole(user.getFactoryId(), role.name()));
+        }
+        modules.addAll(layer1ModulesForRole(role.name()));
+        modules.addAll(PERMISSION_MATRIX.getOrDefault(role, Collections.emptyMap()).keySet());
 
         Map<String, String> levels = new LinkedHashMap<>();
 
@@ -632,37 +614,62 @@ public class PermissionServiceImpl implements PermissionService {
         }
 
         for (String module : modules) {
-            // 与 hasPermission 相同的优先级: L2 → L1 → 硬编码兜底
-            String level = l2.get(module);
-            if (level == null) level = l1.get(module);
-            if (level == null) level = normalizeLevel(hardcoded.get(module));
+            String level = normalizeLevel(resolveEffectiveLevel(user, role, module));
             if (level == null) continue;
             levels.put(module, level);
         }
         return levels;
     }
 
-    /** L1 该角色的全部有效行 (一次查询), 值已 normalize 成 rw/r/w/-. 查询失败 → 空 map (与 resolveLayer1 的 null 同义). */
-    private Map<String, String> layer1LevelsForRole(String roleCode) {
-        if (platformRepo == null) return Collections.emptyMap();
+    /**
+     * 三层解析链的<b>唯一</b>实现: L2 工厂覆盖 → L1 platform_role_permissions → 硬编码兜底。
+     * 返回 legacy 格式 (read_write/read/write/none) 或 null (三层都没有)。
+     * {@link #hasPermission} 与 {@link #resolveModuleLevels} 都只调它 —— 两条路径不可能各漂各的。
+     * ⚠️ 不含超管分支、不含特例权限码 (price:view 等)、不含缓存: 那些留在 hasPermission 里。
+     */
+    private String resolveEffectiveLevel(User user, FactoryUserRole role, String module) {
+        String permType = null;
+
+        // L2: factory-level override
+        if (user.getFactoryId() != null && factoryConfigRepo != null) {
+            permType = resolveLayer2(user.getFactoryId(), role.name(), module);
+        }
+
+        // L1: platform global default (from DB, seeded by Flyway V20260419_01)
+        if (permType == null && platformRepo != null) {
+            permType = resolveLayer1(role.name(), module);
+        }
+
+        // Fallback: hardcoded PERMISSION_MATRIX (safety net)
+        if (permType == null) {
+            Map<String, String> rolePerms = PERMISSION_MATRIX.get(role);
+            if (rolePerms != null) {
+                permType = rolePerms.get(module);
+            }
+        }
+        return permType;
+    }
+
+    /** L1 里该角色登记过的模块**键** (只列键, 不决定级别). 查询失败 → 空集, 与 resolveLayer1 的 null 同义. */
+    private Set<String> layer1ModulesForRole(String roleCode) {
+        if (platformRepo == null) return Collections.emptySet();
         try {
-            Map<String, String> out = new HashMap<>();
+            Set<String> out = new HashSet<>();
             for (PlatformRolePermission row : platformRepo.findByRoleCodeAndDeletedAtIsNull(roleCode)) {
-                if (row.getModuleCode() == null) continue;
-                out.put(row.getModuleCode(), normalizeLevel(row.getPermissionLevel()));
+                if (row.getModuleCode() != null) out.add(row.getModuleCode());
             }
             return out;
         } catch (Exception e) {
             log.warn("L1 list resolve failed for role={}: {}", roleCode, e.getMessage());
-            return Collections.emptyMap();
+            return Collections.emptySet();
         }
     }
 
-    /** L2 该工厂对该角色的全部覆盖格 (与 resolveLayer2 同一数据源、同一「第一个配置命中」顺序). */
-    private Map<String, String> layer2LevelsForRole(String factoryId, String roleCode) {
-        if (factoryConfigRepo == null) return Collections.emptyMap();
+    /** L2 里该工厂对该角色覆盖过的模块**键** (只列键, 不决定级别; 级别仍由 resolveLayer2 决定). */
+    private Set<String> layer2ModulesForRole(String factoryId, String roleCode) {
+        if (factoryConfigRepo == null) return Collections.emptySet();
         try {
-            Map<String, String> out = new HashMap<>();
+            Set<String> out = new HashSet<>();
             List<FactoryModuleConfig> configs = factoryConfigRepo.findByFactoryIdAndConfigVersion(factoryId, 1);
             for (FactoryModuleConfig cfg : configs) {
                 Map<String, Map<String, String>> override = cfg.getRoleModuleOverride();
@@ -670,14 +677,13 @@ public class PermissionServiceImpl implements PermissionService {
                 Map<String, String> roleOverrides = override.get(roleCode);
                 if (roleOverrides == null) continue;
                 for (Map.Entry<String, String> e : roleOverrides.entrySet()) {
-                    if (e.getValue() == null) continue;
-                    out.putIfAbsent(e.getKey(), normalizeLevel(e.getValue()));
+                    if (e.getValue() != null) out.add(e.getKey());
                 }
             }
             return out;
         } catch (Exception e) {
             log.warn("L2 list resolve failed for factory={}, role={}: {}", factoryId, roleCode, e.getMessage());
-            return Collections.emptyMap();
+            return Collections.emptySet();
         }
     }
 
