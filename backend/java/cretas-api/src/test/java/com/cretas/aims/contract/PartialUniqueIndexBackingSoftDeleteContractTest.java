@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,10 +68,18 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      * 🔴 这两个部分索引<b>只活在 prod 上，仓库迁移里没有</b>（2026-09-07 普查：prod 310 个非主键唯一索引、
      * 104 个部分索引，仓库里找不到名字的 74 个中<b>恰好这 2 个</b>是部分索引）。
      *
-     * <p>后果是<b>从仓库迁移新建的库与 prod 不一致</b>：
-     * {@code notify_templates} 的迁移建的是<b>全量</b> {@code CONSTRAINT uq_notify_templates_factory_code}
-     * （prod 上那个已经不在了），{@code business_rules} 的迁移里<b>一个唯一约束都没有</b>。
-     * ⇒ 新库上这两张表要么比 prod 严（软删再建同 code 会被拒），要么完全不设防。
+     * <p>🔴 <b>后果比「不一致」更具体：从迁移新建的任何 PostgreSQL 库上，本 PR 刚修的这个 bug 会原样重现</b>，
+     * 只是载体从 H2 换成 PG。两张表的迁移建的都是<b>全量</b>唯一约束——
+     * {@code notify_templates} 是具名的 {@code CONSTRAINT uq_notify_templates_factory_code}
+     * （{@code V20260621_01:16}），{@code business_rules} 是<b>内联无名</b>的
+     * {@code UNIQUE(factory_id, rule_code)}（{@code V20260622_01:19}）——而 prod 上这两个全量键都<b>已经不在了</b>，
+     * 只剩 {@code …_active} 的部分索引。⇒ 新库比 prod 严 ⇒ 这两张软删表「软删后重建同 code」会撞约束。
+     *
+     * <p>⚠️ <b>这段话我一开始写错了</b>：原文说「{@code business_rules} 的迁移里一个唯一约束都没有」，
+     * 由此把它归成「完全不设防」——方向正好相反。成因是普查器<b>只认 {@code CREATE UNIQUE INDEX}</b>，
+     * 对 {@code CREATE TABLE} 里的内联 {@code UNIQUE(...)} 是<b>全盲</b>的（全仓 123 处）。
+     * ⇒ 一个看不见某种写法的仪器，不会报「我不确定」，它报的是<b>「没有」</b>。
+     * 而那句「没有」正是当时决定延期的依据 ⇒ 依据错了，延期结论要重新过一遍（见票）。
      *
      * <p>⛔ 不在这道闸里顺手补迁移——补它要单独一版迁移 + 存量重复检查，与本次 P0 是两件事，已单独登记。
      * 补上之后请把这两条从这里搬到上面那张表里，本闸会因为「集合变了」报红提醒你搬。
@@ -97,31 +106,39 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
             String stmt = m.group();
             if (stmt.toLowerCase().contains("deleted_at is null")) partial.add(stmt);
         }
-        System.out.println("PARTIAL_UNIQUE_INDEX_STATEMENTS_IN_MIGRATIONS=" + partial.size());
+        // ⚠️ 这个数依赖「语句边界怎么切」：到下一个 `;` 是 109，到下一条语句关键字是 110，
+        // 裸 `CREATE UNIQUE INDEX` 出现次数是 133（差额在 DO $$ … $$ 块里，那里的 `;` 不是语句结尾）。
+        // ⇒ 打印时把口径一起打出来。⛔ 一个不说口径的数字，和不写它一样没用——两个人重数会得到不同的值。
+        System.out.println("PARTIAL_UNIQUE_INDEX_STATEMENTS_IN_MIGRATIONS=" + partial.size()
+                + " (口径: CREATE UNIQUE INDEX 到下一个 ';'; 同口径下总语句数="
+                + CREATE_UNIQUE_INDEX.matcher(sql).results().count() + ")");
+
+        // 🔴 按**迁移顺序**求最终状态，⛔ 不是「文本里出现过一条部分索引语句就算数」。
+        // 2026-09-07 终审指出：短路写法只守得住「原语句被编辑」，一条**后来的** `DROP INDEX uq_lt_plan_tripno;`
+        // 会让原 CREATE 文本原封不动留着、闸保持绿 —— 而本类文档承诺的是「删掉就报红」。
+        // ⇒ 文档承诺了实现做不到的事，且是往「更让人放心」的方向，比闸弱本身更危险 ⇒ 改实现。
+        Map<String, String> finalState = resolveFinalIndexState();
 
         List<String> missing = new ArrayList<>();
         List<String> notPartial = new ArrayList<>();
         for (Map.Entry<String, String> e : MUST_BE_PARTIAL_IN_MIGRATIONS.entrySet()) {
-            String name = e.getKey();
-            boolean declaredPartial = partial.stream().anyMatch(s -> containsWord(s, name));
-            boolean declaredAtAll = CREATE_UNIQUE_INDEX.matcher(sql).results()
-                    .anyMatch(r -> containsWord(r.group(), name));
-            if (declaredPartial) continue;
-            (declaredAtAll ? notPartial : missing).add(name + " (" + e.getValue() + ")");
+            String state = finalState.getOrDefault(e.getKey(), "absent");
+            if ("partial".equals(state)) continue;
+            (state.equals("full") ? notPartial : missing).add(e.getKey() + " [" + state + "] (" + e.getValue() + ")");
         }
 
         assertThat(notPartial)
-                .as("这些索引在迁移里还在，但已经不是 `WHERE deleted_at IS NULL` 的部分索引了。"
+                .as("这些索引在迁移里还在，但按迁移顺序算出来的最终状态已经不是 `WHERE deleted_at IS NULL` 的部分索引了。"
                         + "实体侧已经不声明唯一键了，改成全量等于让「软删再建同键」在生产上被拒。")
                 .isEmpty();
         assertThat(missing)
-                .as("这些索引在迁移里找不到了。唯一性现在只由它们承担，删掉它就是静默失守——"
-                        + "H2 本来就不管，prod 上要等真出重复数据才看得见。")
+                .as("这些索引按迁移顺序算下来最终不存在了（被删、被改名，或后面有一条 DROP INDEX）。"
+                        + "唯一性现在只由它们承担，删掉它就是静默失守——H2 本来就不管，prod 上要等真出重复数据才看得见。")
                 .isEmpty();
 
         // 那两个只活在 prod 上的：集合一变就报红, 提醒把补好迁移的那个搬到上面的表里。
         List<String> prodOnlyNowInMigrations = PROD_ONLY_NOT_IN_MIGRATIONS.stream()
-                .filter(n -> partial.stream().anyMatch(s -> containsWord(s, n)))
+                .filter(n -> "partial".equals(finalState.get(n)))
                 .sorted().toList();
         assertThat(prodOnlyNowInMigrations)
                 .as("这些索引原本只活在 prod 上；现在迁移里有了 —— 把它从 PROD_ONLY_NOT_IN_MIGRATIONS "
@@ -162,6 +179,60 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
                 .as("它必须留在 postgres-reversal-concurrency 那条车道的 -Dtest= 列表里——"
                         + "摘出去它就退回「opt-in 且没人跑」，与不存在读数相同")
                 .contains("SoftDeletePartialUniqueIndexPostgresContractTest");
+    }
+
+    /**
+     * 按迁移的执行顺序把每个唯一索引名收敛到<b>最终状态</b>：{@code partial} / {@code full} / {@code dropped}
+     * （没出现过的名字不在返回值里 ⇒ 调用方读作 {@code absent}）。
+     *
+     * <p>为什么必须按顺序：{@code CREATE …; DROP …;} 与 {@code DROP …; CREATE …;} 在「文本里出现过」这个
+     * 口径下完全一样，而最终状态相反。⇒ 顺序敏感是这道闸能兑现文档承诺的前提。
+     *
+     * <p>⚠️ 已知边界（写出来，⛔ 不假装没有）：
+     * <ul>
+     *   <li>文件顺序按<b>文件名</b>排——本仓 Flyway 版本号是 {@code V<日期>_<序号>} 的定宽格式，字典序即版本序；</li>
+     *   <li>语句边界取到下一个 {@code ;}，所以 {@code DO $$ … $$} 块<b>里面</b>的 CREATE 认不全
+     *       （全仓 224 个 DO 块里有 6 个含 CREATE UNIQUE INDEX，本闸跟踪的 11 个都不在其中——已核）；</li>
+     *   <li>🔴 <b>内联 {@code UNIQUE(...)} / {@code CONSTRAINT … UNIQUE (...)} 完全看不见</b>（全仓 123 处）。
+     *       这个盲区已经造成过一次假读数，见 {@link #PROD_ONLY_NOT_IN_MIGRATIONS} 上的说明。</li>
+     * </ul>
+     */
+    private static Map<String, String> resolveFinalIndexState() throws IOException {
+        Pattern create = Pattern.compile(
+                "CREATE\\s+UNIQUE\\s+INDEX\\s+(?:CONCURRENTLY\\s+)?(?:IF\\s+NOT\\s+EXISTS\\s+)?([A-Za-z_]\\w*)[^;]*;",
+                Pattern.CASE_INSENSITIVE);
+        Pattern drop = Pattern.compile(
+                "DROP\\s+INDEX\\s+(?:CONCURRENTLY\\s+)?(?:IF\\s+EXISTS\\s+)?([A-Za-z_]\\w*)",
+                Pattern.CASE_INSENSITIVE);
+        Pattern dropConstraint = Pattern.compile(
+                "DROP\\s+CONSTRAINT\\s+(?:IF\\s+EXISTS\\s+)?([A-Za-z_]\\w*)", Pattern.CASE_INSENSITIVE);
+
+        List<Path> ordered;
+        try (Stream<Path> files = Files.walk(DB)) {
+            ordered = files.filter(f -> f.toString().toLowerCase().endsWith(".sql"))
+                    .sorted(Comparator.comparing(f -> f.getFileName().toString()))
+                    .toList();
+        }
+        Map<String, String> state = new LinkedHashMap<>();
+        for (Path p : ordered) {
+            String body = Files.readString(p, StandardCharsets.UTF_8);
+            // 同一个文件里也要按**出现位置**排，否则文件内的 CREATE/DROP 先后同样会算反。
+            record Event(int at, String name, String to) {}
+            List<Event> events = new ArrayList<>();
+            for (Matcher c = create.matcher(body); c.find(); ) {
+                events.add(new Event(c.start(), c.group(1).toLowerCase(),
+                        c.group().toLowerCase().contains("deleted_at is null") ? "partial" : "full"));
+            }
+            for (Matcher d = drop.matcher(body); d.find(); ) {
+                events.add(new Event(d.start(), d.group(1).toLowerCase(), "dropped"));
+            }
+            for (Matcher d = dropConstraint.matcher(body); d.find(); ) {
+                events.add(new Event(d.start(), d.group(1).toLowerCase(), "dropped"));
+            }
+            events.stream().sorted(Comparator.comparingInt(Event::at))
+                    .forEach(ev -> state.put(ev.name(), ev.to()));
+        }
+        return state;
     }
 
     private static boolean containsWord(String haystack, String word) {
