@@ -46,7 +46,7 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_lsm_factory_area", columnList = "factory_id, area_code")
         })
-@SQLDelete(sql = "UPDATE logistics_store_master SET deleted_at = NOW() WHERE id = ?")
+@SQLDelete(sql = "UPDATE logistics_store_master SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 @Data
 @EqualsAndHashCode(callSuper = true)

@@ -49,7 +49,7 @@ import java.util.UUID;
                 @Index(name = "idx_sales_opp_owner", columnList = "owner_id"),
                 @Index(name = "idx_sales_opp_expected_close", columnList = "expected_close_date")
         })
-@SQLDelete(sql = "UPDATE sales_opportunities SET deleted_at = NOW() WHERE id = ?")
+@SQLDelete(sql = "UPDATE sales_opportunities SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class SalesOpportunity extends BaseEntity {
 

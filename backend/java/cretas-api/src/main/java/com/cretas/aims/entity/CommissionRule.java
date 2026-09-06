@@ -44,7 +44,7 @@ import java.util.UUID;
                 @Index(name = "idx_comm_rule_customer_type", columnList = "customer_type"),
                 @Index(name = "idx_comm_rule_active", columnList = "active")
         })
-@SQLDelete(sql = "UPDATE commission_rules SET deleted_at = NOW() WHERE id = ?")
+@SQLDelete(sql = "UPDATE commission_rules SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class CommissionRule extends BaseEntity {
 

@@ -38,7 +38,7 @@ import java.util.UUID;
         @Index(name = "idx_business_rules_factory_scope",
                columnList = "factory_id, scope, enabled, priority")
     })
-@SQLDelete(sql = "UPDATE business_rules SET deleted_at = NOW() WHERE id = ?")
+@SQLDelete(sql = "UPDATE business_rules SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 @Data
 @EqualsAndHashCode(callSuper = true)
