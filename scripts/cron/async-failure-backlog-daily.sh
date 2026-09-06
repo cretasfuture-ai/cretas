@@ -26,12 +26,35 @@ ALERTS="${ASYNC_FAILURE_ALERTS:-/www/wwwroot/cretas/logs/async-failure-backlog-a
 APP_PORTS="${ASYNC_FAILURE_APP_PORTS:-:10010|:10020}"
 PSQL_BIN="${ASYNC_FAILURE_PSQL:-psql}"
 
+# 🔴 2026-09-06 审计: 与 soft-delete-orphans-watch.sh 同款隐患 —— root crontab 无 PATH=,
+#    `ss` 只在 /usr/sbin, 而原来 `ss -lntp 2>/dev/null` 把 `command not found` 吞掉,
+#    PID 为空 ⇒ 静默落到默认库名/空密码 ⇒ psql 失败 ⇒ 被记成「台账读不到」。
+#    「找不到 ss」和「台账读不到」是两种修法, 不能长成同一行。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "XXX" ss "$PSQL_BIN"
+
 # 从活着的 JVM 拿库连接 —— 配置文件里的默认值指向的是别的库。
 # ⚠️ 只 export 需要的那几个前缀: eval 整份 environ 会冲掉 PATH。
-PID=$(ss -lntp 2>/dev/null | grep -E "$APP_PORTS" | grep -oP 'pid=\K[0-9]+' | head -1)
+# ⛔ 不再 2>/dev/null: ss 的 stderr 正是「为什么取不到 PID」。
+SS_ERR=$(mktemp)
+LISTEN=$(ss -lntp 2> "$SS_ERR")
+SS_RC=$?
+# ⚠️ 不用 grep -P(\K): BSD grep 没有 -P, 自建 CI runner 是 macOS(time-phrase 那次实测炸过)。
+PID=$(printf '%s\n' "$LISTEN" | grep -E "$APP_PORTS" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+if [ -z "$PID" ] && [ -z "${ASYNC_FAILURE_DB_PASS:-}" ]; then
+    # 拿不到活进程, 又没有显式给密码 ⇒ 下面必然是空密码去连 —— 那不是「台账读不到」,
+    # 是「没找到后端」。分开喊, rc=2 (没量到)。
+    SS_MSG=$(head -2 "$SS_ERR" | tr '\n' ' '); rm -f "$SS_ERR"
+    cron_dead "$ALERTS" "XXX" "no-listener-on-ports" \
+        "ss rc=$SS_RC, 端口 $APP_PORTS 上没有 pid= (后端没在监听, 或 ss 看不到 pid —— 非 root?)" \
+        "$SS_MSG"
+fi
+rm -f "$SS_ERR"
 if [ -n "$PID" ] && [ -r "/proc/$PID/environ" ]; then
     eval "$(tr '\0' '\n' < "/proc/$PID/environ" \
-            | grep -E '^FOOD_KB_POSTGRES_' | sed 's/^/export /')" 2>/dev/null
+            | grep -E '^FOOD_KB_POSTGRES_' | sed 's/^/export /')"
 fi
 
 DB_HOST="${ASYNC_FAILURE_DB_HOST:-${FOOD_KB_POSTGRES_HOST:-127.0.0.1}}"
