@@ -14,10 +14,23 @@
 # Reuses the Layer-5 attribution fix (aliyun_c no longer mislabeled) for clean caller rows.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
-eval "$(systemctl show cretas-python -p Environment | tr ' ' '\n' \
-        | grep -E '^POSTGRES_(PASSWORD|USER|HOST)=' \
-        | sed -E "s/^([^=]+)=(.*)$/export \1='\2'/")"
-export PGPASSWORD="${POSTGRES_PASSWORD:-}"
+ALERTS="${LLM_ROUTER_ALERTS:-/www/wwwroot/cretas/logs/llm-rules-gap-heatmap-alerts.log}"
+# 2026-09-06 审计 (终审订正): 这一个不用 venv, 但**它也不是活的** —— 最后一次好跑是 07-13, 之后 7 次
+# 全是 `FATAL: password authentication failed`。三个 llm-router 周报的共同根因是**密钥源**:
+# 原来 `eval "$(systemctl show cretas-python -p Environment …)"` 只列 unit 里 inline 的 Environment=,
+# 看不见 EnvironmentFile=.env.prod (07-20 起 POSTGRES_PASSWORD 与全部 LLM_*_API_KEY 都在那里) ⇒
+# PGPASSWORD 恒空。⇒ 问活进程要 (形态 A′); 密码拿不到 ⇒ rc=2, ⛔ 不带空密码去撞认证。
+# ⛔ source 失败必须停 (无 -e 下五个 cron_* 逐个 command not found 后照跑, 空密码去撞认证)。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../cron/cron-common.sh" || {
+    echo "LLM RULES-GAP INSTRUMENT DEAD $(date '+%F %T') reason=cron-common-missing — scripts/cron/cron-common.sh 没装 (装序: 先 cron/ 再本脚本), 本次读数作废" >> "$ALERTS"
+    echo "LLM RULES-GAP INSTRUMENT DEAD reason=cron-common-missing" >&2; exit 2; }
+cron_pin_path
+cron_require_cmds "$ALERTS" "LLM RULES-GAP" systemctl psql grep date
+cron_export_service_env cretas-python "$ALERTS" "LLM RULES-GAP" '^POSTGRES_(PASSWORD|USER|HOST)$'
+[ -n "${POSTGRES_PASSWORD:-}" ] || cron_dead "$ALERTS" "LLM RULES-GAP" "no-db-password-in-service-environ" \
+    "cretas-python 的 environ 里没有非空 POSTGRES_PASSWORD —— psql 必然认证失败"
+export PGPASSWORD="$POSTGRES_PASSWORD"
 PSQL=(psql -h "${POSTGRES_HOST:-localhost}" -U "${POSTGRES_USER:-smartbi_user}" -d smartbi_prod_db -X)
 
 echo "# LLM router → 规则缺口热力图   $(date '+%Y-%m-%d %H:%M')"
@@ -63,6 +76,11 @@ GROUP BY 1 ORDER BY samples DESC LIMIT 10;
 SELECT coalesce(teacher_model,'?')  AS teacher_model, count(*) AS samples
 FROM smart_bi_distillation_samples GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 SQL
+psql_rc=$?
+# psql 连不上/认证失败 = 这周的热力图**没量到**, ⛔ 不是「没有缺口」。
+[ "$psql_rc" -eq 0 ] || cron_dead "$ALERTS" "LLM RULES-GAP" "psql-failed" \
+    "psql rc=$psql_rc host=${POSTGRES_HOST:-localhost} user=${POSTGRES_USER:-smartbi_user} db=smartbi_prod_db" \
+    "凭证来自活进程 /proc/<MainPID>/environ (cron_export_service_env); 认证失败多半是密码轮换了而服务没重启"
 
 cat <<'LEGEND'
 
