@@ -104,15 +104,14 @@ public class PrimaryDataSourceConfig {
         properties.put("hibernate.show_sql", showSql);
         properties.put("hibernate.format_sql", "false");
 
-        // IMPORTANT: List all entity packages EXCEPT smartbi.postgres
-        // The smartbi.postgres entities are handled by SmartBIPostgresDataSourceConfig
-        //
-        // Solution: Use Class references for SmartBI MySQL entities.
-        // When packages() receives Class<?> arguments, it only scans the package
-        // containing that class, NOT its subpackages.
-        //
-        // All other packages have no PostgreSQL subpackages, so we can use string names.
-        return builder
+        // packages() 是递归扫描（根包 "com.cretas.aims.entity" 已经覆盖下面所有子包），
+        // 没有「要本包不要子包」的写法，所以 entity.smartbi.postgres 下的实体也会被扫进来。
+        // 它们属于 SmartBIPostgresDataSourceConfig 的 smartbiPostgres 单元（表只在 smartbi 库），
+        // 这里 build 完之后用 PersistenceUnitPostProcessor 把它们从主单元剔掉 —— 与上面
+        // @EnableJpaRepositories 对 repository.smartbi.postgres 的 excludeFilters 对称。
+        // 不剔的后果：主单元 ddl-auto=validate 会去主库找 smart_bi_dynamic_data 等 4 张表
+        // （#643 量出的 6 张缺表里有 4 张是它们）。守闸：SmartBiPostgresEntitiesBelongToOnePersistenceUnitContractTest。
+        LocalContainerEntityManagerFactoryBean emf = builder
             .dataSource(dataSource)
             .packages(
                 // Root entity package (entities not in subfolders)
@@ -137,9 +136,7 @@ public class PrimaryDataSourceConfig {
                 "com.cretas.aims.entity.scale",
                 "com.cretas.aims.entity.tool",
                 "com.cretas.aims.entity.voice",
-                // SmartBI entities - include the whole package including postgres subpackage
-                // Since DDL-auto=none, Hibernate won't try to create missing tables.
-                // The postgres entities will be scanned but not used (their repository is excluded)
+                // SmartBI 固定表实体（smartbi.postgres 子包在下面被剔除）
                 "com.cretas.aims.entity.smartbi",
                 // 一加物流 logistics MVP bounded context (entities live outside com.cretas.aims.entity)
                 "com.cretas.aims.logistics.entity"
@@ -147,7 +144,16 @@ public class PrimaryDataSourceConfig {
             .persistenceUnit("primary")
             .properties(properties)
             .build();
+        emf.setPersistenceUnitPostProcessors(pui ->
+            pui.getManagedClassNames().removeIf(
+                className -> className.startsWith(SMARTBI_POSTGRES_ENTITY_PACKAGE_PREFIX)));
+        return emf;
     }
+
+    /**
+     * 只属于 smartbiPostgres 持久化单元的实体包前缀（带尾点，避免误剔 "…smartbi.postgresX" 这种同前缀包）。
+     */
+    static final String SMARTBI_POSTGRES_ENTITY_PACKAGE_PREFIX = "com.cretas.aims.entity.smartbi.postgres.";
 
     /**
      * Primary TransactionManager
