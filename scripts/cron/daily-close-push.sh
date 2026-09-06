@@ -23,27 +23,35 @@
 #    猜错的方向是「把别人家的经营数字推给另一家店长」。
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-LOG=/www/wwwroot/cretas/logs/daily-close-push.log
-ALERTS=/www/wwwroot/cretas/logs/daily-close-alerts.log
-LEDGER=/www/wwwroot/cretas/logs/daily-close-ledger.jsonl
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态, 与 flywheel-promotion-staleness 同一裁定)。
+PYDIR="${DAILY_CLOSE_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+LOG="${DAILY_CLOSE_LOG:-/www/wwwroot/cretas/logs/daily-close-push.log}"
+ALERTS="${DAILY_CLOSE_ALERTS:-/www/wwwroot/cretas/logs/daily-close-alerts.log}"
+LEDGER="${DAILY_CLOSE_LEDGER:-/www/wwwroot/cretas/logs/daily-close-ledger.jsonl}"
+ENV_PROD="${DAILY_CLOSE_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+ENV_EXTRA="${DAILY_CLOSE_ENV_EXTRA:-/www/wwwroot/cretas/.env.daily-close}"
+# 2026-09-06 审计批 2 (docs/ops/cron-scripts-path-audit-2026-09-06.md): 钉 PATH; venv 不在 ⇒ rc=2
+# (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2 (原来 2>/dev/null 吞掉, 到 python 报凭证缺才知道);
+# .env.daily-close 是**可选**文件, 不在只记一句。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "DAILY CLOSE" systemctl
 
 {
   echo "=== $(date '+%F %T') daily-close push ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "DAILY CLOSE" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "DAILY CLOSE"
 
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.daily-close 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "DAILY CLOSE"
+  cron_source_env_optional "$ENV_EXTRA"
   set +a
 
   # ⚠️ `.env.prod` **不含** POSTGRES_DB —— 它只在 systemd unit 里。
   #    不补这一步会静默落到默认值(测试库), 于是「推了」但推的是测试库的数。
-  svc_pid=$(systemctl show -p MainPID --value cretas-python.service 2>/dev/null)
+  # (systemctl 的 stderr 进 $LOG, ⛔ 不再 2>/dev/null)
+  svc_pid=$(systemctl show -p MainPID --value cretas-python.service)
   if [ -n "${svc_pid:-}" ] && [ "$svc_pid" != "0" ] && [ -r "/proc/$svc_pid/environ" ]; then
     while IFS= read -r -d '' kv; do
       case "$kv" in POSTGRES_*|INTERNAL_API_SECRET=*) export "${kv?}" ;; esac

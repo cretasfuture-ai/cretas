@@ -23,25 +23,30 @@
 # 原子链接切换，避免定时任务与主服务使用不同 Python。
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-LOG=/www/wwwroot/cretas/logs/replay-equivalence.log
-ALERTS=/www/wwwroot/cretas/logs/replay-equivalence-alerts.log
-LEDGER=/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态)。
+PYDIR="${REPLAY_EQ_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+LOG="${REPLAY_EQ_LOG:-/www/wwwroot/cretas/logs/replay-equivalence.log}"
+ALERTS="${REPLAY_EQ_ALERTS:-/www/wwwroot/cretas/logs/replay-equivalence-alerts.log}"
+LEDGER="${REPLAY_EQ_LEDGER:-/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl}"
+ENV_PROD="${REPLAY_EQ_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+# 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "REPLAY EQUIV" systemctl
 
 {
   echo "=== $(date '+%F %T') replay equivalence ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "REPLAY EQUIV" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "REPLAY EQUIV"
 
   # prod 库/密钥只从 .env.prod 注入，绝不落进仓库。
   # ⚠️ `.env.prod` **不含** POSTGRES_DB —— 它只在 systemd unit 里。
   #    所以下面补一次从活服务进程 environ 取值（判据: 量 prod 看活进程）。
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "REPLAY EQUIV"
   set +a
-  svc_pid=$(systemctl show -p MainPID --value cretas-python.service 2>/dev/null)
+  svc_pid=$(systemctl show -p MainPID --value cretas-python.service)
   if [ -n "${svc_pid:-}" ] && [ "$svc_pid" != "0" ] && [ -r "/proc/$svc_pid/environ" ]; then
     while IFS= read -r -d '' kv; do
       case "$kv" in POSTGRES_*|INTERNAL_API_SECRET=*) export "${kv?}" ;; esac

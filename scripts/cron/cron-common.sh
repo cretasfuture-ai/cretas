@@ -89,6 +89,28 @@ cron_export_service_env() {  # $1 service, $2 alerts, $3 prefix, $4 键名 ERE (
     echo "INFO service-env exported=$n match=$re pid=$pid"
 }
 
+# 必需的 env 文件(.env.prod): 不在 ⇒ rc=2 reason=env-file-missing:<名>。
+# ⛔ 原来各脚本写 `source f 2>/dev/null`: 文件不在被吞成「凭证为空」, 要到 python 报
+#    auth failed 才知道 —— 而那时告警措辞已经是「有租户推送失败」之类别的意思了。
+cron_source_env_required() {
+    local f=$1 alerts=$2 prefix=$3
+    [ -r "$f" ] || cron_dead "$alerts" "$prefix" "env-file-missing:$(basename "$f")" "$f 不存在或不可读"
+    # shellcheck disable=SC1090
+    . "$f" || cron_dead "$alerts" "$prefix" "env-file-unreadable:$(basename "$f")" "$f source 失败"
+}
+
+# 可选的 env 文件(.env.daily-close 这种): 不在就在日志里说一声, ⛔ 不吞、也不 rc=2 ——
+# 「可选」与「必需」是两种文件, 第一版审计里 26 处 2>/dev/null 大半是把两者写成了一样。
+cron_source_env_optional() {
+    local f=$1
+    if [ -r "$f" ]; then
+        # shellcheck disable=SC1090
+        . "$f"
+    else
+        echo "INFO optional env file absent: $f"
+    fi
+}
+
 # venv 不在就停, ⛔ 不许静默掉回系统 python(3.6.8, 连 from __future__ annotations 都不认)。
 cron_activate_venv() {
     local activate=$1 alerts=$2 prefix=$3

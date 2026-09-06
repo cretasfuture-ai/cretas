@@ -26,23 +26,28 @@
 #    ⇒ 「没喊」有两种：决定不喊 / 没能做决定。**后者必须喊。**
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-LOG=/www/wwwroot/cretas/logs/llm-provider-health.log
-ALERTS=/www/wwwroot/cretas/logs/llm-provider-health-alerts.log
-LEDGER=/www/wwwroot/cretas/logs/llm-provider-health-ledger.jsonl
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态)。
+PYDIR="${LLM_HEALTH_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+LOG="${LLM_HEALTH_LOG:-/www/wwwroot/cretas/logs/llm-provider-health.log}"
+ALERTS="${LLM_HEALTH_ALERTS:-/www/wwwroot/cretas/logs/llm-provider-health-alerts.log}"
+LEDGER="${LLM_HEALTH_LEDGER:-/www/wwwroot/cretas/logs/llm-provider-health-ledger.jsonl}"
+ENV_PROD="${LLM_HEALTH_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+# 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "LLM HEALTH" systemctl
 
 {
   echo "=== $(date '+%F %T') llm provider health ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "LLM HEALTH" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "LLM HEALTH"
 
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "LLM HEALTH"
   set +a
   # ⚠️ 库名/部分 key 只在 systemd unit 里，不在 .env.prod —— 问活进程要（形态 A′）。
-  svc_pid=$(systemctl show -p MainPID --value cretas-python.service 2>/dev/null)
+  svc_pid=$(systemctl show -p MainPID --value cretas-python.service)
   if [ -n "${svc_pid:-}" ] && [ "$svc_pid" != "0" ] && [ -r "/proc/$svc_pid/environ" ]; then
     while IFS= read -r -d '' kv; do
       case "$kv" in POSTGRES_*|LLM_*|DASHSCOPE_*|INTERNAL_API_SECRET=*) export "${kv?}" ;; esac

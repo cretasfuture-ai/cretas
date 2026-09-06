@@ -22,9 +22,16 @@
 # 避免定时任务与主服务使用不同 Python。
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-LOG=/www/wwwroot/cretas/logs/forecast-backtest.log
-ALERTS=/www/wwwroot/cretas/logs/forecast-backtest-alerts.log
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态)。
+PYDIR="${FORECAST_BT_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+LOG="${FORECAST_BT_LOG:-/www/wwwroot/cretas/logs/forecast-backtest.log}"
+ALERTS="${FORECAST_BT_ALERTS:-/www/wwwroot/cretas/logs/forecast-backtest-alerts.log}"
+ENV_PROD="${FORECAST_BT_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+# 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8 —— 那会让下面每一格都
+# 记成「回测脚本自身出错」); .env.prod 不在 ⇒ rc=2。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
 
 # 租户 × 窗口 × 跨度 —— 窗口刻意用**平稳段**, 不是「最近 N 天」:
 # 最近段被反复灌数据切成了多个体制(实测 90 日窗内 3.0× 与 5.9× 两处突变),
@@ -38,12 +45,10 @@ CASES=(
 mkdir -p "$(dirname "$LOG")"
 {
   echo "=== $(date '+%F %T') forecast backtest ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "FORECAST BACKTEST" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "FORECAST BACKTEST"
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "FORECAST BACKTEST"
   set +a
 
   worst=0
