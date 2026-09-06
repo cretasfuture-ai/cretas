@@ -75,7 +75,24 @@ echo "    $(printf '%s' "$out" | tr '\n' '|' | cut -c1-190)"
     || fail "A1: 合并后树里仍然没有 base 的文件 —— 闸看到的还是 PR 分支自己"
 printf '%s' "$out" | grep -q 'merged_ok=yes' || fail "A1: 没打 merged_ok=yes 读数"
 printf '%s' "$out" | grep -q "base=$BASE_SHA" || fail "A1: 读数里没有 base sha"
-ok "合并 base 之后, 只存在于 base 的文件出现在树里 (闸看的是合并结果)"
+# 硬约束 9: merged_ok=yes 有两种成因(真合进来 / base 已是祖先所以 no-op), 读数相同。
+# 必须再有一个【设计上必然会变】的读数把它们分开。
+printf '%s' "$out" | grep -qE 'merged_in_commits=[1-9]'     || fail "A1: 缺 merged_in_commits(>0) —— 分不出「真合进来」与「base 已是祖先的 no-op」: $out"
+printf '%s' "$out" | grep -q 'tree_changed=yes'     || fail "A1: 缺 tree_changed=yes —— 树没变就说明这一趟什么都没证明: $out"
+ok "合并 base 之后, 只存在于 base 的文件出现在树里 (闸看的是合并结果), 且 merged_in_commits>0 / tree_changed=yes"
+
+# A1b: base 已经是 head 的祖先(PR 刚 rebase 过) ⇒ merge 是 no-op。
+# 它照样 merged_ok=yes, 但必须**自己说出来**这一趟没证明任何事, ⛔ 不许与 A1 长得一样。
+git checkout -q -B rebased "$BASE_SHA"
+echo extra > after-base.txt && git add -A && git commit -qm head-on-top-of-base
+outNoop=$(BASE_SHA="$BASE_SHA" HEAD_SHA="$(git rev-parse HEAD)" bash "$SCRIPT" 2>&1); rcNoop=$?
+[ "$rcNoop" -eq 0 ] || fail "A1b: base 已是祖先时合并应成功, 实得 rc=$rcNoop: $outNoop"
+printf '%s' "$outNoop" | grep -q 'merged_in_commits=0'     || fail "A1b: base 已是祖先时 merged_in_commits 应为 0: $outNoop"
+printf '%s' "$outNoop" | grep -q 'tree_changed=no'     || fail "A1b: no-op 合并不该改变树: $outNoop"
+printf '%s' "$outNoop" | grep -q 'base_already_ancestor'     || fail "A1b: no-op 的那一趟必须自己说明「证明不了任何事」, 否则与 A1 读数同形: $outNoop"
+echo "    $(printf '%s' "$outNoop" | grep -o 'merged_in_commits=[0-9]* tree_changed=[a-z]*' | head -1)"
+ok "base 已是祖先 ⇒ merged_ok=yes 但 merged_in_commits=0 / tree_changed=no 且点名 no-op (两种成因分得开)"
+git checkout -q pr-head
 
 # A1 阴性对照: 不跑这段脚本, 树里就没有那个文件 —— 证明 A1 不是恒真。
 git checkout -q -B pr-head2 "$HEAD_SHA"
