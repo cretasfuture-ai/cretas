@@ -42,6 +42,9 @@
 #                       flyway 读不到 …)。⛔ 不许读成「刷好了」也不许读成「坏了」
 #   3  REFUSED          输入不合格 (jar 落后 main / 本机 jar 与 manifest 不符)。
 #                       什么都没动。与 1 分开: 1 是「环境有问题」, 3 是「你给的东西不对」
+#   64 USAGE            命令行用法错 (未知参数 / 裸 --confirm / --health-timeout 非整数)。
+#                       什么都没跑, 台账不写。⛔ 原来是 2 —— 与「仪器死」同码, organizer 首次真跑
+#                       时被裸 --confirm 撞上, 读成了「没量到」(2026-09-06)。64 = EX_USAGE。
 #
 # 每次运行**恰好一行**判决写进本机台账 ($RTB_LEDGER), 崩在半路也补一行
 # INSTRUMENT_DEAD reason=aborted-before-verdict —— 「台账没涨」不许长成「没跑过」。
@@ -101,9 +104,9 @@ usage: refresh-testenv-backend.sh [--confirm YES-TESTENV] [--jar-dir <dir>] [--t
   --allow-new-install     远端目标目录里**没有** jar 时也装 (默认 REFUSED: 目录在而 jar 不在,
                           多半 launchd 跑的是别处的 jar, 覆盖这里什么都不会变)
 
-退出码: 0 REFRESHED|DRY_RUN|ALREADY_CURRENT / 1 PROBLEM / 2 INSTRUMENT_DEAD(没量到) / 3 REFUSED
+退出码: 0 REFRESHED|DRY_RUN|ALREADY_CURRENT / 1 PROBLEM / 2 INSTRUMENT_DEAD(没量到) / 3 REFUSED / 64 用法错
 EOF
-    exit 2
+    exit 64
 }
 
 while (($#)); do
@@ -119,8 +122,8 @@ while (($#)); do
         *) echo "error=unknown_argument $1" >&2; usage ;;
     esac
 done
-case "$HEALTH_TIMEOUT$HEALTH_INTERVAL" in *[!0-9]*|'') echo "error=health_timeout_not_integer" >&2; exit 2 ;; esac
-[ "$HEALTH_INTERVAL" -gt 0 ] || { echo "error=health_interval_zero" >&2; exit 2; }
+case "$HEALTH_TIMEOUT$HEALTH_INTERVAL" in *[!0-9]*|'') echo "error=health_timeout_not_integer" >&2; exit 64 ;; esac
+[ "$HEALTH_INTERVAL" -gt 0 ] || { echo "error=health_interval_zero" >&2; exit 64; }
 
 WRITE=0
 [ "$CONFIRM" = "YES-TESTENV" ] && WRITE=1

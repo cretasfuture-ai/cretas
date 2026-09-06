@@ -372,11 +372,17 @@ ok "rc=3 manifest-not-success"
 
 # ═════════ 16. 用法错 ⇒ rc=2 (在台账之前退出, 不走 run_it) ══════════════
 make_manifest "$B_SHA" "$TREE_B"; reset_stubs
-PATH="$FAKEBIN:$PATH" RTB_REPO_ROOT="$REPO" RTB_JAR_DIR="$JARDIR" RTB_LEDGER="$LEDGER" bash "$SCRIPT" --bogus >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] || fail "[16] 未知参数应 rc=2, 实得 $rc"
-PATH="$FAKEBIN:$PATH" RTB_REPO_ROOT="$REPO" RTB_JAR_DIR="$JARDIR" RTB_LEDGER="$LEDGER" bash "$SCRIPT" --health-timeout abc >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] || fail "[16] --health-timeout 非整数应 rc=2, 实得 $rc"
-ok "用法错 ⇒ rc=2"
+# 🔴 2026-09-06: 用法错原来是 rc=2, 与「仪器死」同码 —— organizer 首次真跑时裸 `--confirm` 撞上, 读成了
+#    「没量到」。改成 64 (EX_USAGE), 与 0/1/2/3 都不撞; 且**不写台账**(什么都没跑)。
+usage_rc() { PATH="$FAKEBIN:$PATH" RTB_REPO_ROOT="$REPO" RTB_JAR_DIR="$JARDIR" RTB_LEDGER="$LEDGER" bash "$SCRIPT" "$@" >/dev/null 2>&1; echo $?; }
+before=$(grep -c . "$LEDGER" || true)
+[ "$(usage_rc --bogus)" = 64 ] || fail "[16] 未知参数应 rc=64"
+[ "$(usage_rc --health-timeout abc)" = 64 ] || fail "[16] --health-timeout 非整数应 rc=64"
+[ "$(usage_rc --confirm)" = 64 ] || fail "[16] 裸 --confirm (缺令牌) 应 rc=64 —— 就是 organizer 撞上的那个"
+[ "$(usage_rc --help)" = 64 ] || fail "[16] --help 也走 usage ⇒ 64"
+[ "$(grep -c . "$LEDGER" || true)" = "$before" ] || fail "[16] 用法错不该写台账"
+grep -Eq 'rc=2$' <(printf 'x rc=64\n') && fail "[16] 自检: 64 不该匹配 rc=2"
+ok "用法错 ⇒ rc=64 (与 2 仪器死分开), 不写台账"
 
 # ═════════ A. 目录在、jar 不在 ⇒ REFUSED (除非 --allow-new-install); plist 不引用 $J ⇒ REFUSED ═
 make_manifest "$B_SHA" "$TREE_B"; reset_stubs
