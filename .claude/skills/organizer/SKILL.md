@@ -60,6 +60,7 @@ subagent 每次都是**新上下文**，且 organizer 的 `SendMessage` 可能�
 - 开 sister chat 的载体是 `docs/dispatch/briefs/<日期>-line-<X>-*.md`：自包含（基 SHA、已验事实、在飞与禁改区、按序任务、回执格式、入口文件），推上 main 后用 `spawn_task` 卡片开 session（用户点一下），或用户手工开 chat 贴卡。
 - 两种模式共同的边界不变：都只到 PR 停；🔒 合并 / 部署 / OTA / 装服务器只由 organizer；两个 chat 不改同一文件（查台账 scope 锁）。
 - fresh context 有它的价值：今天 brief 里三处错（web-admin 路径、凭证名、`vars` 路由）都是新人不带成见去量才抓出来的 ⇒ sister chat 交付的 🔒 PR 仍然要过独立的对抗式终审 subagent。
+- **交接协议（Steve 2026-09-06）**：sister chat 每到停点（PR 开好 / 阻塞 / 收工 / 需裁定）必须 `send_message` 给 organizer，不等被问；organizer 的合并 / 发布 / 退回也 `send_message` 回去，PR 评论只是备份。organizer 空闲时**主动**去问各线状态（`list_sessions` 看 `isRunning`/`prNumber`，或直接发一条「现在做到哪、head SHA」）——「它结束了你不知道也不会去问」是 Steve 点名的失误。同时开一个 3 分钟一轮的新 PR 监视（`gh pr list` 与快照比对）兜底。
 - 判据反过来读：一个任务如果第二次被派 subagent 还要重读同一批文件，就该转成 sister chat；一个 sister chat 如果一周只出一个 PR，就该收回成 subagent。
 ## 硬纪律
 
