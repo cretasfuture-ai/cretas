@@ -33,11 +33,14 @@ import java.util.UUID;
  * 会做物理硬删除, 跟 @Where 过滤 + 部分唯一索引的软删除语义不一致)。
  */
 @Entity
+// 🔴 实体不再声明这张表的业务唯一键 (2026-09-07, FIX-ENTITY-FULL-UNIQUE-VS-PROD-PARTIAL):
+// prod 上是 uq_lda_resource_date —— `WHERE deleted_at IS NULL` 的**部分**唯一索引; 而 JPA 表达不了部分唯一,
+// 实体里的 @UniqueConstraint 只能在 H2 建出**全量**键 ⇒ H2 比 prod 严。
+// 补 @SQLDelete 之后「软删一行再建同键」在 prod 合法、在 H2 撞键, 表现为测试红而线上是对的
+// (#701 合入后 logistics 三个测试类 4 个 error 就是这么来的, 全部只在 H2 复现)。
+// ⇒ 唯一键以 prod 的部分索引为准, 实体侧不再重复声明。
+// ⚠️ 代价: H2 里这张表**没有**唯一性保护 —— 与 #712 对 material_product_conversions 的处置一致。
 @Table(name = "logistics_daily_availability",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uq_lda_resource_date_jpa",
-                        columnNames = {"factory_id", "resource_type", "resource_id", "avail_date"})
-        },
         indexes = {
                 @Index(name = "idx_lda_factory_date", columnList = "factory_id, avail_date")
         })

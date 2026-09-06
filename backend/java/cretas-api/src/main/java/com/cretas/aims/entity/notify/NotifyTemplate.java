@@ -27,11 +27,14 @@ import java.util.*;
  * @since 2026-05-18 (Phase 3 skeleton)
  */
 @Entity
+// 🔴 实体不再声明这张表的业务唯一键 (2026-09-07, FIX-ENTITY-FULL-UNIQUE-VS-PROD-PARTIAL):
+// prod 上是 uq_notify_templates_factory_code_active —— `WHERE deleted_at IS NULL` 的**部分**唯一索引; 而 JPA 表达不了部分唯一,
+// 实体里的 @UniqueConstraint 只能在 H2 建出**全量**键 ⇒ H2 比 prod 严。
+// 补 @SQLDelete 之后「软删一行再建同键」在 prod 合法、在 H2 撞键, 表现为测试红而线上是对的
+// (#701 合入后 logistics 三个测试类 4 个 error 就是这么来的, 全部只在 H2 复现)。
+// ⇒ 唯一键以 prod 的部分索引为准, 实体侧不再重复声明。
+// ⚠️ 代价: H2 里这张表**没有**唯一性保护 —— 与 #712 对 material_product_conversions 的处置一致。
 @Table(name = "notify_templates",
-       uniqueConstraints = {
-           @UniqueConstraint(name = "uq_notify_templates_factory_code",
-                             columnNames = {"factory_id", "template_code"})
-       },
        indexes = {
            @Index(name = "idx_notify_templates_factory",
                   columnList = "factory_id")
