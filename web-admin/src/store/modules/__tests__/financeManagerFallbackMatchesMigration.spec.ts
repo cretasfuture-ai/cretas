@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  * | 来源 | procurement |
  * |---|---|
  * | `V20261030_14__finance_manager_narrow.sql` (DB 权威) | `'-'` |
- * | `utils/permission.ts` PERMISSION_MATRIX | `'none'` ✅ |
+ * | `utils/permission.ts` PERMISSION_MATRIX | `'none'` ✅ —— 2026-09-07 清单收敛刀 A **已删**(第三份手写矩阵, 唯一调用点改用 store), 本 spec 只剩 store 那份 |
  * | `store/modules/permission.ts` FALLBACK | `'r'` ❌ (Apr 24 写的「对齐 DB」, 8-22 被 migration 作废) |
  *
  * 两份前端表都只是**DB 不可用时的兜底**, 线上真正生效的是后端下发的 permissions
@@ -40,7 +40,7 @@ const MIGRATION = resolve(
   __dirname,
   '../../../../../backend/java/cretas-api/src/main/resources/db/flyway/V20261030_14__finance_manager_narrow.sql',
 );
-const UTILS = resolve(__dirname, '../../../utils/permission.ts');
+// 2026-09-07 刀 A: utils/permission.ts 已删, 兜底只剩 store 这一份
 const STORE = resolve(__dirname, '../permission.ts');
 
 /** migration 把 finance_manager 的哪些模块 UPDATE 成了 '-'。 */
@@ -88,16 +88,15 @@ describe('finance_manager 的前端兜底权限不许比 DB 权威更宽', () =>
     expect(NARROWED).not.toContain('finance');
   });
 
-  it('阳性对照: 两份兜底表都读得到 finance_manager 的值', () => {
+  it('阳性对照: 兜底表读得到 finance_manager 的值', () => {
     // 读空时下面那条会因「到处都是 null」而红得莫名其妙; 这条先炸, 指出是仪器问题。
-    expect(readModuleLevel(UTILS, 'finance')).toBeTruthy();
     expect(readModuleLevel(STORE, 'finance')).toBeTruthy();
   });
 
-  it('migration 砍掉的模块, 两份兜底表要么同样拒绝, 要么已登记为已知漂移', () => {
+  it('migration 砍掉的模块, 兜底表要么同样拒绝, 要么已登记为已知漂移', () => {
     const unregistered: string[] = [];
     for (const module of NARROWED) {
-      for (const [label, file] of [['utils/permission.ts', UTILS], ['store/modules/permission.ts', STORE]] as const) {
+      for (const [label, file] of [['store/modules/permission.ts', STORE]] as const) {
         const level = readModuleLevel(file, module);
         if (level === null) continue;           // 没有这个键 = 默认无权限, 不算更宽
         if (DENIED.has(level)) continue;        // 同样拒绝, 一致
@@ -113,9 +112,8 @@ describe('finance_manager 的前端兜底权限不许比 DB 权威更宽', () =>
     ).toEqual([]);
   });
 
-  it('缺陷 30 那一项已经改好: 两份兜底都拒绝 procurement', () => {
+  it('缺陷 30 那一项已经改好: 兜底拒绝 procurement', () => {
     // 这条是本 PR 真正修掉的那一格, 单独钉住它不许回退。
-    expect(DENIED.has(readModuleLevel(UTILS, 'procurement') ?? ''), 'utils 那份放开了 procurement').toBe(true);
     expect(DENIED.has(readModuleLevel(STORE, 'procurement') ?? ''), 'store 那份放开了 procurement').toBe(true);
     // ⛔ 且 procurement 不许被登记进 KNOWN_DRIFT 蒙混过关。
     expect(KNOWN_DRIFT).not.toHaveProperty('procurement');
