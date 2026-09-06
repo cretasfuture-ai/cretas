@@ -378,6 +378,10 @@ const rawMenuConfig: MenuItem[] = [
       //    餐饮租户不从这里管账号。⛔ 不要把它当成待修缺陷「顺手修好」。
       { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
       { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
+      // 权限矩阵只读页 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。
+      // module: 'system' 与后端端点的 @RequirePermission 同码 —— ⛔ 不加 roles 白名单,
+      // 否则「菜单可见」与「接口可进」会分叉。
+      { path: '/system/permission-matrix', title: '权限矩阵', icon: '', module: 'system' },
       { path: '/hr/employees', title: '员工档案', icon: '', module: 'hr', groupLabel: '员工组织' },
       { path: '/hr/departments', title: '部门管理', icon: '', module: 'hr' },
       { path: '/hr/work-types', title: '工种字典', icon: '', module: 'hr' },
