@@ -394,11 +394,19 @@ log "INFO" "[3c2/5] 校验 cron 入口引用的 CLI 都已落到服务器..."
 # 那个走 3/5 段的整目录 rsync, 本来就同步 —— 拿 code/scripts/ 去找它会假报缺失
 # (写这段时第一版正则就是这么错的, 跑一遍才发现)。
 # 因此要求 scripts/ 前面是行首/空白/引号/`=`, 或者显式的 $CODEDIR/。
+#
+# ⚠️ 直接把三个文件交给 grep(-h 去掉文件名前缀), ⛔ 不写 `cat f1 f2 f3 | grep`。
+# 本文件的回归哨兵(scripts/tests/test-smartbi-python-deploy-epipe.sh 第 1 节)
+# 禁掉的是整个 `... | grep` 形状, 而不是"会翻转答案的那几个 grep" —— 那道闸是
+# 按**形状**判的, 刻意窄而可信(形态 E)。这一处的 `grep -oE` 确实读完整个输入、
+# 不提前关管道, 所以它本身没有 SIGPIPE 陷阱; 但让它待在名单外, 等于要求每个
+# 读闸的人先自己判一遍"这个 grep 会不会提前退出", 而那正是当初漏掉的那一步。
+# ⇒ 让代码去迁就闸, ⛔ 不是把闸改宽。语义逐字不变(cat 拼接 == grep -h 多文件)。
 _cron_referenced_clis="$(
-    cat "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
+    grep -hoE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
+        "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
         "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
         "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" 2>/dev/null \
-    | grep -oE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
     | sed -E 's#^(\$CODEDIR/|.)##' | sort -u
 )"
 if [ -z "$_cron_referenced_clis" ]; then
