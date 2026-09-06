@@ -81,6 +81,10 @@ jobs:
         with:
           # PR 调用绑定原始 head；schedule / workflow_dispatch 绑定触发时的 SHA。
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # 合并 base 需要共同祖先; 浅克隆合不了。
+          fetch-depth: 0
+      # PR 调用时把 base 合进来 —— 最终候选的全量必须看合并结果 (schedule 路径整步跳过)。
+      - uses: ./.github/actions/merge-pr-base
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
