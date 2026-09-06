@@ -136,6 +136,108 @@ class SoftDeleteBatch1ContractTest {
         }
     }
 
+    // ---- 父删级联：cascade=ALL/orphanRemoval 触达的三张子表，父 repository.delete() 之后子行必须是软删 ----
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("PurchaseOrder.items (cascade=ALL, orphanRemoval): 父删 ⇒ purchase_order_items 行在且 deleted_at 非空")
+    void purchaseOrderDeleteSoftDeletesItems() throws Exception {
+        parentDeleteCascadesSoft(com.cretas.aims.entity.inventory.PurchaseOrder.class,
+                com.cretas.aims.entity.inventory.PurchaseOrderItem.class, "purchaseOrderId");
+    }
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("SalesOrder.items (cascade=ALL, orphanRemoval): 父删 ⇒ sales_order_items 行在且 deleted_at 非空")
+    void salesOrderDeleteSoftDeletesItems() throws Exception {
+        parentDeleteCascadesSoft(com.cretas.aims.entity.inventory.SalesOrder.class,
+                com.cretas.aims.entity.inventory.SalesOrderItem.class, "salesOrderId");
+    }
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("ProductionPlan.batchUsages (cascade=ALL): 父删 ⇒ production_plan_batch_usages 行在且 deleted_at 非空")
+    void productionPlanDeleteSoftDeletesBatchUsages() throws Exception {
+        parentDeleteCascadesSoft(com.cretas.aims.entity.ProductionPlan.class,
+                com.cretas.aims.entity.ProductionPlanBatchUsage.class, "productionPlanId");
+    }
+
+    /**
+     * 父实体与子实体各造一条最小行（子行的 FK 列指向父 id），父走真仓库 bean delete()。
+     * 子实体挂进父的 @OneToMany 集合（级联 REMOVE / orphanRemoval 走的就是它），父保持 managed 直接 delete；
+     * 子实体带 @SQLDelete ⇒ 子行应被 UPDATE 成软删，而不是被物理 DELETE。
+     * 父自己是物理删（PurchaseOrder/SalesOrder 仍在棘轮清单）还是软删（ProductionPlan #629）与本断言无关，分别读出来登记。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void parentDeleteCascadesSoft(Class<?> parentClass, Class<?> childClass, String childFkField) throws Exception {
+        String childTable = childClass.getAnnotation(Table.class).name();
+        String parentTable = parentClass.getAnnotation(Table.class).name();
+        em.createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
+        try {
+            Object parent = minimalRow(parentClass);
+            em.persist(parent);
+            em.flush();
+            Object parentId = idOf(parent);
+
+            Object child = minimalRow(childClass);
+            Field fk = findField(childClass, childFkField);
+            fk.set(child, parentId instanceof String s ? s : String.valueOf(parentId));
+            em.persist(child);
+            em.flush();
+            Object childId = idOf(child);
+            // 父保持 managed、子挂进父的集合字段：级联 REMOVE 走的就是这个集合。
+            // （不 clear 再 em.find 重载父：ProductionPlan 的 hypersistence Map<String,String> jsonb 列在 H2 上读不回来——
+            //   "{}" cannot be transformed to Json object，那是 H2 上的仪器限制，与被守行为无关。）
+            attachToParentCollection(parent, child);
+
+            long childBefore = ((Number) em.createNativeQuery("SELECT count(*) FROM " + childTable + " WHERE id = :id AND deleted_at IS NULL")
+                    .setParameter("id", childId).getSingleResult()).longValue();
+            assertThat(childBefore).as("阳性对照：删父之前子行是活的").isEqualTo(1L);
+
+            CrudRepository crud = (CrudRepository) new Repositories(ctx).getRepositoryFor(parentClass).orElseThrow();
+            crud.delete(parent);
+            em.flush();
+            em.clear();
+
+            Object[] childRow = (Object[]) em.createNativeQuery(
+                            "SELECT count(*), max(deleted_at) FROM " + childTable + " WHERE id = :id")
+                    .setParameter("id", childId).getSingleResult();
+            assertThat(((Number) childRow[0]).longValue())
+                    .as(childClass.getSimpleName() + " 子行 physical_rows（0 = 父删把子行物理删了）").isEqualTo(1L);
+            assertThat(childRow[1]).as(childClass.getSimpleName() + " 子行 deleted_at 应非空").isNotNull();
+
+            long parentRows = ((Number) em.createNativeQuery("SELECT count(*) FROM " + parentTable + " WHERE id = :id")
+                    .setParameter("id", parentId).getSingleResult()).longValue();
+            // 只登记不断言：父是物理删还是软删由父自己的注解决定（见 javadoc）
+            System.out.println("CASCADE_READING parent=" + parentClass.getSimpleName() + " parent_physical_rows=" + parentRows
+                    + " child=" + childClass.getSimpleName() + " child_physical_rows=1 child_deleted_at=" + childRow[1]);
+        } finally {
+            em.createNativeQuery("SET REFERENTIAL_INTEGRITY TRUE").executeUpdate();
+        }
+    }
+
+    /** 把子实体加进父实体上那个元素类型为子类的 @OneToMany 集合（级联 REMOVE / orphanRemoval 走的就是它）。 */
+    @SuppressWarnings("unchecked")
+    private static void attachToParentCollection(Object parent, Object child) throws Exception {
+        for (Class<?> k = parent.getClass(); k != null && k != Object.class; k = k.getSuperclass()) {
+            for (Field f : k.getDeclaredFields()) {
+                if (f.getAnnotation(jakarta.persistence.OneToMany.class) == null) continue;
+                if (!(f.getGenericType() instanceof java.lang.reflect.ParameterizedType pt)) continue;
+                if (pt.getActualTypeArguments()[0] != child.getClass()) continue;
+                f.setAccessible(true);
+                java.util.Collection<Object> col = (java.util.Collection<Object>) f.get(parent);
+                if (col == null) { col = new ArrayList<>(); f.set(parent, col); }
+                col.add(child);
+                return;
+            }
+        }
+        throw new IllegalStateException(parent.getClass().getSimpleName() + " 上没有元素类型为 " + child.getClass().getSimpleName() + " 的 @OneToMany");
+    }
+
+    private static Field findField(Class<?> c, String name) {
+        for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+            try { Field f = k.getDeclaredField(name); f.setAccessible(true); return f; } catch (NoSuchFieldException ignored) { }
+        }
+        throw new IllegalStateException(c.getSimpleName() + " 没有字段 " + name);
+    }
+
     // ---- 反射造最小行 ----
 
     private Object minimalRow(Class<?> c) throws Exception {
