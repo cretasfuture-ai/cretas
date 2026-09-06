@@ -36,7 +36,8 @@ on_test_exit() {
     for p in "${CLEANUP_PIDS[@]:-}"; do
         [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
     done
-    rm -f /tmp/lockstale-a1.lock /tmp/lockstale-a2.lock /tmp/lockstale-a3.lock /tmp/lockstale-a5.lock
+    rm -f /tmp/lockstale-a1.lock /tmp/lockstale-a2.lock /tmp/lockstale-a3.lock \
+          /tmp/lockstale-a5.lock /tmp/lockstale-a6.lock
 }
 trap on_test_exit EXIT
 
@@ -273,6 +274,45 @@ echo "$A5_LOG" | grep -q "reclaiming" \
     || fail "A5: 应该走真正的 stale 回收路径(日志里要有 'reclaiming'), 实际日志: $A5_LOG"
 echo "PASS A5: PID 回收撞见自己巧合时不会误判自我重入, 照常走 stale 回收 + flock/PID 文件那层真正互斥"
 rm -f /tmp/lockstale-a5.lock
+
+# ---------------------------------------------------------------------------
+# A6 (2026-09-06, flock 分支专有): 拿到锁之后必须**先截断再写 PID**。
+#
+# 上游那处 `exec 200>` 改成不截断的 `exec 200<>` 之后, 写 PID 是往 offset 0 写的 ——
+# 旧内容比新 PID 长时会留下尾巴(旧 1234567 + 新 999 = "9994567"), 而**下一次**
+# precheck 会拿那串垃圾去 `deploy_pid_alive`。垃圾一律判死 ⇒ 一把真正被持有的锁
+# 会被当成 stale 回收掉 = 两个 deploy 并发(5/30 事故的形态)。
+#
+# 构造: 锁文件里放一串比任何真实 PID 都长的内容, 并把 deploy_pid_alive 打桩成
+# 「它活着」—— 这样不会走 stale 回收那条 rm 路径, 才量得到截断这一步。
+# ⚠️ 只在 flock 模式下成立: PID 文件分支用的是 `deploy_lock_pid > "$lock_file"`,
+#    `>` 自带截断, 本来就没有这个问题。
+# ---------------------------------------------------------------------------
+if command -v flock >/dev/null 2>&1; then
+    rm -f /tmp/lockstale-a6.lock
+    A6_LONG_STALE='1234567890123456789'
+    printf '%s\n' "$A6_LONG_STALE" > /tmp/lockstale-a6.lock
+    deploy_pid_alive() { [ "$1" = "$A6_LONG_STALE" ]; }
+    A6_LOGFILE=$(mktemp)
+    acquire_deploy_lock "lockstale-a6" > "$A6_LOGFILE" 2>&1
+    A6_RC=$?
+    A6_LOG=$(cat "$A6_LOGFILE")
+    rm -f "$A6_LOGFILE"
+    unset -f deploy_pid_alive
+    # shellcheck source=/dev/null
+    source "$COMMON"
+    [ "$A6_RC" -eq 0 ] \
+        || fail "A6 precondition: 没有别的进程持 flock, 应该拿得到锁(rc=0), 实际 rc=$A6_RC, 日志: $A6_LOG"
+    A6_CONTENT=$(cat /tmp/lockstale-a6.lock)
+    A6_EXPECT=$(deploy_lock_pid)
+    echo "A6_LOCKFILE_CONTENT=[$A6_CONTENT] EXPECT=[$A6_EXPECT]"
+    [ "$A6_CONTENT" = "$A6_EXPECT" ] \
+        || fail "A6: 锁文件里是 '$A6_CONTENT', 期望恰好 '$A6_EXPECT' —— 旧内容的尾巴没被截掉, 下次 precheck 会拿这串垃圾去问死活, 把一把真锁当 stale 回收"
+    echo "PASS A6: 拿到锁后先截断再写 PID, 没有旧内容残留"
+    rm -f /tmp/lockstale-a6.lock
+else
+    echo "A6_SKIPPED_BRANCH=pidfile (该分支用 \`>\` 写, 自带截断, 无此问题)"
+fi
 
 # ---------------------------------------------------------------------------
 # 结构闸: 真实的 release-cretas.sh / deploy-web-admin.sh 必须落在 A4 的"正例"
