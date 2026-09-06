@@ -219,5 +219,52 @@ case "$outE" in *"$LIVE"*|*"另一个 deploy"*) ;; *) fail "拒绝信息应点�
 stop_live_holder
 ok "E: 被拒调用方走 release_deploy_lock ⇒ 活持有者的锁文件仍在, 第三个进程照样被拒 (rc=$rcEb)"
 
+# ── F 截断走自己的 fd, 不走路径 (#692 终审 follow-up a) ─────────────────────────
+# release_deploy_lock 要把登记的 PID 清掉。若按【路径】截断, 而 acquire 与 release 之间那个
+# 路径已经被换掉(灰度期的旧写法对端 / 有人手 rm 又重建), 截掉的就是**别人的 inode** ——
+# 互斥不受影响(flock 挂在 OFD 上), 坏的是诊断: 下一次拒绝会说「已正常释放」而其实有活着的
+# 持有者。⇒ 必须经 /dev/fd/200 截断我们自己的 inode。
+rm -f "$LOCK_FILE" "$LOCK_FILE.moved"
+cat > "$TMP/swap.sh" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+source "$COMMON"
+acquire_deploy_lock "$LOCK_NAME" || exit 9
+# 有人在我们持锁期间把路径换走, 并用一个新文件占住原路径
+mv "$LOCK_FILE" "$LOCK_FILE.moved"
+printf 'IMPOSTOR12\n' > "$LOCK_FILE"
+release_deploy_lock
+EOF
+bash "$TMP/swap.sh" > "$TMP/swap.log" 2>&1 || fail "F 构造失败: $(cat "$TMP/swap.log")"
+moved_bytes=$(stat -c %s "$LOCK_FILE.moved" 2>/dev/null || echo missing)
+impostor_bytes=$(stat -c %s "$LOCK_FILE" 2>/dev/null || echo missing)
+echo "READING: F_own_inode_bytes=$moved_bytes F_impostor_bytes=$impostor_bytes (期望 0 / 11)"
+[ "$moved_bytes" = "0" ] \
+    || fail "F: 我们自己的 inode 没被截断(实得 $moved_bytes) —— 登记 PID 还在, 下一次获取会误报 reclaiming"
+[ "$impostor_bytes" = "11" ] \
+    || fail "F: 占住原路径的**别人的**文件被动了(实得 $impostor_bytes, 期望 11) —— 按路径截断会抹掉别人的 PID 戳"
+ok "释放时截断的是自己的 inode, 不是当时占住该路径的那个文件"
+rm -f "$LOCK_FILE" "$LOCK_FILE.moved"
+
+# ── G 拒绝信息: kill 之前必须先有一条确认命令 (#692 终审 follow-up b) ────────────
+# pid 会被回收再分配; 运维几分钟后粘贴 kill 时那个数字可能已经是别的进程。
+rm -f "$LOCK_FILE"
+make_exiting_holder 'release_deploy_lock'
+outG=$(acquire); rcG=$?
+[ "$rcG" -ne 0 ] || fail "G 构造失败: 孤儿还按着锁, 第二次获取本该被拒"
+printf '%s' "$outG" | grep -q "ps -o pid,args -p" \
+    || fail "G: 拒绝信息里没有 kill 之前的确认命令(ps -o pid,args -p …): $outG"
+printf '%s' "$outG" | grep -q "pid 会被回收再分配" \
+    || fail "G: 没有 pid 复用的警告 —— 快照读数几分钟后就可能不成立了"
+ps_line=$(printf '%s\n' "$outG" | grep -n 'ps -o pid,args -p' | head -1 | cut -d: -f1)
+kill_line=$(printf '%s\n' "$outG" | grep -n '    kill ' | head -1 | cut -d: -f1)
+echo "READING: G_ps_line=$ps_line G_kill_line=$kill_line (确认必须排在 kill 之前)"
+[ -n "$ps_line" ] && [ -n "$kill_line" ] && [ "$ps_line" -lt "$kill_line" ] \
+    || fail "G: 确认命令(行 ${ps_line:-?})必须排在 kill(行 ${kill_line:-?})之前, 否则是杀完才确认"
+printf '%s' "$outG" | grep -q "ps -o pid,args -p $CHILD" \
+    || fail "G: 确认命令里没有那个孤儿 pid $CHILD"
+ok "拒绝信息把「先确认」排在 kill 之前, 并带 pid 复用警告"
+kill -9 "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; CHILD=""
+
 echo "READING: SEMANTICS=block-while-orphan-holds"
 echo "PASS: test-deploy-lock-orphan-holder.sh ($PASSED 组断言)"

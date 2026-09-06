@@ -440,7 +440,21 @@ release_deploy_lock() {
     [ -n "$lock_file" ] || return 0
     case "${ACQUIRED_DEPLOY_LOCK_MODE:-pidfile}" in
         flock)
-            : >"$lock_file" 2>/dev/null || true
+            # 清掉登记的 PID: 正常释放不是 stale, 下一次获取不该报 reclaiming, 拒绝措辞也要
+            # 分得出「已正常释放」与「持有者已死」。
+            #
+            # 🔴 2026-09-07: 必须经 /dev/fd/200 截断【我们自己的 inode】。
+            #  ⛔ 不用 `: >"$lock_file"`(按路径): acquire 与 release 之间那个路径可能已经被换掉
+            #     (灰度期还在跑旧写法的对端 / 有人手工 rm 又重建), 那样截掉的是**别人的 inode**,
+            #     把他的 PID 戳抹了。互斥本身不受影响(flock 挂在 fd 200 的 OFD 上), 坏的是**诊断**:
+            #     下一次拒绝会说「登记持有者已正常释放, 但锁仍被按着」, 而其实有个活着的持有者
+            #     就坐在那 —— 正是这套改动要消灭的那类读数。
+            #  ⛔ 也不能写 `: >&200`: 那只是把 fd 200 复制给 stdout, **不带 O_TRUNC, 根本不截断**
+            #     (2026-09-07 WSL 实测: 文件 8 字节, 执行前后都是 8)。
+            #  ✅ `: >/dev/fd/200` 重新打开 fd 200 指向的那个 inode 并截断它 —— 与路径无关
+            #     (实测: 路径被 mv 走之后, 原 inode 变 0 字节, 占住原路径的新文件 11 字节没被动)。
+            #     文件若已被 unlink 则重开失败, 吞掉即可 —— 那种情况本来也没什么可截的。
+            : >/dev/fd/200 2>/dev/null || true
             { exec 200>&-; } 2>/dev/null || true
             ;;
         *)
@@ -586,7 +600,14 @@ acquire_deploy_lock() {
                 # 逃生路要能直接复制: 上面每行 cmdline 里就有 rsync/ssh 的目标, 先看它们还在不在写
                 # 生产制品; 都不在了就 kill; 复核那行全部退出后直接重发, ⛔ 不 rm 锁文件。
                 if [ -n "$holder_pids" ]; then
-                    log "ERROR" "  处置 —— 逐条看上面的 cmdline, 确认孤儿 rsync/ssh 不再写生产制品后:"
+                    local holder_pids_csv
+                    holder_pids_csv=$(printf '%s' "$holder_pids" | tr ' ' ',')
+                    # ⚠️ pid 会被系统回收再分配。上面那份 cmdline 是【拒绝这一刻】拍的快照, 而运维
+                    # 往往几分钟后才来粘贴 —— 那时同一个数字可能已经是别的进程(2026-09-02 的陈旧锁
+                    # 事故就是同一族: 拿一个不再成立的读数当真)。所以 kill 之前先确认一次。
+                    log "ERROR" "  处置 —— ⚠️ pid 会被回收再分配, 上面是拒绝那一刻的快照。**先确认再杀**:"
+                    log "ERROR" "    ps -o pid,args -p $holder_pids_csv"
+                    log "ERROR" "  确认 cmdline 仍是那几个孤儿(rsync/ssh/mvn)且不再写生产制品之后:"
                     log "ERROR" "    kill $holder_pids"
                     log "ERROR" "  复核 (打印 checked 且没有 'still alive' 就直接重发; ⛔ 不要 rm $lock_file —— 那会造出第二把互不可见的锁):"
                     log "ERROR" "    for p in $holder_pids; do kill -0 \$p 2>/dev/null && echo \"still alive: \$p\"; done; echo checked"
