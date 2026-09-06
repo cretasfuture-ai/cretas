@@ -6,7 +6,6 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { ApiResponse, ApiError } from '@/types/api';
 import type { ApiData } from '@/types/api';
-import type { User } from '@/types/auth';
 
 // 动态导入 ElMessage，避免循环依赖
 // Apr 18 2026 UX 优化: error 类 toast 默认 3s 闪过对业务流程错误 (库存不足/并发冲突/
@@ -487,10 +486,10 @@ request.interceptors.response.use(
         || '原料 BOM 单位与库存单位无法换算，无法校验库存';
       const uomHint = richAll.actionHint || '请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度';
       try {
-        const { useAuthStore } = await import('@/store/modules/auth');
-        const { canAccessModule } = await import('@/utils/permission');
-        const authUser = useAuthStore().user as User | null;
-        const canConfig = canAccessModule(authUser, 'warehouse');
+        // 2026-09-07 (清单收敛刀 A): 原来 await import('@/utils/permission') 读的是一份没人维护的第三份手写矩阵
+        // (legacy read_write 值域, 与 L1 漂), 现在用 permission store —— 它是 L1+L2 (DB) 优先、fallback 兜底的同一份真值。
+        const { usePermissionStore } = await import('@/store/modules/permission');
+        const canConfig = usePermissionStore().canAccess('warehouse');
         const { ElMessageBox } = await import('element-plus');
         if (canConfig) {
           await ElMessageBox.confirm(

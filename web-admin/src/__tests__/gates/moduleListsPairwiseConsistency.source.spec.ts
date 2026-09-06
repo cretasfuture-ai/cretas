@@ -108,11 +108,8 @@ function webStoreAccessibleModules(): ModuleList {
   const block = between(src, /function getAccessibleModules\(\): ModuleName\[\] \{\s*const modules: ModuleName\[\] = \[([\s\S]*?)\];/);
   return { key: 'web.store.getAccessibleModules', where: 'store/modules/permission.ts (函数内联数组)', modules: stringLiterals(block) };
 }
-function webUtilsPlatformAdminModules(): ModuleList {
-  const src = stripComments(read(resolve(SRC, 'utils/permission.ts')));
-  const block = between(src, /function getAccessibleModules[\s\S]*?isPlatformAdmin\(user\)\)\s*\{\s*return \[([\s\S]*?)\];/);
-  return { key: 'web.utils.platformAdminModules', where: 'utils/permission.ts (平台管理员内联数组)', modules: stringLiterals(block) };
-}
+// 2026-09-07 刀 A: `utils/permission.ts` (第三份手写矩阵 + 平台管理员内联数组) 已删 —— 唯一调用点 request.ts
+// 的 MATERIAL_UOM_UNCONFIGURED 分支改用 permission store。清单从 9 份降到 8 份, 基线 27 → 21。
 
 const LISTS: ModuleList[] = [
   javaAllModules(),
@@ -123,7 +120,6 @@ const LISTS: ModuleList[] = [
   webModulePermissionsKeys(),
   webSidebarAxis(),
   webStoreAccessibleModules(),
-  webUtilsPlatformAdminModules(),
 ];
 
 /** 任何一份真实清单都不会短于这个数; 低于它 = 提取器打空, 不是清单变短。 */
@@ -171,7 +167,7 @@ function renderTable(devs: Deviation[]): string {
  * 棘轮基线 = 与 L1 轴的偏离总条数 (extra + 非投影清单的 missing)。
  * 2026-09-06 v2 首次实测见 PR body; ⛔ 只许往下调, 每收敛一份就降一次。
  */
-const DEVIATION_BASELINE = 27;   // 2026-09-06 v2 首测: 删 ai 前 29 → 删后 27 (9 份清单; 明细见 PR)
+const DEVIATION_BASELINE = 21;   // 2026-09-06 v2 首测 29 → 删 ai 27 (#675) → 2026-09-07 刀 A 删 utils/permission.ts 21
 
 describe('module lists converge to L1 (ratchet, source-scan)', () => {
   const devs = LISTS.map(deviation);
