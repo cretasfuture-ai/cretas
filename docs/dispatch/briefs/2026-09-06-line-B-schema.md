@@ -1,6 +1,8 @@
 # Brief 卡 B：Schema / 持久化线（持续 session）
 
 **发卡**: organizer `liushanmen-organizer-handoff-fa5fb5`（Fable）· 2026-09-06 · 基 `origin/main` ≥ `ffa87422ee`
+**模型**: 本线是执行车道 ⇒ **Opus 5 + effort high**（organizer 自己跑 Fable 负责统筹；⛔ 别用 Fable 做执行，2026-09-07 Steve 点名过一次）。开 chat 后在模型选择里切。
+
 **角色**: 这条线的 sister chat。多轮连续做；**每个任务做到 PR 停**，合并 / 部署只由 organizer 做。
 **回执格式**: 任务 ID / 基 SHA / 改动文件 / census 等式 / 迁移四态读数 / 变异读数 / PR / 阻塞 / 登记未做。
 
