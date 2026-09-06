@@ -74,6 +74,9 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
+      # 🔴 2026-09-06 v2: 同一道闸的轴换成 L1 (RN 侧从 prod 只读导出的快照), 读这个 JSON。
+      #    刷新快照 = 轴变了 = 偏离读数变了, 不登记它就是「改了轴而闸不跑」。
+      - 'frontend/CretasFoodTrace/src/utils/permissionMatrix.l1Snapshot.json'
       # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
       # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
       # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
@@ -160,6 +163,9 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
+      # 🔴 2026-09-06 v2: 同一道闸的轴换成 L1 (RN 侧从 prod 只读导出的快照), 读这个 JSON。
+      #    刷新快照 = 轴变了 = 偏离读数变了, 不登记它就是「改了轴而闸不跑」。
+      - 'frontend/CretasFoodTrace/src/utils/permissionMatrix.l1Snapshot.json'
       # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
       # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
       # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
