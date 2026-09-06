@@ -274,14 +274,18 @@ export default function SalesOrderDetailScreen() {
               <Text variant="labelLarge" style={styles.dialogSectionLabel}>本次结案锁定的缺口</Text>
               <DataTable>
                 <DataTable.Header>
-                  <DataTable.Title>产品</DataTable.Title>
+                  <DataTable.Title style={styles.dialogProductCol}>产品</DataTable.Title>
                   <DataTable.Title numeric>订购</DataTable.Title>
                   <DataTable.Title numeric>已发</DataTable.Title>
                   <DataTable.Title numeric>短交</DataTable.Title>
                 </DataTable.Header>
                 {shortClose.shortLines.map((line, idx) => (
-                  <DataTable.Row key={idx} testID={`sales-order-short-close-line-${idx}`}>
-                    <DataTable.Cell>{line.productLabel}</DataTable.Cell>
+                  <DataTable.Row key={idx} testID={`sales-order-short-close-line-${idx}`} style={styles.dialogLineRow}>
+                    {/* ⚠️ DataTable.Cell 默认单行截断 —— 实拍走查里产品名被切成「SOP-202…」,
+                        用户看不出这一行到底是哪个产品。这里显式给两行 + 更宽的列。 */}
+                    <DataTable.Cell style={styles.dialogProductCol}>
+                      <Text variant="bodySmall" numberOfLines={2}>{line.productLabel}</Text>
+                    </DataTable.Cell>
                     <DataTable.Cell numeric>{formatShortCloseQty(line.ordered)}</DataTable.Cell>
                     <DataTable.Cell numeric>{formatShortCloseQty(line.delivered)}</DataTable.Cell>
                     <DataTable.Cell numeric>{formatShortCloseQty(line.shortfall)}</DataTable.Cell>
@@ -398,6 +402,8 @@ const styles = StyleSheet.create({
   dialogWarnText: { color: '#9c6b16', marginBottom: 2 },
   dialogSectionLabel: { marginTop: 6, marginBottom: 4, color: '#333' },
   dialogTotal: { marginTop: 8, fontWeight: '700', color: '#e6a23c' },
+  dialogProductCol: { flex: 2.2 },
+  dialogLineRow: { minHeight: 56 },
   radioRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 2 },
   radioLabel: { flex: 1, color: '#333' },
   notesInput: { marginTop: 8, backgroundColor: '#fff' },
