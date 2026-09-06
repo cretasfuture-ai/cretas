@@ -40,11 +40,20 @@ for c in python3 python; do
 done
 echo "READING: PYTHON_STUB=$([ "$HAVE_PY" = 1 ] && cat "$FAKEBIN/python" | tail -1 || echo none)"
 export STUB
+# curl 桩: 按被测脚本的 `-w '\n%{http_code}'` 约定, 先打响应体再打一行 http code。
+#   $STUB/curl.rc   curl 自己的退出码 (网络层失败)      默认 0
+#   $STUB/curl.http HTTP 状态                            默认 200
+#   $STUB/curl.body 响应体                               默认 {"errcode":0,"errmsg":"ok"}
+#   ⚠️ 记调用要用 printf 不用 echo: 被测脚本传的 `-w '\n%{http_code}'` 含字面 \n, dash 的 echo 会把它
+#      展开成换行, 记录被劈成两行, `grep 'curl .*example.invalid'` 就找不到了 (WSL 实测, Windows 的 sh 不会)。
 cat > "$FAKEBIN/curl" <<'S'
 #!/bin/sh
-echo "curl $*" >> "$STUB/calls.log"
+printf 'curl %s\n' "$*" >> "$STUB/calls.log"
 for a in "$@"; do case "$a" in @*) cp "${a#@}" "$STUB/payload.json" ;; esac; done
-[ -f "$STUB/curl.rc" ] && exit "$(cat "$STUB/curl.rc")"; exit 0
+[ -f "$STUB/curl.rc" ] && exit "$(cat "$STUB/curl.rc")"
+if [ -f "$STUB/curl.body" ]; then cat "$STUB/curl.body"; else printf '{"errcode":0,"errmsg":"ok"}'; fi
+printf '\n%s' "$( [ -f "$STUB/curl.http" ] && cat "$STUB/curl.http" || echo 200)"
+exit 0
 S
 chmod +x "$FAKEBIN/curl"
 
@@ -103,12 +112,12 @@ printf 'W1 line for webhook\n' >> "$LOGS/llm-canary-alerts.log"
 printf '7' > "$STUB/curl.rc"
 run_it ALERT_SINK=webhook ALERT_WEBHOOK_URL=https://example.invalid/hook
 if [ "$HAVE_PY" = 1 ]; then
-    [ "$RC" = 2 ] || fail "[5] 期望 rc=2 实得 $RC: $OUT"; assert_out "reason=sink-failed:webhook" "[5]"
+    [ "$RC" = 2 ] || fail "[5] 期望 rc=2 实得 $RC: $OUT"; assert_out "reason=webhook-curl-failed" "[5]"
     grep -q 'curl .*example.invalid' "$STUB/calls.log" || fail "[5] curl 没被调"
     grep -q '"msgtype": "text"' "$STUB/payload.json" || fail "[5] payload 不是机器人 text 形状"
 else
-    [ "$RC" = 2 ] || fail "[5] 期望 rc=2 实得 $RC"; assert_out "reason=sink-failed:webhook" "[5] (无 python, 走 payload 失败那条也该 rc=2)"
-    echo "    (本机无 python, webhook payload 分支未量到)"
+    [ "$RC" = 2 ] || fail "[5] 期望 rc=2 实得 $RC"; assert_out "reason=payload-build-failed" "[5] (无 python, 走 payload 失败那条也该 rc=2, 且 reason 与 curl 失败分开)"
+    echo "    (本机无 python, webhook curl 分支未量到)"
 fi
 rm -f "$STUB/curl.rc"
 run_it
@@ -146,6 +155,50 @@ before=$n_led; run_it; after=$(grep -c . "$STATE/digest.ledger")
 [ "$((after - before))" = 1 ] || fail "[9] 一次运行台账应恰好长 1 行, 实得 $((after - before))"
 ok "台账每次恰好一行"
 
-echo "READING: RC2_REASONS_CONSTRUCTED=5 [no-alert-files sink-failed webhook-url-missing unknown-sink state-dir-unwritable]"
+# ── 10. 🔴 「送到了」= HTTP 2xx 且 errcode=0: 404/500 或 200+errcode≠0 都不许前进游标 (#681 终审) ──
+if [ "$HAVE_PY" = 1 ]; then
+    printf 'H1 line\n' >> "$LOGS/llm-canary-alerts.log"
+    printf '500' > "$STUB/curl.http"; printf 'boom' > "$STUB/curl.body"
+    run_it ALERT_SINK=webhook ALERT_WEBHOOK_URL=https://example.invalid/hook
+    [ "$RC" = 2 ] || fail "[10a] HTTP 500 应 rc=2, 实得 $RC: $OUT"; assert_out "reason=webhook-http-non-2xx" "[10a]"
+    rm -f "$STUB/curl.http" "$STUB/curl.body"
+    printf '{"errcode":93000,"errmsg":"invalid webhook url"}' > "$STUB/curl.body"
+    run_it ALERT_SINK=webhook ALERT_WEBHOOK_URL=https://example.invalid/hook
+    [ "$RC" = 2 ] || fail "[10b] errcode≠0 应 rc=2, 实得 $RC: $OUT"; assert_out "reason=webhook-errcode" "[10b]"
+    grep -q 'errcode=93000' "$STATE/digest.alerts" || fail "[10b] 明细里应带 errcode=93000: $(tail -3 "$STATE/digest.alerts")"
+    rm -f "$STUB/curl.body"
+    run_it
+    [ "$RC" = 1 ] || fail "[10c] 两次假投递之后游标应仍未前进, 实得 rc=$RC"; assert_out "H1 line" "[10c] 那一批不许丢"
+    ok "🔴 HTTP 500 / 200+errcode≠0 都 rc=2 且游标不前进 (不丢批)"
+    # payload 拼不出 (python 坏) ⇒ 独立 reason, ⛔ 不与 curl 失败撞码。先追一行, 否则上一步已把游标推到末尾, 这里会读成 empty。
+    printf 'P1 line for broken python\n' >> "$LOGS/llm-canary-alerts.log"
+    printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/python.broken"; mv "$FAKEBIN/python" "$FAKEBIN/python.ok"; mv "$FAKEBIN/python.broken" "$FAKEBIN/python"; chmod +x "$FAKEBIN/python"
+    run_it ALERT_SINK=webhook ALERT_WEBHOOK_URL=https://example.invalid/hook
+    mv -f "$FAKEBIN/python.ok" "$FAKEBIN/python"
+    [ "$RC" = 2 ] || fail "[10d] 期望 rc=2 实得 $RC"; assert_out "reason=payload-build-failed" "[10d]"
+    [ ! -f "$STUB/calls.log" ] || ! grep -q curl "$STUB/calls.log" || fail "[10d] payload 都没拼出来不该调 curl"
+    ok "payload 拼不出 ⇒ rc=2 payload-build-failed (与 curl 失败分开), 不调 curl"
+    run_it ALERT_SINK=webhook ALERT_WEBHOOK_URL=https://example.invalid/hook
+    [ "$RC" = 1 ] || fail "[10e] 修好后应投递成功, 实得 $RC: $OUT"
+else
+    ok "HTTP/errcode/payload 三例: 本机无 python, 登记未量 (CI ubuntu 有)"
+fi
+
+# ── 11. 全部输入都读不了 ⇒ rc=2 no-readable-alert-files (⛔ 不是 DIGEST empty) ───────
+run_it ALERT_DIGEST_FILES="/nonexistent/a-alerts.log /nonexistent/b.alert"
+[ "$RC" = 2 ] || fail "[11] 期望 rc=2 实得 $RC: $OUT"; assert_out "reason=no-readable-alert-files" "[11]"
+assert_no_out "DIGEST empty" "[11] 一个都读不了不许说 empty"
+ok "全部输入读不了 ⇒ rc=2 no-readable-alert-files"
+
+# ── 12. dead 路径台账也恰好一行判决 (明细走 digest.alerts) ───────────────────────
+printf 'D1 line for dead path\n' >> "$LOGS/margin-parity-alerts.log"   # 没新增会在 sink 之前走 empty 路径, 要先有行
+before=$(grep -c . "$STATE/digest.ledger"); run_it ALERT_SINK=pigeon; after=$(grep -c . "$STATE/digest.ledger")
+[ "$((after - before))" = 1 ] || fail "[12] dead 路径台账应恰好长 1 行, 实得 $((after - before))"
+grep -q 'INSTRUMENT_DEAD reason=unknown-sink:pigeon rc=2' <(ledger_last) || fail "[12] 台账判决行: $(ledger_last)"
+grep -q 'reason=unknown-sink:pigeon' "$STATE/digest.alerts" || fail "[12] 明细应在 digest.alerts"
+grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} ' <(ledger_last) || fail "[12] 台账时间戳应是本地 %F %T (与 cron_dead 同口径): $(ledger_last)"
+ok "dead 路径台账恰好一行, 明细进 digest.alerts, 时间戳同口径"
+
+echo "READING: RC2_REASONS_CONSTRUCTED=$([ "$HAVE_PY" = 1 ] && echo 9 || echo 6) [no-alert-files webhook-curl-failed webhook-url-missing unknown-sink state-dir-unwritable no-readable-alert-files$([ "$HAVE_PY" = 1 ] && echo ' webhook-http-non-2xx webhook-errcode payload-build-failed')]"
 echo "READING: HAVE_PYTHON=$HAVE_PY"
 echo "PASS: test-cron-alert-digest.sh ($PASSED 组断言)"
