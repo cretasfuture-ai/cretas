@@ -1,19 +1,22 @@
 import React, { useMemo } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { Text, Avatar, Icon } from 'react-native-paper';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../store/authStore';
-import { ModuleConfig } from '../../types/navigation';
 import { ModuleCard } from './components/ModuleCard';
 import { QuickStatsPanel } from './components/QuickStatsPanel';
 import { MainTabParamList } from '../../types/navigation';
-import { hasPermission, ROLE_METADATA } from '../../types/auth';
+import { ROLE_METADATA } from '../../types/auth';
 import { ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
-import { hasProductionCapability } from '../../utils/factoryType';
 import { useFactoryFeatureStore } from '../../store/factoryFeatureStore';
+import {
+  resolveHomeModules,
+  toHomeModuleSetId,
+  type ResolvedHomeModule,
+} from './homeModules';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<MainTabParamList, 'HomeTab'>;
 
@@ -24,74 +27,25 @@ type HomeScreenNavigationProp = NativeStackNavigationProp<MainTabParamList, 'Hom
  */
 export default function HomeScreen() {
   const navigation = useNavigation<HomeScreenNavigationProp>();
+  const route = useRoute();
   const { user } = useAuthStore();
   const { t } = useTranslation('home');
   const { isModuleEnabled } = useFactoryFeatureStore();
 
-  // Module Configuration
-  const modules: ModuleConfig[] = useMemo(() => {
-    if (!user) return [];
-    const allModules: ModuleConfig[] = [
-      {
-        id: 'processing',
-        name: t('modules.processing.name'),
-        icon: 'cube-outline',
-        description: t('modules.processing.description'),
-        status: 'available',
-        progress: 27,
-        requiredPermissions: ['production:read'],
-        route: 'ProcessingTab',
-        color: '#1890FF', // Neo Blue
-      },
-      {
-        id: 'logistics',
-        name: t('modules.logistics.name'),
-        icon: 'truck-delivery',
-        description: t('modules.logistics.description'),
-        status: 'available',
-        requiredPermissions: ['warehouse:read'],
-        route: 'LogisticsTab',
-        color: '#FAAD14', // Neo Orange
-      },
-      {
-        id: 'trace',
-        name: t('modules.trace.name'),
-        icon: 'qrcode-scan',
-        description: t('modules.trace.description'),
-        status: 'available',
-        requiredPermissions: ['trace:read'],
-        route: 'ProcessingTab',
-        color: '#722ED1', // Neo Purple
-      },
-      {
-        id: 'admin',
-        name: t('modules.admin.name'),
-        icon: 'account-cog',
-        description: t('modules.admin.description'),
-        status: 'available',
-        requiredPermissions: ['system:read'],
-        route: 'ManagementTab',
-        color: '#13C2C2', // Neo Cyan
-      },
-      {
-        id: 'settings',
-        name: t('modules.settings.name'),
-        icon: 'cog',
-        description: t('modules.settings.description'),
-        status: 'available',
-        requiredPermissions: ['system:read'],
-        color: '#595959', // Neo Gray
-      },
-    ];
+  /**
+   * 模块集由**注册这块首页的导航器**通过 `initialParams` 指定。
+   * ⛔ 不用全局可变量：同一个 HomeScreen 组件被 5 棵树复用，全局量会串台。
+   */
+  const moduleSetId = toHomeModuleSetId(
+    (route.params as { moduleSet?: unknown } | undefined)?.moduleSet
+  );
 
-    return allModules.filter(module => {
-      if (!isModuleEnabled(module.id)) return false;
-      if (module.id === 'processing' && !hasProductionCapability(user)) return false;
-      return module.requiredPermissions.some(permission => hasPermission(user, permission));
-    });
-  }, [user, t, isModuleEnabled]);
+  const modules: ResolvedHomeModule[] = useMemo(
+    () => resolveHomeModules(moduleSetId, user, isModuleEnabled, t),
+    [moduleSetId, user, t, isModuleEnabled]
+  );
 
-  const handleModulePress = (module: ModuleConfig) => {
+  const handleModulePress = (module: ResolvedHomeModule) => {
     if (module.status === 'locked') {
       Alert.alert(
         t('alerts.noAccess.title'),
@@ -101,7 +55,15 @@ export default function HomeScreen() {
     }
 
     if (module.route) {
-      navigation.dispatch(CommonActions.navigate(module.route));
+      // ⚠️ navigate 只向上冒泡，不会钻进兄弟 Tab 的子栈 ⇒ 跨 Tab 必须带 `{ screen }`
+      //    （同 `WHHomeScreen.tsx` 的写法）。
+      navigation.dispatch(
+        CommonActions.navigate(
+          module.nestedScreen
+            ? { name: module.route, params: { screen: module.nestedScreen } }
+            : { name: module.route }
+        )
+      );
     } else if (module.id === 'settings') {
       Alert.alert(t('alerts.settingsInProgress.title'), t('alerts.settingsInProgress.message'));
     }
@@ -151,19 +113,23 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Modules Grid */}
-        <View style={styles.section}>
-          <Text variant="titleLarge" style={styles.sectionTitle}>{t('sections.modules')}</Text>
-          <View style={styles.modulesGrid}>
-            {modules.map(module => (
-              <ModuleCard
-                key={module.id}
-                module={module}
-                onPress={() => handleModulePress(module)}
-              />
-            ))}
+        {/* Modules Grid —— 兜底：一张卡都没有时整段不渲染，
+            ⛔ 不留一个下面空无一物的「功能模块」标题（这次缺陷的可见症状）。 */}
+        {modules.length > 0 && (
+          <View style={styles.section} testID="home-modules-section">
+            <Text variant="titleLarge" style={styles.sectionTitle}>{t('sections.modules')}</Text>
+            <View style={styles.modulesGrid}>
+              {modules.map(module => (
+                <ModuleCard
+                  key={module.id}
+                  module={module}
+                  testID={'home-module-' + module.id}
+                  onPress={() => handleModulePress(module)}
+                />
+              ))}
+            </View>
           </View>
-        </View>
+        )}
 
         <View style={styles.bottomSpacer} />
       </ScrollView>

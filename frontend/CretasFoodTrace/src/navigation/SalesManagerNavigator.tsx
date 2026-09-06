@@ -85,6 +85,7 @@ export function SalesManagerNavigator() {
       <Tab.Screen
         name="SMHomeTab"
         component={HomeScreen}
+        initialParams={{ moduleSet: 'sales' }}
         options={{
           tabBarButtonTestID: "sm-tab-home",
           title: "首页",

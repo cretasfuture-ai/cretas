@@ -91,6 +91,7 @@ export function ProcurementManagerNavigator() {
       <Tab.Screen
         name="PMHomeTab"
         component={HomeScreen}
+        initialParams={{ moduleSet: 'procurement' }}
         options={{
           tabBarButtonTestID: "pm-tab-home",
           title: "首页",

@@ -179,6 +179,7 @@ export function MainNavigator() {
       <Tab.Screen
         name="HomeTab"
         component={HomeScreen}
+        initialParams={{ moduleSet: 'main' }}
         options={{
           title: '首页',
           tabBarButtonTestID: 'main-tab-home',

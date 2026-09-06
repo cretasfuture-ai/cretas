@@ -142,6 +142,54 @@
     "settings": {
       "name": "系统设置",
       "description": "个人设置、系统配置"
+    },
+    "salesOrders": {
+      "name": "销售订单",
+      "description": "开单、发货、短交结案"
+    },
+    "customers": {
+      "name": "客户管理",
+      "description": "客户档案、联系人"
+    },
+    "arAp": {
+      "name": "应收应付",
+      "description": "往来对账、账龄"
+    },
+    "priceList": {
+      "name": "价格表",
+      "description": "客户/供应商报价"
+    },
+    "returnOrders": {
+      "name": "退货单",
+      "description": "退货登记与处理"
+    },
+    "purchaseOrders": {
+      "name": "采购订单",
+      "description": "下单、跟单、到货"
+    },
+    "suppliers": {
+      "name": "供应商管理",
+      "description": "供应商档案、资质"
+    },
+    "supplierDelivery": {
+      "name": "收货确认",
+      "description": "供应商送货签收"
+    },
+    "purchaseExceptions": {
+      "name": "采购异常",
+      "description": "短交、质量、价格异常"
+    },
+    "todoApprovals": {
+      "name": "待办审批",
+      "description": "大额单据审批"
+    },
+    "cashierPayments": {
+      "name": "付款处理",
+      "description": "出纳付款执行"
+    },
+    "finishedGoods": {
+      "name": "成品库存",
+      "description": "成品在库查询"
     }
   },
   "status": {
