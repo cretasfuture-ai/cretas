@@ -37,7 +37,12 @@ import static org.mockito.Mockito.when;
  *   <li>{@code quality} 给 {@code rw} 而同一个假的 {@code getRolePermissions} 只给 read。</li>
  * </ul>
  * ⇒ 只要有人把实现改回读那份清单或读 {@code getRolePermissions}, 这里必红。
- * ({@code TmpRolePageDriftProbe} 实测过: 改之前 294 格里 31 格与 L1 不符。)
+ *
+ * <p>改之前的实测 (临时探针, 已删; 表在 PR #715 body 里): 拿 {@code getRolePermissions} 的
+ * 结果与仓里的 L1 快照 {@code permissionMatrix.l1Snapshot.json} 逐格比,
+ * 30 个角色 × 11 个模块共 294 格里 <b>31 格</b>不一致, 另有 6 个 L1 模块页面上根本没有列。
+ * 要复现: 按同样口径比一次 —— ⛔ 别用 {@code FactoryUserRole.fromRoleCode} 做角色映射,
+ * 它对未知码静默返回 {@code unactivated}, 会把「枚举里没有这个角色」变成一个真读数。
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
