@@ -324,3 +324,5 @@ public class User extends BaseEntity {
         return this.platformType == null || this.platformType.contains("mobile");
     }
 }
+
+// P0 探针: 触发 java-gate 的 paths, 证明 head 不含修复时 merge 步骤仍能跑。用完即删。
