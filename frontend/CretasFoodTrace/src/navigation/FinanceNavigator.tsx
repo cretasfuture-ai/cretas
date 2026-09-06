@@ -40,6 +40,7 @@ export default function FinanceNavigator() {
       <Tab.Screen
         name="FinanceHomeTab"
         component={HomeScreen}
+        initialParams={{ moduleSet: 'finance' }}
         options={{
           title: "首页",
           tabBarButtonTestID: "finance-tab-home",

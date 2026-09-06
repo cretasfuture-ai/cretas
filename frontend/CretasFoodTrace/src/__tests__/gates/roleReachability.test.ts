@@ -64,7 +64,23 @@ const RESULT = analyze();
  *    看清单 —— 数变小可能是**分析器读不懂了**（条目掉进「判不了」），不是修好了。
  *    所以下面同时钉了「判不了」的上限。
  */
-const VACUOUS_BUDGET = 38;
+// 🔴 2026-09-06：38 -> 37，按本文件自己写的「修好了几条就把这个数调小」办。
+//
+// 变的**不是代码，是仪器**：`PERMISSIONS_BY_ROLE` 里 `permission_admin` 写的是 `[]`，
+// 而后端 `FactoryUserRole.getPermissionPrefix()` 把它和 platform_admin /
+// factory_super_admin 放在同一个 case 返回 `"*"` ⇒ 实发 `*:*`。订正后：
+//
+//   permission_admin 拿到 production:read ⇒ MainNavigator 的 ProcessingTab 对它注册
+//   ⇒ ProcessingDashboard.tsx 多了一个可达角色
+//   ⇒ 那里的 `userType === 'platform'` 从「只有 platform_admin 可达 ⇒ 恒真 ⇒ 空转」
+//     变成「platform_admin=T / permission_admin=F ⇒ 有效」
+//
+//   空转 38 -> 37，有效 25 -> 26，判不了 9 -> 9，
+//   reachableScreenFiles / screensExamined / branchesExamined 三个下限读数全部不变
+//   （365 / 390 / 72）—— 即**覆盖面没有变小**，这个 -1 不是分析器瞎了。
+//
+// ⚠️ 口径提示：37 与 38 是**同一把尺子**量的（只有那张权限快照订正了一格）。
+const VACUOUS_BUDGET = 37;
 
 /**
  * 🔴 2026-08-29：37 -> 38，这是权限模型纠偏后的显式遗留登记。

@@ -89,6 +89,7 @@ export function ViewerNavigator() {
       <Tab.Screen
         name="VWHomeTab"
         component={HomeScreen}
+        initialParams={{ moduleSet: 'viewer' }}
         options={{
           title: "首页",
           tabBarIcon: ({ color, size }) => (

@@ -142,6 +142,54 @@
     "settings": {
       "name": "Settings",
       "description": "Personal & system settings"
+    },
+    "salesOrders": {
+      "name": "Sales Orders",
+      "description": "Create, ship, short-close"
+    },
+    "customers": {
+      "name": "Customers",
+      "description": "Customer profiles & contacts"
+    },
+    "arAp": {
+      "name": "AR / AP",
+      "description": "Reconciliation & aging"
+    },
+    "priceList": {
+      "name": "Price List",
+      "description": "Customer & supplier pricing"
+    },
+    "returnOrders": {
+      "name": "Return Orders",
+      "description": "Return intake & handling"
+    },
+    "purchaseOrders": {
+      "name": "Purchase Orders",
+      "description": "Order, follow up, receive"
+    },
+    "suppliers": {
+      "name": "Suppliers",
+      "description": "Supplier profiles & qualifications"
+    },
+    "supplierDelivery": {
+      "name": "Delivery Receipt",
+      "description": "Sign off supplier deliveries"
+    },
+    "purchaseExceptions": {
+      "name": "Purchase Exceptions",
+      "description": "Shortage, quality, price issues"
+    },
+    "todoApprovals": {
+      "name": "My Approvals",
+      "description": "High-value document approvals"
+    },
+    "cashierPayments": {
+      "name": "Payments",
+      "description": "Cashier payment execution"
+    },
+    "finishedGoods": {
+      "name": "Finished Goods",
+      "description": "Finished goods on hand"
     }
   },
   "status": {

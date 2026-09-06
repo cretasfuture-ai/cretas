@@ -14,6 +14,8 @@ interface ModuleCardProps {
   module: ModuleConfig;
   onPress: () => void;
   disabled?: boolean;
+  /** 用于 E2E / 渲染测试定位到具体某张卡（`home-module-<id>`）。 */
+  testID?: string;
 }
 
 /**
@@ -24,7 +26,8 @@ interface ModuleCardProps {
 export const ModuleCard: React.FC<ModuleCardProps> = ({
   module,
   onPress,
-  disabled = false
+  disabled = false,
+  testID
 }) => {
   const { t } = useTranslation('common');
   const isAvailable = module.status === 'available';
@@ -53,6 +56,7 @@ export const ModuleCard: React.FC<ModuleCardProps> = ({
       style={[styles.container, { opacity: containerOpacity }]}
       onPress={(!disabled && isAvailable) ? onPress : undefined}
       padding="l"
+      testID={testID}
     >
       {/* Header: Icon and Badge */}
       <View style={styles.header}>
