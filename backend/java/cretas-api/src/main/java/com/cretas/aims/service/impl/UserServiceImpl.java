@@ -1,5 +1,6 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.user.CreateUserRequest;
@@ -199,6 +200,8 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @Loggable(module = "USER", action = "DELETE", entityType = "User", entityIdParam = "userId",
+              summary = "'删除用户 id=' + #userId")
     public void deleteUser(String factoryId, Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User", String.valueOf(userId)));
@@ -222,12 +225,34 @@ public class UserServiceImpl implements UserService {
                     .withHint("超级管理员账号受系统保护, 无法删除");
         }
 
-        // ⚠️ 这是**软删**(User extends BaseEntity, @SQLDelete 改写成 UPDATE deleted_at)。
-        // 所以 36 张引用 users 的外键(全部 ON DELETE NO ACTION)不会炸,
-        // 他建过的单据也仍然挂在他名下 —— 前端确认框里承诺的正是这件事。
+        // 软删: User 上有类级 @SQLDelete(UPDATE users SET deleted_at = NOW() WHERE id = ?),
+        // 所以 38 张引用 users 的外键(37 张 ON DELETE NO ACTION)不会炸, 他建过的单据仍挂在他名下
+        // —— 前端确认框里承诺的正是这件事。
+        //
+        // 🔴 2026-09-07 修复前, 上面这段话是**假的**, 而且日志还照着它打了一行假回执:
+        //    ① @SQLDelete 写在 @MappedSuperclass BaseEntity 上, Hibernate **静默忽略**, User 自己没有
+        //       ⇒ delete() 是**物理 DELETE**;
+        //    ② User 的 11 个 @OneToMany 当时全是 cascade = ALL, 其中 10 个目标实体也没有 @SQLDelete
+        //       ⇒ 物理删用户会**连带物理删掉**他建的物料类型/产品类型/供应商/客户/物料批次/领料/报工等 10 类业务数据。
+        //    prod 取证: 2026-08-29 11:02:54 这条路真跑过一次(userId=1688 f006_yield_probe), 该行今天
+        //    count=0 而邻居 1687/1689 都在 ⇒ 物理消失; 当时日志打的却是「(软删, 历史单据保留)」。
+        //    附带损失 0 行纯属运气 —— 那账号只活了 2 分 53 秒、零请求, 五类集合里 created_by=1688 全是 0。
+        //    ⇒ 修法是两半一起: 11 个集合去掉 cascade REMOVE + User 补类级 @SQLDelete。缺任一半都是坏的:
+        //      只补 @SQLDelete ⇒ 级联从「物理删 10 类」变成「软删 10 类」, 数据从 @Where 后面消失, 更隐蔽。
         userRepository.delete(user);
-        log.warn("删除用户: factoryId={}, userId={}, username={} (软删, 历史单据保留)",
-                factoryId, userId, user.getUsername());
+
+        // 回执必须是**量出来的**, 不是声称的。@SQLDelete 不会把 deletedAt 回填到内存里的实体,
+        // 所以 user.getDeletedAt() 在这里恒为 null —— 打它就是又造一个假回执。
+        // 这里改读「行还在不在」: 软删成功 => 物理行仍在(=1); 万一哪天又变回物理删 => 0, 日志当场自曝。
+        long rowStillThere = userRepository.countByUsernameIncludingDeleted(user.getUsername());
+        if (rowStillThere > 0) {
+            log.warn("删除用户(软删): factoryId={}, userId={}, username={} —— 物理行仍在, 他建过的单据保留",
+                    factoryId, userId, user.getUsername());
+        } else {
+            log.error("🔴 删除用户: factoryId={}, userId={}, username={} —— 物理行已消失! "
+                            + "这不是软删, 他建过的业务数据可能被级联删除, 立即核查",
+                    factoryId, userId, user.getUsername());
+        }
     }
 
     /**
