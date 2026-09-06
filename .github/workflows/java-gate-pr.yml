@@ -39,6 +39,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          # 合并 base 需要共同祖先; 浅克隆合不了。
+          fetch-depth: 0
+      # 闸要跑在【合并结果】上, 不是 PR 分支自己 (见该 action 的注释)。
+      - uses: ./.github/actions/merge-pr-base
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -67,6 +71,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          # 合并 base 需要共同祖先; 浅克隆合不了。
+          fetch-depth: 0
+      # 闸要跑在【合并结果】上, 不是 PR 分支自己 (见该 action 的注释)。
+      - uses: ./.github/actions/merge-pr-base
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
