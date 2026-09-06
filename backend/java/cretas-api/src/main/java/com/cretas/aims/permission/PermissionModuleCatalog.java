@@ -33,7 +33,7 @@ import java.util.Map;
  * <p>⚠️ 这一处最初被我漏报成「一个字都没变」, 而漏报的成因有普遍性:
  * 钉住旧措辞的那张表<b>是从旧 switch 的 case 抄来的</b>, 所以它覆盖的恰好是
  * <b>不会变</b>的那些码 —— 对「原本走 default、现在有名字了」的码<b>按构造是盲的</b>。
- * ⇒ {@code PermissionModuleCatalogTest.catalogCodesAreEitherPinnedOrRegistered} 把这个洞补上:
+ * ⇒ {@code PermissionModuleCatalogContractTest.catalogCodesAreEitherPinnedOrRegistered} 把这个洞补上:
  * 本表的码集必须恰好等于「17 个既有 case ∪ 显式登记的新增」, 加码不登记就红。
  *
  * <h3>⛔ 这里不是「第 N 份模块清单」</h3>

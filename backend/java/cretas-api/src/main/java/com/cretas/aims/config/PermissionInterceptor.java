@@ -194,7 +194,7 @@ public class PermissionInterceptor implements HandlerInterceptor {
      * {@code RoleController.DISPLAY_MODULES} 在 5 个码上已经漂了。措辞逐字搬进
      * {@link PermissionModuleCatalog} (它采用的正是本方法的措辞, 因为 5 处冲突里侧边栏
      * 逐条站在这一边) ⇒ <b>那 17 个 case 的返回值逐字不变</b>,
-     * {@code PermissionModuleCatalogTest} 逐码钉住。
+     * {@code PermissionModuleCatalogContractTest} 逐码钉住。
      *
      * <p>🔴 有一处<b>变了</b>: {@code operations} 原本没有 case、走 {@code default} 返回码本身,
      * 现在有中文名 ⇒ 那 3 个活的 {@code operations:*} 403 从 {@code [operations] 模块}
