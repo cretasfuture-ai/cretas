@@ -129,6 +129,41 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
                 .isEmpty();
     }
 
+    /**
+     * 闭环：那个真 PostgreSQL 行为测试<b>必须存在，且必须被 CI 点名</b>。
+     *
+     * <p>🔴 这条回答的是一个具体的问题：<b>如果有人把 {@code SoftDeletePartialUniqueIndexPostgresContractTest}
+     * 整个删掉，有没有任何东西会红？</b> 加这条之前答案是<b>没有</b> —— 它是 opt-in 的（没有
+     * {@code CRETAS_WORKFLOW_PG_VERIFY} 就跳过），源码里也没有任何人引用它，
+     * ⇒ 删掉它全量套件只会少一个 skipped，读数与「一切正常」完全重合。
+     *
+     * <p>⚠️ 光把它加进工作流的 {@code -Dtest=} 不够：Surefire 在「指定的测试里有一部分找不到」时不一定报错，
+     * ⇒ 删文件仍可能悄悄通过。所以这里<b>两头都钉</b>：文件在不在（删文件 ⇒ 红）、工作流点没点它（从车道里摘掉 ⇒ 红）。
+     *
+     * <p>📌 顺带一个 2026-09-07 量到的读数：仓库里 <b>15 个</b> opt-in PG 测试，只有 <b>6 个</b>（含本次接入的这个）
+     * 被 {@code java-gate-pr.yml} 点名，其余 <b>9 个在任何 CI 里都不跑</b>。
+     * ⚠️ 障碍不是「自建 runner 没有 Docker」—— 那条车道 {@code runs-on: [self-hosted, cretas]}，
+     * 用的是 runner 上的<b>原生 homebrew postgresql@17</b>，与 Docker 无关。⇒ 接进来只是往列表里加一个名字。
+     */
+    @Test
+    void theRealPostgresBehaviourTestExistsAndIsNamedByCi() throws IOException {
+        Path pgTest = Path.of("src/test/java/com/cretas/aims/integration",
+                "SoftDeletePartialUniqueIndexPostgresContractTest.java");
+        assertThat(Files.exists(pgTest))
+                .as("行为层的证明只有真 PostgreSQL 跑得了（H2 建不出部分唯一索引）。这个文件没了，"
+                        + "「软删后同键可复用 / 活行仍互斥」就再没有任何地方证过。")
+                .isTrue();
+
+        Path workflow = Path.of("../../../.github/workflows/java-gate-pr.yml");
+        assertThat(Files.exists(workflow))
+                .as("阳性对照：读不到工作流时，下面那条断言是恒假而不是恒真，但仍要点名说清楚是路径的问题")
+                .isTrue();
+        assertThat(Files.readString(workflow, StandardCharsets.UTF_8))
+                .as("它必须留在 postgres-reversal-concurrency 那条车道的 -Dtest= 列表里——"
+                        + "摘出去它就退回「opt-in 且没人跑」，与不存在读数相同")
+                .contains("SoftDeletePartialUniqueIndexPostgresContractTest");
+    }
+
     private static boolean containsWord(String haystack, String word) {
         return Pattern.compile("\\b" + Pattern.quote(word) + "\\b").matcher(haystack).find();
     }
