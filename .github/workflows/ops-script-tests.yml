@@ -38,6 +38,15 @@ on:
       - '.github/workflows/ci.yml'
       - '.github/workflows/java-artifact.yml'
       - '.github/workflows/ops-script-tests.yml'
+      # 🔴 2026-09-07 P0 的直接教训: `test-ci-gate-runs-merge-result.sh` 断言的正是下面这几个
+      #    文件的结构(三处 head.sha pin / 内联 merge 步骤 / ⛔ 不许用本地 composite action),
+      #    而它们**一个都不在这份 paths 里** ⇒ 一个**只动 `.github/actions/`** 的 PR 让那道闸
+      #    一次都没触发, 于是「删了 action 却留着三处 uses:」这种会让全仓 CI 停摆的状态,
+      #    在 PR 上是**全绿**的。⇒ 闸断言谁的结构, 谁就必须在触发面里(形态 B)。
+      #    ⚠️ `.github/actions/**` 现在是空目录也要留着 —— 它正是那次出事的路径。
+      - '.github/workflows/java-gate-pr.yml'
+      - '.github/workflows/java-full-nightly.yml'
+      - '.github/actions/**'
   workflow_dispatch:
 
 concurrency:
