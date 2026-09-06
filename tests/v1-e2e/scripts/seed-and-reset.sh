@@ -139,6 +139,25 @@ WHERE requisition_id IN (
     SELECT id FROM factory_material_requisitions WHERE factory_id = 'F_E2E_TEST'
 );
 
+-- Rows referencing production_plans.
+--
+-- 🔴 These MUST be deleted before `DELETE FROM production_plans` below.
+-- V20261101_34 added `fk_process_sheet_rows_plan` / `fk_report_reversal_logs_plan`
+-- (both NOT VALID, ON DELETE RESTRICT). NOT VALID only skips the *existing-row*
+-- check — the parent-side RESTRICT trigger is live from the moment the constraint
+-- exists, so deleting a still-referenced plan now raises 23503 instead of silently
+-- orphaning the child rows (which is exactly what the 2026-08-29 out-of-band SQL
+-- sweep did in prod: 56 process_sheet_rows left pointing at plans that no longer
+-- exist). Without these two DELETEs this script fails at the production_plans line.
+DELETE FROM process_sheet_rows
+WHERE plan_id IN (
+    SELECT id FROM production_plans WHERE factory_id = 'F_E2E_TEST'
+);
+DELETE FROM report_reversal_logs
+WHERE plan_id IN (
+    SELECT id FROM production_plans WHERE factory_id = 'F_E2E_TEST'
+);
+
 -- ── Parent / standalone transactional tables ────────────────────────────────
 
 DELETE FROM sales_orders                   WHERE factory_id = 'F_E2E_TEST';

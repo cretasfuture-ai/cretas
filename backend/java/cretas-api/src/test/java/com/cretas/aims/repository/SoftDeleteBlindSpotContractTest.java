@@ -18,10 +18,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 钉住「必须看得到软删行」的那几条查询是 {@code nativeQuery = true}。
  *
  * <h2>它守的是什么</h2>
- * {@code BaseEntity}(@MappedSuperclass) 上有
- * {@code @SQLDelete(sql = "UPDATE {h-domain} SET deleted_at = NOW() WHERE id = ?")}
- * —— <b>全仓每一次 {@code repository.delete()} 都是软删</b>。同时 341 个实体带类级
- * {@code @Where(clause = "deleted_at IS NULL")}。
+ * 352 个实体带类级 {@code @Where(clause = "deleted_at IS NULL")}(2026-09-06 反射实测,
+ * 全仓 443 个 {@code @Entity})。它让 Hibernate 把「deleted_at IS NULL」拼进每一条 HQL/JPQL。
+ *
+ * <p>🔴 <b>订正 (2026-09-06, ARCH-PRODUCTION-PLAN-HARD-DELETE-PATH)</b>: 本段原文写的是
+ * 「{@code BaseEntity}(@MappedSuperclass) 上有 {@code @SQLDelete} ——
+ * <b>全仓每一次 {@code repository.delete()} 都是软删</b>」。<b>那句话是错的, 而且是承重的。</b>
+ *
+ * <p>{@code BaseEntity} 上那句 {@code @SQLDelete} 与它旁边的 {@code @Where} 一样,
+ * 挂在 {@code @MappedSuperclass} 上<b>被 Hibernate 静默忽略</b>(BaseEntity 自己的 R68 注释
+ * 2026-04-29 就记着这件事)。R68-FIX-A 当年把 {@code @Where} <b>批量补进了每个子类</b>,
+ * 而 {@code @SQLDelete} <b>没有跟着批量补</b> —— 2026-09-06 实测: 352 个带 {@code @Where}
+ * 的实体里只有 20 个同时带类级 {@code @SQLDelete}。
+ *
+ * <p>⇒ 正确的说法是: <b>绝大多数实体的 {@code repository.delete()} 是物理 DELETE</b>。
+ * prod 实证 —— {@code operation_logs} 里 3 条成功的 {@code PRODUCTION_PLAN/DELETE},
+ * 对应 3 行全部 ROW_ABSENT; {@code process_sheet_rows} 因此留下 56 行孤儿。
+ * {@code SalesServiceImpl.deleteDraft} 独立发现过同一件事, 并靠显式调 {@code softDelete()} 绕开。
+ *
+ * <p>⚠️ 这条订正<b>不削弱</b>本闸: 下面登记的三条查询守的是「占用语义」,
+ * 而软删行确实存在(prod 上 {@code production_plans} 61 行里 8 行 deleted_at 非空,
+ * 且 20 个实体本来就在软删) —— 只要有<b>一条</b>软删路径, 发号器问错问题就会永久错位。
+ * 覆盖率那一面由 {@code SoftDeleteAnnotationCoverageRatchetContractTest} 棘轮守着。
  *
  * <p>Hibernate 把 {@code @Where} 拼进<b>每一条</b>作用于该实体的 HQL/JPQL(含 {@code @Query}
  * 写的 JPQL 和 Spring Data 派生查询)。<b>原生 SQL 不经过它。</b>
