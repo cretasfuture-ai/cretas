@@ -36,8 +36,7 @@ usage: prewarm-main-artifact.sh --tests <MavenTestSelector> [--wait <seconds>]
   3  **本组织这条车道结构性不可用** —— 候选制品没有 attestation bundle(私有仓签不上),
      ⛔ 不会进轮询, 也不要重跑; 发布走本地 Maven 构建。
 
-退出码: 0 = 已预热 / 仍 pending(都不算失败, 这是纯优化)；非 0 = 真出错(验签不过、
-传输失败、选择器覆盖不足等), 那些【不】因为是预热就放宽。
+⚠️ 1 与 3 都不因为「这是预热」就被放宽: 预热是把工作提前, 不是把标准放松。
 EOF
     exit 2
 }
