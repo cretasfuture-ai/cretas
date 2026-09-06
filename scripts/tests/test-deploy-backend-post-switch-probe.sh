@@ -68,7 +68,7 @@ CRETAS_POST_SWITCH_PROBE_RETRY_SECONDS=0
 reset_probe_counters
 post_switch_probe gateway server cretas-backend \
     || fail "probe did not recover after one transient SSH round"
-echo "PROBE_CALLS_after_retry_then_pass=$(probe_calls)"
+echo "READING: PROBE_CALLS_after_retry_then_pass=$(probe_calls)"
 [ "$(probe_calls)" -eq 4 ] \
     || fail "probe did not stop after the successful retry (期望 4 次调用 = 2 种探针 x 2 轮, 实际 $(probe_calls))"
 [ "$POST_SWITCH_HTTP" = "200" ] || fail "successful HTTP status was not retained"
@@ -79,7 +79,7 @@ reset_probe_counters
 if post_switch_probe gateway server cretas-backend; then
     fail "sustained probe failure unexpectedly passed"
 fi
-echo "PROBE_CALLS_after_always_fail=$(probe_calls)"
+echo "READING: PROBE_CALLS_after_always_fail=$(probe_calls)"
 [ "$(probe_calls)" -eq 6 ] \
     || fail "sustained failure did not consume exactly three bounded attempts (期望 6, 实际 $(probe_calls))"
 

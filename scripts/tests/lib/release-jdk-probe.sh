@@ -52,14 +52,14 @@ ensure_release_jdk() {
         if major=$(_rjp_major "$cand"); then
             seen="JAVA_HOME=$major"
             if [ "$major" -ge 21 ] 2>/dev/null; then
-                echo "JDK_PROBE=major=$major via=JAVA_HOME where=$cand"
+                echo "READING: JDK_PROBE=major=$major via=JAVA_HOME where=$cand"
                 return 0
             fi
         fi
     elif cand=$(command -v java 2>/dev/null) && major=$(_rjp_major "$cand"); then
         seen="PATH=$major"
         if [ "$major" -ge 21 ] 2>/dev/null; then
-            echo "JDK_PROBE=major=$major via=PATH where=$cand"
+            echo "READING: JDK_PROBE=major=$major via=PATH where=$cand"
             return 0
         fi
     fi
@@ -75,13 +75,13 @@ ensure_release_jdk() {
         major=$(_rjp_major "$cand") || continue
         if [ "$major" -ge 21 ] 2>/dev/null; then
             export JAVA_HOME="$home"
-            echo "JDK_PROBE=major=$major via=discovered where=$cand (原先 ${seen:-none})"
+            echo "READING: JDK_PROBE=major=$major via=discovered where=$cand (原先 ${seen:-none})"
             return 0
         fi
     done
 
     # ③ 真的没有
     RELEASE_JDK_SKIP_REASON="发布级 JDK 不可用 (探到 ${seen:-无 java}, 需要 >=21; 也没找到 JAVA_HOME_21_* 或 /usr/lib/jvm/*21*) —— 真跑 release-java-preflight.sh 的断言在此环境不可判定"
-    echo "JDK_PROBE=major=none 探到 ${seen:-无 java}"
+    echo "READING: JDK_PROBE=major=none 探到 ${seen:-无 java}"
     return 1
 }

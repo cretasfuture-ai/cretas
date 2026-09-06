@@ -100,7 +100,7 @@ rm -f /tmp/lockstale-a1.lock
 # ---------------------------------------------------------------------------
 rm -f /tmp/lockstale-a2.lock
 if command -v flock >/dev/null 2>&1; then
-    echo "A2_MUTEX_MODE=flock"
+    echo "READING: A2_MUTEX_MODE=flock"
     # 真持有者: 自己走一遍 acquire_deploy_lock(所以 PID 文件里是它的 PID),
     # 然后 `exec sleep` —— 用 exec 而不是 `sleep &`, 这样只有一个进程持着 fd 200,
     # kill 掉它 flock 就真的释放(⛔ 起子进程的话父进程死了子进程还按着锁)。
@@ -140,7 +140,7 @@ HOLDERSH
     wait "$A2_HOLDER_PID" 2>/dev/null || true
     rm -f "$A2_HOLDER" "$A2_MARK"
 else
-    echo "A2_MUTEX_MODE=pidfile"
+    echo "READING: A2_MUTEX_MODE=pidfile"
     sleep 300 &
     ALIVE_MSYS_PID=$!
     CLEANUP_PIDS+=("$ALIVE_MSYS_PID")
@@ -305,13 +305,13 @@ if command -v flock >/dev/null 2>&1; then
         || fail "A6 precondition: 没有别的进程持 flock, 应该拿得到锁(rc=0), 实际 rc=$A6_RC, 日志: $A6_LOG"
     A6_CONTENT=$(cat /tmp/lockstale-a6.lock)
     A6_EXPECT=$(deploy_lock_pid)
-    echo "A6_LOCKFILE_CONTENT=[$A6_CONTENT] EXPECT=[$A6_EXPECT]"
+    echo "READING: A6_LOCKFILE_CONTENT=[$A6_CONTENT] EXPECT=[$A6_EXPECT]"
     [ "$A6_CONTENT" = "$A6_EXPECT" ] \
         || fail "A6: 锁文件里是 '$A6_CONTENT', 期望恰好 '$A6_EXPECT' —— 旧内容的尾巴没被截掉, 下次 precheck 会拿这串垃圾去问死活, 把一把真锁当 stale 回收"
     echo "PASS A6: 拿到锁后先截断再写 PID, 没有旧内容残留"
     rm -f /tmp/lockstale-a6.lock
 else
-    echo "A6_SKIPPED_BRANCH=pidfile (该分支用 \`>\` 写, 自带截断, 无此问题)"
+    echo "READING: A6_SKIPPED_BRANCH=pidfile (该分支用 \`>\` 写, 自带截断, 无此问题)"
 fi
 
 # ---------------------------------------------------------------------------

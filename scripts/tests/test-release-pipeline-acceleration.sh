@@ -64,7 +64,7 @@ if [ "$artifact_owner_count" != "1" ]; then
     exit 1
 fi
 ARTIFACT_WORKFLOW="$artifact_owners"
-echo "ARTIFACT_WORKFLOW=$(basename "$ARTIFACT_WORKFLOW")"
+echo "READING: ARTIFACT_WORKFLOW=$(basename "$ARTIFACT_WORKFLOW")"
 
 # ⚠️ 必须带 `- ` 前缀锚**步骤**。java-artifact.yml 的 job 也叫
 #    `name: Package exact-commit deploy artifact`(4 空格缩进), 不带前缀的话即使把

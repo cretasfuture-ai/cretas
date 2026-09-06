@@ -67,7 +67,7 @@ transfer_count=$(printf '%s' "$transfer_lines" | grep -c . || true)
 [ "$transfer_count" -eq 2 ] \
     || { echo "FAIL: 预期恰好 2 条 JAR 传输行(rsync 主 + scp 兜底), 实际 $transfer_count 条:" >&2
          printf '%s\n' "$transfer_lines" >&2; exit 1; }
-echo "EMBEDDING_TRANSFER_LINES=$transfer_count"
+echo "READING: EMBEDDING_TRANSFER_LINES=$transfer_count"
 while IFS= read -r tl; do
     [ -n "$tl" ] || continue
     case "$tl" in
@@ -120,7 +120,7 @@ artifact_owner_count=$(printf '%s' "$artifact_owners" | grep -c . || true)
 [ "$artifact_owner_count" = "1" ] \
     || { echo "FAIL: 恰好应有 1 个 workflow 上传 '$ARTIFACT_NAME_LITERAL', 实际 $artifact_owner_count 个" >&2; exit 1; }
 ARTIFACT_WORKFLOW="$artifact_owners"
-echo "ARTIFACT_WORKFLOW=$(basename "$ARTIFACT_WORKFLOW")"
+echo "READING: ARTIFACT_WORKFLOW=$(basename "$ARTIFACT_WORKFLOW")"
 # ⚠️ ⛔ 不能用 `grep -F 'retention-days: 1'` —— 它把 `retention-days: 14` 也算命中。
 #    实测: 把 1 改成 14 的变异**不红**(HITS_AFTER 仍是 1)。锚到行尾才量得准。
 grep -Eq '^[[:space:]]*retention-days: 1[[:space:]]*$' "$ARTIFACT_WORKFLOW" \

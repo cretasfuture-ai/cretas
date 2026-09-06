@@ -258,7 +258,7 @@ artifact_owner_count=$(printf '%s' "$artifact_owners" | grep -c . || true)
 [ "$artifact_owner_count" = "1" ] \
     || fail "恰好应有 1 个 workflow 上传 '$ARTIFACT_NAME_LITERAL', 实际 $artifact_owner_count 个: $(printf '%s' "$artifact_owners" | tr '\n' ' ')"
 CI_YML="$artifact_owners"
-echo "ARTIFACT_WORKFLOW=$(basename "$CI_YML")"
+echo "READING: ARTIFACT_WORKFLOW=$(basename "$CI_YML")"
 # 阴性对照: 这个不变量要成立, 那个 workflow 必须真的有 push 触发 —— 否则
 # 「paths 覆盖了」是在一个根本不会被 push 触发的文件上量的, 恒真。
 grep -qE '^[[:space:]]*push:' "$CI_YML" \

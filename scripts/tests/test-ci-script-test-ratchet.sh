@@ -159,6 +159,25 @@ run
 ok "边界: 13 天内仍然有效(闸不过紧)"
 rm -f "$TMP/scripts/tests/flip.sh"
 
+# ── 口径行(READING:) 在**绿**的那次也必须贴出来 ───────────────────────────
+# 用例的输出只在失败时被 tail 出来 ⇒ 绿的那次读数为零。而这些用例里有好几条会
+# **按环境分支**(有没有 flock / JDK 几 / 制品住在哪个 workflow), 光看「绿了」
+# 根本不知道它量的是哪一档(形态 A: 报数同时报口径)。
+mk legacy-red.sh 1
+printf '#!/usr/bin/env bash\necho "READING: MUTEX_MODE=flock"\necho "普通输出, 不该被贴出来"\nexit 0\n' \
+    > "$TMP/scripts/tests/with-reading.sh"
+chmod +x "$TMP/scripts/tests/with-reading.sh"
+printf 'legacy-red.sh  # 存量红\n' > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" = 0 ] || { cat "$TMP/out"; fail "带口径行的绿用例不该弄红"; }
+grep -q 'READING: MUTEX_MODE=flock' "$TMP/out" \
+    || { cat "$TMP/out"; fail "绿的那次没把口径行贴出来 —— 那正是最需要它的时候"; }
+# 阴性对照: 只贴口径行, ⛔ 不是把用例的全部输出都倒出来(那会淹掉汇总)。
+grep -q '普通输出, 不该被贴出来' "$TMP/out" \
+    && { cat "$TMP/out"; fail "把非口径行也贴出来了 —— 闸的输出会被淹掉"; }
+ok "口径行: 绿的那次照贴, 且只贴 READING: 那些行"
+rm -f "$TMP/scripts/tests/with-reading.sh"
+
 # ── 第五态 SKIPPED(rc=77): 前提不成立 ≠ 绿, 也 ≠ 红 ───────────────────────
 # 2026-09-06: 11 条存量红里有一条(test-release-artifacts-failfast.sh)的**前提**
 # 在 ubuntu runner 上不成立 —— 那台机器默认 JAVA_HOME 指向 JDK 17, 而发布预检

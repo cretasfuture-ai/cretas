@@ -146,6 +146,20 @@ skipped_reason() {
     printf '%s' "${hits%%$'\n'*}"
 }
 
+# ── 口径行: 绿的时候也要能看见「量的是哪一档」 ────────────────────────────
+# 用例的输出**只在失败时**被 tail 出来, 于是绿的那次读数为零 —— 而这些用例里有
+# 好几条会**按环境分支**(有没有 flock / JDK 几 / 制品住在哪个 workflow), 光看
+# 「绿了」根本不知道它量的是哪一档。同一句「9 条」可能是两个集合(形态 A: 报数
+# 同时报口径)。
+# ⇒ 约定: 用例打 `READING: k=v`, 本 runner **无论红绿**都把这些行贴出来。
+#   ⛔ 不做成硬编码的关键字清单(那是形态 D, 两处一定会漂)。
+print_readings() {
+    local log=$1 line
+    grep -aE '^[[:space:]]*READING: ' "$log" 2>/dev/null | while IFS= read -r line; do
+        printf '         %s\n' "${line#"${line%%[![:space:]]*}"}"
+    done
+}
+
 for f in "$TESTS_DIR"/*.sh; do
     base=$(basename "$f")
     # test-helpers.sh 是被 source 的函数库, 不是用例。
@@ -187,6 +201,8 @@ for f in "$TESTS_DIR"/*.sh; do
         printf 'rc=%-5s %-45s NEW_FAILURE\n' "$rc" "$base"
         n_fail=$((n_fail + 1)); FAILED+=("$base rc=$rc")
     fi
+    # ⛔ 放在四个分支之外 —— 口径行跟红绿无关, 绿的那次尤其需要它。
+    print_readings "$LOG_DIR/$base.log"
 done
 
 echo

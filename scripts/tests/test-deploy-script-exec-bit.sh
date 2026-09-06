@@ -61,7 +61,7 @@ callee_count=$(printf '%s' "$callees" | grep -c . || true)
 # 「全部合规」和「正则一个都没匹配上」长得一模一样。
 [ "$callee_count" -ge 5 ] \
     || fail "只采到 $callee_count 个直接执行的被调脚本 —— 正则大概率失效了, 本次读数作废"
-echo "DIRECTLY_EXECUTED_CALLEES=$callee_count"
+echo "READING: DIRECTLY_EXECUTED_CALLEES=$callee_count"
 printf '%s\n' "$callees" | sed 's/^/  · /'
 
 offenders=""
@@ -76,7 +76,7 @@ while IFS= read -r base; do
     [ "$mode" = "100755" ] || offenders="$offenders$path(mode=$mode) "
 done <<< "$callees"
 
-echo "CHECKED=$checked"
+echo "READING: CHECKED=$checked"
 [ "$checked" -eq "$callee_count" ] \
     || fail "census_mismatch: 采到 $callee_count 个却只查了 $checked 个, 本次读数作废"
 

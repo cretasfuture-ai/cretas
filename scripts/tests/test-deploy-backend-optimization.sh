@@ -28,7 +28,7 @@ if [ "$artifact_owner_count" != "1" ]; then
     exit 1
 fi
 CI_WORKFLOW="$artifact_owners"
-echo "ARTIFACT_WORKFLOW=$(basename "$CI_WORKFLOW")"
+echo "READING: ARTIFACT_WORKFLOW=$(basename "$CI_WORKFLOW")"
 
 assert_contains() {
     local file=$1
@@ -78,7 +78,7 @@ assert_contains "$DEPLOY_SCRIPT" 'journalctl -u $IDLE_SERVICE -n 80 --no-pager -
 round_line=$(grep -Eo '^[[:space:]]*for ROUND in [0-9 ]+; do' "$DEPLOY_SCRIPT" | head -1)
 [ -n "$round_line" ] || { echo "FAIL: 切流后的多轮观察循环没了 (for ROUND in ...)" >&2; exit 1; }
 round_count=$(printf '%s' "$round_line" | sed -E 's/.*for ROUND in ([0-9 ]+); do/\1/' | wc -w | tr -d ' ')
-echo "POST_SWITCH_ROUNDS=$round_count"
+echo "READING: POST_SWITCH_ROUNDS=$round_count"
 [ "$round_count" -ge 3 ] \
     || { echo "FAIL: 切流后观察只剩 $round_count 轮 —— 少于 3 轮盖不住'启动后秒级 crash'那个窗口" >&2; exit 1; }
 assert_contains "$DEPLOY_SCRIPT" 'sleep 6'
