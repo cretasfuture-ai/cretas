@@ -8,17 +8,27 @@
 # 这里 48 个用例从来只在有人想起来的时候手跑。「机制在、没接上」(形态 B)。
 # 接上的第一天就照出 11 条存量红。
 #
-# ── 判定四条 (⛔ 退出码是开放集合, 不枚举失败码) ─────────────────────────
+# ── 判定五条 (⛔ 退出码是开放集合, 不枚举失败码) ─────────────────────────
 #   ① 不在 known-failing 且 rc≠0  ⇒ 红。**任何非 0**, 含 timeout 的 124、
 #      找不到命令的 127、没有执行位的 126。
 #      2026-08-27 那次 nightly 假绿正是因为判定只枚举了 rc==1 和 rc==2, 而实际
 #      是 127 —— 开放集合里的第四种值两条都不命中, 静默落进「绿」(硬约束 4)。
+#      唯一的例外是 ⑤ 那个**显式**的 77, 且它必须自证。
 #   ② 在 known-failing 且 rc=0    ⇒ 红,「已修好, 请从 known-failing.txt 删掉」。
 #      ⛔ 不许静默绿 —— 那样名单只会变长, 棘轮就退化成了永久豁免。
 #   ③ known-failing 里的文件不存在 ⇒ 红,「测试被删了不是修好了」。
 #      2026-08-27 实测: 棘轮把「删掉一个红测试」报成了「已修好」。
 #   ④ FLAKY 条目缺双向 run id / 两个 id 相同 / 登记超过 14 天 ⇒ 红。
 #      FLAKY 不参与红绿判定, 所以它必须自带出口, 否则就是一张永久豁免。
+#   ⑤ rc=77 ⇒ SKIPPED (「这次没量到」, 硬约束 4 的三态), 但**必须自证**:
+#      · 日志里没有 `SKIPPED:<理由>` 那一行            ⇒ 红。
+#        ⛔ 77 不是一张免死金牌 —— 一个崩在打印理由之前的用例, 它的 77 和
+#        「我判断这里量不了」长得一模一样(硬约束 9)。理由行就是那个
+#        「一定会发生」的读数。
+#      · 用例同时还挂在 known-failing.txt 上          ⇒ 红「请重新分类」。
+#        它要么是存量红(确定性失败), 要么是前提不成立(跳过), ⛔ 不能两头占。
+#      · ⛔ SKIPPED **不计进 PASS** —— 下面 `n_pass > 0` 那道闸因此仍然成立:
+#        48 个用例全部 77 时整批是「没量到」, 不是「全绿」。
 #
 # ── 另外两条纪律 ──────────────────────────────────────────────────────────
 #   ⛔ 不 `|| true`、⛔ 不把测试管道进 tail。`cmd | tail` 的退出码是 **tail 的**,
@@ -122,8 +132,19 @@ is_flaky() {
     return 1
 }
 
-n_total=0 n_pass=0 n_fail=0 n_known=0 n_fixed=0 n_flaky=0
-declare -a FAILED=() FIXED=()
+n_total=0 n_pass=0 n_fail=0 n_known=0 n_fixed=0 n_flaky=0 n_skipped=0
+declare -a FAILED=() FIXED=() SKIPPED=()
+
+# rc=77 的自证: 用例必须在自己的输出里打一行 `SKIPPED:<理由>`。
+# ⛔ 取第一条匹配就够, 但**不能**用 `grep | head` —— head 提前关管道会给 grep
+#    发 SIGPIPE, 在 pipefail 下把「有理由」读成失败(本仓 deploy-smartbi-python.sh
+#    的 EPIPE 事故同形)。先收全再切。
+skipped_reason() {
+    local log=$1 hits
+    hits=$(grep -aE '^[[:space:]]*SKIPPED:' "$log" 2>/dev/null || true)
+    [ -n "$hits" ] || return 1
+    printf '%s' "${hits%%$'\n'*}"
+}
 
 for f in "$TESTS_DIR"/*.sh; do
     base=$(basename "$f")
@@ -138,6 +159,19 @@ for f in "$TESTS_DIR"/*.sh; do
         # rc 照常打印(⛔ 不藏), 但不参与红绿判定 —— 它的读数在这台机器上不可判定。
         printf 'rc=%-5s %-45s FLAKY(读数不可判定, 不参与判定)\n' "$rc" "$base"
         n_flaky=$((n_flaky + 1))
+    elif [ "$rc" -eq 77 ]; then
+        # ── 判定⑤: 「这次没量到」是独立的一态, ⛔ 不是绿 ──────────────────
+        reason=$(skipped_reason "$LOG_DIR/$base.log") || reason=""
+        if [ -z "$reason" ]; then
+            printf 'rc=%-5s %-45s NEW_FAILURE(77 但没打 SKIPPED: 理由行)\n' "$rc" "$base"
+            n_fail=$((n_fail + 1)); FAILED+=("$base rc=$rc")
+        elif is_listed "$base"; then
+            printf 'rc=%-5s %-45s NEW_FAILURE(既在 known-failing 又报 SKIPPED — 请重新分类)\n' "$rc" "$base"
+            n_fail=$((n_fail + 1)); FAILED+=("$base rc=$rc 既在 known-failing 又报 SKIPPED")
+        else
+            printf 'rc=%-5s %-45s SKIPPED — %s\n' "$rc" "$base" "$reason"
+            n_skipped=$((n_skipped + 1)); SKIPPED+=("$base | $reason")
+        fi
     elif is_listed "$base"; then
         if [ "$rc" -eq 0 ]; then
             printf 'rc=%-5s %-45s FIXED — 请从 known-failing.txt 删掉\n' "$rc" "$base"
@@ -156,11 +190,18 @@ for f in "$TESTS_DIR"/*.sh; do
 done
 
 echo
-echo "TOTAL=$n_total PASS=$n_pass FAIL=$n_fail KNOWN_FAILING=$n_known FIXED=$n_fixed FLAKY=$n_flaky"
+echo "TOTAL=$n_total PASS=$n_pass FAIL=$n_fail KNOWN_FAILING=$n_known FIXED=$n_fixed FLAKY=$n_flaky SKIPPED=$n_skipped"
+
+if [ "$n_skipped" -gt 0 ]; then
+    echo
+    echo "===== 前提不成立, 本次没量到 (SKIPPED) ====="
+    for entry in ${SKIPPED[@]+"${SKIPPED[@]}"}; do echo "  $entry"; done
+    echo "⇒ 这不是绿。前提变了(换 runner / 装了 JDK 21 / 换了 grep)就该重新量。"
+fi
 
 # 硬约束 9: 「没有新失败」必须配一个「一定会发生」的读数。glob 没命中 / 目录空
 # 在 FAIL=0 上与「全绿」长得一模一样。
-[ "$((n_pass + n_fail + n_known + n_fixed + n_flaky))" -eq "$n_total" ] \
+[ "$((n_pass + n_fail + n_known + n_fixed + n_flaky + n_skipped))" -eq "$n_total" ] \
     || { echo "error=census_mismatch —— 计数器和实际循环对不上, 本次读数作废" >&2; exit 2; }
 [ "$n_pass" -gt 0 ] \
     || { echo "error=zero_tests_actually_passed —— FAIL=0 在这里没有意义" >&2; exit 2; }
@@ -186,5 +227,5 @@ if [ "$n_fixed" -gt 0 ]; then
     rc_final=1
 fi
 
-[ "$rc_final" -eq 0 ] && echo "NO_NEW_FAILURES (存量红 $n_known 条已记账, 读数不可判定 $n_flaky 条)"
+[ "$rc_final" -eq 0 ] && echo "NO_NEW_FAILURES (存量红 $n_known 条已记账, 读数不可判定 $n_flaky 条, 前提不成立 $n_skipped 条)"
 exit "$rc_final"

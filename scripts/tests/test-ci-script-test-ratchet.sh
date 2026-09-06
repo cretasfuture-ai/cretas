@@ -41,7 +41,7 @@ mk legacy-red.sh 1
 printf 'legacy-red.sh  # 存量红, 另立任务\n' > "$TMP/scripts/tests/known-failing.txt"
 run
 [ "$RC" = 0 ] || { cat "$TMP/out"; fail "基线应为绿"; }
-grep -q 'TOTAL=3 PASS=2 FAIL=0 KNOWN_FAILING=1 FIXED=0 FLAKY=0' "$TMP/out" || { cat "$TMP/out"; fail "基线汇总不对"; }
+grep -q 'TOTAL=3 PASS=2 FAIL=0 KNOWN_FAILING=1 FIXED=0 FLAKY=0 SKIPPED=0' "$TMP/out" || { cat "$TMP/out"; fail "基线汇总不对"; }
 grep -q 'NO_NEW_FAILURES' "$TMP/out" || fail "缺少 NO_NEW_FAILURES"
 ok "基线: 存量红记账后整体绿"
 
@@ -158,6 +158,67 @@ run
 [ "$RC" = 0 ] || { cat "$TMP/out"; fail "13 天前的条目不该被拒"; }
 ok "边界: 13 天内仍然有效(闸不过紧)"
 rm -f "$TMP/scripts/tests/flip.sh"
+
+# ── 第五态 SKIPPED(rc=77): 前提不成立 ≠ 绿, 也 ≠ 红 ───────────────────────
+# 2026-09-06: 11 条存量红里有一条(test-release-artifacts-failfast.sh)的**前提**
+# 在 ubuntu runner 上不成立 —— 那台机器默认 JAVA_HOME 指向 JDK 17, 而发布预检
+# 要求 21+。这既不是脚本坏了, 也不是「没问题」。硬约束 4 的三态在这里落地成
+# 第五个判定分支: 用例自己声明「这次没量到」, 并且**必须自证**。
+mk legacy-red.sh 1
+mk_skip() {  # $1=名字 $2=with_reason(yes/no)
+    if [ "$2" = yes ]; then
+        printf '#!/usr/bin/env bash\necho "ok - 前面几条照常量了"\necho "SKIPPED:jdk_major=17 (<21), 发布预检的阳性对照在此环境不可判定"\nexit 77\n' \
+            > "$TMP/scripts/tests/$1"
+    else
+        # 变异: 崩在打印理由**之前**。它的 77 和「我判断这里量不了」长得一样。
+        printf '#!/usr/bin/env bash\necho "ok - 前面几条照常量了"\nexit 77\n' > "$TMP/scripts/tests/$1"
+    fi
+    chmod +x "$TMP/scripts/tests/$1"
+}
+
+printf 'legacy-red.sh  # 存量红\n' > "$TMP/scripts/tests/known-failing.txt"
+mk_skip precondition-unmet.sh yes
+# ⚠️ 这里数的是**用例源码里**的 `SKIPPED:` 出现次数, ⛔ 不能锚 `^SKIPPED:` ——
+#    源码那一行是 `echo "SKIPPED:..."`, 锚了行首两种变体都读出 0, 于是
+#    「变异生效了吗」这个读数一点信息量都没有(形态 A: 量的不是想知道的那个数)。
+echo "    变异到达确认: 源码里 SKIPPED: 出现 $(grep -c 'SKIPPED:' "$TMP/scripts/tests/precondition-unmet.sh" || true) 次"
+run
+[ "$RC" = 0 ] || { cat "$TMP/out"; fail "自证过的 rc=77 不该弄红整个闸"; }
+grep -qE 'rc=77 +precondition-unmet\.sh +SKIPPED — SKIPPED:jdk_major=17' "$TMP/out" \
+    || { cat "$TMP/out"; fail "SKIPPED 那一行没把理由一起打出来"; }
+grep -q 'SKIPPED=1' "$TMP/out" || { cat "$TMP/out"; fail "汇总里没单独计数 SKIPPED"; }
+grep -q '前提不成立, 本次没量到' "$TMP/out" || { cat "$TMP/out"; fail "没有逐条列出 SKIPPED"; }
+# ⛔ 它不能被算进 PASS —— 否则「全体 77」会长成「全绿」。
+grep -q 'TOTAL=4 PASS=2 FAIL=0 KNOWN_FAILING=1 FIXED=0 FLAKY=0 SKIPPED=1' "$TMP/out" \
+    || { cat "$TMP/out"; fail "SKIPPED 被算进了别的计数桶"; }
+ok "第五态: 自证过的 rc=77 ⇒ SKIPPED, 单独计数, ⛔ 不进 PASS"
+
+# 【变异 C: 把理由行删掉】—— 77 不是免死金牌, 没有理由行就是红。
+mk_skip precondition-unmet.sh no
+echo "    变异到达确认: 源码里 SKIPPED: 出现 $(grep -c 'SKIPPED:' "$TMP/scripts/tests/precondition-unmet.sh" || true) 次 (上一轮是 1)"
+run
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "没有 SKIPPED: 理由行的 77 竟然放行 —— 崩在打印理由之前会被读成'跳过'"; }
+grep -q '77 但没打 SKIPPED: 理由行' "$TMP/out" || { cat "$TMP/out"; fail "措辞里没说清缺的是什么"; }
+ok "变异 C: 77 但没打理由行 ⇒ 红"
+
+# 既在 known-failing 又报 SKIPPED ⇒ 红「请重新分类」。⛔ 不能两头占。
+mk_skip precondition-unmet.sh yes
+printf 'legacy-red.sh  # 存量红\nprecondition-unmet.sh  # 存量红(其实前提不成立)\n' \
+    > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "名单里的用例报 SKIPPED 竟然放行"; }
+grep -q '既在 known-failing 又报 SKIPPED' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+ok "名单里的用例报 rc=77 ⇒ 红「请重新分类」"
+
+# 反向: 全是 SKIPPED 时不许报绿 —— 「这次没量到」不是「没问题」。
+rm -f "$TMP/scripts/tests"/*.sh
+mk_skip only-skip.sh yes
+printf '# 空名单\n' > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "整批只有 SKIPPED 时竟然报绿"; }
+grep -q 'zero_tests_actually_passed' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+ok "整批全是 SKIPPED ⇒ rc≠0, ⛔ 不是绿"
+rm -f "$TMP/scripts/tests/only-skip.sh"
 
 # ── 硬约束 9: 一个用例都没通过时不许报绿 ──────────────────────────────────
 # 「FAIL=0」在没跑到任何东西时与「全绿」长得一模一样。
