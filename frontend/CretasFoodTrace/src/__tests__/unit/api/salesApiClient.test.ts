@@ -64,6 +64,43 @@ describe('salesApiClient', () => {
       expect(result.success).toBe(true);
     });
 
+    // T-SHORT-SHIP: 短交结案 —— 后端 SalesController.java:671
+    // POST /orders/{orderId}/close-short-shipment, @RequirePermission("sales:read_write")
+    it('closeShortShipment posts to /close-short-shipment with the reason payload', async () => {
+      mock.onPost(`${BASE}/orders/o1/close-short-shipment`)
+        .reply(200, { success: true, message: '订单已按短交结案', data: { id: 'o1', status: 'SHORT_CLOSED' } });
+      const result = await salesApiClient.closeShortShipment('o1', {
+        reasonCode: 'CUSTOMER_WAIVED_REMAINDER',
+        notes: '客户确认放弃 0.2kg',
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.status).toBe('SHORT_CLOSED');
+      // URL + method 都要断言: 打到 /cancel 上同样会返回 success=true (阴性对照)。
+      expect(mock.history.post).toHaveLength(1);
+      expect(mock.history.post[0].url).toBe(`${BASE}/orders/o1/close-short-shipment`);
+      expect(JSON.parse(mock.history.post[0].data)).toEqual({
+        reasonCode: 'CUSTOMER_WAIVED_REMAINDER',
+        notes: '客户确认放弃 0.2kg',
+      });
+    });
+
+    it('closeShortShipment propagates 409 —— ⛔ 不吞成 success=false', async () => {
+      mock.onPost(`${BASE}/orders/o1/close-short-shipment`).reply(409, {
+        success: false,
+        message: '当前订单状态(已完成)不允许短交结案',
+        actionHint: '只有部分发货状态可以短交结案，请刷新订单查看最新状态',
+      });
+      await expect(salesApiClient.closeShortShipment('o1', { reasonCode: 'OTHER', notes: 'x' }))
+        .rejects.toMatchObject({ response: { status: 409 } });
+    });
+
+    it('closeShortShipment propagates 403 (角色没有 sales:read_write)', async () => {
+      mock.onPost(`${BASE}/orders/o1/close-short-shipment`)
+        .reply(403, { success: false, message: '权限不足' });
+      await expect(salesApiClient.closeShortShipment('o1', { reasonCode: 'SOURCE_SHORTAGE' }))
+        .rejects.toMatchObject({ response: { status: 403 } });
+    });
+
     it('createOrder handles validation error', async () => {
       mock.onPost(`${BASE}/orders`).reply(400, { success: false, message: 'Invalid data' });
       try {
