@@ -55,12 +55,14 @@ function modulesNarrowedByMigration(): string[] {
  * ⛔ 登记是留痕不是豁免: 加一条之前先确认它是「改动范围之外」, 不是「我漏了」。
  */
 const KNOWN_DRIFT: Record<string, string> = {
-  analytics: '两份兜底都给 finance rw(SmartBI 完整权限), 与 migration 的 - 不符。'
+  // ⚠️ 2026-09-07: 原文写「两份兜底」, 描述的是 #690 删掉的 utils/permission.ts。现在只剩 store 一份。
+  //    (spec 只断言 reason.length > 20, 所以这类过期理由没人抓得到 —— 靠人读。)
+  analytics: 'store 兜底给 finance rw(SmartBI 完整权限), 与 migration 的 - 不符。'
     + '改它会改变 SmartBI 在兜底态下的可见性, 与缺陷 30 无关 ⇒ 留待单独确认。',
   production: 'store 兜底给 r, 与 migration 的 - 不符。同上, 超出缺陷 30 范围。',
   sales: 'store 兜底给 r, 与 migration 的 - 不符。销售订单详情与采购同形, '
     + '应与「数据半」那个后续 PR 一起处置, ⛔ 不在本 PR 顺手改。',
-  rd: 'migration 砍了 rd, 而两份兜底表里 finance_manager 根本没有 rd 键(= 默认无权限), '
+  rd: 'migration 砍了 rd, 而 store 兜底表里 finance_manager 根本没有 rd 键(= 默认无权限), '
     + '方向上不冲突 ⇒ 无需处置, 登记备查。',
 };
 
@@ -74,8 +76,12 @@ function readModuleLevel(file: string, module: string): string | null {
   return hit ? hit[1] : null;
 }
 
-/** 两份表用不同的写法表达「没有权限」。 */
-const DENIED = new Set(['-', 'none']);
+/**
+ * store 兜底表用 `'-'` 表达「没有权限」。
+ * ⚠️ 2026-09-07: 原来这里还有 `'none'` —— 那是 #690 删掉的 utils/permission.ts 的 legacy 方言,
+ *    现在是死值, 去掉。剩下的判据只对 store 那一份成立, 这正是本 spec 唯一还在比的东西。
+ */
+const DENIED = new Set(['-']);
 
 const NARROWED = modulesNarrowedByMigration();
 
