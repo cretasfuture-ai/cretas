@@ -249,6 +249,8 @@ export function InventoryAlertScreen() {
 
   // 批量处理预警
   const handleBatchProcess = () => {
+    // ⚠️ 防御性双保险, **不是**用户会看到的防呆: 「批量处理」在 size === 0 时就是 disabled。
+    //    这里不补提示 —— 按钮左边就写着「已选 N 项」, 边界本来就可见 (fool-proof Rule 1)。
     if (selectedAlerts.size === 0) {
       appAlert("提示", "请先选择需要处理的预警");
       return;

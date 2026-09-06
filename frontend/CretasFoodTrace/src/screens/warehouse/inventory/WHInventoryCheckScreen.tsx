@@ -102,6 +102,10 @@ export function WHInventoryCheckScreen() {
 
   // 发起盘点任务 → 进入逐品录入屏
   const handleInitiate = useCallback(async () => {
+    // ⚠️ 防御性双保险, **不是**用户会看到的防呆: 下面那个按钮在 !selectedWarehouseId 时就是 disabled,
+    //    所以这条 appAlert 用户永远触发不到 (2026-09-07 探针实测 `INNER-VALIDATION dialogCount 0 -> 0`)。
+    //    真正告诉工人「缺什么」的是按钮上方那行提示 (testID=stocktake-initiate-hint)。
+    //    ⛔ 不要把这条当成「守卫会弹」的证据。
     if (!selectedWarehouseId) {
       appAlert("请选择仓库", "请先选择要盘点的仓库，再发起盘点任务");
       return;
@@ -222,13 +226,20 @@ export function WHInventoryCheckScreen() {
 
       {/* 底部操作 */}
       <View style={styles.bottomBar}>
+        {/* 2026-09-07: 按钮 disabled 时必须说明缺什么 —— 否则工人只看到一个灰按钮, 点不动也不知道为什么
+            (fool-proof Rule 1「预先显示边界」+ Rule 5「不要 dead-end」)。仓库单选列表在上方, 可能已滚出视野。 */}
+        {!selectedWarehouseId && !initiating && (
+          <Text style={styles.bottomHint} testID="stocktake-initiate-hint">
+            请先在上方选择要盘点的仓库
+          </Text>
+        )}
         <NeoButton
           variant="primary"
           size="large"
           onPress={handleInitiate}
           loading={initiating}
           disabled={initiating || !selectedWarehouseId}
-          style={{ flex: 1 }}
+          style={{ width: "100%" }}
           testID="stocktake-initiate-submit"
         >
           {initiating ? "发起中..." : "发起盘点"}
@@ -290,13 +301,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: "#fff",
-    flexDirection: "row",
+    // 2026-09-07 改成 column: 按钮上方要放一行「缺什么」的提示 (原来是 row, 只有一个按钮)
+    flexDirection: "column",
     paddingHorizontal: 16,
     paddingVertical: 12,
     paddingBottom: 28,
     borderTopWidth: 1,
     borderTopColor: "#e8e8e8",
   },
+  bottomHint: { fontSize: 13, color: "#E6A23C", marginBottom: 8, textAlign: "center" },
 });
 
 export default WHInventoryCheckScreen;

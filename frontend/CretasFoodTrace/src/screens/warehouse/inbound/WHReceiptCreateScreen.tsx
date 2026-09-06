@@ -319,6 +319,9 @@ export default function WHReceiptCreateScreen() {
       const q = Number(rows[it.id]?.receivedQuantity);
       return Number.isFinite(q) && q > 0;
     });
+    // ⚠️ 防御性双保险, **不是**用户会看到的防呆: 「提交入库」在 totalReceivedRows === 0 时就是 disabled,
+    //    而它与这里的 validItems 用的是同一个谓词 (Number.isFinite(q) && q > 0)。
+    //    这里不补提示 —— 按钮上写着「提交入库 (0 行)」, 边界本来就可见 (fool-proof Rule 1)。
     if (validItems.length === 0) {
       appAlert('提示', '请至少填写一行收货数量');
       return;
