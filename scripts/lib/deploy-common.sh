@@ -444,7 +444,22 @@ acquire_deploy_lock() {
 
     if command -v flock >/dev/null 2>&1; then
         # flock 模式 (POSIX advisory lock, Linux/Mac/Git Bash)
-        exec 200>"$lock_file"
+        #
+        # 🔴 ⛔ 不能写 `exec 200>"$lock_file"` —— `>` 在**判定之前**就把文件截断了,
+        #    持有者的 PID 当场被抹掉。两个后果都实测到过(2026-09-06, ubuntu):
+        #      ① 拒绝日志退化成 "PID , cmdline: unknown", 操作者无从判断该不该手删 ——
+        #         而「日志要带 cmdline / mtime, 不是光秃秃一个 PID」正是 2026-09-02
+        #         那次凌晨事故之后加的要求。
+        #      ② 更要命: 下一次调用读到**空** stale_pid, 而 stale 回收那段要求
+        #         `[ -n "$stale_pid" ]` ⇒ 整段被跳过。与此同时 flock 还被持有者的
+        #         **子进程**按着(子进程继承了 fd 200, 父进程死了它没死), 于是这把锁
+        #         **永久卡住**, 后续每一次部署都被拒。CI 里
+        #         test-deploy-mutex-coverage.sh 报的 "lock stayed held after its
+        #         owner died; deploys would be permanently blocked" 就是这条路径。
+        #    ⚠️ Windows Git Bash **没有 flock**, 走下面的 PID 文件分支 —— 所以这个
+        #       缺陷在开发机上一直是绿的, 只有 Linux/macOS 上才看得见。
+        # `<>` 是 O_RDWR|O_CREAT 且**不截断**: 文件不存在照样建, 已有内容原样保留。
+        exec 200<>"$lock_file"
         if ! flock -n 200; then
             local holder_pid holder_cmdline
             holder_pid=$(cat "$lock_file" 2>/dev/null)
@@ -458,6 +473,10 @@ acquire_deploy_lock() {
             return 1
         fi
         # 写 PID 进 lock 文件, 让下次 precheck 能验证 (flock fd 在 SIGKILL 时不一定释放).
+        # ⚠️ 截断挪到**拿到锁之后**: 上面改成不截断的 `<>` 之后, 旧内容比新 PID 长时
+        #    会留下尾巴(旧 1234567 + 新 999 = "9994567"), 而那串垃圾会被下一次
+        #    precheck 当成 PID 去问死活。
+        : >"$lock_file"
         deploy_lock_pid >&200
         # fd 200 保持打开, 进程退出时 flock 自动释放
         log "DEBUG" "获取 flock: $lock_file (PID $$)"

@@ -81,27 +81,84 @@ echo "PASS A1: 死 PID 自动回收, 日志带 mtime"
 rm -f /tmp/lockstale-a1.lock
 
 # ---------------------------------------------------------------------------
-# A2: 活 PID -> 照常拒绝, 且日志里要看到 cmdline。
+# A2: 「另一个进程正持锁」必须被拒绝, 且日志里要看到持有者的 PID + cmdline。
+#
+# 🔴 2026-09-06 实测: acquire_deploy_lock 有**两套互斥实现**, 判据不一样, 必须
+#    按实际生效的那一套来量 —— 原版只写了 PID 文件那一套, 于是在 CI(ubuntu, 有
+#    flock)上 rc=0 而报「活 PID 应该被拒绝」, 在 Windows Git Bash(没有 flock)上绿。
+#
+#    · **PID 文件模式**(Git Bash: 没有 flock): 文件里的 PID 活着 = 拒绝。
+#    · **flock 模式**(Linux/macOS): 真正的互斥是 flock 本身; 文件里的 PID 只是
+#      给人看的线索。「文件里有个活 PID 但没人持 flock」恰恰是 **PID 回收撞库**
+#      那个假阳性 —— 一次崩掉的部署留下死锁文件, 系统把那个 PID 号派给了别的
+#      无关进程。在这种形状下**放行才是对的**(2026-09-02 凌晨: 陈旧锁两次拒掉
+#      健康部署, 靠人工 rm 才发出去)。
+#
+#    ⇒ 两边量的都是同一个性质「有人真持锁就必须被拒, 且日志点名持有者」,
+#      只是持锁的表示不同。⛔ 不用 exit 77 跳过 —— 这条在两种环境里都量得了。
 # ---------------------------------------------------------------------------
 rm -f /tmp/lockstale-a2.lock
-sleep 300 &
-ALIVE_MSYS_PID=$!
-CLEANUP_PIDS+=("$ALIVE_MSYS_PID")
-ALIVE_WINPID=$(cat "/proc/$ALIVE_MSYS_PID/winpid" 2>/dev/null || echo "$ALIVE_MSYS_PID")
-echo "$ALIVE_WINPID" > /tmp/lockstale-a2.lock
+if command -v flock >/dev/null 2>&1; then
+    echo "A2_MUTEX_MODE=flock"
+    # 真持有者: 自己走一遍 acquire_deploy_lock(所以 PID 文件里是它的 PID),
+    # 然后 `exec sleep` —— 用 exec 而不是 `sleep &`, 这样只有一个进程持着 fd 200,
+    # kill 掉它 flock 就真的释放(⛔ 起子进程的话父进程死了子进程还按着锁)。
+    A2_HOLDER="$ROOT_DIR/scripts/tests/.tmp-lock-a2-holder-$$.sh"
+    A2_MARK="/tmp/lockstale-a2.held.$$"
+    rm -f "$A2_MARK"
+    cat > "$A2_HOLDER" <<HOLDERSH
+#!/usr/bin/env bash
+set -euo pipefail
+source "$COMMON"
+acquire_deploy_lock "lockstale-a2" >/dev/null 2>&1 || exit 1
+touch "$A2_MARK"
+exec sleep 300
+HOLDERSH
+    bash "$A2_HOLDER" &
+    A2_HOLDER_PID=$!
+    CLEANUP_PIDS+=("$A2_HOLDER_PID")
+    for _ in $(seq 1 100); do
+        [ -f "$A2_MARK" ] && break
+        sleep 0.1
+    done
+    [ -f "$A2_MARK" ] || fail "A2 precondition: 持有者始终没拿到锁"
+    set +e
+    A2_LOG=$(acquire_deploy_lock "lockstale-a2" 2>&1)
+    A2_RC=$?
+    set -e
+    [ "$A2_RC" -eq 1 ] || fail "A2: 有进程真持着 flock, 第二个必须被拒(rc=1), 实际 rc=$A2_RC, 日志: $A2_LOG"
+    echo "$A2_LOG" | grep -q "cmdline:" || fail "A2: 拒绝日志缺少 cmdline 字段: $A2_LOG"
+    # 🔴 这一条只有在 acquire_deploy_lock **不再于判定前截断锁文件**时才成立 ——
+    #    旧写法 `exec 200>"$lock_file"` 会把持有者的 PID 抹掉, 日志退化成
+    #    "PID , cmdline: unknown"。它同时也是 mutex-coverage 那个「锁永久卡住」
+    #    的根因(空 PID ⇒ 下次 stale 回收整段被跳过)。
+    echo "$A2_LOG" | grep -q "PID $A2_HOLDER_PID" \
+        || fail "A2: 拒绝日志里没点名持有者 PID $A2_HOLDER_PID —— 锁文件在判定前被截断了? 日志: $A2_LOG"
+    echo "PASS A2: 真持有者被拒, 日志带持有者 PID + cmdline"
+    kill -9 "$A2_HOLDER_PID" 2>/dev/null || true
+    wait "$A2_HOLDER_PID" 2>/dev/null || true
+    rm -f "$A2_HOLDER" "$A2_MARK"
+else
+    echo "A2_MUTEX_MODE=pidfile"
+    sleep 300 &
+    ALIVE_MSYS_PID=$!
+    CLEANUP_PIDS+=("$ALIVE_MSYS_PID")
+    ALIVE_WINPID=$(cat "/proc/$ALIVE_MSYS_PID/winpid" 2>/dev/null || echo "$ALIVE_MSYS_PID")
+    echo "$ALIVE_WINPID" > /tmp/lockstale-a2.lock
 
-# 🔴 acquire_deploy_lock 这里预期返回 1(拒绝) —— 在 `set -e` 下,
-# `VAR=$(cmd)` 形式的赋值语句一旦 cmd 非零会立刻杀掉整个测试脚本(不会走到下面
-# 的 fail(), 只会带着一个 EXIT=1 悄悄退出, 看起来像"脚本跑丢了"而不是"断言红了")。
-# 必须先 set +e 拿到返回码, 再 set -e 回来。
-set +e
-A2_LOG=$(acquire_deploy_lock "lockstale-a2" 2>&1)
-A2_RC=$?
-set -e
-[ "$A2_RC" -eq 1 ] || fail "A2: 活 PID 应该被拒绝(rc=1), 实际 rc=$A2_RC"
-echo "$A2_LOG" | grep -q "cmdline:" || fail "A2: 拒绝日志缺少 cmdline 字段: $A2_LOG"
-echo "PASS A2: 活 PID 照常拒绝, 日志带 cmdline"
-kill -9 "$ALIVE_MSYS_PID" 2>/dev/null || true
+    # 🔴 acquire_deploy_lock 这里预期返回 1(拒绝) —— 在 `set -e` 下,
+    # `VAR=$(cmd)` 形式的赋值语句一旦 cmd 非零会立刻杀掉整个测试脚本(不会走到下面
+    # 的 fail(), 只会带着一个 EXIT=1 悄悄退出, 看起来像"脚本跑丢了"而不是"断言红了")。
+    # 必须先 set +e 拿到返回码, 再 set -e 回来。
+    set +e
+    A2_LOG=$(acquire_deploy_lock "lockstale-a2" 2>&1)
+    A2_RC=$?
+    set -e
+    [ "$A2_RC" -eq 1 ] || fail "A2: 活 PID 应该被拒绝(rc=1), 实际 rc=$A2_RC"
+    echo "$A2_LOG" | grep -q "cmdline:" || fail "A2: 拒绝日志缺少 cmdline 字段: $A2_LOG"
+    echo "PASS A2: 活 PID 照常拒绝, 日志带 cmdline"
+    kill -9 "$ALIVE_MSYS_PID" 2>/dev/null || true
+fi
 rm -f /tmp/lockstale-a2.lock
 
 # ---------------------------------------------------------------------------
