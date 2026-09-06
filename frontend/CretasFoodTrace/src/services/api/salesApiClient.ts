@@ -42,6 +42,22 @@ export interface SalesOrder {
   shortageQty?: number;
   createdAt: string;
   updatedAt?: string;
+  // T-SHORT-SHIP: 短交结案落账字段 (后端 SalesOrder.java:187-203, 只在 SHORT_CLOSED 后有值)。
+  shortCloseReasonCode?: string | null;
+  shortCloseNotes?: string | null;
+  shortClosedBy?: number | null;
+  shortClosedAt?: string | null;
+  shortClosedQuantity?: number | null;
+}
+
+/**
+ * 短交结案请求体 —— 逐字对应后端 dto/inventory/CloseShortShipmentRequest.java。
+ * reasonCode 的四个取值定义在 utils/salesOrderShortClose.ts (ShortCloseReasonCode)。
+ */
+export interface CloseShortShipmentPayload {
+  reasonCode: 'CUSTOMER_WAIVED_REMAINDER' | 'SOURCE_SHORTAGE' | 'ORDER_BALANCE_CANCELLED' | 'OTHER';
+  /** 补充说明, ≤ 500 字; reasonCode = OTHER 时后端要求非空。 */
+  notes?: string;
 }
 
 export interface SalesOrderItem {
@@ -328,6 +344,26 @@ class SalesApiClient {
   /** 取消销售单 */
   async cancelOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: SalesOrder }> {
     return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/cancel`);
+  }
+
+  /**
+   * 短交结案 (PARTIAL_DELIVERED → SHORT_CLOSED): 剩余数量确认不再发货。
+   *
+   * 后端: SalesController.java:671 `POST /orders/{orderId}/close-short-shipment`,
+   * `@RequirePermission("sales:read_write")` (= sales_manager)。
+   * body 见 CloseShortShipmentRequest —— reasonCode 必填 (后端 400
+   * SALES_SHORT_CLOSE_REASON_REQUIRED), OTHER 时 notes 必填, notes ≤ 500 字。
+   *
+   * ⚠️ 错误一律**原样抛出** (与 cancelOrder / confirmOrder 同形: apiClient 的响应拦截器
+   * 直接 reject axios error, 调用方用 getErrorMsg 取后端 message + actionHint)。
+   * ⛔ 不在这里 catch 成 `{ success: false }` —— 那会让 409/403 长得像成功 (核心原则 1: 禁止降级)。
+   */
+  async closeShortShipment(
+    orderId: string,
+    payload: CloseShortShipmentPayload,
+    factoryId?: string
+  ): Promise<{ success: boolean; data: SalesOrder; message?: string }> {
+    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/close-short-shipment`, payload);
   }
 
   // ==================== 发货/出库 ====================
