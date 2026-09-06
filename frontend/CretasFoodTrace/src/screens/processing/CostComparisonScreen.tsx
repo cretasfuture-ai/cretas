@@ -1,12 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Dimensions,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, StyleSheet, ScrollView, RefreshControl, Dimensions } from 'react-native';
 import {
   Text,
   Appbar,
@@ -105,14 +99,14 @@ export default function CostComparisonScreen() {
         });
       } else {
         setBatchesData([]);
-        Alert.alert('提示', '未找到批次成本数据');
+        appAlert('提示', '未找到批次成本数据');
       }
     } catch (error) {
       costComparisonLogger.error('获取成本对比数据失败', error as Error, {
         batchIds,
       });
       const errorMessage = getErrorMsg(error) || '加载成本对比数据失败';
-      Alert.alert('加载失败', errorMessage);
+      appAlert('加载失败', errorMessage);
       setBatchesData([]);
     } finally {
       setLoading(false);

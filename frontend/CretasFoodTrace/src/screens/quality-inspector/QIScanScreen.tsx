@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { appAlert } from '../../components/ui/AppDialog';
 import {
   View,
   Text,
@@ -69,7 +70,7 @@ export default function QIScanScreen() {
       }
     } catch (error) {
       console.error('扫码失败:', error);
-      Alert.alert(
+      appAlert(
         t('scan.scanFailed'),
         t('scan.invalidQrCode'),
         [
@@ -102,7 +103,7 @@ export default function QIScanScreen() {
                 batchNumber: batch.batchNumber,
               });
             } catch (error) {
-              Alert.alert(t('scan.scanFailed'), t('scan.batchNotFound'));
+              appAlert(t('scan.scanFailed'), t('scan.batchNotFound'));
             } finally {
               setLoading(false);
             }

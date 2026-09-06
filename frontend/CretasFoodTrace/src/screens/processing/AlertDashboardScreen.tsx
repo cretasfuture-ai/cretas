@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl,
-  ActivityIndicator, Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useAuthStore } from '../../store/authStore';
@@ -81,9 +79,9 @@ const AlertDashboardScreen: React.FC = () => {
       await apiClient.put(`/api/mobile/${factoryId}/alerts/${alertId}/acknowledge`, null, {
         params: { userId },
       });
-      Alert.alert('已确认', '告警已标记为已确认');
+      appAlert('已确认', '告警已标记为已确认');
       loadData(true);
-    } catch { Alert.alert('操作失败'); }
+    } catch { appAlert('操作失败'); }
   };
 
   const getLevelColor = (level: string) => {

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { Alert } from 'react-native';
+import {  } from 'react-native';
+import { appAlert } from '../../../../components/ui/AppDialog';
 import { isAxiosError } from 'axios';
 import { aiApiClient } from '../../../../services/api/aiApiClient';
 import { AIQuota } from '../../../../types/processing';
@@ -112,7 +113,7 @@ export const useAIAnalysis = (batchId: string | number): UseAIAnalysisReturn => 
   const handleAIAnalysis = useCallback(
     async (question?: string) => {
       if (!batchId) {
-        Alert.alert('错误', '批次ID无效');
+        appAlert('错误', '批次ID无效');
         return;
       }
 
@@ -231,7 +232,7 @@ export const useAIAnalysis = (batchId: string | number): UseAIAnalysisReturn => 
         // 错误处理
         const responseMsg = isAxiosError(err) ? (err.response?.data as { message?: string })?.message : undefined;
         if (status === 403) {
-          Alert.alert(
+          appAlert(
             '配额不足',
             responseMsg || '本周AI分析次数已用完，请等待下周重置',
             [
@@ -244,10 +245,10 @@ export const useAIAnalysis = (batchId: string | number): UseAIAnalysisReturn => 
             ]
           );
         } else if (status === 404) {
-          Alert.alert('错误', '批次不存在');
+          appAlert('错误', '批次不存在');
           setShowSection(false);
         } else if (status === 500) {
-          Alert.alert(
+          appAlert(
             'AI服务暂时不可用',
             '抱歉，AI分析服务暂时不可用，请稍后再试',
             [
@@ -260,7 +261,7 @@ export const useAIAnalysis = (batchId: string | number): UseAIAnalysisReturn => 
             ]
           );
         } else {
-          Alert.alert(
+          appAlert(
             'AI分析失败',
             responseMsg || error.message || '请检查网络连接后重试',
             [

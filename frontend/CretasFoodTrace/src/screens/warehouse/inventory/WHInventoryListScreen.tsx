@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -168,8 +169,8 @@ export function WHInventoryListScreen() {
     'view-detail': (e: RowContext) => navigation.navigate('WHInventoryDetail', { inventoryId: e.id }),
     // 🔴 2026-08-17: 原文案是「跳转 WHInventoryTransfer (待接)」—— 把内部屏幕名直接弹给了仓管,
     // 而它指向的那个屏是原型(只改 storageLocation, 数量不参与)。改成人话 + 说清去哪做。
-    transfer: () => Alert.alert('调拨', '手机端暂不支持调拨, 请在网页端「库存 - 调拨」办理。'),
-    'view-price-history': (e: RowContext) => Alert.alert('价格历史', `物料 ${e.id}`),
+    transfer: () => appAlert('调拨', '手机端暂不支持调拨, 请在网页端「库存 - 调拨」办理。'),
+    'view-price-history': (e: RowContext) => appAlert('价格历史', `物料 ${e.id}`),
   }), [navigation]);
 
   const sheetCtx: RowContext = selectedItem

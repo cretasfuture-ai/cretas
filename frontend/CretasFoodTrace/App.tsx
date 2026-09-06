@@ -10,6 +10,7 @@ import { scheduleBackgroundOtaCheck } from './src/services/otaUpdateService';
 import UpdateOverlay from './src/components/common/UpdateOverlay';
 import MandatoryUpdateGate from './src/components/common/MandatoryUpdateGate';
 import AppErrorBoundary from './src/components/common/AppErrorBoundary';
+import { AppDialogHost } from './src/components/ui/AppDialog';
 
 // 初始化 i18n（必须在 App 组件之前导入）
 import './src/i18n';
@@ -70,6 +71,11 @@ export default function App() {
       </AppErrorBoundary>
       <UpdateOverlay />
       <Toast />
+      {/* 全局弹窗宿主 (2026-09-06, Alert.alert codemod 第一刀): appAlert / appPrompt / appChoose 的承载。
+          react-native-web 上 Alert.alert 是 no-op (1672 处调用在 Expo Web 上什么都不显示),
+          这个宿主让同一个调用在 web 与真机上都渲染成 RN Modal。屏内还挂着的 14 个 <AppDialogHost /> 是栈,
+          它们卸载时不会把这个根宿主摘掉。⚠️ 放在错误边界外面: 兜底 UI 出现时仍然要能弹提示。 */}
+      <AppDialogHost />
     </>
   );
 }

@@ -4,16 +4,8 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  RefreshControl,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -122,15 +114,15 @@ export default function QINotificationsScreen() {
       if (isAxiosError(error)) {
         const status = error.response?.status;
         if (status === 401) {
-          Alert.alert(t('common.error'), t('platform:common.sessionExpired'));
+          appAlert(t('common.error'), t('platform:common.sessionExpired'));
         } else {
-          Alert.alert(
+          appAlert(
             t('common.error'),
             error.response?.data?.message || t('notifications.loadFailed')
           );
         }
       } else if (error instanceof Error) {
-        Alert.alert(t('common.error'), error.message);
+        appAlert(t('common.error'), error.message);
       }
       setNotifications([]);
     } finally {
@@ -166,7 +158,7 @@ export default function QINotificationsScreen() {
         )),
       );
     } catch {
-      Alert.alert('未能标记已读', '网络或服务器暂时不可用，请检查网络后重试。');
+      appAlert('未能标记已读', '网络或服务器暂时不可用，请检查网络后重试。');
     } finally {
       pendingReadIdsRef.current.delete(notification.id);
       setPendingReadIds((prev) => {
@@ -178,7 +170,7 @@ export default function QINotificationsScreen() {
   };
 
   const handleMarkAllAsRead = () => {
-    Alert.alert(t('notifications.markAllRead'), t('notifications.confirmMarkAll'), [
+    appAlert(t('notifications.markAllRead'), t('notifications.confirmMarkAll'), [
       { text: t('common.cancel'), style: 'cancel' },
       {
         text: t('common.confirm'),
@@ -192,7 +184,7 @@ export default function QINotificationsScreen() {
             await qualityInspectorApi.markAllNotificationsRead(userId);
             setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
           } catch {
-            Alert.alert('未能全部标记已读', '网络或服务器暂时不可用，请检查网络后重试。');
+            appAlert('未能全部标记已读', '网络或服务器暂时不可用，请检查网络后重试。');
           } finally {
             markingAllRef.current = false;
             setMarkingAll(false);
@@ -203,7 +195,7 @@ export default function QINotificationsScreen() {
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert(t('notifications.deleteNotification'), t('notifications.confirmDelete'), [
+    appAlert(t('notifications.deleteNotification'), t('notifications.confirmDelete'), [
       { text: t('common.cancel'), style: 'cancel' },
       {
         text: t('notifications.delete'),

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -148,7 +149,7 @@ export function WHExpireHandleScreen() {
 
   // 转冻品处理
   const handleConvertToFrozen = async (batch: ExpireBatch) => {
-    Alert.alert("转冻品", `将 ${batch.batchNumber} 转为冻品？`, [
+    appAlert("转冻品", `将 ${batch.batchNumber} 转为冻品？`, [
       { text: "取消", style: "cancel" },
       {
         text: "确定",
@@ -166,7 +167,7 @@ export function WHExpireHandleScreen() {
               // ⇒ 有位置就带上, 没有就不传(后端按不改动处理)。
               ...(batch.location ? { storageLocation: batch.location } : {}),
             });
-            Alert.alert("成功", "已转为冻品，保质期延长30天");
+            appAlert("成功", "已转为冻品，保质期延长30天");
             loadExpireBatches(); // 刷新列表
           } catch (error) {
             handleError(error, { title: '转冻品失败' });
@@ -185,7 +186,7 @@ export function WHExpireHandleScreen() {
       await materialBatchApiClient.updateBatch(batch.id, {
         notes: `优先出库标记 ${formatDate(new Date())}`,
       });
-      Alert.alert("成功", `已将批次 ${batch.batchNumber} 标记为优先出库`);
+      appAlert("成功", `已将批次 ${batch.batchNumber} 标记为优先出库`);
     } catch (error) {
       handleError(error, { title: '标记优先出库失败' });
     } finally {

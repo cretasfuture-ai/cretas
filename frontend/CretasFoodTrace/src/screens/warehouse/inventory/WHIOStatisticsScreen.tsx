@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -153,7 +154,7 @@ export function WHIOStatisticsScreen() {
   // ============================================================
 
   const handleExport = () => {
-    Alert.alert(
+    appAlert(
       t('inbound.create.alert'),
       '台账导出请使用 Web 管理后台',
     );

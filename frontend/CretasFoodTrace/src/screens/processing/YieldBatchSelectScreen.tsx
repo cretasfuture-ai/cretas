@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenWrapper } from '../../components/ui/ScreenWrapper';
@@ -29,7 +30,7 @@ const YieldBatchSelectScreen: React.FC = () => {
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const msg = error instanceof Error ? error.message : '加载批次失败';
-      Alert.alert('加载失败', msg);
+      appAlert('加载失败', msg);
       setBatches([]);
     } finally {
       setLoading(false);
@@ -57,12 +58,12 @@ const YieldBatchSelectScreen: React.FC = () => {
         if (res.success && res.data) {
           goReport(res.data);
         } else {
-          Alert.alert('未找到批次', res.message || '请检查条码是否正确');
+          appAlert('未找到批次', res.message || '请检查条码是否正确');
         }
       } catch (error) {
         handleError(error, { showAlert: false, logError: true });
         const msg = error instanceof Error ? error.message : '扫码查询失败';
-        Alert.alert('查询失败', msg);
+        appAlert('查询失败', msg);
       }
     },
     [goReport],

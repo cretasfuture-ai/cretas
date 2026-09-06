@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -93,7 +94,7 @@ export function WHRecallManageScreen() {
   // ⛔ 这个按钮原来弹一句「选择需要召回的批次」就没有下文了 —— 它不发起任何东西。
   //    在召回真的能落库之前，说清楚它做不到，比让人以为自己已经发起了召回安全得多。
   const handleCreateRecall = () => {
-    Alert.alert(
+    appAlert(
       "召回功能尚未接入",
       "这一页还不能发起召回。需要召回请走线下流程并联系质量负责人，⛔ 不要以为在这里点过就已经发起了。",
     );

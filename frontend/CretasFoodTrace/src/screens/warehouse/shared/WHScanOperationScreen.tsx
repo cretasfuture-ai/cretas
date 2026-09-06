@@ -16,6 +16,7 @@
  */
 
 import React, { useCallback, useRef, useState } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import { View, StyleSheet, TouchableOpacity, Alert, Vibration } from "react-native";
 import { Text, Surface, Button, Portal, Dialog, TextInput } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -115,7 +116,7 @@ export function WHScanOperationScreen() {
             const remaining = label.remainingQuantity ?? 0;
             // 防呆 honest-fail: 剩余量为 0/缺值, 明确告知不跳转 (不是静默失败)
             if (!(remaining > 0) || !label.batchId) {
-              Alert.alert(
+              appAlert(
                 "无法出库",
                 `批次 ${label.batchNumber ?? code} 剩余库存为 0 或数据异常, 无法继续出库.\n请确认扫描的是正确的批次标签, 或联系仓库主管核实.`,
               );
@@ -130,7 +131,7 @@ export function WHScanOperationScreen() {
             });
             return;
           }
-          Alert.alert("物料标签已识别", formatMaterialLabel(labelRes.data));
+          appAlert("物料标签已识别", formatMaterialLabel(labelRes.data));
           return;
         }
       } catch (labelErr) {
@@ -141,7 +142,7 @@ export function WHScanOperationScreen() {
       }
 
       if (mode === "outbound") {
-        Alert.alert("未识别到物料标签", `扫码内容: ${code}\n请确认扫描的是一物一码标签。`);
+        appAlert("未识别到物料标签", `扫码内容: ${code}\n请确认扫描的是一物一码标签。`);
         return;
       }
 
@@ -149,7 +150,7 @@ export function WHScanOperationScreen() {
       const res = await purchaseApiClient.getOrderByNumber(code);
       const order = res?.data as PurchaseOrderLookup | undefined;
       if (!order || !order.id) {
-        Alert.alert("订单未找到", `订单号 ${code} 在当前工厂查不到. 请确认 PDF 是本工厂打印的供货单.`);
+        appAlert("订单未找到", `订单号 ${code} 在当前工厂查不到. 请确认 PDF 是本工厂打印的供货单.`);
         return;
       }
       navigation.navigate("WHReceiptCreate", {
@@ -199,7 +200,7 @@ export function WHScanOperationScreen() {
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-        Alert.alert("权限不足", "需要相机权限才能扫描二维码. 请到系统设置中授权.");
+        appAlert("权限不足", "需要相机权限才能扫描二维码. 请到系统设置中授权.");
         return;
       }
     }

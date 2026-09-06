@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Card, Button, Appbar, ActivityIndicator, Dialog, Portal, IconButton } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -182,7 +183,7 @@ export default function ProcessingDashboard() {
   // 处理成本对比按钮点击
   const handleCostComparisonPress = () => {
     if (recentBatches.length < 2) {
-      Alert.alert(t('dashboard.messages.needTwoBatches'));
+      appAlert(t('dashboard.messages.needTwoBatches'));
       return;
     }
     navigation.navigate('CostComparison', {

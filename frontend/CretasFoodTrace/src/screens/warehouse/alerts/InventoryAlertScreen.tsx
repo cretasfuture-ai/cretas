@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -249,11 +250,11 @@ export function InventoryAlertScreen() {
   // 批量处理预警
   const handleBatchProcess = () => {
     if (selectedAlerts.size === 0) {
-      Alert.alert("提示", "请先选择需要处理的预警");
+      appAlert("提示", "请先选择需要处理的预警");
       return;
     }
 
-    Alert.alert(
+    appAlert(
       "批量处理",
       `确定要处理选中的 ${selectedAlerts.size} 条预警吗？`,
       [
@@ -264,7 +265,7 @@ export function InventoryAlertScreen() {
             try {
               // 这里调用批量处理API
               await materialBatchApiClient.handleExpiredBatches();
-              Alert.alert("成功", "批量处理完成");
+              appAlert("成功", "批量处理完成");
               setSelectedAlerts(new Set());
               setBatchMode(false);
               loadAlerts();
@@ -669,7 +670,7 @@ export function InventoryAlertScreen() {
           style={styles.historyEntry}
           onPress={() => {
             // TODO: 导航到处理记录历史页面
-            Alert.alert("提示", "处理记录功能开发中");
+            appAlert("提示", "处理记录功能开发中");
           }}
         >
           <View style={styles.historyEntryLeft}>

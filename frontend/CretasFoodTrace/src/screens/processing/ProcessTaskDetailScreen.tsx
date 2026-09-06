@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Appbar, Card, Chip, Divider, ActivityIndicator } from 'react-native-paper';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { ProcessingScreenProps } from '../../types/navigation';
@@ -73,7 +74,7 @@ export default function ProcessTaskDetailScreen() {
       if (reportsRes?.data) setReports(Array.isArray(reportsRes.data) ? reportsRes.data : []);
       if (workersRes?.data) setWorkers(Array.isArray(workersRes.data) ? workersRes.data : []);
     } catch {
-      Alert.alert('错误', '加载任务详情失败');
+      appAlert('错误', '加载任务详情失败');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -96,7 +97,7 @@ export default function ProcessTaskDetailScreen() {
           const newPending = res.data.pendingQuantity ?? (res.data.task?.pendingQuantity ?? 0);
           const newCompleted = res.data.completedQuantity ?? (res.data.task?.completedQuantity ?? 0);
           if (prevPendingRef.current !== null && newPending < prevPendingRef.current) {
-            Alert.alert('审批更新', `有报工已审批完成，完成量: ${newCompleted}`);
+            appAlert('审批更新', `有报工已审批完成，完成量: ${newCompleted}`);
             loadData();
           }
           prevPendingRef.current = newPending;
@@ -244,7 +245,7 @@ export default function ProcessTaskDetailScreen() {
               onPress={() => {
                 const batchId = getTaskBatchId(task);
                 if (batchId == null) {
-                  Alert.alert('不能报工', '当前工序没有绑定生产批次，请联系管理员重新转批次。');
+                  appAlert('不能报工', '当前工序没有绑定生产批次，请联系管理员重新转批次。');
                   return;
                 }
                 navigation.navigate('YieldStepReport', {

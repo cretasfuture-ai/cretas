@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -52,17 +53,17 @@ export function WHSettingsScreen() {
   const [offlineMode, setOfflineMode] = useState(true);
 
   const handleClearCache = () => {
-    Alert.alert("清除缓存", "确定要清除缓存吗？", [
+    appAlert("清除缓存", "确定要清除缓存吗？", [
       { text: "取消", style: "cancel" },
       {
         text: "确定",
-        onPress: () => Alert.alert("成功", "缓存已清除"),
+        onPress: () => appAlert("成功", "缓存已清除"),
       },
     ]);
   };
 
   const handleThemeSelect = () => {
-    Alert.alert("深色模式", "选择主题", [
+    appAlert("深色模式", "选择主题", [
       { text: "跟随系统", onPress: () => {} },
       { text: "浅色模式", onPress: () => {} },
       { text: "深色模式", onPress: () => {} },
@@ -70,7 +71,7 @@ export function WHSettingsScreen() {
   };
 
   const handleFontSize = () => {
-    Alert.alert("字体大小", "选择字体大小", [
+    appAlert("字体大小", "选择字体大小", [
       { text: "小", onPress: () => {} },
       { text: "标准", onPress: () => {} },
       { text: "大", onPress: () => {} },
@@ -78,22 +79,22 @@ export function WHSettingsScreen() {
   };
 
   const handleLanguage = () => {
-    Alert.alert("语言", "选择语言", [
+    appAlert("语言", "选择语言", [
       { text: "简体中文", onPress: () => {} },
       { text: "English", onPress: () => {} },
     ]);
   };
 
   const handleCheckUpdate = () => {
-    Alert.alert("检查更新", "当前已是最新版本 v1.0.0");
+    appAlert("检查更新", "当前已是最新版本 v1.0.0");
   };
 
   const handlePrivacyPolicy = () => {
-    Alert.alert("隐私政策", "查看隐私政策");
+    appAlert("隐私政策", "查看隐私政策");
   };
 
   const handleUserAgreement = () => {
-    Alert.alert("用户协议", "查看用户协议");
+    appAlert("用户协议", "查看用户协议");
   };
 
   const renderSettingToggle = (

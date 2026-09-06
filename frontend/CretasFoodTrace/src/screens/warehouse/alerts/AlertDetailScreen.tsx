@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -255,11 +256,11 @@ export function AlertDetailScreen() {
   // 处理提交
   const handleSubmit = async () => {
     if (!selectedSolution) {
-      Alert.alert("提示", "请选择处理方案");
+      appAlert("提示", "请选择处理方案");
       return;
     }
 
-    Alert.alert("确认提交", `确定采用"${allSolutions.find((s) => s.id === selectedSolution)?.title}"方案处理此预警吗？`, [
+    appAlert("确认提交", `确定采用"${allSolutions.find((s) => s.id === selectedSolution)?.title}"方案处理此预警吗？`, [
       { text: "取消", style: "cancel" },
       {
         text: "确定",
@@ -276,7 +277,7 @@ export function AlertDetailScreen() {
                   notes: remarks || "预警处理：转冻品延长保质期",
                 };
                 await materialBatchApiClient.convertToFrozen(alertId, request);
-                Alert.alert("成功", "已转为冻品，保质期延长30天", [
+                appAlert("成功", "已转为冻品，保质期延长30天", [
                   { text: "确定", onPress: () => navigation.goBack() },
                 ]);
                 break;
@@ -287,7 +288,7 @@ export function AlertDetailScreen() {
                   status: "depleted",
                   notes: `报损处理: ${remarks || "过期处理"} ${formatDate(new Date())}`,
                 });
-                Alert.alert("成功", "报损处理已提交", [
+                appAlert("成功", "报损处理已提交", [
                   { text: "确定", onPress: () => navigation.goBack() },
                 ]);
                 break;
@@ -297,7 +298,7 @@ export function AlertDetailScreen() {
                 await materialBatchApiClient.updateBatch(alertId, {
                   notes: `FIFO优先出库标记 ${formatDate(new Date())} ${remarks}`,
                 });
-                Alert.alert("成功", "已标记为优先出库批次", [
+                appAlert("成功", "已标记为优先出库批次", [
                   { text: "确定", onPress: () => navigation.goBack() },
                 ]);
                 break;
@@ -308,7 +309,7 @@ export function AlertDetailScreen() {
               case "recheck":
               default: {
                 // 其他处理方案 - 创建处理记录
-                Alert.alert("成功", "处理方案已提交，等待后续跟进", [
+                appAlert("成功", "处理方案已提交，等待后续跟进", [
                   { text: "确定", onPress: () => navigation.goBack() },
                 ]);
                 break;

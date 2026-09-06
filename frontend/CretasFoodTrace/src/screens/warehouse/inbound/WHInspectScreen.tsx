@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -139,13 +140,13 @@ export function WHInspectScreen() {
   // 提交质检结果
   const submitInspection = async (result: InspectionResult) => {
     if (!productionBatchId) {
-      Alert.alert(t('inbound.inspect.error'), t('inbound.inspect.invalidBatchId'));
+      appAlert(t('inbound.inspect.error'), t('inbound.inspect.invalidBatchId'));
       return;
     }
 
     const userId = getUserId();
     if (!userId) {
-      Alert.alert(t('inbound.inspect.error'), t('inbound.inspect.notLoggedIn'));
+      appAlert(t('inbound.inspect.error'), t('inbound.inspect.notLoggedIn'));
       return;
     }
 
@@ -165,9 +166,9 @@ export function WHInspectScreen() {
       });
 
       if (result === InspectionResult.PASS) {
-        Alert.alert(t('inbound.inspect.success'), t('inbound.inspect.passSuccess'));
+        appAlert(t('inbound.inspect.success'), t('inbound.inspect.passSuccess'));
       } else {
-        Alert.alert(t('inbound.inspect.success'), t('inbound.inspect.rejectSuccess'));
+        appAlert(t('inbound.inspect.success'), t('inbound.inspect.rejectSuccess'));
       }
       navigation.goBack();
     } catch (error) {
@@ -179,11 +180,11 @@ export function WHInspectScreen() {
 
   const handlePass = () => {
     if (!allChecked) {
-      Alert.alert(t('inbound.inspect.alert'), t('inbound.inspect.completeAll'));
+      appAlert(t('inbound.inspect.alert'), t('inbound.inspect.completeAll'));
       return;
     }
 
-    Alert.alert(t('inbound.inspect.passTitle'), t('inbound.inspect.passMessage'), [
+    appAlert(t('inbound.inspect.passTitle'), t('inbound.inspect.passMessage'), [
       { text: t('inbound.inspect.cancel'), style: "cancel" },
       {
         text: t('inbound.inspect.confirm'),
@@ -193,7 +194,7 @@ export function WHInspectScreen() {
   };
 
   const handleReject = () => {
-    Alert.alert(t('inbound.inspect.rejectTitle'), t('inbound.inspect.rejectMessage'), [
+    appAlert(t('inbound.inspect.rejectTitle'), t('inbound.inspect.rejectMessage'), [
       { text: t('inbound.inspect.cancel'), style: "cancel" },
       {
         text: t('inbound.inspect.confirm'),

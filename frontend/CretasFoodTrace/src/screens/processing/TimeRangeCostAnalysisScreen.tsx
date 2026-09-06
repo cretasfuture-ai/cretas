@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, ScrollView, StyleSheet } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Appbar, Card, Button, ActivityIndicator, Chip, SegmentedButtons, IconButton, TextInput, Divider, Switch } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -206,13 +207,13 @@ export default function TimeRangeCostAnalysisScreen() {
       const userId = user?.id;
 
       if (!factoryId || !userId) {
-        Alert.alert('错误', '用户信息不完整');
+        appAlert('错误', '用户信息不完整');
         return;
       }
 
       // 检查配额
       if (aiQuota && aiQuota.remaining <= 0) {
-        Alert.alert('配额不足', '本周AI分析次数已用完，请等待下周重置');
+        appAlert('配额不足', '本周AI分析次数已用完，请等待下周重置');
         return;
       }
 
@@ -261,7 +262,7 @@ export default function TimeRangeCostAnalysisScreen() {
         factoryId: user?.factoryUser?.factoryId,
         hasQuestion: !!question,
       });
-      Alert.alert(
+      appAlert(
         'AI分析失败',
         getErrorMsg(error) || '请稍后重试'
       );

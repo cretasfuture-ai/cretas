@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -198,20 +199,20 @@ export function WHProfileScreen() {
           key: "help",
           label: t('profile.menu.help'),
           icon: "help-circle-outline",
-          onPress: () => Alert.alert(t('profile.dialogs.helpTitle'), t('profile.dialogs.helpMessage')),
+          onPress: () => appAlert(t('profile.dialogs.helpTitle'), t('profile.dialogs.helpMessage')),
         },
         {
           key: "feedback",
           label: t('profile.menu.feedback'),
           icon: "message-text-outline",
-          onPress: () => Alert.alert(t('profile.dialogs.feedbackTitle'), t('profile.dialogs.feedbackMessage')),
+          onPress: () => appAlert(t('profile.dialogs.feedbackTitle'), t('profile.dialogs.feedbackMessage')),
         },
         {
           key: "about",
           label: t('profile.menu.about'),
           icon: "information-outline",
           description: t('profile.version'),
-          onPress: () => Alert.alert(t('profile.dialogs.aboutTitle'), t('profile.dialogs.aboutMessage')),
+          onPress: () => appAlert(t('profile.dialogs.aboutTitle'), t('profile.dialogs.aboutMessage')),
         },
       ],
     },
@@ -230,7 +231,7 @@ export function WHProfileScreen() {
       }
       return;
     }
-    Alert.alert(t('profile.dialogs.logoutTitle'), confirmMessage, [
+    appAlert(t('profile.dialogs.logoutTitle'), confirmMessage, [
       { text: t('profile.dialogs.cancel'), style: "cancel" },
       {
         text: t('profile.dialogs.confirm'),

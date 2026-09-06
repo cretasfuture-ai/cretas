@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, TextInput, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { Alert, Modal, View, Text, TextInput, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 
 /**
  * 跨平台对话框 — Alert.alert 的 drop-in 替换。
@@ -63,16 +63,43 @@ function dialogSignature(s: DialogState): string {
   return JSON.stringify([s.title, s.message ?? '']);
 }
 
-let _show: ((s: DialogState) => void) | null = null;
+/**
+ * 已挂载的宿主**栈** (2026-09-06, Alert.alert codemod 第一刀)。
+ *
+ * 以前是单槽 `_show`: 后挂的宿主覆盖前面的, 卸载时直接置 null。App.tsx 根上挂一个全局宿主之后,
+ * 14 个屏内还各自挂着 `<AppDialogHost />` —— 单槽下**离开那些屏就把全局宿主也置空了**,
+ * 之后所有 appAlert 在真机上静默丢失。栈: 每个宿主挂载 push、卸载把自己摘掉, 永远用栈顶。
+ */
+const _hosts: Array<(s: DialogState) => void> = [];
+function currentShow(): ((s: DialogState) => void) | null {
+  return _hosts[_hosts.length - 1] ?? null;
+}
+/** 基线为 0 的 OTA 标记 + 测试钩子: 当前挂着几个宿主。 */
+export function registeredDialogHostCount(): number {
+  return _hosts.length;
+}
 
 export function appAlert(title: string, message?: string, buttons?: AppDialogButton[]): void {
   const btns: AppDialogButton[] = buttons && buttons.length ? buttons : [{ text: '知道了' }];
-  if (_show) {
-    _show({ title, message, buttons: btns });
+  const show = currentShow();
+  if (show) {
+    show({ title, message, buttons: btns });
     return;
   }
-  // host 未挂载兜底 (理论上不该发生)
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+  // host 未挂载兜底: 真机上退回原生 Alert (它在 Android/iOS 是好的, 只在 web 是 no-op),
+  // ⛔ 不能静默丢 —— 提示/确认丢了比样式不一致严重得多。
+  if (Platform.OS !== 'web') {
+    // 保持与调用方相同的参数个数 (Alert.alert('x') / ('x','y') / ('x','y',[...])) —— 既有屏测试按参数逐个断言
+    if (buttons && buttons.length) {
+      Alert.alert(title, message, buttons.map((b) => ({ text: b.text, style: b.style, onPress: b.onPress })));
+    } else if (message !== undefined) {
+      Alert.alert(title, message);
+    } else {
+      Alert.alert(title);
+    }
+    return;
+  }
+  if (typeof window !== 'undefined') {
     const full = message ? `${title}\n\n${message}` : title;
     if (btns.length > 1) {
       const confirmBtn = btns.find((b) => b.style !== 'cancel') ?? btns[btns.length - 1];
@@ -93,11 +120,11 @@ export function appAlert(title: string, message?: string, buttons?: AppDialogBut
  *
  * ⛔ `Alert.prompt` **只有 iOS 有**。Android 上它根本不存在, 调用即什么都不发生 ——
  * 按钮点下去没有任何反馈, 也不报错。2026-08-15 实测仓里有 4 处 `Alert.prompt`,
- * 只有 `QIScanScreen` 做了 `typeof Alert.prompt === 'function'` 守卫, 另外三处裸调:
- *   · `ProcessTaskApprovalScreen`（报工驳回原因）—— 工人用的是 Android
- *   · `PurchaseOrderDetailScreen`
- *   · `EmployeeProcessSegmentScreen`
- * 也就是说这三处的「驳回/填原因」在 Android 上是死按钮。
+ * 只有 `QIScanScreen` 做了 `typeof Alert.prompt === 'function'` 守卫, 另外三处裸调
+ * (ProcessTaskApproval 报工驳回原因 / PurchaseOrderDetail / EmployeeProcessSegment) 当时在 Android 上是死按钮。
+ * ✅ 2026-09-06 复核: 那三处已全部换成 appPrompt 或自己的受控弹窗 (EmployeeProcessSegmentScreen 文件已不在),
+ *    全仓只剩 QIScanScreen 那一处带守卫的调用; `AppPrompt.test.tsx` 扫着 `Alert.prompt(` 不许再裸调。
+ *    ⚠️ 这段注释曾被当成现状引用过一次 (形态 B⁷) —— 引用前先 grep 调用点。
  *
  * react-native-web 上同理不渲染, 所以 Expo web 调试时也看不见。
  */
@@ -107,8 +134,9 @@ export function appPrompt(
   onSubmit: (value: string) => void,
   opts: AppPromptOptions = {},
 ): void {
-  if (_show) {
-    _show({
+  const show = currentShow();
+  if (show) {
+    show({
       title,
       message,
       buttons: [],
@@ -137,8 +165,9 @@ export function appChoose(
   choices: AppChoice[],
   onPick: (choice: AppChoice) => void,
 ): void {
-  if (_show) {
-    _show({ title, message, buttons: [], choose: { choices, onPick } });
+  const show = currentShow();
+  if (show) {
+    show({ title, message, buttons: [], choose: { choices, onPick } });
     return;
   }
   // host 未挂载兜底
@@ -178,7 +207,7 @@ export const AppDialogHost: React.FC = () => {
   const [queue, setQueue] = useState<QueuedDialog[]>([]);
   const [inputValue, setInputValue] = useState('');
   useEffect(() => {
-    _show = (s) => {
+    const show = (s: DialogState) => {
       setQueue((prev) => {
         if (isDedupable(s)) {
           const sig = dialogSignature(s);
@@ -189,8 +218,11 @@ export const AppDialogHost: React.FC = () => {
         return [...prev, { ...s, key: _seq }];
       });
     };
+    _hosts.push(show);
     return () => {
-      _show = null;
+      // 只摘掉自己, ⛔ 不清空栈 —— 屏内宿主卸载时根宿主必须还在
+      const i = _hosts.lastIndexOf(show);
+      if (i >= 0) _hosts.splice(i, 1);
     };
   }, []);
 
@@ -351,6 +383,8 @@ const styles = StyleSheet.create({
   btnCol: { flexDirection: 'column-reverse', alignItems: 'stretch', gap: 10 },
   btn: {
     minWidth: 80,
+    minHeight: 44,   // ux-flow 触摸目标 ≥ 44pt (2026-09-06 F1): 11+15+11 ≈ 39pt 不够
+    justifyContent: 'center',
     paddingVertical: 11,
     paddingHorizontal: 18,
     borderRadius: 10,

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -230,11 +231,11 @@ export function WHBatchTraceScreen() {
   };
 
   const handleExportReport = () => {
-    Alert.alert("成功", "追溯报告已导出");
+    appAlert("成功", "追溯报告已导出");
   };
 
   const handleRecall = () => {
-    Alert.alert("确认", "确定要发起召回吗？", [
+    appAlert("确认", "确定要发起召回吗？", [
       { text: "取消", style: "cancel" },
       {
         text: "确定",

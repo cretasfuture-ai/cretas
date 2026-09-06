@@ -1,11 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import {
-  View,
-  StyleSheet,
-  FlatList,
-  RefreshControl,
-  TouchableOpacity,
-} from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
 import {
   Text,
   Appbar,
@@ -25,6 +19,7 @@ import { alertApiClient } from '../../services/api/alertApiClient';
 // equipmentApiClient alert methods are deprecated, use alertApiClient instead
 import { useAuthStore } from '../../store/authStore';
 import { Alert } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { useTranslation } from 'react-i18next';
@@ -156,7 +151,7 @@ export default function EquipmentAlertsScreen() {
         factoryId,
         statusFilter,
       });
-      Alert.alert(t('equipmentAlerts.messages.loadFailed'), getErrorMsg(error) || t('equipmentAlerts.messages.loadError'));
+      appAlert(t('equipmentAlerts.messages.loadFailed'), getErrorMsg(error) || t('equipmentAlerts.messages.loadError'));
       setAlerts([]);
     } finally {
       setLoading(false);
@@ -178,7 +173,7 @@ export default function EquipmentAlertsScreen() {
       equipmentAlertsLogger.debug('Acknowledging alert', { alertId });
 
       if (!factoryId) {
-        Alert.alert(t('equipmentAlerts.messages.factoryIdError'), t('equipmentAlerts.messages.factoryIdMessage'));
+        appAlert(t('equipmentAlerts.messages.factoryIdError'), t('equipmentAlerts.messages.factoryIdMessage'));
         return;
       }
 
@@ -190,19 +185,19 @@ export default function EquipmentAlertsScreen() {
 
       if (response.success) {
         equipmentAlertsLogger.info('Alert acknowledged successfully', { alertId });
-        Alert.alert(t('equipmentAlerts.messages.acknowledgeSuccess'), t('equipmentAlerts.messages.acknowledgeMessage'));
+        appAlert(t('equipmentAlerts.messages.acknowledgeSuccess'), t('equipmentAlerts.messages.acknowledgeMessage'));
         // Refresh alerts list
         await fetchAlerts();
       }
     } catch (error) {
       equipmentAlertsLogger.error('Failed to acknowledge alert', error, { alertId });
       const errorMessage = getErrorMsg(error) || t('equipmentAlerts.messages.acknowledgeError');
-      Alert.alert(t('equipmentAlerts.messages.acknowledgeFailed'), errorMessage);
+      appAlert(t('equipmentAlerts.messages.acknowledgeFailed'), errorMessage);
     }
   };
 
   const handleResolve = async (alertId: string) => {
-    Alert.alert(
+    appAlert(
       t('equipmentAlerts.messages.resolveTitle'),
       t('equipmentAlerts.messages.resolvePrompt'),
       [
@@ -217,7 +212,7 @@ export default function EquipmentAlertsScreen() {
               equipmentAlertsLogger.debug('Resolving alert', { alertId });
 
               if (!factoryId) {
-                Alert.alert(t('equipmentAlerts.messages.factoryIdError'), t('equipmentAlerts.messages.factoryIdMessage'));
+                appAlert(t('equipmentAlerts.messages.factoryIdError'), t('equipmentAlerts.messages.factoryIdMessage'));
                 return;
               }
 
@@ -229,14 +224,14 @@ export default function EquipmentAlertsScreen() {
 
               if (response.success) {
                 equipmentAlertsLogger.info('Alert resolved successfully', { alertId });
-                Alert.alert(t('equipmentAlerts.messages.resolveSuccess'), t('equipmentAlerts.messages.resolveMessage'));
+                appAlert(t('equipmentAlerts.messages.resolveSuccess'), t('equipmentAlerts.messages.resolveMessage'));
                 // Refresh alerts list
                 await fetchAlerts();
               }
             } catch (error) {
               equipmentAlertsLogger.error('Failed to resolve alert', error, { alertId });
               const errorMessage = getErrorMsg(error) || t('equipmentAlerts.messages.resolveError');
-              Alert.alert(t('equipmentAlerts.messages.resolveFailed'), errorMessage);
+              appAlert(t('equipmentAlerts.messages.resolveFailed'), errorMessage);
             }
           },
         },

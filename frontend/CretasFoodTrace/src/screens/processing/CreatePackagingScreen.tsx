@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Appbar, TextInput, Button, IconButton, ActivityIndicator, Divider } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
@@ -28,8 +29,8 @@ export default function CreatePackagingScreen() {
     ];
 
     const handleNext = () => {
-        if (currentStep === 1 && !selectedProduct) return Alert.alert(t('common.hint', { defaultValue: '提示' }), t('packaging.validation.selectProduct'));
-        if (currentStep === 2 && !quantity) return Alert.alert(t('common.hint', { defaultValue: '提示' }), t('packaging.validation.enterWeight'));
+        if (currentStep === 1 && !selectedProduct) return appAlert(t('common.hint', { defaultValue: '提示' }), t('packaging.validation.selectProduct'));
+        if (currentStep === 2 && !quantity) return appAlert(t('common.hint', { defaultValue: '提示' }), t('packaging.validation.enterWeight'));
         setCurrentStep(c => c + 1);
     };
 
@@ -38,11 +39,11 @@ export default function CreatePackagingScreen() {
         try {
             // Simulate API call
             await new Promise(resolve => setTimeout(resolve, 1500));
-            Alert.alert(t('packaging.dialog.completeTitle'), t('packaging.dialog.completeMessage'), [
+            appAlert(t('packaging.dialog.completeTitle'), t('packaging.dialog.completeMessage'), [
                 { text: t('packaging.dialog.ok'), onPress: () => navigation.goBack() }
             ]);
         } catch (error) {
-            Alert.alert(t('packaging.messages.failed'), t('packaging.messages.retry'));
+            appAlert(t('packaging.messages.failed'), t('packaging.messages.retry'));
         } finally {
             setLoading(false);
         }

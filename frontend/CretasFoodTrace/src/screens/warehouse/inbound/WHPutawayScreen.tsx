@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -160,11 +161,11 @@ export function WHPutawayScreen() {
 
   const handleConfirm = async () => {
     if (!selectedLocation) {
-      Alert.alert(t('inbound.putaway.alert'), t('inbound.putaway.selectLocationAlert'));
+      appAlert(t('inbound.putaway.alert'), t('inbound.putaway.selectLocationAlert'));
       return;
     }
 
-    Alert.alert(t('inbound.putaway.confirmTitle'), t('inbound.putaway.confirmMessage'), [
+    appAlert(t('inbound.putaway.confirmTitle'), t('inbound.putaway.confirmMessage'), [
       { text: t('inbound.putaway.cancel'), style: "cancel" },
       {
         text: t('inbound.detail.confirm'),
@@ -185,7 +186,7 @@ export function WHPutawayScreen() {
             if (!resp?.success) {
               throw new Error(resp?.message || t('messages.putawayFailed'));
             }
-            Alert.alert(t('inbound.putaway.success'), t('inbound.putaway.successMessage'));
+            appAlert(t('inbound.putaway.success'), t('inbound.putaway.successMessage'));
             navigation.goBack();
           } catch (error) {
             handleError(error, { title: t('messages.putawayFailed') });

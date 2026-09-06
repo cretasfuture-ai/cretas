@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -185,7 +186,7 @@ export function WHAlertListScreen() {
         alertId,
         reason: '仓储管理员忽略',
       });
-      Alert.alert('成功', '告警已忽略');
+      appAlert('成功', '告警已忽略');
       loadAlerts(); // 刷新列表
     } catch (error) {
       handleError(error, { title: '忽略告警失败' });
@@ -201,7 +202,7 @@ export function WHAlertListScreen() {
         resolvedBy: user?.id || 0,
         resolutionNotes: '仓储管理员处理完成',
       });
-      Alert.alert('成功', '告警已处理');
+      appAlert('成功', '告警已处理');
       loadAlerts(); // 刷新列表
     } catch (error) {
       handleError(error, { title: '处理告警失败' });

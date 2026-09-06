@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Platform } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import {
   Text,
   Appbar,
@@ -267,7 +268,7 @@ export default function ProductionPlanManagementScreen() {
       }
     } catch (error) {
       productionPlanLogger.error('加载生产计划失败', error, { filterStatus });
-      Alert.alert(t('common:error', { defaultValue: '错误' }), getErrorMsg(error) || t('productionPlan.messages.loadFailed'));
+      appAlert(t('common:error', { defaultValue: '错误' }), getErrorMsg(error) || t('productionPlan.messages.loadFailed'));
       setPlans([]);
       setMaterialAdvisories({});
     } finally {
@@ -304,7 +305,7 @@ export default function ProductionPlanManagementScreen() {
     });
     setMaterialAdvisories(next);
     if (failed) {
-      Alert.alert('原料预警加载失败', '部分生产计划的原料参考值加载失败，请刷新后重试');
+      appAlert('原料预警加载失败', '部分生产计划的原料参考值加载失败，请刷新后重试');
     }
   };
 
@@ -513,17 +514,17 @@ export default function ProductionPlanManagementScreen() {
 
       if (response.success) {
         const importResult = response.data;
-        Alert.alert(
+        appAlert(
           '导入完成',
           `总计: ${importResult.totalCount} 条\n成功: ${importResult.successCount} 条\n失败: ${importResult.failureCount} 条`,
           [{ text: '确定', onPress: () => loadPlans() }]
         );
       } else {
-        Alert.alert('导入失败', response.message || '请检查文件格式');
+        appAlert('导入失败', response.message || '请检查文件格式');
       }
     } catch (error) {
       productionPlanLogger.error('Excel导入失败', error);
-      Alert.alert('导入失败', getErrorMsg(error) || '请检查文件格式');
+      appAlert('导入失败', getErrorMsg(error) || '请检查文件格式');
     } finally {
       setImportLoading(false);
     }
@@ -544,11 +545,11 @@ export default function ProductionPlanManagementScreen() {
     if (!formData.productTypeId
       || (!isInventoryProduction && !formData.plannedQuantity)
       || ((!isInventoryProduction || isCustomerInventory) && !formData.customerId)) {
-      Alert.alert(t('common.hint', { defaultValue: '提示' }), t('productionPlan.validation.requiredFields'));
+      appAlert(t('common.hint', { defaultValue: '提示' }), t('productionPlan.validation.requiredFields'));
       return;
     }
     if (formData.plannedQuantity && parseFloat(formData.plannedQuantity) <= 0) {
-      Alert.alert('提示', '计划产量必须大于 0；库存生产也可以留空，按实际报工。');
+      appAlert('提示', '计划产量必须大于 0；库存生产也可以留空，按实际报工。');
       return;
     }
 
@@ -558,7 +559,7 @@ export default function ProductionPlanManagementScreen() {
       if (totalSelected < estimatedUsage) {
         const shortage = estimatedUsage - totalSelected;
         const confirmed = await new Promise<boolean>(resolve => {
-          Alert.alert(
+          appAlert(
             '批次不足',
             `选中批次共${totalSelected.toFixed(1)}kg，还需${shortage.toFixed(1)}kg。\n\n是否继续创建？`,
             [
@@ -593,7 +594,7 @@ export default function ProductionPlanManagementScreen() {
       });
 
       if (response.success) {
-        Alert.alert('成功', `生产计划创建成功${selectedBatches.length > 0 ? `\n已预留${selectedBatches.length}个批次的库存` : ''}`);
+        appAlert('成功', `生产计划创建成功${selectedBatches.length > 0 ? `\n已预留${selectedBatches.length}个批次的库存` : ''}`);
         setModalVisible(false);
         loadPlans();
       }
@@ -604,7 +605,7 @@ export default function ProductionPlanManagementScreen() {
         plannedQuantity: formData.plannedQuantity,
         selectedBatchCount: selectedBatches.length,
       });
-      Alert.alert('错误', getErrorMsg(error) || '创建失败');
+      appAlert('错误', getErrorMsg(error) || '创建失败');
     }
   };
 
@@ -621,7 +622,7 @@ export default function ProductionPlanManagementScreen() {
 
     const actualQty = parseFloat(actualQuantity);
     if (isNaN(actualQty) || actualQty <= 0) {
-      Alert.alert('错误', '请输入有效的实际产量');
+      appAlert('错误', '请输入有效的实际产量');
       return;
     }
 
@@ -633,7 +634,7 @@ export default function ProductionPlanManagementScreen() {
       );
 
       if (response.success) {
-        Alert.alert('成功', `生产已完成，实际产量: ${actualQty} kg`);
+        appAlert('成功', `生产已完成，实际产量: ${actualQty} kg`);
         setShowCompleteDialog(false);
         setCompletingPlan(null);
         setActualQuantity('');
@@ -644,7 +645,7 @@ export default function ProductionPlanManagementScreen() {
         planId: completingPlan.id,
         actualQuantity: actualQty,
       });
-      Alert.alert('错误', getErrorMsg(error) || '操作失败');
+      appAlert('错误', getErrorMsg(error) || '操作失败');
     } finally {
       setCompleteLoading(false);
     }

@@ -1,11 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Dimensions,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl, Dimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import {
   Text,
@@ -24,6 +18,7 @@ import { ProcessingStackParamList } from '../../types/navigation';
 import { equipmentApiClient, type EquipmentStatistics } from '../../services/api/equipmentApiClient';
 import { useAuthStore } from '../../store/authStore';
 import { Alert } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 
@@ -91,7 +86,7 @@ export default function EquipmentMonitoringScreen() {
       });
 
       const errorMessage = getErrorMsg(error) || t('equipmentMonitoring.messages.loadError');
-      Alert.alert(t('equipmentMonitoring.messages.loadFailed'), errorMessage);
+      appAlert(t('equipmentMonitoring.messages.loadFailed'), errorMessage);
 
       // No fallback to mock data, set to null to trigger error UI
       setStatistics(null);

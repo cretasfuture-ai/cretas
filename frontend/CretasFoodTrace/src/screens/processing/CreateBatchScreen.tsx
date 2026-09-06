@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TextInput as RNTextInput } from 'react-native';
+import { View, StyleSheet, ScrollView, TextInput as RNTextInput } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Appbar, TextInput, ActivityIndicator } from 'react-native-paper';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
@@ -82,17 +83,17 @@ export default function CreateBatchScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!materialType.trim() || !materialTypeId) return Alert.alert('验证错误', '请选择原料类型');
-    if (!materialQuantity || Number(materialQuantity) <= 0) return Alert.alert('验证错误', '请输入有效的原料数量');
-    if (!materialCost || Number(materialCost) <= 0) return Alert.alert('验证错误', '请输入原料成本');
-    if (!supplierName.trim() || !supplierId) return Alert.alert('验证错误', '请选择供应商');
-    if (!supervisorId) return Alert.alert('验证错误', '请选择生产负责人');
+    if (!materialType.trim() || !materialTypeId) return appAlert('验证错误', '请选择原料类型');
+    if (!materialQuantity || Number(materialQuantity) <= 0) return appAlert('验证错误', '请输入有效的原料数量');
+    if (!materialCost || Number(materialCost) <= 0) return appAlert('验证错误', '请输入原料成本');
+    if (!supplierName.trim() || !supplierId) return appAlert('验证错误', '请选择供应商');
+    if (!supervisorId) return appAlert('验证错误', '请选择生产负责人');
 
     try {
       setLoading(true);
       // 生成唯一的批次号: MB-{工厂ID}-{时间戳}
       if (!user?.factoryId) {
-        Alert.alert('错误', '无法获取工厂信息，请重新登录');
+        appAlert('错误', '无法获取工厂信息，请重新登录');
         setLoading(false);
         return;
       }
@@ -135,7 +136,7 @@ export default function CreateBatchScreen() {
       // 「普通批次页面已关闭无来源入库与续入」), 对应的 `CreateBatch` 路由也已下线,
       // 本屏现在只经 `EditBatch`(必带 batchId)进入。
       if (!isEditMode) {
-        Alert.alert(
+        appAlert(
           '原料入库已改流程',
           '原料入库请由仓储角色从「待收货 / 无单入库」进入；本页只用于编辑已有批次。',
           [{ text: '返回', onPress: () => navigation.goBack() }],
@@ -143,7 +144,7 @@ export default function CreateBatchScreen() {
         return;
       }
       await materialBatchApiClient.updateBatch(batchId!, batchData);
-      Alert.alert('成功', '批次信息已更新！', [{ text: '返回', onPress: () => navigation.goBack() }]);
+      appAlert('成功', '批次信息已更新！', [{ text: '返回', onPress: () => navigation.goBack() }]);
     } catch (error) {
       handleError(error, { showAlert: true, title: isEditMode ? '更新失败' : '入库失败', logError: true });
     } finally {

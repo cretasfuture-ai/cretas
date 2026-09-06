@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import {
   Text,
   Appbar,
@@ -214,7 +215,7 @@ export default function MaterialBatchManagementScreen() {
 
       const factoryId = user?.factoryId || user?.factoryUser?.factoryId;
       if (!factoryId) {
-        Alert.alert('错误', '无法获取工厂信息');
+        appAlert('错误', '无法获取工厂信息');
         return;
       }
 
@@ -239,7 +240,7 @@ export default function MaterialBatchManagementScreen() {
       const isAvailable = await Sharing.isAvailableAsync();
 
       if (isAvailable) {
-        Alert.alert(
+        appAlert(
           '导出成功',
           `库存数据已导出\n\n文件大小：${(fileSize / 1024).toFixed(2)} KB`,
           [
@@ -251,14 +252,14 @@ export default function MaterialBatchManagementScreen() {
                   await Sharing.shareAsync(downloadResult.uri);
                 } catch (error) {
                   materialBatchLogger.error('分享文件失败', error);
-                  Alert.alert('分享失败', '无法分享文件');
+                  appAlert('分享失败', '无法分享文件');
                 }
               },
             },
           ]
         );
       } else {
-        Alert.alert('导出成功', `文件已保存到：${downloadResult.uri}`);
+        appAlert('导出成功', `文件已保存到：${downloadResult.uri}`);
       }
     } catch (error) {
       materialBatchLogger.error('导出库存数据失败', error);
@@ -285,7 +286,7 @@ export default function MaterialBatchManagementScreen() {
       await materialBatchApiClient.deleteBatch(selectedBatch.id, user?.factoryId);
       materialBatchLogger.info('批次删除成功', { batchId: selectedBatch.id });
 
-      Alert.alert('删除成功', `批次 ${selectedBatch.batchNumber} 已删除`);
+      appAlert('删除成功', `批次 ${selectedBatch.batchNumber} 已删除`);
 
       setShowDeleteDialog(false);
       setSelectedBatch(null);
@@ -294,7 +295,7 @@ export default function MaterialBatchManagementScreen() {
       await loadBatches();
     } catch (error) {
       materialBatchLogger.error('删除批次失败', error, { batchId: selectedBatch.id });
-      Alert.alert('删除失败', getErrorMsg(error) || '删除批次失败，请重试');
+      appAlert('删除失败', getErrorMsg(error) || '删除批次失败，请重试');
     } finally {
       setLoading(false);
     }
@@ -336,7 +337,7 @@ export default function MaterialBatchManagementScreen() {
       );
 
       materialBatchLogger.info('转冻品成功', { batchId: batch.id });
-      Alert.alert(
+      appAlert(
         '转换成功',
         `批次 ${batch.batchNumber} 已成功转为冻品\n保质期已延长，存储位置已更新`
       );
@@ -345,7 +346,7 @@ export default function MaterialBatchManagementScreen() {
       await loadBatches();
     } catch (error) {
       materialBatchLogger.error('转冻品失败', error, { batchId: batch.id });
-      Alert.alert(
+      appAlert(
         '转换失败',
         getErrorMsg(error) || '转冻品失败，请重试'
       );
@@ -371,7 +372,7 @@ export default function MaterialBatchManagementScreen() {
       );
 
       materialBatchLogger.info('撤销冻品成功', { batchId: batch.id });
-      Alert.alert(
+      appAlert(
         '撤销成功',
         `批次 ${batch.batchNumber} 已恢复为鲜品状态`
       );
@@ -386,7 +387,7 @@ export default function MaterialBatchManagementScreen() {
     } catch (error) {
       materialBatchLogger.error('撤销冻品失败', error, { batchId: batch.id });
       const errorMsg = getErrorMsg(error) || '撤销失败';
-      Alert.alert('撤销失败', errorMsg);
+      appAlert('撤销失败', errorMsg);
     } finally {
       setUndoingFrozen(false);
     }
@@ -518,7 +519,7 @@ export default function MaterialBatchManagementScreen() {
                 mode="contained"
                 icon="alert-circle-check"
                 onPress={async () => {
-                  Alert.alert(
+                  appAlert(
                     '批量处理过期批次',
                     `确定要处理 ${batches.length} 个过期批次吗？\n\n系统将自动标记这些批次为已过期状态。`,
                     [
@@ -535,7 +536,7 @@ export default function MaterialBatchManagementScreen() {
 
                             materialBatchLogger.info('过期批次处理成功', { count: batches.length });
 
-                            Alert.alert(
+                            appAlert(
                               '处理成功',
                               `已成功处理 ${batches.length} 个过期批次`,
                               [
@@ -550,7 +551,7 @@ export default function MaterialBatchManagementScreen() {
                             );
                           } catch (error) {
                             materialBatchLogger.error('处理过期批次失败', error);
-                            Alert.alert('处理失败', getErrorMsg(error) || '无法处理过期批次，请稍后重试');
+                            appAlert('处理失败', getErrorMsg(error) || '无法处理过期批次，请稍后重试');
                           } finally {
                             setHandlingExpired(false);
                           }
@@ -799,7 +800,7 @@ export default function MaterialBatchManagementScreen() {
                         mode="outlined"
                         icon="snowflake"
                         onPress={() => {
-                          Alert.alert(
+                          appAlert(
                             '转为冻品',
                             `确定将批次 ${batch.batchNumber} 转为冻品吗？\n这将延长保质期并更新库存状态。`,
                             [

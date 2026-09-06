@@ -4,15 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Switch,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Application from 'expo-application';
@@ -57,12 +50,12 @@ export default function QISettingsScreen() {
   };
 
   const handleClearCache = () => {
-    Alert.alert(t('settings.clearCache'), t('settings.confirmClearCache'), [
+    appAlert(t('settings.clearCache'), t('settings.confirmClearCache'), [
       { text: t('settings.cancel'), style: 'cancel' },
       {
         text: t('settings.confirm'),
         onPress: () => {
-          Alert.alert(t('settings.success'), t('settings.cacheCleared'));
+          appAlert(t('settings.success'), t('settings.cacheCleared'));
         },
       },
     ]);
@@ -94,7 +87,7 @@ export default function QISettingsScreen() {
           label: t('settings.defaultSampleSize'),
           type: 'value',
           value: t('settings.sampleSizeValue'),
-          onPress: () => Alert.alert(t('settings.setSampleSize'), t('settings.inDevelopment')),
+          onPress: () => appAlert(t('settings.setSampleSize'), t('settings.inDevelopment')),
         },
       ],
     },
@@ -143,7 +136,7 @@ export default function QISettingsScreen() {
           icon: 'cloud-upload-outline',
           label: t('settings.syncNow'),
           type: 'action',
-          onPress: () => Alert.alert(t('settings.sync'), t('settings.syncing')),
+          onPress: () => appAlert(t('settings.sync'), t('settings.syncing')),
         },
         {
           id: 'lastSync',
@@ -165,7 +158,7 @@ export default function QISettingsScreen() {
           icon: 'key-outline',
           label: t('settings.changePassword'),
           type: 'action',
-          onPress: () => Alert.alert(t('settings.changePassword'), t('settings.inDevelopment')),
+          onPress: () => appAlert(t('settings.changePassword'), t('settings.inDevelopment')),
         },
       ],
     },
@@ -253,7 +246,7 @@ export default function QISettingsScreen() {
       <TouchableOpacity
         style={styles.resetBtn}
         onPress={() =>
-          Alert.alert(t('settings.resetSettings'), t('settings.confirmReset'), [
+          appAlert(t('settings.resetSettings'), t('settings.confirmReset'), [
             { text: t('settings.cancel'), style: 'cancel' },
             {
               text: t('settings.confirm'),
@@ -268,7 +261,7 @@ export default function QISettingsScreen() {
                   autoSync: true,
                   darkMode: false,
                 });
-                Alert.alert(t('settings.success'), t('settings.settingsReset'));
+                appAlert(t('settings.success'), t('settings.settingsReset'));
               },
             },
           ])

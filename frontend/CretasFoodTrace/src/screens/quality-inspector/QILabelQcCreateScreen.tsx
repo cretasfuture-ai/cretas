@@ -1,14 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Alert,
-  Image,
-  Modal,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { Image, Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
@@ -169,7 +161,7 @@ export default function QILabelQcCreateScreen() {
   const selectWebPhotos = async () => {
     const availableSlots = MAX_PHOTOS - photos.length;
     if (availableSlots <= 0) {
-      Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
+      appAlert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -206,7 +198,7 @@ export default function QILabelQcCreateScreen() {
       }
       if (rejectedReasons.length > 0) {
         setTimeout(() => {
-          Alert.alert(
+          appAlert(
             '部分照片需要重拍',
             `${rejectedReasons[0]}${rejectedReasons.length > 1 ? `\n另有 ${rejectedReasons.length - 1} 张也未通过。` : ''}`,
           );
@@ -218,7 +210,7 @@ export default function QILabelQcCreateScreen() {
 
   const requestPhoto = () => {
     if (photos.length >= MAX_PHOTOS) {
-      Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
+      appAlert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
       return;
     }
     if (Platform.OS === 'web') {
@@ -237,7 +229,7 @@ export default function QILabelQcCreateScreen() {
 
   const removePhoto = (index: number) => {
     if (formLocked) {
-      Alert.alert('任务已创建', '上传失败后请直接重试，不能再更改已绑定的照片');
+      appAlert('任务已创建', '上传失败后请直接重试，不能再更改已绑定的照片');
       return;
     }
     setQualityAdvisory(null);
