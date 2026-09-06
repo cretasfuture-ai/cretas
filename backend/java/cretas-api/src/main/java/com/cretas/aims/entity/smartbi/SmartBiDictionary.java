@@ -67,7 +67,7 @@ public class SmartBiDictionary extends BaseEntity {
      * 别名列表 (JSON 数组)
      * 如：["销售", "营销部", "销售团队"]
      */
-    @Column(name = "aliases", columnDefinition = "JSON")
+    @Column(name = "aliases", columnDefinition = "jsonb")
     private String aliases;
 
     /**
@@ -81,7 +81,7 @@ public class SmartBiDictionary extends BaseEntity {
      * 扩展元数据 (JSON)
      * 如指标的单位、聚合方式等
      */
-    @Column(name = "metadata", columnDefinition = "JSON")
+    @Column(name = "metadata", columnDefinition = "jsonb")
     private String metadata;
 
     /**

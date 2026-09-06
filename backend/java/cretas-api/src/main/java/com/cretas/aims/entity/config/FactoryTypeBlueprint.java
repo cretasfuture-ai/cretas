@@ -44,35 +44,35 @@ public class FactoryTypeBlueprint extends BaseEntity {
      * 默认配置JSON (存储为字符串)
      * 包含：dailyCapacity, shiftCount, qualityStandards, temperatureControl等
      */
-    @Column(name = "default_config", columnDefinition = "JSON")
+    @Column(name = "default_config", columnDefinition = "jsonb")
     private String defaultConfig;
 
     /**
      * 表单模板配置 (存储为字符串)
      * 数组格式：[{name, type, fields}]
      */
-    @Column(name = "form_templates", columnDefinition = "JSON")
+    @Column(name = "form_templates", columnDefinition = "jsonb")
     private String formTemplates;
 
     /**
      * 规则模板配置 (存储为字符串)
      * 数组格式：[{name, type, threshold}]
      */
-    @Column(name = "rule_templates", columnDefinition = "JSON")
+    @Column(name = "rule_templates", columnDefinition = "jsonb")
     private String ruleTemplates;
 
     /**
      * 产品类型模板 (存储为字符串)
      * 数组格式：[{name, category, processSteps}]
      */
-    @Column(name = "product_type_templates", columnDefinition = "JSON")
+    @Column(name = "product_type_templates", columnDefinition = "jsonb")
     private String productTypeTemplates;
 
     /**
      * 部门模板 (存储为字符串)
      * 数组格式：[{name, type}]
      */
-    @Column(name = "department_templates", columnDefinition = "JSON")
+    @Column(name = "department_templates", columnDefinition = "jsonb")
     private String departmentTemplates;
 
     /**

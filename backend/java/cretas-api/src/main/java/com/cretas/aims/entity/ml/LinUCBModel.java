@@ -60,20 +60,20 @@ public class LinUCBModel extends BaseEntity {
      * A矩阵 (JSON格式的二维数组)
      * 用于计算 theta = A^(-1) * b
      */
-    @Column(name = "matrix_a", columnDefinition = "JSON", nullable = false)
+    @Column(name = "matrix_a", columnDefinition = "jsonb", nullable = false)
     private String matrixA;
 
     /**
      * A逆矩阵 (JSON格式的二维数组)
      * 预计算的A^(-1)，用于加速UCB计算
      */
-    @Column(name = "matrix_a_inverse", columnDefinition = "JSON", nullable = false)
+    @Column(name = "matrix_a_inverse", columnDefinition = "jsonb", nullable = false)
     private String matrixAInverse;
 
     /**
      * b向量 (JSON格式的一维数组)
      */
-    @Column(name = "vector_b", columnDefinition = "JSON", nullable = false)
+    @Column(name = "vector_b", columnDefinition = "jsonb", nullable = false)
     private String vectorB;
 
     /**

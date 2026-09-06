@@ -116,7 +116,7 @@ public class SystemEnum extends BaseEntity {
      * - 角色枚举: {"level": 10, "department": "production", "permissions": ["read", "write"]}
      * - 状态枚举: {"allowedTransitions": ["IN_PROGRESS", "CANCELLED"], "isFinal": false}
      */
-    @Column(name = "metadata", columnDefinition = "JSON")
+    @Column(name = "metadata", columnDefinition = "jsonb")
     private String metadata;
 
     /**

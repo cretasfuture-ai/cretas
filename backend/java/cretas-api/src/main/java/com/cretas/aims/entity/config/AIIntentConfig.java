@@ -101,7 +101,7 @@ public class AIIntentConfig extends BaseEntity {
      * 如: ["factory_super_admin", "dispatcher", "manager"]
      * 空数组或null表示所有角色都可以
      */
-    @Column(name = "required_roles", columnDefinition = "JSON")
+    @Column(name = "required_roles", columnDefinition = "jsonb")
     private String requiredRoles;
 
     /**
@@ -146,7 +146,7 @@ public class AIIntentConfig extends BaseEntity {
      * 用于意图识别的关键词匹配
      * 如: ["成本", "分析", "预算", "费用"]
      */
-    @Column(name = "keywords", columnDefinition = "JSON")
+    @Column(name = "keywords", columnDefinition = "jsonb")
     private String keywords;
 
     /**
@@ -154,7 +154,7 @@ public class AIIntentConfig extends BaseEntity {
      * 匹配时会扣分，防止意图误匹配
      * 如: SCALE_DELETE 不应匹配 ["列表", "查看"]
      */
-    @Column(name = "negative_keywords", columnDefinition = "JSON")
+    @Column(name = "negative_keywords", columnDefinition = "jsonb")
     private String negativeKeywords;
 
     /**
@@ -184,7 +184,7 @@ public class AIIntentConfig extends BaseEntity {
      * 用于 LLM Reranking 时提供 Few-shot 示例
      * 如: ["查看今天的成本", "这周成本多少", "分析一下成本情况"]
      */
-    @Column(name = "example_queries", columnDefinition = "JSON")
+    @Column(name = "example_queries", columnDefinition = "jsonb")
     private String exampleQueries;
 
     /**
@@ -192,7 +192,7 @@ public class AIIntentConfig extends BaseEntity {
      * 明确不应该匹配到此意图的表达
      * 如: ["删除成本记录", "修改成本数据"]
      */
-    @Column(name = "negative_examples", columnDefinition = "JSON")
+    @Column(name = "negative_examples", columnDefinition = "jsonb")
     private String negativeExamples;
 
     /**
@@ -245,7 +245,7 @@ public class AIIntentConfig extends BaseEntity {
     /**
      * 扩展元数据 (JSON)
      */
-    @Column(name = "metadata", columnDefinition = "JSON")
+    @Column(name = "metadata", columnDefinition = "jsonb")
     private String metadata;
 
     // ==================== SmartBI 专用字段 ====================
@@ -279,15 +279,15 @@ public class AIIntentConfig extends BaseEntity {
      * Legacy SmartBI regex-pattern list. Kept on the canonical entity so the
      * read-only compatibility API does not lose populated historical columns.
      */
-    @Column(name = "patterns", columnDefinition = "JSON")
+    @Column(name = "patterns", columnDefinition = "jsonb")
     private String patterns;
 
     /** Legacy SmartBI example list (distinct from canonical example_queries). */
-    @Column(name = "examples", columnDefinition = "JSON")
+    @Column(name = "examples", columnDefinition = "jsonb")
     private String examples;
 
     /** Legacy SmartBI follow-up suggestions. */
-    @Column(name = "follow_up_questions", columnDefinition = "JSON")
+    @Column(name = "follow_up_questions", columnDefinition = "jsonb")
     private String followUpQuestions;
 
     /** Legacy SmartBI analysis service binding. */
@@ -317,7 +317,7 @@ public class AIIntentConfig extends BaseEntity {
      * 上个版本的完整配置快照 (JSON)
      * 用于一键回滚
      */
-    @Column(name = "previous_snapshot", columnDefinition = "JSON")
+    @Column(name = "previous_snapshot", columnDefinition = "jsonb")
     private String previousSnapshot;
 
     // ==================== 语义层字段 ====================

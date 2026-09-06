@@ -16,7 +16,7 @@ public class CanvasDDLLog {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "id", updatable = false, nullable = false)
+    @Column(name = "id", updatable = false, nullable = false, columnDefinition = "uuid")
     private String id;
 
     @Column(name = "factory_id", length = 50)

@@ -96,7 +96,7 @@ public class AiAgentRule extends BaseEntity {
      *   ]
      * }
      */
-    @Column(name = "tool_chain_config", columnDefinition = "JSON", nullable = false)
+    @Column(name = "tool_chain_config", columnDefinition = "jsonb", nullable = false)
     private String toolChainConfig;
 
     /**

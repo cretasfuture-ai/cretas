@@ -57,21 +57,21 @@ public class ScaleProtocolConfig extends BaseEntity {
      * 串口配置 (JSON)
      * 格式: {"baudRate":9600, "dataBits":8, "stopBits":1, "parity":"NONE"}
      */
-    @Column(name = "serial_config", columnDefinition = "JSON")
+    @Column(name = "serial_config", columnDefinition = "jsonb")
     private String serialConfig;
 
     /**
      * API配置 (JSON)
      * 格式: {"baseUrl":"", "authType":"BEARER", "headers":{}}
      */
-    @Column(name = "api_config", columnDefinition = "JSON")
+    @Column(name = "api_config", columnDefinition = "jsonb")
     private String apiConfig;
 
     /**
      * 数据帧格式定义 (JSON)
      * 包含帧结构、字段解析规则等
      */
-    @Column(name = "frame_format", columnDefinition = "JSON", nullable = false)
+    @Column(name = "frame_format", columnDefinition = "jsonb", nullable = false)
     private String frameFormat;
 
     /**
@@ -135,7 +135,7 @@ public class ScaleProtocolConfig extends BaseEntity {
      * Modbus 配置 (JSON)
      * 格式: {"slaveId":1, "functionCode":3, "registerAddress":0, "registerCount":2}
      */
-    @Column(name = "modbus_config", columnDefinition = "JSON")
+    @Column(name = "modbus_config", columnDefinition = "jsonb")
     private String modbusConfig;
 
     /**

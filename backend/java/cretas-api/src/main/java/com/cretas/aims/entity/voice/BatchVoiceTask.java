@@ -166,7 +166,7 @@ public class BatchVoiceTask extends BaseEntity {
     /**
      * 结果JSON (包含每个文件的识别结果)
      */
-    @Column(name = "result_json", columnDefinition = "LONGTEXT")
+    @Column(name = "result_json", columnDefinition = "TEXT")
     private String resultJson;
 
     /**

@@ -68,14 +68,14 @@ public class SmartBiSchemaHistory extends BaseEntity {
      * Previous schema definition (JSON)
      * Structure: { "fields": [...], "config": {...} }
      */
-    @Column(name = "old_schema", columnDefinition = "JSON")
+    @Column(name = "old_schema", columnDefinition = "jsonb")
     private String oldSchema;
 
     /**
      * New schema definition (JSON)
      * Structure: { "fields": [...], "config": {...} }
      */
-    @Column(name = "new_schema", columnDefinition = "JSON")
+    @Column(name = "new_schema", columnDefinition = "jsonb")
     private String newSchema;
 
     /**

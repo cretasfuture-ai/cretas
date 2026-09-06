@@ -80,7 +80,7 @@ public class AIReportPromptConfig extends BaseEntity {
      * 定义AI分析报告时应关注的重点方向
      * 如: ["成本分析", "产量趋势", "质量指标", "效率提升"]
      */
-    @Column(name = "analysis_directions", columnDefinition = "JSON")
+    @Column(name = "analysis_directions", columnDefinition = "jsonb")
     private String analysisDirections;
 
     /**
@@ -134,7 +134,7 @@ public class AIReportPromptConfig extends BaseEntity {
     /**
      * 扩展元数据 (JSON)
      */
-    @Column(name = "metadata", columnDefinition = "JSON")
+    @Column(name = "metadata", columnDefinition = "jsonb")
     private String metadata;
 
     /**

@@ -68,7 +68,7 @@ public class ConversationMemory extends BaseEntity {
      * 存储对话中提到的实体信息，用于指代消解
      * 格式: {"BATCH": {...}, "SUPPLIER": {...}, ...}
      */
-    @Column(name = "entity_slots", columnDefinition = "json")
+    @Column(name = "entity_slots", columnDefinition = "jsonb")
     @Convert(converter = EntitySlotsConverter.class)
     private Map<String, EntitySlotData> entitySlots;
 
@@ -76,7 +76,7 @@ public class ConversationMemory extends BaseEntity {
      * 最近消息列表
      * 保留最近 6 轮原始消息
      */
-    @Column(name = "recent_messages", columnDefinition = "json")
+    @Column(name = "recent_messages", columnDefinition = "jsonb")
     @Convert(converter = MessageListConverter.class)
     private List<MessageData> recentMessages;
 
@@ -97,7 +97,7 @@ public class ConversationMemory extends BaseEntity {
      * 用户偏好设置
      * 存储用户的个性化偏好，如常用查询时间范围等
      */
-    @Column(name = "user_preferences", columnDefinition = "json")
+    @Column(name = "user_preferences", columnDefinition = "jsonb")
     @Convert(converter = JsonMapConverter.class)
     private Map<String, Object> userPreferences;
 

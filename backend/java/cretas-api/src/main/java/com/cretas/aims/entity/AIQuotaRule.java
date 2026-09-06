@@ -57,7 +57,7 @@ public class AIQuotaRule extends BaseEntity {
      * JSON格式: {"dispatcher": 2.0, "quality_inspector": 1.5, "worker": 1.0}
      * 最终配额 = weeklyQuota * multiplier
      */
-    @Column(name = "role_multipliers", columnDefinition = "json")
+    @Column(name = "role_multipliers", columnDefinition = "jsonb")
     private String roleMultipliers;
 
     /**

@@ -79,7 +79,7 @@ public class AppDecorationSession extends BaseEntity {
      * AI生成的配置 JSON
      * 包含模块配置、主题配置等
      */
-    @Column(name = "generated_config", columnDefinition = "JSON")
+    @Column(name = "generated_config", columnDefinition = "jsonb")
     private String generatedConfig;
 
     /**
@@ -97,7 +97,7 @@ public class AppDecorationSession extends BaseEntity {
      *   { "role": "assistant", "content": "好的，已将今日统计模块移到首位" }
      * ]
      */
-    @Column(name = "conversation_history", columnDefinition = "JSON")
+    @Column(name = "conversation_history", columnDefinition = "jsonb")
     private String conversationHistory;
 
     /**

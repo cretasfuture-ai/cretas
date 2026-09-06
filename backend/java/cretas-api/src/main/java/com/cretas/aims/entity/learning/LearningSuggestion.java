@@ -63,7 +63,7 @@ public class LearningSuggestion {
 
     // ==================== Supporting Data ====================
 
-    @Column(name = "supporting_samples", columnDefinition = "JSON")
+    @Column(name = "supporting_samples", columnDefinition = "jsonb")
     private String supportingSamples;
 
     @Column(name = "sample_count")

@@ -79,14 +79,14 @@ public class StateMachine extends BaseEntity {
      * 状态定义 JSON
      * 格式: [{"code":"pending", "name":"待处理", "isFinal":false, "color":"#FFA500"}]
      */
-    @Column(name = "states_json", columnDefinition = "JSON", nullable = false)
+    @Column(name = "states_json", columnDefinition = "jsonb", nullable = false)
     private String statesJson;
 
     /**
      * 状态转换定义 JSON
      * 格式: [{"from":"pending", "to":"approved", "event":"approve", "guard":"role == 'admin'", "action":"notify"}]
      */
-    @Column(name = "transitions_json", columnDefinition = "JSON", nullable = false)
+    @Column(name = "transitions_json", columnDefinition = "jsonb", nullable = false)
     private String transitionsJson;
 
     /**

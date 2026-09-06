@@ -24,16 +24,16 @@ public class WeightHistory {
     @Column(name = "adjusted_at", nullable = false)
     private LocalDateTime adjustedAt;
 
-    @Column(name = "weights_before", columnDefinition = "JSON")
+    @Column(name = "weights_before", columnDefinition = "jsonb")
     private String weightsBefore;
 
-    @Column(name = "weights_after", columnDefinition = "JSON")
+    @Column(name = "weights_after", columnDefinition = "jsonb")
     private String weightsAfter;
 
     @Column(name = "trigger_reason", length = 200)
     private String triggerReason;
 
-    @Column(name = "performance_metrics", columnDefinition = "JSON")
+    @Column(name = "performance_metrics", columnDefinition = "jsonb")
     private String performanceMetrics;
 
     @Column(name = "created_at")

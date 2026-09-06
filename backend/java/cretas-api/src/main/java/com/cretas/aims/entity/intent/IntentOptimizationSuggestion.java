@@ -85,7 +85,7 @@ public class IntentOptimizationSuggestion extends BaseEntity {
     /**
      * 支持该建议的用户输入样例 (JSON Array)
      */
-    @Column(name = "supporting_examples", columnDefinition = "JSON")
+    @Column(name = "supporting_examples", columnDefinition = "jsonb")
     private String supportingExamples;
 
     /**
@@ -158,7 +158,7 @@ public class IntentOptimizationSuggestion extends BaseEntity {
     /**
      * LLM建议的关键词 (JSON数组, CREATE_INTENT 类型专用)
      */
-    @Column(name = "suggested_keywords", columnDefinition = "JSON")
+    @Column(name = "suggested_keywords", columnDefinition = "jsonb")
     private String suggestedKeywords;
 
     /**

@@ -68,10 +68,10 @@ public class ActiveLearningSample {
     @Column(name = "match_method", length = 20)
     private String matchMethod;
 
-    @Column(name = "top_candidates", columnDefinition = "JSON")
+    @Column(name = "top_candidates", columnDefinition = "jsonb")
     private String topCandidates;
 
-    @Column(name = "matched_keywords", columnDefinition = "JSON")
+    @Column(name = "matched_keywords", columnDefinition = "jsonb")
     private String matchedKeywords;
 
     // ==================== Clustering Info ====================

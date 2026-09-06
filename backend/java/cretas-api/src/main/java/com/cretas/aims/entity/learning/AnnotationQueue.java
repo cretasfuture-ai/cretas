@@ -59,7 +59,7 @@ public class AnnotationQueue {
     @Column(name = "predicted_confidence", precision = 5, scale = 4)
     private BigDecimal predictedConfidence;
 
-    @Column(name = "alternative_intents", columnDefinition = "JSON")
+    @Column(name = "alternative_intents", columnDefinition = "jsonb")
     private String alternativeIntents;
 
     // ==================== Annotation Status ====================

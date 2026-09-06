@@ -97,10 +97,10 @@ public class BehaviorCalibrationMetrics extends BaseEntity {
     @Column(name = "avg_execution_time_ms")
     private Integer avgExecutionTimeMs;
 
-    @Column(name = "tool_distribution", columnDefinition = "JSON")
+    @Column(name = "tool_distribution", columnDefinition = "jsonb")
     private String toolDistribution;
 
-    @Column(name = "error_distribution", columnDefinition = "JSON")
+    @Column(name = "error_distribution", columnDefinition = "jsonb")
     private String errorDistribution;
 
     /**

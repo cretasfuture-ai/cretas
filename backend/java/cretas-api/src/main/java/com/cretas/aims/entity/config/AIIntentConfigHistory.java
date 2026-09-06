@@ -63,7 +63,7 @@ public class AIIntentConfigHistory {
     /**
      * 完整配置快照 (JSON)
      */
-    @Column(name = "snapshot", columnDefinition = "JSON", nullable = false)
+    @Column(name = "snapshot", columnDefinition = "jsonb", nullable = false)
     private String snapshot;
 
     /**
@@ -102,7 +102,7 @@ public class AIIntentConfigHistory {
     /**
      * 变更的字段列表 (JSON)
      */
-    @Column(name = "changed_fields", columnDefinition = "JSON")
+    @Column(name = "changed_fields", columnDefinition = "jsonb")
     private String changedFields;
 
     /**

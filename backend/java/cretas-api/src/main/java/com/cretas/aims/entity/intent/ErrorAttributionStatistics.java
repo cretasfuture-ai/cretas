@@ -192,13 +192,13 @@ public class ErrorAttributionStatistics extends BaseEntity {
     /**
      * 按意图分类的统计 {category: {count, successRate}}
      */
-    @Column(name = "intent_category_stats", columnDefinition = "JSON")
+    @Column(name = "intent_category_stats", columnDefinition = "jsonb")
     private String intentCategoryStats;
 
     /**
      * 按匹配方法的统计 {method: {count, avgConfidence}}
      */
-    @Column(name = "match_method_stats", columnDefinition = "JSON")
+    @Column(name = "match_method_stats", columnDefinition = "jsonb")
     private String matchMethodStats;
 
     // ==================== 置信度分布 ====================
@@ -212,7 +212,7 @@ public class ErrorAttributionStatistics extends BaseEntity {
     /**
      * 置信度分布 {range: count}
      */
-    @Column(name = "confidence_distribution", columnDefinition = "JSON")
+    @Column(name = "confidence_distribution", columnDefinition = "jsonb")
     private String confidenceDistribution;
 
     // ==================== 便捷方法 ====================

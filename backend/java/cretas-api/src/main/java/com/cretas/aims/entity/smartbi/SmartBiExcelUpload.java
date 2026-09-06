@@ -100,14 +100,14 @@ public class SmartBiExcelUpload extends BaseEntity {
      * Resolved field mappings JSON
      * Structure: { "sourceColumn": "targetField", ... }
      */
-    @Column(name = "field_mappings", columnDefinition = "JSON")
+    @Column(name = "field_mappings", columnDefinition = "jsonb")
     private String fieldMappings;
 
     /**
      * Analyzed data features JSON
      * Structure: { "dataType": "sales", "timeRange": {...}, "dimensions": [...] }
      */
-    @Column(name = "data_features", columnDefinition = "JSON")
+    @Column(name = "data_features", columnDefinition = "jsonb")
     private String dataFeatures;
 
     /**

@@ -66,7 +66,7 @@ public class ScaleBrandModel extends BaseEntity {
      * 支持的协议ID列表 (JSON数组)
      * 如: ["uuid1", "uuid2"]
      */
-    @Column(name = "supported_protocol_ids", columnDefinition = "JSON")
+    @Column(name = "supported_protocol_ids", columnDefinition = "jsonb")
     private String supportedProtocolIds;
 
     /**

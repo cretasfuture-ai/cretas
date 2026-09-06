@@ -49,7 +49,7 @@ public class ToolCallRecord extends BaseEntity {
     @Column(name = "tool_name", length = 128, nullable = false)
     private String toolName;
 
-    @Column(name = "tool_parameters", columnDefinition = "JSON")
+    @Column(name = "tool_parameters", columnDefinition = "jsonb")
     private String toolParameters;
 
     @Column(name = "parameters_hash", length = 64)

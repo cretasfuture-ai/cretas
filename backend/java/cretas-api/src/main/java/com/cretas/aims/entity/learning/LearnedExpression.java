@@ -145,7 +145,7 @@ public class LearnedExpression {
      * 768维向量 (768*4=3072 bytes)
      * 使用 GTE-base-zh 模型生成
      */
-    @Column(name = "embedding_vector", columnDefinition = "MEDIUMBLOB")
+    @Column(name = "embedding_vector", columnDefinition = "bytea")
     private byte[] embeddingVector;
 
     /**

@@ -71,14 +71,14 @@ public class SmartBiAnalysisCache extends BaseEntity {
      * Chart configuration and data JSON
      * Structure: { "type": "bar", "data": {...}, "options": {...} }
      */
-    @Column(name = "chart_data", columnDefinition = "JSON")
+    @Column(name = "chart_data", columnDefinition = "jsonb")
     private String chartData;
 
     /**
      * KPI metrics JSON
      * Structure: { "totalSales": 1000000, "growth": 0.15, ... }
      */
-    @Column(name = "kpi_data", columnDefinition = "JSON")
+    @Column(name = "kpi_data", columnDefinition = "jsonb")
     private String kpiData;
 
     /**

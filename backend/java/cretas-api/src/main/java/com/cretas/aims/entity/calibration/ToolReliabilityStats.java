@@ -64,7 +64,7 @@ public class ToolReliabilityStats extends BaseEntity {
     @Column(name = "success_rate", precision = 5, scale = 2)
     private BigDecimal successRate;
 
-    @Column(name = "common_errors", columnDefinition = "JSON")
+    @Column(name = "common_errors", columnDefinition = "jsonb")
     private String commonErrors;
 
     /**

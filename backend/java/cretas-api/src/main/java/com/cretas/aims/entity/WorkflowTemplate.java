@@ -29,16 +29,16 @@ public class WorkflowTemplate extends BaseEntity {
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "industry_tags", columnDefinition = "TEXT")
+    @Column(name = "industry_tags", columnDefinition = "jsonb")
     private String industryTags;
 
-    @Column(name = "workflow_json", columnDefinition = "TEXT", nullable = false)
+    @Column(name = "workflow_json", columnDefinition = "jsonb", nullable = false)
     private String workflowJson;
 
-    @Column(name = "node_configs_json", columnDefinition = "TEXT")
+    @Column(name = "node_configs_json", columnDefinition = "jsonb")
     private String nodeConfigsJson;
 
-    @Column(name = "global_config_json", columnDefinition = "TEXT")
+    @Column(name = "global_config_json", columnDefinition = "jsonb")
     private String globalConfigJson;
 
     @Column(name = "source_count", nullable = false)
