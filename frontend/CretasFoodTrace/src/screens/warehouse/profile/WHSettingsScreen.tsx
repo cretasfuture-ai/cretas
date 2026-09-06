@@ -10,7 +10,6 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  Alert,
 } from "react-native";
 import { Text, Switch, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";

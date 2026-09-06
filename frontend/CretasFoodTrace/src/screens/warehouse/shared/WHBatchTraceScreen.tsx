@@ -10,7 +10,6 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import { Text, Surface, Button, useTheme } from "react-native-paper";

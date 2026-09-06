@@ -11,7 +11,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { Text, Button, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";

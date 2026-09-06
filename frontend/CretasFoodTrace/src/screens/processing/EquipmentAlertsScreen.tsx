@@ -18,7 +18,7 @@ import { ProcessingStackParamList } from '../../types/navigation';
 import { alertApiClient } from '../../services/api/alertApiClient';
 // equipmentApiClient alert methods are deprecated, use alertApiClient instead
 import { useAuthStore } from '../../store/authStore';
-import { Alert } from 'react-native';
+import {  } from 'react-native';
 import { appAlert } from '../../components/ui/AppDialog';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';

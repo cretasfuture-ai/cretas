@@ -17,7 +17,7 @@
 
 import React, { useCallback, useRef, useState } from "react";
 import { appAlert } from '../../../components/ui/AppDialog';
-import { View, StyleSheet, TouchableOpacity, Alert, Vibration } from "react-native";
+import { View, StyleSheet, TouchableOpacity, Vibration } from "react-native";
 import { Text, Surface, Button, Portal, Dialog, TextInput } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";

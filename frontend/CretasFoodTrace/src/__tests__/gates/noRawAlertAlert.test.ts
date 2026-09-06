@@ -21,8 +21,10 @@ const SRC = path.resolve(__dirname, '../..');
 
 function stripComments(src: string): string {
   // 整行 // 与 行尾 //  都剥 (#678 终审 follow-up d: 之前只剥整行, `foo(); // Alert.alert(` 会被数进去)。
-  // ⚠️ 已知盲区: 行尾那条对 'http://…' 这种串内 // 也会切, 同一行 // 之后再写 Alert.alert( 会被少数 (闸假绿)。
-  //    仓里没有这种写法, 出现了也是同一行两件事 —— 登记, 不靠再加启发式逼近。
+  // ⚠️ 已知盲区 (2026-09-07 订正: 上一版把形状写错了)。行尾那条要求 `//` 前有**空白**,
+  //    所以 `'http://…'` 这种紧跟在 `:` 后面的**不受影响**; 真盲区是字符串字面量里的 ` //`
+  //    (带前导空格), 全树 19 行, 其中 0 行后面跟着 `Alert.alert(` ⇒ 今天不漏数。
+  //    登记, 不靠再加启发式逼近 —— 要精确只能上 AST。
   return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ').replace(/\s\/\/.*$/gm, ' ');
 }
 
@@ -107,6 +109,44 @@ describe('Alert.alert ratchet (react-native-web no-op)', () => {
     const outsideZero = Object.entries(counts).filter(([b]) => !ZERO.has(b)).reduce((s, [, n]) => s + n, 0);
     expect(outsideZero > 0 ? 'alive' : 'INSTRUMENT DEAD — 未收敛目录一处都数不到, 先查正则').toBe('alive');
     console.warn(`[alert-ratchet] files=${files.length} total=${total} buckets=${Object.keys(counts).length}`);
+  });
+
+  it('codemod 过的目录里不许留下未用的 `Alert` import (tsc 抓不到 —— 没开 noUnusedLocals)', () => {
+    // 2026-09-07: #687 我报「清完 0 个」是**假读数** —— 扫描器的正则只认单引号
+    // `from 'react-native'`, 而仓里大量文件写的是双引号 `from "react-native"` ⇒ 漏了 18 个
+    // warehouse 文件。organizer 用两种方法各自量出 20 个才发现。⇒ 判据做成闸, 不靠人扫。
+    //
+    // ⚠️ 已知盲区 (#697 终审列出, 今天全不可达; 登记, ⛔ 不靠再加启发式逼近 —— 要精确只能上 AST):
+    //   ① `import { Alert as RNAlert }` —— token 比对是 `'Alert'`, `"Alert as RNAlert"` 不等 ⇒ 假绿;
+    //   ② `import type { Alert }` 同样匹配得到, 而用法判据 `/\bAlert\s*\./` 是**方法调用**形状 ⇒
+    //      纯类型位置的使用 (`let x: Alert`) 会被报成违规 (假红);
+    //   ③ stripComments 不剥字符串字面量 ⇒ 串里的 `"Alert."` 会遮住一个真未用的 import (假绿)。
+    const offenders: string[] = [];
+    let parsedImports = 0;
+    let doubleQuoted = 0;
+    for (const f of files) {
+      const rel = path.relative(SRC, f).split(path.sep).join('/');
+      const bucket = bucketOf(rel);
+      if (!ZERO.has(bucket)) continue;           // 只管已收敛的目录; 其余目录还在用 Alert.alert
+      const code = stripComments(fs.readFileSync(f, 'utf8'));
+      const specs = code.match(/import\s*\{[^}]*\}\s*from\s*['"]react-native['"]/g) ?? [];
+      parsedImports += specs.length;
+      doubleQuoted += specs.filter((s) => s.includes('"react-native"')).length;
+      const importsAlert = specs.some((spec) => {
+        const inner = spec.slice(spec.indexOf('{') + 1, spec.lastIndexOf('}'));
+        return inner.split(',').map((t) => t.trim()).includes('Alert');
+      });
+      if (importsAlert && !/\bAlert\s*\./.test(code)) offenders.push(rel);
+    }
+
+    // 🔴 正向前提 —— 这条闸的全部存在理由就是「防止那个 import 正则再骗人一次」, 而它自己靠那个正则活着。
+    //    上面的 INSTRUMENT ALIVE 只证明 walk() 活着, 对 import 扫描器一个字都没说: 正则一坏,
+    //    offenders 恒空, 闸静默变绿。所以先证明扫描器**这一刻**解析到了东西, 特别是**双引号**那一支
+    //    —— 那正是 2026-09-07 瞎掉、漏掉 18 个 warehouse 文件的形态。
+    expect(parsedImports).toBeGreaterThanOrEqual(50);
+    expect(doubleQuoted).toBeGreaterThanOrEqual(1);
+
+    expect(offenders.join(', ')).toBe('');
   });
 
   it('根宿主挂在 App.tsx 上 (没有它 appAlert 在 web 上退回 window.alert, 真机退回原生 —— 不是本刀想要的路径)', () => {

@@ -1,5 +1,4 @@
 import React from 'react';
-import { Alert } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { AppDialogHost, appPrompt } from '../../../components/ui/AppDialog';
 
