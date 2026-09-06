@@ -11,9 +11,16 @@
  * ## 判据是代理, 两个方向都不准 (写明, 不靠加启发式逼近)
  * - **假阳性**: 同一文件里不同按钮 / 不同 handler 的条件撞了名 (例如 `evidenceUploading`
  *   既是竞态自保又出现在别的按钮的 disabled 里) —— 那类「双保险」是对的, 不该改。
- * - **假阴性**: 语义相同而**写法不同**的一对逃得掉。实测例: `WHReceiptCreateScreen` 的守卫写
+ * - **假阴性 ①**: 语义相同而**写法不同**的一对逃得掉。实测例: `WHReceiptCreateScreen` 的守卫写
  *   `validItems.length === 0`, 按钮写 `totalReceivedRows === 0`, 两者是同一个谓词 —— 本闸数不到它,
- *   organizer 是靠**行为探针**发现的。⇒ 这个数是下界, ⛔ 不要读成「全部」。
+ *   organizer 是靠**行为探针**发现的。
+ * - **假阴性 ②** (#699 终审补): `GUARD` 的 `if\s*\(([^)]{1,120})\)` **看不见条件里带括号的情形**
+ *   (`if (!isValid(x))`); `DISABLED` 的 `[^}]{1,200}` 看不见嵌套花括号。
+ * - **它是源码文本闸, 不是渲染测试**: 把提示 JSX 挪进一个永不渲染的分支, 本闸照样绿。
+ *   「提示真的会渲染」这个证据来自浏览器探针 (2026-09-07 Expo Web), **不来自这道闸**。
+ *
+ * ⇒ 这个数是**下界**, 是「同一种**写法**有几处」而不是「同一种**行为**有几处」。
+ *   ⛔ 不许哪天被人改写成「全 App 共 37 处」。
  *
  * ## 处置分类 (2026-09-07 pilot, 见 PR body)
  * - 边界**已可见**在按钮旁 (`已选 N 项` / `提交入库 (N 行)`) ⇒ disabled 是对的, 守卫标注为防御性即可。
@@ -65,14 +72,27 @@ function census(): string[] {
 
 /** 2026-09-07 实测。⛔ 只许往下调 —— 每处置一处就减一次, 不许因为「新屏也这么写」而上调。 */
 const BASELINE = 37;
+/**
+ * 下限: 读数低于它 ⇒ 先怀疑扫描器坏了, 不是「这一族变少了」。
+ * 取 30 (= 37 − 7) 是保守值: 一刀最多处置得动个位数, 真要一次少 8 处以上, 那个 PR 自己会连基线一起改。
+ */
+const FLOOR = 30;
 
 describe('dead validation guards (behind disabled buttons) ratchet', () => {
   const hits = census();
 
-  it('INSTRUMENT ALIVE: 扫得到文件, 也扫得到这一族 (全 0 = 正则打空, 不是全清了)', () => {
+  it('INSTRUMENT ALIVE: 扫得到文件, 且这一族的读数在合理区间 (下限防「部分瞎掉被读成变好了」)', () => {
     expect(walk(SRC).length).toBeGreaterThan(300);
-    expect(hits.length > 0 ? 'alive' : 'INSTRUMENT DEAD — 一处都数不到, 先查正则').toBe('alive');
-    console.warn(`[dead-guards] ${hits.length} 处 (基线 ${BASELINE})`);
+    console.warn(`[dead-guards] ${hits.length} 处 (基线 ${BASELINE}, 下限 ${FLOOR})`);
+    // 🔴 2026-09-07 补: 原来只拒绝 hits === 0, 于是一个**部分**坏掉的正则读到 3 也能过 —— 而且
+    //    `3 <= 37` 会被读成「这一族缩小了, 真好」, 正是本文件注释里警告的形态 A。
+    //    棘轮只有上界时, 闸自己坏掉的读数与「清理见效」完全同形 ⇒ 必须配下限。
+    //    ⚠️ 下限不是「不许修好」: 真收敛到 30 以下时, 连同基线一起下调, 并在 PR 里贴逐处的去向。
+    expect(
+      hits.length >= FLOOR
+        ? 'alive'
+        : `INSTRUMENT SUSPECT — 只数到 ${hits.length} 处 (下限 ${FLOOR})。先查正则, 再谈「变少了」`,
+    ).toBe('alive');
   });
 
   it('不许增长', () => {
