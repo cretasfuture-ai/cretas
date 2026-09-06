@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform, Alert } from 'react-native';
+import { Platform } from 'react-native';
 import { apiClient } from './api/apiClient';
 import { SecureStorageUnavailableError, TokenStorageError } from '../errors';
 import { logger } from '../utils/logger';

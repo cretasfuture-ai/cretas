@@ -6,7 +6,7 @@
  */
 
 import React, { useMemo, useCallback, useImperativeHandle, forwardRef, useRef, useEffect, useState } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import { Button, useTheme, Snackbar } from 'react-native-paper';
 import { createForm, Form, onFieldValueChange } from '@formily/core';
 import { FormProvider, ISchema } from '@formily/react';

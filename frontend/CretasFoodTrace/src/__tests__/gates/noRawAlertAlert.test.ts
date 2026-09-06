@@ -20,7 +20,10 @@ import path from 'path';
 const SRC = path.resolve(__dirname, '../..');
 
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+  // 整行 // 与 行尾 //  都剥 (#678 终审 follow-up d: 之前只剥整行, `foo(); // Alert.alert(` 会被数进去)。
+  // ⚠️ 已知盲区: 行尾那条对 'http://…' 这种串内 // 也会切, 同一行 // 之后再写 Alert.alert( 会被少数 (闸假绿)。
+  //    仓里没有这种写法, 出现了也是同一行两件事 —— 登记, 不靠再加启发式逼近。
+  return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ').replace(/\s\/\/.*$/gm, ' ');
 }
 
 function walk(dir: string, acc: string[] = []): string[] {
@@ -45,8 +48,10 @@ function bucketOf(rel: string): string {
 
 /** 已收敛 ⇒ 必须为 0 */
 const ZERO = new Set(['screens/processing', 'screens/warehouse', 'screens/quality-inspector']);
-/** 餐饮不管: 只登记 */
+/** 餐饮不管: 不进棘轮, 但钉死在实测值 (见下) */
 const IGNORED = new Set(['screens/restaurant']);
+/** 2026-09-06 实测 screens/restaurant 的 Alert.alert( 数; 餐饮屏不动 ⇒ 这个数不该变 */
+const RESTAURANT_PINNED = 51;
 /** 2026-09-06 实测 (codemod 第一刀之后), ⛔ 只许往下调 */
 const BASELINE: Record<string, number> = {
   'screens/factory-admin': 357,
@@ -126,6 +131,9 @@ describe('Alert.alert ratchet (react-native-web no-op)', () => {
       if (n > base) grown.push(`${b}: ${base} → ${n}`);
     }
     if (IGNORED.size) console.warn(`[alert-ratchet] 餐饮 (登记不计): ${[...IGNORED].map((b) => `${b}=${counts[b] ?? 0}`).join(', ')}`);
+    // #678 终审 follow-up (a): 「不管」不等于「不看」—— 餐饮目录钉死在 2026-09-06 实测值, 变了 (无论方向) 都红:
+    // 涨 = 有人在餐饮屏写了新 Alert.alert; 降 = 有人动了餐饮屏 (Steve: 餐饮不管, 动了要有人知道)。
+    expect(counts['screens/restaurant'] ?? 0).toBe(RESTAURANT_PINNED);
     console.warn(`[alert-ratchet] per-bucket: ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([b, n]) => `${b}=${n}`).join(' ')}`);
     expect(unknown.map((x) => `${x} (新目录出现 Alert.alert, 用 appAlert 或登记基线)`).join(', ')).toBe('');
     expect(grown.map((x) => `${x} (Alert.alert 只许减少)`).join(', ')).toBe('');

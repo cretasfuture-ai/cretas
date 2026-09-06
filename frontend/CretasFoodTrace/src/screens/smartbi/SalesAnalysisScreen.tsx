@@ -24,7 +24,6 @@ import {
   StyleSheet,
   RefreshControl,
   TouchableOpacity,
-  Alert,
   Dimensions,
   Modal,
 } from 'react-native';

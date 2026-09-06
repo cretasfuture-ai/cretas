@@ -67,7 +67,8 @@ function dialogSignature(s: DialogState): string {
  * 已挂载的宿主**栈** (2026-09-06, Alert.alert codemod 第一刀)。
  *
  * 以前是单槽 `_show`: 后挂的宿主覆盖前面的, 卸载时直接置 null。App.tsx 根上挂一个全局宿主之后,
- * 14 个屏内还各自挂着 `<AppDialogHost />` —— 单槽下**离开那些屏就把全局宿主也置空了**,
+ * 十几个屏内还各自挂着 `<AppDialogHost />` (数量以 grep 为准, ⛔ 不在注释里手写——写过一次 14, 实际不是) ——
+ * 单槽下**离开那些屏就把全局宿主也置空了**,
  * 之后所有 appAlert 在真机上静默丢失。栈: 每个宿主挂载 push、卸载把自己摘掉, 永远用栈顶。
  */
 const _hosts: Array<(s: DialogState) => void> = [];
