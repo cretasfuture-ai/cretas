@@ -85,12 +85,14 @@ class SoftDeletePartialUniqueIndexPostgresContractTest {
             st.execute(partialIndexDdl("uq_lt_plan_tripno"));
             st.execute("INSERT INTO logistics_trips VALUES ('t1','PLAN-1',1,NULL)");
             assertEquals(UNIQUE_VIOLATION, assertThrows(SQLException.class, () ->
-                    st.execute("INSERT INTO logistics_trips VALUES ('t2','PLAN-1',1,NULL)")).getSQLState(),
+                    st.execute("INSERT INTO logistics_trips VALUES ('t2','PLAN-1',1,NULL)"),
+                    "阳性对照：两条活行同 (plan_id, trip_no) 必须撞").getSQLState(),
                     "阳性对照：两条活行同 (plan_id, trip_no) 必须撞");
             st.execute("UPDATE logistics_trips SET deleted_at = CURRENT_TIMESTAMP WHERE id='t1'");
             st.execute("INSERT INTO logistics_trips VALUES ('t3','PLAN-1',1,NULL)");   // 目标行为：regenerate
             assertEquals(UNIQUE_VIOLATION, assertThrows(SQLException.class, () ->
-                    st.execute("INSERT INTO logistics_trips VALUES ('t4','PLAN-1',1,NULL)")).getSQLState(),
+                    st.execute("INSERT INTO logistics_trips VALUES ('t4','PLAN-1',1,NULL)"),
+                    "阴性对照：又有活行了, 再插必须又被拒 —— 少了这条, 上面那次成功也可能是索引整个失效").getSQLState(),
                     "阴性对照：又有活行了, 再插必须又被拒 —— 少了这条, 上面那次成功也可能是索引整个失效");
             assertCounts(st, "logistics_trips", "plan_id='PLAN-1'", 2, 1);
 
@@ -106,7 +108,8 @@ class SoftDeletePartialUniqueIndexPostgresContractTest {
             st.execute(partialIndexDdl("uq_ls_order_single_trip"));
             st.execute("INSERT INTO logistics_stops VALUES ('s1','TRIP-1','ORD-1',NULL)");
             assertEquals(UNIQUE_VIOLATION, assertThrows(SQLException.class, () ->
-                    st.execute("INSERT INTO logistics_stops VALUES ('s2','TRIP-2','ORD-1',NULL)")).getSQLState(),
+                    st.execute("INSERT INTO logistics_stops VALUES ('s2','TRIP-2','ORD-1',NULL)"),
+                    "被删那条 H2 断言要的就是这个：同一张配送单挂到第二个活停靠点必须被拒").getSQLState(),
                     "被删那条 H2 断言要的就是这个：同一张配送单挂到第二个活停靠点必须被拒");
             st.execute("UPDATE logistics_stops SET deleted_at = CURRENT_TIMESTAMP WHERE id='s1'");
             st.execute("INSERT INTO logistics_stops VALUES ('s3','TRIP-2','ORD-1',NULL)");
@@ -126,7 +129,8 @@ class SoftDeletePartialUniqueIndexPostgresContractTest {
             st.execute(partialIndexDdl("uk_production_plan_create_request"));
             st.execute("INSERT INTO production_plans VALUES ('p1','F006',1,'req-001',NULL)");
             assertEquals(UNIQUE_VIOLATION, assertThrows(SQLException.class, () ->
-                    st.execute("INSERT INTO production_plans VALUES ('p2','F006',1,'req-001',NULL)")).getSQLState(),
+                    st.execute("INSERT INTO production_plans VALUES ('p2','F006',1,'req-001',NULL)"),
+                    "被删那条断言要的就是这个：同一幂等键并发建第二条必须被 DB 拒").getSQLState(),
                     "被删那条断言要的就是这个：同一幂等键并发建第二条必须被 DB 拒");
             st.execute("UPDATE production_plans SET deleted_at = CURRENT_TIMESTAMP WHERE id='p1'");
             st.execute("INSERT INTO production_plans VALUES ('p3','F006',1,'req-001',NULL)");
