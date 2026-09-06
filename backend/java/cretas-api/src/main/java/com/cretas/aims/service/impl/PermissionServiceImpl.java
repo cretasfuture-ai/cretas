@@ -51,6 +51,33 @@ public class PermissionServiceImpl implements PermissionService {
     }
 
     /**
+     * 兜底矩阵的只读快照 (role_code -> module_code -> legacy level).
+     *
+     * <p>唯一消费方: {@code PermissionMatrixViewService} —— 权限矩阵只读页要把
+     * 「L1 表怎么说」和「这份兜底怎么说」并排摆出来。⛔ 不是给鉴权路径用的:
+     * {@link #hasPermission} 里这份只在 L2/L1 都没有行时才生效, 直接读它会读出
+     * <b>不是实际生效值</b>的东西 (形态 A: 量的不是想知道的那个数)。
+     *
+     * <p>返回不可变副本, 调用方改不动这份静态矩阵。
+     */
+    public static Map<String, Map<String, String>> hardcodedMatrixSnapshot() {
+        Map<String, Map<String, String>> snapshot = new LinkedHashMap<>();
+        for (FactoryUserRole role : FactoryUserRole.values()) {
+            Map<String, String> perms = PERMISSION_MATRIX.get(role);
+            if (perms == null) {
+                continue;
+            }
+            snapshot.put(role.name(), Collections.unmodifiableMap(new LinkedHashMap<>(perms)));
+        }
+        return Collections.unmodifiableMap(snapshot);
+    }
+
+    /** 兜底矩阵声明的模块清单 (ALL_MODULES 的只读视图)。 */
+    public static List<String> hardcodedModules() {
+        return Collections.unmodifiableList(ALL_MODULES);
+    }
+
+    /**
      * 模块列表
      */
     private static final List<String> ALL_MODULES = Arrays.asList(
