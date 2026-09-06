@@ -115,19 +115,37 @@ describe('Alert.alert ratchet (react-native-web no-op)', () => {
     // 2026-09-07: #687 我报「清完 0 个」是**假读数** —— 扫描器的正则只认单引号
     // `from 'react-native'`, 而仓里大量文件写的是双引号 `from "react-native"` ⇒ 漏了 18 个
     // warehouse 文件。organizer 用两种方法各自量出 20 个才发现。⇒ 判据做成闸, 不靠人扫。
+    //
+    // ⚠️ 已知盲区 (#697 终审列出, 今天全不可达; 登记, ⛔ 不靠再加启发式逼近 —— 要精确只能上 AST):
+    //   ① `import { Alert as RNAlert }` —— token 比对是 `'Alert'`, `"Alert as RNAlert"` 不等 ⇒ 假绿;
+    //   ② `import type { Alert }` 同样匹配得到, 而用法判据 `/\bAlert\s*\./` 是**方法调用**形状 ⇒
+    //      纯类型位置的使用 (`let x: Alert`) 会被报成违规 (假红);
+    //   ③ stripComments 不剥字符串字面量 ⇒ 串里的 `"Alert."` 会遮住一个真未用的 import (假绿)。
     const offenders: string[] = [];
+    let parsedImports = 0;
+    let doubleQuoted = 0;
     for (const f of files) {
       const rel = path.relative(SRC, f).split(path.sep).join('/');
       const bucket = bucketOf(rel);
       if (!ZERO.has(bucket)) continue;           // 只管已收敛的目录; 其余目录还在用 Alert.alert
       const code = stripComments(fs.readFileSync(f, 'utf8'));
       const specs = code.match(/import\s*\{[^}]*\}\s*from\s*['"]react-native['"]/g) ?? [];
+      parsedImports += specs.length;
+      doubleQuoted += specs.filter((s) => s.includes('"react-native"')).length;
       const importsAlert = specs.some((spec) => {
         const inner = spec.slice(spec.indexOf('{') + 1, spec.lastIndexOf('}'));
         return inner.split(',').map((t) => t.trim()).includes('Alert');
       });
       if (importsAlert && !/\bAlert\s*\./.test(code)) offenders.push(rel);
     }
+
+    // 🔴 正向前提 —— 这条闸的全部存在理由就是「防止那个 import 正则再骗人一次」, 而它自己靠那个正则活着。
+    //    上面的 INSTRUMENT ALIVE 只证明 walk() 活着, 对 import 扫描器一个字都没说: 正则一坏,
+    //    offenders 恒空, 闸静默变绿。所以先证明扫描器**这一刻**解析到了东西, 特别是**双引号**那一支
+    //    —— 那正是 2026-09-07 瞎掉、漏掉 18 个 warehouse 文件的形态。
+    expect(parsedImports).toBeGreaterThanOrEqual(50);
+    expect(doubleQuoted).toBeGreaterThanOrEqual(1);
+
     expect(offenders.join(', ')).toBe('');
   });
 
