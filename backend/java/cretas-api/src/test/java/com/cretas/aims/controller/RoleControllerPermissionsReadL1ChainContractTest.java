@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -19,6 +20,8 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -205,5 +208,49 @@ class RoleControllerPermissionsReadL1ChainContractTest {
         assertThat(rows.get(6).get("label"))
                 .as("没有中文名的码原样显示, ⛔ 不编造")
                 .isEqualTo("module_nobody_registered");
+    }
+
+    /**
+     * 刀 D 视觉验收实测的 5 个「幽灵角色码」—— 它们出现在当时写死的角色清单里,
+     * 而 {@link FactoryUserRole} 枚举里<b>根本没有</b>。
+     */
+    private static final List<String> PHANTOM_ROLE_CODES = List.of(
+            "warehouse_operator", "procurement_staff", "sales_staff", "hr_manager", "equipment_manager");
+
+    @Test
+    @DisplayName("🔴 枚举里没有的角色码 ⇒ 404 明确报错, ⛔ 不静默降级成 unactivated")
+    void unknownRoleCodeIsAnExplicitError() {
+        RoleController controller = controller();
+
+        for (String phantom : PHANTOM_ROLE_CODES) {
+            // 阳性对照(仪器): 它确实不在枚举里 —— 否则下面那条断言在守空气
+            assertThatThrownBy(() -> FactoryUserRole.valueOf(phantom))
+                    .as("%s 居然在枚举里, 这条用例的前提不成立了", phantom)
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            assertThatThrownBy(() -> controller.getRolePermissions(FACTORY, phantom))
+                    .as("未知码必须明确报错。静默返回 unactivated 会让页面渲染成一张"
+                            + "「17 行全无权限」的表, 在屏幕上与真的无权限角色不可区分")
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(phantom);
+        }
+    }
+
+    @Test
+    @DisplayName("阳性对照: 枚举里有的角色码照常返回, ⛔ 不是「一律报错」")
+    void knownRoleCodeStillWorks() {
+        assertThat(rows(controller().getRolePermissions(FACTORY, "quality_controller")))
+                .as("这条不过, 上面那条 404 证明不了任何事")
+                .isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("未知码的错误码是 404 且点名那个码 (不是笼统的 400)")
+    void unknownRoleCodeCarries404AndTheCode() {
+        BusinessException e = catchThrowableOfType(
+                () -> controller().getRolePermissions(FACTORY, "hr_manager"), BusinessException.class);
+        assertThat(e).isNotNull();
+        assertThat(e.getCode()).isEqualTo(404);
+        assertThat(e.getMessage()).contains("hr_manager");
     }
 }

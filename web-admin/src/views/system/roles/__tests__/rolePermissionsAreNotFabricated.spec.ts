@@ -47,11 +47,34 @@ const BACKEND_ROWS = [
   { module: 'operations', label: '运营协调', access: 'r' },
 ];
 
-/** 用户列表那条 (onMounted 会打) 与权限那条按 URL 分派, ⛔ 不按调用顺序。 */
-function routeGet(permissions: unknown) {
+/**
+ * 后端下发的角色清单。刻意包含三类, 每一类都在守一件具体的事:
+ *  · `yield_operator` / `department_admin` —— 旧写死清单里**没有**它们, 而它们真有 F006 用户
+ *    ⇒ 渲染得出来就证明清单来自端点;
+ *  · `restaurant_owner` —— department='restaurant', 必须被滤掉 (Steve「餐饮不管」);
+ *  · level 用权威刻度 (0 / 30 / 15), ⛔ 不是页面此前那套 1-4。
+ */
+const BACKEND_ROLES = [
+  { name: 'factory_super_admin', displayName: '工厂总监', description: '拥有工厂所有权限', level: 0, department: 'all' },
+  { name: 'yield_operator', displayName: '报工操作员', description: '报工写入', level: 30, department: 'production' },
+  { name: 'department_admin', displayName: '部门管理员', description: '部门内管理', level: 15, department: 'department' },
+  { name: 'restaurant_owner', displayName: '餐饮老板', description: '连锁经营决策', level: 0, department: 'restaurant' },
+];
+
+/**
+ * 三条 GET 按 URL 分派, ⛔ 不按调用顺序 (顺序分派在请求顺序变化时会静默对调, 而两个响应
+ * 都是合法形状 ⇒ 断言照样绿, 量的却是另一件事)。
+ * ⚠️ 顺序要紧: `/{factoryId}/roles/{role}/permissions` 同时含 `/roles` 与 `/permissions`,
+ *    所以先判 `/permissions`。
+ */
+function routeGet(permissions: unknown, rolesResponse: unknown = { success: true, data: BACKEND_ROLES }) {
   apiGet.mockImplementation((url: string) => {
-    if (String(url).includes('/permissions')) {
+    const u = String(url);
+    if (u.includes('/permissions')) {
       return permissions instanceof Error ? Promise.reject(permissions) : Promise.resolve(permissions);
+    }
+    if (u.endsWith('/roles')) {
+      return rolesResponse instanceof Error ? Promise.reject(rolesResponse) : Promise.resolve(rolesResponse);
     }
     return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
   });
@@ -160,20 +183,70 @@ describe('角色权限弹窗的三态', () => {
     expect(wrapper.html()).toContain(`共 ${vm.roles.length} 种工厂角色`);
   });
 
-  it('④ 编辑弹窗里没有权限编辑器 (它此前提交给一个不存在的端点)', async () => {
+  it('④ 编辑弹窗整块删除 —— 它打向一个全仓不存在的 PUT 端点, 且入口按钮 disabled', async () => {
     routeGet({ success: true, data: BACKEND_ROWS });
     const wrapper = mount(RolesList, { global: { stubs: STUBS } });
     await flushPromises();
-    const vm = wrapper.vm as unknown as {
-      handleEdit: (row: { name: string; level: number; displayName: string; description: string }) => void;
-      editForm: Record<string, unknown>;
-    };
-    vm.handleEdit({ name: 'quality_controller', level: 3, displayName: '质检员', description: 'x' });
-    await flushPromises();
 
-    expect(Object.keys(vm.editForm), 'editForm 不该再带 permissions —— 它写不到任何地方')
-      .toEqual(['displayName', 'description']);
-    expect(wrapper.html(), '要指到真正能改权限的地方 (权限矩阵页, 写 L1 带审计)')
-      .toContain('role-edit-permission-pointer');
+    const vm = wrapper.vm as unknown as Record<string, unknown>;
+    expect(vm.handleEdit, '编辑 handler 不该还在').toBeUndefined();
+    expect(vm.editForm, 'editForm 不该还在').toBeUndefined();
+    expect(apiPut, '这一页不该再有任何 PUT —— 那条路径后端没有 handler').not.toHaveBeenCalled();
+
+    // 禁用按钮仍在 (改名称/描述确实还没端点), 但它得指出一条今天办得到的路 —— fool-proof Rule 5
+    expect(wrapper.html()).toContain('role-edit-disabled');
+    expect(wrapper.html(), '要指到真正能改权限的地方 (权限矩阵页, 写 L1 带审计)').toContain('权限矩阵');
+  });
+});
+
+describe('角色清单来自后端, ⛔ 不是写死的', () => {
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiPut.mockReset();
+  });
+
+  async function mounted() {
+    const wrapper = mount(RolesList, { global: { stubs: STUBS } });
+    await flushPromises();
+    return { wrapper, vm: wrapper.vm as unknown as { roles: Array<Record<string, unknown>>; rolesError: string } };
+  }
+
+  it('⑥ 端点下发什么就渲染什么 —— 含旧写死清单里没有的角色', async () => {
+    routeGet({ success: true, data: BACKEND_ROWS });
+    const { vm } = await mounted();
+
+    expect(vm.roles.map((r) => r.name))
+      .toEqual(['factory_super_admin', 'yield_operator', 'department_admin']);
+    // 🔴 这两个是「清单来自端点」的硬证据: 旧写死数组里根本没有它们, 而它们真有 F006 用户
+    expect(vm.roles.map((r) => r.name)).toContain('yield_operator');
+    expect(vm.roles.map((r) => r.name)).toContain('department_admin');
+  });
+
+  it('⑦ 枚举里没有的「幽灵角色码」不许再出现', async () => {
+    routeGet({ success: true, data: BACKEND_ROWS });
+    const { vm } = await mounted();
+
+    // 刀 D 视觉验收实测: 这 5 个码在 FactoryUserRole 里根本不存在, 而旧写死清单里有,
+    // 每一个都被后端 fromRoleCode 静默降级后渲染成「17 行全无权限」。
+    for (const phantom of ['warehouse_operator', 'procurement_staff', 'sales_staff', 'hr_manager', 'equipment_manager']) {
+      expect(vm.roles.map((r) => r.name), `幽灵码 ${phantom} 又回来了`).not.toContain(phantom);
+    }
+  });
+
+  it('⑧ 餐饮角色被滤掉 (Steve「餐饮不管」)，且判据不是恒真式', async () => {
+    routeGet({ success: true, data: BACKEND_ROWS });
+    const { vm } = await mounted();
+
+    expect(vm.roles.map((r) => r.name)).not.toContain('restaurant_owner');
+    // 阳性对照: 端点确实下发了餐饮角色, 否则上面那条什么都没检查
+    expect(BACKEND_ROLES.map((r) => r.name)).toContain('restaurant_owner');
+  });
+
+  it('⑨ 拉不到角色清单 ⇒ 说清没读到, ⛔ 不留一张看起来正常的空表', async () => {
+    routeGet({ success: true, data: BACKEND_ROWS }, new Error('Network Error'));
+    const { vm } = await mounted();
+
+    expect(vm.roles).toEqual([]);
+    expect(vm.rolesError, '「没读到」和「这个工厂没有角色」必须分得开').toContain('Network Error');
   });
 });

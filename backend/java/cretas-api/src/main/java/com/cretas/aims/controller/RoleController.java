@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.permission.PermissionModuleCatalog;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
@@ -130,7 +131,22 @@ public class RoleController {
 
         log.debug("getRolePermissions: factoryId={}, roleName={}", factoryId, roleName);
 
-        FactoryUserRole role = FactoryUserRole.fromRoleCode(roleName);
+        // 🔴 2026-09-07: 这里原本是 FactoryUserRole.fromRoleCode(roleName) —— 它对**枚举里没有的码
+        // 静默返回 unactivated**, 于是解析链返回空 map, 页面把 17 个模块全渲染成「无权限」,
+        // 在屏幕上与一个真的无权限角色**不可区分**。
+        //
+        // 实测 (刀 D 视觉验收): 角色页当时写死的 17 条里有 5 个码在枚举里根本不存在
+        // (warehouse_operator / procurement_staff / sales_staff / hr_manager / equipment_manager),
+        // 每一个都被这样渲染成一张看起来正常的「全部拒绝」表。
+        //
+        // ⇒ 未知码是**明确的错误**, 不是一个可以往下算的值。⛔ 不静默降级。
+        FactoryUserRole role;
+        try {
+            role = FactoryUserRole.valueOf(roleName);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new BusinessException(404, "没有这个角色: " + roleName
+                    + "。可用角色见 GET /api/mobile/{factoryId}/roles。");
+        }
 
         // 三层解析链 (L2 → L1 → 硬编码兜底) —— 与 @RequirePermission 实际执行的是同一条链。
         // ⛔ 不再走 getRolePermissions(role): 那个方法只读硬编码兜底矩阵, 一格 L1 都不查。
