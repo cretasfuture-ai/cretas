@@ -42,7 +42,6 @@ com.cretas.aims.entity.Customer
 com.cretas.aims.entity.CustomerPriceHistory
 com.cretas.aims.entity.CustomerQualityStandard
 com.cretas.aims.entity.CustomerSalesUserHistory
-com.cretas.aims.entity.Department
 com.cretas.aims.entity.DeviceActivation
 com.cretas.aims.entity.DeviceRegistration
 com.cretas.aims.entity.DialectMapping
@@ -54,7 +53,6 @@ com.cretas.aims.entity.Factory
 com.cretas.aims.entity.FactoryEquipment
 com.cretas.aims.entity.FactorySchedulingConfig
 com.cretas.aims.entity.FactorySettings
-com.cretas.aims.entity.HourlyRateRule
 com.cretas.aims.entity.IndustryTemplatePackage
 com.cretas.aims.entity.InsertSlot
 com.cretas.aims.entity.InterimSettleReversalRequest
@@ -73,11 +71,8 @@ com.cretas.aims.entity.MaterialProductConversion
 com.cretas.aims.entity.MaterialSpecConfig
 com.cretas.aims.entity.MixedBatchGroup
 com.cretas.aims.entity.MixedBatchRule
-com.cretas.aims.entity.Notification
 com.cretas.aims.entity.PayrollRecord
-com.cretas.aims.entity.PieceRateRule
 com.cretas.aims.entity.ProcessCheckinRecord
-com.cretas.aims.entity.ProcessingStageRecord
 com.cretas.aims.entity.ProductProcessWorkflow
 com.cretas.aims.entity.ProductProcessWorkflowActivation
 com.cretas.aims.entity.ProductProcessWorkflowRevision
@@ -86,7 +81,6 @@ com.cretas.aims.entity.ProductWorkProcessAssignee
 com.cretas.aims.entity.ProductionInputAllocation
 com.cretas.aims.entity.ProductionInterimSettlement
 com.cretas.aims.entity.ProductionLine
-com.cretas.aims.entity.ProductionPlanBatchUsage
 com.cretas.aims.entity.ProductionSettlement
 com.cretas.aims.entity.ProductionSettlementConsumption
 com.cretas.aims.entity.ProductionSettlementLabor
@@ -112,11 +106,8 @@ com.cretas.aims.entity.User
 com.cretas.aims.entity.UserFeedback
 com.cretas.aims.entity.UserModuleAccess
 com.cretas.aims.entity.WageCalculation
-com.cretas.aims.entity.WagePolicy
 com.cretas.aims.entity.Whitelist
-com.cretas.aims.entity.WorkProcess
 com.cretas.aims.entity.WorkProcessGovernanceAudit
-com.cretas.aims.entity.WorkType
 com.cretas.aims.entity.WorkerDailyEfficiency
 com.cretas.aims.entity.WorkflowTemplate
 com.cretas.aims.entity.alerts.AlertEvent
@@ -148,7 +139,6 @@ com.cretas.aims.entity.common.BusinessLink
 com.cretas.aims.entity.config.AIIntentConfig
 com.cretas.aims.entity.config.AIIntentDomainDefault
 com.cretas.aims.entity.config.AIQuotaConfig
-com.cretas.aims.entity.config.AIReportPromptConfig
 com.cretas.aims.entity.config.ApprovalChainConfig
 com.cretas.aims.entity.config.ApprovalWorkflow
 com.cretas.aims.entity.config.BlueprintApplication
@@ -158,8 +148,6 @@ com.cretas.aims.entity.config.EncodingRule
 com.cretas.aims.entity.config.FactoryBlueprintBinding
 com.cretas.aims.entity.config.FactoryCostSettings
 com.cretas.aims.entity.config.FactoryTypeBlueprint
-com.cretas.aims.entity.config.FormTemplate
-com.cretas.aims.entity.config.OpinionTemplate
 com.cretas.aims.entity.config.ProductionProcessPromptConfig
 com.cretas.aims.entity.config.QualityCheckItem
 com.cretas.aims.entity.config.QualityCheckItemBinding
@@ -172,9 +160,7 @@ com.cretas.aims.entity.conversation.ConversationMemory
 com.cretas.aims.entity.cron.ScheduledTask
 com.cretas.aims.entity.cron.ScheduledTaskRunLog
 com.cretas.aims.entity.datacenter.ExportJob
-com.cretas.aims.entity.datacenter.ExportRule
 com.cretas.aims.entity.datacenter.ImportJob
-com.cretas.aims.entity.datacenter.ImportRule
 com.cretas.aims.entity.datacenter.OperationLog
 com.cretas.aims.entity.decoration.AppDecorationSession
 com.cretas.aims.entity.decoration.FactoryHomeLayout
@@ -244,14 +230,12 @@ com.cretas.aims.entity.inventory.InternalTransfer
 com.cretas.aims.entity.inventory.InternalTransferItem
 com.cretas.aims.entity.inventory.InventoryLedgerSnapshot
 com.cretas.aims.entity.inventory.PaymentRequest
-com.cretas.aims.entity.inventory.PriceList
 com.cretas.aims.entity.inventory.PriceListItem
 com.cretas.aims.entity.inventory.PurchaseException
 com.cretas.aims.entity.inventory.PurchaseInvoice
 com.cretas.aims.entity.inventory.PurchaseInvoiceChaseLog
 com.cretas.aims.entity.inventory.PurchaseOrder
 com.cretas.aims.entity.inventory.PurchaseOrderApprovalRule
-com.cretas.aims.entity.inventory.PurchaseOrderItem
 com.cretas.aims.entity.inventory.PurchaseReceiveItem
 com.cretas.aims.entity.inventory.PurchaseReceiveRecord
 com.cretas.aims.entity.inventory.PurchaseRequisition
@@ -261,7 +245,6 @@ com.cretas.aims.entity.inventory.SalesDeliveryItem
 com.cretas.aims.entity.inventory.SalesDeliveryRecord
 com.cretas.aims.entity.inventory.SalesException
 com.cretas.aims.entity.inventory.SalesOrder
-com.cretas.aims.entity.inventory.SalesOrderItem
 com.cretas.aims.entity.inventory.SalesOrderShortageReport
 com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement
 com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord
@@ -314,9 +297,7 @@ com.cretas.aims.entity.sales.OperationalQuote
 com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation
 com.cretas.aims.entity.sales.SalesNeed
 com.cretas.aims.entity.scale.ScaleBrandModel
-com.cretas.aims.entity.scale.ScaleProtocolConfig
 com.cretas.aims.entity.scale.ScaleProtocolTestCase
-com.cretas.aims.entity.smartbi.AiAgentRule
 com.cretas.aims.entity.smartbi.SkuComplexity
 com.cretas.aims.entity.smartbi.SmartBiAlertThreshold
 com.cretas.aims.entity.smartbi.SmartBiAnalysisCache

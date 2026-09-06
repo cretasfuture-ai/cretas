@@ -9,6 +9,7 @@ import lombok.experimental.SuperBuilder;
 import lombok.Builder;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -35,6 +36,7 @@ import org.hibernate.annotations.Where;
 @SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
+@SQLDelete(sql = "UPDATE form_templates SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class FormTemplate extends BaseEntity {
 

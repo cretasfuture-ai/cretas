@@ -2,6 +2,7 @@ package com.cretas.aims.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -38,6 +39,7 @@ import java.time.LocalDate;
            @Index(name = "idx_hourly_rate_employee", columnList = "factory_id,employee_id"),
            @Index(name = "idx_hourly_rate_effective", columnList = "factory_id,employee_id,effective_from,effective_to")
        })
+@SQLDelete(sql = "UPDATE hourly_rate_rule SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class HourlyRateRule extends BaseEntity {
 

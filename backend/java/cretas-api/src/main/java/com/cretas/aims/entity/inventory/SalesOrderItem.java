@@ -13,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -34,6 +35,7 @@ import org.hibernate.annotations.Where;
                 @Index(name = "idx_soi_product", columnList = "product_type_id")
         }
 )
+@SQLDelete(sql = "UPDATE sales_order_items SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class SalesOrderItem extends BaseEntity {
 

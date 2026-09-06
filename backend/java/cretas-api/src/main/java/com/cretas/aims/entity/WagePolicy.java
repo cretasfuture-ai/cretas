@@ -3,6 +3,7 @@ package com.cretas.aims.entity;
 import com.cretas.aims.entity.enums.WageMode;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -37,6 +38,7 @@ import org.hibernate.annotations.Where;
            @Index(name = "idx_wage_policy_employee", columnList = "factory_id,employee_id"),
            @Index(name = "idx_wage_policy_active", columnList = "factory_id,is_active")
        })
+@SQLDelete(sql = "UPDATE wage_policy SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class WagePolicy extends BaseEntity {
 

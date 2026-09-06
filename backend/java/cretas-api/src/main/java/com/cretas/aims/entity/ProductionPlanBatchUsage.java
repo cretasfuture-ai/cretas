@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 /**
  * 生产计划批次使用关联实体类
@@ -26,6 +27,7 @@ import org.hibernate.annotations.Where;
            @Index(name = "idx_planbatch_batch", columnList = "material_batch_id")
        }
 )
+@SQLDelete(sql = "UPDATE production_plan_batch_usages SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProductionPlanBatchUsage extends BaseEntity {
     @Id
