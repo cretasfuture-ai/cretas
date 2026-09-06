@@ -54,6 +54,14 @@
 | 1 | `scripts/cron/cron-common.sh`（钉 PATH / 缺命令 rc=2 / venv 守卫）+ #1 + #15/#16/#17 + inventory 登记与订正 + 本文档 + 3 个测试 | 本 PR |
 | 2 | #2 #3 #4 #5 #6 #9 #12（六个「systemctl 取 environ」形状 + forecast）：`cron_activate_venv` + `.env.prod` 显式存在性（`cron_source_env_required`）+ `.env.daily-close` 显式可选（`cron_source_env_optional`）+ 去 `2>/dev/null` + 各脚本路径可覆盖。⚠️ 测试当场抓到 #6 一个静默死法：`.env.daily-close` 不在时 `DAILY_CLOSE_FACTORIES` 未定义，`set -u` 下 rc=1 **不写告警**（改前改后都会，改后测试才看见）。硬约束 8 等式：`cron_pin_path` 4→11、`cron_require_cmds` 4→10（forecast 不用 systemctl）、`cron_activate_venv` 2→9、`cron_dead` 7→14（各加一处 `pydir-missing`）、新增 `cron_source_env_required` 7 / `_optional` 2 | 第二个 PR（基于批 1，等 #658 合并后开） |
 | 3 | #7 `probe-llm-registry`（两态 → 三态：崩溃与业务失败分开）。**#8 `refresh-demo-rest` / #10 `restaurant-ai-eval` 属餐饮侧，Steve 2026-09-06 裁定「餐饮的部分不要管」⇒ 不动，登记「餐饮侧待定」** | 再下一 PR（只含 #7） |
+
+### 餐饮侧待定（登记，不动）
+
+- **#2 `daily-close-push` 的角色通知打的是一个可能没人听的端口**（2026-09-07 只读核对，organizer 提出的怀疑成立）：
+  - 机制：python 侧 `smartbi/services/restaurant/value_notifier_client.py` 用 `JAVA_API_BASE_URL`，**默认 `http://localhost:10010`**，打 `/api/internal/notifications/role`。47 上 `.env.prod` / `.env.daily-close` / `cretas-python.service` 的 environ **都没设**这个变量 ⇒ 永远是默认值。
+  - 而 prod Java 是 `10010` / `10020` 蓝绿交替 active（见 `deploy-backend` skill）。核对当刻 47 上**只有 `:10020` 有 java 在听，`:10010` 没有**。
+  - 读数（`logs/daily-close-ledger.jsonl`）：09-04 `failed 3 / notified 0`，09-05 `notified 3`，09-06 第一次跑 `failed 3`、第二次跑 `notified 3`；失败那几次 `daily-close-push.log` 里全是 `[value-notify-client] Java notify call failed … All connection attempts failed`（三个角色各一条）。⇒ 通知成不成功取决于**那晚哪个槽 active**，与日结计算本身无关（`status_by_factory` 一直 ok）。
+  - 批 2 只改了它的 venv / env 守卫，**没碰这条**（餐饮侧）。修法方向登记：`JAVA_API_BASE_URL` 指向 nginx 入口而不是裸槽端口，或客户端按 `_upstream_cretas.conf` 探测 active 槽；由餐饮侧决定。
 | — | #11 #14 已合规；#13 不动 | — |
 
 ## 装什么 / 装哪 / 怎么验（organizer）
