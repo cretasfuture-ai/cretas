@@ -1,6 +1,6 @@
 -- 这是生成物。由 scripts/check-soft-delete-orphans.sh --write 从 prod 抓取。
 -- ⛔ 不要手工编辑: 它是一份**读数**(prod 上哪些表有 deleted_at), 不是配置。
--- captured-at 2026-09-05 23:37:54Z
+-- captured-at 2026-09-06 13:32:23Z
 -- capture-sql SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'
 abaca_quantity_log
 accounting_periods
@@ -352,6 +352,7 @@ suppliers
 system_enums
 time_clock_records
 tool_call_records
+tool_metadata
 tool_reliability_stats
 transfer_diff_records
 unit_of_measurements
@@ -385,4 +386,5 @@ worker_allocation_feedbacks
 worker_daily_efficiency
 workflow_rules
 workflow_task_ports
+workflow_templates
 workflow_variable_def
