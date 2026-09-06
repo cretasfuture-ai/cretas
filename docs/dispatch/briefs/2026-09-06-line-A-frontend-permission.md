@@ -1,6 +1,8 @@
 # Brief 卡 A：前端 / 权限线（持续 session）
 
 **发卡**: organizer `liushanmen-organizer-handoff-fa5fb5`（Fable）· 2026-09-06 · 基 `origin/main` ≥ `ffa87422ee`
+**模型**: 本线是执行车道 ⇒ **Opus 5 + effort high**（organizer 自己跑 Fable 负责统筹；⛔ 别用 Fable 做执行，2026-09-07 Steve 点名过一次）。开 chat 后在模型选择里切。
+
 **角色**: 这条线的 sister chat。你有自己的 worktree 与记忆，多轮连续做；**每个任务做到 PR 停**，合并 / 部署 / OTA 只由 organizer 做。
 **回执格式**（每个 PR 一份，贴到 PR body 末尾 + 回给 owner 转 organizer）: 任务 ID / 基 SHA / 改动文件 / 验证命令与读数 / 变异读数 / PR / 阻塞 / 登记未做。
 

@@ -58,6 +58,7 @@ subagent 每次都是**新上下文**，且 organizer 的 `SendMessage` 可能�
 | **sister chat**（独立 session + 自己的 worktree + 自己的记忆） | 同一批文件要**≥2 个 PR 连续改**；需要**积累环境**（docker 底座 / schema dump / 真机 / 服务器状态）；设计要来回商量；任务会跨天；或需要在 organizer 之外保留一份记忆 | 权限模块 step-1→step-2、schema validate 系列、运维脚本系列 |
 
 - 开 sister chat 的载体是 `docs/dispatch/briefs/<日期>-line-<X>-*.md`：自包含（基 SHA、已验事实、在飞与禁改区、按序任务、回执格式、入口文件），推上 main 后用 `spawn_task` 卡片开 session（用户点一下），或用户手工开 chat 贴卡。
+- 🔴 **开 sister chat 时必须在卡里写死模型档位**（2026-09-07 Steve 点名：三条线全继承了默认的 Fable，「有点太浪费了」，他手动切到 Opus high）。分工同 `multi-model-dispatch`：**organizer 会话 = Fable**（统筹 / 台账 / 追 PR / 汇总读数，判断轻吞吐重）；**sister chat = 执行车道 = Opus + effort high**。sister chat 不是 subagent，effort 设不了 frontmatter，只能在卡的开头写一行「本线用 Opus 5 / effort high，开 chat 后先在模型选择里切」，并在派卡消息里再说一次 —— 用户是唯一能切的人。
 - 两种模式共同的边界不变：都只到 PR 停；🔒 合并 / 部署 / OTA / 装服务器只由 organizer；两个 chat 不改同一文件（查台账 scope 锁）。
 - fresh context 有它的价值：今天 brief 里三处错（web-admin 路径、凭证名、`vars` 路由）都是新人不带成见去量才抓出来的 ⇒ sister chat 交付的 🔒 PR 仍然要过独立的对抗式终审 subagent。
 - **交接协议（Steve 2026-09-06）**：sister chat 每到停点（PR 开好 / 阻塞 / 收工 / 需裁定）必须 `send_message` 给 organizer，不等被问；organizer 的合并 / 发布 / 退回也 `send_message` 回去，PR 评论只是备份。organizer 空闲时**主动**去问各线状态（`list_sessions` 看 `isRunning`/`prNumber`，或直接发一条「现在做到哪、head SHA」）——「它结束了你不知道也不会去问」是 Steve 点名的失误。同时开一个 3 分钟一轮的新 PR 监视（`gh pr list` 与快照比对）兜底。
