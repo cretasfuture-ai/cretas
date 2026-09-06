@@ -47,7 +47,7 @@ ok()   { PASSED=$((PASSED + 1)); echo "  ok  [$PASSED] $*"; }
 
 [ -s "$COMMON" ] || fail "$COMMON 不存在"
 if ! command -v flock >/dev/null 2>&1; then
-    # ⚠️ 别只说 Windows: **macOS 默认也没有 flock**(Mac mini / Darwin 26.4 实测 `command -v flock`
+    # ⚠️ 别只说 Windows: **macOS 默认也没有 flock**(Mac mini / macOS 26.4 / Darwin 25.4.0 实测 `command -v flock`
     #    = ABSENT, 且没有 /proc) ⇒ 那台自建 runner 上 acquire 走的是 PID 文件分支。
     #    这条措辞原来只写「Windows Git Bash」, 在 Mac 上读起来像「这台机器不该跳过却跳过了」。
     echo "SKIPPED:本机没有 flock (Windows Git Bash / macOS 默认都没有), acquire_deploy_lock 走 PID 文件分支, 遗留子进程持锁在这里量不到"
@@ -226,7 +226,7 @@ ok "E: 被拒调用方走 release_deploy_lock ⇒ 活持有者的锁文件仍在
 #
 # 🔴 第一版写 `: >/dev/fd/200`, **只在 Linux 上成立**。macOS 的 man 页写明「打开 /dev/fd/N
 #    等价于 dup(N)」⇒ O_TRUNC 被忽略, 而且 open **成功**⇒ `|| true` 不触发 = 静默 no-op。
-#    Mac mini (Darwin 26.4) 实测: `>&200` 之后 8 字节, `>/dev/fd/200` 之后**仍是 8**。
+#    Mac mini (macOS 26.4 / Darwin 25.4.0) 实测: `>&200` 之后 8 字节, `>/dev/fd/200` 之后**仍是 8**。
 #    ⇒ 改成「记 inode + 比一次」: 相同就按路径截(所有平台成立), 不同就**不截并 WARN**。
 # ⚠️ 这一组的断言在 2026-09-07 **变过号**, 而它**不是放宽判据** —— 看 diff 的人容易误读, 所以写清楚:
 #   旧断言(字面): 「路径被换掉之后, **我们那份**一定是 0 字节」(靠 /dev/fd 截到自己的 inode)
@@ -257,7 +257,16 @@ plain_bytes=$(sz "$LOCK_FILE")
 echo "READING: F1_platform=$PLATFORM lockfile_bytes_after_release=$plain_bytes (期望 0)"
 [ "$plain_bytes" = "0" ] \
     || fail "F1: 正常释放没把登记 PID 清掉(实得 $plain_bytes) —— 下一次获取会误报 reclaiming。⚠️ 若这里在 macOS 上红, 就是 /dev/fd 那条静默 no-op 又回来了"
-ok "F1 正常释放 ⇒ 锁文件被清空 (平台 $PLATFORM)"
+# 🔴 这条读数必须在**默认 LOG_LEVEL**(INFO, 调用方一个都没抬过)下看得见 —— 写成 DEBUG 的话,
+#    它在每一次真实部署里都被抑制, 而本函数声称的性质②「说得出自己做了什么」就在最常见的
+#    那条路径上不成立(#706 终审 F-1 抓到的正是这个)。⚠️ plain.sh 刻意**不设** _LOG_LEVEL。
+grep -q '已清空登记 PID' "$TMP/plain.log" \
+    || fail "F1: 正常释放的那条读数在默认日志级别下看不见 —— 性质②在最常见路径上不成立(是不是写成 DEBUG 了?): $(cat "$TMP/plain.log")"
+# 反向对照: 正常路径**不该**出现「不截断」那条 WARN。没有这一条, 「两种情况读数互异」
+# 只被单向断言过 —— 一个恒打 WARN 的实现也能让 F2 绿。
+grep -q '不截断' "$TMP/plain.log" \
+    && fail "F1 反向对照: 正常路径出现了「不截断」WARN —— inode 比对没走对分支, 或者它恒打 WARN(那样 F2 就是空气)"
+ok "F1 正常释放 ⇒ 清空 + 读数在默认级别可见 + 无「不截断」WARN (平台 $PLATFORM)"
 
 # F2: 持锁期间路径被换掉 —— 两边都不许动, 而且要响。
 rm -f "$LOCK_FILE" "$LOCK_FILE.moved"
