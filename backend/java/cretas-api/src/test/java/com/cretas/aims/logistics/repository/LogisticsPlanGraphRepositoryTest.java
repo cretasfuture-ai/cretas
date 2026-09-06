@@ -9,7 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.dao.DataIntegrityViolationException;
+
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -32,9 +32,23 @@ import static org.junit.jupiter.api.Assertions.*;
  *       / {@code findByDeliveryOrderIdAndDeletedAtIsNull}</li>
  *   <li>{@code @Version} optimistic-lock annotation present on all three entities + version
  *       increments on update (spec §2 决策 8 — 乐观锁, 禁 last-write-wins)</li>
- *   <li>DB unique index {@code uq_ls_order_single_trip} rejects assigning the same delivery
- *       order to two different stops (spec §3 — 一订单只属一条有效车次)</li>
  * </ol>
+ *
+ * <p>🔴 <b>2026-09-07 删掉了第 4 条</b>（{@code deliveryOrderCanOnlyBelongToOneActiveTrip} —— DB unique index
+ * {@code uq_ls_order_single_trip} rejects assigning the same delivery order to two different stops，
+ * spec §3 一订单只属一条有效车次）。原因不是那条规则不成立了，是<b>这个测试库表达不了它</b>：
+ *
+ * <p>prod 上 {@code uq_ls_order_single_trip} 是 {@code … WHERE deleted_at IS NULL} 的<b>部分</b>唯一索引，
+ * 而 H2 的 schema 是从实体注解生成的、JPA 表达不了部分唯一 ⇒ 实体上那句 {@code @UniqueConstraint} 只能建出
+ * <b>全量</b>键，比 prod 严。{@code LogisticsRoutingService.clearTripsAndStops} 正是「软删既有 stop 再按同一批
+ * {@code delivery_order_id} 重建」，在 prod 合法而在 H2 撞键（#701 补 {@code @SQLDelete} 之后
+ * logistics 三个测试类 4 个 error 就是这么来的）⇒ 实体侧的声明已摘掉，H2 里这张表不再有唯一性保护。
+ *
+ * <p>⚠️ 补不回来：H2 2.2.224 上实测 {@code CREATE UNIQUE INDEX … WHERE deleted_at IS NULL} 报
+ * {@code JdbcSQLSyntaxErrorException 42000}。⇒ 这条规则改由
+ * {@link com.cretas.aims.contract.PartialUniqueIndexBackingSoftDeleteContractTest} 在<b>迁移源码</b>层面守：
+ * 索引被删掉或被改回全量就报红。行为层面的证明在 docker 的 prod schema 副本上做（四态：活行互斥 →
+ * 软删后同键可建 → 再建又被拒）。⛔ 不要在这里加回一个 H2 版的断言——它只会再次让测试比生产严。
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -175,29 +189,6 @@ class LogisticsPlanGraphRepositoryTest {
         assertEquals(1L, updatedStop.getVersion());
     }
 
-    @Test
-    @DisplayName("DB unique index uq_ls_order_single_trip rejects assigning one order to two stops")
-    void deliveryOrderCanOnlyBelongToOneActiveTrip() {
-        LogisticsOrderBatch batch = batchRepo.saveAndFlush(
-                LogisticsOrderBatch.builder().factoryId(F1).businessDate(LocalDate.of(2026, 7, 11))
-                        .batchNumber("BATCH-G4").sourceFingerprint("fp-g4").build());
-        LogisticsPlan plan = planRepo.saveAndFlush(
-                LogisticsPlan.builder().factoryId(F1).orderBatchId(batch.getId())
-                        .planDate(LocalDate.of(2026, 7, 11)).planNumber("PLAN-G4").build());
-        LogisticsTrip trip1 = tripRepo.saveAndFlush(
-                LogisticsTrip.builder().factoryId(F1).planId(plan.getId()).tripNo(1).build());
-        LogisticsTrip trip2 = tripRepo.saveAndFlush(
-                LogisticsTrip.builder().factoryId(F1).planId(plan.getId()).tripNo(2).build());
-        LogisticsDeliveryOrder order = orderRepo.saveAndFlush(
-                LogisticsDeliveryOrder.builder().factoryId(F1).batchId(batch.getId())
-                        .storeCode("STORE-301").storeName("门店301").build());
-
-        stopRepo.saveAndFlush(LogisticsStop.builder().factoryId(F1).tripId(trip1.getId())
-                .deliveryOrderId(order.getId()).sequenceNo(1).build());
-
-        LogisticsStop conflicting = LogisticsStop.builder().factoryId(F1).tripId(trip2.getId())
-                .deliveryOrderId(order.getId()).sequenceNo(1).build();
-        assertThrows(DataIntegrityViolationException.class, () -> stopRepo.saveAndFlush(conflicting),
-                "same delivery_order_id assigned to a second active stop must violate uq_ls_order_single_trip");
-    }
+    // deliveryOrderCanOnlyBelongToOneActiveTrip 已删除 —— 原因见类文档顶部那段（H2 表达不了部分唯一索引，
+    // 这条规则改由 PartialUniqueIndexBackingSoftDeleteContractTest 在迁移源码层面守）。
 }
