@@ -54,7 +54,10 @@ set -euo pipefail
 source "$COMMON"
 acquire_deploy_lock "cretas-mutex-selftest" || exit 1
 touch "$TMP_ROOT/held"
-sleep 30
+# ⚠️ exec: 让持有者**本身**就是那个长寿进程。写成裸 \`sleep 30\` 的话, kill 掉 bash 之后 sleep
+#    成了孤儿、仍按着 fd 200 —— 那是另一种状态 (test-deploy-lock-orphan-holder.sh 专门量它,
+#    2026-09-06 起判「挡」), 与本用例要量的「持有者死了锁要能放」不是一回事。
+exec sleep 30
 EOF
 chmod +x "$TMP_ROOT/holder.sh"
 
