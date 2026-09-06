@@ -249,3 +249,12 @@
 - **裁定**：① 告警渠道暂不做留票；② 权限矩阵 step-1 按推荐（L1 只读矩阵页）；③ validate 按推荐（修通、测试环境证明、不改 prod 参数）；④ 销售账号 = `lsm004`（六膳门销售主管，sales_manager，最近登录 09-04）已给 owner，owner 已在小米上登录；⑤ OTA 直接推。
 - **OTA 推送 [RUN]**：deploy worktree detach `b65a7d4312`（`frontend` 与 `19093e274f` 无差异），`push-bundle.sh production android` `PUSH_EXIT=0`，82s，新包 `ts=1788676646980`（`createdAt 2026-09-06T06:38:37Z`），manifest 已切换，CDN `dl.` 上 hbc 200（6.7MB gzip）。现网前一包 `1788544899864`（09-05 02:03）**已含 #590**（`settleAllIndependently` before=1），本次新增只有 #615 的 RN 改动（`ShipmentManagementScreen` 三路独立 settle + util 14 行）。⚠️ 标识符层面正反两向都量不出（#615 全是复用已有符号；Hermes 字符串表去重），新旧 hbc md5 不同 + manifest ts 是仅有的制品证据；**送达**只能靠真机读 update id + 行为（probe `PROBE-XIAOMI-OTA-AND-SHORT-CLOSE` 在跑）。deploy worktree 推后 `git status` 干净（dist 未入树）。
 - 同轮派出：`PROBE-XIAOMI-OTA-AND-SHORT-CLOSE-20260906`（读 OTA 送达 + `DLV-20260904-4086` 的「短交结案」按钮，只读不点）。
+
+
+## 2026-09-06 15:05 `PROBE-XIAOMI-OTA-AND-SHORT-CLOSE-20260906` 回报（真机 M2102K1AC，lsm004 已登录；只读，未碰密码，未做业务写入）
+
+- **OTA 送达 ✅（行为读数）**：`am start` 拉回前台（pid 11535 不变=resume）触发 `scheduleBackgroundOtaCheck`；`dev.expo.updates`：`14:41:47 CheckCompleteAvailable → DownloadComplete(1.08s) → 14:42:59 点「立即更新」Restart → ReactNativeJS Running main → 14:43:00 Check → CheckCompleteUnavailable`。设备读到 update `createdAt 2026-09-06T06:38:37.000Z` = 推送 manifest。决定性的是最后的 Unavailable（新 JS 问服务器答「已最新」）。附带：asset 仍走 `dl.` 域且 1 秒内下完，该域此刻可用。
+- 🔴 **短交结案按钮不存在（形态 B）**：`SalesController.java:671` 端点在（`sales:read_write`，注释「只授予 sales_manager」）；`grep close-short-shipment` RN+web-admin = 0（阳性对照 `/cancel` 在 `salesApiClient.ts:330`）；RN 里「短交结案」只作状态文案（`SHORT_CLOSED`）与 `rowActionsConfig.ts:60` 事后动作；web-admin `短交结案|shortClose|SHORT_CLOSED` 0 处。实拍 `SO-20260902-0001`（部分发货，美式汉堡饼 订 10kg/已发 9.8）详情页零操作按钮。`ShipmentManagementScreen` 对 sales_manager 路由层（`SalesManagerNavigator` 13 屏无它）+ 屏内层（`canView` 仅 admin 三角色）双重不可达，且它是 legacy 只读 ⇒ #615 那半改动本轮没量到（要 `liushanmen_admin` 才能验）。⚠️ 无法从 UI 证明该单就是 `DLV-20260904-4086` 对应单（详情不显示发货单号）。
+- **#615 阳性对照 ✅**：销售看客户管理 6/6/0 显示名称非 ID；新建订单客户选择器 6 个全列；阴性对照退出后订单列表仍 14 条 / ¥102,684.20 未产生草稿。
+- **附带**：首页「功能模块」对 sales_manager 全空（截图 01/03）→ 开票 `BUG-HOME-MODULES-EMPTY-FOR-SALES`。截图 9 张 + logcat 原件在 scratchpad `PROBE-XIAOMI-OTA-*`。
+- **执行者中断**：权限矩阵与 validate 两个执行者被 Opus 403 掐断；权限矩阵在原树续作（已有端点 commit `5715510400`）；validate 原树是别人的旧分支（`codex/claude-rn-product-md` 109 脏文件，未动）⇒ 新树重开、复用 scratchpad 里的 schema dump/枚举脚本。
