@@ -47,7 +47,10 @@ ok()   { PASSED=$((PASSED + 1)); echo "  ok  [$PASSED] $*"; }
 
 [ -s "$COMMON" ] || fail "$COMMON 不存在"
 if ! command -v flock >/dev/null 2>&1; then
-    echo "SKIPPED:本机没有 flock (Windows Git Bash), acquire_deploy_lock 走 PID 文件分支, 遗留子进程持锁在这里量不到"
+    # ⚠️ 别只说 Windows: **macOS 默认也没有 flock**(Mac mini / macOS 26.4 / Darwin 25.4.0 实测 `command -v flock`
+    #    = ABSENT, 且没有 /proc) ⇒ 那台自建 runner 上 acquire 走的是 PID 文件分支。
+    #    这条措辞原来只写「Windows Git Bash」, 在 Mac 上读起来像「这台机器不该跳过却跳过了」。
+    echo "SKIPPED:本机没有 flock (Windows Git Bash / macOS 默认都没有), acquire_deploy_lock 走 PID 文件分支, 遗留子进程持锁在这里量不到"
     exit 77
 fi
 if [ ! -d /proc/self/fd ]; then
@@ -219,31 +222,76 @@ case "$outE" in *"$LIVE"*|*"另一个 deploy"*) ;; *) fail "拒绝信息应点�
 stop_live_holder
 ok "E: 被拒调用方走 release_deploy_lock ⇒ 活持有者的锁文件仍在, 第三个进程照样被拒 (rc=$rcEb)"
 
-# ── F 截断走自己的 fd, 不走路径 (#692 终审 follow-up a) ─────────────────────────
-# release_deploy_lock 要把登记的 PID 清掉。若按【路径】截断, 而 acquire 与 release 之间那个
-# 路径已经被换掉(灰度期的旧写法对端 / 有人手 rm 又重建), 截掉的就是**别人的 inode** ——
-# 互斥不受影响(flock 挂在 OFD 上), 坏的是诊断: 下一次拒绝会说「已正常释放」而其实有活着的
-# 持有者。⇒ 必须经 /dev/fd/200 截断我们自己的 inode。
+# ── F 释放时清 PID: 只清我们自己那个文件 (#692 follow-up a; 2026-09-07 第二版) ──────
+#
+# 🔴 第一版写 `: >/dev/fd/200`, **只在 Linux 上成立**。macOS 的 man 页写明「打开 /dev/fd/N
+#    等价于 dup(N)」⇒ O_TRUNC 被忽略, 而且 open **成功**⇒ `|| true` 不触发 = 静默 no-op。
+#    Mac mini (macOS 26.4 / Darwin 25.4.0) 实测: `>&200` 之后 8 字节, `>/dev/fd/200` 之后**仍是 8**。
+#    ⇒ 改成「记 inode + 比一次」: 相同就按路径截(所有平台成立), 不同就**不截并 WARN**。
+# ⚠️ 这一组的断言在 2026-09-07 **变过号**, 而它**不是放宽判据** —— 看 diff 的人容易误读, 所以写清楚:
+#   旧断言(字面): 「路径被换掉之后, **我们那份**一定是 0 字节」(靠 /dev/fd 截到自己的 inode)
+#   新断言(性质): F 守的从来就是下面这两条, 只是旧写法恰好用「我们那份=0」来表达其中一条:
+#       ① ⛔ **绝不动别人的 inode** —— 抹掉别人的 PID 戳会让下一次拒绝给出反向结论
+#       ② **说得出自己做了什么** —— 截了/没截必须有各自的读数, ⛔ 不许静默
+#   为什么①不再要求「我们那份=0」: 我们那个 inode 在关掉 fd 的那一刻就被内核释放了, 路径已经
+#   不指向它, 下一次 acquire 根本碰不到它 ⇒ 截不截断对后续行为**没有影响**; 而为了截它去依赖
+#   `/dev/fd` 的平台语义, 换来的是 macOS 上的静默 no-op(形态: 断言守着已经不想要的旧行为, C‴)。
+#
+# 判据分三态, ⛔ 不许两种情况打同一行读数:
+#   F1 正常释放(路径没被动)      ⇒ 文件被清空 (0 字节) —— 下一次获取才不会误报 reclaiming
+#   F2 路径被换掉                ⇒ **别人那份一字节不动** + 日志里响一声 (① + ②)
+PLATFORM=$(uname -s)
+sz() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo missing; }
+
+# F1: 正常路径 —— 清空。
+rm -f "$LOCK_FILE" "$LOCK_FILE.moved"
+cat > "$TMP/plain.sh" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+source "$COMMON"
+acquire_deploy_lock "$LOCK_NAME" || exit 9
+release_deploy_lock
+EOF
+bash "$TMP/plain.sh" > "$TMP/plain.log" 2>&1 || fail "F1 构造失败: $(cat "$TMP/plain.log")"
+plain_bytes=$(sz "$LOCK_FILE")
+echo "READING: F1_platform=$PLATFORM lockfile_bytes_after_release=$plain_bytes (期望 0)"
+[ "$plain_bytes" = "0" ] \
+    || fail "F1: 正常释放没把登记 PID 清掉(实得 $plain_bytes) —— 下一次获取会误报 reclaiming。⚠️ 若这里在 macOS 上红, 就是 /dev/fd 那条静默 no-op 又回来了"
+# 🔴 这条读数必须在**默认 LOG_LEVEL**(INFO, 调用方一个都没抬过)下看得见 —— 写成 DEBUG 的话,
+#    它在每一次真实部署里都被抑制, 而本函数声称的性质②「说得出自己做了什么」就在最常见的
+#    那条路径上不成立(#706 终审 F-1 抓到的正是这个)。⚠️ plain.sh 刻意**不设** _LOG_LEVEL。
+grep -q '已清空登记 PID' "$TMP/plain.log" \
+    || fail "F1: 正常释放的那条读数在默认日志级别下看不见 —— 性质②在最常见路径上不成立(是不是写成 DEBUG 了?): $(cat "$TMP/plain.log")"
+# 反向对照: 正常路径**不该**出现「不截断」那条 WARN。没有这一条, 「两种情况读数互异」
+# 只被单向断言过 —— 一个恒打 WARN 的实现也能让 F2 绿。
+grep -q '不截断' "$TMP/plain.log" \
+    && fail "F1 反向对照: 正常路径出现了「不截断」WARN —— inode 比对没走对分支, 或者它恒打 WARN(那样 F2 就是空气)"
+ok "F1 正常释放 ⇒ 清空 + 读数在默认级别可见 + 无「不截断」WARN (平台 $PLATFORM)"
+
+# F2: 持锁期间路径被换掉 —— 两边都不许动, 而且要响。
 rm -f "$LOCK_FILE" "$LOCK_FILE.moved"
 cat > "$TMP/swap.sh" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
 source "$COMMON"
+_LOG_LEVEL=DEBUG
 acquire_deploy_lock "$LOCK_NAME" || exit 9
 # 有人在我们持锁期间把路径换走, 并用一个新文件占住原路径
 mv "$LOCK_FILE" "$LOCK_FILE.moved"
 printf 'IMPOSTOR12\n' > "$LOCK_FILE"
 release_deploy_lock
 EOF
-bash "$TMP/swap.sh" > "$TMP/swap.log" 2>&1 || fail "F 构造失败: $(cat "$TMP/swap.log")"
-moved_bytes=$(stat -c %s "$LOCK_FILE.moved" 2>/dev/null || echo missing)
-impostor_bytes=$(stat -c %s "$LOCK_FILE" 2>/dev/null || echo missing)
-echo "READING: F_own_inode_bytes=$moved_bytes F_impostor_bytes=$impostor_bytes (期望 0 / 11)"
-[ "$moved_bytes" = "0" ] \
-    || fail "F: 我们自己的 inode 没被截断(实得 $moved_bytes) —— 登记 PID 还在, 下一次获取会误报 reclaiming"
+bash "$TMP/swap.sh" > "$TMP/swap.log" 2>&1 || fail "F2 构造失败: $(cat "$TMP/swap.log")"
+moved_bytes=$(sz "$LOCK_FILE.moved")
+impostor_bytes=$(sz "$LOCK_FILE")
+echo "READING: F2_own_file_bytes=$moved_bytes F2_impostor_bytes=$impostor_bytes (期望 都不为 0: 我们那份保持原样, 别人那份 11)"
 [ "$impostor_bytes" = "11" ] \
-    || fail "F: 占住原路径的**别人的**文件被动了(实得 $impostor_bytes, 期望 11) —— 按路径截断会抹掉别人的 PID 戳"
-ok "释放时截断的是自己的 inode, 不是当时占住该路径的那个文件"
+    || fail "F2: 占住原路径的**别人的**文件被动了(实得 $impostor_bytes, 期望 11) —— 无条件按路径截断会抹掉别人的 PID 戳"
+[ "$moved_bytes" != "0" ] \
+    || fail "F2: 我们那份被截断了(0 字节) —— 说明走的仍是与路径/平台绑定的写法, 而不是 inode 比对"
+grep -q '不截断' "$TMP/swap.log" \
+    || fail "F2: 路径被换掉时必须**响一声**(WARN), ⛔ 不能静默跳过 —— 否则与「截断成功」读数同形: $(cat "$TMP/swap.log")"
+ok "F2 路径被换掉 ⇒ 两边都不动, 且日志里响了一声 (不是静默 no-op)"
 rm -f "$LOCK_FILE" "$LOCK_FILE.moved"
 
 # ── G 拒绝信息: kill 之前必须先有一条确认命令 (#692 终审 follow-up b) ────────────
