@@ -52,7 +52,7 @@
 | 批 | 内容 | 状态 |
 |---|---|---|
 | 1 | `scripts/cron/cron-common.sh`（钉 PATH / 缺命令 rc=2 / venv 守卫）+ #1 + #15/#16/#17 + inventory 登记与订正 + 本文档 + 3 个测试 | 本 PR |
-| 2 | #2 #3 #4 #5 #6 #9 #12（六个「systemctl 取 environ」形状 + forecast）：`cron_activate_venv` + `.env.prod` 显式存在性 + 去 `2>/dev/null` | 下一 PR |
+| 2 | #2 #3 #4 #5 #6 #9 #12（六个「systemctl 取 environ」形状 + forecast）：`cron_activate_venv` + `.env.prod` 显式存在性（`cron_source_env_required`）+ `.env.daily-close` 显式可选（`cron_source_env_optional`）+ 去 `2>/dev/null` + 各脚本路径可覆盖。⚠️ 测试当场抓到 #6 一个静默死法：`.env.daily-close` 不在时 `DAILY_CLOSE_FACTORIES` 未定义，`set -u` 下 rc=1 **不写告警**（改前改后都会，改后测试才看见）。硬约束 8 等式：`cron_pin_path` 4→11、`cron_require_cmds` 4→10（forecast 不用 systemctl）、`cron_activate_venv` 2→9、`cron_dead` 7→14（各加一处 `pydir-missing`）、新增 `cron_source_env_required` 7 / `_optional` 2 | 第二个 PR（基于批 1，等 #658 合并后开） |
 | 3 | #7 #8 #10（两态 → 三态：崩溃与业务失败分开）| 再下一 PR |
 | — | #11 #14 已合规；#13 不动 | — |
 

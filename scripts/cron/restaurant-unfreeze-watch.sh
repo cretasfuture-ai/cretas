@@ -9,26 +9,31 @@
 # ⛔ 不阻断任何东西 —— 产出是台账 + 告警行, 给人看。
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-LOG=/www/wwwroot/cretas/logs/unfreeze-watch.log
-ALERTS=/www/wwwroot/cretas/logs/unfreeze-watch-alerts.log
-LEDGER=/www/wwwroot/cretas/logs/unfreeze-watch-ledger.jsonl
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态)。
+PYDIR="${UNFREEZE_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+LOG="${UNFREEZE_LOG:-/www/wwwroot/cretas/logs/unfreeze-watch.log}"
+ALERTS="${UNFREEZE_ALERTS:-/www/wwwroot/cretas/logs/unfreeze-watch-alerts.log}"
+LEDGER="${UNFREEZE_LEDGER:-/www/wwwroot/cretas/logs/unfreeze-watch-ledger.jsonl}"
+ENV_PROD="${UNFREEZE_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+# 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "UNFREEZE WATCH" systemctl
 
 {
   echo "=== $(date '+%F %T') unfreeze watch ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "UNFREEZE WATCH" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "UNFREEZE WATCH"
 
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "UNFREEZE WATCH"
   set +a
 
   # ⚠️ `.env.prod` **不含 POSTGRES_DB** —— 只在 systemd unit 里。
   #    不补会落到默认值(测试库), 而那会让每一条判据都量在错的库上。
   # ⛔ 只 export 需要的前缀: eval 整份 environ 会冲掉 PATH, python 掉回系统解释器。
-  svc_pid=$(systemctl show -p MainPID --value cretas-python.service 2>/dev/null)
+  svc_pid=$(systemctl show -p MainPID --value cretas-python.service)
   if [ -n "${svc_pid:-}" ] && [ "$svc_pid" != "0" ] && [ -r "/proc/$svc_pid/environ" ]; then
     while IFS= read -r -d '' kv; do
       case "$kv" in
@@ -44,13 +49,16 @@ LEDGER=/www/wwwroot/cretas/logs/unfreeze-watch-ledger.jsonl
   export PYTHONPATH="$PYDIR:$PYDIR/smartbi"
   export UNFREEZE_LEDGER="$LEDGER"
 
-  before=$(wc -l < "$LEDGER" 2>/dev/null || echo 0)
+  # 与 flywheel-promotion-staleness 同形: 台账第一次跑时文件还不存在, ⛔ 不用 `2>/dev/null || echo 0`
+  # 去吞重定向错误 —— 那会把别的读错(权限/路径)也吞成 0。
+  _ledger_lines() { if [ -f "$LEDGER" ]; then wc -l < "$LEDGER"; else echo 0; fi; }
+  before=$(_ledger_lines)
 
   PYTHONIOENCODING=utf-8 python -X utf8 -u -m smartbi.scripts.unfreeze_watch
   rc=$?
   echo "=== done (rc=$rc) ==="
 
-  after=$(wc -l < "$LEDGER" 2>/dev/null || echo 0)
+  after=$(_ledger_lines)
 
   # 🔴 硬约束 9：验证「今天没喊」时，必须同时有一个「一定会发生」的读数。
   #    台账每次必追加一行 —— 它没涨就说明根本没跑完, 那么「没告警」没有意义。
