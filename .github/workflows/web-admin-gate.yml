@@ -66,6 +66,14 @@ on:
       #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
+      # 🔴 2026-09-06: moduleListsPairwiseConsistency.source.spec.ts 读这四个文件里的模块清单
+      # 字面量 (ALL_MODULES / 两份 ALLOWED_MODULES / DISPLAY_MODULES), 与 web-admin 的 4 份两两
+      # 比对并钉棘轮。一个**只往 Java 清单加模块**的 PR 恰好是它要守的漂移, 不登记它就看不见。
+      # ⛔ 逐文件登记, 不用宽 glob (理由见上)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
       # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
       # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
       # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
@@ -144,6 +152,14 @@ on:
       #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
+      # 🔴 2026-09-06: moduleListsPairwiseConsistency.source.spec.ts 读这四个文件里的模块清单
+      # 字面量 (ALL_MODULES / 两份 ALLOWED_MODULES / DISPLAY_MODULES), 与 web-admin 的 4 份两两
+      # 比对并钉棘轮。一个**只往 Java 清单加模块**的 PR 恰好是它要守的漂移, 不登记它就看不见。
+      # ⛔ 逐文件登记, 不用宽 glob (理由见上)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
       # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
       # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
       # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
