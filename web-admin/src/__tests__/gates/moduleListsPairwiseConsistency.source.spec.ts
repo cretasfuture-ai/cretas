@@ -167,7 +167,10 @@ function renderTable(devs: Deviation[]): string {
  * 棘轮基线 = 与 L1 轴的偏离总条数 (extra + 非投影清单的 missing)。
  * 2026-09-06 v2 首次实测见 PR body; ⛔ 只许往下调, 每收敛一份就降一次。
  */
-const DEVIATION_BASELINE = 21;   // 2026-09-06 v2 首测 29 → 删 ai 27 (#675) → 2026-09-07 刀 A 删 utils/permission.ts 21
+// 2026-09-06 v2 首测 29 → 删 ai 27 (#675) → 刀 A 删 utils/permission.ts 21 (#690) → 刀 B 补 operations 19 (#695)。
+// ⚠️ 棘轮是 `<=`, 所以「CI 绿」只证明 ≤ 基线, **不证明恰好等于**。每次下调都要把减法算出来:
+//    刀 B 给 L1/L2 两份写白名单各补了 operations ⇒ 各自的 missing 从 1 变 0 ⇒ 21 − 2 = 19 (2026-09-07 实测一致)。
+const DEVIATION_BASELINE = 19;
 
 describe('module lists converge to L1 (ratchet, source-scan)', () => {
   const devs = LISTS.map(deviation);

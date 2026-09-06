@@ -42,9 +42,10 @@
  * | 分支长在哪 | 一个 `.tsx` 的 JSX | **两个语法体系**：`<script setup>`（TS）+ `<template>`（Vue 指令，表达式是字符串） |
  * | 判定用的树 | `ts.createSourceFile` | `vue/compiler-sfc` 拆块 →<br>script 走 `ts.createSourceFile`；template 的每条指令表达式**再喂给 TS 解析器** |
  *
- * ⚠️ `src/utils/permission.ts` 里那套 `hasModulePermission` / `isPlatformAdmin`
- *    （RN `permissionHelper` 的对应物）在 web-admin **零 import** —— 已经是死代码。
- *    所以本分析器**不**登记它们；登记了只会造出一批永远命中不到的成员。
+ * ⚠️ 曾经的 `src/utils/permission.ts`（`hasModulePermission` / `isPlatformAdmin`，RN `permissionHelper`
+ *    的对应物）**已于 2026-09-07 #690 删除**（清单收敛刀 A：第三份手写矩阵，唯一调用点改用 permission store）。
+ *    本分析器不登记它们 —— 现在是因为它们不存在，不是因为「零 import」。
+ *    ⛔ 别照这条注释去找那个文件。
  *
  * ## 三态，⛔ 不许二分
  *
