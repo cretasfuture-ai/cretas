@@ -24,6 +24,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import {
   getPermissionMatrix,
   writePermissionMatrixCell,
@@ -124,8 +125,15 @@ function isRestaurantCell(role: string, module: string): boolean {
   return role.startsWith('restaurant_') || module.startsWith('restaurant');
 }
 
+// R2 (终审): 只读角色 (system=r 的 department_admin / dispatcher) 看得到页面但写会 403 ——
+// 前端先判 canWrite('system'), 不给他们一个必败的编辑器 (fool-proof: 预先显示边界, 不要事后报错)。
+// ⚠️ 这不是权限判定, 后端 @RequirePermission 仍是真值; 这里只决定要不要出编辑态。
+const permissionStore = usePermissionStore();
+const canWriteSystem = computed(() => permissionStore.canWrite('system'));
+
 function isEditable(role: string, module: string): boolean {
   if (!view.value) return false;
+  if (!canWriteSystem.value) return false;
   if (role === 'unactivated') return false;
   return !isRestaurantCell(role, module);
 }

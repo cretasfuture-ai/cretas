@@ -212,4 +212,36 @@ class PlatformRolePermissionWriteServiceContractTest {
         // 缓存没被清: 判定仍是写之前的值 (真库上 L1 行会随事务回滚, 这里只钉「没走到失效那一步」)
         assertThat(permissionService.hasPermission(salesMgr, "sales:write")).isTrue();
     }
+
+    @Test
+    @DisplayName("R1 餐饮不管是双向的: 餐饮角色的操作者 ⇒ 403, 零写入 (阳性对照: permission_admin 同一格能写)")
+    void restaurantActorCannotWriteEvenFactoryCells() {
+        seed("viewer", "finance", "-");
+        for (String actorRole : new String[]{"restaurant_owner", "restaurant_manager", "restaurant_purchaser", "restaurant_chef"}) {
+            assertThatThrownBy(() -> service.write(user(7100L, actorRole), "F006", "viewer", "finance", "r", null))
+                    .as("actor %s", actorRole)
+                    .isInstanceOf(BusinessException.class).hasMessageContaining("餐饮侧待定");
+        }
+        verify(l1Repo, never()).save(any());
+        verify(auditRepo, never()).save(any());
+        assertThat(table.get("viewer|finance").getPermissionLevel()).isEqualTo("-");
+        // 阳性对照: 同一格换成 permission_admin 操作者写得进去
+        assertThat(service.write(user(7000L, "permission_admin"), "F006", "viewer", "finance", "r", null).row().getPermissionLevel()).isEqualTo("r");
+    }
+
+    @Test
+    @DisplayName("R3 role_code 必须是 FactoryUserRole 枚举名: 拼错的角色 ⇒ 400, 不写 L1 也不写审计; unactivated 字面量本身允许")
+    void unknownRoleCodeIsRejected() {
+        User admin = user(7000L, "permission_admin");
+        for (String bad : new String[]{"sales_mgr", "Sales_Manager", "viewer ", "platform-admin"}) {
+            assertThatThrownBy(() -> service.write(admin, "F006", bad, "finance", "r", null))
+                    .as("role %s", bad)
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("未知角色");
+        }
+        verify(l1Repo, never()).save(any());
+        verify(auditRepo, never()).save(any());
+        // 阳性对照: 真实枚举名走得通 (含 unactivated 字面量 —— 它是合法枚举, fromRoleCode 的折叠不该误伤它)
+        assertThat(service.write(admin, "F006", "unactivated", "finance", "-", null).row().getPermissionLevel()).isEqualTo("-");
+        assertThat(service.write(admin, "F006", "sales_manager", "finance", "r", null).row().getPermissionLevel()).isEqualTo("r");
+    }
 }

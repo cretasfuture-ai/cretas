@@ -15,6 +15,12 @@ vi.mock('@/store/modules/auth', () => ({
   useAuthStore: () => ({ factoryId: 'F006' }),
 }));
 
+// R2: 编辑态还看 permissionStore.canWrite('system'); 默认 true, 阴性用例把它拨成 false
+const canWriteSystem = { value: true };
+vi.mock('@/store/modules/permission', () => ({
+  usePermissionStore: () => ({ canWrite: (m: string) => (m === 'system' ? canWriteSystem.value : false) }),
+}));
+
 const getPermissionMatrix = vi.fn();
 const writePermissionMatrixCell = vi.fn();
 vi.mock('@/api/permissionMatrixApi', () => ({
@@ -64,6 +70,18 @@ describe('permission matrix step-2 edit', () => {
   beforeEach(() => {
     getPermissionMatrix.mockReset();
     writePermissionMatrixCell.mockReset();
+    canWriteSystem.value = true;
+  });
+
+  it('R2 阴性: 只读角色 (canWrite(system)=false) 所有格不可编辑, 点了不出编辑器、不发 PUT', async () => {
+    canWriteSystem.value = false;
+    const wrapper = await mountPage(view('-'));
+    const cell = wrapper.find('[data-cell="sales_manager/finance"]');
+    expect(cell.attributes('data-editable')).toBe('false');
+    await cell.trigger('click');
+    expect(wrapper.find('[data-testid="pm-editor"]').exists()).toBe(false);
+    expect(writePermissionMatrixCell).not.toHaveBeenCalled();
+    // 阳性对照在同一 describe 的其它用例里 (canWrite=true 时同一格能进编辑)
   });
 
   it('页面明示「全平台生效」', async () => {

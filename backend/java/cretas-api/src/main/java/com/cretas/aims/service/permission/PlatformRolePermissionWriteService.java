@@ -2,6 +2,7 @@ package com.cretas.aims.service.permission;
 
 import com.cretas.aims.controller.platform.PlatformRolePermissionController;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
 import com.cretas.aims.entity.permission.PlatformRolePermissionAudit;
 import com.cretas.aims.exception.BusinessException;
@@ -71,8 +72,19 @@ public class PlatformRolePermissionWriteService {
         if (actor == null || actor.getId() == null) {
             throw new BusinessException(403, "无法确认操作人, 拒绝写入权限 (审计行不能没有 changed_by)");
         }
+        // R1 (终审): 「餐饮不管」是双向的 —— 餐饮角色的**操作者**也不许写 L1。
+        // prod 今日 restaurant_owner 的 L1 system=rw (4-20 种子), 过得了 system:read_write 门禁, 能改工厂角色的全平台权限。
+        if (actor.getRoleCode() != null && actor.getRoleCode().startsWith(RESTAURANT_ROLE_PREFIX)) {
+            throw new BusinessException(403, "餐饮侧待定: 餐饮角色的操作者不可写 L1 权限 (" + actor.getRoleCode() + ")");
+        }
         if (roleCode == null || roleCode.isBlank() || moduleCode == null || moduleCode.isBlank()) {
             throw new IllegalArgumentException("role / module 不能为空");
+        }
+        // R3 (终审): role_code 必须是 FactoryUserRole 里的枚举名, 拼错的角色不得写进 L1 与审计
+        // (fromRoleCode 把未知串折叠成 unactivated, 所以要和字面量一起判)
+        if (FactoryUserRole.fromRoleCode(roleCode) == FactoryUserRole.unactivated
+                && !FactoryUserRole.unactivated.name().equals(roleCode)) {
+            throw new IllegalArgumentException("未知角色: " + roleCode + " (必须是 FactoryUserRole 枚举名)");
         }
         PlatformRolePermissionController.assertModuleAllowed(moduleCode);
         if (level == null || !ALLOWED_LEVELS.contains(level)) {
