@@ -3,6 +3,7 @@ package com.cretas.aims.entity.hr;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.hr.enums.AnnualTaxSettlementStatus;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
@@ -49,6 +50,7 @@ import java.time.LocalDateTime;
            @Index(name = "idx_annual_tax_factory_status",
                   columnList = "factory_id,status,tax_year")
        })
+@SQLDelete(sql = "UPDATE annual_tax_settlements SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

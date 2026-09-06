@@ -9,6 +9,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.time.LocalDate;
@@ -34,6 +35,7 @@ import java.util.UUID;
                 @Index(name = "idx_lvd_vehicle", columnList = "vehicle_id"),
                 @Index(name = "idx_lvd_driver", columnList = "driver_id")
         })
+@SQLDelete(sql = "UPDATE logistics_vehicle_drivers SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 @Data
 @EqualsAndHashCode(callSuper = true)

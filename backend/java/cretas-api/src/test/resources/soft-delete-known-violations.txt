@@ -96,9 +96,6 @@ com.cretas.aims.entity.SchedulingPlan
 com.cretas.aims.entity.Session
 com.cretas.aims.entity.ShipmentRecord
 com.cretas.aims.entity.Supplier
-com.cretas.aims.entity.SupplierAddress
-com.cretas.aims.entity.SupplierBankAccount
-com.cretas.aims.entity.SupplierContact
 com.cretas.aims.entity.SupplierMaterial
 com.cretas.aims.entity.SupplierMaterialPurchaseSpec
 com.cretas.aims.entity.TimeClockRecord
@@ -155,9 +152,7 @@ com.cretas.aims.entity.config.SopConfig
 com.cretas.aims.entity.config.SystemEnum
 com.cretas.aims.entity.config.UnitOfMeasurement
 com.cretas.aims.entity.config.WorkflowRule
-com.cretas.aims.entity.config.WorkflowVariableDef
 com.cretas.aims.entity.conversation.ConversationMemory
-com.cretas.aims.entity.cron.ScheduledTask
 com.cretas.aims.entity.cron.ScheduledTaskRunLog
 com.cretas.aims.entity.datacenter.ExportJob
 com.cretas.aims.entity.datacenter.ImportJob
@@ -184,7 +179,6 @@ com.cretas.aims.entity.finance.VoucherEntry
 com.cretas.aims.entity.finance.VoucherExportConfig
 com.cretas.aims.entity.finance.VoucherExportRecord
 com.cretas.aims.entity.finance.VoucherSubjectMapping
-com.cretas.aims.entity.finance.VoucherTemplate
 com.cretas.aims.entity.foodsafety.AdditiveLimit
 com.cretas.aims.entity.foodsafety.ColdChainAlert
 com.cretas.aims.entity.foodsafety.ColdChainEquipment
@@ -200,7 +194,6 @@ com.cretas.aims.entity.foodsafety.SsopBlockingGate
 com.cretas.aims.entity.foodsafety.SsopExecutionRecord
 com.cretas.aims.entity.foodsafety.SsopProcedure
 com.cretas.aims.entity.foodsafety.SupplierQualification
-com.cretas.aims.entity.hr.AnnualTaxSettlement
 com.cretas.aims.entity.hr.AttendanceException
 com.cretas.aims.entity.hr.AttendanceShift
 com.cretas.aims.entity.hr.CompTimeBalance
@@ -213,8 +206,6 @@ com.cretas.aims.entity.hr.HrInsuranceConfig
 com.cretas.aims.entity.hr.LeaveBalance
 com.cretas.aims.entity.hr.LeaveRequest
 com.cretas.aims.entity.hr.OvertimeRequest
-com.cretas.aims.entity.hr.SalaryItem
-com.cretas.aims.entity.hr.SalarySpecialDeduction
 com.cretas.aims.entity.indicator.Indicator
 com.cretas.aims.entity.indicator.IndicatorComputation
 com.cretas.aims.entity.indicator.IndicatorThreshold
@@ -235,7 +226,6 @@ com.cretas.aims.entity.inventory.PurchaseException
 com.cretas.aims.entity.inventory.PurchaseInvoice
 com.cretas.aims.entity.inventory.PurchaseInvoiceChaseLog
 com.cretas.aims.entity.inventory.PurchaseOrder
-com.cretas.aims.entity.inventory.PurchaseOrderApprovalRule
 com.cretas.aims.entity.inventory.PurchaseReceiveItem
 com.cretas.aims.entity.inventory.PurchaseReceiveRecord
 com.cretas.aims.entity.inventory.PurchaseRequisition
@@ -257,7 +247,6 @@ com.cretas.aims.entity.material.MaterialPackagingSpec
 com.cretas.aims.entity.ml.LinUCBModel
 com.cretas.aims.entity.ml.WorkerAllocationFeedback
 com.cretas.aims.entity.notify.NotifyLog
-com.cretas.aims.entity.notify.NotifyTemplate
 com.cretas.aims.entity.permission.PlatformRolePermission
 com.cretas.aims.entity.pos.PosConnection
 com.cretas.aims.entity.pos.PosOrderSync
@@ -328,13 +317,8 @@ com.cretas.aims.entity.workflow.ApprovalWorkflowInstance
 com.cretas.aims.entity.workflow.OaActionIdempotencyLedger
 com.cretas.aims.entity.workflow.ProductionWorkflowInstance
 com.cretas.aims.entity.workflow.WorkflowTaskPort
-com.cretas.aims.entity.workprocess.WorkProcessTask
-com.cretas.aims.logistics.entity.LogisticsDeliveryOrder
 com.cretas.aims.logistics.entity.LogisticsDistanceEdge
 com.cretas.aims.logistics.entity.LogisticsDriver
 com.cretas.aims.logistics.entity.LogisticsOrderBatch
 com.cretas.aims.logistics.entity.LogisticsPlan
-com.cretas.aims.logistics.entity.LogisticsStop
-com.cretas.aims.logistics.entity.LogisticsTrip
-com.cretas.aims.logistics.entity.LogisticsVehicleDriver
 com.cretas.aims.logistics.entity.LogisticsVehicleProfile

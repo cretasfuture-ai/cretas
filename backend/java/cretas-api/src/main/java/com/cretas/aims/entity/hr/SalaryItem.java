@@ -3,6 +3,7 @@ package com.cretas.aims.entity.hr;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.hr.enums.SalaryStatus;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
@@ -42,6 +43,7 @@ import java.time.LocalDateTime;
            @Index(name = "idx_salary_factory_month", columnList = "factory_id,year_month"),
            @Index(name = "idx_salary_factory_status", columnList = "factory_id,status,year_month")
        })
+@SQLDelete(sql = "UPDATE salary_items SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

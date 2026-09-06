@@ -16,6 +16,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -51,6 +52,7 @@ import java.time.LocalDateTime;
         @Index(name = "idx_wpt_assignee", columnList = "factory_id, assigned_to, status"),
         @Index(name = "idx_wpt_process", columnList = "factory_id, work_process_id")
 })
+@SQLDelete(sql = "UPDATE work_process_tasks SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class WorkProcessTask extends BaseEntity {
 

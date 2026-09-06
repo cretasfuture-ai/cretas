@@ -6,6 +6,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.util.UUID;
@@ -27,6 +28,7 @@ import java.util.UUID;
            @Index(name = "idx_supplier_addresses_supplier",
                   columnList = "factory_id, supplier_id, sort_order")
        })
+@SQLDelete(sql = "UPDATE supplier_addresses SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class SupplierAddress extends BaseEntity {
 

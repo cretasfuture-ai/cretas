@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.hr.enums.DeductionStatus;
 import com.cretas.aims.entity.hr.enums.DeductionType;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
@@ -51,6 +52,7 @@ import java.time.LocalDate;
            @Index(name = "idx_special_deduction_factory_status",
                   columnList = "factory_id,status,valid_from,valid_to")
        })
+@SQLDelete(sql = "UPDATE salary_special_deductions SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter
