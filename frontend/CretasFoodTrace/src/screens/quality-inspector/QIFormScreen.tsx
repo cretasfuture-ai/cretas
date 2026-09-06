@@ -4,18 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -156,7 +146,7 @@ export default function QIFormScreen() {
       setBatch(data);
     } catch (error) {
       console.error('加载批次失败:', error);
-      Alert.alert(t('form.loadBatchFailed'), t('form.cannotLoadBatch'));
+      appAlert(t('form.loadBatchFailed'), t('form.cannotLoadBatch'));
     } finally {
       setLoading(false);
     }
@@ -262,7 +252,7 @@ export default function QIFormScreen() {
     const validationError = validateBeforeSubmit();
     if (validationError) {
       setSubmitError(validationError);
-      Alert.alert(t('form.cannotSubmit'), validationError);
+      appAlert(t('form.cannotSubmit'), validationError);
       return;
     }
     // validate 已经保证了这几个非空; 断言只是让类型收窄, 不是兜底。
@@ -346,7 +336,7 @@ export default function QIFormScreen() {
         t('form.checkNetworkAndRetry'),
       );
       setSubmitError(message);
-      Alert.alert(t('form.submitFailed'), message);
+      appAlert(t('form.submitFailed'), message);
     } finally {
       setSubmitting(false);
     }

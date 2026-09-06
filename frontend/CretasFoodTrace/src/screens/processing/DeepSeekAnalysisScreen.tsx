@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Card, Button, Appbar, ActivityIndicator, Chip, TextInput as PaperTextInput, IconButton, ProgressBar, Divider, Switch } from 'react-native-paper';
 import { isAxiosError } from 'axios';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -265,12 +266,12 @@ export default function DeepSeekAnalysisScreen() {
 
       // Handle specific errors
       if (status === 429) {
-        Alert.alert('配额不足', getErrorMsg(error) || '本周AI分析次数已达上限，请下周一再试');
+        appAlert('配额不足', getErrorMsg(error) || '本周AI分析次数已达上限，请下周一再试');
       } else if (status === 403) {
-        Alert.alert('功能已禁用', 'AI分析功能已被管理员禁用');
+        appAlert('功能已禁用', 'AI分析功能已被管理员禁用');
       } else {
         const errorMessage = getErrorMsg(error) || '加载AI分析失败，请稍后重试';
-        Alert.alert('加载失败', errorMessage);
+        appAlert('加载失败', errorMessage);
       }
     } finally {
       setLoading(false);
@@ -282,12 +283,12 @@ export default function DeepSeekAnalysisScreen() {
    */
   const handleAskQuestion = async () => {
     if (!question.trim()) {
-      Alert.alert('提示', '请输入问题');
+      appAlert('提示', '请输入问题');
       return;
     }
 
     if (!sessionId) {
-      Alert.alert('提示', '无会话ID，无法追问');
+      appAlert('提示', '无会话ID，无法追问');
       return;
     }
 
@@ -320,7 +321,7 @@ export default function DeepSeekAnalysisScreen() {
     } catch (error) {
       deepSeekLogger.error('AI追问失败', error, { batchId, sessionId });
       const errorMessage = getErrorMsg(error) || '追问失败，请稍后重试';
-      Alert.alert('追问失败', errorMessage);
+      appAlert('追问失败', errorMessage);
     } finally {
       setAiLoading(false);
     }
@@ -328,7 +329,7 @@ export default function DeepSeekAnalysisScreen() {
 
   const handleExport = async () => {
     if (!analysisResponse) {
-      Alert.alert('提示', '暂无分析结果可导出');
+      appAlert('提示', '暂无分析结果可导出');
       return;
     }
     try {
@@ -340,7 +341,7 @@ export default function DeepSeekAnalysisScreen() {
       );
     } catch (error) {
       console.error('PDF export failed:', error);
-      Alert.alert('导出失败', '生成PDF时出错，请稍后重试');
+      appAlert('导出失败', '生成PDF时出错，请稍后重试');
     }
   };
 
@@ -601,7 +602,7 @@ export default function DeepSeekAnalysisScreen() {
                     <Button
                       mode="text"
                       icon="check-circle"
-                      onPress={() => Alert.alert('提示', '已记录采纳')}
+                      onPress={() => appAlert('提示', '已记录采纳')}
                       compact
                     >
                       采纳
@@ -609,7 +610,7 @@ export default function DeepSeekAnalysisScreen() {
                     <Button
                       mode="text"
                       icon="share-variant"
-                      onPress={() => Alert.alert('提示', '已复制到剪贴板')}
+                      onPress={() => appAlert('提示', '已复制到剪贴板')}
                       compact
                     >
                       分享

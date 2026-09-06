@@ -9,20 +9,8 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  FlatList,
-  Alert,
-  ActivityIndicator,
-  Modal,
-  Animated,
-  Easing,
-  Platform,
-  TextInput,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, Modal, Animated, Easing, Platform, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -144,7 +132,7 @@ export default function NfcTagManagementScreen() {
 
   const openWriteModal = useCallback(() => {
     if (!nfcModuleReady) {
-      Alert.alert(
+      appAlert(
         'NFC 不可用',
         '请先安装 react-native-nfc-manager 模块并重新构建应用。',
         [{ text: '知道了' }]
@@ -152,7 +140,7 @@ export default function NfcTagManagementScreen() {
       return;
     }
     if (!nfcAvailable) {
-      Alert.alert(
+      appAlert(
         'NFC 未启用',
         '请在系统设置中开启 NFC 功能。',
         [{ text: '知道了' }]
@@ -178,7 +166,7 @@ export default function NfcTagManagementScreen() {
     const empName = manualEmployeeName.trim() || `员工 #${empId}`;
 
     if (!empId || isNaN(Number(empId))) {
-      Alert.alert('输入错误', '请输入有效的员工编号 (数字)');
+      appAlert('输入错误', '请输入有效的员工编号 (数字)');
       return;
     }
 
@@ -219,7 +207,7 @@ export default function NfcTagManagementScreen() {
   }, [manualEmployeeId, manualEmployeeName, factoryId, startPulse, stopPulse, closeWriteModal]);
 
   const revokeTag = useCallback((tagId: string) => {
-    Alert.alert(
+    appAlert(
       '确认失效',
       '确定要将此标签标记为已失效吗？失效后该标签将无法用于签到。',
       [

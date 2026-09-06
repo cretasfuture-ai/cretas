@@ -1,16 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -360,23 +350,23 @@ export default function DynamicReportScreen() {
 
   const handleSubmit = useCallback(async () => {
     if (isProgress && !processCategory) {
-      Alert.alert('提示', '请填写生产类目/工序');
+      appAlert('提示', '请填写生产类目/工序');
       return;
     }
     if (!isProgress && !productName) {
-      Alert.alert('提示', '请填写商品名称');
+      appAlert('提示', '请填写商品名称');
       return;
     }
     if (isProgress && (!outputQuantity || Number(outputQuantity) <= 0)) {
-      Alert.alert('提示', '请输入大于 0 的产量');
+      appAlert('提示', '请输入大于 0 的产量');
       return;
     }
     if (!isProgress && totalHours <= 0) {
-      Alert.alert('提示', '请填写大于 0 的工时');
+      appAlert('提示', '请填写大于 0 的工时');
       return;
     }
     if (!isProgress && ((startTime && !isValidTime(startTime)) || (endTime && !isValidTime(endTime)))) {
-      Alert.alert('提示', '时间请按 00:00–23:59 填写');
+      appAlert('提示', '时间请按 00:00–23:59 填写');
       return;
     }
 
@@ -408,7 +398,7 @@ export default function DynamicReportScreen() {
           hourEntry,
         });
       }
-      Alert.alert('成功', '报工提交成功', [
+      appAlert('成功', '报工提交成功', [
         { text: '确定', onPress: () => navigation.goBack() },
       ]);
     }
@@ -433,7 +423,7 @@ export default function DynamicReportScreen() {
       hourEntries: !isProgress ? (hourEntry as Record<string, unknown>) : undefined,
       operationVolume: operationVolume ? parseFloat(operationVolume) : undefined,
     });
-    Alert.alert('已保存', '草稿已保存，可在草稿管理中查看', [
+    appAlert('已保存', '草稿已保存，可在草稿管理中查看', [
       { text: '确定', onPress: () => navigation.goBack() },
     ]);
   }, [selectedBatch, productName, processCategory, outputQuantity, goodQuantity,

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, FlatList, Alert, RefreshControl } from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { TutorialOverlay } from '../../components/common/TutorialOverlay';
 import { TUTORIAL_MY_REPORTS, useTutorialTarget, useTutorial } from '../../store/tutorialStore';
 import { Text, Appbar, Card, ActivityIndicator, SegmentedButtons } from 'react-native-paper';
@@ -60,7 +61,7 @@ export default function MyWorkReportsScreen() {
         setAllReports(res.data.content || []);
       }
     } catch {
-      Alert.alert('错误', '加载报工列表失败');
+      appAlert('错误', '加载报工列表失败');
     } finally {
       setLoading(false);
       setRefreshing(false);

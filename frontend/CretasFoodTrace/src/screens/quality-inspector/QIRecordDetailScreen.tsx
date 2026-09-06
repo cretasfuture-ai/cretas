@@ -4,16 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 
@@ -68,7 +60,7 @@ export default function QIRecordDetailScreen() {
       setRecord(data);
     } catch (error) {
       console.error('Load record failed:', error);
-      Alert.alert(t('recordDetail.loadError'), t('recordDetail.loadErrorMessage'));
+      appAlert(t('recordDetail.loadError'), t('recordDetail.loadErrorMessage'));
     } finally {
       setLoading(false);
     }

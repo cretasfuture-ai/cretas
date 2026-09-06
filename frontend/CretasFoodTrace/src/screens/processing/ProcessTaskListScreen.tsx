@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, Appbar, Searchbar, SegmentedButtons, IconButton } from 'react-native-paper';
 import { useNavigation, useFocusEffect, useNavigationState } from '@react-navigation/native';
@@ -136,7 +137,7 @@ export default function ProcessTaskListScreen() {
   useEffect(() => {
     AsyncStorage.getItem('processTaskGuideShown').then(shown => {
       if (!shown) {
-        Alert.alert(
+        appAlert(
           '操作指引',
           '1. 选择要报工的工序卡片\n2. 点击「报工」按钮\n3. 输入本次产出数量\n4. 提交后等待主管审批',
           [{ text: '知道了', onPress: () => AsyncStorage.setItem('processTaskGuideShown', 'true') }]
@@ -352,7 +353,7 @@ export default function ProcessTaskListScreen() {
                 onPress={() => {
                   const batchId = getTaskBatchId(item);
                   if (batchId == null) {
-                    Alert.alert('不能报工', '当前工序没有绑定生产批次，请联系管理员重新转批次。');
+                    appAlert('不能报工', '当前工序没有绑定生产批次，请联系管理员重新转批次。');
                     return;
                   }
                   navigation.navigate('YieldStepReport', {

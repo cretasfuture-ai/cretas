@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl, Alert, TextInput as RNTextInput } from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl, TextInput as RNTextInput } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import {
   Text,
   Appbar,
@@ -83,7 +84,7 @@ export default function CostAnalysisDashboard() {
 
   const loadCostData = async () => {
     if (!batchId) {
-      Alert.alert('提示', '请先选择批次');
+      appAlert('提示', '请先选择批次');
       navigation.goBack();
       return;
     }
@@ -97,7 +98,7 @@ export default function CostAnalysisDashboard() {
       }
     } catch (error) {
       costAnalysisLogger.error('加载成本数据失败', error, { batchId });
-      Alert.alert('错误', '加载成本数据失败');
+      appAlert('错误', '加载成本数据失败');
     } finally {
       setLoading(false);
     }
@@ -150,11 +151,11 @@ export default function CostAnalysisDashboard() {
 
       // 处理429错误（超限）
       if (isAxiosError(err) && err.response?.status === 429) {
-        Alert.alert('使用上限', err.response?.data?.message || '本周AI分析次数已达上限，请下周一再试');
+        appAlert('使用上限', err.response?.data?.message || '本周AI分析次数已达上限，请下周一再试');
       } else if (isAxiosError(err) && err.response?.status === 403) {
-        Alert.alert('功能已禁用', 'AI分析功能已被工厂管理员禁用');
+        appAlert('功能已禁用', 'AI分析功能已被工厂管理员禁用');
       } else {
-        Alert.alert('错误', 'AI分析失败，请稍后重试');
+        appAlert('错误', 'AI分析失败，请稍后重试');
       }
     } finally {
       setAiLoading(false);
@@ -166,7 +167,7 @@ export default function CostAnalysisDashboard() {
    */
   const handleCustomQuestion = async () => {
     if (!customQuestion.trim()) {
-      Alert.alert('提示', '请输入问题');
+      appAlert('提示', '请输入问题');
       return;
     }
 

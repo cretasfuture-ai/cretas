@@ -1,11 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  Share,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, StyleSheet, ScrollView, Share } from 'react-native';
 import {
   Text,
   Appbar,
@@ -123,7 +118,7 @@ export default function AIAnalysisDetailScreen() {
 
       const factoryId = user?.factoryUser?.factoryId;
       if (!factoryId) {
-        Alert.alert(t('common:error') || 'Error', t('aiAnalysisDetail.userInfoIncomplete'));
+        appAlert(t('common:error') || 'Error', t('aiAnalysisDetail.userInfoIncomplete'));
         return;
       }
 
@@ -148,7 +143,7 @@ export default function AIAnalysisDetailScreen() {
         factoryId: factoryId,
         errorStatus: isAxiosError(error) ? error.response?.status : undefined,
       });
-      Alert.alert(t('aiAnalysisDetail.loadFailed'), getErrorMsg(error) || t('aiAnalysisDetail.messages.retryMessage'));
+      appAlert(t('aiAnalysisDetail.loadFailed'), getErrorMsg(error) || t('aiAnalysisDetail.messages.retryMessage'));
     } finally {
       setLoading(false);
     }
@@ -369,11 +364,11 @@ ${report.expiresAt ? t('aiAnalysisDetail.shareTemplate.expiresAt', { time: new D
                     try {
                       if (report?.analysis) {
                         await Clipboard.setStringAsync(report.analysis);
-                        Alert.alert(t('common.hint') || 'Hint', t('aiAnalysisDetail.copySuccess'));
+                        appAlert(t('common.hint') || 'Hint', t('aiAnalysisDetail.copySuccess'));
                       }
                     } catch (error) {
                       aiAnalysisLogger.error('复制AI分析内容失败', error as Error, { reportId });
-                      Alert.alert(t('common:error') || 'Error', t('aiAnalysisDetail.copyFailed'));
+                      appAlert(t('common:error') || 'Error', t('aiAnalysisDetail.copyFailed'));
                     }
                   }}
                 />

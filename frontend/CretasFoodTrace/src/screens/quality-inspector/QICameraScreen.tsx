@@ -4,15 +4,8 @@
  */
 
 import React, { useState, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-  ScrollView,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -53,7 +46,7 @@ export default function QICameraScreen() {
         }
       } catch (error) {
         console.error('拍照失败:', error);
-        Alert.alert(t('camera.captureFailed'), t('camera.cancel'));
+        appAlert(t('camera.captureFailed'), t('camera.cancel'));
       }
     }
   };

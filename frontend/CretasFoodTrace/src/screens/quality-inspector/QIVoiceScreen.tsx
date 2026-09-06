@@ -5,16 +5,8 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Alert,
-  Animated,
-  ActivityIndicator,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Animated, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -79,7 +71,7 @@ export default function QIVoiceScreen() {
     });
 
     const unsubError = speechRecognitionService.addErrorListener((error) => {
-      Alert.alert(t('voice.voiceRecognitionError'), error.message);
+      appAlert(t('voice.voiceRecognitionError'), error.message);
       setIsListening(false);
     });
 
@@ -203,7 +195,7 @@ export default function QIVoiceScreen() {
         await speechRecognitionService.startListening();
       } catch (error) {
         console.error('开始录音失败:', error);
-        Alert.alert(t('voice.recordingFailed'), t('voice.cannotStartRecording'));
+        appAlert(t('voice.recordingFailed'), t('voice.cannotStartRecording'));
       }
     }
   };

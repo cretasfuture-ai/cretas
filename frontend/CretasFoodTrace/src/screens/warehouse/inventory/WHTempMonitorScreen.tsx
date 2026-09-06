@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -180,11 +181,11 @@ export function WHTempMonitorScreen() {
   };
 
   const handleExport = () => {
-    Alert.alert("成功", "温度报表已导出");
+    appAlert("成功", "温度报表已导出");
   };
 
   const handleSetThreshold = () => {
-    Alert.alert("提示", "告警阈值设置功能");
+    appAlert("提示", "告警阈值设置功能");
   };
 
   // 加载状态

@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -124,7 +125,7 @@ export function WHAlertHandleScreen() {
 
   // ⛔ 原来无论如何都弹「成功 · 处理方案已提交」—— 而它不发任何请求。
   const handleSubmit = () => {
-    Alert.alert(
+    appAlert(
       "尚未接入",
       "处理方案没有被提交。这一页还没有连上后端，请走对应的采购单／库存调整流程。",
       [{ text: "知道了" }],

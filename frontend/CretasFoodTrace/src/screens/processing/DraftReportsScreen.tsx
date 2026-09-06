@@ -1,13 +1,6 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -42,7 +35,7 @@ const DraftReportsScreen: React.FC = () => {
     if (draftType === 'TEAM_BATCH') {
       // Navigate to team batch report — data will need to be re-entered
       // since TeamBatchReport doesn't accept params
-      Alert.alert(
+      appAlert(
         '恢复草稿',
         '将打开班组报工页面，部分数据需手动填写',
         [
@@ -58,7 +51,7 @@ const DraftReportsScreen: React.FC = () => {
   };
 
   const handleDelete = (draft: DraftReport) => {
-    Alert.alert(
+    appAlert(
       '删除草稿',
       `确定删除批次 ${draft.batchNumber || draft.batchId} 的草稿？`,
       [
@@ -74,7 +67,7 @@ const DraftReportsScreen: React.FC = () => {
 
   const handleClearAll = () => {
     if (drafts.length === 0) return;
-    Alert.alert('清空所有草稿', `确定删除全部 ${drafts.length} 条草稿？`, [
+    appAlert('清空所有草稿', `确定删除全部 ${drafts.length} 条草稿？`, [
       { text: '取消', style: 'cancel' },
       { text: '清空', style: 'destructive', onPress: () => clearDraftsByFactory(factoryId) },
     ]);

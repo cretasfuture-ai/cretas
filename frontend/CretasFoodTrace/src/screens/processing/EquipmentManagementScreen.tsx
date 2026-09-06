@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl, Alert, TextInput as RNTextInput } from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl, TextInput as RNTextInput } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { useTranslation } from 'react-i18next';
 import {
   Text,
@@ -103,7 +104,7 @@ export default function EquipmentManagementScreen() {
     try {
       const factoryId = getCurrentFactoryId();
       if (!factoryId) {
-        Alert.alert(t('equipmentManagement.messages.loadFailed'), t('equipmentManagement.messages.factoryIdError'));
+        appAlert(t('equipmentManagement.messages.loadFailed'), t('equipmentManagement.messages.factoryIdError'));
         return;
       }
 

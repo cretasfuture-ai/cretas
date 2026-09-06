@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -119,7 +120,7 @@ export function WHProfileEditScreen() {
           email: profileData.email,
         });
       }
-      Alert.alert("成功", "个人信息已保存", [
+      appAlert("成功", "个人信息已保存", [
         { text: "确定", onPress: () => navigation.goBack() },
       ]);
     } catch (error) {
@@ -130,19 +131,19 @@ export function WHProfileEditScreen() {
   };
 
   const handleChangePhone = () => {
-    Alert.alert("更换手机号", "请联系管理员更换绑定手机号");
+    appAlert("更换手机号", "请联系管理员更换绑定手机号");
   };
 
   const handleChangePassword = () => {
-    Alert.alert("修改密码", "密码修改功能");
+    appAlert("修改密码", "密码修改功能");
   };
 
   const handleDeviceBinding = () => {
-    Alert.alert("设备绑定", "当前设备已绑定");
+    appAlert("设备绑定", "当前设备已绑定");
   };
 
   const handleChangeAvatar = () => {
-    Alert.alert("更换头像", "选择新头像");
+    appAlert("更换头像", "选择新头像");
   };
 
   // 加载状态

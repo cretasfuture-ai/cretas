@@ -20,16 +20,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  Alert,
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  TouchableOpacity,
-} from 'react-native';
+import { appAlert } from '../../../components/ui/AppDialog';
+import { View, ScrollView, StyleSheet, Image, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
 import {
   ActivityIndicator,
   Appbar,
@@ -151,7 +143,7 @@ export default function WHReceiptCreateScreen() {
         const orderRes = await purchaseApiClient.getOrder(purchaseOrderId, factoryId);
         const o = orderRes?.data;
         if (!o || !o.items || o.items.length === 0) {
-          Alert.alert('订单异常', '此采购单无明细, 无法收货', [
+          appAlert('订单异常', '此采购单无明细, 无法收货', [
             { text: '返回', onPress: () => navigation.goBack() },
           ]);
           return;
@@ -282,7 +274,7 @@ export default function WHReceiptCreateScreen() {
   const takePhoto = useCallback(async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('需要相机权限', '请在设置中开启相机权限以拍照存档');
+      appAlert('需要相机权限', '请在设置中开启相机权限以拍照存档');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -297,7 +289,7 @@ export default function WHReceiptCreateScreen() {
   const pickPhotoFromGallery = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('需要相册权限');
+      appAlert('需要相册权限');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -328,7 +320,7 @@ export default function WHReceiptCreateScreen() {
       return Number.isFinite(q) && q > 0;
     });
     if (validItems.length === 0) {
-      Alert.alert('提示', '请至少填写一行收货数量');
+      appAlert('提示', '请至少填写一行收货数量');
       return;
     }
 
@@ -336,7 +328,7 @@ export default function WHReceiptCreateScreen() {
     for (const it of validItems) {
       const d = rows[it.id]?.productionDate;
       if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-        Alert.alert('提示', `行 "${it.materialName || it.materialTypeId}" 商品日期格式不对, 应为 YYYY-MM-DD`);
+        appAlert('提示', `行 "${it.materialName || it.materialTypeId}" 商品日期格式不对, 应为 YYYY-MM-DD`);
         return;
       }
       const row = rows[it.id];
@@ -344,7 +336,7 @@ export default function WHReceiptCreateScreen() {
       const maxInSelectedPackage = orderRemaining * Number(it.packageToBaseFactorSnapshot || 1)
         / Number(row?.factor || 1);
       if (Number(row?.receivedQuantity || 0) > maxInSelectedPackage + 1e-9) {
-        Alert.alert(
+        appAlert(
           '超过可收数量',
           `${it.materialName || it.materialTypeId} 本次最多可收 ${maxInSelectedPackage} ${row?.unit || unitFor(it)}`,
         );
@@ -362,7 +354,7 @@ export default function WHReceiptCreateScreen() {
      * 这里同口径地在提交前拦住, 并说清该做什么。
      */
     if (photos.length === 0) {
-      Alert.alert(
+      appAlert(
         '请先拍收货凭证',
         '确认入库前必须有供应商供货单或收货凭证。\n请在上方「收货照片」处拍照或选图后再提交。',
       );
@@ -516,7 +508,7 @@ export default function WHReceiptCreateScreen() {
       }
       const finalMsg = errLines.length > 0 ? `${summary}\n\n${errLines.join('\n\n')}` : summary;
 
-      Alert.alert('入库成功', finalMsg, [
+      appAlert('入库成功', finalMsg, [
         { text: '确定', onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
@@ -623,7 +615,7 @@ export default function WHReceiptCreateScreen() {
 
   const doCloseShort = useCallback(async () => {
     if (closeReason === 'OTHER' && !closeNotes.trim()) {
-      Alert.alert('提示', '选择「其他原因」时必须填写补充说明');
+      appAlert('提示', '选择「其他原因」时必须填写补充说明');
       return;
     }
     setClosing(true);
@@ -634,7 +626,7 @@ export default function WHReceiptCreateScreen() {
       );
       if (res?.success) {
         setCloseDialogVisible(false);
-        Alert.alert(
+        appAlert(
           '已关单',
           res.data === 'COMPLETED'
             ? `「${orderNumber}」已收满，按正常完成处理。`

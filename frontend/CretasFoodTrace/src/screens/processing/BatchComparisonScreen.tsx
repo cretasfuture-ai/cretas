@@ -1,11 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import {
   Text,
   Appbar,
@@ -123,7 +118,7 @@ export default function BatchComparisonScreen() {
       batchComparisonLogger.error('获取批次列表失败', error as Error, {
         factoryId: user?.factoryUser?.factoryId,
       });
-      Alert.alert('加载失败', getErrorMsg(error) || '请稍后重试');
+      appAlert('加载失败', getErrorMsg(error) || '请稍后重试');
       setBatches([]);
     } finally {
       setLoading(false);
@@ -167,7 +162,7 @@ export default function BatchComparisonScreen() {
       newSelection.delete(batchId);
     } else {
       if (newSelection.size >= 5) {
-        Alert.alert('提示', '最多只能选择5个批次进行对比');
+        appAlert('提示', '最多只能选择5个批次进行对比');
         return;
       }
       newSelection.add(batchId);
@@ -181,7 +176,7 @@ export default function BatchComparisonScreen() {
   const handleAIComparison = async (question?: string) => {
     try {
       if (selectedBatches.size < 2) {
-        Alert.alert('提示', '请至少选择2个批次进行对比');
+        appAlert('提示', '请至少选择2个批次进行对比');
         return;
       }
 
@@ -189,13 +184,13 @@ export default function BatchComparisonScreen() {
       const userId = user?.id;
 
       if (!factoryId || !userId) {
-        Alert.alert('错误', '用户信息不完整');
+        appAlert('错误', '用户信息不完整');
         return;
       }
 
       // 检查配额
       if (aiQuota && aiQuota.remaining <= 0) {
-        Alert.alert('配额不足', '本周AI分析次数已用完，请等待下周重置');
+        appAlert('配额不足', '本周AI分析次数已用完，请等待下周重置');
         return;
       }
 
@@ -244,7 +239,7 @@ export default function BatchComparisonScreen() {
         });
       } else {
         const errorMessage = result.data?.message || result.errorMessage || 'AI分析失败';
-        Alert.alert('AI分析失败', errorMessage);
+        appAlert('AI分析失败', errorMessage);
         setAiAnalysis('');
       }
 
@@ -256,7 +251,7 @@ export default function BatchComparisonScreen() {
         dimension,
         factoryId: user?.factoryUser?.factoryId,
       });
-      Alert.alert('AI分析失败', getErrorMsg(error) || '请稍后重试');
+      appAlert('AI分析失败', getErrorMsg(error) || '请稍后重试');
       setAiAnalysis('');
     } finally {
       setAiLoading(false);

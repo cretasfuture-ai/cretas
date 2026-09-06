@@ -1,11 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  StyleSheet,
-  FlatList,
-  RefreshControl,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import {
   Text,
   Appbar,
@@ -60,7 +55,7 @@ export default function AIConversationHistoryScreen() {
     if (sessionId) {
       fetchConversationHistory();
     } else {
-      Alert.alert(t('common:error') || 'Error', t('aiConversationHistory.missingSessionId'));
+      appAlert(t('common:error') || 'Error', t('aiConversationHistory.missingSessionId'));
       navigation.goBack();
     }
   }, [sessionId]);
@@ -74,7 +69,7 @@ export default function AIConversationHistoryScreen() {
 
       const factoryId = user?.factoryUser?.factoryId;
       if (!factoryId || !sessionId) {
-        Alert.alert(t('common:error') || 'Error', t('aiConversationHistory.userInfoIncomplete'));
+        appAlert(t('common:error') || 'Error', t('aiConversationHistory.userInfoIncomplete'));
         return;
       }
 
@@ -103,7 +98,7 @@ export default function AIConversationHistoryScreen() {
         sessionId,
         factoryId: user?.factoryUser?.factoryId,
       });
-      Alert.alert(t('aiConversationHistory.loadFailed'), getErrorMsg(error) || t('common.retryLater') || 'Please try again later');
+      appAlert(t('aiConversationHistory.loadFailed'), getErrorMsg(error) || t('common.retryLater') || 'Please try again later');
       setMessages([]);
     } finally {
       setLoading(false);
@@ -126,7 +121,7 @@ export default function AIConversationHistoryScreen() {
     try {
       if (!sessionId) return;
 
-      Alert.alert(
+      appAlert(
         t('aiConversationHistory.closeConfirmTitle'),
         t('aiConversationHistory.closeConfirmMessage'),
         [
@@ -140,7 +135,7 @@ export default function AIConversationHistoryScreen() {
 
               await aiApiClient.closeConversation(sessionId, factoryId);
               conversationLogger.info('AI会话已关闭', { sessionId, factoryId });
-              Alert.alert(t('dispatcher-complete:common.success') || 'Success', t('aiConversationHistory.closeSuccess'), [
+              appAlert(t('dispatcher-complete:common.success') || 'Success', t('aiConversationHistory.closeSuccess'), [
                 { text: t('common.ok') || 'OK', onPress: () => navigation.goBack() },
               ]);
             },
@@ -152,7 +147,7 @@ export default function AIConversationHistoryScreen() {
         sessionId,
         factoryId: user?.factoryUser?.factoryId,
       });
-      Alert.alert(t('aiConversationHistory.closeFailed'), getErrorMsg(error) || t('common.retryLater') || 'Please try again later');
+      appAlert(t('aiConversationHistory.closeFailed'), getErrorMsg(error) || t('common.retryLater') || 'Please try again later');
     }
   };
 

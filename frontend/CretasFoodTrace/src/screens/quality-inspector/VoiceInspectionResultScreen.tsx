@@ -12,17 +12,8 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
-  ActivityIndicator,
-  Animated,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
@@ -161,7 +152,7 @@ export default function VoiceInspectionResultScreen() {
       }
     } catch (error) {
       console.error('加载语音记录失败:', error);
-      Alert.alert(t('voiceResult.error'), t('voiceResult.loadFailed'));
+      appAlert(t('voiceResult.error'), t('voiceResult.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -279,7 +270,7 @@ export default function VoiceInspectionResultScreen() {
       });
     } catch (error) {
       console.error('保存失败:', error);
-      Alert.alert(t('voiceResult.error'), t('voiceResult.saveFailed'));
+      appAlert(t('voiceResult.error'), t('voiceResult.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -316,7 +307,7 @@ export default function VoiceInspectionResultScreen() {
       }
     } catch (error) {
       console.error('播放失败:', error);
-      Alert.alert(t('voiceResult.error'), t('voiceResult.playbackFailed'));
+      appAlert(t('voiceResult.error'), t('voiceResult.playbackFailed'));
     }
   };
 
@@ -346,7 +337,7 @@ export default function VoiceInspectionResultScreen() {
 
   const reAnalyze = async () => {
     if (!transcribedText.trim()) {
-      Alert.alert(t('voiceResult.error'), t('voiceResult.noTextToAnalyze'));
+      appAlert(t('voiceResult.error'), t('voiceResult.noTextToAnalyze'));
       return;
     }
 
@@ -365,11 +356,11 @@ export default function VoiceInspectionResultScreen() {
 
       if (analyzeResponse.success && analyzeResponse.data) {
         setExtractedItems(analyzeResponse.data.extractedItems);
-        Alert.alert(t('voiceResult.success'), t('voiceResult.reAnalyzeSuccess'));
+        appAlert(t('voiceResult.success'), t('voiceResult.reAnalyzeSuccess'));
       }
     } catch (error) {
       console.error('重新分析失败:', error);
-      Alert.alert(t('voiceResult.error'), t('voiceResult.reAnalyzeFailed'));
+      appAlert(t('voiceResult.error'), t('voiceResult.reAnalyzeFailed'));
     } finally {
       setLoading(false);
     }

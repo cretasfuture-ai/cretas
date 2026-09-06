@@ -25,14 +25,8 @@
  */
 
 import React, { useCallback, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
+import { appAlert } from '../../../components/ui/AppDialog';
+import { View, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
 import {
   Appbar,
   Button,
@@ -76,7 +70,7 @@ export default function WHOutboundIssueScreen() {
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
 
-    Alert.alert(
+    appAlert(
       '确认出库',
       `${materialName || '该物料'} 批次 ${batchNumber}\n出库数量: ${qtyNum} ${unit}\n出库后剩余: ${(remainingQuantity - qtyNum).toFixed(2)} ${unit}`,
       [
@@ -90,7 +84,7 @@ export default function WHOutboundIssueScreen() {
               if (res && res.success === false) {
                 throw new Error(res.message || '出库失败');
               }
-              Alert.alert('出库成功', `${batchNumber} 已出库 ${qtyNum} ${unit}`, [
+              appAlert('出库成功', `${batchNumber} 已出库 ${qtyNum} ${unit}`, [
                 { text: '确定', onPress: () => navigation.goBack() },
               ]);
             } catch (err) {

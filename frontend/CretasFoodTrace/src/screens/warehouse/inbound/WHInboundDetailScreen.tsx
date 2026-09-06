@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
   ScrollView,
@@ -158,12 +159,12 @@ export function WHInboundDetailScreen() {
   }, [loadData]);
 
   const handleConfirm = () => {
-    Alert.alert(t('inbound.detail.confirmTitle'), t('inbound.detail.confirmMessage'), [
+    appAlert(t('inbound.detail.confirmTitle'), t('inbound.detail.confirmMessage'), [
       { text: t('inbound.detail.cancel'), style: "cancel" },
       {
         text: t('inbound.detail.confirm'),
         onPress: () => {
-          Alert.alert(t('inbound.detail.success'), t('inbound.detail.successMessage'));
+          appAlert(t('inbound.detail.success'), t('inbound.detail.successMessage'));
           navigation.goBack();
         },
       },

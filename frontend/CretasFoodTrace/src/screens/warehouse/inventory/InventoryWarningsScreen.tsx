@@ -8,16 +8,8 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  RefreshControl,
-  ListRenderItemInfo,
-} from 'react-native';
+import { appAlert } from '../../../components/ui/AppDialog';
+import { View, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, ListRenderItemInfo } from 'react-native';
 import { Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -349,7 +341,7 @@ export function InventoryWarningsScreen() {
 
   const handleExpiredItem = useCallback(
     (item: InventoryAlert) => {
-      Alert.alert(
+      appAlert(
         '处理过期批次',
         `确定对批次 "${item.batchNumber ?? item.materialTypeName}" 进行过期处理（报损）吗？\n\n此操作不可撤销。`,
         [
@@ -367,7 +359,7 @@ export function InventoryWarningsScreen() {
                   // Fallback: batch-wide handler
                   await materialBatchApiClient.handleExpiredBatches();
                 }
-                Alert.alert('处理成功', '已完成过期批次的报损处理');
+                appAlert('处理成功', '已完成过期批次的报损处理');
                 loadData();
               } catch (error) {
                 handleError(error, { title: '处理过期批次失败' });
@@ -468,7 +460,7 @@ export function InventoryWarningsScreen() {
   };
 
   const handleAllExpired = () => {
-    Alert.alert(
+    appAlert(
       '批量处理所有过期批次',
       `确定对全部 ${expiredItems.length} 个过期批次进行报损处理吗？\n\n此操作不可撤销。`,
       [
@@ -480,7 +472,7 @@ export function InventoryWarningsScreen() {
             setProcessing(true);
             try {
               await materialBatchApiClient.handleExpiredBatches();
-              Alert.alert('处理成功', `已完成全部 ${expiredItems.length} 个过期批次的报损处理`);
+              appAlert('处理成功', `已完成全部 ${expiredItems.length} 个过期批次的报损处理`);
               loadData();
             } catch (error) {
               handleError(error, { title: '批量处理失败' });

@@ -4,15 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  ScrollView,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
@@ -105,7 +98,7 @@ export default function QIClockInScreen() {
 
   const handleClockIn = async () => {
     if (clockedIn) {
-      Alert.alert(t('clock.hint'), t('clock.alreadyClockedIn'));
+      appAlert(t('clock.hint'), t('clock.alreadyClockedIn'));
       return;
     }
 
@@ -123,10 +116,10 @@ export default function QIClockInScreen() {
 
       setTodayRecords((prev) => [...prev, record]);
       setClockedIn(true);
-      Alert.alert(t('clock.clockInSuccess'), t('clock.clockInTime', { time: formatTime(now) }));
+      appAlert(t('clock.clockInSuccess'), t('clock.clockInTime', { time: formatTime(now) }));
     } catch (error) {
       console.error('打卡失败:', error);
-      Alert.alert(t('clock.clockInFailed'), t('clock.retryLater'));
+      appAlert(t('clock.clockInFailed'), t('clock.retryLater'));
     } finally {
       setLoading(false);
     }
@@ -134,12 +127,12 @@ export default function QIClockInScreen() {
 
   const handleClockOut = async () => {
     if (!clockedIn) {
-      Alert.alert(t('clock.hint'), t('clock.clockInFirst'));
+      appAlert(t('clock.hint'), t('clock.clockInFirst'));
       return;
     }
 
     if (clockedOut) {
-      Alert.alert(t('clock.hint'), t('clock.alreadyClockedOut'));
+      appAlert(t('clock.hint'), t('clock.alreadyClockedOut'));
       return;
     }
 
@@ -157,10 +150,10 @@ export default function QIClockInScreen() {
 
       setTodayRecords((prev) => [...prev, record]);
       setClockedOut(true);
-      Alert.alert(t('clock.clockOutSuccess'), t('clock.clockOutTime', { time: formatTime(now) }));
+      appAlert(t('clock.clockOutSuccess'), t('clock.clockOutTime', { time: formatTime(now) }));
     } catch (error) {
       console.error('打卡失败:', error);
-      Alert.alert(t('clock.clockOutFailed'), t('clock.retryLater'));
+      appAlert(t('clock.clockOutFailed'), t('clock.retryLater'));
     } finally {
       setLoading(false);
     }

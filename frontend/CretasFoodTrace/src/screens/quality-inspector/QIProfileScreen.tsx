@@ -1,5 +1,6 @@
 import React from 'react';
-import { Alert, Image, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -36,7 +37,7 @@ export default function QIProfileScreen() {
       if (window.confirm(message)) logout();
       return;
     }
-    Alert.alert('退出登录', message, [
+    appAlert('退出登录', message, [
       { text: '取消', style: 'cancel' },
       { text: '退出', style: 'destructive', onPress: logout },
     ]);

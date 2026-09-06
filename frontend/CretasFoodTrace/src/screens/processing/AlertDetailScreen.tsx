@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useAuthStore } from '../../store/authStore';
@@ -66,9 +64,9 @@ const AlertDetailScreen: React.FC = () => {
       await apiClient.put(`/api/mobile/${factoryId}/alerts/${alertData.id}/acknowledge`, null, {
         params: { userId },
       });
-      Alert.alert('成功', '告警已确认');
+      appAlert('成功', '告警已确认');
       loadAlert();
-    } catch { Alert.alert('操作失败'); }
+    } catch { appAlert('操作失败'); }
     finally { setSubmitting(false); }
   };
 
@@ -80,9 +78,9 @@ const AlertDetailScreen: React.FC = () => {
         { resolutionNotes: resolveNotes },
         { params: { userId } }
       );
-      Alert.alert('成功', '告警已解决');
+      appAlert('成功', '告警已解决');
       loadAlert();
-    } catch { Alert.alert('操作失败'); }
+    } catch { appAlert('操作失败'); }
     finally { setSubmitting(false); }
   };
 

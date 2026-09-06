@@ -1,12 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  StyleSheet,
-  FlatList,
-  RefreshControl,
-  TouchableOpacity,
-  Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
 import {
   Text,
   Appbar,
@@ -71,7 +65,7 @@ export default function AIReportListScreen() {
 
       const factoryId = user?.factoryUser?.factoryId;
       if (!factoryId) {
-        Alert.alert(t('aiReports.messages.loadFailed'), t('aiReports.messages.userInfoError'));
+        appAlert(t('aiReports.messages.loadFailed'), t('aiReports.messages.userInfoError'));
         return;
       }
 
@@ -100,7 +94,7 @@ export default function AIReportListScreen() {
         factoryId: factoryId,
         selectedType,
       });
-      Alert.alert(t('aiReports.messages.loadFailed'), getErrorMsg(error) || t('aiReports.messages.retry'));
+      appAlert(t('aiReports.messages.loadFailed'), getErrorMsg(error) || t('aiReports.messages.retry'));
       setReports([]);
     } finally {
       setLoading(false);

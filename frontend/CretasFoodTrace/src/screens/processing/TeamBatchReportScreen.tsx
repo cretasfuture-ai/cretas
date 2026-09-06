@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  ActivityIndicator, Alert,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useAuthStore } from '../../store/authStore';
@@ -121,7 +119,7 @@ const TeamBatchReportScreen: React.FC = () => {
 
   const handleBatchPress = (batch: BatchOption) => {
     if (batch.status === 'PLANNED') {
-      Alert.alert(
+      appAlert(
         '开始生产',
         `批次 ${batch.batchNumber} 尚未开始生产，是否立即开始？`,
         [
@@ -146,11 +144,11 @@ const TeamBatchReportScreen: React.FC = () => {
         setBatches(prev => prev.map(b => b.id === batch.id ? updated : b));
         selectBatch(updated);
       } else {
-        Alert.alert('开始失败', res?.message || '无法开始生产');
+        appAlert('开始失败', res?.message || '无法开始生产');
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '开始生产失败';
-      Alert.alert('开始失败', msg);
+      appAlert('开始失败', msg);
     } finally {
       setStartingBatch(false);
     }
@@ -193,7 +191,7 @@ const TeamBatchReportScreen: React.FC = () => {
     if (!selectedBatch) return;
     const total = parseInt(teamTotalOutput, 10);
     if (!total || total <= 0) {
-      Alert.alert('请填写团队总产出');
+      appAlert('请填写团队总产出');
       return;
     }
 
@@ -217,14 +215,14 @@ const TeamBatchReportScreen: React.FC = () => {
       });
 
       const data = result.data;
-      Alert.alert(
+      appAlert(
         '提交成功',
         `团队总产出: ${data?.totalOutput ?? total}\n${data?.recordedMembers ? `个人明细: ${data.recordedMembers}人` : '纯团队报工'}`,
         [{ text: '确定', onPress: () => navigation.goBack() }],
       );
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '提交失败';
-      Alert.alert('提交失败', msg);
+      appAlert('提交失败', msg);
     } finally {
       setSubmitting(false);
     }
@@ -255,7 +253,7 @@ const TeamBatchReportScreen: React.FC = () => {
         hireTypeLabel: w.hireTypeLabel ?? undefined,
       })),
     });
-    Alert.alert('已保存', '草稿已保存，可在草稿管理中查看', [
+    appAlert('已保存', '草稿已保存，可在草稿管理中查看', [
       { text: '确定', onPress: () => navigation.goBack() },
     ]);
   };

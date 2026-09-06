@@ -26,7 +26,8 @@ describe('QINotificationsScreen read synchronization contract', () => {
 
     expect(serverWrite).toBeGreaterThan(0);
     expect(localWrite).toBeGreaterThan(serverWrite);
-    expect(source).toContain("Alert.alert('未能标记已读'");
+    // 2026-09-06 codemod: 工人屏 Alert.alert → appAlert (react-native-web 上 Alert.alert 是 no-op)
+    expect(source).toContain("appAlert('未能标记已读'");
     expect(source).toContain('pendingReadIdsRef.current.has(notification.id)');
   });
 
@@ -40,7 +41,7 @@ describe('QINotificationsScreen read synchronization contract', () => {
 
     expect(serverWrite).toBeGreaterThan(0);
     expect(localWrite).toBeGreaterThan(serverWrite);
-    expect(source).toContain("Alert.alert('未能全部标记已读'");
+    expect(source).toContain("appAlert('未能全部标记已读'");
     expect(source).toContain('markingAllRef.current');
   });
 });

@@ -1,14 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  FlatList,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, FlatList } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -207,7 +199,7 @@ export default function NfcCheckinScreen() {
 
   const handleBatchPress = useCallback((batch: BatchItem) => {
     if (batch.status === 'PLANNED') {
-      Alert.alert(
+      appAlert(
         '开始生产',
         `批次 ${batch.batchNumber} 尚未开始，需先开始生产才能签到。是否立即开始？`,
         [
@@ -230,11 +222,11 @@ export default function NfcCheckinScreen() {
         setBatches(prev => prev.map(b => b.id === batch.id ? updated : b));
         selectBatch(updated);
       } else {
-        Alert.alert('开始失败', res?.message || '无法开始生产');
+        appAlert('开始失败', res?.message || '无法开始生产');
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '开始生产失败';
-      Alert.alert('开始失败', msg);
+      appAlert('开始失败', msg);
     } finally {
       setStartingBatch(false);
     }
@@ -258,7 +250,7 @@ export default function NfcCheckinScreen() {
         });
         if (response.success) {
           const empName = response.data?.employeeName || `工号${employeeId}`;
-          Alert.alert('签到成功', `${empName} 已签到「${selectedTask.processName || '工序'}」`);
+          appAlert('签到成功', `${empName} 已签到「${selectedTask.processName || '工序'}」`);
           // 刷新签到列表（适配 ProcessCheckinRecord → BatchWorkSessionResponse 类型）
           try {
             const res = await processTaskApiClient.getActiveCheckins();
@@ -276,11 +268,11 @@ export default function NfcCheckinScreen() {
             }
           } catch { /* silent */ }
         } else {
-          Alert.alert('签到失败', response.message || '签到接口异常');
+          appAlert('签到失败', response.message || '签到接口异常');
         }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : '签到失败';
-        Alert.alert('签到失败', msg);
+        appAlert('签到失败', msg);
       } finally {
         setCheckinLoading(false);
       }
@@ -298,14 +290,14 @@ export default function NfcCheckinScreen() {
       });
 
       if (response.success) {
-        Alert.alert('签到成功', `工号${employeeId} 已通过 ${method === 'NFC' ? 'NFC' : 'QR扫码'} 签到`);
+        appAlert('签到成功', `工号${employeeId} 已通过 ${method === 'NFC' ? 'NFC' : 'QR扫码'} 签到`);
         loadCheckins(selectedBatch.id);
       } else {
-        Alert.alert('签到失败', response.message);
+        appAlert('签到失败', response.message);
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '签到失败';
-      Alert.alert('签到失败', msg);
+      appAlert('签到失败', msg);
     } finally {
       setCheckinLoading(false);
     }
@@ -316,7 +308,7 @@ export default function NfcCheckinScreen() {
     setNfcModalVisible(false);
     const empId = parseInt(employeeId, 10);
     if (isNaN(empId)) {
-      Alert.alert('NFC 错误', '无法解析员工编号');
+      appAlert('NFC 错误', '无法解析员工编号');
       return;
     }
     performCheckin(empId, 'NFC');
@@ -327,7 +319,7 @@ export default function NfcCheckinScreen() {
     setScannerVisible(false);
     const employeeId = parseInt(code, 10);
     if (isNaN(employeeId)) {
-      Alert.alert('扫码错误', '无法识别员工编号: ' + code);
+      appAlert('扫码错误', '无法识别员工编号: ' + code);
       return;
     }
     performCheckin(employeeId, 'QR');
@@ -336,19 +328,19 @@ export default function NfcCheckinScreen() {
   const handleCheckout = useCallback(async (employeeId: number, checkinRecordId?: number) => {
     if (isProcessMode()) {
       if (!checkinRecordId) {
-        Alert.alert('签退失败', '无签到记录ID');
+        appAlert('签退失败', '无签到记录ID');
         return;
       }
       try {
         const response = await processTaskApiClient.processCheckout(checkinRecordId);
         if (response.success) {
-          Alert.alert('签退成功');
+          appAlert('签退成功');
         } else {
-          Alert.alert('签退失败', response.message || '签退接口异常');
+          appAlert('签退失败', response.message || '签退接口异常');
         }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : '签退失败';
-        Alert.alert('签退失败', msg);
+        appAlert('签退失败', msg);
       }
       return;
     }
@@ -360,14 +352,14 @@ export default function NfcCheckinScreen() {
         employeeId,
       });
       if (response.success) {
-        Alert.alert('签退成功');
+        appAlert('签退成功');
         loadCheckins(selectedBatch.id);
       } else {
-        Alert.alert('签退失败', response.message);
+        appAlert('签退失败', response.message);
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '签退失败';
-      Alert.alert('签退失败', msg);
+      appAlert('签退失败', msg);
     }
   }, [selectedBatch, selectedTask, loadCheckins, isProcessMode]);
 

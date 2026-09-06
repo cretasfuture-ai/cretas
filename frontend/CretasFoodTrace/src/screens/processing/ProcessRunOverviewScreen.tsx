@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Appbar, Card, Chip, Divider, ActivityIndicator } from 'react-native-paper';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { ProcessingScreenProps } from '../../types/navigation';
@@ -31,7 +32,7 @@ export default function ProcessRunOverviewScreen() {
       const res = await processTaskApiClient.getRunOverview(productionRunId) as { data?: RunOverview };
       if (res?.data) setOverview(res.data);
     } catch {
-      Alert.alert('错误', '加载生产单信息失败');
+      appAlert('错误', '加载生产单信息失败');
     } finally {
       setLoading(false);
       setRefreshing(false);

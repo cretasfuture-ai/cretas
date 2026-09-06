@@ -6,10 +6,8 @@
  * 2. 显示操作面板: 签到 / 签退 / 报产量
  */
 import React, { useState, useCallback, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator,
-} from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Appbar, Chip } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -114,7 +112,7 @@ export default function ProcessOperationScreen() {
     setScannerVisible(false);
     try {
       const emp = await resolveEmployee(raw);
-      if (!emp) { Alert.alert('未识别', '无法识别此工牌'); return; }
+      if (!emp) { appAlert('未识别', '无法识别此工牌'); return; }
 
       if (scanMode === 'locate') {
         // Scan-to-locate: find which task this employee is checked into
@@ -128,7 +126,7 @@ export default function ProcessOperationScreen() {
             return;
           }
         }
-        Alert.alert('未找到', `${emp.name} 没有进行中的签到记录，请先签到`);
+        appAlert('未找到', `${emp.name} 没有进行中的签到记录，请先签到`);
       } else if (scanMode === 'checkin') {
         await processTaskApiClient.processCheckin({
           employeeId: emp.id,
@@ -137,20 +135,20 @@ export default function ProcessOperationScreen() {
           checkinMethod: 'QR_SCAN',
           processTaskId: selectedTask?.id,
         });
-        Alert.alert('签到成功', `${emp.name} 已签到「${selectedTask?.processName || '工序'}」`);
+        appAlert('签到成功', `${emp.name} 已签到「${selectedTask?.processName || '工序'}」`);
       } else if (scanMode === 'checkout') {
         const checkinsRes = await processTaskApiClient.getActiveCheckins();
         const checkins = Array.isArray(checkinsRes?.data) ? checkinsRes.data : [];
         const match = checkins.find((c) => c.employeeId === emp.id && String(c.processTaskId) === String(selectedTask?.id));
         if (match) {
           await processTaskApiClient.processCheckout(match.id);
-          Alert.alert('签退成功', `${emp.name} 已签退「${selectedTask?.processName || '工序'}」`);
+          appAlert('签退成功', `${emp.name} 已签退「${selectedTask?.processName || '工序'}」`);
         } else {
-          Alert.alert('未找到签到记录', `${emp.name} 未签到此工序`);
+          appAlert('未找到签到记录', `${emp.name} 未签到此工序`);
         }
       }
     } catch (e) {
-      Alert.alert('操作失败', e instanceof Error ? e.message : '请重试');
+      appAlert('操作失败', e instanceof Error ? e.message : '请重试');
     }
   }, [scanMode, selectedTask, tasks, resolveEmployee]);
 
@@ -163,7 +161,7 @@ export default function ProcessOperationScreen() {
     const batchId = selectedTask.batchId;
 
     if (!wptId || !batchId) {
-      Alert.alert('不能报工', '当前工序任务缺少生产批次关联，请刷新后重试或联系管理员。');
+      appAlert('不能报工', '当前工序任务缺少生产批次关联，请刷新后重试或联系管理员。');
       return;
     }
 

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Alert } from 'react-native';
+import {  } from 'react-native';
+import { appAlert } from '../../../../components/ui/AppDialog';
 import { isAxiosError } from 'axios';
 import { useNavigation } from '@react-navigation/native';
 import { processingApiClient } from '../../../../services/api/processingApiClient';
@@ -75,7 +76,7 @@ export const useCostData = (batchId: string | number): UseCostDataReturn => {
    */
   const loadCostData = useCallback(async (forceRefresh = false) => {
     if (!batchId) {
-      Alert.alert('提示', '请先选择批次');
+      appAlert('提示', '请先选择批次');
       navigation.goBack();
       return;
     }
@@ -140,14 +141,14 @@ export const useCostData = (batchId: string | number): UseCostDataReturn => {
 
       // 错误处理
       if (status === 404) {
-        Alert.alert('错误', '批次不存在或已被删除');
+        appAlert('错误', '批次不存在或已被删除');
         navigation.goBack();
       } else if (status === 403) {
-        Alert.alert('权限不足', '您没有查看此批次成本的权限');
+        appAlert('权限不足', '您没有查看此批次成本的权限');
         navigation.goBack();
       } else {
         const responseMsg = isAxiosError(err) ? (err.response?.data as { message?: string })?.message : undefined;
-        Alert.alert(
+        appAlert(
           '加载失败',
           responseMsg || error.message || '加载成本数据失败，请稍后重试'
         );
