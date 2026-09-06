@@ -20,13 +20,19 @@ import static org.mockito.Mockito.when;
 /**
  * 分歧检测器本身的判据 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。
  *
+ * <p>⚠️ 类名以 {@code ContractTest} 结尾<b>不是随手起的</b>: {@code java-gate-pr.yml} 的
+ * fast-contracts 那一步按 {@code -Dtest='*ContractTest,...,*PermissionTest'} 选类,
+ * 叫别的名字它在 CI 上<b>一次都不会跑</b> (本轮实测: 原名 {@code ...ServiceTest} 在
+ * PR 的 Java Gate 日志里 grep 命中 0 次, 而同批的 {@code ...PermissionTest} 命中并
+ * 打出 Tests run: 5)。⛔ 改名前先确认它还落在那个 pattern 里。
+ *
  * <p>硬约束 9: prod 上 diff 数不为 0 是个会变的读数, 不能拿它当「检测器工作正常」的证明。
  * 这里用<b>构造的 fixture</b> 分别钉住三种格子, 其中<b>阴性</b>那一条 (两侧一致 ⇒ 不报)
  * 是防止检测器退化成「什么都报」的那一半 —— 少了它, 一个 {@code return allCells()}
  * 的实现也能让所有阳性断言通过。
  */
 @ExtendWith(MockitoExtension.class)
-class PermissionMatrixViewServiceTest {
+class PermissionMatrixViewServiceContractTest {
 
     @Mock private PlatformRolePermissionRepository platformRepo;
     @Mock private FactoryModuleConfigRepository factoryConfigRepo;
