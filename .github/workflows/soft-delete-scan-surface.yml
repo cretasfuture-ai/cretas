@@ -1,0 +1,75 @@
+name: Soft-delete scan surface
+
+# 票 OPS-SOFT-DELETE-SCAN-SURFACE-DRIFTS-ON-NEW-ENTITY-20260907。
+#
+# 现象: 新增(或删除)一个带 `deleted_at` 的实体, 就会让 `scripts/cron/soft-delete-orphans.sql`
+# 与生成器的当前产出不一致 —— 而这件事**只在 main 上**被 `ops-script-tests` 发现:
+#   · #665: 第一次(430 个实体那次)
+#   · #685: 第二次(430→431, `platform_role_permission_audits`), 而且把两个**无关** PR
+#           (#681 / #686) 一起连坐红, 我为此把两条分支各 rebase 了一遍
+# ⇒ 代价落在「下一个碰 CI 的人」身上, 而不是引入漂移的那个 PR。
+#
+# 本 workflow 把**同一道**判据挪到 PR 上: 在实体 / repository / 生成器 / 两个快照被改动时,
+# 跑那道已经存在的权威检查(`--regen-offline` 重放后逐字比对)。
+#
+# ⛔ 不是「文件改了没改」那种代理判据 —— 那会把「改了但改错」放过去。这里跑的是真生成器。
+# ⛔ 没有把这些路径塞进 `ops-script-tests` 的 paths: 2026-08-28 的教训是给一道闸加宽 glob
+#    会把**另一道闸**「证明自己不过宽」的阴性对照变成恒真式。新闸自带 workflow。
+#
+# ⚠️ paths 必须覆盖**生成器实际扫描的两个根**(`entity/` 与 `repository/`, 见
+#    scripts/check-soft-delete-orphans.sh 的 ENTITY_ROOT / REPOSITORY_ROOT)。少一个,
+#    这道闸就会在那半棵树上静默不触发 —— 与「闸不存在」读数相同。
+#    scripts/tests/test-soft-delete-scan-surface-gate.sh 把这两者钉在一起。
+
+on:
+  pull_request:
+    paths:
+      # 生成器扫描的两个根 —— 与 ENTITY_ROOT / REPOSITORY_ROOT 逐一对应
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/repository/**'
+      # 生成器本身与它的两份产出/输入快照
+      - 'scripts/check-soft-delete-orphans.sh'
+      - 'scripts/cron/soft-delete-orphans.sql'
+      - 'scripts/cron/soft-delete-orphans.hasdel.txt'
+      # 本文件与它跑的那个用例
+      - '.github/workflows/soft-delete-scan-surface.yml'
+      - 'scripts/tests/test-soft-delete-orphans-sql-drift.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan-surface-in-sync:
+    # ⛔ 字面量 —— `${{ vars.X }}` 在 runs-on 里求值为空(见 .claude/rules/ci-runner-routing.md)。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 生成器只做源码级扫描 + 重放 hasdel 快照, ⛔ 不连库、不编译 Java、不需要 JDK。
+      # 它调的是裸 `python`, 而 ubuntu-latest 上只有 python3 ⇒ 补垫片,
+      # ⛔ 不改生成器去迁就 CI(它在开发机上就是 `python`)。与 ops-script-tests.yml 同一处理。
+      - name: Provide a bare `python`
+        run: |
+          set -euo pipefail
+          echo "python3=$(python3 --version)"
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\nexec python3 "$@"\n' > "$HOME/.local/bin/python"
+          chmod +x "$HOME/.local/bin/python"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Prove the shim landed
+        run: |
+          set -euo pipefail
+          command -v python
+          python --version
+
+      # ⛔ 没有 `|| true`、没有管道尾 —— 这一步的 rc 就是闸的 rc。
+      # 用例失败时自带下一步命令(`./scripts/check-soft-delete-orphans.sh --write` 后提交)。
+      - name: Scan surface must match the committed SQL
+        run: bash scripts/tests/test-soft-delete-orphans-sql-drift.sh
