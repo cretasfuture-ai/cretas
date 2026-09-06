@@ -30,22 +30,26 @@ VENV_ACTIVATE="${FLYWHEEL_STALE_VENV_ACTIVATE:-$PYDIR/venv-current/bin/activate}
 LOG="${FLYWHEEL_STALE_LOG:-/www/wwwroot/cretas/logs/flywheel-promotion-staleness.log}"
 ALERTS="${FLYWHEEL_STALE_ALERTS:-/www/wwwroot/cretas/logs/flywheel-promotion-staleness-alerts.log}"
 LEDGER="${FLYWHEEL_STALE_LEDGER:-/www/wwwroot/cretas/logs/flywheel-promotion-staleness-ledger.jsonl}"
+ENV_PROD="${FLYWHEEL_STALE_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+# 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "FLYWHEEL PROMOTION STALENESS" systemctl
 
 {
   echo "=== $(date '+%F %T') flywheel promotion staleness watch ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$VENV_ACTIVATE"
+  cd "$PYDIR" || cron_dead "$ALERTS" "FLYWHEEL PROMOTION STALENESS" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$VENV_ACTIVATE" "$ALERTS" "FLYWHEEL PROMOTION STALENESS"
 
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "FLYWHEEL PROMOTION STALENESS"
   set +a
 
   # ⚠️ `.env.prod` **不含 POSTGRES_DB** —— 只在 systemd unit 里。
   #    不补会落到默认值(测试库)，而那会让读数量在错的库上。
   # ⛔ 只 export 需要的前缀: eval 整份 environ 会冲掉 PATH，python 掉回系统解释器。
-  svc_pid=$(systemctl show -p MainPID --value cretas-python.service 2>/dev/null)
+  svc_pid=$(systemctl show -p MainPID --value cretas-python.service)
   if [ -n "${svc_pid:-}" ] && [ "$svc_pid" != "0" ] && [ -r "/proc/$svc_pid/environ" ]; then
     while IFS= read -r -d '' kv; do
       case "$kv" in

@@ -9,26 +9,32 @@
 # ⛔ 不阻断任何东西 —— 它是观测, 产出是台账 + 告警行, 给人看。
 set -uo pipefail
 
-PYDIR=/www/wwwroot/cretas/code/backend/python
-LOG=/www/wwwroot/cretas/logs/margin-parity.log
-ALERTS=/www/wwwroot/cretas/logs/margin-parity-alerts.log
-LEDGER=/www/wwwroot/cretas/logs/margin-parity-ledger.jsonl
+# ⚙️ 路径可覆盖(生产默认值不变, 测试用环境变量构造三态)。
+PYDIR="${MARGIN_PARITY_PYDIR:-/www/wwwroot/cretas/code/backend/python}"
+LOG="${MARGIN_PARITY_LOG:-/www/wwwroot/cretas/logs/margin-parity.log}"
+ALERTS="${MARGIN_PARITY_ALERTS:-/www/wwwroot/cretas/logs/margin-parity-alerts.log}"
+LEDGER="${MARGIN_PARITY_LEDGER:-/www/wwwroot/cretas/logs/margin-parity-ledger.jsonl}"
+ENV_PROD="${MARGIN_PARITY_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+ENV_EXTRA="${MARGIN_PARITY_ENV_EXTRA:-/www/wwwroot/cretas/.env.daily-close}"
+# 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2;
+# .env.daily-close 是**可选**(没有就用 MOCK_REST), 不在只记一句。
+# shellcheck source=scripts/cron/cron-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
+cron_pin_path
+cron_require_cmds "$ALERTS" "MARGIN PARITY" systemctl
 
 {
   echo "=== $(date '+%F %T') margin parity ==="
-  cd "$PYDIR" || exit 1
-  # shellcheck disable=SC1091
-  source "$PYDIR/venv-current/bin/activate"
+  cd "$PYDIR" || cron_dead "$ALERTS" "MARGIN PARITY" "pydir-missing" "no $PYDIR"
+  cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "MARGIN PARITY"
 
   set -a
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.prod 2>/dev/null
-  # shellcheck disable=SC1091
-  source /www/wwwroot/cretas/.env.daily-close 2>/dev/null
+  cron_source_env_required "$ENV_PROD" "$ALERTS" "MARGIN PARITY"
+  cron_source_env_optional "$ENV_EXTRA"
   set +a
 
   # ⚠️ `.env.prod` 不含 POSTGRES_DB —— 只在 systemd unit 里。不补会落到测试库。
-  svc_pid=$(systemctl show -p MainPID --value cretas-python.service 2>/dev/null)
+  svc_pid=$(systemctl show -p MainPID --value cretas-python.service)
   if [ -n "${svc_pid:-}" ] && [ "$svc_pid" != "0" ] && [ -r "/proc/$svc_pid/environ" ]; then
     while IFS= read -r -d '' kv; do
       case "$kv" in POSTGRES_*|INTERNAL_API_SECRET=*|DASHSCOPE_*) export "${kv?}" ;; esac
@@ -41,7 +47,10 @@ LEDGER=/www/wwwroot/cretas/logs/margin-parity-ledger.jsonl
   rm -f /tmp/margin_parity.json
 
   # 租户默认取日结名单的第一个; 没有就用 demo 租户。
-  parity_factory="${PARITY_FACTORY:-${DAILY_CLOSE_FACTORIES%%,*}}"
+  # ⚠️ 2026-09-06 批 2 测试抓到: .env.daily-close 不在时 DAILY_CLOSE_FACTORIES 未定义, `set -u` 下这里
+  #    直接 `unbound variable` rc=1 退出, **不写告警** —— 一个静默死法。`:-` 让「名单文件不在」落到 MOCK_REST。
+  parity_factory="${PARITY_FACTORY:-${DAILY_CLOSE_FACTORIES:-}}"
+  parity_factory="${parity_factory%%,*}"
   parity_factory="${parity_factory:-MOCK_REST}"
 
   out=$(PARITY_FACTORY="$parity_factory" PARITY_OUT=/tmp/margin_parity.json \
