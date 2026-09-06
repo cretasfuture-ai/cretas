@@ -258,6 +258,8 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childTitles('/hr')).toEqual([
       '账号管理',
       '角色权限',
+      // ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906: 权限矩阵只读页, 挂在「账号权限」组里
+      '权限矩阵',
       '员工档案',
       '部门管理',
       '工种字典',

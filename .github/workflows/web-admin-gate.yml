@@ -93,6 +93,9 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
       # statisticsFieldNamesMatchBackend.source.spec.ts 读它, 断言前端 KPI 字段名 == 后端 stats.put 的键
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/QualityCheckItemServiceImpl.java'
+      # permissionGateMatchesBackend.spec.ts 读它, 断言前端菜单/路由的 module 与后端
+      # @RequirePermission 是同一个权限码 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/permission/PermissionMatrixController.java'
   pull_request:
     paths:
       - 'web-admin/**'
@@ -168,6 +171,9 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
       # statisticsFieldNamesMatchBackend.source.spec.ts 读它, 断言前端 KPI 字段名 == 后端 stats.put 的键
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/QualityCheckItemServiceImpl.java'
+      # permissionGateMatchesBackend.spec.ts 读它, 断言前端菜单/路由的 module 与后端
+      # @RequirePermission 是同一个权限码 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/permission/PermissionMatrixController.java'
 
 concurrency:
   group: web-admin-gate-${{ github.ref }}
