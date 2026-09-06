@@ -186,10 +186,55 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         assertThat(Files.exists(workflow))
                 .as("阳性对照：读不到工作流时，下面那条断言是恒假而不是恒真，但仍要点名说清楚是路径的问题")
                 .isTrue();
-        assertThat(Files.readString(workflow, StandardCharsets.UTF_8))
-                .as("它必须留在 postgres-reversal-concurrency 那条车道的 -Dtest= 列表里——"
-                        + "摘出去它就退回「opt-in 且没人跑」，与不存在读数相同")
-                .contains("SoftDeletePartialUniqueIndexPostgresContractTest");
+
+        // 🔴 ⛔ 不能对整份 yml 做 substring —— 那样钉的性质是「这个字符串出现在这个文件的某处」：
+        //    ① 一条提到该类名的**注释**就能喂饱它；
+        //    ② 把名字挪进 final-full-suite 的列表（那条 job 带 `java-full-ready` 标签才跑）同样保持绿，
+        //       **而这个测试实际停止运行**。
+        //    ⇒ 这正是本 PR 要解决的那件事的元层面：我加这条闭环，是因为「加进 -Dtest= 不够，
+        //      删文件仍可能悄悄通过」；而闭环自己有同一个形状的洞。⇒ 锚到**块 + 键 + 同一行**。
+        String block = jobBlock(Files.readString(workflow, StandardCharsets.UTF_8),
+                "postgres-reversal-concurrency");
+        assertThat(block)
+                .as("阳性对照：切不出 postgres-reversal-concurrency 这个 job（改名/删掉/缩进变了），"
+                        + "下面那条就是恒假——先点名说清楚是切块这一步的问题")
+                .isNotEmpty();
+
+        List<String> dTestLines = block.lines().filter(l -> l.contains("-Dtest=")).toList();
+        assertThat(dTestLines)
+                .as("postgres-reversal-concurrency 里必须有 -Dtest= 那一行；没有它这道车道就不再点名任何测试")
+                .isNotEmpty();
+        assertThat(dTestLines)
+                .as("它必须出现在 postgres-reversal-concurrency 的 **-Dtest= 那一行上**——"
+                        + "只要求「出现在文件某处」是不够的：注释能喂饱它，挪进 final-full-suite（要标签才跑）也能，"
+                        + "而两种情况下这个测试都停止运行")
+                .anyMatch(l -> l.contains("SoftDeletePartialUniqueIndexPostgresContractTest"));
+    }
+
+    /**
+     * 从 workflow 全文里切出某个 job 的正文：从 {@code ^\s*<name>:} 那一行起，到下一个**同缩进**的
+     * {@code key:} 行为止。⛔ 不上 YAML 解析器（那是另一个量级），但足以把「文件某处」收紧成「这个块里」。
+     */
+    private static String jobBlock(String yaml, String jobName) {
+        String[] lines = yaml.split("\n", -1);
+        int start = -1, indent = -1;
+        Pattern head = Pattern.compile("^(\\s*)" + Pattern.quote(jobName) + ":\\s*$");
+        for (int i = 0; i < lines.length; i++) {
+            Matcher m = head.matcher(lines[i]);
+            if (m.find()) {
+                start = i;
+                indent = m.group(1).length();
+                break;
+            }
+        }
+        if (start < 0) return "";
+        StringBuilder sb = new StringBuilder();
+        Pattern sibling = Pattern.compile("^\\s{" + indent + "}[A-Za-z_][\\w-]*:");
+        for (int i = start + 1; i < lines.length; i++) {
+            if (sibling.matcher(lines[i]).find()) break;
+            sb.append(lines[i]).append('\n');
+        }
+        return sb.toString();
     }
 
     /**
@@ -201,10 +246,21 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      *
      * <p>⚠️ 已知边界（写出来，⛔ 不假装没有）：
      * <ul>
-     *   <li>文件顺序按<b>文件名</b>排——本仓 Flyway 版本号是 {@code V<日期>_<序号>} 的定宽格式，字典序即版本序；</li>
+     *   <li>🔴 <b>文件顺序按裸文件名排，而「时间线」其实不是一条线</b>：{@code db/} 下有 5 个目录
+     *       （{@code flyway/} 695、{@code migration/} 256、{@code migration-pg-converted/} 159、
+     *       {@code manual-rollback/} 20、{@code migration-pg/} 7），合起来后有 <b>156 个文件名跨目录重复</b>
+     *       （涉及 316 个文件）⇒ 它们之间的相对顺序取决于遍历顺序，而不是任何真实的执行顺序；
+     *       {@code manual-rollback/} 里的 DROP 还会被当成正向时间线上的事件。
+     *       ⇒ 「Flyway 版本号定宽 ⇒ 字典序即版本序」这句话<b>只在 {@code flyway/} 目录内部成立</b>。
+     *       本闸跟踪的 11 个索引都只在 {@code flyway/} 里出现（已核），所以今天的读数是对的；
+     *       但这不是设计上的保证。</li>
      *   <li>语句边界取到下一个 {@code ;}，所以 {@code DO $$ … $$} 块<b>里面</b>的 CREATE 认不全
      *       （全仓 224 个 DO 块里有 6 个含 CREATE UNIQUE INDEX，本闸跟踪的 11 个都不在其中——已核）；</li>
-     *   <li>🔴 <b>内联 {@code UNIQUE(...)} / {@code CONSTRAINT … UNIQUE (...)} 完全看不见</b>（全仓 123 处）。
+     *   <li>🔴 <b>内联 {@code UNIQUE(...)} / {@code CONSTRAINT … UNIQUE (...)} 完全看不见</b>。
+     *       口径：<b>行首</b>（可带 {@code CONSTRAINT <名>} 前缀）的 {@code UNIQUE (} 有 <b>123</b> 处；
+     *       若改数任意位置的 {@code \bUNIQUE\s*\(} 则是 <b>153</b> 处（多出来的是
+     *       {@code ALTER TABLE … ADD CONSTRAINT … UNIQUE (…)} 那一类）。
+     *       ⚠️ 两个数都对，问的不是同一件事 ⇒ 报它必须带口径，同本方法上面第 (c) 项。
      *       这个盲区已经造成过一次假读数，见 {@link #PROD_ONLY_NOT_IN_MIGRATIONS} 上的说明。</li>
      * </ul>
      */
@@ -226,7 +282,14 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         }
         Map<String, String> state = new LinkedHashMap<>();
         for (Path p : ordered) {
-            String body = Files.readString(p, StandardCharsets.UTF_8);
+            // 🔴 必须先剥 SQL 注释, 而且**方向不安全**: 一条被注释掉的 partial CREATE 会把状态设成
+            //    `partial`, 从而**掩盖掉一次真实的 DROP` —— 也就是说漏剥注释会让闸偏向「一切正常」。
+            //    实测语料里被注释掉的: CREATE UNIQUE INDEX 5 条 / DROP INDEX 8 条 / DROP CONSTRAINT 5 条
+            //    (今天没有一条命中被跟踪的 11 个名字, 所以剥与不剥的最终状态相同——已核)。
+            // ⚠️ 必须**逐文件**剥: 第一版把全部 .sql 拼成一个字符串再剥, `/*…*/` 配 DOTALL 之下
+            //    一处不成对的 `/*` 跨文件吞掉一大段, 读数变成「133 条 CREATE 里 126 条是注释」——
+            //    荒谬, 但它是个看起来很确定的数。是阳性对照(剥完不该腰斩)把它捞出来的。
+            String body = stripSqlComments(Files.readString(p, StandardCharsets.UTF_8));
             // 同一个文件里也要按**出现位置**排，否则文件内的 CREATE/DROP 先后同样会算反。
             record Event(int at, String name, String to) {}
             List<Event> events = new ArrayList<>();
@@ -244,6 +307,11 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
                     .forEach(ev -> state.put(ev.name(), ev.to()));
         }
         return state;
+    }
+
+    /** 剥掉 SQL 注释（{@code -- 行注释} 与 {@code /*…*}{@code /} 块注释）。⚠️ 只能<b>逐文件</b>调用，理由见调用处。 */
+    private static String stripSqlComments(String sql) {
+        return sql.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)--.*$", "");
     }
 
     private static boolean containsWord(String haystack, String word) {
