@@ -48,21 +48,27 @@ for v in "${!LLM_@}"; do case "$v" in *_API_KEY) [ -n "${!v}" ] && n_keys=$((n_k
 [ "$n_keys" -gt 0 ] || cron_dead "$ALERTS" "LLM CANARY" "no-llm-keys-in-service-environ" \
     "cretas-python 的 environ 里一个非空 LLM_*_API_KEY 都没有 —— 密钥没配, 探针没法量; ⛔ 不是「全部条目都 FLAGGED」"
 
-python - <<'PY'
-import sys, types, os, datetime, httpx
+out=$(python - <<'PY'
+import sys, types, os, datetime, traceback
+# 🔴 未捕获异常 ⇒ INSTRUMENT DEAD + exit 2, ⛔ 不是 python 默认的 rc=1 —— 2026-09-06 首跑
+#    `KeyError: 'aistore'` 就是以 rc=1 落进 wrapper 的「FLAGGED rc=1」(又一条假账单告警)。
+def _dead_hook(t, v, tb):
+    traceback.print_exception(t, v, tb)
+    print(f"INSTRUMENT DEAD: unhandled {t.__name__}: {v}")
+    sys.stdout.flush(); sys.stderr.flush()
+    os._exit(2)
+sys.excepthook = _dead_hook
+import httpx
 # stub the http-client import so we can load the module standalone
 _s = types.ModuleType("common.llm_client"); _s.get_llm_http_client = lambda: None
 sys.modules["common.llm_client"] = _s
 import common.llm_router as r
 
 pairs = list(r._SAFE_MODELS.keys())
-CFG = {
-    "aliyun_a": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "LLM_ALIYUN_A_API_KEY"),
-    "aliyun_b": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "LLM_ALIYUN_B_API_KEY"),
-    "aliyun_c": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "LLM_ALIYUN_C_API_KEY"),
-    "tencent":  ("https://tokenhub.tencentmaas.com/v1", "LLM_TENCENT_API_KEY"),
-    "zhipu":    ("https://open.bigmodel.cn/api/paas/v4", "LLM_ZHIPU_API_KEY"),
-}
+# 🔴 端点/密钥**只**从 router 自己的 _provider_config 取 (形态 D): 原来这里抄了一份 5 账号的
+#    CFG 表, 注册表换成 aistore/deepseek/zhipu 之后 `CFG[account]` 当场 KeyError。
+#    _provider_config 对未知账号返回 ("", "") —— base 空 = UNKNOWN-PROVIDER, key 空 = NO-KEY,
+#    两者要分开: 前者是注册表/路由不一致(要人看), 后者是密钥没配。
 def _classify(sc, body):
     """None = billing-safe (200 has-quota / 403 FreeTierOnly / 402 free-exhausted);
     else a flag string. 404 NOSKU = retired; other = toggle flip / possible bill."""
@@ -77,10 +83,11 @@ def _classify(sc, body):
 flags, safe = [], 0
 with httpx.Client(timeout=30.0) as cli:
     for account, model in pairs:
-        base, kenv = CFG[account]
-        key = os.environ.get(kenv, "")
+        base, key = r._provider_config(account)
+        if not base:
+            flags.append(f"{account}/{model}: UNKNOWN-PROVIDER({account} not in _provider_config)"); continue
         if not key:
-            flags.append(f"{account}/{model}: NO-KEY({kenv})"); continue
+            flags.append(f"{account}/{model}: NO-KEY(LLM_{account.upper()}_API_KEY)"); continue
         payload = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
         hdr = {"Authorization": f"Bearer {key}"}
         result = "ERR unknown"
@@ -123,7 +130,17 @@ print("👉 also eyeball the Aliyun 账单 (DashScope/百炼) — client-side lo
       "console-level paid charge; that bill = the true backstop.")
 sys.exit(rc)
 PY
+)
 rc=$?
+printf '%s\n' "$out"
+# 🔴 探针没打出抬头 `[canary …] N entries` = 根本没跑到判定那一步 (KeyError / import 崩 / httpx 缺),
+#    ⛔ 不许按 rc 落进 FLAGGED —— 2026-09-06 首跑 `KeyError: 'aistore'` 就是这么被记成
+#    「FLAGGED rc=1」的。python 侧 excepthook 已把未捕获异常改成 exit 2, 这里是第二道。
+case "$out" in
+    *"[canary "*) ;;
+    *) cron_dead "$ALERTS" "LLM CANARY" "probe-crashed" \
+           "python 探针没打出 [canary …] 抬头 (rc=$rc) —— 崩在判定之前, 见 crontab 指向的日志" ;;
+esac
 # 三态措辞写在这里, ⛔ 不在 crontab 里: 0 全部 billing-safe / 1 有 FLAGGED / 3 注册表过期 /
 # 2 仪器故障 —— 上面 shell 层的 cron_dead 到不了这里; 这里的 2 是 python 探针**自报**的
 # (全部条目 NO-KEY = 一个请求都没发出去), 同样是「没量到」, ⛔ 不许写成 FLAGGED。

@@ -79,13 +79,17 @@ S
 chmod +x "$FAKEBIN/systemctl" "$FAKEBIN/psql"
 # 假 venv: activate 只把假 python 放进 PATH(真 activate 也就是干这个)。
 printf 'export PATH="%s:$PATH"\n' "$PYBIN" > "$PYDIR/venv-current/bin/activate"
+# 桩 python 在 `-` (heredoc) 时打 canary 的抬头行 —— wrapper 现在按「有没有 `[canary ` 抬头」判
+# 探针是否跑到了判定那一步; $STUB/python.noheader 在时不打 (模拟崩在判定之前)。
 cat > "$PYBIN/python" <<'S'
 #!/bin/sh
 echo "python $*" >> "$STUB/calls.log"
 case "$1" in
   -c) [ -f "$STUB/python-old" ] && exit 1; exit 0 ;;      # 版本守卫
   --version) echo "Python 3.11.9"; exit 0 ;;
-  -) cat > /dev/null; [ -f "$STUB/python.rc" ] && exit "$(cat "$STUB/python.rc")"; exit 0 ;;
+  -) cat > /dev/null
+     [ -f "$STUB/python.noheader" ] || echo "[canary 2026-09-06] 3 entries · 2 billing-safe · registry age 1d"
+     [ -f "$STUB/python.rc" ] && exit "$(cat "$STUB/python.rc")"; exit 0 ;;
 esac
 exit 0
 S
@@ -236,6 +240,15 @@ for s in "$CANARY" "$RERANK" "$HEATMAP"; do
 done
 note_rc2 cron-common-missing
 ok "🔴 三个 wrapper: cron-common.sh 不在 ⇒ rc=2 reason=cron-common-missing, 不写 FLAGGED, 不碰 python"
+
+# ═════════ 探针崩在判定之前 (没打 `[canary ` 抬头) ⇒ rc=2 probe-crashed, ⛔ 不按 rc 落进 FLAGGED ═══
+# 2026-09-06 首跑: heredoc `KeyError: 'aistore'` ⇒ python rc=1 ⇒ 写成「FLAGGED rc=1」。现在 python 侧
+# excepthook 会 exit 2 (test-llm-router-canary-probe.sh 钉), 这里是 wrapper 侧的第二道: 抬头没打就是崩。
+reset; : > "$STUB/python.noheader"; printf '1' > "$STUB/python.rc"; run_it "$CANARY"
+[ "$RC" = 2 ] || fail "[p1] 期望 rc=2 实得 $RC"; assert_alert "reason=probe-crashed" "[p1]"
+grep -q 'FLAGGED' "$ALERTS" && fail "[p1] 崩在判定前不许写 FLAGGED (这就是首跑那条假账单告警)"
+note_rc2 probe-crashed
+ok "🔴 canary: python rc=1 但没打抬头 ⇒ rc=2 probe-crashed, 不写 FLAGGED (首跑 KeyError 的长相)"
 
 n=$(printf '%s' "$RC2" | wc -w | tr -d ' ')
 echo "READING: RC2_REASONS_CONSTRUCTED=$n [${RC2# }]"
