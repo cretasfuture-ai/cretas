@@ -600,7 +600,8 @@ public class PermissionServiceImpl implements PermissionService {
                 user.getFactoryId() == null ? Collections.emptyMap() : layer2LevelsForRole(user.getFactoryId(), role.name()),
                 layer1LevelsForRole(role.name()));
 
-        // 模块全集: 三层里任一层为该角色登记过的模块 (不挑「哪一份清单是真的」, 见 7 份清单收敛任务)
+        // 模块全集: 三层里任一层为该角色登记过的模块。owner 2026-09-06 已裁定「以 L1 模块码为准」(#675/#689),
+        // 这里取并集是为了让硬编码兜底独有的格 (L1 无行) 也进登录响应, 不是在挑清单。
         Set<String> modules = new TreeSet<>();
         modules.addAll(snapshot.l2().keySet());
         modules.addAll(snapshot.l1().keySet());

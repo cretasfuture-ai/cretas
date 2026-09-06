@@ -244,4 +244,28 @@ class PlatformRolePermissionWriteServiceContractTest {
         assertThat(service.write(admin, "F006", "unactivated", "finance", "-", null).row().getPermissionLevel()).isEqualTo("-");
         assertThat(service.write(admin, "F006", "sales_manager", "finance", "r", null).row().getPermissionLevel()).isEqualTo("r");
     }
+
+    @Test
+    @DisplayName("清单收敛刀 B: operations 进了写白名单 ⇒ viewer × operations = r 可写且立即生效; 阴性: 餐饮格与 ai 仍 400")
+    void operationsIsWritableAfterCutB() {
+        User admin = user(7000L, "permission_admin");
+        User viewer = user(7200L, "viewer");
+        // 写前: 硬编码 viewer 其实给了 operations 只读 (第一版断言「无行 ⇒ false」跑红了才发现),
+        // 所以用一条 L1 '-' 行把它压住, 让「写前 false → 写后 true」的翻转是真的
+        seed("viewer", "operations", "-");
+        assertThat(permissionService.hasPermission(viewer, "operations:read")).isFalse();
+
+        PlatformRolePermissionWriteService.WriteResult r = service.write(admin, "F006", "viewer", "operations", "r", "运营看板只读");
+        System.out.println("OBSERVED viewer.operations after write = " + r.row().getPermissionLevel()
+                + " hasPermission(operations:read)=" + permissionService.hasPermission(viewer, "operations:read"));
+        assertThat(r.row().getPermissionLevel()).isEqualTo("r");
+        assertThat(permissionService.hasPermission(viewer, "operations:read")).isTrue();
+        assertThat(permissionService.hasPermission(viewer, "operations:write")).isFalse();
+
+        // 阴性: 白名单只多了 operations, 别的没放宽
+        assertThatThrownBy(() -> service.write(admin, "F006", "viewer", "ai", "r", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("无效模块");
+        assertThatThrownBy(() -> service.write(admin, "F006", "viewer", "restaurantOps", "r", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("餐饮侧待定");
+    }
 }

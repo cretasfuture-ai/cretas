@@ -30,6 +30,8 @@ public class FactoryRoleModuleOverrideController {
         "dashboard","production","warehouse","quality","procurement","sales",
         "hr","equipment","finance","system","analytics","scheduling",
         "work_report","inventory","report","rd","restaurant","production_report_correction",
+        // 2026-09-07 清单收敛刀 B: 与 PlatformRolePermissionController.ALLOWED_MODULES 逐字相同 (闸钉着), 补 operations。
+        "operations",
         // 2026-08-05 餐饮四部门驾驶舱细分权限。语义见 permission.ts:552:
         //   最终 = min(restaurant 上限, 该部门声明值 ?? 上限)
         // 大小写敏感, 必须与前端 ModulePermissions 的键逐字一致。

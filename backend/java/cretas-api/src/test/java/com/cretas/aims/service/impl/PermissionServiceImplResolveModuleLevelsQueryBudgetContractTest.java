@@ -140,6 +140,8 @@ class PermissionServiceImplResolveModuleLevelsQueryBudgetContractTest {
         assertThat(service.hasPermission(u, "finance:read")).isTrue();
         verify(platformRepo, times(1)).findByRoleCodeAndModuleCodeAndDeletedAtIsNull("viewer", "finance");
         verify(platformRepo, never()).findByRoleCodeAndDeletedAtIsNull(anyString());
+        // DisplayName 说的「L2 list ×1」也要真 verify (#683 终审备注): 逐格路径每格查一次 L2 配置
+        verify(factoryConfigRepo, times(1)).findByFactoryIdAndConfigVersion("F006", 1);
 
         assertThat(service.hasPermission(u, "finance:read")).isTrue();   // 第二次命中缓存, 不再查
         verify(platformRepo, times(1)).findByRoleCodeAndModuleCodeAndDeletedAtIsNull("viewer", "finance");
