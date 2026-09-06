@@ -34,7 +34,7 @@ bash tests/v1-e2e/scripts/run-full.sh
 | `j6-purchase-full.spec.ts` | Procurement cycle | purchase flow |
 | `j7-warehouse-full.spec.ts` | Warehouse pages | inventory pages |
 | `j8-rd-sample.spec.ts` | R&D samples + quotes | P1-3 / P1-8 / P0-4 |
-| `j9-employee-segment-web.spec.ts` | Employee process (web) | P1-1 web |
+| `j9-employee-segment-web.spec.ts` | Production pages (web); segments API test removed 2026-09-06 (entity deleted, PR #660) | P1-1 web |
 | `j10-bom-audit.spec.ts` | BOM change log + FMR | P1-9 / P1-5 |
 
 ## Seed Data

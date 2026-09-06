@@ -168,7 +168,6 @@ DELETE FROM internal_transfers
     WHERE source_factory_id = 'F_E2E_TEST' OR target_factory_id = 'F_E2E_TEST';
 DELETE FROM factory_material_requisitions  WHERE factory_id = 'F_E2E_TEST';
 DELETE FROM production_plans               WHERE factory_id = 'F_E2E_TEST';
-DELETE FROM employee_process_segments      WHERE factory_id = 'F_E2E_TEST';
 DELETE FROM invoice_records                WHERE factory_id = 'F_E2E_TEST';
 DELETE FROM payment_records                WHERE factory_id = 'F_E2E_TEST';
 DELETE FROM bom_change_logs                WHERE factory_id = 'F_E2E_TEST';
