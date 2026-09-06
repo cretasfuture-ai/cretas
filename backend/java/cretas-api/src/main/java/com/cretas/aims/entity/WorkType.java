@@ -2,6 +2,7 @@ package com.cretas.aims.entity;
 
 import lombok.*;
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 /**
@@ -24,6 +25,7 @@ import java.math.BigDecimal;
            @Index(name = "idx_work_type_code", columnList = "factory_id,code"),
            @Index(name = "idx_work_type_active", columnList = "factory_id,is_active")
        })
+@SQLDelete(sql = "UPDATE work_types SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class WorkType extends BaseEntity {
     @Id

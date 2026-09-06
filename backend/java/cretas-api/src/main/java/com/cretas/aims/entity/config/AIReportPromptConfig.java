@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import lombok.*;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -34,6 +35,7 @@ import org.hibernate.annotations.Where;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@SQLDelete(sql = "UPDATE ai_report_prompt_configs SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class AIReportPromptConfig extends BaseEntity {
 

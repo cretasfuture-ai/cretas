@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -46,6 +47,7 @@ import org.hibernate.annotations.Where;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@SQLDelete(sql = "UPDATE processing_stage_records SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProcessingStageRecord extends BaseEntity {
     @Id

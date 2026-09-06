@@ -7,6 +7,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.GenericGenerator;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -39,6 +40,7 @@ import org.hibernate.annotations.Where;
 @SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
+@SQLDelete(sql = "UPDATE ai_agent_rules SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class AiAgentRule extends BaseEntity {
 

@@ -4,6 +4,7 @@ import lombok.*;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -31,6 +32,7 @@ import org.hibernate.annotations.Where;
            @Index(name = "idx_piece_rate_effective", columnList = "factory_id,effective_from,effective_to"),
            @Index(name = "idx_piece_rate_priority", columnList = "factory_id,priority")
        })
+@SQLDelete(sql = "UPDATE piece_rate_rules SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class PieceRateRule extends BaseEntity {
 

@@ -5,6 +5,7 @@ import io.hypersistence.utils.hibernate.type.json.JsonType;
 import lombok.*;
 import jakarta.persistence.*;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -22,6 +23,7 @@ import java.util.Map;
     @Index(name = "idx_wp_factory", columnList = "factory_id"),
     @Index(name = "idx_wp_factory_active", columnList = "factory_id, is_active")
 })
+@SQLDelete(sql = "UPDATE work_processes SET deleted_at = NOW() WHERE id = ? AND lock_version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class WorkProcess extends BaseEntity {
 

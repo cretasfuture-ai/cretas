@@ -2,6 +2,7 @@ package com.cretas.aims.entity;
 
 import lombok.*;
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 /**
  * 部门实体类
@@ -23,6 +24,7 @@ import org.hibernate.annotations.Where;
            @Index(name = "idx_department_code", columnList = "factory_id,code"),
            @Index(name = "idx_department_active", columnList = "factory_id,is_active")
        })
+@SQLDelete(sql = "UPDATE departments SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class Department extends BaseEntity {
 

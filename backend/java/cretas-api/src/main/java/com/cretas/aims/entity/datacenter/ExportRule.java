@@ -5,6 +5,7 @@ import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.util.List;
@@ -32,6 +33,7 @@ import java.util.Map;
                 @Index(name = "idx_export_rules_factory_module", columnList = "factory_id,module_code"),
                 @Index(name = "idx_export_rules_factory_created", columnList = "factory_id,created_at")
         })
+@SQLDelete(sql = "UPDATE export_rules SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ExportRule extends BaseEntity {
 

@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import lombok.*;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -20,6 +21,7 @@ import org.hibernate.annotations.Where;
 @NoArgsConstructor
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
+@SQLDelete(sql = "UPDATE scale_protocol_configs SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ScaleProtocolConfig extends BaseEntity {
 

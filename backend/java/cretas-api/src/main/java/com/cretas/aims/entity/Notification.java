@@ -8,6 +8,7 @@ import lombok.experimental.SuperBuilder;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -34,6 +35,7 @@ import org.hibernate.annotations.Where;
            @Index(name = "idx_notification_type", columnList = "type")
        }
 )
+@SQLDelete(sql = "UPDATE notifications SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class Notification extends BaseEntity {
 
