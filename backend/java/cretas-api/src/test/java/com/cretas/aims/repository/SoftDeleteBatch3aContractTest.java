@@ -123,6 +123,68 @@ class SoftDeleteBatch3aContractTest {
         }
     }
 
+    /**
+     * 阴性对照：`RawMaterialType` 的 (factory_id, code) **保持全量唯一键**，所以软删之后同 code 仍必须被拒。
+     *
+     * <p>这是本 PR「两条相反行为」里的**那一半**，也是唯一能在 H2 上证的那一半——因为该实体
+     * 保留了 {@code @UniqueConstraint}，H2 会按它建出全量唯一键。
+     * 另一半（`MaterialProductConversion` 软删后同键**可以**重建）**在 H2 上测不了**：
+     * 那条唯一性是 {@code V20261101_38} 的**部分索引**，JPA 表达不了，H2 建不出来 ⇒
+     * 判据在 docker prod-schema 副本的迁移四态里（PR 正文「目标行为」一节）。⛔ 不硬造一个 H2 版本。
+     *
+     * <p>⚠️ 这条断言守的是**政策**（软删后业务标识不回收），不是实现细节：权威查重路径
+     * {@code RawMaterialTypeServiceImpl:158} 用的是 {@code findCodeConflictIncludingDeleted}（原生，含已删），
+     * 与这条全量键一致。⛔ 谁要把这条键改成部分索引，必须先改那条查重，否则两边互相矛盾。
+     */
+    @org.junit.jupiter.api.Test
+    @DisplayName("阴性对照: RawMaterialType 软删后同 code 仍被拒(编码不回收), 换个 code 能建")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void softDeletedMaterialCodeStaysOccupied() throws Exception {
+        em.createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
+        try {
+            String factoryId = "F-B3A-" + UUID.randomUUID().toString().substring(0, 6);
+
+            com.cretas.aims.entity.RawMaterialType first = (com.cretas.aims.entity.RawMaterialType)
+                    minimalRow(com.cretas.aims.entity.RawMaterialType.class);
+            first.setFactoryId(factoryId);
+            first.setCode("CODE-X");
+            em.persist(first);
+            em.flush();
+            Object firstId = idOf(first);
+
+            CrudRepository crud = (CrudRepository) new Repositories(ctx)
+                    .getRepositoryFor(com.cretas.aims.entity.RawMaterialType.class).orElseThrow();
+            crud.delete(em.find(com.cretas.aims.entity.RawMaterialType.class, firstId));
+            em.flush();
+            em.clear();
+
+            long alive = ((Number) em.createNativeQuery(
+                            "SELECT count(*) FROM raw_material_types WHERE id = :id AND deleted_at IS NOT NULL")
+                    .setParameter("id", firstId).getSingleResult()).longValue();
+            assertThat(alive).as("前置: 第一条确实是被软删的(物理行还在, deleted_at 非空)").isEqualTo(1L);
+
+            // 阳性对照: 换个 code 必须能建 —— 否则下面那条「被拒」可能只是因为什么都插不进去
+            com.cretas.aims.entity.RawMaterialType other = (com.cretas.aims.entity.RawMaterialType)
+                    minimalRow(com.cretas.aims.entity.RawMaterialType.class);
+            other.setFactoryId(factoryId);
+            other.setCode("CODE-Y");
+            em.persist(other);
+            em.flush();
+            assertThat(idOf(other)).as("阳性对照: 换个 code 能建").isNotNull();
+
+            // 被守的行为: 同 code 仍被拒（放最后 —— 失败的 flush 会让 EntityManager 不可再用）
+            com.cretas.aims.entity.RawMaterialType dup = (com.cretas.aims.entity.RawMaterialType)
+                    minimalRow(com.cretas.aims.entity.RawMaterialType.class);
+            dup.setFactoryId(factoryId);
+            dup.setCode("CODE-X");
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> { em.persist(dup); em.flush(); })
+                    .as("软删之后同 (factory_id, code) 必须仍被唯一键拒绝 —— 编码不回收")
+                    .isInstanceOf(jakarta.persistence.PersistenceException.class);
+        } finally {
+            try { em.createNativeQuery("SET REFERENTIAL_INTEGRITY TRUE").executeUpdate(); } catch (RuntimeException ignored) { }
+        }
+    }
+
     // ---- 反射造最小行 ----
 
     private Object minimalRow(Class<?> c) throws Exception {
