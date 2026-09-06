@@ -106,9 +106,20 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
             String stmt = m.group();
             if (stmt.toLowerCase().contains("deleted_at is null")) partial.add(stmt);
         }
-        // ⚠️ 这个数依赖「语句边界怎么切」：到下一个 `;` 是 109，到下一条语句关键字是 110，
-        // 裸 `CREATE UNIQUE INDEX` 出现次数是 133（差额在 DO $$ … $$ 块里，那里的 `;` 不是语句结尾）。
-        // ⇒ 打印时把口径一起打出来。⛔ 一个不说口径的数字，和不写它一样没用——两个人重数会得到不同的值。
+        // ⚠️ 这个数**同时**依赖两件事，报它的时候两件都要说清楚：
+        //
+        // ① 语句边界怎么切：到下一个 `;` 是 109/131，到下一条语句关键字是 110/132，
+        //    裸 `CREATE UNIQUE INDEX` 出现次数是 133（差额在 DO $$ … $$ 块里，那里的 `;` 不是语句结尾）。
+        //
+        // ② 🔴 **在哪棵树上数的** —— 这一条才是 2026-09-07 那次 109 vs 111 分歧的真因。
+        //    终审重数得到 111/133，我在自己分支上是 109/131，我当时**用①把它解释掉了**（口径差）。
+        //    错的。把 #712 合进来再数：**恰好 111/133** —— 它的 V20261101_38 加了正好 2 条带
+        //    `deleted_at` 谓词的 CREATE UNIQUE INDEX。⇒ 109+2=111、131+2=133，逐位吻合。
+        //    ⚠️ 我拿一个**自己量过、听起来也成立**的机制，解释掉了一个由**输入不同**造成的差异。
+        //    一个能解释症状的机制，不等于就是这次的成因——差两个数的时候先问「我们数的是不是同一棵树」。
+        //
+        // ⇒ 打印时把口径一起打出来；比对读数时先对齐 base。
+        //   ⛔ 一个不说口径、不说树的数字，和不写它一样没用。
         System.out.println("PARTIAL_UNIQUE_INDEX_STATEMENTS_IN_MIGRATIONS=" + partial.size()
                 + " (口径: CREATE UNIQUE INDEX 到下一个 ';'; 同口径下总语句数="
                 + CREATE_UNIQUE_INDEX.matcher(sql).results().count() + ")");
