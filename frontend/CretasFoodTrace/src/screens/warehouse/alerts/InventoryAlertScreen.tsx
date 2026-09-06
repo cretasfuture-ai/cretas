@@ -12,7 +12,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   RefreshControl,
 } from "react-native";
 import { Text, Button, Checkbox, useTheme } from "react-native-paper";

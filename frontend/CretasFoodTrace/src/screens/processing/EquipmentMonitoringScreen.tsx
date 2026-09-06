@@ -17,7 +17,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ProcessingStackParamList } from '../../types/navigation';
 import { equipmentApiClient, type EquipmentStatistics } from '../../services/api/equipmentApiClient';
 import { useAuthStore } from '../../store/authStore';
-import { Alert } from 'react-native';
+import {  } from 'react-native';
 import { appAlert } from '../../components/ui/AppDialog';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';

@@ -22,7 +22,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ProcessingStackParamList } from '../../types/navigation';
 import { equipmentApiClient, type Equipment, type MaintenanceRecord as APIMaintenanceRecord } from '../../services/api/equipmentApiClient';
 import { useAuthStore } from '../../store/authStore';
-import { Alert } from 'react-native';
+import {  } from 'react-native';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { useTranslation } from 'react-i18next';
