@@ -2,7 +2,7 @@
 
 **票**: `CI-MIGRATION-GATE-READS-HISTORY-NOT-CURRENT-SCHEMA`
 **日期**: 2026-09-07
-**状态**: 🔴 **现在就成立的失败**，不是隐患。⛔ 未修。要修几轮已量出：**21 处失败 / 10 张缺表 / 6 处数据态守卫**，其中最后一类需要先拍一个**决定**（见第六节）
+**状态**: 🔴 **现在就成立的失败**，不是隐患。⛔ 未修。要修几轮：**21 处失败 / 10 张缺表 / 6 处数据态守卫**（第六节）。🔴 **第二节「23 张没有定义」已订正为 9 张** —— 根因不是定义丢了，是**迁移集散在六个位置而 Flyway 只读一个**（第七节，含可行性读数）
 **被测树**: `origin/main` @ `345190f881`（⛔ 不含任何我的未合改动）
 
 ---
@@ -50,15 +50,16 @@ prod 上这两条的 `flyway_schema_history` 都是 `success=true`：baseline �
 | 迁移创建的表 | 293 |
 | **引用了但迁移全程从没创建过的表** | **29**（去掉扫描器噪声 `public` / `_` 开头 5 个之后） |
 | 其中在 `database/*.sql` 里有 CREATE 的 | 6 |
-| 🔴 **仓库里任何地方都没有 CREATE 的** | **23** |
+| ~~仓库里任何地方都没有 CREATE 的~~ | ~~23~~ ⇒ 🔴 **这条是错的，真数是 9**（见第七节：我漏搜了 `db/migration/` 256 个文件） |
 | 这 29 张在 **prod 上存在**的 | **28 / 28**（查得到的全部；1 张 `legacy_process_task_report_ids` 未查） |
 
 **包括核心表**：`work_processes`、`whitelists`、`workflow_templates`、
 `material_consumptions`、`encoding_rules`、`material_product_conversions`、
 `purchase_receive_items`、`state_machines`、`sales_delivery_records` …
 
-⇒ 这些表当年多半是 Hibernate `ddl-auto` 或未提交的脚本建的。
-**仓库里没有它们的定义**，所以任何「从零重建」都拿不到它们。
+⚠️ **这一段的归因也是错的**（见第七节）：29 张里 14 张的定义在 `db/migration/` 等
+**Flyway 不读的死目录**里，6 张在根 `database/`，只有 **9 张**是真的哪儿都没有。
+⇒ 性质不是「定义丢了」，是「**一半的迁移没接进 Flyway 的搜索路径**」。
 
 **其中 14 张有「裸引用」**（引用它的迁移文件里没有 `to_regclass` 守卫）⇒
 每一张都是修好第 267 条之后**下一个**会红的地方：
@@ -121,9 +122,11 @@ $ grep -rl fresh-db-gate .github/
 
 1. **第 267 条**：把它对 `production_settlements` 的依赖前移，或给它加 `to_regclass` 守卫
    （后者与既有 14 处补丁同形，但那是**继续打补丁**，不是修根）。
-2. **那 23 张仓库里没有定义的表**：要把它们的 `CREATE TABLE` 补进 bootstrap ——
-   ⚠️ 定义只能从 **prod 的现状**反推（`pg_dump --schema-only`），而那正是本票说的
-   「历史与现状脱节」的另一面：**我们要用现状去补历史**。
+2. ~~**那 23 张仓库里没有定义的表**~~ ⇒ 🔴 **已订正为 9 张，且修法不同**（第七节）：
+   14 张的定义在 `db/migration/` 等**死目录**里、6 张在根 `database/` ——
+   那不是「补定义」，是「**接搜索路径**」（而接之前有 6 个撞号和 2 个会在 prod 上执行的文件要处置）。
+   只有剩下的 **9 张**才是「只能从 prod 现状反推」。
+   ⚠️ 差别很大：前者是把已有的东西接上，后者是**用现状去补历史**，代价和风险大一个量级。
 3. **接闸**：`fresh-db-gate.sh` 进 CI。ubuntu runner 有 Docker，成本是一次完整 Flyway 跑
    （本机实测约 6 分钟，其中大部分是编译 1641 个测试类；CI 上只跑 Flyway 会更短）。
 
@@ -187,6 +190,100 @@ V20261029_68  中止: 删除后工厂域会剩 1 个租户(预期 2)
    另一条露出**底下真正的**数据态守卫（`SH-01 blocked`）。
    ⚠️ 不做这个对照，那 4 条会被当成 4 个真缺陷写进路线图，而其中一条还会**盖住**
    它下面那个真问题 —— 假读数不只是多一条噪声，它会**遮住**东西。
+
+---
+
+## 七、🔴 订正：不是「23 张没有定义」，是「迁移集散在四个目录，Flyway 只读一个」
+
+### 我上面那条读数是错的
+
+第二节写「23 张整个仓库里都没有 CREATE」。**错了**，成因是我只搜了 `db/flyway/` 与根 `database/`，
+**从没搜过 `db/migration/`**（256 个文件）。⚠️ 与本文第三节自述的两个假读数同族：
+**一个看不见某个位置的仪器，不会报「我没看那里」，它报的是「没有」。**
+
+### 目录全图（Flyway 只读第一个）
+
+| 目录 | `.sql` 数 | Flyway 读吗 |
+|---|---:|---|
+| `db/flyway/` | 696 | ✅ `spring.flyway.locations=classpath:db/flyway` |
+| `db/migration/` | 256 | ❌ |
+| `db/migration-pg-converted/` | 159 | ❌ |
+| `db/migration-pg/` | 7 | ❌ |
+| `db/manual-rollback/` | 20 | ❌ |
+| 仓库根 `database/` | 53 | ❌ |
+
+⇒ **495 个 `.sql` 文件 Flyway 从不读。**
+
+### 29 张表的正确分类（全量，⛔ 不抽样；带阳性对照与分母）
+
+```
+READING: A_in_flyway=0  B_only_dead_dirs=14  C_only_database_dir=6  D_nowhere=9
+阳性对照: business_rules 命中 db/flyway/V20260622_01 ⇒ 匹配式有效
+分母: 含 CREATE TABLE 的文件 flyway 186/696, migration 101/256, migration-pgc 73/159,
+      migration-pg 3/7, database 19/53, manual-rollback **0/20**(该目录无建表, 关于它的结论无效)
+```
+
+⚠️ **A=0 是定义使然，不是发现** —— 这 29 张的定义就是「`db/flyway` 里没建过」，那一格恒真。
+有意义的是 **B/C/D = 14 / 6 / 9**。
+
+**⇒ 真正「哪儿都没有、只能从 prod 反推」的是 9 张，不是 23 张**：
+`bom_labor_cost_configs` · `bom_process_injection_configs` · `disposal_records` ·
+`encoding_rules` · `legacy_process_task_report_ids` · `material_batch_adjustments` ·
+`material_consumptions` · `sales_order_prepayment_records_items` · `whitelists`
+
+### 「把死目录接进 `flyway.locations`」可行吗 —— 量过了
+
+**⛔ 不能整个接。** 版本号撞号（Flyway 拒绝同版本号的两个文件）：
+
+```
+db/flyway            696 文件 / 696 版本号 / 内部撞号 0        ← 干净
+db/migration         256 文件 / 230 版本号 / 内部撞号 22
+db/migration-pg-conv 159 文件 / 139 版本号 / 内部撞号 16
+三个死目录**互相**撞号 = 136 个版本号
+死目录与 db/flyway 撞号 = 0                                   ← 唯一的好消息
+```
+
+而且 `db/migration` 与 `db/migration-pg-converted` 是**同一批迁移的两份**：
+156 个同名文件，**内容相同的 0 个**（后者是 MySQL→PG 转换版，文件头有转换时间戳）。
+
+**但 `db/migration/` 不是铁板一块 —— 它混着两个时代**：
+
+| 子集 | 文件 | 内部撞号 | 与 flyway 撞号 | 含 MySQL 专有语法 |
+|---|---:|---:|---:|---|
+| 已被转换的（MySQL 时代） | 156 | 16 | 0 | 抽 40 个原始版，**32** 个有 |
+| **未被转换的** | **100** | **6** | **0** | **1 / 100** |
+
+⇒ 那 100 个基本已经是 PG 语法 —— 它们是**切到 `db/flyway` 之后、却没跟着搬过去**的那批。
+**B 桶那 14 张表的建表语句就在这里面**（`V20260312_02__work_processes_table.sql` 等）。
+
+⇒ **可行的子集存在**：接这 100 个，只需先解决 **6 个内部撞号**（同版本号两个文件，各改一个号）。
+⛔ 但**不是**「加一行 `locations` 就完事」。
+
+### 🔴 接之前必须先处理的一件：有 2 个文件会在 **prod 上真的执行**
+
+```
+未转换那批的版本号跨度: 2026.03.09.01 .. 20260429.01
+prod 的 baseline:        20260416.99   (≤ 它的一律标记为已应用 ⇒ 不会跑)
+高于 baseline 的:        2 个
+    V20260428_07__fix_f001_super_admin_position.sql
+    V20260429_01__fix_f006_position.sql
+两者都**不在** prod 的 flyway_schema_history 里
+```
+
+⇒ 一旦把 `db/migration` 加进 `locations`，这两条会在**下一次 prod 部署时执行**。
+它们是一次性数据修复（改某个账号的岗位），⚠️ **在今天的 prod 上跑它们意味着什么，没人验过。**
+⇒ **这两条必须单独处置**（挪版本号 / 标记 / 排除），⛔ 不能跟着一起接进来。
+
+### ⇒ 这三张票是同一件事的三个面
+
+`OPS-FRESH-DB-CANNOT-BE-BUILT`（建不出新库）、
+`CI-GATE-SCANS-DEAD-MIGRATION-DIRS`（闸扫死目录，把死目录里的东西算成"迁移里有"）、
+`OPS-DATABASE-DIR-IS-A-SECOND-SCHEMA-SOURCE`（7 个索引只在 `database/`）——
+**根因同一个：迁移集散在六个位置，而 Flyway 只读一个。**
+
+⚠️ 这**不是**已经拍板的修法，是一份可行性读数。真要动，顺序是：
+① 先定「哪一份是真的」（`migration` vs `migration-pg-converted`）；
+② 6 个撞号改号；③ 那 2 个高于 baseline 的单独处置；④ 才谈 `locations`。
 
 ---
 
