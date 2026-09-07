@@ -214,10 +214,22 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
             String stmt = m.group();
             if (stmt.toLowerCase().contains("deleted_at is null")) partial.add(stmt);
         }
-        // ⚠️ 这个数**同时**依赖两件事，报它的时候两件都要说清楚：
+        // ⚠️ 这个数**同时**依赖四件事，报它的时候四件都要说清楚：
         //
-        // ① 语句边界怎么切：到下一个 `;` 是 109/131，到下一条语句关键字是 110/132，
-        //    裸 `CREATE UNIQUE INDEX` 出现次数是 133（差额在 DO $$ … $$ 块里，那里的 `;` 不是语句结尾）。
+        // ① 语句边界怎么切（到下一个 `;` / 到下一条语句关键字 / 裸 occurrence，
+        //    差额在 DO $$ … $$ 块里——那里的 `;` 不是语句结尾）。
+        // ③ 🔴 **扫哪个根**：2026-09-07 之前扫整棵 db/（1138 文件），现在从
+        //    spring.flyway.locations 派生 ⇒ 只扫 db/flyway（696 文件）。死目录贡献 3 条部分索引。
+        // ④ 🔴 **剔不剔注释**：2026-09-07 之前**不剔**，被注释掉的 CREATE UNIQUE INDEX 也算数。
+        //
+        // ⚠️ ③④ 是同一天后加的两维 ⇒ **下面这些历史数字只在它们各自的口径下成立**，
+        //    ⛔ 不要拿来和当前输出直接比：
+        //      109/131、110/132、133      —— 旧口径（扫整棵 db/、不剔注释）
+        //      111/133                    —— 同上，且树里含 #712
+        //      108/117                    —— 收窄扫描根之后、剔注释之前
+        //      107/114                    —— 当前口径（收窄 + 剔注释）；与独立脚本逐位吻合
+        //    📌 这一整段的主旨就是「报数要带口径」，而它自己曾经因为口径变了而过期一次 ——
+        //       ⇒ 口径改了，**同一次改动里把这些历史数字重新标注**，⛔ 不留给下一个人去猜。
         //
         // ② 🔴 **在哪棵树上数的** —— 这一条才是 2026-09-07 那次 109 vs 111 分歧的真因。
         //    终审重数得到 111/133，我在自己分支上是 109/131，我当时**用①把它解释掉了**（口径差）。
@@ -426,11 +438,29 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         return Pattern.compile("\\b" + Pattern.quote(word) + "\\b").matcher(haystack).find();
     }
 
+    /**
+     * 读迁移全文，<b>逐文件剔掉 SQL 注释</b>之后再拼。
+     *
+     * <p>🔴 2026-09-07 之前这里<b>不剔</b>，而同一个文件里的 {@link #resolveFinalIndexState()} 是剔的
+     * ——<b>同一个文件里两条路径两套口径</b>（形态 D）。代价落在别人身上：给迁移写一段说明注释时，
+     * 只要出现 {@code CREATE}/{@code UNIQUE}/{@code INDEX} 三词连写，就会被数成一条真语句，
+     * 把 {@code PARTIAL_UNIQUE_…} 这个<b>跨分支比对用</b>的读数弄脏。
+     * ⚠️ 而且<b>不会红</b> —— 症状是「census 对不上」，⛔ 不是「你的注释有问题」，
+     * 于是写注释的人要背一条<b>没人告诉他的隐性规则</b>。
+     *
+     * <p>实测（2026-09-07，改之前）：在某迁移的注释里加一行
+     * {@code -- CREATE UNIQUE INDEX … WHERE deleted_at IS NULL;} ⇒ 读数 {@code 108/117 → 109/118}。
+     * 改之后同一变异 ⇒ 读数不变。⛔ 只跑「改完还是 108」不算：那与「剔注释根本没生效」同形。
+     *
+     * <p>⚠️ <b>必须逐文件剔</b>，⛔ 不能拼完再剔：{@code /*…*}{@code /} 配 DOTALL 时，
+     * 一处不成对的 {@code /*} 会<b>跨文件</b>吞掉一大段
+     * （2026-09-07 在另一个脚本上实测过：读数变成「133 条里 126 条是注释」，荒谬但看着确定）。
+     */
     private static String readAllMigrations() throws IOException {
         StringBuilder sb = new StringBuilder();
         try (Stream<Path> files = Files.walk(DB)) {
             for (Path p : files.filter(f -> f.toString().toLowerCase().endsWith(".sql")).toList()) {
-                sb.append(Files.readString(p, StandardCharsets.UTF_8)).append('\n');
+                sb.append(stripSqlComments(Files.readString(p, StandardCharsets.UTF_8))).append('\n');
             }
         }
         return sb.toString();
