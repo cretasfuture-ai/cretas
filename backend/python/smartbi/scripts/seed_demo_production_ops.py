@@ -520,9 +520,14 @@ def gen_production_reports(
 
 
 def _assert_no_batch_report_uniqueness(factory_id: str, rows: List[tuple]) -> None:
-    """Guard against the prod-only partial unique index
+    """Guard against the partial unique index
     uk_report_worker_type_date_no_batch ON
       (factory_id, worker_id, report_type, report_date) WHERE batch_id IS NULL.
+
+    NOTE 2026-09-07: it used to say "prod-only" —— that was accurate until
+    V20261101_40 added it to db/flyway. Before that, a database built from
+    migrations did NOT have this index, so this guard was the only thing
+    standing between the seed script and silently duplicated rows.
 
     test DB lacks this index (schema drift), so this in-memory check is the
     real gate. Row tuple layout (see PROD_REPORT_INSERT / gen_production_reports):

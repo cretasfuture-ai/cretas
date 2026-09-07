@@ -173,9 +173,7 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         //    ⚠️ 而且 ProductionReport 的 @SQLDelete 是 0 —— 它仍是 R68 那批**物理删**实体，
         //       本票只补索引，⛔ 不代表这张表已经软删了。
         reg("uk_report_worker_type_date_no_batch", "production_reports 无批次时同工人同类型同日唯一");
-        // ⛔ uk_sm_published 故意**不**登记：它的谓词是 publish_status = 'published'，
-        //    而本闸判 partial 的依据是语句里含 "deleted_at is null"（见 resolveFinalIndexState）
-        //    ⇒ 登进来会被判成 full 而报红 —— 闸没错，是分类错。它由 V20261101_40 §3 补迁移。
+        // uk_sm_published 不在这里 —— 见 NOT_COVERED_BY_THIS_GATE。
     }
 
 
@@ -263,6 +261,28 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      * （{@link #resolveFinalIndexState()} 已经是这么做的）——CREATE / DROP / RENAME 都只是状态转移。
      */
     private static final Set<String> PROD_ONLY_BENIGN = Set.of("uk_encoding_rules");
+
+    /**
+     * <b>确认存在、也确认本闸管不着</b>的唯一索引：名字 -&gt; 为什么不归本闸。
+     *
+     * <p>🔴 为什么要有这一格，而不是「不加就完了」：2026-09-07 的普查<b>第二次</b>发现
+     * {@code uk_sm_published}——第一次发现它的人（就是我）只在注释里提了一句，
+     * 于是它在下一轮普查里<b>又是一条新发现</b>。
+     * ⇒ 一个「已经判过、判定是不管它」的结论，如果没有<b>可被 {@code git grep 名字} 命中的载体</b>，
+     * 和「从来没人看过」在读数上完全一样。
+     *
+     * <p>⛔ <b>不要为了「让它被守住」把对象塞进一道判据不适用的闸</b>：本闸判 partial 的依据是
+     * 语句里含 {@code deleted_at is null}（见 {@link #resolveFinalIndexState()}），
+     * 而 {@code uk_sm_published} 的谓词是 {@code publish_status = 'published'}
+     * ⇒ 登进来会被判成 {@code full} 而报<b>假红</b>。假红的代价不是那一次红，
+     * 是<b>下一个人会去调宽闸的判据</b>，然后它对真问题也瞎了。
+     *
+     * <p>{@code uk_sm_published}（{@code state_machines (factory_id, entity_type)
+     * WHERE publish_status = 'published'}）：prod-only，已由 {@code V20261101_40} §3 补进迁移。
+     * ⚠️ {@code StateMachine} 的 {@code @SQLDelete} 是 <b>0</b> —— 它仍是 R68 那批<b>物理删</b>实体，
+     * ⛔ 「给它补了个带 {@code deleted_at} 语义的邻居索引」不等于「这张表软删了」。
+     */
+    private static final Set<String> NOT_COVERED_BY_THIS_GATE = Set.of("uk_sm_published");
 
     private static final Pattern CREATE_UNIQUE_INDEX =
             Pattern.compile("CREATE\\s+UNIQUE\\s+INDEX\\b[^;]*;", Pattern.CASE_INSENSITIVE);
@@ -363,6 +383,8 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         // 所以必须有一个「设计上必然」的读数把它顶住。
         // ⛔ 不写死等于 24：条目数每批软删都会涨，写死的话「忘了改」与「闸坏了」长得一样。
         System.out.println("MUST_BE_PARTIAL_REGISTERED=" + MUST_BE_PARTIAL_IN_MIGRATIONS.size());
+        System.out.println("NOT_COVERED_BY_THIS_GATE=" + NOT_COVERED_BY_THIS_GATE
+                + " (确认存在、确认本闸判据不适用；⛔ 不是漏登记)");
         assertThat(MUST_BE_PARTIAL_IN_MIGRATIONS)
                 .as("阳性对照：登记表为空 / 被砍半时，下面的逐条核查是恒真的")
                 .hasSizeGreaterThanOrEqualTo(29);

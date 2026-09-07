@@ -62,7 +62,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_report_worker_type_date_no_batch
 --      两条都带 IF EXISTS，覆盖「是约束」和「是裸索引」两种环境，⛔ 不假设它一定是哪种。
 --
 -- 【顺序】先 DROP 再 CREATE 同名。Flyway 在 PG 上每支迁移跑在一个事务里 ⇒
--- 若 CREATE 因存在重复活行而失败, DROP 会**一起回滚**, ⛔ 不会留下「旧的删了新的没建」的裸奔窗口。
+-- 若 CREATE 失败, 前面的 DROP 会**一起回滚**, ⛔ 不会留下「旧的删了新的没建」的裸奔窗口。
+-- ✅ 这一条是**实测**, ⛔ 不是「按 PG 语义应当如此」: 本文件第一版把 4 条写成 DROP INDEX,
+--    在 prod schema 副本上跑到第 2 节就炸(那 4 个是约束不是裸索引, 见上)。
+--    炸掉之后复查 6 条索引的形态 —— **一条没变**, 包括那条已经成功执行过的 CREATE。
+--    ⇒ 一次失败顺手把这条保证从推断变成了读数。
 -- 而失败本身是**要的**: 有重复活行时就该炸出来, ⛔ 不降级、不静默跳过。
 -- ────────────────────────────────────────────────────────────────────────────
 ALTER TABLE dahua_devices DROP CONSTRAINT IF EXISTS uk_dahua_factory_ip_port;
