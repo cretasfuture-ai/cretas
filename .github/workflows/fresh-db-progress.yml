@@ -81,14 +81,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -s /tmp/fresh-db-progress.log ]; then
-            echo "::error title=Fresh DB 进度棘轮没量到::日志文件为空 —— 跑批根本没开始"
+            echo "::error title=Fresh DB 形状闸没量到::日志文件为空 —— 跑批根本没开始"
             exit 1
           fi
-          if ! grep -q 'READING: FRESH_DB_PROGRESS' /tmp/fresh-db-progress.log; then
-            echo "::error title=Fresh DB 进度棘轮没量到::日志里没有 FRESH_DB_PROGRESS 读数。"
+          if ! grep -q 'READING: FRESH_DB_SHAPE ' /tmp/fresh-db-progress.log; then
+            echo "::error title=Fresh DB 形状闸没量到::日志里没有 FRESH_DB_SHAPE 读数。"
             echo "::error::一趟产不出读数的跑批, 在调用方看来可以和成功同形 —— 所以这里硬性要求它出现。"
             tail -40 /tmp/fresh-db-progress.log
             exit 1
           fi
           echo "--- 本趟读数 ---"
-          grep -E 'READING: FRESH_DB_(PROGRESS|FAILURE|BASELINE)' /tmp/fresh-db-progress.log
+          # ⚠️ 这里**写全名**, ⛔ 不用 FRESH_DB_(A|B) 这种嵌套交替 ——
+          #    嵌套之后「消费方要哪些读数」就不是机械可解析的了,
+          #    而下面那道 6e 闸(核对消费方的名字闸是否真会产出)正是靠解析它。
+          grep -E 'READING: (FRESH_DB_SHAPE|FRESH_DB_SHAPE_FLOOR|FRESH_DB_FAILURE|FRESH_DB_ENV|BASELINE_BOOTSTRAP|BASELINE_LOAD_SHAPE) ' /tmp/fresh-db-progress.log

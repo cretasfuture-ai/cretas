@@ -170,6 +170,46 @@ _argue '有意识地下调'   '合法删表删索引时棘轮会红 ⇒ 要有�
 echo "READING: ARGUMENT_FRAGMENTS=5 (钉片段, ⛔ 不钉整句 ⇒ 改措辞不红, 删论点才红)"
 ok "三个读数的形式与理由都写在闸里(钉的是承载论点的片段, ⛔ 不是整句)"
 
+# ---- 6e. 🔴 工作流里要求的读数名, 必须是闸**真的会产出**的名字 ----
+#
+# 立这一条的成因就是本 PR: 我把读数从 FRESH_DB_PROGRESS 改名成 FRESH_DB_SHAPE,
+# **忘了改消费它的工作流**(fresh-db-progress.yml 的「Prove the readings landed」步)。
+# ⇒ 那一步 `grep -q 'READING: FRESH_DB_PROGRESS'` 找不到 ⇒ **硬 exit 1**,
+#   而它报的是「这趟没量到读数」—— 与「跑批真的没产出」**逐字同形**。
+#   🔴 实测: CI 上那一趟其实**完全成功**(tables=502 indexes=2044 失败点=<none>),
+#      却被这条陈旧的消费方判据判成「没量到」。
+#
+# ▎**改判据/改读数名之后, 去找所有用旧名的地方** —— 这条规矩此前**没有可执行形式**,
+#   本条就是给它造一个(至少覆盖「闸 ↔ 它的工作流」这一对)。
+WF="$ROOT_DIR/.github/workflows/fresh-db-progress.yml"
+[ -s "$WF" ] || fail "6e: 找不到 $WF"
+# 工作流里要求/展示的读数名(展开 (A|B|C) 这种交替)
+# 消费方要求的读数名: 从 `READING: X` 与 `READING: (X|Y|Z)` 两种形态里取**全名**。
+# ⚠️ 工作流那边刻意不写嵌套交替, 就是为了让这一步是机械的(见那边的注释)。
+wf_names=$(grep -oE "READING: \(?[A-Z_|]+\)?" "$WF" | sed 's/READING: //' | tr -d '()'     | tr '|' '
+' | grep -E '^[A-Z][A-Z_]+$' | sort -u)
+gate_names=$(grep -oE 'READING: [A-Z_]+' "$GATE" | sed 's/READING: //' | sort -u)
+n_gate=$(printf '%s\n' "$gate_names" | grep -c . || true)
+[ "$n_gate" -ge 3 ] || fail "6e: 只从闸里解析出 $n_gate 个读数名 —— **没量到**, ⛔ 不当成通过"
+missing=""
+for nm in $wf_names; do
+    case "$nm" in ''|FRESH_DB|BASELINE) continue ;; esac
+    printf '%s\n' "$gate_names" | grep -qx "$nm" || missing="$missing $nm"
+done
+echo "READING: WF_CONSUMED_NAMES=$(printf '%s' "$wf_names" | wc -w) GATE_EMITTED_NAMES=$n_gate MISSING=$(printf '%s' "$missing" | wc -w)"
+[ -z "$(printf '%s' "$missing" | tr -d ' ')" ] \
+    || fail "6e: 工作流要求这些读数, 而闸**不会产出**它们:$missing
+  ⇒ 后果不是「少一行日志」: 那一步是硬 exit 1, 且报文是「这趟没量到」——
+     与「跑批真的没产出读数」逐字同形 ⇒ 一趟完全成功的跑批会被判成没量到。
+  ⇒ 多半是**读数改了名而消费方没跟**。"
+# 阴性对照: 编一个不存在的名字, 必须被判为 missing。
+# ⚠️ 没有这一条, 「missing 为空」与「我根本没在比」读数相同。
+probe_missing=""
+printf '%s\n' "$gate_names" | grep -qx "ZZZ_NOT_A_REAL_READING" || probe_missing="ZZZ_NOT_A_REAL_READING"
+[ -n "$probe_missing" ] || fail "6e: 阴性对照失败 —— 编造的读数名竟然被判为存在"
+echo "READING: WF_NAME_CHECK_NEGATIVE_CONTROL=$probe_missing->missing"
+ok "工作流消费的读数名闸都会产出(含阴性对照)"
+
 # ---- 7. 阴性对照: 把倒退判定真跑一遍(⛔ 不只 grep 措辞) ----
 # 复刻脚本里那三行比较, 确认它在「小于」时确实会命中 —— 否则上面全是对文本的断言,
 # 而文本对不代表逻辑对。
