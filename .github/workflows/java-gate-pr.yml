@@ -55,19 +55,45 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PAYLOAD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git config user.email "ci@cretas.local"
           git config user.name "cretas-ci"
 
-          # base 对象必须在本地才能合。调用方给了 fetch-depth: 0 就已经有了;
-          # 万一没有(浅克隆)就单独取一次, 取不到直接红 —— ⛔ 不静默跳过合并,
-          # 那会退化成「跑的还是 PR 分支自己」而读数看起来一切正常。
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "$BASE_SHA" \
-              || { echo "::error::取不到 base 提交 $BASE_SHA —— 调用方需要 fetch-depth: 0"; exit 1; }
+          # 🔴 ⛔ 不用 payload 里的 `base.sha` —— 它是**事件创建那一刻**的快照, 会滞后。
+          # 实测(#710, run 34074881917): #716 合进 main 之后 **17 秒** 触发的那次 run, payload 的
+          # base.sha 仍是 `f3ba01d172`(= `ced5a45397^`, 即合 #716 之前的 main) ⇒ 闸把 head 合进了
+          # 一个**旧 main**, 打出 `merged_in_commits=0` / `base_already_ancestor`, 而 BUILD SUCCESS
+          # 全绿。真正露馅的是**测试总数 13235 vs 13237**(#716 带进来的两条根本没跑到)。
+          # ⚠️ 形状与 #682/#693 那次(31 秒)逐字相同: 窗口被 #707/#713 缩小了, **没有被关上** ——
+          #    从「根本不合 base」变成「合了个旧 base」, 而后者更难发现(`merged_ok=yes` 长得像验过了)。
+          # ⇒ 取 base 分支的**活 tip**, 并把「payload 说的」与「实际用的」**都打出来**。
+          git fetch --no-tags --force origin "$BASE_REF" \
+            || { echo "::error::取不到 base 分支 $BASE_REF 的 tip"; exit 1; }
+          BASE_TIP_AT_FETCH=$(git rev-parse FETCH_HEAD)
+          BASE_SHA="$BASE_TIP_AT_FETCH"
+          if [ "$BASE_SHA" = "$PAYLOAD_BASE_SHA" ]; then PAYLOAD_STALE=no; else PAYLOAD_STALE=yes; fi
+          # 竞态的**大小**要变成一个可读的数 —— ⛔ 不要指望「某个测试数恰好对不上」来发现它:
+          # 那个锚点是碰巧的(#716 恰好带了 2 个测试; 换成纯重构就没有任何东西会对不上)。
+          if git cat-file -e "${PAYLOAD_BASE_SHA}^{commit}" 2>/dev/null; then
+            PAYLOAD_BEHIND_BY=$(git rev-list --count "$PAYLOAD_BASE_SHA..$BASE_SHA" 2>/dev/null || echo unknown)
+          else
+            PAYLOAD_BEHIND_BY=unknown   # payload 那个 commit 不在本地(base 被 force-push 过?)
+          fi
+          # 三个读数一起打, ⛔ 不只打最终 base:
+          #   payload_base_sha    = 事件 payload 里那个**快照**(会滞后)
+          #   base_ref_tip_at_fetch = 运行时 fetch 到的**活 tip**
+          #   base                = 实际合进去的那个
+          # ⚠️ 后两者由构造相等; 分开打是为了让「取到的」与「用掉的」各自可查 —— 将来若有人
+          #    在中间插一步改了 BASE_SHA, 这两个数会立刻不一致, 而不是悄悄换了棵树。
+          echo "READING: GATE_BASE ref=$BASE_REF payload_base_sha=$PAYLOAD_BASE_SHA base_ref_tip_at_fetch=$BASE_TIP_AT_FETCH base=$BASE_SHA payload_stale=$PAYLOAD_STALE payload_behind_by=$PAYLOAD_BEHIND_BY"
+          # ⛔ payload 落后**不红**: base 在事件与 run 之间前进是常态, 红了就是天天红。
+          #    但也 ⛔ 不静默用新的 —— 大声说出来, 让「这次跑的是哪棵树」可追。
+          if [ "$PAYLOAD_STALE" = "yes" ]; then
+            echo "::notice::base 分支在事件之后前进了: payload=$PAYLOAD_BASE_SHA 实际用 $BASE_SHA (这是对的 —— 闸要看的是能不能合进**现在**的 base)"
           fi
 
           # 🔴 硬约束 9: 只打 merged_ok=yes 分不出两种成因 ——
@@ -133,19 +159,45 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PAYLOAD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git config user.email "ci@cretas.local"
           git config user.name "cretas-ci"
 
-          # base 对象必须在本地才能合。调用方给了 fetch-depth: 0 就已经有了;
-          # 万一没有(浅克隆)就单独取一次, 取不到直接红 —— ⛔ 不静默跳过合并,
-          # 那会退化成「跑的还是 PR 分支自己」而读数看起来一切正常。
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "$BASE_SHA" \
-              || { echo "::error::取不到 base 提交 $BASE_SHA —— 调用方需要 fetch-depth: 0"; exit 1; }
+          # 🔴 ⛔ 不用 payload 里的 `base.sha` —— 它是**事件创建那一刻**的快照, 会滞后。
+          # 实测(#710, run 34074881917): #716 合进 main 之后 **17 秒** 触发的那次 run, payload 的
+          # base.sha 仍是 `f3ba01d172`(= `ced5a45397^`, 即合 #716 之前的 main) ⇒ 闸把 head 合进了
+          # 一个**旧 main**, 打出 `merged_in_commits=0` / `base_already_ancestor`, 而 BUILD SUCCESS
+          # 全绿。真正露馅的是**测试总数 13235 vs 13237**(#716 带进来的两条根本没跑到)。
+          # ⚠️ 形状与 #682/#693 那次(31 秒)逐字相同: 窗口被 #707/#713 缩小了, **没有被关上** ——
+          #    从「根本不合 base」变成「合了个旧 base」, 而后者更难发现(`merged_ok=yes` 长得像验过了)。
+          # ⇒ 取 base 分支的**活 tip**, 并把「payload 说的」与「实际用的」**都打出来**。
+          git fetch --no-tags --force origin "$BASE_REF" \
+            || { echo "::error::取不到 base 分支 $BASE_REF 的 tip"; exit 1; }
+          BASE_TIP_AT_FETCH=$(git rev-parse FETCH_HEAD)
+          BASE_SHA="$BASE_TIP_AT_FETCH"
+          if [ "$BASE_SHA" = "$PAYLOAD_BASE_SHA" ]; then PAYLOAD_STALE=no; else PAYLOAD_STALE=yes; fi
+          # 竞态的**大小**要变成一个可读的数 —— ⛔ 不要指望「某个测试数恰好对不上」来发现它:
+          # 那个锚点是碰巧的(#716 恰好带了 2 个测试; 换成纯重构就没有任何东西会对不上)。
+          if git cat-file -e "${PAYLOAD_BASE_SHA}^{commit}" 2>/dev/null; then
+            PAYLOAD_BEHIND_BY=$(git rev-list --count "$PAYLOAD_BASE_SHA..$BASE_SHA" 2>/dev/null || echo unknown)
+          else
+            PAYLOAD_BEHIND_BY=unknown   # payload 那个 commit 不在本地(base 被 force-push 过?)
+          fi
+          # 三个读数一起打, ⛔ 不只打最终 base:
+          #   payload_base_sha    = 事件 payload 里那个**快照**(会滞后)
+          #   base_ref_tip_at_fetch = 运行时 fetch 到的**活 tip**
+          #   base                = 实际合进去的那个
+          # ⚠️ 后两者由构造相等; 分开打是为了让「取到的」与「用掉的」各自可查 —— 将来若有人
+          #    在中间插一步改了 BASE_SHA, 这两个数会立刻不一致, 而不是悄悄换了棵树。
+          echo "READING: GATE_BASE ref=$BASE_REF payload_base_sha=$PAYLOAD_BASE_SHA base_ref_tip_at_fetch=$BASE_TIP_AT_FETCH base=$BASE_SHA payload_stale=$PAYLOAD_STALE payload_behind_by=$PAYLOAD_BEHIND_BY"
+          # ⛔ payload 落后**不红**: base 在事件与 run 之间前进是常态, 红了就是天天红。
+          #    但也 ⛔ 不静默用新的 —— 大声说出来, 让「这次跑的是哪棵树」可追。
+          if [ "$PAYLOAD_STALE" = "yes" ]; then
+            echo "::notice::base 分支在事件之后前进了: payload=$PAYLOAD_BASE_SHA 实际用 $BASE_SHA (这是对的 —— 闸要看的是能不能合进**现在**的 base)"
           fi
 
           # 🔴 硬约束 9: 只打 merged_ok=yes 分不出两种成因 ——
