@@ -223,14 +223,21 @@ class _ExtendedOwnershipDetector:
 
 
 @pytest.mark.parametrize(
-    "class_ids,expected",
-    [([1], "MISSING_WHITE_LABEL"), ([0, 1], "CLEAR")],
+    "class_ids,top,expected",
+    [
+        ([1], 20.0, "MISSING_WHITE_LABEL"),
+        ([0, 1], 20.0, "CLEAR"),
+        ([0], 0.0, "UNJUDGEABLE"),
+        ([1], 1.0, "UNJUDGEABLE"),
+        ([0, 1], 0.0, "CLEAR"),
+        ([0], 1.01, "MISSING_COLOR_LABEL"),
+    ],
 )
 def test_reviewed_shallow_tray_rechecks_extended_lower_compartment(
-    class_ids: list[int], expected: str,
+    class_ids: list[int], top: float, expected: str,
 ) -> None:
     tray = TrayResult(
-        index=0, box=[100.0, 20.0, 300.0, 100.0], confidence=0.8,
+        index=0, box=[100.0, top, 300.0, top + 80.0], confidence=0.8,
         has_white=False, has_color=True, verdict="UNJUDGEABLE",
     )
     result = _result(tray)
@@ -249,8 +256,16 @@ def test_reviewed_shallow_tray_rechecks_extended_lower_compartment(
     )
 
     assert tray.verdict == expected
+    assert tray.needs_review == (expected != "CLEAR")
+    assert tray.has_white == (0 in class_ids)
+    assert tray.has_color == (1 in class_ids)
     assert tray.own_label_count == len(class_ids)
     assert events[0]["finalVerdict"] == expected
+    assert events[0]["reason"] == (
+        "top_boundary_shallow_single_class_requires_review"
+        if expected == "UNJUDGEABLE"
+        else "reviewed_shallow_two_compartment_extended_ownership"
+    )
 
 
 def test_extended_ownership_does_not_reopen_non_shallow_unjudgeable() -> None:
