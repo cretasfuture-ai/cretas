@@ -129,6 +129,24 @@ class MaterialCodeChecksAgreeWithAuthoritativePathContractTest {
     }
 
     /** 剥注释——否则解释这条规则的注释本身会把闸咬红。 */
+    /**
+     * ⚠️ <b>这道闸的正确性依赖这一步</b>，⛔ 不是可有可无的整洁：被测文件里<b>有</b>注释字面提到
+     * 被禁的方法名（{@code svc:857} 那条「改前用的是派生查询(…)」的说明注释）——不剥注释，
+     * 上面那条 {@code isZero()} 会直接红，而红的原因与「真的还有人在调它」<b>完全同形</b>。
+     *
+     * <p><b>已知边界</b>（写出来，⛔ 不假装没有）：
+     * <ul>
+     *   <li>{@code (?m)//.*$} 是<b>无条件</b>剥的 —— 字符串字面量里出现 {@code //}
+     *       （如一个 URL {@code "https://…"}）会把那一行从 {@code //} 起截断。
+     *       今天被测文件里没有这种写法（已核），但这不是设计上的保证；</li>
+     *   <li>同理 {@code /*…*}{@code /} 也不认字符串字面量。⚠️ 而且它必须<b>逐文件</b>用：
+     *       2026-09-07 在另一处把多个文件拼起来再剥，一处不成对的 {@code /*} 跨文件吞掉一大段，
+     *       读数变成「133 条里 126 条是注释」——荒谬，但看起来是个确定的数。</li>
+     * </ul>
+     *
+     * <p>⇒ 真正承重的是只钉<b>方法名</b>的那条断言；另一条 {@code find…(factoryId, code)}
+     * 钉的是<b>参数拼写</b>，换个变量名就绕过去 —— 登记，⛔ 不假装它同样强。
+     */
     private static String stripComments(String s) {
         Matcher m = Pattern.compile("(?s)/\\*.*?\\*/").matcher(s);
         return m.replaceAll("").replaceAll("(?m)//.*$", "");

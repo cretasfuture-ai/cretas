@@ -1145,7 +1145,26 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     /**
      * SP4 扁平方案: 扫描工厂内该前缀的所有编码, 取最大数字后缀 +1, 零填充3位.
      * 无同前缀编码时从 001 开始.
-     * 结果编码不做唯一性检查 — 调用方在写库前做 existsByFactoryIdAndCode 兜底.
+     *
+     * <p>🔴 <b>承重前提</b>: {@code findCodesByFactoryIdAndCodePrefix} 是 {@code nativeQuery} 且
+     * <b>不带 {@code deleted_at} 过滤</b> —— 它<b>看得见已软删的编码</b>。而本方法取的是
+     * 「最大数字后缀 + 1」，所以一个持有最大号的<b>已删</b>行照样把那个号占住，发号器跳过它。
+     * <b>两步缺一条结论都不成立</b>：native（看得见）+ 取 MAX（看得见才有用）。
+     *
+     * <p>⇒ 如果那条查询改成<b>派生</b>查询（受类级 {@code @Where(deleted_at IS NULL)} 过滤），
+     * MAX 就只覆盖活行 ⇒ <b>已删的最大号持有者会被重新发号</b> ⇒ 撞 prod 上那个<b>全量</b>唯一键
+     * {@code ukoddtjujjj3qfsb0o2nyqvcddi (factory_id, code)}。
+     *
+     * <p>⚠️ 也就是说，「{@code raw_material_types} 保持全量唯一键（编码不回收）」这个结论
+     * <b>正是靠这一行 native 查询才成立的</b>。⛔ 改它之前先回答：改完之后发号器还会不会重复发号。
+     *
+     * <p>📌 2026-09-07（#716）：这条前提当时<b>没写下来</b>——结论是对的，但<b>理由不完整</b>，
+     * 而<b>不完整的理由和错的理由，在读者那里读数相同</b>：下一个人在别的实体上照着「保持全量键」
+     * 这条结论推，会得出错的答案，因为他复现不了推理。
+     * ⇒ 写下结论时，同时写下「哪一条前提反过来会让结论反转」——那条就是承重前提，必须落纸。
+     *
+     * <p>本方法自己<b>不做</b>唯一性检查；写库前的查重由调用方走权威路径
+     * {@code findCodeConflictIncludingDeleted}（含已删行）完成。
      */
     String generateNextCode(String factoryId, String category) {
         String prefix = getMaterialCategoryPrefix(category);
