@@ -87,7 +87,7 @@ jobs:
     # ⇒ 改用**分支/文件**级切换: 平时保持 ubuntu-latest;
     #    额度耗尽时执行 `python scripts/ci/switch_ci_runner.py self-hosted` 并提交,
     #    额度恢复时 `... hosted`。一条命令改三个文件, 有闸钉着三处一致。
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend/CretasFoodTrace

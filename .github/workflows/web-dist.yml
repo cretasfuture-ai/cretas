@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   web-dist:
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
 
     # attestations/id-token 是签 provenance 所必需的; 其余最小。
     # 显式声明会【替换】仓库默认权限, 所以列全: 只有 checkout 需要 contents:read,

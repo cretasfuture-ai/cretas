@@ -73,7 +73,7 @@ permissions:
 
 jobs:
   full-suite:
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
     steps:
