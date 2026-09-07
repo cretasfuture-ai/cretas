@@ -173,6 +173,23 @@ class EntityAnnotationFormsAreAllClassifiedContractTest {
             if (v.size() > 1) System.out.println("  MULTI_FORM " + k + " <- " + v);
         });
 
+        // ── 把**全集连同它的分类**打进日志 ────────────────────────────────────────
+        // 🔴 为什么这一段值得占 73 行日志：本闸首跑是**绿**的（登记表在同一个 PR 里就填满了），
+        //    ⇒ 那份「这棵树上实际存在哪些注解形式」的清单，本来只活在 PR 正文里。
+        //    ⚠️ 而 **PR body 没人回头读** —— 半年后想知道「当时判过哪些形式」，
+        //    唯一还在的载体是 CI 日志。⛔ 所以不省这段。
+        // ⚠️ 它同时是一条**可审计**的读数：分类改了、全集变了，diff 立刻看得见，
+        //    ⛔ 不用去读 Java 常量表。
+        System.out.println("--- ANNOTATION_CENSUS (全集 + 分类, 按名字排序) ---");
+        for (Map.Entry<String, Integer> e : census.entrySet()) {
+            String name = e.getKey();
+            String verdict = DECLARES_UNIQUENESS.containsKey(name) ? "UNIQUE"
+                    : EXPLICITLY_IRRELEVANT.contains(name) ? "IRRELEVANT" : "🔴UNCLASSIFIED";
+            System.out.printf("ANNO %-12s %-24s %6d%s%n", verdict, name, e.getValue(),
+                    DECLARES_UNIQUENESS.containsKey(name) ? "  " + DECLARES_UNIQUENESS.get(name) : "");
+        }
+        System.out.println("--- ANNOTATION_CENSUS END ---");
+
         // ── 阳性对照 ─────────────────────────────────────────────────────────────
         // ⛔ 少了这两条，「零未分类」在扫错目录 / 正则不命中时是恒真的。
         assertThat(entityFiles)
