@@ -33,6 +33,13 @@ on:
       #    (2026-08-28 教训: 给别人加宽 glob 会把那边的阴性对照变成恒真式)。
       - 'scripts/deploy/**'
       - 'scripts/lib/**'
+      # 🔴 2026-09-07: test-java-gate-selector-covers-gate-classes.sh 的**被测对象**是
+      #    「测试类的名字」—— 它要拦的正是「有人新加了一道闸, 但名字逃出 java-gate-pr 的
+      #    -Dtest」。那种 PR 只动 Java 测试源码, 不带这道闸就等于闸装了但那一族 PR 触发不到
+      #    (同一个洞今天第三次了: #713 是 java-gate-pr.yml, #723 是 web-dist.yml)。
+      #    ⚠️ 刻意只写**测试源目录**, ⛔ 不是整个 backend/java/** —— 改主代码不需要重跑这
+      #    2 分 53 秒的跑批, 而新增/改名测试类必须。
+      - 'backend/java/cretas-api/src/test/java/**'
       # 三个用例现在断言 ci.yml / java-artifact.yml 的结构(打包住在哪、push paths
       # 覆不覆盖整棵 backend 树、制品保留几天), 所以改这两个文件也要跑一遍。
       - '.github/workflows/ci.yml'
