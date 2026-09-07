@@ -22,15 +22,18 @@ import java.util.List;
  * @author Cretas Team
  * @since 2026-01-23
  */
+// 🔴 2026-09-07 摘掉实体级唯一声明（票 OPS-PROD-ONLY-PARTIAL-INDEXES-20260907 第二批）。
+//    原来声明的是 uk_dahua_device_channel (…, deleted_at) —— deleted_at **在键里**。
+//    PG 默认 NULLS DISTINCT ⇒ 活行 deleted_at 恒为 NULL ⇒ 键里含 NULL ⇒
+//    两条完全相同的活行**不冲突**。实测(pgvector:pg17, prod 原样 DDL)：三条相同活行全部插入成功；
+//    而两条相同的**软删**行反而被拒 ⇒ 约束加在了唯一不需要它的那一半上。
+//    ⇒ 唯一性改由 uk_dahua_device_channel (device_id, channel_id) WHERE deleted_at IS NULL 承担
+//      (V20261101_40)。JPA 表达不了部分唯一，实体侧再声明只会在 H2 里建出一个 prod 没有的东西。
 @Entity
 @Table(name = "dahua_device_channels",
         indexes = {
                 @Index(name = "idx_dahua_device_channel", columnList = "device_id, channel_id"),
                 @Index(name = "idx_dahua_channel_factory", columnList = "factory_id")
-        },
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_dahua_device_channel",
-                        columnNames = {"device_id", "channel_id", "deleted_at"})
         })
 @SQLDelete(sql = "UPDATE dahua_device_channels SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")

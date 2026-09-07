@@ -109,7 +109,13 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
     }
 
     /**
-     * 实体侧摘掉唯一声明之后，改由 prod 的部分索引兜底的那些键：索引名 -> 它守着哪张表的什么。
+     * 必须在迁移里以<b>部分</b>唯一索引形态存在的键：索引名 -> 它守着哪张表的什么。
+     *
+     * <p>⚠️ 2026-09-07 放宽了口径，因为收的已经不止一类。原措辞只写「实体侧摘掉唯一声明之后
+     * 改由 prod 部分索引兜底的那些键」，而 {@code uk_report_worker_type_date_no_batch}
+     * <b>从来没有被实体声明过</b> —— 它是 prod-only、迁移里缺失、由 V20261101_40 补进来的。
+     * ⛔ 与其把它塞进旧措辞里，不如把措辞改对：<b>登记的是索引该长什么样，不是它怎么来的</b>。
+     * 两类都在：<br>① 实体摘掉声明、改由部分索引兜底；<br>② prod-only 补进迁移的部分索引。
      *
      * <p>⛔ 这里<b>不写死条目数</b>：它每批软删都会涨（#717 的 11 -> 批 3-B 的 22 -> 迁移 V20261101_39 搬上来 2 条 = 24），
      * 而写死的数字是「忘了改」和「闸坏了」长得一样的那种仪器。实际条目数由 {@link #reg} 累计，
@@ -153,6 +159,23 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         // 「原本只活在 prod 上、现在迁移里有了」就会报红提醒搬 —— 这次它确实红了。
         reg("uq_business_rules_factory_code_active", "business_rules 规则 code 唯一");
         reg("uq_notify_templates_factory_code_active", "notify_templates 模板 code 唯一");
+
+        // ── 票 OPS-PROD-ONLY-PARTIAL-INDEXES-20260907 第二批（V20261101_40）─────────────
+        // 前 4 条原本是 `(…, deleted_at)`：deleted_at **在键里**，PG 的 NULLS DISTINCT 让它对
+        // **活行零约束**（实测：三条完全相同的活行全部插入成功；而两条相同的软删行反被拒）。
+        // 同一支迁移把它们改成 `WHERE deleted_at IS NULL`，实体侧的声明一并摘掉。
+        reg("uk_dahua_factory_ip_port", "dahua_devices 厂内 IP+端口唯一");
+        reg("uk_dahua_device_channel", "dahua_device_channels 设备内通道唯一");
+        reg("uk_factory_ip_port", "isapi_devices 厂内 IP+端口唯一");
+        reg("uk_device_channel", "isapi_device_channels 设备内通道唯一");
+        // ⚠️ 这一条与上面 4 条**来路不同**：它从来没被实体声明过，是 prod-only、迁移里缺失。
+        //    ⛔ 别因为它进了同一个表就以为它也是「摘声明」那一类（见本常量 javadoc 的两类）。
+        //    ⚠️ 而且 ProductionReport 的 @SQLDelete 是 0 —— 它仍是 R68 那批**物理删**实体，
+        //       本票只补索引，⛔ 不代表这张表已经软删了。
+        reg("uk_report_worker_type_date_no_batch", "production_reports 无批次时同工人同类型同日唯一");
+        // ⛔ uk_sm_published 故意**不**登记：它的谓词是 publish_status = 'published'，
+        //    而本闸判 partial 的依据是语句里含 "deleted_at is null"（见 resolveFinalIndexState）
+        //    ⇒ 登进来会被判成 full 而报红 —— 闸没错，是分类错。它由 V20261101_40 §3 补迁移。
     }
 
 
@@ -342,7 +365,7 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         System.out.println("MUST_BE_PARTIAL_REGISTERED=" + MUST_BE_PARTIAL_IN_MIGRATIONS.size());
         assertThat(MUST_BE_PARTIAL_IN_MIGRATIONS)
                 .as("阳性对照：登记表为空 / 被砍半时，下面的逐条核查是恒真的")
-                .hasSizeGreaterThanOrEqualTo(24);
+                .hasSizeGreaterThanOrEqualTo(29);
 
         List<String> missing = new ArrayList<>();
         List<String> notPartial = new ArrayList<>();
