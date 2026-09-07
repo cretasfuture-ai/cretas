@@ -138,15 +138,14 @@ ssh root@139.196.165.140 "systemctl status mall-backend --no-pager"
 
 ---
 
-## LIUSHANMEN VisionLab 双机计算规则
+## LIUSHANMEN VisionLab 本地主机计算规则（2026-09-07）
 
-1. **固定分工**：加拿大 `canada-mini`（Apple M4 Pro 64GB）负责历史原图去重、候选检测、困难样本挖掘和批量推理；上海 Windows/RTX 3060 负责正式 YOLO 训练、ONNX 导出、保护集与独立正常集验证，以及模型上线判断。不要因 Mac 统一内存更大就把正式训练默认迁过去。
-2. **主机身份必须先验明**：加拿大计算机只使用 SSH alias `canada-mini`；`codex-mac` 当前指向旧 M1 MacBook Pro，不得作为 LIUSHANMEN 图库或挖掘目标。每次新建或恢复通道先核对硬件、可用磁盘和目标根目录，再传业务照片。
-3. **原图一次驻留、派生物不跨洋复制**：保留上海 `D:\CretasVisionLab\raw` 原件不变，首次按内容哈希分片同步到 Mac；后续只增量同步新原图。不要传整个 `datasets/`、`runs/` 或其他可重建派生目录，目标机按清单重建。人工标注仍是真值，任何挖掘输出都不能覆盖原图或人工 JSON。
-4. **传输默认直连且可恢复**：业务照片经 Tailscale SSH/SFTP 直连，使用可断点续传的 `reput` 或等价分片机制；每个分片传前后记录字节数和 SHA-256，断线只补缺失字节。不要用普通 `scp` 承担整库或长时间大包传输。2026-08-31 实测直连 RTT 约 223ms，补传 224MiB 约 86 秒；该读数只作容量规划，执行前仍需短探针复测。
-5. **GitHub 只传代码和非敏感制品**：GitHub/Actions/Release 可用于版本化脚本、清单和约 19MB 模型权重，不得作为工厂历史原图、人工审核照片或长期 VisionLab 数据集的中转存储。跨洋链路异常时也不得通过提交原图到仓库来绕过。
-6. **环境锁定后才能产出正式候选**：Mac 挖掘环境的 Python、PyTorch、Ultralytics、图像预处理参数、模型哈希和命令行必须写入回执，并与上海本轮认可的锁定版本一致；版本不一致时只能做速度基准或探索，不能直接比较训练指标、生成正式训练清单或进入推广门禁。
-7. **Mac 输出不等于可上线模型**：Mac 只返回内容哈希清单、候选 JSON 和少量选中图片；上海必须重新验证输入哈希、任务/图片去重、人工 review 状态、保护集、独立正常集、ONNX parity 和延迟。任一门禁失败均保持生产模型不变。
+1. **统一在本地主机执行**：原图去重、候选检测、困难样本筛查、批量推理、YOLO 训练、ONNX 导出、保护集/独立正常集回归、parity 和延迟测试全部使用上海 Windows/RTX 3060。本地 Python 默认 `B:\anaconda3\python.exe`，数据根目录为 `D:\CretasVisionLab`。
+2. **禁止 Mac 派工或回退**：Mac mini 已留给其他任务。不得通过 `canada-mini`、`codex-mac`、SSH/SFTP、远程任务或 CI runner 向 Mac 发送本任务的照片、模型、筛查或测试。资源不足时减少批量、顺序执行或记录阻塞，不得自动改用 Mac。本规则覆盖旧双机文档、历史 handoff 和技能中的 Mac 测试建议。
+3. **本地入口**：日常流程使用 `scripts/windows/liushanmen-vision-lab.ps1`；目标测试使用 `scripts/windows/test-yolo-local.ps1`。Python CLI 在创建状态、采集或启动计算前校验本地执行策略，拒绝 macOS、远程执行配置和 MPS。自动任务保持原有暂停/启用状态，修改路由不等于启动训练。
+4. **真值与门禁不变**：原图和人工 JSON 保持不变。AI/Mac 历史输出仅为候选或历史证据，不能成为人工真值；训练分组、去重、保护集、正常集、导出一致性和延迟门禁全部保留，任何回退均保留现有生产模型。
+5. **生产通道不变**：允许原有受控生产只读采集；本地训练通过全部门禁后才上传正式模型。GitHub 只传代码和允许的非敏感制品，不传工厂原图或人工审核照片。不删除远端历史数据、SSH 配置或影响 Mac 上其他任务。
+6. **公共 CI 不是远程算力许可**：本任务不得重新启用 Mac runner。共享 CI 路由由对应 Owner 协调，不能以本地目标测试冒充必需 CI 已通过。详见 `docs/ops/yolo-local-compute.md`。
 
 ---
 

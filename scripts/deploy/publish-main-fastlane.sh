@@ -116,7 +116,7 @@ if grep -qx 'docs/dispatch/ACTIVE.md' <<<"$changed_files" && [[ -f scripts/ci/ch
     done
     [[ -n "$ledger_py" ]] || fail "docs/dispatch/ACTIVE.md changed but no python is available to run scripts/ci/check_dispatch_active.py"
     "$ledger_py" scripts/ci/check_dispatch_active.py --repo . \
-        || fail "docs/dispatch/ACTIVE.md violates the ledger cap (<= 300 chars per row, no ### sections, no merged rows, <= 20 KB); move detail to docs/dispatch/archive/"
+        || fail "docs/dispatch/ACTIVE.md violates the ledger cap (<= 300 chars per row, no ### sections, no merged rows, <= 30,000 bytes); move detail to docs/dispatch/archive/"
 fi
 
 # Docs-only batches are not ledger-registered work; the ACTIVE gate exists so a

@@ -7,6 +7,10 @@ description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.
 
 **最后更新**: 2026-09-05（合并原 `aliyun-operations` skill；删下线的 test 环境与历史叙事）
 
+## YOLO compute placement (2026-09-07)
+
+For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on the local Windows/RTX host. Do not use Mac mini, `canada-mini` or `codex-mac`, even as a fallback. Use `scripts/windows/test-yolo-local.ps1` for target tests. Historical Mac test-environment references do not authorize new work there. Production collection and gated model upload retain their existing controls.
+
 ## 全局服务器地图（6 台）
 
 | # | 地址 | 规格 | 角色 | 登录 | 权威文档 |

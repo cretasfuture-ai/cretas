@@ -1,0 +1,13 @@
+# YOLO local compute policy
+
+From 2026-09-07, LIUSHANMEN image deduplication, screening, mining, training, export, replay, protected evaluation and performance tests run on the local Windows/RTX 3060 host. Mac mini is reserved for other work. No automatic remote fallback is allowed.
+
+Use `scripts/windows/liushanmen-vision-lab.ps1` for the existing workflow and `scripts/windows/test-yolo-local.ps1` for local target tests. Python defaults to `B:\anaconda3\python.exe`; originals, annotations, models and receipts remain under `D:\CretasVisionLab`. The Python CLI enforces local Windows execution before state creation or external commands, rejects MPS and remote execution settings, and can bind a config to `execution.computer_name`.
+
+The local runtime config uses `execution.mode=local` and `execution.remote_enabled=false`. Missing local resources are an explicit blocker: reduce batch size or execute sequentially, never dispatch to `canada-mini` or `codex-mac`. Historical Mac scripts and hash-bound receipts are retained only as historical evidence; do not resume them.
+
+The existing YOLO automation keeps its original schedule and paused state. Its prompt now explicitly prohibits Mac dispatch. The three existing Windows YOLO scheduled tasks were already disabled; this change does not enable training. The disabled VisionLab task now points to the local-policy checkout and passes `-RequireMergedMain`. That switch fetches current main and rejects a dirty, unmerged or unverifiable checkout before launching Python. The task remains disabled; after merge, move that clean checkout to exact main before enabling it.
+
+Production read-only collection and gated model upload remain supported. Local execution does not waive human review, split isolation, protected/normal-set gates, parity, latency, Git or deployment checks. Do not modify originals, human annotations, remote historical files, SSH configuration or unrelated Mac services.
+
+Shared GitHub CI routing is separate from local YOLO validation. Do not overwrite the CI owner's workflows. Before creating a PR, inspect both workflow labels and registered runner labels; the PR state of a routing change alone is not evidence of the active destination. On 2026-09-07 both Mac runners were offline and lacked the `cretas` label, while `windows-wsl-ci` was the only matching runner and had completed the latest source-hygiene job. This permits local CI without waiting for PR #745 to merge. Revalidate those assignments before triggering further checks. Local test success does not prove mandatory CI success, and no Mac runner may be used as a fallback for this work.
