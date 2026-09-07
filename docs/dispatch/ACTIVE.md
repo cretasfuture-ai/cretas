@@ -34,8 +34,6 @@
 - `UX-ALERT-ALERT-NOOP-ON-WEB-20260906` — `review` — Owner: Line A — #678 + #687 + #697（QIScan testID 漏进 main 的标记 / 清完 21 个未用 Alert import / 做成闸）已合。🔴 宿主栈行为证明拿到（Expo Web × `f006_warehouse_mgr`）：正向与「离开自带宿主屏后再触发」都 0→1，变异回单槽后回归红。剩：Snackbar 方案待定。
 - `OPS-CRON-SCRIPTS-PATH-AUDIT-20260906` — `in-progress` — Owner: Line C — 批 1–3 + canary + #679 已合装；#681 alert-digest 骨架（14 组测试 / 9 种 rc=2 / 游标只在送达后前进）与 #686（用例级 `# SCRIPT_TEST_TIMEOUT`）已合，#681 按 `# NOT_SCHEDULED` 不装。剩：#679 释放侧后续。🔒 cron。
 - `OPS-CI-ARTIFACT-LANE-DEAD-IN-THIS-ORG-20260907` — `blocked` — Owner: Line C — #698 已合：`release-ci-artifact.sh` 默认 repo 指对 + 签不上时立刻退 `rc=3`（⛔ 不复用 2，那是用法错误码）而不是空等 7 分钟。剩余是**能力边界**：私有仓 GitHub 不给 attestation，ECS 按设计拒未签名制品 ⇒ 这条车道在本组织**永远**走不通，只能明说并退 3。⛔ 不放宽 ECS 信任。🔒 deploy。
-- `UX-WAREHOUSE-VALIDATION-GUARDS-UNREACHABLE-20260907` — `review` — Owner: Line A — #699 已合：边界不可见的两屏补可见提示，另两屏标注防御性，全 App 普查 37 处上棘轮。待真机复看。
-- `BUG-I18N-DUPLICATE-TOP-LEVEL-KEYS-20260907` — `review` — Owner: Line A — #709 已合：既有 i18n 闸修掉一类假阳性（预算 486 → 350），补重复顶层键检测与查表双向自检。⚠️ 该闸此前与另一道同名闸整份重复过一次，Write 返回 `updated` 就是撞名警报。
 - `OPS-SCHEMA-PARITY-ROOT-FIX-20260907` — `queued` — Owner: Line C — bootstrap 已落地(#739), 剩「从迁移建库 → 导 schema → 与 checked-in prod 快照 diff」那道闸。⚠️ 豁免清单必须能表达**第三种**不一致：prod **刻意删掉**的(补回去=制造回归, `uk_report_worker_batch_date` 那个 409)。⛔ Hibernate validate 不是 schema 对账(看不见唯一约束/索引/FK/NOT NULL)。
 - `CI-NINE-OPTIN-PG-TESTS-RUN-NOWHERE-20260907` — `queued` — Owner: Line C — 15 个 opt-in 真 PG 测试只有 6 个被 `java-gate-pr.yml` 点名，其余 9 个任何 CI 都不跑。⚠️ 障碍**不是**「自建 runner 没 Docker」——那条车道用 runner 上原生 homebrew postgresql@17 ⇒ 接进来只是加名字。⚠️ 接之前每个先答「它当初为什么是 opt-in」，耗时长的进 PG 车道而非 fast-contracts。
 - `CI-NO-GATE-GUARDS-SUITE-SIZE-20260907` — `queued` — Owner: Line C — 本仓无任何闸守套件规模（`Tests run` 只在日志里，从未被断言）。守的是「测试静默不跑」族（选择器 / profile / 聚合模块 / 批量 `@Disabled`），#722 三读数对这一族完全不可见。⛔ 不写死 `>= N`（并行线会天天误报）：只在下降超阈值时红 + 无条件打出当次数。⚠️ 抓不到「车道整个 skip」，那一半归 GUARDS 票。
@@ -47,6 +45,8 @@
 - `OPS-FLYWAY-HISTORY-TABLE-WAS-HAND-EDITED-20260907` — `queued` — Owner: Line C — prod `flyway_schema_history` 有 **9 个重复 version**(同一版本两行 success)且 **5 个 version 的文件已不存在**。Flyway 不会重复应用同一版本 ⇒ **台账本身被人手工动过**。⚠️ checksum 691/691 **相符, MISMATCH=0** ⇒ 「编辑已应用迁移」有书面许可但**零实际使用**。⛔ 只登记, 不动 prod 台账。
 - `OPS-MERGED-IS-NOT-DEPLOYED-20260907` — `queued` — Owner: organizer — 🔴 prod Flyway 停在 `20261101.37`(2026-09-06), 而 main 已到 `_41` ⇒ **今天合的 4 支迁移一支都没上线**(4 条零约束索引 / 两处唯一性推回写时**在 prod 上尚未生效**)。⚠️ 台账记的是 PR 状态, 而 **MERGED ≠ prod 生效** —— 这个差在今天的账里看不见, 需要一个字段。
 - `CI-WORKTREE-PATH-CAN-BE-A-LIE-20260907` — `queued` — Owner: organizer — 系统告知的 worktree 路径可能是**主仓里的空目录**(无 `.git`、`git worktree list` 里没有) ⇒ 在其中跑 git 会操作**主检出**(别人的分支 + 别人未提交的改动)。本轮 Line C 因此**整轮零 commit**(正确结果)。⇒ 开工前三验: `.git` 存在 / `worktree list` 命中 / 当前分支名。
+- `CI-PYTHON-PG-TESTS-WOKE-UP-AND-FAIL-20260907` — `queued` — Owner: 迁移任务 — 🔴 WSL runner 装上 PG17 后, 9 个此前恒 skip 的 python 用例开始真跑并全红 ⇒ python 闸对每个 PR 都红。阻塞: CI 需配 `SMARTBI_PG_DSN` + 3.11。详见 `archive/2026-09-07-new-tickets-detail.md`
+- `OPS-MUTATION-GUARD-HAS-NO-CALLER-20260907` — `queued` — Owner: Line C — `scripts/mutation-guard.sh` 可执行但全仓 **0 调用点** ⇒ 那条 memory 的「已机制化」前提已变。⛔ 判据不是 `grep -r mutation-guard`。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
 

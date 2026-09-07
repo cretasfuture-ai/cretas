@@ -53,3 +53,21 @@ OTA bundle `1788716508930` 已推送并在小米真机上取到**行为读数**�
 移出时的原文：
 
 - `BUG-I18N-KEYS-LEAK-CUSTOMER-CREATE-DIALOG-20260906` — `review` — Owner: Line A — #688 已合（8 处泄漏：`useTranslation('management')` 而键写 `common.xxx`；补 modal 节 + 5 键 zh/en 双语；单屏键存在闸 4/4，变异红）。待 OTA 送达后真机复看。
+
+## BUG-I18N-DUPLICATE-TOP-LEVEL-KEYS-20260907
+
+**完成依据**：#709 已合 —— 既有 i18n 闸修掉一类假阳性（预算 486 → 350），补重复顶层键检测与查表双向自检。
+⚠️ 该闸此前与另一道同名闸整份重复过一次，`Write` 返回 `updated` 就是撞名警报。
+
+移出时的原文：
+
+- `BUG-I18N-DUPLICATE-TOP-LEVEL-KEYS-20260907` — `review` — Owner: Line A — #709 已合：既有 i18n 闸修掉一类假阳性（预算 486 → 350），补重复顶层键检测与查表双向自检。⚠️ 该闸此前与另一道同名闸整份重复过一次，Write 返回 `updated` 就是撞名警报。
+
+## UX-WAREHOUSE-VALIDATION-GUARDS-UNREACHABLE-20260907
+
+**完成依据**：#699 已合 —— 边界不可见的两屏补可见提示，另两屏标注为防御性（用户走不到）。
+⚠️ 「防御性」这个判定的保质期由可达性决定，可达性一变结论就失效 ⇒ 结论配了闸。
+
+移出时的原文：
+
+- `UX-WAREHOUSE-VALIDATION-GUARDS-UNREACHABLE-20260907` — `review` — Owner: Line A — #699 已合：边界不可见的两屏补可见提示，另两屏标注防御性，全 App 普查 37 处上棘轮。待真机复看。
