@@ -621,5 +621,79 @@ grep -rlE -- "$ANCHOR"  $NEW_SCOPE | wc -l   # ② 其中真违规
 
 ---
 
+## 十一、🔴 回头审：今天新加的每一个读数，**它有没有取过第二个值？**
+
+`errors=0` 那件事（第二节的订正）不是孤例风险 —— 它是一个可复查的问题：
+
+> **一个永远等于「没问题」的读数，比没有这个读数更坏 —— 它占着位置。**
+
+⇒ 对今天新加的每一个读数问一句：**它有没有取过第二个值？**
+取过 ⇒ 活的；从没取过 ⇒ **做一次变异证明它能取到**；证不出来 ⇒ 它是 `errors=0` 那一类。
+
+⚠️ **「应当恒 0」与「无法非 0」必须分开** —— 前者是判据的目的，后者是坏掉的仪器，
+而两者在日志里长得一模一样。**判据就是变异。**
+
+### A. 声明式：字面值，按设计恒定（⛔ 它们不是测量）
+
+`VERIFIER_SCOPE` / `VERIFIER_BLIND_*` / `VERIFIER_PROOF_OF_CORRECT` /
+`BASELINE_LAG_PROXY_DIRECTION` / `GATE_SCOPE` / `GATE_5_SCOPE`
+
+⇒ 它们回答的是「这道闸守不住什么」，⛔ 不回答「今天是多少」。
+📌 归到这一类的条件是：**值在源码里是字面量**。⚠️ 一个看起来像计数的读数 ⛔ 不能放进这一类。
+
+### B. 今天已经取过第二个值（活的）
+
+| 读数 | 观察到的两个值 |
+|---|---|
+| `BASELINE_DIR` | `absent` → `present` |
+| `BASELINE_LAG` | `baseline_max=<none>` → `20261101.37` |
+| `above_baseline_on_prod` / `missing_files_above` | `0` → `9`（阴性对照 `CRETAS_BASELINE_ASSUME_MAX`） |
+| `BASELINE_REPLAY` | `indexes=2044` → `2043`（扰动真基线） |
+| `BASELINE_REPLAY_ERRORS` | 内建阳性对照：灌 `SELECT 1/0` ⇒ `0` → `1` |
+| `BASELINE_LAG_PROXY` | `action=none-threshold-unset` → `notice`（阈值调 0） |
+| `FRESH_DB_SHAPE` | `indexes 2119` → `2044`；`migrations 266` → `3` |
+| `FRESH_DB_FAILURE` | `file=V…sql` → `<none>` |
+| `FLYWAY_LOCATIONS_CONFIG_FILES` | `2` → `0`（藏起两个真配置） |
+| `TRIGGER_PATHS` / `GUARDS_REGISTERED` | `20`→`21` / `6`→`7` |
+| `BASELINE_BOOTSTRAP tables_after_load` | `501` → `498`（`DROP SCHEMA public` 那条歧路） |
+| `CRITERIA_ORDER` / `HINT_PRINTF_LINE` | 行号随文件变化 |
+| `A1` / `D`（payload 滞后） | `payload_stale=no` / `=yes` |
+| `NEGATIVE_CONTROL_PROBE` ×2 / `RATCHET_NEGATIVE_CONTROL` / `REGRESS_LOGIC_PROBE` | 构造出来的两态，本来就是对照 |
+
+### C. 🔴 本轮**第一次**证明它能动（此前只见过一个值）
+
+```
+LOCAL_COMPOSITE_ACTION_REFS   注入一处 `uses: ./.github/actions/…`  ⇒ 0 → 1, 且红并点名
+INLINE_BODIES identical       三处内联 run 体改掉其中一处            ⇒ True → False, 且红
+normalized_diff_lines         只差随机 token ⇒ 0 ; 真多一条语句 ⇒ 1
+```
+
+⚠️ 第三条我**取脚本里那一行 `normalize()` 原样**去测，⛔ 没有手抄 ——
+手抄的话测的是我抄的那份，而漂掉的恰恰会是没抄对的地方。
+
+### 🔴 ⚠️ 这次审计里我自己造了一个假读数
+
+第一次测 `normalize()` 时我用 shell 内联复刻，`printf` 把 `\r`/`\u` 吃掉、`sed` 正则也没转义对：
+
+```
+只差随机 token (期望 0):   0     ← 看起来对
+真的多一条语句 (期望 >0):  0     ← 🔴 也是 0
+```
+
+⇒ 两条都是 0，而**其中一条本该非 0**。⛔ 如果我只看第一条，会得到「归一化工作正常」这个结论。
+▎**在审「读数会不会说谎」的过程中，我的探针自己说了一次谎，而它说谎的方向仍然是「一切正常」。**
+⇒ 这正是为什么**每个探针都要带一个期望非 0 的分支** —— 只测期望为 0 的那一侧，探针坏了与结论成立同形。
+
+### D. 尚未单独变异，靠既有对照覆盖（⚠️ 说清楚，⛔ 不算已证）
+
+`EXTRACTED_LINES` / `HEAD_SHA_PINS` / `OPS_SCRIPT_TESTS_PATHS` /
+`SELECTOR_PATTERNS` / `TEST_CLASSES` / `KEYWORD_CARRYING` / `REGISTERED_EXCEPTIONS` /
+`FLOOR_*`
+
+⇒ 它们都绑着**会红的断言**（相等/包含/双向登记），且 `#724` 扩选择器时随之变过。
+⚠️ 但我这一轮**没有逐个变异**它们 —— ⛔ 所以不写「已证明」，写「未证」。
+
+---
+
 关联：`docs/ops/repo-cannot-build-a-fresh-database-2026-09-07.md`、
 `scripts/testing/fresh-db-gate.sh`、`.github/workflows/fresh-db-progress.yml`。

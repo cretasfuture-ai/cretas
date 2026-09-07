@@ -369,6 +369,10 @@ export JWT_SECRET=fresh_db_local_jwt_secret_not_for_remote_use
 #    ⚠️ 后果不是「多了几个索引」: 本闸问的是「**迁移**能不能把库建出来」,
 #      而 Hibernate 会在迁移之后**替它把缺的补上** ⇒ 一条缺失的迁移会被悄悄盖住,
 #      读数照样漂亮。▎让被测对象自己修补自己, 这个测量就不再回答原来的问题。
+# ⚠️ 把**配置本身**打成读数, ⛔ 不要只改行为不留痕 ——
+#    否则那三个形状数**不可归因**: 今天这一版和上一版数字不同(2119 vs 2044),
+#    而日志里看不出是「迁移变了」还是「配置变了」。
+echo "READING: FRESH_DB_ENV profile=pg ddl_auto=none(覆盖, 与 prod 的 pg-prod 对齐) flyway_baseline_version=$BASELINE_VERSION flyway_locations=classpath:db/flyway"
 log "starting real pg profile for Flyway + full Spring/JPA gate"
 require_port_available "FRESH_DB_APP_PORT" "$FRESH_DB_APP_PORT"
 (
