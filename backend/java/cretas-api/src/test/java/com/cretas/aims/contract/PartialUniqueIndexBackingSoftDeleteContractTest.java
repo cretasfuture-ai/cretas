@@ -62,6 +62,11 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lsm_factory_name", "logistics_store_master 门店名唯一");
         MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lt_plan_tripno", "logistics_trips 计划内车次号唯一");
         MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lvd_binding", "logistics_vehicle_drivers 车-司机绑定唯一");
+        // 2026-09-07 从 PROD_ONLY_NOT_IN_MIGRATIONS 搬上来的两条（票 OPS-PROD-ONLY-PARTIAL-INDEXES，
+        // 迁移 V20261101_39）。搬家本身是被下面那条断言逼出来的：迁移一落地，
+        // 「原本只活在 prod 上、现在迁移里有了」就会报红提醒搬 —— 这次它确实红了。
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_business_rules_factory_code_active", "business_rules 规则 code 唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_notify_templates_factory_code_active", "notify_templates 模板 code 唯一");
     }
 
     /**
@@ -83,10 +88,19 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      *
      * <p>⛔ 不在这道闸里顺手补迁移——补它要单独一版迁移 + 存量重复检查，与本次 P0 是两件事，已单独登记。
      * 补上之后请把这两条从这里搬到上面那张表里，本闸会因为「集合变了」报红提醒你搬。
+     *
+     * <p>✅ <b>2026-09-07 已补</b>（票 {@code OPS-PROD-ONLY-PARTIAL-INDEXES}，迁移
+     * {@code V20261101_39}）：两条都搬进上面那张表了，本集合现在<b>空着</b>。
+     * ⛔ 空集合<b>不要删</b>——它是这条流程的入口：下次再发现「只活在 prod 上」的部分唯一索引，
+     * 先登记到这里，本闸就会在补上迁移的那一刻报红提醒搬家。这次它确实是这么工作的。
+     *
+     * <p>📌 补的时候实测到的两件事，写在这里免得下次重新查：
+     * <br>① prod 上这两张表的<b>全量</b>唯一键早就没了（约束只剩主键），⇒ 迁移必须允许「已经是
+     * prod 那个形态」而不是硬删；但 ⛔ 不允许「两者都没有」——那是完全不设防。
+     * <br>② {@code business_rules} 那个全量键是 {@code CREATE TABLE} 里的<b>内联无名</b>
+     * {@code UNIQUE(...)}，名字由 PG 生成 ⇒ 迁移里按<b>约束定义</b>找它，⛔ 不能写死名字。
      */
-    private static final Set<String> PROD_ONLY_NOT_IN_MIGRATIONS = Set.of(
-            "uq_notify_templates_factory_code_active",
-            "uq_business_rules_factory_code_active");
+    private static final Set<String> PROD_ONLY_NOT_IN_MIGRATIONS = Set.of();
 
     private static final Pattern CREATE_UNIQUE_INDEX =
             Pattern.compile("CREATE\\s+UNIQUE\\s+INDEX\\b[^;]*;", Pattern.CASE_INSENSITIVE);
