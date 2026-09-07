@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# GUARDS=.github/workflows/java-gate-pr.yml,backend/java/cretas-api/src/test/java/**
 # PR 上的 Java 闸靠**类名后缀**决定跑谁, 而那是一个没人守的命名约定。
 #
 # ═══════════════════════════════════════════════════════════════════════════
