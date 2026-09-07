@@ -18,6 +18,7 @@
 
 test-ci-gate-runs-merge-result.sh
 test-fresh-db-baseline-contract.sh
+test-fresh-db-baseline-replays.sh
 test-fresh-db-progress-ratchet.sh
 test-guarded-paths-are-in-the-trigger-surface.sh
 test-java-gate-selector-covers-gate-classes.sh
