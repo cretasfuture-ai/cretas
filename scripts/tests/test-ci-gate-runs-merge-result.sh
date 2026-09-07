@@ -53,80 +53,118 @@ print(f"READING: EXTRACTED_LINES={len(body)}")
 PY
 [ -s "$SCRIPT" ] || fail "没能从 workflow 里抽出那段内联 merge 脚本"
 
-# 临时仓库: base 上有一个「违规」文件, head 上没有 —— 这正是「分支自己绿 / 合起来红」的形状。
+# 临时仓库: **带一个真的 origin** —— 内联步骤现在要 `git fetch origin <base.ref>` 取活 tip,
+# 所以 fixture 必须有远端, ⛔ 不能只有本地分支(那样测的就不是它实际走的路径了)。
+ORIGIN="$TMP/origin.git"
+git init -q --bare "$ORIGIN"
 FIX="$TMP/repo"
 mkdir -p "$FIX" && cd "$FIX"
 git init -q . && git config user.email t@e.com && git config user.name t
+git remote add origin "$ORIGIN"
 echo shared > shared.txt && git add -A && git commit -qm root
+git branch -M main
+git push -q origin main
 ROOT_SHA=$(git rev-parse HEAD)
-# base: 加一个只有合并后才看得见的文件
+
+# base 前进一步: 加一个只有合并后才看得见的文件
 echo offender > census-offender.txt && git add -A && git commit -qm base-adds-offender
-BASE_SHA=$(git rev-parse HEAD)
-# head: 从 root 分叉, 不含那个文件
+git push -q origin main
+BASE_TIP1=$(git rev-parse HEAD)
+
+# head: 从 root 分叉, 不含 base 的那个文件
 git checkout -q -b pr-head "$ROOT_SHA"
 echo rule > census-rule.txt && git add -A && git commit -qm head-adds-rule
 HEAD_SHA=$(git rev-parse HEAD)
-
 [ ! -f census-offender.txt ] || fail "构造失败: head 分支上不该有 base 的文件"
 
+# 统一入口: 三个 env 都要给 —— BASE_REF 是活 tip 的来源, PAYLOAD_BASE_SHA 只用来对比。
+run_step() {   # $1=BASE_REF $2=PAYLOAD_BASE_SHA
+    BASE_REF="$1" PAYLOAD_BASE_SHA="$2" HEAD_SHA="$(git rev-parse HEAD)" bash "$SCRIPT" 2>&1
+}
+
 # A1 正例: 合并后, base 的文件必须出现在树里 —— 这就是闸本来应该看到的东西。
-out=$(BASE_SHA="$BASE_SHA" HEAD_SHA="$HEAD_SHA" bash "$SCRIPT" 2>&1); rc=$?
+out=$(run_step main "$BASE_TIP1"); rc=$?
 echo "    $(printf '%s' "$out" | tr '\n' '|' | cut -c1-190)"
 [ "$rc" -eq 0 ] || fail "A1: 合并应成功, 实得 rc=$rc: $out"
 [ -f census-offender.txt ] \
     || fail "A1: 合并后树里仍然没有 base 的文件 —— 闸看到的还是 PR 分支自己"
 printf '%s' "$out" | grep -q 'merged_ok=yes' || fail "A1: 没打 merged_ok=yes 读数"
-printf '%s' "$out" | grep -q "base=$BASE_SHA" || fail "A1: 读数里没有 base sha"
-# 硬约束 9: merged_ok=yes 有两种成因(真合进来 / base 已是祖先所以 no-op), 读数相同。
-# 必须再有一个【设计上必然会变】的读数把它们分开。
-printf '%s' "$out" | grep -qE 'merged_in_commits=[1-9]'     || fail "A1: 缺 merged_in_commits(>0) —— 分不出「真合进来」与「base 已是祖先的 no-op」: $out"
-printf '%s' "$out" | grep -q 'tree_changed=yes'     || fail "A1: 缺 tree_changed=yes —— 树没变就说明这一趟什么都没证明: $out"
-ok "合并 base 之后, 只存在于 base 的文件出现在树里 (闸看的是合并结果), 且 merged_in_commits>0 / tree_changed=yes"
+printf '%s' "$out" | grep -qE 'merged_in_commits=[1-9]' \
+    || fail "A1: 缺 merged_in_commits(>0) —— 分不出「真合进来」与「base 已是祖先的 no-op」: $out"
+printf '%s' "$out" | grep -q 'tree_changed=yes' \
+    || fail "A1: 缺 tree_changed=yes —— 树没变就说明这一趟什么都没证明: $out"
+printf '%s' "$out" | grep -q 'payload_stale=no' \
+    || fail "A1: payload 与活 tip 相同, 应报 payload_stale=no: $out"
+ok "合并 base 之后, base 的文件出现在树里; merged_in_commits>0 / tree_changed=yes / payload_stale=no"
+
+# 🔴 D (本票核心): payload 的 base.sha **滞后**时, 闸必须用**活 tip**, 而不是 payload 那个旧 sha。
+# 实测形状(#710): #716 合进 main 之后 17 秒触发的 run, payload 仍是旧 main ⇒ 闸合了个旧 base,
+# merged_in_commits=0、BUILD SUCCESS 全绿, 而测试总数 13235 vs 13237 才露馅。
+git checkout -q main
+echo late > late-arrival.txt && git add -A && git commit -qm "base advances after the event (#716 的形状)"
+git push -q origin main
+BASE_TIP2=$(git rev-parse HEAD)
+git checkout -q -B pr-head2 "$HEAD_SHA"
+
+out_d=$(run_step main "$BASE_TIP1"); rc_d=$?      # ⚠️ 故意传**旧** payload sha
+echo "    $(printf '%s' "$out_d" | grep -o 'GATE_BASE[^|]*' | head -1 | cut -c1-190)"
+[ "$rc_d" -eq 0 ] || fail "D: 合并应成功, 实得 rc=$rc_d: $out_d"
+[ -f late-arrival.txt ] \
+    || fail "D: 树里没有**事件之后**才合进 base 的那个文件 —— 闸用的还是 payload 里那个旧 sha(这正是本票要修的)"
+printf '%s' "$out_d" | grep -q 'payload_stale=yes' \
+    || fail "D: payload 明明滞后了, 却没报 payload_stale=yes: $out_d"
+printf '%s' "$out_d" | grep -qF "used=$BASE_TIP2" \
+    || fail "D: 读数里 used= 不是活 tip $BASE_TIP2: $out_d"
+ok "payload 滞后时用活 tip: 事件后合入的文件在树里, 且 payload_stale=yes / used=<活 tip>"
+
+# D 阴性对照: **旧写法**(合 payload 里那个 sha)在同一场景下会漏掉那个文件 ——
+# 没有这一条, 「D 绿」与「本来就没窗口」读数相同。
+git checkout -q -B pr-head3 "$HEAD_SHA"
+git -c user.email=t@e.com -c user.name=t merge --no-edit "$BASE_TIP1" >/dev/null 2>&1 \
+    || fail "D 阴性对照: 合旧 base 本身应该成功"
+if [ -f late-arrival.txt ]; then
+    fail "D 阴性对照失效: 合了旧 payload sha 却仍有 late-arrival.txt —— 这台机器上旧写法不造成窗口, D 的断言守不住东西"
+fi
+echo "READING: D_old_behaviour_missing_file=late-arrival.txt (合旧 payload sha ⇒ 事件后那次合入看不见)"
+ok "D 阴性对照: 旧写法(合 payload sha)会漏掉事件之后合入 base 的东西"
+git checkout -q -B pr-head4 "$HEAD_SHA"
 
 # A1b: base 已经是 head 的祖先(PR 刚 rebase 过) ⇒ merge 是 no-op。
 # 它照样 merged_ok=yes, 但必须**自己说出来**这一趟没证明任何事, ⛔ 不许与 A1 长得一样。
-git checkout -q -B rebased "$BASE_SHA"
+git checkout -q -B rebased "$BASE_TIP2"
 echo extra > after-base.txt && git add -A && git commit -qm head-on-top-of-base
-outNoop=$(BASE_SHA="$BASE_SHA" HEAD_SHA="$(git rev-parse HEAD)" bash "$SCRIPT" 2>&1); rcNoop=$?
+outNoop=$(run_step main "$BASE_TIP2"); rcNoop=$?
 [ "$rcNoop" -eq 0 ] || fail "A1b: base 已是祖先时合并应成功, 实得 rc=$rcNoop: $outNoop"
-printf '%s' "$outNoop" | grep -q 'merged_in_commits=0'     || fail "A1b: base 已是祖先时 merged_in_commits 应为 0: $outNoop"
-printf '%s' "$outNoop" | grep -q 'tree_changed=no'     || fail "A1b: no-op 合并不该改变树: $outNoop"
-printf '%s' "$outNoop" | grep -q 'base_already_ancestor'     || fail "A1b: no-op 的那一趟必须自己说明「证明不了任何事」, 否则与 A1 读数同形: $outNoop"
+printf '%s' "$outNoop" | grep -q 'merged_in_commits=0' \
+    || fail "A1b: base 已是祖先时 merged_in_commits 应为 0: $outNoop"
+printf '%s' "$outNoop" | grep -q 'tree_changed=no' || fail "A1b: no-op 合并不该改变树: $outNoop"
+printf '%s' "$outNoop" | grep -q 'base_already_ancestor' \
+    || fail "A1b: no-op 的那一趟必须自己说明「证明不了任何事」, 否则与 A1 读数同形: $outNoop"
 echo "    $(printf '%s' "$outNoop" | grep -o 'merged_in_commits=[0-9]* tree_changed=[a-z]*' | head -1)"
-ok "base 已是祖先 ⇒ merged_ok=yes 但 merged_in_commits=0 / tree_changed=no 且点名 no-op (两种成因分得开)"
-git checkout -q pr-head
-
-# A1 阴性对照: 不跑这段脚本, 树里就没有那个文件 —— 证明 A1 不是恒真。
-git checkout -q -B pr-head2 "$HEAD_SHA"
-[ ! -f census-offender.txt ] \
-    || fail "A1 阴性对照失效: 没合并却已经有 base 的文件, 那 A1 什么都没证明"
-ok "阴性对照: 不合并时树里没有那个文件 (A1 不是恒真式)"
+ok "base 已是祖先 ⇒ merged_ok=yes 但 merged_in_commits=0 / tree_changed=no 且点名 no-op"
 
 # A2 冲突: 必须红, ⛔ 不许静默跳过合并继续跑闸。
-git checkout -q -b conflict-base "$ROOT_SHA"
-echo base-side > clash.txt && git add -A && git commit -qm base-clash
+git checkout -q main
+echo base-side > clash.txt && git add -A && git commit -qm base-clash && git push -q origin main
 CBASE=$(git rev-parse HEAD)
-git checkout -q -b conflict-head "$ROOT_SHA"
+git checkout -q -b conflict-head "$HEAD_SHA"
 echo head-side > clash.txt && git add -A && git commit -qm head-clash
-out2=$(BASE_SHA="$CBASE" HEAD_SHA="$(git rev-parse HEAD)" bash "$SCRIPT" 2>&1); rc2=$?
+out2=$(run_step main "$CBASE"); rc2=$?
 git merge --abort 2>/dev/null || true
 echo "    rc=$rc2 $(printf '%s' "$out2" | grep -o 'merged_ok=no' | head -1)"
 [ "$rc2" -ne 0 ] || fail "A2: 冲突时必须红, 实得 rc=0 —— 那会让闸跑在一棵没合成的树上"
 printf '%s' "$out2" | grep -q 'merged_ok=no' || fail "A2: 冲突时没打 merged_ok=no"
 ok "与 base 冲突 ⇒ 红 (不静默跑在没合成的树上)"
 
-# A3 base 对象取不到时必须红, ⛔ 不许「取不到就跳过合并」——那等于悄悄退回 PR 分支。
-git checkout -q pr-head 2>/dev/null || git checkout -q pr-head2
-MISSING=$(printf '0%.0s' {1..40})
-out3=$(BASE_SHA="$MISSING" HEAD_SHA="$HEAD_SHA" bash "$SCRIPT" 2>&1); rc3=$?
-[ "$rc3" -ne 0 ] || fail "A3: base 取不到时必须红, 实得 rc=0: $out3"
-# ⚠️ 只断言「红」是不够的: 去掉那道显式守卫之后, 合并**照样**会失败(base 对象不在),
-#    于是 rc 仍然非 0 —— 变异打不红, 而我会误以为断言在守东西(形态 C 的第三种: 断言守的
-#    行为压根没被变异改变)。守卫真正的价值是**说清楚是什么坏了**, 所以断言措辞:
-#    有它 ⇒「取不到 base 提交 … 需要 fetch-depth: 0」(可直接动手);
-#    没它 ⇒「not something we can merge」(得自己猜)。
-printf '%s' "$out3" | grep -q '取不到 base 提交'     || fail "A3: 缺少可动手的报错(应指出取不到 base 提交、调用方需要 fetch-depth: 0), 实得: $out3"
-ok "base 对象取不到 ⇒ 红, 且报错指到 fetch-depth (不是一句 not something we can merge)"
+# A3 base **分支**取不到时必须红, ⛔ 不许「取不到就跳过合并」——那等于悄悄退回 PR 分支。
+# ⚠️ 只断言「红」不够: 去掉守卫之后后面照样会失败, 变异打不红(形态 C 第三种)。
+#    守卫的价值是**说清楚是什么坏了**, 所以断言措辞。
+git checkout -q -B pr-head5 "$HEAD_SHA"
+out3=$(run_step no-such-branch-xyz "$BASE_TIP2"); rc3=$?
+[ "$rc3" -ne 0 ] || fail "A3: base 分支取不到时必须红, 实得 rc=0: $out3"
+printf '%s' "$out3" | grep -q '取不到 base 分支' \
+    || fail "A3: 缺少可动手的报错(应指出取不到 base 分支), 实得: $out3"
+ok "base 分支取不到 ⇒ 红, 且报错指名道姓"
 cd "$ROOT_DIR"
 
 # ---------------------------------------------------------------------------
