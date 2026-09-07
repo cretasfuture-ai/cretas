@@ -1,0 +1,20 @@
+# java-gate-pr.yml 的 -Dtest 选择器 —— 已登记的「名字撞了族关键词但不是闸」的类。
+#
+# 格式: 类名<TAB>理由     (⛔ 只写类名不写理由的行会红)
+# 由 scripts/tests/test-java-gate-selector-covers-gate-classes.sh 双向校验:
+#   · 逃掉但没登记      ⇒ 红
+#   · 登记了但其实没逃  ⇒ 红「已经进选择器了, 请删掉」(⛔ 不留永久豁免)
+#   · 登记的类文件不存在 ⇒ 红「测试被删了不是被覆盖了」
+#
+# ⚠️ 往这里加一行之前先问: 它是不是一道**闸**(守某个不变量/边界/权限)?
+#    是 ⇒ 让它进选择器(改名或加模式), ⛔ 不要登记豁免。
+#    这里只放「Contract / Permission / Security 作为**业务词**出现」的那种。
+#
+# 2026-09-07 首批 6 条, 全部实测确认是词义碰撞:
+
+AttachmentPermissionResolverTest	测的是附件权限解析器这个组件本身的单测行为(解析规则/边界值), 不是一道拦 PR 的权限闸; "Permission" 是被测类的名字
+PermissionRegistryServiceImplTest	权限注册表 Service 的常规单测(增删查), "Permission" 是业务域名词, 不是闸
+PurchaseServiceImplContractNumberRoundtripTest	"Contract" 在这里是**采购合同号**这个业务字段, 与契约测试(ContractTest)无关
+SecurityUtilsCurrentUserIdTest	SecurityUtils 这个工具类取当前用户 id 的单测, "Security" 是被测类名而非安全闸
+UnitContractControllerTest	"Contract" 是**单位换算契约(unit contract)**这个业务概念的 Controller 单测
+UnitContractServiceTest	同上, Service 层

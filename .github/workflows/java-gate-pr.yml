@@ -131,7 +131,7 @@ jobs:
           set -euo pipefail
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           "$MVN" -B test \
-            -Dtest='*ContractTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*SecurityTest,*AuthorizationTest,*PermissionTest' \
+            -Dtest='*ContractTest,*ContractsTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*RoleGateMvcTest,*SecurityTest,*VulnerabilityTest,*AuthorizationTest,*PermissionTest,*PermissionGateTest,PermissionServiceImpl*Test,*ArchitectureTest' \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
