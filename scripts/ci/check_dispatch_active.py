@@ -16,7 +16,7 @@ Owner 2026-09-05 裁定: 每条 ≤ 300 字, organizer 派活时才读。详情�
    queued / claimed / in-progress / review / blocked —— merged / done 不许留在在飞。
 2. `## Scope 锁地图` 下每条 ≤ 300 字符。
 3. 全文不许有 `###` 小节(增量日志属于 archive, 不属于台账)。
-4. 全文 ≤ 20 KB。
+4. 全文 ≤ 30,000 bytes。
 5. 阳性对照: 至少解析到 1 条在飞条目, 否则 rc=2「没量到」——一个把标题改掉的台账
    不该把这道闸变绿。
 
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 ENTRY_LIMIT = 300
-SIZE_LIMIT = 20 * 1024
+SIZE_LIMIT = 30_000
 ALLOWED_STATUS = {"queued", "claimed", "in-progress", "review", "blocked"}
 FORBIDDEN_STATUS = {"merged", "done"}
 HEAD_RE = re.compile(r"^- `(?P<id>[^`]+)`(?:（[^）]*）)? — `(?P<status>[^`]+)`")

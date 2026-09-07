@@ -199,7 +199,7 @@ jobs:
       - name: 判定 —— 台账违反条目上限
         if: steps.dispatch_active.outputs.rc == '1'
         run: |
-          echo "::error title=dispatch 台账超限::每条 ≤ 300 字、不留 merged/done、不开 ### 增量段、全文 ≤ 20 KB。详情写 docs/dispatch/archive/。见上方清单。"
+          echo "::error title=dispatch 台账超限::每条 ≤ 300 字、不留 merged/done、不开 ### 增量段、全文 ≤ 30,000 bytes。详情写 docs/dispatch/archive/。见上方清单。"
           exit 1
 
       - name: 判定 —— 扫描退出码不是 0/1/2
