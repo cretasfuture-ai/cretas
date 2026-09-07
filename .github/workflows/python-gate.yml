@@ -58,7 +58,8 @@ name: Python Gate
 #
 # ⚠️ `smartbi/gold/tests` 本机 35 failed 全是同一句
 #    `RuntimeError: There is no current event loop in thread 'MainThread'` ——
-#    本机 py3.11 + pytest 9 的 asyncio 行为, 而这里跑的是 **py3.10**。
+#    本机 py3.11 + pytest 9 的 asyncio 行为。⚠️ 2026-09-07 前这里跑的是 py3.10,
+#    **现已改钉 3.11**(与 prod 的 3.11.13 对齐) ⇒ 这条差异的前提没了, 若仍红是真问题。
 #    首次 CI 跑绿即证明是本机环境差异; 若在 CI 也红, 就把这一行摘掉并单独立项,
 #    不要为了让闸变绿而给它加 `|| true` —— 那正是本 workflow 要根治的东西。
 #
@@ -84,8 +85,8 @@ on:
   # 产品退化: 第二个 `mismatch == …` 身份比较长了出来)。清完重新启用时发现:
   # 没有 workflow_dispatch 就**没有办法验证「开了之后它是绿的」** —— 只能等下一次
   # 有人碰 backend/python 才知道, 而那时红了又会变成「谁的锅」。
-  # ⚠️ 本机 py3.11 跑绿 ≠ CI py3.10 跑绿, 所以「开闸后立刻手动跑一次」是必要动作,
-  #    不是方便功能。
+  # ⚠️ 「开闸后立刻手动跑一次」仍是必要动作 —— 但**理由变了**: 2026-09-07 起 CI 也钉 3.11,
+  #    ⇒ ⛔ 不再是「本机 3.11 ≠ CI 3.10」, 而是「本机装的包与顺序 ≠ CI 的干净环境」。
   workflow_dispatch:
 
 concurrency:
@@ -108,20 +109,29 @@ jobs:
       # 它的 macOS 安装脚本把 `/Users/runner` 写死(托管 runner 的用户名就叫 runner),
       # 而本机用户是 rex 且 /Users 不可写 -> `mkdir: /Users/runner: Permission denied`。
       # (与 secret-regression.yml 里同一处理, 那边已实测过预置工具缓存不管用。)
+      # 🔴 3.11, ⛔ 不是 3.10 —— 依据是 **prod 运行中的解释器**(2026-09-07 实测):
+      #     /proc/<uvicorn pid>/exe -> /usr/bin/python3.11
+      #     venv-current/pyvenv.cfg  version = **3.11.13**
+      #   ⚠️ 取法是**问运行中的进程**, ⛔ 不是看配置文件里写了什么。
+      #
+      #   ⇒ 切回托管前这里钉的是 3.10, 而自建那条用系统 Python(3.11) ——
+      #     也就是说**自建期这道闸碰巧与 prod 同版本, 而切到托管会变成明确不对齐**。
+      #     ⛔ 只改 runs-on 会把「碰巧对齐」换成「确定不对齐」。
+      #   📌 与「fresh-db 闸跑 ddl-auto=update 而 prod 是 none」同形:
+      #     **测量环境必须与被声明的目标环境同配置, 并把配置本身打成读数**(见下面那步)。
       - uses: actions/setup-python@v5
         if: runner.environment == 'github-hosted'
         with:
-          python-version: '3.10'
+          python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: backend/python/requirements.txt
 
-      # 🔴 自建 runner 上跑的**不是 3.10** —— 本文件顶部那句
-      #    「本机 py3.11 跑绿 ≠ CI py3.10 跑绿」在这里同样成立, 方向相反:
-      #    落到自建时这道闸测的是另一个小版本。
-      # ⇒ 所以这一步**把版本打出来**, 并只断言下限(≥3.10)。
-      #    ⛔ 不允许静默用一个更老的版本跑 —— 那样绿了也不算数。
-      # ⚠️ 自建只是额度耗尽时的兜底; 额度恢复切回托管, 版本就回到 3.10。
-      #    「这一轮的读数是在哪个解释器上量的」必须能从日志里读出来。
+      # ⚠️ 2026-09-07 订正: 原来这里写「自建跑的不是 3.10 ⇒ 测的是另一个小版本」,
+      #    把它当**缺点**。⇒ 那个判断的前提是「3.10 才是对的」, 而 prod 跑的是 **3.11.13**
+      #    ⇒ 前提反了: 自建期反而**碰巧与 prod 同版本**。
+      #    ▎一条基于错误前提的规则, 照着执行会把「碰巧对」换成「确定错」。
+      # ⇒ 托管那条已改钉 3.11(见上), 两条现在**都对齐 prod**。
+      #   这一步仍**把版本打出来**并只断言下限 —— 「这一轮在哪个解释器上量的」必须可读。
       - name: Use system Python in a venv (self-hosted)
         if: runner.environment != 'github-hosted'
         # ⛔ 不往系统 Python 里装包, 而是**建 venv**, 两个理由:
@@ -132,12 +142,15 @@ jobs:
         # venv 建在 $RUNNER_TEMP 下, job 结束即随临时目录消失。
         run: |
           set -e
-          for c in python3.10 python3.11 python3.12 python3; do
+          # 🔴 顺序即优先级 —— 它挑**第一个找到的**。2026-09-07 前 python3.10 排最前,
+          #   ⇒ 一台同时装了 3.10/3.11 的机器上它会主动选 3.10, 而 prod 是 3.11.13。
+          #   ⚠️ 这不是风格问题: **这一行的顺序决定了这道闸量的是哪个版本**。
+          for c in python3.11 python3.12 python3.10 python3; do
             if command -v "$c" >/dev/null 2>&1; then
               V=$("$c" -c 'import sys;print("%d.%d"%sys.version_info[:2])')
               case "$V" in
                 3.1[0-9]|3.[2-9]*)
-                  echo "PYTHON_USED=$c ($V)  ⚠️ 托管上是 3.10"
+                  echo "PYTHON_USED=$c ($V)  (托管那条已钉 3.11, 与 prod 3.11.13 对齐)"
                   "$c" -m venv "$RUNNER_TEMP/venv"
                   echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
                   exit 0
@@ -147,6 +160,27 @@ jobs:
           done
           echo "✗ 找不到 >=3.10 的 python —— 本闸不能在一个更老的解释器上假装绿"
           exit 1
+
+      # ⚠️ 这一步必须排在**两条 setup 之后** —— ⛔ 不能放在它们之前:
+      #   自建那条是在上面才把 venv 的 bin 加进 GITHUB_PATH 的,
+      #   放在前面报出来的会是**建 venv 之前**的解释器, 而那不是真正跑测试的那个。
+      #   🔴 第一版我就是放在前面的。
+      # ⚠️ 两条车道**都**打这条读数, ⛔ 不只自建那条 ——
+      #   否则「这一趟是 3.10 还是 3.11 跑的」在日志里读不出来, 而两者行为不同
+      #   (2026-09-07 实测: ExceptionGroup 在 3.10 上是 NameError, 3.11 上是内置类型)。
+      - name: Report the interpreter this run actually used
+        if: always()
+        run: |
+          set -eu
+          LANE=$([ "${{ runner.environment }}" = "github-hosted" ] && echo hosted || echo self-hosted)
+          PY=$(python -c 'import sys;print(".".join(map(str,sys.version_info[:3])))' 2>/dev/null || echo "<none>")
+          echo "READING: PYTHON_ENV lane=$LANE python=$PY prod_expected=3.11.13"
+          case "$PY" in
+            3.11.*) echo "READING: PYTHON_MATCHES_PROD=yes" ;;
+            "<none>") echo "READING: PYTHON_MATCHES_PROD=unknown ⇒ **没量到**(拿不到解释器), ⛔ 不是「对上了」" ;;
+            *) echo "READING: PYTHON_MATCHES_PROD=no actual=$PY ⇒ ⚠️ 这一趟量的不是 prod 跑的那个版本" ;;
+          esac
+
       - name: Install dependencies
         # ⚠️ 一律用 `python -m pip`, ⛔ 不要用裸 `pip`。
         #    托管镜像里 setup-python 会同时放一个 `pip` 到 PATH 上, 自建的 macOS 上
