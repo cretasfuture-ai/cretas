@@ -86,6 +86,52 @@ done
 echo "READING: BASELINE_HEADER max_version=$H_VER tables=$H_TAB indexes=$H_IDX unique=$H_UQ fk=$H_FK columns=$H_COL"
 ok "文件头带出处与五个数"
 
+# ---- 2.5 「什么时候该重新采集」的那个数 ----
+#
+# 🔴 为什么这里用代理, 而不是评审指定的 above_baseline_on_prod:
+#    那个数只由采集器产出, 而采集器要连 prod、⛔ 不进 CI、人手跑
+#    ⇒ 拿它当触发条件是**循环的**: 要先做那个动作, 才能知道该不该做它。
+#    ⇒ 实际后果是它**永远不会触发** —— 与「没有触发条件」同一个结果,
+#      而那正是这一节要修的东西。
+#
+# ⚠️ **用代理替权威量之前, 先证明误差的方向。**
+#    prod 的迁移只从 main 来 ⇒ 仓里高于基线的那批 ⊇ prod 已跑的那批
+#    ⇒ 本代理**恒 ≥** above_baseline_on_prod ⇒ **早报不漏报**。
+#    ⛔ 方向反过来(可能少报)的代理一律不能做告警 —— 它会以「一直安静」的方式失效,
+#      而「一直安静」与「一切正常」在读数上完全同形。
+#
+# ⚠️ 本段**只打 ::notice, ⛔ 永不红** —— 理由与 payload_behind_by 同: 落后是常态,
+#    红会让这道闸在第一周就被关掉。⇒ 它也因此**不构成「守着 db/flyway/」**,
+#    所以刻意不写进本文件的 `# GUARDS=`(那份声明是给会**红**的行为用的)。
+FLYWAY_DIR="$ROOT_DIR/backend/java/cretas-api/src/main/resources/db/flyway"
+vkey() { awk -F. '{printf "%d\n", $1 * 1000000 + $2}' <<< "$1"; }
+# ⚠️ 完整锚点 `V<数字>_<数字>__` —— 只写 `^V[0-9_]+` 会把分隔用的 `__` 吃进去,
+#    读数变成 `20261101.39..`, 比较时静默走错分支而看起来「差不多对」。
+mapfile -t REPO_VERS < <(ls "$FLYWAY_DIR" 2>/dev/null | sed -nE 's/^V([0-9]+)_([0-9]+)__.*/\1.\2/p' \
+    | sort -t. -k1,1n -k2,2n)
+REPO_MAX="${REPO_VERS[${#REPO_VERS[@]}-1]:-?}"
+BASE_KEY=$(vkey "$H_VER")
+LAG=0
+for v in "${REPO_VERS[@]}"; do [ "$(vkey "$v")" -gt "$BASE_KEY" ] && LAG=$((LAG + 1)); done
+THRESH="${CRETAS_BASELINE_LAG_THRESHOLD:-unset}"
+if [ "$THRESH" = "unset" ]; then
+    # ⛔ 「阈值还没设」与「没超阈值」必须长得不一样 —— 前者意味着这道告警**今天不会响**。
+    ACTION="none-threshold-unset"
+elif [ "$LAG" -gt "$THRESH" ]; then
+    ACTION="notice"
+else
+    ACTION="none-under-threshold"
+fi
+echo "READING: BASELINE_LAG_PROXY above_baseline_in_repo=$LAG baseline_max=$H_VER repo_max=$REPO_MAX threshold=$THRESH action=$ACTION"
+echo "READING: BASELINE_LAG_PROXY_DIRECTION=over-estimates ⇒ 恒 ≥ 采集器的 above_baseline_on_prod ⇒ **早报不漏报**(⛔ 反方向的代理不能做告警)"
+if [ "$ACTION" = "none-threshold-unset" ]; then
+    echo "READING: BASELINE_LAG_PROXY_ARMED=no ⇒ **阈值待定**(依据上线后 N 周的实际读数) ⇒ 这条告警今天**不会响**, ⛔ 不是「没超」"
+fi
+if [ "$ACTION" = "notice" ]; then
+    echo "::notice title=基线该重新采集了::仓里已有 $LAG 条迁移的版本高于基线(@$H_VER, 仓库最高 $REPO_MAX), 超过阈值 $THRESH。owner=organizer。⛔ 这不是错误 —— 落后是常态, 到点重采一次即可(bash scripts/ops/capture-fresh-db-baseline.sh --write)。"
+fi
+ok "重新采集的触发条件已量出 (代理 above_baseline_in_repo=$LAG, action=$ACTION)"
+
 # ---- 3. 灌进一个空 PG ----
 command -v docker >/dev/null 2>&1 \
     || fail "3: 没有 docker —— 本验证器要一个空 PG。⛔ 不许把「跳过」当通过(那正是这道闸最容易失效的方式)"

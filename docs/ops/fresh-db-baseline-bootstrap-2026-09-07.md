@@ -2,7 +2,9 @@
 
 **票**: `OPS-FRESH-DB-BASELINE-BOOTSTRAP-20260907`
 **日期**: 2026-09-07
-**状态**: 🟡 方向已定（organizer 拍板走方向 B），**⛔ 尚未生成任何基线**。本文件是判据与禁令。
+**状态**: 🟢 **第一份真基线已产出**（2026-09-07，`db/baseline/prod-schema-baseline.sql`，
+采自 prod@`20261101.37`，四条判据全过 —— 见第八、九节）。⚠️ **bootstrap 尚未接进建库流程**
+（`flyway baseline -baselineVersion=20261101.37` 那一步还没接），所以第五节预告的棘轮跳变**还没发生**。
 **取代**: `OPS-FRESH-DB-CANNOT-BE-BUILT` 的修法部分（⛔ 那份分类**留着不删**，见文末）
 
 ---
@@ -243,7 +245,12 @@ READING: BASELINE_LAG baseline_max=… prod_max=… repo_max=… above_baseline_
 | 数 | 谁产出 | 连 prod | 频率 | 角色 |
 |---|---|---|---|---|
 | `above_baseline_on_prod` | 采集器 | ✅ | **只在采集那一刻** | **权威值**，写进新基线的文件头 |
-| `repo_max − baseline_max` | 验证器（离线） | ❌ | **每次 CI** | **触发用**，超阈值打 `::notice` |
+| `above_baseline_in_repo` | 验证器（离线） | ❌ | **每次 CI** | **触发用**，超阈值打 `::notice` |
+
+⚠️ 代理**落地时改成了「计数」而不是「相减」**：版本号形如 `20261101.37`，
+**两个版本号相减没有意义**（它们不是等距的）。⇒ 量的是「`db/flyway/` 里版本高于基线的**文件条数**」，
+这样它才与权威值 `above_baseline_on_prod`（prod history 的**行数**）**同量纲、可直接比大小**。
+▎⛔ 一个与被代替的量**量纲都不同**的数，谈不上「误差方向」。
 
 两个数今天都已经在读数里（`repo_max` 从 `db/flyway/` 文件名数，`baseline_max` 从基线文件头读，
 **两者都不连 prod**）⇒ 代理不需要新仪器，只需要一个阈值和一条 `::notice`。
@@ -275,6 +282,72 @@ READING: BASELINE_LAG baseline_max=… prod_max=… repo_max=… above_baseline_
 
 1. 代理在**那份真基线**上的实际读数；
 2. 一次**超阈值的阴性对照** —— 把阈值临时调到 0 ⇒ `::notice` 真的打出来、且点得出差多少。
+
+**✅ 2026-09-07 已落地**（第一份真基线 `prod-schema-baseline.sql`，`baseline_max=20261101.37`）：
+
+```
+READING: BASELINE_LAG_PROXY above_baseline_in_repo=2 baseline_max=20261101.37 repo_max=20261101.39 threshold=unset action=none-threshold-unset
+READING: BASELINE_LAG_PROXY_ARMED=no ⇒ **阈值待定** ⇒ 这条告警今天**不会响**, ⛔ 不是「没超」
+阴性对照 CRETAS_BASELINE_LAG_THRESHOLD=0 ⇒ ::notice 真打出来, 且 rc 仍为 0(⛔ 不红)
+```
+
+⚠️ **`ARMED=no` 这一行是刻意的**：阈值待定 ⇒ 这道告警今天**是哑的**。
+⛔ 而「哑着」与「量过了没超」在退出码上完全同形 ——
+所以它必须**自己说自己是哑的**，否则这一节读起来像已经在保护什么。
+
+---
+
+## 九、🔴 基线一落盘，就让一道扫迁移的闸变得不可证伪
+
+基线落在 `src/main/resources/db/baseline/`，而
+`PartialUniqueIndexBackingSoftDeleteContractTest` 扫的是**父目录** `src/main/resources/db`
+（全仓**只有它一个**扫父目录；另外 33 个契约测试扫的是 `db/flyway`，不受影响）。
+
+⇒ 那份 dump **进了它的语料**。两个后果，对照组是同一棵树、只把 `db/baseline/` 挪走再跑一次：
+
+| | 有基线 | 无基线（对照） |
+|---|---:|---:|
+| `PARTIAL_UNIQUE_INDEX_STATEMENTS_IN_MIGRATIONS` | **217** | 113 |
+| 闸的结论 | 🔴 红（`uk_encoding_rules`） | ✅ 绿 |
+
+红的那半好办。**⚠️ 真正的问题是没红的那一半。**
+
+那 13 个受本闸守护的索引名，**dump 里一个不少**（各命中 2–4 次）——
+因为 dump 是 prod 的快照，而 prod 上它们当然都在。⇒ **删掉一条真迁移，闸也发现不了。**
+
+### 实证（删掉 `V20261101_39`，两种扫描面各跑一次）
+
+```
+A  排除 db/baseline/  ⇒ 🔴 红, 点名: uq_business_rules_factory_code_active [absent]
+                                   uq_notify_templates_factory_code_active [absent]
+B  不排除            ⇒ 🔴 也红 —— 但报的是 uk_encoding_rules,
+                        **那两个被删的索引一个都没被报成 absent**
+```
+
+⚠️ **B 比「变绿」更坏**：闸**还是红的**，看起来在干活，
+而你关心的那个回归**已经隐形了**。⇒ 只看红绿的人会以为闸没坏。
+
+▎**一份 prod 的快照放进「查迁移里有没有」的语料，会让这个问题不可证伪 ——
+快照里什么都有，那正是它的用途。**
+
+### ⇒ 修法与它自己的判据
+
+扫描面排除 `db/baseline/`（这不是「顺手消红」：本闸问的是「**从迁移新建的库**会不会重现
+prod 已修的 bug」，而基线**按定义**不参与那条路径）。
+
+两个失效方向各配一条断言，⛔ 不能只配一个：
+
+```
+① 排太宽 ⇒ 语料被打空 ⇒「每个索引都缺失」与「没在读」同形
+   ⇒ 断言 scanned_sql > 600           (实测 1139)
+② 没排掉 ⇒ dump 顶替迁移 ⇒ 闸变瞎
+   ⇒ 断言扫描面里 noneMatch(db/baseline/)
+   变异实证: 去掉排除 ⇒ scanned_sql 1139→1140 ⇒ 红
+READING: MIGRATION_SCAN_SCOPE scanned_sql=1139 excluded_baseline_sql=1 baseline_dir=present
+```
+
+⚠️ `baseline_dir=absent` 时读数会明说「**本趟没有基线可排**」——
+⛔ 否则 `excluded=0` 读起来像「排除生效」。
 
 ---
 
