@@ -40,10 +40,18 @@ bash -n "$CAPTURE" || fail "$CAPTURE 语法错误"
 #    「目录不存在」与「目录里没有违规文件」在退出码上同形, 而前者意味着这一条**没量到**。
 if [ -d "$BASELINE_DIR" ]; then
     offenders=$(find "$BASELINE_DIR" -maxdepth 1 -name 'V*__*.sql' -printf '%f\n' 2>/dev/null | tr '\n' ' ')
-    echo "READING: BASELINE_DIR=present files=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.sql' | wc -l)"
+    n_sql=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.sql' | wc -l)
+    n_nonempty=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.sql' -size +0 | wc -l)
+    echo "READING: BASELINE_DIR=present files=$n_sql non_empty=$n_nonempty"
     [ -z "$(printf '%s' "$offenders" | tr -d ' ')" ] \
         || fail "1: db/baseline/ 下出现了 Flyway 迁移命名的文件:$offenders —— ⛔ 它会在 prod 上被当成新迁移执行"
-    ok "db/baseline/ 下没有 V…__ 命名的文件"
+    # 🔴 目录在但**空着**时, 上面那条 offenders 恒为空 ⇒ 闸绿, 而它什么都没守到。
+    #    ⚠️ 「闸绿」与「禁令生效」在这一步读数相同 —— 这正是「每加一道闸先答:
+    #    **它自己坏掉时读数长什么样**」。实测: 建一个空的 db/baseline/ ⇒ files=0 而闸照样 PASS。
+    #    ⇒ 目录一旦存在, 就必须真的有一个非空基线。
+    [ "$n_nonempty" -ge 1 ] \
+        || fail "1: db/baseline/ 存在但没有非空的 .sql (files=$n_sql non_empty=$n_nonempty) —— 本条**没守到东西**, ⛔ 不许算绿"
+    ok "db/baseline/ 下没有 V…__ 命名的文件, 且有 $n_nonempty 个非空基线"
 else
     echo "READING: BASELINE_DIR=absent (基线尚未产出 ⇒ 本条**没量到**, 不是「没问题」)"
     ok "db/baseline/ 尚不存在(允许; 但本条这次没有量到东西)"
