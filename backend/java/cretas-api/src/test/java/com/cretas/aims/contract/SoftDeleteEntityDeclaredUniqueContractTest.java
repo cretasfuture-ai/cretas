@@ -107,7 +107,28 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
             Map.entry("MaterialBatch#column:batch_number",
                     "prod: material_batches 上只有 pkey 和 uq_material_batch_source_event"
                             + "(factory_id,source_doc_type,source_event_key)——那是**别的列**上的键，"
-                            + "batch_number 没有任何唯一索引 ⇒ 待裁定（与上面三条并成一组，共 4 个字段）")
+                            + "batch_number 没有任何唯一索引 ⇒ 待裁定（与上面三条并成一组，共 4 个字段）"),
+
+            // ── #710（删用户级联）给 User 补 @SQLDelete 之后新增的两条 ──────────────────────────
+            Map.entry("User#cols:username",
+                    "prod: ukr43af9ap4edm43mmtq01oddj6 (username) 全量、逐列一致；"
+                            + "业务口径「用户名不回收」——UserRepository.countByUsernameIncludingDeleted "
+                            + "也把已删的算进冲突 ⇒ 类别 A，保留"),
+
+            // 🔴 这一条与上面四个「待裁定」**不是同一问**，⛔ 不要并进那一组：
+            //    那四个 prod 上**有**全量唯一索引，问的是「全量还是部分」（索引形态）；
+            //    employee_code 在 prod 上**一个唯一索引都没有**，问的是「到底要不要唯一」。
+            // ⚠️ 而 2026-09-07 prod 只读普查把这个问题又往前推了一格：
+            //    users 82 行 / 活行 63 / **有 employee_code 的只有 1 行**，其余 81 行为 NULL。
+            //    三个口径（全局全表 / 全局活行 / 按 factory_id）都是「无重复」——
+            //    但 n=1 的「无重复」**不构成任何证据**（阳性对照：同一套写法在 factory_id 上数出 3 个重复值，
+            //    所以「全无重复」不是写法错）。它只排除了「存量重复挡住补索引」。
+            // ⇒ 1/82 这个分布更像**从未被采用/已废弃**，而不是「一个唯一的业务标识」。
+            //    ⛔ 因此不按「声明说唯一所以补索引」默认往一边走 —— 先问它还在不在用。
+            Map.entry("User#column:employee_code",
+                    "prod: users 上只有 pkey 和 ukr43af9ap4edm43mmtq01oddj6(username)，"
+                            + "employee_code 没有任何唯一索引；且 82 行里只有 1 行有值 ⇒ 待裁定，"
+                            + "且问法是「这个字段还在用吗」而不是「该不该唯一」")
     ));
 
     @Test

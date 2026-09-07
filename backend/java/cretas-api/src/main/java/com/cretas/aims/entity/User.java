@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 import org.hibernate.annotations.BatchSize;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
@@ -38,6 +39,7 @@ import java.util.List;
            @Index(name = "idx_username", columnList = "username")  // 加速username查询
        }
 )
+@SQLDelete(sql = "UPDATE users SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class User extends BaseEntity {
     @Id
@@ -119,57 +121,57 @@ public class User extends BaseEntity {
     private Factory factory;
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "user", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<Session> sessions = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "user", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<EmployeeWorkSession> workSessions = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "recorder", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "recorder", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<MaterialConsumption> materialConsumptions = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "employee", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "employee", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<BatchWorkSession> batchWorkSessions = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "createdByUser", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "createdByUser", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<RawMaterialType> createdMaterialTypes = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "createdByUser", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "createdByUser", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<ProductType> createdProductTypes = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "createdByUser", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "createdByUser", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<Supplier> createdSuppliers = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "createdByUser", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "createdByUser", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<Customer> createdCustomers = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "createdByUser", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "createdByUser", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<ProductionPlan> createdProductionPlans = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "createdByUser", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "createdByUser", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<MaterialBatch> createdMaterialBatches = new ArrayList<>();
 
     @JsonIgnore
     @BatchSize(size = 20)
-    @OneToMany(mappedBy = "adjustedBy", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "adjustedBy", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
     private List<MaterialBatchAdjustment> batchAdjustments = new ArrayList<>();
     // 便捷方法
     /**

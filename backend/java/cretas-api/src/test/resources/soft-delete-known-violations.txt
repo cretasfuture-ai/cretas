@@ -96,7 +96,6 @@ com.cretas.aims.entity.Supplier
 com.cretas.aims.entity.SupplierMaterial
 com.cretas.aims.entity.SupplierMaterialPurchaseSpec
 com.cretas.aims.entity.TimeClockRecord
-com.cretas.aims.entity.User
 com.cretas.aims.entity.UserFeedback
 com.cretas.aims.entity.UserModuleAccess
 com.cretas.aims.entity.WageCalculation
