@@ -259,10 +259,14 @@ OPS_PATHS=$(awk '
 ' "$OPS_WF")
 echo "READING: OPS_SCRIPT_TESTS_PATHS=$(printf '%s
 ' "$OPS_PATHS" | grep -c . || true)"
-for guarded in .github/workflows/java-gate-pr.yml .github/workflows/java-full-nightly.yml; do
+# ⚠️ `.github/actions/**` 也要在这个循环里 —— 本测试对它**也有断言**(⛔ 不许用本地 composite
+#    action, 见上面 LOCAL_COMPOSITE_ACTION_REFS)。原来只在注释里写「这个空目录要留着」,
+#    而**注释挡不住**: 删掉那一行今天没有任何东西会红(形态 B)。⇒ 写成闸。
+for guarded in .github/workflows/java-gate-pr.yml .github/workflows/java-full-nightly.yml \
+               '.github/actions/**'; do
     printf '%s
 ' "$OPS_PATHS" | grep -qF "$guarded"         || fail "C: 本测试断言 $guarded 的结构, 但 ops-script-tests.yml 的 paths 不含它 ⇒ 只动它的 PR 触发不到这道闸(那正是 P0 的形状)"
 done
-ok "被本测试断言的两个 workflow 都在 ops-script-tests 的触发面里"
+ok "被本测试断言的两个 workflow 与 .github/actions/** 都在 ops-script-tests 的触发面里"
 
 echo "PASS: test-ci-gate-runs-merge-result.sh ($PASSED 组断言)"
