@@ -368,7 +368,12 @@ if [ "$PROGRESS" -eq 1 ]; then
         fail "progress: 有倒退 —— $regressed。⛔ 三个数只许涨: 倒退意味着新库比昨天更建不出来"
     fi
     if [ "$applied" -gt "$b_applied" ] || [ "$tables" -gt "$b_tables" ] || [ "$indexes" -gt "$b_indexes" ]; then
-        log "progress: 有进展, 请把新读数写进 $PROGRESS_BASELINE 锁住它"
+        # ⚠️ 给**能直接执行的下一步**, ⛔ 不是「基线需要更新」这种指向不明的话 ——
+        #    今天这条纪律已经独立撞到三次(端口探针说「stop the existing process」而没有进程可停;
+        #    登记表说「现在却不声明了」而文件根本不存在)。**报错/提示要说出能做的下一步。**
+        log "progress: 有进展。把下面三行**整体替换** $PROGRESS_BASELINE 的内容, 即可锁住这次的进度:"
+        printf '    migrations_applied=%s\n    tables=%s\n    indexes=%s\n' "$applied" "$tables" "$indexes"
+        log "progress: (旧值 applied=$b_applied tables=$b_tables indexes=$b_indexes)"
     fi
     log "progress: 无倒退 (applied $applied/$b_applied, tables $tables/$b_tables, indexes $indexes/$b_indexes)"
     exit 0
