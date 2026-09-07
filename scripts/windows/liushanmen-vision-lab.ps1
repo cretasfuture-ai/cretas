@@ -7,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+    throw "VisionLab runs on the local Windows host only. Mac dispatch is disabled."
+}
 $scriptPath = Join-Path $RepoRoot "tools\vision-lab\vision_lab.py"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Python not found: $Python"

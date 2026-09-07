@@ -43,7 +43,7 @@ git fetch origin main && git checkout --detach origin/main      # 或 clean 的 
 
 ## 必须在 prod 验证 feature 时
 
-优先 test（Mac mini）验证。若必须在 prod 验 feature 分支：验完**立即 merge 到 main + 从 main 重部**，然后核对运行中的 jar 含你的修复：
+YOLO/LIUSHANMEN 优先本地 Windows/RTX 验证，禁止使用 Mac mini；其他业务测试环境必须先核实当前分配，不能沿用历史 Mac 测试机假设。若必须在 prod 验 feature 分支：验完**立即 merge 到 main + 从 main 重部**，然后核对运行中的 jar 含你的修复：
 
 ```bash
 ssh root@47.100.235.168 "unzip -p /www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar 'BOOT-INF/classes/.../YourClass.class' | strings | grep -c '<ASCII 修复标记>'"
