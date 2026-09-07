@@ -3,7 +3,10 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.permission.PermissionModuleCatalog;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.impl.PermissionServiceImpl;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -30,25 +33,14 @@ public class RoleController {
 
     private final PermissionService permissionService;
 
-    /**
-     * 前端显示的功能模块列表 (与 web-admin/src/views/system/roles/list.vue 保持一致)
-     */
-    private static final Map<String, String> DISPLAY_MODULES = new LinkedHashMap<>();
-    static {
-        DISPLAY_MODULES.put("production", "生产管理");
-        DISPLAY_MODULES.put("quality", "质检管理");
-        DISPLAY_MODULES.put("warehouse", "仓库管理");
-        DISPLAY_MODULES.put("procurement", "采购管理");
-        DISPLAY_MODULES.put("sales", "销售管理");
-        DISPLAY_MODULES.put("hr", "人事管理");
-        DISPLAY_MODULES.put("equipment", "设备管理");
-        DISPLAY_MODULES.put("finance", "财务管理");
-        DISPLAY_MODULES.put("system", "系统设置");
-        // 2026-09-06 清单向 L1 收敛 (owner 裁定): 删掉 "ai" —— 全仓 0 处 @RequirePermission 用它,
-        // prod L1 0 行, 只在这张展示清单与 roles/list.vue 里存在: 一列永远显示 '-' 的幽灵模块。
-        DISPLAY_MODULES.put("report", "报表中心");
-        DISPLAY_MODULES.put("dashboard", "数据看板");
-    }
+    // 2026-09-07 刀 D: 这里原本是一份写死 11 条的 DISPLAY_MODULES (code → 中文名), 与
+    // web-admin/src/views/system/roles/list.vue 的 allPermissionModules 逐字重复 (形态 D)。
+    // 两份都已删除:
+    //   · 列 = permissionService.knownModuleAxis() 现算 (L1 出现过的 ∪ 硬编码声明的),
+    //     与角色无关的稳定轴 ⇒ 每个角色列数一致, ⛔ 不再有第二份清单;
+    //   · 值 = permissionService.resolveRoleModuleLevels(factoryId, role) 三层现算;
+    //   · 中文名 = PermissionModuleCatalog (全仓唯一一份), ⛔ 不在这里再写一遍;
+    //   · 列序 = PermissionModuleCatalog.columnOrder (侧边栏顺序)。
 
     /**
      * 获取某个角色在各功能模块上的权限明细.
@@ -56,15 +48,24 @@ public class RoleController {
      * 返回格式 (前端 list.vue `rolePermissions` 期望的结构):
      * <pre>
      * [
-     *   { "module": "production", "label": "生产管理", "access": "rw" },
-     *   { "module": "quality",    "label": "质检管理", "access": "r"  },
+     *   { "module": "dashboard",  "label": "首页",     "access": "rw" },
+     *   { "module": "production", "label": "生产管理", "access": "r"  },
      *   ...
      * ]
      * </pre>
      *
      * access 值含义: rw=读写 / r=只读 / w=只写 / -=无权限
      *
-     * @param factoryId 工厂ID (路径占位,当前版本仅用于路由匹配,未做工厂隔离校验)
+     * <p><b>2026-09-07 刀 D 之前这里是错的</b>: 它读
+     * {@code permissionService.getRolePermissions(role)} —— 那个方法<b>只读硬编码兜底矩阵</b>,
+     * 一格 L1 都不查, 而 L1 才是权威。实测 30 个角色 × 11 个模块的 294 格里 <b>30 格</b>
+     * 与 L1 不一致 (例: {@code permission_admin} 10 格全是「页面说 rw / L1 说 -」;
+     * {@code quality_controller} 的 production/quality/warehouse 页面说「无权限」而 L1 给了 r/rw/r)。
+     * 现在走 {@link PermissionService#resolveRoleModuleLevels} —— 与
+     * {@code @RequirePermission} 实际执行的是同一条链。
+     *
+     * @param factoryId 工厂ID。<b>参与解析</b>: L2 {@code factory_module_configs} 的
+     *                  role×module 覆盖按它取 (2026-09-07 前这个参数只是路由占位)。
      * @param roleName  角色代码 (必须与 {@link FactoryUserRole} 枚举一致,如 factory_super_admin)
      */
     /**
@@ -109,56 +110,71 @@ public class RoleController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 🔴 2026-09-07 刀 D 补的门禁: 本端点此前<b>一个鉴权注解都没有</b>
+     * ({@code PermissionInterceptor.preHandle}: 「没有注解，放行」), 而同一个 controller 的
+     * 角色列表端点有 {@code @RequirePermission}。任何已登录用户都能读任意角色的权限矩阵。
+     *
+     * <p>为什么在本 PR 里补而不是另开一刀: 刀 D <b>放大了这个口子</b> —— 端点从「11 列陈旧的
+     * 硬编码值」变成「17 列 L1 真实值」, 泄露面变大了。⇒ 由本次改动引出的门禁缺口, 在本次补上。
+     *
+     * <p>权限码与列表端点<b>逐字相同</b>, 也与唯一调用方所在路由的 {@code meta.module = 'system'}
+     * ({@code router/index.ts:1439} 「角色权限」页) 一致 ⇒ 走得到这个页面的人都过得了这道闸,
+     * ⛔ 不会把原本能用的人挡在外面。
+     */
     @GetMapping("/{roleName}/permissions")
     @Operation(summary = "查询角色权限", description = "返回角色在各功能模块的读写权限明细")
+    @RequirePermission({"system:read_write", "system:read"})
     public ApiResponse<List<Map<String, Object>>> getRolePermissions(
             @PathVariable String factoryId,
             @PathVariable String roleName) {
 
         log.debug("getRolePermissions: factoryId={}, roleName={}", factoryId, roleName);
 
-        FactoryUserRole role = FactoryUserRole.fromRoleCode(roleName);
-        Set<String> flatPerms = permissionService.getRolePermissions(role);
-
-        // 将 "module:read" / "module:write" 的扁平集合反向汇总为每个模块的 access 字符串
-        Map<String, Boolean> hasRead = new HashMap<>();
-        Map<String, Boolean> hasWrite = new HashMap<>();
-        for (String p : flatPerms) {
-            int idx = p.indexOf(':');
-            if (idx <= 0) continue;
-            String module = p.substring(0, idx);
-            String action = p.substring(idx + 1);
-            if ("read".equals(action)) {
-                hasRead.put(module, true);
-            } else if ("write".equals(action)) {
-                hasWrite.put(module, true);
-            }
+        // 🔴 2026-09-07: 这里原本是 FactoryUserRole.fromRoleCode(roleName) —— 它对**枚举里没有的码
+        // 静默返回 unactivated**, 于是解析链返回空 map, 页面把 17 个模块全渲染成「无权限」,
+        // 在屏幕上与一个真的无权限角色**不可区分**。
+        //
+        // 实测 (刀 D 视觉验收): 角色页当时写死的 17 条里有 5 个码在枚举里根本不存在
+        // (warehouse_operator / procurement_staff / sales_staff / hr_manager / equipment_manager),
+        // 每一个都被这样渲染成一张看起来正常的「全部拒绝」表。
+        //
+        // ⇒ 未知码是**明确的错误**, 不是一个可以往下算的值。⛔ 不静默降级。
+        FactoryUserRole role;
+        try {
+            role = FactoryUserRole.valueOf(roleName);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new BusinessException(404, "没有这个角色: " + roleName
+                    + "。可用角色见 GET /api/mobile/{factoryId}/roles。");
         }
+
+        // 三层解析链 (L2 → L1 → 硬编码兜底) —— 与 @RequirePermission 实际执行的是同一条链。
+        // ⛔ 不再走 getRolePermissions(role): 那个方法只读硬编码兜底矩阵, 一格 L1 都不查。
+        Map<String, String> levels = permissionService.resolveRoleModuleLevels(factoryId, role);
+
+        // 超管的 "*" 通配键: 它不是一个模块, 不进表格 —— 但它是「没单独列出的模块也是 rw」的意思,
+        // 所以要当作轴上其余格的取值。⛔ 漏了它会让超管的表格出现一堆 '-', 而 hasPermission 说 true。
+        String wildcard = levels.get(PermissionServiceImpl.MODULE_LEVEL_WILDCARD);
+        String absent = wildcard != null ? wildcard : "-";
 
         List<Map<String, Object>> result = new ArrayList<>();
-        for (Map.Entry<String, String> entry : DISPLAY_MODULES.entrySet()) {
-            String module = entry.getKey();
-            String label = entry.getValue();
-
-            boolean r = Boolean.TRUE.equals(hasRead.get(module));
-            boolean w = Boolean.TRUE.equals(hasWrite.get(module));
-            String access;
-            if (r && w) {
-                access = "rw";
-            } else if (r) {
-                access = "r";
-            } else if (w) {
-                access = "w";
-            } else {
-                access = "-";
-            }
-
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("module", module);
-            row.put("label", label);
-            row.put("access", access);
-            result.add(row);
-        }
+        permissionService.knownModuleAxis().stream()
+                // Steve 2026-09-06「餐饮不管」: 餐饮码不进这张工厂角色表 —— 与刀 D 之前的 11 列一致
+                // (那份也没有餐饮列), 所以这不是新增的隐藏, 是保持原状。⛔ 别在这里顺手把它们放出来:
+                // 实测轴上有 6 个餐饮码, 放出来会让 29 个角色里 26 个多出「餐饮管理」等列。
+                .filter(module -> !module.startsWith("restaurant"))
+                .sorted(Comparator
+                        .comparingInt(PermissionModuleCatalog::columnOrder)
+                        .thenComparing(module -> module))
+                .forEach(module -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("module", module);
+                    row.put("label", PermissionModuleCatalog.label(module));
+                    // 轴上有而该角色三层都没登记 ⇒ 有效值就是 '-' (checkAction(null,…) 恒 false),
+                    // 这是可被 hasPermission 证伪的真实读数, ⛔ 不是兜底默认值。
+                    row.put("access", levels.getOrDefault(module, absent));
+                    result.add(row);
+                });
 
         return ApiResponse.success(result);
     }
