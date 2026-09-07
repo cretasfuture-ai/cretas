@@ -45,7 +45,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("软删实体依赖的部分唯一索引必须一直在迁移里")
 class PartialUniqueIndexBackingSoftDeleteContractTest {
 
-    private static final Path DB = Path.of("src/main/resources/db");
+    /**
+     * 🔴 扫描根是 {@code db/flyway}，⛔ <b>不是</b> {@code db/} —— Flyway 只跑前者
+     * （{@code spring.flyway.locations=classpath:db/flyway}，见 {@code application-pg.properties:56}
+     * 与 {@code application-pg-prod.properties:63}）。
+     *
+     * <p>{@code db/} 下另有 <b>442 个死文件</b>（{@code migration/} 256、{@code migration-pg-converted/} 159、
+     * {@code manual-rollback/} 20、{@code migration-pg/} 7），它们<b>永远不会被执行</b>。
+     * 扫整棵树时，死目录里的语句会被当成「迁移里有」——实测污染 3 条部分唯一索引，
+     * 名字在活目录里一次都不出现：{@code uk_report_worker_batch_date} /
+     * {@code uk_report_worker_batch_type_date} / {@code uk_report_worker_type_date_no_batch}。
+     *
+     * <p>⚠️ 这个失效方向是<b>不安全</b>的：它让「迁移里有这条索引」变成恒真的假读数 ——
+     * 本闸的全部价值就是回答这一问。
+     *
+     * <p>✅ 收窄前先量过：本闸跟踪的 22 个索引在活目录里<b>全部</b>建得出来（都是部分索引），
+     * ⇒ 收窄扫描根不会让本闸变红。⛔ 不是「改完看它绿不绿」。
+     */
+    private static final Path DB = Path.of("src/main/resources/db/flyway");
 
     /** 2026-09-07 摘掉实体声明的那 13 个键：索引名 → 它守着哪张表的什么。 */
     private static final Map<String, String> MUST_BE_PARTIAL_IN_MIGRATIONS = new LinkedHashMap<>();

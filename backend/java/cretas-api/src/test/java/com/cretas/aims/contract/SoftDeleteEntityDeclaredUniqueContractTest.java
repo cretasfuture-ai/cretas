@@ -113,22 +113,16 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
             Map.entry("User#cols:username",
                     "prod: ukr43af9ap4edm43mmtq01oddj6 (username) 全量、逐列一致；"
                             + "业务口径「用户名不回收」——UserRepository.countByUsernameIncludingDeleted "
-                            + "也把已删的算进冲突 ⇒ 类别 A，保留"),
+                            + "也把已删的算进冲突 ⇒ 类别 A，保留")
 
-            // 🔴 这一条与上面四个「待裁定」**不是同一问**，⛔ 不要并进那一组：
-            //    那四个 prod 上**有**全量唯一索引，问的是「全量还是部分」（索引形态）；
-            //    employee_code 在 prod 上**一个唯一索引都没有**，问的是「到底要不要唯一」。
-            // ⚠️ 而 2026-09-07 prod 只读普查把这个问题又往前推了一格：
-            //    users 82 行 / 活行 63 / **有 employee_code 的只有 1 行**，其余 81 行为 NULL。
-            //    三个口径（全局全表 / 全局活行 / 按 factory_id）都是「无重复」——
-            //    但 n=1 的「无重复」**不构成任何证据**（阳性对照：同一套写法在 factory_id 上数出 3 个重复值，
-            //    所以「全无重复」不是写法错）。它只排除了「存量重复挡住补索引」。
-            // ⇒ 1/82 这个分布更像**从未被采用/已废弃**，而不是「一个唯一的业务标识」。
-            //    ⛔ 因此不按「声明说唯一所以补索引」默认往一边走 —— 先问它还在不在用。
-            Map.entry("User#column:employee_code",
-                    "prod: users 上只有 pkey 和 ukr43af9ap4edm43mmtq01oddj6(username)，"
-                            + "employee_code 没有任何唯一索引；且 82 行里只有 1 行有值 ⇒ 待裁定，"
-                            + "且问法是「这个字段还在用吗」而不是「该不该唯一」")
+            // 📌 `User#column:employee_code` 曾登记在这里，2026-09-07 **移除** ——
+            //    不是漏登记，是那条声明本身没了。Steve 裁定「员工工号默认自动生成，不需要修改」
+            //    ⇒ 摘掉实体上的 `unique = true`，让声明与 prod 一致（prod 上它没有任何唯一索引）。
+            //    ⛔ 不给 prod 补索引：没人要求这个约束，prod 已这样跑很久，真要唯一是将来一条可逆迁移的事。
+            //    完整理由 + 那个「82 行只有 1 行有值」的留档观察，都写在 User.employeeCode 字段上方。
+            //    ⚠️ `User#cols:username` 仍然登记着（在上面，#710 加的），⛔ 不要在这里重复添加 ——
+            //    `Map.ofEntries` 遇到重复键抛 ExceptionInInitializerError，而它长得像「闸自己坏了」
+            //    （我改这一条时就先后撞了两次重复键：User#cols:username 与 ScaleProtocolConfig#…）。
     ));
 
     @Test
