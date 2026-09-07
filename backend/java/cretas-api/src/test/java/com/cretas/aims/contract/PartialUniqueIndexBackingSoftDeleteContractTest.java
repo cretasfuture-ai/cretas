@@ -173,6 +173,18 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         //    ⚠️ 而且 ProductionReport 的 @SQLDelete 是 0 —— 它仍是 R68 那批**物理删**实体，
         //       本票只补索引，⛔ 不代表这张表已经软删了。
         reg("uk_report_worker_type_date_no_batch", "production_reports 无批次时同工人同类型同日唯一");
+
+        // ── 票 OPS-CONVERSATION-MEMORY-UNIQUENESS-ASSUMED-NOT-ENFORCED-20260907（V20261101_41）──
+        // 这两条的正当性来自「谁依赖它」，⛔ 不来自存量重复（两张表实测都是 0 重复，
+        // 而 labels 分母只有 15 ⇒ 那个 0 几乎不携带信息）。
+        // ⚠️ labels 建的是**单列** (label_code)，⛔ 不是 (factory_id, label_code)：
+        //    应用层 LabelServiceImpl:95 查的就是全局（exists 不带 factory_id），
+        //    带 factory_id 会比应用层松，跨厂那一格仍旧只由那个有竞态的检查把守。
+        reg("uk_labels_label_code", "labels 标签编码全局唯一（与 LabelServiceImpl:95 同口径）");
+        reg("uk_conversation_memory_session_id", "conversation_memory 同 session 一行");
+        // ⚠️ Label 与 ConversationMemory 两个实体都是 @Where(deleted_at IS NULL) + @SQLDelete=0
+        //    ⇒ **读起来完全像软删、而 delete() 是物理删**（R68 里最有欺骗性的那个组合）。
+        //    本票只补索引，⛔ 不代表这两张表已经软删了；它们仍在 R68 待办里。
         // uk_sm_published 不在这里 —— 见 NOT_COVERED_BY_THIS_GATE。
     }
 
@@ -387,7 +399,7 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
                 + " (确认存在、确认本闸判据不适用；⛔ 不是漏登记)");
         assertThat(MUST_BE_PARTIAL_IN_MIGRATIONS)
                 .as("阳性对照：登记表为空 / 被砍半时，下面的逐条核查是恒真的")
-                .hasSizeGreaterThanOrEqualTo(29);
+                .hasSizeGreaterThanOrEqualTo(31);
 
         List<String> missing = new ArrayList<>();
         List<String> notPartial = new ArrayList<>();
