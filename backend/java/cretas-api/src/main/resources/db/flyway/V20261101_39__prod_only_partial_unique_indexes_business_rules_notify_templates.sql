@@ -2,6 +2,28 @@
 -- 把两个「只活在 prod 上」的部分唯一索引补进迁移
 -- ============================================================
 -- 任务: OPS-PROD-ONLY-PARTIAL-INDEXES
+-- ── 🎯 这两个索引的来历（2026-09-07 补，⛔ 它们不是「凭空补上的定义」）──────────
+-- 它们**原本就是由迁移创建的**，只是那两个文件后来被从仓库里删掉了。
+-- prod 的 flyway_schema_history 里还留着记录：
+--
+--     V20260622_99__notify_templates_partial_unique.sql   applied 2026-05-22 08:13:32
+--     V20260822_99__business_rules_partial_unique.sql     applied 2026-05-22 09:35:34
+--     （两者都在 db/flyway / db/migration* / database/ 里**全都找不到**）
+--
+-- ⚠️ 注意版本号在应用日期的**未来**（应用于 05-22，号却是 06-22 / 08-22）
+--    ⇒ 这是**手挑大号的 hotfix**，跑完即从仓库删掉。
+-- ⚠️ 而且那两条各在 history 里出现**两次**（同一 version 两行 success=true）——
+--    Flyway 不会把同一个 version 应用两次 ⇒ 那张台账本身被人手工动过。
+--    见票 OPS-FLYWAY-HISTORY-TABLE-WAS-HAND-EDITED-20260907。
+--
+-- ⇒ 本迁移的性质因此是：**把一条被删掉的迁移重新落进版本控制**，
+--    ⛔ 不是「补一个从没有过的定义」。这两句区别不小：前者说明 prod 上那两个索引
+--    有过设计意图，后者会让人以为它们是某次手工操作的残留。
+--
+-- 📌 另一条来历（产品口径，2026-09-07 Steve 裁定）：**业务编号删掉后可以重新使用**
+--    ⇒ 部分唯一索引（`WHERE deleted_at IS NULL`）是唯一正解，
+--    ⛔ 不是「按 prod 现状照抄」。
+--
 -- 由 PartialUniqueIndexBackingSoftDeleteContractTest 的 PROD_ONLY_NOT_IN_MIGRATIONS 登记,
 -- 那里写着「补它要单独一版迁移 + 存量重复检查, 与本次 P0 是两件事, 已单独登记」—— 就是这一版。
 --
