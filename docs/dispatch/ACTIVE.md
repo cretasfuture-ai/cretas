@@ -47,6 +47,7 @@
 - `CI-WORKTREE-PATH-CAN-BE-A-LIE-20260907` — `queued` — Owner: organizer — 系统告知的 worktree 路径可能是**主仓里的空目录**(无 `.git`、`git worktree list` 里没有) ⇒ 在其中跑 git 会操作**主检出**(别人的分支 + 别人未提交的改动)。本轮 Line C 因此**整轮零 commit**(正确结果)。⇒ 开工前三验: `.git` 存在 / `worktree list` 命中 / 当前分支名。
 - `CI-PYTHON-PG-TESTS-WOKE-UP-AND-FAIL-20260907` — `queued` — Owner: 迁移任务 — 🔴 WSL runner 装上 PG17 后, 9 个此前恒 skip 的 python 用例开始真跑并全红 ⇒ python 闸对每个 PR 都红。阻塞: CI 需配 `SMARTBI_PG_DSN` + 3.11。详见 `archive/2026-09-07-new-tickets-detail.md`
 - `OPS-MUTATION-GUARD-HAS-NO-CALLER-20260907` — `queued` — Owner: Line C — `scripts/mutation-guard.sh` 可执行但全仓 **0 调用点** ⇒ 那条 memory 的「已机制化」前提已变。⛔ 判据不是 `grep -r mutation-guard`。详见 `archive/2026-09-07-new-tickets-detail.md`
+- `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务(`codex/ci-wsl-testenv-followup-20260907`) — 托管池 09-07 13:46 起停止派发。12 个写死 `ubuntu-latest` 里 7 个只能手动 dispatch(无影响); 真缺口 = PR 自动 3 个 + 定时 3 个。🔴 定时那 3 个更危险: 派不出去 = 完全无信号。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
 
