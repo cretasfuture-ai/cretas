@@ -51,7 +51,6 @@ com.cretas.aims.entity.EquipmentAlert
 com.cretas.aims.entity.EquipmentMaintenance
 com.cretas.aims.entity.Factory
 com.cretas.aims.entity.FactoryEquipment
-com.cretas.aims.entity.FactorySchedulingConfig
 com.cretas.aims.entity.FactorySettings
 com.cretas.aims.entity.IndustryTemplatePackage
 com.cretas.aims.entity.InsertSlot
@@ -104,7 +103,6 @@ com.cretas.aims.entity.WorkProcessGovernanceAudit
 com.cretas.aims.entity.WorkerDailyEfficiency
 com.cretas.aims.entity.WorkflowTemplate
 com.cretas.aims.entity.alerts.AlertEvent
-com.cretas.aims.entity.alerts.AlertRule
 com.cretas.aims.entity.auth.PermissionRegistry
 com.cretas.aims.entity.auth.UserMenuPermission
 com.cretas.aims.entity.bom.BomChangeLog
@@ -137,7 +135,6 @@ com.cretas.aims.entity.config.ApprovalWorkflow
 com.cretas.aims.entity.config.BlueprintApplication
 com.cretas.aims.entity.config.BlueprintVersionHistory
 com.cretas.aims.entity.config.ConfigChangeSet
-com.cretas.aims.entity.config.EncodingRule
 com.cretas.aims.entity.config.FactoryBlueprintBinding
 com.cretas.aims.entity.config.FactoryCostSettings
 com.cretas.aims.entity.config.FactoryTypeBlueprint
@@ -164,8 +161,6 @@ com.cretas.aims.entity.factory.FactoryWarehouseDefault
 com.cretas.aims.entity.factory.SaltedWarehouseDeduction
 com.cretas.aims.entity.factory.SemiFinishedStocktake
 com.cretas.aims.entity.factory.SemiFinishedStocktakeItem
-com.cretas.aims.entity.finance.Account
-com.cretas.aims.entity.finance.AccountingPeriod
 com.cretas.aims.entity.finance.ArApPaymentAllocation
 com.cretas.aims.entity.finance.ArApTransaction
 com.cretas.aims.entity.finance.InvoiceRecord
@@ -216,9 +211,7 @@ com.cretas.aims.entity.inventory.FinishedGoodsBatch
 com.cretas.aims.entity.inventory.InternalTransfer
 com.cretas.aims.entity.inventory.InternalTransferItem
 com.cretas.aims.entity.inventory.InventoryLedgerSnapshot
-com.cretas.aims.entity.inventory.PaymentRequest
 com.cretas.aims.entity.inventory.PriceListItem
-com.cretas.aims.entity.inventory.PurchaseException
 com.cretas.aims.entity.inventory.PurchaseInvoice
 com.cretas.aims.entity.inventory.PurchaseInvoiceChaseLog
 com.cretas.aims.entity.inventory.PurchaseOrder
@@ -234,7 +227,6 @@ com.cretas.aims.entity.inventory.SalesOrder
 com.cretas.aims.entity.inventory.SalesOrderShortageReport
 com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement
 com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord
-com.cretas.aims.entity.inventory.TransferDiffRecord
 com.cretas.aims.entity.inventory.WastageReport
 com.cretas.aims.entity.iot.IotDevice
 com.cretas.aims.entity.material.ManufacturerRegistry
@@ -313,8 +305,5 @@ com.cretas.aims.entity.workflow.ApprovalWorkflowInstance
 com.cretas.aims.entity.workflow.OaActionIdempotencyLedger
 com.cretas.aims.entity.workflow.ProductionWorkflowInstance
 com.cretas.aims.entity.workflow.WorkflowTaskPort
-com.cretas.aims.logistics.entity.LogisticsDistanceEdge
 com.cretas.aims.logistics.entity.LogisticsDriver
-com.cretas.aims.logistics.entity.LogisticsOrderBatch
 com.cretas.aims.logistics.entity.LogisticsPlan
-com.cretas.aims.logistics.entity.LogisticsVehicleProfile

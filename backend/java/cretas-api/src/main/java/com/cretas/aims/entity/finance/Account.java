@@ -5,6 +5,7 @@ import com.cretas.aims.entity.enums.AccountBalanceType;
 import com.cretas.aims.entity.enums.AccountCategory;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.util.UUID;
@@ -35,11 +36,6 @@ import java.util.UUID;
 @NoArgsConstructor
 @Entity
 @Table(name = "accounts",
-        uniqueConstraints = {
-                // factory 内 code 唯一. NULL factoryId 表示系统级标准科目, 走单独 unique index
-                // (DB 层 V20260701_02 用 partial unique index 处理 NULL semantics).
-                @UniqueConstraint(name = "uk_account_factory_code", columnNames = {"factory_id", "code"})
-        },
         indexes = {
                 @Index(name = "idx_account_factory", columnList = "factory_id"),
                 @Index(name = "idx_account_code", columnList = "code"),
@@ -47,6 +43,13 @@ import java.util.UUID;
                 @Index(name = "idx_account_category", columnList = "category"),
                 @Index(name = "idx_account_active", columnList = "active")
         })
+// 🔴 软删批 3-B (2026-09-07)：补 @SQLDelete，并**摘掉实体级的唯一声明**。
+// prod 上这张表的业务唯一键是 `… WHERE deleted_at IS NULL` 的**部分**索引（由 现存迁移 创建），
+// 而 JPA 表达不了部分唯一 ⇒ 实体里写 @UniqueConstraint 只会在 H2 建出**全量**键，比 prod 严。
+// 补 @SQLDelete 之后「软删一行再建同键」在 prod 合法、在 H2 撞键，症状是测试红而线上是对的
+// （#701→#717 就是这么炸出 4 个 error 的）⇒ 唯一键以 prod 的部分索引为准。
+// ⚠️ 代价：H2 里这张表没有唯一性保护；行为由 opt-in 的真 PG 契约测试守（见 java-gate-pr 那条车道）。
+@SQLDelete(sql = "UPDATE accounts SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class Account extends BaseEntity {
 

@@ -93,7 +93,21 @@ public class User extends BaseEntity {
     private BigDecimal ccrRate;
 
     // 员工扩展字段 (调度员模块)
-    @Column(name = "employee_code", length = 10, unique = true)
+    //
+    // 🔴 2026-09-07 摘掉了 `unique = true`（Steve 裁定：「员工工号默认自动生成，不需要修改」）。
+    //    prod 上 users 表只有 pkey 和 ukr43af9ap4edm43mmtq01oddj6(username)，
+    //    **employee_code 没有任何唯一索引** ⇒ 实体声明唯一而 prod 没有，是声明与 prod 的漂移：
+    //    它只在 H2（ddl-auto=create）里建出一个 prod 不存在的约束，让测试库比生产严。
+    //    ⇒ 处置是让声明与 prod 一致，⛔ 不是给 prod 补索引（没人要求这个约束，且 prod 已这样跑很久）。
+    //
+    // ⚠️ 留档一个**对不上**的观察（Steve 说不用管，⛔ 不查不修不开票，但下一个人应当知道这是
+    //    已知且已裁定的，不是新发现）：「工号自动生成」与 2026-09-07 的 prod 只读读数对不上 ——
+    //      users 总行 82 / 活行 63 / **有 employee_code 的只有 1 行**，其余 81 行为 NULL
+    //      （三个口径：全局全表 / 全局活行 / 按 factory_id，均无重复；
+    //        阳性对照：同一套写法在 factory_id 上数出 3 个重复值，所以「无重复」不是写法错）
+    //    两种解释：生成逻辑是后加的（老行没有），或者生成没在跑。
+    //    ⚠️ n=1 的「无重复」不构成「业务上唯一」的任何证据 —— 它只排除了「存量重复挡住补索引」。
+    @Column(name = "employee_code", length = 10)
     private String employeeCode;  // 工号 001-999
 
     @Column(name = "hire_type", length = 20)

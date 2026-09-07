@@ -54,13 +54,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SoftDeleteEntityDeclaredUniqueContractTest {
 
     private static final Path MAIN = Path.of("src/main/java/com/cretas/aims");
-    private static final Pattern SQL_DELETE = Pattern.compile("^\\s*@SQLDelete\\s*\\(", Pattern.MULTILINE);
+    // ⚠️ 必须认**全限定**写法 `@org.hibernate.annotations.SQLDelete(...)`。
+    //    2026-09-07 批 3-B：我给这道闸做变异（临时给一个实体补 @SQLDelete）时用了全限定写法，
+    //    **闸完全没反应** —— 不是变异没落盘（已核），是这个锚点看不见它。
+    //    ⇒ 同一个盲区今天第三次：#693 的 @Version 锚点 / 我的取数脚本 / 这里。
+    //    ⛔ 判据改了要去找**用旧判据的所有地方**，不能只修被指出来的那一处。
+    private static final Pattern SQL_DELETE =
+            Pattern.compile("^\\s*@(?:[\\w.]*\\.)?SQLDelete\\s*\\(", Pattern.MULTILINE);
     private static final Pattern TABLE_ANNO = Pattern.compile("^\\s*@Table\\s*\\(", Pattern.MULTILINE);
     private static final Pattern UNIQUE_CONSTRAINT = Pattern.compile("@UniqueConstraint\\s*\\(");
     private static final Pattern COLUMN_ANNO = Pattern.compile("@Column\\s*\\(");
     private static final Pattern NAME_ATTR = Pattern.compile("name\\s*=\\s*\"(\\w+)\"");
     private static final Pattern COLUMN_NAMES_ATTR = Pattern.compile("columnNames\\s*=\\s*\\{([^}]*)}");
     private static final Pattern UNIQUE_TRUE = Pattern.compile("\\bunique\\s*=\\s*true\\b");
+    /** 第三种写法：{@code @Table(indexes = { @Index(..., unique = true) })} —— 2026-09-07 前本闸完全看不见。 */
+    private static final Pattern INDEX_ANNO = Pattern.compile("@Index\\s*\\(");
+    private static final Pattern COLUMN_LIST_ATTR = Pattern.compile("columnList\\s*=\\s*\"([^\"]*)\"");
+    /** 第四种写法：{@code @Column(unique = true)} 不写 name ⇒ 列名由紧随其后的字段名推导。 */
+    private static final Pattern FIELD_AFTER_COLUMN =
+            Pattern.compile("private\\s+[\\w<>.\\[\\]]+\\s+(\\w+)\\s*[;=]");
 
     /**
      * 已登记的「软删实体 + 它自己声明的唯一约束」。key 是 {@code 实体#标签}，value 是<b>为什么允许它留着</b>。
@@ -113,22 +125,16 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
             Map.entry("User#cols:username",
                     "prod: ukr43af9ap4edm43mmtq01oddj6 (username) 全量、逐列一致；"
                             + "业务口径「用户名不回收」——UserRepository.countByUsernameIncludingDeleted "
-                            + "也把已删的算进冲突 ⇒ 类别 A，保留"),
+                            + "也把已删的算进冲突 ⇒ 类别 A，保留")
 
-            // 🔴 这一条与上面四个「待裁定」**不是同一问**，⛔ 不要并进那一组：
-            //    那四个 prod 上**有**全量唯一索引，问的是「全量还是部分」（索引形态）；
-            //    employee_code 在 prod 上**一个唯一索引都没有**，问的是「到底要不要唯一」。
-            // ⚠️ 而 2026-09-07 prod 只读普查把这个问题又往前推了一格：
-            //    users 82 行 / 活行 63 / **有 employee_code 的只有 1 行**，其余 81 行为 NULL。
-            //    三个口径（全局全表 / 全局活行 / 按 factory_id）都是「无重复」——
-            //    但 n=1 的「无重复」**不构成任何证据**（阳性对照：同一套写法在 factory_id 上数出 3 个重复值，
-            //    所以「全无重复」不是写法错）。它只排除了「存量重复挡住补索引」。
-            // ⇒ 1/82 这个分布更像**从未被采用/已废弃**，而不是「一个唯一的业务标识」。
-            //    ⛔ 因此不按「声明说唯一所以补索引」默认往一边走 —— 先问它还在不在用。
-            Map.entry("User#column:employee_code",
-                    "prod: users 上只有 pkey 和 ukr43af9ap4edm43mmtq01oddj6(username)，"
-                            + "employee_code 没有任何唯一索引；且 82 行里只有 1 行有值 ⇒ 待裁定，"
-                            + "且问法是「这个字段还在用吗」而不是「该不该唯一」")
+            // 📌 `User#column:employee_code` 曾登记在这里，2026-09-07 **移除** ——
+            //    不是漏登记，是那条声明本身没了。Steve 裁定「员工工号默认自动生成，不需要修改」
+            //    ⇒ 摘掉实体上的 `unique = true`，让声明与 prod 一致（prod 上它没有任何唯一索引）。
+            //    ⛔ 不给 prod 补索引：没人要求这个约束，prod 已这样跑很久，真要唯一是将来一条可逆迁移的事。
+            //    完整理由 + 那个「82 行只有 1 行有值」的留档观察，都写在 User.employeeCode 字段上方。
+            //    ⚠️ `User#cols:username` 仍然登记着（在上面，#710 加的），⛔ 不要在这里重复添加 ——
+            //    `Map.ofEntries` 遇到重复键抛 ExceptionInInitializerError，而它长得像「闸自己坏了」
+            //    （我改这一条时就先后撞了两次重复键：User#cols:username 与 ScaleProtocolConfig#…）。
     ));
 
     @Test
@@ -181,13 +187,41 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
                     out.add(entity + "#cols:" + (cn.find() ? cn.group(1).replaceAll("[\\s\"]", "") : "?"));
                 }
             }
+
+            // 🔴 第三种写法：`@Table(indexes = { @Index(..., unique = true) })`。
+            //    2026-09-07（批 3-B）实测：全仓 **10 个实体**这么写，本闸此前**完全看不见**它们。
+            //    ⚠️ 今天它们一个都没软删 ⇒ 闸没有因此漏判 —— 但那正是这个盲区最坏的形状：
+            //      **它的盲区与它的作用域今天恰好不相交；补 @SQLDelete 的那一刻，两者立刻相交。**
+            //      ⇒ 这道闸会在它开始变得有用的那一刻同时变瞎，而那次改动的作者会看到一片绿。
+            //    ⛔ 因此不按「今天 0 漏判」定优先级：期望损失全部集中在未来某次改动上。
+            Matcher idx = INDEX_ANNO.matcher(table);
+            while (idx.find()) {
+                String body = balanced(table, idx.end() - 1);
+                if (!UNIQUE_TRUE.matcher(body).find()) continue;
+                Matcher nm = NAME_ATTR.matcher(body);
+                Matcher cl = COLUMN_LIST_ATTR.matcher(body);
+                out.add(entity + "#index:" + (nm.find() ? nm.group(1)
+                        : "cols:" + (cl.find() ? cl.group(1).replaceAll("[\\s\"]", "") : "?")));
+            }
         }
         Matcher col = COLUMN_ANNO.matcher(src);
         while (col.find()) {
             String body = balanced(src, col.end() - 1);
             if (!UNIQUE_TRUE.matcher(body).find()) continue;
             Matcher nm = NAME_ATTR.matcher(body);
-            out.add(entity + "#column:" + (nm.find() ? nm.group(1) : "?"));
+            if (nm.find()) {
+                out.add(entity + "#column:" + nm.group(1));
+                continue;
+            }
+            // 🔴 第四种写法：`@Column(unique = true)` **不写 name** ⇒ 列名由字段名推导（JPA 默认）。
+            //    此前这里输出 `#column:?`，那是个**看起来像读数的占位符** —— PlatformAdmin 就因此
+            //    被我的普查误分进「prod 上找不到对应索引」那一桶，而它其实与 prod 的 idx_username 逐列一致。
+            //    ⇒ 从 @Column 之后最近的字段声明取名字，转 snake_case；⛔ 再取不到才留 `?`。
+            String tail = src.substring(Math.min(col.end() + body.length(), src.length()));
+            Matcher fd = FIELD_AFTER_COLUMN.matcher(tail);
+            out.add(entity + "#column:" + (fd.find()
+                    ? fd.group(1).replaceAll("(?<!^)(?=[A-Z])", "_").toLowerCase()
+                    : "?"));
         }
         return out;
     }

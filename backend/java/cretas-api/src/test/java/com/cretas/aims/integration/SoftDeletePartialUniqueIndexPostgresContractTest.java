@@ -138,6 +138,29 @@ class SoftDeletePartialUniqueIndexPostgresContractTest {
             st.execute("INSERT INTO production_plans VALUES ('p4','F006',1,NULL,NULL)");
             st.execute("INSERT INTO production_plans VALUES ('p5','F006',1,NULL,NULL)");
             assertCounts(st, "production_plans", "factory_id='F006'", 4, 3);
+
+            // ── ④ logistics_order_batches —— 接软删批 3-B 里那条被删掉的 H2 断言 ────────────────
+            //    原断言: LogisticsOrderBatchRepositoryTest.duplicateIdempotencyKeyRejected
+            //    「同 (factory_id, business_date, source_fingerprint) 再插一条必须被 DB 拒」。
+            //    批 3-B 摘掉实体级唯一声明之后 H2 建不出那个键 ⇒ 断言无法再成立, 规则本身没变。
+            st.execute("""
+                    CREATE TABLE logistics_order_batches (
+                        id VARCHAR(191) PRIMARY KEY,
+                        factory_id VARCHAR(50) NOT NULL,
+                        business_date DATE NOT NULL,
+                        source_fingerprint VARCHAR(191),
+                        deleted_at TIMESTAMP
+                    )
+                    """);
+            st.execute(partialIndexDdl("uq_lob_idempotent"));
+            st.execute("INSERT INTO logistics_order_batches VALUES ('b1','F1',DATE '2026-07-11','fp-dup',NULL)");
+            assertEquals(UNIQUE_VIOLATION, assertThrows(SQLException.class, () ->
+                    st.execute("INSERT INTO logistics_order_batches VALUES ('b2','F1',DATE '2026-07-11','fp-dup',NULL)"),
+                    "被删那条 H2 断言要的就是这个：同一幂等键再导一批必须被拒").getSQLState(),
+                    "被删那条 H2 断言要的就是这个：同一幂等键再导一批必须被拒");
+            st.execute("UPDATE logistics_order_batches SET deleted_at = CURRENT_TIMESTAMP WHERE id='b1'");
+            st.execute("INSERT INTO logistics_order_batches VALUES ('b3','F1',DATE '2026-07-11','fp-dup',NULL)");
+            assertCounts(st, "logistics_order_batches", "factory_id='F1'", 2, 1);
         } finally {
             try (Connection connection = DriverManager.getConnection(url, user, password);
                  Statement st = connection.createStatement()) {

@@ -8,7 +8,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -26,10 +25,12 @@ import static org.junit.jupiter.api.Assertions.*;
  * <ol>
  *   <li>save + read back — @PrePersist UUID id + audit cols + enum default PREVIEWED</li>
  *   <li>idempotency lookup — findByFactoryIdAndBusinessDateAndSourceFingerprintAndDeletedAtIsNull</li>
- *   <li>DB unique index {@code uq_lob_idempotent} rejects a true duplicate insert (same
- *       factory + business_date + source_fingerprint) — spec §2 决策 7 (幂等键, 禁静默双写)</li>
  *   <li>findByFactoryIdOrderByBusinessDateDesc — factory-scoped, newest first</li>
  * </ol>
+ *
+ * <p>🔴 <b>2026-09-07（软删批 3-B）删掉了原第 3 条</b>（DB unique index {@code uq_lob_idempotent}
+ * rejects a true duplicate insert — spec §2 决策 7 幂等键）。规则没变，是<b>这个测试库表达不了它</b>；
+ * 理由与接替它的那两道闸见下方 {@code duplicateIdempotencyKeyRejected} 原位置的注释。
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -78,16 +79,22 @@ class LogisticsOrderBatchRepositoryTest {
                 "unknown fingerprint returns empty — no accidental match");
     }
 
-    @Test
-    @DisplayName("DB unique index uq_lob_idempotent rejects true duplicate (factory+date+fingerprint)")
-    void duplicateIdempotencyKeyRejected() {
-        LocalDate date = LocalDate.of(2026, 7, 11);
-        repo.saveAndFlush(batch(F1, date, "BATCH-DUP-1", "fp-dup"));
-
-        LogisticsOrderBatch dup = batch(F1, date, "BATCH-DUP-2", "fp-dup"); // same factory+date+fingerprint
-        assertThrows(DataIntegrityViolationException.class, () -> repo.saveAndFlush(dup),
-                "second insert with identical (factory_id, business_date, source_fingerprint) must violate uq_lob_idempotent");
-    }
+    // 🔴 2026-09-07（软删批 3-B）删掉了 duplicateIdempotencyKeyRejected
+    //    （「同 (factory_id, business_date, source_fingerprint) 再插一条必须被 DB 拒」）。
+    //    删的原因不是那条规则不成立了，是**这个测试库表达不了它**：
+    //
+    //    prod 上 uq_lob_idempotent 是 `… WHERE deleted_at IS NULL` 的**部分**唯一索引，而 H2 的 schema
+    //    从实体注解生成、JPA 表达不了部分唯一 ⇒ 实体里那句 @UniqueConstraint 只能建出**全量**键，比 prod 严。
+    //    本实体补 @SQLDelete 之后「软删一批再按同一指纹重导」在 prod 合法而在 H2 撞键
+    //    ⇒ 实体侧声明已摘掉，H2 里这张表不再有唯一性保护。
+    //
+    //    ⚠️ 补不回来：H2 2.2.224 上 CREATE UNIQUE INDEX … WHERE … 直接 JdbcSQLSyntaxErrorException 42000。
+    //    ⇒ 机制由 com.cretas.aims.contract.PartialUniqueIndexBackingSoftDeleteContractTest 在**迁移源码**层面守
+    //      （uq_lob_idempotent 被删掉或改回全量就报红）；
+    //      行为由 com.cretas.aims.integration.SoftDeletePartialUniqueIndexPostgresContractTest 在**真 PostgreSQL**
+    //      上守（活行互斥 → 软删后同键可重导 → 总/活行必然读数），那道闸已接进 java-gate-pr 的
+    //      postgres-reversal-concurrency 车道、CI 里实际执行（Skipped: 0）。
+    //    ⛔ 不要在这里加回一个 H2 版的断言——它只会再次让测试比生产严。
 
     @Test
     @DisplayName("findByFactoryIdOrderByBusinessDateDesc — factory scoped, newest first")
