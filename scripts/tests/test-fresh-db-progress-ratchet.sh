@@ -27,6 +27,11 @@
 #        ⇒ 对固定值做 pass/fail 会红在每一次正常的 schema 演进上)
 #      · migrations_above_baseline = **⛔ 不设界**(每次重采基线掉回 1)
 #      ▎**闸的类型不是闸的属性, 是每个读数各自的属性。**
+#   ⚠️ 本文件里凡是 grep **散文**的地方, 一律只钉**承载论点的短片段**, ⛔ 不钉整句 ——
+#      钉整句会在「把措辞改好」时变红, 于是要么好的改写被劝退, 要么有人把字串同步过来,
+#      而那时这道闸**退化成一面镜子**。
+#      📌 2026-09-07 普查过一遍: 钉读数/代码结构的(如 `success = false`、`merged_ok=yes`、
+#      `if [ -z "$fail_file" ]`)**保持原样** —— 它们不是散文, 改动它们本来就是行为改动。
 #   ⑤ 日志里「有失败点」本身**不直接红** —— ⚠️ 但理由已经不是「那是常态」了
 #      (2026-09-07 bootstrap 之后这条链跑得完)。现在的理由是**分工**:
 #      失败与否由 flyway_schema_history 的 failed=0 判, 日志那条负责说出**是哪一条**。
@@ -44,7 +49,8 @@ bash -n "$GATE" || fail "$GATE 语法错误"
 
 # ---- 1. --progress 必须存在, 且 ⛔ 不能把 Repository 闸也一起跑掉而不说 ----
 grep -q -- '--progress) PROGRESS=1' "$GATE" || fail "1: 没有 --progress 开关"
-grep -q 'progress mode: skipping the Repository query gate' "$GATE" \
+# 片段: 省掉一道闸必须可见
+grep -q 'skipping the Repository query gate' "$GATE" \
     || fail "1: 跳过 Repository 闸时没有把这件事打出来 —— 省掉一道闸必须是**可见**的"
 ok "--progress 存在, 且跳过 Repository 闸时会明说"
 
@@ -62,7 +68,8 @@ grep -q '这趟没跑到 Flyway' "$GATE" \
 ok "失败点是必然存在的读数, 缺席时判「这趟没跑到」"
 
 # ---- 4. 「读不出数」与「倒退」措辞必须不同 ----
-grep -q '本趟读数作废, ⛔ 不当成倒退' "$GATE" \
+# 片段:「没量到」≠「倒退」这个区分
+grep -q '不当成倒退' "$GATE" \
     || fail "4: 读不出数时没有与「倒退」区分开 —— 一个连不上库的跑批会被读成「没倒退」"
 grep -q '形状只许涨' "$GATE" || fail "4: 没有「只许涨」的措辞"
 ok "「没量到」与「倒退」措辞分开"
@@ -82,7 +89,8 @@ echo "READING: GATE_5_SCOPE=guard-present-only (⛔ 检测不到「有人新加�
 ok "失败点之后那个 fail 以「失败点缺席」为条件(⚠️ 只守这一条, 边界见上面读数)"
 
 # ---- 6. 基线文件: 存在则必须三行齐全; 不存在则脚本要能自己写第一份 ----
-grep -q '下界文件不存在, 写入首个下界' "$GATE" || fail "6: 没有「首次写下界」的路径"
+# 片段: 首次写入这条路径存在
+grep -q '写入首个下界' "$GATE" || fail "6: 没有「首次写下界」的路径"
 if [ -f "$FLOOR" ]; then
     for k in tables indexes; do
         grep -qE "^$k=[0-9]+$" "$FLOOR" \
@@ -105,7 +113,8 @@ fi
 # 基线 bootstrap 落地后「跑完」是常态 ⇒ 一条 success=false 必须当场红,
 # ⚠️ 与「形状下界」是两件事: 形状可以因为新迁移而涨, 失败条数任何时候都该是 0。
 grep -q 'success = false' "$GATE" || fail "6c: 没有数失败迁移条数"
-grep -q '⛔ 直接红, 这不是「进度」问题' "$GATE" \
+# 片段: 失败迁移 ⛔ 不走棘轮
+grep -q '不是「进度」问题' "$GATE" \
     || fail "6c: 失败迁移没有被判成 pass/fail —— 它 ⛔ 不该走棘轮那条路"
 ok "失败迁移条数是 pass/fail(⛔ 不是棘轮)"
 
