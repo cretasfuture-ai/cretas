@@ -9,6 +9,10 @@ description: >
 
 Deploy only an exact, reviewed commit. Read `.claude/skills/server-operations/SKILL.md`, `.claude/rules/worktree-and-main-only-deploy.md`, and `.claude/rules/concurrent-edit-safety.md` before changing deployment scripts or production state.
 
+## YOLO compute placement (2026-09-07)
+
+For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on the local Windows/RTX host. Do not use Mac mini, `canada-mini` or `codex-mac`, even as a fallback. Use `scripts/windows/test-yolo-local.ps1` for target tests. Historical Mac test-environment references do not authorize new work there. Production collection and gated model upload retain their existing controls.
+
 ## Scope And Environment
 
 ⛔ **The test environment was decommissioned on 2026-07-13** (Steve's decision; `cretas-backend-test`

@@ -77,6 +77,28 @@ def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def assert_local_execution(config: dict[str, Any]) -> None:
+    """Reject remote/Mac compute before state creation or any external command."""
+    execution = config.get("execution", {})
+    if not isinstance(execution, dict):
+        raise ValueError("execution must be a local execution policy object")
+    if sys.platform != "win32":
+        raise ValueError("VisionLab compute is local Windows only; Mac/remote fallback is disabled")
+    if execution.get("mode", "local") != "local" or execution.get("remote_enabled", False) is not False:
+        raise ValueError("VisionLab remote execution is disabled")
+    if execution.get("host") not in (None, "", "local", "localhost"):
+        raise ValueError("VisionLab execution.host must be local")
+    expected = execution.get("computer_name")
+    if expected and str(expected).casefold() != os.environ.get("COMPUTERNAME", "").casefold():
+        raise ValueError("VisionLab config belongs to a different local computer")
+    if str(config.get("training", {}).get("device", 0)).lower().startswith("mps"):
+        raise ValueError("MPS/Mac training is disabled; use the local CUDA device or CPU")
+    for section in ("source", "deployment"):
+        host = str(config.get(section, {}).get("ssh_host", "")).lower().split("@")[-1]
+        if host in {"canada-mini", "codex-mac", "mac-mini-01", "mac-mini-01.local", "100.85.234.108"}:
+            raise ValueError("Mac endpoints are disabled for VisionLab")
+
+
 def load_config(path: Path) -> dict[str, Any]:
     config = load_json(path)
     if config.get("version") != VERSION:
@@ -1554,6 +1576,7 @@ def command_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config.resolve())
+    assert_local_execution(config)
     if args.command == "cycle":
         config = config_with_queue_roots(config, args.queue_root)
     root = Path(config["runtime_root"])

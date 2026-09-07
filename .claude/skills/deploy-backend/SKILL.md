@@ -7,6 +7,10 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 
 只从 clean 且 `HEAD == origin/main` 的树部署 prod（`.claude/rules/worktree-and-main-only-deploy.md`）。常规部署不问「要不要部」：验证绿就部（Steve 2026-08-21 裁定）；判据一条不省。
 
+## YOLO compute placement (2026-09-07)
+
+For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on the local Windows/RTX host. Do not use Mac mini, `canada-mini` or `codex-mac`, even as a fallback. Use `scripts/windows/test-yolo-local.ps1` for target tests. Historical Mac test-environment references do not authorize new work there. Production collection and gated model upload retain their existing controls.
+
 ## 统一发布入口（Java / Web 常规发布）
 
 ```bash
