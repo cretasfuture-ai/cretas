@@ -1,3 +1,0 @@
-migrations_applied=266
-tables=158
-indexes=538

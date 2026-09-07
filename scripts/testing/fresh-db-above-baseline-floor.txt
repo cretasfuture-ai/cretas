@@ -1,0 +1,7 @@
+# 口径: 灌 ops/db-baseline/ 那份 prod schema 基线 → flyway baseline → 只跑基线**之上**的迁移,
+#       跑完之后这个库的形状**下界**。⛔ 与 2026-09-07 之前那份 fresh-db-progress-baseline.txt
+#       不是同一件事(那份量的是「从史前史开始能走多远」) —— 见 fresh-db-progress-baseline.RENAMED.md。
+# ⚠️ 这里**刻意没有 migrations_applied**: 每次重新采集基线, 那个数都会掉回 1
+#    (基线往前挪 ⇒ 上面的迁移被吸收进去) ⇒ 给它设下界等于每次刷新基线都红一次。
+tables=502
+indexes=2044

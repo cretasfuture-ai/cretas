@@ -29,7 +29,8 @@ on:
       - 'backend/java/cretas-api/src/main/resources/db/**'
       # 仪器: 跑批脚本与基线
       - 'scripts/testing/fresh-db-gate.sh'
-      - 'scripts/testing/fresh-db-progress-baseline.txt'
+      - 'scripts/testing/fresh-db-above-baseline-floor.txt'
+      - 'ops/db-baseline/**'
       - 'docker-compose.fresh-db.yml'
       # 自指: 改本文件的 PR 也要跑一次(否则触发面改坏了没人知道)
       - '.github/workflows/fresh-db-progress.yml'
@@ -80,14 +81,31 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -s /tmp/fresh-db-progress.log ]; then
-            echo "::error title=Fresh DB 进度棘轮没量到::日志文件为空 —— 跑批根本没开始"
+            echo "::error title=Fresh DB 形状闸没量到::日志文件为空 —— 跑批根本没开始"
             exit 1
           fi
-          if ! grep -q 'READING: FRESH_DB_PROGRESS' /tmp/fresh-db-progress.log; then
-            echo "::error title=Fresh DB 进度棘轮没量到::日志里没有 FRESH_DB_PROGRESS 读数。"
+          # 🔴 两种成因必须**分开报** —— 它们此前给的是同一条错误信息, 而那条信息
+          #    指向错的方向: 2026-09-07 读数改名(FRESH_DB_PROGRESS→FRESH_DB_SHAPE)之后
+          #    这一步报的是「跑批没产出读数」, 而跑批其实完全成功。
+          #    ▎**同一个红, 成因不同, 而只看红绿分不出。**
+          n_any=$(grep -c 'READING: FRESH_DB_' /tmp/fresh-db-progress.log || true)
+          if [ "$n_any" -eq 0 ]; then
+            echo "::error title=Fresh DB 形状闸没量到::日志里**一条** READING: FRESH_DB_* 都没有。"
+            echo "::error::⇒ 成因是**跑批没产出读数**(没跑到 / 起不来 / 提前挂掉), ⛔ 不是改名。"
             echo "::error::一趟产不出读数的跑批, 在调用方看来可以和成功同形 —— 所以这里硬性要求它出现。"
             tail -40 /tmp/fresh-db-progress.log
             exit 1
           fi
+          if ! grep -q 'READING: FRESH_DB_SHAPE ' /tmp/fresh-db-progress.log; then
+            echo "::error title=Fresh DB 读数改名了?::有 $n_any 条 READING: FRESH_DB_*, 但**没有** FRESH_DB_SHAPE。"
+            echo "::error::⇒ 跑批**是在产出读数的** ⇒ 成因几乎一定是**读数改了名而这一步没跟**。"
+            echo "::error::⇒ 请把本步与下面展示行里的 key 同步过来, ⛔ 不要去查「跑批为什么没起来」。"
+            echo "::error::⚠️ 同类还要找: scripts/tests/test-fresh-db-progress-ratchet.sh 的 6e、文档、其它脚本。"
+            grep -o 'READING: FRESH_DB_[A-Z_]*' /tmp/fresh-db-progress.log | sort -u
+            exit 1
+          fi
           echo "--- 本趟读数 ---"
-          grep -E 'READING: FRESH_DB_(PROGRESS|FAILURE|BASELINE)' /tmp/fresh-db-progress.log
+          # ⚠️ 这里**写全名**, ⛔ 不用 FRESH_DB_(A|B) 这种嵌套交替 ——
+          #    嵌套之后「消费方要哪些读数」就不是机械可解析的了,
+          #    而下面那道 6e 闸(核对消费方的名字闸是否真会产出)正是靠解析它。
+          grep -E 'READING: (FRESH_DB_SHAPE|FRESH_DB_SHAPE_FLOOR|FRESH_DB_FAILURE|FRESH_DB_ENV|BASELINE_BOOTSTRAP|BASELINE_LOAD_SHAPE) ' /tmp/fresh-db-progress.log

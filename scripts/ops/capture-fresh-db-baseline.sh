@@ -206,8 +206,17 @@ done
 [ "$ready" -eq 1 ] || fail "验证容器 40 次探测仍未就绪 —— **没量到**"
 docker exec "$VERIFY_CONTAINER" psql -U cretas_user -d cretas_db -Atc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null 2>&1
 docker cp "$WORK/d1.sql" "$VERIFY_CONTAINER:/baseline.sql" >/dev/null || fail "拷不进容器"
-docker exec "$VERIFY_CONTAINER" bash -c 'psql -U cretas_user -d cretas_db -f /baseline.sql >/dev/null 2>/tmp/e.log; grep -c "^ERROR:" /tmp/e.log' > "$WORK/errs" 2>/dev/null || true
+# 🔴 原本是 `grep -c "^ERROR:"` —— **恒 0**: psql 的错误行首是 `psql:<file>:<line>:`,
+#    `^ERROR:` 永远匹配不到。⇒ 那个 errors= 从上线起就是个恒定的安心值。
+docker exec "$VERIFY_CONTAINER" bash -c \
+    'psql -U cretas_user -d cretas_db -f /baseline.sql >/dev/null 2>/tmp/e.log; true' >/dev/null 2>&1 || true
+docker exec "$VERIFY_CONTAINER" bash -c 'grep -c "ERROR:" /tmp/e.log' > "$WORK/errs" 2>/dev/null || true
+docker exec "$VERIFY_CONTAINER" bash -c 'grep -c "ERROR:  schema \"public\" already exists" /tmp/e.log' > "$WORK/benign" 2>/dev/null || true
 N_ERR=$(tr -d '\r\n' < "$WORK/errs"); [ -n "$N_ERR" ] || N_ERR=unknown
+N_BENIGN=$(tr -d '\r\n' < "$WORK/benign"); [ -n "$N_BENIGN" ] || N_BENIGN=0
+# 已知良性: dump 第 38 行的 `CREATE SCHEMA public;` 在空库上必然撞车。
+# ⚠️ ⛔ 不许用「先 DROP SCHEMA public」去消它 —— 实测那会 CASCADE 掉 vector 扩展(56 错/少 4 表)。
+case "$N_ERR" in ''|*[!0-9]*) N_UNEXPECTED=unknown ;; *) N_UNEXPECTED=$((N_ERR - N_BENIGN)) ;; esac
 V_SHAPE=$(docker exec "$VERIFY_CONTAINER" psql -U cretas_user -d cretas_db -Atc "
      SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE')
        ||'|'||(SELECT count(*) FROM pg_indexes WHERE schemaname='public')
@@ -215,7 +224,7 @@ V_SHAPE=$(docker exec "$VERIFY_CONTAINER" psql -U cretas_user -d cretas_db -Atc 
        ||'|'||(SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace AND n.nspname='public' WHERE c.contype='f')
        ||'|'||(SELECT count(*) FROM information_schema.columns WHERE table_schema='public')" 2>/dev/null | tr -d '\r')
 IFS='|' read -r V_TAB V_IDX V_UQ V_FK V_COL <<< "$V_SHAPE"
-echo "READING: REPLAYED_SHAPE errors=$N_ERR tables=$V_TAB indexes=$V_IDX unique=$V_UQ fk=$V_FK columns=$V_COL"
+echo "READING: REPLAYED_SHAPE errors_total=$N_ERR benign=$N_BENIGN unexpected=$N_UNEXPECTED tables=$V_TAB indexes=$V_IDX unique=$V_UQ fk=$V_FK columns=$V_COL"
 mismatch=""
 [ "$V_TAB" = "$P_TAB" ] || mismatch="$mismatch tables($V_TAB≠$P_TAB)"
 [ "$V_IDX" = "$P_IDX" ] || mismatch="$mismatch indexes($V_IDX≠$P_IDX)"
@@ -223,8 +232,8 @@ mismatch=""
 [ "$V_FK"  = "$P_FK"  ] || mismatch="$mismatch fk($V_FK≠$P_FK)"
 [ "$V_COL" = "$P_COL" ] || mismatch="$mismatch columns($V_COL≠$P_COL)"
 [ -z "$mismatch" ] \
-    || fail "判据 ②: 重放出的形状与 prod 不同 ——$mismatch。⛔ 拒绝落盘（注意: errors=$N_ERR, 「没报错」不是判据）"
-log "判据 ② 通过 (五维逐位相同; errors=$N_ERR)"
+    || fail "判据 ②: 重放出的形状与 prod 不同 ——$mismatch。⛔ 拒绝落盘（注意: 非预期错误 $N_UNEXPECTED 条, 而「没报错」本来就不是判据）"
+log "判据 ② 通过 (五维逐位相同; 错误总 $N_ERR / 良性 $N_BENIGN / 非预期 $N_UNEXPECTED)"
 [ "$KEEP" -eq 1 ] || docker rm -f "$VERIFY_CONTAINER" >/dev/null 2>&1 || true
 
 # ── 判据 ③：带出处 + 落盘 ──────────────────────────────────────────────────
