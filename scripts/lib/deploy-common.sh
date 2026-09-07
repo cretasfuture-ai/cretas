@@ -421,6 +421,18 @@ deploy_lock_holders() {
 ACQUIRED_DEPLOY_LOCK_FILE=""
 # 与之配对: 这把锁是怎么拿到的 —— flock | pidfile。释放动作按它分叉。
 ACQUIRED_DEPLOY_LOCK_MODE=""
+# 获取那一刻锁文件的 inode。释放时拿它比一次, 分得出「路径还是我们那个文件」与
+# 「路径被换掉了」—— 见 release_deploy_lock 里为什么不能无条件按路径截断。
+ACQUIRED_DEPLOY_LOCK_INODE=""
+
+# deploy_file_inode <path>
+# 可移植取 inode: GNU coreutils 是 `stat -c %i`, BSD/macOS 是 `stat -f %i`。
+# 取不到返回空串 —— 调用方按「没量到」处理, ⛔ 不要把空串当成「相同」。
+deploy_file_inode() {
+    local p="${1:-}"
+    [ -n "$p" ] || return 0
+    stat -c %i "$p" 2>/dev/null || stat -f %i "$p" 2>/dev/null || true
+}
 
 # release_deploy_lock
 # 调用方 EXIT trap 里的清锁兜底。三个调用方 (release-cretas.sh / deploy-backend.sh /
@@ -443,18 +455,36 @@ release_deploy_lock() {
             # 清掉登记的 PID: 正常释放不是 stale, 下一次获取不该报 reclaiming, 拒绝措辞也要
             # 分得出「已正常释放」与「持有者已死」。
             #
-            # 🔴 2026-09-07: 必须经 /dev/fd/200 截断【我们自己的 inode】。
-            #  ⛔ 不用 `: >"$lock_file"`(按路径): acquire 与 release 之间那个路径可能已经被换掉
-            #     (灰度期还在跑旧写法的对端 / 有人手工 rm 又重建), 那样截掉的是**别人的 inode**,
-            #     把他的 PID 戳抹了。互斥本身不受影响(flock 挂在 fd 200 的 OFD 上), 坏的是**诊断**:
-            #     下一次拒绝会说「登记持有者已正常释放, 但锁仍被按着」, 而其实有个活着的持有者
-            #     就坐在那 —— 正是这套改动要消灭的那类读数。
-            #  ⛔ 也不能写 `: >&200`: 那只是把 fd 200 复制给 stdout, **不带 O_TRUNC, 根本不截断**
-            #     (2026-09-07 WSL 实测: 文件 8 字节, 执行前后都是 8)。
-            #  ✅ `: >/dev/fd/200` 重新打开 fd 200 指向的那个 inode 并截断它 —— 与路径无关
-            #     (实测: 路径被 mv 走之后, 原 inode 变 0 字节, 占住原路径的新文件 11 字节没被动)。
-            #     文件若已被 unlink 则重开失败, 吞掉即可 —— 那种情况本来也没什么可截的。
-            : >/dev/fd/200 2>/dev/null || true
+            # 要截的是【我们自己那个 inode】, ⛔ 不能无条件按路径截 —— acquire 与 release 之间
+            # 那个路径可能已被换掉(灰度期跑旧写法的对端 / 有人手工 rm 又重建), 那样抹掉的是
+            # 别人的 PID 戳。互斥不受影响(flock 挂在 fd 200 的 OFD 上), 坏的是**诊断**:
+            # 下一次拒绝会说「登记持有者已正常释放」, 而其实有个活着的持有者就坐在那。
+            #
+            # 🔴 2026-09-07 第二版。前一版写 `: >/dev/fd/200`, **只在 Linux 上成立**:
+            #   · Linux: /proc 式的 /dev/fd/N 是指向文件的符号链接, open(O_TRUNC) 真的截断。
+            #   · macOS: man 页写明「打开 /dev/fd/N 等价于 dup(N)」⇒ **O_TRUNC 被忽略**。
+            #     Mac mini (macOS 26.4 / Darwin 25.4.0) 实测: 8 字节, `: >&200` 之后 8, `: >/dev/fd/200` 之后**仍是 8**,
+            #     而且 **open 成功、返回 0** ⇒ `2>/dev/null || true` 那一支不触发 = **静默 no-op**,
+            #     rc 检查抓不到。那台机器是自建 CI runner, 也可能有人在 Mac 上本地跑部署脚本。
+            #   ⇒ ⛔ 不再依赖 /dev/fd 的平台语义。改成**记 inode + 比一次**, 三种结果各有各的读数:
+            #     inode 相同 ⇒ 按路径截断(所有平台都成立); inode 变了 / 文件没了 ⇒ **不截断并 WARN**
+            #     (⚠️ 承重理由是「**对下一次 acquire 没有影响**」——路径已经不指向我们那个 inode,
+            #      下一次 `exec 200<>` 开的是现在占着这个路径的那个文件, 碰不到我们这份。
+            #      ⛔ 别把理由写成「我们那个 inode 会随 fd 关闭被内核释放」: 那只在**被 unlink**
+            #      时成立; 测试实际构造的是 `mv`(rename), inode 带着旧名字和旧 PID 戳活得好好的
+            #      (F2 实测它仍是 5 字节)。结论不变, 但理由要准 —— #706 终审 ②。
+            #      而抹掉别人的 PID 戳是实打实的害处)。
+            local cur_ino
+            cur_ino=$(deploy_file_inode "$lock_file")
+            if [ -n "${ACQUIRED_DEPLOY_LOCK_INODE:-}" ] && [ "$cur_ino" = "$ACQUIRED_DEPLOY_LOCK_INODE" ]; then
+                : >"$lock_file" 2>/dev/null || true
+                # 🔴 INFO 不是 DEBUG: 三个调用方一个都没抬过 LOG_LEVEL(默认 INFO), 写 DEBUG 等于
+                # **在每一次真实部署里都把这条读数抑制掉** —— 那样本函数声称的「说得出自己做了什么」
+                # 在最常见的那条路径上根本不成立(#706 终审 F-1)。两条分支必须同样看得见。
+                log "INFO" "释放锁: 已清空登记 PID ($lock_file, inode $cur_ino)"
+            else
+                log "WARN" "释放锁: $lock_file 现在是 inode ${cur_ino:-<不存在>}, 与获取时的 ${ACQUIRED_DEPLOY_LOCK_INODE:-<未记录>} 不同 —— ⛔ 不截断(那会抹掉别人的 PID 戳)。我们那个 inode 关掉 fd 就由内核释放, 不影响下一次获取."
+            fi
             { exec 200>&-; } 2>/dev/null || true
             ;;
         *)
@@ -463,6 +493,7 @@ release_deploy_lock() {
     esac
     ACQUIRED_DEPLOY_LOCK_FILE=""
     ACQUIRED_DEPLOY_LOCK_MODE=""
+    ACQUIRED_DEPLOY_LOCK_INODE=""
     return 0
 }
 
@@ -470,6 +501,7 @@ acquire_deploy_lock() {
     local lock_name="${1:-cretas-deploy}"
     local lock_file="/tmp/${lock_name}.lock"
     ACQUIRED_DEPLOY_LOCK_FILE=""
+    ACQUIRED_DEPLOY_LOCK_INODE=""
 
     # 自我重入: release-cretas.sh 的 drift-retry 用 `exec bash "$0" ...` 重新跑
     # 自己 (main_guard 期间 origin/main 前进了), PID 不变但脚本从头重新执行, 会
@@ -506,6 +538,9 @@ acquire_deploy_lock() {
         ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
         # exec 保留 fd 200, 所以重入后锁的模式与第一次相同: 有 flock 就是 flock 模式。
         if command -v flock >/dev/null 2>&1; then ACQUIRED_DEPLOY_LOCK_MODE=flock; else ACQUIRED_DEPLOY_LOCK_MODE=pidfile; fi
+        # 重入是 exec 同一个进程, 全局变量已被新一轮脚本执行重置 ⇒ 这里重新记一次 inode,
+        # 否则释放时会拿空值去比, 落进「不截断」那一支(读数变成一条无谓的 WARN)。
+        ACQUIRED_DEPLOY_LOCK_INODE=$(deploy_file_inode "$lock_file")
         return 0
     fi
 
@@ -566,6 +601,14 @@ acquire_deploy_lock() {
         #        直到有人按拒绝信息里的 pid 把它杀掉 —— 这是 2026-09-02「陈旧锁拒掉健康部署」
         #        的另一面, 但拒绝信息现在会点名到进程, 不再是光秃秃一个死 PID。
         exec 200<>"$lock_file"
+        # 🔴 inode 必须在**紧挨着 open 之后**记, ⛔ 不能等到写完 PID 才记(#706 终审 F-2):
+        #    open 与「记 inode」之间的每一行都是窗口 —— 路径若在那段里被换掉, 记下的就是
+        #    **冒名者的** inode, 于是 release 会截断冒名者并打印「已清空」, 正好是这道守卫
+        #    要防的那件事的**静默假阴性**。记在这里把窗口压到 open→stat, 并且顺带罩住下面
+        #    那句按路径的 `: >"$lock_file"`(它若截到冒名者, 这里记的 inode 会与之不符)。
+        # ⚠️ 这时还不知道 flock 抢不抢得到; 抢不到时 ACQUIRED_DEPLOY_LOCK_FILE 不会被设,
+        #    release_deploy_lock 一上来就 return, 这个值不会被用到。
+        ACQUIRED_DEPLOY_LOCK_INODE=$(deploy_file_inode "$lock_file")
         if ! flock -n 200; then
             # 拿不到 = **有人按着**。分两种, 措辞与处置都不同 (⛔ 不折叠):
             #   a) 锁文件里的 PID 还活着 —— 另一个 deploy 正在跑, 等它。
@@ -642,6 +685,7 @@ acquire_deploy_lock() {
         log "DEBUG" "获取 flock: $lock_file (PID $$)"
         ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
         ACQUIRED_DEPLOY_LOCK_MODE=flock
+        # (inode 已在 `exec 200<>` 紧后面记过 —— 见那里的注释: 记晚了会记成冒名者的。)
     else
         # PID 文件模式 (fallback)
         if [ -f "$lock_file" ]; then

@@ -63,11 +63,9 @@ com.cretas.aims.entity.LabelQcTask
 com.cretas.aims.entity.LabelQcTrayCrop
 com.cretas.aims.entity.LowcodeComponentDefinition
 com.cretas.aims.entity.LowcodePageConfig
-com.cretas.aims.entity.MaterialBatch
 com.cretas.aims.entity.MaterialBatchAdjustment
 com.cretas.aims.entity.MaterialConsumption
 com.cretas.aims.entity.MaterialPackagingHierarchy
-com.cretas.aims.entity.MaterialProductConversion
 com.cretas.aims.entity.MaterialSpecConfig
 com.cretas.aims.entity.MixedBatchGroup
 com.cretas.aims.entity.MixedBatchRule
@@ -89,7 +87,6 @@ com.cretas.aims.entity.ProductionTransitLedger
 com.cretas.aims.entity.QualityDefect
 com.cretas.aims.entity.QualityInspection
 com.cretas.aims.entity.QualityReturnOrder
-com.cretas.aims.entity.RawMaterialType
 com.cretas.aims.entity.Reminder
 com.cretas.aims.entity.ReworkRecord
 com.cretas.aims.entity.SchedulingPlan

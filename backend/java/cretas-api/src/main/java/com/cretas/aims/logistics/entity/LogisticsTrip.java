@@ -31,10 +31,14 @@ import java.util.UUID;
  * 见 {@link LogisticsOrderBatch} 类注释同类说明)。
  */
 @Entity
+// 🔴 实体不再声明这张表的业务唯一键 (2026-09-07, FIX-ENTITY-FULL-UNIQUE-VS-PROD-PARTIAL):
+// prod 上是 uq_lt_plan_tripno —— `WHERE deleted_at IS NULL` 的**部分**唯一索引; 而 JPA 表达不了部分唯一,
+// 实体里的 @UniqueConstraint 只能在 H2 建出**全量**键 ⇒ H2 比 prod 严。
+// 补 @SQLDelete 之后「软删一行再建同键」在 prod 合法、在 H2 撞键, 表现为测试红而线上是对的
+// (#701 合入后 logistics 三个测试类 4 个 error 就是这么来的, 全部只在 H2 复现)。
+// ⇒ 唯一键以 prod 的部分索引为准, 实体侧不再重复声明。
+// ⚠️ 代价: H2 里这张表**没有**唯一性保护 —— 与 #712 对 material_product_conversions 的处置一致。
 @Table(name = "logistics_trips",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uq_lt_plan_tripno_jpa", columnNames = {"plan_id", "trip_no"})
-        },
         indexes = {
                 @Index(name = "idx_lt_plan", columnList = "plan_id")
         })

@@ -3,6 +3,7 @@ package com.cretas.aims.config;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.permission.PermissionModuleCatalog;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -188,27 +189,20 @@ public class PermissionInterceptor implements HandlerInterceptor {
         }
     }
 
+    /**
+     * 2026-09-07 刀 D: 这里原本是一份 17 条的私有 switch —— 全仓第三份模块中文名表, 且与
+     * {@code RoleController.DISPLAY_MODULES} 在 5 个码上已经漂了。措辞逐字搬进
+     * {@link PermissionModuleCatalog} (它采用的正是本方法的措辞, 因为 5 处冲突里侧边栏
+     * 逐条站在这一边) ⇒ <b>那 17 个 case 的返回值逐字不变</b>,
+     * {@code PermissionModuleCatalogContractTest} 逐码钉住。
+     *
+     * <p>🔴 有一处<b>变了</b>: {@code operations} 原本没有 case、走 {@code default} 返回码本身,
+     * 现在有中文名 ⇒ 那 3 个活的 {@code operations:*} 403 从 {@code [operations] 模块}
+     * 变成 {@code [运营协调] 模块}。这是有意的, 登记在 catalog 的 javadoc 与
+     * {@code CODES_NEWLY_LABELLED_BY_CUT_D} 里。
+     */
     private String moduleLabel(String moduleCode) {
-        switch (moduleCode) {
-            case "dashboard": return "首页";
-            case "production": return "生产管理";
-            case "warehouse": return "仓储管理";
-            case "quality": return "质量管理";
-            case "procurement": return "采购管理";
-            case "sales": return "销售管理";
-            case "hr": return "人事管理";
-            case "equipment": return "设备管理";
-            case "finance": return "财务管理";
-            case "system": return "系统管理";
-            case "analytics": return "数据分析";
-            case "scheduling": return "智能调度";
-            case "work_report": return "工作报告";
-            case "inventory": return "库存管理";
-            case "report": return "报表";
-            case "rd": return "研发管理";
-            case "restaurant": return "餐饮管理";
-            default: return moduleCode;
-        }
+        return PermissionModuleCatalog.label(moduleCode);
     }
 
     private String actionLabel(String action) {

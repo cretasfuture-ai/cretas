@@ -22,13 +22,11 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
-import jakarta.persistence.PersistenceException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Real Hibernate/JPA startup and behavior gate for production-plan creation idempotency queries. */
 @DataJpaTest
@@ -139,25 +137,25 @@ class ProductionPlanRepositoryQueryValidationTest {
                 .extracting(ProductionPlan::getId)
                 .isEqualTo(plan.getId());
 
-        ProductionPlan duplicateKey = new ProductionPlan();
-        duplicateKey.setId("PLAN-JPA-IDEMP-2");
-        duplicateKey.setFactoryId(factory.getId());
-        duplicateKey.setPlanNumber("PLAN-JPA-IDEMP-002");
-        duplicateKey.setProductTypeId(product.getId());
-        duplicateKey.setPlannedQuantity(new BigDecimal("10"));
-        duplicateKey.setPlannedUnit("box");
-        duplicateKey.setPlannedDate(plannedDate);
-        duplicateKey.setStatus(ProductionPlanStatus.PENDING);
-        duplicateKey.setSourceType(PlanSourceType.SAFETY_STOCK);
-        duplicateKey.setCreatedBy(user.getId());
-        duplicateKey.setClientRequestId("request-jpa-idemp-001");
-        duplicateKey.setIsLocked(false);
-        duplicateKey.setSkipProcessReporting(false);
-        duplicateKey.setSourceOrderIds(null);
-
-        assertThatThrownBy(() -> entityManager.persistAndFlush(duplicateKey))
-                .as("database unique constraint is the final concurrent-create guard")
-                .isInstanceOf(PersistenceException.class);
+        // 🔴 2026-09-07：这里原本还有一条「同一 (factory_id, created_by, client_request_id) 再插一条必须被
+        // DB 拒」的断言（database unique constraint is the final concurrent-create guard）。删掉了，因为
+        // **H2 表达不了 prod 上那个键的形状**，而不是因为那条规则不成立。
+        //
+        // prod 上 uk_production_plan_create_request 是
+        //   (factory_id, created_by, client_request_id) WHERE client_request_id IS NOT NULL AND deleted_at IS NULL
+        // 的**部分**唯一索引；JPA 表达不了部分唯一，实体上的 @UniqueConstraint 只能在 H2 建出**全量**键 ⇒ H2 比
+        // prod 严：ProductionPlan 已经是软删实体，「软删一个计划后按同一 client_request_id 重试」在 prod 合法而
+        // 在 H2 撞键。同形问题在 #701 之后已经让 logistics 三个测试类出了 4 个 error ⇒ 实体侧声明已统一摘掉。
+        //
+        // ⚠️ 补不回来：H2 2.2.224 上 CREATE UNIQUE INDEX … WHERE … 直接 JdbcSQLSyntaxErrorException 42000。
+        // ⇒ 机制改由 com.cretas.aims.contract.PartialUniqueIndexBackingSoftDeleteContractTest 在**迁移源码**层面守
+        //   （该索引被删掉或被改回全量就报红）。行为在 docker 的 prod schema 副本上证过，四态齐全：
+        //     ① 首条 req-001            -> INSERT 0 1
+        //     ② 第二条**活**行同键       -> duplicate key … "uk_production_plan_create_request"  ← 即本断言要的
+        //     ③ 软删①之后再插同键       -> INSERT 0 1        (H2 的全量键会在这一步**错误地**拒绝)
+        //     ④ client_request_id=NULL  -> 连插两条都放行     (索引带 client_request_id IS NOT NULL)
+        //   最终 3 活 / 4 总。
+        // ⛔ 不要在这里加回一个 H2 版的断言——它只会再次让测试比生产严。
     }
 
     @Test

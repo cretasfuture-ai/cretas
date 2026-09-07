@@ -81,6 +81,56 @@ jobs:
         with:
           # PR 调用绑定原始 head；schedule / workflow_dispatch 绑定触发时的 SHA。
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # 合并 base 需要共同祖先; 浅克隆合不了。
+          fetch-depth: 0
+      # PR 调用时把 base 合进来 —— 最终候选的全量必须看合并结果 (schedule 路径整步跳过)。
+      # 🔴 **内联, ⛔ 不用本地 composite action** (`uses: ./.github/actions/...`):
+      #    pull_request 事件下 **workflow 定义从 base 读**, 而 `./` 开头的本地 action 从
+      #    **checkout 出来的工作区**读 —— 我们 checkout 的是 `pull_request.head.sha`, 于是任何
+      #    **head 不含那个目录**的 PR(旧分支 / 开了几天的 PR)这一步必死:
+      #      `Can't find 'action.yml' … under .github/actions/merge-pr-base`, 9 秒红。
+      #    2026-09-07 实测: 它炸掉了当时**所有**在飞 PR 的 Java 闸, 而且长得像「CI 没测出问题」
+      #    而不是「CI 坏了」—— rebase 只能绕过去, 任何人从旧 base 开分支还会再撞一次。
+      #    ⇒ 内联的 run 块跟着 workflow 定义走(**总是来自 base**), 与 head 的树无关。
+      # ⚠️ 三处内联必须**逐字相同** —— scripts/tests/test-ci-gate-runs-merge-result.sh 钉了这条。
+      - name: Merge PR base into head (pull_request only)
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git config user.email "ci@cretas.local"
+          git config user.name "cretas-ci"
+
+          # base 对象必须在本地才能合。调用方给了 fetch-depth: 0 就已经有了;
+          # 万一没有(浅克隆)就单独取一次, 取不到直接红 —— ⛔ 不静默跳过合并,
+          # 那会退化成「跑的还是 PR 分支自己」而读数看起来一切正常。
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$BASE_SHA" \
+              || { echo "::error::取不到 base 提交 $BASE_SHA —— 调用方需要 fetch-depth: 0"; exit 1; }
+          fi
+
+          # 🔴 硬约束 9: 只打 merged_ok=yes 分不出两种成因 ——
+          #   (a) 真把 base 合进来了(这道修复在工作)
+          #   (b) base 已经是 head 的祖先(PR 刚 rebase 过), merge 是 no-op
+          # 两者读数完全相同, 而只有 (a) 证明闸看到了「别人合进 base 的东西」。
+          BEHIND=$(git rev-list --count "HEAD..$BASE_SHA" 2>/dev/null || echo unknown)
+          TREE_BEFORE=$(git rev-parse 'HEAD^{tree}')
+          if git merge --no-edit "$BASE_SHA"; then
+            TREE_AFTER=$(git rev-parse 'HEAD^{tree}')
+            if [ "$TREE_BEFORE" = "$TREE_AFTER" ]; then TREE_CHANGED=no; else TREE_CHANGED=yes; fi
+            echo "READING: GATE_TREE=merge head=$HEAD_SHA base=$BASE_SHA merged_ok=yes" \
+                 "merged_in_commits=$BEHIND tree_changed=$TREE_CHANGED tree=$TREE_AFTER"
+            if [ "$BEHIND" = "0" ]; then
+              echo "READING: GATE_TREE_NOTE=base_already_ancestor (本次 merge 是 no-op; 这一趟证明不了闸能看见 base 的新东西)"
+            fi
+          else
+            echo "READING: GATE_TREE=conflict head=$HEAD_SHA base=$BASE_SHA merged_ok=no"
+            echo "::error::PR 与 base 冲突, 闸无法在合并结果上运行 —— 先解冲突再推(反正这样也合不进去)。"
+            exit 1
+          fi
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4

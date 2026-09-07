@@ -583,7 +583,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         try {
             // 使用原生SQL查询count，避免加载实体时触发枚举问题
             Long batchCount = ((Number) entityManager.createNativeQuery(
-                    "SELECT COUNT(*) FROM material_batches WHERE factory_id = ? AND material_type_id = ?")
+                    "SELECT COUNT(*) FROM material_batches WHERE factory_id = ? AND material_type_id = ? AND deleted_at IS NULL")
                     .setParameter(1, factoryId)
                     .setParameter(2, id)
                     .getSingleResult()).longValue();
@@ -605,7 +605,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         try {
             // 使用原生SQL查询count，避免加载实体
             Long conversionCount = ((Number) entityManager.createNativeQuery(
-                    "SELECT COUNT(*) FROM material_product_conversions WHERE factory_id = ? AND material_type_id = ?")
+                    "SELECT COUNT(*) FROM material_product_conversions WHERE factory_id = ? AND material_type_id = ? AND deleted_at IS NULL")
                     .setParameter(1, factoryId)
                     .setParameter(2, id)
                     .getSingleResult()).longValue();

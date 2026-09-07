@@ -27,6 +27,12 @@ on:
       # 生成器扫描的两个根 —— 与 ENTITY_ROOT / REPOSITORY_ROOT 逐一对应
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/repository/**'
+      # 🔴 扫描根**之外**的整棵树也要触发 —— 否则「有人在新子树里加了个软删实体」这件事
+      #    在 PR 上一次都不会被看见(而那正是 test-soft-delete-scan-root-covers-entities.sh
+      #    唯一要守的东西: logistics/entity/ 那 11 个就是这么长出来的, 谁都没红过)。
+      #    ⚠️ 上面两条**不能**因为这条更宽就删掉: 它们是与生成器扫描根逐一对应的锚点,
+      #       test-soft-delete-scan-surface-gate.sh 按它们比对(⛔ 别为了"去重"把锚点删了)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/**'
       # 生成器本身与它的两份产出/输入快照
       - 'scripts/check-soft-delete-orphans.sh'
       - 'scripts/cron/soft-delete-orphans.sql'
@@ -35,6 +41,12 @@ on:
       - '.github/workflows/soft-delete-scan-surface.yml'
       - 'scripts/tests/test-soft-delete-orphans-sql-drift.sh'
   workflow_dispatch:
+
+# ⚠️ 这里**只有** pull_request, 没有 `push: main` —— main 侧的覆盖靠 `ops-script-tests.yml`:
+#    它的 push 车道**刻意不带 paths**(那边注释写明: 再抄一份 12 条清单就是第二份会漂的副本),
+#    每次 push 都跑同一个 `test-soft-delete-orphans-sql-drift.sh`。
+#    🔴 这是一条**隐式耦合**: 哪天有人给那条 push 车道加上 `paths:`, main 侧就又瞎了,
+#    而本文件这边一点感觉都没有。改那边之前先回来看这一句。
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -46,6 +58,17 @@ permissions:
 jobs:
   scan-surface-in-sync:
     # ⛔ 字面量 —— `${{ vars.X }}` 在 runs-on 里求值为空(见 .claude/rules/ci-runner-routing.md)。
+    #
+    # 🔴 **为什么本文件不在 `scripts/ci/switch_ci_runner.py` 的 WORKFLOWS 清单里**(⛔ 不留白):
+    #  · 已知代价: 托管额度耗尽、仓库切到自建模式时, 写死 `ubuntu-latest` 的工作流**根本跑不起来**
+    #    (2~4 秒 / 0 个 step / 无日志, 2026-08-26 事故的形态) ⇒ 那种时候这道闸是**没有信号**的。
+    #  · 但跑同一个 `test-soft-delete-orphans-sql-drift.sh` 的 `ops-script-tests.yml` **也**写死
+    #    `ubuntu-latest` 且同样未接入。两者要接就一起接 —— 只接一个会让 PR 侧与 main 侧的覆盖
+    #    在自建模式下不对称, 那比都不接更难看出来。
+    #  · 接入前必须先验的东西(2026-09-07 在 canada-mini 上量的): 那台机器 **bash 3.2.57**
+    #    (macOS 自带, 不是 4.x)、系统 **python3 3.9.6**, 而本文件的 `python` 垫片与生成器都没在
+    #    那套解释器上跑过。⛔ 不在没实跑过的前提下 `--adopt` —— 那只是把「跑不起来」换成「跑起来就红」。
+    # ⇒ 现状: 与 ops-script-tests.yml 同一 posture, 留票由 organizer 决定何时两个一起接。
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -73,3 +96,8 @@ jobs:
       # 用例失败时自带下一步命令(`./scripts/check-soft-delete-orphans.sh --write` 后提交)。
       - name: Scan surface must match the committed SQL
         run: bash scripts/tests/test-soft-delete-orphans-sql-drift.sh
+
+      # 扫描**根**本身盖不盖得住所有软删实体 —— 与上一步是两件事:
+      # 上一步问「生成物跟不跟得上源」, 这一步问「源里有没有它根本没看过的东西」。
+      - name: Scan roots must cover every soft-deletable entity
+        run: bash scripts/tests/test-soft-delete-scan-root-covers-entities.sh

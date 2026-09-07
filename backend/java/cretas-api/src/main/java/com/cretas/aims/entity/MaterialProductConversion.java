@@ -3,6 +3,7 @@ package com.cretas.aims.entity;
 import lombok.*;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -20,16 +21,27 @@ import org.hibernate.annotations.Where;
 @NoArgsConstructor
 @Builder
 @Entity
+// ⚠️ (factory_id, material_type_id, product_type_id) 的唯一性**故意不在这里声明**。
+//    本实体 2026-09-07 补了 @SQLDelete(软删), 而它的建重查是**派生查询**
+//    ConversionServiceImpl:67 existsByFactoryIdAndMaterialTypeIdAndProductTypeId ——
+//    派生查询受类级 @Where(deleted_at IS NULL) 过滤, **只看得见活行**。
+//    若这里仍声明全量 @UniqueConstraint, 软删一条配置之后:
+//      应用层查重说「空着」(活行没有) → 放行 → 数据库全量唯一键拒绝 → 用户看到看不懂的约束冲突。
+//    ⇒ 判据是「**让数据库唯一键与应用自己的查重口径一致**」, 而 JPA 表达不了部分唯一,
+//      所以唯一性由 V20261101_38 的**部分唯一索引** uq_conversion_factory_material_product
+//      (WHERE deleted_at IS NULL) 拥有, 实体不再重复声明一份会漂的。
+//    ⛔ 不要把 uniqueConstraints 加回来 —— 加回来 H2 会建出一份 prod 没有的全量唯一键(形态 D),
+//      而且「删了再建同名」的测试会在 H2 上假红。
+//    对照: RawMaterialType 的 (factory_id, code) **保持全量**, 因为它的查重是
+//      findCodeConflictIncludingDeleted(原生, 含已删) —— 同一条判据, 相反的结论。
 @Table(name = "material_product_conversions",
-       uniqueConstraints = {
-           @UniqueConstraint(columnNames = {"factory_id", "material_type_id", "product_type_id"})
-       },
        indexes = {
            @Index(name = "idx_conversion_factory", columnList = "factory_id"),
            @Index(name = "idx_conversion_material", columnList = "material_type_id"),
            @Index(name = "idx_conversion_product", columnList = "product_type_id")
        }
 )
+@SQLDelete(sql = "UPDATE material_product_conversions SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class MaterialProductConversion extends BaseEntity {
     @Id

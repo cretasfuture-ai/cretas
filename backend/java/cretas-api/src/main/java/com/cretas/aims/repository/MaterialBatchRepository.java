@@ -911,8 +911,12 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     /**
      * 统计低库存材料数量
      */
+    // 软删批 3-A: MaterialBatch 补了类级 @SQLDelete, 已删批次不许算进库存。
+    // ⚠️ 过滤条件写在拼接串里, ⛔ 不要在字符串拼接中间插行注释 —— 那会把「这条 SQL 有没有 deleted_at」
+    //    的扫描器切成两段, 前半段看起来没有过滤(2026-09-07 自己踩过一次假阳性)。
     @Query(value = "SELECT COUNT(*) FROM (SELECT m.material_type_id FROM material_batches m " +
            "WHERE m.factory_id = :factoryId " +
+           "AND m.deleted_at IS NULL " +
            "AND (m.ownership IS NULL OR m.ownership = 'COMPANY_OWNED') " +
            "GROUP BY m.material_type_id " +
            "HAVING SUM(m.receipt_quantity - m.used_quantity - m.reserved_quantity) < " +
