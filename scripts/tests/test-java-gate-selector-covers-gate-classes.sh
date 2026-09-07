@@ -114,6 +114,33 @@ grep -F -f "$TMP/keywords.txt" "$TMP/classes.txt" 2>/dev/null | sort -u > "$TMP/
 comm -23 "$TMP/kw_carrying.txt" <(sort -u "$TMP/matched.txt") > "$TMP/escaped.txt"
 N_CARRY=$(wc -l < "$TMP/kw_carrying.txt")
 N_ESC=$(wc -l < "$TMP/escaped.txt")
+# 🔴 KEYWORD_CARRYING 对「拿掉一个**被别的关键词包含**的关键词」是**不敏感**的。
+#
+# 2026-09-07 实测: 从选择器里拿掉 `*ContractsTest` ⇒ 同组三个数都动了
+#   (SELECTOR_PATTERNS 14→13 · FAMILY_KEYWORDS 13→12 · ESCAPED 6→7)
+#   而 KEYWORD_CARRYING **纹丝不动**(365→365) —— 因为 `Contracts` 含着 `Contract`,
+#   带前者的类同时带后者, 计数不会掉。
+#
+# ⚠️ 危险的不是这个数本身, 是**组内联动**: 一次变异让同组几个数动了, 会把
+#    「这一组验证过了」这个印象**免费送给不动的那一个** —— 而它恰恰是唯一还没被证的。
+#    ▎**验证是逐个的, ⛔ 不是逐组的。**
+#
+# ⇒ 所以把包含关系**打成读数**, ⛔ 不留在故事里: 下一个人做变异时能当场看见
+#    「这几对里, 拿掉长的那个不会让 KEYWORD_CARRYING 动」。
+# 📌 一般形式: **凡是按「串是否出现」来数的东西, 先问这个串是不是另一个串的一部分。**
+#    两个方向都会出事 —— **被包含**(本条: 移除后计数不变) / **包含别人**
+#    (按文本特征找 X 会把谈论 X 的文本算成 X)。
+N_CONTAIN=0
+CONTAIN_LIST=""
+while read -r a; do
+    [ -n "$a" ] || continue
+    while read -r bkw; do
+        [ -n "$bkw" ] || continue
+        [ "$a" = "$bkw" ] && continue
+        case "$bkw" in *"$a"*) N_CONTAIN=$((N_CONTAIN + 1)); CONTAIN_LIST="$CONTAIN_LIST $a<$bkw" ;; esac
+    done < "$TMP/keywords.txt"
+done < "$TMP/keywords.txt"
+echo "READING: KEYWORD_CONTAINMENT_PAIRS=$N_CONTAIN$CONTAIN_LIST (⇒ 拿掉右边那个, KEYWORD_CARRYING **不会动**)"
 echo "READING: KEYWORD_CARRYING=$N_CARRY ESCAPED=$N_ESC"
 
 # ---- 5. 例外清单(双向) ----
