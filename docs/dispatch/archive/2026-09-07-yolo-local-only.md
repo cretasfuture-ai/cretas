@@ -10,3 +10,9 @@
 - Commit/PR merge and runtime rollout are independent facts. This archive does not attest merge or enable any training, production deployment or model upload.
 
 - Additional CLI regression: `python -m pytest tools/vision-lab/tests/test_vision_lab.py -q` passed 41 tests and 13 subtests locally. Shared route PR #745 remains open, so this branch is pushed without opening a PR that could dispatch CI to the existing Mac runner. Resume PR creation only after verifying the active workflow no longer selects Mac.
+
+## Scheduled-entry closeout
+
+- Replaced the disabled VisionLab task action that referenced missing `cretas-vision-main-v2` with the existing local-policy checkout plus `-RequireMergedMain`; exported the original task XML before changing it and read back `Disabled` afterward. No task was started.
+- Added a startup gate that fetches current main and requires a clean checkout with `HEAD == origin/main` before Python is invoked. Four real local-Git fixture scenarios passed: clean main launches, dirty/unmerged/unreachable cases do not. Validation: `python -m pytest scripts/tests/test_vision_scheduled_launcher.py -q`.
+- CI job metadata confirmed `canada-mac-mini` and `canada-mac-mini-2` handled the earlier PR checks. PR #745 is still open. No new PR or CI run was triggered; no Mac connection was made.

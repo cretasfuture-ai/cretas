@@ -6,7 +6,7 @@ Use `scripts/windows/liushanmen-vision-lab.ps1` for the existing workflow and `s
 
 The local runtime config uses `execution.mode=local` and `execution.remote_enabled=false`. Missing local resources are an explicit blocker: reduce batch size or execute sequentially, never dispatch to `canada-mini` or `codex-mac`. Historical Mac scripts and hash-bound receipts are retained only as historical evidence; do not resume them.
 
-The existing YOLO automation keeps its original schedule and paused state. Its prompt now explicitly prohibits Mac dispatch. The three existing Windows YOLO scheduled tasks were already disabled; this change does not enable training. A disabled task referencing a missing checkout must be repointed to a clean merged checkout before it is enabled.
+The existing YOLO automation keeps its original schedule and paused state. Its prompt now explicitly prohibits Mac dispatch. The three existing Windows YOLO scheduled tasks were already disabled; this change does not enable training. The disabled VisionLab task now points to the local-policy checkout and passes `-RequireMergedMain`. That switch fetches current main and rejects a dirty, unmerged or unverifiable checkout before launching Python. The task remains disabled; after merge, move that clean checkout to exact main before enabling it.
 
 Production read-only collection and gated model upload remain supported. Local execution does not waive human review, split isolation, protected/normal-set gates, parity, latency, Git or deployment checks. Do not modify originals, human annotations, remote historical files, SSH configuration or unrelated Mac services.
 
