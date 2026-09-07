@@ -37,6 +37,11 @@ on:
       # 覆不覆盖整棵 backend 树、制品保留几天), 所以改这两个文件也要跑一遍。
       - '.github/workflows/ci.yml'
       - '.github/workflows/java-artifact.yml'
+      # 🔴 2026-09-07 补: test-release-ci-artifact-prewarm.sh 第 9 节现在对 web-dist.yml
+      #    **也**做断言(`Ship attestation bundle …` 这一步必须恰好 1 个 —— 改了名就把 web
+      #    车道那段签名检查变成恒 unknown)。被断言的文件不在触发面里, 就是 #713 那个 P0 的
+      #    形状: 只动它的 PR 触发不到这道闸, 而「没跑」与「跑了没问题」读数完全相同。
+      - '.github/workflows/web-dist.yml'
       - '.github/workflows/ops-script-tests.yml'
       # 🔴 2026-09-07 P0 的直接教训: `test-ci-gate-runs-merge-result.sh` 断言的正是下面这几个
       #    文件的结构(三处 head.sha pin / 内联 merge 步骤 / ⛔ 不许用本地 composite action),

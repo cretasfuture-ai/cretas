@@ -453,8 +453,17 @@ web_release_build() {
     # 静默回退会让"这条链其实从没生效"长期无人发现。
     if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1" ] \
         && [ -z "${CRETAS_RELEASE_FORCE_WEB_BUILD:-}" ]; then
-        "$(dirname "${BASH_SOURCE[0]}")/release-web-ci-artifact.sh" \
-            || echo "WEB_CI_ARTIFACT=fallback — 取回未成功, 本次走本地构建" >&2
+        # ⚠️ rc 要显式接住, ⛔ 不写成 `cmd || echo …` —— 那样两种失败会折叠成同一句话:
+        # rc=3 是「本组织这条车道**永远**通不了」(制品没签名), rc=1 是「这一趟没成」。
+        # 折叠的代价不是行为(两种都回退本地构建, 这是对的), 是**读数**: 日志里分不出
+        # 「该去修」与「这就是边界, 不用修」, 于是它会被反复重新排查。
+        local ci_rc=0
+        "$(dirname "${BASH_SOURCE[0]}")/release-web-ci-artifact.sh" || ci_rc=$?
+        case "$ci_rc" in
+            0) ;;
+            3) echo "WEB_CI_ARTIFACT=unavailable — 本组织这条车道结构性不可用(制品未签名), 走本地构建。⛔ 重试没有意义" >&2 ;;
+            *) echo "WEB_CI_ARTIFACT=fallback — 取回未成功(rc=$ci_rc), 本次走本地构建" >&2 ;;
+        esac
     fi
 
     if [ -z "${CRETAS_RELEASE_FORCE_WEB_BUILD:-}" ] \
