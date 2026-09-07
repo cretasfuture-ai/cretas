@@ -953,6 +953,11 @@ def _apply_shallow_extended_ownership(
             continue
         has_white, has_color = 0 in classes, 1 in classes
         final_verdict = _verdict_for(has_white, has_color)
+        boundary_requires_review = y0 <= 1.0 and final_verdict in MISSING_VERDICTS
+        if boundary_requires_review:
+            # Extending downward cannot reveal a label clipped above the image.
+            # Keep the observed labels, but do not turn uncertainty into absence.
+            final_verdict = "UNJUDGEABLE"
         tray.has_white = has_white
         tray.has_color = has_color
         tray.verdict = final_verdict
@@ -961,7 +966,11 @@ def _apply_shallow_extended_ownership(
         tray.labels = owned
         events.append({
             "trayIndex": int(tray.index),
-            "reason": "reviewed_shallow_two_compartment_extended_ownership",
+            "reason": (
+                "top_boundary_shallow_single_class_requires_review"
+                if boundary_requires_review
+                else "reviewed_shallow_two_compartment_extended_ownership"
+            ),
             "sourceFailClosedReason": fail_closed_reasons.get(
                 int(tray.index), "crop_below_minimum_or_preexisting_unjudgeable"
             ),
