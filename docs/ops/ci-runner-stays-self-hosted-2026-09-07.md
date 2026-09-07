@@ -73,4 +73,19 @@ python scripts/ci/switch_ci_runner.py --check  # 判据: 当前 = hosted, 10 个
 
 ⇒ 本文件把 owner 定为 **organizer**，并把触发条件写死。⛔ 不留「以后再说」。
 
+---
+
+## 🆕 顺带登记一票：`OPS-CALENDAR-TRIGGERED-RULES-WITHOUT-OWNER-20260907`
+
+本条的教训可以一般化：
+
+▎**任何带周期/日期触发条件的规则，必须写明 owner；写不出 owner 就说明它不会被执行。**
+
+📌 后半句是重点：**「写不出 owner」本身就是一个读数** —— 它**预测**了这条规则的命运。
+⇒ 待做（**排在队列最后，只登记不改**）：扫一遍 `.claude/rules/`，
+看还有几条带周期/日期触发条件却没有 owner。⚠️ 判据要连**它是否真的被执行过**一起量，
+⛔ 不能只数「有没有写 owner 这个字」。
+
+---
+
 关联：`.claude/rules/ci-runner-routing.md`、`scripts/ci/switch_ci_runner.py`。
