@@ -3,6 +3,7 @@ package com.cretas.aims.entity.finance;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.time.LocalDateTime;
@@ -46,15 +47,18 @@ import java.util.UUID;
 @NoArgsConstructor
 @Entity
 @Table(name = "accounting_periods",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_accounting_period_factory_year_month",
-                        columnNames = {"factory_id", "year", "month"})
-        },
         indexes = {
                 @Index(name = "idx_ap_factory", columnList = "factory_id"),
                 @Index(name = "idx_ap_status", columnList = "status"),
                 @Index(name = "idx_ap_year_month", columnList = "year, month")
         })
+// 🔴 软删批 3-B (2026-09-07)：补 @SQLDelete，并**摘掉实体级的唯一声明**。
+// prod 上这张表的业务唯一键是 `… WHERE deleted_at IS NULL` 的**部分**索引（由 现存迁移 创建），
+// 而 JPA 表达不了部分唯一 ⇒ 实体里写 @UniqueConstraint 只会在 H2 建出**全量**键，比 prod 严。
+// 补 @SQLDelete 之后「软删一行再建同键」在 prod 合法、在 H2 撞键，症状是测试红而线上是对的
+// （#701→#717 就是这么炸出 4 个 error 的）⇒ 唯一键以 prod 的部分索引为准。
+// ⚠️ 代价：H2 里这张表没有唯一性保护；行为由 opt-in 的真 PG 契约测试守（见 java-gate-pr 那条车道）。
+@SQLDelete(sql = "UPDATE accounting_periods SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class AccountingPeriod extends BaseEntity {
 

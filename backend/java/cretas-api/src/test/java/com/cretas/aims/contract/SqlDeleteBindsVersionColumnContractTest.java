@@ -45,7 +45,17 @@ class SqlDeleteBindsVersionColumnContractTest {
      * WagePolicy / WorkProcess 两个实体因此对闸隐身，而它们正是同一天合进来的 versioned + @SQLDelete 实体。
      * 「零违规」在那种写法下有一部分是恒真的。
      */
-    private static final Pattern VERSION_ANCHOR = Pattern.compile("^[ \\t]*@Version\\b", Pattern.MULTILINE);
+    private static final Pattern VERSION_ANCHOR =
+            Pattern.compile("^[ \\t]*@(?:[\\w.]*\\.)?Version\\b", Pattern.MULTILINE);
+    // 🔴 2026-09-07（软删批 3-B）：锚点补上**全限定**写法。
+    //    此前只有下面那个 MENTIONS_VERSION（探测器）认 `@jakarta.persistence.Version`，
+    //    而**锚点没跟着改** ⇒ 批 3-B 把第一个这么写的实体（EncodingRule:170）纳进软删集合时，
+    //    本闸的「解析完备性 delta = 0」当场点名它 —— 闸按设计工作，⛔ 不是误报。
+    // ⚠️ 教训（同一个念头散在三处，只修了一处）：
+    //    探测器 ✅ 已修 / 锚点 ❌ 没修 / 我的取数脚本 ❌ 也没修 —— 三处长得都不一样，
+    //    共同点只有「怎么认 @Version」这个**判据**。
+    //    ⇒ 判据改了，要去找**用旧判据的所有地方**，⛔ 不能只修被指出来的那一处。
+    //    找法：拿上次**发现缺陷的探测手法**（这里是「全限定注解名」）在全仓再跑一遍。
     /**
      * 只用来判「这个文件到底提没提 {@code @Version}」——与锚点的差集就是解析器的盲区。
      * ⚠️ 必须认全限定写法：2026-09-07 第一版只写 {@code @Version\\b}，用
