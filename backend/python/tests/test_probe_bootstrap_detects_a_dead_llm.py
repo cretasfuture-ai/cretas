@@ -106,7 +106,10 @@ def test_the_marker_is_a_value_the_product_actually_sets():
 # ── 承重：存在 ≠ 有值 ───────────────────────────────────────────────────────
 
 def test_a_key_that_exists_but_is_empty_counts_as_dead(monkeypatch):
-    """🔴 `LLM_DEEPSEEK_API_KEY` 存在但为空，在生产上活了三周没人发现。
+    """🔴 `LLM_DEEPSEEK_API_KEY` 存在但为空，在生产上活了三周没人发现（2026-08）。
+
+    ⚠️ 2026-09-07 复量：**那把 key 现在非空**（`.env.prod:73`, len=35）。
+       ⇒ 本用例守的是「存在 ≠ 有值」这个性质，⛔ 不是「今天它是空的」。
 
     ⚠️ 2026-08-18 我量它时用的是 `sed 's/=.*/=<set>/'` —— **对空值也打 `<set>`**。
        我的仪器犯了 `llm_router._note_empty_key` 那条日志正在警告的错。
