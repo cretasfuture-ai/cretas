@@ -126,8 +126,18 @@ class UserDeleteDoesNotTouchCreatedBusinessDataContractTest {
     @Test
     @DisplayName("结构: User 的 11 个 @OneToMany 一个都不许带 CascadeType.ALL / REMOVE / orphanRemoval")
     void noCollectionOnUserCascadesRemoval() {
-        assertThat(User.class.getAnnotation(SQLDelete.class))
-                .as("User 必须有类级 @SQLDelete —— 否则 delete() 是物理删, 上面那条行为断言也就无从谈起")
+        // ⚠️ 必须 getDeclaredAnnotation, ⛔ 不是 getAnnotation:
+        //    后者会沿继承链往上找, 而 User extends BaseEntity —— **BaseEntity 上就有一句 @SQLDelete**。
+        //    这条断言「非空」之所以今天不是恒真的, 承重前提是「@SQLDelete 没有被 @Inherited 标注」
+        //    (实测 hibernate-core-6.4.10.Final 的 SQLDelete.class 常量池: Target / Retention / Repeatable,
+        //     **无 Inherited**; 阳性对照 Retention 命中 4 次, 所以「Inherited=0」不是解析失败)。
+        //    ⇒ 但那是**外部库的属性**, 不是我们守得住的东西。改用 getDeclaredAnnotation 之后,
+        //      前提从「依赖 Hibernate 不改这个注解」变成「代码自己说清: 我只认 User 自己声明的那一个」。
+        //    📌 与本仓 R68 那个坑同源: @SQLDelete / @Where 挂在 @MappedSuperclass 上**不被继承**,
+        //      所以「从父类取到一个」在语义上本来就不该算数。
+        assertThat(User.class.getDeclaredAnnotation(SQLDelete.class))
+                .as("User **自己**必须有类级 @SQLDelete —— 否则 delete() 是物理删, 上面那条行为断言也就无从谈起; "
+                        + "⛔ 从 BaseEntity 继承来的不算(Hibernate 对 @MappedSuperclass 上的 @SQLDelete 静默忽略)")
                 .isNotNull();
 
         List<String> offenders = new ArrayList<>();
