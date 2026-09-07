@@ -1,0 +1,25 @@
+# 必须声明 `# GUARDS=` 的用例清单 —— 棘轮，⛔ 只许加不许删。
+#
+# 为什么需要它（2026-09-07，#728 上线当天就暴露的洞）：
+# `# GUARDS=` 是**声明式**的 —— 输入由作者提供。于是当那道闸红了，
+# **让它变绿最便宜的做法是把那行声明删掉**，而删掉之后闸**一个字都不会说**
+# （它只检查已声明的路径，这是写在它文件头的边界）。
+# ⇒ 「作者写一行就能让闸不看某个东西」的机制，那一行必须被钉住。
+#
+# 本清单是双向的：
+#   · 在清单里、但那个文件**不再声明** GUARDS ⇒ 🔴 红，点名是哪个文件（这就是上面那个洞）
+#   · 在声明、但不在清单里                    ⇒ 红，「请登记进来」（一行的事）
+#   · 在清单里、但文件**不存在**              ⇒ 红，「测试被删了不是不需要声明了」
+#
+# ⚠️ 真要删掉一个用例时：**同一个 commit 里**把它从这里删掉，理由写进 commit message。
+#    ⛔ 不要为了让闸变绿先删这里再删文件 —— 那正是这道棘轮要拦的动作。
+#
+# 格式：一行一个文件名（不含路径），`#` 开头是注释。
+
+test-ci-gate-runs-merge-result.sh
+test-fresh-db-baseline-contract.sh
+test-fresh-db-baseline-replays.sh
+test-fresh-db-progress-ratchet.sh
+test-guarded-paths-are-in-the-trigger-surface.sh
+test-java-gate-selector-covers-gate-classes.sh
+test-release-ci-artifact-prewarm.sh

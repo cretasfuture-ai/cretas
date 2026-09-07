@@ -41,6 +41,14 @@ usage: release-web-ci-artifact.sh [--probe-only]
 
   --probe-only   只判断"存不存在 web_tree 匹配的候选制品", 不传输、不落缓存。
                  用于让调用方廉价决定要不要走这条路; 探测通过【不】保证一定能用。
+
+退出码:
+  0  可用(或 --probe-only 下候选存在)
+  1  这一趟没成(传输失败/验签不过/manifest 不一致/无匹配制品)
+  2  用法错误
+  3  **本组织这条车道结构性不可用** —— 候选制品里没有 attestation bundle。
+     ⛔ 这一种重试没有意义, 调用方应直接走本地 npm ci + vite build。
+     (与 release-ci-artifact.sh 的 exit 3 同义 —— 两条车道的退出码约定刻意一致。)
 USAGE
     exit 2
 }
@@ -54,6 +62,24 @@ while (($#)); do
 done
 
 fail() { echo "WEB_CI_ARTIFACT_UNAVAILABLE reason=$1" >&2; exit 1; }
+
+# 「这条车道在本组织根本通不了」——与 fail() 的区别是**重试没有意义**。
+# ⛔ 不复用 1(那是"这一趟没成", 调用方可以下次再试), 也 ⛔ 不复用 2(那是用法错误)。
+# 与 release-ci-artifact.sh 的 exit 3 是同一个约定, 两条车道刻意保持一致。
+lane_unavailable() {
+    echo "WEB_CI_ARTIFACT_LANE_UNAVAILABLE reason=$1" >&2
+    cat >&2 <<'EOF'
+  这份候选制品里【没有】attestation bundle ⇒ 第 7 步的 `gh attestation verify` 必然验不过,
+  再等、再重试都不会变。
+  已知成因(见 .github/workflows/web-dist.yml 里 attest 那步的注释): GitHub 的 artifact
+  attestations 只对【公开仓】可用, 私有仓要 Enterprise Cloud; 本组织 plan=free / visibility=private
+  ⇒ 签不上, `Ship attestation bundle with the artifact` 那一步恒 skipped, ZIP 里没有 bundle。
+  ⇒ 发布会走本地 npm ci + vite build(慢约 86s, 但正确)。这不是故障, 是本组织的边界。
+  ⛔ 不要为了省这一分半去放宽第 7 步那道验签: manifest 与 dist 在同一个 ZIP 里, 谁造得出 ZIP
+     谁就能自己写「这是 CI 构建的」—— 那道闸 fail-closed 是对的。
+EOF
+    exit 3
+}
 
 command -v gh >/dev/null 2>&1 || fail gh_not_installed
 command -v curl >/dev/null 2>&1 || fail curl_not_installed
@@ -84,17 +110,22 @@ candidates=$(GH_HTTP_TIMEOUT=20 gh api \
           | select(.expired == false)
           | select(.workflow_run.head_branch == "main")
           | select(.name == "cretas-web-" + .workflow_run.head_sha)
-          | [(.id | tostring), .workflow_run.head_sha, (.size_in_bytes | tostring)]
+          | [(.id | tostring), .workflow_run.head_sha, (.size_in_bytes | tostring),
+             (.workflow_run.id | tostring)]
           | @tsv' 2>/dev/null) \
     || fail gh_api_failed
 [ -n "$candidates" ] || fail no_main_artifact_listed
 
-ARTIFACT_ID="" ARTIFACT_COMMIT="" ARTIFACT_ZIP_SIZE=""
+ARTIFACT_ID="" ARTIFACT_COMMIT="" ARTIFACT_ZIP_SIZE="" ARTIFACT_RUN_ID=""
 checked=0
-while IFS=$'\t' read -r cand_id cand_sha cand_size; do
+# ⚠️ 第 4 列 run_id 是 2026-09-07 为下面 2c 那段签名检查加的。read 的变量个数必须跟着加 ——
+# 少一个的话最后一个变量会把剩下的列**连在一起**吞掉(read 的语义), 而症状只是 size 里
+# 多了个数字, 长得像"制品变大了"。
+while IFS=$'\t' read -r cand_id cand_sha cand_size cand_run; do
     # 防御性剥 CR: 这条链路上任何一环在 Windows 上多写一个 \r, 都会让长度校验静默失败,
     # 而失败长得像"没有可用制品"。
     cand_id=${cand_id%$'\r'}; cand_sha=${cand_sha%$'\r'}; cand_size=${cand_size%$'\r'}
+    cand_run=${cand_run%$'\r'}
     [ -n "${cand_id:-}" ] || continue
     [ "$checked" -lt "$MAX_CANDIDATES" ] || break
     checked=$((checked + 1))
@@ -105,6 +136,7 @@ while IFS=$'\t' read -r cand_id cand_sha cand_size; do
     cand_tree=$(git -C "$PROJECT_ROOT" rev-parse "${cand_sha}:$WEB_RELEASE_SOURCE_PATH" 2>/dev/null) || continue
     [ "$cand_tree" = "$CURRENT_TREE" ] || continue
     ARTIFACT_ID=$cand_id; ARTIFACT_COMMIT=$cand_sha; ARTIFACT_ZIP_SIZE=$cand_size
+    ARTIFACT_RUN_ID=$cand_run
     break
 done <<< "$candidates"
 
@@ -112,6 +144,42 @@ done <<< "$candidates"
 case "$ARTIFACT_ZIP_SIZE" in ''|*[!0123456789]*) fail zip_size_malformed ;; esac
 
 echo "WEB_CI_ARTIFACT_CANDIDATE id=$ARTIFACT_ID commit=$ARTIFACT_COMMIT web_tree=$CURRENT_TREE"
+
+# ---- 2c. 这份候选带签名 bundle 吗 —— 不带就别再往下走 (2026-09-07) ----
+#
+# 与 release-ci-artifact.sh 那段是**同一道检查**, 只是 Java 那边先落地、web 这边漏了
+# (票 OPS-WEB-CI-ARTIFACT-LANE-HALF-FIXED-20260907: 当时只把 REPO 默认值那一处两边拉齐了)。
+#
+# 为什么在这里就问: 不问的话, 这条路要跑完整趟东京中转(ssh staging + 下载 + 解包)才在
+# 第 4 步的 `attestation_absent_in_artifact` 上撞死 —— 白付一趟跨境往返。而且调用方
+# (release-web-manifest.sh 的 web_release_build)会把它折叠成一句
+# `WEB_CI_ARTIFACT=fallback`, 于是「本组织永远通不了」与「这一趟没成」读数完全相同。
+#
+# 判据取【产出这份制品的那次 run】里 `Ship attestation bundle …` 那一步的结论 ——
+# 它是 `if: steps.attest.outcome == 'success'` 守着的, 签不上就 skipped, ZIP 里也就没有 bundle。
+# ⚠️ 不能匹配「名字里有 attest」的第一步: 同一个 job 里 `Attest dist archive provenance`
+#    的结论是 **success**(它自己 continue-on-error), 而 Ship 那步是 **skipped** ——
+#    两步结论相反, 取第一个会得出完全相反的结论。实测 run 34068075476 就是这个形状。
+#    所以只认名字里带 `attestation bundle` 的那一步。
+# 🔴 三态, ⛔ 不猜: 读到 success 才继续; 读到别的结论(skipped/failure)才判车道不可用;
+#    步骤找不到 / gh 出错 / 空 ⇒ unknown ⇒ **照旧往下走**(维持改动前的行为), 只把读数打出来。
+#    (步骤改名会落进 unknown —— 由 test-release-ci-artifact-prewarm.sh 的漂移闸钉住名字。)
+ATTEST_BUNDLE=unknown
+if [ -n "$ARTIFACT_RUN_ID" ]; then
+    ATTEST_BUNDLE=$(GH_HTTP_TIMEOUT=20 gh api \
+        "repos/$REPO/actions/runs/$ARTIFACT_RUN_ID/jobs" \
+        --jq '[ .jobs[]?.steps[]?
+                | select(.name | ascii_downcase | contains("attestation bundle"))
+                | .conclusion ] | first // "absent"' 2>/dev/null) || ATTEST_BUNDLE=unknown
+    ATTEST_BUNDLE=${ATTEST_BUNDLE%$'\r'}
+    [ -n "$ATTEST_BUNDLE" ] || ATTEST_BUNDLE=unknown
+fi
+echo "READING: WEB_ATTEST_BUNDLE_STEP=$ATTEST_BUNDLE run_id=${ARTIFACT_RUN_ID:-none}"
+case "$ATTEST_BUNDLE" in
+    success)         ;;   # 签上了 —— 照常走完运输与验签
+    unknown|absent)  ;;   # 没量到 ⇒ 不下结论, 让后面的硬断言去判(fail closed 仍在)
+    *) lane_unavailable "attestation_bundle_not_shipped(step=$ATTEST_BUNDLE)" ;;
+esac
 
 # --probe-only 到此为止。刻意【只】保证「存在 web_tree 匹配的候选」—— manifest 一致性与
 # attestation 都要等制品真的送到才能判, 探测不做也不假装做。调用方必须为"晚失败"留回退。

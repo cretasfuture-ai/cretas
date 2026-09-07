@@ -2,11 +2,11 @@
 
 ## Codex 自动执行路由
 
-- 默认由 GPT-5.6 Sol Medium 作为工作型协调者，收到任务后立即做最小充分检查并继续执行；模型与 effort 在内部静默选择，不先向用户展示推荐、要求切换或等待确认。
-- 首次修改前必须在内部选择 `DIRECT`、`DELEGATED`、`PARALLEL` 或 `HANDOFF`。一个代理可以连续完成窄范围定位、实施和目标验证，且没有真实并行收益、上下文噪声隔离或独立复核需求时，默认 `DIRECT`；不要为了形式编排把同一条链拆给多个代理。
+- 使用用户当前选择的模型与 effort 直接完成已授权工作；不按型号划分任务资格，不要求路由预检、匹配报告或切换确认。设置不可见、型号不同或任务变复杂不是暂停理由。
+- 按实际独立工作需要选择执行方式，无需在首次修改前完成路由分类。一个代理可以连续完成窄范围定位、实施和目标验证，且没有真实并行收益、上下文噪声隔离或独立复核需求时，默认 `DIRECT`；不要为了形式编排把同一条链拆给多个代理。
 - 只有委派能实质缩短墙钟时间、隔离大量搜索/日志/测试输出、提供独立证据，或把明确且可逆的实现交给更便宜模型时，才使用 `.codex/agents/` 中的窄职责代理。协调者保留需求澄清、scope/共享状态、接口裁决、diff 审查、最终验证、合并和发布责任，不做只派单不判断的纯 Organizer。
 - 原因明确时可直接派 `cretas_executor`，不要固定先开 Scout；只有真实未知可以独立调查时才使用 `cretas_scout`。高噪声且可独立运行的确定性测试交给 `cretas_test_runner`，高风险终审使用 `cretas_risk_reviewer`；短小目标测试留在当前代理，避免额外交接成本。
-- `.agents/skills/model-effort-router/SKILL.md` 仅作静默路由；只有用户明确询问模型/effort 或要求证据比较时才给一次简短建议，并在同一轮继续执行。
+- `.agents/skills/model-effort-router/SKILL.md` 仅在用户明确询问模型/effort 或要求调整时按需使用，不是执行入口。实际工具可用性、测试与验收决定完成度；生产、发布、数据、JPA 和 dispatch 门禁保持适用。
 
 This file provides guidance to Codex when working with this repository.
 
@@ -220,6 +220,7 @@ frontend/CretasFoodTrace/src/
 - `.claude/rules/worktree-and-main-only-deploy.md` - worktree 隔离 + 只从 main 部署
 - `.claude/rules/measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（案例库 `docs/rules-casebook/`）
 - `.claude/rules/standing-authorization-and-visual-acceptance.md` - 常设授权：直接做完，不设人肉闸门
+- `.claude/rules/windows-shell-and-paths.md` - **Windows 上空格才是根因，中文不是**：新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉）；命令发给对的 shell（`PS C:\>` vs `MINGW64 ~ $`）；精确字符不经过 shell
 - `.claude/rules/ci-runner-routing.md` - **CI runner 路由**：默认托管，额度耗尽时 `python scripts/ci/switch_ci_runner.py self-hosted` 切到加拿大 Mac mini；恢复就 `... hosted`。⛔ 别用组织变量 `${{ vars.X }}` 做路由 —— 实测在 `runs-on` 里读到的是空
 - 服务器运维 / 部署 / 凭证位置：`.claude/skills/server-operations/SKILL.md`；`.codex/rules/*-credentials.md`（gitignored）是 Codex 侧凭证真值
 

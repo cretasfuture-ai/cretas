@@ -12,6 +12,8 @@ FRESH_DB_APP_PORT="${FRESH_DB_APP_PORT:-10019}"
 FRESH_DB_KEEP="${FRESH_DB_KEEP:-0}"
 STARTUP_TIMEOUT="${FRESH_DB_STARTUP_TIMEOUT:-300}"
 DRY_RUN=0
+PROGRESS=0
+PROGRESS_BASELINE="$SCRIPT_DIR/fresh-db-progress-baseline.txt"
 BACKEND_PID=""
 WORK_DIR="${TMPDIR:-/tmp}/cretas-fresh-db-${$}"
 BACKEND_LOG="$WORK_DIR/backend.log"
@@ -28,6 +30,11 @@ initialization. Containers are removed after the run unless --keep is used.
 Options:
   --keep       Keep the database container after success or failure.
   --dry-run    Print the exact plan without invoking Docker or Maven.
+  --progress   进度棘轮模式: 跳过 Repository 闸, 允许 Flyway 中途失败, 然后照样读出
+               migrations_applied / tables / indexes 三个数并与基线比较 —— 三个只许涨。
+               ⛔ 不是 pass/fail 闸: 今天这条链必然跑不完(见
+               docs/ops/repo-cannot-build-a-fresh-database-2026-09-07.md),
+               而开局就红的阻塞闸活不过一周。
   -h, --help   Show this help.
 
 Local-only overrides:
@@ -51,6 +58,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --keep) FRESH_DB_KEEP=1 ;;
         --dry-run) DRY_RUN=1 ;;
+        --progress) PROGRESS=1 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1" ;;
     esac
@@ -70,21 +78,33 @@ validate_port_range() {
 port_is_available() {
     local port="$1"
     if command -v powershell.exe >/dev/null 2>&1; then
+        # ⚠️ 这一支排在 python3 前面, 所以**它**才是 Windows 上真正跑的那个 ——
+        #    只在下面那支里分三态, 上面这条路径就永远走不到(形态 B: 机制在, 没接上)。
+        #    ⇒ 两支都要分: 0 可用 / 1 被占用 / 2 被系统保留(SocketError AccessDenied)。
         powershell.exe -NoProfile -NonInteractive -Command \
-            "\$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port); try { \$listener.Start(); \$listener.Stop(); exit 0 } catch { exit 1 }" \
+            "\$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port); try { \$listener.Start(); \$listener.Stop(); exit 0 } catch [System.Net.Sockets.SocketException] { if (\$_.Exception.SocketErrorCode -eq 'AccessDenied') { exit 2 } else { exit 1 } } catch { exit 1 }" \
             >/dev/null 2>&1
         return $?
     fi
     if command -v python3 >/dev/null 2>&1; then
+        # 🔴 退出码分三态, ⛔ 不是「能不能 bind」两态:
+        #   0 = 可用   1 = 被别的进程占用(EADDRINUSE)   2 = **被系统保留**(WSAEACCES 10013)
+        # 为什么必须分开: Windows(Hyper-V) 会动态保留成片端口, 且**每次重启都会漂**。
+        # 2026-09-07 实测本机 55432(本脚本默认值) / 55440 / 55480 全部落进保留区,
+        # 而 54000 可用 —— 同一天早些时候 55440 还是能用的。
+        # ⚠️ 此前两种成因共用一句 "already in use; stop the existing process":
+        #    对保留区间那种, **那个动作根本不存在可执行对象**(没有进程可停),
+        #    读的人会去翻进程表然后一无所获。失败必须说出**能做的下一步**。
         python3 - "$port" <<'PY'
+import errno
 import socket
 import sys
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 try:
     sock.bind(("127.0.0.1", int(sys.argv[1])))
-except OSError:
-    sys.exit(1)
+except OSError as exc:
+    sys.exit(2 if exc.errno == errno.EACCES else 1)
 finally:
     sock.close()
 PY
@@ -96,8 +116,15 @@ PY
 require_port_available() {
     local name="$1"
     local port="$2"
-    port_is_available "$port" \
-        || fail "$name $port is already in use on 127.0.0.1; stop the existing process or choose another port"
+    local rc=0
+    port_is_available "$port" || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        2) fail "$name $port 被**操作系统保留**(WSAEACCES), ⛔ 没有进程可停 —— Windows/Hyper-V 会动态
+   保留成片端口且每次重启都会漂。用 \`netsh int ipv4 show excludedportrange protocol=tcp\` 看当前
+   保留区间, 然后换一个区间外的端口(实测 54000 可用)。⚠️ 本脚本的默认值 55432 也可能落在里面。" ;;
+        *) fail "$name $port is already in use on 127.0.0.1; stop the existing process or choose another port" ;;
+    esac
 }
 
 validate_port_range "FRESH_DB_PORT" "$FRESH_DB_PORT"
@@ -236,6 +263,13 @@ SQL
 "${COMPOSE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U cretas_user -d smartbi_db \
     -c 'CREATE EXTENSION IF NOT EXISTS vector;'
 
+if [ "$PROGRESS" -eq 1 ]; then
+    # ⛔ 进度模式跳过这一步: 它会编译 1641 个测试类, 是这条链 6 分钟里的大头,
+    #    而棘轮要的三个数一个都不来自它。
+    # ⚠️ 代价要说清楚: 跳过之后本趟**不再验** Repository 查询闸, 所以 `--progress` 的绿
+    #    ⛔ 不能当成 fresh-db-gate 的绿 —— 它们量的不是同一件事。
+    log "progress mode: skipping the Repository query gate (not part of the three ratcheted numbers)"
+else
 log "running CI-equivalent Repository query startup gate"
 (
     cd "$BACKEND_DIR"
@@ -244,6 +278,7 @@ log "running CI-equivalent Repository query startup gate"
         "-Dtest=*RepositoryQueryValidationTest" \
         -Dsurefire.failIfNoSpecifiedTests=false
 )
+fi
 
 DB_URL="jdbc:postgresql://127.0.0.1:${FRESH_DB_PORT}/cretas_db?currentSchema=public&stringtype=unspecified"
 SMARTBI_URL="jdbc:postgresql://127.0.0.1:${FRESH_DB_PORT}/smartbi_db"
@@ -263,10 +298,14 @@ require_port_available "FRESH_DB_APP_PORT" "$FRESH_DB_APP_PORT"
 BACKEND_PID=$!
 
 healthy=0
+died=0
 for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
     if ! kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
         wait "$BACKEND_PID" || true
         BACKEND_PID=""
+        # ⚠️ 进度模式下「进程退出」是**预期**的 —— 今天 Flyway 必然在半路死掉。
+        #    ⛔ 但不能因此静默继续: 记下来, 后面的读数要带上这个事实。
+        if [ "$PROGRESS" -eq 1 ]; then died=1; break; fi
         fail "Spring process exited before becoming healthy"
     fi
     if curl --silent --show-error --fail --max-time 2 \
@@ -278,6 +317,68 @@ for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
     fi
     sleep 1
 done
+if [ "$PROGRESS" -eq 1 ]; then
+    # ── 进度棘轮 ────────────────────────────────────────────────────────────
+    # 三个数 + 失败点。⛔ 不判 pass/fail, 只判「有没有倒退」。
+    q() { "${COMPOSE[@]}" exec -T postgres psql -tAc "$1" -U cretas_user -d cretas_db 2>/dev/null | tr -d '\r' | head -1; }
+    # ⚠️ 每个都要 `|| true`: 本脚本是 `set -euo pipefail`, 而 `x=$(cmd)` 里 cmd 失败会**当场**
+    #    中止脚本 —— 于是下面那个「读不出来 ⇒ 没量到」的三态检查**永远走不到**,
+    #    而退出码 2 与「有倒退」在调用方看来是同一件事。
+    #    🔴 实测踩过: 第一趟真跑 PROG_RC=2、一行读数都没有 —— shell 替我做了那个判定。
+    applied=$(q "SELECT COUNT(*) FROM flyway_schema_history WHERE success = true;" || true)
+    tables=$(q "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';" || true)
+    indexes=$(q "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public';" || true)
+    for v in "$applied" "$tables" "$indexes"; do
+        case "$v" in
+            ''|*[!0-9]*)
+                # 读不出来 ⇒ **没量到**, 与「倒退」是两回事, 措辞必须不同。
+                fail "progress: 读不出三个数之一 (applied='$applied' tables='$tables' indexes='$indexes') —— 本趟读数作废, ⛔ 不当成倒退" ;;
+        esac
+    done
+
+    # 🔴 硬约束 9 的对照: 失败点是**必然存在**的读数(今天这条链一定会死在某处)。
+    #    它不出现, 说明这趟根本没跑到 Flyway —— 那时三个数即使没倒退也毫无意义。
+    # 同理: grep 无命中返回 1, pipefail 会让整条管道非零 ⇒ 又一次在检查之前中止。
+    fail_file=$(grep -oE 'Migration V[0-9A-Za-z_.]+\.sql failed' "$BACKEND_LOG" 2>/dev/null | head -1 | sed 's/^Migration //;s/ failed$//' || true)
+    fail_state=$(grep -oE 'SQL State  *: *[0-9A-Za-z]+' "$BACKEND_LOG" 2>/dev/null | head -1 | sed 's/.*: *//' || true)
+    echo "READING: FRESH_DB_PROGRESS migrations_applied=$applied tables=$tables indexes=$indexes"
+    echo "READING: FRESH_DB_FAILURE file=${fail_file:-<none>} sqlstate=${fail_state:-<none>} process_died=$died"
+    if [ -z "$fail_file" ] && [ "$healthy" -ne 1 ]; then
+        fail "progress: 既没有失败点读数、也没有健康 —— 这趟没跑到 Flyway, ⛔ 三个数不作数"
+    fi
+    [ -n "$fail_file" ] || log "progress: 没有失败点 —— 🎉 这条链已经跑完了, 请把 --progress 换成正常模式并考虑接成 pass/fail 闸"
+
+    if [ ! -f "$PROGRESS_BASELINE" ]; then
+        log "progress: 基线文件不存在, 写入首个基线 $PROGRESS_BASELINE"
+        printf 'migrations_applied=%s\ntables=%s\nindexes=%s\n' "$applied" "$tables" "$indexes" > "$PROGRESS_BASELINE"
+        exit 0
+    fi
+    b_applied=$(grep -oE '^migrations_applied=[0-9]+' "$PROGRESS_BASELINE" | cut -d= -f2)
+    b_tables=$(grep -oE '^tables=[0-9]+' "$PROGRESS_BASELINE" | cut -d= -f2)
+    b_indexes=$(grep -oE '^indexes=[0-9]+' "$PROGRESS_BASELINE" | cut -d= -f2)
+    for v in "$b_applied" "$b_tables" "$b_indexes"; do
+        case "$v" in ''|*[!0-9]*) fail "progress: 基线文件解析不出三个数 —— ⛔ 不拿一个读不懂的基线去判倒退" ;; esac
+    done
+    echo "READING: FRESH_DB_BASELINE migrations_applied=$b_applied tables=$b_tables indexes=$b_indexes"
+    regressed=""
+    [ "$applied" -lt "$b_applied" ] && regressed="$regressed migrations_applied($applied<$b_applied)"
+    [ "$tables"  -lt "$b_tables"  ] && regressed="$regressed tables($tables<$b_tables)"
+    [ "$indexes" -lt "$b_indexes" ] && regressed="$regressed indexes($indexes<$b_indexes)"
+    if [ -n "$regressed" ]; then
+        fail "progress: 有倒退 —— $regressed。⛔ 三个数只许涨: 倒退意味着新库比昨天更建不出来"
+    fi
+    if [ "$applied" -gt "$b_applied" ] || [ "$tables" -gt "$b_tables" ] || [ "$indexes" -gt "$b_indexes" ]; then
+        # ⚠️ 给**能直接执行的下一步**, ⛔ 不是「基线需要更新」这种指向不明的话 ——
+        #    今天这条纪律已经独立撞到三次(端口探针说「stop the existing process」而没有进程可停;
+        #    登记表说「现在却不声明了」而文件根本不存在)。**报错/提示要说出能做的下一步。**
+        log "progress: 有进展。把下面三行**整体替换** $PROGRESS_BASELINE 的内容, 即可锁住这次的进度:"
+        printf '    migrations_applied=%s\n    tables=%s\n    indexes=%s\n' "$applied" "$tables" "$indexes"
+        log "progress: (旧值 applied=$b_applied tables=$b_tables indexes=$b_indexes)"
+    fi
+    log "progress: 无倒退 (applied $applied/$b_applied, tables $tables/$b_tables, indexes $indexes/$b_indexes)"
+    exit 0
+fi
+
 [ "$healthy" -eq 1 ] || fail "Spring health gate timed out after ${STARTUP_TIMEOUT}s"
 kill -0 "$BACKEND_PID" >/dev/null 2>&1 \
     || fail "Spring process exited immediately after the health response"
