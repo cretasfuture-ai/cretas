@@ -27,7 +27,17 @@
 #
 # ⚠️ 它守的是「**这份文件还是不是它声称的那个东西**」, ⛔ 不守「它与今天的 prod 一致」——
 #    后者需要连 prod, 属于采集器那一侧(判据 ④ / BASELINE_LAG)。
-#    ▎两句话的差别: 本验证器绿 ⇒ 基线**自洽**; ⛔ 不代表基线**不过期**。
+#
+# 🔴 ⛔ 不要把本闸的绿描述成「基线**自洽**」—— 那个词读起来像「内部一致所以没问题」,
+#    而它的实际含义只是「**两侧串通得上**」。措辞本身就是那个洞:
+#
+#      只删索引            ⇒ 重放 2043 ≠ 头里 2044  ⇒ 红  ✅
+#      只改头              ⇒ 重放 2044 ≠ 头里 9999  ⇒ 红  ✅
+#      删索引 + 头里也改掉  ⇒ 两侧一致               ⇒ **绿**  🔴 挡不住
+#
+#    ⇒ 一份删了 17 个索引、头里写着少 17 的基线, 在本闸下**完全合格**。
+#    ⛔ 判据 ④ / BASELINE_LAG 也不覆盖它 —— 那两个看的是「基线**之上** prod 跑了什么」,
+#       ⛔ 不看「基线本身对不对」。▎**只有重新采集能证明基线是对的。**
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -123,8 +133,14 @@ diffs=""
   ⚠️ 注意 errors=$n_err —— ⛔「没报错」不是判据: 删掉一条 CREATE INDEX 的基线照样零错误。"
 ok "五维与文件头逐位相同 (tables=$R_TAB indexes=$R_IDX unique=$R_UQ fk=$R_FK columns=$R_COL)"
 
-# ---- 5. 边界: 本验证器**不**回答「基线过期了没有」----
-echo "READING: VERIFIER_SCOPE=self-consistency-only (⛔ 不连 prod ⇒ 守不住「基线过期」; 那由采集器的判据 ④ / BASELINE_LAG 负责)"
-ok "边界已声明"
+# ---- 5. 边界: 本验证器守得住什么、⛔ 守不住什么 ----
+# ⚠️ 这四行**每一行都必须自己是 `READING:`** —— scripts/ci/run-script-tests.sh 只贴
+#    `^[[:space:]]*READING: ` 开头的行(第 158 行), 续行会被**静默丢掉**。
+#    ⇒ 既然「措辞本身就是那个洞」, 那措辞就必须活到 CI 日志里, ⛔ 不能只活在源码注释里。
+echo "READING: VERIFIER_SCOPE=header-matches-replay"
+echo "READING: VERIFIER_BLIND_collusive_edit=yes ⇒ ⛔ 守不住「基线与文件头**一起**被改」: 两侧一致即通过(删 17 个索引 + 头里写少 17 ⇒ 本闸完全合格)"
+echo "READING: VERIFIER_BLIND_staleness=yes ⇒ ⛔ 守不住基线过期(那要连 prod, 属采集器的判据 ④ / BASELINE_LAG)"
+echo "READING: VERIFIER_PROOF_OF_CORRECT=recapture-only ⇒ **只有重新采集能证明基线是对的**; 本闸只证明它没有被**单侧**改坏"
+ok "边界已声明(四行读数, ⛔ 不用「自洽」这个词)"
 
 echo "PASS: $pass 项断言全部通过"
