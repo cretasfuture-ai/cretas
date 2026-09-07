@@ -17,6 +17,7 @@
 # 格式：一行一个文件名（不含路径），`#` 开头是注释。
 
 test-ci-gate-runs-merge-result.sh
+test-fresh-db-baseline-contract.sh
 test-fresh-db-progress-ratchet.sh
 test-guarded-paths-are-in-the-trigger-surface.sh
 test-java-gate-selector-covers-gate-classes.sh
