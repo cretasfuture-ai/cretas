@@ -91,16 +91,47 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      *
      * <p>✅ <b>2026-09-07 已补</b>（票 {@code OPS-PROD-ONLY-PARTIAL-INDEXES}，迁移
      * {@code V20261101_39}）：两条都搬进上面那张表了，本集合现在<b>空着</b>。
-     * ⛔ 空集合<b>不要删</b>——它是这条流程的入口：下次再发现「只活在 prod 上」的部分唯一索引，
+     * ⛔ 空集合<b>不要删</b>——它是这条流程的入口：下次再发现「只活在 prod 上」的<b>真缺口</b>，
      * 先登记到这里，本闸就会在补上迁移的那一刻报红提醒搬家。这次它确实是这么工作的。
+     *
+     * <p>⚠️ <b>空 ≠ 这一类不存在。</b>「已判为良性」的那些在
+     * {@link #PROD_ONLY_BENIGN} 里 —— 两者刻意分开，⛔ 不折叠成一个空集合：
+     * 折叠之后「不存在」与「存在但判过是良性」读数相同，下一个人不知道曾经有过判定。
      *
      * <p>📌 补的时候实测到的两件事，写在这里免得下次重新查：
      * <br>① prod 上这两张表的<b>全量</b>唯一键早就没了（约束只剩主键），⇒ 迁移必须允许「已经是
      * prod 那个形态」而不是硬删；但 ⛔ 不允许「两者都没有」——那是完全不设防。
      * <br>② {@code business_rules} 那个全量键是 {@code CREATE TABLE} 里的<b>内联无名</b>
      * {@code UNIQUE(...)}，名字由 PG 生成 ⇒ 迁移里按<b>约束定义</b>找它，⛔ 不能写死名字。
+     * <b>名字不是身份</b>——这条与下面 {@code uq_bpic_recipe_wp} 那次误判同源。
      */
     private static final Set<String> PROD_ONLY_NOT_IN_MIGRATIONS = Set.of();
+
+    /**
+     * <b>确实只活在 prod 上、但已判定为良性</b>的部分唯一索引。⛔ 不要并进
+     * {@link #PROD_ONLY_NOT_IN_MIGRATIONS}：那一格是「待补的真缺口」。
+     *
+     * <p>{@code uk_encoding_rules}（2026-09-07 实测）：
+     * <br>· 迁移里它<b>只出现在一条 {@code DROP CONSTRAINT}</b>（{@code V20260824_05:31}）——
+     *   ⚠️ <b>名字出现 ≠ 索引被创建</b>，这正是普查判据栽过的地方。
+     * <br>· 同一支迁移紧接着建了 {@code idx_encoding_rules_unique}
+     *   （{@code V20260824_05:34}）：{@code ON encoding_rules (factory_id, entity_type) WHERE deleted_at IS NULL}。
+     * <br>· prod 上<b>两个都在，且 {@code indexdef} 的表/列/谓词完全一致</b>——
+     *   即 prod 背着一对<b>冗余重复</b>的唯一索引，而新库只拿到后者。
+     * <br>⇒ 唯一性在新库上<b>由等价索引承担</b>，不存在「新库比 prod 松」的窗口 ⇒ 良性。
+     * ⚠️ 良性的依据是<b>那两个定义相等</b>，⛔ 不是「名字看起来像一对」。哪天
+     * {@code idx_encoding_rules_unique} 被改窄或删掉，这条判定就作废。
+     *
+     * <p>🔴 <b>{@code uq_bpic_recipe_wp} 曾被误判为 prod-only，记在这里免得下次再判错一遍</b>：
+     * 它在 {@code V20261028_60:24} 以旧名 {@code uq_bps_recipe_wp} 被 <b>CREATE</b>，
+     * 又在 {@code V20261028_82:70} 被 {@code ALTER INDEX … RENAME TO} 改成现名 ——
+     * <b>新库拿得到它，它不是缺口</b>。
+     * ⚠️ 误判的成因是判据连着两次「少一个动词」：v1「名字出现过就算数」漏掉 {@code DROP}，
+     * v2「区分 CREATE 与 DROP」漏掉 {@code RENAME TO}。
+     * ⇒ ⛔ 不要再补第三个动词。正确判据是<b>按迁移顺序求最终状态</b>
+     * （{@link #resolveFinalIndexState()} 已经是这么做的）——CREATE / DROP / RENAME 都只是状态转移。
+     */
+    private static final Set<String> PROD_ONLY_BENIGN = Set.of("uk_encoding_rules");
 
     private static final Pattern CREATE_UNIQUE_INDEX =
             Pattern.compile("CREATE\\s+UNIQUE\\s+INDEX\\b[^;]*;", Pattern.CASE_INSENSITIVE);
@@ -161,8 +192,15 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
                         + "唯一性现在只由它们承担，删掉它就是静默失守——H2 本来就不管，prod 上要等真出重复数据才看得见。")
                 .isEmpty();
 
-        // 那两个只活在 prod 上的：集合一变就报红, 提醒把补好迁移的那个搬到上面的表里。
-        List<String> prodOnlyNowInMigrations = PROD_ONLY_NOT_IN_MIGRATIONS.stream()
+        // 只活在 prod 上的那些：集合一变就报红, 提醒把补好迁移的那个搬到上面的表里。
+        // ⚠️ 两个集合**一起**判 —— 「良性」也是一种判定, 它一旦进了迁移同样要搬家,
+        //    否则 PROD_ONLY_BENIGN 会变成一个没有任何断言看着它的注释(那就是白写)。
+        //    ⛔ 不要只判 PROD_ONLY_NOT_IN_MIGRATIONS: 它现在是空的, 只判它等于恒真。
+        System.out.println("READING: PROD_ONLY_GAPS=" + PROD_ONLY_NOT_IN_MIGRATIONS.size()
+                + " PROD_ONLY_BENIGN=" + PROD_ONLY_BENIGN.size()
+                + " (空的 GAPS ≠ 这一类不存在 —— 已判为良性的在 BENIGN 里)");
+        List<String> prodOnlyNowInMigrations = Stream.concat(
+                        PROD_ONLY_NOT_IN_MIGRATIONS.stream(), PROD_ONLY_BENIGN.stream())
                 .filter(n -> "partial".equals(finalState.get(n)))
                 .sorted().toList();
         assertThat(prodOnlyNowInMigrations)
