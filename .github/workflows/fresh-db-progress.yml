@@ -1,0 +1,93 @@
+name: Fresh DB progress ratchet
+
+# 从迁移新建一个空库, 看能走多远。**⛔ 不是 pass/fail 闸** —— 今天这条链必然跑不完
+# (Flyway 死在第 267 条; 见 docs/ops/repo-cannot-build-a-fresh-database-2026-09-07.md),
+# 开局就红的阻塞闸活不过一周。它棘轮住三个数, **只许涨**。
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 为什么既要每 PR 又要 nightly
+# ═══════════════════════════════════════════════════════════════════════════
+# · 每 PR(只在命中 db/** 时): 这张票的根因就是「迁移腐烂了没人知道」。只放 nightly
+#   意味着回归**先合进 main**、第二天才知道 —— 那正是今天这个局面的成因。
+# · nightly 无条件: 防「没人改 db/ 但环境变了」(镜像升级、依赖漂移)。
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 ⛔ 这个 workflow **不许被 `switch_ci_runner.py --adopt` 接进自建集合**
+# ═══════════════════════════════════════════════════════════════════════════
+# `fresh-db-gate.sh` 用 `docker compose` 起 pg17, 而那台自建 Mac mini **没有 Docker**
+# —— 实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`, job 在
+# **Set up job 阶段**就死, 一个 step 都执行不到(见 .claude/rules/ci-runner-routing.md)。
+# ⚠️ 那个失败长得像「这个闸没跑」而不是「这台机器不支持」。
+# ⇒ `runs-on: ubuntu-latest` 是**硬约束**, 不是默认值。真要上自建, 得先把这个脚本从
+#   docker compose 改成原生 psql(`createdb`/`dropdb`, 抄 java-gate-pr.yml 的
+#   `postgres-reversal-concurrency`), ⛔ 不是改一行 runs-on。
+
+on:
+  pull_request:
+    paths:
+      # 被测对象: 迁移本身
+      - 'backend/java/cretas-api/src/main/resources/db/**'
+      # 仪器: 跑批脚本与基线
+      - 'scripts/testing/fresh-db-gate.sh'
+      - 'scripts/testing/fresh-db-progress-baseline.txt'
+      - 'docker-compose.fresh-db.yml'
+      # 自指: 改本文件的 PR 也要跑一次(否则触发面改坏了没人知道)
+      - '.github/workflows/fresh-db-progress.yml'
+  schedule:
+    # UTC 19:17 = 北京时间次日 03:17(错开 java-full-nightly 的 02:37)
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  progress:
+    # ⛔ 字面量, 且见文件头那条禁令: 自建 runner 没有 Docker。
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Show what this runner actually has
+        run: |
+          set -euo pipefail
+          # ⚠️ 这三样缺任何一样, 下面那步的失败都会长得像「迁移坏了」而不是「机器不对」。
+          docker --version
+          docker compose version
+          "$JAVA_HOME/bin/java" -version 2>&1 | head -1
+
+      - name: Fresh DB progress ratchet
+        run: |
+          set -euo pipefail
+          # ⚠️ `| tee` 会把退出码换成 tee 的 —— pipefail 才让脚本自己的 rc 透出来。
+          #    (本仓栽过: `cmd | tail` 的退出码是 tail 的, 失败被读成成功且无声。)
+          bash scripts/testing/fresh-db-gate.sh --progress 2>&1 | tee /tmp/fresh-db-progress.log
+
+      - name: Prove the readings landed
+        # 🔴 always(): 上一步红了**也要**核读数 —— 「跑批失败」与「跑批根本没产出读数」
+        #    是两件事, 后者意味着这一趟什么都没量到, ⛔ 不能只看上一步的绿。
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -s /tmp/fresh-db-progress.log ]; then
+            echo "::error title=Fresh DB 进度棘轮没量到::日志文件为空 —— 跑批根本没开始"
+            exit 1
+          fi
+          if ! grep -q 'READING: FRESH_DB_PROGRESS' /tmp/fresh-db-progress.log; then
+            echo "::error title=Fresh DB 进度棘轮没量到::日志里没有 FRESH_DB_PROGRESS 读数。"
+            echo "::error::一趟产不出读数的跑批, 在调用方看来可以和成功同形 —— 所以这里硬性要求它出现。"
+            tail -40 /tmp/fresh-db-progress.log
+            exit 1
+          fi
+          echo "--- 本趟读数 ---"
+          grep -E 'READING: FRESH_DB_(PROGRESS|FAILURE|BASELINE)' /tmp/fresh-db-progress.log
