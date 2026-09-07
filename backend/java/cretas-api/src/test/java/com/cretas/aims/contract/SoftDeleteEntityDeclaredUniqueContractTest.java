@@ -96,14 +96,14 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
             // 对**活行零约束**——同一个 (DEV-1, 1) 连插两条活行，两条都成功。
             // 也就是说这 4 个键 prod 与实体两侧一致地**什么都没守住**。正确形状是部分索引。
             // 这是 P0 之外的真实生产缺陷，已单独登记，⛔ 不在本闸里顺手改（要迁移 + 要先查存量重复）。
-            Map.entry("DahuaDevice#uk_dahua_factory_ip_port",
-                    "prod: (factory_id,ip_address,port,deleted_at) 全量；🔴 deleted_at 在键里 ⇒ 对活行零约束，待修"),
-            Map.entry("DahuaDeviceChannel#uk_dahua_device_channel",
-                    "prod: (device_id,channel_id,deleted_at) 全量；🔴 deleted_at 在键里 ⇒ 对活行零约束，待修"),
-            Map.entry("IsapiDevice#uk_factory_ip_port",
-                    "prod: (factory_id,ip_address,port,deleted_at) 全量；🔴 deleted_at 在键里 ⇒ 对活行零约束，待修"),
-            Map.entry("IsapiDeviceChannel#uk_device_channel",
-                    "prod: (device_id,channel_id,deleted_at) 全量；🔴 deleted_at 在键里 ⇒ 对活行零约束，待修"),
+            // ✅ 2026-09-07 已修（V20261101_40 + 四个实体摘掉声明），所以这 4 条从登记表里去掉了。
+            //    上面那句「⛔ 不在本闸里顺手改（要迁移 + 要先查存量重复）」的两个前置条件都办了：
+            //    · 迁移：V20261101_40 §2 —— 同一事务内 DROP 旧的 + CREATE `WHERE deleted_at IS NULL`，
+            //      CREATE 失败会把 DROP 一起回滚，⛔ 不留「旧的删了新的没建」的裸奔窗口。
+            //    · 存量重复：prod public 上这 4 张表实测 **0 行**（dahua 两张 inserts=0；
+            //      isapi 两张历史 inserts=12/6 但已清空）⇒ 无重复可撞。
+            //    ⚠️ 本闸是**全等**断言（containsExactlyElementsOf）⇒ 摘声明之后不删这 4 条就会报红。
+            //    那次红正是它该有的行为，⛔ 不是误报。
 
             // ── 类别 B：prod 上根本没有对应的唯一索引 ⇒ H2 比 prod 严，待裁定 ──────────────────────
             // ⛔ 不要因为「摘掉就绿了」就摘：prod 少建索引和实体多声明是两个相反的结论，

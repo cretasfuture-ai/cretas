@@ -109,7 +109,13 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
     }
 
     /**
-     * 实体侧摘掉唯一声明之后，改由 prod 的部分索引兜底的那些键：索引名 -> 它守着哪张表的什么。
+     * 必须在迁移里以<b>部分</b>唯一索引形态存在的键：索引名 -> 它守着哪张表的什么。
+     *
+     * <p>⚠️ 2026-09-07 放宽了口径，因为收的已经不止一类。原措辞只写「实体侧摘掉唯一声明之后
+     * 改由 prod 部分索引兜底的那些键」，而 {@code uk_report_worker_type_date_no_batch}
+     * <b>从来没有被实体声明过</b> —— 它是 prod-only、迁移里缺失、由 V20261101_40 补进来的。
+     * ⛔ 与其把它塞进旧措辞里，不如把措辞改对：<b>登记的是索引该长什么样，不是它怎么来的</b>。
+     * 两类都在：<br>① 实体摘掉声明、改由部分索引兜底；<br>② prod-only 补进迁移的部分索引。
      *
      * <p>⛔ 这里<b>不写死条目数</b>：它每批软删都会涨（#717 的 11 -> 批 3-B 的 22 -> 迁移 V20261101_39 搬上来 2 条 = 24），
      * 而写死的数字是「忘了改」和「闸坏了」长得一样的那种仪器。实际条目数由 {@link #reg} 累计，
@@ -153,6 +159,21 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         // 「原本只活在 prod 上、现在迁移里有了」就会报红提醒搬 —— 这次它确实红了。
         reg("uq_business_rules_factory_code_active", "business_rules 规则 code 唯一");
         reg("uq_notify_templates_factory_code_active", "notify_templates 模板 code 唯一");
+
+        // ── 票 OPS-PROD-ONLY-PARTIAL-INDEXES-20260907 第二批（V20261101_40）─────────────
+        // 前 4 条原本是 `(…, deleted_at)`：deleted_at **在键里**，PG 的 NULLS DISTINCT 让它对
+        // **活行零约束**（实测：三条完全相同的活行全部插入成功；而两条相同的软删行反被拒）。
+        // 同一支迁移把它们改成 `WHERE deleted_at IS NULL`，实体侧的声明一并摘掉。
+        reg("uk_dahua_factory_ip_port", "dahua_devices 厂内 IP+端口唯一");
+        reg("uk_dahua_device_channel", "dahua_device_channels 设备内通道唯一");
+        reg("uk_factory_ip_port", "isapi_devices 厂内 IP+端口唯一");
+        reg("uk_device_channel", "isapi_device_channels 设备内通道唯一");
+        // ⚠️ 这一条与上面 4 条**来路不同**：它从来没被实体声明过，是 prod-only、迁移里缺失。
+        //    ⛔ 别因为它进了同一个表就以为它也是「摘声明」那一类（见本常量 javadoc 的两类）。
+        //    ⚠️ 而且 ProductionReport 的 @SQLDelete 是 0 —— 它仍是 R68 那批**物理删**实体，
+        //       本票只补索引，⛔ 不代表这张表已经软删了。
+        reg("uk_report_worker_type_date_no_batch", "production_reports 无批次时同工人同类型同日唯一");
+        // uk_sm_published 不在这里 —— 见 NOT_COVERED_BY_THIS_GATE。
     }
 
 
@@ -240,6 +261,28 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      * （{@link #resolveFinalIndexState()} 已经是这么做的）——CREATE / DROP / RENAME 都只是状态转移。
      */
     private static final Set<String> PROD_ONLY_BENIGN = Set.of("uk_encoding_rules");
+
+    /**
+     * <b>确认存在、也确认本闸管不着</b>的唯一索引：名字 -&gt; 为什么不归本闸。
+     *
+     * <p>🔴 为什么要有这一格，而不是「不加就完了」：2026-09-07 的普查<b>第二次</b>发现
+     * {@code uk_sm_published}——第一次发现它的人（就是我）只在注释里提了一句，
+     * 于是它在下一轮普查里<b>又是一条新发现</b>。
+     * ⇒ 一个「已经判过、判定是不管它」的结论，如果没有<b>可被 {@code git grep 名字} 命中的载体</b>，
+     * 和「从来没人看过」在读数上完全一样。
+     *
+     * <p>⛔ <b>不要为了「让它被守住」把对象塞进一道判据不适用的闸</b>：本闸判 partial 的依据是
+     * 语句里含 {@code deleted_at is null}（见 {@link #resolveFinalIndexState()}），
+     * 而 {@code uk_sm_published} 的谓词是 {@code publish_status = 'published'}
+     * ⇒ 登进来会被判成 {@code full} 而报<b>假红</b>。假红的代价不是那一次红，
+     * 是<b>下一个人会去调宽闸的判据</b>，然后它对真问题也瞎了。
+     *
+     * <p>{@code uk_sm_published}（{@code state_machines (factory_id, entity_type)
+     * WHERE publish_status = 'published'}）：prod-only，已由 {@code V20261101_40} §3 补进迁移。
+     * ⚠️ {@code StateMachine} 的 {@code @SQLDelete} 是 <b>0</b> —— 它仍是 R68 那批<b>物理删</b>实体，
+     * ⛔ 「给它补了个带 {@code deleted_at} 语义的邻居索引」不等于「这张表软删了」。
+     */
+    private static final Set<String> NOT_COVERED_BY_THIS_GATE = Set.of("uk_sm_published");
 
     private static final Pattern CREATE_UNIQUE_INDEX =
             Pattern.compile("CREATE\\s+UNIQUE\\s+INDEX\\b[^;]*;", Pattern.CASE_INSENSITIVE);
@@ -340,9 +383,11 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         // 所以必须有一个「设计上必然」的读数把它顶住。
         // ⛔ 不写死等于 24：条目数每批软删都会涨，写死的话「忘了改」与「闸坏了」长得一样。
         System.out.println("MUST_BE_PARTIAL_REGISTERED=" + MUST_BE_PARTIAL_IN_MIGRATIONS.size());
+        System.out.println("NOT_COVERED_BY_THIS_GATE=" + NOT_COVERED_BY_THIS_GATE
+                + " (确认存在、确认本闸判据不适用；⛔ 不是漏登记)");
         assertThat(MUST_BE_PARTIAL_IN_MIGRATIONS)
                 .as("阳性对照：登记表为空 / 被砍半时，下面的逐条核查是恒真的")
-                .hasSizeGreaterThanOrEqualTo(24);
+                .hasSizeGreaterThanOrEqualTo(29);
 
         List<String> missing = new ArrayList<>();
         List<String> notPartial = new ArrayList<>();

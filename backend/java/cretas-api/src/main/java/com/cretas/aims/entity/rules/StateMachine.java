@@ -28,7 +28,11 @@ import org.hibernate.annotations.Where;
            // replaced with (factory_id, entity_type, version) so multiple versions can coexist
            // (one published + N archived + ≤1 draft). The "only one published per pair" rule is
            // enforced via a partial unique index `uk_sm_published WHERE publish_status='published'`,
-           // which JPA's @UniqueConstraint cannot express; production schema is governed by Flyway.
+           // which JPA's @UniqueConstraint cannot express.
+           // ⚠️ 2026-09-07：这句原本写的是「production schema is governed by Flyway」——
+           //    **在 V20261101_40 之前那是假的**：uk_sm_published 只活在 prod 上，
+           //    迁移里一条都没有 ⇒ 从迁移新建的库拿不到它，而这行注释读起来像它已经被管着了。
+           //    V20261101_40 §3 把它补进迁移之后，这句话才成立。
            @UniqueConstraint(name = "uk_sm_factory_entity_version",
                             columnNames = {"factory_id", "entity_type", "version"})
        })
