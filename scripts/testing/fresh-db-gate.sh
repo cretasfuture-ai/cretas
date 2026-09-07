@@ -30,11 +30,20 @@ initialization. Containers are removed after the run unless --keep is used.
 Options:
   --keep       Keep the database container after success or failure.
   --dry-run    Print the exact plan without invoking Docker or Maven.
-  --progress   进度棘轮模式: 跳过 Repository 闸, 允许 Flyway 中途失败, 然后照样读出
-               migrations_applied / tables / indexes 三个数并与基线比较 —— 三个只许涨。
-               ⛔ 不是 pass/fail 闸: 今天这条链必然跑不完(见
-               docs/ops/repo-cannot-build-a-fresh-database-2026-09-07.md),
-               而开局就红的阻塞闸活不过一周。
+  --progress   形状模式: 跳过 Repository 闸, 读出三个数并按**各自的形式**判定。
+               🔴 三个读数三种形式, 理由各不相同 —— ⛔ 别把它们当成一类:
+                 失败迁移条数            = **pass/fail, 必须为 0**
+                                          二值事实, ⛔ 不随正常演进变。
+                 tables / indexes        = **棘轮(只许涨)**
+                                          每合进一条建表/建索引的迁移, 它们**合法地涨**
+                                          ⇒ 对固定值做 pass/fail 会红在**每一次正常的
+                                          schema 演进**上。⛔ 而降是异常。
+                 migrations_above_baseline = **⛔ 不设界**
+                                          每次重新采集基线它都掉回 1(基线往前挪 ⇒
+                                          上面的迁移被吸收), 设界 = 每次刷新都红一次。
+               ▎**闸的类型不是闸的属性, 是每个读数各自的属性。**
+               ⚠️ 唯一边界: 某条迁移**合法地删表删索引**时棘轮会红 ——
+                  那时要**有意识地下调下界并说明**, ⛔ 不是自动跟随。
   -h, --help   Show this help.
 
 Local-only overrides:
@@ -404,8 +413,9 @@ for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
     sleep 1
 done
 if [ "$PROGRESS" -eq 1 ]; then
-    # ── 进度棘轮 ────────────────────────────────────────────────────────────
-    # 三个数 + 失败点。⛔ 不判 pass/fail, 只判「有没有倒退」。
+    # ── 形状判定 ────────────────────────────────────────────────────────────
+    # 🔴 三个读数三种形式(理由见 usage): 失败迁移 = pass/fail; tables/indexes = 棘轮;
+    #    migrations_above_baseline = ⛔ 不设界。⛔ 不要把它们折成同一种判法。
     q() { "${COMPOSE[@]}" exec -T postgres psql -tAc "$1" -U cretas_user -d cretas_db 2>/dev/null | tr -d '\r' | head -1; }
     # ⚠️ 每个都要 `|| true`: 本脚本是 `set -euo pipefail`, 而 `x=$(cmd)` 里 cmd 失败会**当场**
     #    中止脚本 —— 于是下面那个「读不出来 ⇒ 没量到」的三态检查**永远走不到**,
@@ -432,7 +442,13 @@ if [ "$PROGRESS" -eq 1 ]; then
     if [ -z "$fail_file" ] && [ "$healthy" -ne 1 ]; then
         fail "progress: 既没有失败点读数、也没有健康 —— 这趟没跑到 Flyway, ⛔ 三个数不作数"
     fi
-    [ -n "$fail_file" ] || log "progress: 没有失败点 —— 🎉 这条链已经跑完了, 请把 --progress 换成正常模式并考虑接成 pass/fail 闸"
+    # ⚠️ 2026-09-07 baseline bootstrap 落地之后, **「没有失败点」是常态** ——
+    #    此前它是遥远目标, 那时这里写的是「请考虑接成 pass/fail 闸」。⇒ 措辞已换。
+    #    ⛔ 而「有失败点」现在**不再是常态**: 它由下面那条 failed=0 直接判红。
+    #    ⚠️ 本条(fail_file)与那条(failed 计数)是**两个来源**: 这条读的是应用日志里的
+    #      `Migration V… failed`, 那条读的是 flyway_schema_history。两者都留着 ——
+    #      日志能给出**是哪一条**, 而表能给出**有几条**; 只留一个就答不全。
+    [ -n "$fail_file" ] || log "shape: 日志里没有失败点(bootstrap 之后这是常态; 失败与否由下面 failed=0 判)"
 
     # ── 失败迁移: 这一条是 pass/fail, ⛔ 不是棘轮 ────────────────────────────
     # 基线 bootstrap 落地之后, 「跑完」不再是遥远目标而是常态 ⇒ 一条失败的迁移
