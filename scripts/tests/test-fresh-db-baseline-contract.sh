@@ -25,7 +25,7 @@ set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 RES="$ROOT_DIR/backend/java/cretas-api/src/main/resources"
-BASELINE_DIR="$RES/db/baseline"
+BASELINE_DIR="$ROOT_DIR/ops/db-baseline"
 FLYWAY_DIR="$RES/db/flyway"
 CAPTURE="$ROOT_DIR/scripts/ops/capture-fresh-db-baseline.sh"
 pass=0
@@ -35,7 +35,7 @@ ok() { pass=$((pass + 1)); echo "  ok - $*"; }
 [ -s "$CAPTURE" ] || fail "找不到采集脚本 $CAPTURE"
 bash -n "$CAPTURE" || fail "$CAPTURE 语法错误"
 
-# ---- 1. 禁令一: db/baseline/ 下 ⛔ 不许有 V…__ 开头的文件 ----
+# ---- 1. 禁令一: ops/db-baseline/ 下 ⛔ 不许有 V…__ 开头的文件 ----
 # ⚠️ 目录还不存在是**合法状态**(基线尚未产出), 但必须**说出来**, ⛔ 不静默跳过 ——
 #    「目录不存在」与「目录里没有违规文件」在退出码上同形, 而前者意味着这一条**没量到**。
 if [ -d "$BASELINE_DIR" ]; then
@@ -44,17 +44,17 @@ if [ -d "$BASELINE_DIR" ]; then
     n_nonempty=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.sql' -size +0 | wc -l)
     echo "READING: BASELINE_DIR=present files=$n_sql non_empty=$n_nonempty"
     [ -z "$(printf '%s' "$offenders" | tr -d ' ')" ] \
-        || fail "1: db/baseline/ 下出现了 Flyway 迁移命名的文件:$offenders —— ⛔ 它会在 prod 上被当成新迁移执行"
+        || fail "1: ops/db-baseline/ 下出现了 Flyway 迁移命名的文件:$offenders —— ⛔ 它会在 prod 上被当成新迁移执行"
     # 🔴 目录在但**空着**时, 上面那条 offenders 恒为空 ⇒ 闸绿, 而它什么都没守到。
     #    ⚠️ 「闸绿」与「禁令生效」在这一步读数相同 —— 这正是「每加一道闸先答:
-    #    **它自己坏掉时读数长什么样**」。实测: 建一个空的 db/baseline/ ⇒ files=0 而闸照样 PASS。
+    #    **它自己坏掉时读数长什么样**」。实测: 建一个空的 ops/db-baseline/ ⇒ files=0 而闸照样 PASS。
     #    ⇒ 目录一旦存在, 就必须真的有一个非空基线。
     [ "$n_nonempty" -ge 1 ] \
-        || fail "1: db/baseline/ 存在但没有非空的 .sql (files=$n_sql non_empty=$n_nonempty) —— 本条**没守到东西**, ⛔ 不许算绿"
-    ok "db/baseline/ 下没有 V…__ 命名的文件, 且有 $n_nonempty 个非空基线"
+        || fail "1: ops/db-baseline/ 存在但没有非空的 .sql (files=$n_sql non_empty=$n_nonempty) —— 本条**没守到东西**, ⛔ 不许算绿"
+    ok "ops/db-baseline/ 下没有 V…__ 命名的文件, 且有 $n_nonempty 个非空基线"
 else
     echo "READING: BASELINE_DIR=absent (基线尚未产出 ⇒ 本条**没量到**, 不是「没问题」)"
-    ok "db/baseline/ 尚不存在(允许; 但本条这次没有量到东西)"
+    ok "ops/db-baseline/ 尚不存在(允许; 但本条这次没有量到东西)"
 fi
 
 # ---- 2. 禁令一的另一半: db/flyway/ 下 ⛔ 不许出现 baseline dump ----
@@ -65,18 +65,71 @@ dump_in_flyway=$(grep -rl -- '-- Dumped from database version' "$FLYWAY_DIR" 2>/
     || fail "2: db/flyway/ 下混进了 pg_dump 产物:$dump_in_flyway —— ⛔ 那会在 prod 上重跑整份建表脚本"
 ok "db/flyway/ 下没有 pg_dump 产物(按内容特征判, ⛔ 不只看文件名)"
 
+# ---- 2b. 🔴 整个 src/main/resources/ 下 ⛔ 都不许有 pg_dump 产物 ----
+#
+# 这一条是 2026-09-07 实测出来的, ⛔ 不是推想:
+#   第一份真基线原本落在 src/main/resources/db/baseline/, 两个后果**当时都没人算到** ——
+#   ① 它被打进了 jar: BOOT-INF/classes/db/baseline/… (原始 1368345 → 压缩 182157 字节)
+#      ⇒ 一份 prod schema dump 进了**部署产物**。它是运维制品, ⛔ 不是应用资源。
+#   ② 更坏: 落在 BOOT-INF/classes/ 下意味着它**在 classpath 上**
+#      ⇒ `spring.flyway.locations=classpath:db/baseline` 是**真能解析到**的
+#      ⇒ 上面第 3 条那个禁令, 当时离失守只有一行配置。
+#   ③ 而 PartialUniqueIndexBackingSoftDeleteContractTest 扫的是父目录 src/main/resources/db,
+#      ⇒ dump 进了它的语料, 那道闸**红着却已经瞎了**(见文档第九节)。
+#
+# ⇒ 基线移到仓库根的 ops/db-baseline/。本条守着它**不被挪回来** ——
+# ⚠️ 「挪回 resources」是一次看起来很自然的整理(「SQL 不都该放 resources 吗」),
+#    而三个后果全是静默的。⛔ 注释挡不住, 所以写成闸。
+res_dump=$(grep -rl -- '-- Dumped from database version' "$RES" 2>/dev/null | sed "s#^$ROOT_DIR/##" | tr '\n' ' ')
+[ -z "$(printf '%s' "$res_dump" | tr -d ' ')" ] \
+    || fail "2b: src/main/resources/ 下混进了 pg_dump 产物:$res_dump
+  ⇒ ① 它会被打进 jar(部署产物里多一份 prod schema); ② 它落在 classpath 上 ⇒ locations 能解析到它;
+     ③ 扫 src/main/resources/db 的契约闸会把它当迁移语料 ⇒ 那道闸会**红着却已经瞎了**。
+  ⛔ 基线归 ops/db-baseline/, 不归 resources。"
+ok "src/main/resources/ 下没有 pg_dump 产物(⇒ ⛔ 不进 jar / ⛔ 不在 classpath / ⛔ 不污染扫迁移的闸)"
+
 # ---- 3. 禁令二: spring.flyway.locations ⛔ 不许含 baseline ----
-loc_files=$(grep -rl 'spring.flyway.locations' "$RES" 2>/dev/null)
-[ -n "$loc_files" ] || fail "3: 一处 spring.flyway.locations 都找不到 —— **没量到**(配置改名了?), ⛔ 不报绿"
-n_loc=0
+#
+# 🔴 这一条的第一版**把「谈论这个配置的文本」也算成了配置**(2026-09-07 实测):
+#   `grep -rl 'spring.flyway.locations' $RES` 数出 7 个, 而**只有 2 个是真配置**
+#   (application-pg{,-prod}.properties), 另外 **5 个是迁移里的注释**, 形如:
+#     V20260416_11: -- Spring config: spring.flyway.locations=classpath:db/flyway — db/migration
+#     V20260424_08: -- db/migration/ 从未被 Flyway 扫描 (项目用 spring.flyway.locations=
+#
+#   ⇒ 两个后果, ⛔ 都不是「读数难看」这么轻:
+#   ① **假红只有一个词之遥**: 那 5 条注释里但凡有一条写成
+#      「⛔ 不要把 baseline 放进 spring.flyway.locations」——一种完全自然的措辞——
+#      本闸就会红, **红在一句正确的注释上**, 而不是任何真实配置。
+#   ② 🔴 **更坏: 下面那条「一处都找不到就算没量到」的阳性对照会被它们顶住。**
+#      真配置若被改名或删除, 这 5 个注释文件照样让 loc_files 非空 ⇒ 闸继续绿,
+#      而它此刻**一处真配置都没在看**。⇒ 阳性对照被「谈论它的文本」满足 = 阳性对照失效。
+#
+# ▎**任何「按文本特征找 X」的闸, 都会把「谈论 X 的文本」算成 X。**
+#   ⇒ 判据锚到**赋值**这个形态(行首 + = 或 :)并限定配置文件类型, ⛔ 不能只搜那个串;
+#     「仅提及」的那些**单独报数**, ⛔ 不折进同一个读数里。
+loc_files=$(grep -rlE '^[[:space:]]*spring\.flyway\.locations[[:space:]]*[=:]' \
+    --include='*.properties' --include='*.yml' --include='*.yaml' "$RES" 2>/dev/null)
+n_loc=$(printf '%s' "$loc_files" | grep -c . || true)
+n_mention=$(grep -rl 'spring.flyway.locations' "$RES" 2>/dev/null | wc -l)
+n_mention=$((n_mention - n_loc))
+echo "READING: FLYWAY_LOCATIONS_CONFIG_FILES=$n_loc MENTIONS_ONLY=$n_mention (⛔ 后者不是配置, 不参与判定)"
+[ "$n_loc" -ge 1 ] \
+    || fail "3: 一处**真的** spring.flyway.locations 赋值都找不到 —— **没量到**(配置改名了?), ⛔ 不报绿。
+  ⚠️ 而此刻仍有 $n_mention 个文件**提到**这个串 —— 旧版判据会被它们顶成绿。"
 for f in $loc_files; do
-    n_loc=$((n_loc + 1))
-    line=$(grep 'spring.flyway.locations' "$f" | head -1)
+    line=$(grep -m1 -E '^[[:space:]]*spring\.flyway\.locations[[:space:]]*[=:]' "$f")
     printf '%s' "$line" | grep -qi 'baseline' \
         && fail "3: $(basename "$f") 的 locations 含 baseline —— ⛔ 基线一旦进搜索路径就会被当迁移跑: $line"
 done
-echo "READING: FLYWAY_LOCATIONS_FILES=$n_loc"
-ok "$n_loc 处 spring.flyway.locations 都不含 baseline"
+# 阴性对照: 造一行**只是提到**它的注释, 判据必须**不**把它算成配置。
+# ⚠️ 没有这一条,「我锚到了赋值」与「我以为锚了其实还是全匹配」读数完全相同。
+probe=$(mktemp --suffix=.properties)
+printf '# 说明: 本项目用 spring.flyway.locations=classpath:db/flyway, 且 baseline 不许进去\n' > "$probe"
+probe_hit=$(grep -cE '^[[:space:]]*spring\.flyway\.locations[[:space:]]*[=:]' "$probe" || true)
+rm -f "$probe"
+[ "$probe_hit" = "0" ] \
+    || fail "3: 阴性对照失败 —— 一行**只是提到**该配置(且含 baseline)的注释被判成了配置, hit=$probe_hit"
+ok "$n_loc 处真配置都不含 baseline; 另有 $n_mention 处仅提及已排除(阴性对照: 提及行不算配置)"
 
 # ---- 4. 采集脚本默认 ⛔ 不落盘 ----
 # ⚠️ 守的是**行为**: 必须存在「WRITE 不为 1 就提前退出」这条路径。
