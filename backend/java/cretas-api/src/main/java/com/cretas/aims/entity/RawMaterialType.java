@@ -8,6 +8,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Pattern;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -99,6 +100,7 @@ import java.util.List;
            @Index(name = "idx_material_is_active", columnList = "is_active")
        }
 )
+@SQLDelete(sql = "UPDATE raw_material_types SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class RawMaterialType extends BaseEntity {
 

@@ -8,6 +8,7 @@ import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
 import org.hibernate.annotations.Formula;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
@@ -41,6 +42,7 @@ import java.util.Map;
            @Index(name = "idx_material_batch_warehouse", columnList = "factory_id, warehouse_id")
        }
 )
+@SQLDelete(sql = "UPDATE material_batches SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class MaterialBatch extends BaseEntity {
     @Id
