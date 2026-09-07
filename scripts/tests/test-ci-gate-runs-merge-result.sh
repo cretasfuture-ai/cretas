@@ -194,4 +194,26 @@ grep -q "github.event_name == 'pull_request'" "$GATE" \
     || fail "B: action 缺 pull_request 守卫 —— schedule / dispatch 会合一个不存在的 base"
 ok "非 pull_request 事件整步跳过"
 
+# ── C. 这道闸自己**触发得到吗** (2026-09-07 P0 的直接教训) ──────────────────
+# 本测试断言的是 java-gate-pr.yml / java-full-nightly.yml 的结构, 但它自己是由
+# ops-script-tests.yml 的 glob(`scripts/tests/*.sh`)跑的 —— 如果那个 workflow 的 paths
+# 不含被断言的文件, 那么**只动那些文件**的 PR 根本不会触发它。
+# 实测代价: 一个只动 `.github/actions/` 的 commit(删了 action 却留着三处 `uses:`)在 PR 上全绿,
+# 而它会让**每一个** PR 的 Java 闸 9 秒红。⇒ 闸断言谁的结构, 谁就必须在触发面里。
+OPS_WF="$ROOT_DIR/.github/workflows/ops-script-tests.yml"
+[ -s "$OPS_WF" ] || fail "C: 找不到 $OPS_WF"
+OPS_PATHS=$(awk '
+    /^[[:space:]]*paths:[[:space:]]*$/ { inb = 1; next }
+    inb && /^[[:space:]]*-[[:space:]]/ { sub(/#.*$/, ""); print; next }
+    inb && /^[[:space:]]*#/            { next }
+    inb && NF                          { inb = 0 }
+' "$OPS_WF")
+echo "READING: OPS_SCRIPT_TESTS_PATHS=$(printf '%s
+' "$OPS_PATHS" | grep -c . || true)"
+for guarded in .github/workflows/java-gate-pr.yml .github/workflows/java-full-nightly.yml; do
+    printf '%s
+' "$OPS_PATHS" | grep -qF "$guarded"         || fail "C: 本测试断言 $guarded 的结构, 但 ops-script-tests.yml 的 paths 不含它 ⇒ 只动它的 PR 触发不到这道闸(那正是 P0 的形状)"
+done
+ok "被本测试断言的两个 workflow 都在 ops-script-tests 的触发面里"
+
 echo "PASS: test-ci-gate-runs-merge-result.sh ($PASSED 组断言)"
