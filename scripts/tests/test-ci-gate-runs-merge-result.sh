@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# GUARDS=.github/workflows/java-gate-pr.yml,.github/workflows/java-full-nightly.yml,.github/actions/**
 # Java 闸必须跑在【PR 合进 base 之后】的树上, 不是 PR 分支自己。
 #
 # ═══════════════════════════════════════════════════════════════════════════

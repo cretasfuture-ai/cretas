@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# GUARDS=.github/workflows/java-artifact.yml,.github/workflows/web-dist.yml
 # 预热短路的真值测试。
 #
 # 这条短路危险在于: 它的作用是【跳过一整段跨境运输 + 验签】。判松了就会把一份不适用的
