@@ -62,6 +62,25 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lsm_factory_name", "logistics_store_master 门店名唯一");
         MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lt_plan_tripno", "logistics_trips 计划内车次号唯一");
         MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lvd_binding", "logistics_vehicle_drivers 车-司机绑定唯一");
+
+        // ── 软删批 3-B（2026-09-07）：又 11 个实体摘掉了自己的唯一声明 ────────────────────────
+        // ⚠️ 全部 11 个都登记，⛔ 不只登记那个「测试变红」的：#717 的教训是
+        //    「只有 N 个变红不是因为只有它们有问题，是因为只有它们被测试碰到了」——
+        //    本批 11 个里只有 logistics_order_batches 有一条 H2 断言撞上来，另外 10 个是**静默**失去保护的。
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_account_factory_code", "accounts 工厂内科目编码唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_accounting_period_factory_year_month", "accounting_periods 工厂年月唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_alert_rules_factory_name", "alert_rules 工厂内规则名唯一");
+        // ⚠️ encoding_rules 用的是 idx_encoding_rules_unique（迁移里**真的建了**的那条）。
+        //    prod 上另有一条同表同列的 uk_encoding_rules，但它在迁移里只出现在一条 DROP CONSTRAINT 中、
+        //    从未被创建 ⇒ 属于「prod 独有」那张票，⛔ 不能拿它当本闸的锚。
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("idx_encoding_rules_unique", "encoding_rules 工厂+实体类型唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_fsc_factory_active", "factory_scheduling_config 每厂一份生效配置");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lde_edge", "logistics_distance_edges 起讫点对唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lob_idempotent", "logistics_order_batches 导入幂等键");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lvp_vehicle", "logistics_vehicle_profiles 一车一档");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uidx_payment_requests_number", "payment_requests 付款单号唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uidx_purchase_exceptions_number", "purchase_exceptions 异常单号唯一");
+        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_tdr_factory_diffnum", "transfer_diff_records 差异单号唯一");
     }
 
     /**
