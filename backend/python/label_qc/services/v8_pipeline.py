@@ -631,8 +631,9 @@ class _V8CascadeModels:
             return preserved
         tile_width, tile_height = max(1, round(width * 0.65)), max(1, round(height * 0.65))
         proposals: list[Detection] = []
-        for x, y in ((0, 0), (width - tile_width, 0),
-                     (0, height - tile_height), (width - tile_width, height - tile_height)):
+        # The existing cascade already supplements the lower band. Restrict this
+        # optional pass to the upper band, retaining both horizontal positions.
+        for x, y in ((0, 0), (width - tile_width, 0)):
             for row in self.production.detect_trays(
                 image[y:y + tile_height, x:x + tile_width], PRODUCTION_TRAY_CONFIDENCE,
             ):

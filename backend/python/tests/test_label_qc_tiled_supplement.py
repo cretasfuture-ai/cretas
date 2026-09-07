@@ -61,9 +61,9 @@ def test_default_full_layout_and_landscape_do_not_run_tiles(enabled, count, shap
 
 def test_duplicate_tiles_map_to_original_coordinates_and_keep_label_routes():
     original = Detection(20, 100, 150, 300, .8, 0)
-    # Same physical tray appears in all four overlapping tiles.
+    # Same physical tray appears in both upper overlapping tiles.
     tiles = [[Detection(180-x, 400-y, 320-x, 600-y, .95, 0)]
-             for x, y in [(0, 0), (175, 0), (0, 350), (175, 350)]]
+             for x, y in [(0, 0), (175, 0)]]
     production = Production((1000, 500, 3), [original], tiles)
     model = cascade(production)
     rows = model.detect_trays(np.zeros(production.shape, dtype=np.uint8), .6)
@@ -73,6 +73,7 @@ def test_duplicate_tiles_map_to_original_coordinates_and_keep_label_routes():
     assert len(model._label_routes) == 2
     assert model.last_raw_detections[-1]["source"] == "candidate_tiled_supplement"
     assert model.last_stats["tiledSupplementBoxesKept"] == 1
+    assert len(production.calls) == 3  # One primary pass and two upper crops.
 
 
 def test_internal_tile_cuts_overlap_and_far_background_are_excluded():
@@ -81,11 +82,26 @@ def test_internal_tile_cuts_overlap_and_far_background_are_excluded():
         [original, Detection(200, 300, 325, 450, .9, 0),
          Detection(200, 25, 240, 45, .95, 0)],
         [Detection(0, 300, 120, 450, .9, 0)],
-        [Detection(170, 0, 280, 150, .9, 0)],
-        [],
     ])
     model = cascade(production)
     assert model.detect_trays(np.zeros(production.shape, dtype=np.uint8), .6) == [original]
+
+
+def test_both_upper_crops_read_expected_source_pixels():
+    image = np.arange(1000 * 500, dtype=np.int32).reshape(1000, 500, 1)
+    crops = []
+
+    def detect(frame, confidence):
+        if frame.shape == image.shape:
+            return []
+        crops.append(frame.copy())
+        return []
+
+    model = cascade(SimpleNamespace(detect_trays=detect))
+    assert model.detect_trays(image, .6) == []
+    assert len(crops) == 2
+    np.testing.assert_array_equal(crops[0], image[:650, :325])
+    np.testing.assert_array_equal(crops[1], image[:650, 175:])
 
 
 def test_capacity_never_displaces_existing_trays_or_runs_unneeded_tiles():

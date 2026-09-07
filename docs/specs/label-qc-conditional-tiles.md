@@ -5,7 +5,9 @@ The optional bundle manifest boolean `trayTiledSupplementEnabled` defaults to
 loading. This feature does not change model weights or the label threshold.
 
 When enabled, portrait images with fewer than eight primary detections receive
-four overlapping crops, each 65% of the source width and height. The existing
+two upper overlapping crops, each 65% of the source width and height, anchored
+at the left and right edges. The existing cascade already supplements the lower
+band; this optional pass focuses on the upper band. The existing
 primary detector processes them at its fixed 0.60 confidence. This reuses the
 primary count already computed by the cascade, with no extra full-image pass.
 
@@ -36,3 +38,12 @@ bundle hashes. Include triggered cases as a separate latency group: aggregate
 percentiles can hide the cost of rare supplemental passes. Do not enable this
 flag in a production bundle unless the applicable recall, normal-image and
 latency gates pass. Leaving the flag absent is the compatibility path.
+
+The two-upper-crop revision retains both recoveries in the same development
+set while halving additional detector calls. It intentionally removes lower
+crop coverage; this development result does not establish equivalence on new
+images. The first paired timing run passes the original percentile calculation,
+but has large control variation and seven of nine triggered pairs exceed 15%
+overhead (median 27.2%). Stable latency acceptance remains unconfirmed. Keep the
+feature disabled pending representative, controlled measurements; a noisy
+aggregate percentile is insufficient activation evidence.
