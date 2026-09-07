@@ -29,7 +29,8 @@ on:
       - 'backend/java/cretas-api/src/main/resources/db/**'
       # 仪器: 跑批脚本与基线
       - 'scripts/testing/fresh-db-gate.sh'
-      - 'scripts/testing/fresh-db-progress-baseline.txt'
+      - 'scripts/testing/fresh-db-above-baseline-floor.txt'
+      - 'ops/db-baseline/**'
       - 'docker-compose.fresh-db.yml'
       # 自指: 改本文件的 PR 也要跑一次(否则触发面改坏了没人知道)
       - '.github/workflows/fresh-db-progress.yml'

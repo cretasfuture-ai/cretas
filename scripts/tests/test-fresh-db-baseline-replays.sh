@@ -147,11 +147,36 @@ done
 [ "$ready" -eq 1 ] || fail "3: 容器 40 次探测仍未就绪 —— **没量到**"
 docker exec "$CONTAINER" psql -U cretas_user -d cretas_db -Atc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null 2>&1
 docker cp "$BASELINE" "$CONTAINER:/baseline.sql" >/dev/null || fail "3: 拷不进容器"
-n_err=$(docker exec "$CONTAINER" bash -c \
-    'psql -U cretas_user -d cretas_db -f /baseline.sql >/dev/null 2>/tmp/e.log; grep -c "^ERROR:" /tmp/e.log' \
-    2>/dev/null | tr -d '\r\n')
+# 🔴 这里原本写的是 `grep -c "^ERROR:"` —— 它**恒为 0**。
+#    psql 把错误打成 `psql:/baseline.sql:38: ERROR:  ...`, **行首是 `psql:`**,
+#    所以 `^ERROR:` 一条都匹配不到。⇒ 那个 errors= 读数从上线起就是个恒定的安心值,
+#    而它被当作证据引用过好几次。
+#    ▎**一个永远等于「没问题」的读数, 比没有这个读数更坏** —— 它占着位置。
+# ⚠️ 阳性对照就在下面: 故意灌一条坏语句, 计数器必须真的动。
+docker exec "$CONTAINER" bash -c \
+    'psql -U cretas_user -d cretas_db -f /baseline.sql >/dev/null 2>/tmp/e.log; true' >/dev/null 2>&1
+n_err=$(docker exec "$CONTAINER" bash -c 'grep -c "ERROR:" /tmp/e.log' 2>/dev/null | tr -d '\r\n')
+# 已知良性的那一条: dump 里带 `CREATE SCHEMA public;`(第 38 行), 而空库上 public 天然存在。
+# ⚠️ ⛔ 不要「先 DROP SCHEMA public 再灌」来消掉它 —— 实测那样会 **CASCADE 掉 vector 扩展**,
+#    变成 56 个错误、498 张表(少 4 张)。▎消掉一条已知错误的办法, 可能比那条错误糟得多。
+n_benign=$(docker exec "$CONTAINER" bash -c \
+    'grep -c "ERROR:  schema \"public\" already exists" /tmp/e.log' 2>/dev/null | tr -d '\r\n')
 [ -n "$n_err" ] || n_err=unknown
-ok "基线已灌进空 PG (errors=$n_err)"
+[ -n "$n_benign" ] || n_benign=0
+n_unexpected=$((n_err - n_benign))
+echo "READING: BASELINE_REPLAY_ERRORS total=$n_err benign_public_schema=$n_benign unexpected=$n_unexpected"
+[ "$n_unexpected" -eq 0 ] \
+    || fail "3: 重放时出现 $n_unexpected 条**非预期**错误(总 $n_err, 已知良性 $n_benign):
+$(docker exec "$CONTAINER" bash -c 'grep "ERROR:" /tmp/e.log | grep -v "schema \"public\" already exists" | head -10' 2>/dev/null)"
+# 🔴 阳性对照: 计数器必须能变大。⛔ 没有这一条, 修完的 errors= 与修之前一样不可信 ——
+#    我刚刚就是这样被一个恒 0 的读数骗了很久。
+probe_err=$(docker exec "$CONTAINER" bash -c \
+    'printf "SELECT 1/0;\n" > /probe.sql; psql -U cretas_user -d cretas_db -f /probe.sql >/dev/null 2>/tmp/p.log; grep -c "ERROR:" /tmp/p.log' \
+    2>/dev/null | tr -d '\r\n')
+[ "$probe_err" = "1" ] \
+    || fail "3: 阳性对照失败 —— 故意灌一条 SELECT 1/0 之后计数器读到 '$probe_err'(期望 1)。
+  ⇒ 这说明错误计数**仍然量不到东西**, 而 errors=0 会继续读起来像「一切正常」。"
+ok "基线已灌进空 PG (errors 总 $n_err / 良性 $n_benign / 非预期 0; 阳性对照: 坏语句能被数到)"
 
 # ---- 4. 🔴 主判据: 重放出的五个数 == 文件头记的五个数 ----
 # ⚠️ 这里刻意**带 schema 过滤** —— 这个库里任何按名字数的东西都必须带 schema 过滤
@@ -166,7 +191,7 @@ IFS='|' read -r R_TAB R_IDX R_UQ R_FK R_COL <<< "$shape"
 for v in "$R_TAB" "$R_IDX" "$R_UQ" "$R_FK" "$R_COL"; do
     case "$v" in ''|*[!0-9]*) fail "4: 重放后数不出五个数(实得 '$shape') —— **没量到**, ⛔ 与「形状不符」是两回事" ;; esac
 done
-echo "READING: BASELINE_REPLAY errors=$n_err tables=$R_TAB indexes=$R_IDX unique=$R_UQ fk=$R_FK columns=$R_COL"
+echo "READING: BASELINE_REPLAY errors_unexpected=$n_unexpected tables=$R_TAB indexes=$R_IDX unique=$R_UQ fk=$R_FK columns=$R_COL"
 diffs=""
 [ "$R_TAB" = "$H_TAB" ] || diffs="$diffs tables($R_TAB≠$H_TAB)"
 [ "$R_IDX" = "$H_IDX" ] || diffs="$diffs indexes($R_IDX≠$H_IDX)"
@@ -176,7 +201,7 @@ diffs=""
 [ -z "$diffs" ] \
     || fail "4: 基线重放出的形状与它**自己头里记的**不同 ——$diffs
   ⇒ 这份文件已经不是它声称的那个东西了(被编辑过? 被截断过?)。
-  ⚠️ 注意 errors=$n_err —— ⛔「没报错」不是判据: 删掉一条 CREATE INDEX 的基线照样零错误。"
+  ⚠️ 注意非预期错误 $n_unexpected 条 —— ⛔「没报错」不是判据: 删掉一条 CREATE INDEX 的基线**照样零错误**(实测)。"
 ok "五维与文件头逐位相同 (tables=$R_TAB indexes=$R_IDX unique=$R_UQ fk=$R_FK columns=$R_COL)"
 
 # ---- 5. 边界: 本验证器守得住什么、⛔ 守不住什么 ----

@@ -63,7 +63,7 @@ bak_trf_20260809_1790, bak_e2e_trf_20260809_2699, bak_e2e_trf_20260809_8194
 ```
 pg_dump --schema-only --no-owner --no-privileges -n public   (只读, 1.37 MB, stderr 空)
 两侧 md5 一致后才执行 ← ⛔ 同名文件静默替换那次的教训
-空 pg17 上重放: rc=0, ERROR 行数 = 0
+空 pg17 上重放: rc=0, 错误 1 条(已知良性, 见下)
 ```
 
 **⛔「没报错」不是判据。** 五个维度与 prod 逐位比对：
@@ -83,12 +83,42 @@ pg_dump --schema-only --no-owner --no-privileges -n public   (只读, 1.37 MB, s
 
 ```
 从 dump 里删掉 1 条 CREATE INDEX (idx_notification_factory_role)
-⇒ rc=0, ERROR 行数 = 0        ← 重放照样「成功」
+⇒ rc=0, 非预期错误 0 条        ← 重放照样「成功」
 ⇒ tables=502 (不变)  indexes=2043 (**恰好少 1**)  被删那条 count=0 (点名得出来)
 ```
 
 ⇒ 它同时证明两件事：计数器真的在数；**少一个索引的重放依然零错误** ——
 这就是「没报错」不能当判据的实物证据。
+
+### 🔴 ⚠️ 订正：上面那个「ERROR 行数」，我原来根本没量到
+
+采集器与验证器里数错误用的是 `grep -c "^ERROR:"`。**它恒为 0** ——
+psql 把错误打成 `psql:/baseline.sql:38: ERROR:  …`，**行首是 `psql:`**，`^ERROR:` 一条都匹配不到。
+
+```
+旧判据 grep -c "^ERROR:"   ⇒ 0     ← 上线起就是这个值, 与实际无关
+真实   grep -c  "ERROR:"   ⇒ 1     ← psql:/b.sql:38: ERROR: schema "public" already exists
+```
+
+▎**一个永远等于「没问题」的读数，比没有这个读数更坏 —— 它占着位置，**
+而我拿它当过好几次证据（「重放零错误」）。⚠️ **结论没变**（五维逐位比对才是真正承重的那条），
+但**支撑它的那一半是空的**。
+
+⇒ 已修成 `total / benign / unexpected` 三个数，并配一条**阳性对照**：
+故意灌一条 `SELECT 1/0`，计数器必须真的读到 1 —— ⛔ 没有它，修完的计数器与修之前一样不可信。
+
+```
+READING: BASELINE_REPLAY_ERRORS total=1 benign_public_schema=1 unexpected=0
+```
+
+⚠️ 那 1 条良性错误是 dump 第 38 行的 `CREATE SCHEMA public;`（新库上 public 天然存在）。
+🔴 **⛔ 不要用「先 `DROP SCHEMA public` 再灌」去消它** —— 实测那会 **CASCADE 掉 `vector` 扩展**：
+
+```
+错误 1 → 56 条,  表 502 → 498
+```
+
+▎**消掉一条已知错误的办法，可能比那条错误糟得多。**
 
 ### ⚠️ 一个容易走错的代替品
 
@@ -168,17 +198,65 @@ prod = 一个字都不动                    （它的 history 已经有那 697 
 
 ---
 
-## 五、⚠️ 预告：进度棘轮的语义将来会变
+## 五、✅ 跳变发生了：棘轮改名 + 换判据（2026-09-07）
 
-`scripts/testing/fresh-db-gate.sh --progress` 现在的基线是 **266 / 158 / 538**，
-它量的是**方向 A 的进度**（从史前史开始能走多远）。
+第一版这一节是**预告**。⇒ 现在它发生了，把实际读数记在这里。
 
-基线 bootstrap 落地后，它量的会变成「**基线之上那部分能不能跑完**」⇒ 三个数会**跳变**
-（大概率一次性跳到接近 502 / 2044）。
+### bootstrap 接进建库流程之后，这条链**跑完了**
 
-⇒ 到时候**必须重置那份 `fresh-db-progress-baseline.txt`**，并在同一个 PR 里说明为什么跳。
-⚠️ **这件事现在就预告**，⛔ 不能等到那天有人看见数字跳变才去查 —— 一个没解释的跳变
-与「棘轮坏了」读数相同。
+```
+READING: BASELINE_BOOTSTRAP  version=20261101.37 tables_after_load=501 indexes_after_load=2042 history_table_dropped=yes
+READING: BASELINE_LOAD_SHAPE tables=501 expected=501   (= 头里 502 减去我们删掉的 flyway_schema_history)
+READING: FRESH_DB_SHAPE      migrations_above_baseline=3 tables=502 indexes=2044
+READING: FRESH_DB_FAILURE    file=<none> sqlstate=<none>      ← 🎉 **没有失败点**
+```
+
+⇒ 新库的形状 **`502 / 2044`，与 prod 逐位相同**。
+
+### 🔴 跳变的两个口径**并排**（⛔ 只留新值的话，跳变本身就消失了）
+
+```
+旧口径最后一个值   migrations_applied=266   tables=158    indexes=538
+新口径第一个值     (⛔ 不设下界)            tables=502    indexes=2044
+```
+
+⚠️ **`migrations_applied` 是 266 → 3，它往下走。**
+三个数里**两个涨、一个跌** —— 而跌的那个在旧口径下与「真倒退」逐字同形。
+
+### ⇒ 改名，⛔ 不是加个后缀
+
+`fresh-db-progress-baseline.txt` → **`fresh-db-above-baseline-floor.txt`**
+（旧名留 `fresh-db-progress-baseline.RENAMED.md`，两个口径与并排数字都在那里）。
+
+▎**语义变了就改名** —— 名字是读者判断「这是不是同一个东西」的唯一线索。
+沿用名字换语义 = **我们自己制造一次同名替换**，而且比那次事故更糟：
+那次至少有 `Write 返回 updated` 这种信号，这次**一个信号都没有**。
+
+### 判据也换了形状
+
+| | 旧 | 新 |
+|---|---|---|
+| `migrations_*` | 棘轮（只许涨） | ⛔ **不设下界** —— 每次重新采集基线它都掉回 1 |
+| `tables` / `indexes` | 棘轮 | 棘轮（下界 502 / 2044） |
+| 失败迁移条数 | 无 | 🔴 **pass/fail，必须为 0** |
+
+⚠️ `migrations_*` 那条的理由：**会被正常操作触发的闸，迟早被关掉。**
+给它设下界 ⇒ 每次刷新基线都红一次，而那次红与「真的少跑了迁移」逐字同形。
+⇒ 闸里配了一条**反向断言**：下界文件里出现 `migrations_*` 就红（防止有人好心加回来）。
+
+### 🔴 顺带查出：这道闸一直在量一个**没有任何部署会产生**的库
+
+第一次跑通时 `indexes=2119`，而基线 2044 + 上面两条迁移应当是 2044（那 4 个索引 prod 早就有，
+`IF NOT EXISTS` 全是 no-op）⇒ **多出 75 个**。
+
+成因：闸跑 `pg` profile，那里 `ddl-auto=update`；**而 prod 跑 `pg-prod`，那里是 `none`**。
+⇒ 那 75 个是 **Hibernate 启动时自己补的**。
+
+⚠️ 后果不是「多几个索引」：本闸问的是「**迁移**能不能把库建出来」，
+而 Hibernate 会在迁移之后**替它把缺的补上** ⇒ **一条缺失的迁移会被悄悄盖住，读数照样漂亮**。
+▎**让被测对象自己修补自己，这个测量就不再回答原来的问题。**
+
+⇒ 闸里显式覆盖 `--spring.jpa.hibernate.ddl-auto=none`（与 prod 对齐）⇒ 2119 → **2044**。
 
 ---
 
@@ -515,6 +593,31 @@ READING: FLYWAY_LOCATIONS_CONFIG_FILES=2 MENTIONS_ONLY=5 (⛔ 后者不是配置
 
 ⇒ 📌 **谁哪天把扫描面扩到 `docs/`，本节会是命中最多的那个文件。**
 ▎讲这条规则的文本，正是这条规则最典型的受害者 —— ⛔ 这不是俏皮话，是扩扫描面之前要先查的一件事。
+
+### 🔒 ⇒ 扩任何扫描面之前的**前置动作**（⛔ 不是「扩完看红不红」）
+
+**⛔ 不要扩完再看红不红** —— 那时你已经在一堆红里面找答案，
+而「真违规」和「解释违规的文档」在那堆红里**长得一模一样**。
+
+⚠️ 本仓扩扫描面已经出过事：2026-08-28 给别人加宽 glob，
+**把那边的阴性对照变成了恒真式** —— 加宽本身不报错，是对照悄悄失去了鉴别力。
+
+⇒ 扩之前，在**新覆盖进来的那部分**里先把两个数分开量：
+
+```bash
+FEATURE='spring.flyway.locations'          # 换成你那道闸的特征串
+ANCHOR='^[[:space:]]*spring\.flyway\.locations[[:space:]]*[=:]'   # 换成你的锚定正则
+NEW_SCOPE='docs/'                          # 换成你要**新**覆盖的路径
+
+grep -rl  -- "$FEATURE" $NEW_SCOPE | wc -l   # ① 新增命中总数
+grep -rlE -- "$ANCHOR"  $NEW_SCOPE | wc -l   # ② 其中真违规
+```
+
+**判据：两个数分开报。**
+① > ② 时，**扩之前**先决定那些「仅提及」怎么办 —— 排除目录 / 收紧锚定 / 改措辞。
+⛔ 不要让它们以「扩完之后一堆新红」的形式出现。
+
+▎**顺序就是判据本身：先数，再扩。** 反过来做，你拿到的是一个已经被污染的读数。
 
 ---
 
