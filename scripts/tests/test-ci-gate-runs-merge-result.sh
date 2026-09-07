@@ -84,7 +84,13 @@ run_step() {   # $1=BASE_REF $2=PAYLOAD_BASE_SHA
 
 # A1 正例: 合并后, base 的文件必须出现在树里 —— 这就是闸本来应该看到的东西。
 out=$(run_step main "$BASE_TIP1"); rc=$?
-echo "    A1: $(printf '%s' "$out" | grep -o 'payload_stale=[a-z]*' | head -1) $(printf '%s' "$out" | grep -o 'payload_behind_by=[0-9a-z]*' | head -1) $(printf '%s' "$out" | grep -o 'merged_in_commits=[0-9]*' | head -1)"
+# ⚠️ 这两行必须带 `READING: ` 前缀 —— scripts/ci/run-script-tests.sh 只转发 `rc=` 和
+# `READING:` 开头的行, 其余 stdout 一律丢掉。第一版写成 `echo "    A1: …"`, 本地看得见、
+# **CI 上 `grep -c payload_stale` = 0** ⇒ 加了一个恒不可见的读数, 与没加相同(而且更糟:
+# 会以为那件事解决了)。形状与它自己刚修的「字段被 cut -c1-190 截掉」逐字相同, 只是上移了一层:
+# 两次都是**输出经过一层我没量的中间件**。
+# ▎判据: 加一条读数之后, 去它**最终要被读的那个介质**里 grep 一次。本地跑一遍不算。
+A1_LINE="READING: A1 $(printf '%s' "$out" | grep -o 'payload_stale=[a-z]*' | head -1) $(printf '%s' "$out" | grep -o 'payload_behind_by=[0-9a-z]*' | head -1) $(printf '%s' "$out" | grep -o 'merged_in_commits=[0-9]*' | head -1)"; echo "$A1_LINE"
 [ "$rc" -eq 0 ] || fail "A1: 合并应成功, 实得 rc=$rc: $out"
 [ -f census-offender.txt ] \
     || fail "A1: 合并后树里仍然没有 base 的文件 —— 闸看到的还是 PR 分支自己"
@@ -113,7 +119,7 @@ git checkout -q -B pr-head2 "$HEAD_SHA"
 
 out_d=$(run_step main "$BASE_TIP1"); rc_d=$?      # ⚠️ 故意传**旧** payload sha
 # 把判据字段单独打出来 —— 它们埋在一行 200+ 字符的 GATE_BASE 里, 截断之后读不到。
-echo "    D: $(printf '%s' "$out_d" | grep -o 'payload_stale=[a-z]*' | head -1) $(printf '%s' "$out_d" | grep -o 'payload_behind_by=[0-9a-z]*' | head -1)"
+D_LINE="READING: D $(printf '%s' "$out_d" | grep -o 'payload_stale=[a-z]*' | head -1) $(printf '%s' "$out_d" | grep -o 'payload_behind_by=[0-9a-z]*' | head -1)"; echo "$D_LINE"
 [ "$rc_d" -eq 0 ] || fail "D: 合并应成功, 实得 rc=$rc_d: $out_d"
 [ -f late-arrival.txt ] \
     || fail "D: 树里没有**事件之后**才合进 base 的那个文件 —— 闸用的还是 payload 里那个旧 sha(这正是本票要修的)"
@@ -126,6 +132,15 @@ printf '%s' "$out_d" | grep -qF "base=$BASE_TIP2" \
 # 🔴 竞态的**大小**必须是个数 —— ⛔ 别指望「某个测试数恰好对不上」来发现滞后(那是运气不是方法)。
 printf '%s' "$out_d" | grep -qE 'payload_behind_by=[1-9]' \
     || fail "D: payload 滞后时必须把差距打成一个数(payload_behind_by>0): $out_d"
+# ⚠️ 读数行自己也要有人看着。第一版把 `$(` 的 `$` 改没了, 读数变成字面量 + 通配展开,
+#    而**测试照样 PASS** —— 因为没有任何断言看着这两行。那就是「加了读数没人核」的完整形状。
+#    ⇒ 这里断言它们**长得像读数**, ⛔ 不只是"打印过"。
+for want in "READING: A1 payload_stale=no payload_behind_by=0" "READING: D payload_stale=yes payload_behind_by=1"; do
+    printf '%s
+' "$A1_LINE" "$D_LINE" | grep -qF "$want"         || fail "读数行自检失败: 期望出现 \`$want\`, 实得: A1=[$A1_LINE] D=[$D_LINE]"
+done
+ok "两条判据读数带 READING: 前缀且内容正确(⛔ 不是只打印过)"
+
 ok "payload 滞后时用活 tip: 事件后合入的文件在树里, 且 payload_stale=yes / used=<活 tip>"
 
 # D 阴性对照: **旧写法**(合 payload 里那个 sha)在同一场景下会漏掉那个文件 ——
