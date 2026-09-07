@@ -288,21 +288,21 @@ public class ExternalVerifierServiceImpl implements ExternalVerifierService {
         try {
             // 统计总批次数
             Integer totalBatches = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM material_batches WHERE factory_id = ?",
+                    "SELECT COUNT(*) FROM material_batches WHERE factory_id = ? AND deleted_at IS NULL",
                     Integer.class, factoryId);
             context.put("totalRecords", totalBatches);
 
             // 获取最近的批次信息
             List<Map<String, Object>> recentBatches = jdbcTemplate.queryForList(
                     "SELECT batch_number, created_at FROM material_batches " +
-                            "WHERE factory_id = ? ORDER BY created_at DESC LIMIT 5",
+                            "WHERE factory_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 5",
                     factoryId);
             context.put("recentBatches", recentBatches);
 
             // 获取时间范围
             Map<String, Object> dateRange = jdbcTemplate.queryForMap(
                     "SELECT MIN(created_at) as earliest, MAX(created_at) as latest " +
-                            "FROM material_batches WHERE factory_id = ?",
+                            "FROM material_batches WHERE factory_id = ? AND deleted_at IS NULL",
                     factoryId);
             context.put("dateRange", dateRange);
 
