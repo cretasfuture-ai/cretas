@@ -47,6 +47,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 OUT_DIR="$REPO_ROOT/backend/java/cretas-api/src/main/resources/db/baseline"
 OUT_FILE="$OUT_DIR/prod-schema-baseline.sql"      # ⛔ 刻意不是 V…__ 开头
+RES_FLYWAY_DIR="$REPO_ROOT/backend/java/cretas-api/src/main/resources/db/flyway"
 PROD_HOST="${CRETAS_PROD_SSH:-root@47.100.235.168}"
 PROD_DB="${CRETAS_PROD_DB:-cretas_prod_db}"
 VERIFY_IMAGE="${CRETAS_BASELINE_PG_IMAGE:-pgvector/pgvector:pg17}"
@@ -135,6 +136,51 @@ for v in "$P_VER" "$P_TAB" "$P_IDX" "$P_UQ" "$P_FK" "$P_COL"; do
     [ -n "$v" ] || fail "prod 出处/形状数读不全（实得 '$PROD_META'）—— **没量到**, ⛔ 不落盘"
 done
 echo "READING: PROD_SHAPE max_version=$P_VER tables=$P_TAB indexes=$P_IDX unique=$P_UQ fk=$P_FK columns=$P_COL"
+
+# ── 判据 ④: 基线**之上**的迁移, 文件必须都在 ──────────────────────────────────
+#
+# 🔴 为什么这条的写法与评审给的不同 —— 评审版本**恒真**:
+#   评审说「prod history 里所有 version > baseline_max 的行, 其文件必须存在」。
+#   但 baseline_max **就是** prod history 的最大版本 ⇒ 那个集合**按构造永远为空**,
+#   ⛔ 不只是「今天为空」。一条恒真的判据会以「一直绿」的方式活着。
+#
+# ⇒ 有意义的形态是**拿已经 checked-in 的那份基线**去比**现在的 prod**:
+#   基线是在 prod@X 那一刻采的; 之后 prod 又跑了 X+1…Y。
+#   若其中某条的**文件已不存在**(本仓实测有 5 个 version 是这样),
+#   那么「灌这份基线 + 跑基线之上的迁移」得到的库会**静默漏掉**那条的效果。
+#   ⇒ 这才是「基线之上的缺文件是致命的」那句话真正指的东西。
+#
+# ⚠️ 首次运行(还没有 checked-in 基线)时这一条**没有输入** ⇒ 报「没量到」, ⛔ 不报「通过」。
+BASE_MAX="${CRETAS_BASELINE_ASSUME_MAX:-}"   # ← 仅供阴性对照用, 见 test-fresh-db-baseline-contract.sh
+if [ -z "$BASE_MAX" ] && [ -f "$OUT_FILE" ]; then
+    BASE_MAX=$(grep -oE '^-- flyway_schema_history 最大版本: [0-9.]+' "$OUT_FILE" | head -1 | sed 's/.*: //')
+fi
+# ⚠️ 用 `V<数字>_<数字>__` 这个**完整**锚点取版本号 —— 只写 `^V[0-9_]+` 会把文件名里
+#    做分隔用的 `__` 也吃进去, 读数变成 `20261101.39..`(尾部两个点)。
+#    ▎一个带尾巴的读数在比较时会静默走错分支, 而它看起来「差不多对」。
+REPO_MAX=$(ls "$RES_FLYWAY_DIR" 2>/dev/null | sed -nE 's/^V([0-9]+)_([0-9]+)__.*/\1.\2/p' \
+    | sort -t. -k1,1n -k2,2n | tail -1)
+if [ -z "$BASE_MAX" ]; then
+    echo "READING: BASELINE_LAG baseline_max=<none> prod_max=$P_VER repo_max=${REPO_MAX:-?} —— **没量到**(还没有 checked-in 基线), ⛔ 不算通过"
+else
+    ABOVE=$(ssh -o BatchMode=yes -o ConnectTimeout=25 "$PROD_HOST" \
+        "sudo -u postgres psql $PROD_DB -Atc \"SELECT script FROM flyway_schema_history WHERE success=true AND script LIKE '%.sql' AND version::text > '$BASE_MAX' ORDER BY installed_rank\"" 2>/dev/null | tr -d '\r')
+    n_above=0; missing_above=""
+    while IFS= read -r sc; do
+        [ -n "$sc" ] || continue
+        n_above=$((n_above + 1))
+        [ -f "$RES_FLYWAY_DIR/$sc" ] || missing_above="$missing_above $sc"
+    done <<< "$ABOVE"
+    n_missing=$(printf '%s' "$missing_above" | wc -w)
+    echo "READING: BASELINE_LAG baseline_max=$BASE_MAX prod_max=$P_VER repo_max=${REPO_MAX:-?} above_baseline_on_prod=$n_above missing_files_above=$n_missing"
+    [ "$n_missing" -eq 0 ] \
+        || fail "判据 ④: 基线(@$BASE_MAX)**之上**有 $n_missing 条已在 prod 跑过的迁移, 但仓库里文件不存在:$missing_above
+  ⇒ 「灌这份基线 + 跑基线之上的迁移」会**静默漏掉**它们的效果。
+  ⛔ 这不是「基线旧了」可以忽略的那种旧 —— 缺的那几条**永远补不回来**(文件已被删)。"
+    log "判据 ④ 通过 (基线之上 $n_above 条, 文件全在)"
+fi
+# ⚠️ prod 落后于 main 是**常态** ⇒ ⛔ 不要试图把 baseline_max 与 repo_max 的差消成 0,
+#    要的是让它**可读**。
 
 # ── 判据 ②：可验证 ─────────────────────────────────────────────────────────
 log "判据 ②: 灌进一个空 PG, 五个数必须与 prod 逐位相同"
