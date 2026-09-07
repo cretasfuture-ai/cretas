@@ -267,18 +267,32 @@ echo "READING: OLD_FORK_DEFAULTS=$OLD_FORK (改前 2, 改后必须 0)"
 ok "两个脚本的 REPO 默认值一致且指向本组织仓"
 
 # 脚本按名字找那一步; 名字只存在于 workflow 里 ⇒ 两份必须对得上, 否则检查静默退化成 unknown。
-PATTERN_IN_SCRIPT=$(grep -c 'contains("attestation bundle")' "$SRC" || true)
-[ "$PATTERN_IN_SCRIPT" -eq 1 ] || fail "9: 脚本里匹配步骤名的那处不见了(实得 $PATTERN_IN_SCRIPT 处)"
-STEP_HITS=$(grep -ci 'name:.*attestation bundle' "$WORKFLOW" || true)
-echo "READING: WORKFLOW_BUNDLE_STEPS=$STEP_HITS"
-[ "$STEP_HITS" -eq 1 ] \
-    || fail "9: java-artifact.yml 里匹配 'attestation bundle' 的步骤有 $STEP_HITS 个(要恰好 1) —— 改了名就把 2c 那段变成恒 unknown"
-# 同一个 job 里还有一步 `Attest deploy artifact provenance`(结论 success, 与 Ship 相反)。
-# 这条断言钉住「不止一步带 attest」这个事实 —— 它正是「不能取第一个匹配」的理由。
-ATTEST_STEPS=$(grep -ci 'name:.*attest' "$WORKFLOW" || true)
-[ "$ATTEST_STEPS" -ge 2 ] \
-    || fail "9: 预期 workflow 里带 attest 的步骤 ≥2(取第一个会读到相反结论), 实得 $ATTEST_STEPS"
-ok "步骤名两份对得上, 且「带 attest 的步骤不止一个」这个陷阱被钉住"
+#
+# 🔴 2026-09-07: 这个循环原来只跑 "$SRC"(Java 那一份)。web 那份**同样有**这段检查所依赖的
+# 步骤名, 但当时漏了 —— 于是「web 侧根本没有这段检查」这件事, 这道闸看不见
+# (票 OPS-WEB-CI-ARTIFACT-LANE-HALF-FIXED-20260907: 上一轮只把 REPO 默认值两边拉齐了)。
+# ⇒ 两条车道各自的 (脚本, workflow) 一起遍历, ⛔ 不再只钉 Java 那一份。
+WEB_WORKFLOW="$ROOT_DIR/.github/workflows/web-dist.yml"
+for pair in "$SRC|$WORKFLOW" "$WEB_SRC|$WEB_WORKFLOW"; do
+    lane_src=${pair%%|*}; lane_wf=${pair##*|}
+    [ -s "$lane_wf" ] || fail "9: 找不到 workflow $lane_wf"
+    PATTERN_IN_SCRIPT=$(grep -c 'contains("attestation bundle")' "$lane_src" || true)
+    [ "$PATTERN_IN_SCRIPT" -eq 1 ] \
+        || fail "9: $(basename "$lane_src") 里匹配步骤名的那处应恰好 1 处, 实得 $PATTERN_IN_SCRIPT —— 这条车道没有(或有两处)签名 pre-check"
+    STEP_HITS=$(grep -ci 'name:.*attestation bundle' "$lane_wf" || true)
+    echo "READING: BUNDLE_STEPS[$(basename "$lane_wf")]=$STEP_HITS"
+    [ "$STEP_HITS" -eq 1 ] \
+        || fail "9: $(basename "$lane_wf") 里匹配 'attestation bundle' 的步骤有 $STEP_HITS 个(要恰好 1) —— 改了名就把那段检查变成恒 unknown"
+    # 同一个 job 里还有一步 `Attest … provenance`(结论 success, 与 Ship 相反)。
+    # 这条断言钉住「不止一步带 attest」这个事实 —— 它正是「不能取第一个匹配」的理由。
+    ATTEST_STEPS=$(grep -ci 'name:.*attest' "$lane_wf" || true)
+    [ "$ATTEST_STEPS" -ge 2 ] \
+        || fail "9: 预期 $(basename "$lane_wf") 里带 attest 的步骤 ≥2(取第一个会读到相反结论), 实得 $ATTEST_STEPS"
+    # 车道不可用必须是**独立的退出码**, ⛔ 不折叠进 1 —— 两条车道用同一个约定(exit 3)。
+    grep -q 'exit 3' "$lane_src" \
+        || fail "9: $(basename "$lane_src") 没有 exit 3 —— 「本组织永远通不了」被折叠进了「这一趟没成」"
+done
+ok "两条车道的步骤名各自对得上、都有 exit 3, 且「带 attest 的步骤不止一个」这个陷阱被钉住"
 
 # ---- 10. 包装脚本必须把 exit 3 原样透传, ⛔ 不折叠成 1, 更不进轮询 ----
 PREWARM_SRC="$ROOT_DIR/scripts/deploy/prewarm-main-artifact.sh"

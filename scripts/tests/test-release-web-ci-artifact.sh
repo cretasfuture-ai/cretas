@@ -106,4 +106,146 @@ grep -q 'manifest_commit_tree_mismatch' "$FETCH" \
     || fail "取回脚本没有校验 build_commit 的 web 树等于当前树"
 ok "build_commit 可解析性与树一致性都有断言"
 
+# ---- 8. 行为: 签名 pre-check 的三态 (2026-09-07) ----
+#
+# 前七节全是 grep, 而这一段要守的是**行为**: 「候选制品没签名时, 在付掉那趟东京往返之前
+# 就退出, 并且退出码与『这一趟没成』不同」。grep 证明不了它 —— 所以这里真跑脚本。
+# 用 --probe-only: 它在运输之前返回, 于是整节不碰网络(gh 是 stub, curl/ssh 根本走不到)。
+TMP_ROOT=$(mktemp -d)
+trap 'rm -rf "$TMP_ROOT"' EXIT
+REPO_DIR="$TMP_ROOT/repo"
+mkdir -p "$REPO_DIR/scripts/deploy" "$REPO_DIR/scripts/lib" "$REPO_DIR/web-admin/src" "$TMP_ROOT/bin"
+cp "$FETCH" "$REPO_DIR/scripts/deploy/"
+cp "$WEB_MANIFEST" "$ROOT_DIR/scripts/deploy/release-jar-manifest.sh" "$REPO_DIR/scripts/deploy/"
+cp "$ROOT_DIR/scripts/lib/server-script-common.sh" "$REPO_DIR/scripts/lib/"
+echo 'export const x = 1' > "$REPO_DIR/web-admin/src/app.ts"
+(
+    cd "$REPO_DIR"
+    git init -q .
+    git config user.email t@example.com
+    git config user.name t
+    git add -A
+    git commit -qm base
+) || fail "8: 临时仓库准备失败"
+FIX_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
+[ -n "$FIX_SHA" ] || fail "8: 拿不到 fixture 的 HEAD"
+
+# gh stub: 制品列表给一行候选; /jobs 把**脚本自己传进来的 --jq 过滤器**跑在一份真实形状的
+# jobs JSON 上 —— 「同一个 job 里两步都带 attest 且结论相反」这个坑因此是被**真跑出来**的,
+# ⛔ 不是靠断言步骤名钉住的。没有 jq 的机器上退回直给结论(仍能分辨三态)。
+cat > "$TMP_ROOT/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        */jobs)
+            [ "${STUB_GH_JOBS_RC:-0}" = "0" ] || exit "$STUB_GH_JOBS_RC"
+            if [ -s "${STUB_JOBS_JSON:-}" ] && command -v jq >/dev/null 2>&1; then
+                filter="" prev=""
+                for x in "$@"; do
+                    [ "$prev" = "--jq" ] && filter="$x"
+                    prev="$x"
+                done
+                [ -n "$filter" ] && { jq -r "$filter" < "$STUB_JOBS_JSON"; exit 0; }
+            fi
+            printf '%s\n' "${STUB_SHIP_CONCLUSION:-}"
+            exit 0
+            ;;
+    esac
+done
+printf '%s\n' "${STUB_CANDIDATE_TSV:-}"
+exit 0
+STUB
+chmod +x "$TMP_ROOT/bin/gh"
+
+# 真实形状: 第一步 provenance 恒 success(它自己 continue-on-error), Ship 那步才是判据。
+# 实测 run 34068075476(web-dist.yml @ main c6874100ca)就是 success / skipped 这个组合。
+write_jobs() {   # $1=Ship 那步的结论; 空 = 那一步整个不存在(改名/被删)
+    if [ -z "${1:-}" ]; then
+        cat > "$TMP_ROOT/jobs.json" <<'JSON'
+{"jobs":[{"steps":[{"name":"Attest dist archive provenance","conclusion":"success"}]}]}
+JSON
+    else
+        cat > "$TMP_ROOT/jobs.json" <<JSON
+{"jobs":[{"steps":[
+  {"name":"Attest dist archive provenance","conclusion":"success"},
+  {"name":"Ship attestation bundle with the artifact","conclusion":"$1"}
+]}]}
+JSON
+    fi
+}
+
+# 🔴 这次到底走没走 jq, 必须自己说出来。没有 jq 时 stub 退回「直给结论」——
+# 那条路上 8a 照样绿, 但它**没有**跑那个「两步 attest 结论相反」的坑 ⇒ 覆盖面不同。
+# ⛔ 不许让两种覆盖面打出同一条绿(形态 A: 我量的这个数不是我想知道的那个数)。
+if command -v jq >/dev/null 2>&1; then
+    echo "READING: WEB_JOBS_FILTER_MODE=real-jq (脚本自己的过滤器跑在真实形状的 jobs JSON 上)"
+else
+    echo "READING: WEB_JOBS_FILTER_MODE=fallback (本机无 jq ⇒ 直给结论; 「取第一个 attest 步骤」那个坑本轮未覆盖)"
+fi
+
+CAND_FULL=$(printf '4242\t%s\t8388608\t99001' "$FIX_SHA")
+web_probe() {   # $1=期望 rc  $2=用例名  $3=候选 tsv
+    local want=$1 name=$2 tsv=$3 rc=0
+    set +e
+    STUB_CANDIDATE_TSV="$tsv" STUB_JOBS_JSON="$TMP_ROOT/jobs.json" \
+    STUB_SHIP_CONCLUSION="${STUB_SHIP_CONCLUSION:-}" STUB_GH_JOBS_RC="${STUB_GH_JOBS_RC:-0}" \
+    PATH="$TMP_ROOT/bin:$PATH" \
+        bash "$REPO_DIR/scripts/deploy/release-web-ci-artifact.sh" --probe-only \
+            > "$TMP_ROOT/out.log" 2>&1
+    rc=$?
+    set -e
+    [ "$rc" -eq "$want" ] \
+        || { sed -n '1,25p' "$TMP_ROOT/out.log" >&2; fail "8: $name 期望 rc=$want 实得 rc=$rc"; }
+}
+
+# 8a 🔴 本票核心: Ship 那步 skipped ⇒ 车道结构性不可用 ⇒ exit 3, 且**没有**报 PROBE_OK。
+write_jobs skipped
+STUB_SHIP_CONCLUSION=skipped web_probe 3 "候选未签名" "$CAND_FULL"
+grep -q 'WEB_CI_ARTIFACT_LANE_UNAVAILABLE' "$TMP_ROOT/out.log" \
+    || fail "8a: exit 3 了却没打 LANE_UNAVAILABLE —— 调用方看不出这是边界还是故障"
+grep -q 'WEB_CI_ARTIFACT_PROBE_OK' "$TMP_ROOT/out.log" \
+    && fail "8a: 车道不可用却报 PROBE_OK —— 调用方会照着走完整趟东京往返"
+grep -q 'READING: WEB_ATTEST_BUNDLE_STEP=skipped run_id=99001' "$TMP_ROOT/out.log" \
+    || { grep 'READING' "$TMP_ROOT/out.log" >&2 || true; fail "8a: 读数不对(要带 run_id, 证明 tsv 第 4 列真被读出来了)"; }
+ok "候选未签名 ⇒ exit 3 + LANE_UNAVAILABLE, 且在运输之前(无 PROBE_OK)"
+
+# 8b 正路径: 签上了 ⇒ 照常放行。⛔ 这道检查不许把好制品也拦下来。
+write_jobs success
+STUB_SHIP_CONCLUSION=success web_probe 0 "候选已签名" "$CAND_FULL"
+grep -q 'WEB_CI_ARTIFACT_PROBE_OK' "$TMP_ROOT/out.log" || fail "8b: 正路径没打 PROBE_OK"
+ok "候选已签名 ⇒ exit 0 + PROBE_OK(正路径没被这道检查改坏)"
+
+# 8c 三态的第三态: 那一步整个不存在(改名/被删) ⇒ absent ⇒ **不下结论**, 维持改动前的行为。
+# ⛔ 不许把「没量到」当成「不可用」—— 那会在 workflow 改名的当天把整条车道判死。
+write_jobs ""
+STUB_SHIP_CONCLUSION="" web_probe 0 "步骤不存在" "$CAND_FULL"
+grep -q 'READING: WEB_ATTEST_BUNDLE_STEP=absent' "$TMP_ROOT/out.log" \
+    || { grep 'READING' "$TMP_ROOT/out.log" >&2 || true; fail "8c: 步骤缺席时读数应为 absent"; }
+grep -q 'WEB_CI_ARTIFACT_PROBE_OK' "$TMP_ROOT/out.log" || fail "8c: 没量到就该照旧放行"
+ok "步骤缺席 ⇒ absent ⇒ 照旧放行(没量到 ≠ 不可用)"
+
+# 8d gh 出错 ⇒ unknown ⇒ 同样照旧放行。
+write_jobs skipped
+STUB_GH_JOBS_RC=1 STUB_SHIP_CONCLUSION=skipped web_probe 0 "gh 出错" "$CAND_FULL"
+grep -q 'READING: WEB_ATTEST_BUNDLE_STEP=unknown' "$TMP_ROOT/out.log" \
+    || { grep 'READING' "$TMP_ROOT/out.log" >&2 || true; fail "8d: gh 出错时读数应为 unknown"; }
+ok "gh 出错 ⇒ unknown ⇒ 照旧放行"
+STUB_GH_JOBS_RC=0
+
+# 8e 阴性对照: tsv 只给 3 列(= 改动前的形状) ⇒ 取不到 run_id ⇒ 这段检查退化成恒 unknown。
+# 没有这一条,「8a 绿」与「第 4 列其实没接上、只是别处恰好也退 3」读数相同。
+write_jobs skipped
+STUB_SHIP_CONCLUSION=skipped web_probe 0 "tsv 缺 run_id 列" "$(printf '4242\t%s\t8388608' "$FIX_SHA")"
+grep -q 'READING: WEB_ATTEST_BUNDLE_STEP=unknown run_id=none' "$TMP_ROOT/out.log" \
+    || { grep 'READING' "$TMP_ROOT/out.log" >&2 || true; fail "8e: 缺第 4 列时应落成 unknown/run_id=none"; }
+ok "阴性对照: tsv 缺 run_id 列 ⇒ 检查退化成 unknown(证明第 4 列是承重的)"
+
+# ---- 9. 调用方必须把 exit 3 与 exit 1 分开说 ----
+# 行为上两者都回退本地构建(这是对的), 但日志里必须分得出「该去修」与「这就是边界」。
+grep -q 'WEB_CI_ARTIFACT=unavailable' "$WEB_MANIFEST" \
+    || fail "9: web_release_build 没有为 rc=3 单独措辞 —— 结构性不可用被折叠进了「这一趟没成」"
+grep -q 'ci_rc=\$?' "$WEB_MANIFEST" \
+    || fail "9: 调用方没有显式接住退出码(还是 \`cmd || echo\` 的形状, 读不到 rc)"
+ok "调用方对 rc=3 单独措辞, 且显式接住退出码"
+
 echo "PASS: ${pass_count} 项断言全部通过"
