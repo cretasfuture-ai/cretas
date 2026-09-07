@@ -108,45 +108,73 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         return root;
     }
 
-    /** 2026-09-07 摘掉实体声明的那 13 个键：索引名 → 它守着哪张表的什么。 */
+    /**
+     * 实体侧摘掉唯一声明之后，改由 prod 的部分索引兜底的那些键：索引名 -> 它守着哪张表的什么。
+     *
+     * <p>⛔ 这里<b>不写死条目数</b>：它每批软删都会涨（#717 的 11 -> 批 3-B 的 22 -> 迁移 V20261101_39 搬上来 2 条 = 24），
+     * 而写死的数字是「忘了改」和「闸坏了」长得一样的那种仪器。实际条目数由 {@link #reg} 累计，
+     * 断言只钉<b>下限</b>与<b>不许重名</b>。
+     */
     private static final Map<String, String> MUST_BE_PARTIAL_IN_MIGRATIONS = new LinkedHashMap<>();
 
     static {
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_production_plan_create_request", "production_plans 幂等键");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_annual_tax_factory_user_year", "annual_tax_settlements 年度汇算唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_salary_factory_user_month", "salary_items 工资单月唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_poar_factory_name_active", "purchase_order_approval_rules 规则名唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lda_resource_date", "logistics_daily_availability 资源日唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_ldo_batch_store", "logistics_delivery_orders 批次内门店唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_ls_trip_seq", "logistics_stops 车次内序号唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_ls_order_single_trip", "logistics_stops 一张订单只挂一个活停靠点");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lsm_factory_name", "logistics_store_master 门店名唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lt_plan_tripno", "logistics_trips 计划内车次号唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lvd_binding", "logistics_vehicle_drivers 车-司机绑定唯一");
+        reg("uk_production_plan_create_request", "production_plans 幂等键");
+        reg("uq_annual_tax_factory_user_year", "annual_tax_settlements 年度汇算唯一");
+        reg("uq_salary_factory_user_month", "salary_items 工资单月唯一");
+        reg("uk_poar_factory_name_active", "purchase_order_approval_rules 规则名唯一");
+        reg("uq_lda_resource_date", "logistics_daily_availability 资源日唯一");
+        reg("uq_ldo_batch_store", "logistics_delivery_orders 批次内门店唯一");
+        reg("uq_ls_trip_seq", "logistics_stops 车次内序号唯一");
+        reg("uq_ls_order_single_trip", "logistics_stops 一张订单只挂一个活停靠点");
+        reg("uq_lsm_factory_name", "logistics_store_master 门店名唯一");
+        reg("uq_lt_plan_tripno", "logistics_trips 计划内车次号唯一");
+        reg("uq_lvd_binding", "logistics_vehicle_drivers 车-司机绑定唯一");
 
         // ── 软删批 3-B（2026-09-07）：又 11 个实体摘掉了自己的唯一声明 ────────────────────────
         // ⚠️ 全部 11 个都登记，⛔ 不只登记那个「测试变红」的：#717 的教训是
         //    「只有 N 个变红不是因为只有它们有问题，是因为只有它们被测试碰到了」——
         //    本批 11 个里只有 logistics_order_batches 有一条 H2 断言撞上来，另外 10 个是**静默**失去保护的。
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_account_factory_code", "accounts 工厂内科目编码唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_accounting_period_factory_year_month", "accounting_periods 工厂年月唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_alert_rules_factory_name", "alert_rules 工厂内规则名唯一");
+        reg("uk_account_factory_code", "accounts 工厂内科目编码唯一");
+        reg("uk_accounting_period_factory_year_month", "accounting_periods 工厂年月唯一");
+        reg("uk_alert_rules_factory_name", "alert_rules 工厂内规则名唯一");
         // ⚠️ encoding_rules 用的是 idx_encoding_rules_unique（迁移里**真的建了**的那条）。
         //    prod 上另有一条同表同列的 uk_encoding_rules，但它在迁移里只出现在一条 DROP CONSTRAINT 中、
         //    从未被创建 ⇒ 属于「prod 独有」那张票，⛔ 不能拿它当本闸的锚。
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("idx_encoding_rules_unique", "encoding_rules 工厂+实体类型唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uk_fsc_factory_active", "factory_scheduling_config 每厂一份生效配置");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lde_edge", "logistics_distance_edges 起讫点对唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lob_idempotent", "logistics_order_batches 导入幂等键");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_lvp_vehicle", "logistics_vehicle_profiles 一车一档");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uidx_payment_requests_number", "payment_requests 付款单号唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uidx_purchase_exceptions_number", "purchase_exceptions 异常单号唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_tdr_factory_diffnum", "transfer_diff_records 差异单号唯一");
+        reg("idx_encoding_rules_unique", "encoding_rules 工厂+实体类型唯一");
+        reg("uk_fsc_factory_active", "factory_scheduling_config 每厂一份生效配置");
+        reg("uq_lde_edge", "logistics_distance_edges 起讫点对唯一");
+        reg("uq_lob_idempotent", "logistics_order_batches 导入幂等键");
+        reg("uq_lvp_vehicle", "logistics_vehicle_profiles 一车一档");
+        reg("uidx_payment_requests_number", "payment_requests 付款单号唯一");
+        reg("uidx_purchase_exceptions_number", "purchase_exceptions 异常单号唯一");
+        reg("uq_tdr_factory_diffnum", "transfer_diff_records 差异单号唯一");
         // 2026-09-07 从 PROD_ONLY_NOT_IN_MIGRATIONS 搬上来的两条（票 OPS-PROD-ONLY-PARTIAL-INDEXES，
         // 迁移 V20261101_39）。搬家本身是被下面那条断言逼出来的：迁移一落地，
         // 「原本只活在 prod 上、现在迁移里有了」就会报红提醒搬 —— 这次它确实红了。
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_business_rules_factory_code_active", "business_rules 规则 code 唯一");
-        MUST_BE_PARTIAL_IN_MIGRATIONS.put("uq_notify_templates_factory_code_active", "notify_templates 模板 code 唯一");
+        reg("uq_business_rules_factory_code_active", "business_rules 规则 code 唯一");
+        reg("uq_notify_templates_factory_code_active", "notify_templates 模板 code 唯一");
+    }
+
+
+    /**
+     * 登记一条「必须在迁移里是部分唯一索引」的键。
+     *
+     * <p>🔴 <b>为什么不用 {@code map.put} 直接写</b>：2026-09-07 合并 main 时，本常量从
+     * {@code Map.ofEntries(...)} 被解成 {@code LinkedHashMap} + {@code put}——而两者对**重名条目**的行为相反：
+     * {@code ofEntries} 当场抛 {@code IllegalArgumentException}（本轮真的抛过两次，都是我写重了），
+     * {@code put} 则是<b>静默覆盖</b>。静默覆盖的读数长这样：条目少一条、闸少守一个键、
+     * 而所有日志与断言<b>完全正常</b>——与「一切都好」不可区分。
+     *
+     * <p>⇒ 把保护搬回来，并且是**显式**的：撞名点名报错，⛔ 不靠某个集合类碰巧有这个性质。
+     */
+    private static void reg(String indexName, String what) {
+        String prev = MUST_BE_PARTIAL_IN_MIGRATIONS.put(indexName, what);
+        if (prev != null) {
+            throw new IllegalStateException(
+                    "MUST_BE_PARTIAL_IN_MIGRATIONS 登记了重名索引 " + indexName
+                            + "：先前=\"" + prev + "\" 又登记=\"" + what + "\" ——"
+                            + "⛔ 后一条会静默盖掉前一条，闸会少守一个键而读数完全正常");
+        }
     }
 
     /**
@@ -306,6 +334,15 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         // 会让原 CREATE 文本原封不动留着、闸保持绿 —— 而本类文档承诺的是「删掉就报红」。
         // ⇒ 文档承诺了实现做不到的事，且是往「更让人放心」的方向，比闸弱本身更危险 ⇒ 改实现。
         Map<String, String> finalState = resolveFinalIndexState();
+
+        // 阳性对照（下限）：下面整段是「遍历登记表逐条查」——登记表被清空 / 静态块初始化半途而废时，
+        // 循环体一次都不跑，两个 violations 列表都是空的，断言**恒绿**。失败方向与「一切正常」重合，
+        // 所以必须有一个「设计上必然」的读数把它顶住。
+        // ⛔ 不写死等于 24：条目数每批软删都会涨，写死的话「忘了改」与「闸坏了」长得一样。
+        System.out.println("MUST_BE_PARTIAL_REGISTERED=" + MUST_BE_PARTIAL_IN_MIGRATIONS.size());
+        assertThat(MUST_BE_PARTIAL_IN_MIGRATIONS)
+                .as("阳性对照：登记表为空 / 被砍半时，下面的逐条核查是恒真的")
+                .hasSizeGreaterThanOrEqualTo(24);
 
         List<String> missing = new ArrayList<>();
         List<String> notPartial = new ArrayList<>();
