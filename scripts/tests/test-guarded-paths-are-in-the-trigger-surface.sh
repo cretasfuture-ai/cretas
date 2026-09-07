@@ -151,4 +151,62 @@ done < "$TMP/paths.txt"
     || fail "7: 阳性对照失效 —— $pos 明明被 'scripts/tests/**' 覆盖却判成未覆盖, glob 转换过窄"
 ok "阳性对照: 已知被覆盖的路径判为已覆盖"
 
+# ---- 8. 🔴 棘轮: 声明本身不许被删掉 ----
+#
+# 这道闸红了之后, **让它变绿最便宜的做法是删掉那行 `# GUARDS=`** —— 而删掉之后本闸
+# 一个字都不会说(它只检查已声明的路径, 见文件头的边界)。
+# ⇒ 声明式机制的通用规矩: **「作者写一行就能让闸不看某个东西」的机制, 那一行必须被钉住。**
+# ⚠️ 光棘轮一个**计数**不够 —— 计数说不出是哪个文件没了, 而且加一个新声明就能把删掉的那个
+#    补回数目上。⇒ 用**按文件名的双向登记表**。
+REGISTRY="$TESTS_DIR/guards-declaring-files.txt"
+[ -f "$REGISTRY" ] || fail "8: 缺登记表 $REGISTRY"
+grep -vE '^[[:space:]]*(#|$)' "$REGISTRY" | tr -d '\r' | sed 's/[[:space:]]*$//' \
+    | grep -v '^$' | sort -u > "$TMP/registry.txt"
+cut -f1 "$TMP/decl.txt" | sort -u > "$TMP/declaring.txt"
+N_REG=$(wc -l < "$TMP/registry.txt")
+echo "READING: GUARDS_REGISTERED=$N_REG DECLARING_NOW=$(wc -l < "$TMP/declaring.txt")"
+[ "$N_REG" -ge 1 ] || fail "8: 登记表是空的 —— **没量到**, ⛔ 不报绿"
+
+# ⑧b 先判「文件还在不在」—— 必须排在 ⑧a **之前**:
+#    文件都没了的时候, ⑧a 会报「登记过要声明, 现在却不声明了」, 而那句话指向一个
+#    **做不到的动作**(去一个不存在的文件里加声明)。与端口探针那次同族: 报错要说出能做的下一步。
+#    ⚠️ 这一条本身也守着一件事: 没有它,「测试被删了」会长成「它不需要声明」。
+missing=""
+while read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$TESTS_DIR/$f" ] || missing="$missing $f"
+done < "$TMP/registry.txt"
+[ -z "$missing" ] || fail "8: 登记表里这些文件**不存在**(测试被删了不是不需要声明了):$missing"
+
+# ⑧a 登记了却不再声明 ⇒ 就是那个洞
+lost=$(comm -23 "$TMP/registry.txt" "$TMP/declaring.txt" | tr '\n' ' ')
+if [ -n "$(printf '%s' "$lost" | tr -d ' ')" ]; then
+    echo "FAIL: 这些用例登记过要声明 \`# GUARDS=\`, 现在却不声明了:$lost" >&2
+    cat >&2 <<'EOF'
+  ⇒ 删掉声明是让本闸「变绿」最便宜的做法, 而删完之后它对那些路径**完全失明**。
+  修法: 把 `# GUARDS=` 加回去(并把路径补进 ops-script-tests.yml 的 paths);
+       真要删掉这个用例, 就在**同一个 commit** 里把它从 guards-declaring-files.txt 里删掉,
+       ⛔ 不要先删声明再说。
+EOF
+    exit 1
+fi
+
+# ⑧c 在声明却没登记 ⇒ 请登记(一行的事), 否则新声明不受棘轮保护
+unreg=$(comm -13 "$TMP/registry.txt" "$TMP/declaring.txt" | tr '\n' ' ')
+[ -z "$(printf '%s' "$unreg" | tr -d ' ')" ] \
+    || fail "8: 这些用例声明了 \`# GUARDS=\` 但没登记进 guards-declaring-files.txt:$unreg —— 不登记就不受棘轮保护, 下次谁把声明删了没人会知道"
+ok "声明棘轮: $N_REG 个登记文件全部仍在声明(⛔ 删声明会红并被点名)"
+
+# ---- 9. 阴性对照: 这道棘轮真的能红吗 ----
+# 构造「登记了但不在声明集合里」的情形, 确认 comm 会把它算成 lost。
+# ⚠️ 必须**排序后**再喂给 comm。第一版直接把探针行拼在已排序清单前面, comm 打出
+#    `input is not in sorted order` —— 那趟结果碰巧是对的, 但**仪器在报警的读数不能用**。
+probe_lost=$(comm -23 <({ printf 'zzz-not-declaring.sh\n'; cat "$TMP/registry.txt"; } | sort -u) <(sort -u "$TMP/declaring.txt") 2>&1 | tr '\n' ' ')
+printf '%s' "$probe_lost" | grep -q 'not in sorted order' \
+    && fail "9: comm 报「输入未排序」—— 仪器在报警的读数不能用"
+printf '%s' "$probe_lost" | grep -q 'zzz-not-declaring.sh' \
+    || fail "9: 阴性对照失效 —— 构造的「登记了却不声明」没有被算成 lost, 那么第 8 组的绿无意义"
+echo "READING: RATCHET_NEGATIVE_CONTROL=zzz-not-declaring.sh->lost"
+ok "阴性对照: 「登记了却不声明」确实会被判为 lost"
+
 echo "PASS: $pass 项断言全部通过"
