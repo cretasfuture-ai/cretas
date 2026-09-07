@@ -1,0 +1,8 @@
+# test-pipeline-tail-swallows-rc.sh 的验收样本 —— 2026-09-07 四次真实事故的形状。
+# ⚠️ 刻意放在 .txt 而不是 .sh: 那道闸只扫 *.sh, ⇒ 本文件**结构上**不会被自己扫到,
+#    ⛔ 不需要任何排除名单。(把样本留在 .sh 里 = 闸红在自己的测试样本上。)
+# 行号即形状编号, ⛔ 不要改动顺序: 闸按行号断言 ②③④ 命中、① 不命中。
+applied=$(psql -tAc "SELECT 1")
+found=$(grep foo bar.txt | sed 's/a/b/') || echo "(无)"
+rc=$(some_cmd | head -1)
+last=$(other_cmd | tail -1)
