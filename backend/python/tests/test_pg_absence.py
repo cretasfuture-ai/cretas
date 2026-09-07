@@ -22,6 +22,8 @@ asyncio 合成一个**无 errno、无 cause/context** 的聚合 `OSError`（判�
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from .pg_absence import is_local_postgres_absent
@@ -65,12 +67,47 @@ def test_absence_found_through_cause_chain():
     assert is_local_postgres_absent(outer)
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11),
+                    reason="ExceptionGroup 是 3.11+ 的内置类型，3.10 上不存在")
 def test_absence_found_inside_exception_group():
-    """3.11+ 的 `ExceptionGroup` 把子异常挂在 `.exceptions` 上，不在 cause 链里。"""
+    """3.11+ 的 `ExceptionGroup` 把子异常挂在 `.exceptions` 上，不在 cause 链里。
+
+    ⚠️ 这条用**真的** `ExceptionGroup`，⛔ 不用替身 —— 判别式最终要在 prod
+    （Python 3.11.13）上认出真实类型，替身证明不了这一点。
+    """
     group = ExceptionGroup(                                    # noqa: F821 (3.11+)
         "connect attempts", [ConnectionRefusedError(61, "Connection refused")],
     )
     assert is_local_postgres_absent(group)
+
+
+def test_absence_found_via_exceptions_attribute():
+    """`.exceptions` 这条**契约**在每个版本上都测 —— ⛔ 不因为 3.10 没有
+    `ExceptionGroup` 就整条路径无人看守。
+
+    🔴 立这一条的成因（2026-09-07）：上面那条 3.11-only 的用例在自建 runner
+    （系统 Python 3.11）上一直绿；切回托管（3.10）当天就 `NameError` 炸了。
+    作者写了 `# noqa: F821 (3.11+)` —— **他知道**，只是压掉了 linter 而没有
+    任何机制去执行那句「3.11+」。▎注释里写着真相，而没有机制执行它。
+
+    ⚠️ 而只加 `skipif` 会让 3.10 上**整条 `.exceptions` 路径无人看守**：
+    判别式是**鸭子类型**的（`getattr(current, "exceptions", ())`，它根本不引用
+    `ExceptionGroup`）⇒ 那条路径在 3.10 上完全可测，只是要用替身。
+    ⇒ 两条一起：真类型那条守「prod 上认得出」，本条守「契约本身没被改坏」。
+    """
+    class _FakeGroup(Exception):
+        def __init__(self, subs):
+            super().__init__("connect attempts")
+            self.exceptions = tuple(subs)
+
+    assert is_local_postgres_absent(
+        _FakeGroup([ConnectionRefusedError(111, "Connection refused")])
+    )
+    # 阴性：`.exceptions` 里装的不是「库没起」时，⛔ 不许判成 absent。
+    # 没有这一条，上面那句 assert 与「函数无脑返回 True」读数相同。
+    assert not is_local_postgres_absent(
+        _FakeGroup([Exception('password authentication failed for user "x"')])
+    )
 
 
 # ══════════════════════════════════════════════════════════
