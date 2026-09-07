@@ -44,7 +44,7 @@ on:
       # 🔴 2026-09-07: test-fresh-db-baseline-replays.sh(离线验证器)读的就是这个目录 ——
       #    改基线的 PR 必须触发它, 否则「基线被改坏了」与「没问题」读数相同。
       #    ⚠️ 这是那道 GUARDS 闸**第三次**抓住加它的那个 PR 自己。
-      - 'backend/java/cretas-api/src/main/resources/db/baseline/**'
+      - 'ops/db-baseline/**'
       - 'backend/java/cretas-api/src/main/resources/application-pg.properties'
       - 'backend/java/cretas-api/src/main/resources/application-pg-prod.properties'
       # 🔴 2026-09-07: test-java-gate-selector-covers-gate-classes.sh 的**被测对象**是

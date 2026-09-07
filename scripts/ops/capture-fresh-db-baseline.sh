@@ -13,7 +13,17 @@
 #    在一个已有 502 张表的库上重跑整份建表脚本。
 #    ⚠️ 失败形态很坏：dump 满是 `CREATE TABLE IF NOT EXISTS` ⇒ 多半是
 #    **大部分语句静默 no-op、少数报错**，读起来像「一次有点吵但成功的部署」。
-# 2. 输出目录 `db/baseline/` **⛔ 不许进 `spring.flyway.locations`**。
+# 2. 输出目录是**仓库根的 `ops/db-baseline/`**, ⛔ 不是 `src/main/resources/` 下面。
+#    🔴 2026-09-07 第一版就放错了(放在 resources/db/baseline/), 三个后果当时都没算到:
+#      ① 被打进 jar —— BOOT-INF/classes/db/baseline/…(原始 1368345 → 压缩 182157 字节)。
+#         一份 prod schema dump 是**运维制品**, ⛔ 不是应用资源, 不该进部署产物。
+#      ② 落在 BOOT-INF/classes/ 下 ⇒ 它**在 classpath 上**
+#         ⇒ `spring.flyway.locations=classpath:db/baseline` 真能解析到
+#         ⇒ 下面那条禁令当时离失守只有**一行配置**。
+#      ③ PartialUniqueIndexBackingSoftDeleteContractTest 扫父目录 src/main/resources/db
+#         ⇒ dump 进了它的语料, 那道闸**红着却已经瞎了**(文档第九节)。
+#    ⇒ 由 test-fresh-db-baseline-contract.sh 的第 2b 条守着它不被挪回去。
+#    并且它 **⛔ 不许进 `spring.flyway.locations`**(同一份闸的第 3 条)。
 #
 # ⚠️ 这两条**注释挡不住**（本仓 2026-09-07 一天用过三次这句）⇒ 由
 #    scripts/tests/test-fresh-db-baseline-contract.sh 写成闸。
@@ -45,7 +55,7 @@ set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
-OUT_DIR="$REPO_ROOT/backend/java/cretas-api/src/main/resources/db/baseline"
+OUT_DIR="$REPO_ROOT/ops/db-baseline"
 OUT_FILE="$OUT_DIR/prod-schema-baseline.sql"      # ⛔ 刻意不是 V…__ 开头
 RES_FLYWAY_DIR="$REPO_ROOT/backend/java/cretas-api/src/main/resources/db/flyway"
 PROD_HOST="${CRETAS_PROD_SSH:-root@47.100.235.168}"
@@ -65,7 +75,7 @@ usage() {
 usage: bash scripts/ops/capture-fresh-db-baseline.sh [--write] [--keep]
 
   (默认)   只采集 + 跑三条判据, **⛔ 不落盘** —— 用来审这套流程本身。
-  --write  三条判据全过之后才写 db/baseline/prod-schema-baseline.sql。
+  --write  三条判据全过之后才写 ops/db-baseline/prod-schema-baseline.sql。
   --keep   保留验证用的临时容器(排障用)。
 
 ⛔ 本脚本只读 prod（pg_dump --schema-only + 若干 count），一个字都不写。

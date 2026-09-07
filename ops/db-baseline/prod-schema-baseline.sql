@@ -6,7 +6,7 @@
 --    在一个已有 502 张表的库上重跑整份建表脚本(且多半静默 no-op, 读起来像成功)。
 -- 用法: 新库 = psql 灌本文件 → flyway baseline -baselineVersion=20261101.37 → flyway migrate
 --
--- 出处(判据 ③): 采自 root@47.100.235.168 的 cretas_prod_db, 采集时刻 2026-09-07T06:15:38Z
+-- 出处(判据 ③): 采自 root@47.100.235.168 的 cretas_prod_db, 采集时刻 2026-09-07T06:40:53Z
 -- flyway_schema_history 最大版本: 20261101.37
 -- 形状(与重放结果逐位相同): tables=502 indexes=2044 unique=181 fk=227 columns=8812
 -- 只含 schema `public`(prod 另有 6 个 purge/备份 schema, 刻意不采)
@@ -15,7 +15,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict t4Zq4nRWiocfDT8DDeJbGivEb4san95MmeoMnBTHW3IZxOPzxCV4Nf5kxCD9AKG
+\restrict BmES93M5UXi5P7kbGB3ne7j49HxfdkAj2GPXQC4Yxj1d0njg1jvqYmf0HVFX8Jl
 
 -- Dumped from database version 13.23
 -- Dumped by pg_dump version 13.23
@@ -42971,5 +42971,5 @@ ALTER TABLE ONLY public.supplier_delivery_note_lines
 -- PostgreSQL database dump complete
 --
 
-\unrestrict t4Zq4nRWiocfDT8DDeJbGivEb4san95MmeoMnBTHW3IZxOPzxCV4Nf5kxCD9AKG
+\unrestrict BmES93M5UXi5P7kbGB3ne7j49HxfdkAj2GPXQC4Yxj1d0njg1jvqYmf0HVFX8Jl
 

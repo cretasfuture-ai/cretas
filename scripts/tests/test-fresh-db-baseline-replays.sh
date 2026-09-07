@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=backend/java/cretas-api/src/main/resources/db/baseline/**,scripts/ops/capture-fresh-db-baseline.sh
+# GUARDS=ops/db-baseline/**,scripts/ops/capture-fresh-db-baseline.sh
 # SCRIPT_TEST_TIMEOUT=420
 #
 # 离线验证器：仓库里那份基线，今天还能重放成**它自己头里记的那五个数**吗。
@@ -41,7 +41,7 @@
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-BASELINE_DIR="$ROOT_DIR/backend/java/cretas-api/src/main/resources/db/baseline"
+BASELINE_DIR="$ROOT_DIR/ops/db-baseline"
 IMAGE="${CRETAS_BASELINE_PG_IMAGE:-pgvector/pgvector:pg17}"
 CONTAINER="cretas-baseline-replay-$$"
 pass=0
@@ -60,10 +60,10 @@ if [ ! -d "$BASELINE_DIR" ]; then
 fi
 mapfile -t FILES < <(find "$BASELINE_DIR" -maxdepth 1 -name '*.sql' -size +0 | sort)
 if [ "${#FILES[@]}" -eq 0 ]; then
-    fail "1: db/baseline/ 存在但没有非空基线 —— 目录在而内容空, ⛔ 不许算绿"
+    fail "1: ops/db-baseline/ 存在但没有非空基线 —— 目录在而内容空, ⛔ 不许算绿"
 fi
 [ "${#FILES[@]}" -eq 1 ] \
-    || fail "1: db/baseline/ 下有 ${#FILES[@]} 份基线, 期望恰好 1 份 —— 两份基线一定会漂(形态 D): ${FILES[*]}"
+    || fail "1: ops/db-baseline/ 下有 ${#FILES[@]} 份基线, 期望恰好 1 份 —— 两份基线一定会漂(形态 D): ${FILES[*]}"
 BASELINE="${FILES[0]}"
 echo "READING: BASELINE_FILE=$(basename "$BASELINE") bytes=$(wc -c < "$BASELINE")"
 ok "找到恰好一份非空基线"

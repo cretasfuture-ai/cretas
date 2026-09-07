@@ -2,7 +2,7 @@
 
 **票**: `OPS-FRESH-DB-BASELINE-BOOTSTRAP-20260907`
 **日期**: 2026-09-07
-**状态**: 🟢 **第一份真基线已产出**（2026-09-07，`db/baseline/prod-schema-baseline.sql`，
+**状态**: 🟢 **第一份真基线已产出**（2026-09-07，`ops/db-baseline/prod-schema-baseline.sql`，
 采自 prod@`20261101.37`，四条判据全过 —— 见第八、九节）。⚠️ **bootstrap 尚未接进建库流程**
 （`flyway baseline -baselineVersion=20261101.37` 那一步还没接），所以第五节预告的棘轮跳变**还没发生**。
 **取代**: `OPS-FRESH-DB-CANNOT-BE-BUILT` 的修法部分（⛔ 那份分类**留着不删**，见文末）
@@ -129,12 +129,13 @@ prod = 一个字都不动                    （它的 history 已经有那 697 
 下一个人会自己估一个后果，而他估的多半比真实的轻（「也就是多跑一次建表，能有多糟」）。
 📌 这条纪律今天已经用过两次（`--adopt` 禁令、本条）。
 
-### 禁令 2：dump 文件放 `db/baseline/`，**⛔ 不许进 `spring.flyway.locations`**
+### 禁令 2：dump 文件放**仓库根的** `ops/db-baseline/`，⛔ 不放 `src/main/resources/`，且 ⛔ 不许进 `spring.flyway.locations`
 
 ⚠️ **禁令写在注释里挡不住** —— 今天这条已经用过三次。⇒ 要**写成闸**：
 
-- `db/baseline/` 下的文件名 ⛔ 不许匹配 `V*__*.sql`
+- `ops/db-baseline/` 下的文件名 ⛔ 不许匹配 `V*__*.sql`
 - `spring.flyway.locations` ⛔ 不许含 `baseline`
+- 🔴 `src/main/resources/` 下 ⛔ 不许有 pg_dump 产物（按内容特征判）—— **第九节记着它为什么是三个后果，不是一个**
 
 ---
 
@@ -261,6 +262,24 @@ READING: BASELINE_LAG baseline_max=… prod_max=… repo_max=… above_baseline_
 ⇒ 代理**恒 ≥** 权威值 ⇒ 它会**早于**真实滞后报警，⛔ 不会漏报。
 **这个偏向是刻意选的** —— 采集一次的代价（人手 + prod 只读）远低于「基线悄悄过期」的代价。
 
+### 🔴 2026-09-07 实测：两个数第一次同时有值
+
+采集器在**已经有 checked-in 基线**之后再跑一次 —— 判据 ④ 第一次拿到真实输入：
+
+```
+READING: BASELINE_LAG baseline_max=20261101.37 prod_max=20261101.37 repo_max=20261101.39 above_baseline_on_prod=0 missing_files_above=0
+READING: BASELINE_LAG_PROXY above_baseline_in_repo=2 baseline_max=20261101.37 repo_max=20261101.39
+```
+
+⇒ **权威值 0，代理 2** ⇒ 「代理 ≥ 权威值」**不再只是一句论证，它被量到了一次**。
+⚠️ 一次 ⛔ 不等于恒成立 —— 但它至少排除了「方向反了」，
+而在此之前那个方向只有一句推理撑着（`prod 的迁移只从 main 来`）。
+
+⚠️ 顺带一条实测：**两次采集产出的文件 md5 必然不同**
+（文件头的采集时刻 + PG 的 `\restrict` 随机 token），而字节数相同（1368345）。
+⇒ ⛔ 跨采集不能拿 md5 当同一性判据 —— 那是五维的活。
+md5 只在「**同一份文件**有没有被改过」这个问题上成立（扰动/还原那一对用的正是它）。
+
 ### 阈值：⛔ 现在不编一个
 
 **阈值待定，依据是上线后 N 周的实际读数。** 先让那个数跑一阵，看它实际怎么长，再定。
@@ -297,57 +316,122 @@ READING: BASELINE_LAG_PROXY_ARMED=no ⇒ **阈值待定** ⇒ 这条告警今天
 
 ---
 
-## 九、🔴 基线一落盘，就让一道扫迁移的闸变得不可证伪
+## 九、🔴 基线放错了地方：一个位置，**四个**静默后果
 
-基线落在 `src/main/resources/db/baseline/`，而
+第一份真基线原本落在 `src/main/resources/db/baseline/`。**那个位置是错的**。
+
+⚠️ 我第一次登记时只数出**一个**后果（「打包产物变大」），而且那个数还报错了（写的 +1.4 MB，实为 ~178 KB）。
+最终是**四个**，其中第 ④ 个是挪走之后**另一道闸的读数自己动了**才暴露的。
+▎**「这个位置有什么问题」这种问题，第一遍数出来的个数基本都是低估。**
+
+### ① 它被打进了部署产物
+
+两次 **`mvn clean package`** 实测（⚠️ 必须 `clean`，见下）：
+
+```
+基线在 resources 下:  jar = 177,618,520 字节   BOOT-INF/classes/db/baseline/ 条目 2 个
+基线在 ops/ 下:       jar = 177,436,029 字节   baseline 条目 0 个
+差                    =    182,491 字节   ≈ 该条目压缩后 182,157 + 两个 entry 头
+```
+
+一份 prod schema dump 是**运维制品**，⛔ 不是应用资源。
+⚠️ 顺带订正一个我先前报错的数：我登记的是「+1.4 MB」，**实际入 jar 是 ~178 KB**（压缩后）。
+
+🔴 ⚠️ **第一次量「挪走之后」时我没 `clean`** ⇒ `target/classes/` 里上一轮的副本被原样打了进去
+⇒ 读数 **与挪走前逐字节相同（177,618,518）**。
+▎那个「完全没变」看起来像一个结论（「挪了也不影响体积」），
+**实际是这次测量根本没测到我以为的东西** —— 是 `jar 里 baseline 条目数=2` 那条
+阴性对照把它捞出来的，⛔ 单看体积数会直接读成结论。
+
+### 🔴 ② 它落在 `BOOT-INF/classes/` 下 ⇒ **它在 classpath 上**
+
+⇒ `spring.flyway.locations=classpath:db/baseline` **是真能解析到的**。
+⇒ 本文档第三节那条禁令（「⛔ 不许进 locations」），当时离失守只有**一行配置**。
+
+▎**「放哪儿」不是整理问题** —— 它决定了那条禁令挡的是「一行配置」还是「一件做不到的事」。
+
+### 🔴 ③ 它让一道闸**红着却已经瞎了**
+
 `PartialUniqueIndexBackingSoftDeleteContractTest` 扫的是**父目录** `src/main/resources/db`
-（全仓**只有它一个**扫父目录；另外 33 个契约测试扫的是 `db/flyway`，不受影响）。
+（全仓**只有它一个**扫父目录；另外 33 个契约测试扫 `db/flyway`，不受影响）⇒ dump 进了它的语料。
 
-⇒ 那份 dump **进了它的语料**。两个后果，对照组是同一棵树、只把 `db/baseline/` 挪走再跑一次：
+对照组是同一棵树、只把基线目录挪走再跑一次：
 
 | | 有基线 | 无基线（对照） |
 |---|---:|---:|
 | `PARTIAL_UNIQUE_INDEX_STATEMENTS_IN_MIGRATIONS` | **217** | 113 |
 | 闸的结论 | 🔴 红（`uk_encoding_rules`） | ✅ 绿 |
 
-红的那半好办。**⚠️ 真正的问题是没红的那一半。**
+红的那半好办。**⚠️ 真正的问题是没红的那一半**：那 13 个受该闸守护的索引名，**dump 里一个不少**
+（各命中 2–4 次）—— 因为 dump 是 prod 的快照，prod 上它们当然都在。
 
-那 13 个受本闸守护的索引名，**dump 里一个不少**（各命中 2–4 次）——
-因为 dump 是 prod 的快照，而 prod 上它们当然都在。⇒ **删掉一条真迁移，闸也发现不了。**
-
-### 实证（删掉 `V20261101_39`，两种扫描面各跑一次）
+**实证**（删掉 `V20261101_39`，两种扫描面各跑一次）：
 
 ```
-A  排除 db/baseline/  ⇒ 🔴 红, 点名: uq_business_rules_factory_code_active [absent]
-                                   uq_notify_templates_factory_code_active [absent]
-B  不排除            ⇒ 🔴 也红 —— 但报的是 uk_encoding_rules,
-                        **那两个被删的索引一个都没被报成 absent**
+A  排除基线目录  ⇒ 🔴 红, 点名 uq_business_rules_factory_code_active   [absent]
+                              uq_notify_templates_factory_code_active [absent]
+B  不排除       ⇒ 🔴 也红 —— 但报的是 uk_encoding_rules,
+                   **那两个被删的索引一个都没被报成 absent**
 ```
 
-⚠️ **B 比「变绿」更坏**：闸**还是红的**，看起来在干活，
-而你关心的那个回归**已经隐形了**。⇒ 只看红绿的人会以为闸没坏。
+⚠️ **B 比「变绿」更坏**：闸**还是红的**、看起来在干活，而你关心的回归**已经隐形**。
+⇒ 今晚一直在防的是「绿着瞎了」；**这是它的第二形态，而且没人会去查一个红着的闸。**
 
-▎**一份 prod 的快照放进「查迁移里有没有」的语料，会让这个问题不可证伪 ——
-快照里什么都有，那正是它的用途。**
+▎**一份 prod 快照放进「查迁移里有没有」的语料，会让这个问题不可证伪 —— 快照里什么都有，那正是它的用途。**
 
-### ⇒ 修法与它自己的判据
+### 🔴 ④ 它还污染了另一道闸的读数 —— 而这一条是**数字自己动了**才暴露的
 
-扫描面排除 `db/baseline/`（这不是「顺手消红」：本闸问的是「**从迁移新建的库**会不会重现
-prod 已修的 bug」，而基线**按定义**不参与那条路径）。
+挪走之后 `READING: FLYWAY_LOCATIONS_FILES` 从 **8 掉到 7**。
 
-两个失效方向各配一条断言，⛔ 不能只配一个：
+⚠️ 我没有把这个下降当成「少了个文件很正常」，去查了成因：
+`test-fresh-db-baseline-contract.sh` 第 3 条用
+`grep -rl 'spring.flyway.locations' src/main/resources` 找配置文件 ——
+而**基线文件头里就有这个串**（是采集脚本写进去的那句禁令本身）：
 
 ```
-① 排太宽 ⇒ 语料被打空 ⇒「每个索引都缺失」与「没在读」同形
-   ⇒ 断言 scanned_sql > 600           (实测 1139)
-② 没排掉 ⇒ dump 顶替迁移 ⇒ 闸变瞎
-   ⇒ 断言扫描面里 noneMatch(db/baseline/)
-   变异实证: 去掉排除 ⇒ scanned_sql 1139→1140 ⇒ 红
-READING: MIGRATION_SCAN_SCOPE scanned_sql=1139 excluded_baseline_sql=1 baseline_dir=present
+-- ⛔ 不许改名成 V…__*.sql, ⛔ 不许放进 db/flyway/, ⛔ 不许进 spring.flyway.locations。
 ```
 
-⚠️ `baseline_dir=absent` 时读数会明说「**本趟没有基线可排**」——
-⛔ 否则 `excluded=0` 读起来像「排除生效」。
+⇒ 那道闸把**一份 SQL dump 当成了第 8 个配置文件**，并对它那行做了「含不含 `baseline`」的判定。
+
+🔴 **而它离一次假红只有一个词**：那句禁令但凡写成「⛔ 不许把 **baseline** 放进
+`spring.flyway.locations`」——一种完全自然的措辞——闸就会红，
+**红在它自己陈述规则的那句话上**，而不是任何真实配置。
+
+▎与「审查文档把它正在标记的口令抄了进去」同族：**描述一条规则的文本，
+会被按那条规则去检查。** ⇒ 判据的语料里 ⛔ 不该混进「谈论这条判据」的文本。
+
+---
+
+---
+
+### ⇒ 修法：把基线挪出去，⛔ 不是去改那道闸
+
+基线移到仓库根的 **`ops/db-baseline/`**。一个动作同时解掉上面四条：
+闸看不到它了 / 不进 jar / 不在 classpath / ⛔ 不再被当成第 8 个配置文件。
+
+⛔ **不放根 `database/`** —— 那是那个已死的第二 schema 源，放进去会混。
+
+新增闸（`test-fresh-db-baseline-contract.sh` 第 2b 条）：
+**`src/main/resources/` 下按内容特征（`-- Dumped from database version`）⛔ 不许有 pg_dump 产物。**
+
+⚠️ 守的是**它不被挪回来**：「SQL 不都该放 resources 吗」是一次看起来很自然的整理，
+而三个后果全是静默的。⛔ 注释挡不住，所以写成闸。
+
+### ⚠️ 但挪走 ⛔ 不根治那个洞
+
+**那道闸扫父目录这件事仍在** ⇒ **任何未来放进 `db/` 的东西都会再次顶瞎它**。
+⇒ 根治是把它的扫描根派生成只扫 `db/flyway`（在 Line B 手上），
+并要求补一条断言：**基线目录必须不在扫描面里**。
+
+### 🔴 附带教训：我判「没有并发编辑」的方法是结构性看不见的
+
+我原本改了那道闸，理由是「`gh pr list` 全扫，没有在飞 PR 碰它」。**那个判据方向错了** ——
+`gh pr list` **只能看见已推上远端并开了 PR 的编辑**，而 Line B 当时有 **7 个本地未推 commit**
+正在改这个文件（扫描根派生 + `stripSqlComments`）。
+
+▎**并发编辑的风险恰恰在「我看不到的地方」，而以「我没看到」结束的检查对它是盲的。**
+⇒ 碰任何不在自己 scope 里的文件，**问有全局的人**，⛔ 不要扫一个只覆盖已推分支的接口。
 
 ---
 

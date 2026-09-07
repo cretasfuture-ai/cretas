@@ -47,35 +47,6 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
 
     private static final Path DB = Path.of("src/main/resources/db");
 
-    /**
-     * 🔴 <b>{@code db/baseline/} 必须排除在扫描面之外 —— 它是 prod schema 的 pg_dump，不是迁移。</b>
-     *
-     * <p>2026-09-07 第一份真基线落盘（票 {@code OPS-FRESH-DB-BASELINE-BOOTSTRAP-20260907}）时实测到的
-     * 两个后果，<b>对照组是同一棵树、只把 {@code db/baseline/} 挪走再跑一次</b>：
-     * <br>· 读数被污染：{@code PARTIAL_UNIQUE_INDEX_STATEMENTS_IN_MIGRATIONS} <b>113 → 217</b>；
-     * <br>· 本闸直接<b>变红</b>：{@code uk_encoding_rules}（登记在 {@link #PROD_ONLY_BENIGN}，
-     *   意思是「只活在 prod 上」）在 dump 里当然有 ⇒ 闸判定它「进迁移了，快搬家」。
-     *
-     * <p>⚠️ <b>而更坏的是它没红的那一半</b>：这份 dump 里<b>那 13 个受守护的索引名一个不少</b>
-     * （实测各 2–4 次命中）⇒ 有人删掉一条真迁移，本闸<b>照样绿</b>，因为 dump 顶上了。
-     * ▎<b>一份 prod 的快照，会让「迁移里有没有」这个问题变得不可证伪</b>——
-     * 快照里什么都有，那正是它的用途。
-     *
-     * <p>⛔ 所以这不是「顺手把红消掉」，是这道闸的问题定义本身要求排除它：
-     * 本闸问的是<b>「从迁移新建的库</b>会不会重现 prod 已修的 bug」，而基线<b>按定义</b>不参与那条路径
-     * （新库 = 灌基线 → {@code flyway baseline} → 只跑基线<b>之上</b>的迁移）。
-     */
-    private static final Path BASELINE_DIR = DB.resolve("baseline");
-
-    /**
-     * 扫描面：{@code db/} 下的 {@code .sql}，⛔ 但不含 {@link #BASELINE_DIR}。
-     * ⚠️ 两处 {@code Files.walk(DB)} 都必须走这一个判据，⛔ 不许一处改一处漏——
-     * 那会让「统计用的分母」与「断言用的语料」是两棵不同的树（形态 D）。
-     */
-    private static boolean isMigrationSql(Path f) {
-        return f.toString().toLowerCase().endsWith(".sql") && !f.startsWith(BASELINE_DIR);
-    }
-
     /** 2026-09-07 摘掉实体声明的那 13 个键：索引名 → 它守着哪张表的什么。 */
     private static final Map<String, String> MUST_BE_PARTIAL_IN_MIGRATIONS = new LinkedHashMap<>();
 
@@ -167,42 +138,6 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
 
     @Test
     void everyPartialUniqueIndexBackingASoftDeletedEntityIsStillDeclaredPartialInMigrations() throws IOException {
-        // ── 扫描面自检 ────────────────────────────────────────────────────────────
-        // ⚠️ 排除 db/baseline/ 有两种失效方向, 两个都要判, ⛔ 不能只判一个:
-        //    ① 排太宽 ⇒ 语料被打空 ⇒ 「每个索引都缺失」与「没在读」同形 ⇒ 下面①管;
-        //    ② 没排掉 ⇒ dump 顶替迁移 ⇒ 闸对「删掉一条真迁移」变瞎 ⇒ 下面②管。
-        int scanned;
-        int excluded;
-        try (Stream<Path> f1 = Files.walk(DB); Stream<Path> f2 = Files.walk(DB)) {
-            scanned = (int) f1.filter(PartialUniqueIndexBackingSoftDeleteContractTest::isMigrationSql).count();
-            excluded = (int) f2.filter(p -> p.toString().toLowerCase().endsWith(".sql"))
-                    .filter(p -> p.startsWith(BASELINE_DIR)).count();
-        }
-        boolean baselinePresent = Files.isDirectory(BASELINE_DIR);
-        System.out.println("READING: MIGRATION_SCAN_SCOPE scanned_sql=" + scanned
-                + " excluded_baseline_sql=" + excluded
-                + " baseline_dir=" + (baselinePresent ? "present" : "absent")
-                + (baselinePresent ? "" : " ⇒ **本趟没有基线可排** —— excluded=0 ⛔ 不代表排除生效"));
-        // ① 阳性对照
-        assertThat(scanned)
-                .as("阳性对照：排除 db/baseline/ 之后仍必须扫到成百上千个迁移 .sql；"
-                        + "打空了的话下面每一条断言都变成「没在读」而不是「没找到」")
-                .isGreaterThan(600);
-        // ② 基线在场时必须真的一条都没进来
-        if (baselinePresent) {
-            assertThat(excluded)
-                    .as("db/baseline/ 在场却一条 .sql 都没被排除 —— 说明排除判据没生效。"
-                            + "后果不是读数难看：dump 里那 13 个受守护的索引名一个不少，"
-                            + "⇒ 删掉一条真迁移本闸照样绿")
-                    .isGreaterThan(0);
-            try (Stream<Path> f3 = Files.walk(DB)) {
-                assertThat(f3.filter(PartialUniqueIndexBackingSoftDeleteContractTest::isMigrationSql)
-                        .noneMatch(p -> p.startsWith(BASELINE_DIR)))
-                        .as("扫描面里混进了 db/baseline/ 下的文件")
-                        .isTrue();
-            }
-        }
-
         String sql = readAllMigrations();
 
         assertThat(sql)
@@ -393,7 +328,7 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
 
         List<Path> ordered;
         try (Stream<Path> files = Files.walk(DB)) {
-            ordered = files.filter(PartialUniqueIndexBackingSoftDeleteContractTest::isMigrationSql)
+            ordered = files.filter(f -> f.toString().toLowerCase().endsWith(".sql"))
                     .sorted(Comparator.comparing(f -> f.getFileName().toString()))
                     .toList();
         }
@@ -438,7 +373,7 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
     private static String readAllMigrations() throws IOException {
         StringBuilder sb = new StringBuilder();
         try (Stream<Path> files = Files.walk(DB)) {
-            for (Path p : files.filter(PartialUniqueIndexBackingSoftDeleteContractTest::isMigrationSql).toList()) {
+            for (Path p : files.filter(f -> f.toString().toLowerCase().endsWith(".sql")).toList()) {
                 sb.append(Files.readString(p, StandardCharsets.UTF_8)).append('\n');
             }
         }
