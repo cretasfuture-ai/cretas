@@ -17,6 +17,9 @@ on:
     branches: [main]
   pull_request:
     paths:
+      # ⚠️ scripts/** 是整面 —— test-pipeline-tail-swallows-rc.sh 扫的是**所有** .sh,
+      #    只列子目录的话, 改 scripts/ota/ 或 scripts/migrations/ 的 PR 触发不到这道闸。
+      - 'scripts/**'
       - 'scripts/tests/**'
       - 'scripts/ci/run-script-tests.sh'
       - 'scripts/tests/known-failing.txt'
@@ -91,6 +94,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 🔴 test-pipeline-tail-swallows-rc.sh 只拦**新增**行 ⇒ 要 merge-base ⇒ 要全历史。
+          #    浅克隆下它会如实报 `base=<unavailable> —— **没量到**`, ⛔ 不会假绿, 但也就没用了。
+          fetch-depth: 0
 
       # 🔴 2026-09-06 订正: 原来这里写「⛔ 不编译、不需要 JDK」—— 那句话是错的。
       #    test-release-artifacts-failfast.sh 与 test-release-parallel-fastlane.sh
