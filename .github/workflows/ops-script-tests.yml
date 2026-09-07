@@ -33,6 +33,10 @@ on:
       #    (2026-08-28 教训: 给别人加宽 glob 会把那边的阴性对照变成恒真式)。
       - 'scripts/deploy/**'
       - 'scripts/lib/**'
+      # 🔴 2026-09-07: test-fresh-db-progress-ratchet.sh 声明 `# GUARDS=scripts/testing/…`,
+      #    而 scripts/testing/ 原本不在触发面里 —— 这一条是**新装的 GUARDS 闸自己抓出来的**
+      #    (它上线后第一次真用, 就红在加它的那个 PR 上)。⛔ 修法是加 paths, 不是改小声明。
+      - 'scripts/testing/**'
       # 🔴 2026-09-07: test-java-gate-selector-covers-gate-classes.sh 的**被测对象**是
       #    「测试类的名字」—— 它要拦的正是「有人新加了一道闸, 但名字逃出 java-gate-pr 的
       #    -Dtest」。那种 PR 只动 Java 测试源码, 不带这道闸就等于闸装了但那一族 PR 触发不到
