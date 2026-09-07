@@ -84,7 +84,7 @@ run_step() {   # $1=BASE_REF $2=PAYLOAD_BASE_SHA
 
 # A1 正例: 合并后, base 的文件必须出现在树里 —— 这就是闸本来应该看到的东西。
 out=$(run_step main "$BASE_TIP1"); rc=$?
-echo "    $(printf '%s' "$out" | tr '\n' '|' | cut -c1-190)"
+echo "    A1: $(printf '%s' "$out" | grep -o 'payload_stale=[a-z]*' | head -1) $(printf '%s' "$out" | grep -o 'payload_behind_by=[0-9a-z]*' | head -1) $(printf '%s' "$out" | grep -o 'merged_in_commits=[0-9]*' | head -1)"
 [ "$rc" -eq 0 ] || fail "A1: 合并应成功, 实得 rc=$rc: $out"
 [ -f census-offender.txt ] \
     || fail "A1: 合并后树里仍然没有 base 的文件 —— 闸看到的还是 PR 分支自己"
@@ -95,6 +95,11 @@ printf '%s' "$out" | grep -q 'tree_changed=yes' \
     || fail "A1: 缺 tree_changed=yes —— 树没变就说明这一趟什么都没证明: $out"
 printf '%s' "$out" | grep -q 'payload_stale=no' \
     || fail "A1: payload 与活 tip 相同, 应报 payload_stale=no: $out"
+printf '%s' "$out" | grep -q 'payload_behind_by=0' \
+    || fail "A1: payload 与活 tip 相同时 payload_behind_by 应为 0: $out"
+for f in payload_base_sha base_ref_tip_at_fetch base=; do
+    printf '%s' "$out" | grep -qF "$f" || fail "A1: 读数缺字段 $f —— 三个读数要一起打(⛔ 不只打最终 base)"
+done
 ok "合并 base 之后, base 的文件出现在树里; merged_in_commits>0 / tree_changed=yes / payload_stale=no"
 
 # 🔴 D (本票核心): payload 的 base.sha **滞后**时, 闸必须用**活 tip**, 而不是 payload 那个旧 sha。
@@ -107,14 +112,20 @@ BASE_TIP2=$(git rev-parse HEAD)
 git checkout -q -B pr-head2 "$HEAD_SHA"
 
 out_d=$(run_step main "$BASE_TIP1"); rc_d=$?      # ⚠️ 故意传**旧** payload sha
-echo "    $(printf '%s' "$out_d" | grep -o 'GATE_BASE[^|]*' | head -1 | cut -c1-190)"
+# 把判据字段单独打出来 —— 它们埋在一行 200+ 字符的 GATE_BASE 里, 截断之后读不到。
+echo "    D: $(printf '%s' "$out_d" | grep -o 'payload_stale=[a-z]*' | head -1) $(printf '%s' "$out_d" | grep -o 'payload_behind_by=[0-9a-z]*' | head -1)"
 [ "$rc_d" -eq 0 ] || fail "D: 合并应成功, 实得 rc=$rc_d: $out_d"
 [ -f late-arrival.txt ] \
     || fail "D: 树里没有**事件之后**才合进 base 的那个文件 —— 闸用的还是 payload 里那个旧 sha(这正是本票要修的)"
 printf '%s' "$out_d" | grep -q 'payload_stale=yes' \
     || fail "D: payload 明明滞后了, 却没报 payload_stale=yes: $out_d"
-printf '%s' "$out_d" | grep -qF "used=$BASE_TIP2" \
-    || fail "D: 读数里 used= 不是活 tip $BASE_TIP2: $out_d"
+printf '%s' "$out_d" | grep -qF "base_ref_tip_at_fetch=$BASE_TIP2" \
+    || fail "D: 读数里 base_ref_tip_at_fetch 不是活 tip $BASE_TIP2: $out_d"
+printf '%s' "$out_d" | grep -qF "base=$BASE_TIP2" \
+    || fail "D: 实际合进去的不是活 tip: $out_d"
+# 🔴 竞态的**大小**必须是个数 —— ⛔ 别指望「某个测试数恰好对不上」来发现滞后(那是运气不是方法)。
+printf '%s' "$out_d" | grep -qE 'payload_behind_by=[1-9]' \
+    || fail "D: payload 滞后时必须把差距打成一个数(payload_behind_by>0): $out_d"
 ok "payload 滞后时用活 tip: 事件后合入的文件在树里, 且 payload_stale=yes / used=<活 tip>"
 
 # D 阴性对照: **旧写法**(合 payload 里那个 sha)在同一场景下会漏掉那个文件 ——

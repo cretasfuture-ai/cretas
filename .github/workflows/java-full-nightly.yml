@@ -115,9 +115,23 @@ jobs:
           # ⇒ 取 base 分支的**活 tip**, 并把「payload 说的」与「实际用的」**都打出来**。
           git fetch --no-tags --force origin "$BASE_REF" \
             || { echo "::error::取不到 base 分支 $BASE_REF 的 tip"; exit 1; }
-          BASE_SHA=$(git rev-parse FETCH_HEAD)
+          BASE_TIP_AT_FETCH=$(git rev-parse FETCH_HEAD)
+          BASE_SHA="$BASE_TIP_AT_FETCH"
           if [ "$BASE_SHA" = "$PAYLOAD_BASE_SHA" ]; then PAYLOAD_STALE=no; else PAYLOAD_STALE=yes; fi
-          echo "READING: GATE_BASE ref=$BASE_REF used=$BASE_SHA payload=$PAYLOAD_BASE_SHA payload_stale=$PAYLOAD_STALE"
+          # 竞态的**大小**要变成一个可读的数 —— ⛔ 不要指望「某个测试数恰好对不上」来发现它:
+          # 那个锚点是碰巧的(#716 恰好带了 2 个测试; 换成纯重构就没有任何东西会对不上)。
+          if git cat-file -e "${PAYLOAD_BASE_SHA}^{commit}" 2>/dev/null; then
+            PAYLOAD_BEHIND_BY=$(git rev-list --count "$PAYLOAD_BASE_SHA..$BASE_SHA" 2>/dev/null || echo unknown)
+          else
+            PAYLOAD_BEHIND_BY=unknown   # payload 那个 commit 不在本地(base 被 force-push 过?)
+          fi
+          # 三个读数一起打, ⛔ 不只打最终 base:
+          #   payload_base_sha    = 事件 payload 里那个**快照**(会滞后)
+          #   base_ref_tip_at_fetch = 运行时 fetch 到的**活 tip**
+          #   base                = 实际合进去的那个
+          # ⚠️ 后两者由构造相等; 分开打是为了让「取到的」与「用掉的」各自可查 —— 将来若有人
+          #    在中间插一步改了 BASE_SHA, 这两个数会立刻不一致, 而不是悄悄换了棵树。
+          echo "READING: GATE_BASE ref=$BASE_REF payload_base_sha=$PAYLOAD_BASE_SHA base_ref_tip_at_fetch=$BASE_TIP_AT_FETCH base=$BASE_SHA payload_stale=$PAYLOAD_STALE payload_behind_by=$PAYLOAD_BEHIND_BY"
           # ⛔ payload 落后**不红**: base 在事件与 run 之间前进是常态, 红了就是天天红。
           #    但也 ⛔ 不静默用新的 —— 大声说出来, 让「这次跑的是哪棵树」可追。
           if [ "$PAYLOAD_STALE" = "yes" ]; then
