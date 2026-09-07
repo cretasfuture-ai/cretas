@@ -16,3 +16,8 @@
 - Replaced the disabled VisionLab task action that referenced missing `cretas-vision-main-v2` with the existing local-policy checkout plus `-RequireMergedMain`; exported the original task XML before changing it and read back `Disabled` afterward. No task was started.
 - Added a startup gate that fetches current main and requires a clean checkout with `HEAD == origin/main` before Python is invoked. Four real local-Git fixture scenarios passed: clean main launches, dirty/unmerged/unreachable cases do not. Validation: `python -m pytest scripts/tests/test_vision_scheduled_launcher.py -q`.
 - CI job metadata confirmed `canada-mac-mini` and `canada-mac-mini-2` handled the earlier PR checks. PR #745 is still open. No new PR or CI run was triggered; no Mac connection was made.
+
+## Live routing update
+
+- A later organization-runner readback found both Mac runners offline with only `self-hosted, macOS, ARM64` labels; neither retained `cretas`. The sole matching runner was online `windows-wsl-ci` (`self-hosted, cretas, Linux, X64, ci-migration-candidate`).
+- Source-hygiene job `101706153924` actually ran on `windows-wsl-ci`. This supersedes the earlier assumption that opening a PR must await #745: matching labels and actual job assignment now prove local routing. Revalidate before triggering CI; do not change another owner's workflows.
