@@ -62,7 +62,51 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
      * <p>✅ 收窄前先量过：本闸跟踪的 22 个索引在活目录里<b>全部</b>建得出来（都是部分索引），
      * ⇒ 收窄扫描根不会让本闸变红。⛔ 不是「改完看它绿不绿」。
      */
-    private static final Path DB = Path.of("src/main/resources/db/flyway");
+    private static final Path DB = flywayLocationRoot();
+
+    /**
+     * 扫描根<b>从 {@code spring.flyway.locations} 派生</b>，⛔ 不写死成 {@code db/flyway}，也不写死成 {@code db/}。
+     *
+     * <p>为什么不写死（Line C 2026-09-07 提的，比原方案好）：{@code db/} 下那 442 个死文件
+     * <b>该不该接进来还没定</b>。写死成 {@code db/flyway} 之后，哪天真接进来了，
+     * 这道闸就是<b>第二份会漂的副本</b>（形态 D）——「locations 改了没人记得同步闸」这一格会一直在。
+     * 派生之后这一格不存在：<b>locations 改了，闸自动跟着改。</b>
+     *
+     * <p>⚠️ 解析失败一律 <b>抛</b>，⛔ 不静默回退到任何默认值 —— 回退会让「扫到 0 个文件」
+     * 长成「零违规」，那正是本闸最不能有的失效方向。
+     */
+    private static Path flywayLocationRoot() {
+        Path props = Path.of("src/main/resources/application-pg.properties");
+        String key = "spring.flyway.locations";
+        String value;
+        try {
+            value = Files.readAllLines(props, StandardCharsets.UTF_8).stream()
+                    .map(String::trim)
+                    .filter(l -> !l.startsWith("#") && l.startsWith(key + "="))
+                    .map(l -> l.substring(key.length() + 1).trim())
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "读不到 " + key + "（在 " + props + "）——⛔ 不许回退到默认扫描根，"
+                                    + "那会让「扫到 0 个文件」长成「零违规」"));
+        } catch (IOException e) {
+            throw new IllegalStateException("读不到 " + props + "：扫描根无法派生", e);
+        }
+        if (value.contains(",")) {
+            throw new IllegalStateException(
+                    key + " 配了多个 location（" + value + "）——本闸只处理单根，"
+                            + "⛔ 不许悄悄只取第一个：那会让另外几个目录里的迁移对闸隐身");
+        }
+        if (!value.startsWith("classpath:")) {
+            throw new IllegalStateException(key + " 不是 classpath: 形式（" + value + "），本闸不认得怎么落到磁盘路径");
+        }
+        Path root = Path.of("src/main/resources").resolve(value.substring("classpath:".length()));
+        if (!Files.isDirectory(root)) {
+            throw new IllegalStateException(
+                    "由 " + key + "=" + value + " 派生出的扫描根不存在：" + root
+                            + " ——⛔ 不许当作「这里没有迁移」继续扫下去");
+        }
+        return root;
+    }
 
     /** 2026-09-07 摘掉实体声明的那 13 个键：索引名 → 它守着哪张表的什么。 */
     private static final Map<String, String> MUST_BE_PARTIAL_IN_MIGRATIONS = new LinkedHashMap<>();
@@ -135,6 +179,34 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
                 .as("阳性对照：迁移全文里必须找得到 deleted_at IS NULL——找不到说明读迁移这一步本身就错了，"
                         + "那样「每个索引都缺失」是恒真的")
                 .containsIgnoringCase("deleted_at IS NULL");
+
+        // ── 正向锚点：派生出来的扫描根本身也要成为一条读数 ────────────────────────────────
+        // ⚠️ ⛔ 不断言它「等于 db/flyway」——那就把字面量又抄了一份（形态 D，正是派生要消掉的那一格）。
+        //    改为断言两条**性质**：① 它下面真有迁移；② 它**不含**那些死目录
+        //    （若 locations 被改宽到 db/，migration/ 等会出现在它下面 ⇒ 立刻red）。
+        long sqlFiles;
+        try (Stream<Path> f = Files.walk(DB)) {
+            sqlFiles = f.filter(p -> p.toString().toLowerCase().endsWith(".sql")).count();
+        }
+        List<String> deadDirsUnderRoot;
+        try (Stream<Path> f = Files.list(DB)) {
+            deadDirsUnderRoot = f.filter(Files::isDirectory)
+                    .map(p -> p.getFileName().toString())
+                    .filter(n -> n.equals("migration") || n.equals("migration-pg")
+                            || n.equals("migration-pg-converted") || n.equals("manual-rollback"))
+                    .sorted().toList();
+        }
+        System.out.println("FLYWAY_SCAN_ROOT=" + DB + " (由 spring.flyway.locations 派生) SQL_FILES=" + sqlFiles);
+        assertThat(sqlFiles)
+                .as("派生出的扫描根下必须真有迁移——0 个文件时「零违规」是恒真的")
+                .isGreaterThan(500);
+        assertThat(deadDirsUnderRoot)
+                .as("""
+                        扫描根下不该出现那几个**死目录**（Flyway 不跑它们）。
+                        它们一旦出现，说明 locations 被改宽了（或派生解析跑偏），
+                        而后果是「迁移里有这条索引」变成恒真的假读数——本闸的全部价值就是回答这一问。
+                        2026-09-07 实测：扫整棵 db/ 会多出 442 个文件、3 条只在死目录里的部分唯一索引。""")
+                .isEmpty();
 
         List<String> partial = new ArrayList<>();
         Matcher m = CREATE_UNIQUE_INDEX.matcher(sql);
