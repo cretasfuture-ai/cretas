@@ -37,7 +37,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SqlDeleteBindsVersionColumnContractTest {
 
     private static final Path MAIN = Path.of("src/main/java/com/cretas/aims");
-    private static final Pattern SQL_DELETE = Pattern.compile("^\\s*@SQLDelete\\s*\\(\\s*sql\\s*=\\s*\"([^\"]*)\"", Pattern.MULTILINE);
+    // ⚠️ 与本类下面的 VERSION_ANCHOR 同一个道理：必须认**全限定**写法
+    //    `@org.hibernate.annotations.SQLDelete(...)`。2026-09-07 批 3-B 实测：
+    //    只认简单名时，一个用全限定写法的实体对本闸**完全隐身**（连「带 @SQLDelete」都判不出来，
+    //    于是它连解析完备性 delta 都进不去 —— 静默漏掉，读数与「它没有 @SQLDelete」相同）。
+    private static final Pattern SQL_DELETE = Pattern.compile(
+            "^\\s*@(?:[\\w.]*\\.)?SQLDelete\\s*\\(\\s*sql\\s*=\\s*\"([^\"]*)\"", Pattern.MULTILINE);
     /**
      * ⚠️ 只锚 {@code @Version} 那一行，字段名/列名在它之后的声明片段里找。
      * 早先写成「一条正则从 @Version 一路匹配到 private 字段」，被 {@code @Builder.Default} 这种
