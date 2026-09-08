@@ -137,7 +137,8 @@ class DynamicSchedulerServiceTest {
         FactorySchedulerConfig config = config(51L, "F001", "daily", "report_tool");
         config.setParams(Map.of("limit", 10));
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
-        doReturn(scheduledFuture).when(taskScheduler).schedule(any(Runnable.class), any(Trigger.class));
+        org.mockito.Mockito.doReturn(scheduledFuture).when(taskScheduler)
+                .schedule(any(Runnable.class), any(Trigger.class));
         when(toolExecutor.execute(any(ToolCall.class), any())).thenReturn("{\"success\":true,\"data\":[]}");
         when(schedulerRepo.findById(51L)).thenReturn(Optional.of(config));
 
