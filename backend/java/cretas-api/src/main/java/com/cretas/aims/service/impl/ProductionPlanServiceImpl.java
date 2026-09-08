@@ -1846,9 +1846,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private void validateAndEnrichSalesOrderSource(String factoryId, CreateProductionPlanRequest request) {
         if (request.getSourceType() != PlanSourceType.CUSTOMER_ORDER) {
-            boolean customerOwnedInventoryProduction = request.getSourceType() == PlanSourceType.SAFETY_STOCK
-                    && request.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED;
-            if (customerOwnedInventoryProduction) {
+            boolean customerInventoryProduction = request.getSourceType() == PlanSourceType.SAFETY_STOCK
+                    && (request.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED
+                        || request.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED
+                        || !isBlank(request.getCustomerId()));
+            if (customerInventoryProduction) {
                 if (isBlank(request.getCustomerId())) {
                     throw new BusinessException(400, "客户专属库存生产必须选择归属客户")
                             .withCode("CUSTOMER_INVENTORY_PRODUCTION_CUSTOMER_REQUIRED")
@@ -1869,9 +1871,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .orElseThrow(() -> new BusinessException(400, "归属客户不存在、已停用或不属于当前工厂")
                                 .withCode("CUSTOMER_INVENTORY_PRODUCTION_CUSTOMER_INVALID")
                                 .withHintTarget("customerId"));
-                request.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
-                request.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
-                request.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
+                // Selecting a customer does not select the input ownership. Preserve the
+                // legacy meaning only when an older client explicitly selected customer output.
+                boolean customerSupplied = request.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED
+                        || (request.getMaterialSupplyMode() == null
+                            && request.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED);
+                request.setProcessingMode(customerSupplied
+                        ? SalesProcessingMode.TOLL_PROCESSING : SalesProcessingMode.STANDARD_SALE);
+                request.setMaterialSupplyMode(customerSupplied
+                        ? MaterialSupplyMode.CUSTOMER_SUPPLIED : MaterialSupplyMode.FACTORY_SUPPLIED);
+                request.setOutputOwnership(customerSupplied
+                        ? InventoryOwnership.CUSTOMER_OWNED : InventoryOwnership.COMPANY_OWNED);
                 request.setSourceOrderId(null);
                 request.setSourceOrderItemId(null);
                 request.setSourceOrderIds(new java.util.ArrayList<>());

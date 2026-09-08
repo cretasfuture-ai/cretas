@@ -757,7 +757,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .toList();
 
             out.add(new PortAvailability(port.getWorkflowPortId(), materialTypeId,
-                    available, massInput ? KG : inputUnit, elsewhere, expired, expiredElsewhere));
+                    available, massInput ? KG : inputUnit, elsewhere, expired, expiredElsewhere,
+                    com.cretas.aims.service.processentry.ProductionMaterialSupplyScope
+                            .description(plan, materialMainCategory)));
         }
         return out;
     }

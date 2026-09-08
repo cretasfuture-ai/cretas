@@ -58,6 +58,31 @@ class ProductionStockAllocationServiceTest {
 
     private ProductionStockAllocationService service;
 
+    @Test
+    void availabilityExplainsCustomerScopeWithoutCountingCompanyStock() {
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(customerSuppliedPlan()));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        assertThat(service.availability("F006", "PLAN-1", List.of(total("RAW-1", "1"))))
+                .singleElement().satisfies(stock -> {
+                    assertThat(stock.available()).isZero();
+                    assertThat(stock.supplyScopeHint()).contains("对应销售订单", "工厂自有库存不计入");
+                });
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFOByWarehouse(
+                "F006", "RAW-1", "WKS-1");
+    }
+
+    @Test
+    void supplyExplanationDoesNotRestrictFactorySuppliedInputsOrAuxiliaryMaterials() {
+        assertThat(ProductionMaterialSupplyScope.description(factorySuppliedPlan(), "原料")).isNull();
+        assertThat(ProductionMaterialSupplyScope.description(customerSuppliedPlan(), "辅料")).isNull();
+        assertThat(ProductionMaterialSupplyScope.description(customerSuppliedPlan(), "包材")).isNull();
+        ProductionPlan inventoryPlan = customerSuppliedPlan();
+        inventoryPlan.setSourceOrderId(null);
+        assertThat(ProductionMaterialSupplyScope.description(inventoryPlan, "原料"))
+                .contains("尚未绑定销售订单", "调拨仓库不会改变库存归属");
+    }
+
     @BeforeEach
     void setUp() {
         service = new ProductionStockAllocationServiceImpl(

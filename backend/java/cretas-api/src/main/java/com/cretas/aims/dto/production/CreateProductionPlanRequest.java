@@ -161,7 +161,7 @@ public class CreateProductionPlanRequest {
     @Schema(description = "销售处理模式快照（服务端从销售订单覆盖）", accessMode = Schema.AccessMode.READ_ONLY)
     private SalesProcessingMode processingMode;
 
-    @Schema(description = "供料模式快照（服务端从销售订单覆盖）", accessMode = Schema.AccessMode.READ_ONLY)
+    @Schema(description = "供料模式。客户专属库存生产可选择工厂供料或客户供料；销售订单生产由服务端从订单覆盖。旧客户端未传时保留原有规则")
     private MaterialSupplyMode materialSupplyMode;
 
     @Schema(description = "产出库存归属。客户订单由服务端派生；SAFETY_STOCK 库存生产可显式选择 COMPANY_OWNED/CUSTOMER_OWNED")

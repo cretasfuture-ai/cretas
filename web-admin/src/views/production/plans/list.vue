@@ -837,6 +837,7 @@ const planForm = ref({
   customerId: '',
   sourceCustomerName: '',
   outputOwnership: 'COMPANY_OWNED' as ProductionPlanOutputOwnership,
+  materialSupplyMode: 'FACTORY_SUPPLIED' as 'FACTORY_SUPPLIED' | 'CUSTOMER_SUPPLIED',
   processName: '',
   batchDate: '',
   // 新建入口只保留存货生产与销售订单；默认进入日常存货生产。
@@ -1214,10 +1215,11 @@ async function loadCustomers() {
 const selectablePlanCustomers = computed(() => selectableProductionPlanCustomers(customers.value));
 
 function handlePlanCustomerChange(customerId: string | null | undefined) {
-  const selection = resolveProductionPlanCustomerSelection(customerId, customers.value);
+  const selection = resolveProductionPlanCustomerSelection(customerId, customers.value, planForm.value.materialSupplyMode);
   planForm.value.customerId = selection.customerId;
   planForm.value.sourceCustomerName = selection.sourceCustomerName;
   planForm.value.outputOwnership = selection.outputOwnership;
+  if (!selection.customerId) planForm.value.materialSupplyMode = 'FACTORY_SUPPLIED';
 }
 
 async function loadBomProcesses(productTypeId: string) {
@@ -1534,6 +1536,7 @@ function handleCreate() {
     customerId: '',
     sourceCustomerName: '',
     outputOwnership: 'COMPANY_OWNED',
+    materialSupplyMode: 'FACTORY_SUPPLIED',
     processName: '',
     batchDate: today,
     sourceType: 'SAFETY_STOCK',
@@ -4139,6 +4142,7 @@ function handleAiFill(params: TableRow) {
     customerId: '',
     sourceCustomerName: '',
     outputOwnership: 'COMPANY_OWNED' as ProductionPlanOutputOwnership,
+    materialSupplyMode: 'FACTORY_SUPPLIED' as 'FACTORY_SUPPLIED' | 'CUSTOMER_SUPPLIED',
     processName: String(params.processName || ''),
     batchDate: String(params.batchDate || today),
     sourceType: 'SAFETY_STOCK' as 'CUSTOMER_ORDER' | 'SAFETY_STOCK',
@@ -5343,13 +5347,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             />
           </template>
         </el-form-item>
-        <el-form-item v-if="planForm.sourceType === 'SAFETY_STOCK'" label="归属客户(选填)">
+        <el-form-item v-if="planForm.sourceType === 'SAFETY_STOCK'" label="关联客户(选填)">
           <div style="width: 100%;">
             <el-select
               v-model="planForm.customerId"
               clearable
               filterable
-              placeholder="留空为公司库存；选择后为客户专属库存"
+              placeholder="可关联客户，供料方式单独选择"
               style="width: 100%"
               @change="handlePlanCustomerChange"
               @clear="handlePlanCustomerChange('')"
@@ -5362,8 +5366,27 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               />
             </el-select>
             <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
-              留空：成品归公司库存；选择客户：按客供料生产，原料和成品均绑定该客户。
+              选择客户不会自动改为客户供料。工厂供料的成品归公司库存；客户供料的成品归该客户。
             </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="planForm.sourceType === 'SAFETY_STOCK' && planForm.customerId" label="主料供料方式">
+          <div>
+            <el-radio-group v-model="planForm.materialSupplyMode" @change="handlePlanCustomerChange(planForm.customerId)">
+              <el-radio value="FACTORY_SUPPLIED">工厂自有原料</el-radio>
+              <el-radio value="CUSTOMER_SUPPLIED">客户提供原料</el-radio>
+            </el-radio-group>
+            <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+              两种方式均通过仓储入库、调拨和领料。辅料、包材可使用工厂自有库存。
+            </div>
+            <el-alert
+              v-if="planForm.materialSupplyMode === 'CUSTOMER_SUPPLIED'"
+              type="warning"
+              show-icon
+              :closable="false"
+              title="客户供料仅可领用该客户尚未绑定销售订单的主料；工厂自有主料不计入可用库存，调拨仓库不会改变归属。"
+              style="margin-top: 8px;"
+            />
           </div>
         </el-form-item>
         <!-- Wave2 六扇门: 免工序报工开关 (Rule 1 防呆: 产品无工序时 disabled 锁定) -->

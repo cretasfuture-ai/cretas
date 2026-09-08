@@ -37,6 +37,7 @@ export function selectableProductionPlanCustomers(
 export function resolveProductionPlanCustomerSelection(
   customerId: string | null | undefined,
   customers: ProductionPlanCustomerOption[],
+  materialSupplyMode: 'FACTORY_SUPPLIED' | 'CUSTOMER_SUPPLIED' = 'FACTORY_SUPPLIED',
 ): ProductionPlanCustomerSelection {
   const normalizedId = String(customerId || '').trim();
   if (!normalizedId) {
@@ -57,6 +58,6 @@ export function resolveProductionPlanCustomerSelection(
   return {
     customerId: normalizedId,
     sourceCustomerName: productionPlanCustomerName(customer),
-    outputOwnership: 'CUSTOMER_OWNED',
+    outputOwnership: materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'CUSTOMER_OWNED' : 'COMPANY_OWNED',
   };
 }

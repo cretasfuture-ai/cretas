@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `FIX-FACTORY-STOCK-SCOPE-20260908` — `review` — Owner: Codex current task — Base `a62d9e6d8c2b419adcae77e33b78653db5c8eb07` — 09-07/08 日志核查及供料误选修复；Java 69/Web 17 通过，Web 构建成功。F006 单计划已纠正并回读库存恢复，批次未变；代码未部署。详情见当日审计。
+
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 16+17：`SupplierDetailDrawer.vue` 价格字段三处（关系表单/内联规格/独立规格）；`required` 是装饰，校验手写在 `saveRelation`/`savePurchaseSpec`。Owner 裁定：新增必填，编辑仅价格被改动时拦（存量 4 条空价）。未核后端/导入路径，需改后端 → 🔒 回协调者。
@@ -50,6 +52,8 @@
 - `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务(`codex/ci-wsl-testenv-followup-20260907`) — 托管池 09-07 13:46 起停止派发。12 个写死 `ubuntu-latest` 里 7 个只能手动 dispatch(无影响); 真缺口 = PR 自动 3 个 + 定时 3 个。🔴 定时那 3 个更危险: 派不出去 = 完全无信号。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `FIX-FACTORY-STOCK-SCOPE-20260908`：仅计划创建供料选择、领料不足消息、可用量归属提示及对应 Java/Web 测试；文件清单见当日审计。来源单据/BOM/权限/Entity/Repository 不改；F006 单计划修正先核空活动、原值与租户。
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、ACTIVE 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。

@@ -107,6 +107,78 @@ class ProductionPlanFinanceGateTest {
 
     private ProductionPlanServiceImpl service;
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.EnumSource(MaterialSupplyMode.class)
+    void inventoryCustomerDoesNotOverrideExplicitMaterialSupply(MaterialSupplyMode supplyMode) throws Exception {
+        var customerRepository = Mockito.mock(com.cretas.aims.repository.CustomerRepository.class);
+        var customer = new com.cretas.aims.entity.Customer();
+        customer.setId("CUSTOMER-001");
+        customer.setFactoryId(FACTORY_ID);
+        customer.setName("Test customer");
+        customer.setIsActive(true);
+        when(customerRepository.findByIdAndFactoryId("CUSTOMER-001", FACTORY_ID))
+                .thenReturn(Optional.of(customer));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "customerRepository", customerRepository);
+        CreateProductionPlanRequest req = new CreateProductionPlanRequest();
+        req.setSourceType(PlanSourceType.SAFETY_STOCK);
+        req.setProductTypeId(PRODUCT_TYPE_ID);
+        req.setPlannedQuantity(BigDecimal.TEN);
+        req.setPlannedDate(LocalDate.now());
+        req.setBatchDate(LocalDate.now());
+        req.setCustomerId("CUSTOMER-001");
+        req.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        req.setMaterialSupplyMode(supplyMode);
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            service.createProductionPlan(FACTORY_ID, req, 1L);
+        }
+        ArgumentCaptor<ProductionPlan> captor = ArgumentCaptor.forClass(ProductionPlan.class);
+        verify(productionPlanRepository).save(captor.capture());
+        assertEquals(supplyMode == null ? MaterialSupplyMode.CUSTOMER_SUPPLIED : supplyMode,
+                captor.getValue().getMaterialSupplyMode());
+        boolean customerSupplied = supplyMode != MaterialSupplyMode.FACTORY_SUPPLIED;
+        assertEquals(customerSupplied ? InventoryOwnership.CUSTOMER_OWNED : InventoryOwnership.COMPANY_OWNED,
+                captor.getValue().getOutputOwnership());
+        assertEquals(customerSupplied ? SalesProcessingMode.TOLL_PROCESSING : SalesProcessingMode.STANDARD_SALE,
+                captor.getValue().getProcessingMode());
+        assertEquals("CUSTOMER-001", captor.getValue().getCustomerId());
+        verify(salesOrderRepository, never()).findById(any());
+        assertPersistableSupplyContract(captor.getValue());
+    }
+
+    /** Exercise the shipped CHECK, not just a mock repository accepting any tuple. */
+    private void assertPersistableSupplyContract(ProductionPlan plan) throws Exception {
+        String migration;
+        try (var stream = getClass().getResourceAsStream(
+                "/db/flyway/V20261029_74__customer_material_arrival_and_operations_role.sql")) {
+            assertNotNull(stream);
+            migration = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int start = migration.indexOf("ALTER TABLE production_plans ADD CONSTRAINT chk_production_plan_supply_contract");
+        String constraint = migration.substring(start, migration.indexOf(';', start) + 1);
+        try (var connection = java.sql.DriverManager.getConnection(
+                "jdbc:h2:mem:supply-contract-" + java.util.UUID.randomUUID() + ";MODE=PostgreSQL", "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE production_plans (processing_mode varchar, "
+                    + "material_supply_mode varchar, output_ownership varchar, customer_id varchar, "
+                    + "source_order_id varchar, source_type varchar)");
+            connection.createStatement().execute(constraint);
+            try (var insert = connection.prepareStatement("INSERT INTO production_plans VALUES (?,?,?,?,?,?)")) {
+                insert.setString(1, plan.getProcessingMode().name());
+                insert.setString(2, plan.getMaterialSupplyMode().name());
+                insert.setString(3, plan.getOutputOwnership().name());
+                insert.setString(4, plan.getCustomerId());
+                insert.setString(5, plan.getSourceOrderId());
+                insert.setString(6, plan.getSourceType().name());
+                assertEquals(1, insert.executeUpdate());
+                // The tuple rejected in production must remain rejected by this exact CHECK.
+                insert.setString(1, "TOLL_PROCESSING");
+                insert.setString(2, "FACTORY_SUPPLIED");
+                insert.setString(3, "CUSTOMER_OWNED");
+                assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+            }
+        }
+    }
+
     @BeforeEach
     void setUp() {
         service = new ProductionPlanServiceImpl(
