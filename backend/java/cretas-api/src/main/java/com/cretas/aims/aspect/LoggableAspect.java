@@ -1,6 +1,7 @@
 package com.cretas.aims.aspect;
 
 import com.cretas.aims.annotation.Loggable;
+import com.cretas.aims.audit.RequestAuditSupport;
 import com.cretas.aims.entity.datacenter.OperationLog;
 import com.cretas.aims.service.datacenter.OperationLogService;
 import com.cretas.aims.utils.SecurityUtils;
@@ -56,34 +57,46 @@ public class LoggableAspect {
                 Method method = sig.getMethod();
                 Object[] args = joinPoint.getArgs();
 
-                String factoryId = extractFactoryId(method, args);
                 String entityId = extractParam(method, args, loggable.entityIdParam());
                 String summary = evalSpEL(loggable.summary(), method, args, result);
 
                 ServletRequestAttributes attrs =
                         (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
                 HttpServletRequest req = attrs == null ? null : attrs.getRequest();
+                String factoryId = req == null
+                        ? extractFactoryId(method, args)
+                        : RequestAuditSupport.trustedFactoryId(req);
+
+                if (req != null) {
+                    RequestAuditSupport.markExplicitAudit(req);
+                }
+                Boolean responseOutcome = RequestAuditSupport.responseOutcome(result);
+                boolean successful = thrown == null && !Boolean.FALSE.equals(responseOutcome);
+                String errorMessage = thrown == null ? null : RequestAuditSupport.sanitizeText(thrown.getMessage(), 1000);
+                if (errorMessage == null && Boolean.FALSE.equals(responseOutcome)) {
+                    errorMessage = RequestAuditSupport.sanitizeText(responseMessage(result), 1000);
+                }
 
                 OperationLog logEntity = OperationLog.builder()
                         .factoryId(factoryId)
-                        .userId(SecurityUtils.currentUserId())
-                        .username(SecurityUtils.currentUsername())
+                        .userId(req == null ? SecurityUtils.currentUserId() : RequestAuditSupport.userId(req))
+                        .username(req == null ? SecurityUtils.currentUsername() : RequestAuditSupport.username(req))
                         .module(loggable.module())
                         .action(loggable.action())
                         .entityType(emptyToNull(loggable.entityType()))
                         .entityId(emptyToNull(entityId))
-                        .summary(emptyToNull(summary))
+                        .summary(emptyToNull(RequestAuditSupport.sanitizeText(summary, 1000)))
                         .ipAddress(req == null ? null : truncate(req.getRemoteAddr(), 64))
                         .userAgent(req == null ? null : truncate(req.getHeader("User-Agent"), 500))
                         .elapsedMs(System.currentTimeMillis() - start)
-                        .success(thrown == null)
-                        .errorMessage(thrown == null ? null : truncate(thrown.getMessage(), 1000))
+                        .success(successful)
+                        .errorMessage(errorMessage)
                         .build();
 
                 operationLogService.record(logEntity);
             } catch (Throwable auditFail) {
-                log.error("[LoggableAspect] audit build failed for method {}: {}",
-                        joinPoint.getSignature().toShortString(), auditFail.getMessage(), auditFail);
+                log.error("[LoggableAspect] audit build failed for method {}: errorType={}",
+                        joinPoint.getSignature().toShortString(), auditFail.getClass().getSimpleName());
             }
         }
     }
@@ -138,5 +151,12 @@ public class LoggableAspect {
     static String truncate(String s, int max) {
         if (s == null) return null;
         return s.length() > max ? s.substring(0, max) : s;
+    }
+
+    private static String responseMessage(Object result) {
+        Object body = result instanceof org.springframework.http.ResponseEntity<?> entity
+                ? entity.getBody() : result;
+        return body instanceof com.cretas.aims.dto.common.ApiResponse<?> response
+                ? response.getMessage() : null;
     }
 }
