@@ -71,3 +71,34 @@ OTA bundle `1788716508930` 已推送并在小米真机上取到**行为读数**�
 移出时的原文：
 
 - `UX-WAREHOUSE-VALIDATION-GUARDS-UNREACHABLE-20260907` — `review` — Owner: Line A — #699 已合：边界不可见的两屏补可见提示，另两屏标注防御性，全 App 普查 37 处上棘轮。待真机复看。
+
+## OPS-MERGED-IS-NOT-DEPLOYED-20260907
+
+**完成依据**：2026-09-08 22:41 从 clean 的 `origin/main` detached 树发布，prod Flyway **37 → 41**。
+
+| 判据 | 读数 |
+|---|---|
+| `DEPLOY_EXIT` | 0 |
+| `RELEASE_FINAL_STATUS` | 恰好 1 次，`=deployed` |
+| `_38`/`_39`/`_40`/`_41` | 全部 `ok=true`，22:41:31；失败行 0 |
+| 新索引 | 抽查 4 个 → 4/4 在 `pg_indexes` |
+| 进程晚于制品 | jar 22:41:02 → 进程 22:41:22 |
+| 运行中 jar 含本次标记 | `V20261101_41` 的 `uk_labels_label_code` → 1 |
+| 蓝绿 | blue(10010) inactive / green(10020) active，139 网关已跟切 |
+| 真跑业务路径 | `/api/mobile/health` 200；`unified-login` 401（活着并在校验） |
+
+**部署前置**：4 条迁移含 12 条 `CREATE UNIQUE INDEX`，`IF NOT EXISTS` 只按**索引名**跳过、⛔ 不容忍重复数据 ⇒ 每条都可能 fail closed。
+逐条在 prod 数重复组（谓词从 SQL 机械解析，⛔ 不手抄）：**12/12 表存在，重复组全为 0**。
+⚠️ 分母：`conversation_memory` 366 行 / `material_batches` 21 / `labels` 15 / 另两张各 1 行 —— **其余 7 张是空表**，那 7 个「0 重复」恒真，只够证明迁移不会炸。
+
+⚠️ **过程中两次跑成 no-op，都被判据接住**：
+
+① `--base-sha` 误传成当前 HEAD ⇒ `git diff BASE HEAD` 为空 ⇒ `RELEASE_SELECTION=none`。
+后台通知写「exit code 0」而实际 `DEPLOY_EXIT=1` 且 `RELEASE_FINAL_STATUS` **0 次** —— 抓住它的是「不出现本身就是失败信号」，⛔ 不是退出码。
+正确的 base 是 prod 当前跑的 commit，从上一次成功回执的 `head_sha` 取到 `2e9d2c515f83`。
+
+② `--tests` 不接受通配符（`*RepositoryQueryValidationTest` 实际匹配 53 个类，被 preflight 拒）。
+
+移出时的原文：
+
+- `OPS-MERGED-IS-NOT-DEPLOYED-20260907` — `queued` — Owner: organizer — 🔴 prod Flyway 停在 `20261101.37`(2026-09-06), 而 main 已到 `_41` ⇒ **今天合的 4 支迁移一支都没上线**(4 条零约束索引 / 两处唯一性推回写时**在 prod 上尚未生效**)。⚠️ 台账记的是 PR 状态, 而 **MERGED ≠ prod 生效** —— 这个差在今天的账里看不见, 需要一个字段。
