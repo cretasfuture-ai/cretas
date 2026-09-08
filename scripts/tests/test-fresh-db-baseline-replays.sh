@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=ops/db-baseline/**,scripts/ops/capture-fresh-db-baseline.sh
+# GUARDS=ops/db-baseline/**,scripts/ops/capture-fresh-db-baseline.sh,scripts/ci/run-with-test-postgres.sh
 # SCRIPT_TEST_TIMEOUT=420
 #
 # 离线验证器：仓库里那份基线，今天还能重放成**它自己头里记的那五个数**吗。
@@ -42,13 +42,35 @@ set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 BASELINE_DIR="$ROOT_DIR/ops/db-baseline"
+if [ "${CRETAS_BASELINE_NATIVE_PG:-0}" = 1 ] && [ "${1:-}" != --isolated-pg-child ]; then
+    exec bash "$ROOT_DIR/scripts/ci/run-with-test-postgres.sh" bash "$0" --isolated-pg-child
+fi
+native_pg=0
+if [ "${1:-}" = --isolated-pg-child ]; then
+    case "${SMARTBI_PG_DSN:-}" in
+        postgresql://cretas_ci@127.0.0.1:*/cretas_workflow_verify_test) native_pg=1 ;;
+        *) echo 'FAIL: native baseline requires the isolated CI database' >&2; exit 1 ;;
+    esac
+fi
 IMAGE="${CRETAS_BASELINE_PG_IMAGE:-pgvector/pgvector:pg17}"
 CONTAINER="cretas-baseline-replay-$$"
 pass=0
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { pass=$((pass + 1)); echo "  ok - $*"; }
-cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+replay_tmp=$(mktemp -d)
+cleanup() {
+    if [ "$native_pg" = 0 ]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
+    rm -rf -- "$replay_tmp"
+}
 trap cleanup EXIT
+db_sql() {
+    if [ "$native_pg" = 1 ]; then psql -X "$SMARTBI_PG_DSN" -Atc "$1";
+    else docker exec "$CONTAINER" psql -X -U cretas_user -d cretas_db -Atc "$1"; fi
+}
+db_file() {
+    if [ "$native_pg" = 1 ]; then psql -X "$SMARTBI_PG_DSN" -f "$1";
+    else docker exec -i "$CONTAINER" psql -X -U cretas_user -d cretas_db < "$1"; fi
+}
 
 # ---- 1. 找到那份基线 ----
 # ⚠️ 基线还没产出是**合法状态**, 但必须报成「没量到」, ⛔ 不是「通过」——
@@ -133,9 +155,10 @@ fi
 ok "重新采集的触发条件已量出 (代理 above_baseline_in_repo=$LAG, action=$ACTION)"
 
 # ---- 3. 灌进一个空 PG ----
+if [ "$native_pg" = 0 ]; then
 command -v docker >/dev/null 2>&1 \
     || fail "3: 没有 docker —— 本验证器要一个空 PG。⛔ 不许把「跳过」当通过(那正是这道闸最容易失效的方式)"
-cleanup
+docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 docker run -d --name "$CONTAINER" -e POSTGRES_PASSWORD=verify_local_only \
     -e POSTGRES_USER=cretas_user -e POSTGRES_DB=cretas_db "$IMAGE" >/dev/null 2>&1 \
     || fail "3: 起不了验证容器($IMAGE)"
@@ -145,34 +168,34 @@ for _ in $(seq 1 40); do
     sleep 2
 done
 [ "$ready" -eq 1 ] || fail "3: 容器 40 次探测仍未就绪 —— **没量到**"
-docker exec "$CONTAINER" psql -U cretas_user -d cretas_db -Atc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null 2>&1
-docker cp "$BASELINE" "$CONTAINER:/baseline.sql" >/dev/null || fail "3: 拷不进容器"
+fi
+db_sql 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null 2>&1 || fail '3: vector extension unavailable'
 # 🔴 这里原本写的是 `grep -c "^ERROR:"` —— 它**恒为 0**。
 #    psql 把错误打成 `psql:/baseline.sql:38: ERROR:  ...`, **行首是 `psql:`**,
 #    所以 `^ERROR:` 一条都匹配不到。⇒ 那个 errors= 读数从上线起就是个恒定的安心值,
 #    而它被当作证据引用过好几次。
 #    ▎**一个永远等于「没问题」的读数, 比没有这个读数更坏** —— 它占着位置。
 # ⚠️ 阳性对照就在下面: 故意灌一条坏语句, 计数器必须真的动。
-docker exec "$CONTAINER" bash -c \
-    'psql -U cretas_user -d cretas_db -f /baseline.sql >/dev/null 2>/tmp/e.log; true' >/dev/null 2>&1
-n_err=$(docker exec "$CONTAINER" bash -c 'grep -c "ERROR:" /tmp/e.log' 2>/dev/null | tr -d '\r\n')
+db_file "$BASELINE" > /dev/null 2>"$replay_tmp/replay.log"
+replay_rc=$?
+[ "$replay_rc" -eq 0 ] || fail "3: replay process failed with rc=$replay_rc: $(tail -10 "$replay_tmp/replay.log")"
+n_err=$(grep -c 'ERROR:' "$replay_tmp/replay.log" || true)
 # 已知良性的那一条: dump 里带 `CREATE SCHEMA public;`(第 38 行), 而空库上 public 天然存在。
 # ⚠️ ⛔ 不要「先 DROP SCHEMA public 再灌」来消掉它 —— 实测那样会 **CASCADE 掉 vector 扩展**,
 #    变成 56 个错误、498 张表(少 4 张)。▎消掉一条已知错误的办法, 可能比那条错误糟得多。
-n_benign=$(docker exec "$CONTAINER" bash -c \
-    'grep -c "ERROR:  schema \"public\" already exists" /tmp/e.log' 2>/dev/null | tr -d '\r\n')
+n_benign=$(grep -c 'ERROR:  schema "public" already exists' "$replay_tmp/replay.log" || true)
 [ -n "$n_err" ] || n_err=unknown
 [ -n "$n_benign" ] || n_benign=0
 n_unexpected=$((n_err - n_benign))
 echo "READING: BASELINE_REPLAY_ERRORS total=$n_err benign_public_schema=$n_benign unexpected=$n_unexpected"
 [ "$n_unexpected" -eq 0 ] \
     || fail "3: 重放时出现 $n_unexpected 条**非预期**错误(总 $n_err, 已知良性 $n_benign):
-$(docker exec "$CONTAINER" bash -c 'grep "ERROR:" /tmp/e.log | grep -v "schema \"public\" already exists" | head -10' 2>/dev/null)"
+$(grep 'ERROR:' "$replay_tmp/replay.log" | grep -v 'schema "public" already exists' | head -10)"
 # 🔴 阳性对照: 计数器必须能变大。⛔ 没有这一条, 修完的 errors= 与修之前一样不可信 ——
 #    我刚刚就是这样被一个恒 0 的读数骗了很久。
-probe_err=$(docker exec "$CONTAINER" bash -c \
-    'printf "SELECT 1/0;\n" > /probe.sql; psql -U cretas_user -d cretas_db -f /probe.sql >/dev/null 2>/tmp/p.log; grep -c "ERROR:" /tmp/p.log' \
-    2>/dev/null | tr -d '\r\n')
+printf 'SELECT 1/0;\n' > "$replay_tmp/probe.sql"
+db_file "$replay_tmp/probe.sql" >/dev/null 2>"$replay_tmp/probe.log"
+probe_err=$(grep -c 'ERROR:' "$replay_tmp/probe.log" || true)
 [ "$probe_err" = "1" ] \
     || fail "3: 阳性对照失败 —— 故意灌一条 SELECT 1/0 之后计数器读到 '$probe_err'(期望 1)。
   ⇒ 这说明错误计数**仍然量不到东西**, 而 errors=0 会继续读起来像「一切正常」。"
@@ -181,7 +204,7 @@ ok "基线已灌进空 PG (errors 总 $n_err / 良性 $n_benign / 非预期 0; �
 # ---- 4. 🔴 主判据: 重放出的五个数 == 文件头记的五个数 ----
 # ⚠️ 这里刻意**带 schema 过滤** —— 这个库里任何按名字数的东西都必须带 schema 过滤
 #    (prod 上有 7 个 schema; 同源坑咬过一次)。
-shape=$(docker exec "$CONTAINER" psql -U cretas_user -d cretas_db -Atc "
+shape=$(db_sql "
    SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE')
      ||'|'||(SELECT count(*) FROM pg_indexes WHERE schemaname='public')
      ||'|'||(SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace AND n.nspname='public' WHERE c.contype='u')

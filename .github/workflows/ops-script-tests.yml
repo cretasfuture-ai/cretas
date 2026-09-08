@@ -126,7 +126,8 @@ jobs:
           set -euo pipefail
           echo "JAVA_HOME=$JAVA_HOME"
           "$JAVA_HOME/bin/java" -version
-          major=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -nE '1s/.*version "([0-9]+).*/\1/p')
+          # JAVA_TOOL_OPTIONS emits a preamble before the version line.
+          major=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\1/p')
           echo "JAVA_MAJOR=$major"
           # ⛔ 只断言下限, 不钉死 21 —— 装了更新的版本不该把这一步弄红。
           [ "$major" -ge 21 ]
@@ -152,6 +153,8 @@ jobs:
 
       # ⛔ 没有 `|| true`、没有管道尾 tail —— runner 的 rc 就是这一步的 rc。
       - name: Run scripts/tests/*.sh
+        env:
+          CRETAS_BASELINE_NATIVE_PG: '1'
         run: bash scripts/ci/run-script-tests.sh
 
       - name: Verify isolated test PostgreSQL lifecycle
