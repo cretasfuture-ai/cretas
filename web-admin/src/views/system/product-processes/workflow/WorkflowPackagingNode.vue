@@ -35,7 +35,12 @@
         v-for="row in data.rows"
         :key="row.id"
         class="packaging-row nodrag"
+        role="button"
+        tabindex="0"
+        :aria-label="`查看包材明细：${row.materialName} ${quantityDisplay(row)}`"
         @click.stop="emit('open-row-detail', row.id)"
+        @keydown.enter.prevent.stop="emit('open-row-detail', row.id)"
+        @keydown.space.prevent.stop="emit('open-row-detail', row.id)"
       >
         <span class="row-material-name">{{ row.materialName }}</span>
         <span class="row-markers">
@@ -171,6 +176,8 @@ function quantityDisplay(row: PackagingCellRow): string {
   cursor: pointer;
 }
 .packaging-row:hover { border-color: #e3bccb; background: #fbeef2; }
+/* 键盘用户必须看得见焦点在哪 —— 行是 role="button", 没有焦点环等于用不了。 */
+.packaging-row:focus-visible { outline: 2px solid #c2416b; outline-offset: 2px; }
 .row-material-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #475467; font-size: 12px; }
 .row-markers { display: flex; gap: 3px; }
 .row-marker {

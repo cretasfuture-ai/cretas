@@ -110,6 +110,19 @@ describe('包材 cell', () => {
     expect(w.emitted('open-row-detail')?.[0]).toEqual(['r1']);
   });
 
+  it('行可键盘激活: Enter / Space 与点击等价(无障碍)', async () => {
+    const w = mount(WorkflowPackagingNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data } });
+    const row = w.find('.packaging-row');
+    expect(row.attributes('role')).toBe('button');
+    expect(row.attributes('tabindex')).toBe('0');
+    expect(row.attributes('aria-label')).toContain('塑料桶 20L');
+    await row.trigger('keydown.enter');
+    await row.trigger('keydown.space');
+    expect(w.emitted('open-row-detail')?.length).toBe(2);
+  });
+
   it('缺失用量渲染显式占位, 不降级成 0 或空白', () => {
     const missingQty: PackagingCellData = {
       ...data,

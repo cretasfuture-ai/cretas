@@ -125,6 +125,20 @@ describe('辅料 cell', () => {
     expect(w.emitted('add-row')).toBeFalsy();
   });
 
+  it('行可键盘激活: Enter / Space 与点击等价(无障碍)', async () => {
+    const w = mount(WorkflowAuxiliaryNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data: baseData },
+    });
+    const row = w.find('.aux-row');
+    expect(row.attributes('role')).toBe('button');
+    expect(row.attributes('tabindex')).toBe('0');
+    expect(row.attributes('aria-label')).toContain('八角');
+    await row.trigger('keydown.enter');
+    await row.trigger('keydown.space');
+    expect(w.emitted('open-row-detail')?.length).toBe(2);
+  });
+
   // must-fix #3 (final whole-branch review of Phase 3-1): usageSupported 必须是三态。
   // meta 缺失(数据未加载/加载失败/无配方/修订节点 id 不匹配)是"不知道", 不能显示成
   // "已确认该工序不可换算"那句具体诊断——代码给不出这个结论的证据(禁止降级处理)。

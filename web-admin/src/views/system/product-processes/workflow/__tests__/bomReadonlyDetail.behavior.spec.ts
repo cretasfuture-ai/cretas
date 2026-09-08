@@ -379,6 +379,20 @@ describe('只读用户点 BOM 行: 到只读明细, 不到写编辑器', () => {
       .not.toHaveBeenCalled();
   });
 
+  it('键盘可达: 只读用户按 Enter 同样开明细(行是 role=button)', async () => {
+    const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows();
+    const auxRow = wrapper.find(
+      `[data-node-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+    );
+    expect(auxRow.attributes('role')).toBe('button');
+    expect(auxRow.attributes('tabindex')).toBe('0');
+
+    await auxRow.trigger('keydown.enter');
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="bom-detail-panel"]').exists()).toBe(true);
+    expect(vm.auxDialogVisible).toBe(false);
+  });
 });
 
 describe('可写用户: 明细抽屉里「进入编辑」才是写入口', () => {

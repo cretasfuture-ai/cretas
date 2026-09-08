@@ -83,7 +83,10 @@
         class="aux-row nodrag"
         role="button"
         tabindex="0"
+        :aria-label="`查看辅料明细：${row.materialName} ${formatDosage(row)}`"
         @click="emit('open-row-detail', row.id)"
+        @keydown.enter.prevent="emit('open-row-detail', row.id)"
+        @keydown.space.prevent="emit('open-row-detail', row.id)"
       >
         <span class="aux-row-name">{{ row.materialName }}</span>
         <span class="aux-row-markers">
@@ -270,6 +273,8 @@ function formatDosage(row: AuxiliaryCellRow): string {
   cursor: pointer; font-size: 12px;
 }
 .aux-row:hover { border-color: #d9822b; background: #fff8ec; }
+/* 键盘用户必须看得见焦点在哪 —— 行早就是 role="button" + tabindex="0", 却一直没有焦点环。 */
+.aux-row:focus-visible { outline: 2px solid #d9822b; outline-offset: 2px; }
 .aux-row-name {
   color: #4a3110; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
