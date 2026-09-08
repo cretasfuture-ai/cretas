@@ -57,7 +57,6 @@ class DynamicSchedulerServiceTest {
         Field schedulerField = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
         schedulerField.setAccessible(true);
         schedulerField.set(service, taskScheduler);
-        when(toolExecutor.getToolName()).thenReturn("report_tool");
     }
 
     @Test

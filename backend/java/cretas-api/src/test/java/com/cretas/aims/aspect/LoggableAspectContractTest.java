@@ -54,7 +54,7 @@ class LoggableAspectContractTest {
         return Sample.class.getDeclaredMethod(methodName, String.class).getAnnotation(Loggable.class);
     }
 
-    private static ProceedingJoinPoint point(String methodName, Object result) throws Exception {
+    private static ProceedingJoinPoint point(String methodName, Object result) throws Throwable {
         Method method = Sample.class.getDeclaredMethod(methodName, String.class);
         MethodSignature signature = mock(MethodSignature.class);
         when(signature.getMethod()).thenReturn(method);
