@@ -58,7 +58,8 @@ require_release_jdk() {
         return 1
     fi
 
-    raw_version=$("$java_cmd" -version 2>&1 | sed -nE '1s/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
+    # JVM option notices may precede the version line.
+    raw_version=$("$java_cmd" -version 2>&1 | sed -nE 's/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
     case "$raw_version" in
         ''|*[!0-9]*)
             echo "ERROR: could not determine the Java version from $java_cmd" >&2

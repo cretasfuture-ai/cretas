@@ -24,3 +24,4 @@ test-guarded-paths-are-in-the-trigger-surface.sh
 test-java-gate-selector-covers-gate-classes.sh
 test-pipeline-tail-swallows-rc.sh
 test-release-ci-artifact-prewarm.sh
+test-release-jdk-version-preamble.sh

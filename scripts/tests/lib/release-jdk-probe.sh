@@ -26,7 +26,7 @@
 _rjp_major() {
     local java_cmd=$1 raw
     [ -x "$java_cmd" ] || return 1
-    raw=$("$java_cmd" -version 2>&1 | sed -nE '1s/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
+    raw=$("$java_cmd" -version 2>&1 | sed -nE 's/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
     case "$raw" in ''|*[!0-9]*) return 1 ;; esac
     printf '%s' "$raw"
 }

@@ -13,6 +13,7 @@
 - Python 的独立测试库认证失败是环境错误。新增命令包装器创建随机端口、只监听 localhost 的短生命 PostgreSQL 集群，测试结束始终停止并删除自己的目录，保留测试命令失败码。Python 39 项真实 PG 测试通过，包装器成功/失败及清理验证通过；Java PG 车道共用此隔离方法，不再依赖共享 cretas_user/5432。
 - Python venv 从解释器真实路径创建，避免 relocated CPython 经 /usr/local/bin 符号链接生成错误 home。CI 使用 3.11；Linux 保留 CPU 版 Torch，仅 macOS 去掉 +cpu 标识。
 - 实际 Ops CI 首轮在 JDK 版本探测中失败：`JAVA_TOOL_OPTIONS` 提示占据首行。解析改为读取版本行，实测保留该环境变量时得到 `JAVA_MAJOR=21`。
+- 同类首行解析存在于 release-java-preflight.sh 与测试 JDK helper，已一并修正并登记新回归：带提示行的 JDK 17 仍拒绝，21/25 通过；真实 JDK 带 CI JAVA_TOOL_OPTIONS 的发布预检/并行构建失败传播测试通过。
 - Java 首轮 2,013 项测试中唯一失败为 `JavaPrGateTieringContractTest` 仍钉住旧 5432/共享用户配置。已更新为检查新包装器接入及隔离、缺件失败、退出清理和原命令失败码契约，最终验证由真实 Java Gate 执行。
 - Web 旧 PR 全量 8 项失败；7 个涉及文件在 2 worker 下的 67 项用例通过。CI 限制为 2 worker，与可见 16 CPU / 实际 6 CPU 配额相匹配，不扩大超时或排除测试。临时副本的全量运行暴露缺少跨语言输入，已补齐；该次运行不能作为最终全量通过证据。
 
