@@ -83,7 +83,7 @@
         class="aux-row nodrag"
         role="button"
         tabindex="0"
-        @click="canWrite && emit('edit-row', row.id)"
+        @click="emit('open-row-detail', row.id)"
       >
         <span class="aux-row-name">{{ row.materialName }}</span>
         <span class="aux-row-markers">
@@ -139,7 +139,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'add-row': [];
-  'edit-row': [rowId: string];
+  /**
+   * 点某一行 —— 语义是「打开这一行的**只读**明细」, ⛔ 不是「编辑这一行」。
+   * 2026-09-09 从 `edit-row` 改名: 旧名字下这里必须挂 `canWrite &&` 才不越权,
+   * 而那道守卫把只读用户「想看看这行配了什么」也一起堵死了(死胡同)。现在行点击
+   * 一律通向 openBomDetail(只读), 「进入编辑」是抽屉里的显式动作且只对 canEdit 渲染
+   * ⇒ 这里不再需要、也不该再加 canWrite 守卫。
+   */
+  'open-row-detail': [rowId: string];
   'open-detail': [];
   'set-collapsed': [collapsed: boolean];
 }>();

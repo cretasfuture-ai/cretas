@@ -425,8 +425,8 @@
               :can-write="canEdit"
               :collapsed="collapsedAuxProcessIds.has(slotProps.data.processNodeId)"
               @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
-              @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
-              @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @open-row-detail="(rowId: string) => openBomDetail('auxiliary', slotProps.data.processNodeId, rowId)"
+              @open-detail="openBomDetail('auxiliary', slotProps.data.processNodeId)"
               @set-collapsed="(next: boolean) => toggleFusedCollapsed(slotProps.data.processNodeId, next)"
             />
           </template>
@@ -437,7 +437,7 @@
               :can-write="canEdit"
               :collapsed="isFusedCollapsed(slotProps.id)"
               @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
-              @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
+              @open-row-detail="(rowId: string) => openBomDetail('packaging', slotProps.data.outputNodeId, rowId)"
               @set-collapsed="() => toggleFusedCollapsed(slotProps.id)"
             />
           </template>
@@ -866,6 +866,73 @@
     />
 
     <!--
+      只读 BOM 明细抽屉 (2026-09-09) —— 点辅料/包材行的**唯一**落点。
+
+      ⚠️ 刻意用原生 div + v-if, 不用 el-drawer: 理由与下面那个原料关系弹窗完全相同 ——
+         el-drawer 在 shallowMount 下是 stub, 槽内容压根不渲染, 于是只读用户到底看到了
+         什么就只能靠状态变量推断。v-if 让断言拿到的是**渲染结果**。
+      🔴 「进入编辑」按钮 v-if="canEdit": 只读用户根本没有这颗按钮可点; 即便被绕过,
+         beginEditingBomDetail 与两个写入口第一行的 canEdit 闸仍各挡一道。
+    -->
+    <div v-if="bomDetailVisible" class="bom-detail-mask" data-testid="bom-detail-mask" @click.self="closeBomDetail">
+      <div class="bom-detail-panel" role="dialog" aria-modal="true" :aria-label="bomDetailContext?.title || 'BOM 明细'" data-testid="bom-detail-panel">
+        <div class="bom-detail-head">
+          <div>
+            <div class="bom-detail-eyebrow">{{ bomDetailContext?.kind === 'packaging' ? '包材明细' : '辅料明细' }}（只读）</div>
+            <div class="bom-detail-title" data-testid="bom-detail-title">{{ bomDetailContext?.title }}</div>
+            <div class="bom-detail-subtitle" data-testid="bom-detail-subtitle">{{ bomDetailContext?.subtitle }}</div>
+          </div>
+          <button type="button" class="bom-detail-close" data-testid="bom-detail-close" aria-label="关闭明细" @click="closeBomDetail">✕</button>
+        </div>
+
+        <div v-if="!bomDetailContext || bomDetailContext.rows.length === 0" class="bom-detail-empty" data-testid="bom-detail-empty">
+          尚未配置任何明细行。
+        </div>
+        <ul v-else class="bom-detail-rows">
+          <li
+            v-for="row in bomDetailContext.rows"
+            :key="row.id"
+            class="bom-detail-row"
+            :class="{ 'is-focused': row.id === bomDetailContext.rowId }"
+            :data-testid="`bom-detail-row-${row.id}`"
+          >
+            <span class="bom-detail-row-name">{{ row.materialName }}</span>
+            <span class="bom-detail-row-markers">
+              <span
+                v-for="marker in row.markers"
+                :key="`${row.id}:${marker.kind}`"
+                class="bom-detail-marker"
+                :title="marker.title"
+              >{{ marker.glyph }}</span>
+            </span>
+            <span class="bom-detail-row-dosage">{{ row.dosageText }}</span>
+            <span v-if="row.naturalHint" class="bom-detail-row-hint">{{ row.naturalHint }}</span>
+          </li>
+        </ul>
+
+        <!-- ⛔ 不要把这句写成「全部明细」: 单价/备注/替代物料仍然只在编辑弹窗里,
+             这里如实说明缺什么, 而不是让用户以为看到的就是全部。 -->
+        <div class="bom-detail-scope" data-testid="bom-detail-scope">
+          这里显示的是画布 Cell 上的用量与标记；备注、单价、替代物料明细目前只在编辑弹窗内。
+        </div>
+
+        <div class="bom-detail-foot">
+          <button type="button" class="el-button" data-testid="bom-detail-dismiss" @click="closeBomDetail">关闭</button>
+          <button
+            v-if="canEdit"
+            type="button"
+            class="el-button el-button--primary"
+            data-testid="bom-detail-edit"
+            @click="beginEditingBomDetail"
+          >进入编辑</button>
+          <span v-else class="bom-detail-readonly-hint" data-testid="bom-detail-readonly-hint">
+            当前无编辑权限，仅可查看。
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!--
       新增原料 Cell 的关系弹窗 (2026-08-10)。
 
       ⚠️ 刻意用**原生 div + v-if**, 不用 el-dialog:
@@ -1056,6 +1123,7 @@ import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyCanvasTopology, terminalOutputLabels } from './workflowClassification';
 import {
+  BOM_OVERLAY_PREFIX,
   deriveBomOverlay,
   isDerivedBomOverlayConnection,
   isBomOverlayEdge,
@@ -1086,7 +1154,9 @@ import {
 import { createBomDraftEnsurer } from './bom/bomDraftLifecycle';
 import { missingPriceBindingIds } from './bom/seasoningModel';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
-import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
+import type {
+  AuxiliaryCellData, AuxiliaryCellRow, PackagingCellData, PackagingCellRow,
+} from './bomOverlayTypes';
 import type { ByproductMaterialOption } from './WorkflowMaterialNode.vue';
 import type { BomRowMarker } from './bomOverlayMarkers';
 import {
@@ -3887,6 +3957,119 @@ function onPackagingDialogSaved(): void {
   // 同 onAuxDialogSaved: 包材用量也是工艺定义的一部分, 改了要能保存成新版本。
   // (包材用量目前仍只落 BOM 表, 但 hydration 一旦覆盖到它, 这里就已经接对了。)
   void loadBomOverlayData({ afterUserEdit: true });
+}
+
+// -- 只读 BOM 明细抽屉 (2026-09-09) -----------------------------------------
+//
+// 🔴 为什么要有它: 点辅料/包材行以前**直接是写入口**, 于是只读用户被 `canWrite &&`
+//    在子组件里挡掉 —— 挡住的同时也把「看一眼这行配了什么」一起挡掉了, 那是死胡同
+//    (fool-proof Rule 5)。现在行点击一律先到这个**只读**抽屉; 「进入编辑」是抽屉里
+//    的一个显式动作, 且只有 canEdit 才渲染。
+//
+// ⛔ openBomDetail 里**不允许**出现 openAuxiliaryEditor / openPackagingEditor 的调用 ——
+//    那等于把只读入口重新接回写入口, 正是本次改动要根除的越权形状。守它的是
+//    bomReadonlyDetail.behavior.spec.ts 里 canWrite=false 的整条路径断言(不是源码正则)。
+type BomDetailKind = 'auxiliary' | 'packaging';
+
+interface BomDetailRowView {
+  id: string;
+  materialName: string;
+  /** 已折算的用量表达; 缺失时由 openBomDetail 填明确占位, ⛔ 不显示 0 或空白。 */
+  dosageText: string;
+  /** 折算前的原始表达(包材才有), 没有就是 null —— ⛔ 不要退化成空串当 title。 */
+  naturalHint: string | null;
+  markers: BomRowMarker[];
+}
+
+interface BomDetailContext {
+  kind: BomDetailKind;
+  /** 辅料是 PROCESS 节点 id, 包材是 FINISHED_GOOD 节点 id —— 与写入口的入参同一个东西。 */
+  ownerNodeId: string;
+  /** 用户点的是哪一行(点「详情」按钮进来时为 null, 表示整张 cell)。 */
+  rowId: string | null;
+  title: string;
+  subtitle: string;
+  rows: BomDetailRowView[];
+}
+
+const bomDetailVisible = ref(false);
+const bomDetailContext = ref<BomDetailContext | null>(null);
+
+/**
+ * 只读打开 BOM 明细。**纯读**: 只从已经派生好的浮层节点 data 里取(与 cell 上渲染的
+ * 是同一份, 不另建第二份口径 —— 形态 D), 不发请求、不 ensureDraft、不开任何编辑面。
+ */
+function openBomDetail(kind: BomDetailKind, ownerNodeId: string, rowId?: string): void {
+  const overlayId = `${BOM_OVERLAY_PREFIX}${kind === 'auxiliary' ? 'aux' : 'pack'}:${ownerNodeId}`;
+  const node = flowNodes.value.find((candidate) => candidate.id === overlayId);
+  if (!node) {
+    // 禁止降级处理: 拿不到浮层节点就说拿不到, 不要开一个空抽屉冒充「没配」。
+    ElMessage.warning('未找到该 Cell 的 BOM 明细数据，请刷新画布后重试');
+    return;
+  }
+  if (kind === 'auxiliary') {
+    const data = node.data as unknown as AuxiliaryCellData;
+    bomDetailContext.value = {
+      kind,
+      ownerNodeId,
+      rowId: rowId ?? null,
+      title: `${data.processName} · 辅料`,
+      subtitle: data.rows.length > 0
+        ? `${data.rows.length} 种辅料`
+        : '该工序尚未配置辅料',
+      rows: data.rows.map((row): BomDetailRowView => ({
+        id: row.id,
+        materialName: row.materialName,
+        dosageText: row.dosageText && row.dosageText.trim() ? row.dosageText : '未填用量',
+        // 辅料没有「折算前的原始表达」这一维(那是包材的 naturalHint) —— 恒 null。
+        naturalHint: null,
+        markers: row.markers,
+      })),
+    };
+  } else {
+    const data = node.data as unknown as PackagingCellData;
+    bomDetailContext.value = {
+      kind,
+      ownerNodeId,
+      rowId: rowId ?? null,
+      title: `${data.outputName} · 包材`,
+      subtitle: data.rows.length > 0
+        ? `${data.rows.length} 种包材 · 每 1 ${data.baseUnit}成品`
+        : '该产出尚未配置包材',
+      rows: data.rows.map((row) => ({
+        id: row.id,
+        materialName: row.materialName,
+        dosageText: row.dosageText && row.dosageText.trim() ? row.dosageText : '未填用量',
+        naturalHint: row.naturalHint && row.naturalHint.trim() ? row.naturalHint : null,
+        markers: row.markers,
+      })),
+    };
+  }
+  bomDetailVisible.value = true;
+}
+
+function closeBomDetail(): void {
+  bomDetailVisible.value = false;
+}
+
+/**
+ * 抽屉里「进入编辑」—— 这是**唯一**从只读详情通往写入口的那条边, 因此权限判据写在这里,
+ * 且写入口自己(openAuxiliaryEditor / openPackagingEditor)第一行的 canEdit 闸原样保留:
+ * 两道闸都要, 少一道就变成「只剩一道就恒真」。
+ */
+async function beginEditingBomDetail(): Promise<void> {
+  const context = bomDetailContext.value;
+  if (!context) return;
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，只能查看 BOM 明细。');
+    return;
+  }
+  bomDetailVisible.value = false;
+  if (context.kind === 'auxiliary') {
+    await openAuxiliaryEditor(context.ownerNodeId, context.rowId ?? undefined);
+  } else {
+    await openPackagingEditor(context.ownerNodeId, context.rowId ?? undefined);
+  }
 }
 
 function propsMatchIdentity(identity: WorkflowIdentity): boolean {
@@ -7150,6 +7333,55 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   color: var(--el-text-color-secondary, #909399);
 }
 .raw-input-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+
+/* -- 只读 BOM 明细抽屉 ------------------------------------------------------ */
+.bom-detail-mask {
+  position: fixed; inset: 0; z-index: 2100;
+  display: flex; justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.32);
+}
+.bom-detail-panel {
+  display: flex; flex-direction: column; gap: 12px;
+  width: min(420px, 92vw); height: 100%; padding: 20px;
+  background: #fff; box-shadow: -6px 0 24px rgba(0, 0, 0, 0.12);
+  overflow-y: auto;
+}
+.bom-detail-head { display: flex; align-items: flex-start; gap: 12px; }
+.bom-detail-head > div { flex: 1; min-width: 0; }
+.bom-detail-eyebrow { color: #909399; font-size: 12px; }
+.bom-detail-title { color: #303133; font-size: 17px; font-weight: 700; }
+.bom-detail-subtitle { margin-top: 2px; color: #606266; font-size: 12px; }
+.bom-detail-close {
+  flex: 0 0 auto; width: 28px; height: 28px; border: none; border-radius: 6px;
+  background: transparent; color: #909399; cursor: pointer; font-size: 14px;
+}
+.bom-detail-close:hover { background: #f2f3f5; color: #303133; }
+.bom-detail-empty {
+  padding: 14px; border: 1px dashed #dcdfe6; border-radius: 8px;
+  color: #909399; font-size: 13px; text-align: center;
+}
+.bom-detail-rows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.bom-detail-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid #ebeef5; border-radius: 8px; font-size: 13px;
+}
+/* 用户点的是哪一行 —— 抽屉里必须认得出来, 否则一行都定位不到就等于没带 rowId。 */
+.bom-detail-row.is-focused { border-color: #409eff; background: #ecf5ff; }
+.bom-detail-row-name { color: #303133; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bom-detail-row-markers { display: flex; gap: 4px; }
+.bom-detail-marker {
+  display: grid; place-items: center; width: 18px; height: 18px;
+  border-radius: 5px; background: #f2f3f5; color: #606266; font-size: 11px;
+}
+.bom-detail-row-dosage { color: #303133; font-variant-numeric: tabular-nums; }
+.bom-detail-row-hint { grid-column: 1 / -1; color: #909399; font-size: 12px; }
+.bom-detail-scope {
+  padding: 10px; border-radius: 8px; background: #f4f6f8;
+  color: #606266; font-size: 12px; line-height: 1.6;
+}
+.bom-detail-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: auto; }
+.bom-detail-readonly-hint { color: #909399; font-size: 12px; }
 </style>
 
 <!--

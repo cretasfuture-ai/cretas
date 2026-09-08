@@ -35,7 +35,7 @@
         v-for="row in data.rows"
         :key="row.id"
         class="packaging-row nodrag"
-        @click.stop="canWrite && emit('edit-row', row.id)"
+        @click.stop="emit('open-row-detail', row.id)"
       >
         <span class="row-material-name">{{ row.materialName }}</span>
         <span class="row-markers">
@@ -112,7 +112,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'add-row': [];
-  'edit-row': [rowId: string];
+  /** 语义同 WorkflowAuxiliaryNode: 打开这一行的**只读**明细, ⛔ 不是编辑入口。 */
+  'open-row-detail': [rowId: string];
   'set-collapsed': [collapsed: boolean];
 }>();
 
