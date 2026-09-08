@@ -327,3 +327,7 @@ backend/python/smartbi/scripts/_demo_rest_*.jsonl
 # Playwright E2E 登录态。不能放 test-results/ —— 那是 outputDir, 每轮启动会被清空,
 # 于是登录态无法跨轮复用, --no-deps 跑子集时报 Error reading storage state (2026-08-15 实测)。
 web-admin/.auth/
+
+# Codex 构建产物 —— 主 checkout 里有 1774 个未跟踪文件出自这里,
+# 把 `git status` 淹掉, 于是「有没有没提交的活」这个问题问不出答案。
+.codex-build/
