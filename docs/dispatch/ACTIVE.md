@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `FIX-CI-RECOVERY-20260909` — `in-progress` — Owner: Codex current task — Base `83c0e2a2023487c3033d757d7912f58d3ef01d21` — 用户要求解决 CI 红灯、排队及两项脚本失败；恢复 WSL 保活、核实组织级 runner、接入 Linux 可执行检查并真实回归。原迁移任务已停止，保留其刷新工具草稿。
+
 
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
@@ -75,6 +77,10 @@
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
 
 ## 维护规则
+
+- `FIX-CI-RECOVERY-20260909-PG` scope：scripts/ci/run-with-test-postgres.sh、其独立 PostgreSQL 清理/失败传播测试；test-parallel-deploy-failfast.sh 单调计时修复；Python/Java CI 使用隔离临时库。Owner 与 Base 同父任务；不使用真实业务库。
+
+- `FIX-CI-RECOVERY-20260909` scope：scripts/ci/switch_ci_runner.py、scripts/tests/test-ci-gate-runs-merge-result.sh、test-deploy-mutex-coverage.sh、相关测试；.github/workflows 中本批 CI 路由/依赖修复；Windows WSL 保活及专用测试数据库配置。验收：目标双 shell 测试、路由检查、真实 GitHub jobs；不改生产凭据/数据或放宽测试隔离。
 
 - 只记当前在飞（`queued`/`claimed`/`in-progress`/`review`/`blocked`）；`merged`/`done` 立即移入带日期的 `archive/`，同一 commit 释放 scope 锁。
 - **每条 ≤ 300 字**（含缩进续行）：ID、状态、Owner、Base SHA、一句话目标与阻塞点。判据读数、终审记录、增量日志一律写 `archive/<日期>-*.md` 并链接，⛔ 不在本文件开 `###` 小节。全文 ≤ 30,000 bytes。

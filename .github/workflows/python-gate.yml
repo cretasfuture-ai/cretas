@@ -73,11 +73,13 @@ on:
     paths:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
+      - 'scripts/ci/run-with-test-postgres.sh'
       - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
   pull_request:
     paths:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
+      - 'scripts/ci/run-with-test-postgres.sh'
       - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
   # 手动触发 —— 2026-08-26 加。
   # 本闸此前在 GitHub 上被 disabled_manually, 停用期间攒了 8 条红(其中 1 条是真的
@@ -111,7 +113,7 @@ jobs:
       - uses: actions/setup-python@v5
         if: runner.environment == 'github-hosted'
         with:
-          python-version: '3.10'
+          python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: backend/python/requirements.txt
 
@@ -132,20 +134,21 @@ jobs:
         # venv 建在 $RUNNER_TEMP 下, job 结束即随临时目录消失。
         run: |
           set -e
-          for c in python3.10 python3.11 python3.12 python3; do
+          for c in python3.11 python3.12 python3; do
             if command -v "$c" >/dev/null 2>&1; then
               V=$("$c" -c 'import sys;print("%d.%d"%sys.version_info[:2])')
               case "$V" in
-                3.1[0-9]|3.[2-9]*)
-                  echo "PYTHON_USED=$c ($V)  ⚠️ 托管上是 3.10"
-                  "$c" -m venv "$RUNNER_TEMP/venv"
+                3.1[1-9]|3.[2-9]*)
+                  PYTHON_BIN=$("$c" -c 'import os,sys; print(os.path.realpath(sys.executable))')
+                  echo "PYTHON_USED=$PYTHON_BIN ($V)"
+                  "$PYTHON_BIN" -m venv "$RUNNER_TEMP/venv"
                   echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
                   exit 0
                   ;;
               esac
             fi
           done
-          echo "✗ 找不到 >=3.10 的 python —— 本闸不能在一个更老的解释器上假装绿"
+          echo "✗ 找不到 >=3.11 的 python —— 本闸不能在一个更老的解释器上假装绿"
           exit 1
       - name: Install dependencies
         # ⚠️ 一律用 `python -m pip`, ⛔ 不要用裸 `pip`。
@@ -164,10 +167,11 @@ jobs:
         #    ⚠️ 剥掉哪几行会打进日志, 不做静默改写。
         env:
           RUNNER_ENV: ${{ runner.environment }}
+          RUNNER_OS: ${{ runner.os }}
         run: |
           set -e
           REQ=requirements.txt
-          if [ "$RUNNER_ENV" != "github-hosted" ]; then
+          if [ "$RUNNER_OS" = "macOS" ]; then
             echo "自建 runner: 剥掉 +cpu 本地版本标识, 涉及这些行:"
             grep -n '+cpu' requirements.txt || echo "  (没有 +cpu 的行)"
             REQ="$RUNNER_TEMP/requirements.selfhosted.txt"
@@ -211,7 +215,7 @@ jobs:
             echo "   ⇒ 本次读数**不等于**托管上的读数。额度恢复切回托管后这份清单不生效。"
             EXCLUDES="$EXCLUDES $SH"
           fi
-          pytest \
+          bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" pytest \
             tests/ \
             ota/tests \
             efficiency_recognition/tests \

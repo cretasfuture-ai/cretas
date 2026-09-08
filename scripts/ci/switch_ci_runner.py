@@ -64,6 +64,9 @@ WORKFLOWS = [
     # 调度器 canary —— 只有一步 echo, 但它带 runs-on, 所以必须在这张清单里,
     # 否则切回托管时它切不动(载体没登记, 与 java-gate-pr.yml 当初那次同形)。
     "scheduler-canary.yml",
+    # Verified on the isolated Linux runner; neither uses service containers.
+    "ops-script-tests.yml",
+    "soft-delete-scan-surface.yml",
 ]
 
 HOSTED = "    runs-on: ubuntu-latest"
@@ -193,7 +196,7 @@ def main() -> int:
     print("ci-runner: 改动 %d 个文件, 跳过 %d 个。" % (changed, len(WORKFLOWS) - changed))
     print("ci-runner: 已切到 %s。⚠️ 要 commit + push 才生效。" % target)
     if target == "self-hosted":
-        print("  自建 runner: 加拿大 Mac-mini-01, 标签 [self-hosted, cretas]")
+        print("  自建 runner: 组织级 runner，标签 [self-hosted, cretas]；当前使用隔离 Windows WSL Linux")
         print("  在线检查: gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+\" \"+.status'")
     return 0
 

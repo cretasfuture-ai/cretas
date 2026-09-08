@@ -57,7 +57,13 @@ touch "$TMP_ROOT/held"
 # ⚠️ exec: 让持有者**本身**就是那个长寿进程。写成裸 \`sleep 30\` 的话, kill 掉 bash 之后 sleep
 #    成了孤儿、仍按着 fd 200 —— 那是另一种状态 (test-deploy-lock-orphan-holder.sh 专门量它,
 #    2026-09-06 起判「挡」), 与本用例要量的「持有者死了锁要能放」不是一回事。
-exec sleep 30
+if command -v flock >/dev/null 2>&1; then
+    exec sleep 30
+else
+    # MSYS exec replaces the Windows PID used by the pidfile implementation.
+    # Keep the actual shell owner alive; this branch has no inherited flock fd.
+    while :; do sleep 0.2; done
+fi
 EOF
 chmod +x "$TMP_ROOT/holder.sh"
 
