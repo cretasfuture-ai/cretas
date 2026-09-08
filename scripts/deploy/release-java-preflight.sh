@@ -38,7 +38,7 @@ done
 # meanwhile the Web build keeps compiling for another 60-110s before anyone
 # learns the release is already dead.
 require_release_jdk() {
-    local java_cmd= raw_version major
+    local java_cmd= raw_version major version_output
 
     if [ -n "${JAVA_HOME:-}" ]; then
         if [ -x "$JAVA_HOME/bin/java" ]; then
@@ -59,7 +59,11 @@ require_release_jdk() {
     fi
 
     # JVM option notices may precede the version line.
-    raw_version=$("$java_cmd" -version 2>&1 | sed -nE 's/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
+    if ! version_output=$("$java_cmd" -version 2>&1); then
+        echo "ERROR: Java version command failed: $java_cmd" >&2
+        return 1
+    fi
+    raw_version=$(sed -nE 's/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p' <<< "$version_output")
     case "$raw_version" in
         ''|*[!0-9]*)
             echo "ERROR: could not determine the Java version from $java_cmd" >&2

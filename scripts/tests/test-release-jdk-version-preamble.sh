@@ -8,7 +8,8 @@ mkdir -p "$fixture/jdk/bin" "$fixture/backend/java/cretas-api/src/test/java"
 printf '%s\n' 'class ValidTest {}' > "$fixture/backend/java/cretas-api/src/test/java/ValidTest.java"
 printf '%s\n' '#!/usr/bin/env bash' \
     'echo "Picked up JAVA_TOOL_OPTIONS: -XX:ActiveProcessorCount=6" >&2' \
-    'printf "openjdk version \"%s.0.1\"\n" "$FAKE_JAVA_MAJOR" >&2' > "$fixture/jdk/bin/java"
+    'printf "openjdk version \"%s.0.1\"\n" "$FAKE_JAVA_MAJOR" >&2' \
+    'exit "${FAKE_JAVA_EXIT:-0}"' > "$fixture/jdk/bin/java"
 chmod +x "$fixture/jdk/bin/java"
 source "$root/scripts/tests/lib/release-jdk-probe.sh"
 for major in 17 21 25; do
@@ -24,4 +25,12 @@ for major in 17 21 25; do
         [ "$rc" -eq 0 ] || { cat "$fixture/result.log"; exit 1; }
     fi
 done
-echo 'PASS: JVM preambles preserve version parsing and reject JDK 17 while accepting 21/25'
+export FAKE_JAVA_MAJOR=21 FAKE_JAVA_EXIT=47
+if _rjp_major "$fixture/jdk/bin/java"; then
+    echo 'FAIL: helper accepted a failed Java command'; exit 1
+fi
+rc=0
+JAVA_HOME="$fixture/jdk" bash "$root/scripts/deploy/release-java-preflight.sh" \
+    --repo-root "$fixture" --tests ValidTest > "$fixture/result.log" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -Fq 'Java version command failed' "$fixture/result.log"
+echo 'PASS: JVM preambles preserve versions, reject JDK 17 and failed commands, and accept 21/25'
