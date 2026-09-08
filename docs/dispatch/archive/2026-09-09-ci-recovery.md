@@ -11,6 +11,7 @@ This closeout is included in the final candidate commit and takes effect when th
 - User explicitly deferred the AI quota review on September 9. Its failing test is retained; this closeout does not claim all CI is green or update the registry date.
 - Baseline replay now supports the isolated native PostgreSQL cluster in Ops CI, preserving the Docker entry and five-dimension assertions. All expected counts matched; invalid SQL and a tampered index-count header were detected.
 - Included follow-up `FIX-CI-RECOVERY-20260909-BASELINE`: JDK preamble parsing, updated Java CI contract, and bounded Web workers. Final CI results must be verified before merge; WSL clock backsteps remain under diagnosis, with original clocksource and guest NTP restored after unsuccessful experiments.
+- Closed implementation scope `FIX-CI-RECOVERY-20260909-CLOCK`: user deferred Windows clock adjustment; Web tests stabilize only their own wall-clock reader. Real Vue negative/positive controls, explicit fake dates and worker reuse remain covered. Full Web run passed 4,691 tests with 5 existing skips; final five clock controls and typecheck passed. No production clock or event handler change.
 - Docker-dependent lanes, other migration drafts, production credentials and business data were not changed. Remaining migration tickets stay in ACTIVE.
 
 Detailed evidence and validation boundaries: `docs/ops/2026-09-09-ci-recovery.md`; local evidence directory `D:/Temp/cretas-ci-recovery-20260909/`.
