@@ -114,7 +114,9 @@ public interface ProductionStockAllocationService {
              * 「实测 F006 羊排<b>在原料仓</b>有 100kg 但全部 EXPIRED」, 可它的实现按生产仓过滤 ——
              * 实现与自己写的动机相反。
              */
-            List<ElsewhereStock> expiredElsewhere) {
+            List<ElsewhereStock> expiredElsewhere,
+            /** Explains the eligible ownership scope without changing the available quantity. */
+            String supplyScopeHint) {
     }
 
     /** 同物料在**非生产仓**的存量 —— 用于「主仓另有 200 只, 待调拨入生产仓」。 */

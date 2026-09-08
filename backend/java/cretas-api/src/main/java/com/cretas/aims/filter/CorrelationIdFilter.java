@@ -14,6 +14,8 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import com.cretas.aims.audit.RequestAuditSupport;
+
 import java.util.UUID;
 
 /**
@@ -24,7 +26,8 @@ import java.util.UUID;
  *
  * 1. Reads X-Correlation-ID from request header (propagated from upstream)
  * 2. If absent, generates a new UUID
- * 3. Puts correlationId, userId, and factoryId into SLF4J MDC
+ * 3. Puts only the correlation ID into SLF4J MDC; verified identity is read
+ *    from request attributes after JwtAuthInterceptor completes
  * 4. Adds X-Correlation-ID to response header
  * 5. Clears MDC in finally block to prevent thread pool leaks
  *
@@ -48,18 +51,21 @@ public class CorrelationIdFilter implements Filter {
         HttpServletRequest request = (HttpServletRequest) servletRequest;
         HttpServletResponse response = (HttpServletResponse) servletResponse;
 
+        Throwable failure = null;
+        long startedAt = System.nanoTime();
+        String correlationId = null;
         try {
             // 1. Read or generate correlation ID
-            String correlationId = request.getHeader(CORRELATION_ID_HEADER);
-            if (correlationId == null || correlationId.isBlank()) {
+            Object retained = request.getAttribute(CORRELATION_ID_HEADER);
+            correlationId = RequestAuditSupport.sanitizeCorrelationId(retained instanceof String value
+                    ? value : request.getHeader(CORRELATION_ID_HEADER));
+            if (correlationId == null) {
                 correlationId = UUID.randomUUID().toString();
             }
 
             // 2. Put correlation ID in MDC
             MDC.put(MDC_CORRELATION_ID, correlationId);
-
-            // 3. Try to extract userId and factoryId from JWT (best-effort, no validation)
-            extractJwtContextToMdc(request);
+            request.setAttribute(CORRELATION_ID_HEADER, correlationId);
 
             // 4. Add correlation ID to response header
             response.setHeader(CORRELATION_ID_HEADER, correlationId);
@@ -67,103 +73,34 @@ public class CorrelationIdFilter implements Filter {
             // 5. Continue the filter chain
             chain.doFilter(request, response);
 
+        } catch (IOException | ServletException | RuntimeException | Error ex) {
+            failure = ex;
+            throw ex;
         } finally {
+            if (RequestAuditSupport.isMobileApi(request)) {
+                int status = failure == null ? response.getStatus() : 500;
+                log.info("request_audit phase={} method={} route={} status={} businessSuccess={} responseError={} errorCode={} elapsedMs={} correlation={} authenticated={} userId={} username={} factoryId={}",
+                        request.isAsyncStarted() ? "async_dispatch" : "response",
+                        RequestAuditSupport.safeToken(request.getMethod(), 16),
+                        RequestAuditSupport.route(request),
+                        status,
+                        request.getAttribute(RequestAuditSupport.RESPONSE_SUCCESS_ATTRIBUTE),
+                        RequestAuditSupport.safeToken(RequestAuditSupport.responseError(request), 200),
+                        RequestAuditSupport.safeToken(RequestAuditSupport.responseErrorCode(request), 100),
+                        elapsedMillis(startedAt),
+                        RequestAuditSupport.safeToken(correlationId, 64),
+                        RequestAuditSupport.authenticated(request),
+                        RequestAuditSupport.safeToken(RequestAuditSupport.userId(request), 64),
+                        RequestAuditSupport.safeToken(RequestAuditSupport.username(request), 100),
+                        RequestAuditSupport.safeToken(RequestAuditSupport.trustedFactoryId(request), 64));
+            }
             // 6. Always clear MDC to prevent thread pool contamination
             MDC.remove(MDC_CORRELATION_ID);
             MDC.remove(MDC_USER_ID);
             MDC.remove(MDC_FACTORY_ID);
         }
     }
-
-    /**
-     * Best-effort extraction of userId and factoryId from JWT payload.
-     * Uses simple Base64 decode of the payload segment -- no signature verification
-     * (the JwtAuthInterceptor handles that later). This avoids injecting JwtUtil
-     * and keeps the filter dependency-free.
-     *
-     * If anything fails, we simply skip -- MDC fields remain empty which is fine.
-     */
-    private void extractJwtContextToMdc(HttpServletRequest request) {
-        try {
-            String authorization = request.getHeader("Authorization");
-            if (authorization == null || !authorization.startsWith("Bearer ")) {
-                return;
-            }
-
-            String token = authorization.substring(7);
-            // JWT structure: header.payload.signature
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) {
-                return;
-            }
-
-            // Decode the payload (second segment)
-            String payload = new String(
-                    java.util.Base64.getUrlDecoder().decode(parts[1]),
-                    java.nio.charset.StandardCharsets.UTF_8
-            );
-
-            // Simple extraction without a JSON library dependency -- look for key patterns
-            String userId = extractJsonValue(payload, "userId");
-            String factoryId = extractJsonValue(payload, "factoryId");
-
-            if (userId != null) {
-                MDC.put(MDC_USER_ID, userId);
-            }
-            if (factoryId != null) {
-                MDC.put(MDC_FACTORY_ID, factoryId);
-            }
-        } catch (Exception e) {
-            // Best-effort: if JWT parsing fails, just skip MDC enrichment
-            log.trace("Could not extract JWT context for MDC: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Extract a value from a JSON string by key name.
-     * Handles both string values ("key":"value") and numeric values ("key":123).
-     * This avoids pulling in Jackson/Gson just for two fields.
-     */
-    private String extractJsonValue(String json, String key) {
-        String pattern = "\"" + key + "\"";
-        int keyIndex = json.indexOf(pattern);
-        if (keyIndex < 0) {
-            return null;
-        }
-
-        // Find the colon after the key
-        int colonIndex = json.indexOf(':', keyIndex + pattern.length());
-        if (colonIndex < 0) {
-            return null;
-        }
-
-        // Skip whitespace after colon
-        int valueStart = colonIndex + 1;
-        while (valueStart < json.length() && json.charAt(valueStart) == ' ') {
-            valueStart++;
-        }
-
-        if (valueStart >= json.length()) {
-            return null;
-        }
-
-        if (json.charAt(valueStart) == '"') {
-            // String value
-            int valueEnd = json.indexOf('"', valueStart + 1);
-            if (valueEnd < 0) {
-                return null;
-            }
-            return json.substring(valueStart + 1, valueEnd);
-        } else {
-            // Numeric or other value -- read until comma, brace, or end
-            int valueEnd = valueStart;
-            while (valueEnd < json.length()
-                    && json.charAt(valueEnd) != ','
-                    && json.charAt(valueEnd) != '}'
-                    && json.charAt(valueEnd) != ' ') {
-                valueEnd++;
-            }
-            return json.substring(valueStart, valueEnd);
-        }
+    private static long elapsedMillis(long startedAt) {
+        return Math.max(0L, (System.nanoTime() - startedAt) / 1_000_000L);
     }
 }

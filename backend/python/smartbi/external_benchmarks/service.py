@@ -235,7 +235,7 @@ class ExternalBenchmarkService:
                 result.rows_upserted,
                 result.error_message,
                 redact_sensitive_url(result.request_url),
-                result.raw_payload,
+                json.dumps(result.raw_payload, ensure_ascii=False),
             )
 
     async def get_today_source_runs(self, source_code: str) -> int:

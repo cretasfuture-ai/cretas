@@ -126,6 +126,22 @@ describe('投入行「生产仓可用」: 显示后端权威值', () => {
     expect(wrapper.text()).not.toContain('12.5');
   });
 
+  it.each(['card', 'grid'] as const)('explains ownership-limited zero stock in %s view', async (viewMode) => {
+    feedMisleadingBatches();
+    const hint = '本计划按客户供料领用；工厂自有库存不计入，调拨仓库不会改变库存归属。';
+    getInputAvailability.mockResolvedValue({ success: true, data: [{
+      workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', available: 0,
+      unit: 'kg', elsewhere: [], supplyScopeHint: hint,
+    }] });
+    const wrapper = mountTable();
+    await wrapper.setProps({ viewMode });
+    await addRow(wrapper);
+    expect(wrapper.find('[data-testid="input-available-stock"]').text()).toBe('0kg');
+    expect(wrapper.find('[data-testid="input-supply-scope"]').text()).toBe(hint);
+    expect(wrapper.text()).not.toContain('12.5');
+    wrapper.unmount();
+  });
+
   it('请求带上端口身份 (workflowPortId + 物料 + 单位), 否则后端按什么算', async () => {
     const wrapper = mountTable();
     await addRow(wrapper);

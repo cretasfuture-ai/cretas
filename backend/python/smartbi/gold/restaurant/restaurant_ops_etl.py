@@ -111,6 +111,8 @@ async def sync_dim_ingredient(
     source_pks = [r["id"] for r in rows]
     names = [r["name"] or r["id"] for r in rows]
     normalized = [_normalize_name(n) for n in names]
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"ingredient source identity is ambiguous: duplicate normalized names for factory={factory_id}")
     categories = [r["category"] for r in rows]
     codes = [r["code"] for r in rows]
     units = [r["unit"] for r in rows]
@@ -144,6 +146,24 @@ async def sync_dim_ingredient(
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
             await _set_tenant(dst, factory_id)
+            # The mock platform writer may have created the dimension first. Adopt
+            # its placeholder key only when name AND unit identify the same material.
+            # Preserve ingredient_id, so existing recipe/fact foreign keys stay valid.
+            # Real ERP IDs, ambiguous names and unit mismatches are never merged.
+            await dst.execute(
+                """
+                UPDATE dim_ingredient d SET source_pk = src.pk, updated_at = NOW()
+                FROM UNNEST($2::text[], $3::text[], $4::text[]) AS src(pk, nn, unit)
+                WHERE d.factory_id = $1 AND d.normalized_name = src.nn
+                  AND d.source_pk = 'mock_keruyun:' || src.nn
+                  AND d.unit = src.unit
+                  AND NOT EXISTS (
+                      SELECT 1 FROM dim_ingredient other
+                      WHERE other.factory_id = $1 AND other.source_pk = src.pk
+                  )
+                """,
+                factory_id, source_pks, normalized, units,
+            )
             result = await dst.fetch(
                 """
                 INSERT INTO dim_ingredient (

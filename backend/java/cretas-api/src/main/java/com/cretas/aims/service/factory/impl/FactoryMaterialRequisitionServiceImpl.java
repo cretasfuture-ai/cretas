@@ -935,11 +935,16 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 remaining = remaining.subtract(take);
             }
             if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+                String supplyScopeHint = com.cretas.aims.service.processentry.ProductionMaterialSupplyScope
+                        .description(plan, resolveMaterialMainCategory(factoryId, it.getMaterialTypeId()));
                 throw new BusinessException(409, String.format(
-                        "领料调拨失败: 物料 %s 原料仓可用库存不足以领出 %s (尚缺 %s)",
-                        materialLabel(it), issued.toPlainString(), remaining.toPlainString()))
+                        "领料调拨失败: 物料 %s 原料仓可用库存不足以领出 %s (尚缺 %s)%s",
+                        materialLabel(it), issued.toPlainString(), remaining.toPlainString(),
+                        supplyScopeHint == null ? "" : "。" + supplyScopeHint))
                         .withCode("PRODUCTION_REQUISITION_TRANSFER_INSUFFICIENT_STOCK")
-                        .withHint("请核对原料仓实际库存, 或在「确认领料」调低该物料拣货数量")
+                        .withHint(supplyScopeHint == null
+                                ? "请核对原料仓实际库存, 或在「确认领料」调低该物料拣货数量"
+                                : supplyScopeHint)
                         .withHintTarget(it.getId())
                         .withSeverity("BLOCKING");
             }

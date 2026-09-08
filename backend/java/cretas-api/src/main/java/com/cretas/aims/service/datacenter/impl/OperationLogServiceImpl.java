@@ -1,12 +1,14 @@
 package com.cretas.aims.service.datacenter.impl;
 
 import com.cretas.aims.entity.datacenter.OperationLog;
+import com.cretas.aims.audit.RequestAuditSupport;
 import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.service.datacenter.OperationLogService;
 import com.cretas.aims.utils.SecurityUtils;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -20,15 +22,27 @@ import java.util.TreeSet;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class OperationLogServiceImpl implements OperationLogService {
 
     private final OperationLogRepository repo;
+    private final OperationLogService self;
+
+    @Autowired
+    public OperationLogServiceImpl(OperationLogRepository repo, @Lazy OperationLogService self) {
+        this.repo = repo;
+        this.self = self;
+    }
+
+    /** Compatibility constructor for direct unit tests; Spring uses the lazy proxy constructor. */
+    public OperationLogServiceImpl(OperationLogRepository repo) {
+        this.repo = repo;
+        this.self = this;
+    }
 
     /**
      * AOP 入口. async 写库. 失败 log.error 但不抛 — 审计写失败不能阻塞业务.
      */
-    @Async
+    @Async("operationAuditExecutor")
     @Override
     public void record(OperationLog logEntity) {
         try {
@@ -37,20 +51,24 @@ public class OperationLogServiceImpl implements OperationLogService {
         } catch (Throwable t) {
             log.error("[OperationLog] async record failed: factory={}, module={}, action={}, entity={}/{}: {}",
                     logEntity.getFactoryId(), logEntity.getModule(), logEntity.getAction(),
-                    logEntity.getEntityType(), logEntity.getEntityId(), t.getMessage(), t);
+                    logEntity.getEntityType(), logEntity.getEntityId(),
+                    RequestAuditSupport.sanitizeText(t.getMessage(), 1000));
         }
     }
 
-    @Async
     @Override
     public void recordDiff(String factoryId, String module, String entityType, String entityId,
                            Map<String, Object> oldValue, Map<String, Object> newValue, String summary) {
+        // Capture request-thread identity before handing the immutable audit payload
+        // to the async proxy. RequestContextHolder is not propagated to @Async threads.
         try {
+            Long actorId = SecurityUtils.currentUserId();
+            String actorName = SecurityUtils.currentUsername();
             String action = oldValue == null ? "CREATE" : (newValue == null ? "DELETE" : "UPDATE");
             OperationLog logEntity = OperationLog.builder()
                     .factoryId(factoryId)
-                    .userId(SecurityUtils.currentUserId())
-                    .username(SecurityUtils.currentUsername())
+                    .userId(actorId)
+                    .username(actorName)
                     .module(module)
                     .action(action)
                     .entityType(entityType)
@@ -61,10 +79,11 @@ public class OperationLogServiceImpl implements OperationLogService {
                     .summary(summary)
                     .success(Boolean.TRUE)
                     .build();
-            repo.save(logEntity);
+            self.record(logEntity);
         } catch (Throwable t) {
             log.error("[OperationLog] recordDiff failed: factory={}, module={}, entity={}/{}: {}",
-                    factoryId, module, entityType, entityId, t.getMessage(), t);
+                    factoryId, module, entityType, entityId,
+                    RequestAuditSupport.sanitizeText(t.getMessage(), 1000));
         }
     }
 

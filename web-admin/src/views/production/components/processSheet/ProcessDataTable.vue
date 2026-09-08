@@ -554,6 +554,10 @@ function workshopStockText(item: InputPortRef): string {
   return `${fmtStockQty(a.available)}${displayProcessUnit(a.unit)}`;
 }
 
+function supplyScopeText(item: InputPortRef): string {
+  return (item.workflowPortId ? portAvailability.value.get(item.workflowPortId)?.supplyScopeHint : null) || '';
+}
+
 /**
  * 同物料在别的仓的存量 —— 把「真没货」和「有货但没调过来」分开。
  *
@@ -3538,6 +3542,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       class="sp-in-stock"
                       :class="{ 'sp-in-stock-zero': workshopStockIsZero(item) }"
                     >{{ workshopStockText(item) }}</span>
+                    <span v-if="supplyScopeText(item)" data-testid="input-supply-scope" class="sp-in-elsewhere">
+                      {{ supplyScopeText(item) }}
+                    </span>
                     <span
                       v-if="elsewhereStockText(item)"
                       data-testid="input-elsewhere-stock"
@@ -4168,6 +4175,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         class="sp-in-stock"
                         :class="{ 'sp-in-stock-zero': workshopStockIsZero(item) }"
                       >{{ workshopStockText(item) }}</span>
+                      <span v-if="supplyScopeText(item)" data-testid="input-supply-scope" class="sp-in-elsewhere">
+                        {{ supplyScopeText(item) }}
+                      </span>
                       <span
                         v-if="elsewhereStockText(item)"
                         data-testid="input-elsewhere-stock"

@@ -472,6 +472,8 @@ export interface ElsewhereStock {
 
 /** 一个投入端口在生产仓的可投量（后端权威值）。 */
 export interface PortAvailability {
+  /** Backend explanation of stock ownership eligibility; never added to available stock. */
+  supplyScopeHint?: string | null;
   workflowPortId: string | null;
   materialTypeId: string;
   available: number;

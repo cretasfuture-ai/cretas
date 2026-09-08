@@ -21,8 +21,16 @@ describe('productionPlanCustomerSelection', () => {
     });
   });
 
-  it('maps an active customer id to customer-owned production truth', () => {
+  it('customer selection alone keeps factory supply and company stock', () => {
     expect(resolveProductionPlanCustomerSelection('c-active', customers)).toEqual({
+      customerId: 'c-active',
+      sourceCustomerName: '客户甲',
+      outputOwnership: 'COMPANY_OWNED',
+    });
+  });
+
+  it('only explicit customer supply selects customer-owned output', () => {
+    expect(resolveProductionPlanCustomerSelection('c-active', customers, 'CUSTOMER_SUPPLIED')).toEqual({
       customerId: 'c-active',
       sourceCustomerName: '客户甲',
       outputOwnership: 'CUSTOMER_OWNED',

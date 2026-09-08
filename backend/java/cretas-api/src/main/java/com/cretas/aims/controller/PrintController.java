@@ -40,6 +40,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.ResourceAccessException;
+import org.slf4j.MDC;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -749,8 +751,7 @@ public class PrintController {
         HttpEntity<Map<String, Object>> httpRequest = new HttpEntity<>(pythonBody, headers);
 
         try {
-            ResponseEntity<byte[]> resp = pythonRestTemplate.exchange(
-                    url, HttpMethod.POST, httpRequest, byte[].class);
+            ResponseEntity<byte[]> resp = renderPdf(url, httpRequest, "preview-template");
             byte[] pdf = resp.getBody();
             if (pdf == null || pdf.length == 0) {
                 throw new BusinessException(502, "Python 打印服务返空 PDF");
@@ -763,8 +764,8 @@ public class PrintController {
             out.setContentLength(pdf.length);
             return new ResponseEntity<>(pdf, out, org.springframework.http.HttpStatus.OK);
         } catch (RestClientException e) {
-            log.error("preview-template 代理失败 factory={} template={} url={}: {}",
-                    factoryId, templateId, url, e.getMessage());
+            log.error("preview-template 代理失败 factory={} template={} errorType={}",
+                    factoryId, templateId, e.getClass().getSimpleName());
             throw new BusinessException(502, "打印服务暂不可用 — 请稍后重试");
         }
     }
@@ -851,7 +852,7 @@ public class PrintController {
         HttpEntity<Map<String, Object>> req = new HttpEntity<>(payload, headers);
 
         try {
-            ResponseEntity<byte[]> resp = pythonRestTemplate.exchange(url, HttpMethod.POST, req, byte[].class);
+            ResponseEntity<byte[]> resp = renderPdf(url, req, docType);
             byte[] pdf = resp.getBody();
             if (pdf == null || pdf.length == 0) {
                 throw new BusinessException(502, "Python 打印服务返空");
@@ -863,9 +864,38 @@ public class PrintController {
             out.setContentLength(pdf.length);
             return new ResponseEntity<>(pdf, out, org.springframework.http.HttpStatus.OK);
         } catch (RestClientException e) {
-            log.error("PDF 代理失败 docType={} url={}: {}", docType, url, e.getMessage());
+            log.error("PDF 代理失败 docType={} errorType={}", docType, e.getClass().getSimpleName());
             throw new BusinessException(502, "打印服务暂不可用 — 请稍后重试");
         }
+    }
+
+    /** PDF rendering is read-only: retry a dropped connection once, never an HTTP rejection. */
+    ResponseEntity<byte[]> renderPdf(String url, HttpEntity<Map<String, Object>> request, String docType) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.putAll(request.getHeaders());
+        String correlationId = com.cretas.aims.audit.RequestAuditSupport.sanitizeCorrelationId(MDC.get("correlationId"));
+        if (correlationId != null) {
+            headers.set("X-Correlation-ID", correlationId);
+        }
+        HttpEntity<Map<String, Object>> correlated = new HttpEntity<>(request.getBody(), headers);
+        long start = System.nanoTime();
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                ResponseEntity<byte[]> response = pythonRestTemplate.exchange(url, HttpMethod.POST, correlated, byte[].class);
+                log.info("[PrintRender] type={} attempt={} status={} elapsedMs={} bytes={}", docType,
+                        attempt, response.getStatusCode().value(), (System.nanoTime() - start) / 1_000_000,
+                        response.getBody() == null ? 0 : response.getBody().length);
+                return response;
+            } catch (ResourceAccessException e) {
+                log.warn("[PrintRender] type={} attempt={} outcome=transport_failure elapsedMs={} causeType={}",
+                        docType, attempt, (System.nanoTime() - start) / 1_000_000,
+                        e.getMostSpecificCause().getClass().getSimpleName());
+                // Do not double the request budget when rendering itself timed out.
+                if (attempt == 2 || !(e.getMostSpecificCause() instanceof org.apache.hc.core5.http.NoHttpResponseException
+                        || e.getMostSpecificCause() instanceof java.net.SocketException)) throw e;
+            }
+        }
+        throw new IllegalStateException("Unreachable PDF retry state");
     }
 
     // ==================== Payload builders ====================
