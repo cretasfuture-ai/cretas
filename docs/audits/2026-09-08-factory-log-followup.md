@@ -22,7 +22,8 @@
 - 审计保存使用专用有界线程池：最多 2 个线程、256 个排队任务，拒绝必须留错误日志且不改变业务响应。数据库当前审计 945 行、含索引 1080 kB；服务器当前可用磁盘约 31 GB。业务审计记录不自动删除；网关文件按上述策略轮转。异步流的初次返回标记为 async_dispatch，不冒充长任务最终完成。
 
 - Python 17 项通过，包含真实 WSL PostgreSQL TEMP 表重放实际 ETL/writer SQL，证明两次同步后 ID/事实引用不变、writer 不改回旧来源键、另一个工厂不变；事务最后回滚。
-- Java 请求日志、业务失败、调度、打印及前批供料回归纳入最终统一 release 构建。最终结果以本地构建及发布回执为准，不能把尚未执行的步骤视为通过。
+- Java 最终统一 release 构建通过 115 项测试，失败/错误/跳过均 0；覆盖请求日志、业务失败、调度、打印及前批供料回归。build commit `cbc7c89d71f941819341c8aeec76f68f105dde1c`，JAR SHA-256 `f9ab5fc5ffea93daa6463058caafbdc3c60ce2bbea6f358dcb61f291239bc6eb`。Web 17 项测试和可信构建通过；Python 17 项通过。
+- 额外脚本检查 69 项：66 通过、2 失败、1 跳过。失败为既有 CI composite-action 断言和 Git Bash 互斥锁测试；本批未改其脚本/workflow，互斥锁同一测试在 WSL Linux 通过。Git Bash 缺 flock 的孤儿锁场景未测到。不得把这轮脚本检查称为全绿。
 - GitHub 托管 CI 因付款/额度原因未启动，失败 job 没有执行步骤；这不是测试通过证据。
 - 本地证据目录：`D:/Temp/cretas-log-audit-20260908/`。原始业务数据和认证资料不进仓库。
 

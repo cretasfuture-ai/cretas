@@ -5,9 +5,7 @@
 
 ## 在飞任务
 
-- `FIX-FACTORY-LOG-DETAIL-20260908` — `in-progress` — Owner: Codex current task — Base `a62d9e6d8c2b419adcae77e33b78653db5c8eb07` — 用户 go 修复日志缺陷并完善审计；请求结果/脱敏、打印、定时任务及 Python 错误。验收：对应 Java 测试随 release build、Python pytest、网关日志读回。
 
-- `FIX-FACTORY-STOCK-SCOPE-20260908` — `review` — Owner: Codex current task — Base `a62d9e6d8c2b419adcae77e33b78653db5c8eb07` — 09-07/08 日志核查及供料误选修复；Java 69/Web 17 通过，Web 构建成功。F006 单计划已纠正并回读库存恢复，批次未变；代码未部署。详情见当日审计。
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
@@ -55,12 +53,7 @@
 
 ## Scope 锁地图
 
-- `FIX-FACTORY-LOG-DETAIL-20260908`：log_detail Owner 仅 CorrelationIdFilter、LoggableAspect、新请求审计/脱敏 helper 及对应测试；协调者负责 PrintController/目标测试、定时任务/Python 精确文件待诊断后补锁、网关日志配置。无 Entity/Repository/权限改动。
-- `FIX-FACTORY-LOG-DETAIL-20260908-SCHED`：scheduler_fix Owner 仅 engine/DynamicSchedulerService.java 及 engine 对应目标测试；协调者拥有 smartbi/external_benchmarks/service.py、对应 Python 测试。沿用父任务 Base；Java 验收并入最终 release build，Python pytest。
-- `FIX-FACTORY-LOG-DETAIL-20260908-ETL`：协调者仅 smartbi/gold/restaurant/restaurant_ops_etl.py 与身份衔接测试；保留 ingredient_id，仅处理已确认 mock_keruyun 同名同单位来源键衔接，不改原料/事实表；pytest 含幂等和 writer 回归。
-- `FIX-FACTORY-LOG-DETAIL-20260908-DIFF`：log_detail Owner 可补 OperationLogServiceImpl.recordDiff 调用线程捕获身份并经代理异步保存及目标测试；其余服务方法/Repository/Entity 不改。
 
-- `FIX-FACTORY-STOCK-SCOPE-20260908`：仅计划创建供料选择、领料不足消息、可用量归属提示及对应 Java/Web 测试；文件清单见当日审计。来源单据/BOM/权限/Entity/Repository 不改；F006 单计划修正先核空活动、原值与租户。
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、ACTIVE 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。
