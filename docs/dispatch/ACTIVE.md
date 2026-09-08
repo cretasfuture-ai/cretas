@@ -49,10 +49,9 @@
 - `OPS-PURGED-TENANT-SCHEMA-STILL-HAS-LIVE-ROWS-20260907` — `blocked` — Owner: 等 Steve — `tenant_purge_68` 182 表 / **347,661 行**(刻意的删前备份, 迁移注释写「确认无碍后手动 DROP」)。dump 已验证可还原(182/347,661 逐位相同), ⚠️ 依赖外部前提(pgvector 镜像 + 先建扩展)。⛔ 未 DROP、未删 dump。
 - `OPS-BACKUP-RESTORE-NEVER-VERIFIED-20260907` — `queued` — Owner: Line C — prod `backup-db.sh` 唯一「验证」是 `[ ! -s ]`(只判非空) ⇒ 与今晚那份**还原不出来**的 dump 同样是绿的。**RESTORE_EVER_VERIFIED=no**。⚠️ 仓 2062 / prod 5571 已漂移 ⇒ 判据只能取部署那一份。
 - `OPS-FLYWAY-HISTORY-TABLE-WAS-HAND-EDITED-20260907` — `queued` — Owner: Line C — prod `flyway_schema_history` 有 **9 个重复 version**(同一版本两行 success)且 **5 个 version 的文件已不存在**。Flyway 不会重复应用同一版本 ⇒ **台账本身被人手工动过**。⚠️ checksum 691/691 **相符, MISMATCH=0** ⇒ 「编辑已应用迁移」有书面许可但**零实际使用**。⛔ 只登记, 不动 prod 台账。
-- `OPS-MERGED-IS-NOT-DEPLOYED-20260907` — `queued` — Owner: organizer — 🔴 prod Flyway 停在 `20261101.37`(2026-09-06), 而 main 已到 `_41` ⇒ **今天合的 4 支迁移一支都没上线**(4 条零约束索引 / 两处唯一性推回写时**在 prod 上尚未生效**)。⚠️ 台账记的是 PR 状态, 而 **MERGED ≠ prod 生效** —— 这个差在今天的账里看不见, 需要一个字段。
 - `CI-WORKTREE-PATH-CAN-BE-A-LIE-20260907` — `queued` — Owner: organizer — 系统告知的 worktree 路径可能是**主仓里的空目录**(无 `.git`、`git worktree list` 里没有) ⇒ 在其中跑 git 会操作**主检出**(别人的分支 + 别人未提交的改动)。本轮 Line C 因此**整轮零 commit**(正确结果)。⇒ 开工前三验: `.git` 存在 / `worktree list` 命中 / 当前分支名。
 - `OPS-MUTATION-GUARD-HAS-NO-CALLER-20260907` — `queued` — Owner: Line C — `scripts/mutation-guard.sh` 可执行但全仓 **0 调用点** ⇒ 那条 memory 的「已机制化」前提已变。⛔ 判据不是 `grep -r mutation-guard`。详见 `archive/2026-09-07-new-tickets-detail.md`
-- `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务(`codex/ci-wsl-testenv-followup-20260907`) — 托管池 09-07 13:46 起停止派发。12 个写死 `ubuntu-latest` 里 7 个只能手动 dispatch(无影响); 真缺口 = PR 自动 3 个 + 定时 3 个。🔴 定时那 3 个更危险: 派不出去 = 完全无信号。详见 `archive/2026-09-07-new-tickets-detail.md`
+- `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务 — 自建 `windows-wsl-ci` 已恢复，#758 的 Java/Web/扫描真实运行通过；Ops/扫描两条已接入统一路由。托管 billing 未调整，剩余定时及 Docker 专用工作流仍待迁移核验；不得将 runner online 等同于全部工作流可运行。证据：`archive/2026-09-09-ci-recovery.md`。
 
 ## Scope 锁地图
 
