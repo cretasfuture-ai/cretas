@@ -49,6 +49,8 @@
 
 成功证据已保存于本地 `repair-verification.json`、`repair-receipt.txt` 和 `availability-before/after.json`。首次失败回滚另存 `repair-rejected-rolled-back.txt`，不作为成功证据。
 
+独立审查补验：精确回读 F006 批次 10930，实际产量、良品/次品、结束时间、所有成本、工时和出成率均为空，更新时间仍为创建时刻；证据为 `batch-final.result.txt`。本次事务门禁未逐项检查全部成本字段，该缺口通过此次只读回读补证，不能据此宣称原 SQL 已包含这些字段门禁。
+
 ## 其他发现与处理边界
 
 | 时间/类别 | 事实 | 状态 |
