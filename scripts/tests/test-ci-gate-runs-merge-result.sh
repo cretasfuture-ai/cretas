@@ -209,8 +209,13 @@ echo "READING: HEAD_SHA_PINS=$PINS INLINE_MERGE_STEPS=$CALLS FETCH_DEPTH0=$DEPTH
 #    checkout 的是 PR **head** ⇒ head 不含那个目录的 PR(旧分支)这一步必死 9 秒红, 且长得像
 #    「CI 没测出问题」。实测炸掉了当时所有在飞 PR 的 Java 闸。
 # ⚠️ 先剥整行注释再查 —— 本文件与 workflow 的说明文字里都写着这个字符串(闸把自己的注释数进去, 又一次)。
-LOCAL_ACTION_REFS=$(sed -E 's/^[[:space:]]*#.*$//' "$GATE" "$NIGHTLY" \
-    | grep -cE 'uses:[[:space:]]*\./\.github/actions/' || true)
+LOCAL_ACTION_PATTERN='^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*\./\.github/actions/'
+# Anchor the YAML key: locale-dependent sed dot matching can leave UTF-8 comments
+# intact on Windows. A comment must never count as executable configuration.
+LOCAL_ACTION_REFS=$(cat "$GATE" "$NIGHTLY" | grep -cE "$LOCAL_ACTION_PATTERN" || true)
+COMMENT_REFS=$(printf '%s\n' '  # 🔴 uses: ./.github/actions/example' | grep -cE "$LOCAL_ACTION_PATTERN" || true)
+REAL_REFS=$(printf '%s\n' '  - uses: ./.github/actions/example' '    uses: ./.github/actions/example' | grep -cE "$LOCAL_ACTION_PATTERN" || true)
+[ "$COMMENT_REFS" -eq 0 ] && [ "$REAL_REFS" -eq 2 ] || fail "local action matcher lost comment/real-key controls"
 echo "READING: LOCAL_COMPOSITE_ACTION_REFS=$LOCAL_ACTION_REFS (必须 0)"
 [ "$LOCAL_ACTION_REFS" -eq 0 ] \
     || fail "B: 又出现了 \`uses: ./.github/actions/…\` —— head 不含该目录的 PR 会 9 秒红(P0 回归)"

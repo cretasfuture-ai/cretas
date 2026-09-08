@@ -24,9 +24,10 @@
 
 # _rjp_major <java可执行路径> -> 主版本号, 读不出来就是空
 _rjp_major() {
-    local java_cmd=$1 raw
+    local java_cmd=$1 raw version_output
     [ -x "$java_cmd" ] || return 1
-    raw=$("$java_cmd" -version 2>&1 | sed -nE '1s/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
+    version_output=$("$java_cmd" -version 2>&1) || return 1
+    raw=$(sed -nE 's/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p' <<< "$version_output")
     case "$raw" in ''|*[!0-9]*) return 1 ;; esac
     printf '%s' "$raw"
 }

@@ -7,6 +7,10 @@
 
 
 
+
+
+
+
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 16+17：`SupplierDetailDrawer.vue` 价格字段三处（关系表单/内联规格/独立规格）；`required` 是装饰，校验手写在 `saveRelation`/`savePurchaseSpec`。Owner 裁定：新增必填，编辑仅价格被改动时拦（存量 4 条空价）。未核后端/导入路径，需改后端 → 🔒 回协调者。
@@ -46,9 +50,8 @@
 - `OPS-BACKUP-RESTORE-NEVER-VERIFIED-20260907` — `queued` — Owner: Line C — prod `backup-db.sh` 唯一「验证」是 `[ ! -s ]`(只判非空) ⇒ 与今晚那份**还原不出来**的 dump 同样是绿的。**RESTORE_EVER_VERIFIED=no**。⚠️ 仓 2062 / prod 5571 已漂移 ⇒ 判据只能取部署那一份。
 - `OPS-FLYWAY-HISTORY-TABLE-WAS-HAND-EDITED-20260907` — `queued` — Owner: Line C — prod `flyway_schema_history` 有 **9 个重复 version**(同一版本两行 success)且 **5 个 version 的文件已不存在**。Flyway 不会重复应用同一版本 ⇒ **台账本身被人手工动过**。⚠️ checksum 691/691 **相符, MISMATCH=0** ⇒ 「编辑已应用迁移」有书面许可但**零实际使用**。⛔ 只登记, 不动 prod 台账。
 - `CI-WORKTREE-PATH-CAN-BE-A-LIE-20260907` — `queued` — Owner: organizer — 系统告知的 worktree 路径可能是**主仓里的空目录**(无 `.git`、`git worktree list` 里没有) ⇒ 在其中跑 git 会操作**主检出**(别人的分支 + 别人未提交的改动)。本轮 Line C 因此**整轮零 commit**(正确结果)。⇒ 开工前三验: `.git` 存在 / `worktree list` 命中 / 当前分支名。
-- `CI-PYTHON-PG-TESTS-WOKE-UP-AND-FAIL-20260907` — `queued` — Owner: 迁移任务 — 9 个此前恒 skip 的 python 用例开始真跑并全红。✅ 第 9 个(3.10 `ExceptionGroup`)已由 **#748** 修掉(passed 9637→9638 / failed 3→2)。剩 8 个 `InvalidPasswordError smartbi_user`: 3 文件硬编码已废弃的 `smartbi_pass`, `python-gate.yml` 给 `SMARTBI_PG_DSN` 次数=0。
 - `OPS-MUTATION-GUARD-HAS-NO-CALLER-20260907` — `queued` — Owner: Line C — `scripts/mutation-guard.sh` 可执行但全仓 **0 调用点** ⇒ 那条 memory 的「已机制化」前提已变。⛔ 判据不是 `grep -r mutation-guard`。详见 `archive/2026-09-07-new-tickets-detail.md`
-- `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `blocked` — Owner: 迁移任务 — 🔴 **两条车道同时断**: 托管池 09-07 13:46 停派发, 自建 `windows-wsl-ci` 09-09 00:0x 起 `offline/busy=false`(真掉线非重连态) ⇒ 任何 PR 都过不了闸, job 停在 `queued`。原议题详见 `archive/2026-09-07-new-tickets-detail.md`。
+- `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务 — 自建 `windows-wsl-ci` 已恢复，#758 的 Java/Web/扫描真实运行通过；Ops/扫描两条已接入统一路由。托管 billing 未调整，剩余定时及 Docker 专用工作流仍待迁移核验；不得将 runner online 等同于全部工作流可运行。证据：`archive/2026-09-09-ci-recovery.md`。
 
 ## Scope 锁地图
 
@@ -74,6 +77,8 @@
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
 
 ## 维护规则
+
+
 
 - 只记当前在飞（`queued`/`claimed`/`in-progress`/`review`/`blocked`）；`merged`/`done` 立即移入带日期的 `archive/`，同一 commit 释放 scope 锁。
 - **每条 ≤ 300 字**（含缩进续行）：ID、状态、Owner、Base SHA、一句话目标与阻塞点。判据读数、终审记录、增量日志一律写 `archive/<日期>-*.md` 并链接，⛔ 不在本文件开 `###` 小节。全文 ≤ 30,000 bytes。

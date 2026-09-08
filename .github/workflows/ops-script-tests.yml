@@ -22,6 +22,7 @@ on:
       - 'scripts/**'
       - 'scripts/tests/**'
       - 'scripts/ci/run-script-tests.sh'
+      - 'scripts/ci/run-with-test-postgres.sh'
       - 'scripts/tests/known-failing.txt'
       - 'scripts/cron/**'
       - 'scripts/check-soft-delete-orphans.sh'
@@ -90,7 +91,7 @@ jobs:
     # ⛔ 字面量。`${{ vars.X }}` 在 `runs-on` 里求值为**空**(job 被派成 ubuntu-latest
     #    而不报错) —— 已逐条排除 fork/visibility/授权/时序, 那是能力边界不是配错。
     #    见 .claude/rules/ci-runner-routing.md。
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cretas]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -116,12 +117,17 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Prove the release JDK landed
         run: |
           set -euo pipefail
           echo "JAVA_HOME=$JAVA_HOME"
           "$JAVA_HOME/bin/java" -version
-          major=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -nE '1s/.*version "([0-9]+).*/\1/p')
+          # JAVA_TOOL_OPTIONS emits a preamble before the version line.
+          major=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\1/p')
           echo "JAVA_MAJOR=$major"
           # ⛔ 只断言下限, 不钉死 21 —— 装了更新的版本不该把这一步弄红。
           [ "$major" -ge 21 ]
@@ -147,4 +153,9 @@ jobs:
 
       # ⛔ 没有 `|| true`、没有管道尾 tail —— runner 的 rc 就是这一步的 rc。
       - name: Run scripts/tests/*.sh
+        env:
+          CRETAS_BASELINE_NATIVE_PG: '1'
         run: bash scripts/ci/run-script-tests.sh
+
+      - name: Verify isolated test PostgreSQL lifecycle
+        run: python3 scripts/tests/test_ci_postgres_wrapper.py

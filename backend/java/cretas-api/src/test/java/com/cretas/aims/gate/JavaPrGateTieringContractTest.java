@@ -55,12 +55,19 @@ class JavaPrGateTieringContractTest {
                 .containsSubsequence("postgres-reversal-concurrency:",
                         "ref: ${{ github.event.pull_request.head.sha }}")
                 .contains("postgres-reversal-concurrency:")
-                .contains("CRETAS_WORKFLOW_PG_VERIFY=true")
-                .contains("CRETAS_WORKFLOW_PG_URL=jdbc:postgresql://localhost:5432/$DB")
-                .contains("cretas_workflow_verify_${suffix}")
+                .contains("bash \"$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh\" \"$MVN\" -B test")
                 .contains("-Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT")
-                .contains("runner 缺少 psql；不能把跳过当通过")
-                .contains("dropdb --if-exists --force \"$CRETAS_WORKFLOW_PG_DB\"");
+                .doesNotContain("localhost:5432/$DB");
+
+        assertThat(read(REPO_ROOT.resolve("scripts/ci/run-with-test-postgres.sh")))
+                .contains("initdb -D \"$cluster_root/data\"")
+                .contains("CRETAS_WORKFLOW_PG_VERIFY=true")
+                .contains("CRETAS_WORKFLOW_PG_URL=\"jdbc:postgresql://127.0.0.1:$port/$database\"")
+                .contains("database=cretas_workflow_verify_test")
+                .contains("Missing CI database tool:")
+                .contains("trap cleanup EXIT")
+                .contains("pg_ctl -D \"$cluster_root/data\" -m fast -w stop")
+                .contains("exit \"$result\"");
 
         assertThat(workflow)
                 .as("fast gates fail directly; the full-suite failure baseline must not mask them")

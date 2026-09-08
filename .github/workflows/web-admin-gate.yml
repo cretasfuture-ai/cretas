@@ -240,7 +240,9 @@ jobs:
       # 只跑单测。build / vue-tsc 仍留在 ci.yml 的 full_audit 里 ——
       # 本 workflow 的目的是让「套件绿」重新成为可信信号, 不是把整轮审计搬到每次 push。
       - name: Vitest unit tests
-        run: npm test
+        # WSL reports 16 CPUs while the isolated runner has a six-CPU cgroup quota.
+        # Bound worker contention without raising timeouts or excluding tests.
+        run: npm test -- --maxWorkers=2
 
       # 2026-08-01 加入。此前「web-admin 有没有被检查」由**三处**决定:
       #   ci.yml 的 full_audit (workflow_dispatch 手动) / 本 workflow (只跑 vitest) /

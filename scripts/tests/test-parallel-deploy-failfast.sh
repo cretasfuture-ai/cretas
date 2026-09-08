@@ -14,6 +14,10 @@
 # Everything runs against stub child scripts; no build, no ssh, no production.
 set -euo pipefail
 
+# WSL wall time can be corrected while a test is running. Measure durations on
+# the monotonic clock without relaxing the cancellation or completion bounds.
+monotonic_seconds() { python3 -c 'import time; print(time.monotonic_ns() // 1000000000)'; }
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 PARALLEL_DEPLOY="$ROOT_DIR/scripts/deploy/deploy-cretas-parallel.sh"
 TMP_ROOT=$(mktemp -d)
@@ -146,13 +150,13 @@ ok_stub() {
 # ============================================== 1. Java fails, Web still safe
 repo=$(make_fixture java-fails-web-reversible "$(fast_fail_stub java)" "$(reversible_stub web)")
 log=$(run_log_for "$repo")
-started=$(date +%s)
+started=$(monotonic_seconds)
 start_case "$repo"
 cancel_at=$(seconds_until "$log" 'cancelling the still-reversible Web deployment' "$REACTION_BUDGET")
 set +e
 wait "$CASE_PID"; rc=$?
 set -e
-elapsed=$(( $(date +%s) - started ))
+elapsed=$(( $(monotonic_seconds) - started ))
 
 [ "$cancel_at" -ge 0 ] || fail "Java failure never cancelled the reversible Web deploy within ${REACTION_BUDGET}s: $(cat "$log")"
 [ "$elapsed" -lt "$SLOW_SECONDS" ] \
@@ -168,13 +172,13 @@ echo "  case 1 (Java fails, Web reversible): cancelled at ${cancel_at}s, total $
 # ============================================== 2. Web fails, Java still safe
 repo=$(make_fixture web-fails-java-reversible "$(reversible_stub java)" "$(fast_fail_stub web)")
 log=$(run_log_for "$repo")
-started=$(date +%s)
+started=$(monotonic_seconds)
 start_case "$repo"
 cancel_at=$(seconds_until "$log" 'cancelling the still-reversible Java deployment' "$REACTION_BUDGET")
 set +e
 wait "$CASE_PID"; rc=$?
 set -e
-elapsed=$(( $(date +%s) - started ))
+elapsed=$(( $(monotonic_seconds) - started ))
 
 [ "$cancel_at" -ge 0 ] || fail "Web failure never cancelled the reversible Java deploy within ${REACTION_BUDGET}s: $(cat "$log")"
 [ "$elapsed" -lt "$SLOW_SECONDS" ] \
@@ -187,13 +191,13 @@ echo "  case 2 (Web fails, Java reversible): cancelled at ${cancel_at}s, total $
 # ======================= 3. Java fails, Web already inside the atomic swap
 repo=$(make_fixture java-fails-web-swapping "$(fast_fail_stub java)" "$(irreversible_stub web "$WEB_PONR_LINE")")
 log=$(run_log_for "$repo")
-started=$(date +%s)
+started=$(monotonic_seconds)
 start_case "$repo"
 alert_at=$(seconds_until "$log" '半上线风险' "$REACTION_BUDGET")
 set +e
 wait "$CASE_PID"; rc=$?
 set -e
-elapsed=$(( $(date +%s) - started ))
+elapsed=$(( $(monotonic_seconds) - started ))
 
 [ "$alert_at" -ge 0 ] \
     || fail "uncancellable Web deploy produced no alert within ${REACTION_BUDGET}s: $(cat "$log")"
@@ -213,13 +217,13 @@ echo "  case 3 (Java fails, Web past PONR): alerted at ${alert_at}s, waited ${el
 # ======================= 4. Web fails, Java already inside the blue-green switch
 repo=$(make_fixture web-fails-java-switching "$(irreversible_stub java "$JAVA_PONR_LINE")" "$(fast_fail_stub web)")
 log=$(run_log_for "$repo")
-started=$(date +%s)
+started=$(monotonic_seconds)
 start_case "$repo"
 alert_at=$(seconds_until "$log" '半上线风险' "$REACTION_BUDGET")
 set +e
 wait "$CASE_PID"; rc=$?
 set -e
-elapsed=$(( $(date +%s) - started ))
+elapsed=$(( $(monotonic_seconds) - started ))
 
 [ "$alert_at" -ge 0 ] \
     || fail "uncancellable Java deploy produced no alert within ${REACTION_BUDGET}s: $(cat "$log")"
@@ -234,12 +238,12 @@ echo "  case 4 (Web fails, Java past PONR): alerted at ${alert_at}s, waited ${el
 # ================================================ 5. Both succeed, unchanged
 repo=$(make_fixture both-ok "$(ok_stub)" "$(ok_stub)")
 log=$(run_log_for "$repo")
-started=$(date +%s)
+started=$(monotonic_seconds)
 start_case "$repo"
 set +e
 wait "$CASE_PID"; rc=$?
 set -e
-elapsed=$(( $(date +%s) - started ))
+elapsed=$(( $(monotonic_seconds) - started ))
 
 [ "$rc" -eq 0 ] || fail "both-success run failed: $(cat "$log")"
 grep -Fq 'Parallel production release completed' "$log" || fail "success receipt missing"

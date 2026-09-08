@@ -10,6 +10,13 @@
  */
 import { beforeEach, afterEach } from 'vitest';
 import { enableAutoUnmount } from '@vue/test-utils';
+import { installNonDecreasingClock } from './helpers/nonDecreasingClock';
+
+// WSL can correct wall time backwards by about one second. VTU timestamps a
+// synthetic event with Date.now() + 1; Vue discards it when that value predates
+// the listener. Keep the test process clock nondecreasing without changing OS
+// time, event handlers or assertions. Explicit vi fake clocks still replace Date.
+installNonDecreasingClock(Date);
 
 // 每个 spec 挂载出来的组件在用例结束时自动卸载。
 //

@@ -1,0 +1,18 @@
+# CI recovery closeout
+
+Task `FIX-CI-RECOVERY-20260909`, owner Codex, base `83c0e2a2023487c3033d757d7912f58d3ef01d21`, PR #758.
+
+This closeout is included in the final candidate commit and takes effect when the PR merges. Before merge the PR remains the sole writer; final CI checks must be read back separately.
+
+- Recovered the existing Windows WSL keepalive and verified real jobs on organization runner `windows-wsl-ci`, preserving filesystem, resource and production-network isolation.
+- Fixed Windows comment matching and PID fixture semantics, monotonic timing, Node/npm preparation and relocated Python venv creation.
+- Adopted the Ops and soft-delete scan checks through the shared runner registry. Hosted billing was not changed.
+- Resolved `CI-PYTHON-PG-TESTS-WOKE-UP-AND-FAIL-20260907` through a fresh local PostgreSQL cluster per command, with cleanup and failure-code preservation. Local 39 PostgreSQL tests and real lifecycle controls passed. PR Python Gate run `34259128685` reported 9,650 passed and only the known registry audit-date failure; no database authentication errors remained.
+- User explicitly deferred the AI quota review on September 9. Its failing test is retained; this closeout does not claim all CI is green or update the registry date.
+- Baseline replay now supports the isolated native PostgreSQL cluster in Ops CI, preserving the Docker entry and five-dimension assertions. All expected counts matched; invalid SQL and a tampered index-count header were detected.
+- Included follow-up `FIX-CI-RECOVERY-20260909-BASELINE`: JDK preamble parsing, updated Java CI contract, and bounded Web workers. Final CI results must be verified before merge; WSL clock backsteps remain under diagnosis, with original clocksource and guest NTP restored after unsuccessful experiments.
+- Closed implementation scope `FIX-CI-RECOVERY-20260909-CLOCK`: user deferred Windows clock adjustment; Web tests stabilize only their own wall-clock reader. Real Vue negative/positive controls, explicit fake dates and worker reuse remain covered. Full Web run passed 4,691 tests with 5 existing skips; final five clock controls and typecheck passed. No production clock or event handler change.
+- Closed `FIX-CI-RECOVERY-20260909-JDK`: shared release preflight and test helper parse the version after JVM option preambles. Registered regression keeps JDK 17 rejected and 21/25 accepted; real JDK with the CI options passed the release-artifact target tests. No remote deployment was performed.
+- Docker-dependent lanes, other migration drafts, production credentials and business data were not changed. Remaining migration tickets stay in ACTIVE.
+
+Detailed evidence and validation boundaries: `docs/ops/2026-09-09-ci-recovery.md`; local evidence directory `D:/Temp/cretas-ci-recovery-20260909/`.

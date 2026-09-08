@@ -21,6 +21,7 @@ on:
       - '.github/workflows/java-gate-pr.yml'
       - '.github/workflows/java-full-nightly.yml'
       - 'scripts/ci/java-test-ratchet.py'
+      - 'scripts/ci/run-with-test-postgres.sh'
 
 concurrency:
   group: java-pr-gate-${{ github.event.pull_request.number }}
@@ -227,25 +228,6 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Create one disposable PostgreSQL database for this job
-        run: |
-          set -euo pipefail
-          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
-          command -v psql >/dev/null 2>&1 || {
-            echo "::error title=PostgreSQL 并发闸没量到::runner 缺少 psql；不能把跳过当通过。"
-            exit 1
-          }
-          suffix=$(printf '%s_%s_%s' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "${RUNNER_NAME:-runner}" \
-            | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_' | cut -c1-34)
-          DB="cretas_workflow_verify_${suffix}"
-          dropdb --if-exists --force "$DB"
-          createdb -O cretas_user "$DB"
-          echo "CRETAS_WORKFLOW_PG_DB=$DB" >> "$GITHUB_ENV"
-          echo "CRETAS_WORKFLOW_PG_VERIFY=true" >> "$GITHUB_ENV"
-          echo "CRETAS_WORKFLOW_PG_URL=jdbc:postgresql://localhost:5432/$DB" >> "$GITHUB_ENV"
-          echo "CRETAS_WORKFLOW_PG_USER=cretas_user" >> "$GITHUB_ENV"
-          echo "CRETAS_WORKFLOW_PG_PASSWORD=" >> "$GITHUB_ENV"
-
       - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api
         env:
@@ -253,19 +235,10 @@ jobs:
         run: |
           set -euo pipefail
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
-          "$MVN" -B test \
+          bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" "$MVN" -B test \
             -Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest \
             -Dspring.profiles.active=test \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
-
-      - name: Drop the disposable PostgreSQL database
-        if: always()
-        run: |
-          set -euo pipefail
-          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
-          if [ -n "${CRETAS_WORKFLOW_PG_DB:-}" ] && command -v dropdb >/dev/null 2>&1; then
-            dropdb --if-exists --force "$CRETAS_WORKFLOW_PG_DB"
-          fi
 
   final-full-suite:
     if: ${{ contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
