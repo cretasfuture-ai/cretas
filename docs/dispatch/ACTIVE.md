@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-- `FIX-CI-RECOVERY-20260909` — `in-progress` — Owner: Codex current task — Base `83c0e2a2023487c3033d757d7912f58d3ef01d21` — 用户要求解决 CI 红灯、排队及两项脚本失败；恢复 WSL 保活、核实组织级 runner、接入 Linux 可执行检查并真实回归。原迁移任务已停止，保留其刷新工具草稿。
 
 
 
@@ -49,7 +48,6 @@
 - `OPS-FLYWAY-HISTORY-TABLE-WAS-HAND-EDITED-20260907` — `queued` — Owner: Line C — prod `flyway_schema_history` 有 **9 个重复 version**(同一版本两行 success)且 **5 个 version 的文件已不存在**。Flyway 不会重复应用同一版本 ⇒ **台账本身被人手工动过**。⚠️ checksum 691/691 **相符, MISMATCH=0** ⇒ 「编辑已应用迁移」有书面许可但**零实际使用**。⛔ 只登记, 不动 prod 台账。
 - `OPS-MERGED-IS-NOT-DEPLOYED-20260907` — `queued` — Owner: organizer — 🔴 prod Flyway 停在 `20261101.37`(2026-09-06), 而 main 已到 `_41` ⇒ **今天合的 4 支迁移一支都没上线**(4 条零约束索引 / 两处唯一性推回写时**在 prod 上尚未生效**)。⚠️ 台账记的是 PR 状态, 而 **MERGED ≠ prod 生效** —— 这个差在今天的账里看不见, 需要一个字段。
 - `CI-WORKTREE-PATH-CAN-BE-A-LIE-20260907` — `queued` — Owner: organizer — 系统告知的 worktree 路径可能是**主仓里的空目录**(无 `.git`、`git worktree list` 里没有) ⇒ 在其中跑 git 会操作**主检出**(别人的分支 + 别人未提交的改动)。本轮 Line C 因此**整轮零 commit**(正确结果)。⇒ 开工前三验: `.git` 存在 / `worktree list` 命中 / 当前分支名。
-- `CI-PYTHON-PG-TESTS-WOKE-UP-AND-FAIL-20260907` — `queued` — Owner: 迁移任务 — 🔴 WSL runner 装上 PG17 后, 9 个此前恒 skip 的 python 用例开始真跑并全红 ⇒ python 闸对每个 PR 都红。阻塞: CI 需配 `SMARTBI_PG_DSN` + 3.11。详见 `archive/2026-09-07-new-tickets-detail.md`
 - `OPS-MUTATION-GUARD-HAS-NO-CALLER-20260907` — `queued` — Owner: Line C — `scripts/mutation-guard.sh` 可执行但全仓 **0 调用点** ⇒ 那条 memory 的「已机制化」前提已变。⛔ 判据不是 `grep -r mutation-guard`。详见 `archive/2026-09-07-new-tickets-detail.md`
 - `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务(`codex/ci-wsl-testenv-followup-20260907`) — 托管池 09-07 13:46 起停止派发。12 个写死 `ubuntu-latest` 里 7 个只能手动 dispatch(无影响); 真缺口 = PR 自动 3 个 + 定时 3 个。🔴 定时那 3 个更危险: 派不出去 = 完全无信号。详见 `archive/2026-09-07-new-tickets-detail.md`
 
@@ -78,9 +76,7 @@
 
 ## 维护规则
 
-- `FIX-CI-RECOVERY-20260909-PG` scope：scripts/ci/run-with-test-postgres.sh、其独立 PostgreSQL 清理/失败传播测试；test-parallel-deploy-failfast.sh 单调计时修复；Python/Java CI 使用隔离临时库。Owner 与 Base 同父任务；不使用真实业务库。
 
-- `FIX-CI-RECOVERY-20260909` scope：scripts/ci/switch_ci_runner.py、scripts/tests/test-ci-gate-runs-merge-result.sh、test-deploy-mutex-coverage.sh、相关测试；.github/workflows 中本批 CI 路由/依赖修复；Windows WSL 保活及专用测试数据库配置。验收：目标双 shell 测试、路由检查、真实 GitHub jobs；不改生产凭据/数据或放宽测试隔离。
 
 - 只记当前在飞（`queued`/`claimed`/`in-progress`/`review`/`blocked`）；`merged`/`done` 立即移入带日期的 `archive/`，同一 commit 释放 scope 锁。
 - **每条 ≤ 300 字**（含缩进续行）：ID、状态、Owner、Base SHA、一句话目标与阻塞点。判据读数、终审记录、增量日志一律写 `archive/<日期>-*.md` 并链接，⛔ 不在本文件开 `###` 小节。全文 ≤ 30,000 bytes。

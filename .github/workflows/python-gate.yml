@@ -117,13 +117,9 @@ jobs:
           cache: 'pip'
           cache-dependency-path: backend/python/requirements.txt
 
-      # 🔴 自建 runner 上跑的**不是 3.10** —— 本文件顶部那句
-      #    「本机 py3.11 跑绿 ≠ CI py3.10 跑绿」在这里同样成立, 方向相反:
-      #    落到自建时这道闸测的是另一个小版本。
-      # ⇒ 所以这一步**把版本打出来**, 并只断言下限(≥3.10)。
-      #    ⛔ 不允许静默用一个更老的版本跑 —— 那样绿了也不算数。
-      # ⚠️ 自建只是额度耗尽时的兜底; 额度恢复切回托管, 版本就回到 3.10。
-      #    「这一轮的读数是在哪个解释器上量的」必须能从日志里读出来。
+      # 2026-09-09：托管和 WSL 均优先使用 3.11；日志保留实际版本。
+      # relocated CPython 必须从真实路径创建 venv，否则 pyvenv.cfg 的 home
+      # 会指向 /usr/local/bin，导致虚拟环境找不到 encodings 等标准库。
       - name: Use system Python in a venv (self-hosted)
         if: runner.environment != 'github-hosted'
         # ⛔ 不往系统 Python 里装包, 而是**建 venv**, 两个理由:
@@ -161,7 +157,7 @@ jobs:
         # 🔴 `torch==2.4.1+cpu` 的 `+cpu` 是 **Linux 专用**的本地版本标识, macOS arm64
         #    上没有这个变体 —— 实测 `No matching distribution found for torch==2.4.1+cpu`,
         #    而同一次报错列出的可用版本里 **plain 2.4.1 是有的**。
-        # ⇒ 自建上把 `+cpu` 剥掉: **torch 版本不变**(仍是 2.4.1), 只是换成该平台的 build。
+        # ⇒ 仅 macOS 把 `+cpu` 剥掉；Linux 保留 CPU build，版本仍是 2.4.1。
         #    ⛔ 不跳过 torch —— 闸覆盖的目录里 `smartbi/services/intent_classifier.py`
         #      真的 import 它, 跳过等于悄悄缩小这道闸的覆盖面。
         #    ⚠️ 剥掉哪几行会打进日志, 不做静默改写。

@@ -15,6 +15,7 @@
 
 ## 验收边界
 
+- PR #758 首轮 Python Gate（commit `27572cba81b04dc642ebe6da411b4c89382f6ba5`，run `34259128685`）实际运行完成：9,650 passed / 1 failed / 166 skipped / 153 deselected / 2 xfailed；唯一失败为 `test_registry_audit_date_is_not_stale`。PostgreSQL 认证错误已消失，未删除任何原有测试。修复 PR 的最终检查须另按最终 head 核验。
 - 初次 WSL 全脚本检查 69 项中 64 通过、4 失败、1 跳过。新增失败分别为 Windows PATH 中的 Docker CLI 误探测、缺 Linux Node.js、系统校时。修复后的目标检查和真实 GitHub 结果另留证据，不能把初次结果写成全绿。
 - AI 注册表仍有真实的定时复审红灯：`_REGISTRY_AUDIT_DATE=2026-08-13` 已过 21 天。需要当前控制台额度/到期日/用完即停证明及活性探针，不通过改日期、缩小测试或伪造余额清除。用户已收到缺失资料询问，其他 CI 修复继续执行。
 - Docker 依赖的 fresh-db / 手动全栈工作流尚未证明可在当前隔离 runner 运行，不能只改 runs-on 或开放生产权限来伪装接入。
