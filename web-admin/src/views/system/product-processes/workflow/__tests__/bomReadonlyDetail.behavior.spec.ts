@@ -379,6 +379,21 @@ describe('只读用户点 BOM 行: 到只读明细, 不到写编辑器', () => {
       .not.toHaveBeenCalled();
   });
 
+  it('Esc 关抽屉, 而不是退出全屏 —— 它不是 el-drawer, 既有那句选择器看不见它', async () => {
+    const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows();
+    const auxRow = wrapper.find(
+      `[data-node-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+    );
+    await auxRow.trigger('click');
+    await flushPromises();
+    expect(vm.bomDetailVisible).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(vm.bomDetailVisible, 'Esc 必须关掉这个抽屉').toBe(false);
+    expect(wrapper.find('[data-testid="bom-detail-panel"]').exists()).toBe(false);
+  });
+
   it('键盘可达: 只读用户按 Enter 同样开明细(行是 role=button)', async () => {
     const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows();
     const auxRow = wrapper.find(

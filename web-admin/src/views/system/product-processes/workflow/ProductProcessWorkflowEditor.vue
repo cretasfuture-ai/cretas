@@ -1999,7 +1999,15 @@ onUnmounted(() => applyImmersiveBodyClass(false));
 
 /** Esc 退出全屏 —— 盖住导航就必须给一条键盘出口。 */
 function onImmersiveEscape(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || !immersive.value) return;
+  if (event.key !== 'Escape') return;
+  // 🔴 只读 BOM 明细抽屉必须**自己**接住这一下: 它刻意不是 el-drawer(原生 div + v-if,
+  //    否则 shallowMount 下槽内容不渲染、断言只能读状态变量), 于是下面那句选择器
+  //    结构上看不见它 —— 不接住的症状是「Esc 退出了全屏, 抽屉还开着」。
+  if (bomDetailVisible.value) {
+    closeBomDetail();
+    return;
+  }
+  if (!immersive.value) return;
   // ⛔ 有弹窗/抽屉开着时不抢 Esc: 那一下是用户要关弹窗, 不是要退全屏。
   if (document.querySelector('.el-dialog__wrapper:not([style*="display: none"]), .el-drawer.open, .el-overlay')) return;
   immersive.value = false;
