@@ -90,3 +90,38 @@
 
 ⚠️ 相关：#745（切回托管）已于 09-07 关闭 —— 它写对了它那一刻，前提变了。
 
+
+## CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909
+
+**同一个 commit（#759 `8326d2a1f2`）跑两次，红的是两组不相交的用例：**
+
+| 第一次 (job 102178699059) | 重跑 (job 102210817075) |
+|---|---|
+| `ReturnBanner.spec.ts:30` | `approvalHub.mount.spec.ts:121` |
+| `ProcessDataTable.inputAvailableStock.spec.ts:124` | `ProcessDataTable.inputSourceRows.spec.ts:146` |
+| `PackagingBindingDialog.spec.ts:216` | `ProcessDataTable.workflowContext.spec.ts:346` |
+| `PackagingBindingDialog.spec.ts:236` | `ProcessDataTable.workflowContext.spec.ts:385` |
+
+两次都是 **3 files / 4 tests failed / 4691 passed** —— 🔴 **数字一模一样，文件一个都不重合。**
+⚠️ 只看「4 failed」和总数会读成「稳定复现」。要把两次的**文件名**摆在一起比才看得出是浮动。
+
+**四格对照**（本地为同机、同 `node_modules`、同全量口径）：
+
+| | 结果 |
+|---|---|
+| 本地 main `3c69b7f49a` 全量 | ✅ 583 passed / 4687 tests, rc=0 |
+| 本地 #759 `8326d2a1f2` 全量 | ✅ 584 passed / 4695 tests, rc=0（精确复现实现线报的数） |
+| CI #759 第一次 | 🔴 A 组 4 红 |
+| CI #759 重跑 | 🔴 B 组 4 红（与 A 不相交） |
+| CI #758（近 main） | ✅ 绿 —— ⚠️ 浮动的闸偶尔全绿是正常的，**这个绿不构成强证据** |
+
+**差异面**：CI 多 worker 并行（`web-admin-gate.yml` 注释里实测 CPU 350%），本地串行。
+失败形状也吻合：3 条是 `expected vi.fn() to be called … Number of calls: 0`，1 条是
+`Cannot call text on an empty DOMWrapper` —— 都是渲染/异步时序类，不是逻辑断言。
+
+⛔ **不要改那些测试去迎合 CI**：它们在 main 和本地都绿，改它们等于把环境问题伪装成代码问题。
+
+📌 这条比它牵出的那个 PR 要紧：**这道闸现在的绿和红都只携带有限信息。**
+2026-09-08 夜它已经让 organizer 先后得出过两个错结论 ——
+先是「#755 带进来的存量」（对照一做就塌），再是「确定性，与 #759 相关」（重跑一次就翻）。
+
