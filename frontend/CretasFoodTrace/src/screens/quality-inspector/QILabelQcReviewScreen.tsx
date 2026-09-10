@@ -379,11 +379,11 @@ function HumanInlineToolbar({
   onDelete: () => void;
 }) {
   if (!annotation.bbox || readOnly) return null;
-  const width = 214;
+  const width = 230;
   const boxCenterX =
     ((annotation.bbox.xMin + annotation.bbox.xMax) / 2) * surface.width;
   const left = clamp(boxCenterX - width / 2, 4, surface.width - width - 4);
-  const preferredTop = annotation.bbox.yMin * surface.height - 44 / viewport.scale;
+  const preferredTop = annotation.bbox.yMin * surface.height - 58 / viewport.scale;
   const top =
     preferredTop >= 4
       ? preferredTop
@@ -441,7 +441,7 @@ function HumanInlineToolbar({
   );
 }
 
-function PhotoCanvas({
+export function PhotoCanvas({
   photo,
   draft,
   referenceBoxes,
@@ -646,12 +646,13 @@ function PhotoCanvas({
   };
 
   return (
-    <GestureDetector gesture={combinedGesture}>
       <View
         style={styles.canvas}
         onLayout={handleLayout}
         testID="qi-label-qc-photo-canvas"
       >
+        <GestureDetector gesture={combinedGesture}>
+        <View style={StyleSheet.absoluteFill}>
         <View
           style={[
             styles.photoSurface,
@@ -720,7 +721,30 @@ function PhotoCanvas({
               }
             />
           ))}
-          {selectedHuman && (
+        </View>
+        </View>
+        </GestureDetector>
+        {/* Toolbar touches must never reach the canvas tap-to-add recognizer. */}
+        {selectedHuman && !readOnly && (
+          <View
+            pointerEvents="box-none"
+            testID="qi-label-qc-toolbar-overlay"
+            style={[
+              styles.photoSurface,
+              {
+                backgroundColor: 'transparent',
+                width: surface.width,
+                height: surface.height,
+                left: surface.left,
+                top: surface.top,
+                transform: [
+                  { translateX: viewport.translateX },
+                  { translateY: viewport.translateY },
+                  { scale: viewport.scale },
+                ],
+              },
+            ]}
+          >
             <HumanInlineToolbar
               annotation={selectedHuman}
               surface={surface}
@@ -729,8 +753,8 @@ function PhotoCanvas({
               onLabel={(label) => onHumanLabel(selectedHuman.key, label)}
               onDelete={() => onDelete(selectedHuman.key)}
             />
-          )}
-        </View>
+          </View>
+        )}
 
         <View style={styles.zoomBadge} pointerEvents="none">
           <Text style={styles.zoomBadgeText}>
@@ -740,7 +764,6 @@ function PhotoCanvas({
           </Text>
         </View>
       </View>
-    </GestureDetector>
   );
 }
 
@@ -1788,8 +1811,9 @@ const styles = StyleSheet.create({
   },
   inlineToolbar: {
     position: 'absolute',
-    height: 40,
+    height: 50,
     flexDirection: 'row',
+    gap: 8,
     alignItems: 'center',
     padding: 3,
     borderRadius: 10,
@@ -1803,7 +1827,8 @@ const styles = StyleSheet.create({
   },
   inlineButton: {
     flex: 1,
-    height: 34,
+    height: 44,
+    minWidth: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 7,
@@ -1811,7 +1836,7 @@ const styles = StyleSheet.create({
   inlineButtonActive: { backgroundColor: '#00A883' },
   inlineButtonText: { fontSize: 11, fontWeight: '700', color: '#29443C' },
   inlineButtonTextActive: { color: '#fff' },
-  inlineDeleteButton: { flex: 0, width: 38, backgroundColor: '#FFF0EE' },
+  inlineDeleteButton: { flex: 0, width: 44, backgroundColor: '#FFF0EE' },
   stickyError: {
     flexDirection: 'row',
     alignItems: 'center',
