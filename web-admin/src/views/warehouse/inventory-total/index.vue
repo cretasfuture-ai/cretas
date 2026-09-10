@@ -20,6 +20,8 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatAmount, fmtQty } from '@/utils/tableFormatters';
+import FinishedGoodsSummary from './FinishedGoodsSummary.vue';
+const inventoryKind = ref('materials');
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -120,7 +122,12 @@ onMounted(() => {
 
 <template>
   <div class="page-wrapper">
-    <el-card class="filter-card" shadow="never">
+    <el-radio-group v-model="inventoryKind" aria-label="库存类型">
+      <el-radio-button value="materials">原料库存</el-radio-button>
+      <el-radio-button value="products">成品库存</el-radio-button>
+    </el-radio-group>
+    <FinishedGoodsSummary v-if="inventoryKind === 'products'" />
+    <el-card v-if="inventoryKind === 'materials'" class="filter-card" shadow="never">
       <template #header>
         <div class="card-header">
           <span class="page-title">总库存查询</span>
@@ -160,7 +167,7 @@ onMounted(() => {
       </div>
     </el-card>
 
-    <el-card class="summary-card" shadow="never">
+    <el-card v-if="inventoryKind === 'materials'" class="summary-card" shadow="never">
       <div class="summary-row">
         <div class="summary-item">
           <div class="summary-label">原料种类</div>
@@ -173,7 +180,7 @@ onMounted(() => {
       </div>
     </el-card>
 
-    <el-card class="result-card" shadow="never">
+    <el-card v-if="inventoryKind === 'materials'" class="result-card" shadow="never">
       <el-table
         :data="filteredData"
         v-loading="loading"

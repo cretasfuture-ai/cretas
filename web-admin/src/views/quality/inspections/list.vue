@@ -330,7 +330,10 @@ function showDetail(row: TableRow) {
             {{ row.id ? row.id.substring(0, 8).toUpperCase() : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="notes" label="批次/备注" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="batchNumber" label="生产批次号" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="productName" label="品名" min-width="150" show-overflow-tooltip />
+        <el-table-column label="工序" width="140"><template #default>未提供工序关联</template></el-table-column>
+        <el-table-column prop="notes" label="备注" min-width="180" show-overflow-tooltip />
         <el-table-column prop="sampleSize" label="抽样数" width="90" align="center" />
         <!--
           原来这一列叫「质检员ID」且直接显示数字主键 —— 给用户看数据库标识。
@@ -455,7 +458,10 @@ function showDetail(row: TableRow) {
     <el-drawer v-model="detailVisible" title="质检记录详情" size="420px">
       <el-descriptions :column="1" border v-if="detailData">
         <el-descriptions-item label="质检编号">{{ detailData.id ? detailData.id.substring(0, 8).toUpperCase() : '-' }}</el-descriptions-item>
-        <el-descriptions-item label="批次/备注">{{ detailData.notes || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="生产批次号">{{ detailData.batchNumber || '未提供' }}</el-descriptions-item>
+        <el-descriptions-item label="品名">{{ detailData.productName || '未提供' }}</el-descriptions-item>
+        <el-descriptions-item label="工序">未提供工序关联</el-descriptions-item>
+        <el-descriptions-item label="备注">{{ detailData.notes || '-' }}</el-descriptions-item>
         <el-descriptions-item label="抽样数">{{ detailData.sampleSize ?? '-' }}</el-descriptions-item>
         <el-descriptions-item label="质检员">
           {{ detailData.inspectorName || (detailData.inspectorId != null ? `#${detailData.inspectorId}` : '-') }}
