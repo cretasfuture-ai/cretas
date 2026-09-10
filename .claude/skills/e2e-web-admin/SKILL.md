@@ -1,11 +1,11 @@
 ---
 name: e2e-web-admin
-description: Web E2E 验收入口（web-admin / Expo Web 的 CRUD、持久化、跨模块、业务流、部署前后验证、客户 bug 复现；生产只读验收与 F006 写入特例）。本文件是指向 canonical skill 的指针。
+description: Web E2E 验收入口（web-admin / Expo Web 的业务操作、持久化、跨模块、业务流、部署前后验证、客户 bug 复现；生产只读验收与 F006 写入特例）。本文件是指向 canonical skill 的指针。
 ---
 
 # Compatibility pointer
 
-CANONICAL: `.agents/skills/e2e-web-admin/SKILL.md`
+CANONICAL: .agents/skills/e2e-web-admin/SKILL.md
 
 Read and follow the canonical skill above. Production read-only acceptance must
 use the shared implementation under `scripts/e2e/production-readonly/`; this
