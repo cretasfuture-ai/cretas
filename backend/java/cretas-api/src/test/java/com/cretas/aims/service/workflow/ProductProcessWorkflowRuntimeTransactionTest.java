@@ -46,6 +46,8 @@ import static org.mockito.Mockito.when;
 
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
+        // create-drop must own its database: cache eviction must not drop another test context's schema.
+        "spring.datasource.url=jdbc:h2:mem:product_process_workflow_runtime;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=MONTH,YEAR,VALUE",
         "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
