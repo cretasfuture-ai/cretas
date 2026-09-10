@@ -74,7 +74,7 @@ OTA bundle `1788716508930` 已推送并在小米真机上取到**行为读数**�
 
 ## OPS-MERGED-IS-NOT-DEPLOYED-20260907
 
-**完成依据**：2026-09-08 22:41 从 clean 的 `origin/main` detached 树发布，prod Flyway **37 → 41**。
+**完成依据**：2026-09-07 22:41 从 clean 的 `origin/main` detached 树发布，prod Flyway **37 → 41**。（⚠️ 2026-09-10 订正：原记「09-08 22:41」错了一天；权威时刻是 Flyway `installed_on` = `2026-09-07 22:41:31`，与备份文件名 `.bak.20260907_224118` 一致。）
 
 | 判据 | 读数 |
 |---|---|
