@@ -1,5 +1,7 @@
 # B07 调拨草稿回执
 
+> 2026-09-11 补修：独立评审发现首次仓库请求失败后无法恢复的 P2。下方原批次结果保留为历史，最新恢复验证见文末；未据旧 49 项通过掩盖该问题。
+
 - 任务：DRIVE-20260910-B07-TRANSFER-DRAFT
 - Owner：01a08b80-59fc-7a01-a338-b40f862aad6e
 - Base：e03fc7cf0c7c100d35cb8e907067e4b7e7e118af（本轮成功 fetch 并核对）
@@ -77,3 +79,28 @@ main72 仍“正在解决”，仅调拨子场景完成；main77“已修复待�
 - Google 渲染界面未截图，按目标 CellData 做格式/值/验证规则的最佳可用检查；没有改变行高或重排表格。
 - 本任务启动的 Vite 5187 已停止；本地证据、独立依赖和 worktree 保留。
 - 没有阻塞；等待协调者集成与发布。branch push 状态以交付消息中的远端读取结果为准。
+
+## 2026-09-11 P2 失败选项恢复补修
+
+评审来源 C:/Users/Steve/cretas-review-evidence/B07-readonly-review-20260910.md；独立旧版页面证据 C:/Users/Steve/cretas-drive-20260910-b06/web-admin/.playwright-mcp/b07-review/result.json。旧版首次仓库 500 后回页签请求 1→1、备注保留但仓库永远为空，这是已确认退化。
+
+本次只改原 scope：list.vue、transferDraftLifecycle.spec.ts，并新增 transferDraftRecovery.e2e.mjs。表单初始化与 network/source/target 选项加载状态分离；成功空数组记为 loaded；返回页签只恢复失败项，成功项不重取。增加可见“重试加载选项”按钮，不清空表单。loading 状态去重并保留 revision/目标请求标识防止旧租户或旧目标回写。后台成功不抢导航逻辑未删除。
+
+新增 5 项组件测试：仓库失败→返回恢复且重复触发不重复请求、工厂网络失败局部恢复、合法空列表不重试、目标仓库失败只重试该请求、切厂时旧仓库延迟响应不回写。原 49 项不删不跳过，最终 54/54（7 files）通过，B07-recovery-tests.log。
+
+本次新增完整页面验收（真实点击页签/重试按钮；HTTP 500 由本地 fixture 返回）：
+
+| 场景 | 选项请求前后 | 结果 |
+|---|---|---|
+| 首次 500→网络恢复→返回草稿，连续返回三次 | 源仓 1→2；工厂网络 1→1 | 可选择“恢复后的仓库”，备注保持“恢复时保留输入” |
+| 首次 500→本页重试按钮 | 源仓 1→2；工厂网络 1→1 | 输入保留且仓库可选 |
+| 合法空仓库数组，连续返回三次 | 源仓 1→1；工厂网络 1→1 | 不报加载失败、不无限重试，输入保留 |
+| A租户首次失败→挂起重试→切B租户→A延迟返回 | A源仓1→2，B源仓0→1 | 仅显示B仓库，旧输入清空，A响应不覆盖B |
+
+新四组与原六组完整页面脚本最终均退出 0，pageerror 均为空，真实生产业务写 0。原正常路径仍草稿选项请求5→5、创建只发两次有意请求；没有扩大共享缓存或业务规则。新四组证据在 C:/Users/Steve/cretas-drive-20260910-b07/web-admin/test-results/b07-transfer-recovery/result.json，以及各 scenario-before.png/scenario-after.png；脚本在 src/views/transfer/__tests__/transferDraftRecovery.e2e.mjs。已查看恢复后的完整页面截图。
+
+最终 `npx vue-tsc -b --pretty false` 退出 0，B07-recovery-types.log 为空。补修代码 commit da9504bf8fa03fcf77cc77939848618344dc9426；本节文档以独立收尾提交跟随，推送结果回传协调者。
+
+仅追加 main!G72、main!G77、'UX&UI'!G19，Drive 已 readback：三行状态仍为正在解决/已修复待验证/待部署；原备注保留，状态单元格、格式和验证规则与写前一致。证据 test-results/b07-transfer-recovery/drive-readback.json。Google 渲染未另截图，使用 CellData 最佳可用格式验证。Vite 5187 已停止。
+
+未创建PR、未合并、未部署、未改ACTIVE或其他scope。原未验项保持有效。请协调者集成时同时包含 B07 原始修复与本补修，不能只取 db9c8738e5。
