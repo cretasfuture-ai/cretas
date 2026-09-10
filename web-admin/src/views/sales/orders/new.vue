@@ -27,6 +27,7 @@ import {
   type SalesOrderPackagingSpec,
 } from './salesOrderNewLineContract';
 import { toDateString } from '@/utils/dateFormat';
+import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 
 type Warehouse = TableRow & { id: string; code: string; name: string; type?: string; isActive?: boolean };
 type Customer = TableRow & { id: string; name: string };
@@ -383,7 +384,7 @@ onMounted(() => {
         <template #header><span class="section-title">客户与订单信息</span></template>
         <el-row :gutter="20">
           <el-col :md="12" :xs="24"><el-form-item label="客户" required><el-select v-model="form.customerId" v-loading="loadingCustomers" filterable placeholder="请选择客户" style="width:100%" @change="onCustomerChange"><el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="String(customer.id)" /></el-select><small v-if="selectedCustomer">{{ selectedCustomer.name }}<span v-if="loadingCustomerHistory"> · 正在读取历史购买偏好</span></small></el-form-item></el-col>
-          <el-col :md="6" :xs="24"><el-form-item label="交货日期"><el-date-picker v-model="form.requiredDeliveryDate" value-format="YYYY-MM-DD" type="date" style="width:100%" @change="dirty = true" /></el-form-item></el-col>
+          <el-col :md="6" :xs="24"><el-form-item label="交货日期"><OrderDeliveryDatePicker v-model="form.requiredDeliveryDate" @change="dirty = true" /></el-form-item></el-col>
           <el-col :md="6" :xs="24"><el-form-item label="业务员"><el-input v-model="form.salesperson" @input="dirty = true" /></el-form-item></el-col>
         </el-row>
         <el-form-item label="交货地址"><el-input v-model="form.deliveryAddress" @input="dirty = true" /></el-form-item>
