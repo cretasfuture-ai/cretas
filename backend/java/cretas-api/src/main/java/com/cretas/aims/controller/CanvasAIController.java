@@ -774,9 +774,14 @@ public class CanvasAIController {
                             && !result.path("data").path("success").booleanValue())) {
                     var failure = result.path("success").booleanValue() ? result.path("data") : result;
                     String message = failure.path("error").asText(failure.path("message").asText("变更未完成"));
-                    items.add(new ApplyDiffResult(index, "FAILURE", message));
+                    // Tool wrappers can catch an exception after a side effect. A false
+                    // response cannot prove rollback or make replay safe.
+                    items.add(new ApplyDiffResult(index, "UNKNOWN", message));
                 } else if ("DUPLICATE".equals(result.path("data").path("status").asText())) {
                     items.add(new ApplyDiffResult(index, "REUSED", "已存在相同工序，复用已有记录，未新增"));
+                } else if ("PENDING_DDL".equals(result.path("data").path("status").asText())
+                        || "PENDING_DDL".equals(result.path("data").path("data").path("status").asText())) {
+                    items.add(new ApplyDiffResult(index, "UNKNOWN", "字段仍待数据库变更，尚未完成，请核对处理进度，勿重复执行"));
                 } else {
                     items.add(new ApplyDiffResult(index, "SUCCESS", "变更已完成"));
                 }

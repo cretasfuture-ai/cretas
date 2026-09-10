@@ -43,7 +43,7 @@ class CanvasAIApplyDiffsResultTest {
         var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of()), diff(Map.of("action", "fail"))));
         assertFalse(response.getSuccess());
         assertEquals(0, response.getData().applied());
-        assertTrue(response.getData().items().stream().allMatch(item -> item.status().equals("FAILURE")));
+        assertEquals(List.of("FAILURE", "UNKNOWN"), response.getData().items().stream().map(CanvasAIController.ApplyDiffResult::status).toList());
         assertTrue(response.getData().items().get(0).message().contains("信息"));
         assertEquals(0, tool.writes);
     }
@@ -54,7 +54,7 @@ class CanvasAIApplyDiffsResultTest {
         var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(
                 diff(Map.of("action", "create")), diff(Map.of("action", "duplicate")), diff(Map.of("action", "fail"))));
         assertFalse(response.getSuccess());
-        assertEquals(List.of("SUCCESS", "REUSED", "FAILURE"), response.getData().items().stream().map(CanvasAIController.ApplyDiffResult::status).toList());
+        assertEquals(List.of("SUCCESS", "REUSED", "UNKNOWN"), response.getData().items().stream().map(CanvasAIController.ApplyDiffResult::status).toList());
         assertEquals(1, response.getData().applied());
         assertEquals(1, response.getData().reused());
         assertEquals(1, tool.writes);
@@ -71,6 +71,15 @@ class CanvasAIApplyDiffsResultTest {
         var ids = org.mockito.ArgumentCaptor.forClass(ToolCall.class);
         verify(tool, times(2)).execute(ids.capture(), anyMap());
         assertNotEquals(ids.getAllValues().get(0).getId(), ids.getAllValues().get(1).getId());
+    }
+
+    @Test void pendingDdlInsideRealToolWrappingIsNotReportedComplete() {
+        var tool = new ContractTool();
+        when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of("action", "pending-ddl"))));
+        assertFalse(response.getSuccess());
+        assertEquals("UNKNOWN", response.getData().items().get(0).status());
+        assertTrue(response.getData().items().get(0).message().contains("尚未完成"));
     }
 
     @ParameterizedTest @NullAndEmptySource
@@ -107,6 +116,15 @@ class CanvasAIApplyDiffsResultTest {
     }
 
     /** Run the real AbstractBusinessTool JSON wrapping, including caught BusinessException. */
+    @Test void caughtFailureAfterSideEffectIsNotSafeToRetry() {
+        var tool = new ContractTool();
+        when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of("action", "write-then-fail"))));
+        assertEquals(1, tool.writes);
+        assertEquals("UNKNOWN", response.getData().items().get(0).status());
+        assertFalse(response.getSuccess());
+    }
+
     static class ContractTool extends AbstractBusinessTool {
         int writes;
         ContractTool() { objectMapper = new ObjectMapper(); }
@@ -117,7 +135,9 @@ class CanvasAIApplyDiffsResultTest {
         protected Map<String, Object> doExecute(String factory, Map<String, Object> params, Map<String, Object> context) {
             if ("fail".equals(params.get("action"))) throw new BusinessException("工序未完成");
             if ("duplicate".equals(params.get("action"))) return Map.of("status", "DUPLICATE");
+            if ("pending-ddl".equals(params.get("action"))) return Map.of("message", "字段待处理", "data", Map.of("status", "PENDING_DDL"));
             writes++;
+            if ("write-then-fail".equals(params.get("action"))) throw new BusinessException("写后异常");
             return Map.of("id", "local-1");
         }
     }

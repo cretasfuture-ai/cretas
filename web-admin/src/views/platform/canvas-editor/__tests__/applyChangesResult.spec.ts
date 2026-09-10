@@ -55,6 +55,22 @@ describe('receipt shape gate', () => {
 
 describe('batch consumer prevents replay', () => {
   beforeEach(() => vi.clearAllMocks());
+  it('allows a new enable-disable-enable proposal while blocking the old proposal', async () => {
+    api.aiApplyDiffs.mockResolvedValue({ data: result(['SUCCESS']) });
+    const wrapper = shallowMount(CanvasEditor);
+    await flushPromises();
+    const vm = wrapper.vm as unknown as EditorVm;
+    for (const enabled of [true, false, true]) {
+      const proposal = [{ type: 'FIELD_CHANGE', path: 'canvas_test', after: { enabled } }] as ConfigDiff[];
+      vm.handleAIDiff(proposal);
+      await vm.applyChanges();
+      vm.handleAIDiff(proposal);
+      expect(vm.pendingChanges).toEqual([]);
+      await vm.applyChanges();
+    }
+    expect(api.aiApplyDiffs).toHaveBeenCalledTimes(3);
+    wrapper.unmount();
+  });
   const diffs = [0, 1, 2, 3].map(index => ({ type: 'FIELD_CHANGE', path: 'canvas_test', after: { index }, description: `change ${index}` })) as ConfigDiff[];
   it('retries only FAILURE, never SUCCESS, REUSED or UNKNOWN', async () => {
     const receipt = result(['SUCCESS', 'REUSED', 'FAILURE', 'UNKNOWN']);

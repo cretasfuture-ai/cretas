@@ -168,7 +168,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, toRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCanvasEditor } from './composables/useCanvasEditor'
 import { aiApplyDiffs, submitForReview, approveConfig, rejectConfig, publishNow as apiPublishNow, cancelApproval as apiCancelApproval } from '@/api/canvasApi'
@@ -289,8 +289,10 @@ async function withLock(code: string, fn: () => Promise<void>) {
 const pendingChanges = ref<ConfigDiff[]>([])
 const applyResultMessage = ref('')
 const applyingChanges = ref(false)
-const settledChangeKeys = new Set<string>()
+const settledChanges = new WeakSet<ConfigDiff>()
+const unknownChangeKeys = new Set<string>()
 const changeKey = (change: ConfigDiff) => JSON.stringify({ tool: change.path, params: change.after })
+const isSettled = (change: ConfigDiff) => settledChanges.has(toRaw(change)) || unknownChangeKeys.has(changeKey(change))
 const showApproveDialog = ref(false)
 const showRejectDialog = ref(false)
 const showPublishWindow = ref(false)
@@ -300,12 +302,12 @@ const screenTooSmall = ref(false)
 
 function handleAIDiff(diffs: ConfigDiff[]) {
   if (applyingChanges.value) return
-  pendingChanges.value = diffs.filter(diff => !settledChangeKeys.has(changeKey(diff)))
+  pendingChanges.value = diffs.filter(diff => !isSettled(diff))
 }
 
 async function applyChanges() {
   if (!factoryId.value || applyingChanges.value) return
-  const submitted = pendingChanges.value.filter(change => !settledChangeKeys.has(changeKey(change)))
+  const submitted = pendingChanges.value.filter(change => !isSettled(change))
   if (!submitted.length) return
   applyingChanges.value = true
   let payload: unknown
@@ -321,9 +323,10 @@ async function applyChanges() {
   applyResultMessage.value = [applyResultMessage.value, applyChangesSummary(result)].filter(Boolean).join('\n')
   for (const item of result.items) {
     // UNKNOWN is quarantined, not put back into the batch retry button.
-    if (item.status !== 'FAILURE') settledChangeKeys.add(changeKey(submitted[item.index]!))
+    if (item.status !== 'FAILURE') settledChanges.add(toRaw(submitted[item.index]!))
+    if (item.status === 'UNKNOWN') unknownChangeKeys.add(changeKey(submitted[item.index]!))
   }
-  pendingChanges.value = submitted.filter(change => !settledChangeKeys.has(changeKey(change)))
+  pendingChanges.value = submitted.filter(change => !isSettled(change))
   if (result.items.every(item => item.status === 'SUCCESS')) ElMessage.success('变更已应用')
   else ElMessage.warning(applyResultMessage.value)
 }

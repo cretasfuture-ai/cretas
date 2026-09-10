@@ -3,6 +3,15 @@ import { loadAllFinishedStock, summarizeFinishedStock, type FinishedStockBatch }
 const row = (id: string): FinishedStockBatch => ({ id, factoryId: 'TEST', productTypeId: 'p1', unit: 'box',
   producedQuantity: 10, shippedQuantity: 2, reservedQuantity: 1 });
 describe('full finished stock query', () => {
+  it('does not request another page after an in-flight query is cancelled', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn(async () => {
+      controller.abort();
+      return { content: [row('1')], totalElements: 2 };
+    });
+    await expect(loadAllFinishedStock('TEST', fetch, controller.signal)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it('loads every page before summing, including unassigned warehouses', async () => {
     const fetch = vi.fn().mockResolvedValueOnce({ content: [row('1')], totalElements: 2 })
       .mockResolvedValueOnce({ content: [row('2')], totalElements: 2 });

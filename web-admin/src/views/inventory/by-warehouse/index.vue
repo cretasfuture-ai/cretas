@@ -114,6 +114,8 @@ async function loadWarehouses() {
 // ==================== 库存数据 ====================
 
 interface MaterialBatchRow {
+  ownership?: string;
+  ownerCustomerId?: string;
   id: string;
   batchNumber: string;
   materialCode?: string;
@@ -201,7 +203,7 @@ const aggregateRows = computed(() => {
       const quantity = numericQuantity(row.currentQuantity);
       const price = numericQuantity(row.unitPrice);
       return { ...scope, id: row.id, itemId: row.materialTypeId, name: row.materialName, code: row.materialCode,
-        unit: row.quantityUnit || row.unit, status: row.status, quantity,
+        unit: row.quantityUnit || row.unit, status: row.status, ownership: row.ownership, ownerCustomerId: row.ownerCustomerId, quantity,
         available: quantity == null ? null : Math.max(0, quantity - (numericQuantity(row.unsettledConsumption) ?? 0)),
         value: quantity == null || price == null ? null : quantity * price };
     }));
@@ -492,6 +494,8 @@ onMounted(async () => {
         <el-table :data="aggregateRows" :empty-text="activeTab === 'products' ? productEmptyText : materialEmptyText" border stripe data-testid="inventory-aggregate">
           <el-table-column prop="code" label="物料编码" width="140" />
           <el-table-column prop="name" label="物品名称" min-width="160" />
+          <el-table-column prop="itemId" label="物品ID" min-width="140" />
+          <el-table-column label="归属" min-width="150"><template #default="{ row }">{{ row.ownerCustomerId ? `客户 ${row.ownerCustomerId}` : row.ownership || '未提供' }}</template></el-table-column>
           <el-table-column prop="batchCount" label="批次数" width="90" />
           <el-table-column label="账面合计" width="130"><template #default="{ row }">{{ row.quantity == null ? '—' : fmtQty(row.quantity) }}</template></el-table-column>
           <el-table-column label="扣减后余量" width="130"><template #default="{ row }">{{ row.available == null ? '—' : fmtQty(row.available) }}</template></el-table-column>

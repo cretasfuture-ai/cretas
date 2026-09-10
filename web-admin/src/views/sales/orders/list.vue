@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
+const deliveryDatePicker = ref<InstanceType<typeof OrderDeliveryDatePicker>>();
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { PAYABLE_STATUSES } from './salesOrderBillableStatus';
@@ -1981,6 +1982,7 @@ async function handleEdit(row: TableRow) {
 }
 
 async function handleSave() {
+  if (deliveryDatePicker.value?.validate() === false) return;
   if (editingOrderId.value) {
     // Update existing order
     if (!form.value.customerId) return ElMessage.warning('请选择客户');
@@ -3010,7 +3012,7 @@ function handleMergePurchase() {
             <el-button :icon="Plus" class="supplied-material-add" @click="addSuppliedMaterial">添加客户自带物料</el-button>
           </div>
         </el-form-item>
-        <el-form-item label="交货日期"><OrderDeliveryDatePicker v-model="form.requiredDeliveryDate" /></el-form-item>
+        <el-form-item label="交货日期"><OrderDeliveryDatePicker ref="deliveryDatePicker" v-model="form.requiredDeliveryDate" /></el-form-item>
         <el-form-item label="交货地址"><el-input v-model="form.deliveryAddress" /></el-form-item>
         <el-form-item label="业务员">
           <!-- T130 Feature B — 用户手动改业务员 → touched=true, 不再被客户切换自动覆盖. -->

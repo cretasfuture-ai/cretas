@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { fmtQty } from '@/utils/tableFormatters';
@@ -12,23 +12,36 @@ const keyword = ref('');
 const loading = ref(false);
 const error = ref('');
 let requestId = 0;
+let controller: AbortController | undefined;
+let deactivated = false;
+function cancelLoad() {
+  ++requestId;
+  controller?.abort();
+  loading.value = false;
+}
+onBeforeUnmount(cancelLoad);
+onDeactivated(() => { deactivated = true; cancelLoad(); });
+onActivated(() => { if (deactivated) { deactivated = false; void load(); } });
 const summary = computed(() => summarizeFinishedStock(rows.value.filter(row =>
   !keyword.value.trim() || (row.productName || '').toLowerCase().includes(keyword.value.trim().toLowerCase())
   || (row.productTypeId || '').toLowerCase().includes(keyword.value.trim().toLowerCase()),
 )));
 async function load() {
+  cancelLoad();
   const current = ++requestId;
   const factoryId = auth.factoryId;
   rows.value = [];
   error.value = '';
-  if (!factoryId) return;
+  if (!factoryId || deactivated) return;
+  controller = new AbortController();
+  const signal = controller.signal;
   loading.value = true;
   try {
     const result = await loadAllFinishedStock(factoryId, async page => {
-      const response = await get<StockPage>(`/${factoryId}/sales/finished-goods`, { params: { page, size: 100 } });
+      const response = await get<StockPage>(`/${factoryId}/sales/finished-goods`, { params: { page, size: 100 }, signal });
       if (!response.success || !response.data) throw new Error(response.message || '加载成品库存失败');
       return response.data;
-    });
+    }, signal);
     if (current === requestId) rows.value = result;
   } catch (cause) {
     if (current === requestId) error.value = cause instanceof Error ? cause.message : '加载成品库存失败';

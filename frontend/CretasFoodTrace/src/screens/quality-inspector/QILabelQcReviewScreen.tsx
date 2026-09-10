@@ -86,6 +86,7 @@ import {
 } from './labelQcObjectReviewModel';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
+import { labelQcToolbarPosition } from './labelQcToolbarPosition';
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QILabelQcReview'>;
 
 interface Viewport {
@@ -367,6 +368,7 @@ function HumanInlineToolbar({
   annotation,
   surface,
   viewport,
+  container,
   readOnly,
   onLabel,
   onDelete,
@@ -374,20 +376,13 @@ function HumanInlineToolbar({
   annotation: LabelQcReviewAnnotationDraft;
   surface: SurfaceSize;
   viewport: Viewport;
+  container: { width: number; height: number };
   readOnly: boolean;
   onLabel: (label: LabelQcLabel) => void;
   onDelete: () => void;
 }) {
   if (!annotation.bbox || readOnly) return null;
-  const width = 230;
-  const boxCenterX =
-    ((annotation.bbox.xMin + annotation.bbox.xMax) / 2) * surface.width;
-  const left = clamp(boxCenterX - width / 2, 4, surface.width - width - 4);
-  const preferredTop = annotation.bbox.yMin * surface.height - 58 / viewport.scale;
-  const top =
-    preferredTop >= 4
-      ? preferredTop
-      : annotation.bbox.yMax * surface.height + 7 / viewport.scale;
+  const { width, left, top } = labelQcToolbarPosition(annotation.bbox, surface, viewport, container);
 
   return (
     <View
@@ -397,7 +392,6 @@ function HumanInlineToolbar({
           left,
           top,
           width,
-          transform: [{ scale: 1 / viewport.scale }],
         },
       ]}
       testID="qi-label-qc-human-inline-toolbar"
@@ -729,26 +723,13 @@ export function PhotoCanvas({
           <View
             pointerEvents="box-none"
             testID="qi-label-qc-toolbar-overlay"
-            style={[
-              styles.photoSurface,
-              {
-                backgroundColor: 'transparent',
-                width: surface.width,
-                height: surface.height,
-                left: surface.left,
-                top: surface.top,
-                transform: [
-                  { translateX: viewport.translateX },
-                  { translateY: viewport.translateY },
-                  { scale: viewport.scale },
-                ],
-              },
-            ]}
+            style={StyleSheet.absoluteFill}
           >
             <HumanInlineToolbar
               annotation={selectedHuman}
               surface={surface}
               viewport={viewport}
+              container={container}
               readOnly={readOnly}
               onLabel={(label) => onHumanLabel(selectedHuman.key, label)}
               onDelete={() => onDelete(selectedHuman.key)}

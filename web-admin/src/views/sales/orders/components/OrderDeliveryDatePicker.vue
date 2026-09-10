@@ -22,13 +22,14 @@ function accept(value: string) {
 function commitText() {
   const parsed = parseOrderDeliveryDate(text.value);
   if (parsed === null) {
-    text.value = props.modelValue;
     error.value = '日期无效，请输入 YYYYMMDD 或 YYYY-MM-DD';
-    return;
+    return false;
   }
   accept(parsed);
+  return true;
 }
 function chooseDate(value: string | null) { accept(value || ''); }
+defineExpose({ validate: commitText });
 </script>
 
 <template>
@@ -40,7 +41,7 @@ function chooseDate(value: string | null) { accept(value || ''); }
         :editable="false" :clearable="false" aria-label="从日历选择交货日期"
         class="calendar-picker" @update:model-value="chooseDate" />
     </div>
-    <span v-if="error" class="date-error" role="alert">{{ error }}</span>
+    <div class="date-feedback"><span v-if="error" class="date-error" role="alert">{{ error }}</span></div>
   </div>
 </template>
 
@@ -51,5 +52,6 @@ function chooseDate(value: string | null) { accept(value || ''); }
 .date-controls :deep(.calendar-picker) { flex: 0 0 36px; width: 36px; }
 .date-controls :deep(.calendar-picker .el-input__inner) { width: 0; padding: 0; }
 .date-controls :deep(.calendar-picker .el-input__prefix-inner > :last-child) { margin-right: 0; }
-.date-error { color: var(--el-color-danger); font-size: 12px; line-height: 20px; }
+.date-error { display: block; color: var(--el-color-danger); font-size: 12px; line-height: 20px; }
+.date-feedback { min-height: 20px; line-height: 20px; }
 </style>

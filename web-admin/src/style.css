@@ -774,9 +774,6 @@ textarea:focus-visible {
 
 .el-table--layout-fixed .cell {
   min-width: 0 !important;
-  overflow: hidden !important;
-  white-space: nowrap !important;
-  text-overflow: ellipsis !important;
 }
 
 .cretas-table-top-scrollbar {

@@ -26,8 +26,12 @@ describe('order delivery calendar date input', () => {
     expect((input.element as HTMLInputElement).value).toBe('2026-08-20');
     await input.setValue('20260229');
     expect(wrapper.props('modelValue')).toBe('2026-08-20');
+    expect((input.element as HTMLInputElement).value).toBe('20260229');
+    expect(wrapper.vm.validate()).toBe(false);
+    expect(wrapper.vm.validate()).toBe(false);
     expect(wrapper.get('[role="alert"]').text()).toContain('日期无效');
     await input.setValue('');
+    expect(wrapper.vm.validate()).toBe(true);
     expect(wrapper.props('modelValue')).toBe('');
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     wrapper.unmount();

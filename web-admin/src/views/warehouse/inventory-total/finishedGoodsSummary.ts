@@ -18,12 +18,14 @@ export interface FinishedStockBatch {
 export interface StockPage { content: FinishedStockBatch[]; totalElements: number }
 
 /** Load every page before publishing any total; reject drift and repeated pages. */
-export async function loadAllFinishedStock(factoryId: string, fetchPage: (page: number) => Promise<StockPage>): Promise<FinishedStockBatch[]> {
+export async function loadAllFinishedStock(factoryId: string, fetchPage: (page: number) => Promise<StockPage>, signal?: AbortSignal): Promise<FinishedStockBatch[]> {
   const result: FinishedStockBatch[] = [];
   const seen = new Set<string>();
   let expected: number | undefined;
   for (let page = 1; page <= 1000; page++) {
+    signal?.throwIfAborted();
     const data = await fetchPage(page);
+    signal?.throwIfAborted();
     if (!Array.isArray(data.content) || !Number.isInteger(data.totalElements) || data.totalElements < 0
       || (expected != null && data.totalElements !== expected)) throw new Error('成品库存总数变化或响应不完整，请刷新重试');
     expected = data.totalElements;
@@ -45,6 +47,6 @@ export function summarizeFinishedStock(rows: FinishedStockBatch[]): InventoryAgg
     const reserved = numericQuantity(row.reservedQuantity);
     const quantity = produced == null || shipped == null ? null : produced - shipped;
     return { ...row, warehouseId: row.warehouseId || '', itemId: row.productTypeId, name: row.productName,
-      quantity, available: quantity == null || reserved == null ? null : quantity - reserved, value: null };
+      quantity, available: quantity == null || reserved == null ? null : quantity - reserved, value: null as number | null };
   }));
 }

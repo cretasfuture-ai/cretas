@@ -33,10 +33,10 @@
               link
               size="small"
               :loading="applyingDiffKey === diffKey(diff)"
-              :disabled="appliedDiffKeys.has(diffKey(diff)) || unknownDiffKeys.has(diffKey(diff))"
+              :disabled="appliedDiffKeys.has(diffKey(diff)) || unknownDiffKeys.has(payloadKey(diff))"
               @click="applyDiff(diff, message.mode)"
             >
-              {{ unknownDiffKeys.has(diffKey(diff)) ? '结果待核对'
+              {{ unknownDiffKeys.has(payloadKey(diff)) ? '结果待核对'
                 : reusedDiffKeys.has(diffKey(diff)) ? '已复用，未新增'
                 : appliedDiffKeys.has(diffKey(diff)) ? '已执行'
                 : message.mode === 'autopilot' ? '确认并执行' : '应用' }}
@@ -60,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, toRaw } from 'vue';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { aiApplyDiffs, aiChat } from '@/api/canvasApi';
@@ -129,8 +129,16 @@ function isWorkProcessDiff(diff: CanvasDiff): boolean {
   return diff.tool === WORK_PROCESS_TOOL;
 }
 
-function diffKey(diff: CanvasDiff): string {
+function payloadKey(diff: CanvasDiff): string {
   return JSON.stringify({ tool: diff.tool, params: diff.params });
+}
+const proposalKeys = new WeakMap<CanvasDiff, string>();
+let proposalSequence = 0;
+function diffKey(diff: CanvasDiff): string {
+  const raw = toRaw(diff);
+  let key = proposalKeys.get(raw);
+  if (!key) { key = String(++proposalSequence); proposalKeys.set(raw, key); }
+  return key;
 }
 
 async function send(): Promise<void> {
@@ -181,21 +189,21 @@ async function applyDiff(diff: CanvasDiff, sourceMode?: AIAgentMode): Promise<vo
     || (sourceMode !== 'plan' && sourceMode !== 'autopilot')
     || !isWorkProcessDiff(diff)
     || appliedDiffKeys.value.has(key)
-    || unknownDiffKeys.value.has(key)
+    || unknownDiffKeys.value.has(payloadKey(diff))
     || applyingDiffKey.value) return;
 
   applyingDiffKey.value = key;
   try {
     const response = await aiApplyDiffs(props.factoryId, [diff as unknown as Record<string, unknown>]);
-    handleApplyResult(response.data, key);
+    handleApplyResult(response.data, key, payloadKey(diff));
   } catch (e) {
-    handleApplyResult(e instanceof ApiError ? e.data : undefined, key);
+    handleApplyResult(e instanceof ApiError ? e.data : undefined, key, payloadKey(diff));
   } finally {
     applyingDiffKey.value = '';
   }
 }
 
-function handleApplyResult(payload: unknown, key: string): void {
+function handleApplyResult(payload: unknown, key: string, unknownKey: string): void {
   const result = readApplyChangesResult(payload, 1);
   const item = result.items[0]!;
   messages.value.push({ role: 'assistant', content: applyChangesSummary(result) });
@@ -207,7 +215,7 @@ function handleApplyResult(payload: unknown, key: string): void {
     } else ElMessage.success('工序变更已应用');
     emit('applied');
   } else if (item.status === 'UNKNOWN') {
-    unknownDiffKeys.value.add(key);
+    unknownDiffKeys.value.add(unknownKey);
     ElMessage.warning('执行结果不明，请核对实际记录，勿重复执行');
   }
 }

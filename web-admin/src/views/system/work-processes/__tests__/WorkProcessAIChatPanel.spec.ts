@@ -148,4 +148,13 @@ describe('confirmed apply receipts', () => {
     expect(canvasApiMocks.aiApplyDiffs).toHaveBeenCalledTimes(1);
     expect(wrapper.emitted('applied')).toHaveLength(1);
   });
+  it('allows a new proposal with the same payload after confirmed success', async () => {
+    canvasApiMocks.aiApplyDiffs.mockResolvedValue({ success: true, data: receipt('SUCCESS') });
+    const wrapper = mountPanel();
+    const vm = wrapper.vm as unknown as PanelVm;
+    await vm.applyDiff(diff, 'plan');
+    await vm.applyDiff({ ...diff, params: { ...diff.params } }, 'plan');
+    expect(canvasApiMocks.aiApplyDiffs).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
 });
