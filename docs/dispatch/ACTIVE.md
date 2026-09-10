@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `DRIVE-20260910-INTEGRATION` — `in-progress` — Owner: Codex/01a08b76 — Base: `e03fc7cf0c7c100d35cb8e907067e4b7e7e118af` — scope 为 B01–B05 候选文件及其目标测试；五批原 Owner 冻结源码，协调者独占修复。验收：Web/RN 类型与目标测试、Canvas/QC Java 真事务目标测试、跨批 UI 回归；详情见 drive-20260910/INTEGRATION.md。
+- `DRIVE-20260910-INTEGRATION` — `review` — Owner: Codex/01a08b76 — Base: `e03fc7cf0c7c100d35cb8e907067e4b7e7e118af` — B01–B05候选及目标测试由协调者独占；负优化回归已修，Web209/App34/Java51及目标UI通过。75行已分类回填；未合并部署、生产/真机未验。详情 drive-20260910/INTEGRATION.md，合并后归档释放锁。
 
 
 

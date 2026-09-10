@@ -37,13 +37,15 @@ class CanvasAIApplyDiffsResultTest {
 
     private Map<String, Object> diff(Map<String, Object> params) { return Map.of("tool", TOOL, "params", params); }
 
-    @Test void realBusinessToolFailureAndMissingParametersAreNotSuccessful() {
+    @Test void toolWrappedFailuresDoNotProveThatRetryIsSafe() {
         var tool = new ContractTool();
         when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
         var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of()), diff(Map.of("action", "fail"))));
         assertFalse(response.getSuccess());
         assertEquals(0, response.getData().applied());
-        assertEquals(List.of("FAILURE", "UNKNOWN"), response.getData().items().stream().map(CanvasAIController.ApplyDiffResult::status).toList());
+        // Both responses arrive after execute(). The controller cannot distinguish
+        // wrapper validation from an error caught after a business side effect.
+        assertEquals(List.of("UNKNOWN", "UNKNOWN"), response.getData().items().stream().map(CanvasAIController.ApplyDiffResult::status).toList());
         assertTrue(response.getData().items().get(0).message().contains("信息"));
         assertEquals(0, tool.writes);
     }
