@@ -619,11 +619,13 @@ const kindMark = computed(() => (isRework.value
 .material-node:hover :deep(.vue-flow__handle),
 .material-node.wf-valid :deep(.vue-flow__handle) { opacity: 1; }
 .material-node :deep(.vue-flow__handle-left):hover {
-  opacity: 1; transform: translate(-50%, -50%) scale(1.35); cursor: crosshair;
+  opacity: 1; transform: translate(-50%, -50%) scale(1.35);
 }
 .material-node :deep(.vue-flow__handle-right):hover {
-  opacity: 1; transform: translate(50%, -50%) scale(1.35); cursor: crosshair;
+  opacity: 1; transform: translate(50%, -50%) scale(1.35);
 }
+.material-node :deep(.vue-flow__handle.connectable) { cursor: var(--cretas-cursor-crosshair); }
+.material-node.wf-dim :deep(.vue-flow__handle.connectable) { cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   .material-node, .material-node :deep(.vue-flow__handle) { transition: none; }
   .material-node.validation-attention { animation: none; }

@@ -6845,7 +6845,8 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 /* 客户 Sheet 第 13 行「白底上找不到指针」: 必须写在 scoped 块里 —— scoped 会补
  * [data-v-xxxx], 权重压过 style.css 里的同名选择器(2026-08-19 实测, 那条全局规则
  * 从未生效)。光标图形本身只定义在 style.css 的 :root 变量里, 不在这儿复制一份。 */
-.canvas-shell.is-connecting { cursor: var(--cretas-cursor-crosshair); }
+/* VueFlow sets grab on the pane itself, so connection feedback must target it directly. */
+.canvas-shell.is-connecting :deep(.vue-flow__pane) { cursor: var(--cretas-cursor-crosshair); }
 /* #12b: 历史版本预览横幅 + 版本列表行 */
 .version-preview-bar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 30;
