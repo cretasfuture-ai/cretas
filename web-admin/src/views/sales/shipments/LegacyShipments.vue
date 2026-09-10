@@ -101,7 +101,7 @@ const statusFilter = ref('');
 const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
 }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('shipment', summaryRequest);
+const { summary: footerSummary, loading: footerLoading, error: footerError } = useListSummary('shipment', summaryRequest);
 
 let requestVersion = 0;
 let customerVersion = 0;
@@ -330,11 +330,14 @@ watch(factoryId, () => {
       </el-dialog>
 
       <TableFooter
+        v-if="!footerError"
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"
         @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前出货${formatSummaryForAI(footerSummary, { filter: { status: statusFilter } })}`, duration: 8000, showClose: true })"
       />
+
+      <el-alert v-else :title="footerError.message || '历史出货汇总加载失败'" type="error" :closable="false" />
 
       <el-pagination
         v-model:current-page="pagination.page"
