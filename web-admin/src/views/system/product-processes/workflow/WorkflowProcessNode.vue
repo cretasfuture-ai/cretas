@@ -431,11 +431,13 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .process-node:hover :deep(.vue-flow__handle),
 .process-node.wf-valid :deep(.vue-flow__handle) { opacity: 1; }
 .process-node :deep(.vue-flow__handle-left):hover {
-  opacity: 1; transform: translate(-50%, -50%) scale(1.35); cursor: crosshair;
+  opacity: 1; transform: translate(-50%, -50%) scale(1.35);
 }
 .process-node :deep(.vue-flow__handle-right):hover {
-  opacity: 1; transform: translate(50%, -50%) scale(1.35); cursor: crosshair;
+  opacity: 1; transform: translate(50%, -50%) scale(1.35);
 }
+.process-node :deep(.vue-flow__handle.connectable) { cursor: var(--cretas-cursor-crosshair); }
+.process-node.wf-dim :deep(.vue-flow__handle.connectable) { cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   .process-node, .process-node :deep(.vue-flow__handle) { transition: none; }
 }
