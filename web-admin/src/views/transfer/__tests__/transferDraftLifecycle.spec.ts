@@ -20,6 +20,9 @@ interface State {
   form: { transferType: string; targetFactoryId: string; sourceWarehouseId: string; targetWarehouseId: string; transferDate: string; expectedArrivalDate: string; remark: string; items: TransferCreateRow[] };
   factoryNetworkOptions: { factoryId: string }[];
   sourceWarehouseOptions: { id: string }[];
+  targetWarehouseOptions: { id: string }[];
+  optionsFailed: boolean;
+  retryDraftOptions: () => Promise<void>;
   submitCreate: () => Promise<void>;
   openCreateWorkspace: () => void;
   handleTransferTypeChange: (value: string) => Promise<void>;
@@ -51,6 +54,68 @@ function fill(s: State) {
   Object.assign(s.form, { transferType: 'WAREHOUSE_TO_WAREHOUSE', targetFactoryId: 'LOCAL_A', sourceWarehouseId: 'S', targetWarehouseId: 'T', transferDate: '2026-09-11', expectedArrivalDate: '2026-09-12', remark: 'retain me', items: [{ itemType: 'RAW_MATERIAL', selectionCategory: 'MATERIAL:原料', selectedItemId: 'M', materialTypeId: 'M', itemName: '原料', quantity: 3, unit: 'kg' }] });
 }
 describe('cached transfer draft lifecycle', () => {
+  it('retries failed warehouses on return without resetting input or duplicating pending requests', async () => {
+    let attempts=0; let finish!: (value: unknown) => void;
+    mocks.get.mockImplementation((url: string) => {
+      if (url.endsWith('/factory/warehouses')) {
+        attempts++;
+        return attempts === 1 ? Promise.reject(new Error('500')) : new Promise(resolve => { finish=resolve; });
+      }
+      return Promise.resolve({ success: true, data: [] });
+    });
+    const { router, state }=await app(); const s=state(); s.form.remark='recover me';
+    expect(s.optionsFailed).toBe(true); expect(attempts).toBe(1);
+    await router.push('/other'); await flushPromises(); await router.push('/transfer/new'); await flushPromises();
+    await Promise.all([s.retryDraftOptions(), s.retryDraftOptions()]); expect(attempts).toBe(2);
+    finish({ success: true, data: [{ id: 'RECOVERED', name: '恢复仓库' }] }); await flushPromises();
+    expect(s.sourceWarehouseOptions.map(o=>o.id)).toEqual(['RECOVERED']); expect(s.form.remark).toBe('recover me'); expect(s.optionsFailed).toBe(false);
+    await router.push('/other'); await router.push('/transfer/new'); await flushPromises(); expect(attempts).toBe(2);
+  });
+  it('retries network failure locally without reloading successfully empty warehouses', async () => {
+    let attempts=0;
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/factories/network') && ++attempts === 1) throw new Error('500');
+      return { success: true, data: [] };
+    });
+    const { state }=await app(); const s=state(); s.form.remark='keep'; expect(s.optionsFailed).toBe(true);
+    await s.retryDraftOptions(); expect(s.optionsFailed).toBe(false); expect(s.form.remark).toBe('keep');
+    expect(mocks.get.mock.calls.filter(([url])=>url.endsWith('/factory/warehouses'))).toHaveLength(1);
+    expect(attempts).toBe(2);
+  });
+  it('treats a valid empty response as loaded, including repeated returns and explicit retries', async () => {
+    const { router, state }=await app(); const before=mocks.get.mock.calls.length;
+    for(let i=0;i<3;i++){ await router.push('/other'); await router.push('/transfer/new'); await flushPromises(); await state().retryDraftOptions(); }
+    expect(mocks.get).toHaveBeenCalledTimes(before); expect(state().optionsFailed).toBe(false);
+  });
+  it('retries only the failed target warehouse request without clearing existing inputs', async () => {
+    let attempts=0;
+    mocks.get.mockImplementation(async (url: string) => {
+      if(url.endsWith('/inventory/warehouses')) {
+        if(++attempts===1)throw new Error('500');
+        return {success:true,data:[{id:'TARGET',name:'目标仓'}]};
+      }
+      return {success:true,data:[]};
+    });
+    const {state}=await app(); const s=state(); s.form.targetFactoryId='LOCAL_OTHER'; s.form.remark='target retry';
+    await s.handleTransferTypeChange('BRANCH_TO_BRANCH'); expect(s.optionsFailed).toBe(true);
+    const before=mocks.get.mock.calls.length; await s.retryDraftOptions();
+    expect(mocks.get).toHaveBeenCalledTimes(before+1); expect(s.targetWarehouseOptions.map(o=>o.id)).toEqual(['TARGET']);
+    expect(s.form.remark).toBe('target retry'); expect(s.form.targetFactoryId).toBe('LOCAL_OTHER'); expect(s.optionsFailed).toBe(false);
+  });
+  it('rejects a late warehouse response after changing tenant during recovery', async () => {
+    let attempts=0; let finish!: (value: unknown) => void;
+    mocks.get.mockImplementation((url: string) => {
+      if(url==='/LOCAL_A/factory/warehouses') {
+        if(++attempts===1)return Promise.reject(new Error('500'));
+        return new Promise(resolve=>{finish=resolve;});
+      }
+      return Promise.resolve({ success:true,data:url==='/LOCAL_B/factory/warehouses'?[{id:'B',name:'B仓'}]:[] });
+    });
+    const { state }=await app(); const s=state(); s.form.remark='old'; const retry=s.retryDraftOptions();
+    await flushPromises(); mocks.auth.factoryId='LOCAL_B'; await flushPromises();
+    finish({success:true,data:[{id:'A',name:'旧仓'}]}); await retry;
+    expect(s.sourceWarehouseOptions.map(o=>o.id)).toEqual(['B']); expect(s.form.remark).toBe(''); expect(s.optionsFailed).toBe(false);
+  });
   it('retains every field across three route returns without reloading draft options', async () => {
     const { router, state } = await app(); const s = state(); fill(s);
     const before = JSON.stringify(s.form); const count = mocks.get.mock.calls.length;
