@@ -1,6 +1,8 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkProcessAIChatPanel from '../WorkProcessAIChatPanel.vue';
+import { ApiError } from '@/types/api';
+import { ElMessage } from 'element-plus';
 
 const canvasApiMocks = vi.hoisted(() => ({
   aiChat: vi.fn(),
@@ -20,6 +22,7 @@ interface PanelVm {
   input: string;
   mode: string;
   send: () => Promise<void>;
+  applyDiff: (diff: { tool: string; params: Record<string, unknown> }, mode: string) => Promise<void>;
 }
 
 function mountPanel() {
@@ -96,5 +99,53 @@ describe('WorkProcessAIChatPanel sends the operator’s own words', () => {
   it('trims the input but otherwise sends it verbatim', async () => {
     const payload = await sendAs('plan', '  新建焯水工序  ');
     expect(payload.message).toBe('新建焯水工序');
+  });
+});
+
+describe('confirmed apply receipts', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const diff = { tool: 'canvas_work_process_catalog', params: { action: 'create' } };
+  const receipt = (status: string) => ({ operationId: 'test-operation', total: 1,
+    applied: status === 'SUCCESS' ? 1 : 0, reused: status === 'REUSED' ? 1 : 0,
+    items: [{ index: 0, status, message: status === 'REUSED' ? '复用，未新增' : '测试回执' }] });
+
+  it.each(['FAILURE', 'UNKNOWN'])('never marks %s as applied', async status => {
+    canvasApiMocks.aiApplyDiffs.mockRejectedValue(new ApiError('未完成', undefined, undefined, undefined, receipt(status)));
+    const wrapper = mountPanel();
+    await (wrapper.vm as unknown as PanelVm).applyDiff(diff, 'plan');
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(wrapper.emitted('applied')).toBeUndefined();
+  });
+
+  it.each([undefined, '已应用 0/1 项', { items: [] }])('quarantines missing/legacy/invalid result', async data => {
+    canvasApiMocks.aiApplyDiffs.mockResolvedValue({ success: true, data });
+    const wrapper = mountPanel();
+    const vm = wrapper.vm as unknown as PanelVm;
+    await vm.applyDiff(diff, 'plan');
+    await vm.applyDiff(diff, 'plan');
+    expect(canvasApiMocks.aiApplyDiffs).toHaveBeenCalledTimes(1);
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('执行结果不明');
+  });
+
+  it('reports reuse without claiming a new write, and prevents replay', async () => {
+    canvasApiMocks.aiApplyDiffs.mockResolvedValue({ success: true, data: receipt('REUSED') });
+    const wrapper = mountPanel();
+    const vm = wrapper.vm as unknown as PanelVm;
+    await vm.applyDiff(diff, 'autopilot');
+    await vm.applyDiff(diff, 'autopilot');
+    expect(canvasApiMocks.aiApplyDiffs).toHaveBeenCalledTimes(1);
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('已复用现有工序，未新增');
+  });
+
+  it('marks confirmed success only once', async () => {
+    canvasApiMocks.aiApplyDiffs.mockResolvedValue({ success: true, data: receipt('SUCCESS') });
+    const wrapper = mountPanel();
+    const vm = wrapper.vm as unknown as PanelVm;
+    await vm.applyDiff(diff, 'plan');
+    await vm.applyDiff(diff, 'plan');
+    expect(canvasApiMocks.aiApplyDiffs).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted('applied')).toHaveLength(1);
   });
 });

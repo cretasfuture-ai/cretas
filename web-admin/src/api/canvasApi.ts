@@ -70,8 +70,22 @@ export const applyTemplate = (factoryId: string, templateCode: string) =>
 export const aiChat = (factoryId: string, body: { message: string; mode: string; moduleCode?: string }) =>
   request.post(`${v2(factoryId)}/ai/chat`, body)
 
+export interface ApplyDiffResult {
+  index: number
+  status: 'SUCCESS' | 'REUSED' | 'FAILURE' | 'UNKNOWN'
+  message: string
+}
+
+export interface ApplyDiffsResult {
+  operationId: string
+  total: number
+  applied: number
+  reused: number
+  items: ApplyDiffResult[]
+}
+
 export const aiApplyDiffs = (factoryId: string, diffs: Record<string, unknown>[]) =>
-  request.post(`${v2(factoryId)}/ai/apply-diffs`, diffs)
+  request.post<ApplyDiffsResult>(`${v2(factoryId)}/ai/apply-diffs`, diffs)
 
 // Config version status
 export const getConfigVersion = (factoryId: string) =>

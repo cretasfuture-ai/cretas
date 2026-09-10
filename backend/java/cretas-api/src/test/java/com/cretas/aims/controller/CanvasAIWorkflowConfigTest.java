@@ -173,15 +173,17 @@ class CanvasAIWorkflowConfigTest {
 
     @Test
     void applyDiffsHardRejectsWorkflowPreviewToolWithoutExecute() throws Exception {
-        ApiResponse<String> response = controller.applyDiffs(
+        ApiResponse<CanvasAIController.ApplyDiffsResult> response = controller.applyDiffs(
                 "F006",
                 null,
                 List.of(Map.of(
                         "tool", TOOL_NAME,
                         "params", Map.of("patches", List.of()))));
 
-        assertTrue(response.getData().contains("0/1"));
-        assertTrue(response.getData().contains("WORKFLOW_AI_PREVIEW_ONLY"));
+        assertFalse(response.getSuccess());
+        assertEquals(0, response.getData().applied());
+        assertEquals("FAILURE", response.getData().items().get(0).status());
+        assertEquals("WORKFLOW_AI_PREVIEW_ONLY", response.getData().items().get(0).message());
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
         verify(toolRegistry, never()).getExecutor(TOOL_NAME);
     }
