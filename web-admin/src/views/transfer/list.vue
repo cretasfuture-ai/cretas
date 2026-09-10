@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -45,7 +45,16 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
-const isCreateWorkspace = computed(() => route.name === 'TransferCreate');
+// Each cached route (including _task copies) owns its form; the global route
+// continues changing while this instance is inactive.
+const isCreateWorkspace = ref(route.name === 'TransferCreate');
+const workspacePath = route.path;
+const workspaceTask = route.query._task;
+const ownsCurrentRoute = () => route.path === workspacePath && route.query._task === workspaceTask;
+let workspaceActive = false;
+let draftInitialized = false;
+let draftRevision = 0;
+let validating = false;
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -145,26 +154,61 @@ const factoryNetworkLoading = ref(false);
 interface WarehouseOption { id: string | number; name: string; code?: string; type?: string }
 const sourceWarehouseOptions = ref<WarehouseOption[]>([]);
 const targetWarehouseOptions = ref<WarehouseOption[]>([]);
+type OptionLoadState = 'idle' | 'loading' | 'loaded' | 'error';
+const optionLoadState = ref<Record<'network' | 'source' | 'target', OptionLoadState>>({ network: 'idle', source: 'idle', target: 'idle' });
+const optionsFailed = computed(() => Object.values(optionLoadState.value).includes('error'));
+const optionsLoading = computed(() => Object.values(optionLoadState.value).includes('loading'));
+let targetOptionsFactory = '';
+let targetOptionsRequest = 0;
+
+async function retryDraftOptions() {
+  if (!factoryId.value) return;
+  await Promise.all([
+    loadFactoryNetwork(),
+    loadSourceWarehouses(),
+    optionLoadState.value.target === 'error' && form.value.targetFactoryId
+      ? loadTargetWarehouses() : Promise.resolve(),
+  ]);
+}
 
 async function syncRouteWorkspace() {
   if (isCreateWorkspace.value) {
-    initializeCreateForm();
-    await Promise.all([loadFactoryNetwork(), loadSourceWarehouses()]);
+    if (!draftInitialized) {
+      initializeCreateForm();
+      draftInitialized = true;
+    }
+    await retryDraftOptions();
     return;
   }
   await loadData();
 }
 
-onMounted(syncRouteWorkspace);
-watch(() => route.name, syncRouteWorkspace);
+function activateWorkspace() {
+  if (workspaceActive) return;
+  workspaceActive = true;
+  void syncRouteWorkspace();
+}
+onMounted(activateWorkspace);
+onActivated(activateWorkspace);
+onDeactivated(() => { workspaceActive = false; });
+onUnmounted(() => { workspaceActive = false; draftRevision++; });
+watch(factoryId, () => {
+  initializeCreateForm();
+  draftInitialized = false;
+  tableData.value = [];
+  pagination.value = { page: 1, size: 10, total: 0 };
+  if (workspaceActive) void syncRouteWorkspace();
+}, { flush: 'sync' });
 
 async function loadData() {
   if (!factoryId.value) return;
+  const revision = draftRevision;
   loading.value = true;
   try {
     const res = await get(`/${factoryId.value}/transfers`, {
       params: { page: pagination.value.page, size: pagination.value.size },
     });
+    if (revision !== draftRevision) return;
     if (res.success && res.data) {
       tableData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
@@ -172,7 +216,7 @@ async function loadData() {
       ElMessage.error(res.message || '加载失败');
     }
   } catch { /* axios interceptor already displayed error toast */ }
-  finally { loading.value = false; }
+  finally { if (revision === draftRevision) loading.value = false; }
 }
 
 interface InventoryByWarehouseResponse {
@@ -181,9 +225,13 @@ interface InventoryByWarehouseResponse {
 }
 
 async function loadSourceInventoryOptions() {
+  const revision = draftRevision;
+  const warehouseId = form.value.sourceWarehouseId;
+  const isCurrent = () => revision === draftRevision && warehouseId === form.value.sourceWarehouseId;
   sourceMaterialOptions.value = [];
   finishedGoodsOptions.value = [];
   sourceInventoryError.value = '';
+  sourceInventoryLoading.value = false;
   sourceInventoryLoaded.value = Boolean(form.value.sourceWarehouseId);
   if (!factoryId.value || !form.value.sourceWarehouseId) return;
   sourceInventoryLoading.value = true;
@@ -194,13 +242,15 @@ async function loadSourceInventoryOptions() {
         warehouseId: form.value.sourceWarehouseId,
       },
     });
+    if (!isCurrent()) return;
     const inventory = res?.data;
     sourceMaterialOptions.value = aggregateMaterialInventoryOptions(inventory?.materials || []);
     finishedGoodsOptions.value = aggregateFinishedGoodsOptions(inventory?.products || []);
   } catch {
+    if (!isCurrent()) return;
     sourceInventoryError.value = '库存基本类型读取失败，请刷新后重试或联系仓库管理员。';
   }
-  finally { sourceInventoryLoading.value = false; }
+  finally { if (isCurrent()) sourceInventoryLoading.value = false; }
 }
 
 async function handleSourceWarehouseChange() {
@@ -258,52 +308,75 @@ function isPickedInAnotherRow(row: TransferCreateRow, optionId: string): boolean
 
 // PR #309 C2 — load visible factory network for 调入方 dropdown
 async function loadFactoryNetwork() {
-  if (!factoryId.value) return;
+  if (!factoryId.value || ['loading', 'loaded'].includes(optionLoadState.value.network)) return;
+  const revision = draftRevision;
+  optionLoadState.value.network = 'loading';
   factoryNetworkLoading.value = true;
   try {
     const res = await get<FactoryNetworkEntry[]>(`/${factoryId.value}/factories/network`);
-    const entries = (res?.data ?? []) as FactoryNetworkEntry[];
-    factoryNetworkOptions.value = Array.isArray(entries) ? entries : [];
+    if (revision !== draftRevision) return;
+    if (!res.success || !Array.isArray(res.data)) throw new Error('工厂选项读取失败');
+    factoryNetworkOptions.value = res.data;
+    optionLoadState.value.network = 'loaded';
     // Default to own factory if only one entry visible (and form not yet filled)
     if (factoryNetworkOptions.value.length === 1 && !form.value.targetFactoryId) {
       form.value.targetFactoryId = factoryNetworkOptions.value[0].factoryId;
       await loadTargetWarehouses();
     }
   } catch {
-    // Fallback: at minimum let user fill in manually (so we keep filterable allow-create on the select)
-    factoryNetworkOptions.value = [];
+    if (revision !== draftRevision) return;
+    optionLoadState.value.network = 'error';
   } finally {
-    factoryNetworkLoading.value = false;
+    if (revision === draftRevision) factoryNetworkLoading.value = false;
   }
 }
 
 // F-FP-4: 加载本厂仓库列表 (同 stocktakes/index.vue loadWarehouses)
 async function loadWarehousesForFactory(targetFactoryId: string): Promise<WarehouseOption[]> {
   if (!factoryId.value || !targetFactoryId) return [];
-  try {
-    const ownFactory = targetFactoryId === factoryId.value;
-    const url = ownFactory
-      ? `/${factoryId.value}/factory/warehouses`
-      : `/${factoryId.value}/inventory/warehouses`;
-    const res = await get<WarehouseOption[]>(url, ownFactory ? undefined : {
-      params: { targetFactoryId },
-    });
-    return Array.isArray(res.data) ? res.data : [];
-  } catch {
-    return [];
-  }
+  const ownFactory = targetFactoryId === factoryId.value;
+  const url = ownFactory
+    ? `/${factoryId.value}/factory/warehouses`
+    : `/${factoryId.value}/inventory/warehouses`;
+  const res = await get<WarehouseOption[]>(url, ownFactory ? undefined : {
+    params: { targetFactoryId },
+  });
+  if (!res.success || !Array.isArray(res.data)) throw new Error('仓库选项读取失败');
+  return res.data;
 }
 
 async function loadSourceWarehouses() {
-  sourceWarehouseOptions.value = factoryId.value
-    ? await loadWarehousesForFactory(factoryId.value)
-    : [];
+  if (!factoryId.value || ['loading', 'loaded'].includes(optionLoadState.value.source)) return;
+  const revision = draftRevision;
+  optionLoadState.value.source = 'loading';
+  try {
+    const options = await loadWarehousesForFactory(factoryId.value);
+    if (revision !== draftRevision) return;
+    sourceWarehouseOptions.value = options;
+    optionLoadState.value.source = 'loaded';
+  } catch {
+    if (revision === draftRevision) optionLoadState.value.source = 'error';
+  }
 }
 
 async function loadTargetWarehouses() {
-  targetWarehouseOptions.value = form.value.targetFactoryId
-    ? await loadWarehousesForFactory(form.value.targetFactoryId)
-    : [];
+  const revision = draftRevision;
+  const targetFactory = form.value.targetFactoryId;
+  if (targetOptionsFactory === targetFactory && ['loading', 'loaded'].includes(optionLoadState.value.target)) return;
+  targetOptionsFactory = targetFactory;
+  const request = ++targetOptionsRequest;
+  const isCurrent = () => revision === draftRevision && request === targetOptionsRequest;
+  targetWarehouseOptions.value = [];
+  if (!targetFactory || !factoryId.value) { optionLoadState.value.target = 'idle'; return; }
+  optionLoadState.value.target = 'loading';
+  try {
+    const options = await loadWarehousesForFactory(targetFactory);
+    if (!isCurrent()) return;
+    targetWarehouseOptions.value = options;
+    optionLoadState.value.target = 'loaded';
+  } catch {
+    if (isCurrent()) optionLoadState.value.target = 'error';
+  }
 }
 
 async function handleTargetFactoryChange() {
@@ -320,6 +393,9 @@ async function handleTransferTypeChange(value: TransferType) {
 }
 
 function initializeCreateForm() {
+  draftRevision++;
+  optionLoadState.value = { network: 'idle', source: 'idle', target: 'idle' };
+  targetOptionsFactory = '';
   form.value = {
     transferType: 'BRANCH_TO_HQ',
     targetFactoryId: '',
@@ -334,10 +410,18 @@ function initializeCreateForm() {
   finishedGoodsOptions.value = [];
   sourceInventoryLoaded.value = false;
   sourceInventoryError.value = '';
+  sourceInventoryLoading.value = false;
+  factoryNetworkOptions.value = [];
+  sourceWarehouseOptions.value = [];
+  targetWarehouseOptions.value = [];
+  factoryNetworkLoading.value = false;
+  loading.value = false;
+  submitting.value = false;
+  formRef.value?.clearValidate();
 }
 
 function openCreateWorkspace() {
-  router.push({ name: 'TransferCreate' });
+  router.push({ name: 'TransferCreate', query: { _task: crypto.randomUUID() } });
 }
 
 function cancelCreate() {
@@ -369,6 +453,7 @@ function removeItem(idx: number) {
 }
 
 async function handleMaterialChange(idx: number, selectedId: string) {
+  const revision = draftRevision;
   const row = form.value.items[idx];
   const m = selectableOptions(row).find(o => o.id === selectedId);
   if (m) {
@@ -377,6 +462,7 @@ async function handleMaterialChange(idx: number, selectedId: string) {
       const response = await get<{
         packagingSpecs?: NonNullable<TransferCreateRow['packagingOptions']>;
       } | null>(`/${factoryId.value}/material-packaging/by-material/${row.materialTypeId}`);
+      if (revision !== draftRevision || !form.value.items.includes(row) || row.selectedItemId !== selectedId) return;
       row.packagingOptions = (response.data?.packagingSpecs || []).filter((spec) => spec);
       const selected = row.packagingOptions.find((spec) => spec.defaultSpec)
         || (row.packagingOptions.length === 1 ? row.packagingOptions[0] : undefined);
@@ -423,8 +509,12 @@ function formatStock(v: unknown): string {
 }
 
 async function submitCreate() {
-  if (!formRef.value) return;
+  if (!formRef.value || submitting.value || validating) return;
+  const revision = draftRevision;
+  validating = true;
   const valid = await formRef.value.validate().catch(() => false);
+  validating = false;
+  if (revision !== draftRevision) return;
   if (!valid) return;
   if (form.value.items.length === 0) {
     ElMessage.warning('请至少添加一行调拨物料');
@@ -477,9 +567,13 @@ async function submitCreate() {
     if (form.value.expectedArrivalDate) payload.expectedArrivalDate = form.value.expectedArrivalDate;
 
     const res = await post(`/${factoryId.value}/transfers`, payload);
+    if (revision !== draftRevision) return;
     if (res.success && res.data) {
       ElMessage.success('调拨单已创建 (DRAFT)，可在详情页继续走 申请→审批→发货→签收 流程');
       const created = res.data as { id?: string | number };
+      initializeCreateForm();
+      draftInitialized = false;
+      if (!workspaceActive || !ownsCurrentRoute()) return;
       if (created.id !== undefined && created.id !== null) {
         await router.replace({ name: 'TransferDetail', params: { id: String(created.id) } });
       } else {
@@ -487,13 +581,14 @@ async function submitCreate() {
       }
     }
   } catch (e) {
+    if (revision !== draftRevision) return;
     if (e === 'cancel') return;
     const err = e as { status?: number; message?: string; actionHint?: string | null } | undefined;
     if (!err || (err.status !== 409 && !err.actionHint)) {
       ElMessage.error(err?.message || '创建调拨单失败');
     }
   } finally {
-    submitting.value = false;
+    if (revision === draftRevision) submitting.value = false;
   }
 }
 
@@ -757,6 +852,10 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             </el-form-item>
           </el-col>
         </el-row>
+        <el-alert v-if="optionsFailed" type="error" :closable="false" show-icon>
+          <template #title>部分调拨选项加载失败，已填写内容仍保留</template>
+          <el-button :loading="optionsLoading" @click="retryDraftOptions">重试加载选项</el-button>
+        </el-alert>
         <el-form-item label="备注 / 原因">
           <el-input
             v-model="form.remark" type="textarea" :rows="2"
