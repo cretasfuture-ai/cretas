@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-- `DRIVE-20260910-INTEGRATION` — `review` — Owner: Codex/01a08b76 — Base: `e03fc7cf0c7c100d35cb8e907067e4b7e7e118af` — B01–B05候选及目标测试由协调者独占；负优化回归已修，Web209/App34/Java51及目标UI通过。75行已分类回填；未合并部署、生产/真机未验。详情 drive-20260910/INTEGRATION.md，合并后归档释放锁。
 
 
 

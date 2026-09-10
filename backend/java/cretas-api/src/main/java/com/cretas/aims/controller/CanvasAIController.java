@@ -726,10 +726,21 @@ public class CanvasAIController {
     @Operation(summary = "批量应用 Plan Mode 生成的变更")
     // Round 7a P0 fix: same exposure as /chat — plan-mode diffs execute canvas_* tools.
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ApplyDiffsResult> applyDiffs(
+    public ApiResponse<ApplyDiffsResult> applyDiffsWithProtocol(
             @PathVariable String factoryId,
             @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Canvas-Result-Protocol", required = false) String resultProtocol,
             @RequestBody List<Map<String, Object>> diffs) {
+        if (!"2".equals(resultProtocol)) {
+            return ApiResponse.error("页面版本已更新，请刷新页面后重新确认；本次未执行任何变更");
+        }
+        return applyDiffs(factoryId, authorization, diffs);
+    }
+
+    // Internal execution entry; only the protocol-aware method is HTTP-mapped.
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<ApplyDiffsResult> applyDiffs(
+            String factoryId, String authorization, List<Map<String, Object>> diffs) {
 
         Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
         String operationId = "canvas-confirm-" + UUID.randomUUID();

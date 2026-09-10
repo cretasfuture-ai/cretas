@@ -37,6 +37,34 @@ class CanvasAIApplyDiffsResultTest {
 
     private Map<String, Object> diff(Map<String, Object> params) { return Map.of("tool", TOOL, "params", params); }
 
+    @ParameterizedTest @NullAndEmptySource @ValueSource(strings = {"1", "3"})
+    void legacyHttpClientIsRejectedBeforeAnyExecution(String protocol) throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/mobile/LOCAL_B05/config/v2/ai/apply-diffs")
+                .contentType("application/json").content("[]");
+        if (protocol != null) request.header("X-Canvas-Result-Protocol", protocol);
+        mvc.perform(request)
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.success").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message").value(org.hamcrest.Matchers.containsString("未执行")));
+        verifyNoInteractions(registry, mobile);
+    }
+
+    @Test void currentClientCanExecuteWithStructuredReceipt() throws Exception {
+        var tool = new ContractTool();
+        when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/mobile/LOCAL_B05/config/v2/ai/apply-diffs")
+                .header("X-Canvas-Result-Protocol", "2").header("Authorization", "Bearer local-test")
+                .contentType("application/json").content("[{\"tool\":\"canvas_work_process_catalog\",\"params\":{\"action\":\"create\"}}]"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.success").value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.items[0].status").value("SUCCESS"));
+        assertEquals(1, tool.writes);
+    }
+
     @Test void toolWrappedFailuresDoNotProveThatRetryIsSafe() {
         var tool = new ContractTool();
         when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
