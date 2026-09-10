@@ -14,7 +14,7 @@ describe('调拨新建小屏工作区', () => {
     expect(newRoute).toBeGreaterThan(-1);
     expect(detailRoute).toBeGreaterThan(newRoute);
     expect(routerSource).toContain("name: 'TransferCreate'");
-    expect(transferSource).toContain("router.push({ name: 'TransferCreate' })");
+    expect(transferSource).toContain("router.push({ name: 'TransferCreate', query: { _task: crypto.randomUUID() } })");
     expect(transferSource).toContain('v-if="isCreateWorkspace"');
     expect(transferSource).not.toContain('<el-dialog');
   });
