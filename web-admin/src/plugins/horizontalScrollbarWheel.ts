@@ -158,9 +158,69 @@ export function installHorizontalScrollbarWheel(source: EventTarget): () => void
   return () => source.removeEventListener('wheel', onWheel);
 }
 
+/** A separate native scrollbar above the table, sharing EP's real scroll offset. */
+export function installTableTopScrollbar(table: HTMLElement): () => void {
+  const wrap = table.querySelector<HTMLElement>('.el-table__body-wrapper .el-scrollbar__wrap');
+  if (!wrap || !table.parentElement) return () => {};
+  const bar = document.createElement('div');
+  bar.className = 'cretas-table-top-scrollbar';
+  bar.setAttribute('role', 'region');
+  bar.setAttribute('aria-label', '表格顶部横向滚动');
+  bar.tabIndex = 0;
+  const track = document.createElement('div');
+  track.style.height = '1px';
+  bar.append(track);
+  table.before(bar);
+  const update = (): void => {
+    bar.style.width = `${table.clientWidth}px`;
+    track.style.width = `${wrap.scrollWidth}px`;
+    bar.hidden = wrap.scrollWidth <= wrap.clientWidth || table.clientWidth === 0;
+    bar.scrollLeft = wrap.scrollLeft;
+  };
+  const fromTop = (): void => { if (wrap.scrollLeft !== bar.scrollLeft) wrap.scrollLeft = bar.scrollLeft; };
+  const fromBody = (): void => { if (bar.scrollLeft !== wrap.scrollLeft) bar.scrollLeft = wrap.scrollLeft; };
+  const wheel = (event: WheelEvent): void => {
+    if (event.ctrlKey) return;
+    const before = bar.scrollLeft;
+    bar.scrollLeft += horizontalWheelDelta(event);
+    if (bar.scrollLeft !== before) { fromTop(); event.preventDefault(); }
+  };
+  bar.addEventListener('scroll', fromTop);
+  bar.addEventListener('wheel', wheel, { passive: false });
+  wrap.addEventListener('scroll', fromBody);
+  const observer = new ResizeObserver(update);
+  observer.observe(table);
+  observer.observe(wrap);
+  const body = wrap.querySelector('.el-table__body');
+  if (body) observer.observe(body);
+  update();
+  return () => {
+    observer.disconnect();
+    bar.removeEventListener('scroll', fromTop);
+    bar.removeEventListener('wheel', wheel);
+    wrap.removeEventListener('scroll', fromBody);
+    bar.remove();
+  };
+}
+
 export default {
-  install(_app: App): void {
+  install(app: App): void {
     if (typeof document === 'undefined') return;
     installHorizontalScrollbarWheel(document);
+    const cleanups = new WeakMap<object, () => void>();
+    app.mixin({
+      mounted() {
+        if (this.$options.name === 'ElTable' && this.$el instanceof HTMLElement) {
+          cleanups.set(this, installTableTopScrollbar(this.$el));
+        }
+      },
+      activated() {
+        if (!cleanups.has(this) && this.$options.name === 'ElTable' && this.$el instanceof HTMLElement) {
+          cleanups.set(this, installTableTopScrollbar(this.$el));
+        }
+      },
+      deactivated() { cleanups.get(this)?.(); cleanups.delete(this); },
+      beforeUnmount() { cleanups.get(this)?.(); cleanups.delete(this); },
+    });
   },
 };

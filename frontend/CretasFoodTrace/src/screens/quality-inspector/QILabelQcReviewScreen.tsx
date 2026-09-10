@@ -86,6 +86,7 @@ import {
 } from './labelQcObjectReviewModel';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
+import { labelQcToolbarPosition } from './labelQcToolbarPosition';
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QILabelQcReview'>;
 
 interface Viewport {
@@ -367,6 +368,7 @@ function HumanInlineToolbar({
   annotation,
   surface,
   viewport,
+  container,
   readOnly,
   onLabel,
   onDelete,
@@ -374,20 +376,13 @@ function HumanInlineToolbar({
   annotation: LabelQcReviewAnnotationDraft;
   surface: SurfaceSize;
   viewport: Viewport;
+  container: { width: number; height: number };
   readOnly: boolean;
   onLabel: (label: LabelQcLabel) => void;
   onDelete: () => void;
 }) {
   if (!annotation.bbox || readOnly) return null;
-  const width = 214;
-  const boxCenterX =
-    ((annotation.bbox.xMin + annotation.bbox.xMax) / 2) * surface.width;
-  const left = clamp(boxCenterX - width / 2, 4, surface.width - width - 4);
-  const preferredTop = annotation.bbox.yMin * surface.height - 44 / viewport.scale;
-  const top =
-    preferredTop >= 4
-      ? preferredTop
-      : annotation.bbox.yMax * surface.height + 7 / viewport.scale;
+  const { width, left, top } = labelQcToolbarPosition(annotation.bbox, surface, viewport, container);
 
   return (
     <View
@@ -397,7 +392,6 @@ function HumanInlineToolbar({
           left,
           top,
           width,
-          transform: [{ scale: 1 / viewport.scale }],
         },
       ]}
       testID="qi-label-qc-human-inline-toolbar"
@@ -441,7 +435,7 @@ function HumanInlineToolbar({
   );
 }
 
-function PhotoCanvas({
+export function PhotoCanvas({
   photo,
   draft,
   referenceBoxes,
@@ -646,12 +640,13 @@ function PhotoCanvas({
   };
 
   return (
-    <GestureDetector gesture={combinedGesture}>
       <View
         style={styles.canvas}
         onLayout={handleLayout}
         testID="qi-label-qc-photo-canvas"
       >
+        <GestureDetector gesture={combinedGesture}>
+        <View style={StyleSheet.absoluteFill}>
         <View
           style={[
             styles.photoSurface,
@@ -720,17 +715,27 @@ function PhotoCanvas({
               }
             />
           ))}
-          {selectedHuman && (
+        </View>
+        </View>
+        </GestureDetector>
+        {/* Toolbar touches must never reach the canvas tap-to-add recognizer. */}
+        {selectedHuman && !readOnly && (
+          <View
+            pointerEvents="box-none"
+            testID="qi-label-qc-toolbar-overlay"
+            style={StyleSheet.absoluteFill}
+          >
             <HumanInlineToolbar
               annotation={selectedHuman}
               surface={surface}
               viewport={viewport}
+              container={container}
               readOnly={readOnly}
               onLabel={(label) => onHumanLabel(selectedHuman.key, label)}
               onDelete={() => onDelete(selectedHuman.key)}
             />
-          )}
-        </View>
+          </View>
+        )}
 
         <View style={styles.zoomBadge} pointerEvents="none">
           <Text style={styles.zoomBadgeText}>
@@ -740,7 +745,6 @@ function PhotoCanvas({
           </Text>
         </View>
       </View>
-    </GestureDetector>
   );
 }
 
@@ -1788,8 +1792,9 @@ const styles = StyleSheet.create({
   },
   inlineToolbar: {
     position: 'absolute',
-    height: 40,
+    height: 50,
     flexDirection: 'row',
+    gap: 8,
     alignItems: 'center',
     padding: 3,
     borderRadius: 10,
@@ -1803,7 +1808,8 @@ const styles = StyleSheet.create({
   },
   inlineButton: {
     flex: 1,
-    height: 34,
+    height: 44,
+    minWidth: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 7,
@@ -1811,7 +1817,7 @@ const styles = StyleSheet.create({
   inlineButtonActive: { backgroundColor: '#00A883' },
   inlineButtonText: { fontSize: 11, fontWeight: '700', color: '#29443C' },
   inlineButtonTextActive: { color: '#fff' },
-  inlineDeleteButton: { flex: 0, width: 38, backgroundColor: '#FFF0EE' },
+  inlineDeleteButton: { flex: 0, width: 44, backgroundColor: '#FFF0EE' },
   stickyError: {
     flexDirection: 'row',
     alignItems: 'center',

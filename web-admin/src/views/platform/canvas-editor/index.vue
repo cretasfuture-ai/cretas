@@ -115,6 +115,7 @@
         </div>
 
         <!-- Diff viewer -->
+        <el-alert v-if="applyResultMessage" :title="applyResultMessage" type="info" :closable="false" />
         <ConfigDiffViewer
           v-if="pendingChanges.length > 0"
           :changes="pendingChanges"
@@ -167,13 +168,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, toRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCanvasEditor } from './composables/useCanvasEditor'
 import { aiApplyDiffs, submitForReview, approveConfig, rejectConfig, publishNow as apiPublishNow, cancelApproval as apiCancelApproval } from '@/api/canvasApi'
 import { saveModuleConfig } from '@/api/configApi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ConfigDiff } from '@/types/canvas'
+import { ApiError } from '@/types/api'
+import { readApplyChangesResult, applyChangesSummary } from './applyChangesResult'
 import { isDecisionType, type DecisionType } from '@/api/approvalWorkflow'
 
 // Components
@@ -284,6 +287,12 @@ async function withLock(code: string, fn: () => Promise<void>) {
 }
 
 const pendingChanges = ref<ConfigDiff[]>([])
+const applyResultMessage = ref('')
+const applyingChanges = ref(false)
+const settledChanges = new WeakSet<ConfigDiff>()
+const unknownChangeKeys = new Set<string>()
+const changeKey = (change: ConfigDiff) => JSON.stringify({ tool: change.path, params: change.after })
+const isSettled = (change: ConfigDiff) => settledChanges.has(toRaw(change)) || unknownChangeKeys.has(changeKey(change))
 const showApproveDialog = ref(false)
 const showRejectDialog = ref(false)
 const showPublishWindow = ref(false)
@@ -291,16 +300,35 @@ const showSchemaPreview = ref(false)
 const showVersionHistory = ref(false)
 const screenTooSmall = ref(false)
 
-function handleAIDiff(diffs: ConfigDiff[]) { pendingChanges.value = diffs }
+function handleAIDiff(diffs: ConfigDiff[]) {
+  if (applyingChanges.value) return
+  pendingChanges.value = diffs.filter(diff => !isSettled(diff))
+}
 
 async function applyChanges() {
-  if (!factoryId.value) return
+  if (!factoryId.value || applyingChanges.value) return
+  const submitted = pendingChanges.value.filter(change => !isSettled(change))
+  if (!submitted.length) return
+  applyingChanges.value = true
+  let payload: unknown
   try {
-    const diffs = pendingChanges.value.map(c => ({ type: c.type, tool: c.path, params: c.after, description: c.description }))
-    await aiApplyDiffs(factoryId.value, diffs)
-    ElMessage.success('变更已应用')
-    pendingChanges.value = []
-  } catch { /* axios interceptor already displayed error toast */ }
+    const diffs = submitted.map(c => ({ type: c.type, tool: c.path, params: c.after, description: c.description }))
+    payload = (await aiApplyDiffs(factoryId.value, diffs)).data
+  } catch (error) {
+    payload = error instanceof ApiError ? error.data : undefined
+  } finally {
+    applyingChanges.value = false
+  }
+  const result = readApplyChangesResult(payload, submitted.length)
+  applyResultMessage.value = [applyResultMessage.value, applyChangesSummary(result)].filter(Boolean).join('\n')
+  for (const item of result.items) {
+    // UNKNOWN is quarantined, not put back into the batch retry button.
+    if (item.status !== 'FAILURE') settledChanges.add(toRaw(submitted[item.index]!))
+    if (item.status === 'UNKNOWN') unknownChangeKeys.add(changeKey(submitted[item.index]!))
+  }
+  pendingChanges.value = submitted.filter(change => !isSettled(change))
+  if (result.items.every(item => item.status === 'SUCCESS')) ElMessage.success('变更已应用')
+  else ElMessage.warning(applyResultMessage.value)
 }
 
 // Round 7a: all action functions now run under withLock() to prevent double-submit.

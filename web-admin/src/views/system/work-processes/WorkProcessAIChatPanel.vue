@@ -33,11 +33,12 @@
               link
               size="small"
               :loading="applyingDiffKey === diffKey(diff)"
-              :disabled="appliedDiffKeys.has(diffKey(diff))"
+              :disabled="appliedDiffKeys.has(diffKey(diff)) || unknownDiffKeys.has(payloadKey(diff))"
               @click="applyDiff(diff, message.mode)"
             >
-              {{ appliedDiffKeys.has(diffKey(diff))
-                ? '已执行'
+              {{ unknownDiffKeys.has(payloadKey(diff)) ? '结果待核对'
+                : reusedDiffKeys.has(diffKey(diff)) ? '已复用，未新增'
+                : appliedDiffKeys.has(diffKey(diff)) ? '已执行'
                 : message.mode === 'autopilot' ? '确认并执行' : '应用' }}
             </el-button>
           </div>
@@ -59,12 +60,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, toRaw } from 'vue';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { aiApplyDiffs, aiChat } from '@/api/canvasApi';
 import type { AIAgentMode } from '@/types/canvas';
-import type { ApiResponse } from '@/types/api';
+import { ApiError, type ApiResponse } from '@/types/api';
+import { readApplyChangesResult, applyChangesSummary } from '@/views/platform/canvas-editor/applyChangesResult';
 
 const MODULE_CODE = 'work_process_catalog';
 const WORK_PROCESS_TOOL = 'canvas_work_process_catalog';
@@ -108,6 +110,8 @@ const input = ref('');
 const loading = ref(false);
 const applyingDiffKey = ref('');
 const appliedDiffKeys = ref(new Set<string>());
+const unknownDiffKeys = ref(new Set<string>());
+const reusedDiffKeys = ref(new Set<string>());
 const messagesRef = ref<HTMLElement>();
 const messages = ref<ChatMessage[]>([
   {
@@ -125,8 +129,16 @@ function isWorkProcessDiff(diff: CanvasDiff): boolean {
   return diff.tool === WORK_PROCESS_TOOL;
 }
 
-function diffKey(diff: CanvasDiff): string {
+function payloadKey(diff: CanvasDiff): string {
   return JSON.stringify({ tool: diff.tool, params: diff.params });
+}
+const proposalKeys = new WeakMap<CanvasDiff, string>();
+let proposalSequence = 0;
+function diffKey(diff: CanvasDiff): string {
+  const raw = toRaw(diff);
+  let key = proposalKeys.get(raw);
+  if (!key) { key = String(++proposalSequence); proposalKeys.set(raw, key); }
+  return key;
 }
 
 async function send(): Promise<void> {
@@ -177,22 +189,34 @@ async function applyDiff(diff: CanvasDiff, sourceMode?: AIAgentMode): Promise<vo
     || (sourceMode !== 'plan' && sourceMode !== 'autopilot')
     || !isWorkProcessDiff(diff)
     || appliedDiffKeys.value.has(key)
+    || unknownDiffKeys.value.has(payloadKey(diff))
     || applyingDiffKey.value) return;
 
   applyingDiffKey.value = key;
   try {
-    await aiApplyDiffs(props.factoryId, [diff as unknown as Record<string, unknown>]);
-    appliedDiffKeys.value.add(key);
-    ElMessage.success('工序变更已应用');
-    emit('applied');
+    const response = await aiApplyDiffs(props.factoryId, [diff as unknown as Record<string, unknown>]);
+    handleApplyResult(response.data, key, payloadKey(diff));
   } catch (e) {
-    // D3 B-1: request interceptor shows backend toast, but also push a chat message
-    // so the failure is visible inline in the conversation (not just a transient toast)
-    const backendMsg = isAxiosError(e) ? e.response?.data?.message : null;
-    const errorText = backendMsg || '应用工序变更失败，请稍后重试';
-    messages.value.push({ role: 'assistant', content: `应用失败: ${errorText}` });
+    handleApplyResult(e instanceof ApiError ? e.data : undefined, key, payloadKey(diff));
   } finally {
     applyingDiffKey.value = '';
+  }
+}
+
+function handleApplyResult(payload: unknown, key: string, unknownKey: string): void {
+  const result = readApplyChangesResult(payload, 1);
+  const item = result.items[0]!;
+  messages.value.push({ role: 'assistant', content: applyChangesSummary(result) });
+  if (item.status === 'SUCCESS' || item.status === 'REUSED') {
+    appliedDiffKeys.value.add(key);
+    if (item.status === 'REUSED') {
+      reusedDiffKeys.value.add(key);
+      ElMessage.warning('已复用现有工序，未新增');
+    } else ElMessage.success('工序变更已应用');
+    emit('applied');
+  } else if (item.status === 'UNKNOWN') {
+    unknownDiffKeys.value.add(unknownKey);
+    ElMessage.warning('执行结果不明，请核对实际记录，勿重复执行');
   }
 }
 

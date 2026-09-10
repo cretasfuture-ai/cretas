@@ -35,14 +35,14 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
     private final ProductionAlertRepository productionAlertRepository;
     private final ApplicationEventPublisher eventPublisher;
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Autowired
     private ProductionBatchRepository productionBatchRepository;
 
     /**
      * 🔒🔒 QC 生产门 (食品安全): 质检判 FAILED 时用于隔离该生产计划已入库的可售成品批次。
-     * optional (required=false) 保持与 productionBatchRepository 一致, 不破坏未 wire 该 bean 的单测。
+     * Required: a missing isolation repository must not silently leave failed goods sellable.
      */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
     /** Canvas V2: DB-driven validation rules */
@@ -142,12 +142,12 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
             }
         }
 
+        propagateToProductionBatch(saved);
+
         // QI FAIL → 自动创建告警 + 发送通知
         if ("FAIL".equalsIgnoreCase(saved.getResult())) {
             createQualityFailAlert(saved);
         }
-
-        propagateToProductionBatch(saved);
 
         return saved;
     }
@@ -159,25 +159,20 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         // ProductionBatch.recalculate() on production events. Inspection.passRate
         // is an audit sampling ratio (passCount / sampleSize) and must not
         // overwrite the production yield.
-        if (productionBatchRepository == null) return;
         Long batchId = inspection.getProductionBatchId();
         if (batchId == null) return;
-        try {
-            productionBatchRepository.findById(batchId).ifPresent(batch -> {
-                QualityStatus newStatus = mapInspectionResultToBatchQuality(inspection.getResult());
-                if (newStatus == null) return;
-                batch.setQualityStatus(newStatus);
-                productionBatchRepository.save(batch);
-                // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 质检判 FAILED → 该生产计划已入库的可售成品批次
-                // 立即隔离为 DEFECTIVE (不可售)。覆盖"先小结产出可售成品, 后质检失败"的时序。成品可售/FEFO
-                // 查询过滤 status='AVAILABLE' 自动排除 DEFECTIVE。质检经理复核后可放行(→AVAILABLE)。
-                if (newStatus == QualityStatus.FAILED) {
-                    quarantineFinishedGoodsForFailedBatch(batch);
-                }
-            });
-        } catch (Exception e) {
-            log.warn("Batch writeback failed for inspection {} → batch {}: {}",
-                    inspection.getId(), batchId, e.getMessage());
+        ProductionBatch batch = productionBatchRepository.findById(batchId)
+                .filter(candidate -> inspection.getFactoryId().equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new EntityNotFoundException("ProductionBatch", batchId.toString()));
+        QualityStatus newStatus = mapInspectionResultToBatchQuality(inspection.getResult());
+        if (newStatus == null) return;
+        batch.setQualityStatus(newStatus);
+        productionBatchRepository.save(batch);
+        // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 质检判 FAILED → 该生产计划已入库的可售成品批次
+        // 立即隔离为 DEFECTIVE (不可售)。覆盖"先小结产出可售成品, 后质检失败"的时序。成品可售/FEFO
+        // 查询过滤 status='AVAILABLE' 自动排除 DEFECTIVE。质检经理复核后可放行(→AVAILABLE)。
+        if (newStatus == QualityStatus.FAILED) {
+            quarantineFinishedGoodsForFailedBatch(batch);
         }
     }
 
@@ -189,30 +184,25 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
      * 故按 productionPlanId 批量隔离。只把 AVAILABLE 的可售批次改 DEFECTIVE (不动 DEPLETED/EXPIRED/
      * REVERSED/FROZEN 等非可售终态)。已发货部分不回退, 但剩余可售库存立即冻结, 阻止不合格品继续售出。
      *
-     * <p>fail-soft: 隔离失败仅记 error 日志, 不回滚质检结果写回 (质检记录是权威食品安全事件, 必须落库)。
+     * <p>Inspection, batch verdict and quarantine share the caller's transaction.
+     * A failed isolation must fail the submission, allowing the inspector to retry.
      */
     private void quarantineFinishedGoodsForFailedBatch(ProductionBatch batch) {
-        if (finishedGoodsBatchRepository == null) return;
         String planId = batch.getProductionPlanId();
         if (planId == null || planId.isBlank()) return;
-        try {
-            var fgBatches = finishedGoodsBatchRepository
-                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(batch.getFactoryId(), planId);
-            int quarantined = 0;
-            for (var fg : fgBatches) {
-                if ("AVAILABLE".equals(fg.getStatus())) {
-                    fg.setStatus("DEFECTIVE");
-                    finishedGoodsBatchRepository.save(fg);
-                    quarantined++;
-                }
+        var fgBatches = finishedGoodsBatchRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(batch.getFactoryId(), planId);
+        int quarantined = 0;
+        for (var fg : fgBatches) {
+            if ("AVAILABLE".equals(fg.getStatus())) {
+                fg.setStatus("DEFECTIVE");
+                finishedGoodsBatchRepository.save(fg);
+                quarantined++;
             }
-            if (quarantined > 0) {
-                log.warn("QC 失败隔离成品: productionBatchId={}, planId={}, 隔离 {} 个可售成品批次 → DEFECTIVE (不可售, 待质检复核)",
-                        batch.getId(), planId, quarantined);
-            }
-        } catch (Exception e) {
-            log.error("QC 失败隔离成品异常 (不阻断质检结果落库): productionBatchId={}, planId={}: {}",
-                    batch.getId(), planId, e.getMessage());
+        }
+        if (quarantined > 0) {
+            log.warn("QC 失败隔离成品: productionBatchId={}, planId={}, 隔离 {} 个可售成品批次 → DEFECTIVE (不可售, 待质检复核)",
+                    batch.getId(), planId, quarantined);
         }
     }
 

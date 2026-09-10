@@ -765,6 +765,32 @@ textarea:focus-visible {
   max-width: 32rem;
 }
 
+/* EP's separate header/body tables must use the same colgroup widths. */
+.el-table--layout-fixed .el-table__header,
+.el-table--layout-fixed .el-table__body,
+.el-table--layout-fixed .el-table__footer {
+  table-layout: fixed !important;
+}
+
+.el-table--layout-fixed .cell {
+  min-width: 0 !important;
+}
+
+.cretas-table-top-scrollbar {
+  box-sizing: border-box;
+  max-width: 100%;
+  height: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  scrollbar-color: #64748b var(--el-fill-color-light, #f5f7fa);
+  scrollbar-width: auto;
+}
+.cretas-table-top-scrollbar[hidden] { display: none; }
+.cretas-table-top-scrollbar::-webkit-scrollbar { height: 14px; }
+.cretas-table-top-scrollbar:focus-visible { outline: 2px solid #1b65a8; }
+
 /* Core business lists use a fixed grid so header/body/fixed-operation columns
  * share the same width contract. Other detail tables retain the semantic
  * content-driven sizing above. */

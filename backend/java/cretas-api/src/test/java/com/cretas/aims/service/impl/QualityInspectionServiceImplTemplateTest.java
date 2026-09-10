@@ -3,6 +3,8 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.engine.DynamicFieldService;
 import com.cretas.aims.engine.ValidationRuleEvaluator;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionAlertRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,6 +48,7 @@ class QualityInspectionServiceImplTemplateTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private ValidationRuleEvaluator validationRuleEvaluator;
     @Mock private DynamicFieldService dynamicFieldService;
+    @Mock private ProductionBatchRepository productionBatchRepository;
 
     @InjectMocks
     private QualityInspectionServiceImpl service;
@@ -57,6 +60,13 @@ class QualityInspectionServiceImplTemplateTest {
         // via reflection because Mockito does not populate field-level @Autowired.
         ReflectionTestUtils.setField(service, "validationRuleEvaluator", validationRuleEvaluator);
         ReflectionTestUtils.setField(service, "dynamicFieldService", dynamicFieldService);
+        ReflectionTestUtils.setField(service, "productionBatchRepository", productionBatchRepository);
+        when(productionBatchRepository.findById(any())).thenAnswer(invocation -> {
+            ProductionBatch batch = new ProductionBatch();
+            batch.setId(invocation.getArgument(0));
+            batch.setFactoryId("F001");
+            return java.util.Optional.of(batch);
+        });
     }
 
     @Test

@@ -24,8 +24,12 @@ import { Search, Refresh } from '@element-plus/icons-vue';
 import { warehouseDisplayName } from '@/utils/warehouse';
 import { displayUnit } from '@/utils/unitPricing';
 import { resolveWarehouseInventoryEmpty } from './warehouseInventoryEmptyState';
+import { aggregateInventory, isCompleteInventory, numericQuantity } from './inventoryAggregation';
+import { usePermissionStore } from '@/store/modules/permission';
+import { formatAmount, fmtQty } from '@/utils/tableFormatters';
 
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
 const ownFactoryId = computed(() => authStore.factoryId);
 
 // ==================== 工厂下拉 ====================
@@ -110,6 +114,8 @@ async function loadWarehouses() {
 // ==================== 库存数据 ====================
 
 interface MaterialBatchRow {
+  ownership?: string;
+  ownerCustomerId?: string;
   id: string;
   batchNumber: string;
   materialCode?: string;
@@ -135,9 +141,13 @@ interface MaterialBatchRow {
   storageLocation?: string;
   status?: string;
   supplierName?: string;
+  unitPrice?: number;
 }
 
 interface FinishedGoodsRow {
+  ownership?: string;
+  ownerCustomerId?: string;
+  unitCost?: number;
   id: string;
   batchNumber: string;
   productName?: string;
@@ -170,29 +180,71 @@ const loading = ref(false);
 const data = ref<InventoryByWarehouseData | null>(null);
 const activeTab = ref('materials');
 const keywordFilter = ref('');
+const viewMode = ref('summary');
+const inventoryError = ref('');
 
+const aggregateRows = computed(() => {
+  const snapshot = data.value;
+  if (!snapshot) return [];
+  const scope = { factoryId: snapshot.factoryId, warehouseId: snapshot.warehouseId };
+  return activeTab.value === 'products'
+    ? aggregateInventory(filteredProducts.value.map((row) => {
+      const quantity = numericQuantity(row.producedQuantity);
+      const shipped = numericQuantity(row.shippedQuantity);
+      const reserved = numericQuantity(row.reservedQuantity);
+      const ledger = quantity == null || shipped == null ? null : quantity - shipped;
+      const price = numericQuantity(row.unitCost);
+      return { ...scope, id: row.id, itemId: row.productTypeId, name: row.productName,
+        unit: row.unit, status: row.status, ownership: row.ownership, ownerCustomerId: row.ownerCustomerId, quantity: ledger,
+        available: ledger == null || reserved == null ? null : ledger - reserved,
+        value: ledger == null || price == null ? null : ledger * price };
+    }))
+    : aggregateInventory(filteredMaterials.value.map((row) => {
+      const quantity = numericQuantity(row.currentQuantity);
+      const price = numericQuantity(row.unitPrice);
+      return { ...scope, id: row.id, itemId: row.materialTypeId, name: row.materialName, code: row.materialCode,
+        unit: row.quantityUnit || row.unit, status: row.status, ownership: row.ownership, ownerCustomerId: row.ownerCustomerId, quantity,
+        available: quantity == null ? null : Math.max(0, quantity - (numericQuantity(row.unsettledConsumption) ?? 0)),
+        value: quantity == null || price == null ? null : quantity * price };
+    }));
+});
+
+let inventoryRequest = 0;
 async function loadInventory() {
+  const requestId = ++inventoryRequest;
   if (!ownFactoryId.value || !selectedFactoryId.value || !selectedWarehouseId.value) {
     return;
   }
   loading.value = true;
+  inventoryError.value = '';
+  data.value = null;
   try {
     const url =
       `/${ownFactoryId.value}/inventory/by-warehouse?` +
       `targetFactoryId=${encodeURIComponent(selectedFactoryId.value)}` +
       `&warehouseId=${encodeURIComponent(selectedWarehouseId.value)}`;
     const resp = await get<InventoryByWarehouseData>(url);
+    if (requestId !== inventoryRequest) return;
     if (resp.success && resp.data) {
+      if (resp.data.factoryId !== selectedFactoryId.value || resp.data.warehouseId !== selectedWarehouseId.value
+        || !Array.isArray(resp.data.materials) || !Array.isArray(resp.data.products)
+        || !isCompleteInventory(resp.data.materials, resp.data.materialCount)
+        || !isCompleteInventory(resp.data.products, resp.data.productCount)) {
+        throw new Error('库存响应范围不一致或批次数据不完整，无法显示仓库汇总，请刷新重试');
+      }
       data.value = resp.data;
     } else if (resp.success === false) {
+      inventoryError.value = resp.message || '查询库存失败';
       ElMessage.error(resp.message || '查询库存失败');
       data.value = null;
     }
   } catch (e) {
+    if (requestId !== inventoryRequest) return;
+    inventoryError.value = e instanceof Error ? e.message : '查询库存失败';
     console.error('查询库存失败:', e);
     data.value = null;
   } finally {
-    loading.value = false;
+    if (requestId === inventoryRequest) loading.value = false;
   }
 }
 
@@ -432,6 +484,26 @@ onMounted(async () => {
     </el-card>
 
     <el-card class="result-card" shadow="never">
+      <el-alert v-if="inventoryError" :title="inventoryError" type="error" :closable="false" show-icon />
+      <el-radio-group v-if="activeTab !== 'overview'" v-model="viewMode" aria-label="库存展示方式" style="margin-bottom: 12px">
+        <el-radio-button value="summary">按物品汇总</el-radio-button>
+        <el-radio-button value="batches">批次明细</el-radio-button>
+      </el-radio-group>
+      <template v-if="viewMode === 'summary' && activeTab !== 'overview' && data">
+        <p class="hint">当前仓库全部批次，按筛选结果汇总；不同物品、单位与状态分别列出。原料余量扣除在途消耗，成品余量扣除预留；余量不代表质量放行。未提供的成本估值显示“—”。</p>
+        <el-table :data="aggregateRows" :empty-text="activeTab === 'products' ? productEmptyText : materialEmptyText" border stripe data-testid="inventory-aggregate">
+          <el-table-column prop="code" label="物料编码" width="140" />
+          <el-table-column prop="name" label="物品名称" min-width="160" />
+          <el-table-column prop="itemId" label="物品ID" min-width="140" />
+          <el-table-column label="归属" min-width="150"><template #default="{ row }">{{ row.ownerCustomerId ? `客户 ${row.ownerCustomerId}` : row.ownership || '未提供' }}</template></el-table-column>
+          <el-table-column prop="batchCount" label="批次数" width="90" />
+          <el-table-column label="账面合计" width="130"><template #default="{ row }">{{ row.quantity == null ? '—' : fmtQty(row.quantity) }}</template></el-table-column>
+          <el-table-column label="扣减后余量" width="130"><template #default="{ row }">{{ row.available == null ? '—' : fmtQty(row.available) }}</template></el-table-column>
+          <el-table-column label="单位" width="80"><template #default="{ row }">{{ displayUnit(row.unit) || '—' }}</template></el-table-column>
+          <el-table-column label="状态" width="110"><template #default="{ row }">{{ getStatusText(row.status) }}</template></el-table-column>
+          <el-table-column v-if="permissionStore.canViewPrice" label="库存成本估值" width="140"><template #default="{ row }">{{ row.value == null ? '—' : formatAmount(row.value) }}</template></el-table-column>
+        </el-table>
+      </template>
       <el-tabs v-model="activeTab">
         <el-tab-pane name="materials">
           <template #label>
@@ -440,6 +512,7 @@ onMounted(async () => {
           </template>
 
           <el-table
+            v-if="viewMode === 'batches'"
             :data="filteredMaterials"
             v-loading="loading"
             :empty-text="materialEmptyText"
@@ -511,6 +584,7 @@ onMounted(async () => {
           </template>
 
           <el-table
+            v-if="viewMode === 'batches'"
             :data="filteredProducts"
             v-loading="loading"
             :empty-text="productEmptyText"

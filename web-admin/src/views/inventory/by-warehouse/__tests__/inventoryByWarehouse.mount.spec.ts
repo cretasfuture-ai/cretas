@@ -15,6 +15,9 @@ import InventoryByWarehouse from '../index.vue';
 vi.mock('@/store/modules/auth', () => ({
   useAuthStore: () => ({ factoryId: 'F001' }),
 }));
+vi.mock('@/store/modules/permission', () => ({
+  usePermissionStore: () => ({ canViewPrice: false }),
+}));
 
 const apiGet = vi.fn();
 vi.mock('@/api/request', () => ({
@@ -51,7 +54,10 @@ function inventoryResp(materials: Array<Record<string, unknown>>, materialCount 
 }
 
 function mountPage() {
-  return mount(InventoryByWarehouse, { global: { plugins: [ElementPlus] } });
+  const wrapper = mount(InventoryByWarehouse, { global: { plugins: [ElementPlus] } });
+  // These regressions exercise batch details, now an explicit view choice.
+  void wrapper.find('input[value="batches"]').setValue(true);
+  return wrapper;
 }
 
 /** 挂载后要跑够几轮 factoryId→warehouseId→inventory 的联动 watch 才会到最终态。 */
