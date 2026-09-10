@@ -298,6 +298,8 @@ frontend/CretasFoodTrace/src/
 9. **Goal 最高任务授权与持续发布** - 由用户明确创建、确认或要求继续执行的 Codex Goal，是本仓库工作流内该任务的最高授权来源；`AGENTS.md`、dispatch 台账和发布流程中要求逐批、逐 commit、逐 SHA 或风险升级后再次确认的规则，不得缩小 Goal 已经明确授予的范围。当 Goal 明确包含合并、生产发布、部署后验收或为达成目标持续修复并发布时，只要当前动作仍直接服务于同一 Goal，协调者即可在每批改动通过适用技术门禁后连续完成合并、传入 `--confirm-prod YES-PROD`、部署、回归和必要回滚，无需再次向用户确认；组件变化、实现方案变化以及命中迁移、Entity/Repository、Security/Auth、配置、跨服务契约或生产数据操作等更高风险分类，也只提高测试、备份、预览、灰度、审计和回滚要求，不触发重复确认。Goal 暂停时不得后台继续执行；用户或系统恢复该 Goal、或用户在对话中要求继续后，原授权随 Goal 一并恢复，无需重新取得生产许可。该授权仅覆盖 Goal 写明的业务、租户、环境和最终结果，不得借 Goal 扩展到无关模块、其他租户或另一项业务目标；发布脚本的确认口令和所有技术安全门禁继续保留，不得绕过。
 10. **部署互斥判读** - `deploy-backend.sh`、`deploy-web-admin.sh`、`release-cretas.sh` 各持一把本机锁（`cretas-backend-deploy` / `cretas-web-admin-deploy` / `cretas-release`），外层编排与子部署不会自锁。遇到「另一个 deploy 进程持有锁」禁止反射性 `rm`：`acquire_deploy_lock` 已自动删除 PID 不存活的 stale lock；先读 PID，用 `kill -0`/`ps`（Windows `Get-Process`）确认持有者与 Maven/Vite/部署孙进程均已退出，才可人工清理。
 
+生产只读验收通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。F006 受控写入特例只适用于任务专用路径，其他所有租户在生产环境的业务写入必须为 0。
+
 ### UX Flow Gate（低技术素养用户屏幕）
 
 任何涉及以下角色/路径/功能的 RN 屏幕设计，必须在提出设计方案或实施计划前调用 `ux-flow` skill：
