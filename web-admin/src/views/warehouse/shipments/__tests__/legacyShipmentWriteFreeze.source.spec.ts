@@ -8,17 +8,19 @@ function source(path: string): string {
 
 describe('legacy shipment write freeze', () => {
   const sales = source('src/views/sales/shipments/list.vue');
+  const salesLegacy = source('src/views/sales/shipments/LegacyShipments.vue');
   const warehouse = source('src/views/warehouse/shipments/list.vue');
   const salesOrderDetail = source('src/views/sales/orders/detail.vue');
 
   it('removes every web mutation of the legacy shipment endpoint', () => {
-    for (const view of [sales, warehouse]) {
+    for (const view of [sales, salesLegacy, warehouse]) {
       expect(view).not.toMatch(/\b(?:post|put|del|delete)\s*\(\s*`\/\$\{factoryId\.value\}\/shipments/);
     }
   });
 
   it('marks legacy records read-only and routes new work through sales delivery confirmation', () => {
     expect(sales).toContain('历史手工出货记录');
+    expect(salesLegacy).toContain('旧台账已停止新增和修改，仅保留历史查询');
     expect(warehouse).toContain('历史出货记录 (只读)');
     expect(warehouse).toContain('/warehouse/deliveries/${confirmingDelivery.value.id}/confirm');
     expect(warehouse).toContain('确认并出库');
