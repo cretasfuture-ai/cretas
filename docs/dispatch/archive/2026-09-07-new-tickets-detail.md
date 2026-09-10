@@ -125,3 +125,48 @@
 2026-09-08 夜它已经让 organizer 先后得出过两个错结论 ——
 先是「#755 带进来的存量」（对照一做就塌），再是「确定性，与 #759 相关」（重跑一次就翻）。
 
+
+## LLM-PROVIDER-CLIFF-20260815 · 2026-09-10 复量
+
+🔴 **悬崖已经预演过一次了。** `python-prod.log` 里 2026-09-09 04:40:19 连续三行：
+
+```
+POST api.deepseek.com/v1/chat/completions   "HTTP/1.1 401 Authorization Required"
+POST open.bigmodel.cn/api/paas/v4/chat/...  "HTTP/1.1 429 Too Many Requests"
+[restaurant-intent] T3 LLM parse failed/timed out:
+    [llm_router] All providers exhausted for review
+```
+
+deepseek 401 → zhipu 429 → 整条链耗尽。⚠️ 分母：日志覆盖 09-08 03:09 → 09-10 15:20 共 62,185 行，这类目前 1 次。
+
+**健康监控自己算出的到期后形势**（`llm-provider-health-daily.sh`，crontab `25 5 * * *`）：
+
+```
+CHAT / SIMPLE_TEXT / INSIGHTS / CHART / MAPPER / REASONING / REVIEW
+  现在 3~4 个  ->  到期后 2 个 ['deepseek', 'zhipu']
+```
+
+⇒ 而这两个现在都是坏的 ⇒ **09-09 那次偶发的「耗尽」，09-13 之后会变成七个槽的常态。**
+
+**手动跑 `probe-llm-registry.sh`（2026-09-10 15:18，rc=1）**：6/6 全部「注册表说活、实测不可用」
+
+| 条目 | 实测 |
+|---|---|
+| `aistore/DeepSeek-V4-Flash-A` | `LocalProtocolError` |
+| `aistore/Qwen3-235B-A22B` | `LocalProtocolError` |
+| `aistore/Qwen3-32B` | `LocalProtocolError` |
+| `deepseek/deepseek-v4-flash` | 401 |
+| `deepseek/deepseek-v4-pro` | 401 |
+| `zhipu/glm-4.5-air` | quota 429 |
+
+⚠️ **不要把这张表读成「线上全挂了」**：aistore 那三条的 `LocalProtocolError` 是 httpx/h11 的**客户端**错误，
+而生产日志里该错误出现 **0 次** ⇒ 那是探针侧的问题，aistore 目前仍在正常服务。
+▎**探针失败 ≠ 生产失败，两者必须分开验。**
+
+**要 owner 定的三条**（至少打通一条，否则 09-13 后 LLM 全线失效）：
+
+1. deepseek key —— 自 08-26 起 401，`len=35` 格式正确 ⇒ 是被拒不是没配。
+   ⚠️ 换之前**先看旧 key 的控制台状态**，否则换完仍 401 会被读成「问题在别处」。
+2. zhipu 配额 —— 429，需充值或提额。
+3. aistore —— 09-13 硬到期，链首必须在那之前换掉。
+
