@@ -34,7 +34,14 @@ function duplicateCurrent(): void {
 function onDragStart(event: DragEvent, key: string): void {
   workspace.beginDrag(key);
   event.dataTransfer?.setData('text/plain', key);
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove';
+}
+
+function onDrop(event: DragEvent, beforeKey: string): void {
+  event.preventDefault();
+  event.stopPropagation();
+  workspace.moveTab(workspace.draggingKey, beforeKey);
+  workspace.endDrag();
 }
 </script>
 
@@ -52,6 +59,8 @@ function onDragStart(event: DragEvent, key: string): void {
         @click="activate(tab.key)"
         @dragstart="onDragStart($event, tab.key)"
         @dragend="workspace.endDrag"
+        @dragover.prevent
+        @drop="onDrop($event, tab.key)"
       >
         <span v-if="tab.dirty" class="task-dot" aria-label="未完成任务" />
         <span class="workspace-tab-title">{{ tab.title }}</span>
@@ -75,7 +84,7 @@ function onDragStart(event: DragEvent, key: string): void {
         />
       </el-tooltip>
     </div>
-    <span class="workspace-hint">拖动标签到右侧可同屏参考</span>
+    <span class="workspace-hint">拖动标签可排序，拖到右侧可同屏参考</span>
   </nav>
 </template>
 

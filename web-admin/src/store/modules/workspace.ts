@@ -296,6 +296,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     draggingKey.value = '';
   }
 
+  function moveTab(key: string, beforeKey: string): void {
+    const from = tabs.value.findIndex((tab) => tab.key === key);
+    if (from < 0 || key === beforeKey || !tabs.value.some((tab) => tab.key === beforeKey)) return;
+    const [tab] = tabs.value.splice(from, 1);
+    tabs.value.splice(tabs.value.findIndex((item) => item.key === beforeKey), 0, tab!);
+    persist();
+  }
+
   function pinReference(key = draggingKey.value): void {
     if (!tabs.value.some((tab) => tab.key === key)) return;
     referenceKey.value = key;
@@ -336,6 +344,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     markDirty,
     beginDrag,
     endDrag,
+    moveTab,
     pinReference,
     closeReference,
     duplicateRoute,
