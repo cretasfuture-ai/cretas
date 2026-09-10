@@ -29,6 +29,7 @@ const SCENARIOS = [
   require('../scenarios/restaurant-staffing-readonly'),
   require('../scenarios/sales-order-lifecycle-readonly'),
   require('../scenarios/ui-stability'),
+  require('../scenarios/visual-page-census-readonly'),
 ];
 
 function describeHarness() {
@@ -107,7 +108,13 @@ async function runSuiteWithPage(page, options = {}) {
         screenshot,
         evidenceDir,
       };
-      for (const scenario of selectedScenarios) results.push(await scenario.run(scenarioContext));
+      for (const scenario of selectedScenarios) {
+        const before = mutationGuard.snapshot();
+        if (before.actualBusinessWrites || before.blockedMutationAttempts.length) break;
+        results.push(await scenario.run(scenarioContext));
+        const after = mutationGuard.snapshot();
+        if (after.actualBusinessWrites || after.blockedMutationAttempts.length) break;
+      }
     } catch (error) {
       const failure = createScenarioResult(scenarioRef.value || 'bootstrap', page.url());
       failure.result = 'TOOL_ERROR';

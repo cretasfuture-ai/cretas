@@ -5,6 +5,10 @@ const path = require('node:path');
 const { test, expect } = require('@playwright/test');
 const { runSuiteWithPage } = require('../core/run-suite');
 const { installMutationGuard } = require('../core/mutation-guard');
+const { createScreenshotWriter, installContactMasks } = require('../core/screenshot');
+const { SCENARIOS } = require('../core/run-suite');
+const { VISUAL_PAGES, runVisualCensus } = require('../scenarios/visual-page-census-readonly');
+const { createScenarioResult } = require('../core/result-schema');
 
 function pageHtml(pathname) {
   if (pathname === '/login') {
@@ -170,6 +174,76 @@ test.describe('production read-only harness local fixture', () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   });
 
+  test('visual census records every bounded page without activating business controls', async ({ page }) => {
+    test.setTimeout(120_000);
+    const report = await runSuiteWithPage(page, {
+      baseUrl, evidenceDir: path.resolve('test-results', 'visual-census-fixture'),
+      username: 'f006_admin', password: 'fixture-only', scenarios: ['visual-page-census-readonly'],
+    });
+    expect(report.tenant.factoryId).toBe('F006');
+    expect(report.authRequests).toHaveLength(1);
+    expect(report.actualBusinessWrites).toBe(0);
+    expect(report.blockedMutationAttempts).toHaveLength(0);
+    expect(businessWriteCount).toBe(0);
+    expect(report.scenarios[0].pageEvidence).toHaveLength(VISUAL_PAGES.length);
+    expect(report.scenarios[0].screenshots).toHaveLength(VISUAL_PAGES.length);
+    // The fixture deliberately lacks most business landmarks: screenshots do not invent PASS.
+    expect(report.scenarios[0].result).toBe('UNVERIFIED');
+  });
+
+  test('suite stops before the next scenario after a blocked business mutation', async ({ page }) => {
+    let laterRan = false;
+    const trigger = { id: 'fixture-block-and-stop', run: async ctx => {
+      await ctx.page.evaluate(() => fetch('/api/mobile/F006/orders', { method: 'POST' }).catch(() => null));
+      return { ...createScenarioResult('fixture-block-and-stop', ctx.page.url()), result: 'TOOL_ERROR' };
+    } };
+    const later = { id: 'fixture-must-not-run', run: async () => { laterRan = true; return {}; } };
+    SCENARIOS.push(trigger, later);
+    try {
+      const report = await runSuiteWithPage(page, { baseUrl, evidenceDir: path.resolve('test-results', 'visual-stop-fixture'), username: 'f006_admin', password: 'fixture-only', scenarios: [trigger.id, later.id] });
+      expect(report.blockedMutationAttempts).toHaveLength(1);
+      expect(report.actualBusinessWrites).toBe(0);
+      expect(businessWriteCount).toBe(0);
+      expect(laterRan).toBe(false);
+      expect(report.scenarios).toHaveLength(1);
+      expect(report.safetyPassed).toBe(false);
+    } finally { SCENARIOS.splice(SCENARIOS.indexOf(trigger), 2); }
+  });
+
+  test('visual census rejects sidebar-only landmarks, redirects and ignored inventory tabs', async ({ page }) => {
+    const pages = [
+      { id: 'sidebar-only', path: '/fixture/sidebar', landmark: '采购' },
+      { id: 'redirect', path: '/fixture/redirect', landmark: '采购' },
+      { id: 'error-page', path: '/fixture/not-found', landmark: '采购' },
+      { id: 'warehouse', path: '/fixture/inventory?tab=by-warehouse', landmark: '库存' },
+      { id: 'total', path: '/fixture/inventory?tab=total', landmark: '库存' },
+      { id: 'ignored-tab', path: '/fixture/ignored?tab=total', landmark: '库存' },
+    ];
+    await page.route('**/fixture/**', async route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/fixture/redirect') return route.fulfill({ status: 302, headers: { location: '/dashboard' } });
+      const tab = url.pathname === '/fixture/ignored' ? 'by-warehouse' : url.searchParams.get('tab');
+      const body = tab
+        ? `<main><h1>库存查询</h1><div class="hub-tabs"><button role="tab" id="tab-${tab}" aria-selected="true" aria-controls="pane-${tab}">${tab}</button><section id="pane-${tab}" role="tabpanel">${tab === 'total' ? '总库存汇总' : '分仓库存明细'}，这里是实际已加载的库存内容，用于验证当前标签页。</section></div></main>`
+        : `<aside>采购 库存</aside><main><h1>${url.pathname.endsWith('not-found') ? '采购 404 页面不存在' : '无关的工作台'}</h1><p>侧栏有预期关键词但正文没有目标业务，不能判断页面验收通过。</p></main>`;
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body });
+    });
+    const scenario = { id: 'fixture-census-identity', run: ctx => runVisualCensus(ctx, pages) };
+    SCENARIOS.push(scenario);
+    try {
+      const report = await runSuiteWithPage(page, { baseUrl, evidenceDir: path.resolve('test-results', 'visual-identity-fixture'), username: 'f006_admin', password: 'fixture-only', scenarios: [scenario.id] });
+      const results = report.scenarios[0].pageEvidence;
+      expect(results.map(item => item.result)).toEqual(['UNVERIFIED', 'UNVERIFIED', 'UNVERIFIED', 'PASS', 'PASS', 'UNVERIFIED']);
+      const warehouse = results[3];
+      const total = results[4];
+      expect(warehouse.activePanelId).toBe('pane-by-warehouse');
+      expect(total.activePanelId).toBe('pane-total');
+      expect(warehouse.activePanelVisible && total.activePanelVisible).toBe(true);
+      expect(report.actualBusinessWrites).toBe(0);
+      expect(report.blockedMutationAttempts).toHaveLength(0);
+    } finally { SCENARIOS.splice(SCENARIOS.indexOf(scenario), 1); }
+  });
+
   test('reuses one clean UI session and records zero business writes', async ({ page }) => {
     const evidenceDir = path.resolve('test-results', 'production-readonly-fixture');
     const report = await runSuiteWithPage(page, {
@@ -304,4 +378,33 @@ test.describe('production read-only harness local fixture', () => {
     expect(persisted).not.toContain('f006_admin');
     expect(persisted).not.toContain('fixture-only');
   });
+});
+
+test('screenshot contact masks cover only contact fields and leave adjacent quantities readable', async ({ page }, testInfo) => {
+  await page.setContent('<style>td{padding:16px}body{font:16px Arial}</style><table><thead><tr><th>联系电话</th><th>数量</th><th>邮箱</th></tr></thead><tbody><tr><td id="phone">02112345678</td><td id="quantity">20 kg / 50 盒</td><td id="email">fixture@example.invalid</td></tr></tbody></table><p id="mixed">电话 13800138000，数量 <b id="inline-quantity">8 kg</b></p>');
+  const count = await installContactMasks(page);
+  expect(count).toBeGreaterThan(0);
+  const covered = async selector => page.locator(selector).evaluate(el => {
+    const r = el.getBoundingClientRect();
+    return [...document.querySelectorAll('[data-cretas-contact-mask]')].some(mask => { const m = mask.getBoundingClientRect(); return m.left <= r.left + r.width / 2 && m.right >= r.left + r.width / 2 && m.top <= r.top + r.height / 2 && m.bottom >= r.top + r.height / 2; });
+  });
+  expect(await covered('#phone')).toBe(true);
+  expect(await covered('#email')).toBe(true);
+  expect(await covered('#quantity')).toBe(false);
+  expect(await covered('#inline-quantity')).toBe(false);
+  const screenshot = createScreenshotWriter(page, testInfo.outputPath('contact-mask'));
+  await screenshot('contacts-redacted');
+  expect(await page.locator('[data-cretas-contact-mask]').count()).toBe(0);
+  expect(await page.locator('#quantity').innerText()).toBe('20 kg / 50 盒');
+  expect(await page.locator('#phone').innerText()).toBe('02112345678');
+});
+
+test('screenshot failure removes temporary masks', async ({ page }) => {
+  await page.setContent('<p>fixture@example.invalid</p>');
+  const originalScreenshot = page.screenshot.bind(page);
+  page.screenshot = async () => { throw new Error('fixture capture failure'); };
+  try {
+    await expect(createScreenshotWriter(page, 'test-results/contact-failure')('failure')).rejects.toThrow('fixture capture failure');
+    expect(await page.locator('[data-cretas-contact-mask]').count()).toBe(0);
+  } finally { page.screenshot = originalScreenshot; }
 });

@@ -17,3 +17,4 @@ require('./restaurant-staffing-readonly.test');
 require('./sales-order-lifecycle-readonly.test');
 require('./url-utils.test');
 require('./ui-login.test');
+require('./visual-page-census-readonly.test');

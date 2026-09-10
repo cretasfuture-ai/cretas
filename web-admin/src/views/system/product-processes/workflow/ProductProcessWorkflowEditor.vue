@@ -6768,6 +6768,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 /* 沉浸态: 铺满视口。⚠️ z-index 要压过侧边菜单与顶栏, 但低于 el-dialog/el-drawer(2000+)。 */
 .workflow-editor.is-immersive {
   position: fixed; inset: 0;
+  height: 100dvh;
   background: #fff;
   display: flex; flex-direction: column;
 }
@@ -7171,6 +7172,8 @@ body.workflow-immersive .app-header { display: none !important; }
  * ⇒ 一起收。⛔ 别只藏那句提示 —— 留下半条空标签栏更奇怪。
  */
 body.workflow-immersive .workspace-tabs { display: none !important; }
+/* The process hub is outside this editor; its tabs must not overlay the immersive canvas. */
+body.workflow-immersive .process-config-hub > .hub-tabs > .el-tabs__header { display: none !important; }
 body.workflow-immersive .app-sidebar,
 body.workflow-immersive .app-layout > .el-aside,
 body.workflow-immersive .el-aside { display: none !important; }
