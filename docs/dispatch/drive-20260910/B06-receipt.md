@@ -1,5 +1,15 @@
 # DRIVE-20260910-B06-SHIPMENT-READ
 
+## 2026-09-11 cross-review P1 correction
+
+Code commit 0c1757acc853b53bdfe2b9eabb12f061bccfad77 fixes the independently reproduced legacy footer tenant mismatch. Parent list now keys LegacyShipments by factoryId, replacing the entire legacy component including real summary state and dialogs; old async responses can only update the unmounted instance. Shared helper unchanged. Legacy summary errors now render explicitly and hide footer/AI actions instead of showing an empty summary.
+
+New tracked test: web-admin/src/views/sales/shipments/__tests__/legacySummaryIsolation.spec.ts mounts the actual parent, LegacyShipments, TableFooter and useListSummary; only network/store/router/dependent actions are mocked. Two regression cases: A summary pending → B list/B summary → A 999 arrives → B footer remains; A summary already loaded → B pending removes A → B 403 displays an error with no stale footer. A and B each issue their own summary request. This converts the scenario in B01's independent B06-cross-review.md into positive isolation assertions.
+
+Final verification: target Vitest command below exit 0, 3 files / 10 tests (original 8 retained plus 2 isolation cases), 13.22s at 00:01:00. Application vue-tsc --noEmit -p tsconfig.app.json exit 0. Existing browser.mjs rerun exit 0 (7 fixture checks, zero page errors), result.json refreshed. git diff --check passed. Preview 5188 stopped. No formal build, PR, merge, deployment, shared helper or ACTIVE edits.
+
+Drive only main!F82:G82 appended correction/commit/validation on 2026-09-11, status still 已修复待验证. Readback exact values passed; A-E and all A-G formats/validation/notes unchanged. Evidence .playwright-mcp/b06/p1-readback.json. Production business writes remain 0; production acceptance still outstanding. Original receipt below describes the preceding implementation, superseded by this P1 correction for complete legacy footer isolation.
+
 - Owner: task 01a08b80-5014-7453-97d8-3541ba868d2b
 - Base SHA: e03fc7cf0c7c100d35cb8e907067e4b7e7e118af
 - Worktree: C:/Users/Steve/cretas-drive-20260910-b06
