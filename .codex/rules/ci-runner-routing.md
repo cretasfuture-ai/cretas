@@ -1,6 +1,6 @@
 # CI runner 路由：默认托管，额度耗尽切自建
 
-**最后更新**: 2026-08-27
+**最后更新**: 2026-09-11（压缩：本文件只留路由规则、六关清单与判据；接入实测、组织变量排除记录、WSL2 前后对照、时区 bug 与 nightly 开放集合案例存档在 `docs/rules-casebook/ci-runner-routing-cases.md`，章节名一致）
 **触发事故**: 2026-08-26 组织 Actions 免费额度 2000 分钟用尽，所有 job **2~4 秒、0 个 step、无日志**地失败，横跨 `main` 与各 feature 分支。
 
 ⚠️ 本文件在 `.claude/rules/` 与 `.codex/rules/` 各有一份，**必须逐字相同**（见文末闸）。
@@ -38,8 +38,6 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 ## 新接一个工作流：要过六关，⛔ 光加文件名不算接进来
 
-2026-08-27 接 `python-gate` / `jpa-gate-main`（以及试过又撤回的 `ci.yml`）时逐条**实测**踩出来的：
-
 | # | 关卡 | 长什么样 |
 |---|---|---|
 | 1 | **缩进** | 脚本按**字面量**匹配 `    runs-on: ubuntu-latest`（4 空格）。缩进不同 → 静默不命中 |
@@ -51,80 +49,21 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 ⛔ 六关不逐条过就把文件名加进来，换来的是「从跑不起来」变成「跑起来就红」。
 
-### 📌 `ci.yml` 试过并撤回了 —— 卡在第 6 关
+`ci.yml` 保持写死 `ubuntu-latest`：它的 `java-build-test` 依赖 `pgvector` 服务容器，自建 runner 没有 Docker，这是机器侧的事（给 runner 装 Docker 或换 Linux self-hosted），脚本解决不了。
 
-它是**发布链 `--prefer-ci-artifact` 那个制品的产出方**，额度耗尽期间它死掉是有生产影响的，
-所以值得试。它有 **4 个 job**（脚本因此从「恰好 1 处」改成「N 处全换」），
-但 `java-build-test` 依赖 `pgvector/pgvector:pg17` 服务容器 + `psql` ——
-**没有 Docker 就无解，与 YAML 怎么写无关。**
+`--adopt` 是新接工作流时的显式收敛口（新文件状态必然与现有不一致，一致性闸会拒切）：它只做「全部拉齐到 target」并逐行打印每个文件「改了 / 已经是、跳过」，⛔ 不允许静默拉齐，也不是 `--force`。
 
-⇒ 这是**机器侧**的事（给 runner 装 Docker，或换一台 Linux self-hosted），
-⛔ 不是这个脚本能解决的。在那之前 `ci.yml` 保持写死 `ubuntu-latest`。
+### `python-gate` 在两种 runner 上跑的不是同一个解释器
 
-### `--adopt`：一致性闸曾经把接入路径堵死
+托管钉 `python-version: '3.10'`；自建用系统 Python（当前 `windows-wsl-ci` 是 **3.11.13**，与 prod 同版本）。该步骤把 `PYTHON_USED=<解释器> (<版本>)` 打进日志，并只断言下限 `>=3.10`（⛔ 不允许静默用更老的版本跑；⛔ 也不要改成等值断言——下限写法对两种 runner 都成立）。读它的绿时要连版本一起读。
 
-加一个新工作流的那一刻，状态必然不一致（新的还是 `hosted`）⇒ 脚本拒绝切；
-而唯一的出路「手改单个 `runs-on`」正是上面明令禁止的。**这道闸把自己设计的
-接入路径堵死了。** `--adopt` 是那个显式的收敛口：
-
-⚠️ 它**不是** `--force` —— 它只做「全部拉齐到 target」，并把每个文件是
-「改了」还是「已经是、跳过」**逐行打出来**，⛔ 不允许静默拉齐。
-
-### ⚠️ `python-gate` 落到自建时，跑的**不是 3.10**
-
-托管上钉的是 `python-version: '3.10'`；自建上只能用系统 Python（3.11+）。
-该文件顶部那句「本机 py3.11 跑绿 ≠ CI py3.10 跑绿」在这里反向成立 ——
-**自建模式下这道闸测的是另一个小版本**。所以那一步会把
-`PYTHON_USED=<解释器> (<版本>)` 打进日志，并只断言下限 `>=3.10`
-（⛔ 不允许静默用更老的版本跑）。读它的绿时要连版本一起读。
-
-#### 🔧 订正（2026-09-07）：这一段把它写成缺点，**而现在它是优点**
-
-⛔ 上面那段不删 —— 它当时是真的（自建上只有 3.10 以外的系统 Python，版本不确定）。
-
-今日实测：
-
-```
-自建(windows-wsl-ci):  Python **3.11.13**   = prod **3.11.13**   ✅ 与 prod 同版本
-托管(ubuntu-latest):   python-gate 钉 **3.10**                    ❌ 与 prod 不同
-```
-
-⇒ ⚠️ **把 `python-gate` 切到托管，会让它离 prod 更远** ——
-这不是「哪个更方便」的问题，是**这道闸测的是不是生产上跑的那个解释器**。
-
-📌 ⇒ 这条只是「Java 要不要上托管」那次成本/耗时选型的**一个输入**，
-⛔ 它自己不构成结论，⛔ 也不要据此去改任何 workflow。
-
-**这条结论依赖什么才成立**：依赖 **自建 runner 上的系统 Python 保持 3.11.13**
-且 **prod 保持 3.11.13**。⇒ 任一侧升级，这条即作废，要重新量两边。
-
-⚠️ 而「只断言下限 `>=3.10`」这个写法**仍然是对的** —— 它对上面两种情形都成立，
-⛔ 不要因为今天两边对上了就把下限改成等值断言。
+📌 「自建与 prod 同版本」只是「Java 要不要上托管」选型的一个输入，⛔ 不据此改任何 workflow；它依赖自建系统 Python 与 prod 都保持 3.11.13，任一侧升级就要重新量两边。
 
 ---
 
-## ⛔ 别用组织变量做路由（实测不生效，别再试第二遍）
+## ⛔ 别用组织变量做路由
 
-第一版写的是这个，看起来最优雅 —— **切换不用碰任何工作流文件**：
-
-```yaml
-runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
-```
-
-**它不工作。** job 实际被派成 `labels=ubuntu-latest`，即 `vars.CI_RUNNER`
-在 `runs-on` 求值时读到的是**空**。
-
-逐条排除过，配置侧没有任何问题：
-
-| 怀疑 | 实测 |
-|---|---|
-| PR 来自 fork（fork 读不到组织变量）| `isCrossRepository=false` |
-| 变量可见性没覆盖本仓 | `visibility=all` |
-| 组织变量没授权给这个仓 | `repos/.../actions/organization-variables` 列得到 `CI_RUNNER` |
-| 建变量晚于 run（时序竞争）| 变量 `01:43:43Z` < run `01:48:34Z` |
-
-⇒ 成因是 **`runs-on` 在 job 编排阶段求值**，那时可用的上下文比步骤里窄，
-`vars` 够不着。这不是配错了，是**能力边界**。
+`runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}` 不工作：`runs-on` 在 job 编排阶段求值，那时 `vars` 够不着，job 实际落成 `labels=ubuntu-latest`。这是能力边界，不是配置问题（fork / 可见性 / 授权 / 时序都排除过，见案例库）。
 
 ▎判据：`runs-on` 里只放字面量。要动态就改文件。
 
@@ -160,41 +99,24 @@ runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
 正确姿势：`ssh codex-mac "ssh canada-mini '...'"`，且**脚本落盘再执行**，不要多层引号嵌套。
 
 ---
+## ⛔ 别再试的三条路
 
-## ⛔ 别再试的三条路（都实测堵死）
-
-| 载体 | 死因 |
+| 载体 | 状态 |
 |---|---|
-| 阿里云 139 / 47 | **git 长连接连不动** —— 同机 `curl codeload` 5MB/s，而 `git clone --depth 1` 连 10MB 小仓都超时（`fetch-pack: unexpected disconnect`）。`HTTP/1.1` / `postBuffer` / `--filter=blob:none` 三种绕法全败 |
-| 本机 WSL2 | ⚠️ **2026-09-07 部分已推翻 —— 见下方「WSL2 这一行的订正」**。当时实测：「启动后 46 秒自动关机（Windows 侧无进程持有该发行版时，WSL 就关；systemd 后台服务**不算**持有）。且 `nodejs.org` / `python.org` **HTTP=000**」 |
-| 本机 Windows 直跑 | 18 个工作流全是 `ubuntu-latest` + bash 步骤 |
+| 阿里云 139 / 47 | ⛔ 堵死 —— git 长连接连不动（`git clone --depth 1` 连 10MB 小仓都超时；HTTP/1.1、postBuffer、`--filter=blob:none` 全败） |
+| 本机 WSL2 | ⚠️ 有条件可用 —— 见下表三态 |
+| 本机 Windows 直跑 | ⛔ 堵死 —— 18 个工作流全是 `ubuntu-latest` + bash 步骤 |
 
-⚠️ `vmIdleTimeout=-1` 在 WSL **2.5.9 上无效**（那个参数它不认）。
+### WSL2 的三态（⛔ 不许把「尚未验证」并进「已验证」）
 
-### 🔴 WSL2 这一行的订正（2026-09-07）
+| 项 | 状态 | 成立前提 |
+|---|---|---|
+| 保活 | ✅ runner 持续在线并完成真实任务 | Windows 侧登录保活任务处于 **Running**；停掉 / 注销就回到「启动后 46 秒自动关机」（`vmIdleTimeout=-1` 在 WSL 2.5.9 上无效） |
+| 外网 | ✅ runner 内 `nodejs.org` / `python.org` HTTP 200 | 同上保活前提；这只说明那个组件在那一刻能出网，不是「这台机器网络通」的结论 |
+| Windows 重启后自恢复 | ⚠️ 尚未验证 | — |
+| 未登录状态下恢复 | ⚠️ 尚未验证 | — |
 
-⛔ **上表那一行不删** —— 它当时是真的，删掉就没人知道**当初为什么放弃这条路**。
-📌 今晚立过的判据：**记录都是真的，变的是前提。**
-
-⚠️ ⇒ 所以这里写成**三态**，⛔ 不许把「尚未验证」并进「已验证」：
-
-| 项 | 当时实测（2026-08） | 今日实测（2026-09-07） | 状态 |
-|---|---|---|---|
-| 保活 | 启动后 **46 秒**自动关机 | Windows 登录保活任务 **Running**，runner 持续在线并完成真实任务 | ✅ **已推翻** |
-| 外网 | `nodejs.org` / `python.org` **HTTP=000** | runner 内两者均 **HTTP 200** | ✅ **已推翻** |
-| Windows 重启后自恢复 | （没测过） | （仍没测过） | ⚠️ **尚未验证** |
-| 未登录状态下恢复 | （没测过） | （仍没测过） | ⚠️ **尚未验证** |
-
-🔴 **⛔ 不许把这写成「WSL 这条路是通的」。** 上表后两格是空的，
-⇒ 现在成立的说法只有：**「在有人登录、且保活任务在跑的前提下，它能干活。」**
-
-**这两条新结论各自依赖什么才成立**（⚠️ 前提没了，结论跟着作废）：
-
-- 「保活有效」依赖 **Windows 侧登录保活任务处于 Running**。
-  ⇒ ⛔ 保活任务停 / 用户注销 ⇒ 回到 46 秒关机那条旧结论。
-- 「HTTP 200」依赖 **同一个保活前提**（读数是在 runner 内取的，runner 得活着）。
-  ⇒ 它 ⛔ **不是**一条关于「这台机器网络通不通」的结论 —— 它只说**那个组件在那一刻**能出网。
-  📌 一条报错/读数在说哪一层（组件 / 配置 / 机器 / 整条车道），**它自己不会说**，要先问。
+⇒ 现在成立的说法只有：**「在有人登录、且保活任务在跑的前提下，它能干活。」** 前提没了，结论跟着作废。
 
 ---
 
@@ -220,23 +142,11 @@ runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
 `~/actions-runner/.path` 原本只有 `/usr/bin:/bin:/usr/sbin:/sbin`，而 `python3.11` 装在 `/opt/homebrew/bin`。已前置该目录。改了 `.path` 或 `.env` 都要**重启服务**才生效。
 
 ---
+## 🔴 自建 runner 最大的价值：它在另一个时区
 
-## 🔴 自建 runner 最大的价值：它在**另一个时区**
+首次接入当天照出 3 个东八区永远测不出来的 bug（阴性对照西半球恒绿 / 西半球日期差一天 / 东八区 16:00 后返回明天，见案例库）。共同形状：**`Date.now() + 8h` 这种「平移 UTC 轴假装某时区」的写法，必须用 UTC getter 读回**，换成本地 getter 等于又叠一次设备偏移。
 
-2026-08-27 首次接入当天，它照出 **3 个在东八区永远测不出来的 bug**，全部是当天引入的：
-
-| # | 位置 | 性质 |
-|---|---|---|
-| 1 | `analysisDefaults.spec.ts` | 阴性对照在**西半球恒绿** |
-| 2 | `aiOrderNormalization.ts` | 西半球日期差一天 |
-| 3 | `AIChatScreen.tsx` | **东八区每天 16:00 后返回明天** —— 影响真实用户 |
-
-共同形状：**`Date.now() + 8h` 这种「平移 UTC 轴假装某时区」的写法，必须用 UTC getter 读回**。
-换成本地 getter 等于又叠一次设备偏移。
-
-⛔ **别用 `TZ=x cmd` 在 Windows 上验时区** —— 实测那个前缀**根本不传进 node**，
-`process.env.TZ` 是 `undefined`，偏移恒为 `-480`。写「四时区全绿」而实际跑了四遍东八区。
-⇒ 时区相关的验证**只在 Mac/Linux 上做**。
+⛔ **别用 `TZ=x cmd` 在 Windows 上验时区** —— 那个前缀根本不传进 node（`process.env.TZ` 是 `undefined`，偏移恒为 `-480`）。时区相关的验证**只在 Mac/Linux 上做**。
 
 ---
 
@@ -249,31 +159,7 @@ runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
 
 关联：`worktree-and-main-only-deploy.md`（部署只从 main）、`concurrent-edit-safety.md`（commit 范围保护）。
 
----
+## 跑批判定：退出码是开放集合
 
-## 🔴 「跑批报 success 却什么都没产出」—— 三态判定的开放集合陷阱
+▎**不是 0 也不是 1，一律当成「没量到」。⛔ 不要枚举失败码。** 枚举 `rc == 1` / `rc == 2` 时，第四种值（如 `python: command not found` 的 127）两条都不命中、静默落进绿（`java-full-nightly` 首次真跑就是这样：job success，artifact 146 字节）。抓住它的是「artifact 大小」这个设计上必然会变的读数——硬约束 9。
 
-2026-08-27 实测（run 33041333971，`java-full-nightly` 第一次真跑）：
-
-```
-Run the full Java suite = success      ← 全量套件确实跑了（34 万行日志）
-Ratchet                 = success      ← 但它里面是 python: command not found, rc=127
-判定 rc=2 / 判定 rc=1    = skipped      ← 127 既不是 1 也不是 2
-job                     = success
-artifact                = 146 字节，known-failing-tests.txt 压根没产出
-```
-
-成因两层，**第二层才是要害**：
-
-1. 棘轮那一步调**裸 `python`**，macOS 上不存在（见第 4 关）。
-2. 🔴 判定**枚举**了 `rc == 2` 和 `rc == 1`，而退出码是个**开放集合** ——
-   任何第四种值都两条都不命中，静默落进「绿」。
-   ⚠️ 这跟三态机制想解决的问题**是同一个**：它把「没量到」从「没问题」里拆出来，
-   却给自己留了一条「没量到但看起来像没问题」的缝。
-
-▎**判据反过来写：不是 0 也不是 1，一律当成「没量到」。⛔ 不要枚举失败码。**
-
-⚠️ 抓住它的**不是那个绿**，是「artifact 只有 146 字节」——
-一个**设计上必然会变**的读数。这正是硬约束 9：
-验证「X 没发生」时必须同时有一个「Y 一定会发生」的读数。
-⛔ 只看 job 是不是绿，这次会得出「nightly 跑通了」这个完全相反的结论。
