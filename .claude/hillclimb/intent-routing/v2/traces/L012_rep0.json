@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "尽管这批原料的价格比较便宜，可是质量报告显示各项指标都在临界值附近。我想对比一下这批货和之前同供应商的历史批次质量数据"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"尽管这批原料的价格比较便宜，可是质量报告显示各项指标都在临界值附近。我想对比一下这批货和之前同供应商的历史批次质量数据\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_QUALITY\",\n  \"intentName\": \"质量报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"质检报告 (本月 (08-12 ~ 09-12))\\n总检测量: 0 kg | 合格: 0 kg\\n一次通过率: 0.0%\",\n  \"formattedText\": \"质检报告 (本月 (08-12 ~ 09-12))\\n总检测量: 0 kg | 合格: 0 kg\\n一次通过率: 0.0%\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"reportType\": \"QUALITY\",\n    \"period\": \"month\",\n    \"queryConditions\": {\n      \"period\": \"month\",\n      \"endDate\": \"2026-09-12\",\n      \"startDate\": \"2026-08-12\"\n    },\n    \"data\": {\n      \"totalProduction\": 0,\n      \"reworkRate\": null,\n      \"qualifiedProduction\": 0,\n      \"defectiveProduction\": 0,\n      \"firstPassRate\": 0.0,\n      \"qualityRate\": null\n    },\n    \"endDate\": \"2026-09-12\",\n    \"generatedAt\": \"2026-09-12\",\n    \"startDate\": \"2026-08-12\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:44:57.7100422\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"report_quality\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "质检报告 (本月 (08-12 ~ 09-12))\n总检测量: 0 kg | 合格: 0 kg\n一次通过率: 0.0%"
+  }
+]

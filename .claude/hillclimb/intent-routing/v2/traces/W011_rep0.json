@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "创建一个新的检验项目模板：带鱼感官检验，包含外观、气味、色泽三个检查点"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"创建一个新的检验项目模板：带鱼感官检验，包含外观、气味、色泽三个检查点\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"QUALITY_CHECK_EXECUTE\",\n  \"intentName\": \"执行质检\",\n  \"intentCategory\": \"QUALITY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.75,\n  \"matchMethod\": \"KEYWORD\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 执行质检 — 执行一次新的质量检测操作并记录检测结果，需要指定检测类型和检测对象。仅当用户明确要求做质检、执行质检时触发。不适用于查询已有的质检记录、统计质检合格率、查看质检报告等查询操作。\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"formattedText\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 执行质检 — 执行一次新的质量检测操作并记录检测结果，需要指定检测类型和检测对象。仅当用户明确要求做质检、执行质检时触发。不适用于查询已有的质检记录、统计质检合格率、查看质检报告等查询操作。\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:47:00.5912694\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"执行质检\",\n      \"description\": \"执行一次新的质量检测操作并记录检测结果，需要指定检测类型和检测对象。仅当用户明确要求做质检、执行质检时触发。不适用于查询已有的质检记录、统计质检合格率、查看质检报告等查询操作。\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"QUALITY_CHECK_EXECUTE\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的请求可能匹配多个操作, 请选择您实际想做的:\n1. 查询原料库存\n2. 执行质检 — 执行一次新的质量检测操作并记录检测结果，需要指定检测类型和检测对象。仅当用户明确要求做质检、执行质检时触发。不适用于查询已有的质检记录、统计质检合格率、查看质检报告等查询操作。\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。"
+  }
+]

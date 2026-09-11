@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "创建月度质量目标：本月合格率目标98%，投诉率不超过0.5%"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"创建月度质量目标：本月合格率目标98%，投诉率不超过0.5%\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"QUALITY_CHECK_CREATE\",\n  \"intentName\": \"新建质检记录\",\n  \"intentCategory\": \"QUALITY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.8289457937573314,\n  \"matchMethod\": \"SEMANTIC\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 新建质检记录 — 为指定生产批次创建新的质量检测记录单。适用于质检员需要开始一次新的质检任务时，需要指定检测类型（如原料检验、过程检验、成品检验）和批次号。不适用于查询已有质检结果、统计质检合格率、查看质检标准等场景。\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"formattedText\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 新建质检记录 — 为指定生产批次创建新的质量检测记录单。适用于质检员需要开始一次新的质检任务时，需要指定检测类型（如原料检验、过程检验、成品检验）和批次号。不适用于查询已有质检结果、统计质检合格率、查看质检标准等场景。\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:47:00.7777834\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"新建质检记录\",\n      \"description\": \"为指定生产批次创建新的质量检测记录单。适用于质检员需要开始一次新的质检任务时，需要指定检测类型（如原料检验、过程检验、成品检验）和批次号。不适用于查询已有质检结果、统计质检合格率、查看质检标准等场景。\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"QUALITY_CHECK_CREATE\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的请求可能匹配多个操作, 请选择您实际想做的:\n1. 查询原料库存\n2. 新建质检记录 — 为指定生产批次创建新的质量检测记录单。适用于质检员需要开始一次新的质检任务时，需要指定检测类型（如原料检验、过程检验、成品检验）和批次号。不适用于查询已有质检结果、统计质检合格率、查看质检标准等场景。\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。"
+  }
+]

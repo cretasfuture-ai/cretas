@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "审批流程不是说简化了吗？为什么我提交的调拨申请三天了还没有人处理？能帮我查一下这个申请现在卡在哪个环节吗？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"审批流程不是说简化了吗？为什么我提交的调拨申请三天了还没有人处理？能帮我查一下这个申请现在卡在哪个环节吗？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"RAG_COMPLETED_LOW_CONFIDENCE\",\n  \"message\": \"【知识库检索结果】\\n\\n查询: 食品行业 审批流程不是说简化了？为什么我提交调拨申请三天了还没有人处理？能帮我查一下这个申请现在卡在哪个环节？ 标准规范\\n\\n相关标准/规范:\\n1. GB 14881-2013 《食品安全国家标准 食品生产通用卫生规范》\\n2. GB/T 27306 《食品安全管理体系 餐饮业要求》\\n3. HACCP 危害分析与关键控制点体系\\n\\n注意：以上为示例数据，实际检索功能待集成向量知识库。\\n如需查询具体标准内容，请提供更详细的查询条件。\\n\",\n  \"formattedText\": null,\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:44:56.8803088\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"confidence\": 0.25,\n    \"routeType\": \"KNOWLEDGE_SEARCH\",\n    \"consultationType\": \"KNOWLEDGE_SEARCH\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "【知识库检索结果】\n\n查询: 食品行业 审批流程不是说简化了？为什么我提交调拨申请三天了还没有人处理？能帮我查一下这个申请现在卡在哪个环节？ 标准规范\n\n相关标准/规范:\n1. GB 14881-2013 《食品安全国家标准 食品生产通用卫生规范》\n2. GB/T 27306 《食品安全管理体系 餐饮业要求》\n3. HACCP 危害分析与关键控制点体系\n\n注意：以上为示例数据，实际检索功能待集成向量知识库。\n如需查询具体标准内容，请提供更详细的查询条件。\n"
+  }
+]

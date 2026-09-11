@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "BRCGS认证的审核要点是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"BRCGS认证的审核要点是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"BRCGS认证审核要点包括：食品安全管理体系完整性（如HACCP计划、供应商管理）、现场卫生与操作规范（清洁、交叉污染控制）、产品追溯与召回能力、文件记录真实性。建议提前模拟审核，纠正内审发现的问题，并确保全员熟悉职责。\",\n  \"formattedText\": \"BRCGS认证审核要点包括：食品安全管理体系完整性（如HACCP计划、供应商管理）、现场卫生与操作规范（清洁、交叉污染控制）、产品追溯与召回能力、文件记录真实性。建议提前模拟审核，纠正内审发现的问题，并确保全员熟悉职责。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:47:03.4316879\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "BRCGS认证审核要点包括：食品安全管理体系完整性（如HACCP计划、供应商管理）、现场卫生与操作规范（清洁、交叉污染控制）、产品追溯与召回能力、文件记录真实性。建议提前模拟审核，纠正内审发现的问题，并确保全员熟悉职责。"
+  }
+]

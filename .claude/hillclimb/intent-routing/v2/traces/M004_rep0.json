@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我申请请假"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我申请请假\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"HR_LEAVE_SUBMIT\",\n  \"intentName\": \"提交请假申请\",\n  \"intentCategory\": \"DATA_OPERATION\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「提交请假申请」。\\n\\n需要您提供以下信息：\\n1. 请提供请假类型: ANNUAL/SICK/PERSONAL/COMPTIME/MARRIAGE/FUNERAL/MATERNITY/PATERNITY/OTHER\\n2. 请提供日期，格式：YYYY-MM-DD 或 今天/明天\\n3. 请提供日期，格式：YYYY-MM-DD 或 今天/明天\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「提交请假申请」。\\n\\n需要您提供以下信息：\\n1. 请提供请假类型: ANNUAL/SICK/PERSONAL/COMPTIME/MARRIAGE/FUNERAL/MATERNITY/PATERNITY/OTHER\\n2. 请提供日期，格式：YYYY-MM-DD 或 今天/明天\\n3. 请提供日期，格式：YYYY-MM-DD 或 今天/明天\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请提供请假类型: ANNUAL/SICK/PERSONAL/COMPTIME/MARRIAGE/FUNERAL/MATERNITY/PATERNITY/OTHER\",\n    \"请提供日期，格式：YYYY-MM-DD 或 今天/明天\",\n    \"请提供日期，格式：YYYY-MM-DD 或 今天/明天\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:45:25.3725233\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"name\": \"leaveType\",\n        \"type\": \"TEXT\",\n        \"label\": \"请假类型: ANNUAL/SICK/PERSONAL/COMPTIME/MARRIAGE/FUNERAL/MATERNITY/PATERNITY/OTHER\"\n      },\n      {\n        \"name\": \"startDate\",\n        \"type\": \"TEXT\",\n        \"label\": \"起始日期 YYYY-MM-DD\"\n      },\n      {\n        \"name\": \"endDate\",\n        \"type\": \"TEXT\",\n        \"label\": \"结束日期 YYYY-MM-DD (包含当日)\"\n      }\n    ]\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"50ac9098-5123-4c10-94a9-6a5aacb6cfe2\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「提交请假申请」。\n\n需要您提供以下信息：\n1. 请提供请假类型: ANNUAL/SICK/PERSONAL/COMPTIME/MARRIAGE/FUNERAL/MATERNITY/PATERNITY/OTHER\n2. 请提供日期，格式：YYYY-MM-DD 或 今天/明天\n3. 请提供日期，格式：YYYY-MM-DD 或 今天/明天\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

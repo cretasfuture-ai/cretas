@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "对比一下两个批次"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"对比一下两个批次\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"EFFICIENCY_COMPARE_ALIAS\",\n  \"intentName\": \"效率对比(别名)\",\n  \"intentCategory\": \"ANALYSIS\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"查询完成\\n- dailyTrend: 0条\",\n  \"formattedText\": \"查询完成\\n- dailyTrend: 0条\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"reportType\": \"EFFICIENCY_COMPARISON\",\n    \"period\": \"week\",\n    \"previousPeriod\": {\n      \"startDate\": \"2026-08-31\",\n      \"endDate\": \"2026-09-06\"\n    },\n    \"periodComparison\": {\n      \"previousOutput\": 0,\n      \"productivityChange\": 0,\n      \"previousWorkHours\": 0.0,\n      \"currentProductivity\": 0,\n      \"previousProductivity\": 0,\n      \"currentOutput\": 0,\n      \"yieldRateChange\": 0,\n      \"currentYieldRate\": 0,\n      \"outputChange\": 0,\n      \"previousYieldRate\": 0,\n      \"currentWorkHours\": 0.0\n    },\n    \"generatedAt\": \"2026-09-12\",\n    \"workerRanking\": {\n      \"ranking\": [],\n      \"totalWorkers\": 0\n    },\n    \"currentPeriod\": {\n      \"startDate\": \"2026-09-07\",\n      \"endDate\": \"2026-09-12\"\n    },\n    \"dailyTrend\": []\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:45:47.1360133\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"efficiency_comparison\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "查询完成\n- dailyTrend: 0条"
+  }
+]

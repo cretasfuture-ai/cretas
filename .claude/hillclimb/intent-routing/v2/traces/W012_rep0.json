@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "登记设备校准记录：称重设备W-001已完成校准，偏差0.1%，合格"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"登记设备校准记录：称重设备W-001已完成校准，偏差0.1%，合格\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SCALE_LIST_DEVICES\",\n  \"intentName\": \"查看秤设备列表\",\n  \"intentCategory\": \"SCALE\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"查询完成\\n- totalPages: 0\\n- currentPage: 1\\n- content: 0条\\n- totalElements: 0\",\n  \"formattedText\": \"查询完成\\n- totalPages: 0\\n- currentPage: 1\\n- content: 0条\\n- totalElements: 0\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"queryConditions\": {},\n    \"totalPages\": 0,\n    \"hasMore\": false,\n    \"statusDistribution\": {},\n    \"currentPage\": 1,\n    \"content\": [],\n    \"totalElements\": 0\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:47:00.6701555\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"scale_list_devices\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "查询完成\n- totalPages: 0\n- currentPage: 1\n- content: 0条\n- totalElements: 0"
+  }
+]

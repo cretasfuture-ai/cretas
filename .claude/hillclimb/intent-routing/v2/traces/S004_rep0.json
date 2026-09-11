@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "瞧瞧那台切鱼机咋样了"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"瞧瞧那台切鱼机咋样了\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_STATUS\",\n  \"intentName\": \"打卡状态\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤状态摘要\\n\\n- **当前整体状态**：未打卡（NOT_CLOCKED）。今日无任何打卡记录。\\n- **可用操作**：可执行上班打卡（canClockIn为true）。当前不可开始休息、不可结束休息、不可下班打卡（休息与下班相关操作按钮均不可用）。\\n- **最近一次打卡**：系统显示最近一次上班打卡记录为空，最近一次下班打卡记录亦为空，说明当前打卡周期内无历史打卡数据。\\n- **今日记录**：今日记录项为空，确认今日尚未进行任何打卡操作。\\n- **考勤结果**：当前考勤状态字段为空，待首次打卡后生成。\\n\\n### 风险提示\\n当前无任何风险或告警信息。用户可直接进行上班打卡操作以开启今日考勤记录。\",\n  \"formattedText\": \"### 考勤状态摘要\\n\\n- **当前整体状态**：未打卡（NOT_CLOCKED）。今日无任何打卡记录。\\n- **可用操作**：可执行上班打卡（canClockIn为true）。当前不可开始休息、不可结束休息、不可下班打卡（休息与下班相关操作按钮均不可用）。\\n- **最近一次打卡**：系统显示最近一次上班打卡记录为空，最近一次下班打卡记录亦为空，说明当前打卡周期内无历史打卡数据。\\n- **今日记录**：今日记录项为空，确认今日尚未进行任何打卡操作。\\n- **考勤结果**：当前考勤状态字段为空，待首次打卡后生成。\\n\\n### 风险提示\\n当前无任何风险或告警信息。用户可直接进行上班打卡操作以开启今日考勤记录。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"lastClockIn\": null,\n      \"todayRecord\": null,\n      \"canBreakStart\": false,\n      \"canClockOut\": false,\n      \"canClockIn\": true,\n      \"canBreakEnd\": false,\n      \"lastClockOut\": null,\n      \"attendanceStatus\": null,\n      \"status\": \"NOT_CLOCKED\"\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:46:02.7808684\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_status\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤状态摘要\n\n- **当前整体状态**：未打卡（NOT_CLOCKED）。今日无任何打卡记录。\n- **可用操作**：可执行上班打卡（canClockIn为true）。当前不可开始休息、不可结束休息、不可下班打卡（休息与下班相关操作按钮均不可用）。\n- **最近一次打卡**：系统显示最近一次上班打卡记录为空，最近一次下班打卡记录亦为空，说明当前打卡周期内无历史打卡数据。\n- **今日记录**：今日记录项为空，确认今日尚未进行任何打卡操作。\n- **考勤结果**：当前考勤状态字段为空，待首次打卡后生成。\n\n### 风险提示\n当前无任何风险或告警信息。用户可直接进行上班打卡操作以开启今日考勤记录。"
+  }
+]

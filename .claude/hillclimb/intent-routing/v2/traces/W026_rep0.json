@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "删除上个月的测试数据"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"删除上个月的测试数据\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"DATA_BATCH_DELETE\",\n  \"intentName\": \"批量删除数据\",\n  \"intentCategory\": \"DATA_OP\",\n  \"sensitivityLevel\": \"CRITICAL\",\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"PENDING_APPROVAL\",\n  \"message\": \"此操作需要审批确认。审批请求已提交。\",\n  \"formattedText\": \"此操作需要审批确认。审批请求已提交。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:47:01.7407207\",\n  \"requiresApproval\": true,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "此操作需要审批确认。审批请求已提交。"
+  }
+]

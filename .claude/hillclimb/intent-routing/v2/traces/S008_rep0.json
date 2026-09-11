@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我瞅瞅小王的打卡记录咋回事"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我瞅瞅小王的打卡记录咋回事\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤历史概览\\n\\n- **当前暂无考勤记录**：系统查询到的考勤数据为空，没有任何考勤条目被记录。查询条件未匹配到任何历史数据。\\n\\n- **无待处理考勤项**：所有查询维度（如人员、客户、批次、金额、数量、库存等）均无有效数据，无告警或异常提示。\\n\\n### 风险提示\\n\\n- 当前无考勤数据，请确认查询条件或时间范围是否正确。若预期应有记录，建议检查数据源同步或考勤录入流程是否正常。\",\n  \"formattedText\": \"### 考勤历史概览\\n\\n- **当前暂无考勤记录**：系统查询到的考勤数据为空，没有任何考勤条目被记录。查询条件未匹配到任何历史数据。\\n\\n- **无待处理考勤项**：所有查询维度（如人员、客户、批次、金额、数量、库存等）均无有效数据，无告警或异常提示。\\n\\n### 风险提示\\n\\n- 当前无考勤数据，请确认查询条件或时间范围是否正确。若预期应有记录，建议检查数据源同步或考勤录入流程是否正常。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"content\": [],\n      \"page\": 1,\n      \"size\": 10,\n      \"totalElements\": 0,\n      \"totalPages\": 0,\n      \"first\": true,\n      \"last\": true,\n      \"currentPage\": 1,\n      \"number\": 0,\n      \"empty\": true\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:46:02.2773124\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_history\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤历史概览\n\n- **当前暂无考勤记录**：系统查询到的考勤数据为空，没有任何考勤条目被记录。查询条件未匹配到任何历史数据。\n\n- **无待处理考勤项**：所有查询维度（如人员、客户、批次、金额、数量、库存等）均无有效数据，无告警或异常提示。\n\n### 风险提示\n\n- 当前无考勤数据，请确认查询条件或时间范围是否正确。若预期应有记录，建议检查数据源同步或考勤录入流程是否正常。"
+  }
+]

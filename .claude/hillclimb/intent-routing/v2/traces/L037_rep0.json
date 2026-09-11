@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "那几个人今天怎么样？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"那几个人今天怎么样？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"ANALYSIS_COMPLETED\",\n  \"message\": \"您好！感谢您的提问。针对“那几个人今天怎么样？”这个问题，作为AI分析助手，我需要基于当前可用的数据上下文进行专业分析。\\n\\n**当前可获取的数据源状态：**  \\n- 已连接：日报表（DAILY_REPORT）、周报（WEEKLY_SUMMARY）  \\n- 工厂ID：EVAL01  \\n- 当前**未获取到具体的人员出勤、人效或异常人员记录数据**，因此无法直接回答“那几个人”的具体状态。\\n\\n**建议处理步骤：**\\n\\n1. **明确人员对象**  \\n   请提供具体的人员名单或岗位信息（如：生产A班组、质检员小李等），以便精准查询日报中的出勤率、异常登记、培训完成情况等字段。\\n\\n2. **数据分析方向**  \\n   若后续获得数据，我会重点分析：\\n   - **出勤率**（参考食品行业标准 ≥95%）\\n   - **人效指标**（与昨日、周均值对比）\\n   - **异常记录**（如迟到、早退、健康申报异常等涉及食品安全关键工序的风险点）\\n\\n3. **临时行动建议**  \\n   建议立即：\\n   - 检查当日考勤系统是否正常打卡\\n   - 确认关键控制点（如热处理、金属探测）岗位人员是否在岗\\n   - 核查人员体温/健康申报记录（食品安全追溯要求）\\n\\n如需进一步分析，请提供具体人员信息，我将结合生产排班、质检通过率等数据给出综合判断。\",\n  \"formattedText\": \"您好！感谢您的提问。针对“那几个人今天怎么样？”这个问题，作为AI分析助手，我需要基于当前可用的数据上下文进行专业分析。\\n\\n**当前可获取的数据源状态：**  \\n- 已连接：日报表（DAILY_REPORT）、周报（WEEKLY_SUMMARY）  \\n- 工厂ID：EVAL01  \\n- 当前**未获取到具体的人员出勤、人效或异常人员记录数据**，因此无法直接回答“那几个人”的具体状态。\\n\\n**建议处理步骤：**\\n\\n1. **明确人员对象**  \\n   请提供具体的人员名单或岗位信息（如：生产A班组、质检员小李等），以便精准查询日报中的出勤率、异常登记、培训完成情况等字段。\\n\\n2. **数据分析方向**  \\n   若后续获得数据，我会重点分析：\\n   - **出勤率**（参考食品行业标准 ≥95%）\\n   - **人效指标**（与昨日、周均值对比）\\n   - **异常记录**（如迟到、早退、健康申报异常等涉及食品安全关键工序的风险点）\\n\\n3. **临时行动建议**  \\n   建议立即：\\n   - 检查当日考勤系统是否正常打卡\\n   - 确认关键控制点（如热处理、金属探测）岗位人员是否在岗\\n   - 核查人员体温/健康申报记录（食品安全追溯要求）\\n\\n如需进一步分析，请提供具体人员信息，我将结合生产排班、质检通过率等数据给出综合判断。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:45:23.3305398\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"processingMode\": \"ANALYSIS\",\n    \"analysisTopic\": \"OVERALL_BUSINESS\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您好！感谢您的提问。针对“那几个人今天怎么样？”这个问题，作为AI分析助手，我需要基于当前可用的数据上下文进行专业分析。\n\n**当前可获取的数据源状态：**  \n- 已连接：日报表（DAILY_REPORT）、周报（WEEKLY_SUMMARY）  \n- 工厂ID：EVAL01  \n- 当前**未获取到具体的人员出勤、人效或异常人员记录数据**，因此无法直接回答“那几个人”的具体状态。\n\n**建议处理步骤：**\n\n1. **明确人员对象**  \n   请提供具体的人员名单或岗位信息（如：生产A班组、质检员小李等），以便精准查询日报中的出勤率、异常登记、培训完成情况等字段。\n\n2. **数据分析方向**  \n   若后续获得数据，我会重点分析：\n   - **出勤率**（参考食品行业标准 ≥95%）\n   - **人效指标**（与昨日、周均值对比）\n   - **异常记录**（如迟到、早退、健康申报异常等涉及食品安全关键工序的风险点）\n\n3. **临时行动建议**  \n   建议立即：\n   - 检查当日考勤系统是否正常打卡\n   - 确认关键控制点（如热处理、金属探测）岗位人员是否在岗\n   - 核查人员体温/健康申报记录（食品安全追溯要求）\n\n如需进一步分析，请提供具体人员信息，我将结合生产排班、质检通过率等数据给出综合判断。"
+  }
+]

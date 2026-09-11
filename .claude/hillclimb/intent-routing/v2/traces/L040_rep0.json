@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "跟老王说的那个方案，能不能帮我查一下进度？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"跟老王说的那个方案，能不能帮我查一下进度？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ORDER_STATUS\",\n  \"intentName\": \"订单状态\",\n  \"intentCategory\": \"DATA_OP\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"销售订单查询完成，共 0 条\",\n  \"formattedText\": \"查询完成\\n- total: 0\\n- size: 20\\n- totalPages: 0\\n- orders: 0条\\n- page: 1\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"total\": 0,\n    \"size\": 20,\n    \"totalPages\": 0,\n    \"orders\": [],\n    \"source\": \"sales_orders\",\n    \"page\": 1,\n    \"message\": \"销售订单查询完成，共 0 条\",\n    \"queryType\": \"ORDER_STATUS\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:45:25.2310271\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"order_query\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "查询完成\n- total: 0\n- size: 20\n- totalPages: 0\n- orders: 0条\n- page: 1"
+  }
+]
