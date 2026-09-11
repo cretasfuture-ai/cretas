@@ -7,10 +7,6 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 
 只从 clean 且 `HEAD == origin/main` 的树部署 prod（`.claude/rules/worktree-and-main-only-deploy.md`）。常规部署不问「要不要部」：验证绿就部（Steve 2026-08-21 裁定）；判据一条不省。
 
-## YOLO compute placement (2026-09-07)
-
-For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on the local Windows/RTX host. Do not use Mac mini, `canada-mini` or `codex-mac`, even as a fallback. Use `scripts/windows/test-yolo-local.ps1` for target tests. Historical Mac test-environment references do not authorize new work there. Production collection and gated model upload retain their existing controls.
-
 ## 统一发布入口（Java / Web 常规发布）
 
 ```bash
@@ -34,7 +30,7 @@ For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on
 
 - prod Java `10010` / `10020` 交替 active，部署 / 核对前必读 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某槽永久停用。
 - `deploy-backend.sh` 的 idle readiness 判据三态：`UP:*` 健康；`TIMEOUT` / `RESTART_LIMIT:*` 真失败；空串 = ssh 断线没量到（脚本先换连接重试，再独立核验；2026-09-02 曾把断线当挂了触发回滚）。
-- 三把本机锁：`cretas-release` / `cretas-backend-deploy` / `cretas-web-admin-deploy`。走哪种模式**只看有没有 `flock` 命令**：Linux（含 47、CI ubuntu）有 ⇒ flock 模式；**macOS 默认没有**（Mac mini / macOS 26.4 / Darwin 25.4.0 实测 `command -v flock` = ABSENT，也没有 `/proc`）、Windows Git Bash 也没有 ⇒ 两者都走 **PID 文件模式**（stale PID 自动回收）。⚠️ 此处原写「flock 模式，Linux/macOS」是错的。被拒时看拒绝信息分两种：(a)「另一个 deploy 进程持有锁, PID x 活着」= 真并发，等它；(b)「登记持有者已死 / 已正常释放, 但锁仍被按着」= 它的孤儿子进程（rsync/ssh/mvn）继承了 fd 200 还没退，拒绝信息会逐行列出 `pid:cmdline`，并给出可直接复制的 `kill <pids>` 与一行复核（打印 `checked` 且无 `still alive` 即可重发）。逃生路：先看每行 cmdline 里 rsync/ssh 的目标，确认孤儿不再写生产制品；⚠️ **pid 会被系统回收再分配**，拒绝信息里那份 cmdline 是「拒绝那一刻」的快照，几分钟后再粘贴时同一个数字可能已经是别的进程 —— 所以先跑拒绝信息给的 `ps -o pid,args -p <pids>` 确认还是那几个孤儿，**再** `kill`，然后跑复核行，最后重发。⛔ 任何模式下都不要 `rm` 锁文件：flock 模式 rm 只会造出第二把互不可见的锁（5/30 形状）；正常释放由 `release_deploy_lock` 只关 fd、不 unlink。
+- 三把本机锁：`cretas-release` / `cretas-backend-deploy` / `cretas-web-admin-deploy`。走哪种模式**只看有没有 `flock` 命令**：Linux（含 47、CI ubuntu）有 ⇒ flock 模式；**macOS 默认没有**（Mac mini / macOS 26.4 / Darwin 25.4.0 实测 `command -v flock` = ABSENT，也没有 `/proc`）、Windows Git Bash 也没有 ⇒ 两者都走 **PID 文件模式**（stale PID 自动回收）。被拒时看拒绝信息分两种：(a)「另一个 deploy 进程持有锁, PID x 活着」= 真并发，等它；(b)「登记持有者已死 / 已正常释放, 但锁仍被按着」= 它的孤儿子进程（rsync/ssh/mvn）继承了 fd 200 还没退，拒绝信息会逐行列出 `pid:cmdline`，并给出可直接复制的 `kill <pids>` 与一行复核（打印 `checked` 且无 `still alive` 即可重发）。逃生路：先看每行 cmdline 里 rsync/ssh 的目标，确认孤儿不再写生产制品；⚠️ **pid 会被系统回收再分配**，拒绝信息里那份 cmdline 是「拒绝那一刻」的快照，几分钟后再粘贴时同一个数字可能已经是别的进程 —— 所以先跑拒绝信息给的 `ps -o pid,args -p <pids>` 确认还是那几个孤儿，**再** `kill`，然后跑复核行，最后重发。⛔ 任何模式下都不要 `rm` 锁文件：flock 模式 rm 只会造出第二把互不可见的锁（5/30 形状）；正常释放由 `release_deploy_lock` 只关 fd、不 unlink。
 - 默认安全串行；只有显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES` 且迁移 / Entity / Security / 跨端契约风险检测全部未命中才并行。
 
 ## 单组件 / 排查入口

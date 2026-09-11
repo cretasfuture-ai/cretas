@@ -7,10 +7,6 @@ description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.
 
 **最后更新**: 2026-09-05（合并原 `aliyun-operations` skill；删下线的 test 环境与历史叙事）
 
-## YOLO compute placement (2026-09-07)
-
-For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on the local Windows/RTX host. Do not use Mac mini, `canada-mini` or `codex-mac`, even as a fallback. Use `scripts/windows/test-yolo-local.ps1` for target tests. Historical Mac test-environment references do not authorize new work there. Production collection and gated model upload retain their existing controls.
-
 ## 全局服务器地图（6 台）
 
 | # | 地址 | 规格 | 角色 | 登录 | 权威文档 |
@@ -22,7 +18,7 @@ For LIUSHANMEN/YOLO work, run screening, training and all task-specific tests on
 | 5 | `52.196.123.155` | 2C / 0.9GB / 38GB | **东京 tokyo-a** VPN 主节点 + 制品缓存 | `ubuntu` + `~/.ssh/ai-egress-tokyo-windows_ed25519` 或 `LightsailDefaultKeyPair-ap-northeast-1.pem` | 无 |
 | 6 | `57.183.75.185` | 2C / 0.4GB / 19GB | **东京 tokyo-b** VPN 备节点 | `ubuntu` + `LightsailDefaultKeyPair-ap-northeast-1.pem` | 无 |
 
-1–4 阿里云，5–6 AWS Lightsail。⛔ 5 和 6 都在跑 VPN（openvpn / xray / arcway-agent），不是空闲备机，动它们 = 断网风险。规格是快照，可用内存 / 磁盘当场重测（`nproc; free -h; df -h /; uptime`）；四台里三台 systemd journal 无上限，根治是设 `SystemMaxUse=`。
+1–4 阿里云，5–6 AWS Lightsail。不在表里的两台：加拿大 Mac mini（自建 CI runner，见 `ci-runner-routing.md`）和本机 Windows/RTX。**YOLO / LIUSHANMEN 的筛查、训练与目标测试只在本机 Windows/RTX 跑**（`scripts/windows/test-yolo-local.ps1`），不用 Mac mini / `canada-mini` / `codex-mac`；生产采集与门控上传的控制不变。⛔ 5 和 6 都在跑 VPN（openvpn / xray / arcway-agent），不是空闲备机，动它们 = 断网风险。规格是快照，可用内存 / 磁盘当场重测（`nproc; free -h; df -h /; uptime`）；四台里三台 systemd journal 无上限，根治是设 `SystemMaxUse=`。
 
 ## 🔴 蓝绿双槽：查 47 上的 Java 之前先读 upstream
 
@@ -54,7 +50,7 @@ Showcase 与 mock-platform **只上 139，绝不上 47**（模拟器扮演「外
 
 ## 环境
 
-47 只跑 **prod**：主库 `cretas_prod_db`、SmartBI 库 `smartbi_prod_db`。test 环境 2026-07-13 下线（内存紧张，prod Java OOM 后腾出 ~1.5G；prod JVM `-Xmx3g`，`HeapDumpOnOutOfMemoryError` 已开，dump 落 `/www/wwwroot/cretas/logs/`）。现在的测试环境是加拿大 Mac mini，见 memory `project_macmini_test_env_is_live_with_f006`。
+47 只跑 **prod**：主库 `cretas_prod_db`、SmartBI 库 `smartbi_prod_db`。test 环境 2026-07-13 下线（内存紧张，prod Java OOM 后腾出 ~1.5G；prod JVM `-Xmx3g`，`HeapDumpOnOutOfMemoryError` 已开，dump 落 `/www/wwwroot/cretas/logs/`）。业务测试环境当前分配以 memory `project_macmini_test_env_is_live_with_f006` 为准（YOLO 例外见服务器地图）。
 
 ## systemd
 

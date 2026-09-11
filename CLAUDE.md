@@ -77,13 +77,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 
 ## UX Flow Gate（低技术素养用户屏幕）
 
-任何涉及以下角色/路径/功能的 RN 屏幕设计，**提出方案之前先用 `ux-flow` skill 产出「UX Flow Analysis」**：
-
-- **角色词**：operator、操作员、仓管、warehouse_worker、quality_inspector、质检员
-- **路径词**：screens/processing、screens/warehouse、screens/quality-inspector
-- **功能词**：报工、入库、出库、盘点、质检、扫码收货
-
-`ux-flow` Phase 1 产出的「UX Flow Analysis」是 spec 强制组成部分，缺失不进入实现。
+低技术素养用户（操作员 / 仓管 / 质检员）使用的 RN 屏幕，**提出方案之前先用 `ux-flow` skill 产出「UX Flow Analysis」**，缺失不进入实现。角色 / 路径 / 功能触发词以 `ux-flow` 的 skill description 为唯一清单，不在此重复。
 
 ## Documentation
 

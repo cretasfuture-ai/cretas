@@ -5,9 +5,9 @@ description: 多模型分发路由规范(in-harness 全 Opus + Fable organizer /
 
 # 多模型分发路由 (Multi-Model Dispatch)
 
-**in-harness 只用 Opus 5（2026-09-06 Steve 拍板，取代 8-17 的「Sonnet → Opus 两档」）。** organizer 会话跑 Fable 5.1，执行/取证/侦察三条车道一律 Opus。
+**in-harness 只用 Opus 5。** organizer 会话跑 Fable 5.1，执行/取证/侦察三条车道一律 Opus。
 
-⇒ **成本旋钮从「模型轴」整个挪到了「effort 轴」。** 8-17 那条 `earned-not-predicted`（⛔ 不许「为了保险用最好的模型」）**没有作废，只是换了对象**：现在是「⛔ 不许为了保险默认蹲高 effort」。`cost = agents × effort` 仍然是乘。
+⇒ **成本旋钮是 effort 轴，不是模型轴。** effort 要 earned-not-predicted：⛔ 不许为了保险默认蹲高 effort。`cost = agents × effort` 是乘。
 
 ⚠️ 为什么可以放弃 Sonnet 一档：本仓实测「机械小改」几乎都带陷阱（2026-09-05 一天内：抄 `toDateString` 抄成 `toISOString`、抄 `authStore.user?.role` 抄了个不存在的字段、合并冲突选错会把刚做的权限文档退回去、份额 30/70 的样本对真 bug 恒真）—— 这些在便宜模型手里**全会一路绿灯过去**，症状要么在真机上、要么在几周后。
 
@@ -64,7 +64,7 @@ Out-of-harness 看不到 `.claude/rules`，brief 卡必须内联相关规则摘�
 
 降 effort 不缩短输出长度，嫌啰嗦在 prompt 里明说。Organizer 是 effort 分配者不是满载消费者：常驻 max 做廉价分诊 = 烧周额度最快。
 
-Orchestration 从便宜到贵：`inline`（默认）→ 单 subagent（隔离 / 污染性输出）→ workflow（10+ agent 交叉核验）→ ultracode。fan-out 时 workers 压低 effort（`medium`/`low`），只编排者 `high` —— 全 Opus 之后这是**唯一**的成本旋钮 —— `cost = agents × effort` 是乘；编排者蹲 xhigh 时 workers 也继承 xhigh，要在 agents frontmatter 压住。`ultrathink`（深化一个脑）≠ `ultracode`（开很多脑）；概念咨询 / 单点问题 → inline。Opus 5 的已知缺陷是过度委派 subagent，fan-out 编排要主动装刹车。
+Orchestration 从便宜到贵：`inline`（默认）→ 单 subagent（隔离 / 污染性输出）→ workflow（10+ agent 交叉核验）→ ultracode。fan-out 时 workers 压低 effort（`medium`/`low`），只编排者 `high` —— 全 Opus 之后这是**唯一**的成本旋钮 —— `cost = agents × effort` 是乘；编排者蹲 xhigh 时 workers 也继承 xhigh，要在 agents frontmatter 压住。`ultrathink`（深化一个脑）≠ `ultracode`（开很多脑）；概念咨询 / 单点问题 → inline。派 subagent 前先过 organizer skill 的「并发形状」表：并发度 = 1 且 context 在手就 inline，不单派。
 
 | 任务 | 模型 | effort | orchestration |
 |---|---|---|---|
@@ -106,4 +106,4 @@ brief 卡自包含：别的 chat 看不到本 chat 上下文。交接靠 brief �
 - 按额度比例硬塞 Opus 做低价值执行 / 硬塞 Composer 做高风险决策
 - Opus 常驻 max effort 做路由分诊
 - Java Tool-Skill / parity port 直接派 Codex（无规则上下文）
-- fan-out 时 workers 也蹲 `high`/`xhigh`（全 Opus 之后模型已不是旋钮，effort 是；`cost = agents × effort` 仍然是乘）
+- fan-out 时 workers 也蹲 `high`/`xhigh`（模型不是旋钮，effort 是；`cost = agents × effort`）
