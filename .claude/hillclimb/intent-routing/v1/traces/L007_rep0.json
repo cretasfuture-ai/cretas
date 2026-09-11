@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "生产计划不是已经排好了吗？为什么车间主管说不知道明天要生产什么？能不能把明天的排产计划发给我看看？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"生产计划不是已经排好了吗？为什么车间主管说不知道明天要生产什么？能不能把明天的排产计划发给我看看？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"COLD_CHAIN_ALERT_ACKNOWLEDGE\",\n  \"intentName\": \"确认冷链报警\",\n  \"intentCategory\": \"WRITE\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「确认冷链报警」。\\n\\n需要您提供以下信息：\\n1. 请提供报警 ID (必填). e.g. 42\\n2. 请提供确认原因 enum (必填): TEMPORARY_DOOR_OPEN / POWER_FLUCTUATION / MAINTENANCE / SENSOR_FAULT / SPOILED / OTHER\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「确认冷链报警」。\\n\\n需要您提供以下信息：\\n1. 请提供报警 ID (必填). e.g. 42\\n2. 请提供确认原因 enum (必填): TEMPORARY_DOOR_OPEN / POWER_FLUCTUATION / MAINTENANCE / SENSOR_FAULT / SPOILED / OTHER\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请提供报警 ID (必填). e.g. 42\",\n    \"请提供确认原因 enum (必填): TEMPORARY_DOOR_OPEN / POWER_FLUCTUATION / MAINTENANCE / SENSOR_FAULT / SPOILED / OTHER\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:26:29.2492351\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"type\": \"INTEGER\",\n        \"name\": \"id\",\n        \"label\": \"报警 ID (必填). e.g. 42\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"ackReason\",\n        \"label\": \"确认原因 enum (必填): TEMPORARY_DOOR_OPEN / POWER_FLUCTUATION / MAINTENANCE / SENSOR_FAULT / SPOILED / OTHER\"\n      }\n    ]\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"f413c970-7b34-4a36-a0e0-c66923f05619\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「确认冷链报警」。\n\n需要您提供以下信息：\n1. 请提供报警 ID (必填). e.g. 42\n2. 请提供确认原因 enum (必填): TEMPORARY_DOOR_OPEN / POWER_FLUCTUATION / MAINTENANCE / SENSOR_FAULT / SPOILED / OTHER\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

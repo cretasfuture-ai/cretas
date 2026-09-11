@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "更正张三昨天的考勤记录，打卡时间从9:05改成8:55"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"更正张三昨天的考勤记录，打卡时间从9:05改成8:55\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤历史摘要\\n\\n- **查询范围**: 当前查询了第 1 页，每页 10 条记录。\\n- **数据状态**: 当前暂无考勤历史数据。\\n- **分页信息**: 总记录数为 0，总页数为 0，数据为空。\\n\\n### 风险提示\\n\\n无风险提示（当前无任何考勤数据需关注）。\",\n  \"formattedText\": \"### 考勤历史摘要\\n\\n- **查询范围**: 当前查询了第 1 页，每页 10 条记录。\\n- **数据状态**: 当前暂无考勤历史数据。\\n- **分页信息**: 总记录数为 0，总页数为 0，数据为空。\\n\\n### 风险提示\\n\\n无风险提示（当前无任何考勤数据需关注）。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"last\": true,\n      \"page\": 1,\n      \"size\": 10,\n      \"empty\": true,\n      \"first\": true,\n      \"number\": 0,\n      \"content\": [],\n      \"totalPages\": 0,\n      \"currentPage\": 1,\n      \"totalElements\": 0\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:33:18.9821976\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤历史摘要\n\n- **查询范围**: 当前查询了第 1 页，每页 10 条记录。\n- **数据状态**: 当前暂无考勤历史数据。\n- **分页信息**: 总记录数为 0，总页数为 0，数据为空。\n\n### 风险提示\n\n无风险提示（当前无任何考勤数据需关注）。"
+  }
+]

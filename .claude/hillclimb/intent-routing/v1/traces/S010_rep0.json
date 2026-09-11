@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "把明天要用的料都列出来"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"把明天要用的料都列出来\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"FACTORY_MR_QUERY_PENDING\",\n  \"intentName\": \"待备料查询\",\n  \"intentCategory\": \"DATA_QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"找到 0 条 PENDING 领料单\",\n  \"formattedText\": \"待备料查询 - 当前工作台概览\\n\\n当前暂无待备料记录。查询返回结果为 0 条处于“PENDING”状态的领料单，系统提示“找到 0 条 PENDING 领料单”。\\n\\n关键指标摘要：\\n- 领料单数量：0\\n- 状态：PENDING（待处理）\\n- 人员 / 客户 / 批次 / 金额 / 数量 / 库存：均无数据\\n\\n风险提示：\\n当前未发现任何备料任务或告警信息。建议确认查询条件是否覆盖正确时段或状态，确保无遗漏待备料订单。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"list\": [],\n      \"status\": \"PENDING\",\n      \"total\": 0\n    },\n    \"message\": \"找到 0 条 PENDING 领料单\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:27:12.9130724\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"factory_material_requisition_query_pending\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "待备料查询 - 当前工作台概览\n\n当前暂无待备料记录。查询返回结果为 0 条处于“PENDING”状态的领料单，系统提示“找到 0 条 PENDING 领料单”。\n\n关键指标摘要：\n- 领料单数量：0\n- 状态：PENDING（待处理）\n- 人员 / 客户 / 批次 / 金额 / 数量 / 库存：均无数据\n\n风险提示：\n当前未发现任何备料任务或告警信息。建议确认查询条件是否覆盖正确时段或状态，确保无遗漏待备料订单。"
+  }
+]

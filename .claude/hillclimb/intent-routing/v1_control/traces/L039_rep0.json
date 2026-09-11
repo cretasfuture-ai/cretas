@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "这个可以，那个不行，帮我记录一下"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"这个可以，那个不行，帮我记录一下\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"FINANCE_PAYMENT_RECORD\",\n  \"intentName\": \"录入收款\",\n  \"intentCategory\": \"DATA_OPERATION\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「录入收款」。\\n\\n需要您提供以下信息：\\n1. 请提供销售订单ID\\n2. 请问收款金额是多少？\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「录入收款」。\\n\\n需要您提供以下信息：\\n1. 请提供销售订单ID\\n2. 请问收款金额是多少？\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请提供销售订单ID\",\n    \"请问收款金额是多少？\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:02.2104786\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"label\": \"销售订单ID\",\n        \"type\": \"TEXT\",\n        \"name\": \"salesOrderId\"\n      },\n      {\n        \"label\": \"收款金额\",\n        \"type\": \"NUMBER\",\n        \"name\": \"amount\"\n      }\n    ]\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"c9e8f2a8-9366-4499-8ef3-b5f1430ef818\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「录入收款」。\n\n需要您提供以下信息：\n1. 请提供销售订单ID\n2. 请问收款金额是多少？\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

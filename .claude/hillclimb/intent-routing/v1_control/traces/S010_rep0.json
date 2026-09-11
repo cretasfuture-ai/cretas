@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "把明天要用的料都列出来"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"把明天要用的料都列出来\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"FACTORY_MR_QUERY_PENDING\",\n  \"intentName\": \"待备料查询\",\n  \"intentCategory\": \"DATA_QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"找到 0 条 PENDING 领料单\",\n  \"formattedText\": \"### 待备料工作台摘要\\n\\n当前查询结果显示，待备料状态为“PENDING”的领料单数量为 0，暂无任何待处理的备料任务。\\n\\n#### 核心数据\\n- **领料单状态**：PENDING（待处理）\\n- **领料单总数**：0 条\\n- **领料单明细列表**：空（无数据）\\n\\n#### 关键指标\\n- **客户/批次/金额/数量**：因无数据，当前未涉及任何客户、批次、金额或数量信息。\\n- **库存/告警**：由于无备料任务，库存或告警指标无相关数据。\\n\\n### 风险提示\\n- 当前无任何待备料记录，无库存预警、应收过期或合规风险，但需确认是否因数据未导入或筛选条件错误导致无显示。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"total\": 0,\n      \"list\": [],\n      \"status\": \"PENDING\"\n    },\n    \"message\": \"找到 0 条 PENDING 领料单\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:29.3067861\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"factory_material_requisition_query_pending\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 待备料工作台摘要\n\n当前查询结果显示，待备料状态为“PENDING”的领料单数量为 0，暂无任何待处理的备料任务。\n\n#### 核心数据\n- **领料单状态**：PENDING（待处理）\n- **领料单总数**：0 条\n- **领料单明细列表**：空（无数据）\n\n#### 关键指标\n- **客户/批次/金额/数量**：因无数据，当前未涉及任何客户、批次、金额或数量信息。\n- **库存/告警**：由于无备料任务，库存或告警指标无相关数据。\n\n### 风险提示\n- 当前无任何待备料记录，无库存预警、应收过期或合规风险，但需确认是否因数据未导入或筛选条件错误导致无显示。"
+  }
+]

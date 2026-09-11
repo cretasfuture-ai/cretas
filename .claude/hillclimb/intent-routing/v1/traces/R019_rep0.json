@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "冷链物流行业有什么新技术趋势？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"冷链物流行业有什么新技术趋势？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"OUT_OF_DOMAIN\",\n  \"intentName\": \"域外无关输入\",\n  \"intentCategory\": \"SYSTEM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.7335049614112767,\n  \"matchMethod\": \"SEMANTIC\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 域外无关输入 — 处理与业务无关的闲聊或域外问题\\n2. 冷链温度监控 — 查询冷链温度监控数据\\n3. 注册冷链设备 — 注册新冷链设备 (冰柜/冷藏车/陈列柜等), 设温控阈值\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"formattedText\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 域外无关输入 — 处理与业务无关的闲聊或域外问题\\n2. 冷链温度监控 — 查询冷链温度监控数据\\n3. 注册冷链设备 — 注册新冷链设备 (冰柜/冷藏车/陈列柜等), 设温控阈值\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:31.6039383\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"域外无关输入\",\n      \"description\": \"处理与业务无关的闲聊或域外问题\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"OUT_OF_DOMAIN\"\n      }\n    },\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"冷链温度监控\",\n      \"description\": \"查询冷链温度监控数据\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"COLD_CHAIN_TEMPERATURE\"\n      }\n    },\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"注册冷链设备\",\n      \"description\": \"注册新冷链设备 (冰柜/冷藏车/陈列柜等), 设温控阈值\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"COLD_CHAIN_EQUIPMENT_REGISTER\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的请求可能匹配多个操作, 请选择您实际想做的:\n1. 域外无关输入 — 处理与业务无关的闲聊或域外问题\n2. 冷链温度监控 — 查询冷链温度监控数据\n3. 注册冷链设备 — 注册新冷链设备 (冰柜/冷藏车/陈列柜等), 设温控阈值\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。"
+  }
+]

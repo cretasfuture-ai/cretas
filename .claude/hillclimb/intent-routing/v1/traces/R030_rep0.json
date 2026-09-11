@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "BRCGS认证的审核要点是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"BRCGS认证的审核要点是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"BRCGS认证审核要点包括：1. **高级管理层承诺**：需明确食品安全政策，定期管理评审和持续改进。2. **食品安全计划**：基于HACCP原则，涵盖所有关键控制点。3. **现场标准**：强调工厂环境、设备维护、虫害控制和交叉污染预防。4. **产品控制**：严抓原料追溯、过敏原管理和产品检验。5. **流程控制**：确保工艺参数、包装和标签合规。6. **人员管理**：落实培训、个人卫生和健康监控。审核中文件记录和现场实操需一致，尤其关注应急响应与供应商审核。\",\n  \"formattedText\": \"BRCGS认证审核要点包括：1. **高级管理层承诺**：需明确食品安全政策，定期管理评审和持续改进。2. **食品安全计划**：基于HACCP原则，涵盖所有关键控制点。3. **现场标准**：强调工厂环境、设备维护、虫害控制和交叉污染预防。4. **产品控制**：严抓原料追溯、过敏原管理和产品检验。5. **流程控制**：确保工艺参数、包装和标签合规。6. **人员管理**：落实培训、个人卫生和健康监控。审核中文件记录和现场实操需一致，尤其关注应急响应与供应商审核。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:52.9975216\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "BRCGS认证审核要点包括：1. **高级管理层承诺**：需明确食品安全政策，定期管理评审和持续改进。2. **食品安全计划**：基于HACCP原则，涵盖所有关键控制点。3. **现场标准**：强调工厂环境、设备维护、虫害控制和交叉污染预防。4. **产品控制**：严抓原料追溯、过敏原管理和产品检验。5. **流程控制**：确保工艺参数、包装和标签合规。6. **人员管理**：落实培训、个人卫生和健康监控。审核中文件记录和现场实操需一致，尤其关注应急响应与供应商审核。"
+  }
+]

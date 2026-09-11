@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "食品生产许可证的办理流程是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"食品生产许可证的办理流程是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"我不太确定您想执行什么操作。\\n1. 登记供应商资质 — 登记供应商食品资质 (SC 证 / 进口商资质 / HACCP / 营业执照 / ISO 22000 / FSSC 22000 / 第三方检测). WRITE + Preview MEDIUM. 自动按 expiry_date 算初始 status.\\n2. 批次更新 — 更新生产批次信息，如计划产量、状态等\\n请回复对应序号, 或更详细地描述您的需求 (例如指定时段 / 物料 / 批次)。\",\n  \"formattedText\": \"我不太确定您想执行什么操作。\\n1. 登记供应商资质 — 登记供应商食品资质 (SC 证 / 进口商资质 / HACCP / 营业执照 / ISO 22000 / FSSC 22000 / 第三方检测). WRITE + Preview MEDIUM. 自动按 expiry_date 算初始 status.\\n2. 批次更新 — 更新生产批次信息，如计划产量、状态等\\n请回复对应序号, 或更详细地描述您的需求 (例如指定时段 / 物料 / 批次)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:47.7680758\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"登记供应商资质\",\n      \"description\": \"登记供应商食品资质 (SC 证 / 进口商资质 / HACCP / 营业执照 / ISO 22000 / FSSC 22000 / 第三方检测). WRITE + Preview MEDIUM. 自动按 expiry_date 算初始 status.\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"SUPPLIER_QUALIFICATION_CREATE\"\n      }\n    },\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"批次更新\",\n      \"description\": \"更新生产批次信息，如计划产量、状态等\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"BATCH_UPDATE\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "我不太确定您想执行什么操作。\n1. 登记供应商资质 — 登记供应商食品资质 (SC 证 / 进口商资质 / HACCP / 营业执照 / ISO 22000 / FSSC 22000 / 第三方检测). WRITE + Preview MEDIUM. 自动按 expiry_date 算初始 status.\n2. 批次更新 — 更新生产批次信息，如计划产量、状态等\n请回复对应序号, 或更详细地描述您的需求 (例如指定时段 / 物料 / 批次)。"
+  }
+]

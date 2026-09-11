@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "数量不太对"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"数量不太对\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SHIPMENT_BY_DATE\",\n  \"intentName\": \"日期出货\",\n  \"intentCategory\": \"SHIPMENT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.6089073804855895,\n  \"matchMethod\": \"NONE\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的问题可能对应「生产耗料调整」或「日期出货」，请问您想要哪个？\",\n  \"formattedText\": \"您的问题可能对应「生产耗料调整」或「日期出货」，请问您想要哪个？\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:27:06.709397\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"日期出货\",\n      \"description\": \"按日期范围查询出货记录\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"SHIPMENT_BY_DATE\"\n      }\n    },\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"生产耗料调整\",\n      \"description\": \"置信度: 61%\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"BATCH_CONSUMPTION_ADJUST\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的问题可能对应「生产耗料调整」或「日期出货」，请问您想要哪个？"
+  }
+]

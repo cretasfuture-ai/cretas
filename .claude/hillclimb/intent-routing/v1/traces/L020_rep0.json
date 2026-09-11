@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "虽然系统记录显示这批货已经发出，然而客户说还没收到。我需要追踪一下单号SHP-2026-0122-001的物流状态"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"虽然系统记录显示这批货已经发出，然而客户说还没收到。我需要追踪一下单号SHP-2026-0122-001的物流状态\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"CUSTOMER_SEARCH\",\n  \"intentName\": \"客户搜索\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"客户列表查询完成，暂无客户数据。请先在客户管理中添加客户信息。\",\n  \"formattedText\": \"客户列表查询完成，暂无客户数据。请先在客户管理中添加客户信息。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"count\": 0,\n    \"customers\": [],\n    \"keyword\": \"\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:26:29.7675637\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"customer_search\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "客户列表查询完成，暂无客户数据。请先在客户管理中添加客户信息。"
+  }
+]

@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "那个，就是昨天说的那个事情，处理好了没？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"那个，就是昨天说的那个事情，处理好了没？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"OUT_OF_DOMAIN\",\n  \"intentName\": \"域外无关输入\",\n  \"intentCategory\": \"SYSTEM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.35,\n  \"matchMethod\": \"LLM\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"用户输入'那个，就是昨天说的那个事情，处理好了没？'非常模糊，没有明确提及任何业务实体（如订单、批次、客户、设备、质检等），也没有指向任何候选意图中的具体操作或查询。虽然可能隐含对某个未明确提及的'事情'的跟进，但缺乏足够信息以匹配任何特定意图，因此归类为域外无关输入。\",\n  \"formattedText\": \"用户输入'那个，就是昨天说的那个事情，处理好了没？'非常模糊，没有明确提及任何业务实体（如订单、批次、客户、设备、质检等），也没有指向任何候选意图中的具体操作或查询。虽然可能隐含对某个未明确提及的'事情'的跟进，但缺乏足够信息以匹配任何特定意图，因此归类为域外无关输入。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:26:42.6741009\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"域外无关输入\",\n      \"description\": \"处理与业务无关的闲聊或域外问题\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"OUT_OF_DOMAIN\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "用户输入'那个，就是昨天说的那个事情，处理好了没？'非常模糊，没有明确提及任何业务实体（如订单、批次、客户、设备、质检等），也没有指向任何候选意图中的具体操作或查询。虽然可能隐含对某个未明确提及的'事情'的跟进，但缺乏足够信息以匹配任何特定意图，因此归类为域外无关输入。"
+  }
+]

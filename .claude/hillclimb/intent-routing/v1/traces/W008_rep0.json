@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "创建一个临时排产任务：明天加班生产500箱带鱼罐头"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"创建一个临时排产任务：明天加班生产500箱带鱼罐头\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"PRODUCTION_PLAN_CREATE\",\n  \"intentName\": \"创建生产计划\",\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"WRITE_CONFIRM_REQUIRED\",\n  \"message\": \"「创建生产计划」是写入/修改操作，执行前需要确认。\",\n  \"formattedText\": null,\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:49.8269076\",\n  \"requiresApproval\": true,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"WRITE\",\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "「创建生产计划」是写入/修改操作，执行前需要确认。"
+  }
+]

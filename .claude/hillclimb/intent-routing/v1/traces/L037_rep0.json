@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "那几个人今天怎么样？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"那几个人今天怎么样？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"ANALYSIS_COMPLETED\",\n  \"message\": \"您好，根据您的问题和当前可获取的数据上下文，我理解您想了解工厂特定人员（如生产、质检等关键岗位员工）今日的整体状态。\\n\\n目前，系统尚未获取到具体人员的实时工作数据，因此无法准确回答“那几个人”的到岗、效率或状态。不过，结合“整体业务”维度，建议您从以下**人员管理的关键指标**进行关注和评估：\\n\\n1.  **出勤率与人效**：今日生产线的核心岗位（如配料、杀菌、包装）出勤率是否正常？若低于95%，需警惕临时岗位调整导致的效率下降或操作风险。\\n2.  **关键岗位状态**：重点关注质检员、关键控制点（CCP）监控人员的在岗情况。若员工疲劳或缺失，直接影响食品安全监控的完整性。\\n3.  **培训与合规**：评估今日当班人员是否具备相应食品安全培训并考核合格，这是100%追溯体系有效执行的基础。\\n\\n**建议行动**：\\n- 立即调取 **DAILY_REPORT** 中的“人员出勤与培训覆盖”模块，核实现场人效与空缺。\\n- 若发现人员异常，优先确保关键控制点（CCP）有具备资质的人员值守，避免因人手不足导致监控记录缺失。\\n\\n我将持续关注数据更新，待系统集成完整后，为您提供具体人员维度的分析。\",\n  \"formattedText\": \"您好，根据您的问题和当前可获取的数据上下文，我理解您想了解工厂特定人员（如生产、质检等关键岗位员工）今日的整体状态。\\n\\n目前，系统尚未获取到具体人员的实时工作数据，因此无法准确回答“那几个人”的到岗、效率或状态。不过，结合“整体业务”维度，建议您从以下**人员管理的关键指标**进行关注和评估：\\n\\n1.  **出勤率与人效**：今日生产线的核心岗位（如配料、杀菌、包装）出勤率是否正常？若低于95%，需警惕临时岗位调整导致的效率下降或操作风险。\\n2.  **关键岗位状态**：重点关注质检员、关键控制点（CCP）监控人员的在岗情况。若员工疲劳或缺失，直接影响食品安全监控的完整性。\\n3.  **培训与合规**：评估今日当班人员是否具备相应食品安全培训并考核合格，这是100%追溯体系有效执行的基础。\\n\\n**建议行动**：\\n- 立即调取 **DAILY_REPORT** 中的“人员出勤与培训覆盖”模块，核实现场人效与空缺。\\n- 若发现人员异常，优先确保关键控制点（CCP）有具备资质的人员值守，避免因人手不足导致监控记录缺失。\\n\\n我将持续关注数据更新，待系统集成完整后，为您提供具体人员维度的分析。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:26:54.4820431\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"analysisTopic\": \"OVERALL_BUSINESS\",\n    \"processingMode\": \"ANALYSIS\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您好，根据您的问题和当前可获取的数据上下文，我理解您想了解工厂特定人员（如生产、质检等关键岗位员工）今日的整体状态。\n\n目前，系统尚未获取到具体人员的实时工作数据，因此无法准确回答“那几个人”的到岗、效率或状态。不过，结合“整体业务”维度，建议您从以下**人员管理的关键指标**进行关注和评估：\n\n1.  **出勤率与人效**：今日生产线的核心岗位（如配料、杀菌、包装）出勤率是否正常？若低于95%，需警惕临时岗位调整导致的效率下降或操作风险。\n2.  **关键岗位状态**：重点关注质检员、关键控制点（CCP）监控人员的在岗情况。若员工疲劳或缺失，直接影响食品安全监控的完整性。\n3.  **培训与合规**：评估今日当班人员是否具备相应食品安全培训并考核合格，这是100%追溯体系有效执行的基础。\n\n**建议行动**：\n- 立即调取 **DAILY_REPORT** 中的“人员出勤与培训覆盖”模块，核实现场人效与空缺。\n- 若发现人员异常，优先确保关键控制点（CCP）有具备资质的人员值守，避免因人手不足导致监控记录缺失。\n\n我将持续关注数据更新，待系统集成完整后，为您提供具体人员维度的分析。"
+  }
+]
