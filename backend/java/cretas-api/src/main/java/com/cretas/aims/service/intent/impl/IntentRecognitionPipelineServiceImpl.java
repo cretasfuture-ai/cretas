@@ -816,6 +816,20 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         );
     }
 
+    /**
+     * 相似度匹配该拿哪个输入: 处理后的输入塌缩到 ≤4 字、且不足原句一半时, 用原句。
+     * 其余情况(短问句本来就短、或处理只做了轻量归一化)照旧用处理后的输入。
+     */
+    static String pickSimilarityInput(String processedInput, String originalInput) {
+        if (processedInput == null || originalInput == null) {
+            return processedInput;
+        }
+        String p = processedInput.trim();
+        String o = originalInput.trim();
+        boolean collapsed = p.length() <= 4 && o.length() >= p.length() * 2 && o.length() > 6;
+        return collapsed ? o : processedInput;
+    }
+
     static PreprocessedQuery ensureStoreReferenceResolved(String originalInput, String processedInput,
             ConversationContext context, PreprocessedQuery preprocessedQuery) {
         if (originalInput == null || context == null) {
@@ -1376,7 +1390,12 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         if (!skipPhraseShortcut && semanticSimilarityEnabled && semanticIntentMatcher != null
                 && semanticIntentMatcher.isSemanticMatchingAvailable()) {
             try {
-                SemanticMatchResult semanticResult = semanticIntentMatcher.matchBySimilarity(userInput, null);
+                // 预处理(动词+名词消歧)会把长句压成 2~4 字的残句("帮我登记一条安全巡检记录…"→"记录记录",
+                // "删除已作废的供应商记录"→"删除记录"), 残句再做相似度就是在比噪声(intent-routing eval
+                // 里 W030/W020/W015 全被匹到 "发货记录查询")。塌缩过的输入改用原句做相似度: 长句过不了
+                // 阈值就自然落到后面的分类器/LLM, 不再由一个残句拍板。
+                String similarityInput = pickSimilarityInput(userInput, originalInput);
+                SemanticMatchResult semanticResult = semanticIntentMatcher.matchBySimilarity(similarityInput, null);
 
                 if (semanticResult.isMatched()) {
                     String matchedIntentCode = semanticResult.getIntentCode();

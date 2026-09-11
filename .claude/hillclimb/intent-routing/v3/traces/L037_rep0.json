@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "那几个人今天怎么样？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"那几个人今天怎么样？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"ANALYSIS_COMPLETED\",\n  \"message\": \"您好！目前我无法获取“那几个人”的具体实时数据。根据系统设定，我仅能查询`DAILY_REPORT`和`WEEKLY_SUMMARY`两类数据源，但当前查询功能尚未集成实时个人信息或人员动态。\\n\\n建议您通过以下方式快速了解情况：\\n1. **查看今日值班考勤表**，确认人员出勤状态。\\n2. **调取车间关键控制点（CCP）监控记录**，评估关键岗位人员操作规范性。\\n3. **回顾近期周报中的人效与培训覆盖率数据**，判断团队整体稳定性。\\n\\n如需我提供**生产、质量、库存**等方面的日报或周报分析，请明确说明，我将为您生成专业报告。\",\n  \"formattedText\": \"您好！目前我无法获取“那几个人”的具体实时数据。根据系统设定，我仅能查询`DAILY_REPORT`和`WEEKLY_SUMMARY`两类数据源，但当前查询功能尚未集成实时个人信息或人员动态。\\n\\n建议您通过以下方式快速了解情况：\\n1. **查看今日值班考勤表**，确认人员出勤状态。\\n2. **调取车间关键控制点（CCP）监控记录**，评估关键岗位人员操作规范性。\\n3. **回顾近期周报中的人效与培训覆盖率数据**，判断团队整体稳定性。\\n\\n如需我提供**生产、质量、库存**等方面的日报或周报分析，请明确说明，我将为您生成专业报告。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:58:53.5121982\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"processingMode\": \"ANALYSIS\",\n    \"analysisTopic\": \"OVERALL_BUSINESS\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您好！目前我无法获取“那几个人”的具体实时数据。根据系统设定，我仅能查询`DAILY_REPORT`和`WEEKLY_SUMMARY`两类数据源，但当前查询功能尚未集成实时个人信息或人员动态。\n\n建议您通过以下方式快速了解情况：\n1. **查看今日值班考勤表**，确认人员出勤状态。\n2. **调取车间关键控制点（CCP）监控记录**，评估关键岗位人员操作规范性。\n3. **回顾近期周报中的人效与培训覆盖率数据**，判断团队整体稳定性。\n\n如需我提供**生产、质量、库存**等方面的日报或周报分析，请明确说明，我将为您生成专业报告。"
+  }
+]

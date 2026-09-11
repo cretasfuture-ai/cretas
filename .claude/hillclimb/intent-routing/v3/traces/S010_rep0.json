@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "把明天要用的料都列出来"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"把明天要用的料都列出来\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"FACTORY_MR_QUERY_PENDING\",\n  \"intentName\": \"待备料查询\",\n  \"intentCategory\": \"DATA_QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"找到 0 条 PENDING 领料单\",\n  \"formattedText\": \"待备料查询摘要\\n\\n状态说明：当前系统返回状态为“待执行”（PENDING），未查到任何备料单。\\n\\n- 备料单总数：0 条\\n- 所有数据列表为空\\n\\n当前暂无待备料的领料单，无需进一步处理。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"total\": 0,\n      \"status\": \"PENDING\",\n      \"list\": []\n    },\n    \"message\": \"找到 0 条 PENDING 领料单\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:34.0554822\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"factory_material_requisition_query_pending\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "待备料查询摘要\n\n状态说明：当前系统返回状态为“待执行”（PENDING），未查到任何备料单。\n\n- 备料单总数：0 条\n- 所有数据列表为空\n\n当前暂无待备料的领料单，无需进一步处理。"
+  }
+]

@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "HACCP体系中CCP点的监控要求是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"HACCP体系中CCP点的监控要求是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"在HACCP体系中，CCP（关键控制点）监控要求包括：\\n1. **实时性**：持续或定时记录关键限值（如温度、时间、pH值等），确保偏离前能及时干预。\\n2. **人员责任**：指定专人负责监控，并明确操作、记录与纠偏流程。\\n3. **工具校准**：监控设备（如温度计、计时器等）需定期校准，确保数据准确。\\n4. **记录规范**：详实填写监控数据、时间、操作人及纠偏行动，记录需清晰可追溯。\\n5. **纠偏预案**：一旦偏离关键限值，立即采取隔离产品、调整工艺等预案，并分析原因。\\n确保以上要求落实，可有效控制危害，符合食品安全标准。\",\n  \"formattedText\": \"在HACCP体系中，CCP（关键控制点）监控要求包括：\\n1. **实时性**：持续或定时记录关键限值（如温度、时间、pH值等），确保偏离前能及时干预。\\n2. **人员责任**：指定专人负责监控，并明确操作、记录与纠偏流程。\\n3. **工具校准**：监控设备（如温度计、计时器等）需定期校准，确保数据准确。\\n4. **记录规范**：详实填写监控数据、时间、操作人及纠偏行动，记录需清晰可追溯。\\n5. **纠偏预案**：一旦偏离关键限值，立即采取隔离产品、调整工艺等预案，并分析原因。\\n确保以上要求落实，可有效控制危害，符合食品安全标准。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:52.2796894\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "在HACCP体系中，CCP（关键控制点）监控要求包括：\n1. **实时性**：持续或定时记录关键限值（如温度、时间、pH值等），确保偏离前能及时干预。\n2. **人员责任**：指定专人负责监控，并明确操作、记录与纠偏流程。\n3. **工具校准**：监控设备（如温度计、计时器等）需定期校准，确保数据准确。\n4. **记录规范**：详实填写监控数据、时间、操作人及纠偏行动，记录需清晰可追溯。\n5. **纠偏预案**：一旦偏离关键限值，立即采取隔离产品、调整工艺等预案，并分析原因。\n确保以上要求落实，可有效控制危害，符合食品安全标准。"
+  }
+]

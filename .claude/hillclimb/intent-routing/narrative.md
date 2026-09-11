@@ -2,9 +2,32 @@
 
 | round | change (one line) | test | train | all | s/case (median) | llm_fallback | notes |
 |-------|-------------------|------|-------|-----|-----------------|--------------|-------|
-| 0 | baseline (origin/main a1428f8611, prod intent config 2026-09-11, embedding grpc) | 0.300 | 0.330 | 0.315 | 0.08 | 2% | 200 cases × 2 reps, 0 errors, 0 rep flips |
+| 0 | baseline (origin/main a1428f8611, prod intent config 2026-09-11, embedding grpc) | 0.300 | 0.330 | 0.315 | 0.11 | 2% | 200×2 reps, 0 rep flips (in-JVM cache replay) |
+| 1 | dialect guard: 货/活/中 keep business compounds | 0.300 | 0.290 | 0.295 | 0.18 | 6% |  |
+| 1c | no-change control (v1 jar, fresh JVM) | 0.300 | 0.270 | 0.285 | 0.20 | 7% |  |
+| 2 | phrase shortcut skips read-only intents under a write verb | 0.320 | 0.300 | 0.310 | 0.23 | 6% |  |
+| 3 | similarity matcher uses original sentence when input collapsed | 0.330 | 0.300 | 0.315 | 0.26 | 5% |  |
 
-Best so far: round 0 (test 0.300). Noise floor on test: ~±0.07 at 100 cases (reps add nothing — the pipeline is deterministic once learned expressions are reset; 0/200 cases flipped between reps).
+Best so far: round 3 (test 0.330). Stopped: three consecutive rounds with test delta < 0.03 (0.00 / +0.02 / +0.01) — the Step 2 plateau rule. Restart-to-restart noise on identical code is 4/200 flips (round 1c), so each round's net effect sits at the noise floor even where the mechanism is verified by unit tests.
+
+## Per-category, baseline → v3
+
+| category | baseline | v3 |
+|---|---|---|
+| complex-language | 0.40 | 0.30 |
+| formatting | 0.45 | 0.35 |
+| multi-turn | 0.40 | 0.50 |
+| permission | 0.30 | 0.40 |
+| rag | 0.00 | 0.00 |
+| self-learning | 0.50 | 0.40 |
+| write-ops | 0.23 | 0.30 |
+
+## What the three rounds established
+
+1. The three deterministic Java-side defects are real and now unit-tested: single-character dialect keys eating compounds (v1), noun phrases resolving to query intents under write verbs (v2), similarity matching on a 2–4 character residue (v3). Each fix moves a handful of cases; none moves the headline beyond noise, because the headline is dominated by three buckets the tables don't touch.
+2. **RAG 0/30** is unchanged across all rounds — the knowledge/web router is gated on the early question-type classifier saying `GENERAL_QUESTION`, which happens ~4× per 200 requests. That is a routing-architecture lever (Python question-type / `AgenticRAGRouterService` gating), not a phrase-table one.
+3. **UNSUPPORTED_CAPABILITY is never produced** (0/25 across all rounds): every stage prefers a plausible tool over a refusal, and the LLM fallback returns `OUT_OF_DOMAIN` only for genuinely off-topic text. A refusal path needs a confidence floor (fallback conf < X → unsupported) — a behaviour change with product implications, so it was not attempted unilaterally.
+4. **APPROVAL_REQUIRED** cases execute as `SUCCESS`: no approval chain is configured on those intents in the prod config snapshot — config, not routing.
 
 ## Baseline (2026-09-11)
 

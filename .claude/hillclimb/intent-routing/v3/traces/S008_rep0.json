@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我瞅瞅小王的打卡记录咋回事"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我瞅瞅小王的打卡记录咋回事\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤历史总览\\n\\n当前考勤历史记录为空，未查询到任何数据。\\n\\n- **记录数量**: 当前考勤记录总数为 0，无任何考勤条目。\\n- **分页信息**: 当前查询第 1 页，每页 10 条，总页数为 0 页。\\n- **数据状态**: 数据集合为空，未包含任何员工考勤记录。\\n\\n---\\n\\n### 风险提示\\n\\n- 当前暂无考勤历史数据，无法进行员工出勤分析或异常预警。\",\n  \"formattedText\": \"### 考勤历史总览\\n\\n当前考勤历史记录为空，未查询到任何数据。\\n\\n- **记录数量**: 当前考勤记录总数为 0，无任何考勤条目。\\n- **分页信息**: 当前查询第 1 页，每页 10 条，总页数为 0 页。\\n- **数据状态**: 数据集合为空，未包含任何员工考勤记录。\\n\\n---\\n\\n### 风险提示\\n\\n- 当前暂无考勤历史数据，无法进行员工出勤分析或异常预警。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"content\": [],\n      \"page\": 1,\n      \"size\": 10,\n      \"totalElements\": 0,\n      \"totalPages\": 0,\n      \"first\": true,\n      \"last\": true,\n      \"currentPage\": 1,\n      \"number\": 0,\n      \"empty\": true\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:32.600748\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_history\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤历史总览\n\n当前考勤历史记录为空，未查询到任何数据。\n\n- **记录数量**: 当前考勤记录总数为 0，无任何考勤条目。\n- **分页信息**: 当前查询第 1 页，每页 10 条，总页数为 0 页。\n- **数据状态**: 数据集合为空，未包含任何员工考勤记录。\n\n---\n\n### 风险提示\n\n- 当前暂无考勤历史数据，无法进行员工出勤分析或异常预警。"
+  }
+]

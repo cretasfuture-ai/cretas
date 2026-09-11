@@ -1,5 +1,5 @@
 {
-  "current_round": 2,
+  "current_round": 3,
   "reps": 1,
   "goal": {
     "target": "pass",
@@ -263,11 +263,12 @@
     "drawn": "2026-09-11 before baseline scores were read"
   },
   "best": {
-    "round": 2,
-    "test_score": 0.32
+    "round": 3,
+    "test_score": 0.33
   },
   "noise": {
     "restart_to_restart_flips": "4/200 (v1 vs v1_control, identical jar)",
     "note": "in-process caches make same-JVM reps replay; every round = fresh JVM + reset_state.sh"
-  }
+  },
+  "stopped": "plateau: 3 rounds test delta < 0.03"
 }

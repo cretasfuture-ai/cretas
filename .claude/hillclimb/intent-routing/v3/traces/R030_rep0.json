@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "BRCGS认证的审核要点是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"BRCGS认证的审核要点是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"BRCGS认证审核要点包括：\\n1. **高层管理承诺**：需建立食品安全文化，制定明确的质量政策与目标。\\n2. **HACCP体系**：需基于风险分析，完成危害识别、关键控制点（CCP）监控与纠偏。\\n3. **质量管理**：涵盖供应商审核、原料追溯、产品召回演练及纠正预防措施。\\n4. **环境与卫生**：工厂设计需防交叉污染，设备清洁验证有效，虫害控制程序完善。\\n5. **过程控制**：关键工艺参数（如温度、时间）需实时记录，异物检测设备定期校准。\\n6. **人员管理**：培训记录完整，个人卫生规范执行到位。\\n7. **文件记录**：所有记录需真实、可追溯，审核前1年内至少完成一次内部审核。\\n建议提前模拟审核流程，重点突出风险防控与持续改进证据。\",\n  \"formattedText\": \"BRCGS认证审核要点包括：\\n1. **高层管理承诺**：需建立食品安全文化，制定明确的质量政策与目标。\\n2. **HACCP体系**：需基于风险分析，完成危害识别、关键控制点（CCP）监控与纠偏。\\n3. **质量管理**：涵盖供应商审核、原料追溯、产品召回演练及纠正预防措施。\\n4. **环境与卫生**：工厂设计需防交叉污染，设备清洁验证有效，虫害控制程序完善。\\n5. **过程控制**：关键工艺参数（如温度、时间）需实时记录，异物检测设备定期校准。\\n6. **人员管理**：培训记录完整，个人卫生规范执行到位。\\n7. **文件记录**：所有记录需真实、可追溯，审核前1年内至少完成一次内部审核。\\n建议提前模拟审核流程，重点突出风险防控与持续改进证据。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T01:00:21.7172835\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "BRCGS认证审核要点包括：\n1. **高层管理承诺**：需建立食品安全文化，制定明确的质量政策与目标。\n2. **HACCP体系**：需基于风险分析，完成危害识别、关键控制点（CCP）监控与纠偏。\n3. **质量管理**：涵盖供应商审核、原料追溯、产品召回演练及纠正预防措施。\n4. **环境与卫生**：工厂设计需防交叉污染，设备清洁验证有效，虫害控制程序完善。\n5. **过程控制**：关键工艺参数（如温度、时间）需实时记录，异物检测设备定期校准。\n6. **人员管理**：培训记录完整，个人卫生规范执行到位。\n7. **文件记录**：所有记录需真实、可追溯，审核前1年内至少完成一次内部审核。\n建议提前模拟审核流程，重点突出风险防控与持续改进证据。"
+  }
+]

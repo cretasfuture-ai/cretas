@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "食品企业碳中和的实施路径有哪些？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"食品企业碳中和的实施路径有哪些？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"RESTAURANT_INGREDIENT_STOCK\",\n  \"intentName\": \"食材库存查询\",\n  \"intentCategory\": \"RESTAURANT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NOT_APPLICABLE\",\n  \"message\": \"本厂为制造(工厂)业态，无餐饮经营数据，「食材库存查询」餐饮分析不适用。工厂经营分析请使用：库存查询 / 采购建议 / 质检报告 / 生产出品率 等功能。\",\n  \"formattedText\": \"本厂为制造(工厂)业态，无餐饮经营数据，「食材库存查询」餐饮分析不适用。工厂经营分析请使用：库存查询 / 采购建议 / 质检报告 / 生产出品率 等功能。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T01:00:18.2166166\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "本厂为制造(工厂)业态，无餐饮经营数据，「食材库存查询」餐饮分析不适用。工厂经营分析请使用：库存查询 / 采购建议 / 质检报告 / 生产出品率 等功能。"
+  }
+]

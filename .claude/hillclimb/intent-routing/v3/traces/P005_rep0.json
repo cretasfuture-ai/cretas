@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "查看生产线的实时数据"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"查看生产线的实时数据\",\n  \"previewOnly\": false,\n  \"login_as\": \"hr_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_PRODUCTION\",\n  \"intentName\": \"生产报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": \"LOW\",\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NO_PERMISSION\",\n  \"message\": \"您没有权限执行此操作。需要角色: [\\\"factory_super_admin\\\", \\\"department_admin\\\", \\\"workshop_supervisor\\\"]\",\n  \"formattedText\": \"您没有权限执行此操作。需要角色: [\\\"factory_super_admin\\\", \\\"department_admin\\\", \\\"workshop_supervisor\\\"]\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:17.2951672\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您没有权限执行此操作。需要角色: [\"factory_super_admin\", \"department_admin\", \"workshop_supervisor\"]"
+  }
+]

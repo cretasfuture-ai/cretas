@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "冷链运输的温度监控标准是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"冷链运输的温度监控标准是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"COLD_CHAIN_TEMPERATURE\",\n  \"intentName\": \"冷链温度监控\",\n  \"intentCategory\": \"DATA_OP\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"FAILED\",\n  \"message\": \"已理解您的问题，但当前还不能完成这项分析。请补充具体的业务对象、指标和时间范围后重试；如果条件已经明确，请联系管理员。\",\n  \"formattedText\": \"已理解您的问题，但当前还不能完成这项分析。请补充具体的业务对象、指标和时间范围后重试；如果条件已经明确，请联系管理员。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:52.368269\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "已理解您的问题，但当前还不能完成这项分析。请补充具体的业务对象、指标和时间范围后重试；如果条件已经明确，请联系管理员。"
+  }
+]
