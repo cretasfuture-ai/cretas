@@ -5,6 +5,33 @@
 
 ## 在飞任务
 
+- `ERP-S315-BATCH-SEARCH-20261023` — `review` — Owner Root — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 原worker两文件已提交释放，合入S307候选；真实PG复验与scope见archive/2026-10-23-s315-batch-search.md；Root集成发布/原QA验收。
+
+- `ERP-S6-B3C-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 13874247c5b47897e86511cd095dc3bebe6447e1 — C2/C3整改7可写+5冻结，见archive/2026-10-23-s6-c2c3-atomic-scope.md；原HEAD/生产仍HOLD。
+
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 已收实际会话/独立WT，精确11文件与命令见archive/2026-10-23-s2-entry-scope.md；只读工厂入口，原QA验收。
+
+- `ERP-S307-DRIFT-RECOVERY-20261023` — `review` — Owner Root — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 原worker已释放14产品文件，Root接管集成；PG选择器与验收见archive/2026-10-23-s307-drift-recovery.md；旧审批保留，原QA验收。
+
+- `GAPS-G1-20261008D` — `review` — Owner: /root — Base: abf64f51d5e34216955e7bb7804ed8966e0487b5 — Scope: quality路由pipeline/facade/audience及目标测试；g1 worktree。HEAD 9667d45536；24+13测试绿、main基线与双变异红绿、最终3012质检/仓管/统计对照过。回执 D:/Temp/claude/codex-gaps-20261008d-report.md；仅本地提交待organizer。
+- `GAPS-G2-20261008D` — `review` — Owner: /root — Base: abf64f51d5e34216955e7bb7804ed8966e0487b5 — Scope: trends路由pipeline/facade/KB/Tool及目标测试；g2 worktree。HEAD 8ce0e71126；25+18测试绿、main基线与有效变异红绿、最终3012四句直达及模糊对照过。回执 D:/Temp/claude/codex-gaps-20261008d-report.md；仅本地提交待organizer。
+- `GAPS-G3-20261008D` — `review` — Owner: /root — Base: abf64f51d5e34216955e7bb7804ed8966e0487b5 — Scope: ReportTrendsTool、ResultFormatterServiceImpl、目标测试；g3 worktree。HEAD 0e41c45bdb；22测试绿、基线及双变异红、3012真实SQL验收、fixture残留0。回执 D:/Temp/claude/codex-gaps-20261008d-report.md；仅本地提交待organizer。
+- `GAPS-G4-20261008D` — `review` — Owner: /root — Base: abf64f51d5e34216955e7bb7804ed8966e0487b5 — Scope: Workflow Editor/Panel/helper及目标测试；g4 worktree。HEAD ff2725d25a；74测试、tsc/build绿，真实30项独立对账、未应用不变、main基线及双变异红绿。回执 D:/Temp/claude/codex-gaps-20261008d-report.md；仅本地提交待organizer。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -58,6 +85,14 @@
 
 ## Scope 锁地图
 
+- `ERP-S6-B3C-CLAUDE-20261022`：仅archive/2026-10-23-s6-c2c3-atomic-scope.md的7文件修改，5依赖冻结；config写锁与同事务扣减，禁止回写B3A/B2和生产调度。
+
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：精确11文件锁见archive/2026-10-23-s2-entry-scope.md；原Claude唯一写者，平台权限/采购/S6不释放。
+
+
+
+
+
 
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
@@ -78,6 +113,7 @@
 - 餐饮 RN：实现已入 main，但当前 OTA runtime 与真实设备验收未确认。
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
+
 
 ## 维护规则
 

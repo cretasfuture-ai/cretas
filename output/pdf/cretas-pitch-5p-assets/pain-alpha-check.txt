@@ -1,0 +1,28 @@
+PAGES=5; RATIO=16:9
+COVER_CHANGED_PIXELS=0
+PAGES_2_3_4_ONLY_ADDED_PAIN_TEXT=PASS
+PAGE_5_TEXT_DIFF=EMPTY
+PAGE_5_OUTSIDE_ILLUSTRATION_CHANGED_PIXELS=0
+BANNED_TERMS=0
+TEXT_OUT_OF_PAGE=0
+PNG_ALPHA=VERIFIED; CSS_MASK=NONE
+PAGE_5_GAP_TOP_PX=16.33; BOTTOM_PX=18.67
+MOCK_BODY_FONT_PT=9.078
+CANDIDATE_SHA256=85a8707afff8e03a11acd9b71150a1ac04ace4d6c35745fde4249f33917bbe74
+
+PAGE 2
++ 以前 找软件公司定制一套系统，动辄六七位数，还要派工程师驻厂几个月一点点配；改一次流程又要加钱。
+Other text diff: EMPTY
+PAGE 3
++ 以前 「我们最重要的是算这个产品的毛利、毛利率。」每批原料进价不一样，三四十种辅料，手工表一估就偏，月中才出数。—— 某熟食厂财务
+Other text diff: EMPTY
+PAGE 4
++ 以前 食品厂的工艺最复杂：一种原料拆成好几个产品，边角料又回到别的产品里，几道工序同时走。普通系统只会一条线记，账一多就乱。
+Other text diff: EMPTY
+VISUAL_REVIEW_POPPLER_PAGES_2_TO_5=PASS
+FINAL_HASH_MATCH=PASS
+COMMAND: node output/pdf/cretas-pitch-5p-assets/render_pain_alpha.cjs (exit 0)
+COMMAND: B:/anaconda3/python.exe output/pdf/cretas-pitch-5p-assets/assemble_pain_alpha.py (exit 0)
+IMAGE_TOOL=built-in image_gen
+IMAGE_ASSET=security-factory-scene-alpha.png
+FULL_IMAGE_PROMPT=绘图说明.md (2026-10-25 section)

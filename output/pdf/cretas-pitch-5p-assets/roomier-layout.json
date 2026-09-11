@@ -1,0 +1,64 @@
+{
+  "mock": {
+    "height": 690,
+    "width": 1440,
+    "viewport": 690
+  },
+  "checks": [
+    {
+      "selector": "s page2",
+      "overflow": false,
+      "bottom": 720
+    },
+    {
+      "selector": "b2",
+      "overflow": false,
+      "bottom": 284.6875
+    },
+    {
+      "selector": "b2",
+      "overflow": false,
+      "bottom": 462.6875
+    },
+    {
+      "selector": "b2",
+      "overflow": false,
+      "bottom": 640.6875
+    },
+    {
+      "selector": "browser-shot setup-demo",
+      "overflow": false,
+      "bottom": 640.6875
+    },
+    {
+      "selector": "setup-body",
+      "overflow": false,
+      "bottom": 639.6875
+    },
+    {
+      "selector": "s page3",
+      "overflow": false,
+      "bottom": 720
+    },
+    {
+      "selector": "ai",
+      "overflow": false,
+      "bottom": 655.6875
+    },
+    {
+      "selector": "s page4",
+      "overflow": false,
+      "bottom": 720
+    },
+    {
+      "selector": "map",
+      "overflow": false,
+      "bottom": 618.09375
+    },
+    {
+      "selector": "rt",
+      "overflow": false,
+      "bottom": 648.09375
+    }
+  ]
+}

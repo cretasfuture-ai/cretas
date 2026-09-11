@@ -697,6 +697,9 @@ public class YieldReportServiceImpl implements YieldReportService {
     public YieldLimitsDTO getLimits(String factoryId, Long batchId, Long workProcessTaskId, BigDecimal inputQuantity) {
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, workProcessTaskId)
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + workProcessTaskId));
+        if (t.getProductionBatchId() != null && batchId != null && !batchId.equals(t.getProductionBatchId())) {
+            throw new BusinessException(409, "工序任务不属于当前生产批次");
+        }
 
         String workProcessId = t.getWorkProcessId();
         Optional<WorkProcess> wpOpt = processRepo.findById(workProcessId);

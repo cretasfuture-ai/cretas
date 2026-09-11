@@ -1,0 +1,26 @@
+[
+  {
+    "page": "s page2",
+    "barHeight": 55,
+    "bodyBottom": 657.7674560546875,
+    "footerTop": 681,
+    "overflow": false,
+    "cardsOverflow": false
+  },
+  {
+    "page": "s page3",
+    "barHeight": 55,
+    "bodyBottom": 654.6875,
+    "footerTop": 681,
+    "overflow": false,
+    "cardsOverflow": false
+  },
+  {
+    "page": "s page4",
+    "barHeight": 55,
+    "bodyBottom": 652.09375,
+    "footerTop": 681,
+    "overflow": false,
+    "cardsOverflow": false
+  }
+]

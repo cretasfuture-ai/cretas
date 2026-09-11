@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head><meta charset="utf-8"/><title>白垩纪 Cretas 四件事</title>
+<style>
+@page { size: 1280px 720px; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Microsoft YaHei UI","Microsoft YaHei",sans-serif; color: #141414; background: #fff; }
+.s { width: 1280px; height: 720px; position: relative; overflow: hidden; page-break-after: always; padding: 52px 58px 0; }
+.s:last-child { page-break-after: auto; }
+h1 { font-size: 42px; font-weight: 800; letter-spacing: -0.5px; }
+.sub { font-size: 19px; color: #666; margin-top: 10px; }
+.foot { position: absolute; left: 58px; right: 58px; bottom: 26px; display: flex; justify-content: space-between; font-size: 13px; color: #6b6b6b; }
+.dark { background: #111; color: #fff; }
+.dark .foot { color: #8a8a8a; }
+.gc { color: #007a55; }
+.pain { background: #f4f1ee; border-left: 5px solid #c9a27a; border-radius: 8px; padding: 14px 20px; font-size: 18px; color: #444; line-height: 1.55; }
+.pain b { color: #8a5a2b; margin-right: 8px; }
+/* cover */
+.cover { padding: 0; display: flex; }
+.cover .l { width: 700px; padding: 60px 64px; display: flex; flex-direction: column; }
+.cover .r { flex: 1; background: url(p1_0.jpeg) center/cover; }
+.brand { display: flex; align-items: center; gap: 14px; font-size: 24px; font-weight: 800; }
+.brand img { width: 48px; height: 48px; }
+.cover h1 { font-size: 58px; line-height: 1.2; margin-top: 54px; }
+.four { margin-top: 44px; display: flex; flex-direction: column; gap: 20px; }
+.four div { display: flex; align-items: baseline; gap: 18px; font-size: 21px; color: #ddd; }
+.four b { flex: none; width: 108px; font-size: 25px; color: #00b377; }
+.cover .url { margin-top: auto; color: #8a8a8a; font-size: 17px; }
+/* price */
+.big3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 22px; margin-top: 24px; }
+.b { background: #007a55; color: #fff; border-radius: 14px; padding: 26px 28px; height: 210px; }
+.b .n { font-size: 50px; font-weight: 800; line-height: 1.1; }
+.b h3 { font-size: 22px; margin: 8px 0 10px; color: #c4ecdb; }
+.b p { font-size: 18px; line-height: 1.55; }
+.usage { margin-top: 22px; background: #f1f5f3; border-radius: 14px; padding: 18px 28px; display: flex; align-items: center; gap: 40px; }
+.usage .t { font-size: 18px; font-weight: 800; width: 170px; flex: none; line-height: 1.4; }
+.usage .t small { display: block; font-size: 13px; color: #888; font-weight: 400; }
+.usage .c { flex: 1; text-align: center; border-left: 1px solid #d6e2dc; }
+.usage .c b { display: block; font-size: 26px; color: #007a55; }
+.usage .c span { font-size: 15px; color: #555; }
+/* mock admin screenshots */
+.pg2 { display: grid; grid-template-columns: 380px 1fr; gap: 26px; margin-top: 20px; }
+.col3 { display: flex; flex-direction: column; gap: 12px; }
+.b2 { background: #007a55; color: #fff; border-radius: 12px; padding: 16px 20px; display: flex; gap: 16px; align-items: center; height: 120px; }
+.b2 .n { flex: none; width: 112px; font-size: 32px; font-weight: 800; }
+.b2 h3 { font-size: 19px; color: #c4ecdb; margin-bottom: 4px; }
+.b2 p { font-size: 15.5px; line-height: 1.5; }
+.win { border-radius: 10px; overflow: hidden; background: #fff; border: 1px solid #d9dde3; box-shadow: 0 12px 32px rgba(0,0,0,.14); font-size: 12px; color: #303133; }
+.bar { height: 28px; background: #eef0f3; display: flex; align-items: center; gap: 6px; padding: 0 12px; border-bottom: 1px solid #dcdfe6; }
+.bar i { width: 10px; height: 10px; border-radius: 50%; background: #ff5f57; }
+.bar i:nth-child(2) { background: #febc2e; } .bar i:nth-child(3) { background: #28c840; }
+.bar span { margin-left: 14px; background: #fff; border-radius: 5px; padding: 2px 14px; color: #888; font-size: 11px; }
+.app { display: flex; height: 368px; }
+.side { width: 120px; background: #1f2d3d; color: #bfcbd9; padding-top: 10px; flex: none; }
+.side .logo { display: flex; align-items: center; gap: 6px; color: #fff; font-weight: 700; padding: 4px 12px 12px; font-size: 13px; }
+.side .logo img { width: 18px; height: 18px; }
+.side div:not(.logo) { padding: 9px 16px; font-size: 12px; }
+.side .on { background: #00b377; color: #fff; }
+.main { flex: 1; padding: 12px 16px; background: #f5f7fa; }
+.crumb { font-size: 12px; color: #606266; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+.cnt { font-style: normal; background: #fdf6ec; color: #e6a23c; border: 1px solid #f5dab1; border-radius: 4px; padding: 0 6px; font-size: 11px; }
+.kpis { display: flex; gap: 10px; }
+.kpis div { flex: 1; background: #fff; border-radius: 6px; padding: 9px 12px; border: 1px solid #ebeef5; }
+.kpis span { color: #909399; font-size: 11px; display: block; }
+.kpis b { font-size: 22px; color: #007a55; }
+.kpis small { font-size: 11px; color: #909399; font-weight: 400; }
+.chart { background: #fff; border: 1px solid #ebeef5; border-radius: 6px; margin-top: 10px; padding: 8px 12px; }
+.ct { font-size: 11px; color: #606266; margin-bottom: 4px; }
+.bars { height: 64px; display: flex; align-items: flex-end; gap: 6px; border-bottom: 1px solid #ebeef5; }
+.bars i { flex: 1; background: #7fd6b6; border-radius: 2px 2px 0 0; }
+.tb { width: 100%; border-collapse: collapse; background: #fff; margin-top: 10px; border: 1px solid #ebeef5; }
+.tb th { background: #fafafa; color: #909399; font-weight: 600; text-align: left; padding: 7px 10px; font-size: 11px; border-bottom: 1px solid #ebeef5; }
+.tb td { padding: 7px 10px; border-bottom: 1px solid #ebeef5; font-size: 12px; }
+.tb small { color: #909399; font-size: 10.5px; }
+.stg { font-style: normal; font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.stg.w { background: #fdf6ec; color: #e6a23c; border: 1px solid #f5dab1; }
+.stg.b { background: #ecf5ff; color: #409eff; border: 1px solid #c6e2ff; }
+.btn { font-style: normal; color: #fff; background: #00b377; border-radius: 4px; padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+.btn.g { background: #fff; color: #00b377; border: 1px solid #00b377; }
+.win.sm .main { padding: 12px 14px; }
+.win.sm .tb td { font-size: 12.5px; padding: 8px 8px; }
+.cap2 { font-size: 13px; color: #999; margin-top: 8px; }
+/* accuracy */
+.acc { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; margin-top: 22px; }
+.steps { display: flex; flex-direction: column; gap: 12px; }
+.st { display: flex; gap: 16px; background: #f1f5f3; border-radius: 12px; padding: 14px 20px; align-items: center; }
+.st i { flex: none; width: 38px; height: 38px; border-radius: 50%; background: #00b377; color: #fff; font-style: normal; font-weight: 800; font-size: 19px; display: flex; align-items: center; justify-content: center; }
+.st b { font-size: 20px; display: block; }
+.st span { font-size: 16px; color: #555; }
+.res { background: #007a55; color: #fff; border-radius: 12px; padding: 16px 22px; display: flex; align-items: center; gap: 22px; }
+.res .n { font-size: 42px; font-weight: 800; }
+.res p { font-size: 17px; line-height: 1.5; }
+.ai { border: 2px solid #f0a020; border-radius: 14px; padding: 20px 24px; }
+.ai h3 { font-size: 22px; margin-bottom: 6px; }
+.ai .d { font-size: 17px; color: #444; line-height: 1.55; }
+.alert { margin: 14px 0; background: #fff7e8; border-radius: 10px; padding: 14px 18px; font-size: 16px; line-height: 1.6; }
+.alert .tg { display: inline-block; background: #f0a020; color: #fff; font-weight: 700; font-size: 14px; padding: 2px 10px; border-radius: 4px; margin-bottom: 6px; }
+.alert .btns { margin-top: 8px; display: flex; gap: 10px; }
+.alert .btns span { font-size: 14px; padding: 4px 14px; border-radius: 6px; border: 1px solid #ccc; background: #fff; }
+.alert .btns span.p { background: #00b377; border-color: #00b377; color: #fff; }
+.flow { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
+.flow span { background: #f1f5f3; border-radius: 8px; padding: 8px 12px; }
+.flow em { color: #00b377; font-style: normal; }
+/* production */
+.prod { display: grid; grid-template-columns: 720px 1fr; gap: 28px; margin-top: 20px; }
+.map { background: #f6f8f7; border-radius: 14px; padding: 16px 18px; position: relative; height: 410px; }
+.map .cap { font-size: 15px; font-weight: 700; color: #555; }
+.map .cap small { font-weight: 400; color: #999; margin-left: 8px; }
+.map svg { position: absolute; left: 0; top: 0; }
+.nd { position: absolute; background: #fff; border: 2px solid #00b377; border-radius: 8px; font-size: 15px; font-weight: 700; padding: 7px 12px; white-space: nowrap; }
+.nd.raw { background: #007a55; color: #fff; border-color: #007a55; }
+.nd.out { background: #e3f4ec; }
+.nd.back { border-color: #f0a020; color: #9a5d00; }
+.rt { display: flex; flex-direction: column; gap: 9px; }
+.vh { font-size: 20px; font-weight: 800; color: #007a55; }
+.vp { height: 196px; border-radius: 10px; background: url(p3_0.jpeg) center 30%/cover; position: relative; }
+.tag { position: absolute; background: #00b377; color: #fff; font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 5px; }
+.tagd { background: rgba(20,20,20,.82); }
+.box { position: absolute; border: 3px solid #00b377; }
+.vl { background: #f1f5f3; border-radius: 10px; padding: 10px 16px; font-size: 16px; color: #444; }
+.vl b { color: #141414; font-size: 17px; margin-right: 12px; }
+.vn { font-size: 14px; color: #777; }
+.rc { background: #f1f5f3; border-radius: 12px; padding: 14px 18px; }
+.rc b { font-size: 19px; display: block; margin-bottom: 3px; }
+.rc span { font-size: 15.5px; color: #444; line-height: 1.5; }
+/* security */
+.qs { display: grid; grid-template-columns: repeat(4,1fr); gap: 22px; margin-top: 38px; }
+.qc { background: #1e2120; border-radius: 14px; padding: 24px 26px; height: 218px; }
+.qc .qq { font-size: 17px; color: #aaa; font-weight: 700; }
+.qc .ans { font-size: 30px; font-weight: 800; color: #00b377; margin: 10px 0 14px; }
+.qc li { list-style: none; font-size: 17px; line-height: 1.6; color: #ddd; }
+.qc li::before { content: "• "; color: #00b377; }
+.checks { display: grid; grid-template-columns: repeat(4,1fr); gap: 22px; margin-top: 26px; }
+.ck { display: flex; gap: 14px; }
+.ck i { width: 40px; height: 40px; border-radius: 8px; background: #00b377; color: #fff; font-style: normal; font-size: 22px; display: flex; align-items: center; justify-content: center; flex: none; }
+.ck b { font-size: 19px; display: block; }
+.ck span { font-size: 15px; color: #999; }
+.cta { position: absolute; left: 58px; right: 58px; bottom: 70px; height: 116px; background: #007a55; border-radius: 14px; display: flex; align-items: center; justify-content: space-between; padding: 0 64px; }
+.cta p { font-size: 28px; font-weight: 800; line-height: 1.4; }
+.cta .bk { display: flex; flex-direction: column; gap: 6px; font-size: 17px; }
+.cta .bk div { display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 800; }
+.cta img { width: 40px; height: 40px; }
+</style><style>
+body{font-family:"Microsoft YaHei",sans-serif}.s{padding:46px 58px 0}h1{font-size:39px;line-height:1.3;font-weight:700;letter-spacing:-.7px}.pain{font-size:17px;line-height:1.55;padding:13px 18px;border-left-width:3px;border-radius:7px;background:#f6f3ef}.foot{font-size:12px;color:#7f8b86;bottom:23px}.dark .foot{color:#828e88}
+.cover{padding:0}.cover .l{width:700px;padding:57px 62px}.cover .r{background-image:url('../cretas-pitch-5p-source/p1_0.jpeg');background-position:58% center;position:relative}.cover .r:after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,#111 0%,transparent 16%,transparent 90%,#1112)}.cover h1{font-size:58px;font-weight:700;letter-spacing:-1.5px;margin-top:60px}.brand{font-size:23px}.four{gap:23px;margin-top:44px}.four div{font-size:20px;gap:16px;color:#d9e1dd;line-height:1.6}.four b{font-size:24px;width:108px}.cover .url{font-size:15px;letter-spacing:1px}.four div+div{border-top:1px solid #ffffff12;padding-top:12px}.four{gap:12px}
+.pg2{grid-template-columns:300px 1fr;gap:28px;margin-top:22px}.col3{gap:14px}.b2{display:block;position:relative;height:135px;padding:17px 22px;border-radius:12px;background:#f1f5f3;color:#27352e;border:1px solid #e3eae5}.b2 .n{font-size:30px;color:#007a55;width:auto;line-height:1.15;margin-bottom:7px}.b2 h3{position:absolute;right:19px;top:25px;color:#007a55;font-size:17px}.b2 p{font-size:16px;line-height:1.65;max-width:250px}.b2:first-child{background:#007a55;color:white;border-color:#007a55}.b2:first-child .n{color:white;font-size:37px}.b2:first-child h3{color:#d3eee2}.browser-shot{border-radius:11px;overflow:hidden;border:1px solid #d9e1dd;box-shadow:0 12px 26px #15392b18;background:#fff}.browser-top{height:26px;background:#edf1ee;border-bottom:1px solid #d9e1dd;display:flex;align-items:center;gap:6px;padding:0 12px}.browser-top i{width:7px;height:7px;background:#c3ccc6;border-radius:50%}.browser-top i:first-child{background:#eaa59f}.browser-top i:nth-child(2){background:#e5cc8e}.browser-top i:nth-child(3){background:#9fc5ad}.browser-top span{font-size:10px;color:#738179;background:#f9fbf9;border:1px solid #e1e6e2;border-radius:5px;padding:1px 65px;margin-left:auto;margin-right:auto}.browser-shot>img{display:block;width:100%;height:auto}.cap2{font-size:12px;color:#7c8a82;margin:8px 3px 0}.page2 .shot{width:836px}.page2 .pain{margin-top:19px!important}
+.acc{grid-template-columns:300px 1fr;gap:28px;margin-top:20px}.steps{gap:12px}.st{padding:14px 15px;gap:12px;min-height:82px;border:1px solid #e1e9e3;align-items:flex-start}.st i{width:30px;height:30px;font-size:16px;margin-top:1px}.st b{font-size:18px;margin-bottom:5px}.st span{font-size:15px;line-height:1.55;display:block}.res{display:block;padding:16px 19px;margin-top:0;background:#007a55}.res .n{font-size:37px;line-height:1.1;margin-bottom:7px}.res p{font-size:15px;line-height:1.6}.ai{border:0;padding:0;background:none}.ai h3{font-size:24px;line-height:1.3;margin:0 0 7px}.ai .d{font-size:17px;line-height:1.65;margin:0 0 13px}.page3 .pain{margin-top:17px!important}.page3 .browser-shot{width:836px}.page3 .acc{margin-top:18px}
+.prod{grid-template-columns:690px 450px;gap:24px;margin-top:20px}.map{height:430px;padding:16px 18px;background:#fff;border:1px solid #dde9e1;border-radius:14px;overflow:hidden}.map .cap{font-size:16px;color:#234437}.map .cap small{font-size:12px}.map .process-svg{position:absolute;left:0;top:0}.map svg.art{position:initial}.process-label{position:absolute;border:1px solid #c9ddd2;border-radius:16px;font-size:14px;line-height:28px;text-align:center;font-weight:700;color:#254c3c;background:#fff;box-shadow:0 2px 5px #1b4d2e0b}.process-label.raw{background:#007a55;color:white;border-color:#007a55}.process-label.back{border-color:#e4bf87;background:#fff8ee;color:#a86b16}.process-label.out{background:#e9f4ed;color:#007a55;border-color:#c8dfd0}.rework-label{position:absolute;left:405px;top:302px;font-size:12px;color:#b27c2a;background:#fff;padding:1px 3px}.map>div:last-child{bottom:15px!important;font-size:14px!important;line-height:1.6!important;left:17px!important;right:17px!important;border-top:1px solid #e7ede9;padding-top:9px}.rt{gap:8px}.vh{font-size:20px;line-height:28px;display:flex;align-items:center;justify-content:space-between}.rate{font-size:13px;background:#e7f3ec;color:#007a55;padding:1px 9px;border-radius:20px;font-weight:600}.vp{width:450px;height:242px;background:none;overflow:hidden;border-radius:10px;border:1px solid #e3e8e4}.vp>img{width:450px;height:300px;display:block;position:absolute;left:0;top:0}.vision-overlay{position:absolute;inset:0;width:450px;height:242px}.tag{font-size:12px;padding:4px 8px;border-radius:4px;background:#007a55}.tagd{background:#111c}.demo-tag{position:absolute;right:10px;bottom:10px;color:white;background:#1118;border-radius:3px;padding:1px 5px;font-size:11px}.vl{padding:9px 12px;font-size:14px;line-height:22px;background:#f1f5f3}.vl b{font-size:15px;margin-right:10px}.vn{font-size:12px;margin-top:0}.page4 .pain{margin-top:16px!important}.page4 h1{font-size:37px}
+.page5 .qs{margin-top:31px;gap:18px}.qc{height:222px;padding:24px 21px;border:1px solid #304037;background:#19221d;position:relative}.qc:before{content:'';position:absolute;top:0;left:22px;width:40px;height:3px;background:#00b377;border-radius:3px}.qc .qq{font-size:16px;font-weight:500;color:#aebeb4}.qc .ans{font-size:29px;margin:13px 0 15px}.qc li{font-size:16px;line-height:1.8}.page5 .checks{gap:18px;margin-top:28px}.ck{gap:11px}.ck i{width:34px;height:34px;background:#173e2d;color:#3ddf9f;border:1px solid #296442;font-size:18px}.ck b{font-size:17px;line-height:1.5}.ck span{font-size:14px;color:#93a498}.cta{height:112px;bottom:69px;padding:0 38px;border-radius:13px;background:linear-gradient(110deg,#006b4a,#007a55)}.cta p{font-size:26px}.cta .bk{font-size:15px}.cta .bk div{font-size:22px}
+@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.s{break-after:page}.s:last-child{break-after:auto}}
+</style></head><body>
+<!-- 1 封面 = 一页看完 -->
+<section class="s dark cover page1">
+<div class="l">
+<div class="brand"><img alt="" src="logo.png"/>白垩纪 Cretas</div>
+<h1>食品工厂的<br/>AI 运营中枢</h1>
+<div class="four">
+<div><b>先用后付</b>软件免费用，按用量收费，用多少都看得见</div>
+<div><b>算得准</b>成本、毛利算到每一盒，可疑数据 AI 先挑出来</div>
+<div><b>管得住</b>AI 视觉替你盯车间，再复杂的工艺也理得清</div>
+<div><b>守得牢</b>配方和经营数据始终在你手里</div>
+</div>
+<div class="url">cretaceousfuture.com</div>
+</div>
+<div class="r"></div>
+</section>
+<!-- 2 价格 -->
+<section class="s page2">
+<h1>不用先掏钱：软件免费用，按用量付费</h1>
+<div class="pain" style="margin-top:22px"><b>以前</b>买系统要先付一大笔钱，再加实施费、每年的维护费；用不起来，钱也回不来。</div>
+<div class="pg2">
+<div class="col3">
+<div class="b2"><div class="n">¥0</div><div><h3>软件使用费</h3><p>系统本身不收钱，不用先做一笔大投入。</p></div></div>
+<div class="b2"><div class="n">按用量</div><div><h3>用多少，付多少</h3><p>只按 AI 实际干了多少活收费，费用跟着生产走。</p></div></div>
+<div class="b2"><div class="n">全透明</div><div><h3>用量随时看得见</h3><p>哪天、哪个部门、谁用的，后台一笔一笔列清楚。</p></div></div>
+</div>
+<div class="shot">
+<div class="browser-shot"><div class="browser-top"><i></i><i></i><i></i><span>cretas · 管理后台</span></div><img alt="后台界面示意" src="mock-usage.png"/></div>
+<div class="cap2">后台界面示意，数字为举例</div>
+</div>
+</div>
+<div class="foot"><span>白垩纪 Cretas · 收费方式</span><span>2</span></div>
+</section>
+<!-- 3 算得准 -->
+<section class="s page3">
+<h1>成本和毛利，不再拍脑袋算</h1>
+<div class="pain" style="margin-top:20px"><b>以前</b>「我们最重要的是算这个产品的毛利、毛利率。」每批原料进价不一样，三四十种辅料，手工表一估就偏，月中才出数。—— 某熟食厂财务</div>
+<div class="acc">
+<div class="steps">
+<div class="st"><i>1</i><div><b>每一步都记下来</b><span>原料哪批、多少钱，投了多少、出了多少，人工包装用了多少</span></div></div>
+<div class="st"><i>2</i><div><b>和财务的数对上</b><span>进价、费用直接用财务的实际数字，不用估</span></div></div>
+<div class="st"><i>3</i><div><b>算到每一批、每一盒</b><span>每天自动出，不用等月底熬夜做表</span></div></div>
+<div class="res"><div class="n">¥8.32</div><p>一盒卤牛肉的成本，原料、人工、调料、包装全算进去。<br/>示例：卤牛肉出成率 58.2%。</p></div>
+</div>
+<div class="ai">
+<h3>录错的数，AI 先挑出来</h3>
+<div class="d">每张单子都和上月、去年同期比一比，不对劲的 AI 先标出来，让人核对改正，算出来的账才靠得住。</div>
+<div class="browser-shot"><div class="browser-top"><i></i><i></i><i></i><span>cretas · 管理后台</span></div><img alt="后台界面示意" src="mock-cost.png"/></div>
+<div class="cap2">后台界面示意，数字为举例</div>
+</div>
+</div>
+<div class="foot"><span>白垩纪 Cretas · 成本与毛利</span><span>3</span></div>
+</section>
+<!-- 4 生产过程 -->
+<section class="s page4">
+<h1>生产过程：AI 替你盯车间，复杂工艺也理得清</h1>
+<div class="pain" style="margin-top:20px"><b>以前</b>食品厂的工艺最复杂：一种原料拆成好几个产品，边角料又回到别的产品里，几道工序同时走。普通系统只会一条线记，账一多就乱。</div>
+<div class="prod">
+<div class="map"><div class="cap">按你厂真实的工艺流程来记<small>示意</small></div><svg class="process-svg" height="370" viewbox="0 0 690 370" width="690"><defs><marker id="gp" markerheight="6" markerwidth="6" orient="auto" refx="5" refy="3"><path d="M0 0L6 3L0 6Z" fill="#007a55"></path></marker><marker id="op" markerheight="6" markerwidth="6" orient="auto" refx="5" refy="3"><path d="M0 0L6 3L0 6Z" fill="#c7872f"></path></marker></defs><svg class="art" height="70" preserveaspectratio="xMidYMid meet" viewbox="0 427 290 271" width="107" x="20" y="143"><defs><clippath id="clip-raw"><rect height="271" width="290" x="0" y="427"></rect></clippath></defs><image clip-path="url(#clip-raw)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="92" preserveaspectratio="xMidYMid meet" viewbox="295 243 300 535" width="113" x="132" y="119"><defs><clippath id="clip-cut"><rect height="535" width="300" x="295" y="243"></rect></clippath></defs><image clip-path="url(#clip-cut)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="65" preserveaspectratio="xMidYMid meet" viewbox="593 168 309 199" width="90" x="280" y="40"><defs><clippath id="clip-shank"><rect height="199" width="309" x="593" y="168"></rect></clippath></defs><image clip-path="url(#clip-shank)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="62" preserveaspectratio="xMidYMid meet" viewbox="603 410 295 221" width="90" x="280" y="151"><defs><clippath id="clip-brisket"><rect height="221" width="295" x="603" y="410"></rect></clippath></defs><image clip-path="url(#clip-brisket)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="61" preserveaspectratio="xMidYMid meet" viewbox="611 670 294 217" width="90" x="280" y="262"><defs><clippath id="clip-offcut"><rect height="217" width="294" x="611" y="670"></rect></clippath></defs><image clip-path="url(#clip-offcut)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="74" preserveaspectratio="xMidYMid meet" viewbox="936 95 298 336" width="86" x="416" y="31"><defs><clippath id="clip-braise"><rect height="336" width="298" x="936" y="95"></rect></clippath></defs><image clip-path="url(#clip-braise)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="72" preserveaspectratio="xMidYMid meet" viewbox="941 473 284 299" width="86" x="416" y="141"><defs><clippath id="clip-stew"><rect height="299" width="284" x="941" y="473"></rect></clippath></defs><image clip-path="url(#clip-stew)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="74" preserveaspectratio="xMidYMid meet" viewbox="1255 204 281 325" width="125" x="548" y="83"><defs><clippath id="clip-gift"><rect height="325" width="281" x="1255" y="204"></rect></clippath></defs><image clip-path="url(#clip-gift)" height="1024" href="process-illustration-final.png" width="1536"/></svg><svg class="art" height="65" preserveaspectratio="xMidYMid meet" viewbox="1271 596 265 249" width="106" x="560" y="200"><defs><clippath id="clip-cans"><rect height="249" width="265" x="1271" y="596"></rect></clippath></defs><image clip-path="url(#clip-cans)" height="1024" href="process-illustration-final.png" width="1536"/></svg><g fill="none" marker-end="url(#gp)" stroke="#007a55" stroke-width="2"><path d="M129 233L146 233"></path><path d="M226 233C252 233 253 124 277 124"></path><path d="M226 233L277 233"></path><path d="M226 233C249 233 253 342 277 342"></path><path d="M366 124L415 124"></path><path d="M366 233L415 233"></path><path d="M496 124C522 124 524 178 543 178"></path><path d="M496 233C523 233 525 178 543 178"></path><path d="M496 233C524 233 525 287 543 287"></path></g><path d="M366 342C407 342 404 279 446 251" fill="none" marker-end="url(#op)" stroke="#c7872f" stroke-dasharray="6 5" stroke-width="2"></path></svg><span class="process-label raw" style="left:18px;top:219px;width:111px">牛肉原料</span><span class="process-label" style="left:150px;top:219px;width:76px">分割</span><span class="process-label" style="left:282px;top:110px;width:84px">腱子肉</span><span class="process-label" style="left:282px;top:219px;width:84px">牛腩</span><span class="process-label back" style="left:282px;top:328px;width:84px">边角料</span><span class="process-label" style="left:420px;top:110px;width:76px">卤制</span><span class="process-label" style="left:420px;top:219px;width:76px">炖煮</span><span class="process-label out" style="left:548px;top:164px;width:125px">卤牛肉礼盒</span><span class="process-label out" style="left:548px;top:273px;width:125px">牛腩罐头</span><span class="rework-label">边角料回用</span><div style="position:absolute;left:18px;bottom:16px;right:18px;font-size:15px;color:#444">一种原料分成多路、边角料回用、多个成品，系统都照着这张图记；<b class="gc">每一步投了多少、出了多少、损耗多少</b>都对得上。</div></div>
+<div class="rt">
+<div class="vh">AI 视觉 · 替你盯车间</div>
+<div class="vp"><img alt="装盘工位示意" src="vision-packing.png"/><svg class="vision-overlay" viewbox="0 0 450 242"><g fill="none" stroke="#00d18c" stroke-width="2"><rect height="92" rx="3" width="83" x="284" y="3"></rect><rect height="48" rx="3" width="39" x="216" y="139"></rect><rect height="43" rx="3" width="49" x="300" y="183"></rect></g></svg><span class="tag tagd" style="left:12px;top:12px">CAM-03 · AI 在线</span><span class="tag" style="left:151px;top:70px">口罩 ✓ 发网 ✓</span><span class="tag" style="left:155px;top:145px">手套 ✓</span><span class="tag tagd" style="left:12px;bottom:12px">装盘 · 已计件 ×12</span><span class="demo-tag">示意</span></div>
+<div class="vl"><b>自动计件</b>认出装箱、封箱动作，干一件记一件</div>
+<div class="vl"><b>标签检查</b>拍张照 2–3 秒圈出漏贴，误报率 0.18%</div>
+<div class="vl"><b>卫生异物</b>没戴口罩手套、混进异物，24 小时盯着</div>
+<div class="vn">现有海康 / 大华摄像头直接用，不用换</div>
+</div>
+</div>
+<div class="foot"><span>白垩纪 Cretas · 生产过程</span><span>4</span></div>
+</section>
+<!-- 5 数据安全 -->
+<section class="s dark page5">
+<h1>AI 越懂你的工厂，越要守住你的配方</h1>
+<div class="qs">
+<div class="qc"><div class="qq">别的工厂能看到吗？</div><div class="ans">看不到</div><ul><li>按登录账号认工厂</li><li>AI 也查不了别家</li><li>各厂资料互不相通</li></ul></div>
+<div class="qc"><div class="qq">我们能看你的配方吗？</div><div class="ans">默认看不到</div><ul><li>配方名称换成编号</li><li>要看得你同意</li><li>每次查看都留痕</li></ul></div>
+<div class="qc"><div class="qq">会拿去训练 AI 吗？</div><div class="ans">不会</div><ul><li>无书面授权不训练</li><li>授权默认关闭</li><li>签了也能随时收回</li></ul></div>
+<div class="qc"><div class="qq">模型厂商会拿去用吗？</div><div class="ans">不会</div><ul><li>用的是阿里云百炼模型</li><li>发出去前名称换成编号</li><li>换不了就不发</li></ul></div>
+</div>
+<div class="checks">
+<div class="ck"><i>✓</i><div><b>存在国内</b><span>也支持本地部署</span></div></div>
+<div class="ck"><i>✓</i><div><b>HTTPS 传输加密</b><span>路上被截也看不懂</span></div></div>
+<div class="ck"><i>✓</i><div><b>每天备份</b><span>加密后另存一份在别处</span></div></div>
+<div class="ck"><i>✓</i><div><b>数据归你</b><span>可导出、可彻底删除</span></div></div>
+</div>
+<div class="cta">
+<p>数据怎么存、谁能看、怎么用，<br/>可以当面讲清楚，也可以写进合同。</p>
+<div class="bk"><div><img alt="" src="logo.png"/>预约演示</div>cretaceousfuture.com</div>
+</div>
+<div class="foot"><span>白垩纪 Cretas · 数据安全</span><span>5</span></div>
+</section>
+</body></html>

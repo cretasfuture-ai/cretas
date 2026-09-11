@@ -1,0 +1,27 @@
+PAGES=5
+ASPECT_RATIO=16:9
+BANNED_TERMS=0
+REQUIRED_PHRASES=8/8
+APPROVED_COPY=PASS
+MOCK_WIDTH=1440; DPR=2
+MOCK_NUMBERS=PASS; DAILY_BARS=18
+MOCK_CURRENCY=0
+MOCK_BODY_FONT=9.56pt
+TEXT_OUT_OF_PAGE=0
+
+Required phrases:
+误报率 0.18%
+出成率 58.2%
+每次查看都留痕
+无书面授权不训练
+授权默认关闭
+阿里云百炼模型
+HTTPS 传输加密
+也支持本地部署
+
+VISUAL_REVIEW=5/5 PDF pages inspected; no overlap or clipping
+GENERATED_IMAGES=no generated text or garbled lettering
+PROCESS_CONNECTIONS=matches deck2.html; orange dashed rework path
+VISION_BOXES=face/hairnet and both gloved hands aligned
+COMMAND=pwsh -NoProfile -File C:\Users\Steve\my-prototype-logistics\output\pdf\cretas-pitch-5p-assets\自检.ps1
+RG_MATCHES=0; RG_EXIT=1 (no matches)

@@ -1,0 +1,66 @@
+[
+  {
+    "selector": "s dark cover page1",
+    "width": 1280,
+    "height": 720,
+    "scrollWidth": 1280,
+    "scrollHeight": 720,
+    "overflow": false
+  },
+  {
+    "selector": "DIV",
+    "width": 576,
+    "height": 38,
+    "scrollWidth": 576,
+    "scrollHeight": 38,
+    "overflow": false
+  },
+  {
+    "selector": "s page2",
+    "width": 1280,
+    "height": 720,
+    "scrollWidth": 1280,
+    "scrollHeight": 720,
+    "overflow": false
+  },
+  {
+    "selector": "b2",
+    "width": 298,
+    "height": 133,
+    "scrollWidth": 298,
+    "scrollHeight": 133,
+    "overflow": false
+  },
+  {
+    "selector": "b2",
+    "width": 298,
+    "height": 133,
+    "scrollWidth": 298,
+    "scrollHeight": 133,
+    "overflow": false
+  },
+  {
+    "selector": "b2",
+    "width": 298,
+    "height": 133,
+    "scrollWidth": 298,
+    "scrollHeight": 133,
+    "overflow": false
+  },
+  {
+    "selector": "browser-shot setup-demo",
+    "width": 834,
+    "height": 437,
+    "scrollWidth": 834,
+    "scrollHeight": 437,
+    "overflow": false
+  },
+  {
+    "selector": "setup-body",
+    "width": 834,
+    "height": 411,
+    "scrollWidth": 834,
+    "scrollHeight": 411,
+    "overflow": false
+  }
+]

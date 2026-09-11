@@ -1,0 +1,17 @@
+{
+  "pages": 5,
+  "pages_1_to_4_changed_pixels": 0,
+  "all_pages_text_diff": "EMPTY",
+  "page5_outside_scene_changed_pixels": 0,
+  "display_css_width": 800.1524663677131,
+  "display_css_height": 82.8,
+  "page5_top_gap_css_px": 16.06927083333335,
+  "page5_bottom_gap_css_px": 16.133333333333287,
+  "crop": [
+    6.0,
+    269.0,
+    2161.0,
+    492.0
+  ],
+  "sha256": "b5a7fe5da65fa25e3a48404f08d49be0fbbc53a019702857bc38d29169144faf"
+}

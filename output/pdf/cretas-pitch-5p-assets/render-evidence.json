@@ -1,0 +1,64 @@
+{
+  "errors": [],
+  "reports": [
+    {
+      "kind": "usage",
+      "text": "用量与费用\n/\n本月用量\n工厂管理\n管\n工作台\n本月用量×\n本月用量\n全部部门\n本月⌄\n导出\nAI 问数据\n312次\n拍照/视频识别\n4,860张\n自动生成报表\n30份\n每日用量\n本月\n10-01\n10-06\n10-12\n10-18\n用量明细\n全部部门⌄\n日期\n\t\n部门\n\t\n使用人\n\t\n功能\n\t\n用量\n10-18\n\t\n财务部\n\t\n王会计\n\t\nAI 问数据\n\t\n14 次\n\n\n10-18\n\t\n包装车间\n\t\n摄像头 CAM-03\n\t\n视频识别\n\t\n286 张\n\n\n10-18\n\t\n质检部\n\t\n李质检\n\t\n标签检查\n\t\n42 张",
+      "width": 1440,
+      "height": 710,
+      "dpr": 2,
+      "scrollWidth": 1440,
+      "scrollHeight": 710,
+      "tableBodyFont": "22px",
+      "chartBars": 18
+    },
+    {
+      "kind": "cost",
+      "text": "成本分析\n/\nAI 数据核对\n工厂管理\n管\n工作台\nAI 数据核对×\nAI 数据核对\n待处理 3\n全部部门\n全部单据⌄\n单据\n\t\nAI 发现\n\t\n状态\n\t\n操作\n投料单\n卤牛肉 · 10-12\n\t\n出成率 71%，上月平均 58%\n\t\n疑似录错\n\t\n去修正\n\n\n报工单\n包装 · 10-11\n\t\n计件 1,260，平时约 600\n\t\n疑似多录\n\t\n去修正\n\n\n收货单\n八角 · 10-10\n\t\n进价比上月高 45%\n\t\n待确认\n\t\n去确认\n⌄ 投料单 · 卤牛肉 · 10-12\n出成率对比\n这张单子\n71%\n上月平均\n58%",
+      "width": 1440,
+      "height": 570,
+      "dpr": 2,
+      "scrollWidth": 1440,
+      "scrollHeight": 570,
+      "tableBodyFont": "22px",
+      "chartBars": 0
+    }
+  ],
+  "overflow": [
+    {
+      "page": 1,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "scrollHeight": 720,
+      "clientHeight": 720
+    },
+    {
+      "page": 2,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "scrollHeight": 720,
+      "clientHeight": 720
+    },
+    {
+      "page": 3,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "scrollHeight": 720,
+      "clientHeight": 720
+    },
+    {
+      "page": 4,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "scrollHeight": 720,
+      "clientHeight": 720
+    },
+    {
+      "page": 5,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "scrollHeight": 720,
+      "clientHeight": 720
+    }
+  ]
+}
