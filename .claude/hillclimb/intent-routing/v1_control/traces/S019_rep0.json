@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "统计原料损耗率"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"统计原料损耗率\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_ANOMALY\",\n  \"intentName\": \"异常报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"操作已完成。\",\n  \"formattedText\": \"异常检测报告\\n未发现异常，生产运行正常\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"period\": {\n        \"endDate\": \"2026-09-12\",\n        \"startDate\": \"2026-09-05\"\n      },\n      \"anomalies\": [],\n      \"dataContext\": {\n        \"totalCost\": 0,\n        \"totalOutput\": 0,\n        \"lowStockItems\": 0,\n        \"expiredBatches\": 0,\n        \"expiringBatches\": 0,\n        \"equipmentNeedingMaintenance\": 0\n      },\n      \"totalAnomalies\": 0\n    },\n    \"period\": \"week\",\n    \"endDate\": \"2026-09-12\",\n    \"startDate\": \"2026-09-05\",\n    \"reportType\": \"ANOMALY\",\n    \"generatedAt\": \"2026-09-12\",\n    \"queryConditions\": {\n      \"period\": \"week\",\n      \"endDate\": \"2026-09-12\",\n      \"startDate\": \"2026-09-05\"\n    }\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:35.4018531\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "异常检测报告\n未发现异常，生产运行正常"
+  }
+]

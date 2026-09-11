@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "更正张三昨天的考勤记录，打卡时间从9:05改成8:55"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"更正张三昨天的考勤记录，打卡时间从9:05改成8:55\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤历史数据摘要\\n\\n- 当前查询无任何考勤记录，查询范围为第1页，每页10条，总记录数为0，总页数为0。\\n- 系统返回状态为“查询成功”，但无有效数据内容。\\n\\n### 风险提示\\n\\n- 无风险提示：当前无任何考勤数据，无需进行告警或预警处理。\",\n  \"formattedText\": \"### 考勤历史数据摘要\\n\\n- 当前查询无任何考勤记录，查询范围为第1页，每页10条，总记录数为0，总页数为0。\\n- 系统返回状态为“查询成功”，但无有效数据内容。\\n\\n### 风险提示\\n\\n- 无风险提示：当前无任何考勤数据，无需进行告警或预警处理。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"content\": [],\n      \"page\": 1,\n      \"size\": 10,\n      \"totalElements\": 0,\n      \"totalPages\": 0,\n      \"first\": true,\n      \"last\": true,\n      \"currentPage\": 1,\n      \"number\": 0,\n      \"empty\": true\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:50.4146852\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_history\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤历史数据摘要\n\n- 当前查询无任何考勤记录，查询范围为第1页，每页10条，总记录数为0，总页数为0。\n- 系统返回状态为“查询成功”，但无有效数据内容。\n\n### 风险提示\n\n- 无风险提示：当前无任何考勤数据，无需进行告警或预警处理。"
+  }
+]

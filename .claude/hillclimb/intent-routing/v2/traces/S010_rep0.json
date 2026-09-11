@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "把明天要用的料都列出来"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"把明天要用的料都列出来\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"FACTORY_MR_QUERY_PENDING\",\n  \"intentName\": \"待备料查询\",\n  \"intentCategory\": \"DATA_QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"找到 0 条 PENDING 领料单\",\n  \"formattedText\": \"待备料查询摘要\\n\\n当前待备料状态为 PENDING（待处理），但系统未返回任何符合条件的领料单数据。\\n\\n关键信息：\\n- 领料单状态：PENDING（待备料）\\n- 查询结果：领料单列表为空（list 为空数组）\\n- 记录总数：0 条\\n- 系统消息明确提示：\\\"找到 0 条 PENDING 领料单\\\"\\n\\n---\\n\\n综合说明：\\n- 当前暂未有处于待备料状态的领料单，无需进行备料操作。\\n- 所有相关指标（如领料单数量、涉及客户、批次、金额、库存等）均为空或零。\\n- 未发现任何库存预警、应收过期或合规问题。\\n\\n风险提示：\\n当前无风险项。如有最新待备料领料单生成，系统将及时更新。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"status\": \"PENDING\",\n      \"list\": [],\n      \"total\": 0\n    },\n    \"message\": \"找到 0 条 PENDING 领料单\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:46:07.6570465\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"factory_material_requisition_query_pending\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "待备料查询摘要\n\n当前待备料状态为 PENDING（待处理），但系统未返回任何符合条件的领料单数据。\n\n关键信息：\n- 领料单状态：PENDING（待备料）\n- 查询结果：领料单列表为空（list 为空数组）\n- 记录总数：0 条\n- 系统消息明确提示：\"找到 0 条 PENDING 领料单\"\n\n---\n\n综合说明：\n- 当前暂未有处于待备料状态的领料单，无需进行备料操作。\n- 所有相关指标（如领料单数量、涉及客户、批次、金额、库存等）均为空或零。\n- 未发现任何库存预警、应收过期或合规问题。\n\n风险提示：\n当前无风险项。如有最新待备料领料单生成，系统将及时更新。"
+  }
+]

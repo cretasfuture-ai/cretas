@@ -8884,6 +8884,15 @@ public class IntentKnowledgeBase {
 
                 if (isExactMatch || isLongPhrase || coverageRatio >= 0.4 || isShortInput) {
                     String intentCode = entry.getValue();
+                    // 名词短语只说明"关于什么", 不说明"做什么": "删除质检记录"/"创建入库记录"/"录入供应商评价"
+                    // 里的 质检记录/入库记录/供应商评价 都指向查询类意图。输入带明确写动词而短语指向
+                    // 只读意图时, 这个短语不算命中, 交给后面的短语或后续阶段决定(intent-routing eval
+                    // 基线里 F017/F019/M007/P001/P017/P028 等 15 条 train 用例的成因)。
+                    if (isReadOnlyIntent(intentCode) && hasWriteVerb(normalizedInput)) {
+                        log.debug("短语匹配跳过(写动词与只读意图冲突): input='{}', phrase='{}', intent='{}'",
+                                input, entry.getKey(), intentCode);
+                        continue;
+                    }
                     log.debug("短语匹配成功: input='{}', phrase='{}', intent='{}', coverage={}",
                             input, entry.getKey(), intentCode, String.format("%.2f", coverageRatio));
                     return Optional.of(intentCode);
@@ -8895,6 +8904,34 @@ public class IntentKnowledgeBase {
         }
 
         return Optional.empty();
+    }
+
+    // ==================== 写动词 vs 只读意图冲突 ====================
+
+    /** 明确表达"改变数据"的动词。查询类动词(查/看/统计/对比)不在其中。 */
+    static final List<String> WRITE_VERBS = List.of(
+            "创建", "新建", "新增", "添加", "录入", "登记", "删除", "删掉", "移除",
+            "修改", "更新", "更正", "改成", "改为", "调整", "取消", "撤回", "撤销",
+            "重置", "清空", "作废", "批量", "提交", "批准", "审批", "强制", "安排", "领用", "申请");
+
+    /** 只读意图的代码形态: 以查询/统计/报表类后缀结尾, 或 REPORT_/QUERY_/TRACE_ 前缀。 */
+    private static final List<String> READ_ONLY_SUFFIXES = List.of(
+            "_QUERY", "_LIST", "_STATS", "_STATS_BY_DEPT", "_SUMMARY", "_HISTORY", "_TREND", "_RANKING",
+            "_DASHBOARD", "_LOOKUP", "_TODAY", "_OVERVIEW", "_ANALYSIS", "_COMPARISON", "_DETAIL",
+            "_STATUS", "_ACTIVE", "_MONITORING", "_TEMPERATURE", "_ALERT", "_CRITICAL_ITEMS", "_RECENT_QUERY");
+    private static final List<String> READ_ONLY_PREFIXES = List.of("REPORT_", "QUERY_", "TRACE_", "LINEAGE_");
+
+    static boolean isReadOnlyIntent(String intentCode) {
+        if (intentCode == null) return false;
+        for (String p : READ_ONLY_PREFIXES) if (intentCode.startsWith(p)) return true;
+        for (String s : READ_ONLY_SUFFIXES) if (intentCode.endsWith(s)) return true;
+        return false;
+    }
+
+    static boolean hasWriteVerb(String normalizedInput) {
+        if (normalizedInput == null) return false;
+        for (String v : WRITE_VERBS) if (normalizedInput.contains(v)) return true;
+        return false;
     }
 
     // ==================== v11.5: 实体-意图冲突检测 ====================

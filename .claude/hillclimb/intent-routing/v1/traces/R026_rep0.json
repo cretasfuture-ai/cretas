@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "GB 4806食品接触材料的最新要求？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"GB 4806食品接触材料的最新要求？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ADDITIVE_COMPLIANCE\",\n  \"intentName\": \"添加剂合规检查\",\n  \"intentCategory\": \"QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.5953094648824433,\n  \"matchMethod\": \"SEMANTIC\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 添加剂合规检查 — Sprint 8 P3 GB 2760-2014 食品添加剂合规校验 — food-additive-compliance Skill. 查 batch ingredients 限量 + 标记超限 + 营养标签草稿. read-only.\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"formattedText\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 添加剂合规检查 — Sprint 8 P3 GB 2760-2014 食品添加剂合规校验 — food-additive-compliance Skill. 查 batch ingredients 限量 + 标记超限 + 营养标签草稿. read-only.\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:41.6564718\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"添加剂合规检查\",\n      \"description\": \"Sprint 8 P3 GB 2760-2014 食品添加剂合规校验 — food-additive-compliance Skill. 查 batch ingredients 限量 + 标记超限 + 营养标签草稿. read-only.\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"ADDITIVE_COMPLIANCE\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的请求可能匹配多个操作, 请选择您实际想做的:\n1. 查询原料库存\n2. 添加剂合规检查 — Sprint 8 P3 GB 2760-2014 食品添加剂合规校验 — food-additive-compliance Skill. 查 batch ingredients 限量 + 标记超限 + 营养标签草稿. read-only.\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。"
+  }
+]

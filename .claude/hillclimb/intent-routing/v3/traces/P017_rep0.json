@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "删除三个月前的所有考勤异常记录"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"删除三个月前的所有考勤异常记录\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤历史摘要\\n\\n- 当前考勤历史数据为空，系统查询成功但未检索到任何签到或签退记录。\\n- 本页显示第 1 页，每页 10 条，总记录数为 0，总页数为 0。\\n- 无任何考勤事件、人员或时间信息可供展示。\\n- 未发现异常告警或风险提示。\\n\\n### 风险提示\\n\\n当前暂无考勤历史数据，无法进行考勤合规性、迟到早退或遗漏签到等风险分析。\",\n  \"formattedText\": \"### 考勤历史摘要\\n\\n- 当前考勤历史数据为空，系统查询成功但未检索到任何签到或签退记录。\\n- 本页显示第 1 页，每页 10 条，总记录数为 0，总页数为 0。\\n- 无任何考勤事件、人员或时间信息可供展示。\\n- 未发现异常告警或风险提示。\\n\\n### 风险提示\\n\\n当前暂无考勤历史数据，无法进行考勤合规性、迟到早退或遗漏签到等风险分析。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"content\": [],\n      \"page\": 1,\n      \"size\": 10,\n      \"totalElements\": 0,\n      \"totalPages\": 0,\n      \"first\": true,\n      \"last\": true,\n      \"currentPage\": 1,\n      \"number\": 0,\n      \"empty\": true\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:28.5346308\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_history\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤历史摘要\n\n- 当前考勤历史数据为空，系统查询成功但未检索到任何签到或签退记录。\n- 本页显示第 1 页，每页 10 条，总记录数为 0，总页数为 0。\n- 无任何考勤事件、人员或时间信息可供展示。\n- 未发现异常告警或风险提示。\n\n### 风险提示\n\n当前暂无考勤历史数据，无法进行考勤合规性、迟到早退或遗漏签到等风险分析。"
+  }
+]

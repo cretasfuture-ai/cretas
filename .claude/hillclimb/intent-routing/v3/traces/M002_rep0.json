@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我安排一个质检"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我安排一个质检\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"RECEIVE_QUALITY_CHECK_TODAY\",\n  \"intentName\": \"今日待质检批次\",\n  \"intentCategory\": \"QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"今日暂无新入库批次, 也无 INSPECTING 状态待质检, 仓库可正常发料\",\n  \"formattedText\": \"今日暂无新入库批次, 也无 INSPECTING 状态待质检, 仓库可正常发料\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"inspectingBatches\": [],\n      \"inspectingCount\": 0,\n      \"today\": \"2026-09-12\",\n      \"todayInboundCount\": 0\n    },\n    \"message\": \"今日暂无新入库批次, 也无 INSPECTING 状态待质检, 仓库可正常发料\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:11.3348026\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"receive_quality_check_today\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "今日暂无新入库批次, 也无 INSPECTING 状态待质检, 仓库可正常发料"
+  }
+]

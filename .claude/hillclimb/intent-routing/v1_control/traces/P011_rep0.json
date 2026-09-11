@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "取消已发出的发货单"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"取消已发出的发货单\",\n  \"previewOnly\": false,\n  \"login_as\": \"quality_insp1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SHIPMENT_CREATE\",\n  \"intentName\": \"创建发货单\",\n  \"intentCategory\": \"SHIPMENT\",\n  \"sensitivityLevel\": \"HIGH\",\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NO_PERMISSION\",\n  \"message\": \"您没有权限执行此操作。需要角色: [\\\"factory_super_admin\\\", \\\"department_admin\\\"]\",\n  \"formattedText\": \"您没有权限执行此操作。需要角色: [\\\"factory_super_admin\\\", \\\"department_admin\\\"]\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:12.959672\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您没有权限执行此操作。需要角色: [\"factory_super_admin\", \"department_admin\"]"
+  }
+]

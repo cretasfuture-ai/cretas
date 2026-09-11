@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "库存预警难道失效了？明明黄鱼已经低于安全库存了，怎么没有收到任何提醒？帮我查一下当前所有低库存的原料"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"库存预警难道失效了？明明黄鱼已经低于安全库存了，怎么没有收到任何提醒？帮我查一下当前所有低库存的原料\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_INVENTORY\",\n  \"intentName\": \"库存报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"库存报告 (今日)\\n库存总价值: ¥0.00 | 材料种类: 0种\\n原料批次总数: 0。提示: 如需查看本月入库明细/入库总量, 可进入库存管理模块按时段筛选; 当前库存价值或种类为 0 时, 请确认入库单已审核且原料批次已正确登记。\",\n  \"formattedText\": \"库存报告 (今日)\\n库存总价值: ¥0.00 | 材料种类: 0种\\n原料批次总数: 0。提示: 如需查看本月入库明细/入库总量, 可进入库存管理模块按时段筛选; 当前库存价值或种类为 0 时, 请确认入库单已审核且原料批次已正确登记。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"reportType\": \"INVENTORY\",\n    \"period\": \"today\",\n    \"queryConditions\": {\n      \"period\": \"today\",\n      \"reportDate\": \"2026-09-12\"\n    },\n    \"reportDate\": \"2026-09-12\",\n    \"data\": {\n      \"totalValue\": 0,\n      \"quantityWithoutMaterialType\": 0,\n      \"typeDistribution\": {},\n      \"lowStockItems\": 0,\n      \"statusDistribution\": {\n        \"AVAILABLE\": 0,\n        \"EXPIRED\": 0,\n        \"SCRAPPED\": 0,\n        \"DEPLETED\": 0,\n        \"INSPECTING\": 0,\n        \"RESERVED\": 0,\n        \"FROZEN\": 0,\n        \"IN_STOCK\": 0,\n        \"USED_UP\": 0,\n        \"PRODUCING_RESERVED\": 0,\n        \"FRESH\": 0,\n        \"DEFECTIVE\": 0\n      },\n      \"totalBatches\": 0,\n      \"expiringBatches\": 0,\n      \"expiredBatches\": 0\n    },\n    \"generatedAt\": \"2026-09-12\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:44:56.8173111\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"report_inventory\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "库存报告 (今日)\n库存总价值: ¥0.00 | 材料种类: 0种\n原料批次总数: 0。提示: 如需查看本月入库明细/入库总量, 可进入库存管理模块按时段筛选; 当前库存价值或种类为 0 时, 请确认入库单已审核且原料批次已正确登记。"
+  }
+]

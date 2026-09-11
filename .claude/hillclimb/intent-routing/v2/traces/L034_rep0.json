@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "上次那个供应商，就是出过质量问题的那家，他们最近有新的供货吗？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"上次那个供应商，就是出过质量问题的那家，他们最近有新的供货吗？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SUPPLIER_SEARCH\",\n  \"intentName\": \"供应商搜索\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"查询完成\\n- suppliers: 0条\\n- count: 0\",\n  \"formattedText\": \"查询完成\\n- suppliers: 0条\\n- count: 0\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"suppliers\": [],\n    \"count\": 0,\n    \"keyword\": \"\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:45:12.6949825\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"supplier_search\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "查询完成\n- suppliers: 0条\n- count: 0"
+  }
+]

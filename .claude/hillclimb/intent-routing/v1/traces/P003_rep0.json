@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我创建一个新用户账号"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我创建一个新用户账号\",\n  \"previewOnly\": false,\n  \"login_as\": \"warehouse_mgr1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"USER_CREATE\",\n  \"intentName\": \"创建用户\",\n  \"intentCategory\": \"USER\",\n  \"sensitivityLevel\": \"HIGH\",\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NO_PERMISSION\",\n  \"message\": \"您没有权限执行此操作。需要权限: hr:read_write,system:read_write，请联系工厂管理员开通。\",\n  \"formattedText\": \"您没有权限执行此操作。需要权限: hr:read_write,system:read_write，请联系工厂管理员开通。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:27:59.9873256\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"WRITE\",\n  \"requiredPermission\": \"hr:read_write,system:read_write\",\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您没有权限执行此操作。需要权限: hr:read_write,system:read_write，请联系工厂管理员开通。"
+  }
+]

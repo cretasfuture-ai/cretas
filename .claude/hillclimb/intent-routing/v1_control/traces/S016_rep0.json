@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我导出海关报检的数据"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我导出海关报检的数据\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_DASHBOARD_OVERVIEW\",\n  \"intentName\": \"仪表盘总览\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"仪表盘总览\\n生产批次: 0 | 进行中: 0\\n今日产量: 0 kg\",\n  \"formattedText\": \"仪表盘总览\\n生产批次: 0 | 进行中: 0\\n今日产量: 0 kg\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"kpi\": {\n        \"unitCost\": null,\n        \"avgCycleHours\": null,\n        \"qualityPassRate\": null,\n        \"equipmentUtilization\": 0,\n        \"productionEfficiency\": null\n      },\n      \"alerts\": {\n        \"active\": 0,\n        \"status\": \"normal\"\n      },\n      \"period\": \"today\",\n      \"summary\": {\n        \"activeAlerts\": 0,\n        \"totalBatches\": 0,\n        \"totalWorkers\": 6,\n        \"activeBatches\": 0,\n        \"onDutyWorkers\": 6,\n        \"allActiveBatches\": 0,\n        \"completedBatches\": 0,\n        \"qualityInspections\": 0,\n        \"todayInProgressBatches\": 0\n      },\n      \"todayStats\": {\n        \"totalBatches\": 0,\n        \"totalWorkers\": 6,\n        \"activeWorkers\": 6,\n        \"todayOutputKg\": 0,\n        \"totalEquipment\": 0,\n        \"activeEquipment\": 0,\n        \"ordersCompleted\": 0,\n        \"productionCount\": 0,\n        \"materialReceived\": 0,\n        \"qualityCheckCount\": 0,\n        \"productionEfficiency\": null,\n        \"totalMaterialBatches\": 0,\n        \"materialReceivedQuantity\": 0\n      },\n      \"todayOutput\": 0,\n      \"todayBatches\": 0,\n      \"monthlyOutput\": 0,\n      \"yesterdayStats\": {\n        \"outputKg\": 0,\n        \"totalBatches\": 0,\n        \"completedBatches\": 0\n      },\n      \"allActiveBatches\": 0,\n      \"completedBatches\": 0,\n      \"monthlyYieldRate\": null,\n      \"inProgressBatches\": 0,\n      \"lowStockMaterials\": 0,\n      \"todayInProgressBatches\": 0\n    },\n    \"period\": \"today\",\n    \"reportType\": \"DASHBOARD_OVERVIEW\",\n    \"generatedAt\": \"2026-09-12\",\n    \"queryConditions\": {\n      \"period\": \"today\"\n    }\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:33.456074\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "仪表盘总览\n生产批次: 0 | 进行中: 0\n今日产量: 0 kg"
+  }
+]

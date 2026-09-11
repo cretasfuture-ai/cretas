@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "这批带鱼的保质期难道不是六个月吗？为什么系统显示还有不到一周就过期了？帮我核实一下批次号MB-2025-001的实际效期"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"这批带鱼的保质期难道不是六个月吗？为什么系统显示还有不到一周就过期了？帮我核实一下批次号MB-2025-001的实际效期\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SSOP_MONTHLY_AUDIT_REPORT\",\n  \"intentName\": \"SSOP 月度审计报告\",\n  \"intentCategory\": \"DATA_QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"EVAL01 工厂 2026-09 SSOP 月度审计: 共 0 项 records (完成 0 + 跳过 0 = 完成率 0%), 阻产 0 次, 涉及 0 个 active 模板. ⚠️ 完成率不达标 (< 95%), 建议改进\",\n  \"formattedText\": \"EVAL01 工厂 2026-09 SSOP 月度审计: 共 0 项 records (完成 0 + 跳过 0 = 完成率 0%), 阻产 0 次, 涉及 0 个 active 模板. ⚠️ 完成率不达标 (< 95%), 建议改进\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"factoryId\": \"EVAL01\",\n      \"yearMonth\": \"2026-09\",\n      \"startDate\": \"2026-09-01\",\n      \"endDate\": \"2026-09-30\",\n      \"totalProcedures\": 0,\n      \"totalRecords\": 0,\n      \"completionRate\": 0,\n      \"statusBreakdown\": {\n        \"SCHEDULED\": 0,\n        \"IN_PROGRESS\": 0,\n        \"COMPLETED\": 0,\n        \"FAILED\": 0,\n        \"SKIPPED\": 0\n      },\n      \"blockingGatesCount\": 0,\n      \"blockingGates\": [],\n      \"procedureCompletionRates\": [],\n      \"actionHint\": \"/foodsafety/ssop/audit-report?yearMonth=2026-09\"\n    },\n    \"message\": \"EVAL01 工厂 2026-09 SSOP 月度审计: 共 0 项 records (完成 0 + 跳过 0 = 完成率 0%), 阻产 0 次, 涉及 0 个 active 模板. ⚠️ 完成率不达标 (< 95%), 建议改进\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:26:28.885781\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"ssop_monthly_audit_report\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "EVAL01 工厂 2026-09 SSOP 月度审计: 共 0 项 records (完成 0 + 跳过 0 = 完成率 0%), 阻产 0 次, 涉及 0 个 active 模板. ⚠️ 完成率不达标 (< 95%), 建议改进"
+  }
+]

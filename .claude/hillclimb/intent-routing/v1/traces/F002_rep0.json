@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "这个月的质检统计"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"这个月的质检统计\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"QUALITY_STATS\",\n  \"intentName\": \"质检统计\",\n  \"intentCategory\": \"QUALITY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"当前暂无质检统计数据。请先完成质检任务后查看统计。\",\n  \"formattedText\": \"当前暂无质检统计数据。请先完成质检任务后查看统计。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"summary\": \"今日质检统计：共完成 0 次检验，平均合格率 0.00%，无质量问题\",\n    \"period\": {\n      \"endDate\": \"2026-09-12\",\n      \"days\": 1,\n      \"type\": \"today\",\n      \"startDate\": \"2026-09-12\"\n    },\n    \"queryConditions\": {\n      \"period\": \"today\",\n      \"includeDetails\": false\n    },\n    \"counts\": {\n      \"totalSampleSize\": 0,\n      \"totalInspections\": 0,\n      \"totalFailCount\": 0,\n      \"totalPassCount\": 0\n    },\n    \"rates\": {\n      \"defectRate\": \"N/A\",\n      \"averagePassRate\": \"0.00%\",\n      \"firstPassRate\": \"0.00%\"\n    },\n    \"issues\": {\n      \"totalIssues\": 0,\n      \"resolvedIssues\": 0,\n      \"resolutionRate\": \"N/A\",\n      \"openIssues\": 0\n    }\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:54.6034148\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"quality_stats_query\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "当前暂无质检统计数据。请先完成质检任务后查看统计。"
+  }
+]

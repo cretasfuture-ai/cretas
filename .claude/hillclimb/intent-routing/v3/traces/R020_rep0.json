@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "国家对水产品溯源有什么最新要求？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"国家对水产品溯源有什么最新要求？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"TRACE_FULL\",\n  \"intentName\": \"完整溯源\",\n  \"intentCategory\": \"SHIPMENT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「完整溯源」。\\n\\n需要您提供以下信息：\\n1. 请提供要完整溯源的批次号\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「完整溯源」。\\n\\n需要您提供以下信息：\\n1. 请提供要完整溯源的批次号\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请提供要完整溯源的批次号\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T01:00:12.7639389\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"label\": \"要完整溯源的批次号\",\n        \"name\": \"batchNumber\",\n        \"type\": \"TEXT\"\n      }\n    ]\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"55563787-57f9-4dba-841d-71db9eb33de6\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「完整溯源」。\n\n需要您提供以下信息：\n1. 请提供要完整溯源的批次号\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

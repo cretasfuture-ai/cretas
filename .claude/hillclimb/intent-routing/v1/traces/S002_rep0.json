@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "看看仓库里头还剩多少带鱼"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"看看仓库里头还剩多少带鱼\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"MATERIAL_BATCH_QUERY\",\n  \"intentName\": \"原料批次查询\",\n  \"intentCategory\": \"MATERIAL\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"当前暂无原料批次记录。可通过「入库」录入新原料。\",\n  \"formattedText\": \"当前暂无原料批次记录。可通过「入库」录入新原料。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"queryConditions\": {},\n    \"totalPages\": 0,\n    \"hasMore\": false,\n    \"currentPage\": 1,\n    \"content\": [],\n    \"totalElements\": 0\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:27:08.3781773\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"material_batch_query\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "当前暂无原料批次记录。可通过「入库」录入新原料。"
+  }
+]

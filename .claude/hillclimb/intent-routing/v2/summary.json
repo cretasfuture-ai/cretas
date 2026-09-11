@@ -1,0 +1,13 @@
+{
+  "description": "v2: phrase shortcut skips read-only intents when the input carries a write verb",
+  "target": "code",
+  "env": {
+    "repo_sha": "d026a26815",
+    "base_url": "http://localhost:10010",
+    "factory": "EVAL01",
+    "cases_file": ".claude/hillclimb/intent-routing/cases.jsonl",
+    "n_cases": 200,
+    "reps": 1,
+    "started_at": "2026-09-12T00:44:51"
+  }
+}

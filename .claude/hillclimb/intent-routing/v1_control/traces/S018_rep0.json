@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "看看急冻设备的运行状态"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"看看急冻设备的运行状态\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_STATUS\",\n  \"intentName\": \"打卡状态\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 打卡状态摘要\\n\\n- **当前状态**：未打卡（NOT_CLOCKED）。\\n- **上班打卡**：可以打卡（canClockIn=true），但今日无打卡记录（todayRecord=null），最近一次上班打卡时间无记录（lastClockIn=null）。\\n- **下班打卡**：当前不可打下班卡（canClockOut=false），最近一次下班打卡时间无记录（lastClockOut=null）。\\n- **休息**：不可开始休息（canBreakStart=false），不可结束休息（canBreakEnd=false）。\\n- **考勤状态**：无考勤状态记录（attendanceStatus=null）。\\n\\n### 风险提示\\n\\n- 当前考勤状态为未打卡，若在规定的上班时间内长时间未打卡，可能产生迟到或旷工风险。建议及时完成上班打卡操作。\",\n  \"formattedText\": \"### 打卡状态摘要\\n\\n- **当前状态**：未打卡（NOT_CLOCKED）。\\n- **上班打卡**：可以打卡（canClockIn=true），但今日无打卡记录（todayRecord=null），最近一次上班打卡时间无记录（lastClockIn=null）。\\n- **下班打卡**：当前不可打下班卡（canClockOut=false），最近一次下班打卡时间无记录（lastClockOut=null）。\\n- **休息**：不可开始休息（canBreakStart=false），不可结束休息（canBreakEnd=false）。\\n- **考勤状态**：无考勤状态记录（attendanceStatus=null）。\\n\\n### 风险提示\\n\\n- 当前考勤状态为未打卡，若在规定的上班时间内长时间未打卡，可能产生迟到或旷工风险。建议及时完成上班打卡操作。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"lastClockIn\": null,\n      \"todayRecord\": null,\n      \"canBreakStart\": false,\n      \"canClockOut\": false,\n      \"canClockIn\": true,\n      \"canBreakEnd\": false,\n      \"lastClockOut\": null,\n      \"attendanceStatus\": null,\n      \"status\": \"NOT_CLOCKED\"\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:35.5350174\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_status\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 打卡状态摘要\n\n- **当前状态**：未打卡（NOT_CLOCKED）。\n- **上班打卡**：可以打卡（canClockIn=true），但今日无打卡记录（todayRecord=null），最近一次上班打卡时间无记录（lastClockIn=null）。\n- **下班打卡**：当前不可打下班卡（canClockOut=false），最近一次下班打卡时间无记录（lastClockOut=null）。\n- **休息**：不可开始休息（canBreakStart=false），不可结束休息（canBreakEnd=false）。\n- **考勤状态**：无考勤状态记录（attendanceStatus=null）。\n\n### 风险提示\n\n- 当前考勤状态为未打卡，若在规定的上班时间内长时间未打卡，可能产生迟到或旷工风险。建议及时完成上班打卡操作。"
+  }
+]

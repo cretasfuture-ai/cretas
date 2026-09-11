@@ -315,7 +315,7 @@ def main() -> int:
         pid = case["prompt_id"]
         login = case.get("login")
         username = login["username"] if login else args.user
-        password = (os.environ.get(f"EVAL_PASSWORD_{username.upper()}") or (login["password"] if login else args.password))
+        password = (os.environ.get(f"EVAL_PASSWORD_{username.upper()}") or (login or {}).get("password") or args.password)
         preview = bool(args.preview_only)
         attempts = 0
         while True:

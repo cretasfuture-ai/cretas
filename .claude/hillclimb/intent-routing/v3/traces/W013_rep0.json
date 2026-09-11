@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "新建一条采购订单：向东海水产采购带鱼1000公斤，单价25元，预计下周到货"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"新建一条采购订单：向东海水产采购带鱼1000公斤，单价25元，预计下周到货\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"MATERIAL_BATCH_CREATE\",\n  \"intentName\": \"原料入库\",\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"WRITE_CONFIRM_REQUIRED\",\n  \"message\": \"「原料入库」是写入/修改操作，执行前需要确认。\",\n  \"formattedText\": null,\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T01:00:20.7054989\",\n  \"requiresApproval\": true,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"WRITE\",\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "「原料入库」是写入/修改操作，执行前需要确认。"
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "description": "v1 no-change control: same jar, fresh JVM, state reset",
+  "target": "code",
+  "env": {
+    "repo_sha": "65d2a2471c",
+    "base_url": "http://localhost:10010",
+    "factory": "EVAL01",
+    "cases_file": ".claude/hillclimb/intent-routing/cases.jsonl",
+    "n_cases": 200,
+    "reps": 1,
+    "started_at": "2026-09-12T00:31:18"
+  }
+}

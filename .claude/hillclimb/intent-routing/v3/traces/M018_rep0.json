@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "查一下张三的记录"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"查一下张三的记录\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"WECHAT_RECENT_QUERY\",\n  \"intentName\": \"查询近期微信\",\n  \"intentCategory\": \"QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"近 7 天暂无微信记录\",\n  \"formattedText\": \"近 7 天微信相关数据概览\\n\\n- 当前时间段内无微信相关记录生成，所有关键指标（包括客户关联数、业务批次、金额、数量及库存变动）均为空或零。\\n- 近 7 天系统未检测到任何微信用户交互或交易数据，无待处理客户、批次或金额信息。\\n- 所有工具返回的关键指标（如客户数量、批次总数、累计金额、库存数量、告警阈值等）均无有效数据录入。\\n\\n风险提示\\n- 当前无任何风险告警（库存预警、应收过期、合规问题等均未触发），因数据为空，需人工确认近期微信渠道业务是否正常运转或存在系统对接中断。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"records\": [],\n      \"customerId\": null,\n      \"count\": 0,\n      \"daysSince\": 7\n    },\n    \"message\": \"近 7 天暂无微信记录\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:10.3777052\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"wechat_record_recent_query\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "近 7 天微信相关数据概览\n\n- 当前时间段内无微信相关记录生成，所有关键指标（包括客户关联数、业务批次、金额、数量及库存变动）均为空或零。\n- 近 7 天系统未检测到任何微信用户交互或交易数据，无待处理客户、批次或金额信息。\n- 所有工具返回的关键指标（如客户数量、批次总数、累计金额、库存数量、告警阈值等）均无有效数据录入。\n\n风险提示\n- 当前无任何风险告警（库存预警、应收过期、合规问题等均未触发），因数据为空，需人工确认近期微信渠道业务是否正常运转或存在系统对接中断。"
+  }
+]

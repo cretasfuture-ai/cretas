@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "修改已完成发货单的数量"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"修改已完成发货单的数量\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SHIPMENT_CREATE\",\n  \"intentName\": \"创建发货单\",\n  \"intentCategory\": \"SHIPMENT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「创建发货单」。\\n\\n需要您提供以下信息：\\n1. 请问是哪个客户？说名称就行\\n2. 请问是哪个产品？说名称就行\\n3. 请输入数量，可以带单位如 100kg\\n4. 请提供单位（箱/kg/件）\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「创建发货单」。\\n\\n需要您提供以下信息：\\n1. 请问是哪个客户？说名称就行\\n2. 请问是哪个产品？说名称就行\\n3. 请输入数量，可以带单位如 100kg\\n4. 请提供单位（箱/kg/件）\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请问是哪个客户？说名称就行\",\n    \"请问是哪个产品？说名称就行\",\n    \"请输入数量，可以带单位如 100kg\",\n    \"请提供单位（箱/kg/件）\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:04.6214201\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"customerId\",\n        \"label\": \"客户\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"productTypeId\",\n        \"label\": \"产品\"\n      },\n      {\n        \"type\": \"NUMBER\",\n        \"name\": \"quantity\",\n        \"label\": \"发货数量\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"unit\",\n        \"label\": \"单位（箱/kg/件）\"\n      }\n    ]\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"fa172d2f-d116-47f0-b56b-25d15fec43aa\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「创建发货单」。\n\n需要您提供以下信息：\n1. 请问是哪个客户？说名称就行\n2. 请问是哪个产品？说名称就行\n3. 请输入数量，可以带单位如 100kg\n4. 请提供单位（箱/kg/件）\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "查查珍鱼的采购价格"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"查查珍鱼的采购价格\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ORDER_LIST\",\n  \"intentName\": \"订单列表\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"查询到 0 个销售订单\",\n  \"formattedText\": \"当前暂无订单数据。可通过「创建订单」新建销售订单。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"total\": 0,\n    \"size\": 20,\n    \"totalPages\": 0,\n    \"orders\": [],\n    \"page\": 1,\n    \"source\": \"sales_orders\",\n    \"message\": \"查询到 0 个销售订单\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:27:17.351749\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"order_list\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "当前暂无订单数据。可通过「创建订单」新建销售订单。"
+  }
+]

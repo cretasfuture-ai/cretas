@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "昨天的出货明细"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"昨天的出货明细\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SHIPMENT_STATS\",\n  \"intentName\": \"出货统计\",\n  \"intentCategory\": \"SHIPMENT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"出货统计（全部）：总计0条，待发货0，已发货0，已送达0，已退回0，完成率0.0%\",\n  \"formattedText\": \"出货统计：\\n当前查询周期内暂无出货记录。可在出货管理模块查看历史出货数据。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"summary\": \"出货统计（全部）：总计0条，待发货0，已发货0，已送达0，已退回0，完成率0.0%\",\n    \"period\": \"all\",\n    \"stats\": {\n      \"total\": 0,\n      \"shipped\": 0,\n      \"inProgressRate\": \"0.0%\",\n      \"pending\": 0,\n      \"delivered\": 0,\n      \"completionRate\": \"0.0%\",\n      \"returned\": 0\n    },\n    \"message\": \"出货统计（全部）：总计0条，待发货0，已发货0，已送达0，已退回0，完成率0.0%\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:28:54.7136128\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"shipment_stats_query\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "出货统计：\n当前查询周期内暂无出货记录。可在出货管理模块查看历史出货数据。"
+  }
+]

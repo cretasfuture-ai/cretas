@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "把它改成已完成状态"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"把它改成已完成状态\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"UNSUPPORTED_CAPABILITY\",\n  \"intentName\": \"能力不支持-明确拒答\",\n  \"intentCategory\": \"SYSTEM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.65,\n  \"matchMethod\": \"LLM\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"用户输入'改状态'非常模糊，没有明确指定要修改什么对象的状态（如订单、批次、设备、任务等），也没有提供任何上下文。在所有候选意图中，没有一个意图能直接匹配这种笼统的表述。考虑到系统内存在多个涉及状态变更的意图（如批次放行决策、工序任务推进、告警确认等），但用户输入过于简短，无法确定具体指向，因此归类为能力不支持-明确拒答，引导用户提供更具体的信息。\",\n  \"formattedText\": \"用户输入'改状态'非常模糊，没有明确指定要修改什么对象的状态（如订单、批次、设备、任务等），也没有提供任何上下文。在所有候选意图中，没有一个意图能直接匹配这种笼统的表述。考虑到系统内存在多个涉及状态变更的意图（如批次放行决策、工序任务推进、告警确认等），但用户输入过于简短，无法确定具体指向，因此归类为能力不支持-明确拒答，引导用户提供更具体的信息。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:31:49.562104\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"能力不支持-明确拒答\",\n      \"description\": \"用户要的分析系统确实做不到时，明确告知做不到/为什么/替代方案。区别于 OUT_OF_DOMAIN(问的事跟系统无关)：这里问的正是本系统的领域，只是这一项没有能力。\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"UNSUPPORTED_CAPABILITY\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "用户输入'改状态'非常模糊，没有明确指定要修改什么对象的状态（如订单、批次、设备、任务等），也没有提供任何上下文。在所有候选意图中，没有一个意图能直接匹配这种笼统的表述。考虑到系统内存在多个涉及状态变更的意图（如批次放行决策、工序任务推进、告警确认等），但用户输入过于简短，无法确定具体指向，因此归类为能力不支持-明确拒答，引导用户提供更具体的信息。"
+  }
+]

@@ -44,6 +44,18 @@ public class DialectNormalizationServiceImpl implements DialectNormalizationServ
     private volatile List<String> sortedDialectKeys = new ArrayList<>();
 
     /**
+     * 单字方言键（如 "货"→"物料"）不能替换掉业务复合词里的那个字：
+     * "发货单"→"发物料单"、"出货明细"→"出物料明细" 之后短语表只剩「物料」可命中，
+     * 出货/发货/退货全部被路由成原料查询（intent-routing eval 基线里 L004/M003/M013/S005 的成因）。
+     * 这里列出含该字的业务复合词，替换时跳过落在这些词内部的出现。
+     */
+    private static final Map<Character, List<String>> PROTECTED_COMPOUNDS = Map.of(
+            '货', List.of("出货", "发货", "退货", "到货", "收货", "进货", "送货", "交货", "验货", "提货",
+                    "卸货", "补货", "叫货", "囤货", "备货", "货物", "货源", "货品", "货号", "货架", "货主", "货款", "货单"),
+            '活', List.of("干活", "活动", "活跃", "活期", "生活", "存活", "灵活", "激活", "活儿"),
+            '中', List.of("其中", "中间", "中心", "中午", "中断", "中止", "中标", "进行中", "中转", "中式", "中文", "中国"));
+
+    /**
      * 预置方言映射定义
      */
     private static final List<PresetMapping> PRESET_MAPPINGS = new ArrayList<>();
@@ -238,7 +250,7 @@ public class DialectNormalizationServiceImpl implements DialectNormalizationServ
                             mapping.getFactoryId().equals(factoryId)) {
 
                         String oldResult = result;
-                        result = result.replace(dialectKey, mapping.getStandardExpr());
+                        result = replaceOutsideCompounds(result, dialectKey, mapping.getStandardExpr());
 
                         // 只有实际发生替换时才记录
                         if (!oldResult.equals(result)) {
@@ -275,6 +287,43 @@ public class DialectNormalizationServiceImpl implements DialectNormalizationServ
                 .replacements(replacements)
                 .processingTimeMs(processingTime)
                 .build();
+    }
+
+    /**
+     * 等价于 {@code text.replace(key, standard)}，但单字键落在 {@link #PROTECTED_COMPOUNDS}
+     * 列出的复合词内部时不替换。多字键原样整体替换。
+     */
+    static String replaceOutsideCompounds(String text, String key, String standard) {
+        if (key.length() != 1 || !PROTECTED_COMPOUNDS.containsKey(key.charAt(0))) {
+            return text.replace(key, standard);
+        }
+        List<String> compounds = PROTECTED_COMPOUNDS.get(key.charAt(0));
+        StringBuilder out = new StringBuilder(text.length());
+        char k = key.charAt(0);
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c != k) {
+                out.append(c);
+                continue;
+            }
+            boolean protectedHit = false;
+            for (String cp : compounds) {
+                int idx = cp.indexOf(k);
+                while (idx >= 0 && !protectedHit) {
+                    int start = i - idx;
+                    if (start >= 0 && start + cp.length() <= text.length()
+                            && text.startsWith(cp, start)) {
+                        protectedHit = true;
+                    }
+                    idx = cp.indexOf(k, idx + 1);
+                }
+                if (protectedHit) {
+                    break;
+                }
+            }
+            out.append(protectedHit ? String.valueOf(c) : standard);
+        }
+        return out.toString();
     }
 
     @Override

@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "同行业的平均库存周转率是多少？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"同行业的平均库存周转率是多少？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_KPI\",\n  \"intentName\": \"KPI指标报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### KPI 指标报表摘要 (月度: 2026-09)\\n\\n- **报表周期**: 月度，报告日期 2026-09-12。\\n- **整体状况**: 当前报表中所有可量化的 KPI 指标数据均为空值或零。\\n- **交付相关**: 配送满足率、交货前置时间、准时交货率均无数据。交付准时率同样无记录。\\n- **生产效率**: 生产周期、良品率、设备综合效率 (OEE) 均缺失。生产吞吐量为零。\\n- **成本相关**: 单位成本、人工成本、物料成本、制造费用均无数据。\\n- **质量相关**: 返工率、缺陷率、首次通过率 (FPY)、废品率均无数据。质量达成率无记录。\\n- **产能与设备**: 设备 OEE 无数据，表明设备效率评估无法进行。\\n\\n### 风险提示\\n\\n- 当前月度 KPI 报表中，所有关键指标（交付、生产、成本、质量）数据均为空或零，无法评估任何业务表现。这可能表明数据采集系统未正常运行、报表配置错误或该期间内未发生任何业务活动。建议立即检查数据源连接与业务日志。\",\n  \"formattedText\": \"### KPI 指标报表摘要 (月度: 2026-09)\\n\\n- **报表周期**: 月度，报告日期 2026-09-12。\\n- **整体状况**: 当前报表中所有可量化的 KPI 指标数据均为空值或零。\\n- **交付相关**: 配送满足率、交货前置时间、准时交货率均无数据。交付准时率同样无记录。\\n- **生产效率**: 生产周期、良品率、设备综合效率 (OEE) 均缺失。生产吞吐量为零。\\n- **成本相关**: 单位成本、人工成本、物料成本、制造费用均无数据。\\n- **质量相关**: 返工率、缺陷率、首次通过率 (FPY)、废品率均无数据。质量达成率无记录。\\n- **产能与设备**: 设备 OEE 无数据，表明设备效率评估无法进行。\\n\\n### 风险提示\\n\\n- 当前月度 KPI 报表中，所有关键指标（交付、生产、成本、质量）数据均为空或零，无法评估任何业务表现。这可能表明数据采集系统未正常运行、报表配置错误或该期间内未发生任何业务活动。建议立即检查数据源连接与业务日志。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"reportType\": \"KPI\",\n    \"period\": \"month\",\n    \"queryConditions\": {\n      \"period\": \"month\",\n      \"reportDate\": \"2026-09-12\"\n    },\n    \"reportDate\": \"2026-09-12\",\n    \"data\": {\n      \"delivery\": {\n        \"fillRate\": null,\n        \"leadTime\": null,\n        \"onTimeRate\": null\n      },\n      \"productionEfficiency\": null,\n      \"equipmentOEE\": null,\n      \"cost\": {\n        \"unitCost\": null,\n        \"laborCost\": null,\n        \"materialCost\": null,\n        \"overheadCost\": null\n      },\n      \"production\": {\n        \"cycleTime\": null,\n        \"yield\": null,\n        \"throughput\": 0,\n        \"oee\": null\n      },\n      \"deliveryOnTime\": null,\n      \"quality\": {\n        \"reworkRate\": null,\n        \"defectRate\": null,\n        \"fpy\": null,\n        \"scrapRate\": null\n      },\n      \"qualityRate\": null\n    },\n    \"generatedAt\": \"2026-09-12\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:56.6232296\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"report_kpi\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### KPI 指标报表摘要 (月度: 2026-09)\n\n- **报表周期**: 月度，报告日期 2026-09-12。\n- **整体状况**: 当前报表中所有可量化的 KPI 指标数据均为空值或零。\n- **交付相关**: 配送满足率、交货前置时间、准时交货率均无数据。交付准时率同样无记录。\n- **生产效率**: 生产周期、良品率、设备综合效率 (OEE) 均缺失。生产吞吐量为零。\n- **成本相关**: 单位成本、人工成本、物料成本、制造费用均无数据。\n- **质量相关**: 返工率、缺陷率、首次通过率 (FPY)、废品率均无数据。质量达成率无记录。\n- **产能与设备**: 设备 OEE 无数据，表明设备效率评估无法进行。\n\n### 风险提示\n\n- 当前月度 KPI 报表中，所有关键指标（交付、生产、成本、质量）数据均为空或零，无法评估任何业务表现。这可能表明数据采集系统未正常运行、报表配置错误或该期间内未发生任何业务活动。建议立即检查数据源连接与业务日志。"
+  }
+]

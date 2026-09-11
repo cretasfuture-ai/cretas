@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "HACCP体系中CCP点的监控要求是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"HACCP体系中CCP点的监控要求是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"HACCP体系中CCP点的监控要求主要包括：\\n1. **明确监控对象**：确定关键限值对应的物理、化学或生物参数（如温度、时间、pH值等）。\\n2. **建立监控程序**：规定监控方法、频率和责任人，连续监控（如温度记录仪）或定期检查（如每批测量）。\\n3. **校准监控设备**：确保仪器准确，定期校准并保存记录。\\n4. **即时记录**：实时或定时记录数据，注明时间、操作人员及异常情况。\\n5. **纠偏行动**：监控显示偏离关键限值时，立即采取纠偏措施（如隔离产品、调整工艺），并记录。\\n6. **审核与验证**：定期核查监控记录，确保有效性。\",\n  \"formattedText\": \"HACCP体系中CCP点的监控要求主要包括：\\n1. **明确监控对象**：确定关键限值对应的物理、化学或生物参数（如温度、时间、pH值等）。\\n2. **建立监控程序**：规定监控方法、频率和责任人，连续监控（如温度记录仪）或定期检查（如每批测量）。\\n3. **校准监控设备**：确保仪器准确，定期校准并保存记录。\\n4. **即时记录**：实时或定时记录数据，注明时间、操作人员及异常情况。\\n5. **纠偏行动**：监控显示偏离关键限值时，立即采取纠偏措施（如隔离产品、调整工艺），并记录。\\n6. **审核与验证**：定期核查监控记录，确保有效性。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:44.8870485\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "HACCP体系中CCP点的监控要求主要包括：\n1. **明确监控对象**：确定关键限值对应的物理、化学或生物参数（如温度、时间、pH值等）。\n2. **建立监控程序**：规定监控方法、频率和责任人，连续监控（如温度记录仪）或定期检查（如每批测量）。\n3. **校准监控设备**：确保仪器准确，定期校准并保存记录。\n4. **即时记录**：实时或定时记录数据，注明时间、操作人员及异常情况。\n5. **纠偏行动**：监控显示偏离关键限值时，立即采取纠偏措施（如隔离产品、调整工艺），并记录。\n6. **审核与验证**：定期核查监控记录，确保有效性。"
+  }
+]

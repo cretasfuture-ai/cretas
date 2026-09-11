@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "这个供应商怎么样"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"这个供应商怎么样\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SUPPLIER_RANKING\",\n  \"intentName\": \"供应商排名\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"供应商排名查询完成 — 当前没有可排名的供应商数据。诊断建议: 1. 检查本月是否已录入供应商订单信息; 2. 确认供应商基础资料是否齐全; 3. 联系采购部门复核供应商档案完整性。\",\n  \"formattedText\": \"供应商排名查询完成 — 当前没有可排名的供应商数据。诊断建议: 1. 检查本月是否已录入供应商订单信息; 2. 确认供应商基础资料是否齐全; 3. 联系采购部门复核供应商档案完整性。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"count\": 0,\n    \"ranking\": [],\n    \"sortBy\": \"RATING\",\n    \"order\": \"DESC\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:59:16.379374\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"supplier_ranking\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "供应商排名查询完成 — 当前没有可排名的供应商数据。诊断建议: 1. 检查本月是否已录入供应商订单信息; 2. 确认供应商基础资料是否齐全; 3. 联系采购部门复核供应商档案完整性。"
+  }
+]

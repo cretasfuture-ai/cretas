@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "删除已作废的供应商记录"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"删除已作废的供应商记录\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SUPPLIER_LIST\",\n  \"intentName\": \"供应商列表\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"供应商列表查询完成，暂无供应商数据。请先在供应商管理中添加供应商信息。\",\n  \"formattedText\": \"供应商列表查询完成，暂无供应商数据。请先在供应商管理中添加供应商信息。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"totalPages\": 0,\n    \"hasMore\": false,\n    \"currentPage\": 1,\n    \"content\": [],\n    \"totalElements\": 0\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T01:00:24.4177756\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"supplier_list\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "供应商列表查询完成，暂无供应商数据。请先在供应商管理中添加供应商信息。"
+  }
+]

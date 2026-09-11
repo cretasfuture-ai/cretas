@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "把异常考勤记录批量改为正常"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"把异常考勤记录批量改为正常\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"## 考勤历史总览\\n\\n- 当前查询为第一页，每页显示 10 条记录。\\n- 考勤记录总数为 0，查询结果为空，说明当前状态下没有可显示的考勤历史数据。\\n- 翻页信息：当前页码为 1，总页数为 0，无后续数据。\\n\\n## 关键指标\\n\\n- 考勤记录数量：0 条，暂无任何考勤历史记录。\\n\\n## 风险提示\\n\\n- 当前系统未返回任何考勤数据，可能原因包括：数据尚未录入、查询条件过于严格或系统数据缺失。建议检查数据源或调整查询参数，以避免因缺少考勤记录导致的考核或合规风险。\",\n  \"formattedText\": \"## 考勤历史总览\\n\\n- 当前查询为第一页，每页显示 10 条记录。\\n- 考勤记录总数为 0，查询结果为空，说明当前状态下没有可显示的考勤历史数据。\\n- 翻页信息：当前页码为 1，总页数为 0，无后续数据。\\n\\n## 关键指标\\n\\n- 考勤记录数量：0 条，暂无任何考勤历史记录。\\n\\n## 风险提示\\n\\n- 当前系统未返回任何考勤数据，可能原因包括：数据尚未录入、查询条件过于严格或系统数据缺失。建议检查数据源或调整查询参数，以避免因缺少考勤记录导致的考核或合规风险。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"last\": true,\n      \"page\": 1,\n      \"size\": 10,\n      \"empty\": true,\n      \"first\": true,\n      \"number\": 0,\n      \"content\": [],\n      \"totalPages\": 0,\n      \"currentPage\": 1,\n      \"totalElements\": 0\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:33:19.7425206\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "## 考勤历史总览\n\n- 当前查询为第一页，每页显示 10 条记录。\n- 考勤记录总数为 0，查询结果为空，说明当前状态下没有可显示的考勤历史数据。\n- 翻页信息：当前页码为 1，总页数为 0，无后续数据。\n\n## 关键指标\n\n- 考勤记录数量：0 条，暂无任何考勤历史记录。\n\n## 风险提示\n\n- 当前系统未返回任何考勤数据，可能原因包括：数据尚未录入、查询条件过于严格或系统数据缺失。建议检查数据源或调整查询参数，以避免因缺少考勤记录导致的考核或合规风险。"
+  }
+]

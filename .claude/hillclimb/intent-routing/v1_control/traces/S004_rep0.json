@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "瞧瞧那台切鱼机咋样了"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"瞧瞧那台切鱼机咋样了\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_STATUS\",\n  \"intentName\": \"打卡状态\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 打卡状态摘要\\n\\n- **当前打卡状态**：未打卡（NOT_CLOCKED）。\\n- **上班打卡**：今日尚未执行上班打卡操作，系统允许进行上班打卡。\\n- **下班打卡**：今日尚未执行下班打卡操作，系统不允许进行下班打卡。\\n- **休息开始**：系统不允许开始休息。\\n- **休息结束**：系统不允许结束休息。\\n- **最后上班打卡时间**：无记录。\\n- **最后下班打卡时间**：无记录。\\n- **出勤状态**：无记录。\\n\\n### 风险提示\\n当前无风险提示。\",\n  \"formattedText\": \"### 打卡状态摘要\\n\\n- **当前打卡状态**：未打卡（NOT_CLOCKED）。\\n- **上班打卡**：今日尚未执行上班打卡操作，系统允许进行上班打卡。\\n- **下班打卡**：今日尚未执行下班打卡操作，系统不允许进行下班打卡。\\n- **休息开始**：系统不允许开始休息。\\n- **休息结束**：系统不允许结束休息。\\n- **最后上班打卡时间**：无记录。\\n- **最后下班打卡时间**：无记录。\\n- **出勤状态**：无记录。\\n\\n### 风险提示\\n当前无风险提示。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"lastClockIn\": null,\n      \"todayRecord\": null,\n      \"canBreakStart\": false,\n      \"canClockOut\": false,\n      \"canClockIn\": true,\n      \"canBreakEnd\": false,\n      \"lastClockOut\": null,\n      \"attendanceStatus\": null,\n      \"status\": \"NOT_CLOCKED\"\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:28.7462452\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_status\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 打卡状态摘要\n\n- **当前打卡状态**：未打卡（NOT_CLOCKED）。\n- **上班打卡**：今日尚未执行上班打卡操作，系统允许进行上班打卡。\n- **下班打卡**：今日尚未执行下班打卡操作，系统不允许进行下班打卡。\n- **休息开始**：系统不允许开始休息。\n- **休息结束**：系统不允许结束休息。\n- **最后上班打卡时间**：无记录。\n- **最后下班打卡时间**：无记录。\n- **出勤状态**：无记录。\n\n### 风险提示\n当前无风险提示。"
+  }
+]

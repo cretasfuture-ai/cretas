@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "不是不想用这批原料，只是担心质量不过关。能不能帮我确认一下这批带鱼的检验报告是不是都合格了？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"不是不想用这批原料，只是担心质量不过关。能不能帮我确认一下这批带鱼的检验报告是不是都合格了？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"MATERIAL_BATCH_CREATE\",\n  \"intentName\": \"原料入库\",\n  \"intentCategory\": \"MATERIAL\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「原料入库」。\\n\\n需要您提供以下信息：\\n1. 请问是哪个供应商？说名称就行\\n2. 请输入数量，可以带单位如 100kg\\n3. 请提供数量单位，如：公斤、箱、袋等\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「原料入库」。\\n\\n需要您提供以下信息：\\n1. 请问是哪个供应商？说名称就行\\n2. 请输入数量，可以带单位如 100kg\\n3. 请提供数量单位，如：公斤、箱、袋等\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请问是哪个供应商？说名称就行\",\n    \"请输入数量，可以带单位如 100kg\",\n    \"请提供数量单位，如：公斤、箱、袋等\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:58:35.8382373\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"label\": \"供应商\",\n        \"name\": \"supplierId\",\n        \"type\": \"TEXT\"\n      },\n      {\n        \"label\": \"入库数量，必须大于0\",\n        \"name\": \"quantity\",\n        \"type\": \"NUMBER\"\n      },\n      {\n        \"label\": \"数量单位，如：公斤、箱、袋等\",\n        \"name\": \"unit\",\n        \"type\": \"TEXT\"\n      }\n    ],\n    \"extractedParams\": {\n      \"materialTypeId\": \"带鱼\"\n    }\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"9c59ccca-53dc-4044-848a-a53868097c2a\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「原料入库」。\n\n需要您提供以下信息：\n1. 请问是哪个供应商？说名称就行\n2. 请输入数量，可以带单位如 100kg\n3. 请提供数量单位，如：公斤、箱、袋等\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

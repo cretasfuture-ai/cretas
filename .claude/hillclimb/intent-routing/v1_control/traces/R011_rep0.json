@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "设备故障分类标准是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"设备故障分类标准是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"EQUIPMENT_MAINTENANCE\",\n  \"intentName\": \"设备维护\",\n  \"intentCategory\": \"CONFIG\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"设备维护检查完成：当前所有设备运行正常，暂无需要维护的设备。系统将持续监控设备健康状态。\",\n  \"formattedText\": \"设备维护检查完成：当前所有设备运行正常，暂无需要维护的设备。系统将持续监控设备健康状态。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"count\": 0,\n    \"maintenanceDevices\": [],\n    \"message\": \"设备维护检查完成：当前所有设备运行正常，暂无需要维护的设备。系统将持续监控设备健康状态。\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-12T00:32:56.8278773\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"equipment_maintenance\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "设备维护检查完成：当前所有设备运行正常，暂无需要维护的设备。系统将持续监控设备健康状态。"
+  }
+]
