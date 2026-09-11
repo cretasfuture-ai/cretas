@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "HACCP体系中CCP点的监控要求是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"HACCP体系中CCP点的监控要求是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"在HACCP体系中，关键控制点（CCP）的监控要求包括：\\n\\n1. **明确监控对象**：针对每个CCP的临界值（如温度、时间、pH值等），确定需监控的具体参数。\\n2. **确定监控方法**：使用连续记录或定期观察方式，确保实时或高频测量（如温度计、计时器）。\\n3. **设定监控频率**：根据风险程度（如每小时、每批次），确保及时发现偏差。\\n4. **指定责任人**：由经过培训的人员（如操作员或主管）执行并记录监控数据。\\n5. **建立记录体系**：详细保留监控结果（如图表或日志），用于验证和纠偏。\\n6. **制定纠偏预案**：若监控显示偏离临界值，应立即按程序调整（如延长加热时间或隔离产品）。\\n\\n监控目的在于实时控制危害，确保食品安全。所有记录需保存至法规规定期限。\",\n  \"formattedText\": \"在HACCP体系中，关键控制点（CCP）的监控要求包括：\\n\\n1. **明确监控对象**：针对每个CCP的临界值（如温度、时间、pH值等），确定需监控的具体参数。\\n2. **确定监控方法**：使用连续记录或定期观察方式，确保实时或高频测量（如温度计、计时器）。\\n3. **设定监控频率**：根据风险程度（如每小时、每批次），确保及时发现偏差。\\n4. **指定责任人**：由经过培训的人员（如操作员或主管）执行并记录监控数据。\\n5. **建立记录体系**：详细保留监控结果（如图表或日志），用于验证和纠偏。\\n6. **制定纠偏预案**：若监控显示偏离临界值，应立即按程序调整（如延长加热时间或隔离产品）。\\n\\n监控目的在于实时控制危害，确保食品安全。所有记录需保存至法规规定期限。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:43.2455056\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "在HACCP体系中，关键控制点（CCP）的监控要求包括：\n\n1. **明确监控对象**：针对每个CCP的临界值（如温度、时间、pH值等），确定需监控的具体参数。\n2. **确定监控方法**：使用连续记录或定期观察方式，确保实时或高频测量（如温度计、计时器）。\n3. **设定监控频率**：根据风险程度（如每小时、每批次），确保及时发现偏差。\n4. **指定责任人**：由经过培训的人员（如操作员或主管）执行并记录监控数据。\n5. **建立记录体系**：详细保留监控结果（如图表或日志），用于验证和纠偏。\n6. **制定纠偏预案**：若监控显示偏离临界值，应立即按程序调整（如延长加热时间或隔离产品）。\n\n监控目的在于实时控制危害，确保食品安全。所有记录需保存至法规规定期限。"
+  }
+]

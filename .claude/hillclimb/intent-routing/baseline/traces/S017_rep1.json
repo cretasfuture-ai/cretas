@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "查一下冷链配送的发货记录"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"查一下冷链配送的发货记录\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SHIPMENT_BY_DATE\",\n  \"intentName\": \"日期出货\",\n  \"intentCategory\": \"SHIPMENT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"为了完成操作，还需要以下信息：\\n1. 请问查询的开始日期是什么？格式：yyyy-MM-dd\\n2. 请问查询的结束日期是什么？格式：yyyy-MM-dd\\n\\n请直接告诉我，我来帮您处理。\",\n  \"formattedText\": \"为了完成操作，还需要以下信息：\\n1. 请问查询的开始日期是什么？格式：yyyy-MM-dd\\n2. 请问查询的结束日期是什么？格式：yyyy-MM-dd\\n\\n请直接告诉我，我来帮您处理。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:39.5115019\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "为了完成操作，还需要以下信息：\n1. 请问查询的开始日期是什么？格式：yyyy-MM-dd\n2. 请问查询的结束日期是什么？格式：yyyy-MM-dd\n\n请直接告诉我，我来帮您处理。"
+  }
+]
