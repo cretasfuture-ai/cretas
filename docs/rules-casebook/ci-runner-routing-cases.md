@@ -162,3 +162,44 @@ artifact                = 146 字节，known-failing-tests.txt 压根没产出
 一个**设计上必然会变**的读数。这正是硬约束 9：
 验证「X 没发生」时必须同时有一个「Y 一定会发生」的读数。
 ⛔ 只看 job 是不是绿，这次会得出「nightly 跑通了」这个完全相反的结论。
+
+---
+
+## Mac mini 时期的接入方式（2026-08-27 → 2026-09，已退役）
+
+自建 runner 换成本机 WSL2（`windows-wsl-ci` ×3，标签 `self-hosted, cretas, Linux, X64`）之后，两台 `canada-mac-mini` 离线、不再带 `cretas` 标签，`AGENTS.md` 已把它留给其他任务。下面是它时期的事实与坑，留作「当初为什么这么接」的记录：
+
+| | |
+|---|---|
+| 机器 | 加拿大 `Mac-mini-01`（M4 Pro，14 核 / 64GB / 1.7TB）|
+| 连接 | Tailscale `100.85.234.108`；SSH 别名 `canada-mini`（用户 `rex`）|
+| ⚠️ 密钥 | 密码在 **MacBook 的 macOS 钥匙串**里，本机没有 ⇒ **必须经 `codex-mac` 中转** |
+| 服务 | `launchd`，开机自启，7×24 |
+| 标签 | `self-hosted, cretas, macOS, ARM64` |
+
+⛔ **ProxyJump 直连会卡死**（钥匙串要交互解锁，非交互式 SSH 过不去，实测挂满 10 分钟）。
+正确姿势：`ssh codex-mac "ssh canada-mini '...'"`，且**脚本落盘再执行**，不要多层引号嵌套。
+
+### 耗时（托管 51 个成功样本中位数 vs Mac mini）
+
+| 闸 | 托管 | 自建 Mac mini |
+|---|---|---|
+| Web Admin Gate | **12.3 分** | ~1.5 分（缓存热时）|
+| RN Gate | **4.0 分** | ~1 分 |
+| Secret gate | **1.0 分** | 21 秒 |
+
+冷启动另算：checkout 工作树 1.7G ≈ 1.5 分钟。
+
+### 两个 macOS 特例
+
+**① `setup-python` 在 macOS 自建 runner 上必失败**
+
+它的 macOS 安装脚本把 `/Users/runner` 写死（托管 runner 的用户名就是 `runner`），而本机用户是 `rex` 且 `/Users` 不可写 → `mkdir: /Users/runner: Permission denied`。试过两条绕法都不管用：改 `AGENT_TOOLSDIRECTORY`；预置工具缓存（结构完整、可执行，它仍走安装脚本）。⇒ 工作流改成按 runner 类型分支（写法保留在规则文件里）。
+
+**② runner 的 PATH 不含 homebrew**
+
+`~/actions-runner/.path` 原本只有 `/usr/bin:/bin:/usr/sbin:/sbin`，而 `python3.11` 装在 `/opt/homebrew/bin`。已前置该目录。改了 `.path` 或 `.env` 都要重启服务才生效。
+
+### 它在另一个时区
+
+这是 Mac mini 作为 CI 载体最大的价值：西半球机器照出 3 个东八区测不出来的 bug（见上「另一个时区照出的 3 个 bug」）。换成本机 WSL2 后这层覆盖没有了，规则文件已改成「时区断言显式用西半球 `TZ` 再跑一遍」。

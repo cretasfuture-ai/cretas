@@ -1,6 +1,6 @@
 # CI runner 路由：默认托管，额度耗尽切自建
 
-**最后更新**: 2026-09-11（压缩：本文件只留路由规则、六关清单与判据；接入实测、组织变量排除记录、WSL2 前后对照、时区 bug 与 nightly 开放集合案例存档在 `docs/rules-casebook/ci-runner-routing-cases.md`，章节名一致）
+**最后更新**: 2026-09-11（自建 runner 换成本机 WSL2 `windows-wsl-ci`，Mac mini 时期的接入方式与特例移入案例库；同日压缩：本文件只留路由规则、六关清单与判据；接入实测、组织变量排除记录、WSL2 前后对照、时区 bug 与 nightly 开放集合案例存档在 `docs/rules-casebook/ci-runner-routing-cases.md`，章节名一致）
 **触发事故**: 2026-08-26 组织 Actions 免费额度 2000 分钟用尽，所有 job **2~4 秒、0 个 step、无日志**地失败，横跨 `main` 与各 feature 分支。
 
 ⚠️ 本文件在 `.claude/rules/` 与 `.codex/rules/` 各有一份，**必须逐字相同**（见文末闸）。
@@ -9,7 +9,7 @@
 
 ## 一句话
 
-**默认走托管 runner。额度耗尽时，一条命令切到加拿大 Mac mini；额度恢复，切回来。**
+**默认走托管 runner。额度耗尽时，一条命令切到本机 WSL2 自建 runner；额度恢复，切回来。**
 
 ```bash
 python scripts/ci/switch_ci_runner.py --check        # 当前走哪条
@@ -49,6 +49,8 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 ⛔ 六关不逐条过就把文件名加进来，换来的是「从跑不起来」变成「跑起来就红」。
 
+⚠️ 六关是在 Mac mini（macOS）上实测的。现役自建是 WSL2（Linux）：第 1 关（缩进）和第 6 关（Docker）与平台无关，仍然成立；第 2–5 关是 macOS 特有（`/Users/runner`、缺 `nproc`/`free`、homebrew、无 `+cpu` wheel），Linux 上不适用——但 WSL 上有没有 Docker、`mvn`/`python3` 在不在 PATH **没重测过**，接新工作流前逐关跑一遍。
+
 `ci.yml` 保持写死 `ubuntu-latest`：它的 `java-build-test` 依赖 `pgvector` 服务容器，自建 runner 没有 Docker，这是机器侧的事（给 runner 装 Docker 或换 Linux self-hosted），脚本解决不了。
 
 `--adopt` 是新接工作流时的显式收敛口（新文件状态必然与现有不一致，一致性闸会拒切）：它只做「全部拉齐到 target」并逐行打印每个文件「改了 / 已经是、跳过」，⛔ 不允许静默拉齐，也不是 `--force`。
@@ -73,7 +75,7 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 实测耗时（托管，51 个成功样本的中位数）：
 
-| 闸 | 托管 | 自建 Mac mini |
+| 闸 | 托管 | 自建（Mac mini 时期实测；WSL2 未测） |
 |---|---|---|
 | Web Admin Gate | **12.3 分** | ~1.5 分（缓存热时）|
 | RN Gate | **4.0 分** | ~1 分 |
@@ -89,14 +91,13 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 | | |
 |---|---|
-| 机器 | 加拿大 `Mac-mini-01`（M4 Pro，14 核 / 64GB / 1.7TB）|
-| 连接 | Tailscale `100.85.234.108`；SSH 别名 `canada-mini`（用户 `rex`）|
-| ⚠️ 密钥 | 密码在 **MacBook 的 macOS 钥匙串**里，本机没有 ⇒ **必须经 `codex-mac` 中转** |
-| 服务 | `launchd`，开机自启，7×24 |
-| 标签 | `self-hosted, cretas, macOS, ARM64` |
+| 机器 | 本机 Windows 上的 WSL2，三个 runner 实例：`windows-wsl-ci`（标签另带 `ci-migration-candidate`）、`windows-wsl-ci-2` / `-3`（`ci-extra`） |
+| 标签 | `self-hosted, cretas, Linux, X64` —— 脚本写的 `runs-on: [self-hosted, cretas]` 只会派到它们 |
+| 连接 | 本机，不需要 SSH |
+| Python | 系统 Python **3.11.13**（与 prod 同版本，见上） |
+| 前提 | Windows 侧登录保活任务 **Running**（三态表见下）；停掉 / 注销就掉线 |
 
-⛔ **ProxyJump 直连会卡死**（钥匙串要交互解锁，非交互式 SSH 过不去，实测挂满 10 分钟）。
-正确姿势：`ssh codex-mac "ssh canada-mini '...'"`，且**脚本落盘再执行**，不要多层引号嵌套。
+加拿大 Mac mini（`canada-mac-mini` / `-2`，标签 `self-hosted, macOS, ARM64`，**没有 `cretas`**）已退役为本仓 CI 载体：离线，且 `AGENTS.md` 已把它留给其他任务。它时期的接入方式、ProxyJump/钥匙串坑、`setup-python`/homebrew 两个特例都在案例库「Mac mini 时期」一节，⛔ 不要再照着那些去连。
 
 ---
 ## ⛔ 别再试的三条路
@@ -104,7 +105,7 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 | 载体 | 状态 |
 |---|---|
 | 阿里云 139 / 47 | ⛔ 堵死 —— git 长连接连不动（`git clone --depth 1` 连 10MB 小仓都超时；HTTP/1.1、postBuffer、`--filter=blob:none` 全败） |
-| 本机 WSL2 | ⚠️ 有条件可用 —— 见下表三态 |
+| 本机 WSL2 | ✅ 现役自建 runner —— 成立前提见下表三态 |
 | 本机 Windows 直跑 | ⛔ 堵死 —— 18 个工作流全是 `ubuntu-latest` + bash 步骤 |
 
 ### WSL2 的三态（⛔ 不许把「尚未验证」并进「已验证」）
@@ -120,15 +121,9 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 ---
 
-## 自建 runner 的两个已知特例
+## 工作流里按 runner 类型分支
 
-**① `setup-python` 在 macOS 自建 runner 上必失败**
-
-它的 macOS 安装脚本把 `/Users/runner` 写死（托管 runner 的用户名就是 `runner`），而本机用户是 `rex` 且 `/Users` 不可写 → `mkdir: /Users/runner: Permission denied`。
-
-⚠️ 试过两条绕法**都不管用**：改 `AGENT_TOOLSDIRECTORY`；预置工具缓存（结构完整、可执行，它仍走安装脚本）。
-
-⇒ 现在的写法是**按 runner 类型分支**，自建用系统 Python 并**断言版本 ≥ 3.11**：
+`setup-python` 那一步按 runner 类型分支，自建用系统 Python 并断言版本 `>=3.10`（写法保留，不管自建是 macOS 还是 Linux 都成立）：
 
 ```yaml
 - uses: actions/setup-python@v5
@@ -137,16 +132,14 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
   if: runner.environment != 'github-hosted'
 ```
 
-**② runner 的 PATH 不含 homebrew**
-
-`~/actions-runner/.path` 原本只有 `/usr/bin:/bin:/usr/sbin:/sbin`，而 `python3.11` 装在 `/opt/homebrew/bin`。已前置该目录。改了 `.path` 或 `.env` 都要**重启服务**才生效。
+改了 runner 的 `.path` / `.env` 都要**重启 runner 服务**才生效。
 
 ---
-## 🔴 自建 runner 最大的价值：它在另一个时区
+## 🔴 时区覆盖：自建 runner 回到东八区之后要显式跑
 
-首次接入当天照出 3 个东八区永远测不出来的 bug（阴性对照西半球恒绿 / 西半球日期差一天 / 东八区 16:00 后返回明天，见案例库）。共同形状：**`Date.now() + 8h` 这种「平移 UTC 轴假装某时区」的写法，必须用 UTC getter 读回**，换成本地 getter 等于又叠一次设备偏移。
+Mac mini 时期它在西半球，首次接入当天照出 3 个东八区永远测不出来的 bug（阴性对照西半球恒绿 / 西半球日期差一天 / 东八区 16:00 后返回明天，见案例库）。共同形状：**`Date.now() + 8h` 这种「平移 UTC 轴假装某时区」的写法，必须用 UTC getter 读回**，换成本地 getter 等于又叠一次设备偏移。
 
-⛔ **别用 `TZ=x cmd` 在 Windows 上验时区** —— 那个前缀根本不传进 node（`process.env.TZ` 是 `undefined`，偏移恒为 `-480`）。时区相关的验证**只在 Mac/Linux 上做**。
+现役 WSL2 runner 和开发机同在东八区，**那层免费覆盖没有了**：时区相关的断言要显式用西半球 `TZ` 再跑一遍。⛔ **别在 Windows 原生 shell 里用 `TZ=x cmd`** —— 那个前缀根本不传进 node（`process.env.TZ` 是 `undefined`，偏移恒为 `-480`），写「四时区全绿」而实际跑了四遍东八区。`TZ=` 前缀只在 Linux（含 WSL）/ Mac 上生效。
 
 ---
 
