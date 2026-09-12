@@ -317,14 +317,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function duplicateRoute(): { path: string; query: Record<string, string> } | null {
     const tab = activeTab.value;
     if (!tab) return null;
-    const taskId = Date.now().toString(36);
+    const taskId = crypto.randomUUID();
     const url = new URL(tab.fullPath, 'https://workspace.local');
+    // Keep the source title separately: stripping trailing digits would corrupt
+    // meaningful names such as "产线 2", while copying tab.title stacks suffixes.
+    const baseTitle = url.searchParams.get('_taskBaseTitle') || tab.title;
+    const occupiedTitles = new Set(tabs.value.filter((item) => item.path === tab.path).map((item) => item.title));
+    let ordinal = 2;
+    while (occupiedTitles.has(`${baseTitle} ${ordinal}`)) ordinal += 1;
     const query: Record<string, string> = {};
     url.searchParams.forEach((value, key) => {
       if (!key.startsWith('_task')) query[key] = value;
     });
     query._task = taskId;
-    query._taskLabel = `${tab.title} ${tabs.value.filter((item) => item.path === tab.path).length + 1}`;
+    query._taskBaseTitle = baseTitle;
+    query._taskLabel = `${baseTitle} ${ordinal}`;
     return { path: tab.path, query };
   }
 
