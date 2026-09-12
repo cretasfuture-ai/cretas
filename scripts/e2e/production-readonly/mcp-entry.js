@@ -480,6 +480,17 @@ function installConsoleRecorder(context, options = {}) {
   // Playwright surfaces most unhandled rejections as pageerror. This bridge
   // gives them a stable label without storing the rejected object.
   context.addInitScript(() => {
+    // Browser-generated ErrorEvents (for example ResizeObserver delivery errors)
+    // may not reach Playwright's pageerror. Classify locally: never emit raw
+    // messages, source URLs, stacks or error objects from this bridge.
+    window.addEventListener('error', (event) => {
+      const message = typeof event.message === 'string' ? event.message : '';
+      const kind = message === 'ResizeObserver loop completed with undelivered notifications.'
+        || message === 'ResizeObserver loop limit exceeded'
+        ? 'resize_observer_delivery'
+        : message === 'Script error.' ? 'opaque_script_error' : 'other_window_error';
+      console.error(`[window_error_class] ${kind}`);
+    });
     window.addEventListener('unhandledrejection', (event) => {
       const reason = event.reason instanceof Error ? event.reason.message : String(event.reason || 'unknown');
       console.error(`[unhandledrejection] ${reason}`);
@@ -913,6 +924,7 @@ const SCENARIOS = [
   require('../scenarios/sales-date-draft-readonly'),
   require('../scenarios/workflow-viewport-readonly'),
   require('../scenarios/visual-unverified-followup-readonly'),
+  require('../scenarios/production-boards-readonly'),
   require('../scenarios/tenant-isolation'),
   require('../scenarios/bom-readonly'),
   require('../scenarios/bom-cost-caliber-readonly'),
@@ -2155,6 +2167,20 @@ const scenario = {
 module.exports = scenario;
 
 },
+    "scenarios/production-boards-readonly.js": function(module, exports, require) {
+'use strict';
+
+const followup = require('./visual-unverified-followup-readonly');
+const id = 'production-boards-readonly';
+const targets = Object.freeze(followup.FOLLOWUP_PAGES.filter(page =>
+  ['pending-queue', 'restock-board', 'bom-achievement'].includes(page.id)));
+
+// Independently bounded acceptance. The full follow-up retains label-QC and
+// still fails on its blocked telemetry; this scenario never visits that page.
+module.exports = { id, defaultEnabled: false, targets,
+  run: ctx => followup.run(ctx, targets, id) };
+
+},
     "scenarios/production-plan-routing-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -3100,6 +3126,10 @@ function assertSafe(ctx) {
 }
 async function step(ctx, action) { assertSafe(ctx); const value = await action(); assertSafe(ctx); return value; }
 async function verifyTarget(page, ctx, path, heading, tab) {
+  // Element Plus selects its pane before router.replace resolves. Keep the
+  // exact route predicate, but wait for navigation instead of racing the UI.
+  await page.waitForURL(url => routeIdentity(path, ctx.baseUrl, String(url)).routeMatches,
+    { timeout: 8000 });
   const identity = routeIdentity(path, ctx.baseUrl, page.url());
   if (!identity.routeMatches) throw new Error('UNVERIFIED: final route does not match bounded target');
   const main = page.locator('main.app-content, main[role="main"], main').first();
@@ -3119,10 +3149,10 @@ const FOLLOWUP_PAGES = Object.freeze([
   { id: 'restock-board', path: '/production/kanban?tab=restock-board', tab: 'restock-board' },
   { id: 'bom-achievement', path: '/production/analysis-query?tab=bom-achievement', heading: 'BOM达成率分析', tab: 'bom-achievement' },
 ]);
-async function runFollowup(ctx) {
-  const result = createScenarioResult('visual-unverified-followup-readonly');
+async function runFollowup(ctx, targets = FOLLOWUP_PAGES, id = 'visual-unverified-followup-readonly') {
+  const result = createScenarioResult(id);
   const start = Date.now();
-  for (const target of FOLLOWUP_PAGES) {
+  for (const target of targets) {
     assertSafe(ctx);
     const pageResult = await runReadOnlyPageScenario(ctx, { id: `followup-${target.id}`, path: target.path, screenshot: true, inspect: async page => {
       try {
@@ -3154,7 +3184,7 @@ async function runFollowup(ctx) {
     result.actualBusinessWrites += pageResult.actualBusinessWrites;
     if (pageResult.actualBusinessWrites || pageResult.blockedMutationAttempts.length) break;
   }
-  result.result = result.actualBusinessWrites || result.blockedMutationAttempts.length ? 'TOOL_ERROR' : result.pageEvidence.length === FOLLOWUP_PAGES.length && result.pageEvidence.every(p => p.result === 'PASS') ? 'PASS' : 'UNVERIFIED';
+  result.result = result.actualBusinessWrites || result.blockedMutationAttempts.length ? 'TOOL_ERROR' : result.pageEvidence.length === targets.length && result.pageEvidence.every(p => p.result === 'PASS') ? 'PASS' : 'UNVERIFIED';
   result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool'; result.durationMs = Date.now()-start;
   return result;
 }

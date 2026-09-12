@@ -9,6 +9,10 @@ function assertSafe(ctx) {
 }
 async function step(ctx, action) { assertSafe(ctx); const value = await action(); assertSafe(ctx); return value; }
 async function verifyTarget(page, ctx, path, heading, tab) {
+  // Element Plus selects its pane before router.replace resolves. Keep the
+  // exact route predicate, but wait for navigation instead of racing the UI.
+  await page.waitForURL(url => routeIdentity(path, ctx.baseUrl, String(url)).routeMatches,
+    { timeout: 8000 });
   const identity = routeIdentity(path, ctx.baseUrl, page.url());
   if (!identity.routeMatches) throw new Error('UNVERIFIED: final route does not match bounded target');
   const main = page.locator('main.app-content, main[role="main"], main').first();
@@ -28,10 +32,10 @@ const FOLLOWUP_PAGES = Object.freeze([
   { id: 'restock-board', path: '/production/kanban?tab=restock-board', tab: 'restock-board' },
   { id: 'bom-achievement', path: '/production/analysis-query?tab=bom-achievement', heading: 'BOM达成率分析', tab: 'bom-achievement' },
 ]);
-async function runFollowup(ctx) {
-  const result = createScenarioResult('visual-unverified-followup-readonly');
+async function runFollowup(ctx, targets = FOLLOWUP_PAGES, id = 'visual-unverified-followup-readonly') {
+  const result = createScenarioResult(id);
   const start = Date.now();
-  for (const target of FOLLOWUP_PAGES) {
+  for (const target of targets) {
     assertSafe(ctx);
     const pageResult = await runReadOnlyPageScenario(ctx, { id: `followup-${target.id}`, path: target.path, screenshot: true, inspect: async page => {
       try {
@@ -63,7 +67,7 @@ async function runFollowup(ctx) {
     result.actualBusinessWrites += pageResult.actualBusinessWrites;
     if (pageResult.actualBusinessWrites || pageResult.blockedMutationAttempts.length) break;
   }
-  result.result = result.actualBusinessWrites || result.blockedMutationAttempts.length ? 'TOOL_ERROR' : result.pageEvidence.length === FOLLOWUP_PAGES.length && result.pageEvidence.every(p => p.result === 'PASS') ? 'PASS' : 'UNVERIFIED';
+  result.result = result.actualBusinessWrites || result.blockedMutationAttempts.length ? 'TOOL_ERROR' : result.pageEvidence.length === targets.length && result.pageEvidence.every(p => p.result === 'PASS') ? 'PASS' : 'UNVERIFIED';
   result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool'; result.durationMs = Date.now()-start;
   return result;
 }
