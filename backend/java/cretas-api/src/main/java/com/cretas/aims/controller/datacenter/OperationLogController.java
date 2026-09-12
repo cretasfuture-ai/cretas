@@ -1,5 +1,6 @@
 package com.cretas.aims.controller.datacenter;
 
+import com.cretas.aims.audit.inventory.InventoryAuditIdentity;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.datacenter.OperationLog;
 import com.cretas.aims.repository.datacenter.OperationLogRepository;
@@ -57,7 +58,7 @@ public class OperationLogController {
             @RequestParam(defaultValue = "50") int size) {
         int safeSize = Math.min(Math.max(size, 1), 200);
         Page<OperationLog> result = repo.findByFilters(
-                factoryId, module, action, userId, entityType, entityId, start, end,
+                factoryId, module, action, userId, entityType, InventoryAuditIdentity.indexId(entityId), start, end,
                 PageRequest.of(Math.max(page, 0), safeSize));
         return ResponseEntity.ok(ApiResponse.success(result));
     }

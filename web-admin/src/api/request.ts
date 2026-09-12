@@ -6,6 +6,33 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { ApiResponse, ApiError } from '@/types/api';
 import type { ApiData } from '@/types/api';
+import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
+
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+
+function newCorrelationId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid && CORRELATION_ID_PATTERN.test(uuid)) return uuid;
+  return `corr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`.slice(0, 64);
+}
+
+function correlationIdFrom(headers: unknown): string | undefined {
+  if (!headers || typeof headers !== 'object') return undefined;
+  const candidate = headers as { get?: (name: string) => unknown; [key: string]: unknown };
+  const value = typeof candidate.get === 'function'
+    ? candidate.get('X-Correlation-ID')
+    : candidate['X-Correlation-ID'] ?? candidate['x-correlation-id'];
+  return typeof value === 'string' && CORRELATION_ID_PATTERN.test(value) ? value : undefined;
+}
+
+function isClientErrorCollector(url: unknown): boolean {
+  return typeof url === 'string' && /(?:^|\/)client-errors(?:$|[?#])/.test(url);
+}
+
+function rejectReportedApiError(error: ApiError): Promise<never> {
+  markClientErrorReported(error);
+  return Promise.reject(error);
+}
 
 // 动态导入 ElMessage，避免循环依赖
 // Apr 18 2026 UX 优化: error 类 toast 默认 3s 闪过对业务流程错误 (库存不足/并发冲突/
@@ -162,6 +189,7 @@ request.interceptors.request.use(
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
+    config.headers['X-Correlation-ID'] = correlationIdFrom(config.headers) || newCorrelationId();
 
     // FormData 时删除 Content-Type，让浏览器自动设置 multipart/form-data
     if (config.data instanceof FormData) {
@@ -217,8 +245,19 @@ request.interceptors.response.use(
     if (typeof data === 'string' && data.trimStart().startsWith('<')) {
       const url = response.config?.url || '(unknown)';
       const msg = `API 路由错误: ${url} 返回了 HTML (期望 JSON). 检查后端 @RequestMapping 或 nginx 代理规则.`;
+      if (!isClientErrorCollector(response.config?.url)) {
+        void reportClientError({
+          category: 'request_failure',
+          route: url,
+          method: response.config?.method,
+          status: response.status,
+          errorCode: 'ROUTING_ERROR',
+          parentCorrelationId: correlationIdFrom(response.config?.headers),
+          source: 'web-admin',
+        });
+      }
       showMessage(msg, 'error');
-      return Promise.reject(new ApiError(msg, 'ROUTING_ERROR'));
+      return rejectReportedApiError(new ApiError(msg, 'ROUTING_ERROR'));
     }
 
     // 如果响应已经是标准格式
@@ -231,6 +270,17 @@ request.interceptors.response.use(
         // "状态机配置不存在" on every page mount).
         const cfg = response.config as { _silent?: boolean };
         const rich = (data as Record<string, string | null>);
+        if (!isClientErrorCollector(response.config?.url)) {
+          void reportClientError({
+            category: 'request_failure',
+            route: response.config?.url,
+            method: response.config?.method,
+            status: response.status,
+            errorCode: rich.errorCode || (typeof data.code === 'string' ? data.code : undefined),
+            parentCorrelationId: correlationIdFrom(response.config?.headers),
+            source: 'web-admin',
+          });
+        }
         if (!cfg._silent) {
           showRichError(data.message || '操作失败', {
             actionHint: rich.actionHint,
@@ -238,7 +288,7 @@ request.interceptors.response.use(
             hintTarget: rich.hintTarget,
           });
         }
-        return Promise.reject(new ApiError(
+        return rejectReportedApiError(new ApiError(
           data.message,
           rich.errorCode || data.code,
           undefined,
@@ -270,6 +320,12 @@ request.interceptors.response.use(
     // .catch 或 Promise.allSettled, 不会 surface 给用户).
     if (axios.isCancel?.(error) || error.code === 'ERR_CANCELED' || error.message === 'canceled') {
       return Promise.reject(error);
+    }
+
+    // Keep diagnostics independent from Axios so a collector outage cannot recurse into this
+    // interceptor. The reporter strips messages, payloads, query strings, and credentials.
+    if (!isClientErrorCollector(originalRequest?.url)) {
+      reportRequestFailure(error);
     }
 
     // 认证接口自身返回的 401 不是"会话过期", 而是"这次认证请求被拒" —— 最常见的就是
@@ -359,7 +415,7 @@ request.interceptors.response.use(
           hintTarget: rich.hintTarget,
         });
       }
-      return Promise.reject(new ApiError('权限不足', 'FORBIDDEN', 403));
+      return rejectReportedApiError(new ApiError('权限不足', 'FORBIDDEN', 403));
     }
 
     // 404 Spring 默认 NoResourceFoundException 的"请求资源不存在"对用户太神秘,
@@ -389,7 +445,7 @@ request.interceptors.response.use(
           showMessage(friendly, 'error');
         }
       }
-      return Promise.reject(new ApiError(friendly, 'NOT_FOUND', 404));
+      return rejectReportedApiError(new ApiError(friendly, 'NOT_FOUND', 404));
     }
 
     // 410 Gone — Phase 2A SmartBI Java→Python 迁移完成 (PR #205 + chat 8 audit PR #214 §5.1, 2026-05-09).
@@ -413,7 +469,7 @@ request.interceptors.response.use(
           'warning'  // warning level (3s auto-dismiss) vs error (sticky)
         );
       }
-      return Promise.reject(new ApiError(
+      return rejectReportedApiError(new ApiError(
         isMigrated ? '该功能已迁移升级' : (rawMsg || '410 Gone'),
         isMigrated ? 'SMARTBI_MIGRATED' : 'GONE',
         410
@@ -473,7 +529,7 @@ request.interceptors.response.use(
       } catch {
         // 用户选择「稍后处理」或关闭弹窗 — 静默
       }
-      return Promise.reject(new ApiError(fkMessage, 'FK_BLOCK', 409));
+      return rejectReportedApiError(new ApiError(fkMessage, 'FK_BLOCK', 409));
     }
 
     // T144 MATERIAL_UOM_UNCONFIGURED 防呆导航 (fool-proof-design Rule 5: dead-end → 导航).
@@ -518,7 +574,7 @@ request.interceptors.response.use(
       } catch {
         // 用户选择「稍后处理」或关闭弹窗 — 静默
       }
-      return Promise.reject(new ApiError(uomMessage, 'MATERIAL_UOM_UNCONFIGURED', 409, uomHint));
+      return rejectReportedApiError(new ApiError(uomMessage, 'MATERIAL_UOM_UNCONFIGURED', 409, uomHint));
     }
 
     // 409 differentiation (R24 P2 real-window finding; narrowed 2026-09-02 —
@@ -557,7 +613,7 @@ request.interceptors.response.use(
       });
     }
 
-    return Promise.reject(new ApiError(
+    return rejectReportedApiError(new ApiError(
       message,
       rich.errorCode || error.response?.data?.code,
       status,
