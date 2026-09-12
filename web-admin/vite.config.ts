@@ -2,13 +2,14 @@ import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { resolve } from 'path';
 import { elementPlusTableResize, elementPlusTableResizePrebundle } from './tooling/elementPlusTableResize';
+import { elementPlusTableColumnResize, elementPlusTableColumnResizePrebundle } from './tooling/elementPlusTableColumnResize';
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
-    plugins: [elementPlusTableResize(), vue()],
-    optimizeDeps: { esbuildOptions: { plugins: [elementPlusTableResizePrebundle()] } },
+    plugins: [elementPlusTableResize(), elementPlusTableColumnResize(), vue()],
+    optimizeDeps: { esbuildOptions: { plugins: [elementPlusTableResizePrebundle(), elementPlusTableColumnResizePrebundle()] } },
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src'),

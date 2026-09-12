@@ -2562,7 +2562,7 @@ function handleMergePurchase() {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="orderNumber" label="订单编号" width="170" sortable />
+        <el-table-column prop="orderNumber" label="订单编号" width="170" min-width="120" sortable />
         <el-table-column label="客户" min-width="150" show-overflow-tooltip sortable :sort-method="compareCustomer">
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
         </el-table-column>

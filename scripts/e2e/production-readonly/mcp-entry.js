@@ -2971,7 +2971,9 @@ function scenario(id, path, resize) {
     const measure = () => table.evaluate(el => {
       const heads = [...el.querySelectorAll('.el-table__header th:not(.gutter)')];
       const cells = [...el.querySelector('.el-table__body tbody tr').querySelectorAll('td')];
-      return { rows: el.querySelectorAll('.el-table__body tbody tr').length, outline: getComputedStyle(el).outlineWidth,
+      return { rows: el.querySelectorAll('.el-table__body tbody tr').length,
+        rowHeight: el.querySelector('.el-table__body tbody tr').getBoundingClientRect().height,
+        outline: getComputedStyle(el).outlineWidth,
         columns: heads.map((header, i) => ({ header: header.getBoundingClientRect().width,
           body: cells[i]?.getBoundingClientRect().width || 0,
           right: cells[i] ? getComputedStyle(cells[i]).borderRightWidth : null,
@@ -2994,7 +2996,9 @@ function scenario(id, path, resize) {
         await page.mouse.move(Math.max(box.x + 2, box.x + box.width + delta), box.y + box.height / 2, { steps: 12 });
         await step(ctx, () => page.mouse.up()); await page.waitForTimeout(150);
         const data = await measure(); assertGrid(data); measurements.push({ resizeDelta: delta, ...data });
-        if (delta > 0) enlarged = (await header.boundingBox()).width > initial.width + 20;
+        const resizedWidth = (await header.boundingBox()).width;
+        if (resizedWidth < 120) throw new Error('Order identifier column collapsed below its readable minimum');
+        if (delta > 0) enlarged = resizedWidth > initial.width + 20;
       }
       if (!enlarged) throw new Error('Resize gesture did not enlarge the target column');
       screenshots.push(await ctx.screenshot(`${id}-resized`));
