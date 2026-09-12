@@ -2680,6 +2680,9 @@ module.exports = { id: 'sales-date-draft-readonly', defaultEnabled: false, run: 
     // Clear our only draft field before client-side leave; never invoke save validation.
     await step(ctx, () => input.fill(''));
     await step(ctx, () => input.press('Tab'));
+    // Tab can reopen the calendar. Dismiss its popup before the page action.
+    await step(ctx, () => page.keyboard.press('Escape'));
+    await calendar.waitFor({ state: 'hidden', timeout: 5000 });
     await step(ctx, () => page.getByRole('button', { name: '取消', exact: true }).first().click({ timeout: 5000 }));
     const leave = page.getByRole('button', { name: '离开', exact: true });
     // Element Plus mounts the confirmation asynchronously after the click.
