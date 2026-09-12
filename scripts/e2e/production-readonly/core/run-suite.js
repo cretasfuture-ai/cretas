@@ -12,6 +12,8 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/table-grid-readonly').sales,
+  require('../scenarios/table-grid-readonly').label,
   require('../scenarios/transfer-draft-readonly'),
   require('../scenarios/workspace-capacity-readonly'),
   require('../scenarios/workspace-duplicate-readonly'),

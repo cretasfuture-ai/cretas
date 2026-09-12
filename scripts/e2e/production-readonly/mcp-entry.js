@@ -918,6 +918,8 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/table-grid-readonly').sales,
+  require('../scenarios/table-grid-readonly').label,
   require('../scenarios/transfer-draft-readonly'),
   require('../scenarios/workspace-capacity-readonly'),
   require('../scenarios/workspace-duplicate-readonly'),
@@ -2949,6 +2951,65 @@ module.exports = {
 };
 
 },
+    "scenarios/table-grid-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { step, assertSafe } = require('./visual-unverified-followup-readonly');
+
+function assertGrid(data) {
+  if (!data.columns.length || data.rows < 1) throw new Error('UNVERIFIED: no populated table was measured');
+  for (const column of data.columns) {
+    if (column.header <= 0 || column.body <= 0 || Math.abs(column.header - column.body) >= 2) throw new Error('Table header/body width mismatch');
+    if (column.right !== '1px' || column.bottom !== '1px') throw new Error('Table cell grid is incomplete');
+  }
+  if (data.outline !== '1px') throw new Error('Table viewport outline is missing');
+}
+function scenario(id, path, resize) {
+  const inspect = async (page, _body, ctx) => {
+    const table = page.locator('main.app-content .el-table').first();
+    await table.locator('.el-table__body tbody tr').first().waitFor({ state: 'visible', timeout: 15000 });
+    const measure = () => table.evaluate(el => {
+      const heads = [...el.querySelectorAll('.el-table__header th:not(.gutter)')];
+      const cells = [...el.querySelector('.el-table__body tbody tr').querySelectorAll('td')];
+      return { rows: el.querySelectorAll('.el-table__body tbody tr').length, outline: getComputedStyle(el).outlineWidth,
+        columns: heads.map((header, i) => ({ header: header.getBoundingClientRect().width,
+          body: cells[i]?.getBoundingClientRect().width || 0,
+          right: cells[i] ? getComputedStyle(cells[i]).borderRightWidth : null,
+          bottom: cells[i] ? getComputedStyle(cells[i]).borderBottomWidth : null })) };
+    });
+    const measurements = [], screenshots = [];
+    for (const width of [1440, 1024]) {
+      await page.setViewportSize({ width, height: 900 }); await page.waitForTimeout(200);
+      const data = await measure(); assertGrid(data); measurements.push({ width, ...data });
+      screenshots.push(await ctx.screenshot(`${id}-${width}`));
+    }
+    if (resize) {
+      const header = table.locator('.el-table__header th').filter({ hasText: '订单编号' }).first();
+      await header.scrollIntoViewIfNeeded();
+      const initial = await header.boundingBox();
+      let enlarged = false;
+      for (const delta of [80, -160, -160]) {
+        const box = await header.boundingBox();
+        await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2); await page.mouse.down();
+        await page.mouse.move(Math.max(box.x + 2, box.x + box.width + delta), box.y + box.height / 2, { steps: 12 });
+        await step(ctx, () => page.mouse.up()); await page.waitForTimeout(150);
+        const data = await measure(); assertGrid(data); measurements.push({ resizeDelta: delta, ...data });
+        if (delta > 0) enlarged = (await header.boundingBox()).width > initial.width + 20;
+      }
+      if (!enlarged) throw new Error('Resize gesture did not enlarge the target column');
+      screenshots.push(await ctx.screenshot(`${id}-resized`));
+    }
+    assertSafe(ctx);
+    return { measurements, screenshots, limits: 'Only current populated table; native pointer, persisted width memory and all-page coverage are not verified',
+      assessment: { result: 'PASS', rootCauseClass: 'none' } };
+  };
+  return { id, defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id, path, screenshot: true, inspect: page => inspect(page, '', ctx) }) };
+}
+module.exports = { assertGrid,
+  sales: scenario('table-grid-sales-readonly', '/sales/orders', true),
+  label: scenario('table-grid-label-readonly', '/quality/label-qc', false) };
+
+},
     "scenarios/tenant-isolation.js": function(module, exports, require) {
 'use strict';
 
@@ -2995,6 +3056,9 @@ function assertPreserved(before, after) {
     if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) throw new Error(`Transfer draft lost field: ${key}`);
   }
 }
+function distinctOptionIndex(labels, excluded) {
+  return labels.findIndex(label => label.trim() !== excluded.trim());
+}
 async function inspect(page, _body, ctx) {
   const screenshots = [];
   await step(ctx, () => page.getByRole('button', { name: '手动新建调拨单', exact: true }).click());
@@ -3002,18 +3066,34 @@ async function inspect(page, _body, ctx) {
   await form.waitFor({ state: 'visible' });
   const remark = page.getByPlaceholder('如: 领用 / 研发样品 / 余料退总仓 等');
   const item = label => form.locator('.el-form-item').filter({ has: page.locator('.el-form-item__label', { hasText: label }) });
-  async function choose(select, text) {
+  async function choose(select, text, excluded, selectedIndex = 0) {
     const control = select.getByRole('combobox');
     const id = await control.getAttribute('aria-controls');
     await step(ctx, () => select.click());
     const options = page.locator(`[id="${id}"] .el-select-dropdown__item:not(.is-disabled)`);
-    const option = text ? options.filter({ hasText: text }).first() : options.first();
+    await options.first().waitFor({ state: 'visible', timeout: 10000 });
+    const index = excluded ? distinctOptionIndex(await options.allTextContents(), excluded) : selectedIndex;
+    if (index < 0) throw new Error('UNVERIFIED: no distinct target warehouse is available');
+    const option = text ? options.filter({ hasText: text }).first() : options.nth(index);
+    const count = await options.count();
     await option.waitFor({ state: 'visible', timeout: 10000 });
     await step(ctx, () => option.click());
+    return count;
+  }
+  async function selectSource(index = 0) {
+    const responsePromise = page.waitForResponse(response => response.request().method() === 'GET'
+      && new URL(response.url()).pathname.endsWith('/inventory/by-warehouse'), { timeout: 15000 }).catch(() => null);
+    const count = await choose(item('调出仓库').locator('.el-select'), undefined, undefined, index);
+    const response = await responsePromise;
+    if (!response) throw new Error('UNVERIFIED: inventory query response was not observed');
+    if (response.status() >= 400) throw new Error('Inventory query failed');
+    await response.finished(); await page.waitForTimeout(100);
+    return count;
   }
   await choose(item('调拨类型').locator('.el-select'), '同一工厂仓库调拨');
-  await choose(item('调出仓库').locator('.el-select'));
-  await choose(item('调入仓库').locator('.el-select'));
+  const warehouseCount = await selectSource();
+  const sourceLabel = await item('调出仓库').locator('.el-select__selection').innerText();
+  await choose(item('调入仓库').locator('.el-select'), undefined, sourceLabel);
   for (const [label, value] of [['调拨日期', '2030-01-15'], ['预计到货', '2030-01-16']]) {
     const input = item(label).locator('input');
     await step(ctx, () => input.fill(value));
@@ -3021,7 +3101,15 @@ async function inspect(page, _body, ctx) {
   }
   await step(ctx, () => remark.fill('只读验收本地草稿，未提交'));
   await step(ctx, () => page.getByRole('button', { name: '添加物料', exact: true }).click());
-  await choose(form.locator('.el-table__body .el-select').nth(0), '原料');
+  const category = form.locator('.el-table__body .el-select').nth(0);
+  let warehousesInspected = 1;
+  while (await category.getByText('所选仓库暂无可调拨库存', { exact: true }).isVisible()
+    && warehousesInspected < Math.min(warehouseCount, 5)) {
+    await selectSource(warehousesInspected++);
+  }
+  await choose(item('调入仓库').locator('.el-select'), undefined,
+    await item('调出仓库').locator('.el-select__selection').innerText());
+  await choose(category);
   await choose(form.locator('.el-table__body .el-select').nth(1));
   const quantity = form.getByPlaceholder('数量', { exact: true });
   await step(ctx, () => quantity.fill('1')); await remark.click();
@@ -3051,14 +3139,16 @@ async function inspect(page, _body, ctx) {
     assertPreserved(before, await snapshot());
   }
   screenshots.push(await ctx.screenshot('transfer-draft-three-returns'));
+  await quantity.scrollIntoViewIfNeeded();
+  screenshots.push(await ctx.screenshot('transfer-draft-material-fields'));
   // Closing only the locally edited tab discards our unsaved input.
   await step(ctx, () => page.locator('.workspace-tab-container.active .workspace-tab-close').click());
   await page.waitForURL(url => url.pathname === '/transfer/list');
   assertSafe(ctx);
-  return { retainedFields: Object.keys(before), roundTrips: 3, localDraftClosed: true, screenshots,
+  return { retainedFields: Object.keys(before), roundTrips: 3, warehousesInspected, localDraftClosed: true, screenshots,
     assessment: { result: 'PASS', rootCauseClass: 'none' } };
 }
-module.exports = { id: 'transfer-draft-readonly', defaultEnabled: false, assertPreserved, inspect,
+module.exports = { id: 'transfer-draft-readonly', defaultEnabled: false, assertPreserved, distinctOptionIndex, inspect,
   run: ctx => runReadOnlyPageScenario(ctx, { id: 'transfer-draft-readonly', path: '/transfer/list', screenshot: true, inspect }) };
 
 },
@@ -3478,10 +3568,13 @@ module.exports = { id: 'workspace-duplicate-readonly', defaultEnabled: false, in
 'use strict';
 const { runReadOnlyPageScenario } = require('./_shared');
 const { step, assertSafe } = require('./visual-unverified-followup-readonly');
+const { waitForAppMount } = require('../core/app-mount');
 
 async function inspect(page, _body, ctx) {
   const screenshots = [];
   await step(ctx, () => page.goto(`${ctx.baseUrl}/sales/orders/new`));
+  const initialMount = await waitForAppMount(page);
+  if (!initialMount.appMounted) throw new Error('Draft application did not mount');
   const date = page.getByRole('textbox', { name: '交货日期', exact: true });
   await date.waitFor({ state: 'visible', timeout: 15000 });
   const close = page.getByRole('button', { name: '关闭任务', exact: true }).last();
@@ -3492,6 +3585,8 @@ async function inspect(page, _body, ctx) {
   const closeFocus = await page.evaluate(() => document.activeElement?.classList.contains('workspace-tab'));
   if (!closeFocus) throw new Error('Tab close lost keyboard focus');
   await step(ctx, () => page.goto(`${ctx.baseUrl}/sales/orders/new`));
+  const reopenedMount = await waitForAppMount(page);
+  if (!reopenedMount.appMounted) throw new Error('Reopened draft application did not mount');
   await date.waitFor({ state: 'visible', timeout: 15000 });
   await step(ctx, () => date.fill('20300115')); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
   const savedDate = await date.inputValue();
@@ -3503,7 +3598,25 @@ async function inspect(page, _body, ctx) {
   await page.mouse.move(b.x + 45, b.y + 75, { steps: 12 });
   const drop = page.locator('.reference-drop-zone'); await drop.waitFor({ state: 'visible' });
   const d = await drop.boundingBox(); await page.mouse.move(d.x+d.width/2,d.y+d.height/2,{steps:20}); await step(ctx,()=>page.mouse.up());
-  await page.waitForFunction(() => document.querySelector('.reference-pane iframe')?.contentDocument?.querySelector('.el-table__body tr'), null, { timeout: 15000 });
+  await page.locator('.reference-pane iframe').waitFor({ state: 'attached' });
+  const referenceFrame = await page.locator('.reference-pane iframe').elementHandle().then(handle => handle.contentFrame());
+  if (!referenceFrame) throw new Error('Reference frame is unavailable');
+  await referenceFrame.waitForURL(url => url.searchParams.get('_workspaceReference') === '1', { timeout: 30000 });
+  const referenceMount = await waitForAppMount(referenceFrame);
+  try {
+    await page.waitForFunction(() => document.querySelector('.reference-pane iframe')?.contentDocument?.querySelector('.el-table__body tr'), null, { timeout: 15000 });
+  } catch {
+    const referenceState = await page.evaluate(() => {
+      const frame = document.querySelector('.reference-pane iframe');
+      const doc = frame?.contentDocument;
+      return { hasFrame: Boolean(frame), readyState: doc?.readyState || null,
+        bodyLength: doc?.body?.innerText.length || 0,
+        tableCount: doc?.querySelectorAll('.el-table').length || 0,
+        rowCount: doc?.querySelectorAll('.el-table__body tr').length || 0 };
+    });
+    screenshots.push(await ctx.screenshot('workspace-reference-not-ready'));
+    return { initialMount, reopenedMount, referenceMount, referenceState, screenshots, assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' } };
+  }
   const shield = page.locator('.readonly-shield'); await shield.focus(); await step(ctx, () => page.keyboard.press('ArrowDown'));
   const frame = page.frames().find(f => f.url().includes('_workspaceReference'));
   const referenceScroll = await frame.evaluate(() => scrollY);
@@ -3525,7 +3638,7 @@ async function inspect(page, _body, ctx) {
   if (!refFocus || await date.inputValue() !== savedDate) throw new Error('Reference close lost focus or draft');
   await page.setViewportSize({ width: 1440, height: 900 });
   assertSafe(ctx);
-  return { closeFocus, refFocus, referenceScroll, primaryWidth: width, synchronizedRatio: ratio, bottomRatio, draftPreserved: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+  return { initialMount, reopenedMount, referenceMount, closeFocus, refFocus, referenceScroll, primaryWidth: width, synchronizedRatio: ratio, bottomRatio, draftPreserved: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
 }
 module.exports = { id: 'workspace-r3-readonly', defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id: 'workspace-r3-readonly', path: '/sales/orders', screenshot: true, inspect }) };
 
