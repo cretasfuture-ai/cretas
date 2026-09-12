@@ -1,8 +1,20 @@
 import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ElMessage } from 'element-plus';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
 import { BOM_OVERLAY_PREFIX } from '../bomOverlay';
+
+// jsdom lacks the native top-layer API; real browser acceptance verifies showModal and hit targets.
+const showModalDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal');
+beforeAll(() => Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+  configurable: true,
+  value(this: HTMLDialogElement) { this.setAttribute('open', ''); },
+}));
+afterAll(() => {
+  if (showModalDescriptor) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', showModalDescriptor);
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+});
 
 /**
  * 只读 BOM 明细抽屉 —— **行为**断言, 不是源码文本断言。
@@ -81,13 +93,22 @@ vi.mock('../workflowApi', () => ({
  */
 const bomApiMocks = vi.hoisted(() => ({
   ensureDraft: vi.fn(),
+  getVersionsByProduct: vi.fn(),
+  getWorkspace: vi.fn(),
+  listSubstitutes: vi.fn(),
 }));
 
 vi.mock('@/api/bom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/bom')>();
   return {
     ...actual,
-    bomRecipeApi: { ...actual.bomRecipeApi, ensureDraft: bomApiMocks.ensureDraft },
+    bomRecipeApi: {
+      ...actual.bomRecipeApi,
+      ensureDraft: bomApiMocks.ensureDraft,
+      getVersionsByProduct: bomApiMocks.getVersionsByProduct,
+      listSubstitutes: bomApiMocks.listSubstitutes,
+    },
+    bomSeasoningApi: { ...actual.bomSeasoningApi, getWorkspace: bomApiMocks.getWorkspace },
   };
 });
 
@@ -114,7 +135,7 @@ vi.mock('@vue-flow/core', async () => {
           id: string; type?: string; data?: unknown; selected?: boolean;
         }>).map((node) => {
           const slot = slots[`node-${node.type}`];
-          return h('div', { key: node.id, 'data-node-id': node.id },
+          return h('div', { key: node.id, 'data-id': node.id },
             slot ? slot({ id: node.id, data: node.data, selected: !!node.selected }) : []);
         }));
       },
@@ -140,18 +161,32 @@ vi.mock('@vue-flow/controls', async () => {
 });
 
 interface OverlayEditorVm {
-  flowNodes: Array<{ id: string; data: Record<string, unknown> }>;
+  flowNodes: Array<{ id: string; position?: { x: number; y: number }; data: Record<string, unknown> }>;
+  flowEdges: Array<{ id: string; source: string; target: string }>;
   openAddProcess: (materialNodeId: string) => void;
   selectedWorkProcessId: string;
   confirmAddProcess: () => void;
   refreshBomOverlay: () => void;
+  loadBomOverlayData: () => Promise<void>;
   bomOverlayAuxiliaryByProcess: Record<string, unknown>;
   bomOverlayPackagingByOutput: Record<string, unknown>;
+  bomOverlayPackagingRawByOutput: Record<string, unknown>;
+  bomOverlayPackagingMaterialsLoaded: boolean;
+  bomOverlayMaterialArchive: unknown[] | null;
+  loadBomOverlayMaterialArchive: () => Promise<unknown[] | null>;
+  auxOwnerPickerVisible: boolean;
+  auxOwnerPickerChoice: string;
+  auxOwnerPickerCandidates: string[];
+  confirmAuxOwner: () => Promise<void>;
   auxDialogVisible: boolean;
   packagingDialogVisible: boolean;
   bomDetailVisible: boolean;
+  bomDetailContext: unknown;
+  immersive: boolean;
+  selectedNodeId: string;
   openAuxiliaryEditor: (processNodeId: string, rowId?: string) => Promise<void>;
   openPackagingEditor: (outputNodeId: string, rowId?: string) => Promise<void>;
+  beginEditingBomDetail: () => Promise<void>;
 }
 
 const SKU_OPTIONS = [
@@ -159,14 +194,27 @@ const SKU_OPTIONS = [
 ];
 
 const mountedWrappers: VueWrapper[] = [];
+const bomFixture = { processNodeId: '' };
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
+}
 
 afterEach(() => {
-  while (mountedWrappers.length) mountedWrappers.pop()?.unmount();
+  while (mountedWrappers.length) {
+    const wrapper = mountedWrappers.pop();
+    const root = wrapper?.element;
+    wrapper?.unmount();
+    root?.remove();
+  }
 });
 
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  bomFixture.processNodeId = '';
   apiMocks.get.mockImplementation((url: string) => {
     if (url.endsWith('/product-types/options')) {
       return Promise.resolve({ success: true, data: { content: [...SKU_OPTIONS] } });
@@ -178,7 +226,32 @@ beforeEach(() => {
   });
   apiMocks.post.mockResolvedValue({ success: true, data: {} });
   bomApiMocks.ensureDraft.mockReset();
-  bomApiMocks.ensureDraft.mockResolvedValue({ id: 'RECIPE-DRAFT-1', status: 'DRAFT', version: 2 });
+  bomApiMocks.ensureDraft.mockResolvedValue({
+    id: 'RECIPE-DRAFT-1', factoryId: 'F006', recipeCode: 'BOM-1', productTypeId: 'PT-PIG-400',
+    productName: '五香去骨猪蹄 400g', version: 2, isCurrent: false, status: 'DRAFT',
+  });
+  bomApiMocks.getVersionsByProduct.mockReset();
+  bomApiMocks.getVersionsByProduct.mockResolvedValue({ success: true, data: [{
+    id: 'RECIPE-DRAFT-1', factoryId: 'F006', recipeCode: 'BOM-1', productTypeId: 'PT-PIG-400',
+    productName: '五香去骨猪蹄 400g', version: 2, isCurrent: true, status: 'ACTIVE',
+    items: [{
+      id: 'PACK-ROW-1', recipeId: 'RECIPE-DRAFT-1', factoryId: 'F006', materialTypeId: 'PACK-BUCKET',
+      materialName: '塑料桶 20L', materialCategory: 'PACKAGING', standardQuantity: 0.05, unit: '个',
+      naturalQuantity: null,
+    }],
+  }] });
+  bomApiMocks.getWorkspace.mockReset();
+  bomApiMocks.getWorkspace.mockImplementation(() => Promise.resolve({ success: true, data: {
+    recipeId: 'RECIPE-DRAFT-1', productTypeId: 'PT-PIG-400', productName: '五香去骨猪蹄 400g',
+    status: 'DRAFT', editable: true, seasoningRevision: 1, materialSummaries: [], anomalies: [],
+    processes: [{ workflowProcessNodeId: bomFixture.processNodeId, workProcessId: 'WP-PACK', processOrder: 1,
+      processName: '装盒', standardUsageSupported: true, bindings: [{
+        id: 'AUX-ROW-1', workflowProcessNodeId: bomFixture.processNodeId, materialTypeId: 'AUX-STAR', name: '八角',
+        dosagePerKgG: 2, subsequentPotRatio: null, countInSeasoning: true,
+      }] }],
+  } }));
+  bomApiMocks.listSubstitutes.mockReset();
+  bomApiMocks.listSubstitutes.mockResolvedValue({ success: true, data: [] });
   apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
   apiMocks.getWorkProcessCategories.mockResolvedValue({ success: true, data: ['PACKING'] });
   apiMocks.getActiveWorkProcesses.mockResolvedValue({
@@ -236,7 +309,7 @@ beforeEach(() => {
  * 建一张最小的图(原料 → 工序 → 成品), 往两个浮层 cell 里各塞一行真实数据,
  * 然后把用户降级成只读。返回 wrapper 与 vm。
  */
-async function readonlyEditorWithBomRows(): Promise<{
+async function readonlyEditorWithBomRows(attachToDocument = false): Promise<{
   wrapper: VueWrapper; vm: OverlayEditorVm; processNodeId: string; outputNodeId: string;
 }> {
   const wrapper = shallowMount(ProductProcessWorkflowEditor, {
@@ -250,6 +323,7 @@ async function readonlyEditorWithBomRows(): Promise<{
       // 只放开这三个 —— 要点的那个 DOM 行在 WorkflowAuxiliaryNode / WorkflowPackagingNode
       // 里, 而它们的 body 由 WorkflowFusedStrip 的默认槽渲染, 三者缺一就点不到。
       stubs: {
+        Teleport: true,
         // ⚠️ VueFlow 也必须放开 —— shallowMount 会把**每一个**子组件桩掉, 包括上面那个
         //    自己写的 VueFlow 桩; 它一被 VTU 二次桩掉, `#node-*` 槽就一次都不求值,
         //    画布上一个 cell 都不渲染(实测: html 里只有 <vue-flow-stub>)。
@@ -259,6 +333,7 @@ async function readonlyEditorWithBomRows(): Promise<{
         WorkflowFusedStrip: false,
       },
     },
+    attachTo: attachToDocument ? document.body : undefined,
   });
   mountedWrappers.push(wrapper);
   await flushPromises();
@@ -272,22 +347,8 @@ async function readonlyEditorWithBomRows(): Promise<{
   const processNode = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
   const outputNode = vm.flowNodes.find((node) => node.data.kind === 'FINISHED_GOOD');
   if (!processNode || !outputNode) throw new Error('Expected a PROCESS and a FINISHED_GOOD node');
-
-  vm.bomOverlayAuxiliaryByProcess = {
-    [processNode.id]: {
-      usageSupported: true,
-      rows: [{ id: 'AUX-ROW-1', materialName: '八角', dosageText: '2 g/kg', markers: [] }],
-    },
-  };
-  vm.bomOverlayPackagingByOutput = {
-    [outputNode.id]: {
-      rows: [{
-        id: 'PACK-ROW-1', materialName: '塑料桶 20L', dosageText: '0.05 个/kg',
-        naturalHint: '= 1 个 / 20 kg', markers: [],
-      }],
-    },
-  };
-  vm.refreshBomOverlay();
+  bomFixture.processNodeId = processNode.id;
+  await vm.loadBomOverlayData();
   await flushPromises();
 
   // 降级成只读用户 —— 从这一刻起, 任何通往写编辑器的路径都是越权。
@@ -321,7 +382,7 @@ describe('只读用户点 BOM 行: 到只读明细, 不到写编辑器', () => {
     const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows();
 
     const auxRow = wrapper.find(
-      `[data-node-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
     );
     // 正向读数一: 只读用户看得见这一行(旧行为里它也可见, 只是点不动)。
     expect(auxRow.exists(), '只读用户必须仍然看得到辅料行').toBe(true);
@@ -357,7 +418,7 @@ describe('只读用户点 BOM 行: 到只读明细, 不到写编辑器', () => {
     const { wrapper, vm, outputNodeId } = await readonlyEditorWithBomRows();
 
     const packRow = wrapper.find(
-      `[data-node-id="${BOM_OVERLAY_PREFIX}pack:${outputNodeId}"] .packaging-row`,
+      `[data-id="${BOM_OVERLAY_PREFIX}pack:${outputNodeId}"] .packaging-row`,
     );
     expect(packRow.exists(), '只读用户必须仍然看得到包材行').toBe(true);
 
@@ -380,24 +441,248 @@ describe('只读用户点 BOM 行: 到只读明细, 不到写编辑器', () => {
   });
 
   it('Esc 关抽屉, 而不是退出全屏 —— 它不是 el-drawer, 既有那句选择器看不见它', async () => {
-    const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows();
+    const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows(true);
     const auxRow = wrapper.find(
-      `[data-node-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+    );
+    (auxRow.element as HTMLElement).focus();
+    await auxRow.trigger('click');
+    await flushPromises();
+    expect(vm.bomDetailVisible).toBe(true);
+    expect(vm.immersive).toBe(true);
+    expect(document.activeElement).toBe(wrapper.find('[data-testid="bom-detail-panel"]').element);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+    expect(vm.bomDetailVisible, 'Esc 必须关掉这个抽屉').toBe(false);
+    expect(vm.immersive, 'Esc 关闭明细时不得退出沉浸态').toBe(true);
+    expect(document.activeElement).toBe(auxRow.element);
+    expect(wrapper.find('[data-testid="bom-detail-panel"]').exists()).toBe(false);
+  });
+
+  it('原生明细弹窗把焦点收进闭环, Tab/Shift+Tab 不会落到背景', async () => {
+    const { wrapper, processNodeId } = await readonlyEditorWithBomRows(true);
+    const auxRow = wrapper.find(
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+    );
+    (auxRow.element as HTMLElement).focus();
+    await auxRow.trigger('click');
+    await flushPromises();
+
+    const panel = wrapper.find('[data-testid="bom-detail-panel"]');
+    const close = wrapper.find('[data-testid="bom-detail-close"]');
+    const dismiss = wrapper.find('[data-testid="bom-detail-dismiss"]');
+    expect(panel.attributes('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(panel.element);
+
+    await panel.trigger('keydown', { key: 'Tab' });
+    expect(document.activeElement).toBe(close.element);
+    await close.trigger('keydown', { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(dismiss.element);
+    await dismiss.trigger('keydown', { key: 'Tab' });
+    expect(document.activeElement).toBe(close.element);
+    (auxRow.element as HTMLElement).focus();
+    expect(document.activeElement).toBe(panel.element);
+  });
+
+  it('明细打开期间 Delete/Backspace 被拦在弹窗内, 不触发画布删除', async () => {
+    const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows(true);
+    const auxRow = wrapper.find(
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+    );
+    await auxRow.trigger('click');
+    await flushPromises();
+    vm.selectedNodeId = processNodeId;
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancelled'));
+    const panel = wrapper.find('[data-testid="bom-detail-panel"]');
+    for (const key of ['Delete', 'Backspace']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      panel.element.dispatchEvent(event);
+      expect(event.defaultPrevented, `${key} 必须被明细弹窗拦截`).toBe(true);
+    }
+    await flushPromises();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(vm.bomDetailVisible).toBe(true);
+  });
+
+  it.each([{ productTypeId: 'PT-NEW' }, { factoryId: 'F007' }])('切换身份 %j 关闭并清空旧明细, 旧行不能继续进入编辑', async (nextIdentity) => {
+    const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows(true);
+    const auxRow = wrapper.find(
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
     );
     await auxRow.trigger('click');
     await flushPromises();
     expect(vm.bomDetailVisible).toBe(true);
 
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    apiMocks.getProductProcessWorkflow.mockImplementation(() => new Promise(() => {}));
+    await wrapper.setProps(nextIdentity);
+    await nextTick();
+    expect(vm.bomDetailVisible).toBe(false);
+    expect(vm.bomDetailContext).toBe(null);
+    await vm.beginEditingBomDetail();
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+  });
+
+  it('同工厂切换产品时, 延迟的旧 overlay 不显示也不能打开编辑, 新产品完成后才恢复正向路径', async () => {
+    const { wrapper, vm, processNodeId, outputNodeId } = await readonlyEditorWithBomRows(true);
+    await wrapper.setProps({ canWrite: true });
+    const staleA = deferred<{ success: boolean; data: unknown[] }>();
+    const delayedBDefinition = deferred<{ success: boolean; data: unknown }>();
+    const delayedBOverlay = deferred<{ success: boolean; data: unknown[] }>();
+    const bNodes = vm.flowNodes
+      .filter((node) => !node.id.startsWith(BOM_OVERLAY_PREFIX))
+      .map((node) => ({
+        id: node.id,
+        kind: String(node.data.kind),
+        position: node.position,
+        data: {
+          ...node.data,
+          ...(node.id === outputNodeId ? { skuId: 'PT-B', name: '产品 B' } : {}),
+        },
+      }));
+    const bRecipe = {
+      id: 'RECIPE-B', factoryId: 'F006', recipeCode: 'BOM-B', productTypeId: 'PT-B',
+      productName: '产品 B', version: 3, isCurrent: false, status: 'DRAFT',
+      items: [{
+        id: 'B-PACK-ROW', recipeId: 'RECIPE-B', factoryId: 'F006', materialTypeId: 'PACK-BUCKET',
+        materialName: 'B 包材', materialCategory: 'PACKAGING', standardQuantity: 0.1, unit: '个',
+      }],
+    };
+    apiMocks.getProductProcessWorkflow.mockImplementation((_factory: string, product: string) => (
+      product === 'PT-B'
+        ? delayedBDefinition.promise
+        : Promise.resolve({ success: true, data: { productTypeId: 'PT-PIG-400', nodes: [], edges: [] } })
+    ));
+    bomApiMocks.getVersionsByProduct.mockImplementation((_factory: string, product: string) => (
+      product === 'PT-PIG-400' ? staleA.promise : delayedBOverlay.promise
+    ));
+
+    // A 的 overlay 请求仍在途时切到 B；B 定义和 B overlay 也刻意分开延迟。
+    const staleLoad = vm.loadBomOverlayData();
+    await wrapper.setProps({ productTypeId: 'PT-B', productName: '产品 B' });
+    delayedBDefinition.resolve({ success: true, data: {
+      id: 2, productTypeId: 'PT-B', schemaVersion: 1, status: 'DRAFT', version: 1,
+      lockVersion: 0, revisionId: 72, revisionHash: 'revision-b', nodes: bNodes, edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    } });
     await flushPromises();
-    expect(vm.bomDetailVisible, 'Esc 必须关掉这个抽屉').toBe(false);
-    expect(wrapper.find('[data-testid="bom-detail-panel"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('旧产品 A 包材');
+
+    staleA.resolve({ success: true, data: [{
+      id: 'RECIPE-A-STALE', factoryId: 'F006', recipeCode: 'BOM-A', productTypeId: 'PT-PIG-400',
+      productName: '旧产品 A', version: 9, isCurrent: true, status: 'ACTIVE', items: [{
+        id: 'A-PACK-STALE', recipeId: 'RECIPE-A-STALE', factoryId: 'F006', materialTypeId: 'PACK-A',
+        materialName: '旧产品 A 包材', materialCategory: 'PACKAGING', standardQuantity: 0.2, unit: '个',
+      }],
+    }] });
+    await staleLoad;
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('旧产品 A 包材');
+    expect(bomApiMocks.getVersionsByProduct).toHaveBeenCalledWith('F006', 'PT-B');
+
+    // 当前身份已切到 B，但 B overlay 尚未成功，旧 owner id 不能触发任何写路径。
+    await vm.openPackagingEditor(outputNodeId, 'A-PACK-STALE');
+    await vm.openAuxiliaryEditor(processNodeId, 'AUX-ROW-1');
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+    expect(vm.packagingDialogVisible).toBe(false);
+    expect(vm.auxDialogVisible).toBe(false);
+    expect(apiMocks.post).not.toHaveBeenCalled();
+    expect(apiMocks.put).not.toHaveBeenCalled();
+
+    delayedBOverlay.resolve({ success: true, data: [bRecipe] });
+    await flushPromises();
+    const bPack = wrapper.find(`[data-id="${BOM_OVERLAY_PREFIX}pack:${outputNodeId}"] .packaging-row`);
+    expect(bPack.exists()).toBe(true);
+    expect(bPack.text()).toContain('B 包材');
+    expect(wrapper.text()).not.toContain('旧产品 A 包材');
+    await bPack.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="bom-detail-panel"]').text()).toContain('B 包材');
+    await wrapper.find('[data-testid="bom-detail-edit"]').trigger('click');
+    await flushPromises();
+    expect(vm.packagingDialogVisible).toBe(true);
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+  });
+
+  it('身份切换期间延迟的物料档案完成不会继续打开包材编辑器或污染缓存', async () => {
+    const { wrapper, vm, outputNodeId } = await readonlyEditorWithBomRows(true);
+    await wrapper.setProps({ canWrite: true });
+    const delayedArchive = deferred<{ success: boolean; data: unknown[] }>();
+    apiMocks.get.mockImplementation((url: string) => {
+      if (url.includes('/raw-material-types/active')) return delayedArchive.promise;
+      if (url.endsWith('/product-types/options')) {
+        return Promise.resolve({ success: true, data: { content: [...SKU_OPTIONS] } });
+      }
+      return Promise.resolve({ success: true, data: [] });
+    });
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: {
+      id: 3, productTypeId: 'PT-B', schemaVersion: 1, status: 'DRAFT', version: 1,
+      nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 },
+    } });
+
+    const staleEditor = vm.openPackagingEditor(outputNodeId, 'PACK-ROW-1');
+    await flushPromises();
+    expect(apiMocks.get).toHaveBeenCalledWith('/F006/raw-material-types/active');
+    await wrapper.setProps({ factoryId: 'F007', productTypeId: 'PT-B', productName: '产品 B' });
+    await flushPromises();
+    delayedArchive.resolve({ success: true, data: [{ id: 'OLD-FACTORY-MATERIAL', name: '旧工厂物料' }] });
+    await staleEditor;
+    await flushPromises();
+
+    expect(vm.packagingDialogVisible).toBe(false);
+    expect(vm.bomOverlayPackagingMaterialsLoaded).toBe(false);
+    expect(vm.bomOverlayMaterialArchive).toBeNull();
+    const currentMaterials = [{ id: 'B-MATERIAL', name: '当前工厂物料' }];
+    apiMocks.get.mockResolvedValue({ success: true, data: currentMaterials });
+    expect(await vm.loadBomOverlayMaterialArchive()).toEqual(currentMaterials);
+    expect(apiMocks.get).toHaveBeenLastCalledWith('/F007/raw-material-types/active');
+    expect(vm.bomOverlayMaterialArchive).toEqual(currentMaterials);
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+  });
+
+  it('联产归属选择器随产品失效，当前产品重新选择仍能进入写入口', async () => {
+    const { wrapper, vm, processNodeId, outputNodeId } = await readonlyEditorWithBomRows(true);
+    await wrapper.setProps({ canWrite: true });
+    const output = vm.flowNodes.find(node => node.id === outputNodeId)!;
+    vm.flowNodes.push({ ...output, id: 'finished-second', data: { ...output.data, skuId: 'PT-SECOND' } });
+    vm.flowEdges.push({ id: 'second-output', source: processNodeId, target: 'finished-second' });
+    bomApiMocks.getVersionsByProduct.mockResolvedValue({ success: true, data: [] });
+    await vm.loadBomOverlayData();
+    await flushPromises();
+    await vm.openAuxiliaryEditor(processNodeId);
+    expect(vm.auxOwnerPickerVisible).toBe(true);
+    expect(vm.auxOwnerPickerCandidates).toContain('PT-SECOND');
+    const bNodes = vm.flowNodes.filter(node => !node.id.startsWith(BOM_OVERLAY_PREFIX)).map(node => ({
+      id: node.id, kind: node.data.kind, position: { x: 0, y: 0 },
+      data: { ...node.data, ...(node.data.kind === 'FINISHED_GOOD' ? { skuId: `B-${node.id}` } : {}) },
+    }));
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: {
+      id: 2, factoryId: 'F006', productTypeId: 'PT-B', schemaVersion: 1, status: 'DRAFT', version: 1,
+      revisionId: 72, nodes: bNodes, edges: [...vm.flowEdges], viewport: { x: 0, y: 0, zoom: 1 },
+    } });
+    bomApiMocks.ensureDraft.mockClear();
+    await wrapper.setProps({ productTypeId: 'PT-B', productName: '产品 B' });
+    await flushPromises();
+    expect(vm.auxOwnerPickerVisible).toBe(false);
+    expect(vm.auxOwnerPickerChoice).toBe('');
+    expect(vm.auxOwnerPickerCandidates).toEqual([]);
+    await vm.confirmAuxOwner();
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+    expect(vm.auxDialogVisible).toBe(false);
+    await vm.openAuxiliaryEditor(processNodeId);
+    expect(vm.auxOwnerPickerVisible).toBe(true);
+    const currentChoice = vm.auxOwnerPickerChoice;
+    expect(currentChoice).toMatch(/^B-/);
+    await vm.confirmAuxOwner();
+    expect(bomApiMocks.ensureDraft).toHaveBeenCalled();
+    expect(bomApiMocks.ensureDraft.mock.calls[0]?.slice(0, 2)).toEqual(['F006', currentChoice]);
   });
 
   it('键盘可达: 只读用户按 Enter 同样开明细(行是 role=button)', async () => {
     const { wrapper, vm, processNodeId } = await readonlyEditorWithBomRows();
     const auxRow = wrapper.find(
-      `[data-node-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
     );
     expect(auxRow.attributes('role')).toBe('button');
     expect(auxRow.attributes('tabindex')).toBe('0');
@@ -421,7 +706,7 @@ describe('可写用户: 明细抽屉里「进入编辑」才是写入口', () =>
     await flushPromises();
 
     const auxRow = wrapper.find(
-      `[data-node-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
+      `[data-id="${BOM_OVERLAY_PREFIX}aux:${processNodeId}"] .aux-row`,
     );
     await auxRow.trigger('click');
     await flushPromises();
@@ -444,5 +729,30 @@ describe('可写用户: 明细抽屉里「进入编辑」才是写入口', () =>
     //    (它是三条只读用例里断言「一次都没有」的那个函数 —— 同一个探针两侧都读得到,
     //     不可能一侧坏掉另一侧还绿。)
     expect(bomApiMocks.ensureDraft).toHaveBeenCalled();
+  });
+
+  it('包材明细的「进入编辑」正向进入包材写入口', async () => {
+    vi.spyOn(ElMessage, 'info').mockImplementation(() => undefined);
+    vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined);
+    vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined);
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined);
+    const { wrapper, vm, outputNodeId } = await readonlyEditorWithBomRows();
+    await wrapper.setProps({ canWrite: true });
+    await flushPromises();
+
+    const packRow = wrapper.find(
+      `[data-id="${BOM_OVERLAY_PREFIX}pack:${outputNodeId}"] .packaging-row`,
+    );
+    await packRow.trigger('click');
+    await flushPromises();
+    const editButton = wrapper.find('[data-testid="bom-detail-edit"]');
+    expect(editButton.exists()).toBe(true);
+    await editButton.trigger('click');
+    await flushPromises();
+
+    expect(vm.bomDetailVisible).toBe(false);
+    expect(vm.auxDialogVisible).toBe(false);
+    expect(bomApiMocks.ensureDraft).toHaveBeenCalled();
+    expect(ElMessage.info).not.toHaveBeenCalledWith(expect.stringContaining('无法打开包材编辑弹窗'));
   });
 });
