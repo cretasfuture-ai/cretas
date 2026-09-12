@@ -12,6 +12,10 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/order-entry-readonly').purchase,
+  require('../scenarios/order-entry-readonly').sales,
+  require('../scenarios/order-entry-readonly').salesHeaders,
+  require('../scenarios/order-entry-readonly').labelHeaders,
   require('../scenarios/table-grid-readonly').sales,
   require('../scenarios/table-grid-readonly').label,
   require('../scenarios/transfer-draft-readonly'),
