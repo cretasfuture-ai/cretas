@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   queryWithoutReturnScroll,
@@ -21,6 +21,12 @@ const authStore = useAuthStore();
 const workspace = useWorkspaceStore();
 const route = useRoute();
 const router = useRouter();
+const workspaceTabs = ref<InstanceType<typeof WorkspaceTabs>>();
+
+function closeReference(): void {
+  workspace.closeReference();
+  void workspaceTabs.value?.focusActive();
+}
 
 // Sprint 4 W1 C-INLINE-CS-1: 在线客服入口 URL. 后续接入实际客服系统时改 env / runtime config.
 const customerServiceUrl = (import.meta.env.VITE_CUSTOMER_SERVICE_URL as string | undefined) ?? '';
@@ -104,7 +110,7 @@ function pinDraggedReference(event: DragEvent): void {
       <!-- 顶部栏 -->
       <AppHeader v-if="!isReferenceFrame" />
 
-      <WorkspaceTabs v-if="!isReferenceFrame" />
+      <WorkspaceTabs v-if="!isReferenceFrame" ref="workspaceTabs" />
 
       <!-- FK_BLOCK 防呆导航浮条: 从关联页跳转处理完毕后引导返回 -->
       <ReturnBanner v-if="!isReferenceFrame" />
@@ -130,7 +136,7 @@ function pinDraggedReference(event: DragEvent): void {
         <WorkspaceReferencePane
           v-if="workspace.referenceTab && !isReferenceFrame"
           :tab="workspace.referenceTab"
-          @close="workspace.closeReference"
+          @close="closeReference"
         />
         <div
           v-if="workspace.draggingKey && !isReferenceFrame"
@@ -138,7 +144,7 @@ function pinDraggedReference(event: DragEvent): void {
           @dragover.prevent
           @drop="pinDraggedReference"
         >
-          <div><strong>拖到这里，同屏参考</strong><span>松开后右侧只读展示，左侧任务保持不变</span></div>
+          <div><strong>拖到这里，同屏参考</strong><span>松开后只读展示参考页，当前任务保持不变</span></div>
         </div>
       </div>
     </div>
@@ -201,6 +207,11 @@ function pinDraggedReference(event: DragEvent): void {
 .reference-drop-zone div { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .reference-drop-zone strong { font-size: 18px; }
 .reference-drop-zone span { color: #63758a; }
+
+@media (max-width: 1100px) {
+  .workspace-content-shell.has-reference { flex-direction: column; }
+  .has-reference > .app-content { flex: none; height: min(45dvh, 560px); overflow: auto; }
+}
 
 @media (max-width: 768px) {
   .app-main {
