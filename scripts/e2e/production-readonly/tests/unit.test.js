@@ -1,4 +1,5 @@
 'use strict';
+require('./visual-followup.test');
 
 // Stable cross-platform entry: PowerShell does not expand test globs in the
 // same way as POSIX shells. These modules register their cases with node:test.

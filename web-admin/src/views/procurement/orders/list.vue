@@ -702,14 +702,15 @@ onMounted(() => {
 // openEditDialog 内部抛异常而 `void` 把 rejection 丢掉. 任何未处理的异常都会复现同一症状,
 // 所以统一从这里进, 失败必须变成看得见的错误.
 function launchEditDialog(orderId: string): void {
-  void openEditDialog(orderId).catch((error: unknown) => {
+  void openEditDialog(orderId).catch(async (error: unknown) => {
+    // 清 query 会触发路由守卫清理消息；必须等导航结束后再展示本次错误。
+    await clearEditQuery();
     ElMessage({
       message: (error as Error)?.message || '采购单编辑打开失败',
       type: 'error',
       duration: 0,
       showClose: true,
     });
-    void clearEditQuery();
   });
 }
 
@@ -999,16 +1000,17 @@ async function openEditDialog(orderId: string) {
   // ⛔ 不能像新建那样「先开弹窗」: 下面的草稿判定不通过时**根本不该开**,
   //    先开再关会闪一下, 比慢更糟。所以这里只能减少要等的来回数 (6 → 3)。
   void refreshDropdownSources();
-  const response = await get<TableRow>(`/${factoryId.value}/purchase/orders/${orderId}`);
+  // 编辑入口在清 query 后统一显示错误，避免请求层的异步 toast 与页面重复提示。
+  const response = await get<TableRow>(`/${factoryId.value}/purchase/orders/${orderId}`, { _silent: true });
   if (!response.success || !response.data) {
     // 静默 return 会让用户第二次看到「点了没反应」, 且地址栏已经变了 —— 读不到单子必须说清楚.
+    await clearEditQuery();
     ElMessage({
       message: response.message || '采购单读取失败，无法进入编辑',
       type: 'error',
       duration: 0,
       showClose: true,
     });
-    await clearEditQuery();
     return;
   }
   const order = response.data;
@@ -1016,6 +1018,7 @@ async function openEditDialog(orderId: string) {
     // 同函数内其它拒绝分支都是 sticky 的, 只有这一条是 3 秒即散的 warning ——
     // 而它恰恰是最像「点了没反应」的那条 (地址栏已经变了, 弹窗不开, 提示又一闪而过).
     // 按防呆规范「4 位一体」: 具体原因 + sticky + 下一步动作.
+    await clearEditQuery();
     ElMessage({
       message: `仅草稿采购单允许编辑，当前状态为「${getPurchaseOrderStatusLabel(String(order.status))?.text || enumLabel(String(order.status))}」。`
         + '如需修改，请复制为新单据后编辑，或先取消本单。',
@@ -1023,7 +1026,6 @@ async function openEditDialog(orderId: string) {
       duration: 0,
       showClose: true,
     });
-    await clearEditQuery();
     return;
   }
   editingOrderId.value = orderId;
