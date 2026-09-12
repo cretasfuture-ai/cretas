@@ -108,13 +108,35 @@ describe('辅料 cell', () => {
     expect(w.find('[data-testid="aux-add"]').exists()).toBe(false);
   });
 
-  it('只读用户点击行不触发 edit-row', async () => {
+  // 🔴 2026-09-09 判据换代(形态 C‴): 旧断言守的是「只读用户点行什么都不发生」——
+  // 那正是已经不想要的行为(死胡同: 想看看这行配了什么也看不了)。行点击现在通向
+  // **只读明细**, 所以它对只读用户也必须发出来。
+  // ⚠️ 只断言「发出来了」是不够的 —— 越权发生时这条同样成立。它只是一半;
+  //    另一半(「发出来之后没有走到写入口」)在 bomReadonlyDetail.behavior.spec.ts,
+  //    ⛔ 不要在这里删掉那条就当补齐了。
+  it('只读用户点击行照样发出 open-row-detail(通向只读明细, 不是编辑)', async () => {
     const w = mount(WorkflowAuxiliaryNode, {
       global: { stubs: { Handle: HandleStub } },
       props: { id: 'x', canWrite: false, data: baseData },
     });
     await w.find('.aux-row').trigger('click');
-    expect(w.emitted('edit-row')).toBeFalsy();
+    expect(w.emitted('open-row-detail')?.[0]).toEqual(['r1']);
+    // 阴性对照(本层能管的那一半): 只读态下这个组件不发任何**写**事件。
+    expect(w.emitted('add-row')).toBeFalsy();
+  });
+
+  it('行可键盘激活: Enter / Space 与点击等价(无障碍)', async () => {
+    const w = mount(WorkflowAuxiliaryNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data: baseData },
+    });
+    const row = w.find('.aux-row');
+    expect(row.attributes('role')).toBe('button');
+    expect(row.attributes('tabindex')).toBe('0');
+    expect(row.attributes('aria-label')).toContain('八角');
+    await row.trigger('keydown.enter');
+    await row.trigger('keydown.space');
+    expect(w.emitted('open-row-detail')?.length).toBe(2);
   });
 
   // must-fix #3 (final whole-branch review of Phase 3-1): usageSupported 必须是三态。

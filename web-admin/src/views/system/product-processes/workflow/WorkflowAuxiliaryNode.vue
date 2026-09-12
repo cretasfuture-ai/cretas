@@ -83,7 +83,10 @@
         class="aux-row nodrag"
         role="button"
         tabindex="0"
-        @click="canWrite && emit('edit-row', row.id)"
+        :aria-label="`查看辅料明细：${row.materialName} ${formatDosage(row)}`"
+        @click="emit('open-row-detail', row.id)"
+        @keydown.enter.prevent="emit('open-row-detail', row.id)"
+        @keydown.space.prevent="emit('open-row-detail', row.id)"
       >
         <span class="aux-row-name">{{ row.materialName }}</span>
         <span class="aux-row-markers">
@@ -139,7 +142,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'add-row': [];
-  'edit-row': [rowId: string];
+  /**
+   * 点某一行 —— 语义是「打开这一行的**只读**明细」, ⛔ 不是「编辑这一行」。
+   * 2026-09-09 从 `edit-row` 改名: 旧名字下这里必须挂 `canWrite &&` 才不越权,
+   * 而那道守卫把只读用户「想看看这行配了什么」也一起堵死了(死胡同)。现在行点击
+   * 一律通向 openBomDetail(只读), 「进入编辑」是抽屉里的显式动作且只对 canEdit 渲染
+   * ⇒ 这里不再需要、也不该再加 canWrite 守卫。
+   */
+  'open-row-detail': [rowId: string];
   'open-detail': [];
   'set-collapsed': [collapsed: boolean];
 }>();
@@ -263,6 +273,8 @@ function formatDosage(row: AuxiliaryCellRow): string {
   cursor: pointer; font-size: 12px;
 }
 .aux-row:hover { border-color: #d9822b; background: #fff8ec; }
+/* 键盘用户必须看得见焦点在哪 —— 行早就是 role="button" + tabindex="0", 却一直没有焦点环。 */
+.aux-row:focus-visible { outline: 2px solid #d9822b; outline-offset: 2px; }
 .aux-row-name {
   color: #4a3110; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

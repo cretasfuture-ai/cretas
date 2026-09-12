@@ -102,12 +102,25 @@ describe('包材 cell', () => {
     expect(w.emitted('add-row')).toBeTruthy();
   });
 
-  it('点击行触发 edit-row 事件, 携带 rowId', async () => {
+  it('点击行触发 open-row-detail 事件, 携带 rowId', async () => {
     const w = mount(WorkflowPackagingNode, {
       global: { stubs: { Handle: HandleStub } },
       props: { id: 'x', canWrite: true, data } });
     await w.find('[data-testid="pack-qty-r1"]').trigger('click');
-    expect(w.emitted('edit-row')?.[0]).toEqual(['r1']);
+    expect(w.emitted('open-row-detail')?.[0]).toEqual(['r1']);
+  });
+
+  it('行可键盘激活: Enter / Space 与点击等价(无障碍)', async () => {
+    const w = mount(WorkflowPackagingNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data } });
+    const row = w.find('.packaging-row');
+    expect(row.attributes('role')).toBe('button');
+    expect(row.attributes('tabindex')).toBe('0');
+    expect(row.attributes('aria-label')).toContain('塑料桶 20L');
+    await row.trigger('keydown.enter');
+    await row.trigger('keydown.space');
+    expect(w.emitted('open-row-detail')?.length).toBe(2);
   });
 
   it('缺失用量渲染显式占位, 不降级成 0 或空白', () => {
@@ -132,12 +145,16 @@ describe('包材 cell', () => {
     expect(w.find('[data-testid="pack-add"]').exists()).toBe(false);
   });
 
-  it('只读用户点击行不触发 edit-row', async () => {
+  // 判据换代同 WorkflowAuxiliaryNode.spec.ts —— 见那里的长注释。
+  // ⚠️ 这条只管「事件发出来了」这一半; 「发出来之后没走到写入口」由
+  //    bomReadonlyDetail.behavior.spec.ts 在父组件那一层守, ⛔ 两条缺一不可。
+  it('只读用户点击行照样发出 open-row-detail(通向只读明细, 不是编辑)', async () => {
     const w = mount(WorkflowPackagingNode, {
       global: { stubs: { Handle: HandleStub } },
       props: { id: 'x', canWrite: false, data },
     });
     await w.find('[data-testid="pack-qty-r1"]').trigger('click');
-    expect(w.emitted('edit-row')).toBeFalsy();
+    expect(w.emitted('open-row-detail')?.[0]).toEqual(['r1']);
+    expect(w.emitted('add-row')).toBeFalsy();
   });
 });

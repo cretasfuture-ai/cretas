@@ -42,7 +42,7 @@ export interface AuxiliaryCellData {
   usageSupported: boolean | null;
   rows: AuxiliaryCellRow[];
   /** The real (non-overlay) PROCESS node id this cell is attached to — the editor's
-   *  add/edit-row handlers need this to know which process to open, without parsing
+   *  add-row / open-row-detail handlers need this to know which process to open, without parsing
    *  it back out of the overlay node's `bom-overlay:aux:<id>` id string. */
   processNodeId: string;
   /**

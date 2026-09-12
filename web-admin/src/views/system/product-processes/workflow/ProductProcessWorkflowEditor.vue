@@ -425,8 +425,8 @@
               :can-write="canEdit"
               :collapsed="collapsedAuxProcessIds.has(slotProps.data.processNodeId)"
               @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
-              @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
-              @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @open-row-detail="(rowId: string) => openBomDetail('auxiliary', slotProps.data.processNodeId, rowId)"
+              @open-detail="openBomDetail('auxiliary', slotProps.data.processNodeId)"
               @set-collapsed="(next: boolean) => toggleFusedCollapsed(slotProps.data.processNodeId, next)"
             />
           </template>
@@ -437,7 +437,7 @@
               :can-write="canEdit"
               :collapsed="isFusedCollapsed(slotProps.id)"
               @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
-              @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
+              @open-row-detail="(rowId: string) => openBomDetail('packaging', slotProps.data.outputNodeId, rowId)"
               @set-collapsed="() => toggleFusedCollapsed(slotProps.id)"
             />
           </template>
@@ -866,6 +866,81 @@
     />
 
     <!--
+      只读 BOM 明细抽屉 (2026-09-09) —— 点辅料/包材行的**唯一**落点。
+
+      ⚠️ 刻意用原生 div + v-if, 不用 el-drawer: 理由与下面那个原料关系弹窗完全相同 ——
+         el-drawer 在 shallowMount 下是 stub, 槽内容压根不渲染, 于是只读用户到底看到了
+         什么就只能靠状态变量推断。v-if 让断言拿到的是**渲染结果**。
+      🔴 「进入编辑」按钮 v-if="canEdit": 只读用户根本没有这颗按钮可点; 即便被绕过,
+         beginEditingBomDetail 与两个写入口第一行的 canEdit 闸仍各挡一道。
+    -->
+      <dialog v-if="bomDetailVisible" ref="bomDetailDialogRef" class="bom-detail-mask" data-testid="bom-detail-mask"
+        aria-modal="true" :aria-label="bomDetailContext?.title || 'BOM 明细'" @click.self="closeBomDetail()">
+        <div
+          ref="bomDetailPanelRef"
+          class="bom-detail-panel"
+          role="document"
+          tabindex="-1"
+          :aria-label="bomDetailContext?.title || 'BOM 明细'"
+          data-testid="bom-detail-panel"
+        >
+        <div class="bom-detail-head">
+          <div>
+            <div class="bom-detail-eyebrow">{{ bomDetailContext?.kind === 'packaging' ? '包材明细' : '辅料明细' }}（只读）</div>
+            <div class="bom-detail-title" data-testid="bom-detail-title">{{ bomDetailContext?.title }}</div>
+            <div class="bom-detail-subtitle" data-testid="bom-detail-subtitle">{{ bomDetailContext?.subtitle }}</div>
+          </div>
+          <button type="button" class="bom-detail-close" data-testid="bom-detail-close" aria-label="关闭明细" @click="closeBomDetail()">✕</button>
+        </div>
+
+        <div v-if="!bomDetailContext || bomDetailContext.rows.length === 0" class="bom-detail-empty" data-testid="bom-detail-empty">
+          尚未配置任何明细行。
+        </div>
+        <ul v-else class="bom-detail-rows">
+          <li
+            v-for="row in bomDetailContext.rows"
+            :key="row.id"
+            class="bom-detail-row"
+            :class="{ 'is-focused': row.id === bomDetailContext.rowId }"
+            :data-testid="`bom-detail-row-${row.id}`"
+          >
+            <span class="bom-detail-row-name">{{ row.materialName }}</span>
+            <span class="bom-detail-row-markers">
+              <span
+                v-for="marker in row.markers"
+                :key="`${row.id}:${marker.kind}`"
+                class="bom-detail-marker"
+                :title="marker.title"
+              >{{ marker.glyph }}</span>
+            </span>
+            <span class="bom-detail-row-dosage">{{ row.dosageText }}</span>
+            <span v-if="row.naturalHint" class="bom-detail-row-hint">{{ row.naturalHint }}</span>
+          </li>
+        </ul>
+
+        <!-- ⛔ 不要把这句写成「全部明细」: 单价/备注/替代物料仍然只在编辑弹窗里,
+             这里如实说明缺什么, 而不是让用户以为看到的就是全部。 -->
+        <div class="bom-detail-scope" data-testid="bom-detail-scope">
+          这里显示的是画布 Cell 上的用量与标记；备注、单价、替代物料明细目前只在编辑弹窗内。
+        </div>
+
+        <div class="bom-detail-foot">
+          <button type="button" class="el-button" data-testid="bom-detail-dismiss" @click="closeBomDetail()">关闭</button>
+          <button
+            v-if="canEdit"
+            type="button"
+            class="el-button el-button--primary"
+            data-testid="bom-detail-edit"
+            @click="beginEditingBomDetail"
+          >进入编辑</button>
+          <span v-else class="bom-detail-readonly-hint" data-testid="bom-detail-readonly-hint">
+            当前无编辑权限，仅可查看。
+          </span>
+        </div>
+        </div>
+      </dialog>
+
+    <!--
       新增原料 Cell 的关系弹窗 (2026-08-10)。
 
       ⚠️ 刻意用**原生 div + v-if**, 不用 el-dialog:
@@ -1056,6 +1131,7 @@ import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyCanvasTopology, terminalOutputLabels } from './workflowClassification';
 import {
+  BOM_OVERLAY_PREFIX,
   deriveBomOverlay,
   isDerivedBomOverlayConnection,
   isBomOverlayEdge,
@@ -1086,7 +1162,9 @@ import {
 import { createBomDraftEnsurer } from './bom/bomDraftLifecycle';
 import { missingPriceBindingIds } from './bom/seasoningModel';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
-import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
+import type {
+  AuxiliaryCellData, AuxiliaryCellRow, PackagingCellData, PackagingCellRow,
+} from './bomOverlayTypes';
 import type { ByproductMaterialOption } from './WorkflowMaterialNode.vue';
 import type { BomRowMarker } from './bomOverlayMarkers';
 import {
@@ -1394,6 +1472,8 @@ const bomOverlayPackagingByOutput = ref<Record<string, BomOverlayPackagingInput>
 const bomOverlayRecipeIdByProcess = ref<Record<string, string>>({});
 // recipeId → 该版本能否直接写入(仅 DRAFT 可写)。生效版只能看, 落笔前必须先 ensureDraft。
 const bomOverlayRecipeWritable = ref<Record<string, boolean>>({});
+// 浮层缓存必须带完整产品身份；recipeId / processNodeId 在联合产品之间并不保证唯一。
+const bomOverlayLoadedIdentity = ref<WorkflowIdentity | null>(null);
 // recipeId → 归属产品 id, ensureDraft 需要按产品建草稿。
 const bomOverlayProductIdByRecipe = ref<Record<string, string>>({});
 /** 画布当前展示的是草稿的那些产品; 非空即代表「所见 ≠ 产线在跑的」。 */
@@ -1649,6 +1729,8 @@ async function resolveWritableRecipeId(
   recipeId: string | undefined,
   reread: () => string | undefined,
 ): Promise<string | null> {
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)) return null;
   // recipeId 为空 = 该产品一条 BOM 版本都没有(冷启动)。与「有版本但不是草稿」一样,
   // 都靠 ensureDraft 收敛成一个可写草稿 —— 不必让用户先跑去别的页面建首版。
   if (recipeId && bomOverlayRecipeWritable.value[recipeId]) return recipeId;
@@ -1657,7 +1739,9 @@ async function resolveWritableRecipeId(
     // 编辑另一版草稿时，返回 workspace 的 processNodeId 对不上画布，详情入口就会
     // 误报“草稿已创建但未刷新”。
     await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
+    if (!isBomOverlayIdentityCurrent(identity)) return null;
   } catch (error) {
+    if (!isBomOverlayIdentityCurrent(identity)) return null;
     // 🔴 2026-08-12 (Steve 真机): 换原料后点「加辅料」被 409 拦下:
     //   「旧工艺中的原料投入在目标工艺中已不存在：2015胸肉
     //     提示: 请确认是否删除这些原料规则后再重试」
@@ -1675,10 +1759,12 @@ async function resolveWritableRecipeId(
     // 现在的出口: 只取得用户确认, 然后带 dropObsoleteInputs 重试 ensure-draft,
     // 由后端在同一事务里删它自己算出的孤儿行(判定权不外移)。
     if (await repairObsoleteBomInputs(productTypeId, error)) {
+      if (!isBomOverlayIdentityCurrent(identity)) return null;
       try {
         // 带上「人已确认」重试。删哪几行由后端重算, 前端不送 id 列表。
         await ensureBomDraftRecipe(
           props.factoryId, productTypeId, definition.value?.revisionId, true);
+        if (!isBomOverlayIdentityCurrent(identity)) return null;
         ElMessage.success('已移除旧工艺遗留的配方行');
       } catch (retryError) {
         ElMessage.error(retryError instanceof Error ? retryError.message : '移除后仍无法创建 BOM 草稿');
@@ -1689,6 +1775,7 @@ async function resolveWritableRecipeId(
       return null;
     }
   }
+  if (!isBomOverlayIdentityCurrent(identity)) return null;
   // 重载后浮层已指向草稿, 重新读一次映射, 不要沿用旧 id。
   const refreshed = reread();
   if (!refreshed || !bomOverlayRecipeWritable.value[refreshed]) {
@@ -1929,7 +2016,15 @@ onUnmounted(() => applyImmersiveBodyClass(false));
 
 /** Esc 退出全屏 —— 盖住导航就必须给一条键盘出口。 */
 function onImmersiveEscape(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || !immersive.value) return;
+  if (event.key !== 'Escape') return;
+  // 🔴 只读 BOM 明细抽屉必须**自己**接住这一下: 它刻意不是 el-drawer(原生 div + v-if,
+  //    否则 shallowMount 下槽内容不渲染、断言只能读状态变量), 于是下面那句选择器
+  //    结构上看不见它 —— 不接住的症状是「Esc 退出了全屏, 抽屉还开着」。
+  if (bomDetailVisible.value) {
+    closeBomDetail();
+    return;
+  }
+  if (!immersive.value) return;
   // ⛔ 有弹窗/抽屉开着时不抢 Esc: 那一下是用户要关弹窗, 不是要退全屏。
   if (document.querySelector('.el-dialog__wrapper:not([style*="display: none"]), .el-drawer.open, .el-overlay')) return;
   immersive.value = false;
@@ -2784,6 +2879,10 @@ async function restorePreviewAsDraft(): Promise<void> {
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
+  // 产品/工厂切换先失效旧的只读上下文，避免异步加载期间把旧行当成新对象继续编辑。
+  closeBomDetail(false);
+  invalidateBomOverlayCaches();
+  refreshBomOverlay();
   clearPublishBindingErrors();
   workflowBomSyncPreflight.value = null;
   previewingVersion.value = null;   // #12b fix: 切产品必退出历史版本预览 (否则横幅粘住 + 新产品自动保存被抑制)
@@ -3114,6 +3213,7 @@ async function loadDefinition(): Promise<void> {
 }
 
 function invalidateLoadedDefinition(invalidatePersistence = true): void {
+  invalidateBomOverlayCaches();
   loading.value = false;
   loadedDefinitionIdentity.value = null;
   definition.value = null;
@@ -3334,11 +3434,17 @@ async function loadBomOverlayData(options: {
   preferredDraft?: BomRecipeSummary;
 } = {}): Promise<void> {
   const factoryId = props.factoryId;
+  const identity: WorkflowIdentity = {
+    factoryId,
+    productTypeId: props.productTypeId,
+  };
   const finishedNodes = flowNodes.value.filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId);
   const targets = finishedNodes.map((node) => ({ nodeId: node.id, skuId: String(node.data.skuId) }));
   const uniqueSkuIds = [...new Set(targets.map((target) => target.skuId))];
   const generation = ++bomOverlayLoadGeneration;
-  const stillCurrent = () => generation === bomOverlayLoadGeneration && props.factoryId === factoryId;
+  bomOverlayLoadedIdentity.value = null;
+  const stillCurrent = () => generation === bomOverlayLoadGeneration
+    && isLoadedIdentityCurrent(identity);
 
   if (!factoryId || uniqueSkuIds.length === 0) {
     bomOverlayAuxiliaryByProcess.value = {};
@@ -3352,6 +3458,7 @@ async function loadBomOverlayData(options: {
     bomOverlaySubstitutesByRecipe.value = {};
     bomOverlayRecipeIdByOutput.value = {};
     bomOverlayPackagingRawByOutput.value = {};
+    bomOverlayLoadedIdentity.value = { ...identity };
     refreshBomOverlay();
     return;
   }
@@ -3383,6 +3490,7 @@ async function loadBomOverlayData(options: {
     const recipeIdBySku: Record<string, string> = {};
     const recipeIdByOutput: Record<string, string> = {};
     const productIdByRecipe: Record<string, string> = {};
+    const recipeWritableById: Record<string, boolean> = {};
     const packagingRawByOutput: Record<string, BomRecipeItemView[]> = {};
     // ⛔ 这两个必须声明在下面那个 forEach **之前**。
     // 2026-08-08 事故: `packagingBindingsByOutput` 原本声明在 auxiliaryByProcess 旁边
@@ -3408,7 +3516,7 @@ async function loadBomOverlayData(options: {
       );
       if (notice) draftNotices.push(notice);
       recipeIdBySku[skuId] = recipe.id;
-      bomOverlayRecipeWritable.value[recipe.id] = isWritableRecipe(recipe);
+      recipeWritableById[recipe.id] = isWritableRecipe(recipe);
       // ensureDraft 要按产品建草稿, 所以得能从 recipeId 反查它归哪个产品。
       productIdByRecipe[recipe.id] = skuId;
       const outputNode = finishedNodes.find((node) => String(node.data.skuId) === skuId);
@@ -3550,9 +3658,11 @@ async function loadBomOverlayData(options: {
       };
     });
 
+    if (!stillCurrent()) return;
+    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess, packagingBindingsByOutput, options);
     bomOverlayPackagingByOutput.value = packagingByOutput;
     bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
-    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess, packagingBindingsByOutput, options);
+    bomOverlayRecipeWritable.value = recipeWritableById;
     bomOverlayProductIdByRecipe.value = productIdByRecipe;
     bomDraftNotices.value = draftNotices;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
@@ -3561,6 +3671,7 @@ async function loadBomOverlayData(options: {
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
     bomOverlayRecipeIdByOutput.value = recipeIdByOutput;
     bomOverlayPackagingRawByOutput.value = packagingRawByOutput;
+    bomOverlayLoadedIdentity.value = { ...identity };
     refreshBomOverlay();
   } catch (error) {
     if (!stillCurrent()) return;
@@ -3578,11 +3689,44 @@ type BomOverlayArchiveRow = BomOverlayMaterialRow & SeasoningMaterialOption & Pa
 
 const bomOverlayMaterialArchive = ref<BomOverlayArchiveRow[] | null>(null);
 
+/**
+ * 身份切换时同步清空所有 BOM 浮层派生缓存，并推进 generation 让旧请求失效。
+ * 这些 key 在不同产品间可能复用，不能依赖下一次 loader 最终成功来覆盖旧值。
+ */
+function invalidateBomOverlayCaches(): void {
+  bomOverlayLoadGeneration += 1;
+  clearAuxOwnerPicker();
+  bomOverlayLoadedIdentity.value = null;
+  bomOverlayAuxiliaryByProcess.value = {};
+  bomOverlayPackagingByOutput.value = {};
+  bomOverlayRecipeIdByProcess.value = {};
+  bomOverlayRecipeWritable.value = {};
+  bomOverlayProductIdByRecipe.value = {};
+  bomDraftNotices.value = [];
+  bomOverlaySeasoningWorkspaceByRecipe.value = {};
+  bomUnpricedCountByProduct.value = {};
+  bomOverlaySubstitutesByRecipe.value = {};
+  bomOverlayRecipeIdByOutput.value = {};
+  bomOverlayPackagingRawByOutput.value = {};
+  bomOverlayMaterialArchive.value = null;
+  bomOverlayMaterials.value = [];
+  bomOverlayMaterialsLoaded.value = false;
+  bomOverlayPackagingMaterials.value = [];
+  bomOverlayPackagingMaterialsLoaded.value = false;
+  byproductMaterialOptions.value = [];
+  byproductMaterialsLoaded.value = false;
+  byproductMarkCandidates.value = [];
+}
+
 async function loadBomOverlayMaterialArchive(): Promise<BomOverlayArchiveRow[] | null> {
   if (bomOverlayMaterialArchive.value) return bomOverlayMaterialArchive.value;
   const factoryId = props.factoryId;
+  const productTypeId = props.productTypeId;
+  const generation = bomOverlayLoadGeneration;
   if (!factoryId) return null;
   const response = await get<BomOverlayArchiveRow[]>(`/${factoryId}/raw-material-types/active`);
+  if (generation !== bomOverlayLoadGeneration
+    || factoryId !== props.factoryId || productTypeId !== props.productTypeId) return null;
   const rows = response.success && response.data ? response.data : [];
   bomOverlayMaterialArchive.value = rows;
   return rows;
@@ -3700,9 +3844,11 @@ async function ensureByproductMaterialOptions(): Promise<void> {
 
 async function ensureBomOverlayMaterials(): Promise<void> {
   if (bomOverlayMaterialsLoaded.value) return;
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)) return;
   try {
     const rows = await loadBomOverlayMaterialArchive();
-    if (!rows) return;
+    if (!rows || !isBomOverlayIdentityCurrent(identity)) return;
     bomOverlayMaterials.value = selectAuxiliaryMaterials(rows);
     bomOverlayMaterialsLoaded.value = true;
   } catch {
@@ -3716,14 +3862,33 @@ const auxOwnerPickerProcessId = ref<string | null>(null);
 const auxOwnerPickerRowId = ref<string | null>(null);
 const auxOwnerPickerCandidates = ref<string[]>([]);
 const auxOwnerPickerChoice = ref<string>('');
+const auxOwnerPickerIdentity = ref<WorkflowIdentity | null>(null);
+
+function clearAuxOwnerPicker(): void {
+  auxOwnerPickerVisible.value = false;
+  auxOwnerPickerIdentity.value = null;
+  auxOwnerPickerProcessId.value = null;
+  auxOwnerPickerRowId.value = null;
+  auxOwnerPickerCandidates.value = [];
+  auxOwnerPickerChoice.value = '';
+}
+
+function takeAuxOwnerSelection() {
+  const processNodeId = auxOwnerPickerProcessId.value;
+  const chosen = auxOwnerPickerChoice.value;
+  const rowId = auxOwnerPickerRowId.value;
+  const identity = auxOwnerPickerIdentity.value;
+  const valid = identity && isBomOverlayIdentityCurrent(identity)
+    && auxOwnerPickerCandidates.value.includes(chosen);
+  clearAuxOwnerPicker();
+  return valid && processNodeId && chosen ? { processNodeId, rowId, chosen } : null;
+}
 
 /** 选完成品继续原来的流程 —— ⛔ 不复制第二份打开逻辑。 */
 async function confirmAuxOwner(): Promise<void> {
-  const processNodeId = auxOwnerPickerProcessId.value;
-  const chosen = auxOwnerPickerChoice.value;
-  if (!processNodeId || !chosen) return;
-  auxOwnerPickerVisible.value = false;
-  await openAuxiliaryEditor(processNodeId, auxOwnerPickerRowId.value ?? undefined, chosen);
+  const selection = takeAuxOwnerSelection();
+  if (!selection) return;
+  await openAuxiliaryEditor(selection.processNodeId, selection.rowId ?? undefined, selection.chosen);
 }
 
 // 辅料编辑入口 —— 直接复用既有 SeasoningBindingDialog(不新建编辑面, 见 task-6-brief.md)。
@@ -3739,11 +3904,14 @@ async function openAuxiliaryEditor(
     ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)) return;
   // ⛔ 这里不能因为「没有 recipe」就早退: 该产品可能一条 BOM 版本都没有(冷启动),
   // 那不是「数据没加载完」而是「还没建过」—— 早退会让画布在这种最常见的起点上死掉,
   // 且提示词还是错的。归属产品能定就交给 resolveWritableRecipeId 去 ensureDraft。
   const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
   await ensureBomOverlayMaterials();
+  if (!isBomOverlayIdentityCurrent(identity)) return;
 
   let auxProductTypeId = forcedProductTypeId || resolveProductForProcess(processNodeId);
   if (!auxProductTypeId) {
@@ -3764,6 +3932,7 @@ async function openAuxiliaryEditor(
       auxOwnerPickerRowId.value = rowId ?? null;
       auxOwnerPickerCandidates.value = candidates;
       auxOwnerPickerChoice.value = candidates[0];
+      auxOwnerPickerIdentity.value = { ...identity };
       auxOwnerPickerVisible.value = true;
       return;
     }
@@ -3781,6 +3950,7 @@ async function openAuxiliaryEditor(
     () => bomOverlayRecipeIdByProcess.value[processNodeId],
   );
   if (!writableRecipeId) return;
+  if (!isBomOverlayIdentityCurrent(identity)) return;
   // 重载后 workspace/process/binding 都要按草稿版重新取, 旧对象里的行 id 属于别的版本。
   const writableWorkspace = bomOverlaySeasoningWorkspaceByRecipe.value[writableRecipeId];
   const writableProcess = writableWorkspace?.processes
@@ -3818,9 +3988,11 @@ function onAuxDialogSaved(): void {
 // 只是过滤条件从 ensureBomOverlayMaterials 的"辅料/调料"换成"包材"分类 —— 不是新端点。
 async function ensureBomOverlayPackagingMaterials(): Promise<void> {
   if (bomOverlayPackagingMaterialsLoaded.value) return;
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)) return;
   try {
     const rows = await loadBomOverlayMaterialArchive();
-    if (!rows) return;
+    if (!rows || !isBomOverlayIdentityCurrent(identity)) return;
     bomOverlayPackagingMaterials.value = selectPackagingMaterials(rows);
     bomOverlayPackagingMaterialsLoaded.value = true;
   } catch {
@@ -3836,6 +4008,8 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     ElMessage.info('当前无编辑权限，无法打开包材编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)) return;
   const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
   if (node?.data?.kind !== 'FINISHED_GOOD' || !node.data?.skuId) {
     ElMessage.warning('包材数据尚未加载完成，请稍后重试');
@@ -3851,6 +4025,7 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     return;
   }
   await ensureBomOverlayPackagingMaterials();
+  if (!isBomOverlayIdentityCurrent(identity)) return;
 
   // 与辅料同因: 包材 item 也只能写进 DRAFT, 生效版返回「只有 DRAFT 状态可加 item」。
   const packProductTypeId = String(node.data.skuId ?? '') || bomOverlayProductIdByRecipe.value[recipeId];
@@ -3864,6 +4039,7 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     () => bomOverlayRecipeIdByOutput.value[outputNodeId],
   );
   if (!writablePackRecipeId) return;
+  if (!isBomOverlayIdentityCurrent(identity)) return;
   // 编辑既有行时, 行 id 必须来自草稿版 —— 生效版那份的 id 在草稿里不存在。
   const writableRow = rowId
     ? bomOverlayPackagingRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
@@ -3887,6 +4063,211 @@ function onPackagingDialogSaved(): void {
   // 同 onAuxDialogSaved: 包材用量也是工艺定义的一部分, 改了要能保存成新版本。
   // (包材用量目前仍只落 BOM 表, 但 hydration 一旦覆盖到它, 这里就已经接对了。)
   void loadBomOverlayData({ afterUserEdit: true });
+}
+
+// -- 只读 BOM 明细抽屉 (2026-09-09) -----------------------------------------
+//
+// 🔴 为什么要有它: 点辅料/包材行以前**直接是写入口**, 于是只读用户被 `canWrite &&`
+//    在子组件里挡掉 —— 挡住的同时也把「看一眼这行配了什么」一起挡掉了, 那是死胡同
+//    (fool-proof Rule 5)。现在行点击一律先到这个**只读**抽屉; 「进入编辑」是抽屉里
+//    的一个显式动作, 且只有 canEdit 才渲染。
+//
+// ⛔ openBomDetail 里**不允许**出现 openAuxiliaryEditor / openPackagingEditor 的调用 ——
+//    那等于把只读入口重新接回写入口, 正是本次改动要根除的越权形状。守它的是
+//    bomReadonlyDetail.behavior.spec.ts 里 canWrite=false 的整条路径断言(不是源码正则)。
+type BomDetailKind = 'auxiliary' | 'packaging';
+
+interface BomDetailRowView {
+  id: string;
+  materialName: string;
+  /** 已折算的用量表达; 缺失时由 openBomDetail 填明确占位, ⛔ 不显示 0 或空白。 */
+  dosageText: string;
+  /** 折算前的原始表达(包材才有), 没有就是 null —— ⛔ 不要退化成空串当 title。 */
+  naturalHint: string | null;
+  markers: BomRowMarker[];
+}
+
+interface BomDetailContext {
+  identity: WorkflowIdentity;
+  kind: BomDetailKind;
+  /** 辅料是 PROCESS 节点 id, 包材是 FINISHED_GOOD 节点 id —— 与写入口的入参同一个东西。 */
+  ownerNodeId: string;
+  /** 用户点的是哪一行(点「详情」按钮进来时为 null, 表示整张 cell)。 */
+  rowId: string | null;
+  title: string;
+  subtitle: string;
+  rows: BomDetailRowView[];
+}
+
+const bomDetailVisible = ref(false);
+const bomDetailContext = ref<BomDetailContext | null>(null);
+const bomDetailPanelRef = ref<HTMLElement | null>(null);
+const bomDetailDialogRef = ref<HTMLDialogElement | null>(null);
+let bomDetailTriggerElement: HTMLElement | null = null;
+
+/**
+ * 只读打开 BOM 明细。**纯读**: 只从已经派生好的浮层节点 data 里取(与 cell 上渲染的
+ * 是同一份, 不另建第二份口径 —— 形态 D), 不发请求、不 ensureDraft、不开任何编辑面。
+ */
+function openBomDetail(kind: BomDetailKind, ownerNodeId: string, rowId?: string): void {
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)) {
+    ElMessage.warning('画布正在切换产品，当前 BOM 明细已失效，请等待加载完成后重试');
+    return;
+  }
+  const overlayId = `${BOM_OVERLAY_PREFIX}${kind === 'auxiliary' ? 'aux' : 'pack'}:${ownerNodeId}`;
+  const node = flowNodes.value.find((candidate) => candidate.id === overlayId);
+  if (!node) {
+    // 禁止降级处理: 拿不到浮层节点就说拿不到, 不要开一个空抽屉冒充「没配」。
+    ElMessage.warning('未找到该 Cell 的 BOM 明细数据，请刷新画布后重试');
+    return;
+  }
+  const activeElement = document.activeElement instanceof HTMLElement
+    && document.activeElement.closest(`[data-id="${overlayId}"]`)
+    ? document.activeElement
+    : null;
+  bomDetailTriggerElement = activeElement;
+  if (kind === 'auxiliary') {
+    const data = node.data as unknown as AuxiliaryCellData;
+    bomDetailContext.value = {
+      identity,
+      kind,
+      ownerNodeId,
+      rowId: rowId ?? null,
+      title: `${data.processName} · 辅料`,
+      subtitle: data.rows.length > 0
+        ? `${data.rows.length} 种辅料`
+        : '该工序尚未配置辅料',
+      rows: data.rows.map((row): BomDetailRowView => ({
+        id: row.id,
+        materialName: row.materialName,
+        dosageText: row.dosageText && row.dosageText.trim() ? row.dosageText : '未填用量',
+        // 辅料没有「折算前的原始表达」这一维(那是包材的 naturalHint) —— 恒 null。
+        naturalHint: null,
+        markers: row.markers,
+      })),
+    };
+  } else {
+    const data = node.data as unknown as PackagingCellData;
+    bomDetailContext.value = {
+      identity,
+      kind,
+      ownerNodeId,
+      rowId: rowId ?? null,
+      title: `${data.outputName} · 包材`,
+      subtitle: data.rows.length > 0
+        ? `${data.rows.length} 种包材 · 每 1 ${data.baseUnit}成品`
+        : '该产出尚未配置包材',
+      rows: data.rows.map((row) => ({
+        id: row.id,
+        materialName: row.materialName,
+        dosageText: row.dosageText && row.dosageText.trim() ? row.dosageText : '未填用量',
+        naturalHint: row.naturalHint && row.naturalHint.trim() ? row.naturalHint : null,
+        markers: row.markers,
+      })),
+    };
+  }
+  bomDetailVisible.value = true;
+  void nextTick(() => {
+    bomDetailDialogRef.value?.showModal();
+    bomDetailPanelRef.value?.focus();
+  });
+}
+
+function closeBomDetail(restoreFocus = true): void {
+  bomDetailVisible.value = false;
+  bomDetailContext.value = null;
+  const trigger = bomDetailTriggerElement;
+  bomDetailTriggerElement = null;
+  if (restoreFocus) {
+    void nextTick(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
+  }
+}
+
+function onBomDetailKeydown(event: KeyboardEvent): void {
+  if (!bomDetailVisible.value) return;
+  if (event.key === 'Escape' || event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.key === 'Escape') closeBomDetail();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  event.preventDefault();
+  event.stopPropagation();
+  const panel = bomDetailPanelRef.value;
+  if (!panel) return;
+  const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  ));
+  if (focusable.length === 0) {
+    panel.focus();
+    return;
+  }
+  const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+  const nextIndex = event.shiftKey
+    ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+    : (currentIndex < 0 || currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+  focusable[nextIndex]?.focus();
+}
+
+function keepBomDetailFocus(event: FocusEvent): void {
+  const panel = bomDetailPanelRef.value;
+  if (bomDetailVisible.value && panel && !panel.contains(event.target as globalThis.Node | null)) {
+    panel.focus();
+  }
+}
+onMounted(() => {
+  window.addEventListener('keydown', onBomDetailKeydown, true);
+  document.addEventListener('focusin', keepBomDetailFocus);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', onBomDetailKeydown, true);
+  document.removeEventListener('focusin', keepBomDetailFocus);
+});
+
+/**
+ * 抽屉里「进入编辑」—— 这是**唯一**从只读详情通往写入口的那条边, 因此权限判据写在这里,
+ * 且写入口自己(openAuxiliaryEditor / openPackagingEditor)第一行的 canEdit 闸原样保留:
+ * 两道闸都要, 少一道就变成「只剩一道就恒真」。
+ */
+async function beginEditingBomDetail(): Promise<void> {
+  const context = bomDetailContext.value;
+  if (!context) return;
+  const identity = currentLoadedIdentity();
+  if (!identity || !isBomOverlayIdentityCurrent(identity)
+    || !isBomOverlayIdentityCurrent(context.identity)
+    || !identitiesMatch(identity, context.identity)) {
+    closeBomDetail(false);
+    ElMessage.info('画布已切换产品，旧 BOM 明细已失效，请从当前产品重新打开');
+    return;
+  }
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，只能查看 BOM 明细。');
+    return;
+  }
+  const overlayId = `${BOM_OVERLAY_PREFIX}${context.kind === 'auxiliary' ? 'aux' : 'pack'}:${context.ownerNodeId}`;
+  const node = flowNodes.value.find((candidate) => candidate.id === overlayId);
+  if (!node) {
+    closeBomDetail(false);
+    ElMessage.warning('未找到当前产品的 BOM 明细 Cell，请刷新后重试');
+    return;
+  }
+  const rows = (node.data as { rows?: Array<{ id: string }> }).rows;
+  if (context.rowId && (!Array.isArray(rows) || !rows.some((row) => String(row.id) === context.rowId))) {
+    closeBomDetail(false);
+    ElMessage.warning('该 BOM 行已随版本更新失效，请刷新后重试');
+    return;
+  }
+  bomDetailVisible.value = false;
+  bomDetailContext.value = null;
+  if (context.kind === 'auxiliary') {
+    await openAuxiliaryEditor(context.ownerNodeId, context.rowId ?? undefined);
+  } else {
+    await openPackagingEditor(context.ownerNodeId, context.rowId ?? undefined);
+  }
 }
 
 function propsMatchIdentity(identity: WorkflowIdentity): boolean {
@@ -3917,6 +4298,12 @@ function isLoadedIdentityCurrent(identity: WorkflowIdentity): boolean {
     && loadedDefinitionIdentity.value?.productTypeId === identity.productTypeId
     && props.factoryId === identity.factoryId
     && props.productTypeId === identity.productTypeId;
+}
+
+function isBomOverlayIdentityCurrent(identity: WorkflowIdentity): boolean {
+  return isLoadedIdentityCurrent(identity)
+    && bomOverlayLoadedIdentity.value?.factoryId === identity.factoryId
+    && bomOverlayLoadedIdentity.value?.productTypeId === identity.productTypeId;
 }
 
 /**
@@ -4642,6 +5029,7 @@ function removeSelectedElements(): void {
 }
 
 function onEditorKeydown(event: KeyboardEvent): void {
+  if (bomDetailVisible.value) return;
   if (event.key !== 'Delete' && event.key !== 'Backspace') return;
   const tag = (event.target as HTMLElement | null)?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return; // 输入框里删字不误删
@@ -7150,6 +7538,58 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   color: var(--el-text-color-secondary, #909399);
 }
 .raw-input-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+
+/* -- 只读 BOM 明细抽屉 ------------------------------------------------------ */
+.bom-detail-mask {
+  position: fixed; inset: 0; z-index: 2100;
+  width: 100%; height: 100%; max-width: none; max-height: none;
+  padding: 0; margin: 0; border: 0;
+  display: flex; justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.32);
+}
+.bom-detail-mask::backdrop { background: transparent; }
+.bom-detail-panel {
+  display: flex; flex-direction: column; gap: 12px;
+  width: min(420px, 92vw); height: 100%; padding: 20px;
+  background: #fff; box-shadow: -6px 0 24px rgba(0, 0, 0, 0.12);
+  overflow-y: auto;
+}
+.bom-detail-head { display: flex; align-items: flex-start; gap: 12px; }
+.bom-detail-head > div { flex: 1; min-width: 0; }
+.bom-detail-eyebrow { color: #909399; font-size: 12px; }
+.bom-detail-title { color: #303133; font-size: 17px; font-weight: 700; }
+.bom-detail-subtitle { margin-top: 2px; color: #606266; font-size: 12px; }
+.bom-detail-close {
+  flex: 0 0 auto; width: 28px; height: 28px; border: none; border-radius: 6px;
+  background: transparent; color: #909399; cursor: pointer; font-size: 14px;
+}
+.bom-detail-close:hover { background: #f2f3f5; color: #303133; }
+.bom-detail-empty {
+  padding: 14px; border: 1px dashed #dcdfe6; border-radius: 8px;
+  color: #909399; font-size: 13px; text-align: center;
+}
+.bom-detail-rows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.bom-detail-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid #ebeef5; border-radius: 8px; font-size: 13px;
+}
+/* 用户点的是哪一行 —— 抽屉里必须认得出来, 否则一行都定位不到就等于没带 rowId。 */
+.bom-detail-row.is-focused { border-color: #409eff; background: #ecf5ff; }
+.bom-detail-row-name { color: #303133; font-weight: 600; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.bom-detail-row-markers { display: flex; gap: 4px; }
+.bom-detail-marker {
+  display: grid; place-items: center; width: 18px; height: 18px;
+  border-radius: 5px; background: #f2f3f5; color: #606266; font-size: 11px;
+}
+.bom-detail-row-dosage { color: #303133; font-variant-numeric: tabular-nums; }
+.bom-detail-row-hint { grid-column: 1 / -1; color: #909399; font-size: 12px; }
+.bom-detail-scope {
+  padding: 10px; border-radius: 8px; background: #f4f6f8;
+  color: #606266; font-size: 12px; line-height: 1.6;
+}
+.bom-detail-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: auto; }
+.bom-detail-readonly-hint { color: #909399; font-size: 12px; }
 </style>
 
 <!--
