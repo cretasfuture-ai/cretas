@@ -314,8 +314,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     referenceKey.value = '';
   }
 
-  function duplicateRoute(): { path: string; query: Record<string, string> } | null {
-    const tab = activeTab.value;
+  function duplicateRoute(source?: Pick<WorkspaceTab, 'path' | 'fullPath' | 'title'>): { path: string; query: Record<string, string> } | null {
+    const tab = source || activeTab.value;
     if (!tab) return null;
     const taskId = crypto.randomUUID();
     const url = new URL(tab.fullPath, 'https://workspace.local');
@@ -333,6 +333,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     query._taskBaseTitle = baseTitle;
     query._taskLabel = `${baseTitle} ${ordinal}`;
     return { path: tab.path, query };
+  }
+
+  /** Sidebar selections open a fresh instance, using the menu's query, not a previous tab's filters. */
+  function menuRoute(route: WorkspaceRouteSnapshot): string | { path: string; query: Record<string, string> } {
+    if (!tabs.value.some(tab => tab.path === route.path)) return route.fullPath;
+    return duplicateRoute({ path: route.path, fullPath: route.fullPath, title: workspaceRouteTitle(route) })!;
   }
 
   return {
@@ -355,5 +361,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     pinReference,
     closeReference,
     duplicateRoute,
+    menuRoute,
   };
 });

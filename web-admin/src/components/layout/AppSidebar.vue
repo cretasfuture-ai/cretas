@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
+import { useWorkspaceStore } from '@/store/modules/workspace';
 import { get } from '@/api/request';
 import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
@@ -21,6 +22,7 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const taskBadges = useTaskBadgeStore();
+const workspace = useWorkspaceStore();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
@@ -320,7 +322,13 @@ const defaultOpeneds = computed(() => {
 });
 
 function handleSelect(path: string) {
-  router.push(path);
+  const target = router.resolve(path);
+  void router.push(workspace.menuRoute({
+    path: target.path,
+    fullPath: target.fullPath,
+    query: target.query,
+    title: typeof target.meta.title === 'string' ? target.meta.title : undefined,
+  }));
   if (appStore.isMobile) {
     appStore.closeMobileMenu();
   }
