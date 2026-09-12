@@ -907,6 +907,9 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/workspace-r3-readonly'),
+  require('../scenarios/yield-header-r3-readonly'),
+  require('../scenarios/finished-inventory-filter-readonly'),
   require('../scenarios/sales-date-draft-readonly'),
   require('../scenarios/workflow-viewport-readonly'),
   require('../scenarios/visual-unverified-followup-readonly'),
@@ -1952,6 +1955,37 @@ module.exports = {
     inspect: async (page, body) => ({ hasPaymentMethodColumn: /支付方式|付款方式/.test(body), tableCount: await page.locator('.el-table').count() }),
   }),
 };
+
+},
+    "scenarios/finished-inventory-filter-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { step, assertSafe } = require('./visual-unverified-followup-readonly');
+async function inspect(page, _body, ctx) {
+  await step(ctx, () => page.getByText('成品库存', { exact: true }).last().click());
+  const table = page.getByTestId('finished-stock-summary');
+  await table.waitFor({ state: 'visible', timeout: 15000 });
+  await page.locator('.el-loading-mask').first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
+  const rows = table.locator('.el-table__body tr');
+  await rows.first().waitFor({ state: 'visible', timeout: 15000 });
+  const count = await rows.count();
+  const name = (await rows.first().locator('td').first().innerText()).trim();
+  if (!name) throw new Error('No named finished product to verify filtering');
+  const input = page.getByPlaceholder('成品名称 / 产品ID', { exact: true });
+  await step(ctx, () => input.fill(name));
+  const names = await rows.locator('td:first-child').allTextContents();
+  if (!names.length || names.some(v => !v.toLowerCase().includes(name.toLowerCase()))) throw new Error('Finished product filter includes unrelated products');
+  const screenshots = [await ctx.screenshot('finished-filter-matched')];
+  await step(ctx, () => input.fill('NO_MATCH_VISUAL_ACCEPTANCE_7e9c11'));
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="finished-stock-summary"] .el-table__body tr').length === 0);
+  await table.getByText('暂无符合条件的成品库存', { exact: true }).waitFor({ state: 'visible' });
+  screenshots.push(await ctx.screenshot('finished-filter-empty'));
+  await step(ctx, () => input.fill(''));
+  await page.waitForFunction(n => document.querySelectorAll('[data-testid="finished-stock-summary"] .el-table__body tr').length === n, count);
+  assertSafe(ctx);
+  return { initialRows: count, filteredRows: names.length, noMatchEmpty: true, clearRestored: true, screenshots, limits: 'Read-only UI filtering; not an independent inventory/accounting/large-data performance audit', assessment: { result: 'PASS', rootCauseClass: 'none' } };
+}
+module.exports = { id: 'finished-inventory-filter-readonly', defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id: 'finished-inventory-filter-readonly', path: '/warehouse/inventory-query?tab=total', screenshot: true, inspect }) };
 
 },
     "scenarios/label-qc-readonly.js": function(module, exports, require) {
@@ -3200,6 +3234,116 @@ module.exports = { id: 'workflow-viewport-readonly', defaultEnabled: false, run:
     return { states, fit, collapsed, screenshots, assessment: { result: states.every(s=>s.nodesPreserved&&s.geometry)&&collapsed ? 'UNVERIFIED' : 'PARTIAL_DEFECT', rootCauseClass: states.every(s=>s.nodesPreserved&&s.geometry)&&collapsed ? 'tool' : 'frontend' } };
   },
 }) };
+
+},
+    "scenarios/workspace-r3-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { step, assertSafe } = require('./visual-unverified-followup-readonly');
+
+async function inspect(page, _body, ctx) {
+  const screenshots = [];
+  await step(ctx, () => page.goto(`${ctx.baseUrl}/sales/orders/new`));
+  const date = page.getByRole('textbox', { name: '交货日期', exact: true });
+  await date.waitFor({ state: 'visible', timeout: 15000 });
+  const close = page.getByRole('button', { name: '关闭任务', exact: true }).last();
+  const before = await page.locator('.workspace-tab').count();
+  await close.focus(); await step(ctx, () => page.keyboard.press('Space'));
+  await page.waitForFunction(n => document.querySelectorAll('.workspace-tab').length === n - 1, before);
+  await page.waitForFunction(() => document.activeElement?.classList.contains('workspace-tab'), null, { timeout: 5000 });
+  const closeFocus = await page.evaluate(() => document.activeElement?.classList.contains('workspace-tab'));
+  if (!closeFocus) throw new Error('Tab close lost keyboard focus');
+  await step(ctx, () => page.goto(`${ctx.baseUrl}/sales/orders/new`));
+  await date.waitFor({ state: 'visible', timeout: 15000 });
+  await step(ctx, () => date.fill('20300115')); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
+  const savedDate = await date.inputValue();
+  if (savedDate !== '2030-01-15') throw new Error('Draft date was not normalized');
+  await page.setViewportSize({ width: 1024, height: 900 });
+  const tab = page.locator('.workspace-tab-container').filter({ hasText: '销售订单' }).first();
+  const b = await tab.boundingBox();
+  await page.mouse.move(b.x + 25, b.y + 20); await page.mouse.down();
+  await page.mouse.move(b.x + 45, b.y + 75, { steps: 12 });
+  const drop = page.locator('.reference-drop-zone'); await drop.waitFor({ state: 'visible' });
+  const d = await drop.boundingBox(); await page.mouse.move(d.x+d.width/2,d.y+d.height/2,{steps:20}); await step(ctx,()=>page.mouse.up());
+  await page.waitForFunction(() => document.querySelector('.reference-pane iframe')?.contentDocument?.querySelector('.el-table__body tr'), null, { timeout: 15000 });
+  const shield = page.locator('.readonly-shield'); await shield.focus(); await step(ctx, () => page.keyboard.press('ArrowDown'));
+  const frame = page.frames().find(f => f.url().includes('_workspaceReference'));
+  const referenceScroll = await frame.evaluate(() => scrollY);
+  const width = await page.locator('main.app-content').evaluate(e => e.clientWidth);
+  if (width < 750 || referenceScroll <= 0) throw new Error('Narrow reference is not usable or independently scrollable');
+  await page.locator('main.app-content').evaluate(e => { e.scrollTop = (e.scrollHeight-e.clientHeight)/2; });
+  await step(ctx, () => page.getByRole('button', { name: '独立滚动', exact: true }).click());
+  await page.waitForTimeout(100);
+  const ratio = await frame.evaluate(() => scrollY/(document.documentElement.scrollHeight-innerHeight));
+  if (Math.abs(ratio-.5) > .03) throw new Error('Reference synchronization does not follow the primary panel');
+  await page.locator('main.app-content').evaluate(e => { e.scrollTop = e.scrollHeight; });
+  await page.waitForTimeout(100);
+  const bottomRatio = await frame.evaluate(() => scrollY/(document.documentElement.scrollHeight-innerHeight));
+  if (Math.abs(bottomRatio-1) > .03) throw new Error('Reference does not reach the bottom with the primary panel');
+  screenshots.push(await ctx.screenshot('workspace-r3-narrow'));
+  await step(ctx, () => page.getByRole('button', { name: '关闭同屏参考' }).click());
+  await page.waitForTimeout(100);
+  const refFocus = await page.evaluate(() => document.activeElement?.classList.contains('workspace-tab'));
+  if (!refFocus || await date.inputValue() !== savedDate) throw new Error('Reference close lost focus or draft');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  assertSafe(ctx);
+  return { closeFocus, refFocus, referenceScroll, primaryWidth: width, synchronizedRatio: ratio, bottomRatio, draftPreserved: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+}
+module.exports = { id: 'workspace-r3-readonly', defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id: 'workspace-r3-readonly', path: '/sales/orders', screenshot: true, inspect }) };
+
+},
+    "scenarios/yield-header-r3-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { step, assertSafe } = require('./visual-unverified-followup-readonly');
+async function inspect(page, _body, ctx) {
+  await page.locator('.plan-number-link').first().waitFor({ state: 'visible', timeout: 15000 });
+  // Workflow entry always POSTs create-batch, even when the batch already exists.
+  // Only an explicitly disabled Workflow on a currently visible plan is safe here.
+  const candidates = await page.evaluate(async factoryId => {
+    const root = `/api/mobile/${encodeURIComponent(factoryId)}`;
+    const read = async path => { const response = await fetch(path, { credentials: 'same-origin' }); if (!response.ok) throw new Error('Read-only preflight failed'); return response.json(); };
+    const plans = await read(`${root}/production-plans?page=1&size=10&status=UNFINISHED`);
+    if (!plans.success || !Array.isArray(plans.data?.content)) throw new Error('Plan response does not support safe entry selection');
+    const visible = new Set(Array.from(document.querySelectorAll('.plan-number-link')).map(e => e.textContent.trim()));
+    const safe = [];
+    for (const plan of plans.data.content) {
+      if (!plan.productTypeId || !visible.has(plan.planNumber)) continue;
+      const activation = await read(`${root}/product-process-workflows/${encodeURIComponent(plan.productTypeId)}/activation`);
+      if (activation.success && activation.data?.enabled === false) safe.push(plan.planNumber);
+    }
+    return safe;
+  }, ctx.expectedFactoryId);
+  assertSafe(ctx);
+  let entry;
+  for (const number of candidates) {
+    const candidate = page.getByRole('row').filter({ hasText: number }).getByRole('button', { name: '继续录入', exact: true });
+    if (await candidate.count() === 1 && await candidate.isVisible()) { entry = candidate; break; }
+  }
+  if (!entry) return { reason: 'No visible plan with explicitly disabled Workflow; entry may create a production batch and is excluded from read-only acceptance', assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' } };
+  await entry.waitFor({ state: 'visible', timeout: 15000 });
+  await step(ctx, () => entry.click());
+  const table = page.locator('.yield-card-table');
+  const header = table.locator('th').first();
+  await header.waitFor({ state: 'visible', timeout: 15000 });
+  const style = await header.evaluate(e => ({
+    label: e.textContent.trim(), width: e.getBoundingClientRect().width,
+    border: getComputedStyle(e.querySelector('button')).borderWidth,
+    background: getComputedStyle(e.querySelector('button')).backgroundColor,
+  }));
+  if (style.label !== '序号' || style.width < 80 || style.border !== '0px') throw new Error('Yield sequence header does not match the accepted style');
+  const rows = table.locator('.el-table__body tr td:first-child');
+  const values = async () => (await rows.allTextContents()).map(v => Number(v.trim()));
+  await step(ctx, () => header.locator('.sort-caret.ascending').click());
+  const ascending = await values();
+  await step(ctx, () => header.locator('.sort-caret.descending').click());
+  const descending = await values();
+  const sortable = ascending.length > 1 && ascending.every(Number.isFinite);
+  if (sortable && (ascending.some((v,i) => i>0 && v<ascending[i-1]) || descending.some((v,i) => i>0 && v>descending[i-1]))) throw new Error('Yield sequence sorting regressed');
+  assertSafe(ctx);
+  return { ...style, rowCount: ascending.length, sorting: sortable ? 'PASS' : 'UNVERIFIED: fewer than two numeric rows', assessment: { result: 'PASS', rootCauseClass: 'none' } };
+}
+module.exports = { id: 'yield-header-r3-readonly', defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id: 'yield-header-r3-readonly', path: '/production/plans', screenshot: true, inspect }) };
 
 }
   };
