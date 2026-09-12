@@ -56,7 +56,7 @@ watch(
  * 且它以 flush:'pre' 跑在渲染之前 —— 缓存键在同一帧内就是新的, 组件当场重新 mount。
  */
 watch(
-  () => route.fullPath,
+  () => [route.fullPath, authStore.factoryId],
   () => workspace.openRoute({
     fullPath: route.fullPath,
     path: route.path,
@@ -129,7 +129,7 @@ function pinDraggedReference(event: DragEvent): void {
             <component v-if="isReferenceFrame" :is="Component" />
             <WorkspaceRouteCache
               v-else
-                  :key="authStore.factoryId"
+              :key="authStore.factoryId"
               :component="Component"
               :cache-keys="workspaceCacheKeys"
               :active-key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"
