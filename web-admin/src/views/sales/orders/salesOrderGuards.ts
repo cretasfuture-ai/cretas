@@ -218,6 +218,7 @@ export function productionActionState(
   loading = false,
   failed = false,
   forbidden = false,
+  salesOrderId = '',
 ): ActionState {
   if (loading) return { kind: 'loading', label: '核对生产状态', disabled: true, tooltip: '正在核对关联生产计划' };
   // 🔴 2026-08-22: 403 要和「加载失败」分开。
@@ -241,9 +242,21 @@ export function productionActionState(
     const id = lineIdentity(plan);
     if (id) covered.set(id, (covered.get(id) ?? 0) + quantity(plan.sourceDisplayQuantity ?? plan.plannedQuantity));
   });
-  const allCovered = orderItems.length > 0 && orderItems.every((item) => {
+  const allCovered = effectivePlans.length > 0 && orderItems.length > 0 && orderItems.every((item) => {
     const id = String(item.id ?? '');
-    return (covered.get(id) ?? 0) >= quantity(item.quantity);
+    // batch-from-so consumes every remaining line of the matching product in
+    // each extra source order. Its plan retains the PRIMARY order's line ID
+    // and display quantity; neither identifies coverage of this extra order.
+    // Match the explicit order membership too, never just a shared SKU.
+    const mergedCoverage = Boolean(salesOrderId && item.productTypeId) && effectivePlans.some(plan =>
+      String(plan.sourceOrderId ?? '') !== salesOrderId
+      && Boolean(plan.sourceOrderId)
+      && Array.isArray(plan.sourceOrderIds)
+      && plan.sourceOrderIds.includes(salesOrderId)
+      && String(plan.productTypeId ?? '') === String(item.productTypeId),
+    );
+    const remaining = Math.max(0, quantity(item.quantity) - quantity(item.deliveredQuantity));
+    return mergedCoverage || (covered.get(id) ?? 0) >= remaining;
   });
   if (!allCovered) return { kind: 'ready', label: '开始生产', disabled: false, tooltip: '' };
   const active = effectivePlans.find((plan) => ACTIVE_PRODUCTION_STATUSES.has(String(plan.status ?? '').toUpperCase()));
