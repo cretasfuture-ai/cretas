@@ -13,6 +13,7 @@ import AppSidebar from './AppSidebar.vue';
 import AppHeader from './AppHeader.vue';
 import WorkspaceTabs from './WorkspaceTabs.vue';
 import WorkspaceReferencePane from './WorkspaceReferencePane.vue';
+import WorkspaceRouteCache from './WorkspaceRouteCache.vue';
 import InlineCustomerService from '@/components/support/InlineCustomerService.vue';
 import ReturnBanner from './ReturnBanner.vue';
 
@@ -34,6 +35,7 @@ const customerServiceUrl = (import.meta.env.VITE_CUSTOMER_SERVICE_URL as string 
 onMounted(() => appStore.initResponsive());
 
 const isReferenceFrame = computed(() => String(route.query._workspaceReference || '') === '1');
+const workspaceCacheKeys = computed(() => workspace.tabs.map(tab => workspace.cacheKeyFor(tab.key)));
 
 watch(
   () => authStore.factoryId,
@@ -120,17 +122,18 @@ function pinDraggedReference(event: DragEvent): void {
         <main class="app-content" :class="{ 'reference-frame-content': isReferenceFrame }">
           <router-view v-slot="{ Component }">
             <!--
-              键要经过 workspace.cacheKeyFor: 标签被关掉(或被挤掉)之后, 同一个路径会拿到一个
-              新键, keep-alive 因此认不出旧实例 → 重新 mount → onMounted 重新取数。
-              没关过的标签键不变, 标签间来回切换照旧命中缓存(输入不丢)。
-              见 store/modules/workspace.ts 的 cacheKeyFor 注释(2026-08-19 客户实报两条)。
+              每个活标签保留一个缓存实例；关闭或失效后旧缓存连同实例一起释放。
+              cacheKeyFor 保留原有的刷新代次；工厂变化清空整个缓存边界。
+              参考 iframe 没有任务标签，直接渲染自己的只读路由。
             -->
-            <keep-alive :max="10">
-              <component
-                :is="Component"
-                :key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"
-              />
-            </keep-alive>
+            <component v-if="isReferenceFrame" :is="Component" />
+            <WorkspaceRouteCache
+              v-else
+              :key="authStore.factoryId || authStore.currentRole || 'authenticated'"
+              :component="Component"
+              :cache-keys="workspaceCacheKeys"
+              :active-key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"
+            />
           </router-view>
         </main>
         <WorkspaceReferencePane
