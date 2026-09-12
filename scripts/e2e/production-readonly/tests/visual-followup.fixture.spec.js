@@ -22,7 +22,7 @@ test.describe('visual follow-up guarded local fixtures', () => {
       input.onchange=()=>{const bad=input.value==='20260229';error.hidden=!bad;input.setAttribute('aria-invalid',String(bad));if(input.value==='20300115')input.value='2030-01-15';${mode==='date-autosave' ? "fetch('/api/mobile/F006/sales/orders',{method:'POST'}).catch(()=>{});" : ''}};
       document.querySelector('.calendar-picker').onclick=()=>document.querySelector('.el-picker-panel').hidden=false;
       document.querySelector('td').onclick=()=>{input.value='2030-01-15';input.setAttribute('aria-invalid','false');error.hidden=true;document.querySelector('.el-picker-panel').hidden=true;};
-      document.querySelector('#cancel').onclick=()=>document.querySelector('#leave').hidden=false;
+      document.querySelector('#cancel').onclick=()=>setTimeout(()=>document.querySelector('#leave').hidden=false,200);
       document.querySelector('#leave').onclick=()=>location.href='/sales/orders';
       document.querySelector('#save').onclick=()=>fetch('/api/mobile/F006/sales/orders',{method:'POST'});
       </script>`);

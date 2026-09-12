@@ -32,6 +32,12 @@ module.exports = { id: 'sales-date-draft-readonly', defaultEnabled: false, run: 
     await step(ctx, () => input.press('Tab'));
     await step(ctx, () => page.getByRole('button', { name: '取消', exact: true }).first().click({ timeout: 5000 }));
     const leave = page.getByRole('button', { name: '离开', exact: true });
+    // Element Plus mounts the confirmation asynchronously after the click.
+    // A clean draft can navigate directly; wait for either actual outcome.
+    await Promise.race([
+      page.waitForURL('**/sales/orders', { timeout: 8000 }),
+      leave.waitFor({ state: 'visible', timeout: 8000 }),
+    ]);
     if (await leave.isVisible()) await step(ctx, () => leave.click({ timeout: 5000 }));
     await page.waitForURL('**/sales/orders', { timeout: 8000 });
     assertSafe(ctx);
