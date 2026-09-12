@@ -4215,7 +4215,7 @@ function onBomDetailKeydown(event: KeyboardEvent): void {
 
 function keepBomDetailFocus(event: FocusEvent): void {
   const panel = bomDetailPanelRef.value;
-  if (bomDetailVisible.value && panel && !panel.contains(event.target as Node | null)) {
+  if (bomDetailVisible.value && panel && !panel.contains(event.target as globalThis.Node | null)) {
     panel.focus();
   }
 }
