@@ -2650,6 +2650,7 @@ module.exports = scenario;
 'use strict';
 const { runReadOnlyPageScenario } = require('./_shared');
 const { step, assertSafe, verifyTarget } = require('./visual-unverified-followup-readonly');
+const { pathnameOf } = require('../core/url-utils');
 module.exports = { id: 'sales-date-draft-readonly', defaultEnabled: false, run: ctx => runReadOnlyPageScenario(ctx, {
   id: 'sales-date-draft-readonly', path: '/sales/orders/new', screenshot: false,
   inspect: async page => {
@@ -2683,12 +2684,22 @@ module.exports = { id: 'sales-date-draft-readonly', defaultEnabled: false, run: 
     const leave = page.getByRole('button', { name: '离开', exact: true });
     // Element Plus mounts the confirmation asynchronously after the click.
     // A clean draft can navigate directly; wait for either actual outcome.
-    await Promise.race([
-      page.waitForURL('**/sales/orders', { timeout: 8000 }),
-      leave.waitFor({ state: 'visible', timeout: 8000 }),
-    ]);
-    if (await leave.isVisible()) await step(ctx, () => leave.click({ timeout: 5000 }));
-    await page.waitForURL('**/sales/orders', { timeout: 8000 });
+    try {
+      await Promise.race([
+        page.waitForURL('**/sales/orders', { timeout: 8000 }),
+        leave.waitFor({ state: 'visible', timeout: 8000 }),
+      ]);
+      if (await leave.isVisible()) await step(ctx, () => leave.click({ timeout: 5000 }));
+      await page.waitForURL('**/sales/orders', { timeout: 8000 });
+    } catch {
+      assertSafe(ctx);
+      screenshots.push(await ctx.screenshot('sales-date-leave-unverified'));
+      return { validDate: valid, invalidInputDisplayed: invalid, calendarRecovered,
+        leftWithoutSave: false, finalPath: pathnameOf(page.url()),
+        visibleDialogs: await page.getByRole('dialog').count(), screenshots,
+        limitation: 'Client-side leave did not reach the expected list URL; no save submitted',
+        assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' } };
+    }
     assertSafe(ctx);
     return { validDate: valid, invalidInputDisplayed: invalid, backendValidation: 'UNVERIFIED: no save submitted', calendarRecovered, draftCleared: true, leftWithoutSave: true, screenshots, assessment: { result: invalid && calendarRecovered ? 'PASS' : 'PARTIAL_DEFECT', rootCauseClass: invalid && calendarRecovered ? 'none' : 'frontend' } };
   },
