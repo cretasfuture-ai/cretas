@@ -394,7 +394,18 @@ a:hover {
 }
 
 .el-table {
-  --el-table-border-color: var(--border-color-lighter);
+  --el-table-border-color: var(--border-color);
+  /* An inset outline marks the viewport without changing the column geometry. */
+  outline: 1px solid var(--el-table-border-color);
+  outline-offset: -1px;
+}
+
+.el-table th.el-table__cell,
+.el-table td.el-table__cell,
+.el-table:not(.el-table--border) th.el-table__cell,
+.el-table:not(.el-table--border) td.el-table__cell {
+  border-right: 1px solid var(--el-table-border-color);
+  border-bottom: 1px solid var(--el-table-border-color);
 }
 
 /* ============================================================
