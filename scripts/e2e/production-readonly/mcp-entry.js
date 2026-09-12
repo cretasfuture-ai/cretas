@@ -3721,7 +3721,7 @@ const { runReadOnlyPageScenario } = require('./_shared');
 const { step, assertSafe } = require('./visual-unverified-followup-readonly');
 
 function verifyLabels(labels) {
-  const expected = ['新建销售订单', '新建销售订单 2', '新建销售订单 3'];
+  const expected = ['新建销售订单 1', '新建销售订单 2', '新建销售订单 3'];
   if (labels.length !== expected.length || expected.some(label => !labels.includes(label))) {
     throw new Error('Workspace copy labels are missing, repeated or compounded');
   }
@@ -3749,16 +3749,18 @@ async function inspect(page, _body, ctx) {
     await page.waitForFunction(expected => document.querySelector('.workspace-tab-container.active .workspace-tab-title')?.textContent === expected, title);
   }
   await fillDate('20300115', '2030-01-15');
+  const originalKey = await page.locator('.workspace-tab-container.active .workspace-tab').getAttribute('data-workspace-key');
   await copy('新建销售订单 2');
   await fillDate('20300216', '2030-02-16');
   await copy('新建销售订单 3');
   verifyLabels((await labels()).filter(label => label.startsWith('新建销售订单')));
-  await activate('新建销售订单');
+  await activate('新建销售订单 1');
+  if (await page.locator('.workspace-tab-container.active .workspace-tab').getAttribute('data-workspace-key') !== originalKey) throw new Error('Numbering changed the original cache identity');
   if (await date.inputValue() !== '2030-01-15') throw new Error('Original draft lost its date');
   await activate('新建销售订单 2');
   if (await date.inputValue() !== '2030-02-16') throw new Error('Copied draft lost its independent date');
   await step(ctx, () => page.locator('.workspace-tab-container.active .workspace-tab-close').click());
-  await activate('新建销售订单');
+  await activate('新建销售订单 1');
   await copy('新建销售订单 2');
   verifyLabels((await labels()).filter(label => label.startsWith('新建销售订单')));
   if (await date.inputValue() === '2030-02-16') throw new Error('New copy reused the closed draft instance');
@@ -3766,7 +3768,7 @@ async function inspect(page, _body, ctx) {
   for (const width of [1440, 1024]) {
     await page.setViewportSize({ width, height: 900 });
     await tabByTitle('新建销售订单 2').scrollIntoViewIfNeeded();
-    for (const ordinal of [2, 3]) {
+    for (const ordinal of [1, 2, 3]) {
       const tab = tabByTitle(`新建销售订单 ${ordinal}`);
       const number = tab.locator('.workspace-tab-number');
       if (!await number.isVisible()) throw new Error('Workspace ordinal is not visibly separate from truncated text');
@@ -3780,8 +3782,14 @@ async function inspect(page, _body, ctx) {
     await page.waitForTimeout(350);
     screenshots.push(await ctx.screenshot(`workspace-copy-${width}`));
   }
+  for (const ordinal of [3, 2]) {
+    await activate(`新建销售订单 ${ordinal}`);
+    await step(ctx, () => page.locator('.workspace-tab-container.active .workspace-tab-close').click());
+  }
+  await activate('新建销售订单');
+  if (await date.inputValue() !== '2030-01-15') throw new Error('Removing display numbering lost the original draft');
   assertSafe(ctx);
-  return { uniqueLabels: true, ordinalsVisibleAtBothWidths: true, originalDraftPreserved: true, copiedDraftPreserved: true, closedCopyNotReused: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+  return { uniqueLabels: true, originalKeyUnchanged: true, unnumberedAfterCopyCleanup: true, ordinalsVisibleAtBothWidths: true, originalDraftPreserved: true, copiedDraftPreserved: true, closedCopyNotReused: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
 }
 module.exports = { id: 'workspace-duplicate-readonly', defaultEnabled: false, inspect, verifyLabels,
   run: ctx => runReadOnlyPageScenario(ctx, { id: 'workspace-duplicate-readonly', path: '/sales/orders/new', screenshot: true, inspect }) };

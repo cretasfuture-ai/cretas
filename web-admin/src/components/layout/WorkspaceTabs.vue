@@ -9,13 +9,24 @@ const workspace = useWorkspaceStore();
 const tabBar = ref<HTMLElement>();
 
 const canDuplicate = computed(() => Boolean(workspace.activeTab));
-const tabLabels = computed(() => Object.fromEntries(workspace.tabs.map(tab => {
-  const base = new URL(tab.fullPath, 'https://workspace.local').searchParams.get('_taskBaseTitle');
-  const suffix = base && tab.title.startsWith(`${base} `) ? tab.title.slice(base.length) : '';
-  return [tab.key, /^ [1-9]\d*$/.test(suffix)
-    ? { text: base || tab.title, suffix }
-    : { text: tab.title, suffix: '' }] as const;
-})));
+const tabLabels = computed(() => {
+  const entries = workspace.tabs.map(tab => {
+    const base = new URL(tab.fullPath, 'https://workspace.local').searchParams.get('_taskBaseTitle');
+    const candidate = base && tab.title.startsWith(`${base} `) ? tab.title.slice(base.length) : '';
+    return { tab, base, suffix: /^ [1-9]\d*$/.test(candidate) ? candidate : '' };
+  });
+  const copiedGroups = new Set(entries.filter(entry => entry.suffix)
+    .map(({ tab, base }) => JSON.stringify([tab.path, base])));
+  return Object.fromEntries(entries.map(({ tab, base, suffix }) => {
+    // Display-only numbering: changing the original route/key would remount
+    // its cached form and lose the draft. A lone original needs no suffix.
+    const originalSuffix = !base && tab.key === tab.path
+      && copiedGroups.has(JSON.stringify([tab.path, tab.title])) ? ' 1' : '';
+    return [tab.key, suffix
+      ? { text: base || tab.title, suffix }
+      : { text: tab.title, suffix: originalSuffix }] as const;
+  }));
+});
 
 function activate(key: string): void {
   const tab = workspace.tabs.find((item) => item.key === key);
@@ -65,7 +76,7 @@ function onDrop(event: DragEvent, beforeKey: string): void {
         class="workspace-tab-container"
         :class="{ active: workspace.activeKey === tab.key }"
         draggable="true"
-        :title="`${tab.title} · 可拖到右侧作为只读参考`"
+        :title="`${tabLabels[tab.key]?.text || tab.title}${tabLabels[tab.key]?.suffix || ''} · 可拖到右侧作为只读参考`"
         @dragstart="onDragStart($event, tab.key)"
         @dragend="workspace.endDrag"
         @dragover.prevent
