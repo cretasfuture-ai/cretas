@@ -35,7 +35,7 @@ function openRouteCall(): string {
 describe('AppLayout 把路由的业务域接到了标签台账上', () => {
   it('阳性对照: 读到的确实是 AppLayout, 且它调了 openRoute', () => {
     expect(code).toContain('workspace.openRoute');
-    expect(code).toContain('<keep-alive');
+    expect(code).toContain('<WorkspaceRouteCache');
   });
 
   it('openRoute 收到 route.meta.module —— 失效机制全靠它认标签', () => {

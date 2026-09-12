@@ -12,6 +12,8 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/transfer-draft-readonly'),
+  require('../scenarios/workspace-capacity-readonly'),
   require('../scenarios/workspace-duplicate-readonly'),
   require('../scenarios/workspace-r3-readonly'),
   require('../scenarios/yield-header-r3-readonly'),
