@@ -907,6 +907,9 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/sales-date-draft-readonly'),
+  require('../scenarios/workflow-viewport-readonly'),
+  require('../scenarios/visual-unverified-followup-readonly'),
   require('../scenarios/tenant-isolation'),
   require('../scenarios/bom-readonly'),
   require('../scenarios/bom-cost-caliber-readonly'),
@@ -2643,6 +2646,49 @@ const scenario = {
 module.exports = scenario;
 
 },
+    "scenarios/sales-date-draft-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { step, assertSafe, verifyTarget } = require('./visual-unverified-followup-readonly');
+module.exports = { id: 'sales-date-draft-readonly', defaultEnabled: false, run: ctx => runReadOnlyPageScenario(ctx, {
+  id: 'sales-date-draft-readonly', path: '/sales/orders/new', screenshot: false,
+  inspect: async page => {
+    await verifyTarget(page, ctx, '/sales/orders/new', '新建销售订单');
+    const input = page.getByRole('textbox', { name: '交货日期', exact: true });
+    const screenshots = [];
+    await step(ctx, () => input.fill('20300115'));
+    await step(ctx, () => input.press('Tab'));
+    await page.waitForFunction(() => document.querySelector('input[aria-label="交货日期"]')?.value === '2030-01-15', null, { timeout: 5000 });
+    const valid = await input.inputValue();
+    screenshots.push(await ctx.screenshot('sales-date-valid'));
+    await step(ctx, () => input.fill('20260229'));
+    await step(ctx, () => input.press('Tab'));
+    const error = page.getByRole('alert').filter({ hasText: '日期无效' });
+    await error.waitFor({ state: 'visible', timeout: 5000 });
+    const invalid = await input.getAttribute('aria-invalid') === 'true';
+    screenshots.push(await ctx.screenshot('sales-date-invalid'));
+    await step(ctx, () => page.locator('.order-delivery-date .calendar-picker').click({ timeout: 5000 }));
+    const calendar = page.locator('.el-picker-panel:visible');
+    await calendar.waitFor({ state: 'visible', timeout: 5000 });
+    screenshots.push(await ctx.screenshot('sales-date-calendar'));
+    await step(ctx, () => calendar.locator('td.available:not(.disabled):not(.prev-month):not(.next-month)').first().click({ timeout: 5000 }));
+    await error.waitFor({ state: 'hidden', timeout: 5000 });
+    const chosen = await input.inputValue();
+    const calendarRecovered = /^\d{4}-\d{2}-\d{2}$/.test(chosen) && await input.getAttribute('aria-invalid') === 'false';
+    screenshots.push(await ctx.screenshot('sales-date-calendar-selected'));
+    // Clear our only draft field before client-side leave; never invoke save validation.
+    await step(ctx, () => input.fill(''));
+    await step(ctx, () => input.press('Tab'));
+    await step(ctx, () => page.getByRole('button', { name: '取消', exact: true }).first().click({ timeout: 5000 }));
+    const leave = page.getByRole('button', { name: '离开', exact: true });
+    if (await leave.isVisible()) await step(ctx, () => leave.click({ timeout: 5000 }));
+    await page.waitForURL('**/sales/orders', { timeout: 8000 });
+    assertSafe(ctx);
+    return { validDate: valid, invalidInputDisplayed: invalid, backendValidation: 'UNVERIFIED: no save submitted', calendarRecovered, draftCleared: true, leftWithoutSave: true, screenshots, assessment: { result: invalid && calendarRecovered ? 'PASS' : 'PARTIAL_DEFECT', rootCauseClass: invalid && calendarRecovered ? 'none' : 'frontend' } };
+  },
+}) };
+
+},
     "scenarios/sales-order-lifecycle-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -2988,6 +3034,79 @@ async function runVisualCensus(ctx, pages = VISUAL_PAGES) {
 module.exports = { id: 'visual-page-census-readonly', defaultEnabled: false, VISUAL_PAGES, routeIdentity, inspectVisualPage, runVisualCensus, run: ctx => runVisualCensus(ctx) };
 
 },
+    "scenarios/visual-unverified-followup-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { routeIdentity } = require('./visual-page-census-readonly');
+const { createScenarioResult } = require('../core/result-schema');
+
+function assertSafe(ctx) {
+  const state = ctx.mutationGuard.snapshot();
+  if (state.actualBusinessWrites || state.blockedMutationAttempts.length) throw new Error('Read-only guard stopped follow-up');
+}
+async function step(ctx, action) { assertSafe(ctx); const value = await action(); assertSafe(ctx); return value; }
+async function verifyTarget(page, ctx, path, heading, tab) {
+  const identity = routeIdentity(path, ctx.baseUrl, page.url());
+  if (!identity.routeMatches) throw new Error('UNVERIFIED: final route does not match bounded target');
+  const main = page.locator('main.app-content, main[role="main"], main').first();
+  await main.waitFor({ state: 'visible', timeout: 8000 });
+  if (heading) await main.getByText(heading, { exact: true }).first().waitFor({ state: 'visible', timeout: 8000 });
+  if (tab) {
+    const selected = main.locator(`.hub-tabs #tab-${tab}`);
+    if (await selected.getAttribute('aria-selected') !== 'true' || !await main.locator(`#pane-${tab}`).isVisible()) throw new Error('UNVERIFIED: selected tab/panel mismatch');
+  }
+  assertSafe(ctx);
+  return { actualPath: path, routeMatches: true, headingVisible: Boolean(heading), activeTab: tab || null };
+}
+const FOLLOWUP_PAGES = Object.freeze([
+  { id: 'dashboard', path: '/dashboard', heading: '快捷操作' },
+  { id: 'label-qc', path: '/quality/label-qc', heading: '包装标签拍检' },
+  { id: 'pending-queue', path: '/production/kanban?tab=pending-queue', heading: '未完成计划队列', tab: 'pending-queue' },
+  { id: 'restock-board', path: '/production/kanban?tab=restock-board', tab: 'restock-board' },
+  { id: 'bom-achievement', path: '/production/analysis-query?tab=bom-achievement', heading: 'BOM达成率分析', tab: 'bom-achievement' },
+]);
+async function runFollowup(ctx) {
+  const result = createScenarioResult('visual-unverified-followup-readonly');
+  const start = Date.now();
+  for (const target of FOLLOWUP_PAGES) {
+    assertSafe(ctx);
+    const pageResult = await runReadOnlyPageScenario(ctx, { id: `followup-${target.id}`, path: target.path, screenshot: true, inspect: async page => {
+      try {
+        const identity = await verifyTarget(page, ctx, target.path, target.heading, target.tab);
+        // Query-only navigation controls. No row action, export, review or create control.
+        let operation = 'bounded navigation and visible content';
+        if (target.id === 'label-qc') {
+          for (const [label, heading] of [['已完成记录', '已完成记录'], ['待人工审核', '审核队列']]) {
+            const control = page.locator('.el-radio-button').filter({ hasText: label });
+            await step(ctx, () => control.click({ timeout: 5000 }));
+            await page.locator('.queue-toolbar h2').filter({ hasText: heading }).waitFor({ state: 'visible', timeout: 5000 });
+            if (!await control.locator('input[type="radio"]').isChecked()) throw new Error('UNVERIFIED: queue radio did not become checked');
+            assertSafe(ctx);
+          }
+          operation = 'completed queue then pending queue; checked radio and queue heading verified; no review action';
+        } else if (target.tab) {
+          const alternate = target.id === 'bom-achievement' ? 'process-io' : target.tab === 'pending-queue' ? 'restock-board' : 'pending-queue';
+          await step(ctx, () => page.locator(`.hub-tabs #tab-${alternate}`).click({ timeout: 5000 }));
+          await page.locator(`#pane-${alternate}`).waitFor({ state: 'visible', timeout: 8000 });
+          await step(ctx, () => page.locator(`.hub-tabs #tab-${target.tab}`).click({ timeout: 5000 }));
+          await verifyTarget(page, ctx, target.path, target.heading, target.tab);
+          operation = `switch to ${alternate} and return; distinct selected pane verified`;
+        }
+        return { ...identity, operation, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+      } catch (error) { assertSafe(ctx); return { reason: String(error.message), assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' } }; }
+    } });
+    result.pageEvidence.push({ page: target.id, result: pageResult.result, ...Object.assign({}, ...pageResult.pageEvidence) });
+    for (const key of ['apiEvidence','consoleErrors','consoleWarnings','httpErrors','blockedMutationAttempts','screenshots']) result[key].push(...pageResult[key]);
+    result.actualBusinessWrites += pageResult.actualBusinessWrites;
+    if (pageResult.actualBusinessWrites || pageResult.blockedMutationAttempts.length) break;
+  }
+  result.result = result.actualBusinessWrites || result.blockedMutationAttempts.length ? 'TOOL_ERROR' : result.pageEvidence.length === FOLLOWUP_PAGES.length && result.pageEvidence.every(p => p.result === 'PASS') ? 'PASS' : 'UNVERIFIED';
+  result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool'; result.durationMs = Date.now()-start;
+  return result;
+}
+module.exports = { id: 'visual-unverified-followup-readonly', defaultEnabled: false, assertSafe, step, verifyTarget, FOLLOWUP_PAGES, run: runFollowup };
+
+},
     "scenarios/workflow-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -3011,6 +3130,56 @@ module.exports = {
     }),
   }),
 };
+
+},
+    "scenarios/workflow-viewport-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { step, assertSafe, verifyTarget } = require('./visual-unverified-followup-readonly');
+module.exports = { id: 'workflow-viewport-readonly', defaultEnabled: false, run: ctx => runReadOnlyPageScenario(ctx, {
+  id: 'workflow-viewport-readonly', path: '/production/process-hub?tab=product-processes', screenshot: false,
+  inspect: async page => {
+    await verifyTarget(page, ctx, '/production/process-hub?tab=product-processes');
+    const editor = page.locator('.workflow-editor');
+    await editor.waitFor({ state: 'visible', timeout: 15000 });
+    await page.locator('.vue-flow__node').first().waitFor({ state: 'attached', timeout: 15000 });
+    const nodeIds = () => page.locator('.vue-flow__node').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-id')).sort());
+    const before = await nodeIds(); const states = []; const screenshots = [];
+    const enter = page.getByTestId('workflow-immersive-enter');
+    if (await enter.isVisible()) await step(ctx, () => enter.click({ timeout: 5000 }));
+    const capture = async (state, fullscreen) => {
+      // Cover the editor's 2500ms debounced autosave after every layout action.
+      await page.waitForTimeout(3100); assertSafe(ctx);
+      const box = await editor.boundingBox();
+      const viewport = page.viewportSize();
+      const parentTabs = await page.locator('.process-config-hub > .hub-tabs > .el-tabs__header').isVisible();
+      const ids = await nodeIds();
+      const nodesPreserved = JSON.stringify(ids) === JSON.stringify(before);
+      const geometry = fullscreen ? Boolean(box && Math.abs(box.x)<2 && Math.abs(box.y)<2 && Math.abs(box.width-viewport.width)<2 && Math.abs(box.height-viewport.height)<2 && !parentTabs) : parentTabs;
+      states.push({ state, fullscreen, box, parentTabs, nodesPreserved, geometry });
+      screenshots.push(await ctx.screenshot(`workflow-${state}`));
+    };
+    await capture('fullscreen', true);
+    // Viewport-change-end can autosave when editable. Fit safety is not established for production.
+    const fit = { result: 'UNVERIFIED', reason: 'Editable viewport changes have an autosave path; local fit did not reproduce a write, but production fit remains untested.' };
+    const dock = page.locator('.workflow-ai-dock');
+    const collapse = dock.getByText('收起', { exact: true });
+    let collapsed = false;
+    if (await collapse.isVisible()) {
+      const beforeHeight = (await dock.boundingBox()).height;
+      await step(ctx, () => collapse.click({ timeout: 5000 }));
+      await page.waitForTimeout(450);
+      collapsed = (await dock.boundingBox()).height < beforeHeight;
+    }
+    await capture('ai-collapsed', true);
+    await step(ctx, () => page.getByTestId('workflow-immersive-exit').click({ timeout: 5000 }));
+    await capture('exit', false);
+    await step(ctx, () => enter.click({ timeout: 5000 }));
+    await capture('reenter', true);
+    assertSafe(ctx);
+    return { states, fit, collapsed, screenshots, assessment: { result: states.every(s=>s.nodesPreserved&&s.geometry)&&collapsed ? 'UNVERIFIED' : 'PARTIAL_DEFECT', rootCauseClass: states.every(s=>s.nodesPreserved&&s.geometry)&&collapsed ? 'tool' : 'frontend' } };
+  },
+}) };
 
 }
   };
