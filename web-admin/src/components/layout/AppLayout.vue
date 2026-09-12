@@ -129,7 +129,7 @@ function pinDraggedReference(event: DragEvent): void {
             <component v-if="isReferenceFrame" :is="Component" />
             <WorkspaceRouteCache
               v-else
-              :key="authStore.factoryId || authStore.currentRole || 'authenticated'"
+                  :key="authStore.factoryId"
               :component="Component"
               :cache-keys="workspaceCacheKeys"
               :active-key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"

@@ -18,3 +18,5 @@ Validation before release:
 Tradeoff: retaining additional dirty tabs necessarily retains their page instances. This preserves the store's existing dirty-tab policy; it does not introduce unbounded closed-cache accumulation. We measured live-instance counts, not heap usage or a latency improvement. Browser reload recovery, all business fields/modules, and backend persistence remain outside this proof; main72 must not be closed as an all-module claim.
 
 Evidence root: `C:/Users/Steve/cretas-visual-fixes-20260912-r3/`; local capacity `.playwright-mcp/workspace-r7-capacity-local/`. Implementation scope releases on merge; deployment/production receipts remain separate facts.
+
+CI 首轮4822通过/1失败/5原跳过：AppLayout缓存key的角色回退触发branchReachability未知分支47>46。key改为现有watch使用的factoryId，未改权限门禁预算；对应门禁及缓存测试24通过。补入transfer-draft-readonly：本地真实Vue七字段往返3次保留、关闭草稿，错误/拦截/业务写0；harness79通过。scope扩展仅canonical调拨草稿场景和测试，无调拨产品改动。
