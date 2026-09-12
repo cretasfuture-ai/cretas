@@ -684,11 +684,11 @@ function goToPlanList() {
 
 // Row overdue / urgent highlighting
 :deep(.row-overdue) {
-  background-color: rgba(245, 108, 108, 0.08) !important;
+  background-color: var(--el-color-danger-light-9, #fef0f0) !important;
 }
 
 :deep(.row-urgent) {
-  background-color: rgba(230, 162, 60, 0.08) !important;
+  background-color: var(--el-color-warning-light-9, #fdf6ec) !important;
 }
 
 .date-cell {

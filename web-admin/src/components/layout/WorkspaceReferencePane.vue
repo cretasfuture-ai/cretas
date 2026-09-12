@@ -39,8 +39,11 @@ function scrollWithKeyboard(event: KeyboardEvent): void {
 
 function syncScroll(event?: Event): void {
   if (!synchronized.value) return;
+  const main = document.querySelector('main.app-content');
+  const mainScrolls = main && main.scrollHeight > main.clientHeight
+    && ['auto', 'scroll'].includes(getComputedStyle(main).overflowY);
   const source = event?.target instanceof Element && event.target.classList.contains('app-content')
-    ? event.target : document.scrollingElement;
+    ? event.target : mainScrolls ? main : document.scrollingElement;
   const target = referenceScroller();
   if (!source || !target) return;
   const range = source.scrollHeight - source.clientHeight;
@@ -67,7 +70,7 @@ const referenceUrl = computed(() => {
     <header>
       <div>
         <strong>同屏参考 · {{ tab.title }}</strong>
-        <span>只读展示，左侧当前任务不会被替换</span>
+        <span>只读展示，当前任务不会被替换</span>
       </div>
       <el-button text :aria-pressed="synchronized" @click="toggleSync">{{ synchronized ? '同步滚动' : '独立滚动' }}</el-button>
       <el-button :icon="Close" text aria-label="关闭同屏参考" @click="$emit('close')" />
@@ -112,6 +115,8 @@ iframe { width: 100%; height: 100%; border: 0; background: #f4f6f9; }
 .readonly-shield:focus-visible { outline: 2px solid #1b65a8; outline-offset: -2px; }
 
 @media (max-width: 1100px) {
-  .reference-pane { width: 44%; min-width: 320px; }
+  .reference-pane { position: relative; top: auto; width: 100%; min-width: 0; height: 40dvh; min-height: 240px; border-left: 0; border-top: 1px solid #dfe7f1; box-shadow: none; }
+  header { flex-wrap: wrap; gap: 8px; }
+  header > div { flex: 1; min-width: 160px; }
 }
 </style>

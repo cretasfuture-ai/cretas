@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Plus } from '@element-plus/icons-vue';
 import { useWorkspaceStore } from '@/store/modules/workspace';
 
 const router = useRouter();
 const workspace = useWorkspaceStore();
+const tabBar = ref<HTMLElement>();
 
 const canDuplicate = computed(() => Boolean(workspace.activeTab));
 
@@ -14,17 +15,20 @@ function activate(key: string): void {
   if (tab) void router.push(tab.fullPath);
 }
 
-function close(event: MouseEvent, key: string): void {
-  event.stopPropagation();
-  const wasActive = workspace.activeKey === key;
-  const fallback = workspace.closeTab(key);
-  if (wasActive && fallback) void router.push(fallback.fullPath);
+async function focusActive(): Promise<void> {
+  await nextTick();
+  const buttons = tabBar.value?.querySelectorAll<HTMLButtonElement>('.workspace-tab');
+  Array.from(buttons || []).find(button => button.dataset.workspaceKey === workspace.activeKey)?.focus({ preventScroll: true });
 }
 
-function closeFromKeyboard(event: KeyboardEvent, key: string): void {
-  event.preventDefault();
-  close(event as unknown as MouseEvent, key);
+async function close(key: string): Promise<void> {
+  const wasActive = workspace.activeKey === key;
+  const fallback = workspace.closeTab(key);
+  if (wasActive && fallback) await router.push(fallback.fullPath);
+  await focusActive();
 }
+
+defineExpose({ focusActive });
 
 function duplicateCurrent(): void {
   const target = workspace.duplicateRoute();
@@ -46,34 +50,33 @@ function onDrop(event: DragEvent, beforeKey: string): void {
 </script>
 
 <template>
-  <nav class="workspace-tabs" aria-label="已打开任务">
+  <nav ref="tabBar" class="workspace-tabs" aria-label="已打开任务">
     <div class="workspace-tab-scroll">
-      <button
+      <div
         v-for="tab in workspace.tabs"
         :key="tab.key"
-        type="button"
-        class="workspace-tab"
+        class="workspace-tab-container"
         :class="{ active: workspace.activeKey === tab.key }"
         draggable="true"
         :title="`${tab.title} · 可拖到右侧作为只读参考`"
-        @click="activate(tab.key)"
         @dragstart="onDragStart($event, tab.key)"
         @dragend="workspace.endDrag"
         @dragover.prevent
         @drop="onDrop($event, tab.key)"
       >
+        <button type="button" class="workspace-tab" :data-workspace-key="tab.key" @click="activate(tab.key)">
         <span v-if="tab.dirty" class="task-dot" aria-label="未完成任务" />
         <span class="workspace-tab-title">{{ tab.title }}</span>
-        <span
+        </button>
+        <button
           v-if="workspace.tabs.length > 1"
           class="workspace-tab-close"
-          role="button"
+          type="button"
           aria-label="关闭任务"
-          tabindex="0"
-          @click="close($event, tab.key)"
-          @keydown.enter="closeFromKeyboard($event, tab.key)"
-        >×</span>
-      </button>
+          @click.stop="close(tab.key)"
+          @dragstart.stop.prevent
+        >×</button>
+      </div>
       <el-tooltip content="复制当前页面为一个新任务；打开其他页面请直接使用左侧菜单" placement="bottom">
         <el-button
           class="new-task-button"
@@ -127,7 +130,7 @@ function onDrop(event: DragEvent, beforeKey: string): void {
   scrollbar-width: thin;
 }
 
-.workspace-tab {
+.workspace-tab-container {
   min-width: 112px;
   max-width: 210px;
   min-height: 46px;
@@ -144,12 +147,14 @@ function onDrop(event: DragEvent, beforeKey: string): void {
   white-space: nowrap;
 }
 
-.workspace-tab:hover { background: rgba(255, 255, 255, 0.6); color: #1b65a8; }
-.workspace-tab.active { color: #1b65a8; background: #fff; border-bottom-color: #1b65a8; font-weight: 600; }
-.workspace-tab:active { cursor: grabbing; }
+.workspace-tab-container:hover { background: rgba(255, 255, 255, 0.6); color: #1b65a8; }
+.workspace-tab-container.active { color: #1b65a8; background: #fff; border-bottom-color: #1b65a8; font-weight: 600; }
+.workspace-tab-container:active { cursor: grabbing; }
+.workspace-tab { min-width: 0; min-height: 42px; flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: inherit; }
+.workspace-tab:focus-visible, .workspace-tab-close:focus-visible { outline: 2px solid #1b65a8; outline-offset: -2px; }
 .workspace-tab-title { overflow: hidden; text-overflow: ellipsis; }
 .task-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #d89222; box-shadow: 0 0 0 3px rgba(216, 146, 34, 0.12); }
-.workspace-tab-close { width: 24px; height: 24px; border-radius: 6px; display: inline-grid; place-items: center; color: #8a98aa; font-size: 17px; font-weight: 400; }
+.workspace-tab-close { width: 24px; height: 24px; flex: 0 0 24px; padding: 0; border: 0; background: transparent; border-radius: 6px; display: inline-grid; place-items: center; color: #8a98aa; font-size: 17px; font-weight: 400; cursor: pointer; }
 .workspace-tab-close:hover { color: #d84a4a; background: #fff0f0; }
 .new-task-button { align-self: center; margin: 6px 8px; min-width: 34px; }
 .workspace-hint { flex: 0 0 auto; color: #8795a8; font-size: 12px; }

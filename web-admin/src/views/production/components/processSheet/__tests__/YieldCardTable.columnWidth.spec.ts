@@ -28,9 +28,9 @@ const COLUMN_ORDER = [
   'stepYieldRate', 'cumulativeYieldRate', 'status',
 ] as const;
 
-/** 出成率总览默认列宽 —— 与改造前逐像素一致 (min-width 那三列由 min-width 决定)。 */
+/** 出成率总览默认列宽，序号列需要容纳完整标题和排序箭头。 */
 const DEFAULT_RENDERED_WIDTHS: Record<string, string> = {
-  processOrder: '58', processDate: '118', processName: '180', batchNumber: '230',
+  processOrder: '80', processDate: '118', processName: '180', batchNumber: '230',
   sourceBatchNumber: '210', feedQuantity: '110', sourceConsumedRatio: '110',
   inheritedRawEquivalentQuantity: '132', produced: '100', used: '100', remaining: '100',
   rowTotalCost: '116', unitPrice: '105', stepYieldRate: '132', cumulativeYieldRate: '122',
@@ -67,13 +67,22 @@ describe('YieldCardTable 列宽记忆', () => {
     localStorage.clear();
   });
 
-  it('没存过时每一列都保持改造前的默认宽度', async () => {
+  it('没存过时每一列使用默认宽度', async () => {
     const wrapper = mountTable();
     await flushPromises();
 
     expect(renderedWidths(wrapper)).toEqual(DEFAULT_RENDERED_WIDTHS);
     // 没记忆就不该出现「恢复默认列宽」入口
     expect(wrapper.find('.yield-card-reset-widths').exists()).toBe(false);
+  });
+
+  it('旧的窄序号列记忆不挤掉完整标题，其他列记忆仍保留', async () => {
+    localStorage.setItem(STORAGE_KEY_F006, JSON.stringify({ processOrder: 58, batchNumber: 444 }));
+    const wrapper = mountTable();
+    await flushPromises();
+    expect(renderedWidths(wrapper).processOrder).toBe('80');
+    expect(renderedWidths(wrapper).batchNumber).toBe('444');
+    expect(wrapper.find('thead').text()).toContain('序号');
   });
 
   it('存过的列宽在挂载时被读回来, 其余列不受影响 (客户: 刷新就没了)', async () => {

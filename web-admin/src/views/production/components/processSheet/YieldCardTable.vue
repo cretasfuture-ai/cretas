@@ -23,11 +23,11 @@ const props = defineProps<{
 
 /**
  * 列宽记忆 (客户 Sheet Row 13: 调好的列宽刷新就没了)。
- * defaults 就是这张表原本写死的宽度 —— 用户没拖过时渲染结果与以前逐像素一致;
+ * defaults 是默认列宽，序号列至少 80px，容纳完整标题与排序箭头；
  * min-width 那几列刻意不入 defaults, 让 `min-width` 继续管自适应。
  */
 const YIELD_CARD_DEFAULT_COLUMN_WIDTHS = {
-  processOrder: 58,
+  processOrder: 80,
   processDate: 118,
   feedQuantity: 110,
   sourceConsumedRatio: 110,
@@ -323,7 +323,7 @@ defineExpose({ refresh });
     :row-class-name="() => ''"
     @header-dragend="handleHeaderDragend"
   >
-    <el-table-column prop="processOrder" label="序" :width="columnWidth('processOrder')" align="center" sortable :render-header="sortableHeader" />
+    <el-table-column prop="processOrder" label="序号" :width="Math.max(80, columnWidth('processOrder') || 80)" align="center" sortable :render-header="sortableHeader" />
     <el-table-column prop="processDate" label="流程日期" :width="columnWidth('processDate')" align="center" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtDate(row.processDate) }}
@@ -426,7 +426,7 @@ defineExpose({ refresh });
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .yield-card-warnings {
   display: flex;
   flex-direction: column;
