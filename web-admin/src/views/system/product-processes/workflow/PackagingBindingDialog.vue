@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   bomRecipeApi,
@@ -60,9 +60,11 @@ const props = withDefaults(defineProps<{
   /** 由调用方按 `parentKind === 'RECIPE_ITEM' && parentRecipeItemId === row.id` 预先过滤好传入
    *  (与 SeasoningBindingDialog 的 substituteRelations 契约一致)。 */
   substituteRelations?: BomItemSubstituteView[];
+  canWrite?: boolean;
 }>(), {
   row: null,
   substituteRelations: () => [],
+  canWrite: true,
 });
 
 const emit = defineEmits<{
@@ -82,6 +84,8 @@ const form = reactive({
   substituteFactors: {} as Record<string, number | null>,
 });
 const saving = reactive({ value: false });
+const formRef = ref<{ validate: () => Promise<boolean> } | null>(null);
+let operationGeneration = 0;
 const packagingSpecs = ref<ProductPackagingSpecView[]>([]);
 const packagingSpecsLoading = ref(false);
 const packagingSpecsError = ref('');
@@ -232,12 +236,30 @@ watch(() => [props.modelValue, props.row, props.productTypeId] as const, () => {
   void loadPackagingSpecs();
 }, { immediate: true });
 
+function invalidatePendingOperation(): void {
+  operationGeneration += 1;
+}
+
+function isCurrentOperation(generation: number): boolean {
+  return props.canWrite && props.modelValue && generation === operationGeneration;
+}
+
+watch(() => props.canWrite, (canWrite) => {
+  if (!canWrite) invalidatePendingOperation();
+}, { flush: 'sync' });
+watch(() => props.modelValue, (modelValue) => {
+  if (!modelValue) invalidatePendingOperation();
+}, { flush: 'sync' });
+onBeforeUnmount(invalidatePendingOperation);
+
 function isRevisionConflict(error: unknown): boolean {
   const candidate = error as { response?: { status?: number }; status?: number };
   return candidate?.response?.status === 409 || candidate?.status === 409;
 }
 
 async function submit() {
+  if (!props.canWrite || !props.modelValue) return;
+  const generation = operationGeneration;
   if (!form.materialTypeId) return ElMessage.warning('请选择包材');
   if (!form.packagingRole) return ElMessage.warning('请选择包材业务角色');
   if (packagingSpecsLoading.value || packagingSpecsError.value) {
@@ -259,6 +281,14 @@ async function submit() {
     return !Number.isFinite(factor) || factor <= 0;
   });
   if (missingFactor) return ElMessage.warning('不同单位的替代包材必须填写大于0的明确等价换算系数');
+
+  try {
+    if (formRef.value && !(await formRef.value.validate())) return;
+  } catch {
+    ElMessage.warning('请检查表单填写内容');
+    return;
+  }
+  if (!isCurrentOperation(generation)) return;
 
   saving.value = true;
   try {
@@ -296,6 +326,7 @@ async function submit() {
     } else {
       await bomRecipeApi.addItem(props.factoryId, props.recipeId, payload);
     }
+    if (!isCurrentOperation(generation)) return;
     emit('update:modelValue', false);
     emit('saved');
   } catch (error: unknown) {
@@ -309,6 +340,11 @@ async function submit() {
   } finally {
     saving.value = false;
   }
+}
+
+function close(): void {
+  invalidatePendingOperation();
+  emit('update:modelValue', false);
 }
 </script>
 
@@ -329,9 +365,9 @@ async function submit() {
     size="640px"
     direction="rtl"
     append-to-body
-    @close="emit('update:modelValue', false)"
+    @close="close"
   >
-    <el-form label-width="130px" data-testid="packaging-binding-dialog">
+    <el-form ref="formRef" :model="form" label-width="130px" data-testid="packaging-binding-dialog">
       <el-form-item label="投入产出">
         <el-input data-testid="locked-output-context" :model-value="outputName" disabled />
         <div class="form-tip">产出由入口锁定，保存只影响该产出的包材。</div>
@@ -482,8 +518,8 @@ async function submit() {
       />
     </el-form>
     <template #footer>
-      <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" :loading="saving.value" @click="submit">保存包材</el-button>
+      <el-button @click="close">取消</el-button>
+      <el-button type="primary" :loading="saving.value" :disabled="!canWrite" @click="submit">保存包材</el-button>
     </template>
   </el-drawer>
 </template>

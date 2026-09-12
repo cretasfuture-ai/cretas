@@ -187,11 +187,198 @@ interface OverlayEditorVm {
   openAuxiliaryEditor: (processNodeId: string, rowId?: string) => Promise<void>;
   openPackagingEditor: (outputNodeId: string, rowId?: string) => Promise<void>;
   beginEditingBomDetail: () => Promise<void>;
+  openQuickEditSku: (id: string) => void;
+  openQuickEditProcess: (id: string) => void;
+  saveQuickEditSku: () => Promise<void>;
+  saveQuickEditProcess: () => Promise<void>;
+  quickEditForm: { name: string; unit: string };
+  processEditForm: { processName: string };
+  skuOptions: unknown[];
+  workProcessOptions: unknown[];
+  dirty: boolean;
 }
 
 const SKU_OPTIONS = [
   { id: 'PT-PIG-400', name: '五香去骨猪蹄 400g', unit: 'kg', productCategory: 'FINISHED_PRODUCT' },
 ];
+
+describe('catalog access follows readonly and writable modes', () => {
+  it.each([
+    ['sku', 'factory'], ['sku', 'permission'], ['process', 'factory'], ['process', 'permission'],
+  ] as const)('a late %s save response cannot change the current graph after %s changes', async (kind, change) => {
+    const { wrapper, vm, outputNodeId, processNodeId } = await readonlyEditorWithBomRows();
+    await wrapper.setProps({ canWrite: true });
+    await flushPromises();
+    const pending = deferred<{ success: boolean; data: Record<string, unknown> }>();
+    const api = kind === 'sku' ? apiMocks.put : apiMocks.updateWorkProcess;
+    api.mockReturnValue(pending.promise);
+    if (kind === 'sku') {
+      vm.openQuickEditSku(outputNodeId);
+      vm.quickEditForm.name = 'late SKU';
+    } else {
+      vm.openQuickEditProcess(processNodeId);
+      vm.processEditForm.processName = 'late process';
+    }
+    const saving = kind === 'sku' ? vm.saveQuickEditSku() : vm.saveQuickEditProcess();
+    await flushPromises();
+    expect(api).toHaveBeenCalledTimes(1);
+    if (change === 'factory') await wrapper.setProps({ factoryId: 'F007' });
+    else {
+      await wrapper.setProps({ canWrite: false });
+      await wrapper.setProps({ canWrite: true });
+    }
+    await flushPromises();
+    vm.dirty = false;
+    const before = JSON.stringify([vm.flowNodes, vm.skuOptions, vm.workProcessOptions]);
+    apiMocks.saveProductProcessWorkflowDraft.mockClear();
+    pending.resolve({ success: true, data: { id: 'WP-PACK', processName: 'late process', name: 'late SKU' } });
+    await saving;
+    await flushPromises();
+    expect(JSON.stringify([vm.flowNodes, vm.skuOptions, vm.workProcessOptions])).toBe(before);
+    expect(vm.dirty).toBe(false);
+    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(['sku', 'process'] as const)('a current %s save still updates the intended node', async (kind) => {
+    const { wrapper, vm, outputNodeId, processNodeId } = await readonlyEditorWithBomRows();
+    await wrapper.setProps({ canWrite: true });
+    await flushPromises();
+    vm.dirty = false;
+    if (kind === 'sku') {
+      apiMocks.put.mockResolvedValue({ success: true, data: {} });
+      vm.openQuickEditSku(outputNodeId);
+      vm.quickEditForm.name = 'updated SKU';
+      await vm.saveQuickEditSku();
+      expect(vm.flowNodes.find(node => node.id === outputNodeId)?.data.name).toBe('updated SKU');
+    } else {
+      apiMocks.updateWorkProcess.mockResolvedValue({ success: true, data: { id: 'WP-PACK', processName: 'updated process', processCategory: 'PACKING' } });
+      vm.openQuickEditProcess(processNodeId);
+      vm.processEditForm.processName = 'updated process';
+      await vm.saveQuickEditProcess();
+      expect(vm.flowNodes.find(node => node.id === processNodeId)?.data.processName).toBe('updated process');
+    }
+    expect(vm.dirty).toBe(true);
+  });
+
+  function persistEnsuredDraftInFixture(): void {
+    const ensure = bomApiMocks.ensureDraft.getMockImplementation()!;
+    const versions = bomApiMocks.getVersionsByProduct.getMockImplementation()!;
+    bomApiMocks.ensureDraft.mockImplementation(async (...args) => {
+      const draft = await ensure(...args);
+      const response = await versions();
+      bomApiMocks.getVersionsByProduct.mockResolvedValue({ ...response,
+        data: response.data.map((recipe: { id: string; status: string }) => recipe.id === draft.id
+          ? { ...recipe, status: 'DRAFT' } : recipe),
+      });
+      return { success: true, data: draft };
+    });
+  }
+
+  it.each(['product', 'factory'] as const)('changing %s identity closes both existing write dialogs', async (change) => {
+    persistEnsuredDraftInFixture();
+    const { wrapper, vm, processNodeId, outputNodeId } = await readonlyEditorWithBomRows();
+    await wrapper.setProps({ canWrite: true });
+    await flushPromises();
+    await vm.openAuxiliaryEditor(processNodeId, 'AUX-ROW-1');
+    await vm.openPackagingEditor(outputNodeId, 'PACK-ROW-1');
+    expect(vm.auxDialogVisible).toBe(true);
+    expect(vm.packagingDialogVisible).toBe(true);
+    bomApiMocks.ensureDraft.mockClear();
+    const previousDefinition = await apiMocks.getProductProcessWorkflow();
+    const nextDefinition = deferred<typeof previousDefinition>();
+    apiMocks.getProductProcessWorkflow.mockReturnValue(nextDefinition.promise);
+    await wrapper.setProps(change === 'product' ? { productTypeId: 'PT-B' } : { factoryId: 'F007' });
+    await flushPromises();
+    expect(vm.auxDialogVisible).toBe(false);
+    expect(vm.packagingDialogVisible).toBe(false);
+    expect(wrapper.findComponent({ name: 'SeasoningBindingDialog' }).props('canWrite')).toBe(false);
+    expect(wrapper.findComponent({ name: 'PackagingBindingDialog' }).props('canWrite')).toBe(false);
+    await vm.openAuxiliaryEditor(processNodeId, 'AUX-ROW-1');
+    await vm.openPackagingEditor(outputNodeId, 'PACK-ROW-1');
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+    nextDefinition.resolve({ ...previousDefinition, data: { ...previousDefinition.data,
+      factoryId: change === 'factory' ? 'F007' : 'F006',
+      productTypeId: change === 'product' ? 'PT-B' : 'PT-PIG-400',
+    } });
+    await flushPromises();
+    expect(vm.auxDialogVisible).toBe(false);
+    expect(vm.packagingDialogVisible).toBe(false);
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(['auxiliary', 'packaging'] as const)('revoking write access cancels delayed %s entry even after access returns', async (kind) => {
+    persistEnsuredDraftInFixture();
+    const { wrapper, vm, processNodeId, outputNodeId } = await readonlyEditorWithBomRows();
+    await wrapper.setProps({ canWrite: true });
+    await flushPromises();
+    const pending = deferred<{ success: boolean; data: never[] }>();
+    const prior = apiMocks.get.getMockImplementation()!;
+    apiMocks.get.mockImplementation((url: string) => url.endsWith('/raw-material-types/active') ? pending.promise : prior(url));
+    const callsBefore = apiMocks.get.mock.calls.length;
+    const opening = kind === 'auxiliary'
+      ? vm.openAuxiliaryEditor(processNodeId, 'AUX-ROW-1')
+      : vm.openPackagingEditor(outputNodeId, 'PACK-ROW-1');
+    await flushPromises();
+    expect(apiMocks.get.mock.calls.slice(callsBefore)).toContainEqual(['/F006/raw-material-types/active']);
+    await wrapper.setProps({ canWrite: false });
+    await wrapper.setProps({ canWrite: true });
+    pending.resolve({ success: true, data: [] });
+    await opening;
+    await flushPromises();
+    expect(vm.auxDialogVisible).toBe(false);
+    expect(vm.packagingDialogVisible).toBe(false);
+    expect(bomApiMocks.ensureDraft).not.toHaveBeenCalled();
+    // A new action after restored access remains usable.
+    if (kind === 'auxiliary') await vm.openAuxiliaryEditor(processNodeId, 'AUX-ROW-1');
+    else await vm.openPackagingEditor(outputNodeId, 'PACK-ROW-1');
+    expect(bomApiMocks.ensureDraft).toHaveBeenCalled();
+    expect(kind === 'auxiliary' ? vm.auxDialogVisible : vm.packagingDialogVisible).toBe(true);
+    await wrapper.setProps({ canWrite: false });
+    expect(vm.auxDialogVisible).toBe(false);
+    expect(vm.packagingDialogVisible).toBe(false);
+  });
+
+  it('loads readonly units and rows without requesting the write-only taxonomy', async () => {
+    const wrapper = shallowMount(ProductProcessWorkflowEditor, {
+      props: { factoryId: 'F006', productTypeId: 'PT-PIG-400', productName: '猪蹄', canWrite: false },
+    });
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    expect(apiMocks.get.mock.calls.some(([url]) => String(url).endsWith('/material-segments/tree'))).toBe(false);
+    expect(apiMocks.get).toHaveBeenCalledWith('/F006/raw-material-types/active');
+    const state = wrapper.vm as unknown as { loadedCatalogFactoryId: string | null; canEdit: boolean };
+    expect(state.loadedCatalogFactoryId).toBe('F006');
+    expect(state.canEdit).toBe(false);
+
+    const pending = deferred<{ success: boolean; data: never[] }>();
+    const prior = apiMocks.get.getMockImplementation()!;
+    apiMocks.get.mockImplementation((url: string) => url.endsWith('/material-segments/tree') ? pending.promise : prior(url));
+    await wrapper.setProps({ canWrite: true });
+    await flushPromises();
+    expect(apiMocks.get).toHaveBeenCalledWith('/F006/material-segments/tree');
+    expect(state.canEdit).toBe(false);
+    pending.resolve({ success: true, data: [] });
+    await flushPromises();
+    expect(state.canEdit).toBe(true);
+  });
+
+  it('keeps editing disabled when the required writable taxonomy fails', async () => {
+    const prior = apiMocks.get.getMockImplementation()!;
+    apiMocks.get.mockImplementation((url: string) => url.endsWith('/material-segments/tree')
+      ? Promise.reject(new Error('taxonomy unavailable')) : prior(url));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined);
+    const wrapper = shallowMount(ProductProcessWorkflowEditor, {
+      props: { factoryId: 'F006', productTypeId: 'PT-PIG-400', productName: '猪蹄', canWrite: true },
+    });
+    mountedWrappers.push(wrapper);
+    await flushPromises();
+    const state = wrapper.vm as unknown as { loadedCatalogFactoryId: string | null; canEdit: boolean };
+    expect(state.loadedCatalogFactoryId).toBeNull();
+    expect(state.canEdit).toBe(false);
+    expect(ElMessage.error).toHaveBeenCalled();
+  });
+});
 
 const mountedWrappers: VueWrapper[] = [];
 const bomFixture = { processNodeId: '' };

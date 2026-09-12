@@ -7,6 +7,7 @@ import type { BomItemSubstituteView, BomRecipeItemView } from '@/api/bom';
 const addItem = vi.fn();
 const updateItem = vi.fn();
 const getProductPackagingSpecs = vi.fn();
+const validateForm = vi.fn(() => Promise.resolve(true));
 
 vi.mock('@/api/bom', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/api/bom')>();
@@ -59,6 +60,14 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
       stubs: {
         teleport: true,
         transition: false,
+        ElForm: {
+          name: 'ElForm',
+          setup(_: unknown, { expose }: { expose: (value: unknown) => void }) {
+            expose({ validate: (...args: unknown[]) => validateForm(...args) });
+            return {};
+          },
+          template: '<form><slot /></form>',
+        },
         // Element Plus 2.13 + jsdom can recursively update ElSelect while a
         // test emits v-model directly. These contract tests only need the
         // component boundary, not its popup implementation.
@@ -83,6 +92,12 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
       },
     },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
 
 function selectMaterial(wrapper: ReturnType<typeof mountDialog>, materialId: string) {
@@ -125,6 +140,7 @@ function substitute(overrides: Partial<BomItemSubstituteView>): BomItemSubstitut
 describe('包材编辑弹窗', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    validateForm.mockResolvedValue(true);
     addItem.mockResolvedValue({ success: true, data: { id: 99 } });
     updateItem.mockResolvedValue({ success: true, data: { id: 42 } });
     getProductPackagingSpecs.mockResolvedValue({
@@ -134,6 +150,36 @@ describe('包材编辑弹窗', () => {
         conversionFactor: 8, defaultSpec: true, active: true, sortOrder: 0,
       }],
     });
+  });
+
+  it('权限在 deferred validate 期间撤销后，即使重新打开也不写入', async () => {
+    const wrapper = mountDialog();
+    selectMaterial(wrapper, 'PK-BOX');
+    setQuantity(wrapper, 2);
+    await flushPromises();
+    const validation = deferred<boolean>();
+    validateForm.mockReturnValue(validation.promise);
+
+    const click = wrapper.findAll('button').find((button) => button.text().includes('保存'))!.trigger('click');
+    await Promise.resolve();
+    expect(validateForm).toHaveBeenCalled();
+    await wrapper.setProps({ canWrite: false, modelValue: false });
+    await wrapper.setProps({ canWrite: true, modelValue: true });
+    validation.resolve(true);
+    await click;
+    await flushPromises();
+
+    expect(addItem).not.toHaveBeenCalled();
+  });
+
+  it('权限有效时在 validate 后正常保存', async () => {
+    const wrapper = mountDialog({ canWrite: true });
+    selectMaterial(wrapper, 'PK-BOX');
+    setQuantity(wrapper, 2);
+    await flushPromises();
+    await clickSave(wrapper);
+
+    expect(addItem).toHaveBeenCalledWith('F006', 'R1', expect.objectContaining({ naturalQuantity: 2 }));
   });
 
   it('用量输入框的分母来自传入的 baseUnit, 不是写死的「盒」', () => {

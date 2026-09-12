@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { useRoute, useRouter } from 'vue-router';
@@ -34,8 +34,10 @@ const props = withDefaults(defineProps<{
   materials: SeasoningMaterialOption[];
   substituteRelations?: BomItemSubstituteView[];
   revision: number;
+  canWrite?: boolean;
 }>(), {
   substituteRelations: () => [],
+  canWrite: true,
 });
 
 const emit = defineEmits<{
@@ -57,6 +59,8 @@ const form = reactive({
   substituteFactors: {} as Record<string, number | null>,
 });
 const saving = reactive({ value: false });
+const formRef = ref<{ validate: () => Promise<boolean> } | null>(null);
+let operationGeneration = 0;
 const dosageUnit = ref('g');
 const dosageUnitFactorsToG = ref<Record<string, number>>({ g: 1, kg: 1000 });
 const materialUnitLoading = ref(false);
@@ -131,6 +135,22 @@ watch(() => form.materialTypeId, () => {
   void loadSelectedMaterialUnit();
 });
 
+function invalidatePendingOperation(): void {
+  operationGeneration += 1;
+}
+
+function isCurrentOperation(generation: number): boolean {
+  return props.canWrite && props.modelValue && generation === operationGeneration;
+}
+
+watch(() => props.canWrite, (canWrite) => {
+  if (!canWrite) invalidatePendingOperation();
+}, { flush: 'sync' });
+watch(() => props.modelValue, (modelValue) => {
+  if (!modelValue) invalidatePendingOperation();
+}, { flush: 'sync' });
+onBeforeUnmount(invalidatePendingOperation);
+
 async function loadSelectedMaterialUnit(): Promise<void> {
   const unit = canonicalUnitCode(selectedMaterialUnit.value);
   dosageUnit.value = unit || 'g';
@@ -165,6 +185,8 @@ function isRevisionConflict(error: unknown): boolean {
 }
 
 async function submit() {
+  if (!props.canWrite || !props.modelValue) return;
+  const generation = operationGeneration;
   if (!props.process) return;
   if (props.process.standardUsageSupported !== true) {
     return ElMessage.warning('该工序的投入基准单位尚未形成可换算契约，暂不能保存标准辅料用量');
@@ -192,6 +214,14 @@ async function submit() {
   });
   if (missingFactor) return ElMessage.warning('不同单位的替代辅料必须填写明确的等价换算系数');
 
+  try {
+    if (formRef.value && !(await formRef.value.validate())) return;
+  } catch {
+    ElMessage.warning('请检查表单填写内容');
+    return;
+  }
+  if (!isCurrentOperation(generation)) return;
+
   saving.value = true;
   try {
     const payload = {
@@ -215,6 +245,7 @@ async function submit() {
     } else {
       await bomSeasoningApi.createBinding(props.factoryId, props.recipeId, props.process.workProcessId, payload);
     }
+    if (!isCurrentOperation(generation)) return;
     emit('update:modelValue', false);
     emit('saved');
   } catch (error: unknown) {
@@ -227,6 +258,11 @@ async function submit() {
   } finally {
     saving.value = false;
   }
+}
+
+function close(): void {
+  invalidatePendingOperation();
+  emit('update:modelValue', false);
 }
 
 function goConfigureMaterialPrice() {
@@ -276,9 +312,9 @@ async function refreshSelectedMaterialPrice() {
     size="560px"
     direction="rtl"
     append-to-body
-    @close="emit('update:modelValue', false)"
+    @close="close"
   >
-    <el-form label-width="145px" data-testid="seasoning-binding-dialog">
+    <el-form ref="formRef" :model="form" label-width="145px" data-testid="seasoning-binding-dialog">
       <el-form-item label="投入工序">
         <el-input data-testid="locked-process-context" :model-value="process?.processName" disabled />
         <div class="form-tip">工序由入口锁定，保存只影响本工序。</div>
@@ -425,8 +461,8 @@ async function refreshSelectedMaterialPrice() {
       <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" :loading="saving.value" @click="submit">保存到本工序</el-button>
+      <el-button @click="close">取消</el-button>
+      <el-button type="primary" :loading="saving.value" :disabled="!canWrite" @click="submit">保存到本工序</el-button>
     </template>
   </el-drawer>
 </template>

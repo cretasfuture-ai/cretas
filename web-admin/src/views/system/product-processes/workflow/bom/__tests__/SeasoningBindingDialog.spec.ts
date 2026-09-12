@@ -6,6 +6,7 @@ import SeasoningBindingDialog from '../SeasoningBindingDialog.vue';
 const createBinding = vi.fn();
 const convertUnit = vi.fn();
 const getRawMaterialTypes = vi.fn();
+const validateForm = vi.fn(() => Promise.resolve(true));
 const resolveRoute = vi.fn(() => ({ href: '/warehouse/material-types?keyword=辣椒粉' }));
 
 vi.mock('@/api/bom', async (importOriginal) => {
@@ -56,6 +57,14 @@ function mountDialog(price: number | null, materials = [{ id: 'M1', name: '辣�
       stubs: {
         teleport: true,
         transition: false,
+        ElForm: {
+          name: 'ElForm',
+          setup(_: unknown, { expose }: { expose: (value: unknown) => void }) {
+            expose({ validate: (...args: unknown[]) => validateForm(...args) });
+            return {};
+          },
+          template: '<form><slot /></form>',
+        },
         ElDrawer: {
           props: ['modelValue', 'title'],
           template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
@@ -63,6 +72,12 @@ function mountDialog(price: number | null, materials = [{ id: 'M1', name: '辣�
       },
     },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
 
 async function fillRequiredFields(wrapper: ReturnType<typeof mountDialog>, value: number) {
@@ -76,8 +91,38 @@ async function fillRequiredFields(wrapper: ReturnType<typeof mountDialog>, value
 describe('SeasoningBindingDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    validateForm.mockResolvedValue(true);
     convertUnit.mockResolvedValue({ success: true, data: { quantity: 500 } });
     getRawMaterialTypes.mockResolvedValue({ success: true, data: [] });
+  });
+
+  it('权限在 deferred validate 期间撤销后，即使重新打开也不写入', async () => {
+    createBinding.mockResolvedValue({ success: true, data: {} });
+    const wrapper = mountDialog(18);
+    await fillRequiredFields(wrapper, 5);
+    const validation = deferred<boolean>();
+    validateForm.mockReturnValue(validation.promise);
+
+    const click = wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))!.trigger('click');
+    await Promise.resolve();
+    expect(validateForm).toHaveBeenCalled();
+    await wrapper.setProps({ canWrite: false, modelValue: false });
+    await wrapper.setProps({ canWrite: true, modelValue: true });
+    validation.resolve(true);
+    await click;
+    await flushPromises();
+
+    expect(createBinding).not.toHaveBeenCalled();
+  });
+
+  it('权限有效时在 validate 后正常保存', async () => {
+    createBinding.mockResolvedValue({ success: true, data: {} });
+    const wrapper = mountDialog(18);
+    await fillRequiredFields(wrapper, 5);
+    await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))!.trigger('click');
+    await flushPromises();
+
+    expect(createBinding).toHaveBeenCalledWith('F006', 'R1', 'ROLL', expect.objectContaining({ dosagePerKgG: 5 }));
   });
 
   it('defaults a new binding to the pinned 1千克 basis and offers localized material units', async () => {
