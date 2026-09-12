@@ -225,6 +225,7 @@ const productionAction = computed(() => productionActionState(
   productionPlansLoading.value,
   productionPlansFailed.value,
   productionPlansForbidden.value,
+  orderId.value,
 ));
 const deliveryAction = computed(() => deliveryActionState(
   Array.isArray(order.value?.items) ? order.value.items as TableRow[] : [],
