@@ -56,6 +56,17 @@ function installConsoleRecorder(context, options = {}) {
   // Playwright surfaces most unhandled rejections as pageerror. This bridge
   // gives them a stable label without storing the rejected object.
   context.addInitScript(() => {
+    // Browser-generated ErrorEvents (for example ResizeObserver delivery errors)
+    // may not reach Playwright's pageerror. Classify locally: never emit raw
+    // messages, source URLs, stacks or error objects from this bridge.
+    window.addEventListener('error', (event) => {
+      const message = typeof event.message === 'string' ? event.message : '';
+      const kind = message === 'ResizeObserver loop completed with undelivered notifications.'
+        || message === 'ResizeObserver loop limit exceeded'
+        ? 'resize_observer_delivery'
+        : message === 'Script error.' ? 'opaque_script_error' : 'other_window_error';
+      console.error(`[window_error_class] ${kind}`);
+    });
     window.addEventListener('unhandledrejection', (event) => {
       const reason = event.reason instanceof Error ? event.reason.message : String(event.reason || 'unknown');
       console.error(`[unhandledrejection] ${reason}`);

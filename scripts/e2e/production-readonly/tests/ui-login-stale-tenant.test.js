@@ -19,6 +19,7 @@ function fakePage({ pageText, stored, loginBody }) {
     innerText: async () => pageText,
   };
   return {
+    url: () => 'https://example.test/dashboard',
     locator: () => locatorStub,
     waitForResponse: async () => ({
       request: () => ({}),

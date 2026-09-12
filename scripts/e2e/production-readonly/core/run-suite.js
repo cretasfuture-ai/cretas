@@ -18,6 +18,7 @@ const SCENARIOS = [
   require('../scenarios/sales-date-draft-readonly'),
   require('../scenarios/workflow-viewport-readonly'),
   require('../scenarios/visual-unverified-followup-readonly'),
+  require('../scenarios/production-boards-readonly'),
   require('../scenarios/tenant-isolation'),
   require('../scenarios/bom-readonly'),
   require('../scenarios/bom-cost-caliber-readonly'),
