@@ -8,6 +8,7 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import './style.css';
 import { registerEChartsTheme } from './utils/echarts-theme';
+import { installClientErrorReporter } from './utils/clientErrorReporter';
 
 // 异步引导函数
 async function bootstrap() {
@@ -99,6 +100,16 @@ async function bootstrap() {
   // 4. 注册 Pinia（必须在路由守卫之前）
   const pinia = await import('./store');
   app.use(pinia.default);
+
+  // Diagnostics are enabled only after Pinia is ready, so the reporter can use the
+  // current authenticated factory getter and never accept anonymous browser intake.
+  const { useAuthStore } = await import('./store/modules/auth');
+  const authStore = useAuthStore();
+  installClientErrorReporter(app, () => ({
+    factoryId: authStore.factoryId,
+    isAuthenticated: authStore.isAuthenticated,
+    accessToken: localStorage.getItem('cretas_access_token'),
+  }));
 
   // 5. 加载路由并设置守卫（pinia 已就绪）
   const routerModule = await import('./router');

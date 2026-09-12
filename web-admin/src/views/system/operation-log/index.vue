@@ -9,25 +9,33 @@
     <el-card class="filter-card" shadow="never">
       <el-form :inline="true" :model="filters" @submit.prevent>
         <el-form-item label="模块">
-          <el-input v-model="filters.module" placeholder="CUSTOMER / MATERIAL ..." clearable style="width: 160px" />
+          <el-select v-model="filters.module" placeholder="全部模块" clearable filterable allow-create style="width: 170px">
+            <el-option label="库存变更" value="INVENTORY" />
+            <el-option label="业务请求" value="FACTORY_API" />
+            <el-option label="原料" value="MATERIAL" />
+            <el-option label="客户" value="CUSTOMER" />
+            <el-option label="供应商" value="SUPPLIER" />
+          </el-select>
         </el-form-item>
         <el-form-item label="操作">
           <el-select v-model="filters.action" placeholder="全部" clearable style="width: 130px">
-            <el-option label="CREATE" value="CREATE" />
-            <el-option label="UPDATE" value="UPDATE" />
-            <el-option label="DELETE" value="DELETE" />
-            <el-option label="EXPORT" value="EXPORT" />
-            <el-option label="IMPORT" value="IMPORT" />
-            <el-option label="OTHER" value="OTHER" />
+            <el-option label="新增" value="CREATE" />
+            <el-option label="修改" value="UPDATE" />
+            <el-option label="删除" value="DELETE" />
+            <el-option label="导出" value="EXPORT" />
+            <el-option label="导入" value="IMPORT" />
+            <el-option label="其他操作" value="OTHER" />
           </el-select>
         </el-form-item>
         <el-form-item label="用户 ID">
           <el-input-number v-model="filters.userId" :min="1" controls-position="right" style="width: 130px" />
         </el-form-item>
-        <el-form-item label="Entity 类型">
-          <el-input v-model="filters.entityType" placeholder="Customer 等" clearable style="width: 150px" />
+        <el-form-item label="记录类型">
+          <el-select v-model="filters.entityType" placeholder="全部类型" clearable filterable allow-create style="width: 170px">
+            <el-option v-for="(label, value) in entityLabels" :key="value" :label="label" :value="value" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="Entity ID">
+        <el-form-item label="记录 ID">
           <el-input v-model="filters.entityId" clearable style="width: 130px" />
         </el-form-item>
         <el-form-item label="时间范围">
@@ -51,7 +59,7 @@
     <!-- Table -->
     <el-card shadow="never" style="margin-top: 12px">
       <el-table :data="logs" stripe v-loading="loading" border>
-        <el-table-column prop="createdAt" label="时间" width="170">
+        <el-table-column prop="createdAt" label="时间" width="220">
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
         </el-table-column>
         <el-table-column label="用户" width="140">
@@ -61,16 +69,18 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="module" label="模块" width="130" />
+        <el-table-column label="模块" width="130">
+          <template #default="{ row }">{{ moduleLabels[row.module] || row.module }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="100">
           <template #default="{ row }">
-            <el-tag :type="actionTagType(row.action)" size="small">{{ row.action }}</el-tag>
+            <el-tag :type="actionTagType(row.action)" size="small">{{ actionLabels[row.action] || row.action }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Entity" min-width="200">
+        <el-table-column label="业务记录" min-width="200">
           <template #default="{ row }">
             <span v-if="row.entityType">
-              <strong>{{ simpleName(row.entityType) }}</strong>
+              <strong>{{ entityLabels[simpleName(row.entityType)] || simpleName(row.entityType) }}</strong>
               <span v-if="row.entityId" class="muted"> #{{ row.entityId }}</span>
             </span>
             <span v-else class="muted">—</span>
@@ -109,18 +119,20 @@
 
     <!-- Detail dialog -->
     <el-dialog v-model="detailOpen" title="操作日志详情" width="780px" destroy-on-close>
+      <el-alert v-if="detail?.module === 'INVENTORY'" type="info" :closable="false" show-icon
+        title="此记录随库存事务提交，展示已记录的业务字段变化；同一次操作可能涉及多个批次和单据。" style="margin-bottom: 16px" />
       <div v-if="detail" class="detail-grid">
         <div><strong>时间:</strong> {{ formatTime(detail.createdAt) }}</div>
-        <div><strong>用户:</strong> {{ detail.username || '#' + detail.userId }}</div>
-        <div><strong>模块:</strong> {{ detail.module }}</div>
-        <div><strong>操作:</strong> <el-tag size="small">{{ detail.action }}</el-tag></div>
-        <div><strong>Entity:</strong> {{ detail.entityType }} #{{ detail.entityId }}</div>
+        <div><strong>用户:</strong> {{ detail.username || (detail.userId ? '#' + detail.userId : '未关联用户') }}</div>
+        <div><strong>模块:</strong> {{ moduleLabels[detail.module] || detail.module }}</div>
+        <div><strong>操作:</strong> <el-tag size="small">{{ actionLabels[detail.action] || detail.action }}</el-tag></div>
+        <div><strong>业务记录:</strong> {{ entityLabels[simpleName(detail.entityType || '')] || detail.entityType }} #{{ detail.entityId }}</div>
         <div><strong>结果:</strong>
           <el-tag :type="detail.success ? 'success' : 'danger'" size="small">
             {{ detail.success ? '成功' : '失败' }}
           </el-tag>
         </div>
-        <div><strong>耗时:</strong> {{ detail.elapsedMs }} ms</div>
+        <div><strong>耗时:</strong> {{ detail.elapsedMs == null ? '—' : detail.elapsedMs + ' ms' }}</div>
         <div><strong>IP:</strong> {{ detail.ipAddress || '—' }}</div>
         <div class="span-2"><strong>摘要:</strong> {{ detail.summary || '—' }}</div>
         <div v-if="detail.errorMessage" class="span-2" style="color: #f56c6c">
@@ -133,7 +145,9 @@
       <div v-if="detail?.diff && detail.diff.length">
         <h4 style="margin: 0 0 12px">字段级变更 ({{ detail.diff.length }})</h4>
         <el-table :data="detail.diff" border size="small">
-          <el-table-column prop="field" label="字段" width="180" />
+          <el-table-column label="字段" width="180">
+            <template #default="{ row }">{{ fieldLabels[row.field] || row.field }}</template>
+          </el-table-column>
           <el-table-column label="变更前">
             <template #default="{ row }">
               <code class="diff-val">{{ formatValue(row.from) }}</code>
@@ -150,10 +164,10 @@
       <el-divider v-if="detail?.oldValue || detail?.newValue" />
 
       <el-collapse v-if="detail?.oldValue || detail?.newValue" accordion>
-        <el-collapse-item v-if="detail.oldValue" title="变更前完整快照 (oldValue)">
+        <el-collapse-item v-if="detail.oldValue" title="变更前已记录字段">
           <pre class="json-pre">{{ JSON.stringify(detail.oldValue, null, 2) }}</pre>
         </el-collapse-item>
-        <el-collapse-item v-if="detail.newValue" title="变更后完整快照 (newValue)">
+        <el-collapse-item v-if="detail.newValue" title="变更后已记录字段">
           <pre class="json-pre">{{ JSON.stringify(detail.newValue, null, 2) }}</pre>
         </el-collapse-item>
       </el-collapse>
@@ -167,6 +181,35 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { operationLogApi, type OperationLog, type OperationLogFilters } from '@/api/dataCenter';
+
+const actionLabels: Record<string, string> = { CREATE: '新增', UPDATE: '修改', DELETE: '删除', EXPORT: '导出', IMPORT: '导入', OTHER: '其他操作' };
+const moduleLabels: Record<string, string> = { INVENTORY: '库存变更', FACTORY_API: '业务请求', MATERIAL: '原料', CUSTOMER: '客户', SUPPLIER: '供应商' };
+const entityLabels: Record<string, string> = {
+  MaterialBatch: '原料批次', FinishedGoodsBatch: '成品批次', InternalTransfer: '调拨单',
+  InternalTransferItem: '调拨明细', FactoryMaterialRequisition: '领料单', FactoryMaterialRequisitionItem: '领料明细',
+};
+const fieldLabels: Record<string, string> = {
+  recordId: '记录完整 ID', physicalQuantity: '账面实物数量',
+  factoryId: '工厂 ID', batchNumber: '批次号', materialTypeId: '原料 ID', productTypeId: '产品 ID', warehouseId: '仓库 ID',
+  receiptQuantity: '入库数量', usedQuantity: '已用数量', reservedQuantity: '预留数量', availableQuantity: '可用数量',
+  producedQuantity: '生产入库数量', shippedQuantity: '已发货数量', quantityUnit: '数量单位', unit: '单位', status: '状态',
+  ownership: '库存归属', ownerCustomerId: '货主客户 ID', sourceDocType: '来源单据类型', sourceDocId: '来源单据 ID',
+  sourceSalesOrderId: '来源销售单 ID', sourceSalesOrderItemId: '来源销售明细 ID', receiptDate: '入库日期',
+  productionDate: '生产日期', expireDate: '到期日期', supplierBatchNumber: '供应商批次号', deletedAt: '删除时间',
+  transferNumber: '调拨单号', transferType: '调拨类型', sourceFactoryId: '调出工厂 ID', targetFactoryId: '调入工厂 ID',
+  sourceWarehouseId: '调出仓库 ID', targetWarehouseId: '调入仓库 ID', productionPlanId: '生产计划 ID',
+  requestedBy: '申请人 ID', requestedAt: '申请时间', approvedBy: '审批人 ID', approvedAt: '审批时间',
+  shippedAt: '发货时间', receivedAt: '收货时间', confirmedAt: '确认时间', transferId: '调拨单 ID', itemType: '物料类型',
+  quantity: '调拨数量', receivedQuantity: '实收数量', sourceBatchId: '来源批次 ID', targetBatchId: '目标批次 ID',
+  materialPackagingSpecId: '包装规格 ID', packageQuantitySnapshot: '包装数量', packageUnitSnapshot: '包装单位',
+  inventoryBaseUnitSnapshot: '库存基本单位', packageToBaseFactorSnapshot: '包装换算系数', requisitionNo: '领料单号',
+  requiredDate: '需求日期', pickedBy: '领料人 ID', pickedAt: '领料时间', transferredBy: '调拨人 ID', transferredAt: '调拨时间',
+  receivedBy: '收货人 ID', closedBy: '关单人 ID', closedAt: '关单时间', outboundTransferId: '出库调拨单 ID',
+  returnTransferId: '退料调拨单 ID', requisitionId: '领料单 ID', bomRecipeItemId: '配方明细 ID', materialCategory: '物料类别',
+  requiredQty: '需求数量', inputShareRatio: '投入份额', pickedQty: '已领数量', issuedQty: '已发数量',
+  consumedQty: '消耗数量', wastageQty: '损耗数量', returnedQty: '退料数量', selfSupplied: '自备物料',
+  nominalQuantity: '标称数量', counterpartyConfirmed: '对方已确认', reversalLogId: '撤回记录 ID',
+};
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -255,7 +298,7 @@ function simpleName(fqn: string): string {
 
 function formatTime(s: string | null): string {
   if (!s) return '—';
-  return s.replace('T', ' ').replace(/\.\d+$/, '');
+  return s.replace('T', ' ');
 }
 
 function formatValue(v: unknown): string {
