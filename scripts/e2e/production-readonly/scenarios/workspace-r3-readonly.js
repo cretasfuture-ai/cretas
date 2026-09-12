@@ -1,10 +1,13 @@
 'use strict';
 const { runReadOnlyPageScenario } = require('./_shared');
 const { step, assertSafe } = require('./visual-unverified-followup-readonly');
+const { waitForAppMount } = require('../core/app-mount');
 
 async function inspect(page, _body, ctx) {
   const screenshots = [];
   await step(ctx, () => page.goto(`${ctx.baseUrl}/sales/orders/new`));
+  const initialMount = await waitForAppMount(page);
+  if (!initialMount.appMounted) throw new Error('Draft application did not mount');
   const date = page.getByRole('textbox', { name: '交货日期', exact: true });
   await date.waitFor({ state: 'visible', timeout: 15000 });
   const close = page.getByRole('button', { name: '关闭任务', exact: true }).last();
@@ -15,6 +18,8 @@ async function inspect(page, _body, ctx) {
   const closeFocus = await page.evaluate(() => document.activeElement?.classList.contains('workspace-tab'));
   if (!closeFocus) throw new Error('Tab close lost keyboard focus');
   await step(ctx, () => page.goto(`${ctx.baseUrl}/sales/orders/new`));
+  const reopenedMount = await waitForAppMount(page);
+  if (!reopenedMount.appMounted) throw new Error('Reopened draft application did not mount');
   await date.waitFor({ state: 'visible', timeout: 15000 });
   await step(ctx, () => date.fill('20300115')); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
   const savedDate = await date.inputValue();
@@ -26,7 +31,25 @@ async function inspect(page, _body, ctx) {
   await page.mouse.move(b.x + 45, b.y + 75, { steps: 12 });
   const drop = page.locator('.reference-drop-zone'); await drop.waitFor({ state: 'visible' });
   const d = await drop.boundingBox(); await page.mouse.move(d.x+d.width/2,d.y+d.height/2,{steps:20}); await step(ctx,()=>page.mouse.up());
-  await page.waitForFunction(() => document.querySelector('.reference-pane iframe')?.contentDocument?.querySelector('.el-table__body tr'), null, { timeout: 15000 });
+  await page.locator('.reference-pane iframe').waitFor({ state: 'attached' });
+  const referenceFrame = await page.locator('.reference-pane iframe').elementHandle().then(handle => handle.contentFrame());
+  if (!referenceFrame) throw new Error('Reference frame is unavailable');
+  await referenceFrame.waitForURL(url => url.searchParams.get('_workspaceReference') === '1', { timeout: 30000 });
+  const referenceMount = await waitForAppMount(referenceFrame);
+  try {
+    await page.waitForFunction(() => document.querySelector('.reference-pane iframe')?.contentDocument?.querySelector('.el-table__body tr'), null, { timeout: 15000 });
+  } catch {
+    const referenceState = await page.evaluate(() => {
+      const frame = document.querySelector('.reference-pane iframe');
+      const doc = frame?.contentDocument;
+      return { hasFrame: Boolean(frame), readyState: doc?.readyState || null,
+        bodyLength: doc?.body?.innerText.length || 0,
+        tableCount: doc?.querySelectorAll('.el-table').length || 0,
+        rowCount: doc?.querySelectorAll('.el-table__body tr').length || 0 };
+    });
+    screenshots.push(await ctx.screenshot('workspace-reference-not-ready'));
+    return { initialMount, reopenedMount, referenceMount, referenceState, screenshots, assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' } };
+  }
   const shield = page.locator('.readonly-shield'); await shield.focus(); await step(ctx, () => page.keyboard.press('ArrowDown'));
   const frame = page.frames().find(f => f.url().includes('_workspaceReference'));
   const referenceScroll = await frame.evaluate(() => scrollY);
@@ -48,6 +71,6 @@ async function inspect(page, _body, ctx) {
   if (!refFocus || await date.inputValue() !== savedDate) throw new Error('Reference close lost focus or draft');
   await page.setViewportSize({ width: 1440, height: 900 });
   assertSafe(ctx);
-  return { closeFocus, refFocus, referenceScroll, primaryWidth: width, synchronizedRatio: ratio, bottomRatio, draftPreserved: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+  return { initialMount, reopenedMount, referenceMount, closeFocus, refFocus, referenceScroll, primaryWidth: width, synchronizedRatio: ratio, bottomRatio, draftPreserved: true, screenshots, assessment: { result: 'PASS', rootCauseClass: 'none' } };
 }
 module.exports = { id: 'workspace-r3-readonly', defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id: 'workspace-r3-readonly', path: '/sales/orders', screenshot: true, inspect }) };
