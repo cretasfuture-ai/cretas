@@ -42,7 +42,10 @@ async function contrastInspect(page, _body, ctx) {
   assertHeaderContrast(headers);
   const screenshot = await ctx.screenshot('table-header-contrast');
   assertSafe(ctx);
-  return { headers, screenshots: [screenshot], limits: 'Current populated table header text only; not all page text or icons',
+  return { measuredHeaderCount: headers.length, minimumContrast: Math.min(...headers.map(header => header.ratio)),
+    contrastRatios: headers.map(header => header.ratio), foregrounds: [...new Set(headers.map(header => header.foreground))],
+    backgrounds: [...new Set(headers.map(header => header.background))],
+    screenshots: [screenshot], limits: 'Current populated table header text only; not all page text or icons',
     assessment: { result: 'PASS', rootCauseClass: 'none' } };
 }
 
@@ -90,7 +93,8 @@ async function purchaseInspect(page, _body, ctx) {
     rounds.push({ opened: true, formCount, closed: true, editQueryCleared: true });
   }
   assertSafe(ctx);
-  return { rounds, screenshots, limits: 'Existing draft opened and cancelled without editing or saving; persistence not verified', assessment: { result: 'PASS', rootCauseClass: 'none' } };
+  return { roundsCompleted: rounds.length, formCounts: rounds.map(round => round.formCount), allDialogsClosed: true,
+    editQueryCleared: true, screenshots, limits: 'Existing draft opened and cancelled without editing or saving; persistence not verified', assessment: { result: 'PASS', rootCauseClass: 'none' } };
 }
 
 async function salesInspect(page, _body, ctx) {
