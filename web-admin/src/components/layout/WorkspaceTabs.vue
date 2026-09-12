@@ -9,6 +9,13 @@ const workspace = useWorkspaceStore();
 const tabBar = ref<HTMLElement>();
 
 const canDuplicate = computed(() => Boolean(workspace.activeTab));
+const tabLabels = computed(() => Object.fromEntries(workspace.tabs.map(tab => {
+  const base = new URL(tab.fullPath, 'https://workspace.local').searchParams.get('_taskBaseTitle');
+  const suffix = base && tab.title.startsWith(`${base} `) ? tab.title.slice(base.length) : '';
+  return [tab.key, /^ [1-9]\d*$/.test(suffix)
+    ? { text: base || tab.title, suffix }
+    : { text: tab.title, suffix: '' }] as const;
+})));
 
 function activate(key: string): void {
   const tab = workspace.tabs.find((item) => item.key === key);
@@ -66,7 +73,7 @@ function onDrop(event: DragEvent, beforeKey: string): void {
       >
         <button type="button" class="workspace-tab" :data-workspace-key="tab.key" @click="activate(tab.key)">
         <span v-if="tab.dirty" class="task-dot" aria-label="未完成任务" />
-        <span class="workspace-tab-title">{{ tab.title }}</span>
+        <span class="workspace-tab-title"><span class="workspace-tab-text">{{ tabLabels[tab.key]?.text }}</span><span v-if="tabLabels[tab.key]?.suffix" class="workspace-tab-number">{{ tabLabels[tab.key]?.suffix }}</span></span>
         </button>
         <button
           v-if="workspace.tabs.length > 1"
@@ -152,7 +159,9 @@ function onDrop(event: DragEvent, beforeKey: string): void {
 .workspace-tab-container:active { cursor: grabbing; }
 .workspace-tab { min-width: 0; min-height: 42px; flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: inherit; }
 .workspace-tab:focus-visible, .workspace-tab-close:focus-visible { outline: 2px solid #1b65a8; outline-offset: -2px; }
-.workspace-tab-title { overflow: hidden; text-overflow: ellipsis; }
+.workspace-tab-title { min-width: 0; display: inline-flex; overflow: hidden; }
+.workspace-tab-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.workspace-tab-number { flex: 0 0 auto; white-space: pre; }
 .task-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #d89222; box-shadow: 0 0 0 3px rgba(216, 146, 34, 0.12); }
 .workspace-tab-close { width: 24px; height: 24px; flex: 0 0 24px; padding: 0; border: 0; background: transparent; border-radius: 6px; display: inline-grid; place-items: center; color: #8a98aa; font-size: 17px; font-weight: 400; cursor: pointer; }
 .workspace-tab-close:hover { color: #d84a4a; background: #fff0f0; }
