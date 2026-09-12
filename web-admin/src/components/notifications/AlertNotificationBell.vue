@@ -115,13 +115,15 @@ onBeforeUnmount(() => {
 <template>
   <el-popover placement="bottom-end" width="360" trigger="click" @show="onPopoverShow">
     <template #reference>
-      <el-tooltip content="站内通知" placement="bottom">
-        <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" class="notif-bell">
-          <el-icon class="header-action">
-            <Bell />
-          </el-icon>
-        </el-badge>
-      </el-tooltip>
+      <button type="button" class="notif-trigger" aria-label="站内通知">
+        <el-tooltip content="站内通知" placement="bottom">
+          <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" class="notif-bell">
+            <el-icon class="header-action">
+              <Bell />
+            </el-icon>
+          </el-badge>
+        </el-tooltip>
+      </button>
     </template>
 
     <div class="notif-panel">
@@ -167,6 +169,15 @@ onBeforeUnmount(() => {
     background: #f56c6c;
     border: 0;
   }
+}
+
+.notif-trigger {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .header-action {

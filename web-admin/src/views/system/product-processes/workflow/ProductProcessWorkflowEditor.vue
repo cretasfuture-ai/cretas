@@ -841,6 +841,7 @@
     <!-- #Task6: 辅料编辑弹窗 —— 直接复用既有 SeasoningBindingDialog, 不新建编辑面 -->
     <SeasoningBindingDialog
       v-model="auxDialogVisible"
+      :can-write="canEdit"
       :factory-id="auxDialogFactoryId"
       :recipe-id="auxDialogRecipeId"
       :process="auxDialogProcess"
@@ -854,6 +855,7 @@
     <!-- #Task1(2026-08-05 bom-canvas-phase3-2): 画布上的包材编辑弹窗, 不再依赖 BOM 抽屉 -->
     <PackagingBindingDialog
       v-model="packagingDialogVisible"
+      :can-write="canEdit"
       :factory-id="packagingDialogFactoryId"
       :recipe-id="packagingDialogRecipeId"
       :output-name="packagingDialogOutputName"
@@ -1325,6 +1327,7 @@ const flowEdges = ref<Edge[]>([]);
 const loading = ref(false);
 const catalogLoading = ref(false);
 const loadedCatalogFactoryId = ref<string | null>(null);
+const loadedCatalogCanWrite = ref(false);
 const saving = ref(false);
 const publishing = ref(false);
 const workflowBomSyncPreflight = ref<WorkflowBomSyncPreflight | null>(null);
@@ -1729,8 +1732,9 @@ async function resolveWritableRecipeId(
   recipeId: string | undefined,
   reread: () => string | undefined,
 ): Promise<string | null> {
+  const accessGeneration = writeAccessGeneration;
   const identity = currentLoadedIdentity();
-  if (!identity || !isBomOverlayIdentityCurrent(identity)) return null;
+  if (!identity || !isCurrentBomWriteAccess(identity, accessGeneration)) return null;
   // recipeId 为空 = 该产品一条 BOM 版本都没有(冷启动)。与「有版本但不是草稿」一样,
   // 都靠 ensureDraft 收敛成一个可写草稿 —— 不必让用户先跑去别的页面建首版。
   if (recipeId && bomOverlayRecipeWritable.value[recipeId]) return recipeId;
@@ -1739,9 +1743,9 @@ async function resolveWritableRecipeId(
     // 编辑另一版草稿时，返回 workspace 的 processNodeId 对不上画布，详情入口就会
     // 误报“草稿已创建但未刷新”。
     await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
-    if (!isBomOverlayIdentityCurrent(identity)) return null;
+    if (!isCurrentBomWriteAccess(identity, accessGeneration)) return null;
   } catch (error) {
-    if (!isBomOverlayIdentityCurrent(identity)) return null;
+    if (!isCurrentBomWriteAccess(identity, accessGeneration)) return null;
     // 🔴 2026-08-12 (Steve 真机): 换原料后点「加辅料」被 409 拦下:
     //   「旧工艺中的原料投入在目标工艺中已不存在：2015胸肉
     //     提示: 请确认是否删除这些原料规则后再重试」
@@ -1759,12 +1763,12 @@ async function resolveWritableRecipeId(
     // 现在的出口: 只取得用户确认, 然后带 dropObsoleteInputs 重试 ensure-draft,
     // 由后端在同一事务里删它自己算出的孤儿行(判定权不外移)。
     if (await repairObsoleteBomInputs(productTypeId, error)) {
-      if (!isBomOverlayIdentityCurrent(identity)) return null;
+      if (!isCurrentBomWriteAccess(identity, accessGeneration)) return null;
       try {
         // 带上「人已确认」重试。删哪几行由后端重算, 前端不送 id 列表。
         await ensureBomDraftRecipe(
           props.factoryId, productTypeId, definition.value?.revisionId, true);
-        if (!isBomOverlayIdentityCurrent(identity)) return null;
+        if (!isCurrentBomWriteAccess(identity, accessGeneration)) return null;
         ElMessage.success('已移除旧工艺遗留的配方行');
       } catch (retryError) {
         ElMessage.error(retryError instanceof Error ? retryError.message : '移除后仍无法创建 BOM 草稿');
@@ -1775,7 +1779,7 @@ async function resolveWritableRecipeId(
       return null;
     }
   }
-  if (!isBomOverlayIdentityCurrent(identity)) return null;
+  if (!isCurrentBomWriteAccess(identity, accessGeneration)) return null;
   // 重载后浮层已指向草稿, 重新读一次映射, 不要沿用旧 id。
   const refreshed = reread();
   if (!refreshed || !bomOverlayRecipeWritable.value[refreshed]) {
@@ -2368,6 +2372,7 @@ const processEditForm = ref({
 });
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
+let writeAccessGeneration = 0;
 let createSkuGeneration = 0;
 let loadGeneration = 0;
 let bomLoadGeneration = 0;
@@ -2472,6 +2477,7 @@ const canEdit = computed(() => (
   && !publishConfirming.value
   && previewingVersion.value === null   // #12b 预览历史版本时整个画布只读 (不可拖/存/发布, 防止旧版本被当草稿保存发布)
   && loadedCatalogFactoryId.value === props.factoryId
+  && loadedCatalogCanWrite.value
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
 ));
@@ -2879,6 +2885,7 @@ async function restorePreviewAsDraft(): Promise<void> {
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
+  invalidateWriteDialogs();
   // 产品/工厂切换先失效旧的只读上下文，避免异步加载期间把旧行当成新对象继续编辑。
   closeBomDetail(false);
   invalidateBomOverlayCaches();
@@ -2889,9 +2896,28 @@ watch(() => [props.factoryId, props.productTypeId] as const, async (next, previo
   await loadEditorWorkspace(next[0] !== previous[0]);
 });
 
+function invalidateWriteDialogs(): void {
+  writeAccessGeneration += 1;
+  auxDialogVisible.value = false;
+  packagingDialogVisible.value = false;
+  clearAuxOwnerPicker();
+  processDialogVisible.value = false;
+  skuDialogVisible.value = false;
+  quickEditVisible.value = false;
+  processEditVisible.value = false;
+  quickEditSaving.value = false;
+  processEditSaving.value = false;
+}
+
+watch(() => props.canWrite, () => {
+  invalidateWriteDialogs();
+  void loadCatalogs();
+}, { flush: 'sync' });
+
 async function loadCatalogs(): Promise<void> {
   const generation = ++catalogGeneration;
   const factoryId = props.factoryId;
+  const canWrite = props.canWrite;
   invalidateCatalogs();
   if (!factoryId) return;
   catalogLoading.value = true;
@@ -2907,7 +2933,8 @@ async function loadCatalogs(): Promise<void> {
       // SkuOption 只需这些字段; 避开重 DTO 的 ~3s/422KB 全量加载 (顶部选择器已先命中缓存, 这里秒回)。
       get<{ content: SkuOption[] }>(`/${factoryId}/product-types/options`),
       get<RawMaterialPickerOption[]>(`/${factoryId}/raw-material-types/active`),
-      get<MaterialSegmentNode[]>(`/${factoryId}/material-segments/tree`),
+      // 分类树只供编辑选择器使用，服务端要求写权限；只读画布使用已有行和单位档案。
+      canWrite ? get<MaterialSegmentNode[]>(`/${factoryId}/material-segments/tree`) : null,
       unitCatalogRequest,
     ]);
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
@@ -2919,8 +2946,7 @@ async function loadCatalogs(): Promise<void> {
       || !Array.isArray(productResponse.data?.content)
       || !rawResponse.success
       || !Array.isArray(rawResponse.data)
-      || !segmentResponse.success
-      || !Array.isArray(segmentResponse.data)) {
+      || (canWrite && (!segmentResponse?.success || !Array.isArray(segmentResponse.data)))) {
       throw new Error('Workflow catalog response is incomplete');
     }
     workProcessOptions.value = processResponse.data;
@@ -2938,7 +2964,7 @@ async function loadCatalogs(): Promise<void> {
       id: String((row as { id?: unknown }).id ?? ''),
       unit: String((row as { unit?: unknown }).unit ?? ''),
     })).filter((row) => row.id && row.unit);
-    rawMaterialSegments.value = buildRawMaterialSegmentTree(segmentResponse.data);
+    rawMaterialSegments.value = segmentResponse ? buildRawMaterialSegmentTree(segmentResponse.data) : [];
     if (unitCatalogResponse?.success && Array.isArray(unitCatalogResponse.data)) {
       unitCatalog.value = unitCatalogResponse.data;
     } else {
@@ -2946,6 +2972,7 @@ async function loadCatalogs(): Promise<void> {
       ElMessage.warning('系统单位目录加载失败，当前仅使用内建质量、体积和长度换算规则');
     }
     loadedCatalogFactoryId.value = factoryId;
+    loadedCatalogCanWrite.value = canWrite;
     void reconcileLoadedUnits();
   } catch (error) {
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
@@ -2962,6 +2989,7 @@ async function loadCatalogs(): Promise<void> {
 function invalidateCatalogs(): void {
   catalogLoading.value = false;
   loadedCatalogFactoryId.value = null;
+  loadedCatalogCanWrite.value = false;
   workProcessOptions.value = [];
   workProcessCategories.value = [];
   skuOptions.value = [];
@@ -3904,14 +3932,15 @@ async function openAuxiliaryEditor(
     ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
+  const accessGeneration = writeAccessGeneration;
   const identity = currentLoadedIdentity();
-  if (!identity || !isBomOverlayIdentityCurrent(identity)) return;
+  if (!identity || !isCurrentBomWriteAccess(identity, accessGeneration)) return;
   // ⛔ 这里不能因为「没有 recipe」就早退: 该产品可能一条 BOM 版本都没有(冷启动),
   // 那不是「数据没加载完」而是「还没建过」—— 早退会让画布在这种最常见的起点上死掉,
   // 且提示词还是错的。归属产品能定就交给 resolveWritableRecipeId 去 ensureDraft。
   const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
   await ensureBomOverlayMaterials();
-  if (!isBomOverlayIdentityCurrent(identity)) return;
+  if (!isCurrentBomWriteAccess(identity, accessGeneration)) return;
 
   let auxProductTypeId = forcedProductTypeId || resolveProductForProcess(processNodeId);
   if (!auxProductTypeId) {
@@ -3950,7 +3979,7 @@ async function openAuxiliaryEditor(
     () => bomOverlayRecipeIdByProcess.value[processNodeId],
   );
   if (!writableRecipeId) return;
-  if (!isBomOverlayIdentityCurrent(identity)) return;
+  if (!isCurrentBomWriteAccess(identity, accessGeneration)) return;
   // 重载后 workspace/process/binding 都要按草稿版重新取, 旧对象里的行 id 属于别的版本。
   const writableWorkspace = bomOverlaySeasoningWorkspaceByRecipe.value[writableRecipeId];
   const writableProcess = writableWorkspace?.processes
@@ -4008,8 +4037,9 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     ElMessage.info('当前无编辑权限，无法打开包材编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
+  const accessGeneration = writeAccessGeneration;
   const identity = currentLoadedIdentity();
-  if (!identity || !isBomOverlayIdentityCurrent(identity)) return;
+  if (!identity || !isCurrentBomWriteAccess(identity, accessGeneration)) return;
   const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
   if (node?.data?.kind !== 'FINISHED_GOOD' || !node.data?.skuId) {
     ElMessage.warning('包材数据尚未加载完成，请稍后重试');
@@ -4025,7 +4055,7 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     return;
   }
   await ensureBomOverlayPackagingMaterials();
-  if (!isBomOverlayIdentityCurrent(identity)) return;
+  if (!isCurrentBomWriteAccess(identity, accessGeneration)) return;
 
   // 与辅料同因: 包材 item 也只能写进 DRAFT, 生效版返回「只有 DRAFT 状态可加 item」。
   const packProductTypeId = String(node.data.skuId ?? '') || bomOverlayProductIdByRecipe.value[recipeId];
@@ -4039,7 +4069,7 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     () => bomOverlayRecipeIdByOutput.value[outputNodeId],
   );
   if (!writablePackRecipeId) return;
-  if (!isBomOverlayIdentityCurrent(identity)) return;
+  if (!isCurrentBomWriteAccess(identity, accessGeneration)) return;
   // 编辑既有行时, 行 id 必须来自草稿版 —— 生效版那份的 id 在草稿里不存在。
   const writableRow = rowId
     ? bomOverlayPackagingRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
@@ -4281,6 +4311,10 @@ function activationMatchesIdentity(
 ): boolean {
   return candidate.factoryId === identity.factoryId
     && candidate.productTypeId === identity.productTypeId;
+}
+
+function isCurrentBomWriteAccess(identity: WorkflowIdentity, generation: number): boolean {
+  return canEdit.value && generation === writeAccessGeneration && isBomOverlayIdentityCurrent(identity);
 }
 
 function currentLoadedIdentity(): WorkflowIdentity | null {
@@ -5869,8 +5903,11 @@ function openQuickEditProcess(processNodeId: string): void {
 }
 
 async function saveQuickEditProcess(): Promise<void> {
+  if (!canEdit.value) return;
+  const accessGeneration = writeAccessGeneration;
   const identity = currentLoadedIdentity();
-  const node = flowNodes.value.find((candidate) => candidate.id === processEditNodeId.value);
+  const nodeId = processEditNodeId.value;
+  const node = flowNodes.value.find((candidate) => candidate.id === nodeId);
   if (!identity || !node || node.data?.kind !== 'PROCESS' || processEditSaving.value) return;
   const form = processEditForm.value;
   if (!form.processName.trim() || !form.processCategory.trim()) {
@@ -5917,7 +5954,7 @@ async function saveQuickEditProcess(): Promise<void> {
     } catch {
       return;
     }
-    if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
+    if (!isLoadedIdentityCurrent(identity) || !canEdit.value || accessGeneration !== writeAccessGeneration) return;
   }
   processEditSaving.value = true;
   try {
@@ -5928,6 +5965,7 @@ async function saveQuickEditProcess(): Promise<void> {
         processCategory: nextProcessCategory,
         needsInput: form.needsInput,
       });
+      if (!isLoadedIdentityCurrent(identity) || !canEdit.value || accessGeneration !== writeAccessGeneration) return;
       if (!response.success || !response.data) throw new Error(response.message || '工序修改失败');
       updated = response.data;
       workProcessOptions.value = workProcessOptions.value.map(
@@ -5966,15 +6004,16 @@ async function saveQuickEditProcess(): Promise<void> {
         }
       });
     });
-    processEditVisible.value = false;
+    if (processEditNodeId.value === nodeId) processEditVisible.value = false;
     ElMessage.success(masterFieldsChanged
       ? '工序信息及当前 Workflow 产出类型已更新'
       : '当前 Workflow 产出类型已更新');
   } catch (error) {
+    if (!isLoadedIdentityCurrent(identity) || accessGeneration !== writeAccessGeneration) return;
     console.error('[ProductProcessWorkflow] quick edit process failed', error);
     ElMessage.error(error instanceof Error ? error.message : '工序修改失败');
   } finally {
-    processEditSaving.value = false;
+    if (accessGeneration === writeAccessGeneration) processEditSaving.value = false;
   }
 }
 
@@ -5991,22 +6030,29 @@ function openQuickEditSku(materialNodeId: string): void {
 }
 
 async function saveQuickEditSku(): Promise<void> {
+  if (!canEdit.value || quickEditSaving.value) return;
+  const identity = currentLoadedIdentity();
+  if (!identity) return;
+  const accessGeneration = writeAccessGeneration;
+  const skuId = quickEditSkuId.value;
+  const nodeId = quickEditNodeId.value;
   const name = quickEditForm.value.name.trim();
   const unit = quickEditForm.value.unit.trim();
-  if (!name || !unit || !props.factoryId || !quickEditSkuId.value) {
+  if (!name || !unit || !skuId) {
     ElMessage.warning('请填写 SKU 名称和基本单位');
     return;
   }
   quickEditSaving.value = true;
   try {
     const response = await put<SkuOption>(
-      `/${props.factoryId}/product-types/${quickEditSkuId.value}`,
+      `/${identity.factoryId}/product-types/${skuId}`,
       { name, unit },
     );
+    if (!isLoadedIdentityCurrent(identity) || !canEdit.value || accessGeneration !== writeAccessGeneration) return;
     if (!response.success) throw new Error(response.message || 'SKU 修改失败');
-    const option = skuOptions.value.find((item) => item.id === quickEditSkuId.value);
+    const option = skuOptions.value.find((item) => item.id === skuId);
     if (option) Object.assign(option, { name, unit });
-    const material = flowNodes.value.find((node) => node.id === quickEditNodeId.value);
+    const material = flowNodes.value.find((node) => node.id === nodeId);
     if (material) {
       mutate(() => {
         Object.assign(material.data, { name, baseUnit: unit });
@@ -6018,13 +6064,14 @@ async function saveQuickEditSku(): Promise<void> {
         });
       });
     }
-    quickEditVisible.value = false;
+    if (quickEditNodeId.value === nodeId && quickEditSkuId.value === skuId) quickEditVisible.value = false;
     ElMessage.success('SKU 主数据已更新；当前 Workflow 单位已同步，请核对后重新发布');
   } catch (error) {
+    if (!isLoadedIdentityCurrent(identity) || accessGeneration !== writeAccessGeneration) return;
     console.error('[ProductProcessWorkflow] quick edit sku failed', error);
     ElMessage.error(error instanceof Error ? error.message : 'SKU 修改失败');
   } finally {
-    quickEditSaving.value = false;
+    if (accessGeneration === writeAccessGeneration) quickEditSaving.value = false;
   }
 }
 
