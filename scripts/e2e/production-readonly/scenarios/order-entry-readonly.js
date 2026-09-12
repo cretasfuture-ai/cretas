@@ -2,6 +2,50 @@
 const { runReadOnlyPageScenario } = require('./_shared');
 const { step, assertSafe } = require('./visual-unverified-followup-readonly');
 
+async function measureHeaderContrast(page) {
+  return page.locator('main.app-content .el-table').first().evaluate(table => {
+    const rgb = color => {
+      if (!/^rgba?\(/.test(color)) throw new Error('Unsupported computed color format');
+      return color.match(/[\d.]+/g).map(Number);
+    };
+    const luminance = channels => channels.slice(0, 3).map(value => {
+      const s = value / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    return [...table.querySelectorAll('.el-table__header th .cell')].filter(cell => cell.textContent.trim()).map(cell => {
+      const foreground = getComputedStyle(cell).color;
+      let background = 'rgb(255, 255, 255)';
+      for (let parent = cell; parent; parent = parent.parentElement) {
+        const value = getComputedStyle(parent).backgroundColor, channels = rgb(value), alpha = channels[3] ?? 1;
+        if (alpha === 0) continue;
+        if (alpha !== 1) throw new Error('Translucent table background needs separate contrast measurement');
+        background = value; break;
+      }
+      const fg = rgb(foreground), bg = rgb(background);
+      if ((fg[3] ?? 1) !== 1) throw new Error('Translucent table text needs separate contrast measurement');
+      const a = luminance(fg), b = luminance(bg);
+      return { header: cell.textContent.trim(), foreground, background, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
+    });
+  });
+}
+
+function assertHeaderContrast(headers) {
+  if (!headers.length) throw new Error('UNVERIFIED: no table header text was measured');
+  if (headers.some(header => !Number.isFinite(header.ratio) || header.ratio < 4.5)) {
+    throw new Error('Table header text contrast is below 4.5:1');
+  }
+}
+
+async function contrastInspect(page, _body, ctx) {
+  const table = page.locator('main.app-content .el-table').first();
+  await table.locator('.el-table__body tbody tr').first().waitFor({ state: 'visible', timeout: 15000 });
+  const headers = await measureHeaderContrast(page);
+  assertHeaderContrast(headers);
+  const screenshot = await ctx.screenshot('table-header-contrast');
+  assertSafe(ctx);
+  return { headers, screenshots: [screenshot], limits: 'Current populated table header text only; not all page text or icons',
+    assessment: { result: 'PASS', rootCauseClass: 'none' } };
+}
+
 async function settleVisual(locator) {
   await locator.evaluate(async element => {
     const animations = [...element.getAnimations({ subtree: true })];
@@ -91,6 +135,10 @@ function scenario(id, path, inspect) {
     run: ctx => runReadOnlyPageScenario(ctx, { id, path, inspect: page => inspect(page, '', ctx), screenshot: false }) };
 }
 module.exports = {
+  measureHeaderContrast,
+  assertHeaderContrast,
   purchase: scenario('purchase-edit-entry-readonly', '/procurement/orders', purchaseInspect),
   sales: scenario('sales-source-warehouse-readonly', '/sales/orders/new', salesInspect),
+  salesHeaders: scenario('sales-header-contrast-readonly', '/sales/orders', contrastInspect),
+  labelHeaders: scenario('label-header-contrast-readonly', '/quality/label-qc', contrastInspect),
 };

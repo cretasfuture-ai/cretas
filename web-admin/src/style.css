@@ -408,6 +408,12 @@ a:hover {
   border-bottom: 1px solid var(--el-table-border-color);
 }
 
+/* Use the component palette: its header background can remain light even when
+   the surrounding application uses the dark theme. */
+.el-table th.el-table__cell {
+  color: var(--el-text-color-primary);
+}
+
 /* ============================================================
  * Page Container
  * ============================================================ */
