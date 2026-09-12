@@ -10,6 +10,18 @@ function assertGrid(data) {
   }
   if (data.outline !== '1px') throw new Error('Table viewport outline is missing');
 }
+function summarizeMeasurements(measurements) {
+  return {
+    measurementCount: measurements.length,
+    rowCounts: measurements.map(data => data.rows),
+    firstRowHeights: measurements.map(data => data.rowHeight),
+    viewportWidths: measurements.filter(data => data.width).map(data => data.width),
+    maximumHeaderBodyDifference: Math.max(...measurements.flatMap(data => data.columns.map(column => Math.abs(column.header - column.body)))),
+    rightBorders: [...new Set(measurements.flatMap(data => data.columns.map(column => column.right)))],
+    bottomBorders: [...new Set(measurements.flatMap(data => data.columns.map(column => column.bottom)))],
+    outlines: [...new Set(measurements.map(data => data.outline))],
+  };
+}
 function scenario(id, path, resize) {
   const inspect = async (page, _body, ctx) => {
     const table = page.locator('main.app-content .el-table').first();
@@ -25,7 +37,7 @@ function scenario(id, path, resize) {
           right: cells[i] ? getComputedStyle(cells[i]).borderRightWidth : null,
           bottom: cells[i] ? getComputedStyle(cells[i]).borderBottomWidth : null })) };
     });
-    const measurements = [], screenshots = [];
+    const measurements = [], screenshots = [], resizedOrderWidths = [];
     for (const width of [1440, 1024]) {
       await page.setViewportSize({ width, height: 900 }); await page.waitForTimeout(200);
       const data = await measure(); assertGrid(data); measurements.push({ width, ...data });
@@ -43,6 +55,7 @@ function scenario(id, path, resize) {
         await step(ctx, () => page.mouse.up()); await page.waitForTimeout(150);
         const data = await measure(); assertGrid(data); measurements.push({ resizeDelta: delta, ...data });
         const resizedWidth = (await header.boundingBox()).width;
+        resizedOrderWidths.push(resizedWidth);
         if (resizedWidth < 120) throw new Error('Order identifier column collapsed below its readable minimum');
         if (delta > 0) enlarged = resizedWidth > initial.width + 20;
       }
@@ -50,11 +63,11 @@ function scenario(id, path, resize) {
       screenshots.push(await ctx.screenshot(`${id}-resized`));
     }
     assertSafe(ctx);
-    return { measurements, screenshots, limits: 'Only current populated table; native pointer, persisted width memory and all-page coverage are not verified',
+    return { ...summarizeMeasurements(measurements), resizedOrderWidths, screenshots, limits: 'Only current populated table; native pointer, persisted width memory and all-page coverage are not verified',
       assessment: { result: 'PASS', rootCauseClass: 'none' } };
   };
   return { id, defaultEnabled: false, inspect, run: ctx => runReadOnlyPageScenario(ctx, { id, path, screenshot: true, inspect: page => inspect(page, '', ctx) }) };
 }
-module.exports = { assertGrid,
+module.exports = { assertGrid, summarizeMeasurements,
   sales: scenario('table-grid-sales-readonly', '/sales/orders', true),
   label: scenario('table-grid-label-readonly', '/quality/label-qc', false) };
