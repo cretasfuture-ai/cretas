@@ -5,6 +5,16 @@ const {step,FOLLOWUP_PAGES}=require('../scenarios/visual-unverified-followup-rea
 const {describeHarness}=require('../core/run-suite');
 const boards=require('../scenarios/production-boards-readonly');
 const {verifyTarget}=require('../scenarios/visual-unverified-followup-readonly');
+const {waitForQueueRows}=require('../scenarios/visual-unverified-followup-readonly');
+
+test('queue readiness rejects stuck loading and rechecks the mutation guard',async()=>{
+  const ctx={mutationGuard:{snapshot:()=>({actualBusinessWrites:0,blockedMutationAttempts:[]})}};
+  await assert.rejects(waitForQueueRows({locator:()=>({waitFor:async()=>{throw new Error('loading timeout');}})},ctx),/loading timeout/);
+  const page={locator:selector=>{assert.equal(selector,'.queue-table .el-loading-mask');return {waitFor:async options=>assert.equal(options.state,'hidden')};}};
+  await waitForQueueRows(page,ctx);
+  ctx.mutationGuard.snapshot=()=>({actualBusinessWrites:1,blockedMutationAttempts:[]});
+  await assert.rejects(waitForQueueRows(page,ctx),/guard stopped/);
+});
 
 test('target verification waits for route completion and retains exact query checks',async()=>{
   const expected='https://example.test/production/kanban?tab=restock-board';

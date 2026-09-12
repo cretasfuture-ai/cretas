@@ -3125,6 +3125,10 @@ function assertSafe(ctx) {
   if (state.actualBusinessWrites || state.blockedMutationAttempts.length) throw new Error('Read-only guard stopped follow-up');
 }
 async function step(ctx, action) { assertSafe(ctx); const value = await action(); assertSafe(ctx); return value; }
+async function waitForQueueRows(page, ctx) {
+  await page.locator('.queue-table .el-loading-mask').waitFor({ state: 'hidden', timeout: 15000 });
+  assertSafe(ctx);
+}
 async function verifyTarget(page, ctx, path, heading, tab) {
   // Element Plus selects its pane before router.replace resolves. Keep the
   // exact route predicate, but wait for navigation instead of racing the UI.
@@ -3165,6 +3169,7 @@ async function runFollowup(ctx, targets = FOLLOWUP_PAGES, id = 'visual-unverifie
             await step(ctx, () => control.click({ timeout: 5000 }));
             await page.locator('.queue-toolbar h2').filter({ hasText: heading }).waitFor({ state: 'visible', timeout: 5000 });
             if (!await control.locator('input[type="radio"]').isChecked()) throw new Error('UNVERIFIED: queue radio did not become checked');
+            await waitForQueueRows(page, ctx);
             assertSafe(ctx);
           }
           operation = 'completed queue then pending queue; checked radio and queue heading verified; no review action';
@@ -3188,7 +3193,7 @@ async function runFollowup(ctx, targets = FOLLOWUP_PAGES, id = 'visual-unverifie
   result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool'; result.durationMs = Date.now()-start;
   return result;
 }
-module.exports = { id: 'visual-unverified-followup-readonly', defaultEnabled: false, assertSafe, step, verifyTarget, FOLLOWUP_PAGES, run: runFollowup };
+module.exports = { id: 'visual-unverified-followup-readonly', defaultEnabled: false, assertSafe, step, verifyTarget, waitForQueueRows, FOLLOWUP_PAGES, run: runFollowup };
 
 },
     "scenarios/workflow-readonly.js": function(module, exports, require) {
