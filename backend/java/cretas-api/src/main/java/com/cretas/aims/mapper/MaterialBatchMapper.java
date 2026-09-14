@@ -70,8 +70,13 @@ public class MaterialBatchMapper {
                 .notes(batch.getNotes())
                 .factoryNumber(batch.getFactoryNumber())
                 .originPlace(batch.getOriginPlace())
-                // 来源个体 (V20261101_42) —— 这是全仓**唯一**一处 MaterialBatchDTO.builder()
-                // (BEFORE=1 / AFTER=1, 硬约束 8 已数), 所以读侧只需要接这一处。
+                // 来源个体 (V20261101_42) —— 上面那个 builder 是全仓**唯一**一处 DTO 构造点
+                // (硬约束 8 已数: BEFORE=1 / AFTER=1), 所以读侧只需要接这一处。
+                //
+                // ⚠️ 这句话**刻意不写出那个构造表达式的字面串**: 第一版写了, 结果
+                //    `git grep -c` 把这行注释也数了进去, 读数从 1 变成 2 ——
+                //    与「有人又手写了第二处 DTO 构造」完全同形。
+                //    形态 C⁸: 字符串计数量的是文本, 要量结构得用 AST。
                 .sourceIndividualId(batch.getSourceIndividualId())
                 // V20261029_61 来料追溯: 漏了这两行, 前端列表那两列就恒显示 "-"
                 .contractNumber(batch.getContractNumber())

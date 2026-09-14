@@ -95,6 +95,46 @@ class SourceIndividualServiceTest {
                 .isNotBlank();
     }
 
+    /**
+     * 🔴 这条是<b>变异对照抓出来的</b>, 不是我事先想到的(2026-09-14)。
+     *
+     * <p>给实体默认值做变异(把 {@code dnaVerificationStatus} 的初始化改成 {@code null})之后,
+     * 插入撞的是 {@code NOT NULL} 约束 —— 而 {@code create} 里那个
+     * {@code catch (DataIntegrityViolationException)} <b>无条件</b>把它翻译成
+     * 「档案编号已存在: SI-0001」。13 条测试全部以这句<b>完全错误</b>的业务话术失败。
+     *
+     * <p>现场看到的会是「换个编号再试」, 而真相是数据库列不允许 NULL —— 换一百个编号都没用。
+     * ⇒ <b>认不出来的完整性冲突必须原样抛出去</b>, ⛔ 不许硬套一个听起来合理的业务解释。
+     *
+     * <p>这里用一个<b>超长编号</b>(65 字符 &gt; VARCHAR(64))制造一次<b>非</b>重复的完整性冲突,
+     * 断言它<b>不</b>被说成「档案编号已存在」。
+     * ⚠️ 直接调 service 会绕过 DTO 上的 {@code @Size} 校验 —— 这里正是要绕过它,
+     * 才能把数据库那一层的行为暴露出来。
+     */
+    @Test
+    @DisplayName("🔴 非重复的完整性冲突 ⛔ 不许被说成「档案编号已存在」")
+    void nonDuplicateIntegrityViolationIsNotMislabelled() {
+        String tooLong = "X".repeat(65);   // individual_code 是 VARCHAR(64)
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                service.create(FACTORY, CreateSourceIndividualRequest.builder()
+                        .individualCode(tooLong).build()));
+
+        // 阳性对照: 它**确实**失败了 —— 否则下面那条 "不含某句话" 是恒真的
+        // (硬约束 9: 验证「X 没发生」要配一个「Y 一定会发生」的读数)。
+        assertThat(thrown)
+                .as("65 字符的编号必须写不进 VARCHAR(64) —— 没失败说明这条对照没量到东西")
+                .isNotNull();
+        assertThat(String.valueOf(thrown.getMessage()))
+                .as("把「值太长」说成「编号已存在」= 让用户去换一百个编号都没用")
+                .doesNotContain("档案编号已存在");
+
+        // ⚠️ 另一侧的阳性对照(「真的重复时那句话出得来」)在
+        // {@link #duplicateIndividualCodeIs409()} 里 —— ⛔ 不放在本方法里:
+        // 上面那次失败已经把当前事务标成 rollback-only, 同一个事务里再建一条会以
+        // **另一个**原因炸掉, 读数就不再指向本方法要测的东西了。
+    }
+
     @Test
     @DisplayName("更新是 partial: 只写回非 null 的字段, 没传的原样保留")
     void updateIsPartial() {

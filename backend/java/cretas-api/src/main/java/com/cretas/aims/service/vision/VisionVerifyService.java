@@ -37,10 +37,20 @@ import java.util.regex.Pattern;
 public class VisionVerifyService {
 
     /**
-     * 与 {@code LabelQcImageProxyService.MAX_IMAGE_BYTES} 同一口径(20 MB 解码后)。
-     * ⚠️ 这是**解码后**的字节数; base64 串本身约为它的 4/3。
+     * 10 MB(解码后) —— <b>与上游 Python {@code /api/llm/vision} 的
+     * {@code MAX_IMAGE_BYTES} 对齐</b>({@code backend/python/llm/api/endpoints.py:132})。
+     *
+     * <p>🔴 ⛔ <b>不要</b>照抄 {@code LabelQcImageProxyService} 的 20 MB:
+     * 那条路不经过 Python。这条经过 —— 把上限设得比上游<b>松</b>, 结果是
+     * 一张 15 MB 的照片在 Java 这里通过, 然后 Python 回 413,
+     * 用户看到的是一句「视觉识别服务暂时不可用」(502) 而不是「图片太大」。
+     * <b>两个限制中较严的那个才是真的限制</b>, 报错也该在那一层的语言里说出来。
+     *
+     * <p>⚠️ 这是<b>解码后</b>的字节数; base64 串本身约为它的 4/3。
+     * ⚠️ 上游那个常量改了, 这里要跟着改 —— 跨语言抽不成一份(形态 D),
+     * 所以两处各自写明对方在哪。
      */
-    static final int MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+    static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
     private static final Pattern DATA_URL_PREFIX =
             Pattern.compile("^data:([^;,]+)?(;[^,]*)?,", Pattern.CASE_INSENSITIVE);

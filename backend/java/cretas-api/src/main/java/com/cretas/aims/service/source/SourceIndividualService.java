@@ -133,9 +133,23 @@ public class SourceIndividualService {
         try {
             return toDTO(repository.saveAndFlush(entity));
         } catch (DataIntegrityViolationException e) {
-            // 并发下 check-then-insert 补不住 —— 排他真正发生在库上那条部分唯一索引。
-            log.warn("源头个体建档撞唯一索引: factoryId={}, individualCode={}", factoryId, code);
-            throw new BusinessException(409, "档案编号已存在: " + code).withCode("DUPLICATE");
+            // 🔴 只认**那一条**唯一索引。
+            //
+            // 2026-09-14 变异对照实测: 第一版这里是无条件 `throw 409 档案编号已存在`。
+            // 给实体默认值做变异(dnaVerificationStatus 初始化改成 null)之后, 插入撞的是
+            // `NOT NULL` 约束 —— 而这段代码把它翻译成了「档案编号已存在: SI-0001」。
+            // 13 条测试全部以这句**完全错误**的业务话术失败, 现场看到的会是
+            // 「换个编号再试」, 而真相是数据库列不允许 NULL。
+            // ⇒ 认不出来的完整性冲突必须**原样抛出去**(500 + 原始堆栈), ⛔ 不许硬套一个
+            //    听起来合理的业务解释 —— 那比没有解释更糟。
+            if (isDuplicateIndividualCode(e)) {
+                // 并发下 check-then-insert 补不住 —— 排他真正发生在库上那条部分唯一索引。
+                log.warn("源头个体建档撞唯一索引: factoryId={}, individualCode={}", factoryId, code);
+                throw new BusinessException(409, "档案编号已存在: " + code).withCode("DUPLICATE");
+            }
+            log.error("源头个体建档撞到未预期的完整性约束: factoryId={}, individualCode={}",
+                    factoryId, code, e);
+            throw e;
         }
     }
 
@@ -195,6 +209,25 @@ public class SourceIndividualService {
     }
 
     // ── 内部 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 这次完整性冲突是不是<b>档案编号撞了</b>?
+     *
+     * <p>判据是索引名 {@code uk_source_individual_code} —— 它由迁移
+     * {@code V20261101_42} 创建, 是这张表上唯一一条业务唯一索引。
+     * ⚠️ 这是个<b>代理判据</b>: 它依赖驱动把约束名放进异常消息里(PG 会, H2 也会)。
+     * 认不出来时<b>宁可放过</b>(原样抛出 ⇒ 500 + 完整堆栈), ⛔ 也不要猜 ——
+     * 猜错的代价是给用户一句自信而错误的业务话术。
+     */
+    private static boolean isDuplicateIndividualCode(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            String message = t.getMessage();
+            if (message != null && message.toLowerCase().contains("uk_source_individual_code")) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * 系谱引用校验 —— 空串当「没填」, 其余一律要能在<b>同一个工厂</b>里查得到。
