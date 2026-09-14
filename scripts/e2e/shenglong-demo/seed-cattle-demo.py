@@ -837,6 +837,34 @@ def ensure_workflow(api: Api, fid: str, product_type_id: str, definition: dict) 
     ⛔ 发不出去**不要绕**: 把校验器的报错原样打出来 —— 那句话就是它要的形状。
        绕过去(改成一张更简单的图)等于把问题推到演示当天。
     """
+    # ── 幂等 ⓪: 已经**发布**且结构一致 -> 整块跳过 ─────────────────────────
+    # 🔴 判据是「族图的节点/边 id 集合逐一相同」, ⛔ 不是「节点数相同」——
+    #    数量相同而内容不同是这类比较最典型的假绿(改了一个 skuId 数量不变)。
+    # ⚠️ 不跳过会怎样: 每跑一遍 PUT 一次草稿(lockVersion +1)再发布一次。
+    #    数据其实不重复(revisionId 恒为 1, 修订是内容寻址的), 但 STEP 行会一直显示
+    #    created, 让「第二遍 created=0」这条判据永远不成立 —— 而那条判据是幂等的**唯一**证据。
+    current0 = api.get(f"/api/mobile/{fid}/product-process-workflows/{product_type_id}")
+    if current0.get("success"):
+        published = current0.get("data") or {}
+        if published.get("status") == "PUBLISHED":
+            want_nodes = {n["id"] for n in definition["nodes"]}
+            want_edges = {e["id"] for e in definition["edges"]}
+            got_nodes = {n.get("id") for n in (published.get("nodes") or [])}
+            got_edges = {e.get("id") for e in (published.get("edges") or [])}
+            if want_nodes == got_nodes and want_edges == got_edges:
+                step("workflow draft", "reused",
+                     nodes=len(got_nodes), edges=len(got_edges),
+                     lockVersion=published.get("lockVersion"),
+                     revisionId=published.get("revisionId"))
+                ensure_bom_packaging(api, fid, product_type_id,
+                                     published.get("revisionId"))
+                step("workflow publish-and-activate", "reused",
+                     status="PUBLISHED", revisionId=published.get("revisionId"))
+                return
+            info(f"已发布的族图与本脚本的定义不一致(节点差 "
+                 f"{len(want_nodes ^ got_nodes)} 个, 边差 {len(want_edges ^ got_edges)} 条), "
+                 f"重新存草稿并发布")
+
     # 幂等: 已有草稿/已发布版本时, 必须把**当前** lockVersion 带上再存,
     # 否则乐观锁 409 PRODUCT_PROCESS_WORKFLOW_CONFLICT「该 Workflow 已被其他人更新」。
     # ⚠️ 那句话读起来像「有别人在改」, 实际上第二次跑自己就会撞 —— 2026-09-15 实测。
@@ -1028,7 +1056,13 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
     plans = api.need(api.get(f"/api/mobile/{fid}/production-plans",
                              params={"page": 1, "size": 100}), "查生产计划") or {}
     prows = plans.get("content") if isinstance(plans, dict) else plans
-    plan = next((p for p in (prows or []) if plan_number_hint in str(p.get("remark") or "")), None)
+    # 🔴 计划上的备注字段叫 `notes`, **没有** `remark` —— 原来建的时候传 remark,
+    #    后端整个字段不存在于 DTO, 被静默丢掉; 查的时候又按 remark 找, 于是永远找不到,
+    #    每遍都走建的分支。⚠️ 它没造成重复数据纯属运气: 后端按 clientRequestId 重放,
+    #    四次跑下来只有 1 张计划 —— **幂等是后端替我做的, 不是脚本做到的**。
+    #    ⇒ 两头都改成 notes, 让脚本自己也认得出来。
+    plan = next((p for p in (prows or [])
+                 if plan_number_hint in str(p.get("notes") or "")), None)
     if plan:
         plan_id = plan["id"]
         step("production plan", "reused", id=plan_id)
@@ -1041,7 +1075,7 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
         #    ⇒ 这里用**稳定**的键(不是随机 UUID): 重跑时同一个键让后端重放而不是再建一张。
         data = api.need(api.post(f"/api/mobile/{fid}/production-plans", {
             "productTypeId": finished_pt, "plannedQuantity": 200, "unit": "kg",
-            "plannedDate": DEMO_DATE, "remark": f"{plan_number_hint} 酱牛肉演示计划",
+            "plannedDate": DEMO_DATE, "notes": f"{plan_number_hint} 酱牛肉演示计划",
             "clientRequestId": f"{DEMO_MARK}-plan-{finished_pt}",
         }), "建生产计划")
         if data is None:
@@ -1096,10 +1130,25 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
             f"批次 {batch_id} 开工后状态是 {batch_status!r}, 期望 IN_PROGRESS —— "
             f"⛔ 不能带着没开工的批次去报工(那一步只会说「批次尚未开始生产」)。")
 
-    tasks = api.need(
-        api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/spawn-tasks",
-                 {"productTypeId": str(finished_pt)}),
-        "派生工序任务") or []
+    # 幂等: 先查这个批次有没有工序任务, 有就不再派生。
+    tasks_url = f"/api/mobile/{fid}/production/batches/{batch_id}/work-process-tasks"
+    tasks = api.need(api.get(tasks_url), "查工序任务") or []
+    if tasks:
+        spawn_status = "reused"
+    else:
+        api.need(
+            api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/spawn-tasks",
+                     {"productTypeId": str(finished_pt)}),
+            "派生工序任务")
+        # 🔴 **不要用 spawn 的返回体挑任务**: 它刚 insert 出来, `processName` 这类
+        #    关联字段还是 null。2026-09-15 干净库实测, spawn 返回的三条全是
+        #    `None(id=4) None(id=5) None(id=6)`, 按名字挑必然落空;
+        #    而同一批任务从 GET 读出来是 屠宰/分割/加工, 名字齐的。
+        #    ⚠️ 这个坑只在**第一遍**露头 —— 第二遍 tasks 已存在, 走的是上面 GET 那支,
+        #      所以它能一直躲到干净库那次才炸。
+        #    ⇒ 一律以 GET 这份**权威列表**为准。
+        tasks = api.need(api.get(tasks_url), "查工序任务(派生后)") or []
+        spawn_status = "created"
     # 🔴 要的是**分割**那道工序的任务, ⛔ 不是 tasks[0] —— 派生顺序不是契约,
     #    拿错一条会把「分割报工」记到屠宰头上, 而且不会报错(形态 A: 量错了对象)。
     split_task = next(
@@ -1110,7 +1159,9 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
             + ", ".join(f"{t.get('processName') or t.get('name')}(id={t.get('id')})"
                         for t in tasks))
     task_id = (split_task or {}).get("id")
-    step("spawn work-process tasks", "created", spawned=len(tasks),
+    if task_id is None:
+        raise SeedError(f"没有拿到「分割」工序任务 id, 无法报工。tasks={len(tasks)}")
+    step("spawn work-process tasks", spawn_status, spawned=len(tasks),
          splitTaskId=task_id)
 
     # 分割报工: 输入 1 个胴体, 输出 3 个部位
@@ -1126,16 +1177,32 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
     }
     if task_id:
         report_body["workProcessTaskId"] = task_id
-    # ⛔ 报工失败**不能**记成 ok: 协调者要的终态是「至少 1 具胴体报分割工序输出 3 个部位」,
-    #    这一步静默跳过的话, 后面标签照样能建、公开溯源照样 200 —— 一条**没有生产过程**的
-    #    溯源链看起来和真的一模一样。那正是最不能接受的那种绿。
-    d = api.need(
-        api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/reports", report_body),
-        "分割报工")
-    step("split yield report", "created",
-         reportId=(d or {}).get("reportId") or (d or {}).get("id"),
-         outputs=len(SPLIT_OUTPUTS),
-         outputQuantity=report_body["outputQuantity"])
+    # 幂等: 🔴 报工**没有**幂等键, 每 POST 一次就多一条记录 —— 实测跑 4 遍,
+    #    `lastStepOutput` 从 57 一路涨到 228(4×57)。这是本脚本唯一会**真正污染数据**
+    #    的一步, 所以判据要看服务端的累计产出, ⛔ 不能只看「这遍报没报成功」。
+    #    ⚠️ `GET .../reports` 返回的是**汇总**(steps[] 按工序聚合), 不是报工列表 ——
+    #      想按「有没有那条记录」去查是查不到的, 只能问「这道工序累计产出是不是已经 > 0」。
+    summary = api.need(
+        api.get(f"/api/mobile/{fid}/production/batches/{batch_id}/reports"),
+        "查报工汇总") or {}
+    reported = next((st_ for st_ in (summary.get("steps") or [])
+                     if st_.get("workProcessTaskId") == task_id), None)
+    already = reported is not None and float(reported.get("totalOutput") or 0) > 0
+    if already:
+        step("split yield report", "reused", splitTaskId=task_id,
+             totalOutput=reported.get("totalOutput"),
+             outputUnit=reported.get("outputUnit"))
+    else:
+        # ⛔ 报工失败**不能**记成 ok: 协调者要的终态是「至少 1 具胴体报分割工序输出 3 个部位」,
+        #    这一步静默跳过的话, 后面标签照样能建、公开溯源照样 200 —— 一条**没有生产过程**的
+        #    溯源链看起来和真的一模一样。那正是最不能接受的那种绿。
+        d = api.need(
+            api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/reports", report_body),
+            "分割报工")
+        step("split yield report", "created",
+             reportId=(d or {}).get("reportId") or (d or {}).get("id"),
+             outputs=len(SPLIT_OUTPUTS),
+             outputQuantity=report_body["outputQuantity"])
 
     # ── 标签 + traceCode ────────────────────────────────────────────────
     # 🔴 `POST /labels` **不会**替你生成 traceCode: `LabelServiceImpl#createLabel` 只补
