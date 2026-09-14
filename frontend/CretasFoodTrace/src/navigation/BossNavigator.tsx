@@ -10,6 +10,10 @@ import SalesOrderDetailScreen from '../screens/factory-admin/inventory/SalesOrde
 import PurchaseOrderListScreen from '../screens/factory-admin/inventory/PurchaseOrderListScreen';
 import PurchaseOrderDetailScreen from '../screens/factory-admin/inventory/PurchaseOrderDetailScreen';
 import FinishedGoodsListScreen from '../screens/factory-admin/inventory/FinishedGoodsListScreen';
+// 通用现场能力屏 —— 复用 ProcessingStackNavigator 里注册的同一批组件，⛔ 不复制屏代码。
+import { TraceabilityScreen, TraceabilityDetailScreen } from '../screens/traceability';
+import VisionVerifyScreen from '../screens/shared/VisionVerifyScreen';
+import SourceIndividualFormScreen from '../screens/shared/SourceIndividualFormScreen';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
 import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
@@ -29,6 +33,28 @@ function BossOverviewStack() {
       <OverviewStack.Screen name="BossPurchaseOrders" component={PurchaseOrderListScreen} />
       <OverviewStack.Screen name="PurchaseOrderDetail" component={PurchaseOrderDetailScreen} />
       <OverviewStack.Screen name="BossFinishedGoods" component={FinishedGoodsListScreen} />
+      {/*
+        🔴 2026-09-15 接入三个通用现场能力屏 —— 此前工厂管理员**一个都走不到**。
+
+        `Traceability` / `TraceabilityDetail` / `VisionVerify` / `SourceIndividualForm`
+        此前唯一的注册点是 `ProcessingStackNavigator.tsx`，而那棵树唯一的挂载点是
+        `MainNavigator`（platform_admin / equipment_admin / quality_manager /
+        permission_admin）。非餐饮的 `factory_super_admin` 走的是本文件这棵树
+        （`AppNavigator:108` `isRestaurant(user) ? <FactoryAdminNavigator /> : <BossNavigator />`）
+        ⇒ 屏在、组件在、后端接口在，只是这条路上没人注册它们。
+
+        ⚠️ 四条一起注册，⛔ 不能只注册三个入口屏：它们是一张联通图 ——
+          · `TraceabilityScreen`  → `navigate('TraceabilityDetail', { batchNumber })`
+          · `VisionVerifyScreen`  → `navigate('SourceIndividualForm', …)`（两处）
+        漏掉详情屏的话，入口点得开、下一跳 route not found。
+
+        由 `__tests__/gates/factoryBossReachesFieldEntries.test.ts` 三层钉住
+        （可达性 / 同一个 stack / 总览页真按得到）。
+      */}
+      <OverviewStack.Screen name="Traceability" component={TraceabilityScreen} />
+      <OverviewStack.Screen name="TraceabilityDetail" component={TraceabilityDetailScreen} />
+      <OverviewStack.Screen name="VisionVerify" component={VisionVerifyScreen} />
+      <OverviewStack.Screen name="SourceIndividualForm" component={SourceIndividualFormScreen} />
     </OverviewStack.Navigator>
   );
 }
