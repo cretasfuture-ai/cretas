@@ -153,11 +153,21 @@ _d = datetime.date
 # ⇒ 换成一张带证据的登记表: 想往 VL 池里加候选, 就得在这里写下探针日期与结论。
 #   值是那条证据本身, ⛔ 不是 True/False —— 布尔值记不住「凭什么」。
 _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
+    # ── qwen3.8-flash: 三个账号**都**实测通过(2026-09-15) ────────────────────
+    # 免费额度按**账号**分开算 ⇒ 三份叠加, 一个账号 403 FreeTierOnly 之后
+    # 按现有 NEXT 语义切下一个账号, 拿到的是**另一份**额度而不是同一份。
+    # ⚠️ 延迟逐账号量(同一个模型在不同账号上可以差一个数量级 —— 本文件
+    #    REASONING 槽那条 66.9s 的注释就是这么来的), 所以三条各记各的:
     ("aliyun_c_vl", "qwen3.8-flash"):
-        "2026-09-15 prod 探针(dashscope_vl_probe.sh): 两张样张 HTTP 200 且返回合规 JSON —— "
+        "2026-09-15 prod 探针: 带图 HTTP 200, **4.8s**。两张样张均返回合规 JSON —— "
         "EAR_TAG {\"tagNumber\":\"1180245\",\"confidence\":1.0}; "
         "MEAT_CUT {\"cut\":\"Ribeye\",\"marblingScore\":3,\"foreignObjectSuspected\":false,"
-        "\"contaminationSuspected\":false,\"confidence\":0.9}。**8-10s/次**, usage≈1200 tokens。",
+        "\"contaminationSuspected\":false,\"confidence\":0.9}。usage≈1200 tokens。最快 ⇒ 排链头。",
+    ("aliyun_a_vl", "qwen3.8-flash"):
+        "2026-09-15 prod 探针: 带图 HTTP 200, **6.2s**。第二顺位。",
+    ("aliyun_b_vl", "qwen3.8-flash"):
+        "2026-09-15 prod 探针: 带图 HTTP 200, **10.6s**。最慢 ⇒ 排末位(链是串行且共享总预算)。",
+    # ── 可选(非默认) ────────────────────────────────────────────────────────
     ("aliyun_a_vl", "qwen3.7-flash"):
         "2026-09-15 prod 探针: aliyun_a 带图 HTTP 200, 但 **33-48s/次**(token 3.8k-4.9k); "
         "同模型纯文本仅 2.4s ⇒ 慢的是图片那一路, 不是账号。"
@@ -166,29 +176,55 @@ _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
         "RN 那一屏用户举着手机等的就是这段时间。要换成它请先想清楚这一条。",
 }
 
-# VL 槽位的账号与模型**可配**(Steve 2026-09-15): 换模型 = 改 `.env.prod` 一行 + 重启,
-# ⛔ 不用改代码、不用重新发版。
+# VL 槽位的账号顺序与模型**可配**(Steve 2026-09-15): 换模型/调顺序 =
+# 改 `.env.prod` 一行 + 重启, ⛔ 不用改代码、不用重新发版。
+#
+#   LLM_VL_MODEL     缺省 qwen3.8-flash
+#   LLM_VL_ACCOUNTS  缺省 aliyun_c_vl,aliyun_a_vl,aliyun_b_vl   (逗号分隔, 即 c→a→b)
 #
 # 🔴 但 env **只能在上面那张登记表里挑**, ⛔ 不能凭空注入一个 (账号, 模型):
 #    本文件顶部写着 `_SAFE_MODELS` 是**唯一**的计费护栏("The router REFUSES any
 #    (account, model) not in this dict")。如果 env 能把任意模型名塞进白名单,
 #    那道护栏当场变成摆设 —— 一个写错的 `LLM_VL_MODEL` 就可能指向付费 SKU。
-# ⇒ 选中的 pair 不在 `_VISION_VERIFIED` 里时, VL 池**留空**并 ERROR 日志点名,
+# ⇒ 没有任何组合选得中时, VL 池**留空**并 ERROR 日志点名,
 #   表现是「VL 无候选」这条**明确失败**路径, ⛔ 不是静默降级。
-_VL_ACCOUNT = (os.getenv("LLM_VL_ACCOUNT") or "").strip() or "aliyun_c_vl"
+_VL_DEFAULT_ACCOUNTS = "aliyun_c_vl,aliyun_a_vl,aliyun_b_vl"
+_VL_ACCOUNTS: List[str] = [
+    a.strip() for a in
+    ((os.getenv("LLM_VL_ACCOUNTS") or "").strip() or _VL_DEFAULT_ACCOUNTS).split(",")
+    if a.strip()
+]
 _VL_MODEL = (os.getenv("LLM_VL_MODEL") or "").strip() or "qwen3.8-flash"
 
 
 def _vl_pool() -> List[Tuple[str, str]]:
-    """按 env 选出 VL 候选; 选不出来就返回空池(明确失败), ⛔ 不猜、⛔ 不降级。"""
-    pair = (_VL_ACCOUNT, _VL_MODEL)
-    if pair in _VISION_VERIFIED:
-        return [pair]
+    """按 env 选出 VL 候选链(**保持 env 给的账号顺序**)。
+
+    ⚠️ 顺序在这里就是**最终顺序**: VL 在 `_NO_TEXT_TAIL_SLOTS` 里不追加文本地板,
+       而 `_build_chain` 的排序键对这三条完全平手(同模型、同到期日 None、
+       同能力档) ⇒ 稳定排序原样保留这里的书写顺序。
+       ⛔ 别把「快的排前面」这件事只写在注释里 —— 它是靠**这个列表的顺序**实现的,
+       由 test_vl_chain_is_fastest_account_first 钉住。
+
+    选不出来就返回空池(明确失败), ⛔ 不猜、⛔ 不降级。
+    """
+    pool = [(acct, _VL_MODEL) for acct in _VL_ACCOUNTS
+            if (acct, _VL_MODEL) in _VISION_VERIFIED]
+    if pool:
+        skipped = [a for a in _VL_ACCOUNTS if (a, _VL_MODEL) not in _VISION_VERIFIED]
+        if skipped:
+            # 部分命中也要出声: 「3 个账号只接上 1 个」与「配了 1 个账号」在链上同形。
+            logger.warning(
+                "[llm_router] VL: %d/%d 个账号可用于 %s; 未登记因而跳过: %s",
+                len(pool), len(_VL_ACCOUNTS), _VL_MODEL, ", ".join(skipped),
+            )
+        return pool
     logger.error(
-        "[llm_router] VL 槽位没有候选: LLM_VL_ACCOUNT=%r / LLM_VL_MODEL=%r 不在视觉能力登记表里。"
-        " 可选组合: %s。/api/llm/vision 会以「All providers exhausted for vl」明确失败,"
+        "[llm_router] VL 槽位没有候选: LLM_VL_MODEL=%r / LLM_VL_ACCOUNTS=%r"
+        " 里没有任何组合在视觉能力登记表里。已登记: %s。"
+        " /api/llm/vision 会以「All providers exhausted for vl」明确失败,"
         " ⛔ 不会降级给文本模型。",
-        _VL_ACCOUNT, _VL_MODEL,
+        _VL_MODEL, ",".join(_VL_ACCOUNTS),
         ", ".join("%s/%s" % p for p in sorted(_VISION_VERIFIED)),
     )
     return []
@@ -210,6 +246,8 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # ⚠️ 这两条都在这里, 是因为 env 只能**在已登记的候选里挑**(见 `_vl_pool`):
     #    白名单必须先有它, env 才选得到它。⛔ 反过来不行。
     ("aliyun_c_vl", "qwen3.8-flash"): None,
+    ("aliyun_a_vl", "qwen3.8-flash"): None,
+    ("aliyun_b_vl", "qwen3.8-flash"): None,
     ("aliyun_a_vl", "qwen3.7-flash"): None,
     # ── 上海电信 AI Store (owner 2026-08-13 confirmed 25M quota points and
     #    automatic stop on exhaustion; synthetic live probes passed) ──
@@ -421,6 +459,8 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     # ⚠️ 两条都登记是因为 env 可以在它们之间切(见 `_vl_pool`), 而**被切到的那条
     #    必须当场可用** —— 让「切过去之后要等 21 天重审才生效」这种事不可能发生。
     ("aliyun_c_vl", "qwen3.8-flash"),
+    ("aliyun_a_vl", "qwen3.8-flash"),
+    ("aliyun_b_vl", "qwen3.8-flash"),
     ("aliyun_a_vl", "qwen3.7-flash"),
     # 2026-08-13 重建。上一版(08-09 建)的9 个条目今天实测 **6 个已死** ——
     # 包括它自己的三根支柱 qwen3.8-max(三账号各 100 万、到期 11/01)。
@@ -1366,14 +1406,18 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 真实调用)」。那个前提没了: 拍照核验(耳标识别 / 肉品外观初评, PR #791)
     # 把 VL 变成一条产品路径, prod 上 `/api/llm/vision` 因此对每个请求都 500。
     #
-    # 🔴 **只有一条候选, 这是刻意的**: 2026-09-15 同一把 key 实测, 其它 VL SKU
-    #    (qwen-vl-max / qwen-vl-plus / qwen3-vl-flash / qwen3-vl-plus 及日期版 /
-    #     qwen3.5-flash / qwen3.8-max)**一律 403 AllocationQuota.FreeTierOnly**。
-    #    ⛔ 把它们放进链里当回退是**负收益**: 每一条都要先花一次往返拿到 403,
-    #       才轮到真正能用的那条 —— 用户多等, 结果不变。
-    #    ⚠️ 「多一个回退总比没有好」在这里是错的: 回退的前提是它**可能**成功。
+    # 🔴 **三个账号轮转同一个模型**(qwen3.8-flash), 顺序 c → a → b。
+    #    · 为什么是同一个模型: 2026-09-15 同一批探针实测, **其它** VL SKU
+    #      (qwen-vl-max / qwen-vl-plus / qwen3-vl-flash / qwen3-vl-plus 及日期版 /
+    #       qwen3.5-flash / qwen3.8-max)一律 403 AllocationQuota.FreeTierOnly。
+    #      ⛔ 把它们排进链当回退是**负收益**: 先白等一跳 403, 结果不变。
+    #      ⚠️「多一个回退总比没有好」是错的 —— 回退的前提是它**可能**成功。
+    #    · 为什么换账号**是**有效回退: 免费额度按**账号**算, 三个账号三份额度。
+    #      c 403 之后切 a 拿到的是另一份, 不是同一份重试。
+    #    · 为什么是 c → a → b: 实测延迟 4.8s / 6.2s / 10.6s。链是**串行且共享
+    #      同一个总预算**, 慢的排前面会把后面的预算一起吃掉(2026-08-09 生产事故)。
     #
-    # 具体用哪一条由 env 决定(`LLM_VL_ACCOUNT` / `LLM_VL_MODEL`), 但只能在
+    # 顺序与模型都由 env 决定(`LLM_VL_ACCOUNTS` / `LLM_VL_MODEL`), 但只能在
     # `_VISION_VERIFIED` 登记过的组合里挑 —— 见 `_vl_pool()` 上方的说明。
     SLOT.VL: _vl_pool(),
 }
@@ -1838,6 +1882,13 @@ def _provider_config(account: str) -> Tuple[str, str]:
             os.getenv("LLM_ALIYUN_A_BASE_URL",
                       "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             os.getenv("LLM_ALIYUN_A_API_KEY", ""),
+        ),
+        # aliyun_b 的 VL 分身 —— 同上。三个账号各有**独立**的免费额度池,
+        # 所以轮转拿到的是三份额度, ⛔ 不是同一份重试三次。
+        "aliyun_b_vl": (
+            os.getenv("LLM_ALIYUN_B_BASE_URL",
+                      "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            os.getenv("LLM_ALIYUN_B_API_KEY", ""),
         ),
         # ark (Volcengine 火山方舟, 2026-07-30): OpenAI-compatible, ~36 ACTIVE text
         # models each holding an untouched 500k free inference grant — a provider

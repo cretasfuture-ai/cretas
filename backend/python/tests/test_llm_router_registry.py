@@ -62,8 +62,11 @@ _FROZEN_REGISTRY = {
     # 给 aliyun_b 定性时同源 —— 同一把 key 当天对其它 VL SKU 一律返回
     # 403 AllocationQuota.FreeTierOnly, 而 403-而-非-计费-200 只有在用完即停
     # 已开启时才可能出现。
+    # 三账号轮转同一个模型; 实测带图延迟 c 4.8s / a 6.2s / b 10.6s(链序即按此排)。
     ("aliyun_c_vl", "qwen3.8-flash"): None,
-    # 可选备胎(`LLM_VL_ACCOUNT=aliyun_a_vl` + `LLM_VL_MODEL=qwen3.7-flash` 切过去)。
+    ("aliyun_a_vl", "qwen3.8-flash"): None,
+    ("aliyun_b_vl", "qwen3.8-flash"): None,
+    # 可选备胎(`LLM_VL_MODEL=qwen3.7-flash` 切过去; 它只在 aliyun_a 上验过)。
     # ⚠️ 2026-09-15 实测带图 **33-48s/次**(同模型纯文本 2.4s) ⇒ ⛔ 不作默认:
     #    手机端用户举着手机等的就是这段时间。
     ("aliyun_a_vl", "qwen3.7-flash"): None,
