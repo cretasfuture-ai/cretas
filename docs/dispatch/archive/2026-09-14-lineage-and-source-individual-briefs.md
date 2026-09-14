@@ -104,3 +104,13 @@
 - ⇒ **给 Line A 的两条硬修正**：① `FINISHED_TO_SHIPMENT` 的数据源**不是** `shipment_records`——执行者要找真实的出货落库（销售发货/出库单/成品出库流水），找不到就把这一段登记为「无载体，不写」而不是造边；② 成品→生产批次映射走 `production_plan_id`，一个计划多批次时要按批次号/时间二次对齐，登记对不齐的行数。
 - 六膳门在 prod 是**两条 factory**：`F006`（六膳门食品科技，有数据）和 `LIUSHANMEN`（六膳门）。回填两边都做，读数分开报。
 - `source_individuals` 不存在（预期）；`flyway_schema_history` max = 20261101.41 success。
+
+## C1 演示租户：organizer 裁定（2026-09-14 23:20，依据 `2026-09-14-recon-demo-tenant.md`）
+
+- **全走 API（方案 A）**，⛔ 不 SQL 直插。租户 ID 不要求字面量——用 `POST /api/platform/factories` 自动生成（name「胜龙牛业演示」），建完调 onboarding 内部端点或等价 `provisionDefaultUsers` 拿 3 个默认用户，再重置 admin 密码为演示口令。
+- 基础档案单条 API：`raw-material-types`（活牛、胴体半片）、`product-types`（约 20 个分割 SKU + 酱牛肉成品，可用 Excel import）、`work-processes`（屠宰、分割、加工）。
+- 族图走 `PUT /product-process-workflows/{ptId}/draft` + `publish-and-activate`，JSON 照 `ProductProcessWorkflowServiceImplTest.validDefinition()`（L1237-1355）改成「活牛→屠宰→分割(1 个 PROCESS 节点 20 个 OUTPUT port)→加工」。
+- 6 头牛 = 6 个 `POST /material-batches/opening`（幂等 batchKey）；**Line B 合并后**建 6 条 `source-individuals` 并把 `sourceIndividualId` 挂上（⚠️ 检查 `OpeningInventoryRequest` 是否透传该字段；没有就走 update 端点或终审时补）。
+- 生产链照 `seed-demo-chain.py` A2~A22：计划 → 转批次 → start → spawn-tasks → reports → `POST /labels {batchId,type:BATCH}` → `GET /api/public/trace/code/{traceCode}`。
+- ⚠️ 普通 `POST /material-batches` 已 409 墓碑；RawMaterialType 创建需 `factory_super_admin`；默认用户密码随机。
+- 执行者：Line A / B 先收工的那条接 `scripts/e2e/shenglong-demo/seed-cattle-demo.py`（新目录，复用 `seed-demo-chain.py` 的 ApiClient），⛔ 不在 prod 跑；prod 执行由 organizer 做（🔒）。
