@@ -94,3 +94,13 @@
 - C1（合并后，🔒 prod 写）：`SHENGLONG_DEMO` 租户 + 屠宰→分割(20 端口)→加工族图配置 + 6 头个体 + 批次种子 + 二维码。
 - V1：秤读数→报工接线 main 上确认无 ingest 端点（已核），现场不说「已接」。
 - 周二：Steve 手机 4G 跑完整剧本。
+
+## probe 读数（prod `cretas_prod_db`，2026-09-14 22:50，只读，postgres superuser，RLS 两表均未启用）
+
+- `batch_lineage_edges` **67 行，全部 `WIP_CONSUME` / PRODUCTION_BATCH→PRODUCTION_BATCH**（F006=54，LIUSHANMEN=13）。RAW_TO_PRODUCTION / PRODUCTION_TO_FINISHED / FINISHED_TO_SHIPMENT / REWORK / BLEND **各 0**；MATERIAL_BATCH / FINISHED_BATCH / SHIPMENT_RECORD 类型节点 **0**。
+- ⚠️ 67 条里 **48 条是自环**（source_id == target_id，同批次工序间领用）；真正跨批次的只有 6 条（全部 2026-06-12，构成 3 条两跳链，此后再没有）。⇒ 现有 WIP 写边对「链」的贡献接近零，回填才是主体。
+- `batch_lineage_closure` 33 行（F006=31，LIUSHANMEN=2），depth 0→24 / 1→6 / 2→3，max depth 2。触发器 `trg_lineage_edge_insert`（enabled）与 `fn_maintain_lineage_closure` 存在且与闭包行数一致。
+- **回填规模（F006 / LIUSHANMEN）**：`material_consumptions` 带 production_batch_id 的行 **297 / 28**；`semi_finished_inventory_transactions` OUT 行 10 / 13；`finished_goods_batches` 能经 `production_plan_id` 桥到 `production_batches` 的去重行 **26 / 3**（⚠️ 直连会 fan-out，要去重）；`shipment_records` **0 / 0，且全库 0 行**（阳性对照已做）。
+- ⇒ **给 Line A 的两条硬修正**：① `FINISHED_TO_SHIPMENT` 的数据源**不是** `shipment_records`——执行者要找真实的出货落库（销售发货/出库单/成品出库流水），找不到就把这一段登记为「无载体，不写」而不是造边；② 成品→生产批次映射走 `production_plan_id`，一个计划多批次时要按批次号/时间二次对齐，登记对不齐的行数。
+- 六膳门在 prod 是**两条 factory**：`F006`（六膳门食品科技，有数据）和 `LIUSHANMEN`（六膳门）。回填两边都做，读数分开报。
+- `source_individuals` 不存在（预期）；`flyway_schema_history` max = 20261101.41 success。
