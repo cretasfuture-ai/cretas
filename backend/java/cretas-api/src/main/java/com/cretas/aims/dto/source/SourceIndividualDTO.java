@@ -64,6 +64,12 @@ public class SourceIndividualDTO {
     @Schema(description = "DNA 比对状态中文名")
     private String dnaVerificationStatusDisplayName;
 
+    @Schema(description = "父本个体ID (同表自引用, 可空)")
+    private String sireIndividualId;
+
+    @Schema(description = "母本个体ID (同表自引用, 可空)")
+    private String damIndividualId;
+
     @Schema(description = "扩展属性")
     private Map<String, Object> extAttributes;
 

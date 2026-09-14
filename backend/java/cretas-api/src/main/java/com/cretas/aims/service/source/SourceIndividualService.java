@@ -104,10 +104,16 @@ public class SourceIndividualService {
                     .withHint("换一个档案编号, 或直接打开已有的那份档案");
         }
 
+        String newId = UUID.randomUUID().toString();
+        String sireId = requireParentInSameFactory(factoryId, request.getSireIndividualId(), newId, "父本");
+        String damId = requireParentInSameFactory(factoryId, request.getDamIndividualId(), newId, "母本");
+
         SourceIndividual entity = SourceIndividual.builder()
-                .id(UUID.randomUUID().toString())
+                .id(newId)
                 .factoryId(factoryId)
                 .individualCode(code)
+                .sireIndividualId(sireId)
+                .damIndividualId(damId)
                 .tagNumber(normaliseTagOrNull(request.getTagNumber()))
                 .species(trimToNull(request.getSpecies()))
                 .breed(trimToNull(request.getBreed()))
@@ -165,6 +171,14 @@ public class SourceIndividualService {
         if (request.getDnaVerificationStatus() != null) {
             entity.setDnaVerificationStatus(request.getDnaVerificationStatus());
         }
+        if (request.getSireIndividualId() != null) {
+            entity.setSireIndividualId(
+                    requireParentInSameFactory(factoryId, request.getSireIndividualId(), id, "父本"));
+        }
+        if (request.getDamIndividualId() != null) {
+            entity.setDamIndividualId(
+                    requireParentInSameFactory(factoryId, request.getDamIndividualId(), id, "母本"));
+        }
         if (request.getExtAttributes() != null) {
             entity.setExtAttributes(request.getExtAttributes());
         }
@@ -181,6 +195,40 @@ public class SourceIndividualService {
     }
 
     // ── 内部 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 系谱引用校验 —— 空串当「没填」, 其余一律要能在<b>同一个工厂</b>里查得到。
+     *
+     * <p>三条规则, 每条各自 422 并说清是哪一条:
+     * <ol>
+     *   <li>不能指向自己(一头个体不可能是自己的父本)</li>
+     *   <li>必须是本厂已存在的活档案 —— <b>查不到就报错</b>, ⛔ 不静默置空:
+     *       静默置空会让用户以为系谱记上了, 而库里那一格是空的。</li>
+     *   <li>别厂的个体也算查不到 —— 库上那条 FK 只保证「这个 id 存在」,
+     *       保证不了「它是本厂的」(PK 里没有 factory_id)。两道各管一半, 都不能省。</li>
+     * </ol>
+     *
+     * @param selfId 正在建/改的那一条自己的 id, 用来判「指向自己」
+     * @return 归一化后的父本 id(没填时为 {@code null})
+     */
+    private String requireParentInSameFactory(String factoryId, String rawParentId,
+                                              String selfId, String role) {
+        String parentId = trimToNull(rawParentId);
+        if (parentId == null) {
+            return null;
+        }
+        if (parentId.equals(selfId)) {
+            throw new BusinessException(422, role + "不能指向个体自己")
+                    .withCode("INVALID_PEDIGREE");
+        }
+        if (repository.findByIdAndFactoryId(parentId, factoryId).isEmpty()) {
+            throw new BusinessException(422,
+                    role + "个体档案不存在或不属于本工厂: " + parentId)
+                    .withCode("INVALID_PEDIGREE")
+                    .withHint("先建立" + role + "的个体档案, 再回来填这一栏");
+        }
+        return parentId;
+    }
 
     private SourceIndividual require(String factoryId, String id) {
         return repository.findByIdAndFactoryId(id, factoryId)
@@ -226,6 +274,8 @@ public class SourceIndividualService {
                 // 读不到状态就让它是 null —— ⛔ 不兜底成「未采样」(核心原则 1)。
                 .dnaVerificationStatusDisplayName(e.getDnaVerificationStatus() == null
                         ? null : e.getDnaVerificationStatus().getDisplayName())
+                .sireIndividualId(e.getSireIndividualId())
+                .damIndividualId(e.getDamIndividualId())
                 .extAttributes(e.getExtAttributes())
                 .notes(e.getNotes())
                 .createdAt(e.getCreatedAt())

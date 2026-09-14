@@ -125,6 +125,23 @@ public class SourceIndividual extends BaseEntity {
     private DnaVerificationStatus dnaVerificationStatus = DnaVerificationStatus.UNSAMPLED;
 
     /**
+     * 父本 —— 同表自引用, 存的是 {@link #id}, 可空。
+     *
+     * <p>⚠️ 这里<b>刻意用裸 ID 而不是 {@code @ManyToOne}</b>:
+     * 系谱是一张可以很深的图(祖代/曾祖代), JPA 关联会把「读一头个体」变成一串
+     * 不受控的懒加载; 而产品上只需要「谁是父本」这一跳, 需要更多层时由查询显式做。
+     *
+     * <p>⛔ 库上的 FK 是 {@code ON DELETE SET NULL} —— 删父本<b>不连坐</b>后代。
+     * 「同厂」这一条 FK 管不着(PK 只有 id), 由 service 层校验; 两道各管一半。
+     */
+    @Column(name = "sire_individual_id", length = 191)
+    private String sireIndividualId;
+
+    /** 母本 —— 同 {@link #sireIndividualId}。 */
+    @Column(name = "dam_individual_id", length = 191)
+    private String damIndividualId;
+
+    /**
      * 租户/物种特有的扩展属性(体重、免疫记录、圈舍号…)。
      * <p>⛔ 这里是<b>扩展</b>位, 不是「什么都往里塞」的口袋: 一旦某个键跨租户通用,
      * 就该升成正式列并配迁移。

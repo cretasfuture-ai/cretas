@@ -66,6 +66,20 @@ public class CreateSourceIndividualRequest {
     @Schema(description = "DNA 比对状态, 不传则为 UNSAMPLED")
     private DnaVerificationStatus dnaVerificationStatus;
 
+    /**
+     * 父本个体 ID。可空。
+     * <p>填了就必须是<b>同一个工厂</b>里已存在的活档案 —— 查不到就 422 明确报错,
+     * ⛔ 不静默置空(静默置空会让用户以为系谱记上了)。
+     */
+    @Size(max = 191, message = "父本个体ID不能超过191个字符")
+    @Schema(description = "父本个体ID (同表自引用, 可空; 必须是同厂已存在的个体)")
+    private String sireIndividualId;
+
+    /** 母本个体 ID。规则同 {@link #sireIndividualId}。 */
+    @Size(max = 191, message = "母本个体ID不能超过191个字符")
+    @Schema(description = "母本个体ID (同表自引用, 可空; 必须是同厂已存在的个体)")
+    private String damIndividualId;
+
     @Schema(description = "扩展属性")
     private Map<String, Object> extAttributes;
 

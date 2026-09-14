@@ -64,6 +64,16 @@ public class UpdateSourceIndividualRequest {
     @Schema(description = "DNA 比对状态")
     private DnaVerificationStatus dnaVerificationStatus;
 
+    /** 父本个体 ID。必须是同厂已存在的个体, 且⛔ 不能指向自己; 查不到 422。 */
+    @Size(max = 191, message = "父本个体ID不能超过191个字符")
+    @Schema(description = "父本个体ID (同表自引用, 可空)")
+    private String sireIndividualId;
+
+    /** 母本个体 ID。规则同 {@link #sireIndividualId}。 */
+    @Size(max = 191, message = "母本个体ID不能超过191个字符")
+    @Schema(description = "母本个体ID (同表自引用, 可空)")
+    private String damIndividualId;
+
     @Schema(description = "扩展属性 (整体替换)")
     private Map<String, Object> extAttributes;
 

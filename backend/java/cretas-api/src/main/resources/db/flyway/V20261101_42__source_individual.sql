@@ -51,6 +51,8 @@ CREATE TABLE source_individuals (
     external_gene_bank_id   VARCHAR(128),
     dna_sample_code         VARCHAR(64),
     dna_verification_status VARCHAR(16)  NOT NULL DEFAULT 'UNSAMPLED',
+    sire_individual_id      VARCHAR(191),
+    dam_individual_id       VARCHAR(191),
     ext_attributes          JSONB,
     notes                   TEXT,
     version                 BIGINT       NOT NULL DEFAULT 0,
@@ -77,6 +79,28 @@ CREATE INDEX idx_source_individual_tag
 CREATE INDEX idx_source_individual_species
     ON source_individuals (factory_id, species);
 
+-- ── 系谱 (父本 / 母本) ───────────────────────────────────────────────────────
+-- 客户的「基因库」是种质/育种方向, 个体档案第一天就要能表达系谱。
+--
+-- ⛔ FK 用 ON DELETE SET NULL, **绝不级联删**: 删掉一头种公畜不该把它的后代档案一起删掉 ——
+--    那是把「父本记录没了」升级成「后代不存在过」。SET NULL 让后代留下, 只是不知道父本是谁,
+--    而这正是事实(与本仓一贯口径一致: 读不到就是读不到, ⛔ 不伪造也⛔ 不连坐)。
+-- ⚠️ 本表是软删(deleted_at), 物理 DELETE 基本不会发生 ⇒ 这条 FK 实际上主要起
+--    **写入时的引用完整性**作用(插一个不存在的父本会被拒), SET NULL 那一支是兜底。
+-- ⚠️ FK 不含 factory_id(PK 只有 id), 所以「同厂」这条约束由 service 层校验 ——
+--    库上拦得住「不存在的个体」, 拦不住「别厂的个体」, 两道各管一半, 都不能省。
+ALTER TABLE source_individuals
+    ADD CONSTRAINT fk_source_individual_sire
+        FOREIGN KEY (sire_individual_id) REFERENCES source_individuals (id) ON DELETE SET NULL,
+    ADD CONSTRAINT fk_source_individual_dam
+        FOREIGN KEY (dam_individual_id) REFERENCES source_individuals (id) ON DELETE SET NULL;
+
+CREATE INDEX idx_source_individual_sire
+    ON source_individuals (factory_id, sire_individual_id);
+
+CREATE INDEX idx_source_individual_dam
+    ON source_individuals (factory_id, dam_individual_id);
+
 COMMENT ON TABLE source_individuals IS
     '源头个体档案: 溯源链最前端有生命周期的个体(牛/鸭/猪/…)。物种是字段值 species, 不是模型名。';
 COMMENT ON COLUMN source_individuals.individual_code IS
@@ -87,6 +111,10 @@ COMMENT ON COLUMN source_individuals.dna_verification_status IS
     'UNSAMPLED=未采样 / SAMPLED=已采样待比对 / MATCHED=比中 / MISMATCH=不符 (ck_source_individual_dna_status)';
 COMMENT ON COLUMN source_individuals.external_gene_bank_id IS
     '外部基因库/第三方检测机构里的样本主键。本系统不存基因数据本身, 只存这一把外部钥匙。';
+COMMENT ON COLUMN source_individuals.sire_individual_id IS
+    '父本(同表自引用, 可空)。FK ON DELETE SET NULL —— 删父本不连坐后代。同厂校验在 service 层。';
+COMMENT ON COLUMN source_individuals.dam_individual_id IS
+    '母本(同表自引用, 可空)。同上。';
 
 -- ── material_batches 挂钩(加法式, 可空) ─────────────────────────────────────
 -- ⛔ 不加 NOT NULL, ⛔ 不加 DEFAULT: 绝大多数原料批次(面粉/包材/调料)根本没有「源头个体」
@@ -111,7 +139,8 @@ DECLARE
     expected TEXT[] := ARRAY[
         'id','factory_id','individual_code','tag_number','species','breed','sex',
         'birth_date','origin_farm','external_gene_bank_id','dna_sample_code',
-        'dna_verification_status','ext_attributes','notes','version',
+        'dna_verification_status','sire_individual_id','dam_individual_id',
+        'ext_attributes','notes','version',
         'created_at','updated_at','deleted_at'];
     actual   TEXT[];
     mb_col   INTEGER;
