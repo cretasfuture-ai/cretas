@@ -63,10 +63,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import urllib.parse
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 # ════════════════════════════════════════════════════════════════════
 # 演示数据定义 —— 改这里就能改 demo 的样子, ⛔ 不用改流程代码
@@ -145,14 +144,24 @@ def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
-def step(name: str, status: str, **kv) -> None:
-    """统一的一行读数: STEP=<n> <name> -> <status> k=v ...
+def step(label: str, status: str, /, **kv) -> None:
+    """统一的一行读数: STEP=<n> <label> -> <status> k=v ...
 
     status 只有三种: created / reused / ok。
     ⚠️ created 与 reused **必须分开** —— 幂等的判据是「第二遍 created=0」,
        把两者都打成 ok 就量不出来了。
+
+    🔴 前两个形参是**位置限定**(`/`) —— 这不是风格, 是一个已经发生过的缺陷的修法:
+       第一版签名是 `step(name, status, **kv)`, 而调用方很自然地想把工厂名当数据传
+       (`step("ensure factory", "created", id=..., name=FACTORY_NAME)`) ⇒
+       `name` 被位置和关键字各传一次, **运行时 TypeError**。
+       两处调用点都中招, 而 `--self-test` 看不见它(自检不调 step), 所以它一路活到
+       第一次真跑。⇒ 用 `/` 把 `name=` / `status=` 从形参名里解放出来, 让这类
+       碰撞在**结构上**不可能, ⛔ 而不是靠每个调用方记得避开这两个词。
     """
     global _STEP, _CREATED, _REUSED
+
+    name = label
     _STEP += 1
     if status == "created":
         _CREATED += 1
@@ -324,7 +333,15 @@ def ensure_raw_materials(api: Api, fid: str) -> dict:
     out = {}
     listing = api.need(api.get(f"/api/mobile/{fid}/raw-material-types",
                                params={"page": 1, "size": 200}), "查原料类型") or {}
-    known = {m.get("code"): m for m in (listing.get("content") or listing if isinstance(listing, list) else [])}
+    # 🔴 这一行原来是
+    #      (listing.get("content") or listing if isinstance(listing, list) else [])
+    #    优先级坑: 它其实是 `(A or B) if isinstance(...) else []` —— 两个方向都错:
+    #      · listing 是 list  -> 先算 listing.get("content") -> AttributeError 当场炸;
+    #      · listing 是 dict  -> 走 else 分支得到 []  -> known 永远空 -> **幂等失效**,
+    #        每次重跑都把原料类型再建一遍, 而且**不报错**(最坏的那种)。
+    #    ⇒ 改成与本文件其它 ensure_* 一致的写法(分页对象取 content, 裸数组直接用)。
+    rows = listing.get("content") if isinstance(listing, dict) else listing
+    known = {m.get("code"): m for m in (rows or [])}
     for code, name, category, unit, storage in RAW_MATERIALS:
         if code in known:
             out[code] = known[code]["id"]
@@ -714,6 +731,26 @@ def self_test() -> int:
        只有服务端校验器说了算。这里只声称「图是自洽的」, ⛔ 不声称「图是对的」。
     """
     print("SELF-TEST 族图结构自检 (离线, 不连后端)")
+
+    # ── ⓪ 先把 step() 真调一次 ──────────────────────────────────────────
+    # 🔴 这一条是**缺陷驱动**加的: 第一版 `step(name, status, **kv)` 与调用方的
+    #    `name=FACTORY_NAME` 撞参数, 运行时 TypeError, 而**没有任何东西调过 step**
+    #    ⇒ 它活到了第一次真跑。形态 B: 机制在, 没接上 —— 自检不覆盖的代码就是没测。
+    # ⚠️ 用真实调用点里出现过的那几个 kwarg(name/id/status 等), ⛔ 不是随便编两个。
+    _before = _STEP
+    try:
+        step("self-test probe", "ok", id="X-1", name=FACTORY_NAME, note="probe")
+        step("self-test probe", "created", batch="B-1", individual="I-1")
+        step("self-test probe", "reused", traceCode="T-1", http=200)
+    except TypeError as exc:
+        print(f"  SELF-TEST FAILED: step() 调不通 —— {exc}")
+        return 1
+    if _STEP != _before + 3:
+        print(f"  SELF-TEST FAILED: step() 计数没动 ({_before} -> {_STEP})")
+        return 1
+    print(f"  step() OK: 3 次调用计数 {_before} -> {_STEP} "
+          f"(created={_CREATED} reused={_REUSED})")
+
     raw_ids = {code: f"RAWID-{code}" for code, *_ in RAW_MATERIALS}
     pt_ids = {f"PT-CUT-{c}": f"PTID-{c}" for _n, c in CUTS}
     pt_ids[FINISHED_CODE] = "PTID-FINISHED"
