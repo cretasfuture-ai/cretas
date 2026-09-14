@@ -27,6 +27,7 @@ import {
   ShipmentInfo,
 } from '../../services/api/traceabilityApiClient';
 import LineageChainTimeline from './components/LineageChainTimeline';
+import SourceIndividualBanner from './components/SourceIndividualBanner';
 
 /**
  * 完整溯源链路详情屏幕
@@ -221,6 +222,13 @@ const TraceabilityDetailScreen: React.FC = () => {
             ⚠️ 这一节与「原材料溯源」不是一回事: 上面那张卡只看一层
             (本批次的 MaterialConsumption)，这里是沿闭包一路往上的多跳链
             —— 半成品的上一道、上上道原料都在这儿。 */}
+        {/* 「本批来自 N 头牛」——放在来源链上方。
+            ⚠️ 这一屏才是演示实际走到的地方（ProcessingDashboard → 溯源查询 →
+            TraceabilityScreen 输入批次号 → 这里）；PublicTraceScreen 只注册了路由，
+            全仓零 navigate('PublicTrace')、无 linking 配置，App 里到不了。
+            ⛔ N 不在前端算，见 SourceIndividualBanner 的注释。 */}
+        <SourceIndividualBanner lineage={traceData.lineage} />
+
         <LineageChainTimeline lineage={traceData.lineage} showSupplier />
 
         {/* === 2.5 加工环节 === */}

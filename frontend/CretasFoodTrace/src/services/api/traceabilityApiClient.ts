@@ -90,6 +90,33 @@ export interface ProcessingStageInfo {
 // ========== 多跳血缘（来源链 / 影响面） ==========
 
 /** 血缘图上的一个节点。 */
+/**
+ * 血缘节点上的源头个体摘要（这块肉来自哪头牛/鸭/猪）。
+ *
+ * ⚠️ 脱敏由**后端**决定，前端只负责显示：
+ * 公开接口上 `individualCode` 恒为 null、`tagNumber` 只有末 4 位（`tagNumberMasked=true`）。
+ *
+ * ⛔ 这个类型上**根本没有** externalGeneBankId / dnaSampleCode / sire / dam 字段 ——
+ * 后端 DTO 也没有。字段不存在比「记得不要显示」可靠。
+ */
+export interface SourceIndividualBrief {
+  /** 内部个体编码；公开接口恒为 null。 */
+  individualCode?: string | null;
+  /** 耳标号；`tagNumberMasked=true` 时只有末 4 位（如 `*********7788`）。 */
+  tagNumber?: string | null;
+  /** 物种（牛/鸭/猪…）。是**字段值**不是模型名 —— 本功能对所有物种通用。 */
+  species?: string | null;
+  breed?: string | null;
+  originFarm?: string | null;
+  /** UNSAMPLED / SAMPLED / MATCHED / MISMATCH。 */
+  dnaVerificationStatus?: string | null;
+  /**
+   * 上面的 tagNumber 是不是被遮过。
+   * 没有它就分不清 `****7788` 是脱敏结果还是耳标本身，也就不知道能不能拿它去检索。
+   */
+  tagNumberMasked?: boolean | null;
+}
+
 export interface LineageNode {
   nodeType: 'MATERIAL_BATCH' | 'PRODUCTION_BATCH' | 'FINISHED_BATCH' | 'SHIPMENT_RECORD';
   /**
@@ -111,6 +138,13 @@ export interface LineageNode {
    * 所以这里会有 false。⛔ 前端不要给它编一个「未知批次」的名字。
    */
   resolved?: boolean;
+  /**
+   * 源头个体。只有 MATERIAL_BATCH 且该批次登记了个体时才有。
+   *
+   * ⚠️ `null` = 这批原料没登记个体（调料/包材本来就没有），
+   * ⛔ 不要兜底成「未知个体」—— 那会把「没有这回事」说成「信息缺失」。
+   */
+  sourceIndividual?: SourceIndividualBrief | null;
 }
 
 /** 按跳数分组的一层（1 = 直接上游，2 = 隔一跳…）。 */
@@ -128,6 +162,15 @@ export interface LineageSection {
   descendants?: LineageDepthGroup[] | null;
   maxDepth: number;
   nodeCount: number;
+  /**
+   * 上游链上**去重后**的源头个体数（「本批来自 N 头牛」里的 N）。
+   *
+   * 🔴 **由后端算**：公开接口上 individualCode 是 null、tagNumber 被遮成末 4 位，
+   * 前端拿脱敏值去重会把「末 4 位相同的两头牛」数成一头 —— 只会少报，
+   * 而「来自几头牛」少报一头在溯源语境里就是假话。
+   * ⛔ 不要在前端重新算这个数。
+   */
+  sourceIndividualCount?: number | null;
 }
 
 /** 召回影响面。 */
