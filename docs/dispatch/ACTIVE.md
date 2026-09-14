@@ -16,7 +16,7 @@
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
-- `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `in-progress` — Owner: Line A(executor, Opus) — Base `8c04949d54` — 血缘闭包引擎已在 main 但只有 `WIP_CONSUME` 写边；补原料/成品/出货三段 fail-soft 写边 + 幂等回填(🔒 prod 由协调者跑) + 溯源/公开页读闭包出多跳链 + 召回影响面 + RN 渲染。Flyway 预留 `_43`。🔒 架构。详见 archive briefs。
+- `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #792**(head `dc0be9cacf`): recorder+7 处挂钩+读侧 lineage/impact+回填 runner+RN 时间线; 790 tests 0 fail, 10 次变异。出货载体=`sales_delivery_records`。合并后 prod 先 dry-run 看「对不齐」, 再看 closure depth≥2。🔒 架构。
 - `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #791**(head `c0e3be9970`): 个体档案(含父本/母本)+批次挂个体(Flyway `_42`)+`/vision/verify`+RN 核验屏+web-admin 列表; 三端测试全绿, 9 条变异对照。🔴 prod VL 为零(`SLOT.VL: []`+DashScope 免费额度), 拍照演示待 owner 充值。🔒
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 16+17：`SupplierDetailDrawer.vue` 价格字段三处（关系表单/内联规格/独立规格）；`required` 是装饰，校验手写在 `saveRelation`/`savePurchaseSpec`。Owner 裁定：新增必填，编辑仅价格被改动时拦（存量 4 条空价）。未核后端/导入路径，需改后端 → 🔒 回协调者。
 - `OBS-PRODUCTION-MANAGER-FALLBACK-DRIFT-20260901` — `queued` — Owner: 无 — `V20261030_11` 把 production_manager 的 analytics/report/procurement 收窄为 `-`，前端 store 与 Java fallback 仍 `r`（3×2=6 条陈旧），与 #441 同形但不在其 KNOWN_DRIFT 名单；只在 DB 不可达的 fallback 窗口显形。
