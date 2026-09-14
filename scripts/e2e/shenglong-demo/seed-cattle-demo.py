@@ -79,7 +79,7 @@ DEMO_MARK = "SL-DEMO"
 
 # ── 原料类型 ────────────────────────────────────────────────────────
 RAW_MATERIALS = [
-    # (code, name, category, mainCategory, unit, storageType)
+    # (code, name, category, mainCategory, unit, storageType, taxIncludedUnitPrice)
     # 🔴 category(小类)必须是后端 `MaterialMainCategory` 里**已登记**的词, ⛔ 不能自己发明:
     #    2026-09-15 本机实测用「畜类」被拒 ——
     #      400 物料基本类型「畜类」尚未归入大类 (severity=BLOCKING)
@@ -87,9 +87,44 @@ RAW_MATERIALS = [
     #    **没有**「畜类」。⇒ 改用已登记的「肉类」。
     #    ⚠️ mainCategory 传了也没用: 后端按 category 反查大类, 不看请求里的 mainCategory。
     #    📌 已登记: 一个牛肉厂最自然的那个词(畜类)不在表里, 而禽类/水产在 —— 值得单独提。
-    ("RM-CATTLE-LIVE", "活牛", "肉类", "原料", "kg", "fresh"),
-    ("RM-CARCASS-HALF", "胴体半片", "肉类", "原料", "kg", "fresh"),
+    ("RM-CATTLE-LIVE", "活牛", "肉类", "原料", "kg", "fresh", None),
+    # 🔴 包材不是可选项: **成品**(productCategory=FINISHED_PRODUCT)的 BOM 必须至少有
+    #    一条包材行, 否则 publish 顺带激活 BOM 时被拒 —— 2026-09-15 本机彩排实测:
+    #      409 成品尚未配置任何包材关系
+    #      (BOM_COMPLETENESS_REQUIRED, hintTarget=bomCompleteness)
+    #    后端 `ProductConfigurationReadinessService#evaluateBom`(2026-08-25 owner 裁定):
+    #      finishedGoods = "FINISHED_PRODUCT".equalsIgnoreCase(product.getProductCategory())
+    #      packagingComplete = !finishedGoods || !packagingItems.isEmpty()
+    #    ⚠️ 半成品/原料/来料加工**不**强制 —— 所以 20 个分割部位都不需要包材,
+    #       只有酱牛肉这一个成品需要。
+    #
+    #    ⚠️⚠️ 「包材」这三个字是**判据本身**, ⛔ 不是随手写的品类名:
+    #    BOM 行的 materialCategory 由 `BomRecipeServiceImpl#materialCategoryForSkeleton`
+    #    从 RawMaterialType.category **按字面**推出来 ——
+    #      "PACKAGING" / "包材"            -> PACKAGING   ← 只有这两个字面值
+    #      "AUXILIARY"/"SEASONING"/"辅料"/"调料"/"调味料" -> AUXILIARY
+    #      其它一切(含"包装袋"、"包装材料")  -> RAW        ← 会被静默算成主原料!
+    #    ⇒ 写成「包装袋」不会报错, 只会让这条 BOM 行变成 RAW, 成品照样缺包材,
+    #      而报错信息还是那句「尚未配置任何包材关系」—— 最难查的那种。
+    #    ⚠️ 包材比别的物料多一条必填: **含税单价必须 > 0**(其它物料可以不填价)。
+    #      2026-09-15 本机实测, 不带价时:
+    #        400 含税单价必须大于0 (hint=包材主数据需要维护采购参考价)
+    #      后端 `RawMaterialTypeServiceImpl` 建档时 `if (packaging) validateRequiredPricing(...)`,
+    #      非包材走的是只校验计税元数据的那一支 —— 所以这一列只有包材行需要填。
+    #      taxRate 不传时后端默认 TAX_13, 会据此把含税价换算成未税 unitPrice。
+    ("RM-VACUUM-BAG", "真空袋", "包材", "包材", "个", "dry", "0.35"),
 ]
+
+# 🔴 胴体半片是**半成品 SKU(ProductType)**, ⛔ 不是 RawMaterialType。
+#    2026-09-15 彩排实测: 把族图里那个 SEMI_FINISHED 节点的 skuId 绑成
+#    RawMaterialType 的 id, publish 直接被拒 ——
+#      400 Cell「胴体半片」: 产出 SKU 不存在: RMT_abd75deb-...
+#    (errorCode=PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH)
+#    因为 `validateOutputSkus` 是去 **product_types** 里查 skuId 的。
+#    ⇒ 判据: 凡是**某道工序的产出**(哪怕它是中间品), 都必须是 ProductType;
+#      RawMaterialType 只配当**链条最前端的投入**(这里只有活牛)。
+CARCASS_CODE = "PT-CARCASS-HALF"
+CARCASS_NAME = "胴体半片"
 
 # ── 20 个分割部位(半成品) + 1 个成品 ────────────────────────────────
 #   ⚠️ 这里是**部位**, 不是品牌/客户专属名 —— 换个客户照样用。
@@ -106,10 +141,19 @@ FINISHED_CODE = "PT-BRAISED-BEEF"
 
 # ── 工序 ────────────────────────────────────────────────────────────
 WORK_PROCESSES = [
-    # (processName, processCategory, estimatedMinutes)
-    ("屠宰", "屠宰", 60),
-    ("分割", "分割", 180),
-    ("加工", "加工", 240),
+    # (processName, processCategory, estimatedMinutes, defaultOutputMaterialKind)
+    #
+    # 🔴 第四列不是可选项。`ProductProcessWorkflowCatalogValidator` 在 publish 时拿
+    #    `workProcess.getDefaultOutputMaterialKind()` 和族图里该工序**主产出节点的 kind**
+    #    逐一比对, 对不上就整张图发不出去:
+    #      400 Cell「酱牛肉」: 主产出类型 FINISHED_GOOD 与工序目录默认产出类型 SEMI_FINISHED 不一致
+    #    (2026-09-15 本机彩排实测, errorCode=PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH)
+    # ⚠️ 三个都**显式写出来**, ⛔ 不依赖后端默认 —— 默认恰好是 SEMI_FINISHED,
+    #    于是「没写」和「写对了」在屠宰/分割上读数相同, 只有加工会炸。
+    #    那种「大部分情况下碰巧对」的默认值, 正是最难查的一类。
+    ("屠宰", "屠宰", 60, "SEMI_FINISHED"),     # 活牛 -> 胴体半片
+    ("分割", "分割", 180, "SEMI_FINISHED"),    # 胴体 -> 20 个部位
+    ("加工", "加工", 240, "FINISHED_GOOD"),    # 牛腩 -> 酱牛肉(成品)
 ]
 
 # ── 6 头源头个体 ────────────────────────────────────────────────────
@@ -383,10 +427,20 @@ def ensure_raw_materials(api: Api, fid: str) -> dict:
     #    ⇒ 改成与本文件其它 ensure_* 一致的写法(分页对象取 content, 裸数组直接用)。
     rows = listing.get("content") if isinstance(listing, dict) else listing
     known = {m.get("code"): m for m in (rows or [])}
-    for code, name, category, main_category, unit, storage in RAW_MATERIALS:
+    for code, name, category, main_category, unit, storage, tax_price in RAW_MATERIALS:
         if code in known:
-            out[code] = known[code]["id"]
-            step(f"raw-material {name}", "reused", id=out[code])
+            row = known[code]
+            out[code] = row["id"]
+            # 🔴 reused 不等于对: category 是「这条 BOM 行算不算包材」的唯一判据,
+            #    存量记录写错时每一遍都会原样跳过, 而 publish 每一遍都失败。
+            actual = (row.get("category") or "").strip()
+            if actual != category:
+                raise SeedError(
+                    f"原料类型「{name}」的 category 是 {actual!r}, 期望 {category!r} —— "
+                    f"⛔ 不能当成 reused 放过去。它决定 BOM 行的 materialCategory "
+                    f"(「包材」->PACKAGING, 其它->RAW), 写错会让成品永远缺包材, "
+                    f"而报错只会说「成品尚未配置任何包材关系」。请人工核对这条物料档案。")
+            step(f"raw-material {name}", "reused", id=out[code], category=actual)
             continue
         # ⚠️ mainCategory 必填: 后端要求每个「小类」(category)都登记属于哪个**大类**,
         #    大类只有 原料 / 辅料 / 包材 三种。不带它会 400
@@ -395,6 +449,8 @@ def ensure_raw_materials(api: Api, fid: str) -> dict:
                 "mainCategory": main_category, "unit": unit,
                 "storageType": storage, "isActive": True,
                 "notes": f"{DEMO_MARK} 演示数据"}
+        if tax_price is not None:
+            body["taxIncludedUnitPrice"] = tax_price
         data = api.need(api.post(f"/api/mobile/{fid}/raw-material-types", body),
                         f"建原料类型 {name}")
         if data is None:
@@ -419,17 +475,41 @@ def ensure_product_types(api: Api, fid: str) -> dict:
     #    不填直接 400 PRODUCT_CATEGORY_REQUIRED;
     #    ⚠️ 填错的代价更大: 后端注释写着建好之后**普通编辑改不了**(会撞
     #       SKU_UNIT_MIGRATION_REQUIRED), 只能删了重建。
-    wanted = [(f"PT-CUT-{code}", name, "分割部位", "SEMI_FINISHED") for name, code in CUTS]
+    wanted = [(CARCASS_CODE, CARCASS_NAME, "半成品", "SEMI_FINISHED")]
+    wanted += [(f"PT-CUT-{code}", name, "分割部位", "SEMI_FINISHED") for name, code in CUTS]
     wanted.append((FINISHED_CODE, FINISHED_NAME, "成品", "FINISHED_PRODUCT"))
 
     for code, name, category, product_category in wanted:
-        if code in known:
-            out[code] = known[code]["id"]
-            step(f"product-type {name}", "reused", id=out[code])
-            continue
+        # 🔴 netContent 必填(>0 且带单位): publish-and-activate 会顺带同步 BOM,
+        #    而 BOM 激活要求每个 SKU 有净含量 —— 2026-09-15 彩排实测:
+        #      409 SKU 未配置有效净含量，不能创建或激活 BOM
+        #      (BOM_SKU_NET_CONTENT_REQUIRED, hintTarget=netContentQuantity)
+        #    本演示全部按 kg 计价销售 ⇒ 每基本单位净含量 1 kg。
         body = {"code": code, "name": name, "category": category, "unit": "kg",
                 "productCategory": product_category,
+                "netContentQuantity": 1, "netContentUnit": "kg",
                 "description": f"{DEMO_MARK} 演示数据"}
+        if code in known:
+            row = known[code]
+            out[code] = row["id"]
+            # ⚠️ productCategory 建好之后**改不了**(会撞 SKU_UNIT_MIGRATION_REQUIRED),
+            #    所以这里只断言, ⛔ 不尝试更新 —— 不一致时只能人工删了重建。
+            actual_cat = row.get("productCategory")
+            if actual_cat and actual_cat != product_category:
+                raise SeedError(
+                    f"产品类型「{name}」的 productCategory 是 {actual_cat!r}, 期望 "
+                    f"{product_category!r}。它**创建后不可改** ⇒ 需要人工删掉这条 SKU 重建, "
+                    f"⛔ 脚本不替你做这个决定。")
+            # 净含量可以补 —— 缺了就对齐, 否则 publish 时 BOM 激活会被拒。
+            if not row.get("netContentQuantity"):
+                api.need(api.put(f"/api/mobile/{fid}/product-types/{row['id']}", body),
+                         f"补 {name} 的净含量")
+                step(f"product-type {name}", "created", id=out[code],
+                     note="realigned netContent")
+                continue
+            step(f"product-type {name}", "reused", id=out[code],
+                 netContent=row.get("netContentQuantity"))
+            continue
         data = api.need(api.post(f"/api/mobile/{fid}/product-types", body),
                         f"建产品类型 {name}")
         if data is None:
@@ -441,40 +521,87 @@ def ensure_product_types(api: Api, fid: str) -> dict:
 
 
 def ensure_work_processes(api: Api, fid: str) -> dict:
-    """工序(幂等: 按 processName)。"""
+    """工序(幂等: 按 processName), 并**校正**已存在但产出种类不对的那条。
+
+    🔴 `reused` 不等于「对」。彩排里正是这么栽的: 第一遍把 `加工` 建成了默认的
+       SEMI_FINISHED, 之后每一遍都走 reused 分支原样跳过 ⇒ publish 一直失败,
+       而 STEP 行看起来一切正常。
+    ⇒ 幂等的正确形状是「先查后**对齐**」, ⛔ 不是「先查后跳过」:
+       存在但字段不对 -> PUT 改正 -> 打 created(它确实改了东西);
+       存在且字段正确 -> reused, 并且**断言**一次字段值(见 `_assert_kind`)。
+    """
     out = {}
     listing = api.need(api.get(f"/api/mobile/{fid}/work-processes",
                                params={"page": 1, "size": 200}), "查工序") or {}
     rows = listing.get("content") if isinstance(listing, dict) else listing
     known = {w.get("processName"): w for w in (rows or [])}
-    for name, category, minutes in WORK_PROCESSES:
-        if name in known:
-            out[name] = known[name]["id"]
-            step(f"work-process {name}", "reused", id=out[name])
-            continue
+
+    def _assert_kind(process_name: str, row: dict, expected: str) -> None:
+        """读回来的值必须就是期望值 —— 这条是「第二遍 reused 也要证明它是对的」。"""
+        actual = row.get("defaultOutputMaterialKind")
+        if actual != expected:
+            raise SeedError(
+                f"工序「{process_name}」的 defaultOutputMaterialKind 是 {actual!r}, "
+                f"期望 {expected!r} —— 对齐没生效, ⛔ 不能当成 reused 放过去 "
+                f"(publish 会以 PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH 失败)")
+
+    for name, category, minutes, output_kind in WORK_PROCESSES:
         body = {"processName": name, "processCategory": category, "createCategory": True,
                 "unit": "kg", "outputUnit": "kg", "estimatedMinutes": minutes,
+                "defaultOutputMaterialKind": output_kind,
                 "isActive": True, "description": f"{DEMO_MARK} 演示数据"}
+        if name in known:
+            row = known[name]
+            out[name] = row["id"]
+            if row.get("defaultOutputMaterialKind") == output_kind:
+                _assert_kind(name, row, output_kind)
+                step(f"work-process {name}", "reused", id=out[name], outputKind=output_kind)
+                continue
+            # 存在但产出种类不对 -> 就地改正
+            updated = api.need(
+                api.put(f"/api/mobile/{fid}/work-processes/{row['id']}", body),
+                f"校正工序 {name} 的产出种类")
+            if updated is not None:
+                _assert_kind(name, updated, output_kind)
+            step(f"work-process {name}", "created", id=out[name],
+                 note=f"realigned {row.get('defaultOutputMaterialKind')}->{output_kind}")
+            continue
         data = api.need(api.post(f"/api/mobile/{fid}/work-processes", body), f"建工序 {name}")
         if data is None:
             step(f"work-process {name}", "ok", note="dry-run")
             continue
+        _assert_kind(name, data, output_kind)
         out[name] = data["id"]
-        step(f"work-process {name}", "created", id=data["id"])
+        step(f"work-process {name}", "created", id=data["id"], outputKind=output_kind)
     return out
 
 
 # ── 工艺族图 ────────────────────────────────────────────────────────
 
-def _material_node(node_id: str, kind: str, name: str, sku_id: str) -> dict:
+def _material_node(node_id: str, kind: str, name: str, sku_id: str,
+                   unit: str = "kg") -> dict:
+    """物料节点。
+
+    🔴 单位字段名是 **`baseUnit`**, ⛔ 不是 `unit` —— 物料节点和工序端口用的是**两个
+       不同的字段名**: 端口是 `unit`, 物料节点是 `baseUnit`。
+       2026-09-15 彩排实测, 写成 `unit` 时 publish 被拒且 current 仍是 null:
+         400 物料单位不是单位目录中的有效代码或别名 node=m-live current=null expected=kg
+         (errorCode=WORKFLOW_PORT_UNIT_STALE)
+       ⚠️「我明明写了 unit」是这里最容易卡住的地方 —— 校验器自己在隔壁那条
+       WORKFLOW_MATERIAL_SKU_MISSING 的文案里点名过这个坑:
+         「请检查字段名: 物料节点用 skuId / baseUnit, 不是端口的 materialName / unit」
+    """
     return {"id": node_id, "kind": kind, "position": {"x": 0, "y": 0},
-            "data": {"name": name, "skuId": sku_id, "skuCode": sku_id}}
+            "data": {"name": name, "skuId": sku_id, "skuCode": sku_id,
+                     "baseUnit": unit}}
 
 
 def _port(pid: str, direction: str, material_node_id: str, material_kind: str,
-          ordinal: int) -> dict:
+          ordinal: int, unit: str = "kg") -> dict:
+    """工序端口。⚠️ 端口用 `unit`, 物料节点用 `baseUnit` —— 两个不同的字段名, 别写反
+    (见 `_material_node` 的说明)。端口单位必须与所连物料节点的 baseUnit 一致。"""
     return {"id": pid, "direction": direction, "materialNodeId": material_node_id,
-            "materialKind": material_kind, "unit": "kg", "ordinal": ordinal}
+            "materialKind": material_kind, "unit": unit, "ordinal": ordinal}
 
 
 def _process_node(node_id: str, work_process_id: str, name: str, ports: list) -> dict:
@@ -499,8 +626,9 @@ def build_workflow(raw_ids: dict, pt_ids: dict, wp_ids: dict) -> dict:
             _port("in-live", "INPUT", "m-live", "RAW_MATERIAL", 0),
             _port("out-carcass", "OUTPUT", "m-carcass", "SEMI_FINISHED", 0),
         ]),
-        _material_node("m-carcass", "SEMI_FINISHED", "胴体半片",
-                       raw_ids.get("RM-CARCASS-HALF", "RM-CARCASS-HALF")),
+        # 绑 ProductType(半成品), ⛔ 不是 RawMaterialType —— 见 CARCASS_CODE 处的说明。
+        _material_node("m-carcass", "SEMI_FINISHED", CARCASS_NAME,
+                       pt_ids.get(CARCASS_CODE, CARCASS_CODE)),
     ]
     # 分割: 1 个 PROCESS 节点, 1 个 INPUT + 20 个 OUTPUT port
     split_ports = [_port("in-carcass", "INPUT", "m-carcass", "SEMI_FINISHED", 0)]
@@ -512,9 +640,17 @@ def build_workflow(raw_ids: dict, pt_ids: dict, wp_ids: dict) -> dict:
     for name, code in CUTS:
         nodes.append(_material_node(f"m-cut-{code.lower()}", "SEMI_FINISHED", name,
                                     pt_ids.get(f"PT-CUT-{code}", f"PT-CUT-{code}")))
-    # 加工: 取牛腩做酱牛肉
+    # 加工: 牛腩 + 真空袋 -> 酱牛肉
+    # ⚠️ 包材必须作为**加工工序的一个 INPUT 端口**接进来, ⛔ 只建一个孤立的包材档案不够:
+    #    BOM 行是 `BomRecipeServiceImpl` 从族图的 **INPUT 槽**生成的(skeleton 同步),
+    #    没有 INPUT 端口就没有 BOM 行, 也就谈不上「有没有包材」。
+    nodes.append(_material_node("m-bag", "RAW_MATERIAL", "真空袋",
+                                raw_ids.get("RM-VACUUM-BAG", "RM-VACUUM-BAG"), unit="个"))
     nodes.append(_process_node("p-cook", wp_ids.get("加工", "WP-COOK"), "加工", [
         _port("in-nanfu", "INPUT", "m-cut-nanfu", "SEMI_FINISHED", 0),
+        # 包材也是 RAW_MATERIAL 种类(它是 RawMaterialType); 「是不是包材」由物料档案的
+        # category 决定, ⛔ 不由端口的 materialKind 决定 —— 这两件事容易混。
+        _port("in-bag", "INPUT", "m-bag", "RAW_MATERIAL", 1, unit="个"),
         _port("out-braised", "OUTPUT", "m-braised", "FINISHED_GOOD", 0),
     ]))
     nodes.append(_material_node("m-braised", "FINISHED_GOOD", FINISHED_NAME,
@@ -534,11 +670,102 @@ def build_workflow(raw_ids: dict, pt_ids: dict, wp_ids: dict) -> dict:
                       "target": f"m-cut-{code.lower()}", "targetHandle": "input"})
     edges.append({"id": "e-nanfu-cook", "source": "m-cut-nanfu", "sourceHandle": "output",
                   "target": "p-cook", "targetHandle": "in-nanfu"})
+    edges.append({"id": "e-bag-cook", "source": "m-bag", "sourceHandle": "output",
+                  "target": "p-cook", "targetHandle": "in-bag"})
     edges.append({"id": "e-cook-braised", "source": "p-cook", "sourceHandle": "out-braised",
                   "target": "m-braised", "targetHandle": "input"})
 
     return {"schemaVersion": 1, "nodes": nodes, "edges": edges,
             "viewport": {"x": 0, "y": 0, "zoom": 1}}
+
+
+# 包材在 BOM 里的三条必填, 由后端 `BomRecipeServiceImpl#applyPackagingLevel` 一次收齐再报
+# (2026-08-03 P7 的改动, 就是为了不让人来回试三次)。这里按它的口径一次填全:
+PACKAGING_ROLE = "PRIMARY_CONTAINER"   # 真空袋 = 直接接触成品的容器
+PACKAGING_NATURAL_QTY = 1              # 每 1 kg 酱牛肉 1 个真空袋
+
+
+def _packaging_qty_ok(item: dict) -> bool:
+    """这一行包材有没有有效用量(> 0)。"""
+    qty = item.get("standardQuantity")
+    try:
+        return qty is not None and float(qty) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def ensure_bom_packaging(api: Api, fid: str, product_type_id: str,
+                         workflow_revision_id) -> None:
+    """给成品 BOM 的包材行填上用量。
+
+    🔴 为什么需要单独一步: BOM 骨架是后端从族图的 INPUT 槽自动生成的, 而
+       `BomRecipeServiceImpl#createInputSkeleton` 里明写着 `item.setStandardQuantity(null)`
+       —— **用量是留给人填的**, 族图里没有这个信息。包材行不填就激活不了:
+         409 包材明细「真空袋」缺少有效数量，不能激活
+         (BOM_ACTIVATION_QUANTITY_REQUIRED, hintTarget=standardQuantity)
+       原料/辅料行可以留空(它们表达的是「资格/关系」), 只有包材是确定性消耗。
+       ⇒ 这一步不是绕校验器, 正是校验器要的那个人工输入。
+
+    ⚠️ 包材行有三条必填, 缺一条就 400, 而且**一次全报**:
+       · packagingRole  —— 业务角色, 自由文本(后端只限长 64), 用文档举的 PRIMARY_CONTAINER
+       · unit           —— 必须原样回传物料档案的单位(「个」), ⛔ 不能在 BOM 里另选
+       · naturalQuantity—— > 0; 留空时后端依次回退到 standardQuantity、物料档案的
+                           packQtyPerProduct, 两个都没有才报错
+    """
+    # ① 已有生效 BOM 且包材行齐了 -> 不动它(第二遍应当走这条路)
+    cur = api.get(f"/api/mobile/{fid}/bom/recipes/by-product/{product_type_id}/current")
+    if cur.get("success"):
+        rec = cur.get("data") or {}
+        pkg = [i for i in (rec.get("items") or [])
+               if (i.get("materialCategory") or "").upper() == "PACKAGING"]
+        if pkg and all(_packaging_qty_ok(i) for i in pkg):
+            step("bom packaging", "reused", recipe=rec.get("recipeCode"),
+                 items=len(pkg), stdQty=pkg[0].get("standardQuantity"))
+            return
+
+    # ② 把草稿骨架造出来(幂等: 「确保产品存在唯一可编辑 BOM 草稿」)
+    draft = api.need(
+        api.post(f"/api/mobile/{fid}/bom/recipes/ensure-draft",
+                 {"productTypeId": product_type_id,
+                  "workflowRevisionId": workflow_revision_id,
+                  "dropObsoleteInputs": True}),
+        "生成 BOM 草稿骨架")
+    if draft is None:
+        step("bom packaging", "ok", note="dry-run")
+        return
+    items = draft.get("items") or []
+    pkg = [i for i in items if (i.get("materialCategory") or "").upper() == "PACKAGING"]
+    if not pkg:
+        # ⛔ 不静默放过: 没有包材行 = 族图里没接包材, 后面 publish 一定以
+        #    「成品尚未配置任何包材关系」失败, 在这里停比在那里停更容易定位。
+        raise SeedError(
+            f"BOM 草稿({draft.get('recipeCode')})里没有任何包材行 —— 说明族图的加工工序"
+            f"没有接包材 INPUT 端口。当前 {len(items)} 行: "
+            + ", ".join(f"{i.get('materialName')}({i.get('materialCategory')})" for i in items))
+
+    for item in pkg:
+        if _packaging_qty_ok(item):
+            step("bom packaging", "reused", item=item.get("materialName"),
+                 stdQty=item.get("standardQuantity"))
+            continue
+        body = {"materialTypeId": item.get("materialTypeId"),
+                # ⚠️ 原样回传档案单位: 另选会 400 BOM_PACKAGING_UNIT_MISMATCH
+                "unit": item.get("unit"),
+                "materialCategory": "PACKAGING",
+                "packagingRole": PACKAGING_ROLE,
+                "naturalQuantity": PACKAGING_NATURAL_QTY,
+                "standardQuantity": PACKAGING_NATURAL_QTY}
+        updated = api.need(
+            api.put(f"/api/mobile/{fid}/bom/recipes/items/{item['id']}", body),
+            f"补 BOM 包材用量 {item.get('materialName')}")
+        # 🔴 读回来断言, ⛔ 不信「PUT 返回 200 就是写进去了」——
+        #    这一步写不进去时, 失败会推迟到 publish, 报的是另一句话。
+        if updated is not None and not _packaging_qty_ok(updated):
+            raise SeedError(
+                f"包材行「{item.get('materialName')}」更新后 standardQuantity 仍是 "
+                f"{updated.get('standardQuantity')!r} —— 用量没写进去, ⛔ 不能继续发布。")
+        step("bom packaging", "created", item=item.get("materialName"),
+             stdQty=(updated or {}).get("standardQuantity"), role=PACKAGING_ROLE)
 
 
 def ensure_workflow(api: Api, fid: str, product_type_id: str, definition: dict) -> None:
@@ -590,6 +817,10 @@ def ensure_workflow(api: Api, fid: str, product_type_id: str, definition: dict) 
         raise SeedError(
             "草稿响应里缺 " + ", ".join(missing) + " —— 无法发布。完整草稿响应: "
             + json.dumps(draft, ensure_ascii=False)[:800])
+
+    # 🔴 顺序不能反: publish-and-activate 会顺带**同步并激活 BOM**, 所以包材用量必须
+    #    在发布**之前**填好。放到发布之后, 每一遍都会以 BOM_ACTIVATION_QUANTITY_REQUIRED 失败。
+    ensure_bom_packaging(api, fid, product_type_id, draft["revisionId"])
     publish_body = {
         "lockVersion": draft["lockVersion"],
         "revisionId": draft["revisionId"],
@@ -853,6 +1084,7 @@ def self_test() -> int:
     raw_ids = {code: f"RAWID-{code}" for code, *_ in RAW_MATERIALS}
     pt_ids = {f"PT-CUT-{c}": f"PTID-{c}" for _n, c in CUTS}
     pt_ids[FINISHED_CODE] = "PTID-FINISHED"
+    pt_ids[CARCASS_CODE] = "PTID-CARCASS"
     wp_ids = {n: f"WPID-{n}" for n, *_ in WORK_PROCESSES}
 
     d = build_workflow(raw_ids, pt_ids, wp_ids)
