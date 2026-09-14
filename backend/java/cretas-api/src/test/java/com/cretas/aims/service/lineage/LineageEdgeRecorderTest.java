@@ -184,6 +184,30 @@ class LineageEdgeRecorderTest {
     }
 
     @Test
+    @DisplayName("🔴 唯一索引撞车 ⇒ ALREADY_EXISTS 而不是 FAILED（并发去重不是失败）")
+    void uniqueIndexViolationIsTreatedAsAlreadyExists() {
+        // 「先查后插」有并发窗口：两个请求拿同一个 refKey 同时进来，都查到「不存在」。
+        // uq_ble_refkey（V20261101_43）在库那一层兜住，第二个请求拿到
+        // DataIntegrityViolationException —— 那两条线程想写的本来就是同一件事实。
+        // ⛔ 归进 FAILED 会让回填的「失败」计数被并发去重污染，读数当场失真。
+        //
+        // ⚠️ 这一条验的是**异常到结果的映射**。索引本身能不能拦，Mockito 证明不了 ——
+        //    那部分在真 PostgreSQL 上单独验过（同 refKey 第二条被 uq_ble_refkey 拒，
+        //    无 refKey 的历史 WIP_CONSUME 边因部分索引的 WHERE 谓词照常放行）。
+        when(edgeRepository.findMatchingEdges(anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString())).thenReturn(List.of());
+        when(edgeRepository.saveAndFlush(any(BatchLineageEdge.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint \"uq_ble_refkey\""));
+
+        LineageRecordOutcome outcome = newRecorder().recordRawToProduction(
+                FACTORY, "mb-1", 8967L, BigDecimal.ONE, "kg", 7L, "consumption:1", null);
+
+        assertThat(outcome).isEqualTo(LineageRecordOutcome.ALREADY_EXISTS);
+        assertThat(outcome).isNotEqualTo(LineageRecordOutcome.FAILED);
+    }
+
+    @Test
     @DisplayName("写库抛异常 ⇒ FAILED 而不是往上抛（fail-soft 不阻塞报工/发货）")
     void writeFailureIsFailSoft() {
         when(edgeRepository.findMatchingEdges(anyString(), anyString(), anyString(), anyString(),

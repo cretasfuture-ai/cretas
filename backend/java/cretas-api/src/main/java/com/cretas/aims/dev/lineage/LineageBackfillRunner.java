@@ -40,6 +40,12 @@ import java.util.List;
  *
  * <p>日志里逐段打「扫描 / 新增 / 已存在 / 跳过 / 对不齐 / 失败」。
  * ⛔ 不要只看「新增 N」：N=0 在「已经全在库里」和「一条都没量到」上长得一模一样。
+ *
+ * <p>⚠️ 预演（{@code dryRun=true}）<b>会查库</b>：三段都走 {@code recorder.preview*}，
+ * 与真跑共用同一份查重与计划对齐判据（只读，零写），所以预演报出来的
+ * 「新增 / 已存在 / 对不齐」就是真跑会发生的事。
+ * ⛔ 早先那版预演对 PRODUCTION_TO_FINISHED 无条件报「跳过」，会被读成
+ * 「这一段不会新增边」而真跑插了一堆行 —— 那是一个会误导决策的假读数。
  * 「对不齐」那一列专门用来暴露「一个计划多个生产批次，分不出成品是哪个产的」有多少行 ——
  * 那些边我们<b>故意不写</b>（禁止降级，不猜）。
  */
@@ -75,7 +81,8 @@ public class LineageBackfillRunner implements ApplicationRunner {
             LineageBackfillService.Report report = backfillService.backfillFactory(factoryId, dryRun);
             log.warn("{}", report.render());
         }
-        log.warn("[lineage-backfill] 结束。dryRun={} —— 预演里的「新增」是上界, 真跑时其中一部分会落 ALREADY_EXISTS。",
+        log.warn("[lineage-backfill] 结束。dryRun={} —— 预演走的是与真跑**同一份**查重/对齐判据(只读), "
+                        + "三个数与真跑逐条一致; 唯一偏差来自预演与真跑之间数据发生了变化。",
                 dryRun);
     }
 }
