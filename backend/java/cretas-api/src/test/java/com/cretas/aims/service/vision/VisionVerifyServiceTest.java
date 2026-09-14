@@ -155,6 +155,65 @@ class VisionVerifyServiceTest {
         verify(individuals, never()).findByTagNumber(anyString(), anyString());
     }
 
+    // ── ①′ 真实上游输出的**逐字**回放 ──────────────────────────────────────
+    //
+    // 下面两条的字符串不是我编的, 是 2026-09-15 打 prod 那把 key、
+    // 经 `/api/llm/vision` 拿到的 **qwen3.8-flash 原文**
+    // (OPS-VL-SLOT-QWEN38-FLASH-20260915 的本地冒烟)。
+    //
+    // 🔴 为什么要单独放一组: 上面那些用例的桩是**我按 prompt 想象**模型会怎么答,
+    //    而真实那一侧当天给出了第三种形状 —— **多行 pretty-print 的裸 JSON**
+    //    (既不是我桩的单行裸 JSON, 也不是带 ```json 围栏的)。
+    //    形态 B‴: 桩的形状要能在生产上出现 —— 反过来, 生产上出现的形状也必须在桩里有。
+
+    @Test
+    @DisplayName("真实回放 EAR_TAG: qwen3.8-flash 的单行裸 JSON")
+    void realQwen38FlashEarTagPayloadParses() {
+        // 逐字来自 2026-09-15 本地冒烟(图片 md5 4dc45a41…, 合成标识牌样张)
+        when(llm.visionChat(any(), anyString(), anyString()))
+                .thenReturn("{\"tagNumber\": \"1180245\", \"confidence\": 1.0, \"notes\": null}");
+        when(individuals.findByTagNumber(eq(FACTORY), eq("1180245")))
+                .thenReturn(SourceIndividualLookupResult.builder()
+                        .tagNumber("1180245").matchCount(0).matched(null).allMatches(List.of()).build());
+
+        VisionVerifyResponse res = service.verify(FACTORY, request("EAR_TAG"));
+
+        assertThat(res.getNormalizedTagNumber()).isEqualTo("1180245");
+        assertThat(res.getConfidence()).isEqualTo(1.0);
+        assertThat(res.getParseError()).isNull();
+    }
+
+    @Test
+    @DisplayName("🔴 真实回放 MEAT_CUT: qwen3.8-flash 的**多行** pretty-print 裸 JSON, 且 cut 为 null")
+    void realQwen38FlashMeatCutPayloadParses() {
+        // 逐字来自 2026-09-15 本地冒烟(图片 md5 c6babe4b…, 真空包装带骨肉眼照片)。
+        // ⚠️ 两个值得留意的真实特征:
+        //   ① 多行缩进 —— 解析必须容得下换行(截取第一个 { 到最后一个 } 再交给 Jackson);
+        //   ② `"cut": null` —— 模型**照 prompt 要求没有猜**。这是正确行为:
+        //      键在、值是 null ⇒ 必需键检查通过, 而下游看到的是「模型说它判断不出」,
+        //      ⛔ 不是「我们把它兜底成了某个部位」。
+        when(llm.visionChat(any(), anyString(), anyString())).thenReturn("""
+                {
+                  "cut": null,
+                  "marblingScore": 3,
+                  "foreignObjectSuspected": false,
+                  "contaminationSuspected": false,
+                  "confidence": 0.95,
+                  "notes": "真空包装完好，肉质纹理清晰，脂肪分布适中，无明显异物或污染迹象。"
+                }""");
+
+        VisionVerifyResponse res = service.verify(FACTORY, request("MEAT_CUT"));
+
+        assertThat(res.getParseError()).isNull();
+        assertThat(res.getAssessmentLevel()).isEqualTo("AI_PRELIMINARY");
+        assertThat(res.getConfidence()).isEqualTo(0.95);
+        assertThat(res.getFields()).containsEntry("marblingScore", 3);
+        assertThat(res.getFields()).containsEntry("foreignObjectSuspected", false);
+        // `cut` 的键**在**, 值是 null —— 两件事都要成立。
+        assertThat(res.getFields()).containsKey("cut");
+        assertThat(res.getFields().get("cut")).isNull();
+    }
+
     // ── ② 解析失败 ────────────────────────────────────────────────────────
 
     @Test
