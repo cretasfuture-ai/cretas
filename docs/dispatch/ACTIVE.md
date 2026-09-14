@@ -19,7 +19,6 @@
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
 - `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #792**(head `dc0be9cacf`): recorder+7 处挂钩+读侧 lineage/impact+回填 runner+RN 时间线; 790 tests 0 fail, 10 次变异。出货载体=`sales_delivery_records`。合并后 prod 先 dry-run 看「对不齐」, 再看 closure depth≥2。🔒 架构。
-- `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #791**(head `c0e3be9970`): 个体档案(含父本/母本)+批次挂个体(Flyway `_42`)+`/vision/verify`+RN 核验屏+web-admin 列表; 三端测试全绿, 9 条变异对照。🔴 prod VL 为零(`SLOT.VL: []`+DashScope 免费额度), 拍照演示待 owner 充值。🔒
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 16+17：`SupplierDetailDrawer.vue` 价格字段三处（关系表单/内联规格/独立规格）；`required` 是装饰，校验手写在 `saveRelation`/`savePurchaseSpec`。Owner 裁定：新增必填，编辑仅价格被改动时拦（存量 4 条空价）。未核后端/导入路径，需改后端 → 🔒 回协调者。
 - `OBS-PRODUCTION-MANAGER-FALLBACK-DRIFT-20260901` — `queued` — Owner: 无 — `V20261030_11` 把 production_manager 的 analytics/report/procurement 收窄为 `-`，前端 store 与 Java fallback 仍 `r`（3×2=6 条陈旧），与 #441 同形但不在其 KNOWN_DRIFT 名单；只在 DB 不可达的 fallback 窗口显形。
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base `0f11d9a91b` — 质检员「关于/设置」版本号改读 APK 原生真值并补一致性闸；合入后向仍报 1.0.3 的设备发兼容 OTA，重建 1.0.4 签名 APK（保留最低版本门禁）。
@@ -67,7 +66,6 @@
 
 
 - `ARCH-LINEAGE-CLOSE-LOOP-20260914`：新建 `service/lineage/**`；`Traceability*`(Service/Impl/Controller/dto)；六个挂钩 Service 仅插入 recorder 调用行；回填命令；RN `screens/traceability/**`+`traceabilityApiClient.ts`。⛔ 不改 `MaterialBatch.java`/WIP 写边/Flyway(除 `_43`)。全文见 archive briefs。
-- `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914`：新建 `**/SourceIndividual*`、`service/vision/**`、Flyway `V20261101_42`；`MaterialBatch.java` 仅加一列；RN `screens/shared/VisionVerify*`；web-admin `views/source-individuals/**`。⛔ 不碰 Traceability*/lineage/WIP。全文见 archive briefs。
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、ACTIVE 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`mine_tray_queue.py`、`tray_workflow.py`、`evaluate_tray_candidate.py`、`tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、ACTIVE 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
