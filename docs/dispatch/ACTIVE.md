@@ -16,7 +16,7 @@
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915` — `in-progress` — Owner: Line A(executor) — Base `origin/main` — lineage 的 MATERIAL_BATCH 节点带出源头个体(品种/来源场/DNA 状态/耳标脱敏), 公开接口不出基因库编号/样本号/系谱/完整耳标; RN 时间线显示 + 公开页「本批来自 N 头牛」。周三第 5 幕最后一块。
-- `OPS-OTA-DEMO-BUNDLE-20260915` — `in-progress` — Owner: organizer — 🔒 OTA production/android: 先推 #797(总览页三入口), Line A 跟进合并后再推一次。判据: `push-bundle.sh` 回执 + 服务端 manifest 指向新 ts + 真机登录后总览页出现「溯源查询/拍照核验/源头个体」(行为读数, 周二 Steve 手机)。
+- `OPS-OTA-DEMO-BUNDLE-20260915` — `in-progress` — Owner: organizer — 🔒 第 1 推(#797, main `c210c20743`) 06:41 完成: rv=1.0.4 ts=1789425596125, ota 域 manifest createdAt 22:41:33Z 含该 ts, CDN `index-fc8a49d7….hbc` GET 6,762,565B/200。待: 真机总览页出现三入口(Steve 手机); Line A 跟进合并后第 2 推。
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915` — `in-progress` — Owner: Line B(executor) — Base `origin/main`(含 #791/#793) — 纯 API 演示租户种子脚本(建厂→默认用户→原料/产品/工序→族图 draft+publish→6 头个体+期初批次→计划/报工/成品→标签 traceCode→公开溯源 200), 幂等可重跑, 只在本地跑通; prod 执行归 organizer(🔒 prod 写)。
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
