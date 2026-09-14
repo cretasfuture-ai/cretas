@@ -198,6 +198,14 @@ public class MaterialBatchDTO {
     private String originPlace;
 
     /**
+     * 来源个体档案 ID。可空 —— 只有按个体投产的批次才挂。
+     * ⛔ 读不到不代表「没有个体」, 只代表这个批次没挂个体; 两者在 UI 上都显示为「未关联」即可,
+     * 但⛔ 不要在任何一层把 null 翻译成一个具体的个体。
+     */
+    @Schema(description = "来源个体档案ID (source_individuals.id, 可空)")
+    private String sourceIndividualId;
+
+    /**
      * 合同号 (V20261029_61)。
      *
      * <p>⛔ 2026-08-06: 列加了、搜索也加了、列表列也加了, <b>唯独漏了这一层 DTO</b> ——

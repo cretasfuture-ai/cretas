@@ -70,6 +70,9 @@ public class MaterialBatchMapper {
                 .notes(batch.getNotes())
                 .factoryNumber(batch.getFactoryNumber())
                 .originPlace(batch.getOriginPlace())
+                // 来源个体 (V20261101_42) —— 这是全仓**唯一**一处 MaterialBatchDTO.builder()
+                // (BEFORE=1 / AFTER=1, 硬约束 8 已数), 所以读侧只需要接这一处。
+                .sourceIndividualId(batch.getSourceIndividualId())
                 // V20261029_61 来料追溯: 漏了这两行, 前端列表那两列就恒显示 "-"
                 .contractNumber(batch.getContractNumber())
                 .supplierBatchNumber(batch.getSupplierBatchNumber())
@@ -193,6 +196,9 @@ public class MaterialBatchMapper {
         batch.setFactoryNumber(request.getFactoryNumber());
         batch.setOriginPlace(request.getOriginPlace());
 
+        // 来源个体 (V20261101_42, nullable) —— 按个体投产时带上, 其余场景为 null。
+        batch.setSourceIndividualId(request.getSourceIndividualId());
+
         // P0-17: 发起单来源
         batch.setSourceDocType(request.getSourceDocType());
         batch.setSourceDocId(request.getSourceDocId());
@@ -312,6 +318,12 @@ public class MaterialBatchMapper {
         }
         if (request.getOriginPlace() != null) {
             batch.setOriginPlace(request.getOriginPlace());
+        }
+        // 来源个体 (V20261101_42) —— 描述性字段, 与 originPlace 同一条 partial 语义:
+        // null = 不修改。⚠️ 因此「解除个体关联」目前表达不了, 与本 DTO 其余字段同一个
+        // 已知代价(见 UpdateMaterialBatchRequest 类文档), ⛔ 不在这一个字段上另立规矩。
+        if (request.getSourceIndividualId() != null) {
+            batch.setSourceIndividualId(request.getSourceIndividualId());
         }
     }
 
