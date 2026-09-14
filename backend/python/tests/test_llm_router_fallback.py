@@ -291,8 +291,165 @@ def test_flash_quota_pair_retired_from_b_and_c_survives_only_on_a():
 
 
 def test_vl_chain_is_vision_only():
-    for account, model in llm_router.SLOT_MODELS[SLOT.VL]:
-        assert ("vl" in model) or (model == "glm-4.6v"), f"VL non-vision {account}/{model}"
+    """VL 池里的每一条都必须有**实测视觉能力证据**。
+
+    🔴 2026-09-15 换掉了判据。旧版是按**名字**猜:
+        assert ("vl" in model) or (model == "glm-4.6v")
+    它两个方向都会错:
+      · 假阴性 —— `qwen3.8-flash` 是多模态的, 名字里没有 `vl`(本次就撞上了);
+      · 假阳性 —— 任何叫 `xxx-vl-yyy` 的都能过, 哪怕它在这个账号上 403。
+    **名字不是能力的证据。** 换成 `_VISION_VERIFIED` 登记表(值是探针证据本身),
+    往 VL 池加候选就必须先写下「哪天、什么结果」。
+    """
+    pool = llm_router.SLOT_MODELS[SLOT.VL]
+    # 阳性对照: 池空时下面的循环一次都不跑, 断言恒真 —— 与「每条都合格」同形。
+    assert pool, "VL 池是空的 —— 本闸恒真, 读数作废(2026-09-15 起 VL 应有候选)"
+    for account, model in pool:
+        assert (account, model) in llm_router._VISION_VERIFIED, (
+            f"VL 池里的 {account}/{model} 没有实测视觉能力证据 —— "
+            "先在 _VISION_VERIFIED 里写下探针日期与结论, 再放进池"
+        )
+        assert llm_router._VISION_VERIFIED[(account, model)].strip(), (
+            f"{account}/{model} 的证据是空串 —— 登记表要的是证据, 不是打钩"
+        )
+
+
+def test_vision_registry_can_actually_reject_something():
+    """阴性对照: 登记表必须**判得出**不合格的东西。
+
+    没有这一条, 上面那个 `in _VISION_VERIFIED` 在「登记表被塞进所有模型」时
+    同样全绿。这里钉住两个**本来就在链上**的文本模型不在登记表里。
+    """
+    for text_model in (("aistore", "DeepSeek-V4-Flash-A"), ("zhipu", "glm-4.5-air")):
+        assert text_model not in llm_router._VISION_VERIFIED, (
+            f"{text_model} 是文本模型, 不该出现在视觉能力登记表里 —— "
+            "它一旦进来, VL 槽就可能拿文本模型去'看'图片"
+        )
+
+
+def test_vl_model_is_configurable_but_only_within_the_registry():
+    """env 只能在登记表里**挑**, ⛔ 不能凭空注入一个 (账号, 模型)。
+
+    本文件顶部写着 `_SAFE_MODELS` 是**唯一**的计费护栏。如果 `LLM_VL_MODEL`
+    能把任意模型名塞进白名单, 一个写错的环境变量就可能指向付费 SKU。
+    ⇒ 选不中就**空池 + 明确失败**, 不是「用默认值兜一下」。
+
+    ⚠️ 这里**刻意不用 importlib.reload**。第一版用了, 结果 reload 把
+    `llm_router` 这个**共享模块对象**就地改写, 而我的 `finally: reload` 写在
+    `with mock.patch.dict` **里面** —— 还原那一次读到的仍是被 patch 过的 env,
+    于是 `_VL_MODEL` 被永久留成了 `qwen3.7-flash`, 连隔壁
+    `test_chains_match_human_reviewed_golden` 都跟着红。
+    ⇒ 选择逻辑是 `_vl_pool()` 的纯函数行为, 直接 patch 模块全局量就够了,
+      ⛔ 不必重载整个模块(那是把一个小读数的代价放大成全局状态污染)。
+    """
+    from unittest import mock   # 本文件顶部只 import 了 MagicMock
+
+    # ① 未登记的模型 -> 空池(明确失败), ⛔ 不回落默认值
+    with mock.patch.object(llm_router, "_VL_MODEL", "definitely-not-registered"):
+        assert llm_router._vl_pool() == [], (
+            "未登记的 LLM_VL_MODEL 竟然选出了候选 —— 计费护栏被 env 绕过了"
+        )
+
+    # ② 未登记的账号被**逐个跳过**, 而不是让整条链作废
+    with mock.patch.object(llm_router, "_VL_ACCOUNTS",
+                           ["nope_vl", "aliyun_a_vl", "aliyun_b_vl"]):
+        assert llm_router._vl_pool() == [("aliyun_a_vl", "qwen3.8-flash"),
+                                         ("aliyun_b_vl", "qwen3.8-flash")]
+
+    # ③ 账号顺序真的可配(否则「可配」只是句空话)
+    with mock.patch.object(llm_router, "_VL_ACCOUNTS", ["aliyun_b_vl", "aliyun_c_vl"]):
+        assert llm_router._vl_pool() == [("aliyun_b_vl", "qwen3.8-flash"),
+                                         ("aliyun_c_vl", "qwen3.8-flash")]
+
+    # ④ 已登记的备选**模型**也切得过去(它只在 aliyun_a 上验过 ⇒ 只剩一条)
+    with mock.patch.object(llm_router, "_VL_MODEL", "qwen3.7-flash"):
+        assert llm_router._vl_pool() == [("aliyun_a_vl", "qwen3.7-flash")]
+
+    # ⑤ 默认值: 3.8-flash + c,a,b。⛔ 不许是 3.7 —— 实测带图 33-48s/次,
+    #    撑不起手机端交互。同时这也是「上面几个 patch 真的还原了」的读数。
+    assert llm_router._VL_MODEL == "qwen3.8-flash"
+    assert llm_router._VL_ACCOUNTS == ["aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl"]
+    assert llm_router._vl_pool() == [("aliyun_c_vl", "qwen3.8-flash"),
+                                     ("aliyun_a_vl", "qwen3.8-flash"),
+                                     ("aliyun_b_vl", "qwen3.8-flash")]
+
+
+def test_vl_chain_is_fastest_account_first():
+    """链是**串行且共享同一个总预算** ⇒ 慢的排前面会把后面的预算一起吃掉。
+
+    判据来自 2026-08-09 的生产事故(见 `_ABSOLUTE_LAST` 的注释)。
+    2026-09-15 实测三账号带图延迟: c 4.8s < a 6.2s < b 10.6s ⇒ 链序必须是 c,a,b。
+
+    ⚠️ 这条**不是**重复 `_vl_pool` 的默认值断言: 那条量的是「池」, 这条量的是
+       `SLOT_MODELS` —— 也就是 `call_chain` 真正遍历的那个。中间隔着
+       `_build_chain` 的排序键, 它完全可能把顺序重排(本文件记过一次: zhipu
+       被能力档算到了链的第 2 位, 而守它的闸当时量的是列表书写下标, 全绿)。
+    """
+    chain = llm_router.SLOT_MODELS[SLOT.VL]
+    assert [a for a, _m in chain] == ["aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl"], (
+        f"VL 链序不是 c,a,b(按实测延迟 4.8/6.2/10.6s 排) —— 实际 {chain}"
+    )
+    assert {m for _a, m in chain} == {"qwen3.8-flash"}, (
+        "三个账号应当轮转**同一个**模型 —— 混入别的模型请先解释为什么"
+    )
+
+
+def test_vl_env_var_names_are_the_ones_ops_will_set():
+    """env 变量名必须真的是 `LLM_VL_ACCOUNT` / `LLM_VL_MODEL`。
+
+    🔴 上面那条测试 patch 的是**模块全局量**, 它证明「选择逻辑对」, 但对
+    「这两个全局量到底从哪个环境变量读」完全沉默 —— 名字写错(例如
+    `LLM_VISION_MODEL`)时它照样全绿, 而运维照着 PR 描述去改 `.env.prod`
+    会毫无效果。⇒ 这一条单独钉住名字。
+    """
+    import inspect
+    src = inspect.getsource(llm_router)
+    assert 'os.getenv("LLM_VL_ACCOUNTS")' in src, "账号顺序的 env 名不是 LLM_VL_ACCOUNTS"
+    assert 'os.getenv("LLM_VL_MODEL")' in src, "模型的 env 名不是 LLM_VL_MODEL"
+
+
+@pytest.mark.asyncio
+async def test_vl_falls_through_two_quota_exhausted_accounts_to_the_third(monkeypatch):
+    """🔴 三账号轮转的**全部价值**就在这一条: 前两个账号额度用尽时第三个接住。
+
+    免费额度按**账号**算 —— c 403 之后切到 a 拿到的是**另一份**额度, 不是同一份
+    重试。所以这不是「重试三次」, 是「三份额度叠加」。
+
+    ⚠️ 桩的形状要能在生产上出现: 403 + `AllocationQuota.FreeTierOnly` 正是
+       DashScope 免费额度耗尽时的真实返回(本文件 `_is_quota_exhausted` 就按它判),
+       ⛔ 不是随便编的一个错误码。
+    ⚠️ `_ScriptedClient` 按 **api-key 子串**认账号, 映射出来的名字是
+       `aliyun_c/a/b`(没有 `_vl` 后缀) —— 那是夹具的命名, 与被测的逻辑账号名
+       无关, 所以下面断言调用顺序时用的是夹具的名字。
+    """
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
+    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 9, 15))
+
+    vl_chain = [("aliyun_c_vl", "qwen3.8-flash"),
+                ("aliyun_a_vl", "qwen3.8-flash"),
+                ("aliyun_b_vl", "qwen3.8-flash")]
+    # 阳性对照: 被测的链就是产品链本身, ⛔ 不是我在测试里新编的一条。
+    assert llm_router.SLOT_MODELS[SLOT.VL] == vl_chain
+
+    ok = {"choices": [{"message": {"content": '{"tagNumber":"1180245","confidence":1.0}'}}]}
+    client = _ScriptedClient({
+        "aliyun_c": _fake_response(403, "AllocationQuota.FreeTierOnly"),
+        "aliyun_a": _fake_response(403, "AllocationQuota.FreeTierOnly"),
+        "aliyun_b": _fake_response(200, json_payload=ok),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    result = await call_chain(SLOT.VL, {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert result == ok, "第三个账号 200 了却没被返回 —— 轮转没接住"
+    # 三个账号**都**被试过, 且顺序是 c→a→b。
+    assert client.call_log == [("aliyun_c", "qwen3.8-flash"),
+                               ("aliyun_a", "qwen3.8-flash"),
+                               ("aliyun_b", "qwen3.8-flash")], (
+        f"实际调用序列 {client.call_log} —— 期望按 c,a,b 依次回退"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -375,26 +532,24 @@ def test_future_date_every_slot_keeps_a_live_fallback():
     set + never-expiring tencent/zhipu floor) — no hard 'all exhausted' (design-audit
     R3).
 
-    VL is deliberately excluded: the 2026-08-09 audit killed zhipu/glm-4.6v (429
-    balance-insufficient) and every remaining VL entry is aliyun_c, all expiring
-    08/13 — so by 08/14 the VL floor is genuinely empty. That is intentional (see
-    _MINIMAL_SAFE_SET comment: "新的最小集不含任何 VL 模型" / VL accepts an empty
-    chain and reports explicitly per spec §9.1, pending the Task 5 VL exemption) —
-    not a regression this test should paper over.
+    🔴 2026-09-15: VL 的**豁免取消了**, 本闸现在对 8 个槽一视同仁。
+
+    旧版把 VL 排除在外, 并在末尾反向断言 `vl_live == []`, 注释写着
+    "if the registry regained a VL grant, update this test's exclusion accordingly"
+    —— 那一天到了: `OPS-VL-SLOT-QWEN38-FLASH-20260915` 给 VL 接上了
+    aliyun_c_vl/qwen3.8-flash(2026-09-15 实测 200)。
+    ⇒ 按它自己留的说明更新: 删掉豁免, VL 与别的槽同样要求「未来某天仍有活候选」。
+    这是**加强**不是放松 —— 被检查的槽从 7 个变成 8 个。
     """
     future = datetime.date(2026, 8, 14)
+    checked = 0
     for slot, chain in llm_router.SLOT_MODELS.items():
-        if slot is SLOT.VL:
-            continue
         live = [(a, m) for (a, m) in chain if llm_router._refuse_reason(a, m, future) is None]
         assert live, f"{slot.value} has ZERO live fallbacks at {future}"
-    vl_live = [
-        (a, m) for (a, m) in llm_router.SLOT_MODELS[SLOT.VL]
-        if llm_router._refuse_reason(a, m, future) is None
-    ]
-    assert vl_live == [], (
-        f"VL floor unexpectedly live at {future} ({vl_live}) — if the registry "
-        "regained a VL grant, update this test's exclusion accordingly"
+        checked += 1
+    # 阳性对照: 槽数掉下来说明遍历坏了, 而那时「每个槽都有活候选」是恒真的。
+    assert checked == len(list(SLOT)), (
+        f"只检查了 {checked} 个槽, 而 SLOT 有 {len(list(SLOT))} 个 —— 闸空转了一部分"
     )
 
 
@@ -1164,16 +1319,22 @@ def test_the_chain_is_not_a_single_point_of_failure():
        跨 ≥2 家。A2 之后地板**就是单点**(只剩 zhipu 一条)—— 那是 owner 的裁定,
        不是缺陷。⇒ 但它守的风险(单点)**没有消失, 只是转移了**: 现在由整条链
        承担。所以改成守「每个非空槽的链跨 ≥2 家 provider」, ⛔ 不是删掉。
+
+    🔴 2026-09-15: VL 从「空链(隐式跳过)」变成**三个账号轮转同一个模型**,
+       于是它和别的槽一样适用本判据, **不需要任何豁免**。
+
+    ⚠️ 顺带把旧写法 `if not chain: continue` 删掉了 —— 那种隐式跳过会让
+       「链意外变空」和「刻意空链」在读数上无法区分, 而前者正是本闸该抓的。
+       现在空链直接红。
     """
     checked = 0
     for slot, chain in llm_router.SLOT_MODELS.items():
-        if not chain:
-            continue                      # VL 是已裁定的空链
+        assert chain, f"{slot.value} 是空链 —— 2026-09-15 起没有任何槽应该是空的"
         providers = {a for a, _m in chain}
         assert len(providers) >= 2, (
             f"{slot.value} 只有一家 provider ({providers}) —— 一次故障就清空它")
         checked += 1
-    assert checked, "一个非空槽都没扫到 —— 闸空转了"
+    assert checked == len(list(SLOT)), "有槽没扫到 —— 闸空转了"
 
 
 def test_the_deleted_accounts_are_really_gone():

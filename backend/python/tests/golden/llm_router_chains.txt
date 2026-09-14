@@ -23,7 +23,10 @@
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
    2099-01-01  zhipu/glm-4.5-air
-== vl (len=0)
+== vl (len=3)
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
 == review (len=3)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
