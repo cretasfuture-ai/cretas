@@ -36,4 +36,15 @@ public interface TraceabilityService {
      * @return 公开溯源信息（脱敏）
      */
     TraceabilityDTO.PublicTraceResponse getPublicTrace(String batchNumber);
+
+    /**
+     * 召回影响面 —— 从一个批次沿血缘往下游追，列出被波及的生产批次 / 成品批次 / 出货单。
+     *
+     * <p>⛔ 查不到血缘引擎或批次类型非法时<b>抛异常</b>，不返回一个「全 0」的空壳：
+     * 「没有波及」和「没查成」在召回场景里是天差地别的两件事。
+     *
+     * @param batchType MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD
+     * @param maxDepth  最大跳数（&lt;=0 取默认 5，上限 10）
+     */
+    TraceabilityDTO.ImpactResponse getImpact(String factoryId, String batchType, String batchId, int maxDepth);
 }

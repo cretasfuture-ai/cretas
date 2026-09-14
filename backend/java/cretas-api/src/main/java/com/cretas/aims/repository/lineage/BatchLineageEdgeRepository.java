@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -64,6 +65,21 @@ public interface BatchLineageEdgeRepository extends JpaRepository<BatchLineageEd
                                              @Param("sourceId") String sourceId,
                                              @Param("targetType") String targetType,
                                              @Param("targetId") String targetId);
+
+    /**
+     * 一次拉回一组节点的全部出边 — 血缘视图组装用, 防 N+1.
+     *
+     * <p>只按 id 过滤不按 type: 调用方拿到之后在内存里按 (type,id) 配对即可,
+     * 而把 type 也写进 IN 会需要元组比较 (JPQL 支持差)。
+     */
+    @Query("SELECT e FROM BatchLineageEdge e WHERE e.factoryId = :factoryId AND e.sourceId IN :nodeIds")
+    List<BatchLineageEdge> findByFactoryIdAndSourceIdIn(@Param("factoryId") String factoryId,
+                                                        @Param("nodeIds") Collection<String> nodeIds);
+
+    /** 一次拉回一组节点的全部入边 — 血缘视图组装用, 防 N+1. */
+    @Query("SELECT e FROM BatchLineageEdge e WHERE e.factoryId = :factoryId AND e.targetId IN :nodeIds")
+    List<BatchLineageEdge> findByFactoryIdAndTargetIdIn(@Param("factoryId") String factoryId,
+                                                        @Param("nodeIds") Collection<String> nodeIds);
 
     /** 工厂全部 edges 计数 — 监控指标 dashboard 用. */
     long countByFactoryId(String factoryId);
