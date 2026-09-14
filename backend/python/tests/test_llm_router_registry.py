@@ -54,6 +54,19 @@ _FROZEN_REGISTRY = {
     ("deepseek", "deepseek-v4-pro"): datetime.date(2026, 11, 15),
     # zhipu: 文本地板, 无到期日。
     ("zhipu", "glm-4.5-air"): None,
+    # ── VL (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────────────────
+    # ⚠️ 这里的 None 语义是**到期日未知**, 与 zhipu 那条的「无到期日」不同,
+    #    也与 deepseek 那两条的「自设复审点」不同 —— 三种语义共用一个 None,
+    #    所以每条都写明自己是哪一种。
+    # 计费安全不靠日期: aliyun_c 的「免费额度用完即停」是开着的, 证据与 08-09
+    # 给 aliyun_b 定性时同源 —— 同一把 key 当天对其它 VL SKU 一律返回
+    # 403 AllocationQuota.FreeTierOnly, 而 403-而-非-计费-200 只有在用完即停
+    # 已开启时才可能出现。
+    ("aliyun_c_vl", "qwen3.8-flash"): None,
+    # 可选备胎(`LLM_VL_ACCOUNT=aliyun_a_vl` + `LLM_VL_MODEL=qwen3.7-flash` 切过去)。
+    # ⚠️ 2026-09-15 实测带图 **33-48s/次**(同模型纯文本 2.4s) ⇒ ⛔ 不作默认:
+    #    手机端用户举着手机等的就是这段时间。
+    ("aliyun_a_vl", "qwen3.7-flash"): None,
 }
 
 
@@ -87,9 +100,20 @@ def test_fast_non_dashscope_floor_precedes_the_slow_one():
        现在断言 `SLOT_MODELS`(真正被 call_chain 遍历的那个), 并由
        `llm_router._ABSOLUTE_LAST` 这个结构键保证 zhipu 置底。
     """
+    # 🔴 2026-09-15: VL 槽**不适用**本判据, 而且理由与「它是空链」无关 ——
+    #    那个旧理由今天已经不成立(VL 有候选了), 但豁免本身仍然成立:
+    #    `_NO_TEXT_TAIL_SLOTS` 明确规定 VL **不追加文本地板**(文本模型看不见图片,
+    #    追加只会把「明确失败」变成「拿一段瞎猜的文字冒充图片理解」)。
+    #    ⇒ VL 的链尾本来就不该是 zhipu。这一直是结构事实, 只是以前被
+    #      `if not chain: continue` 顺带盖住了 —— 那种隐式豁免正是它危险的地方:
+    #      理由变了它也不会红, 因为它压根没说过自己的理由。
+    assert llm_router.SLOT.VL in llm_router._NO_TEXT_TAIL_SLOTS, (
+        "VL 不再豁免文本地板了? 那本测试的 VL 豁免要跟着重新判断"
+    )
     for slot, chain in llm_router.SLOT_MODELS.items():
-        if not chain:
-            continue                      # VL 是空链, 见 spec §9.1
+        if slot in llm_router._NO_TEXT_TAIL_SLOTS:
+            continue
+        assert chain, f"{slot.value} 是空链 —— 2026-09-15 起没有任何槽应该是空的"
         assert chain[-1] == ("zhipu", "glm-4.5-air"), (
             f"{slot.value}: zhipu 必须是链的最后一位, 实际链尾是 {chain[-1]}"
         )

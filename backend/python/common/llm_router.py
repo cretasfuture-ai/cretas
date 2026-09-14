@@ -2,13 +2,20 @@
 Multi-provider LLM router with 403 AllocationQuota.FreeTierOnly fallback.
 
 Per-slot DEEP fallback chains (rebuilt 2026-05-31, Steve directive): each SLOT
-has a list of (account, model) entries — ≥10 free-tier models spanning
-aliyun_c → aliyun_b → aliyun_a → zhipu (see SLOT_MODELS). The router tries them
-in order; an exhausted free model returns 403 FreeTierOnly and falls to the
-NEXT entry, so it keeps trying free models across all 3 aliyun accounts before
-any chance of error. EVERY entry is FREE + "免费额度用完即停=已开启" per the
+has a list of (account, model) entries. The router tries them in order; an
+exhausted free model returns 403 FreeTierOnly and falls to the NEXT entry.
+EVERY entry is FREE + "免费额度用完即停=已开启" per the
 console (memory reference_dashscope_free_model_allowlist) — NO paid SKU is ever
 in a chain, so paid billing is structurally impossible.
+
+⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
+aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
+账号只剩 `aistore` / `deepseek` / `zhipu`, aliyun 三个通用账号已整体退场。
+注释与实现漂开的期间, 任何照它推理的人都会得到一个自洽但错误的结论
+(本次就是: 先按注释以为 VL 只是「链里的候选都 403」, 实测才发现是**空链**)。
+⇒ 只保留今天仍然成立的那部分。⚠️ 同一句过期描述在本文件里还有两处
+(`Chain — 5 providers` / `Chain order — providers`), 其中 `_provider_config`
+上方那处随本次改动一并订正; 另一处已登记, 本次不动(brief 限定 scope)。
 
 No client-side quota estimation — we rely on Aliyun's 免费额度用完即停 toggle
 which returns 403 when free quota exhausts. This is the HARD guarantee that
@@ -133,7 +140,77 @@ _BULK_EXPIRY: Dict[str, datetime.date] = {
 }
 
 _d = datetime.date
+
+# ── 视觉能力登记表 (2026-09-15) ────────────────────────────────────────────
+#
+# 「这个 (账号, 模型) 真的看得见图片吗」**只有实测能回答**。
+#
+# 🔴 上一版判据是 `test_vl_chain_is_vision_only` 里的
+#    `assert "vl" in model or model == "glm-4.6v"` —— 一个**按名字**猜的代理判据。
+#    它有两个方向的错: ① `qwen3.8-flash` 是多模态的, 名字里却没有 `vl`(假阴性,
+#    本次就撞上了); ② 任何叫 `xxx-vl-yyy` 的东西都能进, 哪怕它在这个账号上 403
+#    (假阳性)。**名字不是能力的证据。**
+# ⇒ 换成一张带证据的登记表: 想往 VL 池里加候选, 就得在这里写下探针日期与结论。
+#   值是那条证据本身, ⛔ 不是 True/False —— 布尔值记不住「凭什么」。
+_VISION_VERIFIED: Dict[Tuple[str, str], str] = {
+    ("aliyun_c_vl", "qwen3.8-flash"):
+        "2026-09-15 prod 探针(dashscope_vl_probe.sh): 两张样张 HTTP 200 且返回合规 JSON —— "
+        "EAR_TAG {\"tagNumber\":\"1180245\",\"confidence\":1.0}; "
+        "MEAT_CUT {\"cut\":\"Ribeye\",\"marblingScore\":3,\"foreignObjectSuspected\":false,"
+        "\"contaminationSuspected\":false,\"confidence\":0.9}。**8-10s/次**, usage≈1200 tokens。",
+    ("aliyun_a_vl", "qwen3.7-flash"):
+        "2026-09-15 prod 探针: aliyun_a 带图 HTTP 200, 但 **33-48s/次**(token 3.8k-4.9k); "
+        "同模型纯文本仅 2.4s ⇒ 慢的是图片那一路, 不是账号。"
+        "aliyun_b/c 上同模型 403 FreeTierOnly(要去控制台开)。"
+        "⚠️ 登记为**可选**候选(便宜), ⛔ **不作默认**: 33-48s 撑不起手机端交互 —— "
+        "RN 那一屏用户举着手机等的就是这段时间。要换成它请先想清楚这一条。",
+}
+
+# VL 槽位的账号与模型**可配**(Steve 2026-09-15): 换模型 = 改 `.env.prod` 一行 + 重启,
+# ⛔ 不用改代码、不用重新发版。
+#
+# 🔴 但 env **只能在上面那张登记表里挑**, ⛔ 不能凭空注入一个 (账号, 模型):
+#    本文件顶部写着 `_SAFE_MODELS` 是**唯一**的计费护栏("The router REFUSES any
+#    (account, model) not in this dict")。如果 env 能把任意模型名塞进白名单,
+#    那道护栏当场变成摆设 —— 一个写错的 `LLM_VL_MODEL` 就可能指向付费 SKU。
+# ⇒ 选中的 pair 不在 `_VISION_VERIFIED` 里时, VL 池**留空**并 ERROR 日志点名,
+#   表现是「VL 无候选」这条**明确失败**路径, ⛔ 不是静默降级。
+_VL_ACCOUNT = (os.getenv("LLM_VL_ACCOUNT") or "").strip() or "aliyun_c_vl"
+_VL_MODEL = (os.getenv("LLM_VL_MODEL") or "").strip() or "qwen3.8-flash"
+
+
+def _vl_pool() -> List[Tuple[str, str]]:
+    """按 env 选出 VL 候选; 选不出来就返回空池(明确失败), ⛔ 不猜、⛔ 不降级。"""
+    pair = (_VL_ACCOUNT, _VL_MODEL)
+    if pair in _VISION_VERIFIED:
+        return [pair]
+    logger.error(
+        "[llm_router] VL 槽位没有候选: LLM_VL_ACCOUNT=%r / LLM_VL_MODEL=%r 不在视觉能力登记表里。"
+        " 可选组合: %s。/api/llm/vision 会以「All providers exhausted for vl」明确失败,"
+        " ⛔ 不会降级给文本模型。",
+        _VL_ACCOUNT, _VL_MODEL,
+        ", ".join("%s/%s" % p for p in sorted(_VISION_VERIFIED)),
+    )
+    return []
+
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # ── VL (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────────────────
+    # 值 = None ⇒ **到期日未知**(不是「永不过期」)。控制台没给这个 SKU 的到期日,
+    # 而 `_refuse_reason` 只在 `exp is not None` 时按日期硬丢 ⇒ 这一条不会被
+    # 日期挡下。
+    #
+    # ⚠️ 这样做的前提是**计费安全不靠日期**(见本文件顶部: "ON-toggle = SAFETY;
+    #    expiry date = ORDERING/availability ONLY")。aliyun_c 的「免费额度用完
+    #    即停」是开着的 —— 证据与 08-09 给 aliyun_b 定性时用的是同一条:
+    #    2026-09-15 同一把 key 对 qwen-vl-max/plus、qwen3-vl-* 等**一律返回
+    #    403 AllocationQuota.FreeTierOnly**, 而 403-而-非-计费-200 只有在
+    #    用完即停已开启时才可能出现。
+    # ⇒ 免费额度用尽时它会 403 掉进「VL 无候选」那条明确失败路径, ⛔ 不会静默计费。
+    #
+    # ⚠️ 这两条都在这里, 是因为 env 只能**在已登记的候选里挑**(见 `_vl_pool`):
+    #    白名单必须先有它, env 才选得到它。⛔ 反过来不行。
+    ("aliyun_c_vl", "qwen3.8-flash"): None,
+    ("aliyun_a_vl", "qwen3.7-flash"): None,
     # ── 上海电信 AI Store (owner 2026-08-13 confirmed 25M quota points and
     #    automatic stop on exhaustion; synthetic live probes passed) ──
     # The account is valid for about one month.  We deliberately hard-stop on
@@ -290,6 +367,21 @@ _THINKING_ONLY: frozenset = frozenset({
 # qwen3.7-flash 系列(10/23 到期)比多数 aliyun_c 条目跑道更长, 集合按「跑道最长
 # + 当天探针通过」逐条选, 不再是单一账号。
 #
+# ⚠️ 2026-09-15 (OPS-VL-SLOT-QWEN38-FLASH-20260915) 推翻了下面这条取舍, 原文保留
+# 在后面供对照。推翻的理由是**前提没了**: 「业务 7 天仅 1 次真实 VL 调用」——
+# 拍照核验(耳标识别 / 肉品外观初评, PR #791)把 VL 变成了一条产品路径,
+# Steve 2026-09-15 拍板重新接上。
+#
+# 🔴 VL 候选**必须**同时进本集合, 而不是只进 `_SAFE_MODELS` —— 这正是下面
+#    deepseek 那段用实测记下来的同一个坑:
+#      `_REGISTRY_AUDIT_DATE(2026-08-13) + _REGISTRY_MAX_AGE_DAYS(21)`
+#      ⇒ **2026-09-04 起 registry 已超龄**, 今天 09-15 就在超龄区间里。
+#    2026-09-15 实测(改动前):
+#      _refuse_reason("aliyun_c_vl", "qwen3.8-flash") == 'registry_stale'
+#    ⇒ 只加 `_SAFE_MODELS` 的话这次改动**上线即无效**, 而它的表现与
+#      「模型不可用」完全同形(照样是 VL 无候选 → 500), 没有任何信号能分开两者。
+#
+# ── 以下为 2026-08-09 的原文(已被上面推翻, 存档) ──
 # ⛔ 集合里刻意**不含任何 VL 模型** —— VL 在 staleness 下会**完全变黑**, 这是
 # 已知且记录在 plan 里的取舍(业务 7 天仅 1 次真实 VL 调用, 明确报错优于文本模型
 # 瞎猜图片, 同 §9.1 对 VL 到期的处置一致), 不是遗漏。Fail SAFE, not open —— 但
@@ -322,6 +414,14 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     #    这个集合眼下最缺的东西: 一条**快的、跑道长的**。
     ("deepseek", "deepseek-v4-flash"),
     ("deepseek", "deepseek-v4-pro"),
+    # ── VL (2026-09-15) ───────────────────────────────────────────────
+    # 两条都进, 理由见本集合上方那段: registry 自 2026-09-04 起已超龄,
+    # 不在本集合里的 pair 会被 `_refuse_reason` 判 'registry_stale' 直接拒掉 ——
+    # 于是「接上了 VL」和「没接上」在行为上一模一样(都是 VL 无候选 → 500)。
+    # ⚠️ 两条都登记是因为 env 可以在它们之间切(见 `_vl_pool`), 而**被切到的那条
+    #    必须当场可用** —— 让「切过去之后要等 21 天重审才生效」这种事不可能发生。
+    ("aliyun_c_vl", "qwen3.8-flash"),
+    ("aliyun_a_vl", "qwen3.7-flash"),
     # 2026-08-13 重建。上一版(08-09 建)的9 个条目今天实测 **6 个已死** ——
     # 包括它自己的三根支柱 qwen3.8-max(三账号各 100 万、到期 11/01)。
     #
@@ -1260,12 +1360,22 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aistore", "DeepSeek-V4-Flash-A"),
         ("deepseek", "deepseek-v4-flash"),
     ],
-    # VL — 空链。owner 2026-08-09 拍板(spec §9.1): 业务用不到 VL(prod 7 天仅 1 次
-    #      真实调用), 明确报错优于把图片请求静默降级给文本模型瞎猜(CLAUDE.md 核心
-    #      原则 1)。2026-08-13 复核: 原 VL 地板 zhipu/glm-4.6v 实测 **429**(余额不足),
-    #      ark 的三个可调模型均非 VL SKU —— 仍然无候选, 维持空链。
-    SLOT.VL: [
-    ],
+    # VL — 2026-09-15 重新接上(OPS-VL-SLOT-QWEN38-FLASH-20260915, Steve 拍板)。
+    #
+    # 上一版是**空链**, 理由是 owner 2026-08-09 拍板「业务用不到 VL(prod 7 天仅 1 次
+    # 真实调用)」。那个前提没了: 拍照核验(耳标识别 / 肉品外观初评, PR #791)
+    # 把 VL 变成一条产品路径, prod 上 `/api/llm/vision` 因此对每个请求都 500。
+    #
+    # 🔴 **只有一条候选, 这是刻意的**: 2026-09-15 同一把 key 实测, 其它 VL SKU
+    #    (qwen-vl-max / qwen-vl-plus / qwen3-vl-flash / qwen3-vl-plus 及日期版 /
+    #     qwen3.5-flash / qwen3.8-max)**一律 403 AllocationQuota.FreeTierOnly**。
+    #    ⛔ 把它们放进链里当回退是**负收益**: 每一条都要先花一次往返拿到 403,
+    #       才轮到真正能用的那条 —— 用户多等, 结果不变。
+    #    ⚠️ 「多一个回退总比没有好」在这里是错的: 回退的前提是它**可能**成功。
+    #
+    # 具体用哪一条由 env 决定(`LLM_VL_ACCOUNT` / `LLM_VL_MODEL`), 但只能在
+    # `_VISION_VERIFIED` 登记过的组合里挑 —— 见 `_vl_pool()` 上方的说明。
+    SLOT.VL: _vl_pool(),
 }
 
 # 绝对置底 —— `_build_chain` 排序键的第 2 位, 优先于能力档/延迟档/到期日。
@@ -1695,6 +1805,40 @@ def _provider_config(account: str) -> Tuple[str, str]:
             os.getenv("LLM_ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
             os.getenv("LLM_ZHIPU_API_KEY", ""),
         ),
+        # ── aliyun_c_vl (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────
+        #
+        # 🔴 **只服务 VL 这一个槽**, 名字里的 `_vl` 就是那道结构闸: 它不出现在
+        #    任何别的 `_SLOT_POOLS` 条目里, 所以「aliyun 悄悄回到 chat/review」
+        #    这件事**在结构上做不到**, 不靠谁记得。
+        #    (同一个做法本文件已有先例: `aliyun_a_deepseek` —— 同端点同 key,
+        #     靠一个独立的逻辑账号名把某一类 SKU 隔离在特定槽里。)
+        #
+        # 账号: DashScope bailian **aliyun_c**。2026-09-15 用 sha256(只比哈希、
+        # 不打印明文)确认 `LLM_ALIYUN_C_API_KEY` 与 Java 侧那把
+        # `CRETAS_AI_DASHSCOPE_API_KEY` **是同一把** —— 这一条是本次改动的**唯一
+        # 载荷**: 免费额度按**账号**算, 挑错账号的表现是 403 而不是报错,
+        # 与「这个模型不可用」完全同形。
+        #
+        # ⛔ 与 aistore / deepseek 同一条纪律: **不 fallback 到 `LLM_API_KEY`
+        #    或任何别的 key**。写成 `os.getenv(..., "")`。把一个不相干的凭证
+        #    发给这个 provider 是计费事故, 不是便利。
+        "aliyun_c_vl": (
+            os.getenv("LLM_ALIYUN_C_BASE_URL",
+                      "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            os.getenv("LLM_ALIYUN_C_API_KEY", ""),
+        ),
+        # aliyun_a 的 VL 分身 —— 同样只服务 VL 槽, 供 `LLM_VL_ACCOUNT` 切换。
+        # ⚠️ 逻辑账号名刻意带 `_vl` 后缀而不是直接复用 `aliyun_a`:
+        #    `aliyun_a` 这个名字在本文件的历史里有**退役结论**挂着
+        #    (test_flash_quota_pair_retired_from_b_and_c_survives_only_on_a 断言
+        #     ("aliyun_a","qwen3.7-flash") 不在 _SAFE_MODELS / _MINIMAL_SAFE_SET)。
+        #    那条结论说的是**文本链**上的它(2026-08-13 探针 403), 与今天带图 200
+        #    是两件事。用独立的逻辑名, 两个结论各自成立、互不推翻。
+        "aliyun_a_vl": (
+            os.getenv("LLM_ALIYUN_A_BASE_URL",
+                      "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            os.getenv("LLM_ALIYUN_A_API_KEY", ""),
+        ),
         # ark (Volcengine 火山方舟, 2026-07-30): OpenAI-compatible, ~36 ACTIVE text
         # models each holding an untouched 500k free inference grant — a provider
         # fully independent of both DashScope and TokenHub.
@@ -1718,14 +1862,18 @@ def _provider_config(account: str) -> Tuple[str, str]:
     return mapping.get(account, ("", ""))
 
 
-# Chain order — providers, all free tier:
-#   aliyun_c → aliyun_b → aliyun_a → tencent → zhipu (→ aliyun_a_deepseek)
+# Chain order — providers, all free tier.
 #
-# tencent (June 1 2026): TokenHub 90-day free trial, between aliyun + zhipu.
+# ⚠️ 2026-09-15 订正: 这里原本写 `aliyun_c → aliyun_b → aliyun_a → tencent →
+# zhipu (→ aliyun_a_deepseek)`, 而上面那张 mapping 里**这些账号一个都不在了**
+# (通用文本只剩 aistore / deepseek / zhipu; aliyun 仅以 `aliyun_c_vl` 的形式
+# 回来服务 VL 一个槽)。⛔ 不要照那句已经作废的话推理链的形状 ——
+# **唯一权威是 `_build_chain(slot)` 的实际输出**, 想知道链长什么样就跑它一次。
 #
-# aliyun_c (May 14 2026): 3rd Aliyun bailian account, brand-new free quota.
-# Placed at HEAD so its fresh 1M/SKU pool consumes first before aliyun_b/a
-# deplete — preserves runway on the older accounts.
+# 今天的通用文本链(实测, 2026-09-15):
+#   aistore → deepseek → zhipu(地板, _ABSOLUTE_LAST 绝对置底)
+# VL 槽:
+#   aliyun_c_vl/qwen3.8-flash  (单条, 见 _SLOT_POOLS[SLOT.VL] 处的说明)
 #
 # Each provider's 403/AllocationQuota.FreeTierOnly + 429 triggers fallback
 # per `_is_quota_exhausted`. After a full cascade exhausts the chain raises
