@@ -15,6 +15,7 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
+- `DEMO-SHENGLONG-TENANT-SEED-20260915` — `in-progress` — Owner: Line B(executor) — Base `origin/main`(含 #791/#793) — 纯 API 演示租户种子脚本(建厂→默认用户→原料/产品/工序→族图 draft+publish→6 头个体+期初批次→计划/报工/成品→标签 traceCode→公开溯源 200), 幂等可重跑, 只在本地跑通; prod 执行归 organizer(🔒 prod 写)。
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
@@ -65,6 +66,7 @@
 
 
 
+- `DEMO-SHENGLONG-TENANT-SEED-20260915`：仅新建 `scripts/e2e/shenglong-demo/**`；⛔ 不改后端/前端代码、不 SQL 直插、凭证不入库。
 - `ARCH-LINEAGE-CLOSE-LOOP-20260914`：新建 `service/lineage/**`；`Traceability*`(Service/Impl/Controller/dto)；六个挂钩 Service 仅插入 recorder 调用行；回填命令；RN `screens/traceability/**`+`traceabilityApiClient.ts`。⛔ 不改 `MaterialBatch.java`/WIP 写边/Flyway(除 `_43`)。全文见 archive briefs。
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、ACTIVE 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。
