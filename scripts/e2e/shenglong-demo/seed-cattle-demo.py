@@ -79,9 +79,16 @@ DEMO_MARK = "SL-DEMO"
 
 # ── 原料类型 ────────────────────────────────────────────────────────
 RAW_MATERIALS = [
-    # (code, name, category, unit, storageType)
-    ("RM-CATTLE-LIVE", "活牛", "畜类", "kg", "fresh"),
-    ("RM-CARCASS-HALF", "胴体半片", "畜类", "kg", "fresh"),
+    # (code, name, category, mainCategory, unit, storageType)
+    # 🔴 category(小类)必须是后端 `MaterialMainCategory` 里**已登记**的词, ⛔ 不能自己发明:
+    #    2026-09-15 本机实测用「畜类」被拒 ——
+    #      400 物料基本类型「畜类」尚未归入大类 (severity=BLOCKING)
+    #    那张表是**代码里的硬编码允许表**, RAW 档收了 肉类/禽类/水产/蔬菜/米面/干货…,
+    #    **没有**「畜类」。⇒ 改用已登记的「肉类」。
+    #    ⚠️ mainCategory 传了也没用: 后端按 category 反查大类, 不看请求里的 mainCategory。
+    #    📌 已登记: 一个牛肉厂最自然的那个词(畜类)不在表里, 而禽类/水产在 —— 值得单独提。
+    ("RM-CATTLE-LIVE", "活牛", "肉类", "原料", "kg", "fresh"),
+    ("RM-CARCASS-HALF", "胴体半片", "肉类", "原料", "kg", "fresh"),
 ]
 
 # ── 20 个分割部位(半成品) + 1 个成品 ────────────────────────────────
@@ -201,15 +208,18 @@ class Api:
         self._requests = requests
 
     # ── 底层 ────────────────────────────────────────────────────────
-    def _call(self, method: str, path: str, body=None, params=None, write=False):
+    def _call(self, method: str, path: str, body=None, params=None, write=False,
+              headers=None):
         url = f"{self.base}{path}"
-        headers = {"Content-Type": "application/json"}
+        hdrs = {"Content-Type": "application/json"}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+            hdrs["Authorization"] = f"Bearer {self.token}"
+        if headers:
+            hdrs.update(headers)
         if self.dry_run and write:
             info(f"DRY-RUN skip {method} {path}")
             return {"success": True, "data": None, "_dry_run": True}
-        r = self._requests.request(method, url, headers=headers, json=body,
+        r = self._requests.request(method, url, headers=hdrs, json=body,
                                    params=params, timeout=60)
         try:
             payload = r.json()
@@ -221,8 +231,9 @@ class Api:
     def get(self, path, params=None):
         return self._call("GET", path, params=params)
 
-    def post(self, path, body=None, params=None, write=True):
-        return self._call("POST", path, body=body, params=params, write=write)
+    def post(self, path, body=None, params=None, write=True, headers=None):
+        return self._call("POST", path, body=body, params=params, write=write,
+                          headers=headers)
 
     def put(self, path, body=None, write=True):
         return self._call("PUT", path, body=body, write=write)
@@ -258,7 +269,7 @@ def login(api: Api, username: str, password: str, factory_id: str | None) -> dic
     return user
 
 
-def ensure_factory(api: Api) -> str:
+def ensure_factory(api: Api, internal_key: str) -> str:
     """建工厂(幂等: 按 name 查)。
 
     ⚠️ 工厂 ID **拿不到字面量** —— `generateFactoryId` 按
@@ -270,60 +281,90 @@ def ensure_factory(api: Api) -> str:
         if f.get("name") == FACTORY_NAME:
             step("ensure factory", "reused", id=f.get("id"), name=FACTORY_NAME)
             return f["id"]
+    # 🔴 建工厂走**内部 onboarding 端点**而不是 `POST /api/platform/factories`,
+    #    因为它一次把「建厂 + provisionDefaultUsers + feature config」都做了。
+    #
+    #    ⚠️ 2026-09-15 实测踩出来的: 平台管理员**建不了**新工厂的第一个用户。
+    #    我原本的设计是 platform/factories 建厂 + `POST /api/mobile/{fid}/users` 建管理员,
+    #    读过 JwtAuthInterceptor(平台角色可跨工厂) 和权限矩阵(platform_admin 对 hr
+    #    是 read_write) 之后以为可行 —— 真跑当场 403:
+    #        账号 local_platform_admin(1) 不属于工厂 CATTLE_3701_001，无法访问模块 hr_employee
+    #    第三道闸 `ModuleEnabledInterceptor` 里有一句
+    #        if (!factoryId.equals(user.getFactoryId())) -> deny
+    #    **没有任何平台角色豁免**。⇒ 凡带 `@RequireModule` 的端点, 任何人都跨不了工厂,
+    #    而 `POST /users` 正好带 `@RequireModule("hr_employee")`。
+    #    📌 两处源码读对了、结论仍然是错的 —— 因为还有第三处我没读到。
     body = {
-        "name": FACTORY_NAME,
+        "factoryName": FACTORY_NAME,
         "industryCode": FACTORY_INDUSTRY_CODE,
         "regionCode": FACTORY_REGION_CODE,
-        "address": "山东省潍坊市（演示数据）",
         "contactName": "演示联系人",
         "contactPhone": "13800000000",
-        "subscriptionPlan": "BASIC",
-        "isActive": True,
+        "surveyCompanyId": f"seed-{FACTORY_INDUSTRY_CODE}-demo",
     }
-    data = api.need(api.post("/api/platform/factories", body), "建工厂")
+    data = api.need(api.post("/api/internal/onboarding/create-factory", body,
+                             headers={"X-Internal-Key": internal_key}), "建工厂(onboarding)")
     if data is None:
         step("ensure factory", "ok", note="dry-run")
         return "DRY_RUN_FACTORY"
-    step("ensure factory", "created", id=data.get("id"), name=FACTORY_NAME)
-    return data["id"]
+    fid = data.get("factoryId") or data.get("id")
+    if not fid:
+        raise SeedError("onboarding 建厂没返回 factoryId, 响应: "
+                        + json.dumps(data, ensure_ascii=False)[:600])
+    step("ensure factory", "created", id=fid, factory=FACTORY_NAME,
+         users=len(data.get("users") or []))
+    return fid
 
 
-def ensure_factory_admin(api: Api, factory_id: str, demo_password: str) -> str:
-    """建工厂管理员(幂等: 按 username 查); 已存在则把密码重置成演示口令。
+def provision_default_users(api: Api, factory_id: str, internal_key: str) -> None:
+    """给**已存在**的工厂补建默认用户(走内部端点的 link-survey-company 分支)。
 
-    🔴 为什么不用 onboarding 的 `provisionDefaultUsers`:
-       那条路要 `X-Internal-Key`, 而 `internal.api.key` 没配置时**默认是每次启动
-       随机的 UUID** —— 等于不可用, 且「不可用」的表现是 403, 与「key 写错了」
-       完全同形。平台管理员本来就能跨工厂(JwtAuthInterceptor 的
-       PLATFORM_ADMIN_ROLES)且 platform_admin 在权限矩阵里对 hr 是 read_write,
-       所以直接建用户是**少一个外部前提**的那条路。
-    ⚠️ 代价: 不会顺带建出 workshop/worker 两个默认账号。演示只需要 admin,
-       需要时再按同样方式加, ⛔ 不去依赖那个内部端点。
+    只有「工厂已在、但 {fid}_admin 还没建出来」时才需要 —— 例如上一次跑到一半失败。
+    """
+    resp = api.post(f"/api/internal/field-visibility/{factory_id}/link-survey-company",
+                    {"surveyCompanyId": f"seed-{factory_id}"},
+                    headers={"X-Internal-Key": internal_key})
+    api.need(resp, f"给已有工厂 {factory_id} 补建默认用户")
+    step("provision default users", "created", factory=factory_id)
+
+
+def ensure_factory_admin(api: Api, factory_id: str, demo_password: str,
+                         internal_key: str) -> str:
+    """把 `{fid}_admin` 的口令重置成演示口令; 账号缺失时先补建默认用户。
+
+    🔴 这里**不建用户** —— 建不了。2026-09-15 实测: 平台管理员对带
+       `@RequireModule` 的端点跨不了工厂(`ModuleEnabledInterceptor` 里
+       `if (!factoryId.equals(user.getFactoryId())) -> deny`, 无平台角色豁免),
+       而 `POST /api/mobile/{fid}/users` 正好带 `@RequireModule("hr_employee")`。
+       ⇒ 新工厂的第一批用户只能由内部 onboarding 端点的 `provisionDefaultUsers` 建。
+       `ensure_factory` 建厂时已经顺带建好, 这里只负责把随机口令换成演示口令。
+
+    ⚠️ `provisionDefaultUsers` 生成的口令是**随机 12 位**, 所以重置这一步不能省。
+       重置走 `/api/mobile/auth/reset-password` —— 它在 `/auth/` 下, 不受上面那道
+       模块闸管, 且显式允许平台角色跨工厂(见 MobileController 里那段多租户注释)。
     """
     username = f"{factory_id.lower()}_admin"
-    listing = api.get(f"/api/mobile/{factory_id}/users", params={"page": 1, "size": 100})
-    if listing.get("success"):
-        content = (listing.get("data") or {}).get("content") or []
-        for u in content:
-            if u.get("username") == username:
-                api.need(api.post("/api/mobile/auth/reset-password", None,
-                                  params={"factoryId": factory_id, "username": username,
-                                          "newPassword": demo_password}),
-                         "重置演示管理员口令")
-                step("ensure factory admin", "reused", username=username, note="password reset")
-                return username
-    body = {
-        "username": username,
-        "password": demo_password,
-        "fullName": "演示管理员",
-        "roleCode": "factory_super_admin",
-        "isActive": True,
-    }
-    data = api.need(api.post(f"/api/mobile/{factory_id}/users", body), "建工厂管理员")
-    if data is None:
+
+    # 账号在不在? 用平台管理员查不了(同样是模块闸), 所以直接拿重置当探针:
+    # 重置成功 = 账号在; 404/不存在 = 需要补建默认用户再重置一次。
+    resp = api.post("/api/mobile/auth/reset-password", None,
+                    params={"factoryId": factory_id, "username": username,
+                            "newPassword": demo_password})
+    if resp.get("_dry_run"):
         step("ensure factory admin", "ok", note="dry-run")
         return username
-    step("ensure factory admin", "created", username=username, id=data.get("id"))
+    if resp.get("success"):
+        step("ensure factory admin", "reused", username=username, note="password-reset")
+        return username
+
+    # 账号还没有(上一次跑到一半失败等) -> 补建默认用户, 再重置一次。
+    info(f"{username} 重置失败({resp.get('message')!r}), 尝试补建默认用户")
+    provision_default_users(api, factory_id, internal_key)
+    api.need(api.post("/api/mobile/auth/reset-password", None,
+                      params={"factoryId": factory_id, "username": username,
+                              "newPassword": demo_password}),
+             f"重置 {username} 口令(补建默认用户之后)")
+    step("ensure factory admin", "created", username=username)
     return username
 
 
@@ -342,12 +383,16 @@ def ensure_raw_materials(api: Api, fid: str) -> dict:
     #    ⇒ 改成与本文件其它 ensure_* 一致的写法(分页对象取 content, 裸数组直接用)。
     rows = listing.get("content") if isinstance(listing, dict) else listing
     known = {m.get("code"): m for m in (rows or [])}
-    for code, name, category, unit, storage in RAW_MATERIALS:
+    for code, name, category, main_category, unit, storage in RAW_MATERIALS:
         if code in known:
             out[code] = known[code]["id"]
             step(f"raw-material {name}", "reused", id=out[code])
             continue
-        body = {"code": code, "name": name, "category": category, "unit": unit,
+        # ⚠️ mainCategory 必填: 后端要求每个「小类」(category)都登记属于哪个**大类**,
+        #    大类只有 原料 / 辅料 / 包材 三种。不带它会 400
+        #    「物料基本类型「畜类」尚未归入大类」(2026-09-15 本机实测)。
+        body = {"code": code, "name": name, "category": category,
+                "mainCategory": main_category, "unit": unit,
                 "storageType": storage, "isActive": True,
                 "notes": f"{DEMO_MARK} 演示数据"}
         data = api.need(api.post(f"/api/mobile/{fid}/raw-material-types", body),
@@ -368,15 +413,22 @@ def ensure_product_types(api: Api, fid: str) -> dict:
     rows = listing.get("content") if isinstance(listing, dict) else listing
     known = {p.get("code"): p for p in (rows or [])}
 
-    wanted = [(f"PT-CUT-{code}", name, "分割部位") for name, code in CUTS]
-    wanted.append((FINISHED_CODE, FINISHED_NAME, "成品"))
+    # 🔴 productCategory 必填, 且**必须与族图节点 kind 对上**(2026-09-15 本机实测):
+    #      SEMI_FINISHED 节点 -> SKU 必须是 SEMI_FINISHED
+    #      FINISHED_GOOD 节点 -> SKU 必须在 FINISHED_OUTPUT_CATEGORIES 里(用 FINISHED_PRODUCT)
+    #    不填直接 400 PRODUCT_CATEGORY_REQUIRED;
+    #    ⚠️ 填错的代价更大: 后端注释写着建好之后**普通编辑改不了**(会撞
+    #       SKU_UNIT_MIGRATION_REQUIRED), 只能删了重建。
+    wanted = [(f"PT-CUT-{code}", name, "分割部位", "SEMI_FINISHED") for name, code in CUTS]
+    wanted.append((FINISHED_CODE, FINISHED_NAME, "成品", "FINISHED_PRODUCT"))
 
-    for code, name, category in wanted:
+    for code, name, category, product_category in wanted:
         if code in known:
             out[code] = known[code]["id"]
             step(f"product-type {name}", "reused", id=out[code])
             continue
         body = {"code": code, "name": name, "category": category, "unit": "kg",
+                "productCategory": product_category,
                 "description": f"{DEMO_MARK} 演示数据"}
         data = api.need(api.post(f"/api/mobile/{fid}/product-types", body),
                         f"建产品类型 {name}")
@@ -495,16 +547,63 @@ def ensure_workflow(api: Api, fid: str, product_type_id: str, definition: dict) 
     ⛔ 发不出去**不要绕**: 把校验器的报错原样打出来 —— 那句话就是它要的形状。
        绕过去(改成一张更简单的图)等于把问题推到演示当天。
     """
+    # 幂等: 已有草稿/已发布版本时, 必须把**当前** lockVersion 带上再存,
+    # 否则乐观锁 409 PRODUCT_PROCESS_WORKFLOW_CONFLICT「该 Workflow 已被其他人更新」。
+    # ⚠️ 那句话读起来像「有别人在改」, 实际上第二次跑自己就会撞 —— 2026-09-15 实测。
+    current = api.get(f"/api/mobile/{fid}/product-process-workflows/{product_type_id}")
+    if current.get("success") and (current.get("data") or {}).get("lockVersion") is not None:
+        existing = current["data"]
+        definition = dict(definition)
+        # 🔴 `assertCurrentIdentity` 要**三个**都对上: id / version / lockVersion
+        #    (version 对应实体的 definitionVersion)。少传任何一个都是同一句
+        #    409「该 Workflow 已被其他人更新」—— 那句话不会告诉你少了哪个。
+        #    2026-09-15 实测: 只带 id+lockVersion 仍然 409, 补上 version 才过。
+        definition["lockVersion"] = existing["lockVersion"]
+        definition["id"] = existing.get("id")
+        definition["version"] = existing.get("version")
+        for key in ("id", "version", "lockVersion"):
+            if definition.get(key) is None:
+                raise SeedError(
+                    f"已有 Workflow 但读不到 {key}, 无法带锁保存。完整响应: "
+                    + json.dumps(existing, ensure_ascii=False)[:600])
+        info(f"已有 Workflow(status={existing.get('status')} "
+             f"lockVersion={existing.get('lockVersion')}), 带锁保存")
+
     resp = api.put(f"/api/mobile/{fid}/product-process-workflows/{product_type_id}/draft",
                    definition)
-    api.need(resp, "保存工艺草稿")
-    step("workflow draft", "created" if not api.dry_run else "ok", nodes=len(definition["nodes"]),
-         edges=len(definition["edges"]))
+    draft = api.need(resp, "保存工艺草稿")
+    if draft is None:
+        step("workflow draft", "ok", note="dry-run")
+        step("workflow publish-and-activate", "ok", note="dry-run")
+        return
+    step("workflow draft", "created", nodes=len(definition["nodes"]),
+         edges=len(definition["edges"]), lockVersion=draft.get("lockVersion"),
+         revisionId=draft.get("revisionId"))
 
+    # 🔴 publish 的 5 个字段全部 @NotNull/@NotBlank, 而且**只能从草稿响应里取** ——
+    #    自己编一个 lockVersion/revisionHash 就是在绕乐观锁。
+    #    ⚠️ 少传任何一个, 后端返回的是 400「请求格式不正确，请检查JSON格式」
+    #      (HttpMessageNotReadable/校验失败的统一文案), 它**不会**告诉你少了哪个字段 ——
+    #      2026-09-15 本机实测: 第一版不带 body, 就得到这句, 很容易被读成「族图有问题」。
+    missing = [k for k in ("lockVersion", "revisionId", "revisionHash") if draft.get(k) is None]
+    if missing:
+        raise SeedError(
+            "草稿响应里缺 " + ", ".join(missing) + " —— 无法发布。完整草稿响应: "
+            + json.dumps(draft, ensure_ascii=False)[:800])
+    publish_body = {
+        "lockVersion": draft["lockVersion"],
+        "revisionId": draft["revisionId"],
+        "revisionHash": draft["revisionHash"],
+        "definitionVersion": draft.get("schemaVersion") or 1,
+        # 幂等键: 同一份草稿重复发布不应产生第二个版本。
+        "idempotencyKey": f"{DEMO_MARK}-publish-{product_type_id}-{draft['revisionId']}",
+    }
     resp = api.post(
-        f"/api/mobile/{fid}/product-process-workflows/{product_type_id}/publish-and-activate")
+        f"/api/mobile/{fid}/product-process-workflows/{product_type_id}/publish-and-activate",
+        publish_body)
     api.need(resp, "发布并激活工艺")
-    step("workflow publish-and-activate", "created" if not api.dry_run else "ok")
+    step("workflow publish-and-activate", "created",
+         lockVersion=publish_body["lockVersion"], revisionId=publish_body["revisionId"])
 
 
 # ── 源头个体 + 期初批次 ─────────────────────────────────────────────
@@ -855,6 +954,9 @@ def main() -> int:
                    help="演示租户管理员口令 (⛔ 不写进代码)")
     p.add_argument("--dry-run", action="store_true",
                    help="只登录 + 只读探测, 不写任何数据")
+    p.add_argument("--internal-key", default=os.getenv("SEED_INTERNAL_KEY"),
+                   help="内部 onboarding 端点的 X-Internal-Key (后端 internal.api.key)。"
+                        "⚠️ 新工厂的第一批用户只能由它建 —— 平台管理员跨不了模块闸。")
     p.add_argument("--self-test", action="store_true",
                    help="离线自检族图结构, 不连后端(不需要任何凭证)")
     args = p.parse_args()
@@ -873,6 +975,17 @@ def main() -> int:
         print("ERROR: 非 dry-run 必须给 --demo-password (或 SEED_DEMO_PASSWORD)。",
               file=sys.stderr)
         return 2
+    # ⛔ 早停在**建任何东西之前**: 缺 key 时后面必定 403, 而那时工厂已经建了一半。
+    if not args.dry_run and not args.internal_key:
+        print("\n".join([
+            "ERROR: 需要 --internal-key (或 SEED_INTERNAL_KEY)。",
+            "  新工厂的第一批用户只能由内部 onboarding 端点建 —— 平台管理员带不动",
+            "  @RequireModule 的跨工厂请求(ModuleEnabledInterceptor 无平台角色豁免)。",
+            "  后端侧对应配置项是 `internal.api.key`;",
+            "  ⚠️ 它没配置时默认是**每次启动随机的 UUID**, 那种情况下任何值都会 403",
+            "     —— 先确认后端真的配了它, ⛔ 别把 403 读成「key 写错了」。",
+        ]), file=sys.stderr)
+        return 2
 
     info(f"base-url={args.base_url} dry_run={args.dry_run} "
          f"platform_user={args.platform_user} "
@@ -883,8 +996,9 @@ def main() -> int:
         who = login(api, args.platform_user, args.platform_pass, args.platform_factory)
         step("platform login", "ok", user=args.platform_user, role=who.get("roleCode") or who.get("role"))
 
-        fid = ensure_factory(api)
-        admin_user = ensure_factory_admin(api, fid, args.demo_password or "")
+        fid = ensure_factory(api, args.internal_key or "")
+        admin_user = ensure_factory_admin(api, fid, args.demo_password or "",
+                                          args.internal_key or "")
 
         if args.dry_run:
             info("dry-run: 到此为止(后面每一步都要写数据)。")
