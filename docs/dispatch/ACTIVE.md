@@ -15,7 +15,8 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
-- `OPS-VL-SLOT-QWEN38-FLASH-20260915` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #793**(head `62585e43ac`, 仅 backend/python): VL 槽三账号轮转 `qwen3.8-flash`(c→a→b, 4.8/6.2/10.6 s), env 只能在登记表里选, 其它 7 槽逐字不变。合并后 `deploy-smartbi-python.sh --env prod`, 判据=真打 `/api/llm/vision` 200。
+- `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
+- `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
 - `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #792**(head `dc0be9cacf`): recorder+7 处挂钩+读侧 lineage/impact+回填 runner+RN 时间线; 790 tests 0 fail, 10 次变异。出货载体=`sales_delivery_records`。合并后 prod 先 dry-run 看「对不齐」, 再看 closure depth≥2。🔒 架构。
 - `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #791**(head `c0e3be9970`): 个体档案(含父本/母本)+批次挂个体(Flyway `_42`)+`/vision/verify`+RN 核验屏+web-admin 列表; 三端测试全绿, 9 条变异对照。🔴 prod VL 为零(`SLOT.VL: []`+DashScope 免费额度), 拍照演示待 owner 充值。🔒
@@ -65,7 +66,6 @@
 
 
 
-- `OPS-VL-SLOT-QWEN38-FLASH-20260915`：仅 `backend/python/common/llm_router.py` 与其单测、Python 侧 VL 端点测试；⛔ 不改其它槽位、不改 Java、不改 `.env*`。
 - `ARCH-LINEAGE-CLOSE-LOOP-20260914`：新建 `service/lineage/**`；`Traceability*`(Service/Impl/Controller/dto)；六个挂钩 Service 仅插入 recorder 调用行；回填命令；RN `screens/traceability/**`+`traceabilityApiClient.ts`。⛔ 不改 `MaterialBatch.java`/WIP 写边/Flyway(除 `_43`)。全文见 archive briefs。
 - `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914`：新建 `**/SourceIndividual*`、`service/vision/**`、Flyway `V20261101_42`；`MaterialBatch.java` 仅加一列；RN `screens/shared/VisionVerify*`；web-admin `views/source-individuals/**`。⛔ 不碰 Traceability*/lineage/WIP。全文见 archive briefs。
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
