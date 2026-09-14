@@ -53,7 +53,9 @@
       "exceptionAlert": "异常预警",
       "traceability": "产品溯源",
       "materialRequisitions": "领料单",
-      "teamReport": "班组报工"
+      "teamReport": "班组报工",
+      "visionVerify": "拍照核验",
+      "sourceIndividual": "源头个体"
     },
     "aiAnalysis": {
       "title": "AI智能分析",
@@ -1307,5 +1309,94 @@
       "qualityDifference": "质量差异的主要原因是什么?"
     },
     "aiFailed": "AI分析失败"
+  },
+  "sourceIndividual": {
+    "vision": {
+      "title": "拍照核验",
+      "template": {
+        "earTag": "标识牌识别",
+        "meatCut": "肉品分割块初评"
+      },
+      "scan": "扫码",
+      "takePhoto": "拍照",
+      "gallery": "从相册选",
+      "scannerTitle": "扫描标识牌上的条码",
+      "scanPreferredHint": "标识牌上有条码就直接扫码 —— 扫码是确定的，拍照识别是估的。",
+      "working": "识别中…",
+      "failedTitle": "核验失败",
+      "failedUnknown": "请稍后重试",
+      "permissionTitle": "权限不足",
+      "cameraDenied": "需要相机权限才能拍照",
+      "galleryDenied": "需要相册权限才能选择图片",
+      "unreadableTitle": "没认出来",
+      "modelRawText": "模型原始输出",
+      "retake": "重拍",
+      "earTagResultTitle": "标识牌识别结果",
+      "meatCutResultTitle": "肉品初评结果",
+      "viaScan": "来自扫码（确定读数）",
+      "viaModel": "来自拍照识别（估计读数）",
+      "tagUnreadable": "这张照片没读出编号，请重拍",
+      "notQueried": "没有编号可查，未查询档案",
+      "noMatch": "查过了：这个编号还没有建档",
+      "multipleMatches": "这个编号命中 {{count}} 份档案（标牌可能重挂过），请人工确认是哪一头",
+      "confidence": "把握程度 {{value}}%",
+      "openProfile": "查看档案",
+      "registerNew": "登记新个体",
+      "aiPreliminary": "AI 初评 · 需人工复核",
+      "cut": "分割部位",
+      "marbling": "脂肪分布评分（1-5）",
+      "foreignObject": "疑似异物",
+      "contamination": "疑似污染",
+      "suspected": "疑似有",
+      "notSuspected": "未发现"
+    },
+    "fields": {
+      "individualCode": "档案编号",
+      "tagNumber": "标识牌编号",
+      "species": "物种",
+      "breed": "品种",
+      "sex": "性别",
+      "birthDate": "出生日期",
+      "originFarm": "来源养殖场",
+      "externalGeneBankId": "外部基因库编号",
+      "dnaSampleCode": "采样编号",
+      "dnaStatus": "DNA 比对状态",
+      "notes": "备注",
+      "sire": "父本",
+      "dam": "母本"
+    },
+    "dnaStatus": {
+      "UNSAMPLED": "未采样",
+      "SAMPLED": "已采样",
+      "MATCHED": "已比中",
+      "MISMATCH": "不符"
+    },
+    "form": {
+      "createTitle": "登记源头个体",
+      "editTitle": "个体档案",
+      "save": "保存",
+      "ok": "好",
+      "savedTitle": "已保存",
+      "savedBody": "档案已保存",
+      "saveFailedTitle": "保存失败",
+      "saveFailedUnknown": "请稍后重试",
+      "loadFailed": "档案读取失败",
+      "invalidTitle": "还不能保存",
+      "codeRequired": "档案编号必填",
+      "codeImmutable": "档案编号建档后不可修改 —— 已打印的标签按它对账",
+      "tagNotUnique": "标识牌编号可以重复（脱落重挂、跨场引进都会撞号），系统不强制唯一",
+      "dnaSection": "DNA / 基因比对",
+      "dnaExternalOnly": "本系统只记采样与比对状态，基因数据存在外部基因库",
+      "pedigreeSection": "系谱",
+      "pedigreeHint": "父本/母本必须先建好档案 —— 填一个系统里没有的编号会被拒绝，不会静默存成空的",
+      "pedigreeNotSet": "未设置",
+      "pedigreeChoose": "选择",
+      "pedigreeClear": "清除",
+      "pedigreeSearchLabel": "按档案编号或标识牌编号搜索",
+      "pedigreeSearch": "搜索",
+      "pedigreeCancel": "取消",
+      "pedigreeNoResult": "搜过了：没有匹配的个体档案",
+      "pedigreeSearchFailed": "搜索失败"
+    }
   }
 }

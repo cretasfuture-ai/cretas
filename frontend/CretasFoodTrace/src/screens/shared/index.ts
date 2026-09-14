@@ -5,3 +5,5 @@
  */
 
 export { default as LabelScanScreen } from './LabelScanScreen';
+export { default as VisionVerifyScreen } from './VisionVerifyScreen';
+export { default as SourceIndividualFormScreen } from './SourceIndividualFormScreen';

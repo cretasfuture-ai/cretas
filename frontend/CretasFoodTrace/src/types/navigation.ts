@@ -179,6 +179,20 @@ export type ProcessingStackParamList = {
     batchNumber?: string; // 期望的批次号（用于匹配验证）
   };
 
+  // 拍照核验 + 源头个体档案 - 通用组件 (FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914)
+  // ⚠️ 两个都是**整体可选**参数: VisionVerify 从快捷操作直接进; SourceIndividualForm
+  //    有三种进法(带耳标号建档 / 打开已有档案 / 空白建档)。
+  //    屏里用 `route.params ?? {}` 取值 — 本仓 40 个屏踩过「无参打开当场 destructure 崩」。
+  VisionVerify: undefined;
+  SourceIndividualForm:
+    | {
+        /** 从拍照核验「登记新个体」带过来, 预填耳标号 */
+        tagNumber?: string;
+        /** 打开已有档案 */
+        individualId?: string;
+      }
+    | undefined;
+
   // 工位监控 - 生产模块
   WorkstationMonitor: {
     workstationId?: string;
