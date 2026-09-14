@@ -12,8 +12,14 @@
       → 原料类型(活牛/胴体半片) + 产品类型(20 个分割部位 + 酱牛肉) + 工序(屠宰/分割/加工)
       → 工艺族图 draft + publish-and-activate
       → 6 头源头个体(含系谱: 2 公 4 后代) → 6 个活牛期初批次并挂上个体
-      → 生产计划 → 批次 → 开工 → spawn-tasks → 分割报工 → 酱牛肉成品批次
-      → 建标签拿 traceCode → **公开溯源 200 = 终态断言**
+      → 生产计划 → 批次 → 开工 → **领用 6 个活牛批次** → spawn-tasks → 分割报工
+      → 建标签拿 traceCode → **公开溯源 200 + 溯源链上挂着 6 头牛 = 终态断言**
+
+🔴 「领用」那一步不是流水账里的一环, 它是**血缘边的唯一写点**:
+   `RAW_TO_PRODUCTION` 只在 `ProcessingServiceImpl#recordMaterialConsumption`
+   → `recordRawLineage` 里写。不领用的话, 上面每一步照样 success、公开溯源照样 200,
+   只是溯源链**没有上游** —— 「这块肉来自哪头牛」整块空掉, 而没有任何读数会变红。
+   所以终态断言里专门有一条量 `lineage.sourceIndividualCount`。
 
 ⛔ 明确不做的事
 --------------
@@ -159,7 +165,16 @@ WORK_PROCESSES = [
 # ── 6 头源头个体 ────────────────────────────────────────────────────
 #   耳标号照**畜禽标识码** 15 位样式(2 位畜种 + 6 位县级行政区 + 7 位流水)。
 #   ⚠️ 这是演示数据的**形状**参考, 不声称与任何真实编码体系一致。
-SPECIES = "CATTLE"
+# 🔴 物种是**自由文本**(`SourceIndividual.species`, varchar(32)), ⛔ 不是枚举 ——
+#    后端原样存、原样发, 量词由前端按**中文**物种名选(`SourceIndividualBanner`:
+#    牛/猪→头, 羊/鸭/鸡/鹅→只)。写 "CATTLE" 不报错、不警告, 只是让横幅渲染成
+#      本批来自 6 个CATTLE源头个体
+#    (走的是「认识物种名但没有对应量词」那一支, 把原值直接拼进句子)。
+#    ⇒ 用中文「牛」。
+# ⚠️ 改这个常量**只改了新建那条路径** —— 已经建过的 6 头个体还留在旧值上,
+#    而演示租户恰恰是已经建过的那个。所以 `ensure_source_individuals` 里
+#    配了一步「存量物种不一致就地纠正」, 那不是多余的(形态 B: 机制在, 没接上)。
+SPECIES = "牛"
 BREED = "西门塔尔杂交"
 ORIGIN_FARM = "山东胜龙自有育肥场"
 #   前两头是种公牛(无父母), 后四头挂系谱。
@@ -177,6 +192,12 @@ LIVE_WEIGHTS = [612.0, 548.5, 505.0, 486.5, 523.0, 498.0]
 
 # 分割报工: 输入 1 个胴体, 输出 3 个部位(带重量)
 SPLIT_OUTPUTS = [("西冷", 18.5), ("眼肉", 16.0), ("牛腩", 22.5)]
+
+# 生产批次号 / 溯源码后缀 —— 建批次要用, 终态断言按**批次号**查内部完整溯源也要用。
+# ⛔ 不在两处各写一遍字面量(形态 D: 同一个东西有两份, 它一定会漂 —— 改了建批次那处
+#    而断言那处还指着旧号, 表现是「断言查不到这个批次」, 长得像后端坏了)。
+PRODUCTION_BATCH_NUMBER = f"{DEMO_MARK}-BATCH-V1"
+TRACE_CODE_SUFFIX = "SEED01"
 
 _TODAY = date.today()
 DEMO_DATE = _TODAY.isoformat()
@@ -942,7 +963,22 @@ def ensure_source_individuals(api: Api, fid: str) -> dict:
     for code, tag, sex, birth, dna, _sire, _dam in INDIVIDUALS:
         if code in known:
             code_to_id[code] = known[code]["id"]
-            step(f"source-individual {code}", "reused", id=code_to_id[code])
+            # 🔴 存量物种与常量不一致时**就地纠正**。
+            #    只在新建那条路径上写 species, 等于「常量改了但存量没变」——
+            #    而这个脚本的全部意义就是**重跑同一个租户**, 存量才是常态。
+            #    ⚠️ 这一步算 created(它确实写了一次), 所以第二遍才会回到 0;
+            #      把修复记成 reused 会让「第二遍 CREATED=0」这条判据变成恒真式。
+            current_species = known[code].get("species")
+            if current_species != SPECIES:
+                api.need(
+                    api.put(f"/api/mobile/{fid}/source-individuals/{code_to_id[code]}",
+                            {"species": SPECIES}),
+                    f"纠正个体 {code} 的物种")
+                step(f"source-individual {code}", "created" if not api.dry_run else "ok",
+                     id=code_to_id[code],
+                     note=f"species {current_species!r}->{SPECIES!r}")
+            else:
+                step(f"source-individual {code}", "reused", id=code_to_id[code])
             continue
         body = {"individualCode": code, "tagNumber": tag, "species": SPECIES,
                 "breed": BREED, "sex": sex, "birthDate": birth,
@@ -984,8 +1020,13 @@ def ensure_source_individuals(api: Api, fid: str) -> dict:
 
 
 def ensure_live_cattle_batches(api: Api, fid: str, raw_ids: dict,
-                               individual_ids: dict) -> list:
-    """6 个活牛期初批次 + 挂 sourceIndividualId。
+                               individual_ids: dict) -> dict:
+    """6 个活牛期初批次 + 挂 sourceIndividualId。返回 `{个体 code: 原料批次 id}`。
+
+    🔴 返回的是 **dict 不是 list**: 下游 `consume_live_cattle` 要按个体 code 对上
+       `LIVE_WEIGHTS[idx]`(领用全部入栏重)。返回顺序列表也能用下标对上, 但那是
+       「两个列表顺序必须一致」这种隐式契约 —— 中间任何一步加个过滤就静默错位,
+       而错位的表现是**领错了牛的重量**, 不报错。⇒ 用 code 显式配对。
 
     🔴 两段式, 且第二段是**必须**的:
        `OpeningInventoryItem` 上**没有** `sourceIndividualId` 字段(实测 DTO 只有
@@ -1014,7 +1055,7 @@ def ensure_live_cattle_batches(api: Api, fid: str, raw_ids: dict,
     data = api.need(resp, "活牛期初建账")
     if data is None:
         step("opening live-cattle batches", "ok", note="dry-run")
-        return []
+        return {}
     idempotent = bool(data.get("idempotentHit"))
     created_batches = data.get("batches") or data.get("createdBatches") or []
     step("opening live-cattle batches", "reused" if idempotent else "created",
@@ -1025,7 +1066,7 @@ def ensure_live_cattle_batches(api: Api, fid: str, raw_ids: dict,
                                params={"page": 1, "size": 200}), "查原料批次") or {}
     rows = listing.get("content") if isinstance(listing, dict) else listing
     by_number = {b.get("batchNumber"): b for b in (rows or [])}
-    attached = []
+    attached: dict = {}
     for code, *_ in INDIVIDUALS:
         number = f"{DEMO_MARK}-LIVE-{code}"
         batch = by_number.get(number)
@@ -1035,19 +1076,108 @@ def ensure_live_cattle_batches(api: Api, fid: str, raw_ids: dict,
         want = individual_ids.get(code)
         if batch.get("sourceIndividualId") == want:
             step(f"attach individual {code}", "reused", batch=number)
-            attached.append(batch["id"])
+            attached[code] = batch["id"]
             continue
         api.need(api.put(f"/api/mobile/{fid}/material-batches/{batch['id']}",
                          {"sourceIndividualId": want}), f"给批次 {number} 挂个体")
         step(f"attach individual {code}", "created", batch=number, individual=code)
-        attached.append(batch["id"])
+        attached[code] = batch["id"]
+    # ⛔ 不返回一个「差几头」的 map: 下游按它领用, 少一头就少一条血缘边,
+    #    而那个缺口在溯源页上表现为「本批来自 5 头牛」—— 一句看起来完全正常的假话。
+    missing = [code for code, *_ in INDIVIDUALS if code not in attached]
+    if missing:
+        raise SeedError(f"活牛批次 id 没配齐, 缺: {missing}")
     return attached
+
+
+def consumed_material_batch_ids(consumptions) -> set:
+    """领用幂等判据(**纯函数**, `--self-test` 离线验它)。
+
+    入参是 `GET /processing/material-consumptions/batch/{生产批次id}` 的 `data`,
+    返回「这个生产批次已经领用过哪些**原料批次 id**」。
+
+    🔴 键名是读源码定的, ⛔ 不是猜的: `MaterialConsumptionController#enrichConsumptionWithMaps`
+       put 的是 `batchId`(= `MaterialConsumption.batchId` = 原料批次主键),
+       `productionBatchId` 是另一个键。这里额外认 `materialBatchId` 只是别名兜底。
+    ⚠️ 一条记录**两个键都没有**时**必须炸**, ⛔ 不能当成「没领过」——
+       那会让每一遍都重领一次, 直到库存扣光才 409「原材料库存不足」,
+       而那个报错长得像「数量写错了」, 离真因隔着好几步(形态 A¹⁰:
+       兜底会把「我不知道」翻译成一个确定的读数)。
+    """
+    if consumptions is None:
+        raise SeedError("查领用记录返回 None —— 「没量到」不等于「没领过」, ⛔ 不兜底成空集。")
+    seen = set()
+    for rec in consumptions:
+        if not isinstance(rec, dict):
+            raise SeedError(f"领用记录不是对象: {rec!r}")
+        ref = None
+        for key in ("batchId", "materialBatchId"):
+            value = rec.get(key)
+            if value not in (None, ""):
+                ref = str(value)
+                break
+        if ref is None:
+            raise SeedError(
+                "领用记录里找不到原料批次引用(既没有 batchId 也没有 materialBatchId), "
+                f"响应结构可能变了。这一条: {json.dumps(rec, ensure_ascii=False)[:300]}")
+        seen.add(ref)
+    return seen
+
+
+def consume_live_cattle(api: Api, fid: str, batch_id, live_batch_ids_by_code: dict) -> None:
+    """把 6 个活牛批次**领用**进生产批次 —— 血缘边就是在这一步写的。
+
+    🔴 为什么这一步非有不可: `RAW_TO_PRODUCTION` 边只在
+       `ProcessingServiceImpl#recordMaterialConsumption` → `recordRawLineage` 里写。
+       不领用 = 溯源链**没有上游** = 「这块肉来自哪头牛」整块空掉,
+       而前面每一步照样 success、公开溯源照样 200、标签照样扫得出来。
+       ⇒ 又一条「看起来完全正常的空链」, 正是最不能接受的那种绿。
+
+    幂等: 领用**没有**服务端幂等键(每 POST 一次多一条记录 + 多扣一次库存),
+    所以判据是先查这个生产批次已经领过哪些原料批次(`consumed_material_batch_ids`)。
+    ⚠️ 领的是**全部入栏重**, 所以第二遍要是真的重领, 库存不足会 409 ——
+       那是个响亮的失败, 但判据不能指望它: 判据是「第二遍 created=0」。
+    """
+    if not live_batch_ids_by_code:
+        raise SeedError("没有活牛批次 id, 领用无从做起 —— 期初建账那一步的产出没传进来。")
+
+    listing = api.need(
+        api.get(f"/api/mobile/{fid}/processing/material-consumptions/batch/{batch_id}"),
+        "查生产批次已有领用记录")
+    already = consumed_material_batch_ids(listing if listing is not None else [])
+    info(f"生产批次 {batch_id} 已有领用记录 {len(already)} 条")
+
+    for idx, (code, *_rest) in enumerate(INDIVIDUALS):
+        material_batch_id = live_batch_ids_by_code.get(code)
+        if not material_batch_id:
+            raise SeedError(f"个体 {code} 没有对应的活牛原料批次 id")
+        quantity = LIVE_WEIGHTS[idx]
+        if str(material_batch_id) in already:
+            step(f"consume live-cattle {code}", "reused",
+                 materialBatch=material_batch_id)
+            continue
+        if api.dry_run:
+            step(f"consume live-cattle {code}", "ok", note="dry-run")
+            continue
+        # body 是**数组**(ProcessingController#recordMaterialConsumption 收
+        # List<Map<String,Object>>), 元素键 materialBatchId / quantity。
+        api.need(
+            api.post(f"/api/mobile/{fid}/processing/batches/{batch_id}/material-consumption",
+                     [{"materialBatchId": str(material_batch_id), "quantity": quantity}]),
+            f"领用活牛批次 {code}")
+        step(f"consume live-cattle {code}", "created",
+             materialBatch=material_batch_id, quantity=quantity)
 
 
 # ── 生产链 ──────────────────────────────────────────────────────────
 
-def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str | None:
-    """计划 → 批次 → 开工 → spawn-tasks → 分割报工 → 标签。返回 traceCode。"""
+def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id,
+                         live_batch_ids_by_code: dict) -> str | None:
+    """计划 → 批次 → 开工 → **领用活牛** → spawn-tasks → 分割报工 → 标签。返回 traceCode。
+
+    `live_batch_ids_by_code` 是 `ensure_live_cattle_batches` 的产出(`{个体 code: 原料批次 id}`),
+    领用那一步要用它 —— ⛔ 不在这里按批次号再查一遍(那就成了同一份映射的第二个来源)。
+    """
     finished_pt = pt_ids.get(FINISHED_CODE)
     if not finished_pt:
         raise SeedError("缺成品产品类型 ID, 生产链没法跑")
@@ -1084,7 +1214,7 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
         plan_id = data["id"]
         step("production plan", "created", id=plan_id)
 
-    batch_number = f"{DEMO_MARK}-BATCH-V1"
+    batch_number = PRODUCTION_BATCH_NUMBER
     batches = api.need(api.get(f"/api/mobile/{fid}/processing/batches",
                                params={"page": 1, "size": 100}), "查生产批次") or {}
     brows = batches.get("content") if isinstance(batches, dict) else batches
@@ -1129,6 +1259,11 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
         raise SeedError(
             f"批次 {batch_id} 开工后状态是 {batch_status!r}, 期望 IN_PROGRESS —— "
             f"⛔ 不能带着没开工的批次去报工(那一步只会说「批次尚未开始生产」)。")
+
+    # 领用 6 头活牛 —— 位置在**开工之后、报工之前**:
+    #   开工之前批次还是 PLANNED, 领用挂不上一个没开始的批次;
+    #   报工之后再补, 那条血缘边的时间就晚于产出, 演示时间线是乱的。
+    consume_live_cattle(api, fid, batch_id, live_batch_ids_by_code)
 
     # 幂等: 先查这个批次有没有工序任务, 有就不再派生。
     tasks_url = f"/api/mobile/{fid}/production/batches/{batch_id}/work-process-tasks"
@@ -1219,7 +1354,7 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
     # ⚠️ 后缀里**不能有短横线**: 解析器取的是「TRACE- 之后、**最后一个**短横线之前」那一段。
     #    带横线的 UUID 当后缀会把批次号切成 `SL-DEMO-BATCH-V1-550e8400-e29b-41d4-a716` —— 查不到。
     #    ⇒ 用固定后缀 SEED01, 顺便让 traceCode **可重现**, 第二遍能按它查到同一张标签。
-    trace_code = f"TRACE-{batch_number}-SEED01"
+    trace_code = f"TRACE-{batch_number}-{TRACE_CODE_SUFFIX}"
 
     found = api.get(f"/api/mobile/{fid}/labels/trace/{trace_code}", allow_missing=True)
     if found.get("success") and (found.get("data") or {}).get("id"):
@@ -1289,6 +1424,36 @@ def self_test() -> int:
     d = build_workflow(raw_ids, pt_ids, wp_ids)
     nodes = {n["id"]: n for n in d["nodes"]}
     problems: list[str] = []
+
+    # ── ① 领用幂等判据的离线对照 ────────────────────────────────────────
+    # 判据是**纯函数** `consumed_material_batch_ids`, 所以不连后端就能验它
+    # 「已领用 / 未领用」分得开。⚠️ 两个方向都要验: 只验「已领用认得出来」的话,
+    #   一个恒返回全集的实现也能通过, 而它会让第二遍什么都不领(第二遍永远 created=0,
+    #   幂等判据变成恒真式)。
+    fake_consumptions = [
+        {"id": 1, "batchId": "MB-LIVE-0001", "quantity": 612.0,
+         "batchNumber": f"{DEMO_MARK}-LIVE-SL-BULL-001", "productionBatchId": 7},
+        {"id": 2, "batchId": "MB-LIVE-0002", "quantity": 548.5,
+         "batchNumber": f"{DEMO_MARK}-LIVE-SL-COW-002", "productionBatchId": 7},
+    ]
+    seen = consumed_material_batch_ids(fake_consumptions)
+    if "MB-LIVE-0001" not in seen:
+        problems.append("幂等判据: 已领用的 MB-LIVE-0001 没被认出来 -> 第二遍会重复领用")
+    if "MB-LIVE-0003" in seen:
+        problems.append("幂等判据: 从没领过的 MB-LIVE-0003 被当成已领用 -> 第一遍就不会领")
+    if consumed_material_batch_ids([]) != set():
+        problems.append("幂等判据: 空列表应当是「谁都没领过」")
+    try:
+        consumed_material_batch_ids([{"id": 9, "quantity": 1.0}])
+        problems.append("幂等判据: 记录里没有原料批次引用时**必须**炸, ⛔ 不能静默算成没领过")
+    except SeedError:
+        pass
+    # ⛔ 这一行只打**读数**, 不打结论词。
+    #    第一版写的是「领用幂等判据 OK: 已领 {sorted(seen)}」—— 变异跑一次就露馅:
+    #    `已领 []` 后面照样跟着 OK(结论被硬编码, 与实际值无关)。判决由下面的 problems 出。
+    print(f"  领用幂等判据读数: 已领={sorted(seen)}(期望 2 条) "
+          f"MB-LIVE-0003在集合里={'MB-LIVE-0003' in seen}(期望 False) "
+          f"空列表={consumed_material_batch_ids([])}(期望 set())")
 
     # ① 节点 id 不重复
     if len(nodes) != len(d["nodes"]):
@@ -1367,6 +1532,143 @@ def assert_public_trace(api: Api, trace_code: str) -> None:
          keys=",".join(sorted(data.keys())[:8]))
     print("\n─── 公开溯源响应(截断 2000 字符) ───")
     print(json.dumps(resp, ensure_ascii=False, indent=2)[:2000])
+
+
+def _deepest_ancestor_group(ancestors, where: str) -> dict:
+    """取 depth **最大**的那一层(最远祖先层)。
+
+    ⚠️ ⛔ 不取 `ancestors[0]`: 分组顺序不是契约, 而「最远祖先层」才是
+       「本批来自 N 头牛」那句话的判据所在 —— 拿错一层的表现是断言恒绿。
+    """
+    groups = [g for g in (ancestors or []) if isinstance(g, dict)]
+    if not groups:
+        raise SeedError(f"{where}: lineage.ancestors 是空的 —— 这条链没有任何上游。"
+                        f"领用那一步没写成血缘边(或根本没跑)。")
+    for g in groups:
+        if g.get("depth") is None:
+            raise SeedError(f"{where}: 有一层没有 depth, 取不到「最远祖先层」: "
+                            f"{json.dumps(g, ensure_ascii=False)[:300]}")
+    return max(groups, key=lambda g: int(g["depth"]))
+
+
+def assert_lineage_source_individuals(api: Api, fid: str, batch_number: str,
+                                      trace_code: str) -> None:
+    """终态断言②: 溯源链上真的挂着 6 头牛, 且公开侧脱敏没漏。
+
+    ⚠️ 这一条**加在**「公开溯源 200」之后, ⛔ 不替代它 —— 200 只证明页面打得开,
+       一条**没有上游**的空链同样是 200(那正是本次改动之前的样子)。
+
+    三条判据:
+      ① 内部 `traceability/full/{批次号}`: `lineage.sourceIndividualCount == 6`,
+         **最远祖先层**全是带 `sourceIndividual` 的 `MATERIAL_BATCH`,
+         且至少一个节点带**完整**耳标(内部不脱敏)。
+         — 这与 App 横幅 `SourceIndividualBanner` 的判据是同一条, 故意对齐:
+           只看 count>0 不够, 那一层混着调料/包材时这句话会把辅料来源一并盖掉。
+      ② 公开 `public/trace/code/{码}`: 同样 6, 但**完整耳标一个字都不许出现**,
+         只能出现遮星版; 基因库 ID / DNA 样本号 / 父母系谱四个键名也不许出现。
+      ③ 阳性对照: 那串完整耳标**必须**在内部响应里出得来。
+         ⛔ 没有这一条, ②「公开侧不含完整耳标」就可能只是因为这串字符
+           在任何地方都不出现(形态 B′: 阴性断言先要证明 X 在别处出得来)。
+    """
+    expected = len(INDIVIDUALS)
+    full_tag = INDIVIDUALS[0][1]
+    masked_tag = "*" * (len(full_tag) - 4) + full_tag[-4:]
+    # 遮星口径来自后端 `LineageGraphAssembler#maskTagNumber`(保留原长、只留末 4 位)。
+    # 算出来 + 钉死字面量: 算式写错时这里当场炸, ⛔ 不是拿一个错的期望去比。
+    if masked_tag != "***********0001":
+        raise SeedError(f"遮星耳标算错了: 得到 {masked_tag!r}, 期望 '***********0001'")
+
+    # ── ① 内部完整溯源 ────────────────────────────────────────────────
+    iresp = api.get(
+        f"/api/mobile/{fid}/traceability/full/{urllib.parse.quote(batch_number, safe='')}")
+    idata = api.need(iresp, f"内部完整溯源 {batch_number}") or {}
+    itext = json.dumps(iresp, ensure_ascii=False)
+    lineage = idata.get("lineage")
+    if lineage is None:
+        raise SeedError(
+            f"内部溯源 {batch_number} 的 lineage 是 null —— 后端 `buildLineage` 组装失败时"
+            f"也正是这个长相(catch 住返回 null)。⛔ 不能把它读成「没有上游」: "
+            f"那是「这次没量到」。")
+    icount = lineage.get("sourceIndividualCount")
+    igroups = [g for g in (lineage.get("ancestors") or []) if isinstance(g, dict)]
+    # 🔴 先把读数打出来再断言, **而且在取「最远祖先层」之前打** ——
+    #    取那一层本身会抛(空 ancestors 时), 抛在打印之前就等于失败时回执里一个数都没有。
+    print(f"\n─── 内部溯源读数 ({batch_number}) ───\n"
+          f"  sourceIndividualCount = {icount} (期望 {expected})\n"
+          f"  ancestors 层数        = {len(igroups)}, 各层 depth/节点数 = "
+          f"{[(g.get('depth'), len(g.get('nodes') or [])) for g in igroups]}\n"
+          f"  lineage.nodeCount     = {lineage.get('nodeCount')}")
+
+    if icount != expected:
+        raise SeedError(
+            f"断言①-1 未过: 内部溯源 sourceIndividualCount={icount!r}, 期望 {expected}。"
+            f"0 = 这条链一个带个体的原料都没领用过(血缘边没写)。"
+            f"ancestors 层数={len(igroups)}。")
+    ideepest = _deepest_ancestor_group(lineage.get("ancestors"), "内部溯源")
+    inodes = ideepest.get("nodes") or []
+    ikinds = sorted({str(n.get("nodeType")) for n in inodes})
+    iwith_individual = [n for n in inodes if n.get("sourceIndividual")]
+    itags = sorted({(n.get("sourceIndividual") or {}).get("tagNumber") for n in iwith_individual})
+    print(f"  最远祖先层 depth      = {ideepest.get('depth')}, 节点 {len(inodes)} 个\n"
+          f"  该层 nodeType         = {ikinds}\n"
+          f"  该层带个体的节点      = {len(iwith_individual)}/{len(inodes)}\n"
+          f"  该层耳标(完整)        = {itags}")
+
+    if not inodes:
+        raise SeedError("断言①-2 未过: 最远祖先层一个节点都没有。")
+    bad_kind = [n for n in inodes if n.get("nodeType") != "MATERIAL_BATCH"]
+    if bad_kind:
+        raise SeedError(
+            f"断言①-2 未过: 最远祖先层混进了非 MATERIAL_BATCH 节点 {ikinds} —— "
+            f"「本批来自 N 头牛」这句话会把它们的来源一并盖掉。")
+    if len(iwith_individual) != len(inodes):
+        raise SeedError(
+            f"断言①-2 未过: 最远祖先层 {len(inodes)} 个节点里只有 "
+            f"{len(iwith_individual)} 个带 sourceIndividual。")
+    if full_tag not in itags:
+        raise SeedError(
+            f"断言①-3 未过: 内部侧没有拿到完整耳标 {full_tag}(内部不该脱敏)。"
+            f"该层耳标是 {itags}。")
+    if full_tag not in itext:
+        raise SeedError(
+            f"阳性对照未过: 完整耳标 {full_tag} 在内部响应正文里都找不到 —— "
+            f"那么下面「公开侧不含它」就什么都没证明。")
+    step("LINEAGE / internal (final assertion)", "ok",
+         batch=batch_number, sourceIndividualCount=icount,
+         deepestDepth=ideepest.get("depth"), nodes=len(inodes))
+
+    # ── ② 公开溯源的脱敏 ──────────────────────────────────────────────
+    presp = api.get(f"/api/public/trace/code/{urllib.parse.quote(trace_code, safe='')}")
+    pdata = api.need(presp, f"公开溯源 {trace_code}") or {}
+    ptext = json.dumps(presp, ensure_ascii=False)
+    plineage = pdata.get("lineage")
+    if plineage is None:
+        raise SeedError(f"公开溯源 {trace_code} 的 lineage 是 null —— 同上, 这是「没量到」。")
+    pcount = plineage.get("sourceIndividualCount")
+    # 公开侧个体编码恒为 null、耳标只剩末 4 位 ⇒ 计数只能由后端按真实 id 去重,
+    # 这里就是在守那条契约(前端自己去重会少报, 而「来自几头牛」少报一头就是假话)。
+    leaked = [s for s in (full_tag, "externalGeneBankId", "dnaSampleCode",
+                          "sireIndividualId", "damIndividualId") if s in ptext]
+    print(f"\n─── 公开溯源读数 ({trace_code}) ───\n"
+          f"  sourceIndividualCount = {pcount} (期望 {expected})\n"
+          f"  泄漏项                = {leaked or '无'}\n"
+          f"  含遮星耳标 {masked_tag} = {masked_tag in ptext}")
+
+    if pcount != expected:
+        raise SeedError(
+            f"断言②-1 未过: 公开溯源 sourceIndividualCount={pcount!r}, 期望 {expected}。")
+    if leaked:
+        raise SeedError(
+            f"断言②-2 未过: 公开溯源响应里出现了不该出现的东西 {leaked} —— "
+            f"消费者扫码页泄漏个体内部标识。")
+    if masked_tag not in ptext:
+        raise SeedError(
+            f"断言②-3 未过: 公开溯源里找不到遮星耳标 {masked_tag}。"
+            f"⚠️ 与②-2 配对: 只有「完整的没有、遮星的有」才说明是**脱敏**, "
+            f"不然「两个都没有」同样能让②-2 绿(那是字段整个丢了)。")
+    step("LINEAGE / public desensitize (final assertion)", "ok",
+         traceCode=trace_code, sourceIndividualCount=pcount,
+         maskedTag=masked_tag, leaked="none")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1449,12 +1751,14 @@ def main() -> int:
         ensure_workflow(api, fid, pt_ids[FINISHED_CODE], definition)
 
         individual_ids = ensure_source_individuals(api, fid)
-        ensure_live_cattle_batches(api, fid, raw_ids, individual_ids)
+        live_batch_ids = ensure_live_cattle_batches(api, fid, raw_ids, individual_ids)
 
-        trace_code = run_production_chain(api, fid, pt_ids, supervisor_id)
+        trace_code = run_production_chain(api, fid, pt_ids, supervisor_id, live_batch_ids)
         if not trace_code:
             raise SeedError("没有拿到 traceCode, 终态断言无从做起")
         assert_public_trace(api, trace_code)
+        # 终态断言②(加法式, ⛔ 不替代上面那条): 溯源链上真的挂着 6 头牛 + 公开侧脱敏没漏。
+        assert_lineage_source_individuals(api, fid, PRODUCTION_BATCH_NUMBER, trace_code)
 
     except SeedError as exc:
         print(f"\n[{_ts()}] FAILED at STEP={_STEP + 1}\n{exc}", file=sys.stderr)
