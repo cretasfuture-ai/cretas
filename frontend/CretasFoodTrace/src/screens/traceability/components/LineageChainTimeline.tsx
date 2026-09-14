@@ -7,6 +7,7 @@ import type {
   LineageSection,
   LineageNode,
   LineageDepthGroup,
+  SourceIndividualBrief,
 } from '../../../services/api/traceabilityApiClient';
 
 /**
@@ -41,6 +42,39 @@ const NODE_TYPE_LABEL: Record<string, string> = {
   FINISHED_BATCH: '成品批次',
   SHIPMENT_RECORD: '出货单',
 };
+
+/**
+ * DNA 核验状态的用户可读说法。
+ *
+ * ⚠️ 未知状态码<b>原样显示那个码</b>，⛔ 不翻译成「未核验」之类看起来正常的值 ——
+ * 把不认识的输入翻译成一个合法值，正是本仓踩过多次的那个坑
+ * （`yield_operator` 被渲染成「全无权限」，与真的无权限不可区分）。
+ */
+export const DNA_STATUS_LABEL: Record<string, string> = {
+  UNSAMPLED: '未采样',
+  SAMPLED: '已采样',
+  MATCHED: 'DNA 已比中',
+  MISMATCH: 'DNA 不匹配',
+};
+
+export function dnaStatusLabel(status?: string | null): string | null {
+  if (!status) {
+    return null;
+  }
+  return DNA_STATUS_LABEL[status] ?? status;
+}
+
+/**
+ * 「品种 · 来源场 · DNA 状态」那一行。
+ *
+ * 缺哪一项就<b>不显示哪一项</b>（用 · 连接实际有的部分），
+ * ⛔ 不填「未知」占位 —— 占位会让「没登记来源场」长得和「来源场就叫未知」一样。
+ */
+export function individualSummaryLine(si: SourceIndividualBrief): string | null {
+  const parts = [si.breed, si.originFarm, dnaStatusLabel(si.dnaVerificationStatus)]
+    .filter((p): p is string => !!p && `${p}`.trim().length > 0);
+  return parts.length === 0 ? null : parts.join(' · ');
+}
 
 const NODE_TYPE_ICON: Record<string, React.ComponentProps<typeof MaterialCommunityIcons>['name']> = {
   MATERIAL_BATCH: 'sprout',
@@ -116,6 +150,22 @@ function NodeRow({ node, showSupplier }: { node: LineageNode; showSupplier: bool
             投入量：{node.quantity}
             {node.unit || ''}
           </Text>
+        )}
+        {/* 源头个体：这块肉来自哪头牛。⚠️ 没有个体时整段不渲染 ——
+            绝大多数原料（调料、包材）本来就没有个体，那不是缺陷。 */}
+        {!!node.sourceIndividual && (
+          <View testID={`lineage-individual-${nodeKey(node)}`}>
+            {!!individualSummaryLine(node.sourceIndividual) && (
+              <Text style={styles.individualLine}>
+                {individualSummaryLine(node.sourceIndividual)}
+              </Text>
+            )}
+            {!!node.sourceIndividual.tagNumber && (
+              <Text style={styles.nodeMeta}>
+                耳标：{node.sourceIndividual.tagNumber}
+              </Text>
+            )}
+          </View>
         )}
       </View>
     </View>
@@ -211,6 +261,7 @@ const styles = StyleSheet.create({
   typeChipText: { fontSize: 10, lineHeight: 12 },
   nodeMeta: { fontSize: 12, color: '#666', marginTop: 2 },
   nodeUnresolved: { fontSize: 12, color: '#B26A00', marginTop: 2 },
+  individualLine: { fontSize: 12, color: '#5D4037', marginTop: 2, fontWeight: '500' },
 });
 
 export default LineageChainTimeline;

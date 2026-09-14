@@ -8,6 +8,7 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.lineage.BatchLineageClosure;
+import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -17,6 +18,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.lineage.BatchLineageClosureRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.source.SourceIndividualRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -60,6 +62,9 @@ public class LineageGraphAssembler {
     public static final int MAX_DEPTH_CAP = 10;
     public static final int DEFAULT_MAX_DEPTH = 5;
 
+    /** 公开接口上耳标号保留的末位数。 */
+    static final int TAG_SUFFIX_VISIBLE = 4;
+
     private final BatchLineageClosureRepository closureRepository;
     private final BatchLineageEdgeRepository edgeRepository;
     private final MaterialBatchRepository materialBatchRepository;
@@ -68,6 +73,10 @@ public class LineageGraphAssembler {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final SalesDeliveryRecordRepository salesDeliveryRecordRepository;
     private final CustomerRepository customerRepository;
+    /**
+     * 源头个体（这块肉来自哪头牛）。与其它节点解析同款：按 id 批量取，⛔ 不在循环里单条查。
+     */
+    private final SourceIndividualRepository sourceIndividualRepository;
 
     /**
      * 组装一个批次的血缘视图。
@@ -109,6 +118,9 @@ public class LineageGraphAssembler {
                 : null;
 
         int nodeCount = countNodes(ancestors) + countNodes(descendants);
+        // ⚠️ 按**真实个体 id** 去重, 不是按节点上那个（公开侧已被遮过的）耳标号 ——
+        //    末 4 位相同的两头牛会被数成一头, 而「来自几头牛」少报一头就是假话。
+        int individualCount = countDistinctIndividuals(ancestorRows, resolver);
         return TraceabilityDTO.LineageSection.builder()
                 .rootType(rootType)
                 .rootId(rootId)
@@ -116,7 +128,28 @@ public class LineageGraphAssembler {
                 .descendants(descendants)
                 .maxDepth(depthCap)
                 .nodeCount(nodeCount)
+                .sourceIndividualCount(individualCount)
                 .build();
+    }
+
+    /** 上游原料批次挂到的、去重后的源头个体数。没有就是 0（⛔ 不是 null）。 */
+    private int countDistinctIndividuals(List<BatchLineageClosure> ancestorRows, NodeResolver resolver) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (BatchLineageClosure row : ancestorRows) {
+            if (!LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(row.getAncestorType())) {
+                continue;
+            }
+            MaterialBatch mb = resolver.materials().get(row.getAncestorId());
+            if (mb == null || mb.getSourceIndividualId() == null || mb.getSourceIndividualId().isBlank()) {
+                continue;
+            }
+            // 只数**真的查得到**的个体：批次上挂着一个已被软删/不存在的 id 时，
+            // 节点上也不会显示个体，两处口径必须一致。
+            if (resolver.individuals().containsKey(mb.getSourceIndividualId())) {
+                ids.add(mb.getSourceIndividualId());
+            }
+        }
+        return ids.size();
     }
 
     /**
@@ -164,6 +197,27 @@ public class LineageGraphAssembler {
             return 0;
         }
         return groups.stream().mapToInt(g -> g.getNodes() == null ? 0 : g.getNodes().size()).sum();
+    }
+
+    /**
+     * 耳标号脱敏：只留末 4 位，前面用 {@code *} 补到原长。
+     *
+     * <p>⚠️ 为什么补到<b>原长</b>而不是固定 4 颗星：长度本身不敏感，而保留长度让店长/质检
+     * 拿脱敏值与手上的耳标比对时能一眼排除「不是同一头」。
+     *
+     * <p>⛔ 耳标本身就 ≤4 位时<b>整串打星</b>，绝不原样返回 —— 那种情况下「末 4 位」等于全量，
+     * 是这条规则最容易被绕过的边界（也是短 id 泄漏最常见的成因）。
+     */
+    static String maskTagNumber(String tagNumber) {
+        if (tagNumber == null || tagNumber.isBlank()) {
+            return null;
+        }
+        String trimmed = tagNumber.trim();
+        if (trimmed.length() <= TAG_SUFFIX_VISIBLE) {
+            return "*".repeat(trimmed.length());
+        }
+        return "*".repeat(trimmed.length() - TAG_SUFFIX_VISIBLE)
+                + trimmed.substring(trimmed.length() - TAG_SUFFIX_VISIBLE);
     }
 
     public static int clampDepth(int requested) {
@@ -263,8 +317,12 @@ public class LineageGraphAssembler {
         Map<String, SalesDeliveryRecord> shipments =
                 loadShipments(idsByType.get(LineageEdgeRecorder.NODE_SHIPMENT_RECORD));
         Map<String, Customer> customers = desensitize ? Map.of() : loadCustomers(shipments.values());
+        // ⚠️ 个体在**公开侧也要给**（那正是「扫码看到这块肉来自哪头牛」的全部意义），
+        //    所以这里不按 desensitize 短路取数 —— 脱敏发生在 toNode 拼 DTO 那一步。
+        Map<String, SourceIndividual> individuals = loadIndividuals(materials.values());
 
-        return new NodeResolver(materials, suppliers, productions, finished, shipments, customers, desensitize);
+        return new NodeResolver(materials, suppliers, productions, finished, shipments, customers,
+                individuals, desensitize);
     }
 
     private Map<String, MaterialBatch> loadMaterials(Set<String> ids) {
@@ -273,6 +331,24 @@ public class LineageGraphAssembler {
         }
         return materialBatchRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(MaterialBatch::getId, Function.identity(), (a, b) -> a));
+    }
+
+    /**
+     * 按 {@code MaterialBatch.sourceIndividualId} 批量取源头个体。
+     *
+     * <p>⚠️ 绝大多数原料批次（调料、包材、辅料）<b>没有</b>个体，这里 id 集合为空就直接返回，
+     * 不发查询 —— 这条路径在非畜禽场景下是零开销的。
+     */
+    private Map<String, SourceIndividual> loadIndividuals(Collection<MaterialBatch> batches) {
+        Set<String> individualIds = batches.stream()
+                .map(MaterialBatch::getSourceIndividualId).filter(Objects::nonNull)
+                .filter(id -> !id.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (individualIds.isEmpty()) {
+            return Map.of();
+        }
+        return sourceIndividualRepository.findAllById(individualIds).stream()
+                .collect(Collectors.toMap(SourceIndividual::getId, Function.identity(), (a, b) -> a));
     }
 
     private Map<String, Supplier> loadSuppliers(Collection<MaterialBatch> batches) {
@@ -341,6 +417,7 @@ public class LineageGraphAssembler {
                                 Map<String, FinishedGoodsBatch> finished,
                                 Map<String, SalesDeliveryRecord> shipments,
                                 Map<String, Customer> customers,
+                                Map<String, SourceIndividual> individuals,
                                 boolean desensitize) {
 
         TraceabilityDTO.LineageNode toNode(String type, String id, List<BatchLineageEdge> adjacent) {
@@ -366,6 +443,7 @@ public class LineageGraphAssembler {
                         Supplier s = suppliers.get(mb.getSupplierId());
                         b.supplierName(s == null ? null : s.getName());
                     }
+                    b.sourceIndividual(toIndividualBrief(mb.getSourceIndividualId()));
                 }
             } else if (LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(type)) {
                 ProductionBatch pb = productions.get(id);
@@ -400,6 +478,39 @@ public class LineageGraphAssembler {
          * <p>多条边时：单位一致才求和，⛔ 单位不一致<b>不换算也不挑一个</b> ——
          * 那正是「兜底把不知道翻译成一个数」。时间取最早那条（这个节点是什么时候进入这条链的）。
          */
+        /**
+         * 个体 → 节点上的摘要。<b>脱敏就发生在这一处</b>。
+         *
+         * <p>⚠️ 公开侧要给的东西是有意义的：品种、来源场、DNA 状态，
+         * 那正是消费者扫码想看的「这块肉来自哪头牛」。
+         * ⛔ 不给的是内部编码 / 基因库 ID / DNA 样本号 / 父母系谱 / 完整耳标号 ——
+         * 后四样在 {@link TraceabilityDTO.SourceIndividualBrief} 上<b>压根没有字段</b>，
+         * 所以不存在「忘了置 null」这种失误面。
+         *
+         * @return 该批次没挂个体时返回 {@code null}（⛔ 不是一个空壳对象 ——
+         *         空壳会让「没登记个体」在前端长成「个体信息全缺」）
+         */
+        TraceabilityDTO.SourceIndividualBrief toIndividualBrief(String individualId) {
+            if (individualId == null || individualId.isBlank()) {
+                return null;
+            }
+            SourceIndividual si = individuals.get(individualId);
+            if (si == null) {
+                // 个体被软删/查不到。与节点的 resolved=false 同一条纪律：不编。
+                return null;
+            }
+            return TraceabilityDTO.SourceIndividualBrief.builder()
+                    .individualCode(desensitize ? null : si.getIndividualCode())
+                    .tagNumber(desensitize ? maskTagNumber(si.getTagNumber()) : si.getTagNumber())
+                    .tagNumberMasked(desensitize)
+                    .species(si.getSpecies())
+                    .breed(si.getBreed())
+                    .originFarm(si.getOriginFarm())
+                    .dnaVerificationStatus(si.getDnaVerificationStatus() == null
+                            ? null : si.getDnaVerificationStatus().name())
+                    .build();
+        }
+
         private void applyEdgeFacts(TraceabilityDTO.LineageNode.LineageNodeBuilder b,
                                     List<BatchLineageEdge> adjacent) {
             if (adjacent == null || adjacent.isEmpty()) {

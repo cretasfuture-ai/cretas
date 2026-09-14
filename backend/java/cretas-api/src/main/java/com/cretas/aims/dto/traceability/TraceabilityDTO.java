@@ -74,6 +74,58 @@ public class TraceabilityDTO {
         private LocalDateTime eventTime;
         /** 批次实体是否查得到。false ⇒ 上面的名称字段全为 null，不是「没名字」而是「查不到」。 */
         private Boolean resolved;
+        /**
+         * 源头个体（这块肉来自哪头牛/鸭/猪）。
+         *
+         * <p>只有 {@code MATERIAL_BATCH} 节点、且该批次挂了 {@code source_individual_id} 时才有；
+         * 其余情况为 {@code null}。⚠️ {@code null} 表示「这批原料没登记个体」，
+         * ⛔ 不要在前端兜底成「未知个体」—— 绝大多数原料（调料、包材）本来就没有个体。
+         */
+        private SourceIndividualBrief sourceIndividual;
+    }
+
+    /**
+     * 血缘节点上的源头个体摘要 —— <b>脱敏口径由后端决定，前端只负责显示</b>。
+     *
+     * <h3>公开（消费者）接口给什么</h3>
+     * 允许：{@code species} / {@code breed} / {@code originFarm} / {@code dnaVerificationStatus}
+     * / {@code tagNumber}（<b>只保留末 4 位，前面打星</b>）。
+     *
+     * <h3>⛔ 公开接口一个字都不许出的</h3>
+     * {@code individualCode}（内部编码）、{@code externalGeneBankId}（外部基因库 ID）、
+     * {@code dnaSampleCode}（DNA 样本号）、{@code sireIndividualId} / {@code damIndividualId}
+     * （父母系谱）、<b>完整耳标号</b>。
+     *
+     * <p>⚠️ 这个类<b>刻意不含</b> geneBank / dnaSampleCode / sire / dam 这几个字段 ——
+     * 「字段根本不在 DTO 上」比「运行时记得置 null」强：后者漏一次就泄漏一次，
+     * 而且漏了没有任何测试会红。内部要看全字段走
+     * {@code /api/mobile/{factoryId}/source-individuals/{id}}（带鉴权）。
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SourceIndividualBrief {
+        /** 内部个体编码；公开接口恒为 null。 */
+        private String individualCode;
+        /**
+         * 耳标号。公开接口只给末 4 位、前面用 {@code *} 补齐（如 {@code ****7788}）；
+         * 内部接口给完整值。
+         */
+        private String tagNumber;
+        /** 物种（牛/鸭/猪…）。⚠️ 是字段值，不是模型名 —— 本功能对所有物种通用。 */
+        private String species;
+        private String breed;
+        private String originFarm;
+        /** UNSAMPLED / SAMPLED / MATCHED / MISMATCH。 */
+        private String dnaVerificationStatus;
+        /**
+         * 上面的 {@code tagNumber} 是不是被遮过。
+         *
+         * <p>没有它，前端分不清「****7788」是脱敏结果还是耳标本身就长这样，
+         * 也就无法决定能不能拿它去检索。
+         */
+        private Boolean tagNumberMasked;
     }
 
     /** 按跳数分组的一层。 */
@@ -108,6 +160,17 @@ public class TraceabilityDTO {
         private Integer maxDepth;
         /** 祖先 + 后代的节点总数，供前端判断「有没有东西可展示」。 */
         private Integer nodeCount;
+        /**
+         * 上游链上<b>去重后</b>的源头个体数（「本批来自 N 头牛」里的那个 N）。
+         *
+         * <p>🔴 这个数<b>必须由后端算</b>：公开接口上 {@code individualCode} 是 null、
+         * {@code tagNumber} 被遮成末 4 位，前端拿脱敏值去重会把「末 4 位相同的两头牛」
+         * 数成一头 —— 那是个只会<b>少报</b>的错，而「来自几头牛」少报一头在溯源语境里
+         * 就是一句假话。后端按真实个体 id 去重，前端只负责显示。
+         *
+         * <p>没有任何带个体的原料时为 0（不是 null）—— 0 是一个确定的读数。
+         */
+        private Integer sourceIndividualCount;
     }
 
     /**

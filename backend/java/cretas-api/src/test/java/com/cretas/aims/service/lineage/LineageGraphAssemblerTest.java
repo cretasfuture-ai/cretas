@@ -17,6 +17,9 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.lineage.BatchLineageClosureRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.source.SourceIndividualRepository;
+import com.cretas.aims.entity.source.SourceIndividual;
+import com.cretas.aims.entity.enums.DnaVerificationStatus;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -60,11 +65,12 @@ class LineageGraphAssemblerTest {
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private SalesDeliveryRecordRepository salesDeliveryRecordRepository;
     @Mock private CustomerRepository customerRepository;
+    @Mock private SourceIndividualRepository sourceIndividualRepository;
 
     private LineageGraphAssembler newAssembler() {
         return new LineageGraphAssembler(closureRepository, edgeRepository, materialBatchRepository,
                 supplierRepository, productionBatchRepository, finishedGoodsBatchRepository,
-                salesDeliveryRecordRepository, customerRepository);
+                salesDeliveryRecordRepository, customerRepository, sourceIndividualRepository);
     }
 
     /**
@@ -244,6 +250,194 @@ class LineageGraphAssemblerTest {
         assertThat(impact.getProductionBatchCount()).isZero();
         assertThat(impact.getShipments()).extracting(TraceabilityDTO.LineageNode::getName)
                 .containsExactly("六膳门中央厨房");
+    }
+
+    // -- (5) 源头个体（「这块肉来自哪头牛」） --------------------------------
+
+    /** mb-near 挂个体 SI-1，mb-far 挂个体 SI-2；两头牛耳标末 4 位<b>故意相同</b>。 */
+    private void wireIndividuals() {
+        when(materialBatchRepository.findAllById(any()))
+                .thenReturn(List.of(
+                        materialBatchWithIndividual("mb-near", "MB-NEAR-001", "牛腩", "sup-1", "SI-1"),
+                        materialBatchWithIndividual("mb-far", "MB-FAR-001", "整牛", "sup-1", "SI-2")));
+        when(sourceIndividualRepository.findAllById(any()))
+                .thenReturn(List.of(
+                        individual("SI-1", "COW-0001", "1109876547788", "牛", "西门塔尔", "胜龙一号牧场",
+                                DnaVerificationStatus.MATCHED),
+                        // 末 4 位与 SI-1 相同 —— 拿脱敏后的耳标去重会把两头牛数成一头。
+                        individual("SI-2", "COW-0002", "2201234567788", "牛", "安格斯", "胜龙二号牧场",
+                                DnaVerificationStatus.SAMPLED)));
+    }
+
+    @Test
+    @DisplayName("原料批次挂了个体 ⇒ 节点带出品种/来源场/DNA 状态；没挂的节点为 null")
+    void materialNodesCarryTheirSourceIndividual() {
+        wireThreeLayerGraph();
+        wireIndividuals();
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, true, false);
+
+        TraceabilityDTO.SourceIndividualBrief near = nodeAt(section, 1, "mb-near").getSourceIndividual();
+        assertThat(near).isNotNull();
+        assertThat(near.getSpecies()).isEqualTo("牛");
+        assertThat(near.getBreed()).isEqualTo("西门塔尔");
+        assertThat(near.getOriginFarm()).isEqualTo("胜龙一号牧场");
+        assertThat(near.getDnaVerificationStatus()).isEqualTo("MATCHED");
+        // 内部接口给完整耳标 + 内部编码
+        assertThat(near.getTagNumber()).isEqualTo("1109876547788");
+        assertThat(near.getTagNumberMasked()).isFalse();
+        assertThat(near.getIndividualCode()).isEqualTo("COW-0001");
+
+        // 生产批次节点没有个体 —— 不是空壳对象
+        assertThat(nodeAt(section, 2, "8100").getSourceIndividual()).isNull();
+    }
+
+    @Test
+    @DisplayName("原料批次没挂个体 ⇒ sourceIndividual 为 null，且不发个体查询")
+    void materialWithoutIndividualQueriesNothing() {
+        wireThreeLayerGraph();   // 默认的 materialBatch 没有 sourceIndividualId
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, true, false);
+
+        assertThat(nodeAt(section, 1, "mb-near").getSourceIndividual()).isNull();
+        assertThat(section.getSourceIndividualCount()).isZero();
+        // 非畜禽场景（调料/包材）这条路径必须是零开销的
+        verify(sourceIndividualRepository, never()).findAllById(any());
+    }
+
+    @Test
+    @DisplayName("公开接口脱敏：耳标只留末 4 位，内部编码/基因库/样本号/系谱一律不出现")
+    void publicViewMasksTheIndividual() throws Exception {
+        wireThreeLayerGraph();
+        wireIndividuals();
+
+        TraceabilityDTO.LineageSection publicSection =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, false, true);
+        TraceabilityDTO.LineageSection internalSection =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, true, false);
+
+        // 「必发生」的那一半：内部视图**看得到**完整耳标与内部编码。
+        // 没有它，「公开视图里找不到它们」在「个体压根没挂上」时同样成立 —— 恒真式。
+        assertThat(internalSection.getAncestors())
+                .flatExtracting(TraceabilityDTO.LineageDepthGroup::getNodes)
+                .anySatisfy(n -> {
+                    assertThat(n.getSourceIndividual()).isNotNull();
+                    assertThat(n.getSourceIndividual().getTagNumber()).isEqualTo("1109876547788");
+                    assertThat(n.getSourceIndividual().getIndividualCode()).isEqualTo("COW-0001");
+                });
+
+        TraceabilityDTO.SourceIndividualBrief masked =
+                publicNode(publicSection, "MB-NEAR-001").getSourceIndividual();
+        assertThat(masked).isNotNull();
+        // 允许出的：品种 / 来源场 / DNA 状态 —— 那正是扫码的人想看的
+        assertThat(masked.getSpecies()).isEqualTo("牛");
+        assertThat(masked.getBreed()).isEqualTo("西门塔尔");
+        assertThat(masked.getOriginFarm()).isEqualTo("胜龙一号牧场");
+        assertThat(masked.getDnaVerificationStatus()).isEqualTo("MATCHED");
+        // 耳标只留末 4 位，长度保持不变
+        assertThat(masked.getTagNumber()).isEqualTo("*********7788");
+        assertThat(masked.getTagNumberMasked()).isTrue();
+        assertThat(masked.getIndividualCode()).isNull();
+
+        // 判据落到**真正发出去的字节流**上：只断言 DTO 字段为 null 不够 ——
+        // 哪天有人把敏感值塞进别的字段，那条断言照样绿。
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(publicSection);
+        assertThat(json)
+                .as("公开响应里不许出现完整耳标 / 内部编码 / 基因库 ID / DNA 样本号 / 系谱")
+                .doesNotContain("1109876547788")
+                .doesNotContain("2201234567788")
+                .doesNotContain("COW-0001")
+                .doesNotContain("GENEBANK")
+                .doesNotContain("DNA-SAMPLE")
+                .doesNotContain("externalGeneBankId")
+                .doesNotContain("dnaSampleCode")
+                .doesNotContain("sireIndividualId")
+                .doesNotContain("damIndividualId");
+    }
+
+    @Test
+    @DisplayName("「本批来自 N 头牛」按真实个体 id 去重 —— 末 4 位相同的两头不许被数成一头")
+    void individualCountDedupesOnRealIdsNotMaskedTags() {
+        wireThreeLayerGraph();
+        wireIndividuals();
+
+        TraceabilityDTO.LineageSection publicSection =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, false, true);
+
+        // 两头牛的脱敏耳标都是 *********7788；按脱敏值去重会得到 1，那是一句假话。
+        assertThat(publicSection.getSourceIndividualCount()).isEqualTo(2);
+        assertThat(publicSection.getAncestors())
+                .flatExtracting(TraceabilityDTO.LineageDepthGroup::getNodes)
+                .filteredOn(n -> n.getSourceIndividual() != null)
+                .extracting(n -> n.getSourceIndividual().getTagNumber())
+                .as("前提确认：两头牛脱敏后长得一模一样 —— 这正是不能在前端去重的原因")
+                .containsOnly("*********7788");
+    }
+
+    @Test
+    @DisplayName("耳标 <= 4 位 ⇒ 整串打星（不许因为「末 4 位就是全部」而原样返回）")
+    void shortTagIsFullyMasked() {
+        assertThat(LineageGraphAssembler.maskTagNumber("7788")).isEqualTo("****");
+        assertThat(LineageGraphAssembler.maskTagNumber("88")).isEqualTo("**");
+        assertThat(LineageGraphAssembler.maskTagNumber("123456")).isEqualTo("**3456");
+        assertThat(LineageGraphAssembler.maskTagNumber(null)).isNull();
+        assertThat(LineageGraphAssembler.maskTagNumber("  ")).isNull();
+    }
+
+    @Test
+    @DisplayName("个体 id 挂着但个体查不到（软删）⇒ 节点不带个体，计数也不算它（两处同口径）")
+    void danglingIndividualIsNotFabricated() {
+        wireThreeLayerGraph();
+        when(materialBatchRepository.findAllById(any()))
+                .thenReturn(List.of(materialBatchWithIndividual(
+                        "mb-near", "MB-NEAR-001", "牛腩", "sup-1", "SI-GONE")));
+        when(sourceIndividualRepository.findAllById(any())).thenReturn(List.of());
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, true, false);
+
+        assertThat(nodeAt(section, 1, "mb-near").getSourceIndividual()).isNull();
+        assertThat(section.getSourceIndividualCount())
+                .as("节点上不显示的个体, 计数里也不许算 —— 否则「来自 1 头牛」下面一头都看不到")
+                .isZero();
+    }
+
+    private static TraceabilityDTO.LineageNode publicNode(TraceabilityDTO.LineageSection section,
+                                                          String batchNumber) {
+        return section.getAncestors().stream()
+                .flatMap(g -> g.getNodes().stream())
+                .filter(n -> batchNumber.equals(n.getBatchNumber()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("公开视图里找不到批次 " + batchNumber));
+    }
+
+    private static MaterialBatch materialBatchWithIndividual(String id, String batchNumber,
+                                                             String typeName, String supplierId,
+                                                             String individualId) {
+        MaterialBatch mb = materialBatch(id, batchNumber, typeName, supplierId);
+        mb.setSourceIndividualId(individualId);
+        return mb;
+    }
+
+    private static SourceIndividual individual(String id, String code, String tag, String species,
+                                               String breed, String farm, DnaVerificationStatus dna) {
+        SourceIndividual si = new SourceIndividual();
+        si.setId(id);
+        si.setFactoryId(FACTORY);
+        si.setIndividualCode(code);
+        si.setTagNumber(tag);
+        si.setSpecies(species);
+        si.setBreed(breed);
+        si.setOriginFarm(farm);
+        si.setDnaVerificationStatus(dna);
+        // 这几样**绝不能**出现在公开响应里
+        si.setExternalGeneBankId("GENEBANK-XYZ-001");
+        si.setDnaSampleCode("DNA-SAMPLE-777");
+        si.setSireIndividualId("SIRE-1");
+        si.setDamIndividualId("DAM-1");
+        return si;
     }
 
     @Test
