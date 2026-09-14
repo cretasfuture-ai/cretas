@@ -15,8 +15,8 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
-- `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `queued` — Owner: Line A(sister chat) — Base `8c04949d54` — 血缘闭包引擎已在 main 但只有 `WIP_CONSUME` 写边；补原料/成品/出货三段 fail-soft 写边 + 幂等回填(🔒 prod 由协调者跑) + 溯源/公开页读闭包出多跳链 + 召回影响面 + RN 渲染。Flyway 预留 `_43`。🔒 架构。详见 archive briefs。
-- `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914` — `queued` — Owner: Line B(sister chat) — Base `8c04949d54` — 通用「源头个体档案」实体+CRUD+`material_batches.source_individual_id`(Flyway `_42`)；`POST /vision/verify` 代码内模板 EAR_TAG/MEAT_CUT，非 JSON 显式失败；RN 核验屏 + web-admin 列表。🔒 Flyway/Entity。详见 archive briefs。
+- `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `in-progress` — Owner: Line A(executor subagent, Opus, 22:55 起) — Base `8c04949d54` — 血缘闭包引擎已在 main 但只有 `WIP_CONSUME` 写边；补原料/成品/出货三段 fail-soft 写边 + 幂等回填(🔒 prod 由协调者跑) + 溯源/公开页读闭包出多跳链 + 召回影响面 + RN 渲染。Flyway 预留 `_43`。🔒 架构。详见 archive briefs。
+- `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914` — `in-progress` — Owner: Line B(executor subagent, Opus, 22:55 起) — Base `8c04949d54` — 通用「源头个体档案」实体+CRUD+`material_batches.source_individual_id`(Flyway `_42`)；`POST /vision/verify` 代码内模板 EAR_TAG/MEAT_CUT，非 JSON 显式失败；RN 核验屏 + web-admin 列表。🔒 Flyway/Entity。详见 archive briefs。
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 16+17：`SupplierDetailDrawer.vue` 价格字段三处（关系表单/内联规格/独立规格）；`required` 是装饰，校验手写在 `saveRelation`/`savePurchaseSpec`。Owner 裁定：新增必填，编辑仅价格被改动时拦（存量 4 条空价）。未核后端/导入路径，需改后端 → 🔒 回协调者。
 - `OBS-PRODUCTION-MANAGER-FALLBACK-DRIFT-20260901` — `queued` — Owner: 无 — `V20261030_11` 把 production_manager 的 analytics/report/procurement 收窄为 `-`，前端 store 与 Java fallback 仍 `r`（3×2=6 条陈旧），与 #441 同形但不在其 KNOWN_DRIFT 名单；只在 DB 不可达的 fallback 窗口显形。
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base `0f11d9a91b` — 质检员「关于/设置」版本号改读 APK 原生真值并补一致性闸；合入后向仍报 1.0.3 的设备发兼容 OTA，重建 1.0.4 签名 APK（保留最低版本门禁）。
