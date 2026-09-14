@@ -253,7 +253,7 @@ class Api:
 
     # ── 底层 ────────────────────────────────────────────────────────
     def _call(self, method: str, path: str, body=None, params=None, write=False,
-              headers=None):
+              headers=None, allow_missing=False):
         url = f"{self.base}{path}"
         hdrs = {"Content-Type": "application/json"}
         if self.token:
@@ -268,12 +268,19 @@ class Api:
         try:
             payload = r.json()
         except ValueError:
+            # 「这东西在不在」的探针: 404 是**合法答案**(不在), 不是故障。
+            # ⚠️ 只在调用方显式要求时才这样读 —— 默认仍然把非 JSON 当异常,
+            #    否则「后端挂了返回 HTML 404」会被静默读成「这条数据不存在」,
+            #    那是把「没量到」折叠进「没有」。
+            if allow_missing and r.status_code == 404:
+                return {"success": False, "data": None,
+                        "_http": 404, "_missing": True}
             raise SeedError(f"{method} {path} -> HTTP {r.status_code}, 非 JSON 响应:\n{r.text[:800]}")
         payload["_http"] = r.status_code
         return payload
 
-    def get(self, path, params=None):
-        return self._call("GET", path, params=params)
+    def get(self, path, params=None, allow_missing=False):
+        return self._call("GET", path, params=params, allow_missing=allow_missing)
 
     def post(self, path, body=None, params=None, write=True, headers=None):
         return self._call("POST", path, body=body, params=params, write=write,
@@ -309,8 +316,23 @@ def login(api: Api, username: str, password: str, factory_id: str | None) -> dic
         raise SeedError(f"登录 {username} 没有拿到 token, 响应: "
                         f"{json.dumps(resp, ensure_ascii=False)[:800]}")
     api.token = token
+    # 🔴 登录响应**没有** `user` 子对象 —— 用户 id 在 data 顶层的 `userId`。
+    #    2026-09-15 实测 data 的键: accessToken/token/refreshToken/expiresIn/userId/
+    #    username/role/factoryId/factoryName/factoryType/businessDomain/profile/
+    #    permissions/modulePermissions/lastLoginTime。
+    #    ⚠️ 原来写的是 `data["user"]["id"]`, 取到的是 **{}** —— 不报错, 只是让
+    #      supervisorId 变成 None, 于是开工那步 400「缺少必要参数: supervisorId」,
+    #      而那一步当时被当成「已开工」放过去了, 最后表现为**报工说批次没开始** ——
+    #      离真正的病因隔了三步。形态 A¹⁰: 读不到就该炸, 别兜底成一个假值。
     user = (data or {}).get("user") or {}
-    return user
+    user_id = user.get("id") if user else (data or {}).get("userId")
+    if user_id is None:
+        raise SeedError(
+            f"登录 {username} 拿不到用户 id(data.userId 和 data.user.id 都没有), "
+            f"后面开工要用它当 supervisorId。data 的键: "
+            f"{sorted((data or {}).keys())}")
+    return {"id": user_id, "username": (data or {}).get("username") or username,
+            "role": (data or {}).get("role")}
 
 
 def ensure_factory(api: Api, internal_key: str) -> str:
@@ -410,6 +432,47 @@ def ensure_factory_admin(api: Api, factory_id: str, demo_password: str,
              f"重置 {username} 口令(补建默认用户之后)")
     step("ensure factory admin", "created", username=username)
     return username
+
+
+# 🔴 新建工厂**没有**仓库 —— 这不是本脚本的疏忽, 是平台的一个结构性缺口。
+#    双仓(WH-LOG 物流仓 / WH-WKS 鲜棉仓)是 Flyway `V20260411_03` 用
+#      INSERT ... SELECT FROM factories WHERE NOT EXISTS ...
+#    给**迁移执行那一刻已存在**的工厂补的。迁移跑过之后新建的工厂, 建厂链路上
+#    没有任何一处补这两个仓 ⇒ 期初建账当场 500:
+#      Factory [<fid>] 缺少 warehouse seed [WH-LOG] — 数据库 seed 异常 (V20260411_03 未跑?)
+#    ⚠️ 那句「(V20260411_03 未跑?)」是**误导**: 迁移跑过了(本机 flyway 走到 20261101.42),
+#       只是它按设计跑不到后来才建的工厂。照它去查迁移会白查一轮。
+#    ⇒ 这里按迁移自己的口径(同样的 code / name / type)用 API 补齐, ⛔ 不 SQL 直插。
+#    📌 已登记给协调者: 建厂链路缺双仓 seed。
+WAREHOUSES = [
+    # (code, name, type) —— 与 V20260411_03 的 seed 逐字一致
+    ("WH-LOG", "物流仓", "LOGISTICS"),   # 采购入库/期初建账默认落这里
+    ("WH-WKS", "鲜棉仓", "WORKSHOP"),    # 报工/生产产出默认落这里
+]
+
+
+def ensure_warehouses(api: Api, fid: str) -> dict:
+    """双仓(幂等: 按 code)。⚠️ 需要 factory_super_admin / permission_admin。"""
+    out = {}
+    listing = api.need(api.get(f"/api/mobile/{fid}/factory/warehouses"), "查工厂仓库") or []
+    rows = listing.get("content") if isinstance(listing, dict) else listing
+    known = {w.get("code"): w for w in (rows or [])}
+    for code, name, wtype in WAREHOUSES:
+        if code in known:
+            out[code] = known[code]["id"]
+            step(f"warehouse {code}", "reused", id=out[code], name=known[code].get("name"))
+            continue
+        data = api.need(
+            api.post(f"/api/mobile/{fid}/factory/warehouses",
+                     {"code": code, "name": name, "type": wtype, "isActive": True,
+                      "remarks": f"{DEMO_MARK} 演示数据"}),
+            f"建仓库 {code}")
+        if data is None:
+            step(f"warehouse {code}", "ok", note="dry-run")
+            continue
+        out[code] = data["id"]
+        step(f"warehouse {code}", "created", id=data["id"], name=name, type=wtype)
+    return out
 
 
 def ensure_raw_materials(api: Api, fid: str) -> dict:
@@ -970,9 +1033,16 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
         plan_id = plan["id"]
         step("production plan", "reused", id=plan_id)
     else:
+        # 🔴 `clientRequestId` 必填(等价于 `Idempotency-Key` 请求头, 两者给了必须一致):
+        #      400 缺少创建请求幂等键 (IDEMPOTENCY_KEY_REQUIRED)
+        #    ⚠️ 提示语说「请刷新创建窗口后重试，系统会自动生成新的提交键」—— 那是给
+        #       **前端用户**的话(前端开窗时自动塞一个 UUID), 对脚本没有意义, 别照着去找
+        #       什么「创建窗口」接口。
+        #    ⇒ 这里用**稳定**的键(不是随机 UUID): 重跑时同一个键让后端重放而不是再建一张。
         data = api.need(api.post(f"/api/mobile/{fid}/production-plans", {
             "productTypeId": finished_pt, "plannedQuantity": 200, "unit": "kg",
             "plannedDate": DEMO_DATE, "remark": f"{plan_number_hint} 酱牛肉演示计划",
+            "clientRequestId": f"{DEMO_MARK}-plan-{finished_pt}",
         }), "建生产计划")
         if data is None:
             step("production plan", "ok", note="dry-run")
@@ -1001,20 +1071,47 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
         batch = data
         step("production batch", "created", id=batch_id, number=data.get("batchNumber"))
 
-    # 开工(已开工时后端会说, 不当失败)
-    started = api.post(f"/api/mobile/{fid}/processing/batches/{batch_id}/start",
-                       params={"supervisorId": supervisor_id} if supervisor_id else None)
-    if started.get("success"):
-        step("start batch", "created", id=batch_id)
+    # 开工。🔴 判据是**批次状态**, ⛔ 不是「接口报没报错」——
+    #    后端 `startProduction` 只接受 PLANNED, 其它状态一律 409
+    #    「批次状态不允许开始生产: <status>」。所以:
+    #      PLANNED     -> 开工(created)
+    #      IN_PROGRESS -> 上一遍已经开过(reused)
+    #      其它        -> 停下, ⛔ 不假装没事
+    #    ⚠️ 原来这里把**任何**失败都记成 reused, 于是「supervisorId 没传」这种真错
+    #      被读成「已经开工了」, 直到三步之后报工说「批次尚未开始生产」才暴露。
+    if supervisor_id is None:
+        raise SeedError("没有 supervisorId, 开不了工 —— 登录响应里没拿到用户 id。")
+    batch_status = (batch or {}).get("status")
+    if batch_status == "PLANNED":
+        started = api.need(
+            api.post(f"/api/mobile/{fid}/processing/batches/{batch_id}/start",
+                     params={"supervisorId": supervisor_id}),
+            "开工")
+        batch_status = (started or {}).get("status", batch_status)
+        step("start batch", "created", id=batch_id, status=batch_status)
     else:
-        step("start batch", "reused", note=str(started.get("message"))[:60])
+        step("start batch", "reused", id=batch_id, status=batch_status)
+    if batch_status not in ("IN_PROGRESS", "COMPLETED"):
+        raise SeedError(
+            f"批次 {batch_id} 开工后状态是 {batch_status!r}, 期望 IN_PROGRESS —— "
+            f"⛔ 不能带着没开工的批次去报工(那一步只会说「批次尚未开始生产」)。")
 
-    spawned = api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/spawn-tasks",
-                       {"productTypeId": str(finished_pt)})
-    tasks = spawned.get("data") or []
-    task_id = tasks[0].get("id") if tasks else None
-    step("spawn work-process tasks", "created" if spawned.get("success") else "ok",
-         spawned=len(tasks), firstTaskId=task_id)
+    tasks = api.need(
+        api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/spawn-tasks",
+                 {"productTypeId": str(finished_pt)}),
+        "派生工序任务") or []
+    # 🔴 要的是**分割**那道工序的任务, ⛔ 不是 tasks[0] —— 派生顺序不是契约,
+    #    拿错一条会把「分割报工」记到屠宰头上, 而且不会报错(形态 A: 量错了对象)。
+    split_task = next(
+        (t for t in tasks if "分割" in str(t.get("processName") or t.get("name") or "")), None)
+    if split_task is None and tasks:
+        raise SeedError(
+            "派生出来的工序任务里没有「分割」——无法做分割报工。拿到的是: "
+            + ", ".join(f"{t.get('processName') or t.get('name')}(id={t.get('id')})"
+                        for t in tasks))
+    task_id = (split_task or {}).get("id")
+    step("spawn work-process tasks", "created", spawned=len(tasks),
+         splitTaskId=task_id)
 
     # 分割报工: 输入 1 个胴体, 输出 3 个部位
     report_body = {
@@ -1029,24 +1126,59 @@ def run_production_chain(api: Api, fid: str, pt_ids: dict, supervisor_id) -> str
     }
     if task_id:
         report_body["workProcessTaskId"] = task_id
-    rep = api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/reports", report_body)
-    if rep.get("success"):
-        d = rep.get("data") or {}
-        step("split yield report", "created",
-             reportId=d.get("reportId") or d.get("id"),
-             outputs=len(SPLIT_OUTPUTS))
-    else:
-        step("split yield report", "ok", note=str(rep.get("message"))[:80])
+    # ⛔ 报工失败**不能**记成 ok: 协调者要的终态是「至少 1 具胴体报分割工序输出 3 个部位」,
+    #    这一步静默跳过的话, 后面标签照样能建、公开溯源照样 200 —— 一条**没有生产过程**的
+    #    溯源链看起来和真的一模一样。那正是最不能接受的那种绿。
+    d = api.need(
+        api.post(f"/api/mobile/{fid}/production/batches/{batch_id}/reports", report_body),
+        "分割报工")
+    step("split yield report", "created",
+         reportId=(d or {}).get("reportId") or (d or {}).get("id"),
+         outputs=len(SPLIT_OUTPUTS),
+         outputQuantity=report_body["outputQuantity"])
 
-    # 标签 + traceCode
-    label = api.post(f"/api/mobile/{fid}/labels", {"batchId": batch_id, "labelType": "BATCH"})
-    ldata = api.need(label, "建标签")
+    # ── 标签 + traceCode ────────────────────────────────────────────────
+    # 🔴 `POST /labels` **不会**替你生成 traceCode: `LabelServiceImpl#createLabel` 只补
+    #    id / labelCode / status / printCount 四样, traceCode 由调用方(打印流程)给。
+    #    2026-09-15 实测: 只传 {batchId, labelType} 建出来的标签
+    #    traceCode=None、productionBatchId=None ⇒ 公开溯源无从查起。
+    #
+    # traceCode 的两种格式(见 `TraceabilityController#resolveBatchNumberFromTraceCode`):
+    #   ① 内嵌式 TRACE-{batchNumber}-{后缀}  —— 默认/无编码规则工厂, 直接从码里解析批次号
+    #   ② 编码规则式 TR-{工厂}-{日期}-{序号} —— 反查 labels.trace_code → production_batch_id
+    # 本演示工厂没配编码规则, 用 ①; 同时**也**把 productionBatchId 填上, 让 ② 这条路
+    # 一样能走通(两条解析路径都成立, 不依赖单一实现细节)。
+    #
+    # ⚠️ 后缀里**不能有短横线**: 解析器取的是「TRACE- 之后、**最后一个**短横线之前」那一段。
+    #    带横线的 UUID 当后缀会把批次号切成 `SL-DEMO-BATCH-V1-550e8400-e29b-41d4-a716` —— 查不到。
+    #    ⇒ 用固定后缀 SEED01, 顺便让 traceCode **可重现**, 第二遍能按它查到同一张标签。
+    trace_code = f"TRACE-{batch_number}-SEED01"
+
+    found = api.get(f"/api/mobile/{fid}/labels/trace/{trace_code}", allow_missing=True)
+    if found.get("success") and (found.get("data") or {}).get("id"):
+        existing_label = found["data"]
+        step("label", "reused", labelCode=existing_label.get("labelCode"),
+             traceCode=existing_label.get("traceCode"))
+        return existing_label.get("traceCode") or trace_code
+
+    ldata = api.need(
+        api.post(f"/api/mobile/{fid}/labels",
+                 {"batchId": str(batch_id), "productionBatchId": batch_id,
+                  "labelType": "BATCH", "traceCode": trace_code,
+                  "productName": FINISHED_NAME}),
+        "建标签")
     if ldata is None:
         step("label", "ok", note="dry-run")
         return None
-    trace_code = ldata.get("traceCode") or ldata.get("qrContent")
-    step("label", "created", labelCode=ldata.get("labelCode"), traceCode=trace_code)
-    return trace_code
+    # 🔴 读回来断言, ⛔ 不信「建成功了就有码」—— traceCode 为空时下一步的失败
+    #    («没有拿到 traceCode») 离病因隔着一层。
+    saved = ldata.get("traceCode")
+    if not saved:
+        raise SeedError(
+            "标签建出来了但 traceCode 是空的 —— 公开溯源无从查起。完整响应: "
+            + json.dumps(ldata, ensure_ascii=False)[:600])
+    step("label", "created", labelCode=ldata.get("labelCode"), traceCode=saved)
+    return saved
 
 
 def self_test() -> int:
@@ -1241,6 +1373,7 @@ def main() -> int:
         step("factory admin login", "ok", user=admin_user, id=me.get("id"))
         supervisor_id = me.get("id")
 
+        ensure_warehouses(api, fid)
         raw_ids = ensure_raw_materials(api, fid)
         pt_ids = ensure_product_types(api, fid)
         wp_ids = ensure_work_processes(api, fid)
