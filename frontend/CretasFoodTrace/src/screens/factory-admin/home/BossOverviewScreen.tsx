@@ -3,7 +3,15 @@ import { StyleSheet, View } from 'react-native';
 import { Appbar, Button, Card, Text } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 
-type BossRoute = 'BossProductionPlans' | 'BossSalesOrders' | 'BossPurchaseOrders' | 'BossFinishedGoods';
+type BossRoute =
+  | 'BossProductionPlans'
+  | 'BossSalesOrders'
+  | 'BossPurchaseOrders'
+  | 'BossFinishedGoods'
+  // 通用现场能力 —— 注册在同一个 OverviewStack 里（见 BossNavigator.tsx）。
+  | 'Traceability'
+  | 'VisionVerify'
+  | 'SourceIndividualForm';
 
 export default function BossOverviewScreen() {
   const navigation = useNavigation();
@@ -27,6 +35,9 @@ export default function BossOverviewScreen() {
         <Button mode="contained-tonal" icon="cart-outline" onPress={() => open('BossSalesOrders')} style={styles.button}>销售订单</Button>
         <Button mode="contained-tonal" icon="package-down" onPress={() => open('BossPurchaseOrders')} style={styles.button}>采购订单</Button>
         <Button mode="contained-tonal" icon="package-variant-closed" onPress={() => open('BossFinishedGoods')} style={styles.button}>成品库存</Button>
+        <Button mode="contained-tonal" icon="qrcode-scan" testID="boss-entry-traceability" onPress={() => open('Traceability')} style={styles.button}>溯源查询</Button>
+        <Button mode="contained-tonal" icon="camera-outline" testID="boss-entry-vision-verify" onPress={() => open('VisionVerify')} style={styles.button}>拍照核验</Button>
+        <Button mode="contained-tonal" icon="card-account-details-outline" testID="boss-entry-source-individual" onPress={() => open('SourceIndividualForm')} style={styles.button}>源头个体</Button>
       </View>
     </View>
   );
