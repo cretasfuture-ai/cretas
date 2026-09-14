@@ -22,6 +22,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 type MCIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 import { traceabilityApiClient, PublicTraceResponse } from '../../services/api/traceabilityApiClient';
+import LineageChainTimeline from './components/LineageChainTimeline';
 
 /**
  * 公开溯源屏幕
@@ -279,6 +280,10 @@ const PublicTraceScreen: React.FC = () => {
                     </Card.Content>
                   </Card>
                 )}
+
+                {/* 来源链（多跳血缘，脱敏 —— 后端只下发 ancestors 且不带供应商，
+                    这里 showSupplier 保持默认 false 作为第二道闸） */}
+                <LineageChainTimeline lineage={traceData.lineage} />
 
                 {/* 溯源码 */}
                 <Surface style={styles.traceCodeCard} elevation={1}>

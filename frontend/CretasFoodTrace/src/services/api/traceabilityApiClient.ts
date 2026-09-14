@@ -87,6 +87,58 @@ export interface ProcessingStageInfo {
   operatorName?: string;
 }
 
+// ========== 多跳血缘（来源链 / 影响面） ==========
+
+/** 血缘图上的一个节点。 */
+export interface LineageNode {
+  nodeType: 'MATERIAL_BATCH' | 'PRODUCTION_BATCH' | 'FINISHED_BATCH' | 'SHIPMENT_RECORD';
+  nodeId: string;
+  batchNumber?: string | null;
+  /** 物料名 / 产品名 / 客户名。⚠️ resolved=false 时恒为 null —— 那是「查不到」不是「没名字」。 */
+  name?: string | null;
+  /** 仅原料节点；公开（消费者）接口恒为 null。 */
+  supplierName?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  eventTime?: string | null;
+  /**
+   * 批次实体是否还查得到。血缘边是 forensic 的（永不删），批次却可能被软删，
+   * 所以这里会有 false。⛔ 前端不要给它编一个「未知批次」的名字。
+   */
+  resolved?: boolean;
+}
+
+/** 按跳数分组的一层（1 = 直接上游，2 = 隔一跳…）。 */
+export interface LineageDepthGroup {
+  depth: number;
+  nodes: LineageNode[];
+}
+
+export interface LineageSection {
+  rootType: string;
+  rootId: string;
+  /** 上游，depth 由近到远。空数组 = 确实没有上游血缘记录。 */
+  ancestors: LineageDepthGroup[];
+  /** 下游；公开接口为 null（本接口不提供），不是空数组。 */
+  descendants?: LineageDepthGroup[] | null;
+  maxDepth: number;
+  nodeCount: number;
+}
+
+/** 召回影响面。 */
+export interface ImpactResponse {
+  rootType: string;
+  rootId: string;
+  productionBatches: LineageNode[];
+  finishedBatches: LineageNode[];
+  shipments: LineageNode[];
+  productionBatchCount: number;
+  finishedBatchCount: number;
+  shipmentCount: number;
+  maxDepth: number;
+  queryTime: string;
+}
+
 export interface FullTraceResponse {
   production: ProductionInfo;
   materials: MaterialInfo[];
@@ -95,6 +147,12 @@ export interface FullTraceResponse {
   shipments: ShipmentInfo[];
   traceCode: string;
   queryTime: string;
+  /**
+   * 多跳血缘。
+   * ⚠️ `null`/`undefined` = **本次没拿到**（血缘引擎不可用）；
+   * `ancestors: []` = **确实没有上游血缘记录**。两者在 UI 上是不同的话，⛔ 别合并。
+   */
+  lineage?: LineageSection | null;
 }
 
 export interface PublicMaterialInfo {
@@ -122,6 +180,8 @@ export interface PublicTraceResponse {
   queryTime: string;
   isValid: boolean;
   message: string;
+  /** 多跳来源链（脱敏：只有 ancestors，节点上不带供应商）。语义同 FullTraceResponse.lineage。 */
+  lineage?: LineageSection | null;
 }
 
 // ========== API客户端类 ==========
@@ -177,6 +237,26 @@ class TraceabilityApiClient {
       }
       throw error;
     }
+  }
+
+  /**
+   * 2.5 召回影响面查询
+   * GET /api/mobile/{factoryId}/traceability/impact/{batchType}/{batchId}
+   * 需要认证。
+   *
+   * ⛔ 这里**不吞异常**：召回场景下「没有波及」和「没查成」是天差地别的两件事，
+   * 后端也不会返回全 0 空壳。调用方必须自己决定怎么把失败告诉用户。
+   */
+  async getImpact(
+    batchType: 'MATERIAL_BATCH' | 'PRODUCTION_BATCH' | 'FINISHED_BATCH' | 'SHIPMENT_RECORD',
+    batchId: string,
+    options?: { maxDepth?: number; factoryId?: string }
+  ): Promise<ImpactResponse> {
+    const maxDepth = options?.maxDepth ?? 5;
+    const response = await apiClient.get<any>(
+      `${this.getPath(options?.factoryId)}/impact/${batchType}/${encodeURIComponent(batchId)}?maxDepth=${maxDepth}`
+    );
+    return response.data || response;
   }
 
   /**
