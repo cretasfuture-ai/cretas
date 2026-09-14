@@ -145,7 +145,9 @@ public class SourceIndividualService {
             if (isDuplicateIndividualCode(e)) {
                 // 并发下 check-then-insert 补不住 —— 排他真正发生在库上那条部分唯一索引。
                 log.warn("源头个体建档撞唯一索引: factoryId={}, individualCode={}", factoryId, code);
-                throw new BusinessException(409, "档案编号已存在: " + code).withCode("DUPLICATE");
+                throw new BusinessException(409, "档案编号已存在: " + code)
+                        .withCode("DUPLICATE")
+                        .withHint("换一个档案编号, 或直接打开已有的那份档案");
             }
             log.error("源头个体建档撞到未预期的完整性约束: factoryId={}, individualCode={}",
                     factoryId, code, e);
