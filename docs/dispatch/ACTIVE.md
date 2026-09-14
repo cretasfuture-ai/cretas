@@ -15,7 +15,7 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
-- `OPS-LINEAGE-BACKFILL-PROD-20260915` — `in-progress` — Owner: organizer(🔒 prod 写) — #792 已合 `48b9308188`; 待: merged main 全新库闸 → 从 main 发布 Java+web → OTA 推 RN → prod 回填 dry-run(读「对不齐」列) → 真跑 → 核 `batch_lineage_closure` 出现 MATERIAL_BATCH→FINISHED_BATCH depth≥2 → 归档。
+- `OPS-LINEAGE-BACKFILL-PROD-20260915` — `in-progress` — Owner: organizer(🔒 prod 写) — #792 已合 `48b9308188` 并发布(blue 10010, jar<进程, 8 处标记, flyway .43 true, `uq_ble_refkey` 在); OTA 已推 rv=1.0.4 ts=1789420787986(真机送达待周二)。待: 回填 dry-run→真跑→closure depth≥2→归档。证据见 archive 2026-09-15。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915` — `in-progress` — Owner: Line B(executor) — Base `origin/main`(含 #791/#793) — 纯 API 演示租户种子脚本(建厂→默认用户→原料/产品/工序→族图 draft+publish→6 头个体+期初批次→计划/报工/成品→标签 traceCode→公开溯源 200), 幂等可重跑, 只在本地跑通; prod 执行归 organizer(🔒 prod 写)。
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
