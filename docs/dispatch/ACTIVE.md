@@ -15,7 +15,8 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
-- `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915` — `in-progress` — Owner: Line A(executor) — Base `origin/main` — lineage 的 MATERIAL_BATCH 节点带出源头个体(品种/来源场/DNA 状态/耳标脱敏), 公开接口不出基因库编号/样本号/系谱/完整耳标; RN 时间线显示 + 公开页「本批来自 N 头牛」。周三第 5 幕最后一块。
+- `OPS-RELEASE-LINEAGE-NODE-20260915` — `in-progress` — Owner: organizer — 🔒 main `ef32c456ce`(#797+#798) Java/web 发布中(prewarm → release-cretas deploy)。判据: RELEASE_FINAL_STATUS 恰 1 次 + 运行 jar 含 `sourceIndividualCount` + 进程晚于 jar + 公开溯源 JSON 出该字段。
+- `FEAT-SEED-CONSUME-LIVE-CATTLE-20260915` — `in-progress` — Owner: sister(executor/Opus) — C1 种子缺口: 从不领用 6 个活牛批次 ⇒ 无 RAW_TO_PRODUCTION 边, 溯源无上游。加领用步骤(幂等) + SPECIES 改「牛」+ 终态断言(count=6/最远层全带个体/公开侧脱敏) + 本机两遍验收 + 变异。只到 PR。🔒 Scope: scripts/e2e/shenglong-demo/seed-cattle-demo.py
 - `OPS-OTA-DEMO-BUNDLE-20260915` — `in-progress` — Owner: organizer — 🔒 第 1 推(#797, main `c210c20743`) 06:41 完成: rv=1.0.4 ts=1789425596125, ota 域 manifest createdAt 22:41:33Z 含该 ts, CDN `index-fc8a49d7….hbc` GET 6,762,565B/200。待: 真机总览页出现三入口(Steve 手机); Line A 跟进合并后第 2 推。
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915` — `in-progress` — Owner: Line B(executor) — Base `origin/main`(含 #791/#793) — 纯 API 演示租户种子脚本(建厂→默认用户→原料/产品/工序→族图 draft+publish→6 头个体+期初批次→计划/报工/成品→标签 traceCode→公开溯源 200), 幂等可重跑, 只在本地跑通; prod 执行归 organizer(🔒 prod 写)。
