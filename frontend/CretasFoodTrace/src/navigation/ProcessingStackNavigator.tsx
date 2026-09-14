@@ -72,6 +72,10 @@ import { WorkstationMonitorScreen } from '../screens/production/WorkstationMonit
 // 标签扫描 (shared模块)
 import LabelScanScreen from '../screens/shared/LabelScanScreen';
 
+// 拍照核验 + 源头个体档案 (shared模块, FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914)
+import VisionVerifyScreen from '../screens/shared/VisionVerifyScreen';
+import SourceIndividualFormScreen from '../screens/shared/SourceIndividualFormScreen';
+
 // 工序制生产页面
 import ProcessTaskListScreen from '../screens/processing/ProcessTaskListScreen';
 import ProcessTaskDetailScreen from '../screens/processing/ProcessTaskDetailScreen';
@@ -311,6 +315,16 @@ export function ProcessingStackNavigator() {
       <Stack.Screen
         name="LabelScan"
         component={LabelScanScreen}
+      />
+
+      {/* 拍照核验 + 源头个体档案 - 通用组件 */}
+      <Stack.Screen
+        name="VisionVerify"
+        component={VisionVerifyScreen}
+      />
+      <Stack.Screen
+        name="SourceIndividualForm"
+        component={SourceIndividualFormScreen}
       />
 
       {/* 工序制生产 - Process Mode */}

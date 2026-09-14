@@ -162,6 +162,23 @@ public class MaterialBatch extends BaseEntity {
     private String originPlace;
 
     /**
+     * 来源个体档案 ID ({@code source_individuals.id}) —— 加法式, 可空。
+     *
+     * <p>只有<b>按个体投产</b>的批次才挂它(屠宰分割: 一头牛 → 若干原料批次)。
+     * 绝大多数批次(面粉/包材/调料)根本没有「源头个体」这个概念, 所以这一列
+     * ⛔ 不加 NOT NULL、⛔ 不加 DEFAULT —— 给「不适用」一个默认值就是把它翻译成
+     * 一个看起来正常的值。
+     *
+     * <p>⚠️ 存的是 {@code id} 而不是 {@code individualCode}: 编号是人看的、可以改,
+     * id 是引用用的。V20261101_42 建列时也没加 FK, 与本表既有的
+     * {@code supplier_id} / {@code material_type_id} 口径一致。
+     *
+     * @since 2026-09-14 (V20261101_42__source_individual.sql)
+     */
+    @Column(name = "source_individual_id", length = 191)
+    private String sourceIndividualId;
+
+    /**
      * 合同号 —— 从收货行带入 (V20261029_61)。
      *
      * <p>客户按合同号追溯来料是常态; 同一张采购单的不同来料批可以是不同合同号,

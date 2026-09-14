@@ -298,6 +298,7 @@ const rawMenuConfig: MenuItem[] = [
       // 结果全生产 0 个租户配置过仓储空间 —— 没有入口就没人找得到。
       { path: '/warehouse/storage-locations', title: '仓储空间与现场盘点', icon: '', module: 'warehouse', groupLabel: '仓储配置' },
       { path: '/warehouse/material-types', title: '原料类型字典', icon: '', module: 'warehouse' },
+      { path: '/warehouse/source-individuals', title: '源头个体档案', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-segments', title: '物料分类字典', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-price-trend', title: '物料均价趋势', icon: '', module: 'warehouse', groupLabel: '仓储分析' },
     ]

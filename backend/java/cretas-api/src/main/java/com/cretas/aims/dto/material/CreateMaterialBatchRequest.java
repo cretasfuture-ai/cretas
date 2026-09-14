@@ -119,4 +119,9 @@ public class CreateMaterialBatchRequest {
     @Schema(description = "产地 (SP4-A4, 可选)", example = "山东省青岛市")
     @Size(max = 200, message = "产地不能超过200个字符")
     private String originPlace;
+
+    /** 来源个体档案 ID —— 按个体投产(屠宰分割等)时带上, 其余场景留空。 */
+    @Schema(description = "来源个体档案ID (source_individuals.id, 可选)")
+    @Size(max = 191, message = "来源个体ID不能超过191个字符")
+    private String sourceIndividualId;
 }

@@ -103,4 +103,12 @@ public class UpdateMaterialBatchRequest {
     @Schema(description = "产地 (SP4-A4, 可选)")
     @Size(max = 200, message = "产地不能超过200个字符")
     private String originPlace;
+
+    /**
+     * 来源个体档案 ID —— 描述性信息, 不是账实数据, 所以走这条普通更新路径。
+     * partial 语义: null = 不修改(与本 DTO 其余字段一致)。
+     */
+    @Schema(description = "来源个体档案ID (source_individuals.id, 可选)")
+    @Size(max = 191, message = "来源个体ID不能超过191个字符")
+    private String sourceIndividualId;
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import { appAlert } from '../../components/ui/AppDialog';
 import { Text, Card, Button, Appbar, ActivityIndicator, Dialog, Portal, IconButton } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
@@ -374,6 +374,25 @@ export default function ProcessingDashboard() {
                 style={styles.actionButton}
               >
                 {t('dashboard.quickActions.materialManagement')}
+              </Button>
+              {/* 拍照核验 —— 耳标/脚环识别 + 肉品外观初评 (通用能力, 物种是字段值) */}
+              <Button
+                testID="quick-action-vision-verify"
+                mode="outlined"
+                icon="camera-outline"
+                onPress={() => navigation.navigate('VisionVerify')}
+                style={styles.actionButton}
+              >
+                {t('dashboard.quickActions.visionVerify')}
+              </Button>
+              <Button
+                testID="quick-action-source-individual"
+                mode="outlined"
+                icon="card-account-details-outline"
+                onPress={() => navigation.navigate('SourceIndividualForm')}
+                style={styles.actionButton}
+              >
+                {t('dashboard.quickActions.sourceIndividual')}
               </Button>
               {isScreenEnabled('EquipmentMonitoring') && (
                 <Button

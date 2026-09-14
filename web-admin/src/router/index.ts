@@ -489,6 +489,15 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '厂商登记表', module: 'warehouse' }
           },
           {
+            // 源头个体档案 —— 溯源链最前端的个体(物种是字段值, 不绑定单一物种)。
+            // ⚠️ 菜单登记在 components/layout/menuConfig.ts 的仓储管理组里 ——
+            //    只加路由不加菜单 = 用户只能手打 URL(routeReachability 那道闸正是为此)。
+            path: 'source-individuals',
+            name: 'WarehouseSourceIndividuals',
+            component: () => import('@/views/source-individuals/index.vue'),
+            meta: { requiresAuth: true, title: '源头个体档案', module: 'warehouse' }
+          },
+          {
             path: 'wip-batches',
             name: 'WarehouseWipBatches',
             component: () => import('@/views/warehouse/materials/wip-list.vue'),

@@ -51,7 +51,9 @@
       "exceptionAlert": "Exception Alert",
       "traceability": "Product Traceability",
       "materialRequisitions": "Material Requisitions",
-      "teamReport": "Team Report"
+      "teamReport": "Team Report",
+      "visionVerify": "Photo verify",
+      "sourceIndividual": "Source individual"
     },
     "aiAnalysis": {
       "title": "AI Analysis",
@@ -1309,5 +1311,94 @@
       "qualityDifference": "What are the main reasons for quality differences?"
     },
     "aiFailed": "AI analysis failed"
+  },
+  "sourceIndividual": {
+    "vision": {
+      "title": "Photo verification",
+      "template": {
+        "earTag": "ID tag reading",
+        "meatCut": "Meat cut pre-assessment"
+      },
+      "scan": "Scan code",
+      "takePhoto": "Take photo",
+      "gallery": "Pick from gallery",
+      "scannerTitle": "Scan the barcode on the ID tag",
+      "scanPreferredHint": "If the tag carries a barcode, scan it - scanning is exact, photo recognition is an estimate.",
+      "working": "Recognising...",
+      "failedTitle": "Verification failed",
+      "failedUnknown": "Please try again later",
+      "permissionTitle": "Permission required",
+      "cameraDenied": "Camera permission is required to take a photo",
+      "galleryDenied": "Photo library permission is required",
+      "unreadableTitle": "Could not read it",
+      "modelRawText": "Raw model output",
+      "retake": "Retake",
+      "earTagResultTitle": "ID tag result",
+      "meatCutResultTitle": "Meat cut result",
+      "viaScan": "From barcode scan (exact reading)",
+      "viaModel": "From photo recognition (estimated reading)",
+      "tagUnreadable": "No number could be read from this photo - please retake",
+      "notQueried": "No number to look up; no record was queried",
+      "noMatch": "Looked it up: no record exists for this number yet",
+      "multipleMatches": "This number matches {{count}} records (the tag may have been re-attached). Pick the right one manually.",
+      "confidence": "Confidence {{value}}%",
+      "openProfile": "Open record",
+      "registerNew": "Register new individual",
+      "aiPreliminary": "AI pre-assessment - human review required",
+      "cut": "Cut",
+      "marbling": "Marbling score (1-5)",
+      "foreignObject": "Foreign object suspected",
+      "contamination": "Contamination suspected",
+      "suspected": "Suspected",
+      "notSuspected": "Not observed"
+    },
+    "fields": {
+      "individualCode": "Record code",
+      "tagNumber": "ID tag number",
+      "species": "Species",
+      "breed": "Breed",
+      "sex": "Sex",
+      "birthDate": "Date of birth",
+      "originFarm": "Origin farm",
+      "externalGeneBankId": "External gene bank ID",
+      "dnaSampleCode": "Sample code",
+      "dnaStatus": "DNA verification status",
+      "notes": "Notes",
+      "sire": "Sire",
+      "dam": "Dam"
+    },
+    "dnaStatus": {
+      "UNSAMPLED": "Unsampled",
+      "SAMPLED": "Sampled",
+      "MATCHED": "Matched",
+      "MISMATCH": "Mismatch"
+    },
+    "form": {
+      "createTitle": "Register source individual",
+      "editTitle": "Individual record",
+      "save": "Save",
+      "ok": "OK",
+      "savedTitle": "Saved",
+      "savedBody": "The record has been saved",
+      "saveFailedTitle": "Save failed",
+      "saveFailedUnknown": "Please try again later",
+      "loadFailed": "Failed to load the record",
+      "invalidTitle": "Cannot save yet",
+      "codeRequired": "Record code is required",
+      "codeImmutable": "The record code cannot change after creation - printed labels reconcile against it",
+      "tagNotUnique": "ID tag numbers may repeat (re-attached tags, cross-farm intake); uniqueness is not enforced",
+      "dnaSection": "DNA / gene verification",
+      "dnaExternalOnly": "Only sampling and verification status are stored here; gene data lives in an external gene bank",
+      "pedigreeSection": "Pedigree",
+      "pedigreeHint": "Sire/dam must already have a record - an unknown id is rejected, never silently stored as empty",
+      "pedigreeNotSet": "Not set",
+      "pedigreeChoose": "Choose",
+      "pedigreeClear": "Clear",
+      "pedigreeSearchLabel": "Search by record code or ID tag number",
+      "pedigreeSearch": "Search",
+      "pedigreeCancel": "Cancel",
+      "pedigreeNoResult": "Searched: no matching individual record",
+      "pedigreeSearchFailed": "Search failed"
+    }
   }
 }
