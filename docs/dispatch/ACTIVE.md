@@ -15,7 +15,7 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
-- `OPS-VL-SLOT-QWEN38-FLASH-20260915` — `in-progress` — Owner: Line B(executor) — Base `origin/main` — Steve 01:5x 拍板: VL 槽位接 DashScope `qwen3.8-flash`(prod 实测 200, 免费额度在; 其它 VL 模型全 403 FreeTierOnly), 账号 aliyun_c(=Java key)。只动 VL 槽, 其它槽候选链逐字不变; 顺手订正 llm_router 过期链注释。Python 走 PR, 部署归 organizer。
+- `OPS-VL-SLOT-QWEN38-FLASH-20260915` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #793**(head `62585e43ac`, 仅 backend/python): VL 槽三账号轮转 `qwen3.8-flash`(c→a→b, 4.8/6.2/10.6 s), env 只能在登记表里选, 其它 7 槽逐字不变。合并后 `deploy-smartbi-python.sh --env prod`, 判据=真打 `/api/llm/vision` 200。
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
 - `ARCH-LINEAGE-CLOSE-LOOP-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #792**(head `dc0be9cacf`): recorder+7 处挂钩+读侧 lineage/impact+回填 runner+RN 时间线; 790 tests 0 fail, 10 次变异。出货载体=`sales_delivery_records`。合并后 prod 先 dry-run 看「对不齐」, 再看 closure depth≥2。🔒 架构。
 - `FEAT-SOURCE-INDIVIDUAL-VISION-VERIFY-20260914` — `review` — Owner: organizer 终审 — Base `8c04949d54` — **PR #791**(head `c0e3be9970`): 个体档案(含父本/母本)+批次挂个体(Flyway `_42`)+`/vision/verify`+RN 核验屏+web-admin 列表; 三端测试全绿, 9 条变异对照。🔴 prod VL 为零(`SLOT.VL: []`+DashScope 免费额度), 拍照演示待 owner 充值。🔒
