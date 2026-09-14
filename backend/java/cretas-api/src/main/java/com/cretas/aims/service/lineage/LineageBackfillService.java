@@ -72,12 +72,16 @@ public class LineageBackfillService {
         private int skipped;
         private int ambiguous;
         private int failed;
+        private int scheduled;
         private int scanned;
 
         void record(LineageRecordOutcome outcome) {
             scanned++;
             switch (outcome) {
                 case INSERTED -> inserted++;
+                // 回填在无事务上下文里跑, 正常拿不到 SCHEDULED。真拿到了说明有人
+                // 给 backfillFactory 套了外层事务 —— 那时读数已经作废, 必须显形。
+                case SCHEDULED -> scheduled++;
                 case ALREADY_EXISTS -> alreadyExists++;
                 case SKIPPED -> skipped++;
                 case AMBIGUOUS -> ambiguous++;
@@ -90,12 +94,17 @@ public class LineageBackfillService {
         public int getSkipped() { return skipped; }
         public int getAmbiguous() { return ambiguous; }
         public int getFailed() { return failed; }
+        public int getScheduled() { return scheduled; }
         public int getScanned() { return scanned; }
 
         @Override
         public String toString() {
-            return String.format("扫描 %d / 新增 %d / 已存在 %d / 跳过 %d / 对不齐 %d / 失败 %d",
+            String base = String.format("扫描 %d / 新增 %d / 已存在 %d / 跳过 %d / 对不齐 %d / 失败 %d",
                     scanned, inserted, alreadyExists, skipped, ambiguous, failed);
+            // ⚠️ 只在非 0 时追加, 免得正常回填的日志里多一列永远是 0 的噪音；
+            //    但它一旦非 0 就必须刺眼 —— 那说明本轮读数不可信。
+            return scheduled == 0 ? base
+                    : base + String.format(" / ⚠️ 延后待定 %d (本轮读数不可信: backfillFactory 被套了外层事务)", scheduled);
         }
     }
 
@@ -118,9 +127,23 @@ public class LineageBackfillService {
     /**
      * 回填一个工厂的三段血缘。
      *
+     * <h3>🔴 本方法<b>刻意不加 {@code @Transactional}</b></h3>
+     *
+     * <p>{@link LineageEdgeRecorder#record} 按「当前有没有活动事务」分两条路：
+     * 有事务 ⇒ 挂 {@code afterCommit}（在线业务要的语义）；无事务 ⇒ 同步 REQUIRES_NEW 写。
+     * 如果这里包一层事务，回填会掉进 afterCommit 那条路，于是：
+     * <ul>
+     *   <li>整轮回填的边全部推迟到最后一起写 ⇒ <b>查重看不到本轮刚写的边</b>，
+     *       同一批数据会被重复插一遍（只能靠 {@code uq_ble_refkey} 兜底）；</li>
+     *   <li>每一行拿到的都是 {@code SCHEDULED} ⇒ <b>五态读数全部作废</b>，
+     *       「新增 N / 已存在 M」变成一个恒为 0 的假数。</li>
+     * </ul>
+     * 所以读取走无事务查询（只读，shared EntityManager 会各自开临时会话），
+     * 写入由 recorder 自己的 REQUIRES_NEW 边界负责 —— 每行独立提交，
+     * 一行失败不会回滚整个工厂（这也修掉了原来「整工厂单事务」的连坐面）。
+     *
      * @param dryRun true = 只扫描并报数，一条边都不写
      */
-    @Transactional
     public Report backfillFactory(String factoryId, boolean dryRun) {
         Counters raw = backfillRawToProduction(factoryId, dryRun);
         Counters prod = backfillProductionToFinished(factoryId, dryRun);
@@ -146,7 +169,8 @@ public class LineageBackfillService {
             meta.put("consumptionSourceType", m.getSourceType());
             meta.put("origin", "BACKFILL");
             LineageRecordOutcome outcome = dryRun
-                    ? dryRunOutcome(m.getBatchId(), m.getProductionBatchId(), m.getQuantity())
+                    ? recorder.previewRawToProduction(factoryId, m.getBatchId(),
+                            m.getProductionBatchId(), m.getQuantity(), "consumption:" + m.getId())
                     : recorder.recordRawToProduction(factoryId, m.getBatchId(), m.getProductionBatchId(),
                             m.getQuantity(), null, m.getRecordedBy(),
                             "consumption:" + m.getId(), meta);
@@ -168,8 +192,14 @@ public class LineageBackfillService {
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("origin", "BACKFILL");
             meta.put("finishedBatchNumber", fg.getBatchNumber());
+            // 🔴 dry-run 必须跑真实的计划对齐（只读, 不写库）。
+            //    原来这里无条件报 SKIPPED, 预演会显示「跳过 N / 新增 0」,
+            //    运维照着「先 dry-run 再真跑」的指示读, 会把它解读成「这一段不会新增边」,
+            //    而真跑时可能插入大量行 —— 一个会误导决策的假读数。
             LineageRecordOutcome outcome = dryRun
-                    ? LineageRecordOutcome.SKIPPED   // 预演不查计划对齐，只报「扫到了多少行」
+                    ? recorder.previewProductionToFinishedByPlan(factoryId, fg.getProductionPlanId(),
+                            fg.getProductTypeId(), fg.getId(), fg.getProducedQuantity(), fg.getUnit(),
+                            "finishedBatch:" + fg.getId())
                     : recorder.recordProductionToFinishedByPlan(factoryId, fg.getProductionPlanId(),
                             fg.getProductTypeId(), fg.getId(), fg.getProducedQuantity(), fg.getUnit(),
                             fg.getCreatedBy(), "finishedBatch:" + fg.getId(), meta);
@@ -241,7 +271,9 @@ public class LineageBackfillService {
             meta.put("deliveryItemId", item.getId());
             meta.put("finishedBatchNumber", a.getBatchNumber());
             LineageRecordOutcome outcome = dryRun
-                    ? dryRunOutcome(a.getFinishedGoodsBatchId(), record.getId(), a.getAllocatedQty())
+                    ? recorder.previewFinishedToShipment(factoryId, a.getFinishedGoodsBatchId(),
+                            record.getId(), a.getAllocatedQty(), a.getUnit(),
+                            "delivery:" + record.getId() + ":" + a.getFinishedGoodsBatchId())
                     : recorder.recordFinishedToShipment(factoryId, a.getFinishedGoodsBatchId(),
                             record.getId(), a.getAllocatedQty(), a.getUnit(), record.getShippedBy(),
                             "delivery:" + record.getId() + ":" + a.getFinishedGoodsBatchId(), meta);
@@ -250,20 +282,4 @@ public class LineageBackfillService {
         return counters;
     }
 
-    /**
-     * 预演：只判「这行构不构成一条边」，不查库、不写库。
-     *
-     * <p>⚠️ 预演报出来的 INSERTED 是<b>上界</b>（其中一部分真跑时会落 ALREADY_EXISTS），
-     * 这一点必须在报数时说清楚，⛔ 不能把它当成「将新增 N 条」。
-     */
-    private LineageRecordOutcome dryRunOutcome(Object sourceId, Object targetId, java.math.BigDecimal qty) {
-        if (sourceId == null || String.valueOf(sourceId).isBlank()
-                || targetId == null || String.valueOf(targetId).isBlank()) {
-            return LineageRecordOutcome.SKIPPED;
-        }
-        if (qty != null && qty.signum() <= 0) {
-            return LineageRecordOutcome.SKIPPED;
-        }
-        return LineageRecordOutcome.INSERTED;
-    }
 }

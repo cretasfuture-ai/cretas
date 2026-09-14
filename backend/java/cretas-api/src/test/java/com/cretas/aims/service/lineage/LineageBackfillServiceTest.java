@@ -1,6 +1,7 @@
 package com.cretas.aims.service.lineage;
 
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -56,12 +57,12 @@ class LineageBackfillServiceTest {
                                 && e.getSourceId().equals(inv.getArgument(3))
                                 && e.getTargetId().equals(inv.getArgument(5)))
                         .toList());
-        when(edgeRepository.save(any(BatchLineageEdge.class))).thenAnswer(inv -> {
+        when(edgeRepository.saveAndFlush(any(BatchLineageEdge.class))).thenAnswer(inv -> {
             BatchLineageEdge e = inv.getArgument(0);
             store.add(e);
             return e;
         });
-        LineageEdgeRecorder recorder = new LineageEdgeRecorder(edgeRepository,
+        LineageEdgeRecorder recorder = new LineageEdgeRecorder(new LineageEdgeWriter(edgeRepository),
                 new FinishedBatchProductionAligner(productionBatchRepository));
         LineageBackfillService service = new LineageBackfillService(recorder);
         ReflectionTestUtils.setField(service, "entityManager", entityManager);
@@ -127,6 +128,75 @@ class LineageBackfillServiceTest {
         assertThat(store).isEmpty();                        // 真的什么都没写
     }
 
+    @SuppressWarnings("unchecked")
+    private void stubFinishedBatches(List<FinishedGoodsBatch> rows) {
+        TypedQuery<FinishedGoodsBatch> query = mock(TypedQuery.class);
+        when(entityManager.createQuery(anyString(), eq(FinishedGoodsBatch.class))).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.getResultList()).thenReturn(rows);
+    }
+
+    @Test
+    @DisplayName("🔴 PROD→FIN 的 dry-run 必须跑真实对齐 —— ⛔ 不许无条件报 SKIPPED")
+    void productionToFinishedDryRunRunsTheRealAlignment() {
+        FinishedGoodsBatch aligned = finishedBatch("fg-1", "plan-1", "PT-A");
+        FinishedGoodsBatch ambiguous = finishedBatch("fg-2", "plan-2", "PT-A");
+        FinishedGoodsBatch noCarrier = finishedBatch("fg-3", "plan-3", "PT-A");
+        stubFinishedBatches(List.of(aligned, ambiguous, noCarrier));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY, "plan-1"))
+                .thenReturn(List.of(productionBatch(1L, "PT-A")));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY, "plan-2"))
+                .thenReturn(List.of(productionBatch(2L, "PT-A"), productionBatch(3L, "PT-A")));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY, "plan-3"))
+                .thenReturn(List.of());
+        LineageBackfillService service = newService();
+
+        LineageBackfillService.Counters counters = service.backfillProductionToFinished(FACTORY, true);
+
+        // 原来这一段 dry-run 无条件报 SKIPPED=3 / 新增=0，运维会读成「这一段不会新增边」，
+        // 而真跑会插一行。现在三态必须各自落位。
+        assertThat(counters.getScanned()).isEqualTo(3);
+        assertThat(counters.getInserted()).as("plan-1 唯一对齐 ⇒ 真跑会新增").isEqualTo(1);
+        assertThat(counters.getAmbiguous()).as("plan-2 两个同产品批次 ⇒ 对不齐").isEqualTo(1);
+        assertThat(counters.getSkipped()).as("plan-3 没有生产批次 ⇒ 无载体").isEqualTo(1);
+        // dry-run 仍然零写
+        assertThat(store).isEmpty();
+    }
+
+    @Test
+    @DisplayName("dry-run 与真跑同口径：已写过的行在 dry-run 里报「已存在」而不是「新增」")
+    void dryRunAgreesWithRealRunOnAlreadyExisting() {
+        stubConsumptions(List.of(consumption(1, "mb-1", 8967L, new BigDecimal("3"))));
+        LineageBackfillService service = newService();
+
+        assertThat(service.backfillRawToProduction(FACTORY, true).getInserted()).isEqualTo(1);
+        assertThat(service.backfillRawToProduction(FACTORY, false).getInserted()).isEqualTo(1);
+        // 真跑之后再 dry-run：同一行必须翻成「已存在」。
+        // ⛔ 如果 dry-run 另写一套判定（原来那样），这条永远是「新增 1」，与事实相反。
+        LineageBackfillService.Counters after = service.backfillRawToProduction(FACTORY, true);
+        assertThat(after.getInserted()).isZero();
+        assertThat(after.getAlreadyExists()).isEqualTo(1);
+    }
+
+    private static FinishedGoodsBatch finishedBatch(String id, String planId, String productTypeId) {
+        FinishedGoodsBatch fg = new FinishedGoodsBatch();
+        fg.setId(id);
+        fg.setFactoryId(FACTORY);
+        fg.setBatchNumber("FG-" + id);
+        fg.setProductionPlanId(planId);
+        fg.setProductTypeId(productTypeId);
+        fg.setProducedQuantity(new BigDecimal("10"));
+        fg.setUnit("盒");
+        return fg;
+    }
+
+    private static ProductionBatch productionBatch(Long id, String productTypeId) {
+        ProductionBatch b = new ProductionBatch();
+        b.setId(id);
+        b.setProductTypeId(productTypeId);
+        return b;
+    }
+
     @Test
     @DisplayName("counters 的 toString 把五个数都打出来（⛔ 不许只报「新增 N」）")
     void countersRenderAllFiveNumbers() {
@@ -153,10 +223,4 @@ class LineageBackfillServiceTest {
         return m;
     }
 
-    @SuppressWarnings("unused")
-    private static ProductionBatch batch(Long id) {
-        ProductionBatch b = new ProductionBatch();
-        b.setId(id);
-        return b;
-    }
 }

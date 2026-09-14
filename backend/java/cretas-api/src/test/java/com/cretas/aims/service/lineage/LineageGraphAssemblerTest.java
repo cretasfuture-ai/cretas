@@ -153,6 +153,35 @@ class LineageGraphAssemblerTest {
     }
 
     @Test
+    @DisplayName("🔴 公开接口不许泄漏 nodeId —— 序列化后的 JSON 里一个内部主键都不许有")
+    void publicViewDoesNotLeakInternalNodeIds() throws Exception {
+        wireThreeLayerGraph();
+
+        TraceabilityDTO.LineageSection publicSection =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, false, true);
+        TraceabilityDTO.LineageSection internalSection =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 5, true, false);
+
+        // ⚠️「必发生」的那一半: 内部视图必须**看得到** nodeId。
+        //    没有它, 下面那条「公开视图没有 nodeId」在「组装器根本没填过 nodeId」时也成立 —— 恒真式。
+        assertThat(internalSection.getAncestors())
+                .flatExtracting(TraceabilityDTO.LineageDepthGroup::getNodes)
+                .extracting(TraceabilityDTO.LineageNode::getNodeId)
+                .contains("8100", "mb-near", "mb-far");
+
+        assertThat(publicSection.getAncestors())
+                .flatExtracting(TraceabilityDTO.LineageDepthGroup::getNodes)
+                .allSatisfy(n -> assertThat(n.getNodeId())
+                        .as("nodeId 是内部数据库主键(PRODUCTION_BATCH 还是自增整数), 公开接口必须置空")
+                        .isNull());
+
+        // 判据落到**真正发出去的那个字节流**上: 序列化之后整段 JSON 里不许出现那几个内部 id。
+        // 只断言 DTO 字段为 null 不够 —— 万一哪天有人把 id 塞进别的字段, 那条断言照样绿。
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(publicSection);
+        assertThat(json).doesNotContain("\"8100\"").doesNotContain("mb-near").doesNotContain("mb-far");
+    }
+
+    @Test
     @DisplayName("公开接口: 不给 descendants, 供应商恒为 null")
     void publicViewHidesSupplierAndDescendants() {
         wireThreeLayerGraph();

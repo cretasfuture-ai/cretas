@@ -1,17 +1,16 @@
 package com.cretas.aims.service.lineage;
 
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
-import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * 血缘边的<b>唯一</b>写入口 —— 在线业务路径与历史回填共用同一个方法。
@@ -78,7 +77,11 @@ public class LineageEdgeRecorder {
 
     public static final String SHIPMENT_CARRIER_SALES_DELIVERY = "SALES_DELIVERY_RECORD";
 
-    private final BatchLineageEdgeRepository edgeRepository;
+    /**
+     * 真正落库的那一层（独立事务 + 立即 flush）。
+     * ⚠️ 必须是<b>另一个 bean</b>：Spring 的 @Transactional 走代理，同类自调用不生效。
+     */
+    private final LineageEdgeWriter edgeWriter;
     private final FinishedBatchProductionAligner productionAligner;
 
     /**
@@ -184,6 +187,36 @@ public class LineageEdgeRecorder {
 
     /**
      * 所有三段共用的实现。⛔ 不要为某一段单独复制一份 —— 幂等判据一旦有两份就会漂。
+     *
+     * <h3>两条落库路径，按「当前有没有活动事务」分（⛔ 不要合并成一条）</h3>
+     *
+     * <table border="1">
+     *   <tr><th>场景</th><th>怎么写</th><th>为什么</th></tr>
+     *   <tr>
+     *     <td>有活动事务（报工 / 发货 / 结单 / 小结）</td>
+     *     <td>注册 {@code afterCommit} 回调，回调里走 REQUIRES_NEW + saveAndFlush</td>
+     *     <td>① 调用方回滚 ⇒ 回调不执行 ⇒ 不留永久假边（本表 append-only，写错删不掉）；<br>
+     *         ② 边写失败时调用方已经提交完了 ⇒ 确认发货 / 自动扣料绝不会被拖挂</td>
+     *   </tr>
+     *   <tr>
+     *     <td>无活动事务（回填 runner / 无事务的 controller 直调）</td>
+     *     <td>直接 REQUIRES_NEW + saveAndFlush，同步拿结果</td>
+     *     <td>没有更大的原子单元可以被连坐，回填也因此拿得到精确的五态读数</td>
+     *   </tr>
+     * </table>
+     *
+     * <h3>⛔ 为什么「只加 REQUIRES_NEW」不够</h3>
+     *
+     * <p>REQUIRES_NEW 会<b>立即独立提交</b>。直接在业务事务里调它，一旦调用方随后回滚，
+     * 边已经落库且再也删不掉 —— 血缘图上会出现一条「这批料投进了一个根本不存在的批次」的假边。
+     * 所以必须挂在 afterCommit 上。
+     *
+     * <h3>⛔ 为什么「只加 afterCommit」也不够</h3>
+     *
+     * <p>afterCommit 回调跑在业务事务<b>已经提交之后</b>，此时没有活动事务；
+     * 若回调里只调 {@code save()}，Hibernate 的 assigned-id 实体不会立即 flush，
+     * INSERT 会落进一个临时 session 的边界，异常时机再次变得不可控。
+     * 所以回调里走的是 {@link LineageEdgeWriter}（REQUIRES_NEW + saveAndFlush）。
      */
     LineageRecordOutcome record(String factoryId,
                                 String edgeType,
@@ -193,81 +226,149 @@ public class LineageEdgeRecorder {
                                 Long operatorId,
                                 String refKey,
                                 Map<String, Object> extraMeta) {
-        if (isBlank(factoryId) || isBlank(sourceId) || isBlank(targetId)) {
-            // 「这条业务记录不构成一条边」是合法状态（例：不挂生产批次的手工出库），
-            // ⛔ 不要在这里兜底造一个 id —— 那是假数据，比没有边糟得多。
-            log.debug("[lineage] 缺少构成边的 id, 不写边: factory={} edge={} source={}/{} target={}/{}",
-                    factoryId, edgeType, sourceType, sourceId, targetType, targetId);
-            return LineageRecordOutcome.SKIPPED;
-        }
-        if (quantity != null && quantity.signum() <= 0) {
-            // 负数/零是冲销或调整，血缘边是 append-only 的，写不进「减少」这个语义。
-            // 登记为 SKIPPED 让回填能把它报出来，⛔ 不是静默丢弃。
-            log.debug("[lineage] 数量非正({}), 不写边(append-only 表达不了冲销): edge={} {}→{}",
-                    quantity, edgeType, sourceId, targetId);
+        BatchLineageEdge edge = buildEdge(factoryId, edgeType, sourceType, sourceId,
+                targetType, targetId, quantity, unit, operatorId, refKey, extraMeta);
+        if (edge == null) {
             return LineageRecordOutcome.SKIPPED;
         }
         try {
-            List<BatchLineageEdge> existing = edgeRepository.findMatchingEdges(
-                    factoryId, edgeType, sourceType, sourceId, targetType, targetId);
-            if (alreadyRecorded(existing, refKey)) {
-                return LineageRecordOutcome.ALREADY_EXISTS;
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(
+                        new TransactionSynchronization() {
+                            @Override
+                            public void afterCommit() {
+                                // 整体 try/catch: afterCommit 里抛异常会被 Spring 往上抛,
+                                // 而此时业务事务已经提交 —— 让它冒出去只会把一个已经成功的
+                                // 请求变成 500。fail-soft 的语义在这里才真正兑现。
+                                try {
+                                    edgeWriter.writeInNewTransaction(edge, refKey);
+                                } catch (Exception e) {
+                                    log.warn("[lineage] afterCommit 写边失败 (fail-soft, 业务已提交): "
+                                                    + "edge={} {}:{} → {}:{} refKey={}",
+                                            edgeType, sourceType, sourceId, targetType, targetId, refKey, e);
+                                }
+                            }
+                        });
+                return LineageRecordOutcome.SCHEDULED;
             }
-
-            BatchLineageEdge edge = new BatchLineageEdge();
-            edge.setFactoryId(factoryId);
-            edge.setEdgeType(edgeType);
-            edge.setSourceType(sourceType);
-            edge.setSourceId(sourceId);
-            edge.setTargetType(targetType);
-            edge.setTargetId(targetId);
-            edge.setQuantityUsed(quantity);
-            edge.setUnit(unit);
-            edge.setEventTime(LocalDateTime.now());
-            edge.setOperatorId(operatorId);
-
-            Map<String, Object> meta = new HashMap<>();
-            if (extraMeta != null) {
-                extraMeta.forEach((k, v) -> {
-                    if (k != null && v != null) {
-                        meta.put(k, v);
-                    }
-                });
-            }
-            if (!isBlank(refKey)) {
-                meta.put(META_REF_KEY, refKey);
-            }
-            edge.setMeta(meta);
-
-            edgeRepository.save(edge);
-            return LineageRecordOutcome.INSERTED;
+            return edgeWriter.writeInNewTransaction(edge, refKey);
         } catch (Exception e) {
-            // fail-soft: 审计边写不进去绝不能把报工/入库/发货拖挂。
-            log.warn("[lineage] 边写入失败 (fail-soft, 不阻塞业务): edge={} {}:{} → {}:{} qty={} refKey={}",
+            log.warn("[lineage] 边登记失败 (fail-soft, 不阻塞业务): edge={} {}:{} → {}:{} qty={} refKey={}",
                     edgeType, sourceType, sourceId, targetType, targetId, quantity, refKey, e);
             return LineageRecordOutcome.FAILED;
         }
     }
 
     /**
-     * 幂等判定。
+     * 只判定不写 —— 回填 dry-run 用。
      *
-     * <p>有 refKey → 只有<b>同 refKey</b> 的边算「已写过」；同一对批次之间多次不同投料
-     * 各自写各自的边（这是真实业务，不是重复）。
-     *
-     * <p>没有 refKey → 退化成「同一对批次同一 edgeType 已有任何边就算写过」。
+     * <p>⚠️ 与 {@link #record} 共用 {@link #buildEdge} 与
+     * {@link LineageEdgeWriter} 的查重判据，所以 dry-run 报出来的
+     * SKIPPED / ALREADY_EXISTS / INSERTED 与真跑逐条一致。
+     * ⛔ 不许给 dry-run 另写一套判定（形态 D：两边会给出不同的数，而没有测试会红）。
      */
-    private boolean alreadyRecorded(List<BatchLineageEdge> existing, String refKey) {
-        if (existing == null || existing.isEmpty()) {
-            return false;
+    LineageRecordOutcome preview(String factoryId,
+                                 String edgeType,
+                                 String sourceType, String sourceId,
+                                 String targetType, String targetId,
+                                 BigDecimal quantity, String unit,
+                                 Long operatorId,
+                                 String refKey,
+                                 Map<String, Object> extraMeta) {
+        BatchLineageEdge edge = buildEdge(factoryId, edgeType, sourceType, sourceId,
+                targetType, targetId, quantity, unit, operatorId, refKey, extraMeta);
+        if (edge == null) {
+            return LineageRecordOutcome.SKIPPED;
         }
-        if (isBlank(refKey)) {
-            return true;
+        return edgeWriter.previewInNewTransaction(edge, refKey);
+    }
+
+    /** dry-run 版的 by-plan 入口：跑真实的对齐（只读），⛔ 不无条件报 SKIPPED。 */
+    public LineageRecordOutcome previewProductionToFinishedByPlan(String factoryId,
+                                                                  String productionPlanId,
+                                                                  String finishedProductTypeId,
+                                                                  String finishedBatchId,
+                                                                  BigDecimal quantity,
+                                                                  String unit,
+                                                                  String refKey) {
+        FinishedBatchProductionAligner.Alignment alignment =
+                productionAligner.align(factoryId, productionPlanId, finishedProductTypeId);
+        if (alignment.batch().isEmpty()) {
+            return alignment.asFailureOutcome();
         }
-        return existing.stream().anyMatch(e -> {
-            Map<String, Object> meta = e.getMeta();
-            return meta != null && Objects.equals(String.valueOf(meta.get(META_REF_KEY)), refKey);
-        });
+        return preview(factoryId, EDGE_PRODUCTION_TO_FINISHED,
+                NODE_PRODUCTION_BATCH, String.valueOf(alignment.batch().get().getId()),
+                NODE_FINISHED_BATCH, finishedBatchId,
+                quantity, unit, null, refKey, null);
+    }
+
+    /** dry-run 版的原料→生产批次入口。 */
+    public LineageRecordOutcome previewRawToProduction(String factoryId, String materialBatchId,
+                                                       Long productionBatchId, BigDecimal quantity,
+                                                       String refKey) {
+        return preview(factoryId, EDGE_RAW_TO_PRODUCTION,
+                NODE_MATERIAL_BATCH, materialBatchId,
+                NODE_PRODUCTION_BATCH, productionBatchId == null ? null : String.valueOf(productionBatchId),
+                quantity, null, null, refKey, null);
+    }
+
+    /** dry-run 版的成品→出货入口。 */
+    public LineageRecordOutcome previewFinishedToShipment(String factoryId, String finishedBatchId,
+                                                          String shipmentId, BigDecimal quantity,
+                                                          String unit, String refKey) {
+        return preview(factoryId, EDGE_FINISHED_TO_SHIPMENT,
+                NODE_FINISHED_BATCH, finishedBatchId,
+                NODE_SHIPMENT_RECORD, shipmentId,
+                quantity, unit, null, refKey, null);
+    }
+
+    /**
+     * 构造一条待写的边；入参不足以构成一条边时返回 {@code null}（调用方记 SKIPPED）。
+     *
+     * <p>⛔ 缺 id 时不兜底造一个 —— 那是假数据，比没有边糟得多。
+     */
+    private BatchLineageEdge buildEdge(String factoryId, String edgeType,
+                                       String sourceType, String sourceId,
+                                       String targetType, String targetId,
+                                       BigDecimal quantity, String unit, Long operatorId,
+                                       String refKey, Map<String, Object> extraMeta) {
+        if (isBlank(factoryId) || isBlank(sourceId) || isBlank(targetId)) {
+            // 「这条业务记录不构成一条边」是合法状态（例：不挂生产批次的手工出库）。
+            log.debug("[lineage] 缺少构成边的 id, 不写边: factory={} edge={} source={}/{} target={}/{}",
+                    factoryId, edgeType, sourceType, sourceId, targetType, targetId);
+            return null;
+        }
+        if (quantity != null && quantity.signum() <= 0) {
+            // 负数/零是冲销或调整，血缘边是 append-only 的，写不进「减少」这个语义。
+            log.debug("[lineage] 数量非正({}), 不写边(append-only 表达不了冲销): edge={} {}→{}",
+                    quantity, edgeType, sourceId, targetId);
+            return null;
+        }
+        BatchLineageEdge edge = new BatchLineageEdge();
+        edge.setFactoryId(factoryId);
+        edge.setEdgeType(edgeType);
+        edge.setSourceType(sourceType);
+        edge.setSourceId(sourceId);
+        edge.setTargetType(targetType);
+        edge.setTargetId(targetId);
+        edge.setQuantityUsed(quantity);
+        edge.setUnit(unit);
+        edge.setEventTime(LocalDateTime.now());
+        edge.setOperatorId(operatorId);
+
+        Map<String, Object> meta = new HashMap<>();
+        if (extraMeta != null) {
+            extraMeta.forEach((k, v) -> {
+                if (k != null && v != null) {
+                    meta.put(k, v);
+                }
+            });
+        }
+        if (!isBlank(refKey)) {
+            meta.put(META_REF_KEY, refKey);
+        }
+        edge.setMeta(meta);
+        return edge;
     }
 
     private static boolean isBlank(String s) {

@@ -20,6 +20,7 @@ import LineageChainTimeline, {
   LINEAGE_TIMELINE_TEST_ID,
   LINEAGE_UNAVAILABLE_TEST_ID,
   LINEAGE_UNAVAILABLE_TEXT,
+  UNNAMED_NODE_TEXT,
 } from '../../screens/traceability/components/LineageChainTimeline';
 import type { LineageSection } from '../../services/api/traceabilityApiClient';
 
@@ -157,8 +158,66 @@ describe('LineageChainTimeline 三态', () => {
       />
     );
 
-    expect(getByText('mb-gone')).toBeTruthy(); // id 是我们真的知道的东西
     expect(getByText('该批次记录已不可查（血缘保留，批次已归档）')).toBeTruthy();
     expect(queryByText('未知批次')).toBeNull();
+  });
+
+  it('🔴 公开侧 nodeId=null ⇒ 用 batchNumber 展示；缺 batchNumber 也⛔不回显内部主键', () => {
+    // 后端在 desensitize 路径上把 nodeId 置成了 null(它是内部数据库主键,
+    // PRODUCTION_BATCH 那一类还是自增整数)。前端原来拿它当兜底标签, 等于又渲染回屏幕上。
+    const { getByText, queryByText } = render(
+      <LineageChainTimeline
+        lineage={{
+          rootType: 'PRODUCTION_BATCH',
+          rootId: '8967',
+          maxDepth: 5,
+          nodeCount: 2,
+          ancestors: [
+            {
+              depth: 1,
+              nodes: [
+                { nodeType: 'MATERIAL_BATCH', nodeId: null, batchNumber: 'MB-PUB-001',
+                  name: '牛腩', resolved: true },
+                { nodeType: 'PRODUCTION_BATCH', nodeId: null, batchNumber: null,
+                  name: null, resolved: true },
+              ],
+            },
+          ],
+        }}
+      />
+    );
+
+    // 「必发生」的那一半：有 batchNumber 的节点照常显示 —— 没有它,
+    // 「屏幕上找不到内部 id」在「整个组件没渲染」时也成立。
+    expect(getByText('MB-PUB-001')).toBeTruthy();
+    // 没有批次号时如实说，不回显任何 id
+    expect(getByText(UNNAMED_NODE_TEXT)).toBeTruthy();
+  });
+
+  it('🔴 内部页上 nodeId 存在, 但它也不该被当成标题兜底（标题只认 batchNumber）', () => {
+    const { getByText, queryByText } = render(
+      <LineageChainTimeline
+        lineage={{
+          rootType: 'PRODUCTION_BATCH',
+          rootId: '8967',
+          maxDepth: 5,
+          nodeCount: 1,
+          ancestors: [
+            {
+              depth: 1,
+              nodes: [
+                { nodeType: 'PRODUCTION_BATCH', nodeId: '8100', batchNumber: null,
+                  name: null, resolved: true },
+              ],
+            },
+          ],
+        }}
+        showSupplier
+      />
+    );
+
+    expect(getByText(UNNAMED_NODE_TEXT)).toBeTruthy();
+    // 这条是会红的那一条：把 `node.batchNumber || node.nodeId` 写回去, 屏幕上就会出现 8100。
+    expect(queryByText('8100')).toBeNull();
   });
 });

@@ -112,10 +112,12 @@ class SalesOrderFulfillmentWarehouseTest {
 
     private void invokeDeduct(String salesOrderId, SalesDeliveryItem item) throws Exception {
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+                // ⚠️ 2026-09-15: 多了 operatorId —— 出货血缘边要记「谁确认的发货」。
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class,
+                Long.class);
         m.setAccessible(true);
         try {
-            m.invoke(salesService, FACTORY_A, salesOrderId, item);
+            m.invoke(salesService, FACTORY_A, salesOrderId, item, 7L);
         } catch (java.lang.reflect.InvocationTargetException e) {
             // Unwrap so callers can catch BusinessException directly.
             if (e.getCause() instanceof RuntimeException) {
@@ -734,9 +736,11 @@ class SalesOrderFulfillmentWarehouseTest {
         item.setUnit("kg");
 
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+                // ⚠️ 2026-09-15: 多了 operatorId —— 出货血缘边要记「谁确认的发货」。
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class,
+                Long.class);
         m.setAccessible(true);
-        m.invoke(mixedUnitService, FACTORY_A, (String) null, item);
+        m.invoke(mixedUnitService, FACTORY_A, (String) null, item, 7L);
 
         // 10kg 目标量换算回批次原生单位(盒): 10 × 1000 / 15 = 666.6666... → HALF_UP scale2 → 666.67盒
         assertEquals(0, new BigDecimal("666.67").compareTo(boxBatch.getShippedQuantity()));
@@ -769,12 +773,14 @@ class SalesOrderFulfillmentWarehouseTest {
         item.setUnit("kg");
 
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+                // ⚠️ 2026-09-15: 多了 operatorId —— 出货血缘边要记「谁确认的发货」。
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class,
+                Long.class);
         m.setAccessible(true);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> {
                     try {
-                        m.invoke(mixedUnitService, FACTORY_A, (String) null, item);
+                        m.invoke(mixedUnitService, FACTORY_A, (String) null, item, 7L);
                     } catch (java.lang.reflect.InvocationTargetException e) {
                         if (e.getCause() instanceof RuntimeException re) throw re;
                         throw new RuntimeException(e);

@@ -30,6 +30,8 @@ export const LINEAGE_UNAVAILABLE_TEST_ID = 'lineage-chain-unavailable';
 
 /** 空态文案 —— 「确实没有上游」。 */
 export const LINEAGE_EMPTY_TEXT = '无上游血缘记录';
+/** 既没有批次号、也不许回显内部主键时的诚实说法。 */
+export const UNNAMED_NODE_TEXT = '未命名批次';
 /** 故障文案 —— 「这一次没取到」，⛔ 与空态不是同一句话。 */
 export const LINEAGE_UNAVAILABLE_TEXT = '来源链暂时取不到，请稍后重试';
 
@@ -54,26 +56,47 @@ export interface LineageChainTimelineProps {
   title?: string;
 }
 
+/**
+ * 节点的稳定标识（testID / React key 用）。
+ * 公开侧 nodeId 为 null，退到 batchNumber；都没有就用类型占位 —— 只影响 key，不渲染给用户。
+ */
+function nodeKey(node: LineageNode): string {
+  return node.nodeId || node.batchNumber || `${node.nodeType}-unknown`;
+}
+
 /** 按 depth 从远到近排（最远的来源排最上面，读起来就是「从哪来 → 到这里」）。 */
 function sortFarToNear(groups: LineageDepthGroup[]): LineageDepthGroup[] {
   return [...groups].sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
+}
+
+/**
+ * 节点标题。
+ *
+ * 🔴 ⛔ **不要拿 nodeId 当兜底**：公开溯源页上后端已经把它置成 null（它是内部数据库主键，
+ * PRODUCTION_BATCH 那一类还是顺序自增整数）。原来这里写的是
+ * `node.batchNumber || node.nodeId`，等于把后端刚遮住的内部 ID 又渲染回屏幕上。
+ * 没有批次号就如实说「未命名批次」——「不知道」比一个内部主键有用得多。
+ */
+function nodeTitle(node: LineageNode): string {
+  if (node.batchNumber) {
+    return node.batchNumber;
+  }
+  return UNNAMED_NODE_TEXT;
 }
 
 function NodeRow({ node, showSupplier }: { node: LineageNode; showSupplier: boolean }) {
   const typeLabel = NODE_TYPE_LABEL[node.nodeType] ?? node.nodeType;
   const icon = NODE_TYPE_ICON[node.nodeType] ?? 'help-circle-outline';
   // resolved === false ⇒ 批次实体查不到（被软删/清理）。
-  // ⛔ 不编名字：显示 id + 一句实话，让「查不到」与「叫什么」区分得开。
+  // ⛔ 不编名字：说一句实话，让「查不到」与「叫什么」区分得开。
   const unresolved = node.resolved === false;
 
   return (
-    <View style={styles.nodeRow} testID={`lineage-node-${node.nodeId}`}>
+    <View style={styles.nodeRow} testID={`lineage-node-${nodeKey(node)}`}>
       <MaterialCommunityIcons name={icon} size={18} color="#666" style={styles.nodeIcon} />
       <View style={styles.nodeBody}>
         <View style={styles.nodeTitleRow}>
-          <Text style={styles.nodeTitle}>
-            {unresolved ? node.nodeId : (node.batchNumber || node.nodeId)}
-          </Text>
+          <Text style={styles.nodeTitle}>{nodeTitle(node)}</Text>
           <Chip compact mode="outlined" style={styles.typeChip} textStyle={styles.typeChipText}>
             {typeLabel}
           </Chip>
@@ -159,7 +182,7 @@ const LineageChainTimeline: React.FC<LineageChainTimelineProps> = ({
               </Text>
             </View>
             {(group.nodes ?? []).map((node) => (
-              <NodeRow key={`${node.nodeType}#${node.nodeId}`} node={node} showSupplier={showSupplier} />
+              <NodeRow key={`${node.nodeType}#${nodeKey(node)}`} node={node} showSupplier={showSupplier} />
             ))}
             {index < groups.length - 1 && <View style={styles.connector} />}
           </View>

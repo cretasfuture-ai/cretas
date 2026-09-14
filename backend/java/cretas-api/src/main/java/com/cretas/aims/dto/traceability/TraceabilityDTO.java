@@ -57,6 +57,11 @@ public class TraceabilityDTO {
     public static class LineageNode {
         /** MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD */
         private String nodeType;
+        /**
+         * 内部批次主键。<b>公开（消费者）接口恒为 null</b> —— 它是数据库主键，
+         * 其中 PRODUCTION_BATCH 是顺序自增 BIGSERIAL，泄漏出去可被枚举、可推断生产节奏。
+         * ⛔ 前端不要拿它当展示文案的兜底，用 batchNumber。
+         */
         private String nodeId;
         private String batchNumber;
         /** 物料名 / 产品名 / 客户名，按 nodeType 取。查不到实体时为 null。 */

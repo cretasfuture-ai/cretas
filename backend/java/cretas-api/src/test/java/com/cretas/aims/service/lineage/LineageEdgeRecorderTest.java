@@ -39,8 +39,16 @@ class LineageEdgeRecorderTest {
     @Mock private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository edgeRepository;
     @Mock private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
 
+    /**
+     * ⚠️ 这里装的是**真的** {@link LineageEdgeWriter}（只有仓库是 mock）。
+     *
+     * <p>不是为了好看：writer 持有幂等判据，把它也 mock 掉这一整组断言就全变成
+     * 「我让 mock 返回什么它就返回什么」。真事务语义（afterCommit / REQUIRES_NEW /
+     * flush 时机）由 {@code LineageEdgeRecorderTransactionContractTest} 在真 H2 上守，
+     * ⛔ 本文件不声称覆盖那一层。
+     */
     private LineageEdgeRecorder newRecorder() {
-        return new LineageEdgeRecorder(edgeRepository,
+        return new LineageEdgeRecorder(new LineageEdgeWriter(edgeRepository),
                 new FinishedBatchProductionAligner(productionBatchRepository));
     }
 
@@ -57,7 +65,7 @@ class LineageEdgeRecorderTest {
                                 && e.getTargetType().equals(inv.getArgument(4))
                                 && e.getTargetId().equals(inv.getArgument(5)))
                         .toList());
-        when(edgeRepository.save(any(BatchLineageEdge.class))).thenAnswer(inv -> {
+        when(edgeRepository.saveAndFlush(any(BatchLineageEdge.class))).thenAnswer(inv -> {
             BatchLineageEdge e = inv.getArgument(0);
             store.add(e);
             return e;
@@ -162,7 +170,7 @@ class LineageEdgeRecorderTest {
                 FACTORY, "mb-1", null, BigDecimal.ONE, "kg", 7L, "consumption:1", null);
 
         assertThat(outcome).isEqualTo(LineageRecordOutcome.SKIPPED);
-        verify(edgeRepository, never()).save(any());
+        verify(edgeRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -172,7 +180,7 @@ class LineageEdgeRecorderTest {
                 FACTORY, "mb-1", 8967L, new BigDecimal("-5"), "kg", 7L, "consumption:9", null);
 
         assertThat(outcome).isEqualTo(LineageRecordOutcome.SKIPPED);
-        verify(edgeRepository, never()).save(any());
+        verify(edgeRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -180,7 +188,7 @@ class LineageEdgeRecorderTest {
     void writeFailureIsFailSoft() {
         when(edgeRepository.findMatchingEdges(anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString())).thenReturn(List.of());
-        when(edgeRepository.save(any(BatchLineageEdge.class)))
+        when(edgeRepository.saveAndFlush(any(BatchLineageEdge.class)))
                 .thenThrow(new RuntimeException("db down"));
 
         LineageRecordOutcome outcome = newRecorder().recordRawToProduction(
@@ -230,7 +238,7 @@ class LineageEdgeRecorderTest {
 
         // AMBIGUOUS 与 SKIPPED 必须分得开: 前者是「有东西但分不出」, 是要报出来的缺口。
         assertThat(outcome).isEqualTo(LineageRecordOutcome.AMBIGUOUS);
-        verify(edgeRepository, never()).save(any());
+        verify(edgeRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -243,14 +251,14 @@ class LineageEdgeRecorderTest {
                 FACTORY, "plan-1", "PT-A", "fg-1", BigDecimal.TEN, "盒", 7L, "finishedBatch:fg-1", null);
 
         assertThat(outcome).isEqualTo(LineageRecordOutcome.SKIPPED);
-        verify(edgeRepository, never()).save(any());
+        verify(edgeRepository, never()).saveAndFlush(any());
     }
 
     // ─────────────────────────────────────────────────────────────────────────
 
     private BatchLineageEdge capture() {
         ArgumentCaptor<BatchLineageEdge> captor = ArgumentCaptor.forClass(BatchLineageEdge.class);
-        verify(edgeRepository).save(captor.capture());
+        verify(edgeRepository).saveAndFlush(captor.capture());
         return captor.getValue();
     }
 

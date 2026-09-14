@@ -346,7 +346,13 @@ public class LineageGraphAssembler {
         TraceabilityDTO.LineageNode toNode(String type, String id, List<BatchLineageEdge> adjacent) {
             TraceabilityDTO.LineageNode.LineageNodeBuilder b = TraceabilityDTO.LineageNode.builder()
                     .nodeType(type)
-                    .nodeId(id)
+                    // 🔴 nodeId 也要受 desensitize 管。它是**内部数据库主键**，
+                    //    而 PRODUCTION_BATCH 的主键是顺序自增 BIGSERIAL —— 未认证的消费者
+                    //    扫一次码就能拿到工厂内部批次表的连续整数, 可枚举、可推断生产节奏。
+                    //    supplierName / 客户名当初都加了守卫, 唯独这一列漏了（漏的正是
+                    //    「看起来只是个技术字段」的那一个）。公开侧一律置 null,
+                    //    前端用 batchNumber 展示, 不依赖它。
+                    .nodeId(desensitize ? null : id)
                     .resolved(false);
             applyEdgeFacts(b, adjacent);
 

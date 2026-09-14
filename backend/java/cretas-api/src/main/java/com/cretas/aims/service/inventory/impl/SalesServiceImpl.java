@@ -3363,7 +3363,9 @@ public class SalesServiceImpl implements SalesService {
 
         // FIFO 扣减成品库存
         for (SalesDeliveryItem item : record.getItems()) {
-            deductFinishedGoodsInventory(factoryId, record.getSalesOrderId(), item);
+            // 🔴 userId 一路透传到血缘边: 出货边的 operator_id 原本硬编码 null,
+            //    审计侧回答不了「这次出货是谁确认的」。
+            deductFinishedGoodsInventory(factoryId, record.getSalesOrderId(), item, userId);
         }
 
         record.setStatus(SalesDeliveryStatus.SHIPPED);
@@ -4464,7 +4466,8 @@ public class SalesServiceImpl implements SalesService {
         }
     }
 
-    private void deductFinishedGoodsInventory(String factoryId, String salesOrderId, SalesDeliveryItem item) {
+    private void deductFinishedGoodsInventory(String factoryId, String salesOrderId,
+                                              SalesDeliveryItem item, Long operatorId) {
         // 🔴 2026-08-12: 物料行(原料/辅料/包材)的货在 material_batches, 不在成品批次里。
         // 在这里分叉后 return, 下面整段成品逻辑(批次分配/FEFO/客户自有库存)一个字不动。
         if (isMaterialLine(factoryId, item.getProductTypeId())) {
@@ -4502,7 +4505,7 @@ public class SalesServiceImpl implements SalesService {
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations =
                     batchAllocationService.listByDeliveryItem(factoryId, String.valueOf(item.getId()));
             if (allocations != null && !allocations.isEmpty()) {
-                deductByAllocations(factoryId, salesOrder, item, allocations);
+                deductByAllocations(factoryId, salesOrder, item, allocations, operatorId);
                 return;
             }
         }
@@ -4579,7 +4582,7 @@ public class SalesServiceImpl implements SalesService {
             BigDecimal deductNative = toNativeDeductAmount(
                     deductInTargetUnit, item, batch, gramsPerUnit, availableNative);
             if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
-            applyShipment(item, batch, deductNative, BigDecimal.ZERO);  // 不释放预留 (扣的是未预留部分)
+            applyShipment(item, batch, deductNative, BigDecimal.ZERO, operatorId);  // 不释放预留 (扣的是未预留部分)
             recordDeductedBatch(item, batch);
             remaining = remaining.subtract(deductInTargetUnit);
         }
@@ -4616,7 +4619,7 @@ public class SalesServiceImpl implements SalesService {
                 BigDecimal deductNative = toNativeDeductAmount(
                         deductInTargetUnit, item, batch, gramsPerUnit, fromReservedNative);
                 if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
-                applyShipment(item, batch, deductNative, deductNative);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
+                applyShipment(item, batch, deductNative, deductNative, operatorId);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
                 // 台账镜像: applyShipment 已把 batch.reserved 减了 deductNative, 这里同步削掉本 SO
                 // 在该批的 ACTIVE 台账行 (只削台账, 不再动 reserved), 维持 reserved == Σ台账 不变式。
                 if (reservationLedgerService != null && salesOrderId != null) {
@@ -4656,7 +4659,8 @@ public class SalesServiceImpl implements SalesService {
      * loud-fail 409 提示重新分配, <b>绝不静默少发或超发</b>。
      */
     private void deductByAllocations(String factoryId, SalesOrder salesOrder, SalesDeliveryItem item,
-            List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations) {
+            List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations,
+            Long operatorId) {
         boolean prestockedCustomerStock = salesOrder != null
                 && salesOrder.getCustomerStockFulfillmentMode()
                 == CustomerStockFulfillmentMode.PRESTOCKED;
@@ -4740,7 +4744,7 @@ public class SalesServiceImpl implements SalesService {
             }
             // PRESTOCKED 发的是本订单台账预留；普通订单仍扣未预留可用量。
             applyShipment(item, batch, shipNative,
-                    prestockedCustomerStock ? shipNative : BigDecimal.ZERO);
+                    prestockedCustomerStock ? shipNative : BigDecimal.ZERO, operatorId);
             if (prestockedCustomerStock) {
                 reservationLedgerService.syncReleaseOnShipment(
                         salesOrder.getId(), batch.getId(), shipNative);
@@ -4822,8 +4826,8 @@ public class SalesServiceImpl implements SalesService {
      * R6 #6: releaseReserved 让发货释放对应预留, 避免 available 双扣低估。
      */
     private void applyShipment(SalesDeliveryItem item, FinishedGoodsBatch batch,
-                               BigDecimal shipQty, BigDecimal releaseReserved) {
-        recordShipmentLineage(item, batch, shipQty);
+                               BigDecimal shipQty, BigDecimal releaseReserved, Long operatorId) {
+        recordShipmentLineage(item, batch, shipQty, operatorId);
         batch.setShippedQuantity(
                 (batch.getShippedQuantity() != null ? batch.getShippedQuantity() : BigDecimal.ZERO).add(shipQty));
         if (releaseReserved.compareTo(BigDecimal.ZERO) > 0) {
@@ -4845,7 +4849,7 @@ public class SalesServiceImpl implements SalesService {
      * 只留一条边；不同发货行发同一批次是两次真实出货，各自成边。
      */
     private void recordShipmentLineage(SalesDeliveryItem item, FinishedGoodsBatch batch,
-                                       BigDecimal shipQty) {
+                                       BigDecimal shipQty, Long operatorId) {
         if (lineageEdgeRecorder == null || item == null || batch == null) {
             return;
         }
@@ -4856,7 +4860,7 @@ public class SalesServiceImpl implements SalesService {
         meta.put("finishedBatchNumber", batch.getBatchNumber());
         lineageEdgeRecorder.recordFinishedToShipment(
                 batch.getFactoryId(), batch.getId(), deliveryRecordId,
-                shipQty, batch.getUnit(), null,
+                shipQty, batch.getUnit(), operatorId,
                 "delivery:" + deliveryRecordId + ":" + batch.getId(), meta);
     }
 

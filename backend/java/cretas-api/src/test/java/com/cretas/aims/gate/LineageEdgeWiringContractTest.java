@@ -109,6 +109,60 @@ class LineageEdgeWiringContractTest {
     }
 
     @Test
+    @DisplayName("出货边必须带上操作人 —— ⛔ 不许把 operatorId 写死成 null")
+    void shipmentEdgeCarriesTheOperator() throws IOException {
+        // 代理判据（说清它看不见什么）：源码里那次调用的第 6 个实参不能是字面 null。
+        // 静态扫描判不出「传进来的 operatorId 运行时是不是真的非空」——
+        // 那一层由 shipDelivery(factoryId, deliveryId, userId) 的签名和
+        // SalesDeliveryRecord.shippedBy 的 NOT NULL 约束共同保证。
+        //
+        // 为什么值得单独一条：这条链上有三层私有方法
+        // (deductFinishedGoodsInventory → applyShipment → recordShipmentLineage)，
+        // 最初谁都没把 userId 往下传，最后一层就硬编码了 null ——
+        // 所有 FINISHED_TO_SHIPMENT 边的 operator_id 永远为空，
+        // 审计侧回答不了「这次出货是谁确认的」，而不会有任何测试因此变红。
+        String source = Files.readString(
+                MAIN_ROOT.resolve("com/cretas/aims/service/inventory/impl/SalesServiceImpl.java"),
+                StandardCharsets.UTF_8);
+        assertThat(source)
+                .as("recordFinishedToShipment 的 operatorId 又被写死成 null 了")
+                .doesNotContain("shipQty, batch.getUnit(), null,");
+        assertThat(source)
+                .as("出货边没有把 operatorId 传下去")
+                .contains("shipQty, batch.getUnit(), operatorId,");
+    }
+
+    @Test
+    @DisplayName("写边必须经 LineageEdgeWriter（独立事务 + 立即 flush），⛔ recorder 不许直接碰仓库")
+    void recorderDelegatesPersistenceToTheTransactionalWriter() throws IOException {
+        String recorderSource = Files.readString(
+                MAIN_ROOT.resolve("com/cretas/aims/service/lineage/LineageEdgeRecorder.java"),
+                StandardCharsets.UTF_8);
+        String writerSource = Files.readString(
+                MAIN_ROOT.resolve("com/cretas/aims/service/lineage/LineageEdgeWriter.java"),
+                StandardCharsets.UTF_8);
+
+        // 🔴 recorder 一旦自己 save，INSERT 会落在**调用方**的事务里：
+        //    ① 调用方回滚 ⇒ 边可能已经写进去（append-only，删不掉）；
+        //    ② 边写失败 ⇒ 把确认发货/自动扣料整单拖挂。
+        assertThat(recorderSource)
+                .as("recorder 不该持有仓库 —— 落库必须过 LineageEdgeWriter 的事务边界")
+                .doesNotContain("edgeRepository");
+        assertThat(recorderSource)
+                .as("有活动事务时必须挂 afterCommit，否则 REQUIRES_NEW 会独立提交出一条假边")
+                .contains("registerSynchronization");
+
+        // 🔴 saveAndFlush 不是风格选择：BatchLineageEdge 的主键是应用赋值 UUID，
+        //    save() 不会立即 flush，异常会推迟到 catch 块之外才发生。
+        assertThat(writerSource)
+                .as("writer 必须 saveAndFlush —— save() 的异常时机在 try/catch 之外")
+                .contains("saveAndFlush");
+        assertThat(writerSource)
+                .as("writer 必须 REQUIRES_NEW —— 否则仍然与调用方同生共死")
+                .contains("Propagation.REQUIRES_NEW");
+    }
+
+    @Test
     @DisplayName("LineageEdgeRecorder 必须是 @Service —— required=false 注入失败是静默的")
     void recorderIsASpringBean() {
         // 🔴 这不是装饰性断言: 7 处写点用的都是 @Autowired(required = false)。

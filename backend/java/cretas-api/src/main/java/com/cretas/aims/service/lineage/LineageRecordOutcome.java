@@ -27,6 +27,17 @@ public enum LineageRecordOutcome {
     /** 新插了一条边。 */
     INSERTED,
 
+    /**
+     * 已登记在「调用方事务提交之后」执行，本次<b>还不知道</b>结果。
+     *
+     * <p>在线业务路径（报工/发货/结单）都会拿到这一态：边必须等业务事务真的提交了才写，
+     * 否则调用方回滚时会留下一条永不消失的假边（本表 append-only，删不掉）。
+     *
+     * <p>⛔ 不要把它折叠进 {@link #INSERTED} —— 那是把「我不知道」翻译成「成功了」。
+     * 回填命令<b>不会</b>拿到这一态（它在无事务上下文里跑，走同步写），所以回填的读数仍然精确。
+     */
+    SCHEDULED,
+
     /** 同幂等键的边已存在，本次不重复写。 */
     ALREADY_EXISTS,
 
@@ -42,5 +53,10 @@ public enum LineageRecordOutcome {
     /** 是否真的新增了一行。 */
     public boolean inserted() {
         return this == INSERTED;
+    }
+
+    /** 这次调用有没有拿到一个确定的结论（SCHEDULED 没有）。 */
+    public boolean decided() {
+        return this != SCHEDULED;
     }
 }

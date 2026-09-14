@@ -92,7 +92,12 @@ export interface ProcessingStageInfo {
 /** 血缘图上的一个节点。 */
 export interface LineageNode {
   nodeType: 'MATERIAL_BATCH' | 'PRODUCTION_BATCH' | 'FINISHED_BATCH' | 'SHIPMENT_RECORD';
-  nodeId: string;
+  /**
+   * 内部批次主键。⚠️ **公开（消费者）接口恒为 null** —— 它是数据库主键，
+   * PRODUCTION_BATCH 那一类还是顺序自增整数，泄漏出去可枚举。
+   * ⛔ 不要拿它当展示文案的兜底，用 batchNumber。
+   */
+  nodeId?: string | null;
   batchNumber?: string | null;
   /** 物料名 / 产品名 / 客户名。⚠️ resolved=false 时恒为 null —— 那是「查不到」不是「没名字」。 */
   name?: string | null;
