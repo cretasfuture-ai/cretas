@@ -17,7 +17,6 @@
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915` — `in-progress` — Owner: Line A(executor) — Base `origin/main` — lineage 的 MATERIAL_BATCH 节点带出源头个体(品种/来源场/DNA 状态/耳标脱敏), 公开接口不出基因库编号/样本号/系谱/完整耳标; RN 时间线显示 + 公开页「本批来自 N 头牛」。周三第 5 幕最后一块。
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。
-- `OPS-LINEAGE-BACKFILL-PROD-20260915` — `in-progress` — Owner: organizer(🔒 prod 写) — 真跑完成 05:35: 边 RAW 325/PROD→FIN 20/FIN→SHIP 28(+WIP 67), 闭包 MATERIAL→FINISHED depth≥2 = 64(原 0), SCHEDULED 0; 公开溯源实测出 ancestors; 对不齐 7(F006 三个多批次计划, 登记跟进)。待第二遍幂等读数(新增 0)后归档。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915` — `in-progress` — Owner: Line B(executor) — Base `origin/main`(含 #791/#793) — 纯 API 演示租户种子脚本(建厂→默认用户→原料/产品/工序→族图 draft+publish→6 头个体+期初批次→计划/报工/成品→标签 traceCode→公开溯源 200), 幂等可重跑, 只在本地跑通; prod 执行归 organizer(🔒 prod 写)。
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
