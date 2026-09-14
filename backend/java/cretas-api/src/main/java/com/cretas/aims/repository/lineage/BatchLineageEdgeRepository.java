@@ -42,6 +42,29 @@ public interface BatchLineageEdgeRepository extends JpaRepository<BatchLineageEd
             @Param("fromTime") LocalDateTime fromTime,
             @Param("toTime") LocalDateTime toTime);
 
+    /**
+     * 幂等检查专用 — 精确定位 (factory, edgeType, source, target) 这一组边.
+     *
+     * <p><b>为什么不把 {@code meta->>'refKey'} 也写进查询</b>: {@code meta} 是 jsonb,
+     * JSON 路径谓词是 PostgreSQL 方言, 而本仓的 JPA slice 测试跑在 H2 上 ——
+     * 把它写进 JPQL 会让闸在 H2 上直接起不来(而那是我们唯一能自动跑的地方)。
+     * 这一组的基数天然极小(同一对批次之间的边通常 0~2 条), 拉回来在 Java 侧按
+     * refKey 比对既准确又便宜。⛔ 不要为了"少一次 Java 循环"把它改成 native query。
+     *
+     * <p>append-only, 不带 deleted_at 过滤 (与本实体其它查询一致, forensic 语义)。
+     */
+    @Query("SELECT e FROM BatchLineageEdge e " +
+           "WHERE e.factoryId = :factoryId " +
+           "AND e.edgeType = :edgeType " +
+           "AND e.sourceType = :sourceType AND e.sourceId = :sourceId " +
+           "AND e.targetType = :targetType AND e.targetId = :targetId")
+    List<BatchLineageEdge> findMatchingEdges(@Param("factoryId") String factoryId,
+                                             @Param("edgeType") String edgeType,
+                                             @Param("sourceType") String sourceType,
+                                             @Param("sourceId") String sourceId,
+                                             @Param("targetType") String targetType,
+                                             @Param("targetId") String targetId);
+
     /** 工厂全部 edges 计数 — 监控指标 dashboard 用. */
     long countByFactoryId(String factoryId);
 
