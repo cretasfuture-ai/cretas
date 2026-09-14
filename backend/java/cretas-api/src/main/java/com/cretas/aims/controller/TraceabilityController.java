@@ -186,6 +186,31 @@ public class TraceabilityController {
     }
 
     /**
+     * 召回影响面 —— 这个批次流向了哪里。
+     *
+     * <p>沿血缘闭包往<b>下游</b>追：被波及的生产批次 / 成品批次 / 出货单（含客户名）三组 + 计数。
+     * 需要认证。
+     *
+     * <p>⛔ 这个端点<b>不会</b>在查不成时返回全 0 —— 召回场景下「没有波及」和「没查成」
+     * 是天差地别的两件事，后者走 4xx/5xx。
+     */
+    @GetMapping("/api/mobile/{factoryId}/traceability/impact/{batchType}/{batchId}")
+    @Operation(summary = "召回影响面查询",
+            description = "沿批次血缘往下游追溯，返回被波及的生产批次、成品批次、出货单（含客户名）三组及其计数。"
+                    + "用于食品安全召回：知道某批原料有问题时，一次问清它进了哪些生产批次、变成了哪些成品、发给了哪些客户。")
+    public ApiResponse<TraceabilityDTO.ImpactResponse> getImpact(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006", required = true) String factoryId,
+            @PathVariable @Parameter(description = "批次类型: MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD",
+                    example = "MATERIAL_BATCH", required = true) String batchType,
+            @PathVariable @Parameter(description = "批次ID（UUID 或生产批次的数字ID）", required = true) String batchId,
+            @RequestParam(defaultValue = "5") @Parameter(description = "最大跳数（1-10）", example = "5") Integer maxDepth) {
+        log.info("召回影响面查询: factoryId={}, batchType={}, batchId={}, maxDepth={}",
+                factoryId, batchType, batchId, maxDepth);
+        return ApiResponse.success(traceabilityService.getImpact(
+                factoryId, batchType, batchId, maxDepth == null ? 0 : maxDepth));
+    }
+
+    /**
      * 公开溯源查询（消费者扫码）
      * 无需认证，返回脱敏的溯源信息
      *

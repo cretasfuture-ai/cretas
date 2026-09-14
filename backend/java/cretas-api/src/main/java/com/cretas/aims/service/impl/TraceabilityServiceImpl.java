@@ -6,6 +6,7 @@ import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.ProcessingStageType;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.EncodingRuleService;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.TraceabilityService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,8 +47,21 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     private final EncodingRuleService encodingRuleService;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 多跳血缘组装器。
+     *
+     * <p>⚠️ 允许为 null：本类在单测里用 {@code @InjectMocks} 构造，不 mock 它时会被塞 null。
+     * 为 null 时 {@code lineage} 字段留 null（表示「本次没拿到血缘」），
+     * ⛔ 不返回一个空的 LineageSection —— 那会让「引擎没接上」长成「确实没有上游」。
+     */
+    private final com.cretas.aims.service.lineage.LineageGraphAssembler lineageGraphAssembler;
+
     /** 溯源码实体类型标识 */
     private static final String TRACE_CODE_ENTITY_TYPE = "TRACE_CODE";
+
+    /** 血缘查询允许的根节点类型（与 BatchLineageEdge.sourceType 取值集一致）。 */
+    private static final Set<String> LINEAGE_ROOT_TYPES = Set.of(
+            "MATERIAL_BATCH", "PRODUCTION_BATCH", "FINISHED_BATCH", "SHIPMENT_RECORD");
 
     @Override
     @Transactional(readOnly = true)
@@ -137,7 +151,11 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         // 7. 生成溯源码（使用工厂ID以支持配置化规则）
         String traceCode = generateTraceCode(factoryId, batchNumber);
 
-        // 8. 构建完整响应
+        // 8. 多跳血缘（加法式新增，既有字段一个不动）
+        TraceabilityDTO.LineageSection lineage = buildLineage(
+                factoryId, "PRODUCTION_BATCH", String.valueOf(batch.getId()), true, false);
+
+        // 9. 构建完整响应
         return TraceabilityDTO.FullTraceResponse.builder()
                 .production(productionInfo)
                 .materials(materials)
@@ -146,6 +164,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .shipments(shipments)
                 .traceCode(traceCode)
                 .queryTime(LocalDateTime.now())
+                .lineage(lineage)
                 .build();
     }
 
@@ -197,7 +216,11 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                     .build();
         }
 
-        // 5. 构建公开响应
+        // 5. 多跳来源链（脱敏：只给 ancestors，节点上不带供应商/客户）
+        TraceabilityDTO.LineageSection lineage = buildLineage(
+                factoryId, "PRODUCTION_BATCH", String.valueOf(batch.getId()), false, true);
+
+        // 6. 构建公开响应
         return TraceabilityDTO.PublicTraceResponse.builder()
                 .productName(batch.getProductName())
                 .batchNumber(batchNumber)
@@ -211,10 +234,56 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .queryTime(LocalDateTime.now())
                 .isValid(true)
                 .message("溯源信息查询成功")
+                .lineage(lineage)
                 .build();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public TraceabilityDTO.ImpactResponse getImpact(String factoryId, String batchType, String batchId,
+                                                    int maxDepth) {
+        String normalizedType = batchType == null ? null : batchType.trim().toUpperCase(Locale.ROOT);
+        if (!LINEAGE_ROOT_TYPES.contains(normalizedType)) {
+            throw new BusinessException(400, "不支持的批次类型: " + batchType)
+                    .withHint("批次类型只能是 MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD")
+                    .withHintTarget("batchType");
+        }
+        if (batchId == null || batchId.isBlank()) {
+            throw new BusinessException(400, "批次 ID 不能为空").withHintTarget("batchId");
+        }
+        if (lineageGraphAssembler == null) {
+            // ⛔ 禁止降级: 召回场景下「查不成」绝不能返回一个全 0 的空壳,
+            //    那会被读成「这批货没发出去过」。
+            throw new BusinessException(503, "血缘引擎未就绪，无法计算召回影响面")
+                    .withHint("请稍后重试；若持续出现请联系管理员检查血缘服务");
+        }
+        return lineageGraphAssembler.assembleImpact(factoryId, normalizedType, batchId, maxDepth);
+    }
+
     // ==================== 私有辅助方法 ====================
+
+    /**
+     * 组装多跳血缘。
+     *
+     * <p>血缘是溯源页的<b>附加</b>信息，组装失败不应该让整张溯源页 500 —— 返回 null 表示
+     * 「本次没拿到血缘」，与「确实没有上游」（返回空 ancestors 的 section）是两个不同的读数，
+     * 前端据此分别显示「暂时取不到」和「无上游血缘记录」。
+     */
+    private TraceabilityDTO.LineageSection buildLineage(String factoryId, String rootType, String rootId,
+                                                        boolean includeDescendants, boolean desensitize) {
+        if (lineageGraphAssembler == null) {
+            return null;
+        }
+        try {
+            return lineageGraphAssembler.assemble(factoryId, rootType, rootId,
+                    com.cretas.aims.service.lineage.LineageGraphAssembler.DEFAULT_MAX_DEPTH,
+                    includeDescendants, desensitize);
+        } catch (Exception e) {
+            log.warn("[lineage] 溯源页血缘组装失败, 本次不带 lineage 字段: factory={} root={}:{}",
+                    factoryId, rootType, rootId, e);
+            return null;
+        }
+    }
 
     /**
      * 构建生产信息

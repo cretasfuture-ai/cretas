@@ -59,6 +59,10 @@ public class ProcessingServiceImpl implements ProcessingService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
 
+    /** RAW_TO_PRODUCTION 血缘边接线点。字段注入理由同上（构造器被大量测试直接 new）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
     private final ProductionBatchRepository productionBatchRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -881,6 +885,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             materialBatchRepository.save(materialBatch);
             inventoryLowStockEventPublisher.publishIfLowStock(factoryId, materialBatch, "OUT");
             materialConsumptionRepository.save(consumptionRecord);
+            recordRawLineage(factoryId, materialBatchId, consumptionRecord.getProductionBatchId(),
+                    quantity, materialBatch.getQuantityUnit(), recordedBy, consumptionRecord.getId());
 
             // 同时计算成本（合并原第二个循环的逻辑）
             BigDecimal cost = quantity.multiply(unitPrice);
@@ -890,6 +896,21 @@ public class ProcessingServiceImpl implements ProcessingService {
         // 更新生产批次的原材料成本
         productionBatch.setMaterialCost(totalMaterialCost);
         productionBatchRepository.save(productionBatch);
+    }
+
+    /** 生产领料的原料→生产批次血缘边写点（本类唯一一处）。 */
+    private void recordRawLineage(String factoryId, String materialBatchId, Long productionBatchId,
+                                  BigDecimal quantity, String unit, Long operatorId,
+                                  Integer consumptionId) {
+        if (lineageEdgeRecorder == null) {
+            return;
+        }
+        java.util.Map<String, Object> meta = new java.util.HashMap<>();
+        meta.put("consumptionSourceType", "PRODUCTION_ISSUE");
+        meta.put("origin", "PROCESSING_SERVICE");
+        lineageEdgeRecorder.recordRawToProduction(factoryId, materialBatchId, productionBatchId,
+                quantity, unit, operatorId,
+                consumptionId == null ? null : "consumption:" + consumptionId, meta);
     }
     // ========== 质量检验 ==========
     /**

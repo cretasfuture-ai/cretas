@@ -232,6 +232,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /**
+     * PRODUCTION_TO_FINISHED 血缘边接线点。required=false 兼容单测（与本类其它可选依赖同款）。
+     *
+     * <p>⚠️ {@code finished_goods_batches} 没有 production_batch_id 列，只有 production_plan_id，
+     * 所以这里走 {@code recordProductionToFinishedByPlan}，由
+     * {@code FinishedBatchProductionAligner} 做「一计划多批次」的二次对齐；对不齐就不写边。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
     /** raw-centric 多成品: 建计划/转批次守卫 —— 断言 owner 启用 workflow 终端覆盖所选成品. required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
@@ -7556,7 +7566,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("Workflow output receipt: " + settlement.getPlanNumber());
-        return finishedGoodsBatchRepository.save(batch);
+        FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
+        recordProductionToFinishedLineage(saved, receiptDelta, receivedBy, "WORKFLOW_OUTPUT_RECEIPT");
+        return saved;
+    }
+
+    /**
+     * 结单/实收两条成品入库路径共用的 PRODUCTION_TO_FINISHED 写边点（本类唯一一处）。
+     *
+     * <p>⛔ 不要在两个 {@code createFinishedGoods*} 方法里各写一份 —— 那正是形态 D
+     * 「同一件事两份实现」，其中一份会先漂。
+     */
+    private void recordProductionToFinishedLineage(FinishedGoodsBatch saved, BigDecimal quantity,
+                                                   Long operatorId, String origin) {
+        if (lineageEdgeRecorder == null || saved == null) {
+            return;
+        }
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("origin", origin);
+        meta.put("finishedBatchNumber", saved.getBatchNumber());
+        lineageEdgeRecorder.recordProductionToFinishedByPlan(
+                saved.getFactoryId(), saved.getProductionPlanId(), saved.getProductTypeId(),
+                saved.getId(), quantity, saved.getUnit(), operatorId,
+                "finishedBatch:" + saved.getId(), meta);
     }
 
     private FinishedGoodsBatch createFinishedGoodsFromReceipt(ProductionPlan plan,
@@ -7628,7 +7660,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
-        return finishedGoodsBatchRepository.save(batch);
+        FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
+        recordProductionToFinishedLineage(saved, received, receivedBy, "SETTLEMENT_WAREHOUSE_RECEIPT");
+        return saved;
     }
 
     /**

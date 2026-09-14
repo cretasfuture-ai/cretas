@@ -87,12 +87,19 @@ class SalesDeliveryHonorBatchAllocationTest {
         return svc;
     }
 
+    private static final Long OPERATOR_ID = 7L;
+
     private void invokeDeduct(SalesServiceImpl svc, SalesDeliveryItem item) throws Exception {
+        // ⚠️ 2026-09-15: 签名多了 operatorId —— 出货血缘边要带上「这次发货是谁确认的」，
+        //    userId 从 shipDelivery 一路透传到 recordShipmentLineage。
+        //    本测试按反射调私有方法，所以签名变了它会以 NoSuchMethodException 当场红（好事：
+        //    它是这条链上唯一会对签名漂移出声的地方）。
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class,
+                Long.class);
         m.setAccessible(true);
         try {
-            m.invoke(svc, FACTORY_A, (String) null, item);
+            m.invoke(svc, FACTORY_A, (String) null, item, OPERATOR_ID);
         } catch (java.lang.reflect.InvocationTargetException e) {
             if (e.getCause() instanceof RuntimeException re) throw re;
             throw e;

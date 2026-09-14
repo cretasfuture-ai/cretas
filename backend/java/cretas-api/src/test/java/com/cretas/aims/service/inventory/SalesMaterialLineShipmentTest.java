@@ -88,10 +88,12 @@ class SalesMaterialLineShipmentTest {
 
     private void invokeDeduct(SalesDeliveryItem item) throws Exception {
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+                // ⚠️ 2026-09-15: 多了 operatorId —— 出货血缘边要记「谁确认的发货」。
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class,
+                Long.class);
         m.setAccessible(true);
         try {
-            m.invoke(salesService, FACTORY, (String) null, item);
+            m.invoke(salesService, FACTORY, (String) null, item, 7L);
         } catch (java.lang.reflect.InvocationTargetException e) {
             if (e.getCause() instanceof RuntimeException re) throw re;
             throw e;

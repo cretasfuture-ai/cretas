@@ -78,6 +78,16 @@ public class SupplyChainOrchestrator {
     private final SellableLineDomainResolver sellableLineDomainResolver;
 
     /**
+     * PRODUCTION_TO_FINISHED 血缘边接线点。字段注入 (required=false) 不改构造器 ——
+     * 本类构造器被单测按位置参数直接 new。
+     *
+     * <p>⚠️ 这是三个成品入库写点里<b>唯一</b>手里直接握着 ProductionBatch 的那个，
+     * 所以它走 {@code recordProductionToFinished} 精确写边，不需要 plan→batch 对齐。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
+    /**
      * doomed-tx 隔离 (2026-08-01 incident) — 见 {@link #expandBomAndCheckMaterialIsolated}.
      * 不用 {@code @Transactional(REQUIRES_NEW)} 私有方法(同类 self-invocation 绕过 AOP 代理不生效),
      * 改用 {@link org.springframework.transaction.support.TransactionTemplate} 编程式开子事务。
@@ -797,7 +807,17 @@ public class SupplyChainOrchestrator {
         } else {
             fg.setWarehouseId(warehouseResolver.resolveWorkshopId(batch.getFactoryId()));
         }
-        return finishedGoodsBatchRepository.save(fg);
+        FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(fg);
+        if (lineageEdgeRecorder != null) {
+            java.util.Map<String, Object> meta = new java.util.HashMap<>();
+            meta.put("origin", "SUPPLY_CHAIN_ORCHESTRATOR");
+            meta.put("finishedBatchNumber", saved.getBatchNumber());
+            lineageEdgeRecorder.recordProductionToFinished(
+                    saved.getFactoryId(), batch.getId(), saved.getId(),
+                    saved.getProducedQuantity(), saved.getUnit(), saved.getCreatedBy(),
+                    "finishedBatch:" + saved.getId(), meta);
+        }
+        return saved;
     }
 
     /**

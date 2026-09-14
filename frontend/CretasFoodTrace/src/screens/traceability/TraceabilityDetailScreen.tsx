@@ -26,6 +26,7 @@ import {
   QualityInfo,
   ShipmentInfo,
 } from '../../services/api/traceabilityApiClient';
+import LineageChainTimeline from './components/LineageChainTimeline';
 
 /**
  * 完整溯源链路详情屏幕
@@ -215,6 +216,12 @@ const TraceabilityDetailScreen: React.FC = () => {
             )}
           </Card.Content>
         </Card>
+
+        {/* === 2.2 来源链（多跳血缘） ===
+            ⚠️ 这一节与「原材料溯源」不是一回事: 上面那张卡只看一层
+            (本批次的 MaterialConsumption)，这里是沿闭包一路往上的多跳链
+            —— 半成品的上一道、上上道原料都在这儿。 */}
+        <LineageChainTimeline lineage={traceData.lineage} showSupplier />
 
         {/* === 2.5 加工环节 === */}
         {traceData.processingStages && traceData.processingStages.length > 0 && (

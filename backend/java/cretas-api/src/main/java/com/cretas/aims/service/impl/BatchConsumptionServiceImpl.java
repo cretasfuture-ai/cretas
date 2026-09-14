@@ -47,6 +47,13 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final WarehouseResolver warehouseResolver;
 
+    /**
+     * RAW_TO_PRODUCTION 血缘边接线点。字段注入 (required=false) 而非构造器参数 ——
+     * 本类构造器被单测按位置参数直接 new，加必需依赖会把它们打红；血缘边是审计旁路。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
     @Override
     // REQUIRES_NEW: 自动扣料失败必须真正"不影响后续流程". 调用方 onBatchCompleted 是 @Transactional,
     // 若本方法用默认 REQUIRED 会加入同一事务, 任一 save 失败(FK/缺料 shortfall 等)就把整个事务标记
@@ -136,6 +143,8 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     consumption.setNotes("BOM自动扣料");
 
                     consumptionRepository.save(consumption);
+                    recordRawLineage(factoryId, alloc.getMaterialBatchId(), batch.getId(),
+                            alloc.getAllocatedQuantity(), SOURCE_AUTO_BOM, recordedBy, consumption.getId());
                     totalMaterialCost = totalMaterialCost.add(cost);
 
                     // 同一物料类型的后续批次，plannedQuantity置0（计划量只在首条记录上）
@@ -253,6 +262,12 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     adj.setSourceType(SOURCE_ADJUSTMENT);
                     adj.setNotes("差异调整(+): " + reason);
                     consumptionRepository.save(adj);
+                    // 正向差异调整 = 真的又从某个原料批次扣了料进这个生产批次
+                    // (上面刚调过 useBatchQuantity)，所以它是一条真实的 RAW_TO_PRODUCTION 边。
+                    // ⚠️ 与之相对，下面那条负数调整是**冲销**，append-only 的边表达不了「减少」，
+                    //    recorder 会按 quantity<=0 判 SKIPPED —— 两者都在 PR 描述里登记。
+                    recordRawLineage(factoryId, mb.getId(), batchId, alloc, SOURCE_ADJUSTMENT,
+                            adj.getRecordedBy(), adj.getId());
 
                     remaining = remaining.subtract(alloc);
                 }
@@ -414,6 +429,21 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
     }
 
     // ===== 内部方法 =====
+
+    /** BOM 自动扣料 / 正向差异调整的原料→生产批次血缘边写点（本类唯一一处）。 */
+    private void recordRawLineage(String factoryId, String materialBatchId, Long productionBatchId,
+                                  BigDecimal quantity, String sourceType, Long operatorId,
+                                  Integer consumptionId) {
+        if (lineageEdgeRecorder == null) {
+            return;
+        }
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("consumptionSourceType", sourceType);
+        meta.put("origin", "BATCH_CONSUMPTION");
+        lineageEdgeRecorder.recordRawToProduction(factoryId, materialBatchId, productionBatchId,
+                quantity, null, operatorId,
+                consumptionId == null ? null : "consumption:" + consumptionId, meta);
+    }
 
     private BigDecimal getUnitPrice(String materialBatchId, String materialTypeId, String factoryId) {
         return materialBatchRepository.findById(materialBatchId)

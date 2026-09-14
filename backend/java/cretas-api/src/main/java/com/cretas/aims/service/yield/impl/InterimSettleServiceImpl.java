@@ -95,6 +95,13 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
 
+    /**
+     * PRODUCTION_TO_FINISHED 血缘边接线点。required=false 不改构造器（本类构造器被单测直接 new）。
+     * 成品只记 production_plan_id，故走 by-plan 对齐；对不齐不写边。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
     @Override
     @Transactional
     public Map<String, Object> interimSettle(String factoryId, String planId, Long userId) {
@@ -577,7 +584,9 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         .findByIdAndFactoryId(productTypeId, plan.getFactoryId()).orElse(null);
                 populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
                 batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库(撤销后重做): " + plan.getPlanNumber());
-                return finishedGoodsBatchRepository.save(batch);
+                FinishedGoodsBatch revived = finishedGoodsBatchRepository.save(batch);
+                recordInterimFinishedLineage(revived, qty, userId, "INTERIM_SETTLE_REVIVED");
+                return revived;
             }
             // 非 REVERSED (真实已产 AVAILABLE/DEPLETED) → 原样返回 (幂等安全网, 不覆盖真实数据)。
             //   注 (2026-07-04): 同次小结多条成品行的累加已在调用方按 productTypeId 预聚合完成 —— 每个产品的
@@ -591,7 +600,30 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         batch.setBatchNumber(batchNumber);
         populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
         batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库: " + plan.getPlanNumber());
-        return finishedGoodsBatchRepository.save(batch);
+        FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
+        recordInterimFinishedLineage(saved, qty, userId, "INTERIM_SETTLE");
+        return saved;
+    }
+
+    /**
+     * 小结成品入库的 PRODUCTION_TO_FINISHED 写边点（本类唯一一处，新建与"复活"共用）。
+     *
+     * <p>复活路径也要写：那条成品批次行是被冲销成 0 之后重新填满的，业务上是一次真实产出。
+     * 幂等键用 finishedBatchId，所以复活写的是同一个 key —— recorder 会判 ALREADY_EXISTS
+     * 而不是造第二条边。
+     */
+    private void recordInterimFinishedLineage(FinishedGoodsBatch saved, BigDecimal quantity,
+                                              Long operatorId, String origin) {
+        if (lineageEdgeRecorder == null || saved == null) {
+            return;
+        }
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("origin", origin);
+        meta.put("finishedBatchNumber", saved.getBatchNumber());
+        lineageEdgeRecorder.recordProductionToFinishedByPlan(
+                saved.getFactoryId(), saved.getProductionPlanId(), saved.getProductTypeId(),
+                saved.getId(), quantity, saved.getUnit(), operatorId,
+                "finishedBatch:" + saved.getId(), meta);
     }
 
     /**

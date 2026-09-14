@@ -119,6 +119,14 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     /** 每道注射工序的绝对注射量配置。 */
     private final BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
+    /**
+     * RAW_TO_PRODUCTION 血缘边接线点。字段注入 (required=false) 不改构造器 ——
+     * 本类的构造器被 50+ 测试文件按位置参数直接 new，加一个必需依赖会把它们全打红，
+     * 而血缘边是审计旁路，不该有那么大的爆炸半径（与上面 byproductBatchMaterializer 同款）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
     // ─────────────────────────────────────────────────────────────
     // Public API
     // ─────────────────────────────────────────────────────────────
@@ -869,6 +877,27 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         c.setConsumedAt(LocalDateTime.now());
         c.setRecordedBy(operatorId);
         consumptionRepo.save(c);
+        recordRawLineage(factoryId, upstreamBatchId, batchId, qty, sourceType, operatorId, c.getId());
+    }
+
+    /**
+     * 文员录入这条路上唯一的原料→生产批次血缘边写点。
+     *
+     * <p>放在 {@link #writeConsumption} 里而不是它的两个调用方
+     * （{@code materializeBatch} / {@code rematerializeInPlace}）里：那两处是同一件事的两份实现，
+     * 边写在哪一份上另一份就漏（形态 D）。这里是它们的汇合点。
+     */
+    private void recordRawLineage(String factoryId, String upstreamBatchId, Long productionBatchId,
+                                  BigDecimal qty, String sourceType, Long operatorId, Integer consumptionId) {
+        if (lineageEdgeRecorder == null) {
+            return;
+        }
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("consumptionSourceType", sourceType);
+        meta.put("origin", "CLERK_PROCESS_ENTRY");
+        lineageEdgeRecorder.recordRawToProduction(factoryId, upstreamBatchId, productionBatchId,
+                qty, null, operatorId,
+                consumptionId == null ? null : "consumption:" + consumptionId, meta);
     }
 
     // ─────────────────────────────────────────────────────────────
