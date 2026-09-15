@@ -1515,6 +1515,11 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SL
 # ═══════════════════════════════════════════════════════════════════════════
 _ALIYUN_ACCOUNTS: frozenset = frozenset({
     "aliyun_a", "aliyun_b", "aliyun_c", "aliyun_a_deepseek",
+    # 🔴 2026-09-15: VL 三账号(#793 新增)漏登 ⇒ `_apply_slot_params` 对 SLOT.VL
+    #    从不下发 enable_thinking=false —— qwen3.8-flash 默认开思考, 真机拍耳标
+    #    实测 389–1048 个 reasoning token, 6–14s, 尾部 >30s 撞三次超时 → 502。
+    #    同图关思考 2.6–4.2s。形态 B: 槽 profile 写了「关」, 账号表没接上。
+    "aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl",
 })
 
 _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
