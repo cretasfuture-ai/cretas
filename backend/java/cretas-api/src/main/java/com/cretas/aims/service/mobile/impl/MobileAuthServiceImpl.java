@@ -3,6 +3,7 @@ package com.cretas.aims.service.mobile.impl;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.PlatformAdmin;
+import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.Whitelist;
 import com.cretas.aims.entity.enums.FactoryUserRole;
@@ -180,9 +181,29 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     }
 
     /**
+     * 工厂关停闸 (2026-09-15). 平台侧 deactivateFactory 把 factories.is_active 置 false,
+     * 但此前登录链路只查 user.isActive, 从不看工厂 —— 停用工厂对登录零效果.
+     * 现在签发/续签令牌前都过这一道: 工厂 inactive 一律 403「当前服务已关闭」.
+     * 文案是用户在 RN / web-admin 登录页看到的全部, 与 JwtAuthInterceptor 的在线会话闸同一句.
+     * 平台管理员不经过这里 (loginAsPlatformAdmin 单独分支, 无工厂).
+     */
+    static final String FACTORY_CLOSED_MESSAGE = "当前服务已关闭";
+
+    private void rejectIfFactoryClosed(User user) {
+        Factory factory = user.getFactory();
+        if (factory != null && Boolean.FALSE.equals(factory.getIsActive())) {
+            log.warn("工厂已关停, 拒绝签发令牌: factoryId={}, username={}", user.getFactoryId(), user.getUsername());
+            throw new BusinessException(403, FACTORY_CLOSED_MESSAGE)
+                    .withHint("该工厂服务已停用, 如有疑问请联系平台管理员");
+        }
+    }
+
+    /**
      * 构建登录响应 (生成令牌 + 更新最后登录时间). unifiedLogin 与 demoLogin 共用.
      */
     private MobileDTO.LoginResponse buildLoginResponse(User user) {
+        rejectIfFactoryClosed(user);
+
         // 生成令牌（包含角色和工厂信息）
         String role = user.getRoleCode() != null ? user.getRoleCode() : "viewer";
         String token = jwtUtil.generateToken(user.getId(), user.getFactoryId(), user.getUsername(), role);
@@ -319,6 +340,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
             Long userId = Long.parseLong(userIdStr);
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+            rejectIfFactoryClosed(user);
 
             String role = user.getRoleCode() != null ? user.getRoleCode() : "viewer";
             String newToken = jwtUtil.generateToken(user.getId(), user.getFactoryId(), user.getUsername(), role);
