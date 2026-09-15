@@ -32,7 +32,7 @@ export interface ToneColors {
 export function statusToneColors(theme: AppTheme, tone: StatusTone): ToneColors {
   switch (tone) {
     case 'success':
-      return { backgroundColor: theme.custom.workflow.doneBg, color: theme.custom.workflow.doneText };
+      return { backgroundColor: theme.custom.workflow.successBg, color: theme.custom.workflow.successText };
     case 'info':
       return { backgroundColor: theme.colors.primaryContainer, color: theme.colors.onPrimaryContainer };
     case 'pending':
