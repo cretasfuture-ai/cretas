@@ -239,13 +239,13 @@ export default function AIChatScreen() {
     screen: { backgroundColor: theme.colors.background },
     onSurface: { color: theme.colors.onSurface },
     muted: { color: theme.colors.onSurfaceVariant },
-    onPrimary: { color: theme.colors.onPrimary },
     onPrimaryContainer: { color: theme.colors.onPrimaryContainer },
     primaryText: { color: theme.colors.primary },
     errorText: { color: theme.colors.error },
     avatar: { backgroundColor: theme.colors.primaryContainer },
     aiBubble: { backgroundColor: theme.colors.surface, ...theme.custom.shadows.small },
-    userBubble: { backgroundColor: theme.colors.primary },
+    // 用户气泡用 primaryContainer/onPrimaryContainer (6.83:1); onPrimary on primary 只有 3.24:1, 正文过不了 AA
+    userBubble: { backgroundColor: theme.colors.primaryContainer },
     suggestedAction: { backgroundColor: theme.colors.primaryContainer, borderColor: theme.colors.primary },
     inputArea: { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.outlineVariant },
     inputWrapper: { backgroundColor: theme.colors.surfaceVariant, borderColor: theme.colors.outline },
@@ -776,7 +776,7 @@ export default function AIChatScreen() {
       return (
         <View key={message.id} style={styles.userMessageRow}>
           <View style={[styles.userMessageBubble, tone.userBubble]}>
-            <Text variant="bodyMedium" style={tone.onPrimary}>{message.content}</Text>
+            <Text variant="bodyMedium" style={tone.onPrimaryContainer}>{message.content}</Text>
           </View>
           <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
         </View>
