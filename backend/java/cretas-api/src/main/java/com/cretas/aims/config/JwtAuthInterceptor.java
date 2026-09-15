@@ -1,9 +1,13 @@
 package com.cretas.aims.config;
 
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.utils.CookieAuthHelper;
 import com.cretas.aims.utils.JwtUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +18,7 @@ import org.springframework.web.servlet.HandlerMapping;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -76,6 +81,25 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
     @Autowired
     private TokenBlacklistService tokenBlacklistService;
+
+    @Autowired
+    private FactoryRepository factoryRepository;
+
+    /**
+     * 工厂关停闸 (2026-09-15). factories.is_active=false 的工厂, 其已签发的 access token
+     * (24h 有效) 也必须被挡, 否则关厂后 App 里已登录的人还能用一整天.
+     * 文案与 MobileAuthServiceImpl.FACTORY_CLOSED_MESSAGE 同一句 —— 用户在登录页看到的
+     * 和被踢出时看到的是同一句话.
+     *
+     * <p>每请求查一次库太贵, 状态按 factoryId 缓存 60s: 关厂最多 1 分钟后全员下线.
+     */
+    static final String FACTORY_CLOSED_MESSAGE = "当前服务已关闭";
+    private static final Duration FACTORY_STATUS_TTL = Duration.ofSeconds(60);
+
+    private final Cache<String, Boolean> factoryClosedCache = Caffeine.newBuilder()
+            .expireAfterWrite(FACTORY_STATUS_TTL)
+            .maximumSize(1_000)
+            .build();
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -141,6 +165,19 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
         // 跨工厂权限验证
         String requestUri = request.getRequestURI();
+
+        // 工厂关停闸: 已登录的工厂用户, 其工厂 is_active=false → 401 踢回登录页.
+        // 公开端点 (登录/刷新) 不在这里挡 —— 服务层 rejectIfFactoryClosed 用同一句话拒.
+        // 401 而非 403 是有意的: 前端对 401 走「refresh → 失败 → 清凭证 → 登录页」,
+        // 403 只会在当前屏弹一条错, 会话仍挂着.
+        if (userId != null && tokenFactoryId != null
+                && !isPlatformPrincipal(tokenFactoryId, tokenRole)
+                && !isPublicEndpoint(requestUri)
+                && isFactoryClosed(tokenFactoryId)) {
+            log.warn("工厂已关停, 拒绝在线会话: userId={}, factoryId={}, uri={}", userId, tokenFactoryId, requestUri);
+            sendUnauthorizedResponse(response, FACTORY_CLOSED_MESSAGE, "该工厂服务已停用, 如有疑问请联系平台管理员");
+            return false;
+        }
 
         // Admin API 权限验证 — 仅允许已认证用户(平台管理员或工厂管理员)访问
         if (requestUri.startsWith("/api/admin/")) {
@@ -219,6 +256,28 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
         // 继续处理请求
         return true;
+    }
+
+    /**
+     * 平台级主体 (PLATFORM 工厂 ID 或平台管理员角色) 不受工厂关停闸约束 —— 关厂是他们操作的.
+     */
+    private boolean isPlatformPrincipal(String tokenFactoryId, String tokenRole) {
+        return "PLATFORM".equals(tokenFactoryId)
+                || (tokenRole != null && PLATFORM_ADMIN_ROLES.contains(tokenRole.toLowerCase()));
+    }
+
+    /**
+     * 工厂是否已关停 (is_active=false). 只认「明确关停」: 工厂行不存在 / isActive 为 null
+     * 一律视为未关停 —— 这道闸不把数据缺口翻译成关停 (那是另一类问题, 由别处报).
+     * 结果按 factoryId 缓存 {@link #FACTORY_STATUS_TTL}.
+     */
+    boolean isFactoryClosed(String factoryId) {
+        Boolean closed = factoryClosedCache.get(factoryId, id ->
+                factoryRepository.findById(id)
+                        .map(Factory::getIsActive)
+                        .map(active -> Boolean.FALSE.equals(active))
+                        .orElse(false));
+        return Boolean.TRUE.equals(closed);
     }
 
     /**
@@ -313,6 +372,11 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
      * severity + actionHint 让前端 axios interceptor ElNotification sticky 处理一致).
      */
     private void sendUnauthorizedResponse(HttpServletResponse response, String message) throws IOException {
+        sendUnauthorizedResponse(response, message, "会话已过期或未登录, 请重新登录");
+    }
+
+    private void sendUnauthorizedResponse(HttpServletResponse response, String message, String actionHint)
+            throws IOException {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType("application/json;charset=UTF-8");
 
@@ -321,7 +385,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         errorResponse.put("code", 401);
         errorResponse.put("message", message);
         errorResponse.put("severity", "error");
-        errorResponse.put("actionHint", "会话已过期或未登录, 请重新登录");
+        errorResponse.put("actionHint", actionHint);
         errorResponse.put("timestamp", java.time.LocalDateTime.now().toString());
 
         ObjectMapper mapper = new ObjectMapper();
