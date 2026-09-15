@@ -71,10 +71,32 @@ WORKFLOWS = [
 
 HOSTED = "    runs-on: ubuntu-latest"
 SELF = "    runs-on: [self-hosted, cretas]"
+# 2026-09-15: 跑 Maven 测试 fork 的 job 必须落在带 `java` 标签的 8G runner 上 ——
+# 同一台 WSL 上另有两个 4G 的 extra runner(给 jest/web 用), 也带 [self-hosted, cretas],
+# JVM 按 cgroup 算默认堆只有 1G, Java Gate 在上面第 61 个类就 `Java heap space`。
+# 托管侧用行尾注释标记, 切回自托管时才知道该还原成哪一种形态(两种形态往返必须逐字还原,
+# scripts/tests/test-java-heavy-jobs-need-8g-runner.sh 钉了这条)。
+SELF_JAVA = "    runs-on: [self-hosted, cretas, java]"
+HOSTED_JAVA = "    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G runner"
+PAIRS = ((SELF, HOSTED), (SELF_JAVA, HOSTED_JAVA))
 
 
 def read(p):
     return io.open(p, "r", encoding="utf-8", newline="").read()
+
+
+def _count_lines(text, literal):
+    """整行相等才算 —— HOSTED 是 HOSTED_JAVA 的前缀, `str.count` 会把后者也数进去。"""
+    return sum(1 for ln in text.split("\n") if ln.rstrip("\r") == literal)
+
+
+def _swap_lines(text, frm, to):
+    """整行替换, 保留每行原有的行尾(\\r\\n / \\n)。"""
+    out = []
+    for ln in text.split("\n"):
+        body = ln.rstrip("\r")
+        out.append(to + ln[len(body):] if body == frm else ln)
+    return "\n".join(out)
 
 
 def current(text):
@@ -85,7 +107,8 @@ def current(text):
     「共享结构只改一处」那种坏法**藏起来**。而多 job 的文件正是最容易半转换的
     (ci.yml 有 4 个 job)。⇒ 两种都数, 同时存在就是显式的坏状态 `mixed`。
     """
-    n_self, n_hosted = text.count(SELF), text.count(HOSTED)
+    n_self = _count_lines(text, SELF) + _count_lines(text, SELF_JAVA)
+    n_hosted = _count_lines(text, HOSTED) + _count_lines(text, HOSTED_JAVA)
     if n_self and n_hosted:
         return "mixed"
     if n_self:
@@ -165,7 +188,8 @@ def main() -> int:
         print("ci-runner: 已经是 %s, 无需改动" % target)
         return 0
 
-    frm, to = (HOSTED, SELF) if target == "self-hosted" else (SELF, HOSTED)
+    # 两对形态各自往返(普通 job / java-heavy job), 方向由 target 决定。
+    pairs = [(h, s) for s, h in PAIRS] if target == "self-hosted" else list(PAIRS)
     changed = 0
     for name in WORKFLOWS:
         p = REPO / ".github" / "workflows" / name
@@ -182,13 +206,15 @@ def main() -> int:
         # ⇒ 改成「至少 1 处, 全部替换」, 并把**每个文件改了几处**打出来 ——
         #   数目是这里唯一能自证「没有只改一半」的东西。
         # ⛔ 不用 assert: `python -O` 会把它整条剥掉, 那样这道防线在某些跑法下不存在。
-        n = s.count(frm)
+        n = sum(_count_lines(s, frm) for frm, _ in pairs)
         if n < 1:
             print("ci-runner: FAIL — %s 里一处 `%s` 都没有(当前状态 %s)"
-                  % (name, frm.strip(), states[name]))
+                  % (name, " / ".join(frm.strip() for frm, _ in pairs), states[name]))
             print("  (已改动 %d 个文件, 工作树现在是**半途状态**, 用 git 看一眼再决定)" % changed)
             return 1
-        io.open(p, "w", encoding="utf-8", newline="").write(s.replace(frm, to))
+        for frm, to in pairs:
+            s = _swap_lines(s, frm, to)
+        io.open(p, "w", encoding="utf-8", newline="").write(s)
         changed += 1
         print("  %-26s -> %s  (%d 处)" % (name, target, n))
 
@@ -197,6 +223,7 @@ def main() -> int:
     print("ci-runner: 已切到 %s。⚠️ 要 commit + push 才生效。" % target)
     if target == "self-hosted":
         print("  自建 runner: 组织级 runner，标签 [self-hosted, cretas]；当前使用隔离 Windows WSL Linux")
+        print("  ⚠️ Maven job 要求额外的 `java` 标签 —— 只有 8G 的 windows-wsl-ci 有; 4G 的 extra runner 上 JVM 默认堆 1G 必 OOM")
         print("  在线检查: gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+\" \"+.status'")
     return 0
 

@@ -50,7 +50,7 @@ concurrency:
 jobs:
   tool-inventory-gate:
     name: Tool descriptor inventory drift gate
-    runs-on: [self-hosted, cretas]
+    runs-on: [self-hosted, cretas, java]
     timeout-minutes: 20
 
     # 不起任何服务容器: 这道闸【不构造也不启动任何 Spring tool bean】, 它把 .java 当文本

@@ -25,3 +25,4 @@ test-java-gate-selector-covers-gate-classes.sh
 test-pipeline-tail-swallows-rc.sh
 test-release-ci-artifact-prewarm.sh
 test-release-jdk-version-preamble.sh
+test-java-heavy-jobs-need-8g-runner.sh
