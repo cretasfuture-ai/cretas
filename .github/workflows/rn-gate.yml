@@ -88,6 +88,15 @@ jobs:
     #    额度耗尽时执行 `python scripts/ci/switch_ci_runner.py self-hosted` 并提交,
     #    额度恢复时 `... hosted`。一条命令改三个文件, 有闸钉着三处一致。
     runs-on: [self-hosted, cretas]
+    # 2026-09-15: 没有超时 + jest 在 CI 下 maxWorkers=50% (WSL 报 16 核 → 8 个 worker, RN 的 jest
+    #   每个 ~1G) → 撞主 runner 的 cgroup MemoryHigh=7G 被节流 → 一个 job 跑了 20 小时, runner 连
+    #   GitHub 的取消指令都收不到 (TLS 超时), 显示 offline, 之后所有 Java job 落到 4G 的 extra 上 OOM。
+    #   两层都修: 超时是兜底, worker 数才是不让它撑爆的那一层 —— 而且必须由 workflow 自己带,
+    #   不能依赖某台 runner 单元里恰好有 JEST_MAX_WORKERS (extra 有、主 runner 没有, 这次就是这么漏的)。
+    #   正常 8 分钟; 30 分钟远高于正常、远低于 GitHub 默认 6 小时。
+    timeout-minutes: 30
+    env:
+      JEST_MAX_WORKERS: 2
     defaults:
       run:
         working-directory: frontend/CretasFoodTrace

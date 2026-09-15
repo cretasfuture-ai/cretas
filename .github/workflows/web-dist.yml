@@ -28,6 +28,8 @@ concurrency:
 jobs:
   web-dist:
     runs-on: [self-hosted, cretas]
+    # 2026-09-15: 自托管 job 一律带超时 (见 rn-gate.yml jest 的 20 小时事故)
+    timeout-minutes: 30
 
     # attestations/id-token 是签 provenance 所必需的; 其余最小。
     # 显式声明会【替换】仓库默认权限, 所以列全: 只有 checkout 需要 contents:read,

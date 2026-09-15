@@ -82,6 +82,17 @@ on:
       - '.github/workflows/jpa-gate-main.yml'
       - '.github/workflows/tool-inventory-gate.yml'
       - 'backend/java/cretas-api/pom.xml'
+      # 2026-09-15: test-selfhosted-jobs-have-timeouts.sh 钉「自托管 job 全带超时 + rn-gate jest 自带 JEST_MAX_WORKERS」
+      - '.github/workflows/rn-gate.yml'
+      - '.github/workflows/web-admin-gate.yml'
+      - '.github/workflows/python-gate.yml'
+      - '.github/workflows/crosslang-contract-gate.yml'
+      - '.github/workflows/source-hygiene.yml'
+      - '.github/workflows/soft-delete-scan-surface.yml'
+      - '.github/workflows/secret-regression.yml'
+      - '.github/workflows/scheduler-canary.yml'
+      - '.github/workflows/artifact-reaper.yml'
+      - '.github/workflows/reap-orphan-testenvs.yml'
   workflow_dispatch:
 
 concurrency:

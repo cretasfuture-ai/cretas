@@ -56,6 +56,8 @@ jobs:
     # 与 web-admin-gate 同一台 runner。runner 路由见 .claude/rules/ci-runner-routing.md,
     # ⛔ 别用 `${{ vars.X }}` —— 实测在 runs-on 里求值为空。
     runs-on: [self-hosted, cretas]
+    # 2026-09-15: 自托管 job 一律带超时 (正常 ≤2 分钟)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
