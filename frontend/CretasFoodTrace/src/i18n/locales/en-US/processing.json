@@ -1312,6 +1312,13 @@
     },
     "aiFailed": "AI analysis failed"
   },
+  "traceability": {
+    "lineage": {
+      "sourceCount": "{{n}} sources",
+      "directSource": "Direct sources",
+      "upstreamLevel": "Sources {{depth}} levels up"
+    }
+  },
   "sourceIndividual": {
     "vision": {
       "title": "Photo verification",
@@ -1370,8 +1377,18 @@
     "dnaStatus": {
       "UNSAMPLED": "Unsampled",
       "SAMPLED": "Sampled",
-      "MATCHED": "Matched",
-      "MISMATCH": "Mismatch"
+      "MATCHED": "DNA matched",
+      "MISMATCH": "DNA mismatch",
+      "meaning": {
+        "UNSAMPLED": "Not sampled yet; the pedigree is only what was registered",
+        "SAMPLED": "Sampled; waiting for the lab result",
+        "MATCHED": "The lab sample matches the registered sire",
+        "MISMATCH": "The lab sample does not match the registered sire: the sample may have been mixed up, or the pedigree entered wrong. Treat its pedigree as unconfirmed for now."
+      },
+      "nextStep": {
+        "MISMATCH": "Next: check the sampling record / resample / correct the registered sire"
+      },
+      "fixSire": "Correct the registered sire"
     },
     "detail": {
       "title": "Individual record",
@@ -1380,6 +1397,7 @@
       "loadFailed": "Failed to load the record details",
       "retry": "Retry",
       "notRegistered": "Not registered",
+      "parentNotRegistered": "No {{parent}} registered",
       "unavailable": "Record no longer available",
       "pedigreeSection": "Pedigree",
       "whereaboutsSection": "Where it went",

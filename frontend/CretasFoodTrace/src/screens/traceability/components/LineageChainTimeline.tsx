@@ -4,6 +4,7 @@ import { Text, Card, Divider, TouchableRipple, useTheme } from 'react-native-pap
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 
 import type { AppTheme } from '../../../theme';
 import type { ProcessingStackParamList } from '../../../types/navigation';
@@ -30,15 +31,25 @@ import { DnaStatusChip, DNA_STATUS_LABEL, dnaStatusLabel } from './dnaStatus';
  *
  * 前两种<b>都不隐藏</b>。隐藏会让「没数据」和「功能坏了」都长成「这块不存在」。
  *
- * <h3>链的视觉语言（2026-09-15 polish）</h3>
+ * <h3>链的视觉语言（2026-09-15 polish，2026-09-16 连线改连续）</h3>
  * 「一段」= 左侧圆点 + 标题（`ChainGroup`），段内每一行 = 左 icon + 正文 + 可进时右 chevron
  * （`ChainRow`）。个体档案屏「去了哪」是同一条链的反向，**复用这两个组件**，
  * ⛔ 别在那边再抄一份样式。颜色全部走 `useTheme()`，本文件里不出现色值。
+ *
+ * 圆点之间的竖线是一条**从这一段圆点画到下一段圆点**的连续线（左侧一根「导轨」，
+ * 线绝对定位、上下都锚在圆点中心），⛔ 不是段与段之间一小截写死高度的短线 ——
+ * 2026-09-16 真机实测那截 14px 的短线与上下圆点都不相连，web 抽屉同一区块是连续线。
+ *
+ * <h3>措辞</h3>
+ * 段标题与计数走 i18n（`traceability.lineage.*`）：「直接来源」「往上第 N 层来源」「来源 N 项」。
+ * ⛔ 不再说「上游节点」「直接上游」「关联边」—— 那是图论词，老板听不懂。N 由后端算，这里只显示。
  */
 
 export const LINEAGE_TIMELINE_TEST_ID = 'lineage-chain-timeline';
 export const LINEAGE_EMPTY_TEST_ID = 'lineage-chain-empty';
 export const LINEAGE_UNAVAILABLE_TEST_ID = 'lineage-chain-unavailable';
+/** 段与段之间那根连续竖线的 testID（每段一根，最后一段没有 ⇒ 数量 = 段数 − 1）。 */
+export const CHAIN_CONNECTOR_TEST_ID = 'chain-group-connector';
 
 /** 空态文案 —— 「确实没有上游」。 */
 export const LINEAGE_EMPTY_TEXT = '无上游血缘记录';
@@ -135,7 +146,7 @@ export function individualDetailId(node: LineageNode): string | null {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ChainGroupProps {
-  /** 段标题：「直接上游」「上游第 2 跳」「原料批次」「出货」…… */
+  /** 段标题：「直接来源」「往上第 2 层来源」「原料批次」「出货」…… */
   label: string;
   testID?: string;
   /** 最后一段下面不画连线。 */
@@ -143,29 +154,47 @@ export interface ChainGroupProps {
   children: React.ReactNode;
 }
 
+/** 圆点直径 / 连线宽度 / 圆点离段顶部的距离（对齐 labelLarge 一行 20sp 的中心）。 */
+const DOT_SIZE = 8;
+const LINE_WIDTH = 2;
+const DOT_TOP = 6;
+/** 圆点中心离段顶部的距离 —— 连线的上端锚在这里，下端越过段底边同样的距离，落在下一段的圆点中心。 */
+const DOT_CENTER = DOT_TOP + DOT_SIZE / 2;
+
 /**
- * 链上的一段：左侧圆点（primary）+ 标题（labelLarge，onSurfaceVariant），
- * 段与段之间一根短连线。标题不是可点元素，⛔ 不用 primary 上色（蓝色只给可点的东西）。
+ * 链上的一段：左侧一根「导轨」（圆点 primary + 连续竖线）+ 右侧正文
+ * （标题 labelLarge，onSurfaceVariant；然后是段内的行）。
+ *
+ * 竖线**从本段圆点中心一直画到下一段圆点中心**：绝对定位在导轨里，`top` 锚在圆点中心，
+ * `bottom` 为负、越过本段底边刚好到下一段的圆点中心。段有多高线就多长，
+ * ⛔ 不写死高度（写死就回到「中间一小截、上下都不相连」）。最后一段不画。
+ *
+ * 标题不是可点元素，⛔ 不用 primary 上色（蓝色只给可点的东西）。
  */
 export function ChainGroup({ label, testID, last = false, children }: ChainGroupProps) {
   const theme = useTheme<AppTheme>();
   return (
-    <View testID={testID}>
-      <View style={[styles.groupHeader, { gap: theme.custom.spacing.s }]}>
+    <View testID={testID} style={styles.group}>
+      <View style={styles.rail}>
+        {!last && (
+          <View
+            testID={CHAIN_CONNECTOR_TEST_ID}
+            style={[styles.connector, { backgroundColor: theme.custom.workflow.connector }]}
+          />
+        )}
         <View style={[styles.groupDot, { backgroundColor: theme.colors.primary }]} />
+      </View>
+      <View
+        style={[
+          styles.groupBody,
+          { paddingLeft: theme.custom.spacing.s, paddingBottom: last ? 0 : theme.custom.spacing.m },
+        ]}
+      >
         <Text variant="labelLarge" style={{ color: theme.colors.onSurfaceVariant }}>
           {label}
         </Text>
+        {children}
       </View>
-      {children}
-      {!last && (
-        <View
-          style={[
-            styles.connector,
-            { backgroundColor: theme.custom.workflow.connector, marginVertical: theme.custom.spacing.xs },
-          ]}
-        />
-      )}
     </View>
   );
 }
@@ -184,6 +213,7 @@ export interface ChainRowProps {
 /**
  * 链上的一行：左 icon、中间正文、可进时右侧 chevron。
  * 可点的行**整行**是触控目标（minHeight 48），⛔ 不再用一行蓝字当链接。
+ * 左边不再自己缩进 —— 与段标题对齐由 `ChainGroup` 的导轨 + 正文列负责。
  */
 export function ChainRow({ icon, iconLabel, testID, onPress, chevronTestID, children }: ChainRowProps) {
   const theme = useTheme<AppTheme>();
@@ -194,7 +224,6 @@ export function ChainRow({ icon, iconLabel, testID, onPress, chevronTestID, chil
         {
           gap: theme.custom.spacing.m,
           paddingVertical: theme.custom.spacing.s,
-          paddingLeft: theme.custom.spacing.l,
         },
       ]}
     >
@@ -365,6 +394,7 @@ const LineageChainTimeline: React.FC<LineageChainTimelineProps> = ({
   title = '来源链',
 }) => {
   const theme = useTheme<AppTheme>();
+  const { t } = useTranslation('processing');
   const cardStyle = [
     styles.card,
     { marginHorizontal: theme.custom.spacing.l, marginBottom: theme.custom.spacing.m, borderRadius: theme.custom.borderRadius.m },
@@ -372,11 +402,14 @@ const LineageChainTimeline: React.FC<LineageChainTimelineProps> = ({
   const dividerStyle = { marginVertical: theme.custom.spacing.m };
   const emptyTextStyle = { color: theme.colors.onSurfaceVariant, paddingVertical: theme.custom.spacing.s };
 
+  // 「来源 N 项」—— N 是后端按真实节点算的 nodeCount，这里只显示，⛔ 不在前端重新数。
   const header = (
     <SectionHeader
       icon="file-tree-outline"
       title={title}
-      trailing={!!lineage && lineage.nodeCount > 0 ? `${lineage.nodeCount} 个上游节点` : null}
+      trailing={
+        !!lineage && lineage.nodeCount > 0 ? t('traceability.lineage.sourceCount', { n: lineage.nodeCount }) : null
+      }
     />
   );
 
@@ -418,7 +451,11 @@ const LineageChainTimeline: React.FC<LineageChainTimelineProps> = ({
           <ChainGroup
             key={`depth-${group.depth}`}
             testID={`lineage-depth-${group.depth}`}
-            label={group.depth === 1 ? '直接上游' : `上游第 ${group.depth} 跳`}
+            label={
+              group.depth === 1
+                ? t('traceability.lineage.directSource')
+                : t('traceability.lineage.upstreamLevel', { depth: group.depth })
+            }
             last={index === groups.length - 1}
           >
             {(group.nodes ?? []).map((node) => (
@@ -435,10 +472,21 @@ const styles = StyleSheet.create({
   card: {},
   sectionHeader: { flexDirection: 'row', alignItems: 'center' },
   sectionTitle: { flex: 1 },
-  groupHeader: { flexDirection: 'row', alignItems: 'center' },
-  groupDot: { width: 8, height: 8, borderRadius: 4 },
-  // 连线对齐圆点中心（圆点 8 宽，线 2 宽 ⇒ 左移 3）
-  connector: { width: 2, height: 14, marginLeft: 3 },
+  group: { flexDirection: 'row', alignItems: 'stretch' },
+  // 导轨：与段同高（stretch），线是绝对定位、可以越出下边界去接下一段的圆点
+  rail: { width: DOT_SIZE, overflow: 'visible' },
+  groupBody: { flex: 1 },
+  groupDot: { width: DOT_SIZE, height: DOT_SIZE, borderRadius: DOT_SIZE / 2, marginTop: DOT_TOP },
+  // 连线：横向对齐圆点中心（圆点 8 宽，线 2 宽 ⇒ 左移 3）；
+  // 纵向从本段圆点中心（top）到下一段圆点中心（bottom 为负、越过本段底边同样的距离）。
+  // ⛔ 不写 height —— 段有多高线就多长，这正是「连续」的全部含义。
+  connector: {
+    position: 'absolute',
+    width: LINE_WIDTH,
+    left: (DOT_SIZE - LINE_WIDTH) / 2,
+    top: DOT_CENTER,
+    bottom: -DOT_CENTER,
+  },
   rowTouchable: { minHeight: 48, justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center' },
   rowIcon: { alignSelf: 'flex-start', marginTop: 2 },

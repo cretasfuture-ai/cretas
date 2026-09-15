@@ -1310,6 +1310,13 @@
     },
     "aiFailed": "AI分析失败"
   },
+  "traceability": {
+    "lineage": {
+      "sourceCount": "来源 {{n}} 项",
+      "directSource": "直接来源",
+      "upstreamLevel": "往上第 {{depth}} 层来源"
+    }
+  },
   "sourceIndividual": {
     "vision": {
       "title": "拍照核验",
@@ -1368,8 +1375,18 @@
     "dnaStatus": {
       "UNSAMPLED": "未采样",
       "SAMPLED": "已采样",
-      "MATCHED": "已比中",
-      "MISMATCH": "不符"
+      "MATCHED": "DNA 已比中",
+      "MISMATCH": "DNA 不匹配",
+      "meaning": {
+        "UNSAMPLED": "还没采样，系谱只是登记的",
+        "SAMPLED": "已采样，等实验室结果",
+        "MATCHED": "送检样本与登记的父本比对一致",
+        "MISMATCH": "送检样本与登记的父本对不上：可能是样本弄混，也可能是系谱填错。它的血缘先按未确认处理。"
+      },
+      "nextStep": {
+        "MISMATCH": "下一步：核对采样记录 / 重新采样 / 改登记的父本"
+      },
+      "fixSire": "去改登记的父本"
     },
     "detail": {
       "title": "个体档案",
@@ -1378,6 +1395,7 @@
       "loadFailed": "档案详情读取失败",
       "retry": "重试",
       "notRegistered": "未登记",
+      "parentNotRegistered": "未登记{{parent}}",
       "unavailable": "档案已不可查",
       "pedigreeSection": "系谱",
       "whereaboutsSection": "去了哪",

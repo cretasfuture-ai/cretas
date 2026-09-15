@@ -26,6 +26,7 @@ import {
   type SourceIndividual,
 } from '../../services/api/sourceIndividualApiClient';
 import type { ProcessingStackParamList } from '../../types/navigation';
+import { dnaStatusText } from '../traceability/components/dnaStatus';
 
 type Nav = NativeStackNavigationProp<ProcessingStackParamList, 'SourceIndividualForm'>;
 type Route = RouteProp<ProcessingStackParamList, 'SourceIndividualForm'>;
@@ -418,7 +419,8 @@ export default function SourceIndividualFormScreen() {
             style={styles.statusButton}
             compact
           >
-            {t(`sourceIndividual.dnaStatus.${status}`)}
+            {/* 与档案 / 时间线 / 拍照核验同一份文案 (dnaStatus.tsx → processing.json), ⛔ 不自己拼键 */}
+            {dnaStatusText(t, status)}
           </Button>
         ))}
       </View>
