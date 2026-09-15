@@ -6,6 +6,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import {
+  Appbar,
   Text,
   Card,
   Surface,
@@ -14,9 +15,11 @@ import {
   useTheme,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { AppTheme } from '../../theme';
+import { formatDateTime, formatTime } from '../../utils/formatters';
 import {
   traceabilityApiClient,
   FullTraceResponse,
@@ -150,6 +153,10 @@ export function shipmentStatusTone(status?: string | null): StatusTone {
  */
 const TraceabilityDetailScreen: React.FC = () => {
   const theme = useTheme<AppTheme>();
+  const navigation = useNavigation<{ goBack: () => void }>();
+  // 本文件其余文案仍是硬编码中文(2026-09-15 前的存量, 不在本次范围); 标题栏这两句走 common 里
+  // 已有的键(`traceability.detail.title` / `buttons.back`), 没有新造键。
+  const { t } = useTranslation('common');
   const route = useRoute<any>();
   const { batchNumber, traceCode: scannedTraceCode } = (route.params || {}) as {
     batchNumber?: string;
@@ -217,33 +224,64 @@ const TraceabilityDetailScreen: React.FC = () => {
   const { spacing, borderRadius } = theme.custom;
   const cardStyle = [styles.card, { marginBottom: spacing.l, borderRadius: borderRadius.m }];
   const dividerStyle = { marginVertical: spacing.m };
+  const containerStyle = [styles.container, { backgroundColor: theme.colors.background }];
+
+  /**
+   * 两个导航栈（BossNavigator / ProcessingStackNavigator）都是 headerShown: false，
+   * 屏幕自己出标题栏（范本 SourceIndividualDetailScreen）。2026-09-15 真机：详情页顶部直接是
+   * 溯源码卡，没标题没返回 —— 四个分支（加载 / 出错 / 无数据 / 正文）都得有这一条，
+   * 否则「未找到该批次」那一屏用户就卡死在那里。
+   * 标题优先用批次号（用户刚输入 / 扫进来的那个），没有批次号时退回「溯源详情」。
+   */
+  const header = (
+    <Appbar.Header>
+      <Appbar.BackAction
+        testID="trace-detail-back"
+        accessibilityLabel={t('buttons.back')}
+        onPress={() => navigation.goBack()}
+      />
+      <Appbar.Content
+        testID="trace-detail-title"
+        title={traceData?.production.batchNumber || batchNumber || t('traceability.detail.title')}
+      />
+    </Appbar.Header>
+  );
 
   if (loading) {
     return (
-      <View style={[styles.centerContainer, { padding: spacing.xl }]}>
-        <ActivityIndicator size="large" />
-        <Text variant="bodyMedium" style={{ marginTop: spacing.m, color: theme.colors.onSurfaceVariant }}>
-          正在加载溯源数据...
-        </Text>
+      <View style={containerStyle}>
+        {header}
+        <View style={[styles.centerContainer, { padding: spacing.xl }]}>
+          <ActivityIndicator size="large" />
+          <Text variant="bodyMedium" style={{ marginTop: spacing.m, color: theme.colors.onSurfaceVariant }}>
+            正在加载溯源数据...
+          </Text>
+        </View>
       </View>
     );
   }
 
   if (error) {
     return (
-      <View style={[styles.centerContainer, { padding: spacing.xl }]}>
-        <MaterialCommunityIcons name="alert-circle-outline" size={64} color={theme.colors.error} />
-        <Text variant="bodyLarge" style={[styles.errorText, { marginTop: spacing.m, color: theme.colors.error }]}>
-          {error}
-        </Text>
+      <View style={containerStyle}>
+        {header}
+        <View style={[styles.centerContainer, { padding: spacing.xl }]}>
+          <MaterialCommunityIcons name="alert-circle-outline" size={64} color={theme.colors.error} />
+          <Text variant="bodyLarge" style={[styles.errorText, { marginTop: spacing.m, color: theme.colors.error }]}>
+            {error}
+          </Text>
+        </View>
       </View>
     );
   }
 
   if (!traceData) {
     return (
-      <View style={[styles.centerContainer, { padding: spacing.xl }]}>
-        <Text variant="bodyMedium">无数据</Text>
+      <View style={containerStyle}>
+        {header}
+        <View style={[styles.centerContainer, { padding: spacing.xl }]}>
+          <Text variant="bodyMedium">无数据</Text>
+        </View>
       </View>
     );
   }
@@ -267,8 +305,10 @@ const TraceabilityDetailScreen: React.FC = () => {
   const codeLabelStyle = { marginLeft: spacing.s, color: theme.colors.onSurfaceVariant };
   const codeValueStyle = [styles.traceCode, { color: theme.colors.onSurface }];
 
+  // 顶部安全区由 Appbar.Header 自己处理（它读 safe-area insets），SafeAreaView 只管底部。
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]} edges={['bottom']}>
+    <SafeAreaView style={containerStyle} edges={['bottom']}>
+      {header}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={{ padding: spacing.l, paddingBottom: spacing.xxl }}
@@ -464,13 +504,18 @@ const TraceabilityDetailScreen: React.FC = () => {
           </Text>
         )}
 
-        {/* 查询时间 */}
-        <Text
-          variant="bodySmall"
-          style={[styles.emptyText, { color: theme.colors.onSurfaceVariant, marginTop: spacing.s }]}
-        >
-          查询时间: {traceData.queryTime ? new Date(traceData.queryTime).toLocaleString() : '-'}
-        </Text>
+        {/* 查询时间 —— 走 utils/formatters 的 "YYYY-MM-DD HH:mm"（2026-09-15 真机：
+            toLocaleString() 打出 "9/15/2026, 6:46:38 PM"，是整屏唯一一处英文日期）。
+            没有 queryTime 就整行不出现，⛔ 不显示占位横杠。 */}
+        {!!formatDateTime(traceData.queryTime) && (
+          <Text
+            variant="bodySmall"
+            style={[styles.emptyText, { color: theme.colors.onSurfaceVariant, marginTop: spacing.s }]}
+            testID="trace-query-time"
+          >
+            查询时间 {formatDateTime(traceData.queryTime)}
+          </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -557,10 +602,11 @@ const ProcessingStageCard: React.FC<{ stage: ProcessingStageInfo; isLast: boolea
     {stage.lossRate != null && <Detail>损耗率: {(stage.lossRate * 100).toFixed(1)}%</Detail>}
     {stage.passRate != null && <Detail>合格率: {(stage.passRate * 100).toFixed(1)}%</Detail>}
     {stage.temperature != null && <Detail>温度: {stage.temperature}°C</Detail>}
-    {stage.startTime && (
+    {/* 与底部「查询时间」同一把尺子（formatters），⛔ 不再 toLocaleString —— 那会打出英文日期。 */}
+    {!!formatDateTime(stage.startTime) && (
       <Detail>
-        时间: {new Date(stage.startTime).toLocaleString()}
-        {stage.endTime ? ` ~ ${new Date(stage.endTime).toLocaleTimeString()}` : ''}
+        时间: {formatDateTime(stage.startTime)}
+        {formatTime(stage.endTime) ? ` ~ ${formatTime(stage.endTime)}` : ''}
       </Detail>
     )}
   </ItemFrame>

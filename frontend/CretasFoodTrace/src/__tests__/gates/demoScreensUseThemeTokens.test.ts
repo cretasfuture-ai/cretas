@@ -14,22 +14,25 @@
  * 变异对照（2026-09-15 做过）：在 LineageChainTimeline 的 StyleSheet 里写回一个
  * `backgroundColor: '#5D4037'` ⇒ ① 红（并把文件名与那一段打出来）。
  *
- * ## 故意不扫的（硬约束 8：登记是留痕，不是豁免）
- * - `screens/shared/VisionVerifyScreen.tsx`：本次只改了 DNA 状态那一处，其余 8 个 hex
- *   （`#f5f7fa` / `#718096` …）是存量，不在本任务范围。要扫它得先把那些换掉。
+ * 2026-09-16（demo-nav-shell）：`screens/shared/VisionVerifyScreen.tsx` 原本登记在「故意不扫」
+ * 里（存量 7 个 hex：`#f5f7fa` / `#718096`×3 / `#4a5568` / `#c05621` / `#fefcbf`）。
+ * 本轮把它们全部换成 token 后加进 GUARDED_FILES；变异对照：在它的 StyleSheet 里写回
+ * `container: { flex: 1, backgroundColor: '#f5f7fa' }` ⇒ ① 红。
+ * 「故意不扫」清单现在为空 —— 再要豁免文件，按硬约束 8 在这里登记并写理由。
  */
 import fs from 'fs';
 import path from 'path';
 
 const SRC = path.resolve(__dirname, '../..');
 
-/** 被守的文件：三个屏 + 两个溯源组件 + 两个色板文件（色板自己更不许有色值）。 */
+/** 被守的文件：四个屏 + 两个溯源组件 + 两个色板文件（色板自己更不许有色值）。 */
 export const GUARDED_FILES = [
   'screens/factory-admin/home/BossOverviewScreen.tsx',
   'screens/traceability/TraceabilityDetailScreen.tsx',
   'screens/traceability/components/LineageChainTimeline.tsx',
   'screens/traceability/components/SourceIndividualBanner.tsx',
   'screens/shared/SourceIndividualDetailScreen.tsx',
+  'screens/shared/VisionVerifyScreen.tsx',
   'screens/traceability/components/dnaStatus.tsx',
   'screens/traceability/components/statusTone.tsx',
 ] as const;
