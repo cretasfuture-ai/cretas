@@ -480,6 +480,17 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<MaterialBatch> findByFactoryIdAndSupplierId(String factoryId, String supplierId);
 
     /**
+     * 挂在某个源头个体(牛/猪/鸭…)上的全部原料批次, 最近入库的在前。
+     *
+     * <p>个体详情页「它去了哪些批次」的第一跳; 再往下(生产批次/成品/出货)走血缘闭包,
+     * ⛔ 不在这里 join。软删过滤由实体上的 {@code @Where} 负责。
+     *
+     * @since 2026-09-15 (FEAT-RN-SOURCE-INDIVIDUAL-DETAIL-20260915)
+     */
+    List<MaterialBatch> findByFactoryIdAndSourceIndividualIdOrderByReceiptDateDesc(
+            String factoryId, String sourceIndividualId);
+
+    /**
      * 计算库存总值 (排除 PRODUCTION_BATCH 来源的 WIP 批次).
      * SP-D Fix 1b: WIP MaterialBatch 是内部成本路由工件, 不计入原料库存价值.
      */
