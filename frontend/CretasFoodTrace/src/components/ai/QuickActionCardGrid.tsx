@@ -146,7 +146,7 @@ const QuickActionCardGrid: React.FC<QuickActionCardGridProps> = (props) => {
           activeOpacity={0.7}
           onPress={card.action}
         >
-          <View style={[styles.iconContainer, iconTone]}>
+          <View testID={`quick-action-icon-${index}`} style={[styles.iconContainer, iconTone]}>
             <MaterialCommunityIcons name={card.icon} size={36} color={theme.colors.onPrimaryContainer} />
           </View>
           <Text

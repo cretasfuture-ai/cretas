@@ -25,7 +25,10 @@ import path from 'path';
 
 const SRC = path.resolve(__dirname, '../..');
 
-/** 被守的文件：四个屏 + 两个溯源组件 + 两个色板文件（色板自己更不许有色值）。 */
+/**
+ * 被守的文件：四个屏 + 两个溯源组件 + 两个色板文件（色板自己更不许有色值）
+ * + 溯源入口 / 只读个体列表 + AI 问答屏与它的快捷卡组（2026-09-16 第五幕 polish：62 hex / 17 fontSize → 0）。
+ */
 export const GUARDED_FILES = [
   'screens/factory-admin/home/BossOverviewScreen.tsx',
   'screens/traceability/TraceabilityDetailScreen.tsx',
@@ -38,6 +41,9 @@ export const GUARDED_FILES = [
   // 2026-09-16 (demo-entry-list): 溯源入口重做 + 新建只读个体列表, 两屏从写下第一行起就在闸里。
   'screens/traceability/TraceabilityScreen.tsx',
   'screens/shared/SourceIndividualListScreen.tsx',
+  // 2026-09-16 (demo-ai-chat): AI 问答屏 + 快捷卡组, 62 hex / 17 fontSize 清零后登记。
+  'screens/factory-admin/ai-analysis/AIChatScreen.tsx',
+  'components/ai/QuickActionCardGrid.tsx',
 ] as const;
 
 const HEX6 = /#[0-9A-Fa-f]{6}\b/g;
