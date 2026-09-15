@@ -823,7 +823,23 @@
     "networkError": "网络连接失败，请检查网络后重试",
     "defaultReply": "好的，我已收到您的消息。",
     "quickModeHint": "即时响应",
-    "deepModeHint": "AI 将深度思考，预计 15-25 秒"
+    "deepModeHint": "AI 将深度思考，预计 15-25 秒",
+    "cancel": "取消",
+    "tapToSpeak": "点一下说话",
+    "send": "发送",
+    "switchToKeyboard": "切换到键盘输入",
+    "inputLabel": "问题输入框",
+    "cattleCards": {
+      "batchOrigin": "这批来自哪几头牛",
+      "batchOriginDesc": "输入批次号查来源牛只",
+      "offspring": "这头牛的后代",
+      "offspringDesc": "查个体档案与后代",
+      "dnaMismatch": "谁 DNA 不匹配",
+      "dnaMismatchDesc": "列出比对不匹配的牛",
+      "dnaMismatchIntent": "哪一头牛的 DNA 比对不匹配",
+      "earTag": "拍耳标认牛",
+      "earTagDesc": "拍照核验耳标"
+    }
   },
   "aiReport": {
     "title": "AI 分析报告",

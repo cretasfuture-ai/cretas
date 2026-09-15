@@ -11,7 +11,6 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TextInput,
@@ -22,8 +21,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
-import { IconButton } from 'react-native-paper';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Text, useTheme } from 'react-native-paper';
+import type { AppTheme } from '../../../theme';
 import { useTranslation } from 'react-i18next';
 import i18next from 'i18next';
 import { aiService, detectAnalysisMode } from '../../../services/ai';
@@ -233,6 +232,28 @@ export default function AIChatScreen() {
   const isRestaurantMode = isRestaurant(user);
   const { t, i18n } = useTranslation('home');
   const scrollViewRef = useRef<ScrollView>(null);
+  const theme = useTheme<AppTheme>();
+  // 颜色层: 布局在文件底部的 StyleSheet, 颜色全部从这里取 token, 渲染时合并。
+  // ⛔ 本文件不许出现 #RRGGBB / fontSize: 10..13 (闸: gates/demoScreensUseThemeTokens)。
+  const tone = useMemo(() => ({
+    screen: { backgroundColor: theme.colors.background },
+    onSurface: { color: theme.colors.onSurface },
+    muted: { color: theme.colors.onSurfaceVariant },
+    onPrimary: { color: theme.colors.onPrimary },
+    onPrimaryContainer: { color: theme.colors.onPrimaryContainer },
+    primaryText: { color: theme.colors.primary },
+    errorText: { color: theme.colors.error },
+    avatar: { backgroundColor: theme.colors.primaryContainer },
+    aiBubble: { backgroundColor: theme.colors.surface, ...theme.custom.shadows.small },
+    userBubble: { backgroundColor: theme.colors.primary },
+    suggestedAction: { backgroundColor: theme.colors.primaryContainer, borderColor: theme.colors.primary },
+    inputArea: { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.outlineVariant },
+    inputWrapper: { backgroundColor: theme.colors.surfaceVariant, borderColor: theme.colors.outline },
+    voicePreview: { backgroundColor: theme.colors.primaryContainer, borderBottomColor: theme.colors.outlineVariant },
+    primaryButton: { backgroundColor: theme.colors.primary },
+    primaryButtonIdle: { backgroundColor: theme.colors.primaryContainer },
+    subtleButton: { backgroundColor: theme.colors.surfaceVariant },
+  }), [theme]);
 
   // 从路由参数获取场景类型
   const params = route.params as Record<string, any> | undefined;
@@ -256,7 +277,6 @@ export default function AIChatScreen() {
   const [inputText, setInputText] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [quotaRemaining, setQuotaRemaining] = useState<number | null>(null);
 
   // P1: Voice-first input mode
   const [showKeyboard, setShowKeyboard] = useState(false);
@@ -295,19 +315,36 @@ export default function AIChatScreen() {
   }, []);
 
   // P2: Handle card grid actions
-  const handleCardNavigate = useCallback((screen: string) => {
+  // 卡片落点可能在另一个 tab 的 stack 里: 溯源 / 拍照核验 / 个体档案在 BossOverviewTab 的
+  // OverviewStack, 而本屏在 BossAnalysisTab 的 SmartBIStack 下。navigate(screen) 只在父 tab 的
+  // routeNames 里找, 找不到就静默不动 —— 所以按父导航器真有的 tab 名投递到嵌套 stack。
+  const handleCardNavigate = useCallback((screen: string, params?: Record<string, unknown>) => {
     try {
       const parent = navigation.getParent();
-      if (parent) {
-        parent.navigate('FAManagementTab', { screen });
+      const parentRouteNames: string[] = parent?.getState?.()?.routeNames ?? [];
+      if (parent && parentRouteNames.includes('BossOverviewTab')) {
+        parent.navigate('BossOverviewTab', { screen, params });
+      } else if (parent) {
+        parent.navigate('FAManagementTab', { screen, params });
       } else {
-        navigation.dispatch(CommonActions.navigate(screen));
+        navigation.dispatch(CommonActions.navigate(screen, params));
       }
     } catch {
       // Fallback: send as intent
       handleSend(screen);
     }
   }, [navigation]);
+
+  // 头像是装饰, 不是按钮: 用 MaterialCommunityIcons 而不是 IconButton (后者 role=button), 并对读屏隐藏。
+  const renderAssistantAvatar = () => (
+    <View
+      style={[styles.aiAvatar, tone.avatar]}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <MaterialCommunityIcons name="robot" size={20} color={theme.colors.onPrimaryContainer} />
+    </View>
+  );
 
   // 实时检测当前输入的分析模式
   const detectedMode = useMemo(() => {
@@ -715,22 +752,19 @@ export default function AIChatScreen() {
   // 渲染消息
   const renderMessage = (message: Message) => {
     const isUser = message.role === 'user';
+    const timestampText = message.timestamp.toLocaleTimeString(i18n.language, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
 
     // 流式加载状态：无内容时显示思考动画+进度状态，有内容时显示内容+光标
     if (message.isLoading && !message.content) {
       return (
         <View key={message.id} style={styles.messageRow}>
-          <View style={styles.aiAvatar}>
-            <LinearGradient
-              colors={['#667eea', '#764ba2']}
-              style={styles.avatarGradient}
-            >
-              <IconButton icon="robot" size={18} iconColor="#fff" />
-            </LinearGradient>
-          </View>
-          <View style={styles.aiMessageBubble}>
-            <ActivityIndicator size="small" color="#667eea" />
-            <Text style={styles.loadingText}>
+          {renderAssistantAvatar()}
+          <View style={[styles.aiMessageBubble, styles.loadingBubble, tone.aiBubble]}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text variant="bodyMedium" style={[styles.loadingText, tone.muted]}>
               {streamStatus || t('aiChat.thinking')}
             </Text>
           </View>
@@ -741,53 +775,39 @@ export default function AIChatScreen() {
     if (isUser) {
       return (
         <View key={message.id} style={styles.userMessageRow}>
-          <LinearGradient
-            colors={['#667eea', '#764ba2']}
-            style={styles.userMessageBubble}
-          >
-            <Text style={styles.userMessageText}>{message.content}</Text>
-          </LinearGradient>
-          <Text style={styles.timestamp}>
-            {message.timestamp.toLocaleTimeString(i18n.language, {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </Text>
+          <View style={[styles.userMessageBubble, tone.userBubble]}>
+            <Text variant="bodyMedium" style={tone.onPrimary}>{message.content}</Text>
+          </View>
+          <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
         </View>
       );
     }
 
     return (
       <View key={message.id} style={styles.messageRow}>
-        <View style={styles.aiAvatar}>
-          <LinearGradient
-            colors={['#667eea', '#764ba2']}
-            style={styles.avatarGradient}
-          >
-            <IconButton icon="robot" size={18} iconColor="#fff" />
-          </LinearGradient>
-        </View>
+        {renderAssistantAvatar()}
         <View style={styles.aiMessageContainer}>
-          {/* 显示分析模式指示器 (在消息气泡上方) */}
-          {message.mode && !message.isLoading && (
-            <View style={styles.modeIndicatorRow}>
+          {/* 分析模式 + 耗时是工程遥测, 只在 __DEV__ 下给开发者看, 不露给老板 */}
+          {__DEV__ && message.mode && !message.isLoading && (
+            <View testID="ai-telemetry-row" style={styles.modeIndicatorRow}>
               <AIModeIndicator mode={message.mode} size="small" />
-              {message.responseTimeMs && (
-                <Text style={styles.responseTime}>
+              {message.responseTimeMs ? (
+                <Text variant="bodySmall" style={tone.muted}>
                   {(message.responseTimeMs / 1000).toFixed(1)}s
                 </Text>
-              )}
+              ) : null}
             </View>
           )}
-          <View style={styles.aiMessageBubble}>
+          <View style={[styles.aiMessageBubble, tone.aiBubble]}>
             {/* 2026-07-24: resolver 答案已 markdown 化 (加粗/列表/引用块) —
                 纯 Text 会露出裸 ** 星号, 完成态走 MarkdownRenderer;
-                流式中仍用 Text (逐字追加 + 光标, markdown 半截标记无意义) */}
+                流式中仍用 Text (逐字追加 + 光标, markdown 半截标记无意义)。
+                ⚠️ 两条路都保留 `\n`: 后端 Tool 让「每头牛一行」, 这里不许把换行吞掉。 */}
             {message.isLoading ? (
-              <Text style={styles.aiMessageText}>
+              <Text variant="bodyMedium" style={tone.onSurface}>
                 {message.content}
                 {message.content ? (
-                  <Text style={styles.streamingCursor}>|</Text>
+                  <Text variant="bodyMedium" style={[styles.streamingCursor, tone.primaryText]}>|</Text>
                 ) : null}
               </Text>
             ) : (
@@ -818,14 +838,21 @@ export default function AIChatScreen() {
                 <TouchableOpacity
                   key={index}
                   testID={`suggested-action-${index}`}
-                  style={styles.suggestedActionButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={action.label}
+                  accessibilityState={{ disabled: isLoading }}
+                  style={[styles.suggestedActionButton, tone.suggestedAction]}
                   onPress={() => handleSuggestedActionClick(action, message.id)}
                   disabled={isLoading}
                 >
-                  <Text style={styles.suggestedActionText}>{action.label}</Text>
+                  <Text variant="labelLarge" style={[styles.centeredText, tone.onPrimaryContainer]}>
+                    {action.label}
+                  </Text>
                   {/* 只有当 description 与 label 不同时才显示 */}
                   {action.description && action.description !== action.label && (
-                    <Text style={styles.suggestedActionDesc}>{action.description}</Text>
+                    <Text variant="bodySmall" style={[styles.centeredText, styles.suggestedActionDesc, tone.muted]}>
+                      {action.description}
+                    </Text>
                   )}
                 </TouchableOpacity>
               ))}
@@ -845,12 +872,7 @@ export default function AIChatScreen() {
               />
             )}
           {!message.isLoading && (
-            <Text style={styles.timestamp}>
-              {message.timestamp.toLocaleTimeString(i18n.language, {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </Text>
+            <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
           )}
         </View>
       </View>
@@ -862,46 +884,32 @@ export default function AIChatScreen() {
     <View style={styles.welcomeContainer}>
       {/* AI 欢迎消息 */}
       <View style={styles.messageRow}>
-        <View style={styles.aiAvatar}>
-          <LinearGradient
-            colors={['#667eea', '#764ba2']}
-            style={styles.avatarGradient}
-          >
-            <IconButton icon="robot" size={18} iconColor="#fff" />
-          </LinearGradient>
-        </View>
-        <View style={styles.aiMessageBubble}>
-          <Text style={styles.aiMessageText}>
+        {renderAssistantAvatar()}
+        <View style={[styles.aiMessageBubble, tone.aiBubble]}>
+          <Text variant="bodyMedium" style={tone.onSurface}>
             {t(isRestaurantMode ? 'aiChat.restaurantWelcome' : 'aiChat.welcome')}
           </Text>
-          <Text style={[styles.aiMessageText, { marginTop: 8 }]}>
+          <Text variant="bodyMedium" style={[tone.onSurface, { marginTop: theme.custom.spacing.s }]}>
             {t(isRestaurantMode ? 'aiChat.restaurantCanHelp' : 'aiChat.canHelp')}
           </Text>
         </View>
       </View>
 
-      {/* P2: 大卡片网格 — 按角色显示常用操作 */}
+      {/* P2: 大卡片网格 — 餐饮 / 牛业 / 角色 三选一, 选法在 QuickActionCardGrid 里 */}
       <QuickActionCardGrid
         userRole={userRole}
         isRestaurantMode={isRestaurantMode}
+        factoryId={currentFactoryId}
         onSendIntent={(text) => handleSend(text)}
         onNavigate={handleCardNavigate}
       />
     </View>
   );
 
-  return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* 配额提示 */}
-      {quotaRemaining !== null && (
-        <View style={styles.quotaBanner}>
-          <IconButton icon="information" size={16} iconColor="#faad14" />
-          <Text style={styles.quotaText}>
-            {t('aiChat.remainingQuota')}：<Text style={styles.quotaNumber}>{quotaRemaining}</Text> {t('aiChat.times')}
-          </Text>
-        </View>
-      )}
+  const canSend = !isLoading && inputText.trim().length > 0;
 
+  return (
+    <SafeAreaView style={[styles.container, tone.screen]} edges={['top']}>
       {/* 消息区域 */}
       <KeyboardAvoidingView
         style={styles.flex1}
@@ -918,44 +926,51 @@ export default function AIChatScreen() {
         </ScrollView>
 
         {/* 输入区域 — P1: 语音优先 */}
-        <View style={styles.inputAreaContainer}>
+        <View style={[styles.inputAreaContainer, tone.inputArea]}>
           {/* P1: 语音预览浮层 */}
           {previewText !== '' && (
-            <View style={styles.voicePreview}>
-              <Text style={styles.voicePreviewText}>{previewText}</Text>
-              <TouchableOpacity onPress={cancelVoicePreview} style={styles.voicePreviewCancel}>
-                <Text style={styles.voicePreviewCancelText}>取消</Text>
+            <View style={[styles.voicePreview, tone.voicePreview]}>
+              <Text variant="bodyLarge" style={[styles.flex1, tone.onSurface]}>{previewText}</Text>
+              <TouchableOpacity
+                onPress={cancelVoicePreview}
+                accessibilityRole="button"
+                accessibilityLabel={t('aiChat.cancel')}
+                style={styles.voicePreviewCancel}
+              >
+                <Text variant="labelLarge" style={tone.errorText}>{t('aiChat.cancel')}</Text>
               </TouchableOpacity>
             </View>
           )}
-          {/* 实时模式检测指示器 - 仅在有输入时显示 */}
-          {detectedMode && showKeyboard && (
-            <View style={styles.inputModeIndicator}>
+          {/* 输入时的模式预判 (快速/深度) 也是遥测, 只在 __DEV__ 下显示 */}
+          {__DEV__ && detectedMode && showKeyboard && (
+            <View testID="ai-input-mode-row" style={styles.inputModeIndicator}>
               <AIModeIndicator mode={detectedMode.mode} size="small" />
-              <Text style={styles.inputModeHint}>
+              <Text variant="bodySmall" style={[styles.flex1, tone.muted]}>
                 {detectedMode.mode === 'deep' ? t('aiChat.deepModeHint') : t('aiChat.quickModeHint')}
               </Text>
             </View>
           )}
           {showKeyboard ? (
-            /* 展开态: 文本输入 + 小麦克风 + 发送 */
+            /* 展开态: 文本输入 + 小麦克风 + 发送。
+               麦克风与发送键至少一个用主色 —— 之前空输入时整条输入栏全灰, 没有一个活的元素。 */
             <View style={styles.inputContainer}>
               <VoiceMicButton
                 onTranscript={handleVoiceResult}
                 size={48}
-                color="#666"
-                activeColor="#EF4444"
+                color={theme.colors.primary}
+                activeColor={theme.colors.error}
                 disabled={isLoading}
-                style={styles.addButton}
+                style={StyleSheet.flatten([styles.roundButton, tone.subtleButton])}
               />
-              <View style={styles.inputWrapper}>
+              <View style={[styles.inputWrapper, tone.inputWrapper]}>
                 <TextInput
                   testID="ai-chat-input"
-                  style={styles.input}
+                  accessibilityLabel={t('aiChat.inputLabel')}
+                  style={[styles.input, theme.fonts.bodyLarge, tone.onSurface]}
                   value={inputText}
                   onChangeText={setInputText}
                   placeholder={t('aiChat.inputPlaceholder')}
-                  placeholderTextColor="#999"
+                  placeholderTextColor={theme.colors.onSurfaceVariant}
                   multiline
                   maxLength={500}
                   editable={!isLoading}
@@ -963,20 +978,18 @@ export default function AIChatScreen() {
               </View>
               <TouchableOpacity
                 testID="ai-chat-send-btn"
-                style={[styles.sendButton, isLoading && styles.sendButtonDisabled]}
+                accessibilityRole="button"
+                accessibilityLabel={t('aiChat.send')}
+                accessibilityState={{ disabled: !canSend }}
+                style={[styles.roundButton, canSend ? tone.primaryButton : tone.primaryButtonIdle]}
                 onPress={() => handleSend()}
-                disabled={isLoading || !inputText.trim()}
+                disabled={!canSend}
               >
-                <LinearGradient
-                  colors={isLoading || !inputText.trim() ? ['#ccc', '#ccc'] : ['#667eea', '#764ba2']}
-                  style={styles.sendButtonGradient}
-                >
-                  <IconButton
-                    icon="send"
-                    size={20}
-                    iconColor="#fff"
-                  />
-                </LinearGradient>
+                <MaterialCommunityIcons
+                  name="send"
+                  size={22}
+                  color={canSend ? theme.colors.onPrimary : theme.colors.onPrimaryContainer}
+                />
               </TouchableOpacity>
             </View>
           ) : (
@@ -985,27 +998,28 @@ export default function AIChatScreen() {
               <View style={styles.voiceFirstRow}>
                 <TouchableOpacity
                   testID="keyboard-toggle-btn"
-                  style={styles.keyboardToggle}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('aiChat.switchToKeyboard')}
+                  style={[styles.roundButton, tone.subtleButton]}
                   onPress={() => setShowKeyboard(true)}
                 >
-                  <MaterialCommunityIcons name="keyboard-outline" size={24} color="#999" />
+                  <MaterialCommunityIcons name="keyboard-outline" size={24} color={theme.colors.onSurfaceVariant} />
                 </TouchableOpacity>
                 <View style={styles.largeMicWrapper}>
-                  <LinearGradient
-                    colors={['#667eea', '#764ba2']}
-                    style={styles.largeMicGradient}
-                  >
+                  <View style={[styles.largeMicCircle, tone.primaryButton]}>
                     <VoiceMicButton
                       onTranscript={handleVoiceResult}
                       size={72}
-                      color="#fff"
-                      activeColor="#fff"
+                      color={theme.colors.onPrimary}
+                      activeColor={theme.colors.onPrimary}
                       disabled={isLoading}
                     />
-                  </LinearGradient>
-                  <Text style={styles.voiceHintText}>点一下说话</Text>
+                  </View>
+                  <Text variant="bodyMedium" style={[styles.voiceHintText, tone.muted]}>
+                    {t('aiChat.tapToSpeak')}
+                  </Text>
                 </View>
-                <View style={{ width: 48 }} />
+                <View style={styles.roundButton} />
               </View>
             </View>
           )}
@@ -1015,50 +1029,13 @@ export default function AIChatScreen() {
   );
 }
 
+// ⚠️ 这里只放布局: 颜色 / 字号全部在组件里走 useTheme() 与 Paper 的 variant (见 tone / variant=)。
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   flex1: {
     flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  backButton: {
-    width: 48,
-    height: 48,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#333',
-  },
-  quotaBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fffbe6',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ffe58f',
-  },
-  quotaText: {
-    fontSize: 13,
-    color: '#ad6800',
-  },
-  quotaNumber: {
-    fontWeight: '600',
   },
   messagesContainer: {
     flex: 1,
@@ -1081,12 +1058,8 @@ const styles = StyleSheet.create({
   aiAvatar: {
     width: 36,
     height: 36,
-    marginRight: 10,
-  },
-  avatarGradient: {
-    width: 36,
-    height: 36,
     borderRadius: 18,
+    marginRight: 10,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1094,21 +1067,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   aiMessageBubble: {
-    backgroundColor: '#fff',
     borderRadius: 12,
     borderTopLeftRadius: 0,
     padding: 12,
     maxWidth: '85%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
   },
-  aiMessageText: {
-    fontSize: 14,
-    color: '#333',
-    lineHeight: 20,
+  loadingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   userMessageBubble: {
     borderRadius: 12,
@@ -1116,60 +1082,14 @@ const styles = StyleSheet.create({
     padding: 12,
     maxWidth: '75%',
   },
-  userMessageText: {
-    fontSize: 14,
-    color: '#fff',
-    lineHeight: 20,
-  },
   timestamp: {
-    fontSize: 11,
-    color: '#999',
-    marginTop: 4,
-  },
-  bulletList: {
-    marginTop: 8,
-  },
-  bulletItem: {
-    fontSize: 13,
-    color: '#666',
     marginTop: 4,
   },
   loadingText: {
-    fontSize: 13,
-    color: '#667eea',
     marginLeft: 8,
   },
   streamingCursor: {
-    color: '#667eea',
     fontWeight: '300',
-  },
-  quickQuestionsContainer: {
-    marginTop: 20,
-    marginLeft: 46,
-  },
-  quickQuestionsTitle: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 10,
-  },
-  quickQuestionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  quickQuestionButton: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e8e8e8',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    minHeight: 48,
-    justifyContent: 'center',
-  },
-  quickQuestionText: {
-    fontSize: 15,
-    color: '#333',
   },
   inputContainer: {
     flexDirection: 'row',
@@ -1177,58 +1097,37 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
   },
-  addButton: {
+  /** 48×48 圆形触控目标 (麦克风 / 发送 / 键盘切换 共用) */
+  roundButton: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#f5f5f5',
     justifyContent: 'center',
     alignItems: 'center',
   },
   inputWrapper: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
     borderRadius: 20,
+    borderWidth: 1,
     marginHorizontal: 10,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    minHeight: 36,
+    minHeight: 48,
     maxHeight: 100,
+    justifyContent: 'center',
   },
   input: {
-    fontSize: 14,
-    color: '#333',
     maxHeight: 80,
   },
-  sendButton: {
-    width: 48,
-    height: 48,
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  sendButtonGradient: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // 模式指示器相关样式
+  // 模式指示器相关样式 (仅 __DEV__)
   modeIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 4,
     gap: 8,
   },
-  responseTime: {
-    fontSize: 11,
-    color: '#999',
-  },
   inputAreaContainer: {
-    backgroundColor: '#fff',
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
   },
   inputModeIndicator: {
     flexDirection: 'row',
@@ -1238,11 +1137,6 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     gap: 8,
   },
-  inputModeHint: {
-    fontSize: 11,
-    color: '#999',
-    flex: 1,
-  },
   // 建议操作按钮样式
   suggestedActionsContainer: {
     marginTop: 8,
@@ -1251,9 +1145,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   suggestedActionButton: {
-    backgroundColor: '#f0f5ff',
     borderWidth: 1,
-    borderColor: '#667eea',
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 14,
@@ -1261,17 +1153,11 @@ const styles = StyleSheet.create({
     minHeight: 48,
     justifyContent: 'center',
   },
-  suggestedActionText: {
-    fontSize: 15,
-    color: '#667eea',
-    fontWeight: '500',
+  centeredText: {
     textAlign: 'center',
   },
   suggestedActionDesc: {
-    fontSize: 11,
-    color: '#999',
     marginTop: 2,
-    textAlign: 'center',
   },
   // P1: Voice-first input styles
   voiceFirstContainer: {
@@ -1286,7 +1172,7 @@ const styles = StyleSheet.create({
   largeMicWrapper: {
     alignItems: 'center',
   },
-  largeMicGradient: {
+  largeMicCircle: {
     width: 72,
     height: 72,
     borderRadius: 36,
@@ -1294,43 +1180,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   voiceHintText: {
-    fontSize: 13,
-    color: '#999',
     marginTop: 6,
-  },
-  keyboardToggle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#f5f5f5',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   // P1: Voice preview
   voicePreview: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#f0f5ff',
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  voicePreviewText: {
-    fontSize: 15,
-    color: '#333',
-    flex: 1,
   },
   voicePreviewCancel: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     minHeight: 48,
     justifyContent: 'center',
-  },
-  voicePreviewCancelText: {
-    fontSize: 15,
-    color: '#EF4444',
-    fontWeight: '500',
   },
 });
