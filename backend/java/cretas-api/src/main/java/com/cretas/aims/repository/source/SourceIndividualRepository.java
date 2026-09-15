@@ -1,5 +1,6 @@
 package com.cretas.aims.repository.source;
 
+import com.cretas.aims.entity.enums.DnaVerificationStatus;
 import com.cretas.aims.entity.source.SourceIndividual;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -89,4 +90,15 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
      */
     List<SourceIndividual> findByFactoryIdAndSireIndividualIdOrderByIndividualCodeAsc(
             String factoryId, String sireIndividualId);
+
+    // ── 按 DNA 比对状态列个体 (FEAT-AI-LINEAGE-INDIVIDUAL-TOOLS-20260915) ──
+
+    /**
+     * AI 问「哪几头牛 DNA 不匹配 / 未采样」用。分页, 调用方自己定上限并把「还有 N 头」说出来。
+     *
+     * <p>⛔ 不要用 Query-by-Example 替代它: 实体的 {@code getVersion()} 把 null 折成 0,
+     * 探针会带上 {@code version = 0} 这个条件, 编辑过的档案（version ≥ 1）全部漏掉。
+     */
+    Page<SourceIndividual> findByFactoryIdAndDnaVerificationStatusOrderByIndividualCodeAsc(
+            String factoryId, DnaVerificationStatus dnaVerificationStatus, Pageable pageable);
 }
