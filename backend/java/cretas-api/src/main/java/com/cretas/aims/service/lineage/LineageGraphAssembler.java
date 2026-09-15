@@ -22,6 +22,7 @@ import com.cretas.aims.repository.source.SourceIndividualRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -85,6 +86,13 @@ public class LineageGraphAssembler {
      * @param desensitize        是否抹掉供应商等内部信息（公开接口给 true）
      * @return 永远非 null；没有任何血缘记录时 {@code ancestors} 是空列表、{@code nodeCount} 为 0
      */
+    // 🔴 自带只读事务: 结点解析会碰 MaterialBatch.materialType 这类懒加载代理。
+    //    TraceabilityServiceImpl 的调用方本来就在事务里(这里只是加入), 但 AI 的
+    //    lineage_query 走手机端的 SSE 流式路径时在 intent-sse 线程上直接调本方法,
+    //    没有 OSIV 也没有事务 —— prod 实测 2026-09-15 22:03 手机问「SL-DEMO-BATCH-V1」
+    //    LazyInitializationException: could not initialize proxy [RawMaterialType#…] - no Session,
+    //    而同一个问题走非流式 /execute (请求线程, 有 OSIV) 答得出来。
+    @Transactional(readOnly = true)
     public TraceabilityDTO.LineageSection assemble(String factoryId, String rootType, String rootId,
                                                    int maxDepth, boolean includeDescendants,
                                                    boolean desensitize) {
@@ -155,6 +163,7 @@ public class LineageGraphAssembler {
     /**
      * 召回影响面：这个批次往下游能波及到的生产批次 / 成品批次 / 出货单。
      */
+    @Transactional(readOnly = true)
     public TraceabilityDTO.ImpactResponse assembleImpact(String factoryId, String rootType, String rootId,
                                                          int maxDepth) {
         TraceabilityDTO.LineageSection section =
