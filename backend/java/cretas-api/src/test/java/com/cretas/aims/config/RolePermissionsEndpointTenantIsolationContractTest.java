@@ -1,5 +1,6 @@
 package com.cretas.aims.config;
 
+import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.utils.JwtUtil;
 import jakarta.servlet.http.HttpServletResponse;
@@ -8,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -54,9 +57,15 @@ class RolePermissionsEndpointTenantIsolationContractTest {
         TokenBlacklistService blacklist = mock(TokenBlacklistService.class);
         when(blacklist.isBlacklisted(anyString())).thenReturn(false);
 
+        // 2026-09-15 (#812): 拦截器多了工厂关停闸, 会按 token 的 factoryId 查一次库。
+        // 这里的工厂都视为「存在且未关停」—— 本测试守的是跨租户隔离, 不是关停。
+        FactoryRepository factories = mock(FactoryRepository.class);
+        when(factories.findById(anyString())).thenReturn(Optional.empty());
+
         JwtAuthInterceptor interceptor = new JwtAuthInterceptor();
         ReflectionTestUtils.setField(interceptor, "jwtUtil", jwt);
         ReflectionTestUtils.setField(interceptor, "tokenBlacklistService", blacklist);
+        ReflectionTestUtils.setField(interceptor, "factoryRepository", factories);
         return interceptor;
     }
 
