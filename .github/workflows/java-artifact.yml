@@ -28,21 +28,20 @@ name: Java deploy artifact
 # (原 ci.yml 只列 src/main + pom + lib 时，实测最近 120 个 main commit 里有 3 个
 #  纯测试改动命中了这个洞 —— 那些 commit 上永远取不到匹配的制品。)
 
+# ## 2026-09-15: 只保留手动 dispatch
+#
+# 这条车道在本组织从来没被信任过: 私有仓没有 attestation(套餐不含), 而 ECS 侧按设计
+# 拒收未签名制品 ⇒ release 每次都回退本地 Maven。push/PR 触发的实际效果只剩:
+# 每个后端 PR 多跑 17 分钟 Maven、往 GitHub 传一个 ~170MB 的 jar、把 Actions 免费
+# 存储配额撑爆(2026-09-15 实测 `Artifact storage quota has been hit`, 之后连别的
+# workflow 的小制品都传不上去)、然后在 PR 上红一个 check。
+# ⇒ Steve 拍板: 只在手动 dispatch 时跑。需要 CI 制品时(例如验证运输链)显式触发。
+# ⚠️ 代价: `prewarm-main-artifact.sh` 在没人 dispatch 时永远 `no_main_artifact_listed`,
+#    release 走 java-fallback(本地构建) —— 这本来就是每次的实际路径。
+# 上面「树变了⟺触发」那段不变量随之作废, scripts/tests/test-release-ci-artifact.sh 改为
+# 钉「只有 workflow_dispatch, 没有 push/pull_request」。
+
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'backend/java/cretas-api/**'
-  # 🔴 自限定的 PR 触发: 只在改到**这个工作流自己**或它依赖的脚本时跑。
-  #    理由是「谁保证它被调用」—— push 触发只在 main 上, 意味着任何对本文件的
-  #    改动都是**合进 main 之后才第一次执行**。那正是本仓反复踩的形态:
-  #    改了闸, 而闸本身没被任何东西验过。
-  #    ⚠️ 代价可控: 它只在这两个文件变化时触发, 平常的后端 PR 一次都不跑。
-  pull_request:
-    paths:
-      - '.github/workflows/java-artifact.yml'
-      - 'scripts/ci/resolve-maven.sh'
   workflow_dispatch:
     inputs:
       target_tests:

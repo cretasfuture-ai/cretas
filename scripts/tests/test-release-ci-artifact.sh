@@ -259,17 +259,18 @@ artifact_owner_count=$(printf '%s' "$artifact_owners" | grep -c . || true)
     || fail "恰好应有 1 个 workflow 上传 '$ARTIFACT_NAME_LITERAL', 实际 $artifact_owner_count 个: $(printf '%s' "$artifact_owners" | tr '\n' ' ')"
 CI_YML="$artifact_owners"
 echo "READING: ARTIFACT_WORKFLOW=$(basename "$CI_YML")"
-# 阴性对照: 这个不变量要成立, 那个 workflow 必须真的有 push 触发 —— 否则
-# 「paths 覆盖了」是在一个根本不会被 push 触发的文件上量的, 恒真。
-grep -qE '^[[:space:]]*push:' "$CI_YML" \
-    || fail "$(basename "$CI_YML") 没有 push 触发 —— 「树变了⟺触发」这条不变量无从谈起"
-# shellcheck source=scripts/deploy/release-jar-manifest.sh
-backend_path=$(sed -n 's/^RELEASE_BACKEND_PATH="\(.*\)"$/\1/p' \
-    "$ROOT_DIR/scripts/deploy/release-jar-manifest.sh" | head -1)
-[ -n "$backend_path" ] || fail "取不到 RELEASE_BACKEND_PATH"
-# ⚠️ 必须 `--`: 模式以 '-' 开头, 否则 grep 当成选项报 "unknown option"(踩过)。
-grep -Fq -- "- '$backend_path/**'" "$CI_YML" \
-    || fail "$(basename "$CI_YML") 的 push paths 未覆盖整个 $backend_path/** —— 存在改树却不触发打包的 commit"
+# 2026-09-15 Steve 拍板: 打包 workflow **只在手动 dispatch 时跑**。
+# 原来这里钉的是「push 触发 + paths 覆盖整个 backend 树」(树变了⟺触发)。那条不变量的
+# 前提是 CI 制品会被发布链消费 —— 而本组织私有仓没有 attestation, ECS 侧按设计拒收
+# 未签名制品, release 每次都回退本地 Maven; push/PR 触发只剩下每个后端 PR 多跑 17 分钟、
+# 传 170MB、把 Actions 存储配额撑爆(2026-09-15 实测 `Artifact storage quota has been hit`)。
+# ⇒ 断言翻过来: 有 workflow_dispatch, **没有** push / pull_request。
+#   (把守的东西从「历史」改成「需求」, 不是删断言 —— 正反两条都在。)
+grep -qE '^[[:space:]]*workflow_dispatch:' "$CI_YML" \
+    || fail "$(basename "$CI_YML") 没有 workflow_dispatch —— 手动都触发不了, 制品链彻底没入口"
+if grep -qE '^[[:space:]]*(push|pull_request):' "$CI_YML"; then
+    fail "$(basename "$CI_YML") 又长回了 push/pull_request 触发 —— 每个后端 PR 会多跑 17 分钟 Maven 并把 Actions 存储配额撑爆 (2026-09-15 拍板只留 dispatch)"
+fi
 
 # ---- --prefer-ci-artifact 默认开, 且必须有一个显式关闭出口 ----
 # 2026-07-31 Steve 拍板翻成默认开: 默认关的时候整条 CI 制品链路对日常发布形同不存在
@@ -290,6 +291,8 @@ contains "$RELEASE_SCRIPT" 'export CRETAS_RELEASE_PREFER_CI_ARTIFACT=1'
 # ⚠️ 这条以前也钉在 ci.yml 上 —— 而 ci.yml 早就没有 push paths 了, 所以它是一条
 #    **恒真**的阴性对照(形态 B′: 无论谁改了什么它都不会红)。跟着上面一起挪到
 #    真正带 push paths 的那个 workflow 上, 它才重新有守的东西。
+# ⚠️ 2026-09-15 起该 workflow 没有 push paths 了, 这条又回到恒真 —— 留着是因为上面
+#    「不许长回 push/pull_request」已经把它的前提整个挡住; 它不再单独守东西。
 if grep -Eq "^[[:space:]]*-[[:space:]]*'?web-admin/" "$CI_YML"; then
     fail "web-admin 被加进了 $(basename "$CI_YML") 的 push paths —— 会触发无意义的 Java 构建"
 fi
