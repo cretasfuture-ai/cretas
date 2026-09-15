@@ -526,9 +526,32 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
         return t.isEmpty() ? null : t;
     }
 
-    private static String normalizeAsk(String s) {
+    /**
+     * ask 归一化: 英文枚举原样小写; 槽位正则 / LLM 抽出来的中文说法映射到枚举
+     * （「后代」→ offspring, 「去了哪」→ downstream ...）。映射不到的原样返回, 由调用方按
+     * {@link #ALLOWED_ASKS} 报 VALIDATION_ERROR, ⛔ 不静默改成 profile。
+     */
+    public static String normalizeAsk(String s) {
         String t = blankToNull(s);
-        return t == null ? null : t.toLowerCase(Locale.ROOT);
+        if (t == null) return null;
+        String lower = t.toLowerCase(Locale.ROOT);
+        if (ALLOWED_ASKS.contains(lower)) return lower;
+        if (lower.contains("后代") || lower.contains("子代") || lower.contains("子女") || lower.contains("儿女")) {
+            return "offspring";
+        }
+        if (lower.contains("系谱") || lower.contains("父本") || lower.contains("母本") || lower.contains("父母")) {
+            return "pedigree";
+        }
+        if (lower.contains("兄弟") || lower.contains("姐妹") || lower.contains("同父")) {
+            return "siblings";
+        }
+        if (lower.contains("去了哪") || lower.contains("去向") || lower.contains("流向") || lower.contains("哪些批次")) {
+            return "downstream";
+        }
+        if (lower.contains("档案")) {
+            return "profile";
+        }
+        return lower;
     }
 
     /** spec §8.2 只读查询, 无副作用 */
