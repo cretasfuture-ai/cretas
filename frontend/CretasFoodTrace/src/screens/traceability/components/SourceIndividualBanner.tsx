@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
-import { Text, Surface } from 'react-native-paper';
+import { StyleSheet } from 'react-native';
+import { Text, Surface, useTheme } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
+import type { AppTheme } from '../../../theme';
 import type {
   LineageSection,
   LineageDepthGroup,
@@ -108,6 +109,7 @@ export interface SourceIndividualBannerProps {
 }
 
 const SourceIndividualBanner: React.FC<SourceIndividualBannerProps> = ({ lineage }) => {
+  const theme = useTheme<AppTheme>();
   const summary = summarizeSourceIndividuals(lineage);
   if (!summary.show) {
     // ⚠️ 这里**可以**整块不渲染：与「无上游血缘记录」不同，
@@ -115,27 +117,36 @@ const SourceIndividualBanner: React.FC<SourceIndividualBannerProps> = ({ lineage
     // 没有一句话需要对用户交代。
     return null;
   }
+  // 与首页「现场作业」瓷砖同一族（primaryContainer / onPrimaryContainer）——
+  // 它是一条「这批货从活体来」的信息横幅，不是警告，⛔ 不用棕黄。
   return (
-    <Surface style={styles.banner} elevation={1} testID={SOURCE_INDIVIDUAL_BANNER_TEST_ID}>
-      <MaterialCommunityIcons name="cow" size={22} color="#5D4037" />
-      <Text style={styles.text}>{bannerText(summary)}</Text>
+    <Surface
+      style={[
+        styles.banner,
+        {
+          gap: theme.custom.spacing.s,
+          marginHorizontal: theme.custom.spacing.l,
+          marginBottom: theme.custom.spacing.m,
+          paddingVertical: theme.custom.spacing.m,
+          paddingHorizontal: theme.custom.spacing.l,
+          borderRadius: theme.custom.borderRadius.m,
+          backgroundColor: theme.colors.primaryContainer,
+        },
+      ]}
+      elevation={0}
+      testID={SOURCE_INDIVIDUAL_BANNER_TEST_ID}
+    >
+      <MaterialCommunityIcons name="cow" size={22} color={theme.colors.onPrimaryContainer} />
+      <Text variant="titleSmall" style={[styles.text, { color: theme.colors.onPrimaryContainer }]}>
+        {bannerText(summary)}
+      </Text>
     </Surface>
   );
 };
 
 const styles = StyleSheet.create({
-  banner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    backgroundColor: '#FFF8E1',
-  },
-  text: { flex: 1, fontSize: 14, fontWeight: '600', color: '#5D4037' },
+  banner: { flexDirection: 'row', alignItems: 'center' },
+  text: { flex: 1 },
 });
 
 export default SourceIndividualBanner;

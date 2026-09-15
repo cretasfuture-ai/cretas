@@ -31,6 +31,24 @@ function textLeavesInOrder(node: unknown, out: string[] = []): string[] {
   return out;
 }
 
+/** RN 的 style 可能是数组 / 嵌套数组 —— 摊平成一个对象再读键。 */
+function flatten(style: unknown): Record<string, unknown> {
+  if (style == null || typeof style === 'boolean') return {};
+  if (Array.isArray(style)) return Object.assign({}, ...style.map(flatten));
+  return style as Record<string, unknown>;
+}
+
+/** 从这个节点起沿祖先向上，找最近一个 style 里带 `key` 的值。找不到返回 undefined。 */
+function nearestStyle(node: unknown, key: string): unknown {
+  let cur: any = node;
+  while (cur) {
+    const v = flatten(cur.props?.style)[key];
+    if (v != null) return v;
+    cur = cur.parent;
+  }
+  return undefined;
+}
+
 function indexOfLeaf(leaves: string[], label: string): number {
   const i = leaves.findIndex((s) => s === label);
   if (i < 0) throw new Error(`没渲染出「${label}」—— 顺序断言无从谈起: ${JSON.stringify(leaves)}`);
@@ -67,13 +85,28 @@ describe('BossOverviewScreen 分组', () => {
     }
   });
 
-  it('说明卡只剩一行（原来三行占首屏三分之一）', () => {
+  it('标题与「现场作业」之间没有说明卡（政策说明不是功能，2026-09-15 polish 删掉）', () => {
     const { toJSON } = render(<BossOverviewScreen />);
     const leaves = textLeavesInOrder(toJSON());
-    // 说明卡的文案在「现场作业」之前；那一段里只允许有一个文本叶子。
+    // 「现场作业」之前只允许有页面标题 —— 任何一句说明文案回来这里都会红。
     const field = indexOfLeaf(leaves, '现场作业');
-    const before = leaves.slice(0, field).filter((s) => s !== '经营总览' && s !== '查看进度与异常');
-    expect(before).toHaveLength(1);
-    expect(before[0]).toMatch(/查看与决策/);
+    const before = leaves.slice(0, field).filter((s) => s !== '经营总览');
+    expect(before).toEqual([]);
+    expect(leaves.some((s) => /查看与决策/.test(s))).toBe(false);
+  });
+
+  it('现场作业是瓷砖（primaryContainer 底、≥96dp），经营是列表项（≥48dp）—— 两组视觉权重不同', () => {
+    const { getByTestId, getByText } = render(<BossOverviewScreen />);
+    const { theme } = require('../../theme');
+    const tile = getByTestId('boss-entry-traceability');
+    // 瓷砖: 触控目标本身 ≥96dp
+    expect(flatten(tile.props.style).minHeight).toBeGreaterThanOrEqual(96);
+    // 瓷砖的底是 primaryContainer (在它外层的 Surface 上 —— 沿祖先找最近一个有底色的)
+    expect(nearestStyle(tile, 'backgroundColor')).toBe(theme.colors.primaryContainer);
+    // 列表项: 最近的触控容器 ≥48dp, 且**不是**瓷砖那个底色 (两组权重不同, 不能长一样)
+    const item = getByText('生产进度');
+    expect(nearestStyle(item, 'minHeight')).toBeGreaterThanOrEqual(48);
+    expect(nearestStyle(item, 'minHeight')).toBeLessThan(96);
+    expect(nearestStyle(item, 'backgroundColor')).not.toBe(theme.colors.primaryContainer);
   });
 });

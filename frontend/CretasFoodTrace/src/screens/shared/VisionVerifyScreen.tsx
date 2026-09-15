@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { BarcodeScannerModal } from '../../components/processing/BarcodeScannerModal';
+import { DnaStatusChip } from '../traceability/components/dnaStatus';
 import {
   sourceIndividualApiClient,
   type SourceIndividual,
@@ -325,10 +326,22 @@ export default function VisionVerifyScreen() {
                 <Field label={t('sourceIndividual.fields.species')} value={tagOutcome.matched.species} />
                 <Field label={t('sourceIndividual.fields.breed')} value={tagOutcome.matched.breed} />
                 <Field label={t('sourceIndividual.fields.originFarm')} value={tagOutcome.matched.originFarm} />
-                <Field
-                  label={t('sourceIndividual.fields.dnaStatus')}
-                  value={tagOutcome.matched.dnaVerificationStatusDisplayName}
-                />
+                {/* DNA 状态走四处共用的色板 (traceability/components/dnaStatus) ——
+                    时间线节点 / 档案头部 / 后代行 / 这里, 同一状态同一颜色。
+                    后端没给状态码时退回原来的文本 Field (显示 displayName 或「—」)。 */}
+                {tagOutcome.matched.dnaVerificationStatus ? (
+                  <View style={styles.fieldRow}>
+                    <Text variant="labelMedium" style={styles.fieldLabel}>
+                      {t('sourceIndividual.fields.dnaStatus')}
+                    </Text>
+                    <DnaStatusChip status={tagOutcome.matched.dnaVerificationStatus} testID="vision-dna-status" />
+                  </View>
+                ) : (
+                  <Field
+                    label={t('sourceIndividual.fields.dnaStatus')}
+                    value={tagOutcome.matched.dnaVerificationStatusDisplayName}
+                  />
+                )}
               </View>
             )}
 

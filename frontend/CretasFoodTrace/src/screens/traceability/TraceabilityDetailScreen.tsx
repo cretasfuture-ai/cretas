@@ -10,13 +10,13 @@ import {
   Card,
   Surface,
   Divider,
-  Chip,
   ActivityIndicator,
   useTheme,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import type { AppTheme } from '../../theme';
 import {
   traceabilityApiClient,
   FullTraceResponse,
@@ -25,8 +25,9 @@ import {
   QualityInfo,
   ShipmentInfo,
 } from '../../services/api/traceabilityApiClient';
-import LineageChainTimeline from './components/LineageChainTimeline';
+import LineageChainTimeline, { SectionHeader } from './components/LineageChainTimeline';
 import SourceIndividualBanner from './components/SourceIndividualBanner';
+import { ToneChip, type StatusTone } from './components/statusTone';
 
 /**
  * 生产批次 `qualityStatus` 的用户可读说法。
@@ -95,12 +96,60 @@ function isBlank(value: unknown): boolean {
   return value == null || value === '' || value === '-';
 }
 
+
+/**
+ * 质量状态 → 色调。这里**只**决定「是哪一种色调」，色值由 `statusTone.ts` 从主题 token 取，
+ * ⛔ 不再在屏里写硬编码色值，也不再用 `chipColor + '20'` 拼透明度。
+ *
+ * 待检验 / 质检中 / 待审核 / 需返工 这些「还没定」的态走 pending（橙），
+ * 合格 / 通过 / 返工完成 走 success，不合格 / 报废 走 error，认不出来的码走 neutral。
+ */
+export function qualityStatusTone(status?: string | null): StatusTone {
+  switch (status?.toUpperCase()) {
+    case 'PASSED':
+    case 'PASS':
+    case 'QUALIFIED':
+    case 'REWORK_COMPLETED':
+      return 'success';
+    case 'FAILED':
+    case 'FAIL':
+    case 'SCRAPPED':
+      return 'error';
+    case 'PENDING':
+    case 'PENDING_INSPECTION':
+    case 'INSPECTING':
+    case 'NEEDS_REVIEW':
+    case 'CONDITIONAL':
+    case 'PARTIAL_PASS':
+    case 'REWORK_REQUIRED':
+    case 'REWORKING':
+      return 'pending';
+    default:
+      return 'neutral';
+  }
+}
+
+export function shipmentStatusTone(status?: string | null): StatusTone {
+  switch (status?.toLowerCase()) {
+    case 'delivered':
+      return 'success';
+    case 'shipped':
+      return 'info';
+    case 'pending':
+      return 'pending';
+    case 'returned':
+      return 'error';
+    default:
+      return 'neutral';
+  }
+}
+
 /**
  * 完整溯源链路详情屏幕
  * 展示从原材料到出货的完整追溯信息
  */
 const TraceabilityDetailScreen: React.FC = () => {
-  const theme = useTheme();
+  const theme = useTheme<AppTheme>();
   const route = useRoute<any>();
   const { batchNumber, traceCode: scannedTraceCode } = (route.params || {}) as {
     batchNumber?: string;
@@ -150,41 +199,6 @@ const TraceabilityDetailScreen: React.FC = () => {
     setRefreshing(false);
   }, [loadTraceData]);
 
-  const getQualityStatusColor = (status: string) => {
-    switch (status?.toUpperCase()) {
-      case 'PASSED':
-      case 'PASS':
-      case 'QUALIFIED':
-        return '#4CAF50';
-      case 'FAILED':
-      case 'FAIL':
-      case 'SCRAPPED':
-        return '#f44336';
-      case 'CONDITIONAL':
-      case 'PARTIAL_PASS':
-      case 'REWORK_REQUIRED':
-      case 'REWORKING':
-        return '#FF9800';
-      default:
-        return '#9e9e9e';
-    }
-  };
-
-  const getShipmentStatusColor = (status: string) => {
-    switch (status?.toLowerCase()) {
-      case 'delivered':
-        return '#4CAF50';
-      case 'shipped':
-        return '#2196F3';
-      case 'pending':
-        return '#FF9800';
-      case 'returned':
-        return '#f44336';
-      default:
-        return '#9e9e9e';
-    }
-  };
-
   const getShipmentStatusText = (status: string) => {
     switch (status?.toLowerCase()) {
       case 'delivered':
@@ -200,28 +214,36 @@ const TraceabilityDetailScreen: React.FC = () => {
     }
   };
 
+  const { spacing, borderRadius } = theme.custom;
+  const cardStyle = [styles.card, { marginBottom: spacing.l, borderRadius: borderRadius.m }];
+  const dividerStyle = { marginVertical: spacing.m };
+
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
+      <View style={[styles.centerContainer, { padding: spacing.xl }]}>
         <ActivityIndicator size="large" />
-        <Text style={styles.loadingText}>正在加载溯源数据...</Text>
+        <Text variant="bodyMedium" style={{ marginTop: spacing.m, color: theme.colors.onSurfaceVariant }}>
+          正在加载溯源数据...
+        </Text>
       </View>
     );
   }
 
   if (error) {
     return (
-      <View style={styles.centerContainer}>
+      <View style={[styles.centerContainer, { padding: spacing.xl }]}>
         <MaterialCommunityIcons name="alert-circle-outline" size={64} color={theme.colors.error} />
-        <Text style={[styles.errorText, { color: theme.colors.error }]}>{error}</Text>
+        <Text variant="bodyLarge" style={[styles.errorText, { marginTop: spacing.m, color: theme.colors.error }]}>
+          {error}
+        </Text>
       </View>
     );
   }
 
   if (!traceData) {
     return (
-      <View style={styles.centerContainer}>
-        <Text>无数据</Text>
+      <View style={[styles.centerContainer, { padding: spacing.xl }]}>
+        <Text variant="bodyMedium">无数据</Text>
       </View>
     );
   }
@@ -242,11 +264,14 @@ const TraceabilityDetailScreen: React.FC = () => {
   const labelCode = scannedTraceCode?.trim() || null;
   const showBothCodes = !!labelCode && !!traceData.traceCode && labelCode !== traceData.traceCode;
 
+  const codeLabelStyle = { marginLeft: spacing.s, color: theme.colors.onSurfaceVariant };
+  const codeValueStyle = [styles.traceCode, { color: theme.colors.onSurface }];
+
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]} edges={['bottom']}>
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={{ padding: spacing.l, paddingBottom: spacing.xxl }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -254,48 +279,59 @@ const TraceabilityDetailScreen: React.FC = () => {
         {/* 溯源码 = 这个批次已打印标签上的码(后端只读 labels.trace_code, 2026-09-15 起不再现造)。
             null ⇒ 还没打过标签, 明说「未打印标签」, ⛔ 不显示一个扫不回来的码。
             `route.params.traceCode`(扫码/输入进来的)与服务端持久化码不同时两个都摆出来。 */}
-        <Surface style={styles.traceCodeCard} elevation={2} testID="trace-code-card">
+        <Surface
+          style={[
+            styles.traceCodeCard,
+            {
+              padding: spacing.l,
+              marginBottom: spacing.l,
+              borderRadius: borderRadius.m,
+              backgroundColor: theme.colors.surfaceVariant,
+            },
+          ]}
+          elevation={0}
+          testID="trace-code-card"
+        >
           <View style={styles.traceCodeHeader}>
             <MaterialCommunityIcons name="qrcode" size={24} color={theme.colors.primary} />
             {showBothCodes ? (
-              <View style={styles.traceCodeColumn}>
+              <View style={[styles.traceCodeColumn, { gap: spacing.xs }]}>
                 <View style={styles.traceCodeRow}>
-                  <Text style={styles.traceCodeLabel}>扫入码</Text>
-                  <Text style={styles.traceCode} testID="trace-code-label">{labelCode}</Text>
+                  <Text variant="labelMedium" style={codeLabelStyle}>扫入码</Text>
+                  <Text variant="bodyMedium" style={codeValueStyle} testID="trace-code-label">{labelCode}</Text>
                 </View>
                 <View style={styles.traceCodeRow}>
-                  <Text style={styles.traceCodeLabel}>标签码</Text>
-                  <Text style={styles.traceCode} testID="trace-code-system">{traceData.traceCode}</Text>
+                  <Text variant="labelMedium" style={codeLabelStyle}>标签码</Text>
+                  <Text variant="bodyMedium" style={codeValueStyle} testID="trace-code-system">{traceData.traceCode}</Text>
                 </View>
               </View>
             ) : traceData.traceCode ? (
               <View style={styles.traceCodeRow}>
-                <Text style={styles.traceCodeLabel}>溯源码</Text>
-                <Text style={styles.traceCode} testID="trace-code-system">{traceData.traceCode}</Text>
+                <Text variant="labelMedium" style={codeLabelStyle}>溯源码</Text>
+                <Text variant="bodyMedium" style={codeValueStyle} testID="trace-code-system">{traceData.traceCode}</Text>
               </View>
             ) : (
               <View style={styles.traceCodeRow}>
-                <Text style={styles.traceCodeMissing} testID="trace-code-missing">未打印标签</Text>
+                <Text variant="bodyMedium" style={codeLabelStyle} testID="trace-code-missing">未打印标签</Text>
               </View>
             )}
           </View>
-          <Text style={styles.traceCodeBatch} testID="trace-code-batch">
+          <Text
+            variant="bodyMedium"
+            style={{ marginTop: spacing.s, marginLeft: spacing.xxl, color: theme.colors.onSurfaceVariant }}
+            testID="trace-code-batch"
+          >
             批次号 {traceData.production.batchNumber}
           </Text>
         </Surface>
 
         {/* === 1. 生产信息 === */}
-        <Card style={styles.card}>
+        <Card style={cardStyle}>
           <Card.Content>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionIconContainer}>
-                <MaterialCommunityIcons name="factory" size={24} color="#fff" />
-              </View>
-              <Text variant="titleMedium" style={styles.sectionTitle}>生产信息</Text>
-            </View>
-            <Divider style={styles.divider} />
+            <SectionHeader icon="factory" title="生产信息" />
+            <Divider style={dividerStyle} />
 
-            <View style={styles.infoGrid}>
+            <View style={{ gap: spacing.s }}>
               <InfoItem label="批次号" value={traceData.production.batchNumber} />
               <InfoItem label="产品名称" value={traceData.production.productName} />
               <InfoItem label="生产工厂" value={traceData.production.factoryName} />
@@ -312,7 +348,7 @@ const TraceabilityDetailScreen: React.FC = () => {
               <InfoItem
                 label="质量状态"
                 value={qualityStatusLabel(traceData.production.qualityStatus)}
-                chipColor={getQualityStatusColor(traceData.production.qualityStatus)}
+                tone={qualityStatusTone(traceData.production.qualityStatus)}
               />
             </View>
           </Card.Content>
@@ -332,19 +368,18 @@ const TraceabilityDetailScreen: React.FC = () => {
             有祖先时来源链已经把 depth=1 那层（就是这份 materials）画出来了，
             再列一遍就是同一批牛出现两次。 */}
         {!hasLineageAncestors && (
-          <Card style={styles.card} testID="materials-one-hop-card">
+          <Card style={cardStyle} testID="materials-one-hop-card">
             <Card.Content>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.sectionIconContainer, { backgroundColor: '#FF9800' }]}>
-                  <MaterialCommunityIcons name="package-variant" size={24} color="#fff" />
-                </View>
-                <Text variant="titleMedium" style={styles.sectionTitle}>原材料溯源</Text>
-                <Chip mode="flat">{traceData.materials.length} 批次</Chip>
-              </View>
-              <Divider style={styles.divider} />
+              <SectionHeader icon="package-variant" title="原材料溯源" trailing={`${traceData.materials.length} 批次`} />
+              <Divider style={dividerStyle} />
 
               {traceData.materials.length === 0 ? (
-                <Text style={styles.emptyText}>暂无原材料消耗记录</Text>
+                <Text
+                  variant="bodyMedium"
+                  style={[styles.emptyText, { color: theme.colors.onSurfaceVariant, paddingVertical: spacing.l }]}
+                >
+                  暂无原材料消耗记录
+                </Text>
               ) : (
                 traceData.materials.map((material, index) => (
                   <MaterialCard key={index} material={material} isLast={index === traceData.materials.length - 1} />
@@ -356,16 +391,10 @@ const TraceabilityDetailScreen: React.FC = () => {
 
         {/* === 3. 加工环节 ===（空数组不占卡，折进底部那一行） */}
         {processingStages.length > 0 && (
-          <Card style={styles.card}>
+          <Card style={cardStyle}>
             <Card.Content>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.sectionIconContainer, { backgroundColor: '#00BCD4' }]}>
-                  <MaterialCommunityIcons name="cog-transfer" size={24} color="#fff" />
-                </View>
-                <Text variant="titleMedium" style={styles.sectionTitle}>加工环节</Text>
-                <Chip mode="flat">{processingStages.length} 道工序</Chip>
-              </View>
-              <Divider style={styles.divider} />
+              <SectionHeader icon="cog-transfer" title="加工环节" trailing={`${processingStages.length} 道工序`} />
+              <Divider style={dividerStyle} />
 
               {[...processingStages]
                 .sort((a, b) => (a.stageOrder ?? 0) - (b.stageOrder ?? 0))
@@ -382,22 +411,19 @@ const TraceabilityDetailScreen: React.FC = () => {
 
         {/* === 4. 质检记录 ===（空数组不占卡） */}
         {traceData.qualityInspections.length > 0 && (
-          <Card style={styles.card}>
+          <Card style={cardStyle}>
             <Card.Content>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.sectionIconContainer, { backgroundColor: '#9C27B0' }]}>
-                  <MaterialCommunityIcons name="clipboard-check-outline" size={24} color="#fff" />
-                </View>
-                <Text variant="titleMedium" style={styles.sectionTitle}>质检记录</Text>
-                <Chip mode="flat">{traceData.qualityInspections.length} 次</Chip>
-              </View>
-              <Divider style={styles.divider} />
+              <SectionHeader
+                icon="clipboard-check-outline"
+                title="质检记录"
+                trailing={`${traceData.qualityInspections.length} 次`}
+              />
+              <Divider style={dividerStyle} />
 
               {traceData.qualityInspections.map((inspection, index) => (
                 <QualityCard
                   key={index}
                   inspection={inspection}
-                  getStatusColor={getQualityStatusColor}
                   isLast={index === traceData.qualityInspections.length - 1}
                 />
               ))}
@@ -407,22 +433,15 @@ const TraceabilityDetailScreen: React.FC = () => {
 
         {/* === 5. 出货记录 ===（空数组不占卡） */}
         {traceData.shipments.length > 0 && (
-          <Card style={styles.card}>
+          <Card style={cardStyle}>
             <Card.Content>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.sectionIconContainer, { backgroundColor: '#4CAF50' }]}>
-                  <MaterialCommunityIcons name="truck-delivery" size={24} color="#fff" />
-                </View>
-                <Text variant="titleMedium" style={styles.sectionTitle}>出货记录</Text>
-                <Chip mode="flat">{traceData.shipments.length} 单</Chip>
-              </View>
-              <Divider style={styles.divider} />
+              <SectionHeader icon="truck-delivery" title="出货记录" trailing={`${traceData.shipments.length} 单`} />
+              <Divider style={dividerStyle} />
 
               {traceData.shipments.map((shipment, index) => (
                 <ShipmentCard
                   key={index}
                   shipment={shipment}
-                  getStatusColor={getShipmentStatusColor}
                   getStatusText={getShipmentStatusText}
                   isLast={index === traceData.shipments.length - 1}
                 />
@@ -433,11 +452,23 @@ const TraceabilityDetailScreen: React.FC = () => {
 
         {/* 三段里真正为空的那些，合成一行灰字；一段都不空时这一行不出现。 */}
         {emptyLine && (
-          <Text style={styles.emptySectionsLine} testID="empty-sections-line">{emptyLine}</Text>
+          <Text
+            variant="bodySmall"
+            style={[
+              styles.emptyText,
+              { color: theme.colors.onSurfaceVariant, marginTop: spacing.xs, marginBottom: spacing.s },
+            ]}
+            testID="empty-sections-line"
+          >
+            {emptyLine}
+          </Text>
         )}
 
         {/* 查询时间 */}
-        <Text style={styles.queryTime}>
+        <Text
+          variant="bodySmall"
+          style={[styles.emptyText, { color: theme.colors.onSurfaceVariant, marginTop: spacing.s }]}
+        >
           查询时间: {traceData.queryTime ? new Date(traceData.queryTime).toLocaleString() : '-'}
         </Text>
       </ScrollView>
@@ -449,68 +480,90 @@ const TraceabilityDetailScreen: React.FC = () => {
 const InfoItem: React.FC<{
   label: string;
   value?: string | null;
-  chipColor?: string;
-}> = ({ label, value, chipColor }) => {
+  /** 给了色调就渲染成状态 chip（质量状态那一行）。 */
+  tone?: StatusTone;
+}> = ({ label, value, tone }) => {
+  const theme = useTheme<AppTheme>();
   if (isBlank(value)) {
     return null;
   }
   return (
-    <View style={styles.infoItem}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      {chipColor ? (
-        <Chip
-          mode="flat"
-          style={[styles.statusChip, { backgroundColor: chipColor + '20' }]}
-          textStyle={{ color: chipColor, fontSize: 12 }}
-        >
-          {value}
-        </Chip>
+    <View style={[styles.infoItem, { paddingVertical: theme.custom.spacing.xs }]}>
+      <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>{label}</Text>
+      {tone ? (
+        <ToneChip tone={tone}>{value as string}</ToneChip>
       ) : (
-        <Text style={styles.infoValue}>{value}</Text>
+        <Text variant="bodyMedium" style={[styles.infoValue, { color: theme.colors.onSurface }]}>
+          {value}
+        </Text>
       )}
     </View>
   );
 };
 
+/**
+ * 列表项外框：标题行 + 若干明细行，项与项之间一条 outlineVariant 细线。
+ * 加工 / 原料 / 质检 / 出货 四种项共用，⛔ 别各写一套。
+ */
+const ItemFrame: React.FC<{
+  title: string;
+  /** 标题右侧：一段说明文字，或一个状态 chip。 */
+  trailing?: React.ReactNode;
+  isLast: boolean;
+  children: React.ReactNode;
+}> = ({ title, trailing, isLast, children }) => {
+  const theme = useTheme<AppTheme>();
+  return (
+    <View
+      style={[
+        { paddingVertical: theme.custom.spacing.m },
+        !isLast && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.outlineVariant },
+      ]}
+    >
+      <View style={[styles.itemHeader, { marginBottom: theme.custom.spacing.s }]}>
+        <Text variant="titleSmall" style={{ color: theme.colors.onSurface }}>{title}</Text>
+        {typeof trailing === 'string' ? (
+          <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>{trailing}</Text>
+        ) : (
+          trailing
+        )}
+      </View>
+      <View style={{ gap: theme.custom.spacing.xs }}>{children}</View>
+    </View>
+  );
+};
+
+/** 明细行：bodyMedium（14sp）onSurfaceVariant。 */
+const Detail: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const theme = useTheme<AppTheme>();
+  return (
+    <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+      {children}
+    </Text>
+  );
+};
+
 // 加工环节卡片组件
 const ProcessingStageCard: React.FC<{ stage: ProcessingStageInfo; isLast: boolean }> = ({ stage, isLast }) => (
-  <View style={[styles.itemCard, !isLast && styles.itemCardBorder]}>
-    <View style={styles.itemHeader}>
-      <Text style={styles.itemTitle}>{stage.stageName || stage.stageType}</Text>
-      <Text style={styles.itemSubtitle}>第{stage.stageOrder}道工序</Text>
-    </View>
-    <View style={styles.itemDetails}>
-      {stage.operatorName && (
-        <Text style={styles.itemDetail}>操作员: {stage.operatorName}</Text>
-      )}
-      {stage.equipmentName && (
-        <Text style={styles.itemDetail}>设备: {stage.equipmentName}</Text>
-      )}
-      {stage.durationMinutes != null && (
-        <Text style={styles.itemDetail}>耗时: {stage.durationMinutes}分钟</Text>
-      )}
-      {stage.inputWeight != null && stage.outputWeight != null && (
-        <Text style={styles.itemDetail}>
-          投入/产出: {stage.inputWeight}kg → {stage.outputWeight}kg
-        </Text>
-      )}
-      {stage.lossRate != null && (
-        <Text style={styles.itemDetail}>损耗率: {(stage.lossRate * 100).toFixed(1)}%</Text>
-      )}
-      {stage.passRate != null && (
-        <Text style={styles.itemDetail}>合格率: {(stage.passRate * 100).toFixed(1)}%</Text>
-      )}
-      {stage.temperature != null && (
-        <Text style={styles.itemDetail}>温度: {stage.temperature}°C</Text>
-      )}
-      {stage.startTime && (
-        <Text style={styles.itemDetail}>
-          时间: {new Date(stage.startTime).toLocaleString()}
-          {stage.endTime ? ` ~ ${new Date(stage.endTime).toLocaleTimeString()}` : ''}
-        </Text>
-      )}
-    </View>
-  </View>
+  <ItemFrame title={stage.stageName || stage.stageType} trailing={`第${stage.stageOrder}道工序`} isLast={isLast}>
+    {stage.operatorName && <Detail>操作员: {stage.operatorName}</Detail>}
+    {stage.equipmentName && <Detail>设备: {stage.equipmentName}</Detail>}
+    {stage.durationMinutes != null && <Detail>耗时: {stage.durationMinutes}分钟</Detail>}
+    {stage.inputWeight != null && stage.outputWeight != null && (
+      <Detail>
+        投入/产出: {stage.inputWeight}kg → {stage.outputWeight}kg
+      </Detail>
+    )}
+    {stage.lossRate != null && <Detail>损耗率: {(stage.lossRate * 100).toFixed(1)}%</Detail>}
+    {stage.passRate != null && <Detail>合格率: {(stage.passRate * 100).toFixed(1)}%</Detail>}
+    {stage.temperature != null && <Detail>温度: {stage.temperature}°C</Detail>}
+    {stage.startTime && (
+      <Detail>
+        时间: {new Date(stage.startTime).toLocaleString()}
+        {stage.endTime ? ` ~ ${new Date(stage.endTime).toLocaleTimeString()}` : ''}
+      </Detail>
+    )}
+  </ItemFrame>
 );
 
 // 原材料卡片组件（一跳）
@@ -521,263 +574,74 @@ const MaterialCard: React.FC<{ material: MaterialInfo; isLast: boolean }> = ({ m
       ? null
       : material.supplierName;
   return (
-    <View style={[styles.itemCard, !isLast && styles.itemCardBorder]}>
-      <View style={styles.itemHeader}>
-        <Text style={styles.itemTitle}>{material.materialName}</Text>
-        <Text style={styles.itemSubtitle}>{material.batchNumber}</Text>
-      </View>
-      <View style={styles.itemDetails}>
-        {supplierName && (
-          <Text style={styles.itemDetail}>供应商: {supplierName}</Text>
-        )}
-        {!isBlank(material.receiptDate) && (
-          <Text style={styles.itemDetail}>入库日期: {material.receiptDate}</Text>
-        )}
-        {material.expireDate && (
-          <Text style={styles.itemDetail}>过期日期: {material.expireDate}</Text>
-        )}
-        {material.quantity != null && (
-          <Text style={styles.itemDetail}>消耗量: {material.quantity} {material.unit}</Text>
-        )}
-        {material.storageLocation && (
-          <Text style={styles.itemDetail}>存储位置: {material.storageLocation}</Text>
-        )}
-      </View>
-    </View>
+    <ItemFrame title={material.materialName} trailing={material.batchNumber} isLast={isLast}>
+      {supplierName && <Detail>供应商: {supplierName}</Detail>}
+      {!isBlank(material.receiptDate) && <Detail>入库日期: {material.receiptDate}</Detail>}
+      {material.expireDate && <Detail>过期日期: {material.expireDate}</Detail>}
+      {material.quantity != null && (
+        <Detail>
+          消耗量: {material.quantity} {material.unit}
+        </Detail>
+      )}
+      {material.storageLocation && <Detail>存储位置: {material.storageLocation}</Detail>}
+    </ItemFrame>
   );
 };
 
 // 质检卡片组件
-const QualityCard: React.FC<{
-  inspection: QualityInfo;
-  getStatusColor: (status: string) => string;
-  isLast: boolean;
-}> = ({ inspection, getStatusColor, isLast }) => (
-  <View style={[styles.itemCard, !isLast && styles.itemCardBorder]}>
-    <View style={styles.itemHeader}>
-      <Text style={styles.itemTitle}>质检 #{inspection.inspectionId?.slice(-8) || '-'}</Text>
-      <Chip
-        mode="flat"
-        style={[
-          styles.miniChip,
-          { backgroundColor: getStatusColor(inspection.result) + '20' },
-        ]}
-        textStyle={{ color: getStatusColor(inspection.result), fontSize: 11 }}
-      >
-        {inspection.result || '待定'}
-      </Chip>
-    </View>
-    <View style={styles.itemDetails}>
-      <Text style={styles.itemDetail}>检验日期: {inspection.inspectionDate?.split('T')[0]}</Text>
-      <Text style={styles.itemDetail}>检验员: {inspection.inspectorName}</Text>
-      {inspection.passRate !== undefined && (
-        <Text style={styles.itemDetail}>合格率: {inspection.passRate}%</Text>
-      )}
-      {inspection.remarks && (
-        <Text style={styles.itemDetail}>备注: {inspection.remarks}</Text>
-      )}
-    </View>
-  </View>
+const QualityCard: React.FC<{ inspection: QualityInfo; isLast: boolean }> = ({ inspection, isLast }) => (
+  <ItemFrame
+    title={`质检 #${inspection.inspectionId?.slice(-8) || '-'}`}
+    trailing={<ToneChip tone={qualityStatusTone(inspection.result)}>{inspection.result || '待定'}</ToneChip>}
+    isLast={isLast}
+  >
+    <Detail>检验日期: {inspection.inspectionDate?.split('T')[0]}</Detail>
+    <Detail>检验员: {inspection.inspectorName}</Detail>
+    {inspection.passRate !== undefined && <Detail>合格率: {inspection.passRate}%</Detail>}
+    {inspection.remarks && <Detail>备注: {inspection.remarks}</Detail>}
+  </ItemFrame>
 );
 
 // 出货卡片组件
 const ShipmentCard: React.FC<{
   shipment: ShipmentInfo;
-  getStatusColor: (status: string) => string;
   getStatusText: (status: string) => string;
   isLast: boolean;
-}> = ({ shipment, getStatusColor, getStatusText, isLast }) => (
-  <View style={[styles.itemCard, !isLast && styles.itemCardBorder]}>
-    <View style={styles.itemHeader}>
-      <Text style={styles.itemTitle}>{shipment.shipmentNumber}</Text>
-      <Chip
-        mode="flat"
-        style={[
-          styles.miniChip,
-          { backgroundColor: getStatusColor(shipment.status) + '20' },
-        ]}
-        textStyle={{ color: getStatusColor(shipment.status), fontSize: 11 }}
-      >
-        {getStatusText(shipment.status)}
-      </Chip>
-    </View>
-    <View style={styles.itemDetails}>
-      <Text style={styles.itemDetail}>出货日期: {shipment.shipmentDate}</Text>
-      <Text style={styles.itemDetail}>客户: {shipment.customerName}</Text>
-      {shipment.quantity && (
-        <Text style={styles.itemDetail}>数量: {shipment.quantity} {shipment.unit}</Text>
-      )}
-      {shipment.logisticsCompany && (
-        <Text style={styles.itemDetail}>物流公司: {shipment.logisticsCompany}</Text>
-      )}
-      {shipment.trackingNumber && (
-        <Text style={styles.itemDetail}>物流单号: {shipment.trackingNumber}</Text>
-      )}
-    </View>
-  </View>
+}> = ({ shipment, getStatusText, isLast }) => (
+  <ItemFrame
+    title={shipment.shipmentNumber}
+    trailing={<ToneChip tone={shipmentStatusTone(shipment.status)}>{getStatusText(shipment.status)}</ToneChip>}
+    isLast={isLast}
+  >
+    <Detail>出货日期: {shipment.shipmentDate}</Detail>
+    <Detail>客户: {shipment.customerName}</Detail>
+    {shipment.quantity && (
+      <Detail>
+        数量: {shipment.quantity} {shipment.unit}
+      </Detail>
+    )}
+    {shipment.logisticsCompany && <Detail>物流公司: {shipment.logisticsCompany}</Detail>}
+    {shipment.trackingNumber && <Detail>物流单号: {shipment.trackingNumber}</Detail>}
+  </ItemFrame>
 );
 
+// ⚠️ 这里只放布局：颜色 / 字号 / 间距全部走 useTheme() 与 Paper 的 variant，
+//    `gates/demoScreensUseThemeTokens` 守着本文件里不再出现色值与 fontSize<14。
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  loadingText: {
-    marginTop: 12,
-    color: '#666',
-  },
-  errorText: {
-    marginTop: 12,
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  traceCodeCard: {
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 16,
-  },
-  traceCodeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  traceCodeColumn: {
-    flex: 1,
-    gap: 4,
-  },
-  traceCodeRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  traceCodeLabel: {
-    marginLeft: 8,
-    color: '#666',
-  },
-  traceCode: {
-    flex: 1,
-    textAlign: 'right',
-    fontFamily: 'monospace',
-    fontSize: 12,
-    color: '#333',
-  },
-  traceCodeMissing: {
-    marginLeft: 8,
-    fontSize: 14,
-    color: '#999',
-  },
-  traceCodeBatch: {
-    marginTop: 8,
-    marginLeft: 32,
-    fontSize: 12,
-    color: '#888',
-  },
-  card: {
-    marginBottom: 16,
-    borderRadius: 12,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  sectionIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#2196F3',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sectionTitle: {
-    marginLeft: 12,
-    flex: 1,
-    fontWeight: '600',
-  },
-  divider: {
-    marginVertical: 12,
-  },
-  infoGrid: {
-    gap: 8,
-  },
-  infoItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  infoLabel: {
-    color: '#666',
-    fontSize: 14,
-  },
-  infoValue: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  statusChip: {
-    height: 26,
-  },
-  miniChip: {
-    height: 24,
-  },
-  emptyText: {
-    textAlign: 'center',
-    color: '#999',
-    paddingVertical: 16,
-  },
-  emptySectionsLine: {
-    textAlign: 'center',
-    color: '#999',
-    fontSize: 13,
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  itemCard: {
-    paddingVertical: 12,
-  },
-  itemCardBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  itemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  itemTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  itemSubtitle: {
-    fontSize: 12,
-    color: '#666',
-  },
-  itemDetails: {
-    gap: 4,
-  },
-  itemDetail: {
-    fontSize: 13,
-    color: '#555',
-  },
-  queryTime: {
-    textAlign: 'center',
-    color: '#999',
-    fontSize: 12,
-    marginTop: 8,
-  },
+  container: { flex: 1 },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  errorText: { textAlign: 'center' },
+  scrollView: { flex: 1 },
+  traceCodeCard: {},
+  traceCodeHeader: { flexDirection: 'row', alignItems: 'center' },
+  traceCodeColumn: { flex: 1 },
+  traceCodeRow: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  traceCode: { flex: 1, textAlign: 'right', fontFamily: 'monospace' },
+  card: {},
+  infoItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  infoValue: { fontWeight: '500' },
+  emptyText: { textAlign: 'center' },
+  itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
 });
 
 export default TraceabilityDetailScreen;
