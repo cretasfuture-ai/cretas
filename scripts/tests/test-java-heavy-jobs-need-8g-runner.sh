@@ -85,7 +85,8 @@ ok "A. $heavy 个自托管 Maven job 全部 runs-on 带 java 标签"
 mkdir -p "$TMP/neg"
 cp "$WF_DIR/java-gate-pr.yml" "$TMP/neg/"
 sed -i 's/\[self-hosted, cretas, java\]/[self-hosted, cretas]/' "$TMP/neg/java-gate-pr.yml"
-neg=$(scan_jobs "$TMP/neg" | awk -F'\t' '$3 ~ /self-hosted/ && $4 > 0 && $3 !~ /java\]/' | wc -l)
+neg_rows=$(scan_jobs "$TMP/neg") || fail "阴性对照: 扫描器在副本上跑挂了"
+neg=$(awk -F'\t' '$3 ~ /self-hosted/ && $4 > 0 && $3 !~ /java\]/' <<<"$neg_rows" | wc -l)
 [ "$neg" -ge 1 ] || fail "阴性对照: 抹掉 java 标签后扫描器没报 —— 闸在守空气"
 ok "A'. 阴性对照: 抹掉标签能被抓到 ($neg 个 job)"
 
