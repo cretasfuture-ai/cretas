@@ -50,6 +50,17 @@ public final class VisionTemplateRegistry {
     public static final String EAR_TAG = "EAR_TAG";
     public static final String MEAT_CUT = "MEAT_CUT";
 
+    /**
+     * 肉品初评允许的部位词表 —— 与胜龙演示租户工艺族图里「分割」工序的 20 个产出端口同名
+     * (scripts/e2e/shenglong-demo/seed-cattle-demo.py 的 CUTS)。⚠️ 这是通用牛肉分割命名,
+     * 不是租户配置; 猪/羊部位另起模板时再扩。清单外一律 null, ⛔ 不让模型自由发挥。
+     */
+    public static final java.util.List<String> MEAT_CUT_VOCABULARY = java.util.List.of(
+            "牛腩", "西冷", "眼肉", "牛腱", "牛霖", "上脑", "牛柳", "前胸", "后胸", "牛肋条",
+            "板腱", "嫩肩", "黄瓜条", "大米龙", "小米龙", "臀肉", "腱子", "牛尾", "碎肉", "骨");
+
+    private static final String CUT_VOCABULARY = String.join("、", MEAT_CUT_VOCABULARY);
+
     private static final Map<String, VisionTemplate> TEMPLATES = new LinkedHashMap<>();
 
     static {
@@ -72,13 +83,19 @@ public final class VisionTemplateRegistry {
                 """
                 这是一张肉品分割块的照片。请做一次外观初评。
 
+                部位判断的纪律(2026-09-16 演示实测: 切好的方块被说成"牛小排"且把握 0.95, 另一张写成英文 "Sirloin"):
+                - cut 只能从这个清单里选一个, 用清单里的中文原词: {CUTS}; 清单外的一律填 null。
+                - 只有看得到整块分割肉的形状、骨或筋膜走向时才判断部位; 已切成方块、薄片、肉粒、肉末的, cut 填 null。
+                - 不要用英文, 不要中英混排, 不要写"眼肉 (Ribeye)"这种带括号的写法。
+                - confidence 主要反映你对 cut 的把握: cut 为 null 或拿不准时 confidence 不高于 0.6。
+
                 返回 JSON:
-                {"cut": "分割部位名称, 判断不出填 null", \
-                "marblingScore": 1到5的整数(脂肪分布均匀细密为高分), 判断不出填 null, \
-                "foreignObjectSuspected": true/false(是否疑似有异物, 如毛发/金属/塑料/骨渣), \
+                {"cut": "上面清单里的一个中文词, 判断不出填 null", \
+                "marblingScore": 1到5的整数(脂肪分布均匀细密为高分; 这是外观描述, 不是等级), 判断不出填 null, \
+                "foreignObjectSuspected": true/false(是否疑似有异物, 如毛发/金属/塑料/骨渣/标签/牙签; 盘饰蔬菜和配料不算), \
                 "contaminationSuspected": true/false(是否疑似污染, 如变色/渗液/霉斑), \
                 "confidence": 0.0, "notes": "补充说明; 没有就填 null"}
-                """ + JSON_DISCIPLINE,
+                """.replace("{CUTS}", CUT_VOCABULARY) + JSON_DISCIPLINE,
                 Set.of("cut", "marblingScore", "foreignObjectSuspected",
                         "contaminationSuspected", "confidence")));
     }
