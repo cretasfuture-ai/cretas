@@ -1312,13 +1312,6 @@
     },
     "aiFailed": "AI analysis failed"
   },
-  "traceability": {
-    "lineage": {
-      "sourceCount": "{{n}} sources",
-      "directSource": "Direct sources",
-      "upstreamLevel": "Sources {{depth}} levels up"
-    }
-  },
   "sourceIndividual": {
     "vision": {
       "title": "Photo verification",
@@ -1458,6 +1451,11 @@
     }
   },
   "traceability": {
+    "lineage": {
+      "sourceCount": "{{n}} sources",
+      "directSource": "Direct sources",
+      "upstreamLevel": "Sources {{depth}} levels up"
+    },
     "entry": {
       "title": "Trace lookup",
       "scan": "Scan to trace",
