@@ -163,6 +163,10 @@ const rawMenuConfig: MenuItem[] = [
       //   后端要的那个, 再叠 roles 只会把车间主管挡在外面 —— 那是把问题反着修一遍。
       { path: '/dashboard/production-progress', title: '生产进度大屏', icon: '', module: 'production' },
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
+      // 溯源查询 (2026-09-15) —— 一条批次从源头个体到出货的完整链路, 投屏讲「一条链路」
+      // 时不用举手机。⛔ 不加 roles 白名单: 页面只读, 后端闸是 module 级 (production),
+      // 与本菜单项判的模块是同一个 (同上面 /dashboard/production-progress 那段的理由)。
+      { path: '/production/traceability', title: '溯源查询', icon: '', module: 'production' },
       // 标准出成率 (2026-09-05) —— 备料计算的基准线, 唯一的人工写入口。
       // ⛔ 不加 roles 白名单: 与上面 /dashboard/production-progress 同一个理由 ——
       //   页面本身对无权者是**可读**的 (只是改按钮置灰 + 明示找谁改), 菜单挡住反而

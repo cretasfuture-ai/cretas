@@ -250,6 +250,16 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '批次详情', module: 'production', hidden: true }
           },
           {
+            // 溯源查询 —— 一条批次从源头个体到出货的完整链路 (投屏讲「一条链路」用)。
+            // 支持 `?batchNumber=` 带参直接打开。
+            // ⚠️ 菜单登记在 components/layout/menuConfig.ts 的生产管理组里 ——
+            //    只加路由不加菜单 = 用户只能手打 URL(routeReachability 那道闸正是为此)。
+            path: 'traceability',
+            name: 'ProductionTraceability',
+            component: () => import('@/views/traceability/index.vue'),
+            meta: { requiresAuth: true, title: '溯源查询', module: 'production' }
+          },
+          {
             path: 'plans',
             name: 'ProductionPlans',
             component: () => import('@/views/production/plans/list.vue'),

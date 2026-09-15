@@ -1,10 +1,12 @@
 import { del, get, post, put } from './request';
+import type { LineageNode } from './traceability';
 
 /**
  * 源头个体档案 —— 溯源链最前端有生命周期的个体(牛/鸭/猪/…)。
  *
  * 后端: `/api/mobile/{factoryId}/source-individuals`
  * (axios baseURL 已是 `/api/mobile`, 所以这里的路径从 `/{factoryId}/...` 开始)
+ *   GET /{factoryId}/source-individuals/{id}/detail   (系谱 + 去向, #807)
  *
  * ⚠️ 物种是**字段值** `species`, 不是模型名 —— ⛔ 不要在这一层长出物种专属字段。
  */
@@ -51,6 +53,59 @@ export interface SourceIndividualPage {
   totalPages: number;
 }
 
+// ── 详情 (系谱 + 去向) ──────────────────────────────────────────────────────
+// 形状逐字对着手机端 `services/api/sourceIndividualApiClient.ts` 抄, ⛔ 不自己发明字段名。
+
+/** 系谱行上另一头个体的摘要 (父本 / 母本 / 后代 / 同父兄弟)。 */
+export interface SourceIndividualSummary {
+  id: string;
+  individualCode: string;
+  tagNumber?: string | null;
+  species?: string | null;
+  breed?: string | null;
+  sex?: string | null;
+  dnaVerificationStatus?: DnaVerificationStatus | null;
+}
+
+/** 挂了该个体的原料批次 —— 「它去了哪」的第一跳。 */
+export interface SourceIndividualBatchSummary {
+  id: string;
+  batchNumber: string;
+  /** 物料名; 后端查不到物料类型时为 null (⛔ 前端不编「未知物料」)。 */
+  materialName?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  receiptDate?: string | null;
+}
+
+/**
+ * 下游三组, 元素与溯源血缘节点同一个形状 (`LineageNode`)。
+ * 三个数组**永远是数组**, 没有就是空的。
+ */
+export interface SourceIndividualDownstream {
+  productionBatches: LineageNode[];
+  finishedBatches: LineageNode[];
+  shipments: LineageNode[];
+}
+
+/**
+ * 个体详情: 本体 + 系谱 + 去向。
+ *
+ * ⚠️ 三种「没有」分开读:
+ *   · `sire`/`dam` 为 null 且 `individual.sireIndividualId`/`damIndividualId` 也为 null ⇒ 未登记
+ *   · `sire`/`dam` 为 null 而对应 id 非空 ⇒ 登记过、档案已不可查(软删)
+ *   · `offspring` / `siblingsBySire` / `batches` / `downstream.*` 空数组 ⇒ 确实没有
+ */
+export interface SourceIndividualDetail {
+  individual: SourceIndividual;
+  sire: SourceIndividualSummary | null;
+  dam: SourceIndividualSummary | null;
+  offspring: SourceIndividualSummary[];
+  siblingsBySire: SourceIndividualSummary[];
+  batches: SourceIndividualBatchSummary[];
+  downstream: SourceIndividualDownstream;
+}
+
 export interface SourceIndividualPayload {
   individualCode?: string;
   tagNumber?: string | null;
@@ -94,6 +149,17 @@ export function listSourceIndividuals(
 
 export function getSourceIndividual(factoryId: string, id: string) {
   return get<SourceIndividual>(`/${factoryId}/source-individuals/${id}`);
+}
+
+/**
+ * 详情: 本体 + 系谱 + 去向 (#807)。
+ * `_silent: true`: 抽屉自己把失败原话显示出来 (不留一张空档案让人以为「这头没有系谱」),
+ * 拦截器再弹一个 toast 是重复的。
+ */
+export function getSourceIndividualDetail(factoryId: string, id: string) {
+  return get<SourceIndividualDetail>(`/${factoryId}/source-individuals/${id}/detail`, {
+    _silent: true,
+  });
 }
 
 export function findSourceIndividualByTag(factoryId: string, tagNumber: string) {
