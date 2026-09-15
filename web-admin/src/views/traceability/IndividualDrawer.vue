@@ -19,6 +19,7 @@ import { useRouter } from 'vue-router';
 import { ArrowLeft, ArrowRight, Edit } from '@element-plus/icons-vue';
 import {
   getSourceIndividualDetail,
+  type SourceIndividualBatchSummary,
   type SourceIndividualDetail,
   type SourceIndividualSummary,
 } from '@/api/sourceIndividual';
@@ -108,9 +109,14 @@ function goEdit() {
 }
 
 const individual = computed(() => detail.value?.individual ?? null);
+/** 编码只在标题栏念一次 —— 正文首行是耳标 (现场认牛靠它), ⛔ 不把同一个编码再排一遍。 */
 const title = computed(() => individual.value?.individualCode || '个体档案');
+/** 「品种 · 来源场」—— 与来源链行上点进来的那一段是同一句, 点的是什么看到的就是什么。 */
+const originLine = computed(() =>
+  individual.value ? joinPresent([individual.value.breed, individual.value.originFarm]) : null
+);
 const identityLine = computed(() =>
-  individual.value ? joinPresent([individual.value.species, individual.value.breed, individual.value.sex]) : null
+  individual.value ? joinPresent([individual.value.species, individual.value.sex]) : null
 );
 
 /** 耳标末 4 位 —— 列表行上够用, 完整耳标在头部。⚠️ 耳标本身 ≤4 位就整串给。 */
@@ -129,6 +135,21 @@ const hasDownstream = computed(() => {
   const d = detail.value?.downstream;
   return !!d && d.productionBatches.length + d.finishedBatches.length + d.shipments.length > 0;
 });
+
+/**
+ * 原料批次也走 `LineageNodeRow` —— 与下面「生产批次 / 成品 / 出货」同一份图标与排版,
+ * 左缘才对得齐 (自己画 `.row` 时少了 18px 图标 + 12px 间距, 实测差 30px)。
+ * 数量拼进 name 而不是走 `showQuantity`: 那一行的标签是「投入量」, 而这里是这批的入库量。
+ */
+function batchNode(b: SourceIndividualBatchSummary): LineageNode {
+  return {
+    nodeType: 'MATERIAL_BATCH',
+    nodeId: b.id,
+    batchNumber: b.batchNumber,
+    name: joinPresent([b.materialName, b.quantity != null ? `${b.quantity}${b.unit ?? ''}` : null]),
+    resolved: true,
+  };
+}
 
 /** 「去了哪」按链的方向排: 原料批次 → 生产批次 → 成品 → 出货。只列真有内容的段。 */
 const whereaboutGroups = computed(() => {
@@ -167,11 +188,14 @@ const whereaboutGroups = computed(() => {
       <el-button class="retry" @click="retry">重试</el-button>
     </div>
 
-    <template v-else-if="detail && individual">
-      <!-- 头部: 编码、耳标、物种·品种·性别、出生、来源场、DNA -->
+    <!-- 底部留白: 最后一段「后代」的 chip 不贴着抽屉底缘 (el-drawer__body 自带 20px 不够) -->
+    <div v-else-if="detail && individual" class="drawer-content">
+      <!-- 头部: 耳标 + DNA、品种·来源场、物种·性别、出生。编码只在标题栏 -->
       <section class="drawer-section" data-testid="drawer-identity">
-        <div class="identity-row">
-          <h3 class="identity-code">{{ individual.individualCode }}</h3>
+        <div v-if="individual.tagNumber || dnaStatusLabel(individual.dnaVerificationStatus)" class="identity-row">
+          <h3 v-if="individual.tagNumber" class="identity-tag" data-testid="drawer-tag">
+            耳标 <span class="mono">{{ individual.tagNumber }}</span>
+          </h3>
           <el-tag
             v-if="dnaStatusLabel(individual.dnaVerificationStatus)"
             :type="dnaStatusTag(individual.dnaVerificationStatus)"
@@ -182,10 +206,9 @@ const whereaboutGroups = computed(() => {
             {{ dnaStatusLabel(individual.dnaVerificationStatus) }}
           </el-tag>
         </div>
-        <p v-if="individual.tagNumber" class="meta">耳标：{{ individual.tagNumber }}</p>
+        <p v-if="originLine" class="meta" data-testid="drawer-origin-line">{{ originLine }}</p>
         <p v-if="identityLine" class="meta">{{ identityLine }}</p>
         <p v-if="individual.birthDate" class="meta">出生：{{ individual.birthDate }}</p>
-        <p v-if="individual.originFarm" class="meta">来源场：{{ individual.originFarm }}</p>
       </section>
 
       <!-- 系谱 -->
@@ -237,15 +260,10 @@ const whereaboutGroups = computed(() => {
             <p v-if="detail.batches.length === 0" class="muted" data-testid="drawer-batches-empty">
               尚未挂到任何原料批次
             </p>
-            <div v-for="b in detail.batches" :key="b.id" class="row">
-              <div class="row__body">
-                <div class="row__title mono">{{ b.batchNumber }}</div>
-                <div v-if="joinPresent([b.materialName, b.quantity != null ? `${b.quantity}${b.unit ?? ''}` : null])" class="row__line">
-                  {{ joinPresent([b.materialName, b.quantity != null ? `${b.quantity}${b.unit ?? ''}` : null]) }}
-                </div>
-                <div v-if="b.receiptDate" class="row__line">入库：{{ b.receiptDate }}</div>
-              </div>
-            </div>
+            <LineageNodeRow v-for="b in detail.batches" :key="b.id" :node="batchNode(b)" :show-quantity="false">
+              <!-- 条件挂在 slot 上: 没入库日期就不传 slot, 行里不留一个空 div -->
+              <template v-if="b.receiptDate" #default>入库：{{ b.receiptDate }}</template>
+            </LineageNodeRow>
             <p v-if="detail.batches.length > 0 && !hasDownstream" class="muted" data-testid="drawer-not-in-production">
               还没进入生产
             </p>
@@ -320,7 +338,7 @@ const whereaboutGroups = computed(() => {
           <el-icon class="row__chevron"><ArrowRight /></el-icon>
         </div>
       </section>
-    </template>
+    </div>
   </el-drawer>
 </template>
 
@@ -337,6 +355,11 @@ const whereaboutGroups = computed(() => {
     color: var(--el-text-color-primary);
     font-family: var(--font-family-mono);
   }
+}
+
+// el-drawer__body 自带 20px 内边距; 再加 24px, 滚到底时「后代」最后一行 chip 与底缘之间有一整行的空。
+.drawer-content {
+  padding-bottom: 24px;
 }
 
 .drawer-section {
@@ -362,10 +385,10 @@ const whereaboutGroups = computed(() => {
   gap: 12px;
 }
 
-.identity-code {
+.identity-tag {
   margin: 0;
-  font-size: var(--font-size-xl);
-  font-family: var(--font-family-mono);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
   color: var(--el-text-color-primary);
 }
 
