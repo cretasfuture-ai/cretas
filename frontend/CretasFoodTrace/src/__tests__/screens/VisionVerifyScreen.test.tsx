@@ -23,7 +23,7 @@
  */
 import React from 'react';
 import { ActivityIndicator } from 'react-native';
-import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
 
 import VisionVerifyScreen from '../../screens/shared/VisionVerifyScreen';
@@ -226,8 +226,15 @@ describe('⑥ 识别中', () => {
     expect(UNSAFE_getByType(ActivityIndicator).props.size).toBe('large');
     expect(within(getByTestId('vision-busy')).getByText('识别中…').props.variant).toBe('bodyLarge');
 
-    resolveVerify(READ_AND_MATCHED);
-    await waitFor(() => expect(queryByTestId('vision-busy')).toBeNull());
+    // ⚠️ 在 act 里放行 promise：promise 续体里的 setState 在 act 之外只能靠 waitFor 轮询等
+    //    React 自己调度，实测（2026-09-16 探针）要 1.6–1.8 s，机器一忙就撞 waitFor 的 1 s 上限
+    //    ——变异对照跑批时这条因此红过三次，与被变异的行为无关。act 里 181 ms 且确定。
+    await act(async () => {
+      resolveVerify(READ_AND_MATCHED);
+    });
+    expect(queryByTestId('vision-busy')).toBeNull();
+    // 「必发生」：识别完成的结果卡出来了 —— 否则「busy 没了」也可能是整屏没渲染
+    expect(getByTestId('vision-ear-tag-card')).toBeTruthy();
   });
 });
 
