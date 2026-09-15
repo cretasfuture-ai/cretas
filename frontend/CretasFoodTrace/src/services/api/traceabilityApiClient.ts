@@ -193,7 +193,8 @@ export interface FullTraceResponse {
   processingStages?: ProcessingStageInfo[];
   qualityInspections: QualityInfo[];
   shipments: ShipmentInfo[];
-  traceCode: string;
+  /** 已打印标签上的溯源码; 还没打过标签为 null(后端不再现造扫不回来的码)。 */
+  traceCode: string | null;
   queryTime: string;
   /**
    * 多跳血缘。
@@ -224,7 +225,8 @@ export interface PublicTraceResponse {
   certificationInfo?: string;
   materials: PublicMaterialInfo[];
   qualityInspection?: PublicQualityInfo;
-  traceCode: string;
+  /** 已打印标签上的溯源码; 还没打过标签为 null(后端不再现造扫不回来的码)。 */
+  traceCode: string | null;
   queryTime: string;
   isValid: boolean;
   message: string;

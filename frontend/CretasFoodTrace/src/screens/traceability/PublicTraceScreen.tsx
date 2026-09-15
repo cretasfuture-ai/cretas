@@ -291,12 +291,14 @@ const PublicTraceScreen: React.FC = () => {
 
                 <LineageChainTimeline lineage={traceData.lineage} />
 
-                {/* 溯源码 */}
-                <Surface style={styles.traceCodeCard} elevation={1}>
-                  <MaterialCommunityIcons name="qrcode" size={20} color="#666" />
-                  <Text style={styles.traceCodeLabel}>溯源码:</Text>
-                  <Text style={styles.traceCode}>{traceData.traceCode}</Text>
-                </Surface>
+                {/* 溯源码 = 标签上印的码; 没打过标签(null)整卡不显示 */}
+                {!!traceData.traceCode && (
+                  <Surface style={styles.traceCodeCard} elevation={1}>
+                    <MaterialCommunityIcons name="qrcode" size={20} color="#666" />
+                    <Text style={styles.traceCodeLabel}>溯源码:</Text>
+                    <Text style={styles.traceCode}>{traceData.traceCode}</Text>
+                  </Surface>
+                )}
               </>
             ) : (
               /* 验证失败 */

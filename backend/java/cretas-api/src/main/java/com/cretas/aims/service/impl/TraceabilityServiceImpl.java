@@ -5,7 +5,6 @@ import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.ProcessingStageType;
 import com.cretas.aims.repository.*;
-import com.cretas.aims.service.EncodingRuleService;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.TraceabilityService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -44,8 +43,21 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     private final SupplierRepository supplierRepository;
     private final CustomerRepository customerRepository;
     private final ProcessSheetRowRepository processSheetRowRepository;
-    private final EncodingRuleService encodingRuleService;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 标签仓库 —— 溯源码的<b>唯一</b>来源。
+     *
+     * <p>🔴 2026-09-15 真机彩排: 详情页顶上显示 `TR-CATTLE_3701_001-20260915-8125`, 而标签上印的是
+     * `TRACE-SL-DEMO-BATCH-V1-SEED01`。原实现每次查询都 {@code generateTraceCode()} 现造一个:
+     * 工厂配了编码规则就 {@code incrementSequence()}(<b>看一眼溯源就烧掉一个序号</b>),
+     * 没配就 `TR-…-{毫秒%10000}`; 两条路都不落库、不与批次绑定、扫不回来。
+     * 现在只返回 {@code labels.trace_code} 里<b>持久化过</b>的码, 没打过标签就是 {@code null},
+     * ⛔ 不再现造 —— 一个扫不回来的「溯源码」不是溯源码, 是装饰。
+     *
+     * <p>⚠️ 允许为 null(单测 {@code @InjectMocks} 不 mock 它时), 为 null 时同样返回 null。
+     */
+    private final com.cretas.aims.repository.LabelRepository labelRepository;
 
     /**
      * 多跳血缘组装器。
@@ -56,8 +68,6 @@ public class TraceabilityServiceImpl implements TraceabilityService {
      */
     private final com.cretas.aims.service.lineage.LineageGraphAssembler lineageGraphAssembler;
 
-    /** 溯源码实体类型标识 */
-    private static final String TRACE_CODE_ENTITY_TYPE = "TRACE_CODE";
 
     /** 血缘查询允许的根节点类型（与 BatchLineageEdge.sourceType 取值集一致）。 */
     private static final Set<String> LINEAGE_ROOT_TYPES = Set.of(
@@ -102,7 +112,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     }
 
     @Override
-    @Transactional  // 移除 readOnly=true, 因为 generateTraceCode() 会调用 incrementSequence() 写操作
+    @Transactional(readOnly = true)  // 溯源码改为只读标签表, 本方法不再有任何写操作
     public TraceabilityDTO.FullTraceResponse getFullTrace(String factoryId, String batchNumber) {
         log.info("获取完整溯源链路: factoryId={}, batchNumber={}", factoryId, batchNumber);
 
@@ -148,8 +158,8 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .findByFactoryIdAndBatchNumber(factoryId, batchNumber);
         List<TraceabilityDTO.ShipmentInfo> shipments = buildShipmentInfoList(shipmentRecords);
 
-        // 7. 生成溯源码（使用工厂ID以支持配置化规则）
-        String traceCode = generateTraceCode(factoryId, batchNumber);
+        // 7. 溯源码 = 这个批次已打印标签上的码(持久化); 没打过标签就是 null, ⛔ 不现造
+        String traceCode = persistedTraceCode(batch.getId());
 
         // 8. 多跳血缘（加法式新增，既有字段一个不动）
         TraceabilityDTO.LineageSection lineage = buildLineage(
@@ -169,7 +179,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     }
 
     @Override
-    @Transactional  // 移除 readOnly=true, 因为 generateTraceCode() 会调用 incrementSequence() 写操作
+    @Transactional(readOnly = true)  // 同 getFullTrace: 溯源码只读标签表
     public TraceabilityDTO.PublicTraceResponse getPublicTrace(String batchNumber) {
         log.info("公开溯源查询: batchNumber={}", batchNumber);
 
@@ -230,7 +240,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .certificationInfo("食品安全认证")
                 .materials(publicMaterials)
                 .qualityInspection(publicQuality)
-                .traceCode(generateTraceCode(factoryId, batchNumber))
+                .traceCode(persistedTraceCode(batch.getId()))
                 .queryTime(LocalDateTime.now())
                 .isValid(true)
                 .message("溯源信息查询成功")
@@ -690,44 +700,23 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     }
 
     /**
-     * 生成溯源码
+     * 该生产批次已打印标签上的溯源码; 多张标签取最新一张; 没有标签或没注入仓库 → {@code null}。
      *
-     * 优先使用 EncodingRuleService 配置化生成溯源码
-     * 如果未配置溯源码规则，则使用默认格式
-     *
-     * @param batchNumber 批次号
-     * @return 溯源码
+     * <p>判据是「扫这个码能不能回到这个批次」: {@code labels.trace_code} 正是
+     * {@code TraceabilityController#resolveBatchNumberFromTraceCode} 反查的那一列, 所以这里出的码
+     * 一定能扫回来; 反过来任何现造的码都不能。
      */
-    private String generateTraceCode(String batchNumber) {
-        return generateTraceCode(null, batchNumber);
-    }
-
-    /**
-     * 生成溯源码（带工厂ID）
-     *
-     * 优先使用 EncodingRuleService 配置化生成溯源码
-     * 如果未配置溯源码规则，则使用默认格式
-     *
-     * @param factoryId 工厂ID（可选）
-     * @param batchNumber 批次号
-     * @return 溯源码
-     */
-    private String generateTraceCode(String factoryId, String batchNumber) {
-        try {
-            // 尝试使用配置化的编码规则生成溯源码
-            if (factoryId != null) {
-                // 使用上下文变量传递批次号信息
-                Map<String, String> context = new HashMap<>();
-                context.put("BATCH", batchNumber);
-                return encodingRuleService.generateCode(factoryId, TRACE_CODE_ENTITY_TYPE, context);
-            } else {
-                // 没有工厂ID时，尝试使用系统默认规则
-                return encodingRuleService.generateCode("SYSTEM", TRACE_CODE_ENTITY_TYPE);
-            }
-        } catch (Exception e) {
-            // 如果编码规则未配置或生成失败，使用默认格式
-            log.debug("使用默认溯源码格式: {}", e.getMessage());
-            return "TRACE-" + batchNumber + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    private String persistedTraceCode(Long productionBatchId) {
+        if (labelRepository == null || productionBatchId == null) {
+            return null;
         }
+        return labelRepository.findByProductionBatchIdAndDeletedAtIsNull(productionBatchId).stream()
+                .filter(l -> l.getTraceCode() != null && !l.getTraceCode().isBlank())
+                .sorted(java.util.Comparator.comparing(
+                        (com.cretas.aims.entity.Label l) -> l.getCreatedAt(),
+                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())).reversed())
+                .map(com.cretas.aims.entity.Label::getTraceCode)
+                .findFirst()
+                .orElse(null);
     }
 }

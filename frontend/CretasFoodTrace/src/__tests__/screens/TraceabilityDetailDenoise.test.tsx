@@ -338,19 +338,19 @@ describe('⑦ 溯源码卡', () => {
     expect(getByText('溯源码')).toBeTruthy();
     expect(getByTestId('trace-code-system')).toHaveTextContent(SYSTEM_CODE);
     expect(getByTestId('trace-code-batch')).toHaveTextContent(`批次号 ${BATCH}`);
-    expect(queryByText('标签码')).toBeNull();
-    expect(queryByText('系统码')).toBeNull();
+    expect(queryByText('扫入码')).toBeNull();
+    expect(queryByTestId('trace-code-missing')).toBeNull();
     expect(queryByTestId('trace-code-label')).toBeNull();
   });
 
-  it('路由带了与服务端不同的标签码 ⇒ 两个都显示并标「标签码 / 系统码」', async () => {
+  it('路由带了与服务端不同的码 ⇒ 两个都显示并标「扫入码 / 标签码」', async () => {
     mockRoute.params = { batchNumber: BATCH, traceCode: LABEL_CODE };
     mockGetFullTrace.mockResolvedValue(traceResponse());
     const { getByText, getByTestId, queryByText } = render(<TraceabilityDetailScreen />);
 
     await waitFor(() => expect(getByTestId('trace-code-label')).toBeTruthy());
+    expect(getByText('扫入码')).toBeTruthy();
     expect(getByText('标签码')).toBeTruthy();
-    expect(getByText('系统码')).toBeTruthy();
     expect(getByTestId('trace-code-label')).toHaveTextContent(LABEL_CODE);
     expect(getByTestId('trace-code-system')).toHaveTextContent(SYSTEM_CODE);
     expect(queryByText('溯源码')).toBeNull();
@@ -364,5 +364,18 @@ describe('⑦ 溯源码卡', () => {
     await waitFor(() => expect(getByTestId('trace-code-card')).toBeTruthy());
     expect(getByText('溯源码')).toBeTruthy();
     expect(queryByTestId('trace-code-label')).toBeNull();
+  });
+
+  it('服务端没有持久化标签码(null) ⇒ 显示「未打印标签」, ⛔ 不显示任何码', async () => {
+    mockRoute.params = { batchNumber: BATCH };
+    mockGetFullTrace.mockResolvedValue({ ...traceResponse(), traceCode: null });
+    const { getByTestId, queryByTestId, queryByText } = render(<TraceabilityDetailScreen />);
+
+    await waitFor(() => expect(getByTestId('trace-code-missing')).toBeTruthy());
+    expect(getByTestId('trace-code-missing')).toHaveTextContent('未打印标签');
+    expect(queryByTestId('trace-code-system')).toBeNull();
+    expect(queryByTestId('trace-code-label')).toBeNull();
+    expect(queryByText('溯源码')).toBeNull();
+    expect(getByTestId('trace-code-batch')).toHaveTextContent(`批次号 ${BATCH}`);
   });
 });
