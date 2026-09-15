@@ -15,7 +15,6 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
-- `OPS-OTA-DEMO-BUNDLE-20260915` — `in-progress` — Owner: organizer — 🔒 两推均已核: 第 1 推 06:41 ts=1789425596125(#797); 第 2 推 07:05 ts=1789427030082(main `ef32c456ce`, 含 #798 RN), ota 域 manifest createdAt 23:05:44Z 含该 ts, CDN `index-41faa7f0….hbc` GET 6,764,861B/200。仅剩真机行为读数, 等 Steve 周二手机。
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。；实测 3 个计划: 8cf3fa56(3 批)/ffeb2d34(2)/40b47b4b(2), 均为同计划多生产批次, 成品无法唯一归属
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
