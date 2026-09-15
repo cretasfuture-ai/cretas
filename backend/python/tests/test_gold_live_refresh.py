@@ -197,3 +197,18 @@ async def test_租户上下文_执行时已设_返回后还原():
                                    today=datetime.date(2026, 7, 29), now=1000.0)
     assert pool.factory_at_execute == ["MOCK_REST"] * 4
     assert get_factory_id() == before
+
+def test_未配置不算非法_不记error(caplog):
+    """2026-09-15: prod 从没配过 PLATFORM_GOLD_PRODUCT_INTERVAL_SECONDS, 原实现把 None
+    当非法值, 每次启动 ERROR 一条 —— 把「没配」和「配错」混成一个读数。"""
+    import logging
+    with caplog.at_level(logging.ERROR, logger="smartbi.gold.live_refresh"):
+        assert product_interval_from_env({}) == DEFAULT_PRODUCT_INTERVAL_SECONDS
+        assert parse_interval_seconds("", 600, var_name="X") == 600
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], (
+        "未配置不该记 ERROR: " + "; ".join(r.getMessage() for r in caplog.records))
+    # 阳性对照: 配了但非法, 必须还在喊
+    with caplog.at_level(logging.ERROR, logger="smartbi.gold.live_refresh"):
+        assert parse_interval_seconds("oops", 600, var_name="X") == 600
+    assert any("非法" in r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
+

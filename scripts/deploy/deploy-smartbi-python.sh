@@ -295,6 +295,15 @@ log "INFO" "[3/5] 同步文件到服务器 (rsync 增量传输)..."
 # 覆盖了服务器上全部"仓库里没有但必须保留"的运行时文件 (venv / .env / 日志 /
 # __pycache__ / 上传的 xlsx·png)。
 # ⛔ 绝不能加 --delete-excluded —— 那会把上面这些运行时文件一起删掉。
+# 🔴 2026-09-15: 上面「删除清单为空」的实测已经过期 —— main.py 的 TimedRotatingFileHandler
+#    写的是 `python-service.log`(单数), 而 exclude 里只有 `python-services.log`(复数),
+#    于是每次部署 --delete-after 都把应用日志和它的日期备份删光(真机彩排当天 10:28 的
+#    超时证据就是这样丢的, 部署后文件 head 时间戳 = 重启时间)。
+#    ⇒ 现在两种拼法都排除; 判据: 部署后 `head -n1 python-service.log` 的时间早于本次重启。
+#    同一次 dry-run 还揪出 `.deploy-requirements-manifest.venv311` 也在删除清单里 ——
+#    它是本脚本第 5 步自己写的依赖缓存指纹, 被上一步的 rsync 删掉 ⇒ 每次部署都
+#    「cache miss (manifest missing)」重跑 pip install(09-15 两次部署日志都是这句)。
+#    判据: 连续两次部署, 第二次必须打 `cache hit - skipping pip install`。
 # 用 --delete-after 而不是 --delete: 传输中途失败时不会出现"旧文件已删、新文件没到"
 # 的空窗, 删除只在全部传完之后发生。
 #
@@ -304,7 +313,7 @@ log "INFO" "[3/5] 同步文件到服务器 (rsync 增量传输)..."
 run_rsync "backend/python 应用代码" -az --delete-after --timeout=120 \
     --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' \
     --exclude='smartbi.log' --exclude='*.xlsx' --exclude='*.png' \
-    --exclude='venv*' --exclude='python-services.log' \
+    --exclude='venv*' --exclude='python-services.log'     --exclude='python-service.log*' --exclude='.deploy-requirements-manifest.*' \
     --exclude='python-prod.log' --exclude='python-test.log' \
     "$LOCAL_DIR/" "$SERVER:$REMOTE_DIR/"
 

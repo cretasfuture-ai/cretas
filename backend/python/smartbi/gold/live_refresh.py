@@ -56,8 +56,13 @@ def parse_interval_seconds(raw: Optional[str], default: int, *, var_name: str) -
     `0` / 负数 / 小数 / 非数字一律算非法。禁降级的边界在这里是「回退到一个安全的
     慢周期并把非法值喊出来」, 而不是静默按 0 秒跑。
     """
+    # 🔴 2026-09-15: 「没配」不是「配错」。prod 从来没配过这个变量, 每次启动都在
+    #    ERROR 里喊一句 `=None 非法` —— 形态 A¹¹(空是合法状态, 别把它算成缺陷),
+    #    而且真正的非法值(如 "oops")会淹在这条每日必现的假 ERROR 里。
+    if raw is None or not str(raw).strip():
+        return default
     try:
-        value = int(raw)  # type: ignore[arg-type]  # None/非数字走 except
+        value = int(raw)
     except (TypeError, ValueError):
         logger.error("[platform-sync] %s=%r 非法, 回退 %ds", var_name, raw, default)
         return default
