@@ -7,7 +7,7 @@ import type { AppTheme } from '../../../theme';
 /**
  * 状态 → 语义色调 → 主题 token。
  *
- * 溯源这几屏原来各自写 `chipColor + '20'` 拼透明度、`#4CAF50` / `#FF9800` 这类硬编码，
+ * 溯源这几屏原来各自写 `chipColor + '20'` 拼透明度、绿 / 橙 / 红各一个硬编码 hex，
  * 同一个「合格」在三处三个绿。这里是**唯一**的「色调 → token」映射：
  * 屏上只决定「这个状态是哪一种色调」，⛔ 不再决定「用哪个色值」。
  *
@@ -55,7 +55,7 @@ export interface ToneChipProps {
  * 带语义色调的状态 chip —— 溯源详情的质量状态 / 质检结果 / 出货状态、
  * 以及四处 DNA 状态（经 `DnaStatusChip`）都渲染成它。
  *
- * 字号沿用 Paper Chip 默认的 labelLarge（14sp），⛔ 不再写 `fontSize: 11/12`。
+ * 字号沿用 Paper Chip 默认的 labelLarge（14sp），⛔ 不再写小于 14 的 fontSize。
  */
 export function ToneChip({ tone, children, testID, style }: ToneChipProps) {
   const theme = useTheme<AppTheme>();
