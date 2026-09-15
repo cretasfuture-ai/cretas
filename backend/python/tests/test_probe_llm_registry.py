@@ -252,8 +252,17 @@ def test_slots_for_text_tail_member_covers_every_slot_that_appends_it():
     pair = llm_router._TEXT_TAIL[0]
     slots = set(_slots_for(pair))
     expected = {s for s in llm_router.SLOT if s not in llm_router._NO_TEXT_TAIL_SLOTS}
-    assert slots == expected
-    assert llm_router.SLOT.VL not in slots
+    # 🔴 2026-09-16: 原来断言 `slots == expected` 且 VL ∉ slots —— 那是把「地板成员不在
+    #    任何池里」这个**前提**写成了断言。#816 把 aliyun_*_vl/qwen3.8-flash 放进文本
+    #    地板, 而它们本来就在 VL 池里, 于是 _slots_for 正确地多探了一个 VL 档, 断言却红了
+    #    (Python Gate 当时已因定时闸红着, 这条被盖住)。本用例守的性质只有一条:
+    #    地板成员覆盖**每一个**非 VL 槽; 它是否还进 VL 槽, 由「在不在 VL 池里」决定,
+    #    ⛔ 不由本用例规定。
+    assert expected <= slots, f"地板成员漏了槽: {expected - slots}"
+    in_vl_pool = pair in llm_router._SLOT_POOLS[llm_router.SLOT.VL]
+    assert (llm_router.SLOT.VL in slots) == in_vl_pool, (
+        "VL 档只该跟着「在不在 VL 池」走: "
+        f"in_vl_pool={in_vl_pool} but VL in slots={llm_router.SLOT.VL in slots}")
 
 
 def test_slots_for_pool_only_member_is_unaffected():
