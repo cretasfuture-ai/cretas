@@ -105,7 +105,10 @@ class SourceIndividualQueryToolTest {
         assertEquals("offspring", data.get("ask"));
         assertEquals(4, ((List<?>) data.get("offspring")).size());
         assertEquals(summary, result.get("message"));
-        assertTrue(summary.startsWith("SL-BULL-001 有 4 头后代: "), summary);
+        assertTrue(summary.startsWith("SL-BULL-001 有 4 头后代:"), summary);
+        // 2026-09-16: ≥2 头一头一行(手机气泡里对着看), 不再用「、」串成一句
+        assertEquals(4, summary.split("\n- ", -1).length - 1, "4 头 = 4 行: " + summary);
+        assertFalse(summary.contains("、"), summary);
         assertTrue(summary.contains("SL-CATTLE-003(DNA 已采样)"), summary);
         assertTrue(summary.contains("SL-CATTLE-004(DNA 未采样)"), summary);
         assertTrue(summary.contains("SL-CATTLE-005(DNA 不匹配)"), summary);
@@ -178,7 +181,9 @@ class SourceIndividualQueryToolTest {
         List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
         assertEquals(1, items.size());
         assertEquals("SL-CATTLE-005", items.get(0).get("individualCode"));
+        // 只有 1 头时接在冒号后, 不换行
         assertTrue(summary.contains("DNA 不匹配 的个体共 1 头: SL-CATTLE-005(耳标 1100000000005)"), summary);
+        assertFalse(summary.contains("\n"), summary);
         assertFalse(summary.contains("还有"), summary);
         verifyNoInteractions(detailService);
     }
@@ -410,8 +415,10 @@ class SourceIndividualQueryToolTest {
         Map<String, Object> data = (Map<String, Object>) invoke(Map.of("individual_code", "SL-CATTLE-005", "ask", "pedigree")).get("data");
         String summary = (String) data.get("summary");
 
-        assertTrue(summary.startsWith("SL-CATTLE-005: 父本 SL-BULL-001(耳标 1100000000001), 母本 未登记; 没有登记后代; 同父兄弟 3 头: "), summary);
-        assertTrue(summary.contains("SL-CATTLE-003(DNA 已采样)、SL-CATTLE-004(DNA 未采样)、SL-CATTLE-007(DNA 已采样)"), summary);
+        assertTrue(summary.startsWith("SL-CATTLE-005: 父本 SL-BULL-001(耳标 1100000000001), 母本 未登记; 没有登记后代; 同父兄弟 3 头:"), summary);
+        for (String sib : new String[] {"SL-CATTLE-003(DNA 已采样)", "SL-CATTLE-004(DNA 未采样)", "SL-CATTLE-007(DNA 已采样)"}) {
+            assertTrue(summary.contains("- " + sib), summary);   // 一行一头
+        }
         assertNotNull(data.get("sire"));
         assertNull(data.get("dam"));
     }

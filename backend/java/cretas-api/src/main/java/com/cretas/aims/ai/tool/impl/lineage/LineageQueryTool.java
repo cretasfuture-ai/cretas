@@ -380,28 +380,40 @@ public class LineageQueryTool extends AbstractBusinessTool {
         StringBuilder sb = new StringBuilder();
         sb.append(typeLabel(batchType)).append(" ").append(batchNumber != null ? batchNumber : batchId).append(" — ");
 
+        // 2026-09-16 评审(impeccable critique 22/40): 老板在手机气泡里读到的是一段 220 字
+        // 不换行的流水句, 结尾「上游 6 节点, 6 条直接关联边」是图论词。改成一头牛一行,
+        // 图的计数只在没有个体可念时兜底一句人话。summary 与 message 仍是同一句。
         if (!"DESCENDANTS".equals(direction)) {
             List<String> lines = describeIndividuals(ancestors);
             if (individualCount > 0) {
-                sb.append("来自 ").append(individualCount).append(" 头牛: ").append(String.join("; ", lines)).append(". ");
+                sb.append("来自 ").append(individualCount).append(" 头牛");
+                appendList(sb, lines);
             } else if (!ancestors.isEmpty()) {
-                sb.append("上游原料批次没登记来自哪头牛. ");
+                sb.append("上游原料批次没登记来自哪头牛");
             }
         }
 
-        boolean wroteCount = false;
-        if (!"DESCENDANTS".equals(direction) && !ancestors.isEmpty()) {
-            sb.append("上游 ").append(ancestors.size()).append(" 节点");
-            wroteCount = true;
-        }
+        boolean wroteAny = sb.length() > 0 && !sb.toString().endsWith("— ");
         if (!"ANCESTORS".equals(direction) && descendantCount > 0) {
-            if (wroteCount) sb.append(", ");
-            sb.append("下游 ").append(descendantCount).append(" 节点");
-            wroteCount = true;
+            sb.append(wroteAny ? "\n" : "").append("往下去了 ").append(descendantCount).append(" 个批次");
+            wroteAny = true;
         }
-        if (wroteCount) sb.append(", ");
-        sb.append(edgeCount).append(" 条直接关联边");
+        if (!wroteAny) {
+            sb.append("没有登记任何来源或去向");
+        }
         return sb.toString();
+    }
+
+    /** 1 项就接在冒号后; ≥2 项一行一项, 手机气泡里能对齐着看。 */
+    public static void appendList(StringBuilder sb, List<String> lines) {
+        if (lines.size() == 1) {
+            sb.append(": ").append(lines.get(0));
+            return;
+        }
+        sb.append(":");
+        for (String line : lines) {
+            sb.append("\n- ").append(line);
+        }
     }
 
     /** 每头一句「耳标 X · 品种 · 来源场 · DNA 状态」, 按个体 id 去重, 保持首次出现顺序。 */

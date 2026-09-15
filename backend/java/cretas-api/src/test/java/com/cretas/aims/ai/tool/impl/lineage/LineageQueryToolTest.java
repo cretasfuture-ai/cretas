@@ -287,6 +287,10 @@ class LineageQueryToolTest {
             assertTrue(summary.contains("耳标 11037028100000" + i), "summary 缺第 " + i + " 头: " + summary);
         }
         assertTrue(summary.contains("西门塔尔杂交 · 山东胜龙自有育肥场 · DNA 已比中"), summary);
+        // 2026-09-16 评审: 一头牛一行, 结尾不再是「上游 N 节点, M 条直接关联边」这种图论词
+        assertEquals(6, summary.split("\n- ", -1).length - 1, "6 头 = 6 行: " + summary);
+        assertFalse(summary.contains("关联边"), summary);
+        assertFalse(summary.contains("节点"), summary);
 
         // 结构化侧: 每个祖先节点带 sourceIndividual, 老字段 nodeType/nodeId/depth 仍在
         List<Map<String, Object>> ancestors = (List<Map<String, Object>>) data.get("ancestors");
