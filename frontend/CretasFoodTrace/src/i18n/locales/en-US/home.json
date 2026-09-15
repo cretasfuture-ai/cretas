@@ -948,7 +948,23 @@
     "networkError": "Network connection failed, please check and retry",
     "defaultReply": "OK, I have received your message.",
     "quickModeHint": "Instant response",
-    "deepModeHint": "AI will think deeply, ~15-25 seconds"
+    "deepModeHint": "AI will think deeply, ~15-25 seconds",
+    "cancel": "Cancel",
+    "tapToSpeak": "Tap to speak",
+    "send": "Send",
+    "switchToKeyboard": "Switch to keyboard input",
+    "inputLabel": "Question input",
+    "cattleCards": {
+      "batchOrigin": "Which cattle is this batch from",
+      "batchOriginDesc": "Enter a batch number to find source cattle",
+      "offspring": "Offspring of this animal",
+      "offspringDesc": "Open individual records and offspring",
+      "dnaMismatch": "Whose DNA does not match",
+      "dnaMismatchDesc": "List cattle with mismatched DNA",
+      "dnaMismatchIntent": "Which animal has a DNA mismatch",
+      "earTag": "Verify ear tag by photo",
+      "earTagDesc": "Take a photo to verify the ear tag"
+    }
   },
   "aiReport": {
     "title": "AI Analysis Report",
