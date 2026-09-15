@@ -304,7 +304,7 @@ export default function VisionVerifyScreen() {
         {/* ── 识别不出来 —— 一等结果, 带模型原文 ───────────────────────────── */}
         {unparseable && (
           <Card style={errorCardStyle} testID="vision-unparseable-card">
-            <Card.Title title={t('sourceIndividual.vision.unreadableTitle')} subtitleStyle={onErrorStyle} />
+            <Card.Title title={t('sourceIndividual.vision.unreadableTitle')} />
             <Card.Content>
               <Text variant="bodyMedium">{unparseable.reason}</Text>
               {!!unparseable.rawText && (
