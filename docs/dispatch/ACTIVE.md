@@ -17,7 +17,6 @@
 
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。；实测 3 个计划: 8cf3fa56(3 批)/ffeb2d34(2)/40b47b4b(2), 均为同计划多生产批次, 成品无法唯一归属
 - `OPS-REHEARSAL-LOG-SWEEP-20260915` — `in-progress` — Owner: organizer — 3/5 已修上 prod(#803 `41f1613ced`: 部署删日志+依赖指纹 / 未配周期记 ERROR / 死 admin 块; 部署实证 log_head 未变、`cache hit`、启动 0 旧告警); image-picker 派 `FEAT-RN-IMAGE-PICKER-MEDIATYPE-20260915`; 剩 EAS projectId(账号级, 等 Steve)、workers vs 缓存(餐饮, 只登记)。
-- `FEAT-AI-LINEAGE-INDIVIDUAL-TOOLS-20260915` — `in-progress` — Owner: organizer — 🔒 PR #815 `4bc3aab437` 已合(含 `V20261101_44`), Java 发布中(prewarm→release)。发完判据: flyway .44 success + jar 含 `SourceIndividualQueryTool.class` + 用四句真实问法打 `/ai-intents/execute` 行为读数(来自哪几头牛 / 有哪些后代 / DNA 不匹配 / 去了哪)。
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
@@ -82,7 +81,8 @@
 
 - LIUSHANMEN：21 条空 `storage_type` 等待 Owner 向客户取得真实储存类型；结论到达前保持零写入，不猜填。
 - VisionLab：正式 ROI audit 仍有 1 个 unjudgeable；计划任务迁移与运行失败已核销。
-- LLM 运营：2026-09-13 aistore 续期换 key，以及 2026-09-04/2026-11-15 复审需要 Owner/供应商控制台动作。
+- LLM 运营：prod 文本链 09-15 实测全死(aistore 09-13 过期 / deepseek key 401 / zhipu 配额), #816 用 aliyun qwen3.8-flash ×3 兜底; 需要 Owner 在各控制台续期/换 key; 2026-09-04/2026-11-15 复审同前。
+- 发布链：CI runner 不产制品 ⇒ 每次 `release-cretas.sh` 都回退本地 Maven(≈6 min 构建 + 1 min 切流)；prewarm 再等 420s 纯浪费。CI 恢复前发布一律 `--no-prefer-ci-artifact` 且不跑 prewarm。
 - 餐饮 RN：实现已入 main，但当前 OTA runtime 与真实设备验收未确认。
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
