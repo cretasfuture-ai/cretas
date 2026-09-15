@@ -77,6 +77,11 @@ on:
       - '.github/workflows/java-gate-pr.yml'
       - '.github/workflows/java-full-nightly.yml'
       - '.github/actions/**'
+      # 2026-09-15: test-java-heavy-jobs-need-8g-runner.sh 钉「Maven job 只落 8G runner +
+      #    pom argLine 走属性」, 它声明的三条路径此前都不在触发面里。
+      - '.github/workflows/jpa-gate-main.yml'
+      - '.github/workflows/tool-inventory-gate.yml'
+      - 'backend/java/cretas-api/pom.xml'
   workflow_dispatch:
 
 concurrency:

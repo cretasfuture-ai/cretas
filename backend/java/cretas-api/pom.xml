@@ -50,6 +50,13 @@
              class, surefire finds no tests and the build fails; it never produces an
              artifact that skipped its tests. -->
         <cretas.testIncludes>**/*.java</cretas.testIncludes>
+        <!-- surefire fork 的 JVM 参数。放在属性里而不是写死在插件配置里, 是为了让
+             命令行 `-DargLine="..."` 能覆盖: Maven 里插件 <configuration> 的显式值优先于
+             -D 用户属性, 此前 CI 各 workflow 传了几个月的 `-DargLine=... -Xmx3g` 一次都
+             没到过 fork(实测 -DargLine=-Xmx1m 测试照样绿), fork 一直用 JVM 默认堆
+             (cgroup 内存的 1/4), 落到 4G 的 runner 上就是 1G, Java Gate 第 61 个类 OOM。
+             ⚠️ 覆盖时要把这两个基础参数一起带上, 属性是整串替换不是追加。 -->
+        <argLine>-XX:+EnableDynamicAgentLoading -Xshare:off</argLine>
     </properties>
 
     <dependencyManagement>
@@ -590,7 +597,8 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>-XX:+EnableDynamicAgentLoading -Xshare:off</argLine>
+                    <!-- 见 properties 里 argLine 的说明: 引用属性, 命令行 -DargLine 才能覆盖 -->
+                    <argLine>${argLine}</argLine>
                     <!--
                       🔴 2026-08-27: 一个挂死的测试会让 CI job 被 GitHub 直接杀掉,
                       而那样三态判定**一步都执行不到**。
