@@ -12,9 +12,12 @@
  *    否则「找不到那段文案」在「组件根本没渲染」时同样成立 —— 恒真式。
  */
 import React from 'react';
-import { fireEvent, render } from '@testing-library/react-native';
+import { Text as RNText } from 'react-native';
+import { fireEvent, render, within } from '@testing-library/react-native';
 
 import LineageChainTimeline, {
+  CHAIN_CONNECTOR_TEST_ID,
+  ChainGroup,
   LINEAGE_EMPTY_TEST_ID,
   LINEAGE_EMPTY_TEXT,
   LINEAGE_TIMELINE_TEST_ID,
@@ -30,6 +33,18 @@ const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: mockNavigate, goBack: jest.fn(), push: jest.fn() }),
 }));
+
+// 段标题 / 计数 / DNA chip 文案走 i18n（processing 命名空间）。真的 i18n 实例在单测里没初始化
+// ⇒ 直接查 zh-CN 的 bundle，断言里的中文和用户屏上看到的是**同一个来源**。
+jest.mock('react-i18next', () => {
+  const bundle = require('../../i18n/locales/zh-CN/processing.json');
+  const lookup = (key: string, opts?: Record<string, unknown>): string => {
+    const raw = key.split('.').reduce<any>((acc, part) => (acc ? acc[part] : undefined), bundle);
+    if (typeof raw !== 'string') return key;
+    return raw.replace(/\{\{(\w+)\}\}/g, (_m, name) => String(opts?.[name] ?? ''));
+  };
+  return { useTranslation: () => ({ t: lookup }) };
+});
 
 const SECTION_TITLE = '来源链'; // 「一定会发生」的那个读数
 
@@ -299,5 +314,104 @@ describe('挂了个体的原料行 → 个体详情', () => {
 
     fireEvent.press(getByTestId('lineage-node-MB-NEAR-001'));
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
+// ── 2026-09-16 评审：措辞去图论词、圆点之间的竖线要连续 ─────────────────────────────
+
+/** RN 的 style 可能是数组 / 嵌套数组 —— 摊平成一个对象再读键。 */
+function flatten(style: unknown): Record<string, unknown> {
+  if (style == null || typeof style === 'boolean') return {};
+  if (Array.isArray(style)) return Object.assign({}, ...style.map(flatten));
+  return style as Record<string, unknown>;
+}
+
+describe('措辞：老板听得懂的话，不是图论词', () => {
+  it('段标题「直接来源」「往上第 N 层来源」、计数「来源 N 项」；⛔ 不再出现「上游节点 / 直接上游 / 关联边」', () => {
+    const { getByText, queryByText } = render(<LineageChainTimeline lineage={threeLayerLineage()} showSupplier />);
+
+    // 必发生：三段标题 + 计数都渲染出来（否则下面的阴性断言是恒真式）
+    expect(getByText('直接来源')).toBeTruthy();
+    expect(getByText('往上第 2 层来源')).toBeTruthy();
+    expect(getByText('往上第 3 层来源')).toBeTruthy();
+    expect(getByText('来源 3 项')).toBeTruthy(); // N = nodeCount(3)，后端给的，不在前端数
+
+    // 阴性：旧措辞一个都不许回来
+    expect(queryByText(/上游节点/)).toBeNull();
+    expect(queryByText(/直接上游/)).toBeNull();
+    expect(queryByText(/关联边/)).toBeNull();
+    expect(queryByText(/跳/)).toBeNull();
+  });
+
+  it('nodeCount=0 ⇒ 不显示计数（「来源 0 项」是句废话）', () => {
+    const { queryByText, getByText } = render(
+      <LineageChainTimeline
+        lineage={{ rootType: 'PRODUCTION_BATCH', rootId: '8967', maxDepth: 5, nodeCount: 0, ancestors: [] }}
+      />
+    );
+    expect(getByText(SECTION_TITLE)).toBeTruthy();
+    expect(queryByText(/来源 \d+ 项/)).toBeNull();
+  });
+});
+
+describe('圆点之间的竖线连续（个体档案「去了哪」与来源链共用同一个 ChainGroup）', () => {
+  it('3 段 ⇒ 2 根连线（= 段数 − 1）；每根都是上下锚在圆点上的绝对定位线，⛔ 不是写死高度的短线', () => {
+    const { getAllByTestId, getByTestId } = render(
+      <LineageChainTimeline lineage={threeLayerLineage()} showSupplier />
+    );
+
+    const connectors = getAllByTestId(CHAIN_CONNECTOR_TEST_ID);
+    expect(connectors).toHaveLength(2);
+
+    for (const c of connectors) {
+      const s = flatten(c.props.style);
+      // 连续的全部含义：段有多高线就多长 ⇒ 没有 height，靠 top/bottom 两端锚定
+      expect(s.position).toBe('absolute');
+      expect(s.height).toBeUndefined();
+      expect(typeof s.top).toBe('number');
+      expect(typeof s.bottom).toBe('number');
+      // 下端越过本段底边（bottom 为负）—— 这样才碰得到下一段的圆点，而不是停在段与段之间
+      expect(s.bottom as number).toBeLessThan(0);
+      // 上端与下端对称：从本段圆点中心到下一段圆点中心
+      expect(s.top).toBe(-(s.bottom as number));
+      expect(typeof s.backgroundColor).toBe('string');
+    }
+
+    // 最后一段（depth 1，排最下面）里没有连线；第一段（depth 3）里有
+    expect(within(getByTestId('lineage-depth-1')).queryByTestId(CHAIN_CONNECTOR_TEST_ID)).toBeNull();
+    expect(within(getByTestId('lineage-depth-3')).getByTestId(CHAIN_CONNECTOR_TEST_ID)).toBeTruthy();
+  });
+
+  it('只有 1 段 ⇒ 0 根连线；单独渲染 ChainGroup：last=false 有线、last=true 没有', () => {
+    const one = render(
+      <LineageChainTimeline
+        lineage={{
+          ...threeLayerLineage(),
+          nodeCount: 1,
+          ancestors: [threeLayerLineage().ancestors[0]!],
+        }}
+        showSupplier
+      />
+    );
+    expect(one.getByTestId('lineage-depth-1')).toBeTruthy(); // 必发生：那一段真的渲染了
+    expect(one.queryAllByTestId(CHAIN_CONNECTOR_TEST_ID)).toHaveLength(0);
+    one.unmount();
+
+    const open = render(
+      <ChainGroup label="原料批次" testID="g-open">
+        <RNText>row</RNText>
+      </ChainGroup>
+    );
+    expect(open.getByText('原料批次')).toBeTruthy();
+    expect(open.getAllByTestId(CHAIN_CONNECTOR_TEST_ID)).toHaveLength(1);
+    open.unmount();
+
+    const closed = render(
+      <ChainGroup label="出货单" testID="g-closed" last>
+        <RNText>row</RNText>
+      </ChainGroup>
+    );
+    expect(closed.getByText('出货单')).toBeTruthy();
+    expect(closed.queryAllByTestId(CHAIN_CONNECTOR_TEST_ID)).toHaveLength(0);
   });
 });

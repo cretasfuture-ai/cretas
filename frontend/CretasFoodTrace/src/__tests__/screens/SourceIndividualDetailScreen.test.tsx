@@ -113,10 +113,12 @@ describe('SourceIndividualDetailScreen（演示形状：父有 / 母无 / 同父
     expect(within(getByTestId('si-detail-identity')).getByText('SL-CATTLE-005')).toBeTruthy();
     expect(within(getByTestId(SI_DETAIL_TEST_IDS.sireRow)).getByText(/SL-BULL-001/)).toBeTruthy();
 
-    // 母本未登记 —— 灰字「未登记」，⛔ 不是 '-' 之类的假值
+    // 母本未登记 —— 灰字「未登记母本」（2026-09-16：说清「没登记的是什么」，
+    // 但⛔不编「创始个体 / 还没录」这种数据上分不出的假状态），⛔ 不是 '-' 之类的假值
     const damRow = getByTestId(SI_DETAIL_TEST_IDS.damRow);
     expect(within(damRow).getByText('母本')).toBeTruthy();
-    expect(within(damRow).getByText('未登记')).toBeTruthy();
+    expect(within(damRow).getByText('未登记母本')).toBeTruthy();
+    expect(within(damRow).queryByText('未登记')).toBeNull(); // 光秃秃的「未登记」不许再出现
     expect(within(damRow).queryByText('-')).toBeNull();
 
     // 同父兄弟 2 行（钉住条数，不是「至少一条」）
@@ -183,9 +185,9 @@ describe('SourceIndividualDetailScreen（演示形状：父有 / 母无 / 同父
 
     const sireRow = getByTestId(SI_DETAIL_TEST_IDS.sireRow);
     expect(within(sireRow).getByText('档案已不可查')).toBeTruthy();
-    expect(within(sireRow).queryByText('未登记')).toBeNull();
-    // 母本那一行仍然是「未登记」—— 两句话在同一屏上并存，证明不是同一条分支
-    expect(within(getByTestId(SI_DETAIL_TEST_IDS.damRow)).getByText('未登记')).toBeTruthy();
+    expect(within(sireRow).queryByText(/未登记/)).toBeNull();
+    // 母本那一行仍然是「未登记母本」—— 两句话在同一屏上并存，证明不是同一条分支
+    expect(within(getByTestId(SI_DETAIL_TEST_IDS.damRow)).getByText('未登记母本')).toBeTruthy();
   });
 
   it('接口失败 ⇒ 显示错误原话 + 重试，⛔ 不渲染一张空档案', async () => {

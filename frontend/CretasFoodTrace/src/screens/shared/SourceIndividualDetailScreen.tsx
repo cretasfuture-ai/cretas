@@ -20,6 +20,11 @@
  * 复用 `LineageChainTimeline` 导出的 ChainGroup / ChainRow / ChainLine, ⛔ 不抄一份样式;
  * DNA 状态经 `DnaStatusChip` 用四处共用的色板; 可点的行是 ≥48dp 的 List.Item / ChainRow,
  * ⛔ 不再用一行蓝字当链接。
+ *
+ * DNA 那颗 chip 下面 (2026-09-16 评审 P1): 每一态一句「这意味着什么」(文案与 chip 同出
+ * `dnaStatus.tsx` → `processing.json`); MISMATCH 是整条流唯一的坏消息时刻, 单独一张
+ * errorContainer 底的说明卡: 含义 + 下一步 + 「去改登记的父本」按钮 (进既有编辑表单)。
+ * ⛔ 认不出来的状态码没有含义可说 —— chip 原样显示那个码, 说明整段不渲染, 不编一句。
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
@@ -43,7 +48,12 @@ import {
   ChainTitle,
   nodeTypeIcon,
 } from '../traceability/components/LineageChainTimeline';
-import { DnaStatusChip } from '../traceability/components/dnaStatus';
+import {
+  DNA_FIX_SIRE_I18N,
+  DnaStatusChip,
+  dnaStatusMeaning,
+  dnaStatusNextStep,
+} from '../traceability/components/dnaStatus';
 import type { AppTheme } from '../../theme';
 import type { ProcessingStackParamList } from '../../types/navigation';
 
@@ -64,6 +74,12 @@ export const SI_DETAIL_TEST_IDS = {
   offspringEmpty: 'si-detail-offspring-empty',
   /** 头部那颗 DNA chip —— 四处同色板的其中一处。 */
   dna: 'si-detail-dna',
+  /** chip 下面那句「这意味着什么」（四态都有；认不出来的码没有）。 */
+  dnaMeaning: 'si-detail-dna-meaning',
+  /** MISMATCH 专属：errorContainer 底的说明卡（含义 + 下一步 + 去改父本）。其它态不渲染。 */
+  dnaMismatch: 'si-detail-dna-mismatch',
+  dnaNextStep: 'si-detail-dna-next-step',
+  dnaFixSire: 'si-detail-dna-fix-sire',
   /** 行上的 DNA chip：`si-detail-dna-<row>`。⚠️ 与行本身的 testID 前缀分开 —— 既有测试按
    *  `/^si-detail-sibling-/` 数「几行」，chip 若共用前缀会把 2 行数成 4。 */
   dnaOf: (row: string) => `si-detail-dna-${row}`,
@@ -223,7 +239,13 @@ export default function SourceIndividualDetailScreen() {
     <View style={containerStyle} testID={SI_DETAIL_TEST_IDS.screen}>
       {header(individual.individualCode)}
       <ScrollView contentContainerStyle={{ paddingVertical: spacing.m, paddingBottom: spacing.xxl }}>
-        <IdentityCard t={t} individual={individual} cardStyle={cardStyle} />
+        <IdentityCard
+          t={t}
+          individual={individual}
+          cardStyle={cardStyle}
+          // 「去改登记的父本」进既有的编辑表单 —— 与右上角铅笔同一个目的地，只是从坏消息那里直达。
+          onFixSire={() => navigation.navigate('SourceIndividualForm', { individualId })}
+        />
 
         {/* 系谱 */}
         <Card style={cardStyle}>
@@ -370,23 +392,75 @@ function IdentityCard({
   t,
   individual,
   cardStyle,
+  onFixSire,
 }: {
   t: T;
   individual: SourceIndividual;
   cardStyle: React.ComponentProps<typeof Card>['style'];
+  onFixSire: () => void;
 }) {
   const theme = useTheme<AppTheme>();
+  const { spacing, borderRadius } = theme.custom;
   const line1 = joinPresent([individual.species, individual.breed, individual.sex]);
-  const metaStyle = { color: theme.colors.onSurfaceVariant, marginTop: theme.custom.spacing.xs };
+  const metaStyle = { color: theme.colors.onSurfaceVariant, marginTop: spacing.xs };
+
+  const dnaStatus = individual.dnaVerificationStatus;
+  // 四态各一句「这意味着什么」; 认不出来的码 ⇒ null ⇒ 下面整段不渲染 (chip 仍原样显示那个码)。
+  const dnaMeaning = dnaStatusMeaning(t, dnaStatus);
+  const dnaNextStep = dnaStatusNextStep(t, dnaStatus);
+  const dnaMismatch = dnaStatus === 'MISMATCH';
+  const onErrorStyle = { color: theme.colors.onErrorContainer };
+
   return (
     <Card style={cardStyle} testID="si-detail-identity">
       <Card.Content>
-        <View style={[styles.titleRow, { gap: theme.custom.spacing.s }]}>
+        <View style={[styles.titleRow, { gap: spacing.s }]}>
           <Text variant="headlineSmall" style={[styles.code, { color: theme.colors.onSurface }]}>
             {individual.individualCode}
           </Text>
-          <DnaStatusChip status={individual.dnaVerificationStatus} testID={SI_DETAIL_TEST_IDS.dna} />
+          <DnaStatusChip status={dnaStatus} testID={SI_DETAIL_TEST_IDS.dna} />
         </View>
+        {/* MISMATCH: 整条流唯一的坏消息时刻 —— 说明卡 (含义 + 下一步 + 去改父本)。
+            其它三态: 一行 muted 的含义就够, ⛔ 别喧宾夺主。 */}
+        {!!dnaMeaning &&
+          (dnaMismatch ? (
+            <View
+              testID={SI_DETAIL_TEST_IDS.dnaMismatch}
+              style={[
+                styles.mismatchCard,
+                {
+                  backgroundColor: theme.colors.errorContainer,
+                  borderRadius: borderRadius.m,
+                  padding: spacing.m,
+                  marginTop: spacing.m,
+                  gap: spacing.s,
+                },
+              ]}
+            >
+              <Text variant="bodyMedium" style={onErrorStyle} testID={SI_DETAIL_TEST_IDS.dnaMeaning}>
+                {dnaMeaning}
+              </Text>
+              {!!dnaNextStep && (
+                <Text variant="bodyMedium" style={onErrorStyle} testID={SI_DETAIL_TEST_IDS.dnaNextStep}>
+                  {dnaNextStep}
+                </Text>
+              )}
+              <Button
+                mode="outlined"
+                onPress={onFixSire}
+                testID={SI_DETAIL_TEST_IDS.dnaFixSire}
+                accessibilityLabel={t(DNA_FIX_SIRE_I18N)}
+                textColor={theme.colors.onErrorContainer}
+                style={[styles.mismatchAction, { borderColor: theme.colors.onErrorContainer }]}
+              >
+                {t(DNA_FIX_SIRE_I18N)}
+              </Button>
+            </View>
+          ) : (
+            <Text variant="bodyMedium" style={metaStyle} testID={SI_DETAIL_TEST_IDS.dnaMeaning}>
+              {dnaMeaning}
+            </Text>
+          ))}
         {!!individual.tagNumber && (
           <Text variant="bodyMedium" style={metaStyle}>
             {t('sourceIndividual.fields.tagNumber')}：{individual.tagNumber}
@@ -416,7 +490,10 @@ function IdentityCard({
  * 父本 / 母本一行 (List.Item, ≥48dp)。三种状态:
  *   有摘要          → 可点, 同屏换 id; onSurface 字 + 右侧 chevron
  *   无摘要、有 id   → 「档案已不可查」(登记过、被删了) —— onErrorContainer 字, 不可点、无 chevron
- *   无摘要、无 id   → 「未登记」 —— onSurfaceVariant 字, 不可点、无 chevron
+ *   无摘要、无 id   → 「未登记父本」/「未登记母本」 —— onSurfaceVariant 字, 不可点、无 chevron
+ *
+ * ⚠️ 「未登记」对创始公牛 (本来就没有父母) 与「还没录」是同一句 —— 数据上分不出这两种,
+ *    ⛔ 不编一个假状态去区分; 措辞只把「没登记的是什么」说明白。
  */
 function ParentRow({
   t,
@@ -461,7 +538,11 @@ function ParentRow({
       testID={testID}
       title={label}
       titleStyle={{ color: theme.colors.onSurface }}
-      description={unavailable ? t('sourceIndividual.detail.unavailable') : t('sourceIndividual.detail.notRegistered')}
+      description={
+        unavailable
+          ? t('sourceIndividual.detail.unavailable')
+          : t('sourceIndividual.detail.parentNotRegistered', { parent: label })
+      }
       descriptionStyle={{ color: unavailable ? theme.colors.onErrorContainer : theme.colors.onSurfaceVariant }}
       style={styles.listItem}
     />
@@ -531,6 +612,9 @@ const styles = StyleSheet.create({
   errorText: { textAlign: 'center' },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   code: { flexShrink: 1 },
+  mismatchCard: { alignItems: 'stretch' },
+  // 按钮不要撑满整张说明卡 —— 它是一个动作, 不是一条横幅
+  mismatchAction: { alignSelf: 'flex-start' },
   listItem: { minHeight: 48, paddingHorizontal: 0 },
   rowRight: { flexDirection: 'row', alignItems: 'center' },
 });

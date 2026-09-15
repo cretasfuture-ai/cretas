@@ -37,6 +37,18 @@ jest.mock('../../services/api/traceabilityApiClient', () => ({
   },
 }));
 
+// 来源链上的 DNA chip 文案 / 段标题走 i18n（processing 命名空间，2026-09-16 起）。
+// 真的 i18n 实例在单测里没初始化 ⇒ 查 zh-CN 的 bundle，断言里的中文与用户屏上是同一个来源。
+jest.mock('react-i18next', () => {
+  const bundle = require('../../i18n/locales/zh-CN/processing.json');
+  const lookup = (key: string, opts?: Record<string, unknown>): string => {
+    const raw = key.split('.').reduce<any>((acc, part) => (acc ? acc[part] : undefined), bundle);
+    if (typeof raw !== 'string') return key;
+    return raw.replace(/\{\{(\w+)\}\}/g, (_m, name) => String(opts?.[name] ?? ''));
+  };
+  return { useTranslation: () => ({ t: lookup }) };
+});
+
 function lineageWithIndividuals(): LineageSection {
   return {
     rootType: 'PRODUCTION_BATCH',
