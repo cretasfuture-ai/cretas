@@ -17,7 +17,6 @@
 
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。；实测 3 个计划: 8cf3fa56(3 批)/ffeb2d34(2)/40b47b4b(2), 均为同计划多生产批次, 成品无法唯一归属
 - `OPS-REHEARSAL-LOG-SWEEP-20260915` — `in-progress` — Owner: organizer — 3/5 已修上 prod(#803 `41f1613ced`: 部署删日志+依赖指纹 / 未配周期记 ERROR / 死 admin 块; 部署实证 log_head 未变、`cache hit`、启动 0 旧告警); image-picker 派 `FEAT-RN-IMAGE-PICKER-MEDIATYPE-20260915`; 剩 EAS projectId(账号级, 等 Steve)、workers vs 缓存(餐饮, 只登记)。
-- `FEAT-RN-DEMO-SCREENS-POLISH-20260915` — `in-progress` — Owner: sister(executor/Opus) — Steve「用 design skill 优化」: impeccable polish + RN 规范: 首页瓷砖+列表、去说明卡; 详情段标题统一、状态色走 token、节点整行可点; DNA 色板抽一处三屏共用; hex→token。只到 PR。🔒 Scope: 三个演示屏 + Timeline/Banner + VisionVerify DNA 处 + dnaStatus.ts
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
 - `OPS-LLM-REGISTRY-AUDIT-STALE-20260915` — `queued` — Owner: 等 Steve — `test_registry_audit_date_is_not_stale` 自 09-04 起红(`_REGISTRY_AUDIT_DATE`=08-13 + 21 天), main 的 Python Gate 因此常红; 修它需要一次真正的注册表复审(逐 (账号,模型) 探针), ⛔ 不许只推日期。
 - `OPS-VL-SLOT-HAS-NO-PROVIDER-GATE-20260915` — `queued` — Owner: 无 — prod `llm_router` `SLOT.VL: []`(owner 08-09 拍板)而产品代码仍调 VL ⇒ 500; DashScope key 仅免费额度。要一道「被产品调用的 SLOT 必须有非空候选链」的闸, 并订正 `llm_router.py` 过期的 `aliyun_c→b→a` 注释。同根 `LLM-PROVIDER-CLIFF-20260815`。
