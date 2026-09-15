@@ -116,8 +116,8 @@ describe('① 色板本身', () => {
 
   it('MATCHED 用完成色、SAMPLED 用信息色、UNSAMPLED 用中性', () => {
     expect(dnaStatusColors(theme, 'MATCHED')).toEqual({
-      backgroundColor: theme.custom.workflow.doneBg,
-      color: theme.custom.workflow.doneText,
+      backgroundColor: theme.custom.workflow.successBg,
+      color: theme.custom.workflow.successText,
     });
     expect(dnaStatusColors(theme, 'SAMPLED')).toEqual({
       backgroundColor: theme.colors.primaryContainer,

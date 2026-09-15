@@ -38,6 +38,10 @@ const workflowColors = {
   inProgressBg: '#D4EDDA',
   inProgressText: '#155724',
   inProgressBorder: '#A3D9A5',
+  // 语义「成功/已通过」容器色(2026-09-15): 之前没有这一对, 状态 chip 只能借 doneBg(青)
+  // 或 inProgressBg(绿)——名字都不对。DNA 已比中 / 质检合格 用这一对, 与 inProgress 同值但语义独立。
+  successBg: '#D4EDDA',
+  successText: '#155724',
   doneBg: '#D1ECF1',
   doneText: '#0C5460',
   doneBorder: '#9FD0DC',
