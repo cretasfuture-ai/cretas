@@ -32,11 +32,10 @@ export function isCattleFactory(factoryId: string | undefined | null): boolean {
 }
 
 /**
- * 「这头牛的后代」的落点。E2 线正在加 `SourceIndividualList` 路由; 本树里还没有,
- * 先落到 `SourceIndividualForm`(个体档案入口), E2 合入后把这一个常量改成
- * `'SourceIndividualList'` 即可 —— 只改这一处, 测试跟着这个常量走。
+ * 「这头牛的后代」的落点: 只读源头个体列表 (#822 起在 BossNavigator OverviewStack /
+ * ProcessingStack 都注册了, params: undefined)。老板从列表点进个体档案再看后代。
  */
-export const CATTLE_OFFSPRING_ROUTE = 'SourceIndividualForm';
+export const CATTLE_OFFSPRING_ROUTE = 'SourceIndividualList';
 
 /**
  * 牛业卡组(2026-09-16, 胜龙演示第五幕)。

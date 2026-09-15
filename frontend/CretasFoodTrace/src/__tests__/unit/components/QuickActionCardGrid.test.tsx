@@ -108,11 +108,11 @@ describe('牛业卡的落点', () => {
     expect(onSendIntent).not.toHaveBeenCalled();
   });
 
-  it('「这头牛的后代」→ CATTLE_OFFSPRING_ROUTE（E2 合入 SourceIndividualList 前先落个体档案入口）', () => {
+  it('「这头牛的后代」→ SourceIndividualList（只读源头个体列表，#822 起在 Boss 树里注册）', () => {
     const { screen, onNavigate } = renderGrid('factory_super_admin', { factoryId: 'CATTLE_3701_001' });
     fireEvent.press(screen.getByTestId('quick-action-card-1'));
-    expect(onNavigate).toHaveBeenCalledWith(CATTLE_OFFSPRING_ROUTE);
-    expect(['SourceIndividualForm', 'SourceIndividualList']).toContain(CATTLE_OFFSPRING_ROUTE);
+    expect(onNavigate).toHaveBeenCalledWith('SourceIndividualList');
+    expect(CATTLE_OFFSPRING_ROUTE).toBe('SourceIndividualList');
   });
 
   it('「谁 DNA 不匹配」→ 问答意图（正文格式由后端 Tool 决定）', () => {
