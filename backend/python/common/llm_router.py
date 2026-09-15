@@ -112,7 +112,22 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # exhausted-ON models that showed no date; None for tencent/zhipu which have no
 # DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
 # ═══════════════════════════════════════════════════════════════════════════
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 8, 13)  # 08-13 全量重审: 30 条删 21 增 11
+# ── 2026-09-16 复审 (registry 自 09-04 超龄, test_registry_audit_date_is_not_stale 红) ──
+# 证据: prod 上 `python -m scripts.probe_llm_registry`(经 _apply_slot_params, 判非空 content),
+#   09-16 共探 10 条:
+#   · aliyun_c/a/b_vl qwen3.8-flash + aliyun_a_vl qwen3.7-flash  ✅ 有内容; 「用完即停」
+#     证据同 09-15 #793/#816(403 FreeTierOnly 而非计费 200) —— 判据两边都有。
+#   · deepseek ×2  401 key 无效(至少自 09-10)   → owner 09-16 裁定「暂时不用管」, 原样保留;
+#     调用时它们本来就 401 → 下一跳, 不计费。换 key 后重新跑探针再登记。
+#   · zhipu glm-4.5-air  429 配额用尽              → owner 09-16 裁定「暂时不用管」, 原样保留。
+#   · aistore ×3  09-13 已过期(401)                → `_refuse_reason` 到期日起硬拒, 惰性条目;
+#     ⚠️ 故意不在本轮清理: 它们还钉在 _MINIMAL_SAFE_SET / 延迟表 / 四个槽池 /
+#     test_llm_router_aistore.py 里, 清理是一次注册表重构, 另立任务。
+# ⇒ 注册表内容**不变**, 冻结表不变, 只推审计日期。
+# ⚠️ 推日期不改变 prod 行为: _MINIMAL_SAFE_SET 现在等于整张注册表(10/10), stale 与否
+#   _refuse_reason 对 10 条的结果逐条相同(09-16 用两个日期各算一遍实测, 见 PR 描述)。
+# ⚠️ 每日探针 cron 在 47 上最后一次跑是 09-10, 之后没日志 —— 与本仓 cron 告警无人读同源。
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 9, 16)  # 09-16 复审: 0 删 0 增, 见上
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
 # (探针 200 但控制台无余量的最危险: 可能是「用完即停」没覆盖它、其实在计费,

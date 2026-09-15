@@ -77,8 +77,11 @@ def test_deepseek_survives_the_registry_staleness_cliff(model):
     ⛔ 这条不能用「monkeypatch 到期日」来测: 那只触发 expired 一道闸,
        `_registry_stale` 仍按真实今天算 ⇒ 会一路绿到 9-13。**推 today 才对。**
     """
-    stale_day = datetime.date(2026, 9, 5)      # 只 stale, aistore 还没过期
-    cliff_day = datetime.date(2026, 9, 14)     # stale + aistore expired
+    # 2026-09-16: 原来写死 09-05 / 09-14 (按 08-13 的审计日期算) —— 审计日期一推就全错。
+    #    stale 日从常量推; cliff 日 = stale 日与 aistore 到期日之后取晚者 (两者都要 stale)。
+    stale_day = (llm_router._REGISTRY_AUDIT_DATE
+                 + datetime.timedelta(days=llm_router._REGISTRY_MAX_AGE_DAYS + 1))
+    cliff_day = max(stale_day, datetime.date(2026, 9, 14))   # stale + aistore expired
     assert llm_router._registry_stale(stale_day) is True
     for day in (stale_day, cliff_day):
         assert llm_router._refuse_reason("deepseek", model, day) is None, (
@@ -104,11 +107,12 @@ def test_the_staleness_cliff_is_real_for_a_model_outside_the_minimal_set(monkeyp
     ghost = ("aistore", "__not-in-minimal-set__")
     monkeypatch.setitem(llm_router._SAFE_MODELS, ghost, datetime.date(2099, 1, 1))
     assert ghost not in llm_router._MINIMAL_SAFE_SET
-    stale = datetime.date(2026, 9, 5)
+    stale = (llm_router._REGISTRY_AUDIT_DATE
+             + datetime.timedelta(days=llm_router._REGISTRY_MAX_AGE_DAYS + 1))
     assert llm_router._registry_stale(stale) is True
     assert llm_router._refuse_reason(*ghost, stale) == "registry_stale"
-    # 阴性: 同一条目在 registry 未超龄时不该被这道闸拒
-    assert llm_router._refuse_reason(*ghost, datetime.date(2026, 8, 15)) is None
+    # 阴性: 同一条目在 registry 未超龄时(审计当天)不该被这道闸拒
+    assert llm_router._refuse_reason(*ghost, llm_router._REGISTRY_AUDIT_DATE) is None
 
 
 # ── T7-c thinking 注入 ──────────────────────────────────────────────────

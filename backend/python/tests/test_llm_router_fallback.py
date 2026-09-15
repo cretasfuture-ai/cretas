@@ -462,7 +462,7 @@ async def test_vl_falls_through_two_quota_exhausted_accounts_to_the_third(monkey
 # _refuse_reason — the single shared billing gate
 # ════════════════════════════════════════════════════════════════════════
 
-_TODAY = datetime.date(2026, 8, 13)  # registry audit date → not stale
+_TODAY = llm_router._REGISTRY_AUDIT_DATE  # registry audit date → not stale (从常量推, 别写死)
 # (与 llm_router._REGISTRY_AUDIT_DATE 同步更新; call_chain 类测试用
 # monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
