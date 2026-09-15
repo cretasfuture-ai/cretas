@@ -43,6 +43,17 @@ jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: jest.fn(), goBack: jest.fn() }),
 }));
 
+// 2026-09-16 起屏幕的标题栏走 useTranslation('common')；单测里没有 i18n 实例，
+// 直接查 zh-CN 的 common bundle（同 SourceIndividualDetailScreen.test 的做法）。
+jest.mock('react-i18next', () => {
+  const bundle = require('../../i18n/locales/zh-CN/common.json');
+  const lookup = (key: string): string => {
+    const raw = key.split('.').reduce<any>((acc, part) => (acc ? acc[part] : undefined), bundle);
+    return typeof raw === 'string' ? raw : key;
+  };
+  return { useTranslation: () => ({ t: lookup }) };
+});
+
 jest.mock('../../services/api/traceabilityApiClient', () => ({
   traceabilityApiClient: {
     getFullTrace: (...args: unknown[]) => mockGetFullTrace(...args),
