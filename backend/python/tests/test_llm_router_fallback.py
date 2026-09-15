@@ -1361,4 +1361,17 @@ def test_the_deleted_accounts_are_really_gone():
             f"{sym} 被一起删了 —— #580 删 deepseek 时就是这样, "
             "加回来才发现少了 thinking 注入那一半")
 
+def test_vl_accounts_actually_receive_enable_thinking_false():
+    """2026-09-15 真机事故: SLOT.VL 的 profile 写着 enable_thinking=False, 但三个
+    VL 账号(aliyun_*_vl, #793 新增)不在 _ALIYUN_ACCOUNTS 里, `_apply_slot_params`
+    据此判定「非 aliyun」而**从不下发**关思考 → qwen3.8-flash 默认思考,
+    拍耳标 6–14s、尾部 >30s 撞三次超时。守的是「真的发出去了」, 不是 profile 字面。
+    """
+    for account, model in llm_router.SLOT_MODELS[SLOT.VL]:
+        p = llm_router._apply_slot_params(slot=SLOT.VL, account=account, model=model,
+                                          payload={"messages": []})
+        assert p.get("enable_thinking") is False, (
+            f"VL {account}/{model}: enable_thinking 没有下发 (得到 {p.get('enable_thinking')!r})"
+            " —— 账号不在 _ALIYUN_ACCOUNTS 里, 模型会默认开思考"
+        )
 
