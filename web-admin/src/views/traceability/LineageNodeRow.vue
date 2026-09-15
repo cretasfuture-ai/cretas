@@ -26,8 +26,15 @@ const props = withDefaults(
     node: LineageNode;
     /** 内部页 true; 抽屉里的「去了哪」不需要再念供应商。 */
     showSupplier?: boolean;
+    /**
+     * 是否显示「投入量」。来源链里它是本节点对下游的投入量, 有意义;
+     * 抽屉「去了哪」里下游节点的 quantity 是**该批次全部**上游边的合计
+     * (演示租户: 6 头牛合计 3173kg 挂在一头牛的去向下面), 会被读成「这头牛投了 3173kg」——
+     * 那是误导, 不显示。
+     */
+    showQuantity?: boolean;
   }>(),
-  { showSupplier: false }
+  { showSupplier: false, showQuantity: true }
 );
 
 const emit = defineEmits<{ (e: 'open-individual', id: string): void }>();
@@ -79,7 +86,7 @@ function open() {
           供应商：{{ node.supplierName }}
         </div>
       </template>
-      <div v-if="quantityLine" class="lineage-node__line">投入量：{{ quantityLine }}</div>
+      <div v-if="showQuantity && quantityLine" class="lineage-node__line">投入量：{{ quantityLine }}</div>
 
       <div v-if="individual" class="lineage-node__individual" data-testid="lineage-individual">
         <span v-if="individualLine" class="lineage-node__individual-line">{{ individualLine }}</span>

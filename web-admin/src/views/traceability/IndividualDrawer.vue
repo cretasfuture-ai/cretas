@@ -263,6 +263,7 @@ const whereaboutGroups = computed(() => {
               v-for="node in g.nodes"
               :key="`${node.nodeType}#${node.nodeId || node.batchNumber || 'unnamed'}`"
               :node="node"
+              :show-quantity="false"
             />
           </el-timeline-item>
         </el-timeline>
