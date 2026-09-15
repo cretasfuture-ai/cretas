@@ -9,6 +9,7 @@
  *  2. 系谱选不到就报错, ⛔ 不静默置空。后端 422 的文案原样弹给用户。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Search } from '@element-plus/icons-vue';
 import type { FormInstance } from 'element-plus';
@@ -27,6 +28,7 @@ import {
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 
@@ -90,7 +92,13 @@ function parentLabel(row: SourceIndividual) {
   return row.tagNumber ? `${row.individualCode} · ${row.tagNumber}` : row.individualCode;
 }
 
-onMounted(loadData);
+onMounted(() => {
+  // `?keyword=` 带参打开 (溯源页个体抽屉的「编辑」跳过来时带的是档案编号):
+  // 列表先按它过滤, 用户在行上点「编辑」。⚠️ 只在首载读一次, 之后搜索框归用户。
+  const q = route?.query?.keyword;
+  if (typeof q === 'string' && q.trim()) keyword.value = q.trim();
+  loadData();
+});
 watch([page, size], loadData);
 
 async function loadData() {
