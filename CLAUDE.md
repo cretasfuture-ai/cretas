@@ -33,8 +33,8 @@ This file provides guidance to Claude Code when working with this repository.
 cd frontend/CretasFoodTrace && npm start                       # RN 前端 (Expo)
 cd backend/java/cretas-api && mvn clean package -DskipTests    # Java 构建
 cd backend/python && uvicorn main:app --port 8083              # Python 服务
-./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420                          # 合并后先预热, 不能省
-./scripts/deploy/release-cretas.sh --phase deploy --base-sha <SHA> --tests '<tests>' --confirm-prod YES-PROD  # 发布统一入口 (单组件/详情见 /deploy-backend skill)
+./scripts/deploy/release-cretas.sh --phase build --base-sha <SHA> --tests '<tests>' --stage-backend YES-STAGE   # 合并【前】在候选树先 build+预传 (硬规则, 2026-09-15); ⛔ 不跑 prewarm(CI 制品车道不通)
+./scripts/deploy/release-cretas.sh --phase deploy --base-sha <SHA> --tests '<tests>' --no-prefer-ci-artifact --confirm-prod YES-PROD  # 合并后发布, 命中①则 ≈1 min (详见 /deploy-backend skill)
 # 判据: DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好 1 次 (不出现本身就是失败信号)
 ```
 

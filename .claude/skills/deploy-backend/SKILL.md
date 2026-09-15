@@ -9,20 +9,27 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 
 ## 统一发布入口（Java / Web 常规发布）
 
+**硬规则（Steve 2026-09-15 裁定）：先 build 再合并。** 任何要发 prod 的 Java PR，合并之前必须在候选 worktree 跑完 ①；合并后直接 ③。⛔ 不跑 ②（见下）。
+
 ```bash
-# ① 合并前（干净的已审查候选 worktree）：唯一一次构建 + Java 制品预上传，不安装 / 不重启 / 不切流
+# ① 合并前（干净的已审查候选 worktree，HEAD = PR head）：唯一一次构建 + Java 制品预上传到服务器缓存，
+#    不安装 / 不重启 / 不切流。manifest 按 backend/java/cretas-api 的 git tree hash 记账。
 ./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<Maven 选择器>' --stage-backend YES-STAGE
-# ② 合并后先预热（幂等，可丢后台）：把 CI 制品的跨境运输挪出发布窗口；看到 PREWARM=done / already-warm 再往下
-#    ⚠️ PREWARM=unavailable（rc=3）= 本组织这条车道结构性不可用（私有仓签不上 attestation，ECS 按设计拒收）：
-#       **照常往下发布**，构建走本地 Maven（慢约 4 分钟但正确）。⛔ 不要重跑预热、也不要因此停下。
-./scripts/deploy/prewarm-main-artifact.sh --tests '<同③选择器或更窄>' --wait 420
-# ③ 发布：自动检测 Java/Web 范围，复用 manifest / tree cache / CI 制品，部署或安全 no-op，输出 JSON 回执
-./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
+# ② （已停用）prewarm-main-artifact.sh 等的是 CI 制品，而本组织这条车道三重不通（见下），等 420s 纯浪费。
+# ③ 合并后立刻发布：validate 命中 ① 的 manifest ⇒ build=reused、零 Maven、零上传，≈1 min（green readiness ~50s + 切流）
+./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<同①选择器>' --no-prefer-ci-artifact --confirm-prod YES-PROD
 ```
+
+**复用条件**（三条同时成立才 `reused`，任一不成立就回退本地 Maven ≈4 min，脚本会明说 `RELEASE_BUILD_MODE=java-fallback`）：
+1. squash 合并后 `origin/main:backend/java/cretas-api` 的 tree hash == ① 时的 tree hash ⇒ **① 到合并之间不能有别的后端改动落 main**。合并前 `git fetch && git log --oneline <base>..origin/main -- backend/java/cretas-api` 为空即可；不为空就在合并后的 main 上重跑 ① 再 ③。
+2. ③ 的 `--tests` 选择器与 ① 完全一致。
+3. 本机 `~/.cache/cretas/java-deploy/current/release-jar.manifest` 未被别的树的 build 覆盖（并发发布线要各用各的 `CRETAS_JAVA_RELEASE_MANIFEST`）。
+
+**为什么 ② 停用、CI 制品车道不能指望**（2026-09-15 实测三重叠加）：自托管 Java job 在 4G runner 上 OOM（#814 已修）；GitHub 报 `Artifact storage quota has been hit`，制品传不上去（组织级配额）；私有仓无 attestation，ECS 按设计拒收未签名制品。**修 runner 不会让部署变快。** 当晚两次发布各 8 min，全在本地 Maven（javac 4277 文件 2:41，纯 CPU；自托管 runner 就在本机抢 CPU）；按本节先 ① 再合并，各 ≈1 min。
 
 **判据**：`DEPLOY_EXIT=0` 且日志里 `RELEASE_FINAL_STATUS` 恰好 1 次（不出现就是失败：收尾 printf 在 `set -e` 下被掐掉；后台任务通知里的 exit code 不可信）。被 exact-main 闸拒绝是**静默**的：BUILD SUCCESS、测试全绿、然后戛然而止，回执 `deploy_mode=none` → `git fetch && git checkout --detach origin/main` 重跑。回执里 `build="reused"` / `java_build=0` / `build_count=0` 是正常成功（复用可信 manifest，选择器一变必重编）；但 deploy 阶段的 validate 不比对测试选择器，审计选择器要看 manifest 的 `target_tests`。
 
-**为什么 ② 不能省**：预热后 Java 零次 Maven ∥ Web 19s ≈ 25s，不预热 ≈ 204s；main 上相邻合并常 ≤4 分钟，200s 的本地构建期间 origin/main 被推进就整体作废（07-30、07-31 各一次）。本机刚建过这棵树时预热看不出效果（validate 直接命中本地 manifest），价值在合并别人的 PR 之后。
+**为什么构建要挪出发布窗口**（① 存在的理由）：main 上相邻合并常 ≤4 分钟，200s 的本地构建期间 origin/main 被推进就整体作废（07-30、07-31 各一次）；① 把这 4 分钟放到合并之前，③ 只剩 1 分钟窗口。合并别人的 PR（本机没建过那棵树）时同样先在合并后的 main 上跑 ① 再 ③，不要直接 ③。
 
 **部署后**：入口已调 `verify-release.sh`（真实 upstream / systemd / 直连健康 / Web 四方哈希）写入回执，回执完整且成功时不重复手工检查；单独验证 `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod`。再按 measurement-and-wiring 硬约束 2：在运行中的制品里 grep 这次改动的 ASCII 标记，并真跑一次那条路径。
 
