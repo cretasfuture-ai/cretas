@@ -15,6 +15,7 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
+- `ARCH-SELF-HOSTED-RUNNER-DIRECT-STAGE-20260915` — `queued`(周三 09-17 胜龙面谈后) — Owner: organizer 框架 → 🔒 — 自托管 runner 合并 main 后直接 build + 传 jar 到 47 缓存, manifest 用 runner 持有的密钥签名, `release-cretas.sh` 验签后复用; 绕开 GitHub 制品存储与 attestation。改发布脚本 + ECS 校验 = 信任策略变更, Steve 09-15 裁定「周三后再说」。
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。；实测 3 个计划: 8cf3fa56(3 批)/ffeb2d34(2)/40b47b4b(2), 均为同计划多生产批次, 成品无法唯一归属
 - `OPS-REHEARSAL-LOG-SWEEP-20260915` — `in-progress` — Owner: organizer — 3/5 已修上 prod(#803 `41f1613ced`: 部署删日志+依赖指纹 / 未配周期记 ERROR / 死 admin 块; 部署实证 log_head 未变、`cache hit`、启动 0 旧告警); image-picker 派 `FEAT-RN-IMAGE-PICKER-MEDIATYPE-20260915`; 剩 EAS projectId(账号级, 等 Steve)、workers vs 缓存(餐饮, 只登记)。
 - `OPS-LLM-ROUTER-STALE-CHAIN-COMMENT-20260915` — `queued` — Owner: 无 — `llm_router.py` L1029 一带 `# Chain — 5 providers, all free:` 仍描述已不存在的链(#793 只订正了两处); 照它推理会得到自洽但错误的链形状。判据=注释与 `_build_chain` 实际输出一致。
