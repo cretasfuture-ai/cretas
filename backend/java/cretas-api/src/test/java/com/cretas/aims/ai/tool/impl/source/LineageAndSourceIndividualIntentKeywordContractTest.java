@@ -114,10 +114,18 @@ class LineageAndSourceIndividualIntentKeywordContractTest {
 
     // ── 从迁移 SQL 取关键词 ─────────────────────────────────────────────────
 
-    /** LINEAGE_QUERY = D4 登记的原始数组 ∪ 本次迁移追加的数组 (迁移用 jsonb 合并, 这里同样取并集)。 */
+    /**
+     * LINEAGE_QUERY 在 prod 上 = D4 登记的原始数组 ∪ 本次迁移 upsert 的数组 (迁移 ON CONFLICT 时 jsonb 合并,
+     * 这里同样取并集); 全新库上只有本次迁移那份 —— 它必须自带 D4 的 15 条, 下面顺手钉住这一点。
+     */
     private static Set<String> lineageKeywords() throws IOException {
-        Set<String> out = new LinkedHashSet<>(arrayAfter(read(D4_REGISTRATION), "'LINEAGE_QUERY'"));
-        out.addAll(arrayAfter(read(THIS_MIGRATION), "intent_code = 'LINEAGE_QUERY'", true));
+        List<String> d4 = arrayAfter(read(D4_REGISTRATION), "'LINEAGE_QUERY'");
+        List<String> mine = arrayAfter(read(THIS_MIGRATION), "'LINEAGE_QUERY'");
+        assertThat(mine)
+                .as("V20261101_44 走 upsert: 全新库上它是 LINEAGE_QUERY 唯一的一份关键词, 必须包含 D4 的原始 15 条")
+                .containsAll(d4);
+        Set<String> out = new LinkedHashSet<>(d4);
+        out.addAll(mine);
         return out;
     }
 
@@ -125,30 +133,19 @@ class LineageAndSourceIndividualIntentKeywordContractTest {
         return new LinkedHashSet<>(arrayAfter(read(THIS_MIGRATION), "'SOURCE_INDIVIDUAL_QUERY'"));
     }
 
-    /** 从 anchor 之后的第一段 JSON 数组字面量取关键词。 */
+    /** 从 anchor (第一次出现处) 之后的第一段 JSON 数组字面量取关键词。 */
     private static List<String> arrayAfter(String sql, String anchor) throws IOException {
-        return arrayAfter(sql, anchor, false);
-    }
-
-    /**
-     * @param beforeAnchor true 时取 anchor <b>之前</b>最近的一段数组 —— LINEAGE 的 UPDATE 语句里
-     *                     数组在 WHERE intent_code 之前。
-     */
-    private static List<String> arrayAfter(String sql, String anchor, boolean beforeAnchor) throws IOException {
         int at = sql.indexOf(anchor);
         assertThat(at).as("迁移里应有 %s", anchor).isGreaterThanOrEqualTo(0);
         Matcher m = JSON_ARRAY_LITERAL.matcher(sql);
         String literal = null;
         while (m.find()) {
-            if (beforeAnchor) {
-                if (m.start() < at) literal = m.group(1);   // 最后一段在 anchor 之前的
-                else break;
-            } else if (m.start() > at) {
+            if (m.start() > at) {
                 literal = m.group(1);
                 break;
             }
         }
-        assertThat(literal).as("%s 附近应有一段 JSON 数组字面量", anchor).isNotNull();
+        assertThat(literal).as("%s 之后应有一段 JSON 数组字面量", anchor).isNotNull();
         return JSON.readValue(literal, new TypeReference<List<String>>() { });
     }
 

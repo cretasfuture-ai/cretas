@@ -16,20 +16,35 @@
 -- 另: 全文没有 "$" 后面紧跟 "{" 的写法 -- Flyway 会把它当占位符 (注释里也算).
 
 -- =====================================================================
--- 1. LINEAGE_QUERY: 追加「来自哪几头牛」一族关键词 (去重合并, 不覆盖已有的),
---    description 改成说明可以直接给批次号.
+-- 1. LINEAGE_QUERY: 追加「来自哪几头牛」一族关键词, description 改成说明可以直接给批次号.
+--
+--    ⚠️ 必须是 upsert, 不能是 UPDATE: 全新库从 prod-schema-baseline (baselineVersion 20261101.37)
+--    起跑, V20260823_05 那条 INSERT 被 baseline 跳过, LINEAGE_QUERY 这一行根本不存在 ——
+--    fresh-db gate 实测 UPDATE 影响 0 行 (被第 3 节的核对当场抓住). 所以:
+--      - 行不在 (全新库): INSERT 完整清单 (V20260823_05 的 15 条 + 本次 9 条)
+--      - 行已在 (prod):   只合并 keywords (去重, 保留 prod 上已有的) + 换 description;
+--                         tool_name / priority / sensitivity 等保持 prod 现值不动
 -- =====================================================================
-UPDATE ai_intent_configs
-   SET keywords = (
-         SELECT jsonb_agg(DISTINCT e)
-           FROM jsonb_array_elements(
-                  COALESCE(keywords::jsonb, '[]'::jsonb)
-                  || '["来自哪几头牛","来自哪头牛","哪几头牛","这批肉来自","牛的来源","源头个体","这批来自","用了哪些原料","来自哪些牛"]'::jsonb
-                ) e
-       ),
-       description = 'Sprint 11 D4 + 2026-09-15 -- 批次溯源 Tool. 直接给 batch_number (批次号, 如 SL-DEMO-BATCH-V1) 即可, batch_type 缺省 PRODUCTION_BATCH (也支持 MATERIAL_BATCH/FINISHED_BATCH/SHIPMENT_RECORD); 老用法 batch_type + batch_id 仍可用. 返回全部祖先 (上游/源批次, 含每头源头个体的耳标/品种/来源场/DNA 状态) + 后代 (下游/客户) + 直接边 metadata + 一段人话摘要 (来自几头牛). 触发: 这批来自哪几头牛 / 这批用了哪批原料 / 召回这批查哪些客户. Sensitivity MEDIUM 因含批次明细 + 客户信息.',
-       updated_at = NOW()
- WHERE intent_code = 'LINEAGE_QUERY';
+INSERT INTO ai_intent_configs AS aic (
+    id, intent_code, intent_name, intent_category, tool_name,
+    sensitivity_level, keywords, description, priority, is_active,
+    created_at, updated_at
+)
+VALUES
+    (gen_random_uuid(), 'LINEAGE_QUERY', '批次溯源查询', 'QUERY',
+     'lineage_query', 'MEDIUM',
+     '["批次溯源","这批用了哪些原料","这批从哪来","原料流向","召回","客户追溯","RES_3101_009","批次追溯","上游下游","哪批原料","流向了哪些客户","物料 lineage","批次来源","溯源链路","溯源 DAG","来自哪几头牛","来自哪头牛","哪几头牛","这批肉来自","牛的来源","源头个体","这批来自","用了哪些原料","来自哪些牛"]',
+     'Sprint 11 D4 + 2026-09-15 -- 批次溯源 Tool. 直接给 batch_number (批次号, 如 SL-DEMO-BATCH-V1) 即可, batch_type 缺省 PRODUCTION_BATCH (也支持 MATERIAL_BATCH/FINISHED_BATCH/SHIPMENT_RECORD); 老用法 batch_type + batch_id 仍可用. 返回全部祖先 (上游/源批次, 含每头源头个体的耳标/品种/来源场/DNA 状态) + 后代 (下游/客户) + 直接边 metadata + 一段人话摘要 (来自几头牛). 触发: 这批来自哪几头牛 / 这批用了哪批原料 / 召回这批查哪些客户. Sensitivity MEDIUM 因含批次明细 + 客户信息.',
+     80, true, NOW(), NOW())
+ON CONFLICT (intent_code) DO UPDATE SET
+    keywords = (
+        SELECT jsonb_agg(DISTINCT e)
+          FROM jsonb_array_elements(
+                 COALESCE(aic.keywords::jsonb, '[]'::jsonb) || EXCLUDED.keywords::jsonb
+               ) e
+    ),
+    description = EXCLUDED.description,
+    updated_at = NOW();
 
 -- =====================================================================
 -- 2. SOURCE_INDIVIDUAL_QUERY: 新意图 (QUERY / MEDIUM / priority 82, 略高于 LINEAGE_QUERY 的 80).
