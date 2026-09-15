@@ -147,6 +147,13 @@ public class SlotFillingServiceImpl implements SlotFillingService {
         if (!configuredSlots.isEmpty()) {
             return configuredSlots;
         }
+        // 1b. 配置里只有可选槽位（「三选一」这类单个必填表达不了的意图, 如 SOURCE_INDIVIDUAL_QUERY）:
+        //     也要拿去抽参, 否则 Tool 永远收不到编码/耳标 —— findMissingSlots 只对 required 追问,
+        //     所以可选槽位抽不到不会变成反问。现有带必填的意图不走这条分支, 行为不变。
+        List<RequiredSlot> optionalOnly = intentSlotConfiguration.getRequiredSlots(intent.getIntentCode());
+        if (!optionalOnly.isEmpty()) {
+            return optionalOnly;
+        }
 
         // 2. 尝试从绑定的 Tool 推断
         String toolName = intent.getToolName();
@@ -247,7 +254,11 @@ public class SlotFillingServiceImpl implements SlotFillingService {
             List<RequiredSlot> stillMissing = slots.stream()
                 .filter(s -> !extracted.containsKey(s.getName()))
                 .collect(Collectors.toList());
-            if (!stillMissing.isEmpty()) {
+            // 全是可选槽位的意图: 前 4 步已经抽到东西就不再为剩下的可选项多付一次 LLM 往返;
+            // 一样都没抽到才兜底（自由措辞如「那头 DNA 对不上的牛」）。
+            boolean anyRequiredMissing = stillMissing.stream().anyMatch(RequiredSlot::isRequired);
+            boolean noSlotExtracted = stillMissing.size() == slots.size();
+            if (!stillMissing.isEmpty() && (anyRequiredMissing || noSlotExtracted)) {
                 Map<String, Object> llmExtracted = llmExtractMissingSlots(userInput, stillMissing);
                 for (Map.Entry<String, Object> e : llmExtracted.entrySet()) {
                     if (!extracted.containsKey(e.getKey()) && e.getValue() != null) {

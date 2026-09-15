@@ -304,6 +304,63 @@ public class IntentSlotConfiguration {
                         .build()
         ));
 
+
+        // ==================== 溯源 / 源头个体（胜龙 2026-09-15）====================
+        // 这两个 Tool 的 schema `required` 是空表（batch_number/batch_id 二选一、
+        // 编码/耳标/DNA 状态三选一，单个必填表达不了），而 SlotFilling 与
+        // ToolDispatchService 都只对 schema `required` 抽参 ⇒ prod 实测四个问句全部
+        // 「工具提前返回 NEED_MORE_INFO」。在这里把槽位登记出来，让正则 / LLM 抽参接上；
+        // 「至少给一个」仍由各 Tool 的 validateRequiredParams 判。
+
+        // 批次溯源：批号必填，规则抽 SL-DEMO-BATCH-V1 / MB-20260915-001 这种编号，抽不到走 LLM
+        registerSlots("LINEAGE_QUERY", Arrays.asList(
+                RequiredSlot.builder()
+                        .name("batch_number")
+                        .label("批次号 / 批号（用户原文里形如 SL-DEMO-BATCH-V1、MB-20260915-001 的编号，原样提取）")
+                        .type("TEXT")
+                        .required(true)
+                        .pattern("([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)")
+                        .validationHint("请问是哪一批? 说批次号就行 (例: SL-DEMO-BATCH-V1)")
+                        .priority(1)
+                        .build()
+        ));
+
+        // 源头个体：三个入口都不单独必填（required=false ⇒ 不追问，只抽参）
+        registerSlots("SOURCE_INDIVIDUAL_QUERY", Arrays.asList(
+                RequiredSlot.builder()
+                        .name("individual_code")
+                        .label("个体档案编码（用户原文里形如 SL-BULL-001、SL-CATTLE-005 的编号，原样提取；没提就 null）")
+                        .type("TEXT")
+                        .required(false)
+                        .pattern("([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)")
+                        .priority(1)
+                        .build(),
+                RequiredSlot.builder()
+                        .name("tag_number")
+                        .label("耳标号（8 位以上纯数字，原样提取；没提就 null）")
+                        .type("TEXT")
+                        .required(false)
+                        .pattern("(?<![0-9A-Za-z-])([0-9]{8,})(?![0-9])")
+                        .priority(2)
+                        .build(),
+                RequiredSlot.builder()
+                        .name("dna_status")
+                        .label("DNA 比对状态，只能是 MISMATCH(不匹配)/MATCHED(已比中)/SAMPLED(已采样)/UNSAMPLED(未采样)；没提就 null")
+                        .type("TEXT")
+                        .required(false)
+                        .pattern("(不匹配|不一致|已比中|已匹配|未采样|没采样|已采样|MISMATCH|MATCHED|UNSAMPLED|SAMPLED)")
+                        .priority(3)
+                        .build(),
+                RequiredSlot.builder()
+                        .name("ask")
+                        .label("想看什么，只能是 profile(档案)/pedigree(父本母本)/offspring(后代)/siblings(同父兄弟姐妹)/downstream(去了哪些批次)/list(按状态列名单)；没明确就 null")
+                        .type("TEXT")
+                        .required(false)
+                        .pattern("(后代|子代|子女|儿女|系谱|父本|母本|父母|兄弟|姐妹|同父|去了哪|去向|流向|哪些批次|去了哪些|档案)")
+                        .priority(4)
+                        .build()
+        ));
+
         log.info("意图槽位配置初始化完成，共配置 {} 个意图", intentSlots.size());
     }
 
