@@ -305,6 +305,125 @@ describe('溯源查询页 — 个体抽屉', () => {
     await flushPromises();
     expect(getDetailMock).not.toHaveBeenCalled();
   });
+
+  // ── 2026-09-15 投屏截图取证的两处 (impeccable critique B 侧) ──────────────
+  it('编码只在标题栏出现一次; 正文首行是耳标 + 品种·来源场', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    getDetailMock.mockImplementation(() => ok(individualDetail()));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    await wrapper.findAll('[data-testid="lineage-node"]')[1].trigger('click');
+    await flushPromises();
+    await nextTick();
+
+    const drawer = wrapper.find('[data-testid="individual-drawer"]');
+    expect(drawer.exists()).toBe(true);
+    // 阳性对照: 标题栏确实念了编码 —— 否则「只出现一次」可能是「一次都没出现」
+    expect(wrapper.find('[data-testid="drawer-title"]').text()).toBe('SL-002');
+    expect((drawer.text().match(/SL-002/g) ?? []).length).toBe(1);
+    // 正文首行: 耳标 + 品种·来源场 (与来源链行上点进来的那一段是同一句)
+    expect(wrapper.find('[data-testid="drawer-tag"]').text()).toBe('耳标 12345672');
+    expect(wrapper.find('[data-testid="drawer-origin-line"]').text()).toBe('西门塔尔 · 胜龙一号场');
+    expect(wrapper.find('[data-testid="drawer-identity"]').text()).not.toContain('SL-002');
+  });
+
+  it('「去了哪」原料批次与生产批次两种节点都带图标 (同一份 LineageNodeRow, 左缘对齐)', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    getDetailMock.mockImplementation(() => ok(individualDetail()));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    await wrapper.findAll('[data-testid="lineage-node"]')[1].trigger('click');
+    await flushPromises();
+    await nextTick();
+
+    const batches = wrapper.find('[data-testid="drawer-batches"]');
+    const production = wrapper.find('[data-testid="drawer-group-production"]');
+    expect(batches.findAll('.lineage-node__icon')).toHaveLength(1);
+    expect(production.findAll('.lineage-node__icon')).toHaveLength(1);
+    // 图标不是空壳: 两个都真渲染了 svg (nodeTypeIcon 映射到了 Element Plus 图标组件)
+    expect(batches.find('.lineage-node__icon svg').exists()).toBe(true);
+    expect(production.find('.lineage-node__icon svg').exists()).toBe(true);
+    expect(batches.find('[data-testid="lineage-node"]').attributes('data-node-type')).toBe('MATERIAL_BATCH');
+    // 原料批次行的内容一样不少: 批次号 / 物料·数量 / 入库日期
+    expect(batches.text()).toContain('MB-2026-002');
+    expect(batches.text()).toContain('牛胴体 · 250kg');
+    expect(batches.text()).toContain('入库：2026-09-09');
+    // 「投入量」是来源链上的口径, 这里不该出现
+    expect(batches.text()).not.toContain('投入量');
+  });
+
+  it('原料批次没有入库日期 ⇒ 不留一个空行', async () => {
+    const d = individualDetail();
+    d.batches = [{ id: 'mb-2', batchNumber: 'MB-2026-002', materialName: '牛胴体', receiptDate: null }];
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    getDetailMock.mockImplementation(() => ok(d));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    await wrapper.findAll('[data-testid="lineage-node"]')[1].trigger('click');
+    await flushPromises();
+    await nextTick();
+
+    const batches = wrapper.find('[data-testid="drawer-batches"]');
+    expect(batches.text()).not.toContain('入库');
+    const lines = batches.findAll('.lineage-node__line').map((l) => l.text());
+    expect(lines).toEqual(['牛胴体']);
+  });
+});
+
+describe('溯源查询页 — 投屏细节 (2026-09-15 截图取证)', () => {
+  it('横幅前有图标, 文案本身不变', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+
+    const banner = wrapper.find('[data-testid="source-individual-banner"]');
+    expect(banner.find('[data-testid="source-individual-banner-icon"] svg').exists()).toBe(true);
+    expect(banner.text()).toBe('本批来自 6 头牛');
+  });
+
+  it('「查询时间」是 YYYY-MM-DD HH:mm, 不是浏览器语言的 toLocaleString', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace())); // queryTime: 2026-09-15T10:00:00
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+
+    const line = wrapper.find('[data-testid="query-time"]');
+    expect(line.exists()).toBe(true);
+    expect(line.text()).toBe('查询时间: 2026-09-15 10:00');
+    expect(wrapper.text()).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{4}/); // 9/15/2026 这种形状不许出现
+  });
+
+  it('对照: 后端没给 queryTime ⇒ 那一行整行不渲染, 也不显示 -', async () => {
+    getFullTraceMock.mockImplementation(() => ok({ ...sixCattleTrace(), queryTime: undefined as unknown as string }));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+
+    // 阳性对照: 页面确实渲染到了页尾 (生产卡在), 「没有那一行」不是「整页没渲染」
+    expect(wrapper.find('[data-testid="production-card"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="query-time"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('查询时间');
+    expect(wrapper.findAll('.footer-line').map((l) => l.text())).not.toContain('查询时间: -');
+  });
+
+  it('工序「时间」列同样走 dayjs 格式', async () => {
+    const t = sixCattleTrace();
+    t.processingStages = [
+      {
+        stageType: 'CUTTING',
+        stageName: '分割',
+        stageOrder: 1,
+        operatorName: '张三',
+        durationMinutes: 40,
+        startTime: '2026-09-10T08:00:00',
+        endTime: '2026-09-10T08:40:00',
+      },
+    ];
+    getFullTraceMock.mockImplementation(() => ok(t));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+
+    expect(wrapper.find('[data-testid="processing-table"]').text()).toContain('2026-09-10 08:00 ~ 08:40');
+    expect(wrapper.text()).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{4}/);
+  });
 });
 
 describe('溯源查询页 — 带参直开', () => {
