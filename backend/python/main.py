@@ -1524,19 +1524,10 @@ app.include_router(
     tags=["LLM Fallback Log"],
 )
 
-# J1 (Apr 24 2026): LLM router circuit breaker stats
-# Optional: lives on a parallel branch (e2e/v1-framework). On branches where
-# it's absent the rest of the service still starts; the admin route is just
-# unavailable. Same pattern as the SmartBI compat block below.
-try:
-    from smartbi.api import llm_router_admin
-    app.include_router(
-        llm_router_admin.router,
-        prefix="/api/smartbi/admin/llm-router",
-        tags=["LLM Router Admin"],
-    )
-except ImportError as e:
-    logger.warning(f"LLM Router admin routes not registered: {e}")
+# 2026-09-15: 原「J1 LLM router circuit breaker stats」的可选注册块已删。
+# `smartbi/api/llm_router_admin.py` 在**任何分支的历史里都不存在**(git log --all 为空),
+# 那段 try/except 自 04-24 起每次启动都在 WARN 里报一次 ImportError —— 守着一个
+# 从没接上的口子。要恢复请新建模块并直接 include_router, 不要再用 try/except 吞。
 
 # Phase A A-1 Restaurant ETL admin (Apr 28 2026): trigger + status endpoints
 from smartbi.api import restaurant_etl_admin  # noqa: E402
