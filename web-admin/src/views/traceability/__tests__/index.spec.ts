@@ -266,6 +266,34 @@ describe('溯源查询页 — 个体抽屉', () => {
     });
   });
 
+  it('抽屉读档失败 ⇒ 显示原话; 关掉再点同一头 ⇒ 重新取 (id 没变也得刷掉错误态)', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    getDetailMock
+      .mockImplementationOnce(() => Promise.reject(new ApiError('权限不足', 'FORBIDDEN', 403)))
+      .mockImplementation(() => ok(individualDetail()));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+
+    const row = wrapper.findAll('[data-testid="lineage-node"]')[1];
+    await row.trigger('click');
+    await flushPromises();
+    await nextTick();
+    expect(getDetailMock).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-testid="drawer-error"]').text()).toContain('权限不足');
+    expect(wrapper.find('[data-testid="drawer-identity"]').exists()).toBe(false);
+
+    // 关掉 (el-drawer v-model → false), 再点同一行
+    await wrapper.findComponent({ name: 'ElDrawer' }).vm.$emit('update:modelValue', false);
+    await nextTick();
+    await row.trigger('click');
+    await flushPromises();
+    await nextTick();
+
+    expect(getDetailMock).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-testid="drawer-error"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="drawer-title"]').text()).toBe('SL-002');
+  });
+
   it('阴性对照: 没有个体 id 的行不可点, 点了也不调 detail', async () => {
     getFullTraceMock.mockImplementation(() => ok(mixedFarthestLayerTrace()));
     const wrapper = mountPage();

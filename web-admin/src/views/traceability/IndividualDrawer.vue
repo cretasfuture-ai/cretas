@@ -44,10 +44,15 @@ const error = ref<string | null>(null);
 watch(
   () => [visible.value, props.individualId] as const,
   ([open, id]) => {
-    if (!open) return;
+    if (!open || !id) return;
     // 每次从外面打开都是一条新的路径: 清栈、从 props 给的 id 开始。
     stack.value = [];
-    currentId.value = id;
+    if (currentId.value === id) {
+      // 同一头再点一次: id 没变, 下面那个 watcher 不会响 —— 直接重取, 让上次的错误态能被刷掉。
+      void load(id);
+    } else {
+      currentId.value = id;
+    }
   },
   { immediate: true }
 );
