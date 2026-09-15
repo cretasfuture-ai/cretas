@@ -333,7 +333,7 @@ export function useProtocolDocParser(): UseProtocolDocParserReturn {
 
     try {
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
         base64: false,
@@ -362,7 +362,7 @@ export function useProtocolDocParser(): UseProtocolDocParserReturn {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
         base64: false,
