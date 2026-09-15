@@ -275,41 +275,37 @@ async function handleDelete(row: SourceIndividual) {
         <el-button :icon="Refresh" @click="loadData">刷新</el-button>
       </div>
 
+      <!--
+        列宽预算 (1366 视口, 侧栏 220 展开): 1366 - 220 - 三层 20px 内边距×2 - 竖向滚动条 ≈ 1009px。
+        定宽合计 140+120+110+80+110+60+104+120 = 844, 加来源场 min 110 = 954 < 1009 —— 不出横向滚动条。
+        ⚠️ 原来 1180px 在 1440 上就出滚动条, 「DNA 比对」被右侧固定的「操作」列盖得只剩一个字 ——
+        技术员最关心的那一列排第 3, 别再排在最右。
+        空字段整格留空, ⛔ 不渲染 '-': 「没登记」不需要一个占位符来说明自己。
+      -->
       <el-table v-loading="loading" :data="rows" border stripe>
-        <el-table-column prop="individualCode" label="档案编号" width="160" show-overflow-tooltip />
-        <el-table-column label="标识牌编号" width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.tagNumber || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="物种" width="110">
-          <template #default="{ row }">{{ row.species || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="品种" width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.breed || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="性别" width="80">
-          <template #default="{ row }">{{ row.sex || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="出生日期" width="120">
-          <template #default="{ row }">{{ row.birthDate || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="来源养殖场" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.originFarm || '-' }}</template>
-        </el-table-column>
+        <el-table-column prop="individualCode" label="档案编号" width="140" show-overflow-tooltip />
+        <el-table-column prop="tagNumber" label="标识牌编号" width="120" show-overflow-tooltip />
         <el-table-column label="DNA 比对" width="110" align="center">
           <template #default="{ row }">
-            <!-- ⛔ 读不到状态就显示 '-'，不兜底成「未采样」——「没读到」和「没采样」是两件事 -->
+            <!-- ⛔ 读不到状态整格留空, 不兜底成「未采样」——「没读到」和「没采样」是两件事 -->
             <el-tag
               v-if="row.dnaVerificationStatus"
               :type="row.dnaVerificationStatus === 'MISMATCH' ? 'danger'
                 : row.dnaVerificationStatus === 'MATCHED' ? 'success' : 'info'"
               size="small"
+              round
+              data-testid="dna-chip"
             >
               {{ row.dnaVerificationStatusDisplayName || row.dnaVerificationStatus }}
             </el-tag>
-            <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="150" fixed="right">
+        <el-table-column prop="species" label="物种" width="80" show-overflow-tooltip />
+        <el-table-column prop="breed" label="品种" width="110" show-overflow-tooltip />
+        <el-table-column prop="sex" label="性别" width="60" />
+        <el-table-column prop="birthDate" label="出生日期" width="104" />
+        <el-table-column prop="originFarm" label="来源养殖场" min-width="110" show-overflow-tooltip />
+        <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
             <el-button link type="danger" @click="handleDelete(row)">删除</el-button>

@@ -14,13 +14,15 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Search } from '@element-plus/icons-vue';
+import { Connection, Search } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { getFullTrace, isTraceNotFound, type FullTraceResponse } from '@/api/traceability';
 import { bannerText, summarizeSourceIndividuals } from './lineageBanner';
 import {
   depthLabel,
   emptySectionsLine,
+  formatQueryTime,
+  formatTimeRange,
   isBlank,
   qualityStatusLabel,
   qualityStatusTag,
@@ -145,16 +147,14 @@ const emptyLine = computed(() => {
   return emptySectionsLine(empties);
 });
 
+/** 页尾「查询时间」。空串 = 后端没给 / 给的解析不了 —— 那一行整行不渲染, ⛔ 不显示 `-`。 */
+const queryTimeText = computed(() => formatQueryTime(trace.value?.queryTime));
+
 function percent(rate?: number | null): string {
   return rate == null ? '' : `${(rate * 100).toFixed(1)}%`;
 }
 function dateOnly(value?: string | null): string {
   return value ? value.split('T')[0] : '';
-}
-function timeRange(start?: string, end?: string): string {
-  if (!start) return '';
-  const s = new Date(start).toLocaleString();
-  return end ? `${s} ~ ${new Date(end).toLocaleTimeString()}` : s;
 }
 
 function openIndividual(id: string) {
@@ -261,9 +261,10 @@ function openIndividual(id: string) {
         </el-col>
       </el-row>
 
-      <!-- 「本批来自 N 头牛」横幅 -->
+      <!-- 「本批来自 N 头牛」横幅 —— 前面一个图标让投屏时一眼抓到, 文案本身不变 -->
       <div v-if="banner" class="source-banner" data-testid="source-individual-banner">
-        {{ banner }}
+        <el-icon class="source-banner__icon" data-testid="source-individual-banner-icon"><Connection /></el-icon>
+        <span>{{ banner }}</span>
       </div>
 
       <!-- 来源链 -->
@@ -350,7 +351,7 @@ function openIndividual(id: string) {
             <template #default="{ row }">{{ percent(row.passRate) }}</template>
           </el-table-column>
           <el-table-column label="时间" min-width="200">
-            <template #default="{ row }">{{ timeRange(row.startTime, row.endTime) }}</template>
+            <template #default="{ row }">{{ formatTimeRange(row.startTime, row.endTime) }}</template>
           </el-table-column>
         </el-table>
       </el-card>
@@ -406,9 +407,7 @@ function openIndividual(id: string) {
 
       <!-- 三段里真正为空的那些, 合成一行灰字; 一段都不空时这一行不出现。 -->
       <p v-if="emptyLine" class="muted footer-line" data-testid="empty-sections-line">{{ emptyLine }}</p>
-      <p class="muted footer-line">
-        查询时间: {{ trace.queryTime ? new Date(trace.queryTime).toLocaleString() : '-' }}
-      </p>
+      <p v-if="queryTimeText" class="muted footer-line" data-testid="query-time">查询时间: {{ queryTimeText }}</p>
     </template>
 
     <IndividualDrawer
@@ -422,6 +421,12 @@ function openIndividual(id: string) {
 <style scoped lang="scss">
 .page-container {
   padding: 20px;
+}
+
+// 右下角客服浮球 (AppLayout 的 InlineCustomerService: 48px, 距底 24px) 是 fixed 定位,
+// 滚到底时会盖住来源链最后一行的 chevron。底部多留 48+24+24, 让最后一行永远在它上面。
+.trace-page {
+  padding-bottom: 96px;
 }
 
 .page-header {
@@ -448,9 +453,10 @@ function openIndividual(id: string) {
   margin-bottom: 16px;
 }
 
+// 按钮轨道定宽: grid 的 `auto` 轨道会被拉伸吃掉整行剩余宽度, 实测「查询」按钮被拉到 ~600px。
 .query-bar {
   display: grid;
-  grid-template-columns: minmax(260px, 480px) auto;
+  grid-template-columns: minmax(260px, 480px) 120px;
   gap: 12px;
   align-items: center;
 }
@@ -481,9 +487,7 @@ function openIndividual(id: string) {
   margin-bottom: 8px;
 }
 
-.trace-row .content-card {
-  height: calc(100% - 16px);
-}
+// ⛔ 不把溯源码卡拉到与右侧生产信息卡等高 —— 它只有三行, 强制等高就是下半张空白。
 
 .trace-code-card {
   &__label {
@@ -514,6 +518,9 @@ function openIndividual(id: string) {
 
 // 与首页「现场作业」瓷砖同一族: 一条「这批货从活体来」的信息横幅, 不是警告, ⛔ 不用棕黄。
 .source-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 16px;
   padding: 12px 16px;
   border-radius: 10px;
@@ -521,6 +528,11 @@ function openIndividual(id: string) {
   color: var(--el-color-primary-dark-2);
   font-size: var(--font-size-md);
   font-weight: 600;
+
+  &__icon {
+    flex: none;
+    font-size: 20px;
+  }
 }
 
 .lineage-timeline {

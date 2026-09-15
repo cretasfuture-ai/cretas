@@ -1,4 +1,5 @@
 import type { Component } from 'vue';
+import dayjs from 'dayjs';
 import { Box, Goods, Operation, QuestionFilled, Van } from '@element-plus/icons-vue';
 
 /**
@@ -175,6 +176,34 @@ export type EmptySectionKey = keyof typeof EMPTY_SECTION_LABEL;
 export function emptySectionsLine(empties: ReadonlyArray<EmptySectionKey>): string | null {
   if (empties.length === 0) return null;
   return `暂无${empties.map((k) => EMPTY_SECTION_LABEL[k]).join('/')}记录`;
+}
+
+// ── 时间 ────────────────────────────────────────────────────────────────────
+
+/**
+ * 后端 LocalDateTime(`2026-09-15T18:46:38`) → `2026-09-15 18:46`。溯源页「查询时间」「工序起止」
+ * 与抽屉共用这一个出口。
+ * ⛔ 不用 `toLocaleString()` —— 它跟浏览器语言走, 投屏机上实测出来的是 `9/15/2026, 6:46:38 PM`。
+ * 解析不了的输入返回空串(调用方按「没有」处理, 那一行不渲染), 不抛、⛔ 不显示 `Invalid Date`。
+ * ⚠️ 空值必须先挡: `dayjs(undefined)` 是「现在」, 不是无效。
+ */
+export function formatQueryTime(value?: string | null): string {
+  if (value == null || `${value}`.trim() === '') return '';
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : '';
+}
+
+/**
+ * 「起 ~ 止」: 同一天只念一次日期 (`2026-09-10 08:00 ~ 08:40`), 跨天两头都带日期。
+ * 起点解析不了整段为空; 止点解析不了只显示起点。
+ */
+export function formatTimeRange(start?: string | null, end?: string | null): string {
+  const s = formatQueryTime(start);
+  if (!s) return '';
+  const e = formatQueryTime(end);
+  if (!e) return s;
+  const sameDay = s.slice(0, 10) === e.slice(0, 10);
+  return `${s} ~ ${sameDay ? e.slice(11) : e}`;
 }
 
 // ── 小工具 ──────────────────────────────────────────────────────────────────

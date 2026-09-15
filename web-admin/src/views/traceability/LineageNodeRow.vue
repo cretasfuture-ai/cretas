@@ -87,6 +87,8 @@ function open() {
         </div>
       </template>
       <div v-if="showQuantity && quantityLine" class="lineage-node__line">投入量：{{ quantityLine }}</div>
+      <!-- 调用方追加的一行 (抽屉「去了哪」里原料批次的入库日期), 与上面几行同一款式 -->
+      <div v-if="$slots.default" class="lineage-node__line"><slot /></div>
 
       <div v-if="individual" class="lineage-node__individual" data-testid="lineage-individual">
         <span v-if="individualLine" class="lineage-node__individual-line">{{ individualLine }}</span>
