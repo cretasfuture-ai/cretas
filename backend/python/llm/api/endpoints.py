@@ -131,6 +131,18 @@ def _build_payload(req: LLMRequest) -> Dict[str, Any]:
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 
+# 手持拍照核验的延迟契约(2026-09-15 真机彩排定下来的):
+#   · Java 侧 aiServiceHttpClient readTimeout = 30s ⇒ 整条级联必须在 30s 内出结果,
+#     否则 Python 这边就算第二个账号答对了, Java 也已经把 502 发给手机了。
+#   · qwen3.8-flash 关思考后中位 1.5–4s, 但 DashScope 有随机长尾(同图同 prompt 实测
+#     23.5s / 28.2s, 6 次里 2 次), 长尾与账号无关 ⇒ 等它不如换个账号再打一次。
+#   ⇒ 单次尝试 12s, 整条级联 27s(留 3s 给 Java 的传输/序列化): 最多两次完整尝试,
+#     第三次拿剩余预算(由 _budgeted_attempt_timeout 截断)。
+# ⛔ 不要把单次改回 30s: 那等于「第一次撞长尾就必 502」, 而且后面两个账号的重试
+#    全部发生在 Java 已经放弃之后, 白烧额度。
+VL_ATTEMPT_TIMEOUT_S = 12.0
+VL_TOTAL_TIMEOUT_S = 27.0
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
@@ -227,4 +239,6 @@ async def vision(
 
     payload: Dict[str, Any] = {"messages": messages}
     with llm_caller_context("llm_api.vision"):
-        return await call_chain(parsed_slot, payload)
+        return await call_chain(parsed_slot, payload,
+                                timeout=VL_ATTEMPT_TIMEOUT_S,
+                                total_timeout=VL_TOTAL_TIMEOUT_S)
