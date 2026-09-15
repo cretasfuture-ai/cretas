@@ -1425,6 +1425,32 @@
       "pedigreeCancel": "Cancel",
       "pedigreeNoResult": "Searched: no matching individual record",
       "pedigreeSearchFailed": "Search failed"
+    },
+    "list": {
+      "title": "Source individuals",
+      "add": "Register new individual",
+      "searchPlaceholder": "Search by record code or tag number",
+      "total": "{{count}} in total",
+      "loadFailed": "Failed to load the individual records",
+      "retry": "Retry",
+      "emptyTitle": "No individual has been registered yet",
+      "emptyAction": "Register the first one",
+      "noMatch": "Searched: no individual record matches",
+      "openDetail": "Open record {{code}}"
+    }
+  },
+  "traceability": {
+    "entry": {
+      "title": "Trace lookup",
+      "scan": "Scan to trace",
+      "scanHint": "Point at the QR code or barcode on the label",
+      "scannerTitle": "Scan the trace label",
+      "orManual": "or type it in",
+      "inputLabel": "Batch number or trace code",
+      "inputPlaceholder": "e.g. SL-DEMO-BATCH-V1",
+      "go": "View trace",
+      "recentTitle": "Recently viewed",
+      "recentClear": "Clear"
     }
   }
 }

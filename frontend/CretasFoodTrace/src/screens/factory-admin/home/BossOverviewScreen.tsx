@@ -14,7 +14,7 @@ type BossRoute =
   // 通用现场能力 —— 注册在同一个 OverviewStack 里（见 BossNavigator.tsx）。
   | 'Traceability'
   | 'VisionVerify'
-  | 'SourceIndividualForm';
+  | 'SourceIndividualList';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -26,7 +26,8 @@ type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 const FIELD_ENTRIES: ReadonlyArray<{ route: BossRoute; icon: IconName; label: string; testID: string }> = [
   { route: 'Traceability', icon: 'qrcode-scan', label: '溯源查询', testID: 'boss-entry-traceability' },
   { route: 'VisionVerify', icon: 'camera-outline', label: '拍照核验', testID: 'boss-entry-vision-verify' },
-  { route: 'SourceIndividualForm', icon: 'card-account-details-outline', label: '源头个体', testID: 'boss-entry-source-individual' },
+  // 2026-09-16: 落到只读列表 (档案与系谱), ⛔ 不再直达登记表 —— 老板点名词是想看「我有哪些牛」。
+  { route: 'SourceIndividualList', icon: 'cow', label: '源头个体', testID: 'boss-entry-source-individual' },
 ];
 
 /** 「经营」：次要动作，列表项（≥48dp），视觉权重比瓷砖轻。 */

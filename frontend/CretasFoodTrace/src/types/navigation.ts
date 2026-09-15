@@ -160,7 +160,12 @@ export type ProcessingStackParamList = {
 
   // 溯源功能 - Phase 3 完整溯源链路
   Traceability: undefined;                             // 溯源查询入口
-  TraceabilityDetail: { batchNumber: string };         // 完整溯源链路
+  /**
+   * 完整溯源链路。`traceCode` 是扫码 / 手输进来的**标签码**(可选): 详情屏拿 batchNumber 取数,
+   * traceCode 只用来在顶卡把「扫入码」与服务端持久化的码并排摆出来 (两者不同时)。
+   * 2026-09-16 起 `TraceabilityScreen` 会传它 (标签二维码印的是 `TRACE-{batch}-{suffix}`)。
+   */
+  TraceabilityDetail: { batchNumber: string; traceCode?: string };
   PublicTrace: { batchNumber?: string; traceCode?: string };  // 公开溯源（消费者）
 
   // AI语音质检 - Phase 4
@@ -197,6 +202,12 @@ export type ProcessingStackParamList = {
    * 参数必填 —— 但屏里仍用 `route.params ?? {}` 取值, 缺参时显示「缺少参数」而不是崩。
    */
   SourceIndividualDetail: { individualId: string };
+  /**
+   * 个体档案列表 (只读, 2026-09-16): 首页「源头个体」瓷砖落到这里, 点行进 SourceIndividualDetail,
+   * 右上 + 才进 SourceIndividualForm。此前瓷砖直达登记表 —— 老板点一个名词想看「我有哪些牛」,
+   * 落进一张 10 个字段的表单。
+   */
+  SourceIndividualList: undefined;
 
   // 工位监控 - 生产模块
   WorkstationMonitor: {

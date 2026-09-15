@@ -1423,6 +1423,32 @@
       "pedigreeCancel": "取消",
       "pedigreeNoResult": "搜过了：没有匹配的个体档案",
       "pedigreeSearchFailed": "搜索失败"
+    },
+    "list": {
+      "title": "源头个体",
+      "add": "登记新个体",
+      "searchPlaceholder": "按档案编号或标识牌编号搜索",
+      "total": "共 {{count}} 头",
+      "loadFailed": "个体档案列表读取失败",
+      "retry": "重试",
+      "emptyTitle": "还没有登记任何个体",
+      "emptyAction": "登记第一头",
+      "noMatch": "搜过了：没有匹配的个体档案",
+      "openDetail": "查看 {{code}} 的档案"
+    }
+  },
+  "traceability": {
+    "entry": {
+      "title": "溯源查询",
+      "scan": "扫码查溯源",
+      "scanHint": "对准标签上的二维码或条码",
+      "scannerTitle": "扫描溯源标签",
+      "orManual": "或者手动输入",
+      "inputLabel": "批次号或溯源码",
+      "inputPlaceholder": "例如 SL-DEMO-BATCH-V1",
+      "go": "查看溯源",
+      "recentTitle": "最近查过",
+      "recentClear": "清空"
     }
   }
 }
