@@ -134,14 +134,17 @@ describe('TraceabilityDetailScreen 源头个体', () => {
     expect(getByText('本批来自 2 头牛')).toBeTruthy();
   });
 
-  it('节点卡显示「品种 · 来源场 · DNA 状态」与脱敏耳标', async () => {
+  it('节点卡显示「品种 · 来源场」+ DNA 状态 chip 与脱敏耳标', async () => {
     mockGetFullTrace.mockResolvedValue(traceResponse(lineageWithIndividuals()));
 
     const { getByText, getAllByText, getByTestId } = render(<TraceabilityDetailScreen />);
 
     await waitFor(() => expect(getByTestId(LINEAGE_TIMELINE_TEST_ID)).toBeTruthy());
-    expect(getByText('西门塔尔 · 胜龙一号牧场 · DNA 已比中')).toBeTruthy();
-    expect(getByText('安格斯 · 胜龙二号牧场 · 已采样')).toBeTruthy();
+    expect(getByText('西门塔尔 · 胜龙一号牧场')).toBeTruthy();
+    expect(getByText('安格斯 · 胜龙二号牧场')).toBeTruthy();
+    // DNA 状态是每个节点上一颗 chip (统一色板), 不再拼进那行文字
+    expect(getByTestId('lineage-individual-dna-mb-a')).toHaveTextContent('DNA 已比中');
+    expect(getByTestId('lineage-individual-dna-mb-b')).toHaveTextContent('已采样');
     // 两头牛脱敏后长得一模一样 —— 钉住条数(2)而不是「至少一条」,
     // 这正是「N 不能在前端按耳标去重」的可见证据。
     expect(getAllByText('耳标：*********7788')).toHaveLength(2);

@@ -15,7 +15,6 @@ import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import LineageChainTimeline, {
-  INDIVIDUAL_DETAIL_HINT,
   LINEAGE_EMPTY_TEST_ID,
   LINEAGE_EMPTY_TEXT,
   LINEAGE_TIMELINE_TEST_ID,
@@ -268,32 +267,35 @@ describe('挂了个体的原料行 → 个体详情', () => {
     };
   }
 
-  it('内部侧（后端给了个体 id）⇒ 行上有「查看个体档案」，按下去 navigate 到 SourceIndividualDetail 并带 id', () => {
+  it('内部侧（后端给了个体 id）⇒ 整行可点、右侧有「可进」的 chevron，按下去 navigate 到 SourceIndividualDetail 并带 id', () => {
     const { getByTestId, getByText } = render(
       <LineageChainTimeline lineage={lineageWithIndividual('si-005')} showSupplier />
     );
 
-    // 「必发生」读数: 个体信息本身渲染出来了 (否则下面找不到链接是恒真式)
-    expect(getByText('西门塔尔 · 胜龙一号牧场 · 已采样')).toBeTruthy();
-    expect(getByTestId('lineage-individual-link-mb-near')).toBeTruthy();
-    expect(getByText(INDIVIDUAL_DETAIL_HINT)).toBeTruthy();
+    // 「必发生」读数: 个体信息本身渲染出来了 (否则下面找不到 chevron 是恒真式)
+    expect(getByText('西门塔尔 · 胜龙一号牧场')).toBeTruthy();
+    // DNA 状态不再拼进那行文字里 —— 它是一颗走统一色板的 chip (颜色由 DnaStatusPalette 测试钉)
+    expect(getByTestId('lineage-individual-dna-mb-near')).toHaveTextContent('已采样');
+    // 2026-09-15 polish: 「查看个体档案 ›」那行蓝字没了, 「可进」由整行 ripple + chevron 表达。
+    // 守性质不守字面: chevron 在、整行按下去导航。
+    expect(getByTestId('lineage-node-chevron-mb-near')).toBeTruthy();
 
     fireEvent.press(getByTestId('lineage-node-mb-near'));
     expect(mockNavigate).toHaveBeenCalledTimes(1);
     expect(mockNavigate).toHaveBeenCalledWith('SourceIndividualDetail', { individualId: 'si-005' });
   });
 
-  it('公开侧（id 为 null）⇒ 个体信息照常显示，但没有链接、按了也不导航', () => {
-    const { getByText, queryByTestId, getByTestId, queryByText } = render(
+  it('公开侧（id 为 null）⇒ 个体信息照常显示，但没有 chevron、按了也不导航', () => {
+    const { getByText, queryByTestId, getByTestId } = render(
       <LineageChainTimeline lineage={lineageWithIndividual(null)} />
     );
 
     // 必发生: 品种/来源场/DNA 仍然显示 —— 这是消费者扫码要看的
-    expect(getByText('西门塔尔 · 胜龙一号牧场 · 已采样')).toBeTruthy();
+    expect(getByText('西门塔尔 · 胜龙一号牧场')).toBeTruthy();
+    expect(getByTestId('lineage-individual-dna-MB-NEAR-001')).toHaveTextContent('已采样');
     expect(getByText('耳标：*********0005')).toBeTruthy();
-    // 阴性: 没有链接
-    expect(queryByTestId('lineage-individual-link-MB-NEAR-001')).toBeNull();
-    expect(queryByText(INDIVIDUAL_DETAIL_HINT)).toBeNull();
+    // 阴性: 没有「可进」的示意 (公开侧没有个体主键, 没地方可进)
+    expect(queryByTestId('lineage-node-chevron-MB-NEAR-001')).toBeNull();
 
     fireEvent.press(getByTestId('lineage-node-MB-NEAR-001'));
     expect(mockNavigate).not.toHaveBeenCalled();

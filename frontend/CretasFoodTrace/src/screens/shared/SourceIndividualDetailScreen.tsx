@@ -15,10 +15,15 @@
  *
  * ⛔ 三态分开: 加载中 / 出错(把错误原话显示出来, 不留空屏) / 有数据。
  * ⛔ 「未登记」「档案已不可查」「确实没有」三种「没有」分开说, 不显示假值。
+ *
+ * 视觉 (2026-09-15 polish): 颜色全部走 `useTheme()`; 「去了哪」是来源链的反向,
+ * 复用 `LineageChainTimeline` 导出的 ChainGroup / ChainRow / ChainLine, ⛔ 不抄一份样式;
+ * DNA 状态经 `DnaStatusChip` 用四处共用的色板; 可点的行是 ≥48dp 的 List.Item / ChainRow,
+ * ⛔ 不再用一行蓝字当链接。
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { ActivityIndicator, Appbar, Button, Card, Chip, Divider, Text } from 'react-native-paper';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Card, Divider, List, Text, useTheme } from 'react-native-paper';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
@@ -31,7 +36,15 @@ import {
   type SourceIndividualSummary,
 } from '../../services/api/sourceIndividualApiClient';
 import type { LineageNode } from '../../services/api/traceabilityApiClient';
-import { dnaStatusLabel } from '../traceability/components/LineageChainTimeline';
+import {
+  ChainGroup,
+  ChainLine,
+  ChainRow,
+  ChainTitle,
+  nodeTypeIcon,
+} from '../traceability/components/LineageChainTimeline';
+import { DnaStatusChip, dnaStatusLabel } from '../traceability/components/dnaStatus';
+import type { AppTheme } from '../../theme';
 import type { ProcessingStackParamList } from '../../types/navigation';
 
 type Nav = NativeStackNavigationProp<ProcessingStackParamList, 'SourceIndividualDetail'>;
@@ -49,6 +62,11 @@ export const SI_DETAIL_TEST_IDS = {
   notInProduction: 'si-detail-not-in-production',
   siblingsEmpty: 'si-detail-siblings-empty',
   offspringEmpty: 'si-detail-offspring-empty',
+  /** 头部那颗 DNA chip —— 四处同色板的其中一处。 */
+  dna: 'si-detail-dna',
+  /** 行上的 DNA chip：`si-detail-dna-<row>`。⚠️ 与行本身的 testID 前缀分开 —— 既有测试按
+   *  `/^si-detail-sibling-/` 数「几行」，chip 若共用前缀会把 2 行数成 4。 */
+  dnaOf: (row: string) => `si-detail-dna-${row}`,
 } as const;
 
 /** 耳标末 4 位 —— 列表行上够用, 完整耳标在头部。⚠️ 耳标本身 ≤4 位就整串给。 */
@@ -69,13 +87,16 @@ function joinPresent(parts: Array<string | null | undefined>): string | null {
   return present.length === 0 ? null : present.join(' · ');
 }
 
-function summaryLine(t: (k: string, o?: Record<string, unknown>) => string, s: SourceIndividualSummary): string {
+/**
+ * 列表行的描述: 「标牌末四位 0003 · 已采样」。
+ * ⚠️ DNA 文案仍在这一行里 (读屏 / 搜索都靠它); 颜色由旁边的 `DnaStatusChip` 表达。
+ */
+function summaryDescription(t: (k: string, o?: Record<string, unknown>) => string, s: SourceIndividualSummary): string | null {
   const tail = tagTail(s.tagNumber);
   return joinPresent([
-    s.individualCode,
     tail ? t('sourceIndividual.detail.tagShort', { tail }) : null,
     dnaStatusLabel(s.dnaVerificationStatus),
-  ]) ?? s.individualCode;
+  ]);
 }
 
 function nodeTitle(t: (k: string) => string, node: LineageNode): string {
@@ -85,6 +106,7 @@ function nodeTitle(t: (k: string) => string, node: LineageNode): string {
 
 export default function SourceIndividualDetailScreen() {
   const { t } = useTranslation('processing');
+  const theme = useTheme<AppTheme>();
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   // ⚠️ 不 destructure route.params 本体 —— 它可能是 undefined。
@@ -143,11 +165,18 @@ export default function SourceIndividualDetailScreen() {
     </Appbar.Header>
   );
 
+  const { spacing, borderRadius } = theme.custom;
+  const containerStyle = [styles.container, { backgroundColor: theme.colors.background }];
+  const centerStyle = [styles.center, { padding: spacing.xl, gap: spacing.m }];
+  const cardStyle = [{ marginHorizontal: spacing.l, marginBottom: spacing.m, borderRadius: borderRadius.m }];
+  const dividerStyle = { marginVertical: spacing.m };
+  const mutedStyle = { color: theme.colors.onSurfaceVariant, paddingVertical: spacing.s };
+
   if (!individualId) {
     return (
-      <View style={styles.container}>
+      <View style={containerStyle}>
         {header(t('sourceIndividual.detail.title'))}
-        <View style={styles.center} testID={SI_DETAIL_TEST_IDS.missingParam}>
+        <View style={centerStyle} testID={SI_DETAIL_TEST_IDS.missingParam}>
           <Text variant="bodyMedium">{t('sourceIndividual.detail.missingParam')}</Text>
         </View>
       </View>
@@ -156,9 +185,9 @@ export default function SourceIndividualDetailScreen() {
 
   if (loading) {
     return (
-      <View style={styles.container}>
+      <View style={containerStyle}>
         {header(t('sourceIndividual.detail.title'))}
-        <View style={styles.center} testID={SI_DETAIL_TEST_IDS.loading}>
+        <View style={centerStyle} testID={SI_DETAIL_TEST_IDS.loading}>
           <ActivityIndicator />
         </View>
       </View>
@@ -167,10 +196,10 @@ export default function SourceIndividualDetailScreen() {
 
   if (error || !detail) {
     return (
-      <View style={styles.container}>
+      <View style={containerStyle}>
         {header(t('sourceIndividual.detail.title'))}
-        <View style={styles.center} testID={SI_DETAIL_TEST_IDS.error}>
-          <Text variant="bodyMedium" style={styles.errorText}>
+        <View style={centerStyle} testID={SI_DETAIL_TEST_IDS.error}>
+          <Text variant="bodyMedium" style={[styles.errorText, { color: theme.colors.error }]}>
             {error ?? t('sourceIndividual.detail.loadFailed')}
           </Text>
           <Button mode="contained-tonal" onPress={() => setAttempt((n) => n + 1)}>
@@ -185,22 +214,30 @@ export default function SourceIndividualDetailScreen() {
   const hasDownstream =
     downstream.productionBatches.length + downstream.finishedBatches.length + downstream.shipments.length > 0;
 
+  // 「去了哪」按链的方向排: 原料批次 → 生产批次 → 成品 → 出货。只列真有内容的段。
+  const whereaboutGroups: Array<{ key: string; label: string; nodes: LineageNode[] }> = [
+    { key: 'production', label: t('sourceIndividual.detail.productionBatches'), nodes: downstream.productionBatches },
+    { key: 'finished', label: t('sourceIndividual.detail.finishedBatches'), nodes: downstream.finishedBatches },
+    { key: 'shipments', label: t('sourceIndividual.detail.shipments'), nodes: downstream.shipments },
+  ].filter((g) => g.nodes.length > 0);
+
   return (
-    <View style={styles.container} testID={SI_DETAIL_TEST_IDS.screen}>
+    <View style={containerStyle} testID={SI_DETAIL_TEST_IDS.screen}>
       {header(individual.individualCode)}
-      <ScrollView contentContainerStyle={styles.content}>
-        <IdentityCard t={t} individual={individual} />
+      <ScrollView contentContainerStyle={{ paddingVertical: spacing.m, paddingBottom: spacing.xxl }}>
+        <IdentityCard t={t} individual={individual} cardStyle={cardStyle} />
 
         {/* 系谱 */}
-        <Card style={styles.card}>
+        <Card style={cardStyle}>
           <Card.Content>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
               {t('sourceIndividual.detail.pedigreeSection')}
             </Text>
-            <Divider style={styles.divider} />
+            <Divider style={dividerStyle} />
             <ParentRow
               t={t}
               testID={SI_DETAIL_TEST_IDS.sireRow}
+              dnaTestID={SI_DETAIL_TEST_IDS.dnaOf('sire')}
               label={t('sourceIndividual.fields.sire')}
               summary={sire}
               registeredId={individual.sireIndividualId}
@@ -209,6 +246,7 @@ export default function SourceIndividualDetailScreen() {
             <ParentRow
               t={t}
               testID={SI_DETAIL_TEST_IDS.damRow}
+              dnaTestID={SI_DETAIL_TEST_IDS.dnaOf('dam')}
               label={t('sourceIndividual.fields.dam')}
               summary={dam}
               registeredId={individual.damIndividualId}
@@ -217,75 +255,108 @@ export default function SourceIndividualDetailScreen() {
           </Card.Content>
         </Card>
 
-        {/* 去了哪: 原料批次 → 生产批次 → 成品 → 出货 */}
-        <Card style={styles.card}>
+        {/* 去了哪: 原料批次 → 生产批次 → 成品 → 出货 —— 来源链的反向, 同一套链的积木 */}
+        <Card style={cardStyle}>
           <Card.Content>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
               {t('sourceIndividual.detail.whereaboutsSection')}
             </Text>
-            <Divider style={styles.divider} />
+            <Divider style={dividerStyle} />
 
-            <Text style={styles.groupLabel}>{t('sourceIndividual.detail.materialBatches')}</Text>
-            {batches.length === 0 ? (
-              <Text style={styles.muted} testID={SI_DETAIL_TEST_IDS.batchesEmpty}>
-                {t('sourceIndividual.detail.noBatches')}
-              </Text>
-            ) : (
-              batches.map((b) => <BatchRow key={b.id} t={t} batch={b} />)
-            )}
+            <ChainGroup
+              label={t('sourceIndividual.detail.materialBatches')}
+              testID="si-detail-group-materials"
+              last={whereaboutGroups.length === 0}
+            >
+              {batches.length === 0 ? (
+                <Text variant="bodyMedium" style={mutedStyle} testID={SI_DETAIL_TEST_IDS.batchesEmpty}>
+                  {t('sourceIndividual.detail.noBatches')}
+                </Text>
+              ) : (
+                batches.map((b) => <BatchRow key={b.id} t={t} batch={b} />)
+              )}
+              {batches.length > 0 && !hasDownstream && (
+                <Text variant="bodyMedium" style={mutedStyle} testID={SI_DETAIL_TEST_IDS.notInProduction}>
+                  {t('sourceIndividual.detail.notInProduction')}
+                </Text>
+              )}
+            </ChainGroup>
 
-            {batches.length > 0 && !hasDownstream && (
-              <Text style={styles.muted} testID={SI_DETAIL_TEST_IDS.notInProduction}>
-                {t('sourceIndividual.detail.notInProduction')}
-              </Text>
-            )}
-            {downstream.productionBatches.length > 0 && (
-              <NodeGroup t={t} label={t('sourceIndividual.detail.productionBatches')} nodes={downstream.productionBatches} />
-            )}
-            {downstream.finishedBatches.length > 0 && (
-              <NodeGroup t={t} label={t('sourceIndividual.detail.finishedBatches')} nodes={downstream.finishedBatches} />
-            )}
-            {downstream.shipments.length > 0 && (
-              <NodeGroup t={t} label={t('sourceIndividual.detail.shipments')} nodes={downstream.shipments} />
-            )}
+            {whereaboutGroups.map((g, index) => (
+              <ChainGroup
+                key={g.key}
+                label={g.label}
+                testID={`si-detail-group-${g.key}`}
+                last={index === whereaboutGroups.length - 1}
+              >
+                {g.nodes.map((node) => (
+                  <ChainRow
+                    key={`${node.nodeType}#${node.nodeId ?? node.batchNumber ?? 'unnamed'}`}
+                    icon={nodeTypeIcon(node.nodeType)}
+                    testID={`si-detail-node-${node.nodeId ?? node.batchNumber ?? 'unnamed'}`}
+                  >
+                    <ChainTitle>{nodeTitle(t, node)}</ChainTitle>
+                    {node.resolved === false ? (
+                      <ChainLine emphasis="error">{t('sourceIndividual.detail.batchUnresolved')}</ChainLine>
+                    ) : (
+                      !!node.name && <ChainLine>{node.name}</ChainLine>
+                    )}
+                  </ChainRow>
+                ))}
+              </ChainGroup>
+            ))}
           </Card.Content>
         </Card>
 
         {/* 同父后代 */}
-        <Card style={styles.card}>
+        <Card style={cardStyle}>
           <Card.Content>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
               {t('sourceIndividual.detail.siblingsSection')}
             </Text>
-            <Divider style={styles.divider} />
+            <Divider style={dividerStyle} />
             {siblingsBySire.length === 0 ? (
-              <Text style={styles.muted} testID={SI_DETAIL_TEST_IDS.siblingsEmpty}>
+              <Text variant="bodyMedium" style={mutedStyle} testID={SI_DETAIL_TEST_IDS.siblingsEmpty}>
                 {individual.sireIndividualId
                   ? t('sourceIndividual.detail.noSiblings')
                   : t('sourceIndividual.detail.siblingsNoSire')}
               </Text>
             ) : (
               siblingsBySire.map((s) => (
-                <IndividualRow key={s.id} t={t} testID={`si-detail-sibling-${s.id}`} summary={s} onPress={openIndividual} />
+                <IndividualRow
+                  key={s.id}
+                  t={t}
+                  testID={`si-detail-sibling-${s.id}`}
+                  dnaTestID={SI_DETAIL_TEST_IDS.dnaOf(`sibling-${s.id}`)}
+                  summary={s}
+                  onPress={openIndividual}
+                />
               ))
             )}
           </Card.Content>
         </Card>
 
         {/* 后代 —— 对种公牛/母牛这一屏最有用的那一段 */}
-        <Card style={styles.card}>
+        <Card style={cardStyle}>
           <Card.Content>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
               {t('sourceIndividual.detail.offspringSection')}
             </Text>
-            <Divider style={styles.divider} />
+            <Divider style={dividerStyle} />
             {offspring.length === 0 ? (
-              <Text style={styles.muted} testID={SI_DETAIL_TEST_IDS.offspringEmpty}>
+              <Text variant="bodyMedium" style={mutedStyle} testID={SI_DETAIL_TEST_IDS.offspringEmpty}>
                 {t('sourceIndividual.detail.noOffspring')}
               </Text>
             ) : (
               offspring.map((s) => (
-                <IndividualRow key={s.id} t={t} testID={`si-detail-offspring-${s.id}`} summary={s} onPress={openIndividual} />
+                <IndividualRow
+                  key={s.id}
+                  t={t}
+                  testID={`si-detail-offspring-${s.id}`}
+                  dnaTestID={SI_DETAIL_TEST_IDS.dnaOf(`offspring-${s.id}`)}
+                  summary={s}
+                  onPress={openIndividual}
+                />
               ))
             )}
           </Card.Content>
@@ -297,35 +368,44 @@ export default function SourceIndividualDetailScreen() {
 
 type T = (k: string, o?: Record<string, unknown>) => string;
 
-function IdentityCard({ t, individual }: { t: T; individual: SourceIndividual }) {
-  const dna = dnaStatusLabel(individual.dnaVerificationStatus);
+function IdentityCard({
+  t,
+  individual,
+  cardStyle,
+}: {
+  t: T;
+  individual: SourceIndividual;
+  cardStyle: React.ComponentProps<typeof Card>['style'];
+}) {
+  const theme = useTheme<AppTheme>();
   const line1 = joinPresent([individual.species, individual.breed, individual.sex]);
+  const metaStyle = { color: theme.colors.onSurfaceVariant, marginTop: theme.custom.spacing.xs };
   return (
-    <Card style={styles.card} testID="si-detail-identity">
+    <Card style={cardStyle} testID="si-detail-identity">
       <Card.Content>
-        <View style={styles.titleRow}>
-          <Text variant="titleLarge" style={styles.code}>
+        <View style={[styles.titleRow, { gap: theme.custom.spacing.s }]}>
+          <Text variant="headlineSmall" style={[styles.code, { color: theme.colors.onSurface }]}>
             {individual.individualCode}
           </Text>
-          {!!dna && (
-            <Chip compact mode="outlined" testID="si-detail-dna">
-              {dna}
-            </Chip>
-          )}
+          <DnaStatusChip status={individual.dnaVerificationStatus} testID={SI_DETAIL_TEST_IDS.dna} />
         </View>
         {!!individual.tagNumber && (
-          <Text style={styles.meta}>
+          <Text variant="bodyMedium" style={metaStyle}>
             {t('sourceIndividual.fields.tagNumber')}：{individual.tagNumber}
           </Text>
         )}
-        {!!line1 && <Text style={styles.meta}>{line1}</Text>}
+        {!!line1 && (
+          <Text variant="bodyMedium" style={metaStyle}>
+            {line1}
+          </Text>
+        )}
         {!!individual.birthDate && (
-          <Text style={styles.meta}>
+          <Text variant="bodyMedium" style={metaStyle}>
             {t('sourceIndividual.fields.birthDate')}：{individual.birthDate}
           </Text>
         )}
         {!!individual.originFarm && (
-          <Text style={styles.meta}>
+          <Text variant="bodyMedium" style={metaStyle}>
             {t('sourceIndividual.fields.originFarm')}：{individual.originFarm}
           </Text>
         )}
@@ -335,14 +415,15 @@ function IdentityCard({ t, individual }: { t: T; individual: SourceIndividual })
 }
 
 /**
- * 父本 / 母本一行。三种状态:
- *   有摘要          → 可点, 同屏换 id
- *   无摘要、有 id   → 「档案已不可查」(登记过、被删了) —— 灰字, 不可点
- *   无摘要、无 id   → 「未登记」 —— 灰字
+ * 父本 / 母本一行 (List.Item, ≥48dp)。三种状态:
+ *   有摘要          → 可点, 同屏换 id; onSurface 字 + 右侧 chevron
+ *   无摘要、有 id   → 「档案已不可查」(登记过、被删了) —— onErrorContainer 字, 不可点、无 chevron
+ *   无摘要、无 id   → 「未登记」 —— onSurfaceVariant 字, 不可点、无 chevron
  */
 function ParentRow({
   t,
   testID,
+  dnaTestID,
   label,
   summary,
   registeredId,
@@ -350,119 +431,108 @@ function ParentRow({
 }: {
   t: T;
   testID: string;
+  dnaTestID: string;
   label: string;
   summary: SourceIndividualSummary | null;
   registeredId?: string | null;
   onPress: (id: string) => void;
 }) {
+  const theme = useTheme<AppTheme>();
   if (summary) {
     return (
-      <Pressable
+      <List.Item
         testID={testID}
-        accessibilityRole="button"
+        title={`${label} ${summary.individualCode}`}
+        titleStyle={{ color: theme.colors.onSurface }}
+        description={summaryDescription(t, summary)}
+        descriptionStyle={{ color: theme.colors.onSurfaceVariant }}
         onPress={() => onPress(summary.id)}
-        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      >
-        <Text style={styles.rowLabel}>{label}</Text>
-        <Text style={styles.rowValueLink}>{summaryLine(t, summary)}</Text>
-      </Pressable>
+        right={(props) => (
+          <View style={[styles.rowRight, { gap: theme.custom.spacing.s }]}>
+            <DnaStatusChip status={summary.dnaVerificationStatus} testID={dnaTestID} />
+            <List.Icon {...props} icon="chevron-right" />
+          </View>
+        )}
+        style={styles.listItem}
+      />
     );
   }
+  const unavailable = !!registeredId;
   return (
-    <View testID={testID} style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValueMuted}>
-        {registeredId ? t('sourceIndividual.detail.unavailable') : t('sourceIndividual.detail.notRegistered')}
-      </Text>
-    </View>
+    <List.Item
+      testID={testID}
+      title={label}
+      titleStyle={{ color: theme.colors.onSurface }}
+      description={unavailable ? t('sourceIndividual.detail.unavailable') : t('sourceIndividual.detail.notRegistered')}
+      descriptionStyle={{ color: unavailable ? theme.colors.onErrorContainer : theme.colors.onSurfaceVariant }}
+      style={styles.listItem}
+    />
   );
 }
 
+/**
+ * 后代 / 同父后代的一行 (List.Item, ≥48dp):
+ * 标题 = 编码, 描述 = 「标牌末四位 0003 · 已采样」, 右侧 DNA chip (统一色板) + chevron。
+ */
 function IndividualRow({
   t,
   testID,
+  dnaTestID,
   summary,
   onPress,
 }: {
   t: T;
   testID: string;
+  dnaTestID: string;
   summary: SourceIndividualSummary;
   onPress: (id: string) => void;
 }) {
+  const theme = useTheme<AppTheme>();
+  const line2 = joinPresent([summary.species, summary.breed, summary.sex]);
+  const description = joinPresent([summaryDescription(t, summary), line2]);
   return (
-    <Pressable
+    <List.Item
       testID={testID}
-      accessibilityRole="button"
+      title={summary.individualCode}
+      titleStyle={{ color: theme.colors.onSurface }}
+      description={description}
+      descriptionStyle={{ color: theme.colors.onSurfaceVariant }}
       onPress={() => onPress(summary.id)}
-      style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]}
-    >
-      <Text style={styles.rowValueLink}>{summaryLine(t, summary)}</Text>
-      {!!joinPresent([summary.species, summary.breed, summary.sex]) && (
-        <Text style={styles.meta}>{joinPresent([summary.species, summary.breed, summary.sex])}</Text>
+      right={(props) => (
+        <View style={[styles.rowRight, { gap: theme.custom.spacing.s }]}>
+          <DnaStatusChip status={summary.dnaVerificationStatus} testID={dnaTestID} />
+          <List.Icon {...props} icon="chevron-right" />
+        </View>
       )}
-    </Pressable>
+      style={styles.listItem}
+    />
   );
 }
 
+/** 「去了哪」第一跳: 挂了该个体的原料批次 (不可点 —— 批次没有详情屏)。 */
 function BatchRow({ t, batch }: { t: T; batch: SourceIndividualBatchSummary }) {
   const qty = batch.quantity != null ? `${batch.quantity}${batch.unit ?? ''}` : null;
   return (
-    <View style={styles.listRow} testID={`si-detail-batch-${batch.id}`}>
-      <Text style={styles.rowValue}>{batch.batchNumber}</Text>
-      {!!joinPresent([batch.materialName, qty]) && (
-        <Text style={styles.meta}>{joinPresent([batch.materialName, qty])}</Text>
-      )}
+    <ChainRow icon={nodeTypeIcon('MATERIAL_BATCH')} testID={`si-detail-batch-${batch.id}`}>
+      <ChainTitle>{batch.batchNumber}</ChainTitle>
+      {!!joinPresent([batch.materialName, qty]) && <ChainLine>{joinPresent([batch.materialName, qty])}</ChainLine>}
       {!!batch.receiptDate && (
-        <Text style={styles.meta}>
+        <ChainLine>
           {t('sourceIndividual.detail.receiptDate')}：{batch.receiptDate}
-        </Text>
+        </ChainLine>
       )}
-    </View>
+    </ChainRow>
   );
 }
 
-function NodeGroup({ t, label, nodes }: { t: T; label: string; nodes: LineageNode[] }) {
-  return (
-    <View style={styles.group}>
-      <Text style={styles.groupLabel}>{label}</Text>
-      {nodes.map((node) => (
-        <View
-          key={`${node.nodeType}#${node.nodeId ?? node.batchNumber ?? 'unnamed'}`}
-          style={styles.listRow}
-          testID={`si-detail-node-${node.nodeId ?? node.batchNumber ?? 'unnamed'}`}
-        >
-          <Text style={styles.rowValue}>{nodeTitle(t, node)}</Text>
-          {node.resolved === false ? (
-            <Text style={styles.unresolved}>{t('sourceIndividual.detail.batchUnresolved')}</Text>
-          ) : (
-            !!node.name && <Text style={styles.meta}>{node.name}</Text>
-          )}
-        </View>
-      ))}
-    </View>
-  );
-}
-
+// ⚠️ 这里只放布局: 颜色 / 字号 / 间距全部走 useTheme() 与 Paper 的 variant,
+//    `gates/demoScreensUseThemeTokens` 守着本文件里不再出现色值与 fontSize<14。
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F5F5' },
-  content: { paddingVertical: 12, paddingBottom: 32 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
-  errorText: { color: '#B00020', textAlign: 'center' },
-  card: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  code: { fontWeight: '700', flexShrink: 1 },
-  sectionTitle: { fontWeight: '600' },
-  divider: { marginVertical: 10 },
-  meta: { fontSize: 12, color: '#666', marginTop: 2 },
-  muted: { fontSize: 13, color: '#888', paddingVertical: 6 },
-  groupLabel: { fontSize: 12, color: '#3F51B5', fontWeight: '600', marginTop: 6, marginBottom: 2 },
-  group: { marginTop: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 12 },
-  rowPressed: { opacity: 0.6 },
-  rowLabel: { width: 48, fontSize: 13, color: '#444' },
-  rowValue: { fontSize: 14, color: '#222', fontWeight: '500' },
-  rowValueLink: { fontSize: 14, color: '#1A57B5', fontWeight: '500', flexShrink: 1 },
-  rowValueMuted: { fontSize: 14, color: '#999' },
-  listRow: { paddingVertical: 6 },
-  unresolved: { fontSize: 12, color: '#B26A00', marginTop: 2 },
+  container: { flex: 1 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  errorText: { textAlign: 'center' },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  code: { flexShrink: 1 },
+  listItem: { minHeight: 48, paddingHorizontal: 0 },
+  rowRight: { flexDirection: 'row', alignItems: 'center' },
 });

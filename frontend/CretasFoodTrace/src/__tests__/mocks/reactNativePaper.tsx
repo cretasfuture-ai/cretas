@@ -154,12 +154,21 @@ export const Dialog = Object.assign(container('Dialog'), {
 });
 
 export const List = Object.assign(container('List'), {
-  Item: ({ title, description, left, right, onPress, ...props }: AnyProps) => (
-    <TouchableOpacity onPress={onPress} {...props}>
-      {title != null ? <RNText>{title}</RNText> : null}
-      {description != null ? <RNText>{description}</RNText> : null}
-    </TouchableOpacity>
-  ),
+  // left / right 是 render prop —— 真 Paper 会以 { color, style } 调它们。
+  // 2026-09-15: 个体档案的后代行把 DNA chip 放在 right 里, 不渲染它「四处同色」那条断言
+  // 在这一处就成了恒真式 (找不到 chip ≠ 颜色对)。
+  Item: ({ title, description, left, right, onPress, titleStyle, descriptionStyle, ...props }: AnyProps) => {
+    const slot = (render: unknown) =>
+      typeof render === 'function' ? render({ color: colors.onSurfaceVariant, style: {} }) : null;
+    return (
+      <TouchableOpacity onPress={onPress} {...props}>
+        {slot(left)}
+        {title != null ? <RNText style={titleStyle}>{title}</RNText> : null}
+        {description != null ? <RNText style={descriptionStyle}>{description}</RNText> : null}
+        {slot(right)}
+      </TouchableOpacity>
+    );
+  },
   Section: container('List.Section'),
   Subheader: textual('List.Subheader'),
   Accordion: ({ title, children, ...props }: AnyProps) => (
@@ -263,7 +272,18 @@ export const MD3DarkTheme = { ...MD3LightTheme, dark: true };
 export const DefaultTheme = MD3LightTheme;
 export const DarkTheme = MD3DarkTheme;
 
-export const useTheme = () => MD3LightTheme;
+/**
+ * useTheme() 返回**应用自己的** theme (src/theme/index.ts), 而不是上面那个只有 colors 的骨架。
+ *
+ * 2026-09-15: 溯源 / 首页 / 个体档案几屏全部改走 `useTheme<AppTheme>().custom.spacing / .workflow`,
+ * 骨架上没有 `custom` ⇒ 渲染期 TypeError。此前 SalesOrderListScreen / YieldStepReport 等测试
+ * 各自局部替身绕过 —— 那是同一个缺口的第 N 份补丁。这里补在根上。
+ *
+ * 用 require 延迟取: theme/index.ts 自己 import 本文件的 MD3LightTheme, 顶层 import 会循环。
+ * 返回的是真 theme 对象 (它 spread 了上面的 MD3LightTheme 再覆盖), 所以旧断言仍拿得到
+ * primary / surface 这些键, 只是值变成了 token 权威值。
+ */
+export const useTheme = () => require('../../theme').theme;
 export const withTheme = (C: any) => C;
 export const Provider = ({ children }: AnyProps) => <>{children}</>;
 export const PaperProvider = Provider;
