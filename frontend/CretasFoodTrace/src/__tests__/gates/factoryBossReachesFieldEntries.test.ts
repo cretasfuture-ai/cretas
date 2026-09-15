@@ -71,6 +71,8 @@ const MUST_REGISTER = [
   'SourceIndividualForm',
   // 2026-09-15: 拍照核验「查看档案」与来源链上的个体行都跳这一屏 (FEAT-RN-SOURCE-INDIVIDUAL-DETAIL)。
   'SourceIndividualDetail',
+  // 2026-09-16: 首页「源头个体」瓷砖改落到只读列表; 列表点行 → Detail, 右上 + → Form。
+  'SourceIndividualList',
 ] as const;
 
 /** 四个屏文件 —— 路由名对上了但组件挂错文件，这一层会红。 */
@@ -80,13 +82,15 @@ const MUST_REACH = [
   'screens/shared/VisionVerifyScreen.tsx',
   'screens/shared/SourceIndividualFormScreen.tsx',
   'screens/shared/SourceIndividualDetailScreen.tsx',
+  'screens/shared/SourceIndividualListScreen.tsx',
 ];
 
 /** 总览页上的三个入口：testID → 它按下去必须打开的路由。 */
 const ENTRIES: ReadonlyArray<readonly [string, string]> = [
   ['boss-entry-traceability', 'Traceability'],
   ['boss-entry-vision-verify', 'VisionVerify'],
-  ['boss-entry-source-individual', 'SourceIndividualForm'],
+  // 2026-09-16: 落到只读列表, ⛔ 不再直达登记表 (评审 P1: 老板点名词想看「我有哪些牛」, 落进 10 字段表单)。
+  ['boss-entry-source-individual', 'SourceIndividualList'],
 ];
 
 function reachableFiles(role: string): string[] {

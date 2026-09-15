@@ -15,6 +15,7 @@ import { TraceabilityScreen, TraceabilityDetailScreen } from '../screens/traceab
 import VisionVerifyScreen from '../screens/shared/VisionVerifyScreen';
 import SourceIndividualFormScreen from '../screens/shared/SourceIndividualFormScreen';
 import SourceIndividualDetailScreen from '../screens/shared/SourceIndividualDetailScreen';
+import SourceIndividualListScreen from '../screens/shared/SourceIndividualListScreen';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
 import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
@@ -57,6 +58,8 @@ function BossOverviewStack() {
       <OverviewStack.Screen name="VisionVerify" component={VisionVerifyScreen} />
       <OverviewStack.Screen name="SourceIndividualForm" component={SourceIndividualFormScreen} />
       <OverviewStack.Screen name="SourceIndividualDetail" component={SourceIndividualDetailScreen} />
+      {/* 2026-09-16: 首页「源头个体」瓷砖改落到只读列表 (点行进详情, 右上 + 才进登记表)。 */}
+      <OverviewStack.Screen name="SourceIndividualList" component={SourceIndividualListScreen} />
     </OverviewStack.Navigator>
   );
 }

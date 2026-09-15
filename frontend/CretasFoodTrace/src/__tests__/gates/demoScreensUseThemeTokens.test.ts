@@ -32,6 +32,9 @@ export const GUARDED_FILES = [
   'screens/shared/SourceIndividualDetailScreen.tsx',
   'screens/traceability/components/dnaStatus.tsx',
   'screens/traceability/components/statusTone.tsx',
+  // 2026-09-16 (demo-entry-list): 溯源入口重做 + 新建只读个体列表, 两屏从写下第一行起就在闸里。
+  'screens/traceability/TraceabilityScreen.tsx',
+  'screens/shared/SourceIndividualListScreen.tsx',
 ] as const;
 
 const HEX6 = /#[0-9A-Fa-f]{6}\b/g;

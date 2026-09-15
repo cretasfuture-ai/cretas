@@ -1,439 +1,272 @@
-import React, { useState, useCallback } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Alert,
-} from 'react-native';
-import {
-  Text,
-  Card,
-  TextInput,
-  Button,
-  Surface,
-  Divider,
-  Chip,
-  ActivityIndicator,
-  useTheme,
-} from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+/**
+ * TraceabilityScreen — 溯源查询入口 (「找一批」)
+ *
+ * 2026-09-15 评审 (P1): 首页瓷砖画的是 `qrcode-scan`, 点进来却是一个 TextInput, 旁边的
+ * `barcode-scan` 图标没有 onPress —— 承诺扫码、交付键盘, 老板要手打 `SL-DEMO-BATCH-V1`。
+ * 查到之后又先显示一张摘要卡 (「6 原材料批次」统计块), 还要再点「查看完整溯源链路」才到详情;
+ * 摘要和详情横幅「本批来自 6 头牛」说的是同一件事, 多一跳。
+ *
+ * 重做后本屏只做一件事: 拿到一个码, **直接**进 `TraceabilityDetail`。
+ *  · 扫码 (主动作, 复用 `BarcodeScannerModal`) 或手输, 两条路汇合到 `goToDetail()`
+ *  · 摘要卡 / 第三份质量状态 switch / `'-'` 占位 / 硬编码色 全部删掉 —— 详情屏才是唯一的展示处
+ *  · 「最近查过」: AsyncStorage 存最近 5 个码, 没有就整段不渲染 (⛔ 不渲染一个空标题)
+ *
+ * 参数形状按 `TraceabilityDetailScreen` 从 `route.params` 读的来:
+ *   `{ batchNumber: string; traceCode?: string }` —— 它拿 batchNumber 打 `/traceability/full/{batchNumber}`,
+ *   traceCode 只用来在顶卡把「扫入码」和「系统码」并排摆出来 (两者不同时)。
+ *
+ * ⚠️ 标签二维码里印的**不是**批次号而是溯源码 (`LabelServiceImpl.scanLabel` 的注释: 打印机印进
+ *    二维码的是 traceCode, 形如 `TRACE-SL-DEMO-BATCH-V1-SEED01`)。`parseTraceInput` 把内嵌格式
+ *    `TRACE-{batchNumber}-{suffix}` 拆出批次号 (与后端 `extractBatchNumberFromTraceCode` 同一条规则);
+ *    编码规则格式 (`TR-{工厂}-{日期}-{序号}`) **不内嵌批次号**, 本屏不做反查 —— 原样当批次号传过去,
+ *    详情屏会明说「未找到该批次」, ⛔ 不在入口屏猜一个。
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { Appbar, Button, Divider, List, Text, TextInput, useTheme } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { traceabilityApiClient, BatchTraceResponse } from '../../services/api/traceabilityApiClient';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { BarcodeScannerModal } from '../../components/processing/BarcodeScannerModal';
+import type { AppTheme } from '../../theme';
+import type { ProcessingStackParamList } from '../../types/navigation';
+
+type Nav = NativeStackNavigationProp<ProcessingStackParamList, 'Traceability'>;
+
+export const TRACE_ENTRY_TEST_IDS = {
+  screen: 'trace-entry',
+  scan: 'trace-entry-scan',
+  input: 'trace-entry-input',
+  go: 'trace-entry-go',
+  recentSection: 'trace-entry-recent',
+  recentClear: 'trace-entry-recent-clear',
+  recentRow: (code: string) => `trace-entry-recent-${code}`,
+} as const;
+
+/** AsyncStorage 键: 最近查过的码 (JSON string[], 最新在前, 最多 RECENT_LIMIT 个)。 */
+export const RECENT_STORAGE_KEY = 'traceability.recentCodes';
+export const RECENT_LIMIT = 5;
+
+export interface TraceDetailParams {
+  batchNumber: string;
+  traceCode?: string;
+}
 
 /**
- * 溯源查询屏幕
- * 用于工厂内部查询批次溯源信息
+ * 把扫到 / 手输的一个串变成详情屏的参数。
+ *  · `TRACE-{batchNumber}-{suffix}` (内嵌格式) ⇒ 拆出 batchNumber, 原串作 traceCode
+ *  · 其它 ⇒ 整个串就是 batchNumber
+ * 空串 / 纯空白 ⇒ null (调用方不导航)。
  */
-const TraceabilityScreen: React.FC = () => {
-  const theme = useTheme();
-  const navigation = useNavigation<any>();
-
-  const [batchNumber, setBatchNumber] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [traceData, setTraceData] = useState<BatchTraceResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSearch = useCallback(async () => {
-    if (!batchNumber.trim()) {
-      Alert.alert('提示', '请输入批次号');
-      return;
+export function parseTraceInput(raw: string): TraceDetailParams | null {
+  const code = raw.trim();
+  if (!code) {
+    return null;
+  }
+  if (code.startsWith('TRACE-')) {
+    const remaining = code.slice('TRACE-'.length);
+    const lastDash = remaining.lastIndexOf('-');
+    if (lastDash > 0) {
+      return { batchNumber: remaining.slice(0, lastDash), traceCode: code };
     }
+  }
+  return { batchNumber: code };
+}
 
-    setLoading(true);
-    setError(null);
-    setTraceData(null);
+/** 新码放最前、去重、截到 RECENT_LIMIT。纯函数, 便于对照。 */
+export function pushRecent(existing: readonly string[], code: string): string[] {
+  return [code, ...existing.filter((c) => c !== code)].slice(0, RECENT_LIMIT);
+}
 
-    try {
-      const result = await traceabilityApiClient.getBatchTrace(batchNumber.trim());
-      if (result) {
-        setTraceData(result);
-      } else {
-        setError('未找到该批次的溯源信息');
-      }
-    } catch (err: any) {
-      console.error('溯源查询失败:', err);
-      setError(err.message || '查询失败，请稍后重试');
-    } finally {
-      setLoading(false);
-    }
-  }, [batchNumber]);
+async function readRecent(): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(RECENT_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((c): c is string => typeof c === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
-  const handleViewFullTrace = useCallback(() => {
-    if (traceData) {
-      navigation.navigate('TraceabilityDetail', {
-        batchNumber: traceData.production.batchNumber,
-      });
-    }
-  }, [traceData, navigation]);
+export default function TraceabilityScreen() {
+  const theme = useTheme<AppTheme>();
+  const navigation = useNavigation<Nav>();
+  const { t } = useTranslation('processing');
+  const { spacing, borderRadius } = theme.custom;
 
-  const onRefresh = useCallback(async () => {
-    if (!batchNumber.trim()) return;
-    setRefreshing(true);
-    await handleSearch();
-    setRefreshing(false);
-  }, [batchNumber, handleSearch]);
+  const [input, setInput] = useState('');
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [recent, setRecent] = useState<string[]>([]);
 
-  const getQualityStatusColor = (status: string) => {
-    switch (status?.toUpperCase()) {
-      case 'PASSED':
-        return theme.colors.primary;
-      case 'FAILED':
-        return theme.colors.error;
-      case 'PENDING':
-      case 'PENDING_INSPECTION':
-        return theme.colors.secondary;
-      default:
-        return theme.colors.outline;
-    }
-  };
+  useEffect(() => {
+    let cancelled = false;
+    readRecent().then((codes) => {
+      if (!cancelled) setRecent(codes);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const getQualityStatusText = (status: string) => {
-    switch (status?.toUpperCase()) {
-      case 'PASSED':
-        return '已通过';
-      case 'FAILED':
-        return '未通过';
-      case 'PENDING':
-      case 'PENDING_INSPECTION':
-        return '待检验';
-      case 'INSPECTING':
-        return '检验中';
-      default:
-        return status || '未知';
-    }
-  };
+  /** 扫码与手输在这里汇合。没码不导航 (阴性对照就钉在这一句)。 */
+  const goToDetail = useCallback(
+    (raw: string) => {
+      const params = parseTraceInput(raw);
+      if (!params) return;
+      const next = pushRecent(recent, raw.trim());
+      setRecent(next);
+      // 写失败不阻塞导航 —— 「最近查过」是便利, 不是溯源本身。
+      AsyncStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next)).catch(() => undefined);
+      navigation.navigate('TraceabilityDetail', params);
+    },
+    [navigation, recent]
+  );
+
+  const handleScan = useCallback(
+    (data: string) => {
+      setScannerVisible(false);
+      goToDetail(data);
+    },
+    [goToDetail]
+  );
+
+  const clearRecent = useCallback(() => {
+    setRecent([]);
+    AsyncStorage.removeItem(RECENT_STORAGE_KEY).catch(() => undefined);
+  }, []);
+
+  const canGo = parseTraceInput(input) !== null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]} testID={TRACE_ENTRY_TEST_IDS.screen}>
+      <Appbar.Header>
+        <Appbar.BackAction onPress={() => navigation.goBack()} />
+        <Appbar.Content title={t('traceability.entry.title')} />
+      </Appbar.Header>
+
       <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
+        contentContainerStyle={{ padding: spacing.l, paddingBottom: spacing.xxl, gap: spacing.l }}
+        keyboardShouldPersistTaps="handled"
       >
-        {/* 搜索区域 */}
-        <Surface style={styles.searchCard} elevation={2}>
-          <Text variant="titleMedium" style={styles.sectionTitle}>
-            <MaterialCommunityIcons name="shield-check" size={20} color="#1976D2" /> 产品溯源查询
-          </Text>
-          <TextInput
-            mode="outlined"
-            label="批次号"
-            placeholder="输入生产批次号"
-            value={batchNumber}
-            onChangeText={setBatchNumber}
-            style={styles.input}
-            left={<TextInput.Icon icon="barcode-scan" />}
-            onSubmitEditing={handleSearch}
-          />
+        {/* 主动作: 扫码。一个屏一个主色按钮。 */}
+        <View style={{ gap: spacing.s }}>
           <Button
             mode="contained"
-            onPress={handleSearch}
-            loading={loading}
-            disabled={loading || !batchNumber.trim()}
-            style={styles.searchButton}
-            icon="magnify"
+            icon="qrcode-scan"
+            onPress={() => setScannerVisible(true)}
+            contentStyle={styles.scanButtonContent}
+            style={{ borderRadius: borderRadius.m }}
+            accessibilityLabel={t('traceability.entry.scan')}
+            testID={TRACE_ENTRY_TEST_IDS.scan}
           >
-            查询
+            {t('traceability.entry.scan')}
           </Button>
-        </Surface>
+          <Text variant="bodySmall" style={[styles.centerText, { color: theme.colors.onSurfaceVariant }]}>
+            {t('traceability.entry.scanHint')}
+          </Text>
+        </View>
 
-        {/* 错误提示 */}
-        {error && (
-          <Card style={[styles.card, styles.errorCard]}>
-            <Card.Content>
-              <View style={styles.errorContent}>
-                <MaterialCommunityIcons
-                  name="alert-circle-outline"
-                  size={24}
-                  color={theme.colors.error}
+        <View style={[styles.dividerRow, { gap: spacing.m }]}>
+          <Divider style={styles.dividerLine} />
+          <Text variant="labelLarge" style={{ color: theme.colors.onSurfaceVariant }}>
+            {t('traceability.entry.orManual')}
+          </Text>
+          <Divider style={styles.dividerLine} />
+        </View>
+
+        {/* 手输: 批次号或溯源码, 回车 / 按钮都直接进详情。 */}
+        <View style={{ gap: spacing.s }}>
+          <TextInput
+            mode="outlined"
+            label={t('traceability.entry.inputLabel')}
+            placeholder={t('traceability.entry.inputPlaceholder')}
+            value={input}
+            onChangeText={setInput}
+            onSubmitEditing={() => goToDetail(input)}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="search"
+            accessibilityLabel={t('traceability.entry.inputLabel')}
+            testID={TRACE_ENTRY_TEST_IDS.input}
+          />
+          <Button
+            mode="contained-tonal"
+            icon="arrow-right"
+            onPress={() => goToDetail(input)}
+            disabled={!canGo}
+            contentStyle={styles.goButtonContent}
+            style={{ borderRadius: borderRadius.m }}
+            accessibilityLabel={t('traceability.entry.go')}
+            testID={TRACE_ENTRY_TEST_IDS.go}
+          >
+            {t('traceability.entry.go')}
+          </Button>
+        </View>
+
+        {/* 最近查过: 一个都没有就整段不渲染。 */}
+        {recent.length > 0 && (
+          <View
+            style={{ backgroundColor: theme.colors.surface, borderRadius: borderRadius.m, overflow: 'hidden' }}
+            testID={TRACE_ENTRY_TEST_IDS.recentSection}
+          >
+            <View style={[styles.recentHeader, { paddingLeft: spacing.l, paddingRight: spacing.xs }]}>
+              <Text variant="titleSmall" style={[styles.recentTitle, { color: theme.colors.onSurfaceVariant }]}>
+                {t('traceability.entry.recentTitle')}
+              </Text>
+              <Button
+                mode="text"
+                compact
+                onPress={clearRecent}
+                accessibilityLabel={t('traceability.entry.recentClear')}
+                testID={TRACE_ENTRY_TEST_IDS.recentClear}
+              >
+                {t('traceability.entry.recentClear')}
+              </Button>
+            </View>
+            {recent.map((code, index) => (
+              <React.Fragment key={code}>
+                {index > 0 && <Divider />}
+                <List.Item
+                  title={code}
+                  titleStyle={[styles.mono, { color: theme.colors.onSurface }]}
+                  onPress={() => goToDetail(code)}
+                  left={(props) => <List.Icon {...props} icon="history" color={theme.colors.onSurfaceVariant} />}
+                  right={(props) => <List.Icon {...props} icon="chevron-right" />}
+                  style={[styles.recentRow, { paddingHorizontal: spacing.s }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={code}
+                  testID={TRACE_ENTRY_TEST_IDS.recentRow(code)}
                 />
-                <Text style={[styles.errorText, { color: theme.colors.error }]}>
-                  {error}
-                </Text>
-              </View>
-            </Card.Content>
-          </Card>
-        )}
-
-        {/* 加载中 */}
-        {loading && (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" />
-            <Text style={styles.loadingText}>正在查询...</Text>
-          </View>
-        )}
-
-        {/* 溯源结果 */}
-        {traceData && !loading && (
-          <>
-            {/* 生产信息卡片 */}
-            <Card style={styles.card}>
-              <Card.Content>
-                <View style={styles.cardHeader}>
-                  <MaterialCommunityIcons
-                    name="factory"
-                    size={24}
-                    color={theme.colors.primary}
-                  />
-                  <Text variant="titleMedium" style={styles.cardTitle}>
-                    生产信息
-                  </Text>
-                  <Chip
-                    mode="flat"
-                    style={[
-                      styles.statusChip,
-                      { backgroundColor: getQualityStatusColor(traceData.qualityStatus) + '20' },
-                    ]}
-                    textStyle={{ color: getQualityStatusColor(traceData.qualityStatus) }}
-                  >
-                    {getQualityStatusText(traceData.qualityStatus)}
-                  </Chip>
-                </View>
-                <Divider style={styles.divider} />
-
-                <View style={styles.infoRow}>
-                  <Text style={styles.label}>批次号:</Text>
-                  <Text style={styles.value}>{traceData.production.batchNumber}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.label}>产品名称:</Text>
-                  <Text style={styles.value}>{traceData.production.productName || '-'}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.label}>生产工厂:</Text>
-                  <Text style={styles.value}>{traceData.production.factoryName}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.label}>生产日期:</Text>
-                  <Text style={styles.value}>{traceData.production.productionDate || '-'}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.label}>负责人:</Text>
-                  <Text style={styles.value}>{traceData.production.supervisorName || '-'}</Text>
-                </View>
-                {traceData.production.quantity && (
-                  <View style={styles.infoRow}>
-                    <Text style={styles.label}>产量:</Text>
-                    <Text style={styles.value}>
-                      {traceData.production.quantity} {traceData.production.unit}
-                    </Text>
-                  </View>
-                )}
-              </Card.Content>
-            </Card>
-
-            {/* 统计信息 */}
-            <Card style={styles.card}>
-              <Card.Content>
-                <View style={styles.cardHeader}>
-                  <MaterialCommunityIcons
-                    name="chart-bar"
-                    size={24}
-                    color={theme.colors.primary}
-                  />
-                  <Text variant="titleMedium" style={styles.cardTitle}>
-                    关联数据
-                  </Text>
-                </View>
-                <Divider style={styles.divider} />
-
-                <View style={styles.statsContainer}>
-                  <View style={styles.statItem}>
-                    <MaterialCommunityIcons
-                      name="package-variant"
-                      size={28}
-                      color={theme.colors.tertiary}
-                    />
-                    <Text style={styles.statNumber}>{traceData.materialCount}</Text>
-                    <Text style={styles.statLabel}>原材料批次</Text>
-                  </View>
-                  <View style={styles.statItem}>
-                    <MaterialCommunityIcons
-                      name="clipboard-check-outline"
-                      size={28}
-                      color={theme.colors.secondary}
-                    />
-                    <Text style={styles.statNumber}>{traceData.inspectionCount}</Text>
-                    <Text style={styles.statLabel}>质检记录</Text>
-                  </View>
-                  <View style={styles.statItem}>
-                    <MaterialCommunityIcons
-                      name="truck-delivery"
-                      size={28}
-                      color={theme.colors.primary}
-                    />
-                    <Text style={styles.statNumber}>{traceData.shipmentCount}</Text>
-                    <Text style={styles.statLabel}>出货记录</Text>
-                  </View>
-                </View>
-              </Card.Content>
-            </Card>
-
-            {/* 查看完整链路按钮 */}
-            <Button
-              mode="contained"
-              onPress={handleViewFullTrace}
-              style={styles.fullTraceButton}
-              icon="link-variant"
-            >
-              查看完整溯源链路
-            </Button>
-
-            {/* 最后更新时间 */}
-            <Text style={styles.updateTime}>
-              最后更新: {traceData.lastUpdateTime ? new Date(traceData.lastUpdateTime).toLocaleString() : '-'}
-            </Text>
-          </>
-        )}
-
-        {/* 空状态 */}
-        {!traceData && !loading && !error && (
-          <View style={styles.emptyContainer}>
-            <MaterialCommunityIcons
-              name="qrcode-scan"
-              size={80}
-              color={theme.colors.outlineVariant}
-            />
-            <Text style={styles.emptyText}>
-              输入批次号查询溯源信息
-            </Text>
-            <Text style={styles.emptySubtext}>
-              支持查询生产批次的完整追溯链路
-            </Text>
+              </React.Fragment>
+            ))}
           </View>
         )}
       </ScrollView>
-    </SafeAreaView>
+
+      <BarcodeScannerModal
+        visible={scannerVisible}
+        onClose={() => setScannerVisible(false)}
+        onScan={handleScan}
+        title={t('traceability.entry.scannerTitle')}
+      />
+    </View>
   );
-};
+}
 
+// ⚠️ 只放布局: 颜色 / 字号 / 间距全部走 useTheme() 与 Paper 的 variant,
+//    `gates/demoScreensUseThemeTokens` 守着本文件里不出现色值与 fontSize<14。
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
-  searchCard: {
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    marginBottom: 12,
-    fontWeight: '600',
-  },
-  input: {
-    marginBottom: 12,
-  },
-  searchButton: {
-    marginTop: 4,
-  },
-  card: {
-    marginBottom: 16,
-    borderRadius: 12,
-  },
-  errorCard: {
-    backgroundColor: '#ffebee',
-  },
-  errorContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  errorText: {
-    marginLeft: 8,
-    flex: 1,
-  },
-  loadingContainer: {
-    alignItems: 'center',
-    padding: 40,
-  },
-  loadingText: {
-    marginTop: 12,
-    color: '#666',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  cardTitle: {
-    marginLeft: 8,
-    flex: 1,
-    fontWeight: '600',
-  },
-  statusChip: {
-    height: 28,
-  },
-  divider: {
-    marginVertical: 12,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    marginBottom: 8,
-  },
-  label: {
-    width: 80,
-    color: '#666',
-    fontSize: 14,
-  },
-  value: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 8,
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginTop: 8,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-  },
-  fullTraceButton: {
-    marginBottom: 16,
-    borderRadius: 8,
-  },
-  updateTime: {
-    textAlign: 'center',
-    color: '#999',
-    fontSize: 12,
-    marginBottom: 20,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#666',
-    marginTop: 16,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 8,
-  },
+  container: { flex: 1 },
+  scanButtonContent: { minHeight: 64 },
+  goButtonContent: { minHeight: 48 },
+  centerText: { textAlign: 'center' },
+  dividerRow: { flexDirection: 'row', alignItems: 'center' },
+  dividerLine: { flex: 1 },
+  recentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 },
+  recentTitle: { flex: 1 },
+  recentRow: { minHeight: 48 },
+  mono: { fontFamily: 'monospace' },
 });
-
-export default TraceabilityScreen;

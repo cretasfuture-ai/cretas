@@ -197,6 +197,12 @@ export type ProcessingStackParamList = {
    * 参数必填 —— 但屏里仍用 `route.params ?? {}` 取值, 缺参时显示「缺少参数」而不是崩。
    */
   SourceIndividualDetail: { individualId: string };
+  /**
+   * 个体档案列表 (只读, 2026-09-16): 首页「源头个体」瓷砖落到这里, 点行进 SourceIndividualDetail,
+   * 右上 + 才进 SourceIndividualForm。此前瓷砖直达登记表 —— 老板点一个名词想看「我有哪些牛」,
+   * 落进一张 10 个字段的表单。
+   */
+  SourceIndividualList: undefined;
 
   // 工位监控 - 生产模块
   WorkstationMonitor: {

@@ -76,6 +76,7 @@ import LabelScanScreen from '../screens/shared/LabelScanScreen';
 import VisionVerifyScreen from '../screens/shared/VisionVerifyScreen';
 import SourceIndividualFormScreen from '../screens/shared/SourceIndividualFormScreen';
 import SourceIndividualDetailScreen from '../screens/shared/SourceIndividualDetailScreen';
+import SourceIndividualListScreen from '../screens/shared/SourceIndividualListScreen';
 
 // 工序制生产页面
 import ProcessTaskListScreen from '../screens/processing/ProcessTaskListScreen';
@@ -330,6 +331,10 @@ export function ProcessingStackNavigator() {
       <Stack.Screen
         name="SourceIndividualDetail"
         component={SourceIndividualDetailScreen}
+      />
+      <Stack.Screen
+        name="SourceIndividualList"
+        component={SourceIndividualListScreen}
       />
 
       {/* 工序制生产 - Process Mode */}
