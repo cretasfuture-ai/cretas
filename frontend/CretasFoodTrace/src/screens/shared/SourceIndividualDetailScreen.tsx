@@ -43,7 +43,7 @@ import {
   ChainTitle,
   nodeTypeIcon,
 } from '../traceability/components/LineageChainTimeline';
-import { DnaStatusChip, dnaStatusLabel } from '../traceability/components/dnaStatus';
+import { DnaStatusChip } from '../traceability/components/dnaStatus';
 import type { AppTheme } from '../../theme';
 import type { ProcessingStackParamList } from '../../types/navigation';
 
@@ -88,15 +88,13 @@ function joinPresent(parts: Array<string | null | undefined>): string | null {
 }
 
 /**
- * 列表行的描述: 「标牌末四位 0003 · 已采样」。
- * ⚠️ DNA 文案仍在这一行里 (读屏 / 搜索都靠它); 颜色由旁边的 `DnaStatusChip` 表达。
+ * 列表行的描述: 「标牌末四位 0003」。
+ * DNA 状态只由同一行右侧的 `DnaStatusChip` 表达 (chip 自己渲染文字, 读屏读得到) ——
+ * 真机实测同一行写两遍「DNA 已比中」(描述里一遍、chip 一遍) 是多余信息。
  */
 function summaryDescription(t: (k: string, o?: Record<string, unknown>) => string, s: SourceIndividualSummary): string | null {
   const tail = tagTail(s.tagNumber);
-  return joinPresent([
-    tail ? t('sourceIndividual.detail.tagShort', { tail }) : null,
-    dnaStatusLabel(s.dnaVerificationStatus),
-  ]);
+  return tail ? t('sourceIndividual.detail.tagShort', { tail }) : null;
 }
 
 function nodeTitle(t: (k: string) => string, node: LineageNode): string {
