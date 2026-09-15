@@ -1241,6 +1241,16 @@ def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
 
 
 _TEXT_TAIL: List[Tuple[str, str]] = [
+    # 🔴 2026-09-15 21:19 prod 实测: 文本槽整条链死透 —— aistore 09-13 到期(expired)、
+    #    deepseek 401「api key ****8048 is invalid」、zhipu quota_skip ⇒ 每一句 AI 问答
+    #    的 LLM 兜底/槽位抽取都 500, 意图识别只剩关键词硬匹配。同一时刻 VL 槽的
+    #    aliyun qwen3.8-flash 三账号有免费额度、关思考 1.5–4s、已被 `_MINIMAL_SAFE_SET`
+    #    豁免 registry_stale。它是通用模型(带图不带图都吃), 所以把三账号放进文本地板:
+    #    排在 zhipu 之前、所有到期日非 None 的 aliyun 条目之后(expiry None → _FAR_FUTURE)。
+    #    ⛔ 这是地板不是头: 等 owner 换了 deepseek 的 key、aistore 续了期, 它们自然排回前面。
+    ("aliyun_c_vl", "qwen3.8-flash"),
+    ("aliyun_a_vl", "qwen3.8-flash"),
+    ("aliyun_b_vl", "qwen3.8-flash"),
     # 非 DashScope 地板 —— 到期日为 None → _expiry_of 返回 _FAR_FUTURE →
     # _build_chain 的排序必然把它们放在所有 aliyun 条目之后。
     #
