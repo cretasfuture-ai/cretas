@@ -160,7 +160,12 @@ export type ProcessingStackParamList = {
 
   // 溯源功能 - Phase 3 完整溯源链路
   Traceability: undefined;                             // 溯源查询入口
-  TraceabilityDetail: { batchNumber: string };         // 完整溯源链路
+  /**
+   * 完整溯源链路。`traceCode` 是扫码 / 手输进来的**标签码**(可选): 详情屏拿 batchNumber 取数,
+   * traceCode 只用来在顶卡把「扫入码」与服务端持久化的码并排摆出来 (两者不同时)。
+   * 2026-09-16 起 `TraceabilityScreen` 会传它 (标签二维码印的是 `TRACE-{batch}-{suffix}`)。
+   */
+  TraceabilityDetail: { batchNumber: string; traceCode?: string };
   PublicTrace: { batchNumber?: string; traceCode?: string };  // 公开溯源（消费者）
 
   // AI语音质检 - Phase 4
