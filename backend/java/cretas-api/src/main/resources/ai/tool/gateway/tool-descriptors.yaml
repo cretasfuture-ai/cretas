@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 584
+expectedToolCount: 585
 expectedLegacyCount: 569
 descriptors:
   - toolName: "unsupported_capability"
@@ -11146,6 +11146,27 @@ descriptors:
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["lineage"]
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "source_individual_query"
+    implementationClass: "com.cretas.aims.ai.tool.impl.source.SourceIndividualQueryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["source"]
     overrideFlags:
       actionType: false
       riskLevel: false
