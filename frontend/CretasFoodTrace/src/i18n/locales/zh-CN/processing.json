@@ -1310,13 +1310,6 @@
     },
     "aiFailed": "AI分析失败"
   },
-  "traceability": {
-    "lineage": {
-      "sourceCount": "来源 {{n}} 项",
-      "directSource": "直接来源",
-      "upstreamLevel": "往上第 {{depth}} 层来源"
-    }
-  },
   "sourceIndividual": {
     "vision": {
       "title": "拍照核验",
@@ -1456,6 +1449,11 @@
     }
   },
   "traceability": {
+    "lineage": {
+      "sourceCount": "来源 {{n}} 项",
+      "directSource": "直接来源",
+      "upstreamLevel": "往上第 {{depth}} 层来源"
+    },
     "entry": {
       "title": "溯源查询",
       "scan": "扫码查溯源",
