@@ -44,6 +44,8 @@ concurrency:
 jobs:
   no-literal-nul-bytes:
     runs-on: [self-hosted, cretas]
+    # 2026-09-15: 自托管 job 一律带超时 (正常 <1 分钟)
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 

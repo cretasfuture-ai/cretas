@@ -100,6 +100,8 @@ jobs:
     #    统一切换(一次改全部已接入的工作流并断言各处一致)。
     #    见 `.claude/rules/ci-runner-routing.md`。
     runs-on: [self-hosted, cretas]
+    # 2026-09-15: 自托管 job 一律带超时 (正常 2 分钟; 见 rn-gate.yml jest 的 20 小时事故)
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend/python
