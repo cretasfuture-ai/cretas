@@ -279,15 +279,16 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
         if (total == 0) {
             sb.append("没有 ").append(label).append(" 的个体");
         } else {
-            sb.append(label).append(" 的个体共 ").append(total).append(" 头: ");
-            for (int i = 0; i < rows.size(); i++) {
-                if (i > 0) sb.append("、");
-                SourceIndividual si = rows.get(i);
-                sb.append(si.getIndividualCode());
-                if (si.getTagNumber() != null) sb.append("(耳标 ").append(si.getTagNumber()).append(")");
+            sb.append(label).append(" 的个体共 ").append(total).append(" 头");
+            List<String> lines = new ArrayList<>();
+            for (SourceIndividual si : rows) {
+                String line = si.getIndividualCode();
+                if (si.getTagNumber() != null) line += "(耳标 " + si.getTagNumber() + ")";
+                lines.add(line);
             }
+            com.cretas.aims.ai.tool.impl.lineage.LineageQueryTool.appendList(sb, lines);
             if (total > rows.size()) {
-                sb.append("; 还有 ").append(total - rows.size()).append(" 头未列出");
+                sb.append("\n还有 ").append(total - rows.size()).append(" 头未列出");
             }
         }
 
@@ -335,7 +336,7 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
         if (offspring == null || offspring.isEmpty()) {
             return "没有登记后代";
         }
-        return "有 " + offspring.size() + " 头后代: " + joinSummaries(offspring);
+        return "有 " + offspring.size() + " 头后代" + joinSummaries(offspring);
     }
 
     private static String siblingsSummary(SourceIndividualDetailDTO d) {
@@ -347,7 +348,7 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
         if (sibs == null || sibs.isEmpty()) {
             return code + " 没有同父兄弟";
         }
-        return code + " 有 " + sibs.size() + " 头同父兄弟: " + joinSummaries(sibs);
+        return code + " 有 " + sibs.size() + " 头同父兄弟" + joinSummaries(sibs);
     }
 
     private static String pedigreeSummary(SourceIndividualDetailDTO d) {
@@ -360,7 +361,7 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
             List<SourceIndividualDetailDTO.Summary> sibs = d.getSiblingsBySire();
             sb.append("; 同父兄弟 ").append(sibs == null ? 0 : sibs.size()).append(" 头");
             if (sibs != null && !sibs.isEmpty()) {
-                sb.append(": ").append(joinSummaries(sibs));
+                sb.append(joinSummaries(sibs));
             }
         }
         return sb.toString();
@@ -411,13 +412,14 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
         return l != null && !l.isEmpty();
     }
 
+    /** 2026-09-16: 一头牛一行(≥2 头), 老板在手机气泡里能对着看; 1 头接在冒号后。返回值自带前导「: 」或「:」+ 每行「- 」。 */
     private static String joinSummaries(List<SourceIndividualDetailDTO.Summary> list) {
-        StringBuilder sb = new StringBuilder();
-        for (int k = 0; k < list.size(); k++) {
-            if (k > 0) sb.append("、");
-            SourceIndividualDetailDTO.Summary s = list.get(k);
-            sb.append(s.getIndividualCode()).append("(").append(dnaLabel(s.getDnaVerificationStatus())).append(")");
+        List<String> lines = new ArrayList<>();
+        for (SourceIndividualDetailDTO.Summary s : list) {
+            lines.add(s.getIndividualCode() + "(" + dnaLabel(s.getDnaVerificationStatus()) + ")");
         }
+        StringBuilder sb = new StringBuilder();
+        com.cretas.aims.ai.tool.impl.lineage.LineageQueryTool.appendList(sb, lines);
         return sb.toString();
     }
 
