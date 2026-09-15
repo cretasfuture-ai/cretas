@@ -192,6 +192,11 @@ export type ProcessingStackParamList = {
         individualId?: string;
       }
     | undefined;
+  /**
+   * 个体详情 (只读): 本体 + 系谱 + 去向 (FEAT-RN-SOURCE-INDIVIDUAL-DETAIL-20260915)。
+   * 参数必填 —— 但屏里仍用 `route.params ?? {}` 取值, 缺参时显示「缺少参数」而不是崩。
+   */
+  SourceIndividualDetail: { individualId: string };
 
   // 工位监控 - 生产模块
   WorkstationMonitor: {

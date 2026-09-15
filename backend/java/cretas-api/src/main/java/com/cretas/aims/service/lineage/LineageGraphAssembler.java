@@ -500,6 +500,8 @@ public class LineageGraphAssembler {
                 return null;
             }
             return TraceabilityDTO.SourceIndividualBrief.builder()
+                    // 主键只给内部侧 —— 溯源页靠它跳个体详情; 公开侧与 nodeId 同一条纪律。
+                    .id(desensitize ? null : si.getId())
                     .individualCode(desensitize ? null : si.getIndividualCode())
                     .tagNumber(desensitize ? maskTagNumber(si.getTagNumber()) : si.getTagNumber())
                     .tagNumberMasked(desensitize)

@@ -61,4 +61,32 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
                                            Pageable pageable);
 
     boolean existsByFactoryIdAndIndividualCode(String factoryId, String individualCode);
+
+    // ── 系谱反查 (FEAT-RN-SOURCE-INDIVIDUAL-DETAIL-20260915) ──────────────
+
+    /**
+     * 某个体的<b>全部后代</b>: 父本是它<b>或</b>母本是它。
+     *
+     * <p>🔴 必须手写 JPQL, ⛔ 不能写成派生查询
+     * {@code findByFactoryIdAndSireIndividualIdOrDamIndividualId}: Spring Data 把它解析成
+     * {@code (factoryId = ? AND sire = ?) OR dam = ?} —— 「或」那一半<b>不带工厂过滤</b>,
+     * 别厂同 id(理论上不会撞, 但 id 是 UUID 字符串, 没有库级隔离)会漏进来。
+     * 括号是这条查询里唯一重要的东西。
+     */
+    @Query("""
+            SELECT si FROM SourceIndividual si
+             WHERE si.factoryId = :factoryId
+               AND (si.sireIndividualId = :parentId OR si.damIndividualId = :parentId)
+             ORDER BY si.individualCode ASC
+            """)
+    List<SourceIndividual> findOffspring(@Param("factoryId") String factoryId,
+                                         @Param("parentId") String parentId);
+
+    /**
+     * 同一父本的全部个体(<b>含调用方自己</b> —— 排除自身是服务层的事, 这里如实返回)。
+     *
+     * <p>「同一头种公牛的其它后代」是选种的最小闭环: 从一块好肉倒推到公牛, 再看它别的后代。
+     */
+    List<SourceIndividual> findByFactoryIdAndSireIndividualIdOrderByIndividualCodeAsc(
+            String factoryId, String sireIndividualId);
 }

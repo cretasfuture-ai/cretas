@@ -92,7 +92,7 @@ public class TraceabilityDTO {
      * / {@code tagNumber}（<b>只保留末 4 位，前面打星</b>）。
      *
      * <h3>⛔ 公开接口一个字都不许出的</h3>
-     * {@code individualCode}（内部编码）、{@code externalGeneBankId}（外部基因库 ID）、
+     * {@code id}（档案主键）、{@code individualCode}（内部编码）、{@code externalGeneBankId}（外部基因库 ID）、
      * {@code dnaSampleCode}（DNA 样本号）、{@code sireIndividualId} / {@code damIndividualId}
      * （父母系谱）、<b>完整耳标号</b>。
      *
@@ -106,6 +106,12 @@ public class TraceabilityDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class SourceIndividualBrief {
+        /**
+         * 个体档案主键 —— 内部溯源页拿它跳「个体详情」。<b>公开接口恒为 null</b>
+         * （与 {@code LineageNode.nodeId} 同一条纪律：主键不出公开侧）。
+         * 前端以它是否为 null 判断这一行能不能点，⛔ 不要拿 individualCode 兜底。
+         */
+        private String id;
         /** 内部个体编码；公开接口恒为 null。 */
         private String individualCode;
         /**

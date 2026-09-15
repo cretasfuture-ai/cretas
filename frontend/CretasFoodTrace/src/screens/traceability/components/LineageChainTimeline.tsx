@@ -1,7 +1,11 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Pressable } from 'react-native';
 import { Text, Card, Divider, Chip } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
+import type { ProcessingStackParamList } from '../../../types/navigation';
 
 import type {
   LineageSection,
@@ -35,6 +39,8 @@ export const LINEAGE_EMPTY_TEXT = '无上游血缘记录';
 export const UNNAMED_NODE_TEXT = '未命名批次';
 /** 故障文案 —— 「这一次没取到」，⛔ 与空态不是同一句话。 */
 export const LINEAGE_UNAVAILABLE_TEXT = '来源链暂时取不到，请稍后重试';
+/** 内部侧、挂了个体的原料行上的提示 —— 公开侧没有个体主键，这句不出现。 */
+export const INDIVIDUAL_DETAIL_HINT = '查看个体档案 ›';
 
 const NODE_TYPE_LABEL: Record<string, string> = {
   MATERIAL_BATCH: '原料批次',
@@ -118,15 +124,37 @@ function nodeTitle(node: LineageNode): string {
   return UNNAMED_NODE_TEXT;
 }
 
+/** 这一行能不能点进「个体详情」——只看后端给没给个体主键。 */
+export function individualDetailId(node: LineageNode): string | null {
+  const id = node.sourceIndividual?.id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+type LineageNav = NativeStackNavigationProp<ProcessingStackParamList>;
+
 function NodeRow({ node, showSupplier }: { node: LineageNode; showSupplier: boolean }) {
+  const navigation = useNavigation<LineageNav>();
   const typeLabel = NODE_TYPE_LABEL[node.nodeType] ?? node.nodeType;
   const icon = NODE_TYPE_ICON[node.nodeType] ?? 'help-circle-outline';
   // resolved === false ⇒ 批次实体查不到（被软删/清理）。
   // ⛔ 不编名字：说一句实话，让「查不到」与「叫什么」区分得开。
   const unresolved = node.resolved === false;
+  /**
+   * 挂了个体、且后端给了个体主键 ⇒ 整行可点，进个体详情（系谱 + 去向）。
+   * 公开侧 `sourceIndividual.id` 恒为 null（与 nodeId 同一条纪律）⇒ 不可点 ——
+   * ⛔ 不拿 individualCode / tagNumber 当兜底去猜一个 id。
+   */
+  const detailId = individualDetailId(node);
+  const Row: React.ElementType = detailId ? Pressable : View;
+  const rowProps = detailId
+    ? {
+        accessibilityRole: 'button' as const,
+        onPress: () => navigation.navigate('SourceIndividualDetail', { individualId: detailId }),
+      }
+    : {};
 
   return (
-    <View style={styles.nodeRow} testID={`lineage-node-${nodeKey(node)}`}>
+    <Row style={styles.nodeRow} testID={`lineage-node-${nodeKey(node)}`} {...rowProps}>
       <MaterialCommunityIcons name={icon} size={18} color="#666" style={styles.nodeIcon} />
       <View style={styles.nodeBody}>
         <View style={styles.nodeTitleRow}>
@@ -165,10 +193,15 @@ function NodeRow({ node, showSupplier }: { node: LineageNode; showSupplier: bool
                 耳标：{node.sourceIndividual.tagNumber}
               </Text>
             )}
+            {!!detailId && (
+              <Text style={styles.individualLink} testID={`lineage-individual-link-${nodeKey(node)}`}>
+                {INDIVIDUAL_DETAIL_HINT}
+              </Text>
+            )}
           </View>
         )}
       </View>
-    </View>
+    </Row>
   );
 }
 
@@ -262,6 +295,7 @@ const styles = StyleSheet.create({
   nodeMeta: { fontSize: 12, color: '#666', marginTop: 2 },
   nodeUnresolved: { fontSize: 12, color: '#B26A00', marginTop: 2 },
   individualLine: { fontSize: 12, color: '#5D4037', marginTop: 2, fontWeight: '500' },
+  individualLink: { fontSize: 12, color: '#1A57B5', marginTop: 4, fontWeight: '500' },
 });
 
 export default LineageChainTimeline;

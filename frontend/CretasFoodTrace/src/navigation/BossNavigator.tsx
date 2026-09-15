@@ -14,6 +14,7 @@ import FinishedGoodsListScreen from '../screens/factory-admin/inventory/Finished
 import { TraceabilityScreen, TraceabilityDetailScreen } from '../screens/traceability';
 import VisionVerifyScreen from '../screens/shared/VisionVerifyScreen';
 import SourceIndividualFormScreen from '../screens/shared/SourceIndividualFormScreen';
+import SourceIndividualDetailScreen from '../screens/shared/SourceIndividualDetailScreen';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
 import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
@@ -55,6 +56,7 @@ function BossOverviewStack() {
       <OverviewStack.Screen name="TraceabilityDetail" component={TraceabilityDetailScreen} />
       <OverviewStack.Screen name="VisionVerify" component={VisionVerifyScreen} />
       <OverviewStack.Screen name="SourceIndividualForm" component={SourceIndividualFormScreen} />
+      <OverviewStack.Screen name="SourceIndividualDetail" component={SourceIndividualDetailScreen} />
     </OverviewStack.Navigator>
   );
 }

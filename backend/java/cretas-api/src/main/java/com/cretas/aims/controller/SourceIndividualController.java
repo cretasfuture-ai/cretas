@@ -6,9 +6,11 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.source.CreateSourceIndividualRequest;
 import com.cretas.aims.dto.source.SourceIndividualDTO;
+import com.cretas.aims.dto.source.SourceIndividualDetailDTO;
 import com.cretas.aims.dto.source.SourceIndividualLookupResult;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.service.source.SourceIndividualService;
+import com.cretas.aims.service.source.SourceIndividualDetailService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -46,9 +48,11 @@ public class SourceIndividualController {
 
     // ⚠️ 读权限那一组在下面**逐处展开**而不是抽成常量: 注解值必须是常量表达式,
     //    引用 String[] 变量编译不过(同 FormAssistantController 里那段说明)。
-    //    ⇒ 改读权限口径时四处要一起改, 这是 Java 注解的硬限制, 不是疏忽。
+    //    ⇒ 改读权限口径时四处(list / by-tag / {id} / {id}/detail)要一起改,
+    //    这是 Java 注解的硬限制, 不是疏忽。
 
     private final SourceIndividualService sourceIndividualService;
+    private final SourceIndividualDetailService sourceIndividualDetailService;
 
     @RequirePermission({"warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"})
     @GetMapping
@@ -86,6 +90,22 @@ public class SourceIndividualController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String id) {
         return ApiResponse.success(sourceIndividualService.getById(factoryId, id));
+    }
+
+    /**
+     * 详情: 本体 + 系谱(父母/后代/同父兄弟) + 去向(原料批次 → 生产 → 成品 → 出货)。
+     *
+     * <p>读权限与 {@code GET /{id}} <b>同一组</b> —— 能看档案的人就能看它的系谱和去向。
+     * 内部接口, 不脱敏; 公开侧的个体信息另走血缘节点上的 {@code SourceIndividualBrief}。
+     */
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"})
+    @GetMapping("/{id}/detail")
+    @Operation(summary = "源头个体档案详情 (系谱 + 去向)",
+            description = "父本/母本/后代/同父兄弟 + 挂了它的原料批次及其下游生产批次/成品批次/出货单(合并去重)")
+    public ApiResponse<SourceIndividualDetailDTO> getDetail(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id) {
+        return ApiResponse.success(sourceIndividualDetailService.getDetail(factoryId, id));
     }
 
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})

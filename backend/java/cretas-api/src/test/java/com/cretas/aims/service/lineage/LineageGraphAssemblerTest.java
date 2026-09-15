@@ -326,6 +326,8 @@ class LineageGraphAssemblerTest {
                     assertThat(n.getSourceIndividual()).isNotNull();
                     assertThat(n.getSourceIndividual().getTagNumber()).isEqualTo("1109876547788");
                     assertThat(n.getSourceIndividual().getIndividualCode()).isEqualTo("COW-0001");
+                    // 内部侧给主键 —— 溯源页靠它跳个体详情。这一条是下面「公开侧 id 为 null」的阳性对照。
+                    assertThat(n.getSourceIndividual().getId()).isEqualTo("SI-1");
                 });
 
         TraceabilityDTO.SourceIndividualBrief masked =
@@ -340,6 +342,8 @@ class LineageGraphAssemblerTest {
         assertThat(masked.getTagNumber()).isEqualTo("*********7788");
         assertThat(masked.getTagNumberMasked()).isTrue();
         assertThat(masked.getIndividualCode()).isNull();
+        // 主键与 nodeId 同一条纪律: 公开侧恒为 null (前端以它判断「这一行能不能点」)。
+        assertThat(masked.getId()).isNull();
 
         // 判据落到**真正发出去的字节流**上：只断言 DTO 字段为 null 不够 ——
         // 哪天有人把敏感值塞进别的字段，那条断言照样绿。
@@ -349,6 +353,9 @@ class LineageGraphAssemblerTest {
                 .doesNotContain("1109876547788")
                 .doesNotContain("2201234567788")
                 .doesNotContain("COW-0001")
+                // 个体主键 (SI-1 / SI-2) 不许以任何字段名出现在公开字节流里
+                .doesNotContain("\"SI-1\"")
+                .doesNotContain("\"SI-2\"")
                 .doesNotContain("GENEBANK")
                 .doesNotContain("DNA-SAMPLE")
                 .doesNotContain("externalGeneBankId")
