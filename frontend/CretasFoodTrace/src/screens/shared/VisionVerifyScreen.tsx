@@ -342,11 +342,15 @@ export default function VisionVerifyScreen() {
             {tagOutcome.matched ? (
               <Button
                 testID="vision-open-profile"
-                onPress={() =>
-                  navigation.navigate('SourceIndividualForm', {
-                    individualId: tagOutcome.matched?.id,
-                  })
-                }
+                // 「查看档案」进只读详情 (系谱 + 去向); 编辑从详情屏右上角进。
+                onPress={() => {
+                  // 这个按钮只在 matched 非空时渲染; 闭包里 TS 不保留属性收窄, 所以再取一次。
+                  const matchedId = tagOutcome.matched?.id;
+                  if (!matchedId) {
+                    return;
+                  }
+                  navigation.navigate('SourceIndividualDetail', { individualId: matchedId });
+                }}
               >
                 {t('sourceIndividual.vision.openProfile')}
               </Button>

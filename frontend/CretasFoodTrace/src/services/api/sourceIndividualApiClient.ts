@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import type { LineageNode } from './traceabilityApiClient';
 
 /**
  * 源头个体档案 + 拍照核验 API 客户端。
@@ -7,6 +8,7 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
  * 后端:
  *   GET    /api/mobile/{factoryId}/source-individuals
  *   GET    /api/mobile/{factoryId}/source-individuals/{id}
+ *   GET    /api/mobile/{factoryId}/source-individuals/{id}/detail   (系谱 + 去向)
  *   GET    /api/mobile/{factoryId}/source-individuals/by-tag/{tagNumber}
  *   POST   /api/mobile/{factoryId}/source-individuals
  *   PUT    /api/mobile/{factoryId}/source-individuals/{id}
@@ -44,6 +46,56 @@ export interface SourceIndividual {
   createdAt?: string;
   updatedAt?: string;
   version?: number;
+}
+
+/** 系谱行上另一头个体的摘要 (父本 / 母本 / 后代 / 同父兄弟)。 */
+export interface SourceIndividualSummary {
+  id: string;
+  individualCode: string;
+  tagNumber?: string | null;
+  species?: string | null;
+  breed?: string | null;
+  sex?: string | null;
+  dnaVerificationStatus?: DnaVerificationStatus | null;
+}
+
+/** 挂了该个体的原料批次 —— 「它去了哪」的第一跳。 */
+export interface SourceIndividualBatchSummary {
+  id: string;
+  batchNumber: string;
+  /** 物料名; 后端查不到物料类型时为 null (⛔ 前端不编「未知物料」)。 */
+  materialName?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  receiptDate?: string | null;
+}
+
+/**
+ * 下游三组, 元素与溯源血缘节点同一个形状 (`LineageNode`)。
+ * 后端已按 `nodeType#nodeId` 跨批次去重; 三个数组**永远是数组**, 没有就是空的。
+ */
+export interface SourceIndividualDownstream {
+  productionBatches: LineageNode[];
+  finishedBatches: LineageNode[];
+  shipments: LineageNode[];
+}
+
+/**
+ * 个体详情: 本体 + 系谱 + 去向。
+ *
+ * ⚠️ 三种「没有」分开读:
+ *   · `sire`/`dam` 为 null 且 `individual.sireIndividualId`/`damIndividualId` 也为 null ⇒ 未登记
+ *   · `sire`/`dam` 为 null 而对应 id 非空 ⇒ 登记过、档案已不可查(软删)
+ *   · `offspring` / `siblingsBySire` / `batches` / `downstream.*` 空数组 ⇒ 确实没有
+ */
+export interface SourceIndividualDetail {
+  individual: SourceIndividual;
+  sire: SourceIndividualSummary | null;
+  dam: SourceIndividualSummary | null;
+  offspring: SourceIndividualSummary[];
+  siblingsBySire: SourceIndividualSummary[];
+  batches: SourceIndividualBatchSummary[];
+  downstream: SourceIndividualDownstream;
 }
 
 export interface SourceIndividualPage {
@@ -178,6 +230,14 @@ class SourceIndividualApiClient {
       `${this.basePath(factoryId)}/${encodeURIComponent(id)}`
     );
     return this.unwrap(response, '获取个体档案');
+  }
+
+  /** 详情: 本体 + 系谱 + 去向。读不到 data 就抛 —— 与 getById 同一条纪律。 */
+  async getDetail(id: string, factoryId?: string): Promise<SourceIndividualDetail> {
+    const response = await apiClient.get<ApiEnvelope<SourceIndividualDetail>>(
+      `${this.basePath(factoryId)}/${encodeURIComponent(id)}/detail`
+    );
+    return this.unwrap(response, '获取个体档案详情');
   }
 
   async findByTag(tagNumber: string, factoryId?: string): Promise<SourceIndividualLookupResult> {

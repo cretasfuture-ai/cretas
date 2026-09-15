@@ -100,6 +100,12 @@ export interface ProcessingStageInfo {
  * 后端 DTO 也没有。字段不存在比「记得不要显示」可靠。
  */
 export interface SourceIndividualBrief {
+  /**
+   * 个体档案主键 —— 内部溯源页拿它跳「个体详情」。**公开接口恒为 null**
+   * (与 `LineageNode.nodeId` 同一条纪律: 主键不出公开侧)。
+   * 有它这一行才可点; ⛔ 不要拿 individualCode 兜底。
+   */
+  id?: string | null;
   /** 内部个体编码；公开接口恒为 null。 */
   individualCode?: string | null;
   /** 耳标号；`tagNumberMasked=true` 时只有末 4 位（如 `*********7788`）。 */

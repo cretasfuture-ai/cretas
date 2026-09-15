@@ -69,6 +69,8 @@ const MUST_REGISTER = [
   'TraceabilityDetail',
   'VisionVerify',
   'SourceIndividualForm',
+  // 2026-09-15: 拍照核验「查看档案」与来源链上的个体行都跳这一屏 (FEAT-RN-SOURCE-INDIVIDUAL-DETAIL)。
+  'SourceIndividualDetail',
 ] as const;
 
 /** 四个屏文件 —— 路由名对上了但组件挂错文件，这一层会红。 */
@@ -77,6 +79,7 @@ const MUST_REACH = [
   'screens/traceability/TraceabilityDetailScreen.tsx',
   'screens/shared/VisionVerifyScreen.tsx',
   'screens/shared/SourceIndividualFormScreen.tsx',
+  'screens/shared/SourceIndividualDetailScreen.tsx',
 ];
 
 /** 总览页上的三个入口：testID → 它按下去必须打开的路由。 */

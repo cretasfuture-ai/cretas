@@ -12,9 +12,10 @@
  *    否则「找不到那段文案」在「组件根本没渲染」时同样成立 —— 恒真式。
  */
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 
 import LineageChainTimeline, {
+  INDIVIDUAL_DETAIL_HINT,
   LINEAGE_EMPTY_TEST_ID,
   LINEAGE_EMPTY_TEXT,
   LINEAGE_TIMELINE_TEST_ID,
@@ -23,6 +24,13 @@ import LineageChainTimeline, {
   UNNAMED_NODE_TEXT,
 } from '../../screens/traceability/components/LineageChainTimeline';
 import type { LineageSection } from '../../services/api/traceabilityApiClient';
+
+// 时间线自己会 useNavigation()（内部侧挂了个体的原料行可点进个体详情）。
+// 这里不起 NavigationContainer, 直接桩掉 navigate 并留一个可断言的 mock。
+const mockNavigate = jest.fn();
+jest.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ navigate: mockNavigate, goBack: jest.fn(), push: jest.fn() }),
+}));
 
 const SECTION_TITLE = '来源链'; // 「一定会发生」的那个读数
 
@@ -219,5 +227,75 @@ describe('LineageChainTimeline 三态', () => {
     expect(getByText(UNNAMED_NODE_TEXT)).toBeTruthy();
     // 这条是会红的那一条：把 `node.batchNumber || node.nodeId` 写回去, 屏幕上就会出现 8100。
     expect(queryByText('8100')).toBeNull();
+  });
+});
+
+describe('挂了个体的原料行 → 个体详情', () => {
+  beforeEach(() => mockNavigate.mockClear());
+
+  function lineageWithIndividual(id: string | null): LineageSection {
+    return {
+      rootType: 'PRODUCTION_BATCH',
+      rootId: '8967',
+      maxDepth: 5,
+      nodeCount: 1,
+      sourceIndividualCount: 1,
+      ancestors: [
+        {
+          depth: 1,
+          nodes: [
+            {
+              nodeType: 'MATERIAL_BATCH',
+              nodeId: id ? 'mb-near' : null,
+              batchNumber: 'MB-NEAR-001',
+              name: '整牛',
+              resolved: true,
+              sourceIndividual: {
+                id,
+                // 公开侧: 编码 null、耳标遮住; 内部侧: 全给。两种形状都照后端真实输出。
+                individualCode: id ? 'SL-CATTLE-005' : null,
+                tagNumber: id ? '1100000000005' : '*********0005',
+                tagNumberMasked: !id,
+                species: '牛',
+                breed: '西门塔尔',
+                originFarm: '胜龙一号牧场',
+                dnaVerificationStatus: 'SAMPLED',
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('内部侧（后端给了个体 id）⇒ 行上有「查看个体档案」，按下去 navigate 到 SourceIndividualDetail 并带 id', () => {
+    const { getByTestId, getByText } = render(
+      <LineageChainTimeline lineage={lineageWithIndividual('si-005')} showSupplier />
+    );
+
+    // 「必发生」读数: 个体信息本身渲染出来了 (否则下面找不到链接是恒真式)
+    expect(getByText('西门塔尔 · 胜龙一号牧场 · 已采样')).toBeTruthy();
+    expect(getByTestId('lineage-individual-link-mb-near')).toBeTruthy();
+    expect(getByText(INDIVIDUAL_DETAIL_HINT)).toBeTruthy();
+
+    fireEvent.press(getByTestId('lineage-node-mb-near'));
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith('SourceIndividualDetail', { individualId: 'si-005' });
+  });
+
+  it('公开侧（id 为 null）⇒ 个体信息照常显示，但没有链接、按了也不导航', () => {
+    const { getByText, queryByTestId, getByTestId, queryByText } = render(
+      <LineageChainTimeline lineage={lineageWithIndividual(null)} />
+    );
+
+    // 必发生: 品种/来源场/DNA 仍然显示 —— 这是消费者扫码要看的
+    expect(getByText('西门塔尔 · 胜龙一号牧场 · 已采样')).toBeTruthy();
+    expect(getByText('耳标：*********0005')).toBeTruthy();
+    // 阴性: 没有链接
+    expect(queryByTestId('lineage-individual-link-MB-NEAR-001')).toBeNull();
+    expect(queryByText(INDIVIDUAL_DETAIL_HINT)).toBeNull();
+
+    fireEvent.press(getByTestId('lineage-node-MB-NEAR-001'));
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
