@@ -240,7 +240,7 @@ const TraceabilityDetailScreen: React.FC = () => {
 
   // 标签码与系统码不同时才需要把两个都摆出来并各自贴标签。
   const labelCode = scannedTraceCode?.trim() || null;
-  const showBothCodes = !!labelCode && labelCode !== traceData.traceCode;
+  const showBothCodes = !!labelCode && !!traceData.traceCode && labelCode !== traceData.traceCode;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -251,39 +251,31 @@ const TraceabilityDetailScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        {/* 溯源码
-            🔴 `traceData.traceCode` 是**每次查询现生成**的，不是标签上印的那个码：
-            `TraceabilityServiceImpl#getFullTrace` 第 7 步调 `generateTraceCode(factoryId, batchNumber)`
-            → `EncodingRuleServiceImpl#generateCode(factoryId, "TRACE_CODE", ctx)`：
-              · 工厂配了 TRACE_CODE 编码规则 → 按规则出码并 incrementSequence（所以这个方法不能 readOnly）；
-              · 没配（演示工厂 CATTLE_3701_001 就没配）→ `generateDefaultCode` =
-                `TR-{factoryId}-{yyyyMMdd}-{System.currentTimeMillis() % 10000}`，
-                即真机看到的 `TR-CATTLE_3701_001-20260915-8125`。
-            两条路都**不落库、不与批次绑定**，下拉刷新一次就换一个；`TR-…` 也扫不回来
-            （`TraceabilityController#resolveBatchNumberFromTraceCode` 只认 `TRACE-` 内嵌格式
-            或 `labels.trace_code` 里持久化过的码）。
-            而标签上印的 `TRACE-SL-DEMO-BATCH-V1-SEED01` 是 seed 脚本经 `POST /labels` 写进
-            `labels.trace_code` 的内嵌格式码（`TRACE-{batchNumber}-{后缀}`），才是能扫的那个。
-            ⇒ 有标签码时把两个都摆出来并标「标签码 / 系统码」，否则只标「溯源码」；
-            批次号永远在下面一行，它才是两边共同的锚。 */}
+        {/* 溯源码 = 这个批次已打印标签上的码(后端只读 labels.trace_code, 2026-09-15 起不再现造)。
+            null ⇒ 还没打过标签, 明说「未打印标签」, ⛔ 不显示一个扫不回来的码。
+            `route.params.traceCode`(扫码/输入进来的)与服务端持久化码不同时两个都摆出来。 */}
         <Surface style={styles.traceCodeCard} elevation={2} testID="trace-code-card">
           <View style={styles.traceCodeHeader}>
             <MaterialCommunityIcons name="qrcode" size={24} color={theme.colors.primary} />
             {showBothCodes ? (
               <View style={styles.traceCodeColumn}>
                 <View style={styles.traceCodeRow}>
-                  <Text style={styles.traceCodeLabel}>标签码</Text>
+                  <Text style={styles.traceCodeLabel}>扫入码</Text>
                   <Text style={styles.traceCode} testID="trace-code-label">{labelCode}</Text>
                 </View>
                 <View style={styles.traceCodeRow}>
-                  <Text style={styles.traceCodeLabel}>系统码</Text>
+                  <Text style={styles.traceCodeLabel}>标签码</Text>
                   <Text style={styles.traceCode} testID="trace-code-system">{traceData.traceCode}</Text>
                 </View>
               </View>
-            ) : (
+            ) : traceData.traceCode ? (
               <View style={styles.traceCodeRow}>
                 <Text style={styles.traceCodeLabel}>溯源码</Text>
                 <Text style={styles.traceCode} testID="trace-code-system">{traceData.traceCode}</Text>
+              </View>
+            ) : (
+              <View style={styles.traceCodeRow}>
+                <Text style={styles.traceCodeMissing} testID="trace-code-missing">未打印标签</Text>
               </View>
             )}
           </View>
@@ -680,6 +672,11 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 12,
     color: '#333',
+  },
+  traceCodeMissing: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#999',
   },
   traceCodeBatch: {
     marginTop: 8,

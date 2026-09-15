@@ -14,7 +14,8 @@ import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.repository.ShipmentRecordRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.UserRepository;
-import com.cretas.aims.service.EncodingRuleService;
+import com.cretas.aims.entity.Label;
+import com.cretas.aims.repository.LabelRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,8 +31,6 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,7 +49,7 @@ class TraceabilityServiceImplTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private CustomerRepository customerRepository;
     @Mock private ProcessSheetRowRepository processSheetRowRepository;
-    @Mock private EncodingRuleService encodingRuleService;
+    @Mock private LabelRepository labelRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -114,8 +113,8 @@ class TraceabilityServiceImplTest {
                         }
                         """)
         ));
-        when(encodingRuleService.generateCode(eq(FACTORY), eq("TRACE_CODE"), anyMap()))
-                .thenReturn("TR-F006-TEST");
+        // 没打过标签 ⇒ 溯源码为 null(⛔ 不再现造一个扫不回来的码)
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(9440L)).thenReturn(List.of());
 
         TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "CLK-B-FINAL");
 
@@ -136,7 +135,7 @@ class TraceabilityServiceImplTest {
         TraceabilityDTO.ProcessingStageInfo pack = response.getProcessingStages().get(1);
         assertThat(pack.getStartTime().toLocalDate().toString()).isEqualTo("2026-06-29");
         assertThat(pack.getOutputWeight()).isEqualTo(480.0);
-        assertThat(response.getTraceCode()).isEqualTo("TR-F006-TEST");
+        assertThat(response.getTraceCode()).as("没打过标签就没有溯源码, 不现造").isNull();
     }
 
     private ProcessSheetRow processRow(Long id, Integer order, String processCode, String batchNumber, String payload) {
@@ -150,5 +149,36 @@ class TraceabilityServiceImplTest {
         row.setBatchNumber(batchNumber);
         row.setRowPayload(payload);
         return row;
+    }
+
+    @Test
+    @DisplayName("trace code is the persisted label code (newest label wins), never a generated one")
+    void getFullTrace_traceCodeComesFromPersistedLabel() {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(9441L);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("SL-DEMO-BATCH-V1");
+        batch.setProductTypeId("sku-final");
+        batch.setProductName("酱牛肉");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "SL-DEMO-BATCH-V1"))
+                .thenReturn(Optional.of(batch));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+
+        Label older = new Label();
+        older.setTraceCode("TRACE-SL-DEMO-BATCH-V1-OLD");
+        older.setCreatedAt(LocalDateTime.parse("2026-09-14T10:00:00"));
+        Label newer = new Label();
+        newer.setTraceCode("TRACE-SL-DEMO-BATCH-V1-SEED01");
+        newer.setCreatedAt(LocalDateTime.parse("2026-09-15T09:56:09"));
+        Label blank = new Label();  // 没写 traceCode 的标签不算
+        blank.setCreatedAt(LocalDateTime.parse("2026-09-15T12:00:00"));
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(9441L))
+                .thenReturn(List.of(older, blank, newer));
+
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "SL-DEMO-BATCH-V1");
+
+        assertThat(response.getTraceCode())
+                .as("溯源码必须是标签上印的那个(最新一张), 它才扫得回来")
+                .isEqualTo("TRACE-SL-DEMO-BATCH-V1-SEED01");
     }
 }
