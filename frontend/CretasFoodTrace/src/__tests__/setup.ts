@@ -113,9 +113,9 @@ jest.mock('expo-image-picker', () => ({
     canceled: false,
     assets: [{ uri: 'file://mock-image.jpg', width: 100, height: 100 }],
   })),
-  MediaTypeOptions: {
-    Images: 'Images',
-  },
+  // expo-image-picker v16: `mediaTypes` takes a MediaType[] string literal array (e.g. ['images']).
+  // `MediaType` is a pure TS type alias with no runtime export, so the mock needs no enum for it.
+  // The deprecated SDK<=51 enum is no longer referenced anywhere in src (removed 2026-09-15).
 }));
 
 jest.mock('expo-local-authentication', () => ({

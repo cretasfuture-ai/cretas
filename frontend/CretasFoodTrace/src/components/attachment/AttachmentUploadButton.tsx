@@ -55,7 +55,7 @@ export function AttachmentUploadButton({
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.8,
     });
     if (!result.canceled && result.assets[0]) {
@@ -70,7 +70,7 @@ export function AttachmentUploadButton({
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ['images', 'videos'],
       quality: 0.8,
     });
     if (!result.canceled && result.assets[0]) {

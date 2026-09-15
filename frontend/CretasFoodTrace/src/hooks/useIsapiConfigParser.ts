@@ -277,7 +277,7 @@ export function useIsapiConfigParser(): UseIsapiConfigParserReturn {
 
     try {
       const pickerResult = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
         base64: false,
@@ -306,7 +306,7 @@ export function useIsapiConfigParser(): UseIsapiConfigParserReturn {
 
     try {
       const pickerResult = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
         base64: false,
