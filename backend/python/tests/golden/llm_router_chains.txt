@@ -1,33 +1,54 @@
-== chat (len=3)
+== chat (len=6)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
-== simple_text (len=3)
+== simple_text (len=6)
    2026-09-13  aistore/Qwen3-32B
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
-== insights (len=3)
+== insights (len=6)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
-== chart (len=4)
+== chart (len=7)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-09-13  aistore/Qwen3-235B-A22B
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
-== mapper (len=3)
+== mapper (len=6)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
-== reasoning (len=3)
+== reasoning (len=6)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
 == vl (len=3)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== review (len=3)
+== review (len=6)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air

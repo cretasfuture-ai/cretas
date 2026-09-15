@@ -229,9 +229,15 @@ def test_review_still_reaches_a_non_aliyun_floor_after_aliyun_exhausts():
         #       自动重新开始守那一半。
         return
     last_aliyun_idx = max(aliyun_idx)
-    first_floor_idx = min(chain.index(p) for p in non_aliyun)
-    assert first_floor_idx > last_aliyun_idx, (
-        "non-aliyun floor precedes an aliyun pair -- floor should be the "
+    # 2026-09-15: aliyun 三个 VL 账号被放进 _TEXT_TAIL 当文本地板(到期日 None), 于是
+    # 「aliyun 条目」不再等于「有到期日的 grant」—— 带日期的非 aliyun 头(aistore/deepseek)
+    # 会排在它们前面, 那是排序规则的正确结果, 不是漂移。这里守的不变量收窄成本意:
+    # 钉死在最后一位的非 aliyun 地板(zhipu, 见 _TEXT_TAIL 注释)必须仍在**所有** aliyun 之后。
+    tail_floor = llm_router._TEXT_TAIL[-1]
+    assert tail_floor[0] not in llm_router._ALIYUN_ACCOUNTS, "结构地板必须是非 aliyun"
+    assert tail_floor in chain, f"REVIEW 链丢了结构地板 {tail_floor}"
+    assert chain.index(tail_floor) > last_aliyun_idx, (
+        "structural non-aliyun floor precedes an aliyun pair -- floor should be the "
         "structural tail (None expiry -> _FAR_FUTURE)"
     )
 
