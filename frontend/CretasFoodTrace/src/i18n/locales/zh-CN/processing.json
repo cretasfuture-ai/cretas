@@ -1344,6 +1344,8 @@
       "registerNew": "登记新个体",
       "aiPreliminary": "AI 初评 · 需人工复核",
       "cut": "分割部位",
+      "cutUnknown": "没认出部位（切成方块或薄片后看不出整块形状）",
+      "cutConfidence": "对部位的把握 {{value}}%",
       "marbling": "脂肪分布评分（1-5）",
       "foreignObject": "疑似异物",
       "contamination": "疑似污染",

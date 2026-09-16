@@ -254,3 +254,44 @@ describe('⑦ 每个交互元素都有 accessibilityLabel', () => {
     }
   });
 });
+
+describe('⑧ 肉品卡：把握程度只跟着「认出来的部位」走', () => {
+  // 2026-09-16 实测: 方块 cut=null 而模型自报 confidence 0.98, 卡片上「分割部位 —」紧挨着
+  // 「把握程度 98%」, 老板会读成「98% 确定」。数字是真的, 放的位置让它撒谎。
+  const meat = (cut: string | null, confidence: number): VisionVerifyOutcome => ({
+    ok: true,
+    result: {
+      templateCode: 'MEAT_CUT',
+      confidence,
+      normalizedTagNumber: null,
+      fields: { cut, marblingScore: 5, foreignObjectSuspected: false, contaminationSuspected: false, notes: null },
+    } as never,
+  });
+
+  it('部位认出了 ⇒ 显示「分割部位 眼肉」+「对部位的把握 95%」', async () => {
+    mockVerify.mockResolvedValueOnce(meat('眼肉', 0.95));
+    const { getByTestId, getByText, queryByTestId, queryByText } = render(<VisionVerifyScreen />);
+    fireEvent.press(getByTestId('vision-template-MEAT_CUT'));
+    await shoot(getByTestId);
+    await waitFor(() => expect(getByTestId('vision-meat-cut-card')).toBeTruthy());
+    expect(getByText('眼肉')).toBeTruthy();
+    expect(getByText('对部位的把握 95%')).toBeTruthy();
+    expect(queryByTestId('vision-cut-unknown')).toBeNull();
+    // 老文案「把握程度 95%」不再出现 —— 它读起来像整体准确率
+    expect(queryByText(/^把握程度/)).toBeNull();
+  });
+
+  it('对照：部位没认出 ⇒ 明说「没认出部位」，⛔ 不显示 — 也不显示任何百分比', async () => {
+    mockVerify.mockResolvedValueOnce(meat(null, 0.98));
+    const { getByTestId, queryByTestId, queryByText } = render(<VisionVerifyScreen />);
+    fireEvent.press(getByTestId('vision-template-MEAT_CUT'));
+    await shoot(getByTestId);
+    await waitFor(() => expect(getByTestId('vision-meat-cut-card')).toBeTruthy());
+    expect(getByTestId('vision-cut-unknown')).toBeTruthy();
+    expect(queryByTestId('vision-confidence')).toBeNull();
+    expect(queryByText(/98%/)).toBeNull();
+    expect(queryByText(/把握/)).toBeNull();
+    // 必发生: 脂肪评分那一行仍在 —— 否则「没有百分比」也可能是整张卡没渲染
+    expect(queryByText('脂肪分布评分（1-5）')).toBeTruthy();
+  });
+});

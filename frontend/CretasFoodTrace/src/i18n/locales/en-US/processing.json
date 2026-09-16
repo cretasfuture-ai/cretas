@@ -1346,6 +1346,8 @@
       "registerNew": "Register new individual",
       "aiPreliminary": "AI pre-assessment - human review required",
       "cut": "Cut",
+      "cutUnknown": "Cut not identified (cubes or slices hide the whole-cut shape)",
+      "cutConfidence": "Confidence in the cut: {{value}}%",
       "marbling": "Marbling score (1-5)",
       "foreignObject": "Foreign object suspected",
       "contamination": "Contamination suspected",
