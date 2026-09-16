@@ -482,7 +482,26 @@ export default function VisionVerifyScreen() {
               >
                 {t('sourceIndividual.vision.aiPreliminary')}
               </Chip>
-              <Field label={t('sourceIndividual.vision.cut')} value={asText(result.fields?.cut)} />
+              {/* 部位认出了才有「对部位的把握」这个数; 没认出(方块/薄片看不出整块形状)就明说,
+                  ⛔ 不显示「—」也不显示一个跟部位无关的 95%。
+                  2026-09-16 实测: 方块 cut=null 而模型自报 confidence 0.98, 卡片上「分割部位 —」
+                  紧挨着「把握程度 98%」, 老板会读成「98% 确定」—— 数字是真的, 放的位置让它撒谎。 */}
+              {asText(result.fields?.cut) ? (
+                <>
+                  <Field label={t('sourceIndividual.vision.cut')} value={asText(result.fields?.cut)} />
+                  {typeof result.confidence === 'number' && (
+                    <Text variant="bodyMedium" style={[mutedStyle, { marginTop: spacing.xs }]} testID="vision-confidence">
+                      {t('sourceIndividual.vision.cutConfidence', {
+                        value: Math.round(result.confidence * 100),
+                      })}
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <Text variant="bodyMedium" style={[mutedStyle, { marginTop: spacing.xs }]} testID="vision-cut-unknown">
+                  {t('sourceIndividual.vision.cutUnknown')}
+                </Text>
+              )}
               <Field
                 label={t('sourceIndividual.vision.marbling')}
                 value={asText(result.fields?.marblingScore)}
@@ -495,13 +514,6 @@ export default function VisionVerifyScreen() {
                 label={t('sourceIndividual.vision.contamination')}
                 value={asFlag(result.fields?.contaminationSuspected, t)}
               />
-              {typeof result.confidence === 'number' && (
-                <Text variant="bodyMedium" style={[mutedStyle, { marginTop: spacing.s }]} testID="vision-confidence">
-                  {t('sourceIndividual.vision.confidence', {
-                    value: Math.round(result.confidence * 100),
-                  })}
-                </Text>
-              )}
               {!!asText(result.fields?.notes) && (
                 <Text variant="bodyMedium" style={[mutedStyle, { marginTop: spacing.s }]}>
                   {asText(result.fields?.notes)}
