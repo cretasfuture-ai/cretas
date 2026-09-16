@@ -52,6 +52,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `organizer` - Thin-Opus Organizer 多模型编排（顶层入口，核心）
 - `multi-model-dispatch` - 模型/effort/orchestration 三轴路由 + 分发卡
 - `server-operations` - 服务器运维（服务器目录结构/systemd/日志/凭证/部署）
+- `contract-drafting` - 对外合同/保密协议/合作方案/排他协议的起草、审计与出包（拍板流程 + 中文合同文字标准 + audit/build 工具）
 
 ## 规则（`.claude/rules/`）
 
