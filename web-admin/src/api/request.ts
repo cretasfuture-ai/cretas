@@ -7,6 +7,7 @@ import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosRequ
 import { ApiResponse, ApiError } from '@/types/api';
 import type { ApiData } from '@/types/api';
 import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
+import { currentActionId } from '@/utils/activityTracker';
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
@@ -190,6 +191,9 @@ request.interceptors.request.use(
       config.headers['Authorization'] = `Bearer ${token}`;
     }
     config.headers['X-Correlation-ID'] = correlationIdFrom(config.headers) || newCorrelationId();
+    config.headers['X-Activity-Client'] = 'web-admin';
+    const clientActionId = currentActionId();
+    if (clientActionId) config.headers['X-Client-Action-ID'] = clientActionId;
 
     // FormData 时删除 Content-Type，让浏览器自动设置 multipart/form-data
     if (config.data instanceof FormData) {

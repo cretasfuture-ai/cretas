@@ -75,6 +75,9 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
             "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/restaurant-agent/runs"
                     + "(?:/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
                     + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/cancel)?$");
+    // Activity collection writes only the diagnostic timeline, never ERP business records.
+    private static final Pattern ACTIVITY_COLLECTION_POST = Pattern.compile(
+            "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/activity-events$");
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
@@ -99,7 +102,8 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
         // 写方法: PUT/PATCH/DELETE 一律拦; POST 放行读取/分析类.
         String uri = request.getRequestURI();
         if ("POST".equals(method)) {
-            if (READ_ONLY_RESTAURANT_AGENT_POST.matcher(uri).matches()) {
+            if (READ_ONLY_RESTAURANT_AGENT_POST.matcher(uri).matches()
+                    || ACTIVITY_COLLECTION_POST.matcher(uri).matches()) {
                 return true;
             }
             for (String allow : READ_POST_ALLOW) {

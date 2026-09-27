@@ -22,6 +22,7 @@ on:
       - '.github/workflows/java-full-nightly.yml'
       - 'scripts/ci/java-test-ratchet.py'
       - 'scripts/ci/run-with-test-postgres.sh'
+      - 'scripts/ci/test-activity-events-migration.sh'
 
 concurrency:
   group: java-pr-gate-${{ github.event.pull_request.number }}
@@ -139,7 +140,7 @@ jobs:
 
   postgres-reversal-concurrency:
     runs-on: [self-hosted, cretas, java]
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -239,6 +240,9 @@ jobs:
             -Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest,InventoryAuditTransactionContractTest \
             -Dspring.profiles.active=test \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
+
+      - name: Prove activity event migration and committed JDBC writes
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash "$GITHUB_WORKSPACE/scripts/ci/test-activity-events-migration.sh"
 
   final-full-suite:
     if: ${{ contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}

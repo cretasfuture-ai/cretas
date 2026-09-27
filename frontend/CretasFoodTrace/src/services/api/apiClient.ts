@@ -3,6 +3,7 @@ import { StorageService } from '../storage/storageService';
 import { API_BASE_URL } from '../../constants/config';
 import { useAuthStore } from '../../store/authStore';
 import { logger } from '../../utils/logger';
+import { currentActionId } from '../activityTracker';
 
 // 创建ApiClient专用logger
 const apiLogger = logger.createContextLogger('ApiClient');
@@ -52,6 +53,11 @@ class ApiClient {
         } else {
           apiLogger.warn('SecureStore中未找到Token');
         }
+        config.headers['X-Activity-Client'] = 'app';
+        config.headers['X-Correlation-ID'] = config.headers['X-Correlation-ID'] ||
+          (globalThis.crypto?.randomUUID?.() || `corr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+        const clientActionId = currentActionId();
+        if (clientActionId) config.headers['X-Client-Action-ID'] = clientActionId;
         return config;
       },
       (error) => Promise.reject(error)
