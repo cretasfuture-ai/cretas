@@ -1,12 +1,11 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-09-14 22:30（登记胜龙/六膳门血缘闭环两条线 + 预留 Flyway _42/_43；其余未动）
+**最后更新**：2026-09-27 14:35（归档 OBS-ACTIVITY-TIMELINE-20260927；其余未动）
 **上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
 
 ## 在飞任务
 
-- `OBS-ACTIVITY-TIMELINE-20260927` — `in-progress` — Owner: Codex — Base `4f708720ed12ea1b9938358735a29aba03f791d5` — App/Web 操作、API 结果与业务审计关联的租户时间线；scope: audit/activity、filter、前端 tracker/操作日志页、Flyway _45、目标测试/CI。待隔离 PG/JDBC、PR 与发布回读。
 
 
 
