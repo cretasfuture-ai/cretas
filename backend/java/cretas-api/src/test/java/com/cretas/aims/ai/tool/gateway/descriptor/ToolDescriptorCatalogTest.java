@@ -23,10 +23,12 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(584);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(585);
         assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(569);
-        assertThat(statistics.total()).isEqualTo(584);
+        assertThat(statistics.total()).isEqualTo(585);
         assertThat(statistics.legacy()).isEqualTo(569);
+        // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
+        // 总数 584 → 585，LEGACY_INFERRED 不变。
         // 2026-08-27: 579 → 584 (+5, legacy 计数不变 — 全部落在 EXPLICIT 一侧)。
         // 这是一个**复合**delta, 至少叠加了两类已分别 merge 的改动:
         //   (a) 新增 EXPLICIT/REVIEW_REQUIRED 工具, 已逐个查过源码 getAccessMode() 与清册一致
@@ -37,10 +39,10 @@ class ToolDescriptorCatalogTest {
         //   restaurant_peak_hours_gold 的 getAccessMode() 缺失已由 #186 修复(改的是
         //   GoldBackedRestaurantTool.java 基类声明, 不改 YAML), 与本次计数变化无关。
         // ⚠️ 不逐工具手工拆分 (a)/(b) 对每个桶的贡献 —— 下面这组数字取自
-        //   ToolDescriptorInventoryDriftTest(逐字段比对源码 584 个工具与清册, 该闸独立通过)
+        //   ToolDescriptorInventoryDriftTest(逐字段比对源码 585 个工具与清册, 该闸独立通过)
         //   跑出的真实统计, 不是手推算出来的, 避免编造一个自洽但不准的归因。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 444L,
+                ToolExecutor.ActionType.READ, 445L,
                 ToolExecutor.ActionType.WRITE, 61L,
                 ToolExecutor.ActionType.UPDATE, 26L,
                 ToolExecutor.ActionType.DELETE, 11L,
@@ -48,7 +50,7 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 509L,
+                ToolExecutor.RiskLevel.LOW, 510L,
                 ToolExecutor.RiskLevel.MEDIUM, 67L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
@@ -57,10 +59,10 @@ class ToolDescriptorCatalogTest {
         // / RuntimeToolPolicyLoaderTest 同步更新。requiresPermission 41 → 44 (+3): 同上 (b) 的重新分类。
         assertThat(statistics.previewSupported()).isEqualTo(37);
         assertThat(statistics.requiresPermission()).isEqualTo(44);
-        // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5, 新工具落 REVIEW_REQUIRED);
+        // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 558L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 559L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 17L,
                 ToolGovernanceStatus.APPROVED, 9L,
                 ToolGovernanceStatus.WAIVED, 0L));

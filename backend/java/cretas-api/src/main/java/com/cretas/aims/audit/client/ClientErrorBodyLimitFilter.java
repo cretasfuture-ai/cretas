@@ -23,11 +23,12 @@ import java.nio.charset.StandardCharsets;
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 final class ClientErrorBodyLimitFilter extends OncePerRequestFilter {
     static final int MAX_BODY_BYTES = 8 * 1024;
+    static final int MAX_ACTIVITY_BYTES = 64 * 1024;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         return !"POST".equalsIgnoreCase(request.getMethod())
-                || !request.getRequestURI().matches("/api/mobile/[A-Za-z0-9_-]{1,64}/client-errors");
+                || !request.getRequestURI().matches("/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/(client-errors|activity-events)");
     }
 
     @Override
@@ -36,12 +37,13 @@ final class ClientErrorBodyLimitFilter extends OncePerRequestFilter {
         // Mark before binding so malformed or oversized telemetry cannot be mistaken for a
         // failed business mutation by the generic mobile operation auditor.
         com.cretas.aims.audit.RequestAuditSupport.markExplicitAudit(request);
-        if (request.getContentLengthLong() > MAX_BODY_BYTES) {
+        int limit = request.getRequestURI().endsWith("/activity-events") ? MAX_ACTIVITY_BYTES : MAX_BODY_BYTES;
+        if (request.getContentLengthLong() > limit) {
             response.sendError(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
             return;
         }
-        byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
-        if (body.length > MAX_BODY_BYTES) {
+        byte[] body = request.getInputStream().readNBytes(limit + 1);
+        if (body.length > limit) {
             response.sendError(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
             return;
         }

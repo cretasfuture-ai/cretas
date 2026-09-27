@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import com.cretas.aims.audit.RequestAuditSupport;
+import com.cretas.aims.audit.activity.ActivityEventRecorder;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.UUID;
 
@@ -38,6 +40,8 @@ import java.util.UUID;
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class CorrelationIdFilter implements Filter {
+    @Autowired(required = false)
+    private ActivityEventRecorder activityEventRecorder;
 
     public static final String CORRELATION_ID_HEADER = "X-Correlation-ID";
     public static final String MDC_CORRELATION_ID = "correlationId";
@@ -79,6 +83,13 @@ public class CorrelationIdFilter implements Filter {
         } finally {
             if (RequestAuditSupport.isMobileApi(request)) {
                 int status = failure == null ? response.getStatus() : 500;
+                if (activityEventRecorder != null) {
+                    try {
+                        activityEventRecorder.recordApi(request, status, elapsedMillis(startedAt));
+                    } catch (Exception auditFailure) {
+                        log.error("activity_event_record_failed type={}", auditFailure.getClass().getSimpleName());
+                    }
+                }
                 log.info("request_audit phase={} method={} route={} status={} businessSuccess={} responseError={} errorCode={} elapsedMs={} correlation={} authenticated={} userId={} username={} factoryId={}",
                         request.isAsyncStarted() ? "async_dispatch" : "response",
                         RequestAuditSupport.safeToken(request.getMethod(), 16),

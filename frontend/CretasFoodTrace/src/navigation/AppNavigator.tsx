@@ -43,6 +43,7 @@ import BossNavigator from "./BossNavigator";
 import { isRestaurant } from "../utils/factoryType";
 import WarehouseWorkerNavigator from "./WarehouseWorkerNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { beginTouch, endTouch, logScreen, startActivityTracker } from '../services/activityTracker';
 
 const Stack = createNativeStackNavigator();
 
@@ -209,6 +210,7 @@ export function AppNavigator() {
 
   // App启动时恢复工厂特性配置（防止persist恢复后权限绕过）
   useEffect(() => {
+    startActivityTracker();
     if (isAuthenticated && user && !featuresLoaded) {
       const factoryId = getFactoryId(user);
       if (factoryId) {
@@ -222,7 +224,14 @@ export function AppNavigator() {
 
   return (
     <PaperProvider theme={theme}>
-      <NavigationContainer ref={navigationRef}>
+      <View style={{ flex: 1 }} onTouchStart={beginTouch} onTouchEnd={endTouch}>
+      <NavigationContainer ref={navigationRef} onReady={() => {
+        const current = navigationRef.getCurrentRoute();
+        if (current) logScreen(current.name);
+      }} onStateChange={() => {
+        const current = navigationRef.getCurrentRoute();
+        if (current) logScreen(current.name);
+      }}>
         <Stack.Navigator screenLayout={screenErrorBoundary}
           screenOptions={{
             headerShown: false,
@@ -267,6 +276,7 @@ export function AppNavigator() {
           )}
         </Stack.Navigator>
       </NavigationContainer>
+      </View>
     </PaperProvider>
   );
 }

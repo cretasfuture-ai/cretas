@@ -6,6 +6,7 @@
 
 ## 在飞任务
 
+- `OBS-ACTIVITY-TIMELINE-20260927` — `in-progress` — Owner: Codex — Base `4f708720ed12ea1b9938358735a29aba03f791d5` — App/Web 操作、API 结果与业务审计关联的租户时间线；scope: audit/activity、filter、前端 tracker/操作日志页、Flyway _45、目标测试/CI。待隔离 PG/JDBC、PR 与发布回读。
 
 
 

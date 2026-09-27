@@ -172,6 +172,7 @@
         </el-collapse-item>
       </el-collapse>
     </el-dialog>
+    <ActivityTimeline v-if="canViewActivity" />
   </div>
 </template>
 
@@ -181,6 +182,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { operationLogApi, type OperationLog, type OperationLogFilters } from '@/api/dataCenter';
+import ActivityTimeline from './ActivityTimeline.vue';
 
 const actionLabels: Record<string, string> = { CREATE: '新增', UPDATE: '修改', DELETE: '删除', EXPORT: '导出', IMPORT: '导入', OTHER: '其他操作' };
 const moduleLabels: Record<string, string> = { INVENTORY: '库存变更', FACTORY_API: '业务请求', MATERIAL: '原料', CUSTOMER: '客户', SUPPLIER: '供应商' };
@@ -213,6 +215,9 @@ const fieldLabels: Record<string, string> = {
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
+const canViewActivity = computed(() => !!authStore.factoryId &&
+  ['factory_super_admin', 'permission_admin', 'super_admin', 'platform_admin', 'developer', 'platform_super_admin']
+    .includes(authStore.currentRole));
 
 const loading = ref(false);
 const logs = ref<OperationLog[]>([]);

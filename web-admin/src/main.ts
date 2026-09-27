@@ -116,6 +116,14 @@ async function bootstrap() {
   const router = routerModule.default;
   const { setupRouterGuards } = routerModule;
 
+  const { installActivityTracker } = await import('./utils/activityTracker');
+  installActivityTracker(router, () => ({
+    factoryId: authStore.factoryId,
+    userId: authStore.user?.id,
+    isAuthenticated: authStore.isAuthenticated,
+    accessToken: localStorage.getItem('cretas_access_token'),
+  }));
+
   setupRouterGuards(router);
   app.use(router);
 
