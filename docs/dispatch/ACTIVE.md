@@ -1,12 +1,11 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-09-27 14:35（归档 OBS-ACTIVITY-TIMELINE-20260927；其余未动）
+**最后更新**：2026-09-28 19:30（归档 BUG-DISPOSAL-UNSHIPPED-BALANCE-20260928；其余未动）
 **上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
 
 ## 在飞任务
 
-- `BUG-DISPOSAL-UNSHIPPED-BALANCE-20260928` — `in-progress` — Owner: Codex — Base `89cf4d97fbda3bc36fc4b62298afbe9f718ecd4e` — 废弃处理只列公司自有且未发/未预留余量，申请与审批防混合批次，并发状态串行；scope: DisposalController/Service、DisposalRecord/FG Repository、Web 废弃页及目标测试。PR #833 待门禁与发布回读。
 
 
 
