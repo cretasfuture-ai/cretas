@@ -7,6 +7,7 @@ import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { useWorkspaceStore } from '@/store/modules/workspace';
 import { get } from '@/api/request';
+import { startVisibleBadgeRefresh } from '@/utils/badgeRefreshTimer';
 import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
@@ -246,11 +247,20 @@ function badgeForItem(item: MenuItem): number | null {
   return taskBadges.badge(item.badgeKey);
 }
 
-let badgeTimer: ReturnType<typeof setInterval> | undefined;
+let stopBadgeTimer: (() => void) | undefined;
 let badgeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-function scheduleBadgeRefresh(): void {
+let badgeRefreshForced = false;
+function scheduleBadgeRefresh(force = false): void {
+  badgeRefreshForced ||= force;
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
-  badgeRefreshTimer = setTimeout(() => { void taskBadges.loadAll(); }, 350);
+  badgeRefreshTimer = setTimeout(() => {
+    const shouldForce = badgeRefreshForced;
+    badgeRefreshForced = false;
+    void taskBadges.loadAll(shouldForce);
+  }, 350);
+}
+function forceBadgeRefresh(): void {
+  scheduleBadgeRefresh(true);
 }
 function refreshBadgesWhenVisible(): void {
   if (document.visibilityState === 'visible') scheduleBadgeRefresh();
@@ -268,15 +278,19 @@ watch(
 watch(() => route.path, () => scheduleBadgeRefresh());
 
 onMounted(() => {
-  badgeTimer = setInterval(() => { void taskBadges.loadAll(); }, 60_000);
-  window.addEventListener('cretas:task-badges-refresh', scheduleBadgeRefresh);
+  stopBadgeTimer = startVisibleBadgeRefresh(
+    () => { void taskBadges.loadAll(); },
+    () => document.visibilityState === 'visible',
+  );
+  window.addEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
   document.addEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 
 onBeforeUnmount(() => {
-  if (badgeTimer) clearInterval(badgeTimer);
+  stopBadgeTimer?.();
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
-  window.removeEventListener('cretas:task-badges-refresh', scheduleBadgeRefresh);
+  badgeRefreshForced = false;
+  window.removeEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
   document.removeEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 

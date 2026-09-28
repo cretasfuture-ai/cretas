@@ -57,8 +57,12 @@ export function countActionableSalesOrders(rows: TableRow[]): number {
 }
 
 export const useTaskBadgeStore = defineStore('taskBadges', () => {
+  const REFRESH_INTERVAL_MS = 5 * 60_000;
   const factoryId = ref('');
   const loading = ref(false);
+  let nextRefreshAt = 0;
+  let loadingFactory = '';
+  let refreshQueued = false;
   const states = reactive<Record<TaskBadgeKey, BadgeState>>({
     salesOrders: { count: 0, available: false },
     warehouseReceiving: { count: 0, available: false },
@@ -74,6 +78,11 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
     const normalized = String(nextFactoryId || '').trim();
     if (factoryId.value === normalized) return;
     factoryId.value = normalized;
+    nextRefreshAt = 0;
+    refreshQueued = false;
+    loading.value = false;
+    loadingFactory = '';
+    loadToken++;
     for (const state of Object.values(states)) {
       state.count = 0;
       state.available = false;
@@ -110,11 +119,17 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
       : 0;
   }
 
-  async function loadAll(): Promise<void> {
+  async function loadAll(force = false): Promise<void> {
     const currentFactoryId = factoryId.value;
     if (!currentFactoryId) return;
+    if (!force && Date.now() < nextRefreshAt) return;
+    if (loading.value && loadingFactory === currentFactoryId) {
+      if (force) refreshQueued = true;
+      return;
+    }
     const token = ++loadToken;
     loading.value = true;
+    loadingFactory = currentFactoryId;
 
     const permission = usePermissionStore();
     const runners: Record<TaskBadgeKey, (fid: string) => Promise<number>> = {
@@ -148,7 +163,14 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
         states[key].available = false;
       }
     });
+    nextRefreshAt = loaders.length === 0 ? 0 : Date.now()
+      + (results.every((result) => result.status === 'fulfilled') ? REFRESH_INTERVAL_MS : 60_000);
     loading.value = false;
+    loadingFactory = '';
+    if (refreshQueued) {
+      refreshQueued = false;
+      void loadAll(true);
+    }
   }
 
   function badge(key?: TaskBadgeKey): number | null {

@@ -407,7 +407,7 @@ function getDisposalReason(row: TableRow): string {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">
+            <el-button v-if="canWrite" data-activity-action="disposal.create.open" type="primary" :icon="Plus" @click="handleCreate">
               新建申请
             </el-button>
           </div>
@@ -474,9 +474,10 @@ function getDisposalReason(row: TableRow): string {
         <el-table-column prop="createdAt" label="申请时间" width="180" :formatter="formatDateTimeCell" />
         <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
+            <el-button data-activity-action="disposal.view" type="primary" link size="small" @click="handleView(row)">查看</el-button>
             <el-button
               v-if="canWrite && row.status === 'PENDING'"
+              data-activity-action="disposal.approve"
               type="success"
               link
               size="small"
@@ -486,6 +487,7 @@ function getDisposalReason(row: TableRow): string {
             >批准</el-button>
             <el-button
               v-if="canWrite && row.status === 'PENDING'"
+              data-activity-action="disposal.reject.open"
               type="danger"
               link
               size="small"
@@ -603,7 +605,7 @@ function getDisposalReason(row: TableRow): string {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="dialogLoading" @click="submitDisposal">提交申请</el-button>
+        <el-button data-activity-action="disposal.create.submit" type="primary" :loading="dialogLoading" @click="submitDisposal">提交申请</el-button>
       </template>
     </el-dialog>
 
@@ -633,7 +635,7 @@ function getDisposalReason(row: TableRow): string {
       </el-form>
       <template #footer>
         <el-button @click="rejectDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="actionLoading" @click="submitReject">确认拒绝</el-button>
+        <el-button data-activity-action="disposal.reject.confirm" type="danger" :loading="actionLoading" @click="submitReject">确认拒绝</el-button>
       </template>
     </el-dialog>
   </div>
