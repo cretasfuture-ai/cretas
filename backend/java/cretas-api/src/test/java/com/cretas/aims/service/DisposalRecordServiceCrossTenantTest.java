@@ -15,6 +15,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -519,7 +520,7 @@ class DisposalRecordServiceCrossTenantTest {
     }
 
     @Test
-    void approveDisposal_finishedGoodsBatch_exactAvailable_succeeds_marksDepleted() {
+    void approveDisposal_finishedGoodsBatch_exactFreeBalance_preservesReservedShipmentAndRelease() {
         DisposalRecord r = record(71L, "F006");
         r.setFinishedGoodsBatchId("FG-2");
         r.setDisposalQuantity(new BigDecimal("70.00"));    // 恰好等于 available(70) → 扣空
@@ -534,14 +535,54 @@ class DisposalRecordServiceCrossTenantTest {
 
         service.approveDisposal("F006", 71L, 7, "财务", FINANCE_ROLE);
 
-        // produced: 100 - 70 = 30; available = 30 - 20 - 10 = 0 → DEPLETED
+        // produced: 100 - 70 = 30; the remaining 10 units are reserved physical goods.
         assertThat(batch.getProducedQuantity()).isEqualByComparingTo("30.0000");
         assertThat(batch.getAvailableQuantity()).isEqualByComparingTo("0.0000");
-        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEPLETED);
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        FinishedGoodsBatchSaleabilityGuard.assertSaleable(batch, "batchId");
+        // Order cancellation releases the reservation without changing status.
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        assertThat(batch.getAvailableQuantity()).isEqualByComparingTo("10.0000");
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         verify(fgBatchRepo).save(batch);
         verify(fgAdjustmentLogRepo).save(any());
         assertThat(r.getActualLoss()).isEqualByComparingTo("560.00");   // 70 × 8
         assertThat(r.getStatus()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void approveDisposal_finishedGoodsBatch_noPhysicalRemainder_marksDepleted() {
+        DisposalRecord r = record(711L, "F006");
+        r.setFinishedGoodsBatchId("FG-PHYSICAL-EMPTY");
+        r.setDisposalQuantity(new BigDecimal("80.00"));
+        FinishedGoodsBatch batch = fgBatch("FG-PHYSICAL-EMPTY", "F006",
+                new BigDecimal("100.0000"), new BigDecimal("20.0000"),
+                BigDecimal.ZERO, BigDecimal.ONE);
+        when(repo.findById(711L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-PHYSICAL-EMPTY")).thenReturn(Optional.of(batch));
+        when(repo.save(any(DisposalRecord.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.approveDisposal("F006", 711L, 7, "财务", FINANCE_ROLE);
+        assertThat(batch.getProducedQuantity()).isEqualByComparingTo("20.0000");
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEPLETED);
+    }
+
+    @Test
+    void approveDisposal_finishedGoodsBatch_preservesFrozenStatusWhileReservedStockRemains() {
+        DisposalRecord r = record(712L, "F006");
+        r.setFinishedGoodsBatchId("FG-FROZEN");
+        r.setDisposalQuantity(new BigDecimal("70.00"));
+        FinishedGoodsBatch batch = fgBatch("FG-FROZEN", "F006",
+                new BigDecimal("100.0000"), new BigDecimal("20.0000"),
+                new BigDecimal("10.0000"), BigDecimal.ONE);
+        batch.setStatus(FinishedGoodsBatch.Status.FROZEN);
+        when(repo.findById(712L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-FROZEN")).thenReturn(Optional.of(batch));
+        when(repo.save(any(DisposalRecord.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.approveDisposal("F006", 712L, 7, "财务", FINANCE_ROLE);
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.FROZEN);
+        assertThat(batch.getAvailableQuantity()).isEqualByComparingTo("0.0000");
     }
 
     @Test

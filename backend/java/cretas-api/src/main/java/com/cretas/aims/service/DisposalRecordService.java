@@ -374,7 +374,11 @@ public class DisposalRecordService implements IDisposalRecordService {
             finishedGoodsAdjustmentLogRepository.save(logEntry);
 
             fgBatch.setProducedQuantity(afterProduced);
-            if (fgBatch.isDepleted()) {
+            // Reserved goods are still physically present. A zero free balance must not
+            // hide them from shipment, or keep them hidden after reservation release.
+            BigDecimal shipped = fgBatch.getShippedQuantity() != null
+                    ? fgBatch.getShippedQuantity() : BigDecimal.ZERO;
+            if (afterProduced.subtract(shipped).signum() <= 0) {
                 fgBatch.setStatus(FinishedGoodsBatch.Status.DEPLETED);
             }
             finishedGoodsBatchRepository.save(fgBatch);
