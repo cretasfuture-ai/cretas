@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
@@ -14,6 +15,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -50,10 +52,16 @@ class DisposalRecordServiceCrossTenantTest {
     @BeforeEach
     void setUp() {
         repo = mock(DisposalRecordRepository.class);
+        when(repo.findByIdAndFactoryIdForUpdate(any(), any())).thenAnswer(call ->
+                repo.findById(call.getArgument(0)).filter(record ->
+                        record.getFactoryId().equals(call.getArgument(1))));
         materialBatchRepo = mock(MaterialBatchRepository.class);
         adjustmentRepo = mock(MaterialBatchAdjustmentRepository.class);
         productionBatchRepo = mock(ProductionBatchRepository.class);
         fgBatchRepo = mock(FinishedGoodsBatchRepository.class);
+        when(fgBatchRepo.findByIdAndFactoryIdForUpdate(any(), any())).thenAnswer(call ->
+                fgBatchRepo.findById(call.getArgument(0)).filter(batch ->
+                        batch.getFactoryId().equals(call.getArgument(1))));
         fgAdjustmentLogRepo = mock(FinishedGoodsAdjustmentLogRepository.class);
         service = new DisposalRecordService(repo, materialBatchRepo, adjustmentRepo, productionBatchRepo,
                 fgBatchRepo, fgAdjustmentLogRepo);
@@ -104,6 +112,23 @@ class DisposalRecordServiceCrossTenantTest {
         assertThat(r.getIsApproved()).isFalse();              // 不扣库存
         assertThat(r.getStatus()).isEqualTo("REJECTED");
         assertThat(r.getRejectReason()).isEqualTo("证据不足");
+    }
+
+    @Test
+    void rejectedRecordCannotBeEditedDeletedOrSubmittedAgain() {
+        DisposalRecord r = record(58L, "F006");
+        r.reject(1, "财务", "证据不足");
+        when(repo.findById(58L)).thenReturn(Optional.of(r));
+        assertThatThrownBy(() -> service.updateDisposalRecord("F006", 58L, new DisposalRecord()))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+        assertThatThrownBy(() -> service.deleteDisposalRecord("F006", 58L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+        assertThatThrownBy(() -> service.submitForApproval(58L, "F006", 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+        verify(repo, never()).save(any());
     }
 
     @Test
@@ -429,6 +454,36 @@ class DisposalRecordServiceCrossTenantTest {
     }
 
     @Test
+    void approveDisposal_legacyMixedTargetsCannotDeductEitherInventory() {
+        DisposalRecord r = record(69L, "F006");
+        r.setMaterialBatchId("MB-1");
+        r.setFinishedGoodsBatchId("FG-1");
+        r.setDisposalQuantity(BigDecimal.ONE);
+        when(repo.findById(69L)).thenReturn(Optional.of(r));
+        assertThatThrownBy(() -> service.approveDisposal("F006", 69L, 7, "财务", FINANCE_ROLE))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(422));
+        verify(materialBatchRepo, never()).save(any());
+        verify(fgBatchRepo, never()).save(any());
+    }
+
+    @Test
+    void approveDisposal_customerOwnedFinishedGoodsCannotDeductInventory() {
+        DisposalRecord r = record(690L, "F006");
+        r.setFinishedGoodsBatchId("FG-CUSTOMER");
+        r.setDisposalQuantity(BigDecimal.ONE);
+        FinishedGoodsBatch batch = fgBatch("FG-CUSTOMER", "F006", BigDecimal.TEN,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ONE);
+        batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        when(repo.findById(690L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-CUSTOMER")).thenReturn(Optional.of(batch));
+        assertThatThrownBy(() -> service.approveDisposal("F006", 690L, 7, "财务", FINANCE_ROLE))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+        verify(fgBatchRepo, never()).save(any());
+    }
+
+    @Test
     void approveDisposal_finishedGoodsBatch_deductsAvailable_writesLog_andActualLoss() {
         DisposalRecord r = record(70L, "F006");
         r.setFinishedGoodsBatchId("FG-1");
@@ -465,7 +520,7 @@ class DisposalRecordServiceCrossTenantTest {
     }
 
     @Test
-    void approveDisposal_finishedGoodsBatch_exactAvailable_succeeds_marksDepleted() {
+    void approveDisposal_finishedGoodsBatch_exactFreeBalance_preservesReservedShipmentAndRelease() {
         DisposalRecord r = record(71L, "F006");
         r.setFinishedGoodsBatchId("FG-2");
         r.setDisposalQuantity(new BigDecimal("70.00"));    // 恰好等于 available(70) → 扣空
@@ -480,14 +535,54 @@ class DisposalRecordServiceCrossTenantTest {
 
         service.approveDisposal("F006", 71L, 7, "财务", FINANCE_ROLE);
 
-        // produced: 100 - 70 = 30; available = 30 - 20 - 10 = 0 → DEPLETED
+        // produced: 100 - 70 = 30; the remaining 10 units are reserved physical goods.
         assertThat(batch.getProducedQuantity()).isEqualByComparingTo("30.0000");
         assertThat(batch.getAvailableQuantity()).isEqualByComparingTo("0.0000");
-        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEPLETED);
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        FinishedGoodsBatchSaleabilityGuard.assertSaleable(batch, "batchId");
+        // Order cancellation releases the reservation without changing status.
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        assertThat(batch.getAvailableQuantity()).isEqualByComparingTo("10.0000");
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         verify(fgBatchRepo).save(batch);
         verify(fgAdjustmentLogRepo).save(any());
         assertThat(r.getActualLoss()).isEqualByComparingTo("560.00");   // 70 × 8
         assertThat(r.getStatus()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void approveDisposal_finishedGoodsBatch_noPhysicalRemainder_marksDepleted() {
+        DisposalRecord r = record(711L, "F006");
+        r.setFinishedGoodsBatchId("FG-PHYSICAL-EMPTY");
+        r.setDisposalQuantity(new BigDecimal("80.00"));
+        FinishedGoodsBatch batch = fgBatch("FG-PHYSICAL-EMPTY", "F006",
+                new BigDecimal("100.0000"), new BigDecimal("20.0000"),
+                BigDecimal.ZERO, BigDecimal.ONE);
+        when(repo.findById(711L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-PHYSICAL-EMPTY")).thenReturn(Optional.of(batch));
+        when(repo.save(any(DisposalRecord.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.approveDisposal("F006", 711L, 7, "财务", FINANCE_ROLE);
+        assertThat(batch.getProducedQuantity()).isEqualByComparingTo("20.0000");
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEPLETED);
+    }
+
+    @Test
+    void approveDisposal_finishedGoodsBatch_preservesFrozenStatusWhileReservedStockRemains() {
+        DisposalRecord r = record(712L, "F006");
+        r.setFinishedGoodsBatchId("FG-FROZEN");
+        r.setDisposalQuantity(new BigDecimal("70.00"));
+        FinishedGoodsBatch batch = fgBatch("FG-FROZEN", "F006",
+                new BigDecimal("100.0000"), new BigDecimal("20.0000"),
+                new BigDecimal("10.0000"), BigDecimal.ONE);
+        batch.setStatus(FinishedGoodsBatch.Status.FROZEN);
+        when(repo.findById(712L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-FROZEN")).thenReturn(Optional.of(batch));
+        when(repo.save(any(DisposalRecord.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.approveDisposal("F006", 712L, 7, "财务", FINANCE_ROLE);
+        assertThat(batch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.FROZEN);
+        assertThat(batch.getAvailableQuantity()).isEqualByComparingTo("0.0000");
     }
 
     @Test

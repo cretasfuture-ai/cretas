@@ -13,6 +13,7 @@ import {
   getBatchNumber,
   getQuantityDisplay
 } from './disposalReadback';
+import { disposalAvailableQuantity, isEligibleFinishedGoods } from './eligibleFinishedGoods';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -43,6 +44,7 @@ const disposalForm = ref({
 const actionLoading = ref(false);
 const batches = ref<TableRow[]>([]);           // 原料批次 (MaterialBatch)
 const fgBatches = ref<TableRow[]>([]);          // R12: 成品批次 (FinishedGoodsBatch)
+const fgLoading = ref(false);
 
 // R12: 当前报损对象对应的批次下拉数据源。
 const currentBatches = computed<TableRow[]>(() =>
@@ -56,7 +58,7 @@ const selectedBatchMax = computed<number | null>(() => {
   const b = currentBatches.value.find((x) => x.id === disposalForm.value.batchId);
   if (!b) return null;
   const avail = disposalForm.value.targetType === 'FINISHED'
-    ? ((b.availableQuantity ?? b.producedQuantity) as number | undefined)
+    ? disposalAvailableQuantity(b)
     : ((b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined);
   return typeof avail === 'number' ? avail : null;
 });
@@ -65,12 +67,12 @@ const selectedBatchMax = computed<number | null>(() => {
 function handleTargetTypeChange() {
   disposalForm.value.batchId = '';
   disposalForm.value.quantity = 0;
+  if (disposalForm.value.targetType === 'FINISHED') loadFgBatches();
 }
 
 onMounted(() => {
   loadData();
   loadBatches();
-  loadFgBatches();
 });
 
 async function loadData() {
@@ -116,19 +118,23 @@ async function loadBatches() {
   }
 }
 
-// R12: 加载可售成品批次 (FinishedGoodsBatch) 供成品报损选择。
+// 加载可报损成品余量；接口排除已发货、预留占用和已撤回的部分。
 async function loadFgBatches() {
   if (!factoryId.value) return;
+  fgLoading.value = true;
+  fgBatches.value = [];
   try {
-    const response = await get(`/${factoryId.value}/sales/finished-goods`, {
-      params: { status: 'AVAILABLE', size: 100 }
-    });
-    if (response.success && response.data) {
-      fgBatches.value = response.data.content || response.data || [];
+    const response = await get(`/${factoryId.value}/disposal-records/eligible-finished-goods`);
+    if (response.success && Array.isArray(response.data)) {
+      fgBatches.value = response.data.filter(isEligibleFinishedGoods);
+    } else {
+      ElMessage.error(response.message || '加载成品批次列表失败');
     }
   } catch (error: any) {
     console.error('加载成品批次列表失败:', error);
     if (!error?.actionHint) ElMessage.error('加载成品批次列表失败');
+  } finally {
+    fgLoading.value = false;
   }
 }
 
@@ -171,6 +177,11 @@ async function submitDisposal() {
   // 防呆: 字段级提示, 明确告诉用户缺哪个 (不再笼统 "请填写完整信息")
   if (!disposalForm.value.batchId) {
     ElMessage.warning('请选择批次');
+    return;
+  }
+  if (disposalForm.value.targetType === 'FINISHED'
+      && (selectedBatchMax.value == null || selectedBatchMax.value <= 0)) {
+    ElMessage.warning('该成品批次已无可报损余量，请刷新后重新选择');
     return;
   }
   if (!disposalForm.value.disposalType) {
@@ -537,13 +548,14 @@ function getDisposalReason(row: TableRow): string {
           </el-radio-group>
         </el-form-item>
         <el-form-item label="批次" required>
-          <el-select v-model="disposalForm.batchId" placeholder="选择批次" style="width: 100%">
-            <!-- R12: 成品批次显批次号 + 产品名 + 可用量 (防呆 Rule 1 显边界); 原料批次显批次号 + 物料名。 -->
+          <el-select v-model="disposalForm.batchId" placeholder="选择批次" style="width: 100%"
+            :loading="disposalForm.targetType === 'FINISHED' && fgLoading">
+            <!-- 成品只显示可报损余量，不展示已发货量；原料批次显批次号 + 物料名。 -->
             <el-option
               v-for="item in currentBatches"
               :key="item.id"
               :label="disposalForm.targetType === 'FINISHED'
-                ? `${item.batchNumber} - ${item.productName || item.productTypeName || '成品'} (可用 ${item.availableQuantity ?? item.producedQuantity ?? 0})`
+                ? `${item.batchNumber} - ${item.productName || '成品'} (可报损余量 ${item.availableQuantity} ${item.unit || ''})`
                 : `${item.batchNumber} - ${item.materialName || item.materialTypeName || '物料'}`"
               :value="item.id"
             />

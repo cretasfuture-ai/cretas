@@ -60,6 +60,8 @@ class DisposalWorkflowIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(disposalRecordRepository.findByIdAndFactoryIdForUpdate(any(), any()))
+                .thenAnswer(call -> disposalRecordRepository.findById(call.getArgument(0)));
         service = new DisposalRecordService(disposalRecordRepository, materialBatchRepository,
                 materialBatchAdjustmentRepository, productionBatchRepository,
                 finishedGoodsBatchRepository, finishedGoodsAdjustmentLogRepository);
