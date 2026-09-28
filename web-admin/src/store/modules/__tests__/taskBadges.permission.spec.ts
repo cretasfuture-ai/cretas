@@ -28,6 +28,7 @@ vi.mock('@/store/modules/permission', () => ({
 }));
 
 import { useTaskBadgeStore } from '../taskBadges';
+import { startVisibleBadgeRefresh } from '@/utils/badgeRefreshTimer';
 
 const okPage = (content: unknown[]) => ({
   success: true,
@@ -35,7 +36,10 @@ const okPage = (content: unknown[]) => ({
 });
 
 describe('taskBadges — 没权限的模块不发请求', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     setActivePinia(createPinia());
     getMock.mockReset().mockResolvedValue(okPage([]));
@@ -131,6 +135,42 @@ describe('taskBadges — 没权限的模块不发请求', () => {
     now.mockReturnValue(61_001);
     await store.loadAll();
     expect(getMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('可见侧栏在首次加载后六分钟内刷新，隐藏时暂停', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T00:00:00Z'));
+    canAccessMock.mockReturnValue(true);
+    const store = useTaskBadgeStore();
+    store.setFactory('F006');
+    let visible = true;
+    const stop = startVisibleBadgeRefresh(() => { void store.loadAll(); }, () => visible);
+    await vi.advanceTimersByTimeAsync(10_000); // Initial response lands after the timer starts.
+    await store.loadAll();
+    expect(getMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 10_000);
+    expect(getMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getMock).toHaveBeenCalledTimes(2);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(getMock).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('可见侧栏的失败请求在一分钟后自动重试', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T00:00:00Z'));
+    canAccessMock.mockReturnValue(true);
+    getMock.mockRejectedValue(new Error('unavailable'));
+    const store = useTaskBadgeStore();
+    store.setFactory('F006');
+    const stop = startVisibleBadgeRefresh(() => { void store.loadAll(); }, () => true);
+    await store.loadAll();
+    expect(getMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getMock).toHaveBeenCalledTimes(2);
+    stop();
   });
 
   it('切换工厂时丢弃旧请求结果并立即读取新工厂', async () => {

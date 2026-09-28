@@ -7,6 +7,7 @@ import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { useWorkspaceStore } from '@/store/modules/workspace';
 import { get } from '@/api/request';
+import { startVisibleBadgeRefresh } from '@/utils/badgeRefreshTimer';
 import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
@@ -246,7 +247,7 @@ function badgeForItem(item: MenuItem): number | null {
   return taskBadges.badge(item.badgeKey);
 }
 
-let badgeTimer: ReturnType<typeof setInterval> | undefined;
+let stopBadgeTimer: (() => void) | undefined;
 let badgeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let badgeRefreshForced = false;
 function scheduleBadgeRefresh(force = false): void {
@@ -277,15 +278,16 @@ watch(
 watch(() => route.path, () => scheduleBadgeRefresh());
 
 onMounted(() => {
-  badgeTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') void taskBadges.loadAll();
-  }, 5 * 60_000);
+  stopBadgeTimer = startVisibleBadgeRefresh(
+    () => { void taskBadges.loadAll(); },
+    () => document.visibilityState === 'visible',
+  );
   window.addEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
   document.addEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 
 onBeforeUnmount(() => {
-  if (badgeTimer) clearInterval(badgeTimer);
+  stopBadgeTimer?.();
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
   badgeRefreshForced = false;
   window.removeEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
