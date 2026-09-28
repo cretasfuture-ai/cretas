@@ -699,25 +699,25 @@ onUnmounted(() => {
     </header>
 
     <nav class="workspace-tabs">
-      <button v-for="tab in navigationTabs" :key="tab.id" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">{{ tab.label }}</button>
+      <button v-for="tab in navigationTabs" :key="tab.id" :data-activity-action="`storage.tab.${tab.id}`" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">{{ tab.label }}</button>
     </nav>
 
     <section v-if="activeTab === 'locations'" class="workspace-body">
       <aside class="zone-sidebar">
-        <div class="section-heading"><h2>储存区域</h2><el-button v-if="canEditLayout" :icon="Plus" circle size="small" aria-label="添加储存区域" title="添加储存区域" @click="openZoneDialog" /></div>
+        <div class="section-heading"><h2>储存区域</h2><el-button v-if="canEditLayout" data-activity-action="storage.add-zone" :icon="Plus" circle size="small" aria-label="添加储存区域" title="添加储存区域" @click="openZoneDialog" /></div>
         <div v-for="zone in layout.zones" :key="zone.id" class="zone-row" :class="{ selected: zone.id === selectedZoneId }">
-          <button class="zone-main" @click="selectedZoneId = zone.id">
+          <button class="zone-main" data-activity-action="storage.select-zone" @click="selectedZoneId = zone.id">
             <span class="zone-prefix" :style="{ background: zone.color }">{{ zone.prefix }}</span>
             <span>{{ zone.name }}</span><small>{{ layout.locations.filter(item => item.zoneId === zone.id).length }}</small>
           </button>
-          <el-button v-if="canEditLayout" class="row-remove" link :icon="Delete" :aria-label="`删除区域 ${zone.name}`" :title="`删除区域 ${zone.name}`" @click.stop="removeZone(zone)" />
+          <el-button v-if="canEditLayout" class="row-remove" data-activity-action="storage.delete-zone" link :icon="Delete" :aria-label="`删除区域 ${zone.name}`" :title="`删除区域 ${zone.name}`" @click.stop="removeZone(zone)" />
         </div>
         <el-empty v-if="!layout.zones.length" description="暂无区域" :image-size="70" />
       </aside>
 
       <div class="primary-panel">
         <div class="section-heading"><h2>{{ activeZone?.name || '储存位置' }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" placeholder="搜索位置" clearable /><el-button v-if="canEditLayout" type="primary" :icon="Plus" @click="openLocationDialog">添加位置</el-button></div></div>
-        <div class="location-grid"><article v-for="location in visibleLocations" :key="location.id" class="location-card"><div class="card-top"><strong>{{ location.code }}</strong><span class="card-top-right"><span>{{ countAt(location.code).length }} 批</span><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`删除位置 ${location.code}`" :title="`删除位置 ${location.code}`" @click="removeLocation(location)" /></span></div><div>{{ location.name }}</div><small class="muted">{{ location.notes || (countAt(location.code).length ? `${new Set(countAt(location.code).map(item => item.name)).size} 种物料` : '空闲') }}</small></article></div>
+        <div class="location-grid"><article v-for="location in visibleLocations" :key="location.id" class="location-card"><div class="card-top"><strong>{{ location.code }}</strong><span class="card-top-right"><span>{{ countAt(location.code).length }} 批</span><el-button v-if="canEditLayout" data-activity-action="storage.delete-location" link :icon="Delete" :aria-label="`删除位置 ${location.code}`" :title="`删除位置 ${location.code}`" @click="removeLocation(location)" /></span></div><div>{{ location.name }}</div><small class="muted">{{ location.notes || (countAt(location.code).length ? `${new Set(countAt(location.code).map(item => item.name)).size} 种物料` : '空闲') }}</small></article></div>
         <el-empty v-if="!visibleLocations.length" description="暂无储存位置" :image-size="90" />
       </div>
     </section>
@@ -735,7 +735,7 @@ onUnmounted(() => {
         <div>
           <el-radio-group v-model="selectedFloorId"><el-radio-button v-for="floor in layout.floors" :key="floor.id" :value="floor.id">{{ floor.name }}</el-radio-button></el-radio-group>
           <el-button v-if="canEditLayout" link :icon="Plus" @click="addFloor">楼层</el-button>
-          <el-button v-if="canEditLayout && activeFloor" link :icon="Delete" :aria-label="`删除${activeFloor.name}`" :title="`删除${activeFloor.name}`" @click="removeFloor(activeFloor)" />
+          <el-button v-if="canEditLayout && activeFloor" data-activity-action="storage.delete-floor" link :icon="Delete" :aria-label="`删除${activeFloor.name}`" :title="`删除${activeFloor.name}`" @click="removeFloor(activeFloor)" />
         </div>
         <div class="toolbar">
           <el-select v-model="selectedZoneId" placeholder="选择区域"><el-option v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`" :value="zone.id" /></el-select>
@@ -815,7 +815,7 @@ onUnmounted(() => {
             <small class="muted">点一下按默认位置放上去，或全屏后用「区域」笔在图上拖出它的实际位置。</small>
           </div>
           <template v-if="activeRack">
-            <div class="section-heading"><h2>{{ activeRack.name }}</h2><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`删除${activeRack.name}`" :title="`删除${activeRack.name}`" @click="removeRack(activeRack)" /></div>
+            <div class="section-heading"><h2>{{ activeRack.name }}</h2><el-button v-if="canEditLayout" data-activity-action="storage.delete-rack" link :icon="Delete" :aria-label="`删除${activeRack.name}`" :title="`删除${activeRack.name}`" @click="removeRack(activeRack)" /></div>
             <span class="muted">{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || '未归属区域' }} · {{ activeRack.levels }} 层</span>
             <div class="shelf-stack">
               <div v-for="level in Array.from({ length: activeRack.levels }, (_, index) => activeRack!.levels - index)" :key="level" class="shelf-level">

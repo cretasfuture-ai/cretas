@@ -256,7 +256,7 @@ async function handleDelete(row: SourceIndividual) {
         <h2>源头个体档案</h2>
         <p>溯源链最前端的个体（物种由「物种」字段表达，本页面不绑定任何单一物种）</p>
       </div>
-      <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">
+      <el-button v-if="canWrite" data-activity-action="source-individual.create.open" type="primary" :icon="Plus" @click="handleCreate">
         登记个体
       </el-button>
     </div>
@@ -307,8 +307,8 @@ async function handleDelete(row: SourceIndividual) {
         <el-table-column prop="originFarm" label="来源养殖场" min-width="110" show-overflow-tooltip />
         <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-button data-activity-action="source-individual.edit.open" link type="primary" @click="handleEdit(row)">编辑</el-button>
+            <el-button data-activity-action="source-individual.delete" link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -431,7 +431,7 @@ async function handleDelete(row: SourceIndividual) {
       </el-form>
       <template #footer>
         <el-button @click="drawerVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSubmit">保存</el-button>
+        <el-button data-activity-action="source-individual.save" type="primary" :loading="saving" @click="handleSubmit">保存</el-button>
       </template>
     </el-drawer>
   </div>

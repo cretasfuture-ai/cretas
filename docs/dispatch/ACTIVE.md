@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `OPT-LOG-INSIGHTS-20260928` — `in-progress` — Owner: Codex — Base `a1cf6a2e7babac3272206c13dd2d11d0c8d4c80f` — 修复全局动态任务重复配置、减少 Web 角标轮询和补齐操作按钮标识；scope: scheduler 迁移/测试、角标 API/Web、activityTracker/Web 关键操作及目标测试；验收为 JPA 启动、Web 测试、生产只读回读。
+
 
 
 

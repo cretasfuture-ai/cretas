@@ -7,6 +7,18 @@ type ActivityEvent = { source: Source; action: string; route: string; detail?: D
 type Auth = { factoryId: string; userId: number | string | undefined; isAuthenticated: boolean; accessToken?: string | null };
 
 const SAFE = /^[A-Za-z0-9_.:-]{1,128}$/;
+// Exact UI verbs only. Never derive an event name from arbitrary button text or form data.
+const CONTROL_VERBS: Record<string, string> = {
+  '搜索': 'search', '查询': 'search', '重置': 'reset', '刷新': 'refresh',
+  '新建': 'create', '新增': 'create', '添加': 'add', '添加位置': 'add-location',
+  '编辑': 'edit', '查看': 'view', '删除': 'delete', '保存': 'save',
+  '取消': 'cancel', '确认': 'confirm', '提交': 'submit', '提交申请': 'submit-request',
+  '确认拒绝': 'confirm-reject', '审批': 'approve', '通过': 'approve', '驳回': 'reject',
+  '导入': 'import', '导出': 'export', '盘点任务': 'stocktake-tasks',
+  '发起盘点': 'start-stocktake', '调整位置': 'move-location',
+  '添加货架': 'add-rack', '绑定位置': 'bind-location',
+  '应用到配置': 'apply-layout', '退出全屏': 'exit-fullscreen',
+};
 const DETAIL_KEYS = new Set(['field', 'result', 'reason', 'component', 'disabled',
   'count', 'length', 'status', 'entityType', 'entityId', 'unit', 'quantity', 'role']);
 const queue: ActivityEvent[] = [];
@@ -82,11 +94,18 @@ function onClick(event: MouseEvent): void {
   if (!control) return;
   const explicit = control.getAttribute('data-activity-action') || control.getAttribute('data-testid')
     || control.getAttribute('aria-label') || control.getAttribute('name');
-  const action = explicit && SAFE.test(explicit) ? explicit : `control.${control.tagName.toLowerCase()}`;
+  const action = resolveControlAction(control, explicit);
   actionId = uuid();
   actionAt = Date.now();
   enqueue('click', action, { component: control.tagName.toLowerCase(),
     disabled: control.hasAttribute('disabled') || control.getAttribute('aria-disabled') === 'true' });
+}
+
+export function resolveControlAction(control: Element, explicit?: string | null): string {
+  if (explicit && SAFE.test(explicit)) return explicit;
+  const label = control.textContent?.trim().replace(/\s+/g, '');
+  const verb = label ? CONTROL_VERBS[label] : undefined;
+  return verb ? `control.${verb}` : `control.${control.tagName.toLowerCase()}`;
 }
 
 function onPointerDown(event: PointerEvent): void {
@@ -96,7 +115,7 @@ function onPointerDown(event: PointerEvent): void {
   const control = target.closest('button,[role="button"]');
   if (!control || (!control.hasAttribute('disabled') && control.getAttribute('aria-disabled') !== 'true')) return;
   const explicit = control.getAttribute('data-activity-action') || control.getAttribute('data-testid');
-  const action = explicit && SAFE.test(explicit) ? explicit : `control.${control.tagName.toLowerCase()}`;
+  const action = resolveControlAction(control, explicit);
   actionId = uuid();
   actionAt = Date.now();
   enqueue('click', action, { component: control.tagName.toLowerCase(), disabled: true });
