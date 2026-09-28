@@ -37,6 +37,7 @@ import java.util.stream.Collectors;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -67,6 +68,11 @@ public class DisposalRecordService implements IDisposalRecordService {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
 
+    /** Damaged/expired/QC-held goods can be scrapped while physical free stock remains. */
+    private static final Set<String> DISPOSAL_ELIGIBLE_FG_STATUSES = Set.of(
+            FinishedGoodsBatch.Status.AVAILABLE, FinishedGoodsBatch.Status.DEFECTIVE,
+            FinishedGoodsBatch.Status.EXPIRED, FinishedGoodsBatch.Status.FROZEN);
+
     /** SP12 §5.3: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
@@ -77,6 +83,9 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     @Transactional
     public DisposalRecord createDisposalRecord(DisposalRecord record) {
+        if (record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
+            assertFinishedGoodsDisposalBalance(record);
+        }
         // 设置默认值
         if (record.getDisposalDate() == null) {
             record.setDisposalDate(LocalDateTime.now());
@@ -86,6 +95,39 @@ public class DisposalRecordService implements IDisposalRecordService {
         }
         log.info("创建报废记录: 工厂={}, 类型={}", record.getFactoryId(), record.getDisposalType());
         return hydrateReadback(disposalRecordRepository.save(record));
+    }
+
+    /** The selector uses the same free-stock definition as approval: produced - shipped - reserved. */
+    @Transactional(readOnly = true)
+    public List<EligibleFinishedGoodsBatch> getEligibleFinishedGoods(String factoryId) {
+        return finishedGoodsBatchRepository.findDisposalEligibleByFactoryId(
+                        factoryId, DISPOSAL_ELIGIBLE_FG_STATUSES).stream()
+                .map(batch -> new EligibleFinishedGoodsBatch(batch.getId(), batch.getBatchNumber(),
+                        batch.getProductName(), batch.getUnit(), batch.getAvailableQuantity()))
+                .toList();
+    }
+
+    public record EligibleFinishedGoodsBatch(String id, String batchNumber, String productName,
+                                              String unit, BigDecimal availableQuantity) {}
+
+    private void assertFinishedGoodsDisposalBalance(DisposalRecord record) {
+        FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(record.getFinishedGoodsBatchId())
+                .orElseThrow(() -> new BusinessException(404, "报损成品批次不存在"));
+        if (record.getFactoryId() == null || !record.getFactoryId().equals(batch.getFactoryId())) {
+            throw new BusinessException(403, "无权操作该成品批次");
+        }
+        BigDecimal quantity = record.getDisposalQuantity();
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new BusinessException(422, "报损数量必须大于0");
+        }
+        BigDecimal available = batch.getAvailableQuantity();
+        if (batch.getStatus() == null || !DISPOSAL_ELIGIBLE_FG_STATUSES.contains(batch.getStatus())
+                || available == null || available.signum() <= 0
+                || quantity.compareTo(available) > 0) {
+            throw new BusinessException(409, "成品批次可报损余量不足，已发货和已预留数量不可报损")
+                    .withHint("请刷新批次列表并只选择未发货、未预留的余量")
+                    .withHintTarget("disposalQuantity");
+        }
     }
 
     /**
@@ -265,6 +307,10 @@ public class DisposalRecordService implements IDisposalRecordService {
             if (fgBatch.getFactoryId() == null || !fgBatch.getFactoryId().equals(record.getFactoryId())) {
                 throw new BusinessException(403, "无权操作该成品批次")
                         .withHint("批次不属于当前工厂");
+            }
+
+            if (fgBatch.getStatus() == null || !DISPOSAL_ELIGIBLE_FG_STATUSES.contains(fgBatch.getStatus())) {
+                throw new BusinessException(409, "成品批次当前不可报损，请刷新库存状态");
             }
 
             BigDecimal available = fgBatch.getAvailableQuantity() != null
@@ -499,6 +545,10 @@ public class DisposalRecordService implements IDisposalRecordService {
         }
         if (updateData.getNotes() != null) {
             existing.setNotes(updateData.getNotes());
+        }
+
+        if (existing.getFinishedGoodsBatchId() != null && !existing.getFinishedGoodsBatchId().isBlank()) {
+            assertFinishedGoodsDisposalBalance(existing);
         }
 
         log.info("更新报废记录: id={}", id);

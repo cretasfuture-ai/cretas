@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `BUG-DISPOSAL-UNSHIPPED-BALANCE-20260928` — `in-progress` — Owner: Codex — Base `89cf4d97fbda3bc36fc4b62298afbe9f718ecd4e` — 废弃处理成品筛选只列真实可用余量，提交与审批阻止已发/已预留数量；scope: DisposalController/Service、FG 查询、Web 废弃页及目标测试。待 PR、发布回读。
+
 
 
 

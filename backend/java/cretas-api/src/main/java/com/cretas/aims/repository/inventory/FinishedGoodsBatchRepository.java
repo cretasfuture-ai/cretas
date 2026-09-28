@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 
 import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,6 +19,14 @@ import java.util.Optional;
 public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGoodsBatch, String> {
 
     Page<FinishedGoodsBatch> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
+
+    /** Disposal may consume only stock still physically present and not reserved for an order. */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.status IN :statuses " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
+            "ORDER BY b.createdAt DESC, b.id DESC")
+    List<FinishedGoodsBatch> findDisposalEligibleByFactoryId(@Param("factoryId") String factoryId,
+            @Param("statuses") Collection<String> statuses);
 
     List<FinishedGoodsBatch> findByFactoryIdAndProductTypeIdAndStatus(String factoryId, String productTypeId, String status);
 

@@ -44,6 +44,14 @@ public class DisposalController {
 
     private final DisposalRecordService disposalRecordService;
 
+    @GetMapping("/eligible-finished-goods")
+    @RequirePermission({"warehouse:read_write", "quality:read", "quality:read_write"})
+    @Operation(summary = "废弃申请可选成品批次", description = "仅返回未发货、未预留且可用量大于零的成品余额")
+    public ResponseEntity<?> getEligibleFinishedGoods(@PathVariable String factoryId) {
+        return ResponseEntity.ok(Map.of("success", true,
+                "data", disposalRecordService.getEligibleFinishedGoods(factoryId)));
+    }
+
     /**
      * 获取报废记录列表（分页）
      */
