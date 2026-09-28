@@ -6,12 +6,15 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 报废记录Repository
@@ -23,6 +26,11 @@ import java.util.List;
  */
 @Repository
 public interface DisposalRecordRepository extends JpaRepository<DisposalRecord, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM DisposalRecord d WHERE d.id = :id AND d.factoryId = :factoryId")
+    Optional<DisposalRecord> findByIdAndFactoryIdForUpdate(
+            @Param("id") Long id, @Param("factoryId") String factoryId);
 
     // ===================================================================
     // 基础查询方法
@@ -66,7 +74,7 @@ public interface DisposalRecordRepository extends JpaRepository<DisposalRecord, 
      * 查询待审批的报废记录
      */
     @Query("SELECT d FROM DisposalRecord d WHERE d.factoryId = :factoryId " +
-           "AND d.isApproved = false " +
+           "AND d.approvalStatus = 'PENDING' " +
            "ORDER BY d.disposalDate DESC")
     List<DisposalRecord> findPendingApprovals(@Param("factoryId") String factoryId);
 
@@ -79,6 +87,8 @@ public interface DisposalRecordRepository extends JpaRepository<DisposalRecord, 
      * 统计待审批的报废记录数量
      */
     Long countByFactoryIdAndIsApproved(String factoryId, Boolean isApproved);
+
+    Long countByFactoryIdAndApprovalStatus(String factoryId, String approvalStatus);
 
     /**
      * 根据审批人查询报废记录

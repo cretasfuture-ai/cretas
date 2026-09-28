@@ -2,6 +2,7 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.entity.DisposalRecord;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
@@ -111,5 +112,26 @@ class DisposalFinishedGoodsBalanceTest {
         assertThatThrownBy(() -> service.createDisposalRecord(request("1")))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(409));
+    }
+
+    @Test
+    void mixedMaterialAndFinishedGoodsTargetsAreRejectedBeforeSave() {
+        DisposalRecord record = request("1");
+        record.setMaterialBatchId("MB-1");
+        assertThatThrownBy(() -> service.createDisposalRecord(record))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(422));
+        verify(records, never()).save(any());
+    }
+
+    @Test
+    void customerOwnedFinishedGoodsCannotEnterGeneralDisposal() {
+        FinishedGoodsBatch batch = batch("F006", "10", "0", "0");
+        batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        when(batches.findById("FG-1")).thenReturn(Optional.of(batch));
+        assertThatThrownBy(() -> service.createDisposalRecord(request("1")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(409));
+        verify(records, never()).save(any());
     }
 }

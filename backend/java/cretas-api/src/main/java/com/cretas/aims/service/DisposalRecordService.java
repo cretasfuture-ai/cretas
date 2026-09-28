@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -83,6 +84,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     @Transactional
     public DisposalRecord createDisposalRecord(DisposalRecord record) {
+        assertSingleInventoryTarget(record);
         if (record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
             assertFinishedGoodsDisposalBalance(record);
         }
@@ -121,6 +123,10 @@ public class DisposalRecordService implements IDisposalRecordService {
             throw new BusinessException(422, "报损数量必须大于0");
         }
         BigDecimal available = batch.getAvailableQuantity();
+        if (batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+            throw new BusinessException(409, "客户自有成品不能走通用废弃处理")
+                    .withHint("请先与客户确认处置方式，再联系管理员处理");
+        }
         if (batch.getStatus() == null || !DISPOSAL_ELIGIBLE_FG_STATUSES.contains(batch.getStatus())
                 || available == null || available.signum() <= 0
                 || quantity.compareTo(available) > 0) {
@@ -128,6 +134,22 @@ public class DisposalRecordService implements IDisposalRecordService {
                     .withHint("请刷新批次列表并只选择未发货、未预留的余量")
                     .withHintTarget("disposalQuantity");
         }
+    }
+
+    private void assertSingleInventoryTarget(DisposalRecord record) {
+        if (record.getMaterialBatchId() != null && !record.getMaterialBatchId().isBlank()
+                && record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
+            throw new BusinessException(422, "报废申请不能同时关联原料和成品批次");
+        }
+    }
+
+    private DisposalRecord findForMutation(String factoryId, Long id) {
+        Optional<DisposalRecord> locked = disposalRecordRepository.findByIdAndFactoryIdForUpdate(id, factoryId);
+        if (locked.isPresent()) {
+            return locked.get();
+        }
+        disposalRecordRepository.findById(id).ifPresent(record -> assertSameFactory(record, factoryId));
+        throw new BusinessException(404, "报废记录不存在: " + id);
     }
 
     /**
@@ -197,9 +219,8 @@ public class DisposalRecordService implements IDisposalRecordService {
     public DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId,
             String approverName, String requestRole) {
         assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
-        DisposalRecord record = disposalRecordRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
-        assertSameFactory(record, factoryId);  // 多租户隔离
+        DisposalRecord record = findForMutation(factoryId, id);
+        assertSingleInventoryTarget(record);
 
         // 幂等防重 (2026-06-12, Codex Gate2): 已审批/已拒绝 (终态) 不可重复操作.
         // 审批触发库存扣减, 重复 approve 会重复扣库存. 返 409.
@@ -299,18 +320,30 @@ public class DisposalRecordService implements IDisposalRecordService {
         // 可用量 getAvailableQuantity() = producedQuantity - shippedQuantity - reservedQuantity 把关,
         // 不足 → 409 (不扣成负, 不动已发/已预留部分). 扣空 → 标 DEPLETED.
         if (record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
-            FinishedGoodsBatch fgBatch = finishedGoodsBatchRepository
-                    .findById(record.getFinishedGoodsBatchId())
-                    .orElseThrow(() -> new BusinessException(404,
-                            "报损成品批次不存在: " + record.getFinishedGoodsBatchId()));
+            Optional<FinishedGoodsBatch> lockedBatch = finishedGoodsBatchRepository
+                    .findByIdAndFactoryIdForUpdate(record.getFinishedGoodsBatchId(), record.getFactoryId());
+            if (lockedBatch.isEmpty()) {
+                finishedGoodsBatchRepository.findById(record.getFinishedGoodsBatchId()).ifPresent(batch -> {
+                    if (!record.getFactoryId().equals(batch.getFactoryId())) {
+                        throw new BusinessException(403, "无权操作该成品批次");
+                    }
+                });
+                throw new BusinessException(404, "报损成品批次不存在: " + record.getFinishedGoodsBatchId());
+            }
+            FinishedGoodsBatch fgBatch = lockedBatch.get();
             // 跨租户: 批次必须属于同工厂
             if (fgBatch.getFactoryId() == null || !fgBatch.getFactoryId().equals(record.getFactoryId())) {
                 throw new BusinessException(403, "无权操作该成品批次")
                         .withHint("批次不属于当前工厂");
             }
 
+            if (fgBatch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+                throw new BusinessException(409, "客户自有成品不能走通用废弃处理")
+                        .withHint("请先与客户确认处置方式，再联系管理员处理");
+            }
             if (fgBatch.getStatus() == null || !DISPOSAL_ELIGIBLE_FG_STATUSES.contains(fgBatch.getStatus())) {
-                throw new BusinessException(409, "成品批次当前不可报损，请刷新库存状态");
+                throw new BusinessException(409, "成品批次当前不可报损，请刷新库存状态")
+                        .withHint("请重新选择仍有可报损余量的成品批次");
             }
 
             BigDecimal available = fgBatch.getAvailableQuantity() != null
@@ -408,9 +441,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     public DisposalRecord rejectDisposal(String factoryId, Long id, Integer approverId,
             String approverName, String reason, String requestRole) {
         assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
-        DisposalRecord record = disposalRecordRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
-        assertSameFactory(record, factoryId);  // 多租户隔离
+        DisposalRecord record = findForMutation(factoryId, id);
 
         if (!"PENDING".equals(record.getStatus())) {
             throw new BusinessException(409, "报废记录已处理 (" + record.getStatus() + "), 请勿重复操作")
@@ -474,7 +505,7 @@ public class DisposalRecordService implements IDisposalRecordService {
         Map<String, Object> stats = new HashMap<>();
         
         stats.put("totalCount", disposalRecordRepository.countByFactoryId(factoryId));
-        stats.put("pendingCount", disposalRecordRepository.countByFactoryIdAndIsApproved(factoryId, false));
+        stats.put("pendingCount", disposalRecordRepository.countByFactoryIdAndApprovalStatus(factoryId, "PENDING"));
         
         Double totalQuantity = disposalRecordRepository.calculateTotalDisposalQuantity(factoryId, startDate, endDate);
         stats.put("totalQuantity", totalQuantity != null ? totalQuantity : 0.0);
@@ -513,13 +544,12 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     @Transactional
     public DisposalRecord updateDisposalRecord(String factoryId, Long id, DisposalRecord updateData) {
-        DisposalRecord existing = disposalRecordRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("报废记录不存在: " + id));
-        assertSameFactory(existing, factoryId);  // 多租户隔离
+        DisposalRecord existing = findForMutation(factoryId, id);
 
         // 只能更新未审批的记录
-        if (existing.getIsApproved()) {
-            throw new IllegalStateException("已审批的记录不能修改");
+        if (!"PENDING".equals(existing.getStatus())) {
+            throw new BusinessException(409, "已处理的报废记录不能修改")
+                    .withHint("请查看审批结果，终态记录不能修改");
         }
 
         if (updateData.getDisposalQuantity() != null) {
@@ -599,12 +629,11 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     @Transactional
     public void deleteDisposalRecord(String factoryId, Long id) {
-        DisposalRecord record = disposalRecordRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("报废记录不存在: " + id));
-        assertSameFactory(record, factoryId);  // 多租户隔离
+        DisposalRecord record = findForMutation(factoryId, id);
 
-        if (record.getIsApproved()) {
-            throw new IllegalStateException("已审批的记录不能删除");
+        if (!"PENDING".equals(record.getStatus())) {
+            throw new BusinessException(409, "已处理的报废记录不能删除")
+                    .withHint("请查看审批结果，终态记录不能删除");
         }
 
         record.softDelete();
@@ -618,9 +647,11 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     @Transactional
     public String submitForApproval(Long id, String factoryId, Long userId) {
-        DisposalRecord record = disposalRecordRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
-        assertSameFactory(record, factoryId);  // 多租户隔离 (此前 factoryId 仅用于 workflow context, 未校验归属)
+        DisposalRecord record = findForMutation(factoryId, id);
+        if (!"PENDING".equals(record.getStatus())) {
+            throw new BusinessException(409, "已处理的报废记录不能提交审批")
+                    .withHint("请查看审批结果，终态记录无需再次提交");
+        }
 
         // 幂等防重：已在工作流中则 409
         if (record.getWorkflowInstanceId() != null) {

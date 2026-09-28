@@ -23,6 +23,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     /** Disposal may consume only stock still physically present and not reserved for an order. */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.status IN :statuses " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.createdAt DESC, b.id DESC")
     List<FinishedGoodsBatch> findDisposalEligibleByFactoryId(@Param("factoryId") String factoryId,
