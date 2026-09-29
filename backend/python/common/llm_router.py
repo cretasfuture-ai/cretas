@@ -167,7 +167,8 @@ _d = datetime.date
 _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
     ("aliyun_a_vl", "qwen3.8-27b"):
         "2026-09-29 A 账号生产同源仓库图探针 HTTP 200，3.53s；合法 JSON，"
-        "识别冷藏区、1号货架、入口，usage.image_tokens=402。仅供 warehouse_vl。",
+        "识别冷藏区、1号货架、入口，usage.image_tokens=402。"
+        "但上线后经真实 Java→Python 链路两次识图均漏掉货架，已退出自动候选池。",
     ("aliyun_a_vl", "kimi-k3"):
         "2026-09-29 A 账号生产同源仓库图探针 HTTP 200，3.12s；合法 JSON，"
         "识别冷藏区、1号货架、入口，usage.image_tokens=525。仅供 warehouse_vl。",
@@ -1478,9 +1479,9 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 顺序与模型都由 env 决定(`LLM_VL_ACCOUNTS` / `LLM_VL_MODEL`), 但只能在
     # `_VISION_VERIFIED` 登记过的组合里挑 —— 见 `_vl_pool()` 上方的说明。
     SLOT.VL: _vl_pool(),
-    # 仓库优先使用 A 账号本次带图实测候选；DeepSeek 与原 VL 链继续故障转移。
+    # qwen3.8-27b 直连探针通过，但真实业务链路 0/2 识别货架，故不入自动池。
+    # 仓库优先使用通过补充同图探针的候选；DeepSeek 与原 VL 链继续故障转移。
     SLOT.WAREHOUSE_VL: [
-        ("aliyun_a_vl", "qwen3.8-27b"),
         ("aliyun_a_vl", "kimi-k3"),
         ("aliyun_a_vl", "qwen3.8-max-0902"),
         ("aliyun_a_vl", "deepseek-v4.1-flash"),

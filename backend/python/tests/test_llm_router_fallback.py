@@ -342,13 +342,14 @@ def test_vision_registry_can_actually_reject_something():
 def test_warehouse_vision_uses_only_verified_aliyun_a_models(monkeypatch):
     """仓库优先使用实测带图模型，并保持其它视觉与文本槽的路由。"""
     candidates = [
-        ("aliyun_a_vl", "qwen3.8-27b"),
         ("aliyun_a_vl", "kimi-k3"),
         ("aliyun_a_vl", "qwen3.8-max-0902"),
     ]
+    unreliable = ("aliyun_a_vl", "qwen3.8-27b")
     pair = ("aliyun_a_vl", "deepseek-v4.1-flash")
     warehouse_pairs = [*candidates, pair]
     assert llm_router.SLOT_MODELS[SLOT.WAREHOUSE_VL] == [*warehouse_pairs, *llm_router.SLOT_MODELS[SLOT.VL]]
+    assert unreliable not in llm_router.SLOT_MODELS[SLOT.WAREHOUSE_VL]
     monkeypatch.delenv("LLM_WAREHOUSE_CANDIDATES_ENABLED", raising=False)
     for candidate in candidates:
         assert candidate in llm_router._VISION_VERIFIED
