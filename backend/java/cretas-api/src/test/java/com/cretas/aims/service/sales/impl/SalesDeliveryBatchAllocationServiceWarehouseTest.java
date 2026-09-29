@@ -312,6 +312,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     @Test
     void recommendFifo_blankSource_searchesAllWarehousesExcludingRd() {
         FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        wksBatch.setStorageLocation("LC01");
         when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
                 .thenReturn(List.of(wksBatch));
 
@@ -319,6 +320,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         assertEquals(1, result.size(), "FG in WH-WKS must be discovered under a blank source (bug repro)");
         assertEquals("BATCH-b1", result.get(0).get("batchNumber"));
+        assertEquals("LC01", result.get(0).get("storageLocation"), "拣货提示必须带出实际库位");
         verify(finishedGoodsBatchRepository).findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD");
         verify(warehouseResolver, never()).resolveId(eq(FID), any());
         verify(warehouseResolver, never()).resolveLogisticsId(any());

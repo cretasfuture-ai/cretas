@@ -368,6 +368,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             Map<String, Object> rec = new LinkedHashMap<>();
             rec.put("batchId", batch.getId());
             rec.put("batchNumber", batch.getBatchNumber());
+            rec.put("storageLocation", batch.getStorageLocation());
             rec.put("productionDate", batch.getProductionDate() != null ? batch.getProductionDate().toString() : null);
             rec.put("expireDate", batch.getExpireDate() != null ? batch.getExpireDate().toString() : null);
             // 🔴 UX2: expose the batch's own native unit + the (converted, comparable) available/

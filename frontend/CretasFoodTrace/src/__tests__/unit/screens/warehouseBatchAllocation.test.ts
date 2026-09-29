@@ -94,6 +94,12 @@ describe('发货确认 · 告诉仓管该拿哪一批（信息，不是决定）
     expect(confirm).toMatch(/productionDate[\s\S]{0,120}生产/);
   });
 
+  it('拣货时显示实际库位，未定位的批次明确提示', () => {
+    expect(confirm).toContain('storageLocation: c.storageLocation?.trim() || undefined');
+    expect(confirm).toContain('库位待定位');
+    expect(confirm).toContain('库位 ${p.storageLocation}');
+  });
+
   it('⛔ 仍然只是信息 —— 不给选择、不加操作', () => {
     // 没有任何让他挑批次的控件
     expect(confirm).not.toContain('RadioButton');
