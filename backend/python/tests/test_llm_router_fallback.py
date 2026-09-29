@@ -333,6 +333,25 @@ def test_vision_registry_can_actually_reject_something():
         )
 
 
+def test_warehouse_vision_uses_only_verified_aliyun_a_deepseek(monkeypatch):
+    """仓库专用模型能看图，其它 VL / 文本槽保持原有路由。"""
+    pair = ("aliyun_a_vl", "deepseek-v4.1-flash")
+    assert llm_router.SLOT_MODELS[SLOT.WAREHOUSE_VL] == [pair, *llm_router.SLOT_MODELS[SLOT.VL]]
+    assert pair in llm_router._VISION_VERIFIED
+    assert pair in llm_router._MINIMAL_SAFE_SET
+    monkeypatch.delenv("LLM_WAREHOUSE_V41_ENABLED", raising=False)
+    assert llm_router._refuse_reason(*pair) == "warehouse_v41_not_enabled"
+    monkeypatch.setenv("LLM_WAREHOUSE_V41_ENABLED", "1")
+    assert llm_router._refuse_reason(*pair) is None
+    assert llm_router._apply_slot_params(
+        slot=SLOT.WAREHOUSE_VL, account=pair[0], model=pair[1], payload={"messages": []}
+    )["enable_thinking"] is False
+    assert pair not in llm_router.SLOT_MODELS[SLOT.VL]
+    for slot, pool in llm_router._SLOT_POOLS.items():
+        if slot != SLOT.WAREHOUSE_VL:
+            assert pair not in pool
+
+
 def test_vl_model_is_configurable_but_only_within_the_registry():
     """env 只能在登记表里**挑**, ⛔ 不能凭空注入一个 (账号, 模型)。
 
@@ -467,13 +486,14 @@ _TODAY = llm_router._REGISTRY_AUDIT_DATE  # registry audit date → not stale (�
 # monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
 
-def test_refuse_allows_current_registered_model():
-    """守的是**需求**:「注册过且未到期的模型不该被这道闸拒」。
+def test_refuse_allows_current_registered_model(monkeypatch):
+    """显式启用待确认候选后，注册过且未到期的模型不应被拒。
 
     🔴 2026-08-15 改表达: 原来点名三条 aliyun 条目, 而账号收敛后它们不存在了。
        守的东西没变, 变的是**用什么表达它** —— 改成遍历注册表本身,
        这样以后换任何账号都不会因为「点名的那条没了」而红。
     """
+    monkeypatch.setenv("LLM_WAREHOUSE_V41_ENABLED", "1")
     checked = 0
     for (account, model), expiry in llm_router._SAFE_MODELS.items():
         if expiry is not None and expiry <= _TODAY:
@@ -514,7 +534,8 @@ def test_refuse_denylist_veto():
         del llm_router._SAFE_MODELS[key]
 
 
-def test_staleness_failsafe_narrows_to_minimal_set():
+def test_staleness_failsafe_narrows_to_minimal_set(monkeypatch):
+    monkeypatch.setenv("LLM_WAREHOUSE_V41_ENABLED", "1")
     stale = _TODAY + datetime.timedelta(days=llm_router._REGISTRY_MAX_AGE_DAYS + 1)
     # 守的是**性质**: 超龄时「不在最小集的被拒 / 在最小集的放行」。
     # 🔴 2026-08-15 改表达: 原来点名 aliyun 条目。账号收敛后
@@ -1380,4 +1401,3 @@ def test_vl_accounts_actually_receive_enable_thinking_false():
             f"VL {account}/{model}: enable_thinking 没有下发 (得到 {p.get('enable_thinking')!r})"
             " —— 账号不在 _ALIYUN_ACCOUNTS 里, 模型会默认开思考"
         )
-
