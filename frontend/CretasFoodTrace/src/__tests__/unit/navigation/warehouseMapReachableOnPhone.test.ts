@@ -31,7 +31,8 @@ describe('仓库地图在手机上必须够得着', () => {
 
   it('首页有一个能点到它的入口', () => {
     expect(home).toContain('testID="wh-home-warehouse-map"');
-    expect(home).toContain("navigate('WHLocationManage')");
+    expect(home).toContain("navigate('WHLocationManage', { openMap: true })");
+    expect(locationScreen).toContain('route.params?.openMap');
     expect(home).toContain('accessibilityLabel="查看库位与仓库地图"');
   });
 
