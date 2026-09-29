@@ -238,6 +238,9 @@ async def vision(
     ]
 
     payload: Dict[str, Any] = {"messages": messages}
+    if parsed_slot == SLOT.WAREHOUSE_VL:
+        # 平面图只需要短 JSON，限制单次输出与异常计费；不影响其它拍照业务。
+        payload["max_tokens"] = 2048
     with llm_caller_context("llm_api.vision"):
         return await call_chain(parsed_slot, payload,
                                 timeout=VL_ATTEMPT_TIMEOUT_S,

@@ -199,6 +199,21 @@ class PythonLLMClientUsageLogTest {
     // Helpers
     // ──────────────────────────────────────────────────────────────────────────
 
+    @Test
+    void warehouseVisionUsesDedicatedSlotWhileOtherVisionKeepsVl() throws Exception {
+        String response = "{\"model\":\"deepseek-v4.1-flash\",\"choices\":[{\"message\":{\"content\":\"{}\"}}]}";
+        mockServer.enqueue(new MockResponse().setBody(response).setHeader("Content-Type", "application/json"));
+        mockServer.enqueue(new MockResponse().setBody(response).setHeader("Content-Type", "application/json"));
+
+        assertThat(client.visionChatWarehouse(new byte[] {1, 2}, "image/png", "read map")).isEqualTo("{}");
+        var warehouseRequest = mockServer.takeRequest();
+        assertThat(warehouseRequest.getPath()).isEqualTo("/api/llm/vision");
+        assertThat(warehouseRequest.getBody().readUtf8()).contains("name=\"slot\"", "warehouse_vl");
+
+        assertThat(client.visionChat(new byte[] {1, 2}, "image/png", "read image")).isEqualTo("{}");
+        assertThat(mockServer.takeRequest().getBody().readUtf8()).contains("name=\"slot\"", "\r\nvl\r\n");
+    }
+
     private List<String> captureUsageLogs() {
         return logAppender.list.stream()
                 .filter(e -> e.getFormattedMessage().contains(TAG))

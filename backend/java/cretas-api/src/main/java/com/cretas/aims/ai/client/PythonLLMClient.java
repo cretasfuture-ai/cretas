@@ -567,6 +567,15 @@ public class PythonLLMClient {
      * @return LLM 的文本描述
      */
     public String visionChat(byte[] imageBytes, String contentType, String prompt) {
+        return visionChatWithSlot(imageBytes, contentType, prompt, "vl");
+    }
+
+    /** 仓库平面图专用视觉链；其它拍照识别仍走 vl。 */
+    public String visionChatWarehouse(byte[] imageBytes, String contentType, String prompt) {
+        return visionChatWithSlot(imageBytes, contentType, prompt, "warehouse_vl");
+    }
+
+    private String visionChatWithSlot(byte[] imageBytes, String contentType, String prompt, String slot) {
         if (contentType == null || contentType.isBlank()) {
             contentType = "image/jpeg";
         }
@@ -576,7 +585,7 @@ public class PythonLLMClient {
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("image", "image", imageBody)
                 .addFormDataPart("prompt", prompt)
-                .addFormDataPart("slot", "vl")
+                .addFormDataPart("slot", slot)
                 .build();
 
         Request httpRequest = new Request.Builder()
@@ -592,7 +601,7 @@ public class PythonLLMClient {
             }
             String responseBody = response.body() != null ? response.body().string() : "{}";
             ChatCompletionResponse resp = objectMapper.readValue(responseBody, ChatCompletionResponse.class);
-            logLlmUsage("vl", "/api/llm/vision", resp);
+            logLlmUsage(slot, "/api/llm/vision", resp);
             if (resp.hasError()) {
                 throw new RuntimeException("Python LLM vision 错误: " + resp.getErrorMessage());
             }

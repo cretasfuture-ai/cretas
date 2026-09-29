@@ -43,3 +43,24 @@ def test_vision_endpoint_passes_attempt_and_total_budget_to_call_chain() -> None
     # Java aiServiceHttpClient readTimeout=30s: 级联必须在它之前结束, 单次必须能重试一次。
     assert endpoints.VL_TOTAL_TIMEOUT_S < 30.0
     assert endpoints.VL_ATTEMPT_TIMEOUT_S * 2 <= endpoints.VL_TOTAL_TIMEOUT_S
+
+
+def test_warehouse_vision_slot_reaches_router_with_image() -> None:
+    seen: dict = {}
+
+    async def fake_call_chain(slot, payload, **kw):
+        seen["slot"] = slot
+        seen["content"] = payload["messages"][0]["content"]
+        seen["max_tokens"] = payload.get("max_tokens")
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    with mock.patch.object(endpoints, "call_chain", fake_call_chain):
+        resp = _client().post(
+            "/api/llm/vision",
+            files={"image": ("map.png", io.BytesIO(b"\x89PNG\r\n"), "image/png")},
+            data={"prompt": "仓库平面图 JSON", "slot": "warehouse_vl"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert seen["slot"] == endpoints.SLOT.WAREHOUSE_VL
+    assert seen["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert seen["max_tokens"] == 2048

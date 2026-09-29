@@ -168,6 +168,10 @@ _d = datetime.date
 # ⇒ 换成一张带证据的登记表: 想往 VL 池里加候选, 就得在这里写下探针日期与结论。
 #   值是那条证据本身, ⛔ 不是 True/False —— 布尔值记不住「凭什么」。
 _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
+    ("aliyun_a_vl", "deepseek-v4.1-flash"):
+        "2026-09-29 A 账号生产同源带图探针两次 HTTP 200，分别 2.8s 和 2.0s；"
+        "仓库图原提示词返回合法 JSON，识别冷藏区、1号货架、入口，usage.image_tokens=254。"
+        "仅供 warehouse_vl 专用槽使用，不改变其它拍照识别链。",
     # ── qwen3.8-flash: 三个账号**都**实测通过(2026-09-15) ────────────────────
     # 免费额度按**账号**分开算 ⇒ 三份叠加, 一个账号 403 FreeTierOnly 之后
     # 按现有 NEXT 语义切下一个账号, 拿到的是**另一份**额度而不是同一份。
@@ -245,6 +249,9 @@ def _vl_pool() -> List[Tuple[str, str]]:
     return []
 
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # 2026-09-29 仓库地图专用候选。计费边界待确认；_refuse_reason 默认拒绝，
+    # 只有显式设置 LLM_WAREHOUSE_V41_ENABLED=1 后才会发送请求。
+    ("aliyun_a_vl", "deepseek-v4.1-flash"): None,
     # ── VL (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────────────────
     # 值 = None ⇒ **到期日未知**(不是「永不过期」)。控制台没给这个 SKU 的到期日,
     # 而 `_refuse_reason` 只在 `exp is not None` 时按日期硬丢 ⇒ 这一条不会被
@@ -440,6 +447,8 @@ _THINKING_ONLY: frozenset = frozenset({
 # 瞎猜图片, 同 §9.1 对 VL 到期的处置一致), 不是遗漏。Fail SAFE, not open —— 但
 # "safe" 不承诺"每个槽都有兜底", 只承诺"有兜底的槽兜底的是活的模型"。
 _MINIMAL_SAFE_SET: frozenset = frozenset({
+    # registry 超龄时专用视觉槽也必须保留已核验的候选。
+    ("aliyun_a_vl", "deepseek-v4.1-flash"),
     # AI Store's account-level auto-stop was explicitly confirmed by the owner;
     # these remain admissible when the older shared registry becomes stale, but
     # _refuse_reason still hard-drops all three at their 2026-09-13 expiry.
@@ -743,6 +752,9 @@ def _refuse_reason(account: str, model: str,
         return "registry_stale"          # fail SAFE: only minimal set until re-audit
     if (account, model) not in _SAFE_MODELS:
         return "not_allowlisted"         # not a confirmed-ON model on this account
+    if (account, model) == ("aliyun_a_vl", "deepseek-v4.1-flash"):
+        if os.getenv("LLM_WAREHOUSE_V41_ENABLED") != "1":
+            return "warehouse_v41_not_enabled"  # billing status pending: fail closed
     if model in _PAID_MODEL_DENYLIST:
         return "paid_denylist"           # final veto on known-catastrophic bare names
     exp = _SAFE_MODELS.get((account, model))
@@ -1114,6 +1126,7 @@ class SLOT(str, Enum):
     MAPPER = "mapper"
     REASONING = "reasoning"
     VL = "vl"
+    WAREHOUSE_VL = "warehouse_vl"
     REVIEW = "review"
 
 
@@ -1445,6 +1458,8 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 顺序与模型都由 env 决定(`LLM_VL_ACCOUNTS` / `LLM_VL_MODEL`), 但只能在
     # `_VISION_VERIFIED` 登记过的组合里挑 —— 见 `_vl_pool()` 上方的说明。
     SLOT.VL: _vl_pool(),
+    # 仓库优先用已实测的 A DeepSeek；原视觉链仍可在额度恢复时故障转移。
+    SLOT.WAREHOUSE_VL: [("aliyun_a_vl", "deepseek-v4.1-flash"), *_vl_pool()],
 }
 
 # 绝对置底 —— `_build_chain` 排序键的第 2 位, 优先于能力档/延迟档/到期日。
@@ -1457,7 +1472,7 @@ _ABSOLUTE_LAST: frozenset = frozenset({("zhipu", "glm-4.5-air")})
 # VL 槽不追加文本地板 —— 文本模型看不见图片, 追加只会把「明确失败」变成
 # 「拿一段瞎猜的文字冒充图片理解」。这个集合是 _build_chain 的唯一例外,
 # 也是 test_every_text_slot_has_a_floor 的唯一豁免项。
-_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL})
+_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL})
 
 
 def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
@@ -1581,6 +1596,7 @@ _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
     #    `call_chain` 且不传 thinking ⇒ 它不需要开思考。
     SLOT.REASONING: {"enable_thinking": False},
     SLOT.VL:        {"enable_thinking": False},
+    SLOT.WAREHOUSE_VL: {"enable_thinking": False},
     SLOT.REVIEW:    {"enable_thinking": False},
 }
 
