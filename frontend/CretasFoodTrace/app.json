@@ -2,12 +2,12 @@
   "expo": {
     "name": "白垩纪AI Agent",
     "slug": "CretasFoodTrace",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "runtimeVersion": "1.0.4",
+    "runtimeVersion": "1.0.5",
     "updates": {
       "enabled": true,
       "url": "https://ota.cretaceousfuture.com/api/ota/manifest",

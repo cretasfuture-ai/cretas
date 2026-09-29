@@ -16,14 +16,15 @@ import {
 import { Text, Surface, Button, TouchableRipple, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { warehouseLayoutApiClient, WarehouseLayoutConfiguration } from "../../../services/api/warehouseLayoutApiClient";
 import { requireFactoryId } from '../../../utils/factoryIdHelper';
-import { WarehouseFloorMap } from './WarehouseFloorMap';
-import { warehouseMapExtent } from './warehouseFloorMapModel';
+import { WarehouseMapViewport } from './WarehouseMapViewport';
 import { loadAllWarehouseMaterialBatches } from './warehouseInventoryPages';
 import { handleError } from "../../../utils/errorHandler";
 
@@ -54,8 +55,9 @@ export function WHLocationManageScreen() {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProp<WHInventoryStackParamList, 'WHLocationManage'>>();
-  const { height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const autoOpenedMap = useRef(false);
+  const orientationQueue = useRef<Promise<void>>(Promise.resolve());
 
   // 状态管理
   const [loading, setLoading] = useState(true);
@@ -68,6 +70,23 @@ export function WHLocationManageScreen() {
   const [mapVisible, setMapVisible] = useState(false);
   const [mapFloorId, setMapFloorId] = useState('');
   const [mapRackId, setMapRackId] = useState('');
+  const [orientationError, setOrientationError] = useState(false);
+
+  const lockMapOrientation = useCallback((lock: ScreenOrientation.OrientationLock) => {
+    const next = orientationQueue.current.catch(() => undefined).then(() => ScreenOrientation.lockAsync(lock));
+    orientationQueue.current = next;
+    return next.catch(() => setOrientationError(true));
+  }, []);
+
+  useEffect(() => {
+    void lockMapOrientation(mapVisible
+      ? ScreenOrientation.OrientationLock.DEFAULT
+      : ScreenOrientation.OrientationLock.PORTRAIT_UP);
+  }, [lockMapOrientation, mapVisible]);
+
+  useEffect(() => () => {
+    void lockMapOrientation(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+  }, [lockMapOrientation]);
 
   // 从批次数据计算库位信息
   const loadLocationData = useCallback(async () => {
@@ -161,9 +180,6 @@ export function WHLocationManageScreen() {
 
   const mapFloor = warehouseLayout?.floors.find((floor) => floor.id === mapFloorId);
   const mapRack = mapFloor?.racks.find((rack) => rack.id === mapRackId);
-  const mapViewportHeight = mapFloor
-    ? Math.min(warehouseMapExtent(mapFloor).height, Math.max(220, Math.floor(screenHeight * (mapRack ? 0.35 : 0.5))))
-    : 300;
 
   useEffect(() => {
     if (autoOpenedMap.current || loading || loadError || !route.params?.openMap) return;
@@ -392,6 +408,7 @@ export function WHLocationManageScreen() {
       </ScrollView>
 
       <Modal visible={mapVisible} animationType="slide" supportedOrientations={["portrait", "landscape"]} onRequestClose={() => setMapVisible(false)}>
+        <GestureHandlerRootView style={styles.mapContainer}>
         <SafeAreaView style={styles.mapContainer} edges={['top', 'bottom']}>
           <View style={styles.mapHeader}>
             <TouchableRipple onPress={() => setMapVisible(false)} style={styles.mapCloseButton}
@@ -402,31 +419,31 @@ export function WHLocationManageScreen() {
               <Text style={styles.mapTitle}>仓库平面图</Text>
               <Text style={styles.mapSubtitle}>{mapFloor?.name ?? '选择楼层'} · {mapFloor?.racks.length ?? 0} 个货架</Text>
             </View>
-            <View style={styles.mapHeaderSpacer} />
+            <TouchableRipple onPress={() => { void lockMapOrientation(screenWidth > screenHeight
+              ? ScreenOrientation.OrientationLock.PORTRAIT_UP
+              : ScreenOrientation.OrientationLock.LANDSCAPE); }} style={styles.mapRotateButton}
+              accessibilityRole="button" accessibilityLabel={screenWidth > screenHeight ? '切换竖屏' : '切换横屏'}
+              testID="warehouse-map-rotate">
+              <MaterialCommunityIcons name="screen-rotation" size={24} color="#1F2937" />
+            </TouchableRipple>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.floorTabs}
-            contentContainerStyle={styles.floorTabsContent}>
-            {warehouseLayout?.floors.map((floor) => (
-              <TouchableRipple key={floor.id} onPress={() => { setMapFloorId(floor.id); setMapRackId(''); }}
-                style={[styles.floorTab, floor.id === mapFloorId && styles.floorTabActive]}
-                accessibilityRole="tab" accessibilityState={{ selected: floor.id === mapFloorId }}
-                testID={`warehouse-map-floor-${floor.id}`}>
-                <Text style={[styles.floorTabText, floor.id === mapFloorId && styles.floorTabTextActive]}>{floor.name}</Text>
-              </TouchableRipple>
-            ))}
-          </ScrollView>
-          <View style={styles.mapGuide}>
-            <MaterialCommunityIcons name="gesture-swipe-horizontal" size={21} color="#6B7280" />
-            <Text style={styles.mapGuideText}>左右拖动查看全图，点货架看层位</Text>
-          </View>
-          <ScrollView style={[styles.mapCanvasScroll, { maxHeight: mapViewportHeight }]} nestedScrollEnabled>
-            <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-              {mapFloor && warehouseLayout && <WarehouseFloorMap floor={mapFloor} layout={warehouseLayout}
-                selectedRackId={mapRackId} onSelectRack={setMapRackId} />}
+          {orientationError && <Text style={styles.mapOrientationError}>屏幕方向切换失败，请检查设备设置</Text>}
+          <View style={styles.mapStage}>
+            {mapFloor && warehouseLayout && <WarehouseMapViewport key={mapFloor.id} floor={mapFloor} layout={warehouseLayout}
+              selectedRackId={mapRackId} onSelectRack={setMapRackId} />}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.floorTabs}
+              contentContainerStyle={styles.floorTabsContent}>
+              {warehouseLayout?.floors.map((floor) => (
+                <TouchableRipple key={floor.id} onPress={() => { setMapFloorId(floor.id); setMapRackId(''); }}
+                  style={[styles.floorTab, floor.id === mapFloorId && styles.floorTabActive]}
+                  accessibilityRole="tab" accessibilityState={{ selected: floor.id === mapFloorId }}
+                  testID={`warehouse-map-floor-${floor.id}`}>
+                  <Text style={[styles.floorTabText, floor.id === mapFloorId && styles.floorTabTextActive]}>{floor.name}</Text>
+                </TouchableRipple>
+              ))}
             </ScrollView>
-          </ScrollView>
           {mapRack ? (
-            <View style={styles.mapShelfPanel}>
+            <View style={[styles.mapShelfPanel, screenWidth > screenHeight && styles.mapShelfPanelLandscape]}>
               <View style={styles.mapShelfHeader}>
                 <View style={styles.mapShelfHeaderCopy}>
                   <Text style={styles.mapShelfTitle}>{mapRack.name}</Text>
@@ -449,14 +466,14 @@ export function WHLocationManageScreen() {
               </ScrollView>
             </View>
           ) : (
-            <View style={styles.mapHintPanel}>
-              <MaterialCommunityIcons name={mapFloor?.racks.length ? 'gesture-tap' : 'map-marker-off-outline'} size={22} color="#6B7280" />
-              <Text style={styles.mapHintText}>{mapFloor?.racks.length
-                ? '点选货架，查看每层库位'
-                : '这一层暂无货架；可切换楼层，或请管理员在网页端配置'}</Text>
+            !mapFloor?.racks.length && <View style={styles.mapHintPanel}>
+              <MaterialCommunityIcons name="map-marker-off-outline" size={22} color="#6B7280" />
+              <Text style={styles.mapHintText}>这一层暂无货架；可切换楼层，或请管理员在网页端配置</Text>
             </View>
           )}
+          </View>
         </SafeAreaView>
+        </GestureHandlerRootView>
       </Modal>
     </SafeAreaView>
   );
@@ -646,22 +663,22 @@ const styles = StyleSheet.create({
   mapEntryButton: { marginHorizontal: 16, marginTop: 16, borderRadius: 12, minHeight: 52, justifyContent: 'center' },
   mapUnavailableNotice: { margin: 16, padding: 16, borderRadius: 12, backgroundColor: '#E6F7FF' },
   mapContainer: { flex: 1, backgroundColor: '#F5F5F5' },
+  mapStage: { flex: 1 },
   mapHeader: { minHeight: 68, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   mapCloseButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
   mapHeaderCopy: { flex: 1, alignItems: 'center' },
-  mapHeaderSpacer: { width: 44 },
+  mapRotateButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  mapOrientationError: { color: '#B42318', backgroundColor: '#FFF1F0', paddingHorizontal: 16, paddingVertical: 6, fontSize: 12 },
   mapTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937' },
   mapSubtitle: { marginTop: 2, fontSize: 12, color: '#6B7280' },
-  floorTabs: { flexGrow: 0, maxHeight: 64 },
+  floorTabs: { position: 'absolute', top: 0, left: 0, right: 0, maxHeight: 64 },
   floorTabsContent: { paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center' },
   floorTab: { minWidth: 64, minHeight: 44, paddingHorizontal: 16, marginRight: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB' },
   floorTabActive: { backgroundColor: '#E6F7FF', borderColor: '#1890FF' },
   floorTabText: { fontSize: 14, fontWeight: '600', color: '#6B7280' },
   floorTabTextActive: { color: '#1890FF' },
-  mapGuide: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 18, paddingBottom: 8 },
-  mapGuideText: { fontSize: 13, color: '#6B7280' },
-  mapCanvasScroll: { flex: 1, marginHorizontal: 14, marginBottom: 12, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB' },
-  mapShelfPanel: { marginHorizontal: 14, marginBottom: 14, padding: 14, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB' },
+  mapShelfPanel: { position: 'absolute', bottom: 16, left: 14, right: 14, maxHeight: '45%', padding: 14, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', elevation: 3 },
+  mapShelfPanelLandscape: { top: 8, bottom: 8, left: undefined, width: 320, maxHeight: undefined },
   mapShelfHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   mapShelfHeaderCopy: { flex: 1 },
   mapShelfTitle: { fontSize: 17, fontWeight: '700', color: '#1F2937' },
@@ -671,7 +688,7 @@ const styles = StyleSheet.create({
   mapShelfRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   mapShelfLevel: { width: 48, color: '#6B7280', fontSize: 14, fontWeight: '600' },
   mapShelfCodes: { flex: 1, color: '#1F2937', fontSize: 14 },
-  mapHintPanel: { minHeight: 64, marginHorizontal: 14, marginBottom: 14, paddingHorizontal: 16, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB' },
+  mapHintPanel: { position: 'absolute', bottom: 16, left: 14, right: 14, minHeight: 64, paddingHorizontal: 16, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB' },
   mapHintText: { flex: 1, color: '#6B7280', fontSize: 14 },
 });
 
