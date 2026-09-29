@@ -17,7 +17,7 @@ import {
 import { bigCategoryOf } from '@/utils/materialCategory';
 import {
   createTrailingDebouncer, daysInStorage, defaultZoneShapeFor, floorAnnotations, floorZoneShapes, formatQuantity,
-  maxDaysInStorage, MAX_ANNOTATIONS_PER_FLOOR, nextLocationCode, normalizeWarehouseLayout, parseMapSelection,
+  maxDaysInStorage, MAX_ANNOTATIONS_PER_FLOOR, nextLocationCode, normalizeWarehouseLayout, parseMapSelection, rackZoneMismatch,
   upsertZoneShape, zoneShapeFromPercent, zonesMissingShapeOnFloor, type MapTool,
 } from './warehouseLayoutModel';
 import WarehouseFloorOverlay from './WarehouseFloorOverlay.vue';
@@ -79,6 +79,7 @@ const locationDialogKey = ref(0);
 const moveDialogKey = ref(0);
 const recognizePreview = ref<RecognizedWarehouseLayout | null>(null);
 const recognizePreviewImage = ref('');
+const recognizeError = ref('');
 const recognizeDialogVisible = ref(false);
 const recognizeDialogKey = ref(0);
 // 画布连续拖拽的保存调度器。抽成 createTrailingDebouncer 是为了能用假定时器
@@ -119,6 +120,12 @@ let inventoryController: AbortController | undefined;
 const activeZone = computed(() => layout.value.zones.find((zone) => zone.id === selectedZoneId.value));
 const activeFloor = computed(() => layout.value.floors.find((floor) => floor.id === selectedFloorId.value));
 const activeRack = computed(() => activeFloor.value?.racks.find((rack) => rack.id === selectedRackId.value));
+const rackWarnings = computed(() => (activeFloor.value?.racks ?? []).flatMap((rack) => {
+  const otherZoneId = activeFloor.value && rackZoneMismatch(rack, activeFloor.value);
+  const otherZone = layout.value.zones.find((zone) => zone.id === otherZoneId);
+  return otherZone ? [{ rack, otherZone }] : [];
+}));
+const activeRackWarning = computed(() => rackWarnings.value.find((item) => item.rack.id === selectedRackId.value));
 const visibleLocations = computed(() => layout.value.locations.filter((location) =>
   (!selectedZoneId.value || location.zoneId === selectedZoneId.value)
   && (!searchTerm.value || `${location.code} ${location.name}`.toLowerCase().includes(searchTerm.value.toLowerCase()))));
@@ -150,14 +157,15 @@ const selectedBatches = computed(() => materials.value.find((material) => materi
 const activeRackLocations = computed(() => layout.value.locations.filter((location) => location.rackId === selectedRackId.value));
 const flowNodes = computed<Node[]>(() => (activeFloor.value?.racks ?? []).map((rack) => {
   const zone = layout.value.zones.find((entry) => entry.id === rack.zoneId);
+  const warning = rackWarnings.value.find((item) => item.rack.id === rack.id);
   const count = layout.value.locations.filter((entry) => entry.rackId === rack.id).length;
   return {
     id: rack.id,
     position: { x: rack.x, y: rack.y },
-    data: { label: `${zone?.prefix ?? ''} · ${rack.name}\n${rack.levels} 层 · ${count} 位置` },
+    data: { label: `${warning ? '⚠ ' : ''}${zone?.prefix ?? ''} · ${rack.name}\n${rack.levels} 层 · ${count} 位置` },
     style: {
       width: `${rack.width}px`, minHeight: `${rack.height}px`, whiteSpace: 'pre-line',
-      border: rack.id === selectedRackId.value ? '2px solid #2563eb' : '1px solid #cbd5e1',
+      border: warning ? '2px solid #d97706' : rack.id === selectedRackId.value ? '2px solid #2563eb' : '1px solid #cbd5e1',
       borderRadius: '12px', background: zone?.color ?? '#eff6ff', color: '#0f172a',
       fontSize: '14px', fontWeight: '600', padding: '14px',
     },
@@ -581,19 +589,54 @@ async function handleImageUpload(event: Event) {
     reader.readAsDataURL(file);
   });
   loading.value = true;
+  recognizePreview.value = null;
+  recognizePreviewImage.value = image;
+  recognizeError.value = '';
   try {
     const response = await recognizeWarehouseLayout(factoryId.value, image, file.type || 'image/jpeg');
     // 🔴 原实现识别完**直接写进配置并保存**, 没有任何预览或确认 —— 模型认错一次
     //    就把工厂的仓储配置改了, 而且没有撤销。改成先出预览, 人工确认才应用。
     recognizePreview.value = response.data;
-    recognizePreviewImage.value = image;
     recognizeDialogKey.value += 1;
     recognizeDialogVisible.value = true;
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : 'AI 识别失败');
+    recognizeError.value = error instanceof Error ? error.message : 'AI 识别失败';
+    recognizeDialogKey.value += 1;
+    recognizeDialogVisible.value = true;
   } finally {
     loading.value = false;
     if (fileInput.value) fileInput.value.value = '';
+  }
+}
+
+/** AI 不可用时，用户仍可明确确认只保存底图；不猜测或改动区域和货架。 */
+async function applyBackgroundOnly() {
+  const image = recognizePreviewImage.value;
+  if (!image || !canEditLayout.value) return;
+  let createdFloor: WarehouseFloor | null = null;
+  if (!activeFloor.value) {
+    createdFloor = { id: crypto.randomUUID(), name: '1 层', racks: [], zoneShapes: [], annotations: [] };
+    layout.value.floors.push(createdFloor);
+    selectedFloorId.value = createdFloor.id;
+  }
+  const floor = activeFloor.value;
+  if (!floor) return;
+  const previousBackground = floor.background;
+  floor.background = image;
+  try {
+    await persist(false);
+    recognizeDialogVisible.value = false;
+    recognizePreviewImage.value = '';
+    recognizePreview.value = null;
+    recognizeError.value = '';
+    ElMessage.success('底图已保存，可在全屏地图手动画区域');
+  } catch {
+    if (createdFloor) {
+      layout.value.floors = layout.value.floors.filter((item) => item.id !== createdFloor?.id);
+      selectedFloorId.value = layout.value.floors[0]?.id ?? '';
+    } else {
+      floor.background = previousBackground;
+    }
   }
 }
 
@@ -745,7 +788,7 @@ onUnmounted(() => {
           <!-- 全屏面板高于默认传送到 body 的弹层；选项留在面板内才能点到。 -->
           <el-select v-model="selectedZoneId" placeholder="选择区域" :teleported="false"><el-option v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`" :value="zone.id" /></el-select>
           <el-button v-if="canEditLayout" :icon="Grid" @click="addRack">添加货架</el-button>
-          <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">AI 识别底图</el-button>
+          <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">上传底图 / AI 识别</el-button>
           <input ref="fileInput" type="file" accept="image/*" hidden @change="handleImageUpload">
           <el-button v-if="!mapFullscreen" type="primary" :icon="FullScreen" @click="openMapFullscreen">{{ mapFullscreenLabel }}</el-button>
           <el-button v-else :icon="Close" @click="closeMapFullscreen">退出全屏</el-button>
@@ -808,6 +851,13 @@ onUnmounted(() => {
         </div>
 
         <aside class="rack-detail">
+          <div v-if="rackWarnings.length" class="rack-warning-list" role="status">
+            <strong>有 {{ rackWarnings.length }} 个货架需要核对位置</strong>
+            <p>货架中心落在其他区域内，图上位置与归属可能不一致。请对照现场核对后移动货架或调整区域边界。</p>
+            <button v-for="item in rackWarnings" :key="item.rack.id" type="button" @click="selectedRackId = item.rack.id">
+              {{ item.rack.name }} → {{ item.otherZone.name }}
+            </button>
+          </div>
           <div v-if="canEditLayout && activeFloor && unplacedZones.length" class="unplaced-zones">
             <h3>还没画在{{ activeFloor.name }}的区域</h3>
             <div class="chip-row">
@@ -822,6 +872,7 @@ onUnmounted(() => {
           <template v-if="activeRack">
             <div class="section-heading"><h2>{{ activeRack.name }}</h2><el-button v-if="canEditLayout" data-activity-action="storage.delete-rack" link :icon="Delete" :aria-label="`删除${activeRack.name}`" :title="`删除${activeRack.name}`" @click="removeRack(activeRack)" /></div>
             <span class="muted">{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || '未归属区域' }} · {{ activeRack.levels }} 层</span>
+            <p v-if="activeRackWarning" class="rack-warning-detail">图上位于「{{ activeRackWarning.otherZone.name }}」，归属仍为「{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || '未归属区域' }}」。请按现场实际位置核对。</p>
             <div class="shelf-stack">
               <div v-for="level in Array.from({ length: activeRack.levels }, (_, index) => activeRack!.levels - index)" :key="level" class="shelf-level">
                 <span class="level-number">{{ level }}F</span>
@@ -840,9 +891,12 @@ onUnmounted(() => {
     <el-dialog :key="`zone-${zoneDialogKey}`" v-model="zoneDialogVisible" title="添加储存区域" width="420"><el-form label-position="top"><el-form-item label="区域名称"><el-input v-model="zoneForm.name" placeholder="例如：冷藏区" /></el-form-item><el-form-item label="英文前缀"><el-input v-model="zoneForm.prefix" maxlength="8" placeholder="例如：LC" /></el-form-item></el-form><template #footer><el-button @click="zoneDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="addZone">保存</el-button></template></el-dialog>
     <el-dialog :key="`location-${locationDialogKey}`" v-model="locationDialogVisible" title="添加储存位置" width="440"><el-form label-position="top"><el-form-item label="位置编码"><el-input v-model="locationForm.code" /></el-form-item><el-form-item label="位置名称"><el-input v-model="locationForm.name" placeholder="选填" /></el-form-item><el-form-item label="备注"><el-input v-model="locationForm.notes" placeholder="选填" /></el-form-item></el-form><template #footer><el-button @click="locationDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="addLocation">保存</el-button></template></el-dialog>
     <el-dialog :key="`move-${moveDialogKey}`" v-model="moveDialogVisible" title="调整储存位置" width="420"><el-form label-position="top"><el-form-item label="批次"><span>{{ selectedBatch?.batchNumber }}</span></el-form-item><el-form-item label="储存位置"><el-select v-model="moveLocation" filterable placeholder="选择位置" style="width:100%"><el-option-group v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`"><el-option v-for="location in layout.locations.filter(item => item.zoneId === zone.id)" :key="location.id" :label="`${location.code} · ${location.name}`" :value="location.code" /></el-option-group></el-select></el-form-item></el-form><template #footer><el-button @click="moveDialogVisible = false">取消</el-button><el-button type="primary" @click="moveBatch">保存</el-button></template></el-dialog>
-    <el-dialog :key="`recognize-${recognizeDialogKey}`" v-model="recognizeDialogVisible" title="确认 AI 识别结果" width="560">
-      <p class="muted recognize-note">识别结果不会自动生效。确认后才会写入本厂仓储配置，底图也一并保存。</p>
-      <ul class="recognize-list">
+    <el-dialog :key="`recognize-${recognizeDialogKey}`" v-model="recognizeDialogVisible" :title="recognizeError ? '设置仓库底图' : '确认 AI 识别结果'" :z-index="2500" width="560">
+      <el-alert v-if="recognizeError" title="AI 识别暂不可用" type="warning" :closable="false" show-icon class="recognize-note">
+        <template #default>识别服务返回错误：{{ recognizeError }}。仍可只保存底图，再在全屏地图手动画区域。</template>
+      </el-alert>
+      <p v-else class="muted recognize-note">识别结果不会自动生效。确认后才会写入本厂仓储配置，底图也一并保存。</p>
+      <ul v-if="recognizePreview" class="recognize-list">
         <li><strong>新增区域 {{ recognizedZonesToAdd.length }} 个</strong><span v-if="recognizedZonesToAdd.length">：{{ recognizedZonesToAdd.map(z => `${z.name} · ${String(z.prefix).toUpperCase()}`).join('、') }}</span></li>
         <li v-if="recognizedZonesSkipped > 0" class="muted">另有 {{ recognizedZonesSkipped }} 个区域被跳过（前缀不合法或已存在）</li>
         <li><strong>新增货架 {{ recognizedRacks.length }} 个</strong></li>
@@ -851,7 +905,8 @@ onUnmounted(() => {
       <img v-if="recognizePreviewImage" class="recognize-preview" :src="recognizePreviewImage" alt="待确认的仓库底图">
       <template #footer>
         <el-button @click="recognizeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="loading" :disabled="!recognizedZonesToAdd.length && !recognizedRacks.length" @click="applyRecognizedLayout">应用到配置</el-button>
+        <el-button :loading="saving" :disabled="!recognizePreviewImage" @click="applyBackgroundOnly">仅保存底图</el-button>
+        <el-button v-if="recognizePreview" type="primary" :loading="loading" :disabled="!recognizedZonesToAdd.length && !recognizedRacks.length" @click="applyRecognizedLayout">应用识别结果</el-button>
       </template>
     </el-dialog>
   </main>
@@ -862,4 +917,5 @@ onUnmounted(() => {
 .inventory-load-error{margin-bottom:16px}
 .load-more-materials{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;color:var(--muted);font-size:13px}
 .workspace-tabs button:disabled{opacity:.5;cursor:not-allowed}
+.rack-warning-list{margin-bottom:16px;padding:12px;border:1px solid #f4c779;border-radius:10px;background:#fffbeb;color:#78350f}.rack-warning-list strong{font-size:14px}.rack-warning-list p,.rack-warning-detail{margin:7px 0;font-size:13px;line-height:1.5}.rack-warning-list button{display:block;width:100%;margin-top:6px;padding:5px 7px;border:0;border-radius:6px;background:transparent;color:#92400e;text-align:left;cursor:pointer}.rack-warning-list button:hover,.rack-warning-list button:focus-visible{background:#fef3c7}.rack-warning-detail{padding:9px;border-radius:8px;background:#fffbeb;color:#92400e}
 </style>

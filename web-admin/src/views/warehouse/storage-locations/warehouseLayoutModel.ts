@@ -1,6 +1,6 @@
 import type {
   WarehouseAnnotation, WarehouseAnnotationKind, WarehouseFloor, WarehouseLayout,
-  WarehouseLocation, WarehouseRectGeometry, WarehouseZone, WarehouseZoneShape,
+  WarehouseLocation, WarehouseRack, WarehouseRectGeometry, WarehouseZone, WarehouseZoneShape,
 } from '@/api/warehouseLayout';
 
 export const EMPTY_WAREHOUSE_LAYOUT: WarehouseLayout = { zones: [], locations: [], floors: [] };
@@ -303,6 +303,17 @@ export function normalizeZoneShapes(value: unknown): WarehouseZoneShape[] {
 
 export function floorZoneShapes(floor?: WarehouseFloor | null): WarehouseZoneShape[] {
   return floor?.zoneShapes ?? [];
+}
+
+/** 仅在货架中心明确落入另一块区域、且不在归属区域内时提示复核。 */
+export function rackZoneMismatch(rack: WarehouseRack, floor: WarehouseFloor): string | null {
+  const centerX = rack.x + rack.width / 2;
+  const centerY = rack.y + rack.height / 2;
+  const containing = floorZoneShapes(floor).filter((shape) =>
+    centerX >= shape.x && centerX <= shape.x + shape.width
+    && centerY >= shape.y && centerY <= shape.y + shape.height);
+  if (containing.some((shape) => shape.zoneId === rack.zoneId)) return null;
+  return containing.length === 1 ? containing[0].zoneId : null;
 }
 
 export function floorAnnotations(floor?: WarehouseFloor | null): WarehouseAnnotation[] {

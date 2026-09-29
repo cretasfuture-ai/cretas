@@ -8,15 +8,35 @@
  * 只做第一层就是「机制在、没接上」的经典形态：算术全对，画布上一动不动。
  */
 import { describe, expect, it } from 'vitest';
-import type { WarehouseAnnotation, WarehouseFloor, WarehouseZone } from '@/api/warehouseLayout';
+import type { WarehouseAnnotation, WarehouseFloor, WarehouseRack, WarehouseZone } from '@/api/warehouseLayout';
 import {
   annotationFromPolyline, annotationPathData, appendFreehandPoint, boundsOfPoints, clampRect,
   defaultZoneShapeFor, floorAnnotations, floorZoneShapes, handleAnchor, MAX_FREEHAND_POINTS,
   MIN_SHAPE_SIZE, minSizeForKind, moveRect, normalizeAnnotation, normalizeAnnotations,
   normalizeWarehouseLayout, normalizeZoneShapes, parseMapSelection, rectFromDrag, resizeAnnotation, resizeRect,
-  screenToFlowPoint, thinPoints, toPointPairs, upsertZoneShape, zoneShapeFromPercent, zoneShapeOf,
+  rackZoneMismatch, screenToFlowPoint, thinPoints, toPointPairs, upsertZoneShape, zoneShapeFromPercent, zoneShapeOf,
   zonesMissingShapeOnFloor,
 } from './warehouseLayoutModel';
+
+describe('货架归属与绘制区域提示', () => {
+  const rack: WarehouseRack = { id: 'r1', name: 'A', zoneId: 'cold', x: 120, y: 20, width: 40, height: 40, levels: 2 };
+  const floor: WarehouseFloor = {
+    id: 'f1', name: '1 层', racks: [rack], zoneShapes: [
+      { zoneId: 'cold', x: 0, y: 0, width: 100, height: 100 },
+      { zoneId: 'dry', x: 100, y: 0, width: 100, height: 100 },
+    ],
+  };
+
+  it('中心明确位于其他区域时提示其区域 ID', () => {
+    expect(rackZoneMismatch(rack, floor)).toBe('dry');
+  });
+
+  it('归属区域、未画区域和重叠区域都不猜测', () => {
+    expect(rackZoneMismatch({ ...rack, x: 20 }, floor)).toBeNull();
+    expect(rackZoneMismatch({ ...rack, x: 240 }, floor)).toBeNull();
+    expect(rackZoneMismatch(rack, { ...floor, zoneShapes: [...floor.zoneShapes!, { zoneId: 'other', x: 110, y: 0, width: 80, height: 80 }] })).toBeNull();
+  });
+});
 
 describe('文字标注缩放算术', () => {
   it('四角放大两倍时框与字号一起两倍，普通矩形不凭空长 fontSize', () => {
