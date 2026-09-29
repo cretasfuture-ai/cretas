@@ -249,8 +249,8 @@ def _vl_pool() -> List[Tuple[str, str]]:
     return []
 
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
-    # 2026-09-29 仓库地图专用候选。计费边界待确认；_refuse_reason 默认拒绝，
-    # 只有显式设置 LLM_WAREHOUSE_V41_ENABLED=1 后才会发送请求。
+    # 2026-09-29 owner 确认长期使用这个模型；可能产生按量费用。
+    # _refuse_reason 默认拒绝，只有显式设置 LLM_WAREHOUSE_V41_ENABLED=1 才发送请求。
     ("aliyun_a_vl", "deepseek-v4.1-flash"): None,
     # ── VL (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────────────────
     # 值 = None ⇒ **到期日未知**(不是「永不过期」)。控制台没给这个 SKU 的到期日,
@@ -754,7 +754,7 @@ def _refuse_reason(account: str, model: str,
         return "not_allowlisted"         # not a confirmed-ON model on this account
     if (account, model) == ("aliyun_a_vl", "deepseek-v4.1-flash"):
         if os.getenv("LLM_WAREHOUSE_V41_ENABLED") != "1":
-            return "warehouse_v41_not_enabled"  # billing status pending: fail closed
+            return "warehouse_v41_not_enabled"  # explicit production enable required
     if model in _PAID_MODEL_DENYLIST:
         return "paid_denylist"           # final veto on known-catastrophic bare names
     exp = _SAFE_MODELS.get((account, model))

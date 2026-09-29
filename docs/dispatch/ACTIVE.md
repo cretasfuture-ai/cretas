@@ -1,12 +1,10 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-09-29（登记仓库地图视觉模型候选；其余未动）
+**最后更新**：2026-09-29（归档仓库地图视觉模型接入；其余未动）
 **上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
 
 ## 在飞任务
-
-- `WAREHOUSE-MAP-V41-VISION-20260929` — `review` — Owner: Codex — Base `4f4950b9c6` — 仓库地图专用 A 账号 DeepSeek V4.1 Flash 已实测看图，Python/Java 目标测试通过；代码默认关，待确认该模型免费额度用完即停或按量付费授权后才启用生产。验收：仓库地图识图与回读。
 
 
 
@@ -66,8 +64,6 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
-
-- `WAREHOUSE-MAP-V41-VISION-20260929`：仅 WarehouseLayoutController、PythonLLMClient、Python llm_router/vision endpoint、对应目标测试、golden 和 dispatch；不改其他视觉场景、生产计费开关或 F006 业务数据。验收命令见当日归档。
 
 
 
