@@ -742,7 +742,8 @@ onUnmounted(() => {
           <el-button v-if="canEditLayout && activeFloor" data-activity-action="storage.delete-floor" link :icon="Delete" :aria-label="`删除${activeFloor.name}`" :title="`删除${activeFloor.name}`" @click="removeFloor(activeFloor)" />
         </div>
         <div class="toolbar">
-          <el-select v-model="selectedZoneId" placeholder="选择区域"><el-option v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`" :value="zone.id" /></el-select>
+          <!-- 全屏面板高于默认传送到 body 的弹层；选项留在面板内才能点到。 -->
+          <el-select v-model="selectedZoneId" placeholder="选择区域" :teleported="false"><el-option v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`" :value="zone.id" /></el-select>
           <el-button v-if="canEditLayout" :icon="Grid" @click="addRack">添加货架</el-button>
           <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">AI 识别底图</el-button>
           <input ref="fileInput" type="file" accept="image/*" hidden @change="handleImageUpload">
@@ -826,7 +827,7 @@ onUnmounted(() => {
                 <span class="level-number">{{ level }}F</span>
                 <div class="shelf-content">
                   <div v-for="location in activeRackLocations.filter(item => item.level === level)" :key="location.id" class="shelf-location"><strong>{{ location.code }}</strong><small>{{ inventoryError ? '库存未加载' : `${countAt(location.code).length} 批` }}</small><small v-if="!inventoryError && countAt(location.code)[0]">{{ formatAge(countAt(location.code)[0]?.inboundDate) }}</small><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`把 ${location.code} 从本层解绑`" :title="`把 ${location.code} 从本层解绑`" @click="unbindLocation(location)" /></div>
-                  <el-dropdown v-if="canEditLayout" trigger="click" @command="(id: string) => { const location = layout.locations.find(item => item.id === id); if (location) bindLocation(location, level); }"><el-button text :icon="Plus">绑定位置</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="location in layout.locations.filter(item => item.zoneId === activeRack!.zoneId && !item.rackId)" :key="location.id" :command="location.id">{{ location.code }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
+                  <el-dropdown v-if="canEditLayout" trigger="click" :teleported="false" @command="(id: string) => { const location = layout.locations.find(item => item.id === id); if (location) bindLocation(location, level); }"><el-button text :icon="Plus">绑定位置</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="location in layout.locations.filter(item => item.zoneId === activeRack!.zoneId && !item.rackId)" :key="location.id" :command="location.id">{{ location.code }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
                 </div>
               </div>
             </div>
