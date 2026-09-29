@@ -137,7 +137,7 @@ public class LowStockDualAlertService {
             }
         }
 
-        log.info("sweepFactory {}: checked {} materials, {} below minStock → dual alerts sent",
+        log.info("sweepFactory {}: checked {} materials, {} below minStock; notification dispatch attempted",
                 factoryId, types.size(), alerted);
     }
 
@@ -161,7 +161,7 @@ public class LowStockDualAlertService {
                 minStock.setScale(2, RoundingMode.HALF_UP).toPlainString(), unit,
                 gap.setScale(2, RoundingMode.HALF_UP).toPlainString(), unit);
 
-        log.info("低库存双向报警: factoryId={} materialTypeId={} name={} current={} min={} gap={}",
+        log.debug("低库存双向报警: factoryId={} materialTypeId={} name={} current={} min={} gap={}",
                 factoryId, materialTypeId, materialName, currentStock, minStock, gap);
 
         try {

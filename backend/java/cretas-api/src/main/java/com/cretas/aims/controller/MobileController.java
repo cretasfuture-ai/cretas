@@ -196,7 +196,7 @@ public class MobileController {
     @Operation(summary = "设备激活")
     public ApiResponse<MobileDTO.ActivationResponse> activateDevice(
             @RequestBody @Valid MobileDTO.ActivationRequest request) {
-        log.info("设备激活: code={}", request.getActivationCode());
+        log.info("设备激活请求");
         MobileDTO.ActivationResponse response = mobileService.activateDevice(request);
         return ApiResponse.success(response);
     }
@@ -208,7 +208,7 @@ public class MobileController {
     @RateLimit(count = 3, period = 60, limitType = LimitType.IP, message = "注册请求过于频繁，请60秒后再试")
     public ApiResponse<MobileDTO.RegisterPhaseOneResponse> registerPhaseOne(
             @RequestBody @Valid MobileDTO.RegisterPhaseOneRequest request) {
-        log.info("移动端注册第一阶段: phone={}", request.getPhoneNumber());
+        log.info("移动端注册第一阶段请求");
         MobileDTO.RegisterPhaseOneResponse response = mobileService.registerPhaseOne(request);
         return ApiResponse.success(response);
     }
@@ -287,7 +287,7 @@ public class MobileController {
     public ApiResponse<Void> unregisterPushNotification(
             @RequestParam @Parameter(description = "设备令牌", example = "FCM_token_xxxxx") String deviceToken) {
         Long userId = SecurityUtils.currentUserId();
-        log.info("取消推送: userId={}, token={}", userId, deviceToken);
+        log.info("取消推送: userId={}", userId);
         mobileService.unregisterPushNotification(userId, deviceToken);
         return ApiResponse.success();
     }

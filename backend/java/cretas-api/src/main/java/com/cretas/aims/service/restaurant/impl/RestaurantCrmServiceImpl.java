@@ -75,8 +75,8 @@ public class RestaurantCrmServiceImpl implements RestaurantCrmService {
             guest.setRepBoundAt(LocalDateTime.now());
         }
         RestaurantGuest saved = guestRepository.save(guest);
-        log.info("登记散客: factoryId={}, name={}, phone={}, repId={}",
-                factoryId, safeName(saved), maskPhone(phone), saved.getRepId());
+        log.info("登记散客: factoryId={}, repId={}",
+                factoryId, saved.getRepId());
         return saved;
     }
 
