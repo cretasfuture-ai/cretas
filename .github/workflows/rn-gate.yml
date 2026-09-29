@@ -112,6 +112,8 @@ jobs:
       # 2026-09-07 (#678 终审 follow-up b): 此前「tsc 0 错」只是本地读数, PR 上没有任何东西跑类型检查。
       # ts-jest 只检查被测试 import 到的文件, 没被任何测试碰到的屏 (大多数) 一个类型错都报不出来。
       - name: TypeScript (tsc --noEmit)
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
         run: npx tsc --noEmit
 
       # --forceExit: 套件跑完后有 worker 不能优雅退出 (既有情况, ci.yml 的
