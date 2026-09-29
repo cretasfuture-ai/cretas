@@ -326,17 +326,37 @@ def test_vision_registry_can_actually_reject_something():
     没有这一条, 上面那个 `in _VISION_VERIFIED` 在「登记表被塞进所有模型」时
     同样全绿。这里钉住两个**本来就在链上**的文本模型不在登记表里。
     """
-    for text_model in (("aistore", "DeepSeek-V4-Flash-A"), ("zhipu", "glm-4.5-air")):
+    for text_model in (
+        ("aistore", "DeepSeek-V4-Flash-A"),
+        ("zhipu", "glm-4.5-air"),
+        ("aliyun_a_vl", "glm-5.3"),
+        ("aliyun_a_vl", "deepseek-v4-pro-0813"),
+        ("aliyun_a_vl", "qwen3.8-2.4t-a95b"),
+    ):
         assert text_model not in llm_router._VISION_VERIFIED, (
             f"{text_model} 是文本模型, 不该出现在视觉能力登记表里 —— "
             "它一旦进来, VL 槽就可能拿文本模型去'看'图片"
         )
 
 
-def test_warehouse_vision_uses_only_verified_aliyun_a_deepseek(monkeypatch):
-    """仓库专用模型能看图，其它 VL / 文本槽保持原有路由。"""
+def test_warehouse_vision_uses_only_verified_aliyun_a_models(monkeypatch):
+    """仓库优先使用实测带图模型，并保持其它视觉与文本槽的路由。"""
+    candidates = [
+        ("aliyun_a_vl", "qwen3.8-27b"),
+        ("aliyun_a_vl", "kimi-k3"),
+        ("aliyun_a_vl", "qwen3.8-max-0902"),
+    ]
     pair = ("aliyun_a_vl", "deepseek-v4.1-flash")
-    assert llm_router.SLOT_MODELS[SLOT.WAREHOUSE_VL] == [pair, *llm_router.SLOT_MODELS[SLOT.VL]]
+    warehouse_pairs = [*candidates, pair]
+    assert llm_router.SLOT_MODELS[SLOT.WAREHOUSE_VL] == [*warehouse_pairs, *llm_router.SLOT_MODELS[SLOT.VL]]
+    monkeypatch.delenv("LLM_WAREHOUSE_CANDIDATES_ENABLED", raising=False)
+    for candidate in candidates:
+        assert candidate in llm_router._VISION_VERIFIED
+        assert candidate in llm_router._MINIMAL_SAFE_SET
+        assert llm_router._refuse_reason(*candidate) == "warehouse_candidates_not_enabled"
+    monkeypatch.setenv("LLM_WAREHOUSE_CANDIDATES_ENABLED", "1")
+    for candidate in candidates:
+        assert llm_router._refuse_reason(*candidate) is None
     assert pair in llm_router._VISION_VERIFIED
     assert pair in llm_router._MINIMAL_SAFE_SET
     monkeypatch.delenv("LLM_WAREHOUSE_V41_ENABLED", raising=False)
@@ -346,10 +366,12 @@ def test_warehouse_vision_uses_only_verified_aliyun_a_deepseek(monkeypatch):
     assert llm_router._apply_slot_params(
         slot=SLOT.WAREHOUSE_VL, account=pair[0], model=pair[1], payload={"messages": []}
     )["enable_thinking"] is False
-    assert pair not in llm_router.SLOT_MODELS[SLOT.VL]
+    for candidate in warehouse_pairs:
+        assert candidate not in llm_router.SLOT_MODELS[SLOT.VL]
     for slot, pool in llm_router._SLOT_POOLS.items():
         if slot != SLOT.WAREHOUSE_VL:
-            assert pair not in pool
+            for candidate in warehouse_pairs:
+                assert candidate not in pool
 
 
 def test_vl_model_is_configurable_but_only_within_the_registry():
@@ -494,6 +516,7 @@ def test_refuse_allows_current_registered_model(monkeypatch):
        这样以后换任何账号都不会因为「点名的那条没了」而红。
     """
     monkeypatch.setenv("LLM_WAREHOUSE_V41_ENABLED", "1")
+    monkeypatch.setenv("LLM_WAREHOUSE_CANDIDATES_ENABLED", "1")
     checked = 0
     for (account, model), expiry in llm_router._SAFE_MODELS.items():
         if expiry is not None and expiry <= _TODAY:
