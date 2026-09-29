@@ -1,12 +1,11 @@
 """
-Multi-provider LLM router with 403 AllocationQuota.FreeTierOnly fallback.
+Multi-provider LLM router with per-account allowlisting and fallback.
 
 Per-slot DEEP fallback chains (rebuilt 2026-05-31, Steve directive): each SLOT
 has a list of (account, model) entries. The router tries them in order; an
 exhausted free model returns 403 FreeTierOnly and falls to the NEXT entry.
-EVERY entry is FREE + "免费额度用完即停=已开启" per the
-console (memory reference_dashscope_free_model_allowlist) — NO paid SKU is ever
-in a chain, so paid billing is structurally impossible.
+Some entries have owner-approved pay-as-you-go billing. The warehouse-specific
+DeepSeek candidate requires LLM_WAREHOUSE_V41_ENABLED=1 as an additional gate.
 
 ⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
 aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
@@ -17,11 +16,9 @@ aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config
 (`Chain — 5 providers` / `Chain order — providers`), 其中 `_provider_config`
 上方那处随本次改动一并订正; 另一处已登记, 本次不动(brief 限定 scope)。
 
-No client-side quota estimation — we rely on Aliyun's 免费额度用完即停 toggle
-which returns 403 when free quota exhausts. This is the HARD guarantee that
-accounts will never be charged beyond free tier. Circuit breaker is keyed per
-(account, model) so one model's quota-403 doesn't skip other free models on the
-same account.
+No client-side quota estimation. Free-tier candidates rely on their account's
+免费额度用完即停 setting; owner-approved paid candidates can incur usage charges.
+Circuit breakers are keyed per (account, model).
 
 The metrics hook in common/llm_metrics.py records each attempt (including
 failed fallback attempts) so we have per-account usage visibility.
@@ -86,14 +83,13 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # 0 mismatch, account identity confirmed). 6-agent audit hardened. Spec:
 # docs/superpowers/specs/2026-07-01-smart-llm-router-spec.md
 #
-# ⛔ SAFETY INVARIANT (billing red-line): a (account, model) is in _SAFE_MODELS
-# IFF its `免费额度用完即停` toggle is 已开启(ON) on THAT account. ON ⇒ upstream
-# returns 403 FreeTierOnly on exhaust/expiry, NEVER a paid 200. The router REFUSES
-# any (account, model) not in this dict. This is the ONLY billing guard that matters
-# (the router cannot detect a paid 200 in the response).
+# ⛔ BILLING INVARIANT: _SAFE_MODELS contains only account/model pairs backed by
+# verified free-quota auto-stop OR explicit owner authorization for paid use.
+# The warehouse DeepSeek pair additionally requires an explicit runtime switch.
+# The router refuses every unlisted pair; it cannot identify a paid 200 response.
 #
-# ⛔ ON-toggle = SAFETY; expiry date = ORDERING/availability ONLY (orthogonal — never
-# gate safety on the date, never trust the date for billing).
+# ⛔ For free-grant entries: ON-toggle = SAFETY; expiry date =
+# ORDERING/availability ONLY. Paid entries need explicit owner authorization.
 #
 # ⛔ PER-(account, model): the SAME model has DIFFERENT toggle state per account —
 # deepseek-v4-pro is ON on aliyun_c but 不支持开启(PAID) on aliyun_b. A global
@@ -1897,8 +1893,8 @@ def _provider_config(account: str) -> Tuple[str, str]:
         ),
         # ── aliyun_c_vl (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────
         #
-        # 🔴 **只服务 VL 这一个槽**, 名字里的 `_vl` 就是那道结构闸: 它不出现在
-        #    任何别的 `_SLOT_POOLS` 条目里, 所以「aliyun 悄悄回到 chat/review」
+        # 🔴 **只服务视觉槽**, 名字里的 `_vl` 就是那道结构闸: 它不出现在
+        #    任何文本 `_SLOT_POOLS` 条目里, 所以「aliyun 悄悄回到 chat/review」
         #    这件事**在结构上做不到**, 不靠谁记得。
         #    (同一个做法本文件已有先例: `aliyun_a_deepseek` —— 同端点同 key,
         #     靠一个独立的逻辑账号名把某一类 SKU 隔离在特定槽里。)
@@ -1917,7 +1913,7 @@ def _provider_config(account: str) -> Tuple[str, str]:
                       "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             os.getenv("LLM_ALIYUN_C_API_KEY", ""),
         ),
-        # aliyun_a 的 VL 分身 —— 同样只服务 VL 槽, 供 `LLM_VL_ACCOUNT` 切换。
+        # aliyun_a 的视觉分身 —— 服务 vl 和 warehouse_vl 两个视觉槽。
         # ⚠️ 逻辑账号名刻意带 `_vl` 后缀而不是直接复用 `aliyun_a`:
         #    `aliyun_a` 这个名字在本文件的历史里有**退役结论**挂着
         #    (test_flash_quota_pair_retired_from_b_and_c_survives_only_on_a 断言
@@ -1959,7 +1955,7 @@ def _provider_config(account: str) -> Tuple[str, str]:
     return mapping.get(account, ("", ""))
 
 
-# Chain order — providers, all free tier.
+# Chain order — allowlisted providers, with owner-approved paid entries.
 #
 # ⚠️ 2026-09-15 订正: 这里原本写 `aliyun_c → aliyun_b → aliyun_a → tencent →
 # zhipu (→ aliyun_a_deepseek)`, 而上面那张 mapping 里**这些账号一个都不在了**
