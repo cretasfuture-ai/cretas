@@ -510,12 +510,15 @@ const styles = StyleSheet.create({
   },
   zoneOverview: {
     flexDirection: "row",
+    flexWrap: "wrap",
     paddingHorizontal: 16,
     paddingTop: 16,
     gap: 12,
   },
   zoneCard: {
-    flex: 1,
+    flexBasis: "46%",
+    flexGrow: 1,
+    minWidth: 145,
     backgroundColor: "#fff",
     borderRadius: 12,
     padding: 12,
