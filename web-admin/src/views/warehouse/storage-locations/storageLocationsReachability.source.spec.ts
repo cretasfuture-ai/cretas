@@ -80,9 +80,10 @@ describe('AI 识别不能未经确认就改配置（BUG-8）', () => {
     expect(PAGE).toContain('recognizeDialogVisible');
     expect(PAGE).toContain('function applyRecognizedLayout');
     // 阴性对照：handleImageUpload 里不许再直接 persist
-    const upload = PAGE.slice(PAGE.indexOf('async function handleImageUpload'), PAGE.indexOf('/** 识别结果里真正会被采纳的部分'));
+    const upload = PAGE.slice(PAGE.indexOf('async function handleImageUpload'), PAGE.indexOf('/** AI 不可用时'));
     expect(upload).not.toContain('persist(');
     expect(upload.length).toBeGreaterThan(200);
+    expect(PAGE).toContain('@click="applyBackgroundOnly"');
   });
 });
 
