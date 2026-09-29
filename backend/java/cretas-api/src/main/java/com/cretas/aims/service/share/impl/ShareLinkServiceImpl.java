@@ -123,8 +123,8 @@ public class ShareLinkServiceImpl implements ShareLinkService {
         try {
             shareLinkRepository.recordView(link.getToken(), LocalDateTime.now());
         } catch (Exception e) {
-            log.warn("[ShareLink] recordView failed for token={}, ignoring: {}",
-                    token, e.getMessage());
+            log.warn("[ShareLink] recordView failed: entityType={}, entityId={}, errorType={}",
+                    link.getEntityType(), link.getEntityId(), e.getClass().getSimpleName());
         }
 
         Map<String, Object> result = new LinkedHashMap<>();

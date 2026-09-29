@@ -97,7 +97,7 @@ public class MobilePasswordServiceImpl implements MobilePasswordService {
         String phoneNumber = request.getPhoneNumber();
         String verificationType = request.getVerificationType();
 
-        log.info("发送验证码: phone={}, type={}", phoneNumber, verificationType);
+        log.info("发送验证码: type={}", verificationType);
 
         // 检查该手机号是否存在用户
         List<User> users = userRepository.findAllByPhone(phoneNumber);
@@ -148,7 +148,7 @@ public class MobilePasswordServiceImpl implements MobilePasswordService {
         String phoneNumber = request.getPhoneNumber();
         String inputCode = request.getVerificationCode();
 
-        log.info("验证重置码: phone={}, code={}", phoneNumber, inputCode);
+        log.info("验证重置码请求");
 
         // 检查验证码是否存在
         String cacheKey = "verification_" + phoneNumber;
@@ -187,7 +187,7 @@ public class MobilePasswordServiceImpl implements MobilePasswordService {
         // 删除验证码
         verificationCodes.remove(cacheKey);
 
-        log.info("验证码验证成功: phone={}", phoneNumber);
+        log.info("验证码验证成功");
 
         return MobileDTO.VerifyResetCodeResponse.builder()
                 .success(true)
@@ -205,7 +205,7 @@ public class MobilePasswordServiceImpl implements MobilePasswordService {
         String resetToken = request.getResetToken();
         String newPassword = request.getNewPassword();
 
-        log.info("忘记密码-重置密码: phone={}", phoneNumber);
+        log.info("忘记密码-重置密码请求");
 
         // 验证重置令牌
         String phoneFromToken = tempTokenService.validateAndGetPhone(resetToken);
@@ -239,7 +239,7 @@ public class MobilePasswordServiceImpl implements MobilePasswordService {
         tempTokenService.deleteTempToken(resetToken);
 
         LocalDateTime now = LocalDateTime.now();
-        log.info("密码重置完成: phone={}, 更新了{}个账户", phoneNumber, updatedCount);
+        log.info("密码重置完成: updatedAccounts={}", updatedCount);
 
         return MobileDTO.ForgotPasswordResponse.builder()
                 .success(true)

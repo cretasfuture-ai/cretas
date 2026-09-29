@@ -95,7 +95,7 @@ public class WhitelistController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestHeader("Authorization") @Parameter(description = "访问令牌") String authorization,
             @RequestBody @Valid @Parameter(description = "单条白名单添加请求") WhitelistDTO.SingleAddRequest request) {
-        log.info("添加单条白名单: factoryId={}, phone={}", factoryId, request.getPhoneNumber());
+        log.info("添加单条白名单: factoryId={}", factoryId);
 
         String token = TokenUtils.extractToken(authorization);
         Long userId = mobileService.getUserFromToken(token).getId();
@@ -246,7 +246,7 @@ public class WhitelistController {
     public ApiResponse<WhitelistDTO.ValidationResponse> validatePhoneNumber(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "手机号", example = "13812345678") String phoneNumber) {
-        log.debug("验证手机号: factoryId={}, phone={}", factoryId, phoneNumber);
+        log.debug("验证手机号: factoryId={}", factoryId);
         WhitelistDTO.ValidationResponse response = whitelistService.validatePhoneNumber(factoryId, phoneNumber);
         return ApiResponse.success(response);
     }
@@ -257,7 +257,7 @@ public class WhitelistController {
     public ApiResponse<Void> incrementUsage(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "手机号", example = "13812345678") String phoneNumber) {
-        log.debug("增加使用次数: factoryId={}, phone={}", factoryId, phoneNumber);
+        log.debug("增加使用次数: factoryId={}", factoryId);
         whitelistService.incrementUsage(factoryId, phoneNumber);
         return ApiResponse.success();
     }

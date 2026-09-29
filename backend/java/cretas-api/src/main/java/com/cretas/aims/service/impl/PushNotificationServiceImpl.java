@@ -41,16 +41,16 @@ public class PushNotificationServiceImpl implements PushNotificationService {
     @Override
     public void sendToDevice(String pushToken, String title, String body, Map<String, Object> data, String priority) {
         if (!isValidExpoPushToken(pushToken)) {
-            log.warn("无效的 Push Token: {}", pushToken);
+            log.warn("无效的 Push Token，跳过单设备推送");
             return;
         }
 
         try {
             Map<String, Object> message = buildPushMessage(pushToken, title, body, data, priority);
             sendPushRequest(Collections.singletonList(message));
-            log.info("推送已发送到设备: token={}, title={}", pushToken, title);
+            log.debug("推送请求已发送到设备");
         } catch (Exception e) {
-            log.error("发送推送失败: token={}, error={}", pushToken, e.getMessage(), e);
+            log.error("发送推送失败: errorType={}", e.getClass().getSimpleName());
         }
     }
 
@@ -59,7 +59,7 @@ public class PushNotificationServiceImpl implements PushNotificationService {
         List<DeviceRegistration> devices = deviceRepository.findByUserIdAndIsEnabledTrue(userId);
 
         if (devices.isEmpty()) {
-            log.warn("用户 {} 没有已注册的设备", userId);
+            log.debug("用户 {} 没有已注册的设备，跳过推送", userId);
             return;
         }
 
@@ -75,7 +75,7 @@ public class PushNotificationServiceImpl implements PushNotificationService {
         List<DeviceRegistration> devices = deviceRepository.findByFactoryIdAndIsEnabledTrue(factoryId);
 
         if (devices.isEmpty()) {
-            log.warn("工厂 {} 没有已注册的设备", factoryId);
+            log.debug("工厂 {} 没有已注册的设备，跳过推送", factoryId);
             return;
         }
 
@@ -95,7 +95,7 @@ public class PushNotificationServiceImpl implements PushNotificationService {
         }
 
         if (devices.isEmpty()) {
-            log.warn("指定的用户没有已注册的设备");
+            log.debug("指定的用户没有已注册的设备，跳过推送");
             return;
         }
 
@@ -130,9 +130,9 @@ public class PushNotificationServiceImpl implements PushNotificationService {
                         .collect(Collectors.toList());
 
                 sendPushRequest(messages);
-                log.info("批量推送已发送: count={}, title={}", batch.size(), title);
+                log.info("批量推送请求已发送: count={}", batch.size());
             } catch (Exception e) {
-                log.error("批量推送失败: error={}", e.getMessage(), e);
+                log.error("批量推送失败: errorType={}", e.getClass().getSimpleName());
             }
         }
     }

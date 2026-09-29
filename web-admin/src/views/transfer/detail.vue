@@ -480,16 +480,16 @@ async function submitDecide() {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <el-button :icon="ArrowLeft" @click="router.push('/transfer/list')">返回</el-button>
+            <el-button data-activity-action="transfer.detail.back" :icon="ArrowLeft" @click="router.push('/transfer/list')">返回</el-button>
             <span class="page-title">{{ label('transfer') }}详情</span>
-            <el-button v-if="transfer" plain @click="documentTraceVisible = true">单据追溯</el-button>
+            <el-button v-if="transfer" data-activity-action="transfer.trace.open" plain @click="documentTraceVisible = true">单据追溯</el-button>
             <el-tag v-if="transfer" :type="(statusMap[transfer.status]?.type) || 'info'" size="large">
               {{ statusMap[transfer.status]?.text || transfer.status }}
             </el-tag>
           </div>
           <div class="header-right" v-if="transfer && canWrite">
-            <el-button v-if="transfer.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('request')">提交 OA 审批</el-button>
-            <el-button v-if="transfer.status === 'REQUESTED'" type="primary" plain @click="goToOaProgress">查看审批进度</el-button>
+            <el-button v-if="transfer.status === 'DRAFT'" data-activity-action="transfer.approval.submit" type="warning" :loading="submitting" @click="handleAction('request')">提交 OA 审批</el-button>
+            <el-button v-if="transfer.status === 'REQUESTED'" data-activity-action="transfer.approval.view" type="primary" plain @click="goToOaProgress">查看审批进度</el-button>
             <!-- 同厂仓间调拨此前被 `!isIntraFactory` 排除在这道闸之外, 落到下面的 v-else-if
                  分支 → 库存不足也照常可点「确认调拨入库」, 直到后端 409 才知道 (2026-08-09
                  六膳门 TRF-20260809-1790 走的正是这条路)。同厂/跨厂共用同一道闸, 只换按钮文案。 -->
@@ -497,22 +497,24 @@ async function submitDecide() {
               v-if="transfer.status === 'APPROVED' && isOutbound && hasStockShortage"
               :content="shipBlockedReason" placement="top">
               <span>
-                <el-button type="primary" disabled>{{ isIntraFactory ? '确认调拨入库' : '确认发运' }}</el-button>
+                <el-button data-activity-action="transfer.stock.blocked" type="primary" disabled>{{ isIntraFactory ? '确认调拨入库' : '确认发运' }}</el-button>
               </span>
             </el-tooltip>
             <el-button
               v-else-if="transfer.status === 'APPROVED' && isIntraFactory"
+              data-activity-action="transfer.inbound.confirm"
               type="success"
               :loading="submitting"
               @click="handleAction('confirm')">确认调拨入库</el-button>
             <el-button
               v-else-if="transfer.status === 'APPROVED' && isOutbound"
+              data-activity-action="transfer.ship.confirm"
               type="primary"
               :loading="submitting"
               @click="handleAction('ship')">确认发运</el-button>
-            <el-button v-if="transfer.status === 'SHIPPED' && isInbound && !isIntraFactory" type="primary" :loading="submitting" @click="handleAction('receive')">确认签收</el-button>
-            <el-button v-if="transfer.status === 'RECEIVED' && isInbound && !isIntraFactory" type="success" :loading="submitting" @click="handleAction('confirm')">确认入库</el-button>
-            <el-button v-if="['DRAFT','REQUESTED'].includes(transfer.status)" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
+            <el-button v-if="transfer.status === 'SHIPPED' && isInbound && !isIntraFactory" data-activity-action="transfer.receive.confirm" type="primary" :loading="submitting" @click="handleAction('receive')">确认签收</el-button>
+            <el-button v-if="transfer.status === 'RECEIVED' && isInbound && !isIntraFactory" data-activity-action="transfer.inbound.confirm" type="success" :loading="submitting" @click="handleAction('confirm')">确认入库</el-button>
+            <el-button v-if="['DRAFT','REQUESTED'].includes(transfer.status)" data-activity-action="transfer.cancel" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
           </div>
         </div>
       </template>

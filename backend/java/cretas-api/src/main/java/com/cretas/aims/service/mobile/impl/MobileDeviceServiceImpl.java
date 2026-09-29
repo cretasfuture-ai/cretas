@@ -33,8 +33,7 @@ public class MobileDeviceServiceImpl implements MobileDeviceService {
     @Override
     @Transactional
     public MobileDTO.ActivationResponse activateDevice(MobileDTO.ActivationRequest request) {
-        log.info("设备激活: code={}, deviceId={}",
-                request.getActivationCode(), request.getDeviceInfo().getDeviceId());
+        log.info("设备激活: deviceId={}", request.getDeviceInfo().getDeviceId());
 
         // 查找激活码
         DeviceActivation activation = deviceActivationRepository
@@ -122,7 +121,7 @@ public class MobileDeviceServiceImpl implements MobileDeviceService {
 
     @Override
     public void unregisterPushNotification(Long userId, String deviceToken) {
-        log.info("取消推送通知: userId={}, token={}", userId, deviceToken);
+        log.info("取消推送通知: userId={}", userId);
         // TODO: 实现取消推送通知逻辑
     }
 }

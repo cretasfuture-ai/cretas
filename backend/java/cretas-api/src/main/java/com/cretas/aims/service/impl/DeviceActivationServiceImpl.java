@@ -60,7 +60,7 @@ public class DeviceActivationServiceImpl implements DeviceActivationService {
     @Override
     @Transactional(readOnly = true)
     public DeviceActivationDTO validateActivationCode(String activationCode) {
-        log.debug("验证激活码: {}", activationCode);
+        log.debug("验证激活码请求");
         DeviceActivation activation = activationRepository.findByActivationCode(activationCode)
                 .orElseThrow(() -> new BusinessException(404, "激活码不存在")
                         .withHint("请检查激活码是否正确").withHintTarget("activationCode"));
@@ -73,8 +73,7 @@ public class DeviceActivationServiceImpl implements DeviceActivationService {
     @Override
     @Transactional
     public DeviceActivationDTO activateDevice(DeviceActivationDTO.ActivateRequest request) {
-        log.info("激活设备: activationCode={}, deviceId={}",
-                request.getActivationCode(), request.getDeviceId());
+        log.info("激活设备: deviceId={}", request.getDeviceId());
         DeviceActivation activation = activationRepository
                 .findByActivationCode(request.getActivationCode())
                 .orElseThrow(() -> new BusinessException(404, "激活码不存在")

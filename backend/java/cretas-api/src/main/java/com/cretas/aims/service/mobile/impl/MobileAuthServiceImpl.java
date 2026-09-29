@@ -300,7 +300,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
 
     @Override
     public MobileDTO.LoginResponse refreshToken(String refreshToken) {
-        log.debug("刷新令牌: token={}", refreshToken);
+        log.debug("收到刷新令牌请求");
 
         // 验证刷新令牌
         if (!jwtUtil.validateToken(refreshToken)) {
@@ -466,7 +466,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
 
         // 智能推断 factoryId（如果未提供）
         if (factoryId == null || factoryId.trim().isEmpty()) {
-            log.info("factoryId未提供，通过手机号查找白名单: phone={}", phoneNumber);
+            log.info("factoryId未提供，通过手机号查找白名单");
             List<Whitelist> whitelists = whitelistRepository.findAllByPhoneNumber(phoneNumber).stream()
                     .filter(Whitelist::isValid)
                     .toList();
@@ -476,7 +476,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                         .withHint("请联系管理员将该手机号加入工厂白名单").withHintTarget("phoneNumber");
             } else if (whitelists.size() == 1) {
                 factoryId = whitelists.get(0).getFactoryId();
-                log.info("智能推断成功: phone={}, factoryId={}", phoneNumber, factoryId);
+                log.info("智能推断成功: factoryId={}", factoryId);
             } else {
                 // 手机号在多个工厂白名单中，必须指定
                 throw new BusinessException(409, "该手机号在多个工厂白名单中")
@@ -484,7 +484,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
             }
         }
 
-        log.info("移动端注册第一阶段: phone={}, factoryId={}", phoneNumber, factoryId);
+        log.info("移动端注册第一阶段: factoryId={}", factoryId);
 
         // 检查白名单
         Whitelist whitelist = whitelistRepository.findByFactoryIdAndPhoneNumber(factoryId, phoneNumber)
@@ -514,7 +514,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         String tempToken = tempTokenService.generateTempToken(phoneNumber, 30);
         long expiresAt = System.currentTimeMillis() + 30 * 60 * 1000;
 
-        log.info("手机验证成功: phone={}, isNewUser={}", phoneNumber, isNewUser);
+        log.info("手机验证成功: isNewUser={}", isNewUser);
 
         return MobileDTO.RegisterPhaseOneResponse.builder()
                 .tempToken(tempToken)
@@ -557,7 +557,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                         .withHint("请在注册界面选择具体工厂").withHintTarget("factoryId");
             } else if (whitelists.size() == 1) {
                 factoryId = whitelists.get(0).getFactoryId();
-                log.info("从白名单推断factoryId: phone={}, factoryId={}", phoneNumber, factoryId);
+                log.info("从白名单推断factoryId: factoryId={}", factoryId);
             } else {
                 throw new BusinessException(409, "该手机号在多个工厂白名单中")
                         .withHint("请在注册界面选择具体工厂").withHintTarget("factoryId");

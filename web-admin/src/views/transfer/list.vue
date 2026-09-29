@@ -17,6 +17,7 @@ import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { displayUnit } from '@/utils/unitPricing';
+import { logActivityBlock } from '@/utils/activityTracker';
 import {
   aggregateFinishedGoodsOptions,
   aggregateMaterialInventoryOptions,
@@ -515,8 +516,9 @@ async function submitCreate() {
   const valid = await formRef.value.validate().catch(() => false);
   validating = false;
   if (revision !== draftRevision) return;
-  if (!valid) return;
+  if (!valid) { logActivityBlock('transfer.create.form-invalid'); return; }
   if (form.value.items.length === 0) {
+    logActivityBlock('transfer.create.empty-items', 'items');
     ElMessage.warning('请至少添加一行调拨物料');
     return;
   }
@@ -524,6 +526,7 @@ async function submitCreate() {
   // 合计却是库存的两倍。必须在逐行校验之前拦, 否则下面的循环会逐行报"够", 一路放行。
   const duplicate = findDuplicateTransferRow(form.value.items);
   if (duplicate) {
+    logActivityBlock('transfer.create.duplicate-item', 'items');
     ElMessage({
       message: `「${duplicate.name}」在本单里重复出现 ${duplicate.rows.length} 行`
         + `（合计 ${formatStock(duplicate.totalBaseQuantity)} ${displayUnit(duplicate.baseUnit)}）,`
@@ -534,21 +537,25 @@ async function submitCreate() {
   }
   for (const it of form.value.items) {
     if (!it.selectionCategory) {
+      logActivityBlock('transfer.create.missing-category', 'selectionCategory');
       ElMessage.warning('请为每行选择与建品一致的基本类型'); return;
     }
     if (!it.selectedItemId || (it.itemType === 'FINISHED_GOODS' ? !it.productTypeId : !it.materialTypeId)) {
+      logActivityBlock('transfer.create.missing-item', 'selectedItemId');
       ElMessage.warning('请为每行选择与基本类型匹配的物料或成品'); return;
     }
-    if (!it.quantity || it.quantity <= 0) { ElMessage.warning('每行数量必须大于 0'); return; }
-    if (!it.unit) { ElMessage.warning('每行必须有单位'); return; }
+    if (!it.quantity || it.quantity <= 0) { logActivityBlock('transfer.create.invalid-quantity', 'quantity'); ElMessage.warning('每行数量必须大于 0'); return; }
+    if (!it.unit) { logActivityBlock('transfer.create.missing-unit', 'unit'); ElMessage.warning('每行必须有单位'); return; }
     if (it.itemType !== 'FINISHED_GOODS'
         && (it.packagingOptions?.length || 0) > 0
         && !it.materialPackagingSpecId) {
+      logActivityBlock('transfer.create.missing-packaging', 'materialPackagingSpecId');
       ElMessage.warning(`请为「${it.itemName}」选择调拨包装规格`); return;
     }
     // F-FP-3 Rule1: 超过现有库存时阻止提交，边界前置
     const stock = (it as any)._currentStock;
     if (stock != null && stock !== '' && transferBaseQuantity(it) > Number(stock)) {
+      logActivityBlock('transfer.create.insufficient-stock', 'quantity');
       ElMessage({ message: `折合基本量 ${transferBaseQuantity(it)} ${displayUnit(it._inventoryUnit)} 超过现有库存 ${stock}（物料：${it.itemName || it.materialTypeId}），请调整数量`, type: 'error', duration: 0, showClose: true });
       return;
     }
@@ -642,9 +649,10 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+            <el-button data-activity-action="transfer.list.refresh" :icon="Refresh" @click="loadData">刷新</el-button>
             <el-button
               v-if="canWrite"
+              data-activity-action="transfer.create.open"
               type="primary" :icon="Plus"
               @click="openCreateWorkspace"
             >手动新建调拨单</el-button>
@@ -686,14 +694,16 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+            <el-button data-activity-action="transfer.detail.open" type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
             <el-button
               v-if="awaitingInboundConfirm(row)"
+              data-activity-action="transfer.inbound.open"
               type="success" link size="small"
               @click="goDetail(row.id)"
             >去确认入库</el-button>
             <el-button
               v-if="canWrite && row.status === 'DRAFT'"
+              data-activity-action="transfer.approval.submit"
               type="warning"
               link
               size="small"
@@ -722,7 +732,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
     <section v-if="isCreateWorkspace" class="create-workspace" aria-labelledby="transfer-create-title">
       <header class="workspace-header">
         <div class="workspace-heading">
-          <el-button :icon="ArrowLeft" text class="back-button" @click="cancelCreate">返回调拨单列表</el-button>
+          <el-button data-activity-action="transfer.create.back" :icon="ArrowLeft" text class="back-button" @click="cancelCreate">返回调拨单列表</el-button>
           <div class="title-line">
             <div>
               <h1 id="transfer-create-title">手动新建调拨单</h1>
@@ -854,7 +864,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </el-row>
         <el-alert v-if="optionsFailed" type="error" :closable="false" show-icon>
           <template #title>部分调拨选项加载失败，已填写内容仍保留</template>
-          <el-button :loading="optionsLoading" @click="retryDraftOptions">重试加载选项</el-button>
+          <el-button data-activity-action="transfer.create.retry-options" :loading="optionsLoading" @click="retryDraftOptions">重试加载选项</el-button>
         </el-alert>
         <el-form-item label="备注 / 原因">
           <el-input
@@ -874,7 +884,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
           style="margin-bottom: 8px"
         />
         <UpstreamMissingHint v-else-if="sourceInventoryLoaded && sourceMaterialOptions.length === 0 && finishedGoodsOptions.length === 0" description="所选调出仓库暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
-        <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
+        <el-button data-activity-action="transfer.item.add" size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
         <div class="material-table-scroll" role="region" aria-label="调拨物料明细" tabindex="0">
         <el-table :data="form.items" border empty-text="点击「添加物料」开始">
           <el-table-column label="基本类型" width="160">
@@ -986,7 +996,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
           </el-table-column>
           <el-table-column label="操作" width="80" align="center">
             <template #default="{ $index }">
-              <el-button type="danger" link size="small" @click="removeItem($index)">删除</el-button>
+              <el-button data-activity-action="transfer.item.remove" type="danger" link size="small" @click="removeItem($index)">删除</el-button>
             </template>
           </el-table-column>
               </el-table>
@@ -1019,8 +1029,8 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
       <footer class="workspace-actions">
         <span class="action-hint">创建后进入详情页，继续提交审批。</span>
         <div>
-          <el-button :disabled="submitting" @click="cancelCreate">取消</el-button>
-          <el-button type="primary" :loading="submitting" @click="submitCreate">创建调拨草稿</el-button>
+          <el-button data-activity-action="transfer.create.cancel" :disabled="submitting" @click="cancelCreate">取消</el-button>
+          <el-button data-activity-action="transfer.create.submit" type="primary" :loading="submitting" @click="submitCreate">创建调拨草稿</el-button>
         </div>
       </footer>
     </section>

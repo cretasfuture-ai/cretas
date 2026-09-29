@@ -53,8 +53,8 @@ import java.util.function.Supplier;
  * <p><b>ShedLock</b> — Blue/green Java instances both run @Scheduled.
  * @SchedulerLock makes only one instance fire (per ShedLockConfig).
  *
- * <p><b>Disable</b> — set {@code cretas.insights.prewarm.enabled=false}
- * to skip entirely (e.g. dev machines, or if DashScope quota tight).
+ * <p><b>Enable</b> — set {@code cretas.insights.prewarm.enabled=true}
+ * only after the Python Agent insights route is enabled.
  *
  * @since 2026-04-25
  */
@@ -67,10 +67,10 @@ public class InsightsPreWarmScheduler {
     private final AgentInsightsClient agentInsightsClient;
 
     /**
-     * Disable flag — default ON. Set to false in application properties
-     * or via env var CRETAS_INSIGHTS_PREWARM_ENABLED=false to disable.
+     * Opt in only when the Python Agent insights route is enabled. The Python
+     * route is disabled by default; otherwise every run produces a 404.
      */
-    @Value("${cretas.insights.prewarm.enabled:true}")
+    @Value("${cretas.insights.prewarm.enabled:false}")
     private boolean enabled;
 
     /**

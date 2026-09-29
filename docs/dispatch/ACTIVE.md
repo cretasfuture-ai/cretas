@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `OPT-LOG-DETAIL-20260929` — `in-progress` — Owner: Codex — Base `eaff438cbff06b381752f1b3e643e5413cea62cc` — 降低无推送设备和未启用洞察预热噪声，调拨操作/阻断补稳定标识，敏感令牌/手机号/验证码不进日志；待目标验证、PR、发布。
+
 
 
 
@@ -63,6 +65,8 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `OPT-LOG-DETAIL-20260929`：Java 仅日志语句及洞察预热默认开关；Web 仅调拨列表/详情的活动埋点；目标测试与归档。验收：Java `LowStockDualAlertServiceTest`、Web `vue-tsc`/调拨目标测试、统一发布回执。
 
 
 

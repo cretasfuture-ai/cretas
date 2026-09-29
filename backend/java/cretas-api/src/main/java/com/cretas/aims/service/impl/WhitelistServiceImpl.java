@@ -87,7 +87,7 @@ public class WhitelistServiceImpl implements WhitelistService {
                 result.getSuccessPhones().add(entry.getPhoneNumber());
                 result.setSuccessCount(result.getSuccessCount() + 1);
             } catch (Exception e) {
-                log.error("添加白名单失败: phone={}, error={}", entry.getPhoneNumber(), e.getMessage());
+                log.error("添加白名单失败: errorType={}", e.getClass().getSimpleName());
                 result.getFailedEntries().add(
                         WhitelistDTO.BatchResult.FailedEntry.builder()
                                 .phoneNumber(entry.getPhoneNumber())
@@ -288,7 +288,7 @@ public class WhitelistServiceImpl implements WhitelistService {
 
     @Override
     public WhitelistDTO.ValidationResponse validatePhoneNumber(String factoryId, String phoneNumber) {
-        log.debug("验证手机号: factoryId={}, phone={}", factoryId, phoneNumber);
+        log.debug("验证手机号: factoryId={}", factoryId);
         Optional<Whitelist> optional = whitelistRepository.findByFactoryIdAndPhoneNumber(factoryId, phoneNumber);
         if (!optional.isPresent()) {
             return WhitelistDTO.ValidationResponse.builder()
@@ -330,7 +330,7 @@ public class WhitelistServiceImpl implements WhitelistService {
     @Override
     @Transactional
     public void incrementUsage(String factoryId, String phoneNumber) {
-        log.debug("增加使用次数（已废弃）: factoryId={}, phone={}", factoryId, phoneNumber);
+        log.debug("增加使用次数（已废弃）: factoryId={}", factoryId);
         // 使用次数追踪功能已删除，此方法保留为空实现以保持接口兼容性
     }
 
@@ -459,7 +459,7 @@ public class WhitelistServiceImpl implements WhitelistService {
                 result.getSuccessPhones().add(phoneNumber);
                 result.setSuccessCount(result.getSuccessCount() + 1);
             } catch (Exception e) {
-                log.error("导入白名单失败: phone={}, error={}", phoneNumber, e.getMessage());
+                log.error("导入白名单失败: errorType={}", e.getClass().getSimpleName());
                 result.getFailedEntries().add(
                         WhitelistDTO.BatchResult.FailedEntry.builder()
                                 .phoneNumber(phoneNumber)

@@ -66,7 +66,7 @@ public class InMemoryTempTokenServiceImpl implements TempTokenService {
         // 存储到内存
         tokenStore.put(token, new TokenData(phoneNumber, expiryTime));
 
-        log.info("生成临时令牌: token={}, phone={}, duration={}min", token, phoneNumber, durationMinutes);
+        log.info("生成临时令牌: duration={}min", durationMinutes);
         return token;
     }
 
@@ -79,17 +79,17 @@ public class InMemoryTempTokenServiceImpl implements TempTokenService {
         TokenData data = tokenStore.get(tempToken);
 
         if (data == null) {
-            log.warn("临时令牌不存在: token={}", tempToken);
+            log.warn("临时令牌不存在");
             return null;
         }
 
         if (data.isExpired()) {
-            log.warn("临时令牌已过期: token={}", tempToken);
+            log.warn("临时令牌已过期");
             tokenStore.remove(tempToken);
             return null;
         }
 
-        log.info("临时令牌验证成功: token={}, phone={}", tempToken, data.phoneNumber);
+        log.debug("临时令牌验证成功");
         return data.phoneNumber;
     }
 
@@ -100,7 +100,7 @@ public class InMemoryTempTokenServiceImpl implements TempTokenService {
         }
 
         TokenData removed = tokenStore.remove(tempToken);
-        log.info("删除临时令牌: token={}, existed={}", tempToken, removed != null);
+        log.info("删除临时令牌: existed={}", removed != null);
     }
 
     @Override
