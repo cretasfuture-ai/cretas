@@ -6,7 +6,6 @@
 
 ## 在飞任务
 
-- `OPT-LOG-DETAIL-20260929` — `in-progress` — Owner: Codex — Base `eaff438cbff06b381752f1b3e643e5413cea62cc` — 降低无推送设备和未启用洞察预热噪声，调拨操作/阻断补稳定标识，敏感令牌/手机号/验证码不进日志；待目标验证、PR、发布。
 
 
 
@@ -66,7 +65,6 @@
 
 ## Scope 锁地图
 
-- `OPT-LOG-DETAIL-20260929`：Java 仅日志语句及洞察预热默认开关；Web 仅调拨列表/详情的活动埋点；目标测试与归档。验收：Java `LowStockDualAlertServiceTest`、Web `vue-tsc`/调拨目标测试、统一发布回执。
 
 
 
