@@ -20,6 +20,9 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { warehouseLayoutApiClient, WarehouseLayoutConfiguration } from "../../../services/api/warehouseLayoutApiClient";
+import { requireFactoryId } from '../../../utils/factoryIdHelper';
+import { WarehouseFloorMap } from './WarehouseFloorMap';
+import { loadAllWarehouseMaterialBatches } from './warehouseInventoryPages';
 import { handleError } from "../../../utils/errorHandler";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
@@ -51,6 +54,7 @@ export function WHLocationManageScreen() {
 
   // 状态管理
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [zones, setZones] = useState<Zone[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [totalLocations, setTotalLocations] = useState(0);
@@ -62,16 +66,16 @@ export function WHLocationManageScreen() {
 
   // 从批次数据计算库位信息
   const loadLocationData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
-      const [response, layout] = await Promise.all([
-        materialBatchApiClient.getMaterialBatches({ status: 'available', size: 200 }),
-        warehouseLayoutApiClient.getLayout(),
-      ]) as [
-        { data?: { content?: MaterialBatch[] } | MaterialBatch[] },
-        Awaited<ReturnType<typeof warehouseLayoutApiClient.getLayout>>,
-      ];
-
-      const allBatches: MaterialBatch[] = (response.data as { content?: MaterialBatch[] })?.content || response.data as MaterialBatch[] || [];
+      const factoryId = requireFactoryId();
+      const layout = await warehouseLayoutApiClient.getLayout(factoryId);
+      const allBatches = await loadAllWarehouseMaterialBatches<MaterialBatch>(factoryId, async (page) => {
+        const response = await materialBatchApiClient.getMaterialBatches({ factoryId, status: 'available', page, size: 200 });
+        if (!response.success || !response.data) throw new Error(response.message || '库存查询失败');
+        return response.data;
+      });
       setWarehouseLayout(layout);
       if (layout.floors[0]) setMapFloorId(layout.floors[0].id);
 
@@ -135,6 +139,7 @@ export function WHLocationManageScreen() {
       setUsedLocations(locationList.filter(l => l.status === 'using').length);
 
     } catch (error) {
+      setLoadError(true);
       handleError(error, { title: '加载库位数据失败' });
     } finally {
       setLoading(false);
@@ -299,6 +304,16 @@ export function WHLocationManageScreen() {
     );
   }
 
+  if (loadError) {
+    return <SafeAreaView style={styles.container} edges={["top"]}>
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>仓库地图与库存未完整加载，请重试</Text>
+        <Button mode="contained" onPress={loadLocationData} testID="warehouse-map-retry">重试</Button>
+        <Button mode="text" onPress={() => navigation.goBack()}>返回</Button>
+      </View>
+    </SafeAreaView>;
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       {/* Header */}
@@ -376,15 +391,11 @@ export function WHLocationManageScreen() {
               </TouchableOpacity>
             ))}
           </ScrollView>
-          <ScrollView horizontal style={styles.mapCanvasScroll}>
-            <View style={styles.mapCanvas}>
-              {mapFloor?.racks.map((rack) => (
-                <TouchableOpacity key={rack.id} onPress={() => setMapRackId(rack.id)} style={[styles.mapRack, { left: rack.x, top: rack.y, width: rack.width, minHeight: rack.height }, rack.id === mapRackId && styles.mapRackActive]}>
-                  <Text style={styles.mapRackName}>{rack.name}</Text>
-                  <Text style={styles.mapRackMeta}>{warehouseLayout?.zones.find((zone) => zone.id === rack.zoneId)?.prefix} · {rack.levels} 层</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+          <ScrollView style={styles.mapCanvasScroll}>
+            <ScrollView horizontal>
+              {mapFloor && warehouseLayout && <WarehouseFloorMap floor={mapFloor} layout={warehouseLayout}
+                selectedRackId={mapRackId} onSelectRack={setMapRackId} />}
+            </ScrollView>
           </ScrollView>
           {mapRack && (
             <View style={styles.mapShelfPanel}>
@@ -589,11 +600,6 @@ const styles = StyleSheet.create({
   floorTabActive: { backgroundColor: '#dbeafe' },
   floorTabText: { fontSize: 14, color: '#17243a' },
   mapCanvasScroll: { flex: 1, margin: 14, backgroundColor: '#fff', borderRadius: 12 },
-  mapCanvas: { width: 900, minHeight: 420, position: 'relative' },
-  mapRack: { position: 'absolute', padding: 12, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 10 },
-  mapRackActive: { borderWidth: 2, borderColor: '#2563eb' },
-  mapRackName: { color: '#17243a', fontSize: 14, fontWeight: '600' },
-  mapRackMeta: { color: '#607089', fontSize: 12, marginTop: 5 },
   mapShelfPanel: { marginHorizontal: 14, marginBottom: 14, padding: 14, backgroundColor: '#fff', borderRadius: 12 },
   mapShelfTitle: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
   mapShelfRow: { minHeight: 35, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e5eaf2' },
