@@ -44,7 +44,7 @@ interface EditableItem {
    * 本次系统会从哪几个批次取货(按先进先出算出来的)。
    * ⚠️ 这是**信息不是决定** —— 仓管不需要选, 但需要知道该搬哪一批。
    */
-  pickBatches?: { batchNumber: string; productionDate?: string; qty: number }[];
+  pickBatches?: { batchNumber: string; productionDate?: string; storageLocation?: string; qty: number }[];
   /**
    * 进屏时算出来的缺口（需要的量 − 系统现在能凑出来的量），凑得够时为 undefined。
    *
@@ -133,6 +133,7 @@ export function WHDeliveryConfirmScreen() {
               .map((c) => ({
                 batchNumber: String(c.batchNumber ?? ''),
                 productionDate: c.productionDate ? String(c.productionDate) : undefined,
+                storageLocation: c.storageLocation?.trim() || undefined,
                 qty: Number(c.recommendedQuantity ?? 0),
               }))
               .filter((p) => p.batchNumber && p.qty > 0);
@@ -387,6 +388,7 @@ export function WHDeliveryConfirmScreen() {
                           {`· ${p.batchNumber}`}
                           {p.productionDate ? `（${p.productionDate} 生产）` : ''}
                           {` ${p.qty} ${it.unit}`}
+                          {!readOnlyHistory && ` · ${p.storageLocation ? `库位 ${p.storageLocation}` : '库位待定位'}`}
                         </Text>
                       ))}
                     </View>

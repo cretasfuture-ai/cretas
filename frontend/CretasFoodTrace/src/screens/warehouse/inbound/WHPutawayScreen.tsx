@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { WHInboundStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { warehouseLayoutApiClient } from "../../../services/api/warehouseLayoutApiClient";
+import { stocktakeApiClient } from "../../../services/api/stocktakeApiClient";
 import { handleError } from "../../../utils/errorHandler";
 import { MissingRouteParams } from '../../../components/common/MissingRouteParams';
 
@@ -65,6 +66,8 @@ interface BatchInfo {
   quantity: number;
   inspectResult: string;
   storageTemp: string;
+  warehouseName: string;
+  quantityUnit: string;
 }
 
 interface LocationOption {
@@ -103,12 +106,14 @@ export function WHPutawayScreen() {
     }
 
     try {
-      const [response, layout] = await Promise.all([
+      const [response, layout, warehouseResult] = await Promise.all([
         materialBatchApiClient.getBatchById(batchId),
         warehouseLayoutApiClient.getLayout(),
+        stocktakeApiClient.listWarehouses().catch(() => null),
       ]) as [
         { data?: MaterialBatch } | MaterialBatch | undefined,
-        Awaited<ReturnType<typeof warehouseLayoutApiClient.getLayout>>
+        Awaited<ReturnType<typeof warehouseLayoutApiClient.getLayout>>,
+        Awaited<ReturnType<typeof stocktakeApiClient.listWarehouses>> | null,
       ];
 
       setLocationOptions(layout.locations.map((location) => {
@@ -127,6 +132,9 @@ export function WHPutawayScreen() {
 
       if (batch) {
         const storageType = batch.storageType ?? 'fresh';
+        const warehouse = warehouseResult?.success
+          ? warehouseResult.data?.find((item) => item.id === batch.warehouseId || item.code === batch.warehouseId)
+          : undefined;
         setBatchInfo({
           batchNumber: batch.batchNumber ?? `MB-${batch.id}`,
           material: batch.materialName ?? t('messages.unknownMaterial'),
@@ -135,6 +143,8 @@ export function WHPutawayScreen() {
           quantity: batch.remainingQuantity ?? batch.inboundQuantity ?? 0,
           inspectResult: batch.status === 'available' ? t('inbound.putaway.inspectPass') : t('inbound.putaway.inspectPending'),
           storageTemp: getStorageTemp(storageType),
+          warehouseName: warehouse?.name || (batch.warehouseId ? `仓库 ${batch.warehouseId}` : '仓库未登记'),
+          quantityUnit: batch.quantityUnit || '单位未登记',
         });
       }
     } catch (error) {
@@ -277,8 +287,12 @@ export function WHPutawayScreen() {
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>{t('inbound.putaway.quantity')}</Text>
               <Text style={[styles.infoValue, styles.quantityValue]}>
-                {batchInfo.quantity} kg
+                {batchInfo.quantity} {batchInfo.quantityUnit}
               </Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>业务仓库</Text>
+              <Text style={styles.infoValue}>{batchInfo.warehouseName}</Text>
             </View>
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>{t('inbound.putaway.storageTemp')}</Text>
@@ -290,6 +304,7 @@ export function WHPutawayScreen() {
         {/* 选择库位 */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t('inbound.putaway.selectLocation')}</Text>
+          <Text style={styles.metaText}>请选择货物实际放置的位置；同一位置可存放不同业务仓库的批次。</Text>
 
           {locationOptions.length === 0 && (
             <Text style={styles.metaText}>暂无储存位置，请先在网页端配置</Text>
@@ -371,7 +386,7 @@ export function WHPutawayScreen() {
               outlineColor="#ddd"
               activeOutlineColor="#4CAF50"
             />
-            <Text style={styles.unitText}>kg</Text>
+            <Text style={styles.unitText}>{batchInfo.quantityUnit}</Text>
           </View>
           {Number(actualQuantity) !== batchInfo.quantity && (
             <Text style={styles.warningText}>

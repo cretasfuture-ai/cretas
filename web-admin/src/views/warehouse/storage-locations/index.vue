@@ -9,6 +9,7 @@ import { Controls } from '@vue-flow/controls';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, put } from '@/api/request';
+import { listWarehouses, WAREHOUSE_TYPE_LABELS, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import {
   getWarehouseLayout, recognizeWarehouseLayout, saveWarehouseLayout,
   type RecognizedWarehouseLayout, type WarehouseAnnotation, type WarehouseFloor, type WarehouseLayout,
@@ -22,6 +23,7 @@ import {
 } from './warehouseLayoutModel';
 import WarehouseFloorOverlay from './WarehouseFloorOverlay.vue';
 import { loadAllWarehouseBatches, type WarehouseBatchPage } from './warehouseInventoryPages';
+import { warehouseOccupancyAt } from './warehouseOccupancy';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 
@@ -34,6 +36,7 @@ interface InventoryBatch {
   unit: string;
   category: ItemCategory;
   location: string;
+  warehouseId: string;
   inboundDate?: string;
   finished: boolean;
   /** 后端没给物料名, 名称退化成了批次号 —— 展示时必须说清, 不能装成物料名 */
@@ -54,7 +57,9 @@ const saving = ref(false);
 const activeTab = ref<'locations' | 'check' | 'map'>('locations');
 const layout = ref<WarehouseLayout>(normalizeWarehouseLayout(null));
 const batches = ref<InventoryBatch[]>([]);
+const warehouses = ref<FactoryWarehouse[]>([]);
 const inventoryError = ref('');
+const warehouseError = ref('');
 const visibleMaterialCount = ref(36);
 const selectedZoneId = ref('');
 const selectedFloorId = ref('');
@@ -155,6 +160,16 @@ const materials = computed(() => {
 const visibleMaterials = computed(() => materials.value.slice(0, visibleMaterialCount.value));
 const selectedBatches = computed(() => materials.value.find((material) => material.name === selectedMaterial.value)?.entries ?? []);
 const activeRackLocations = computed(() => layout.value.locations.filter((location) => location.rackId === selectedRackId.value));
+function warehouseLabel(id: string) {
+  if (!id) return '仓库未登记';
+  const warehouse = warehouses.value.find((item) => item.id === id || item.code === id);
+  if (!warehouse) return `仓库 ${id}`;
+  const type = WAREHOUSE_TYPE_LABELS[warehouse.type];
+  return `${warehouse.name}${type ? `（${type}）` : ''}`;
+}
+function warehouseSummaryAt(code: string) {
+  return warehouseOccupancyAt(code, batches.value, warehouses.value).join(' · ');
+}
 const flowNodes = computed<Node[]>(() => (activeFloor.value?.racks ?? []).map((rack) => {
   const zone = layout.value.zones.find((entry) => entry.id === rack.zoneId);
   const warning = rackWarnings.value.find((item) => item.rack.id === rack.id);
@@ -336,6 +351,7 @@ function normalizeMaterial(row: Record<string, unknown>, finished: boolean): Inv
     unit: String(row.unit ?? row.quantityUnit ?? 'kg'),
     category,
     location: String(row.storageLocation ?? ''),
+    warehouseId: String(row.warehouseId ?? ''),
     inboundDate: String(row.receiptDate ?? row.inboundDate ?? row.createdAt ?? row.productionDate ?? '') || undefined,
     finished,
   };
@@ -348,7 +364,9 @@ async function loadWorkspace() {
   const signal = inventoryController.signal;
   loading.value = true;
   inventoryError.value = '';
+  warehouseError.value = '';
   batches.value = [];
+  warehouses.value = [];
   try {
     const currentFactoryId = factoryId.value;
     const stored = await getWarehouseLayout(currentFactoryId);
@@ -362,11 +380,23 @@ async function loadWorkspace() {
       return response.data;
     }, signal);
     try {
-      const [materials, finished] = await Promise.all([
+      const [materialResult, finishedResult, warehouseResult] = await Promise.allSettled([
         loadPages(`/${currentFactoryId}/material-batches`, 200),
         loadPages(`/${currentFactoryId}/sales/finished-goods`, 100),
+        listWarehouses(currentFactoryId),
       ]);
       if (signal.aborted) return;
+      if (warehouseResult.status === 'fulfilled' && warehouseResult.value.success && Array.isArray(warehouseResult.value.data)) {
+        warehouses.value = warehouseResult.value.data;
+      } else {
+        warehouseError.value = warehouseResult.status === 'rejected'
+          ? (warehouseResult.reason instanceof Error ? warehouseResult.reason.message : '业务仓库信息加载失败')
+          : '业务仓库信息加载失败';
+      }
+      if (materialResult.status === 'rejected') throw materialResult.reason;
+      if (finishedResult.status === 'rejected') throw finishedResult.reason;
+      const materials = materialResult.value;
+      const finished = finishedResult.value;
       batches.value = [
         ...materials.map((row) => normalizeMaterial(row, false)),
         ...finished.map((row) => normalizeMaterial(row, true)),
@@ -747,6 +777,7 @@ onUnmounted(() => {
       <button v-for="tab in navigationTabs" :key="tab.id" :data-activity-action="`storage.tab.${tab.id}`" :class="{ active: activeTab === tab.id }" :disabled="!!inventoryError && tab.id !== 'map'" @click="activeTab = tab.id">{{ tab.label }}</button>
     </nav>
     <el-alert v-if="inventoryError" class="inventory-load-error" type="error" :closable="false" show-icon :title="`库存未完整加载：${inventoryError}`"><el-button size="small" @click="loadWorkspace">重试加载库存</el-button></el-alert>
+    <el-alert v-if="warehouseError" class="inventory-load-error" type="warning" :closable="false" show-icon :title="`业务仓库信息未加载：${warehouseError}`"><el-button size="small" @click="loadWorkspace">重试</el-button></el-alert>
 
     <section v-if="activeTab === 'locations'" class="workspace-body">
       <aside class="zone-sidebar">
@@ -763,7 +794,7 @@ onUnmounted(() => {
 
       <div class="primary-panel">
         <div class="section-heading"><h2>{{ activeZone?.name || '储存位置' }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" placeholder="搜索位置" clearable /><el-button v-if="canEditLayout" type="primary" :icon="Plus" @click="openLocationDialog">添加位置</el-button></div></div>
-        <div class="location-grid"><article v-for="location in visibleLocations" :key="location.id" class="location-card"><div class="card-top"><strong>{{ location.code }}</strong><span class="card-top-right"><span>{{ countAt(location.code).length }} 批</span><el-button v-if="canEditLayout" data-activity-action="storage.delete-location" link :icon="Delete" :aria-label="`删除位置 ${location.code}`" :title="`删除位置 ${location.code}`" @click="removeLocation(location)" /></span></div><div>{{ location.name }}</div><small class="muted">{{ location.notes || (countAt(location.code).length ? `${new Set(countAt(location.code).map(item => item.name)).size} 种物料` : '空闲') }}</small></article></div>
+        <div class="location-grid"><article v-for="location in visibleLocations" :key="location.id" class="location-card"><div class="card-top"><strong>{{ location.code }}</strong><span class="card-top-right"><span>{{ countAt(location.code).length }} 批</span><el-button v-if="canEditLayout" data-activity-action="storage.delete-location" link :icon="Delete" :aria-label="`删除位置 ${location.code}`" :title="`删除位置 ${location.code}`" @click="removeLocation(location)" /></span></div><div>{{ location.name }}</div><small class="muted">{{ location.notes || (countAt(location.code).length ? `${new Set(countAt(location.code).map(item => item.name)).size} 种物料` : '空闲') }}</small><small v-if="countAt(location.code).length && !warehouseError" class="muted warehouse-occupancy">{{ warehouseSummaryAt(location.code) }}</small></article></div>
         <el-empty v-if="!visibleLocations.length" description="暂无储存位置" :image-size="90" />
       </div>
     </section>
@@ -774,7 +805,7 @@ onUnmounted(() => {
       <div class="material-grid"><button v-for="material in visibleMaterials" :key="material.name" class="material-card" :class="{ selected: selectedMaterial === material.name }" @click="selectedMaterial = material.name"><strong>{{ material.name }}</strong><small v-if="material.unnamed" class="unnamed-tag">未登记物料名 · 按批次号显示</small><span class="quantity">{{ formatQuantity(material.quantity) }} <small>{{ material.unit }}</small></span><span class="card-foot"><small>{{ material.entries.length }} 批次</small><small>{{ material.maxAge === null ? '在库时长未知' : `最长 ${material.maxAge} 天` }}</small></span></button></div>
       <div v-if="materials.length > visibleMaterialCount" class="load-more-materials"><span>已显示 {{ visibleMaterials.length }} / {{ materials.length }} 项</span><el-button @click="visibleMaterialCount += 36">显示更多</el-button></div>
       <el-empty v-if="!inventoryError && !materials.length" description="暂无库存" :image-size="75" />
-      <template v-if="selectedMaterial"><div class="section-heading batch-heading"><h2>{{ selectedMaterial }}</h2><el-button type="primary" plain @click="router.push('/warehouse/stocktakes')">发起盘点</el-button></div><div class="batch-grid"><article v-for="batch in selectedBatches" :key="batch.id" class="batch-card"><div class="card-top"><strong>{{ batch.batchNumber }}</strong><el-button v-if="canMoveInventory" link type="primary" @click="openMoveDialog(batch)">调整位置</el-button></div><div class="quantity">{{ formatQuantity(batch.quantity) }} <small>{{ batch.unit }}</small></div><div class="card-foot"><span :class="{ 'bad-location': batch.location && !isConfiguredLocation(batch.location) }" :title="batch.location">{{ batch.location ? (isConfiguredLocation(batch.location) ? batch.location : '位置无效') : '未分配' }}</span><span>在库 {{ formatAge(batch.inboundDate) }}</span></div></article></div></template>
+      <template v-if="selectedMaterial"><div class="section-heading batch-heading"><h2>{{ selectedMaterial }}</h2><el-button type="primary" plain @click="router.push('/warehouse/stocktakes')">发起盘点</el-button></div><div class="batch-grid"><article v-for="batch in selectedBatches" :key="batch.id" class="batch-card"><div class="card-top"><strong>{{ batch.batchNumber }}</strong><el-button v-if="canMoveInventory" link type="primary" @click="openMoveDialog(batch)">调整位置</el-button></div><div class="quantity">{{ formatQuantity(batch.quantity) }} <small>{{ batch.unit }}</small></div><small v-if="!warehouseError" class="muted warehouse-occupancy">{{ warehouseLabel(batch.warehouseId) }}</small><div class="card-foot"><span :class="{ 'bad-location': batch.location && !isConfiguredLocation(batch.location) }" :title="batch.location">{{ batch.location ? (isConfiguredLocation(batch.location) ? batch.location : '位置无效') : '未分配' }}</span><span>在库 {{ formatAge(batch.inboundDate) }}</span></div></article></div></template>
     </section>
 
     <section v-else class="map-panel" :class="{ 'is-fullscreen': mapFullscreen }">
@@ -918,4 +949,5 @@ onUnmounted(() => {
 .load-more-materials{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;color:var(--muted);font-size:13px}
 .workspace-tabs button:disabled{opacity:.5;cursor:not-allowed}
 .rack-warning-list{margin-bottom:16px;padding:12px;border:1px solid #f4c779;border-radius:10px;background:#fffbeb;color:#78350f}.rack-warning-list strong{font-size:14px}.rack-warning-list p,.rack-warning-detail{margin:7px 0;font-size:13px;line-height:1.5}.rack-warning-list button{display:block;width:100%;margin-top:6px;padding:5px 7px;border:0;border-radius:6px;background:transparent;color:#92400e;text-align:left;cursor:pointer}.rack-warning-list button:hover,.rack-warning-list button:focus-visible{background:#fef3c7}.rack-warning-detail{padding:9px;border-radius:8px;background:#fffbeb;color:#92400e}
+.warehouse-occupancy{display:block;margin:8px 0;line-height:1.4;overflow-wrap:anywhere}
 </style>

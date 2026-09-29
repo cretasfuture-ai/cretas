@@ -25,6 +25,7 @@ export interface FifoBatchCandidate {
   finishedGoodsBatchId?: string;
   batchNumber?: string;
   productionDate?: string;
+  storageLocation?: string | null;
   availableQuantity?: number;
   unit?: string;
   [k: string]: unknown;
