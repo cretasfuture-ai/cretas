@@ -44,6 +44,10 @@ def test_minimal_safe_set_is_subset_of_safe_models():
 #:    留痕已有两份且都是权威位置: git 历史(完整旧表 + 那个 commit)、
 #:    以及 llm_router.py 里 08-09 / 08-13 两轮人审结论的审计注释。
 _FROZEN_REGISTRY = {
+    # 2026-09-29 A 账号同源带图探针通过；owner 要求先用有限额模型。
+    ("aliyun_a_vl", "qwen3.8-27b"): None,
+    ("aliyun_a_vl", "kimi-k3"): None,
+    ("aliyun_a_vl", "qwen3.8-max-0902"): None,
     ("aliyun_a_vl", "deepseek-v4.1-flash"): None,
     # AI Store: owner 确认账号级自动停 + 生产同源探针; 到期日是**真额度到期**。
     ("aistore", "DeepSeek-V4-Flash-A"): datetime.date(2026, 9, 13),

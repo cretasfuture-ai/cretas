@@ -4,8 +4,9 @@ Multi-provider LLM router with per-account allowlisting and fallback.
 Per-slot DEEP fallback chains (rebuilt 2026-05-31, Steve directive): each SLOT
 has a list of (account, model) entries. The router tries them in order; an
 exhausted free model returns 403 FreeTierOnly and falls to the NEXT entry.
-Some entries have owner-approved pay-as-you-go billing. The warehouse-specific
-DeepSeek candidate requires LLM_WAREHOUSE_V41_ENABLED=1 as an additional gate.
+Some entries have owner-approved pay-as-you-go billing. Warehouse-only visual
+candidates require LLM_WAREHOUSE_CANDIDATES_ENABLED=1; the DeepSeek candidate
+retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 
 ⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
 aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
@@ -85,7 +86,7 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 #
 # ⛔ BILLING INVARIANT: _SAFE_MODELS contains only account/model pairs backed by
 # verified free-quota auto-stop OR explicit owner authorization for paid use.
-# The warehouse DeepSeek pair additionally requires an explicit runtime switch.
+# Warehouse-only pairs additionally require explicit runtime switches.
 # The router refuses every unlisted pair; it cannot identify a paid 200 response.
 #
 # ⛔ For free-grant entries: ON-toggle = SAFETY; expiry date =
@@ -164,6 +165,15 @@ _d = datetime.date
 # ⇒ 换成一张带证据的登记表: 想往 VL 池里加候选, 就得在这里写下探针日期与结论。
 #   值是那条证据本身, ⛔ 不是 True/False —— 布尔值记不住「凭什么」。
 _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
+    ("aliyun_a_vl", "qwen3.8-27b"):
+        "2026-09-29 A 账号生产同源仓库图探针 HTTP 200，3.53s；合法 JSON，"
+        "识别冷藏区、1号货架、入口，usage.image_tokens=402。仅供 warehouse_vl。",
+    ("aliyun_a_vl", "kimi-k3"):
+        "2026-09-29 A 账号生产同源仓库图探针 HTTP 200，3.12s；合法 JSON，"
+        "识别冷藏区、1号货架、入口，usage.image_tokens=525。仅供 warehouse_vl。",
+    ("aliyun_a_vl", "qwen3.8-max-0902"):
+        "2026-09-29 A 账号生产同源仓库图探针 HTTP 200，4.90s；合法 JSON，"
+        "识别冷藏区、1号货架、入口，usage.image_tokens=402。仅供 warehouse_vl。",
     ("aliyun_a_vl", "deepseek-v4.1-flash"):
         "2026-09-29 A 账号生产同源带图探针两次 HTTP 200，分别 2.8s 和 2.0s；"
         "仓库图原提示词返回合法 JSON，识别冷藏区、1号货架、入口，usage.image_tokens=254。"
@@ -245,6 +255,11 @@ def _vl_pool() -> List[Tuple[str, str]]:
     return []
 
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # 2026-09-29 owner 要求先用截图中的有限额模型；额度/自动停状态未在截图展示。
+    # 显式开关控制仓库专用调用；None 表示额度到期日未知，不表示免费或无限额。
+    ("aliyun_a_vl", "qwen3.8-27b"): None,
+    ("aliyun_a_vl", "kimi-k3"): None,
+    ("aliyun_a_vl", "qwen3.8-max-0902"): None,
     # 2026-09-29 owner 确认长期使用这个模型；可能产生按量费用。
     # _refuse_reason 默认拒绝，只有显式设置 LLM_WAREHOUSE_V41_ENABLED=1 才发送请求。
     ("aliyun_a_vl", "deepseek-v4.1-flash"): None,
@@ -444,6 +459,9 @@ _THINKING_ONLY: frozenset = frozenset({
 # "safe" 不承诺"每个槽都有兜底", 只承诺"有兜底的槽兜底的是活的模型"。
 _MINIMAL_SAFE_SET: frozenset = frozenset({
     # registry 超龄时专用视觉槽也必须保留已核验的候选。
+    ("aliyun_a_vl", "qwen3.8-27b"),
+    ("aliyun_a_vl", "kimi-k3"),
+    ("aliyun_a_vl", "qwen3.8-max-0902"),
     ("aliyun_a_vl", "deepseek-v4.1-flash"),
     # AI Store's account-level auto-stop was explicitly confirmed by the owner;
     # these remain admissible when the older shared registry becomes stale, but
@@ -748,6 +766,12 @@ def _refuse_reason(account: str, model: str,
         return "registry_stale"          # fail SAFE: only minimal set until re-audit
     if (account, model) not in _SAFE_MODELS:
         return "not_allowlisted"         # not a confirmed-ON model on this account
+    if (account, model) in {
+        ("aliyun_a_vl", "qwen3.8-27b"),
+        ("aliyun_a_vl", "kimi-k3"),
+        ("aliyun_a_vl", "qwen3.8-max-0902"),
+    } and os.getenv("LLM_WAREHOUSE_CANDIDATES_ENABLED") != "1":
+        return "warehouse_candidates_not_enabled"
     if (account, model) == ("aliyun_a_vl", "deepseek-v4.1-flash"):
         if os.getenv("LLM_WAREHOUSE_V41_ENABLED") != "1":
             return "warehouse_v41_not_enabled"  # explicit production enable required
@@ -1454,8 +1478,14 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 顺序与模型都由 env 决定(`LLM_VL_ACCOUNTS` / `LLM_VL_MODEL`), 但只能在
     # `_VISION_VERIFIED` 登记过的组合里挑 —— 见 `_vl_pool()` 上方的说明。
     SLOT.VL: _vl_pool(),
-    # 仓库优先用已实测的 A DeepSeek；原视觉链仍可在额度恢复时故障转移。
-    SLOT.WAREHOUSE_VL: [("aliyun_a_vl", "deepseek-v4.1-flash"), *_vl_pool()],
+    # 仓库优先使用 A 账号本次带图实测候选；DeepSeek 与原 VL 链继续故障转移。
+    SLOT.WAREHOUSE_VL: [
+        ("aliyun_a_vl", "qwen3.8-27b"),
+        ("aliyun_a_vl", "kimi-k3"),
+        ("aliyun_a_vl", "qwen3.8-max-0902"),
+        ("aliyun_a_vl", "deepseek-v4.1-flash"),
+        *_vl_pool(),
+    ],
 }
 
 # 绝对置底 —— `_build_chain` 排序键的第 2 位, 优先于能力档/延迟档/到期日。
