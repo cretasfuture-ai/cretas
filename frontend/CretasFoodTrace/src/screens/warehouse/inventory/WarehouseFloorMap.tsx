@@ -1,5 +1,6 @@
 import React from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
+import { TouchableRipple } from 'react-native-paper';
 import Svg, { Ellipse, Polygon, Polyline, Rect, Text as SvgText } from 'react-native-svg';
 import type { WarehouseMapFloor, WarehouseLayoutConfiguration } from '../../../services/api/warehouseLayoutApiClient';
 import { warehouseAnnotationPoints, warehouseMapExtent } from './warehouseFloorMapModel';
@@ -24,20 +25,23 @@ export function WarehouseFloorMap({ floor, layout, selectedRackId, onSelectRack 
           const zone = layout.zones.find((item) => item.id === shape.zoneId);
           return <React.Fragment key={shape.zoneId}>
             <Rect x={shape.x} y={shape.y} width={shape.width} height={shape.height} rx={14}
-              fill={zone?.color ?? '#e2e8f0'} fillOpacity={0.6} stroke="#94a3b8" strokeDasharray={zone ? '7 5' : '3 3'} strokeWidth={1.5} />
-            <SvgText x={shape.x + 12} y={shape.y + 24} fontSize={13} fill="#17243a">
+              fill={zone?.color ?? '#E5E7EB'} fillOpacity={0.6} stroke="#94a3b8" strokeDasharray={zone ? '7 5' : '3 3'} strokeWidth={1.5} />
+            <SvgText x={shape.x + 12} y={shape.y + 25} fontSize={14} fontWeight="600" fill="#1F2937">
               {zone ? `${zone.prefix} · ${zone.name}` : '已删除的区域'}
             </SvgText>
           </React.Fragment>;
         })}
       </Svg>
       {floor.racks.map((rack) => (
-        <TouchableOpacity key={rack.id} onPress={() => onSelectRack(rack.id)}
-          style={[styles.rack, { left: rack.x, top: rack.y, width: rack.width, minHeight: rack.height }, rack.id === selectedRackId && styles.rackSelected]}
+        <TouchableRipple key={rack.id} onPress={() => onSelectRack(rack.id)} rippleColor="rgba(24,144,255,0.16)"
+          style={[styles.rack, { left: rack.x, top: rack.y, width: Math.max(44, rack.width), minHeight: Math.max(44, rack.height) }, rack.id === selectedRackId && styles.rackSelected]}
+          accessibilityRole="button" accessibilityState={{ selected: rack.id === selectedRackId }}
           accessibilityLabel={`${rack.name}，${rack.levels} 层`} testID={`warehouse-rack-${rack.id}`}>
-          <Text style={styles.rackName}>{rack.name}</Text>
-          <Text style={styles.rackMeta}>{layout.zones.find((zone) => zone.id === rack.zoneId)?.prefix ?? '未归属'} · {rack.levels} 层</Text>
-        </TouchableOpacity>
+          <View>
+            <Text style={styles.rackName}>{rack.name}</Text>
+            <Text style={styles.rackMeta}>{layout.zones.find((zone) => zone.id === rack.zoneId)?.prefix ?? '未归属'} · {rack.levels} 层</Text>
+          </View>
+        </TouchableRipple>
       ))}
       <Svg width={extent.width} height={extent.height} style={styles.layer} pointerEvents="none">
         {(floor.annotations ?? []).map((annotation) => {
@@ -61,9 +65,9 @@ export function WarehouseFloorMap({ floor, layout, selectedRackId, onSelectRack 
 const styles = StyleSheet.create({
   canvas: { position: 'relative', backgroundColor: '#fff' },
   layer: { position: 'absolute', left: 0, top: 0 },
-  backgroundWash: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.72)' },
-  rack: { position: 'absolute', padding: 12, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 10 },
-  rackSelected: { borderWidth: 2, borderColor: '#2563eb' },
-  rackName: { color: '#17243a', fontSize: 14, fontWeight: '600' },
-  rackMeta: { color: '#607089', fontSize: 12, marginTop: 5 },
+  backgroundWash: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.35)' },
+  rack: { position: 'absolute', padding: 12, borderWidth: 1, borderColor: '#91CAFF', backgroundColor: '#E6F7FF', borderRadius: 12, overflow: 'hidden', justifyContent: 'center' },
+  rackSelected: { borderWidth: 2, borderColor: '#1890FF', backgroundColor: '#D6EEFF' },
+  rackName: { color: '#1F2937', fontSize: 16, fontWeight: '700' },
+  rackMeta: { color: '#6B7280', fontSize: 13, marginTop: 5 },
 });

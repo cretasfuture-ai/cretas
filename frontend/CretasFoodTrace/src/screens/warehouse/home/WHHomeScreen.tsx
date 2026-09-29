@@ -5,19 +5,21 @@ import { Text, Surface, TouchableRipple } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 
-import { WarehouseManagerTabParamList } from '../../../types/navigation';
+import { WHHomeStackParamList, WarehouseManagerTabParamList } from '../../../types/navigation';
 import { handleError } from '../../../utils/errorHandler';
 
 type TabNav = BottomTabNavigationProp<WarehouseManagerTabParamList>;
+type HomeNav = NativeStackNavigationProp<WHHomeStackParamList>;
 
 export default function WHHomeScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<HomeNav>();
 
   /** 仓库地图在**本栈**内, 不切 Tab —— 它是现场找货的参照, 不是第三条作业主线。 */
   const openWarehouseMap = useCallback(() => {
-    (navigation as unknown as { navigate: (name: string) => void }).navigate('WHLocationManage');
+    navigation.navigate('WHLocationManage', { openMap: true });
   }, [navigation]);
 
   const openTab = useCallback((tab: 'WHInboundTab' | 'WHOutboundTab') => {
