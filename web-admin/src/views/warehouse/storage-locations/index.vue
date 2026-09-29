@@ -21,6 +21,7 @@ import {
   upsertZoneShape, zoneShapeFromPercent, zonesMissingShapeOnFloor, type MapTool,
 } from './warehouseLayoutModel';
 import WarehouseFloorOverlay from './WarehouseFloorOverlay.vue';
+import { loadAllWarehouseBatches, type WarehouseBatchPage } from './warehouseInventoryPages';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 
@@ -38,6 +39,7 @@ interface InventoryBatch {
   /** 后端没给物料名, 名称退化成了批次号 —— 展示时必须说清, 不能装成物料名 */
   unnamed: boolean;
 }
+type RawWarehouseBatch = Record<string, unknown> & { id: string; factoryId: string };
 
 const auth = useAuthStore();
 const permissions = usePermissionStore();
@@ -52,6 +54,8 @@ const saving = ref(false);
 const activeTab = ref<'locations' | 'check' | 'map'>('locations');
 const layout = ref<WarehouseLayout>(normalizeWarehouseLayout(null));
 const batches = ref<InventoryBatch[]>([]);
+const inventoryError = ref('');
+const visibleMaterialCount = ref(36);
 const selectedZoneId = ref('');
 const selectedFloorId = ref('');
 const selectedRackId = ref('');
@@ -110,7 +114,7 @@ const mapTools: Array<{ id: MapTool; label: string }> = [
   { id: 'ellipse', label: '圆形' }, { id: 'polygon', label: '多边形' }, { id: 'freehand', label: '自由笔' },
   { id: 'text', label: '文字' },
 ];
-let materialSearchTimer: ReturnType<typeof setTimeout> | undefined;
+let inventoryController: AbortController | undefined;
 
 const activeZone = computed(() => layout.value.zones.find((zone) => zone.id === selectedZoneId.value));
 const activeFloor = computed(() => layout.value.floors.find((floor) => floor.id === selectedFloorId.value));
@@ -139,8 +143,9 @@ const materials = computed(() => {
     maxAge: maxDaysInStorage(entries.map((entry) => entry.inboundDate)),
     // 这一组是不是只有批次号、没有真实物料名(见 normalizeMaterial 的 unnamed)
     unnamed: entries.every((entry) => entry.unnamed),
-  })).slice(0, 36);
+  }));
 });
+const visibleMaterials = computed(() => materials.value.slice(0, visibleMaterialCount.value));
 const selectedBatches = computed(() => materials.value.find((material) => material.name === selectedMaterial.value)?.entries ?? []);
 const activeRackLocations = computed(() => layout.value.locations.filter((location) => location.rackId === selectedRackId.value));
 const flowNodes = computed<Node[]>(() => (activeFloor.value?.racks ?? []).map((rack) => {
@@ -304,18 +309,8 @@ function onMapKeydown(event: KeyboardEvent) {
   else if ((event.key === 'Delete' || event.key === 'Backspace') && mapSelection.value) void removeSelectedShape();
 }
 
-function pickArray(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) return value as Record<string, unknown>[];
-  if (value && typeof value === 'object') {
-    const result = value as Record<string, unknown>;
-    return Array.isArray(result.content) ? result.content as Record<string, unknown>[]
-      : Array.isArray(result.list) ? result.list as Record<string, unknown>[] : [];
-  }
-  return [];
-}
-
 function normalizeMaterial(row: Record<string, unknown>, finished: boolean): InventoryBatch {
-  const family = bigCategoryOf(String(row.category ?? row.materialCategory ?? row.materialTypeCategory ?? ''));
+  const family = bigCategoryOf(String(row.materialMainCategory ?? row.category ?? row.materialCategory ?? row.materialTypeCategory ?? ''));
   const category: ItemCategory = finished ? '成品' : family === '包材' ? '包材' : family === '辅料' || family === '调料' ? '辅材' : '原料';
   // 🔴 2026-08-25 生产实测: F006 的 139 条原料批次里 22 条 materialName 为 null,
   // 于是名称回落成批次号, 「按物料分组」在这 22 条上退化成「按批次分组」——
@@ -340,25 +335,45 @@ function normalizeMaterial(row: Record<string, unknown>, finished: boolean): Inv
 
 async function loadWorkspace() {
   if (!factoryId.value) return;
+  inventoryController?.abort();
+  inventoryController = new AbortController();
+  const signal = inventoryController.signal;
   loading.value = true;
+  inventoryError.value = '';
+  batches.value = [];
   try {
-    const [stored, materialsResult, finishedResult] = await Promise.allSettled([
-      getWarehouseLayout(factoryId.value),
-      get(`/${factoryId.value}/material-batches`, { params: { page: 1, size: 200 } }),
-      get(`/${factoryId.value}/sales/finished-goods`, { params: { page: 1, size: 500 } }),
-    ]);
-    if (stored.status === 'fulfilled') layout.value = normalizeWarehouseLayout(stored.value.data);
-    else throw stored.reason;
-    batches.value = [
-      ...(materialsResult.status === 'fulfilled' ? pickArray(materialsResult.value.data).map((row) => normalizeMaterial(row, false)) : []),
-      ...(finishedResult.status === 'fulfilled' ? pickArray(finishedResult.value.data).map((row) => normalizeMaterial(row, true)) : []),
-    ].filter((batch) => batch.quantity > 0);
+    const currentFactoryId = factoryId.value;
+    const stored = await getWarehouseLayout(currentFactoryId);
+    if (signal.aborted) return;
+    layout.value = normalizeWarehouseLayout(stored.data);
     if (!selectedZoneId.value && layout.value.zones[0]) selectedZoneId.value = layout.value.zones[0].id;
     if (!selectedFloorId.value && layout.value.floors[0]) selectedFloorId.value = layout.value.floors[0].id;
+    const loadPages = (path: string, size: number) => loadAllWarehouseBatches(currentFactoryId, async (page) => {
+      const response = await get<WarehouseBatchPage<RawWarehouseBatch>>(path, { params: { page, size }, signal });
+      if (!response.success || !response.data) throw new Error(response.message || '库存查询失败');
+      return response.data;
+    }, signal);
+    try {
+      const [materials, finished] = await Promise.all([
+        loadPages(`/${currentFactoryId}/material-batches`, 200),
+        loadPages(`/${currentFactoryId}/sales/finished-goods`, 100),
+      ]);
+      if (signal.aborted) return;
+      batches.value = [
+        ...materials.map((row) => normalizeMaterial(row, false)),
+        ...finished.map((row) => normalizeMaterial(row, true)),
+      ].filter((batch) => batch.quantity > 0);
+      visibleMaterialCount.value = 36;
+    } catch (error) {
+      if (!signal.aborted) {
+        inventoryError.value = error instanceof Error ? error.message : '库存查询失败';
+        activeTab.value = 'map';
+      }
+    }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '仓储配置加载失败');
+    if (!signal.aborted) ElMessage.error(error instanceof Error ? error.message : '仓储配置加载失败');
   } finally {
-    loading.value = false;
+    if (!signal.aborted) loading.value = false;
   }
 }
 
@@ -658,22 +673,8 @@ function categoryCount(category: ItemCategory) {
   return names.size;
 }
 function formatAge(value?: string) { const age = daysInStorage(value); return age === null ? '—' : `${age} 天`; }
-function selectCategory(category: ItemCategory) { selectedCategory.value = category; selectedMaterial.value = ''; searchTerm.value = ''; }
-watch(searchTerm, (keyword) => {
-  if (activeTab.value !== 'check' || !factoryId.value || selectedCategory.value === '成品') return;
-  if (materialSearchTimer) clearTimeout(materialSearchTimer);
-  materialSearchTimer = setTimeout(async () => {
-    try {
-      const response = await get(`/${factoryId.value}/material-batches`, {
-        params: { page: 1, size: 200, ...(keyword.trim() ? { keyword: keyword.trim() } : {}) },
-      });
-      const materialRows = pickArray(response.data).map((row) => normalizeMaterial(row, false)).filter((batch) => batch.quantity > 0);
-      batches.value = [...materialRows, ...batches.value.filter((batch) => batch.finished)];
-    } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '物料搜索失败');
-    }
-  }, 250);
-});
+function selectCategory(category: ItemCategory) { selectedCategory.value = category; selectedMaterial.value = ''; searchTerm.value = ''; visibleMaterialCount.value = 36; }
+watch([searchTerm, locationFilter], () => { visibleMaterialCount.value = 36; selectedMaterial.value = ''; });
 // 全屏时锁住页面滚动 —— 全屏面板是 position:fixed, 底下的页面还能滚会让人晕。
 watch(mapFullscreen, (open) => { document.body.style.overflow = open ? 'hidden' : ''; });
 // 换楼层就把选中清掉: 选中标记里存的是上一层的图形 id, 留着会指向一个本层没有的东西。
@@ -685,6 +686,7 @@ onMounted(() => {
 // 离开页面时把还没落地的那次保存取消掉 —— 否则用户已经走了, 还会再打一次整份 PUT。
 // 全屏时直接路由走掉的话, body 的 overflow 也必须还回去, 否则整站滚不动了。
 onUnmounted(() => {
+  inventoryController?.abort();
   layoutPersistDebouncer.cancel();
   window.removeEventListener('keydown', onMapKeydown);
   document.body.style.overflow = '';
@@ -699,8 +701,9 @@ onUnmounted(() => {
     </header>
 
     <nav class="workspace-tabs">
-      <button v-for="tab in navigationTabs" :key="tab.id" :data-activity-action="`storage.tab.${tab.id}`" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">{{ tab.label }}</button>
+      <button v-for="tab in navigationTabs" :key="tab.id" :data-activity-action="`storage.tab.${tab.id}`" :class="{ active: activeTab === tab.id }" :disabled="!!inventoryError && tab.id !== 'map'" @click="activeTab = tab.id">{{ tab.label }}</button>
     </nav>
+    <el-alert v-if="inventoryError" class="inventory-load-error" type="error" :closable="false" show-icon :title="`库存未完整加载：${inventoryError}`"><el-button size="small" @click="loadWorkspace">重试加载库存</el-button></el-alert>
 
     <section v-if="activeTab === 'locations'" class="workspace-body">
       <aside class="zone-sidebar">
@@ -725,8 +728,9 @@ onUnmounted(() => {
     <section v-else-if="activeTab === 'check'" class="stock-panel">
       <div class="category-grid"><button v-for="category in categoryOptions" :key="category" class="category-card" :class="{ selected: category === selectedCategory }" @click="selectCategory(category)"><strong>{{ category }}</strong><small>{{ categoryCount(category) }} 项</small></button></div>
       <div class="section-heading"><h2>{{ selectedCategory }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" placeholder="搜索名称 / 批次" clearable /><el-select v-model="locationFilter" placeholder="全部位置" clearable><el-option-group v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`"><el-option v-for="location in layout.locations.filter(item => item.zoneId === zone.id)" :key="location.id" :label="location.code" :value="location.code" /></el-option-group></el-select></div></div>
-      <div class="material-grid"><button v-for="material in materials" :key="material.name" class="material-card" :class="{ selected: selectedMaterial === material.name }" @click="selectedMaterial = material.name"><strong>{{ material.name }}</strong><small v-if="material.unnamed" class="unnamed-tag">未登记物料名 · 按批次号显示</small><span class="quantity">{{ formatQuantity(material.quantity) }} <small>{{ material.unit }}</small></span><span class="card-foot"><small>{{ material.entries.length }} 批次</small><small>{{ material.maxAge === null ? '在库时长未知' : `最长 ${material.maxAge} 天` }}</small></span></button></div>
-      <el-empty v-if="!materials.length" description="暂无库存" :image-size="75" />
+      <div class="material-grid"><button v-for="material in visibleMaterials" :key="material.name" class="material-card" :class="{ selected: selectedMaterial === material.name }" @click="selectedMaterial = material.name"><strong>{{ material.name }}</strong><small v-if="material.unnamed" class="unnamed-tag">未登记物料名 · 按批次号显示</small><span class="quantity">{{ formatQuantity(material.quantity) }} <small>{{ material.unit }}</small></span><span class="card-foot"><small>{{ material.entries.length }} 批次</small><small>{{ material.maxAge === null ? '在库时长未知' : `最长 ${material.maxAge} 天` }}</small></span></button></div>
+      <div v-if="materials.length > visibleMaterialCount" class="load-more-materials"><span>已显示 {{ visibleMaterials.length }} / {{ materials.length }} 项</span><el-button @click="visibleMaterialCount += 36">显示更多</el-button></div>
+      <el-empty v-if="!inventoryError && !materials.length" description="暂无库存" :image-size="75" />
       <template v-if="selectedMaterial"><div class="section-heading batch-heading"><h2>{{ selectedMaterial }}</h2><el-button type="primary" plain @click="router.push('/warehouse/stocktakes')">发起盘点</el-button></div><div class="batch-grid"><article v-for="batch in selectedBatches" :key="batch.id" class="batch-card"><div class="card-top"><strong>{{ batch.batchNumber }}</strong><el-button v-if="canMoveInventory" link type="primary" @click="openMoveDialog(batch)">调整位置</el-button></div><div class="quantity">{{ formatQuantity(batch.quantity) }} <small>{{ batch.unit }}</small></div><div class="card-foot"><span :class="{ 'bad-location': batch.location && !isConfiguredLocation(batch.location) }" :title="batch.location">{{ batch.location ? (isConfiguredLocation(batch.location) ? batch.location : '位置无效') : '未分配' }}</span><span>在库 {{ formatAge(batch.inboundDate) }}</span></div></article></div></template>
     </section>
 
@@ -821,7 +825,7 @@ onUnmounted(() => {
               <div v-for="level in Array.from({ length: activeRack.levels }, (_, index) => activeRack!.levels - index)" :key="level" class="shelf-level">
                 <span class="level-number">{{ level }}F</span>
                 <div class="shelf-content">
-                  <div v-for="location in activeRackLocations.filter(item => item.level === level)" :key="location.id" class="shelf-location"><strong>{{ location.code }}</strong><small>{{ countAt(location.code).length }} 批</small><small v-if="countAt(location.code)[0]">{{ formatAge(countAt(location.code)[0]?.inboundDate) }}</small><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`把 ${location.code} 从本层解绑`" :title="`把 ${location.code} 从本层解绑`" @click="unbindLocation(location)" /></div>
+                  <div v-for="location in activeRackLocations.filter(item => item.level === level)" :key="location.id" class="shelf-location"><strong>{{ location.code }}</strong><small>{{ inventoryError ? '库存未加载' : `${countAt(location.code).length} 批` }}</small><small v-if="!inventoryError && countAt(location.code)[0]">{{ formatAge(countAt(location.code)[0]?.inboundDate) }}</small><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`把 ${location.code} 从本层解绑`" :title="`把 ${location.code} 从本层解绑`" @click="unbindLocation(location)" /></div>
                   <el-dropdown v-if="canEditLayout" trigger="click" @command="(id: string) => { const location = layout.locations.find(item => item.id === id); if (location) bindLocation(location, level); }"><el-button text :icon="Plus">绑定位置</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="location in layout.locations.filter(item => item.zoneId === activeRack!.zoneId && !item.rackId)" :key="location.id" :command="location.id">{{ location.code }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
                 </div>
               </div>
@@ -854,4 +858,7 @@ onUnmounted(() => {
 
 <style scoped>
 .storage-workspace{--ink:#17243a;--muted:#72809a;--line:#e5eaf2;--blue:#2563eb;padding:28px 32px;color:var(--ink);font-size:15px;background:#f7f9fc;min-height:calc(100vh - 88px)}.workspace-header,.section-heading,.toolbar,.card-top,.card-foot,.map-toolbar{display:flex;align-items:center;justify-content:space-between}.workspace-header{margin-bottom:22px}.workspace-header h1{font-size:24px;margin:0 0 6px;font-weight:700}.muted,small{color:var(--muted);font-size:13px}.workspace-tabs{display:flex;gap:28px;border-bottom:1px solid var(--line);margin-bottom:22px}.workspace-tabs button{padding:14px 2px;background:none;border:0;color:var(--muted);font-size:15px;cursor:pointer}.workspace-tabs button.active{color:var(--blue);border-bottom:2px solid var(--blue);font-weight:600}.workspace-body{display:grid;grid-template-columns:245px minmax(0,1fr);gap:20px}.zone-sidebar,.primary-panel,.stock-panel,.map-panel,.rack-detail{background:white;border:1px solid var(--line);border-radius:14px;padding:20px}.section-heading{margin-bottom:18px}.section-heading h2,.rack-detail h2{font-size:17px;margin:0}.zone-row{width:100%;display:flex;align-items:center;gap:11px;padding:11px 10px;margin:5px 0;border:1px solid transparent;border-radius:10px;background:white;text-align:left;color:var(--ink);font-size:14px;cursor:pointer}.zone-row.selected,.material-card.selected,.category-card.selected{background:#eff6ff;border-color:#bfd7ff}.zone-row small{margin-left:auto}.zone-prefix{display:grid;place-items:center;width:37px;height:32px;border-radius:8px;font-weight:650}.toolbar{gap:10px}.toolbar .el-input{width:220px}.toolbar .el-select{width:180px}.location-grid,.material-grid,.batch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}.location-card,.material-card,.batch-card{min-height:112px;padding:15px;border:1px solid var(--line);border-radius:12px;background:white;text-align:left}.location-card .card-top,.batch-card .card-top{margin-bottom:11px}.location-card strong,.batch-card strong{font-size:16px}.location-card>div:nth-child(2){margin-bottom:7px}.category-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:25px}.category-card,.material-card{cursor:pointer}.category-card{padding:15px;border:1px solid var(--line);border-radius:11px;background:white;text-align:left}.category-card strong,.category-card small,.material-card strong,.material-card>.quantity{display:block}.category-card strong{font-size:16px;margin-bottom:6px}.material-card>.quantity,.batch-card>.quantity{font-size:22px;font-weight:700;margin:13px 0}.material-card .quantity small,.batch-card .quantity small{font-weight:400}.card-foot{font-size:13px;color:#526176}.batch-heading{margin-top:27px;padding-top:20px;border-top:1px solid var(--line)}.map-toolbar{gap:12px;margin-bottom:15px}.map-columns{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:15px}.canvas-shell{position:relative;height:340px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background-size:contain;background-position:center;background-repeat:no-repeat}.canvas-shell>.el-empty{height:100%}.rack-detail{padding:17px}.rack-detail h2{margin-bottom:7px}.shelf-stack{margin-top:22px}.shelf-level{display:grid;grid-template-columns:30px minmax(0,1fr);gap:8px;margin:9px 0}.level-number{padding-top:12px;color:var(--muted);font-size:12px}.shelf-content{min-height:74px;padding:9px;background:#f8fafc;border:1px solid #e5eaf2;border-bottom:3px solid #94a3b8;border-radius:8px}.shelf-location{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}.shelf-location strong{font-size:14px}.zone-row{display:flex;align-items:center;gap:4px;padding:0 4px 0 0;margin:5px 0;border:1px solid transparent;border-radius:10px;background:white}.zone-main{flex:1;min-width:0;display:flex;align-items:center;gap:11px;padding:11px 6px 11px 10px;border:0;border-radius:10px;background:none;text-align:left;color:var(--ink);font-size:14px;cursor:pointer}.zone-main small{margin-left:auto}.zone-row .row-remove,.location-card .el-button.is-link,.shelf-location .el-button.is-link{color:var(--muted);padding:0 2px}.zone-row .row-remove:hover,.location-card .el-button.is-link:hover,.shelf-location .el-button.is-link:hover{color:#d03050}.card-top-right{display:flex;align-items:center;gap:6px}.material-card,.batch-card,.location-card{min-width:0;overflow:hidden}.material-card>.quantity,.batch-card>.quantity,.material-card strong,.batch-card strong,.location-card strong{overflow-wrap:anywhere;word-break:break-word}.unnamed-tag{display:block;margin-top:4px;color:#b26a00;font-size:12px}.bad-location{color:#d03050}.rack-detail .section-heading{margin-bottom:0}.recognize-note{margin:0 0 12px}.recognize-list{margin:0 0 14px;padding-left:18px}.recognize-list li{margin:4px 0}.recognize-preview{display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.canvas-expand{position:absolute;top:10px;right:10px;z-index:20;display:flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.94);color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 1px 4px rgba(23,36,58,.12)}.canvas-expand:hover{background:#eff6ff}.map-panel.is-fullscreen{position:fixed;inset:0;z-index:2400;margin:0;border:0;border-radius:0;padding:16px 22px 20px;background:white;display:flex;flex-direction:column;overflow:auto}.map-panel.is-fullscreen .map-columns{flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 320px}.map-panel.is-fullscreen .canvas-shell{height:100%;min-height:420px}.draw-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:13px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:#f8fafc}.tool-group{display:flex;align-items:center;gap:7px}.tool-button{padding:6px 13px;border:1px solid var(--line);border-radius:8px;background:white;color:var(--ink);font-size:13px;cursor:pointer}.tool-button.active{background:var(--blue);border-color:var(--blue);color:white;font-weight:600}.tool-button:disabled,.color-swatch:disabled{opacity:.5;cursor:not-allowed}.color-swatch{width:22px;height:22px;border:2px solid white;border-radius:50%;outline:1px solid var(--line);cursor:pointer}.color-swatch.active{outline:2px solid var(--blue);outline-offset:1px}.map-hint{margin-left:auto}.unplaced-zones{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}.unplaced-zones h3{margin:0 0 9px;font-size:14px}.chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:7px}.place-zone-chip{padding:6px 11px;border:1px solid var(--line);border-radius:8px;color:var(--ink);font-size:13px;cursor:pointer}.place-zone-chip:hover{border-color:#bfd7ff}@media(max-width:1050px){.storage-workspace{padding:20px}.workspace-body{grid-template-columns:205px minmax(0,1fr)}.map-columns{grid-template-columns:1fr}.canvas-shell{height:280px}.map-panel.is-fullscreen .map-columns{grid-template-columns:1fr}.map-panel.is-fullscreen .canvas-shell{height:58vh}.toolbar .el-input{width:160px}.category-grid{grid-template-columns:repeat(2,1fr)}}
+.inventory-load-error{margin-bottom:16px}
+.load-more-materials{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;color:var(--muted);font-size:13px}
+.workspace-tabs button:disabled{opacity:.5;cursor:not-allowed}
 </style>

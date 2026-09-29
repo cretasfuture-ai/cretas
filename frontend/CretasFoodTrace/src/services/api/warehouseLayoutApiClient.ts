@@ -5,6 +5,28 @@ export interface WarehouseLayoutZone {
   id: string;
   name: string;
   prefix: string;
+  color?: string;
+}
+
+export interface WarehouseMapRect { x: number; y: number; width: number; height: number }
+export interface WarehouseZoneShape extends WarehouseMapRect { zoneId: string }
+export interface WarehouseMapAnnotation extends WarehouseMapRect {
+  id: string;
+  kind: 'rect' | 'ellipse' | 'polygon' | 'freehand' | 'text';
+  points?: number[];
+  text?: string;
+  color?: string;
+  fill?: string;
+  strokeWidth?: number;
+  fontSize?: number;
+}
+export interface WarehouseMapFloor {
+  id: string;
+  name: string;
+  racks: Array<{ id: string; zoneId: string; name: string; x: number; y: number; width: number; height: number; levels: number }>;
+  zoneShapes?: WarehouseZoneShape[];
+  annotations?: WarehouseMapAnnotation[];
+  background?: string;
 }
 
 export interface WarehouseLayoutLocation {
@@ -20,11 +42,7 @@ export interface WarehouseLayoutLocation {
 export interface WarehouseLayoutConfiguration {
   zones: WarehouseLayoutZone[];
   locations: WarehouseLayoutLocation[];
-  floors: Array<{
-    id: string;
-    name: string;
-    racks: Array<{ id: string; zoneId: string; name: string; x: number; y: number; width: number; height: number; levels: number }>;
-  }>;
+  floors: WarehouseMapFloor[];
 }
 
 export const warehouseLayoutApiClient = {
@@ -37,7 +55,12 @@ export const warehouseLayoutApiClient = {
       zones: Array.isArray(data.zones) ? data.zones : [],
       locations: Array.isArray(data.locations) ? data.locations : [],
       floors: Array.isArray(data.floors)
-        ? data.floors.map((floor) => ({ ...floor, racks: Array.isArray(floor.racks) ? floor.racks : [] }))
+        ? data.floors.map((floor) => ({
+            ...floor,
+            racks: Array.isArray(floor.racks) ? floor.racks : [],
+            zoneShapes: Array.isArray(floor.zoneShapes) ? floor.zoneShapes : [],
+            annotations: Array.isArray(floor.annotations) ? floor.annotations : [],
+          }))
         : [],
     };
   },
