@@ -7,5 +7,5 @@
        所以升版本时它**不会**自动跟着改。2026-08-09 那次 bump 就漏了这里(停在 1.0.3),
        导致装着 1.0.4 二进制的机器向 OTA 服务器要 1.0.3 的 bundle, 而推送都进 1.0.4 树 ——
        零交集, 自那以后 OTA 一次都没送达过任何设备, 而每次推送都报"成功"。 -->
-  <string name="expo_runtime_version" translatable="false">1.0.4</string>
+  <string name="expo_runtime_version" translatable="false">1.0.5</string>
 </resources>
