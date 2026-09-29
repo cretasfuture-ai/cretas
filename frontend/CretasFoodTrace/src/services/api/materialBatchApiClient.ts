@@ -60,6 +60,7 @@ export interface MaterialBatch {
   status: 'available' | 'reserved' | 'depleted' | 'expired' | 'fresh' | 'frozen';
   qualityGrade?: string;
   storageLocation?: string;
+  warehouseId?: string;
   notes?: string;
   movingAvgPrice?: number;      // 移动均价
   factoryNumber?: string | null;  // SP4: 厂号 (VARCHAR 100)
