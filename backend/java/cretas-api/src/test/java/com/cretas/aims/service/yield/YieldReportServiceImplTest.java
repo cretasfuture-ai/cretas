@@ -13,6 +13,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -31,6 +32,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
 import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
@@ -82,6 +84,7 @@ class YieldReportServiceImplTest {
     private ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
     private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
     private ProcessSheetRowRepository processSheetRowRepository;
+    private SemiFinishedInventoryTransactionRepository wipTransactionRepository;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -104,6 +107,7 @@ class YieldReportServiceImplTest {
         pwpAssigneeRepository = mock(ProductWorkProcessAssigneeRepository.class);
         productWorkProcessRepository = mock(com.cretas.aims.repository.ProductWorkProcessRepository.class);
         processSheetRowRepository = mock(ProcessSheetRowRepository.class);
+        wipTransactionRepository = mock(SemiFinishedInventoryTransactionRepository.class);
         // default: 任务无 productWorkProcessId → 不查; 显式测继承的用例单独 stub
         when(productWorkProcessRepository.findByFactoryIdAndId(anyString(), any())).thenReturn(Optional.empty());
         // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
@@ -123,6 +127,53 @@ class YieldReportServiceImplTest {
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo, wipInventoryService,
                 pwpAssigneeRepository, productWorkProcessRepository, new com.cretas.aims.service.yield.CostReconcileService(),
                 processSheetRowRepository);
+        ReflectionTestUtils.setField(svc, "wipTransactionRepository", wipTransactionRepository);
+    }
+
+    @Test
+    void getYield_netsTransferredWipFromThreeStepMaterialCost() {
+        ProductionReport first = ProductionReport.builder()
+                .id(1L).factoryId("F006").batchId(10943L).workProcessTaskId(1986L).processOrder(1)
+                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("kg")
+                .materialCost(new BigDecimal("10.28")).build();
+        ProductionReport second = ProductionReport.builder()
+                .id(2L).factoryId("F006").batchId(10943L).workProcessTaskId(1987L).processOrder(2)
+                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("kg")
+                .sourceWipNo("TEST-S1").materialCost(new BigDecimal("20.56")).build();
+        ProductionReport third = ProductionReport.builder()
+                .id(3L).factoryId("F006").batchId(10943L).workProcessTaskId(1988L).processOrder(3)
+                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("kg")
+                .sourceWipNo("TEST-S2").materialCost(new BigDecimal("51.49")).build();
+        when(reportRepo.findYieldReportsByBatch("F006", 10943L)).thenReturn(List.of(first, second, third));
+        when(wipTransactionRepository.findByFactoryIdAndReportId("F006", 2L)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder().txnType("OUT").sourceType("SECONDARY_CONSUME")
+                        .quantity(new BigDecimal("-1")).unitCostAtTxn(new BigDecimal("20.56")).build()));
+        when(wipTransactionRepository.findByFactoryIdAndReportId("F006", 3L)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder().txnType("OUT").sourceType("SECONDARY_CONSUME")
+                        .quantity(new BigDecimal("-1")).unitCostAtTxn(new BigDecimal("51.40")).build()));
+
+        BatchYieldDTO dto = svc.getYield("F006", 10943L);
+
+        assertThat(dto.getSteps()).extracting(StepYieldDTO::getMaterialCost)
+                .containsExactly(new BigDecimal("10.28"), new BigDecimal("0.00"), new BigDecimal("0.09"));
+        assertThat(dto.getTotalMaterialCost()).isEqualByComparingTo("10.37");
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("10.37");
+        verify(wipTransactionRepository, never()).findByFactoryIdAndReportId(anyString(), eq(1L));
+    }
+
+    @Test
+    void getYield_missingTransferSnapshotDoesNotShowPartialCostAsComplete() {
+        ProductionReport report = ProductionReport.builder()
+                .id(4L).factoryId("F006").batchId(10944L).workProcessTaskId(1989L).processOrder(1)
+                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("kg")
+                .sourceWipNo("TEST-S1").materialCost(new BigDecimal("10.28")).build();
+        when(reportRepo.findYieldReportsByBatch("F006", 10944L)).thenReturn(List.of(report));
+
+        BatchYieldDTO dto = svc.getYield("F006", 10944L);
+
+        assertThat(dto.getSteps().get(0).getMaterialCost()).isNull();
+        assertThat(dto.getTotalMaterialCost()).isNull();
+        assertThat(dto.getTotalCost()).isNull();
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -1230,8 +1281,9 @@ class YieldReportServiceImplTest {
         // 部分产出: markComplete=false → 累加产出但任务保持 IN_PROGRESS, 可续报。
         setupPhaseTask(new BigDecimal("1.5000"));
         ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        ArgumentCaptor<ProductionReport> reportCap = ArgumentCaptor.forClass(ProductionReport.class);
         when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
-        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+        when(reportRepo.save(reportCap.capture())).thenAnswer(i -> {
             ProductionReport r = i.getArgument(0); r.setId(701L); return r;
         });
 
@@ -1251,6 +1303,7 @@ class YieldReportServiceImplTest {
         assertThat(savedTask.getActualQuantity()).isEqualByComparingTo("300");
         assertThat(out.get("taskCompleted")).isEqualTo(false);
         assertThat((BigDecimal) out.get("cumulativeOutput")).isEqualByComparingTo("300");
+        assertThat(reportCap.getValue().getCustomFields()).containsEntry("markComplete", false);
     }
 
     @Test
@@ -1262,8 +1315,9 @@ class YieldReportServiceImplTest {
                 ProductionReport.builder().reportKind("OUTPUT").outputQuantity(new BigDecimal("300")).build()
         ));
         ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        ArgumentCaptor<ProductionReport> reportCap = ArgumentCaptor.forClass(ProductionReport.class);
         when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
-        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+        when(reportRepo.save(reportCap.capture())).thenAnswer(i -> {
             ProductionReport r = i.getArgument(0); r.setId(702L); return r;
         });
 
@@ -1281,6 +1335,7 @@ class YieldReportServiceImplTest {
         assertThat(savedTask.getActualQuantity()).isEqualByComparingTo("500");  // 300 + 200 累计
         assertThat(out.get("taskCompleted")).isEqualTo(true);
         assertThat((BigDecimal) out.get("cumulativeOutput")).isEqualByComparingTo("500");
+        assertThat(reportCap.getValue().getCustomFields()).containsEntry("markComplete", true);
     }
 
     @Test

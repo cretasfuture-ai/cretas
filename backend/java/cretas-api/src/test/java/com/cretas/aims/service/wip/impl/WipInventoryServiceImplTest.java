@@ -368,8 +368,7 @@ class WipInventoryServiceImplTest {
                 ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("100.00")).build(),
                 ProductionReport.builder().reportKind("SEGMENT").laborCost(new BigDecimal("20.00")).build()
         ));
-        // OUTPUT report 还会聚合同批次 INPUT 料 (findYieldReportsByBatch); 此处自身 task rollup 已含 INPUT 100
-        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 9001L)).thenReturn(List.of());
+        // 本道已有 INPUT 成本时，无须再次查询整批 INPUT。
         // F1: FINISHED 新行走 ensure-row-then-lock
         stubFinishedFirstIn("PROD-001-B9001-S2-7001");
 
@@ -380,6 +379,43 @@ class WipInventoryServiceImplTest {
         assertEquals(new BigDecimal("120.00"), saved.getAccumulatedCost());
         assertEquals(new BigDecimal("1.6000"), saved.getUnitCost());
         assertEquals(Boolean.TRUE, output.getCustomFields().get("wipPosted"));
+        verify(reportRepo, never()).findYieldReportsByBatch(FACTORY_ID, 9001L);
+    }
+
+    @Test
+    @DisplayName("Three-stage partial OUTPUT does not post the same INPUT cost twice")
+    void postApprovedOutput_partialThenFinalPostsCumulativeCostOnce() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7001L).factoryId(FACTORY_ID).productionBatchId(9001L)
+                .workProcessId("WP-001").productTypeId("PROD-001")
+                .processOrder(2).plannedUnit("kg").build();
+        ProductionReport input = ProductionReport.builder()
+                .factoryId(FACTORY_ID).batchId(9001L).workProcessTaskId(7001L)
+                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("千克")
+                .materialCost(new BigDecimal("10.37")).build();
+        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 7001L)).thenReturn(List.of(input));
+        stubFinishedFirstIn("PROD-001-B9001-S2-7001");
+        ProductionReport first = ProductionReport.builder()
+                .factoryId(FACTORY_ID).id(510L).batchId(9001L).workProcessTaskId(7001L)
+                .reportKind("OUTPUT").outputQuantity(new BigDecimal("0.4")).outputUnit("kg")
+                .customFields(Map.of("markComplete", false)).build();
+        ProductionReport second = ProductionReport.builder()
+                .factoryId(FACTORY_ID).id(511L).batchId(9001L).workProcessTaskId(7001L)
+                .reportKind("OUTPUT").outputQuantity(new BigDecimal("0.6")).outputUnit("kg")
+                .customFields(Map.of("markComplete", true)).build();
+
+        service.postApprovedOutput(FACTORY_ID, first, task, 10L);
+        service.postApprovedOutput(FACTORY_ID, second, task, 10L);
+
+        verify(wipRepo, times(2)).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getAllValues().get(1);
+        assertEquals(new BigDecimal("1.0"), saved.getProducedQuantity());
+        assertEquals(new BigDecimal("10.37"), saved.getAccumulatedCost());
+        assertEquals(new BigDecimal("10.3700"), saved.getUnitCost());
+        verify(txnRepo, times(2)).save(txnCaptor.capture());
+        assertEquals(new BigDecimal("10.3750"), txnCaptor.getAllValues().get(0).getUnitCostAtTxn());
+        assertEquals(new BigDecimal("10.3667"), txnCaptor.getAllValues().get(1).getUnitCostAtTxn());
+        verify(reportRepo, never()).findYieldReportsByBatch(FACTORY_ID, 9001L);
     }
 
     @Test
@@ -395,8 +431,9 @@ class WipInventoryServiceImplTest {
                 .factoryId(FACTORY_ID).id(602L).batchId(8000L).workProcessTaskId(8002L)
                 .reportKind("OUTPUT").outputQuantity(new BigDecimal("10")).outputUnit("kg").build();
 
-        // OUTPUT task 自身无料 report (空); 同批次有一条 INPUT-kind 料报工 0.50 (+ OUTPUT 报工不计料)
-        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 8002L)).thenReturn(List.of());
+        // OUTPUT task 自身有显式 0 元料成本；另一条 INPUT 哨兵报工仍须加 0.50。
+        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 8002L)).thenReturn(List.of(
+                ProductionReport.builder().materialCost(new BigDecimal("0.00")).build()));
         when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 8000L)).thenReturn(List.of(
                 ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("0.50")).build(),
                 output  // OUTPUT-kind, 料 null → 不计入 INPUT 聚合

@@ -17,6 +17,7 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.inventory.FeedUnitConverter;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -1348,6 +1349,30 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal thisRollup = allocated != null
                 ? allocated.totalCost()
                 : nullSafeAdd(null, rollLaborCost, rollMaterialCost);
+        // 三阶段 OUTPUT 的 rollup 是本道截至本次的累计成本。续报只过账未分配的部分。
+        // 显式续报且计划量或同单位投入量已知时，先按当前产出占比来分配，避免 0.4 kg 先拿走全额成本；
+        // 显式完工时把余量全部分配。没有 markComplete 的历史报工维持原先首报全额口径。
+        // 老库存累计值若已高于目标金额，保留历史金额并告警，避免新写负成本流水。
+        if (allocated == null && "OUTPUT".equals(report.getReportKind())
+                && thisRollup != null
+                && (nz(wipPriorProduced).signum() == 0 || wip.getAccumulatedCost() != null)) {
+            BigDecimal targetPostedCost = thisRollup;
+            if (report.getCustomFields() != null
+                    && Boolean.FALSE.equals(report.getCustomFields().get("markComplete"))) {
+                BigDecimal basis = outputCostAllocationBasis(factoryId, task, report.getOutputUnit());
+                if (basis != null && produced.compareTo(basis) < 0) {
+                    targetPostedCost = thisRollup.multiply(produced)
+                            .divide(basis, 2, RoundingMode.HALF_UP);
+                }
+            }
+            BigDecimal incremental = targetPostedCost.subtract(nz(wip.getAccumulatedCost()));
+            if (incremental.signum() < 0) {
+                log.warn("[wip] prior cumulative cost exceeds current rollup: factory={} task={} report={}",
+                        factoryId, task.getId(), report.getId());
+                incremental = BigDecimal.ZERO;
+            }
+            thisRollup = incremental;
+        }
         BigDecimal priorProduced = nz(wipPriorProduced);
         boolean priorPoisoned = priorProduced.signum() > 0 && wipPriorUnitCost == null;
         boolean inCostUnknown = out.signum() > 0 && thisRollup == null;
@@ -1392,6 +1417,28 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return saved;
     }
 
+    private BigDecimal outputCostAllocationBasis(String factoryId, WorkProcessTask task, String outputUnit) {
+        if (task.getPlannedQuantity() != null && task.getPlannedQuantity().signum() > 0
+                && (task.getPlannedUnit() == null || sameOutputUnit(task.getPlannedUnit(), outputUnit))) {
+            return task.getPlannedQuantity();
+        }
+        if (outputUnit == null) return null;
+        BigDecimal input = BigDecimal.ZERO;
+        for (ProductionReport report : reportRepo.findYieldReportsByTask(factoryId, task.getId())) {
+            if ("INPUT".equals(report.getReportKind()) && sameOutputUnit(outputUnit, report.getInputUnit())
+                    && report.getInputQuantity() != null) {
+                input = input.add(report.getInputQuantity());
+            }
+        }
+        return input.signum() > 0 ? input : null;
+    }
+
+    private boolean sameOutputUnit(String left, String right) {
+        String leftCode = UnitContractServiceImpl.crossLanguageCode(left);
+        String rightCode = UnitContractServiceImpl.crossLanguageCode(right);
+        return leftCode != null && leftCode.equals(rightCode);
+    }
+
     private CostRollup calculateTaskCostRollup(String factoryId, Long workProcessTaskId) {
         BigDecimal labor = null;
         BigDecimal material = null;
@@ -1415,16 +1462,20 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * report (material 为 null) → 产出 WIP unitCost 永 null → ProductionCostUpdatedEvent 不发 →
      * SalesOrderItem.costUnitPrice 永不回填 → 财审 actualCost null + 撤回自愈/多段链/混合计价全部 deep-close 受阻.
      *
-     * <p>逐道模式 (F001): 每道工序 task 各自有料+产出, 无 {@code __MATERIAL_INPUT__} 哨兵 task →
-     * {@link #calculateBatchInputMaterialCost} 返 null → 本方法等价于原 per-task rollup. Mode-aware by construction,
-     * 不破坏逐道. 诚实 null: 无 INPUT 料且 OUTPUT 自身无料 → material 仍 null (不伪造 0).
+     * <p>逐道模式: 本道 INPUT 已在 per-task rollup 中时不能再次加入同批 INPUT；
+     * 否则每道从上道 WIP 转入的成本会在每次 OUTPUT 里重复累计。
+     * 本道没有已知材料成本时才补用同批 INPUT (两点报工和跨 task 二次加工)。
+     * 诚实 null: 两处都无已知料成本则保持 null。
      */
     private CostRollup outputRollupWithBatchInputMaterial(String factoryId, WorkProcessTask outputTask) {
         CostRollup own = calculateTaskCostRollup(factoryId, outputTask.getId());
         BigDecimal material = own.materialCost();
-        BigDecimal inputMaterial = calculateBatchInputMaterialCost(factoryId, outputTask.getProductionBatchId());
-        if (inputMaterial != null) {
-            material = (material == null ? BigDecimal.ZERO : material).add(inputMaterial);
+        if ("__FINAL_OUTPUT__".equals(outputTask.getWorkProcessId())) {
+            // 两点模式的领料在另一条哨兵 task；OUTPUT task 自身可以还有追加料。
+            BigDecimal batchInput = calculateBatchInputMaterialCost(factoryId, outputTask.getProductionBatchId());
+            material = nullSafeAdd(null, material, batchInput);
+        } else if (material == null) {
+            material = calculateBatchInputMaterialCost(factoryId, outputTask.getProductionBatchId());
         }
         return new CostRollup(own.laborCost(), material);
     }

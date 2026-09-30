@@ -17,6 +17,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
@@ -31,6 +32,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
@@ -110,6 +112,9 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
     private final CostReconcileService costReconcileService;
     private final ProcessSheetRowRepository processSheetRowRepository;
+
+    @Autowired
+    private SemiFinishedInventoryTransactionRepository wipTransactionRepository;
 
     /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
     @Autowired(required = false)
@@ -376,7 +381,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .auxPotNo(req.getAuxPotNo())                 // AUDIT-004: 共享锅(运行时锅号, 不继承)
                 .auxPotTotalCost(req.getAuxPotTotalCost())
                 .auxAllocMethod(effAuxAllocMethod)     // AUDIT-004: 分摊方式 (req优先, 否则继承工序配置)
-                .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity))
+                .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity,
+                        req.getMarkComplete()))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
@@ -1017,7 +1023,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         }).collect(Collectors.toList());
     }
 
-    private Map<String, Object> buildYieldCustomFields(String reportKind, BigDecimal sourceWipQuantity) {
+    private Map<String, Object> buildYieldCustomFields(String reportKind, BigDecimal sourceWipQuantity,
+                                                        Boolean markComplete) {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("reportStack", "YIELD");
         fields.put("wipPostingMode", "APPROVAL");
@@ -1026,6 +1033,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         if (sourceWipQuantity != null) {
             fields.put("sourceWipQuantity", sourceWipQuantity);
+        }
+        if ("OUTPUT".equals(reportKind) && markComplete != null) {
+            fields.put("markComplete", markComplete);
         }
         return fields;
     }
@@ -1466,6 +1476,7 @@ public class YieldReportServiceImpl implements YieldReportService {
             dto.setBatchNumber(batch.getBatchNumber());
         }
         enrichFromProcessSheetRows(factoryId, batchId, dto);
+        netTransferredWipCost(factoryId, reports, dto);
         applyPinnedUnitConversion(dto, conversion);
         // Process-sheet enrichment can replace the sparse report steps. Resolve names afterwards
         // so workflow-based clerk rows also receive their configured process names.
@@ -1473,6 +1484,74 @@ public class YieldReportServiceImpl implements YieldReportService {
         // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
         enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
+    }
+
+    /**
+     * A transfer from the preceding WIP step is part of that step's cost, not new material for
+     * this batch. Keep each report and immutable ledger row unchanged; only net the transfer
+     * snapshot out of the yield display before summing the step and batch totals.
+     */
+    private void netTransferredWipCost(String factoryId, List<ProductionReport> reports, BatchYieldDTO dto) {
+        if (dto.getSteps() == null || reports == null || reports.isEmpty()) return;
+        Map<Long, BigDecimal> transferByTask = new HashMap<>();
+        Set<Long> unknownTasks = new HashSet<>();
+        for (ProductionReport report : reports) {
+            if (report.getSourceWipNo() == null || report.getSourceWipNo().isBlank()) continue;
+            Long taskId = report.getWorkProcessTaskId();
+            if (taskId == null || report.getId() == null) {
+                if (taskId != null) unknownTasks.add(taskId);
+                continue;
+            }
+            List<SemiFinishedInventoryTransaction> transfers = wipTransactionRepository
+                    .findByFactoryIdAndReportId(factoryId, report.getId()).stream()
+                    .filter(t -> SemiFinishedInventoryTransaction.TxnType.OUT.equals(t.getTxnType())
+                            && SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(t.getSourceType()))
+                    .toList();
+            if (transfers.size() != 1 || transfers.get(0).getQuantity() == null
+                    || transfers.get(0).getUnitCostAtTxn() == null) {
+                unknownTasks.add(taskId);
+                continue;
+            }
+            SemiFinishedInventoryTransaction transfer = transfers.get(0);
+            transferByTask.merge(taskId,
+                    transfer.getQuantity().abs().multiply(transfer.getUnitCostAtTxn()), BigDecimal::add);
+        }
+        if (transferByTask.isEmpty() && unknownTasks.isEmpty()) return;
+        boolean unknownBatchCost = false;
+        for (StepYieldDTO step : dto.getSteps()) {
+            Long taskId = step.getWorkProcessTaskId();
+            if (taskId == null) continue;
+            if (unknownTasks.contains(taskId)) {
+                step.setMaterialCost(null);
+                step.setStepCost(null);
+                unknownBatchCost = true;
+                continue;
+            }
+            BigDecimal transferred = transferByTask.get(taskId);
+            if (transferred == null) continue;
+            BigDecimal material = step.getMaterialCost();
+            if (material == null || material.compareTo(transferred) < 0) {
+                step.setMaterialCost(null);
+                step.setStepCost(null);
+                unknownBatchCost = true;
+                log.warn("[yield] transferred WIP exceeds reported material or material is unknown: factory={} task={}",
+                        factoryId, taskId);
+                continue;
+            }
+            step.setMaterialCost(material.subtract(transferred));
+            step.setStepCost(step.getLaborCost() == null
+                    ? step.getMaterialCost() : step.getLaborCost().add(step.getMaterialCost()));
+        }
+        if (unknownBatchCost) {
+            dto.setTotalMaterialCost(null);
+            dto.setTotalCost(null);
+        } else {
+            BigDecimal netMaterial = dto.getSteps().stream().map(StepYieldDTO::getMaterialCost)
+                    .filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
+            dto.setTotalMaterialCost(netMaterial);
+            dto.setTotalCost(netMaterial == null ? dto.getTotalLaborCost()
+                    : dto.getTotalLaborCost() == null ? netMaterial : netMaterial.add(dto.getTotalLaborCost()));
+        }
     }
 
     /**
