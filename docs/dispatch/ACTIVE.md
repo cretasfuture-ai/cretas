@@ -37,6 +37,7 @@
 - `BUG-F006-R2-SKU-UNIT-001` — `blocked` — Owner: `/root/supplier_frontend` — Web canonical 化已成熟且有 CI 背书；Java 净含量契约已补 `ProductTypeNetContentContractTest` 13 条（容量型绝不伪装为克重）。剩余未核销：历史回填。
 - `FEATURE-F006-R2-WORKPROCESS-DEDUP-001` — `blocked` — Owner: `/root/workprocess_governance` — Java 治理契约已补 11 条；生产审计表 0 行、F006 重名 3 组 8 行疑似按产线拆分而非重复录入，治理前需 owner 判定。剩余：Web 治理界面、排序/单位移除、Flyway/JPA 验收。
 - `FEATURE-F006-R2-BOM-SUBSTITUTE-001` — `queued` — Owner: `/root` — Java CORE 已归档；父任务的 Web/计划/领料/报工/成本/追溯快照未证明完成，由统一 Workflow/BOM 任务串行吸收，`NOT_DEPLOYED`。
+- `BUG-F006-REPORT-WIP-COST-20260930` — `in-progress` — Owner: `/root` — Base `2e9a7754478ac9f38d50a052ccd0e28a18209f71` — F006 三道报工成本重复修复；验收测试 `WipInventoryServiceImplTest,YieldReportServiceImplTest,YieldCalculationServiceImplTest`；待 PR/发布/历史 TEST 批次复核。
 - `QA-WAREHOUSE-STORAGE-UI-VERIFY-20260825` — `review` — Owner: `claude-code/warehouse-storage-ui-verify` — 第一批 PR #87 已部署复验；第二批（`codex/claude-warehouse-approval-closeout-20260826`）：App 端仓库地图入口、数量审批走通（凭证发号器无类型参数第 5 次必炸已修）、位置脏值清洗。未决：`ST-202608-C20566F3` 待上线后点「应用差异」。
 - `LSM-WALKTHROUGH-ORGANIZER-LINE-20260902` — `in-progress` — Owner: `liushanmen-organizer-handoff-fa5fb5-0c` — 生产 = main（发 49 = #683）；OTA 推 #687/#688（标记 `common:pleaseSelect` 基线 0）。待 owner：lsm001 登权限矩阵页、zhipu 余额、DeepSeek key、prod 切 validate。
 - `YIELD-STANDARD-LINE-20260905` — `blocked` — Owner: 无（f006 收工） — #594/#599/#600/#601 + **#612（发 36）** 已上线：头级出成率现在真的生效（此前被行级 100.00 哨兵门拦死，#599 三周一次没算过）。剩下卡数据：六膳门 8 配方出成率 0/8（张权填，填了即生效）、主料份额 1/12。F006 黄油鸡 100.00 已由迁移置 NULL，回滚项撤销。
@@ -78,6 +79,7 @@
 - `BUG-F006-R2-SKU-UNIT-001`：仅 Web SKU 新建/编辑基础规格、displayUnit/净含量单位 helper 与目标测试；Java 净含量契约须另行登记不重叠 scope。
 - `FEATURE-F006-R2-WORKPROCESS-DEDUP-001`：Java WorkProcess/Workflow/SKU 关联、DTO/Repository/Service/Controller、Flyway/JPA tests；Web 工序治理及排序/单位字段移除与目标测试；不得迁移既有业务引用或治理生产重复组。
 - `FEATURE-F006-R2-BOM-SUBSTITUTE-001`：BOM 替代关系的 Web、版本/计划/领料/报工/成本/追溯快照与目标测试；Java CORE 已完成，父任务不得重复修改 CORE Flyway/Entity，必须与统一 Workflow/BOM 任务串行。
+- `BUG-F006-REPORT-WIP-COST-20260930`：仅 Java `WipInventoryServiceImpl`、`YieldReportServiceImpl` 与同名目标测试及本台账；与 BOM 任务串行，不改 Entity、Repository、迁移、Web 或其他租户业务数据。
 
 
 ## 阻塞项
