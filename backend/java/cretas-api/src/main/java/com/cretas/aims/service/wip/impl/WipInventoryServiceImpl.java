@@ -17,6 +17,7 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.inventory.FeedUnitConverter;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -1418,18 +1419,24 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
     private BigDecimal outputCostAllocationBasis(String factoryId, WorkProcessTask task, String outputUnit) {
         if (task.getPlannedQuantity() != null && task.getPlannedQuantity().signum() > 0
-                && (task.getPlannedUnit() == null || task.getPlannedUnit().equals(outputUnit))) {
+                && (task.getPlannedUnit() == null || sameOutputUnit(task.getPlannedUnit(), outputUnit))) {
             return task.getPlannedQuantity();
         }
         if (outputUnit == null) return null;
         BigDecimal input = BigDecimal.ZERO;
         for (ProductionReport report : reportRepo.findYieldReportsByTask(factoryId, task.getId())) {
-            if ("INPUT".equals(report.getReportKind()) && outputUnit.equals(report.getInputUnit())
+            if ("INPUT".equals(report.getReportKind()) && sameOutputUnit(outputUnit, report.getInputUnit())
                     && report.getInputQuantity() != null) {
                 input = input.add(report.getInputQuantity());
             }
         }
         return input.signum() > 0 ? input : null;
+    }
+
+    private boolean sameOutputUnit(String left, String right) {
+        String leftCode = UnitContractServiceImpl.crossLanguageCode(left);
+        String rightCode = UnitContractServiceImpl.crossLanguageCode(right);
+        return leftCode != null && leftCode.equals(rightCode);
     }
 
     private CostRollup calculateTaskCostRollup(String factoryId, Long workProcessTaskId) {

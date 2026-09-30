@@ -391,7 +391,7 @@ class WipInventoryServiceImplTest {
                 .processOrder(2).plannedUnit("kg").build();
         ProductionReport input = ProductionReport.builder()
                 .factoryId(FACTORY_ID).batchId(9001L).workProcessTaskId(7001L)
-                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("kg")
+                .reportKind("INPUT").inputQuantity(BigDecimal.ONE).inputUnit("千克")
                 .materialCost(new BigDecimal("10.37")).build();
         when(reportRepo.findYieldReportsByTask(FACTORY_ID, 7001L)).thenReturn(List.of(input));
         stubFinishedFirstIn("PROD-001-B9001-S2-7001");
