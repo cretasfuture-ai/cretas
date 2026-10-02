@@ -214,6 +214,67 @@ def test_appended_occurrences_repeat_only_new_human_rows():
     assert policy["validation_unchanged"] is True
 
 
+def test_appended_occurrences_keep_historical_ignore_exclusion():
+    rows = [
+        {"split": "train", "stem": "safe"},
+        {"split": "train", "stem": "ignored", "training_excluded": True},
+        {"split": "train", "stem": "new-one"},
+        {"split": "train", "stem": "new-two"},
+    ]
+    occurrences, policy = module.build_appended_occurrences(rows, ["new-one", "new-two"], 1)
+    assert occurrences == ["safe", "new-one", "new-two"]
+    assert policy["unique_train_images"] == 3
+    assert policy["excluded_historical_stems"] == ["ignored"]
+
+
+def test_full_image_append_does_not_reenable_retained_ignored_photo(tmp_path, monkeypatch):
+    base = tmp_path / "base"
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    (base / "annotations-source").mkdir(parents=True)
+    for split in ("train", "val"):
+        for kind in ("images", "labels"):
+            (base / kind / split).mkdir(parents=True)
+    rows = [
+        {"stem": "safe", "split": "train", "task_id": "old-1", "box_count": 1},
+        {"stem": "ignored", "split": "train", "task_id": "old-2", "box_count": 1, "training_excluded": True},
+        {"stem": "validation", "split": "val", "task_id": "val-1", "box_count": 1},
+    ]
+    for row in rows:
+        (base / "images" / row["split"] / (row["stem"]+".jpg")).write_bytes(b"original")
+        (base / "labels" / row["split"] / (row["stem"]+".txt")).write_text("0 0.2 0.2 0.2 0.2\n", encoding="utf-8")
+    (base / "provenance.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    (base / "train-focus.txt").write_text("./images/train/safe.jpg\n", encoding="utf-8")
+    (base / "data.yaml").write_text(f"path: {base.as_posix()}\ntrain: train-focus.txt\nval: images/val\n", encoding="utf-8")
+    manifest = {"dataset_id":"prior", "protected_holdout_included":False,
+                "protected_holdout":str(tmp_path/"protected.json"),
+                "counts":{"train_images":1,"train_boxes":1,"val_images":1,"val_boxes":1}}
+    manifest["dataset_sha256"] = module.patch_dataset.dataset_digest(base)
+    mp = base / "manifest.json"
+    mp.write_text(json.dumps(manifest), encoding="utf-8")
+    fresh = []
+    for n in (1,2):
+        image, annotation = queue/f"new-{n}.jpg", queue/f"new-{n}.json"
+        image.write_bytes(b"new image")
+        annotation.write_text(json.dumps({"source":"human","reviewed":True,"boxes":[[.1,.1,.3,.3]]}), encoding="utf-8")
+        row = reviewed(f"new-{n}",f"new-task-{n}",str(n)*64,boxes=1)
+        row["source"].update(source_photo_id=f"photo-{n}",packed_image_sha256=module.patch_dataset.sha256_file(image))
+        row.update(image=image,annotation_path=annotation)
+        fresh.append(row)
+    qm = safe_manifest(fresh)
+    (queue/"manifest.json").write_text(json.dumps(qm),encoding="utf-8")
+    monkeypatch.setattr(module.tray_workflow,"validate_reviewed_queue",lambda *args:(qm,fresh))
+    out, result = module.build_dataset(mp,queue,tmp_path/"out",appended_repeats=1)
+    import yaml
+    selector = yaml.safe_load((out/"data.yaml").read_text())["train"]
+    assert selector == "train-focus.txt"
+    assert {Path(line).stem for line in (out/selector).read_text().splitlines()} == {"safe","new-1","new-2"}
+    assert (out/"images/train/ignored.jpg").read_bytes()==b"original"
+    assert result["counts"]["train_images"]==3
+    assert result["counts"]["train_boxes"]==3
+    assert (out/"labels/val/validation.txt").read_bytes()==(base/"labels/val/validation.txt").read_bytes()
+
+
 @pytest.mark.parametrize("repeats", [0, 9])
 def test_appended_occurrences_rejects_unsafe_repeat_count(repeats):
     with pytest.raises(ValueError, match="between 1 and 8"):
