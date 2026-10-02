@@ -27,7 +27,6 @@ const canGenerate = computed(() => auth.factoryType === 'FACTORY' && permissions
 const body = computed(() => report.value?.reportAnalysis ?? report.value?.analysis ?? '');
 let readEpoch = 0;
 let detailSequence = 0;
-const readerScope = computed(() => [factoryId.value, auth.currentRole, auth.user?.id].join('|'));
 const labels: Record<string, string> = { daily: '日报', weekly: '周报', monthly: '月报', batch: '批次报告', custom: '自定义报告' };
 const dateText = (value?: string) => value ? value.replace('T', ' ').slice(0, 19) : '—';
 const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
@@ -88,7 +87,7 @@ function closeDetail() {
 }
 watch(filter, () => void load());
 watch(() => route.params.reportId, (id) => { if (id && Number.isSafeInteger(Number(id))) void openReport(Number(id), false); });
-watch(readerScope, () => { readEpoch += 1; detailSequence += 1; report.value = null; reports.value = []; detailOpen.value = false; void load(); });
+watch([factoryId, () => auth.currentRole, () => auth.user?.id], () => { readEpoch += 1; detailSequence += 1; report.value = null; reports.value = []; detailOpen.value = false; void load(); });
 onMounted(() => { void load(); if (route.params.reportId) void openReport(Number(route.params.reportId), false); });
 </script>
 
