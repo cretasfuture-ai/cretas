@@ -58,6 +58,7 @@ export const financeManagerMenu: MenuItem[] = [
   { path: '/restaurant/cost-attribution', title: '成本归因', icon: 'Histogram', module: 'finance', hideForFactoryTypes: ['FACTORY'] },
   // 工厂财务只保留本职工作台。销售/采购审批统一在个人 OA，财务菜单不再重复挂审批索引。
   { path: '/finance/ar-ap', title: '应收应付', icon: 'Wallet', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
+  { path: '/finance/adjustments', title: '调整审批', icon: 'Checked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/invoices?status=REQUESTED', title: '销售开票', icon: 'Tickets', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/purchase-invoices', title: '采购收票', icon: 'DocumentChecked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/payments', title: '收款管理', icon: 'Money', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
