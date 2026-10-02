@@ -267,3 +267,15 @@ def test_normalize_matches_offline_n2():
     assert registry.normalize("淀粉还剩多少", lex) == "<物料>还剩多少"
     assert registry.normalize("B20260911 那批明天发", lex) == "<号>那批<日期>发"
     assert registry.normalize("PO-12345 到了没", lex) == "<号>到了没"
+
+
+def test_shortlist_catalog_lines_carry_three_common_phrases():
+    """粗选只看「代码｜名称」时, 车间说法 (搞起 / 弄好了) 对不上开发者起的名字; 每行带前 3 个常见说法。"""
+    from ai.matcher.decision import build_shortlist_messages
+    rows = [{"intent_code": "WORK_PROCESS_TASK_START", "intent_name": "开始工序",
+             "keywords": '["开工","开干","开始做","开始干"]'},
+            {"intent_code": "X_NO_KW", "intent_name": "无关键词", "keywords": None}]
+    system = build_shortlist_messages("搞起酱鸭腿", "operator", rows)[0]["content"]
+    assert "WORK_PROCESS_TASK_START｜开始工序（开工、开干、开始做）" in system
+    assert "开始干" not in system          # 只带前 3 个
+    assert "X_NO_KW｜无关键词\n" in system  # 没有关键词时不留空括号
