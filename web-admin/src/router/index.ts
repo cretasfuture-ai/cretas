@@ -1016,7 +1016,7 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/sales/needs/list.vue'),
             meta: { requiresAuth: true, title: '客户需求', module: 'sales' }
           },
-          // Sprint 4 W2 S-REPORTS-PRESETS: 销售报表 (5 active + 9 Sprint 5 stub)
+          // Sprint 4 W2 S-REPORTS-PRESETS: 销售报表 (9 active + 5 Sprint 5 stub)
           {
             path: 'reports',
             name: 'SalesReports',
@@ -1052,6 +1052,32 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'SalesReportProductRank',
             component: () => import('@/views/sales/reports/product-rank.vue'),
             meta: { requiresAuth: true, title: '产品销售排行', module: 'sales', hidden: true }
+          },
+          // 经营分析 4 张 (2026-10): 业务员 / 区域 / 增长率 / 毛利率
+          {
+            path: 'reports/salesperson-performance',
+            name: 'SalesReportSalesperson',
+            component: () => import('@/views/sales/reports/salesperson-performance.vue'),
+            meta: { requiresAuth: true, title: '业绩 by 业务员', module: 'sales', hidden: true }
+          },
+          {
+            path: 'reports/regional-comparison',
+            name: 'SalesReportRegional',
+            component: () => import('@/views/sales/reports/regional-comparison.vue'),
+            meta: { requiresAuth: true, title: '区域销售对比', module: 'sales', hidden: true }
+          },
+          {
+            path: 'reports/growth-rate',
+            name: 'SalesReportGrowthRate',
+            component: () => import('@/views/sales/reports/growth-rate.vue'),
+            meta: { requiresAuth: true, title: '月度增长率', module: 'sales', hidden: true }
+          },
+          {
+            // 含成本: 后端只对价格查看权限角色开放, 其余角色页面上显示权限说明
+            path: 'reports/gross-margin',
+            name: 'SalesReportGrossMargin',
+            component: () => import('@/views/sales/reports/gross-margin.vue'),
+            meta: { requiresAuth: true, title: '销售毛利率', module: 'sales', hidden: true }
           },
           // #739 销售方向付款申请 (对客户 outbound 退款/返利/销售费用)
           {

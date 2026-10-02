@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Sprint 4 W2 S-REPORTS-PRESETS + 防呆 R3/R5:
 // - 14 预置卡片 (R3 不让用户瞎搜索, 直接选)
-// - 9 disabled 卡片点击给 next action (R5 dead-end 改导航)
+// - 未开放卡片点击给 next action (R5 dead-end 改导航); 2026-10 开放业务员/区域/增长率/毛利率 4 张
 import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 
@@ -22,27 +22,32 @@ const cards: Card[] = [
  { id: 'yearly', title: '销售额年报', desc: '当年销售额 + 按月明细', icon: '', active: true, route: '/sales/reports/yearly' },
  { id: 'customer-rank', title: '客户销售排行 top 20', desc: '按销售额客户排名', icon: '', active: true, route: '/sales/reports/customer-rank' },
  { id: 'product-rank', title: '产品销售排行 top 20', desc: '按销售额产品排名', icon: '', active: true, route: '/sales/reports/product-rank' },
- { id: 'salesperson-performance', title: '业绩 by 业务员', desc: '业务员销售业绩对比', icon: '', active: false },
+ { id: 'salesperson-performance', title: '业绩 by 业务员', desc: '业务员销售业绩对比', icon: '', active: true, route: '/sales/reports/salesperson-performance' },
   { id: 'aging', title: '应收账龄', desc: '30/60/90/120/180+ 天分布', icon: '⏰', active: false },
  { id: 'collection-rate', title: '客户回款率', desc: '回款金额/应收金额', icon: '', active: false },
   { id: 'return-rate', title: '退货率', desc: '退货金额/销售金额', icon: '↩️', active: false },
- { id: 'gross-margin', title: '销售毛利率 by 产品', desc: '产品级毛利率排名', icon: '', active: false },
+ { id: 'gross-margin', title: '销售毛利率 by 产品', desc: '产品级毛利率排名(需价格查看权限)', icon: '', active: true, route: '/sales/reports/gross-margin' },
  { id: 'purchase-frequency', title: '客户购买频次', desc: '客户回购周期分析', icon: '', active: false },
- { id: 'growth-rate', title: '月度增长率', desc: 'MoM/YoY 增长指标', icon: '', active: false },
- { id: 'regional-comparison', title: '区域销售对比', desc: '区域销售分布', icon: '️', active: false },
+ { id: 'growth-rate', title: '月度增长率', desc: 'MoM/YoY 增长指标', icon: '', active: true, route: '/sales/reports/growth-rate' },
+ { id: 'regional-comparison', title: '区域销售对比', desc: '按省份/大区 + 去年同期对比', icon: '️', active: true, route: '/sales/reports/regional-comparison' },
   { id: 'customer-tier', title: '客户分级销售贡献', desc: 'A/B/C/D 分级贡献率', icon: '⭐', active: false },
 ];
+
+// 文案从卡片列表算出来, 避免「N 张可用」与实际开放的卡片对不上
+const availableCount = cards.filter(c => c.active).length;
+const pendingCount = cards.length - availableCount;
+const availableTitles = cards.filter(c => c.active).map(c => c.title).join(' / ');
 
 async function open(card: Card): Promise<void> {
   if (card.active && card.route) {
     router.push(card.route);
     return;
   }
-  // R5 dead-end 改导航: 9 个 Sprint 5 报表点击不应该哑火,
+  // R5 dead-end 改导航: 未开放的 Sprint 5 报表点击不应该哑火,
   // 给用户当前可用替代 + 一键跳转.
   try {
     await ElMessageBox.confirm(
-      `${card.title} 尚未开放。当前 5 个可用报表: 销售额日报/月报/年报 + 客户/产品销售排行 top 20。是否查看销售报表概览?`,
+      `${card.title} 尚未开放。当前 ${availableCount} 个可用报表: ${availableTitles}。是否查看销售报表概览?`,
       '功能待上线',
       { confirmButtonText: '查看可用报表', cancelButtonText: '关闭', type: 'info' },
     );
@@ -57,7 +62,7 @@ async function open(card: Card): Promise<void> {
   <div class="sales-reports-dashboard">
     <div class="header">
       <h2>销售报表</h2>
-      <p class="subtitle">14 张预置销售报表 — 5 张可用, 9 张尚未开放</p>
+      <p class="subtitle">{{ cards.length }} 张预置销售报表 — {{ availableCount }} 张可用, {{ pendingCount }} 张尚未开放</p>
     </div>
 
     <div class="card-grid">
