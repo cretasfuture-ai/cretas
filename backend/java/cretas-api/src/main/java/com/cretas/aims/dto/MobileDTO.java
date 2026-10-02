@@ -578,6 +578,13 @@ public class MobileDTO {
          */
         private String analysis;
 
+        /** Report-only financial body; analysis carries the public projection. */
+        @com.cretas.aims.security.PriceSensitive
+        private String reportAnalysis;
+
+        private String generationStatus;
+        private String failureCode;
+
         /**
          * Python Session ID（用于后续follow-up）
          */
@@ -717,6 +724,13 @@ public class MobileDTO {
         private String batchId;
         private String reportType;
         private String summaryText; // 摘要（前200字）
+
+        @com.cretas.aims.security.PriceSensitive
+        private String financialSummaryText;
+
+        private String generationStatus;
+        private String failureCode;
+        private String failureReason;
 
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
         private LocalDateTime periodStart;
