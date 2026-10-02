@@ -4,6 +4,7 @@ import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.rules.DroolsRule;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.FeatureEngineeringService;
@@ -238,17 +239,11 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
 
     @Override
     public List<WorkerAssignmentDTO> optimizeWorkers(String factoryId, OptimizeWorkersRequest request) {
-        SchedulingPlan plan = planRepository.findByIdAndFactoryIdAndDeletedAtIsNull(request.getPlanId(), factoryId)
+        planRepository.findByIdAndFactoryIdAndDeletedAtIsNull(request.getPlanId(), factoryId)
             .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", request.getPlanId()));
 
-        List<LineSchedule> schedules = scheduleRepository.findByPlanId(request.getPlanId());
-
-        Set<String> scheduleIds = schedules.stream()
-            .map(LineSchedule::getId)
-            .collect(Collectors.toSet());
-        List<WorkerAssignment> assignments = assignmentRepository.findByScheduleIdIn(scheduleIds);
-
-        return workerAssignmentService.enrichAssignmentDTOs(assignments);
+        // No optimizer is implemented: returning existing assignments would report a false success.
+        throw new BusinessException("自动人员优化暂不可用，本次未调整派工，请手动指派");
     }
 
     @Override
