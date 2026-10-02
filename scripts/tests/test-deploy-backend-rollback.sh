@@ -16,6 +16,16 @@ SHA256_BIN=$(type -P sha256sum || true)
 sha256sum() {
     if [ -n "$SHA256_BIN" ]; then "$SHA256_BIN" "$@"; else shasum -a 256 "$@"; fi
 }
+file_sha256() {
+    local checksum
+    checksum=$(sha256sum "$1") || return 1
+    printf '%s\n' "${checksum%% *}"
+}
+event_line() {
+    local event
+    event=$(grep -n -m1 "$1" "$EVENTS") || return 1
+    printf '%s\n' "${event%%:*}"
+}
 cp() {
     printf 'copy %s\n' "$*" >> "$EVENTS"
     local src=$1
@@ -83,8 +93,8 @@ run_case() (
     printf 'unrelated newer backup\n' > "$case_root/$RUNTIME_JAR_NAME.bak.decoy"
     touch -t 209901010000 "$case_root/$RUNTIME_JAR_NAME.bak.decoy"
     local old_sha new_sha
-    old_sha=$(sha256sum "$case_root/$RUNTIME_JAR_NAME.bak.bound" | awk '{print $1}')
-    new_sha=$(sha256sum "$case_root/$RUNTIME_JAR_NAME" | awk '{print $1}')
+    old_sha=$(file_sha256 "$case_root/$RUNTIME_JAR_NAME.bak.bound") || return 1
+    new_sha=$(file_sha256 "$case_root/$RUNTIME_JAR_NAME") || return 1
     printf 'CRETAS_ROLLBACK_V1\n%s\n%s\n%s\n%s\n' "$RUNTIME_JAR_NAME.bak.bound" "$old_sha" "$port" "$new_sha" > "$case_root/.last-deploy-rollback"
     local binding
     binding=$(cat "$case_root/.last-deploy-rollback")
@@ -117,17 +127,17 @@ run_case() (
         local expected_rc=0
         [ "$entry" != automatic ] || expected_rc=1 # Original deployment still failed.
         [ "$rc" = "$expected_rc" ] || { cat "$case_root/output"; echo 'FAIL: unexpected deployment result'; return 1; }
-        [ "$(sha256sum "$case_root/$RUNTIME_JAR_NAME" | awk '{print $1}')" = "$old_sha" ] || { echo 'FAIL: restored an unbound backup'; return 1; }
+        [ "$(file_sha256 "$case_root/$RUNTIME_JAR_NAME")" = "$old_sha" ] || { echo 'FAIL: restored an unbound backup'; return 1; }
         grep -Fxq "systemctl restart $EXPECTED_SERVICE" "$EVENTS" || return 1
         grep -Fxq "health $port" "$EVENTS" || return 1
         grep -Fq "47.100.235.168:$port;" "$NGINX_UPSTREAM_FILE" || return 1
         grep -Fq 'ROLLBACK_STATUS=restored' "$case_root/output" || return 1
         # Restart only after the verified copy; switch traffic only after health.
         local copied restarted healthy switched
-        copied=$(grep -n '^copy .*bak.bound' "$EVENTS" | head -1 | cut -d: -f1)
-        restarted=$(grep -n '^systemctl restart ' "$EVENTS" | cut -d: -f1)
-        healthy=$(grep -n '^health ' "$EVENTS" | cut -d: -f1)
-        switched=$(grep -n '^nginx -s reload' "$EVENTS" | cut -d: -f1)
+        copied=$(event_line '^copy .*bak.bound') || return 1
+        restarted=$(event_line '^systemctl restart ') || return 1
+        healthy=$(event_line '^health ') || return 1
+        switched=$(event_line '^nginx -s reload') || return 1
         [ "$copied" -lt "$restarted" ] && [ "$restarted" -lt "$healthy" ] && [ "$healthy" -lt "$switched" ] || return 1
     else
         [ "$rc" != 0 ] || { echo 'FAIL: failure returned success'; return 1; }
@@ -165,8 +175,8 @@ for port in 10010 10020; do
         : > "$EVENTS"
         printf 'old prepare artifact\n' > "$case_root/$RUNTIME_JAR_NAME"
         printf 'candidate\n' > "$case_root/candidate"
-        LOCAL_SHA256=$(sha256sum "$case_root/candidate" | awk '{print $1}')
-        expected_old=$(sha256sum "$case_root/$RUNTIME_JAR_NAME" | awk '{print $1}')
+        LOCAL_SHA256=$(file_sha256 "$case_root/candidate") || exit 1
+        expected_old=$(file_sha256 "$case_root/$RUNTIME_JAR_NAME") || exit 1
         printf ' server 47.100.235.168:%s;\n' "$port" > "$NGINX_UPSTREAM_FILE"
         prepare_bound_rollback || exit 1
         [ "$ROLLBACK_BOUND_PORT" = "$port" ] || exit 1
@@ -175,7 +185,7 @@ for port in 10010 10020; do
         [ "$(sed -n '5p' "$case_root/.last-deploy-rollback")" = "$LOCAL_SHA256" ] || exit 1
         command cp "$case_root/candidate" "$case_root/$RUNTIME_JAR_NAME"
         restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING" || exit 1
-        [ "$(sha256sum "$case_root/$RUNTIME_JAR_NAME" | awk '{print $1}')" = "$expected_old" ] || exit 1
+        [ "$(file_sha256 "$case_root/$RUNTIME_JAR_NAME")" = "$expected_old" ] || exit 1
         ! grep -q '^systemctl restart' "$EVENTS" || exit 1
         # The live automatic caller must reject a record replaced by another release.
         printf '\nchanged\n' >> "$case_root/.last-deploy-rollback"

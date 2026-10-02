@@ -83,7 +83,7 @@ GREEN_SERVICE="cretas-backend-green"
 rollback_active_port() {
     local upstream ports
     upstream=$(ssh "$GATEWAY" "cat '$NGINX_UPSTREAM_FILE'") || return 1
-    ports=$(printf '%s\n' "$upstream" | sed -nE 's/^[[:space:]]*server[[:space:]]+47\.100\.235\.168:(10010|10020);.*/\1/p')
+    ports=$(sed -nE 's/^[[:space:]]*server[[:space:]]+47\.100\.235\.168:(10010|10020);.*/\1/p' <<< "$upstream") || return 1
     case "$ports" in 10010|10020) printf '%s\n' "$ports" ;; *) return 1 ;; esac
 }
 
