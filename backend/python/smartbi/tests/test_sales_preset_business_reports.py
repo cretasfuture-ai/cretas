@@ -368,5 +368,5 @@ def test_region_leap_day_shifts_to_feb_28(use_rows):
     "/salesperson-performance", "/gross-margin", "/growth-rate", "/regional-comparison",
 ])
 def test_routes_registered(path):
-    paths = {r.path for r in sales_preset.router.routes}
+    paths = {getattr(r, "path", None) for r in sales_preset.router.routes}
     assert f"/api/smartbi/{{factory_id}}/sales-preset{path}" in paths
