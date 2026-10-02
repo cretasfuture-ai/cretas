@@ -78,6 +78,128 @@ GREEN_PORT=10020
 GREEN_MANAGEMENT_PORT=10022
 GREEN_SERVICE="cretas-backend-green"
 
+# BEGIN_BOUND_ROLLBACK_HELPERS
+# A rollback is bound to the pre-install artifact and slot, never backup mtime.
+rollback_active_port() {
+    local upstream ports
+    upstream=$(ssh "$GATEWAY" "cat '$NGINX_UPSTREAM_FILE'") || return 1
+    ports=$(sed -nE 's/^[[:space:]]*server[[:space:]]+47\.100\.235\.168:(10010|10020);.*/\1/p' <<< "$upstream") || return 1
+    case "$ports" in 10010|10020) printf '%s\n' "$ports" ;; *) return 1 ;; esac
+}
+
+prepare_bound_rollback() {
+    ROLLBACK_BOUND_PORT=$(rollback_active_port) || { echo 'ROLLBACK_BINDING_FAILED: active slot unknown' >&2; return 1; }
+    [[ "$LOCAL_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    ssh "$SERVER" "bash -s -- '$REMOTE_JAR_DIR' '$RUNTIME_JAR_NAME' '$ROLLBACK_BOUND_PORT' '$LOCAL_SHA256'" <<'ROLLBACK_PREPARE'
+set -e
+cd "$1" || exit 1
+runtime=$2
+port=$3
+candidate_sha=$4
+[ -f "$runtime" ] || { echo 'ROLLBACK_BINDING_FAILED: existing runtime JAR required' >&2; exit 1; }
+old_sha=$(sha256sum "$runtime") || exit 1
+old_sha=${old_sha%% *}
+backup="$runtime.bak.$(date +%Y%m%d_%H%M%S).$$"
+cp "$runtime" "$backup" || exit 1
+backup_sha=$(sha256sum "$backup") || exit 1
+[ "${backup_sha%% *}" = "$old_sha" ] || exit 1
+record=$(mktemp .rollback-binding.XXXXXX) || exit 1
+printf 'CRETAS_ROLLBACK_V1\n%s\n%s\n%s\n%s\n' "$backup" "$old_sha" "$port" "$candidate_sha" > "$record" || exit 1
+mv "$record" .last-deploy-rollback || exit 1
+# Keep the existing retention policy, always preserving this bound backup.
+ls -t "$runtime".bak.* | tail -n +4 | while IFS= read -r stale; do
+    if [ "$stale" != "$backup" ]; then
+        rm -f -- "$stale" || echo "Warning: could not prune $stale" >&2
+    fi
+done
+ROLLBACK_PREPARE
+    local rc=$?
+    [ "$rc" = 0 ] || return "$rc"
+    DEPLOY_ROLLBACK_BINDING=$(ssh "$SERVER" "cat '$REMOTE_JAR_DIR/.last-deploy-rollback'") || return 1
+    [ -n "$DEPLOY_ROLLBACK_BINDING" ] || return 1
+}
+
+restore_bound_rollback() {
+    local mode=${1:-service} expected_binding=${2:-} binding version="" backup="" old_sha="" port="" candidate_sha="" extra="" service state current_port
+    case "$mode" in disk|service) ;; *) return 1 ;; esac
+    binding=$(ssh "$SERVER" "cat '$REMOTE_JAR_DIR/.last-deploy-rollback'") || { echo 'ROLLBACK_FAILED: missing binding' >&2; return 1; }
+    if [ -n "$expected_binding" ] && [ "$binding" != "$expected_binding" ]; then
+        echo 'ROLLBACK_FAILED: another deployment changed the binding' >&2
+        return 1
+    fi
+    [ "$(printf '%s\n' "$binding" | wc -l | tr -d '[:space:]')" = 5 ] || { echo 'ROLLBACK_FAILED: invalid binding length' >&2; return 1; }
+    {
+        IFS= read -r version && IFS= read -r backup && IFS= read -r old_sha && IFS= read -r port && IFS= read -r candidate_sha
+        IFS= read -r extra || extra=""
+    } <<< "$binding"
+    if [ "$version" != CRETAS_ROLLBACK_V1 ] || [ -n "$extra" ] \
+        || [[ ! "$backup" =~ ^aims-0\.0\.1-SNAPSHOT\.jar\.bak\.[A-Za-z0-9._-]+$ ]] \
+        || [[ ! "$old_sha" =~ ^[0-9a-f]{64}$ ]] || [[ ! "$candidate_sha" =~ ^[0-9a-f]{64}$ ]]; then
+        echo 'ROLLBACK_FAILED: invalid binding' >&2
+        return 1
+    fi
+    case "$port" in
+        10010) service=$BLUE_SERVICE ;;
+        10020) service=$GREEN_SERVICE ;;
+        *) echo 'ROLLBACK_FAILED: invalid bound slot' >&2; return 1 ;;
+    esac
+    current_port=$(rollback_active_port) || { echo 'ROLLBACK_FAILED: current upstream unknown' >&2; return 1; }
+    # Explicit guards matter here: callers deliberately handle failures with if/!.
+    # A failed copy must never fall through to restart or a success receipt.
+    if ! ssh "$SERVER" "bash -s -- '$REMOTE_JAR_DIR' '$RUNTIME_JAR_NAME' '$backup' '$old_sha' '$candidate_sha'" <<'ROLLBACK_RESTORE'
+set -e
+cd "$1" || exit 1
+runtime=$2
+backup=$3
+old_sha=$4
+candidate_sha=$5
+actual=$(sha256sum "$backup") || exit 1
+[ "${actual%% *}" = "$old_sha" ] || { echo 'ROLLBACK_FAILED: backup SHA256 mismatch' >&2; exit 1; }
+current=$(sha256sum "$runtime") || exit 1
+case "${current%% *}" in "$old_sha"|"$candidate_sha") ;; *) echo 'ROLLBACK_FAILED: runtime belongs to another deployment' >&2; exit 1 ;; esac
+restore_tmp=$(mktemp "$runtime.rollback.XXXXXX") || exit 1
+trap 'rm -f "$restore_tmp"' EXIT
+cp -p "$backup" "$restore_tmp" || exit 1
+copied=$(sha256sum "$restore_tmp") || exit 1
+[ "${copied%% *}" = "$old_sha" ] || exit 1
+mv "$restore_tmp" "$runtime" || exit 1
+# restart.sh must not subsequently auto-swap an unrelated .new JAR.
+rm -f "$runtime.new" || exit 1
+restored=$(sha256sum "$runtime") || exit 1
+[ "${restored%% *}" = "$old_sha" ] || exit 1
+ROLLBACK_RESTORE
+    then
+        echo 'ROLLBACK_FAILED: exact artifact restore failed; no restart' >&2
+        return 1
+    fi
+    if [ "$mode" = disk ]; then
+        echo "ROLLBACK_STATUS=disk-restored sha256=$old_sha port=$port"
+        return 0
+    fi
+    if ! ssh "$SERVER" "systemctl reset-failed '$service' && systemctl restart '$service'"; then
+        echo 'ROLLBACK_FAILED: bound slot restart failed' >&2
+        return 1
+    fi
+    if ! wait_for_health_via_ssh "$SERVER" "$port" /api/mobile/health 90 2; then
+        echo 'ROLLBACK_FAILED: bound slot health failed' >&2
+        return 1
+    fi
+    state=$(ssh "$SERVER" "systemctl is-active '$service'") || return 1
+    [ "$state" = active ] || { echo 'ROLLBACK_FAILED: bound slot inactive' >&2; return 1; }
+    if ! ssh "$GATEWAY" "sed -i 's|server 47\\.100\\.235\\.168:[0-9]*;.*\$|server 47.100.235.168:$port; # ACTIVE=$port (rollback)|' '$NGINX_UPSTREAM_FILE' && nginx -t && nginx -s reload"; then
+        echo 'ROLLBACK_FAILED: upstream restore failed' >&2
+        return 1
+    fi
+    if [ "$(rollback_active_port)" != "$port" ] || ! post_switch_probe "$GATEWAY" "$SERVER" "$service"; then
+        echo 'ROLLBACK_FAILED: routed rollback health failed' >&2
+        return 1
+    fi
+    FINAL_ACTIVE_PORT=$port
+    FINAL_ACTIVE_SERVICE=$service
+    echo "ROLLBACK_STATUS=restored sha256=$old_sha port=$port service=$service"
+}
+# END_BOUND_ROLLBACK_HELPERS
+
 # BEGIN_POST_SWITCH_PROBE_HELPER
 # Keep a transient SSH failure from escaping the explicit rollback path under
 # `set -e`. Each observation round gets a small bounded retry window; sustained
@@ -1869,23 +1991,12 @@ deploy_jar() {
     echo ""
     echo "🚀 [3/4] 服务器部署..."
     deploy_timing_begin remote_install "服务器安装 JAR"
+    # Capture the exact old artifact and its active slot before replacing bytes.
+    prepare_bound_rollback || { echo 'ROLLBACK_BINDING_FAILED: installation aborted' >&2; exit 1; }
     # MD5 验证 + 部署 JAR (不含重启)
     DEPLOY_OK=false
     if ssh $SERVER "
-        cd $REMOTE_JAR_DIR
-
-        # 备份当前 JAR
-        rm -f .last-deploy-backup
-        if [ -f aims-0.0.1-SNAPSHOT.jar ]; then
-            BACKUP_NAME=\"aims-0.0.1-SNAPSHOT.jar.bak.\$(date +%Y%m%d_%H%M%S)\"
-            cp aims-0.0.1-SNAPSHOT.jar \"\$BACKUP_NAME\"
-            echo \"   备份: \$BACKUP_NAME\"
-            # 🔴 2026-08-12: 把备份名落到标记文件。BACKUP_NAME 是本 heredoc 里的远端
-            # 局部变量, 后面「idle 起不来 → 回退磁盘 jar」那一步是**另一次 ssh**, 读不到它。
-            # 没有这个文件, 那一步就只能靠 ls -t 猜, 并发部署时会猜错。
-            printf '%s\n' \"\$BACKUP_NAME\" > .last-deploy-backup
-            ls -t aims-0.0.1-SNAPSHOT.jar.bak.* 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
-        fi
+        cd $REMOTE_JAR_DIR || exit 1
 
         # 最终 MD5 验证 (部署前)
         REMOTE_MD5=\$(md5sum $REMOTE_TMP/$JAR_NAME | cut -d' ' -f1)
@@ -1896,16 +2007,12 @@ deploy_jar() {
         fi
 
         # 部署 JAR
-        mv $REMOTE_TMP/$JAR_NAME aims-0.0.1-SNAPSHOT.jar
+        mv $REMOTE_TMP/$JAR_NAME aims-0.0.1-SNAPSHOT.jar || exit 1
 
         # 验证部署后文件完整性
         DEPLOYED_MD5=\$(md5sum aims-0.0.1-SNAPSHOT.jar | cut -d' ' -f1)
         if [ \"\$DEPLOYED_MD5\" != \"$LOCAL_MD5\" ]; then
-            echo '   ❌ 部署后 checksum 不匹配! 恢复备份...'
-            if [ -n \"\$BACKUP_NAME\" ] && [ -f \"\$BACKUP_NAME\" ]; then
-                cp \"\$BACKUP_NAME\" aims-0.0.1-SNAPSHOT.jar
-                echo '   ✓ 已恢复备份'
-            fi
+            echo '   ❌ 部署后 checksum 不匹配!'
             exit 1
         fi
         echo '   ✓ MD5 验证通过'
@@ -1915,6 +2022,7 @@ deploy_jar() {
 
     if [ "$DEPLOY_OK" != "true" ]; then
         echo "   ❌ 部署失败 (MD5 不匹配或文件损坏)"
+        restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING" || { echo 'ROLLBACK_FAILED: installation recovery failed' >&2; exit 1; }
         exit 1
     fi
     deploy_timing_end remote_install
@@ -1935,13 +2043,12 @@ deploy_jar() {
 
         # 检测当前 active port (从 139 nginx upstream 读)
         # 用 grep -oP 而不是 awk, 避免 shell $3 扩展问题
-        ACTIVE_PORT=$(ssh $GATEWAY "grep -oP 'server 47\\.100\\.235\\.168:\\K[0-9]+' $NGINX_UPSTREAM_FILE | head -1" 2>/dev/null)
+        ACTIVE_PORT=$(rollback_active_port) || ACTIVE_PORT=""
 
-        if [ -z "$ACTIVE_PORT" ] || [[ ! "$ACTIVE_PORT" =~ ^(10010|10020)$ ]]; then
-            echo "   ❌ 无法检测 nginx upstream active port (got: '$ACTIVE_PORT')"
-            echo "   请确认 $NGINX_UPSTREAM_FILE 在 139 存在且含 'server 47.100.235.168:10010;' 这样的行"
-            echo "   回退到 in-place 部署"
-            DEPLOY_MODE="inplace"
+        if [ "$ACTIVE_PORT" != "$ROLLBACK_BOUND_PORT" ]; then
+            echo 'ROLLBACK_FAILED: upstream changed after backup binding; abort rollout' >&2
+            restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING" || { echo 'ROLLBACK_FAILED: bound disk recovery failed' >&2; exit 1; }
+            exit 1
         else
             if [ "$ACTIVE_PORT" = "$BLUE_PORT" ]; then
                 IDLE_COLOR="green"; IDLE_SERVICE="$GREEN_SERVICE"; IDLE_PORT="$GREEN_PORT"; IDLE_MANAGEMENT_PORT="$GREEN_MANAGEMENT_PORT"
@@ -1982,6 +2089,7 @@ deploy_jar() {
             deploy_timing_begin idle_startup "idle Java 启动至健康"
             if ! ssh $SERVER "systemctl restart $IDLE_SERVICE"; then
                 echo "   ❌ 无法启动 $IDLE_SERVICE, 中止切换"
+                restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING" || { echo 'ROLLBACK_FAILED: startup recovery failed' >&2; exit 1; }
                 exit 1
             fi
 
@@ -2001,7 +2109,11 @@ deploy_jar() {
                 echo "   ---- $IDLE_SERVICE 最近日志（只读，最多 80 行）----"
                 ssh $SERVER "journalctl -u $IDLE_SERVICE -n 80 --no-pager -o short-iso" 2>/dev/null || true
                 echo "   ---- 日志结束 ----"
-                ssh $SERVER "systemctl stop $IDLE_SERVICE" 2>/dev/null || true
+                if ! ssh "$SERVER" "systemctl stop '$IDLE_SERVICE'"; then
+                    echo 'ROLLBACK_FAILED: unhealthy idle stop failed' >&2
+                    restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING" || echo 'ROLLBACK_FAILED: disk recovery also failed' >&2
+                    exit 1
+                fi
 
                 # 🔴 2026-08-12 实测事故: 这里原本只是「停 idle + exit 1」, **没有把磁盘上
                 # 的 jar 换回去**。于是留下这个局面: active 靠自己**内存里**那份继续服务,
@@ -2011,31 +2123,7 @@ deploy_jar() {
                 #
                 # 「部署失败了」必须意味着**磁盘也回到部署前**, 否则失败不是失败, 是延迟引爆。
                 echo "   🔁 回退磁盘上的 jar (这份 jar 起不来, 不能留在磁盘上等下次重启加载)"
-                ssh $SERVER "
-                    cd $REMOTE_JAR_DIR || exit 1
-                    CUR=\$(md5sum aims-0.0.1-SNAPSHOT.jar 2>/dev/null | cut -d' ' -f1)
-                    if [ \"\$CUR\" != '$LOCAL_MD5' ]; then
-                        echo '   ⏭  磁盘上的 jar 不是本次部署的(可能已被并发部署覆盖), 不动它'
-                        exit 0
-                    fi
-                    if [ ! -s .last-deploy-backup ]; then
-                        echo '   ⚠️  没有备份标记 —— 说明部署前磁盘上本来就没有 jar, 无可回退'
-                        exit 0
-                    fi
-                    BK=\$(cat .last-deploy-backup)
-                    if [ ! -f \"\$BK\" ]; then
-                        echo \"   ❌ 备份 \$BK 不见了, 无法回退! 磁盘上留着一份起不来的 jar!\"
-                        echo '   ❌ 立即手动处理: ls -t $REMOTE_JAR_DIR/aims-0.0.1-SNAPSHOT.jar.bak.*'
-                        exit 1
-                    fi
-                    cp \"\$BK\" aims-0.0.1-SNAPSHOT.jar || exit 1
-                    BACK_MD5=\$(md5sum aims-0.0.1-SNAPSHOT.jar | cut -d' ' -f1)
-                    if [ \"\$BACK_MD5\" = '$LOCAL_MD5' ]; then
-                        echo '   ❌ 回退后 md5 仍等于本次部署的 jar, 回退没生效!'
-                        exit 1
-                    fi
-                    echo \"   ✓ 已回退到 \$BK (md5 \$BACK_MD5)\"
-                " || echo "   ⚠️⚠️  磁盘 jar 回退失败 —— 上面的手动步骤必须现在做, 否则下次重启 prod 起不来"
+                restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING" || { echo 'ROLLBACK_FAILED: readiness recovery failed' >&2; exit 1; }
                 exit 1
             fi
 
@@ -2051,8 +2139,8 @@ deploy_jar() {
                 nginx -s reload
             "; then
                 echo "   ❌ nginx upstream 切换失败, 回滚 upstream 并停 idle"
-                ssh $GATEWAY "sed -i 's|server 47\\.100\\.235\\.168:$IDLE_PORT;.*\$|server 47.100.235.168:$ACTIVE_PORT;  # ACTIVE=$ACTIVE_PORT (rolled back $SWITCH_DATE) — auto-synced by deploy-backend.sh|' $NGINX_UPSTREAM_FILE && nginx -s reload" 2>/dev/null || true
-                ssh $SERVER "systemctl stop $IDLE_SERVICE" 2>/dev/null || true
+                restore_bound_rollback service "$DEPLOY_ROLLBACK_BINDING" || echo 'ROLLBACK_FAILED: switch recovery failed' >&2
+                ssh "$SERVER" "systemctl stop '$IDLE_SERVICE'" || echo 'ROLLBACK_FAILED: idle stop failed' >&2
                 exit 1
             fi
             echo "   ✓ upstream 切换完成 (含 ACTIVE 注释自动同步)"
@@ -2086,28 +2174,14 @@ deploy_jar() {
                 fi
             done
 
+            # BEGIN_POST_SWITCH_BOUND_ROLLBACK
             if [ "$POST_SWITCH_HEALTHY" != "true" ]; then
-                echo "   🔄 auto-rollback: 切回旧 upstream ($ACTIVE_COLOR $ACTIVE_PORT) + 重启旧 active"
-                ssh $GATEWAY "
-                    sed -i 's|server 47\\.100\\.235\\.168:$IDLE_PORT;.*\$|server 47.100.235.168:$ACTIVE_PORT;  # ACTIVE=$ACTIVE_PORT (rolled back $SWITCH_DATE) — auto-synced by deploy-backend.sh|' $NGINX_UPSTREAM_FILE &&
-                    nginx -t >/dev/null 2>&1 &&
-                    nginx -s reload
-                " 2>/dev/null || echo "   ⚠️  rollback nginx 失败, 需手动: vi $NGINX_UPSTREAM_FILE && nginx -s reload"
-                # 重启旧 active (jar 文件已被新 jar 覆盖, 但可从最近备份恢复)
-                LAST_BAK=$(ssh $SERVER "ls -t /www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar.bak.* 2>/dev/null | head -1")
-                if [ -n "$LAST_BAK" ]; then
-                    ssh $SERVER "
-                        cp '$LAST_BAK' /www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar &&
-                        systemctl reset-failed $ACTIVE_SERVICE 2>/dev/null || true
-                        systemctl restart $ACTIVE_SERVICE
-                    " 2>/dev/null || echo "   ⚠️  rollback 重启 $ACTIVE_SERVICE 失败"
-                    echo "   ↻ 已恢复 jar 到 $LAST_BAK + 重启 $ACTIVE_COLOR"
-                else
-                    echo "   ⚠️  无可回滚的备份 jar — 当前 jar 仍是 corrupt 版本, 需 git 重新部署"
-                fi
-                ssh $SERVER "systemctl stop $IDLE_SERVICE" 2>/dev/null || true
+                echo "   🔄 auto-rollback: 切回旧 upstream ($ACTIVE_COLOR $ACTIVE_PORT), after verified artifact and slot health"
+                restore_bound_rollback service "$DEPLOY_ROLLBACK_BINDING" || echo 'ROLLBACK_FAILED: post-switch recovery failed' >&2
+                ssh "$SERVER" "systemctl stop '$IDLE_SERVICE'" || echo 'ROLLBACK_FAILED: idle stop failed' >&2
                 exit 1
             fi
+            # END_POST_SWITCH_BOUND_ROLLBACK
             deploy_timing_end post_switch_observation
             echo "   ✓ 切换后验证全部通过 (3/3 轮 nginx 200 + idle systemd active)"
 
@@ -2341,36 +2415,7 @@ deploy_rollback() {
     echo "  Rollback 模式 — 恢复上一版本"
     echo "=========================================="
 
-    log "INFO" "查找最新备份..."
-    LATEST_BAK=$(ssh $SERVER "ls -t $REMOTE_JAR_DIR/aims-0.0.1-SNAPSHOT.jar.bak.* 2>/dev/null | head -1")
-
-    if [ -z "$LATEST_BAK" ]; then
-        log "ERROR" "无可用备份: $REMOTE_JAR_DIR/aims-0.0.1-SNAPSHOT.jar.bak.*"
-        exit 1
-    fi
-
-    log "INFO" "回滚到: $LATEST_BAK"
-    ssh $SERVER "
-        cd $REMOTE_JAR_DIR
-        cp '$LATEST_BAK' aims-0.0.1-SNAPSHOT.jar
-        bash restart.sh $DEPLOY_ENV
-    "
-
-    # 2026-05-18: rollback 健康检查也改 SSH localhost (SG 收紧后 public-IP 永远 timeout)
-    if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
-        if wait_for_health_via_ssh "$SERVER" 10010 /api/mobile/health 30 2; then
-            log "INFO" "回滚完成，生产服务正常"
-        else
-            log "WARN" "回滚完成但生产健康检查超时，请手动检查"
-        fi
-    fi
-    if [[ "$DEPLOY_ENV" == "test" || "$DEPLOY_ENV" == "all" ]]; then
-        if wait_for_health_via_ssh "$SERVER" 10011 /api/mobile/health 30 2; then
-            log "INFO" "回滚完成，测试服务正常"
-        else
-            log "WARN" "回滚完成但测试健康检查超时，请手动检查"
-        fi
-    fi
+    restore_bound_rollback service
 }
 
 # ==================== 执行 ====================
