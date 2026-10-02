@@ -963,8 +963,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         //   CONDITIONAL  requires 70 <= passRate < 95 (B/C grade)
         //   PENDING      always allowed (待复检, no verdict yet)
         BigDecimal passRate = passCount
-                .divide(sampleSize, 2, RoundingMode.HALF_UP)
-                .multiply(new BigDecimal(100));
+                .multiply(new BigDecimal(100))
+                .divide(sampleSize, 2, RoundingMode.HALF_UP);
         validateResultVsPassRate(factoryId, resultStr, passRate);
         QualityInspection qualityInspection = new QualityInspection();
         qualityInspection.setFactoryId(factoryId);
