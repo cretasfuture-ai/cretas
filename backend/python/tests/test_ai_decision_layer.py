@@ -230,6 +230,34 @@ def test_choose_with_single_option_skips_the_call():
 
 # ---------------- 归一化 (与离线评测 N2 一致) ----------------
 
+def test_alias_in_two_entity_types_resolves_to_one_tag_regardless_of_order():
+    """「酱牛肉」既是物料又是产品: 结果必须与输入顺序 (以及进程的哈希种子) 无关。"""
+    rows = [{"factory_id": "F006", "entity_type": "PRODUCT", "alias": "酱牛肉"},
+            {"factory_id": "F006", "entity_type": "MATERIAL", "alias": "酱牛肉"}]
+    a = registry.build_snapshot([], rows).lexicon["F006"]
+    b = registry.build_snapshot([], list(reversed(rows))).lexicon["F006"]
+    assert a == b == [("酱牛肉", "<物料>")]
+    assert registry.normalize("报个酱牛肉", a) == "报个<物料>"
+
+
+def test_normalization_is_identical_across_hash_seeds():
+    """真正的病是跨进程: 用不同 PYTHONHASHSEED 起子进程各算一次, 键必须相同。"""
+    import os
+    import subprocess
+    import sys
+    code = (
+        "from ai import registry as R;"
+        "rows=[{'factory_id':'F','entity_type':t,'alias':a} for t in ('PRODUCT','MATERIAL','PROCESS') "
+        "for a in ('酱牛肉','牛肉','卤牛肉','包装')];"
+        "print(R.normalize('报个酱牛肉包装', R.build_snapshot([], rows).lexicon['F']))"
+    )
+    outs = set()
+    for seed in ("1", "2", "3", "4"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        outs.add(subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
+                                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))).stdout.strip())
+    assert len(outs) == 1 and "" not in outs, outs
+
 def test_normalize_matches_offline_n2():
     lex = registry.build_snapshot([], [
         {"factory_id": "F006", "entity_type": "MATERIAL", "alias": "淀粉"},
