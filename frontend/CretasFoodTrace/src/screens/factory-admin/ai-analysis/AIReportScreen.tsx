@@ -22,7 +22,7 @@ import { aiApiClient, ReportSummary } from '../../../services/api/aiApiClient';
 
 type NavigationProp = NativeStackNavigationProp<FAAIStackParamList, 'AIReport'>;
 
-type ReportType = 'all' | 'batch' | 'weekly' | 'monthly' | 'custom';
+type ReportType = 'all' | 'batch' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
 export function AIReportScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -61,6 +61,7 @@ export function AIReportScreen() {
   const getReportTypeIcon = (type: string): string => {
     const icons: Record<string, string> = {
       batch: 'package-variant',
+      daily: 'calendar-today',
       weekly: 'calendar-week',
       monthly: 'calendar-month',
       custom: 'tune',
@@ -71,6 +72,7 @@ export function AIReportScreen() {
   const getReportTypeColor = (type: string): string => {
     const colors: Record<string, string> = {
       batch: '#667eea',
+      daily: '#287c8e',
       weekly: '#48bb78',
       monthly: '#ed8936',
       custom: '#9f7aea',
@@ -81,6 +83,7 @@ export function AIReportScreen() {
   const getReportTypeLabel = (type: string): string => {
     const labels: Record<string, string> = {
       batch: t('aiReport.batchAnalysis'),
+      daily: '日报',
       weekly: t('aiReport.weeklyReport'),
       monthly: t('aiReport.monthlyReport'),
       custom: t('aiReport.customReport'),
@@ -99,7 +102,7 @@ export function AIReportScreen() {
 
   const renderFilterTabs = () => (
     <View style={styles.filterTabs}>
-      {(['all', 'batch', 'weekly', 'monthly'] as ReportType[]).map((type) => (
+      {(['all', 'daily', 'weekly', 'monthly'] as ReportType[]).map((type) => (
         <TouchableOpacity
           key={type}
           style={[styles.filterTab, filterType === type && styles.filterTabActive]}
@@ -146,6 +149,13 @@ export function AIReportScreen() {
         </View>
         <Icon source="chevron-right" size={20} color="#ccc" />
       </View>
+
+      {item.generationStatus === 'FAILED' ? (
+        <View style={styles.failurePanel}>
+          <Text style={styles.failureTitle}>生成失败</Text>
+          <Text style={styles.failureReason}>{item.failureReason || '报告生成失败，请重新生成。'}</Text>
+        </View>
+      ) : item.summary ? <Text style={styles.summary} numberOfLines={3}>{item.summary}</Text> : null}
 
       {/* 报告统计 */}
       {(item.totalCost !== undefined || item.keyFindingsCount !== undefined) && (
@@ -321,6 +331,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
   },
+  summary: { marginTop: 12, color: '#526170', fontSize: 13, lineHeight: 20 },
+  failurePanel: { marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: '#fff1ef' },
+  failureTitle: { color: '#b42318', fontWeight: '600', marginBottom: 4 },
+  failureReason: { color: '#8b2c25', lineHeight: 20 },
   reportStats: {
     flexDirection: 'row',
     marginTop: 12,

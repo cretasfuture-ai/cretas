@@ -16,8 +16,7 @@ import CreatePlanScreen from "../../screens/factory-admin/ai-analysis/CreatePlan
 import IntentSuggestionsListScreen from "../../screens/factory-admin/ai-analysis/IntentSuggestionsListScreen";
 import IntentSuggestionDetailScreen from "../../screens/factory-admin/ai-analysis/IntentSuggestionDetailScreen";
 
-// 复用现有AI相关页面
-import AIAnalysisDetailScreen from "../../screens/processing/AIAnalysisDetailScreen";
+import AIReportDetailScreen from "../../screens/factory-admin/ai-analysis/AIReportDetailScreen";
 // 使用新的独立AI对话屏幕
 import AIChatScreen from "../../screens/factory-admin/ai-analysis/AIChatScreen";
 import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
@@ -74,10 +73,10 @@ export function FAAIStackNavigator() {
         options={{ title: "新建计划" }}
       />
 
-      {/* AI报告详情 (复用现有) */}
+      {/* AI报告详情 */}
       <Stack.Screen
         name="AIReportDetail"
-        component={AIAnalysisDetailScreen}
+        component={AIReportDetailScreen}
         options={{ title: "报告详情" }}
       />
 

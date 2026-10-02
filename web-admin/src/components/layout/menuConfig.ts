@@ -30,6 +30,7 @@ const RESTAURANT_ANALYTICS_STEWARDS = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_
 // 财务主管专用菜单 - 简化版
 // WS4: 财务看板/财务分析/销售分析 合并为单一「经营分析」hub (财务/销售/趋势/KPI tab)。
 export const financeManagerMenu: MenuItem[] = [
+  { path: '/analytics/ai-reports', title: 'AI经营报告', icon: 'Document', module: 'analytics', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
   {
     path: '/workflow', title: '个人 OA', icon: 'Checked', module: 'dashboard',
     children: [
@@ -65,6 +66,7 @@ export const financeManagerMenu: MenuItem[] = [
 ];
 
 const rawMenuConfig: MenuItem[] = [
+  { path: '/analytics/ai-reports', title: 'AI经营报告', icon: 'Document', module: 'analytics', roles: ['factory_super_admin', 'finance_manager'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard', hideForFactoryTypes: ['LOGISTICS'] },
   // 🔴 2026-08-07: 这一项此前**只有路由没有菜单入口** —— `router/index.ts` 里
   // `dashboard/ai-value` 声明齐全(title/icon/module 都有)，但 menuConfig 里零命中，
@@ -689,6 +691,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/procurement': 30,
   '/sales': 40,
   '/finance': 50,
+  '/analytics/ai-reports': 52,
   '/rd': 55,
   '/production': 60,
   '/warehouse': 70,

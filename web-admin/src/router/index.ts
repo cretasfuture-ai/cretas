@@ -1884,11 +1884,17 @@ meta: { requiresAuth: true, title: '产品-工序配置', module: 'production', 
             name: 'AnalyticsTrends',
             redirect: (to) => buildHubRedirect(to, 'trend')
           },
-          // WS4 #9: AI分析报告删除 — redirect 到经营分析 hub (component 保留以防深链, 但 menu 隐藏)。
           {
             path: 'ai-reports',
             name: 'AnalyticsAIReports',
-            redirect: (to) => buildHubRedirect(to)
+            component: () => import('@/views/analytics/ai-reports/index.vue'),
+            meta: { requiresAuth: true, title: 'AI经营报告', module: 'analytics', modulesAny: ['analytics', 'warehouse'], hideForFactoryTypes: ['RESTAURANT'] }
+          },
+          {
+            path: 'ai-reports/:reportId',
+            name: 'AnalyticsAIReportDetail',
+            component: () => import('@/views/analytics/ai-reports/index.vue'),
+            meta: { requiresAuth: true, title: '经营报告全文', module: 'analytics', modulesAny: ['analytics', 'warehouse'], hideForFactoryTypes: ['RESTAURANT'] }
           },
           // WS4: KPI看板合并入经营分析 hub (redirect 保书签 → ?tab=kpi)。组件经 hub 加载。
           {

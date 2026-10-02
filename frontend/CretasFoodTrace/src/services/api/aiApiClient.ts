@@ -164,7 +164,7 @@ export interface ConversationRequest {
  * AI报告生成请求
  */
 export interface ReportGenerationRequest {
-  reportType: 'batch' | 'weekly' | 'monthly' | 'custom';
+  reportType: 'batch' | 'daily' | 'weekly' | 'monthly' | 'custom';
   batchId?: number;
   startDate?: string;
   endDate?: string;
@@ -189,6 +189,10 @@ interface ApiResponseWrapper<T> {
 interface AICostAnalysisResponseBackend {
   success: boolean;
   analysis: string;
+  reportAnalysis?: string;
+  reportId?: number;
+  generationStatus?: 'SUCCESS' | 'FAILED';
+  failureCode?: string;
   session_id?: string;
   messageCount?: number;
   quota?: AIQuotaInfoBackend;
@@ -205,6 +209,10 @@ interface AICostAnalysisResponseBackend {
 export interface AICostAnalysisResponse {
   success: boolean;
   analysis: string;
+  reportAnalysis?: string;
+  reportId?: number;
+  generationStatus?: 'SUCCESS' | 'FAILED';
+  failureCode?: string;
   session_id?: string;
   messageCount?: number;
   quota?: AIQuotaInfo;
@@ -279,7 +287,11 @@ function transformAnalysisResponse(backendResponse: AICostAnalysisResponseBacken
 
   return {
     success: backendResponse.success ?? false,
-    analysis: backendResponse.analysis ?? '',
+    analysis: backendResponse.reportAnalysis ?? backendResponse.analysis ?? '',
+    reportAnalysis: backendResponse.reportAnalysis,
+    reportId: backendResponse.reportId,
+    generationStatus: backendResponse.generationStatus,
+    failureCode: backendResponse.failureCode,
     session_id: backendResponse.session_id,
     messageCount: backendResponse.messageCount,
     quota: transformQuotaResponse(backendResponse.quota),
@@ -369,13 +381,33 @@ export interface ReportListResponse {
  */
 export interface ReportSummary {
   reportId: number;
-  reportType: 'batch' | 'weekly' | 'monthly' | 'custom';
+  reportType: 'batch' | 'daily' | 'weekly' | 'monthly' | 'custom';
   title: string;
   createdAt: string;
   batchId?: number;
   batchNumber?: string;
   startDate?: string;
   endDate?: string;
+  totalCost?: number;
+  keyFindingsCount?: number;
+  suggestionsCount?: number;
+  generationStatus?: 'SUCCESS' | 'FAILED';
+  failureReason?: string;
+  summary?: string;
+}
+
+interface BackendReportSummary {
+  id: number;
+  reportType: ReportSummary['reportType'];
+  createdAt: string;
+  summaryText?: string;
+  financialSummaryText?: string;
+  generationStatus?: 'SUCCESS' | 'FAILED';
+  failureReason?: string;
+  batchId?: number;
+  batchNumber?: string;
+  periodStart?: string;
+  periodEnd?: string;
   totalCost?: number;
   keyFindingsCount?: number;
   suggestionsCount?: number;
@@ -816,7 +848,7 @@ class AIApiClient {
     },
     factoryId?: string
   ): Promise<ReportListResponse> {
-    const response = await apiClient.get<any>(
+    const response = await apiClient.get<ApiResponseWrapper<{ reports: BackendReportSummary[]; total?: number; page?: number; pageSize?: number }>>(
       `${this.getBasePath(factoryId)}/reports`,
       { params }
     );
@@ -824,10 +856,13 @@ class AIApiClient {
     // 后端返回格式与前端类型不匹配，需要转换字段名
     const backendData = response.data;
     if (backendData && Array.isArray(backendData.reports)) {
-      const transformedReports: ReportSummary[] = backendData.reports.map((report: any) => ({
+      const transformedReports: ReportSummary[] = backendData.reports.map((report) => ({
         reportId: report.id,
         reportType: report.reportType,
-        title: report.summaryText?.substring(0, 100) || `${report.reportType === 'weekly' ? '周报' : report.reportType === 'monthly' ? '月报' : '报告'} - ${new Date(report.createdAt).toLocaleDateString('zh-CN')}`,
+        title: `${report.reportType === 'daily' ? '日报' : report.reportType === 'weekly' ? '周报' : report.reportType === 'monthly' ? '月报' : '报告'} · ${report.periodStart ?? new Date(report.createdAt).toLocaleDateString('zh-CN')}`,
+        summary: report.financialSummaryText ?? report.summaryText,
+        generationStatus: report.generationStatus,
+        failureReason: report.failureReason,
         createdAt: report.createdAt,
         batchId: report.batchId,
         batchNumber: report.batchNumber,
