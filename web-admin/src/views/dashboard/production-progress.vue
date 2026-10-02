@@ -5,150 +5,42 @@
  *
  * 深色全屏大字风格,30秒自动刷新,适合挂大屏展示
  */
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
-import { get } from '@/api/request'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
+import { useProductionProgress } from './useProductionProgress'
 import { useAuthStore } from '@/store/modules/auth'
 import { ElMessage } from 'element-plus'
 
-interface ProcessRow {
-  processName: string
-  plannedQty: number
-  reportedQty: number
-  pct: number
-  status: 'DONE' | 'IN_PROGRESS' | 'PENDING'
-}
-interface PlanRow {
-  planId: string
-  planNumber: string
-  productName: string
-  customerName: string
-  plannedQuantity: number
-  reportedQuantity: number
-  progressPct: number
-  status: 'DONE' | 'IN_PROGRESS' | 'PENDING'
-  processes: ProcessRow[]
-}
-interface Summary {
-  totalPlans: number
-  totalWorkOrders: number
-  completedWorkOrders: number
-  inProgressWorkOrders: number
-  pendingWorkOrders: number
-  overallProgressPct: number
-}
-interface ProgressResp {
-  date: string
-  summary: Summary
-  plans: PlanRow[]
-}
-
 const authStore = useAuthStore()
 const factoryId = computed(() => authStore.factoryId)
+const { loading, data, today, nowText, errorMsg, stale, lastSuccessText,
+  overdueCount, overdueFailed, overdueText, refreshAll } = useProductionProgress(factoryId)
 
-const loading = ref(false)
-const data = ref<ProgressResp | null>(null)
-const now = ref(new Date())
-const errorMsg = ref('')
-
-/**
- * 🔴 「没有读数」和「读数是 0」必须分得开。
- *
- * 当天一条计划都没排时, 后端如实返回 summary 全 0 —— 那是**定义上的** 0,
- * 不是一个测量结果。照旧把它印成大字, 墙上就是
- * 「总计划 0 / 已完成 0 / 整体进度 0%」, 车间读到的是「今天产线停了」。
- * ⇒ 零计划时只出空态, 不出那一排大字。
- *
- * ⚠️ 判据是 totalPlans, 不是 plans.length —— 两者理论上同源, 但顶部大字的
- *    含义由 summary 定义, 用哪个数决定要不要显示 summary 就该问哪个数。
- */
+// Preserve the fresh contract: KPI visibility is defined by summary.totalPlans.
 const hasPlans = computed(() => (data.value?.summary?.totalPlans ?? 0) > 0)
-
-/**
- * 交货预警(已超期计划数)。数据来自**另一个端点**
- * `GET /{factoryId}/production-plans/delivery-warnings` (已分 OVERDUE/URGENT/WARN/NORMAL),
- * 与主看板互不影响 —— 它挂了不许拖垮整块墙, 它也不许借主看板的成功冒充自己成功。
- *
- * 三态, ⛔ 不是两态:
- *   null + !failed  = 还没问到 (首帧)          → '—'
- *   failed          = 问了但读不到              → '—' + 「读取失败」
- *   number          = 真读数 (0 是合法读数)     → 数字
- *
- * ⛔ 失败绝不许落成 0。「已超期 0」是车间最想听到的一句话,
- *   不能由一个失败的请求替我们说出来。
- */
-const overdueCount = ref<number | null>(null)
-const overdueFailed = ref(false)
-const overdueText = computed(() =>
-  overdueFailed.value || overdueCount.value === null ? '—' : String(overdueCount.value),
-)
-
-let timer: ReturnType<typeof setInterval> | null = null
-let clockTimer: ReturnType<typeof setInterval> | null = null
-
-const today = computed(() => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-})
-
-const nowText = computed(() => {
-  const d = now.value
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-})
-
-async function fetchData() {
-  if (!factoryId.value) {
-    errorMsg.value = '未获取到工厂ID'
-    return
-  }
-  loading.value = true
-  errorMsg.value = ''
-  try {
-    const res = await get<ProgressResp>(`/${factoryId.value}/dashboard/production-progress`, {
-      params: { date: today.value }
-    })
-    data.value = res.data ?? null
-  } catch (e) {
-    const msg = (e as Error)?.message || '加载失败'
-    errorMsg.value = msg
-    ElMessage.error('加载生产进度失败: ' + msg)
-  } finally {
-    loading.value = false
-  }
+const screen = ref<HTMLElement | null>(null)
+const isFullscreen = ref(false)
+const enteringFullscreen = ref(false)
+const maskCustomerNames = computed(() => isFullscreen.value || enteringFullscreen.value)
+function syncFullscreen() {
+  isFullscreen.value = !!screen.value && document.fullscreenElement === screen.value
 }
-
-interface DeliveryWarn {
-  planId: string
-  planNumber: string
-  warnLevel: 'OVERDUE' | 'URGENT' | 'WARN' | 'NORMAL'
-  daysUntilDeadline: number | null
-}
-
-async function fetchOverdue() {
-  if (!factoryId.value) return
+async function toggleFullscreen() {
   try {
-    const res = await get<DeliveryWarn[]>(`/${factoryId.value}/production-plans/delivery-warnings`, {
-      params: { windowDays: 7 }
-    })
-    const list = res.data
-    // ⛔ 拿不到数组不许当空数组用 —— `?? []` 会把「接口换了形状」渲染成「零超期」。
-    if (!Array.isArray(list)) {
-      overdueFailed.value = true
-      overdueCount.value = null
-      return
+    if (isFullscreen.value) await document.exitFullscreen()
+    else if (screen.value?.requestFullscreen) {
+      // Hide customer text before the browser's first fullscreen frame.
+      enteringFullscreen.value = true
+      await nextTick()
+      await screen.value.requestFullscreen()
     }
-    overdueCount.value = list.filter(w => w?.warnLevel === 'OVERDUE').length
-    overdueFailed.value = false
+    else ElMessage.error('当前浏览器不支持全屏展示')
+    syncFullscreen()
   } catch {
-    // ⛔ 不弹 toast: 这一格失败不该盖住主看板的错误提示; 失败本身已经写在格子里。
-    overdueFailed.value = true
-    overdueCount.value = null
+    syncFullscreen()
+    ElMessage.error('无法切换全屏展示，请重试')
+  } finally {
+    enteringFullscreen.value = false
   }
-}
-
-/** 两条请求各自独立成败 —— 一条挂了另一条照常出数。 */
-function refreshAll() {
-  void fetchData()
-  void fetchOverdue()
 }
 
 function statusColor(status: string): string {
@@ -162,19 +54,17 @@ function statusText(status: string): string {
   return '未开始'
 }
 
-onMounted(() => {
-  refreshAll()
-  timer = setInterval(refreshAll, 30000)
-  clockTimer = setInterval(() => { now.value = new Date() }, 1000)
-})
+onMounted(() => { document.addEventListener('fullscreenchange', syncFullscreen) })
 onBeforeUnmount(() => {
-  if (timer) clearInterval(timer)
-  if (clockTimer) clearInterval(clockTimer)
+  document.removeEventListener('fullscreenchange', syncFullscreen)
+  if (screen.value && document.fullscreenElement === screen.value) {
+    void document.exitFullscreen().catch(() => { /* The browser owns fullscreen teardown. */ })
+  }
 })
 </script>
 
 <template>
-  <div class="dashboard-screen">
+  <div ref="screen" class="dashboard-screen" :class="{ 'is-fullscreen': isFullscreen }">
     <!-- 顶部 -->
     <div class="header">
       <div class="header-left">
@@ -186,8 +76,14 @@ onBeforeUnmount(() => {
         <div class="clock">{{ nowText }}</div>
       </div>
       <div class="header-right">
+        <el-button @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏展示' }}</el-button>
         <el-button type="primary" :loading="loading" @click="refreshAll">刷新</el-button>
       </div>
+    </div>
+
+    <div class="freshness" :class="{ 'is-stale': stale }" role="status" aria-live="polite">
+      <span>{{ stale ? '数据已过期 · ' : '' }}最近成功取数：{{ lastSuccessText }}</span>
+      <span>每30秒自动刷新</span>
     </div>
 
     <!-- Summary Cards —— 🔴 只在**真的有计划**时渲染。
@@ -244,7 +140,7 @@ onBeforeUnmount(() => {
         <div class="plan-meta">
           <span>{{ plan.planNumber }}</span>
           <span class="sep">·</span>
-          <span>客户: {{ plan.customerName }}</span>
+          <span>客户: {{ maskCustomerNames ? '—' : plan.customerName }}</span>
         </div>
         <div class="plan-progress">
           <div class="plan-qty">
@@ -287,18 +183,33 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div v-else-if="!data" class="empty-state">
+      <div class="empty-text">{{ loading ? '正在读取生产进度' : '尚未成功取数' }}</div>
+    </div>
+
     <div v-if="errorMsg" class="error-banner">{{ errorMsg }}</div>
   </div>
 </template>
 
 <style scoped>
 .dashboard-screen {
+  box-sizing: border-box;
   min-height: 100vh;
   background: linear-gradient(180deg, #0a0f1e 0%, #0f172a 100%);
   color: #ffffff;
   padding: 24px 32px;
   font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif;
 }
+.dashboard-screen:fullscreen { overflow-y: auto; }
+.freshness {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: -10px 0 20px;
+  font-size: 14px;
+  color: #94a3b8;
+}
+.freshness.is-stale { color: #e6a23c; }
 .header {
   display: flex;
   align-items: center;
