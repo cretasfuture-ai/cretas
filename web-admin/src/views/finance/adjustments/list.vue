@@ -20,7 +20,7 @@
  * === current userId. Bulk approve relies on backend per-id reject (4-eye
  * violations show up in failures list with reason).
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -34,8 +34,8 @@ interface AdjustmentRow {
   counterpartyType: 'CUSTOMER' | 'SUPPLIER';
   counterpartyId: string;
   counterpartyName?: string;
-  amount: number;
-  balanceAfter: number;
+  amount: number | null;
+  balanceAfter: number | null;
   approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
   operatedBy: number;
   remark?: string;
@@ -68,8 +68,23 @@ const filterMinAmount = ref<number | null>(null);
 const filterMaxAmount = ref<number | null>(null);
 const filterDateRange = ref<[string, string] | null>(null);
 
+// A pending row contains a submission snapshot, not a posted balance.
+// Account/factory switches and newer list requests invalidate older responses.
+let contextVersion = 0;
+let listRequestVersion = 0;
+let active = true;
+let approvalConfirmationOpen = false;
+function requestContext() {
+  return { factoryId: factoryId.value, userId: currentUserId.value, version: contextVersion };
+}
+function isCurrentContext(context: ReturnType<typeof requestContext>) {
+  return active && context.version === contextVersion && context.factoryId === factoryId.value && context.userId === currentUserId.value;
+}
+
 async function loadData() {
-  if (!factoryId.value) return;
+  const context = requestContext();
+  const requestVersion = ++listRequestVersion;
+  if (!context.factoryId) return;
   loading.value = true;
   try {
     const params: Record<string, unknown> = { page: pagination.value.page, size: pagination.value.size };
@@ -79,18 +94,20 @@ async function loadData() {
     if (filterDateRange.value && filterDateRange.value[0]) params.fromDate = filterDateRange.value[0];
     if (filterDateRange.value && filterDateRange.value[1]) params.toDate = filterDateRange.value[1];
     const res = await get<{ content: AdjustmentRow[]; totalElements: number }>(
-      `/${factoryId.value}/finance/adjustments/pending`,
+      `/${context.factoryId}/finance/adjustments/pending`,
       { params }
     );
-    if (res.success && res.data) {
+    if (isCurrentContext(context) && requestVersion === listRequestVersion && res.success && res.data) {
       tableData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
     }
   } catch {
     // Interceptor toasts; this catch silences the unhandled-promise log.
   } finally {
-    loading.value = false;
-    selectedRows.value = [];
+    if (isCurrentContext(context) && requestVersion === listRequestVersion) {
+      loading.value = false;
+      selectedRows.value = [];
+    }
   }
 }
 
@@ -109,23 +126,41 @@ function handleApplyFilter() {
 }
 
 async function handleApprove(row: AdjustmentRow) {
-  if (!factoryId.value) return;
+  const context = requestContext();
+  if (!context.factoryId || row.factoryId !== context.factoryId || !canShowApproveBtn(row) || row.approvalStatus !== 'PENDING') return;
   try {
+    approvalConfirmationOpen = true;
+    const financialDetails = canViewPrice.value
+      ? `\n金额: ${formatAmount(row.amount, row.counterpartyType)}\n提交时余额: ${formatBalance(row.balanceAfter)}`
+      : '';
     await ElMessageBox.confirm(
-      `确认审批通过该调整？\n金额: ${formatAmount(row.amount, row.counterpartyType)}\n对手方: ${row.counterpartyName || row.counterpartyId}\n余额变动后: ${row.balanceAfter}`,
+      `确认审批通过该调整？\n状态: 待审批，审批前未计入余额\n对手方: ${row.counterpartyName || row.counterpartyId}${financialDetails}\n余额以审批结果为准`,
       '审批通过',
       { type: 'warning', confirmButtonText: '确认审批', cancelButtonText: '取消' }
     );
-    await post(`/${factoryId.value}/finance/adjustment/${row.id}/approve`);
-    ElMessage.success('已审批通过, 余额已应用');
+    approvalConfirmationOpen = false;
+    if (!isCurrentContext(context) || !canShowApproveBtn(row)) return;
+    const res = await post<Partial<AdjustmentRow>>(`/${context.factoryId}/finance/adjustment/${row.id}/approve`);
+    if (!isCurrentContext(context)) return;
+    const result = res.data;
+    if (res.success && result?.id === row.id && result.approvalStatus === 'APPROVED' &&
+        (result.factoryId == null || result.factoryId === context.factoryId)) {
+      ElMessage.success(canViewPrice.value
+        ? `已审批通过，本次审批后余额: ${formatBalance(result.balanceAfter)}`
+        : '已审批通过');
+    } else {
+      ElMessage.warning('审批结果待刷新核验，请勿重复提交');
+    }
     loadData();
   } catch (e) {
-    if (e === 'cancel') return;
+    if (!isCurrentContext(context) || e === 'cancel' || e === 'close') return;
     const err = e as { status?: number; actionHint?: string | null } | undefined;
     if (!err || (err.status !== 409 && err.status !== 403 && !err.actionHint)) {
       ElMessage.error('审批失败');
     }
     if (err?.status === 409) loadData();
+  } finally {
+    approvalConfirmationOpen = false;
   }
 }
 
@@ -236,9 +271,18 @@ function canShowApproveBtn(row: AdjustmentRow): boolean {
   return canApprove.value && row.operatedBy !== currentUserId.value;
 }
 
-function formatAmount(amount: number, type: 'CUSTOMER' | 'SUPPLIER'): string {
-  const sign = amount >= 0 ? '+' : '';
+function isKnownAmount(amount: unknown): amount is number {
+  return typeof amount === 'number' && Number.isFinite(amount);
+}
+
+function formatBalance(amount: unknown): string {
+  return isKnownAmount(amount) ? `${amount.toFixed(2)} 元` : '未知';
+}
+
+function formatAmount(amount: number | null, type: 'CUSTOMER' | 'SUPPLIER'): string {
   const label = type === 'CUSTOMER' ? '应收' : '应付';
+  if (!isKnownAmount(amount)) return `${label} 未知`;
+  const sign = amount >= 0 ? '+' : '';
   return `${label} ${sign}${amount.toFixed(2)} 元`;
 }
 
@@ -254,7 +298,23 @@ function formatDate(s: string): string {
 function handleSizeChange(val: number) { pagination.value.size = val; pagination.value.page = 1; loadData(); }
 function handlePageChange(val: number) { pagination.value.page = val; loadData(); }
 
-onMounted(loadData);
+watch([factoryId, currentUserId], () => {
+  ++contextVersion;
+  ++listRequestVersion;
+  if (approvalConfirmationOpen) ElMessageBox.close();
+  tableData.value = [];
+  selectedRows.value = [];
+  pagination.value.page = 1;
+  pagination.value.total = 0;
+  loading.value = false;
+  loadData();
+}, { immediate: true, flush: 'sync' });
+
+onBeforeUnmount(() => {
+  active = false;
+  ++contextVersion;
+  if (approvalConfirmationOpen) ElMessageBox.close();
+});
 </script>
 
 <template>
@@ -343,13 +403,13 @@ onMounted(loadData);
         </el-table-column>
         <el-table-column v-if="canViewPrice" label="金额" width="140" align="right">
           <template #default="{ row }">
-            <span :style="{ color: row.amount > 0 ? '#67C23A' : '#F56C6C', fontWeight: 600 }">
+            <span :style="{ color: isKnownAmount(row.amount) && row.amount > 0 ? '#67C23A' : '#F56C6C', fontWeight: 600 }">
               {{ formatAmount(row.amount, row.counterpartyType) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canViewPrice" prop="balanceAfter" label="变动后余额" width="120" align="right">
-          <template #default="{ row }">{{ row.balanceAfter?.toFixed(2) || '-' }}</template>
+        <el-table-column v-if="canViewPrice" prop="balanceAfter" label="提交时余额 (待审批)" width="170" align="right">
+          <template #default="{ row }">{{ formatBalance(row.balanceAfter) }}</template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="200" show-overflow-tooltip />
         <el-table-column prop="operatedBy" label="提交人 ID" width="100" align="center">
