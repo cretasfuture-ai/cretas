@@ -1,3 +1,6 @@
+import OperatingReportStackNavigator from './OperatingReportStackNavigator';
+import { canAccessOperatingReports } from '../utils/operatingReportAccess';
+import { useAuthStore } from '../store/authStore';
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -66,8 +69,10 @@ function BossOverviewStack() {
 
 export default function BossNavigator() {
   const insets = useSafeAreaInsets();
+  const user = useAuthStore((state) => state.user);
   const smartBiEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('SmartBI'));
   const reportsEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('Reports'));
+  const operatingReportsEnabled = smartBiEnabled && canAccessOperatingReports(user);
 
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
@@ -149,6 +154,11 @@ export default function BossNavigator() {
           component={SmartBIStackNavigator}
           options={{ title: '分析', tabBarIcon: ({ color, size }) => <Icon source="chart-line" color={color} size={size} /> }}
         />
+      )}
+      {operatingReportsEnabled && (
+        <Tab.Screen name="BossOperatingReportsTab" component={OperatingReportStackNavigator}
+          options={{ title: '经营', tabBarButtonTestID: 'boss-tab-operating-reports',
+            tabBarIcon: ({ color, size }) => <Icon source="file-chart-outline" color={color} size={size} /> }} />
       )}
       <Tab.Screen
         name="BossProfileTab"

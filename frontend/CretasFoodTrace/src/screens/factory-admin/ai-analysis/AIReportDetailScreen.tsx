@@ -1,35 +1,51 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FAAIStackParamList } from '../../../types/navigation';
+import { Button } from 'react-native-paper';
+import { useAuthStore } from '../../../store/authStore';
+import { operatingReportReaderKey } from '../../../utils/operatingReportAccess';
 import { aiApiClient, AICostAnalysisResponse } from '../../../services/api/aiApiClient';
 
 export default function AIReportDetailScreen() {
   const route = useRoute<RouteProp<FAAIStackParamList, 'AIReportDetail'>>();
+  const user = useAuthStore((state) => state.user);
+  const readerKey = operatingReportReaderKey(user);
+  const requestSequence = useRef(0);
+  const [loadedReaderKey, setLoadedReaderKey] = useState(readerKey);
   const [report, setReport] = useState<AICostAnalysisResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     setLoading(true); setError(null); setReport(null);
-    try { setReport(await aiApiClient.getReportDetail(route.params.reportId)); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : '报告加载失败，请重试。'); }
-    finally { setLoading(false); }
-  }, [route.params.reportId]);
-  useEffect(() => { void load(); }, [load]);
+    try {
+      const response = await aiApiClient.getReportDetail(route.params.reportId);
+      if (sequence === requestSequence.current) {
+        setLoadedReaderKey(readerKey); setReport(response);
+      }
+    } catch {
+      if (sequence === requestSequence.current) {
+        setLoadedReaderKey(readerKey); setError('报告未能加载。请检查网络后重新加载。');
+      }
+    } finally { if (sequence === requestSequence.current) setLoading(false); }
+  }, [route.params.reportId, readerKey]);
+  useEffect(() => { void load(); return () => { requestSequence.current += 1; }; }, [load]);
+  const visibleReport = loadedReaderKey === readerKey ? report : null;
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" /></View>;
   return <SafeAreaView style={styles.page} edges={['bottom']}>
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.title}>{route.params.title || '经营分析报告'}</Text>
-      {report?.generatedAt ? <Text style={styles.date}>生成时间：{report.generatedAt}</Text> : null}
+      {visibleReport?.generatedAt ? <Text style={styles.date}>生成时间：{visibleReport.generatedAt}</Text> : null}
       {error ? <View style={styles.failure}><Text style={styles.failureTitle}>{error}</Text>
-        <TouchableOpacity onPress={() => void load()} accessibilityRole="button"><Text style={styles.retry}>重新加载</Text></TouchableOpacity>
+        <Button onPress={() => void load()} contentStyle={styles.actionTarget}>重新加载</Button>
       </View> : null}
-      {report?.generationStatus === 'FAILED' || report?.success === false ? <View style={styles.failure}>
+      {visibleReport?.generationStatus === 'FAILED' || visibleReport?.success === false ? <View style={styles.failure}>
         <Text style={styles.failureTitle}>生成失败</Text>
-        <Text style={styles.body}>{report.errorMessage || '报告生成失败，请重新生成。'}</Text>
+        <Text style={styles.body}>{visibleReport.errorMessage || '报告生成失败，请重新生成。'}</Text>
       </View> : null}
-      {report?.analysis ? <Text selectable style={styles.body}>{report.analysis}</Text> : null}
+      {visibleReport?.analysis ? <Text selectable style={styles.body}>{visibleReport.analysis}</Text> : null}
     </ScrollView>
   </SafeAreaView>;
 }
@@ -42,5 +58,5 @@ const styles = StyleSheet.create({
   body: { fontSize: 15, lineHeight: 25, color: '#243746' },
   failure: { backgroundColor: '#fff1ef', padding: 16, borderRadius: 8, gap: 8 },
   failureTitle: { color: '#b42318', fontWeight: '600' },
-  retry: { color: '#287c8e', paddingVertical: 8 }
+  actionTarget: { minHeight: 44, minWidth: 44 }
 });
