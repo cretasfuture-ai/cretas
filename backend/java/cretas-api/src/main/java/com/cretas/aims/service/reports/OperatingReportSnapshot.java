@@ -7,12 +7,26 @@ import java.util.List;
 public record OperatingReportSnapshot(
         String schema, Status status, String reportType, String periodStart, String periodEnd,
         String fetchedAt, List<SourceReceipt> sources, List<Section> sections,
-        List<Insight> insights, Failure failure) {
+        List<Insight> insights, Failure failure, AuditReceipt audit) {
+    public OperatingReportSnapshot(String schema, Status status, String reportType, String periodStart, String periodEnd,
+                                   String fetchedAt, List<SourceReceipt> sources, List<Section> sections,
+                                   List<Insight> insights, Failure failure) {
+        this(schema,status,reportType,periodStart,periodEnd,fetchedAt,sources,sections,insights,failure,null);
+    }
+    public OperatingReportSnapshot withAudit(AuditReceipt receipt) {
+        return new OperatingReportSnapshot(schema,status,reportType,periodStart,periodEnd,fetchedAt,sources,sections,insights,failure,receipt);
+    }
+    public OperatingReportSnapshot withInsights(List<Insight> selection) {
+        return new OperatingReportSnapshot(schema,status,reportType,periodStart,periodEnd,fetchedAt,sources,sections,selection,failure,audit);
+    }
+    public record AuditReceipt(String principalType,String principalId,String factoryId,String runId,
+                               String correlationId,String purpose,String scopedCapability,String outcome) { }
     public static final String SCHEMA = "CRETAS_OPERATING_REPORT_V1";
     public enum Status { SUCCESS, FAILED }
     public enum Failure {
         SOURCE_UNAVAILABLE("经营数据查询失败，请稍后重试或联系管理员检查数据服务。"),
         MODEL_UNAVAILABLE("AI 解读生成失败，请稍后重试。"),
+        MODEL_OUTPUT_INVALID("AI 解读未通过结构和指标引用校验，请重新生成。"),
         INVALID_SNAPSHOT("报告内容无法解析，请重新生成。"),
         GENERATION_FAILED("经营报告生成失败，请稍后重试。");
         private final String reason;

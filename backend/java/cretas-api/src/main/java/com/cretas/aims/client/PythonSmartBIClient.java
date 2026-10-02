@@ -2812,6 +2812,36 @@ public class PythonSmartBIClient {
         }
     }
 
+    /** Fixed, read-only sales presets using the existing internally authenticated service client. */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getOperatingSalesPreset(String factoryId, String userId, String userRole,
+                                                       String endpoint, Map<String, String> parameters) throws IOException {
+        if (!Set.of("salesperson-performance", "regional-comparison", "daily-report", "monthly-report").contains(endpoint))
+            throw new IOException("Unsupported operating report source");
+        String trustedFactory = requireFactoryId(factoryId);
+        String trustedUser = optionalIdentity(userId);
+        String trustedRole = optionalIdentity(userRole);
+        HttpUrl.Builder url = serviceBaseUrl.newBuilder().addPathSegments("api/smartbi")
+                .addPathSegment(trustedFactory).addPathSegments("sales-preset").addPathSegment(endpoint);
+        Set<String> allowed = switch (endpoint) {
+            case "daily-report" -> Set.of("date");
+            case "monthly-report" -> Set.of("yearMonth");
+            case "regional-comparison" -> Set.of("startDate", "endDate", "level");
+            default -> Set.of("startDate", "endDate");
+        };
+        for (var parameter : parameters.entrySet()) {
+            if (!allowed.contains(parameter.getKey())) throw new IOException("Unsupported operating report parameter");
+            url.addQueryParameter(parameter.getKey(), parameter.getValue());
+        }
+        Request.Builder request = new Request.Builder().url(url.build()).get().header("X-Factory-Id", trustedFactory);
+        if (trustedUser != null) request.header("X-User-Id", trustedUser);
+        if (trustedRole != null) request.header("X-User-Role", trustedRole);
+        Map<String, Object> response = executeWithRetry(request.build(), Map.class);
+        if (response == null || !Boolean.TRUE.equals(response.get("success")) || !(response.get("data") instanceof Map))
+            throw new IOException("Operating report source returned no successful payload");
+        return (Map<String, Object>) response.get("data");
+    }
+
     private static String requireFactoryId(String factoryId) throws IOException {
         if (factoryId == null || !INTERNAL_IDENTITY.matcher(factoryId).matches()) {
             throw new IOException("factoryId is required for Python SmartBI request");

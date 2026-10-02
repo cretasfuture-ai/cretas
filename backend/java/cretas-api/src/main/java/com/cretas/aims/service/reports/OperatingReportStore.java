@@ -28,9 +28,9 @@ public class OperatingReportStore {
 
     @Transactional(propagation=Propagation.REQUIRES_NEW)
     public AIAnalysisResult failure(String factoryId,String type,LocalDate start,LocalDate end,
-                                    OperatingReportSnapshot.Failure reason,boolean automatic) {
+                                    OperatingReportSnapshot.Failure reason,boolean automatic,OperatingReportSnapshot.AuditReceipt audit) {
         return save(factoryId,new OperatingReportSnapshot(OperatingReportSnapshot.SCHEMA,
                 OperatingReportSnapshot.Status.FAILED,type,start.toString(),end.toString(),LocalDateTime.now().toString(),
-                List.of(),List.of(),null,reason),automatic);
+                List.of(),List.of(),List.of(),reason,audit),automatic);
     }
 }

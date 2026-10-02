@@ -101,7 +101,7 @@ public class AIRequestDTO {
     @Schema(description = "AI报告生成请求")
     public static class ReportGenerationRequest {
         @NotNull(message = "报告类型不能为空")
-        @Schema(description = "报告类型", required = true, allowableValues = {"batch", "weekly", "monthly", "custom"})
+        @Schema(description = "报告类型", required = true, allowableValues = {"batch", "daily", "weekly", "monthly", "custom"})
         private String reportType;
 
         @Schema(description = "批次ID（批次报告时必填）")

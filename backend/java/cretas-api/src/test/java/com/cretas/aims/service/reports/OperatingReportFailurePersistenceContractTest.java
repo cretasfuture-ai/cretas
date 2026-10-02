@@ -36,7 +36,7 @@ class OperatingReportFailurePersistenceContractTest {
             OperatingReportStore store=context.getBean(OperatingReportStore.class);
             TransactionTemplate outer=new TransactionTemplate(context.getBean(DataSourceTransactionManager.class));
             assertThrows(IllegalStateException.class,()->outer.execute(status->{
-                store.failure("SYNTHETIC_REPORT_FAILURE","daily",LocalDate.of(2026,1,1),LocalDate.of(2026,1,1),OperatingReportSnapshot.Failure.SOURCE_UNAVAILABLE,true);
+                store.failure("SYNTHETIC_REPORT_FAILURE","daily",LocalDate.of(2026,1,1),LocalDate.of(2026,1,1),OperatingReportSnapshot.Failure.SOURCE_UNAVAILABLE,true,new OperatingReportSnapshot.AuditReceipt("SERVICE","synthetic-report-scheduler","SYNTHETIC_REPORT_FAILURE","synthetic-run","synthetic-correlation","GENERATE_FACTORY_OPERATING_REPORT","OPERATING_REPORT_FINANCIAL_READ","FAILED"));
                 throw new IllegalStateException("synthetic sensitive connection string must not be persisted");
             }));
             assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM synthetic_reports",Integer.class));
@@ -46,6 +46,9 @@ class OperatingReportFailurePersistenceContractTest {
             assertEquals(OperatingReportSnapshot.Status.FAILED,record.status());
             assertEquals(OperatingReportSnapshot.Failure.SOURCE_UNAVAILABLE,record.failure());
             assertFalse(payload.contains("sensitive connection"));
+            assertEquals("SERVICE",record.audit().principalType());assertEquals("FAILED",record.audit().outcome());assertEquals("SYNTHETIC_REPORT_FAILURE",record.audit().factoryId());
+            var capture=org.mockito.ArgumentCaptor.forClass(AIAnalysisResult.class);verify(context.getBean(AIAnalysisResultRepository.class)).saveAndFlush(capture.capture());
+            assertTrue(capture.getValue().getExpiresAt().isAfter(java.time.LocalDateTime.now().plusDays(29)));
             var response=new OperatingReportProjection(codec).detail(AIAnalysisResult.builder().analysisText(payload).build(),false);
             assertEquals("FAILED",response.getGenerationStatus()); assertEquals("SOURCE_UNAVAILABLE",response.getFailureCode());
             assertTrue(response.getAnalysis().contains("生成失败"));
