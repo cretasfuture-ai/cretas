@@ -10,6 +10,7 @@ import com.cretas.aims.service.finance.IncomeStatementService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.domain.Pageable;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
@@ -61,7 +62,15 @@ public class OperatingReportCollector {
     private Map<String,Object> preset(OperatingReportContext context,String endpoint,LocalDate start,LocalDate end,List<OperatingReportSnapshot.SourceReceipt> receipts)throws Exception{
         Map<String,String> parameters=new LinkedHashMap<>(Map.of("startDate",start.toString(),"endDate",end.toString()));
         if(endpoint.equals("regional-comparison"))parameters.put("level","province");
-        Map<String,Object> result=python.getOperatingSalesPreset(context.factoryId(),context.userId()==null?null:context.userId().toString(),context.userRole(),endpoint,parameters);
+        String previousCorrelation=MDC.get("correlationId");
+        Map<String,Object> result;
+        try {
+            MDC.put("correlationId",context.audit("READ").correlationId());
+            result=python.getOperatingSalesPreset(context.factoryId(),context.userId()==null?null:context.userId().toString(),context.userRole(),endpoint,parameters);
+        } finally {
+            if(previousCorrelation==null)MDC.remove("correlationId");
+            else MDC.put("correlationId",previousCorrelation);
+        }
         receipt(receipts,"sales-preset/"+endpoint,start+".."+end+(endpoint.equals("regional-comparison")?" province":""));
         return result;
     }

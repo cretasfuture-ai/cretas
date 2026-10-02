@@ -32,6 +32,23 @@ class OperatingReportAssemblyContractTest {
         assertEquals(new BigDecimal("0.25"),metric(snapshot,"province.unrecognized").coverage());
         assertEquals(new BigDecimal("120"),metric(snapshot,"sales.untaxed").value());
     }
+    @Test void salespersonComparisonMatchesActualIdOrDistinctNameAndNeverInventsMissingBases(){
+        Map<String,Object> jane=new HashMap<>(Map.of("salespersonName","Jane","totalAmountWithTax",150));jane.put("salespersonId",null);
+        Map<String,Object> kate=new HashMap<>(Map.of("salespersonName","Kate","totalAmountWithTax",30));kate.put("salespersonId",null);
+        Map<String,Object> named=Map.of("salespersonName","Jane","totalAmountWithTax",100);
+        Map<String,Object> identified=Map.of("salespersonId",7,"salespersonName","Recorded seller","totalAmountWithTax",50);
+        var snapshot=new OperatingReportAssembler().assemble(new OperatingReportAssembler.Input("daily",LocalDate.of(2026,1,1),LocalDate.of(2026,1,1),"synthetic",List.of(),
+            Map.of("rank",List.of(jane,kate,identified)),Map.of("rank",List.of(named)),
+            Map.of("rank",List.of(Map.of("salespersonName","Jane","totalAmountWithTax",0),Map.of("salespersonId",7,"totalAmountWithTax",25))),
+            Map.of(),Map.of(),Map.of(),List.of(),Map.of(),List.of(),Map.of()));
+        var people=snapshot.sections().stream().filter(section->section.id().equals("salespeople")).findFirst().orElseThrow().metrics();
+        assertEquals(people.size(),people.stream().map(OperatingReportSnapshot.Metric::id).distinct().count(),"Name-only sellers require distinct metric identities");
+        assertEquals(new BigDecimal("50.00000000"),people.stream().filter(m->m.label().equals("Jane 环比")).findFirst().orElseThrow().value());
+        assertNull(people.stream().filter(m->m.label().equals("Jane 同比")).findFirst().orElseThrow().value());
+        assertNull(people.stream().filter(m->m.label().equals("Kate 同比")).findFirst().orElseThrow().value());
+        assertEquals(new BigDecimal("100.00000000"),people.stream().filter(m->m.label().equals("Recorded seller 同比")).findFirst().orElseThrow().value());
+        assertNull(people.stream().filter(m->m.label().equals("Recorded seller 环比")).findFirst().orElseThrow().value());
+    }
     @Test void ratioRejectsMissingZeroAndNegativeDenominators(){
         assertNull(OperatingReportAssembler.ratio(BigDecimal.ONE,null));
         assertNull(OperatingReportAssembler.ratio(BigDecimal.ONE,BigDecimal.ZERO));

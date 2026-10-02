@@ -10,6 +10,16 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.util.Map;
+import java.util.List;
+import java.time.LocalDate;
+import org.slf4j.MDC;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.finance.IncomeStatementService;
+import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
 import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -47,6 +57,37 @@ class OperatingReportSourceIdentityContractTest {
             server.enqueue(new MockResponse().setResponseCode(302).setHeader("Location",foreign.url("/elsewhere")));
             assertThrows(IOException.class,()->client(server,"synthetic-secret").getOperatingSalesPreset("SYNTH-A",null,"finance_manager","salesperson-performance",Map.of()));
             assertEquals(0,foreign.getRequestCount());
+        }
+    }
+    @Test void scheduledCollectionCarriesAuditCorrelationAndRestoresCallerOnSuccessAndFailure()throws Exception{
+        try(MockWebServer server=new MockWebServer()){
+            for(int i=0;i<4;i++)server.enqueue(new MockResponse().setHeader("Content-Type","application/json").setBody("{\"success\":true,\"data\":{}}"));
+            var margin=mock(OperatingReportGrossMarginQuery.class);
+            when(margin.fetch(anyString(),any(),any())).thenReturn(Map.of("rank",List.of(),"summary",Map.of()));
+            var aging=mock(ArApService.class);when(aging.getAgingAnalysis(anyString(),any())).thenReturn(List.of());
+            var income=mock(IncomeStatementService.class);when(income.generate(anyString(),anyInt(),anyInt(),anyInt(),anyInt())).thenReturn(new IncomeStatementDTO());
+            var materials=mock(MaterialBatchService.class);when(materials.listStockSummary(anyString())).thenReturn(List.of());
+            var batches=mock(MaterialBatchRepository.class);when(batches.findByFactoryId(anyString(),any(Pageable.class))).thenReturn(Page.empty());
+            var collector=new OperatingReportCollector(client(server,"synthetic-secret"),margin,aging,income,materials,batches,new ObjectMapper());
+            var context=OperatingReportContext.scheduled(new FactoryFixture().factory(),null);
+            assertEquals(context.audit("READ").runId(),context.audit("READ").correlationId());
+            String previous=MDC.get("correlationId");
+            try {
+                MDC.put("correlationId","synthetic-caller");
+                LocalDate day=LocalDate.of(2026,1,1);
+                collector.collect(context,"daily",day,day);
+                assertEquals("synthetic-caller",MDC.get("correlationId"));
+                for(int i=0;i<4;i++){
+                    var request=server.takeRequest(2,TimeUnit.SECONDS);assertNotNull(request);
+                    assertEquals(context.audit("READ").correlationId(),request.getHeader("X-Correlation-ID"));
+                    assertEquals("SYNTH-A",request.getHeader("X-Factory-Id"));assertNull(request.getHeader("X-User-Id"));
+                }
+                server.enqueue(new MockResponse().setResponseCode(401));
+                assertThrows(IOException.class,()->collector.collect(context,"daily",day,day));
+                assertEquals("synthetic-caller",MDC.get("correlationId"));
+            } finally {
+                if(previous==null)MDC.remove("correlationId");else MDC.put("correlationId",previous);
+            }
         }
     }
     private static class FactoryFixture {

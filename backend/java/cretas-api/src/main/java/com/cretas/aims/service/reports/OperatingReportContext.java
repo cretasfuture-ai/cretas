@@ -14,7 +14,8 @@ public final class OperatingReportContext {
     private final Long userId;
     private OperatingReportContext(String factoryId,String type,String id,Long userId,String role,String correlationId){
         this.factoryId=factoryId;this.principalType=type;this.principalId=id;this.userId=userId;this.userRole=role;
-        this.runId=UUID.randomUUID().toString();this.correlationId=correlationId;
+        this.runId=UUID.randomUUID().toString();
+        this.correlationId=correlationId==null||correlationId.isBlank()?runId:correlationId;
     }
     static OperatingReportContext scheduled(Factory authorizedFactory,String correlationId){
         if(authorizedFactory==null||authorizedFactory.getId()==null||authorizedFactory.getId().isBlank()||authorizedFactory.getType()!=FactoryType.FACTORY||!Boolean.TRUE.equals(authorizedFactory.getIsActive()))

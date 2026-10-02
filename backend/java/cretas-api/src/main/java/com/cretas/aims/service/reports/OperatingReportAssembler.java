@@ -45,14 +45,22 @@ public class OperatingReportAssembler {
         sections.add(section("sales", "销售额、环比与同比", true, "含税=未税+税额；比较期间见取数来源。没有订单的已查询期间可为零，零基数增长率不可计算。", sales));
 
         List<Metric> people = new ArrayList<>();
+        Map<String,Map<String,Object>> previousPeople=uniqueSellers(input.previous());
+        Map<String,Map<String,Object>> lastYearPeople=uniqueSellers(input.lastYear());
         for (Map<String,Object> row : ranks) {
-            String id = String.valueOf(row.get("salespersonId"));
+            String id = sellerKey(row);
             String name = text(row.get("salespersonName"), "业务员姓名缺失");
             people.add(metric("salesperson."+id+".sales", name+" 含税销售额", number(row.get("totalAmountWithTax")), "元", "销售额缺失", assignmentCoverage, "salesperson-performance.rank["+id+"].totalAmountWithTax"));
             people.add(metric("salesperson."+id+".orders", name+" 订单数", number(row.get("orderCount")), "单", "订单数缺失", assignmentCoverage, "salesperson-performance.rank["+id+"].orderCount"));
+            BigDecimal previousSales=number(previousPeople.getOrDefault(id,Map.of()).get("totalAmountWithTax"));
+            BigDecimal yearSales=number(lastYearPeople.getOrDefault(id,Map.of()).get("totalAmountWithTax"));
+            people.add(metric("salesperson."+id+".previous",name+" 上一期间含税销售额",previousSales,"元","上一期间未匹配到相同业务员归属",null,"previous.salesperson-performance.rank["+id+"].totalAmountWithTax"));
+            people.add(metric("salesperson."+id+".lastYear",name+" 去年同期含税销售额",yearSales,"元","去年同期未匹配到相同业务员归属",null,"lastYear.salesperson-performance.rank["+id+"].totalAmountWithTax"));
+            people.add(metric("salesperson."+id+".mom",name+" 环比",percentage(growth(number(row.get("totalAmountWithTax")),previousSales)),"%","上一期间归属缺失或基数不大于零",null,"(current-previous)/previous*100"));
+            people.add(metric("salesperson."+id+".yoy",name+" 同比",percentage(growth(number(row.get("totalAmountWithTax")),yearSales)),"%","去年同期归属缺失或基数不大于零",null,"(current-lastYear)/lastYear*100"));
         }
         people.add(metric("salesperson.unassigned", "未归属业务员销售额（不列入个人排行）", number(unassigned.get("totalAmountWithTax")), "元", "未填写业务员", assignmentCoverage, "salesperson-performance.unassigned.totalAmountWithTax"));
-        sections.add(section("salespeople", "业务员排行", true, "按既有 salesperson-performance 含税销售额排序；覆盖率按订单归属计算。", people));
+        sections.add(section("salespeople", "业务员排行", true, "按既有 salesperson-performance 含税销售额排序；覆盖率按订单归属计算。比较按用户ID或既有姓名归属分别匹配，归属改变或同期缺记录时增长率未知。", people));
 
         List<Metric> regions = new ArrayList<>();
         BigDecimal regionCoverage = number(map(input.region().get("summary")).get("recognizedShare"));
@@ -110,6 +118,16 @@ public class OperatingReportAssembler {
         return new OperatingReportSnapshot(SCHEMA,Status.SUCCESS,input.type(),input.start().toString(),input.end().toString(),input.fetchedAt(),input.receipts(),sections,null,null);
     }
 
+    private String sellerKey(Map<String,Object> row){
+        if(row.get("salespersonId")!=null)return "id:"+row.get("salespersonId");
+        Object name=row.get("salespersonName");
+        return "name:"+Base64.getUrlEncoder().withoutPadding().encodeToString((name==null?"":name.toString().trim()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private Map<String,Map<String,Object>> uniqueSellers(Map<String,Object> payload){
+        Map<String,Map<String,Object>> result=new HashMap<>();Set<String> duplicate=new HashSet<>();
+        for(Map<String,Object> row:rows(payload.get("rank"))){String key=sellerKey(row);if(result.putIfAbsent(key,row)!=null)duplicate.add(key);}
+        duplicate.forEach(result::remove);return result;
+    }
     private Section productRank(String id,String title,Map<String,Object> payload,boolean byProfit) {
         List<Map<String,Object>> rank=new ArrayList<>(rows(payload.get("rank")));
         if(byProfit) rank.sort(Comparator.comparing((Map<String,Object> row)->number(row.get("grossProfit")),Comparator.nullsLast(id.equals("profitLow")?Comparator.<BigDecimal>naturalOrder():Comparator.<BigDecimal>reverseOrder())));
