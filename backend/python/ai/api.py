@@ -230,12 +230,16 @@ async def invalidate_cache(request: Request):
 
     try:
         from ai.db import load_snapshot
+        from ai.registry import load_registry
         snap = await load_snapshot(pool)
+        reg = await load_registry(pool)
         return ApiResponse.ok(
             data={
                 "reloaded": True,
                 "rows": len(snap.rows),
                 "max_config_version": snap.max_config_version,
+                "registry_available": reg.available,
+                "registry_phrases": sum(len(v) for v in reg.phrases.values()),
             },
             message="Snapshot reloaded",
         ).model_dump()
