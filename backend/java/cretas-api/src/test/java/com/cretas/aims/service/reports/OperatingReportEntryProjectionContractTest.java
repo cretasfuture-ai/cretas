@@ -28,6 +28,8 @@ class OperatingReportEntryProjectionContractTest {
         var mapper=new ObjectMapper().findAndRegisterModules();var codec=new OperatingReportCodec(mapper);var projection=new OperatingReportProjection(codec);
         var permissions=mock(PermissionService.class);var mobile=mock(MobileService.class);var users=mock(com.cretas.aims.repository.UserRepository.class);var reader=new OperatingReportReadAccess(mobile,permissions,users);
         var repository=mock(AIAnalysisResultRepository.class);var service=new AIEnterpriseService();var controller=new AIController();
+        var generator=mock(OperatingReportGenerator.class);when(generator.isFactory("SYNTH-A")).thenReturn(true);
+        ReflectionTestUtils.setField(service,"operatingReports",generator);
         ReflectionTestUtils.setField(service,"analysisResultRepository",repository);ReflectionTestUtils.setField(service,"operatingProjection",projection);
         ReflectionTestUtils.setField(service,"operatingCodec",codec);ReflectionTestUtils.setField(service,"operatingReadAccess",reader);
         ReflectionTestUtils.setField(controller,"aiEnterpriseService",service);ReflectionTestUtils.setField(controller,"mobileService",mobile);ReflectionTestUtils.setField(controller,"operatingReadAccess",reader);
@@ -57,5 +59,37 @@ class OperatingReportEntryProjectionContractTest {
         User foreign=new User();foreign.setId(321L);foreign.setRoleCode("finance_manager");foreign.setFactoryId("SYNTH-B");actor.set(foreign);
         assertFalse(mvc.perform(get("/api/mobile/SYNTH-A/ai/reports/42").header("Authorization","Bearer SYNTHETIC_TOKEN")).andReturn().getResponse().getContentAsString().contains("55321"));
         assertFalse(reader.current("SYNTH-A"));
+    }
+    @Test void knownRestaurantRetainsLegacyListDetailCacheAndManualReportContracts()throws Exception{
+        var mapper=new ObjectMapper().findAndRegisterModules();var codec=new OperatingReportCodec(mapper);
+        var factories=mock(com.cretas.aims.repository.FactoryRepository.class);
+        var restaurant=new com.cretas.aims.entity.Factory();restaurant.setId("SYNTH-R");restaurant.setType(com.cretas.aims.entity.enums.FactoryType.RESTAURANT);
+        when(factories.findById("SYNTH-R")).thenReturn(Optional.of(restaurant));
+        var generator=new OperatingReportGenerator(factories,mock(PermissionService.class),mock(OperatingReportCollector.class),new OperatingReportAssembler(),codec,mock(OperatingReportStore.class),mock(com.cretas.aims.ai.client.PythonLLMClient.class),mock(com.cretas.aims.repository.config.AIReportPromptConfigRepository.class));
+        var service=spy(new AIEnterpriseService());var repository=mock(AIAnalysisResultRepository.class);var reader=mock(OperatingReportReadAccess.class);
+        ReflectionTestUtils.setField(service,"analysisResultRepository",repository);ReflectionTestUtils.setField(service,"operatingReports",generator);
+        ReflectionTestUtils.setField(service,"operatingCodec",codec);ReflectionTestUtils.setField(service,"operatingProjection",new OperatingReportProjection(codec));
+        ReflectionTestUtils.setField(service,"operatingReadAccess",reader);
+        doReturn(com.cretas.aims.dto.MobileDTO.AIQuotaInfo.builder().total(100).used(0).remaining(100).build()).when(service).getQuotaInfo("SYNTH-R");
+        String legacy="# Existing restaurant cost report 55321\n"+"query text ".repeat(30);
+        var record=AIAnalysisResult.builder().id(43L).factoryId("SYNTH-R").reportType("weekly").analysisText(legacy).periodStart(LocalDateTime.of(2026,1,1,0,0)).periodEnd(LocalDateTime.of(2026,1,7,23,59,59)).expiresAt(LocalDateTime.now().plusDays(30)).build();record.setCreatedAt(LocalDateTime.now());
+        when(repository.findById(43L)).thenReturn(Optional.of(record));when(repository.findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(eq("SYNTH-R"),any())).thenReturn(List.of(record));
+        var request=com.cretas.aims.dto.MobileDTO.AIReportListRequest.builder().startDate(LocalDateTime.of(2026,2,1,0,0)).build();
+        var list=service.getReportList("SYNTH-R",request,false);assertEquals(1,list.getTotal());
+        assertEquals(legacy.substring(0,200)+"...",list.getReports().get(0).getSummaryText());assertNull(list.getReports().get(0).getFinancialSummaryText());
+        var detail=service.getReportDetail("SYNTH-R",43L,false);assertEquals(legacy,detail.getAnalysis());assertNull(detail.getReportAnalysis());assertTrue(detail.getCacheHit());assertNotNull(detail.getQuota());
+        var cache=(com.cretas.aims.dto.MobileDTO.AICostAnalysisResponse)ReflectionTestUtils.invokeMethod(service,"buildResponseFromCache",record,"SYNTH-R");assertEquals(legacy,cache.getAnalysis());
+        var mobile=mock(MobileService.class);var actor=new com.cretas.aims.dto.user.UserDTO();actor.setId(321L);actor.setFactoryId("SYNTH-R");when(mobile.getUserFromToken("SYNTHETIC_TOKEN")).thenReturn(actor);
+        var controller=new AIController();ReflectionTestUtils.setField(controller,"aiEnterpriseService",service);ReflectionTestUtils.setField(controller,"operatingReadAccess",reader);ReflectionTestUtils.setField(controller,"mobileService",mobile);
+        MockMvc mvc=MockMvcBuilders.standaloneSetup(controller).build();
+        var body=mapper.readTree(mvc.perform(get("/api/mobile/SYNTH-R/ai/reports/43")).andReturn().getResponse().getContentAsString());assertEquals(legacy,body.path("data").path("analysis").asText());
+        var listBody=mapper.readTree(mvc.perform(get("/api/mobile/SYNTH-R/ai/reports")).andReturn().getResponse().getContentAsString());assertEquals(legacy.substring(0,200)+"...",listBody.path("data").path("reports").get(0).path("summaryText").asText());
+        var generation=new com.cretas.aims.dto.AIRequestDTO.ReportGenerationRequest();generation.setReportType("weekly");generation.setStartDate(java.time.LocalDate.of(2026,1,1));generation.setEndDate(java.time.LocalDate.of(2026,1,7));
+        doReturn(detail).when(service).analyzeTimeRangeCost(eq("SYNTH-R"),eq(321L),any(),any(),eq("weekly"),isNull(),any());
+        var http=new MockHttpServletRequest();http.addHeader("Authorization","Bearer SYNTHETIC_TOKEN");assertEquals(legacy,controller.generateReport("SYNTH-R",generation,http).getData().getAnalysis());
+        verify(service).analyzeTimeRangeCost(eq("SYNTH-R"),eq(321L),any(),any(),eq("weekly"),isNull(),eq(http));verifyNoInteractions(reader);
+        when(factories.findById("SYNTH-R")).thenReturn(Optional.empty());
+        assertFalse(generator.usesLegacyReportContract("SYNTH-R"),"Unknown tenant must not gain the legacy raw-body bypass");
+        assertFalse(service.getReportDetail("SYNTH-R",43L,false).getAnalysis().contains("55321"));
     }
 }

@@ -408,15 +408,14 @@ public class AIController {
 
         // 从Token获取用户ID
         String token = TokenUtils.extractToken(httpRequest.getHeader("Authorization"));
-        com.cretas.aims.entity.User reportActor = operatingReadAccess.actor(factoryId, httpRequest);
-        Long userId = reportActor.getId().longValue();
-
         if (Set.of("daily", "weekly", "monthly").contains(request.getReportType())
                 && aiEnterpriseService.supportsOperatingReports(factoryId)) {
+            com.cretas.aims.entity.User reportActor = operatingReadAccess.actor(factoryId, httpRequest);
             if (!canViewReportPrices(factoryId, httpRequest)) throw new BusinessException(403, "经营报告生成需要价格查看权限");
             return ApiResponse.success(aiEnterpriseService.generateOperatingReport(factoryId, reportActor, request));
         }
 
+        Long userId = mobileService.getUserFromToken(token).getId();
         log.info("生成AI报告: factoryId={}, userId={}, reportType={}",
                 factoryId, userId, request.getReportType());
 
@@ -464,7 +463,7 @@ public class AIController {
     }
 
     private boolean canViewReportPrices(String factoryId, HttpServletRequest request) {
-        return operatingReadAccess.canView(factoryId, request);
+        return aiEnterpriseService.supportsOperatingReports(factoryId) && operatingReadAccess.canView(factoryId, request);
     }
 
     // ========== 健康检查接口 ==========

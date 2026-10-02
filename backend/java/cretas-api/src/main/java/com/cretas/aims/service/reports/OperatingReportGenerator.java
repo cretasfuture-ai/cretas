@@ -33,6 +33,10 @@ public class OperatingReportGenerator {
         this.codec=codec;this.store=store;this.model=model;this.prompts=prompts;
     }
     public boolean isFactory(String factoryId){return factories.findById(factoryId).map(f->f.getType()==FactoryType.FACTORY).orElse(false);}
+    /** Legacy contracts are retained only for an explicitly known non-factory tenant. */
+    public boolean usesLegacyReportContract(String factoryId){
+        return factories.findById(factoryId).map(f->f.getType()!=null&&f.getType()!=FactoryType.FACTORY).orElse(false);
+    }
     /** Only the existing scheduled application entry calls this; no HTTP actor can fall back here. */
     public AIAnalysisResult scheduled(String factoryId,String type,LocalDate start,LocalDate end){
         Factory authorizedFactory=factories.findById(factoryId).orElseThrow(()->new com.cretas.aims.exception.BusinessException(403,"Factory capability unavailable"));
