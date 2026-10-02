@@ -20,10 +20,13 @@ with Java IntentMatchResult shape.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from ai import registry as registry_module
+from ai.config import default_config
 from ai.db import row_to_dto
 from ai.dto import (
     ActionType,
@@ -49,7 +52,8 @@ class Orchestrator:
     def __init__(self, semantic_matcher, classifier_matcher, llm_matcher,
                  semantic_router=None, llm_tier_selector=None,
                  calibrator=None, scorer=None,
-                 rag_retriever=None, rag_evaluator=None):
+                 rag_retriever=None, rag_evaluator=None,
+                 decision_matcher=None, candidate_retriever=None, config=None):
         self.semantic_matcher = semantic_matcher
         self.classifier_matcher = classifier_matcher
         self.llm_matcher = llm_matcher
@@ -59,8 +63,125 @@ class Orchestrator:
         self.scorer = scorer  # β C4: optional combined-score reranker
         self.rag_retriever = rag_retriever  # β C5: optional RAG retriever
         self.rag_evaluator = rag_evaluator  # β C5: optional CRAG-style quality evaluator
+        # 三层识别 (2026-10): 第②层决策器 + 候选召回器 (向量只提供候选, ⛔ 不拍板)
+        self.decision_matcher = decision_matcher
+        self.candidate_retriever = candidate_retriever
+        self.config = config or default_config
 
     async def match(
+        self,
+        query: str,
+        factoryId: str,
+        businessType: str,
+        userId: str,
+        role: str,
+        visible_intents: List[Dict[str, Any]],
+        history: List[Dict[str, Any]],
+        min_confidence: float,
+        enable_llm: bool = True,
+    ) -> IntentMatchResultDto:
+        """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。"""
+        if (self.decision_matcher is not None and enable_llm
+                and self.config.decision_enabled_for(businessType)):
+            try:
+                result = await self._match_decision(query, factoryId, businessType, role, visible_intents)
+            except Exception:
+                logger.exception("decision layer failed, falling back to legacy stages")
+                result = None
+            if result is not None:
+                return result
+            legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
+                                              history, min_confidence, enable_llm)
+            # 回落要留痕: 「三层答的」与「三层没答出来、旧路径答的」在结果上必须分得开
+            legacy.timingMs = {**(legacy.timingMs or {}), "decisionFallback": 1}
+            return legacy
+        return await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
+                                        history, min_confidence, enable_llm)
+
+    async def _match_decision(
+        self,
+        query: str,
+        factoryId: str,
+        businessType: str,
+        role: str,
+        visible_intents: List[Dict[str, Any]],
+    ) -> Optional[IntentMatchResultDto]:
+        """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
+
+        返回 None = 这一路没有产出 (无候选 / 决策链拿不到概率), 调用方回落旧路径。
+        """
+        t0 = time.time()
+        timing: Dict[str, int] = {"decisionLayer": 1}
+        by_code = {str(r.get("intent_code")): r for r in visible_intents}
+        if not by_code:
+            return None
+
+        # ===== ① 精确表: 归一化后整句相等, 只认 APPROVED =====
+        snap = registry_module.get_registry()
+        if snap.available:
+            t = time.time()
+            code, _key = registry_module.lookup(snap, query, factoryId, businessType)
+            timing["registryMs"] = int((time.time() - t) * 1000)
+            if code and code in by_code:
+                row = by_code[code]
+                timing["registryHit"] = 1
+                timing["totalMs"] = int((time.time() - t0) * 1000)
+                cand = CandidateIntentDto(
+                    intentCode=code, intentName=row.get("intent_name") or code,
+                    intentCategory=row.get("intent_category"), confidence=1.0,
+                    matchMethod=MatchMethod.EXACT, description=row.get("description"),
+                )
+                return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.EXACT,
+                                          visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+
+        # ===== ② 候选: LLM 粗选 ‖ 向量召回 (并行), 合并去重 =====
+        t = time.time()
+        retriever = self.candidate_retriever or self.semantic_matcher
+        sem, short = await asyncio.gather(
+            retriever.match(query, factoryId=factoryId, businessType=businessType),
+            self.decision_matcher.shortlist(query, role, visible_intents),
+            return_exceptions=True,
+        )
+        timing["retrievalMs"] = int((time.time() - t) * 1000)
+        if isinstance(sem, BaseException):
+            logger.warning("decision: candidate retrieval failed: %s", sem)
+            sem = []
+        if isinstance(short, BaseException):
+            short = None
+        timing["shortlistOk"] = 0 if short is None else 1
+        codes: List[str] = []
+        for c in list(short or []) + [s.intentCode for s in sem]:
+            if c in by_code and c not in codes:
+                codes.append(c)
+            if len(codes) >= self.config.decision_k:
+                break
+        if not codes:
+            return None
+
+        # ===== ② 决策: 读概率 =====
+        t = time.time()
+        probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes])
+        timing["decisionMs"] = int((time.time() - t) * 1000)
+        if not probs:
+            return None
+        ranked = sorted(probs.items(), key=lambda kv: -kv[1])
+        candidates = []
+        for i, (code, p) in enumerate(ranked[:5]):
+            if i >= 2 and p < 0.03:  # 澄清按钮至少两个, 其余只留有分量的
+                break
+            row = by_code[code]
+            candidates.append(CandidateIntentDto(
+                intentCode=code, intentName=row.get("intent_name") or code,
+                intentCategory=row.get("intent_category"), confidence=round(float(p), 4),
+                matchMethod=MatchMethod.LLM, description=row.get("description"),
+            ))
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        # ③ 置信不够 → requiresConfirmation=true, Java 走 buildClarificationResponse 出候选按钮
+        return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,
+                                  visible_intents=visible_intents,
+                                  min_confidence=self.config.decision_auto_threshold, timing=timing)
+
+    async def _match_legacy(
         self,
         query: str,
         factoryId: str,

@@ -202,6 +202,36 @@ _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
         "RN 那一屏用户举着手机等的就是这段时间。要换成它请先想清楚这一条。",
 }
 
+# ── 读概率能力登记表 (2026-10-02, SLOT.DECISION) ──────────────────────────
+#
+# 「这个 (账号, 模型) 会不会返回 top_logprobs」**只有实测能回答**, 而且它不支持时
+# 是**静默**的: 返回 200, 只是没有 logprobs 字段(百炼文档的支持列表与实测对不上,
+# 2026-10 评测里多数旧快照就是这样)。⇒ 与 `_VISION_VERIFIED` 同一个做法:
+# 想进 DECISION 槽, 先在这里写下探针日期与结论。值是证据本身, ⛔ 不是布尔值。
+#
+# 探针: max_tokens=1 + logprobs/top_logprobs=5 + 前缀续写「答案：」(partial),
+# 关思考, 4 选项字母题, 每组合 5 次, prod 服务器本机经各账号自己的 key。
+_LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
+    ("aliyun_a_vl", "qwen3.7-flash"):
+        "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 是正确选项字母; "
+        "中位 0.38s / 最慢 0.67s。离线评测 2,000+ 次同形调用: 偶发缺 logprobs 约 1/700, "
+        "同请求重试即恢复 ⇒ 调用方必须校验 logprobs 并重试/换下一跳。链头。",
+    ("aliyun_c_vl", "qwen3.8-flash"):
+        "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 正确; "
+        "中位 0.73s 但最慢 **11.86s** —— 长尾重(离线评测 p95 6-9s)。只作链头失败后的备胎。",
+    ("aliyun_a_vl", "qwen3.8-flash"):
+        "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 正确; 中位 1.28s / 最慢 2.47s。",
+    # ⛔ 同日探针**不收**的组合(都是 403 Free quota exhausted, 不是能力问题):
+    #    aliyun_b qwen3.7-flash / qwen3.8-flash / qwen3.5-flash; aliyun_c qwen3.7-flash / qwen3.5-flash。
+    #    ⚠️ aliyun_b qwen3.8-flash 403 也意味着 VL 链的第三跳当天是死的。
+}
+# 链序(人写): 快且稳的在前。只有同时在 `_LOGPROB_VERIFIED` 里的才进池。
+_LOGPROB_ORDER: List[Tuple[str, str]] = [
+    ("aliyun_a_vl", "qwen3.7-flash"),
+    ("aliyun_a_vl", "qwen3.8-flash"),
+    ("aliyun_c_vl", "qwen3.8-flash"),
+]
+
 # VL 槽位的账号顺序与模型**可配**(Steve 2026-09-15): 换模型/调顺序 =
 # 改 `.env.prod` 一行 + 重启, ⛔ 不用改代码、不用重新发版。
 #
@@ -1149,6 +1179,9 @@ class SLOT(str, Enum):
     VL = "vl"
     WAREHOUSE_VL = "warehouse_vl"
     REVIEW = "review"
+    # 读概率决策 (2026-10-02): 选项编字母, 读首 token 的 top_logprobs 当概率。
+    # 契约在 logprobs 上, 不在正文上 —— 见 `_LOGPROB_VERIFIED` 与 `_validate_output`。
+    DECISION = "decision"
 
 
 # ─── Slot → per-provider model name ───
@@ -1487,6 +1520,9 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_a_vl", "deepseek-v4.1-flash"),
         *_vl_pool(),
     ],
+    # DECISION — 读概率决策 + 意图粗选。只收 `_LOGPROB_VERIFIED` 里登记过的组合,
+    # 顺序即书写顺序(三条到期日都是 None、都没有能力表读数 ⇒ 稳定排序原样保留)。
+    SLOT.DECISION: [p for p in _LOGPROB_ORDER if p in _LOGPROB_VERIFIED],
 }
 
 # 绝对置底 —— `_build_chain` 排序键的第 2 位, 优先于能力档/延迟档/到期日。
@@ -1499,7 +1535,11 @@ _ABSOLUTE_LAST: frozenset = frozenset({("zhipu", "glm-4.5-air")})
 # VL 槽不追加文本地板 —— 文本模型看不见图片, 追加只会把「明确失败」变成
 # 「拿一段瞎猜的文字冒充图片理解」。这个集合是 _build_chain 的唯一例外,
 # 也是 test_every_text_slot_has_a_floor 的唯一豁免项。
-_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL})
+#
+# DECISION (2026-10-02) 同理: 契约是 top_logprobs, 而文本地板(zhipu)没有在这个
+# 契约下测过 —— 追加它只会把「拿不到概率 → 明确失败, 调用方回旧路径」变成
+# 「拿到一个没有概率的字母」。
+_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION})
 
 
 def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
@@ -1625,6 +1665,9 @@ _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
     SLOT.VL:        {"enable_thinking": False},
     SLOT.WAREHOUSE_VL: {"enable_thinking": False},
     SLOT.REVIEW:    {"enable_thinking": False},
+    # 读概率决策: 思考开着时首 token 是思考内容, 概率读不出来; temperature 0 让
+    # 粗选那次生成稳定(决策那次只读概率, 不受采样影响)。
+    SLOT.DECISION:  {"enable_thinking": False, "temperature": 0},
 }
 
 
@@ -1844,6 +1887,11 @@ def _validate_output(slot: SLOT, content: str) -> Optional[str]:
     """Return an invalidity reason (→ fall to next model) or None if the output is
     acceptable for this slot. Cheap, deterministic — the free half of a FrugalGPT
     cascade (reject garbage + retry, no expensive judge)."""
+    if slot is SLOT.DECISION:
+        # 读概率决策的产物是 top_logprobs, 不是正文: 首 token 可能是换行(正文为空)
+        # 而选项字母仍在 top-5 里。正文判据在这里会把好答案判成 "empty" 并切去慢的
+        # 下一跳。⇒ 契约由调用方的 `body_validator` 在完整响应上判。
+        return None
     if not content or not content.strip():
         return "empty"
     if slot in (SLOT.CHART, SLOT.MAPPER):
@@ -2117,7 +2165,7 @@ def _normalize_payload_for_provider(payload: Dict[str, Any], account: str) -> Di
 
 
 _BUDGET_AWARE_FAST_SLOTS = frozenset({
-    SLOT.CHAT, SLOT.SIMPLE_TEXT, SLOT.CHART, SLOT.MAPPER,
+    SLOT.CHAT, SLOT.SIMPLE_TEXT, SLOT.CHART, SLOT.MAPPER, SLOT.DECISION,
 })
 _FAST_SLOT_RESERVE_RATIO = 0.40
 _FAST_SLOT_RESERVE_CAP_SECONDS = 1.0
@@ -2233,9 +2281,16 @@ async def call_chain(
     timeout: float = 30.0,
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
+    body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
 ) -> Dict[str, Any]:
     """
     Call LLM via provider chain with automatic fallback on 403 FreeTierOnly / 429.
+
+    ``body_validator`` (2026-10-02, SLOT.DECISION) is the same idea as
+    ``content_validator`` but sees the whole response body — needed when the
+    contract lives outside the assistant text (``choices[0].logprobs``). A
+    provider that answers 200 WITHOUT logprobs is silent about it, so the caller
+    must be able to reject it and move on. Raising = reject, never propagated.
 
     ``content_validator`` (2026-07-30) closes the poison-pill hole: return a short
     reason string to REJECT this candidate's output and continue the cascade, or
@@ -2392,6 +2447,11 @@ async def call_chain(
                         # A buggy caller predicate must not turn a working provider
                         # cascade into a 500 — degrade to "this candidate is no good".
                         invalid = f"validator_error_{type(exc).__name__}"
+                if not invalid and body_validator is not None:
+                    try:
+                        invalid = body_validator(body_json)
+                    except Exception as exc:  # noqa: BLE001
+                        invalid = f"body_validator_error_{type(exc).__name__}"
                 if invalid:
                     logger.warning(
                         f"[llm_router] slot={slot.value} {account}/{model} output "

@@ -1092,6 +1092,13 @@ async def lifespan(app: FastAPI):
             _ai_scorer = IntentScorer()
             _ai_rag_retriever = RAGRetriever(ai_pg_pool)
             _ai_rag_evaluator = RAGEvaluator()
+            from ai.config import default_config as _ai_cfg_boot
+            from ai.matcher.decision import DecisionMatcher
+            _ai_decision_matcher = DecisionMatcher(
+                timeout_s=_ai_cfg_boot.decision_timeout_s, k=_ai_cfg_boot.decision_k,
+            )
+            logger.info("[startup] AI decision layer business types: %r (threshold %.2f)",
+                        _ai_cfg_boot.decision_business_types, _ai_cfg_boot.decision_auto_threshold)
 
             app.state.ai_orchestrator = Orchestrator(
                 semantic_matcher=SemanticMatcher(ai_pg_pool),
@@ -1103,6 +1110,10 @@ async def lifespan(app: FastAPI):
                 scorer=_ai_scorer,
                 rag_retriever=_ai_rag_retriever,
                 rag_evaluator=_ai_rag_evaluator,
+                # 三层识别 (2026-10): 只对 AI_DECISION_LAYER_BUSINESS_TYPES 列出的业态生效,
+                # 未设置时 decision_matcher 存在但不会被调用 (旧行为)。
+                decision_matcher=_ai_decision_matcher,
+                candidate_retriever=SemanticMatcher(ai_pg_pool, top_k=_ai_cfg_boot.decision_k),
             )
             logger.info(
                 "[startup] AI orchestrator wired (orchestrator + 3 matchers + β: router/calibrator/scorer/rag, "
@@ -1118,6 +1129,11 @@ async def lifespan(app: FastAPI):
 
                     snap = await _ai_load_snapshot(ai_pg_pool)
                     logger.info(f"[startup] ai_intent_configs snapshot loaded: {len(snap.rows)} rows")
+                    from ai.registry import load_registry as _ai_load_registry
+                    try:
+                        await _ai_load_registry(ai_pg_pool)
+                    except Exception as _reg_ex:
+                        logger.warning(f"[startup] ai phrase registry load failed: {_reg_ex}")
 
                     refresh_seconds = getattr(_ai_cfg, "config_refresh_s", 300)
 
@@ -1128,6 +1144,7 @@ async def lifespan(app: FastAPI):
                             try:
                                 _snap = await _ai_load_snapshot(ai_pg_pool)
                                 logger.debug(f"[ai-snapshot] refreshed: {len(_snap.rows)} rows")
+                                await _ai_load_registry(ai_pg_pool)
                             except Exception as _ex:
                                 logger.warning(f"[ai-snapshot] refresh failed: {_ex}")
 

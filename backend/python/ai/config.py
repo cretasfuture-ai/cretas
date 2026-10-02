@@ -26,6 +26,19 @@ class AIConfig:
     embedding_grpc_endpoint: str = "localhost:9090"
     embedding_retry_attempts: int = 3
     embedding_retry_delay_s: float = 1.0
+    # 三层识别 (2026-10): 第①层精确表 + 第②层读概率决策 + 第③层按钮澄清。
+    # 只对列出的业态生效 (逗号分隔, 如 "FACTORY"); 空 = 关闭, 行为与旧版一致。
+    decision_business_types: str = ""
+    # 第②层: 首选概率 >= 此值才自动执行, 否则 requiresConfirmation=true 交给按钮澄清。
+    # 0.80 是 2026-10-02 在模拟流量 history 段 (1,647 句, 未用验收段) 上选的:
+    #   τ=0.70 自动 55% / 准 80.2% / 读写方向错 100;  τ=0.80 自动 43% / 准 84.1% / 方向错 30
+    decision_auto_threshold: float = 0.80
+    decision_timeout_s: float = 6.0
+    decision_k: int = 20
+
+    def decision_enabled_for(self, business_type: str) -> bool:
+        wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
+        return (business_type or "").upper() in wanted
 
     @classmethod
     def from_env(cls) -> "AIConfig":
@@ -42,6 +55,10 @@ class AIConfig:
             ),
             embedding_retry_attempts=int(os.environ.get("AI_EMBEDDING_RETRY_ATTEMPTS", "3")),
             embedding_retry_delay_s=float(os.environ.get("AI_EMBEDDING_RETRY_DELAY_S", "1.0")),
+            decision_business_types=os.environ.get("AI_DECISION_LAYER_BUSINESS_TYPES", ""),
+            decision_auto_threshold=float(os.environ.get("AI_DECISION_AUTO_THRESHOLD", "0.80")),
+            decision_timeout_s=float(os.environ.get("AI_DECISION_TIMEOUT_S", "6.0")),
+            decision_k=int(os.environ.get("AI_DECISION_K", "20")),
         )
 
 

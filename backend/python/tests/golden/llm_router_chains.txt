@@ -59,3 +59,7 @@
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  zhipu/glm-4.5-air
+== decision (len=3)
+   2099-01-01  aliyun_a_vl/qwen3.7-flash
+   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  aliyun_c_vl/qwen3.8-flash
