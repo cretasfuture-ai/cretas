@@ -19,11 +19,11 @@ public class OperatingReportReadAccess {
     private final UserRepository users;
     public OperatingReportReadAccess(MobileService mobile,PermissionService permissions,UserRepository users){this.mobile=mobile;this.permissions=permissions;this.users=users;}
     public User actor(String factoryId,HttpServletRequest request){
-        if(factoryId==null||request==null)throw new BusinessException(403,"Authenticated factory actor required");
+        if(factoryId==null||request==null)throw new BusinessException(403,"请登录所属工厂账号后重试");
         var dto=mobile.getUserFromToken(TokenUtils.extractToken(request.getHeader("Authorization")));
-        if(dto==null||dto.getId()==null||!factoryId.equals(dto.getFactoryId()))throw new BusinessException(403,"Authenticated factory actor required");
+        if(dto==null||dto.getId()==null||!factoryId.equals(dto.getFactoryId()))throw new BusinessException(403,"请登录所属工厂账号后重试");
         return users.findById(dto.getId()).filter(user->factoryId.equals(user.getFactoryId()))
-                .orElseThrow(()->new BusinessException(403,"Authenticated factory actor required"));
+                .orElseThrow(()->new BusinessException(403,"请登录所属工厂账号后重试"));
     }
     public boolean canView(String factoryId,HttpServletRequest request){
         try {return permissions.hasPermission(actor(factoryId,request),"procurement:price:view");}
