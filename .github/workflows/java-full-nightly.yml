@@ -189,6 +189,10 @@ jobs:
         run: |
           set -uo pipefail
           export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+          # 加拿大/aurora 的 CI VM: r10 常驻集群在 5433(5432 留给同 VM 里 assembly 的服务容器),
+          # runner .env 设 R10_IT_PGPORT; 测试侧由 application-r10-it.properties 读同一个变量。
+          export PGPORT="${R10_IT_PGPORT:-5432}"
+          echo "r10-it PostgreSQL port: $PGPORT"
           if ! command -v psql >/dev/null 2>&1; then
             echo "::warning title=r10-it 缺 PostgreSQL::这台 runner 上找不到 psql —— FactoryConfigServiceImplReorderIT 那 4 条这一轮会红。⛔ 这不是产品缺陷, 是仪器缺一味环境。"
             exit 0
