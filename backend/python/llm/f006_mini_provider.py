@@ -102,6 +102,11 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
                             if delta:
                                 yield {"type": "delta", "content": delta}
                             if frame.get("done") is True:
+                                if frame.get("done_reason") != "stop":
+                                    status = 502
+                                    yield {"type": "error", "code": "MINI_INCOMPLETE",
+                                           "message": "本地 AI 回答未完整完成，请重试"}
+                                    return
                                 if not content.strip():
                                     raise ValueError("empty answer")
                                 tokens = _usage(frame)
@@ -115,7 +120,7 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
                                 status = 200
                                 yield {"type": "done", "content": content, "provider": PROVIDER,
                                        "model": MODEL, "usageAvailable": tokens is not None,
-                                       "usage": tokens, "finishReason": frame.get("done_reason", "stop"),
+                                       "usage": tokens, "finishReason": frame["done_reason"],
                                        "correlationId": correlation}
                                 return
                         raise ValueError("missing terminal frame")

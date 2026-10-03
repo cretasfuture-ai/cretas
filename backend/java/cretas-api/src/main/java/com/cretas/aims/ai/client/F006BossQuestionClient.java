@@ -160,7 +160,9 @@ public class F006BossQuestionClient {
                                     || !metadata.provider().equals(event.path("provider").asText())
                                     || !metadata.model().equals(event.path("model").asText())
                                     || !metadata.correlationId().equals(event.path("correlationId").asText())
-                                    || !event.path("usageAvailable").isBoolean()) throw invalidStream();
+                                    || !event.path("usageAvailable").isBoolean()
+                                    || !event.path("finishReason").isTextual()
+                                    || !"stop".equals(event.path("finishReason").textValue())) throw invalidStream();
                             Usage usage = null;
                             if (event.path("usageAvailable").booleanValue()) {
                                 JsonNode raw = event.path("usage");
@@ -171,7 +173,7 @@ public class F006BossQuestionClient {
                                 usage = new Usage(input, output, total);
                             } else if (!event.path("usage").isNull()) throw invalidStream();
                             return new Answer(content.toString(), metadata.provider(), metadata.model(),
-                                    event.path("finishReason").asText("stop"), metadata.correlationId(), usage);
+                                    event.path("finishReason").textValue(), metadata.correlationId(), usage);
                         }
                         default -> throw invalidStream();
                     }
