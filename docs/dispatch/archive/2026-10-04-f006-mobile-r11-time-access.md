@@ -13,3 +13,5 @@
 root 收回唯一写 Owner 后完成个人端点所有有效员工自读、真实 canonical viewer/hr_admin 允许而 cashier/operator 拒绝的 13 聚合别名测试。导出 CSV 仅生成报告，但能绕过账号模块 DENY，补充 export 的 hr_employee 模块注解并以真实拦截器覆盖工厂关闭 400、账号拒绝 403、合法导出 200/实际 service 调用，以及真实 canonical viewer 只读不能导出。cleanup/recalculate 生命周期仍未修改，不能据本批宣称已完成这些写接口的安全审计。独立权限复核及 export 增量复核均 P0=0/P1=0；最终五类 Maven 160 项 F0/E0/S0 通过（Controller 136、Service 11、JWT 6、Module 3、selector 4），日志私有 r9-r11-export-reviewed-final.log；尚未 commit/PR/合入/生产验收。
 
 源码由 root 冻结保存；尚未创建 PR、合入或发布。终审包括导出新增模块闸，日志及 XML 汇总私有 r9-r11-export-final-test-receipt.json。
+
+候选归档：root 已合入本地 fresh origin/main 88de770f5d，独立权限与导出终审 P0=0/P1=0，最终五类160项F0/E0/S0通过。四源文件 scope 冻结并从在飞台账移除；尚待可信制品 build/stage、PR CI、合并、生产发布和 F006 数据/手机回读，不声明这些阶段已完成。联合发布 Base 采用 R9 登记 d0db852ef565c0ca688f0e9e5586b9aef59299dd；R11 原实现 Base 27756a50e702fb2fffcdf487c11e1c2ea4e68611保留。

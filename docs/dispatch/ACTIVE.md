@@ -6,10 +6,10 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-R11-TIME-ACCESS-20261004` — `review` — Owner: Codex/root — Base `27756a50e7` — scope仅TimeStatsController与新ReadAccessContractTest；汇总走既有HR/module门禁，本人考勤保留，拒绝跨人越权。独立WT/target。详见archive/2026-10-04-f006-mobile-r11-time-access.md。
-- `F006-MOBILE-R9-TIME-STATS-20261004` — `review` — Owner: Codex/root — Base `d0db852ef5` — 两文件scope真实工时/去模拟输出，15项目标测试通过；源已冻结，尚未合入/发布。详见archive/2026-10-04-f006-mobile-r9-time-stats.md。
+- `F006-MOBILE-R12-PAGINATION-20261004` — `in-progress` — Owner: Codex/f006_ai_pagination_trace — Base `88de770f5d` — 🔒 SseStreamingService/SseConversationPaginationContractTest；真机库存下一页1→2→3已验，上一页错误加载4。只修手机SSE向前翻页和首尾边界，同厂同用户/只读重放门禁保持。详见archive/2026-10-04-f006-mobile-r12-pagination.md。
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
+
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `88de770f5d` — R1/R8/R3/R4/CORE #876/#891/#892/#893已合并且Java/Python已发布；18角色71页仅L1。R9/R11源码冻结待本PR，R6/R7、反向分页R12、全角色深流程与Mini手机验收继续；本行不锁归档源码。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 

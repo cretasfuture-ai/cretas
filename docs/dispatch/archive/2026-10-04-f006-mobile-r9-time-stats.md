@@ -15,3 +15,5 @@
 禁止Gitcommit/push/PR/台账写、生产DB/业务HTTP/服务器/设备/runner、任何依赖安装/删除/链接/孙代理。非scope需求回root，由root裁决。回执含task/Base/实际文件/命令结果/阻塞/下一动作。不把单测当线上真实数据验收。
 
 源码终审后的里程碑：真实范围/工人按clockInTime天数/同厂元数据Map与nullable趋势、JSON/CSV未知已闭合；11 Service行为+4选择器=15项F0/E0/S0，root只读复核源码。当前只保存本地，不表示合入、发布或线上数据回读。后续将同步main报表/班次保护，再在独立R11 Controller权限scope完成后统一目标验证；cleanup/recalculate生命周期未改，不能宣称全部写接口已审完。
+
+候选归档：root 已合入本地 fresh origin/main 88de770f5d，独立权限与导出终审 P0=0/P1=0，最终五类160项F0/E0/S0通过。四源文件 scope 冻结并从在飞台账移除；尚待可信制品 build/stage、PR CI、合并、生产发布和 F006 数据/手机回读，不声明这些阶段已完成。联合发布 Base 采用 R9 登记 d0db852ef565c0ca688f0e9e5586b9aef59299dd；R11 原实现 Base 27756a50e702fb2fffcdf487c11e1c2ea4e68611保留。
