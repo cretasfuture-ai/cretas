@@ -91,8 +91,11 @@ class Lines(httpx.AsyncByteStream):
 
 
 def frame(text="", **extra):
-    return {"model": provider.MODEL, "message": {"role": "assistant", "content": text},
-            "done": False, **extra}
+    result = {"model": provider.MODEL, "message": {"role": "assistant", "content": text},
+              "done": False, **extra}
+    if result.get("done") is True and "done_reason" not in extra:
+        result["done_reason"] = "stop"
+    return result
 
 
 def install_model(monkeypatch, frames, status=200, slow=False):
@@ -159,6 +162,23 @@ def test_stream_failures_do_not_report_completion_or_cloud_fallback(monkeypatch,
     assert len(observed["requests"]) == 1
     assert observed["metrics"] == []
     assert "sensitive upstream detail" not in str(events)
+
+
+@pytest.mark.parametrize("reason", ["missing", None, 13, "length", "unexpected"])
+def test_incomplete_terminal_after_real_delta_never_reports_done(monkeypatch, reason):
+    terminal = frame("", done=True, prompt_eval_count=10, eval_count=4)
+    if reason == "missing":
+        terminal.pop("done_reason")
+    else:
+        terminal["done_reason"] = reason
+    observed = install_model(monkeypatch, [frame("半个回答"), terminal])
+    events = collect()
+    assert any(event.get("content") == "半个回答" for event in events if event["type"] == "delta")
+    assert events[-1]["type"] == "error" and events[-1]["code"] == "MINI_INCOMPLETE"
+    assert not any(event["type"] in ("done", "result", "complete") for event in events)
+    assert observed["audits"][0].status_code == 502
+    assert len(observed["requests"]) == 1 and observed["metrics"] == []
+    assert not provider._inflight.locked()
 
 
 def test_total_timeout_and_lock_release(monkeypatch):

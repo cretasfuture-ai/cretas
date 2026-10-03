@@ -1,5 +1,5 @@
 import type { CreateSalesOrderRequest } from '../services/api/salesApiClient';
-import { formatCurrency, formatDate, formatDateTime } from './formatters';
+import { formatCurrency, formatDateTime } from './formatters';
 
 type ProcessingMode = CreateSalesOrderRequest['processingMode'];
 type MaterialSupplyMode = CreateSalesOrderRequest['materialSupplyMode'];
@@ -46,7 +46,7 @@ export function formatOATodoValue(key: string, value: unknown): string | undefin
   if (key === 'orderDate' || key === 'requiredDeliveryDate' || key === 'expectedDeliveryDate') {
     if (typeof value === 'string' || typeof value === 'number') {
       const formatted = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-        ? formatDate(value)
+        ? value
         : formatDateTime(value);
       return formatted || value.toString();
     }

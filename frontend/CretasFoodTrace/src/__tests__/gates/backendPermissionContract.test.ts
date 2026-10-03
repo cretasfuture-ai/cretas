@@ -79,13 +79,13 @@ describe('backend permission authority contract', () => {
       expect(src).not.toMatch(/processing_access|logistics_access|trace_access|admin_access/);
     }
 
-    // 2) 每个模块要的权限都得长成后端发得出来的 `<namespace>:<action>`
+    // 2) 每个模块使用真实后端权限；采购价格读取是三段 procurement:price:view。
     const namespaces = new Set<string>();
     for (const specs of Object.values(HOME_MODULE_SETS)) {
       for (const spec of specs) {
         expect(spec.requiredPermissions.length).toBeGreaterThan(0);
         for (const p of spec.requiredPermissions) {
-          expect(p).toMatch(/^[a-z]+:[a-z]+$/);
+          expect(/^[a-z]+:[a-z_]+$/.test(p) || p === 'procurement:price:view').toBe(true);
           namespaces.add(p.split(':')[0]!);
         }
       }

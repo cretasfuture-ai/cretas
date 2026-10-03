@@ -256,18 +256,23 @@ export interface CapacityUtilizationReport {
   factoryId: string;
   startDate: string;
   endDate: string;
-  overallUtilization: number;
-  utilizationByLine: Array<{
-    lineId: string;
-    lineName: string;
-    utilization: number;
-    plannedCapacity: number;
-    actualOutput: number;
+  totalEquipment: number;
+  averageUtilization: number | null;
+  utilizationTarget: number | null;
+  dailyCapacity: number | null;
+  capacityBasis: string | null;
+  equipmentUtilization: Array<{
+    equipmentId: number;
+    equipmentName: string;
+    utilization: number | null;
+    status: string;
   }>;
-  utilizationHeatmap: Array<{
+  dailyUtilization: Array<{
     date: string;
-    hour: number;
-    utilization: number;
+    utilization: number | null;
+    output: number;
+    dayOfWeek: number;
+    weekOfYear: number;
   }>;
 }
 

@@ -159,6 +159,22 @@ class F006BossQuestionClientContractTest {
     }
 
     @Test
+    void incompleteFinishReasonAfterActualDeltaCannotReturnAnswer() throws Exception {
+        Object[] invalidReasons = { null, 13, "length", "unexpected" };
+        for (int index = 0; index <= invalidReasons.length; index++) {
+            var terminal = done();
+            if (index == 0) terminal.remove("finishReason");
+            else terminal.put("finishReason", invalidReasons[index - 1]);
+            server.enqueue(new MockResponse().setBody(meta() + delta() + event(terminal)));
+            List<String> tokens = new ArrayList<>();
+            assertThatThrownBy(() -> client.stream("F006", 7L, "factory_super_admin",
+                    "如何检查冷链？", false, metadata -> { }, tokens::add))
+                    .isInstanceOf(IOException.class).hasMessageContaining("未完整完成");
+            assertThat(tokens).containsExactly("检查冷链。");
+        }
+    }
+
+    @Test
     void terminalModelCorrelationContentAndTokenCountsMustMatch() throws Exception {
         for (String field : List.of("model", "correlationId", "content", "usage")) {
             var done = done();

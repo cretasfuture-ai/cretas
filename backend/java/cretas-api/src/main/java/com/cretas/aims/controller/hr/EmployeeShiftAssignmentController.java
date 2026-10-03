@@ -3,11 +3,13 @@ package com.cretas.aims.controller.hr;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.hr.AttendanceShift;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.hr.EmployeeShiftAssignment;
 import com.cretas.aims.entity.hr.enums.ShiftAssignmentStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.hr.AttendanceShiftRepository;
 import com.cretas.aims.repository.hr.EmployeeShiftAssignmentRepository;
+import com.cretas.aims.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -57,6 +60,7 @@ public class EmployeeShiftAssignmentController {
 
     private final EmployeeShiftAssignmentRepository assignmentRepository;
     private final AttendanceShiftRepository shiftRepository;
+    private final UserRepository userRepository;
 
     /**
      * 列出工厂在 [startDate, endDate] 内的全部排班 (用于月视图日历).
@@ -89,11 +93,12 @@ public class EmployeeShiftAssignmentController {
     public ResponseEntity<?> upsert(@PathVariable String factoryId,
                                     @RequestBody Map<String, Object> body) {
         Long userId = parseUserId(body.get("userId"));
-        LocalDate workDate = parseDate((String) body.get("workDate"), "workDate");
+        LocalDate workDate = parseDate(body.get("workDate"), "workDate");
         String shiftId = (String) body.get("shiftId");
         String notes = (String) body.get("notes");
 
         AttendanceShift shift = requireShift(factoryId, shiftId);
+        requireEmployee(factoryId, userId);
 
         EmployeeShiftAssignment saved = upsertOne(factoryId, userId, workDate, shift.getId(), notes);
         return ResponseEntity.ok(Map.of("success", true, "data", saved, "message", "已保存"));
@@ -124,13 +129,23 @@ public class EmployeeShiftAssignmentController {
         }
         AttendanceShift shift = requireShift(factoryId, shiftId);
 
+        // Validate the whole request before touching any assignment, including an existing row.
+        List<Long> userIds = new ArrayList<>();
+        for (Object userId : userIdsRaw) {
+            Long parsed = parseUserId(userId);
+            requireEmployee(factoryId, parsed);
+            userIds.add(parsed);
+        }
+        List<LocalDate> dates = new ArrayList<>();
+        for (Object date : datesRaw) {
+            dates.add(parseDate(date, "dates 元素"));
+        }
+
         int created = 0;
         int updated = 0;
         List<EmployeeShiftAssignment> savedRows = new ArrayList<>();
-        for (Object u : userIdsRaw) {
-            Long uid = parseUserId(u);
-            for (Object d : datesRaw) {
-                LocalDate wd = parseDate((String) d, "dates 元素");
+        for (Long uid : userIds) {
+            for (LocalDate wd : dates) {
                 Optional<EmployeeShiftAssignment> existing = assignmentRepository
                         .findByFactoryIdAndUserIdAndWorkDate(factoryId, uid, wd);
                 if (existing.isPresent()) {
@@ -174,6 +189,10 @@ public class EmployeeShiftAssignmentController {
                 .findByFactoryIdAndUserIdAndWorkDate(factoryId, userId, workDate);
         if (existing.isPresent()) {
             EmployeeShiftAssignment row = existing.get();
+            if (!factoryId.equals(row.getFactoryId()) || !userId.equals(row.getUserId())
+                    || !workDate.equals(row.getWorkDate())) {
+                throw new BusinessException("排班记录与当前员工、工厂或日期不一致，请重新加载后重试");
+            }
             row.setShiftId(shiftId);
             if (notes != null) row.setNotes(notes);
             // 重新分配 → 重置 SCHEDULED 状态 (旧 detect 结果应通过 re-detect 覆盖)
@@ -195,18 +214,35 @@ public class EmployeeShiftAssignmentController {
         if (shiftId == null || shiftId.isBlank()) {
             throw new BusinessException("shiftId 必填");
         }
-        return shiftRepository.findByIdAndFactoryId(shiftId, factoryId)
-                .orElseThrow(() -> new BusinessException("班次不存在或不属于该工厂: " + shiftId));
+        AttendanceShift shift = shiftRepository.findByIdAndFactoryId(shiftId, factoryId)
+                .orElseThrow(() -> new BusinessException("班次不存在，请选择当前工厂的有效班次"));
+        if (!factoryId.equals(shift.getFactoryId()) || !shiftId.equals(shift.getId())
+                || !Boolean.TRUE.equals(shift.getIsActive())) {
+            throw new BusinessException("班次不存在或已停用，请选择当前工厂的有效班次");
+        }
+        return shift;
     }
 
-    private LocalDate parseDate(String value, String fieldName) {
-        if (value == null || value.isBlank()) {
+    private void requireEmployee(String factoryId, Long userId) {
+        User employee = userRepository.findByIdAndFactoryId(userId, factoryId)
+                .orElseThrow(() -> new BusinessException("员工不存在，请选择当前工厂的有效员工"));
+        if (!factoryId.equals(employee.getFactoryId()) || !userId.equals(employee.getId())
+                || !Boolean.TRUE.equals(employee.getIsActive())) {
+            throw new BusinessException("员工不存在或已停用，请选择当前工厂的有效员工");
+        }
+    }
+
+    private LocalDate parseDate(Object value, String fieldName) {
+        if (value == null) {
             throw new BusinessException(fieldName + " 必填 (YYYY-MM-DD)");
         }
+        if (!(value instanceof String text) || text.isBlank()) {
+            throw new BusinessException(fieldName + " 格式必须 YYYY-MM-DD");
+        }
         try {
-            return LocalDate.parse(value);
+            return LocalDate.parse(text);
         } catch (Exception e) {
-            throw new BusinessException(fieldName + " 格式必须 YYYY-MM-DD, 当前=" + value);
+            throw new BusinessException(fieldName + " 格式必须 YYYY-MM-DD");
         }
     }
 
@@ -214,11 +250,21 @@ public class EmployeeShiftAssignmentController {
         if (value == null) {
             throw new BusinessException("userId 必填");
         }
-        if (value instanceof Number n) return n.longValue();
         try {
-            return Long.parseLong(value.toString());
-        } catch (NumberFormatException e) {
-            throw new BusinessException("userId 必须为数字, 当前=" + value);
+            long userId;
+            if (value instanceof Number number) {
+                userId = new BigDecimal(number.toString()).longValueExact();
+            } else if (value instanceof String text) {
+                userId = Long.parseLong(text);
+            } else {
+                throw new BusinessException("userId 必须为正整数");
+            }
+            if (userId <= 0) {
+                throw new BusinessException("userId 必须为正整数");
+            }
+            return userId;
+        } catch (NumberFormatException | ArithmeticException e) {
+            throw new BusinessException("userId 必须为正整数");
         }
     }
 }

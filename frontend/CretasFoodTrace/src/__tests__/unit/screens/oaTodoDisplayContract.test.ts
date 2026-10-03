@@ -30,6 +30,12 @@ describe('OA 待办详情显示合同', () => {
     expect(formatOATodoValue('orderDate', '2026-10-01')).toBe('2026-10-01');
   });
 
+  it.each(['orderDate', 'requiredDeliveryDate', 'expectedDeliveryDate'])('preserves calendar dates without timezone conversion: %s', (field) => {
+    for (const value of ['2026-10-01', '2026-01-01', '2024-02-29']) {
+      expect(formatOATodoValue(field, value)).toBe(value);
+    }
+  });
+
   it('keeps permission masking, nulls, and zero values visible with safe semantics', () => {
     expect(screenSource).toContain("key === 'submittedBy'");
     expect(screenSource).toContain('发起人需核对');

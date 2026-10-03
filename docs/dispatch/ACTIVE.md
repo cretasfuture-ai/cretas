@@ -6,15 +6,10 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-CI-PORTABLE-20261004` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 三文件scope：full workflow、r10-it测试profile、新ContractTest；复用独立PG并约束TestContext缓存。禁止runner/service/helper/labels/选择器/基线和prod改变。详见archive/2026-10-04-f006-mobile-ci-portable.md。
-
-- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读/金额、财务/价格身份边界；ArAp 查询 DTO、账龄、PriceList 工厂校验；采购列表刷新、useListSummary 迟到响应保护及回归；F006 真机和老板 AI。文件/验收见 `archive/2026-10-03-f006-mobile-audit.md`。
-- `F006-MOBILE-R2-20261003` — `in-progress` — Owner: Codex — Base `8005a38306` — 🔒 R2导航/会话/Mini源码在飞；R1已上线。待R6/R7整合、最终门禁和新版真机。精确scope见archive/2026-10-03-f006-mobile-r2.md。
-- `F006-MOBILE-R2-DISPLAY-20261003` — `review` — Owner: Codex — Base `8005a38306` — 显示/设备代码已交还，目标组件/TS通过；新版真机待验。scope见R2归档。
-- `F006-MOBILE-R2-NAV-20261003` — `review` — Owner: Codex — Base `8005a38306` — 导航/质量/设备代码已交还，目标验证通过；scope见R2归档。
-- `F006-MOBILE-R2-SESSION-20261003` — `review` — Owner: Codex — Base `8005a38306` — SSE/Memory/分页代码已交还，目标通过；Mini默认关闭/真机待验，scope见R2归档。
-- `F006-MOBILE-R3-REPORT-20261003` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 独立R3 worktree八文件scope：生产全量周期/分单位摘要与手机统计接线及真实行为测试；legacy顶层契约保留。禁止质检/Entity/Repository/迁移/业务写。详见archive/2026-10-04-f006-mobile-r3-report.md。
 - `F006-MOBILE-R6-HR-20261004` — `review` — Owner: Codex/root — Base `bafc7fcb55` — 🔒 14文件绩效/真实排班；self/actor/旧刷新与重试终审已修；联合R7目标95/TS通过，新版真机待验。详见archive/2026-10-04-f006-mobile-r6-hr.md。
+- `F006-MOBILE-R7-LABOR-COST-20261004` — `review` — Owner: Codex/root — Base `bafc7fcb55` — 🔒 七文件人工成本真实wire/NULL、actor/请求序号/焦点已修；R7三套36与联合R6八套95/TS通过。后端工时与工资样本边界保留，真机待验。详见archive/2026-10-04-f006-mobile-r7-labor-cost.md。
+
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
@@ -86,9 +81,6 @@
 
 ## Scope 锁地图
 
-- `F006-MOBILE-R2-20261003`：仅 R2 worktree 的角色导航、采购编辑、仓储显示、AIChat/SSE/Memory 会话与新内部 F006 Mac 文本流，精确文件见 `archive/2026-10-03-f006-mobile-r2.md`。禁止 Entity/Repository/迁移/角色授予、全局模型链、照片、历史账务/异厂写。R1 HEAD 冻结。
-- `F006-MOBILE-R2-DISPLAY-20261003`：仅 AIReportDetailScreen、TodoDetailScreen、QILabelQcCreateScreen、必要 oaTodoDisplay helper 与三个对应目标测试；精确路径见 R2 归档。禁止导航/API/权限/业务状态/台账，协调者保留终审与发布。
-
 
 
 
@@ -123,4 +115,3 @@
 - organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
-- `F006-MOBILE-R7-LABOR-COST-20261004` — `review` — Owner: Codex/root — Base `bafc7fcb55` — 🔒 七文件人工成本真实wire/NULL、actor/请求序号/焦点已修；R7三套36与联合R6八套95/TS通过。后端工时与工资样本边界保留，真机待验。详见archive/2026-10-04-f006-mobile-r7-labor-cost.md。

@@ -19,3 +19,9 @@ wrapper的CRETAS_WORKFLOW_PG_VERIFY/SMARTBI_PG_DSN会影响其他opt-in tests，
 禁止生产代码、Entity/Repository/迁移、共享pom/helper/scripts、baseline、角色/业务写、设备、网络写、commit/PR、台账写或孙代理。日志私有r1-ci-portable-*；既有tracked测试fallback不代表生产凭据，不读取/复制真实credentials。
 
 根协调者接受最小执行scope扩展（仍只三个文件）：允许workflow把原默认full选择拆为两次互补执行，第一排除FactoryConfigServiceImplReorderIT且清除helper新增的五个PG变量，第二只该r10类并消费随机PG参数；总选择面必须等价原pom Test/Tests/IT，不漏/重复、不激活历史opt-in、不清理前段报告。新ContractTest须实际运行workflow抽取Bash证明环境隔离/后段接线和失败处理；Maven selector等价/报告累计需独立证据，只有全文contains不足。root将以WSL runner UID1000在私有临时PG实例实际验R10，禁止任何常驻服务、runner标签/进程或基线修改。之前12目标PASS、wrapper2skip、shell7PASS不代表随机PG或full执行成功。
+
+2026-10-04最终目标验证：旧Base08bf隔离Linux实际三门15项无skip，真实临时PG R10四项无skip；SQL回读专用库/专用用户/127.0.0.1:34307，实例由既有wrapper创建和清理，runner/service未变。三门XML与R10 XML已回读，私有ci-portable-linux-target-xml-readback.json。该19项目标不等于full suite。
+
+合并main71b后，保留团队NIGHTLY_XMX（nightly优先/fork fallback/default3g）并export至wrapper子进程，两阶段使用相同heap；保留legacy R10_IT_PGPORT fallback5433。root在本地merge提交eafc误留conflict markers，工作树已解析纠正，三文件及ACTIVE无残留；本次修正commit后才可推送。worker最终三门15项无失败/错误/skip，YAML/heavy7及diff通过，独立只读终审P0/P1=0。实际full mandatory run尚未完成，不能合并/发布产品，也不宣称全量OOM已修复。scope写owner已由worker交还root，worker切换独立R6任务。
+
+2026-10-04收尾：最终CI代码commit c0827940fd2e7f9157f945bc14b219c71658da6f，经R1合并至c024。最终Windows三门15项、Linux最终overlay三门15项均通过无skip；先前真实临时PG R10四项通过。GitHub run37147661135/job111274824489实际执行PR merge e986347a4a02999d0b7f4faba6cedea279741f97引用的新workflow，完整suite、instrument、ratchet均success，旧常驻PG准备step已消失。当前实际full不再出现先前OOM/0 tests仪器故障；不以此扩展到未运行未来提交。源码批次归档并随#876合入释放scope；最后docs提交适用CI和实际合并仍待完成。
