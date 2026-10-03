@@ -8,7 +8,7 @@
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
-- `CRETAS-ORG-20261003-G1` — `in-progress` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `35e017dc526255c39956195a11b06b6c93916a31` — Java包已验SHA；Web下载guard遗漏CDN，07仅修私有guard再构建；零产品/安装/迁移/账号写。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G1` — `blocked` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `35e017dc526255c39956195a11b06b6c93916a31` — Java/Web固定包已验SHA，Web795资产一致；未安装，真实issuer/期限/身份与新QA资格仍待验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G2` — `blocked` — Owner: `01a10277-1213-7a60-b72d-55524e160840` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — CUSTOMER03已提交不重放；原FAIL/pending/预算保留，身份与精确恢复入口缺失。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G3` — `blocked` — Owner: `01a10277-13d1-7a82-a27d-1624f6538ddd` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — 原RAW403/pending保留；身份与收货附件范围未绑定。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G4` — `blocked` — Owner: `01a10277-1615-7932-b97e-883356d0c96a` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR881已合并、代码scope已释放；BOMv2真链未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
