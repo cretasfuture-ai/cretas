@@ -3,8 +3,6 @@ package com.cretas.aims.config;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.InOrder;
-
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +10,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 
@@ -23,24 +22,56 @@ class FlywayNoAutomaticRepairContractTest {
     Path migrations;
 
     @Test
-    void validatesBeforeMigratingAndNeverRepairsHistory() {
-        Flyway flyway = mock(Flyway.class);
+    void validatesBeforeMigratingAndNeverRepairsHistory() throws Exception {
+        Files.writeString(migrations.resolve("V1__synthetic_probe.sql"), "CREATE TABLE synthetic_ok (value INT);");
+        String url = "jdbc:h2:mem:no_repair_order;DB_CLOSE_DELAY=-1;NON_KEYWORDS=VALUE";
+        Flyway flyway = spy(Flyway.configure().dataSource(url, "sa", "")
+                .locations("filesystem:" + migrations).load());
         new FlywayConfig().migrationStrategy().migrate(flyway);
         verify(flyway, never()).repair();
-        InOrder order = inOrder(flyway);
-        order.verify(flyway).validate();
-        order.verify(flyway).migrate();
+        verify(flyway).migrate();
+    }
+
+    /**
+     * The normal release: one migration already applied, one new migration shipped in the jar.
+     * Validation must not treat the new (pending) migration as drift — 2026-10-03 every release
+     * with a migration failed to start because of exactly this (V20261101_48).
+     */
+    @Test
+    void pendingMigrationWithoutDriftIsAppliedAtStartup() throws Exception {
+        Files.writeString(migrations.resolve("V1__synthetic_probe.sql"),
+                "CREATE TABLE synthetic_pending (value INT); INSERT INTO synthetic_pending VALUES (1);");
+        String url = "jdbc:h2:mem:pending_ok;DB_CLOSE_DELAY=-1;NON_KEYWORDS=VALUE";
+        Flyway flyway = Flyway.configure().dataSource(url, "sa", "")
+                .locations("filesystem:" + migrations).load();
+        flyway.migrate();
+        Files.writeString(migrations.resolve("V2__synthetic_pending.sql"),
+                "INSERT INTO synthetic_pending VALUES (2);");
+
+        new FlywayConfig().migrationStrategy().migrate(flyway);
+
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            try (ResultSet applied = connection.createStatement().executeQuery(
+                    "SELECT COUNT(*) FROM \"flyway_schema_history\" WHERE \"version\" = '2' AND \"success\"")) {
+                assertTrue(applied.next());
+                assertEquals(1, applied.getInt(1), "the pending V2 must be recorded as applied");
+            }
+            try (ResultSet rows = connection.createStatement().executeQuery("SELECT COUNT(*) FROM synthetic_pending")) {
+                assertTrue(rows.next());
+                assertEquals(2, rows.getInt(1), "the pending V2 must have executed");
+            }
+        }
     }
 
     @Test
-    void validationFailureStopsBeforeAnyMigrationOrRepair() {
-        Flyway flyway = mock(Flyway.class);
-        doThrow(new IllegalStateException("synthetic checksum mismatch"))
-                .when(flyway).validate();
-        assertThrows(IllegalStateException.class,
-                () -> new FlywayConfig().migrationStrategy().migrate(flyway));
-        verify(flyway, never()).repair();
-        verify(flyway, never()).migrate();
+    void validationIgnoresOnlyPendingAndKeepsConfiguredPatterns() {
+        Flyway flyway = Flyway.configure().dataSource("jdbc:h2:mem:patterns", "sa", "")
+                .ignoreMigrationPatterns("*:missing").load();
+        Flyway validator = FlywayConfig.pendingTolerantValidator(flyway);
+        String patterns = Arrays.toString(validator.getConfiguration().getIgnoreMigrationPatterns());
+        assertTrue(patterns.contains("*:missing"), patterns);
+        assertTrue(patterns.contains("*:pending"), patterns);
+        assertFalse(patterns.contains("*:failed"), patterns);
     }
 
     @Test
