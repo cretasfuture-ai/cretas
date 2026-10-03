@@ -6,13 +6,9 @@
 
 ## 在飞任务
 
-<<<<<<< HEAD
 - `F006-MOBILE-CI-PORTABLE-20261004` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 三文件scope：full workflow、r10-it测试profile、新ContractTest；复用独立PG并约束TestContext缓存。禁止runner/service/helper/labels/选择器/基线和prod改变。详见archive/2026-10-04-f006-mobile-ci-portable.md。
 
-- `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `7c3095c267a859393b70d3470c3e840574630737` — 独占本批ACTIVE/archive写入；七组均idle，业务FAIL/pending未清，三修复合并、一草稿保留。
-=======
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `0e42f79786a3b0b0abc68be687f5cb16aecdbdf3` — 独占本批ACTIVE/archive写入；四修复合并，业务FAIL/pending保留；AI新四题有界评测见archive。
->>>>>>> origin/main
 
 - `CRETAS-ORG-20261003-G1` — `blocked` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `0e42f79786a3b0b0abc68be687f5cb16aecdbdf3` — PR888合并、42目标过、代码scope释放；运行旧版，issuer/账号与真实撤销待验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G2` — `blocked` — Owner: `01a10277-1213-7a60-b72d-55524e160840` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — CUSTOMER03已提交不重放；原FAIL/pending/预算保留，身份与精确恢复入口缺失。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。

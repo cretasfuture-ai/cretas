@@ -126,6 +126,17 @@ class JavaFullPortablePostgresContractTest {
 
     private static WorkflowRun runFakeWorkflow(String runBlock, Path workspace, Path log, Path report,
                                                 String mode) throws Exception {
+        return runFakeWorkflow(runBlock, workspace, log, report, mode, null, null);
+    }
+
+    private static WorkflowRun runFakeWorkflowWithHeap(String runBlock, Path workspace, Path log, Path report,
+                                                       String mode, String nightlyXmx, String forkXmx)
+            throws Exception {
+        return runFakeWorkflow(runBlock, workspace, log, report, mode, nightlyXmx, forkXmx);
+    }
+
+    private static WorkflowRun runFakeWorkflow(String runBlock, Path workspace, Path log, Path report,
+                                                String mode, String nightlyXmx, String forkXmx) throws Exception {
         Path script = Files.createTempFile("cretas-full-suite-run-", ".sh");
         Path r10Report = workspace.resolve(
                 "target/surefire-reports/TEST-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.xml");
@@ -139,6 +150,14 @@ class JavaFullPortablePostgresContractTest {
             builder.environment().put("FAKE_REPORT", shellPath(report));
             builder.environment().put("FAKE_R10_REPORT", shellPath(r10Report));
             builder.environment().put("FAKE_MODE", mode);
+            builder.environment().remove("CRETAS_JAVA_NIGHTLY_XMX");
+            builder.environment().remove("CRETAS_JAVA_FORK_XMX");
+            if (nightlyXmx != null) {
+                builder.environment().put("CRETAS_JAVA_NIGHTLY_XMX", nightlyXmx);
+            }
+            if (forkXmx != null) {
+                builder.environment().put("CRETAS_JAVA_FORK_XMX", forkXmx);
+            }
             builder.environment().put("SPRING_DATASOURCE_URL", "jdbc:postgresql://10.99.0.8:5432/inherited_unsafe");
             builder.environment().put("SPRING_DATASOURCE_USERNAME", "inherited_unsafe_user");
             builder.environment().put("SPRING_DATASOURCE_PASSWORD", "inherited_unsafe_password");
@@ -247,10 +266,12 @@ class JavaFullPortablePostgresContractTest {
     @DisplayName("r10 properties retain the local legacy fallback when wrapper variables are absent")
     void retainsLegacyFallback() throws IOException {
         Properties properties = r10Properties();
-        StandardEnvironment legacy = environment(Map.of("R10_IT_DB", "legacy_test_database"));
+        StandardEnvironment legacy = environment(Map.of(
+                "R10_IT_PGPORT", "5433",
+                "R10_IT_DB", "legacy_test_database"));
 
         assertThat(resolve(properties, "spring.datasource.url", legacy))
-                .isEqualTo("jdbc:postgresql://localhost:5432/legacy_test_database");
+                .isEqualTo("jdbc:postgresql://localhost:5433/legacy_test_database");
         assertThat(resolve(properties, "spring.datasource.username", legacy)).isEqualTo("cretas_user");
         assertThat(resolve(properties, "spring.datasource.password", legacy)).isEqualTo("cretas_pass");
         assertThat(read(R10_PROPERTIES)).doesNotContain("SPRING_DATASOURCE_URL");
@@ -302,7 +323,9 @@ class JavaFullPortablePostgresContractTest {
                 .contains("-Dtest=!FactoryConfigServiceImplReorderIT")
                 .contains("-Dtest=FactoryConfigServiceImplReorderIT")
                 .contains("-Dspring.test.context.cache.maxSize=2")
-                .contains("-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError")
+                .contains("NIGHTLY_XMX=\"${CRETAS_JAVA_NIGHTLY_XMX:-${CRETAS_JAVA_FORK_XMX:-3g}}\"")
+                .contains("export MVN NIGHTLY_XMX")
+                .contains("-DargLine=\"-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx$NIGHTLY_XMX -XX:+HeapDumpOnOutOfMemoryError")
                 .contains("id: full-suite")
                 .contains("Full-suite instrument gate")
                 .contains("steps.full-suite.outcome")
@@ -393,6 +416,26 @@ class JavaFullPortablePostgresContractTest {
             assertThat(occurrences(normal.log(), "CALL\n")).isEqualTo(2);
             assertThat(occurrences(normal.log(), "arg=-Dspring.profiles.active=test")).isEqualTo(2);
             assertThat(occurrences(normal.log(), "argline_count=1")).isEqualTo(2);
+
+            Files.deleteIfExists(log);
+            Files.deleteIfExists(report);
+            Files.deleteIfExists(r10Report);
+            WorkflowRun nightlyHeap = runFakeWorkflowWithHeap(
+                    runBlock, workspace, log, report, "normal", "7g", "5g");
+            assertThat(nightlyHeap.exitCode()).as(nightlyHeap.output()).isZero();
+            assertThat(occurrences(nightlyHeap.log(), "-Xmx7g")).isEqualTo(2);
+            assertThat(nightlyHeap.log()).doesNotContain("-Xmx5g");
+            assertThat(occurrences(nightlyHeap.log(), "argline_count=1")).isEqualTo(2);
+
+            Files.deleteIfExists(log);
+            Files.deleteIfExists(report);
+            Files.deleteIfExists(r10Report);
+            WorkflowRun forkHeap = runFakeWorkflowWithHeap(
+                    runBlock, workspace, log, report, "normal", null, "5g");
+            assertThat(forkHeap.exitCode()).as(forkHeap.output()).isZero();
+            assertThat(occurrences(forkHeap.log(), "-Xmx5g")).isEqualTo(2);
+            assertThat(forkHeap.log()).doesNotContain("-Xmx3g");
+            assertThat(occurrences(forkHeap.log(), "argline_count=1")).isEqualTo(2);
 
             Files.deleteIfExists(log);
             Files.deleteIfExists(report);

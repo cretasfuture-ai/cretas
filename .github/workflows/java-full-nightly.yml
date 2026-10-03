@@ -165,50 +165,6 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-<<<<<<< HEAD
-=======
-      # 🔴 FactoryConfigServiceImplReorderIT 那 4 条要【真 PostgreSQL】
-      #    (@DataJpaTest + Replace.NONE + profile r10-it, 连 localhost:5432)。
-      #    2026-08-27 之前它们在【任何自动路径上都跑不了也不可能绿】, 一直挂在
-      #    known-failing-tests.txt 里 —— 唯一提供 pgvector 服务容器的
-      #    ci.yml/java-build-test 是 `if: inputs.full_audit` + `runs-on: ubuntu-latest`,
-      #    而托管侧当时被账单挡着(job 2 秒失败)。
-      #    ⛔ 服务容器这条路在这台机器上走不通: 实测 `docker: command not found`
-      #    (scripts/ci/switch_ci_runner.py 里记着 ci.yml「试过并撤回」正是这个原因)。
-      #    ⇒ 改成在 runner 上装【原生】PG 17 (Homebrew LaunchAgent, 与两个 runner agent
-      #      同一套 ~/Library/LaunchAgents + RunAtLoad 生命周期 —— runner 起得来它就起得来)。
-      #
-      # ⚠️ 一个 runner 一个库, ⛔ 不是共用一个。这台机器上跑着【两个】runner agent,
-      #    而本工作流的 concurrency 组按 ref 分(java-full-suite-<ref> / nightly),
-      #    两条 PR 的全量跑批可以同时落在同一台机器上; 而 r10-it 的 schema 由
-      #    spring.sql.init 每次 DROP+CREATE 重建 ⇒ 共用一个库 = 互相 drop 对方的表。
-      #    那与 #197 那个 H2 schema 毒源【同一个形状】, 只是换成了 PostgreSQL。
-      #
-      # ⚠️ 找不到 psql 时【只警告不失败】: 这一步的缺席不该把整轮跑批打断 ——
-      #    那 4 条会红, 而棘轮会照常把它判成红并说清楚。⛔ 但也不许静默:
-      #    「没量到」必须说出来(硬约束 4), 否则切回托管那天没人知道少了什么。
-      - name: Bootstrap the r10-it PostgreSQL database (per-runner)
-        run: |
-          set -uo pipefail
-          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
-          # 加拿大/aurora 的 CI VM: r10 常驻集群在 5433(5432 留给同 VM 里 assembly 的服务容器),
-          # runner .env 设 R10_IT_PGPORT; 测试侧由 application-r10-it.properties 读同一个变量。
-          export PGPORT="${R10_IT_PGPORT:-5432}"
-          echo "r10-it PostgreSQL port: $PGPORT"
-          if ! command -v psql >/dev/null 2>&1; then
-            echo "::warning title=r10-it 缺 PostgreSQL::这台 runner 上找不到 psql —— FactoryConfigServiceImplReorderIT 那 4 条这一轮会红。⛔ 这不是产品缺陷, 是仪器缺一味环境。"
-            exit 0
-          fi
-          DB="cretas_r10_it_$(printf '%s' "${RUNNER_NAME:-unknown}" | tr -c 'a-zA-Z0-9' '_')"
-          existing=$(psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'")
-          if [ "$existing" != "1" ]; then
-            createdb -O cretas_user "$DB"
-            echo "created database $DB"
-          fi
-          echo "R10_IT_DB=$DB" >> "$GITHUB_ENV"
-          echo "R10_IT_DB=$DB (runner=${RUNNER_NAME:-unknown})"
-
->>>>>>> origin/main
       - name: Run the full Java suite
         id: full-suite
         working-directory: backend/java/cretas-api
@@ -247,8 +203,16 @@ jobs:
           set -uo pipefail
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           echo "MVN_USED=$MVN"
-<<<<<<< HEAD
-          export MVN
+          # 堆: runner .env 的 CRETAS_JAVA_NIGHTLY_XMX, 没有就退到 java-gate-pr 用的
+          # CRETAS_JAVA_FORK_XMX, 再没有就 3g(本机不设 = 3g, 行为不变)。
+          # 2026-10-04 加拿大实测: 写死 3g -> 只跑到 2879/12012(run 37139116569, rc=2);
+          # 6g -> 跑满 12744 但后段 Spring 上下文缓存撑爆, 9 次 OOM、lineage 三个类 10 红
+          # (run 37140487356)。全量的上下文远多于 PR 闸的子集, 所以 nightly 单独一个变量
+          # (加拿大 12g: 8g 跑满 12999 仍在尾段 OOM 出 11 红, run 37141895672; aurora 7g 跑不满,
+          # 已知限制), PR 闸维持 6g。
+          NIGHTLY_XMX="${CRETAS_JAVA_NIGHTLY_XMX:-${CRETAS_JAVA_FORK_XMX:-3g}}"
+          echo "READING: JAVA_NIGHTLY_XMX=$NIGHTLY_XMX runner=${RUNNER_NAME:-?}"
+          export MVN NIGHTLY_XMX
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash -c '
             set -euo pipefail
             env -u CRETAS_WORKFLOW_PG_VERIFY \
@@ -263,7 +227,7 @@ jobs:
                   -Dmaven.test.failure.ignore=true \
                   -Dtest=!FactoryConfigServiceImplReorderIT \
                   -Dspring.profiles.active=test \
-                  -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError -Dspring.test.context.cache.maxSize=2"
+                  -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx$NIGHTLY_XMX -XX:+HeapDumpOnOutOfMemoryError -Dspring.test.context.cache.maxSize=2"
             R10_REPORT=target/surefire-reports/TEST-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.xml
             rm -f "$R10_REPORT"
             if [[ "${CRETAS_WORKFLOW_PG_VERIFY:-}" != true ]]; then
@@ -296,7 +260,7 @@ jobs:
               -Dmaven.test.failure.ignore=true \
               -Dtest=FactoryConfigServiceImplReorderIT \
               -Dspring.profiles.active=test \
-              -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError -Dspring.test.context.cache.maxSize=2"
+              -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx$NIGHTLY_XMX -XX:+HeapDumpOnOutOfMemoryError -Dspring.test.context.cache.maxSize=2"
             test -s "$R10_REPORT" || {
               echo "R10 instrument failure: FactoryConfigServiceImplReorderIT produced no fresh XML report"
               exit 86
@@ -326,21 +290,6 @@ jobs:
             echo "::error::full-suite instrument failed before ratchet; this run is not a valid full-suite measurement"
             exit 1
           fi
-=======
-          # 堆: runner .env 的 CRETAS_JAVA_NIGHTLY_XMX, 没有就退到 java-gate-pr 用的
-          # CRETAS_JAVA_FORK_XMX, 再没有就 3g(本机不设 = 3g, 行为不变)。
-          # 2026-10-04 加拿大实测: 写死 3g -> 只跑到 2879/12012(run 37139116569, rc=2);
-          # 6g -> 跑满 12744 但后段 Spring 上下文缓存撑爆, 9 次 OOM、lineage 三个类 10 红
-          # (run 37140487356)。全量的上下文远多于 PR 闸的子集, 所以 nightly 单独一个变量
-          # (加拿大 12g: 8g 跑满 12999 仍在尾段 OOM 出 11 红, run 37141895672; aurora 7g 跑不满,
-          # 已知限制), PR 闸维持 6g。
-          NIGHTLY_XMX="${CRETAS_JAVA_NIGHTLY_XMX:-${CRETAS_JAVA_FORK_XMX:-3g}}"
-          echo "READING: JAVA_NIGHTLY_XMX=$NIGHTLY_XMX runner=${RUNNER_NAME:-?}"
-          "$MVN" -B test \
-            -Dmaven.test.failure.ignore=true \
-            -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx$NIGHTLY_XMX -XX:+HeapDumpOnOutOfMemoryError"
->>>>>>> origin/main
 
       - name: Ratchet — 已知红只许变少
         id: ratchet
