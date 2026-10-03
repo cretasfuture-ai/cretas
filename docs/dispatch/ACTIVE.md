@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: ResultFormatterServiceImpl、RichContentRenderer/richListPresentation、TimeClockScreen/currentPosition 及对应测试；F006 真机角色、权限、全流程和老板 AI 核验。验收与证据见 `archive/2026-10-03-f006-mobile-audit.md`。
+
 
 
 

@@ -292,6 +292,8 @@
       "currentTime": "当前时间",
       "currentLocation": "当前位置",
       "locating": "定位中...",
+      "locationUnavailable": "定位失败。请确认已开启定位后重试。",
+      "locationPermissionRequired": "未获得定位权限。请允许定位后重试。",
       "locationSuccess": "定位成功",
       "clockInBtn": "上班打卡",
       "clockOutBtn": "下班打卡",

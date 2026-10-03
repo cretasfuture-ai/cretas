@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
 import {
   Text,
@@ -18,6 +18,7 @@ import type { AttendanceStackParamList } from '../../types/navigation';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
 import { theme } from '../../theme';
 import { handleError } from '../../utils/errorHandler';
+import { getCurrentPositionWithTimeout } from '../../utils/currentPosition';
 
 type TimeClockNavigationProp = NativeStackNavigationProp<AttendanceStackParamList, 'TimeClockScreen'>;
 
@@ -32,12 +33,19 @@ export default function TimeClockScreen() {
   const [loadingRecords, setLoadingRecords] = useState(true);
   const [lastClockIn, setLastClockIn] = useState<any>(null);
   const [gpsLocation, setGpsLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationState, setLocationState] = useState<'loading' | 'ready' | 'denied' | 'failed'>('loading');
+  const locationRequestRef = useRef(0);
+  const locationAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     loadTodayRecords();
     loadGpsLocation();
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      locationRequestRef.current += 1;
+      locationAbortRef.current?.abort();
+    };
   }, []);
 
   const getUserId = (): number | null => {
@@ -75,18 +83,27 @@ export default function TimeClockScreen() {
   };
 
   const loadGpsLocation = async () => {
+    const request = ++locationRequestRef.current;
+    locationAbortRef.current?.abort();
+    const controller = new AbortController();
+    locationAbortRef.current = controller;
+    setGpsLocation(null);
+    setLocationState('loading');
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
+      if (request !== locationRequestRef.current) return;
       if (status !== 'granted') {
-        Alert.alert(t('attendance.timeClock.alerts.locationDenied'), t('attendance.timeClock.alerts.locationDeniedMsg'));
-        setGpsLocation(null);
+        setLocationState('denied');
         return;
       }
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const location = await getCurrentPositionWithTimeout({ accuracy: Location.Accuracy.High }, controller.signal);
+      if (request !== locationRequestRef.current) return;
       setGpsLocation(location.coords);
+      setLocationState('ready');
     } catch (error) {
-      Alert.alert(t('attendance.timeClock.alerts.locationFailed'), t('attendance.timeClock.alerts.locationFailedMsg'));
+      if (request !== locationRequestRef.current) return;
       setGpsLocation(null);
+      setLocationState('failed');
     }
   };
 
@@ -182,7 +199,7 @@ export default function TimeClockScreen() {
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title={t('attendance.timeClock.title')} />
         <Appbar.Action icon="history" onPress={() => navigation.navigate('AttendanceHistory')} />
-        <Appbar.Action icon="refresh" onPress={loadTodayRecords} />
+        <Appbar.Action icon="refresh" onPress={() => { loadTodayRecords(); loadGpsLocation(); }} />
       </Appbar.Header>
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -208,10 +225,19 @@ export default function TimeClockScreen() {
                   <Text style={styles.locationText}>Lon: {gpsLocation.longitude.toFixed(6)}</Text>
                   <Text style={styles.successText}>{t('attendance.timeClock.locationSuccess')}</Text>
                 </View>
-              ) : (
+              ) : locationState === 'loading' ? (
                 <View style={styles.row}>
                   <ActivityIndicator size="small" />
                   <Text style={{ marginLeft: 8 }}>{t('attendance.timeClock.locating')}</Text>
+                </View>
+              ) : (
+                <View>
+                  <Text style={styles.locationText}>
+                    {t(locationState === 'denied' ? 'attendance.timeClock.locationPermissionRequired' : 'attendance.timeClock.locationUnavailable')}
+                  </Text>
+                  <NeoButton testID="timeclock-location-retry" variant="outline" icon="crosshairs-gps" onPress={loadGpsLocation}>
+                    {t('common:retry')}
+                  </NeoButton>
                 </View>
               )}
             </View>
