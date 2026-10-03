@@ -114,6 +114,10 @@ export interface IntentSSEEventData {
  * 意图执行 SSE 回调函数
  */
 export interface IntentSSECallbacks {
+  /** Live actor guard, checked again after token lookup before opening transport. */
+  isCurrentRequest?: () => boolean;
+  /** Server-owned conversation id. Never generate one on the client. */
+  onSessionId?: (sessionId: string) => void;
   /** 开始处理 */
   onStart?: (message: string) => void;
   /** 缓存命中 (可跳过意图识别) */
@@ -133,7 +137,7 @@ export interface IntentSSECallbacks {
   /** 执行结果 */
   onResult?: (result: Record<string, unknown>) => void;
   /** 完成 */
-  onComplete?: (data: { status: string; cacheHit: boolean; fullContent?: string; totalLatencyMs?: number }) => void;
+  onComplete?: (data: { status: string; cacheHit: boolean; fullContent?: string; totalLatencyMs?: number; sessionId?: string }) => void;
   /** 错误 */
   onError?: (message: string) => void;
 }
@@ -1028,20 +1032,29 @@ class AIApiClient {
     callbacks: IntentSSECallbacks,
     factoryId?: string,
     entityType?: string,
-    options?: { intentCode?: string; context?: Record<string, unknown> }
+    options?: { intentCode?: string; context?: Record<string, unknown>; sessionId?: string },
+    signal?: AbortSignal,
   ): Promise<void> {
+    const abortError = () => {
+      const error = new Error('流式请求已取消');
+      error.name = 'AbortError';
+      return error;
+    };
+    const requestIsCurrent = () => !signal?.aborted && (callbacks.isCurrentRequest?.() ?? true);
+    if (!requestIsCurrent()) throw abortError();
     const url = `${this.getIntentBasePath(factoryId)}/execute/stream`;
 
     // 获取 token
     const token = await this.getAuthToken();
+    if (!requestIsCurrent()) throw abortError();
 
     // 获取完整的 API 基础 URL
     const baseUrl = await this.getBaseUrl();
+    if (!requestIsCurrent()) throw abortError();
     const fullUrl = `${baseUrl}${url}`;
 
     console.log('=== 意图执行 SSE 流式请求开始 ===');
     console.log('URL:', fullUrl);
-    console.log('UserInput:', userInput);
 
     // 后端使用 SseEmitter.event().name(eventName).data(json)
     // 对应 SSE 协议: event: eventName\ndata: json\n\n
@@ -1050,6 +1063,7 @@ class AIApiClient {
       | 'progress' | 'intent_recognized' | 'executing' | 'result' | 'complete' | 'error';
 
     return new Promise<void>((resolve, reject) => {
+      let settled = false;
       const es = new EventSource<SSEEventNames>(fullUrl, {
         headers: {
           'Content-Type': 'application/json',
@@ -1060,12 +1074,37 @@ class AIApiClient {
         // intentCode + context: 澄清按钮点选后带着「原话 + 选中的意图」回来 (后端跳过识别、记录点选)
         body: JSON.stringify({
           userInput,
+          ...(options?.sessionId && { sessionId: options.sessionId }),
           ...(entityType && { entityType }),
           ...(options?.intentCode && { intentCode: options.intentCode }),
           ...(options?.context && { context: options.context }),
         }),
         pollingInterval: 0,
       });
+
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', onAbort);
+        es.removeAllEventListeners();
+        es.close();
+        if (error) reject(error);
+        else resolve();
+      };
+      const onAbort = () => finish(abortError());
+      signal?.addEventListener('abort', onAbort);
+      if (!requestIsCurrent()) {
+        onAbort();
+        return;
+      }
+      const ignoreEvent = () => {
+        if (settled) return true;
+        if (!requestIsCurrent()) {
+          onAbort();
+          return true;
+        }
+        return false;
+      };
 
       const safeParseJSON = (data: string | null | undefined): Record<string, unknown> | null => {
         if (!data) return null;
@@ -1074,12 +1113,15 @@ class AIApiClient {
 
       // 1. start — 开始处理
       es.addEventListener('start', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
+        if (typeof d?.sessionId === 'string' && d.sessionId) callbacks.onSessionId?.(d.sessionId);
         callbacks.onStart?.(d?.message as string || '开始处理...');
       });
 
       // 2. cache_hit — 缓存命中
       es.addEventListener('cache_hit', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         if (d) {
           callbacks.onCacheHit?.({
@@ -1091,12 +1133,14 @@ class AIApiClient {
 
       // 3. cache_miss — 缓存未命中
       es.addEventListener('cache_miss', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         callbacks.onCacheMiss?.((d?.latencyMs as number) || 0);
       });
 
       // 4. progress — 处理进度（阶段信息）
       es.addEventListener('progress', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         if (d) {
           callbacks.onProgress?.({
@@ -1108,6 +1152,7 @@ class AIApiClient {
 
       // 5. intent_recognized — 意图识别完成
       es.addEventListener('intent_recognized', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         if (d) {
           callbacks.onIntentRecognized?.({
@@ -1120,12 +1165,14 @@ class AIApiClient {
 
       // 6. executing — 开始执行
       es.addEventListener('executing', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         callbacks.onExecuting?.((d?.intentName as string) || '');
       });
 
       // 7. meta — D3 流式模式元数据
       es.addEventListener('meta', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         if (d) {
           callbacks.onMeta?.({
@@ -1138,6 +1185,7 @@ class AIApiClient {
 
       // 8. token — D3 流式文本 token（逐 token 推送）
       es.addEventListener('token', (event) => {
+        if (ignoreEvent()) return;
         // token 事件的 data 是 JSON 编码的字符串（带引号），需要解析
         if (event.data) {
           try {
@@ -1154,34 +1202,44 @@ class AIApiClient {
 
       // 9. result — 执行结果
       es.addEventListener('result', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
         if (d) {
+          if (typeof d.sessionId === 'string' && d.sessionId) callbacks.onSessionId?.(d.sessionId);
           callbacks.onResult?.(d);
         }
       });
 
       // 10. complete — 处理完成
       es.addEventListener('complete', (event) => {
+        if (ignoreEvent()) return;
         const d = safeParseJSON(event.data);
-        callbacks.onComplete?.({
-          status: (d?.status as string) || 'SUCCESS',
-          cacheHit: (d?.cacheHit as boolean) || false,
-          fullContent: d?.fullContent as string | undefined,
-          totalLatencyMs: d?.totalLatencyMs as number | undefined,
-        });
-        es.close();
-        resolve();
+        try {
+          callbacks.onComplete?.({
+            status: (d?.status as string) || 'SUCCESS',
+            cacheHit: (d?.cacheHit as boolean) || false,
+            fullContent: d?.fullContent as string | undefined,
+            totalLatencyMs: d?.totalLatencyMs as number | undefined,
+            sessionId: d?.sessionId as string | undefined,
+          });
+          if (typeof d?.sessionId === 'string' && d.sessionId) callbacks.onSessionId?.(d.sessionId);
+        } finally {
+          finish();
+        }
       });
 
       // 11. error — 错误
       es.addEventListener('error', (event) => {
+        if (ignoreEvent()) return;
         // SSE error 事件可能是连接错误（无 data），也可能是后端发送的 error 事件（有 data）
         const d = safeParseJSON('data' in event ? (event as { data?: string }).data : undefined);
         const errorMessage = d?.message as string
           || ('message' in event && typeof event.message === 'string' ? event.message : '流式请求失败');
-        callbacks.onError?.(errorMessage);
-        es.close();
-        reject(new Error(errorMessage));
+        try {
+          callbacks.onError?.(errorMessage);
+        } finally {
+          finish(new Error(errorMessage));
+        }
       });
     });
   }

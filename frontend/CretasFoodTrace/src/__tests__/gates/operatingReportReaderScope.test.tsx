@@ -63,3 +63,11 @@ it('clears populated list summaries on a reader change and gives a retry action 
   fireEvent.press(view.getAllByText('重新加载')[0]);
   await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
 });
+
+it('shows a readable Markdown preview without hiding zero or negative business values', async () => {
+  list.mockResolvedValueOnce({ reports: [{ reportId: 71, reportType: 'daily', title: '日报 · 2026-10-03 00:00:00', createdAt: '2026-10-03', summary: '# 经营分析报告\n\n## 销售\n- **订单数**：0单\n- 毛利：-¥1.25\n- [取数来源](https://example.test/source)' }], total: 1 });
+  const view = render(<AIReportScreen />);
+  await waitFor(() => expect(view.getByText('日报 · 2026-10-03')).toBeTruthy());
+  expect(view.getByText('经营分析报告 销售 订单数：0单 毛利：-¥1.25 取数来源')).toBeTruthy();
+  expect(view.queryByText(/00:00:00/)).toBeNull();
+});

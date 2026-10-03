@@ -13,13 +13,16 @@ const mockSaveCheckpoint = jest.fn();
 const mockClearCheckpoint = jest.fn();
 
 jest.mock('../../../store/authStore', () => ({
-  useAuthStore: (selector?: (state: any) => unknown) => {
-    const state = {
-      user: mockUser,
-      getUserRole: () => mockRole,
-    };
-    return selector ? selector(state) : state;
-  },
+  useAuthStore: Object.assign(
+    (selector?: (state: any) => unknown) => {
+      const state = {
+        user: mockUser,
+        getUserRole: () => mockRole,
+      };
+      return selector ? selector(state) : state;
+    },
+    { getState: () => ({ user: mockUser, getUserRole: () => mockRole }) },
+  ),
 }));
 
 jest.mock('../../../services/api/restaurantAgentRuns', () => ({
@@ -595,7 +598,7 @@ describe('AIChatScreen restaurant agent run', () => {
     expect(mockStartRun).not.toHaveBeenCalled();
   });
 
-  it('fails free chat explicitly when factory identity is missing and never uses F001', async () => {
+  it('refuses free chat when factory identity is missing and never uses F001', async () => {
     mockUser = restaurantUser('');
     mockRole = 'restaurant_owner';
     const screen = render(<AIChatScreen />);
@@ -605,7 +608,7 @@ describe('AIChatScreen restaurant agent run', () => {
       fireEvent.press(screen.getByTestId('ai-chat-send-btn'));
     });
 
-    await waitFor(() => expect(screen.getByText('当前账号缺少工厂标识，请重新登录')).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText('查询今天经营情况')).toBeNull());
     expect(mockExecuteIntentStream).not.toHaveBeenCalled();
   });
 });

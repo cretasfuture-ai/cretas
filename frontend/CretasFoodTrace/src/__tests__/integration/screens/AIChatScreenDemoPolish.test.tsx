@@ -28,10 +28,13 @@ function lookup(obj: unknown, dotted: string): string | undefined {
 }
 
 jest.mock('../../../store/authStore', () => ({
-  useAuthStore: (selector?: (state: any) => unknown) => {
-    const state = { user: mockUser, getUserRole: () => mockRole };
-    return selector ? selector(state) : state;
-  },
+  useAuthStore: Object.assign(
+    (selector?: (state: any) => unknown) => {
+      const state = { user: mockUser, getUserRole: () => mockRole };
+      return selector ? selector(state) : state;
+    },
+    { getState: () => ({ user: mockUser, getUserRole: () => mockRole }) },
+  ),
 }));
 jest.mock('../../../services/api/aiApiClient', () => ({
   aiApiClient: { executeIntentStream: (...args: unknown[]) => mockExecuteIntentStream(...args) },
@@ -175,6 +178,7 @@ describe('AIChatScreen 第五幕 polish', () => {
       await act(async () => { fireEvent.press(screen.getByText('谁 DNA 不匹配')); });
       expect(mockExecuteIntentStream).toHaveBeenCalledWith(
         '哪一头牛的 DNA 比对不匹配', expect.any(Object), 'CATTLE_3701_001', undefined,
+        undefined, expect.any(AbortSignal),
       );
       expect(mockDispatch).not.toHaveBeenCalled();
     });

@@ -6,6 +6,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchaseApiClient';
 import { useAuthStore } from '../../../store/authStore';
+import { getFactoryId } from '../../../types/auth';
 import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { RowActionBottomSheet, StickyFooterSummary } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
@@ -35,6 +36,7 @@ function PurchaseOrderListForActor() {
   const navigation = useNavigation<Nav>();
   const { user } = useAuthStore();
   const isOperationsReadOnly = isMobileBusinessObserver(user);
+  const canOpenAIWorkspace = Boolean(navigation.getParent?.()?.getState().routeNames.includes('FAAITab'));
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -117,16 +119,14 @@ function PurchaseOrderListForActor() {
     void refreshSummary();
   };
 
-  const handleAction = useCallback(async (orderId: string, action: string) => {
+  const handleAction = useCallback(async (orderId: string, action: 'submit' | 'cancel') => {
     const currentUser = useAuthStore.getState().user;
     if (!focused.current || !currentUser || currentUser !== user || isMobileBusinessObserver(currentUser)) return;
     try {
       let res;
       switch (action) {
-        case 'submit': res = await purchaseApiClient.submitOrder(orderId); break;
-        case 'approve': res = await purchaseApiClient.approveOrder(orderId); break;
-        case 'reject': res = await purchaseApiClient.rejectOrder(orderId); break;
-        case 'cancel': res = await purchaseApiClient.cancelOrder(orderId); break;
+        case 'submit': res = await purchaseApiClient.submitOrder(orderId, getFactoryId(currentUser) || undefined); break;
+        case 'cancel': res = await purchaseApiClient.cancelOrder(orderId, getFactoryId(currentUser) || undefined); break;
       }
       if (res?.success && focused.current && currentUser === useAuthStore.getState().user) {
         Alert.alert('成功', '操作成功');
@@ -138,20 +138,33 @@ function PurchaseOrderListForActor() {
     }
   }, [user]);
 
+  const confirmAction = useCallback((entity: RowContext, action: 'submit' | 'cancel') => {
+    const actor = useAuthStore.getState().user;
+    if (!focused.current || !actor || actor !== user || isMobileBusinessObserver(actor)) return;
+    const order = orders.find(row => row.id === entity.id && row.factoryId === getFactoryId(actor));
+    if (!order) return;
+    Alert.alert(action === 'submit' ? '提交采购订单' : '取消采购订单',
+      action === 'submit' ? `确认提交 ${order.orderNumber}？提交后进入审批流程。`
+        : `确认取消 ${order.orderNumber}？取消后不能继续收货。`,
+      [{ text: '返回', style: 'cancel' }, { text: action === 'submit' ? '确认提交' : '确认取消',
+        style: action === 'cancel' ? 'destructive' : 'default',
+        onPress: () => { void handleAction(entity.id, action); } }]);
+  }, [user, orders, handleAction]);
+
   const handlers = useMemo(() => ({
     'view-detail': (e: RowContext) => navigation.navigate('PurchaseOrderDetail', { orderId: e.id }),
-    submit: (e: RowContext) => handleAction(e.id, 'submit'),
-    approve: (e: RowContext) => handleAction(e.id, 'approve'),
-    reject: (e: RowContext) => handleAction(e.id, 'reject'),
-    cancel: (e: RowContext) => handleAction(e.id, 'cancel'),
+    submit: (e: RowContext) => confirmAction(e, 'submit'),
+    cancel: (e: RowContext) => confirmAction(e, 'cancel'),
     'print-pdf': (e: RowContext) => { void safePrint('purchase-order', e.id); },
-    copy: (e: RowContext) => Alert.alert('复制', `复制单据 ${e.id} (待接 API)`),
-  }), [navigation, handleAction]);
+  }), [navigation, confirmAction]);
 
   const sheetCtx: RowContext = selectedOrder
     ? { status: selectedOrder.status, id: selectedOrder.id, canEdit: !isOperationsReadOnly }
     : { status: '', id: '', canEdit: !isOperationsReadOnly };
-  const rowActions = useRowActions('purchaseOrder', sheetCtx, { handlers });
+  // Shared configuration also describes desktop actions. Only expose wired
+  // mobile actions; missing edit/delete handlers must never look executable.
+  const rowActions = useRowActions('purchaseOrder', sheetCtx, { handlers })
+    .filter(action => Boolean(action.onPress));
 
   const openSheet = (order: PurchaseOrder) => { setSelectedOrder(order); setActionSheetVisible(true); };
 
@@ -180,14 +193,8 @@ function PurchaseOrderListForActor() {
           </View>
           {!isOperationsReadOnly && item.status === 'DRAFT' && (
             <View style={styles.actions}>
-              <Button mode="contained" compact onPress={() => handleAction(item.id, 'submit')} style={styles.actionBtn}>提交</Button>
-              <Button mode="outlined" compact onPress={() => handleAction(item.id, 'cancel')} style={styles.actionBtn}>取消</Button>
-            </View>
-          )}
-          {!isOperationsReadOnly && item.status === 'SUBMITTED' && (
-            <View style={styles.actions}>
-              <Button mode="contained" compact onPress={() => handleAction(item.id, 'approve')} style={styles.actionBtn}>审批</Button>
-              <Button mode="outlined" compact textColor="#f56c6c" onPress={() => handleAction(item.id, 'reject')} style={styles.actionBtn}>驳回</Button>
+              <Button mode="contained" compact onPress={() => confirmAction(item, 'submit')} style={styles.actionBtn}>提交</Button>
+              <Button mode="outlined" compact onPress={() => confirmAction(item, 'cancel')} style={styles.actionBtn}>取消</Button>
             </View>
           )}
         </Card.Content>
@@ -200,7 +207,7 @@ function PurchaseOrderListForActor() {
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="采购订单" />
-        {!isOperationsReadOnly && (
+        {!isOperationsReadOnly && canOpenAIWorkspace && (
           <Appbar.Action icon="robot-outline" onPress={() => navigation.dispatch(CommonActions.navigate('FAAITab', { screen: 'AIChat', params: { entityType: 'PURCHASE', initialMessage: '我要创建采购订单' } }))} />
         )}
         {!isOperationsReadOnly && (
@@ -270,7 +277,7 @@ function PurchaseOrderListForActor() {
       {!isOperationsReadOnly && <StickyFooterSummary
         stats={summary?.stats ?? []}
         loading={summary == null && !loading}
-        onAIAnalyze={() =>
+        onAIAnalyze={canOpenAIWorkspace ? () =>
           navigation.dispatch(CommonActions.navigate('FAAITab', {
             screen: 'AIChat',
             params: {
@@ -278,7 +285,7 @@ function PurchaseOrderListForActor() {
               initialMessage: `分析当前采购单列表${formatSummaryForAI(summary, { filter: { status: statusFilter } })}`,
             },
           }))
-        }
+        : undefined}
       />}
       </View>
       {!isOperationsReadOnly && <FAB
@@ -293,9 +300,9 @@ function PurchaseOrderListForActor() {
         onClose={() => setActionSheetVisible(false)}
         actions={rowActions}
         title={selectedOrder ? `采购单 ${selectedOrder.orderNumber}` : ''}
-        aiTriggerEnabled
+        aiTriggerEnabled={canOpenAIWorkspace}
         onAITrigger={() => {
-          if (!selectedOrder) return;
+          if (!selectedOrder || !canOpenAIWorkspace) return;
           navigation.dispatch(CommonActions.navigate('FAAITab', {
             screen: 'AIChat',
             params: { entityType: 'PURCHASE', initialMessage: `${selectedOrder.orderNumber}: ` },

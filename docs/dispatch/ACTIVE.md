@@ -8,7 +8,9 @@
 
 - `F006-MOBILE-R11-TIME-ACCESS-20261004` — `review` — Owner: Codex/root — Base `27756a50e7` — scope仅TimeStatsController与新ReadAccessContractTest；汇总走既有HR/module门禁，本人考勤保留，拒绝跨人越权。独立WT/target。详见archive/2026-10-04-f006-mobile-r11-time-access.md。
 - `F006-MOBILE-R9-TIME-STATS-20261004` — `review` — Owner: Codex/root — Base `d0db852ef5` — 两文件scope真实工时/去模拟输出，15项目标测试通过；源已冻结，尚未合入/发布。详见archive/2026-10-04-f006-mobile-r9-time-stats.md。
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `3509acf303` — R1 #876、R8 #891、R3/R4 #892已合/Java已发布；18角色71页仅L1。R2/R6/R7/R9、全角色深流程与Mini手机验收继续。本行不锁已归档源码scope。
+
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
+
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
 - `CRETAS-ORG-20261003-G1` — `blocked` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `35e017dc526255c39956195a11b06b6c93916a31` — Java/Web固定包已验SHA，Web795资产一致；未安装，真实issuer/期限/身份与新QA资格仍待验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。

@@ -242,6 +242,20 @@ const SCENE_CONFIG: Record<string, {
 };
 
 export default function AIChatScreen() {
+  const { user } = useAuthStore();
+  const getUserRole = useAuthStore((state) => state.getUserRole);
+  const factoryId = user?.userType === 'factory' ? user.factoryUser.factoryId : '';
+  const actorKey = `${factoryId}|${String(user?.id ?? '')}|${getUserRole() || 'factory_super_admin'}`;
+  const actorRef = useRef({ key: actorKey, generation: 0 });
+  if (actorRef.current.key !== actorKey) {
+    actorRef.current = { key: actorKey, generation: actorRef.current.generation + 1 };
+  }
+  // Remount synchronously so old messages, typed text and voice previews never
+  // render for a different authenticated actor while effect cleanup is pending.
+  return <AIChatScreenContent key={`${actorKey}|${actorRef.current.generation}`} />;
+}
+
+function AIChatScreenContent() {
   const navigation = useNavigation();
   const route = useRoute<AIChatRouteProp>();
   const { user } = useAuthStore();
@@ -308,14 +322,47 @@ export default function AIChatScreen() {
   const resolvedUserRole = getUserRole();
   const userRole = resolvedUserRole || 'factory_super_admin';
   const currentFactoryId = user?.userType === 'factory' ? user.factoryUser.factoryId : '';
+  const identityKey = `${currentFactoryId}|${String(user?.id ?? '')}|${userRole}`;
+  const sessionIdentityRef = useRef({ key: identityKey, generation: 0 });
+  // Invalidate callbacks during render, before an effect can clear the old UI.
+  if (sessionIdentityRef.current.key !== identityKey) {
+    sessionIdentityRef.current = {
+      key: identityKey,
+      generation: sessionIdentityRef.current.generation + 1,
+    };
+  }
+  const renderIdentityGeneration = sessionIdentityRef.current.generation;
+  const isCurrentActor = () => {
+    const live = useAuthStore.getState();
+    const liveUser = live.user;
+    const liveFactoryId = liveUser?.userType === 'factory' ? liveUser.factoryUser.factoryId : '';
+    const liveKey = `${liveFactoryId}|${String(liveUser?.id ?? '')}|${live.getUserRole() || 'factory_super_admin'}`;
+    return isMountedRef.current && liveKey === identityKey
+      && sessionIdentityRef.current.key === identityKey
+      && sessionIdentityRef.current.generation === renderIdentityGeneration;
+  };
+  useEffect(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    ++previewGenerationRef.current;
+    if (previewTimer.current) clearTimeout(previewTimer.current);
+    previewTimer.current = null;
+    sendPendingRef.current = false;
+    setSessionId(null);
+    setMessages([]);
+    setInputText('');
+    setPreviewText('');
+    setStreamStatus(null);
+    setIsLoading(false);
+  }, [identityKey]);
   // P1: Voice result handler — show preview then auto-send
   const handleVoiceResult = (text: string) => {
-    if (!isMountedRef.current) return;
+    if (!isCurrentActor()) return;
     if (previewTimer.current) clearTimeout(previewTimer.current);
     const generation = ++previewGenerationRef.current;
     setPreviewText(text);
     previewTimer.current = setTimeout(() => {
-      if (!isMountedRef.current || previewGenerationRef.current !== generation) return;
+      if (!isCurrentActor() || previewGenerationRef.current !== generation) return;
       previewTimer.current = null;
       handleSend(text);
       setPreviewText('');
@@ -398,6 +445,8 @@ export default function AIChatScreen() {
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      sendPendingRef.current = false;
     };
   }, []);
 
@@ -469,7 +518,14 @@ export default function AIChatScreen() {
     sendOptions?: { displayText?: string; intentCode?: string; context?: Record<string, unknown> },
   ) => {
     const messageText = text || inputText.trim();
-    if (!messageText || isLoading || sendPendingRef.current || !isMountedRef.current) return;
+    if (!isCurrentActor() || !currentFactoryId || !messageText || isLoading || sendPendingRef.current) return;
+
+    const requestIdentityGeneration = renderIdentityGeneration;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const isCurrentStream = () => isCurrentActor()
+      && sessionIdentityRef.current.generation === requestIdentityGeneration
+      && !controller.signal.aborted;
 
     const startTime = Date.now();
     const assistantMessageId = generateMessageId();
@@ -509,33 +565,37 @@ export default function AIChatScreen() {
       if (!factoryId) {
         throw new Error('当前账号缺少工厂标识，请重新登录');
       }
-
       const callbacks: IntentSSECallbacks = {
+        isCurrentRequest: isCurrentStream,
+        onSessionId: (serverSessionId) => {
+          if (!isCurrentStream()) return;
+          setSessionId(serverSessionId);
+        },
         onStart: (message) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           setStreamStatus(message);
           console.log('[AI Stream] Start:', message);
         },
 
         onCacheHit: (data) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           setStreamStatus('命中缓存，快速响应...');
           console.log('[AI Stream] Cache hit:', data.cacheType, data.latencyMs + 'ms');
         },
 
         onCacheMiss: (latencyMs) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           console.log('[AI Stream] Cache miss:', latencyMs + 'ms');
         },
 
         onProgress: (data) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           setStreamStatus(data.message || data.stage);
           console.log('[AI Stream] Progress:', data.stage, data.message);
         },
 
         onIntentRecognized: (data) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           setStreamStatus(`识别到: ${data.intentName}`);
           console.log('[AI Stream] Intent:', data.intentCode, data.confidence);
           // 更新消息的意图信息
@@ -549,13 +609,13 @@ export default function AIChatScreen() {
         },
 
         onExecuting: (intentName) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           setStreamStatus(`正在执行: ${intentName}...`);
           console.log('[AI Stream] Executing:', intentName);
         },
 
         onMeta: (data) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           console.log('[AI Stream] Meta:', data.model, data.questionType);
           // 更新分析模式
           setMessages((prev) =>
@@ -571,7 +631,7 @@ export default function AIChatScreen() {
         },
 
         onToken: (token) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           // 逐 token 实时显示 — 这是真正的流式！
           streamedContent += token;
           setStreamStatus(null); // 收到内容后隐藏状态文本
@@ -586,7 +646,7 @@ export default function AIChatScreen() {
         },
 
         onResult: (result) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           resultData = result;
           console.log('[AI Stream] Result status:', result.status);
 
@@ -713,7 +773,7 @@ export default function AIChatScreen() {
         },
 
         onComplete: (data) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           console.log('[AI Stream] Complete:', data.status, data.totalLatencyMs + 'ms');
 
           // 如果 complete 带有 fullContent 且流式没收到内容，用 fullContent
@@ -754,7 +814,7 @@ export default function AIChatScreen() {
         },
 
         onError: (message) => {
-          if (!isMountedRef.current) return;
+          if (!isCurrentStream()) return;
           console.error('[AI Stream] Error:', message);
           setMessages((prev) =>
             prev.map((msg) =>
@@ -774,19 +834,22 @@ export default function AIChatScreen() {
         },
       };
 
-      // 这一句之前的几轮 (messages 是本次发送前的会话); 第一句话没有上下文, 照旧 4 参调用
+      // 最近对话只辅助识别；分页来源继续由服务端归属会话决定。
       const recentTurns = buildRecentTurns(messages);
-      if (sendOptions?.intentCode || recentTurns.length > 0) {
+      if (sendOptions?.intentCode || sendOptions?.context || recentTurns.length > 0 || sessionId) {
         await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, {
-          ...(sendOptions?.intentCode && { intentCode: sendOptions.intentCode }),
-          context: { ...(sendOptions?.context || {}), ...(recentTurns.length > 0 && { recentTurns }) },
-        });
+          ...(sendOptions?.intentCode ? { intentCode: sendOptions.intentCode } : {}),
+          ...((sendOptions?.context || recentTurns.length > 0) ? {
+            context: { ...(sendOptions?.context || {}), ...(recentTurns.length > 0 ? { recentTurns } : {}) },
+          } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        }, controller.signal);
       } else {
-        await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType);
+        await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, undefined, controller.signal);
       }
 
     } catch (error) {
-      if (!isMountedRef.current) return;
+      if (!isCurrentStream()) return;
       console.error('AI 对话失败:', error);
 
       // 如果流式已经有内容，保留已有内容
@@ -812,8 +875,11 @@ export default function AIChatScreen() {
       setStreamStatus(null);
       setIsLoading(false);
     } finally {
-      sendPendingRef.current = false;
-      if (isMountedRef.current) setIsLoading(false);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      if (isCurrentStream()) {
+        sendPendingRef.current = false;
+        setIsLoading(false);
+      }
     }
   };
 

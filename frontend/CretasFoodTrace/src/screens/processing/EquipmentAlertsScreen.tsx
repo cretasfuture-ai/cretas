@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
 import {
   Text,
@@ -23,6 +23,9 @@ import { appAlert } from '../../components/ui/AppDialog';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { useTranslation } from 'react-i18next';
+import { getFactoryId, getUserRole } from '../../types/auth';
+import type { User } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 // Create EquipmentAlerts context logger
 const equipmentAlertsLogger = logger.createContextLogger('EquipmentAlerts');
@@ -56,6 +59,18 @@ interface EquipmentAlert {
   resolvedBy?: string | number;
 }
 
+type AlertWriteContext = {
+  actorKey: string;
+  factoryId: string;
+  userId: number;
+  alert: EquipmentAlert;
+};
+
+const getActorKey = (user: User | null): string => {
+  const factoryId = getFactoryId(user) || 'none';
+  return `${user?.id ?? 'none'}:${factoryId}:${getUserRole(user)}`;
+};
+
 /**
  * Equipment Alerts System Screen
  * P1-004: Equipment Alerts System
@@ -73,9 +88,19 @@ export default function EquipmentAlertsScreen() {
   const route = useRoute<EquipmentAlertsScreenRouteProp>();
   const { equipmentId } = route.params || {};
 
-  // Get user context
-  const { user } = useAuthStore();
-  const factoryId = user?.factoryId || user?.factoryUser?.factoryId;
+  // Get user context. Update the identity during render so late callbacks are
+  // invalidated before a following effect can start another request.
+  const user = useAuthStore((state) => state.user);
+  const actorKey = getActorKey(user);
+  const actorRef = useRef({ actorKey, generation: 0 });
+  const requestSequenceRef = useRef(0);
+  const loadedAlertsRef = useRef<EquipmentAlert[]>([]);
+  const [alertsActorKey, setAlertsActorKey] = useState<string | null>(null);
+  if (actorRef.current.actorKey !== actorKey) {
+    actorRef.current = { actorKey, generation: actorRef.current.generation + 1 };
+    requestSequenceRef.current += 1;
+    loadedAlertsRef.current = [];
+  }
 
   // Data state
   const [alerts, setAlerts] = useState<EquipmentAlert[]>([]);
@@ -86,25 +111,58 @@ export default function EquipmentAlertsScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [levelFilter, setLevelFilter] = useState<AlertLevel | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<AlertStatus | 'all'>('active');
+  const canReadEquipment = hasModulePermission(user, 'equipment', 'read');
+  const canWriteEquipment = canReadEquipment && hasModulePermission(user, 'equipment', 'write');
+  const visibleAlerts = alertsActorKey === actorKey && canReadEquipment ? alerts : [];
+  const readLoadKey = `${actorKey}:${canReadEquipment ? 'read' : 'denied'}:${equipmentId ?? 'all'}:${levelFilter}:${statusFilter}`;
+  const readLoadKeyRef = useRef(readLoadKey);
+  if (readLoadKeyRef.current !== readLoadKey) {
+    readLoadKeyRef.current = readLoadKey;
+    requestSequenceRef.current += 1;
+  }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchAlerts();
-    }, [equipmentId, levelFilter, statusFilter])
-  );
+  useEffect(() => {
+    setAlerts([]);
+    setAlertsActorKey(null);
+    loadedAlertsRef.current = [];
+    setSearchQuery('');
+    setLevelFilter('all');
+    setStatusFilter('active');
+    setRefreshing(false);
+  }, [actorKey]);
 
-  const fetchAlerts = async () => {
+  const fetchAlerts = useCallback(async () => {
+    const requestUser = useAuthStore.getState().user;
+    const requestActorKey = getActorKey(requestUser);
+    const requestFactoryId = getFactoryId(requestUser);
+    const requestLoadKey = readLoadKey;
+    const requestSequence = ++requestSequenceRef.current;
+    const isCurrentRequest = () =>
+      actorRef.current.actorKey === requestActorKey &&
+      readLoadKeyRef.current === requestLoadKey &&
+      requestSequenceRef.current === requestSequence;
+
+    if (!requestFactoryId || !hasModulePermission(requestUser, 'equipment', 'read')) {
+      if (isCurrentRequest()) {
+        setAlerts([]);
+        setAlertsActorKey(requestActorKey);
+        loadedAlertsRef.current = [];
+        setLoading(false);
+      }
+      return;
+    }
+
     setLoading(true);
     try {
       // API integration - GET /equipment/alerts (with pagination and filtering)
       equipmentAlertsLogger.debug('Fetching equipment alerts list', {
-        factoryId,
+        factoryId: requestFactoryId,
         statusFilter,
         equipmentId,
       });
 
       const response = await alertApiClient.getEquipmentAlerts({
-        factoryId,
+        factoryId: requestFactoryId,
         status: statusFilter !== 'all' ? (statusFilter.toUpperCase() as 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED') : undefined,
         page: 1,
         size: 100,
@@ -118,7 +176,9 @@ export default function EquipmentAlertsScreen() {
       });
 
       // Transform API response to local format
-      const transformedAlerts: EquipmentAlert[] = alertsContent.map((alert) => ({
+      const transformedAlerts: EquipmentAlert[] = alertsContent
+        .filter((alert) => alert.factoryId === requestFactoryId)
+        .map((alert) => ({
         id: String(alert.id),
         equipmentId: String(alert.equipmentId),
         equipmentName: alert.equipmentName ?? 'Unknown Equipment',
@@ -132,7 +192,7 @@ export default function EquipmentAlertsScreen() {
         acknowledgedBy: alert.acknowledgedBy,
         resolvedAt: alert.resolvedAt ? new Date(alert.resolvedAt) : undefined,
         resolvedBy: alert.resolvedBy ?? undefined,
-      }));
+        }));
 
       // Filter by equipmentId if provided
       let filteredAlerts = equipmentId
@@ -144,45 +204,103 @@ export default function EquipmentAlertsScreen() {
         filteredAlerts = filteredAlerts.filter((a) => a.level === levelFilter);
       }
 
+      if (!isCurrentRequest()) return;
       setAlerts(filteredAlerts);
+      setAlertsActorKey(requestActorKey);
+      loadedAlertsRef.current = filteredAlerts;
 
     } catch (error) {
+      if (!isCurrentRequest()) return;
       equipmentAlertsLogger.error('Failed to load equipment alerts', error, {
-        factoryId,
+        factoryId: requestFactoryId,
         statusFilter,
       });
       appAlert(t('equipmentAlerts.messages.loadFailed'), getErrorMsg(error) || t('equipmentAlerts.messages.loadError'));
       setAlerts([]);
+      setAlertsActorKey(requestActorKey);
+      loadedAlertsRef.current = [];
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
+  }, [actorKey, equipmentId, levelFilter, statusFilter, readLoadKey, t]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchAlerts();
+    }, [fetchAlerts])
+  );
+
+  const getLiveWriteContext = useCallback((alertId: string, statuses: AlertStatus[]): AlertWriteContext | null => {
+    const liveUser = useAuthStore.getState().user;
+    const liveActorKey = getActorKey(liveUser);
+    const liveFactoryId = getFactoryId(liveUser);
+    const alert = loadedAlertsRef.current.find((item) => item.id === alertId);
+    if (
+      !liveUser ||
+      liveActorKey !== actorRef.current.actorKey ||
+      !liveFactoryId ||
+      !hasModulePermission(liveUser, 'equipment', 'read') ||
+      !hasModulePermission(liveUser, 'equipment', 'write') ||
+      !alert ||
+      !statuses.includes(alert.status)
+    ) {
+      return null;
+    }
+    return { actorKey: liveActorKey, factoryId: liveFactoryId, userId: liveUser.id, alert };
+  }, []);
+
+  const isLiveWriteContext = (context: AlertWriteContext): boolean => {
+    const liveUser = useAuthStore.getState().user;
+    return (
+      getActorKey(liveUser) === context.actorKey &&
+      actorRef.current.actorKey === context.actorKey &&
+      getFactoryId(liveUser) === context.factoryId &&
+      hasModulePermission(liveUser, 'equipment', 'read') &&
+      hasModulePermission(liveUser, 'equipment', 'write') &&
+      loadedAlertsRef.current.some(
+        (item) => item.id === context.alert.id && item.status === context.alert.status
+      )
+    );
   };
 
   const handleRefresh = async () => {
+    const refreshActorKey = getActorKey(useAuthStore.getState().user);
+    if (refreshActorKey !== actorRef.current.actorKey) return;
     setRefreshing(true);
     await fetchAlerts();
-    setRefreshing(false);
+    if (
+      refreshActorKey === actorRef.current.actorKey &&
+      getActorKey(useAuthStore.getState().user) === refreshActorKey
+    ) {
+      setRefreshing(false);
+    }
   };
 
   const handleAlertPress = (alert: EquipmentAlert) => {
-    navigation.navigate('EquipmentDetail', { equipmentId: parseInt(alert.equipmentId, 10) });
+    const liveUser = useAuthStore.getState().user;
+    const canonicalAlert = loadedAlertsRef.current.find((item) => item.id === alert.id);
+    if (
+      getActorKey(liveUser) !== actorRef.current.actorKey ||
+      !getFactoryId(liveUser) ||
+      !hasModulePermission(liveUser, 'equipment', 'read') ||
+      !canonicalAlert
+    ) return;
+    navigation.navigate('EquipmentDetail', { equipmentId: parseInt(canonicalAlert.equipmentId, 10) });
   };
 
   const handleAcknowledge = async (alertId: string) => {
+    const context = getLiveWriteContext(alertId, ['active']);
+    if (!context) return;
     try {
       equipmentAlertsLogger.debug('Acknowledging alert', { alertId });
 
-      if (!factoryId) {
-        appAlert(t('equipmentAlerts.messages.factoryIdError'), t('equipmentAlerts.messages.factoryIdMessage'));
-        return;
-      }
-
       const response = await alertApiClient.acknowledgeAlert({
-        factoryId,
+        factoryId: context.factoryId,
         alertId,
-        acknowledgedBy: user?.id,
+        acknowledgedBy: context.userId,
       });
 
+      if (!isLiveWriteContext(context)) return;
       if (response.success) {
         equipmentAlertsLogger.info('Alert acknowledged successfully', { alertId });
         appAlert(t('equipmentAlerts.messages.acknowledgeSuccess'), t('equipmentAlerts.messages.acknowledgeMessage'));
@@ -190,6 +308,7 @@ export default function EquipmentAlertsScreen() {
         await fetchAlerts();
       }
     } catch (error) {
+      if (!isLiveWriteContext(context)) return;
       equipmentAlertsLogger.error('Failed to acknowledge alert', error, { alertId });
       const errorMessage = getErrorMsg(error) || t('equipmentAlerts.messages.acknowledgeError');
       appAlert(t('equipmentAlerts.messages.acknowledgeFailed'), errorMessage);
@@ -197,6 +316,8 @@ export default function EquipmentAlertsScreen() {
   };
 
   const handleResolve = async (alertId: string) => {
+    const context = getLiveWriteContext(alertId, ['active', 'acknowledged']);
+    if (!context) return;
     appAlert(
       t('equipmentAlerts.messages.resolveTitle'),
       t('equipmentAlerts.messages.resolvePrompt'),
@@ -208,20 +329,18 @@ export default function EquipmentAlertsScreen() {
         {
           text: t('common.confirm'),
           onPress: async () => {
+            const currentContext = getLiveWriteContext(alertId, ['active', 'acknowledged']);
+            if (!currentContext || currentContext.actorKey !== context.actorKey) return;
             try {
               equipmentAlertsLogger.debug('Resolving alert', { alertId });
 
-              if (!factoryId) {
-                appAlert(t('equipmentAlerts.messages.factoryIdError'), t('equipmentAlerts.messages.factoryIdMessage'));
-                return;
-              }
-
               const response = await alertApiClient.resolveAlert({
-                factoryId,
+                factoryId: currentContext.factoryId,
                 alertId,
-                resolvedBy: user?.id || 0,
+                resolvedBy: currentContext.userId,
               });
 
+              if (!isLiveWriteContext(currentContext)) return;
               if (response.success) {
                 equipmentAlertsLogger.info('Alert resolved successfully', { alertId });
                 appAlert(t('equipmentAlerts.messages.resolveSuccess'), t('equipmentAlerts.messages.resolveMessage'));
@@ -229,6 +348,7 @@ export default function EquipmentAlertsScreen() {
                 await fetchAlerts();
               }
             } catch (error) {
+              if (!isLiveWriteContext(currentContext)) return;
               equipmentAlertsLogger.error('Failed to resolve alert', error, { alertId });
               const errorMessage = getErrorMsg(error) || t('equipmentAlerts.messages.resolveError');
               appAlert(t('equipmentAlerts.messages.resolveFailed'), errorMessage);
@@ -282,21 +402,21 @@ export default function EquipmentAlertsScreen() {
   };
 
   // Statistics
-  const criticalCount = alerts.filter(
+  const criticalCount = visibleAlerts.filter(
     (a) => a.level === 'critical' && a.status === 'active'
   ).length;
-  const warningCount = alerts.filter(
+  const warningCount = visibleAlerts.filter(
     (a) => a.level === 'warning' && a.status === 'active'
   ).length;
-  const activeCount = alerts.filter((a) => a.status === 'active').length;
+  const activeCount = visibleAlerts.filter((a) => a.status === 'active').length;
 
   // Filter data based on search query
-  const filteredAlerts = useMemo(() => alerts.filter(
+  const filteredAlerts = useMemo(() => visibleAlerts.filter(
     (item) =>
       item.equipmentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.alertType.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.message.toLowerCase().includes(searchQuery.toLowerCase())
-  ), [alerts, searchQuery]);
+  ), [visibleAlerts, searchQuery]);
 
   // Render item
   const renderItem = useCallback(({ item }: { item: EquipmentAlert }) => (
@@ -378,7 +498,7 @@ export default function EquipmentAlertsScreen() {
             </Text>
           )}
 
-          {item.status === 'active' && (
+          {canWriteEquipment && item.status === 'active' && (
             <View style={styles.actions}>
               <IconButton
                 icon="check"
@@ -399,7 +519,7 @@ export default function EquipmentAlertsScreen() {
             </View>
           )}
 
-          {item.status === 'acknowledged' && (
+          {canWriteEquipment && item.status === 'acknowledged' && (
             <View style={styles.actions}>
               <IconButton
                 icon="check-all"

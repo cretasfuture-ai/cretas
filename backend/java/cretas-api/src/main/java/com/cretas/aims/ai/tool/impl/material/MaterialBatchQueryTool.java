@@ -226,6 +226,10 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
                 page
         );
 
+        // Filtering may shrink this page; retain the service's actual page size
+        // so server-owned pagination never infers it from the remaining rows.
+        result.put("size", pageResponse.getSize() != null ? pageResponse.getSize() : size);
+
         // 添加查询条件摘要
         Map<String, Object> queryConditions = new HashMap<>();
         if (batchNumber != null) queryConditions.put("batchNumber", batchNumber);

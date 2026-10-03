@@ -42,6 +42,8 @@ import RestaurantNavigator from "./RestaurantNavigator";
 import BossNavigator from "./BossNavigator";
 import { isRestaurant } from "../utils/factoryType";
 import WarehouseWorkerNavigator from "./WarehouseWorkerNavigator";
+import EquipmentAdminNavigator from "./EquipmentAdminNavigator";
+import QualityManagerNavigator from "./QualityManagerNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 import { beginTouch, endTouch, logScreen, startActivityTracker } from '../services/activityTracker';
 
@@ -148,6 +150,13 @@ function RoleBasedNavigator() {
     return <QualityInspectorNavigator />;
   }
 
+  if (userRole === "equipment_admin") {
+    return <EquipmentAdminNavigator />;
+  }
+  if (userRole === "quality_manager") {
+    return <QualityManagerNavigator />;
+  }
+
   // operator (操作员) 使用操作员专属界面
   if (userRole === "operator" || userRole === "yield_operator") {
     return <OperatorNavigator />;
@@ -186,8 +195,6 @@ function RoleBasedNavigator() {
   // 已知的管理/平台兼容角色继续使用原有界面；未知角色进入锁定页
   if (
     userRole === "platform_admin"
-    || userRole === "equipment_admin"
-    || userRole === "quality_manager"
     || userRole === "permission_admin"
   ) {
     return <MainNavigator />;

@@ -33,6 +33,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { labelQcApi } from '../../services/api/labelQcApi';
 import { useAuthStore } from '../../store/authStore';
+import { getUserRole } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
 import {
   LabelQcBoundingBox,
   LabelQcLabel,
@@ -88,6 +90,16 @@ import {
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 import { labelQcToolbarPosition } from './labelQcToolbarPosition';
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QILabelQcReview'>;
+
+export interface QILabelQcReviewScreenProps {
+  managerMode?: boolean;
+}
+
+const actorKeyForUser = (candidate: ReturnType<typeof useAuthStore.getState>['user']): string => {
+  const factoryId = candidate?.factoryId
+    ?? (candidate?.userType === 'factory' ? candidate.factoryUser.factoryId : undefined);
+  return `${candidate?.id ?? 'none'}:${factoryId ?? 'none'}:${getUserRole(candidate)}`;
+};
 
 interface Viewport {
   scale: number;
@@ -1020,12 +1032,18 @@ function ObjectTrayQuickReview({
   );
 }
 
-export default function QILabelQcReviewScreen() {
+export default function QILabelQcReviewScreen({ managerMode = false }: QILabelQcReviewScreenProps) {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
-  const factoryId = useAuthStore((state) => state.user?.factoryId);
+  const user = useAuthStore((state) => state.user);
+  const factoryId = user?.factoryId
+    ?? (user?.userType === 'factory' ? user.factoryUser.factoryId : undefined);
+  const actorKey = actorKeyForUser(user);
+  const actorKeyRef = useRef(actorKey);
+  const requestSequenceRef = useRef(0);
   const [detail, setDetail] = useState<LabelQcTaskDetail | null>(null);
+  const [detailActorKey, setDetailActorKey] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<LabelQcReviewPhotoDraft[]>([]);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -1043,19 +1061,38 @@ export default function QILabelQcReviewScreen() {
     createLabelQcReviewRequestId(route.params.taskId),
   );
 
+  useEffect(() => {
+    actorKeyRef.current = actorKey;
+    requestSequenceRef.current += 1;
+    setDetail(null);
+    setDetailActorKey(null);
+    setDrafts([]);
+    setPhotoIndex(0);
+    setSelectedKey(null);
+    setSelectedObjectTrayKey(null);
+    setSelectedObjectKey(null);
+    setError(null);
+    setConflictMessage(null);
+  }, [actorKey]);
+
   const load = useCallback(async () => {
+    const requestActorKey = actorKey;
+    const requestSequence = ++requestSequenceRef.current;
     if (!factoryId) {
       setError('登录信息缺少工厂，请重新登录');
       setLoading(false);
       return;
     }
+    if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
     try {
       setLoading(true);
       setError(null);
       setConflictMessage(null);
       const taskDetail = await labelQcApi.getTask(route.params.taskId, factoryId);
+      if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
       const initialDrafts = hydrateLabelQcReviewDrafts(taskDetail);
       setDetail(taskDetail);
+      setDetailActorKey(requestActorKey);
       setDrafts(initialDrafts);
       setSelectedKey(
         initialDrafts[0]?.annotations.find((annotation) => !annotation.label)?.key
@@ -1064,11 +1101,14 @@ export default function QILabelQcReviewScreen() {
       setSelectedObjectTrayKey(initialDrafts[0]?.objectReview?.trays[0]?.key ?? null);
       setSelectedObjectKey(initialDrafts[0]?.objectReview?.trays[0]?.labels[0]?.key ?? null);
     } catch (loadError) {
+      if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
       setError(getErrorMessage(loadError));
     } finally {
-      setLoading(false);
+      if (actorKeyRef.current === requestActorKey && requestSequence === requestSequenceRef.current) {
+        setLoading(false);
+      }
     }
-  }, [factoryId, route.params.taskId]);
+  }, [actorKey, factoryId, route.params.taskId]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1077,7 +1117,8 @@ export default function QILabelQcReviewScreen() {
     return () => clearTimeout(timer);
   }, [load]);
 
-  const photo = detail?.photos[photoIndex];
+  const activeDetail = detailActorKey === actorKey ? detail : null;
+  const photo = activeDetail?.photos[photoIndex];
   const draft = drafts[photoIndex];
   const selected = draft?.annotations.find(
     (annotation) => annotation.key === selectedKey,
@@ -1086,7 +1127,8 @@ export default function QILabelQcReviewScreen() {
   const selectedObjectTray = objectReview?.trays.find(
     (tray) => tray.key === selectedObjectTrayKey,
   ) ?? objectReview?.trays[0] ?? null;
-  const readOnly = detail?.task.status === 'REVIEWED';
+  const readOnly = activeDetail?.task.status === 'REVIEWED';
+  const canWriteQuality = hasModulePermission(user, 'quality', 'write');
   const completedCount = drafts.filter(isPhotoReviewComplete).length;
   const allComplete =
     drafts.length > 0 && completedCount === drafts.length;
@@ -1253,6 +1295,15 @@ export default function QILabelQcReviewScreen() {
 
   const submitReview = async () => {
     if (!factoryId || !detail || submitting) return;
+    const currentUser = useAuthStore.getState().user;
+    if (actorKeyRef.current !== actorKey || actorKeyForUser(currentUser) !== actorKey) {
+      setError('当前账号已变化，请返回队列后重新打开任务。');
+      return;
+    }
+    if (managerMode && !hasModulePermission(currentUser, 'quality', 'write')) {
+      setError('当前账号没有质量审核写权限，请联系管理员后重试。');
+      return;
+    }
     try {
       setSubmitting(true);
       setError(null);
@@ -1262,6 +1313,15 @@ export default function QILabelQcReviewScreen() {
         reviewRequestIdRef.current,
       );
       const reviewed = await labelQcApi.reviewTask(detail.task.id, request, factoryId);
+      const afterUser = useAuthStore.getState().user;
+      if (
+        actorKeyRef.current !== actorKey
+        || actorKeyForUser(afterUser) !== actorKey
+        || (managerMode && !hasModulePermission(afterUser, 'quality', 'write'))
+      ) {
+        setError('当前账号或审核权限已变化，未继续显示旧任务结果。');
+        return;
+      }
       setDetail(reviewed);
       setDrafts(hydrateLabelQcReviewDrafts(reviewed));
       navigation.replace('QILabelQcSubmitted', {
@@ -1292,6 +1352,28 @@ export default function QILabelQcReviewScreen() {
     );
   }
 
+  if (detailActorKey !== actorKey) {
+    return (
+      <View style={styles.centerState} testID="qi-label-qc-review-actor-transition">
+        <ActivityIndicator size="large" color={QI_COLORS.primary} />
+        <Text style={styles.centerStateText}>正在切换账号，请稍候…</Text>
+      </View>
+    );
+  }
+
+  if (managerMode && !canWriteQuality) {
+    return (
+      <View style={styles.centerState} testID="qi-label-qc-review-write-unavailable">
+        <Ionicons name="lock-closed-outline" size={48} color={QI_COLORS.danger} />
+        <Text style={styles.centerStateTitle}>当前账号只能查看状态</Text>
+        <Text style={styles.centerStateText}>质量审核写权限已关闭，不能提交人工审核。请联系管理员后返回队列。</Text>
+        <Button mode="outlined" textColor={QI_COLORS.primary} onPress={() => navigation.replace('QILabelQcQueue')}>
+          返回待审核列表
+        </Button>
+      </View>
+    );
+  }
+
   if (!detail || !photo || !draft) {
     return (
       <View style={styles.centerState}>
@@ -1304,6 +1386,7 @@ export default function QILabelQcReviewScreen() {
       </View>
     );
   }
+
 
   const isReviewable =
     readOnly || REVIEWABLE_STATUSES.includes(detail.task.status);
