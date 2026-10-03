@@ -1,7 +1,9 @@
 package com.cretas.aims.config;
 
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.utils.CookieAuthHelper;
 import com.cretas.aims.utils.JwtUtil;
@@ -85,6 +87,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     @Autowired
     private FactoryRepository factoryRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
     /**
      * 工厂关停闸 (2026-09-15). factories.is_active=false 的工厂, 其已签发的 access token
      * (24h 有效) 也必须被挡, 否则关厂后 App 里已登录的人还能用一整天.
@@ -165,6 +170,18 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
         // 跨工厂权限验证
         String requestUri = request.getRequestURI();
+
+        if (userId != null
+                && !isPlatformPrincipal(tokenFactoryId, tokenRole)
+                && !isPublicEndpoint(requestUri)
+                && !requestUri.startsWith("/api/internal/")) {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null || !Boolean.TRUE.equals(user.getIsActive())
+                    || (tokenFactoryId != null && !tokenFactoryId.equals(user.getFactoryId()))) {
+                sendUnauthorizedResponse(response, "账号已被禁用或不存在，请重新登录");
+                return false;
+            }
+        }
 
         // 工厂关停闸: 已登录的工厂用户, 其工厂 is_active=false → 401 踢回登录页.
         // 公开端点 (登录/刷新) 不在这里挡 —— 服务层 rejectIfFactoryClosed 用同一句话拒.

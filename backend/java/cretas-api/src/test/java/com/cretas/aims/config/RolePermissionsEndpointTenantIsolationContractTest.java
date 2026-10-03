@@ -1,6 +1,8 @@
 package com.cretas.aims.config;
 
+import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.utils.JwtUtil;
 import jakarta.servlet.http.HttpServletResponse;
@@ -54,6 +56,13 @@ class RolePermissionsEndpointTenantIsolationContractTest {
         when(jwt.getFactoryIdFromToken(anyString())).thenReturn(tokenFactoryId);
         when(jwt.getRoleFromToken(anyString())).thenReturn(tokenRole);
 
+        User user = new User();
+        user.setId(42L);
+        user.setFactoryId(tokenFactoryId);
+        user.setIsActive(true);
+        UserRepository users = mock(UserRepository.class);
+        when(users.findById(42L)).thenReturn(Optional.of(user));
+
         TokenBlacklistService blacklist = mock(TokenBlacklistService.class);
         when(blacklist.isBlacklisted(anyString())).thenReturn(false);
 
@@ -63,6 +72,7 @@ class RolePermissionsEndpointTenantIsolationContractTest {
         when(factories.findById(anyString())).thenReturn(Optional.empty());
 
         JwtAuthInterceptor interceptor = new JwtAuthInterceptor();
+        ReflectionTestUtils.setField(interceptor, "userRepository", users);
         ReflectionTestUtils.setField(interceptor, "jwtUtil", jwt);
         ReflectionTestUtils.setField(interceptor, "tokenBlacklistService", blacklist);
         ReflectionTestUtils.setField(interceptor, "factoryRepository", factories);

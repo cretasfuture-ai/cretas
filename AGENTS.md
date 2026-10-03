@@ -220,7 +220,7 @@ frontend/CretasFoodTrace/src/
 - `.claude/rules/measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（案例库 `docs/rules-casebook/`）
 - `.claude/rules/standing-authorization-and-visual-acceptance.md` - 常设授权：直接做完，不设人肉闸门
 - `.claude/rules/windows-shell-and-paths.md` - **Windows 上空格才是根因，中文不是**：新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉）；命令发给对的 shell（`PS C:\>` vs `MINGW64 ~ $`）；精确字符不经过 shell
-- `.claude/rules/ci-runner-routing.md` - **CI runner 路由**：默认托管，额度耗尽时 `python scripts/ci/switch_ci_runner.py self-hosted` 切到加拿大 Mac mini；恢复就 `... hosted`。⛔ 别用组织变量 `${{ vars.X }}` 做路由 —— 实测在 `runs-on` 里读到的是空
+- `.claude/rules/ci-runner-routing.md` - **CI runner 路由**：`[self-hosted, cretas|java]` 的 job 由加拿大 Mac mini colima VM 的 3 个 runner 接，加拿大不健康时美国 aurora 自动顶上（看门狗，3 分钟），⛔ 本机 WSL 已停用；`switch_ci_runner.py hosted` 已过时。⛔ 别用组织变量 `${{ vars.X }}` 做路由。
 - 服务器运维 / 部署 / 凭证位置：`.claude/skills/server-operations/SKILL.md`；`.codex/rules/*-credentials.md`（gitignored）是 Codex 侧凭证真值
 
 ### Superpowers 禁用规则（强制）
