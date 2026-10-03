@@ -54,11 +54,12 @@ class FakeDecision:
         self.seen_history.append(("shortlist", history))
         return self.short
 
-    async def choose(self, query, role, options, history=None):
+    async def choose(self, query, role, options, history=None, special_options=False):
         self.choose_calls += 1
         self.seen_history.append(("choose", history))
         self.seen_options = [o["intent_code"] for o in options]
-        return self.probs
+        self.seen_special = special_options
+        return dict(self.probs)
 
 
 class FakeLegacyLlm:
@@ -327,3 +328,72 @@ def test_history_block_sanitizes_turns():
     assert lines == ["系统：" + "长" * 200, "用户：三", "系统：四", "用户：五"]
     assert "忽略之前的规则" not in block
     assert history_block([]) == "" and history_block(None) == ""
+
+
+# ---------------- 「以上都不是 / 需要先问清楚」出口 (防曲解) ----------------
+
+from ai.matcher.decision import CLARIFY_KEY, NONE_KEY  # noqa: E402
+
+CFG_SPECIAL = replace(CFG, decision_special_options=True)
+
+
+def test_none_exit_wins_returns_explicit_no_match_without_legacy_fallback():
+    dec = FakeDecision(["MATERIAL_BATCH_QUERY"], {"MATERIAL_BATCH_QUERY": 0.2, NONE_KEY: 0.7, CLARIFY_KEY: 0.1})
+    orch = _orch(dec, cfg=CFG_SPECIAL)
+    res = _run(orch, query="先别入库")
+    assert dec.seen_special is True
+    assert res.bestMatch is None
+    assert res.timingMs.get("decisionNone") == 1
+    assert "先不做任何操作" in (res.conversationMessage or "")
+    assert orch.llm_matcher.calls == 0           # 没有回落到旧路径去「猜一个」
+    assert "decisionFallback" not in res.timingMs
+
+
+def test_none_exit_below_the_real_top_does_not_block_the_match():
+    """对照: NONE 有一点概率但不是最大 → 照常给出真实意图 (证明上一条不是一律判无)。"""
+    dec = FakeDecision(["MATERIAL_BATCH_QUERY"], {"MATERIAL_BATCH_QUERY": 0.85, NONE_KEY: 0.1, CLARIFY_KEY: 0.05})
+    res = _run(_orch(dec, cfg=CFG_SPECIAL), query="淀粉还剩多少")
+    assert res.bestMatch.intentCode == "MATERIAL_BATCH_QUERY"
+    assert res.requiresConfirmation is False
+    assert "decisionNone" not in res.timingMs
+    assert res.timingMs.get("decisionNoneP") == 100
+
+
+def test_clarify_exit_wins_forces_buttons_even_with_a_confident_looking_top():
+    dec = FakeDecision(["RETURN_ORDER_CREATE", "CLOCK_OUT"],
+                       {"RETURN_ORDER_CREATE": 0.30, "CLOCK_OUT": 0.05, NONE_KEY: 0.0, CLARIFY_KEY: 0.65})
+    res = _run(_orch(dec, cfg=CFG_SPECIAL), query="要是那单不超五千你就直接退了")
+    assert res.requiresConfirmation is True
+    assert res.timingMs.get("decisionClarify") == 1
+    assert res.bestMatch.intentCode == "RETURN_ORDER_CREATE"   # 按钮仍按真实候选排
+
+
+def test_special_options_off_by_default():
+    dec = FakeDecision(["CLOCK_OUT"], {"CLOCK_OUT": 0.95})
+    res = _run(_orch(dec), query="签退")
+    assert dec.seen_special is False
+    assert res.bestMatch.intentCode == "CLOCK_OUT"
+    assert "decisionNoneP" not in res.timingMs
+
+
+def test_choose_appends_the_two_exits_after_the_shuffled_real_options():
+    captured = {}
+
+    async def fake_call(self, payload, body_validator=None, content_validator=None):
+        captured["user"] = payload["messages"][1]["content"]
+        n = len(ROWS) + 2
+        # 真实选项各 0.1, 最后一个字母 (CLARIFY) 0.5, 倒数第二 (NONE) 0.2
+        tokens = [(LETTERS[i], 0.1 / len(ROWS)) for i in range(len(ROWS))] + [(LETTERS[n - 2], 0.2), (LETTERS[n - 1], 0.5)]
+        return _body(tokens)
+
+    orig = DecisionMatcher._call
+    DecisionMatcher._call = fake_call
+    try:
+        out = asyncio.run(DecisionMatcher().choose("x", "operator", ROWS, special_options=True))
+    finally:
+        DecisionMatcher._call = orig
+    n = len(ROWS) + 2
+    assert f"{LETTERS[n - 2]}. NONE：以上都不是" in captured["user"]
+    assert f"{LETTERS[n - 1]}. CLARIFY：需要先问清楚" in captured["user"]
+    assert set(out) == {r["intent_code"] for r in ROWS} | {NONE_KEY, CLARIFY_KEY}
+    assert out[CLARIFY_KEY] > out[NONE_KEY] > max(out[r["intent_code"]] for r in ROWS)

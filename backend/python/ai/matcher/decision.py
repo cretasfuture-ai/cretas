@@ -23,6 +23,19 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 LETTERS = "ABCDEFGHIJKLMNOPQRST"
+
+# 两个特殊出口 (2026-10-03): 没有它们时模型只能在候选里硬选一个 ——「先别入库」也得挑个功能,
+# 这是曲解的主要来源。它们排在真实候选之后 (不参与打乱), 选项代码用 NONE / CLARIFY,
+# 返回给调用方时换成不会与意图码撞名的键。
+NONE_KEY = "__NONE__"
+CLARIFY_KEY = "__CLARIFY__"
+SPECIAL_OPTIONS = [
+    {"intent_code": "NONE", "intent_name": "以上都不是",
+     "description": "这句话和上面的功能都对不上，或者用户明确说不要做、先别做"},
+    {"intent_code": "CLARIFY", "intent_name": "需要先问清楚",
+     "description": "上面有两个以上的功能都说得通，或者缺了关键信息必须先问用户"},
+]
+_SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
 STRICT_SYSTEM = "你是业务系统的请求分类器。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
 
@@ -197,15 +210,24 @@ class DecisionMatcher:
         return parse_shortlist(content, codes, self.shortlist_size)
 
     async def choose(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
-                     history: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, float]]:
-        """返回 {intent_code: 概率}; 整条链都拿不到概率 -> None。"""
+                     history: Optional[List[Dict[str, Any]]] = None,
+                     special_options: bool = False) -> Optional[Dict[str, float]]:
+        """返回 {intent_code: 概率}; 整条链都拿不到概率 -> None。
+
+        special_options=True 时追加「以上都不是 / 需要先问清楚」两个选项, 它们的概率以
+        NONE_KEY / CLARIFY_KEY 返回; 真实候选的概率**不重新归一化** —— 模型放在这两个出口上的
+        把握会把真实候选的置信度拉低, 让「拿不准」自然落到按钮澄清。
+        """
         if not options:
             return None
-        opts = options[: self.k]
-        if len(opts) == 1:
+        n_special = len(SPECIAL_OPTIONS) if special_options else 0
+        opts = options[: self.k - n_special]
+        if len(opts) == 1 and not n_special:
             return {str(opts[0]["intent_code"]): 1.0}
         opts = opts[:]
         random.Random(query).shuffle(opts)  # 固定打乱, 消除「爱选第一个」(与评测一致)
+        if n_special:
+            opts = opts + SPECIAL_OPTIONS  # 出口固定排在最后
         n = len(opts)
 
         def has_probs(body: Dict[str, Any]) -> Optional[str]:
@@ -219,8 +241,15 @@ class DecisionMatcher:
             logger.warning("decision choose failed: %s", str(ex)[:300])
             return None
         probs = letter_probs(body, n) or {}
-        return {str(r["intent_code"]): probs.get(L, 0.0) for L, r in zip(LETTERS, opts)}
+        out: Dict[str, float] = {}
+        for i, (L, r) in enumerate(zip(LETTERS, opts)):
+            code = str(r["intent_code"])
+            if i >= n - n_special:
+                code = _SPECIAL_KEYS[code]
+            out[code] = probs.get(L, 0.0)
+        return out
 
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
+           "NONE_KEY", "CLARIFY_KEY", "SPECIAL_OPTIONS",
            "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block"]

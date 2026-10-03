@@ -177,6 +177,15 @@ public class AIIntentServiceImpl implements AIIntentService {
         }
     }
 
+    /**
+     * Python 决策层明确判「以上都不是」: 没有 bestMatch, 且 timingMs.decisionNone == 1。
+     * 只有这一种空结果是「结论」; 其余空结果 (超时 / 没拿到概率) 照旧回落旧路径。
+     */
+    static boolean isDecisionNone(IntentMatchResult result) {
+        return result != null && !result.hasMatch() && result.getTimingMs() != null
+                && Long.valueOf(1L).equals(result.getTimingMs().get("decisionNone"));
+    }
+
     // ==================== Intent Recognition ====================
 
     /**
@@ -397,6 +406,12 @@ public class AIIntentServiceImpl implements AIIntentService {
                     recordStageHit("PYTHON_MATCH");
                     // 先缓存未过滤结果 (上面), 再对返回值做 mode 过滤 —— 顺序不能反。
                     return applyAccessModeFilter(pyResult, factoryId, mode, userPermissions);
+                }
+                // 决策层明确判「以上都不是」(2026-10-03, 防曲解): 这是一个结论, 不是「没答出来」——
+                // 回落旧路径会让它去猜一个意图 (「先别入库」被猜成入库)。不缓存, 原样返回。
+                if (isDecisionNone(pyResult)) {
+                    recordStageHit("PYTHON_DECISION_NONE");
+                    return pyResult;
                 }
                 log.info("Python matcher returned empty for query='{}' — falling back to legacy pipeline",
                         userInput);
