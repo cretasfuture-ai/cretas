@@ -647,5 +647,10 @@
       "edit": "Edit",
       "quota": "Quota"
     }
+  },
+  "factoryAIWizard": {
+    "unavailableTitle": "Generation unavailable",
+    "unavailableMessage": "Automatic generation is unavailable. No factory was created and no configuration was saved. Your entries remain on this page; continue editing or return to the previous step.",
+    "keepEditing": "Keep editing"
   }
 }

@@ -16,7 +16,6 @@ import {
   TouchableOpacity,
   TextInput as RNTextInput,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { Text, Checkbox } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -164,7 +163,6 @@ export function FactoryAIWizardScreen() {
   const [selectedBlueprint, setSelectedBlueprint] = useState<string>('auto');
   const [generateOptions, setGenerateOptions] = useState<GenerateOption[]>(INITIAL_OPTIONS);
   const [aiQuota, setAiQuota] = useState(500);
-  const [generating, setGenerating] = useState(false);
   const [showBlueprintPicker, setShowBlueprintPicker] = useState(false);
 
   // 计算步骤状态
@@ -218,33 +216,14 @@ export function FactoryAIWizardScreen() {
   }, [currentStep, navigation]);
 
   // 处理开始生成
-  const handleGenerate = useCallback(async () => {
-    setGenerating(true);
-    try {
-      // TODO: 调用 API 生成工厂配置
-      // 模拟 API 调用
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      Alert.alert(
-        t('success.title'),
-        t('factoryAIWizard.generateSuccess', { defaultValue: '工厂配置生成成功' }),
-        [
-          {
-            text: t('aiQuota.confirmAction'),
-            onPress: () => navigation.goBack(),
-          },
-        ]
-      );
-    } catch (error) {
-      console.error('生成失败:', error);
-      Alert.alert(
-        t('errors.createFailed'),
-        error instanceof Error ? error.message : t('errors.loadFailed')
-      );
-    } finally {
-      setGenerating(false);
-    }
-  }, [selectedIndustry, businessDescription, generateOptions, aiQuota, navigation, t]);
+  const handleGenerate = useCallback(() => {
+    // 尚未接通真实生成与持久化接口，不能以延时模拟成功。
+    Alert.alert(
+      t('factoryAIWizard.unavailableTitle'),
+      t('factoryAIWizard.unavailableMessage'),
+      [{ text: t('factoryAIWizard.keepEditing') }]
+    );
+  }, [t]);
 
   // 获取选中的蓝图名称
   const selectedBlueprintName = useMemo(() => {
@@ -507,9 +486,8 @@ export function FactoryAIWizardScreen() {
           <Text style={styles.secondaryButtonText}>上一步</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.primaryButton, generating && styles.buttonDisabled]}
+          style={styles.primaryButton}
           onPress={handleGenerate}
-          disabled={generating}
         >
           <LinearGradient
             colors={['#667eea', '#764ba2']}
@@ -517,14 +495,8 @@ export function FactoryAIWizardScreen() {
             end={{ x: 1, y: 1 }}
             style={styles.primaryButtonGradient}
           >
-            {generating ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Icon source="lightbulb-on" size={16} color="#fff" />
-                <Text style={styles.primaryButtonText}>开始生成</Text>
-              </>
-            )}
+            <Icon source="lightbulb-on" size={16} color="#fff" />
+            <Text style={styles.primaryButtonText}>开始生成</Text>
           </LinearGradient>
         </TouchableOpacity>
       </View>
@@ -862,9 +834,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
   },
 });
 

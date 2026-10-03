@@ -647,5 +647,10 @@
       "edit": "编辑",
       "quota": "配额"
     }
+  },
+  "factoryAIWizard": {
+    "unavailableTitle": "暂时无法生成",
+    "unavailableMessage": "自动生成暂不可用。本次未创建工厂，也未保存配置；已填内容仍在当前页面，请继续编辑或返回上一步。",
+    "keepEditing": "继续编辑"
   }
 }
