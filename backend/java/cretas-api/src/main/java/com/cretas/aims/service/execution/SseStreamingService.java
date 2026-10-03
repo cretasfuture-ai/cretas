@@ -105,6 +105,18 @@ public class SseStreamingService {
     private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
             restaurantGrossMarginChatRouteSelector;
 
+    /**
+     * 意图级权限码门 (与 /execute 的 checkIntentPermission 同一份实现)。
+     * 2026-10-03 前流式路径只查 requiredRoles —— 意图声明的 required_permission 在 App 实际走的
+     * 这条路上从未被检查。required=false: 裸构造的单测不提供时回落旧的角色判定。
+     */
+    @Autowired(required = false)
+    private IntentPermissionGate intentPermissionGate;
+
+    /** 澄清按钮点选回写到 Python (学习样本)。缺席时不记录, 不影响执行。 */
+    @Autowired(required = false)
+    private com.cretas.aims.client.PythonAiMatcherClient pythonAiMatcherClient;
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -191,11 +203,38 @@ public class SseStreamingService {
             // The stream historically ignored explicit intent codes. A constrained Factory Pack
             // must converge explicit and recognized intents before any Restaurant/general/skill
             // route can run, without adding an LLM call.
+            // 2026-10-03: 非能力包工厂也认显式意图码 —— 澄清按钮点选后 App 带着「意图码 + 原话」
+            // 回来 (此前 App 把按钮上的名字当一句新话再识别一遍, 原话里的数量等信息就丢了)。
+            // 显式码只换掉「识别」这一步: 权限码 / 审批 / 业态门 / W0 写确认 / 咨询页拦写
+            // 全部照常在 executeAndStreamResult 及其下游执行。查意图只认在用未删的。
+            Optional<AIIntentConfig> explicitIntent =
+                    request.getIntentCode() == null || request.getIntentCode().isBlank()
+                            ? Optional.empty()
+                            : aiIntentService.getIntentByCode(factoryId, request.getIntentCode());
+            if (!factoryPackConstrained && explicitIntent.isPresent()) {
+                AIIntentConfig intent = explicitIntent.get();
+                sendSseEvent(emitter, "intent_recognized", Map.of(
+                        "intentCode", intent.getIntentCode(),
+                        "intentName", intent.getIntentName(),
+                        "intentCategory", intent.getIntentCategory(),
+                        "confidence", 1.0d,
+                        "matchMethod", "EXPLICIT"));
+                recordClarificationSelection(factoryId, userId, userRole, request, intent);
+                executeAndStreamResult(
+                        emitter, factoryId, request, intent, userId, userRole, startTime,
+                        IntentMatchResult.builder()
+                                .bestMatch(intent)
+                                .confidence(1.0d)
+                                .matchMethod(IntentMatchResult.MatchMethod.EXACT)
+                                .requiresConfirmation(false)
+                                .questionType(QuestionType.OPERATIONAL_COMMAND)
+                                .build(),
+                        factoryPackRoute);
+                return;
+            }
             if (factoryPackConstrained
                     && request.getIntentCode() != null
                     && !request.getIntentCode().isBlank()) {
-                Optional<AIIntentConfig> explicitIntent =
-                        aiIntentService.getIntentByCode(factoryId, request.getIntentCode());
                 if (explicitIntent.isEmpty()) {
                     streamTerminalResponse(
                             emitter,
@@ -543,6 +582,30 @@ public class SseStreamingService {
     }
 
     /**
+     * 澄清按钮点选 → 学习样本 (异步、尽力而为)。只有 App 在 context 里标了
+     * {@code clarificationSelection=true} 才记, 普通的显式意图调用不算「用户替系统做了选择」。
+     */
+    void recordClarificationSelection(String factoryId, Long userId, String userRole,
+                                      IntentExecuteRequest request, AIIntentConfig intent) {
+        if (pythonAiMatcherClient == null || request == null || request.getContext() == null
+                || !Boolean.TRUE.equals(request.getContext().get("clarificationSelection"))) {
+            return;
+        }
+        Object rawCandidates = request.getContext().get("clarificationCandidates");
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+        if (rawCandidates instanceof java.util.Collection<?> c) {
+            for (Object o : c) {
+                if (o != null && candidates.size() < 10) {
+                    candidates.add(String.valueOf(o));
+                }
+            }
+        }
+        String query = request.getUserInput();
+        java.util.concurrent.CompletableFuture.runAsync(() -> pythonAiMatcherClient.recordSelection(
+                factoryId, userId, userRole, query, intent.getIntentCode(), candidates));
+    }
+
+    /**
      * 执行意图并流式返回结果
      */
     private void executeAndStreamResult(SseEmitter emitter, String factoryId,
@@ -551,14 +614,27 @@ public class SseStreamingService {
                                          IntentMatchResult matchResult,
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
-        // 权限检查
-        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+        // 权限检查: 意图声明了权限码 → 走权限码门 (fail-closed, 与 /execute 同源);
+        // 没声明 → 保留 requiredRoles 旧判定。
+        String deniedMessage = null;
+        String requiredPermission = intent.getRequiredPermission();
+        if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
+            IntentPermissionGate.PermissionCheck check = intentPermissionGate.check(intent, userId, userRole);
+            if (check.isDenied()) {
+                deniedMessage = "您没有权限执行此操作。需要权限: " + check.requiredPermission()
+                        + "，请联系工厂管理员开通。";
+            }
+        } else if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+            deniedMessage = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+        }
+        if (deniedMessage != null) {
             IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())
                     .intentName(intent.getIntentName())
                     .status("NO_PERMISSION")
-                    .message("您没有权限执行此操作。需要角色: " + intent.getRequiredRoles())
+                    .message(deniedMessage)
+                    .formattedText(deniedMessage)
                     .executedAt(LocalDateTime.now())
                     .build();
             sendSseEvent(emitter, "result", noPermissionResponse);

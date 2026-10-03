@@ -420,18 +420,38 @@ export default function AIChatScreen() {
       return;
     }
 
+    // 澄清候选: 用「原话 + 选中的意图码」重新执行, 而不是把按钮名字当一句新话再识别一遍
+    // (否则「就是六十箱」里的数量会丢)。同时把候选一起带上, 后端记成一条学习样本。
+    const sourceMessage = messages.find((msg) => msg.id === messageId);
+    const pickedIntent = action.value === 'SELECT_INTENT' ? action.params?.intentCode : undefined;
+    const originalQuestion = sourceMessage?.userQuestion;
+
     // 清除该消息的建议选项（已选择）
     setMessages((prev) =>
       prev.map((msg) =>
         msg.id === messageId ? { ...msg, suggestedActions: undefined } : msg
       )
     );
+    if (typeof pickedIntent === 'string' && pickedIntent && originalQuestion) {
+      const candidates = (sourceMessage?.suggestedActions || [])
+        .map((a) => (a.value === 'SELECT_INTENT' ? a.params?.intentCode : undefined))
+        .filter((c): c is string => typeof c === 'string' && c.length > 0);
+      await handleSend(originalQuestion, {
+        displayText: action.label,
+        intentCode: pickedIntent,
+        context: { clarificationSelection: true, clarificationCandidates: candidates },
+      });
+      return;
+    }
     // 发送用户选择作为新消息
     await handleSend(action.label);
   };
 
   // 发送消息 — 使用真正的 SSE 流式传输
-  const handleSend = async (text?: string) => {
+  const handleSend = async (
+    text?: string,
+    sendOptions?: { displayText?: string; intentCode?: string; context?: Record<string, unknown> },
+  ) => {
     const messageText = text || inputText.trim();
     if (!messageText || isLoading || sendPendingRef.current || !isMountedRef.current) return;
 
@@ -451,7 +471,7 @@ export default function AIChatScreen() {
       const userMessage: Message = {
         id: generateMessageId(),
         role: 'user',
-        content: messageText,
+        content: sendOptions?.displayText || messageText,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, userMessage]);
@@ -609,6 +629,7 @@ export default function AIChatScreen() {
               label: (action.actionName || action.label || action.name || action.description) as string,
               value: (action.actionCode || action.value || action.code || action.actionName) as string,
               description: action.description as string | undefined,
+              params: (action.parameters || action.params) as Record<string, unknown> | undefined,
             })).filter((a) => a.label && a.value);
           }
 
@@ -650,7 +671,7 @@ export default function AIChatScreen() {
           // 场景过滤：只保留当前场景允许的建议操作
           if (sceneConfig && suggestedActions.length > 0) {
             suggestedActions = suggestedActions.filter(
-              (a) => sceneConfig.allowedActionCodes.includes(a.value)
+              (a) => a.value === 'SELECT_INTENT' || sceneConfig.allowedActionCodes.includes(a.value)
             );
           }
 
@@ -737,7 +758,14 @@ export default function AIChatScreen() {
         },
       };
 
-      await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType);
+      if (sendOptions?.intentCode) {
+        await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, {
+          intentCode: sendOptions.intentCode,
+          context: sendOptions.context,
+        });
+      } else {
+        await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType);
+      }
 
     } catch (error) {
       if (!isMountedRef.current) return;
