@@ -17,6 +17,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.WorkflowDraftProjection;
 import com.cretas.aims.utils.TokenUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -409,21 +410,21 @@ public class CanvasAIController {
                 objectMapper.writeValueAsString(definition),
                 Objects.toString(selectedNodeId, "null"));
         String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
-        Map<String, Object> spec;
-        try {
-            // 规格是 JSON 对象 {...} 不是数组, 必须用 extractJsonObject (extractJson 只抓 [...] 数组)。
-            spec = objectMapper.readValue(
-                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
-        } catch (Exception parseError) {
+        WorkflowDraftProjection.Result projection = new WorkflowDraftProjection(objectMapper)
+                .project(llmResponse, request.getMessage());
+        if (projection.decision() == WorkflowDraftProjection.Decision.REJECTED) {
             return workflowSpecFailureResponse();
         }
-        // 只校验规格 shape (steps 非空); 图的合法性由前端编译器保证 (端口/边/id 全代码生成)。
-        if (!(spec.get("steps") instanceof List<?> stepList) || stepList.isEmpty()) {
-            return workflowSpecFailureResponse();
+        if (projection.decision() == WorkflowDraftProjection.Decision.REVIEW_REQUIRED) {
+            AIResponse response = new AIResponse();
+            response.setApplied(false);
+            response.setDiffs(List.of());
+            response.setReply("AI 草稿结构有效，但原始请求缺少可核对的材料和步骤来源，需要人工复核；本次未提供可应用草稿");
+            return response;
         }
 
         Map<String, Object> diffParams = new LinkedHashMap<>();
-        diffParams.put("spec", spec);
+        diffParams.put("spec", projection.spec());
 
         AIResponse response = new AIResponse();
         response.setApplied(false);
