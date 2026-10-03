@@ -46,6 +46,7 @@ const aiOptions = ref({
 });
 
 const useAI = ref(false);
+const AI_GENERATION_UNAVAILABLE = 'AI 排产暂不可用。当前优化选项无法可靠执行，请使用手动创建。';
 
 onMounted(() => {
   loadBatches();
@@ -119,6 +120,11 @@ function clearSelection() {
 }
 
 async function handleSubmit() {
+  if (useAI.value) {
+    ElMessage.warning(AI_GENERATION_UNAVAILABLE);
+    return;
+  }
+
   if (form.value.selectedBatchIds.length === 0) {
     ElMessage.warning('请选择至少一个生产批次');
     return;
@@ -223,17 +229,19 @@ function getOptimizationLabel(goal: string) {
               <div class="mode-desc">选择批次后系统按顺序排程</div>
             </div>
           </div>
-          <div
-            class="mode-option"
-            :class="{ active: useAI }"
-            @click="useAI = true"
+          <button
+            type="button"
+            class="mode-option unavailable"
+            disabled
+            aria-disabled="true"
+            aria-describedby="ai-generation-unavailable-reason"
           >
             <el-icon class="mode-icon ai"><MagicStick /></el-icon>
             <div class="mode-info">
-              <div class="mode-title">AI 智能生成</div>
-              <div class="mode-desc">AI优化排程顺序和人员分配</div>
+              <div class="mode-title">AI 智能生成（暂不可用）</div>
+              <div id="ai-generation-unavailable-reason" class="mode-desc">{{ AI_GENERATION_UNAVAILABLE }}</div>
             </div>
-          </div>
+          </button>
         </div>
 
         <!-- AI 选项 -->
@@ -387,6 +395,17 @@ function getOptimizationLabel(goal: string) {
   &.active {
     border-color: #409EFF;
     background: rgba(64, 158, 255, 0.05);
+  }
+
+  &.unavailable {
+    font: inherit;
+    text-align: left;
+    cursor: not-allowed;
+    background: #f5f7fa;
+
+    &:hover {
+      border-color: #dcdfe6;
+    }
   }
 
   .mode-icon {
