@@ -2,6 +2,14 @@
 import { renderHook, act } from '@testing-library/react-native';
 import { useAuthStore } from '../../../store/authStore';
 import { useFactoryFeatureStore } from '../../../store/factoryFeatureStore';
+import { createApiMock } from '../../utils/mockApiClient';
+import type MockAdapter from 'axios-mock-adapter';
+
+const FEATURE_CONFIG_URL = '/api/mobile/F001/feature-config';
+const syntheticFeatures = [{
+  moduleId: 'production', moduleName: 'Production', enabled: true, config: {},
+}];
+let featureApiMock: MockAdapter;
 
 const mockLogin = jest.fn();
 jest.mock('../../../services/serviceFactory', () => ({
@@ -21,6 +29,8 @@ import { useLogin } from '../../../hooks/useLogin';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  featureApiMock = createApiMock();
+  featureApiMock.onGet(FEATURE_CONFIG_URL).reply(200, { success: true, data: syntheticFeatures });
   useAuthStore.setState({
     user: null,
     tokens: null,
@@ -32,6 +42,17 @@ beforeEach(() => {
     loaded: false,
     loading: false,
   });
+});
+
+afterEach(() => {
+  try {
+    expect(featureApiMock.history.get.every((request) => request.url === FEATURE_CONFIG_URL)).toBe(true);
+    for (const method of ['post', 'put', 'patch', 'delete']) {
+      expect(featureApiMock.history[method]).toHaveLength(0);
+    }
+  } finally {
+    featureApiMock.restore();
+  }
 });
 
 const mockFactoryUser = {
@@ -93,6 +114,11 @@ describe('useLogin', () => {
       expect(authState.user).toEqual(mockFactoryUser);
       expect(authState.tokens).toEqual(mockTokens);
       expect(authState.isAuthenticated).toBe(true);
+      expect(useFactoryFeatureStore.getState().loaded).toBe(true);
+      expect(useFactoryFeatureStore.getState().modules.production).toEqual({
+        enabled: true, moduleName: 'Production', config: {}, conversationSummary: undefined,
+      });
+      expect(featureApiMock.history.get).toHaveLength(1);
     });
 
     it('sets isLoading false after success', async () => {
@@ -126,7 +152,8 @@ describe('useLogin', () => {
       await act(async () => {
         await result.current.login({ username: 'factory_admin1', password: '123456' });
       });
-      // loadFeatures should have been called (store method invoked)
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      expect(loadSpy).toHaveBeenCalledWith(mockFactoryUser.factoryUser.factoryId);
       loadSpy.mockRestore();
     });
   });

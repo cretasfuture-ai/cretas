@@ -283,6 +283,9 @@ export default function AIChatScreen() {
   // P1: Voice preview before auto-send
   const [previewText, setPreviewText] = useState('');
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewGenerationRef = useRef(0);
+  const isMountedRef = useRef(true);
+  const sendPendingRef = useRef(false);
 
   // Get user role for card grid and audio feedback
   const getUserRole = useAuthStore((s) => s.getUserRole);
@@ -291,8 +294,13 @@ export default function AIChatScreen() {
   const currentFactoryId = user?.userType === 'factory' ? user.factoryUser.factoryId : '';
   // P1: Voice result handler — show preview then auto-send
   const handleVoiceResult = (text: string) => {
+    if (!isMountedRef.current) return;
+    if (previewTimer.current) clearTimeout(previewTimer.current);
+    const generation = ++previewGenerationRef.current;
     setPreviewText(text);
     previewTimer.current = setTimeout(() => {
+      if (!isMountedRef.current || previewGenerationRef.current !== generation) return;
+      previewTimer.current = null;
       handleSend(text);
       setPreviewText('');
     }, 1500);
@@ -300,6 +308,7 @@ export default function AIChatScreen() {
 
   // Cancel voice preview
   const cancelVoicePreview = useCallback(() => {
+    ++previewGenerationRef.current;
     if (previewTimer.current) {
       clearTimeout(previewTimer.current);
       previewTimer.current = null;
@@ -307,10 +316,14 @@ export default function AIChatScreen() {
     setPreviewText('');
   }, []);
 
-  // Cleanup preview timer
+  // Invalidate queued preview callbacks as well as the active timer on unmount.
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
+      ++previewGenerationRef.current;
       if (previewTimer.current) clearTimeout(previewTimer.current);
+      previewTimer.current = null;
     };
   }, []);
 
@@ -420,48 +433,42 @@ export default function AIChatScreen() {
   // 发送消息 — 使用真正的 SSE 流式传输
   const handleSend = async (text?: string) => {
     const messageText = text || inputText.trim();
-    if (!messageText || isLoading) return;
-
-    setInputText('');
-    setIsLoading(true);
-    setStreamStatus(null);
+    if (!messageText || isLoading || sendPendingRef.current || !isMountedRef.current) return;
 
     const startTime = Date.now();
-
-    // 检测分析模式
-    const modeResult = detectAnalysisMode(messageText);
-
-    // 添加用户消息
-    const userMessage: Message = {
-      id: generateMessageId(),
-      role: 'user',
-      content: messageText,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, userMessage]);
-    scrollToBottom();
-
-    // 添加 AI 回复消息（初始为空，逐步填充）
     const assistantMessageId = generateMessageId();
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-        isLoading: true,
-        userQuestion: messageText,
-      },
-    ]);
-    scrollToBottom();
-
-    // 累积的流式文本
     let streamedContent = '';
-    // 收集到的结果数据
     let resultData: Record<string, unknown> | null = null;
 
+    // React state updates do not synchronously guard another press in this render.
+    sendPendingRef.current = true;
     try {
+      setInputText('');
+      setIsLoading(true);
+      setStreamStatus(null);
+      const modeResult = detectAnalysisMode(messageText);
+
+      const userMessage: Message = {
+        id: generateMessageId(),
+        role: 'user',
+        content: messageText,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+      scrollToBottom();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+          isLoading: true,
+          userQuestion: messageText,
+        },
+      ]);
+      scrollToBottom();
+
       const factoryId = currentFactoryId;
       if (!factoryId) {
         throw new Error('当前账号缺少工厂标识，请重新登录');
@@ -469,25 +476,30 @@ export default function AIChatScreen() {
 
       const callbacks: IntentSSECallbacks = {
         onStart: (message) => {
+          if (!isMountedRef.current) return;
           setStreamStatus(message);
           console.log('[AI Stream] Start:', message);
         },
 
         onCacheHit: (data) => {
+          if (!isMountedRef.current) return;
           setStreamStatus('命中缓存，快速响应...');
           console.log('[AI Stream] Cache hit:', data.cacheType, data.latencyMs + 'ms');
         },
 
         onCacheMiss: (latencyMs) => {
+          if (!isMountedRef.current) return;
           console.log('[AI Stream] Cache miss:', latencyMs + 'ms');
         },
 
         onProgress: (data) => {
+          if (!isMountedRef.current) return;
           setStreamStatus(data.message || data.stage);
           console.log('[AI Stream] Progress:', data.stage, data.message);
         },
 
         onIntentRecognized: (data) => {
+          if (!isMountedRef.current) return;
           setStreamStatus(`识别到: ${data.intentName}`);
           console.log('[AI Stream] Intent:', data.intentCode, data.confidence);
           // 更新消息的意图信息
@@ -501,11 +513,13 @@ export default function AIChatScreen() {
         },
 
         onExecuting: (intentName) => {
+          if (!isMountedRef.current) return;
           setStreamStatus(`正在执行: ${intentName}...`);
           console.log('[AI Stream] Executing:', intentName);
         },
 
         onMeta: (data) => {
+          if (!isMountedRef.current) return;
           console.log('[AI Stream] Meta:', data.model, data.questionType);
           // 更新分析模式
           setMessages((prev) =>
@@ -521,6 +535,7 @@ export default function AIChatScreen() {
         },
 
         onToken: (token) => {
+          if (!isMountedRef.current) return;
           // 逐 token 实时显示 — 这是真正的流式！
           streamedContent += token;
           setStreamStatus(null); // 收到内容后隐藏状态文本
@@ -535,6 +550,7 @@ export default function AIChatScreen() {
         },
 
         onResult: (result) => {
+          if (!isMountedRef.current) return;
           resultData = result;
           console.log('[AI Stream] Result status:', result.status);
 
@@ -660,6 +676,7 @@ export default function AIChatScreen() {
         },
 
         onComplete: (data) => {
+          if (!isMountedRef.current) return;
           console.log('[AI Stream] Complete:', data.status, data.totalLatencyMs + 'ms');
 
           // 如果 complete 带有 fullContent 且流式没收到内容，用 fullContent
@@ -700,6 +717,7 @@ export default function AIChatScreen() {
         },
 
         onError: (message) => {
+          if (!isMountedRef.current) return;
           console.error('[AI Stream] Error:', message);
           setMessages((prev) =>
             prev.map((msg) =>
@@ -722,6 +740,7 @@ export default function AIChatScreen() {
       await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType);
 
     } catch (error) {
+      if (!isMountedRef.current) return;
       console.error('AI 对话失败:', error);
 
       // 如果流式已经有内容，保留已有内容
@@ -746,6 +765,9 @@ export default function AIChatScreen() {
       }
       setStreamStatus(null);
       setIsLoading(false);
+    } finally {
+      sendPendingRef.current = false;
+      if (isMountedRef.current) setIsLoading(false);
     }
   };
 
