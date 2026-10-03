@@ -13,11 +13,13 @@
 ⚠️ 纯检索 (不要 LLM 粗选) 召回相同但首选对只有 35.3% —— 检索只用来**补足**, 不替代粗选。
 
 没有例句的意图 (或例句表还没建): 例句分 = 描述分, 退化成旧行为, 不报错。
+没有描述向量的意图 (描述太短被向量回填跳过, 2026-10-03 prod 有 2 个: 电子秤校准 / 电子秤故障排查):
+只用例句分 —— ⛔ 不能因为缺描述向量就整个排除出候选。
 """
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from ai.dto import CandidateIntentDto, MatchMethod
 from ai.embedding import get_embedding_cached, vec_to_pgvector_text
@@ -26,13 +28,12 @@ logger = logging.getLogger(__name__)
 
 DESC_SQL = """
 SELECT intent_code, intent_name, intent_category, description,
-       1 - (embedding <=> $1::vector) AS similarity
+       CASE WHEN embedding IS NULL THEN NULL ELSE 1 - (embedding <=> $1::vector) END AS similarity
 FROM ai_intent_configs
 WHERE deleted_at IS NULL
   AND is_active = true
   AND (factory_id IS NULL OR factory_id = $2)
   AND (business_type = 'COMMON' OR business_type = $3)
-  AND embedding IS NOT NULL
 """
 
 EXAMPLE_SQL = """
@@ -45,9 +46,20 @@ GROUP BY intent_code
 _missing_table_warned = False
 
 
-def blend_scores(desc: Dict[str, float], ex: Dict[str, float], blend: float) -> Dict[str, float]:
-    """只给有描述向量 (= 可见) 的意图打分; 没有例句的意图例句分取描述分。"""
-    return {c: ex.get(c, d) * (1 - blend) + d * blend for c, d in desc.items()}
+def blend_scores(desc: Dict[str, Optional[float]], ex: Dict[str, float], blend: float) -> Dict[str, float]:
+    """只给可见意图 (desc 的键) 打分。缺例句 → 例句分取描述分; 缺描述向量 → 只用例句分; 两样都缺 → 不打分。"""
+    out: Dict[str, float] = {}
+    for c, d in desc.items():
+        e = ex.get(c)
+        if d is None and e is None:
+            continue
+        if d is None:
+            out[c] = e
+        elif e is None:
+            out[c] = d
+        else:
+            out[c] = e * (1 - blend) + d * blend
+    return out
 
 
 class BlendRetriever:
@@ -79,7 +91,8 @@ class BlendRetriever:
                     _missing_table_warned = True
                 ex_rows = []
         meta = {r["intent_code"]: r for r in desc_rows}
-        scores = blend_scores({r["intent_code"]: float(r["similarity"]) for r in desc_rows},
+        scores = blend_scores({r["intent_code"]: (None if r["similarity"] is None else float(r["similarity"]))
+                               for r in desc_rows},
                               {r["intent_code"]: float(r["similarity"]) for r in ex_rows}, self.blend)
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])[: self.top_k]
         return [
