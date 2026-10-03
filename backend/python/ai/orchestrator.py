@@ -38,6 +38,10 @@ from ai.dto import (
 )
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
+from ai.matcher.decision import CLARIFY_KEY, NONE_KEY
+
+# 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
+NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
 
 logger = logging.getLogger(__name__)
 
@@ -164,11 +168,36 @@ class Orchestrator:
 
         # ===== ② 决策: 读概率 =====
         t = time.time()
-        probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history)
+        special = bool(getattr(self.config, "decision_special_options", False))
+        if special:
+            probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
+                                                       special_options=True)
+        else:
+            probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history)
         timing["decisionMs"] = int((time.time() - t) * 1000)
         if not probs:
             return None
+        p_none = float(probs.pop(NONE_KEY, 0.0) or 0.0)
+        p_clarify = float(probs.pop(CLARIFY_KEY, 0.0) or 0.0)
         ranked = sorted(probs.items(), key=lambda kv: -kv[1])
+        top_real = ranked[0][1] if ranked else 0.0
+        if special:
+            timing["decisionNoneP"] = int(round(p_none * 1000))
+            timing["decisionClarifyP"] = int(round(p_clarify * 1000))
+        # 「以上都不是」最大且过半 → 明确判无对应功能: 不执行、不回落旧路径猜一个 (Java 认 decisionNone)
+        if special and p_none >= 0.5 and p_none > top_real and p_none >= p_clarify:
+            timing["decisionNone"] = 1
+            timing["totalMs"] = int((time.time() - t0) * 1000)
+            result = IntentMatchResultDto.empty(userInput=query)
+            result.matchMethod = MatchMethod.LLM
+            result.questionType = QuestionType.CONVERSATIONAL
+            result.conversationMessage = NONE_REPLY
+            result.timingMs = timing
+            return result
+        # 「需要先问清楚」最大 → 一律出按钮 (不管真实第一名的概率是多少)
+        force_clarify = special and p_clarify > top_real and p_clarify >= p_none
+        if force_clarify:
+            timing["decisionClarify"] = 1
         candidates = []
         for i, (code, p) in enumerate(ranked[:5]):
             if i >= 2 and p < 0.03:  # 澄清按钮至少两个, 其余只留有分量的
@@ -183,7 +212,8 @@ class Orchestrator:
         # ③ 置信不够 → requiresConfirmation=true, Java 走 buildClarificationResponse 出候选按钮
         return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,
                                   visible_intents=visible_intents,
-                                  min_confidence=self.config.decision_auto_threshold, timing=timing)
+                                  min_confidence=1.01 if force_clarify else self.config.decision_auto_threshold,
+                                  timing=timing)
 
     async def _match_legacy(
         self,
