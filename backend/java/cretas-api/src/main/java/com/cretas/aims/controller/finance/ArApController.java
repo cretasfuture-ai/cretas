@@ -3,6 +3,8 @@ package com.cretas.aims.controller.finance;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.finance.RecordTransactionRequest;
+import com.cretas.aims.dto.finance.ArApQueryResponses;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentMethod;
 import com.cretas.aims.entity.finance.ArApTransaction;
@@ -37,6 +39,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class ArApController {
 
     private final ArApService arApService;
+    private final ObjectMapper objectMapper;
     private final MobileService mobileService;
     /** R23 audit C4: conditional module check for /adjustment endpoint (counterpartyType-dependent). */
     private final FactoryConfigService factoryConfigService;
@@ -279,7 +282,7 @@ public class ArApController {
     @GetMapping("/statement")
     @Operation(summary = "对账单（指定期间的交易明细+期初期末余额）")
     @RequirePermission({"finance:read_write", "finance:read"})
-    public ApiResponse<Map<String, Object>> getStatement(
+    public ApiResponse<ArApQueryResponses.Statement> getStatement(
             @PathVariable @NotBlank String factoryId,
             @RequestParam CounterpartyType counterpartyType,
             @RequestParam String counterpartyId,
@@ -287,26 +290,34 @@ public class ArApController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
         Map<String, Object> statement = arApService.getStatement(
                 factoryId, counterpartyType, counterpartyId, startDate, endDate);
-        return ApiResponse.success("查询成功", statement);
+        Map<String, Object> summary = new LinkedHashMap<>(statement);
+        Object transactionRows = summary.remove("transactions");
+        if (!(transactionRows instanceof List<?> rows)) {
+            throw new IllegalStateException("Finance statement transactions are missing");
+        }
+        ArApQueryResponses.Statement response = objectMapper.convertValue(summary, ArApQueryResponses.Statement.class);
+        response.setTransactions(rows.stream().map(ArApTransaction.class::cast).toList());
+        return ApiResponse.success("查询成功", response);
     }
 
     @GetMapping("/aging")
     @Operation(summary = "账龄分析（6桶）")
     @RequirePermission({"finance:read_write", "finance:read"})
-    public ApiResponse<List<Map<String, Object>>> getAgingAnalysis(
+    public ApiResponse<List<ArApQueryResponses.Aging>> getAgingAnalysis(
             @PathVariable @NotBlank String factoryId,
             @RequestParam CounterpartyType counterpartyType) {
         List<Map<String, Object>> aging = arApService.getAgingAnalysis(factoryId, counterpartyType);
-        return ApiResponse.success("查询成功", aging);
+        return ApiResponse.success("查询成功", aging.stream()
+                .map(row -> objectMapper.convertValue(row, ArApQueryResponses.Aging.class)).toList());
     }
 
     @GetMapping("/overview")
     @Operation(summary = "财务概览（应收应付汇总）")
     @RequirePermission({"finance:read_write", "finance:read"})
-    public ApiResponse<Map<String, Object>> getFinanceOverview(
+    public ApiResponse<ArApQueryResponses.Overview> getFinanceOverview(
             @PathVariable @NotBlank String factoryId) {
         Map<String, Object> overview = arApService.getFinanceOverview(factoryId);
-        return ApiResponse.success("查询成功", overview);
+        return ApiResponse.success("查询成功", objectMapper.convertValue(overview, ArApQueryResponses.Overview.class));
     }
 
     @GetMapping("/credit-check")

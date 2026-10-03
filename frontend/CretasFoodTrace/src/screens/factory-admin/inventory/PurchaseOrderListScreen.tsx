@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import { View, StyleSheet, FlatList, Alert, RefreshControl, TouchableOpacity, ScrollView } from 'react-native';
 import { Text, Appbar, Card, Chip, FAB, Portal, Modal, TextInput, Button, ActivityIndicator, SegmentedButtons, Icon } from 'react-native-paper';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchaseApiClient';
 import { useAuthStore } from '../../../store/authStore';
-import { formatNumberWithCommas } from '../../../utils/formatters';
+import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { RowActionBottomSheet, StickyFooterSummary } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useListSummary } from '../../../hooks/useListSummary';
@@ -22,6 +22,16 @@ type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 // 兜底把原始枚举串显示给了用户 (测试反馈 2026-08-12)。
 
 export default function PurchaseOrderListScreen() {
+  const { user } = useAuthStore();
+  const owner = useRef({ user, generation: 0 });
+  if (owner.current.user !== user) {
+    owner.current = { user, generation: owner.current.generation + 1 };
+  }
+  // Remount before rendering data belonging to a different authenticated actor.
+  return <PurchaseOrderListForActor key={owner.current.generation} />;
+}
+
+function PurchaseOrderListForActor() {
   const navigation = useNavigation<Nav>();
   const { user } = useAuthStore();
   const isOperationsReadOnly = isMobileBusinessObserver(user);
@@ -31,8 +41,16 @@ export default function PurchaseOrderListScreen() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+  const [footerHeight, setFooterHeight] = useState(0);
+  const requestSequence = useRef(0);
+  const focused = useRef(false);
 
   const loadOrders = useCallback(async () => {
+    const sequence = ++requestSequence.current;
+    const actor = useAuthStore.getState().user;
+    const isCurrent = () => focused.current && sequence === requestSequence.current
+      && actor === user && actor === useAuthStore.getState().user;
+    if (!actor || actor !== user) return;
     try {
       const params = { page: 1, size: 50 };
       let res;
@@ -44,30 +62,64 @@ export default function PurchaseOrderListScreen() {
       } else {
         res = await purchaseApiClient.getOrders(params);
       }
-      if (res.success && res.data) {
+      if (isCurrent() && res.success && res.data) {
         setOrders(res.data.content || []);
       }
     } catch (error) {
-      Alert.alert('错误', '加载采购单失败');
+      if (isCurrent()) Alert.alert('错误', '加载采购单失败');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [statusFilter]);
-
-  useEffect(() => { loadOrders(); }, [loadOrders]);
-
-  const onRefresh = () => { setRefreshing(true); loadOrders(); };
+  }, [statusFilter, user]);
 
   // U-FOOTER-1: sticky footer summary, filter mirrors list filter
   const summaryRequest = useMemo(
     () => ({ filterConditions: statusFilter !== 'all' ? { status: statusFilter } : {} }),
-    [statusFilter],
+    [statusFilter, user],
   );
-  const { summary, refresh: refreshSummary } = useListSummary('purchaseOrder', summaryRequest);
-  useEffect(() => { refreshSummary(); }, [refreshSummary, refreshing]);
+  const factoryId = user?.userType === 'factory' ? user.factoryUser.factoryId : undefined;
+  const { summary, refresh: refreshSummary } = useListSummary('purchaseOrder', summaryRequest, factoryId);
+  const latestRefresh = useRef({ loadOrders, refreshSummary });
+  latestRefresh.current = { loadOrders, refreshSummary };
+  const hasFocused = useRef(false);
+  useFocusEffect(useCallback(() => {
+    focused.current = true;
+    void latestRefresh.current.loadOrders();
+    // The summary hook owns the initial request and filter changes.
+    if (hasFocused.current) void latestRefresh.current.refreshSummary();
+    hasFocused.current = true;
+    return () => {
+      focused.current = false;
+      ++requestSequence.current;
+      setActionSheetVisible(false);
+    };
+  }, []));
+  const previousQuery = useRef({ statusFilter, user });
+  React.useEffect(() => {
+    const previous = previousQuery.current;
+    previousQuery.current = { statusFilter, user };
+    if (previous.statusFilter === statusFilter && previous.user === user) return;
+    ++requestSequence.current;
+    setOrders([]);
+    setSelectedOrder(null);
+    setActionSheetVisible(false);
+    setLoading(true);
+    if (focused.current) void loadOrders();
+  }, [loadOrders, statusFilter, user]);
 
-  const handleAction = async (orderId: string, action: string) => {
+  const onRefresh = () => {
+    if (!focused.current || useAuthStore.getState().user !== user) return;
+    setRefreshing(true);
+    void loadOrders();
+    void refreshSummary();
+  };
+
+  const handleAction = useCallback(async (orderId: string, action: string) => {
+    const currentUser = useAuthStore.getState().user;
+    if (!focused.current || !currentUser || currentUser !== user || isMobileBusinessObserver(currentUser)) return;
     try {
       let res;
       switch (action) {
@@ -76,12 +128,15 @@ export default function PurchaseOrderListScreen() {
         case 'reject': res = await purchaseApiClient.rejectOrder(orderId); break;
         case 'cancel': res = await purchaseApiClient.cancelOrder(orderId); break;
       }
-      if (res?.success) {
+      if (res?.success && focused.current && currentUser === useAuthStore.getState().user) {
         Alert.alert('成功', '操作成功');
-        loadOrders();
+        void latestRefresh.current.loadOrders();
+        void latestRefresh.current.refreshSummary();
       }
-    } catch { Alert.alert('错误', '操作失败'); }
-  };
+    } catch {
+      if (focused.current && currentUser === useAuthStore.getState().user) Alert.alert('错误', '操作失败');
+    }
+  }, [user]);
 
   const handlers = useMemo(() => ({
     'view-detail': (e: RowContext) => navigation.navigate('PurchaseOrderDetail', { orderId: e.id }),
@@ -91,11 +146,11 @@ export default function PurchaseOrderListScreen() {
     cancel: (e: RowContext) => handleAction(e.id, 'cancel'),
     'print-pdf': (e: RowContext) => { void safePrint('purchase-order', e.id); },
     copy: (e: RowContext) => Alert.alert('复制', `复制单据 ${e.id} (待接 API)`),
-  }), [navigation]);
+  }), [navigation, handleAction]);
 
   const sheetCtx: RowContext = selectedOrder
-    ? { status: selectedOrder.status, id: selectedOrder.id }
-    : { status: '', id: '' };
+    ? { status: selectedOrder.status, id: selectedOrder.id, canEdit: !isOperationsReadOnly }
+    : { status: '', id: '', canEdit: !isOperationsReadOnly };
   const rowActions = useRowActions('purchaseOrder', sheetCtx, { handlers });
 
   const openSheet = (order: PurchaseOrder) => { setSelectedOrder(order); setActionSheetVisible(true); };
@@ -117,7 +172,7 @@ export default function PurchaseOrderListScreen() {
           </View>
           <View style={styles.cardRow}>
             <Text style={styles.label}>金额</Text>
-            <Text style={[styles.value, styles.amount]}>¥{formatNumberWithCommas(item.totalAmount)}</Text>
+            <Text style={[styles.value, styles.amount]}>{formatVisibleOrderAmount(item.totalAmount)}</Text>
           </View>
           <View style={styles.cardRow}>
             <Text style={styles.label}>下单日期</Text>
@@ -207,6 +262,11 @@ export default function PurchaseOrderListScreen() {
         )}
       </View>
 
+      <View onLayout={event => setFooterHeight(event.nativeEvent.layout.height)}>
+      {isOperationsReadOnly && <StickyFooterSummary
+        stats={(summary?.stats ?? []).filter(stat => !stat.canViewPrice)}
+        loading={summary == null && !loading}
+      />}
       {!isOperationsReadOnly && <StickyFooterSummary
         stats={summary?.stats ?? []}
         loading={summary == null && !loading}
@@ -220,10 +280,10 @@ export default function PurchaseOrderListScreen() {
           }))
         }
       />}
-
+      </View>
       {!isOperationsReadOnly && <FAB
         icon="plus"
-        style={styles.fab}
+        style={[styles.fab, { bottom: footerHeight }]}
         onPress={() => navigation.navigate('PurchaseOrderCreate')}
         label="新建采购单"
       />}
@@ -249,7 +309,7 @@ export default function PurchaseOrderListScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   // SP6 #36 — 快捷入口条
-  quickBar: { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  quickBar: { flexGrow: 0, flexShrink: 0, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   quickBarContent: { paddingHorizontal: 12, paddingVertical: 10, gap: 10, flexDirection: 'row' },
   quickCard: {
     width: 120,

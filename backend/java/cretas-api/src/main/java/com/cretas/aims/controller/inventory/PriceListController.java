@@ -117,8 +117,7 @@ public class PriceListController {
     public ApiResponse<PriceList> getPriceList(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String priceListId) {
-        PriceList priceList = priceListRepository.findById(priceListId)
-                .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
+        PriceList priceList = requireFactoryPriceList(factoryId, priceListId);
         return ApiResponse.success("查询成功", priceList);
     }
 
@@ -201,10 +200,15 @@ public class PriceListController {
     public ApiResponse<Void> deletePriceList(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String priceListId) {
-        PriceList priceList = priceListRepository.findById(priceListId)
-                .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
+        PriceList priceList = requireFactoryPriceList(factoryId, priceListId);
         priceListRepository.delete(priceList);
         log.info("删除价格表: priceListId={}", priceListId);
         return ApiResponse.success("价格表删除成功", null);
+    }
+
+    private PriceList requireFactoryPriceList(String factoryId, String priceListId) {
+        return priceListRepository.findById(priceListId)
+                .filter(priceList -> factoryId.equals(priceList.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
     }
 }

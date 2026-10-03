@@ -29,7 +29,7 @@ export interface PurchaseOrder {
   financeReviewedBy?: number;
   financeReviewedAt?: string;
   financeReviewNotes?: string;
-  totalAmount: number;
+  totalAmount: number | null;
   orderDate: string;
   expectedDeliveryDate?: string;
   remark?: string;
@@ -60,14 +60,14 @@ export interface PurchaseOrderItem {
   materialName?: string;
   quantity: number;
   receivedQuantity: number;
-  unitPrice: number;
+  unitPrice: number | null;
   unit: string;
   materialPackagingSpecId?: string;
   purchasePackageUnitSnapshot?: string;
   inventoryBaseUnitSnapshot?: string;
   packageToBaseFactorSnapshot?: number;
   inventoryQuantitySnapshot?: number;
-  totalPrice: number;
+  totalPrice: number | null;
   remark?: string;
 }
 
