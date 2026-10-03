@@ -5,7 +5,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { salesApiClient, SalesOrder } from '../../../services/api/salesApiClient';
-import { formatNumberWithCommas } from '../../../utils/formatters';
+import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { useAuthStore } from '../../../store/authStore';
 import { MissingRouteParams } from '../../../components/common/MissingRouteParams';
 import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
@@ -60,6 +60,9 @@ export default function SalesOrderDetailScreen() {
   });
 
   useEffect(() => { if (orderId) loadOrder(); }, [orderId]);
+  useEffect(() => {
+    if (isOperationsReadOnly) setShortCloseVisible(false);
+  }, [isOperationsReadOnly]);
 
   // ⛔ 这个 early return 必须在**所有 hook 之后** —— 提到 hook 中间就违反 hooks 规则。
   if (!orderId) {
@@ -82,10 +85,14 @@ export default function SalesOrderDetailScreen() {
   };
 
   const handleAction = async (action: string) => {
+    const currentUser = useAuthStore.getState().user;
+    if (!currentUser || isMobileBusinessObserver(currentUser)) return;
     const labels: Record<string, string> = { confirm: '确认订单', cancel: '取消订单' };
     Alert.alert('确认', `确认${labels[action]}？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
+        const currentUser = useAuthStore.getState().user;
+        if (!currentUser || isMobileBusinessObserver(currentUser)) return;
         try {
           let res;
           if (action === 'confirm') res = await salesApiClient.confirmOrder(orderId);
@@ -106,11 +113,15 @@ export default function SalesOrderDetailScreen() {
   };
 
   const openShortCloseDialog = () => {
+    const currentUser = useAuthStore.getState().user;
+    if (!currentUser || isMobileBusinessObserver(currentUser)) return;
     setShortCloseForm({ reasonCode: '', notes: '', acknowledged: false });
     setShortCloseVisible(true);
   };
 
   const submitShortClose = async () => {
+    const currentUser = useAuthStore.getState().user;
+    if (!currentUser || isMobileBusinessObserver(currentUser) || !canShortCloseSalesOrder(order, currentUser)) return;
     if (!order || shortCloseSubmitting) return;
     // 本地拦一道 (少一次往返), 后端 SalesServiceImpl 仍会自己再判一遍。
     const blocked = shortCloseSubmitReason;
@@ -179,9 +190,10 @@ export default function SalesOrderDetailScreen() {
             </View>
             <Divider style={styles.divider} />
             <InfoRow label="客户" value={order.customerName || order.customerId} />
-            <InfoRow label="总金额" value={`¥${formatNumberWithCommas(order.totalAmount)}`} valueStyle={styles.amountText} />
+            <InfoRow label="总金额" value={formatVisibleOrderAmount(order.totalAmount)} valueStyle={styles.amountText} />
             <InfoRow label="下单日期" value={order.orderDate} />
-            <InfoRow label="预计交付" value={order.expectedDeliveryDate || '-'} />
+            <InfoRow label="要求交付" value={order.requiredDeliveryDate || '-'} />
+            {order.expectedDeliveryDate && <InfoRow label="预计交付" value={order.expectedDeliveryDate} />}
             {order.remark ? <InfoRow label="备注" value={order.remark} /> : null}
           </Card.Content>
         </Card>
@@ -204,7 +216,7 @@ export default function SalesOrderDetailScreen() {
                   <DataTable.Cell>{item.productName || item.productTypeName || item.productTypeId}</DataTable.Cell>
                   <DataTable.Cell numeric>{item.quantity} {item.unit}</DataTable.Cell>
                   <DataTable.Cell numeric>{item.deliveredQuantity}</DataTable.Cell>
-                  <DataTable.Cell numeric>¥{formatNumberWithCommas(item.unitPrice)}</DataTable.Cell>
+                  <DataTable.Cell numeric>{formatVisibleOrderAmount(item.unitPrice)}</DataTable.Cell>
                 </DataTable.Row>
               ))}
             </DataTable>
@@ -256,7 +268,7 @@ export default function SalesOrderDetailScreen() {
         <View style={{ height: 30 }} />
       </ScrollView>
 
-      {shortCloseVisible && (
+      {!isOperationsReadOnly && shortCloseVisible && (
         <View style={styles.dialogOverlay}>
           <ScrollView style={styles.dialogScroll} contentContainerStyle={styles.dialogScrollContent}>
             <View style={styles.dialogBox}>

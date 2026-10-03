@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { View, StyleSheet, ScrollView, RefreshControl, Alert, TouchableOpacity } from 'react-native';
 import {
   Text,
@@ -20,9 +20,12 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuthStore } from '../../store/authStore';
-import { processingApiClient } from '../../services/api/processingApiClient';
+import { processingApiClient, ProcessingBatch } from '../../services/api/processingApiClient';
+import { dashboardAPI, ProductionPeriod, ProductionSummary } from '../../services/api/dashboardApiClient';
 import { reportApiClient, RealtimeData, CapacityUtilizationReport } from '../../services/api/reportApiClient';
-import { getFactoryId } from '../../types/auth';
+import { canvasApiClient } from '../../services/api/canvasApiClient';
+import { getFactoryId, User } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
 import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { ReportStackParamList } from '../../types/navigation';
@@ -46,7 +49,39 @@ type NavigationProp = NativeStackNavigationProp<ReportStackParamList>;
 // 主标签类型
 type MainTab = 'overview' | 'realtime' | 'capacity';
 
-export default function ProductionReportScreen() {
+const REPORT_READ_MODULES = ['dashboard', 'warehouse', 'production', 'inventory', 'quality', 'finance'] as const;
+
+function getCanonicalActorKey(user: User | null): string {
+  if (!user) return 'anonymous';
+  const actor = user.userType === 'factory' ? user.factoryUser : user.platformUser;
+  const modulePermissions = user.userType === 'factory' ? user.factoryUser.modulePermissions : undefined;
+  return JSON.stringify({
+    userType: user.userType,
+    userId: user.id,
+    factoryId: getFactoryId(user),
+    role: actor?.role ?? user.role ?? '',
+    permissions: [...(actor?.permissions ?? [])].sort(),
+    modulePermissions: modulePermissions
+      ? Object.entries(modulePermissions).sort(([left], [right]) => left.localeCompare(right))
+      : [],
+  });
+}
+
+function hasProductionSummaryRead(user: User | null): boolean {
+  if (!user) return false;
+  const actor = user.userType === 'factory' ? user.factoryUser : user.platformUser;
+  return REPORT_READ_MODULES.some((module) => hasModulePermission(user, module, 'read'))
+    || (actor?.permissions ?? []).includes('procurement:price:view');
+}
+
+function hasFinancialReportRead(user: User | null): boolean {
+  if (!user) return false;
+  const actor = user.userType === 'factory' ? user.factoryUser : user.platformUser;
+  return hasModulePermission(user, 'finance', 'read')
+    || (actor?.permissions ?? []).includes('procurement:price:view');
+}
+
+function ProductionReportScreenContent() {
   const navigation = useNavigation<NavigationProp>();
   const { user } = useAuthStore();
   const { t } = useTranslation('reports');
@@ -55,27 +90,71 @@ export default function ProductionReportScreen() {
   const [mainTab, setMainTab] = useState<MainTab>('overview');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [timeRange, setTimeRange] = useState('week'); // day, week, month
+  const [timeRange, setTimeRange] = useState<ProductionPeriod>('week');
 
   // 数据状态
-  const [productionStats, setProductionStats] = useState<any>(null);
-  const [recentBatches, setRecentBatches] = useState<any[]>([]);
+  const [productionStats, setProductionStats] = useState<ProductionSummary | null>(null);
+  const [productionStatsError, setProductionStatsError] = useState<string | null>(null);
+  const [recentBatches, setRecentBatches] = useState<ProcessingBatch[]>([]);
+  const [recentBatchesError, setRecentBatchesError] = useState<string | null>(null);
 
   // 实时监控数据状态
   const [realtimeData, setRealtimeData] = useState<RealtimeData | null>(null);
   const [realtimeLoading, setRealtimeLoading] = useState(false);
+  const [realtimeError, setRealtimeError] = useState<string | null>(null);
 
   // 产能利用数据状态
   const [capacityData, setCapacityData] = useState<CapacityUtilizationReport | null>(null);
   const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityError, setCapacityError] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
+  const ownerKey = useMemo(() => getCanonicalActorKey(user), [user]);
+
+  // 同一屏的三个 tab 共用 owner generation；身份/工厂/角色变化时清空旧读数，
+  // 任何迟到的旧请求都不能再回填任一 tab。
+  useLayoutEffect(() => {
+    requestGenerationRef.current += 1;
+    setProductionStats(null);
+    setProductionStatsError(null);
+    setRecentBatches([]);
+    setRecentBatchesError(null);
+    setRealtimeData(null);
+    setRealtimeError(null);
+    setCapacityData(null);
+    setCapacityError(null);
+    setLoading(false);
+    setRealtimeLoading(false);
+    setCapacityLoading(false);
+  }, [ownerKey]);
+
+  const isLiveOwner = (expectedOwnerKey: string): boolean => {
+    const liveUser = useAuthStore.getState().user;
+    return expectedOwnerKey === ownerKey && getCanonicalActorKey(liveUser) === expectedOwnerKey;
+  };
 
   /**
    * 加载生产数据
    */
   const loadProductionData = async () => {
+    const generation = ++requestGenerationRef.current;
+    const expectedOwnerKey = ownerKey;
+    const currentUser = useAuthStore.getState().user;
+    if (!isLiveOwner(expectedOwnerKey)) return;
+    const canReadSummary = hasProductionSummaryRead(currentUser);
+    if (!canReadSummary && !currentUser) {
+      setProductionStats(null);
+      setProductionStatsError(t('production.permissionDenied'));
+      setRecentBatches([]);
+      setRecentBatchesError(t('production.permissionDenied'));
+      return;
+    }
     setLoading(true);
+    setProductionStats(null);
+    setProductionStatsError(null);
+    setRecentBatches([]);
+    setRecentBatchesError(null);
     try {
-      const factoryId = getFactoryId(user);
+      const factoryId = getFactoryId(currentUser);
 
       if (!factoryId) {
         Alert.alert(t('production.error'), t('production.cannotGetFactoryInfo'));
@@ -84,49 +163,80 @@ export default function ProductionReportScreen() {
 
       productionReportLogger.debug('加载生产报表数据', { timeRange, factoryId });
 
-      // 加载最近的批次列表
-      const batchesResponse = await processingApiClient.getBatches({
-        page: 1,
-        size: 10,
-        status: 'completed', // 只看已完成的批次
-        factoryId: factoryId
-      });
+      const period: ProductionPeriod = timeRange;
+      const [statisticsResult, accessResult] = await Promise.allSettled([
+        canReadSummary
+          ? dashboardAPI.getProductionStatistics({ period }, factoryId)
+          : Promise.resolve({ success: false, data: null, message: t('production.permissionDenied') }),
+        canvasApiClient.getUserModuleAccess(factoryId, currentUser?.id ?? ''),
+      ]);
 
-      if (batchesResponse.success && batchesResponse.data) {
-        const batches = batchesResponse.data.content || batchesResponse.data || [];
-        setRecentBatches(Array.isArray(batches) ? batches : []);
-
-        // 计算统计数据
-        const stats = calculateProductionStats(batches);
-        setProductionStats(stats);
-
-        productionReportLogger.info('生产报表数据加载成功', {
-          batchCount: batches.length,
-          totalOutput: stats.totalOutput,
-          completionRate: Number(stats.completionRate ?? 0).toFixed(1) + '%',
-          factoryId,
-        });
+      if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
+      if (statisticsResult.status === 'fulfilled') {
+        const statisticsResponse = statisticsResult.value;
+        const summary = statisticsResponse.success ? statisticsResponse.data?.productionSummary : null;
+        if (summary) {
+          setProductionStats(summary);
+          setProductionStatsError(null);
+          productionReportLogger.info('生产统计摘要加载成功', {
+            totalBatches: summary.totalBatches,
+            completionRate: summary.completionRate,
+            factoryId,
+            period,
+          });
+        } else {
+          setProductionStats(null);
+          setProductionStatsError(statisticsResponse.message || t('production.noStatsData'));
+        }
       } else {
-        productionReportLogger.warn('获取生产数据失败', {
-          message: batchesResponse.message,
-          factoryId,
-        });
-        setRecentBatches([]);
         setProductionStats(null);
+        setProductionStatsError(statisticsResult.reason instanceof Error
+          ? statisticsResult.reason.message : t('production.loadProductionDataFailed'));
+      }
+
+      if (accessResult.status !== 'fulfilled') {
+        setRecentBatches([]);
+        setRecentBatchesError(t('production.loadRecentBatchesFailed'));
+      } else {
+        const canReadSamples = accessResult.value.some(
+          (access) => access.moduleCode === 'production_plan' && access.effectiveAllowed
+        );
+        if (!canReadSamples) {
+          setRecentBatches([]);
+          setRecentBatchesError(t('production.permissionDenied'));
+        } else {
+          try {
+            const batchesResponse = await processingApiClient.getBatches({ page: 1, size: 10, factoryId });
+            if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
+            if (batchesResponse.success) {
+              setRecentBatches(batchesResponse.data?.content ?? []);
+              setRecentBatchesError(null);
+            } else {
+              setRecentBatches([]);
+              setRecentBatchesError(batchesResponse.message || t('production.loadRecentBatchesFailed'));
+            }
+          } catch (sampleError) {
+            if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
+            setRecentBatches([]);
+            setRecentBatchesError(sampleError instanceof Error
+              ? sampleError.message : t('production.loadRecentBatchesFailed'));
+          }
+        }
       }
     } catch (error) {
+      if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
       productionReportLogger.error('加载生产报表失败', error as Error, {
-        factoryId: getFactoryId(user),
+        factoryId: getFactoryId(useAuthStore.getState().user),
         timeRange,
       });
       handleError(error, {
         title: t('production.loadFailed'),
         customMessage: t('production.loadProductionDataFailed'),
       });
-      setRecentBatches([]);
       setProductionStats(null);
+      setProductionStatsError(error instanceof Error ? error.message : t('production.loadProductionDataFailed'));
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current && isLiveOwner(expectedOwnerKey)) setLoading(false);
     }
   };
 
@@ -134,9 +244,20 @@ export default function ProductionReportScreen() {
    * 加载实时监控数据
    */
   const loadRealtimeData = async () => {
+    const generation = ++requestGenerationRef.current;
+    const expectedOwnerKey = ownerKey;
+    const currentUser = useAuthStore.getState().user;
+    if (!isLiveOwner(expectedOwnerKey)) return;
+    if (!hasFinancialReportRead(currentUser)) {
+      setRealtimeData(null);
+      setRealtimeError(t('production.permissionDenied'));
+      return;
+    }
     setRealtimeLoading(true);
+    setRealtimeData(null);
+    setRealtimeError(null);
     try {
-      const factoryId = getFactoryId(user);
+      const factoryId = getFactoryId(currentUser);
       if (!factoryId) {
         productionReportLogger.warn('无法获取工厂ID');
         return;
@@ -146,16 +267,20 @@ export default function ProductionReportScreen() {
       const response = await reportApiClient.getRealtimeData(factoryId);
       // 解包嵌套的响应格式 {code, message, data}
       const actualData = (response && typeof response === 'object' && 'data' in response) ? (response as { data: typeof response }).data : response;
+      if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
       setRealtimeData(actualData);
+      setRealtimeError(null);
       productionReportLogger.info('实时监控数据加载成功', {
         runningPlans: actualData.runningPlans,
         todayOutput: actualData.todayOutput,
       });
     } catch (error) {
+      if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
       productionReportLogger.error('加载实时监控数据失败', error as Error);
-      // 静默处理，不弹窗
+      setRealtimeData(null);
+      setRealtimeError(error instanceof Error ? error.message : t('production.loadRealtimeFailed'));
     } finally {
-      setRealtimeLoading(false);
+      if (generation === requestGenerationRef.current && isLiveOwner(expectedOwnerKey)) setRealtimeLoading(false);
     }
   };
 
@@ -163,9 +288,20 @@ export default function ProductionReportScreen() {
    * 加载产能利用数据
    */
   const loadCapacityData = async () => {
+    const generation = ++requestGenerationRef.current;
+    const expectedOwnerKey = ownerKey;
+    const currentUser = useAuthStore.getState().user;
+    if (!isLiveOwner(expectedOwnerKey)) return;
+    if (!hasFinancialReportRead(currentUser)) {
+      setCapacityData(null);
+      setCapacityError(t('production.permissionDenied'));
+      return;
+    }
     setCapacityLoading(true);
+    setCapacityData(null);
+    setCapacityError(null);
     try {
-      const factoryId = getFactoryId(user);
+      const factoryId = getFactoryId(currentUser);
       if (!factoryId) {
         productionReportLogger.warn('无法获取工厂ID');
         return;
@@ -174,7 +310,7 @@ export default function ProductionReportScreen() {
       // 计算日期范围：最近7天
       const endDate = new Date();
       const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 7);
+      startDate.setDate(startDate.getDate() - 6);
 
 
       productionReportLogger.debug('加载产能利用数据', {
@@ -190,51 +326,21 @@ export default function ProductionReportScreen() {
       });
       // 解包嵌套的响应格式 {code, message, data}
       const actualData = (response && typeof response === 'object' && 'data' in response) ? (response as { data: typeof response }).data : response;
+      if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
       setCapacityData(actualData);
+      setCapacityError(null);
       productionReportLogger.info('产能利用数据加载成功', {
-        overallUtilization: actualData.overallUtilization,
-        lineCount: actualData.utilizationByLine?.length ?? 0,
+        averageUtilization: actualData.averageUtilization,
+        equipmentCount: actualData.equipmentUtilization?.length ?? 0,
       });
     } catch (error) {
+      if (generation !== requestGenerationRef.current || !isLiveOwner(expectedOwnerKey)) return;
       productionReportLogger.error('加载产能利用数据失败', error as Error);
-      // 静默处理，不弹窗
+      setCapacityData(null);
+      setCapacityError(error instanceof Error ? error.message : t('production.loadCapacityFailed'));
     } finally {
-      setCapacityLoading(false);
+      if (generation === requestGenerationRef.current && isLiveOwner(expectedOwnerKey)) setCapacityLoading(false);
     }
-  };
-
-  /**
-   * 计算生产统计
-   */
-  const calculateProductionStats = (batches: any[]) => {
-    const totalBatches = batches.length;
-    const totalOutput = batches.reduce((sum, batch) => {
-      const output = batch.actualQuantity || batch.outputQuantity || batch.targetQuantity || 0;
-      return sum + output;
-    }, 0);
-
-    const completedBatches = batches.filter(
-      (b) => b.status === 'completed' || b.status === 'COMPLETED'
-    ).length;
-
-    const avgOutput = totalBatches > 0 ? totalOutput / totalBatches : 0;
-
-    // 计算合格率（如果有质检数据）
-    const batchesWithQuality = batches.filter((b) => b.qualityRate !== undefined);
-    const avgQualityRate =
-      batchesWithQuality.length > 0
-        ? batchesWithQuality.reduce((sum, b) => sum + (b.qualityRate || 0), 0) /
-          batchesWithQuality.length
-        : null;
-
-    return {
-      totalBatches,
-      totalOutput,
-      completedBatches,
-      avgOutput,
-      avgQualityRate,
-      completionRate: totalBatches > 0 ? (completedBatches / totalBatches) * 100 : 0,
-    };
   };
 
   /**
@@ -274,7 +380,10 @@ export default function ProductionReportScreen() {
       } else if (mainTab === 'capacity') {
         loadCapacityData();
       }
-    }, [timeRange, mainTab])
+      return () => {
+        requestGenerationRef.current += 1;
+      };
+    }, [timeRange, mainTab, ownerKey])
   );
 
   /**
@@ -285,6 +394,19 @@ export default function ProductionReportScreen() {
     return value.toFixed(2);
   };
 
+  const getBatchUnit = (batch: ProcessingBatch): string | null => {
+    const unit = (batch as ProcessingBatch & { unit?: string }).unit;
+    const trimmed = unit?.trim();
+    return trimmed ? trimmed : null;
+  };
+
+  const formatSummaryUnits = (summary: ProductionSummary): string => {
+    if (summary.unitBreakdown.length === 0) return t('production.noReportedQuantity');
+    return summary.unitBreakdown.map((item) => item.reportedBatches > 0
+      ? `${formatQuantity(item.reportedQuantity)} ${item.unit}`
+      : `${item.unit}: ${t('production.noReportedQuantity')}`).join('\n');
+  };
+
   /**
    * 获取状态标签
    */
@@ -293,11 +415,21 @@ export default function ProductionReportScreen() {
       string,
       { label: string; color: string; bgColor: string }
     > = {
-      completed: { label: t('status.completed'), color: '#4CAF50', bgColor: '#E8F5E9' },
-      COMPLETED: { label: t('status.completed'), color: '#4CAF50', bgColor: '#E8F5E9' },
-      in_progress: { label: t('status.inProgress'), color: '#2196F3', bgColor: '#E3F2FD' },
-      pending: { label: t('status.pending'), color: '#FF9800', bgColor: '#FFF3E0' },
-      cancelled: { label: t('status.cancelled'), color: '#F44336', bgColor: '#FFEBEE' },
+      completed: { label: t('production.statusCompleted'), color: '#4CAF50', bgColor: '#E8F5E9' },
+      COMPLETED: { label: t('production.statusCompleted'), color: '#4CAF50', bgColor: '#E8F5E9' },
+      in_progress: { label: t('production.statusInProgress'), color: '#2196F3', bgColor: '#E3F2FD' },
+      IN_PROGRESS: { label: t('production.statusInProgress'), color: '#2196F3', bgColor: '#E3F2FD' },
+      producing: { label: t('production.statusProducing'), color: '#2196F3', bgColor: '#E3F2FD' },
+      PRODUCING: { label: t('production.statusProducing'), color: '#2196F3', bgColor: '#E3F2FD' },
+      planned: { label: t('production.statusPlanned'), color: '#FF9800', bgColor: '#FFF3E0' },
+      PLANNED: { label: t('production.statusPlanned'), color: '#FF9800', bgColor: '#FFF3E0' },
+      planning: { label: t('production.statusPlanning'), color: '#FF9800', bgColor: '#FFF3E0' },
+      PLANNING: { label: t('production.statusPlanning'), color: '#FF9800', bgColor: '#FFF3E0' },
+      pending: { label: t('production.statusPlanned'), color: '#FF9800', bgColor: '#FFF3E0' },
+      paused: { label: t('production.statusPaused'), color: '#FF9800', bgColor: '#FFF3E0' },
+      PAUSED: { label: t('production.statusPaused'), color: '#FF9800', bgColor: '#FFF3E0' },
+      cancelled: { label: t('production.statusCancelled'), color: '#F44336', bgColor: '#FFEBEE' },
+      CANCELLED: { label: t('production.statusCancelled'), color: '#F44336', bgColor: '#FFEBEE' },
     };
 
     const config = statusMap[status] || statusMap['pending'] || { label: t('status.unknown'), color: '#666', bgColor: '#f5f5f5' };
@@ -328,8 +460,8 @@ export default function ProductionReportScreen() {
           value={timeRange}
           onValueChange={setTimeRange}
           buttons={[
-            { value: 'day', label: t('production.today') },
-            { value: 'week', label: t('production.thisWeek') },
+            { value: 'today', label: t('production.today') },
+            { value: 'week', label: t('production.rollingSevenDays') },
             { value: 'month', label: t('production.thisMonth') },
           ]}
           style={styles.segmentedButtons}
@@ -356,22 +488,41 @@ export default function ProductionReportScreen() {
             </View>
             <View style={styles.statBox}>
               <Text style={[styles.statValue, { color: '#4CAF50' }]}>
-                {formatQuantity(productionStats.totalOutput)}
+                {formatSummaryUnits(productionStats)}
               </Text>
-              <Text style={styles.statLabel}>{t('production.totalOutput')}</Text>
+              <Text style={styles.statLabel}>{t('production.outputByUnit')}</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={[styles.statValue, { color: '#2196F3' }]}>
-                {Number(productionStats.completionRate ?? 0).toFixed(1)}%
+                {productionStats.completionRate === null ? t('production.unknownRate') : `${productionStats.completionRate.toFixed(1)}%`}
               </Text>
               <Text style={styles.statLabel}>{t('production.completionRate')}</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={[styles.statValue, { color: '#FF9800' }]}>
-                {formatQuantity(productionStats.avgOutput)}
+                {productionStats.missingActualQuantityCount > 0
+                  ? `${productionStats.missingActualQuantityCount}`
+                  : '0'}
               </Text>
-              <Text style={styles.statLabel}>{t('production.avgOutput')}</Text>
+              <Text style={styles.statLabel}>{t('production.missingActualQuantity')}</Text>
             </View>
+            <Text style={styles.summaryRangeText}>
+              {t('production.statisticsRange')}: {productionStats.startDate} - {productionStats.endDate}
+            </Text>
+            {productionStats.unknownUnitCount > 0 && (
+              <Text style={styles.summaryWarningText}>
+                {t('production.unknownUnit')}: {productionStats.unknownUnitCount}
+              </Text>
+            )}
+            {productionStats.missingUnitCount > 0 && (
+              <Text style={styles.summaryWarningText}>
+                {t('production.missingUnit')}: {productionStats.missingUnitCount}
+              </Text>
+            )}
+          </View>
+        ) : productionStatsError ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>{productionStatsError}</Text>
           </View>
         ) : (
           <View style={styles.emptyContainer}>
@@ -382,7 +533,7 @@ export default function ProductionReportScreen() {
 
       {/* 最近批次列表 */}
       <Card style={styles.card} mode="elevated">
-        <Card.Title title={t('production.recentCompletedBatches')} titleVariant="titleMedium" />
+          <Card.Title title={`${t('production.recentBatches')} · ${t('production.recentTen')}`} titleVariant="titleMedium" />
         <DataTable>
           <DataTable.Header>
             <DataTable.Title>{t('production.batchNumber')}</DataTable.Title>
@@ -394,6 +545,13 @@ export default function ProductionReportScreen() {
           {loading ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" />
+            </View>
+          ) : recentBatchesError ? (
+            <View style={styles.emptyContainer}>
+              <Text variant="bodyMedium" style={styles.emptyText}>{recentBatchesError}</Text>
+              <Button mode="outlined" onPress={loadProductionData} style={{ marginTop: 16 }}>
+                {t('production.retry')}
+              </Button>
             </View>
           ) : recentBatches.length === 0 ? (
             <View style={styles.emptyContainer}>
@@ -409,12 +567,14 @@ export default function ProductionReportScreen() {
                 </DataTable.Cell>
                 <DataTable.Cell>
                   <Text variant="bodySmall">
-                    {batch.productTypeName || batch.productType || '-'}
+                    {batch.productType || batch.productTypeId || '-'}
                   </Text>
                 </DataTable.Cell>
                 <DataTable.Cell numeric>
                   <Text variant="bodySmall">
-                    {formatQuantity(batch.actualQuantity || batch.outputQuantity || batch.targetQuantity)}
+                    {batch.actualQuantity === null || batch.actualQuantity === undefined
+                      ? t('production.noReportedQuantity')
+                      : `${formatQuantity(batch.actualQuantity)} ${getBatchUnit(batch) ?? t('production.unitMissing')}`}
                   </Text>
                 </DataTable.Cell>
                 <DataTable.Cell>{getStatusChip(batch.status)}</DataTable.Cell>
@@ -452,9 +612,9 @@ export default function ProductionReportScreen() {
     if (!realtimeData) {
       return (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>暂无实时监控数据</Text>
+          <Text style={styles.emptyText}>{realtimeError ?? t('production.noRealtimeData')}</Text>
           <Button mode="outlined" onPress={loadRealtimeData} style={{ marginTop: 16 }}>
-            重新加载
+            {t('production.retry')}
           </Button>
         </View>
       );
@@ -579,113 +739,110 @@ export default function ProductionReportScreen() {
     if (!capacityData) {
       return (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>暂无产能利用数据</Text>
+          <Text style={styles.emptyText}>{capacityError ?? t('production.noCapacityData')}</Text>
           <Button mode="outlined" onPress={loadCapacityData} style={{ marginTop: 16 }}>
-            重新加载
+            {t('production.retry')}
           </Button>
         </View>
       );
     }
 
-    // 计算总产能和实际产出
-    const totalPlannedCapacity = capacityData.utilizationByLine?.reduce(
-      (sum, line) => sum + (line.plannedCapacity ?? 0),
-      0
-    ) ?? 0;
-    const totalActualOutput = capacityData.utilizationByLine?.reduce(
-      (sum, line) => sum + (line.actualOutput ?? 0),
-      0
-    ) ?? 0;
-
-    // 计算时间分配（基于整体利用率估算）
-    const overallUtilization = Number(capacityData.overallUtilization ?? 0);
-    const idleTime = Math.max(0, 100 - overallUtilization);
+    const averageUtilization = capacityData.averageUtilization;
+    const formatUtilization = (value: number | null | undefined) =>
+      value == null ? t('production.unknownRate') : `${value.toFixed(1)}%`;
 
     return (
       <View style={styles.capacityContainer}>
         {/* 产能利用率概览 */}
         <Surface style={styles.capacityCard} elevation={1}>
           <Text variant="titleMedium" style={styles.statsTitle}>
-            产能利用率分析
+            {t('production.capacityUtilization')} · {t('production.rollingSevenDays')}
           </Text>
           <Divider style={styles.divider} />
 
           {/* 总体利用率 */}
           <View style={styles.capacityMainSection}>
             <View style={styles.capacityGauge}>
-              <Text style={[styles.capacityMainValue, { color: getUtilizationColor(overallUtilization) }]}>
-                {overallUtilization.toFixed(1)}%
+              <Text style={[styles.capacityMainValue, { color: averageUtilization == null ? '#999' : getUtilizationColor(averageUtilization) }]}>
+                {formatUtilization(averageUtilization)}
               </Text>
-              <Text style={styles.capacityMainLabel}>整体利用率</Text>
+              <Text style={styles.capacityMainLabel}>{t('production.averageUtilization')}</Text>
             </View>
             <View style={styles.capacityDetails}>
               <View style={styles.capacityDetailRow}>
-                <Text style={styles.capacityDetailLabel}>计划产能</Text>
-                <Text style={styles.capacityDetailValue}>{totalPlannedCapacity}</Text>
+                <Text style={styles.capacityDetailLabel}>{t('production.dailyCapacity')}</Text>
+                <Text style={styles.capacityDetailValue}>{capacityData.dailyCapacity ?? t('production.unknownRate')}</Text>
               </View>
               <View style={styles.capacityDetailRow}>
-                <Text style={styles.capacityDetailLabel}>实际产出</Text>
-                <Text style={[styles.capacityDetailValue, { color: '#4CAF50' }]}>{totalActualOutput}</Text>
+                <Text style={styles.capacityDetailLabel}>{t('production.totalEquipment')}</Text>
+                <Text style={[styles.capacityDetailValue, { color: '#2196F3' }]}>{capacityData.totalEquipment}</Text>
               </View>
             </View>
           </View>
-
-          {/* 时间分配 */}
-          <Divider style={styles.divider} />
-          <Text variant="bodyMedium" style={styles.capacitySectionTitle}>时间分配</Text>
-          <View style={styles.timeDistribution}>
-            <View style={[styles.timeBlock, { backgroundColor: '#E8F5E9', flex: Math.max(1, overallUtilization) }]}>
-              <Text style={[styles.timeBlockText, { color: '#4CAF50' }]}>生产 {overallUtilization.toFixed(1)}%</Text>
-            </View>
-            {idleTime > 0 && (
-              <View style={[styles.timeBlock, { backgroundColor: '#FFEBEE', flex: Math.max(1, idleTime) }]}>
-                <Text style={[styles.timeBlockText, { color: '#F44336' }]}>空闲</Text>
-              </View>
-            )}
-          </View>
-          <View style={styles.timeLegend}>
-            <View style={styles.timeLegendItem}>
-              <View style={[styles.timeLegendDot, { backgroundColor: '#E8F5E9' }]} />
-              <Text style={styles.timeLegendText}>生产 {overallUtilization.toFixed(1)}%</Text>
-            </View>
-            <View style={styles.timeLegendItem}>
-              <View style={[styles.timeLegendDot, { backgroundColor: '#FFEBEE' }]} />
-              <Text style={styles.timeLegendText}>空闲 {idleTime.toFixed(1)}%</Text>
-            </View>
-          </View>
+          {capacityData.capacityBasis && (
+            <Text style={styles.capacitySectionTitle}>{t('production.capacityBasis')}: {capacityData.capacityBasis}</Text>
+          )}
+          {capacityData.utilizationTarget != null && (
+            <Text style={styles.capacitySectionTitle}>{t('production.utilizationTarget')}: {formatUtilization(capacityData.utilizationTarget)}</Text>
+          )}
         </Surface>
 
-        {/* 各生产线产能详情 */}
+        {/* 每日真实利用率 */}
         <Surface style={styles.capacityCard} elevation={1}>
           <Text variant="titleMedium" style={styles.statsTitle}>
-            生产线产能详情
+            {t('production.dailyUtilization')}
           </Text>
           <Divider style={styles.divider} />
           <View style={styles.equipmentCapacityList}>
-            {(capacityData.utilizationByLine ?? []).length === 0 ? (
+            {capacityData.dailyUtilization.length === 0 ? (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>暂无生产线数据</Text>
+                <Text style={styles.emptyText}>{t('production.noDailyUtilization')}</Text>
               </View>
             ) : (
-              capacityData.utilizationByLine.map((line) => (
-                <View key={line.lineId} style={styles.equipmentCapacityItem}>
+              capacityData.dailyUtilization.slice(-7).map((day) => (
+                <View key={day.date} style={styles.equipmentCapacityItem}>
                   <View style={styles.equipmentCapacityHeader}>
-                    <Text style={styles.equipmentName}>{line.lineName ?? line.lineId}</Text>
-                    <Text style={[styles.equipmentUtilization, { color: getUtilizationColor(line.utilization ?? 0) }]}>
-                      {Number(line.utilization ?? 0).toFixed(1)}%
+                    <Text style={styles.equipmentName}>{day.date}</Text>
+                    <Text style={[styles.equipmentUtilization, { color: day.utilization == null ? '#999' : getUtilizationColor(day.utilization) }]}>
+                      {formatUtilization(day.utilization)}
                     </Text>
                   </View>
-                  <ProgressBar
-                    progress={Number(line.utilization ?? 0) / 100}
-                    color={getUtilizationColor(line.utilization ?? 0)}
-                    style={styles.equipmentProgressBar}
-                  />
                   <Text style={styles.equipmentCapacityText}>
-                    产出: {line.actualOutput ?? 0} / 产能: {line.plannedCapacity ?? 0}
+                    {t('production.dailyOutput')}: {day.output}
                   </Text>
                 </View>
               ))
             )}
+          </View>
+        </Surface>
+
+        {/* 各设备真实利用率 */}
+        <Surface style={styles.capacityCard} elevation={1}>
+          <Text variant="titleMedium" style={styles.statsTitle}>{t('production.equipmentUtilization')}</Text>
+          <Divider style={styles.divider} />
+          <View style={styles.equipmentCapacityList}>
+            {capacityData.equipmentUtilization.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>{t('production.noEquipmentUtilization')}</Text>
+              </View>
+            ) : capacityData.equipmentUtilization.map((equipment) => (
+              <View key={equipment.equipmentId} style={styles.equipmentCapacityItem}>
+                <View style={styles.equipmentCapacityHeader}>
+                  <Text style={styles.equipmentName}>{equipment.equipmentName}</Text>
+                  <Text style={[styles.equipmentUtilization, { color: equipment.utilization == null ? '#999' : getUtilizationColor(equipment.utilization) }]}>
+                    {formatUtilization(equipment.utilization)}
+                  </Text>
+                </View>
+                {equipment.utilization != null && (
+                  <ProgressBar
+                    progress={equipment.utilization / 100}
+                    color={getUtilizationColor(equipment.utilization)}
+                    style={styles.equipmentProgressBar}
+                  />
+                )}
+                <Text style={styles.equipmentCapacityText}>{equipment.status}</Text>
+              </View>
+            ))}
           </View>
         </Surface>
       </View>
@@ -741,6 +898,12 @@ export default function ProductionReportScreen() {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+export default function ProductionReportScreen() {
+  const { user } = useAuthStore();
+  const ownerKey = getCanonicalActorKey(user);
+  return <ProductionReportScreenContent key={ownerKey} />;
 }
 
 const styles = StyleSheet.create({
@@ -820,6 +983,20 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 13,
     color: '#666',
+  },
+  summaryRangeText: {
+    width: '100%',
+    color: '#666',
+    fontSize: 12,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  summaryWarningText: {
+    width: '100%',
+    color: '#B45309',
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: 'center',
   },
   card: {
     margin: 16,

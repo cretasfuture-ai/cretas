@@ -345,7 +345,9 @@ public class SseStreamingService {
                     boolean isAnalysis = earlyQuestionType == QuestionType.GENERAL_QUESTION
                             && analysisRouterService.isAnalysisRequest(userInput, earlyQuestionType);
                     Optional<String> foodPhrase = knowledgeBase.matchPhrase(userInput);
-                    boolean isFood = foodPhrase.isPresent() && "FOOD_KNOWLEDGE_QUERY".equals(foodPhrase.get());
+                    boolean isFood = foodPhrase.isPresent() && "FOOD_KNOWLEDGE_QUERY".equals(foodPhrase.get())
+                            && aiIntentService.getIntentByCode(factoryId, "FOOD_KNOWLEDGE_QUERY")
+                                    .filter(config -> Boolean.TRUE.equals(config.getIsActive())).isPresent();
 
                     if (!isAnalysis && !isFood) {
                         log.info("Stream: 早期检测到{}，使用流式 LLM 回复", earlyQuestionType);

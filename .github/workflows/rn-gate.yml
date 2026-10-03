@@ -47,6 +47,7 @@ on:
       #    frontend/CretasFoodTrace/src/__tests__/gates/gateTriggerSurfaceCoversWhatItReads.test.ts 会红。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/enums/**'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'
   pull_request:
@@ -62,6 +63,7 @@ on:
       #    frontend/CretasFoodTrace/src/__tests__/gates/gateTriggerSurfaceCoversWhatItReads.test.ts 会红。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/enums/**'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'
 

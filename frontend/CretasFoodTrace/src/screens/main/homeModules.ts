@@ -58,6 +58,8 @@ import type { User } from '../../types/auth';
 import { getUserRole, hasPermission } from '../../types/auth';
 import type { ModuleConfig } from '../../types/navigation';
 import { hasProductionCapability } from '../../utils/factoryType';
+import { hasModulePermission } from '../../utils/permissionHelper';
+import { canViewPrice } from '../../utils/priceViewAccess';
 
 /**
  * 部署核验用的 ASCII 标记。
@@ -78,6 +80,9 @@ export interface HomeModuleSpec {
   color: string;
   /** 命中任意一条即可见（沿用原来的 `.some()` 语义） */
   requiredPermissions: string[];
+  /** 页面实际接口要求的模块权限，命中任意一项才显示入口。 */
+  requiredReadModulesAny?: string[];
+  requiresPriceView?: boolean;
   /** 该导航器**根部**注册的路由名（通常是 Tab 名） */
   route?: string;
   /** `route` 那个 Tab 的内嵌栈里的目标屏 */
@@ -173,6 +178,7 @@ export const SALES_HOME_MODULES: HomeModuleSpec[] = [
     requiredPermissions: ['sales:read'],
     route: 'SMSalesTab',
     nestedScreen: 'ArApOverview',
+    requiredReadModulesAny: ['finance'],
   },
   {
     id: 'priceList',
@@ -183,6 +189,7 @@ export const SALES_HOME_MODULES: HomeModuleSpec[] = [
     requiredPermissions: ['sales:read'],
     route: 'SMSalesTab',
     nestedScreen: 'PriceList',
+    requiresPriceView: true,
   },
   {
     id: 'returnOrders',
@@ -225,6 +232,7 @@ export const PROCUREMENT_HOME_MODULES: HomeModuleSpec[] = [
     icon: 'clipboard-check-outline',
     color: '#13C2C2',
     requiredPermissions: ['procurement:read'],
+    requiredReadModulesAny: ['warehouse', 'finance'],
     route: 'PMPurchaseTab',
     nestedScreen: 'SupplierDeliveryList',
   },
@@ -247,6 +255,7 @@ export const PROCUREMENT_HOME_MODULES: HomeModuleSpec[] = [
     requiredPermissions: ['procurement:read'],
     route: 'PMPurchaseTab',
     nestedScreen: 'PriceList',
+    requiresPriceView: true,
   },
 ];
 
@@ -320,6 +329,7 @@ export const VIEWER_HOME_MODULES: HomeModuleSpec[] = [
     requiredPermissions: ['view:read'],
     route: 'VWSalesTab',
     nestedScreen: 'PriceList',
+    requiresPriceView: true,
   },
   {
     id: 'arAp',
@@ -330,6 +340,7 @@ export const VIEWER_HOME_MODULES: HomeModuleSpec[] = [
     requiredPermissions: ['view:read'],
     route: 'VWSalesTab',
     nestedScreen: 'ArApOverview',
+    requiredReadModulesAny: ['finance'],
   },
 ];
 
@@ -368,6 +379,8 @@ export function resolveHomeModules(
       if (!isModuleEnabled(spec.id)) return false;
       if (spec.requiresProductionCapability && !hasProductionCapability(user)) return false;
       if (spec.requiredRoles && !spec.requiredRoles.includes(role)) return false;
+      if (spec.requiresPriceView && !canViewPrice(user)) return false;
+      if (spec.requiredReadModulesAny && !spec.requiredReadModulesAny.some(module => hasModulePermission(user, module, 'read'))) return false;
       return spec.requiredPermissions.some((permission) => hasPermission(user, permission));
     })
     .map((spec) => ({
