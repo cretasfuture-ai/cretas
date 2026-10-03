@@ -1094,6 +1094,7 @@ async def lifespan(app: FastAPI):
             _ai_rag_evaluator = RAGEvaluator()
             from ai.config import default_config as _ai_cfg_boot
             from ai.matcher.decision import DecisionMatcher
+            from ai.matcher.candidates import BlendRetriever
             _ai_decision_matcher = DecisionMatcher(
                 timeout_s=_ai_cfg_boot.decision_timeout_s, k=_ai_cfg_boot.decision_k,
             )
@@ -1113,7 +1114,11 @@ async def lifespan(app: FastAPI):
                 # 三层识别 (2026-10): 只对 AI_DECISION_LAYER_BUSINESS_TYPES 列出的业态生效,
                 # 未设置时 decision_matcher 存在但不会被调用 (旧行为)。
                 decision_matcher=_ai_decision_matcher,
-                candidate_retriever=SemanticMatcher(ai_pg_pool, top_k=_ai_cfg_boot.decision_k),
+                # 候选补足: 例句+描述混合检索 (例句表缺失时自动退回描述向量)
+                candidate_retriever=BlendRetriever(
+                    ai_pg_pool, top_k=_ai_cfg_boot.decision_k,
+                    blend=_ai_cfg_boot.decision_candidate_blend,
+                ),
             )
             logger.info(
                 "[startup] AI orchestrator wired (orchestrator + 3 matchers + β: router/calibrator/scorer/rag, "
