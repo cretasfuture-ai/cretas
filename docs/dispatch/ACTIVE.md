@@ -6,6 +6,16 @@
 
 ## 在飞任务
 
+- `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `7c3095c267a859393b70d3470c3e840574630737` — 独占本批ACTIVE/archive写入；七组均idle，业务FAIL/pending未清，三修复合并、一草稿保留。
+
+- `CRETAS-ORG-20261003-G1` — `in-progress` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `7c3095c267a859393b70d3470c3e840574630737` — 工厂用户停用后access/refresh有限修复候选；新base7c3095，七文件scope见archive，账号未建。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G2` — `blocked` — Owner: `01a10277-1213-7a60-b72d-55524e160840` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — CUSTOMER03已提交不重放；原FAIL/pending/预算保留，身份与精确恢复入口缺失。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G3` — `blocked` — Owner: `01a10277-13d1-7a82-a27d-1624f6538ddd` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — 原RAW403/pending保留；身份与收货附件范围未绑定。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G4` — `blocked` — Owner: `01a10277-1615-7932-b97e-883356d0c96a` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR881已合并、代码scope已释放；BOMv2真链未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G5` — `blocked` — Owner: `01a10277-181f-7f71-83ce-ea033d6d2876` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR884已合并、代码scope已释放；标准22过，新版本真样本未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G6` — `blocked` — Owner: `01a10277-199d-7fa2-b130-369d12f7e030` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR882已合并、代码scope已释放；41目标过，无设备/业务新验收。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G7` — `review` — Owner: `01a10277-1af9-7203-b775-96ff673b87f8` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — 四文件PR885草稿暂缓合并；58目标过，自然语言来源collector缺失，模型POST为0。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+
 
 
 

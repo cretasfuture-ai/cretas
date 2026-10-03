@@ -16,6 +16,22 @@ describe('formatFriendlyNumber', () => {
     expect(formatFriendlyNumber(Number.NaN)).toBe('—');
     expect(formatFriendlyNumber(undefined)).toBe('—');
   });
+
+  it('缺失值不能转换为真实零', () => {
+    expect(formatFriendlyNumber(null)).toBe('—');
+    expect(formatFriendlyNumber(undefined)).toBe('—');
+  });
+
+  it('空白数值不能转换为真实零', () => {
+    expect(formatFriendlyNumber('')).toBe('—');
+    expect(formatFriendlyNumber(' \t ')).toBe('—');
+  });
+
+  it('真实零与数值字符串仍显示数值', () => {
+    expect(formatFriendlyNumber(0)).toBe('0');
+    expect(formatFriendlyNumber('0')).toBe('0');
+    expect(formatFriendlyNumber('2.5')).toBe('2.5');
+  });
 });
 
 describe('formatAuxiliaryDosageText', () => {
