@@ -362,7 +362,9 @@ public class SseStreamingService {
             // tiered-first disabled). The cache can hold an answer up to 1h stale; the tiered
             // planner (when eligible) already produced a fresh answer above, and every other
             // restaurant branch below re-derives its own answer rather than replaying an old one.
-            boolean skipCacheForRestaurant = factoryPackConstrained || restaurantTenant;
+            // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
+            boolean skipCacheForRestaurant = factoryPackConstrained || restaurantTenant
+                    || !recentTurns(request).isEmpty();
             SemanticCacheHit cacheHit = skipCacheForRestaurant
                     ? SemanticCacheHit.miss(0L)
                     : semanticCacheService.queryCache(factoryId, userInput);
@@ -424,7 +426,7 @@ public class SseStreamingService {
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
                         userInput, factoryId, 3, userId, userRole, request.getSessionId(),
-                        request.getMode(), null);
+                        request.getMode(), null, recentTurns(request));
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);
@@ -577,6 +579,40 @@ public class SseStreamingService {
             }
             emitter.completeWithError(e);
         }
+    }
+
+    /** 最近几轮对话最多带几轮、每轮最多几个字 —— 只为消歧, 不是完整会话。 */
+    static final int MAX_RECENT_TURNS = 4;
+    static final int MAX_TURN_CHARS = 200;
+
+    /**
+     * App 随请求带来的 {@code context.recentTurns}: 只认 role=user/assistant 的非空文本,
+     * 截断到 {@link #MAX_TURN_CHARS} 字, 取最后 {@link #MAX_RECENT_TURNS} 轮。格式不对的条目丢弃。
+     */
+    static java.util.List<Map<String, String>> recentTurns(IntentExecuteRequest request) {
+        if (request == null || request.getContext() == null) {
+            return java.util.Collections.emptyList();
+        }
+        Object raw = request.getContext().get("recentTurns");
+        if (!(raw instanceof java.util.Collection<?> items)) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<Map<String, String>> out = new java.util.ArrayList<>();
+        for (Object item : items) {
+            if (!(item instanceof Map<?, ?> m)) {
+                continue;
+            }
+            Object role = m.get("role");
+            Object content = m.get("content");
+            if (!("user".equals(role) || "assistant".equals(role)) || !(content instanceof String text)
+                    || text.isBlank()) {
+                continue;
+            }
+            String trimmed = text.strip();
+            out.add(Map.of("role", (String) role,
+                    "content", trimmed.length() > MAX_TURN_CHARS ? trimmed.substring(0, MAX_TURN_CHARS) : trimmed));
+        }
+        return out.size() > MAX_RECENT_TURNS ? out.subList(out.size() - MAX_RECENT_TURNS, out.size()) : out;
     }
 
     /**
@@ -738,7 +774,10 @@ public class SseStreamingService {
         sendSseEvent(emitter, "result", response);
 
         // 缓存结果
-        if ("COMPLETED".equals(response.getStatus()) || "SUCCESS".equals(response.getStatus())) {
+        if (("COMPLETED".equals(response.getStatus()) || "SUCCESS".equals(response.getStatus()))
+                && recentTurns(request).isEmpty()      // 带上下文的结果不写入按原话缓存
+                && (request.getIntentCode() == null || request.getIntentCode().isBlank())) {
+            // 显式意图码 (澄清按钮点选) 也不写: 那是这一个人的选择, 写进去会按原话回放给所有人
             try {
                 semanticCacheService.cacheResult(factoryId, request.getUserInput(), matchResult, response);
             } catch (Exception e) {

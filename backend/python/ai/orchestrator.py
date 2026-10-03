@@ -84,7 +84,8 @@ class Orchestrator:
         if (self.decision_matcher is not None and enable_llm
                 and self.config.decision_enabled_for(businessType)):
             try:
-                result = await self._match_decision(query, factoryId, businessType, role, visible_intents)
+                result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
+                                                    history)
             except Exception:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 result = None
@@ -105,13 +106,16 @@ class Orchestrator:
         businessType: str,
         role: str,
         visible_intents: List[Dict[str, Any]],
+        history: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
+
+        ``history`` (最近几轮对话) 进粗选与决策两个提示词; 精确表与向量召回只看这一句本身。
 
         返回 None = 这一路没有产出 (无候选 / 决策链拿不到概率), 调用方回落旧路径。
         """
         t0 = time.time()
-        timing: Dict[str, int] = {"decisionLayer": 1}
+        timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
             return None
@@ -139,7 +143,7 @@ class Orchestrator:
         retriever = self.candidate_retriever or self.semantic_matcher
         sem, short = await asyncio.gather(
             retriever.match(query, factoryId=factoryId, businessType=businessType),
-            self.decision_matcher.shortlist(query, role, visible_intents),
+            self.decision_matcher.shortlist(query, role, visible_intents, history),
             return_exceptions=True,
         )
         timing["retrievalMs"] = int((time.time() - t) * 1000)
@@ -160,7 +164,7 @@ class Orchestrator:
 
         # ===== ② 决策: 读概率 =====
         t = time.time()
-        probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes])
+        probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history)
         timing["decisionMs"] = int((time.time() - t) * 1000)
         if not probs:
             return None

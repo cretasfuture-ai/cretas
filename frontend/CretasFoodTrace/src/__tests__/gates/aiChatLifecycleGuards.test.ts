@@ -103,6 +103,7 @@ function sending(behavior?: (args: StreamCall) => void | Promise<void>) {
             mode: string;
         } => ({ mode: 'quick' }), generateMessageId: () => String(++id),
         setMessages: (update: (previous: Message[]) => Message[]) => { state.messages = update(state.messages); },
+        messages: [] as Message[], buildRecentTurns: () => [],
         scrollToBottom() { }, detectRichData: () => null, parseRestaurantAgentLaunch: () => undefined, t: (key: string) => key,
         feedbackSounds: { onError: () => { state.audio++; }, onWriteSuccess: () => { state.audio++; }, onNeedMoreInfo: () => { state.audio++; } },
         aiApiClient: { executeIntentStream: async (...args: StreamCall) => { state.calls.push(args); if (behavior)
