@@ -141,7 +141,7 @@ const ALL_ORDERS: TestOrder[] = [
 
 const page = (rows: TestOrder[]) => ({
   success: true as const,
-  data: { content: rows, totalElements: rows.length, totalPages: 1, currentPage: 1, pageSize: 50 },
+  data: { content: rows, totalElements: rows.length, totalPages: 1, number: 0, size: 50 },
 });
 
 const ordersWithStatus = (status?: string) =>
@@ -200,6 +200,54 @@ const countRenderedCards = (utils: ReturnType<typeof render>): number =>
 const probe = (line: string) => { process.stdout.write('[SALES-LIST-PROBE] ' + line + '\n'); };
 
 const renderScreen = () => render(<SalesOrderListScreen />);
+
+describe('SalesOrderListScreen — viewer read boundary and masked money', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedSummaryApi.getSummary.mockResolvedValue({
+      success: true,
+      data: { entityType: 'salesOrder', stats: [
+        { label: '共', value: 2, format: 'number', unit: '条', canViewPrice: false },
+        { label: '总金额', value: 100, format: 'currency', unit: '¥', canViewPrice: true },
+      ] },
+    });
+    mockedSalesApi.getOrders.mockResolvedValue({
+      success: true,
+      data: { ...page([]).data, content: [
+        { ...makeOrder(1, 'DRAFT'), status: 'DRAFT', totalAmount: null },
+        { ...makeOrder(2, 'DRAFT'), status: 'DRAFT', totalAmount: 0 },
+      ] },
+    });
+  });
+
+  it('shows a missing amount distinctly from true zero and removes viewer write actions', async () => {
+    const viewer: FactoryUser = {
+      ...mockSalesManager,
+      factoryUser: { ...mockSalesManager.factoryUser, role: 'viewer', modulePermissions: { sales: 'r' } },
+    };
+    useAuthStore.setState({ user: viewer, isAuthenticated: true });
+    const utils = renderScreen();
+    await utils.findByText('金额未提供');
+    expect(utils.getByText('¥0')).toBeTruthy();
+    expect(utils.queryByTestId('sales-order-create-action')).toBeNull();
+    expect(utils.queryByTestId('sales-order-confirm-so-1')).toBeNull();
+    expect(utils.queryByTestId('sales-order-cancel-so-1')).toBeNull();
+    fireEvent(utils.getByTestId('sales-order-card-so-1'), 'longPress');
+    expect(utils.queryByTestId('row-action-sheet-mock')).toBeNull();
+    await waitFor(() => expect(readFooterCount(utils)).toBe(2));
+    expect(utils.queryByTestId('sticky-footer-ai')).toBeNull();
+    expect(mockedSalesApi.confirmOrder).not.toHaveBeenCalled();
+    expect(mockedSalesApi.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('retains creation and confirmation for a sales manager', async () => {
+    useAuthStore.setState({ user: mockSalesManager, isAuthenticated: true });
+    const utils = renderScreen();
+    await utils.findByText('金额未提供');
+    expect(utils.getByTestId('sales-order-create-action')).toBeTruthy();
+    expect(utils.getByTestId('sales-order-confirm-so-1')).toBeTruthy();
+  });
+});
 
 const tapTab = async (utils: ReturnType<typeof render>, status: string) => {
   fireEvent.press(utils.getByTestId(`sales-order-list-status-${status}`));

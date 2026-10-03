@@ -15,21 +15,10 @@
  */
 
 import { COMMON_ACTIONS, type EntityType } from '../types/rowActions';
+import { PRICE_VIEW_ROLES } from '../utils/priceViewAccess';
+export { PRICE_VIEW_ROLES } from '../utils/priceViewAccess';
 
 /** Roles allowed to see priceRelated actions. Keep in sync with web-admin + backend. */
-export const PRICE_VIEW_ROLES: ReadonlySet<string> = new Set([
-  'factory_super_admin',
-  'platform_admin',
-  'procurement_manager',
-  'finance_manager',
-  'cashier',
-  'sales_manager',
-  'dispatcher',
-  'production_manager',
-  'restaurant_manager',
-  'permission_admin',
-  'department_admin',
-]);
 
 type ActionId = (typeof COMMON_ACTIONS)[keyof typeof COMMON_ACTIONS]['id'];
 

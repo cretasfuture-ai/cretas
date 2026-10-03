@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   StyleSheet,
   FlatList,
-  Alert,
   RefreshControl,
   ScrollView,
 } from 'react-native';
@@ -22,6 +21,9 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, PriceList, PriceType } from '../../../services/api/purchaseApiClient';
 import { formatNumberWithCommas } from '../../../utils/formatters';
+import { useAuthStore } from '../../../store/authStore';
+import { getMobileFinancialScope, type MobileFinancialScope } from '../../../utils/mobileFinancialAccess';
+import { appAlert } from '../../../components/ui';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -196,7 +198,24 @@ function PriceListCard({ item, isEffective, onPress }: ListCardProps) {
 // ==================== Main Screen ====================
 
 export default function PriceListScreen() {
+  const user = useAuthStore(state => state.user);
   const navigation = useNavigation<Nav>();
+  const scope = getMobileFinancialScope(user, 'price');
+  if (!scope) return (
+    <View style={styles.container}>
+      <Appbar.Header><Appbar.BackAction onPress={() => navigation.goBack()} /><Appbar.Content title="价格表管理" /></Appbar.Header>
+      <Text style={styles.empty}>当前账号无权查看价格表</Text>
+    </View>
+  );
+  return <AuthorizedPriceListScreen key={scope.key} scope={scope} />;
+}
+
+function AuthorizedPriceListScreen({ scope }: { scope: MobileFinancialScope }) {
+  const navigation = useNavigation<Nav>();
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const isCurrent = useCallback(() => mounted.current
+    && getMobileFinancialScope(useAuthStore.getState().user, 'price')?.key === scope.key, [scope.key]);
 
   const [priceLists, setPriceLists] = useState<PriceList[]>([]);
   const [effectiveIds, setEffectiveIds] = useState<Set<string>>(new Set());
@@ -205,11 +224,14 @@ export default function PriceListScreen() {
   const [selectedPriceList, setSelectedPriceList] = useState<PriceList | null>(null);
 
   const loadData = useCallback(async () => {
+    if (!isCurrent()) return;
     try {
       const [listRes, effectiveRes] = await Promise.all([
-        purchaseApiClient.getPriceLists({ page: 1, size: 50 }),
-        purchaseApiClient.getEffectivePriceLists(),
+        purchaseApiClient.getPriceLists({ page: 1, size: 50 }, scope.factoryId),
+        purchaseApiClient.getEffectivePriceLists(scope.factoryId),
       ]);
+      if (!isCurrent()) return;
+      if (!listRes.success || !effectiveRes.success) throw new Error('Price list read failed');
 
       if (listRes.success && listRes.data) {
         setPriceLists(listRes.data.content ?? []);
@@ -218,12 +240,11 @@ export default function PriceListScreen() {
         setEffectiveIds(new Set(effectiveRes.data.map((pl) => pl.id)));
       }
     } catch {
-      Alert.alert('错误', '加载价格表失败');
+      if (isCurrent()) void appAlert('错误', '加载价格表失败');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrent()) { setLoading(false); setRefreshing(false); }
     }
-  }, []);
+  }, [isCurrent, scope.factoryId]);
 
   useEffect(() => {
     loadData();
@@ -273,7 +294,7 @@ export default function PriceListScreen() {
             <PriceListCard
               item={item}
               isEffective={effectiveIds.has(item.id)}
-              onPress={setSelectedPriceList}
+              onPress={priceList => { if (isCurrent()) setSelectedPriceList(priceList); }}
             />
           )}
           contentContainerStyle={styles.list}

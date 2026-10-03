@@ -1,6 +1,7 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.service.ResultFormatterService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -253,20 +254,35 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
 
             String batchNumber = getString(item, "batchNumber");
             String materialName = getString(item, "materialName");
-            BigDecimal quantity = getBigDecimal(item, "quantity");
-            String unit = getString(item, "unit");
-            String status = translateStatus(getString(item, "status"));
+            BigDecimal quantity = getBigDecimal(item, "currentQuantity");
+            if (!item.containsKey("currentQuantity")) {
+                quantity = getBigDecimal(item, "quantity");
+            }
+            String unit = getString(item, "quantityUnit");
+            if (unit == null || unit.isBlank()) unit = getString(item, "unit");
+            String status = formatMaterialStatus(getString(item, "status"));
+            String quantityText = quantity != null
+                    ? "账面数量 " + QUANTITY_FORMATTER.format(quantity) + (unit != null ? unit : "")
+                    : "数量未提供";
 
-            sb.append(String.format("%d. %s | %s %s%s | %s\n",
+            sb.append(String.format("%d. %s | %s | %s | %s\n",
                     ++count,
                     batchNumber != null ? batchNumber : "无批号",
                     materialName != null ? materialName : "未知原料",
-                    quantity != null ? QUANTITY_FORMATTER.format(quantity) : "?",
-                    unit != null ? unit : "",
+                    quantityText,
                     status));
         }
 
         return sb.toString();
+    }
+
+    private String formatMaterialStatus(String status) {
+        if (status == null) return "未知";
+        try {
+            return MaterialBatchStatus.valueOf(status.toUpperCase(java.util.Locale.ROOT)).getDisplayName();
+        } catch (IllegalArgumentException e) {
+            return translateStatus(status);
+        }
     }
 
     private String formatMaterialCreated(Map<String, Object> data) {

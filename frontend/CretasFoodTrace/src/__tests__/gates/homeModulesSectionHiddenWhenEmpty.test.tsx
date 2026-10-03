@@ -6,7 +6,7 @@
  * 而屏幕自己没用它 / 或者仍然无条件渲染那个标题。
  * ⇒ 这里用 RNTL 渲染**真的 HomeScreen**，两侧都验：
  *
- *   正向：sales_manager 拿到 5 张卡，标题在，每张卡都能按 testID 找到
+ *   正向：sales_manager 拿到 4 张卡，标题在；未授予财务权限时不显示应收应付
  *   阴性：权限为空 ⇒ 0 张卡，**「功能模块」这四个字一次都不出现**
  *         （这次缺陷的可见症状就是「一个标题，下面空无一物」）
  *
@@ -71,7 +71,7 @@ describe('首页「功能模块」段：有卡才渲染标题', () => {
     currentModuleSet = 'sales';
   });
 
-  it('正向：sales_manager 看到标题 + 5 张卡，每张都点得到', () => {
+  it('正向：sales_manager 看到标题 + 4 张卡，无财务权限时隐藏应收应付', () => {
     currentUser = withPermissions('sales_manager', ['sales:*']);
     currentModuleSet = 'sales';
     const { queryByTestId, queryAllByText } = render(<HomeScreen />);
@@ -84,7 +84,8 @@ describe('首页「功能模块」段：有卡才渲染标题', () => {
     );
     // eslint-disable-next-line no-console
     console.warn('[home-section] sales 渲染到的卡: ' + found.join(','));
-    expect(found).toHaveLength(5);
+    expect(found).toEqual(['salesOrders', 'customers', 'priceList', 'returnOrders']);
+    expect(queryByTestId('home-module-arAp')).toBeNull();
   });
 
   it('🔴 阴性对照：权限为空 ⇒ 0 张卡，且「功能模块」标题一次都不出现', () => {

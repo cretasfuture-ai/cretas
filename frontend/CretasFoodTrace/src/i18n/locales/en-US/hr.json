@@ -292,6 +292,8 @@
       "currentTime": "Current Time",
       "currentLocation": "Current Location",
       "locating": "Locating...",
+      "locationUnavailable": "Location failed. Enable location services and try again.",
+      "locationPermissionRequired": "Location permission is missing. Allow location access and try again.",
       "locationSuccess": "Location acquired",
       "clockInBtn": "Clock In",
       "clockOutBtn": "Clock Out",
