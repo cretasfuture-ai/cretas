@@ -35,6 +35,8 @@ class AIConfig:
     decision_auto_threshold: float = 0.80
     decision_timeout_s: float = 6.0
     decision_k: int = 20
+    # 候选补足: 例句相似度 × (1-blend) + 描述相似度 × blend (见 ai/matcher/candidates.py 的离线读数)
+    decision_candidate_blend: float = 0.35
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -59,6 +61,7 @@ class AIConfig:
             decision_auto_threshold=float(os.environ.get("AI_DECISION_AUTO_THRESHOLD", "0.80")),
             decision_timeout_s=float(os.environ.get("AI_DECISION_TIMEOUT_S", "6.0")),
             decision_k=int(os.environ.get("AI_DECISION_K", "20")),
+            decision_candidate_blend=float(os.environ.get("AI_DECISION_CANDIDATE_BLEND", "0.35")),
         )
 
 
