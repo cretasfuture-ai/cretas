@@ -108,7 +108,7 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 | 标签 | `self-hosted, Linux, ARM64, java, canada-mini` —— **没有 `cretas`**，所以只接 `runs-on: [self-hosted, java]` 的 job |
 | 可溢出的 job | `java-gate-pr`（fast-contracts、postgres-reversal-concurrency）、`jpa-gate-main`、`tool-inventory-gate` |
 | 不溢出 | `java-full-nightly`（要 runner 本机常驻 PG + r10 库，加拿大没有）；`java-artifact`（09-15 起只手动派发、不抢 runner，没必要溢出）——仍是 `[self-hosted, cretas, java]` |
-| 工具 | Maven 3.9.16、PG 17 服务端二进制（无常驻集群，`run-with-test-postgres.sh` 自起临时实例）、python3 |
+| 工具 | Maven 3.9.16、PG 17 服务端二进制（无常驻集群，`run-with-test-postgres.sh` 自起临时实例，`max_connections=200`——30 在这台的执行顺序下会 `too many clients`）、python3 |
 | 测试堆 | runner `.env` 设 `CRETAS_JAVA_FORK_XMX=6g`；`java-gate-pr` 用 `-Xmx${CRETAS_JAVA_FORK_XMX:-3g}`（本机不设 = 3g）。实测这台的执行顺序下 fast-contracts 3g / 4g 都在第 324 个类 OOM，6g / 8g 全过；本机同一测试集 3g 能过只是顺序碰巧有利 |
 | 三态 | 在线 ✅；**Mac 重启后自恢复 ⚠️ 未验证**（VM 由 rex 的 GUI 会话下 launchd 代理拉起，机器未开自动登录） |
 
