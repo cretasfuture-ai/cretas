@@ -255,9 +255,11 @@ describe('首页功能模块（每个落在共享 HomeScreen 上的角色都得�
     expect(reduced.map((x) => x.id)).not.toContain('processing');
   });
 
-  it('阴性对照：权限为空的用户在任何模块集上都是 0 张卡', () => {
+  it('阴性对照：模块权限与价格特殊权限均无时，任何模块集上都是 0 张卡', () => {
     for (const setId of Object.keys(HOME_MODULE_SETS) as HomeModuleSetId[]) {
-      const stripped = patchFactoryUser(makeUser('sales_manager'), { permissions: [] });
+      const stripped = patchFactoryUser(makeUser('cashier'), {
+        permissions: [], modulePermissions: { '*': '-' },
+      });
       const modules = resolveHomeModules(setId, stripped, allModulesEnabled, identityT);
       expect({ setId, count: modules.length }).toEqual({ setId, count: 0 });
     }

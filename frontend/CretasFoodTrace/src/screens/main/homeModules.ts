@@ -60,6 +60,7 @@ import type { ModuleConfig } from '../../types/navigation';
 import { hasProductionCapability } from '../../utils/factoryType';
 import { hasModulePermission } from '../../utils/permissionHelper';
 import { canViewPrice } from '../../utils/priceViewAccess';
+import { getMobileFinancialScope, type FinancialScreenKind } from '../../utils/mobileFinancialAccess';
 
 /**
  * 部署核验用的 ASCII 标记。
@@ -83,6 +84,7 @@ export interface HomeModuleSpec {
   /** 页面实际接口要求的模块权限，命中任意一项才显示入口。 */
   requiredReadModulesAny?: string[];
   requiresPriceView?: boolean;
+  financialScreen?: FinancialScreenKind;
   /** 该导航器**根部**注册的路由名（通常是 Tab 名） */
   route?: string;
   /** `route` 那个 Tab 的内嵌栈里的目标屏 */
@@ -260,11 +262,21 @@ export const PROCUREMENT_HOME_MODULES: HomeModuleSpec[] = [
 ];
 
 /**
- * FinanceNavigator —— ⚠️ 这棵树只注册了「待办」和（仅 cashier）「付款」两条业务线。
+ * FinanceNavigator：账务子栈、待办和（仅 cashier）付款。
  * 付款 Tab 外面套着 `{isCashier && …}`，所以 `finance_manager` 拿它会点到不存在的路由，
  * 必须用 `requiredRoles` 拦住。
  */
 export const FINANCE_HOME_MODULES: HomeModuleSpec[] = [
+  {
+    id: 'arAp', nameKey: 'modules.arAp.name', descriptionKey: 'modules.arAp.description',
+    icon: 'book-open-outline', color: '#1B65A8', requiredPermissions: [], financialScreen: 'finance',
+    route: 'FinanceWorkspaceTab', nestedScreen: 'ArApOverview',
+  },
+  {
+    id: 'priceList', nameKey: 'modules.priceList.name', descriptionKey: 'modules.priceList.description',
+    icon: 'tag-multiple-outline', color: '#722ED1', requiredPermissions: [], financialScreen: 'price',
+    route: 'FinanceWorkspaceTab', nestedScreen: 'PriceList',
+  },
   {
     id: 'todoApprovals',
     nameKey: 'modules.todoApprovals.name',
@@ -380,6 +392,7 @@ export function resolveHomeModules(
       if (spec.requiresProductionCapability && !hasProductionCapability(user)) return false;
       if (spec.requiredRoles && !spec.requiredRoles.includes(role)) return false;
       if (spec.requiresPriceView && !canViewPrice(user)) return false;
+      if (spec.financialScreen) return getMobileFinancialScope(user, spec.financialScreen) !== null;
       if (spec.requiredReadModulesAny && !spec.requiredReadModulesAny.some(module => hasModulePermission(user, module, 'read'))) return false;
       return spec.requiredPermissions.some((permission) => hasPermission(user, permission));
     })
