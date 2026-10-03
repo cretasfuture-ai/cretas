@@ -1119,7 +1119,13 @@ public class ProcessingServiceImpl implements ProcessingService {
 
     public Map<String, Object> getQualityStatistics(String factoryId, LocalDate startDate, LocalDate endDate) {
         List<QualityInspection> inspections = qualityInspectionRepository.findByFactoryIdAndDateRange(
-                factoryId, startDate, endDate);
+                        factoryId, startDate, endDate).stream()
+                .filter(Objects::nonNull)
+                .filter(inspection -> factoryId.equals(inspection.getFactoryId()))
+                .filter(inspection -> inspection.getInspectionDate() != null)
+                .filter(inspection -> !inspection.getInspectionDate().isBefore(startDate)
+                        && !inspection.getInspectionDate().isAfter(endDate))
+                .toList();
         Map<String, Object> statistics = new HashMap<>();
         statistics.put("totalInspections", inspections.size());
         if (!inspections.isEmpty()) {
@@ -1156,7 +1162,109 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .filter(i -> i.getResult() == null || i.getResult().isBlank())
                 .count());
         statistics.put("breakdown", breakdown);
+        statistics.put("qualitySummary", buildQualitySummary(inspections, startDate, endDate));
         return statistics;
+    }
+
+    /**
+     * 质量报表移动端摘要。
+     *
+     * <p>保留上面的 legacy 字段及其「非 PASS」failedBatches 口径，避免影响 web-admin
+     * 消费者；新摘要按完整查询周期统计每一种真实结果，并把空结果、未知结果、缺失数值
+     * 与合法的零值分开表达。分页样本不参与这里的统计。
+     */
+    private Map<String, Object> buildQualitySummary(List<QualityInspection> inspections,
+                                                     LocalDate startDate,
+                                                     LocalDate endDate) {
+        Map<String, Long> statusCounts = new LinkedHashMap<>();
+        statusCounts.put("PASS", 0L);
+        statusCounts.put("FAIL", 0L);
+        statusCounts.put("CONDITIONAL", 0L);
+        statusCounts.put("PENDING", 0L);
+        statusCounts.put("UNKNOWN", 0L);
+        statusCounts.put("EMPTY", 0L);
+
+        BigDecimal totalSampleSize = BigDecimal.ZERO;
+        BigDecimal totalPassCount = BigDecimal.ZERO;
+        BigDecimal totalFailCount = BigDecimal.ZERO;
+        long missingSampleSizeCount = 0L;
+        long missingPassCount = 0L;
+        long missingFailCount = 0L;
+        long missingPassRateCount = 0L;
+        BigDecimal passRateSum = BigDecimal.ZERO;
+        long reportedPassRateCount = 0L;
+
+        for (QualityInspection inspection : inspections) {
+            String result = inspection.getResult();
+            if (result == null || result.isBlank()) {
+                statusCounts.computeIfPresent("EMPTY", (key, value) -> value + 1L);
+            } else {
+                String normalizedResult = result.trim().toUpperCase(Locale.ROOT);
+                String statusKey = switch (normalizedResult) {
+                    case "PASS" -> "PASS";
+                    case "FAIL" -> "FAIL";
+                    case "CONDITIONAL" -> "CONDITIONAL";
+                    case "PENDING" -> "PENDING";
+                    default -> "UNKNOWN";
+                };
+                statusCounts.computeIfPresent(statusKey, (key, value) -> value + 1L);
+            }
+
+            if (inspection.getSampleSize() == null) {
+                missingSampleSizeCount++;
+            } else {
+                totalSampleSize = totalSampleSize.add(inspection.getSampleSize());
+            }
+            if (inspection.getPassCount() == null) {
+                missingPassCount++;
+            } else {
+                totalPassCount = totalPassCount.add(inspection.getPassCount());
+            }
+            if (inspection.getFailCount() == null) {
+                missingFailCount++;
+            } else {
+                totalFailCount = totalFailCount.add(inspection.getFailCount());
+            }
+            if (inspection.getPassRate() == null) {
+                missingPassRateCount++;
+            } else {
+                passRateSum = passRateSum.add(inspection.getPassRate());
+                reportedPassRateCount++;
+            }
+        }
+
+        long passCount = statusCounts.get("PASS");
+        long failCount = statusCounts.get("FAIL");
+        long conditionalCount = statusCounts.get("CONDITIONAL");
+        long decidedCount = passCount + failCount + conditionalCount;
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("startDate", startDate);
+        summary.put("endDate", endDate);
+        summary.put("totalInspections", (long) inspections.size());
+        summary.put("statusCounts", statusCounts);
+        summary.put("passedInspections", passCount);
+        summary.put("failedInspections", failCount);
+        summary.put("conditionalInspections", conditionalCount);
+        summary.put("pendingInspections", statusCounts.get("PENDING"));
+        summary.put("unknownInspections", statusCounts.get("UNKNOWN"));
+        summary.put("emptyResultInspections", statusCounts.get("EMPTY"));
+        summary.put("averagePassRate", reportedPassRateCount == 0 ? null
+                : passRateSum.divide(BigDecimal.valueOf(reportedPassRateCount), 2, RoundingMode.HALF_UP));
+        summary.put("reportedPassRateCount", reportedPassRateCount);
+        summary.put("missingPassRateCount", missingPassRateCount);
+        summary.put("decisionPassRate", decidedCount == 0 ? null
+                : BigDecimal.valueOf(passCount)
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(BigDecimal.valueOf(decidedCount), 2, RoundingMode.HALF_UP));
+        summary.put("decidedInspectionCount", decidedCount);
+        summary.put("totalSampleSize", totalSampleSize);
+        summary.put("totalPassCount", totalPassCount);
+        summary.put("totalFailCount", totalFailCount);
+        summary.put("missingSampleSizeCount", missingSampleSizeCount);
+        summary.put("missingPassCount", missingPassCount);
+        summary.put("missingFailCount", missingFailCount);
+        return summary;
     }
 
     /**

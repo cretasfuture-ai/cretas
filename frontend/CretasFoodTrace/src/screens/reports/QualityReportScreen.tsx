@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { View, StyleSheet, ScrollView, RefreshControl, Alert, TouchableOpacity } from 'react-native';
 import {
   Text,
@@ -12,15 +12,19 @@ import {
   SegmentedButtons,
   ProgressBar,
   IconButton,
+  Button,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../store/authStore';
-import { qualityInspectionApiClient } from '../../services/api/qualityInspectionApiClient';
+import { qualityInspectionApiClient, QualityInspection, QualitySummary } from '../../services/api/qualityInspectionApiClient';
 import { reportApiClient, AnomalyReport } from '../../services/api/reportApiClient';
+import { canvasApiClient } from '../../services/api/canvasApiClient';
 import { getFactoryId } from '../../types/auth';
+import { User } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
 import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { ReportStackParamList } from '../../types/navigation';
@@ -41,6 +45,44 @@ const qualityReportLogger = logger.createContextLogger('QualityReport');
  */
 type NavigationProp = NativeStackNavigationProp<ReportStackParamList>;
 
+type QualityTimeRange = 'day' | 'week' | 'month';
+
+function getCanonicalActorKey(user: User | null): string {
+  if (!user) return 'anonymous';
+  const actor = user.userType === 'factory' ? user.factoryUser : user.platformUser;
+  const modulePermissions = user.userType === 'factory' ? user.factoryUser.modulePermissions : undefined;
+  return JSON.stringify({
+    userType: user.userType,
+    userId: user.id,
+    factoryId: getFactoryId(user),
+    role: actor?.role ?? user.role ?? '',
+    permissions: [...(actor?.permissions ?? [])].sort(),
+    modulePermissions: modulePermissions
+      ? Object.entries(modulePermissions).sort(([left], [right]) => left.localeCompare(right))
+      : [],
+  });
+}
+
+function hasFinancialReportRead(user: User | null): boolean {
+  if (!user) return false;
+  const actor = user.userType === 'factory' ? user.factoryUser : user.platformUser;
+  return hasModulePermission(user, 'finance', 'read')
+    || (actor?.permissions ?? []).includes('procurement:price:view');
+}
+
+function getQualityDateRange(timeRange: QualityTimeRange): { startDate: string; endDate: string } {
+  const end = new Date();
+  const start = new Date(end);
+  if (timeRange === 'day') {
+    // same natural day
+  } else if (timeRange === 'week') {
+    start.setDate(start.getDate() - 6);
+  } else {
+    start.setDate(1);
+  }
+  return { startDate: formatDate(start), endDate: formatDate(end) };
+}
+
 export default function QualityReportScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { user } = useAuthStore();
@@ -48,169 +90,190 @@ export default function QualityReportScreen() {
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [timeRange, setTimeRange] = useState('week');
+  const [timeRange, setTimeRange] = useState<QualityTimeRange>('week');
   const [activeTab, setActiveTab] = useState('overview');
 
   // 数据状态
-  const [qualityStats, setQualityStats] = useState<any>(null);
-  const [recentInspections, setRecentInspections] = useState<any[]>([]);
+  const [qualityStats, setQualityStats] = useState<QualitySummary | null>(null);
+  const [qualityStatsError, setQualityStatsError] = useState<string | null>(null);
+  const [recentInspections, setRecentInspections] = useState<QualityInspection[]>([]);
+  const [recentInspectionsError, setRecentInspectionsError] = useState<string | null>(null);
 
   // 异常检测数据状态
   const [anomalyData, setAnomalyData] = useState<AnomalyReport | null>(null);
   const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [anomalyError, setAnomalyError] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
+  const refreshTokenRef = useRef(0);
+  const ownerKey = useMemo(() => getCanonicalActorKey(user), [user]);
+  const viewContextKey = useMemo(() => `${ownerKey}|${timeRange}|${activeTab}`, [ownerKey, timeRange, activeTab]);
+  const viewContextRef = useRef(viewContextKey);
+
+  useLayoutEffect(() => {
+    viewContextRef.current = viewContextKey;
+    requestGenerationRef.current += 1;
+    refreshTokenRef.current += 1;
+    setLoading(false);
+    setRefreshing(false);
+    setQualityStats(null);
+    setQualityStatsError(null);
+    setRecentInspections([]);
+    setRecentInspectionsError(null);
+    setAnomalyData(null);
+    setAnomalyError(null);
+    setAnomalyLoading(false);
+  }, [viewContextKey]);
+
+  const isLiveContext = (expectedContextKey: string): boolean => {
+    const liveUser = useAuthStore.getState().user;
+    return expectedContextKey === viewContextRef.current
+      && expectedContextKey === viewContextKey
+      && getCanonicalActorKey(liveUser) === ownerKey;
+  };
 
   /**
    * 加载质检数据
    */
   const loadQualityData = async () => {
+    const expectedContextKey = viewContextKey;
+    const currentUser = useAuthStore.getState().user;
+    if (!isLiveContext(expectedContextKey)) return;
+    const generation = ++requestGenerationRef.current;
     setLoading(true);
+    setQualityStats(null);
+    setQualityStatsError(null);
+    setRecentInspections([]);
+    setRecentInspectionsError(null);
     try {
-      const factoryId = getFactoryId(user);
+      const factoryId = getFactoryId(currentUser);
 
       if (!factoryId) {
         Alert.alert(t('common.error'), t('quality.cannotGetFactoryInfo'));
         return;
       }
 
-      qualityReportLogger.debug('加载质量报表数据', { timeRange, factoryId });
+      const range = getQualityDateRange(timeRange);
+      qualityReportLogger.debug('加载质量报表数据', { timeRange, factoryId, ...range });
+      const [statisticsResult, accessResult] = await Promise.allSettled([
+        qualityInspectionApiClient.getStatistics(range, factoryId),
+        canvasApiClient.getUserModuleAccess(factoryId, currentUser?.id ?? ''),
+      ]);
 
-      // 加载质检记录列表
-      const inspectionsResponse = await qualityInspectionApiClient.getInspections(
-        {
-          page: 1,
-          size: 20,
-        },
-        factoryId
-      );
+      if (generation !== requestGenerationRef.current || !isLiveContext(expectedContextKey)) return;
 
-      if (inspectionsResponse.success && inspectionsResponse.data) {
-        const inspections = inspectionsResponse.data.content || inspectionsResponse.data || [];
-        setRecentInspections(Array.isArray(inspections) ? inspections : []);
-
-        // 计算统计数据
-        const stats = calculateQualityStats(inspections as unknown as Record<string, unknown>[]);
-        setQualityStats(stats);
-
-        qualityReportLogger.info('质量报表数据加载成功', {
-          inspectionCount: inspections.length,
-          passRate: Number(stats.passRate ?? 0).toFixed(1) + '%',
-          factoryId,
-        });
+      if (statisticsResult.status === 'fulfilled') {
+        const response = statisticsResult.value;
+        const summary = response.success ? response.data?.qualitySummary : null;
+        if (summary) {
+          setQualityStats(summary);
+          setQualityStatsError(null);
+        } else {
+          setQualityStats(null);
+          setQualityStatsError(response.message || t('quality.loadQualityDataFailed'));
+        }
       } else {
-        qualityReportLogger.warn('获取质检数据失败', {
-          message: inspectionsResponse.message,
-          factoryId,
-        });
-        setRecentInspections([]);
         setQualityStats(null);
+        setQualityStatsError(statisticsResult.reason instanceof Error
+          ? statisticsResult.reason.message : t('quality.loadQualityDataFailed'));
+      }
+
+      if (accessResult.status !== 'fulfilled') {
+        setRecentInspections([]);
+        setRecentInspectionsError(t('quality.permissionDenied'));
+      } else if (!accessResult.value.some(
+        (access) => access.moduleCode === 'production_plan' && access.effectiveAllowed
+      )) {
+        setRecentInspections([]);
+        setRecentInspectionsError(t('quality.permissionDenied'));
+      } else {
+        try {
+          const inspectionsResponse = await qualityInspectionApiClient.getInspections(
+            { page: 1, size: 20 }, factoryId);
+          if (generation !== requestGenerationRef.current || !isLiveContext(expectedContextKey)) return;
+          if (inspectionsResponse.success && inspectionsResponse.data) {
+            setRecentInspections(inspectionsResponse.data.content ?? []);
+            setRecentInspectionsError(null);
+          } else {
+            setRecentInspections([]);
+            setRecentInspectionsError(inspectionsResponse.message || t('quality.loadSamplesFailed'));
+          }
+        } catch (sampleError) {
+          if (generation !== requestGenerationRef.current || !isLiveContext(expectedContextKey)) return;
+          setRecentInspections([]);
+          setRecentInspectionsError(sampleError instanceof Error
+            ? sampleError.message : t('quality.loadSamplesFailed'));
+        }
       }
     } catch (error) {
       qualityReportLogger.error('加载质量报表失败', error as Error, {
-        factoryId: getFactoryId(user),
+        factoryId: getFactoryId(useAuthStore.getState().user),
         timeRange,
       });
       handleError(error, {
         title: t('quality.loadFailed'),
         customMessage: t('quality.loadQualityDataFailed'),
       });
-      setRecentInspections([]);
-      setQualityStats(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /**
-   * 计算质检统计
-   */
-  const calculateQualityStats = (inspections: Record<string, unknown>[]) => {
-    const totalInspections = inspections.length;
-    const resultUpper = (i: Record<string, unknown>) => String(i.result || i.inspectionResult || '').toUpperCase();
-    const passedInspections = inspections.filter(
-      (i) => resultUpper(i) === 'PASS' || resultUpper(i) === 'PASSED'
-    ).length;
-    const failedInspections = inspections.filter(
-      (i) => resultUpper(i) === 'FAIL' || resultUpper(i) === 'FAILED'
-    ).length;
-    const conditionalInspections = inspections.filter(
-      (i) => resultUpper(i) === 'CONDITIONAL'
-    ).length;
-
-    const passRate = totalInspections > 0 ? (passedInspections / totalInspections) * 100 : 0;
-
-    // 问题分类统计
-    const issueCategories: Record<string, number> = {};
-    inspections.forEach((inspection) => {
-      if (inspection.issues && Array.isArray(inspection.issues)) {
-        (inspection.issues as Record<string, unknown>[]).forEach((issue) => {
-          const category = String(issue.category || '其他问题');
-          issueCategories[category] = (issueCategories[category] || 0) + 1;
-        });
+      if (generation === requestGenerationRef.current && isLiveContext(expectedContextKey)) {
+        setRecentInspections([]);
+        setRecentInspectionsError(error instanceof Error ? error.message : t('quality.loadSamplesFailed'));
+        setQualityStats(null);
+        setQualityStatsError(error instanceof Error ? error.message : t('quality.loadQualityDataFailed'));
       }
-    });
-
-    return {
-      totalInspections,
-      passedInspections,
-      failedInspections,
-      conditionalInspections,
-      passRate,
-      issueCategories,
-    };
+    } finally {
+      if (generation === requestGenerationRef.current && isLiveContext(expectedContextKey)) setLoading(false);
+    }
   };
 
   /**
    * 加载异常检测数据
    */
   const loadAnomalyData = async () => {
+    const expectedContextKey = viewContextKey;
+    const currentUser = useAuthStore.getState().user;
+    if (!isLiveContext(expectedContextKey)) return;
+    const generation = ++requestGenerationRef.current;
     setAnomalyLoading(true);
+    setAnomalyData(null);
+    setAnomalyError(null);
     try {
-      const factoryId = getFactoryId(user);
+      const factoryId = getFactoryId(currentUser);
 
       if (!factoryId) {
-        qualityReportLogger.warn('加载异常数据失败: 无法获取工厂ID');
+        setAnomalyError(t('quality.cannotGetFactoryInfo'));
         return;
       }
 
-      // 计算日期范围 (根据 timeRange)
-      const endDate = new Date();
-      const startDate = new Date();
-      if (timeRange === 'day') {
-        startDate.setDate(startDate.getDate() - 1);
-      } else if (timeRange === 'week') {
-        startDate.setDate(startDate.getDate() - 7);
-      } else {
-        startDate.setMonth(startDate.getMonth() - 1);
+      if (!hasFinancialReportRead(currentUser)) {
+        setAnomalyError(t('quality.permissionDenied'));
+        return;
       }
 
+      const range = getQualityDateRange(timeRange);
 
       qualityReportLogger.debug('加载异常检测数据', {
         factoryId,
-        startDate: formatDate(startDate),
-        endDate: formatDate(endDate),
+        ...range,
       });
 
-      const response = await reportApiClient.getAnomalyReport({
-        factoryId,
-        startDate: formatDate(startDate),
-        endDate: formatDate(endDate),
-      });
-      // 解包嵌套的响应格式 {code, message, data}
-      const actualData = (response && typeof response === 'object' && 'data' in response) ? (response as { data: typeof response }).data : response;
+      const actualData = await reportApiClient.getAnomalyReport({ ...range, factoryId });
+      if (generation !== requestGenerationRef.current || !isLiveContext(expectedContextKey)) return;
       setAnomalyData(actualData);
+      setAnomalyError(null);
       qualityReportLogger.info('异常检测数据加载成功', {
         totalAnomalies: actualData.totalAnomalies ?? 0,
         factoryId,
       });
     } catch (error) {
-      // 静默处理错误，只记录日志
       qualityReportLogger.error('加载异常检测数据失败', error as Error, {
-        factoryId: getFactoryId(user),
+        factoryId: getFactoryId(useAuthStore.getState().user),
         timeRange,
       });
-      setAnomalyData(null);
+      if (generation === requestGenerationRef.current && isLiveContext(expectedContextKey)) {
+        setAnomalyData(null);
+        setAnomalyError(error instanceof Error ? error.message : t('quality.loadAnomalyFailed'));
+      }
     } finally {
-      setAnomalyLoading(false);
+      if (generation === requestGenerationRef.current && isLiveContext(expectedContextKey)) setAnomalyLoading(false);
     }
   };
 
@@ -218,13 +281,21 @@ export default function QualityReportScreen() {
    * 刷新数据
    */
   const handleRefresh = async () => {
+    const expectedContextKey = viewContextKey;
+    if (!isLiveContext(expectedContextKey)) return;
+    const refreshToken = ++refreshTokenRef.current;
     setRefreshing(true);
-    if (activeTab === 'anomaly') {
-      await loadAnomalyData();
-    } else {
-      await loadQualityData();
+    try {
+      if (activeTab === 'anomaly') {
+        await loadAnomalyData();
+      } else {
+        await loadQualityData();
+      }
+    } finally {
+      if (refreshToken === refreshTokenRef.current && isLiveContext(expectedContextKey)) {
+        setRefreshing(false);
+      }
     }
-    setRefreshing(false);
   };
 
   /**
@@ -232,28 +303,37 @@ export default function QualityReportScreen() {
    */
   useFocusEffect(
     useCallback(() => {
+      const expectedContextKey = viewContextKey;
       if (activeTab === 'anomaly') {
         loadAnomalyData();
       } else {
         loadQualityData();
       }
-    }, [timeRange, activeTab])
+      return () => {
+        if (isLiveContext(expectedContextKey)) requestGenerationRef.current += 1;
+      };
+    }, [timeRange, activeTab, ownerKey, viewContextKey])
   );
 
   /**
    * 获取结果标签
    */
-  const getResultChip = (result: string) => {
+  const getResultChip = (result: unknown) => {
     const pass = { label: t('quality.passed'), color: '#4CAF50', bgColor: '#E8F5E9' };
     const fail = { label: t('quality.failed'), color: '#F44336', bgColor: '#FFEBEE' };
     const cond = { label: t('quality.conditional'), color: '#FF9800', bgColor: '#FFF3E0' };
+    const pending = { label: t('quality.pending'), color: '#757575', bgColor: '#EEEEEE' };
+    const unknown = { label: t('quality.unknown'), color: '#616161', bgColor: '#F5F5F5' };
+    const empty = { label: t('quality.emptyResult'), color: '#616161', bgColor: '#F5F5F5' };
     const resultMap: Record<string, { label: string; color: string; bgColor: string }> = {
       PASS: pass, PASSED: pass, passed: pass,
       FAIL: fail, FAILED: fail, failed: fail,
       CONDITIONAL: cond, conditional: cond,
+      PENDING: pending, pending,
     };
 
-    const config = resultMap[result] ?? cond;
+    const normalized = typeof result === 'string' ? result.trim().toUpperCase() : '';
+    const config = normalized === '' ? empty : resultMap[normalized] ?? unknown;
 
     return (
       <Chip
@@ -328,6 +408,13 @@ export default function QualityReportScreen() {
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="small" />
               <Text style={styles.loadingText}>{t('common.loading')}</Text>
+            </View>
+          ) : anomalyError ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>{anomalyError}</Text>
+              <Button mode="outlined" onPress={loadAnomalyData} style={{ marginTop: 16 }}>
+                {t('quality.retry')}
+              </Button>
             </View>
           ) : (
             <>
@@ -439,8 +526,9 @@ export default function QualityReportScreen() {
       </Surface>
 
       <ScrollView
+        testID="quality-report-scroll-view"
         style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
+        refreshControl={<RefreshControl testID="quality-report-refresh-control" refreshing={refreshing} onRefresh={handleRefresh} />}
       >
         {activeTab === 'anomaly' ? (
           renderAnomalyTab()
@@ -500,21 +588,63 @@ export default function QualityReportScreen() {
                       </Text>
                       <Text style={styles.statLabel}>{t('quality.conditional')}</Text>
                     </View>
+                    <View style={styles.statBox}>
+                      <Text style={[styles.statValue, { color: '#757575' }]}>
+                        {qualityStats.pendingInspections}
+                      </Text>
+                      <Text style={styles.statLabel}>{t('quality.pending')}</Text>
+                    </View>
+                    <View style={styles.statBox}>
+                      <Text style={[styles.statValue, { color: '#616161' }]}>
+                        {qualityStats.unknownInspections}
+                      </Text>
+                      <Text style={styles.statLabel}>{t('quality.unknown')}</Text>
+                    </View>
+                    <View style={styles.statBox}>
+                      <Text style={[styles.statValue, { color: '#616161' }]}>
+                        {qualityStats.emptyResultInspections}
+                      </Text>
+                      <Text style={styles.statLabel}>{t('quality.emptyResult')}</Text>
+                    </View>
                   </View>
 
-                  {/* 合格率 */}
+                  {/* 检测平均合格率与判定通过率使用不同分母 */}
                   <View style={styles.passRateContainer}>
                     <View style={styles.passRateHeader}>
-                      <Text style={styles.passRateLabel}>{t('quality.passRate')}</Text>
-                      <Text style={styles.passRateValue}>{Number(qualityStats.passRate ?? 0).toFixed(1)}%</Text>
+                      <Text style={styles.passRateLabel}>{t('quality.averagePassRate')}</Text>
+                      <Text style={styles.passRateValue}>
+                        {qualityStats.averagePassRate == null ? t('quality.unknown') : `${qualityStats.averagePassRate.toFixed(1)}%`}
+                      </Text>
                     </View>
-                    <ProgressBar
-                      progress={Number(qualityStats.passRate ?? 0) / 100}
-                      color={Number(qualityStats.passRate ?? 0) >= 95 ? '#4CAF50' : '#FF9800'}
-                      style={styles.progressBar}
-                    />
+                    {qualityStats.averagePassRate != null && (
+                      <ProgressBar
+                        progress={qualityStats.averagePassRate / 100}
+                        color={qualityStats.averagePassRate >= 95 ? '#4CAF50' : '#FF9800'}
+                        style={styles.progressBar}
+                      />
+                    )}
+                    <View style={styles.passRateHeader}>
+                      <Text style={styles.passRateLabel}>{t('quality.decisionPassRate')}</Text>
+                      <Text style={styles.passRateValue}>
+                        {qualityStats.decisionPassRate == null ? t('quality.unknown') : `${qualityStats.decisionPassRate.toFixed(1)}%`}
+                      </Text>
+                    </View>
+                    <Text style={styles.statsRangeText}>
+                      {t('quality.statisticsRange')}: {qualityStats.startDate} - {qualityStats.endDate}
+                    </Text>
+                    <Text style={styles.statsRangeText}>
+                      {t('quality.totalSampleSize')}: {qualityStats.totalSampleSize}
+                      {qualityStats.missingSampleSizeCount > 0 && ` · ${t('quality.missingSampleSize')}: ${qualityStats.missingSampleSizeCount}`}
+                    </Text>
                   </View>
                 </>
+              ) : qualityStatsError ? (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>{qualityStatsError}</Text>
+                  <Button mode="outlined" onPress={loadQualityData} style={{ marginTop: 16 }}>
+                    {t('quality.retry')}
+                  </Button>
+                </View>
               ) : (
                 <View style={styles.emptyContainer}>
                   <Text style={styles.emptyText}>{t('quality.noStatsData')}</Text>
@@ -524,7 +654,7 @@ export default function QualityReportScreen() {
 
             {/* 最近质检记录 */}
             <Card style={styles.card} mode="elevated">
-              <Card.Title title={t('quality.recentInspectionRecords')} titleVariant="titleMedium" />
+              <Card.Title title={`${t('quality.recentInspectionRecords')} · ${t('quality.recentTwenty')}`} titleVariant="titleMedium" />
               <DataTable>
                 <DataTable.Header>
                   <DataTable.Title>{t('quality.batchNumber')}</DataTable.Title>
@@ -536,6 +666,13 @@ export default function QualityReportScreen() {
                   <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" />
                   </View>
+                ) : recentInspectionsError ? (
+                  <View style={styles.emptyContainer}>
+                    <Text variant="bodyMedium" style={styles.emptyText}>{recentInspectionsError}</Text>
+                    <Button mode="outlined" onPress={loadQualityData} style={{ marginTop: 16 }}>
+                      {t('quality.retry')}
+                    </Button>
+                  </View>
                 ) : recentInspections.length === 0 ? (
                   <View style={styles.emptyContainer}>
                     <Text variant="bodyMedium" style={styles.emptyText}>
@@ -543,20 +680,20 @@ export default function QualityReportScreen() {
                     </Text>
                   </View>
                 ) : (
-                  recentInspections.slice(0, 10).map((inspection, index) => (
-                    <DataTable.Row key={inspection.id || index}>
+                  recentInspections.slice(0, 20).map((inspection, index) => (
+                    <DataTable.Row key={String(inspection.id || index)}>
                       <DataTable.Cell>
                         <Text variant="bodySmall">
-                          {inspection.batchNumber || (inspection.productionBatchId ? `批次#${inspection.productionBatchId}` : '--')}
+                          {String(inspection.batchNumber || (inspection.productionBatchId ? `批次#${inspection.productionBatchId}` : '--'))}
                         </Text>
                       </DataTable.Cell>
                       <DataTable.Cell>
                         <Text variant="bodySmall">
-                          {inspection.inspectorName || (inspection.inspectorId ? `质检员#${inspection.inspectorId}` : '--')}
+                          {String(inspection.inspectorName || (inspection.inspectorId ? `质检员#${inspection.inspectorId}` : '--'))}
                         </Text>
                       </DataTable.Cell>
                       <DataTable.Cell>
-                        {getResultChip(inspection.result || inspection.inspectionResult || 'CONDITIONAL')}
+                        {getResultChip(inspection.result ?? inspection.inspectionResult)}
                       </DataTable.Cell>
                     </DataTable.Row>
                   ))
@@ -727,6 +864,11 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: '#4CAF50',
+  },
+  statsRangeText: {
+    marginTop: 8,
+    color: '#666',
+    fontSize: 12,
   },
   progressBar: {
     height: 8,

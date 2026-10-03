@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-R3-REPORT-20261003` — `review` — Owner: Codex — Base `08bf57fc69` — 独立R3十二文件scope：生产摘要/产能wire/独立错误/账号模块有效权限与行为测试；legacy兼容。禁止质检/Entity/Repository/迁移/业务写。详见archive/2026-10-04-f006-mobile-r3-report.md。
+
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `0e42f79786a3b0b0abc68be687f5cb16aecdbdf3` — 独占本批ACTIVE/archive写入；四修复合并，业务FAIL/pending保留；AI新四题有界评测见archive。
 

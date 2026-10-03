@@ -26,3 +26,6 @@ Worktree `C:/Users/Steve/cretas-f006-mobile-r3-20261004`，branch `codex/f006-mo
 最终冻结验收：Java四类19项F0/E0/S0（私有r3-java-target-final2.log）；RN四套45项PASS（r3-rn-target-final3.log，不使用之前43项r8日志）；TSC final3 exit0，JSON/diff/ACTIVE检查通过。独立只读终审确认原阻断闭合，无新增P0/P1源码问题；三个tab共用actor key/generation，样本self有效权限、两资源错误独立、nullable产能wire与7日口径正确。测试是组件点击/异步回包/权限案例，不等于真机。没有Controller/Security/Auth/Entity/Repository/迁移改动。未验证生产性能（月窗重复实体装载的非阻断风险）、真机、新接口上线。发布顺序仍后端先RN后，回滚RN先。仅保存本地14文件里程碑（代码12+根台账/归档），不push/PR/main/部署。
 
 本地里程碑9e3aab3182后整合fresh main71b4e430cb：唯一ACTIVE冲突保留本批review条目与最新main organizer条目；其余源码自动合入，上游CI heap/PG port与组织角色修复均保留，不归本批新写/部署。生产摘要/self客户端本scope源码未因整合改变；未来R4质检与同Service文件必须顺序接管，不由另一WT并行写。
+
+R3/R4最终组合验收：2026-10-04 root六Java类24项F0/E0/S0、六RN套58项PASS、完整TypeScript exit0（r3-r4-combined-*-final.log）。R3先前独立审查与R4三轮实质P1修复独立复核均闭环。R3与R4共享ProcessingService顺序完成，无源码scope并发写。与最新main3509相比本组件依赖的authStore/apiClient/permissionHelper/factoryIdHelper/types及ProcessingService未改变，合入main若仅文档及不相关组件不重复无变化目标验证；新实质集成变化则补对应目标。
+源码scope归档，PR最终适用CI/可信制品/合并/后端发布/新手机包验收仍各自待执行，合入时释放本批scope。没有生产业务写/DB/权限映射/Entity/Repository/迁移改变。R3/R4新summary须后端先RN后，回滚RN先；不能用目标测试冒充新接口线上或真机已通过。后续验收由F006-MOBILE-CAMPAIGN-20261003协调。
