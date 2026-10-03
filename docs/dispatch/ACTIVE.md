@@ -6,15 +6,15 @@
 
 ## 在飞任务
 
-- `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `0e42f79786a3b0b0abc68be687f5cb16aecdbdf3` — 独占本批ACTIVE/archive写入；四修复合并，业务FAIL/pending保留；AI新四题有界评测见archive。
+- `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
-- `CRETAS-ORG-20261003-G1` — `blocked` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `0e42f79786a3b0b0abc68be687f5cb16aecdbdf3` — PR888合并、42目标过、代码scope释放；运行旧版，issuer/账号与真实撤销待验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G1` — `in-progress` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `35e017dc526255c39956195a11b06b6c93916a31` — Java包已验SHA；Web按锁定依赖补齐并构建，零产品写；无安装/迁移/账号写，真链仍待验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G2` — `blocked` — Owner: `01a10277-1213-7a60-b72d-55524e160840` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — CUSTOMER03已提交不重放；原FAIL/pending/预算保留，身份与精确恢复入口缺失。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G3` — `blocked` — Owner: `01a10277-13d1-7a82-a27d-1624f6538ddd` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — 原RAW403/pending保留；身份与收货附件范围未绑定。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G4` — `blocked` — Owner: `01a10277-1615-7932-b97e-883356d0c96a` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR881已合并、代码scope已释放；BOMv2真链未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G5` — `blocked` — Owner: `01a10277-181f-7f71-83ce-ea033d6d2876` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR884已合并、代码scope已释放；标准22过，新版本真样本未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G6` — `blocked` — Owner: `01a10277-199d-7fa2-b130-369d12f7e030` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR882已合并、代码scope已释放；41目标过，无设备/业务新验收。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
-- `CRETAS-ORG-20261003-G7` — `in-progress` — Owner: `01a10277-1af9-7203-b775-96ff673b87f8` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR885草稿hold；4新题各一次既有provider预算已批，上下文上界3445；不改产品/应用。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
+- `CRETAS-ORG-20261003-G7` — `in-progress` — Owner: `01a10277-1af9-7203-b775-96ff673b87f8` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR885草稿hold；旧3真响应0/3/预算保留；离线正式提示对齐后新2题各一次，零产品/应用写。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 
 
 
