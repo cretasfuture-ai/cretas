@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { handleCatchError } from '@/utils/errorToast';
+import { reportErrorText } from './reportFormat';
 import { fetchDailyReport, type DailyReport } from '@/api/salesPreset';
 import { toDateString } from '@/utils/dateFormat';
 
 const data = ref<DailyReport | null>(null);
 const loading = ref(false);
+const error = ref<string | null>(null);
 const selectedDate = ref<string>(toDateString(new Date()));
 
 function money(value: number | null | undefined): string {
@@ -14,12 +15,13 @@ function money(value: number | null | undefined): string {
 
 async function load(): Promise<void> {
   loading.value = true;
+  error.value = null;
   try {
     const res = await fetchDailyReport(selectedDate.value);
     data.value = res?.data;
   } catch (e) {
-    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
-    handleCatchError(e, '加载失败,请检查网络');
+    error.value = reportErrorText(e);
+    data.value = null;
   } finally {
     loading.value = false;
   }
@@ -41,6 +43,8 @@ onMounted(load);
         />
       </div>
     </div>
+
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon style="margin-bottom: 16px" />
 
     <div v-loading="loading" class="kpi-grid" v-if="data">
       <el-card class="kpi">
