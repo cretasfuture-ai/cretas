@@ -37,6 +37,8 @@ class AIConfig:
     decision_k: int = 20
     # 候选补足: 例句相似度 × (1-blend) + 描述相似度 × blend (见 ai/matcher/candidates.py 的离线读数)
     decision_candidate_blend: float = 0.35
+    # 决策选项里追加「以上都不是 / 需要先问清楚」两个出口 (2026-10-03, 防曲解)。缺省关, 量过再开。
+    decision_special_options: bool = False
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -62,6 +64,8 @@ class AIConfig:
             decision_timeout_s=float(os.environ.get("AI_DECISION_TIMEOUT_S", "6.0")),
             decision_k=int(os.environ.get("AI_DECISION_K", "20")),
             decision_candidate_blend=float(os.environ.get("AI_DECISION_CANDIDATE_BLEND", "0.35")),
+            decision_special_options=os.environ.get("AI_DECISION_SPECIAL_OPTIONS", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
         )
 
 

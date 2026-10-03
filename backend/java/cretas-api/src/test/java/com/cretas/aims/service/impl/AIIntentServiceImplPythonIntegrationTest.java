@@ -176,6 +176,25 @@ class AIIntentServiceImplPythonIntegrationTest {
     }
 
     @Test
+    void pythonDecisionNone_isAConclusion_notAFallbackTrigger() {
+        // 决策层判「以上都不是」: 原样返回, 不回落旧路径去猜一个意图, 也不进缓存。
+        // 对照是上一条 pythonEmpty_fallsBackToLegacy_doesNotCachePut: 不带标记的空结果照旧回落。
+        when(cache.get(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
+        IntentMatchResult none = IntentMatchResult.empty("先别入库");
+        none.setConversationMessage("这句话我没对上系统里的功能，所以先不做任何操作。");
+        none.setTimingMs(new java.util.HashMap<>(java.util.Map.of("decisionNone", 1L)));
+        when(pythonClient.match(any(PythonIntentMatchRequest.class))).thenReturn(none);
+
+        IntentMatchResult result = service.recognizeIntentWithConfidence(
+                "先别入库", "F001", 3, 22L, "admin", null);
+
+        assertSame(none, result);
+        verify(pipelineService, never())
+                .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), anyString(), any());
+        verify(cache, never()).put(anyString(), anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
     void pythonException_fallsBackToLegacy() {
         when(cache.get(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
         when(pythonClient.match(any(PythonIntentMatchRequest.class)))
