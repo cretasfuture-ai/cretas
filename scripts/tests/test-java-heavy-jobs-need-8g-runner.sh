@@ -95,12 +95,14 @@ ok "A'. 阴性对照: 抹掉标签能被抓到 ($neg 个 job)"
 # A2. 可溢出形态([self-hosted, java])的 job 会落到加拿大 Mac mini 的 colima VM ——
 #     同一台 VM 上还有 assembly 仓的 runner, 它的 job 用 services: 映射 5432;
 #     java-full-nightly 要 runner 本机常驻的 PG + r10 库(加拿大没有)。⇒ 这两类不许可溢出。
+#     另: 可溢出 job 的 -DargLine 不许写死 -Xmx —— 加拿大的执行顺序下 3g/4g 会 OOM、6g 才过,
+#     堆由 runner 的 CRETAS_JAVA_FORK_XMX 决定(本机不设 = 3g)。
 a2_out=$("$PY" - "$WF_DIR" <<'PY'
 import re, sys, pathlib
 sys.stdout.reconfigure(newline=chr(10))
 bad = []; portable = 0
 for p in sorted(pathlib.Path(sys.argv[1]).glob("*.yml")):
-    job = None; ro = None; svc = False; rows = []
+    job = None; ro = None; svc = False; rows = []; hard = []
     for line in p.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
         if m:
@@ -109,12 +111,14 @@ for p in sorted(pathlib.Path(sys.argv[1]).glob("*.yml")):
             continue
         if job and re.match(r"^\s{4}runs-on:", line): ro = line.rstrip()
         if job and re.match(r"^\s{4}services:", line): svc = True
+        if job and "-DargLine" in line and re.search(r"-Xmx\d", line): hard.append((p.name, job))
     if job: rows.append((job, ro, svc))
     for job, ro, svc in rows:
         if ro == "    runs-on: [self-hosted, java]":
             portable += 1
             if svc: bad.append("%s/%s 声明了 services:" % (p.name, job))
             if p.name == "java-full-nightly.yml": bad.append("%s/%s 要 runner 本机常驻 PG" % (p.name, job))
+            if (p.name, job) in hard: bad.append("%s/%s 的 -DargLine 写死了 -Xmx(加拿大要 6g, 用 -Xmx${CRETAS_JAVA_FORK_XMX:-3g})" % (p.name, job))
 print("PORTABLE=%d" % portable)
 for b in bad: print("BAD " + b)
 PY
