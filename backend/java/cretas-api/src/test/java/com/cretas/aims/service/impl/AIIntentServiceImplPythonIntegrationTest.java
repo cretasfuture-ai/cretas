@@ -134,6 +134,26 @@ class AIIntentServiceImplPythonIntegrationTest {
     }
 
     @Test
+    void recentTurns_bypassResultCacheAndReachPython() {
+        // 第 3b 步: 带上下文的轮次不读也不写按原话缓存的结果 (对照见上面两条: 不带上下文时会读会写)
+        IntentMatchResult py = buildRealMatch("WORK_PROCESS_TASK_COMPLETE", "好了");
+        org.mockito.ArgumentCaptor<PythonIntentMatchRequest> sent =
+                org.mockito.ArgumentCaptor.forClass(PythonIntentMatchRequest.class);
+        when(pythonClient.match(sent.capture())).thenReturn(py);
+        java.util.List<java.util.Map<String, String>> turns = java.util.List.of(
+                java.util.Map.of("role", "user", "content", "今天包装线的任务"),
+                java.util.Map.of("role", "assistant", "content", "第一个任务 120 箱"));
+
+        IntentMatchResult result = service.recognizeIntentWithConfidence(
+                "好了", "F001", 3, 22L, "admin", null, null, null, turns);
+
+        assertSame(py, result);
+        org.junit.jupiter.api.Assertions.assertEquals(turns, sent.getValue().getHistory());
+        verify(cache, never()).get(anyString(), anyString(), anyString(), anyString());
+        verify(cache, never()).put(anyString(), anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
     void pythonEmpty_fallsBackToLegacy_doesNotCachePut() {
         when(cache.get(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
         // hasMatch() == false because bestMatch == null

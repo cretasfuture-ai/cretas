@@ -36,6 +36,8 @@ ok() { PASSED=$((PASSED + 1)); echo "  ok  [$PASSED] $*"; }
 PY=$(command -v python3 || command -v python) || fail "没有 python"
 
 JAVA_SELF='    runs-on: [self-hosted, cretas, java]'
+# 2026-10-03: 可溢出形态, 同样带 java 标签(本机 8G runner 与加拿大 canada-mini-cretas 都匹配)
+JAVA_ANY='    runs-on: [self-hosted, java]'
 
 # ---------------------------------------------------------------------------
 # A. 结构: 自托管 + 调 Maven 的 job ⇒ 必须带 java 标签
@@ -72,7 +74,7 @@ while IFS=$'\t' read -r f job ro mvn; do
     case "$ro" in *self-hosted*) ;; *) continue ;; esac
     [ "$mvn" -gt 0 ] || continue
     heavy=$((heavy + 1))
-    if [ "$ro" != "$JAVA_SELF" ]; then
+    if [ "$ro" != "$JAVA_SELF" ] && [ "$ro" != "$JAVA_ANY" ]; then
         echo "  ✗ $f/$job 调了 Maven($mvn 处) 但 runs-on 是: ${ro#    }" >&2
         violations=$((violations + 1))
     fi
@@ -84,11 +86,48 @@ ok "A. $heavy 个自托管 Maven job 全部 runs-on 带 java 标签"
 # A 的阴性对照: 把一份副本的 java 标签抹掉, 扫描器必须抓到
 mkdir -p "$TMP/neg"
 cp "$WF_DIR/java-gate-pr.yml" "$TMP/neg/"
-sed -i 's/\[self-hosted, cretas, java\]/[self-hosted, cretas]/' "$TMP/neg/java-gate-pr.yml"
+sed -i -e 's/\[self-hosted, cretas, java\]/[self-hosted, cretas]/' -e 's/\[self-hosted, java\]/[self-hosted, cretas]/' "$TMP/neg/java-gate-pr.yml"
 neg_rows=$(scan_jobs "$TMP/neg") || fail "阴性对照: 扫描器在副本上跑挂了"
 neg=$(awk -F'\t' '$3 ~ /self-hosted/ && $4 > 0 && $3 !~ /java\]/' <<<"$neg_rows" | wc -l)
 [ "$neg" -ge 1 ] || fail "阴性对照: 抹掉 java 标签后扫描器没报 —— 闸在守空气"
 ok "A'. 阴性对照: 抹掉标签能被抓到 ($neg 个 job)"
+
+# A2. 可溢出形态([self-hosted, java])的 job 会落到加拿大 Mac mini 的 colima VM ——
+#     同一台 VM 上还有 assembly 仓的 runner, 它的 job 用 services: 映射 5432;
+#     java-full-nightly 要 runner 本机常驻的 PG + r10 库(加拿大没有)。⇒ 这两类不许可溢出。
+#     另: 可溢出 job 的 -DargLine 不许写死 -Xmx —— 加拿大的执行顺序下 3g/4g 会 OOM、6g 才过,
+#     堆由 runner 的 CRETAS_JAVA_FORK_XMX 决定(本机不设 = 3g)。
+a2_out=$("$PY" - "$WF_DIR" <<'PY'
+import re, sys, pathlib
+sys.stdout.reconfigure(newline=chr(10))
+bad = []; portable = 0
+for p in sorted(pathlib.Path(sys.argv[1]).glob("*.yml")):
+    job = None; ro = None; svc = False; rows = []; hard = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if m:
+            if job: rows.append((job, ro, svc))
+            job, ro, svc = m.group(1), None, False
+            continue
+        if job and re.match(r"^\s{4}runs-on:", line): ro = line.rstrip()
+        if job and re.match(r"^\s{4}services:", line): svc = True
+        if job and "-DargLine" in line and re.search(r"-Xmx\d", line): hard.append((p.name, job))
+    if job: rows.append((job, ro, svc))
+    for job, ro, svc in rows:
+        if ro == "    runs-on: [self-hosted, java]":
+            portable += 1
+            if svc: bad.append("%s/%s 声明了 services:" % (p.name, job))
+            if p.name == "java-full-nightly.yml": bad.append("%s/%s 要 runner 本机常驻 PG" % (p.name, job))
+            if (p.name, job) in hard: bad.append("%s/%s 的 -DargLine 写死了 -Xmx(加拿大要 6g, 用 -Xmx${CRETAS_JAVA_FORK_XMX:-3g})" % (p.name, job))
+print("PORTABLE=%d" % portable)
+for b in bad: print("BAD " + b)
+PY
+) || fail "A2 扫描器跑挂了"
+portable=$(sed -n 's/^PORTABLE=//p' <<<"$a2_out")
+[ "${portable:-0}" -ge 4 ] || fail "A2 阳性对照: 可溢出 job 只扫到 ${portable:-0} 个(预期 ≥4: fast-contracts / postgres-reversal-concurrency / jpa-gate / tool-inventory)"
+if grep -q '^BAD ' <<<"$a2_out"; then fail "A2 不该可溢出的 job 用了 [self-hosted, java]:
+$(grep '^BAD ' <<<"$a2_out")"; fi
+ok "A2. $portable 个可溢出 Java job 都不带 services:, 也不是 nightly"
 
 # ---------------------------------------------------------------------------
 # B. 行为: switch_ci_runner.py 往返, 三标签形态逐字还原

@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -304,6 +305,21 @@ public class AIIntentServiceImpl implements AIIntentService {
     public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
                                                             Long userId, String userRole, String sessionId,
                                                             String mode, java.util.Set<String> userPermissions) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId,
+                mode, userPermissions, Collections.emptyList());
+    }
+
+    /**
+     * 第 3b 步 (2026-10-03): 9 参版是真正的实现。{@code history} 非空 = 这一句依赖上下文:
+     * 下发给 Python, 并且不读也不写按 (原话, 工厂, 角色, 业态) 缓存的识别结果。
+     */
+    @Override
+    public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions,
+                                                            List<Map<String, String>> history) {
+        List<Map<String, String>> turns = history == null ? Collections.emptyList() : history;
+        boolean contextual = !turns.isEmpty();
         // ===== Phase 2B-α: optional Python matcher branch =====
         // shouldUsePythonMatcher(factoryId) honours both the master flag and
         // the Phase 2B canary whitelist (#73 §1.4) so stage 2/3 can dispatch
@@ -329,9 +345,10 @@ public class AIIntentServiceImpl implements AIIntentService {
             // conversation-memory coreference. Python carries neither sessionId nor entity slots.
             if (!requiresSessionContext) {
                 // 1) Cache check — short-circuits both Python and legacy
+                //    带上下文的轮次跳过: 缓存键不含上下文, 读到的是别人上一次说同一句话的结果。
             try {
-                IntentMatchResult cached =
-                        intentResultCache.get(userInput, factoryId, role, businessType);
+                IntentMatchResult cached = contextual ? null
+                        : intentResultCache.get(userInput, factoryId, role, businessType);
                 if (cached != null) {
                     log.debug("IntentResultCache hit for query='{}' factoryId={}", userInput, factoryId);
                     recordStageHit("PYTHON_CACHE_HIT");
@@ -354,7 +371,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                         .username(null)
                         .role(role)
                         .businessType(businessType)
-                        .history(Collections.emptyList())
+                        .history(turns)
                         // spec §8.2 洞②接线: 这两个字段自 Phase 2B-α 起就存在且有 javadoc
                         // ("READ=剔除写意图候选 | OPERATE=按 userPermissions 剔除无权限写意图"),
                         // 但在此之前全仓库没有任何一处给它们赋过值 —— Python 侧目录过滤一直是死的。
@@ -370,7 +387,9 @@ public class AIIntentServiceImpl implements AIIntentService {
                 IntentMatchResult pyResult = pythonClient.match(req);
                 if (pyResult != null && pyResult.hasMatch()) {
                     try {
-                        intentResultCache.put(userInput, factoryId, role, businessType, pyResult);
+                        if (!contextual) {
+                            intentResultCache.put(userInput, factoryId, role, businessType, pyResult);
+                        }
                     } catch (Exception cachePutEx) {
                         log.warn("IntentResultCache.put failed (returning result anyway): {}",
                                 cachePutEx.getMessage());

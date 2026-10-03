@@ -35,7 +35,7 @@ jobs:
   fast-contracts:
     # 最终候选的全量已经包含这些测试；2 台 runner 上再跑一份只会与全量争槽。
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
-    runs-on: [self-hosted, cretas, java]
+    runs-on: [self-hosted, java]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -131,15 +131,18 @@ jobs:
           MAVEN_OPTS: -Xmx2g
         run: |
           set -euo pipefail
+          # 测试 fork 的堆按 runner 取 (2026-10-03): 本机 8G runner 不设 -> 3g; 加拿大 canada-mini-cretas
+          # 的 .env 设 6g —— 那边的执行顺序下 3g/4g 都在第 324 个类 OOM, 6g/8g 全过 (实测, 见 PR #874)。
+          echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           "$MVN" -B test \
             -Dtest='*ContractTest,*ContractsTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*RoleGateMvcTest,*SecurityTest,*VulnerabilityTest,*AuthorizationTest,*PermissionTest,*PermissionGateTest,PermissionServiceImpl*Test,*ArchitectureTest' \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
   postgres-reversal-concurrency:
-    runs-on: [self-hosted, cretas, java]
+    runs-on: [self-hosted, java]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -235,11 +238,14 @@ jobs:
           MAVEN_OPTS: -Xmx2g
         run: |
           set -euo pipefail
+          # 测试 fork 的堆按 runner 取 (2026-10-03): 本机 8G runner 不设 -> 3g; 加拿大 canada-mini-cretas
+          # 的 .env 设 6g —— 那边的执行顺序下 3g/4g 都在第 324 个类 OOM, 6g/8g 全过 (实测, 见 PR #874)。
+          echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" "$MVN" -B test \
             -Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest,InventoryAuditTransactionContractTest \
             -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
       - name: Prove activity event migration and committed JDBC writes
         run: bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash "$GITHUB_WORKSPACE/scripts/ci/test-activity-events-migration.sh"

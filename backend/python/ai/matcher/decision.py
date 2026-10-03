@@ -72,15 +72,38 @@ def _catalog_line(row: Dict[str, Any], n_keywords: int = 3) -> str:
     return line + (f"（{'、'.join(kws)}）" if kws else "")
 
 
+# 最近对话 (第 3b 步, 2026-10-03): 「好了」「就是六十箱」这种话离开上一句说不清。
+# 只为消歧 —— 最多几轮、每轮截断, 与 Java 侧 SseStreamingService.recentTurns 的清洗同口径。
+MAX_HISTORY_TURNS = 4
+MAX_TURN_CHARS = 200
+_SPEAKER = {"user": "用户", "assistant": "系统"}
+
+
+def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
+    """最近对话 -> 提示词片段; 没有可用的轮次时返回空串 (提示词与不带上下文时逐字相同)。"""
+    lines: List[str] = []
+    for turn in history or []:
+        if not isinstance(turn, dict):
+            continue
+        who = _SPEAKER.get(str(turn.get("role") or ""))
+        text = " ".join(str(turn.get("content") or "").split())[:MAX_TURN_CHARS]
+        if who and text:
+            lines.append(f"{who}：{text}")
+    lines = lines[-MAX_HISTORY_TURNS:]
+    if not lines:
+        return ""
+    return "最近对话（只用来理解下面这句话指的是什么）：\n" + "\n".join(lines) + "\n"
+
+
 def build_shortlist_messages(query: str, role: Optional[str], visible: List[Dict[str, Any]],
-                             size: int = 8) -> List[Dict[str, str]]:
+                             size: int = 8, history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     catalog = "\n".join(
         _catalog_line(r) for r in sorted(visible, key=lambda r: str(r.get("intent_code")))
     )
     system = ("你是食品加工厂业务系统的意图粗筛器。下面是全部意图目录（代码｜名称）：\n" + catalog +
               f'\n\n只输出 JSON：{{"candidates": ["代码1", "代码2", ...]}}，最多 {size} 个，按可能性从高到低；都不像就输出空数组。')
     return [{"role": "system", "content": system},
-            {"role": "user", "content": f"{role_line(role)}\n用户说：{query}"}]
+            {"role": "user", "content": f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
 
 
 def parse_shortlist(raw: str, visible_codes: set, size: int = 8) -> Optional[List[str]]:
@@ -102,10 +125,11 @@ def parse_shortlist(raw: str, visible_codes: set, size: int = 8) -> Optional[Lis
     return out[:size]
 
 
-def build_choice_messages(query: str, role: Optional[str], options: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_choice_messages(query: str, role: Optional[str], options: List[Dict[str, Any]],
+                          history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     letters = LETTERS[: len(options)]
     opts = "\n".join(f"{L}. {r['intent_code']}：{intent_text(r)[:60]}" for L, r in zip(letters, options))
-    user = f"{role_line(role)}\n用户说：{query}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
+    user = f"{role_line(role)}\n{history_block(history)}用户说：{query}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
     return [{"role": "system", "content": STRICT_SYSTEM},
             {"role": "user", "content": user},
             {"role": "assistant", "content": "答案：", "partial": True}]
@@ -155,13 +179,14 @@ class DecisionMatcher:
                                     total_timeout=self.timeout_s, body_validator=body_validator,
                                     content_validator=content_validator)
 
-    async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]]) -> Optional[List[str]]:
+    async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
+                        history: Optional[List[Dict[str, Any]]] = None) -> Optional[List[str]]:
         codes = {str(r.get("intent_code")) for r in visible}
 
         def valid(content: str) -> Optional[str]:
             return None if parse_shortlist(content, codes, self.shortlist_size) is not None else "bad_shortlist_json"
 
-        payload = {"messages": build_shortlist_messages(query, role, visible, self.shortlist_size),
+        payload = {"messages": build_shortlist_messages(query, role, visible, self.shortlist_size, history),
                    "max_tokens": 160}
         try:
             body = await self._call(payload, content_validator=valid)
@@ -171,7 +196,8 @@ class DecisionMatcher:
         content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         return parse_shortlist(content, codes, self.shortlist_size)
 
-    async def choose(self, query: str, role: Optional[str], options: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    async def choose(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
+                     history: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, float]]:
         """返回 {intent_code: 概率}; 整条链都拿不到概率 -> None。"""
         if not options:
             return None
@@ -185,7 +211,7 @@ class DecisionMatcher:
         def has_probs(body: Dict[str, Any]) -> Optional[str]:
             return None if letter_probs(body, n) else "no_option_letter_in_top_logprobs"
 
-        payload = {"messages": build_choice_messages(query, role, opts), "max_tokens": 1,
+        payload = {"messages": build_choice_messages(query, role, opts, history), "max_tokens": 1,
                    "logprobs": True, "top_logprobs": 5}
         try:
             body = await self._call(payload, body_validator=has_probs)
@@ -197,4 +223,4 @@ class DecisionMatcher:
 
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
-           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS"]
+           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block"]
