@@ -342,11 +342,14 @@ async def product_rank(
                    MAX(soi.product_name) AS product_name,
                    SUM(soi.quantity) AS total_qty,
                    MAX(soi.unit) AS unit,
-                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)) AS total_amount,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * COALESCE(soi.tax_rate, 0) / 100) AS tax_amount,
+                       * (1 - COALESCE(soi.discount_rate, 0))) AS total_amount,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 + COALESCE(soi.tax_rate, 0) / 100)) AS total_amount_with_tax,
+                       * COALESCE(soi.tax_rate, 0) / 100
+                       * (1 - COALESCE(soi.discount_rate, 0))) AS tax_amount,
+                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
+                       * (1 + COALESCE(soi.tax_rate, 0) / 100)
+                       * (1 - COALESCE(soi.discount_rate, 0))) AS total_amount_with_tax,
                    COUNT(DISTINCT soi.sales_order_id) AS order_count
             FROM sales_order_items soi
             JOIN sales_orders so ON so.id = soi.sales_order_id
