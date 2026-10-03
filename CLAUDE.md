@@ -62,7 +62,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署
 - `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量
 - `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（硬约束 1–9 + 形态 A–E 判据；全部实测案例在 `docs/rules-casebook/measurement-and-wiring-cases.md`，编号一致）
-- `ci-runner-routing.md` - CI 默认走托管, 额度耗尽切自建(本机 WSL2 `windows-wsl-ci`); 切换用 `python scripts/ci/switch_ci_runner.py self-hosted|hosted` 然后提交。⛔ 别用组织变量 `${{ vars.X }}` —— 实测在 `runs-on` 里读到的是空。与 `.codex/rules/` 同名文件**逐字相同**, 有闸钉着
+- `ci-runner-routing.md` - CI 自建 runner 在加拿大 Mac mini 的 colima Linux arm64 VM（3 实例，标签 `cretas,java`），美国 aurora 由看门狗自动故障切换做备用；⛔ 本机 WSL 已停用（owner 2026-10-04：内存）。路由靠 runner 端标签，⛔ 别用组织变量 `${{ vars.X }}`（`runs-on` 里读到空）；`switch_ci_runner.py hosted` 已过时。与 `.codex/rules/` 同名文件**逐字相同**，有闸钉着
 - `windows-shell-and-paths.md` - Windows 上 **空格才是根因，中文不是**（实测对照：纯 ASCII 带空格不加引号失败 / 纯中文无空格成功）。新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉，PATH 上 26/61 条带空格）；命令发给对的 shell；精确字符不经过 shell
 
 `.codex/rules/` 是 Codex 侧副本，Claude 以本目录为准（`ci-runner-routing.md` 两侧由 `scripts/ci/check_shared_agent_rules.py` 钉逐字相同）。superpowers 插件在本仓库已关闭（`.claude/settings.json`），规划/调试/评审只用本仓库自己的 skill 与 rules。

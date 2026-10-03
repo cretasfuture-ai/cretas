@@ -342,6 +342,10 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                     .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
             rejectIfFactoryClosed(user);
 
+            if (!Boolean.TRUE.equals(user.getIsActive())) {
+                throw new BusinessException(403, "账号已被禁用");
+            }
+
             String role = user.getRoleCode() != null ? user.getRoleCode() : "viewer";
             String newToken = jwtUtil.generateToken(user.getId(), user.getFactoryId(), user.getUsername(), role);
 

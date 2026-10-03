@@ -165,44 +165,8 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # 🔴 FactoryConfigServiceImplReorderIT 那 4 条要【真 PostgreSQL】
-      #    (@DataJpaTest + Replace.NONE + profile r10-it, 连 localhost:5432)。
-      #    2026-08-27 之前它们在【任何自动路径上都跑不了也不可能绿】, 一直挂在
-      #    known-failing-tests.txt 里 —— 唯一提供 pgvector 服务容器的
-      #    ci.yml/java-build-test 是 `if: inputs.full_audit` + `runs-on: ubuntu-latest`,
-      #    而托管侧当时被账单挡着(job 2 秒失败)。
-      #    ⛔ 服务容器这条路在这台机器上走不通: 实测 `docker: command not found`
-      #    (scripts/ci/switch_ci_runner.py 里记着 ci.yml「试过并撤回」正是这个原因)。
-      #    ⇒ 改成在 runner 上装【原生】PG 17 (Homebrew LaunchAgent, 与两个 runner agent
-      #      同一套 ~/Library/LaunchAgents + RunAtLoad 生命周期 —— runner 起得来它就起得来)。
-      #
-      # ⚠️ 一个 runner 一个库, ⛔ 不是共用一个。这台机器上跑着【两个】runner agent,
-      #    而本工作流的 concurrency 组按 ref 分(java-full-suite-<ref> / nightly),
-      #    两条 PR 的全量跑批可以同时落在同一台机器上; 而 r10-it 的 schema 由
-      #    spring.sql.init 每次 DROP+CREATE 重建 ⇒ 共用一个库 = 互相 drop 对方的表。
-      #    那与 #197 那个 H2 schema 毒源【同一个形状】, 只是换成了 PostgreSQL。
-      #
-      # ⚠️ 找不到 psql 时【只警告不失败】: 这一步的缺席不该把整轮跑批打断 ——
-      #    那 4 条会红, 而棘轮会照常把它判成红并说清楚。⛔ 但也不许静默:
-      #    「没量到」必须说出来(硬约束 4), 否则切回托管那天没人知道少了什么。
-      - name: Bootstrap the r10-it PostgreSQL database (per-runner)
-        run: |
-          set -uo pipefail
-          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
-          if ! command -v psql >/dev/null 2>&1; then
-            echo "::warning title=r10-it 缺 PostgreSQL::这台 runner 上找不到 psql —— FactoryConfigServiceImplReorderIT 那 4 条这一轮会红。⛔ 这不是产品缺陷, 是仪器缺一味环境。"
-            exit 0
-          fi
-          DB="cretas_r10_it_$(printf '%s' "${RUNNER_NAME:-unknown}" | tr -c 'a-zA-Z0-9' '_')"
-          existing=$(psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'")
-          if [ "$existing" != "1" ]; then
-            createdb -O cretas_user "$DB"
-            echo "created database $DB"
-          fi
-          echo "R10_IT_DB=$DB" >> "$GITHUB_ENV"
-          echo "R10_IT_DB=$DB (runner=${RUNNER_NAME:-unknown})"
-
       - name: Run the full Java suite
+        id: full-suite
         working-directory: backend/java/cretas-api
         # ⚠️ failure.ignore=true 是【故意的】: 我们要拿到【全部】测试的结果,
         #    让棘轮来决定红不红。让 surefire 中途停会让名单不完整,
@@ -239,10 +203,93 @@ jobs:
           set -uo pipefail
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           echo "MVN_USED=$MVN"
-          "$MVN" -B test \
-            -Dmaven.test.failure.ignore=true \
-            -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError"
+          # 堆: runner .env 的 CRETAS_JAVA_NIGHTLY_XMX, 没有就退到 java-gate-pr 用的
+          # CRETAS_JAVA_FORK_XMX, 再没有就 3g(本机不设 = 3g, 行为不变)。
+          # 2026-10-04 加拿大实测: 写死 3g -> 只跑到 2879/12012(run 37139116569, rc=2);
+          # 6g -> 跑满 12744 但后段 Spring 上下文缓存撑爆, 9 次 OOM、lineage 三个类 10 红
+          # (run 37140487356)。全量的上下文远多于 PR 闸的子集, 所以 nightly 单独一个变量
+          # (加拿大 12g: 8g 跑满 12999 仍在尾段 OOM 出 11 红, run 37141895672; aurora 7g 跑不满,
+          # 已知限制), PR 闸维持 6g。
+          NIGHTLY_XMX="${CRETAS_JAVA_NIGHTLY_XMX:-${CRETAS_JAVA_FORK_XMX:-3g}}"
+          echo "READING: JAVA_NIGHTLY_XMX=$NIGHTLY_XMX runner=${RUNNER_NAME:-?}"
+          export MVN NIGHTLY_XMX
+          bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash -c '
+            set -euo pipefail
+            env -u CRETAS_WORKFLOW_PG_VERIFY \
+                -u SMARTBI_PG_DSN \
+                -u CRETAS_WORKFLOW_PG_URL \
+                -u CRETAS_WORKFLOW_PG_USER \
+                -u CRETAS_WORKFLOW_PG_PASSWORD \
+                -u SPRING_DATASOURCE_URL \
+                -u SPRING_DATASOURCE_USERNAME \
+                -u SPRING_DATASOURCE_PASSWORD \
+                "$MVN" -B test \
+                  -Dmaven.test.failure.ignore=true \
+                  -Dtest=!FactoryConfigServiceImplReorderIT \
+                  -Dspring.profiles.active=test \
+                  -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx$NIGHTLY_XMX -XX:+HeapDumpOnOutOfMemoryError -Dspring.test.context.cache.maxSize=2"
+            R10_REPORT=target/surefire-reports/TEST-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.xml
+            rm -f "$R10_REPORT"
+            if [[ "${CRETAS_WORKFLOW_PG_VERIFY:-}" != true ]]; then
+              echo "R10 instrument failure: CRETAS_WORKFLOW_PG_VERIFY is not true"
+              exit 86
+            fi
+            if [[ ! "${CRETAS_WORKFLOW_PG_URL:-}" =~ ^jdbc:postgresql://127\.0\.0\.1:[0-9]+/cretas_workflow_verify_test$ ]]; then
+              echo "R10 instrument failure: wrapper URL is not an isolated loopback verify database"
+              exit 86
+            fi
+            R10_PORT="${CRETAS_WORKFLOW_PG_URL##*:}"
+            R10_PORT="${R10_PORT%/*}"
+            R10_PORT_NUMBER=$((10#$R10_PORT))
+            if (( R10_PORT_NUMBER < 1024 || R10_PORT_NUMBER > 65535 )); then
+              echo "R10 instrument failure: wrapper port is outside the usable range"
+              exit 86
+            fi
+            if [[ "${CRETAS_WORKFLOW_PG_USER:-}" != cretas_ci ]]; then
+              echo "R10 instrument failure: wrapper user is not cretas_ci"
+              exit 86
+            fi
+            if [[ "${CRETAS_WORKFLOW_PG_PASSWORD+x}" != x || -n "${CRETAS_WORKFLOW_PG_PASSWORD-}" ]]; then
+              echo "R10 instrument failure: wrapper password must be explicitly empty"
+              exit 86
+            fi
+            SPRING_DATASOURCE_URL="$CRETAS_WORKFLOW_PG_URL" \
+            SPRING_DATASOURCE_USERNAME="$CRETAS_WORKFLOW_PG_USER" \
+            SPRING_DATASOURCE_PASSWORD="$CRETAS_WORKFLOW_PG_PASSWORD" \
+            "$MVN" -B test \
+              -Dmaven.test.failure.ignore=true \
+              -Dtest=FactoryConfigServiceImplReorderIT \
+              -Dspring.profiles.active=test \
+              -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx$NIGHTLY_XMX -XX:+HeapDumpOnOutOfMemoryError -Dspring.test.context.cache.maxSize=2"
+            test -s "$R10_REPORT" || {
+              echo "R10 instrument failure: FactoryConfigServiceImplReorderIT produced no fresh XML report"
+              exit 86
+            }
+            python3 - "$R10_REPORT" <<PY
+          import sys
+          from xml.etree import ElementTree
+
+          path = sys.argv[1]
+          try:
+              root = ElementTree.parse(path).getroot()
+              tests = int(root.attrib.get("tests", "0"))
+              skipped = int(root.attrib.get("skipped", "0"))
+          except (OSError, ValueError, ElementTree.ParseError) as exc:
+              print(f"R10 instrument failure: cannot parse fresh XML: {exc}")
+              raise SystemExit(86)
+          if tests <= 0 or tests - skipped <= 0:
+              print(f"R10 instrument failure: XML has no executed tests (tests={tests}, skipped={skipped})")
+              raise SystemExit(86)
+          PY
+          '
+
+      - name: Full-suite instrument gate
+        if: always()
+        run: |
+          if [ "${{ steps.full-suite.outcome }}" != "success" ]; then
+            echo "::error::full-suite instrument failed before ratchet; this run is not a valid full-suite measurement"
+            exit 1
+          fi
 
       - name: Ratchet — 已知红只许变少
         id: ratchet
