@@ -24,13 +24,27 @@ export function useListSummary(
   request: ListSummaryRequest = {},
   factoryId?: string,
 ): UseListSummaryResult {
+  const contextRef = useRef({ entityType, factoryId });
+  if (contextRef.current.entityType !== entityType || contextRef.current.factoryId !== factoryId) {
+    contextRef.current = { entityType, factoryId };
+  }
+  const context = contextRef.current;
   const [summary, setSummary] = useState<ListSummaryResponse | null>(null);
+  const summaryOwner = useRef<{ context: typeof context; request: ListSummaryRequest } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const reqRef = useRef(request);
   reqRef.current = request;
+  const requestSequence = useRef(0);
+  const active = useRef(true);
 
   const refresh = useCallback(async () => {
+    // Retained callbacks may outlive a factory/entity switch.
+    if (!active.current || context !== contextRef.current) return;
+    const sequence = ++requestSequence.current;
+    const currentRequest = reqRef.current;
+    const isCurrent = () => active.current && context === contextRef.current && sequence === requestSequence.current
+      && currentRequest === reqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -38,18 +52,28 @@ export function useListSummary(
       if (!envelope.success) {
         throw new Error(envelope.message ?? '获取合计失败');
       }
-      setSummary(envelope.data);
+      if (isCurrent()) {
+        summaryOwner.current = { context, request: currentRequest };
+        setSummary(envelope.data);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e : new Error(String(e)));
-      setSummary(null);
+      if (isCurrent()) {
+        setError(e instanceof Error ? e : new Error(String(e)));
+        setSummary(null);
+      }
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [entityType, factoryId]);
+  }, [context, entityType, factoryId]);
 
   useEffect(() => {
-    refresh();
+    active.current = true;
+    setSummary(null);
+    void refresh();
+    return () => { active.current = false; ++requestSequence.current; };
   }, [refresh, request]);
 
-  return { summary, loading, error, refresh };
+  const visibleSummary = summaryOwner.current?.context === context
+    && summaryOwner.current.request === request ? summary : null;
+  return { summary: visibleSummary, loading, error, refresh };
 }

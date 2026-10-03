@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读/金额、财务/价格身份边界；ArAp 查询 DTO 金额遮罩、RN 真实账龄字段及 PriceListController 详情/删除工厂校验；F006 真机和老板 AI。文件/验收见 `archive/2026-10-03-f006-mobile-audit.md`。
+- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读/金额、财务/价格身份边界；ArAp 查询 DTO、账龄、PriceList 工厂校验；采购列表刷新、useListSummary 迟到响应保护及回归；F006 真机和老板 AI。文件/验收见 `archive/2026-10-03-f006-mobile-audit.md`。
 
 
 
