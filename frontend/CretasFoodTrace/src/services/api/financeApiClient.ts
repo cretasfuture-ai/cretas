@@ -12,10 +12,13 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 export interface FinanceOverview {
   totalReceivable: number | null;
   totalPayable: number | null;
-  receivableCount: number;
-  payableCount: number;
-  overdueAmount: number | null;
-  overdueCount: number;
+  receivableCount: number | null;
+  payableCount: number | null;
+  netPosition: number | null;
+  overdueReceivable: number | null;
+  overduePayable: number | null;
+  overdueARCount: number | null;
+  overdueAPCount: number | null;
 }
 
 export interface ArApTransaction {
@@ -46,23 +49,25 @@ export interface ArApTransaction {
 export interface AgingData {
   counterpartyId: string;
   counterpartyName: string;
-  counterpartyType: string;
-  totalBalance: number | null;
+  total: number | null;
   current: number | null;
-  days1to30: number | null;
-  days31to60: number | null;
-  days61to90: number | null;
-  days91to180: number | null;
-  over180: number | null;
+  days1_30: number | null;
+  days31_60: number | null;
+  days61_90: number | null;
+  days91_120: number | null;
+  days120plus: number | null;
 }
 
 export interface StatementData {
   counterpartyId: string;
-  counterpartyName: string;
+  counterpartyType: CounterpartyType;
   startDate: string;
   endDate: string;
-  openingBalance: number;
-  closingBalance: number;
+  openingBalance: number | null;
+  periodDebit: number | null;
+  periodCredit: number | null;
+  closingBalance: number | null;
+  transactionCount: number;
   transactions: ArApTransaction[];
 }
 

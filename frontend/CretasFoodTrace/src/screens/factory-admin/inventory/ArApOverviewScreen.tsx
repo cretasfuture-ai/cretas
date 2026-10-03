@@ -39,6 +39,7 @@ import {
 import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { useAuthStore } from '../../../store/authStore';
 import { getMobileFinancialScope, type MobileFinancialScope } from '../../../utils/mobileFinancialAccess';
+import { appAlert } from '../../../components/ui';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -165,20 +166,20 @@ function AgingRow({ row, isCustomer: _isCustomer }: AgingRowProps) {
         <Text style={styles.agingName} numberOfLines={1}>
           {row.counterpartyName}
         </Text>
-        <Text style={styles.agingTotal}>{fmt(row.totalBalance)}</Text>
+        <Text style={styles.agingTotal}>{fmt(row.total)}</Text>
       </View>
 
       <View style={styles.agingBuckets}>
         <AgingBucket label="未到期" value={fmt(row.current)} color="#67c23a" />
-        <AgingBucket label="1-30天" value={fmt(row.days1to30)} color="#e6a23c" />
-        <AgingBucket label="31-60天" value={fmt(row.days31to60)} color="#e6a23c" />
-        <AgingBucket label="61-90天" value={fmt(row.days61to90)} color="#f56c6c" />
-        <AgingBucket label="91-180天" value={fmt(row.days91to180)} color="#f56c6c" />
+        <AgingBucket label="1-30天" value={fmt(row.days1_30)} color="#e6a23c" />
+        <AgingBucket label="31-60天" value={fmt(row.days31_60)} color="#e6a23c" />
+        <AgingBucket label="61-90天" value={fmt(row.days61_90)} color="#f56c6c" />
+        <AgingBucket label="91-120天" value={fmt(row.days91_120)} color="#f56c6c" />
         <AgingBucket
-          label=">180天"
-          value={fmt(row.over180)}
-          color={row.over180 != null && row.over180 > 0 ? '#f56c6c' : '#909399'}
-          bold={row.over180 != null && row.over180 > 0}
+          label=">120天"
+          value={fmt(row.days120plus)}
+          color={row.days120plus != null && row.days120plus > 0 ? '#f56c6c' : '#909399'}
+          bold={row.days120plus != null && row.days120plus > 0}
         />
       </View>
 
@@ -256,7 +257,7 @@ function AuthorizedArApScreen({ scope }: { scope: MobileFinancialScope }) {
       if (!res.success) throw new Error('Overview failed');
       if (res.success) setOverview(res.data);
     } catch {
-      if (isCurrent()) { setOverview(null); Alert.alert('错误', '加载财务概览失败'); }
+      if (isCurrent()) { setOverview(null); void appAlert('错误', '加载财务概览失败'); }
     }
   }, [isCurrent, scope.factoryId]);
 
@@ -365,25 +366,28 @@ function AuthorizedArApScreen({ scope }: { scope: MobileFinancialScope }) {
 
   // ==================== KPI 数据 ====================
 
-  const netAmount = overview?.totalReceivable != null && overview?.totalPayable != null
-    ? overview.totalReceivable - overview.totalPayable : null;
+  const netAmount = overview?.netPosition ?? null;
+  const overdueAmount = overview?.overdueReceivable != null && overview?.overduePayable != null
+    ? overview.overdueReceivable + overview.overduePayable : null;
+  const overdueCount = overview?.overdueARCount != null && overview?.overdueAPCount != null
+    ? overview.overdueARCount + overview.overdueAPCount : null;
 
   const kpiValues: Record<string, { value: string; sub: string }> = {
     ar: {
       value: fmt(overview?.totalReceivable),
-      sub: `${overview?.receivableCount ?? 0} 笔未收`,
+      sub: overview?.receivableCount != null ? `${overview.receivableCount} 家未结` : '未结家数未提供',
     },
     ap: {
       value: fmt(overview?.totalPayable),
-      sub: `${overview?.payableCount ?? 0} 笔未付`,
+      sub: overview?.payableCount != null ? `${overview.payableCount} 家未结` : '未结家数未提供',
     },
     net: {
       value: fmt(netAmount),
       sub: netAmount == null ? '金额未提供' : netAmount >= 0 ? '净应收' : '净应付',
     },
     overdue: {
-      value: fmt(overview?.overdueAmount),
-      sub: `${overview?.overdueCount ?? 0} 笔逾期`,
+      value: fmt(overdueAmount),
+      sub: overdueCount != null ? `${overdueCount} 笔逾期` : '逾期笔数未提供',
     },
   };
 

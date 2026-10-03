@@ -22,7 +22,8 @@ const actor = (role: FactoryUser['factoryUser']['role'], level: ModulePermission
   factoryId, factoryUser: { factoryId, role, permissions: [], modulePermissions: { finance: level } },
 });
 const overview = (amount: number): FinanceOverview => ({
-  totalReceivable: amount, totalPayable: 0, receivableCount: 0, payableCount: 0, overdueAmount: 0, overdueCount: 0,
+  totalReceivable: amount, totalPayable: 0, netPosition: amount, receivableCount: 0, payableCount: 0,
+  overdueReceivable: 0, overduePayable: 0, overdueARCount: 0, overdueAPCount: 0,
 });
 const prices: PriceList = {
   id: 'price-f006', factoryId: 'F006', name: '旧工厂机密价格表', priceType: 'SELLING_PRICE',
@@ -81,9 +82,9 @@ it('shows masked transaction amounts as unavailable and keeps real zero amounts'
 
 it('distinguishes unknown aging balances from genuine zero', async () => {
   finance.getAging.mockResolvedValue({ success: true, data: [{
-    counterpartyId: 'customer', counterpartyName: '测试账龄', counterpartyType: 'CUSTOMER',
-    totalBalance: null, current: 0, days1to30: null, days31to60: 0,
-    days61to90: 0, days91to180: 0, over180: null,
+    counterpartyId: 'customer', counterpartyName: '测试账龄',
+    total: null, current: 0, days1_30: null, days31_60: 0,
+    days61_90: 0, days91_120: 0, days120plus: null,
   }] });
   const view = render(<ArApOverviewScreen />);
   await waitFor(() => expect(finance.getAging).toHaveBeenCalled());
@@ -91,6 +92,28 @@ it('distinguishes unknown aging balances from genuine zero', async () => {
   expect(view.getByText('测试账龄')).toBeTruthy();
   expect(view.getAllByText('金额未提供')).toHaveLength(3);
   expect(view.getAllByText('¥0')).toHaveLength(4);
+});
+
+it('uses the service wire keys for overdue totals and exact aging bucket boundaries', async () => {
+  finance.getOverview.mockResolvedValue({ success: true, data: {
+    ...overview(100), netPosition: 75, overdueReceivable: 12, overduePayable: 13,
+    overdueARCount: 2, overdueAPCount: 3, receivableCount: 4, payableCount: 6,
+  } });
+  finance.getAging.mockResolvedValue({ success: true, data: [{
+    counterpartyId: 'customer', counterpartyName: '真实字段口径', total: 216,
+    current: 1, days1_30: 2, days31_60: 3, days61_90: 4, days91_120: 5, days120plus: 201,
+  }] });
+  const view = render(<ArApOverviewScreen />);
+  await waitFor(() => expect(view.getByText('¥25')).toBeTruthy());
+  expect(view.getByText('5 笔逾期')).toBeTruthy();
+  expect(view.getByText('4 家未结')).toBeTruthy();
+  expect(view.getByText('¥75')).toBeTruthy();
+  fireEvent.press(view.getByText('账龄'));
+  expect(view.getByText('¥216')).toBeTruthy();
+  expect(view.getByText('91-120天')).toBeTruthy();
+  expect(view.getByText('>120天')).toBeTruthy();
+  expect(view.getByText('¥201')).toBeTruthy();
+  expect(view.queryByText('金额未提供')).toBeNull();
 });
 
 it.each(['role', 'factory', 'revoke'] as const)('closes the payment form and refuses its old callback after %s changes', async change => {

@@ -3,7 +3,6 @@ import {
   View,
   StyleSheet,
   FlatList,
-  Alert,
   RefreshControl,
   ScrollView,
 } from 'react-native';
@@ -24,6 +23,7 @@ import { purchaseApiClient, PriceList, PriceType } from '../../../services/api/p
 import { formatNumberWithCommas } from '../../../utils/formatters';
 import { useAuthStore } from '../../../store/authStore';
 import { getMobileFinancialScope, type MobileFinancialScope } from '../../../utils/mobileFinancialAccess';
+import { appAlert } from '../../../components/ui';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -240,7 +240,7 @@ function AuthorizedPriceListScreen({ scope }: { scope: MobileFinancialScope }) {
         setEffectiveIds(new Set(effectiveRes.data.map((pl) => pl.id)));
       }
     } catch {
-      if (isCurrent()) Alert.alert('错误', '加载价格表失败');
+      if (isCurrent()) void appAlert('错误', '加载价格表失败');
     } finally {
       if (isCurrent()) { setLoading(false); setRefreshing(false); }
     }

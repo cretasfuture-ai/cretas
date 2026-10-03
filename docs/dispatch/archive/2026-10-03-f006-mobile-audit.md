@@ -84,3 +84,7 @@
 - 第三批范围增加 `services/api/financeApiClient.ts` 响应 nullable 字段、财务页交易/账龄空金额显示；采购 FAB 依据汇总实际高度避让；销售 DTO 增加 requiredDeliveryDate 与详情显示。创建请求金额仍为 number，无假零/写权限扩大。目标三套测试 37 项通过（失败 fixture 已修正，财务套重跑 14 项通过），完整 TypeScript 通过；未代表第三批真机通过。
 - 实际手机销售 L2：空客户提交被拦；选 F006 客户/产品创建 1 盒/1 元隔离测试草稿；列表与详情可读，手机取消后显示已取消；SQL 回读 DRAFT→CANCELLED，订单一张/明细一条，其他工厂同标记 0。未确认订单、未发货、未记收付款，不将此算作完整销售/仓储/财务 L3/L4。
 - 发布构建已通过 6 类 Java 32 项，可信 JAR 已仅预上传 SHA 缓存（未安装/重启/切流）。随后 fresh origin/main 发现上游 #872 的 AI 澄清点选/流式权限修复和 #873 测试已合入，须同步并补集成验证，旧树制品不可冒充最新 main 发布。
+- 最终只读审查发现发布阻断：ArAp overview/aging 的真实 Map 字段与 RN 不一致，且聚合字段未命中价格遮罩。扩展明确 scope 为 `controller/finance/ArApController.java`、新增 `dto/finance/ArApQueryResponses.java` 和真实 response-advice MockMvc ContractTest；保留现有 JSON key，金额加既有 PriceSensitive 注解，不改权限矩阵、Entity/Repository/Service 查询。RN 对齐真实 91–120/120+ 桶与逾期字段，数量口径显示家未结。修复及正反向测试完成前 PR #876 保持 draft，未上线。
+- 财务 wire 修复已完成；初轮真实 MVC/advice/序列化与现有 Controller 共 13 项通过，补有价无财务写权后 16 项通过；终版增加出纳型「无价有财务写权」组合，随最终可信构建运行。Statement 四个余额及四个实体金额均覆盖，RN 类型使用真实 key 与 nullable 金额；未改 JPA 查询。
+- CI 首轮 RN 全套发现三处本批集成失败，已修复而未放宽基线：两处新增报错改用现有 appAlert；精确增加 `.github/workflows/rn-gate.yml` push/PR 对 PermissionServiceImpl.java 的触发路径；`homeModulesSectionHiddenWhenEmpty.test.tsx` 正向对照改为销售权限四卡且财务卡缺席。该批允许 scope 含这两个 gate/CI 文件；相关五套 28 项通过，最终全套 CI 待最后推送。
+- 第三版本地验证 APK 已构建并安装，原官方应用保留；取消的隔离销售单详情真实显示 requiredDeliveryDate 2026-10-04。该版不含后续 wire 修复，最终 APK 与最终后台发布后仍须金额正反向及六桶真机对照。
