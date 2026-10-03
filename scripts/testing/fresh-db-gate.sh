@@ -10,11 +10,14 @@ FRESH_DB_PORT="${FRESH_DB_PORT:-55432}"
 FRESH_DB_PROJECT="${FRESH_DB_PROJECT:-cretas-fresh-db}"
 FRESH_DB_APP_PORT="${FRESH_DB_APP_PORT:-10019}"
 FRESH_DB_KEEP="${FRESH_DB_KEEP:-0}"
-# ⚠️ 600 不是拍脑袋: hosted ubuntu-latest 上「起 Spring → 读数」成功样本 233–289s
-#    (2026-09-07 ~ 10-03, 含 Maven 编译), 而 300 的旧预算让 10-01 ~ 10-03 七趟里四趟
-#    在 306s 被截断 —— 最好的成功样本也只剩 11s 余量。600 ≈ 最慢成功样本的 2 倍。
+# ⚠️ 预算**只量 Spring 启动**, 编译在它之前单独一步(见「编译提前」)。
+#    口径变过一次, 数字跟着变, ⛔ 别拿旧数比:
+#    · #868 之前: 300s 且**含编译** ⇒ hosted 成功样本 233–289s, 10-01 ~ 10-03 七趟里四趟在 306s 被截断。
+#    · #868: 600s, 仍含编译 ⇒ hosted elapsed 298s, 其中 spring_started_s=203 是编译。
+#    · 现在: 300s, **不含编译** ⇒ hosted 的「Spring 开始 → 健康」≈95s(#868 那趟), 本机冷机 192s;
+#      300 ≈ hosted 的 3 倍、本机的 1.5 倍。反复 rc=2 时先看 FRESH_DB_STARTUP 的相位读数再调。
 #    预算是墙钟秒(SECONDS), ⛔ 不是循环次数(每轮 curl+grep+sleep 不止 1s)。
-STARTUP_TIMEOUT="${FRESH_DB_STARTUP_TIMEOUT:-600}"
+STARTUP_TIMEOUT="${FRESH_DB_STARTUP_TIMEOUT:-300}"
 DRY_RUN=0
 PROGRESS=0
 SHAPE_FLOOR="$SCRIPT_DIR/fresh-db-above-baseline-floor.txt"
@@ -57,7 +60,7 @@ Local-only overrides:
   FRESH_DB_PORT=55432
   FRESH_DB_APP_PORT=10019
   FRESH_DB_PROJECT=cretas-fresh-db[-suffix]
-  FRESH_DB_STARTUP_TIMEOUT=600   (墙钟秒, 含 Maven 编译)
+  FRESH_DB_STARTUP_TIMEOUT=300   (墙钟秒, 只量 Spring 启动; 编译在它之前单独计时)
 EOF
 }
 
@@ -249,8 +252,9 @@ cleanup         : $([ "$FRESH_DB_KEEP" = "1" ] && echo keep || echo remove)
 1. docker compose down -v, then up a genuinely empty database
 2. create vector extensions and the local-only smartbi database
 3. mvn -B test -Dspring.profiles.active=test -Dtest='*RepositoryQueryValidationTest' -Dsurefire.failIfNoSpecifiedTests=false
-4. mvn -B spring-boot:run -Dspring-boot.run.profiles=pg (database URL overridden to port $FRESH_DB_PORT)
-5. require /api/mobile/health and a non-empty, successful flyway_schema_history
+4. mvn -B compile -Dmaven.test.skip=true (timed separately, outside the startup budget)
+5. mvn -B spring-boot:run -Dmaven.test.skip=true -Dspring-boot.run.profiles=pg (database URL overridden to port $FRESH_DB_PORT), within ${STARTUP_TIMEOUT}s
+6. require /api/mobile/health and a non-empty, successful flyway_schema_history
 EOF
     exit 0
 fi
@@ -398,11 +402,35 @@ export JWT_SECRET=fresh_db_local_jwt_secret_not_for_remote_use
 #    否则那三个形状数**不可归因**: 今天这一版和上一版数字不同(2119 vs 2044),
 #    而日志里看不出是「迁移变了」还是「配置变了」。
 echo "READING: FRESH_DB_ENV profile=pg ddl_auto=none(覆盖, 与 prod 的 pg-prod 对齐) flyway_baseline_version=$BASELINE_VERSION flyway_locations=classpath:db/flyway"
+
+# ── 编译提前: 编译 ⛔ 不占启动预算 ───────────────────────────────────────────
+# 🔴 `spring-boot:run` 会先把生命周期跑到 test-compile —— 主代码 4291 + **测试 1693** 个源文件,
+#    全算在下面的启动预算里。#868 在 hosted 上的读数: elapsed 298s 里 spring_started_s=203,
+#    即三分之二的「启动」其实是编译; 本机冷编译主代码 206s、测试再加 103s。
+#    ⇒ 编译单独一步、单独计时、单独判红; 预算只量 Spring 自己。
+# ⚠️ `-Dmaven.test.skip=true` 两处都要带: 只在这一步带, spring-boot:run 的 fork 照样会去编测试。
+#    本闸不跑任何测试(Repository 闸是另一步, 用它自己的 mvn test 编测试), 编它们纯属浪费。
+# ⚠️ 编译失败是**真失败**(rc=1), 措辞 ⛔ 不能像「启动超时」或「迁移失败」。
+log "pre-compiling main sources (tests skipped) so the compile does not eat the startup budget"
+compile_t0=$SECONDS
+compile_rc=0
+(
+    cd "$BACKEND_DIR"
+    run_maven -B compile -Dmaven.test.skip=true
+) >"$WORK_DIR/compile.log" 2>&1 || compile_rc=$?
+compile_s=$((SECONDS - compile_t0))
+echo "READING: FRESH_DB_COMPILE rc=$compile_rc elapsed_s=$compile_s test_sources=skipped"
+if [ "$compile_rc" -ne 0 ]; then
+    tail -60 "$WORK_DIR/compile.log" >&2 || true
+    fail "compile: 主代码编译失败 (rc=$compile_rc, ${compile_s}s) —— ⛔ 不是启动超时, 也不是迁移失败; 全文见 $WORK_DIR/compile.log"
+fi
+
 log "starting real pg profile for Flyway + full Spring/JPA gate"
 require_port_available "FRESH_DB_APP_PORT" "$FRESH_DB_APP_PORT"
 (
     cd "$BACKEND_DIR"
     run_maven -B spring-boot:run \
+        -Dmaven.test.skip=true \
         -Dspring-boot.run.profiles=pg \
         "-Dspring-boot.run.arguments=$RUN_ARGS"
 ) >"$BACKEND_LOG" 2>&1 &

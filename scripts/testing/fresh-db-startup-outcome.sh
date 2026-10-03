@@ -77,7 +77,7 @@ startup_outcome_message() {
         TIMEOUT_AFTER_FLYWAY)
             echo "启动超时: 迁移已执行 ${applied:-?} 个 (Flyway 已完成), 进程仍在启动 —— ${budget}s 内没到健康。⛔ 不是迁移失败; Spring/JPA 启动这一半本趟没量到。反复出现就调大 FRESH_DB_STARTUP_TIMEOUT" ;;
         TIMEOUT_BEFORE_FLYWAY)
-            echo "启动超时: ${budget}s 内日志里没看到 Flyway 完成 (history 成功行 ${applied:-读不出}), 进程仍在启动 —— 多半还在编译或迁移半途, 三个数不作数" ;;
+            echo "启动超时: ${budget}s 内日志里没看到 Flyway 完成 (history 成功行 ${applied:-读不出}), 进程仍在启动 —— 多半卡在 Spring 启动前段或迁移半途(编译已在预算之外完成), 三个数不作数" ;;
         *)
             echo "认不出的启动结局 [$state] —— 分类器与调用方不一致, 本趟没量到" ;;
     esac

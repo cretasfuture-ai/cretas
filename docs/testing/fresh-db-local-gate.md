@@ -61,8 +61,9 @@ docker compose -p cretas-fresh-db -f docker-compose.fresh-db.yml down -v
 ```
 
 Optional local-only overrides are `FRESH_DB_PORT`, `FRESH_DB_APP_PORT`,
-`FRESH_DB_STARTUP_TIMEOUT` (wall-clock seconds including the Maven compile,
-default `600`), and a project name matching `cretas-fresh-db[-suffix]`.
+`FRESH_DB_STARTUP_TIMEOUT` (wall-clock seconds for Spring startup only,
+default `300`; the main-source compile runs first as its own timed step,
+`READING: FRESH_DB_COMPILE`, and test sources are not compiled), and a project name matching `cretas-fresh-db[-suffix]`.
 Port `5432` is rejected deliberately.
 
 ## `--progress` exit codes
