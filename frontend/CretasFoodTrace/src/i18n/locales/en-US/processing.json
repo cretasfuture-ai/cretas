@@ -449,14 +449,18 @@
       "active": "Active",
       "inactive": "Inactive",
       "maintenance": "Maintenance",
-      "scrapped": "Scrapped"
+      "scrapped": "Scrapped",
+      "idle": "Idle",
+      "unknown": "Unknown status"
     },
     "type": {
       "processing": "Processing",
       "refrigeration": "Refrigeration",
       "packaging": "Packaging",
       "transport": "Transport",
-      "other": "Other"
+      "other": "Other",
+      "missing": "Not entered",
+      "unknown": "Unknown type"
     },
     "info": {
       "type": "Type",
@@ -479,10 +483,14 @@
         "code": "Code",
         "model": "Model",
         "location": "Location",
-        "operator": "Operator",
-        "selectOperator": "Select Operator",
-        "noOperator": "No Assignment",
-        "loadingOperators": "Loading...",
+      "operator": "Operator",
+      "selectOperator": "Select Operator",
+      "noOperator": "No Assignment",
+      "operatorReadRequired": "HR read access is required to choose an operator; leave this unassigned if needed",
+      "operatorBindingRetained": "Current operator retained",
+      "operatorLoadFailed": "Operator candidates could not be loaded. Please retry.",
+      "retryOperators": "Retry",
+      "loadingOperators": "Loading...",
         "notes": "Notes"
       },
       "buttons": {

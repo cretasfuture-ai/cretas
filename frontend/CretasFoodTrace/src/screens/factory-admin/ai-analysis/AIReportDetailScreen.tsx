@@ -7,6 +7,7 @@ import { Button } from 'react-native-paper';
 import { useAuthStore } from '../../../store/authStore';
 import { operatingReportReaderKey } from '../../../utils/operatingReportAccess';
 import { aiApiClient, AICostAnalysisResponse } from '../../../services/api/aiApiClient';
+import MarkdownRenderer from '../../../components/common/MarkdownRenderer';
 
 export default function AIReportDetailScreen() {
   const route = useRoute<RouteProp<FAAIStackParamList, 'AIReportDetail'>>();
@@ -36,7 +37,7 @@ export default function AIReportDetailScreen() {
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" /></View>;
   return <SafeAreaView style={styles.page} edges={['bottom']}>
     <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.title}>{route.params.title || '经营分析报告'}</Text>
+      <Text style={styles.title}>{route.params.title?.replace(/^(日报|周报|月报)( · \d{4}-\d{2}-\d{2}) 00:00:00$/, '$1$2') || '经营分析报告'}</Text>
       {visibleReport?.generatedAt ? <Text style={styles.date}>生成时间：{visibleReport.generatedAt}</Text> : null}
       {error ? <View style={styles.failure}><Text style={styles.failureTitle}>{error}</Text>
         <Button onPress={() => void load()} contentStyle={styles.actionTarget}>重新加载</Button>
@@ -45,7 +46,9 @@ export default function AIReportDetailScreen() {
         <Text style={styles.failureTitle}>生成失败</Text>
         <Text style={styles.body}>{visibleReport.errorMessage || '报告生成失败，请重新生成。'}</Text>
       </View> : null}
-      {visibleReport?.analysis ? <Text selectable style={styles.body}>{visibleReport.analysis}</Text> : null}
+      {visibleReport?.analysis ? (
+        <MarkdownRenderer content={visibleReport.analysis} style={styles.body} />
+      ) : null}
     </ScrollView>
   </SafeAreaView>;
 }

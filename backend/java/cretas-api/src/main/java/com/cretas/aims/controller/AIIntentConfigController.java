@@ -741,10 +741,9 @@ public class AIIntentConfigController {
         String userRole = jwtUtil.getRoleFromToken(token);
 
         removeCallerConfirmationAuthority(request);
-        log.info("流式执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
+        log.info("流式执行AI意图: factoryId={}, inputLength={}, userId={}, role={}",
                 factoryId,
-                request.getUserInput().length() > 30 ?
-                        request.getUserInput().substring(0, 30) + "..." : request.getUserInput(),
+                request.getUserInput() == null ? 0 : request.getUserInput().length(),
                 userId, userRole);
 
         return intentExecutorService.executeStream(factoryId, request, userId, userRole);

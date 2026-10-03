@@ -73,7 +73,7 @@ class AlertApiClient {
 
   /**
    * 解决告警
-   * 端点: POST /api/mobile/{factoryId}/equipment/alerts/{alertId}/resolve
+   * 端点: PUT /api/mobile/{factoryId}/equipment-alerts/{alertId}/resolve
    * ✅ P1-5: 后端已实现
    */
   async resolveAlert(params: {
@@ -92,16 +92,16 @@ class AlertApiClient {
     };
     message?: string;
   }> {
-    const { factoryId, alertId, ...data } = params;
-    return await apiClient.post(
-      `${this.getPath(factoryId)}/equipment/alerts/${alertId}/resolve`,
-      data
+    const { factoryId, alertId, resolutionNotes } = params;
+    return await apiClient.put(
+      `${this.getPath(factoryId)}/equipment-alerts/${alertId}/resolve`,
+      { resolution: resolutionNotes ?? '' }
     );
   }
 
   /**
    * 确认告警
-   * 端点: POST /api/mobile/{factoryId}/equipment/alerts/{alertId}/acknowledge
+   * 端点: PUT /api/mobile/{factoryId}/equipment-alerts/{alertId}/acknowledge
    * ✅ P1-5: 后端已实现
    */
   async acknowledgeAlert(params: {
@@ -120,10 +120,9 @@ class AlertApiClient {
     };
     message?: string;
   }> {
-    const { factoryId, alertId, ...data } = params;
-    return await apiClient.post(
-      `${this.getPath(factoryId)}/equipment/alerts/${alertId}/acknowledge`,
-      data
+    const { factoryId, alertId } = params;
+    return await apiClient.put(
+      `${this.getPath(factoryId)}/equipment-alerts/${alertId}/acknowledge`
     );
   }
 

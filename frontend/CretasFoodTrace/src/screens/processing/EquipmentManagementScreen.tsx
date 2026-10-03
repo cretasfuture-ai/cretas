@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { View, StyleSheet, ScrollView, RefreshControl, TextInput as RNTextInput } from 'react-native';
 import { appAlert } from '../../components/ui/AppDialog';
 import { useTranslation } from 'react-i18next';
@@ -15,7 +15,7 @@ import {
   Menu,
   Chip,
 } from 'react-native-paper';
-import { useNavigation, useFocusEffect, CommonActions } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ProcessingStackParamList } from '../../types/navigation';
 import {
@@ -27,20 +27,71 @@ import {
 } from '../../services/api/equipmentApiClient';
 import { userApiClient, type UserDTO } from '../../services/api/userApiClient';
 import { useAuthStore } from '../../store/authStore';
-import { getFactoryId } from '../../types/auth';
+import { getFactoryId, type User } from '../../types/auth';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
 import { theme } from '../../theme';
 import { logger } from '../../utils/logger';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 // Create EquipmentManagement context logger
 const equipmentMgmtLogger = logger.createContextLogger('EquipmentManagement');
 
 type NavigationProp = NativeStackNavigationProp<ProcessingStackParamList, 'EquipmentManagement'>;
 
+type EquipmentActorContext = {
+  actorKey: string;
+  factoryId: string;
+  generation: number;
+  renderActorKey: string;
+  renderUser: User | null | undefined;
+};
+
+function equipmentActorKey(user: User | null | undefined): string {
+  if (!user) return 'none';
+  const factoryId = getFactoryId(user) || '';
+  const userId = user.id != null ? String(user.id) : user.username || '';
+  const role = user.userType === 'factory' ? user.factoryUser?.role || '' : user.userType;
+  const equipmentPermission = user.userType === 'factory'
+    ? user.factoryUser?.modulePermissions?.equipment || ''
+    : '';
+  const hrPermission = user.userType === 'factory'
+    ? user.factoryUser?.modulePermissions?.hr || ''
+    : '';
+  return `${user.userType}:${userId}:${factoryId}:${role}:${equipmentPermission}:${hrPermission}`;
+}
+
 export default function EquipmentManagementScreen() {
+  const user = useAuthStore((state) => state.user);
+  const actorKey = equipmentActorKey(user);
+  const previousUserRef = useRef<User | null | undefined>(user);
+  const generationRef = useRef(0);
+  if (previousUserRef.current !== user) {
+    previousUserRef.current = user;
+    generationRef.current += 1;
+  }
+  return <EquipmentManagementContent key={`${actorKey}:${generationRef.current}`} />;
+}
+
+function EquipmentManagementContent() {
   const { t } = useTranslation('processing');
   const navigation = useNavigation<NavigationProp>();
   const { user } = useAuthStore();
+  const renderActorKey = equipmentActorKey(user);
+  const liveUserForRender = useAuthStore.getState().user;
+  const liveActorKeyForRender = equipmentActorKey(liveUserForRender);
+  const canReadEquipment = renderActorKey === liveActorKeyForRender
+    && hasModulePermission(liveUserForRender, 'equipment', 'read');
+  const canWriteEquipment = renderActorKey === liveActorKeyForRender
+    && hasModulePermission(liveUserForRender, 'equipment', 'write');
+  const canReadHr = renderActorKey === liveActorKeyForRender
+    && hasModulePermission(liveUserForRender, 'hr', 'read');
+  const generationRef = useRef(0);
+  const actorKeyRef = useRef(renderActorKey);
+  const mountedRef = useRef(false);
+  if (actorKeyRef.current !== renderActorKey) {
+    actorKeyRef.current = renderActorKey;
+    generationRef.current += 1;
+  }
 
   // State
   const [equipments, setEquipments] = useState<Equipment[]>([]);
@@ -52,6 +103,7 @@ export default function EquipmentManagementScreen() {
 
   // CRUD State
   const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
+  const [loadedActorKey, setLoadedActorKey] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -61,6 +113,7 @@ export default function EquipmentManagementScreen() {
   const [operatorUsers, setOperatorUsers] = useState<UserDTO[]>([]);
   const [showOperatorMenu, setShowOperatorMenu] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [operatorLoadError, setOperatorLoadError] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState<CreateEquipmentRequest>({
@@ -79,37 +132,103 @@ export default function EquipmentManagementScreen() {
     notes: '',
   });
 
-  const getCurrentFactoryId = (): string => getFactoryId(user) || '';
-
-  // Load selectable operator users list
-  const loadOperatorUsers = async () => {
-    setLoadingUsers(true);
-    try {
-      const factoryId = getCurrentFactoryId();
-      // Load all users, can be filtered by role later
-      const response = await userApiClient.getUsers({ factoryId, size: 100 });
-      // Handle paginated response
-      const users = Array.isArray(response) ? response : (response && typeof response === 'object' && 'content' in response) ? (response as { content: unknown[] }).content || [] : [];
-      setOperatorUsers(users as UserDTO[]);
-    } catch (error) {
-      equipmentMgmtLogger.error('Failed to load operator users list', error as Error);
-      setOperatorUsers([]);
-    } finally {
-      setLoadingUsers(false);
-    }
+  const captureActorContext = (): EquipmentActorContext => {
+    const liveUser = useAuthStore.getState().user;
+    return {
+      actorKey: equipmentActorKey(liveUser),
+      factoryId: getFactoryId(liveUser) || '',
+      generation: generationRef.current,
+      renderActorKey,
+      renderUser: user,
+    };
   };
 
-  const loadEquipments = async () => {
+  const isCurrentActorContext = (
+    context: EquipmentActorContext,
+    requireWrite = false,
+    requireHrRead = false,
+  ): boolean => {
+    if (!mountedRef.current || context.generation !== generationRef.current) return false;
+    const liveUser = useAuthStore.getState().user;
+    const liveActorKey = equipmentActorKey(liveUser);
+    const liveFactoryId = getFactoryId(liveUser) || '';
+    if (!context.factoryId || context.actorKey !== context.renderActorKey
+      || context.renderActorKey !== renderActorKey
+      || liveUser !== context.renderUser
+      || liveActorKey !== context.actorKey || liveFactoryId !== context.factoryId) {
+      return false;
+    }
+    if (!hasModulePermission(liveUser, 'equipment', 'read')) return false;
+    if (requireWrite && !hasModulePermission(liveUser, 'equipment', 'write')) return false;
+    return !requireHrRead || hasModulePermission(liveUser, 'hr', 'read');
+  };
+
+  const canonicalSelectedEquipment = (context: EquipmentActorContext): Equipment | null => {
+    if (!selectedEquipment || loadedActorKey !== context.actorKey) return null;
+    const canonical = equipments.find((equipment) => equipment.id === selectedEquipment.id);
+    return canonical?.factoryId === context.factoryId ? canonical : null;
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    setEquipments([]);
+    setLoadedActorKey(null);
+    setLoading(false);
+    setRefreshing(false);
+    setLoadingUsers(false);
+    setSelectedEquipment(null);
+    setShowCreateDialog(false);
+    setShowEditDialog(false);
+    setShowDeleteDialog(false);
+    setShowStatusMenu(false);
+    setOperatorUsers([]);
+    setOperatorLoadError(false);
+  }, [renderActorKey, user]);
+
+  // Load selectable operator users list
+  const loadOperatorUsers = useCallback(async () => {
+    const context = captureActorContext();
+    if (!isCurrentActorContext(context, true, true)) return;
+    setLoadingUsers(true);
+    setOperatorLoadError(false);
+    setOperatorUsers([]);
+    try {
+      // Load all users, can be filtered by role later
+      const response = await userApiClient.getUsers({ factoryId: context.factoryId, size: 100 });
+      // Handle paginated response
+      const users = Array.isArray(response) ? response : (response && typeof response === 'object' && 'content' in response) ? (response as { content: unknown[] }).content || [] : [];
+      const scopedUsers = (users as Array<UserDTO & { factoryId?: string; factoryUser?: { factoryId?: string } }>).filter((operator) => {
+        const operatorFactoryId = operator.factoryId || operator.factoryUser?.factoryId;
+        return !operatorFactoryId || operatorFactoryId === context.factoryId;
+      });
+      if (isCurrentActorContext(context, true, true)) setOperatorUsers(scopedUsers);
+    } catch (error) {
+      equipmentMgmtLogger.error('Failed to load operator users list', error as Error);
+      if (isCurrentActorContext(context, true, true)) setOperatorLoadError(true);
+    } finally {
+      if (isCurrentActorContext(context, true, true)) setLoadingUsers(false);
+    }
+  }, [renderActorKey, user]);
+
+  const loadEquipments = useCallback(async () => {
+    const context = captureActorContext();
+    if (!isCurrentActorContext(context)) return;
     setLoading(true);
     try {
-      const factoryId = getCurrentFactoryId();
-      if (!factoryId) {
+      if (!context.factoryId) {
         appAlert(t('equipmentManagement.messages.loadFailed'), t('equipmentManagement.messages.factoryIdError'));
         return;
       }
 
       const params: any = {
-        factoryId,
+        factoryId: context.factoryId,
         page: 1,
         size: 50,
         sortBy: 'createdAt',
@@ -124,133 +243,162 @@ export default function EquipmentManagementScreen() {
       let equipmentList: Equipment[] = [];
 
       if (result && result.content) {
-        equipmentList = result.content;
+        equipmentList = result.content.filter((equipment) => equipment.factoryId === context.factoryId);
       } else if (Array.isArray(result)) {
-        equipmentList = result as unknown as Equipment[];
+        equipmentList = (result as unknown as Equipment[])
+          .filter((equipment) => equipment.factoryId === context.factoryId);
       }
 
-      setEquipments(equipmentList);
+      if (isCurrentActorContext(context)) {
+        setEquipments(equipmentList);
+        setLoadedActorKey(context.actorKey);
+      }
     } catch (error) {
-      setEquipments([]);
+      if (isCurrentActorContext(context)) {
+        setEquipments([]);
+        setLoadedActorKey(context.actorKey);
+      }
     } finally {
-      setLoading(false);
+      if (isCurrentActorContext(context)) setLoading(false);
     }
-  };
+  }, [renderActorKey, user, statusFilter, typeFilter, searchQuery, t]);
 
   const handleRefresh = async () => {
+    const context = captureActorContext();
+    if (!isCurrentActorContext(context)) return;
     setRefreshing(true);
     await loadEquipments();
-    setRefreshing(false);
+    if (isCurrentActorContext(context)) setRefreshing(false);
   };
 
   useFocusEffect(
     useCallback(() => {
-      loadEquipments();
-    }, [statusFilter, typeFilter, searchQuery])
+      void loadEquipments();
+    }, [loadEquipments])
   );
 
   // CRUD Handlers (unchanged logic, just simplified for brevity in visual refactor)
   const handleCreateEquipment = async () => {
+      const context = captureActorContext();
+      if (!isCurrentActorContext(context, true)) return;
       // ... same logic as before ...
       // For brevity, assuming successful creation for now
       try {
         setLoading(true);
-        await equipmentApiClient.createEquipment(formData, getCurrentFactoryId());
+        await equipmentApiClient.createEquipment(formData, context.factoryId);
+        if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.info('Equipment created successfully', {
           equipmentName: formData.name,
           equipmentCode: formData.code,
-          factoryId: getCurrentFactoryId(),
+          factoryId: context.factoryId,
         });
         setShowCreateDialog(false);
-        loadEquipments();
+        void loadEquipments();
       } catch (e) {
+        if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.error('Failed to create equipment', e as Error, {
           equipmentName: formData.name,
-          factoryId: getCurrentFactoryId(),
+          factoryId: context.factoryId,
         });
-      } finally { setLoading(false); }
+      } finally {
+        if (isCurrentActorContext(context)) setLoading(false);
+      }
   };
 
   const handleUpdateEquipment = async () => {
-      if(!selectedEquipment) return;
+      const context = captureActorContext();
+      if (!isCurrentActorContext(context, true)) return;
+      const canonical = canonicalSelectedEquipment(context);
+      if (!canonical) return;
       try {
           setLoading(true);
-          await equipmentApiClient.updateEquipment(selectedEquipment.id, formData, getCurrentFactoryId());
+          await equipmentApiClient.updateEquipment(canonical.id, formData, context.factoryId);
+          if (!isCurrentActorContext(context)) return;
           equipmentMgmtLogger.info('Equipment updated successfully', {
-            equipmentId: selectedEquipment.id,
+            equipmentId: canonical.id,
             equipmentName: formData.name,
-            factoryId: getCurrentFactoryId(),
+            factoryId: context.factoryId,
           });
           setShowEditDialog(false);
-          loadEquipments();
+          void loadEquipments();
       } catch(e) {
+        if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.error('Failed to update equipment', e as Error, {
-          equipmentId: selectedEquipment.id,
-          factoryId: getCurrentFactoryId(),
+          equipmentId: canonical.id,
+          factoryId: context.factoryId,
         });
-      } finally { setLoading(false); }
+      } finally {
+        if (isCurrentActorContext(context)) setLoading(false);
+      }
   };
 
   const handleDeleteEquipment = async () => {
-      if(!selectedEquipment) return;
+      const context = captureActorContext();
+      if (!isCurrentActorContext(context, true)) return;
+      const canonical = canonicalSelectedEquipment(context);
+      if (!canonical) return;
       try {
           setLoading(true);
-          await equipmentApiClient.deleteEquipment(selectedEquipment.id, getCurrentFactoryId());
+          await equipmentApiClient.deleteEquipment(canonical.id, context.factoryId);
+          if (!isCurrentActorContext(context)) return;
           equipmentMgmtLogger.info('Equipment deleted successfully', {
-            equipmentId: selectedEquipment.id,
-            equipmentName: selectedEquipment.name,
-            factoryId: getCurrentFactoryId(),
+            equipmentId: canonical.id,
+            equipmentName: canonical.name,
+            factoryId: context.factoryId,
           });
           setShowDeleteDialog(false);
-          loadEquipments();
+          void loadEquipments();
       } catch(e) {
+        if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.error('Failed to delete equipment', e as Error, {
-          equipmentId: selectedEquipment.id,
-          factoryId: getCurrentFactoryId(),
+          equipmentId: canonical.id,
+          factoryId: context.factoryId,
         });
-      } finally { setLoading(false); }
+      } finally {
+        if (isCurrentActorContext(context)) setLoading(false);
+      }
   };
 
   const handleUpdateStatus = async (newStatus: EquipmentStatus) => {
-      if(!selectedEquipment) return;
+      const context = captureActorContext();
+      if (!isCurrentActorContext(context, true)) return;
+      const canonical = canonicalSelectedEquipment(context);
+      if (!canonical) return;
       try {
           setLoading(true);
-          await equipmentApiClient.updateEquipmentStatus(selectedEquipment.id, newStatus, getCurrentFactoryId());
+          await equipmentApiClient.updateEquipmentStatus(canonical.id, newStatus, context.factoryId);
+          if (!isCurrentActorContext(context)) return;
           equipmentMgmtLogger.info('Equipment status updated successfully', {
-            equipmentId: selectedEquipment.id,
+            equipmentId: canonical.id,
             newStatus,
-            factoryId: getCurrentFactoryId(),
+            factoryId: context.factoryId,
           });
           setShowStatusMenu(false);
-          loadEquipments();
+          void loadEquipments();
       } catch(e) {
+        if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.error('Failed to update equipment status', e as Error, {
-          equipmentId: selectedEquipment.id,
+          equipmentId: canonical.id,
           newStatus,
-          factoryId: getCurrentFactoryId(),
+          factoryId: context.factoryId,
         });
-      } finally { setLoading(false); }
+      } finally {
+        if (isCurrentActorContext(context)) setLoading(false);
+      }
   };
 
   // Dialog Openers
   const openCreateDialog = () => {
     setFormData({ name: '', code: '', type: 'processing', model: '', manufacturer: '', purchaseDate: '', location: '', specifications: '', operatorId: undefined, notes: '' });
-    loadOperatorUsers(); // Load operator users list
+    if (isCurrentActorContext(captureActorContext(), true, true)) void loadOperatorUsers();
     setShowCreateDialog(true);
   };
 
   const openEditDialog = (equipment: Equipment) => {
     setSelectedEquipment(equipment);
     setFormData({ ...equipment, purchasePrice: equipment.purchasePrice, depreciationYears: equipment.depreciationYears, maintenanceInterval: equipment.maintenanceInterval, operatorId: equipment.operatorId });
-    loadOperatorUsers(); // Load operator users list
+    if (isCurrentActorContext(captureActorContext(), true, true)) void loadOperatorUsers();
     setShowEditDialog(true);
-  };
-
-  // Get selected operator name
-  const getSelectedOperatorName = (): string => {
-    if (!formData.operatorId) return t('equipmentManagement.dialogs.fields.selectOperator');
-    const operator = operatorUsers.find(u => u.id === formData.operatorId);
-    return operator ? operator.realName : t('equipmentManagement.dialogs.fields.selectOperator');
   };
 
   const openDeleteDialog = (equipment: Equipment) => {
@@ -261,6 +409,22 @@ export default function EquipmentManagementScreen() {
   const openStatusMenu = (equipment: Equipment) => {
     setSelectedEquipment(equipment);
     setShowStatusMenu(true);
+  };
+
+  const openOperatorMenu = () => {
+    if (!isCurrentActorContext(captureActorContext(), true, true)) return;
+    setShowOperatorMenu(true);
+  };
+
+  const selectOperator = (operatorId?: number) => {
+    if (!isCurrentActorContext(captureActorContext(), true, true)) return;
+    setFormData((current) => ({ ...current, operatorId }));
+    setShowOperatorMenu(false);
+  };
+
+  const retryOperatorUsers = () => {
+    if (!isCurrentActorContext(captureActorContext(), true, true)) return;
+    void loadOperatorUsers();
   };
 
   const getStatusVariant = (status: EquipmentStatus) => {
@@ -274,19 +438,88 @@ export default function EquipmentManagementScreen() {
   };
 
   const getStatusLabel = (status: EquipmentStatus) => {
-      return t(`equipmentManagement.status.${status}`);
+      const knownStatus = ['active', 'idle', 'inactive', 'maintenance', 'scrapped'].includes(status);
+      return t(`equipmentManagement.status.${knownStatus ? status : 'unknown'}`);
   };
 
-  const getTypeLabel = (type: EquipmentType) => {
-      return t(`equipmentManagement.type.${type}`);
+  const getTypeLabel = (type: EquipmentType | null | undefined) => {
+      if (!type) return t('equipmentManagement.type.missing');
+      const knownType = ['processing', 'refrigeration', 'packaging', 'transport', 'other'].includes(type);
+      return t(`equipmentManagement.type.${knownType ? type : 'unknown'}`);
   };
+
+  const getSelectedOperatorName = (): string => {
+    if (!formData.operatorId) return t('equipmentManagement.dialogs.fields.noOperator');
+    const operator = operatorUsers.find(u => u.id === formData.operatorId);
+    return operator
+      ? operator.realName
+      : t('equipmentManagement.dialogs.fields.operatorBindingRetained', { id: formData.operatorId });
+  };
+
+  const renderOperatorField = () => {
+    if (!canReadHr) {
+      return (
+        <Text testID="equipment-management-operator-hr-locked">
+          {formData.operatorId
+            ? t('equipmentManagement.dialogs.fields.operatorBindingRetained', { id: formData.operatorId })
+            : t('equipmentManagement.dialogs.fields.operatorReadRequired')}
+        </Text>
+      );
+    }
+    return (
+      <>
+        <Menu
+          visible={showOperatorMenu}
+          onDismiss={() => setShowOperatorMenu(false)}
+          anchor={
+            <NeoButton
+              testID="equipment-management-operator-picker"
+              variant="outline"
+              onPress={openOperatorMenu}
+              style={styles.operatorButton}
+            >
+              {loadingUsers ? t('equipmentManagement.dialogs.fields.loadingOperators') : getSelectedOperatorName()}
+            </NeoButton>
+          }
+          contentStyle={{ backgroundColor: 'white', maxHeight: 300 }}
+        >
+          <Menu.Item
+            testID="equipment-management-operator-clear"
+            onPress={() => selectOperator(undefined)}
+            title={t('equipmentManagement.dialogs.fields.noOperator')}
+          />
+          {operatorUsers.map(operator => (
+            <Menu.Item
+              key={operator.id}
+              testID={`equipment-management-operator-${operator.id}`}
+              onPress={() => selectOperator(operator.id)}
+              title={`${operator.realName} (${operator.position || operator.role})`}
+            />
+          ))}
+        </Menu>
+        {operatorLoadError && (
+          <View>
+            <Text testID="equipment-management-operator-load-error">
+              {t('equipmentManagement.dialogs.fields.operatorLoadFailed')}
+            </Text>
+            <NeoButton testID="equipment-management-operator-retry" variant="ghost" onPress={retryOperatorUsers}>
+              {t('equipmentManagement.dialogs.fields.retryOperators')}
+            </NeoButton>
+          </View>
+        )}
+      </>
+    );
+  };
+
+  const visibleEquipments = canReadEquipment && loadedActorKey === renderActorKey
+    ? equipments
+    : [];
 
   return (
     <ScreenWrapper edges={['top']} backgroundColor={theme.colors.background}>
       <Appbar.Header elevated style={{ backgroundColor: theme.colors.surface }}>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title={t('equipmentManagement.title')} titleStyle={{ fontWeight: '600' }} />
-        <Appbar.Action icon="robot-outline" onPress={() => navigation.dispatch(CommonActions.navigate('FAAITab', { screen: 'AIChat', params: { entityType: 'EQUIPMENT' } }))} />
         <Appbar.Action icon="monitor-dashboard" onPress={() => navigation.navigate('EquipmentMonitoring')} />
       </Appbar.Header>
 
@@ -322,15 +555,15 @@ export default function EquipmentManagementScreen() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
       >
-        {loading && equipments.length === 0 ? (
+        {loading && visibleEquipments.length === 0 ? (
           <View style={styles.centerContainer}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
-        ) : equipments.length === 0 ? (
+        ) : visibleEquipments.length === 0 ? (
           <View style={styles.centerContainer}>
             <Text style={styles.emptyText}>{t('equipmentManagement.empty.title')}</Text>
-            <NeoButton variant="primary" onPress={openCreateDialog} style={{ marginTop: 16 }}>{t('equipmentManagement.actions.create')}</NeoButton>
+            {canWriteEquipment && <NeoButton testID="equipment-management-create-button" variant="primary" onPress={openCreateDialog} style={{ marginTop: 16 }}>{t('equipmentManagement.actions.create')}</NeoButton>}
           </View>
         ) : (
-          equipments.map((equipment) => (
+          visibleEquipments.map((equipment) => (
             <NeoCard key={equipment.id} style={styles.card} padding="m">
               <View style={styles.cardHeader}>
                 <View>
@@ -362,33 +595,35 @@ export default function EquipmentManagementScreen() {
               </View>
 
               <View style={styles.cardActions}>
-                 <View style={styles.leftActions}>
-                    <IconButton icon="pencil-outline" size={20} onPress={() => openEditDialog(equipment)} />
-                    <IconButton icon="trash-can-outline" size={20} iconColor={theme.colors.error} onPress={() => openDeleteDialog(equipment)} />
-                 </View>
-                 <View style={styles.rightActions}>
-                    <Menu
-                        visible={showStatusMenu && selectedEquipment?.id === equipment.id}
-                        onDismiss={() => { setShowStatusMenu(false); setSelectedEquipment(null); }}
-                        anchor={<NeoButton variant="ghost" size="small" onPress={() => openStatusMenu(equipment)}>{t('equipmentManagement.actions.status')}</NeoButton>}
-                    >
-                        <Menu.Item onPress={() => handleUpdateStatus('active')} title={t('equipmentManagement.statusMenu.running')} />
-                        <Menu.Item onPress={() => handleUpdateStatus('maintenance')} title={t('equipmentManagement.statusMenu.maintenance')} />
-                        <Menu.Item onPress={() => handleUpdateStatus('inactive')} title={t('equipmentManagement.statusMenu.inactive')} />
-                    </Menu>
-                    <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('EquipmentDetail', { equipmentId: equipment.id })}>{t('equipmentManagement.actions.detail')}</NeoButton>
-                 </View>
+                {canWriteEquipment && <View style={styles.leftActions}>
+                  <IconButton testID={`equipment-management-edit-${equipment.id}`} icon="pencil-outline" size={20} onPress={() => openEditDialog(equipment)} />
+                  <IconButton testID={`equipment-management-delete-${equipment.id}`} icon="trash-can-outline" size={20} iconColor={theme.colors.error} onPress={() => openDeleteDialog(equipment)} />
+                </View>}
+                <View style={styles.rightActions}>
+                  {canWriteEquipment && <Menu
+                    visible={showStatusMenu && selectedEquipment?.id === equipment.id}
+                    onDismiss={() => { setShowStatusMenu(false); setSelectedEquipment(null); }}
+                    anchor={<NeoButton testID={`equipment-management-status-${equipment.id}`} variant="ghost" size="small" onPress={() => openStatusMenu(equipment)}>{t('equipmentManagement.actions.status')}</NeoButton>}
+                  >
+                    <Menu.Item testID="equipment-management-status-active" onPress={() => handleUpdateStatus('active')} title={t('equipmentManagement.statusMenu.running')} />
+                    <Menu.Item testID="equipment-management-status-maintenance" onPress={() => handleUpdateStatus('maintenance')} title={t('equipmentManagement.statusMenu.maintenance')} />
+                    <Menu.Item testID="equipment-management-status-inactive" onPress={() => handleUpdateStatus('inactive')} title={t('equipmentManagement.statusMenu.inactive')} />
+                  </Menu>}
+                  <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('EquipmentDetail', { equipmentId: equipment.id })}>{t('equipmentManagement.actions.detail')}</NeoButton>
+                </View>
               </View>
             </NeoCard>
           ))
         )}
       </ScrollView>
 
-      <FAB icon="plus" style={styles.fab} onPress={openCreateDialog} color="white" />
+      {canWriteEquipment && <FAB testID="equipment-management-fab" icon="plus" style={styles.fab} onPress={openCreateDialog} color="white" />}
 
       {/* Dialogs (Create/Edit/Delete) would go here, using Portal */}
       <Portal>
-        <Dialog visible={showCreateDialog} onDismiss={() => setShowCreateDialog(false)} style={{ backgroundColor: 'white' }}>
+        <React.Fragment key={`${renderActorKey}:${canWriteEquipment ? 'write' : 'read'}`}>
+        {canWriteEquipment && <>
+        {showCreateDialog && <Dialog visible onDismiss={() => setShowCreateDialog(false)} style={{ backgroundColor: 'white' }}>
             <Dialog.Title>{t('equipmentManagement.dialogs.createTitle')}</Dialog.Title>
             <Dialog.ScrollArea style={{ maxHeight: 400, paddingHorizontal: 0 }}>
               <ScrollView>
@@ -400,38 +635,7 @@ export default function EquipmentManagementScreen() {
 
                   {/* Operator selection */}
                   <Text style={styles.fieldLabel}>{t('equipmentManagement.dialogs.fields.operator')}</Text>
-                  <Menu
-                    visible={showOperatorMenu}
-                    onDismiss={() => setShowOperatorMenu(false)}
-                    anchor={
-                      <NeoButton
-                        variant="outline"
-                        onPress={() => setShowOperatorMenu(true)}
-                        style={styles.operatorButton}
-                      >
-                        {loadingUsers ? t('equipmentManagement.dialogs.fields.loadingOperators') : getSelectedOperatorName()}
-                      </NeoButton>
-                    }
-                    contentStyle={{ backgroundColor: 'white', maxHeight: 300 }}
-                  >
-                    <Menu.Item
-                      onPress={() => {
-                        setFormData({...formData, operatorId: undefined});
-                        setShowOperatorMenu(false);
-                      }}
-                      title={t('equipmentManagement.dialogs.fields.noOperator')}
-                    />
-                    {operatorUsers.map(user => (
-                      <Menu.Item
-                        key={user.id}
-                        onPress={() => {
-                          setFormData({...formData, operatorId: user.id});
-                          setShowOperatorMenu(false);
-                        }}
-                        title={`${user.realName} (${user.position || user.role})`}
-                      />
-                    ))}
-                  </Menu>
+                  {renderOperatorField()}
 
                   <TextInput label={t('equipmentManagement.dialogs.fields.notes')} value={formData.notes || ''} onChangeText={text => setFormData({...formData, notes: text})} mode="outlined" style={styles.input} multiline numberOfLines={2} />
                 </View>
@@ -439,12 +643,12 @@ export default function EquipmentManagementScreen() {
             </Dialog.ScrollArea>
             <Dialog.Actions>
                 <NeoButton variant="ghost" onPress={() => setShowCreateDialog(false)}>{t('equipmentManagement.dialogs.buttons.cancel')}</NeoButton>
-                <NeoButton variant="primary" onPress={handleCreateEquipment}>{t('equipmentManagement.dialogs.buttons.create')}</NeoButton>
+                <NeoButton testID="equipment-management-submit-create" variant="primary" onPress={handleCreateEquipment}>{t('equipmentManagement.dialogs.buttons.create')}</NeoButton>
             </Dialog.Actions>
-        </Dialog>
+        </Dialog>}
 
         {/* Edit equipment dialog */}
-        <Dialog visible={showEditDialog} onDismiss={() => setShowEditDialog(false)} style={{ backgroundColor: 'white' }}>
+        {showEditDialog && <Dialog visible onDismiss={() => setShowEditDialog(false)} style={{ backgroundColor: 'white' }}>
             <Dialog.Title>{t('equipmentManagement.dialogs.editTitle')}</Dialog.Title>
             <Dialog.ScrollArea style={{ maxHeight: 400, paddingHorizontal: 0 }}>
               <ScrollView>
@@ -456,38 +660,7 @@ export default function EquipmentManagementScreen() {
 
                   {/* Operator selection */}
                   <Text style={styles.fieldLabel}>{t('equipmentManagement.dialogs.fields.operator')}</Text>
-                  <Menu
-                    visible={showOperatorMenu}
-                    onDismiss={() => setShowOperatorMenu(false)}
-                    anchor={
-                      <NeoButton
-                        variant="outline"
-                        onPress={() => setShowOperatorMenu(true)}
-                        style={styles.operatorButton}
-                      >
-                        {loadingUsers ? t('equipmentManagement.dialogs.fields.loadingOperators') : getSelectedOperatorName()}
-                      </NeoButton>
-                    }
-                    contentStyle={{ backgroundColor: 'white', maxHeight: 300 }}
-                  >
-                    <Menu.Item
-                      onPress={() => {
-                        setFormData({...formData, operatorId: undefined});
-                        setShowOperatorMenu(false);
-                      }}
-                      title={t('equipmentManagement.dialogs.fields.noOperator')}
-                    />
-                    {operatorUsers.map(user => (
-                      <Menu.Item
-                        key={user.id}
-                        onPress={() => {
-                          setFormData({...formData, operatorId: user.id});
-                          setShowOperatorMenu(false);
-                        }}
-                        title={`${user.realName} (${user.position || user.role})`}
-                      />
-                    ))}
-                  </Menu>
+                  {renderOperatorField()}
 
                   <TextInput label={t('equipmentManagement.dialogs.fields.notes')} value={formData.notes || ''} onChangeText={text => setFormData({...formData, notes: text})} mode="outlined" style={styles.input} multiline numberOfLines={2} />
                 </View>
@@ -495,19 +668,21 @@ export default function EquipmentManagementScreen() {
             </Dialog.ScrollArea>
             <Dialog.Actions>
                 <NeoButton variant="ghost" onPress={() => setShowEditDialog(false)}>{t('equipmentManagement.dialogs.buttons.cancel')}</NeoButton>
-                <NeoButton variant="primary" onPress={handleUpdateEquipment}>{t('equipmentManagement.dialogs.buttons.save')}</NeoButton>
+                <NeoButton testID="equipment-management-submit-edit" variant="primary" onPress={handleUpdateEquipment}>{t('equipmentManagement.dialogs.buttons.save')}</NeoButton>
             </Dialog.Actions>
-        </Dialog>
+        </Dialog>}
 
         {/* Simplified Delete Dialog */}
-        <Dialog visible={showDeleteDialog} onDismiss={() => setShowDeleteDialog(false)} style={{ backgroundColor: 'white' }}>
+        {showDeleteDialog && <Dialog visible onDismiss={() => setShowDeleteDialog(false)} style={{ backgroundColor: 'white' }}>
             <Dialog.Title>{t('equipmentManagement.dialogs.deleteTitle')}</Dialog.Title>
             <Dialog.Content><Text>{t('equipmentManagement.dialogs.deleteMessage')}</Text></Dialog.Content>
             <Dialog.Actions>
                 <NeoButton variant="ghost" onPress={() => setShowDeleteDialog(false)}>{t('equipmentManagement.dialogs.buttons.cancel')}</NeoButton>
-                <NeoButton variant="danger" onPress={handleDeleteEquipment}>{t('equipmentManagement.dialogs.buttons.delete')}</NeoButton>
+                <NeoButton testID="equipment-management-confirm-delete" variant="danger" onPress={handleDeleteEquipment}>{t('equipmentManagement.dialogs.buttons.delete')}</NeoButton>
             </Dialog.Actions>
-        </Dialog>
+        </Dialog>}
+        </>}
+        </React.Fragment>
       </Portal>
 
     </ScreenWrapper>

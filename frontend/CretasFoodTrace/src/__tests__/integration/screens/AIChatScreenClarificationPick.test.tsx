@@ -28,10 +28,13 @@ function lookup(obj: unknown, dotted: string): string | undefined {
 }
 
 jest.mock('../../../store/authStore', () => ({
-  useAuthStore: (selector?: (state: any) => unknown) => {
-    const state = { user: mockUser, getUserRole: () => mockRole };
-    return selector ? selector(state) : state;
-  },
+  useAuthStore: Object.assign(
+    (selector?: (state: any) => unknown) => {
+      const state = { user: mockUser, getUserRole: () => mockRole };
+      return selector ? selector(state) : state;
+    },
+    { getState: () => ({ user: mockUser, getUserRole: () => mockRole }) },
+  ),
 }));
 jest.mock('../../../services/api/aiApiClient', () => ({
   aiApiClient: { executeIntentStream: (...args: unknown[]) => mockExecuteIntentStream(...args) },
@@ -75,7 +78,12 @@ jest.mock('../../../components/ai/RichContentRenderer', () => ({
 jest.mock('../../../components/ai/RestaurantGrossMarginRunCard', () => ({
   RestaurantGrossMarginRunCard: () => null,
 }));
-jest.mock('../../../components/common/VoiceMicButton', () => ({ VoiceMicButton: () => null }));
+jest.mock('../../../components/common/VoiceMicButton', () => ({
+  VoiceMicButton: ({ onTranscript, ...props }: any) => {
+    const { Text } = require('react-native');
+    return <Text testID="voice-mic" onPress={() => onTranscript?.('迟到语音')} {...props}>VOICE</Text>;
+  },
+}));
 jest.mock('../../../services/audio/feedbackSounds', () => ({
   feedbackSounds: { onWriteSuccess: jest.fn(), onNeedMoreInfo: jest.fn(), onError: jest.fn() },
 }));
@@ -163,6 +171,100 @@ describe('AIChatScreen 澄清按钮点选', () => {
 
     await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
     expect(mockExecuteIntentStream.mock.calls[1][0]).toBe('重新描述');
-    expect(mockExecuteIntentStream.mock.calls[1]).toHaveLength(4);
+    expect(mockExecuteIntentStream.mock.calls[1]).toHaveLength(6);
+    expect(mockExecuteIntentStream.mock.calls[1][5]).toBeInstanceOf(AbortSignal);
+  });
+
+  it('切换账号后忽略旧 SSE 的迟到 session、result 和 complete 回调', async () => {
+    let oldCallbacks: any;
+    let oldSignal: AbortSignal;
+    let resolveOldStream!: () => void;
+    const oldStream = new Promise<void>((resolve) => { resolveOldStream = resolve; });
+    mockExecuteIntentStream.mockReset();
+    mockExecuteIntentStream.mockImplementation(async (_message: string, callbacks: any, _factory: string, _entity: unknown, _options: unknown, signal: AbortSignal) => {
+      oldCallbacks = callbacks;
+      oldSignal = signal;
+      await oldStream;
+    });
+
+    const screen = render(<AIChatScreen />);
+    await send(screen, '旧账号问题');
+    expect(oldCallbacks).toBeTruthy();
+
+    mockUser = factoryUser('F006');
+    mockUser.id = 8;
+    await act(async () => {
+      screen.rerender(<AIChatScreen />);
+    });
+    expect(oldSignal.aborted).toBe(true);
+    expect(screen.queryByText('旧账号问题')).toBeNull();
+
+    // ABA: returning to the original actor must still reject callbacks from generation 0.
+    mockUser = factoryUser('F006');
+    await act(async () => { screen.rerender(<AIChatScreen />); });
+
+    await act(async () => {
+      oldCallbacks.onSessionId?.('old-account-session');
+      oldCallbacks.onResult?.({
+        status: 'COMPLETED',
+        message: '旧账号回答，不应出现',
+        intentCode: 'OLD_ACCOUNT_RESULT',
+      });
+      oldCallbacks.onComplete?.({ status: 'COMPLETED', sessionId: 'old-account-session' });
+    });
+
+    expect(screen.queryByText('旧账号回答，不应出现')).toBeNull();
+    resolveOldStream();
+  });
+
+  it('切换账号后清除语音预览并取消旧 timer', async () => {
+    jest.useFakeTimers();
+    try {
+      const screen = render(<AIChatScreen />);
+      fireEvent.press(screen.getByTestId('voice-mic'));
+      expect(screen.getByText('迟到语音')).toBeTruthy();
+
+      mockUser = factoryUser('F006');
+      mockUser.id = 8;
+      await act(async () => { screen.rerender(<AIChatScreen />); });
+      await act(async () => { jest.runOnlyPendingTimers(); });
+
+      expect(screen.queryByText('迟到语音')).toBeNull();
+      expect(mockExecuteIntentStream).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('同一用户同一角色切换工厂后首帧清除旧消息、输入和语音预览', async () => {
+    jest.useFakeTimers();
+    try {
+      mockExecuteIntentStream.mockReset();
+      mockExecuteIntentStream.mockImplementation(async (_message: string, callbacks: any) => {
+        callbacks.onResult?.({ status: 'COMPLETED', message: 'F006旧消息', intentCode: 'OLD_FACTORY_RESULT' });
+        callbacks.onComplete?.({ status: 'COMPLETED', cacheHit: false, totalLatencyMs: 1 });
+      });
+
+      const screen = render(<AIChatScreen />);
+      await send(screen, 'F006问题');
+      await waitFor(() => expect(screen.getByText('F006旧消息')).toBeTruthy());
+
+      fireEvent.changeText(screen.getByTestId('ai-chat-input'), 'F006未发送输入');
+      fireEvent.press(screen.getByTestId('voice-mic'));
+      expect(screen.getByText('迟到语音')).toBeTruthy();
+
+      mockUser = factoryUser('F007');
+      await act(async () => { screen.rerender(<AIChatScreen />); });
+
+      expect(screen.queryByText('F006旧消息')).toBeNull();
+      expect(screen.queryByText('迟到语音')).toBeNull();
+      expect(screen.queryByTestId('ai-chat-input')).toBeNull();
+      fireEvent.press(screen.getByTestId('keyboard-toggle-btn'));
+      expect(screen.getByTestId('ai-chat-input').props.value).toBe('');
+      await act(async () => { jest.runOnlyPendingTimers(); });
+      expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

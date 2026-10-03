@@ -6,7 +6,15 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-CI-PORTABLE-20261004` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 三文件scope：full workflow、r10-it测试profile、新ContractTest；复用独立PG并约束TestContext缓存。禁止runner/service/helper/labels/选择器/基线和prod改变。详见archive/2026-10-04-f006-mobile-ci-portable.md。
+
 - `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读/金额、财务/价格身份边界；ArAp 查询 DTO、账龄、PriceList 工厂校验；采购列表刷新、useListSummary 迟到响应保护及回归；F006 真机和老板 AI。文件/验收见 `archive/2026-10-03-f006-mobile-audit.md`。
+- `F006-MOBILE-R2-20261003` — `in-progress` — Owner: Codex — Base `8005a38306` — 🔒 第二批手机导航/采购编辑/会话归属与分页、F006 老板 Mac 文本流。R1 #876 HEAD 冻结且未合；本批暂不发布。scope/验收见 `archive/2026-10-03-f006-mobile-r2.md`。
+- `F006-MOBILE-R2-DISPLAY-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 显示/设备范围已交还；设备HR权限与actor真实组件8项、最终TS通过。APK7导航/表单已实测，后加HR修复未装机；待上游整合/统一发布。详见R2归档。
+- `F006-MOBILE-R2-NAV-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 设备/质量导航及即时权限范围已交还；质量11、告警7、告警API3测试通过，待整批 TS/RN/终审/真机。不改后端权限/实体。详见 R2 归档。
+- `F006-MOBILE-R2-SESSION-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 SSE/Memory/分页与手机身份流取消已交还；RN会话5套57项、Java真实归属/取消/日志门禁通过，待整批终审/发布/Mini真机。不改 Repository/Entity。详见 R2 归档。
+- `F006-MOBILE-R3-REPORT-20261003` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 独立R3 worktree六文件scope：生产全量周期/分单位摘要与手机统计接线及真实行为测试；legacy顶层契约保留。禁止质检/Entity/Repository/迁移/业务写。详见archive/2026-10-04-f006-mobile-r3-report.md。
+- `F006-MOBILE-R4-QUALITY-20261003` — `queued` — Owner: Codex — Base待R3收口后登记 — 真机质量日/周/月均用第一页17条算41.2%；本周真实3条全PENDING，backend breakdown漏PENDING并把legacy非PASS3误读为失败。先锁scope，日期接线/待检与条件通过/有效分母/actor隔离修复；证据见R2归档。
 
 
 
@@ -67,6 +75,9 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `F006-MOBILE-R2-20261003`：仅 R2 worktree 的角色导航、采购编辑、仓储显示、AIChat/SSE/Memory 会话与新内部 F006 Mac 文本流，精确文件见 `archive/2026-10-03-f006-mobile-r2.md`。禁止 Entity/Repository/迁移/角色授予、全局模型链、照片、历史账务/异厂写。R1 HEAD 冻结。
+- `F006-MOBILE-R2-DISPLAY-20261003`：仅 AIReportDetailScreen、TodoDetailScreen、QILabelQcCreateScreen、必要 oaTodoDisplay helper 与三个对应目标测试；精确路径见 R2 归档。禁止导航/API/权限/业务状态/台账，协调者保留终审与发布。
 
 
 

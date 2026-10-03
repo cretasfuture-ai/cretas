@@ -84,8 +84,8 @@ public class AnalysisRouterServiceImpl implements AnalysisRouterService {
 
         boolean isAnalysis = hasBusinessKeyword && hasAnalysisIndicator;
 
-        log.debug("分析请求检测: input='{}', hasBusinessKeyword={}, hasAnalysisIndicator={}, isAnalysis={}",
-                userInput, hasBusinessKeyword, hasAnalysisIndicator, isAnalysis);
+        log.debug("分析请求检测: inputLength={}, hasBusinessKeyword={}, hasAnalysisIndicator={}, isAnalysis={}",
+                userInput.length(), hasBusinessKeyword, hasAnalysisIndicator, isAnalysis);
 
         return isAnalysis;
     }

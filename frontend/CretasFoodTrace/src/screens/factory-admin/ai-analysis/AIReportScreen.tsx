@@ -25,6 +25,16 @@ type NavigationProp = NativeStackNavigationProp<FAAIStackParamList, 'AIReport'>;
 
 type ReportType = 'all' | 'batch' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
+function reportPreview(markdown: string): string {
+  return markdown
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+)/gm, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function AIReportScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { t, i18n } = useTranslation('home');
@@ -152,7 +162,7 @@ export function AIReportScreen() {
           />
         </View>
         <View style={styles.reportInfo}>
-          <Text style={styles.reportTitle} numberOfLines={2}>{item.title}</Text>
+          <Text style={styles.reportTitle} numberOfLines={2}>{item.title.replace(/^(日报|周报|月报)( · \d{4}-\d{2}-\d{2}) 00:00:00$/, '$1$2')}</Text>
           <View style={styles.reportMeta}>
             <Text style={styles.reportDate}>{formatDate(item.createdAt)}</Text>
             <View style={[styles.typeBadge, { backgroundColor: getReportTypeColor(item.reportType) + '20' }]}>
@@ -170,7 +180,7 @@ export function AIReportScreen() {
           <Text style={styles.failureTitle}>生成失败</Text>
           <Text style={styles.failureReason}>{item.failureReason || '报告生成失败，请重新生成。'}</Text>
         </View>
-      ) : item.summary ? <Text style={styles.summary} numberOfLines={3}>{item.summary}</Text> : null}
+      ) : item.summary ? <Text style={styles.summary} numberOfLines={3}>{reportPreview(item.summary)}</Text> : null}
 
       {/* 报告统计 */}
       {(item.totalCost !== undefined || item.keyFindingsCount !== undefined) && (

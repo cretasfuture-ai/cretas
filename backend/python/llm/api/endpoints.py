@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["LLM Router"])
 
+# This exact child route is internal-only even though legacy /api/llm siblings
+# retain their existing auth semantics. It never enters the shared cloud chain.
+from llm.api.f006_boss_question import router as f006_boss_question_router
+router.include_router(f006_boss_question_router)
+
 # ── Request model ─────────────────────────────────────────────────────────────
 
 

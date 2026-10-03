@@ -14,6 +14,8 @@ import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.cache.SemanticCacheHit;
+import com.cretas.aims.dto.conversation.ConversationContext;
+import com.cretas.aims.dto.conversation.ConversationMessage;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.exception.LlmSchemaValidationException;
@@ -35,9 +37,13 @@ import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -117,6 +123,13 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.client.PythonAiMatcherClient pythonAiMatcherClient;
 
+    /** Optional for bare SSE tests; required in the real Spring path for server-owned sessions. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.ConversationMemoryService conversationMemoryService;
+
+    @Autowired(required = false)
+    private com.cretas.aims.ai.client.F006BossQuestionClient f006BossQuestionClient;
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -166,7 +179,8 @@ public class SseStreamingService {
         emitter.onTimeout(() -> log.warn("SSE connection timeout: factoryId={}", factoryId));
         emitter.onError(e -> log.error("SSE connection error: factoryId={}", factoryId, e));
 
-        sseExecutor.execute(() -> executeStreamAsync(emitter, factoryId, request, userId, userRole));
+        var miniCancellation = registerMiniCancellation(emitter);
+        sseExecutor.execute(() -> executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation));
 
         return emitter;
     }
@@ -178,14 +192,40 @@ public class SseStreamingService {
      */
     private void executeStreamAsync(SseEmitter emitter, String factoryId,
                                      IntentExecuteRequest request, Long userId, String userRole) {
+        executeStreamAsync(emitter, factoryId, request, userId, userRole, registerMiniCancellation(emitter));
+    }
+
+    private com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation registerMiniCancellation(SseEmitter emitter) {
+        var cancellation = new com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation();
+        emitter.onCompletion(cancellation::cancel);
+        emitter.onTimeout(cancellation::cancel);
+        emitter.onError(error -> cancellation.cancel());
+        return cancellation;
+    }
+
+    private void executeStreamAsync(SseEmitter emitter, String factoryId,
+                                     IntentExecuteRequest request, Long userId, String userRole,
+                                     com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation miniCancellation) {
         try {
             long startTime = System.currentTimeMillis();
 
+            ConversationContext sessionContext = establishOwnedSession(factoryId, request, userId);
+            if (conversationMemoryService != null && (sessionContext == null
+                    || !java.util.Objects.equals(factoryId, sessionContext.getFactoryId())
+                    || !java.util.Objects.equals(userId, sessionContext.getUserId())
+                    || sessionContext.getSessionId() == null || sessionContext.getSessionId().isBlank())) {
+                streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
+                return;
+            }
+
             // 1. 开始事件
-            sendSseEvent(emitter, "start", Map.of(
-                    "message", "开始处理...",
-                    "timestamp", LocalDateTime.now().toString()
-            ));
+            Map<String, Object> startEvent = new LinkedHashMap<>();
+            startEvent.put("message", "开始处理...");
+            startEvent.put("timestamp", LocalDateTime.now().toString());
+            if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
+                startEvent.put("sessionId", request.getSessionId());
+            }
+            sendSseEvent(emitter, "start", startEvent);
 
             String userInput = request.getUserInput();
 
@@ -199,6 +239,12 @@ public class SseStreamingService {
                 return;
             }
             boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+
+            if (isPaginationRequest(request)) {
+                executePaginationRequest(emitter, factoryId, request, userId, userRole,
+                        startTime, factoryPackRoute);
+                return;
+            }
 
             // The stream historically ignored explicit intent codes. A constrained Factory Pack
             // must converge explicit and recognized intents before any Restaurant/general/skill
@@ -351,8 +397,9 @@ public class SseStreamingService {
 
                     if (!isAnalysis && !isFood) {
                         log.info("Stream: 早期检测到{}，使用流式 LLM 回复", earlyQuestionType);
-                        streamConversationalResponse(emitter, factoryId, userInput, earlyQuestionType,
-                                request.getEnableThinking(), request.getThinkingBudget(), startTime);
+                        streamConversationalResponse(emitter, factoryId, userId, userRole,
+                                request.getSessionId(), userInput, earlyQuestionType,
+                                request.getEnableThinking(), request.getThinkingBudget(), startTime, miniCancellation);
                         return;
                     }
                 }
@@ -605,6 +652,158 @@ public class SseStreamingService {
                 factoryId, userId, userRole, query, intent.getIntentCode(), candidates));
     }
 
+    private ConversationContext establishOwnedSession(String factoryId,
+                                                       IntentExecuteRequest request,
+                                                       Long userId) {
+        if (conversationMemoryService == null) return null;
+        if (request == null || factoryId == null || factoryId.isBlank() || userId == null) return null;
+        ConversationContext context = conversationMemoryService.getOrCreateContext(
+                factoryId, userId, request.getSessionId());
+        if (context != null) request.setSessionId(context.getSessionId());
+        return context;
+    }
+
+    private IntentExecuteResponse sessionOwnershipFailureResponse() {
+        String message = "当前 AI 会话身份已失效或不属于当前工厂，未执行查询。请重新发起会话。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("SESSION_OWNERSHIP_DENIED")
+                .message(message)
+                .formattedText(message)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    private boolean isPaginationRequest(IntentExecuteRequest request) {
+        if (request == null) return false;
+        if ("PAGINATION_NEXT".equalsIgnoreCase(request.getIntentCode())
+                || "NAVIGATION_NEXT_PAGE".equalsIgnoreCase(request.getIntentCode())) return true;
+        String input = request.getUserInput() == null ? "" : request.getUserInput().trim();
+        return Set.of("下一页", "翻页", "翻到下一页", "更多").contains(input);
+    }
+
+    private void executePaginationRequest(SseEmitter emitter, String factoryId,
+                                          IntentExecuteRequest request, Long userId, String userRole,
+                                          long startTime,
+                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
+            throws IOException {
+        IntentExecuteResponse refusal = paginationRefusal("当前会话没有可继续的成功列表查询。");
+        if (conversationMemoryService == null || request.getSessionId() == null
+                || request.getSessionId().isBlank() || userId == null || factoryId == null) {
+            streamTerminalResponse(emitter, refusal, startTime);
+            return;
+        }
+
+        ConversationContext owner = conversationMemoryService.getContext(request.getSessionId());
+        if (owner == null || !factoryId.equals(owner.getFactoryId()) || !userId.equals(owner.getUserId())) {
+            streamTerminalResponse(emitter, paginationRefusal("当前会话不属于当前用户或工厂，无法翻页。"), startTime);
+            return;
+        }
+        Map<String, Object> metadata = latestPaginationMetadata(owner);
+        if (metadata == null) {
+            streamTerminalResponse(emitter, refusal, startTime);
+            return;
+        }
+        Object hasMore = metadata.get("hasMore");
+        if (Boolean.FALSE.equals(hasMore)) {
+            streamTerminalResponse(emitter, paginationRefusal("已经是最后一页，没有更多数据。"), startTime);
+            return;
+        }
+
+        String intentCode = stringValue(metadata.get("intentCode"));
+        if (intentCode == null || intentCode.isBlank()) {
+            streamTerminalResponse(emitter, paginationRefusal("上次查询没有可复用的服务端意图。"), startTime);
+            return;
+        }
+        Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
+        if (intentOpt.isEmpty()) {
+            streamTerminalResponse(emitter, paginationRefusal("上次查询已不可用，无法安全翻页。"), startTime);
+            return;
+        }
+        AIIntentConfig intent = intentOpt.get();
+        Optional<ToolExecutor> toolOpt = intent.getToolName() == null
+                ? Optional.empty() : toolRegistry.getExecutor(intent.getToolName());
+        if (toolOpt.isEmpty() || toolOpt.get().getAccessMode() != ToolExecutor.AccessMode.READ
+                || (writeGuardService != null && writeGuardService.isWriteTool(toolOpt.get()))
+                || (writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
+            streamTerminalResponse(emitter, paginationRefusal("上次查询不是受支持的只读列表，无法翻页。"), startTime);
+            return;
+        }
+
+        Map<String, Object> replayContext = new LinkedHashMap<>();
+        Object filters = metadata.get("filters");
+        if (filters instanceof Map<?, ?> filterMap) {
+            for (Map.Entry<?, ?> entry : filterMap.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    replayContext.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+        }
+        int currentPage = numberValue(metadata.get("page"), 0);
+        replayContext.put("page", currentPage + 1);
+        Object size = metadata.get("size");
+        if (size != null) replayContext.put("size", size);
+        replayContext.put("paginationReplay", true);
+        String queryInput = stringValue(metadata.get("queryInput"));
+        if (queryInput == null || queryInput.isBlank()) queryInput = "列表查询";
+        IntentExecuteRequest replay = IntentExecuteRequest.builder()
+                .userInput(queryInput)
+                .intentCode(intentCode)
+                .context(replayContext)
+                .sessionId(request.getSessionId())
+                .mode(request.getMode())
+                .build();
+        IntentMatchResult replayMatch = IntentMatchResult.builder()
+                .bestMatch(intent)
+                .confidence(1.0d)
+                .matchMethod(IntentMatchResult.MatchMethod.EXACT)
+                .requiresConfirmation(false)
+                .build();
+        sendSseEvent(emitter, "intent_recognized", Map.of(
+                "intentCode", intentCode,
+                "intentName", intent.getIntentName() == null ? intentCode : intent.getIntentName(),
+                "confidence", 1.0d,
+                "matchMethod", "SERVER_SESSION"));
+        executeAndStreamResult(emitter, factoryId, replay, intent, userId, userRole,
+                startTime, replayMatch, factoryPackRoute);
+    }
+
+    private IntentExecuteResponse paginationRefusal(String message) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode("PAGINATION_NEXT")
+                .status("PAGINATION_REFUSED")
+                .message(message)
+                .formattedText(message)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> latestPaginationMetadata(ConversationContext context) {
+        List<ConversationMessage> messages = context.getRecentMessages();
+        if (messages == null) return null;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ConversationMessage message = messages.get(i);
+            if (message.getRole() != ConversationMessage.Role.ASSISTANT || message.getMetadata() == null) continue;
+            Object raw = message.getMetadata().get("pagination");
+            if (raw instanceof Map<?, ?> map) return new LinkedHashMap<>((Map<String, Object>) map);
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private int numberValue(Object value, int fallback) {
+        if (value instanceof Number number) return number.intValue();
+        try { return value == null ? fallback : Integer.parseInt(String.valueOf(value)); }
+        catch (NumberFormatException ignored) { return fallback; }
+    }
+
     /**
      * 执行意图并流式返回结果
      */
@@ -737,6 +936,11 @@ public class SseStreamingService {
             response.setFormattedText(response.getMessage());
         }
 
+        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
+            response.setSessionId(request.getSessionId());
+        }
+        persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
+
         sendSseEvent(emitter, "result", response);
 
         // 缓存结果
@@ -748,21 +952,135 @@ public class SseStreamingService {
             }
         }
 
-        sendSseEvent(emitter, "complete", Map.of(
-                "status", response.getStatus(),
-                "cacheHit", false,
-                "totalLatencyMs", System.currentTimeMillis() - startTime
-        ));
+        Map<String, Object> complete = new LinkedHashMap<>();
+        complete.put("status", response.getStatus());
+        complete.put("cacheHit", false);
+        complete.put("totalLatencyMs", System.currentTimeMillis() - startTime);
+        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
+            complete.put("sessionId", request.getSessionId());
+        }
+        sendSseEvent(emitter, "complete", complete);
         emitter.complete();
+    }
+
+    private void persistSuccessfulReadPagination(String factoryId, Long userId,
+                                                 IntentExecuteRequest request,
+                                                 AIIntentConfig intent, String toolName,
+                                                 IntentExecuteResponse response) {
+        if (conversationMemoryService == null || request == null || userId == null
+                || request.getSessionId() == null || request.getSessionId().isBlank()
+                || intent == null || toolName == null || response == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return;
+        }
+        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+        if (executor.isEmpty() || executor.get().getAccessMode() != ToolExecutor.AccessMode.READ
+                || (writeGuardService != null && writeGuardService.isWriteTool(executor.get()))
+                || (writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
+            return;
+        }
+        Map<String, Object> pagination = buildPaginationMetadata(request, intent, toolName, response.getResultData());
+        if (pagination == null) return;
+
+        try {
+            ConversationContext owner = conversationMemoryService.getOrCreateContext(
+                    factoryId, userId, request.getSessionId());
+            if (owner == null || !factoryId.equals(owner.getFactoryId()) || !userId.equals(owner.getUserId())) return;
+            conversationMemoryService.addMessage(request.getSessionId(),
+                    ConversationMessage.user(request.getUserInput()));
+            ConversationMessage assistant = ConversationMessage.assistant(
+                    response.getMessage() == null ? "查询完成" : response.getMessage(), intent.getIntentCode());
+            Map<String, Object> messageMetadata = new LinkedHashMap<>();
+            messageMetadata.put("pagination", pagination);
+            assistant.setMetadata(messageMetadata);
+            conversationMemoryService.addMessage(request.getSessionId(), assistant);
+            conversationMemoryService.updateLastIntent(request.getSessionId(), intent.getIntentCode());
+        } catch (Exception e) {
+            log.warn("SSE 对话记忆持久化失败: factoryId={}, userId={}, failureType={}",
+                    factoryId, userId, e.getClass().getSimpleName());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildPaginationMetadata(IntentExecuteRequest request,
+                                                        AIIntentConfig intent, String toolName,
+                                                        Object rawResultData) {
+        Map<String, Object> pageData = findPageMap(rawResultData);
+        if (pageData == null) return null;
+        Object pageValue = pageData.containsKey("currentPage")
+                ? pageData.get("currentPage") : pageData.get("page");
+        if (pageValue == null) return null;
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("intentCode", intent.getIntentCode());
+        metadata.put("toolName", toolName);
+        metadata.put("queryInput", request.getUserInput());
+        metadata.put("page", pageValue);
+        Object size = firstValue(pageData, "size", "pageSize", "limit");
+        if (size == null && request.getContext() != null) {
+            size = firstValue(request.getContext(), "size", "pageSize", "limit");
+        }
+        if (size != null) metadata.put("size", size);
+        Object hasMore = pageData.get("hasMore");
+        if (hasMore != null) metadata.put("hasMore", hasMore);
+        Object totalPages = pageData.get("totalPages");
+        if (totalPages != null) metadata.put("totalPages", totalPages);
+
+        Object conditions = firstValue(pageData, "queryConditions", "filters", "filter");
+        if (conditions instanceof Map<?, ?> conditionMap) {
+            metadata.put("filters", copyMap(conditionMap));
+        } else if (request.getContext() != null) {
+            Map<String, Object> requestFilters = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : request.getContext().entrySet()) {
+                if (entry.getValue() != null && !Set.of("page", "size", "paginationReplay").contains(entry.getKey())) {
+                    requestFilters.put(entry.getKey(), entry.getValue());
+                }
+            }
+            if (!requestFilters.isEmpty()) metadata.put("filters", requestFilters);
+        }
+        return metadata;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> findPageMap(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) return null;
+        Map<String, Object> candidate = copyMap(map);
+        if (candidate.containsKey("currentPage") || candidate.containsKey("page")) return candidate;
+        Object nested = candidate.get("data");
+        return nested instanceof Map<?, ?> ? findPageMap(nested) : null;
+    }
+
+    private Object firstValue(Map<String, Object> map, String... keys) {
+        for (String key : keys) if (map.containsKey(key)) return map.get(key);
+        return null;
+    }
+
+    private Map<String, Object> copyMap(Map<?, ?> map) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (entry.getKey() != null) copy.put(String.valueOf(entry.getKey()), entry.getValue());
+        }
+        return copy;
     }
 
     /**
      * 流式生成对话回复
      */
     private void streamConversationalResponse(SseEmitter emitter, String factoryId,
+                                               Long userId, String userRole, String sessionId,
                                                String userInput, QuestionType questionType,
                                                Boolean enableThinking, Integer thinkingBudget,
-                                               long startTime) throws IOException {
+                                               long startTime,
+                                               com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation miniCancellation) throws IOException {
+        if (questionType == QuestionType.GENERAL_QUESTION && f006BossQuestionClient != null
+                && f006BossQuestionClient.shouldRoute(factoryId, userId, userRole)) {
+            if (conversationMemoryService == null || sessionId == null || sessionId.isBlank()) {
+                streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
+                return;
+            }
+            streamF006MiniQuestion(emitter, factoryId, userId, userRole, sessionId,
+                    userInput, Boolean.TRUE.equals(enableThinking), startTime, miniCancellation);
+            return;
+        }
         String systemPrompt;
         if (questionType == QuestionType.GENERAL_QUESTION) {
             systemPrompt = """
@@ -869,6 +1187,61 @@ public class SseStreamingService {
                     "fullContent", fallback,
                     "totalLatencyMs", System.currentTimeMillis() - startTime
             ));
+            emitter.complete();
+        }
+    }
+
+    /** The enabled pilot is terminal: errors cannot fall through to another provider. */
+    private void streamF006MiniQuestion(SseEmitter emitter, String factoryId, Long userId,
+                                        String userRole, String sessionId, String userInput,
+                                        boolean thinking, long startTime,
+                                        com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation cancellation) throws IOException {
+        try {
+            var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, userInput, thinking,
+                    metadata -> {
+                        try {
+                            sendSseEvent(emitter, "meta", Map.of(
+                                    "provider", metadata.provider(), "model", metadata.model(),
+                                    "thinking", metadata.thinking(), "correlationId", metadata.correlationId(),
+                                    "questionType", QuestionType.GENERAL_QUESTION.name()));
+                        } catch (IOException e) {
+                            throw new java.io.UncheckedIOException(e);
+                        }
+                    }, token -> {
+                        try {
+                            sendSseEvent(emitter, "token", token);
+                        } catch (IOException e) {
+                            throw new java.io.UncheckedIOException(e);
+                        }
+                    }, cancellation);
+            Map<String, Object> source = new LinkedHashMap<>();
+            source.put("provider", answer.provider());
+            source.put("model", answer.model());
+            source.put("correlationId", answer.correlationId());
+            source.put("usageAvailable", answer.usage() != null);
+            source.put("usage", answer.usage());
+            sendSseEvent(emitter, "result", IntentExecuteResponse.builder()
+                    .intentRecognized(false).status("COMPLETED").sessionId(sessionId)
+                    .message(answer.content()).formattedText(answer.content())
+                    .resultData(source).executedAt(LocalDateTime.now()).build());
+            Map<String, Object> complete = new LinkedHashMap<>(source);
+            complete.put("status", "SUCCESS");
+            complete.put("sessionId", sessionId);
+            complete.put("fullContent", answer.content());
+            complete.put("tokensUsed", answer.usage() == null ? null : answer.usage().totalTokens());
+            complete.put("finishReason", answer.finishReason());
+            complete.put("totalLatencyMs", System.currentTimeMillis() - startTime);
+            sendSseEvent(emitter, "complete", complete);
+            emitter.complete();
+            log.info("F006 Mini question completed: userId={}, correlationId={}, usageAvailable={}",
+                    userId, answer.correlationId(), answer.usage() != null);
+        } catch (java.io.UncheckedIOException disconnected) {
+            // Throwing from the transport callback closes the upstream response immediately.
+            throw disconnected.getCause();
+        } catch (IOException unavailable) {
+            log.warn("F006 Mini question failed: userId={}, elapsedMs={}",
+                    userId, System.currentTimeMillis() - startTime);
+            sendSseEvent(emitter, "error", Map.of("status", "FAILED", "message", unavailable.getMessage()));
             emitter.complete();
         }
     }

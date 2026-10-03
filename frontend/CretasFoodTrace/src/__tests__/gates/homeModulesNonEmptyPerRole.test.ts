@@ -23,13 +23,8 @@
  *
  * 筛选逻辑也不抄：测试调的 `resolveHomeModules` 就是 HomeScreen 渲染时调的那一个。
  *
- * ## ⚠️ 已登记的「故意为空」（⛔ 不是允许清单，是待办清单）
- *
- * `equipment_admin` / `quality_manager` 走 MainNavigator，而那棵树里
- * **一个 equipment / quality 屏都没注册**（除首页外只有考勤和我的）。
- * 给它们发卡只能发出点不动的卡 ⇒ 本轮不发，靠 HomeScreen 的
- * 「空则整段不渲染」兜住，并在这里显式登记。
- * 这张表是**精确匹配**的：多一个少一个都红 ⇒ 想再放一个角色进来必须改这里。
+ * `equipment_admin` / `quality_manager` 已从 MainNavigator 分流到专用工作台，
+ * 因此不再挂载共享 HomeScreen；本闸只检查仍使用共享首页的角色。
  */
 import fs from 'fs';
 import path from 'path';
@@ -56,12 +51,6 @@ import {
 } from '../../screens/main/homeModules';
 
 const HOME_SCREEN_FILE = path.resolve(__dirname, '../../screens/main/HomeScreen.tsx');
-
-/**
- * 已登记的「这棵树里确实没有该角色能去的地方」。
- * ⛔ 精确匹配，往里加一个角色 = 承认又少了一处入口，必须在 PR 里说明。
- */
-const KNOWN_EMPTY_ROLES = ['equipment_admin', 'quality_manager'];
 
 /** 工厂特性开关在测试里一律视为启用（store 对未登记的 id 本来就返回 true）。 */
 const allModulesEnabled = (): boolean => true;
@@ -170,7 +159,7 @@ describe('首页功能模块（每个落在共享 HomeScreen 上的角色都得�
     expect(ALL_ROLES.length).toBeGreaterThanOrEqual(20);
 
     // 共享 HomeScreen 被 5 个导航器注册（源码里数得到），
-    // 落到它上面的角色是 9 个。这两个数一起掉下来 = 分析器瞎了。
+    // 当前仍落到它上面的角色是 7 个。这两个数一起掉下来 = 分析器瞎了。
     const navFiles = new Set(MOUNTS.map((m) => path.basename(m.registration.navFile)));
     // ⚠️ 用 warn 不用 log：`__tests__/setup.ts` 把 console.log 静默了，
     //    读数打不出来 = 形态 C″ 里「分不清断言在守空气还是变异没生效」。
@@ -181,7 +170,7 @@ describe('首页功能模块（每个落在共享 HomeScreen 上的角色都得�
       ' 角色数=' + MOUNTS.length
     );
     expect(navFiles.size).toBe(5);
-    expect(MOUNTS.length).toBe(9);
+    expect(MOUNTS.length).toBe(7);
   });
 
   it('每个挂载点都显式声明了 moduleSet（⛔ 不许靠默认值蒙混）', () => {
@@ -195,7 +184,7 @@ describe('首页功能模块（每个落在共享 HomeScreen 上的角色都得�
     }
   });
 
-  it('🔴 每个角色至少解析出 1 张卡（已登记的空角色除外）', () => {
+  it('🔴 每个仍使用共享首页的角色至少解析出 1 张卡', () => {
     const counts: string[] = [];
     const empty: string[] = [];
     for (const m of MOUNTS) {
@@ -211,7 +200,7 @@ describe('首页功能模块（每个落在共享 HomeScreen 上的角色都得�
     //    读数打不出来 = 形态 C″ 里「分不清断言在守空气还是变异没生效」。
     // eslint-disable-next-line no-console
     console.warn('[home-modules] 每角色卡片数:\n  ' + counts.join('\n  '));
-    expect(empty.sort()).toEqual([...KNOWN_EMPTY_ROLES].sort());
+    expect(empty).toEqual([]);
   });
 
   it('🔴 每张卡的 route / nestedScreen 都在该角色那棵树里注册过', () => {
