@@ -198,6 +198,54 @@ async def match_intent(request: Request, body: IntentMatchRequest):
 
 
 # ======================================================================
+# POST /api/ai/intent/selection —— 澄清按钮点选 = 学习样本
+# ======================================================================
+
+SELECTION_INSERT_SQL = """
+INSERT INTO ai_intent_selection_log
+    (factory_id, user_id, role, query_text, normalized_text, chosen_intent, candidates)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+"""
+
+
+@router.post("/intent/selection")
+async def record_selection(request: Request):
+    """Java 流式路径在「澄清按钮点选后执行」时异步回写。只追加, 不影响识别。
+
+    Body: {factoryId, userId?, role?, query, chosenIntent, candidates?: [code...]}
+    归一化与精确表同一套 (ai.registry.normalize), 以后按归一化键聚合「多人多次选同一个意图」。
+    """
+    import json as _json
+
+    from ai.registry import get_registry, normalize
+
+    if getattr(request.state, "auth_method", None) != "internal":
+        return _err("AUTH_INTERNAL_SECRET_MISMATCH", "X-Internal-Secret header missing or invalid", 401)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _err("BAD_REQUEST", "invalid json", 400)
+    factory_id = str(body.get("factoryId") or "")
+    query = str(body.get("query") or "").strip()
+    chosen = str(body.get("chosenIntent") or "").strip()
+    header_factory = getattr(request.state, "factory_id", None)
+    if not factory_id or not query or not chosen:
+        return _err("BAD_REQUEST", "factoryId / query / chosenIntent required", 400)
+    if header_factory is not None and header_factory != factory_id:
+        return _err("AUTH_FACTORY_ID_MISMATCH", "factoryId does not match X-Factory-Id", 403)
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is None:
+        return _err("NO_DB", "no pg_pool", 503)
+    candidates = [str(c) for c in (body.get("candidates") or [])][:10]
+    snap = get_registry()
+    key = normalize(query, snap.lexicon.get(factory_id, []))[:500]
+    async with pool.acquire() as conn:
+        await conn.execute(SELECTION_INSERT_SQL, factory_id, body.get("userId"), body.get("role"),
+                           query[:500], key, chosen[:100], _json.dumps(candidates, ensure_ascii=False))
+    return ApiResponse.ok(data={"recorded": True, "normalized": key}, message="OK").model_dump()
+
+
+# ======================================================================
 # POST /api/ai/intent/cache/invalidate (optional admin endpoint)
 # ======================================================================
 

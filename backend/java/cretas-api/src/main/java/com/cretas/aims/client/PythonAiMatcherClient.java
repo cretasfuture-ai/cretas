@@ -164,6 +164,35 @@ public class PythonAiMatcherClient {
     }
 
     /**
+     * POST /api/ai/intent/selection —— 用户在澄清按钮里替系统选了意图, 记一条学习样本。
+     * 尽力而为: 任何失败只记日志, ⛔ 不抛、不影响本次执行 (调用方异步调用)。
+     */
+    public void recordSelection(String factoryId, Long userId, String role, String query,
+                                String chosenIntent, java.util.List<String> candidates) {
+        if (internalSecret == null || internalSecret.isEmpty()
+                || factoryId == null || query == null || query.isBlank() || chosenIntent == null) {
+            return;
+        }
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("X-Internal-Secret", internalSecret);
+            headers.set("X-Factory-Id", factoryId);
+            java.util.Map<String, Object> body = new java.util.HashMap<>();
+            body.put("factoryId", factoryId);
+            body.put("userId", userId == null ? null : String.valueOf(userId));
+            body.put("role", role);
+            body.put("query", query);
+            body.put("chosenIntent", chosenIntent);
+            body.put("candidates", candidates == null ? java.util.List.of() : candidates);
+            restTemplate.exchange(baseUrl + "/api/ai/intent/selection", HttpMethod.POST,
+                    new HttpEntity<>(body, headers), String.class);
+        } catch (Exception e) {
+            log.warn("记录澄清点选失败 (不影响执行): intent={} err={}", chosenIntent, e.getMessage());
+        }
+    }
+
+    /**
      * Resilience4j fallback. Signature must accept the original args plus a
      * {@link Throwable}. Returns an empty match so upstream callers don't
      * have to handle null or rethrow.

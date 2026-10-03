@@ -1027,7 +1027,8 @@ class AIApiClient {
     userInput: string,
     callbacks: IntentSSECallbacks,
     factoryId?: string,
-    entityType?: string
+    entityType?: string,
+    options?: { intentCode?: string; context?: Record<string, unknown> }
   ): Promise<void> {
     const url = `${this.getIntentBasePath(factoryId)}/execute/stream`;
 
@@ -1056,7 +1057,13 @@ class AIApiClient {
           'Authorization': `Bearer ${token}`,
         },
         method: 'POST',
-        body: JSON.stringify({ userInput, ...(entityType && { entityType }) }),
+        // intentCode + context: 澄清按钮点选后带着「原话 + 选中的意图」回来 (后端跳过识别、记录点选)
+        body: JSON.stringify({
+          userInput,
+          ...(entityType && { entityType }),
+          ...(options?.intentCode && { intentCode: options.intentCode }),
+          ...(options?.context && { context: options.context }),
+        }),
         pollingInterval: 0,
       });
 
