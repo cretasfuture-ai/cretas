@@ -59,6 +59,11 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
+          # 只缓存**依赖**(~/.m2), 与 ci.yml / java-artifact.yml 同一写法。
+          # ⛔ 不缓存 target/: jpa-gate-main.yml 记着 2026-07-29 四轮实测净收益为负
+          #    (maven-compiler 增量名不副实, 任何改动全量重编)。效果看 FRESH_DB_COMPILE 的 elapsed_s。
+          cache: 'maven'
+          cache-dependency-path: backend/java/cretas-api/pom.xml
 
       - name: Show what this runner actually has
         run: |
