@@ -192,7 +192,8 @@ export default function SalesOrderDetailScreen() {
             <InfoRow label="客户" value={order.customerName || order.customerId} />
             <InfoRow label="总金额" value={formatVisibleOrderAmount(order.totalAmount)} valueStyle={styles.amountText} />
             <InfoRow label="下单日期" value={order.orderDate} />
-            <InfoRow label="预计交付" value={order.expectedDeliveryDate || '-'} />
+            <InfoRow label="要求交付" value={order.requiredDeliveryDate || '-'} />
+            {order.expectedDeliveryDate && <InfoRow label="预计交付" value={order.expectedDeliveryDate} />}
             {order.remark ? <InfoRow label="备注" value={order.remark} /> : null}
           </Card.Content>
         </Card>

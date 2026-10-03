@@ -36,7 +36,7 @@ import {
   PaymentMethod,
   RecordTransactionRequest,
 } from '../../../services/api/financeApiClient';
-import { formatNumberWithCommas } from '../../../utils/formatters';
+import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { useAuthStore } from '../../../store/authStore';
 import { getMobileFinancialScope, type MobileFinancialScope } from '../../../utils/mobileFinancialAccess';
 
@@ -127,7 +127,7 @@ function TxRow({ tx }: TxRowProps) {
           {tx.counterpartyName ?? tx.counterpartyId}
         </Text>
         <Text style={[styles.txAmount, { color: typeInfo.color }]}>
-          ¥{formatNumberWithCommas(tx.amount)}
+          {formatVisibleOrderAmount(tx.amount)}
         </Text>
       </View>
 
@@ -158,7 +158,7 @@ interface AgingRowProps {
 }
 
 function AgingRow({ row, isCustomer: _isCustomer }: AgingRowProps) {
-  const fmt = (v: number) => (v != null && v !== 0 ? `¥${formatNumberWithCommas(v)}` : '-');
+  const fmt = formatVisibleOrderAmount;
   return (
     <View style={styles.agingRow}>
       <View style={styles.agingNameCell}>
@@ -177,8 +177,8 @@ function AgingRow({ row, isCustomer: _isCustomer }: AgingRowProps) {
         <AgingBucket
           label=">180天"
           value={fmt(row.over180)}
-          color={row.over180 > 0 ? '#f56c6c' : '#909399'}
-          bold={row.over180 > 0}
+          color={row.over180 != null && row.over180 > 0 ? '#f56c6c' : '#909399'}
+          bold={row.over180 != null && row.over180 > 0}
         />
       </View>
 
@@ -244,10 +244,7 @@ function AuthorizedArApScreen({ scope }: { scope: MobileFinancialScope }) {
 
   const PAGE_SIZE = 20;
 
-  const fmt = (v: number | null | undefined): string => {
-    if (v == null) return '-';
-    return `¥${formatNumberWithCommas(v)}`;
-  };
+  const fmt = formatVisibleOrderAmount;
 
   // ==================== 数据加载 ====================
 

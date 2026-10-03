@@ -31,6 +31,7 @@ export default function PurchaseOrderListScreen() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+  const [footerHeight, setFooterHeight] = useState(0);
 
   const loadOrders = useCallback(async () => {
     try {
@@ -209,6 +210,7 @@ export default function PurchaseOrderListScreen() {
         )}
       </View>
 
+      <View onLayout={event => setFooterHeight(event.nativeEvent.layout.height)}>
       {isOperationsReadOnly && <StickyFooterSummary
         stats={(summary?.stats ?? []).filter(stat => !stat.canViewPrice)}
         loading={summary == null && !loading}
@@ -226,10 +228,10 @@ export default function PurchaseOrderListScreen() {
           }))
         }
       />}
-
+      </View>
       {!isOperationsReadOnly && <FAB
         icon="plus"
-        style={styles.fab}
+        style={[styles.fab, { bottom: footerHeight }]}
         onPress={() => navigation.navigate('PurchaseOrderCreate')}
         label="新建采购单"
       />}

@@ -2,7 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import ArApOverviewScreen from '../../../screens/factory-admin/inventory/ArApOverviewScreen';
 import PriceListScreen from '../../../screens/factory-admin/inventory/PriceListScreen';
-import { financeApiClient, type FinanceOverview } from '../../../services/api/financeApiClient';
+import { financeApiClient, type FinanceOverview, type ArApTransaction } from '../../../services/api/financeApiClient';
 import { purchaseApiClient, type PriceList } from '../../../services/api/purchaseApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import type { FactoryUser, ModulePermissionLevel } from '../../../types/auth';
@@ -58,6 +58,39 @@ it('viewer retains real finance reads but has no payment form even with erroneou
   expect(finance.getAging).toHaveBeenCalledWith('CUSTOMER', 'F006');
   expect(view.queryByTestId('finance-payment-create')).toBeNull();
   expect(view.queryByPlaceholderText('客户ID')).toBeNull();
+});
+
+it('shows masked transaction amounts as unavailable and keeps real zero amounts', async () => {
+  const transaction: ArApTransaction = {
+    id: 'tx-masked', factoryId: 'F006', transactionNumber: 'AR-MASKED',
+    counterpartyType: 'CUSTOMER', counterpartyId: 'customer', transactionType: 'AR_PAYMENT',
+    amount: null, balanceAfter: null, transactionDate: '2026-10-03', createdAt: '2026-10-03',
+  };
+  finance.getTransactions.mockImplementation(async params => ({ success: true, data: page(
+    params?.counterpartyType === 'CUSTOMER'
+      ? [transaction, { ...transaction, id: 'tx-zero', transactionNumber: 'AR-ZERO', amount: 0 }]
+      : [],
+  ) }));
+  const view = render(<ArApOverviewScreen />);
+  await waitFor(() => expect(view.getByText('AR-MASKED')).toBeTruthy());
+  expect(view.getByText('金额未提供')).toBeTruthy();
+  expect(view.getAllByText('¥0').length).toBeGreaterThan(0);
+  fireEvent.press(view.getByText('应收'));
+  expect(view.getByText('金额未提供')).toBeTruthy();
+});
+
+it('distinguishes unknown aging balances from genuine zero', async () => {
+  finance.getAging.mockResolvedValue({ success: true, data: [{
+    counterpartyId: 'customer', counterpartyName: '测试账龄', counterpartyType: 'CUSTOMER',
+    totalBalance: null, current: 0, days1to30: null, days31to60: 0,
+    days61to90: 0, days91to180: 0, over180: null,
+  }] });
+  const view = render(<ArApOverviewScreen />);
+  await waitFor(() => expect(finance.getAging).toHaveBeenCalled());
+  fireEvent.press(view.getByText('账龄'));
+  expect(view.getByText('测试账龄')).toBeTruthy();
+  expect(view.getAllByText('金额未提供')).toHaveLength(3);
+  expect(view.getAllByText('¥0')).toHaveLength(4);
 });
 
 it.each(['role', 'factory', 'revoke'] as const)('closes the payment form and refuses its old callback after %s changes', async change => {

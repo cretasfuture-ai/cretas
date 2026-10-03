@@ -30,6 +30,7 @@ export interface SalesOrder {
   /** Price-sensitive fields are null when the backend masks financial data. */
   totalAmount: number | null;
   orderDate: string;
+  requiredDeliveryDate?: string | null;
   expectedDeliveryDate?: string;
   salesperson?: string;
   remark?: string;

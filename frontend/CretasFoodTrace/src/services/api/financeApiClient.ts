@@ -10,11 +10,11 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 // ========== 类型定义 ==========
 
 export interface FinanceOverview {
-  totalReceivable: number;
-  totalPayable: number;
+  totalReceivable: number | null;
+  totalPayable: number | null;
   receivableCount: number;
   payableCount: number;
-  overdueAmount: number;
+  overdueAmount: number | null;
   overdueCount: number;
 }
 
@@ -32,8 +32,8 @@ export interface ArApTransaction {
     | 'AP_INVOICE'
     | 'AP_PAYMENT'
     | 'AP_ADJUSTMENT';
-  amount: number;
-  balanceAfter: number;
+  amount: number | null;
+  balanceAfter: number | null;
   paymentMethod?: string;
   paymentReference?: string;
   orderId?: string;
@@ -47,13 +47,13 @@ export interface AgingData {
   counterpartyId: string;
   counterpartyName: string;
   counterpartyType: string;
-  totalBalance: number;
-  current: number;
-  days1to30: number;
-  days31to60: number;
-  days61to90: number;
-  days91to180: number;
-  over180: number;
+  totalBalance: number | null;
+  current: number | null;
+  days1to30: number | null;
+  days31to60: number | null;
+  days61to90: number | null;
+  days91to180: number | null;
+  over180: number | null;
 }
 
 export interface StatementData {

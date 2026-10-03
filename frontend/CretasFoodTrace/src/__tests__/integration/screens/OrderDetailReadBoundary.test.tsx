@@ -44,6 +44,7 @@ const user = (role: FactoryUser['factoryUser']['role']): FactoryUser => ({
 const sales: SalesOrder = {
   id: 'f006-order', factoryId: 'F006', orderNumber: 'SO-AUDIT', customerId: 'customer',
   status: 'DRAFT', totalAmount: null, orderDate: '2026-10-03', createdAt: '2026-10-03',
+  requiredDeliveryDate: '2026-10-04', expectedDeliveryDate: '2026-10-05',
   items: [{ id: 'line', productTypeId: 'product', productName: '产品', quantity: 10,
     deliveredQuantity: 8, unit: 'kg', unitPrice: null, totalPrice: null }],
 };
@@ -61,6 +62,15 @@ beforeEach(() => {
   salesApi.getOrder.mockResolvedValue({ success: true, data: sales });
   purchaseApi.getOrder.mockResolvedValue({ success: true, data: purchase });
   useAuthStore.setState({ user: user('viewer'), isAuthenticated: true });
+});
+
+it('shows the persisted required delivery date separately from a legacy expected date', async () => {
+  const view = render(<SalesOrderDetailScreen />);
+  await waitFor(() => expect(view.getByText('SO-AUDIT')).toBeTruthy());
+  expect(view.getByText('要求交付')).toBeTruthy();
+  expect(view.getByText('2026-10-04')).toBeTruthy();
+  expect(view.getByText('预计交付')).toBeTruthy();
+  expect(view.getByText('2026-10-05')).toBeTruthy();
 });
 
 it.each([
