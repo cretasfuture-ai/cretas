@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-CI-PORTABLE-20261004` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 三文件scope：full workflow、r10-it测试profile、新ContractTest；复用独立PG并约束TestContext缓存。禁止runner/service/helper/labels/选择器/基线和prod改变。详见archive/2026-10-04-f006-mobile-ci-portable.md。
+
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `7c3095c267a859393b70d3470c3e840574630737` — 独占本批ACTIVE/archive写入；七组均idle，业务FAIL/pending未清，三修复合并、一草稿保留。
 
 - `CRETAS-ORG-20261003-G1` — `in-progress` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `7c3095c267a859393b70d3470c3e840574630737` — 工厂用户停用后access/refresh有限修复候选；新base7c3095，七文件scope见archive，账号未建。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
