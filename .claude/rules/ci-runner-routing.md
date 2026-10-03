@@ -1,7 +1,7 @@
-# CI runner 路由：默认托管，额度耗尽切自建
+# CI runner 路由：自建在加拿大 VM，aurora 自动备用，本机 WSL 停用
 
-**最后更新**: 2026-09-11（自建 runner 换成本机 WSL2 `windows-wsl-ci`，Mac mini 时期的接入方式与特例移入案例库；同日压缩：本文件只留路由规则、六关清单与判据；接入实测、组织变量排除记录、WSL2 前后对照、时区 bug 与 nightly 开放集合案例存档在 `docs/rules-casebook/ci-runner-routing-cases.md`，章节名一致）
-**触发事故**: 2026-08-26 组织 Actions 免费额度 2000 分钟用尽，所有 job **2~4 秒、0 个 step、无日志**地失败，横跨 `main` 与各 feature 分支。
+**最后更新**: 2026-10-04（owner：本机 WSL 内存要炸，停用。自建 runner 全部迁到加拿大 Mac mini 的 colima Linux arm64 VM；美国 aurora 做自动故障切换的备用。Mac mini 时期和 WSL2 时期的接入实测、组织变量排除记录、时区 bug、nightly 开放集合案例都存档在 `docs/rules-casebook/ci-runner-routing-cases.md`）
+**触发事故**: 2026-08-26 组织 Actions 免费额度 2000 分钟用尽，所有 job **2~4 秒、0 个 step、无日志**地失败。2026-10-03 本机 WSL（24G + 8G swap）同时跑 2–3 个 Java Gate，swap 打满（8119/8192 MB）、15 分钟负载 106，job 卡在 Spring 启动阶段超时，或者报 runner lost communication。
 
 ⚠️ 本文件在 `.claude/rules/` 与 `.codex/rules/` 各有一份，**必须逐字相同**（见文末闸）。
 
@@ -9,30 +9,72 @@
 
 ## 一句话
 
-**默认走托管 runner。额度耗尽时，一条命令切到本机 WSL2 自建 runner；额度恢复，切回来。**
+**`[self-hosted, cretas]` / `[self-hosted, java]` / `[self-hosted, cretas, java]` 的 job 由加拿大 VM 的 3 个 runner 接；加拿大不健康时，aurora 在 3 分钟内自动顶上，加拿大恢复后自动撤下。⛔ 本机 WSL 不再跑 CI。**
 
-```bash
-python scripts/ci/switch_ci_runner.py --check        # 当前走哪条
-python scripts/ci/switch_ci_runner.py self-hosted    # 额度耗尽 -> 自建
-python scripts/ci/switch_ci_runner.py hosted         # 额度恢复(每月 1 号) -> 托管
-python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一个工作流时用, 见下
-```
+路由靠 **runner 端标签**，workflow 文件一行不用改：
+- 加拿大的 3 个实例和 aurora 都带 `cretas` 与 `java` 两个标签。
+- 本机 WSL 的 runner 服务已停用并禁用。
 
-⚠️ 它改的是**工作流文件**，所以要 `git commit && git push` 才生效。
-脚本一次改全部已接入的闸，并断言各处一致 —— ⛔ 不要手工改单个 `runs-on`
-（「共享结构只改一处」是本仓反复踩的坑）。
+⛔ `python scripts/ci/switch_ci_runner.py hosted` 已经**过时**，不要再拿它当"切托管"的开关。2026-10-04 实测（PR #879，已关闭）切到托管后：
+- Python Gate 报 `Could not find database tool: initdb`（测试需要本机 PG 二进制）。
+- ops 测试新增 3 条红：`test-java-heavy-jobs-need-8g-runner.sh`、`test-selfhosted-jobs-have-timeouts.sh`、`test-fresh-db-baseline-replays.sh`（rc=2）。
+- 另外 `source-hygiene` / `crosslang-contract-gate` / `reap-orphan-testenvs` 根本不受这个脚本管。
 
-已接入（9 个）：`secret-regression` / `web-admin-gate` / `rn-gate` / `python-gate`
-/ `jpa-gate-main` / `java-artifact` / `java-full-nightly` / `tool-inventory-gate` / `web-dist`。
+脚本仍然负责"各 workflow 的 `runs-on` 写法彼此一致"这件事（⛔ 不要手工改单个 `runs-on`）。要真正切到托管，得先把上面这几处修好。
 
-其余 6 个写死 `ubuntu-latest` —— 在自建模式下它们**完全跑不起来**
-（`2~4 秒 / 0 个 step / 无 runner`），不是「暂时没覆盖」而是「没有信号」：
+写死 `ubuntu-latest` 的 workflow（`ci.yml` 等）照旧走托管，不受本文件的自建路由影响。
 
-- `ci.yml` —— 卡在第 6 关（服务容器），见下。
-- `e2e-post-deploy` / `e2e-pr` / `tool-isolation-audit` —— 在 GitHub 上仍是
-  `disabled_manually`。⛔ 前两个会碰部署环境，**一 dispatch 就有副作用，验不了就不该接**。
-- `daily-integration` / `kb-drift-check` / `threshold-parity-check` —— 手动触发，
-  同样是「dispatch 一次就有副作用（开 PR 等）」，未接。
+---
+
+## 自建 runner 是什么
+
+### 主力：加拿大 Mac mini 上的 colima `ci` VM
+
+| | |
+|---|---|
+| 机器 | 加拿大 Mac mini（`ssh canada-mini`，用户 rex，Tailscale `100.85.234.108`，M4 Pro 14 核 / 64 GB）上的 colima `ci` VM：Ubuntu 24.04 **arm64**，**12 核 / 44 GB**，数据盘 120 GB（挂在 `/mnt/lima-colima-ci`，root fs 只有 19 GB） |
+| VM 保活 | launchd 代理 `~/Library/LaunchAgents/com.cretas.colima-ci.plist`（`colima start ci --foreground`，KeepAlive）。⚠️ `colima stop ci` 会停掉 VM，但不会让这个前台进程退出，所以 KeepAlive 不会重启它。改 VM 规格（`~/.colima/ci/colima.yaml`）之后要用 `launchctl kickstart -k gui/$(id -u)/com.cretas.colima-ci` 才能按新配置拉起 |
+| runner | **仓级**：`canada-mini-cretas`、`canada-mini-cretas-2`、`canada-mini-cretas-3`，目录 `/mnt/lima-colima-ci/actions-runner-cretas{,-2,-3}`。同一个 VM 里还有 assembly 仓的 `canada-mini-ci` |
+| 标签 | `self-hosted, Linux, ARM64, cretas, java, canada-mini` |
+| systemd | 每个 unit 都带 drop-in `restart.conf`：`Restart=always`、`RestartSec=30`、`StartLimitIntervalSec=0`、`RequiresMountsFor=/mnt/lima-colima-ci`。2026-10-03 assembly runner 因为 DNS 抖动退出后没有重启，掉线 3 小时；2026-10-04 VM 重启时服务比数据盘先起来（203/EXEC），30 秒后由 Restart 拉起 |
+| 工具 | JDK 21（apt）、Maven 3.9.16、PG 17 二进制在 PATH（`initdb`/`pg_ctl` 在 `/usr/local/bin`）、python3.11（deadsnakes，与 prod 同小版本）、python3.12-venv、zip、jq、docker |
+| r10 常驻 PG | 集群 `17/r10`，**端口 5433**，开机自启。5432 留给同一个 VM 里 assembly `java-build-test` 的服务容器。runner `.env` 设 `R10_IT_PGPORT=5433`，`application-r10-it.properties` 和 nightly 引导步骤读这个变量；⛔ 不要在 `.env` 里全局设 `PGPORT`，那会让别的 psql 调用被静默改道 |
+| 测试堆 | PR 闸读 `.env` 的 `CRETAS_JAVA_FORK_XMX=6g`（这台的执行顺序下 fast-contracts 用 3g / 4g 会 OOM，6g / 8g 能过）。nightly 全量读单独的 `CRETAS_JAVA_NIGHTLY_XMX=12g`：Spring 测试上下文缓存随全量累积，实测 3g 只跑到 2879/12012，6g 跑满但尾段 OOM 出 10 红，8g 跑满 12999 仍在最后 OOM 出 11 红。⛔ 不用 `spring.test.context.cache.maxSize` 压缓存：被淘汰的上下文会关掉共享的内存 H2 库，下游测试连带变红 |
+| Maven 本地仓库 | VM 里 4 个 runner 共用一个本地仓库。并发下载时曾把 `poi-ooxml-4.1.2.jar` 读到写一半的状态（编译报 `zip END header not found`，事后文件完好）。每个 runner 的 `.env` 都设了 `MAVEN_ARGS=-Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav`（Maven 3.9 跨进程文件锁） |
+| 时区 | `America/Vancouver`（西七区），继承自宿主 |
+| Mac 重启后自恢复 | ⚠️ 配置就绪、**未实测**：已开 rex 自动登录（`autoLoginUser=rex`、`/etc/kcpassword`、FileVault 关、`autorestart=1`）。链路 = 开机 → 自动登录 → launchd 拉起 VM → VM 内 systemd 拉起 runner |
+
+### 备用：美国 aurora，自动故障切换
+
+| | |
+|---|---|
+| 机器 | aurora（`ssh -i ~/.ssh/canada_mini_ed25519 aurora@100.92.5.62`，macOS 26，10 核 / 24 GB，常年不关机）。上面原本就有 colima `default` VM（4 核 / 6 GB，跑 pomelox-test 容器）、openclaw-gateway 和 iOS 模拟器，内存偏紧，swap 常年在用 |
+| CI VM | 单独的 colima `ci` VM（6 核 / 12 GB / 100 GB），工具和 r10 集群与加拿大一致。**平时关着**。`CRETAS_JAVA_NIGHTLY_XMX=7g`：nightly 如果碰上故障切换落到 aurora，**会跑不满**（加拿大要 12g），棘轮会判 rc=1 或 rc=2，这是已知限制 |
+| runner | `aurora-cretas`，仓级，标签 `self-hosted, Linux, ARM64, cretas, java, aurora`。systemd unit **disabled**，由看门狗控制启停 |
+| 为什么不常驻 | GitHub 派 job **没有优先级**：带同样标签的空闲 runner 都会分到活。aurora 常驻就会和加拿大平分 job，内存会被压进 swap。所以它只在加拿大不健康时才开 |
+| 看门狗 | `~/cretas-ci-failover.sh`，由 launchd `~/Library/LaunchAgents/com.cretas.ci-failover.plist` 每 60 秒运行一次，日志写到 `~/Library/Logs/cretas-ci-failover.log` |
+| 健康检查 | aurora 用专用密钥 `~/.ssh/id_ed25519_cretas_ci_health` SSH 到加拿大。加拿大的 `authorized_keys` 里把这把钥匙限定为 `restrict,command="/Users/rex/ci-health.sh"`，只能拿到一行 `CRETAS_RUNNERS_ACTIVE=<n>`（VM 里活着的 cretas runner 服务数）。连不上或读数不对按 0 算。阴性对照：带别的命令（`ls /; whoami`）去调，拿回的仍然只是这一行 |
+| 切换规则 | 连续 **3** 次 n=0 → 启动 aurora 的 VM 和 runner。n≥1 时，aurora 手上没有 `Runner.Worker` 才停 runner 并关 VM；有就等。每次 `colima start` 之后都把 docker context 切回 `colima`，不影响 aurora 原有的容器 |
+| 没覆盖到的 | VM 和 runner 服务都活着、但 runner 卡死不接活，这种情况健康检查看不出来（服务是 active） |
+
+#### 2026-10-04 故障切换实测（判据：真实 job 的 `runner_name`）
+
+| 时刻（UTC） | 事件 |
+|---|---|
+| 16:57:48 | 停掉加拿大 3 个 cretas runner 服务（VM 和 Mac 不动），健康读数变成 `CRETAS_RUNNERS_ACTIVE=0` |
+| 17:00:00 | 看门狗第 3 次读到 0：`FAILOVER ... -> start aurora ci VM` |
+| 17:00:13 | `FAILOVER start aurora-cretas.service`，runner 上线后立刻接到排队的 job |
+| 17:00:17–17:01:33 | aurora 跑完 `field-names`（run 37138722767），之后又跑了 `no-literal-nul-bytes`、`tracked-secret-scan`，三个都绿，`runner_name=aurora-cretas` |
+| 17:01:50 | 恢复加拿大，健康读数 3 |
+| 17:02:18 | `FAILBACK ... -> stop aurora-cretas.service and aurora ci VM`，aurora 变 offline，VM 已关，docker context 仍是 `colima` |
+
+⚠️ 这次测试时我停加拿大之前读到 3 个实例都在忙，却没拿这个读数当闸门，打断了 3 个 job（另一条线 PR 的 Java Gate 两个 job 和一个 script-tests），之后用 `gh run rerun --failed` 重跑了。**下次演练前先确认 `busy=false`。** 要摘掉单个实例时，先等它手上的 job 跑完。
+
+### 已停用：本机 WSL2
+
+`cretas-ci.service`（`windows-wsl-ci`）、`cretas-ci-extra@2` / `@3` 都已 `systemctl disable --now`。要恢复：在 WSL 里以 root 执行 `systemctl enable --now cretas-ci.service`（extra 实例是 `cretas-ci-extra@N.service`）。它们是**组织级** runner，仓级 token 列不出来，也改不了它们的标签。
+
+加拿大 Mac mini 时期的 macOS runner（`canada-mac-mini` / `-2`）早已退役，那个时期的接入方式在案例库，⛔ 不要再照着去连。
 
 ---
 
@@ -41,108 +83,42 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 | # | 关卡 | 长什么样 |
 |---|---|---|
 | 1 | **缩进** | 脚本按**字面量**匹配 `    runs-on: ubuntu-latest`（4 空格）。缩进不同 → 静默不命中 |
-| 2 | **`actions/setup-python`** | 自建 macOS 上**必失败**（安装脚本把 `/Users/runner` 写死）⇒ 条件化 + 建 venv（homebrew 的 3.11+ 带 PEP 668，直接装会被拒） |
-| 3 | **Linux 专有命令** | `nproc` / `free` / `apt-get` / `stat -c` 在 macOS 上不存在。`jpa-gate` 就有一步 `nproc` + `free -h`，**只负责打印却能弄红整个 job** |
-| 4 | **缺工具** | `setup-java` 只装 JDK **不装 Maven** → `mvn: command not found`；homebrew 只给 `pip3` / `python3`，**没有裸 `pip`、也没有裸 `python`** ⇒ 探测 + 兜底（`./mvnw` / `python3` / venv 里的 `python`）。⚠️ 扫的时候**不能只看 `uses:`** —— run 步骤里的裸解释器同样要查 |
-| 5 | **平台专用 wheel** | `torch==2.4.1+cpu` 的 `+cpu` 是 **Linux 专用**本地版本标识，macOS arm64 没有这个变体 |
-| 6 | 🔴 **`services:` / 容器** | 这台自建 runner **没有 Docker**。实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`，job 在 **Set up job 阶段**死，**一个 step 都执行不到**（run 33037689686，9 秒） |
+| 2 | **`actions/setup-python`** | 自建 macOS 上**必失败**（安装脚本把 `/Users/runner` 写死）⇒ 条件化 + 建 venv。Linux VM 上用系统 python3.11 |
+| 3 | **Linux 专有命令** | `nproc` / `free` / `apt-get` / `stat -c` 在 macOS 上不存在（现役 VM 是 Linux，但 workflow 要能在两边都跑） |
+| 4 | **缺工具** | `setup-java` 只装 JDK **不装 Maven**；homebrew 只给 `pip3` / `python3`，没有裸 `pip`、也没有裸 `python` ⇒ 探测 + 兜底。⚠️ 扫的时候**不能只看 `uses:`**，run 步骤里的裸解释器同样要查 |
+| 5 | **平台专用 wheel** | `torch==2.4.1+cpu` 的 `+cpu` 只有 x64 Linux 才有，macOS 和 **ARM64 Linux** 都没有这个变体。Python Gate 在 `runner.os == macOS` 或 `runner.arch == ARM64` 时剥掉 `+cpu`（#883）；ARM64 上 PyPI 的 plain `torch==2.4.1` 本身就是 CPU build |
+| 6 | 🔴 **`services:` / 容器** | 加拿大和 aurora 的 VM 有 Docker，但加拿大 VM 的宿主 5432 被 assembly 的服务容器占着。A2 闸（`scripts/tests/test-java-heavy-jobs-need-8g-runner.sh`）钉着：可溢出的 Java job 形态不许带 `services:` |
 
 ⛔ 六关不逐条过就把文件名加进来，换来的是「从跑不起来」变成「跑起来就红」。
 
-⚠️ 六关是在 Mac mini（macOS）上实测的。现役自建是 WSL2（Linux）：第 1 关（缩进）和第 6 关（Docker）与平台无关，仍然成立；第 2–5 关是 macOS 特有（`/Users/runner`、缺 `nproc`/`free`、homebrew、无 `+cpu` wheel），Linux 上不适用——但 WSL 上有没有 Docker、`mvn`/`python3` 在不在 PATH **没重测过**，接新工作流前逐关跑一遍。
-
-`ci.yml` 保持写死 `ubuntu-latest`：它的 `java-build-test` 依赖 `pgvector` 服务容器，自建 runner 没有 Docker，这是机器侧的事（给 runner 装 Docker 或换 Linux self-hosted），脚本解决不了。
-
-`--adopt` 是新接工作流时的显式收敛口（新文件状态必然与现有不一致，一致性闸会拒切）：它只做「全部拉齐到 target」并逐行打印每个文件「改了 / 已经是、跳过」，⛔ 不允许静默拉齐，也不是 `--force`。
-
 ### `python-gate` 在两种 runner 上跑的不是同一个解释器
 
-托管钉 `python-version: '3.10'`；自建用系统 Python（当前 `windows-wsl-ci` 是 **3.11.13**，与 prod 同版本）。该步骤把 `PYTHON_USED=<解释器> (<版本>)` 打进日志，并只断言下限 `>=3.10`（⛔ 不允许静默用更老的版本跑；⛔ 也不要改成等值断言——下限写法对两种 runner 都成立）。读它的绿时要连版本一起读。
-
-📌 「自建与 prod 同版本」只是「Java 要不要上托管」选型的一个输入，⛔ 不据此改任何 workflow；它依赖自建系统 Python 与 prod 都保持 3.11.13，任一侧升级就要重新量两边。
+托管钉 `python-version: '3.10'`；自建用系统 Python（加拿大 / aurora VM 是 **3.11.17**，prod 是 3.11.13）。该步骤把 `PYTHON_USED=<解释器> (<版本>)` 打进日志，并只断言下限 `>=3.10`（⛔ 不允许静默用更老的版本跑；⛔ 也不要改成等值断言）。读它的绿时要连版本一起读。
 
 ---
 
 ## ⛔ 别用组织变量做路由
 
-`runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}` 不工作：`runs-on` 在 job 编排阶段求值，那时 `vars` 够不着，job 实际落成 `labels=ubuntu-latest`。这是能力边界，不是配置问题（fork / 可见性 / 授权 / 时序都排除过，见案例库）。
+`runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}` 不工作：`runs-on` 在 job 编排阶段求值，那时 `vars` 够不着，job 实际落成 `labels=ubuntu-latest`。这是能力边界，不是配置问题（见案例库）。
 
-▎判据：`runs-on` 里只放字面量。要动态就改文件。
-
----
-
-## 为什么默认是托管，而不是自建
-
-实测耗时（托管，51 个成功样本的中位数）：
-
-| 闸 | 托管 | 自建（Mac mini 时期实测；WSL2 未测） |
-|---|---|---|
-| Web Admin Gate | **12.3 分** | ~1.5 分（缓存热时）|
-| RN Gate | **4.0 分** | ~1 分 |
-| Secret gate | **1.0 分** | 21 秒 |
-
-⚠️ 自建**冷启动**要另算：checkout 工作树 1.7G ≈ 1.5 分钟。
-更重要的是托管提供**干净机器 + 第三方执行**的独立性，自建给不了。
-⇒ 有额度就用托管，自建是兜底。
+▎判据：`runs-on` 里只放字面量。主备切换靠 runner 端标签和启停，不靠 workflow。
 
 ---
 
-## 自建 runner 是什么
-
-| | |
-|---|---|
-| 机器 | 本机 Windows 上的 WSL2，三个 runner 实例：`windows-wsl-ci`（标签另带 `ci-migration-candidate`）、`windows-wsl-ci-2` / `-3`（`ci-extra`） |
-| 标签 | `self-hosted, cretas, Linux, X64` —— 脚本写的 `runs-on: [self-hosted, cretas]` 只会派到它们 |
-| 连接 | 本机，不需要 SSH |
-| Python | 系统 Python **3.11.13**（与 prod 同版本，见上） |
-| 前提 | Windows 侧登录保活任务 **Running**（三态表见下）；停掉 / 注销就掉线 |
-
-### 溢出 runner：加拿大 Mac mini 上的 Linux VM（2026-10-03 起）
-
-本机三个 8G runner 满了时，**可溢出的 Java job** 会被 GitHub 派到 `canada-mini-cretas`：
-
-| | |
-|---|---|
-| 机器 | 加拿大 Mac mini（`ssh canada-mini`）上 colima 的 `ci` VM，Ubuntu 24.04 **arm64**，10 核 / 24 GB，数据盘 120 GB |
-| 注册 | **仓级** runner（cretas 仓），systemd 自启；同一 VM 里另有 assembly 仓的 `canada-mini-ci` |
-| 标签 | `self-hosted, Linux, ARM64, java, canada-mini` —— **没有 `cretas`**，所以只接 `runs-on: [self-hosted, java]` 的 job |
-| 可溢出的 job | `java-gate-pr`（fast-contracts、postgres-reversal-concurrency）、`jpa-gate-main`、`tool-inventory-gate` |
-| 不溢出 | `java-full-nightly`（要 runner 本机常驻 PG + r10 库，加拿大没有）；`java-artifact`（09-15 起只手动派发、不抢 runner，没必要溢出）——仍是 `[self-hosted, cretas, java]` |
-| 工具 | Maven 3.9.16、PG 17 服务端二进制（无常驻集群，`run-with-test-postgres.sh` 自起临时实例，`max_connections=200`——30 在这台的执行顺序下会 `too many clients`）、python3 |
-| 测试堆 | runner `.env` 设 `CRETAS_JAVA_FORK_XMX=6g`；`java-gate-pr` 用 `-Xmx${CRETAS_JAVA_FORK_XMX:-3g}`（本机不设 = 3g）。实测这台的执行顺序下 fast-contracts 3g / 4g 都在第 324 个类 OOM，6g / 8g 全过；本机同一测试集 3g 能过只是顺序碰巧有利 |
-| 三态 | 在线 ✅；**Mac 重启后自恢复 ⚠️ 配置就绪、未实测**——2026-10-03 已开 rex 自动登录（`autoLoginUser=rex`、`/etc/kcpassword` 在、FileVault 关、`autorestart=1`），链路 = 开机→自动登录→launchd 代理拉起 VM→VM 内 systemd 拉起 runner |
-
-⚠️ 非 Java 的闸（`[self-hosted, cretas]`）**不会**溢出：它们要 `cretas` 标签，而 arm64 上装不了 `torch==2.4.1+cpu`（第 5 关）。⛔ 别给这台 runner 加 `cretas` 标签。
-A2 闸（`scripts/tests/test-java-heavy-jobs-need-8g-runner.sh`）钉着「可溢出形态不许带 `services:`、不许是 nightly」：
-同一 VM 里 assembly 的 job 用 `services:` 映射 5432，可溢出的 job 再声明服务容器就会撞端口。
-
-加拿大 Mac mini（`canada-mac-mini` / `-2`，标签 `self-hosted, macOS, ARM64`，**没有 `cretas`**）已退役为本仓 CI 载体：离线，且 `AGENTS.md` 已把它留给其他任务。它时期的接入方式、ProxyJump/钥匙串坑、`setup-python`/homebrew 两个特例都在案例库「Mac mini 时期」一节，⛔ 不要再照着那些去连。
-
----
-## ⛔ 别再试的三条路
+## ⛔ 别再试的路
 
 | 载体 | 状态 |
 |---|---|
-| 阿里云 139 / 47 | ⛔ 堵死 —— git 长连接连不动（`git clone --depth 1` 连 10MB 小仓都超时；HTTP/1.1、postBuffer、`--filter=blob:none` 全败） |
-| 本机 WSL2 | ✅ 现役自建 runner —— 成立前提见下表三态 |
-| 本机 Windows 直跑 | ⛔ 堵死 —— 18 个工作流全是 `ubuntu-latest` + bash 步骤 |
-
-### WSL2 的三态（⛔ 不许把「尚未验证」并进「已验证」）
-
-| 项 | 状态 | 成立前提 |
-|---|---|---|
-| 保活 | ✅ runner 持续在线并完成真实任务 | Windows 侧登录保活任务处于 **Running**；停掉 / 注销就回到「启动后 46 秒自动关机」（`vmIdleTimeout=-1` 在 WSL 2.5.9 上无效） |
-| 外网 | ✅ runner 内 `nodejs.org` / `python.org` HTTP 200 | 同上保活前提；这只说明那个组件在那一刻能出网，不是「这台机器网络通」的结论 |
-| Windows 重启后自恢复 | ⚠️ 尚未验证 | — |
-| 未登录状态下恢复 | ⚠️ 尚未验证 | — |
-
-⇒ 现在成立的说法只有：**「在有人登录、且保活任务在跑的前提下，它能干活。」** 前提没了，结论跟着作废。
+| 阿里云 139 / 47 | ⛔ 堵死：git 长连接连不动（`git clone --depth 1` 连 10MB 小仓都超时） |
+| 本机 WSL2 | ⛔ 停用（owner 2026-10-04：内存要炸）。恢复方法见上 |
+| 本机 Windows 直跑 | ⛔ 堵死：工作流全是 bash 步骤 |
+| aurora 常驻接活 | ⛔ 不做：没有优先级，常驻就是平分 job；它的内存撑不住 |
 
 ---
 
 ## 工作流里按 runner 类型分支
 
-`setup-python` 那一步按 runner 类型分支，自建用系统 Python 并断言版本 `>=3.10`（写法保留，不管自建是 macOS 还是 Linux 都成立）：
+`setup-python` 那一步按 runner 类型分支，自建用系统 Python 并断言版本 `>=3.10`：
 
 ```yaml
 - uses: actions/setup-python@v5
@@ -154,24 +130,28 @@ A2 闸（`scripts/tests/test-java-heavy-jobs-need-8g-runner.sh`）钉着「可�
 改了 runner 的 `.path` / `.env` 都要**重启 runner 服务**才生效。
 
 ---
-## 🔴 时区覆盖：自建 runner 回到东八区之后要显式跑
 
-Mac mini 时期它在西半球，首次接入当天照出 3 个东八区永远测不出来的 bug（阴性对照西半球恒绿 / 西半球日期差一天 / 东八区 16:00 后返回明天，见案例库）。共同形状：**`Date.now() + 8h` 这种「平移 UTC 轴假装某时区」的写法，必须用 UTC getter 读回**，换成本地 getter 等于又叠一次设备偏移。
+## 时区覆盖：自建 runner 又回到西半球了
 
-现役 WSL2 runner 和开发机同在东八区，**那层免费覆盖没有了**：时区相关的断言要显式用西半球 `TZ` 再跑一遍。⛔ **别在 Windows 原生 shell 里用 `TZ=x cmd`** —— 那个前缀根本不传进 node（`process.env.TZ` 是 `undefined`，偏移恒为 `-480`），写「四时区全绿」而实际跑了四遍东八区。`TZ=` 前缀只在 Linux（含 WSL）/ Mac 上生效。
+Mac mini 时期 runner 在西半球，首次接入当天就照出 3 个东八区永远测不出来的 bug（见案例库）。共同形状：**`Date.now() + 8h` 这种「平移 UTC 轴假装某时区」的写法，必须用 UTC getter 读回**，换成本地 getter 等于又叠一次设备偏移。
+
+WSL2 时期 runner 和开发机同在东八区，这层免费覆盖没有了。现在加拿大 VM 是 `America/Vancouver`（aurora 在美国），**覆盖又回来了**：同一个断言在开发机（东八区）和 CI（西七区）上各跑一遍。
+
+⛔ **别在 Windows 原生 shell 里用 `TZ=x cmd`**：那个前缀根本不传进 node（`process.env.TZ` 是 `undefined`，偏移恒为 `-480`）。`TZ=` 前缀只在 Linux / Mac 上生效。
 
 ---
 
 ## 判据
 
-- 切换后**不看脚本说了什么，看 job 实际落在哪**：
+- **不看配置说了什么，看 job 实际落在哪**：
   `gh api repos/cretasfuture-ai/cretas/actions/jobs/<id> --jq .runner_name`
-- 自建 runner 在线：`gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+" "+.status'`
-- ⚠️ `status=offline` 但 `busy=true` 是**正常的中间态**（正在重连），不要据此判定它挂了
+- runner 状态（仓级）：`gh api repos/cretasfuture-ai/cretas/actions/runners --jq '.runners[]|.name+" "+.status+" busy="+(.busy|tostring)'`
+- 加拿大健康读数：`ssh canada-mini '~/ci-health.sh'`
+- aurora 切换记录：`ssh -i ~/.ssh/canada_mini_ed25519 aurora@100.92.5.62 'grep -E "FAILOVER|FAILBACK" ~/Library/Logs/cretas-ci-failover.log | tail'`
+- ⚠️ `status=offline` 但 `busy=true` 是**正常的中间态**（正在重连），不要据此判定它挂了；aurora 撤回后 GitHub 上还会显示一会儿 online
 
 关联：`worktree-and-main-only-deploy.md`（部署只从 main）、`concurrent-edit-safety.md`（commit 范围保护）。
 
 ## 跑批判定：退出码是开放集合
 
 ▎**不是 0 也不是 1，一律当成「没量到」。⛔ 不要枚举失败码。** 枚举 `rc == 1` / `rc == 2` 时，第四种值（如 `python: command not found` 的 127）两条都不命中、静默落进绿（`java-full-nightly` 首次真跑就是这样：job success，artifact 146 字节）。抓住它的是「artifact 大小」这个设计上必然会变的读数——硬约束 9。
-
