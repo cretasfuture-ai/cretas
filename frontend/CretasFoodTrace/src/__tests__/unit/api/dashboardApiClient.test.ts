@@ -98,8 +98,9 @@ describe('dashboardApiClient', () => {
         data: mockData,
       });
 
-      const result = await dashboardAPI.getProductionStatistics({ period: 'month', lineId: 'L1' }) as MockApiResponse;
+      const result = await dashboardAPI.getProductionStatistics({ period: 'month' }) as MockApiResponse;
       expect(result.success).toBe(true);
+      expect(mock.history.get[0].params?.period).toBe('month');
     });
 
     it('should handle empty production data', async () => {

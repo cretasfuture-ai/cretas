@@ -327,11 +327,25 @@ describe('reportApiClient', () => {
 
   describe('getCapacityUtilizationReport', () => {
     it('should GET /reports/capacity-utilization with date range', async () => {
-      const mockCapacity = { overallUtilization: 0.78, utilizationByLine: [], utilizationHeatmap: [] };
+      const mockCapacity = {
+        factoryId: 'F006',
+        startDate: '2026-03-01',
+        endDate: '2026-03-20',
+        totalEquipment: 2,
+        averageUtilization: 78,
+        utilizationTarget: null,
+        dailyCapacity: null,
+        capacityBasis: null,
+        equipmentUtilization: [{ equipmentId: 7, equipmentName: 'Line A', utilization: null, status: 'idle' }],
+        dailyUtilization: [{ date: '2026-03-20', utilization: null, output: 0, dayOfWeek: 5, weekOfYear: 12 }],
+      };
       mock.onGet(`${BASE}/capacity-utilization`).reply(200, { data: mockCapacity });
 
       const result = await reportApiClient.getCapacityUtilizationReport({ startDate: '2026-03-01', endDate: '2026-03-20' });
-      expect(result.overallUtilization).toBe(0.78);
+      expect(result.averageUtilization).toBe(78);
+      expect(result.dailyCapacity).toBeNull();
+      expect(result.equipmentUtilization[0]?.utilization).toBeNull();
+      expect(result.dailyUtilization[0]?.output).toBe(0);
     });
   });
 

@@ -51,6 +51,16 @@ export interface ApiResponse<T> {
   success: boolean;
 }
 
+export interface UserModuleAccessView {
+  moduleCode: string;
+  displayName: string;
+  category: string;
+  permissionModule: string;
+  roleDefaultAllowed: boolean;
+  override: string | null;
+  effectiveAllowed: boolean;
+}
+
 class CanvasApiClient {
   /** 获取模块的合并有效配置 (包含动态字段) */
   async getEffectiveConfig(
@@ -79,6 +89,17 @@ class CanvasApiClient {
     } catch (e) {
       return [];
     }
+  }
+
+  /** Read the caller's effective module access. The self endpoint is fail-closed. */
+  async getUserModuleAccess(factoryId: string, userId: string | number): Promise<UserModuleAccessView[]> {
+    const response = await apiClient.get<ApiResponse<UserModuleAccessView[]>>(
+      `/api/mobile/${factoryId}/canvas/user-module-access/${encodeURIComponent(String(userId))}`
+    );
+    if (!response.success || !Array.isArray(response.data)) {
+      throw new Error(response.message || 'Unable to read module access');
+    }
+    return response.data;
   }
 
   /** 获取记录的动态字段值 */
