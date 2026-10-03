@@ -137,4 +137,37 @@ class JwtAuthInterceptorDisabledUserTest {
         assertFalse(interceptor.preHandle(request("GET", "/api/mobile/OTHER/a", true), response, null));
         assertEquals(403, response.getStatus());
     }
+
+    @Test
+    void legacyTokenWithoutFactoryCannotBypassDisabledGlobalPrincipalGuard() throws Exception {
+        when(jwt.getFactoryIdFromToken("synthetic-access")).thenReturn(null);
+        when(users.findById(101L)).thenReturn(Optional.of(user(false)));
+        for (String uri : new String[]{"/api/mobile/ai/chat", "/api/mobile/upload"}) {
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            assertFalse(interceptor.preHandle(request("POST", uri, true), response, null));
+            assertEquals(401, response.getStatus());
+        }
+    }
+
+    @Test
+    void legacyTokenWithoutFactoryCannotBypassMissingGlobalPrincipalGuard() throws Exception {
+        when(jwt.getFactoryIdFromToken("synthetic-access")).thenReturn(null);
+        when(users.findById(101L)).thenReturn(Optional.empty());
+        for (String uri : new String[]{"/api/mobile/ai/chat", "/api/mobile/upload"}) {
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            assertFalse(interceptor.preHandle(request("POST", uri, true), response, null));
+            assertEquals(401, response.getStatus());
+        }
+    }
+
+    @Test
+    void activeLegacyGlobalTokenKeepsPriorGlobalAndTenantContracts() throws Exception {
+        when(jwt.getFactoryIdFromToken("synthetic-access")).thenReturn(null);
+        for (String uri : new String[]{"/api/mobile/ai/chat", "/api/mobile/upload"}) {
+            assertTrue(interceptor.preHandle(request("POST", uri, true), new MockHttpServletResponse(), null));
+        }
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        assertFalse(interceptor.preHandle(request("GET", "/api/mobile/SIM24A/a", true), response, null));
+        assertEquals(403, response.getStatus());
+    }
 }

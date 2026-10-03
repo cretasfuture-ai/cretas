@@ -171,13 +171,13 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         // 跨工厂权限验证
         String requestUri = request.getRequestURI();
 
-        if (userId != null && tokenFactoryId != null
+        if (userId != null
                 && !isPlatformPrincipal(tokenFactoryId, tokenRole)
                 && !isPublicEndpoint(requestUri)
                 && !requestUri.startsWith("/api/internal/")) {
             User user = userRepository.findById(userId).orElse(null);
             if (user == null || !Boolean.TRUE.equals(user.getIsActive())
-                    || !tokenFactoryId.equals(user.getFactoryId())) {
+                    || (tokenFactoryId != null && !tokenFactoryId.equals(user.getFactoryId()))) {
                 sendUnauthorizedResponse(response, "账号已被禁用或不存在，请重新登录");
                 return false;
             }
