@@ -16,6 +16,7 @@
  *  此处已是唯一实现, 不再有"两处要保持一致"的对照方。)
  */
 export function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return '—';
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
   return number.toFixed(maxDecimals).replace(/\.?0+$/, '');
