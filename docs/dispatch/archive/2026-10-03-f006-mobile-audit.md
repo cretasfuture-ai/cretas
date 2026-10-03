@@ -3,7 +3,7 @@
 - Owner: 当前 Codex 手机测试任务，DIRECT；Base SHA: `c3eefe0c6af48cd690f770d7a6ec890d3aa8cebf`。
 - Worktree: `C:\Users\Steve\cretas-f006-mobile-audit-20261003`。
 - 设备：Mi 11 Pro，Android 14；安装版 `com.cretas.foodtrace` 1.0.5 / 16。
-- 当前手机端点：生产网关下的 F006 测试租户。其他租户业务写入为 0；截至本记录 F006 业务写入也为 0，登录与操作遥测另计。
+- 当前手机端点：生产网关下的 F006 测试租户。其他租户业务写入为 0；已在手机创建带本次测试标记的 F006 销售草稿（1 盒、1 元、状态 DRAFT），写前无目标记录、写后回读一张订单/一条明细，其他租户同标记 0。登录与操作遥测另计。
 - 本机证据：`C:\Users\Steve\Documents\Cretas-F006-手机测试-20261003`。不提交账号口令、令牌、数据库密码、原始用户数据或设备位置。
 
 ## 修改范围
@@ -17,6 +17,8 @@
 - 首页入口权限范围：`screens/main/homeModules.ts` 及既有 `homeModulesNonEmptyPerRole.test.ts`。采购主管真机送货签收 GET 被 warehouse/finance 权限拒绝，首页卡片须同时匹配页面实际要求的任一读模块；不替角色授予额外权限。
 
 ## 当前证据与限制
+
+- AI 修复新增范围：`service/execution/SseStreamingService.java` 和 `SseStreamingFoodFallbackContractTest.java`。食品知识静态短语仅在对应意图配置仍 active 时保留专用路由；停用时通用概念问题走既有只读对话链，不全局启用意图、不绕写确认、不更改权限或 Repository。最终目标 Java 回归及独立风险审查须通过；部署另记。
 
 - 第二批范围：`screens/factory-admin/inventory/{ArApOverviewScreen,PriceListScreen}.tsx`，`utils/{priceViewAccess,mobileFinancialAccess}.ts`，`store/canViewPriceStore.ts`、`config/rowActionsConfig.ts`、首页模块及相应权限/屏幕测试。只收紧移动 UI，不授予权限。应收应付写回调及迟到读取绑定当前用户、工厂、角色和权限；身份变化重建页面并清空表单。价格角色名单以 `PermissionServiceImpl.PRICE_VIEW_ROLES` 为真值。
 - 第一批验证 APK 已构建成功，独立包名与 runtime，debug 签名只用于本地真机验证，原应用保留。第二批尚未进入该 APK，安装与验收分别记录。
@@ -74,4 +76,7 @@
 - 后续 18 项财务读取检查全部匹配权限。送货单读取另有逐账号 `restaurant` 模块访问闸，仓管/出纳即使有 warehouse/finance 读权仍可能 403；角色矩阵不能替代此闸。错误路径 `/ar-ap/overview` 的首轮 404 属测试工具错误，已修正为 `/finance/overview`，不计产品失败。
 - AI 实时配置已只读核验：`FOOD_KNOWLEDGE_QUERY` inactive，手机 HACCP 问句仍返回无可见候选的澄清；SSE 候选响应丢失为源码问题，Mac 独立文本推理成功不证明手机调用它。
 - 第二批源码独立只读风险审查无阻断；目标 Jest 6 套 64 项、完整 TypeScript 均通过。覆盖 AR/AP 正向 factory 绑定、失权/换工厂旧回调拒绝、财务/价格迟到回包隔离，价格角色与后端 enum 集精确一致。
-- 第二批候选真机验收、PR、合并和发布尚未完成。
+- 第二批独立验证 APK 构建成功（源码 `47aae1f173`），已安装；原应用 versionCode 16 保留。第二批真机验收、PR、合并和发布尚未完成。
+- SSE 最终 5 类回归 27 项通过（exit 0 / BUILD SUCCESS）；包含缺失或停用食品意图的只读对话路由、active 食品意图保留、active 情况下分析优先、工厂受控路由与既有澄清行为。独立风险审查条件已落实：全局精确食品意图查询仅有一条 platform inactive、非删除配置，无 active 副本；分析优先测试传 active 配置。
+- 最新前端证据按测试文件去重为 14 套 133 项通过，不叠加同一套重跑次数。完整 TypeScript 检查通过。
+- 销售草稿前置检查发现名称含空格的 SQL 经 Windows SSH 命令转义后失真，不能计产品串租户问题；接口精确 ID 回读与 SQL stdin 重查均确认客户和产品属于 F006。查询工具已修正，无其他租户写请求。
