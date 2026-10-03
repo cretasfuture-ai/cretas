@@ -1,14 +1,23 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.TimeStatsDTO;
+import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.TimeStatsService;
+import com.cretas.aims.service.UserModuleAccessService;
+import com.cretas.aims.service.config.FactoryConfigService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,7 +39,16 @@ import java.util.List;
 public class TimeStatsController {
 
     private final TimeStatsService timeStatsService;
+    private final PermissionService permissionService;
+    private final UserModuleAccessService userModuleAccessService;
+    private final FactoryConfigService factoryConfigService;
+    private final UserRepository userRepository;
 
+    private static final String HR_EMPLOYEE_MODULE = "hr_employee";
+    private static final String[] HR_READ_PERMISSIONS = {"hr:read", "hr:read_write"};
+
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/daily")
     @Operation(summary = "获取日统计")
     public ApiResponse<TimeStatsDTO> getDailyStats(
@@ -42,6 +60,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/daily/range")
     @Operation(summary = "获取日期范围统计")
     public ApiResponse<TimeStatsDTO> getDailyStatsRange(
@@ -56,6 +76,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/weekly")
     @Operation(summary = "获取周统计")
     public ApiResponse<TimeStatsDTO> getWeeklyStats(
@@ -67,6 +89,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/monthly")
     @Operation(summary = "获取月统计")
     public ApiResponse<TimeStatsDTO> getMonthlyStats(
@@ -78,6 +102,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/yearly")
     @Operation(summary = "获取年统计")
     public ApiResponse<TimeStatsDTO> getYearlyStats(
@@ -88,6 +114,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/by-work-type")
     @Operation(summary = "按工作类型统计")
     public ApiResponse<TimeStatsDTO> getStatsByWorkType(
@@ -102,6 +130,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/by-department")
     @Operation(summary = "按部门统计")
     public ApiResponse<TimeStatsDTO> getStatsByDepartment(
@@ -116,6 +146,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/productivity")
     @Operation(summary = "获取生产力分析")
     public ApiResponse<TimeStatsDTO.ProductivityAnalysis> getProductivityAnalysis(
@@ -131,6 +163,8 @@ public class TimeStatsController {
         return ApiResponse.success(analysis);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/workers")
     @Operation(summary = "获取员工时间统计")
     public ApiResponse<List<TimeStatsDTO.WorkerTimeStats>> getWorkerTimeStats(
@@ -150,20 +184,31 @@ public class TimeStatsController {
 
     @GetMapping("/workers/{workerId}")
     @Operation(summary = "获取员工个人时间统计")
-    public ApiResponse<TimeStatsDTO.WorkerTimeStats> getWorkerTimeStatsById(
+    public ResponseEntity<ApiResponse<TimeStatsDTO.WorkerTimeStats>> getWorkerTimeStatsById(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "员工ID") Integer workerId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             @Parameter(description = "开始日期") LocalDate startDate,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            @Parameter(description = "结束日期") LocalDate endDate) {
+            @Parameter(description = "结束日期") LocalDate endDate,
+            HttpServletRequest request) {
         log.debug("获取员工个人时间统计: factoryId={}, workerId={}, startDate={}, endDate={}",
                 factoryId, workerId, startDate, endDate);
+        if (parseActorId(request.getAttribute("userId")) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error(HttpStatus.UNAUTHORIZED.value(), "未登录，无法访问员工个人时间统计"));
+        }
+        if (!canReadPersonalStats(factoryId, workerId, request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(ApiResponse.error(HttpStatus.FORBIDDEN.value(), "无权访问该员工个人时间统计"));
+        }
         TimeStatsDTO.WorkerTimeStats stats =
             timeStatsService.getWorkerTimeStatsById(factoryId, workerId, startDate, endDate);
-        return ApiResponse.success(stats);
+        return ResponseEntity.ok(ApiResponse.success(stats));
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/realtime")
     @Operation(summary = "获取工时实时统计")
     public ApiResponse<TimeStatsDTO> getRealtimeTimeStats(
@@ -173,6 +218,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/comparative")
     @Operation(summary = "获取对比分析")
     public ApiResponse<TimeStatsDTO> getComparativeStats(
@@ -192,6 +239,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/anomaly")
     @Operation(summary = "获取异常统计")
     public ApiResponse<TimeStatsDTO> getAnomalyStats(
@@ -206,6 +255,8 @@ public class TimeStatsController {
         return ApiResponse.success(stats);
     }
 
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/trend")
     @Operation(summary = "获取统计趋势")
     public ApiResponse<List<TimeStatsDTO.DailyStats>> getStatsTrend(
@@ -221,8 +272,54 @@ public class TimeStatsController {
         return ApiResponse.success(trend);
     }
 
+    private boolean canReadPersonalStats(String factoryId, Integer workerId,
+                                         HttpServletRequest request) {
+        Long actorId = parseActorId(request.getAttribute("userId"));
+        if (actorId == null || workerId == null) {
+            return false;
+        }
+
+        User actor = findActiveUser(actorId, factoryId);
+        User target = findActiveUser(workerId.longValue(), factoryId);
+        if (actor == null || target == null) {
+            return false;
+        }
+
+        // The personal attendance path is deliberately self-scoped for all employees and
+        // does not require the HR module. It must still be same-factory and active.
+        if (actorId.equals(workerId.longValue())) {
+            return true;
+        }
+
+        // Reading another worker requires the canonical HR read permission plus both
+        // account-level and factory-level hr_employee gates. A module GRANT alone
+        // must not manufacture the canonical HR permission.
+        return permissionService.hasAnyPermission(actor, HR_READ_PERMISSIONS)
+                && userModuleAccessService.canAccessModule(actor, HR_EMPLOYEE_MODULE)
+                && factoryConfigService.isModuleEnabled(factoryId, HR_EMPLOYEE_MODULE);
+    }
+
+    private User findActiveUser(Long userId, String factoryId) {
+        return userRepository.findByIdAndFactoryId(userId, factoryId)
+                .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+                .orElse(null);
+    }
+
+    private Long parseActorId(Object actorId) {
+        if (actorId == null) {
+            return null;
+        }
+        try {
+            Long parsed = Long.valueOf(String.valueOf(actorId));
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
     @RequirePermission({"hr:read_write"})
     @PostMapping("/export")
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @Operation(summary = "导出统计报告")
     public ApiResponse<String> exportStatsReport(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
