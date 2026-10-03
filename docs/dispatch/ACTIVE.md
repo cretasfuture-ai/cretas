@@ -6,15 +6,7 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-CI-PORTABLE-20261004` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 三文件scope：full workflow、r10-it测试profile、新ContractTest；复用独立PG并约束TestContext缓存。禁止runner/service/helper/labels/选择器/基线和prod改变。详见archive/2026-10-04-f006-mobile-ci-portable.md。
-
-- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读/金额、财务/价格身份边界；ArAp 查询 DTO、账龄、PriceList 工厂校验；采购列表刷新、useListSummary 迟到响应保护及回归；F006 真机和老板 AI。文件/验收见 `archive/2026-10-03-f006-mobile-audit.md`。
-- `F006-MOBILE-R2-20261003` — `in-progress` — Owner: Codex — Base `8005a38306` — 🔒 第二批手机导航/采购编辑/会话归属与分页、F006 老板 Mac 文本流。R1 #876 HEAD 冻结且未合；本批暂不发布。scope/验收见 `archive/2026-10-03-f006-mobile-r2.md`。
-- `F006-MOBILE-R2-DISPLAY-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 显示/设备范围已交还；设备HR权限与actor真实组件8项、最终TS通过。APK7导航/表单已实测，后加HR修复未装机；待上游整合/统一发布。详见R2归档。
-- `F006-MOBILE-R2-NAV-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 设备/质量导航及即时权限范围已交还；质量11、告警7、告警API3测试通过，待整批 TS/RN/终审/真机。不改后端权限/实体。详见 R2 归档。
-- `F006-MOBILE-R2-SESSION-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 SSE/Memory/分页与手机身份流取消已交还；RN会话5套57项、Java真实归属/取消/日志门禁通过，待整批终审/发布/Mini真机。不改 Repository/Entity。详见 R2 归档。
-- `F006-MOBILE-R3-REPORT-20261003` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 独立R3 worktree八文件scope：生产全量周期/分单位摘要与手机统计接线及真实行为测试；legacy顶层契约保留。禁止质检/Entity/Repository/迁移/业务写。详见archive/2026-10-04-f006-mobile-r3-report.md。
-- `F006-MOBILE-R4-QUALITY-20261003` — `queued` — Owner: Codex — Base待R3收口后登记 — 真机质量日/周/月均用第一页17条算41.2%；本周真实3条全PENDING，backend breakdown漏PENDING并把legacy非PASS3误读为失败。先锁scope，日期接线/待检与条件通过/有效分母/actor隔离修复；证据见R2归档。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891已合且Java已发布；财务viewer真机/三角色API回读通过。R3/R4 #892待门禁/发布，R2 CORE及R6/R7/R9和全角色深流程/Mac手机验收继续；本行不锁归档源码。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
@@ -86,9 +78,6 @@
 
 ## Scope 锁地图
 
-- `F006-MOBILE-R2-20261003`：仅 R2 worktree 的角色导航、采购编辑、仓储显示、AIChat/SSE/Memory 会话与新内部 F006 Mac 文本流，精确文件见 `archive/2026-10-03-f006-mobile-r2.md`。禁止 Entity/Repository/迁移/角色授予、全局模型链、照片、历史账务/异厂写。R1 HEAD 冻结。
-- `F006-MOBILE-R2-DISPLAY-20261003`：仅 AIReportDetailScreen、TodoDetailScreen、QILabelQcCreateScreen、必要 oaTodoDisplay helper 与三个对应目标测试；精确路径见 R2 归档。禁止导航/API/权限/业务状态/台账，协调者保留终审与发布。
-
 
 
 
@@ -123,3 +112,4 @@
 - organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
+- `F006-MOBILE-R2-CORE-20261004` — `in-progress` — Owner: Codex — Base `fe9ef6b3bf7eaa232c98165f1564489e82c0a142` — 🔒 冻结bafc源码与main整合，导航/会话/分页/财务入口和默认关闭Mini；R6/R7脏改留原WT。精确scope和Java/RN/Python验收见archive/2026-10-04-f006-mobile-r2-core.md。
