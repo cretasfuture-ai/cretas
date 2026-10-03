@@ -199,7 +199,8 @@ describe('QualityReportScreen real quality summary behavior', () => {
   let statisticsRequests: Array<{ params: { startDate: string; endDate: string }; deferred: Deferred<unknown> }>;
 
   beforeEach(() => {
-    jest.useFakeTimers({ now: new Date('2026-10-04T08:00:00+08:00') });
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 9, 4, 12, 0, 0));
     currentUser = actor('F006', 1);
     statisticsRequests = [];
     mockUseAuthStore.mockImplementation(() => ({ user: currentUser }));
