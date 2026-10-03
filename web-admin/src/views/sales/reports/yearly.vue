@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { handleCatchError } from '@/utils/errorToast';
+import { reportErrorText } from './reportFormat';
 import { fetchYearlyReport, type YearlyReport } from '@/api/salesPreset';
 
 const data = ref<YearlyReport | null>(null);
 const loading = ref(false);
+const error = ref<string | null>(null);
 const selectedYear = ref<number>(new Date().getFullYear());
 
 function money(value: number | null | undefined): string {
@@ -13,13 +14,13 @@ function money(value: number | null | undefined): string {
 
 async function load(): Promise<void> {
   loading.value = true;
+  error.value = null;
   try {
     const res = await fetchYearlyReport(selectedYear.value);
     data.value = res?.data;
   } catch (e) {
-    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx;
-    // only fire fallback for pure network errors.
-    handleCatchError(e, '加载失败,请检查网络');
+    error.value = reportErrorText(e);
+    data.value = null;
   } finally {
     loading.value = false;
   }
@@ -36,6 +37,8 @@ onMounted(load);
       <h2>销售额年报</h2>
       <el-input-number v-model="selectedYear" :min="2020" :max="2099" controls-position="right" @change="load" />
     </div>
+
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon style="margin-bottom: 16px" />
 
     <div v-loading="loading" v-if="data" class="kpi-grid">
       <el-card><div class="label">年份</div><div class="value">{{ data.year }}</div></el-card>

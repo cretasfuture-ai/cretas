@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { handleCatchError } from '@/utils/errorToast';
+import { reportErrorText } from './reportFormat';
 import { fetchCustomerRank, type CustomerRankRow } from '@/api/salesPreset';
 
 const rows = ref<CustomerRankRow[]>([]);
 const loading = ref(false);
+const error = ref<string | null>(null);
 const dateRange = ref<[string, string] | null>(null);
 const limit = ref(20);
 
@@ -14,13 +15,14 @@ function money(value: number | null | undefined): string {
 
 async function load(): Promise<void> {
   loading.value = true;
+  error.value = null;
   try {
     const [start, end] = dateRange.value ?? [undefined, undefined];
     const res = await fetchCustomerRank(start, end, limit.value);
     rows.value = res?.data?.rank ?? [];
   } catch (e) {
-    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
-    handleCatchError(e, '加载失败,请检查网络');
+    error.value = reportErrorText(e);
+    rows.value = [];
   } finally {
     loading.value = false;
   }
@@ -46,6 +48,8 @@ onMounted(load);
         <el-button type="primary" @click="load">查询</el-button>
       </div>
     </div>
+
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon style="margin-bottom: 16px" />
 
     <el-table v-loading="loading" :data="rows" stripe>
       <el-table-column prop="rank" label="排名" width="80" />
