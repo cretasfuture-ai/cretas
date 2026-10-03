@@ -63,6 +63,7 @@ export interface DashboardOverviewData {
  * 生产统计数据
  */
 export interface ProductionStatisticsData {
+  productionSummary?: ProductionSummary;
   batchStatusDistribution: Array<{
     status: string;
     count: number;
@@ -80,6 +81,31 @@ export interface ProductionStatisticsData {
     quantity: number;
     completed: number;
   }>;
+}
+
+export type ProductionPeriod = 'today' | 'week' | 'month';
+
+export interface ProductionSummaryUnit {
+  unit: string;
+  totalBatches: number;
+  reportedBatches: number;
+  missingActualQuantityBatches: number;
+  reportedQuantity: number;
+  totalQuantity: number;
+}
+
+export interface ProductionSummary {
+  period: ProductionPeriod;
+  startDate: string;
+  endDate: string;
+  totalBatches: number;
+  completedBatches: number;
+  completionRate: number | null;
+  statusCounts: Record<string, number>;
+  missingUnitCount: number;
+  missingActualQuantityCount: number;
+  unknownUnitCount: number;
+  unitBreakdown: ProductionSummaryUnit[];
 }
 
 /**
@@ -264,7 +290,10 @@ export const dashboardAPI = {
    */
   getProductionStatistics: async (
     params?: {
+      period?: ProductionPeriod;
+      /** @deprecated legacy callers may still pass dates; the production dashboard uses period. */
       startDate?: string;
+      /** @deprecated legacy callers may still pass dates; the production dashboard uses period. */
       endDate?: string;
       department?: string;
     },
@@ -280,7 +309,7 @@ export const dashboardAPI = {
       data: ProductionStatisticsData;
       message?: string;
     }>(`/api/mobile/${currentFactoryId}/reports/dashboard/production`, {
-      params,
+      params: params?.period ? { period: params.period } : params,
     });
     return response;
   },

@@ -51,6 +51,7 @@ export enum InspectionResult {
   PASS = 'PASS',
   FAIL = 'FAIL',
   CONDITIONAL = 'CONDITIONAL',
+  PENDING = 'PENDING',
 }
 
 /**
@@ -91,6 +92,9 @@ export interface QualityInspection {
   factoryId: string;
   productionBatchId: number;
   inspectorId: number;
+  batchNumber?: string;
+  inspectorName?: string;
+  inspectionResult?: string;
 
   // 检验数据
   inspectionDate: string; // ISO date string: YYYY-MM-DD
@@ -101,7 +105,7 @@ export interface QualityInspection {
   defectRate?: number; // 后端 @Transient 计算字段（failCount / sampleSize * 100）
 
   // 检验结果
-  result?: InspectionResult; // PASS, FAIL, CONDITIONAL
+  result?: InspectionResult | string; // PASS, FAIL, CONDITIONAL, PENDING, or backend extension
   qualityGrade?: string; // A, B, C, D (后端 @Transient 计算，基于 passRate)
   notes?: string;
 
@@ -140,6 +144,39 @@ export interface InspectionListParams {
 /**
  * 质量统计数据（后端返回Map<String, Object>）
  */
+export interface QualityStatusCounts {
+  PASS: number;
+  FAIL: number;
+  CONDITIONAL: number;
+  PENDING: number;
+  UNKNOWN: number;
+  EMPTY: number;
+}
+
+export interface QualitySummary {
+  startDate: string;
+  endDate: string;
+  totalInspections: number;
+  statusCounts: QualityStatusCounts;
+  passedInspections: number;
+  failedInspections: number;
+  conditionalInspections: number;
+  pendingInspections: number;
+  unknownInspections: number;
+  emptyResultInspections: number;
+  averagePassRate: number | null;
+  reportedPassRateCount: number;
+  missingPassRateCount: number;
+  decisionPassRate: number | null;
+  decidedInspectionCount: number;
+  totalSampleSize: number;
+  totalPassCount: number;
+  totalFailCount: number;
+  missingSampleSizeCount: number;
+  missingPassCount: number;
+  missingFailCount: number;
+}
+
 export interface QualityStatistics {
   totalInspections: number;
   passedInspections: number;
@@ -149,6 +186,7 @@ export interface QualityStatistics {
   totalSampleSize: number;
   totalPassCount: number;
   totalFailCount: number;
+  qualitySummary?: QualitySummary;
   [key: string]: any; // 后端可能返回额外字段
 }
 
