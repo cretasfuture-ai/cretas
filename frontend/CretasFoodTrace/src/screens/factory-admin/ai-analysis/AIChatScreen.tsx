@@ -102,6 +102,22 @@ function parseRestaurantAgentLaunch(
   return candidate as unknown as RestaurantAgentLaunch;
 }
 
+/** 随请求带上的最近几轮对话: 只为让「好了」「就是六十箱」这种话能被看懂, 不是完整会话。 */
+const MAX_RECENT_TURNS = 4;
+const MAX_TURN_CHARS = 200;
+
+export function buildRecentTurns(
+  history: ReadonlyArray<{ role: string; content: string; isLoading?: boolean }>,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const turns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const msg of history) {
+    if ((msg.role !== 'user' && msg.role !== 'assistant') || msg.isLoading) continue;
+    const content = (msg.content || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TURN_CHARS);
+    if (content) turns.push({ role: msg.role, content });
+  }
+  return turns.slice(-MAX_RECENT_TURNS);
+}
+
 // 消息类型
 interface Message {
   id: string;
@@ -818,17 +834,16 @@ function AIChatScreenContent() {
         },
       };
 
-      if (sendOptions?.intentCode) {
-        const streamOptions = {
-          intentCode: sendOptions.intentCode,
-          context: sendOptions.context,
-          ...(sessionId ? { sessionId } : {}),
-        };
+      // 最近对话只辅助识别；分页来源继续由服务端归属会话决定。
+      const recentTurns = buildRecentTurns(messages);
+      if (sendOptions?.intentCode || sendOptions?.context || recentTurns.length > 0 || sessionId) {
         await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, {
-          ...streamOptions,
+          ...(sendOptions?.intentCode ? { intentCode: sendOptions.intentCode } : {}),
+          ...((sendOptions?.context || recentTurns.length > 0) ? {
+            context: { ...(sendOptions?.context || {}), ...(recentTurns.length > 0 ? { recentTurns } : {}) },
+          } : {}),
+          ...(sessionId ? { sessionId } : {}),
         }, controller.signal);
-      } else if (sessionId) {
-        await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, { sessionId }, controller.signal);
       } else {
         await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, undefined, controller.signal);
       }

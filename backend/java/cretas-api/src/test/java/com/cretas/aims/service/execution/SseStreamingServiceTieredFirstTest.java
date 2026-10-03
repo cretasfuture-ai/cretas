@@ -126,7 +126,7 @@ class SseStreamingServiceTieredFirstTest {
                 .build();
         when(aiIntentService.recognizeIntentWithConfidence(
                 anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
-                any(), anyString(), any(), any(), any()))
+                any(), anyString(), any(), any(), any(), any()))
                 .thenReturn(noMatch);
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("帮我创建一个新活动")
@@ -160,7 +160,7 @@ class SseStreamingServiceTieredFirstTest {
                 .build();
         when(aiIntentService.recognizeIntentWithConfidence(
                 anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
-                any(), anyString(), any(), any(), any()))
+                any(), anyString(), any(), any(), any(), any()))
                 .thenReturn(match);
         // 权限放行, 让「没答」只可能来自这道闸 —— 否则 NO_PERMISSION 会替它挡住,
         // 变异时红的那句话就说不清是闸拦的还是权限拦的。
@@ -239,7 +239,7 @@ class SseStreamingServiceTieredFirstTest {
                 .build();
         when(aiIntentService.recognizeIntentWithConfidence(
                 anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
-                any(), anyString(), any(), any(), any()))
+                any(), anyString(), any(), any(), any(), any()))
                 .thenReturn(noMatch);
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("别看订单")

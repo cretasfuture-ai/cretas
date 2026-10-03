@@ -18,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,7 +46,7 @@ class SseStreamingFoodFallbackContractTest {
         when(config.getFastModel()).thenReturn("test-text-model");
         when(cache.queryCache("F006", QUESTION)).thenReturn(SemanticCacheHit.miss(0L));
         when(intents.recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any())).thenReturn(IntentMatchResult.builder()
+                eq("factory_super_admin"), any(), any(), any(), eq(List.of()))).thenReturn(IntentMatchResult.builder()
                 .matchMethod(IntentMatchResult.MatchMethod.NONE)
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         doNothing().when(service).sendSseEvent(any(), any(), any());
@@ -59,6 +60,7 @@ class SseStreamingFoodFallbackContractTest {
         assertThat(request.getValue().getMessages().get(1).getContent()).isEqualTo(QUESTION);
         verify(cache, never()).queryCache(any(), any());
         verify(intents, never()).recognizeIntentWithConfidence(any(), any(), anyInt(), any(), any(), any(), any(), any());
+        verify(intents, never()).recognizeIntentWithConfidence(any(), any(), anyInt(), any(), any(), any(), any(), any(), anyList());
     }
 
     @Test
@@ -78,7 +80,7 @@ class SseStreamingFoodFallbackContractTest {
         execute(Optional.of(AIIntentConfig.builder().intentCode("FOOD_KNOWLEDGE_QUERY").isActive(true).build()), false);
         verify(llm, never()).chatCompletionStream(any(), any(), any());
         verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any());
+                eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
     }
 
     @Test
@@ -87,6 +89,6 @@ class SseStreamingFoodFallbackContractTest {
         verify(llm, never()).chatCompletionStream(any(), any(), any());
         verify(cache).queryCache("F006", QUESTION);
         verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any());
+                eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
     }
 }

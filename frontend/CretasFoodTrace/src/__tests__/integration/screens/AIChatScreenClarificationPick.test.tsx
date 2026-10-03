@@ -158,12 +158,19 @@ describe('AIChatScreen 澄清按钮点选', () => {
     expect(factoryId).toBe('F006');
     expect(options).toEqual({
       intentCode: 'WORK_PROCESS_TASK_COMPLETE',
-      context: { clarificationSelection: true, clarificationCandidates: ['WORK_PROCESS_TASK_COMPLETE', 'ABACA_WEIGHT_LOG'] },
+      context: {
+        clarificationSelection: true,
+        clarificationCandidates: ['WORK_PROCESS_TASK_COMPLETE', 'ABACA_WEIGHT_LOG'],
+        recentTurns: [
+          { role: 'user', content: '就是六十箱' },
+          { role: 'assistant', content: '我不太确定您想执行什么操作。' },
+        ],
+      },
     });
     expect(screen.getAllByText('完成工序').length).toBeGreaterThan(0);
   });
 
-  it('对照: 非澄清按钮仍把按钮名字当一句新话发出去', async () => {
+  it('对照: 非澄清按钮仍把按钮名字当一句新话发出去 (只带上下文, 不带意图码)', async () => {
     const screen = render(<AIChatScreen />);
     await send(screen, '就是六十箱');
     await waitFor(() => expect(screen.getByTestId('suggested-action-2')).toBeTruthy());
@@ -171,6 +178,10 @@ describe('AIChatScreen 澄清按钮点选', () => {
 
     await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
     expect(mockExecuteIntentStream.mock.calls[1][0]).toBe('重新描述');
+    const options = mockExecuteIntentStream.mock.calls[1][4];
+    expect(options.intentCode).toBeUndefined();
+    expect(options.context.clarificationSelection).toBeUndefined();
+    expect(options.context.recentTurns).toHaveLength(2);
     expect(mockExecuteIntentStream.mock.calls[1]).toHaveLength(6);
     expect(mockExecuteIntentStream.mock.calls[1][5]).toBeInstanceOf(AbortSignal);
   });
@@ -266,5 +277,70 @@ describe('AIChatScreen 澄清按钮点选', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('AIChatScreen 最近对话', () => {
+  beforeEach(() => {
+    mockUser = factoryUser('F006');
+    mockRole = 'factory_super_admin';
+    mockExecuteIntentStream.mockReset();
+    mockExecuteIntentStream.mockImplementation(async (_m: string, callbacks: any) => {
+      callbacks.onResult?.({ status: 'COMPLETED', message: '包装线今天有 3 个任务', intentCode: 'X' });
+      callbacks.onComplete?.({ status: 'COMPLETED', cacheHit: false, totalLatencyMs: 700 });
+    });
+  });
+
+  it('第一句没有历史且仍传入取消信号', async () => {
+    const screen = render(<AIChatScreen />);
+    await send(screen, '今天包装线的任务');
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));
+    expect(mockExecuteIntentStream.mock.calls[0]).toHaveLength(6);
+    expect(mockExecuteIntentStream.mock.calls[0][4]).toBeUndefined();
+    expect(mockExecuteIntentStream.mock.calls[0][5]).toBeInstanceOf(AbortSignal);
+  });
+
+  it('第二句带上前一轮的问与答', async () => {
+    const screen = render(<AIChatScreen />);
+    await send(screen, '今天包装线的任务');
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getAllByText(/包装线今天有 3 个任务/).length).toBeGreaterThan(0));
+    await send(screen, '好了');
+
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
+    const [text, , , , options] = mockExecuteIntentStream.mock.calls[1];
+    expect(text).toBe('好了');
+    expect(options).toEqual({
+      context: {
+        recentTurns: [
+          { role: 'user', content: '今天包装线的任务' },
+          { role: 'assistant', content: '包装线今天有 3 个任务' },
+        ],
+      },
+    });
+  });
+});
+
+describe('buildRecentTurns', () => {
+  const { buildRecentTurns } = require('../../../screens/factory-admin/ai-analysis/AIChatScreen');
+
+  it('只留用户/助手、跳过加载中和空白、截断、取最后 4 轮', () => {
+    const turns = buildRecentTurns([
+      { role: 'system', content: '系统提示' },
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: '   ' },
+      { role: 'assistant', content: 'x'.repeat(300) },
+      { role: 'user', content: '三\n\n换行' },
+      { role: 'assistant', content: '四' },
+      { role: 'user', content: '五' },
+      { role: 'assistant', content: '', isLoading: true },
+    ]);
+    expect(turns).toEqual([
+      { role: 'assistant', content: 'x'.repeat(200) },
+      { role: 'user', content: '三 换行' },
+      { role: 'assistant', content: '四' },
+      { role: 'user', content: '五' },
+    ]);
+    expect(buildRecentTurns([])).toEqual([]);
   });
 });

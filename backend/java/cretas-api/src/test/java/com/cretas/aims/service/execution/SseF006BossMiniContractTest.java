@@ -30,6 +30,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -267,13 +268,13 @@ class SseF006BossMiniContractTest {
         SemanticCacheService cache = (SemanticCacheService) ReflectionTestUtils.getField(service, "semanticCacheService");
         when(cache.queryCache("F006", QUESTION)).thenReturn(SemanticCacheHit.miss(0L));
         when(intents.recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any())).thenReturn(IntentMatchResult.builder()
+                eq("factory_super_admin"), any(), any(), any(), eq(List.of()))).thenReturn(IntentMatchResult.builder()
                 .matchMethod(IntentMatchResult.MatchMethod.NONE)
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         execute("F006", 77L, "factory_super_admin", false);
         verifyNoInteractions(mini, cloud);
         verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any());
+                eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
     }
 
     @Test
