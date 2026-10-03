@@ -36,7 +36,10 @@ import {
   PaymentMethod,
   RecordTransactionRequest,
 } from '../../../services/api/financeApiClient';
-import { formatNumberWithCommas } from '../../../utils/formatters';
+import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
+import { useAuthStore } from '../../../store/authStore';
+import { getMobileFinancialScope, type MobileFinancialScope } from '../../../utils/mobileFinancialAccess';
+import { appAlert } from '../../../components/ui';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -125,7 +128,7 @@ function TxRow({ tx }: TxRowProps) {
           {tx.counterpartyName ?? tx.counterpartyId}
         </Text>
         <Text style={[styles.txAmount, { color: typeInfo.color }]}>
-          ¥{formatNumberWithCommas(tx.amount)}
+          {formatVisibleOrderAmount(tx.amount)}
         </Text>
       </View>
 
@@ -156,27 +159,27 @@ interface AgingRowProps {
 }
 
 function AgingRow({ row, isCustomer: _isCustomer }: AgingRowProps) {
-  const fmt = (v: number) => (v != null && v !== 0 ? `¥${formatNumberWithCommas(v)}` : '-');
+  const fmt = formatVisibleOrderAmount;
   return (
     <View style={styles.agingRow}>
       <View style={styles.agingNameCell}>
         <Text style={styles.agingName} numberOfLines={1}>
           {row.counterpartyName}
         </Text>
-        <Text style={styles.agingTotal}>{fmt(row.totalBalance)}</Text>
+        <Text style={styles.agingTotal}>{fmt(row.total)}</Text>
       </View>
 
       <View style={styles.agingBuckets}>
         <AgingBucket label="未到期" value={fmt(row.current)} color="#67c23a" />
-        <AgingBucket label="1-30天" value={fmt(row.days1to30)} color="#e6a23c" />
-        <AgingBucket label="31-60天" value={fmt(row.days31to60)} color="#e6a23c" />
-        <AgingBucket label="61-90天" value={fmt(row.days61to90)} color="#f56c6c" />
-        <AgingBucket label="91-180天" value={fmt(row.days91to180)} color="#f56c6c" />
+        <AgingBucket label="1-30天" value={fmt(row.days1_30)} color="#e6a23c" />
+        <AgingBucket label="31-60天" value={fmt(row.days31_60)} color="#e6a23c" />
+        <AgingBucket label="61-90天" value={fmt(row.days61_90)} color="#f56c6c" />
+        <AgingBucket label="91-120天" value={fmt(row.days91_120)} color="#f56c6c" />
         <AgingBucket
-          label=">180天"
-          value={fmt(row.over180)}
-          color={row.over180 > 0 ? '#f56c6c' : '#909399'}
-          bold={row.over180 > 0}
+          label=">120天"
+          value={fmt(row.days120plus)}
+          color={row.days120plus != null && row.days120plus > 0 ? '#f56c6c' : '#909399'}
+          bold={row.days120plus != null && row.days120plus > 0}
         />
       </View>
 
@@ -206,7 +209,24 @@ function AgingBucket({ label, value, color, bold }: AgingBucketProps) {
 // ==================== 主页面 ====================
 
 export default function ArApOverviewScreen() {
+  const user = useAuthStore(state => state.user);
   const navigation = useNavigation();
+  const scope = getMobileFinancialScope(user, 'finance');
+  if (!scope) return (
+    <View style={styles.container}>
+      <Appbar.Header><Appbar.BackAction onPress={() => navigation.goBack()} /><Appbar.Content title="应收应付管理" /></Appbar.Header>
+      <Text style={styles.emptyText}>当前账号无权查看应收应付</Text>
+    </View>
+  );
+  return <AuthorizedArApScreen key={scope.key} scope={scope} />;
+}
+
+function AuthorizedArApScreen({ scope }: { scope: MobileFinancialScope }) {
+  const navigation = useNavigation();
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const isCurrent = useCallback(() => mounted.current
+    && getMobileFinancialScope(useAuthStore.getState().user, 'finance')?.key === scope.key, [scope.key]);
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -225,75 +245,82 @@ export default function ArApOverviewScreen() {
 
   const PAGE_SIZE = 20;
 
-  const fmt = (v: number | null | undefined): string => {
-    if (v == null) return '-';
-    return `¥${formatNumberWithCommas(v)}`;
-  };
+  const fmt = formatVisibleOrderAmount;
 
   // ==================== 数据加载 ====================
 
   const loadOverview = useCallback(async () => {
+    if (!isCurrent()) return;
     try {
-      const res = await financeApiClient.getOverview();
+      const res = await financeApiClient.getOverview(scope.factoryId);
+      if (!isCurrent()) return;
+      if (!res.success) throw new Error('Overview failed');
       if (res.success) setOverview(res.data);
     } catch {
-      // overview is non-critical, silent fail
+      if (isCurrent()) { setOverview(null); void appAlert('错误', '加载财务概览失败'); }
     }
-  }, []);
+  }, [isCurrent, scope.factoryId]);
 
   const loadArTransactions = useCallback(async (page: number, append = false) => {
+    if (!isCurrent()) return;
     if (append) setArLoadingMore(true);
     try {
       const res = await financeApiClient.getTransactions({
         counterpartyType: 'CUSTOMER',
         page,
         size: PAGE_SIZE,
-      });
+      }, scope.factoryId);
+      if (!isCurrent()) return;
       if (res.success && res.data) {
         const newItems = res.data.content ?? [];
         setArTransactions(prev => (append ? [...prev, ...newItems] : newItems));
         setArTotal(res.data.totalElements ?? 0);
       }
     } catch {
-      if (!append) Alert.alert('错误', '加载应收记录失败');
+      if (isCurrent() && !append) Alert.alert('错误', '加载应收记录失败');
     } finally {
-      setArLoadingMore(false);
+      if (isCurrent()) setArLoadingMore(false);
     }
-  }, []);
+  }, [isCurrent, scope.factoryId]);
 
   const loadApTransactions = useCallback(async (page: number, append = false) => {
+    if (!isCurrent()) return;
     if (append) setApLoadingMore(true);
     try {
       const res = await financeApiClient.getTransactions({
         counterpartyType: 'SUPPLIER',
         page,
         size: PAGE_SIZE,
-      });
+      }, scope.factoryId);
+      if (!isCurrent()) return;
       if (res.success && res.data) {
         const newItems = res.data.content ?? [];
         setApTransactions(prev => (append ? [...prev, ...newItems] : newItems));
         setApTotal(res.data.totalElements ?? 0);
       }
     } catch {
-      if (!append) Alert.alert('错误', '加载应付记录失败');
+      if (isCurrent() && !append) Alert.alert('错误', '加载应付记录失败');
     } finally {
-      setApLoadingMore(false);
+      if (isCurrent()) setApLoadingMore(false);
     }
-  }, []);
+  }, [isCurrent, scope.factoryId]);
 
   const loadAging = useCallback(
     async (type: CounterpartyType) => {
+      if (!isCurrent()) return;
       try {
-        const res = await financeApiClient.getAging(type);
+        const res = await financeApiClient.getAging(type, scope.factoryId);
+        if (!isCurrent()) return;
         if (res.success) setAgingData(Array.isArray(res.data) ? res.data : []);
       } catch {
-        // non-critical
+        if (isCurrent()) Alert.alert('错误', '加载账龄失败');
       }
     },
-    []
+    [isCurrent, scope.factoryId]
   );
 
   const loadAll = useCallback(async () => {
+    if (!isCurrent()) return;
     setLoading(true);
     try {
       await Promise.all([
@@ -303,10 +330,9 @@ export default function ArApOverviewScreen() {
         loadAging(agingType),
       ]);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrent()) { setLoading(false); setRefreshing(false); }
     }
-  }, [agingType, loadOverview, loadArTransactions, loadApTransactions, loadAging]);
+  }, [agingType, loadOverview, loadArTransactions, loadApTransactions, loadAging, isCurrent]);
 
   useEffect(() => {
     loadAll();
@@ -340,24 +366,28 @@ export default function ArApOverviewScreen() {
 
   // ==================== KPI 数据 ====================
 
-  const netAmount = (overview?.totalReceivable ?? 0) - (overview?.totalPayable ?? 0);
+  const netAmount = overview?.netPosition ?? null;
+  const overdueAmount = overview?.overdueReceivable != null && overview?.overduePayable != null
+    ? overview.overdueReceivable + overview.overduePayable : null;
+  const overdueCount = overview?.overdueARCount != null && overview?.overdueAPCount != null
+    ? overview.overdueARCount + overview.overdueAPCount : null;
 
   const kpiValues: Record<string, { value: string; sub: string }> = {
     ar: {
       value: fmt(overview?.totalReceivable),
-      sub: `${overview?.receivableCount ?? 0} 笔未收`,
+      sub: overview?.receivableCount != null ? `${overview.receivableCount} 家未结` : '未结家数未提供',
     },
     ap: {
       value: fmt(overview?.totalPayable),
-      sub: `${overview?.payableCount ?? 0} 笔未付`,
+      sub: overview?.payableCount != null ? `${overview.payableCount} 家未结` : '未结家数未提供',
     },
     net: {
       value: fmt(netAmount),
-      sub: netAmount >= 0 ? '净应收' : '净应付',
+      sub: netAmount == null ? '金额未提供' : netAmount >= 0 ? '净应收' : '净应付',
     },
     overdue: {
-      value: fmt(overview?.overdueAmount),
-      sub: `${overview?.overdueCount ?? 0} 笔逾期`,
+      value: fmt(overdueAmount),
+      sub: overdueCount != null ? `${overdueCount} 笔逾期` : '逾期笔数未提供',
     },
   };
 
@@ -383,6 +413,7 @@ export default function ArApOverviewScreen() {
   ];
 
   const openPaymentModal = () => {
+    if (!isCurrent() || !scope.canWrite) return;
     setPaymentType(activeTab === 'ap' ? 'ap' : 'ar');
     setPaymentCounterpartyId('');
     setPaymentAmount('');
@@ -393,12 +424,13 @@ export default function ArApOverviewScreen() {
   };
 
   const handlePaymentSubmit = async () => {
+    if (!isCurrent() || !scope.canWrite || !paymentVisible || paymentSubmitting) return;
     if (!paymentCounterpartyId.trim()) {
       Alert.alert('提示', '请输入交易对手ID');
       return;
     }
-    const amount = parseFloat(paymentAmount);
-    if (isNaN(amount) || amount <= 0) {
+    const amount = Number(paymentAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
       Alert.alert('提示', '请输入有效金额');
       return;
     }
@@ -414,8 +446,9 @@ export default function ArApOverviewScreen() {
       };
 
       const res = paymentType === 'ar'
-        ? await financeApiClient.recordArPayment(request)
-        : await financeApiClient.recordApPayment(request);
+        ? await financeApiClient.recordArPayment(request, scope.factoryId)
+        : await financeApiClient.recordApPayment(request, scope.factoryId);
+      if (!isCurrent()) return;
 
       if (res.success) {
         Alert.alert('成功', paymentType === 'ar' ? '收款记录已创建' : '付款记录已创建');
@@ -425,9 +458,9 @@ export default function ArApOverviewScreen() {
         Alert.alert('失败', res.message || '操作失败');
       }
     } catch {
-      Alert.alert('错误', '请求失败');
+      if (isCurrent()) Alert.alert('错误', '请求失败');
     } finally {
-      setPaymentSubmitting(false);
+      if (isCurrent()) setPaymentSubmitting(false);
     }
   };
 
@@ -649,15 +682,16 @@ export default function ArApOverviewScreen() {
       )}
 
       {/* 收付款 FAB */}
-      <FAB
+      {scope.canWrite && <FAB
+        testID="finance-payment-create"
         icon="plus"
         style={styles.fab}
         onPress={openPaymentModal}
         label={activeTab === 'ap' ? '付款' : '收款'}
-      />
+      />}
 
       {/* 收付款弹窗 */}
-      <Portal>
+      {scope.canWrite && paymentVisible && <Portal>
         <Modal
           visible={paymentVisible}
           onDismiss={() => setPaymentVisible(false)}
@@ -733,8 +767,9 @@ export default function ArApOverviewScreen() {
               >
                 取消
               </Button>
-              <Button
-                mode="contained"
+            <Button
+              testID="finance-payment-submit"
+              mode="contained"
                 onPress={handlePaymentSubmit}
                 loading={paymentSubmitting}
                 disabled={paymentSubmitting}
@@ -745,7 +780,7 @@ export default function ArApOverviewScreen() {
             </View>
           </ScrollView>
         </Modal>
-      </Portal>
+      </Portal>}
     </View>
   );
 }

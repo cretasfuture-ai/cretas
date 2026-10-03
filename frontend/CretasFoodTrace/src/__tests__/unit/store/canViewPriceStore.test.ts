@@ -10,11 +10,12 @@ describe('canViewPriceForRole', () => {
     'platform_admin',
     'procurement_manager',
     'finance_manager',
-    'cashier',
     'sales_manager',
     'dispatcher',
     'production_manager',
     'restaurant_manager',
+    'restaurant_owner',
+    'restaurant_purchaser',
     'permission_admin',
     'department_admin',
   ])('allows price view for role %s', (role) => {
@@ -23,6 +24,7 @@ describe('canViewPriceForRole', () => {
 
   it.each([
     'warehouse_manager',
+    'cashier',
     'quality_inspector',
     'workshop_supervisor',
     'operator',
@@ -37,7 +39,7 @@ describe('canViewPriceForRole', () => {
     expect(canViewPriceForRole(undefined)).toBe(false);
   });
 
-  it('PRICE_VIEW_ROLES contains exactly 11 roles (includes cashier payment flow)', () => {
-    expect(PRICE_VIEW_ROLES.size).toBe(11);
+  it('PRICE_VIEW_ROLES contains the 12 backend price roles', () => {
+    expect(PRICE_VIEW_ROLES.size).toBe(12);
   });
 });

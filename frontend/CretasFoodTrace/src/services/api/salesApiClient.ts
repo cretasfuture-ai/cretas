@@ -27,8 +27,10 @@ export interface SalesOrder {
     // T-SHORT-SHIP (2026-09-04): 与后端 SalesOrderStatus.SHORT_CLOSED 对齐 —— 缺此值会让
     // TS 联合类型与运行时实际返回值不一致 (窄类型下这个真实状态会被判定成非法值)。
     | 'SHORT_CLOSED';
-  totalAmount: number;
+  /** Price-sensitive fields are null when the backend masks financial data. */
+  totalAmount: number | null;
   orderDate: string;
+  requiredDeliveryDate?: string | null;
   expectedDeliveryDate?: string;
   salesperson?: string;
   remark?: string;
@@ -71,9 +73,9 @@ export interface SalesOrderItem {
   deliveredQuantity: number;
   /** 未发货量 = quantity - deliveredQuantity（后端 @Transient getter）。 */
   pendingQuantity?: number;
-  unitPrice: number;
+  unitPrice: number | null;
   unit: string;
-  totalPrice: number;
+  totalPrice: number | null;
   // Sprint3-G S-LOCK-1: 行级 lockedQty / reservedQty 来自 sales_order_items 列;
   // shortageQty 后端 @Transient getter
   // (2026-08-28 起 = quantity - deliveredQuantity - reservedQty, clamp ≥0;

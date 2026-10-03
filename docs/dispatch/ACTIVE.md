@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c0248188ca` — R1源码/CI修复已完成并归档，#876待最终门禁/合入/Java发布。继续F006全角色流程、R2/R3/R4/R6/R8真机回读及老板Mac mini问答；本行仅协调/验收，不占用已归档源码scope。详见archive/2026-10-03-f006-mobile-audit.md。
+
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
 - `CRETAS-ORG-20261003-G1` — `blocked` — Owner: `01a10277-0b68-7cb3-88ee-f221c9fce4ba` — Base `35e017dc526255c39956195a11b06b6c93916a31` — Java/Web固定包已验SHA，Web795资产一致；未安装，真实issuer/期限/身份与新QA资格仍待验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。

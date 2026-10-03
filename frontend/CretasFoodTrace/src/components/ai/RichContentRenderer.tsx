@@ -7,6 +7,7 @@
 
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { getListCellValue, getListDisplayKeys } from './richListPresentation';
 
 export interface RichData {
   /** Content type hint from backend (optional) */
@@ -82,10 +83,7 @@ function ListRenderer({ items, pagination }: { items: unknown[]; pagination: Ric
 
   // Extract column keys from first item
   const firstItem = items[0] as Record<string, unknown>;
-  const displayKeys = Object.keys(firstItem)
-    .filter(k => !k.endsWith('Id') && k !== 'id' && k !== 'factoryId' &&
-                 typeof firstItem[k] !== 'object')
-    .slice(0, 5); // Max 5 columns for mobile
+  const displayKeys = getListDisplayKeys(firstItem);
 
   return (
     <View style={listStyles.container}>
@@ -106,7 +104,7 @@ function ListRenderer({ items, pagination }: { items: unknown[]; pagination: Ric
             <View key={idx} style={[listStyles.dataRow, idx % 2 === 0 && listStyles.evenRow]}>
               {displayKeys.map(key => (
                 <Text key={key} style={listStyles.dataCell} numberOfLines={2}>
-                  {formatValue(row[key])}
+                  {formatValue(getListCellValue(row, key))}
                 </Text>
               ))}
             </View>
@@ -180,6 +178,9 @@ const COLUMN_NAMES: Record<string, string> = {
   totalOrders: '总订单', totalElements: '总记录数',
   currentPage: '当前页', hasMore: '有更多',
   statusDisplayName: '状态',
+  materialName: '物料名称', materialCode: '物料编码',
+  materialCategory: '物料类别', materialMainCategory: '物料大类',
+  currentQuantity: '账面数量', unit: '单位', quantityUnit: '单位',
 };
 
 function formatColumnName(key: string): string {

@@ -5,7 +5,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchaseApiClient';
-import { formatNumberWithCommas } from '../../../utils/formatters';
+import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { todayIso } from '../../../utils/orderDate';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
 import { useAuthStore } from '../../../store/authStore';
@@ -54,12 +54,16 @@ export default function PurchaseOrderDetailScreen() {
   };
 
   const handleAction = async (action: string) => {
+    const currentUser = useAuthStore.getState().user;
+    if (!currentUser || isMobileBusinessObserver(currentUser)) return;
     const actionLabels: Record<string, string> = {
       submit: '提交审批', approve: '审批通过', reject: '驳回', cancel: '取消',
     };
     appAlert('确认', `确认${actionLabels[action]}？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
+        const currentUser = useAuthStore.getState().user;
+        if (!currentUser || isMobileBusinessObserver(currentUser)) return;
         try {
           let res;
           switch (action) {
@@ -75,19 +79,29 @@ export default function PurchaseOrderDetailScreen() {
   };
 
   const handleEditDraft = () => {
-    if (!order) return;
+    const currentUser = useAuthStore.getState().user;
+    if (!order || !currentUser || isMobileBusinessObserver(currentUser)) return;
     // ⛔ 原本用 Alert.prompt —— iOS 专有 API, Android 上「编辑备注」是死按钮。
     appPrompt(
       '编辑备注',
       '修改采购单备注（其他字段请在Web端编辑）',
       async (newRemark) => {
+          const currentUser = useAuthStore.getState().user;
+          if (!currentUser || isMobileBusinessObserver(currentUser)) return;
           try {
-            const items = (order.items || []).map(item => ({
+            const items: { materialTypeId: string; quantity: number; unitPrice: number; unit: string }[] = [];
+            for (const item of order.items || []) {
+              if (item.unitPrice === null || !Number.isFinite(item.unitPrice)) {
+                appAlert('无法保存', '订单单价未提供，请刷新订单或联系有价格权限的管理员');
+                return;
+              }
+              items.push({
               materialTypeId: item.materialTypeId,
               quantity: item.quantity,
               unitPrice: item.unitPrice,
               unit: item.unit || 'kg',
-            }));
+              });
+            }
             const res = await purchaseApiClient.updateOrder(orderId, {
               supplierId: order.supplierId,
               // 后端 @NotNull —— 改备注也走整单更新契约, 不带就 400。
@@ -137,7 +151,7 @@ export default function PurchaseOrderDetailScreen() {
             </View>
             <Divider style={styles.divider} />
             <InfoRow label="供应商" value={order.supplierName || order.supplierId} />
-            <InfoRow label="总金额" value={`¥${formatNumberWithCommas(order.totalAmount)}`} valueStyle={styles.amountText} />
+            <InfoRow label="总金额" value={formatVisibleOrderAmount(order.totalAmount)} valueStyle={styles.amountText} />
             <InfoRow label="下单日期" value={order.orderDate} />
             <InfoRow label="预计到货" value={order.expectedDeliveryDate || '-'} />
             <InfoRow label="审批人" value={order.approvedBy || '-'} />
@@ -161,7 +175,7 @@ export default function PurchaseOrderDetailScreen() {
                   <DataTable.Cell>{item.materialName || item.materialTypeId}</DataTable.Cell>
                   <DataTable.Cell numeric>{item.quantity} {item.unit}</DataTable.Cell>
                   <DataTable.Cell numeric>{item.receivedQuantity}</DataTable.Cell>
-                  <DataTable.Cell numeric>¥{formatNumberWithCommas(item.unitPrice)}</DataTable.Cell>
+                  <DataTable.Cell numeric>{formatVisibleOrderAmount(item.unitPrice)}</DataTable.Cell>
                 </DataTable.Row>
               ))}
             </DataTable>
@@ -227,6 +241,7 @@ export default function PurchaseOrderDetailScreen() {
 
         <View style={{ height: 30 }} />
       </ScrollView>
+      <AppDialogHost key={isOperationsReadOnly ? 'observer' : 'writer'} />
     </View>
   );
 }
@@ -236,7 +251,6 @@ function InfoRow({ label, value, valueStyle }: { label: string; value: string; v
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
       <Text style={[styles.infoValue, valueStyle]}>{value}</Text>
-      <AppDialogHost />
     </View>
   );
 }
