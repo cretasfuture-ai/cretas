@@ -1,7 +1,9 @@
 package com.cretas.aims.config;
 
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.utils.JwtUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +43,7 @@ class JwtAuthInterceptorFactoryClosedTest {
     @Mock private JwtUtil jwtUtil;
     @Mock private TokenBlacklistService tokenBlacklistService;
     @Mock private FactoryRepository factoryRepository;
+    @Mock private UserRepository userRepository;
 
     private JwtAuthInterceptor interceptor;
 
@@ -50,11 +53,19 @@ class JwtAuthInterceptorFactoryClosedTest {
         ReflectionTestUtils.setField(interceptor, "jwtUtil", jwtUtil);
         ReflectionTestUtils.setField(interceptor, "tokenBlacklistService", tokenBlacklistService);
         ReflectionTestUtils.setField(interceptor, "factoryRepository", factoryRepository);
+        ReflectionTestUtils.setField(interceptor, "userRepository", userRepository);
 
         when(jwtUtil.validateToken(anyString())).thenReturn(true);
         when(tokenBlacklistService.isBlacklisted(anyString())).thenReturn(false);
         when(jwtUtil.getUserIdFromToken(anyString())).thenReturn(77L);
         when(jwtUtil.getUsernameFromToken(anyString())).thenReturn("op1");
+        when(userRepository.findById(77L)).thenAnswer(invocation -> {
+            User user = new User();
+            user.setId(77L);
+            user.setFactoryId(jwtUtil.getFactoryIdFromToken("some-token"));
+            user.setIsActive(true);
+            return Optional.of(user);
+        });
     }
 
     private void tokenOf(String factoryId, String role) {
