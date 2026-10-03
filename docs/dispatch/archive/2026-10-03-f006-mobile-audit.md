@@ -14,6 +14,7 @@
 - 当前台账条目和本记录。后端权限、实体、Repository、全局配置、历史关联账务不在当前修复范围。
 - 扩展：`src/utils/mobileRoleBoundaries.ts`、`visibleOrderAmount.ts` 及测试；`screens/factory-admin/inventory/{SalesOrderListScreen,SalesOrderDetailScreen,PurchaseOrderListScreen,PurchaseOrderDetailScreen}.tsx`、`services/api/{salesApiClient,purchaseApiClient}.ts`、既有销售列表屏级集成测试与 `OrderDetailReadBoundary.test.tsx`。仅收紧 viewer 的移动端写入口与正确显示空金额，不更改后端权限矩阵；长按菜单绑定只读状态，确认与编辑回调发送前重读当前角色，隐藏单价禁止整单更新。
 - nullable 关联范围：`screens/warehouse/inbound/WHReceiptCreateScreen.tsx` 的收货草稿省略遮罩单价，真实零值保留。API 创建请求类型不改成可空，也不补假零。
+- 首页入口权限范围：`screens/main/homeModules.ts` 及既有 `homeModulesNonEmptyPerRole.test.ts`。采购主管真机送货签收 GET 被 warehouse/finance 权限拒绝，首页卡片须同时匹配页面实际要求的任一读模块；不替角色授予额外权限。
 
 ## 当前证据与限制
 
@@ -60,6 +61,9 @@
 - `node node_modules/jest/bin/jest.js --runInBand --runTestsByPath src/components/ai/__tests__/richListPresentation.test.ts src/components/ai/__tests__/RichContentRenderer.test.tsx`：6 项通过。
 - `node node_modules/jest/bin/jest.js --runInBand --runTestsByPath src/utils/__tests__/currentPosition.test.ts src/__tests__/screens/TimeClockLocationRecovery.test.tsx`：9 项通过，覆盖超时、取消、迟到监听清理、权限拒绝与重试；不会自动打卡。
 - `node node_modules/typescript/bin/tsc --noEmit`：库存与定位修复后均通过。
+- 同步 `origin/main` 到 `05369c9893` 后，9 套目标 Jest 共 72 项通过、全量 TypeScript 通过；首页模块闸补测 11 项通过，随后 TypeScript 通过。独立只读风险复核未发现本批实现阻断，不代表真机或发布完成。
+- 18 角色的 54 次修改权限 HTTP 探测只指向事前 SQL 证明不存在的 F006 随机订单 ID / 负数设备 ID。有写权返回 404、无写权返回 403 全部符合；事后 SQL 三类目标仍各 0 行。修改 HTTP 尝试为 54，目标 ERP 行变更为 0，登录/审计元数据另计。
+- 新发现：sales_manager 应收应付读取受 finance 权限拒绝；viewer 价格表受采购价格查看权限拒绝。当前首页送货签收修复不覆盖创建送货后“去验收”的详情路径，也不代表所有只读共享屏写入口已清零。
 - 18 个活跃角色已完成 L1 登录和主要页签观察，设备管理员的许可弹窗页面需补核验。首道报工空表提交正确拦截，提示选择领料批次，未录入历史批次投入。
 - 手机 Cretas 前台定位权限已开启（fine/coarse），USB 相关权限原本均开启；没有授予其他应用权限。
 - 修复后的真机验收、PR、合并和发布尚未完成。
