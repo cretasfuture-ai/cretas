@@ -81,7 +81,7 @@ jobs:
           case "$rc" in
             0) ;;
             2) echo "::error title=Fresh DB 没量到(rc=2)::启动超时或读数读不出 —— ⛔ 不是迁移失败。看日志里 READING: FRESH_DB_STARTUP 的 state / elapsed_s / flyway_done_s; 反复出现再调 FRESH_DB_STARTUP_TIMEOUT" ;;
-            *) echo "::error title=Fresh DB 闸红(rc=$rc)::迁移失败 / 启动崩溃 / 形状倒退 —— 看日志里 [fresh-db] ERROR 那一行" ;;
+            *) echo "::error title=Fresh DB 闸红(rc=$rc)::编译失败 / 迁移失败 / 启动崩溃 / 形状倒退 —— 看日志里 [fresh-db] ERROR 那一行" ;;
           esac
           exit "$rc"
 
@@ -119,4 +119,4 @@ jobs:
           # ⚠️ 这里**写全名**, ⛔ 不用 FRESH_DB_(A|B) 这种嵌套交替 ——
           #    嵌套之后「消费方要哪些读数」就不是机械可解析的了,
           #    而下面那道 6e 闸(核对消费方的名字闸是否真会产出)正是靠解析它。
-          grep -E 'READING: (FRESH_DB_SHAPE|FRESH_DB_SHAPE_FLOOR|FRESH_DB_FAILURE|FRESH_DB_STARTUP|FRESH_DB_ENV|BASELINE_BOOTSTRAP|BASELINE_LOAD_SHAPE) ' /tmp/fresh-db-progress.log
+          grep -E 'READING: (FRESH_DB_SHAPE|FRESH_DB_SHAPE_FLOOR|FRESH_DB_FAILURE|FRESH_DB_STARTUP|FRESH_DB_COMPILE|FRESH_DB_ENV|BASELINE_BOOTSTRAP|BASELINE_LOAD_SHAPE) ' /tmp/fresh-db-progress.log

@@ -21,6 +21,7 @@
 #      (本仓栽过: grep 无命中 rc=1 + pipefail ⇒ 三态检查永远走不到)
 #   ⑥ 接线(形态 B): 闸真的 source 并调用了这些函数; unmeasured 真的 exit 2;
 #      工作流把 rc=2 与 rc=1 分开报
+#   ⑦ 编译提前: 主代码编译在 spring-boot:run 与预算计时之前单独一步, 两处都跳过测试编译
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -157,6 +158,27 @@ grep -qF 'startup_state=$(classify_startup_outcome "$BACKEND_LOG" "$healthy" "$d
 grep -qF 'READING: FRESH_DB_STARTUP state=$startup_state' "$GATE" || fail "⑥: 闸没有打 FRESH_DB_STARTUP 读数"
 # 闸的超时判定用墙钟, ⛔ 不是循环次数
 grep -qF 'boot_deadline=$((SECONDS + STARTUP_TIMEOUT))' "$GATE" || fail "⑥: 启动预算不是墙钟秒"
+# ⑦ 编译提前: 编译单独一步, 在启动预算开始计时**之前**; 两处都跳过测试编译。
+#    ⚠️ 守的是**顺序**: 编译挪进预算之后(或 spring-boot:run 又去编 1693 个测试源文件),
+#    #868 那趟 298s 里 203s 是编译的局面就回来了, 而预算读数看不出来。
+ln_of() { grep -nF -- "$1" "$GATE" | grep -v '^[0-9]*:[[:space:]]*#' | head -1 | cut -d: -f1; }
+l_compile=$(ln_of 'run_maven -B compile -Dmaven.test.skip=true')
+l_compile_reading=$(ln_of 'READING: FRESH_DB_COMPILE rc=$compile_rc')
+l_run=$(ln_of 'run_maven -B spring-boot:run')
+l_t0=$(ln_of 'boot_t0=$SECONDS')
+for v in l_compile l_compile_reading l_run l_t0; do
+    [ -n "${!v}" ] || fail "⑦: 闸里找不到 $v 对应的那一行 —— 编译提前这一步不在了?"
+done
+[ "$l_compile" -lt "$l_run" ] && [ "$l_run" -lt "$l_t0" ] \
+    || fail "⑦: 顺序不对 (compile=$l_compile spring-boot:run=$l_run boot_t0=$l_t0) —— 编译必须在启动、在预算计时之前"
+sed -n "$l_run,$((l_run + 3))p" "$GATE" | grep -qF -- '-Dmaven.test.skip=true' \
+    || fail "⑦: spring-boot:run 没带 -Dmaven.test.skip=true —— 它的 fork 会在预算里重新编测试源文件"
+# 编译失败是 rc=1 的真失败, 且措辞说「编译」, ⛔ 不像启动超时
+sed -n "$l_compile_reading,$((l_compile_reading + 4))p" "$GATE" | grep -qE 'fail "compile: .*编译失败' \
+    || fail "⑦: 编译失败没有以「编译失败」当场红"
+echo "READING: PRECOMPILE_ORDER compile=$l_compile spring_boot_run=$l_run budget_t0=$l_t0"
+ok "编译在启动与预算计时之前单独一步, 两处都跳过测试编译, 编译失败当场红"
+
 # unmeasured 真的 exit 2(行为, ⛔ 不是 grep 「exit 2」字样)
 um=$(awk '/^unmeasured\(\) \{/{c=1} c{print} c&&/^}$/{exit}' "$GATE")
 [ -n "$um" ] || fail "⑥: 闸里找不到 unmeasured()"
