@@ -243,10 +243,14 @@ jobs:
           set -uo pipefail
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           echo "MVN_USED=$MVN"
+          # 堆与 java-gate-pr 同一个口: runner .env 的 CRETAS_JAVA_FORK_XMX(加拿大/aurora VM = 6g)。
+          # 2026-10-04 首跑加拿大(run 37139116569): 写死 3g -> 6 次 OutOfMemoryError, 只跑到
+          # 2879/12012 个测试, 棘轮判 rc=2。本机不设 = 3g, 行为不变。
+          echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           "$MVN" -B test \
             -Dmaven.test.failure.ignore=true \
             -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError"
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g} -XX:+HeapDumpOnOutOfMemoryError"
 
       - name: Ratchet — 已知红只许变少
         id: ratchet
