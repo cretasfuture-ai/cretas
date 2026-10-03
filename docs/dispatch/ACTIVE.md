@@ -1,5 +1,5 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-09-29（归档仓库地图视觉模型接入；其余未动）
+**最后更新**：2026-10-03（补登 Codex 10-02/03 八个 PR、#861、OTA 补推，均已完成，见 `archive/2026-10-03-codex-batch-ota-operating-reports.md`；#855 验收在飞；其余未动）
 **上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
@@ -14,6 +14,8 @@
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
+- `ACCEPT-OPERATING-REPORTS-855-20261003` — `in-progress` — Owner: organizer — #855 经营报告 API 层已过（超管生成 14404；仓库主管读同报告 0 金额 0 毛利、生成被拒）。发现生成侧「需价格权」闸无真实角色可触发，只靠单测。剩 web-admin 截图验收，等 owner 在浏览器面板登录。详情 `archive/2026-10-03-codex-batch-ota-operating-reports.md`。
+- `OPEN-CODEX-PRS-20261003` — `queued` — Owner: Codex/owner — #862 五张旧销售报表 400/403 显示真实错误（web-admin，Draft，等 owner 发布）；#856 托盘训练排除照片不回流（只改 tools/，CI 只跑 2 道闸不覆盖 tools/，未训练未上线）。
 - `FEAT-SEED-CONSUME-LIVE-CATTLE-20260915` — `in-progress` — Owner: sister(executor/Opus) — C1 种子缺口: 从不领用 6 个活牛批次 ⇒ 无 RAW_TO_PRODUCTION 边, 溯源无上游。加领用步骤(幂等) + SPECIES 改「牛」+ 终态断言(count=6/最远层全带个体/公开侧脱敏) + 本机两遍验收 + 变异。只到 PR。🔒 Scope: scripts/e2e/shenglong-demo/seed-cattle-demo.py
 - `OPS-OTA-DEMO-BUNDLE-20260915` — `in-progress` — Owner: organizer — 🔒 两推均已核: 第 1 推 06:41 ts=1789425596125(#797); 第 2 推 07:05 ts=1789427030082(main `ef32c456ce`, 含 #798 RN), ota 域 manifest createdAt 23:05:44Z 含该 ts, CDN `index-41faa7f0….hbc` GET 6,764,861B/200。仅剩真机行为读数, 等 Steve 周二手机。
 - `OPS-LINEAGE-FINISHED-ALIGN-AMBIGUOUS-20260915` — `queued` — Owner: 无 — 回填对不齐 7 条(F006 计划 8cf3fa56/ffeb2d34/40b47b4b 各多批次), 对齐器拒绝猜 ⇒ 这些成品批次无 PROD→FIN 边。要按批次号/时间二次对齐或人工映射, ⛔ 不猜。
