@@ -2,6 +2,7 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.dto.MobileDTO;
+import com.cretas.aims.dto.AIRequestDTO;
 import com.cretas.aims.entity.AIAnalysisResult;
 import com.cretas.aims.entity.AIAuditLog;
 import com.cretas.aims.entity.AIQuotaUsage;
@@ -60,6 +61,15 @@ import java.util.stream.Collectors;
 @Service
 public class AIEnterpriseService {
     private static final Logger log = LoggerFactory.getLogger(AIEnterpriseService.class);
+
+    @Autowired
+    private com.cretas.aims.service.reports.OperatingReportGenerator operatingReports;
+    @Autowired
+    private com.cretas.aims.service.reports.OperatingReportProjection operatingProjection;
+    @Autowired
+    private com.cretas.aims.service.reports.OperatingReportCodec operatingCodec;
+    @Autowired
+    private com.cretas.aims.service.reports.OperatingReportReadAccess operatingReadAccess;
 
     @Autowired
     private AIAnalysisService basicAIService;
@@ -216,6 +226,10 @@ public class AIEnterpriseService {
      */
     @Transactional
     public void generateWeeklyReport(String factoryId, LocalDate weekStart, LocalDate weekEnd) {
+        if (operatingReports.isFactory(factoryId)) {
+            operatingReports.scheduled(factoryId, "weekly", weekStart, weekEnd);
+            return;
+        }
         try {
             log.info("开始生成周报告: factoryId={}, week={} to {}",
                     factoryId, weekStart, weekEnd);
@@ -253,6 +267,10 @@ public class AIEnterpriseService {
      */
     @Transactional
     public void generateMonthlyReport(String factoryId, LocalDate monthStart, LocalDate monthEnd) {
+        if (operatingReports.isFactory(factoryId)) {
+            operatingReports.scheduled(factoryId, "monthly", monthStart, monthEnd);
+            return;
+        }
         try {
             log.info("开始生成月报告: factoryId={}, month={} to {}",
                     factoryId, monthStart, monthEnd);
@@ -311,6 +329,10 @@ public class AIEnterpriseService {
      */
     @Transactional
     public void generateDailyReport(String factoryId, LocalDate reportDate) {
+        if (operatingReports.isFactory(factoryId)) {
+            operatingReports.scheduled(factoryId, "daily", reportDate, reportDate);
+            return;
+        }
         try {
             LocalDateTime dayStart = reportDate.atStartOfDay();
             LocalDateTime dayEnd = reportDate.atTime(23, 59, 59);
@@ -515,11 +537,38 @@ public class AIEnterpriseService {
         return sb.toString();
     }
 
+    public boolean supportsOperatingReports(String factoryId) {
+        return operatingReports.isFactory(factoryId);
+    }
+
+    public MobileDTO.AICostAnalysisResponse generateOperatingReport(String factoryId, com.cretas.aims.entity.User actor,
+                                                                    AIRequestDTO.ReportGenerationRequest request) {
+        LocalDate start = request.getStartDate();
+        LocalDate end = request.getEndDate();
+        if ("daily".equals(request.getReportType())) {
+            if (start == null) start = LocalDate.now();
+            if (end == null) end = start;
+        }
+        checkQuotaOrThrow(factoryId, "time_range");
+        AIAnalysisResult record = operatingReports.manual(factoryId, actor, request.getReportType(), start, end);
+        if (operatingCodec.decode(record.getAnalysisText()).orElseThrow().status()
+                == com.cretas.aims.service.reports.OperatingReportSnapshot.Status.SUCCESS) {
+            consumeQuota(factoryId, getQuotaCostFromConfig(factoryId, "time_range"));
+        }
+        return operatingProjection.detail(record, true);
+    }
+
     /**
      * 获取工厂的AI报告列表
      */
     public MobileDTO.AIReportListResponse getReportList(String factoryId,
                                                         MobileDTO.AIReportListRequest request) {
+        return getReportList(factoryId, request, false);
+    }
+
+    public MobileDTO.AIReportListResponse getReportList(String factoryId,
+                                                        MobileDTO.AIReportListRequest request, boolean canViewPrices) {
+        boolean legacyContract = operatingReports.usesLegacyReportContract(factoryId);
         List<AIAnalysisResult> reports;
 
         if (request.getReportType() != null) {
@@ -537,7 +586,9 @@ public class AIEnterpriseService {
 
         // 转换为摘要格式
         List<MobileDTO.AIReportSummary> summaries = reports.stream()
-                .map(this::toReportSummary)
+                .filter(r -> legacyContract || request.getStartDate() == null || (r.getPeriodStart() != null && !r.getPeriodStart().isBefore(request.getStartDate())))
+                .filter(r -> legacyContract || request.getEndDate() == null || (r.getPeriodEnd() != null && !r.getPeriodEnd().isAfter(request.getEndDate())))
+                .map(r -> legacyContract ? toReportSummary(r) : operatingProjection.summary(r, canViewPrices))
                 .collect(Collectors.toList());
 
         return MobileDTO.AIReportListResponse.builder()
@@ -575,6 +626,10 @@ public class AIEnterpriseService {
      * @return AI报告详情
      */
     public MobileDTO.AICostAnalysisResponse getReportDetail(String factoryId, Long reportId) {
+        return getReportDetail(factoryId, reportId, false);
+    }
+
+    public MobileDTO.AICostAnalysisResponse getReportDetail(String factoryId, Long reportId, boolean canViewPrices) {
         // 1. 查询报告
         AIAnalysisResult report = analysisResultRepository.findById(reportId)
                 .orElseThrow(() -> new RuntimeException("报告不存在: reportId=" + reportId));
@@ -594,7 +649,8 @@ public class AIEnterpriseService {
                 factoryId, reportId, report.getReportType());
 
         // 4. 构建响应
-        return buildResponseFromCache(report, factoryId);
+        return operatingReports.usesLegacyReportContract(factoryId)
+                ? buildResponseFromCache(report, factoryId) : operatingProjection.detail(report, canViewPrices);
     }
 
     /**
@@ -1834,6 +1890,9 @@ public class AIEnterpriseService {
      * 从缓存构建响应
      */
     private MobileDTO.AICostAnalysisResponse buildResponseFromCache(AIAnalysisResult cached, String factoryId) {
+        if (!operatingReports.usesLegacyReportContract(factoryId) && operatingCodec.decode(cached.getAnalysisText()).isPresent()) {
+            return operatingProjection.detail(cached, operatingReadAccess.current(factoryId));
+        }
         return MobileDTO.AICostAnalysisResponse.builder()
                 .success(true)
                 .analysis(cached.getAnalysisText())

@@ -1,3 +1,6 @@
+import OperatingReportStackNavigator from './OperatingReportStackNavigator';
+import { canAccessOperatingReports } from '../utils/operatingReportAccess';
+import { useAuthStore } from '../store/authStore';
 /**
  * Warehouse Manager Tab 导航器
  * 用于仓储管理员 (warehouse_manager) 和仓储员工 (warehouse_worker) 角色
@@ -38,7 +41,7 @@ import WHInventoryStackNavigator from "./warehouse/WHInventoryStackNavigator";
 import WHProfileStackNavigator from "./warehouse/WHProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
-const Tab = createBottomTabNavigator<WarehouseManagerTabParamList>();
+const Tab = createBottomTabNavigator<WarehouseManagerTabParamList & { WHOperatingReportsTab: undefined }>();
 
 // Tab栏配色 - 仓储主题色 (绿色)
 const TAB_COLORS = {
@@ -77,6 +80,8 @@ export function WarehouseManagerTabNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
   const inboundEnabled = isScreenEnabled('InboundManagement');
   const outboundEnabled = isScreenEnabled('OutboundManagement');
+  const user = useAuthStore((state) => state.user);
+  const operatingReportsEnabled = isScreenEnabled('SmartBI') && canAccessOperatingReports(user);
 
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
@@ -153,6 +158,11 @@ export function WarehouseManagerTabNavigator() {
       />
       )}
 
+      {operatingReportsEnabled && (
+        <Tab.Screen name="WHOperatingReportsTab" component={OperatingReportStackNavigator}
+          options={{ title: '经营', tabBarButtonTestID: 'wh-tab-operating-reports',
+            tabBarIcon: ({ color, size }) => <Icon source="file-chart-outline" color={color} size={size} /> }} />
+      )}
       {/* 我的Tab */}
       <Tab.Screen
         name="WHProfileTab"

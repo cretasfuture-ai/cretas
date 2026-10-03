@@ -70,6 +70,9 @@ public class AIController {
     private AIEnterpriseService aiEnterpriseService;
 
     @Autowired
+    private com.cretas.aims.service.reports.OperatingReportReadAccess operatingReadAccess;
+
+    @Autowired
     private AIAnalysisService basicAIService;
 
     @Autowired
@@ -355,7 +358,7 @@ public class AIController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
             @Parameter(description = "开始日期") LocalDateTime startDate,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
-            @Parameter(description = "结束日期") LocalDateTime endDate) {
+            @Parameter(description = "结束日期") LocalDateTime endDate, HttpServletRequest httpRequest) {
 
         log.info("获取AI报告列表: factoryId={}, reportType={}", factoryId, reportType);
 
@@ -367,7 +370,7 @@ public class AIController {
                 .build();
 
         // 调用企业级AI服务获取报告列表
-        MobileDTO.AIReportListResponse reports = aiEnterpriseService.getReportList(factoryId, request);
+        MobileDTO.AIReportListResponse reports = aiEnterpriseService.getReportList(factoryId, request, canViewReportPrices(factoryId, httpRequest));
 
         return ApiResponse.success(reports);
     }
@@ -380,12 +383,12 @@ public class AIController {
                description = "获取指定AI报告的完整内容")
     public ApiResponse<MobileDTO.AICostAnalysisResponse> getReportDetail(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "报告ID") Long reportId) {
+            @PathVariable @Parameter(description = "报告ID") Long reportId, HttpServletRequest httpRequest) {
 
         log.info("获取AI报告详情: factoryId={}, reportId={}", factoryId, reportId);
 
         // 调用企业级AI服务获取报告详情
-        MobileDTO.AICostAnalysisResponse response = aiEnterpriseService.getReportDetail(factoryId, reportId);
+        MobileDTO.AICostAnalysisResponse response = aiEnterpriseService.getReportDetail(factoryId, reportId, canViewReportPrices(factoryId, httpRequest));
 
         return ApiResponse.success(response);
     }
@@ -405,8 +408,14 @@ public class AIController {
 
         // 从Token获取用户ID
         String token = TokenUtils.extractToken(httpRequest.getHeader("Authorization"));
-        Long userId = (long) mobileService.getUserFromToken(token).getId();
+        if (Set.of("daily", "weekly", "monthly").contains(request.getReportType())
+                && aiEnterpriseService.supportsOperatingReports(factoryId)) {
+            com.cretas.aims.entity.User reportActor = operatingReadAccess.actor(factoryId, httpRequest);
+            if (!canViewReportPrices(factoryId, httpRequest)) throw new BusinessException(403, "经营报告生成需要价格查看权限");
+            return ApiResponse.success(aiEnterpriseService.generateOperatingReport(factoryId, reportActor, request));
+        }
 
+        Long userId = mobileService.getUserFromToken(token).getId();
         log.info("生成AI报告: factoryId={}, userId={}, reportType={}",
                 factoryId, userId, request.getReportType());
 
@@ -451,6 +460,10 @@ public class AIController {
                 factoryId, request.getReportType(), response.getReportId());
 
         return ApiResponse.success(response);
+    }
+
+    private boolean canViewReportPrices(String factoryId, HttpServletRequest request) {
+        return aiEnterpriseService.supportsOperatingReports(factoryId) && operatingReadAccess.canView(factoryId, request);
     }
 
     // ========== 健康检查接口 ==========

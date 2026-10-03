@@ -38,6 +38,8 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     // /smart-bi/analysis-hub 同一形状，见下方 WS4 注释)。
     '/warehouse/stocktake-query',
     '/finance',
+    '/analytics/ai-reports', // factory operating reports; server projects financial text by price permission
+
     // 销售/采购审批统一在个人 OA；财务角色不再通过旧销售财审索引跨模块浏览。
     // 🔴 2026-08-22: 补上工作台。财务有 dashboard/finance 模块 ⇒ 菜单显示「工作台」,
     //   但路径不在本白名单里 ⇒ 点进去 403。owner 没点到, 是扫描器 B 类查出来的。

@@ -2,12 +2,11 @@
  * AI报告列表页面
  * 显示历史AI分析报告
  */
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
   FlatList,
@@ -15,18 +14,24 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Icon } from 'react-native-paper';
+import { Button, Icon, TouchableRipple } from 'react-native-paper';
+import { useAuthStore } from '../../../store/authStore';
+import { operatingReportReaderKey } from '../../../utils/operatingReportAccess';
 import { useTranslation } from 'react-i18next';
 import { FAAIStackParamList } from '../../../types/navigation';
 import { aiApiClient, ReportSummary } from '../../../services/api/aiApiClient';
 
 type NavigationProp = NativeStackNavigationProp<FAAIStackParamList, 'AIReport'>;
 
-type ReportType = 'all' | 'batch' | 'weekly' | 'monthly' | 'custom';
+type ReportType = 'all' | 'batch' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
 export function AIReportScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { t, i18n } = useTranslation('home');
+  const user = useAuthStore((state) => state.user);
+  const readerKey = operatingReportReaderKey(user);
+  const requestSequence = useRef(0);
+  const [loadedReaderKey, setLoadedReaderKey] = useState(readerKey);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -35,22 +40,32 @@ export function AIReportScreen() {
   const [filterType, setFilterType] = useState<ReportType>('all');
 
   const loadReports = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     try {
       setError(null);
       const params = filterType !== 'all' ? { reportType: filterType } : undefined;
       const response = await aiApiClient.getReports(params);
+      if (sequence !== requestSequence.current) return;
+      setLoadedReaderKey(readerKey);
       setReports(response.reports || []);
     } catch (err) {
-      console.error(t('aiReport.loadFailed') || 'Load reports failed:', err);
-      setError(t('aiReport.loadFailedMessage'));
+      if (sequence !== requestSequence.current) return;
+      setLoadedReaderKey(readerKey);
+      setError('报告未能加载。请检查网络后重新加载。');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (sequence === requestSequence.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [filterType, t]);
+  }, [filterType, readerKey]);
 
   useEffect(() => {
-    loadReports();
+    setReports([]);
+    setError(null);
+    setLoading(true);
+    void loadReports();
+    return () => { requestSequence.current += 1; };
   }, [loadReports]);
 
   const onRefresh = useCallback(() => {
@@ -61,6 +76,7 @@ export function AIReportScreen() {
   const getReportTypeIcon = (type: string): string => {
     const icons: Record<string, string> = {
       batch: 'package-variant',
+      daily: 'calendar-today',
       weekly: 'calendar-week',
       monthly: 'calendar-month',
       custom: 'tune',
@@ -71,6 +87,7 @@ export function AIReportScreen() {
   const getReportTypeColor = (type: string): string => {
     const colors: Record<string, string> = {
       batch: '#667eea',
+      daily: '#287c8e',
       weekly: '#48bb78',
       monthly: '#ed8936',
       custom: '#9f7aea',
@@ -81,6 +98,7 @@ export function AIReportScreen() {
   const getReportTypeLabel = (type: string): string => {
     const labels: Record<string, string> = {
       batch: t('aiReport.batchAnalysis'),
+      daily: '日报',
       weekly: t('aiReport.weeklyReport'),
       monthly: t('aiReport.monthlyReport'),
       custom: t('aiReport.customReport'),
@@ -99,8 +117,8 @@ export function AIReportScreen() {
 
   const renderFilterTabs = () => (
     <View style={styles.filterTabs}>
-      {(['all', 'batch', 'weekly', 'monthly'] as ReportType[]).map((type) => (
-        <TouchableOpacity
+      {(['all', 'daily', 'weekly', 'monthly'] as ReportType[]).map((type) => (
+        <TouchableRipple
           key={type}
           style={[styles.filterTab, filterType === type && styles.filterTabActive]}
           onPress={() => setFilterType(type)}
@@ -110,21 +128,21 @@ export function AIReportScreen() {
           >
             {type === 'all' ? t('common:all') : getReportTypeLabel(type)}
           </Text>
-        </TouchableOpacity>
+        </TouchableRipple>
       ))}
     </View>
   );
 
   const renderReportItem = ({ item }: { item: ReportSummary }) => (
-    <TouchableOpacity
+    <TouchableRipple
       style={styles.reportCard}
       onPress={() => navigation.navigate('AIReportDetail', {
         reportId: item.reportId,
         reportType: item.reportType,
         title: item.title,
       })}
-      activeOpacity={0.7}
     >
+      <View>
       <View style={styles.reportHeader}>
         <View style={[styles.typeIcon, { backgroundColor: getReportTypeColor(item.reportType) + '20' }]}>
           <Icon
@@ -146,6 +164,13 @@ export function AIReportScreen() {
         </View>
         <Icon source="chevron-right" size={20} color="#ccc" />
       </View>
+
+      {item.generationStatus === 'FAILED' ? (
+        <View style={styles.failurePanel}>
+          <Text style={styles.failureTitle}>生成失败</Text>
+          <Text style={styles.failureReason}>{item.failureReason || '报告生成失败，请重新生成。'}</Text>
+        </View>
+      ) : item.summary ? <Text style={styles.summary} numberOfLines={3}>{item.summary}</Text> : null}
 
       {/* 报告统计 */}
       {(item.totalCost !== undefined || item.keyFindingsCount !== undefined) && (
@@ -170,12 +195,13 @@ export function AIReportScreen() {
           )}
         </View>
       )}
-    </TouchableOpacity>
+      </View>
+    </TouchableRipple>
   );
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#667eea" />
           <Text style={styles.loadingText}>{t('loading')}</Text>
@@ -185,7 +211,7 @@ export function AIReportScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       {/* Filter Tabs */}
       {renderFilterTabs()}
 
@@ -194,11 +220,12 @@ export function AIReportScreen() {
         <View style={styles.errorBanner}>
           <Icon source="alert-circle" size={20} color="#e53e3e" />
           <Text style={styles.errorText}>{error}</Text>
+          <Button onPress={onRefresh} contentStyle={styles.actionTarget}>重新加载</Button>
         </View>
       )}
 
       <FlatList
-        data={reports}
+        data={loadedReaderKey === readerKey ? reports : []}
         keyExtractor={(item) => String(item.reportId)}
         renderItem={renderReportItem}
         contentContainerStyle={styles.listContent}
@@ -210,6 +237,7 @@ export function AIReportScreen() {
             <Icon source="file-document-outline" size={48} color="#ccc" />
             <Text style={styles.emptyText}>{t('aiReport.noReports')}</Text>
             <Text style={styles.emptyHint}>{t('aiReport.noReportsHint')}</Text>
+            <Button mode="outlined" onPress={onRefresh} contentStyle={styles.actionTarget}>重新加载</Button>
           </View>
         }
       />
@@ -240,7 +268,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   filterTab: {
-    paddingHorizontal: 16,
+    flex: 1,
+    minHeight: 44,
+    minWidth: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
     paddingVertical: 8,
     borderRadius: 20,
     backgroundColor: '#f0f0f0',
@@ -256,6 +289,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '500',
   },
+  actionTarget: { minHeight: 44, minWidth: 44 },
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -321,6 +355,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
   },
+  summary: { marginTop: 12, color: '#526170', fontSize: 13, lineHeight: 20 },
+  failurePanel: { marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: '#fff1ef' },
+  failureTitle: { color: '#b42318', fontWeight: '600', marginBottom: 4 },
+  failureReason: { color: '#8b2c25', lineHeight: 20 },
   reportStats: {
     flexDirection: 'row',
     marginTop: 12,

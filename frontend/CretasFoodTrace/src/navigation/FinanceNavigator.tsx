@@ -1,3 +1,6 @@
+import OperatingReportStackNavigator from './OperatingReportStackNavigator';
+import { canAccessOperatingReports } from '../utils/operatingReportAccess';
+import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -28,6 +31,8 @@ export default function FinanceNavigator() {
   const role = getUserRole(user);
   const { count: todoCount } = useMyTodoCount(undefined, 30000);
   const isCashier = role === "cashier";
+  const smartBiEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('SmartBI'));
+  const operatingReportsEnabled = smartBiEnabled && canAccessOperatingReports(user);
 
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
@@ -67,6 +72,11 @@ export default function FinanceNavigator() {
             tabBarIcon: ({ color, size }) => <Icon source="bank-transfer-out" size={size} color={color} />,
           }}
         />
+      )}
+      {operatingReportsEnabled && (
+        <Tab.Screen name="FinanceOperatingReportsTab" component={OperatingReportStackNavigator}
+          options={{ title: '经营', tabBarButtonTestID: 'finance-tab-operating-reports',
+            tabBarIcon: ({ color, size }) => <Icon source="file-chart-outline" color={color} size={size} /> }} />
       )}
       <Tab.Screen
         name="FinanceProfileTab"
