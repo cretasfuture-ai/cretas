@@ -211,6 +211,31 @@ describe('PersonnelDetailScreenPerformance', () => {
     expect(schedulingApiClient.getEmployeeDetail).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['resolve', 'reject'])('keeps the newer profile when an older same-owner performance request settles: %s', async (settlement) => {
+    let resolveOld: ((value: unknown) => void) | undefined;
+    let rejectOld: ((reason: Error) => void) | undefined;
+    (schedulingApiClient.getEmployeeDetail as jest.Mock)
+      .mockResolvedValueOnce({ success: true, data: { id: 42, fullName: 'old profile', status: 'IDLE', skillLevels: {} } })
+      .mockResolvedValueOnce({ success: true, data: { id: 42, fullName: 'new profile', status: 'IDLE', skillLevels: {} } });
+    (hrApiClient.getEmployeePerformance as jest.Mock)
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
+      .mockResolvedValueOnce({ userId: 42, efficiency: 40, attendance: 40, score: 40, grade: 'E' });
+    const view = render(<PersonnelDetailScreen />);
+    await waitFor(() => expect(hrApiClient.getEmployeePerformance).toHaveBeenCalledTimes(1));
+    await act(async () => { view.UNSAFE_getByType(ScrollView).props.refreshControl.props.onRefresh(); });
+    await waitFor(() => expect(hrApiClient.getEmployeePerformance).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(view.getByText('new profile')).toBeTruthy());
+    await act(async () => {
+      if (settlement === 'resolve') resolveOld?.({ userId: 42, efficiency: 99, attendance: 99, score: 99, grade: 'A' });
+      else rejectOld?.(new Error('old performance failed'));
+      await Promise.resolve();
+    });
+    expect(view.getByText('new profile')).toBeTruthy();
+    expect(view.queryByText('old profile')).toBeNull();
+    expect(view.queryByText('old performance failed')).toBeNull();
+    expect(view.UNSAFE_getByType(ScrollView).props.refreshControl.props.refreshing).toBe(false);
+  });
+
   it('keeps the new actor performance error when a retained old retry runs', async () => {
     (schedulingApiClient.getEmployeeDetail as jest.Mock).mockResolvedValue({
       success: true, data: { id: 42, fullName: '当前员工', status: 'IDLE', skillLevels: {} },

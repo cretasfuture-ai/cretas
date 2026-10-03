@@ -284,14 +284,14 @@ export default function PersonnelDetailScreen() {
 
       try {
         const moduleAccess = await hrShiftApiClient.getSelfModuleAccess(owner.userId || 0, owner.factoryId);
-        if (!isCurrentContext(owner)) return;
+        if (requestSequence !== requestSeqRef.current || !isCurrentContext(owner)) return;
         const latestUser = useAuthStore.getState().user;
         const canReadPerformance = Boolean(latestUser && hasModulePermission(latestUser, 'hr', 'read')
           && moduleAccess.some((module) => module.moduleCode === 'hr_employee'
             && module.permissionModule === 'hr' && module.effectiveAllowed));
         if (!canReadPerformance) throw new Error('无权读取员工绩效');
         const perfData = await hrApiClient.getEmployeePerformance(employeeId, { factoryId: owner.factoryId });
-        if (!isCurrentContext(owner)) return;
+        if (requestSequence !== requestSeqRef.current || !isCurrentContext(owner)) return;
         if (perfData) {
           setEmployee({ ...employeeDetail, performance: [
             { label: '工作效率', value: perfData.efficiency ?? null, trend: 'stable', trendValue: '-' },
@@ -301,7 +301,7 @@ export default function PersonnelDetailScreen() {
           ] });
         }
       } catch (perfError) {
-        if (isCurrentContext(owner)) {
+        if (requestSequence === requestSeqRef.current && isCurrentContext(owner)) {
           setPerformanceError(perfError instanceof Error ? perfError.message : '读取员工绩效失败');
         }
       }
