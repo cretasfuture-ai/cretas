@@ -618,7 +618,38 @@
       },
       "assignedCount": "Assigned/Total",
       "confirmedCount": "Confirmed",
-      "pendingCount": "Pending"
+      "pendingCount": "Pending",
+      "noFactory": "No factory is bound to this account",
+      "readFailed": "Failed to read schedules. Try again.",
+      "permissionTitle": "Scheduling write permission required",
+      "permissionRequired": "This account can view schedules but cannot save or clear them.",
+      "permissionChanged": "The signed-in actor or permission changed. Reopen the screen.",
+      "noShiftTitle": "Shifts are not configured",
+      "noShiftConfigured": "This factory has no active shift definitions.",
+      "noShiftNextStep": "Ask an administrator to configure an active shift before assigning employees.",
+      "previousDay": "Previous day",
+      "nextDay": "Next day",
+      "addTitle": "Add schedule",
+      "employee": "Employee",
+      "chooseEmployee": "Choose an employee",
+      "shift": "Shift",
+      "chooseShift": "Choose a shift",
+      "notes": "Notes (optional)",
+      "confirmTitle": "Confirm schedule",
+      "saveConfirm": "Schedule {{employee}} for {{date}} on {{shift}}?",
+      "overwriteConfirm": "{{employee}} already has a schedule on {{date}}. Replace it with {{shift}}?",
+      "saveSuccess": "Schedule saved and read back successfully.",
+      "saveFailedTitle": "Failed to save schedule",
+      "saveFailed": "Save failed. Check permission and try again.",
+      "clearTitle": "Clear schedule",
+      "clearConfirm": "Clear {{employee}}'s schedule on {{date}}?",
+      "clearSuccess": "Schedule cleared and read back successfully.",
+      "clearFailedTitle": "Failed to clear schedule",
+      "clearFailed": "Clear failed. Check permission and try again.",
+      "invalidFormTitle": "Incomplete information",
+      "invalidForm": "Choose an employee and an active shift.",
+      "unknownShift": "Shift definition is unavailable",
+      "statusUnknown": "Status unknown"
     }
   },
   "production": {
@@ -746,18 +777,20 @@
     "performance": {
       "title": "Performance Analysis",
       "period": {
+        "week": "This Week",
         "month": "This Month",
         "quarter": "This Quarter",
         "year": "This Year"
       },
       "stats": {
-        "avgScore": "Avg Score",
+        "avgScore": "Sample average ({{count}})",
         "excellent": "Excellent",
         "needsAttention": "Needs Attention"
       },
       "gradeDistribution": "Performance Grade Distribution",
       "employeeList": "Employee Performance List",
-      "empty": "No performance data"
+      "empty": "No performance data",
+      "readFailed": "Failed to read performance data. Try again."
     }
   },
   "anomalyTypes": {
