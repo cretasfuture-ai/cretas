@@ -110,7 +110,7 @@ jobs:
     # ⛔ 字面量。`${{ vars.X }}` 在 `runs-on` 里求值为**空**(job 被派成 ubuntu-latest
     #    而不报错) —— 已逐条排除 fork/visibility/授权/时序, 那是能力边界不是配错。
     #    见 .claude/rules/ci-runner-routing.md。
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

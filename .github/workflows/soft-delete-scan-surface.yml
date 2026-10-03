@@ -61,7 +61,7 @@ jobs:
     #
     # 2026-09-09：与 ops-script-tests 一起纳入统一切换表。
     # 当前由隔离 Windows WSL Linux runner 执行，目标脚本已实跑；不恢复旧 Mac 标签。
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

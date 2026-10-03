@@ -73,7 +73,7 @@ permissions:
 
 jobs:
   full-suite:
-    runs-on: [self-hosted, cretas, java]
+    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G runner
     timeout-minutes: 120
 
     steps:
