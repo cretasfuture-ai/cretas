@@ -16,3 +16,5 @@ Worktree `C:/Users/Steve/cretas-f006-mobile-r3-20261004`，branch `codex/f006-mo
 验收：R3 Maven 目标 `ProcessingServiceImplProductionStatisticsContractTest,DashboardTodayScopeContractTest,R6V2ReportControllerRbacTest,ProcessingServiceImplEnhancedCostAnalysisTest`；多类 testIncludes 用 `**/*.java`（不可逗号）。RN 两文件 `jest --runInBand --runTestsByPath`、完整 TypeScript。覆盖不同周期/未来与异厂排除、混单位、actual0/NULL、非completed分母、无数据未知率、后台失败不显示假成功；组件实际点击切换周期和 actor/迟到响应阴性。
 
 禁止 Entity/Repository/迁移/认证授权/质检方法/数据库写/生产请求/设备/网络/依赖更新/commit/PR/台账子代理写入/孙代理。依赖仅只读复用 R1 node_modules junction；Maven 独立 target 限 CPU2。scope 增加先回执请求。
+
+终审后最小scope扩展：允许worker追加仅RN src/i18n/locales/{zh-CN,en-US}/reports.json生产报表键，合计八文件；近7天、按单位总实际量、缺失实际量/缺失单位批次数、最近10条样本、实际状态、权限受限与错误/重试必须有中英正确文案，不借旧kg/平均量键错误呈现。禁止修改quality/cost等其他命名空间、全局翻译体系、依赖或任何未登记文件。独立复核未通过，六项边界已退回修复，需真实RNTL组件替代原三项源码镜像。

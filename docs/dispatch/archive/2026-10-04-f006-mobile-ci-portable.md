@@ -17,3 +17,5 @@ wrapper的CRETAS_WORKFLOW_PG_VERIFY/SMARTBI_PG_DSN会影响其他opt-in tests，
 验收：Maven `JavaFullPortablePostgresContractTest,JavaPrGateTieringContractTest,GateSelectorCoverageContractTest`，多类testIncludes **/*.java，CPU2/Maven3g/test1g；Spring真实property resolution正反向legacyfallback/随机loopbackURL/user/空密码；workflow实际调用wrapper/选择器与Mockito参数保持/缓存上限接线。既有PG wrapper测试和heavy runner shell guard按可用当前环境执行；一次隔离Linux PG实际child readback由root确认，不触常驻PG。最终候选CI全量必须真实完成、棘轮通过，不以源码镜像或目标测试代替。
 
 禁止生产代码、Entity/Repository/迁移、共享pom/helper/scripts、baseline、角色/业务写、设备、网络写、commit/PR、台账写或孙代理。日志私有r1-ci-portable-*；既有tracked测试fallback不代表生产凭据，不读取/复制真实credentials。
+
+根协调者接受最小执行scope扩展（仍只三个文件）：允许workflow把原默认full选择拆为两次互补执行，第一排除FactoryConfigServiceImplReorderIT且清除helper新增的五个PG变量，第二只该r10类并消费随机PG参数；总选择面必须等价原pom Test/Tests/IT，不漏/重复、不激活历史opt-in、不清理前段报告。新ContractTest须实际运行workflow抽取Bash证明环境隔离/后段接线和失败处理；Maven selector等价/报告累计需独立证据，只有全文contains不足。root将以WSL runner UID1000在私有临时PG实例实际验R10，禁止任何常驻服务、runner标签/进程或基线修改。之前12目标PASS、wrapper2skip、shell7PASS不代表随机PG或full执行成功。

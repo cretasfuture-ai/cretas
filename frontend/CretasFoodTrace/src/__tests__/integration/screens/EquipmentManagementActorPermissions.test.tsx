@@ -122,6 +122,27 @@ describe('EquipmentManagement actor and permission isolation', () => {
     ));
   });
 
+  it('preserves an existing operator binding when saving an edit without HR read', async () => {
+    getEquipments.mockResolvedValue({
+      content: [{ ...equipment('F006'), operatorId: 99 }], totalElements: 1, totalPages: 1,
+    });
+    const view = render(<EquipmentManagementScreen />);
+    await waitFor(() => expect(view.getByText('F006-设备')).toBeTruthy());
+
+    fireEvent.press(view.getByTestId('equipment-management-edit-7'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-operator-hr-locked')).toBeTruthy());
+    expect(view.queryByTestId('equipment-management-operator-picker')).toBeNull();
+    expect(getUsers).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-edit')); });
+    await waitFor(() => expect(updateEquipment).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ operatorId: 99 }),
+      'F006',
+    ));
+    expect(getUsers).not.toHaveBeenCalled();
+    expect(createEquipment).not.toHaveBeenCalled();
+  });
+
   it('does not display a late GET from the previous actor and reloads the current factory', async () => {
     const first = deferred<any>();
     const second = deferred<any>();

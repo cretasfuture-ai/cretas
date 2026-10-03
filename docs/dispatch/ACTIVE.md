@@ -13,7 +13,7 @@
 - `F006-MOBILE-R2-DISPLAY-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 显示/设备范围已交还；设备HR权限与actor真实组件8项、最终TS通过。APK7导航/表单已实测，后加HR修复未装机；待上游整合/统一发布。详见R2归档。
 - `F006-MOBILE-R2-NAV-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 设备/质量导航及即时权限范围已交还；质量11、告警7、告警API3测试通过，待整批 TS/RN/终审/真机。不改后端权限/实体。详见 R2 归档。
 - `F006-MOBILE-R2-SESSION-20261003` — `review` — Owner: Codex — Base `8005a38306` — 🔒 SSE/Memory/分页与手机身份流取消已交还；RN会话5套57项、Java真实归属/取消/日志门禁通过，待整批终审/发布/Mini真机。不改 Repository/Entity。详见 R2 归档。
-- `F006-MOBILE-R3-REPORT-20261003` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 独立R3 worktree六文件scope：生产全量周期/分单位摘要与手机统计接线及真实行为测试；legacy顶层契约保留。禁止质检/Entity/Repository/迁移/业务写。详见archive/2026-10-04-f006-mobile-r3-report.md。
+- `F006-MOBILE-R3-REPORT-20261003` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 独立R3 worktree八文件scope：生产全量周期/分单位摘要与手机统计接线及真实行为测试；legacy顶层契约保留。禁止质检/Entity/Repository/迁移/业务写。详见archive/2026-10-04-f006-mobile-r3-report.md。
 - `F006-MOBILE-R4-QUALITY-20261003` — `queued` — Owner: Codex — Base待R3收口后登记 — 真机质量日/周/月均用第一页17条算41.2%；本周真实3条全PENDING，backend breakdown漏PENDING并把legacy非PASS3误读为失败。先锁scope，日期接线/待检与条件通过/有效分母/actor隔离修复；证据见R2归档。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `0e42f79786a3b0b0abc68be687f5cb16aecdbdf3` — 独占本批ACTIVE/archive写入；四修复合并，业务FAIL/pending保留；AI新四题有界评测见archive。
