@@ -146,11 +146,13 @@ async def backfill_one(pool: asyncpg.Pool, row, attempt_idx: int, total: int) ->
 
 async def main(args):
     db_name = args.db
-    pg_url = (
-        f"postgresql://cretas_user:{os.environ.get('FOOD_KB_POSTGRES_PASSWORD', 'cretas123')}"
-        f"@localhost:5432/{db_name}"
-    )
-    pool = await asyncpg.create_pool(pg_url, min_size=1, max_size=3)
+    # 口令可能含 '@': 拼进 DSN 会被 asyncpg 当成 host:port 解析, 报错信息还会带出口令片段
+    # (2026-10-03 prod 实测)。一律分参数传, 且不给默认口令。
+    pool = await asyncpg.create_pool(
+        user=os.environ.get("FOOD_KB_POSTGRES_USER", "cretas_user"),
+        password=os.environ["FOOD_KB_POSTGRES_PASSWORD"],
+        host=os.environ.get("FOOD_KB_POSTGRES_HOST", "localhost"),
+        database=db_name, min_size=1, max_size=3)
     try:
         rows = await fetch_rows(pool, refresh=args.refresh)
         total = len(rows)

@@ -16,6 +16,13 @@ def test_blend_uses_examples_and_falls_back_to_description():
     assert s["A"] > s["B"]               # 例句命中把 A 抬到 B 前面
 
 
+def test_intent_without_description_vector_is_scored_by_examples():
+    """电子秤校准这类描述太短、没有描述向量的意图, 仍要靠例句进候选。"""
+    s = blend_scores({"SCALE": None, "B": 0.4}, {"SCALE": 0.8}, blend=0.35)
+    assert s["SCALE"] == pytest.approx(0.8) and s["SCALE"] > s["B"]
+    assert "X" not in blend_scores({"X": None}, {}, blend=0.35)   # 两样都缺: 不打分
+
+
 def test_only_visible_intents_are_scored():
     """例句表里有、但描述查询没返回 (不可见/已停用) 的意图不能混进候选。"""
     s = blend_scores({"A": 0.5}, {"A": 0.9, "GONE": 0.99}, blend=0.35)
