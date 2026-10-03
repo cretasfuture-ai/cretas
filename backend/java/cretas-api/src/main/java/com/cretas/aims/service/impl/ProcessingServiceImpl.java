@@ -948,6 +948,9 @@ public class ProcessingServiceImpl implements ProcessingService {
         if (passCount.add(failCount).compareTo(sampleSize) > 0) {
             throw new com.cretas.aims.exception.BusinessException("合格数+不合格数不能超过抽样数量");
         }
+        if (passCount.add(failCount).compareTo(sampleSize) < 0) {
+            throw new com.cretas.aims.exception.BusinessException("合格数+不合格数必须等于抽样数量，不能留下未分类样本");
+        }
         // Issue #813 fix A (2026-05-17): reject result=null. FE form already requires
         // it; this guards API-direct callers (curl, dev console, future mobile app).
         Object resultRaw = inspection.get("result");

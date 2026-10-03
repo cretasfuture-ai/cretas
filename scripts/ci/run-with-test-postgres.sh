@@ -28,7 +28,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 initdb -D "$cluster_root/data" --username=cretas_ci --auth-local=trust --auth-host=trust --encoding=UTF8 --no-locale >"$cluster_root/init.log"
-pg_ctl -D "$cluster_root/data" -l "$cluster_root/server.log" -o "-h 127.0.0.1 -p $port -k $cluster_root -c shared_buffers=32MB -c max_connections=30" -w start
+# max_connections: 每个被缓存的 Spring 测试上下文各持一个 Hikari 池(默认 10 个、空闲也保留),
+# 同时活着几个用 PG 的上下文由 surefire 的执行顺序决定 —— 本机顺序下不超过 3 个, 加拿大
+# canada-mini-cretas 的顺序下超过 3 个, 30 就会 `too many clients`。2026-10-03 在那台 VM 上
+# 同一组 7 个类对照: 30 -> 20 个里 3 个错误(16 次 too many clients), 200 -> 20/20。
+# 这是随跑随删的临时实例, 提高上限不掩盖泄漏(真泄漏会持续增长, 200 也会撞上)。
+pg_ctl -D "$cluster_root/data" -l "$cluster_root/server.log" -o "-h 127.0.0.1 -p $port -k $cluster_root -c shared_buffers=32MB -c max_connections=200" -w start
 database=cretas_workflow_verify_test
 createdb -h 127.0.0.1 -p "$port" -U cretas_ci "$database"
 export SMARTBI_PG_DSN="postgresql://cretas_ci@127.0.0.1:$port/$database"

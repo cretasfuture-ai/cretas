@@ -102,6 +102,22 @@ function parseRestaurantAgentLaunch(
   return candidate as unknown as RestaurantAgentLaunch;
 }
 
+/** 随请求带上的最近几轮对话: 只为让「好了」「就是六十箱」这种话能被看懂, 不是完整会话。 */
+const MAX_RECENT_TURNS = 4;
+const MAX_TURN_CHARS = 200;
+
+export function buildRecentTurns(
+  history: ReadonlyArray<{ role: string; content: string; isLoading?: boolean }>,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const turns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const msg of history) {
+    if ((msg.role !== 'user' && msg.role !== 'assistant') || msg.isLoading) continue;
+    const content = (msg.content || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TURN_CHARS);
+    if (content) turns.push({ role: msg.role, content });
+  }
+  return turns.slice(-MAX_RECENT_TURNS);
+}
+
 // 消息类型
 interface Message {
   id: string;
@@ -758,10 +774,12 @@ export default function AIChatScreen() {
         },
       };
 
-      if (sendOptions?.intentCode) {
+      // 这一句之前的几轮 (messages 是本次发送前的会话); 第一句话没有上下文, 照旧 4 参调用
+      const recentTurns = buildRecentTurns(messages);
+      if (sendOptions?.intentCode || recentTurns.length > 0) {
         await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, {
-          intentCode: sendOptions.intentCode,
-          context: sendOptions.context,
+          ...(sendOptions?.intentCode && { intentCode: sendOptions.intentCode }),
+          context: { ...(sendOptions?.context || {}), ...(recentTurns.length > 0 && { recentTurns }) },
         });
       } else {
         await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType);

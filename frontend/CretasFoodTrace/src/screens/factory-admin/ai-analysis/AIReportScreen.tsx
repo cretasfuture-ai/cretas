@@ -20,6 +20,7 @@ import { operatingReportReaderKey } from '../../../utils/operatingReportAccess';
 import { useTranslation } from 'react-i18next';
 import { FAAIStackParamList } from '../../../types/navigation';
 import { aiApiClient, ReportSummary } from '../../../services/api/aiApiClient';
+import { formatReportCost } from './reportCostDisplay';
 
 type NavigationProp = NativeStackNavigationProp<FAAIStackParamList, 'AIReport'>;
 
@@ -178,7 +179,7 @@ export function AIReportScreen() {
           {item.totalCost !== undefined && (
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>{t('aiReport.totalCost')}</Text>
-              <Text style={styles.statValue}>¥{Number(item.totalCost ?? 0).toFixed(2)}</Text>
+              <Text style={styles.statValue}>{formatReportCost(item.totalCost)}</Text>
             </View>
           )}
           {item.keyFindingsCount !== undefined && (
