@@ -88,3 +88,4 @@
 - 财务 wire 修复已完成；初轮真实 MVC/advice/序列化与现有 Controller 共 13 项通过，补有价无财务写权后 16 项通过；终版增加出纳型「无价有财务写权」组合，随最终可信构建运行。Statement 四个余额及四个实体金额均覆盖，RN 类型使用真实 key 与 nullable 金额；未改 JPA 查询。
 - CI 首轮 RN 全套发现三处本批集成失败，已修复而未放宽基线：两处新增报错改用现有 appAlert；精确增加 `.github/workflows/rn-gate.yml` push/PR 对 PermissionServiceImpl.java 的触发路径；`homeModulesSectionHiddenWhenEmpty.test.tsx` 正向对照改为销售权限四卡且财务卡缺席。该批允许 scope 含这两个 gate/CI 文件；相关五套 28 项通过，最终全套 CI 待最后推送。
 - 第三版本地验证 APK 已构建并安装，原官方应用保留；取消的隔离销售单详情真实显示 requiredDeliveryDate 2026-10-04。该版不含后续 wire 修复，最终 APK 与最终后台发布后仍须金额正反向及六桶真机对照。
+- 价格表源码确认详情/删除仅 findById、缺 factoryId 二次校验；新增窄 scope `controller/inventory/PriceListController.java` 与 `PriceListFactoryScopeContractTest.java`，返回/删除前拒绝异厂、空工厂或不存在 ID。保持查询/Entity/Repository/权限不变，不对其他租户进行线上删除探测；目标门禁合入最终可信构建选择器，最终风险复核和通过证据为必需。
