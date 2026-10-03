@@ -53,6 +53,14 @@ import java.util.stream.Collectors;
 public class ProcessingServiceImpl implements ProcessingService {
     private static final Logger log = LoggerFactory.getLogger(ProcessingServiceImpl.class);
 
+    /**
+     * 统计摘要只需要识别明显的存储单位；它不负责把不同单位换算成同一单位。
+     * 未知的非空单位仍按原文分组，并同时暴露 unknownUnitCount。
+     */
+    private static final Set<String> KNOWN_PRODUCTION_UNITS = Set.of(
+            "kg", "g", "mg", "t", "ml", "l", "pcs", "pc", "piece", "box", "case", "bag",
+            "bottle", "tray", "份", "个", "件", "盒", "箱", "包", "袋", "瓶", "桶", "只");
+
     /** 储存位置是受控词表 —— 判据只有一份, 见 WarehouseLocationCatalog。
      *  ⚠️ 用字段注入而不是构造器注入: 这几个类在测试里被直接 new 42 处,
      *  改构造器签名会一次打断全部, 与本次改动无关。 */
@@ -1111,7 +1119,13 @@ public class ProcessingServiceImpl implements ProcessingService {
 
     public Map<String, Object> getQualityStatistics(String factoryId, LocalDate startDate, LocalDate endDate) {
         List<QualityInspection> inspections = qualityInspectionRepository.findByFactoryIdAndDateRange(
-                factoryId, startDate, endDate);
+                        factoryId, startDate, endDate).stream()
+                .filter(Objects::nonNull)
+                .filter(inspection -> factoryId.equals(inspection.getFactoryId()))
+                .filter(inspection -> inspection.getInspectionDate() != null)
+                .filter(inspection -> !inspection.getInspectionDate().isBefore(startDate)
+                        && !inspection.getInspectionDate().isAfter(endDate))
+                .toList();
         Map<String, Object> statistics = new HashMap<>();
         statistics.put("totalInspections", inspections.size());
         if (!inspections.isEmpty()) {
@@ -1148,7 +1162,109 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .filter(i -> i.getResult() == null || i.getResult().isBlank())
                 .count());
         statistics.put("breakdown", breakdown);
+        statistics.put("qualitySummary", buildQualitySummary(inspections, startDate, endDate));
         return statistics;
+    }
+
+    /**
+     * 质量报表移动端摘要。
+     *
+     * <p>保留上面的 legacy 字段及其「非 PASS」failedBatches 口径，避免影响 web-admin
+     * 消费者；新摘要按完整查询周期统计每一种真实结果，并把空结果、未知结果、缺失数值
+     * 与合法的零值分开表达。分页样本不参与这里的统计。
+     */
+    private Map<String, Object> buildQualitySummary(List<QualityInspection> inspections,
+                                                     LocalDate startDate,
+                                                     LocalDate endDate) {
+        Map<String, Long> statusCounts = new LinkedHashMap<>();
+        statusCounts.put("PASS", 0L);
+        statusCounts.put("FAIL", 0L);
+        statusCounts.put("CONDITIONAL", 0L);
+        statusCounts.put("PENDING", 0L);
+        statusCounts.put("UNKNOWN", 0L);
+        statusCounts.put("EMPTY", 0L);
+
+        BigDecimal totalSampleSize = BigDecimal.ZERO;
+        BigDecimal totalPassCount = BigDecimal.ZERO;
+        BigDecimal totalFailCount = BigDecimal.ZERO;
+        long missingSampleSizeCount = 0L;
+        long missingPassCount = 0L;
+        long missingFailCount = 0L;
+        long missingPassRateCount = 0L;
+        BigDecimal passRateSum = BigDecimal.ZERO;
+        long reportedPassRateCount = 0L;
+
+        for (QualityInspection inspection : inspections) {
+            String result = inspection.getResult();
+            if (result == null || result.isBlank()) {
+                statusCounts.computeIfPresent("EMPTY", (key, value) -> value + 1L);
+            } else {
+                String normalizedResult = result.trim().toUpperCase(Locale.ROOT);
+                String statusKey = switch (normalizedResult) {
+                    case "PASS" -> "PASS";
+                    case "FAIL" -> "FAIL";
+                    case "CONDITIONAL" -> "CONDITIONAL";
+                    case "PENDING" -> "PENDING";
+                    default -> "UNKNOWN";
+                };
+                statusCounts.computeIfPresent(statusKey, (key, value) -> value + 1L);
+            }
+
+            if (inspection.getSampleSize() == null) {
+                missingSampleSizeCount++;
+            } else {
+                totalSampleSize = totalSampleSize.add(inspection.getSampleSize());
+            }
+            if (inspection.getPassCount() == null) {
+                missingPassCount++;
+            } else {
+                totalPassCount = totalPassCount.add(inspection.getPassCount());
+            }
+            if (inspection.getFailCount() == null) {
+                missingFailCount++;
+            } else {
+                totalFailCount = totalFailCount.add(inspection.getFailCount());
+            }
+            if (inspection.getPassRate() == null) {
+                missingPassRateCount++;
+            } else {
+                passRateSum = passRateSum.add(inspection.getPassRate());
+                reportedPassRateCount++;
+            }
+        }
+
+        long passCount = statusCounts.get("PASS");
+        long failCount = statusCounts.get("FAIL");
+        long conditionalCount = statusCounts.get("CONDITIONAL");
+        long decidedCount = passCount + failCount + conditionalCount;
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("startDate", startDate);
+        summary.put("endDate", endDate);
+        summary.put("totalInspections", (long) inspections.size());
+        summary.put("statusCounts", statusCounts);
+        summary.put("passedInspections", passCount);
+        summary.put("failedInspections", failCount);
+        summary.put("conditionalInspections", conditionalCount);
+        summary.put("pendingInspections", statusCounts.get("PENDING"));
+        summary.put("unknownInspections", statusCounts.get("UNKNOWN"));
+        summary.put("emptyResultInspections", statusCounts.get("EMPTY"));
+        summary.put("averagePassRate", reportedPassRateCount == 0 ? null
+                : passRateSum.divide(BigDecimal.valueOf(reportedPassRateCount), 2, RoundingMode.HALF_UP));
+        summary.put("reportedPassRateCount", reportedPassRateCount);
+        summary.put("missingPassRateCount", missingPassRateCount);
+        summary.put("decisionPassRate", decidedCount == 0 ? null
+                : BigDecimal.valueOf(passCount)
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(BigDecimal.valueOf(decidedCount), 2, RoundingMode.HALF_UP));
+        summary.put("decidedInspectionCount", decidedCount);
+        summary.put("totalSampleSize", totalSampleSize);
+        summary.put("totalPassCount", totalPassCount);
+        summary.put("totalFailCount", totalFailCount);
+        summary.put("missingSampleSizeCount", missingSampleSizeCount);
+        summary.put("missingPassCount", missingPassCount);
+        summary.put("missingFailCount", missingFailCount);
+        return summary;
     }
 
     /**
@@ -2278,7 +2394,107 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
         statistics.put("productTypeStats", productTypeStats);
 
+        // 新摘要使用明确的自然日窗口，独立于上面的 legacy 查询口径。
+        statistics.put("productionSummary", buildProductionSummary(factoryId, period));
+
         return statistics;
+    }
+
+    /**
+     * 生产报表手机端使用的全量摘要。
+     *
+     * <p>Repository 查询只是第一道租户/窗口筛选；二次筛选是为了让 mock、历史脏数据和
+     * 边界值也不会进入摘要。actualQuantity 为 null 时保持「缺失」，0 是合法已上报读数。</p>
+     */
+    private Map<String, Object> buildProductionSummary(String factoryId, String period) {
+        LocalDate today = LocalDate.now();
+        String normalizedPeriod = period == null ? "today" : period.toLowerCase(Locale.ROOT);
+        LocalDate startDay = switch (normalizedPeriod) {
+            case "week" -> today.minusDays(6);
+            case "month" -> today.withDayOfMonth(1);
+            default -> today;
+        };
+        LocalDate endDay = today;
+        LocalDateTime startDate = startDay.atStartOfDay();
+        LocalDateTime endExclusive = endDay.plusDays(1).atStartOfDay();
+
+        List<ProductionBatch> queried = productionBatchRepository
+                .findByFactoryIdAndCreatedAtBetween(factoryId, startDate, endExclusive);
+        List<ProductionBatch> batches = queried == null ? Collections.emptyList() : queried.stream()
+                .filter(Objects::nonNull)
+                .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
+                .filter(batch -> batch.getCreatedAt() != null
+                        && !batch.getCreatedAt().isBefore(startDate)
+                        && batch.getCreatedAt().isBefore(endExclusive))
+                .toList();
+
+        long completedBatches = batches.stream()
+                .filter(batch -> batch.getStatus() == ProductionBatchStatus.COMPLETED)
+                .count();
+        Map<String, Long> statusCounts = new LinkedHashMap<>();
+        for (ProductionBatch batch : batches) {
+            String status = batch.getStatus() == null ? "UNKNOWN" : batch.getStatus().name();
+            statusCounts.merge(status, 1L, Long::sum);
+        }
+
+        long missingUnitCount = 0;
+        long missingActualQuantityCount = 0;
+        long unknownUnitCount = 0;
+        Map<String, Map<String, Object>> unitStats = new LinkedHashMap<>();
+        for (ProductionBatch batch : batches) {
+            String unit = batch.getUnit() == null ? null : batch.getUnit().trim();
+            if (unit == null || unit.isEmpty()) {
+                missingUnitCount++;
+            } else {
+                if (!KNOWN_PRODUCTION_UNITS.contains(unit.toLowerCase(Locale.ROOT))) {
+                    unknownUnitCount++;
+                }
+                Map<String, Object> unitSummary = unitStats.computeIfAbsent(unit, key -> {
+                    Map<String, Object> value = new LinkedHashMap<>();
+                    value.put("unit", key);
+                    value.put("totalBatches", 0L);
+                    value.put("reportedBatches", 0L);
+                    value.put("missingActualQuantityBatches", 0L);
+                    value.put("reportedQuantity", BigDecimal.ZERO);
+                    value.put("totalQuantity", BigDecimal.ZERO);
+                    return value;
+                });
+                unitSummary.put("totalBatches", ((Long) unitSummary.get("totalBatches")) + 1L);
+                if (batch.getActualQuantity() == null) {
+                    missingActualQuantityCount++;
+                    unitSummary.put("missingActualQuantityBatches",
+                            ((Long) unitSummary.get("missingActualQuantityBatches")) + 1L);
+                } else {
+                    unitSummary.put("reportedBatches", ((Long) unitSummary.get("reportedBatches")) + 1L);
+                    BigDecimal reportedQuantity = ((BigDecimal) unitSummary.get("reportedQuantity"))
+                            .add(batch.getActualQuantity());
+                    unitSummary.put("reportedQuantity", reportedQuantity);
+                    unitSummary.put("totalQuantity", reportedQuantity);
+                }
+            }
+            if (batch.getActualQuantity() == null && (unit == null || unit.isEmpty())) {
+                missingActualQuantityCount++;
+            }
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("period", normalizedPeriod.equals("week") || normalizedPeriod.equals("month")
+                ? normalizedPeriod : "today");
+        summary.put("startDate", startDay);
+        summary.put("endDate", endDay);
+        summary.put("totalBatches", (long) batches.size());
+        summary.put("completedBatches", completedBatches);
+        summary.put("completionRate", batches.isEmpty()
+                ? null : BigDecimal.valueOf(completedBatches)
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(BigDecimal.valueOf(batches.size()), 2, RoundingMode.HALF_UP));
+        summary.put("statusCounts", statusCounts);
+        summary.put("missingUnitCount", missingUnitCount);
+        summary.put("missingActualQuantityCount", missingActualQuantityCount);
+        summary.put("unknownUnitCount", unknownUnitCount);
+        summary.put("unitBreakdown", new ArrayList<>(unitStats.values()));
+        return summary;
     }
     public Map<String, Object> getQualityDashboard(String factoryId) {
         Map<String, Object> dashboard = new HashMap<>();
