@@ -39,7 +39,8 @@
 | systemd | 每个 unit 都带 drop-in `restart.conf`：`Restart=always`、`RestartSec=30`、`StartLimitIntervalSec=0`、`RequiresMountsFor=/mnt/lima-colima-ci`。2026-10-03 assembly runner 因为 DNS 抖动退出后没有重启，掉线 3 小时；2026-10-04 VM 重启时服务比数据盘先起来（203/EXEC），30 秒后由 Restart 拉起 |
 | 工具 | JDK 21（apt）、Maven 3.9.16、PG 17 二进制在 PATH（`initdb`/`pg_ctl` 在 `/usr/local/bin`）、python3.11（deadsnakes，与 prod 同小版本）、python3.12-venv、zip、jq、docker |
 | r10 常驻 PG | 集群 `17/r10`，**端口 5433**，开机自启。5432 留给同一个 VM 里 assembly `java-build-test` 的服务容器。runner `.env` 设 `R10_IT_PGPORT=5433`，`application-r10-it.properties` 和 nightly 引导步骤读这个变量；⛔ 不要在 `.env` 里全局设 `PGPORT`，那会让别的 psql 调用被静默改道 |
-| 测试堆 | `.env` 设 `CRETAS_JAVA_FORK_XMX=6g`。这台的执行顺序下 fast-contracts 用 3g / 4g 会 OOM，6g / 8g 能过 |
+| 测试堆 | PR 闸读 `.env` 的 `CRETAS_JAVA_FORK_XMX=6g`（这台的执行顺序下 fast-contracts 用 3g / 4g 会 OOM，6g / 8g 能过）。nightly 全量读单独的 `CRETAS_JAVA_NIGHTLY_XMX=12g`：Spring 测试上下文缓存随全量累积，实测 3g 只跑到 2879/12012，6g 跑满但尾段 OOM 出 10 红，8g 跑满 12999 仍在最后 OOM 出 11 红。⛔ 不用 `spring.test.context.cache.maxSize` 压缓存：被淘汰的上下文会关掉共享的内存 H2 库，下游测试连带变红 |
+| Maven 本地仓库 | VM 里 4 个 runner 共用一个本地仓库。并发下载时曾把 `poi-ooxml-4.1.2.jar` 读到写一半的状态（编译报 `zip END header not found`，事后文件完好）。每个 runner 的 `.env` 都设了 `MAVEN_ARGS=-Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav`（Maven 3.9 跨进程文件锁） |
 | 时区 | `America/Vancouver`（西七区），继承自宿主 |
 | Mac 重启后自恢复 | ⚠️ 配置就绪、**未实测**：已开 rex 自动登录（`autoLoginUser=rex`、`/etc/kcpassword`、FileVault 关、`autorestart=1`）。链路 = 开机 → 自动登录 → launchd 拉起 VM → VM 内 systemd 拉起 runner |
 
@@ -48,7 +49,7 @@
 | | |
 |---|---|
 | 机器 | aurora（`ssh -i ~/.ssh/canada_mini_ed25519 aurora@100.92.5.62`，macOS 26，10 核 / 24 GB，常年不关机）。上面原本就有 colima `default` VM（4 核 / 6 GB，跑 pomelox-test 容器）、openclaw-gateway 和 iOS 模拟器，内存偏紧，swap 常年在用 |
-| CI VM | 单独的 colima `ci` VM（6 核 / 12 GB / 100 GB），工具和 r10 集群与加拿大一致。**平时关着** |
+| CI VM | 单独的 colima `ci` VM（6 核 / 12 GB / 100 GB），工具和 r10 集群与加拿大一致。**平时关着**。`CRETAS_JAVA_NIGHTLY_XMX=7g`：nightly 如果碰上故障切换落到 aurora，**会跑不满**（加拿大要 12g），棘轮会判 rc=1 或 rc=2，这是已知限制 |
 | runner | `aurora-cretas`，仓级，标签 `self-hosted, Linux, ARM64, cretas, java, aurora`。systemd unit **disabled**，由看门狗控制启停 |
 | 为什么不常驻 | GitHub 派 job **没有优先级**：带同样标签的空闲 runner 都会分到活。aurora 常驻就会和加拿大平分 job，内存会被压进 swap。所以它只在加拿大不健康时才开 |
 | 看门狗 | `~/cretas-ci-failover.sh`，由 launchd `~/Library/LaunchAgents/com.cretas.ci-failover.plist` 每 60 秒运行一次，日志写到 `~/Library/Logs/cretas-ci-failover.log` |
