@@ -97,6 +97,24 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 | Python | 系统 Python **3.11.13**（与 prod 同版本，见上） |
 | 前提 | Windows 侧登录保活任务 **Running**（三态表见下）；停掉 / 注销就掉线 |
 
+### 溢出 runner：加拿大 Mac mini 上的 Linux VM（2026-10-03 起）
+
+本机三个 8G runner 满了时，**可溢出的 Java job** 会被 GitHub 派到 `canada-mini-cretas`：
+
+| | |
+|---|---|
+| 机器 | 加拿大 Mac mini（`ssh canada-mini`）上 colima 的 `ci` VM，Ubuntu 24.04 **arm64**，10 核 / 24 GB，数据盘 120 GB |
+| 注册 | **仓级** runner（cretas 仓），systemd 自启；同一 VM 里另有 assembly 仓的 `canada-mini-ci` |
+| 标签 | `self-hosted, Linux, ARM64, java, canada-mini` —— **没有 `cretas`**，所以只接 `runs-on: [self-hosted, java]` 的 job |
+| 可溢出的 job | `java-gate-pr`（fast-contracts、postgres-reversal-concurrency）、`jpa-gate-main`、`tool-inventory-gate` |
+| 不溢出 | `java-full-nightly`（要 runner 本机常驻 PG + r10 库，加拿大没有）；`java-artifact`（09-15 起只手动派发、不抢 runner，没必要溢出）——仍是 `[self-hosted, cretas, java]` |
+| 工具 | Maven 3.9.16、PG 17 服务端二进制（无常驻集群，`run-with-test-postgres.sh` 自起临时实例）、python3 |
+| 三态 | 在线 ✅；**Mac 重启后自恢复 ⚠️ 未验证**（VM 由 rex 的 GUI 会话下 launchd 代理拉起，机器未开自动登录） |
+
+⚠️ 非 Java 的闸（`[self-hosted, cretas]`）**不会**溢出：它们要 `cretas` 标签，而 arm64 上装不了 `torch==2.4.1+cpu`（第 5 关）。⛔ 别给这台 runner 加 `cretas` 标签。
+A2 闸（`scripts/tests/test-java-heavy-jobs-need-8g-runner.sh`）钉着「可溢出形态不许带 `services:`、不许是 nightly」：
+同一 VM 里 assembly 的 job 用 `services:` 映射 5432，可溢出的 job 再声明服务容器就会撞端口。
+
 加拿大 Mac mini（`canada-mac-mini` / `-2`，标签 `self-hosted, macOS, ARM64`，**没有 `cretas`**）已退役为本仓 CI 载体：离线，且 `AGENTS.md` 已把它留给其他任务。它时期的接入方式、ProxyJump/钥匙串坑、`setup-python`/homebrew 两个特例都在案例库「Mac mini 时期」一节，⛔ 不要再照着那些去连。
 
 ---

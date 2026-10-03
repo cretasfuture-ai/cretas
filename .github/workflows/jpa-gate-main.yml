@@ -76,7 +76,7 @@ jobs:
     # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
     #    统一切换(一次改全部已接入的工作流并断言各处一致)。
     #    见 `.claude/rules/ci-runner-routing.md`。
-    runs-on: [self-hosted, cretas, java]
+    runs-on: [self-hosted, java]
     timeout-minutes: 20
 
     # 不起 Postgres 服务容器: 这些 *RepositoryQueryValidationTest 全部标注

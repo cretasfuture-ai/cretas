@@ -78,7 +78,16 @@ SELF = "    runs-on: [self-hosted, cretas]"
 # scripts/tests/test-java-heavy-jobs-need-8g-runner.sh 钉了这条)。
 SELF_JAVA = "    runs-on: [self-hosted, cretas, java]"
 HOSTED_JAVA = "    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G runner"
-PAIRS = ((SELF, HOSTED), (SELF_JAVA, HOSTED_JAVA))
+# 2026-10-03: 可溢出的 Java job —— 只要 `java` 标签, 不要 `cretas`。本机三个 8G 的
+# windows-wsl-ci 带 [cretas, java] 照样匹配; 加拿大 Mac mini 上 colima Linux arm64 VM 里的
+# canada-mini-cretas 只带 [java], 也匹配 ⇒ 本机满了 GitHub 会把这些 job 派过去。
+# 4G 的 extra runner 没有 java 标签, 仍然接不到(这正是 java 标签存在的理由)。
+# ⛔ 带 services: 的 job(会撞同 VM 里 assembly runner 的 job 映射的 5432) 与要 runner 本机常驻 PG 的
+#    java-full-nightly 不许用这一形态 —— test-java-heavy-jobs-need-8g-runner.sh 的 A2 钉着。
+#    java-artifact 没有 services:, 但 09-15 起只手动派发, 不抢 runner, 故保留三标签形态。
+SELF_JAVA_ANY = "    runs-on: [self-hosted, java]"
+HOSTED_JAVA_ANY = "    runs-on: ubuntu-latest  # java-heavy-any: self-hosted 时要 8G runner, 可溢到 canada-mini"
+PAIRS = ((SELF, HOSTED), (SELF_JAVA, HOSTED_JAVA), (SELF_JAVA_ANY, HOSTED_JAVA_ANY))
 
 
 def read(p):
@@ -107,8 +116,8 @@ def current(text):
     「共享结构只改一处」那种坏法**藏起来**。而多 job 的文件正是最容易半转换的
     (ci.yml 有 4 个 job)。⇒ 两种都数, 同时存在就是显式的坏状态 `mixed`。
     """
-    n_self = _count_lines(text, SELF) + _count_lines(text, SELF_JAVA)
-    n_hosted = _count_lines(text, HOSTED) + _count_lines(text, HOSTED_JAVA)
+    n_self = sum(_count_lines(text, s) for s, _ in PAIRS)
+    n_hosted = sum(_count_lines(text, h) for _, h in PAIRS)
     if n_self and n_hosted:
         return "mixed"
     if n_self:
@@ -224,6 +233,7 @@ def main() -> int:
     if target == "self-hosted":
         print("  自建 runner: 组织级 runner，标签 [self-hosted, cretas]；当前使用隔离 Windows WSL Linux")
         print("  ⚠️ Maven job 要求额外的 `java` 标签 —— 只有 8G 的 windows-wsl-ci 有; 4G 的 extra runner 上 JVM 默认堆 1G 必 OOM")
+        print("  可溢出的 Java job([self-hosted, java]) 本机满了会派到加拿大 Mac mini 的 canada-mini-cretas(仓级 runner)")
         print("  在线检查: gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+\" \"+.status'")
     return 0
 
