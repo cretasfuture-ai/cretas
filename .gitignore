@@ -331,3 +331,6 @@ web-admin/.auth/
 # Codex 构建产物 —— 主 checkout 里有 1774 个未跟踪文件出自这里,
 # 把 `git status` 淹掉, 于是「有没有没提交的活」这个问题问不出答案。
 .codex-build/
+
+# 私密商务/法律文件 (合同、NDA、股权条款、对方原件) — 绝不入库
+docs/private/
