@@ -136,6 +136,22 @@ public interface AIIntentService {
         return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId);
     }
 
+    /**
+     * 带最近几轮对话的识别 (2026-10-03, 第 3b 步)。
+     *
+     * <p>{@code history} 是 App 随请求带来的最近几轮 ({@code role} = user/assistant, {@code content}),
+     * 只用来帮助理解「好了」「就是六十箱」这种脱离上下文说不清的话 —— 下发给 Python matcher 的
+     * {@code history} 字段 (此前恒为空列表)。带了上下文的请求**不读也不写**按原话缓存的识别结果,
+     * 否则同一句「好了」会把别人上一次的结果原样回放。
+     */
+    default IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions,
+                                                            java.util.List<java.util.Map<String, String>> history) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId,
+                mode, userPermissions);
+    }
+
     // ==================== 多意图识别 ====================
 
     /**

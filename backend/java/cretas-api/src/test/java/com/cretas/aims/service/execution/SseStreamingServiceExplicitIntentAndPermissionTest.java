@@ -64,7 +64,7 @@ class SseStreamingServiceExplicitIntentAndPermissionTest {
 
         assertThat(result.getStatus()).isEqualTo("COMPLETED");
         verify(h.aiIntentService, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), anyLong(), anyString(), any(), any(), any());
+                anyString(), anyString(), anyInt(), anyLong(), anyString(), any(), any(), any(), any());
         ArgumentCaptor<IntentExecuteRequest> sent = ArgumentCaptor.forClass(IntentExecuteRequest.class);
         verify(h.toolDispatchService).executeWithTool(any(), eq("F001"), sent.capture(), eq(intent),
                 eq(7L), eq("factory_super_admin"), any());

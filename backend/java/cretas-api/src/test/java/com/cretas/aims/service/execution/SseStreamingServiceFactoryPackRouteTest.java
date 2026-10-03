@@ -26,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -126,7 +127,7 @@ class SseStreamingServiceFactoryPackRouteTest {
                 .message("批次进度查询完成")
                 .build();
         when(harness.aiIntentService.recognizeIntentWithConfidence(
-                "查看批次进度", "F001", 3, 7L, "operator", null, null, null)).thenReturn(match);
+                "查看批次进度", "F001", 3, 7L, "operator", null, null, null, List.of())).thenReturn(match);
         when(harness.aiIntentService.hasPermission(intent.getIntentCode(), "operator"))
                 .thenReturn(true);
         when(harness.writeGuardService.isWriteIntent(intent)).thenReturn(false);
@@ -182,7 +183,7 @@ class SseStreamingServiceFactoryPackRouteTest {
                 assertThat(action.getParameters())
                         .containsEntry("requiresUserConfirmation", true));
         verify(harness.aiIntentService, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), anyLong(), anyString(), any(), any(), any());
+                anyString(), anyString(), anyInt(), anyLong(), anyString(), any(), any(), any(), any());
         verifyNoInteractions(
                 harness.restaurantSelector,
                 harness.semanticCacheService,
@@ -201,7 +202,7 @@ class SseStreamingServiceFactoryPackRouteTest {
         AIIntentConfig intent = intent("REPORT_INVENTORY", "report_inventory", "库存报表");
         IntentMatchResult match = match(intent, IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND);
         when(harness.aiIntentService.recognizeIntentWithConfidence(
-                "查看批次进度", "F001", 3, 7L, "operator", null, null, null)).thenReturn(match);
+                "查看批次进度", "F001", 3, 7L, "operator", null, null, null, List.of())).thenReturn(match);
         when(harness.aiIntentService.hasPermission("REPORT_INVENTORY", "operator"))
                 .thenReturn(true);
         when(harness.writeGuardService.isWriteIntent(intent)).thenReturn(false);
@@ -235,7 +236,7 @@ class SseStreamingServiceFactoryPackRouteTest {
                 .questionType(IntentKnowledgeBase.QuestionType.GENERAL_QUESTION)
                 .build();
         when(harness.aiIntentService.recognizeIntentWithConfidence(
-                "分析生产异常", "F001", 3, 7L, "operator", null, null, null)).thenReturn(general);
+                "分析生产异常", "F001", 3, 7L, "operator", null, null, null, List.of())).thenReturn(general);
 
         IntentExecuteResponse result = harness.execute(
                 "F001",
