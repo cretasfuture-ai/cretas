@@ -29,6 +29,8 @@ import {
   WarehouseDeliveryRecord,
 } from '../../../services/api/warehouseDeliveryApiClient';
 import { handleError } from '../../../utils/errorHandler';
+import { displayUnit } from '../../../utils/packagingUnitConversion';
+import { formatDateTime } from '../../../utils/formatters';
 import {
   filterPendingDeliveries,
   isConfirmableDeliveryStatus,
@@ -103,7 +105,7 @@ export function deliveryItemLines(row: WarehouseDeliveryRecord) {
   return (row.items || []).map((item) => ({
     id: item.id,
     name: item.productName || `产品-${item.productTypeId || ''}`,
-    quantityText: `计划发 ${item.deliveredQuantity ?? 0} ${item.unit || '单位未标注'}`,
+    quantityText: `计划发 ${item.deliveredQuantity ?? 0} ${displayUnit(item.unit) || '单位未标注'}`,
   }));
 }
 
@@ -399,8 +401,8 @@ export function WHDeliveryConfirmListScreen() {
                             <Text style={styles.infoValue}>{row.shippedBy ? `用户 ${row.shippedBy}` : '系统未记录'}</Text>
                           </View>
                           <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>完成时间</Text>
-                            <Text style={styles.infoValue}>{row.updatedAt || '-'}</Text>
+                            <Text style={styles.infoLabel}>更新时间</Text>
+                            <Text style={styles.infoValue}>{row.updatedAt ? formatDateTime(row.updatedAt) || row.updatedAt : '-'}</Text>
                           </View>
                         </>
                       )}

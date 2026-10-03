@@ -42,6 +42,7 @@ import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { apiClient } from '../../services/api/apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 import { formatDateTime } from '../../utils/formatters';
+import { formatOATodoValue } from '../../utils/oaTodoDisplay';
 import type { OATodoStackParamList } from '../../types/navigation';
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -120,6 +121,8 @@ function isDateTimeKey(key: string): boolean {
 }
 
 function formatDisplayValue(key: string, value: unknown): string {
+  const specializedValue = formatOATodoValue(key, value);
+  if (specializedValue !== undefined) return specializedValue;
   if (key === 'warehouseId' && isWarehouseIdLike(value)) {
     return '盘点仓库需核对';
   }
@@ -203,6 +206,12 @@ const FIELD_LABELS: Record<string, string> = {
   defaultInvoiceType: '默认发票类型',
   payableAmount: '应收金额',
   paymentStatus: '收款状态',
+  salesperson: '业务员',
+  shippingIncluded: '含运费',
+  shippingFee: '运费',
+  processingMode: '销售模式',
+  materialSupplyMode: '供料方式',
+  customerStockFulfillmentMode: '客户库存履约方式',
   lockedQty: '锁定数量',
   reservedQty: '已预留数量',
   shortageQty: '缺口数量',
@@ -262,6 +271,7 @@ const SKIP_KEYS = new Set([
   'supplierId',
   'purchaseOrderId',
   'quoteId',
+  'invoiceTodoAttempts',
 ]);
 
 function isEmptyDetailValue(value: unknown): boolean {

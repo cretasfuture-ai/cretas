@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
@@ -8,11 +8,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { labelQcApi } from '../../services/api/labelQcApi';
 import { useAuthStore } from '../../store/authStore';
+import { getFactoryId, getUserRole } from '../../types/auth';
 import { LabelQcTaskDetail, LabelQcTaskStatus } from '../../types/labelQc';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QILabelQcSubmitted'>;
+
+export interface QILabelQcSubmittedScreenProps {
+  managerMode?: boolean;
+}
 
 const STATUS_COPY: Record<LabelQcTaskStatus, { title: string; body: string; color: string }> = {
   DRAFT: { title: '草稿待上传', body: '照片尚未全部提交，请返回后重试。', color: QI_COLORS.warning },
@@ -25,50 +30,84 @@ const STATUS_COPY: Record<LabelQcTaskStatus, { title: string; body: string; colo
   ANALYSIS_FAILED: { title: '等待人工处理', body: '照片已经保存，质量审核员会在审核工作台继续处理。', color: QI_COLORS.danger },
 };
 
-export default function QILabelQcSubmittedScreen() {
+export default function QILabelQcSubmittedScreen({ managerMode = false }: QILabelQcSubmittedScreenProps) {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
-  const factoryId = useAuthStore((state) => state.user?.factoryId);
+  const user = useAuthStore((state) => state.user);
+  const factoryId = getFactoryId(user) || undefined;
+  const actorKey = `${user?.id ?? 'none'}:${factoryId ?? 'none'}:${getUserRole(user)}`;
+  const actorKeyRef = useRef(actorKey);
+  const requestSequenceRef = useRef(0);
   const [detail, setDetail] = useState<LabelQcTaskDetail | null>(null);
+  const [detailActorKey, setDetailActorKey] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
-  const load = async () => {
+  if (actorKeyRef.current !== actorKey) {
+    actorKeyRef.current = actorKey;
+    requestSequenceRef.current += 1;
+  }
+
+  useEffect(() => {
+    setDetail(null);
+    setDetailActorKey(null);
+    setRefreshError(null);
+  }, [actorKey]);
+
+  const visibleDetail = detailActorKey === actorKey ? detail : null;
+  const visibleDetailStatus = visibleDetail?.task.status;
+
+  const load = useCallback(async () => {
+    const requestActorKey = actorKey;
+    const requestSequence = ++requestSequenceRef.current;
     if (!factoryId) return;
+    if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
     try {
       setRefreshError(null);
-      setDetail(await labelQcApi.getTask(route.params.taskId, factoryId));
+      const nextDetail = await labelQcApi.getTask(route.params.taskId, factoryId);
+      if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
+      setDetail(nextDetail);
+      setDetailActorKey(requestActorKey);
     } catch {
-      setRefreshError('状态刷新失败，任务已提交，可稍后在拍检记录中查看。');
+      if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
+      setRefreshError('状态暂时无法刷新，请稍后重试。');
     }
-  };
+  }, [actorKey, factoryId, route.params.taskId]);
+
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   useEffect(() => {
     const initialTimer = setTimeout(() => {
-      void load();
+      void loadRef.current();
     }, 0);
+    return () => clearTimeout(initialTimer);
+  }, [actorKey, route.params.taskId]);
+
+  useEffect(() => {
     const timer = setInterval(() => {
-      if (!detail || ['QUEUED', 'ANALYZING'].includes(detail.task.status)) {
-        void load();
+      if (visibleDetailStatus && ['QUEUED', 'ANALYZING'].includes(visibleDetailStatus)) {
+        void loadRef.current();
       }
     }, 5000);
     return () => {
-      clearTimeout(initialTimer);
       clearInterval(timer);
     };
-  }, [factoryId, route.params.taskId, detail?.task.status]);
-
-  const status = detail?.task.status ?? 'QUEUED';
+  }, [actorKey, route.params.taskId, visibleDetailStatus]);
+  const status = visibleDetailStatus ?? 'QUEUED';
   const copy = STATUS_COPY[status];
-  const context = useMemo(
-    () => [
-      ['SKU', `${route.params.skuCode} · ${route.params.skuName}`],
-      ['批次号', route.params.batchNumber || '未填写'],
-      ['生产日期', route.params.productionDate],
-      ['任务编号', route.params.taskId],
-    ],
-    [route.params],
-  );
+  const context = useMemo(() => {
+    if (!visibleDetail) return [];
+    const task = visibleDetail.task;
+    return [
+      ['SKU', `${task.skuCode} · ${task.skuName}`],
+      ['批次号', task.batchNumber || '未填写'],
+      ['生产日期', task.productionDate],
+      ['任务编号', task.id],
+    ];
+  }, [visibleDetail]);
 
   return (
     <ScrollView
@@ -106,17 +145,17 @@ export default function QILabelQcSubmittedScreen() {
             </Text>
           </View>
         ))}
-        {detail && (
+        {visibleDetail && (
           <>
             <View style={styles.divider} />
             <View style={styles.contextRow}>
               <Text style={styles.contextLabel}>照片</Text>
-              <Text style={styles.contextValue}>{detail.task.photoCount} 张</Text>
+              <Text style={styles.contextValue}>{visibleDetail.task.photoCount} 张</Text>
             </View>
             <View style={styles.contextRow}>
               <Text style={styles.contextLabel}>AI 疑似区域</Text>
-              <Text style={[styles.contextValue, detail.task.aiCandidateCount > 0 && styles.warningValue]}>
-                {detail.task.aiCandidateCount} 处（待人工确认）
+              <Text style={[styles.contextValue, visibleDetail.task.aiCandidateCount > 0 && styles.warningValue]}>
+                {visibleDetail.task.aiCandidateCount} 处（待人工确认）
               </Text>
             </View>
           </>
@@ -136,26 +175,41 @@ export default function QILabelQcSubmittedScreen() {
         </View>
       )}
 
-      <Button
-        mode="contained"
-        buttonColor={QI_COLORS.primary}
-        contentStyle={styles.buttonContent}
-        labelStyle={styles.buttonLabel}
-        onPress={() => navigation.replace('QILabelQcCreate')}
-        testID="qi-label-qc-submitted-new-task-button"
-      >
-        再拍一批
-      </Button>
-      <Button
-        mode="outlined"
-        textColor={QI_COLORS.primary}
-        contentStyle={styles.buttonContent}
-        style={styles.secondaryButton}
-        onPress={() => navigation.navigate('QIHomeTab')}
-        testID="qi-label-qc-submitted-home-button"
-      >
-        返回质检首页
-      </Button>
+      {managerMode ? (
+        <Button
+          mode="contained"
+          buttonColor={QI_COLORS.primary}
+          contentStyle={styles.buttonContent}
+          labelStyle={styles.buttonLabel}
+          onPress={() => navigation.replace('QILabelQcQueue')}
+          testID="qi-label-qc-submitted-queue-button"
+        >
+          返回拍检队列
+        </Button>
+      ) : (
+        <>
+          <Button
+            mode="contained"
+            buttonColor={QI_COLORS.primary}
+            contentStyle={styles.buttonContent}
+            labelStyle={styles.buttonLabel}
+            onPress={() => navigation.replace('QILabelQcCreate')}
+            testID="qi-label-qc-submitted-new-task-button"
+          >
+            再拍一批
+          </Button>
+          <Button
+            mode="outlined"
+            textColor={QI_COLORS.primary}
+            contentStyle={styles.buttonContent}
+            style={styles.secondaryButton}
+            onPress={() => navigation.navigate('QIHomeTab')}
+            testID="qi-label-qc-submitted-home-button"
+          >
+            返回质检首页
+          </Button>
+        </>
+      )}
     </ScrollView>
   );
 }

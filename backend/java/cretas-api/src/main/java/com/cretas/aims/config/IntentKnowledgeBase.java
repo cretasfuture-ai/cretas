@@ -8248,7 +8248,7 @@ public class IntentKnowledgeBase {
                     log.debug("检测到混合型问题，优先按操作指令处理: input='{}', indicator='{}'", input, indicator);
                     return QuestionType.OPERATIONAL_COMMAND;
                 }
-                log.debug("检测到通用咨询问题: input='{}', matched='{}'", input, indicator);
+                log.debug("检测到通用咨询问题: inputLength={}, matched='{}'", input.length(), indicator);
                 return QuestionType.GENERAL_QUESTION;
             }
         }
@@ -8884,12 +8884,12 @@ public class IntentKnowledgeBase {
 
                 if (isExactMatch || isLongPhrase || coverageRatio >= 0.4 || isShortInput) {
                     String intentCode = entry.getValue();
-                    log.debug("短语匹配成功: input='{}', phrase='{}', intent='{}', coverage={}",
-                            input, entry.getKey(), intentCode, String.format("%.2f", coverageRatio));
+                    log.debug("短语匹配成功: inputLength={}, phrase='{}', intent='{}', coverage={}",
+                            input.length(), entry.getKey(), intentCode, String.format("%.2f", coverageRatio));
                     return Optional.of(intentCode);
                 } else {
-                    log.debug("短语匹配跳过(覆盖率不足): input='{}', phrase='{}', coverage={}",
-                            input, entry.getKey(), String.format("%.2f", coverageRatio));
+                    log.debug("短语匹配跳过(覆盖率不足): inputLength={}, phrase='{}', coverage={}",
+                            input.length(), entry.getKey(), String.format("%.2f", coverageRatio));
                 }
             }
         }

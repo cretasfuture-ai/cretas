@@ -47,7 +47,7 @@ describe('quality inspector home workflow contract', () => {
   it('shows pending-review states as read-only processing records', () => {
     expect(queueSource).toContain("PROCESSING: ['DRAFT', 'UPLOADING', 'QUEUED', 'ANALYZING', 'NEEDS_REVIEW', 'ANALYSIS_FAILED']");
     expect(queueSource).toContain("navigation.navigate('QILabelQcSubmitted'");
-    expect(queueSource).not.toContain("navigation.navigate('QILabelQcReview'");
+    expect(queueSource).toContain("if (managerMode && getManagerTaskRoute(task.status, canWriteQuality) === 'QILabelQcReview')");
     expect(submittedSource).not.toContain("navigation.navigate('QILabelQcReview'");
   });
 

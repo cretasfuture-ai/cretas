@@ -90,6 +90,7 @@ PUBLIC_PREFIXES = (
 # cannot accidentally inherit the internal-service bypass.
 INTERNAL_ONLY_PATHS = frozenset({
     "/api/smartbi/restaurant/sections/owner-action-chat",
+    "/api/llm/f006-boss-question-stream",
 })
 INTERNAL_ONLY_PREFIXES = (
     "/api/internal/smartbi/agent/runs",

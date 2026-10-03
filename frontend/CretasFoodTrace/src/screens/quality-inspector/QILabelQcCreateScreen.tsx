@@ -368,7 +368,9 @@ export default function QILabelQcCreateScreen() {
           <Ionicons name="shield-checkmark-outline" size={22} color={QI_COLORS.secondary} />
           <View style={styles.noticeText}>
             <Text style={styles.noticeTitle}>AI 只做疑似初筛</Text>
-            <Text style={styles.noticeBody}>所有照片都会进入人工审核，不会自动判定合格。</Text>
+            <Text style={styles.noticeBody}>
+              发现疑点或照片无法判断时进入人工审核；AI 自动完成不等同于人工训练真值。
+            </Text>
           </View>
         </View>
 

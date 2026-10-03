@@ -128,6 +128,13 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
     public ConversationContext getOrCreateContext(String factoryId, Long userId, String sessionId) {
         log.debug("获取或创建对话上下文: factoryId={}, userId={}, sessionId={}", factoryId, userId, sessionId);
 
+        // A session is tenant/user state.  Do not touch, create, save, or even build a
+        // context when the authenticated principal is incomplete; callers must fail closed.
+        if (factoryId == null || factoryId.isBlank() || userId == null) {
+            log.warn("拒绝建立对话上下文: principal incomplete, sessionId={}", sessionId);
+            return null;
+        }
+
         ConversationMemory memory;
         boolean isNew = false;
 
@@ -136,6 +143,10 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
             Optional<ConversationMemory> existingOpt = memoryRepository.findBySessionId(sessionId);
             if (existingOpt.isPresent()) {
                 memory = existingOpt.get();
+                if (!factoryId.equals(memory.getFactoryId()) || !userId.equals(memory.getUserId())) {
+                    log.warn("拒绝访问不属于当前 principal 的会话: sessionId={}", sessionId);
+                    return null;
+                }
                 memory.touch();
             } else {
                 // sessionId 不存在，创建新的

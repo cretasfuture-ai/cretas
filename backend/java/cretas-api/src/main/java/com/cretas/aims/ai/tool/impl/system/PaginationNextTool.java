@@ -85,16 +85,32 @@ public class PaginationNextTool extends AbstractBusinessTool {
             return result;
         }
 
+        Long trustedUserId = getLong(context, "userId");
+        String trustedFactoryId = getString(context, "factoryId");
+        if (trustedUserId == null || trustedFactoryId == null || !trustedFactoryId.equals(factoryId)) {
+            result.put("status", "PAGINATION_REFUSED");
+            result.put("message", "当前会话身份不完整，无法翻页。");
+            return result;
+        }
+
         // 从对话记忆中读取上下文
         ConversationContext convContext = conversationMemoryService.getContext(sessionId);
 
-        if (convContext == null || convContext.getLastIntentCode() == null) {
+        if (convContext == null || !factoryId.equals(convContext.getFactoryId())
+                || !trustedUserId.equals(convContext.getUserId())) {
+            result.put("status", "PAGINATION_REFUSED");
+            result.put("message", "当前会话不属于当前用户或工厂，无法翻页。");
+            return result;
+        }
+
+        Map<String, Object> pagination = latestPaginationMetadata(convContext);
+        if (pagination == null) {
             log.info("会话 {} 无上次查询记录", sessionId);
             result.put("message", "当前会话没有查询记录，无法翻页。请先执行一次查询，例如：「查看库存」「查看订单」");
             return result;
         }
 
-        String lastIntentCode = convContext.getLastIntentCode();
+        String lastIntentCode = String.valueOf(pagination.getOrDefault("intentCode", ""));
 
         // 检查上次意图是否为可翻页的查询类意图
         if (!isPaginableIntent(lastIntentCode)) {
@@ -105,23 +121,18 @@ public class PaginationNextTool extends AbstractBusinessTool {
             return result;
         }
 
-        // 计算目标页码
+        // 计算目标页码。The stored value is the tool's own page convention (1-based or
+        // 0-based), so increment the returned value instead of imposing a convention here.
         Integer targetPage = getInteger(params, "targetPage");
-        int currentPage = 1; // 默认当前在第1页
-
-        // 尝试从最近的助手消息中提取当前页码
-        List<ConversationMessage> recentMessages = convContext.getRecentMessages();
-        if (recentMessages != null) {
-            currentPage = extractCurrentPage(recentMessages);
-        }
+        int currentPage = getInteger(pagination, "page", 0);
 
         int nextPage = targetPage != null ? targetPage : currentPage + 1;
 
         log.info("翻页: sessionId={}, lastIntent={}, currentPage={}, nextPage={}",
                 sessionId, lastIntentCode, currentPage, nextPage);
 
-        // 找到上次的用户查询输入
-        String lastUserInput = findLastQueryInput(recentMessages);
+        String lastUserInput = String.valueOf(pagination.getOrDefault("queryInput", "")).trim();
+        if (lastUserInput.isEmpty()) lastUserInput = null;
 
         result.put("status", "PAGINATION_READY");
         result.put("lastIntentCode", lastIntentCode);
@@ -132,7 +143,13 @@ public class PaginationNextTool extends AbstractBusinessTool {
 
         if (lastUserInput != null) {
             result.put("reExecuteInput", lastUserInput);
-            result.put("paginationParams", Map.of("page", nextPage, "size", 10));
+            Map<String, Object> paginationParams = new LinkedHashMap<>();
+            paginationParams.put("page", nextPage);
+            Object size = pagination.get("size");
+            if (size != null) paginationParams.put("size", size);
+            Object filters = pagination.get("filters");
+            if (filters instanceof Map<?, ?> filterMap) paginationParams.put("filters", filterMap);
+            result.put("paginationParams", paginationParams);
             result.put("message", String.format(
                     "正在为您加载第 %d 页数据（上次查询：%s）...",
                     nextPage, lastUserInput));
@@ -143,6 +160,21 @@ public class PaginationNextTool extends AbstractBusinessTool {
         }
 
         return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> latestPaginationMetadata(ConversationContext context) {
+        List<ConversationMessage> messages = context.getRecentMessages();
+        if (messages == null) return null;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ConversationMessage message = messages.get(i);
+            if (message.getRole() != ConversationMessage.Role.ASSISTANT || message.getMetadata() == null) continue;
+            Object raw = message.getMetadata().get("pagination");
+            if (raw instanceof Map<?, ?> map) {
+                return new LinkedHashMap<>((Map<String, Object>) map);
+            }
+        }
+        return null;
     }
 
     /**

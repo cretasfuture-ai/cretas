@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -18,13 +18,30 @@ import {
   LabelQcTaskStatus,
   LabelQcTaskSummary,
 } from '../../types/labelQc';
+import { getFactoryId, getUserRole } from '../../types/auth';
 import {
   QI_COLORS,
   QualityInspectorStackParamList,
 } from '../../types/qualityInspector';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type QueueFilter = 'PROCESSING' | 'DONE';
+
+const REVIEWABLE_STATUSES: LabelQcTaskStatus[] = ['NEEDS_REVIEW', 'ANALYSIS_FAILED'];
+
+export function getManagerTaskRoute(
+  status: LabelQcTaskStatus,
+  canWriteQuality = true,
+): 'QILabelQcReview' | 'QILabelQcSubmitted' {
+  return canWriteQuality && REVIEWABLE_STATUSES.includes(status)
+    ? 'QILabelQcReview'
+    : 'QILabelQcSubmitted';
+}
+
+interface QILabelQcQueueProps {
+  managerMode?: boolean;
+}
 
 const FILTER_STATUSES: Record<QueueFilter, LabelQcTaskStatus[]> = {
   PROCESSING: ['DRAFT', 'UPLOADING', 'QUEUED', 'ANALYZING', 'NEEDS_REVIEW', 'ANALYSIS_FAILED'],
@@ -54,23 +71,43 @@ const getErrorMessage = (error: unknown): string => {
   return '拍检记录加载失败，请检查网络后重试';
 };
 
-export default function QILabelQcQueueScreen() {
+export default function QILabelQcQueueScreen({ managerMode = false }: QILabelQcQueueProps) {
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
-  const factoryId = useAuthStore((state) => state.user?.factoryId);
+  const user = useAuthStore((state) => state.user);
+  const factoryId = getFactoryId(user) || undefined;
+  const actorKey = `${user?.id ?? 'none'}:${factoryId ?? 'none'}:${getUserRole(user)}`;
+  const actorKeyRef = useRef(actorKey);
+  const requestSequenceRef = useRef(0);
   const [filter, setFilter] = useState<QueueFilter>('PROCESSING');
   const [tasks, setTasks] = useState<LabelQcTaskSummary[]>([]);
+  const [tasksOwnerActorKey, setTasksOwnerActorKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const visibleTasks = tasksOwnerActorKey === actorKey ? tasks : [];
+
+  if (actorKeyRef.current !== actorKey) {
+    actorKeyRef.current = actorKey;
+    requestSequenceRef.current += 1;
+  }
+
+  useEffect(() => {
+    setTasks([]);
+    setTasksOwnerActorKey(null);
+    setError(null);
+  }, [actorKey]);
 
   const load = useCallback(
     async (asRefresh = false) => {
+      const requestActorKey = actorKey;
+      const requestSequence = ++requestSequenceRef.current;
       if (!factoryId) {
         setError('登录信息缺少工厂，请重新登录');
         setLoading(false);
         return;
       }
+      if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
       try {
         if (asRefresh) setRefreshing(true);
         else setLoading(true);
@@ -79,15 +116,19 @@ export default function QILabelQcQueueScreen() {
           { statuses: FILTER_STATUSES[filter], page: 1, size: 50 },
           factoryId,
         );
+        if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
         setTasks(page.content);
+        setTasksOwnerActorKey(requestActorKey);
       } catch (loadError) {
+        if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
         setError(getErrorMessage(loadError));
       } finally {
+        if (actorKeyRef.current !== requestActorKey || requestSequence !== requestSequenceRef.current) return;
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [factoryId, filter],
+    [actorKey, factoryId, filter],
   );
 
   useFocusEffect(
@@ -100,18 +141,23 @@ export default function QILabelQcQueueScreen() {
     if (filter === 'PROCESSING') {
       return {
         icon: 'sparkles-outline' as const,
-        title: '当前没有处理中的拍检',
-        body: '发起拍检并上传照片后，可以在这里查看处理进度。',
+        title: managerMode ? '当前没有待审核拍检' : '当前没有处理中的拍检',
+        body: managerMode ? '现场质检员提交疑点后，任务会出现在这里。' : '发起拍检并上传照片后，可以在这里查看处理进度。',
       };
     }
     return {
       icon: 'archive-outline' as const,
       title: '还没有已完成记录',
-      body: '拍检处理完成后会保留在这里。',
+      body: managerMode ? '人工审核完成或 AI 自动通过的任务会保留在这里。' : '拍检处理完成后会保留在这里。',
     };
-  }, [filter]);
+  }, [filter, managerMode]);
 
   const openTask = (task: LabelQcTaskSummary) => {
+    const canWriteQuality = hasModulePermission(user, 'quality', 'write');
+    if (managerMode && getManagerTaskRoute(task.status, canWriteQuality) === 'QILabelQcReview') {
+      navigation.navigate('QILabelQcReview', { taskId: task.id });
+      return;
+    }
     navigation.navigate('QILabelQcSubmitted', {
       taskId: task.id,
       skuCode: task.skuCode,
@@ -128,15 +174,15 @@ export default function QILabelQcQueueScreen() {
           <Text style={styles.title}>拍检记录</Text>
           <Text style={styles.subtitle}>查看照片上传、AI 初筛和处理结果</Text>
         </View>
-        <Button
-          mode="contained"
-          icon="camera-plus-outline"
-          buttonColor={QI_COLORS.primary}
-          onPress={() => navigation.navigate('QILabelQcCreate')}
-          testID="qi-label-qc-queue-create-button"
-        >
-          新建拍检
-        </Button>
+        {!managerMode && <Button
+            mode="contained"
+            icon="camera-plus-outline"
+            buttonColor={QI_COLORS.primary}
+            onPress={() => navigation.navigate('QILabelQcCreate')}
+            testID="qi-label-qc-queue-create-button"
+          >
+            新建拍检
+          </Button>}
       </View>
 
       <SegmentedButtons
@@ -160,11 +206,11 @@ export default function QILabelQcQueueScreen() {
       )}
 
       <FlatList
-        data={tasks}
+        data={visibleTasks}
         keyExtractor={(task) => task.id}
         contentContainerStyle={[
           styles.listContent,
-          !tasks.length && styles.emptyListContent,
+          !visibleTasks.length && styles.emptyListContent,
           { paddingBottom: insets.bottom + 24 },
         ]}
         refreshControl={

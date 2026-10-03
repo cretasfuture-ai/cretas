@@ -451,14 +451,18 @@
       "active": "运行中",
       "inactive": "停用",
       "maintenance": "维护中",
-      "scrapped": "已报废"
+      "scrapped": "已报废",
+      "idle": "空闲",
+      "unknown": "状态未知"
     },
     "type": {
       "processing": "加工",
       "refrigeration": "冷藏",
       "packaging": "包装",
       "transport": "运输",
-      "other": "其他"
+      "other": "其他",
+      "missing": "未填写",
+      "unknown": "类型未知"
     },
     "info": {
       "type": "类型",
@@ -481,10 +485,14 @@
         "code": "编号",
         "model": "型号",
         "location": "位置",
-        "operator": "操作员",
-        "selectOperator": "请选择操作员",
-        "noOperator": "不指定",
-        "loadingOperators": "加载中...",
+      "operator": "操作员",
+      "selectOperator": "请选择操作员",
+      "noOperator": "不指定",
+      "operatorReadRequired": "当前没有人事读取权限，无法选择操作员；可保持未指定",
+      "operatorBindingRetained": "已保留原操作员",
+      "operatorLoadFailed": "操作员候选加载失败，请重试",
+      "retryOperators": "重试",
+      "loadingOperators": "加载中...",
         "notes": "备注"
       },
       "buttons": {
