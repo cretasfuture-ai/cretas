@@ -6,8 +6,6 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-R6-HR-20261004` — `review` — Owner: Codex/root — Base `bafc7fcb55` — 🔒 14文件绩效/真实排班；self/actor/旧刷新与重试终审已修；联合R7目标95/TS通过，新版真机待验。详见archive/2026-10-04-f006-mobile-r6-hr.md。
-- `F006-MOBILE-R7-LABOR-COST-20261004` — `review` — Owner: Codex/root — Base `bafc7fcb55` — 🔒 七文件人工成本真实wire/NULL、actor/请求序号/焦点已修；R7三套36与联合R6八套95/TS通过。后端工时与工资样本边界保留，真机待验。详见archive/2026-10-04-f006-mobile-r7-labor-cost.md。
 
 - `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
 
