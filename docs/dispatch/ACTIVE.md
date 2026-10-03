@@ -6,8 +6,7 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读/金额、财务/价格身份边界；ArAp 查询 DTO、账龄、PriceList 工厂校验；采购列表刷新、useListSummary 迟到响应保护及回归；F006 真机和老板 AI。文件/验收见 `archive/2026-10-03-f006-mobile-audit.md`。
-- `F006-MOBILE-CI-PORTABLE-20261004` — `in-progress` — Owner: Codex/cretas_executor — Base `08bf57fc69` — 三文件scope：full workflow、r10-it测试profile、新ContractTest；复用独立PG并约束TestContext缓存。禁止runner/service/helper/labels/选择器/基线和prod改变。详见archive/2026-10-04-f006-mobile-ci-portable.md。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c0248188ca` — R1源码/CI修复已完成并归档，#876待最终门禁/合入/Java发布。继续F006全角色流程、R2/R3/R4/R6/R8真机回读及老板Mac mini问答；本行仅协调/验收，不占用已归档源码scope。详见archive/2026-10-03-f006-mobile-audit.md。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
