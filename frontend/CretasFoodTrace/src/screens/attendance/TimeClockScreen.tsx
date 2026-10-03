@@ -236,7 +236,7 @@ export default function TimeClockScreen() {
                     {t(locationState === 'denied' ? 'attendance.timeClock.locationPermissionRequired' : 'attendance.timeClock.locationUnavailable')}
                   </Text>
                   <NeoButton testID="timeclock-location-retry" variant="outline" icon="crosshairs-gps" onPress={loadGpsLocation}>
-                    {t('common:retry')}
+                    {t('common.retry')}
                   </NeoButton>
                 </View>
               )}

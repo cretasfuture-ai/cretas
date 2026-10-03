@@ -5,7 +5,8 @@ import TimeClockScreen from '../../screens/attendance/TimeClockScreen';
 import { getCurrentPositionWithTimeout } from '../../utils/currentPosition';
 import { timeclockApiClient } from '../../services/api/timeclockApiClient';
 
-jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) =>
+  key === 'common.retry' ? require('../../i18n/locales/zh-CN/hr.json').common.retry : key }) }));
 jest.mock('../../store/authStore', () => ({
   useAuthStore: () => ({ user: { id: 42, userType: 'factory', factoryId: 'F006', factoryUser: { factoryId: 'F006' } } }),
 }));
@@ -29,6 +30,7 @@ it('shows permission recovery and keeps clock writes blocked when permission is 
   render(<TimeClockScreen />);
   await screen.findByText('attendance.timeClock.locationPermissionRequired');
   expect(screen.getByTestId('timeclock-location-retry')).toBeTruthy();
+  expect(screen.getByText('重试')).toBeTruthy();
   expect(screen.queryByText('attendance.timeClock.locating')).toBeNull();
   expect(position).not.toHaveBeenCalled();
   fireEvent.press(screen.getByText('attendance.timeClock.clockInBtn'));

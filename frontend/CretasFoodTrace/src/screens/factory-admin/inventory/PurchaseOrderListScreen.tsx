@@ -255,7 +255,7 @@ export default function PurchaseOrderListScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   // SP6 #36 — 快捷入口条
-  quickBar: { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  quickBar: { flexGrow: 0, flexShrink: 0, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   quickBarContent: { paddingHorizontal: 12, paddingVertical: 10, gap: 10, flexDirection: 'row' },
   quickCard: {
     width: 120,

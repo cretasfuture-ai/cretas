@@ -310,6 +310,23 @@ describe('首页功能模块（每个落在共享 HomeScreen 上的角色都得�
     expect(withoutVictim).toHaveLength(all.length - 1);
   });
 
+  it('销售主管缺财务读取时隐藏应收应付，保留订单和有权读取的价格表', () => {
+    const user = patchFactoryUser(makeUser('sales_manager'), {
+      modulePermissions: { sales: 'rw', finance: '-' },
+    });
+    const ids = resolveHomeModules('sales', user, allModulesEnabled, identityT).map(m => m.id);
+    expect(ids).toContain('salesOrders');
+    expect(ids).toContain('priceList');
+    expect(ids).not.toContain('arAp');
+  });
+
+  it('查看者有财务读权仍保留应收应付，但不展示价格表', () => {
+    const user = patchFactoryUser(makeUser('viewer'), { modulePermissions: { finance: 'r' } });
+    const ids = resolveHomeModules('viewer', user, allModulesEnabled, identityT).map(m => m.id);
+    expect(ids).toContain('arAp');
+    expect(ids).not.toContain('priceList');
+  });
+
   it('每个模块的 i18n key 在 zh-CN 与 en-US 的 home.json 里都取得到', () => {
     // ⚠️ `i18nKeysResolve` 那道闸只认**字面量** `t('…')` 且只查 zh-CN；
     //    这里的 key 存在配置对象里 ⇒ 它看不见。所以两个 locale 在这里各查一遍。

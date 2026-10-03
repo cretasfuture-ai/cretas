@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI 显示、考勤定位、viewer 移动只读边界与销售金额显示及测试；F006 真机角色、权限、流程和老板 AI 核验。文件与验收见 `archive/2026-10-03-f006-mobile-audit.md`。
+- `F006-MOBILE-AUDIT-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `c3eefe0c6a` — 🔒 Scope: 库存 AI、定位、移动只读及金额、应收应付/价格页权限与身份绑定；F006 真机角色、流程和老板 AI 核验。文件与验收见 `archive/2026-10-03-f006-mobile-audit.md`。
 
 
 
