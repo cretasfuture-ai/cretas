@@ -67,6 +67,9 @@ on:
       #    车道那段签名检查变成恒 unknown)。被断言的文件不在触发面里, 就是 #713 那个 P0 的
       #    形状: 只动它的 PR 触发不到这道闸, 而「没跑」与「跑了没问题」读数完全相同。
       - '.github/workflows/web-dist.yml'
+      # 🔴 2026-10-03: test-fresh-db-startup-outcome.sh 钉着这个工作流的 rc=2 分支
+      #    (启动超时 ⇒ 没量到, ⛔ 不与迁移失败同一个红) —— 改它的 PR 必须触发那道闸。
+      - '.github/workflows/fresh-db-progress.yml'
       - '.github/workflows/ops-script-tests.yml'
       # 🔴 2026-09-07 P0 的直接教训: `test-ci-gate-runs-merge-result.sh` 断言的正是下面这几个
       #    文件的结构(三处 head.sha pin / 内联 merge 步骤 / ⛔ 不许用本地 composite action),
