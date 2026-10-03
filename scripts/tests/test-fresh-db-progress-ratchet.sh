@@ -19,8 +19,10 @@
 #   ① 三个数**只许涨**: 任一倒退 ⇒ 红, 且报出是哪一个、从多少到多少
 #   ② 读不出数 ⇒ 报「**没量到**」, ⛔ 措辞必须与「倒退」不同 —— 两者混在一起, 一个连不上库
 #      的跑批会天天被读成「没倒退」
-#   ③ 🔴 失败点(文件名 + SQLSTATE)是**必然存在**的读数(硬约束 9): 今天这条链一定死在某处。
-#      它缺席且又没健康 ⇒ 这趟没跑到 Flyway ⇒ 三个数不作数, 必须红
+#   ③ 🔴 失败点(文件名 + SQLSTATE)读数必须打出来; 它缺席且又没健康时**不再是一句话**:
+#      进程死了 = 启动失败(rc=1) / 进程还活着 = 启动超时(rc=2, 没量到)。
+#      (2026-10-01 ~ 10-03 四趟启动超时被报成「这趟没跑到 Flyway」, 而迁移早已跑完。)
+#      五个结局的逐态行为由 test-fresh-db-startup-outcome.sh 用合成日志守, 这里只守接线。
 #   ④ 🔴 三个读数**三种形式**, ⛔ 不是一类:
 #      · 失败迁移条数 = **pass/fail 必须为 0**(二值事实, ⛔ 不随正常演进变)
 #      · tables/indexes = **棘轮**(每条建表/建索引的迁移都让它们**合法地涨**
@@ -32,9 +34,10 @@
 #      而那时这道闸**退化成一面镜子**。
 #      📌 2026-09-07 普查过一遍: 钉读数/代码结构的(如 `success = false`、`merged_ok=yes`、
 #      `if [ -z "$fail_file" ]`)**保持原样** —— 它们不是散文, 改动它们本来就是行为改动。
-#   ⑤ 日志里「有失败点」本身**不直接红** —— ⚠️ 但理由已经不是「那是常态」了
-#      (2026-09-07 bootstrap 之后这条链跑得完)。现在的理由是**分工**:
-#      失败与否由 flyway_schema_history 的 failed=0 判, 日志那条负责说出**是哪一条**。
+#   ⑤ 日志里「有失败点」**自己判红**(FLYWAY_FAILED, rc=1)。
+#      ⚠️ 此前的理由是「分工: 失败与否由 failed=0 判, 日志只负责说是哪一条」——
+#      2026-10-03 改掉: PostgreSQL 上失败的迁移整体回滚, history 里不留 success=false,
+#      于是一条坏迁移会读成「失败 0 条」再被形状棘轮放过。failed=0 那条保留, 但 ⛔ 不再是唯一的判据。
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -63,9 +66,9 @@ ok "三个数都在 FRESH_DB_SHAPE 读数里"
 
 # ---- 3. 失败点读数存在, 且缺席时会红(硬约束 9 的对照) ----
 grep -q 'READING: FRESH_DB_FAILURE' "$GATE" || fail "3: 没有失败点读数"
-grep -q '这趟没跑到 Flyway' "$GATE" \
-    || fail "3: 失败点缺席时没有判「没跑到」—— 那样三个数即使没倒退也毫无意义(硬约束 9)"
-ok "失败点是必然存在的读数, 缺席时判「这趟没跑到」"
+grep -q 'READING: FRESH_DB_STARTUP state=' "$GATE" \
+    || fail "3: 没有启动结局读数 —— 失败点缺席又没健康时, 读的人分不出「进程死了」还是「启动超时」"
+ok "失败点读数在; 缺席且没健康时由启动结局读数说清是哪一种(逐态见 test-fresh-db-startup-outcome.sh)"
 
 # ---- 4. 「读不出数」与「倒退」措辞必须不同 ----
 # 片段:「没量到」≠「倒退」这个区分
@@ -74,19 +77,20 @@ grep -q '不当成倒退' "$GATE" \
 grep -q '形状只许涨' "$GATE" || fail "4: 没有「只许涨」的措辞"
 ok "「没量到」与「倒退」措辞分开"
 
-# ---- 5. 日志里的失败点本身不直接红(理由是**分工**, ⛔ 不再是「那是常态」) ----
-# ⚠️ 第一版判据是「打完 FRESH_DB_FAILURE 之后不能紧跟 fail」—— **假阳性**:
-#    那里确实紧跟一个 fail, 但它被 `[ -z "$fail_file" ]` 守着, 只在**失败点缺席**时开火。
-#    文本匹配分不出「无条件 fail」与「条件 fail」, 而这两者的行为正好相反。
-#    ⇒ 判据改成守**那个条件本身**: 紧跟的 fail 必须以「失败点为空」为前提。
-#    第二版改成「无条件 fail 就红」也还是假阳性: 一个缩进在 `if` 里的 `fail` 与一个顶格的
-#    `fail`, 在**行文本上完全一样**。这个判据用文本匹配**表达不出来** —— 要判它得解析结构。
-# ⇒ 只留能表达的那条(守卫必须在), 并把做不到的那半**写出来**, ⛔ 不假装守住了。
-after=$(awk '/READING: FRESH_DB_FAILURE/{found=1; next} found && NF {print; c++} c>=3{exit}' "$GATE")
-printf '%s' "$after" | grep -qF 'if [ -z "$fail_file" ]' \
-    || fail "5: 失败点之后那个 fail 不是以「失败点缺席」为条件 —— 失败与否由 failed=0 判定(见 6c), 日志这条只负责说出是哪一条, ⛔ 不该自己红"
-echo "READING: GATE_5_SCOPE=guard-present-only (⛔ 检测不到「有人新加一个无条件 fail」—— 文本匹配分不出缩进在 if 里的 fail)"
-ok "失败点之后那个 fail 以「失败点缺席」为条件(⚠️ 只守这一条, 边界见上面读数)"
+# ---- 5. 日志里的失败点**自己判红**, 且判定交给分类器(⛔ 不在调用方另写一支) ----
+# ⚠️ 2026-10-03 之前这里守的是相反的行为(「失败点之后的 fail 必须以失败点缺席为条件」,
+#    理由是「失败与否由 failed=0 判」)。那条理由在 PostgreSQL 上不成立: 失败的迁移整体回滚,
+#    history 里不留 success=false ⇒ failed=0 照样是 0。⇒ 断言从「不许自己红」改成「必须经分类器」。
+#    行为本身(失败点 ⇒ FLYWAY_FAILED ⇒ rc=1, 失败点 + 健康也不放绿)由
+#    test-fresh-db-startup-outcome.sh 真跑分类函数来守, 这里只守**接线顺序**:
+#    打完 FRESH_DB_FAILURE 之后、判三个数之前, 先过分类器。
+after=$(awk '/READING: FRESH_DB_FAILURE/{found=1; next} found && /^[[:space:]]*for v in "\$applied"/{exit} found {print}' "$GATE")
+printf '%s' "$after" | grep -qF 'classify_startup_outcome "$BACKEND_LOG"' \
+    || fail "5: 打完失败点读数之后、判三个数之前没有过分类器 —— 一条坏迁移可能读成「失败 0 条」再被棘轮放过"
+printf '%s' "$after" | grep -qF '[ "$startup_rc" = "1" ] && fail' \
+    || fail "5: 分类器判成 rc=1(迁移失败 / 进程崩溃)时调用方没有红"
+echo "READING: GATE_5_SCOPE=wiring-order-only (逐态行为见 test-fresh-db-startup-outcome.sh)"
+ok "失败点读数之后先过分类器, rc=1 的结局当场红"
 
 # ---- 6. 基线文件: 存在则必须三行齐全; 不存在则脚本要能自己写第一份 ----
 # 片段: 首次写入这条路径存在

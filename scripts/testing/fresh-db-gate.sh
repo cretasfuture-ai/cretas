@@ -10,7 +10,11 @@ FRESH_DB_PORT="${FRESH_DB_PORT:-55432}"
 FRESH_DB_PROJECT="${FRESH_DB_PROJECT:-cretas-fresh-db}"
 FRESH_DB_APP_PORT="${FRESH_DB_APP_PORT:-10019}"
 FRESH_DB_KEEP="${FRESH_DB_KEEP:-0}"
-STARTUP_TIMEOUT="${FRESH_DB_STARTUP_TIMEOUT:-300}"
+# ⚠️ 600 不是拍脑袋: hosted ubuntu-latest 上「起 Spring → 读数」成功样本 233–289s
+#    (2026-09-07 ~ 10-03, 含 Maven 编译), 而 300 的旧预算让 10-01 ~ 10-03 七趟里四趟
+#    在 306s 被截断 —— 最好的成功样本也只剩 11s 余量。600 ≈ 最慢成功样本的 2 倍。
+#    预算是墙钟秒(SECONDS), ⛔ 不是循环次数(每轮 curl+grep+sleep 不止 1s)。
+STARTUP_TIMEOUT="${FRESH_DB_STARTUP_TIMEOUT:-600}"
 DRY_RUN=0
 PROGRESS=0
 SHAPE_FLOOR="$SCRIPT_DIR/fresh-db-above-baseline-floor.txt"
@@ -44,13 +48,16 @@ Options:
                ▎**闸的类型不是闸的属性, 是每个读数各自的属性。**
                ⚠️ 唯一边界: 某条迁移**合法地删表删索引**时棘轮会红 ——
                   那时要**有意识地下调下界并说明**, ⛔ 不是自动跟随。
+               退出码: 0 健康且无倒退 / 1 真失败(迁移失败、启动崩溃、倒退)
+                       / 2 没量到(启动超时、读数读不出) —— 结局分类见
+                       scripts/testing/fresh-db-startup-outcome.sh。
   -h, --help   Show this help.
 
 Local-only overrides:
   FRESH_DB_PORT=55432
   FRESH_DB_APP_PORT=10019
   FRESH_DB_PROJECT=cretas-fresh-db[-suffix]
-  FRESH_DB_STARTUP_TIMEOUT=300
+  FRESH_DB_STARTUP_TIMEOUT=600   (墙钟秒, 含 Maven 编译)
 EOF
 }
 
@@ -62,6 +69,15 @@ fail() {
     printf '[fresh-db] ERROR: %s\n' "$*" >&2
     exit 1
 }
+
+# rc=2: 本趟**没量到** —— 与「量到了、而且是坏的」(rc=1)措辞和退出码都不同。
+unmeasured() {
+    printf '[fresh-db] UNMEASURED (rc=2): %s\n' "$*" >&2
+    exit 2
+}
+
+# shellcheck source=fresh-db-startup-outcome.sh
+. "$SCRIPT_DIR/fresh-db-startup-outcome.sh"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -394,7 +410,19 @@ BACKEND_PID=$!
 
 healthy=0
 died=0
-for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
+boot_t0=$SECONDS
+boot_deadline=$((SECONDS + STARTUP_TIMEOUT))
+# 两个相位时刻(秒, 相对 boot_t0): 编译交给 Spring / Flyway 完成。
+# 超时那趟靠它们说清「卡在哪一段」, 也给下次调预算留证据, ⛔ 不再凭一句「超时了」猜。
+spring_started_s=""
+flyway_done_s=""
+while [ "$SECONDS" -lt "$boot_deadline" ]; do
+    if [ -z "$spring_started_s" ] && grep -q "$FRESH_DB_SPRING_START_RE" "$BACKEND_LOG" 2>/dev/null; then
+        spring_started_s=$((SECONDS - boot_t0))
+    fi
+    if [ -z "$flyway_done_s" ] && grep -qE "$FRESH_DB_FLYWAY_DONE_RE" "$BACKEND_LOG" 2>/dev/null; then
+        flyway_done_s=$((SECONDS - boot_t0))
+    fi
     if ! kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
         wait "$BACKEND_PID" || true
         BACKEND_PID=""
@@ -412,6 +440,7 @@ for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
     fi
     sleep 1
 done
+boot_elapsed=$((SECONDS - boot_t0))
 if [ "$PROGRESS" -eq 1 ]; then
     # ── 形状判定 ────────────────────────────────────────────────────────────
     # 🔴 三个读数三种形式(理由见 usage): 失败迁移 = pass/fail; tables/indexes = 棘轮;
@@ -424,41 +453,51 @@ if [ "$PROGRESS" -eq 1 ]; then
     applied=$(q "SELECT COUNT(*) FROM flyway_schema_history WHERE success = true;" || true)
     tables=$(q "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';" || true)
     indexes=$(q "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public';" || true)
+    fail_file=$(fresh_db_failure_file "$BACKEND_LOG")
+    fail_state=$(fresh_db_failure_sqlstate "$BACKEND_LOG")
+    process_alive=0
+    if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" >/dev/null 2>&1; then process_alive=1; fi
+    echo "READING: FRESH_DB_SHAPE migrations_above_baseline=$applied tables=$tables indexes=$indexes"
+    echo "READING: FRESH_DB_FAILURE file=${fail_file:-<none>} sqlstate=${fail_state:-<none>} process_died=$died"
+
+    # ── 启动结局: 五态, 退出码三态 (分类与措辞在 fresh-db-startup-outcome.sh) ──
+    # 🔴 此前这里只有一句「既没有失败点、也没有健康 ⇒ 这趟没跑到 Flyway」(rc=1)。
+    #    2026-10-01 ~ 10-03 四趟 CI 在 300s 预算处被截断, 当时迁移已执行 14 个、进程还活着、
+    #    Spring 在初始化 bean —— 却被报成「没跑到 Flyway」, 与真失败同一个 rc。
+    #    ▎「没量到」与「量到了是坏的」必须分开: 前者 rc=2, 后者 rc=1(硬约束 4)。
+    startup_state=$(classify_startup_outcome "$BACKEND_LOG" "$healthy" "$died")
+    startup_rc=$(startup_outcome_rc "$startup_state")
+    startup_msg=$(startup_outcome_message "$startup_state" "$applied" "$boot_elapsed" "$STARTUP_TIMEOUT" "$fail_file" "$fail_state")
+    echo "READING: FRESH_DB_STARTUP state=$startup_state rc=$startup_rc elapsed_s=$boot_elapsed budget_s=$STARTUP_TIMEOUT spring_started_s=${spring_started_s:-none} flyway_done_s=${flyway_done_s:-none} process_alive=$process_alive"
+    case "$startup_state" in
+        HEALTHY) log "startup: $startup_msg" ;;
+        # Flyway 已完成 ⇒ 三个数是有效的: 照样判 failed=0 和棘轮(能红成 rc=1),
+        # 都过了才在最后以 rc=2 收尾 —— ⛔ 不让一趟慢启动把一次真倒退藏起来。
+        TIMEOUT_AFTER_FLYWAY) log "startup: $startup_msg —— 形状读数仍有效, 继续判形状" ;;
+        *)
+            [ "$startup_rc" = "1" ] && fail "progress: $startup_msg"
+            unmeasured "progress: $startup_msg" ;;
+    esac
+
     for v in "$applied" "$tables" "$indexes"; do
         case "$v" in
             ''|*[!0-9]*)
-                # 读不出来 ⇒ **没量到**, 与「倒退」是两回事, 措辞必须不同。
-                fail "progress: 读不出三个数之一 (applied='$applied' tables='$tables' indexes='$indexes') —— 本趟读数作废, ⛔ 不当成倒退" ;;
+                # 读不出来 ⇒ **没量到**(rc=2), 与「倒退」(rc=1)是两回事, 措辞与退出码都不同。
+                unmeasured "progress: 读不出三个数之一 (applied='$applied' tables='$tables' indexes='$indexes') —— 本趟读数作废, ⛔ 不当成倒退" ;;
         esac
     done
-
-    # 🔴 硬约束 9 的对照: 失败点是**必然存在**的读数(今天这条链一定会死在某处)。
-    #    它不出现, 说明这趟根本没跑到 Flyway —— 那时三个数即使没倒退也毫无意义。
-    # 同理: grep 无命中返回 1, pipefail 会让整条管道非零 ⇒ 又一次在检查之前中止。
-    fail_file=$(grep -oE 'Migration V[0-9A-Za-z_.]+\.sql failed' "$BACKEND_LOG" 2>/dev/null | head -1 | sed 's/^Migration //;s/ failed$//' || true)
-    fail_state=$(grep -oE 'SQL State  *: *[0-9A-Za-z]+' "$BACKEND_LOG" 2>/dev/null | head -1 | sed 's/.*: *//' || true)
-    echo "READING: FRESH_DB_SHAPE migrations_above_baseline=$applied tables=$tables indexes=$indexes"
-    echo "READING: FRESH_DB_FAILURE file=${fail_file:-<none>} sqlstate=${fail_state:-<none>} process_died=$died"
-    if [ -z "$fail_file" ] && [ "$healthy" -ne 1 ]; then
-        fail "progress: 既没有失败点读数、也没有健康 —— 这趟没跑到 Flyway, ⛔ 三个数不作数"
-    fi
-    # ⚠️ 2026-09-07 baseline bootstrap 落地之后, **「没有失败点」是常态** ——
-    #    此前它是遥远目标, 那时这里写的是「请考虑接成 pass/fail 闸」。⇒ 措辞已换。
-    #    ⛔ 而「有失败点」现在**不再是常态**: 它由下面那条 failed=0 直接判红。
-    #    ⚠️ 本条(fail_file)与那条(failed 计数)是**两个来源**: 这条读的是应用日志里的
-    #      `Migration V… failed`, 那条读的是 flyway_schema_history。两者都留着 ——
-    #      日志能给出**是哪一条**, 而表能给出**有几条**; 只留一个就答不全。
-    [ -n "$fail_file" ] || log "shape: 日志里没有失败点(bootstrap 之后这是常态; 失败与否由下面 failed=0 判)"
 
     # ── 失败迁移: 这一条是 pass/fail, ⛔ 不是棘轮 ────────────────────────────
     # 基线 bootstrap 落地之后, 「跑完」不再是遥远目标而是常态 ⇒ 一条失败的迁移
     # 必须当场红。⚠️ 它与下面的形状下界是两件事: 形状可以因为新迁移而涨,
     # 但 success=false 的行数**任何时候都该是 0**。
     failed=$(q "SELECT COUNT(*) FROM flyway_schema_history WHERE success = false;" || true)
-    case "$failed" in ''|*[!0-9]*) fail "shape: 数不出失败迁移条数(实得 '$failed') —— **没量到**" ;; esac
+    case "$failed" in ''|*[!0-9]*) unmeasured "shape: 数不出失败迁移条数(实得 '$failed') —— **没量到**" ;; esac
     [ "$failed" -eq 0 ] || fail "shape: flyway_schema_history 里有 $failed 条失败迁移 —— ⛔ 直接红, 这不是「进度」问题"
 
     if [ ! -f "$SHAPE_FLOOR" ]; then
+        # 首个下界只从**健康**的一趟写: 一趟没启动完的读数 ⛔ 不配当下界。
+        [ "$startup_state" = "HEALTHY" ] || unmeasured "shape: 下界文件不存在, 而本趟没到健康 ⇒ 不写首个下界。$startup_msg"
         log "shape: 下界文件不存在, 写入首个下界 $SHAPE_FLOOR"
         printf 'tables=%s\nindexes=%s\n' "$tables" "$indexes" > "$SHAPE_FLOOR"
         exit 0
@@ -486,6 +525,8 @@ if [ "$PROGRESS" -eq 1 ]; then
         log "shape: (旧值 tables=$b_tables indexes=$b_indexes)"
     fi
     log "shape: 无倒退 (tables $tables/$b_tables, indexes $indexes/$b_indexes; 失败迁移 $failed; 基线之上已跑 $applied)"
+    # 形状过了, 但启动那一半没量到 ⇒ rc=2, ⛔ 不报绿。
+    [ "$startup_state" = "HEALTHY" ] || unmeasured "progress: 形状无倒退, 但 $startup_msg"
     exit 0
 fi
 

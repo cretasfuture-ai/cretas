@@ -61,8 +61,27 @@ docker compose -p cretas-fresh-db -f docker-compose.fresh-db.yml down -v
 ```
 
 Optional local-only overrides are `FRESH_DB_PORT`, `FRESH_DB_APP_PORT`,
-`FRESH_DB_STARTUP_TIMEOUT`, and a project name matching
-`cretas-fresh-db[-suffix]`. Port `5432` is rejected deliberately.
+`FRESH_DB_STARTUP_TIMEOUT` (wall-clock seconds including the Maven compile,
+default `600`), and a project name matching `cretas-fresh-db[-suffix]`.
+Port `5432` is rejected deliberately.
+
+## `--progress` exit codes
+
+`--progress` prints `READING: FRESH_DB_STARTUP state=… elapsed_s=… budget_s=…
+spring_started_s=… flyway_done_s=…` and exits by startup outcome
+(classifier: `scripts/testing/fresh-db-startup-outcome.sh`, fixtures:
+`scripts/tests/test-fresh-db-startup-outcome.sh`):
+
+| state | rc | meaning |
+|---|---|---|
+| `HEALTHY` | 0 (or 1 on shape regression) | started; shape ratchet judged |
+| `FLYWAY_FAILED` | 1 | log names `Migration V….sql failed` |
+| `DIED_BEFORE_HEALTHY` | 1 | process exited, no Flyway failure point |
+| `TIMEOUT_AFTER_FLYWAY` | 2 (or 1 on shape regression) | Flyway finished, Spring still starting at the budget |
+| `TIMEOUT_BEFORE_FLYWAY` | 2 | budget ran out before Flyway finished; numbers not valid |
+
+`rc=2` means "not measured", not "migrations are broken". If it recurs, compare
+`flyway_done_s` with `elapsed_s` before raising `FRESH_DB_STARTUP_TIMEOUT`.
 
 ## What success proves
 
