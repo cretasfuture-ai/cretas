@@ -87,13 +87,21 @@ def build_snapshot(phrase_rows: List[Dict[str, Any]], lexicon_rows: List[Dict[st
     for r in phrase_rows:
         key = (str(r["factory_id"]), str(r["business_type"]).upper())
         phrases.setdefault(key, {})[str(r["normalized_text"])] = str(r["intent_code"])
-    lex: Dict[str, set] = {}
+    # 一个别名只对应一个标签。同一别名登记在两类实体下 (「酱牛肉」既是物料也是产品) 时,
+    # 按 ENTITY_TAGS 的书写顺序取第一个 —— ⛔ 不能依赖 set 的迭代顺序: 字符串哈希每个进程
+    # 随机, prod 两个 uvicorn worker 会把同一句话归一化成两个不同的键 (2026-10-02 实测)。
+    rank = {t: i for i, t in enumerate(ENTITY_TAGS)}
+    lex: Dict[str, Dict[str, Tuple[int, str]]] = {}
     for r in lexicon_rows:
-        tag = ENTITY_TAGS.get(str(r["entity_type"]).upper())
+        et = str(r["entity_type"]).upper()
+        tag = ENTITY_TAGS.get(et)
         alias = str(r["alias"] or "").strip().lower()
         if tag and len(alias) >= 2:
-            lex.setdefault(str(r["factory_id"]), set()).add((alias, tag))
-    lexicon = {f: sorted(pairs, key=lambda p: (-len(p[0]), p[0])) for f, pairs in lex.items()}
+            cur = lex.setdefault(str(r["factory_id"]), {})
+            if alias not in cur or rank[et] < cur[alias][0]:
+                cur[alias] = (rank[et], tag)
+    lexicon = {f: sorted(((a, t) for a, (_, t) in m.items()), key=lambda p: (-len(p[0]), p[0]))
+               for f, m in lex.items()}
     return RegistrySnapshot(phrases=phrases, lexicon=lexicon, loaded_at_unix=time.time(), available=True)
 
 
