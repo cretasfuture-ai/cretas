@@ -61,6 +61,7 @@ jest.mock('react-native-paper', () => {
     TextInput: RN.TextInput, ActivityIndicator: RN.ActivityIndicator, Icon: () => null,
     SegmentedButtons: ({ buttons, onValueChange }: Props) => R.createElement(RN.View, null,
       buttons?.map(({ value, label }) => R.createElement(Button, { key: value, label,
+        testID: `filter-${value}`,
         onPress: () => onValueChange?.(value) }))),
   };
 });
@@ -136,15 +137,16 @@ it('manual refresh refreshes both requests once', async () => {
 it('a legal menu action after changing filter reloads the selected status', async () => {
   const screen = render(<PurchaseOrderListScreen />);
   await screen.findByText('PO-existing');
-  fireEvent.press(screen.getByText('草稿'));
+  fireEvent.press(screen.getByTestId('filter-APPROVED'));
   await screen.findByText('PO-filtered');
-  await act(async () => { await cancelHandler()({ id: 'PO-filtered', status: 'DRAFT', canEdit: true }); });
+  await act(async () => { await cancelHandler()({ id: 'PO-filtered', status: 'APPROVED', canEdit: true }); });
   expect(api.cancelOrder).toHaveBeenCalledWith('PO-filtered');
   expect(api.getOrders).toHaveBeenCalledTimes(1);
   expect(api.getOrdersByStatus).toHaveBeenCalledTimes(2);
+  expect(api.getOrdersByStatus).toHaveBeenLastCalledWith('APPROVED', { page: 1, size: 50 });
   expect(summaryApi.getSummary).toHaveBeenCalledTimes(3);
   expect(summaryApi.getSummary).toHaveBeenLastCalledWith('purchaseOrder',
-    { filterConditions: { status: 'DRAFT' } }, 'F006');
+    { filterConditions: { status: 'APPROVED' } }, 'F006');
 });
 
 it('late responses from an old filter cannot replace current rows or totals', async () => {
