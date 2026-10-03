@@ -382,7 +382,7 @@ export default function WHReceiptCreateScreen() {
             materialName: it.materialName,
             receivedQuantity: Number(row.receivedQuantity),
             unit: row.unit || unitFor(it),
-            unitPrice: it.unitPrice,
+                unitPrice: it.unitPrice ?? undefined,
           };
         }),
       };

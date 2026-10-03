@@ -12,6 +12,8 @@
 - `frontend/CretasFoodTrace/src/components/ai/{RichContentRenderer.tsx,richListPresentation.ts,__tests__/RichContentRenderer.test.tsx,__tests__/richListPresentation.test.ts}`。
 - `frontend/CretasFoodTrace/src/screens/attendance/TimeClockScreen.tsx`、`src/utils/currentPosition.ts`、对应目标测试、`src/i18n/locales/{zh-CN,en-US}/hr.json`。
 - 当前台账条目和本记录。后端权限、实体、Repository、全局配置、历史关联账务不在当前修复范围。
+- 扩展：`src/utils/mobileRoleBoundaries.ts`、`visibleOrderAmount.ts` 及测试；`screens/factory-admin/inventory/{SalesOrderListScreen,SalesOrderDetailScreen,PurchaseOrderListScreen,PurchaseOrderDetailScreen}.tsx`、`services/api/{salesApiClient,purchaseApiClient}.ts`、既有销售列表屏级集成测试与 `OrderDetailReadBoundary.test.tsx`。仅收紧 viewer 的移动端写入口与正确显示空金额，不更改后端权限矩阵；长按菜单绑定只读状态，确认与编辑回调发送前重读当前角色，隐藏单价禁止整单更新。
+- nullable 关联范围：`screens/warehouse/inbound/WHReceiptCreateScreen.tsx` 的收货草稿省略遮罩单价，真实零值保留。API 创建请求类型不改成可空，也不补假零。
 
 ## 当前证据与限制
 
@@ -20,6 +22,7 @@
 3. 考勤页面截屏在 19:10 与 19:18 都显示定位中。页面没有获取位置的截止时间，权限拒绝/失败后 `gpsLocation=null` 仍被渲染为定位中。修复须有超时、取消和重试，保持无真实定位时禁止打卡。
 4. 独立加拿大 Mac mini 测试环境配置指向 `cretas_testenv`；实际 PostgreSQL 5432、Java 10010 均拒绝连接，launchd 明确 disabled。没有将不存在的实时账号读数当成空账号表，也没有启动停用服务。
 5. 角色记录仅为 L1 登录/首页/主要页签观察；页面许可弹窗或测试选择器中断不能计为业务失败或完整通过。L2 表单/CRUD、L3 跨模块、L4 生命周期和完整权限拦截尚未全部完成。
+6. 18 个活跃角色的 90 项只读接口检查均与登录返回模块权限一致。查看员实际显示销售新建按钮，点击无法导航；后台隐藏的金额被数字格式化为 ¥0。修复收紧其移动只读边界，并显式显示未提供金额，保留真实零值。
 
 ## UX Flow Analysis（ux-flow 门控产出，不可删除）
 

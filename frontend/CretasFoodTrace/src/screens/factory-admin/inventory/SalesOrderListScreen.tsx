@@ -5,7 +5,7 @@ import { useNavigation, CommonActions, useFocusEffect } from '@react-navigation/
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { salesApiClient, SalesOrder } from '../../../services/api/salesApiClient';
-import { formatNumberWithCommas } from '../../../utils/formatters';
+import { formatVisibleOrderAmount } from '../../../utils/visibleOrderAmount';
 import { RowActionBottomSheet, StickyFooterSummary } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useListSummary } from '../../../hooks/useListSummary';
@@ -114,6 +114,8 @@ export default function SalesOrderListScreen() {
   useEffect(() => { refreshSummary(); }, [refreshSummary, refreshing]);
 
   const handleAction = async (orderId: string, action: string) => {
+    const currentUser = useAuthStore.getState().user;
+    if (!currentUser || isMobileBusinessObserver(currentUser)) return;
     try {
       let res;
       if (action === 'confirm') res = await salesApiClient.confirmOrder(orderId);
@@ -141,11 +143,11 @@ export default function SalesOrderListScreen() {
     cancel: (e: RowContext) => handleAction(e.id, 'cancel'),
     'print-pdf': (e: RowContext) => { void safePrint('sales-order', e.id); },
     copy: (e: RowContext) => Alert.alert('复制', `复制单据 ${e.id} (待接 API)`),
-  }), [navigation]);
+  }), [navigation, isOperationsReadOnly]);
 
   const sheetCtx: RowContext = selectedOrder
-    ? { status: selectedOrder.status, id: selectedOrder.id }
-    : { status: '', id: '' };
+    ? { status: selectedOrder.status, id: selectedOrder.id, canEdit: !isOperationsReadOnly }
+    : { status: '', id: '', canEdit: !isOperationsReadOnly };
   const rowActions = useRowActions('salesOrder', sheetCtx, { handlers });
 
   const openSheet = (order: SalesOrder) => { setSelectedOrder(order); setActionSheetVisible(true); };
@@ -173,7 +175,7 @@ export default function SalesOrderListScreen() {
           </View>
           <View style={styles.cardRow}>
             <Text style={styles.label}>金额</Text>
-            <Text style={[styles.value, styles.amount]}>¥{formatNumberWithCommas(item.totalAmount)}</Text>
+            <Text style={[styles.value, styles.amount]}>{formatVisibleOrderAmount(item.totalAmount)}</Text>
           </View>
           <View style={styles.cardRow}>
             <Text style={styles.label}>下单日期</Text>
@@ -245,6 +247,10 @@ export default function SalesOrderListScreen() {
         )}
       </View>
 
+      {isOperationsReadOnly && <StickyFooterSummary
+        stats={(summary?.stats ?? []).filter(stat => !stat.canViewPrice)}
+        loading={summary == null && !loading}
+      />}
       {!isOperationsReadOnly && <StickyFooterSummary
         stats={summary?.stats ?? []}
         loading={summary == null && !loading}
