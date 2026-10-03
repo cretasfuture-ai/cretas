@@ -112,4 +112,3 @@
 - organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
-- `F006-MOBILE-R2-CORE-20261004` — `review` — Owner: Codex/root — Base `fe9ef6b3bf7eaa232c98165f1564489e82c0a142` — 🔒 导航/会话/分页/财务入口与默认关闭Mini；Java93/POSIX Python55/TS通过，RN权限metadata目标26通过，完整CI待验。精确scope见archive/2026-10-04-f006-mobile-r2-core.md。
