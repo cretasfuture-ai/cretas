@@ -269,12 +269,12 @@ export const PROCUREMENT_HOME_MODULES: HomeModuleSpec[] = [
 export const FINANCE_HOME_MODULES: HomeModuleSpec[] = [
   {
     id: 'arAp', nameKey: 'modules.arAp.name', descriptionKey: 'modules.arAp.description',
-    icon: 'book-open-outline', color: '#1B65A8', requiredPermissions: [], financialScreen: 'finance',
+    icon: 'book-open-outline', color: '#1B65A8', requiredPermissions: ['finance:read', 'finance:read_write'], financialScreen: 'finance',
     route: 'FinanceWorkspaceTab', nestedScreen: 'ArApOverview',
   },
   {
     id: 'priceList', nameKey: 'modules.priceList.name', descriptionKey: 'modules.priceList.description',
-    icon: 'tag-multiple-outline', color: '#722ED1', requiredPermissions: [], financialScreen: 'price',
+    icon: 'tag-multiple-outline', color: '#722ED1', requiredPermissions: ['procurement:price:view'], financialScreen: 'price',
     route: 'FinanceWorkspaceTab', nestedScreen: 'PriceList',
   },
   {

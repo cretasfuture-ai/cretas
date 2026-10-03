@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891已合且Java已发布；财务viewer真机/三角色API回读通过。R3/R4 #892已合/Java发布中，R2 CORE及R6/R7/R9和全角色深流程/Mac手机验收继续；本行不锁归档源码。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
@@ -112,4 +112,4 @@
 - organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
-- `F006-MOBILE-R2-CORE-20261004` — `in-progress` — Owner: Codex — Base `fe9ef6b3bf7eaa232c98165f1564489e82c0a142` — 🔒 冻结bafc源码与main整合，导航/会话/分页/财务入口和默认关闭Mini；R6/R7脏改留原WT。精确scope和Java/RN/Python验收见archive/2026-10-04-f006-mobile-r2-core.md。
+- `F006-MOBILE-R2-CORE-20261004` — `review` — Owner: Codex/root — Base `fe9ef6b3bf7eaa232c98165f1564489e82c0a142` — 🔒 导航/会话/分页/财务入口与默认关闭Mini；Java93/POSIX Python55/TS通过，RN权限metadata目标26通过，完整CI待验。精确scope见archive/2026-10-04-f006-mobile-r2-core.md。
