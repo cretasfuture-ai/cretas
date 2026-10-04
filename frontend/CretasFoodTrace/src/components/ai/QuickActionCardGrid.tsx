@@ -83,7 +83,7 @@ const ROLE_CARDS: Record<string, CardFactory> = {
   factory_super_admin: ({ onSendIntent, onNavigate }) => [
     { icon: 'clipboard-text', label: '生产报工', description: '记录产量和用料', action: () => onSendIntent('我要报工') },
     { icon: 'package-down', label: '原料入库', description: '扫码或手动入库', action: () => onSendIntent('原料入库') },
-    { icon: 'magnify', label: '查库存', description: '查看物料库存', action: () => onSendIntent('查看库存') },
+    { icon: 'magnify', label: '查库存', description: '查看原材料库存', action: () => onSendIntent('查询原材料库存') },
     { icon: 'chart-bar', label: 'BOM达成率', description: '投入产出对比', action: () => onNavigate('BomAchievement') },
     { icon: 'currency-cny', label: '成本分析', description: '查看生产成本', action: () => onSendIntent('查看成本') },
     { icon: 'trending-up', label: '毛利率', description: 'SKU盈利分析', action: () => onSendIntent('查毛利率') },
@@ -101,7 +101,7 @@ const ROLE_CARDS: Record<string, CardFactory> = {
     // ⚠️ 不能用 WHUnorderedInboundReceive: 它必须带 noticeId, 不是空白新建。
     { icon: 'package-down', label: '原料入库', description: '扫码或手动入库', action: () => onNavigate('WHPurchaseReceiveList') },
     { icon: 'package-up', label: '出库发货', description: '发货出库', action: () => onSendIntent('出库') },
-    { icon: 'magnify', label: '查库存', description: '查看物料库存', action: () => onSendIntent('查看库存') },
+    { icon: 'magnify', label: '查库存', description: '查看原材料库存', action: () => onSendIntent('查询原材料库存') },
     { icon: 'alert', label: '低库存', description: '库存预警查看', action: () => onSendIntent('低库存预警') },
   ],
 };

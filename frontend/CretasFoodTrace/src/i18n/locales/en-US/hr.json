@@ -630,10 +630,17 @@
       "workHours": "hours",
       "laborCost": "cost",
       "empty": "No batch tasks",
+      "accessDenied": "Production plan access unavailable",
+      "accessDeniedHint": "This account cannot read production batches. Contact the factory administrator.",
+      "factoryDisabled": "Production plan module is disabled",
+      "factoryDisabledHint": "The production plan module is not enabled for this factory.",
+      "loadFailed": "Failed to load batch tasks",
+      "loadFailedHint": "Batch tasks could not be read. Please try again later.",
       "status": {
         "inProgress": "In Progress",
         "pending": "Pending",
-        "completed": "Completed"
+        "completed": "Completed",
+        "unknown": "Unknown"
       }
     },
     "batchWorkers": {
@@ -642,21 +649,27 @@
       "totalHours": "Total Hours",
       "working": "Working",
       "empty": "No workers assigned",
-      "emptyHint": "Click below to add workers",
+      "emptyHint": "No workers are assigned to this batch",
       "addWorker": "Add Worker",
       "removeWorker": "Remove Worker",
       "removeConfirm": "Remove {name} from this batch?",
       "removeSuccess": "Removed successfully",
       "removeFailed": "Failed to remove, please try again",
+      "staleAction": "The account or factory access changed. Refresh and try again.",
+      "accessDenied": "Production plan access unavailable",
+      "accessDeniedHint": "This account cannot read batch workers. Contact the factory administrator.",
+      "factoryDisabled": "Production plan module is disabled",
+      "factoryDisabledHint": "The production plan module is not enabled for this factory.",
+      "loadFailed": "Failed to load batch workers",
+      "loadFailedHint": "Batch workers could not be read. Please try again later.",
       "noDepartment": "No Department",
       "workDuration": "Work Hours",
       "status": {
+        "assigned": "Assigned",
         "working": "Working",
         "completed": "Completed",
-        "paused": "Paused"
-      },
-      "alerts": {
-        "addComingSoon": "Add worker feature coming soon"
+        "paused": "Paused",
+        "unknown": "Unknown"
       }
     }
   },

@@ -26,7 +26,7 @@ const STATUS_COPY: Record<LabelQcTaskStatus, { title: string; body: string; colo
   ANALYZING: { title: 'AI 正在初筛', body: '正在查找疑似缺白标或缺彩标区域。', color: QI_COLORS.secondary },
   NEEDS_REVIEW: { title: '等待人工审核', body: 'AI 初筛已完成，最终结果由质量审核员确认。', color: QI_COLORS.warning },
   AUTO_PASSED: { title: '本批未发现风险', body: 'AI 初筛没有发现需要人工处理的疑点，本批已自动完成。', color: QI_COLORS.success },
-  REVIEWED: { title: '人工审核已完成', body: '审核结果已经保存，可在手机端查看最终标注。', color: QI_COLORS.success },
+  REVIEWED: { title: '人工审核已完成', body: '审核结果已经保存，本批人工审核已完成。', color: QI_COLORS.success },
   ANALYSIS_FAILED: { title: '等待人工处理', body: '照片已经保存，质量审核员会在审核工作台继续处理。', color: QI_COLORS.danger },
 };
 
@@ -155,7 +155,7 @@ export default function QILabelQcSubmittedScreen({ managerMode = false }: QILabe
             <View style={styles.contextRow}>
               <Text style={styles.contextLabel}>AI 疑似区域</Text>
               <Text style={[styles.contextValue, visibleDetail.task.aiCandidateCount > 0 && styles.warningValue]}>
-                {visibleDetail.task.aiCandidateCount} 处（待人工确认）
+                {visibleDetail.task.aiCandidateCount} 处（{['REVIEWED', 'AUTO_PASSED'].includes(status) ? '初筛记录' : '待人工确认'}）
               </Text>
             </View>
           </>

@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl, Alert } from 'react-native';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import {
   Text,
   Appbar,
@@ -16,12 +16,8 @@ import { useTranslation } from 'react-i18next';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuthStore } from '../../store/authStore';
 import { timeclockApiClient } from '../../services/api/timeclockApiClient';
-import { getFactoryId } from '../../types/auth';
-import { handleError, getErrorMsg } from '../../utils/errorHandler';
-import { logger } from '../../utils/logger';
-
-// 创建DepartmentAttendance专用logger
-const deptAttendanceLogger = logger.createContextLogger('DepartmentAttendance');
+import { getFactoryId, type User } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 /**
  * 格式化日期为 ISO 字符串 (YYYY-MM-DD)
@@ -32,6 +28,71 @@ const formatDate = (date: Date): string => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+type AttendanceRecord = {
+  userId?: number | string;
+  userName?: string;
+  employeeName?: string;
+  clockInTime?: string | null;
+  clockOutTime?: string | null;
+  workDuration?: number | string | null;
+  workHours?: number | string | null;
+  status?: string;
+};
+
+type AttendancePayload = { records: AttendanceRecord[] } & Record<string, unknown>;
+
+type AttendanceActorContext = {
+  actorKey: string;
+  factoryId: string;
+  user: User;
+  generation: number;
+  department: string;
+  date: string;
+  queryKey: string;
+  requestId: number;
+};
+
+function attendanceActorKey(user: User | null | undefined): string {
+  if (!user) return 'none';
+  const factoryId = getFactoryId(user) || '';
+  const userId = user.id != null ? String(user.id) : user.username || '';
+  const role = user.userType === 'factory' ? user.factoryUser?.role || '' : user.userType;
+  const permissions = user.userType === 'factory' ? JSON.stringify(user.factoryUser?.modulePermissions || {}) : '';
+  return `${user.userType}:${userId}:${factoryId}:${role}:${permissions}`;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseAttendanceResponse(value: unknown): AttendancePayload {
+  if (!isObject(value) || value.success !== true || !isObject(value.data) || !Array.isArray(value.data.records)) {
+    throw new Error('部门考勤响应无效');
+  }
+  const records: AttendanceRecord[] = [];
+  for (const rawRecord of value.data.records) {
+    if (!isObject(rawRecord)) throw new Error('部门考勤记录无效');
+    const userId = rawRecord.userId;
+    const userName = rawRecord.userName;
+    const employeeName = rawRecord.employeeName;
+    if (userId !== undefined && typeof userId !== 'number' && typeof userId !== 'string') throw new Error('部门考勤记录无效');
+    if (userName !== undefined && typeof userName !== 'string') throw new Error('部门考勤记录无效');
+    if (employeeName !== undefined && typeof employeeName !== 'string') throw new Error('部门考勤记录无效');
+    if (userId === undefined && userName === undefined && employeeName === undefined) throw new Error('部门考勤记录无效');
+    records.push({
+      userId: userId as number | string | undefined,
+      userName: userName as string | undefined,
+      employeeName: employeeName as string | undefined,
+      clockInTime: typeof rawRecord.clockInTime === 'string' ? rawRecord.clockInTime : null,
+      clockOutTime: typeof rawRecord.clockOutTime === 'string' ? rawRecord.clockOutTime : null,
+      workDuration: typeof rawRecord.workDuration === 'number' || typeof rawRecord.workDuration === 'string' ? rawRecord.workDuration : null,
+      workHours: typeof rawRecord.workHours === 'number' || typeof rawRecord.workHours === 'string' ? rawRecord.workHours : null,
+      status: typeof rawRecord.status === 'string' ? rawRecord.status : undefined,
+    });
+  }
+  return { ...value.data, records };
+}
 
 /**
  * 部门考勤查询页面
@@ -44,12 +105,23 @@ const formatDate = (date: Date): string => {
  * - 迟到/早退/缺勤标记
  */
 export default function DepartmentAttendanceScreen() {
+  const capturedUser = useAuthStore((state) => state.user);
+  const actorKey = attendanceActorKey(capturedUser);
+  const previousUserRef = useRef<User | null>(capturedUser);
+  const userGenerationRef = useRef(0);
+  if (previousUserRef.current !== capturedUser) {
+    previousUserRef.current = capturedUser;
+    userGenerationRef.current += 1;
+  }
+  return <DepartmentAttendanceContent key={`${actorKey}:${userGenerationRef.current}`} capturedUser={capturedUser} actorKey={actorKey} />;
+}
+
+function DepartmentAttendanceContent({ capturedUser, actorKey: renderActorKey }: { capturedUser: User | null; actorKey: string }) {
   const navigation = useNavigation();
-  const { user } = useAuthStore();
   const { t } = useTranslation('hr');
 
   // UI状态
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // 查询参数
@@ -58,8 +130,23 @@ export default function DepartmentAttendanceScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   // 数据状态
-  const [attendanceData, setAttendanceData] = useState<any>(null);
-  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
+  const [attendanceData, setAttendanceData] = useState<AttendancePayload | null>(null);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+  const generationRef = useRef(0);
+  const requestSequenceRef = useRef(0);
+  const refreshSequenceRef = useRef(0);
+  const currentQueryRef = useRef('');
+  const previousQueryRef = useRef('');
+  const currentQueryKey = `${selectedDepartment}:${formatDate(selectedDate)}`;
+  if (previousQueryRef.current !== currentQueryKey) {
+    previousQueryRef.current = currentQueryKey;
+    requestSequenceRef.current += 1;
+    refreshSequenceRef.current += 1;
+  }
+  currentQueryRef.current = currentQueryKey;
 
   /**
    * 部门列表
@@ -71,86 +158,113 @@ export default function DepartmentAttendanceScreen() {
     { value: 'MANAGEMENT', label: t('attendance.department.departments.management'), code: 'MANAGEMENT' },
   ];
 
-  /**
-   * 加载部门考勤数据
-   */
-  const loadDepartmentAttendance = async () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+    };
+  }, []);
+
+  const liveActorMatches = useCallback(() => {
+    const liveUser = useAuthStore.getState().user;
+    return mountedRef.current
+      && capturedUser !== null
+      && liveUser === capturedUser
+      && attendanceActorKey(liveUser) === renderActorKey
+      && hasModulePermission(liveUser, 'hr', 'read');
+  }, [capturedUser, renderActorKey]);
+
+  const captureContext = useCallback((): AttendanceActorContext | null => {
+    if (!liveActorMatches() || !capturedUser) return null;
+    const factoryId = getFactoryId(capturedUser);
+    if (!factoryId) return null;
+    const queryKey = `${selectedDepartment}:${formatDate(selectedDate)}`;
+    if (currentQueryRef.current !== queryKey) return null;
+    return {
+      actorKey: renderActorKey,
+      factoryId,
+      user: capturedUser,
+      generation: generationRef.current,
+      department: selectedDepartment,
+      date: formatDate(selectedDate),
+      queryKey,
+      requestId: 0,
+    };
+  }, [capturedUser, liveActorMatches, renderActorKey, selectedDate, selectedDepartment]);
+
+  const isCurrentOwnerContext = useCallback((context: AttendanceActorContext) => {
+    const liveUser = useAuthStore.getState().user;
+    return liveActorMatches()
+      && context.generation === generationRef.current
+      && context.user === liveUser
+      && context.actorKey === attendanceActorKey(liveUser)
+      && context.factoryId === getFactoryId(liveUser)
+      && context.queryKey === currentQueryRef.current;
+  }, [liveActorMatches]);
+
+  const isCurrentContext = useCallback((context: AttendanceActorContext) => (
+    isCurrentOwnerContext(context) && context.requestId === requestSequenceRef.current
+  ), [isCurrentOwnerContext]);
+
+  /** 加载部门考勤数据 */
+  const loadDepartmentAttendance = useCallback(async () => {
+    const context = captureContext();
+    if (!context) return;
+    const requestId = ++requestSequenceRef.current;
+    const requestContext = { ...context, requestId };
     setLoading(true);
+    setLoadFailed(false);
     try {
-      const factoryId = getFactoryId(user);
-
-      if (!factoryId) {
-        Alert.alert(t('messages.error'), t('attendance.department.errors.noFactory'));
-        return;
-      }
-
-      deptAttendanceLogger.debug('加载部门考勤数据', {
-        department: selectedDepartment,
-        date: formatDate(selectedDate),
-        factoryId,
-      });
-
-      // 调用部门考勤API
       const response = await timeclockApiClient.getDepartmentAttendance(
-        selectedDepartment,
-        formatDate(selectedDate),
-        factoryId
+        requestContext.department,
+        requestContext.date,
+        requestContext.factoryId
       );
-
-      if (response.success && response.data) {
-        setAttendanceData(response.data);
-
-        // 提取员工记录列表
-        const records = response.data.records || [];
-        setAttendanceRecords(Array.isArray(records) ? records : []);
-
-        deptAttendanceLogger.info('部门考勤数据加载成功', {
-          department: selectedDepartment,
-          date: formatDate(selectedDate),
-          recordCount: records.length,
-          factoryId,
-        });
-      } else {
-        deptAttendanceLogger.warn('获取部门考勤失败', {
-          message: response.message,
-          department: selectedDepartment,
-          date: formatDate(selectedDate),
-          factoryId,
-        });
-        setAttendanceData(null);
-        setAttendanceRecords([]);
-      }
-    } catch (error) {
-      deptAttendanceLogger.error('加载部门考勤失败', error as Error, {
-        department: selectedDepartment,
-        date: formatDate(selectedDate),
-        factoryId: getFactoryId(user),
-      });
-      const errorMessage = getErrorMsg(error) || t('attendance.department.errors.loadFailed');
-      Alert.alert(t('messages.error'), errorMessage);
+      if (!isCurrentContext(requestContext)) return;
+      const payload = parseAttendanceResponse(response);
+      if (!isCurrentContext(requestContext)) return;
+      setAttendanceData(payload);
+      setAttendanceRecords(payload.records);
+      setLoadedQueryKey(requestContext.queryKey);
+    } catch {
+      if (!isCurrentContext(requestContext)) return;
       setAttendanceData(null);
       setAttendanceRecords([]);
+      setLoadedQueryKey(requestContext.queryKey);
+      setLoadFailed(true);
     } finally {
-      setLoading(false);
+      if (isCurrentContext(requestContext)) setLoading(false);
     }
-  };
+  }, [captureContext, isCurrentContext]);
 
   /**
    * 刷新数据
    */
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
+    const context = captureContext();
+    if (!context) return;
+    const refreshSequence = ++refreshSequenceRef.current;
     setRefreshing(true);
-    await loadDepartmentAttendance();
-    setRefreshing(false);
-  };
+    try {
+      await loadDepartmentAttendance();
+    } finally {
+      if (isCurrentOwnerContext(context) && refreshSequenceRef.current === refreshSequence) setRefreshing(false);
+    }
+  }, [captureContext, isCurrentOwnerContext, loadDepartmentAttendance]);
 
   /**
    * 页面聚焦时加载数据
    */
   useFocusEffect(
     useCallback(() => {
-      loadDepartmentAttendance();
-    }, [selectedDepartment, selectedDate])
+      if (liveActorMatches()) void loadDepartmentAttendance();
+      return () => {
+        generationRef.current += 1;
+        requestSequenceRef.current += 1;
+        refreshSequenceRef.current += 1;
+      };
+    }, [liveActorMatches, loadDepartmentAttendance])
   );
 
   /**
@@ -185,13 +299,18 @@ export default function DepartmentAttendanceScreen() {
   /**
    * 计算统计数据
    */
+  const queryIsLoaded = loadedQueryKey === currentQueryKey;
+  const visibleAttendanceRecords = queryIsLoaded ? attendanceRecords : [];
+  const visibleLoadFailed = queryIsLoaded && loadFailed;
+  const visibleLoading = loading || !queryIsLoaded;
+
   const calculateStats = () => {
-    const total = attendanceRecords.length;
-    const present = attendanceRecords.filter(
+    const total = visibleAttendanceRecords.length;
+    const present = visibleAttendanceRecords.filter(
       (r) => r.status === 'present' || r.clockInTime
     ).length;
-    const late = attendanceRecords.filter((r) => r.status === 'late').length;
-    const absent = attendanceRecords.filter(
+    const late = visibleAttendanceRecords.filter((r) => r.status === 'late').length;
+    const absent = visibleAttendanceRecords.filter(
       (r) => r.status === 'absent' || !r.clockInTime
     ).length;
     const attendanceRate = total > 0 ? (present / total) * 100 : 0;
@@ -207,14 +326,51 @@ export default function DepartmentAttendanceScreen() {
 
   const stats = calculateStats();
 
+  const liveUserForRender = useAuthStore.getState().user;
+  const canReadHr = liveUserForRender === capturedUser
+    && attendanceActorKey(liveUserForRender) === renderActorKey
+    && hasModulePermission(liveUserForRender, 'hr', 'read');
+
   /**
    * 快捷日期选择
    */
-  const setQuickDate = (days: number) => {
+  const setQuickDate = (days: number, ownerQueryKey: string) => {
+    if (!mountedRef.current || currentQueryRef.current !== ownerQueryKey) return;
     const newDate = new Date();
     newDate.setDate(newDate.getDate() + days);
     setSelectedDate(newDate);
   };
+
+  const setDepartment = (department: string, ownerQueryKey: string) => {
+    if (mountedRef.current && currentQueryRef.current === ownerQueryKey) setSelectedDepartment(department);
+  };
+
+  const setDateFromPicker = (date: Date | undefined, ownerQueryKey: string) => {
+    if (mountedRef.current && currentQueryRef.current === ownerQueryKey && date) setSelectedDate(date);
+  };
+
+  if (!canReadHr) {
+    return <View style={styles.container}>
+      <Appbar.Header elevated>
+        <Appbar.BackAction onPress={() => navigation.goBack()} />
+        <Appbar.Content title={t('attendance.department.title')} />
+      </Appbar.Header>
+      <View style={styles.errorContainer}><Text style={styles.errorText}>暂无部门考勤权限</Text></View>
+    </View>;
+  }
+
+  if (visibleLoadFailed) {
+    return <View style={styles.container}>
+      <Appbar.Header elevated>
+        <Appbar.BackAction onPress={() => navigation.goBack()} />
+        <Appbar.Content title={t('attendance.department.title')} />
+      </Appbar.Header>
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>{t('attendance.department.errors.loadFailed')}</Text>
+        <Chip onPress={() => void handleRefresh()}>{t('common.retry')}</Chip>
+      </View>
+    </View>;
+  }
 
   return (
     <View style={styles.container}>
@@ -250,7 +406,7 @@ export default function DepartmentAttendanceScreen() {
                     formatDate(selectedDate) === formatDate(new Date()) ? 'flat' : 'outlined'
                   }
                   compact
-                  onPress={() => setSelectedDate(new Date())}
+                  onPress={() => setDateFromPicker(new Date(), currentQueryKey)}
                   style={styles.quickDateChip}
                 >
                   {t('attendance.department.today')}
@@ -258,7 +414,7 @@ export default function DepartmentAttendanceScreen() {
                 <Chip
                   mode="outlined"
                   compact
-                  onPress={() => setQuickDate(-1)}
+                  onPress={() => setQuickDate(-1, currentQueryKey)}
                   style={styles.quickDateChip}
                 >
                   {t('attendance.department.yesterday')}
@@ -280,7 +436,7 @@ export default function DepartmentAttendanceScreen() {
                   key={dept.value}
                   mode={selectedDepartment === dept.value ? 'flat' : 'outlined'}
                   selected={selectedDepartment === dept.value}
-                  onPress={() => setSelectedDepartment(dept.value)}
+                  onPress={() => setDepartment(dept.value, currentQueryKey)}
                   style={styles.departmentChip}
                 >
                   {dept.label}
@@ -297,7 +453,7 @@ export default function DepartmentAttendanceScreen() {
           </Text>
           <Divider style={styles.divider} />
 
-          {loading ? (
+          {visibleLoading ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="small" />
               <Text style={styles.loadingText}>{t('attendance.department.loading')}</Text>
@@ -345,18 +501,18 @@ export default function DepartmentAttendanceScreen() {
               <DataTable.Title>{t('attendance.department.status')}</DataTable.Title>
             </DataTable.Header>
 
-            {loading ? (
+            {visibleLoading ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" />
               </View>
-            ) : attendanceRecords.length === 0 ? (
+            ) : visibleAttendanceRecords.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Text variant="bodyMedium" style={styles.emptyText}>
                   {t('attendance.department.noRecords')}
                 </Text>
               </View>
             ) : (
-              attendanceRecords.map((record, index) => (
+              visibleAttendanceRecords.map((record, index) => (
                 <DataTable.Row key={record.userId || index}>
                   <DataTable.Cell>
                     <Text variant="bodyMedium">{record.userName || record.employeeName || `员工${record.userId}`}</Text>
@@ -404,9 +560,7 @@ export default function DepartmentAttendanceScreen() {
           display="default"
           onChange={(event, date) => {
             setShowDatePicker(false);
-            if (date) {
-              setSelectedDate(date);
-            }
+            setDateFromPicker(date, currentQueryKey)
           }}
         />
       )}
@@ -418,6 +572,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
+  },
+  errorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    padding: 24,
+  },
+  errorText: {
+    color: '#B00020',
+    textAlign: 'center',
   },
   content: {
     flex: 1,

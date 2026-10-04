@@ -323,11 +323,11 @@ export interface BatchAssignmentItem {
   batchNumber: string;
   productName: string;
   productSpec?: string;
-  status: 'in_progress' | 'pending' | 'completed';
-  assignedCount: number;
-  requiredCount: number;
-  totalWorkHours: number;
-  laborCost: number;
+  status: 'in_progress' | 'pending' | 'completed' | 'unknown';
+  assignedCount: number | null;
+  requiredCount: number | null;
+  totalWorkHours: number | null;
+  laborCost: number | null;
   assignedEmployees: {
     id: number;
     name: string;
