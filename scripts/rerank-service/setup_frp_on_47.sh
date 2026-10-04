@@ -6,9 +6,16 @@
 set -euo pipefail
 D=/opt/frp/rerank
 mkdir -p "$D" && chmod 700 "$D"
-# 2026-10-04 实测: frps.toml 没有设 auth.token (7000 对公网开放, 无认证 —— 既有隐患, 已报 Steve)。
-# 本通道靠 STCP secretKey 保护: 不知道 sk 的人连不上这个 visitor 对应的服务端。有 token 就带上。
-TOKEN=$(grep -E '^\s*auth\.token\s*=' /opt/frp/frps.toml | head -1 | sed -E 's/^[^=]+=\s*"?([^"]*)"?\s*$/\1/' || true)
+# frps 用 auth.token 认证 (2026-10-04 由 reset_frps_on_47.sh 重设; 之前磁盘上的配置曾被安装包默认版覆盖,
+# 运行中的进程靠内存里的旧 token 拒扫描器)。本通道另有 STCP secretKey: 不知道 sk 的人连不上这个服务端。
+# 逐行读 + bash 正则, 不经管道 (管道尾部会吞掉前面命令的退出码, 仓库闸 test-pipeline-tail-swallows-rc 拦新增)
+TOKEN=""
+while IFS= read -r line; do
+  if [[ $line =~ ^[[:space:]]*auth\.token[[:space:]]*=[[:space:]]*\"?([^\"]*)\"?[[:space:]]*$ ]]; then
+    TOKEN="${BASH_REMATCH[1]}"
+    break
+  fi
+done < /opt/frp/frps.toml
 TOKEN_LINE=""
 [ -n "$TOKEN" ] && TOKEN_LINE="auth.token = \"$TOKEN\""
 if [ ! -f "$D/sk" ]; then
