@@ -91,6 +91,7 @@
   "profile": {
     "title": "My Profile",
     "role": "Workshop Supervisor",
+    "departmentAdminRole": "Department Administrator",
     "stats": {
       "managedBatches": "Managed Batches",
       "onDutyPersonnel": "On-Duty Personnel",

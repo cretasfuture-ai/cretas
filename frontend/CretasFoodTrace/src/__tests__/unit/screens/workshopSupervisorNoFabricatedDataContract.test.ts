@@ -322,6 +322,14 @@ describe('the two fabricated equipment sub-screens stay deleted', () => {
     expect(stack).toContain('name="WSEquipment"');
     expect(stack).toContain('name="EquipmentDetail"');
   });
+
+  it('设备详情的工厂告警入口注册同一真实告警组件', () => {
+    const stack = readCode(EQUIP_STACK);
+    expect(stack).toMatch(/import\s+EquipmentAlertsScreen\s+from\s+['"]\.\.\/\.\.\/screens\/processing\/EquipmentAlertsScreen['"]/);
+    expect(stack).toMatch(/<Stack\.Screen\s+name="EquipmentAlerts"\s+component=\{EquipmentAlertsScreen\}/);
+    expect(readCode(path.join(SCREENS, 'processing/EquipmentAlertsScreen.tsx'))).toContain('alertApiClient.getEquipmentAlerts');
+    expect(readCode(path.join(SCREENS, 'processing/EquipmentAlertsScreen.tsx'))).toContain("hasModulePermission(user, 'equipment', 'read')");
+  });
 });
 
 // ============================================================

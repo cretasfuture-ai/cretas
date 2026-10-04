@@ -684,6 +684,7 @@ export type WSWorkersStackParamList = {
 export type WSEquipmentStackParamList = {
   WSEquipment: undefined;
   EquipmentDetail: { equipmentId: number };
+  EquipmentAlerts: { equipmentId?: string };
 };
 
 export type WSProfileStackParamList = {

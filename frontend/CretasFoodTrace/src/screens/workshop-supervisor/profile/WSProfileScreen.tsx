@@ -9,9 +9,13 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Icon } from "react-native-paper";
 import { useTranslation } from "react-i18next";
+import * as Application from 'expo-application';
 import { WSProfileStackParamList } from "../../../types/navigation";
 import { useAuthStore } from "../../../store/authStore";
 import { useLanguageStore, LANGUAGE_NAMES, type SupportedLanguage } from "../../../store/languageStore";
+import { getUserRole, ROLE_METADATA } from '../../../types/auth';
+
+const APP_VERSION = Application.nativeApplicationVersion;
 
 type NavigationProp = NativeStackNavigationProp<WSProfileStackParamList, "WSProfile">;
 
@@ -43,6 +47,12 @@ export function WSProfileScreen() {
   const { t } = useTranslation('workshop');
   const { language, setLanguage } = useLanguageStore();
   const insets = useSafeAreaInsets();
+  const role = user ? getUserRole(user) : '';
+  const roleName = role === 'workshop_supervisor'
+    ? t('profile.role')
+    : role === 'department_admin'
+      ? t('profile.departmentAdminRole')
+      : ROLE_METADATA[role]?.displayName || role || '-';
 
   const toggleLanguage = () => {
     const newLang: SupportedLanguage = language === 'zh-CN' ? 'en-US' : 'zh-CN';
@@ -52,7 +62,6 @@ export function WSProfileScreen() {
   const handleLogout = () => {
     // Rule 2: 退出弹窗带账号上下文
     const displayName = user?.fullName || user?.username || '';
-    const roleName = t('profile.role');
     const accountLabel = displayName
       ? `${displayName}（${roleName}）`
       : `@${user?.username ?? ''}（${roleName}）`;
@@ -83,29 +92,11 @@ export function WSProfileScreen() {
             <Icon source="account" size={40} color="#fff" />
           </View>
           <View style={styles.userInfo}>
-            <Text style={styles.userName}>{user?.username || t('profile.role')}</Text>
-            <Text style={styles.userRole}>{t('profile.role')}</Text>
+            <Text style={styles.userName}>{user?.fullName || user?.username || '-'}</Text>
+            <Text style={styles.userRole}>{roleName}</Text>
           </View>
           <Icon source="chevron-right" size={24} color="#ccc" />
         </TouchableOpacity>
-
-        {/* 今日统计 */}
-        <View style={styles.statsCard}>
-          <View style={styles.statsItem}>
-            <Text style={styles.statsValue}>6</Text>
-            <Text style={styles.statsLabel}>{t('profile.stats.managedBatches')}</Text>
-          </View>
-          <View style={styles.statsDivider} />
-          <View style={styles.statsItem}>
-            <Text style={styles.statsValue}>8</Text>
-            <Text style={styles.statsLabel}>{t('profile.stats.onDutyPersonnel')}</Text>
-          </View>
-          <View style={styles.statsDivider} />
-          <View style={styles.statsItem}>
-            <Text style={styles.statsValue}>4</Text>
-            <Text style={styles.statsLabel}>{t('profile.stats.runningEquipment')}</Text>
-          </View>
-        </View>
 
         {/* 账户设置 */}
         <View style={styles.menuSection}>
@@ -166,7 +157,7 @@ export function WSProfileScreen() {
               icon="information-outline"
               title={t('profile.menu.about')}
               onPress={() => navigation.navigate("About")}
-              rightText="v1.0.0"
+              rightText={APP_VERSION ? `v${APP_VERSION}` : '-'}
             />
           </View>
         </View>
@@ -237,32 +228,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
     marginTop: 4,
-  },
-  statsCard: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginBottom: 16,
-    paddingVertical: 16,
-    borderRadius: 12,
-  },
-  statsItem: {
-    flex: 1,
-    alignItems: "center",
-  },
-  statsValue: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#667eea",
-  },
-  statsLabel: {
-    fontSize: 12,
-    color: "#666",
-    marginTop: 4,
-  },
-  statsDivider: {
-    width: 1,
-    backgroundColor: "#f0f0f0",
   },
   menuSection: {
     marginTop: 8,
