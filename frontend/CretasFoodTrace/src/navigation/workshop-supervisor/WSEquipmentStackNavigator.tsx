@@ -18,6 +18,7 @@ import WSEquipmentScreen from "../../screens/workshop-supervisor/equipment/WSEqu
 
 // 复用现有详情页
 import EquipmentDetailScreen from "../../screens/processing/EquipmentDetailScreen";
+import EquipmentAlertsScreen from '../../screens/processing/EquipmentAlertsScreen';
 import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WSEquipmentStackParamList>();
@@ -38,6 +39,7 @@ export function WSEquipmentStackNavigator() {
         component={EquipmentDetailScreen}
         options={{ title: "设备详情" }}
       />
+      <Stack.Screen name="EquipmentAlerts" component={EquipmentAlertsScreen} />
     </Stack.Navigator>
   );
 }

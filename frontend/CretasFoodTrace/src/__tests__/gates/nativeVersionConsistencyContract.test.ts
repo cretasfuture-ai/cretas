@@ -134,6 +134,7 @@ describe('屏幕上显示的版本号不许写死', () => {
     'src/screens/factory-admin/profile/AboutScreen.tsx',
     'src/screens/quality-inspector/QIProfileScreen.tsx',
     'src/screens/quality-inspector/QISettingsScreen.tsx',
+    'src/screens/workshop-supervisor/profile/WSProfileScreen.tsx',
   ];
 
   const readScreen = (rel: string): string =>
@@ -156,6 +157,7 @@ describe('屏幕上显示的版本号不许写死', () => {
         .replace(/^\s*\/\/.*$/gm, '');
       expect(code).not.toMatch(/const\s+APP_VERSION\s*(:[^=]+)?=\s*['"`]/);
       expect(code).not.toMatch(/const\s+BUILD_NUMBER\s*(:[^=]+)?=\s*['"`]/);
+      expect(code).not.toMatch(/rightText\s*=\s*['"]v\d+\.\d+\.\d+/);
     }
   });
 

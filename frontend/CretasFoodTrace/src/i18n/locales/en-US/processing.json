@@ -381,7 +381,10 @@
     "stats": {
       "uptime": "Uptime",
       "activeAlerts": "Active Alerts",
-      "maintenanceCount": "Maintenance Records"
+      "maintenanceCount": "Maintenance Records",
+      "unknown": "Unknown",
+      "alertsHint": "View equipment alerts in the factory alert list",
+      "reportHint": "Metrics use server records; missing runtime may be treated as zero. OEE is estimated using default performance and quality factors."
     },
     "basicInfo": {
       "equipmentId": "Equipment ID",
@@ -399,12 +402,12 @@
       "power": "Power"
     },
     "performance": {
-      "oee": "OEE (Overall Equipment Effectiveness)",
+      "oee": "OEE (estimate)",
       "availability": "Availability",
       "performance": "Performance",
       "quality": "Quality",
       "depreciatedValue": "Current Depreciated Value",
-      "totalRuntime": "Total Runtime",
+      "totalRuntime": "Runtime (server record)",
       "downtime": "Downtime",
       "utilizationRate": "Utilization Rate",
       "mtbf": "MTBF (Mean Time Between Failures)",
@@ -418,7 +421,7 @@
       "empty": "No maintenance records"
     },
     "actions": {
-      "viewAlerts": "View Alerts",
+      "viewAlerts": "View Factory Alerts",
       "maintenanceRecord": "Maintenance Record"
     },
     "status": {

@@ -383,7 +383,10 @@
     "stats": {
       "uptime": "运行率",
       "activeAlerts": "活动告警",
-      "maintenanceCount": "维护记录"
+      "maintenanceCount": "维护记录",
+      "unknown": "未知",
+      "alertsHint": "设备告警请前往工厂告警列表查看",
+      "reportHint": "指标按服务端记录计算，未记录的运行时长可能按0处理；OEE使用默认性能和质量参数估算。"
     },
     "basicInfo": {
       "equipmentId": "设备编号",
@@ -401,12 +404,12 @@
       "power": "功率"
     },
     "performance": {
-      "oee": "OEE (设备综合效率)",
+      "oee": "OEE（估算）",
       "availability": "可用率",
       "performance": "性能率",
       "quality": "质量率",
       "depreciatedValue": "当前折旧后价值",
-      "totalRuntime": "总运行时间",
+      "totalRuntime": "运行时长（服务端记录）",
       "downtime": "停机时间",
       "utilizationRate": "设备利用率",
       "mtbf": "平均故障间隔(MTBF)",
@@ -420,7 +423,7 @@
       "empty": "暂无维护记录"
     },
     "actions": {
-      "viewAlerts": "查看告警",
+      "viewAlerts": "查看工厂告警",
       "maintenanceRecord": "维护记录"
     },
     "status": {

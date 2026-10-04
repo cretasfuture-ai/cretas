@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -20,13 +20,20 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ProcessingStackParamList } from '../../types/navigation';
-import { equipmentApiClient, type Equipment, type MaintenanceRecord as APIMaintenanceRecord } from '../../services/api/equipmentApiClient';
+import { equipmentApiClient, type MaintenanceRecord as APIMaintenanceRecord } from '../../services/api/equipmentApiClient';
 import { useAuthStore } from '../../store/authStore';
-import {  } from 'react-native';
-import { handleError, getErrorMsg } from '../../utils/errorHandler';
+import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../../utils/formatters';
+import { getFactoryId, type User } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
+import {
+  normalizeEfficiencyReport,
+  normalizeOeeScalar,
+  type EquipmentEfficiencyMetrics,
+  type EquipmentOeeMetrics,
+} from '../../utils/equipmentDetailMetrics';
 
 // Create EquipmentDetail context logger
 const equipmentDetailLogger = logger.createContextLogger('EquipmentDetail');
@@ -42,6 +49,15 @@ type EquipmentDetailScreenRouteProp = RouteProp<
 >;
 
 type EquipmentStatus = 'running' | 'idle' | 'maintenance' | 'offline';
+
+function equipmentActorKey(user: User | null | undefined): string {
+  if (!user) return 'none';
+  const factoryId = getFactoryId(user) || '';
+  const userId = user.id != null ? String(user.id) : user.username || '';
+  const role = user.userType === 'factory' ? user.factoryUser?.role || '' : user.userType;
+  const permissions = user.userType === 'factory' ? JSON.stringify(user.factoryUser?.modulePermissions || {}) : '';
+  return `${user.userType}:${userId}:${factoryId}:${role}:${permissions}`;
+}
 
 interface EquipmentInfo {
   id: string;
@@ -71,7 +87,7 @@ interface MaintenanceRecord {
   type: string;
   technician: string;
   description: string;
-  cost: number;
+  cost: number | null;
 }
 
 /**
@@ -93,7 +109,6 @@ export default function EquipmentDetailScreen() {
 
   // Get user context
   const { user } = useAuthStore();
-  const factoryId = user?.factoryId || user?.factoryUser?.factoryId;
 
   // Data state
   const [equipment, setEquipment] = useState<EquipmentInfo | null>(null);
@@ -103,25 +118,92 @@ export default function EquipmentDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   // Statistics
-  const [uptime, setUptime] = useState(0); // Percentage
-  const [activeAlertsCount, setActiveAlertsCount] = useState(0);
+  const [uptime, setUptime] = useState<number | null>(null); // Percentage points from the server
 
   // Performance metrics
-  const [oeeData, setOeeData] = useState<{ oee: number; availability: number; performance: number; quality: number } | null>(null);
+  const [oeeData, setOeeData] = useState<EquipmentOeeMetrics | null>(null);
   const [depreciatedValue, setDepreciatedValue] = useState<number | null>(null);
-  const [usageStats, setUsageStats] = useState<{ utilizationRate?: number; totalRuntime?: number; downtime?: number; mtbf?: number; mttr?: number } | null>(null);
+  const [usageStats, setUsageStats] = useState<EquipmentEfficiencyMetrics | null>(null);
+  const [activeAlertsCount, setActiveAlertsCount] = useState<number | null>(null);
+  const [dataOwnerKey, setDataOwnerKey] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const mountedRef = useRef(true);
+  const requestSequenceRef = useRef(0);
+  const currentQueryRef = useRef('');
+  const previousQueryRef = useRef('');
+
+  const capturedUser = user as User | null;
+  const canonicalFactoryId = getFactoryId(capturedUser) || '';
+  const actorKey = equipmentActorKey(capturedUser);
+  const normalizedEquipmentId = String(equipmentId);
+  const queryKey = `${actorKey}:${canonicalFactoryId}:${normalizedEquipmentId}`;
+  if (previousQueryRef.current !== queryKey) {
+    previousQueryRef.current = queryKey;
+    currentQueryRef.current = queryKey;
+    requestSequenceRef.current += 1;
+  }
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestSequenceRef.current += 1;
+    };
+  }, []);
+
+  const canNavigateToFactoryAlerts = () => {
+    const liveUser = useAuthStore.getState().user as User | null;
+    return currentQueryRef.current === queryKey
+      && equipmentActorKey(liveUser) === actorKey
+      && (getFactoryId(liveUser) || '') === canonicalFactoryId
+      && String(equipmentId) === normalizedEquipmentId
+      && hasModulePermission(liveUser, 'equipment', 'read');
+  };
+
+  const navigateToFactoryAlerts = () => {
+    if (canNavigateToFactoryAlerts()) navigation.navigate('EquipmentAlerts', {});
+  };
 
   useFocusEffect(
     useCallback(() => {
-      fetchEquipmentDetail();
-    }, [equipmentId])
+      void fetchEquipmentDetail();
+      return () => {
+        requestSequenceRef.current += 1;
+      };
+    }, [queryKey])
   );
 
   const fetchEquipmentDetail = async () => {
+    const requestUser = useAuthStore.getState().user as User | null;
+    const requestActorKey = equipmentActorKey(requestUser);
+    const requestFactoryId = getFactoryId(requestUser) || '';
+    const requestEquipmentId = Number(equipmentId);
+    if (currentQueryRef.current !== queryKey
+      || requestActorKey !== actorKey
+      || requestFactoryId !== canonicalFactoryId
+      || String(equipmentId) !== normalizedEquipmentId) return;
+
+    const requestSequence = ++requestSequenceRef.current;
+    const isCurrentRequest = () => mountedRef.current
+      && requestSequenceRef.current === requestSequence
+      && currentQueryRef.current === queryKey
+      && requestActorKey === equipmentActorKey(useAuthStore.getState().user as User | null)
+      && requestFactoryId === (getFactoryId(useAuthStore.getState().user as User | null) || '')
+      && String(equipmentId) === normalizedEquipmentId;
+
     setLoading(true);
+    setLoadError(false);
+    setDataOwnerKey(null);
+    setEquipment(null);
+    setMaintenanceRecords([]);
+    setOeeData(null);
+    setDepreciatedValue(null);
+    setUsageStats(null);
+    setUptime(null);
     try {
-      // API integration - GET /equipment/{equipmentId}
-      equipmentDetailLogger.debug('Fetching equipment detail', { factoryId, equipmentId });
+      if (!requestFactoryId || !Number.isInteger(requestEquipmentId) || requestEquipmentId <= 0
+        || !hasModulePermission(requestUser, 'equipment', 'read')) {
+        throw new Error('equipment_detail_read_denied');
+      }
 
       // Calculate date range for performance metrics (last 30 days)
       const endDate = formatDate(new Date());
@@ -133,25 +215,18 @@ export default function EquipmentDetailScreen() {
         oeeResult,
         depreciatedValueResult,
         usageStatsResult,
-        equipmentStatsResult,
       ] = await Promise.all([
-        equipmentApiClient.getEquipmentById(Number(equipmentId), factoryId),
-        equipmentApiClient.getEquipmentMaintenanceHistory(Number(equipmentId), factoryId),
-        // OEE Analysis
-        equipmentApiClient.calculateOEE(Number(equipmentId), { startDate, endDate }, factoryId).catch(() => null),
-        // Depreciated Value
-        equipmentApiClient.calculateDepreciatedValue(Number(equipmentId), factoryId).catch(() => null),
-        // Usage Statistics (efficiency report)
-        equipmentApiClient.getEquipmentEfficiencyReport(Number(equipmentId), { startDate, endDate }, factoryId).catch(() => null),
-        // Equipment Statistics
-        equipmentApiClient.getEquipmentStatistics(Number(equipmentId), factoryId).catch(() => null),
+        equipmentApiClient.getEquipmentById(requestEquipmentId, requestFactoryId),
+        equipmentApiClient.getEquipmentMaintenanceHistory(requestEquipmentId, requestFactoryId),
+        equipmentApiClient.calculateOEE(requestEquipmentId, { startDate, endDate }, requestFactoryId).catch(() => null),
+        equipmentApiClient.calculateDepreciatedValue(requestEquipmentId, requestFactoryId).catch(() => null),
+        equipmentApiClient.getEquipmentEfficiencyReport(requestEquipmentId, { startDate, endDate }, requestFactoryId).catch(() => null),
       ]);
 
-      equipmentDetailLogger.info('Equipment detail loaded successfully', {
-        equipmentId,
-        name: eq.name,
-        status: eq.status,
-      });
+      if (!isCurrentRequest()) return;
+      if (String(eq.id) !== String(requestEquipmentId) || eq.factoryId !== requestFactoryId) {
+        throw new Error('equipment_detail_contract_invalid');
+      }
 
       // Map Equipment status to EquipmentStatus
       const mapStatus = (status: string): EquipmentStatus => {
@@ -183,96 +258,72 @@ export default function EquipmentDetailScreen() {
         operatorName: eq.operatorName,
       };
 
-      setEquipment(equipmentInfo);
+      const history: APIMaintenanceRecord[] = maintenanceHistoryResult || [];
+      const records: MaintenanceRecord[] = history.map((record) => ({
+        id: String(record.id),
+        date: record.maintenanceDate,
+        type: 'Routine Maintenance',
+        technician: record.performedBy || 'Unknown',
+        description: record.description || 'N/A',
+        cost: typeof record.cost === 'number' && Number.isFinite(record.cost) && record.cost >= 0 ? record.cost : null,
+      }));
+
+      const normalizedOee = normalizeOeeScalar(oeeResult);
+      const normalizedUsage = normalizeEfficiencyReport(usageStatsResult, requestEquipmentId);
+      const depreciatedValue = typeof depreciatedValueResult === 'number'
+        && Number.isFinite(depreciatedValueResult)
+        ? depreciatedValueResult
+        : null;
+      const serverUptime = normalizedUsage?.availability ?? normalizedUsage?.utilizationRate ?? null;
 
       // ✅ Note: Real-time IoT parameters are not yet implemented
       // TODO: Integrate with IoT system in Phase 4
       // For now, set empty parameters to indicate feature is pending
       setParameters({});
-
-      // Transform maintenance history
-      const history: APIMaintenanceRecord[] = maintenanceHistoryResult || [];
-      const records: MaintenanceRecord[] = history.map((record) => ({
-        id: String(record.id),
-        date: record.maintenanceDate,
-        type: 'Routine Maintenance', // Backend doesn't distinguish types
-        technician: record.performedBy || 'Unknown',
-        description: record.description || 'N/A',
-        cost: record.cost || 0,
-      }));
-
+      setEquipment(equipmentInfo);
       setMaintenanceRecords(records);
-
-      // Set performance metrics
-      if (oeeResult) {
-        setOeeData(oeeResult as unknown as { oee: number; availability: number; performance: number; quality: number });
-        equipmentDetailLogger.info('OEE data loaded successfully', {
-          oee: typeof oeeResult === 'number' ? oeeResult.toFixed(1) + '%' : 'N/A',
-        });
-      }
-
-      if (depreciatedValueResult != null) {
-        setDepreciatedValue(typeof depreciatedValueResult === 'number' ? depreciatedValueResult : (depreciatedValueResult as { depreciatedValue?: number })?.depreciatedValue ?? 0);
-        equipmentDetailLogger.info('Depreciated value loaded successfully', {
-          value: depreciatedValueResult,
-        });
-      }
-
-      if (usageStatsResult) {
-        setUsageStats(usageStatsResult);
-        equipmentDetailLogger.info('Usage statistics loaded successfully', {
-          utilizationRate: (usageStatsResult as { utilizationRate?: number }).utilizationRate,
-        });
-      }
-
-      // Calculate uptime from efficiency report or OEE data
-      const usageRaw = usageStatsResult as { utilizationRate?: number } | null;
-      const oeeRaw = oeeResult as { availability?: number } | null;
-      if (usageRaw?.utilizationRate !== undefined) {
-        setUptime(usageRaw.utilizationRate);
-      } else if (oeeRaw?.availability !== undefined) {
-        setUptime(oeeRaw.availability * 100);
-      } else {
-        setUptime(eq.status === 'active' ? 95 : 0);
-      }
-
-      // Get active alerts count (fetch from alerts endpoint)
-      try {
-        const [maintenanceAlerts, warrantyAlerts] = await Promise.all([
-          equipmentApiClient.getEquipmentNeedingMaintenance(factoryId),
-          equipmentApiClient.getEquipmentWithExpiringWarranty(30, factoryId),
-        ]);
-
-        const totalAlerts =
-          (maintenanceAlerts || []).filter((e: Equipment) => String(e.id) === String(equipmentId)).length +
-          (warrantyAlerts || []).filter((e: Equipment) => String(e.id) === String(equipmentId)).length;
-
-        setActiveAlertsCount(totalAlerts);
-      } catch (alertError) {
-        equipmentDetailLogger.warn('Failed to fetch alert count', alertError);
-        setActiveAlertsCount(0);
-      }
+      setOeeData(normalizedOee);
+      setDepreciatedValue(depreciatedValue);
+      setUsageStats(normalizedUsage);
+      setUptime(serverUptime);
+      setDataOwnerKey(queryKey);
 
     } catch (error) {
-      equipmentDetailLogger.error('Failed to load equipment detail', error, { equipmentId });
+      if (!isCurrentRequest()) return;
+      equipmentDetailLogger.error('设备详情读取失败', new Error('equipment_detail_read_failed'));
 
-      // GOOD: No fallback to fake data, use unified error handling
       handleError(error, {
         title: t('equipmentDetail.messages.loadFailed'),
         customMessage: t('equipmentDetail.messages.loadError'),
+        logError: false,
       });
 
-      // Set to null to trigger error UI state
       setEquipment(null);
+      setMaintenanceRecords([]);
+      setOeeData(null);
+      setDepreciatedValue(null);
+      setUsageStats(null);
+      setUptime(null);
+      setDataOwnerKey(queryKey);
+      setLoadError(true);
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
   const handleRefresh = async () => {
+    const liveUser = useAuthStore.getState().user as User | null;
+    if (currentQueryRef.current !== queryKey
+      || equipmentActorKey(liveUser) !== actorKey
+      || (getFactoryId(liveUser) || '') !== canonicalFactoryId) return;
     setRefreshing(true);
     await fetchEquipmentDetail();
-    setRefreshing(false);
+    if (currentQueryRef.current === queryKey && equipmentActorKey(useAuthStore.getState().user as User | null) === actorKey) {
+      setRefreshing(false);
+    }
   };
 
   // Helper functions
@@ -294,7 +345,7 @@ export default function EquipmentDetailScreen() {
   };
 
   // Loading state
-  if (loading) {
+  if (loading || dataOwnerKey !== queryKey) {
     return (
       <View style={styles.container}>
         <Appbar.Header elevated>
@@ -310,7 +361,7 @@ export default function EquipmentDetailScreen() {
   }
 
   // Error state
-  if (!equipment) {
+  if (loadError || !equipment) {
     return (
       <View style={styles.container}>
         <Appbar.Header elevated>
@@ -334,7 +385,7 @@ export default function EquipmentDetailScreen() {
         <Appbar.Content title={equipment.name} />
         <Appbar.Action
           icon="bell"
-          onPress={() => navigation.navigate('EquipmentAlerts', { equipmentId: String(equipmentId) })}
+          onPress={navigateToFactoryAlerts}
         />
       </Appbar.Header>
 
@@ -373,12 +424,12 @@ export default function EquipmentDetailScreen() {
 
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{uptime}%</Text>
+              <Text style={styles.statValue}>{uptime === null ? t('equipmentDetail.stats.unknown') : `${uptime}%`}</Text>
               <Text style={styles.statLabel}>{t('equipmentDetail.stats.uptime')}</Text>
             </View>
             <Divider style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{activeAlertsCount}</Text>
+              <Text style={styles.statValue}>{activeAlertsCount === null ? t('equipmentDetail.stats.unknown') : activeAlertsCount}</Text>
               <Text style={styles.statLabel}>{t('equipmentDetail.stats.activeAlerts')}</Text>
             </View>
             <Divider style={styles.statDivider} />
@@ -389,6 +440,10 @@ export default function EquipmentDetailScreen() {
               <Text style={styles.statLabel}>{t('equipmentDetail.stats.maintenanceCount')}</Text>
             </View>
           </View>
+          {activeAlertsCount === null && (
+            <Text style={styles.statsHint}>{t('equipmentDetail.stats.alertsHint')}</Text>
+          )}
+          <Text style={styles.statsHint}>{t('equipmentDetail.stats.reportHint')}</Text>
         </Surface>
 
         {/* Basic Information */}
@@ -530,7 +585,7 @@ export default function EquipmentDetailScreen() {
         </Surface>
 
         {/* Performance Analysis */}
-        {(oeeData || depreciatedValue || usageStats) && (
+        {(oeeData !== null || depreciatedValue !== null || usageStats !== null) && (
           <Surface style={styles.section} elevation={1}>
             <Text variant="titleMedium" style={styles.sectionTitle}>
               {t('equipmentDetail.sections.performanceAnalysis')}
@@ -542,29 +597,8 @@ export default function EquipmentDetailScreen() {
                 <View style={styles.oeeContainer}>
                   <Text style={styles.oeeLabel}>{t('equipmentDetail.performance.oee')}</Text>
                   <Text style={styles.oeeValue}>
-                    {(oeeData.oee * 100).toFixed(1)}%
+                    {oeeData.oee.toFixed(1)}%
                   </Text>
-                </View>
-
-                <View style={styles.oeeBreakdown}>
-                  <View style={styles.oeeItem}>
-                    <Text style={styles.oeeItemLabel}>{t('equipmentDetail.performance.availability')}</Text>
-                    <Text style={styles.oeeItemValue}>
-                      {(oeeData.availability * 100).toFixed(1)}%
-                    </Text>
-                  </View>
-                  <View style={styles.oeeItem}>
-                    <Text style={styles.oeeItemLabel}>{t('equipmentDetail.performance.performance')}</Text>
-                    <Text style={styles.oeeItemValue}>
-                      {(oeeData.performance * 100).toFixed(1)}%
-                    </Text>
-                  </View>
-                  <View style={styles.oeeItem}>
-                    <Text style={styles.oeeItemLabel}>{t('equipmentDetail.performance.quality')}</Text>
-                    <Text style={styles.oeeItemValue}>
-                      {(oeeData.quality * 100).toFixed(1)}%
-                    </Text>
-                  </View>
                 </View>
 
                 <Divider style={styles.divider} />
@@ -591,16 +625,7 @@ export default function EquipmentDetailScreen() {
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>{t('equipmentDetail.performance.totalRuntime')}</Text>
                   <Text style={styles.infoValue}>
-                    {usageStats.totalRuntime ? t('equipmentDetail.hours', { value: usageStats.totalRuntime }) : 'N/A'}
-                  </Text>
-                </View>
-
-                <Divider style={styles.divider} />
-
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>{t('equipmentDetail.performance.downtime')}</Text>
-                  <Text style={styles.infoValue}>
-                    {usageStats.downtime ? t('equipmentDetail.hours', { value: usageStats.downtime }) : 'N/A'}
+                    {usageStats.actualRunningHours === null ? 'N/A' : t('equipmentDetail.hours', { value: usageStats.actualRunningHours })}
                   </Text>
                 </View>
 
@@ -609,33 +634,9 @@ export default function EquipmentDetailScreen() {
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>{t('equipmentDetail.performance.utilizationRate')}</Text>
                   <Text style={[styles.infoValue, styles.valueHighlight]}>
-                    {usageStats.utilizationRate ? `${usageStats.utilizationRate.toFixed(1)}%` : 'N/A'}
+                    {usageStats.utilizationRate === null ? 'N/A' : `${usageStats.utilizationRate.toFixed(1)}%`}
                   </Text>
                 </View>
-
-                {usageStats.mtbf && (
-                  <>
-                    <Divider style={styles.divider} />
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>{t('equipmentDetail.performance.mtbf')}</Text>
-                      <Text style={styles.infoValue}>
-                        {t('equipmentDetail.hours', { value: usageStats.mtbf })}
-                      </Text>
-                    </View>
-                  </>
-                )}
-
-                {usageStats.mttr && (
-                  <>
-                    <Divider style={styles.divider} />
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>{t('equipmentDetail.performance.mttr')}</Text>
-                      <Text style={styles.infoValue}>
-                        {t('equipmentDetail.hours', { value: usageStats.mttr })}
-                      </Text>
-                    </View>
-                  </>
-                )}
               </>
             )}
           </Surface>
@@ -666,7 +667,7 @@ export default function EquipmentDetailScreen() {
                   <DataTable.Cell>{record.date}</DataTable.Cell>
                   <DataTable.Cell>{record.type}</DataTable.Cell>
                   <DataTable.Cell>{record.technician}</DataTable.Cell>
-                  <DataTable.Cell numeric>¥{record.cost}</DataTable.Cell>
+                  <DataTable.Cell numeric>{record.cost === null ? 'N/A' : `¥${record.cost}`}</DataTable.Cell>
                 </DataTable.Row>
               ))}
             </DataTable>
@@ -680,7 +681,7 @@ export default function EquipmentDetailScreen() {
           <Button
             mode="outlined"
             icon="bell"
-            onPress={() => navigation.navigate('EquipmentAlerts', { equipmentId: String(equipmentId) })}
+            onPress={navigateToFactoryAlerts}
             style={styles.actionButton}
           >
             {t('equipmentDetail.actions.viewAlerts')}
@@ -772,6 +773,12 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 12,
     color: '#666',
+  },
+  statsHint: {
+    color: '#666',
+    fontSize: 12,
+    marginTop: 12,
+    textAlign: 'center',
   },
   statDivider: {
     width: 1,
@@ -866,24 +873,6 @@ const styles = StyleSheet.create({
     fontSize: 36,
     fontWeight: 'bold',
     color: '#4CAF50',
-  },
-  oeeBreakdown: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 16,
-  },
-  oeeItem: {
-    alignItems: 'center',
-  },
-  oeeItemLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 4,
-  },
-  oeeItemValue: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#212121',
   },
   valueHighlight: {
     color: '#2196F3',

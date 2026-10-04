@@ -91,6 +91,7 @@
   "profile": {
     "title": "我的",
     "role": "车间主任",
+    "departmentAdminRole": "部门管理员",
     "stats": {
       "managedBatches": "管理批次",
       "onDutyPersonnel": "在岗人员",
