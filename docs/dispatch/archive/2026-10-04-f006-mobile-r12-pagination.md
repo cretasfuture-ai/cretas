@@ -11,3 +11,5 @@
 禁止子代理、Git commit/push/PR、ACTIVE/archive改动、数据库/线上请求/服务器/设备/依赖安装/runner改动。你不独占整个仓库，不回退他人改动。root 继续独立的人事统计发布与手机验收，不写本scope；交付 task/Base/文件/验证证据/阻塞/下一动作。本批尚未实现、验证、合入或发布。
 
 Final implementation: server tool schema minimum 0/1 is authoritative; legal defaults may be above minimum, default-only previous safely refuses. Strict page/total/hasMore bounds, integer overflow, current READ/write guard and current ownership/permission controls. Previous refusal retains previous intent direction. Five target selectors 44/44 PASS (private r12-final-five-selector-v2.log); final independent risk review P0/P1 zero and frozen SHA verified. No Entity/Repository/query/migration changes. Final main integration, trusted build, PR/current CI, production/native previous-page acceptance pending.
+
+Source frozen and scope released in combined R12/R16 candidate integrated with defc450e3e main. The two independent reviews remain valid: integration changed no reviewed production source. Final combined trusted build/test selector and current PR CI remain required; merge/deploy/native acceptance are separate pending facts.
