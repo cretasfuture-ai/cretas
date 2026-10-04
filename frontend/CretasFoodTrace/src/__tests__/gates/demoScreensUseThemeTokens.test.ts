@@ -44,6 +44,8 @@ export const GUARDED_FILES = [
   // 2026-09-16 (demo-ai-chat): AI 问答屏 + 快捷卡组, 62 hex / 17 fontSize 清零后登记。
   'screens/factory-admin/ai-analysis/AIChatScreen.tsx',
   'components/ai/QuickActionCardGrid.tsx',
+  // 2026-10-04 (rn-ai-write-confirm): AI 问答屏的写操作确认卡, 从写下第一行起就在闸里。
+  'components/ai/AIWriteConfirmCard.tsx',
 ] as const;
 
 const HEX6 = /#[0-9A-Fa-f]{6}\b/g;
