@@ -6,7 +6,7 @@
  * - materialBatchApiClient - 获取库存统计和批次列表
  */
 
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { appAlert } from '../../../components/ui/AppDialog';
 import {
   View,
@@ -21,6 +21,7 @@ import {
   Surface,
   Chip,
   Searchbar,
+  Button,
   useTheme,
 } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -36,7 +37,8 @@ import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../../store/authStore';
 import { canViewPrice } from '../../../utils/priceViewAccess';
 import { WHInventoryStackParamList } from "../../../types/navigation";
-import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
+import type { User } from '../../../types/auth';
+import { materialBatchApiClient } from "../../../services/api/materialBatchApiClient";
 import {
   materialPackagingApiClient,
   type MaterialPackagingHierarchy,
@@ -55,13 +57,18 @@ import { RowActionBottomSheet } from "../../../components/list";
 import { useRowActions, type RowContext } from "../../../hooks/useRowActions";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
+type AncestorNavigation = {
+  getParent?: () => AncestorNavigation | undefined;
+  getState?: () => { routeNames?: readonly string[] };
+};
 
 // 物料类型
-type MaterialType = "fresh" | "frozen" | "dry";
+type MaterialType = "fresh" | "frozen" | "dry" | "unknown";
 
 interface InventoryItem {
   id: string;
   name: string;
+  batchNumber: string;
   type: MaterialType;
   /** 用来关联原料字典的规格层级 (material_packaging_hierarchy.material_type_id) */
   materialTypeId?: string;
@@ -74,6 +81,221 @@ interface InventoryItem {
   updatedAt: string;
 }
 
+const INVENTORY_PAGE_SIZE = 50;
+const MAX_INVENTORY_PAGES = 1000;
+
+type OwnerUser = {
+  id?: number | string;
+  username?: string;
+  factoryId?: string;
+  factoryUser?: {
+    factoryId?: string;
+    role?: string;
+    permissions?: string[];
+    modulePermissions?: Record<string, string>;
+  };
+} | null | undefined;
+
+class InventoryPaginationError extends Error {}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const identityKeyForUser = (currentUser: OwnerUser): string => {
+  const factoryId = currentUser?.factoryUser?.factoryId ?? currentUser?.factoryId ?? '';
+  const actorId = currentUser?.id == null
+    ? (currentUser?.username ?? '')
+    : String(currentUser.id);
+  const role = currentUser?.factoryUser?.role ?? '';
+  return `${factoryId}:${actorId}:${role}`;
+};
+
+const ownerTagForUser = (currentUser: OwnerUser): string => {
+  const permissions = [...(currentUser?.factoryUser?.permissions ?? [])].sort();
+  const modulePermissions = Object.entries(currentUser?.factoryUser?.modulePermissions ?? {})
+    .sort(([left], [right]) => left.localeCompare(right));
+  return JSON.stringify({ identity: identityKeyForUser(currentUser), permissions, modulePermissions });
+};
+
+const factoryIdForUser = (currentUser: OwnerUser): string =>
+  currentUser?.factoryUser?.factoryId ?? currentUser?.factoryId ?? '';
+
+const hasAncestorRoute = (navigation: NavigationProp, routeName: string): boolean => {
+  let current: AncestorNavigation | undefined = navigation as unknown as AncestorNavigation;
+  for (let depth = 0; current && depth < 6; depth += 1) {
+    if (current.getState?.().routeNames?.includes(routeName)) return true;
+    current = current.getParent?.();
+  }
+  return false;
+};
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+interface InventoryBatchProjection {
+  id: string;
+  batchNumber: string;
+  factoryId: string;
+  materialTypeId?: string | null;
+  materialName?: string | null;
+  materialCategory?: string | null;
+  storageType?: string | null;
+  inboundQuantity: number;
+  remainingQuantity: number;
+  reservedQuantity?: number | null;
+  usedQuantity?: number | null;
+  unit?: string | null;
+  quantityUnit?: string | null;
+  storageLocation?: string | null;
+  expiryDate?: string | null;
+  updatedAt?: string | null;
+  status: string;
+}
+
+const MATERIAL_BATCH_STATUSES = new Set([
+  'IN_STOCK',
+  'AVAILABLE',
+  'FRESH',
+  'FROZEN',
+  'DEPLETED',
+  'USED_UP',
+  'EXPIRED',
+  'INSPECTING',
+  'SCRAPPED',
+  'RESERVED',
+  'PRODUCING_RESERVED',
+  'DEFECTIVE',
+]);
+
+const isOptionalFiniteNumber = (value: unknown): boolean =>
+  value == null || isFiniteNumber(value);
+
+const isOptionalString = (value: unknown): boolean =>
+  value == null || typeof value === 'string';
+
+const isInventoryBatchProjection = (value: unknown): value is InventoryBatchProjection => {
+  if (!isRecord(value)) return false;
+  const status = typeof value.status === 'string' ? value.status.trim().toUpperCase() : '';
+  return typeof value.id === 'string'
+    && value.id.trim() !== ''
+    && typeof value.batchNumber === 'string'
+    && value.batchNumber.trim() !== ''
+    && typeof value.factoryId === 'string'
+    && value.factoryId.trim() !== ''
+    && isFiniteNumber(value.inboundQuantity)
+    && isFiniteNumber(value.remainingQuantity)
+    && isOptionalFiniteNumber(value.reservedQuantity)
+    && isOptionalFiniteNumber(value.usedQuantity)
+    && isOptionalString(value.materialTypeId)
+    && isOptionalString(value.materialName)
+    && isOptionalString(value.materialCategory)
+    && isOptionalString(value.storageType)
+    && isOptionalString(value.unit)
+    && isOptionalString(value.quantityUnit)
+    && isOptionalString(value.storageLocation)
+    && isOptionalString(value.expiryDate)
+    && isOptionalString(value.updatedAt)
+    && MATERIAL_BATCH_STATUSES.has(status);
+};
+
+const parseInventoryPage = (
+  response: unknown,
+  page: number,
+  expectedTotalPages?: number,
+): { batches: InventoryBatchProjection[]; totalPages: number } => {
+  if (!isRecord(response) || response.success !== true || !isRecord(response.data)) {
+    throw new InventoryPaginationError('库存列表响应无效');
+  }
+  const totalPages = response.data.totalPages;
+  const currentPage = response.data.currentPage;
+  if (typeof totalPages !== 'number' || !Number.isInteger(totalPages) || totalPages < 0
+    || totalPages > MAX_INVENTORY_PAGES
+    || (totalPages < page && !(totalPages === 0 && page === 1))
+    || (totalPages === 0 && Array.isArray(response.data.content) && response.data.content.length > 0)
+    || typeof currentPage !== 'number' || !Number.isInteger(currentPage) || currentPage !== page) {
+    throw new InventoryPaginationError('库存分页信息无效');
+  }
+  if (expectedTotalPages != null && totalPages !== expectedTotalPages) {
+    throw new InventoryPaginationError('库存分页信息前后不一致');
+  }
+  if (!Array.isArray(response.data.content)) {
+    throw new InventoryPaginationError('库存批次数据无效');
+  }
+  const batches = response.data.content.map((value) => {
+    if (!isInventoryBatchProjection(value)) {
+      throw new InventoryPaginationError('库存批次身份信息无效');
+    }
+    return value;
+  });
+  return { batches, totalPages };
+};
+
+interface InventorySummaryFooterProps {
+  factoryId: string;
+  ownerActor: User;
+  ownerTag: string;
+  visible: boolean;
+  loading: boolean;
+  refreshing: boolean;
+  aiAvailable: boolean;
+  navigation: NavigationProp;
+  isCurrentOwner: () => boolean;
+}
+
+function InventorySummaryFooter({
+  factoryId,
+  ownerActor,
+  ownerTag,
+  visible,
+  loading,
+  refreshing,
+  aiAvailable,
+  navigation,
+  isCurrentOwner,
+}: InventorySummaryFooterProps) {
+  const summaryRequest = useMemo(() => ({ filterConditions: {} }), [ownerActor, ownerTag]);
+  const {
+    summary,
+    loading: summaryLoading,
+    error: summaryError,
+    refresh: refreshSummary,
+  } = useListSummary('inventory', summaryRequest, factoryId);
+  useEffect(() => {
+    if (refreshing && visible && isCurrentOwner()) void refreshSummary();
+  }, [isCurrentOwner, refreshing, refreshSummary, visible]);
+
+  const currentSummary = visible && !loading && !summaryError ? summary : null;
+  const summaryUnavailable = visible && !loading && summaryError != null;
+  const visibleSummary = useMemo(() => {
+    if (!currentSummary) return null;
+    const ownerCanViewPrice = canViewPrice(ownerActor);
+    return {
+      ...currentSummary,
+      stats: currentSummary.stats.filter(
+        (stat) => ownerCanViewPrice || (stat.canViewPrice !== true && stat.format !== 'currency'),
+      ),
+    };
+  }, [currentSummary, ownerActor]);
+  const handleAIAnalyze = useCallback(() => {
+    if (!aiAvailable || !hasAncestorRoute(navigation, 'AIChat') || !visible || !visibleSummary || !isCurrentOwner()) return;
+    navigation.dispatch(CommonActions.navigate('AIChat', {
+      initialMessage: `分析当前库存 (低库存预警 / 总价值 / 周转率)${formatSummaryForAI(visibleSummary)}`,
+    }));
+  }, [aiAvailable, isCurrentOwner, navigation, visible, visibleSummary]);
+
+  return (
+    <StickyFooterSummary
+      stats={(visibleSummary?.stats ?? []).filter(
+        (st) => !(st.format === 'number' && !String(st.unit ?? '').trim())
+      )}
+      loading={loading || (visible && summaryLoading && visibleSummary == null && !summaryError)}
+      empty={summaryUnavailable || (!loading && visibleSummary == null && !summaryLoading)}
+      emptyText={summaryUnavailable ? '统计暂不可用，可下拉重试' : undefined}
+      onAIAnalyze={aiAvailable && visibleSummary != null ? handleAIAnalyze : undefined}
+    />
+  );
+}
+
 interface QuickAction {
   key: string;
   label: string;
@@ -83,21 +305,17 @@ interface QuickAction {
 }
 
 // 将后端批次状态映射为仓储物料类型
-const mapBatchToMaterialType = (batch: MaterialBatch): MaterialType => {
-  // 根据 storageType 或 status 判断类型
-  const status = batch.status?.toLowerCase() ?? '';
-  const storageType = batch.storageType?.toLowerCase() ?? '';
-
-  if (storageType === 'frozen' || status === 'frozen') {
-    return 'frozen';
-  } else if (storageType === 'dry' || storageType.includes('干')) {
-    return 'dry';
-  }
-  return 'fresh';
+const mapBatchToMaterialType = (batch: InventoryBatchProjection): MaterialType => {
+  // storageType 是后端原料类型的受控字段；缺失或未知时必须保留未知，不能猜鲜品。
+  const storageType = batch.storageType?.trim().toLowerCase();
+  if (storageType === 'fresh') return 'fresh';
+  if (storageType === 'frozen') return 'frozen';
+  if (storageType === 'dry') return 'dry';
+  return 'unknown';
 };
 
 // 计算预警类型
-const getWarningType = (batch: MaterialBatch): "expire" | "low" | "normal" => {
+const getWarningType = (batch: InventoryBatchProjection): "expire" | "low" | "normal" => {
   const remaining = batch.remainingQuantity ?? 0;
   const total = batch.inboundQuantity ?? 0;
 
@@ -120,7 +338,7 @@ const getWarningType = (batch: MaterialBatch): "expire" | "low" | "normal" => {
 };
 
 // 获取预警文本
-const getWarningText = (warningType: "expire" | "low" | "normal", batch: MaterialBatch): string => {
+const getWarningText = (warningType: "expire" | "low" | "normal", batch: InventoryBatchProjection): string => {
   if (warningType === 'expire') {
     if (batch.expiryDate) {
       const expDate = new Date(batch.expiryDate);
@@ -143,6 +361,7 @@ export function WHInventoryListScreen() {
   const priceVisible = canViewPrice(user);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("all");
   const [inventoryList, setInventoryList] = useState<InventoryItem[]>([]);
@@ -161,6 +380,73 @@ export function WHInventoryListScreen() {
   } | null>(null);
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+  const [sheetOwner, setSheetOwner] = useState<typeof user>(null);
+  const [sheetOwnerTag, setSheetOwnerTag] = useState<string | null>(null);
+  const [sheetOwnerEpoch, setSheetOwnerEpoch] = useState<number | null>(null);
+  const requestGenerationRef = useRef(0);
+  const authVersionRef = useRef(0);
+  const [authEpoch, setAuthEpoch] = useState(0);
+  useEffect(() => {
+    let lastActor = useAuthStore.getState().user;
+    let lastOwnerTag = ownerTagForUser(lastActor);
+    const unsubscribe = useAuthStore.subscribe((state) => {
+      const nextOwnerTag = ownerTagForUser(state.user);
+      if (state.user !== lastActor || nextOwnerTag !== lastOwnerTag) {
+        authVersionRef.current += 1;
+        requestGenerationRef.current += 1;
+        setAuthEpoch((epoch) => epoch + 1);
+      }
+      lastActor = state.user;
+      lastOwnerTag = nextOwnerTag;
+    });
+    return unsubscribe;
+  }, []);
+  const identityKey = identityKeyForUser(user);
+  const ownerTag = ownerTagForUser(user);
+  const ownerVersionRef = useRef<{ actor: typeof user; tag: string; version: number }>({
+    actor: user,
+    tag: ownerTag,
+    version: 0,
+  });
+  if (ownerVersionRef.current.actor !== user || ownerVersionRef.current.tag !== ownerTag) {
+    ownerVersionRef.current = {
+      actor: user,
+      tag: ownerTag,
+      version: ownerVersionRef.current.version + 1,
+    };
+    requestGenerationRef.current += 1;
+  }
+  const ownerVersion = ownerVersionRef.current.version;
+  const renderAuthVersion = authVersionRef.current;
+  const [inventoryOwner, setInventoryOwner] = useState<typeof user>(user);
+  const [inventoryOwnerTag, setInventoryOwnerTag] = useState<string>(ownerTag);
+  const [inventoryOwnerEpoch, setInventoryOwnerEpoch] = useState(authEpoch);
+  const [statsOwner, setStatsOwner] = useState<typeof user>(user);
+  const [statsOwnerTag, setStatsOwnerTag] = useState<string>(ownerTag);
+  const [statsOwnerEpoch, setStatsOwnerEpoch] = useState(authEpoch);
+  const [hierarchyOwner, setHierarchyOwner] = useState<typeof user>(user);
+  const [hierarchyOwnerTag, setHierarchyOwnerTag] = useState<string>(ownerTag);
+  const [hierarchyOwnerEpoch, setHierarchyOwnerEpoch] = useState(authEpoch);
+  const ownerSnapshotIsCurrent = inventoryOwner === user
+    && inventoryOwnerTag === ownerTag
+    && inventoryOwnerEpoch === authEpoch;
+  const visibleInventoryList = ownerSnapshotIsCurrent ? inventoryList : [];
+  const visibleInventoryStats = statsOwner === user && statsOwnerTag === ownerTag && statsOwnerEpoch === authEpoch
+    ? inventoryStats
+    : null;
+  const visibleHierarchyMap = hierarchyOwner === user && hierarchyOwnerTag === ownerTag && hierarchyOwnerEpoch === authEpoch
+    ? hierarchyMap
+    : {};
+  const isCurrentOwnerFor = (
+    capturedUser: typeof user,
+    capturedOwnerTag: string,
+    capturedAuthVersion: number,
+  ): boolean => {
+    const liveUser = useAuthStore.getState().user;
+    return liveUser === capturedUser
+      && ownerTagForUser(liveUser) === capturedOwnerTag
+      && authVersionRef.current === capturedAuthVersion;
+  };
 
   /** Map warningType ('normal'/'low'/'expire') to STATUS_ACTIONS_MAP key. */
   const deriveInventoryStatus = (item: InventoryItem): string => {
@@ -170,25 +456,47 @@ export function WHInventoryListScreen() {
   };
 
   const handlers = useMemo(() => ({
-    'view-detail': (e: RowContext) => navigation.navigate('WHInventoryDetail', { inventoryId: e.id }),
+    'view-detail': (e: RowContext) => {
+      if (!isCurrentOwnerFor(user, ownerTag, renderAuthVersion)
+        || !visibleInventoryList.some((item) => item.id === e.id)) return;
+      navigation.navigate('WHInventoryDetail', { inventoryId: e.id });
+    },
     // 🔴 2026-08-17: 原文案是「跳转 WHInventoryTransfer (待接)」—— 把内部屏幕名直接弹给了仓管,
     // 而它指向的那个屏是原型(只改 storageLocation, 数量不参与)。改成人话 + 说清去哪做。
-    transfer: () => appAlert('调拨', '手机端暂不支持调拨, 请在网页端「库存 - 调拨」办理。'),
-    'view-price-history': (e: RowContext) => appAlert('价格历史', `物料 ${e.id}`),
-  }), [navigation]);
+    transfer: () => {
+      if (isCurrentOwnerFor(user, ownerTag, renderAuthVersion)) {
+        appAlert('调拨', '手机端暂不支持调拨, 请在网页端「库存 - 调拨」办理。');
+      }
+    },
+    'view-price-history': (e: RowContext) => {
+      if (isCurrentOwnerFor(user, ownerTag, renderAuthVersion)
+        && visibleInventoryList.some((item) => item.id === e.id)) {
+        appAlert('价格历史', `物料 ${e.id}`);
+      }
+    },
+  }), [navigation, ownerTag, renderAuthVersion, user, visibleInventoryList]);
 
   const sheetCtx: RowContext = selectedItem
     ? { status: deriveInventoryStatus(selectedItem), id: selectedItem.id }
     : { status: '', id: '' };
   const rowActions = useRowActions('inventory', sheetCtx, { handlers });
 
-  const openSheet = (item: InventoryItem) => { setSelectedItem(item); setActionSheetVisible(true); };
+  const openSheet = (item: InventoryItem) => {
+    if (!isCurrentOwnerFor(user, ownerTag, renderAuthVersion)
+      || !visibleInventoryList.some((candidate) => candidate.id === item.id)) return;
+    setSelectedItem(item);
+    setSheetOwner(user);
+    setSheetOwnerTag(ownerTag);
+    setSheetOwnerEpoch(authEpoch);
+    setActionSheetVisible(true);
+  };
 
   // Define type config and quick actions inside component to access t()
   const typeConfig: Record<MaterialType, { label: string; color: string; bgColor: string }> = {
     fresh: { label: t('inventory.filter.fresh'), color: "#4CAF50", bgColor: "#e8f5e9" },
     frozen: { label: t('inventory.filter.frozen'), color: "#2196F3", bgColor: "#e3f2fd" },
     dry: { label: t('inventory.filter.dry'), color: "#FF9800", bgColor: "#fff3e0" },
+    unknown: { label: '类型未提供', color: "#757575", bgColor: "#f5f5f5" },
   };
 
   const quickActions: QuickAction[] = [
@@ -212,87 +520,144 @@ export function WHInventoryListScreen() {
     { key: "warnings", label: "库存预警", icon: "bell-alert-outline", color: "#E91E63", screen: "WHInventoryWarnings" },
   ];
 
-  // 加载库存数据
+  // 加载库存数据。列表必须完整完成服务端分页后才替换当前结果。
   const loadData = useCallback(async () => {
+    const liveUserAtEntry = useAuthStore.getState().user;
+    if (liveUserAtEntry !== user
+      || identityKeyForUser(liveUserAtEntry) !== identityKey
+      || ownerTagForUser(liveUserAtEntry) !== ownerTag
+      || authVersionRef.current !== renderAuthVersion) return;
+    const generation = ++requestGenerationRef.current;
+    const requestActor = user;
+    const requestIdentity = identityKey;
+    const requestOwnerTag = ownerTag;
+    const requestFactoryId = factoryIdForUser(requestActor);
+    const requestAuthVersion = renderAuthVersion;
+    const requestAuthEpoch = authEpoch;
+    const isCurrentRequest = () =>
+      generation === requestGenerationRef.current
+      && authVersionRef.current === requestAuthVersion
+      && authEpoch === requestAuthEpoch
+      && useAuthStore.getState().user === requestActor
+      && identityKeyForUser(useAuthStore.getState().user) === requestIdentity
+      && ownerTagForUser(useAuthStore.getState().user) === requestOwnerTag;
+
+    setLoading(true);
+    setLoadError(null);
+
+    if (!requestActor || !requestFactoryId || !isCurrentRequest()) {
+      setLoading(false);
+      setRefreshing(false);
+      setLoadError('当前账号缺少工厂身份，无法加载库存。请重新登录后重试。');
+      return;
+    }
+
     try {
       logger.info('WHInventoryListScreen', '开始加载库存数据...');
 
-      // 并行获取批次列表和库存统计
+      const loadAllBatches = async (): Promise<InventoryBatchProjection[]> => {
+        const allBatches = new Map<string, InventoryBatchProjection>();
+        let page = 1;
+        let totalPages: number | undefined;
+        while (totalPages == null || page <= totalPages) {
+          if (!isCurrentRequest()) throw new InventoryPaginationError('库存请求已过期');
+          const response = await materialBatchApiClient.getMaterialBatches({
+            factoryId: requestFactoryId,
+            page,
+            size: INVENTORY_PAGE_SIZE,
+          });
+          if (!isCurrentRequest()) throw new InventoryPaginationError('库存请求已过期');
+          const parsed = parseInventoryPage(response, page, totalPages);
+          totalPages = parsed.totalPages;
+          for (const batch of parsed.batches) {
+            if (requestFactoryId && batch.factoryId !== requestFactoryId) {
+              throw new InventoryPaginationError('库存批次不属于当前工厂');
+            }
+            if (!allBatches.has(batch.id)) allBatches.set(batch.id, batch);
+          }
+          page += 1;
+        }
+        return [...allBatches.values()];
+      };
+
       const [batchesResult, statsResult, packagingResult] = await Promise.allSettled([
-        materialBatchApiClient.getMaterialBatches({ page: 1, size: 50 }),
-        materialBatchApiClient.getInventoryStatistics(),
-        materialPackagingApiClient.list(),
+        loadAllBatches(),
+        materialBatchApiClient.getInventoryStatistics(requestFactoryId),
+        materialPackagingApiClient.list(requestFactoryId),
       ]);
 
-      // 规格层级取不到不阻断列表 —— 只是换算显示不出来, 卡片会显示「未设规格」。
+      if (!isCurrentRequest()) return;
+
       if (packagingResult.status === 'fulfilled') {
         const map: Record<string, MaterialPackagingHierarchy> = {};
         for (const h of packagingResult.value ?? []) {
           if (h?.materialTypeId) map[h.materialTypeId] = h;
         }
         setHierarchyMap(map);
+        setHierarchyOwner(requestActor);
+        setHierarchyOwnerTag(requestOwnerTag);
+        setHierarchyOwnerEpoch(requestAuthEpoch);
         logger.info('WHInventoryListScreen', `规格层级 ${Object.keys(map).length} 条`);
       } else {
         logger.warn('WHInventoryListScreen', '规格层级获取失败, 换算将显示为未设规格');
         setHierarchyMap({});
+        setHierarchyOwner(requestActor);
+        setHierarchyOwnerTag(requestOwnerTag);
+        setHierarchyOwnerEpoch(requestAuthEpoch);
       }
 
-      // 处理批次列表
-      if (batchesResult.status === 'fulfilled') {
-        const response = batchesResult.value as { success?: boolean; data?: { content?: MaterialBatch[] } };
-        if (response.success) {
-          const batches = response.data?.content ?? [];
-          logger.info('WHInventoryListScreen', `获取到 ${batches.length} 个批次`);
-
-          // 转换为库存项目格式
-          const items: InventoryItem[] = batches.map((batch: MaterialBatch) => {
-            const warningType = getWarningType(batch);
-            return {
-              id: batch.id ?? batch.batchNumber ?? String(Math.random()),
-              name: batch.materialName ?? batch.materialCategory ?? '未知物料',
-              type: mapBatchToMaterialType(batch),
-              materialTypeId: batch.materialTypeId,
-              quantity: batch.remainingQuantity ?? batch.inboundQuantity ?? 0,
-              // 口径修正 (2026-08-02): 原来这里硬编码 'kg'。prod 实测 F006 首页 50 条批次的
-              // 真实单位是 kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 unit 5 ——
-              // 12/50 根本不是 kg, 却被当 kg 显示并求和。带上真实单位, 缺失就直说。
-              unit: batch.unit || '未标注',
-              batchCount: 1, // 每个批次算一个
-              location: batch.storageLocation ?? '默认库位',
-              warning: getWarningText(warningType, batch),
-              warningType: warningType,
-              updatedAt: batch.updatedAt
-                ? formatDate(new Date(batch.updatedAt))
-                : formatDate(new Date()),
-            };
-          });
-
-          setInventoryList(items);
-        } else {
-          logger.warn('WHInventoryListScreen', '获取批次列表失败');
-          setInventoryList([]);
-        }
-      } else {
-        logger.warn('WHInventoryListScreen', '获取批次列表失败');
-        setInventoryList([]);
+      if (batchesResult.status === 'rejected') {
+        throw batchesResult.reason;
       }
 
-      // 处理库存统计
+      const items: InventoryItem[] = batchesResult.value.map((batch: InventoryBatchProjection) => {
+        const warningType = getWarningType(batch);
+        return {
+          id: batch.id,
+          name: batch.materialName ?? batch.materialCategory ?? '未知物料',
+          batchNumber: batch.batchNumber,
+          type: mapBatchToMaterialType(batch),
+          materialTypeId: batch.materialTypeId ?? undefined,
+          quantity: batch.remainingQuantity ?? batch.inboundQuantity ?? 0,
+          unit: batch.quantityUnit || '未标注',
+          batchCount: 1,
+          location: batch.storageLocation ?? '未提供库位',
+          warning: getWarningText(warningType, batch),
+          warningType: warningType,
+          updatedAt: batch.updatedAt ? formatDate(new Date(batch.updatedAt)) : '更新时间未知',
+        };
+      });
+
+      setInventoryList(items);
+      setInventoryOwner(requestActor);
+      setInventoryOwnerTag(requestOwnerTag);
+      setInventoryOwnerEpoch(requestAuthEpoch);
+
       if (statsResult.status === 'fulfilled') {
         const statsResponse = statsResult.value as { success?: boolean; data?: { totalValue?: number | null; totalBatches: number; availableBatches: number; expiringBatchesCount: number; inventoryByType?: Record<string, number> } };
         if (statsResponse.success && statsResponse.data) {
           setInventoryStats({ ...statsResponse.data, totalValue: statsResponse.data.totalValue ?? null });
+        } else {
+          setInventoryStats(null);
         }
+      } else {
+        setInventoryStats(null);
       }
-
+      setStatsOwner(requestActor);
+      setStatsOwnerTag(requestOwnerTag);
+      setStatsOwnerEpoch(requestAuthEpoch);
     } catch (error) {
+      if (!isCurrentRequest()) return;
       logger.error('WHInventoryListScreen', '加载库存数据失败', error);
       handleError(error, { title: '加载库存数据失败' });
+      setLoadError('库存列表加载失败，未显示不完整数据。请点击“重试”重新加载。');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrentRequest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [authEpoch, authVersionRef, identityKey, ownerTag, renderAuthVersion, user]);
 
   // 重新进入页面时刷新数据（盘点/调拨/入库后返回能看到最新库存）
   useFocusEffect(
@@ -302,21 +667,40 @@ export function WHInventoryListScreen() {
   );
 
   const onRefresh = useCallback(() => {
+    const liveUser = useAuthStore.getState().user;
+    if (liveUser !== user
+      || identityKeyForUser(liveUser) !== identityKey
+      || ownerTagForUser(liveUser) !== ownerTag
+      || authVersionRef.current !== renderAuthVersion) return;
     setRefreshing(true);
     loadData();
-  }, [loadData]);
+  }, [identityKey, loadData, ownerTag, renderAuthVersion, user]);
 
-  // U-FOOTER-1
-  const summaryRequest = useMemo(() => ({ filterConditions: {} }), []);
-  const { summary, refresh: refreshSummary } = useListSummary('inventory', summaryRequest);
-  useEffect(() => { refreshSummary(); }, [refreshSummary, refreshing]);
+  const retryLoad = useCallback(() => {
+    const liveUser = useAuthStore.getState().user;
+    if (liveUser === user
+      && identityKeyForUser(liveUser) === identityKey
+      && ownerTagForUser(liveUser) === ownerTag
+      && authVersionRef.current === renderAuthVersion) loadData();
+  }, [identityKey, loadData, ownerTag, renderAuthVersion, user]);
 
+  const summaryAiAvailable = ownerSnapshotIsCurrent
+    && hasAncestorRoute(navigation, 'AIChat')
+    && (user?.factoryUser?.role === 'warehouse_manager' || user?.factoryUser?.role === 'factory_super_admin');
+  const summaryFactoryId = factoryIdForUser(user);
+  const isCurrentOwner = useCallback(() => {
+    const liveUser = useAuthStore.getState().user;
+    return liveUser === user
+      && ownerTagForUser(liveUser) === ownerTag
+      && authVersionRef.current === renderAuthVersion;
+  }, [ownerTag, renderAuthVersion, user]);
   // 筛选数据
-  const filteredList = inventoryList.filter((item) => {
+  const filteredList = visibleInventoryList.filter((item) => {
     if (selectedType !== "all" && item.type !== selectedType) return false;
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      return item.name.toLowerCase().includes(query);
+      return item.name.toLowerCase().includes(query)
+        || item.batchNumber.toLowerCase().includes(query);
     }
     return true;
   });
@@ -335,17 +719,17 @@ export function WHInventoryListScreen() {
   //
   // 修法: 分清「全量(服务端)」与「已加载(本页)」两个范围, 各自只说自己能证明的事;
   // 数量按单位分组, 绝不跨单位相加。
-  const loadedCount = inventoryList.length;
-  const totalBatches = inventoryStats?.totalBatches ?? loadedCount;
+  const loadedCount = visibleInventoryList.length;
+  const totalBatches = visibleInventoryStats?.totalBatches ?? loadedCount;
 
   /** 已加载批次按单位分组求和 —— 只在同一单位内相加。 */
-  const loadedQuantityByUnit = inventoryList.reduce<Record<string, number>>((acc, i) => {
+  const loadedQuantityByUnit = visibleInventoryList.reduce<Record<string, number>>((acc, i) => {
     acc[i.unit] = (acc[i.unit] ?? 0) + i.quantity;
     return acc;
   }, {});
   const loadedUnitKinds = Object.keys(loadedQuantityByUnit);
   const loadedKgQuantity = loadedQuantityByUnit['kg'] ?? 0;
-  const nonKgBatchCount = inventoryList.filter((i) => i.unit !== 'kg').length;
+  const nonKgBatchCount = visibleInventoryList.filter((i) => i.unit !== 'kg').length;
 
   const stats = {
     // 批次总数 (全量, 服务端)
@@ -353,23 +737,36 @@ export function WHInventoryListScreen() {
     // 本页已加载条数 —— 类型分项都只覆盖这些, 所以「全部」也必须用它, 否则
     // 全部(296) 与 鲜品+冻品+干货(50) 当场对不上。
     loaded: loadedCount,
-    fresh: inventoryList.filter((i) => i.type === "fresh").length,
-    frozen: inventoryList.filter((i) => i.type === "frozen").length,
-    dry: inventoryList.filter((i) => i.type === "dry").length,
+    fresh: visibleInventoryList.filter((i) => i.type === "fresh").length,
+    frozen: visibleInventoryList.filter((i) => i.type === "frozen").length,
+    dry: visibleInventoryList.filter((i) => i.type === "dry").length,
+    unknown: visibleInventoryList.filter((i) => i.type === "unknown").length,
     loadedKgQuantity,
     nonKgBatchCount,
     loadedUnitKinds: loadedUnitKinds.length,
-    warningCount: inventoryStats?.expiringBatchesCount ?? inventoryList.filter((i) => i.warningType !== "normal").length,
-    totalValue: inventoryStats?.totalValue ?? null,
+    warningCount: visibleInventoryStats?.expiringBatchesCount ?? visibleInventoryList.filter((i) => i.warningType !== "normal").length,
+    totalValue: visibleInventoryStats?.totalValue ?? null,
   };
 
   const handleItemPress = (item: InventoryItem) => {
+    if (!isCurrentOwnerFor(user, ownerTag, renderAuthVersion)
+      || !visibleInventoryList.some((candidate) => candidate.id === item.id)) return;
     navigation.navigate("WHInventoryDetail", { inventoryId: item.id });
   };
 
   const handleQuickAction = (action: QuickAction) => {
+    if (!isCurrentOwnerFor(user, ownerTag, renderAuthVersion)) return;
     (navigation.navigate as (screen: string) => void)(action.screen);
   };
+
+  const actionSheetOwned = actionSheetVisible
+    && ownerSnapshotIsCurrent
+    && selectedItem != null
+    && visibleInventoryList.some((item) => item.id === selectedItem.id)
+    && sheetOwner === user
+    && sheetOwnerTag === ownerTag
+    && sheetOwnerEpoch === authEpoch
+    && isCurrentOwnerFor(user, ownerTag, renderAuthVersion);
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -386,11 +783,32 @@ export function WHInventoryListScreen() {
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>加载中...</Text>
+          <Text style={styles.loadingText}>加载库存中...</Text>
+        </View>
+      ) : loadError ? (
+        <View style={styles.errorContainer} testID="wh-inventory-load-error">
+          <Searchbar
+            placeholder="搜索物料名称/批次号"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            style={styles.searchBar}
+            inputStyle={styles.searchInput}
+          />
+          <Text style={styles.errorText}>{loadError}</Text>
+          <Button
+            mode="contained"
+            onPress={retryLoad}
+            testID="wh-inventory-retry"
+            style={styles.retryButton}
+            contentStyle={styles.retryButtonContent}
+          >
+            重试
+          </Button>
         </View>
       ) : (
       <ScrollView
         style={styles.content}
+        testID="wh-inventory-scroll"
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -452,6 +870,7 @@ export function WHInventoryListScreen() {
             全部({stats.loaded})
           </Chip>
           <Chip
+            testID="wh-inventory-filter-fresh"
             selected={selectedType === "fresh"}
             onPress={() => setSelectedType("fresh")}
             style={[
@@ -484,6 +903,18 @@ export function WHInventoryListScreen() {
           >
             干货({stats.dry})
           </Chip>
+          <Chip
+            testID="wh-inventory-filter-unknown"
+            selected={selectedType === "unknown"}
+            onPress={() => setSelectedType("unknown")}
+            style={[
+              styles.filterChip,
+              selectedType === "unknown" && styles.filterChipActive,
+            ]}
+            textStyle={selectedType === "unknown" ? styles.filterChipTextActive : undefined}
+          >
+            类型未提供({stats.unknown})
+          </Chip>
         </ScrollView>
 
         {/* 库存列表 */}
@@ -493,6 +924,7 @@ export function WHInventoryListScreen() {
             return (
               <TouchableOpacity
                 key={item.id}
+                testID={`wh-inventory-row-${item.id}`}
                 onPress={() => handleItemPress(item)}
                 onLongPress={() => openSheet(item)}
                 activeOpacity={0.7}
@@ -511,6 +943,7 @@ export function WHInventoryListScreen() {
                       </Text>
                     </View>
                   </View>
+                  <Text style={styles.batchNumber}>批次号: {item.batchNumber}</Text>
 
                   <View style={styles.cardContent}>
                     <View style={styles.mainInfo}>
@@ -551,13 +984,17 @@ export function WHInventoryListScreen() {
                     绝不退回按 1:1 猜 —— 那正是 725,908 那个假数的成因。
                   */}
                   {(() => {
-                    const h = item.materialTypeId ? hierarchyMap[item.materialTypeId] : undefined;
+                    const h = item.materialTypeId ? visibleHierarchyMap[item.materialTypeId] : undefined;
                     const conv = convertByHierarchy(item.quantity, item.unit, h);
                     if (!conv) {
                       return (
                         <TouchableOpacity
                           style={styles.convertRow}
-                          onPress={() => navigation.navigate('WHInventoryDetail', { inventoryId: item.id })}
+                          onPress={() => {
+                            if (isCurrentOwnerFor(user, ownerTag, renderAuthVersion)) {
+                              navigation.navigate('WHInventoryDetail', { inventoryId: item.id });
+                            }
+                          }}
                         >
                           <Text style={styles.convertMissing}>⚠ 未设规格 · 无法折算</Text>
                           <Text style={styles.convertLink}>去设置 ›</Text>
@@ -601,9 +1038,9 @@ export function WHInventoryListScreen() {
             计数单位分列 —— 盒/箱/片/卷 之间没有通用换算 (全局单位表里那些 1:1 是假的),
             所以按单位各自成组显示, 而不是加成一个没有业务含义的总数。
           */}
-          {bucketByDimension(inventoryList).filter((b) => b.kind === 'count').length > 0 && (
+          {bucketByDimension(visibleInventoryList).filter((b) => b.kind === 'count').length > 0 && (
             <View style={styles.countUnitRow}>
-              {bucketByDimension(inventoryList)
+              {bucketByDimension(visibleInventoryList)
                 .filter((b) => b.kind === 'count')
                 .map((b) => (
                   <View key={b.unit} style={styles.countUnitChip}>
@@ -626,7 +1063,7 @@ export function WHInventoryListScreen() {
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>
                 {formatQuantity(
-                  bucketByDimension(inventoryList).find((b) => b.kind === 'weight')?.quantity ?? 0
+                  bucketByDimension(visibleInventoryList).find((b) => b.kind === 'weight')?.quantity ?? 0
                 )}
               </Text>
               <Text style={styles.statsLabel}>已加载食材(kg)</Text>
@@ -654,39 +1091,35 @@ export function WHInventoryListScreen() {
       </ScrollView>
       )}
 
-      <StickyFooterSummary
-        /*
-          口径修正 (2026-08-02): 后端 list-summary 的「可用数量」是
-          SUM(receipt-used-reserved) **跨单位硬加** (prod F006 实测 725,908.175 =
-          70万克 + 1万个盒 + 1万张膜 + 310个箱), 它自己返回的 unit 是**空字符串** ——
-          等于承认给不出单位。这里就用这个自证信号过滤: 数量型(number)但没有单位的统计
-          不予展示, 因为跨量纲求和没有业务含义。
-          带单位的(共 N 批 / 总价值 ¥)照常显示。
-          ⚠️ 后端那条 SQL 本身也该按单位分组, 属独立项。
-        */
-        stats={(summary?.stats ?? []).filter(
-          (st) => !(st.format === 'number' && !String(st.unit ?? '').trim())
-        )}
-        loading={summary == null && !loading}
-        onAIAnalyze={() =>
-          navigation.dispatch(CommonActions.navigate('FAAITab' as never, {
-            screen: 'AIChat',
-            params: { entityType: 'MATERIAL', initialMessage: `分析当前库存 (低库存预警 / 总价值 / 周转率)${formatSummaryForAI(summary)}` },
-          } as never))
-        }
-      />
+      {summaryFactoryId && user && (
+        <InventorySummaryFooter
+          key={`${authEpoch}:${ownerVersion}:${ownerTag}`}
+          factoryId={summaryFactoryId}
+          ownerActor={user}
+          ownerTag={ownerTag}
+          visible={ownerSnapshotIsCurrent && !loadError}
+          loading={loading}
+          refreshing={refreshing}
+          aiAvailable={summaryAiAvailable}
+          navigation={navigation}
+          isCurrentOwner={isCurrentOwner}
+        />
+      )}
+
+      {!summaryAiAvailable && summaryFactoryId && user && ownerSnapshotIsCurrent && (
+        <Text style={styles.aiUnavailableText}>库存 AI 分析请联系仓储主管</Text>
+      )}
 
       <RowActionBottomSheet
-        visible={actionSheetVisible}
+        visible={actionSheetOwned}
         onClose={() => setActionSheetVisible(false)}
-        actions={rowActions}
-        title={selectedItem ? `${selectedItem.name}` : ''}
-        aiTriggerEnabled
+        actions={actionSheetOwned ? rowActions : []}
+        title={actionSheetOwned && selectedItem ? `${selectedItem.name}` : ''}
+        aiTriggerEnabled={summaryAiAvailable}
         onAITrigger={() => {
-          if (!selectedItem) return;
-          navigation.dispatch(CommonActions.navigate('FAAITab', {
-            screen: 'AIChat',
-            params: { entityType: 'INVENTORY', initialMessage: `${selectedItem.name}: ` },
+          if (!selectedItem || !summaryAiAvailable || !hasAncestorRoute(navigation, 'AIChat') || !isCurrentOwnerFor(user, ownerTag, renderAuthVersion)) return;
+          navigation.dispatch(CommonActions.navigate('AIChat', {
+            initialMessage: `${selectedItem.name}: `,
           }));
         }}
       />
@@ -709,6 +1142,27 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
     color: "#666",
+  },
+  errorContainer: {
+    flex: 1,
+    padding: 16,
+    alignItems: "stretch",
+  },
+  errorText: {
+    marginTop: 24,
+    textAlign: "center",
+    color: "#8a1c1c",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  retryButton: {
+    marginTop: 12,
+    minHeight: 44,
+    alignSelf: "center",
+  },
+  retryButtonContent: {
+    minHeight: 44,
+    paddingHorizontal: 20,
   },
   header: {
     backgroundColor: "#4CAF50",
@@ -794,6 +1248,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#333",
+  },
+  batchNumber: {
+    marginTop: 4,
+    color: "#666",
+    fontSize: 13,
+  },
+  aiUnavailableText: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    textAlign: "center",
+    color: "#666",
+    fontSize: 12,
   },
   typeBadge: {
     paddingHorizontal: 10,

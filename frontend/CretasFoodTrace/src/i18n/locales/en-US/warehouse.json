@@ -612,8 +612,10 @@
       "noData": "No trace records",
       "noQualityRecords": "No actual quality records",
       "qualityUnavailable": "The material impact interface does not provide quality records",
-  "partialFailure": "Some traceability data failed to load. Retry.",
-  "recall": "Recall management"
+      "partialFailure": "Some traceability data failed to load. Retry.",
+      "recall": "Recall management",
+      "recallUnavailable": "Recall management unavailable",
+      "recallUnavailableHint": "This warehouse worker account has no recall management entry. Contact a warehouse manager."
     },
     "recall": {
       "title": "Recall Management",

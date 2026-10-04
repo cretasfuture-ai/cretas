@@ -613,8 +613,10 @@
       "noData": "暂无追溯记录",
       "noQualityRecords": "暂无实际质检记录",
       "qualityUnavailable": "原料影响接口未提供质检记录",
-  "partialFailure": "追溯信息部分未能加载，请重试",
-  "recall": "召回管理"
+      "partialFailure": "追溯信息部分未能加载，请重试",
+      "recall": "召回管理",
+      "recallUnavailable": "召回管理不可用",
+      "recallUnavailableHint": "当前仓管账号没有召回管理入口，请联系仓储管理员"
     },
     "recall": {
       "title": "召回管理",
