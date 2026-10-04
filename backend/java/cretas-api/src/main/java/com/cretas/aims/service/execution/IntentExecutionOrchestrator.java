@@ -4021,14 +4021,9 @@ public class IntentExecutionOrchestrator {
                 if (!isCandidateCompatible(factoryId, factoryDomain, candidate.getIntentCode())) {
                     continue; // business-type mismatch — skip noise
                 }
-                Map<String, Object> params = new HashMap<>();
-                params.put("intentCode", candidate.getIntentCode());
-                actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                        .actionCode("SELECT_INTENT").actionName(candidate.getIntentName())
-                        .description(candidate.getDescription() != null ? candidate.getDescription() :
-                                String.format("置信度: %.0f%%", candidate.getConfidence() * 100))
-                        .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
-                        .parameters(params).build());
+                actions.add(ClarificationCandidateService.toSelectAction(
+                        factoryId, candidate.getIntentCode(), candidate.getIntentName(),
+                        candidate.getDescription(), candidate.getConfidence()));
             }
         }
         // C1: if filtering left ZERO data candidates (all incompatible with this domain), fall

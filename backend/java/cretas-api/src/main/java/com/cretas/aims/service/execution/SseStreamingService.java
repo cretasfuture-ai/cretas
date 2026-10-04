@@ -120,6 +120,10 @@ public class SseStreamingService {
     @Autowired(required = false)
     private IntentPermissionGate intentPermissionGate;
 
+    /** Canonical candidate builder shared with the non-stream clarification path. */
+    @Autowired(required = false)
+    private ClarificationCandidateService clarificationCandidateService;
+
     /** 澄清按钮点选回写到 Python (学习样本)。缺席时不记录, 不影响执行。 */
     @Autowired(required = false)
     private com.cretas.aims.client.PythonAiMatcherClient pythonAiMatcherClient;
@@ -537,7 +541,8 @@ public class SseStreamingService {
             // 6. 需要确认的情况
             if (Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                     && !Boolean.TRUE.equals(request.getForceExecute())) {
-                IntentExecuteResponse clarificationResponse = buildClarificationResponseForStream(matchResult, factoryId);
+                IntentExecuteResponse clarificationResponse = buildClarificationResponseForStream(
+                        matchResult, factoryId, userId, userRole, request.getMode());
                 sendSseEvent(emitter, "result", clarificationResponse);
                 sendSseEvent(emitter, "complete", Map.of(
                         "status", "NEED_CLARIFICATION",
@@ -1635,12 +1640,16 @@ public class SseStreamingService {
                 .build();
     }
 
-    private IntentExecuteResponse buildClarificationResponseForStream(IntentMatchResult matchResult, String factoryId) {
+    private IntentExecuteResponse buildClarificationResponseForStream(
+            IntentMatchResult matchResult, String factoryId, Long userId, String userRole, String mode) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        String clarificationMessage = matchResult.getClarificationQuestion();
-        if (clarificationMessage == null || clarificationMessage.isEmpty()) {
-            clarificationMessage = "您的请求可能匹配多个操作，请确认您想要执行的操作。";
-        }
+        List<IntentExecuteResponse.SuggestedAction> candidateActions =
+                clarificationCandidateService == null
+                        ? List.of(IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("REPHRASE").actionName("重新描述").build())
+                        : clarificationCandidateService.buildCandidateActions(
+                                matchResult, factoryId, userId, userRole, mode);
+        String clarificationMessage = buildSafeClarificationMessage(candidateActions);
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(matchedIntent.getIntentCode())
@@ -1650,8 +1659,36 @@ public class SseStreamingService {
                 .message(clarificationMessage)
                 .formattedText(clarificationMessage)
                 .confidence(matchResult.getConfidence())
+                .suggestedActions(candidateActions)
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    private String buildSafeClarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
+        String choices = streamChoicesLine(actions);
+        if (choices.isBlank()) {
+            return "当前没有可安全提供的业务选项，请重新描述您的需求。";
+        }
+        return "您的请求可能匹配多个操作, 请选择您实际想做的:" + choices;
+    }
+
+    private String streamChoicesLine(List<IntentExecuteResponse.SuggestedAction> actions) {
+        if (actions == null || actions.isEmpty()) {
+            return "";
+        }
+        StringBuilder line = new StringBuilder("\n");
+        int index = 1;
+        for (IntentExecuteResponse.SuggestedAction action : actions) {
+            if (action == null || !"SELECT_INTENT".equals(action.getActionCode())
+                    || action.getActionName() == null || action.getActionName().isBlank()) {
+                continue;
+            }
+            line.append(index++).append(". ").append(action.getActionName()).append("\n");
+            if (index > 3) {
+                break;
+            }
+        }
+        return index == 1 ? "" : line.toString();
     }
 
     /** R16: SSE no-tool 出口的餐饮 tiered 兜底 — 未命中回落原死胡同提示。 */
