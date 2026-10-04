@@ -57,7 +57,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>独立 H2 库名: 不与共享 testdb 上的其它 @DataJpaTest 上下文互相 create-drop。
  */
-@DataJpaTest
+@DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
 @TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:invoice_todo_after_commit;MODE=PostgreSQL;"
@@ -66,7 +66,7 @@ import static org.mockito.Mockito.when;
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @Import({SalesOrderCompletedInvoiceListener.class, SalesOrderInvoiceTodoProcessor.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-class SalesOrderInvoiceTodoAfterCommitJpaTest {
+class SalesOrderInvoiceTodoAfterCommitContractTest {
 
     @Autowired SalesOrderRepository salesOrderRepository;
     @Autowired SalesOrderInvoiceTodoProcessor processor;

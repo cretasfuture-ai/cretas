@@ -20,7 +20,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@code TransactionRequiredException: no transaction is in progress}，被 Spring 记日志后吞掉，
  * 即时开票从不成功、只剩补偿扫描在开票。挂起之后，认领 / 开票 / 标记各自开新事务，
  * 且仍互相独立（不用 REQUIRES_NEW 包成一个事务，否则开票失败会连认领一起回滚）。
- * 守门测试：{@code SalesOrderInvoiceTodoAfterCommitJpaTest}。</p>
+ * 守门测试：{@code SalesOrderInvoiceTodoAfterCommitContractTest}。</p>
  */
 @Slf4j
 @Component
