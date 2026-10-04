@@ -228,6 +228,16 @@ export function applyPreviewResponse(
       : (backendMessage ?? '还缺少必要信息，请补充后重新说一遍。');
     return { ...base, phase: 'blocked', notice: ask, canRegenerate: false };
   }
+  if (status === 'PREVIEW_BLOCKED') {
+    // 后端 (#907) 预览没通过 (业务规则不允许 / 预览失败) 就不发令牌, 原因在 message 里。
+    // 这是「这一单现在不能做」(例: 工序不在进行中), 不是「功能不支持」—— 不拼手工兜底那句。
+    return {
+      ...base,
+      phase: 'blocked',
+      notice: backendMessage ?? '这个操作现在不能执行。',
+      canRegenerate: false,
+    };
+  }
   // PREVIEW_UNSUPPORTED / FAILED / 其它: 后端原话 + 下一步
   return {
     ...base,
