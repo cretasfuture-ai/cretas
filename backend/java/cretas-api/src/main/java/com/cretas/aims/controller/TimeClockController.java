@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -33,6 +34,8 @@ import java.util.Map;
 public class TimeClockController {
 
     private final TimeClockService timeClockService;
+
+    private static final String HR_EMPLOYEE_MODULE = "hr_employee";
 
     /**
      * 上班打卡
@@ -218,6 +221,8 @@ public class TimeClockController {
     /**
      * 获取部门考勤
      */
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/department/{department}")
     @Operation(summary = "部门考勤", description = "获取指定部门在特定日期的考勤情况，包括出勤人数、缺勤人数、迟到早退统计等")
     public ApiResponse<Map<String, Object>> getDepartmentAttendance(
@@ -233,6 +238,8 @@ public class TimeClockController {
     /**
      * 导出考勤记录
      */
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/export")
     @Operation(summary = "导出考勤记录", description = "导出指定日期范围内工厂所有员工的考勤记录为Excel文件，文件名格式为attendance_开始日期_结束日期.xlsx")
     public void exportAttendanceRecords(
@@ -262,6 +269,8 @@ public class TimeClockController {
     /**
      * 【管理员】获取所有员工打卡历史
      */
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/admin/history")
     @Operation(summary = "【管理员】所有员工打卡历史", description = "管理员查询工厂所有员工在指定日期范围内的打卡历史记录，支持分页，按时间倒序排列")
     public ApiResponse<PageResponse<TimeClockRecord>> getAllEmployeesClockHistory(
@@ -285,6 +294,8 @@ public class TimeClockController {
     /**
      * 【管理员】获取所有员工考勤统计
      */
+    @RequirePermission({"hr:read", "hr:read_write"})
+    @RequireModule(HR_EMPLOYEE_MODULE)
     @GetMapping("/admin/statistics")
     @Operation(summary = "【管理员】所有员工考勤统计", description = "管理员获取工厂所有员工在指定日期范围内的考勤统计汇总，包括总出勤、迟到、早退、缺勤等各项统计数据")
     public ApiResponse<Map<String, Object>> getAllEmployeesAttendanceStatistics(
