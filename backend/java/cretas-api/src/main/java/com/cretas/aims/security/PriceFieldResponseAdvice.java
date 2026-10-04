@@ -2,6 +2,7 @@ package com.cretas.aims.security;
 
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.listsummary.ListSummaryResponse;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
@@ -306,12 +307,28 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         }
 
         // Resolve current user from request attributes (set by JwtAuthInterceptor).
+        // A missing attribute is a genuine public/login/health request. Once an
+        // attribute is present, however, a lookup failure must fail closed instead
+        // of treating the authenticated request as public and serializing secrets.
+        if (!(request instanceof ServletServerHttpRequest)
+                || ((ServletServerHttpRequest) request).getServletRequest().getAttribute("userId") == null) {
+            return body;
+        }
         User currentUser = resolveCurrentUser(request);
         if (currentUser == null) {
-            // No authenticated user (login, health checks, public endpoints).
-            // Public endpoints are filtered by JwtAuthInterceptor — if we reach
-            // here without a user, the endpoint is intentionally unauthenticated.
-            return body;
+            log.warn("PriceFieldResponseAdvice: authenticated userId could not be resolved; masking sensitive fields");
+            Object bodyToStrip = copyListSummaryPayload(body);
+            try {
+                // Keep the controller's successful envelope/status intact. A late 401
+                // here can make mobile/web clients replay a completed POST. Unknown
+                // authenticated identities receive the same fail-closed field mask as
+                // a resolved user without either permission.
+                stripPriceFields(bodyToStrip, new IdentityHashMap<>(), new ArrayDeque<>(), false, false);
+            } catch (Exception e) {
+                log.warn("PriceFieldResponseAdvice strip failed for unresolved userId: {}", e.getMessage());
+            }
+            PriceSensitiveContext.hide();
+            return bodyToStrip;
         }
 
         // ── Dual permission check ────────────────────────────────────────────
@@ -360,8 +377,9 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         // User lacks at least one permission — strip the relevant fields.
         // canViewPrices=T + canViewFinance=F: only Rule 2b (finance upload columns) fires.
         // canViewPrices=F + canViewFinance=*: full strip including @PriceSensitive fields.
+        Object bodyToStrip = canViewPrices ? body : copyListSummaryPayload(body);
         try {
-            stripPriceFields(body, new IdentityHashMap<>(), new ArrayDeque<>(), canViewPrices, canViewFinance);
+            stripPriceFields(bodyToStrip, new IdentityHashMap<>(), new ArrayDeque<>(), canViewPrices, canViewFinance);
         } catch (Exception e) {
             // Defensive: never fail the response on a stripping error. Log and
             // pass through the body — admin-role parity preserved (no regression).
@@ -378,7 +396,63 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         if (!canViewPrices) {
             PriceSensitiveContext.hide();
         }
+        return bodyToStrip;
+    }
+
+    /**
+     * List-summary responses are frequently reused by the controller/service boundary and
+     * contain a generic Object value. Copy only this DTO graph before masking so a denied
+     * response cannot poison a later authorized response that reuses the same fixture/object.
+     */
+    private Object copyListSummaryPayload(Object body) {
+        if (body instanceof ApiResponse<?> response
+                && response.getData() instanceof ListSummaryResponse summary) {
+            ApiResponse<Object> copy = new ApiResponse<>();
+            copy.setCode(response.getCode());
+            copy.setMessage(response.getMessage());
+            copy.setData(copyListSummaryResponse(summary));
+            copy.setTimestamp(response.getTimestamp());
+            copy.setSuccess(response.getSuccess());
+            copy.setActionHint(response.getActionHint());
+            copy.setSeverity(response.getSeverity());
+            copy.setHintTarget(response.getHintTarget());
+            copy.setErrorCode(response.getErrorCode());
+            return copy;
+        }
+        if (body instanceof ListSummaryResponse summary) {
+            return copyListSummaryResponse(summary);
+        }
         return body;
+    }
+
+    private ListSummaryResponse copyListSummaryResponse(ListSummaryResponse source) {
+        ListSummaryResponse.Pagination pagination = source.getPagination();
+        ListSummaryResponse.Pagination paginationCopy = pagination == null ? null
+                : ListSummaryResponse.Pagination.builder()
+                        .currentPage(pagination.getCurrentPage())
+                        .totalPages(pagination.getTotalPages())
+                        .pageSize(pagination.getPageSize())
+                        .totalItems(pagination.getTotalItems())
+                        .build();
+        List<ListSummaryResponse.SummaryStat> stats = source.getStats() == null ? null
+                : source.getStats().stream().map(this::copySummaryStat).toList();
+        return ListSummaryResponse.builder()
+                .entityType(source.getEntityType())
+                .stats(stats)
+                .pagination(paginationCopy)
+                .build();
+    }
+
+    private ListSummaryResponse.SummaryStat copySummaryStat(ListSummaryResponse.SummaryStat source) {
+        return ListSummaryResponse.SummaryStat.builder()
+                .label(source.getLabel())
+                .value(source.getValue())
+                .format(source.getFormat())
+                .unit(source.getUnit())
+                .canViewPrice(source.getCanViewPrice())
+                .trend(source.getTrend())
+                .trendDelta(source.getTrendDelta())
+                .build();
     }
 
     /**
@@ -416,6 +490,14 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             return;
         }
         if (visited.containsKey(obj)) {
+            return;
+        }
+
+        if (obj instanceof ListSummaryResponse.SummaryStat stat) {
+            if (!canViewPrices && isPriceSummaryStat(stat)) {
+                stat.setValue(null);
+                stat.setTrendDelta(null);
+            }
             return;
         }
 
@@ -481,6 +563,12 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         }
 
         descendChildren(obj, clazz, visited, pathStack, canViewPrices, canViewFinance);
+    }
+
+    /** SummaryStat has no @PriceSensitive field; its explicit flag and currency format are the contract. */
+    private boolean isPriceSummaryStat(ListSummaryResponse.SummaryStat stat) {
+        return Boolean.TRUE.equals(stat.getCanViewPrice())
+                || (stat.getFormat() != null && "currency".equalsIgnoreCase(stat.getFormat().trim()));
     }
 
     /**
