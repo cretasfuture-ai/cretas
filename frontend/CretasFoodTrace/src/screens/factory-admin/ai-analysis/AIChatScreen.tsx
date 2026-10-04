@@ -118,6 +118,33 @@ export function buildRecentTurns(
   return turns.slice(-MAX_RECENT_TURNS);
 }
 
+/**
+ * 服务端在工具执行成功后给的「上一步做了什么」(metadata.lastAction)。下一句原样带回去,
+ * 「好了」「下一个」「再加十公斤」「批了吧」才能被确定性地解读成一个确认按钮 (服务端不会直接执行)。
+ * 新鲜度按本机收到它的时间算 (不用服务端 at, 避开手机与服务器的时钟差)。
+ */
+export const LAST_ACTION_MAX_AGE_MS = 10 * 60 * 1000;
+
+export type HeldLastAction = { value: Record<string, unknown>; receivedAt: number };
+
+export const readLastAction = (metadata: unknown): Record<string, unknown> | undefined => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const raw = (metadata as Record<string, unknown>).lastAction;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const candidate = raw as Record<string, unknown>;
+  if (typeof candidate.intentCode !== 'string' || !candidate.intentCode) return undefined;
+  return candidate;
+};
+
+export const pickFreshLastAction = (
+  held: HeldLastAction | null,
+  nowMs: number,
+): Record<string, unknown> | undefined => {
+  if (!held) return undefined;
+  const age = nowMs - held.receivedAt;
+  return age >= 0 && age <= LAST_ACTION_MAX_AGE_MS ? held.value : undefined;
+};
+
 // 消息类型
 interface Message {
   id: string;
@@ -316,6 +343,8 @@ function AIChatScreenContent() {
   const previewGenerationRef = useRef(0);
   const isMountedRef = useRef(true);
   const sendPendingRef = useRef(false);
+  // 最近一次成功执行的「上一步」(见 readLastAction); 换账号/换厂时清空。
+  const lastActionRef = useRef<HeldLastAction | null>(null);
 
   // Get user role for card grid and audio feedback
   const getUserRole = useAuthStore((s) => s.getUserRole);
@@ -348,6 +377,7 @@ function AIChatScreenContent() {
     if (previewTimer.current) clearTimeout(previewTimer.current);
     previewTimer.current = null;
     sendPendingRef.current = false;
+    lastActionRef.current = null;
     setSessionId(null);
     setMessages([]);
     setInputText('');
@@ -501,10 +531,15 @@ function AIChatScreenContent() {
       const candidates = (sourceMessage?.suggestedActions || [])
         .map((a) => (a.value === 'SELECT_INTENT' ? a.params?.intentCode : undefined))
         .filter((c): c is string => typeof c === 'string' && c.length > 0);
+      // 按钮上除意图码以外的参数 (追问确认按钮带的 taskId / 数量 / followUpRule 等) 一并带回去;
+      // 澄清字段放在后面, 按钮参数盖不掉它们。
+      const buttonParams = Object.fromEntries(
+        Object.entries(action.params || {}).filter(([key]) => key !== 'intentCode'),
+      );
       await handleSend(originalQuestion, {
         displayText: action.label,
         intentCode: pickedIntent,
-        context: { clarificationSelection: true, clarificationCandidates: candidates },
+        context: { ...buttonParams, clarificationSelection: true, clarificationCandidates: candidates },
       });
       return;
     }
@@ -649,6 +684,10 @@ function AIChatScreenContent() {
           if (!isCurrentStream()) return;
           resultData = result;
           console.log('[AI Stream] Result status:', result.status);
+          const nextLastAction = readLastAction(result.metadata);
+          if (nextLastAction) {
+            lastActionRef.current = { value: nextLastAction, receivedAt: Date.now() };
+          }
 
           // 从结果中提取回复文本
           let replyMessage = '';
@@ -836,11 +875,17 @@ function AIChatScreenContent() {
 
       // 最近对话只辅助识别；分页来源继续由服务端归属会话决定。
       const recentTurns = buildRecentTurns(messages);
-      if (sendOptions?.intentCode || sendOptions?.context || recentTurns.length > 0 || sessionId) {
+      // 上一步只在 10 分钟内有效; 过期就不带, 服务端也就不会拿它解读这一句。
+      const lastAction = pickFreshLastAction(lastActionRef.current, Date.now());
+      if (sendOptions?.intentCode || sendOptions?.context || recentTurns.length > 0 || lastAction || sessionId) {
         await aiApiClient.executeIntentStream(messageText, callbacks, factoryId, entityType, {
           ...(sendOptions?.intentCode ? { intentCode: sendOptions.intentCode } : {}),
-          ...((sendOptions?.context || recentTurns.length > 0) ? {
-            context: { ...(sendOptions?.context || {}), ...(recentTurns.length > 0 ? { recentTurns } : {}) },
+          ...((sendOptions?.context || recentTurns.length > 0 || lastAction) ? {
+            context: {
+              ...(sendOptions?.context || {}),
+              ...(recentTurns.length > 0 ? { recentTurns } : {}),
+              ...(lastAction ? { lastAction } : {}),
+            },
           } : {}),
           ...(sessionId ? { sessionId } : {}),
         }, controller.signal);

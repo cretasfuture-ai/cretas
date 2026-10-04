@@ -135,6 +135,9 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.ai.client.F006BossQuestionClient f006BossQuestionClient;
 
+    /** 追问解读规则表 (纯函数, 无依赖)。 */
+    private final FollowUpResolver followUpResolver = new FollowUpResolver();
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -329,6 +332,14 @@ public class SseStreamingService {
             // card exists to close. Single source of truth — never copy this logic again.
             boolean restaurantTenant = !factoryPackConstrained
                     && isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
+
+            // 2026-10-04 追问解读: 「好了 / 下一个 / 再加十公斤 / 批了吧」+ App 带回的 lastAction
+            // → 确认按钮 (不执行)。在早期问题类型检测之前 —— 否则「好了」会被当闲聊流式回复;
+            // 显式意图码 (点了按钮回来) 已在上面处理, 不会再进这里。能力包受限路由与餐饮租户不走。
+            if (!factoryPackConstrained && !restaurantTenant
+                    && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
+                return;
+            }
             boolean restaurantSemanticPlanEligible = tieredFirstEnabled
                     && !factoryPackConstrained
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
@@ -680,6 +691,11 @@ public class SseStreamingService {
                 || !Boolean.TRUE.equals(request.getContext().get("clarificationSelection"))) {
             return;
         }
+        // 追问确认按钮不是学习样本: 「好了 → 完成工序」只在「刚开始了一道工序」这个上下文里成立,
+        // 记成「好了」的无条件样本会把别人的「好了」也往完成工序上拉。
+        if (request.getContext().get(FollowUpResolver.FOLLOW_UP_RULE_KEY) != null) {
+            return;
+        }
         Object rawCandidates = request.getContext().get("clarificationCandidates");
         java.util.List<String> candidates = new java.util.ArrayList<>();
         if (rawCandidates instanceof java.util.Collection<?> c) {
@@ -1005,19 +1021,7 @@ public class SseStreamingService {
                                          IntentMatchResult matchResult,
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
-        // 权限检查: 意图声明了权限码 → 走权限码门 (fail-closed, 与 /execute 同源);
-        // 没声明 → 保留 requiredRoles 旧判定。
-        String deniedMessage = null;
-        String requiredPermission = intent.getRequiredPermission();
-        if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
-            IntentPermissionGate.PermissionCheck check = intentPermissionGate.check(intent, userId, userRole);
-            if (check.isDenied()) {
-                deniedMessage = "您没有权限执行此操作。需要权限: " + check.requiredPermission()
-                        + "，请联系工厂管理员开通。";
-            }
-        } else if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-            deniedMessage = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
-        }
+        String deniedMessage = permissionDeniedMessage(intent, userId, userRole);
         if (deniedMessage != null) {
             IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
                     .intentRecognized(true)
@@ -1156,6 +1160,94 @@ public class SseStreamingService {
         }
         sendSseEvent(emitter, "complete", complete);
         emitter.complete();
+    }
+
+    /**
+     * 权限检查: 意图声明了权限码 → 走权限码门 (fail-closed, 与 /execute 同源);
+     * 没声明 → 保留 requiredRoles 旧判定。返回 null 表示放行, 否则是给用户看的拒绝原因。
+     * 执行前 ({@link #executeAndStreamResult}) 与追问确认按钮出按钮前共用这一份。
+     */
+    private String permissionDeniedMessage(AIIntentConfig intent, Long userId, String userRole) {
+        String requiredPermission = intent.getRequiredPermission();
+        if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
+            IntentPermissionGate.PermissionCheck check = intentPermissionGate.check(intent, userId, userRole);
+            if (check.isDenied()) {
+                return "您没有权限执行此操作。需要权限: " + check.requiredPermission()
+                        + "，请联系工厂管理员开通。";
+            }
+        } else if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+            return "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+        }
+        return null;
+    }
+
+    /**
+     * 追问解读 (2026-10-04): App 带着 {@code context.lastAction} 来, 这一句又是
+     * {@link FollowUpResolver} 规则表里的短句 → 不识别、不执行, 直接回一个「您是要 X 吗？」
+     * 和<b>一个</b> SELECT_INTENT 确认按钮。用户点了按钮, App 用「原话 + 意图码 + 按钮参数」
+     * 回来, 走上面的显式意图分支 —— 权限 / 审批 / 业态门 / W0 写确认全部照常。
+     *
+     * <p>目标意图不在用 / 当前角色没权限 → 不出按钮, 返回 false 让正常识别流程接着跑。
+     *
+     * @return true 表示已经流出确认响应, 调用方必须就地 return
+     */
+    private boolean streamFollowUpConfirmation(SseEmitter emitter, String factoryId,
+                                               IntentExecuteRequest request, Long userId, String userRole,
+                                               long startTime) throws IOException {
+        if (request.getContext() == null || !request.getContext().containsKey(LastActionContract.CONTEXT_KEY)) {
+            return false;
+        }
+        Optional<FollowUpResolver.FollowUp> resolved = followUpResolver.resolve(
+                request.getUserInput(), request.getContext().get(LastActionContract.CONTEXT_KEY),
+                System.currentTimeMillis());
+        if (resolved.isEmpty()) {
+            return false;
+        }
+        FollowUpResolver.FollowUp followUp = resolved.get();
+        Optional<AIIntentConfig> target = aiIntentService.getIntentByCode(factoryId, followUp.intentCode());
+        if (target.isEmpty()) {
+            log.info("[SSE][FollowUp] 规则 {} 命中但目标意图不在用: {}", followUp.ruleId(), followUp.intentCode());
+            return false;
+        }
+        AIIntentConfig intent = target.get();
+        if (permissionDeniedMessage(intent, userId, userRole) != null) {
+            log.info("[SSE][FollowUp] 规则 {} 命中但当前角色无权执行 {}, 交回正常流程",
+                    followUp.ruleId(), followUp.intentCode());
+            return false;
+        }
+
+        String intentName = intent.getIntentName() != null ? intent.getIntentName() : intent.getIntentCode();
+        String detail = followUp.summary() == null || followUp.summary().isBlank()
+                ? "" : "（" + followUp.summary() + "）";
+        Map<String, Object> buttonParams = new LinkedHashMap<>();
+        buttonParams.put("intentCode", intent.getIntentCode());
+        buttonParams.putAll(followUp.params());
+        buttonParams.put(FollowUpResolver.FOLLOW_UP_RULE_KEY, followUp.ruleId());
+        IntentExecuteResponse.SuggestedAction confirm = IntentExecuteResponse.SuggestedAction.builder()
+                .actionCode("SELECT_INTENT")
+                .actionName(intentName + detail)
+                .description("点一下确认; 不是的话直接告诉我您要做什么")
+                .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
+                .parameters(buttonParams)
+                .build();
+        String message = "您是要「" + intentName + "」吗？" + detail;
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(FollowUpResolver.FOLLOW_UP_RULE_KEY, followUp.ruleId());
+        log.info("[SSE][FollowUp] 规则 {} → 确认按钮 {} (不直接执行)", followUp.ruleId(), intent.getIntentCode());
+        streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .status("NEED_CLARIFICATION")
+                .message(message)
+                .formattedText(message)
+                .suggestedActions(List.of(confirm))
+                .metadata(metadata)
+                .sessionId(request.getSessionId())
+                .executedAt(LocalDateTime.now())
+                .build(), startTime);
+        return true;
     }
 
     private void persistSuccessfulReadPagination(String factoryId, Long userId,

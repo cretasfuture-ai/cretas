@@ -367,6 +367,12 @@ public class ToolDispatchService {
 
             // 2.8. LLM 提取剩余参数
             Map<String, Object> llmExtractedParams = extractParametersWithLLM(userInputToUse, tool, params);
+            if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
+                // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
+                // 补缺参时 LLM 从原话「再加十公斤」里读出的 10 不许把它改掉。
+                llmExtractedParams.keySet().removeIf(key -> params.get(key) != null
+                        && !(params.get(key) instanceof String s && s.isBlank()));
+            }
             if (!llmExtractedParams.isEmpty()) {
                 params.putAll(llmExtractedParams);
                 log.info("合并 LLM 提取的参数: {}", llmExtractedParams.keySet());
@@ -415,6 +421,11 @@ public class ToolDispatchService {
                     // Sprint 12: parse cached JSON to extract message + data, don't leak raw JSON as message text.
                     IntentExecuteResponse parsed = parseToolResultToResponse(cachedResult.get(), intent);
                     String parsedMsg = parsed.getMessage() != null ? parsed.getMessage() : "操作已完成。";
+                    Map<String, Object> cachedMetadata = new HashMap<>();
+                    cachedMetadata.put("cached", true);
+                    // 冗余缓存复用的也是一次成功执行 (同参数), 一样产出 lastAction
+                    putLastAction(cachedMetadata, parsed.getStatus(), parsed.getResultData(),
+                            intent, tool.getToolName(), params);
                     return IntentExecuteResponse.builder()
                             .intentRecognized(true)
                             .intentCode(intent.getIntentCode())
@@ -424,7 +435,7 @@ public class ToolDispatchService {
                             .message(parsedMsg)
                             .resultData(parsed.getResultData())
                             .formattedText(parsed.getFormattedText())
-                            .metadata(Map.of("cached", true))
+                            .metadata(cachedMetadata)
                             .executedAt(LocalDateTime.now())
                             .build();
                 }
@@ -694,6 +705,8 @@ public class ToolDispatchService {
                     metadata.put("recoveredAfterRetries", retryCount);
                     metadata.put("totalExecutionTimeMs", totalExecutionTime);
                 }
+                putLastAction(metadata, response.getStatus(), response.getResultData(),
+                        intent, tool.getToolName(), params);
                 response.setMetadata(metadata);
             }
 
@@ -1109,6 +1122,7 @@ public class ToolDispatchService {
             metadata.put("executionBoundary", "TOOL_EXECUTION_GATEWAY");
             metadata.put("gatewayStatus", gatewayResult.status().name());
             metadata.put("gatewayAuditEventId", gatewayResult.auditEventId());
+            putLastAction(metadata, response.getStatus(), response.getResultData(), intent, toolName, parameters);
             response.setMetadata(metadata);
             return response;
         } catch (Exception gatewayFailure) {
@@ -1130,6 +1144,31 @@ public class ToolDispatchService {
                     .executedAt(LocalDateTime.now())
                     .build();
         }
+    }
+
+    /**
+     * 工具执行成功后, 把「这一步做了什么」写进 {@code metadata.lastAction} —— App 带回来,
+     * 下一句「好了 / 下一个 / 再加十公斤 / 批了吧」才有东西可解读 (见 {@link FollowUpResolver})。
+     * 只在 SUCCESS 时产出; 参数只留白名单里的标识 / 数量键 ({@link LastActionContract}),
+     * 主体键与自由文本一律不出去。
+     */
+    private static void putLastAction(Map<String, Object> metadata, String status, Object resultData,
+                                      AIIntentConfig intent, String toolName, Map<String, Object> executedParams) {
+        if (!"SUCCESS".equals(status)) {
+            return;
+        }
+        Map<String, Object> lastAction = LastActionContract.build(
+                intent, toolName, executedParams, resultData, System.currentTimeMillis());
+        if (lastAction != null) {
+            metadata.put(LastActionContract.CONTEXT_KEY, lastAction);
+        }
+    }
+
+    /** 确认按钮点回来的追问 (按钮参数里带着规则 id, App 原样转进 context)。 */
+    private static boolean isFollowUpConfirmation(IntentExecuteRequest request) {
+        return request != null && request.getContext() != null
+                && request.getContext().get(FollowUpResolver.FOLLOW_UP_RULE_KEY) instanceof String rule
+                && !rule.isBlank();
     }
 
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
