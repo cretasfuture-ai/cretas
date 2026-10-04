@@ -5,6 +5,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.permission.PermissionModuleCatalog;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.PermissionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
@@ -65,7 +66,20 @@ public class PermissionInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 获取当前用户
+        // ⚠️ 先按主体类型分支, 再查 users: 平台管理员的 id 来自 platform_admins, 与 users.id
+        // 是两条独立序列 —— 拿它去 users.findById 会查到一个不相干的工厂账号, 用那个账号的权限
+        // 判这次请求(放行或拒绝都是错的)。平台授权只看签名 JWT 里的角色。
+        AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
+        if (actor != null && actor.isPlatformAdmin()) {
+            if (actor.hasFactoryBypass()) {
+                return true;
+            }
+            sendError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "当前平台角色 " + actor.role() + " 无权访问该功能");
+            return false;
+        }
+
+        // 获取当前用户 (工厂账号)
         User user = getCurrentUser(request);
         if (user == null) {
             sendError(response, HttpServletResponse.SC_UNAUTHORIZED, "用户未登录");
@@ -218,6 +232,10 @@ public class PermissionInterceptor implements HandlerInterceptor {
 
     /**
      * 获取当前登录用户
+     */
+    /**
+     * 工厂账号路径: 只在主体不是平台管理员时才走到这里。JwtAuthInterceptor 设 userId 时同步设
+     * {@link AuthenticatedActor}; 没有 actor 只出现在直接注入 userId 的单测里, 按工厂账号处理。
      */
     private User getCurrentUser(HttpServletRequest request) {
         // 从请求属性中获取用户ID (由 JwtAuthInterceptor 设置)
