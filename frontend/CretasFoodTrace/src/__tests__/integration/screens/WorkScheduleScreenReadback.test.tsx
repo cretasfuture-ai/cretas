@@ -1,9 +1,10 @@
 import React from 'react';
-import { Alert, ScrollView, TouchableOpacity, View } from 'react-native';
+import { ScrollView, TouchableOpacity, View } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { hrShiftApiClient } from '../../../services/api/hrShiftApiClient';
 import { userApiClient } from '../../../services/api/userApiClient';
 import { useAuthStore } from '../../../store/authStore';
+import * as AppDialog from '../../../components/ui/AppDialog';
 
 let WorkScheduleScreen: React.ComponentType;
 let mockHrPermission: 'r' | 'rw' = 'rw';
@@ -39,6 +40,7 @@ jest.mock('../../../store/authStore', () => {
 jest.mock('../../../utils/permissionHelper', () => ({
   hasModulePermission: (_user: unknown, _module: string, action: 'read' | 'write') => action === 'read' || mockHrPermission === 'rw',
 }));
+jest.mock('../../../components/ui/AppDialog', () => ({ appAlert: jest.fn() }));
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: jest.fn() }),
   useFocusEffect: (callback: () => void) => React.useEffect(callback, [callback]),
@@ -123,7 +125,7 @@ describe('WorkScheduleScreenReadback', () => {
   });
 
   it('requires confirmation, sends one employee/date payload, and reads back after save', async () => {
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((...args) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((...args) => {
       const buttons = args[2] as Array<{ text: string; onPress?: () => void }> | undefined;
       if (buttons?.[1]?.onPress) buttons[1].onPress();
     });
@@ -198,7 +200,7 @@ describe('WorkScheduleScreenReadback', () => {
     expect(hrShiftApiClient.listAssignments).not.toHaveBeenCalled();
     expect(hrShiftApiClient.listActiveShifts).not.toHaveBeenCalled();
     expect(userApiClient.getUsers).not.toHaveBeenCalled();
-    expect((view.getByLabelText('scheduling.workSchedule.addTitle') as any).props.disabled).toBe(true);
+    expect(view.queryByLabelText('scheduling.workSchedule.addTitle')).toBeNull();
   });
 
   it('loads with canonical HR read while denying write when the role is read-only', async () => {
@@ -207,7 +209,7 @@ describe('WorkScheduleScreenReadback', () => {
     await waitFor(() => expect(view.getByText('scheduling.workSchedule.empty')).toBeTruthy());
     expect(hrShiftApiClient.listAssignments).toHaveBeenCalled();
     expect(hrShiftApiClient.listActiveShifts).toHaveBeenCalled();
-    expect((view.getByLabelText('scheduling.workSchedule.addTitle') as any).props.disabled).toBe(true);
+    expect(view.queryByLabelText('scheduling.workSchedule.addTitle')).toBeNull();
   });
 
   it('filters foreign, inactive, and invalid employees and shifts before rendering write choices', async () => {
@@ -231,7 +233,7 @@ describe('WorkScheduleScreenReadback', () => {
 
   it('uses one mutation for a double confirmation and rejects an old actor confirmation', async () => {
     let confirm: (() => void) | undefined;
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((...args) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((...args) => {
       const buttons = args[2] as Array<{ onPress?: () => void }> | undefined;
       if (buttons?.[1]?.onPress) confirm = buttons[1].onPress;
     });
@@ -248,7 +250,7 @@ describe('WorkScheduleScreenReadback', () => {
     await waitFor(() => expect(hrShiftApiClient.assign).toHaveBeenCalledTimes(1));
 
     (hrShiftApiClient.assign as jest.Mock).mockClear();
-    const secondAlert = jest.spyOn(Alert, 'alert').mockImplementation((...args) => {
+    const secondAlert = jest.spyOn(AppDialog, 'appAlert').mockImplementation((...args) => {
       const buttons = args[2] as Array<{ onPress?: () => void }> | undefined;
       if (buttons?.[1]?.onPress) confirm = buttons[1].onPress;
     });
@@ -267,7 +269,7 @@ describe('WorkScheduleScreenReadback', () => {
 
   it('keeps the form open after a failed save', async () => {
     const alertMessages: string[] = [];
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((title, message, buttons) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((title, message, buttons) => {
       alertMessages.push(`${title}:${message}`);
       const confirm = buttons?.[1] as { onPress?: () => void } | undefined;
       if (confirm?.onPress && title === 'scheduling.workSchedule.confirmTitle') confirm.onPress();
@@ -289,7 +291,7 @@ describe('WorkScheduleScreenReadback', () => {
     let resolveAssign: ((value: unknown) => void) | undefined;
     const assignPromise = new Promise<unknown>((resolve) => { resolveAssign = resolve; });
     const alertMessages: string[] = [];
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((title, message, buttons) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((title, message, buttons) => {
       alertMessages.push(`${title}:${message}`);
       const confirm = buttons?.[1] as { onPress?: () => void } | undefined;
       if (confirm?.onPress && title === 'scheduling.workSchedule.confirmTitle') confirm.onPress();
@@ -327,7 +329,7 @@ describe('WorkScheduleScreenReadback', () => {
       { id: 'a1', factoryId: 'F006', userId: 7, workDate, shiftId: 's1', status: '已排班' },
     ]);
     (hrShiftApiClient.remove as jest.Mock).mockResolvedValue({ success: true });
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((_title, _message, buttons) => {
       const deleteButton = buttons?.find((button) => button.text === 'common.delete');
       deleteButton?.onPress?.();
     });
@@ -346,7 +348,7 @@ describe('WorkScheduleScreenReadback', () => {
       { id: 'a1', factoryId: 'F006', userId: 7, workDate, shiftId: 's1', status: '已排班' },
     ]);
     let confirmDelete: (() => void) | undefined;
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((_title, _message, buttons) => {
       confirmDelete = buttons?.find((button) => button.text === 'common.delete')?.onPress;
     });
     const view = render(<WorkScheduleScreen />);
@@ -366,7 +368,7 @@ describe('WorkScheduleScreenReadback', () => {
     const assignment = { id: 'a1', factoryId: 'F006', userId: 7, workDate, shiftId: 's1', status: '已排班' };
     (hrShiftApiClient.listAssignments as jest.Mock).mockResolvedValueOnce([assignment]).mockResolvedValueOnce([]);
     let confirmDelete: (() => void) | undefined;
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((_title, _message, buttons) => {
       confirmDelete = buttons?.find((button) => button.text === 'common.delete')?.onPress;
     });
     const view = render(<WorkScheduleScreen />);
@@ -397,7 +399,7 @@ describe('WorkScheduleScreenReadback', () => {
       .mockResolvedValueOnce([{ moduleCode: 'hr_employee', permissionModule: 'hr', effectiveAllowed: true }])
       .mockReturnValueOnce(accessPromise);
     let confirmDelete: (() => void) | undefined;
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+    const alertSpy = jest.spyOn(AppDialog, 'appAlert').mockImplementation((_title, _message, buttons) => {
       confirmDelete = buttons?.find((button) => button.text === 'common.delete')?.onPress;
     });
     const view = render(<WorkScheduleScreen />);

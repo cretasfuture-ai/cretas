@@ -6,6 +6,10 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-R10-HR-BATCHES-20261004` — `in-progress` — Owner: Codex/f006_mobile_r10_exec — Base `317888e518` — 🔒 HR批次两页、schedulingApi/hrNavigation、hr中英与3目标测试；修403假空/人数单位/状态及跨actor写门禁。不改后端/授予权限/已有业务。详见archive/2026-10-04-f006-mobile-r10-hr-batches.md。
+
+- `F006-MOBILE-R6-HR-CI-20261004` — `in-progress` — Owner: Codex/f006_mobile_ci_portable — Base `8acc0022e4` — 🔒 排班及ReadbackTest、roleReachability解析器/测试共4文件；#895三闸FAIL，rawAlert/deadguard与runtime-only分类修复。canonical/self/actor门禁保留，不改阈值/排除。详见archive/2026-10-04-f006-mobile-r6-ci.md。
+
 
 - `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
 

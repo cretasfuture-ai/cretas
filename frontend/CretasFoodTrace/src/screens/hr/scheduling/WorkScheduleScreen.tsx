@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Modal,
   RefreshControl,
   ScrollView,
@@ -22,6 +21,7 @@ import { hasModulePermission } from '../../../utils/permissionHelper';
 import { formatDate as formatLocalYmd } from '../../../utils/formatters';
 import { HR_THEME } from '../../../types/hrNavigation';
 import type { User } from '../../../types/auth';
+import { appAlert } from '../../../components/ui/AppDialog';
 
 interface EmployeeOption {
   id: number;
@@ -108,11 +108,15 @@ export default function WorkScheduleScreen() {
   employeesRef.current = employees;
   shiftsRef.current = shifts;
   assignmentsRef.current = assignments;
-  const canWrite = Boolean(
+  const hasHrEmployeeWriteModule = Boolean(
     selfModuleAccess?.some((module) => module.moduleCode === 'hr_employee'
       && module.permissionModule === 'hr' && module.effectiveAllowed)
-      && hasModulePermission(user, 'hr', 'write')
   );
+  const canWrite = Boolean(
+    hasHrEmployeeWriteModule
+      && hasModulePermission(user, 'hr', 'write'),
+  );
+  const hasSchedulingChoices = shifts.length > 0 && employees.length > 0;
 
   const sameOwner = (left: ViewOwner, right: ViewOwner): boolean => (
     left.user === right.user
@@ -234,11 +238,11 @@ export default function WorkScheduleScreen() {
 
   const openForm = () => {
     if (!canWrite) {
-      Alert.alert(t('scheduling.workSchedule.permissionTitle'), t('scheduling.workSchedule.permissionRequired'));
+      appAlert(t('scheduling.workSchedule.permissionTitle'), t('scheduling.workSchedule.permissionRequired'));
       return;
     }
     if (shifts.length === 0 || employees.length === 0) {
-      Alert.alert(t('scheduling.workSchedule.noShiftTitle'), t('scheduling.workSchedule.noShiftConfigured'));
+      appAlert(t('scheduling.workSchedule.noShiftTitle'), t('scheduling.workSchedule.noShiftConfigured'));
       return;
     }
     setSelectedEmployeeId(employees[0] ? String(employees[0].id) : '');
@@ -299,7 +303,7 @@ export default function WorkScheduleScreen() {
     if (confirmingRef.current || mutationRef.current) return;
     const owner = currentOwner;
     if (!owner) {
-      Alert.alert(t('scheduling.workSchedule.permissionTitle'), t('scheduling.workSchedule.permissionChanged'));
+      appAlert(t('scheduling.workSchedule.permissionTitle'), t('scheduling.workSchedule.permissionChanged'));
       return;
     }
     const form = formContextRef.current;
@@ -309,7 +313,7 @@ export default function WorkScheduleScreen() {
     const selectedEmployee = employeesRef.current.find((employee) => employee.id === employeeId);
     const selectedShift = shiftsRef.current.find((shift) => shift.id === shiftId);
     if (!employeeId || !selectedShiftId || !selectedEmployee || !selectedShift) {
-      Alert.alert(t('scheduling.workSchedule.invalidFormTitle'), t('scheduling.workSchedule.invalidForm'));
+      appAlert(t('scheduling.workSchedule.invalidFormTitle'), t('scheduling.workSchedule.invalidForm'));
       return;
     }
     const message = existing
@@ -325,7 +329,7 @@ export default function WorkScheduleScreen() {
       });
     const snapshot: SaveSnapshot = { owner, employeeId, shiftId, notes: form?.notes ?? notes.trim() };
     confirmingRef.current = true;
-    Alert.alert(t('scheduling.workSchedule.confirmTitle'), message, [
+    appAlert(t('scheduling.workSchedule.confirmTitle'), message, [
       { text: t('common.cancel'), style: 'cancel', onPress: () => { confirmingRef.current = false; } },
       { text: t('common.confirm'), onPress: () => { confirmingRef.current = false; void performSave(snapshot); } },
     ]);
@@ -350,10 +354,10 @@ export default function WorkScheduleScreen() {
       formContextRef.current = null;
       await loadData(snapshot.owner);
       if (!isCurrentContext(snapshot.owner)) return;
-      Alert.alert(t('common.success'), t('scheduling.workSchedule.saveSuccess'));
+      appAlert(t('common.success'), t('scheduling.workSchedule.saveSuccess'));
     } catch (error) {
       if (isCurrentContext(snapshot.owner)) {
-        Alert.alert(t('scheduling.workSchedule.saveFailedTitle'), error instanceof Error
+        appAlert(t('scheduling.workSchedule.saveFailedTitle'), error instanceof Error
           ? error.message : t('scheduling.workSchedule.saveFailed'));
       }
     } finally {
@@ -374,7 +378,7 @@ export default function WorkScheduleScreen() {
       workDate: assignment.workDate,
     };
     confirmingRef.current = true;
-    Alert.alert(
+    appAlert(
       t('scheduling.workSchedule.clearTitle'),
       t('scheduling.workSchedule.clearConfirm', { employee: employee?.name || assignment.userId, date: assignment.workDate }),
       [
@@ -396,10 +400,10 @@ export default function WorkScheduleScreen() {
       if (!isCurrentContext(snapshot.owner)) return;
       await loadData(snapshot.owner);
       if (!isCurrentContext(snapshot.owner)) return;
-      Alert.alert(t('common.success'), t('scheduling.workSchedule.clearSuccess'));
+      appAlert(t('common.success'), t('scheduling.workSchedule.clearSuccess'));
     } catch (error) {
       if (isCurrentContext(snapshot.owner)) {
-        Alert.alert(t('scheduling.workSchedule.clearFailedTitle'), error instanceof Error
+        appAlert(t('scheduling.workSchedule.clearFailedTitle'), error instanceof Error
           ? error.message : t('scheduling.workSchedule.clearFailed'));
       }
     } finally {
@@ -455,6 +459,14 @@ export default function WorkScheduleScreen() {
             </Card.Content>
           </Card>
         )}
+        {shifts.length > 0 && employees.length === 0 && !readError && (
+          <Card style={styles.noticeCard}>
+            <Card.Content>
+              <Text style={styles.noticeTitle}>{t('scheduling.workSchedule.employee')}</Text>
+              <Text style={styles.noticeText}>{t('scheduling.workSchedule.chooseEmployee')}</Text>
+            </Card.Content>
+          </Card>
+        )}
         {assignments.length === 0 && shifts.length > 0 && !readError ? (
           <View style={styles.emptyContainer}>
             <MaterialCommunityIcons name="calendar-blank-outline" size={64} color={HR_THEME.textMuted} />
@@ -484,14 +496,14 @@ export default function WorkScheduleScreen() {
         <View style={styles.bottomSpacer} />
       </ScrollView>
 
-      <FAB
+      {canWrite && <FAB
         icon="plus"
         accessibilityLabel={t('scheduling.workSchedule.addTitle')}
         style={styles.fab}
         onPress={openForm}
         color="#fff"
-        disabled={saving || shifts.length === 0 || employees.length === 0 || !canWrite}
-      />
+        disabled={saving || !hasSchedulingChoices}
+      />}
 
       <Modal visible={formOpen} transparent animationType="slide" onRequestClose={() => !saving && setFormOpen(false)}>
         <View style={styles.modalBackdrop}>
