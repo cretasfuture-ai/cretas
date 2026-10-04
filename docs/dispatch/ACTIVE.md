@@ -6,6 +6,7 @@
 
 ## 在飞任务
 
+
 - `F006-MOBILE-R12-PAGINATION-20261004` — `in-progress` — Owner: Codex/f006_ai_pagination_trace — Base `88de770f5d` — 🔒 SseStreamingService/SseConversationPaginationContractTest；真机库存下一页1→2→3已验，上一页错误加载4。只修手机SSE向前翻页和首尾边界，同厂同用户/只读重放门禁保持。详见archive/2026-10-04-f006-mobile-r12-pagination.md。
 
 

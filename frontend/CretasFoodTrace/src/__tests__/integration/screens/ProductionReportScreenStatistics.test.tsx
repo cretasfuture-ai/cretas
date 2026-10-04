@@ -39,6 +39,22 @@ jest.mock('react-i18next', () => ({
       'production.output': '产量',
       'production.completionRate': '完成率',
       'production.unknownRate': '未知',
+      'production.registeredEquipment': '登记设备总数',
+      'production.registeredEquipmentStates': '设备登记状态',
+      'production.equipmentRegistrationBasis': '按设备登记状态统计；暂无实时运行采样',
+      'production.equipmentRunningRate': '设备运行率',
+      'production.noRegisteredEquipment': '暂无设备登记数据',
+      'production.equipmentRunning': '登记运行中',
+      'production.equipmentStopped': '登记停止',
+      'production.equipmentMaintenance': '维护中',
+      'production.equipmentIdle': '空闲',
+      'production.equipmentInactive': '停用',
+      'production.equipmentActive': '启用',
+      'production.equipmentScrapped': '报废',
+      'production.equipmentFault': '故障',
+      'production.equipmentOffline': '离线',
+      'production.unknownEquipmentState': '未知状态',
+      'production.equipmentCountUnit': '台',
       'production.missingActualQuantity': '缺少实际量',
       'production.missingUnit': '缺少单位',
       'production.unknownUnit': '未知单位',
@@ -414,6 +430,62 @@ describe('ProductionReportScreen real statistics behavior', () => {
     await waitFor(() => expect(dashboardAPI.getProductionStatistics).toHaveBeenCalledTimes(3));
     expect(processingApiClient.getBatches).toHaveBeenCalledTimes(2);
   });
+
+  it('counts every registered status without claiming a sampled running rate', async () => {
+    currentUser.factoryUser.modulePermissions.finance = 'r';
+    (reportApiClient.getRealtimeData as jest.Mock).mockResolvedValue({
+      runningPlans: 0, todayOutput: 0, equipmentStatus: { idle: 3, active: 4, scrapped: 1 },
+    });
+    const view = render(<ProductionReportScreen />);
+    await waitFor(() => expect(statisticsRequests).toHaveLength(1));
+    await resolveStatistics(0);
+    await act(async () => fireEvent.press(view.getByText('实时监控')));
+    await waitFor(() => expect(view.getByText('37.5%')).toBeTruthy());
+    expect(reportApiClient.getRealtimeData).toHaveBeenCalledWith('F006');
+    expect(view.getByText('8')).toBeTruthy();
+    expect(view.getByText('启用')).toBeTruthy();
+    expect(view.getByText('报废')).toBeTruthy();
+    expect(view.getByText('50.0%')).toBeTruthy();
+    expect(view.getByText('12.5%')).toBeTruthy();
+    expect(view.getByText('设备运行率: 未知')).toBeTruthy();
+    expect(view.getByText('按设备登记状态统计；暂无实时运行采样')).toBeTruthy();
+    expect(view.queryByText('0%')).toBeNull();
+  });
+
+  it('includes unfamiliar and legacy registered states in the same denominator', async () => {
+    currentUser.factoryUser.modulePermissions.finance = 'r';
+    (reportApiClient.getRealtimeData as jest.Mock).mockResolvedValue({
+      runningPlans: 0, todayOutput: 0, equipmentStatus: { running: 2, inactive: 1, vendor_state: 1 },
+    });
+    const view = render(<ProductionReportScreen />);
+    await waitFor(() => expect(statisticsRequests).toHaveLength(1));
+    await resolveStatistics(0);
+    await act(async () => fireEvent.press(view.getByText('实时监控')));
+    await waitFor(() => expect(view.getByText('未知状态 (vendor_state)')).toBeTruthy());
+    expect(view.getByText('4')).toBeTruthy();
+    expect(view.getByText('停用')).toBeTruthy();
+    expect(view.getByText('50.0%')).toBeTruthy();
+    expect(view.getAllByText('25.0%')).toHaveLength(2);
+    expect(view.getByText('设备运行率: 未知')).toBeTruthy();
+  });
+
+  it.each([{}, { idle: 0 }, { idle: 3, active: -1 }, { idle: 3, active: 1.5 }])(
+    'does not invent percentages for missing, zero, or invalid counts: %j',
+    async (equipmentStatus) => {
+      currentUser.factoryUser.modulePermissions.finance = 'r';
+      (reportApiClient.getRealtimeData as jest.Mock).mockResolvedValue({
+        runningPlans: 0, todayOutput: 0, equipmentStatus,
+      });
+      const view = render(<ProductionReportScreen />);
+      await waitFor(() => expect(statisticsRequests).toHaveLength(1));
+      await resolveStatistics(0);
+      await act(async () => fireEvent.press(view.getByText('实时监控')));
+      await waitFor(() => expect(view.getByText('设备运行率: 未知')).toBeTruthy());
+      expect(view.queryByText(/^\d+(?:\.\d+)?%$/)).toBeNull();
+      expect(view.queryByText('-1 台')).toBeNull();
+      expect(view.queryByText('1.5 台')).toBeNull();
+    },
+  );
 
   it('renders nullable wire capacity fields and requests an inclusive seven-day window', async () => {
     const capacityResponse = {
