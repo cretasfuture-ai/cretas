@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,7 +24,7 @@ class DataScopeServiceCoverageContractTest {
     private static final Map<String, String> EXPECTED_METHODS = expectedMethods();
 
     @Test
-    void exactlySixReviewedServiceMethodsAreDataScoped() throws IOException {
+    void exactlyEightReviewedServiceMethodsAreDataScoped() throws IOException {
         Map<String, Integer> annotationCounts = new LinkedHashMap<>();
 
         try (var paths = Files.walk(SERVICES)) {
@@ -36,14 +37,19 @@ class DataScopeServiceCoverageContractTest {
             }
         }
 
+        Set<String> expectedFiles = EXPECTED_METHODS.keySet().stream()
+                .map(key -> key.substring(0, key.indexOf('#'))).collect(java.util.stream.Collectors.toSet());
         assertThat(annotationCounts)
                 .as("The production @DataScope surface changed; review the new method and its role acceptance before updating this contract")
-                .containsOnlyKeys(EXPECTED_METHODS.keySet());
-        assertThat(annotationCounts.values()).containsOnly(1);
-        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(6);
+                .containsOnlyKeys(expectedFiles.toArray(String[]::new));
+        assertThat(annotationCounts.values()).containsOnly(1, 2);
+        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(8);
 
-        EXPECTED_METHODS.forEach((file, method) -> {
+        EXPECTED_METHODS.forEach((methodKey, ignored) -> {
             try {
+                String[] parts = methodKey.split("#", 2);
+                String file = parts[0];
+                String method = parts[1];
                 String source = stripComments(Files.readString(SERVICES.resolve(file), StandardCharsets.UTF_8));
                 assertThat(source)
                         .as("%s must keep @DataScope on %s", file, method)
@@ -56,12 +62,14 @@ class DataScopeServiceCoverageContractTest {
 
     private static Map<String, String> expectedMethods() {
         Map<String, String> expected = new LinkedHashMap<>();
-        expected.put("impl/CustomerServiceImpl.java", "getCustomerList");
-        expected.put("impl/MaterialBatchServiceImpl.java", "getMaterialBatchList");
-        expected.put("impl/QualityReturnOrderServiceImpl.java", "list");
-        expected.put("inventory/impl/PurchaseServiceImpl.java", "getPurchaseOrders");
-        expected.put("inventory/impl/ReturnOrderServiceImpl.java", "getReturnOrders");
-        expected.put("inventory/impl/SalesServiceImpl.java", "getSalesOrders");
+        expected.put("impl/CustomerServiceImpl.java#getCustomerList", "getCustomerList");
+        expected.put("impl/MaterialBatchServiceImpl.java#getMaterialBatchList", "getMaterialBatchList");
+        expected.put("impl/MaterialBatchServiceImpl.java#getLowStockWarnings", "getLowStockWarnings");
+        expected.put("impl/QualityReturnOrderServiceImpl.java#list", "list");
+        expected.put("inventory/impl/PurchaseServiceImpl.java#getPurchaseOrders", "getPurchaseOrders");
+        expected.put("inventory/impl/ReturnOrderServiceImpl.java#getReturnOrders", "getReturnOrders");
+        expected.put("inventory/impl/SalesServiceImpl.java#getSalesOrders", "getSalesOrders");
+        expected.put("listsummary/impl/ListSummaryServiceImpl.java#computeSummary", "computeSummary");
         return expected;
     }
 

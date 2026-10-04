@@ -35,6 +35,7 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
+import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -44,11 +45,13 @@ import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -1181,22 +1184,63 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
+    @DataScope("created_by")
     public List<Map<String, Object>> getLowStockWarnings(String factoryId) {
         List<Map<String, Object>> warnings = new ArrayList<>();
+
+        DataScopeContext dsCtx = DataScopeContext.current();
+        if (dsCtx == null && SecurityUtils.currentUserId() != null) {
+            if (dataScopeResolver == null) {
+                throw new AccessDeniedException("Unable to resolve authenticated data scope");
+            }
+            dsCtx = dataScopeResolver.resolve(SecurityUtils.currentUserId());
+            if (dsCtx == null) {
+                throw new AccessDeniedException("Unable to resolve authenticated data scope");
+            }
+        }
+
+        List<String> visibleMaterialTypeIds = null;
 
         // 1. 获取所有激活的原材料类型（含 minStock 阈值）
         List<com.cretas.aims.entity.RawMaterialType> materialTypes =
                 materialTypeRepository.findByFactoryIdAndIsActive(factoryId, true);
 
         // 2. 获取各原材料类型的当前库存汇总
-        List<Object[]> stockSummary = materialBatchRepository.sumQuantityByMaterialType(factoryId);
         Map<String, BigDecimal> stockMap = new HashMap<>();
-        for (Object[] row : stockSummary) {
-            stockMap.put((String) row[0], (BigDecimal) row[1]);
+        if (dsCtx != null && dsCtx.isFiltered()) {
+            List<Long> chain = dataScopeResolver == null
+                    ? List.of() : dataScopeResolver.resolveCreatedByChain(dsCtx);
+            if (chain == null || chain.isEmpty()) {
+                return warnings;
+            }
+            visibleMaterialTypeIds = new ArrayList<>();
+            for (MaterialBatch batch : materialBatchRepository
+                    .findByFactoryIdAndCreatedByIn(factoryId, chain, Pageable.unpaged()).getContent()) {
+                if (batch.getMaterialTypeId() != null) {
+                    visibleMaterialTypeIds.add(batch.getMaterialTypeId());
+                }
+                if (batch.getStatus() != MaterialBatchStatus.AVAILABLE
+                        || (batch.getOwnership() != null
+                        && batch.getOwnership() != com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED)) {
+                    continue;
+                }
+                BigDecimal available = valueOrZero(batch.getReceiptQuantity())
+                        .subtract(valueOrZero(batch.getUsedQuantity()))
+                        .subtract(valueOrZero(batch.getReservedQuantity()));
+                stockMap.merge(batch.getMaterialTypeId(), available, BigDecimal::add);
+            }
+        } else {
+            List<Object[]> stockSummary = materialBatchRepository.sumQuantityByMaterialType(factoryId);
+            for (Object[] row : stockSummary) {
+                stockMap.put((String) row[0], (BigDecimal) row[1]);
+            }
         }
 
         // 3. 对比阈值，生成预警
         for (com.cretas.aims.entity.RawMaterialType mt : materialTypes) {
+            if (visibleMaterialTypeIds != null && !visibleMaterialTypeIds.contains(mt.getId())) {
+                continue;
+            }
             BigDecimal minStock = mt.getMinStock();
             if (minStock == null || minStock.compareTo(BigDecimal.ZERO) <= 0) {
                 continue; // 未设置安全库存
@@ -1243,6 +1287,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         log.info("低库存预警查询: factoryId={}, 预警数量={}", factoryId, warnings.size());
         return warnings;
+    }
+
+    private static BigDecimal valueOrZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     private int getLevelPriority(String level) {

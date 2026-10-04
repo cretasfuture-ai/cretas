@@ -4,6 +4,10 @@ import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse.SummaryStat;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.annotation.DataScope;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
+import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import jakarta.persistence.EntityManager;
@@ -13,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -49,6 +54,7 @@ public class ListSummaryServiceImpl implements ListSummaryService {
     // different numbers (e.g. footer "808项" vs KPI card near-zero) even
     // though both claim to show "低库存".
     private final MaterialBatchService materialBatchService;
+    private final DataScopeResolver dataScopeResolver;
 
     private static final Set<String> SUPPORTED = Set.of(
             "salesOrder", "purchaseOrder", "inventory", "wastage", "attendance",
@@ -57,7 +63,9 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
     @Override
     @Transactional(readOnly = true)
+    @DataScope("created_by")
     public ListSummaryResponse computeSummary(String factoryId, String entityType, ListSummaryRequest request) {
+        requireAuthenticatedDataScopeContext();
         if (!SUPPORTED.contains(entityType)) {
             throw new IllegalArgumentException(
                     "Unsupported entityType: " + entityType + ". Day 2 supports: " + SUPPORTED);
@@ -137,9 +145,11 @@ public class ListSummaryServiceImpl implements ListSummaryService {
                 "       COALESCE(SUM(receipt_quantity - used_quantity - reserved_quantity), 0) AS avail_qty, " +
                 "       COALESCE(SUM((receipt_quantity - used_quantity - reserved_quantity) * COALESCE(unit_price, 0)), 0) AS total_value " +
                 "FROM material_batches WHERE factory_id = :fid AND deleted_at IS NULL");
+        List<Long> createdByIds = createdByFilter();
+        appendCreatedByScope(sql, createdByIds);
         appendStatusFilter(sql, filter);
         Query q = em.createNativeQuery(sql.toString());
-        bindParams(q, factoryId, filter, null, null);
+        bindParams(q, factoryId, filter, null, null, createdByIds);
         Object[] row = (Object[]) q.getSingleResult();
         long count = ((Number) row[0]).longValue();
         BigDecimal availQty = (BigDecimal) row[1];
@@ -156,6 +166,32 @@ public class ListSummaryServiceImpl implements ListSummaryService {
         stats.add(stat("总价值", totalValue, "currency", "¥", true));
         stats.add(stat("低库存", lowStock, "number", "项", false));
         return ListSummaryResponse.builder().entityType("inventory").stats(stats).build();
+    }
+
+    private void requireAuthenticatedDataScopeContext() {
+        if (DataScopeContext.current() == null && SecurityUtils.currentUserId() != null) {
+            throw new AccessDeniedException("Unable to resolve authenticated data scope");
+        }
+    }
+
+    private List<Long> createdByFilter() {
+        DataScopeContext ctx = DataScopeContext.current();
+        if (ctx == null || !ctx.isFiltered()) {
+            return null;
+        }
+        List<Long> chain = dataScopeResolver.resolveCreatedByChain(ctx);
+        return chain == null ? List.of() : chain;
+    }
+
+    private static void appendCreatedByScope(StringBuilder sql, List<Long> chain) {
+        if (chain == null) {
+            return;
+        }
+        if (chain.isEmpty()) {
+            sql.append(" AND 1 = 0");
+        } else {
+            sql.append(" AND created_by IN (:createdByIds)");
+        }
     }
 
     // ==================== 餐饮损耗 ====================
@@ -455,7 +491,15 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
     private static void bindParams(Query q, String factoryId, Map<String, Object> filter,
                                     LocalDate from, LocalDate to) {
+        bindParams(q, factoryId, filter, from, to, null);
+    }
+
+    private static void bindParams(Query q, String factoryId, Map<String, Object> filter,
+                                    LocalDate from, LocalDate to, List<Long> createdByIds) {
         q.setParameter("fid", factoryId);
+        if (createdByIds != null && !createdByIds.isEmpty()) {
+            q.setParameter("createdByIds", createdByIds);
+        }
         if (filter.containsKey("status") && filter.get("status") != null) {
             q.setParameter("status", String.valueOf(filter.get("status")));
         }

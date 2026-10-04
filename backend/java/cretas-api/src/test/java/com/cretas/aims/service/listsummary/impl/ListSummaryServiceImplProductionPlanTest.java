@@ -3,6 +3,7 @@ package com.cretas.aims.service.listsummary.impl;
 import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.security.DataScopeResolver;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,7 +29,7 @@ class ListSummaryServiceImplProductionPlanTest {
 
     @BeforeEach
     void setUp() {
-        service = new ListSummaryServiceImpl(mock(MaterialBatchService.class));
+        service = new ListSummaryServiceImpl(mock(MaterialBatchService.class), mock(DataScopeResolver.class));
         entityManager = mock(EntityManager.class);
         query = mock(Query.class);
         ReflectionTestUtils.setField(service, "em", entityManager);
