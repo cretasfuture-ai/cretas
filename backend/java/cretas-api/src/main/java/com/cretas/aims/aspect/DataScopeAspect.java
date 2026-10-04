@@ -1,6 +1,8 @@
 package com.cretas.aims.aspect;
 
 import com.cretas.aims.annotation.DataScope;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.utils.SecurityUtils;
@@ -11,6 +13,8 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+
+import java.util.Optional;
 
 /**
  * 数据权限 AOP (RBAC 第 2 维, Sprint 5 Track G).
@@ -45,6 +49,17 @@ public class DataScopeAspect {
 
     @Around("@annotation(scope)")
     public Object aroundDataScope(ProceedingJoinPoint pjp, DataScope scope) throws Throwable {
+        // ⚠️ Branch on actor type BEFORE the users lookup in resolver.resolve: a platform admin's id
+        // is from platform_admins, an independent sequence — users.findById would hand this request
+        // the role / department / factory scope of an unrelated factory user.
+        Optional<AuthenticatedActor> platformAdmin = AuthenticatedActor.currentPlatformAdmin();
+        if (platformAdmin.isPresent()) {
+            if (!platformAdmin.get().hasFactoryBypass()) {
+                throw new BusinessException(403, "平台角色 " + platformAdmin.get().role() + " 无权访问工厂数据");
+            }
+            // Full factory access: no row-level scope, same as the ALL fallback below.
+            return pjp.proceed();
+        }
         Long userId = SecurityUtils.currentUserId();
         DataScopeContext ctx = resolver.resolve(userId);
 

@@ -8,6 +8,7 @@ import com.cretas.aims.entity.rules.DroolsRule;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.*;
+import com.cretas.aims.security.CurrentOperatorResolver;
 import com.cretas.aims.service.NotificationService;
 import com.cretas.aims.service.PushNotificationService;
 import com.cretas.aims.service.scheduling.core.SchedulingAIService;
@@ -39,6 +40,7 @@ import java.util.stream.Collectors;
 public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService {
 
     private final SchedulingPlanRepository planRepository;
+    private final CurrentOperatorResolver currentOperatorResolver;
     private final LineScheduleRepository scheduleRepository;
     private final WorkerAssignmentRepository assignmentRepository;
     private final ProductionLineRepository lineRepository;
@@ -232,8 +234,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
 
         // 发送调度计划确认通知
         try {
-            String confirmerName = userRepository.findById(userId)
-                .map(User::getFullName)
+            // Platform admin ids are not users ids — never look the confirmer up in users directly.
+            String confirmerName = currentOperatorResolver.resolve(userId)
+                .map(CurrentOperatorResolver.Operator::displayName)
                 .orElse("未知用户");
             notificationService.notifyScheduleConfirmed(factoryId, planId, confirmerName);
             log.info("调度计划确认通知已发送: planId={}, confirmedBy={}", planId, confirmerName);

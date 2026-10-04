@@ -1,6 +1,8 @@
 package com.cretas.aims.security;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.Locale;
 import java.util.Optional;
@@ -61,5 +63,17 @@ public record AuthenticatedActor(
     public static Optional<AuthenticatedActor> current(HttpServletRequest request) {
         Object value = request == null ? null : request.getAttribute(REQUEST_ATTRIBUTE);
         return value instanceof AuthenticatedActor actor ? Optional.of(actor) : Optional.empty();
+    }
+
+    /** The current request's actor when it is a platform admin; empty for factory users and outside a request. */
+    public static Optional<AuthenticatedActor> currentPlatformAdmin() {
+        return fromCurrentRequest().filter(AuthenticatedActor::isPlatformAdmin);
+    }
+
+    /** The actor of the HTTP request bound to this thread; empty outside a request (jobs, async). */
+    public static Optional<AuthenticatedActor> fromCurrentRequest() {
+        return RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes
+                ? current(attributes.getRequest())
+                : Optional.empty();
     }
 }

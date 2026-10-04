@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.ProductionAnalyticsServiceImpl;
@@ -25,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.Optional;
 
 @Slf4j
 @RestController
@@ -220,6 +222,12 @@ public class ProductionAnalyticsController {
      * supplier-price RBAC.
      */
     private boolean resolveCanViewCosts(String authorization) {
+        // ⚠️ Decided before any users lookup: for a platform token getUserFromToken returns the
+        // platform_admins id, an independent sequence. Bypass platform roles see costs.
+        Optional<AuthenticatedActor> platformAdmin = AuthenticatedActor.currentPlatformAdmin();
+        if (platformAdmin.isPresent()) {
+            return platformAdmin.get().hasFactoryBypass();
+        }
         try {
             if (authorization == null || authorization.isBlank()) {
                 return false;

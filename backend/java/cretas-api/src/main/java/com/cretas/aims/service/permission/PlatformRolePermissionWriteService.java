@@ -69,13 +69,26 @@ public class PlatformRolePermissionWriteService {
     @Transactional
     public WriteResult write(User actor, String factoryId, String roleCode, String moduleCode,
                              String level, String reason) {
-        if (actor == null || actor.getId() == null) {
+        return write(actor == null ? null : actor.getId(), actor == null ? null : actor.getRoleCode(),
+                factoryId, roleCode, moduleCode, level, reason);
+    }
+
+    /**
+     * Same as {@link #write(User, String, String, String, String, String)} for an operator that is
+     * not a {@code users} row — a platform admin, whose id comes from {@code platform_admins} and
+     * whose role ({@code super_admin} / {@code platform_admin} / {@code developer}) is what the
+     * audit row records in {@code changed_by_role}.
+     */
+    @Transactional
+    public WriteResult write(Long actorId, String actorRoleCode, String factoryId, String roleCode,
+                             String moduleCode, String level, String reason) {
+        if (actorId == null) {
             throw new BusinessException(403, "无法确认操作人, 拒绝写入权限 (审计行不能没有 changed_by)");
         }
         // R1 (终审): 「餐饮不管」是双向的 —— 餐饮角色的**操作者**也不许写 L1。
         // prod 今日 restaurant_owner 的 L1 system=rw (4-20 种子), 过得了 system:read_write 门禁, 能改工厂角色的全平台权限。
-        if (actor.getRoleCode() != null && actor.getRoleCode().startsWith(RESTAURANT_ROLE_PREFIX)) {
-            throw new BusinessException(403, "餐饮侧待定: 餐饮角色的操作者不可写 L1 权限 (" + actor.getRoleCode() + ")");
+        if (actorRoleCode != null && actorRoleCode.startsWith(RESTAURANT_ROLE_PREFIX)) {
+            throw new BusinessException(403, "餐饮侧待定: 餐饮角色的操作者不可写 L1 权限 (" + actorRoleCode + ")");
         }
         if (roleCode == null || roleCode.isBlank() || moduleCode == null || moduleCode.isBlank()) {
             throw new IllegalArgumentException("role / module 不能为空");
@@ -114,7 +127,7 @@ public class PlatformRolePermissionWriteService {
             return p;
         });
         row.setPermissionLevel(level);
-        row.setUpdatedBy(actor.getId());
+        row.setUpdatedBy(actorId);
         row = repo.save(row);
 
         PlatformRolePermissionAudit audit = auditRepo.save(PlatformRolePermissionAudit.builder()
@@ -122,8 +135,8 @@ public class PlatformRolePermissionWriteService {
                 .moduleCode(moduleCode)
                 .oldLevel(oldLevel)
                 .newLevel(level)
-                .changedBy(actor.getId())
-                .changedByRole(actor.getRoleCode())
+                .changedBy(actorId)
+                .changedByRole(actorRoleCode)
                 .factoryId(factoryId)
                 .reason(reason)
                 .changedAt(LocalDateTime.now())
@@ -137,7 +150,7 @@ public class PlatformRolePermissionWriteService {
         }
 
         log.info("L1 write: {} × {} {} -> {} by user={} role={} factory={} audit={}",
-                roleCode, moduleCode, oldLevel, level, actor.getId(), actor.getRoleCode(), factoryId, audit.getId());
+                roleCode, moduleCode, oldLevel, level, actorId, actorRoleCode, factoryId, audit.getId());
 
         // 回读: 返回的是仓库里那一行, 不是请求体
         PlatformRolePermission reread = repo.findByRoleCodeAndModuleCodeAndDeletedAtIsNull(roleCode, moduleCode).orElse(row);

@@ -96,6 +96,8 @@ class FinanceRbacBugFixTest {
 
     private void asUserWithPermissions(Long userId, boolean canViewPrice, boolean canViewFinance) {
         httpRequest.setAttribute("userId", userId);
+        httpRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, "F001", "test_role"));
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));

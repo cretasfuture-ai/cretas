@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockHttpServletRequest;
 
 import java.util.Optional;
 
@@ -111,7 +112,7 @@ class AttachmentPermissionResolverTest {
     @DisplayName("❌ 未登录 (user=null) → 401")
     void nullUser_throws401() {
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> resolver.requireRead(null, EntityType.PURCHASE_ORDER));
+                () -> resolver.requireRead((User) null, EntityType.PURCHASE_ORDER));
         assertEquals(401, ex.getCode());
     }
 
@@ -205,31 +206,102 @@ class AttachmentPermissionResolverTest {
         assertDoesNotThrow(() -> resolver.validateUploadRequest("Application/PDF", null));
     }
 
-    // ==================== resolveCurrentUser ====================
+    // ==================== Request-based: actor type decides before any users lookup ====================
 
-    @Test
-    @DisplayName("✅ resolveCurrentUser 从 request.userId 解析 User")
-    void resolveCurrentUser_fromRequestAttribute() {
-        HttpServletRequest req = mock(HttpServletRequest.class);
-        User u = userWithRole(42L, FactoryUserRole.procurement_manager);
-        when(req.getAttribute("userId")).thenReturn(42L);
-        when(userRepository.findById(42L)).thenReturn(Optional.of(u));
+    /** Shared id: platform_admins.id and users.id are independent sequences, so they collide. */
+    private static final long SHARED_ID = 7L;
 
-        User result = resolver.resolveCurrentUser(req);
-        assertSame(u, result);
+    private static HttpServletRequest requestAs(AuthenticatedActorType type, String factoryId, String role) {
+        MockHttpServletRequest req = new MockHttpServletRequest();
+        req.setAttribute("userId", SHARED_ID);
+        req.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(type, SHARED_ID, factoryId, role));
+        return req;
+    }
+
+    private static HttpServletRequest platformAdmin(String role) {
+        return requestAs(AuthenticatedActorType.PLATFORM_ADMIN, "PLATFORM", role);
+    }
+
+    private static HttpServletRequest factoryUser(String role) {
+        return requestAs(AuthenticatedActorType.FACTORY_USER, "F999", role);
     }
 
     @Test
-    @DisplayName("✅ resolveCurrentUser 在 request=null → 返 null (closed-by-default)")
-    void resolveCurrentUser_nullRequest_returnsNull() {
-        assertNull(resolver.resolveCurrentUser(null));
+    @DisplayName("✅ factory user: requireRead(request) 按 users 行 + 权限判定")
+    void factoryUser_request_resolvesUsersRow() {
+        User financeMgr = userWithRole(SHARED_ID, FactoryUserRole.finance_manager);
+        when(userRepository.findById(SHARED_ID)).thenReturn(Optional.of(financeMgr));
+        when(permissionService.hasAnyPermission(eq(financeMgr), any(String[].class))).thenReturn(true);
+
+        assertDoesNotThrow(() -> resolver.requireRead(factoryUser("finance_manager"), EntityType.PAYMENT_VOUCHER));
+        assertEquals(SHARED_ID, resolver.requireWrite(factoryUser("finance_manager"), EntityType.PAYMENT_VOUCHER));
     }
 
     @Test
-    @DisplayName("✅ resolveCurrentUser 在 userId 属性缺失 → 返 null")
-    void resolveCurrentUser_missingAttribute_returnsNull() {
-        HttpServletRequest req = mock(HttpServletRequest.class);
-        when(req.getAttribute("userId")).thenReturn(null);
-        assertNull(resolver.resolveCurrentUser(req));
+    @DisplayName("❌ 没有 actor (只有裸 userId) → 401, 不拿 userId 去查 users")
+    void noActor_unauthorized_evenWithRawUserId() {
+        MockHttpServletRequest req = new MockHttpServletRequest();
+        req.setAttribute("userId", SHARED_ID);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> resolver.requireRead(req, EntityType.PAYMENT_VOUCHER));
+        assertEquals(401, ex.getCode());
+        BusinessException nullReq = assertThrows(BusinessException.class,
+                () -> resolver.requireRead((HttpServletRequest) null, EntityType.PAYMENT_VOUCHER));
+        assertEquals(401, nullReq.getCode());
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("✅ 平台 super_admin, users 里同 id 是无财务权限的仓管 → 仍放行, 不查 users")
+    void platformBypassRole_notJudgedAsCollidingFactoryUser() {
+        // The colliding factory account would be refused PAYMENT_VOUCHER.
+        User collidingWarehouseMgr = userWithRole(SHARED_ID, FactoryUserRole.warehouse_manager);
+        lenient().when(userRepository.findById(SHARED_ID)).thenReturn(Optional.of(collidingWarehouseMgr));
+        lenient().when(permissionService.hasAnyPermission(eq(collidingWarehouseMgr), any(String[].class)))
+                .thenReturn(false);
+
+        for (String role : AuthenticatedActor.FACTORY_BYPASS_PLATFORM_ROLES) {
+            assertDoesNotThrow(() -> resolver.requireRead(platformAdmin(role), EntityType.PAYMENT_VOUCHER), role);
+            assertEquals(SHARED_ID, resolver.requireWrite(platformAdmin(role), EntityType.PAYMENT_VOUCHER), role);
+        }
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("❌ 平台 auditor, users 里同 id 是工厂超管 → 仍 403 (不借用工厂超管的 bypass)")
+    void platformNonBypassRole_refused_evenIfCollidingFactoryUserIsAdmin() {
+        // The colliding factory account would bypass every check.
+        User collidingFactoryAdmin = userWithRole(SHARED_ID, FactoryUserRole.factory_super_admin);
+        lenient().when(userRepository.findById(SHARED_ID)).thenReturn(Optional.of(collidingFactoryAdmin));
+
+        for (String role : new String[]{"auditor", "operation_admin", "system_admin"}) {
+            BusinessException read = assertThrows(BusinessException.class,
+                    () -> resolver.requireRead(platformAdmin(role), EntityType.PAYMENT_VOUCHER), role);
+            assertEquals(403, read.getCode(), role);
+            assertTrue(read.getMessage().contains("平台角色 [" + role + "]"), read.getMessage());
+            BusinessException write = assertThrows(BusinessException.class,
+                    () -> resolver.requireWrite(platformAdmin(role), EntityType.PAYMENT_VOUCHER), role);
+            assertEquals(403, write.getCode(), role);
+        }
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("阴性对照: 同 id 的工厂用户保持自己的结果 (仓管 403 / 工厂超管放行)")
+    void negativeControl_factoryUserWithSameIdKeepsOwnResult() {
+        User warehouseMgr = userWithRole(SHARED_ID, FactoryUserRole.warehouse_manager);
+        when(userRepository.findById(SHARED_ID)).thenReturn(Optional.of(warehouseMgr));
+        when(permissionService.hasAnyPermission(eq(warehouseMgr), any(String[].class))).thenReturn(false);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> resolver.requireRead(factoryUser("warehouse_manager"), EntityType.PAYMENT_VOUCHER));
+        assertEquals(403, ex.getCode());
+        assertTrue(ex.getMessage().contains("仓储主管"), "工厂用户的拒绝措辞来自他自己的角色: " + ex.getMessage());
+
+        User factoryAdmin = userWithRole(SHARED_ID, FactoryUserRole.factory_super_admin);
+        when(userRepository.findById(SHARED_ID)).thenReturn(Optional.of(factoryAdmin));
+        assertDoesNotThrow(() -> resolver.requireRead(factoryUser("factory_super_admin"), EntityType.PAYMENT_VOUCHER));
     }
 }

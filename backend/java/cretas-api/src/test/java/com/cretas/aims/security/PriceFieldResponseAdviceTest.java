@@ -103,6 +103,8 @@ class PriceFieldResponseAdviceTest {
      */
     private void asUser(Long userId, boolean canViewPrice, boolean canViewFinance) {
         httpRequest.setAttribute("userId", userId);
+        httpRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, "F001", "test_role"));
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -842,6 +844,8 @@ class PriceFieldResponseAdviceTest {
         // Stub: user resolves OK, but permission check throws (DB outage / cache misconfig).
         Long userId = 42L;
         httpRequest.setAttribute("userId", userId);
+        httpRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, "F001", "test_role"));
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -866,6 +870,8 @@ class PriceFieldResponseAdviceTest {
     void f5_permissionService_throws_hideFlagAlsoSet() {
         Long userId = 43L;
         httpRequest.setAttribute("userId", userId);
+        httpRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, "F001", "test_role"));
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));

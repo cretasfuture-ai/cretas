@@ -6,10 +6,12 @@ import com.cretas.aims.dto.permission.PermissionMatrixView;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.permission.PermissionMatrixViewService;
 import com.cretas.aims.service.permission.PlatformRolePermissionWriteService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -79,15 +81,30 @@ public class PermissionMatrixController {
                                                     @PathVariable String role,
                                                     @PathVariable String module,
                                                     @RequestBody WriteCellRequest body,
-                                                    @RequestAttribute(value = "userId", required = false) Long userId) {
-        // 操作人从 JwtAuthInterceptor 放进来的 userId 取; 取不到 ⇒ 403, ⛔ 不写 changed_by=NULL
-        User actor = userId == null ? null : userRepository.findById(userId).orElse(null);
-        if (actor == null) {
-            throw new BusinessException(403, "无法确认操作人, 拒绝写入权限");
+                                                    @RequestAttribute(value = "userId", required = false) Long userId,
+                                                    HttpServletRequest request) {
+        String level = body == null ? null : body.level();
+        String reason = body == null ? null : body.reason();
+        // ⚠️ 先按主体类型分支, 再查 users: 平台管理员的 id 来自 platform_admins, 与 users.id 是两条
+        // 独立序列 —— 拿它去 users.findById 会把一个不相干的工厂账号记成操作人 (审计 changed_by / 角色)。
+        AuthenticatedActor platformActor = AuthenticatedActor.current(request)
+                .filter(AuthenticatedActor::isPlatformAdmin)
+                .orElse(null);
+        PlatformRolePermissionWriteService.WriteResult result;
+        if (platformActor != null) {
+            if (!platformActor.hasFactoryBypass()) {
+                throw new BusinessException(403, "平台角色 " + platformActor.role() + " 无权写入权限矩阵");
+            }
+            result = writeService.write(platformActor.id(), platformActor.role(),
+                    factoryId, role, module, level, reason);
+        } else {
+            // 操作人从 JwtAuthInterceptor 放进来的 userId 取; 取不到 ⇒ 403, ⛔ 不写 changed_by=NULL
+            User actor = userId == null ? null : userRepository.findById(userId).orElse(null);
+            if (actor == null) {
+                throw new BusinessException(403, "无法确认操作人, 拒绝写入权限");
+            }
+            result = writeService.write(actor, factoryId, role, module, level, reason);
         }
-        PlatformRolePermissionWriteService.WriteResult result = writeService.write(
-                actor, factoryId, role, module,
-                body == null ? null : body.level(), body == null ? null : body.reason());
         return ApiResponse.success(new WriteCellResponse(
                 role, module, result.oldLevel(), result.row().getPermissionLevel(), result.auditId()));
     }

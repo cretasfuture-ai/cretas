@@ -16,6 +16,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -1049,6 +1050,13 @@ public class WorkflowInstanceController {
     }
 
     private User resolveCurrentUser(String authorization) {
+        // ⚠️ For a platform token getUserFromToken returns the platform_admins id, an independent
+        // sequence — users.findById would answer with an unrelated factory account, whose role would
+        // pick the approval queue, pass canTransition, and be stamped into the domain action.
+        // A platform admin has no factory approval identity; refuse rather than borrow one.
+        if (AuthenticatedActor.currentPlatformAdmin().isPresent()) {
+            throw new BusinessException(403, "平台管理员没有工厂审批身份，请用该工厂的账号登录后操作审批");
+        }
         try {
             Long userId = extractUserId(authorization);
             if (userId == null) return null;

@@ -5,7 +5,6 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
-import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.security.AttachmentPermissionResolver;
@@ -57,9 +56,7 @@ class AttachmentControllerTest {
     private static final String ATT_ID = "att-uuid-001";
 
     private void stubCurrentUser() {
-        User user = new User();
-        user.setId(42L);
-        when(permissionResolver.resolveCurrentUser(request)).thenReturn(user);
+        when(permissionResolver.requireWrite(eq(request), any(EntityType.class))).thenReturn(42L);
     }
 
     @Test
@@ -78,7 +75,7 @@ class AttachmentControllerTest {
         assertTrue(resp.getBody().getSuccess());
         assertEquals(1, resp.getBody().getData().size());
         assertEquals(ATT_ID, resp.getBody().getData().get(0).getId());
-        verify(permissionResolver).requireRead(any(), eq(EntityType.PURCHASE_ORDER));
+        verify(permissionResolver).requireRead(eq(request), eq(EntityType.PURCHASE_ORDER));
     }
 
     @Test
@@ -93,7 +90,7 @@ class AttachmentControllerTest {
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals(ATT_ID, resp.getBody().getData().getId());
-        verify(permissionResolver).requireRead(any(), eq(EntityType.PURCHASE_ORDER));
+        verify(permissionResolver).requireRead(eq(request), eq(EntityType.PURCHASE_ORDER));
     }
 
     @Test
@@ -110,7 +107,7 @@ class AttachmentControllerTest {
 
         assertEquals(HttpStatus.FOUND, resp.getStatusCode());
         assertEquals(signedUrl, resp.getHeaders().getLocation().toString());
-        verify(permissionResolver).requireRead(any(), eq(EntityType.PURCHASE_ORDER));
+        verify(permissionResolver).requireRead(eq(request), eq(EntityType.PURCHASE_ORDER));
     }
 
     @Test
@@ -159,10 +156,10 @@ class AttachmentControllerTest {
         assertEquals(ATT_ID, resp.getBody().getData().getId());
 
         ArgumentCaptor<RegisterAttachmentRequest> cap = ArgumentCaptor.forClass(RegisterAttachmentRequest.class);
-        verify(attachmentService).register(eq(FACTORY_ID), cap.capture(), any());
+        verify(attachmentService).register(eq(FACTORY_ID), cap.capture(), eq(42L));
         assertEquals(EntityType.PURCHASE_ORDER, cap.getValue().getEntityType());
         assertEquals("PO-001", cap.getValue().getEntityId());
-        verify(permissionResolver).requireWrite(any(), eq(EntityType.PURCHASE_ORDER));
+        verify(permissionResolver).requireWrite(eq(request), eq(EntityType.PURCHASE_ORDER));
     }
 
     @Test
@@ -186,7 +183,7 @@ class AttachmentControllerTest {
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals("new desc", resp.getBody().getData().getDescription());
-        verify(permissionResolver).requireWrite(any(), eq(EntityType.PURCHASE_ORDER));
+        verify(permissionResolver).requireWrite(eq(request), eq(EntityType.PURCHASE_ORDER));
     }
 
     @Test
@@ -216,7 +213,7 @@ class AttachmentControllerTest {
         assertEquals(2, resp.getBody().getData().size());
         assertEquals(3L, resp.getBody().getData().get("PO-001"));
         assertEquals(7L, resp.getBody().getData().get("PO-002"));
-        verify(permissionResolver).requireRead(any(), eq(EntityType.PURCHASE_ORDER));
+        verify(permissionResolver).requireRead(eq(request), eq(EntityType.PURCHASE_ORDER));
     }
 
     @Test
@@ -284,7 +281,7 @@ class AttachmentControllerTest {
         assertEquals(0L, so003.getImageCount());
         assertEquals(0L, so003.getContractCount());
 
-        verify(permissionResolver).requireRead(any(), eq(EntityType.SALES_ORDER));
+        verify(permissionResolver).requireRead(eq(request), eq(EntityType.SALES_ORDER));
     }
 
     @Test

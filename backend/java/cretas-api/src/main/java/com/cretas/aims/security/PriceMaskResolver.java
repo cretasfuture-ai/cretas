@@ -9,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
+
 /**
  * RBAC defense-in-depth helper for byte[] export endpoints (PDF / Excel).
  *
@@ -50,6 +52,10 @@ public class PriceMaskResolver {
      * @return {@code true} → mask prices, {@code false} → show real values
      */
     public boolean shouldMaskPrice(String authorization) {
+        Optional<Boolean> platform = platformAdminMasks();
+        if (platform.isPresent()) {
+            return platform.get();
+        }
         User currentUser = resolveCurrentUser(authorization);
         if (currentUser == null) {
             return true; // closed-by-default: no resolvable caller → mask
@@ -81,12 +87,27 @@ public class PriceMaskResolver {
      * @since 2026-06-18 (dashboard cost finance-gate alignment — sales_manager must not see unitCost)
      */
     public boolean shouldMaskOperationalCost(String authorization) {
+        Optional<Boolean> platform = platformAdminMasks();
+        if (platform.isPresent()) {
+            return platform.get();
+        }
         User currentUser = resolveCurrentUser(authorization);
         if (currentUser == null) {
             return true; // closed-by-default: no resolvable caller → mask
         }
         return !permissionService.hasPermission(
                 currentUser, PriceFieldResponseAdvice.FINANCE_READ_PERMISSION);
+    }
+
+    /**
+     * ⚠️ Decided BEFORE any users lookup: for a platform token {@code getUserFromToken} returns the
+     * platform_admins id, an independent sequence, so {@code users.findById} would answer with an
+     * unrelated factory account (on a fresh DB, id=1 is F999's phase2a_test_user) and mask or reveal
+     * by that account's permissions. Bypass platform roles get full factory access; other platform
+     * roles are masked. Empty for factory users.
+     */
+    private static Optional<Boolean> platformAdminMasks() {
+        return AuthenticatedActor.currentPlatformAdmin().map(actor -> !actor.hasFactoryBypass());
     }
 
     /**

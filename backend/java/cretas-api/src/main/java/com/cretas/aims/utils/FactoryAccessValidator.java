@@ -4,6 +4,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.AuthenticationException;
 import com.cretas.aims.exception.AuthorizationException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import org.springframework.stereotype.Component;
 
 /**
@@ -35,6 +36,18 @@ public class FactoryAccessValidator {
     public void validateAccess(String factoryId, Long userId) {
         if (userId == null) {
             throw new AuthenticationException("用户未登录");
+        }
+
+        // ⚠️ Branch on actor type BEFORE any users lookup: a platform admin's id is from
+        // platform_admins, an independent sequence, so users.findById(userId) would answer with
+        // an unrelated factory account (on a fresh DB, id=1 is F999's phase2a_test_user) and
+        // decide cross-factory access by that account's factory.
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (actor != null && actor.isPlatformAdmin() && actor.id().equals(userId)) {
+            if (actor.hasFactoryBypass()) {
+                return;
+            }
+            throw new AuthorizationException("平台角色 " + actor.role() + " 无权访问工厂数据");
         }
 
         User user = userRepository.findById(userId)

@@ -305,12 +305,30 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             return body;
         }
 
-        // Resolve current user from request attributes (set by JwtAuthInterceptor).
-        User currentUser = resolveCurrentUser(request);
-        if (currentUser == null) {
+        // Resolve the typed caller set by JwtAuthInterceptor.
+        AuthenticatedActor actor = resolveActor(request);
+        if (actor == null) {
             // No authenticated user (login, health checks, public endpoints).
             // Public endpoints are filtered by JwtAuthInterceptor — if we reach
             // here without a user, the endpoint is intentionally unauthenticated.
+            return body;
+        }
+
+        // ⚠️ Branch on actor type BEFORE any users lookup: a platform admin's id is from
+        // platform_admins, an independent sequence, so users.findById(actor.id()) would answer
+        // with an unrelated factory account (on a fresh DB, id=1 is F999's phase2a_test_user)
+        // and mask or reveal prices by that account's permissions.
+        if (actor.isPlatformAdmin()) {
+            if (actor.hasFactoryBypass()) {
+                // Full factory access, the same rule PermissionInterceptor applies.
+                return body;
+            }
+            // Other platform roles hold no procurement / finance grant (PlatformRole) — strip all.
+            return strip(body, false, false, "platform:" + actor.role() + "(" + actor.id() + ")");
+        }
+
+        User currentUser = resolveFactoryUser(actor);
+        if (currentUser == null) {
             return body;
         }
 
@@ -357,6 +375,11 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             return body;
         }
 
+        return strip(body, canViewPrices, canViewFinance, currentUser.getId() + "/"
+                + (currentUser.getRoleEnum() != null ? currentUser.getRoleEnum().name() : "null"));
+    }
+
+    private Object strip(Object body, boolean canViewPrices, boolean canViewFinance, String callerLabel) {
         // User lacks at least one permission — strip the relevant fields.
         // canViewPrices=T + canViewFinance=F: only Rule 2b (finance upload columns) fires.
         // canViewPrices=F + canViewFinance=*: full strip including @PriceSensitive fields.
@@ -365,10 +388,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         } catch (Exception e) {
             // Defensive: never fail the response on a stripping error. Log and
             // pass through the body — admin-role parity preserved (no regression).
-            log.warn("PriceFieldResponseAdvice strip failed for userId={}, role={}: {}",
-                    currentUser.getId(),
-                    currentUser.getRoleEnum() != null ? currentUser.getRoleEnum().name() : "null",
-                    e.getMessage());
+            log.warn("PriceFieldResponseAdvice strip failed for caller={}: {}", callerLabel, e.getMessage());
         }
         // Signal to Jackson only when price fields were actually stripped.
         // canViewPrices=true + canViewFinance=false is the sales_manager path:
@@ -737,36 +757,22 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 || name.startsWith("org.springframework.");
     }
 
-    /** Resolve the current user from request attributes set by {@link com.cretas.aims.config.JwtAuthInterceptor}. */
-    private User resolveCurrentUser(ServerHttpRequest request) {
+    /** The typed caller set by {@link com.cretas.aims.config.JwtAuthInterceptor}; {@code null} when unauthenticated. */
+    private AuthenticatedActor resolveActor(ServerHttpRequest request) {
         if (!(request instanceof ServletServerHttpRequest)) {
             return null;
         }
         HttpServletRequest servletReq = ((ServletServerHttpRequest) request).getServletRequest();
-        Object userIdObj = servletReq.getAttribute("userId");
-        if (userIdObj == null) {
-            return null;
-        }
-        Long userId = null;
-        if (userIdObj instanceof Long) {
-            userId = (Long) userIdObj;
-        } else if (userIdObj instanceof Integer) {
-            userId = ((Integer) userIdObj).longValue();
-        } else if (userIdObj instanceof String) {
-            try {
-                userId = Long.parseLong((String) userIdObj);
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        }
-        if (userId == null) {
-            return null;
-        }
+        return AuthenticatedActor.current(servletReq).orElse(null);
+    }
+
+    /** Only for {@code FACTORY_USER} actors — their id is a {@code users.id}. */
+    private User resolveFactoryUser(AuthenticatedActor actor) {
         try {
-            Optional<User> userOpt = userRepository.findById(userId);
+            Optional<User> userOpt = userRepository.findById(actor.id());
             return userOpt.orElse(null);
         } catch (Exception e) {
-            log.debug("Failed to resolve user for userId={}: {}", userId, e.getMessage());
+            log.debug("Failed to resolve user for userId={}: {}", actor.id(), e.getMessage());
             return null;
         }
     }

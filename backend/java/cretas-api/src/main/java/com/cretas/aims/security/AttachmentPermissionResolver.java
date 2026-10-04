@@ -101,37 +101,55 @@ public class AttachmentPermissionResolver {
         require(user, entityType, true);
     }
 
+    /** Throws 401/403 unless the caller of {@code request} may read attachments of {@code entityType}. */
+    public void requireRead(HttpServletRequest request, EntityType entityType) {
+        requireCaller(request, entityType, false);
+    }
+
     /**
-     * Resolve the authenticated user from {@code request.userId} set by
-     * {@link com.cretas.aims.config.JwtAuthInterceptor}. Returns {@code null} when
-     * the attribute is missing or no row matches — caller MUST treat null as 401.
+     * Throws 401/403 unless the caller of {@code request} may write attachments of {@code entityType}.
+     *
+     * @return the caller's actor id, stamped as uploader / editor
      */
-    public User resolveCurrentUser(HttpServletRequest request) {
-        if (request == null) {
-            return null;
+    public Long requireWrite(HttpServletRequest request, EntityType entityType) {
+        return requireCaller(request, entityType, true);
+    }
+
+    /**
+     * Decide from the typed actor set by {@link com.cretas.aims.config.JwtAuthInterceptor}.
+     *
+     * <p>⚠️ Branch on actor type BEFORE any users lookup: a platform admin's id is from
+     * platform_admins, an independent sequence, so {@code users.findById(actor.id())} would
+     * answer with an unrelated factory account (on a fresh DB, id=1 is F999's
+     * phase2a_test_user) and grant or refuse by that account's role.
+     */
+    private Long requireCaller(HttpServletRequest request, EntityType entityType, boolean write) {
+        AuthenticatedActor actor = request == null ? null : AuthenticatedActor.current(request).orElse(null);
+        if (actor == null) {
+            throw new BusinessException(401, "未登录 — 无法访问附件");
         }
-        Object userIdObj = request.getAttribute("userId");
-        if (userIdObj == null) {
-            return null;
-        }
-        Long userId;
-        if (userIdObj instanceof Long) {
-            userId = (Long) userIdObj;
-        } else if (userIdObj instanceof Integer) {
-            userId = ((Integer) userIdObj).longValue();
-        } else if (userIdObj instanceof String) {
-            try {
-                userId = Long.parseLong((String) userIdObj);
-            } catch (NumberFormatException e) {
-                return null;
+        if (actor.isPlatformAdmin()) {
+            if (entityType == null) {
+                throw new BusinessException(400, "entityType 必填");
             }
-        } else {
-            return null;
+            if (actor.hasFactoryBypass()) {
+                return actor.id();
+            }
+            throw new BusinessException(403,
+                    "平台角色 [" + actor.role() + "] 无权" + (write ? "管理" : "查看")
+                            + " [" + entityType.name() + "] 附件");
         }
+        User user = resolveFactoryUser(actor);
+        require(user, entityType, write);
+        return user.getId();
+    }
+
+    /** Only for {@code FACTORY_USER} actors — their id is a {@code users.id}. */
+    private User resolveFactoryUser(AuthenticatedActor actor) {
         try {
-            return userRepository.findById(userId).orElse(null);
+            return userRepository.findById(actor.id()).orElse(null);
         } catch (Exception e) {
-            log.debug("resolveCurrentUser failed for userId={}: {}", userId, e.getMessage());
+            log.debug("resolveFactoryUser failed for userId={}: {}", actor.id(), e.getMessage());
             return null;
         }
     }
