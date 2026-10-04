@@ -54,7 +54,9 @@ public final class FollowUpResolver {
 
     // ---------- 话语类 ----------
 
-    private static final String NUM = "([0-9]{1,6}(?:\\.[0-9]{1,3})?|[零一二两三四五六七八九十百千]{1,6})";
+    // 「千」后面跟「克」时是单位「千克」的一部分, 不是数字 (否则「十千克」被读成数字「十千」)
+    private static final String NUM =
+            "([0-9]{1,6}(?:\\.[0-9]{1,3})?|(?:[零一二两三四五六七八九十百]|千(?!克)){1,6})";
     private static final String UNIT = "(公斤|千克|kg|KG|Kg|斤|克|g|吨|箱|袋|件|个|包|桶|瓶|盒|份|筐|盘)?";
     private static final String QTY_LEAD = "(?:一共|总共|共|产量|数量是?|做了)?";
     private static final String HAN = "\\u4e00-\\u9fa5";
