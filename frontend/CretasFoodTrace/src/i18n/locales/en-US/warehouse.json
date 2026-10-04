@@ -308,6 +308,7 @@
       "print": "Print label",
       "printing": "Preparing...",
       "printFailed": "Printing failed. Check the printer and try again.",
+      "statusLabel": "Expiry status",
       "status": {
         "normal": "Normal",
         "warning": "Expiry Warning",

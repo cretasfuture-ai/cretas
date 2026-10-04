@@ -295,7 +295,7 @@ export function WHBatchDetailScreen() {
           <Info label={t("batch.detail.productionDate")} value={dateOnly(batch.productionDate)} />
           <Info label={t("batch.detail.shelfLife")} value={visibleDetail.shelfLifeDays == null ? null : `${visibleDetail.shelfLifeDays} ${t("batch.detail.daysUnit")}`} />
           <Info label={t("batch.detail.expiryDate")} value={dateOnly(batch.expiryDate)} />
-          <Info label={t("batch.detail.status")} value={expiryLabel} />
+          <Info label={t("batch.detail.statusLabel")} value={expiryLabel} />
         </Section>
         <Section title={t("batch.detail.storageInfo")}>
           <Info label={t("batch.detail.location")} value={batch.storageLocation} />

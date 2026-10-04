@@ -309,6 +309,7 @@
       "print": "打印标签",
       "printing": "生成中...",
       "printFailed": "打印失败，请检查打印机后重试",
+      "statusLabel": "到期状态",
       "status": {
         "normal": "正常",
         "warning": "临期提醒",

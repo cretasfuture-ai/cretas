@@ -20,7 +20,7 @@
 
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #913/APK14已验；R29送货价格/R30维护可读/R31旧出库/R32原料详情已目标+类型+审查归档，待Java门禁/CI/发布/APK15。18角色深流程未完；QC真实快门待目标，Mini专用服务未就绪/GPS超时；其他租户业务写0。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #914 R29-32目标209/tsc/Java108已验，R34翻译闸补修38已归档；待CI/合并/发布/APK15。18角色深流程未完；QC真实快门待目标，Mini专用服务未就绪/GPS超时；其他租户业务写0。
 
 
 
