@@ -2,6 +2,7 @@ package com.cretas.aims.entity.inventory;
 
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
@@ -75,6 +76,7 @@ public class SalesDeliveryItem extends BaseEntity {
     private BigDecimal packagingFactor;
 
     @Column(name = "unit_price", precision = 15, scale = 4)
+    @PriceSensitive
     private BigDecimal unitPrice;
 
     /** 关联扣减的成品批次ID */

@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 
 const mockNavigate = jest.fn();
 const mockRouteParams = { equipmentId: '42' };
@@ -199,6 +199,7 @@ describe('EquipmentDetailScreen real readback', () => {
       { id: 1, equipmentId: 42, maintenanceDate: '2026-10-01', cost: 0, description: 'zero', performedBy: 'tech' },
       { id: 2, equipmentId: 42, maintenanceDate: '2026-10-02', cost: null, description: 'missing', performedBy: 'tech' },
       { id: 3, equipmentId: 42, maintenanceDate: '2026-10-03', cost: -1, description: 'invalid', performedBy: 'tech' },
+      { id: 4, equipmentId: 42, maintenanceDate: undefined, cost: undefined, description: undefined, performedBy: undefined },
     ] as never);
     jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
     jest.spyOn(equipmentApiClient, 'calculateDepreciatedValue').mockResolvedValue(null as never);
@@ -206,9 +207,13 @@ describe('EquipmentDetailScreen real readback', () => {
     const view = render(<EquipmentDetailScreen />);
 
     await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
-    const costCells = view.UNSAFE_getAllByProps({ numeric: true });
-    expect(costCells.some((cell) => cell.props.children === '¥0')).toBe(true);
-    expect(costCells.some((cell) => JSON.stringify(cell.props.children).includes('N/A'))).toBe(true);
+    expect(view.getByTestId('equipment-detail-maintenance-cost-1').props.children).toBe('¥0');
+    expect(view.getByTestId('equipment-detail-maintenance-cost-2').props.children).toBe('equipmentDetail.maintenanceRecords.missingCost');
+    const missingRecord = view.getByTestId('equipment-detail-maintenance-card-4');
+    expect(within(missingRecord).getByText('equipmentDetail.maintenanceRecords.date')).toBeTruthy();
+    expect(within(missingRecord).getByText('equipmentDetail.maintenanceRecords.missingDate')).toBeTruthy();
+    expect(within(missingRecord).getByText('equipmentDetail.maintenanceRecords.missingTechnician')).toBeTruthy();
+    expect(within(missingRecord).getByText('equipmentDetail.maintenanceRecords.missingDescription')).toBeTruthy();
   });
 
   it('shows real maintenance descriptions and expands all returned records without inventing a type', async () => {
@@ -217,7 +222,9 @@ describe('EquipmentDetailScreen real readback', () => {
       equipmentId: 42,
       maintenanceDate: `2026-10-${String(index + 1).padStart(2, '0')}`,
       cost: index === 0 ? 0 : null,
-      description: `真实维护内容-${index + 1}`,
+      description: index === 5
+        ? '审计探测2-验证maintenanceType是否生效-完整维护内容不应被截断'
+        : `真实维护内容-${index + 1}`,
       performedBy: '现场技术员',
     }));
     jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue(equipment());
@@ -233,7 +240,9 @@ describe('EquipmentDetailScreen real readback', () => {
     expect(view.queryByText('Routine Maintenance')).toBeNull();
 
     fireEvent.press(view.getByTestId('equipment-detail-maintenance-toggle'));
-    expect(view.getByTestId('equipment-detail-maintenance-description-6').props.children).toBe('真实维护内容-6');
+    const fullDescription = view.getByTestId('equipment-detail-maintenance-description-6');
+    expect(fullDescription.props.children).toBe('审计探测2-验证maintenanceType是否生效-完整维护内容不应被截断');
+    expect(fullDescription.props.numberOfLines).toBeUndefined();
     fireEvent.press(view.getByTestId('equipment-detail-maintenance-toggle'));
     expect(view.queryByTestId('equipment-detail-maintenance-description-6')).toBeNull();
   });

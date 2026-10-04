@@ -374,6 +374,7 @@
   "equipmentDetail": {
     "title": "设备详情",
     "hours": "{{value}}小时",
+    "missingValue": "未提供",
     "sections": {
       "basicInfo": "基本信息",
       "realtimeParams": "实时参数",
@@ -424,7 +425,11 @@
       "cost": "费用",
       "empty": "暂无维护记录",
       "expand": "展开全部记录",
-      "collapse": "收起记录"
+      "collapse": "收起记录",
+      "missingDate": "未填写日期",
+      "missingTechnician": "未填写技术员",
+      "missingDescription": "未填写维护内容",
+      "missingCost": "未提供费用"
     },
     "actions": {
       "viewAlerts": "查看工厂告警",

@@ -298,6 +298,18 @@
       "title": "批次详情",
       "loading": "加载批次详情...",
       "noData": "暂无批次数据",
+      "expiryUnknown": "到期日期未知",
+      "expired": "已过期",
+      "daysRemainingShort": "天后到期",
+      "daysUnit": "天",
+      "storageType": "储存类型",
+      "movingAvgPrice": "移动均价",
+      "analysisUnavailable": "暂无实际分析数据",
+      "consumptionUnavailable": "暂无实际消耗记录",
+      "print": "打印标签",
+      "printing": "生成中...",
+      "printFailed": "打印失败，请检查打印机后重试",
+      "statusLabel": "到期状态",
       "status": {
         "normal": "正常",
         "warning": "临期提醒",
@@ -374,6 +386,17 @@
     "putawayFailed": "上架失败",
     "loadListFailed": "加载入库列表失败",
     "loadBatchDetailFailed": "加载批次详情失败"
+    ,"retry": "重试",
+    "factoryUnavailable": "无法确认当前工厂，请重新登录",
+    "batchIdentityMissing": "缺少批次或物料身份，无法安全加载",
+    "batchIdentityMismatch": "批次身份与当前工厂不匹配，未显示数据",
+    "traceBatchNumberMissing": "该批次没有有效批号，无法查询追溯",
+    "traceIdentityMismatch": "追溯响应工厂不匹配，未显示数据",
+  "loadInventoryDetailFailed": "库存详情加载失败，请重试",
+  "loadTraceFailed": "追溯数据加载失败，请重试",
+  "printIdentityMismatch": "标签响应与当前批次或工厂不匹配，未执行打印",
+  "printLabelUnavailable": "没有可信标签二维码，未执行打印，请重试",
+  "parentNavigationUnavailable": "暂时无法打开召回管理，请返回后重试"
   },
   "profile": {
     "title": "我的",
@@ -581,7 +604,17 @@
       "traceability": "追溯信息",
       "upstream": "上游信息",
       "downstream": "下游信息",
-      "qualityRecords": "质检记录"
+      "productionImpact": "受影响生产批次",
+      "qualityRecords": "质检记录",
+      "inbound": "入库",
+      "usage": "消耗",
+      "shipment": "出库",
+      "events": "实际记录",
+      "noData": "暂无追溯记录",
+      "noQualityRecords": "暂无实际质检记录",
+      "qualityUnavailable": "原料影响接口未提供质检记录",
+  "partialFailure": "追溯信息部分未能加载，请重试",
+  "recall": "召回管理"
     },
     "recall": {
       "title": "召回管理",
@@ -828,7 +861,16 @@
     "reservedStock": "预留库存",
     "location": "库位",
     "unitPrice": "单价",
-    "totalValue": "总价值"
+    "totalValue": "总价值",
+    "movingAvgPrice": "移动均价",
+    "status": "库存状态",
+    "statusUnavailable": "暂无可信库存阈值",
+  "totalFromApi": "按相同计量单位汇总的实际库存",
+  "loadedSummary": "已加载批次的实际库存汇总",
+    "mixedUnits": "单位不同，分别显示",
+    "unknownUnit": "单位未知",
+    "unassignedLocation": "未登记库位",
+    "noData": "暂无库存详情"
   },
   "batchDetail": {
     "title": "批次详情",

@@ -45,7 +45,7 @@ export interface WarehouseDeliveryItem {
   /** 计划发货数量 (BigDecimal). confirm 时被实发数量覆盖. */
   deliveredQuantity: number;
   unit?: string;
-  unitPrice?: number;
+  unitPrice?: number | null;
   finishedGoodsBatchId?: string;
   sourceWarehouseCode?: string;
   remark?: string;
@@ -69,7 +69,7 @@ export interface WarehouseDeliveryRecord {
   trackingNumber?: string | null;
   deliveryMethod?: 'LOGISTICS' | 'SELF_PICKUP' | 'SELF_DELIVERY' | string | null;
   status: SalesDeliveryStatus | string;
-  totalAmount?: number;
+  totalAmount?: number | null;
   remark?: string | null;
   items?: WarehouseDeliveryItem[];
   createdAt?: string;

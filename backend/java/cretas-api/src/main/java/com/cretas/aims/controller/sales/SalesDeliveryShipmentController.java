@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.inventory.CreateDeliveryShipmentRequest;
+import com.cretas.aims.dto.inventory.SalesDeliveryResponseCopies;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.SalesService;
@@ -27,7 +28,8 @@ public class SalesDeliveryShipmentController {
     @RequirePermission({"sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"})
     public ApiResponse<List<SalesDeliveryRecord>> list(
             @PathVariable String factoryId, @PathVariable String parentDeliveryId) {
-        return ApiResponse.success("查询成功", salesService.getDeliveryShipments(factoryId, parentDeliveryId));
+        return ApiResponse.success("查询成功",
+                SalesDeliveryResponseCopies.records(salesService.getDeliveryShipments(factoryId, parentDeliveryId)));
     }
 
     @PostMapping
@@ -39,7 +41,8 @@ public class SalesDeliveryShipmentController {
             @Valid @RequestBody CreateDeliveryShipmentRequest request) {
         Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
         return ApiResponse.success("子发运单创建成功",
-                salesService.createDeliveryShipment(factoryId, parentDeliveryId, request, userId));
+                SalesDeliveryResponseCopies.record(
+                        salesService.createDeliveryShipment(factoryId, parentDeliveryId, request, userId)));
     }
 
     @PostMapping("/{shipmentId}/cancel")
@@ -51,6 +54,7 @@ public class SalesDeliveryShipmentController {
             @RequestHeader("Authorization") String authorization) {
         Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
         return ApiResponse.success("子发运单已取消，剩余可安排数量已释放",
-                salesService.cancelDeliveryShipment(factoryId, parentDeliveryId, shipmentId, userId));
+                SalesDeliveryResponseCopies.record(
+                        salesService.cancelDeliveryShipment(factoryId, parentDeliveryId, shipmentId, userId)));
     }
 }

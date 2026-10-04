@@ -107,7 +107,7 @@ export function MaterialBatchDetailScreen() {
     });
   };
 
-  const formatCurrency = (amount?: number): string => {
+  const formatCurrency = (amount: number | null | undefined): string => {
     if (amount === undefined || amount === null) return '-';
     return `¥${amount.toFixed(2)}`;
   };

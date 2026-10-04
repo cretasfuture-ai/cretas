@@ -1,688 +1,300 @@
-/**
- * 库存详情页面
- * 对应原型: warehouse/inventory-detail.html
- */
+/** 原材料库存详情：只展示当前工厂 API 实际返回的数据。 */
 
-import React, { useState, useEffect, useCallback } from "react";
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  ActivityIndicator,
-} from "react-native";
-import { Text, Surface, Button, Divider, useTheme } from "react-native-paper";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View } from "react-native";
+import { Button, Surface, Text } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useNavigation, useRoute, RouteProp, CommonActions } from "@react-navigation/native";
+import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { useTranslation } from 'react-i18next';
+import { useTranslation } from "react-i18next";
+import { useAuthStore } from "../../../store/authStore";
+import { canViewPrice } from "../../../utils/priceViewAccess";
 import { WHInventoryStackParamList } from "../../../types/navigation";
-import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
-import { handleError } from "../../../utils/errorHandler";
-import { formatNumberWithCommas } from "../../../utils/formatters";
+import { MaterialBatch, materialBatchApiClient } from "../../../services/api/materialBatchApiClient";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 type RouteType = RouteProp<WHInventoryStackParamList, "WHInventoryDetail">;
+type AuthUser = ReturnType<typeof useAuthStore.getState>["user"];
 
 interface BatchItem {
   id: string;
   batchNumber: string;
   quantity: number;
-  inboundDate: string;
-  location: string;
-  expiryDays: number;
-  isNew?: boolean;
-  isFifo?: boolean;
+  quantityUnit: string | null;
+  inboundDate: string | null;
+  expiryDays: number | null;
+  location: string | null;
 }
 
-interface OperationLog {
-  id: string;
-  time: string;
-  action: string;
-  type: "in" | "out" | "normal";
+interface InventoryDetailData {
+  materialName: string | null;
+  materialType: string | null;
+  totalQuantity: number | null;
+  quantityUnit: string | null;
+  batches: BatchItem[];
+  locationDistribution: { name: string; quantity: number; unit: string | null }[];
+  unitPrice: number | null;
+  movingAvgPrice: number | null;
 }
 
-/**
- * 计算批次距离过期的天数
- */
-const calculateExpiryDays = (expiryDate?: string): number => {
-  if (!expiryDate) return 999; // 无过期日期，显示很大
-  const expiry = new Date(expiryDate);
-  const now = new Date();
-  return Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-};
+function factoryOf(user: AuthUser): string | null {
+  return user?.factoryUser?.factoryId ?? user?.factoryId ?? null;
+}
 
-/**
- * 判断库存状态
- */
-const getInventoryStatus = (totalQty: number, safetyStock: number): { status: string; label: string } => {
-  if (totalQty >= safetyStock * 1.5) return { status: 'sufficient', label: '充足' };
-  if (totalQty >= safetyStock) return { status: 'warning', label: '正常' };
-  if (totalQty > 0) return { status: 'danger', label: '不足' };
-  return { status: 'danger', label: '缺货' };
-};
+function ownerKeyOf(user: AuthUser, routeKey: string): string {
+  return [
+    user?.id ?? "",
+    factoryOf(user) ?? "",
+    user?.userType ?? "",
+    user?.factoryUser?.role ?? user?.platformUser?.role ?? "",
+    JSON.stringify(user?.factoryUser?.modulePermissions ?? {}),
+    routeKey,
+  ].join("|");
+}
 
-/**
- * 根据存储类型获取温度和保质期描述
- */
-const getStorageInfo = (storageType?: string): { temp: string; shelfLife: string } => {
-  switch (storageType?.toLowerCase()) {
-    case 'frozen':
-      return { temp: '-18°C (冷冻)', shelfLife: '90天' };
-    case 'fresh':
-      return { temp: '0°C ~ 4°C (冷藏)', shelfLife: '7天' };
-    case 'dry':
-      return { temp: '常温', shelfLife: '365天' };
-    default:
-      return { temp: '0°C ~ 4°C (冷藏)', shelfLife: '7天' };
+function validDate(value?: string | null): Date | null {
+  if (!value) return null;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function expiryDays(expiryDate?: string | null): number | null {
+  const expiry = validDate(expiryDate);
+  if (!expiry) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.ceil((expiry.getTime() - today.getTime()) / 86400000);
+}
+
+function displayDate(value?: string | null): string | null {
+  return value ? value.split("T")[0] ?? null : null;
+}
+
+function isMaterialBatchRecord(value: unknown): value is MaterialBatch {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === "string"
+    && typeof record.batchNumber === "string"
+    && typeof record.factoryId === "string"
+    && typeof record.materialTypeId === "string"
+    && typeof record.inboundQuantity === "number"
+    && typeof record.remainingQuantity === "number";
+}
+
+function parseBatchList(response: Awaited<ReturnType<typeof materialBatchApiClient.getMaterialBatches>>): MaterialBatch[] {
+  if (!response?.success || !response.data || !Array.isArray(response.data.content) || !Number.isInteger(response.data.totalPages) || response.data.totalPages < 0) {
+    throw new Error(response?.message || "批次数据格式无效");
   }
-};
+  if (!response.data.content.every(isMaterialBatchRecord)) throw new Error("批次数据格式无效");
+  return response.data.content;
+}
 
 export function WHInventoryDetailScreen() {
-  const { t } = useTranslation('warehouse');
-  const theme = useTheme();
+  const { t } = useTranslation("warehouse");
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
-  const { materialId } = route.params;
-
+  const user = useAuthStore((state) => state.user);
+  const { materialId, inventoryId } = route.params;
+  const routeKey = `${materialId ?? ""}:${inventoryId ?? ""}`;
+  const ownerKey = ownerKeyOf(user, routeKey);
+  const factoryId = factoryOf(user);
   const [loading, setLoading] = useState(true);
-  const [batches, setBatches] = useState<MaterialBatch[]>([]);
-  const [inventoryDetail, setInventoryDetail] = useState<{
-    materialName: string;
-    materialType: string;
-    totalQuantity: number;
-    safetyStock: number;
-    status: string;
-    statusLabel: string;
-    storageTemp: string;
-    shelfLife: string;
-    unitPrice: number;
-    movingAvgPrice: number | null;
-    totalValue: number;
-    batches: BatchItem[];
-    locationDistribution: { name: string; quantity: number }[];
-    operationLogs: OperationLog[];
-  } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [errorOwnerKey, setErrorOwnerKey] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ ownerKey: string; data: InventoryDetailData } | null>(null);
+  const generationRef = useRef(0);
+  const renderContextRef = useRef({ ownerKey, routeKey, user });
+  renderContextRef.current = { ownerKey, routeKey, user };
 
-  // 加载数据
+  const isLiveOwner = useCallback(() =>
+    useAuthStore.getState().user === user
+      && renderContextRef.current.ownerKey === ownerKey
+      && renderContextRef.current.routeKey === routeKey,
+    [ownerKey, routeKey, user],
+  );
+
   const loadData = useCallback(async () => {
+    const actor = user;
+    const requestOwnerKey = ownerKey;
+    if (!isLiveOwner()) return;
+    const generation = ++generationRef.current;
+    const isCurrent = () =>
+      useAuthStore.getState().user === actor
+      && isLiveOwner()
+      && renderContextRef.current.ownerKey === requestOwnerKey
+      && generationRef.current === generation;
+
+    setLoading(true);
+    setLoadError(null);
+    setErrorOwnerKey(null);
+    setDetail(null);
+
     try {
-      // 获取该物料类型的所有批次
-      const response = await materialBatchApiClient.getMaterialBatches({
-        materialTypeId: materialId,
-        page: 1,
-        size: 50,
-      }) as { data?: { content?: MaterialBatch[] }; content?: MaterialBatch[] };
-
-      const batchList = response?.data?.content ?? response?.content ?? [];
-      setBatches(batchList);
-
-      const firstBatch = batchList[0];
-      if (batchList.length > 0 && firstBatch) {
-        // 从批次数据构建详情
-        const totalQty = batchList.reduce((sum, b) => sum + (b.remainingQuantity ?? 0), 0);
-        const safetyStock = 200; // 默认安全库存
-        const statusInfo = getInventoryStatus(totalQty, safetyStock);
-        const storageInfo = getStorageInfo(firstBatch.storageType);
-        const unitPrice = firstBatch.unitPrice ?? 30;
-        const movingAvgPrice = firstBatch.movingAvgPrice ?? null;
-
-        // 构建批次列表
-        const batchItems: BatchItem[] = batchList.map((b, idx) => ({
-          id: b.id,
-          batchNumber: b.batchNumber || `MB-${b.id}`,
-          quantity: b.remainingQuantity ?? 0,
-          inboundDate: b.createdAt?.split('T')[0] ?? '',
-          // 🔴 2026-08-27: 原来兜底成 'A区-冷藏库'(编出来的位置) ⇒ 改成如实说未分配。
-          location: b.storageLocation || '未分配',
-          expiryDays: calculateExpiryDays(b.expiryDate),
-          isFifo: idx === 0, // 第一个批次标记为FIFO优先消耗
-          isNew: calculateExpiryDays(b.expiryDate) >= 7,
-        }));
-
-        // 构建库位分布
-        const locationMap = new Map<string, number>();
-        batchList.forEach(b => {
-          // 🔴 这一处比下面那处更糟: 它在建**库位分布图**。没有位置的批次被兜进一个
-          //    编出来的 'A区-冷藏库', 图上就出现一根「那里有货」的柱子。
-          //    实测 F006 的 139 条原料批次位置全是 NULL ⇒ 整张分布图会是一根假柱子。
-          //    ⇒ 归到「未分配」: 如实说「这些货还没登记位置」, 而不是说错地方。
-          const loc = b.storageLocation || '未分配';
-          locationMap.set(loc, (locationMap.get(loc) ?? 0) + (b.remainingQuantity ?? 0));
-        });
-        const locationDistribution = Array.from(locationMap.entries()).map(([name, quantity]) => ({
-          name,
-          quantity,
-        }));
-
-        setInventoryDetail({
-          materialName: firstBatch.materialName || '物料',
-          materialType: firstBatch.storageType?.toLowerCase() === 'frozen' ? '冻品' : '鲜品',
-          totalQuantity: totalQty,
-          safetyStock,
-          status: statusInfo.status,
-          statusLabel: statusInfo.label,
-          storageTemp: storageInfo.temp,
-          shelfLife: storageInfo.shelfLife,
-          unitPrice,
-          movingAvgPrice,
-          totalValue: totalQty * unitPrice,
-          batches: batchItems,
-          locationDistribution,
-          operationLogs: [], // 操作日志需要另外API获取，暂时为空
-        });
+      if (!actor || !factoryId) throw new Error(t("messages.factoryUnavailable"));
+      let materialTypeId = materialId?.trim() || "";
+      if (!materialTypeId && inventoryId) {
+        if (!isCurrent()) return;
+        const batchResponse = await materialBatchApiClient.getBatchById(inventoryId, factoryId);
+        if (!isCurrent()) return;
+        const batch = batchResponse?.success ? batchResponse.data : null;
+        if (!isMaterialBatchRecord(batch) || batch.id !== inventoryId || batch.factoryId !== factoryId || !batch.materialTypeId) {
+          throw new Error(t("messages.batchIdentityMismatch"));
+        }
+        materialTypeId = batch.materialTypeId;
       }
-    } catch (error) {
-      handleError(error, { title: t('messages.loadBatchDetailFailed') });
+      if (!materialTypeId) throw new Error(t("messages.batchIdentityMissing"));
+      if (!isCurrent()) return;
+      const response = await materialBatchApiClient.getMaterialBatches({ factoryId, materialTypeId, page: 1, size: 50 });
+      if (!isCurrent()) return;
+      const batchList = parseBatchList(response);
+      if (batchList.some((batch) => batch.factoryId !== factoryId || batch.materialTypeId !== materialTypeId)) {
+        throw new Error(t("messages.batchIdentityMismatch"));
+      }
+
+      const batchUnits = batchList.map((batch) => batch.quantityUnit ?? null);
+      const firstUnit = batchUnits[0] ?? null;
+      const quantityUnit = batchUnits.length > 0 && firstUnit !== null && batchUnits.every((unit) => unit === firstUnit)
+        ? firstUnit
+        : null;
+      const totalQuantity = quantityUnit !== null ? batchList.reduce((sum, batch) => sum + batch.remainingQuantity, 0) : null;
+      const batchItems = batchList.map((batch): BatchItem => ({
+        id: batch.id,
+        batchNumber: batch.batchNumber,
+        quantity: batch.remainingQuantity,
+        quantityUnit: batch.quantityUnit ?? null,
+        inboundDate: displayDate(batch.inboundDate || batch.createdAt),
+        expiryDays: expiryDays(batch.expiryDate),
+        location: batch.storageLocation ?? null,
+      }));
+      const locations = new Map<string, { name: string; quantity: number; unit: string | null }>();
+      for (const batch of batchList) {
+        const name = batch.storageLocation || t("inventoryDetail.unassignedLocation");
+        const unit = batch.quantityUnit ?? null;
+        const key = `${name}\u0000${unit ?? ""}`;
+        const previous = locations.get(key) ?? { name, quantity: 0, unit };
+        locations.set(key, { name, quantity: previous.quantity + batch.remainingQuantity, unit });
+      }
+      const firstBatch = batchList[0];
+      const data: InventoryDetailData = {
+        materialName: firstBatch?.materialName ?? null,
+        materialType: firstBatch?.materialCategory ?? firstBatch?.storageType ?? null,
+        totalQuantity,
+        quantityUnit,
+        batches: batchItems,
+        locationDistribution: [...locations.values()],
+        unitPrice: canViewPrice(actor) ? firstBatch?.unitPrice ?? null : null,
+        movingAvgPrice: canViewPrice(actor) ? firstBatch?.movingAvgPrice ?? null : null,
+      };
+      if (!isCurrent()) return;
+      setDetail({ ownerKey: requestOwnerKey, data });
+    } catch (error: unknown) {
+      if (!isCurrent()) return;
+      setLoadError(error instanceof Error ? error.message : t("messages.loadInventoryDetailFailed"));
+      setErrorOwnerKey(requestOwnerKey);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [materialId]);
+  }, [factoryId, inventoryId, isLiveOwner, materialId, ownerKey, t, user]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { void loadData(); }, [loadData]);
 
-  // 加载中显示
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container} edges={["top"]}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>{t('inventoryDetail.title')}</Text>
-          </View>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>{t('inventoryDetail.loading')}</Text>
-        </View>
-      </SafeAreaView>
-    );
+  const visibleDetail = detail?.ownerKey === ownerKey ? detail.data : null;
+  const visibleError = errorOwnerKey === ownerKey ? loadError : null;
+  const goBackIfCurrent = useCallback(() => { if (isLiveOwner()) navigation.goBack(); }, [isLiveOwner, navigation]);
+  const openBatchIfCurrent = useCallback((batch: BatchItem) => {
+    if (!isLiveOwner()) return;
+    navigation.navigate("WHBatchDetail", { batchId: batch.id, batchNumber: batch.batchNumber });
+  }, [isLiveOwner, navigation]);
+  const openExpireIfCurrent = useCallback(() => {
+    if (!isLiveOwner()) return;
+    navigation.navigate("WHExpireHandle", {});
+  }, [isLiveOwner, navigation]);
+  const renderLoading = loading || (!visibleDetail && !visibleError);
+
+  if (renderLoading) {
+    return <StateScreen title={t("inventoryDetail.title")} loading message={t("inventoryDetail.loading")} onBack={goBackIfCurrent} />;
   }
-
-  // 无数据显示
-  if (!inventoryDetail) {
-    return (
-      <SafeAreaView style={styles.container} edges={["top"]}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>{t('inventoryDetail.title')}</Text>
-          </View>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>{t('batch.detail.noData')}</Text>
-        </View>
-      </SafeAreaView>
-    );
+  if (visibleError || !visibleDetail) {
+    return <StateScreen title={t("inventoryDetail.title")} message={visibleError || t("inventoryDetail.noData")} onBack={goBackIfCurrent} onRetry={() => void loadData()} retryLabel={t("messages.retry")} />;
   }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "sufficient":
-        return { color: "#388e3c", bgColor: "#e8f5e9" };
-      case "warning":
-        return { color: "#f57c00", bgColor: "#fff3e0" };
-      case "danger":
-        return { color: "#d32f2f", bgColor: "#ffebee" };
-      default:
-        return { color: "#666", bgColor: "#f5f5f5" };
-    }
-  };
-
-  const getExpiryTagStyle = (days: number, isNew?: boolean) => {
-    if (isNew) return { color: "#388e3c", bgColor: "#e8f5e9", label: "新入库" };
-    if (days <= 3) return { color: "#f57c00", bgColor: "#fff3e0", label: `${days}天后过期` };
-    return { color: "#666", bgColor: "#f5f5f5", label: `${days}天后过期` };
-  };
-
-  const statusColor = getStatusColor(inventoryDetail.status);
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>{t('inventoryDetail.title')}</Text>
-          <Text style={styles.headerSubtitle}>{inventoryDetail.materialName}</Text>
-        </View>
-        <View style={styles.headerRight} />
-      </View>
-
-      {/* 顶部操作按钮 */}
-      <View style={styles.topActions}>
-        {/* 🔴 2026-08-17 摘掉「调拨」按钮 —— WHInventoryTransferScreen 是原型屏:
-            库位下拉写死、单位硬编码 kg、executeTransfer 只改批次的 storageLocation 字段,
-            用户输入的调拨数量完全不参与, 不产生调拨单。点完显示「调拨成功」而什么都没调走。
-            成因与接回方案见 WHInventoryListScreen 里同日的那段注释。 */}
-        <Button
-          mode="outlined"
-          onPress={() => navigation.dispatch(CommonActions.navigate("WHExpireHandle"))}
-          style={[styles.topActionBtn, styles.warningBtn]}
-          labelStyle={styles.warningBtnLabel}
-        >
-          {t('batch.detail.actions.expireHandle')}
-        </Button>
-      </View>
-
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* 库存概览 */}
-        <Surface style={styles.overviewCard} elevation={1}>
-          <View style={styles.overviewMain}>
-            <Text style={styles.overviewQty}>{inventoryDetail.totalQuantity}</Text>
-            <Text style={styles.overviewUnit}>kg</Text>
-          </View>
-          <View style={styles.overviewMeta}>
-            <View style={styles.overviewItem}>
-              <Text style={styles.overviewLabel}>{t('home.alerts.safetyStock')}</Text>
-              <Text style={styles.overviewValue}>{inventoryDetail.safetyStock} kg</Text>
-            </View>
-            <View style={styles.overviewItem}>
-              <Text style={styles.overviewLabel}>{t('inventory.card.status')}</Text>
-              <Text style={[styles.overviewValue, { color: statusColor.color }]}>
-                {inventoryDetail.statusLabel}
-              </Text>
-            </View>
-          </View>
+      <Header title={t("inventoryDetail.title")} subtitle={visibleDetail.materialName} onBack={goBackIfCurrent} />
+      <View style={{ marginHorizontal: 16, paddingVertical: 8 }}><Button mode="outlined" onPress={openExpireIfCurrent}>{t("batch.detail.actions.expireHandle")}</Button></View>
+      <ScrollView style={styles.content}>
+        <Surface style={styles.card} elevation={1}>
+          <Text style={styles.bigNumber}>{visibleDetail.totalQuantity == null ? "—" : visibleDetail.totalQuantity}</Text>
+          <Text style={styles.unit}>{visibleDetail.quantityUnit || t("inventoryDetail.mixedUnits")}</Text>
+          <Text style={styles.muted}>{t("inventoryDetail.loadedSummary")}</Text>
         </Surface>
-
-        {/* 基本信息 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('inventoryDetail.basicInfo')}</Text>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>{t('inventoryDetail.materialName')}</Text>
-            <Text style={styles.infoValue}>{inventoryDetail.materialName}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>{t('batch.detail.materialType')}</Text>
-            <Text style={styles.infoValue}>{inventoryDetail.materialType}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>{t('batch.detail.temperature')}</Text>
-            <Text style={styles.infoValue}>{inventoryDetail.storageTemp}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>{t('batch.detail.shelfLife')}</Text>
-            <Text style={styles.infoValue}>{inventoryDetail.shelfLife}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>{t('inventoryDetail.unitPrice')}</Text>
-            <Text style={styles.infoValue}>¥{inventoryDetail.unitPrice}/kg</Text>
-          </View>
-          <View style={styles.infoRow} testID="moving-avg-price">
-            <Text style={styles.infoLabel}>移动均价</Text>
-            <Text style={styles.infoValue}>
-              {inventoryDetail.movingAvgPrice != null
-                ? `¥${inventoryDetail.movingAvgPrice.toFixed(2)}/kg`
-                : '暂无数据'}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>{t('inventoryDetail.totalValue')}</Text>
-            <Text style={[styles.infoValue, styles.highlightValue]}>
-              ¥{formatNumberWithCommas(inventoryDetail.totalValue)}
-            </Text>
-          </View>
-        </View>
-
-        {/* 批次列表 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            {t('inventoryDetail.batchList')} ({inventoryDetail.batches.length})
-          </Text>
-          {inventoryDetail.batches.map((batch) => {
-            const tagStyle = getExpiryTagStyle(batch.expiryDays, batch.isNew);
-            return (
-              <TouchableOpacity
-                key={batch.id}
-                style={styles.batchCard}
-                onPress={() =>
-                  navigation.navigate("WHBatchDetail", { batchId: batch.id })
-                }
-                activeOpacity={0.7}
-              >
-                <View style={styles.batchHeader}>
-                  <Text style={styles.batchNumber}>{batch.batchNumber}</Text>
-                  <View style={[styles.batchTag, { backgroundColor: tagStyle.bgColor }]}>
-                    <Text style={[styles.batchTagText, { color: tagStyle.color }]}>
-                      {tagStyle.label}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.batchContent}>
-                  <View style={styles.batchRow}>
-                    <Text style={styles.batchLabel}>{t('inventoryDetail.currentStock')}</Text>
-                    <Text style={styles.batchValue}>{batch.quantity} kg</Text>
-                  </View>
-                  <View style={styles.batchRow}>
-                    <Text style={styles.batchLabel}>{t('batch.detail.inboundDate')}</Text>
-                    <Text style={styles.batchValue}>{batch.inboundDate}</Text>
-                  </View>
-                  <View style={styles.batchRow}>
-                    <Text style={styles.batchLabel}>{t('inventoryDetail.location')}</Text>
-                    <Text style={styles.batchValue}>{batch.location}</Text>
-                  </View>
-                </View>
-                <View style={styles.batchFooter}>
-                  <Text style={styles.batchHint}>
-                    {batch.isFifo ? "FIFO" : batch.isNew ? t('batch.detail.daysLater', { days: batch.expiryDays }) : ""}
-                  </Text>
-                  <Text style={styles.batchAction}>{t('inventory.card.viewDetail')} &gt;</Text>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* 库位分布 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('inventoryDetail.location')}</Text>
-          {inventoryDetail.locationDistribution.map((loc, index) => (
-            <View key={index} style={styles.locationItem}>
-              <Text style={styles.locationName}>{loc.name}</Text>
-              <Text style={styles.locationQty}>{loc.quantity} kg</Text>
-            </View>
+        <Section title={t("inventoryDetail.basicInfo")}>
+          <Info label={t("inventoryDetail.materialName")} value={visibleDetail.materialName} />
+          <Info label={t("batch.detail.materialType")} value={visibleDetail.materialType} />
+          <Info label={t("inventoryDetail.status")} value={t("inventoryDetail.statusUnavailable")} />
+          {visibleDetail.unitPrice != null ? <Info label={t("inventoryDetail.unitPrice")} value={`¥${visibleDetail.unitPrice}`} /> : null}
+          {visibleDetail.movingAvgPrice != null ? <Info label={t("inventoryDetail.movingAvgPrice")} value={`¥${visibleDetail.movingAvgPrice}`} /> : null}
+        </Section>
+        <Section title={`${t("inventoryDetail.batchList")} (${visibleDetail.batches.length})`}>
+          {visibleDetail.batches.map((batch) => (
+            <TouchableOpacity key={batch.id} style={styles.batchCard} onPress={() => openBatchIfCurrent(batch)}>
+              <Text style={styles.batchNumber}>{batch.batchNumber}</Text>
+              <Info label={t("inventoryDetail.currentStock")} value={`${batch.quantity} ${batch.quantityUnit || t("inventoryDetail.unknownUnit")}`} />
+              <Info label={t("batch.detail.inboundDate")} value={batch.inboundDate} />
+              <Info label={t("inventoryDetail.location")} value={batch.location} />
+              <Info label={t("batch.detail.expiryDate")} value={batch.expiryDays == null ? t("batch.detail.expiryUnknown") : `${batch.expiryDays} ${t("batch.detail.daysRemainingShort")}`} />
+            </TouchableOpacity>
           ))}
-        </View>
-
-        {/* 操作记录 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('inventoryDetail.operationLog')}</Text>
-          <View style={styles.timeline}>
-            {inventoryDetail.operationLogs.map((log, index) => (
-              <View key={log.id} style={styles.timelineItem}>
-                <View
-                  style={[
-                    styles.timelineDot,
-                    log.type === "in" && styles.timelineDotIn,
-                    log.type === "out" && styles.timelineDotOut,
-                  ]}
-                />
-                {index < inventoryDetail.operationLogs.length - 1 && (
-                  <View style={styles.timelineLine} />
-                )}
-                <View style={styles.timelineContent}>
-                  <Text style={styles.timelineTime}>{log.time}</Text>
-                  <Text style={styles.timelineText}>{log.action}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <View style={{ height: 20 }} />
+        </Section>
+        <Section title={t("inventoryDetail.location")}>
+          {visibleDetail.locationDistribution.map((location) => <Info key={`${location.name}\u0000${location.unit ?? ""}`} label={location.name} value={`${location.quantity} ${location.unit || t("inventoryDetail.unknownUnit")}`} />)}
+        </Section>
+        <View style={styles.bottomSpace} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+function Header({ title, subtitle, onBack }: { title: string; subtitle?: string | null; onBack: () => void }) {
+  return <View style={styles.header}><TouchableOpacity style={styles.backButton} onPress={onBack}><MaterialCommunityIcons name="arrow-left" size={24} color="#fff" /></TouchableOpacity><View style={styles.headerCenter}><Text style={styles.headerTitle}>{title}</Text>{subtitle ? <Text style={styles.headerSubtitle}>{subtitle}</Text> : null}</View><View style={styles.headerRight} /></View>;
+}
+
+function StateScreen({ title, message, loading, onBack, onRetry, retryLabel }: { title: string; message: string; loading?: boolean; onBack: () => void; onRetry?: () => void; retryLabel?: string }) {
+  return <SafeAreaView style={styles.container} edges={["top"]}><Header title={title} onBack={onBack} /><View style={styles.state}>{loading ? <ActivityIndicator color="#4CAF50" /> : null}<Text style={styles.stateText}>{message}</Text>{onRetry ? <Button mode="contained" onPress={onRetry}>{retryLabel}</Button> : null}</View></SafeAreaView>;
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>;
+}
+
+function Info({ label, value }: { label: string; value: string | number | null | undefined }) {
+  return <View style={styles.infoRow}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoValue}>{value ?? "—"}</Text></View>;
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f5f5f5",
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#666",
-  },
-  header: {
-    backgroundColor: "#4CAF50",
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  backButton: {
-    padding: 4,
-  },
-  headerCenter: {
-    flex: 1,
-    alignItems: "center",
-    marginRight: 28,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#fff",
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.8)",
-    marginTop: 2,
-  },
-  headerRight: {
-    width: 28,
-  },
-  topActions: {
-    flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#fff",
-  },
-  topActionBtn: {
-    flex: 1,
-    borderRadius: 8,
-    borderColor: "#ddd",
-  },
-  topActionLabel: {
-    color: "#666",
-  },
-  warningBtn: {
-    borderColor: "#f57c00",
-  },
-  warningBtnLabel: {
-    color: "#f57c00",
-  },
-  content: {
-    flex: 1,
-  },
-  overviewCard: {
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderRadius: 12,
-    padding: 20,
-  },
-  overviewMain: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    justifyContent: "center",
-    marginBottom: 16,
-  },
-  overviewQty: {
-    fontSize: 48,
-    fontWeight: "bold",
-    color: "#4CAF50",
-  },
-  overviewUnit: {
-    fontSize: 20,
-    color: "#4CAF50",
-    marginLeft: 4,
-  },
-  overviewMeta: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-  },
-  overviewItem: {
-    alignItems: "center",
-  },
-  overviewLabel: {
-    fontSize: 13,
-    color: "#999",
-    marginBottom: 4,
-  },
-  overviewValue: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#333",
-  },
-  section: {
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderRadius: 12,
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#999",
-    marginBottom: 12,
-  },
-  infoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f5f5f5",
-  },
-  infoLabel: {
-    fontSize: 14,
-    color: "#666",
-  },
-  infoValue: {
-    fontSize: 14,
-    color: "#333",
-  },
-  highlightValue: {
-    color: "#4CAF50",
-    fontWeight: "600",
-  },
-  batchCard: {
-    backgroundColor: "#f9f9f9",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
-  },
-  batchHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  batchNumber: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-  },
-  batchTag: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  batchTagText: {
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  batchContent: {
-    gap: 4,
-  },
-  batchRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  batchLabel: {
-    fontSize: 13,
-    color: "#999",
-  },
-  batchValue: {
-    fontSize: 13,
-    color: "#333",
-  },
-  batchFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#eee",
-  },
-  batchHint: {
-    fontSize: 12,
-    color: "#f57c00",
-  },
-  batchAction: {
-    fontSize: 12,
-    color: "#4CAF50",
-  },
-  locationItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f5f5f5",
-  },
-  locationName: {
-    fontSize: 14,
-    color: "#333",
-  },
-  locationQty: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#4CAF50",
-  },
-  timeline: {},
-  timelineItem: {
-    flexDirection: "row",
-    minHeight: 50,
-  },
-  timelineDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#e0e0e0",
-    marginTop: 4,
-  },
-  timelineDotIn: {
-    backgroundColor: "#4CAF50",
-  },
-  timelineDotOut: {
-    backgroundColor: "#f44336",
-  },
-  timelineLine: {
-    position: "absolute",
-    left: 4,
-    top: 18,
-    bottom: 0,
-    width: 2,
-    backgroundColor: "#e0e0e0",
-  },
-  timelineContent: {
-    flex: 1,
-    marginLeft: 12,
-    paddingBottom: 16,
-  },
-  timelineTime: {
-    fontSize: 12,
-    color: "#999",
-    marginBottom: 2,
-  },
-  timelineText: {
-    fontSize: 14,
-    color: "#333",
-  },
+  container: { flex: 1, backgroundColor: "#f5f5f5" },
+  header: { backgroundColor: "#4CAF50", flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12 },
+  backButton: { minWidth: 44, minHeight: 44, justifyContent: "center" },
+  headerCenter: { flex: 1, alignItems: "center", marginRight: 44 },
+  headerTitle: { fontSize: 18, fontWeight: "600", color: "#fff" },
+  headerSubtitle: { fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 },
+  headerRight: { width: 0 },
+  content: { flex: 1 },
+  card: { backgroundColor: "#fff", margin: 16, borderRadius: 12, padding: 20, alignItems: "center" },
+  bigNumber: { fontSize: 42, fontWeight: "700", color: "#388e3c" },
+  unit: { fontSize: 16, color: "#555", marginTop: 4 },
+  muted: { color: "#777", marginTop: 8 },
+  section: { backgroundColor: "#fff", marginHorizontal: 16, marginBottom: 12, borderRadius: 12, padding: 16 },
+  sectionTitle: { fontSize: 16, fontWeight: "700", color: "#333", marginBottom: 10 },
+  infoRow: { flexDirection: "row", justifyContent: "space-between", gap: 12, paddingVertical: 7 },
+  infoLabel: { color: "#777", flex: 1 },
+  infoValue: { color: "#333", flex: 1, textAlign: "right" },
+  batchCard: { borderWidth: 1, borderColor: "#e0e0e0", borderRadius: 10, padding: 12, marginBottom: 10, minHeight: 44 },
+  batchNumber: { fontWeight: "700", color: "#333", marginBottom: 4 },
+  state: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, padding: 24 },
+  stateText: { color: "#555", textAlign: "center" },
+  bottomSpace: { height: 24 },
 });
 
 export default WHInventoryDetailScreen;

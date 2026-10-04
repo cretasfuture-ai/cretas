@@ -1,602 +1,272 @@
-/**
- * 批次追溯页面
- * 对应原型: warehouse/batch-trace.html
- */
+/** 原材料批次追溯：先确认本厂批次身份，再查询真实批号的上下游记录。 */
 
-import React, { useState, useEffect, useCallback } from "react";
-import { appAlert } from '../../../components/ui/AppDialog';
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  ActivityIndicator,
-} from "react-native";
-import { Text, Surface, Button, useTheme } from "react-native-paper";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View } from "react-native";
+import { Button, Surface, Text } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useNavigation, useRoute, RouteProp, CommonActions } from "@react-navigation/native";
+import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { WHInventoryStackParamList } from "../../../types/navigation";
-import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
-import { traceabilityApiClient, FullTraceResponse } from "../../../services/api/traceabilityApiClient";
-import { handleError } from "../../../utils/errorHandler";
-import { formatDate, formatDateTime } from "../../../utils/formatters";
+import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
+import { useTranslation } from "react-i18next";
+import { useAuthStore } from "../../../store/authStore";
+import { WHInventoryStackParamList, WarehouseManagerTabParamList } from "../../../types/navigation";
+import { MaterialBatch, materialBatchApiClient } from "../../../services/api/materialBatchApiClient";
+import { ImpactResponse, LineageNode, traceabilityApiClient } from "../../../services/api/traceabilityApiClient";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
+type TabNavigationProp = BottomTabNavigationProp<WarehouseManagerTabParamList>;
 type RouteType = RouteProp<WHInventoryStackParamList, "WHBatchTrace">;
+type AuthUser = ReturnType<typeof useAuthStore.getState>["user"];
 
-interface TraceNode {
-  step: number;
-  title: string;
-  type: "source" | "inbound" | "storage" | "outbound" | "current";
-  content: { label: string; value: string; status?: "success" | "warning" | "clickable" }[];
-  subItems?: {
-    header: string;
-    qty: string;
-    rows: { label: string; value: string }[];
-  }[];
+interface UsageRecord { id?: string | number; quantity?: number; usedQuantity?: number; unit?: string; quantityUnit?: string; createdAt?: string; usedAt?: string; }
+interface TraceEvent { id: string; label: string; date: string | null; quantity: string | null; detail?: string | null; }
+interface TraceData { batch: MaterialBatch; events: TraceEvent[]; impact: ImpactResponse | null; partial: boolean; }
+
+function factoryOf(user: AuthUser): string | null { return user?.factoryUser?.factoryId ?? user?.factoryId ?? null; }
+function ownerKeyOf(user: AuthUser, batchId: string, batchNumber: string): string { return [user?.id ?? "", factoryOf(user) ?? "", user?.userType ?? "", user?.factoryUser?.role ?? user?.platformUser?.role ?? "", JSON.stringify(user?.factoryUser?.modulePermissions ?? {}), batchId, batchNumber].join("|"); }
+function dateOnly(value?: string | null): string | null { return value ? value.split("T")[0] ?? null : null; }
+function isUsageRecord(value: unknown): value is UsageRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (typeof record.quantity === "number" || typeof record.usedQuantity === "number")
+    && (record.quantity === undefined || typeof record.quantity === "number")
+    && (record.usedQuantity === undefined || typeof record.usedQuantity === "number")
+    && (record.unit === undefined || typeof record.unit === "string")
+    && (record.quantityUnit === undefined || typeof record.quantityUnit === "string")
+    && (record.createdAt === undefined || typeof record.createdAt === "string")
+    && (record.usedAt === undefined || typeof record.usedAt === "string");
+}
+function isLineageNode(value: unknown, expectedType: LineageNode["nodeType"]): value is LineageNode {
+  if (!value || typeof value !== "object") return false;
+  const node = value as Record<string, unknown>;
+  return node.nodeType === expectedType
+    && typeof node.nodeId === "string"
+    && node.nodeId.length > 0
+    && (node.quantity === undefined || node.quantity === null || typeof node.quantity === "number")
+    && (node.unit === undefined || node.unit === null || typeof node.unit === "string")
+    && (node.eventTime === undefined || node.eventTime === null || typeof node.eventTime === "string")
+    && (node.batchNumber === undefined || node.batchNumber === null || typeof node.batchNumber === "string")
+    && (node.name === undefined || node.name === null || typeof node.name === "string")
+    && (node.resolved === undefined || typeof node.resolved === "boolean");
+}
+function isImpactResponse(value: unknown, factoryId: string, batchId: string): value is ImpactResponse {
+  if (!value || typeof value !== "object") return false;
+  const impact = value as Record<string, unknown>;
+  if ("success" in impact && impact.success !== true) return false;
+  return impact.rootType === "MATERIAL_BATCH"
+    && impact.rootId === batchId
+    && Array.isArray(impact.productionBatches)
+    && Array.isArray(impact.finishedBatches)
+    && Array.isArray(impact.shipments)
+    && impact.productionBatches.every((node) => isLineageNode(node, "PRODUCTION_BATCH"))
+    && impact.finishedBatches.every((node) => isLineageNode(node, "FINISHED_BATCH"))
+    && impact.shipments.every((node) => isLineageNode(node, "SHIPMENT_RECORD"))
+    && (impact.factoryId === undefined || impact.factoryId === factoryId);
+}
+function isMaterialBatchRecord(value: unknown): value is MaterialBatch {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === "string"
+    && typeof record.batchNumber === "string"
+    && typeof record.factoryId === "string"
+    && typeof record.materialTypeId === "string"
+    && typeof record.inboundQuantity === "number"
+    && typeof record.remainingQuantity === "number";
+}
+function batchFromResponse(response: Awaited<ReturnType<typeof materialBatchApiClient.getBatchById>>, batchId: string, factoryId: string): MaterialBatch {
+  const batch = response?.success ? response.data : null;
+  if (!isMaterialBatchRecord(batch) || batch.id !== batchId || batch.factoryId !== factoryId) throw new Error(response?.message || "批次身份校验失败");
+  return batch;
+}
+function parseBatchList(response: Awaited<ReturnType<typeof materialBatchApiClient.getMaterialBatches>>): MaterialBatch[] {
+  if (!response?.success || !response.data || !Array.isArray(response.data.content) || !Number.isInteger(response.data.totalPages) || response.data.totalPages < 0 || !response.data.content.every(isMaterialBatchRecord)) {
+    throw new Error(response?.message || "批次数据格式无效");
+  }
+  return response.data.content;
 }
 
 export function WHBatchTraceScreen() {
-  const theme = useTheme();
+  const { t } = useTranslation("warehouse");
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
-  const { batchId, batchNumber } = route.params;
-
+  const user = useAuthStore((state) => state.user);
+  const batchId = route.params.batchId ?? "";
+  const suppliedBatchNumber = route.params.batchNumber ?? "";
+  const factoryId = factoryOf(user);
+  const ownerKey = ownerKeyOf(user, batchId, suppliedBatchNumber);
   const [loading, setLoading] = useState(true);
-  const [traceData, setTraceData] = useState<{
-    batchNumber: string;
-    productName: string;
-    initialQty: number;
-    currentQty: number;
-  } | null>(null);
-  const [traceNodes, setTraceNodes] = useState<TraceNode[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [errorOwnerKey, setErrorOwnerKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionErrorOwnerKey, setActionErrorOwnerKey] = useState<string | null>(null);
+  const [traceData, setTraceData] = useState<{ ownerKey: string; data: TraceData } | null>(null);
+  const generationRef = useRef(0);
+  const renderContextRef = useRef({ ownerKey, batchId, suppliedBatchNumber, user });
+  renderContextRef.current = { ownerKey, batchId, suppliedBatchNumber, user };
+
+  const isLiveOwner = useCallback(() =>
+    useAuthStore.getState().user === user
+      && renderContextRef.current.ownerKey === ownerKey
+      && renderContextRef.current.batchId === batchId
+      && renderContextRef.current.suppliedBatchNumber === suppliedBatchNumber,
+    [batchId, ownerKey, suppliedBatchNumber, user],
+  );
 
   const loadTraceData = useCallback(async () => {
+    const actor = user;
+    const requestOwnerKey = ownerKey;
+    if (!isLiveOwner()) return;
+    const generation = ++generationRef.current;
+    const isCurrent = () => useAuthStore.getState().user === actor && isLiveOwner() && renderContextRef.current.ownerKey === requestOwnerKey && generationRef.current === generation;
+    setLoading(true);
+    setLoadError(null);
+    setErrorOwnerKey(null);
+    setTraceData(null);
     try {
-      setLoading(true);
-
-      const [batchResult, fullTraceResult, usageResult] = await Promise.allSettled([
-        materialBatchApiClient.getBatchById(batchId ?? ''),
-        traceabilityApiClient.getFullTrace(batchNumber ?? ''),
-        materialBatchApiClient.getBatchUsageHistory(batchId ?? ''),
+      if (!actor || !factoryId || (!batchId && !suppliedBatchNumber)) throw new Error(t("messages.batchIdentityMissing"));
+      if (!isCurrent()) return;
+      let batch: MaterialBatch;
+      if (batchId) {
+        batch = batchFromResponse(await materialBatchApiClient.getBatchById(batchId, factoryId), batchId, factoryId);
+      } else {
+        const candidates: MaterialBatch[] = [];
+        let page = 1;
+        let totalPages = 1;
+        do {
+          if (!isCurrent()) return;
+          const pageResponse = await materialBatchApiClient.getMaterialBatches({ factoryId, keyword: suppliedBatchNumber, page, size: 50 });
+          if (!isCurrent()) return;
+          candidates.push(...parseBatchList(pageResponse));
+          totalPages = pageResponse.data.totalPages;
+          page += 1;
+        } while (page <= totalPages);
+        const numberMatches = candidates.filter((candidate) => candidate.batchNumber === suppliedBatchNumber);
+        if (numberMatches.length !== 1 || numberMatches[0]?.factoryId !== factoryId) throw new Error(t("messages.batchIdentityMismatch"));
+        const matched = numberMatches[0];
+        if (!matched) throw new Error(t("messages.batchIdentityMismatch"));
+        batch = matched;
+      }
+      if (!batch.batchNumber) throw new Error(t("messages.traceBatchNumberMissing"));
+      if (!isCurrent()) return;
+      const [impactResult, usageResult] = await Promise.allSettled([
+        traceabilityApiClient.getImpact("MATERIAL_BATCH", batch.id, { factoryId }),
+        materialBatchApiClient.getBatchUsageHistory(batch.id, factoryId),
       ]);
-
-      // Extract batch info
-      const batch: MaterialBatch | null =
-        batchResult.status === 'fulfilled' && batchResult.value?.data
-          ? batchResult.value.data
-          : null;
-
-      const fullTrace: FullTraceResponse | null =
-        fullTraceResult.status === 'fulfilled' ? fullTraceResult.value : null;
-
-      const usageHistory: any[] =
-        usageResult.status === 'fulfilled' && usageResult.value?.data
-          ? (Array.isArray(usageResult.value.data) ? usageResult.value.data : [])
-          : [];
-
-      if (!batch) {
-        setTraceData(null);
-        setTraceNodes([]);
-        return;
+      if (!isCurrent()) return;
+      const impact = impactResult.status === "fulfilled" && isImpactResponse(impactResult.value, factoryId, batch.id) ? impactResult.value : null;
+      const usageValid = usageResult.status === "fulfilled"
+        && usageResult.value?.success === true
+        && Array.isArray(usageResult.value.data)
+        && usageResult.value.data.every(isUsageRecord);
+      const usage = usageValid ? usageResult.value.data : [];
+      const events: TraceEvent[] = [{
+        id: `inbound-${batch.id}`,
+        label: t("shared.batchTrace.inbound"),
+        date: dateOnly(batch.inboundDate || batch.createdAt),
+        quantity: `${batch.inboundQuantity} ${batch.quantityUnit || t("inventoryDetail.unknownUnit")}`,
+      }];
+      usage.forEach((record, index) => {
+        const quantity = record.quantity ?? record.usedQuantity;
+        events.push({
+          id: `usage-${record.id ?? index}`,
+          label: t("shared.batchTrace.usage"),
+          date: dateOnly(record.usedAt || record.createdAt),
+          quantity: quantity == null ? null : `-${quantity} ${record.quantityUnit || record.unit || batch.quantityUnit || t("inventoryDetail.unknownUnit")}`,
+        });
+      });
+      const addImpactEvents = (nodes: LineageNode[], label: string, prefix: string) => nodes.forEach((node, index) => {
+        events.push({
+          id: `${prefix}-${node.batchNumber ?? node.nodeId ?? index}`,
+          label,
+          date: dateOnly(node.eventTime),
+          quantity: node.quantity == null ? null : `${node.quantity} ${node.unit || t("inventoryDetail.unknownUnit")}`,
+          detail: node.name || node.batchNumber || null,
+        });
+      });
+      if (impact) {
+        addImpactEvents(impact.productionBatches, t("shared.batchTrace.productionImpact"), "production");
+        addImpactEvents(impact.finishedBatches, t("shared.batchTrace.downstream"), "finished");
+        addImpactEvents(impact.shipments, t("shared.batchTrace.shipment"), "shipment");
       }
-
-      // Build trace overview
-      setTraceData({
-        batchNumber: batch.batchNumber,
-        productName: batch.materialName || batch.materialCategory || '-',
-        initialQty: batch.inboundQuantity ?? 0,
-        currentQty: batch.remainingQuantity ?? 0,
-      });
-
-      // Build trace nodes from real data
-      const nodes: TraceNode[] = [];
-
-      // Node 1: 原料来源
-      nodes.push({
-        step: 1,
-        title: "原料来源",
-        type: "source",
-        content: [
-          { label: "供应商", value: batch.supplierName || '-' },
-          { label: "入库日期", value: batch.inboundDate ? formatDate(batch.inboundDate) : '-' },
-          { label: "库位", value: batch.storageLocation || '-' },
-          ...(batch.productionDate
-            ? [{ label: "生产日期", value: formatDate(batch.productionDate) }]
-            : []),
-        ],
-      });
-
-      // Node 2: 入库验收
-      const firstQC = fullTrace?.qualityInspections?.[0];
-      nodes.push({
-        step: 2,
-        title: "入库验收",
-        type: "inbound",
-        content: [
-          { label: "入库时间", value: batch.inboundDate ? formatDateTime(batch.inboundDate) : '-' },
-          { label: "入库数量", value: `${batch.inboundQuantity ?? 0} kg` },
-          ...(firstQC ? [
-            { label: "质检员", value: firstQC.inspectorName || '-' },
-            { label: "质检结果", value: firstQC.result || '-', status: firstQC.result === '合格' ? 'success' as const : undefined },
-          ] : []),
-          { label: "库位", value: batch.storageLocation || '-' },
-        ],
-      });
-
-      // Node 3: 仓储管理
-      const daysSinceReceipt = batch.inboundDate
-        ? Math.max(0, Math.floor((Date.now() - new Date(batch.inboundDate).getTime()) / (1000 * 60 * 60 * 24)))
-        : 0;
-      const storageTypeLabel = batch.storageType === 'frozen' ? '冷冻' : batch.storageType === 'fresh' ? '冷藏' : batch.storageType === 'dry' ? '常温' : '-';
-      nodes.push({
-        step: 3,
-        title: "仓储管理",
-        type: "storage",
-        content: [
-          { label: "存储类型", value: storageTypeLabel },
-          { label: "存储天数", value: `${daysSinceReceipt}天` },
-          { label: "库位", value: batch.storageLocation || '-' },
-        ],
-      });
-
-      // Node 4: 出库记录
-      const outboundSubItems: TraceNode['subItems'] = [];
-
-      // From usage history
-      if (usageHistory.length > 0) {
-        for (const record of usageHistory) {
-          outboundSubItems.push({
-            header: record.productionPlanId ? `生产计划: ${record.productionPlanId}` : `使用记录`,
-            qty: `-${record.quantity ?? record.usedQuantity ?? 0}kg`,
-            rows: [
-              ...(record.reason ? [{ label: "用途", value: record.reason }] : []),
-              ...(record.createdAt ? [{ label: "时间", value: formatDateTime(record.createdAt) }] : []),
-            ],
-          });
-        }
-      }
-
-      // From fullTrace shipments
-      if (fullTrace?.shipments?.length) {
-        for (const shipment of fullTrace.shipments) {
-          outboundSubItems.push({
-            header: `发货: ${shipment.shipmentNumber}`,
-            qty: shipment.quantity ? `-${shipment.quantity}kg` : '-',
-            rows: [
-              { label: "客户", value: shipment.customerName || '-' },
-              { label: "出库时间", value: shipment.shipmentDate ? formatDateTime(shipment.shipmentDate) : '-' },
-            ],
-          });
-        }
-      }
-
-      nodes.push({
-        step: 4,
-        title: "出库记录",
-        type: "outbound",
-        content: outboundSubItems.length === 0
-          ? [{ label: "记录", value: "暂无出库记录" }]
-          : [],
-        subItems: outboundSubItems.length > 0 ? outboundSubItems : undefined,
-      });
-
-      // Node 5: 当前状态
-      const daysUntilExpiry = batch.expiryDate
-        ? Math.ceil((new Date(batch.expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-        : null;
-      const expiryDisplay = batch.expiryDate
-        ? `${formatDate(batch.expiryDate)}${daysUntilExpiry !== null ? ` (${daysUntilExpiry > 0 ? daysUntilExpiry + '天后' : '已过期'})` : ''}`
-        : '-';
-      nodes.push({
-        step: 5,
-        title: "当前状态",
-        type: "current",
-        content: [
-          { label: "剩余数量", value: `${batch.remainingQuantity ?? 0} kg` },
-          { label: "到期时间", value: expiryDisplay, status: daysUntilExpiry !== null && daysUntilExpiry <= 7 ? "warning" : undefined },
-          { label: "库位", value: batch.storageLocation || '-' },
-          { label: "状态", value: batch.status || '-' },
-        ],
-      });
-
-      setTraceNodes(nodes);
-    } catch (error) {
-      handleError(error, { title: '加载追溯数据失败' });
+      const partial = !impact || !usageValid;
+      if (!isCurrent()) return;
+      setTraceData({ ownerKey: requestOwnerKey, data: { batch, events, impact, partial } });
+    } catch (error: unknown) {
+      if (!isCurrent()) return;
+      setLoadError(error instanceof Error ? error.message : t("messages.loadTraceFailed"));
+      setErrorOwnerKey(requestOwnerKey);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [batchId, batchNumber]);
+  }, [batchId, factoryId, isLiveOwner, ownerKey, suppliedBatchNumber, t, user]);
 
-  useEffect(() => {
-    loadTraceData();
-  }, [loadTraceData]);
+  useEffect(() => { void loadTraceData(); }, [loadTraceData]);
 
-  const getNodeStyle = (type: TraceNode["type"]) => {
-    switch (type) {
-      case "source":
-        return { bg: "#e3f2fd", border: "#1976d2" };
-      case "inbound":
-        return { bg: "#e8f5e9", border: "#4CAF50" };
-      case "storage":
-        return { bg: "#f3e5f5", border: "#7b1fa2" };
-      case "outbound":
-        return { bg: "#fff3e0", border: "#f57c00" };
-      case "current":
-        return { bg: "#e0f7fa", border: "#0097a7" };
+  const visible = traceData?.ownerKey === ownerKey ? traceData.data : null;
+  const visibleError = errorOwnerKey === ownerKey ? loadError : null;
+  const goBackIfCurrent = useCallback(() => { if (isLiveOwner()) navigation.goBack(); }, [isLiveOwner, navigation]);
+  const openRecallIfCurrent = useCallback(() => {
+    if (!isLiveOwner()) return;
+    const parent = navigation.getParent<TabNavigationProp>();
+    if (!parent) {
+      setActionError(t("messages.parentNavigationUnavailable"));
+      setActionErrorOwnerKey(ownerKey);
+      return;
     }
-  };
-
-  const handleExportReport = () => {
-    appAlert("成功", "追溯报告已导出");
-  };
-
-  const handleRecall = () => {
-    appAlert("确认", "确定要发起召回吗？", [
-      { text: "取消", style: "cancel" },
-      {
-        text: "确定",
-        style: "destructive",
-        onPress: () => navigation.dispatch(CommonActions.navigate("WHRecallManage")),
-      },
-    ]);
-  };
-
-  const renderTraceNode = (node: TraceNode, index: number) => {
-    const nodeStyle = getNodeStyle(node.type);
-
-    return (
-      <View key={node.step}>
-        <View
-          style={[
-            styles.traceNode,
-            { backgroundColor: nodeStyle.bg, borderLeftColor: nodeStyle.border },
-          ]}
-        >
-          <View style={styles.traceNodeHeader}>
-            <View style={[styles.traceNodeIcon, { backgroundColor: nodeStyle.border }]}>
-              <Text style={styles.traceNodeIconText}>{node.step}</Text>
-            </View>
-            <Text style={styles.traceNodeTitle}>{node.title}</Text>
-          </View>
-
-          <View style={styles.traceNodeContent}>
-            {node.content.map((row, rowIndex) => (
-              <View key={rowIndex} style={styles.traceRow}>
-                <Text style={styles.traceLabel}>{row.label}</Text>
-                <Text
-                  style={[
-                    styles.traceValue,
-                    row.status === "success" && styles.traceValueSuccess,
-                    row.status === "warning" && styles.traceValueWarning,
-                    row.status === "clickable" && styles.traceValueClickable,
-                  ]}
-                >
-                  {row.value}
-                </Text>
-              </View>
-            ))}
-
-            {node.subItems?.map((subItem, subIndex) => (
-              <View key={subIndex} style={styles.traceSubItem}>
-                <View style={styles.traceSubHeader}>
-                  <Text style={styles.traceSubHeaderText}>{subItem.header}</Text>
-                  <Text style={styles.traceSubQty}>{subItem.qty}</Text>
-                </View>
-                {subItem.rows.map((row, rowIdx) => (
-                  <View key={rowIdx} style={styles.traceRow}>
-                    <Text style={styles.traceLabel}>{row.label}</Text>
-                    <Text style={styles.traceValue}>{row.value}</Text>
-                  </View>
-                ))}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {index < traceNodes.length - 1 && (
-          <View style={styles.traceConnector}>
-            <View style={styles.traceConnectorLine} />
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  // Loading state
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container} edges={["top"]}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>批次追溯</Text>
-            <Text style={styles.headerSubtitle}>{batchNumber || '-'}</Text>
-          </View>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>加载追溯数据...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  // Empty state
-  if (!traceData) {
-    return (
-      <SafeAreaView style={styles.container} edges={["top"]}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>批次追溯</Text>
-            <Text style={styles.headerSubtitle}>{batchNumber || '-'}</Text>
-          </View>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <MaterialCommunityIcons name="file-search-outline" size={64} color="#ddd" />
-          <Text style={styles.loadingText}>未找到批次数据</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+    setActionError(null);
+    setActionErrorOwnerKey(null);
+    parent.navigate("WHProfileTab", { screen: "WHRecallManage" });
+  }, [isLiveOwner, navigation, ownerKey, t]);
+  if (loading || (!visible && !visibleError)) return <StateScreen title={t("shared.batchTrace.title")} message={t("shared.batchTrace.loading")} loading onBack={goBackIfCurrent} />;
+  if (!visible || visibleError) return <StateScreen title={t("shared.batchTrace.title")} message={visibleError || t("shared.batchTrace.noData")} onBack={goBackIfCurrent} onRetry={() => void loadTraceData()} retryLabel={t("messages.retry")} />;
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>批次追溯</Text>
-          <Text style={styles.headerSubtitle}>{traceData.batchNumber}</Text>
-        </View>
-        <View style={styles.headerRight} />
-      </View>
-
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* 批次概览 */}
-        <Surface style={styles.traceOverview} elevation={1}>
-          <Text style={styles.traceBatch}>{traceData.batchNumber}</Text>
-          <Text style={styles.traceProduct}>{traceData.productName}</Text>
-          <Text style={styles.traceQty}>
-            初始: {traceData.initialQty}kg | 当前: {traceData.currentQty}kg
-          </Text>
-        </Surface>
-
-        {/* 追溯链条 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>完整追溯链</Text>
-
-          <View style={styles.traceTimeline}>
-            {traceNodes.map((node, index) => renderTraceNode(node, index))}
-          </View>
-        </View>
-
-        {/* 操作按钮 */}
-        <View style={styles.actionButtons}>
-          <Button
-            mode="outlined"
-            onPress={handleExportReport}
-            style={styles.actionBtnSecondary}
-            labelStyle={{ color: "#666" }}
-          >
-            导出报告
-          </Button>
-          <Button
-            mode="contained"
-            onPress={handleRecall}
-            style={styles.actionBtnDanger}
-            labelStyle={{ color: "#fff" }}
-          >
-            发起召回
-          </Button>
-        </View>
-
-        <View style={{ height: 20 }} />
+      <Header title={t("shared.batchTrace.title")} subtitle={visible.batch.batchNumber} onBack={goBackIfCurrent} />
+      <ScrollView style={styles.content}>
+        <View style={styles.actions}><Button mode="outlined" onPress={openRecallIfCurrent}>{t("shared.batchTrace.recall")}</Button>{actionErrorOwnerKey === ownerKey && actionError ? <Text style={styles.error}>{actionError}</Text> : null}</View>
+        {visible.partial ? <View style={styles.warning}><Text style={styles.warningText}>{t("shared.batchTrace.partialFailure")}</Text><Button mode="outlined" onPress={() => void loadTraceData()}>{t("messages.retry")}</Button></View> : null}
+        <Surface style={styles.card} elevation={1}><Text style={styles.cardTitle}>{t("shared.batchTrace.traceability")}</Text><Text>{visible.batch.materialName ?? t("messages.unknownMaterial")}</Text><Text>{t("shared.batchTrace.batchNumber")}: {visible.batch.batchNumber}</Text></Surface>
+        <Section title={t("shared.batchTrace.events")}>
+          {visible.events.map((event) => <View key={event.id} style={styles.event}><Text style={styles.eventLabel}>{event.label}</Text>{event.detail ? <Text style={styles.muted}>{event.detail}</Text> : null}<Text style={styles.eventDate}>{event.date ?? "—"}</Text><Text style={styles.eventQty}>{event.quantity ?? "—"}</Text></View>)}
+        </Section>
+        <Section title={t("shared.batchTrace.qualityRecords")}><Text style={styles.muted}>{t("shared.batchTrace.qualityUnavailable")}</Text></Section>
+        <View style={styles.bottomSpace} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+function Header({ title, subtitle, onBack }: { title: string; subtitle?: string | null; onBack: () => void }) { return <View style={styles.header}><TouchableOpacity style={styles.backButton} onPress={onBack}><MaterialCommunityIcons name="arrow-left" size={24} color="#fff" /></TouchableOpacity><View style={styles.headerCenter}><Text style={styles.headerTitle}>{title}</Text>{subtitle ? <Text style={styles.headerSubtitle}>{subtitle}</Text> : null}</View><View style={styles.headerRight} /></View>; }
+function StateScreen({ title, message, loading, onBack, onRetry, retryLabel }: { title: string; message: string; loading?: boolean; onBack: () => void; onRetry?: () => void; retryLabel?: string }) { return <SafeAreaView style={styles.container} edges={["top"]}><Header title={title} onBack={onBack} /><View style={styles.state}>{loading ? <ActivityIndicator color="#4CAF50" /> : null}<Text style={styles.stateText}>{message}</Text>{onRetry ? <Button mode="contained" onPress={onRetry}>{retryLabel}</Button> : null}</View></SafeAreaView>; }
+function Section({ title, children }: { title: string; children: React.ReactNode }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f5f5f5",
-  },
-  header: {
-    backgroundColor: "#4CAF50",
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  backButton: {
-    padding: 4,
-  },
-  headerCenter: {
-    flex: 1,
-    alignItems: "center",
-    marginRight: 28,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#fff",
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.8)",
-    marginTop: 2,
-  },
-  headerRight: {
-    width: 28,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#666",
-  },
-  content: {
-    flex: 1,
-  },
-  traceOverview: {
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginTop: 16,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-  },
-  traceBatch: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#4CAF50",
-    marginBottom: 4,
-  },
-  traceProduct: {
-    fontSize: 14,
-    color: "#333",
-    marginBottom: 4,
-  },
-  traceQty: {
-    fontSize: 13,
-    color: "#666",
-  },
-  section: {
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderRadius: 12,
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#999",
-    marginBottom: 16,
-  },
-  traceTimeline: {},
-  traceNode: {
-    borderRadius: 8,
-    padding: 12,
-    borderLeftWidth: 4,
-  },
-  traceNodeHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  traceNodeIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-  traceNodeIconText: {
-    fontSize: 12,
-    fontWeight: "bold",
-    color: "#fff",
-  },
-  traceNodeTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-  },
-  traceNodeContent: {
-    marginLeft: 34,
-  },
-  traceRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 6,
-  },
-  traceLabel: {
-    fontSize: 13,
-    color: "#666",
-  },
-  traceValue: {
-    fontSize: 13,
-    color: "#333",
-  },
-  traceValueSuccess: {
-    color: "#4CAF50",
-  },
-  traceValueWarning: {
-    color: "#f57c00",
-  },
-  traceValueClickable: {
-    color: "#1976d2",
-  },
-  traceSubItem: {
-    backgroundColor: "rgba(255,255,255,0.7)",
-    borderRadius: 6,
-    padding: 10,
-    marginTop: 8,
-  },
-  traceSubHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 6,
-    paddingBottom: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(0,0,0,0.05)",
-  },
-  traceSubHeaderText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#333",
-  },
-  traceSubQty: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#f44336",
-  },
-  traceConnector: {
-    height: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  traceConnectorLine: {
-    width: 2,
-    height: "100%",
-    backgroundColor: "#e0e0e0",
-  },
-  actionButtons: {
-    flexDirection: "row",
-    paddingHorizontal: 16,
-    marginTop: 16,
-    gap: 12,
-  },
-  actionBtnSecondary: {
-    flex: 1,
-    borderRadius: 8,
-    borderColor: "#ddd",
-  },
-  actionBtnDanger: {
-    flex: 1,
-    borderRadius: 8,
-    backgroundColor: "#f44336",
-  },
+  container: { flex: 1, backgroundColor: "#f5f5f5" },
+  header: { backgroundColor: "#4CAF50", flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12 },
+  backButton: { minWidth: 44, minHeight: 44, justifyContent: "center" },
+  headerCenter: { flex: 1, alignItems: "center", marginRight: 44 },
+  headerTitle: { fontSize: 18, fontWeight: "600", color: "#fff" },
+  headerSubtitle: { fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 },
+  headerRight: { width: 0 },
+  content: { flex: 1 },
+  card: { backgroundColor: "#fff", margin: 16, borderRadius: 12, padding: 20, gap: 6 },
+  cardTitle: { fontSize: 18, fontWeight: "700", marginBottom: 4 },
+  warning: { margin: 16, padding: 14, backgroundColor: "#fff3e0", borderRadius: 10, gap: 10 },
+  warningText: { color: "#8a4b08" },
+  actions: { marginHorizontal: 16, marginBottom: 12, gap: 10 },
+  error: { color: "#b71c1c", textAlign: "center" },
+  section: { backgroundColor: "#fff", marginHorizontal: 16, marginBottom: 12, borderRadius: 12, padding: 16 },
+  sectionTitle: { fontSize: 16, fontWeight: "700", marginBottom: 10 },
+  event: { borderLeftWidth: 3, borderLeftColor: "#4CAF50", paddingLeft: 12, paddingVertical: 8, marginBottom: 8 },
+  eventLabel: { fontWeight: "700" },
+  eventDate: { color: "#666" },
+  eventQty: { color: "#333" },
+  muted: { color: "#666" },
+  state: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, padding: 24 },
+  stateText: { color: "#555", textAlign: "center" },
+  bottomSpace: { height: 24 },
 });
 
 export default WHBatchTraceScreen;

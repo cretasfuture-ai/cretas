@@ -50,8 +50,8 @@ export interface MaterialBatch {
    * 不同的 `unit` (原料类型默认单位, 见上)。
    */
   quantityUnit?: string;
-  unitPrice: number;
-  totalCost: number;
+  unitPrice: number | null;
+  totalCost: number | null;
   supplierId: string;
   supplierName?: string;        // 供应商名称
   inboundDate: string;
@@ -62,7 +62,7 @@ export interface MaterialBatch {
   storageLocation?: string;
   warehouseId?: string;
   notes?: string;
-  movingAvgPrice?: number;      // 移动均价
+  movingAvgPrice?: number | null;      // 移动均价
   factoryNumber?: string | null;  // SP4: 厂号 (VARCHAR 100)
   originPlace?: string | null;    // SP4: 产地 (VARCHAR 200)
   createdAt: string;
@@ -113,7 +113,7 @@ class MaterialBatchApiClient {
   }
 
   // 1. 获取原材料批次列表（分页）
-  async getMaterialBatches(params?: { factoryId?: string; [key: string]: any }): Promise<ApiResponse<{ content: MaterialBatch[]; totalElements: number; totalPages: number }>> {
+  async getMaterialBatches(params?: { factoryId?: string; keyword?: string; materialTypeId?: string; status?: string; page?: number; size?: number; [key: string]: unknown }): Promise<ApiResponse<{ content: MaterialBatch[]; totalElements: number; totalPages: number }>> {
     const { factoryId, ...query } = params || {};
     return await apiClient.get(this.getPath(factoryId), { params: query });
   }
@@ -129,7 +129,7 @@ class MaterialBatchApiClient {
   }
 
   // 4. 获取原材料批次详情
-  async getBatchById(batchId: string, factoryId?: string): Promise<{ success: boolean; data: MaterialBatch; message?: string }> {
+  async getBatchById(batchId: string, factoryId?: string): Promise<ApiResponse<MaterialBatch>> {
     return await apiClient.get(`${this.getPath(factoryId)}/${batchId}`);
   }
 
