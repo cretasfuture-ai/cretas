@@ -39,6 +39,14 @@ class AIConfig:
     decision_candidate_blend: float = 0.35
     # 决策选项里追加「以上都不是 / 需要先问清楚」两个出口 (2026-10-03, 防曲解)。缺省关, 量过再开。
     decision_special_options: bool = False
+    # 候选来源 (2026-10-04): "shortlist" = LLM 粗选 + 向量补足 (旧); "rerank" = 向量 Top-N → 微调重排 → 前 K。
+    # rerank 失败 / 没配地址 / 本轮带对话历史时一律走 shortlist。
+    decision_candidates: str = "shortlist"
+    rerank_url: str = ""
+    rerank_key: str = ""
+    rerank_timeout_s: float = 0.6
+    rerank_pool_k: int = 50
+    rerank_top_k: int = 10
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -66,6 +74,12 @@ class AIConfig:
             decision_candidate_blend=float(os.environ.get("AI_DECISION_CANDIDATE_BLEND", "0.35")),
             decision_special_options=os.environ.get("AI_DECISION_SPECIAL_OPTIONS", "0").strip().lower()
             in ("1", "true", "yes", "on"),
+            decision_candidates=(os.environ.get("AI_DECISION_CANDIDATES", "shortlist").strip().lower() or "shortlist"),
+            rerank_url=os.environ.get("AI_RERANK_URL", "").strip(),
+            rerank_key=os.environ.get("AI_RERANK_KEY", "").strip(),
+            rerank_timeout_s=float(os.environ.get("AI_RERANK_TIMEOUT_MS", "600")) / 1000.0,
+            rerank_pool_k=int(os.environ.get("AI_RERANK_POOL_K", "50")),
+            rerank_top_k=int(os.environ.get("AI_RERANK_TOP_K", "10")),
         )
 
 
