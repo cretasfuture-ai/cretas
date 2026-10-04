@@ -14,6 +14,7 @@ export type { User };
 
 export interface UserDTO {
   id: number;
+  factoryId?: string;
   username: string;
   email?: string;
   realName: string;

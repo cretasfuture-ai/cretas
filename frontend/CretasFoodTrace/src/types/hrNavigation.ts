@@ -372,9 +372,14 @@ export interface WorkerHoursRank {
 /** 绩效等级 */
 export type PerformanceGrade = 'A' | 'B' | 'C' | 'D' | 'E';
 
+/** 绩效统计窗口。所有卡片和员工样本必须使用同一窗口。 */
+export type PerformancePeriod = 'week' | 'month' | 'quarter' | 'year';
+
 /** 绩效统计 */
 export interface PerformanceStats {
-  avgScore: number;
+  avgScore: number | null;
+  sampleSize: number;
+  period: PerformancePeriod;
   excellentCount: number;
   needAttentionCount: number;
   needImprovementCount: number;
@@ -392,11 +397,11 @@ export interface EmployeePerformance {
   userAvatar?: string;
   department?: string;
   position?: string;
-  score: number;
-  grade: PerformanceGrade;
-  efficiency?: number;
-  quality?: number;
-  attendance?: number;
+  score: number | null;
+  grade: PerformanceGrade | null;
+  efficiency?: number | null;
+  quality?: number | null;
+  attendance?: number | null;
 }
 
 /** 绩效等级配置 */

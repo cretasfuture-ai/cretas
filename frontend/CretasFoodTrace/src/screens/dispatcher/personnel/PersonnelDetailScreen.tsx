@@ -13,7 +13,7 @@
  * @since 2025-12-28
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -28,13 +28,17 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
+import { ActivityIndicator } from 'react-native-paper';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { personnelApiClient } from '../../../services/api/personnelApiClient';
 import { hrApiClient } from '../../../services/api/hrApiClient';
+import { hrShiftApiClient } from '../../../services/api/hrShiftApiClient';
 import { isAxiosError } from 'axios';
 import { useAuthStore } from '../../../store/authStore';
+import { hasModulePermission } from '../../../utils/permissionHelper';
 import type { DispatcherEmployee } from '../../../types/dispatcher';
 import { formatDate } from '../../../utils/formatters';
+import type { User } from '../../../types/auth';
 
 // 调度员主题色
 const DISPATCHER_THEME = {
@@ -47,6 +51,7 @@ const DISPATCHER_THEME = {
   info: '#1890ff',
   background: '#f5f5f5',
   cardBackground: '#ffffff',
+  border: '#d9d9d9',
 };
 
 // 类型定义
@@ -58,7 +63,7 @@ interface Skill {
 
 interface PerformanceMetric {
   label: string;
-  value: number;
+  value: number | null;
   trend: 'up' | 'down' | 'stable';
   trendValue: string;
 }
@@ -99,41 +104,24 @@ type PersonnelDetailRouteParams = {
   };
 };
 
-// Fallback data when API fails or returns empty results
-const fallbackEmployee: Employee = {
-  id: '1',
-  name: '王五行',
-  avatar: '王',
-  employeeCode: '003',
-  status: 'idle',
-  workshop: '切片车间',
-  position: '切片技工',
-  hireDate: '2022-06-15',
-  tenure: '2年6个月',
-  contractType: 'full_time',
-  phone: '138****8888',
-  skills: [
-    { name: '切片', level: 4, maxLevel: 5 },
-    { name: '质检', level: 3, maxLevel: 5 },
-    { name: '设备操作', level: 3, maxLevel: 5 },
-    { name: '包装', level: 2, maxLevel: 5 },
-  ],
-  performance: [
-    { label: '工作效率', value: 95, trend: 'up', trendValue: '+3%' },
-    { label: '出勤率', value: 98, trend: 'stable', trendValue: '0%' },
-    { label: '质量评分', value: 92, trend: 'up', trendValue: '+2%' },
-    { label: '协作评分', value: 88, trend: 'down', trendValue: '-1%' },
-  ],
-  weeklyHours: 32,
-  maxWeeklyHours: 40,
-  overtimeHours: 4,
-  recentTasks: [
-    { id: '1', name: 'PB20241227001 带鱼段切片', date: '12-27', status: 'completed', hours: 6 },
-    { id: '2', name: 'PB20241226002 虾仁分拣', date: '12-26', status: 'completed', hours: 8 },
-    { id: '3', name: 'PB20241225001 鱿鱼切片', date: '12-25', status: 'completed', hours: 7 },
-    { id: '4', name: 'PB20241224001 带鱼段切片', date: '12-24', status: 'cancelled', hours: 0 },
-  ],
-};
+const unknownPerformance: PerformanceMetric[] = [
+  { label: '工作效率', value: null, trend: 'stable', trendValue: '-' },
+  { label: '出勤率', value: null, trend: 'stable', trendValue: '-' },
+  { label: '质量评分', value: null, trend: 'stable', trendValue: '-' },
+  { label: '协作评分', value: null, trend: 'stable', trendValue: '-' },
+];
+
+interface PersonnelOwner {
+  user: User | null;
+  userId?: number;
+  factoryId?: string;
+  generation: number;
+  personnelId?: string;
+}
+
+interface LoadOptions {
+  refresh?: boolean;
+}
 
 export default function PersonnelDetailScreen() {
   const { t } = useTranslation('dispatcher');
@@ -142,10 +130,52 @@ export default function PersonnelDetailScreen() {
   const { user } = useAuthStore();
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [employee, setEmployee] = useState<Employee>(fallbackEmployee);
+  const [employee, setEmployee] = useState<Employee | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [errorOwnerKey, setErrorOwnerKey] = useState<string | null>(null);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
+  const actorRef = useRef<{ user: User | null; generation: number }>({ user: user || null, generation: 0 });
+  const ownerRef = useRef<PersonnelOwner | null>(null);
+  const requestSeqRef = useRef(0);
+  const [dataOwnerKey, setDataOwnerKey] = useState<string | null>(null);
+  const translationRef = useRef(t);
+  translationRef.current = t;
 
   // Get employee ID from route params
   const personnelId = route.params?.personnelId;
+
+  if (actorRef.current.user !== user) {
+    actorRef.current = { user, generation: actorRef.current.generation + 1 };
+  }
+
+  const currentOwner: PersonnelOwner = {
+      user: user || null,
+      userId: user?.id,
+      factoryId: user?.factoryId,
+      generation: actorRef.current.generation,
+      personnelId,
+  };
+  ownerRef.current = currentOwner;
+  const ownerKey = `${currentOwner.userId || 'none'}:${currentOwner.factoryId || ''}:${currentOwner.personnelId || ''}:${currentOwner.generation}`;
+
+  useEffect(() => {
+    setReadError(null);
+    setErrorOwnerKey(null);
+    setPerformanceError(null);
+    setEmployee(null);
+    setDataOwnerKey(null);
+    setLoading(true);
+    setRefreshing(false);
+  }, [ownerKey]);
+
+  const isCurrentContext = (owner: PersonnelOwner): boolean => {
+    const liveUser = useAuthStore.getState().user;
+    const current = ownerRef.current;
+    return Boolean(current && liveUser === owner.user && liveUser?.id === owner.userId
+      && current.user === owner.user && current.userId === owner.userId
+      && current.generation === owner.generation && current.personnelId === owner.personnelId
+      && liveUser?.factoryId === owner.factoryId);
+  };
 
   // Calculate tenure from hire date
   const calculateTenure = (hireDate: string): string => {
@@ -159,135 +189,163 @@ export default function PersonnelDetailScreen() {
     return `${months}个月`;
   };
 
-  const loadData = useCallback(async () => {
-    if (!personnelId) {
+  const loadData = useCallback(async (capturedOwner: PersonnelOwner | null, options: LoadOptions = {}) => {
+    const owner = capturedOwner;
+    const liveUser = useAuthStore.getState().user;
+    if (!owner || !owner.personnelId || !liveUser || liveUser !== owner.user || !isCurrentContext(owner)) {
+      if (!owner) {
+        setReadError('读取员工信息失败');
+        setErrorOwnerKey('none');
+        setEmployee(null);
+        setDataOwnerKey('none');
+        setLoading(false);
+      }
+      return;
+    }
+    const requestSequence = ++requestSeqRef.current;
+
+    const employeeId = parseInt(owner.personnelId, 10);
+    if (!Number.isInteger(employeeId) || employeeId <= 0) {
+      setReadError('员工编号无效');
+      setErrorOwnerKey(String(owner.userId || 'none') + ':' + (owner.factoryId || '') + ':' + (owner.personnelId || '') + ':' + owner.generation);
+      setEmployee(null);
+      setDataOwnerKey(String(owner.userId || 'none') + ':' + (owner.factoryId || '') + ':' + (owner.personnelId || '') + ':' + owner.generation);
       setLoading(false);
       return;
     }
 
     try {
-      const factoryId = user?.factoryId;
-      const employeeId = parseInt(personnelId, 10);
+      setReadError(null);
+      setErrorOwnerKey(null);
+      setPerformanceError(null);
+      setEmployee(null);
+      setDataOwnerKey(null);
+      setLoading(true);
+      if (options.refresh) setRefreshing(true);
 
-      // 获取员工详情
-      const detailRes = await schedulingApiClient.getEmployeeDetail(employeeId, factoryId);
-      if (detailRes.success && detailRes.data) {
-        // empData is DispatcherEmployee, use its existing fields
-        const empData = detailRes.data;
+      const detailRes = await schedulingApiClient.getEmployeeDetail(employeeId, owner.factoryId);
+      if (requestSequence !== requestSeqRef.current || !isCurrentContext(owner)) return;
+      if (!detailRes.success || !detailRes.data) throw new Error('未找到该员工信息');
 
-        // Determine status - handle both lowercase (from type) and uppercase (from API)
-        let status: Employee['status'] = 'off_duty';
-        const empStatus = empData.status?.toLowerCase();
-        if (empStatus === 'working' || empStatus === 'on_duty') status = 'working';
-        else if (empStatus === 'idle' || empStatus === 'available') status = 'idle';
-        else if (empStatus === 'on_leave' || empStatus === 'leave') status = 'on_leave';
+      const empData = detailRes.data;
+      let status: Employee['status'] = 'off_duty';
+      const empStatus = empData.status?.toLowerCase();
+      if (empStatus === 'working' || empStatus === 'on_duty') status = 'working';
+      else if (empStatus === 'idle' || empStatus === 'available') status = 'idle';
+      else if (empStatus === 'on_leave' || empStatus === 'leave') status = 'on_leave';
 
-        // Determine contract type - handle both lowercase (from type) and uppercase (from API)
-        let contractType: Employee['contractType'] = 'full_time';
-        const hireType = empData.hireType?.toLowerCase();
-        if (hireType === 'temporary') contractType = 'temporary';
-        else if (hireType === 'dispatch') contractType = 'dispatch';
-        else if (hireType === 'part_time') contractType = 'part_time';
+      let contractType: Employee['contractType'] = 'full_time';
+      const hireType = empData.hireType?.toLowerCase();
+      if (hireType === 'temporary') contractType = 'temporary';
+      else if (hireType === 'dispatch') contractType = 'dispatch';
+      else if (hireType === 'part_time') contractType = 'part_time';
 
-        // Transform skills — handle both Record<string,number> and array formats
-        let skills: Skill[] = [];
-        if (empData.skillLevels) {
-          if (Array.isArray(empData.skillLevels)) {
-            // API returns array of { skillName, level } or similar
-            skills = (empData.skillLevels as any[]).map((s: any) => ({
-              name: s.skillName || s.name || '未知技能',
-              level: typeof s.level === 'number' ? s.level : 1,
-              maxLevel: 5,
-            }));
-          } else {
-            skills = Object.entries(empData.skillLevels).map(([name, level]) => ({
-              name,
-              level: typeof level === 'number' ? level : 1,
-              maxLevel: 5,
-            }));
-          }
+      let skills: Skill[] = [];
+      if (empData.skillLevels) {
+        if (Array.isArray(empData.skillLevels)) {
+          skills = (empData.skillLevels as Array<{ skillName?: string; name?: string; level?: number }>).map((skill) => ({
+            name: skill.skillName || skill.name || '未知技能',
+            level: typeof skill.level === 'number' ? skill.level : 1,
+            maxLevel: 5,
+          }));
+        } else {
+          skills = Object.entries(empData.skillLevels).map(([name, level]) => ({
+            name,
+            level: typeof level === 'number' ? level : 1,
+            maxLevel: 5,
+          }));
         }
+      }
 
-        // Load performance data from HR API
-        let performance: PerformanceMetric[] = [
-          { label: '工作效率', value: empData.efficiency ?? 85, trend: 'stable', trendValue: '0%' },
-          { label: '出勤率', value: 95, trend: 'stable', trendValue: '0%' },
-          { label: '质量评分', value: 90, trend: 'stable', trendValue: '0%' },
-          { label: '协作评分', value: 85, trend: 'stable', trendValue: '0%' },
-        ];
+      const employeeDetail: Employee = {
+        id: String(empData.id),
+        name: empData.fullName || empData.username || '未知',
+        avatar: (empData.fullName || empData.username || '未知').charAt(0),
+        employeeCode: empData.employeeCode || String(empData.id),
+        status,
+        workshop: empData.workshopName || empData.departmentName || '未分配',
+        position: empData.position || '员工',
+        hireDate: empData.hireDate ?? formatDate(new Date()),
+        tenure: calculateTenure(empData.hireDate || new Date().toISOString()),
+        contractType,
+        phone: empData.phone ? empData.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : '未设置',
+        skills,
+        performance: unknownPerformance.map((metric) => ({ ...metric })),
+        weeklyHours: empData.todayWorkHours ?? 0,
+        maxWeeklyHours: 40,
+        overtimeHours: 0,
+        recentTasks: [],
+      };
 
-        try {
-          // hrApiClient.getPerformanceStats returns data directly (not wrapped in success/data)
-          const perfData = await hrApiClient.getPerformanceStats({ factoryId });
-          if (perfData && perfData.avgScore !== undefined) {
-            // Map API response to PerformanceMetric format
-            // The API returns aggregate stats, use avgScore as efficiency indicator
-            const avgScore = perfData.avgScore || 85;
-            performance = [
-              { label: '工作效率', value: avgScore, trend: 'stable', trendValue: '0%' },
-              { label: '出勤率', value: 95, trend: 'stable', trendValue: '0%' },
-              { label: '质量评分', value: avgScore, trend: 'stable', trendValue: '0%' },
-              { label: '协作评分', value: 85, trend: 'stable', trendValue: '0%' },
-            ];
-          }
-        } catch (perfError) {
-          console.warn('Failed to load performance stats, using defaults:', perfError);
+      if (!isCurrentContext(owner)) return;
+      setEmployee(employeeDetail);
+      setDataOwnerKey(`${owner.userId || 'none'}:${owner.factoryId || ''}:${owner.personnelId || ''}:${owner.generation}`);
+      setLoading(false);
+
+      try {
+        const moduleAccess = await hrShiftApiClient.getSelfModuleAccess(owner.userId || 0, owner.factoryId);
+        if (requestSequence !== requestSeqRef.current || !isCurrentContext(owner)) return;
+        const latestUser = useAuthStore.getState().user;
+        const canReadPerformance = Boolean(latestUser && hasModulePermission(latestUser, 'hr', 'read')
+          && moduleAccess.some((module) => module.moduleCode === 'hr_employee'
+            && module.permissionModule === 'hr' && module.effectiveAllowed));
+        if (!canReadPerformance) throw new Error('无权读取员工绩效');
+        const perfData = await hrApiClient.getEmployeePerformance(employeeId, { factoryId: owner.factoryId });
+        if (requestSequence !== requestSeqRef.current || !isCurrentContext(owner)) return;
+        if (perfData) {
+          setEmployee({ ...employeeDetail, performance: [
+            { label: '工作效率', value: perfData.efficiency ?? null, trend: 'stable', trendValue: '-' },
+            { label: '出勤率', value: perfData.attendance ?? null, trend: 'stable', trendValue: '-' },
+            { label: '质量评分', value: null, trend: 'stable', trendValue: '-' },
+            { label: '协作评分', value: null, trend: 'stable', trendValue: '-' },
+          ] });
         }
-
-        // Recent tasks - using fallback until backend provides employee task history API
-        const recentTasks: RecentTask[] = fallbackEmployee.recentTasks;
-
-        const employeeDetail: Employee = {
-          id: String(empData.id),
-          name: empData.fullName || empData.username || '未知',
-          avatar: (empData.fullName || empData.username || '未知').charAt(0),
-          employeeCode: empData.employeeCode || String(empData.id),
-          status,
-          workshop: empData.workshopName || empData.departmentName || '未分配',
-          position: empData.position || '员工',
-          hireDate: empData.hireDate ?? formatDate(new Date()),
-          tenure: calculateTenure(empData.hireDate || new Date().toISOString()),
-          contractType,
-          phone: empData.phone ? empData.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : '未设置',
-          skills: skills.length > 0 ? skills : fallbackEmployee.skills,
-          performance,
-          weeklyHours: empData.todayWorkHours ?? 0,
-          maxWeeklyHours: 40,
-          overtimeHours: 0,
-          recentTasks,
-        };
-
-        setEmployee(employeeDetail);
-      } else {
-        // Use fallback data when API returns empty
-        setEmployee(fallbackEmployee);
+      } catch (perfError) {
+        if (requestSequence === requestSeqRef.current && isCurrentContext(owner)) {
+          setPerformanceError(perfError instanceof Error ? perfError.message : '读取员工绩效失败');
+        }
       }
     } catch (error) {
+      if (requestSequence !== requestSeqRef.current || !isCurrentContext(owner)) return;
       console.error('Failed to load employee detail:', error);
-      if (isAxiosError(error)) {
-        if (error.response?.status === 401) {
-          console.error('认证过期，请重新登录');
-        } else if (error.response?.status === 404) {
-          Alert.alert('错误', '未找到该员工信息');
-        }
-      }
-      // Use fallback data on error
-      setEmployee(fallbackEmployee);
+      setReadError(error instanceof Error ? error.message : '读取员工信息失败');
+      setErrorOwnerKey(String(owner.userId || 'none') + ':' + (owner.factoryId || '') + ':' + (owner.personnelId || '') + ':' + owner.generation);
+      if (isAxiosError(error) && error.response?.status === 404) Alert.alert('错误', '未找到该员工信息');
+      setEmployee(null);
+      setDataOwnerKey(String(owner.userId || 'none') + ':' + (owner.factoryId || '') + ':' + (owner.personnelId || '') + ':' + owner.generation);
     } finally {
-      setLoading(false);
+      if (requestSequence === requestSeqRef.current && isCurrentContext(owner)) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [personnelId, user?.factoryId]);
+  }, []);
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
-  }, [loadData]);
+    void loadData(currentOwner, { refresh: true });
+  }, [loadData, ownerKey]);
 
   // Load data on mount
   React.useEffect(() => {
-    loadData();
-  }, [loadData]);
+    void loadData(currentOwner);
+  }, [loadData, ownerKey]);
+
+  if (loading || dataOwnerKey !== ownerKey || (!employee && !readError)) {
+    return <View style={styles.loadingContainer}><ActivityIndicator size="large" color={DISPATCHER_THEME.primary} /></View>;
+  }
+
+  if (!employee) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>{readError && errorOwnerKey === ownerKey ? readError : '读取员工信息失败'}</Text>
+          <TouchableOpacity onPress={() => { void loadData(currentOwner); }}>
+            <Text style={styles.retryText}>{t('common.retry')}</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const handleGoBack = () => {
     navigation.goBack();
@@ -427,9 +485,11 @@ export default function PersonnelDetailScreen() {
           style={[
             styles.metricBarFill,
             {
-              width: `${metric.value}%`,
+              width: `${metric.value ?? 0}%`,
               backgroundColor:
-                metric.value >= 90
+                metric.value === null
+                ? DISPATCHER_THEME.border
+                : metric.value >= 90
                   ? DISPATCHER_THEME.success
                   : metric.value >= 70
                   ? DISPATCHER_THEME.warning
@@ -438,7 +498,7 @@ export default function PersonnelDetailScreen() {
           ]}
         />
       </View>
-      <Text style={styles.metricValue}>{metric.value}%</Text>
+      <Text style={styles.metricValue}>{metric.value === null ? '未知' : `${metric.value}%`}</Text>
     </View>
   );
 
@@ -485,6 +545,22 @@ export default function PersonnelDetailScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
+        {readError && errorOwnerKey === ownerKey && (
+          <View style={styles.errorCard}>
+            <Text style={styles.errorText}>{readError}</Text>
+            <TouchableOpacity onPress={() => { void loadData(currentOwner); }}>
+              <Text style={styles.retryText}>{t('common.retry')}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {performanceError && (
+          <View style={styles.errorCard}>
+            <Text style={styles.errorText}>{performanceError}</Text>
+            <TouchableOpacity onPress={() => { void loadData(currentOwner); }}>
+              <Text style={styles.retryText}>{t('common.retry')}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         {/* 员工信息卡片 */}
         <View style={styles.profileCard}>
           <LinearGradient
@@ -604,6 +680,26 @@ export default function PersonnelDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: DISPATCHER_THEME.background,
+  },
+  errorCard: {
+    margin: 16,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#fff1f0',
+  },
+  errorText: {
+    color: DISPATCHER_THEME.danger,
+    marginBottom: 8,
+  },
+  retryText: {
+    color: DISPATCHER_THEME.primary,
+    fontWeight: '600',
+  },
   container: {
     flex: 1,
     backgroundColor: DISPATCHER_THEME.background,

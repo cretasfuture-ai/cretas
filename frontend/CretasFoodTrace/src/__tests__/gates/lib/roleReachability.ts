@@ -302,7 +302,7 @@ export type Expr =
   | { k: 'not'; a: Expr }
   | { k: 'and'; a: Expr; b: Expr }
   | { k: 'or'; a: Expr; b: Expr }
-  | { k: 'unknown'; canon: string };
+  | { k: 'unknown'; canon: string; provenance?: 'selfModuleAccess.some' };
 
 export function canon(e: Expr): string {
   switch (e.k) {
@@ -737,6 +737,39 @@ export function fileCtx(file: string): FileCtx {
 
 const UNKNOWN_TEXT_LIMIT = 60;
 
+function isTrustedSelfModuleAccessSome(node: ts.Node): boolean {
+  const candidate = unwrap(node);
+  if (!ts.isCallExpression(candidate)) return false;
+  const access = unwrap(candidate.expression);
+  if (!ts.isPropertyAccessExpression(access) || access.name.text !== 'some') return false;
+  const receiver = unwrap(access.expression);
+  if (!ts.isIdentifier(receiver) || receiver.text !== 'selfModuleAccess') {
+    return false;
+  }
+  const callback = candidate.arguments.length === 1 ? unwrap(candidate.arguments[0]!) : null;
+  if (!callback || (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))) return false;
+  let forbidden = false;
+  const visit = (child: ts.Node): void => {
+    if (forbidden) return;
+    if (ts.isCallExpression(child)) {
+      forbidden = true;
+      return;
+    }
+    const isPropertyName = ts.isPropertyAccessExpression(child.parent) && child.parent.name === child;
+    if (!isPropertyName && ts.isIdentifier(child) && (
+      USER_IDENTIFIERS.has(child.text)
+      || /(?:role|permission|helper)/i.test(child.text)
+      || child.text === 'selfModuleAccess'
+    )) {
+      forbidden = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(callback.body);
+  return !forbidden;
+}
+
 function unknownOf(node: ts.Node): Expr {
   let text: string;
   try {
@@ -745,7 +778,11 @@ function unknownOf(node: ts.Node): Expr {
     text = '<expr>';
   }
   if (text.length > UNKNOWN_TEXT_LIMIT) text = text.slice(0, UNKNOWN_TEXT_LIMIT) + '…';
-  return { k: 'unknown', canon: text };
+  return {
+    k: 'unknown',
+    canon: text,
+    ...(isTrustedSelfModuleAccessSome(node) ? { provenance: 'selfModuleAccess.some' as const } : {}),
+  };
 }
 
 /** 布尔表达式 AST → 三值 IR。读不懂的子树落成 `unknown`，⛔ 不猜。 */
@@ -1328,6 +1365,11 @@ export interface Finding {
   /** role -> T/F/U */
   values: Record<string, Tri>;
   verdict: Verdict;
+  /**
+   * 运行时未知仍然保留在 findings 和完整报告里；只有当其中所有可判定的
+   * 角色谓词对当前可达角色恒真、未知部分又没有角色/权限形状时，才单独归类。
+   */
+  runtimeOnly: boolean;
   /** 空转时是恒真还是恒假；有效时给出反例角色对 */
   detail: string;
 }
@@ -1337,6 +1379,7 @@ export interface AnalysisResult {
   vacuous: Finding[];
   effective: Finding[];
   undecided: Finding[];
+  runtimeOnly: Finding[];
   /** 仪器自证用 */
   stats: {
     navFiles: number;
@@ -1352,6 +1395,57 @@ export interface AnalysisResult {
 
 export function relative(file: string): string {
   return path.relative(SRC_DIR, file).split(path.sep).join('/');
+}
+
+interface RuntimeProjection {
+  atoms: Array<Extract<Expr, { k: 'atom' }>>;
+  unknowns: Array<Extract<Expr, { k: 'unknown' }>>;
+}
+
+/** Only a structure-preserving positive conjunction can be runtime-only. */
+function runtimeProjection(expr: Expr): RuntimeProjection | null {
+  switch (expr.k) {
+    case 'atom':
+      return { atoms: [expr], unknowns: [] };
+    case 'unknown':
+      return { atoms: [], unknowns: [expr] };
+    case 'and': {
+      const left = runtimeProjection(expr.a);
+      const right = runtimeProjection(expr.b);
+      if (!left || !right) return null;
+      return {
+        atoms: [...left.atoms, ...right.atoms],
+        unknowns: [...left.unknowns, ...right.unknowns],
+      };
+    }
+    // NOT, OR, and constants have polarity/short-circuit semantics that must
+    // remain in the ordinary unknown budget.
+    default:
+      return null;
+  }
+}
+
+/**
+ * A runtime value may legitimately accompany a canonical permission check.
+ * That is runtime-only only when the known role predicates are true for every
+ * role that can reach this screen and the unreadable leaves do not mention a
+ * user/role/permission helper.  This keeps unresolved role expressions in the
+ * undecided budget instead of giving them a green label.
+ */
+function isRuntimeOnly(expr: Expr, roles: string[]): boolean {
+  const projection = runtimeProjection(expr);
+  if (!projection || !roles.length || !projection.atoms.length || !projection.unknowns.length) return false;
+  const canonicalRoleChecksAlwaysTrue = projection.atoms.every((atom) => roles.every((role) => {
+    try {
+      return atom.run(userOf(role));
+    } catch {
+      return false;
+    }
+  }));
+  if (!canonicalRoleChecksAlwaysTrue) return false;
+  // Provenance is deliberate: a neutral/bare alias is not enough to prove
+  // that the unknown leaf is ordinary runtime state.
+  return projection.unknowns.every((unknown) => unknown.provenance === 'selfModuleAccess.some');
 }
 
 export function analyze(): AnalysisResult {
@@ -1403,6 +1497,10 @@ export function analyze(): AnalysisResult {
         const f = roles.find((r) => values[r] === 'F');
         detail = '举得出反例: ' + String(t) + '=真 / ' + String(f) + '=假';
       }
+      const runtimeOnly = verdict === 'UNDECIDED' && isRuntimeOnly(branch.expr, roles);
+      if (runtimeOnly) {
+        detail += '；runtime-only：canonical 角色条件对全部可达角色恒真，保留未知运行时诊断';
+      }
       findings.push({
         file,
         relFile: relative(file),
@@ -1411,6 +1509,7 @@ export function analyze(): AnalysisResult {
         roles,
         values,
         verdict,
+        runtimeOnly,
         detail,
       });
     }
@@ -1425,7 +1524,8 @@ export function analyze(): AnalysisResult {
     findings,
     vacuous: findings.filter((f) => f.verdict === 'VACUOUS'),
     effective: findings.filter((f) => f.verdict === 'EFFECTIVE'),
-    undecided: findings.filter((f) => f.verdict === 'UNDECIDED'),
+    undecided: findings.filter((f) => f.verdict === 'UNDECIDED' && !f.runtimeOnly),
+    runtimeOnly: findings.filter((f) => f.runtimeOnly),
     stats: {
       navFiles,
       rolesDispatched: dispatch.length,
@@ -1462,7 +1562,7 @@ export function judgeSource(
   code: string,
   roles: string[],
   fileName = '__probe__.tsx',
-): Array<{ key: string; verdict: Verdict; values: Record<string, Tri>; detail: string }> {
+): Array<{ key: string; verdict: Verdict; values: Record<string, Tri>; runtimeOnly: boolean; detail: string }> {
   const virtual = path.join(SRC_DIR, '__gate_probe__', fileName);
   sourceCache.set(
     virtual,
@@ -1488,7 +1588,9 @@ export function judgeSource(
       verdict = 'EFFECTIVE';
       detail = '有反例';
     }
-    return { key: branch.key, verdict, values, detail };
+    const runtimeOnly = verdict === 'UNDECIDED' && isRuntimeOnly(branch.expr, roles);
+    if (runtimeOnly) detail += '；runtime-only';
+    return { key: branch.key, verdict, values, runtimeOnly, detail };
   });
   sourceCache.delete(virtual);
   ctxCache.delete(virtual);

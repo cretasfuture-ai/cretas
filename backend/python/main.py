@@ -1100,6 +1100,18 @@ async def lifespan(app: FastAPI):
             )
             logger.info("[startup] AI decision layer business types: %r (threshold %.2f)",
                         _ai_cfg_boot.decision_business_types, _ai_cfg_boot.decision_auto_threshold)
+            _ai_rerank_client = None
+            if _ai_cfg_boot.decision_candidates == "rerank":
+                if _ai_cfg_boot.rerank_url and _ai_cfg_boot.rerank_key:
+                    from ai.matcher.rerank import RerankClient
+                    _ai_rerank_client = RerankClient(_ai_cfg_boot.rerank_url, _ai_cfg_boot.rerank_key,
+                                                     timeout_s=_ai_cfg_boot.rerank_timeout_s)
+                    logger.info("[startup] AI decision candidates: rerank (%s, pool %d -> top %d, timeout %.2fs)",
+                                _ai_cfg_boot.rerank_url, _ai_cfg_boot.rerank_pool_k, _ai_cfg_boot.rerank_top_k,
+                                _ai_cfg_boot.rerank_timeout_s)
+                else:
+                    logger.error("[startup] AI_DECISION_CANDIDATES=rerank but AI_RERANK_URL / AI_RERANK_KEY missing "
+                                 "— using LLM shortlist")
 
             app.state.ai_orchestrator = Orchestrator(
                 semantic_matcher=SemanticMatcher(ai_pg_pool),
@@ -1119,6 +1131,7 @@ async def lifespan(app: FastAPI):
                     ai_pg_pool, top_k=_ai_cfg_boot.decision_k,
                     blend=_ai_cfg_boot.decision_candidate_blend,
                 ),
+                rerank_client=_ai_rerank_client,
             )
             logger.info(
                 "[startup] AI orchestrator wired (orchestrator + 3 matchers + β: router/calibrator/scorer/rag, "

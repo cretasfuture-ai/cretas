@@ -38,7 +38,8 @@ from ai.dto import (
 )
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
-from ai.matcher.decision import CLARIFY_KEY, NONE_KEY
+from ai.matcher.candidates import BlendRetriever
+from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, intent_text
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
@@ -57,7 +58,7 @@ class Orchestrator:
                  semantic_router=None, llm_tier_selector=None,
                  calibrator=None, scorer=None,
                  rag_retriever=None, rag_evaluator=None,
-                 decision_matcher=None, candidate_retriever=None, config=None):
+                 decision_matcher=None, candidate_retriever=None, config=None, rerank_client=None):
         self.semantic_matcher = semantic_matcher
         self.classifier_matcher = classifier_matcher
         self.llm_matcher = llm_matcher
@@ -71,6 +72,8 @@ class Orchestrator:
         self.decision_matcher = decision_matcher
         self.candidate_retriever = candidate_retriever
         self.config = config or default_config
+        # 候选重排 (2026-10-04): 配了且 decision_candidates == "rerank" 才用; 失败退回 LLM 粗选
+        self.rerank_client = rerank_client
 
     async def match(
         self,
@@ -142,27 +145,38 @@ class Orchestrator:
                 return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.EXACT,
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
 
+        retriever = self.candidate_retriever or self.semantic_matcher
+        # ===== ② 候选 (重排路): 向量 Top-N → 微调重排 → 前 K, 0 token =====
+        # 带对话历史的轮次不走这条: 重排只看这一句, LLM 粗选能看到前文。
+        codes = None
+        if (getattr(self.config, "decision_candidates", "shortlist") == "rerank" and self.rerank_client is not None
+                and isinstance(retriever, BlendRetriever)):
+            if history:
+                timing["rerankSkippedHistory"] = 1
+            else:
+                codes = await self._rerank_candidates(query, factoryId, businessType, retriever, by_code, timing)
+
         # ===== ② 候选: LLM 粗选 ‖ 向量召回 (并行), 合并去重 =====
         t = time.time()
-        retriever = self.candidate_retriever or self.semantic_matcher
-        sem, short = await asyncio.gather(
-            retriever.match(query, factoryId=factoryId, businessType=businessType),
-            self.decision_matcher.shortlist(query, role, visible_intents, history),
-            return_exceptions=True,
-        )
-        timing["retrievalMs"] = int((time.time() - t) * 1000)
-        if isinstance(sem, BaseException):
-            logger.warning("decision: candidate retrieval failed: %s", sem)
-            sem = []
-        if isinstance(short, BaseException):
-            short = None
-        timing["shortlistOk"] = 0 if short is None else 1
-        codes: List[str] = []
-        for c in list(short or []) + [s.intentCode for s in sem]:
-            if c in by_code and c not in codes:
-                codes.append(c)
-            if len(codes) >= self.config.decision_k:
-                break
+        if codes is None:
+            sem, short = await asyncio.gather(
+                retriever.match(query, factoryId=factoryId, businessType=businessType),
+                self.decision_matcher.shortlist(query, role, visible_intents, history),
+                return_exceptions=True,
+            )
+            timing["retrievalMs"] = int((time.time() - t) * 1000)
+            if isinstance(sem, BaseException):
+                logger.warning("decision: candidate retrieval failed: %s", sem)
+                sem = []
+            if isinstance(short, BaseException):
+                short = None
+            timing["shortlistOk"] = 0 if short is None else 1
+            codes = []
+            for c in list(short or []) + [s.intentCode for s in sem]:
+                if c in by_code and c not in codes:
+                    codes.append(c)
+                if len(codes) >= self.config.decision_k:
+                    break
         if not codes:
             return None
 
@@ -214,6 +228,29 @@ class Orchestrator:
                                   visible_intents=visible_intents,
                                   min_confidence=1.01 if force_clarify else self.config.decision_auto_threshold,
                                   timing=timing)
+
+    async def _rerank_candidates(self, query, factoryId, businessType, retriever, by_code, timing):
+        """向量 Top-N → 重排 → 前 K 个意图码; 任何一步拿不到结果 → None (调用方走 LLM 粗选)。"""
+        t = time.time()
+        try:
+            pool = await retriever.match(query, factoryId=factoryId, businessType=businessType,
+                                         top_k=self.config.rerank_pool_k)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision: rerank pool retrieval failed: %s", ex)
+            pool = []
+        pool_codes = [c.intentCode for c in pool if c.intentCode in by_code]
+        scores = None
+        if pool_codes:
+            # 文档格式与训练时逐字一致: intent_text (名称：说明 常见说法) 截到 120 字
+            docs = [intent_text(by_code[c])[:120] for c in pool_codes]
+            scores = await self.rerank_client.scores(query, docs)
+        timing["rerankMs"] = int((time.time() - t) * 1000)
+        if not scores:
+            timing["rerankFallback"] = 1
+            return None
+        timing["rerankOk"] = 1
+        ranked = [c for c, _ in sorted(zip(pool_codes, scores), key=lambda kv: -kv[1])]
+        return ranked[: self.config.rerank_top_k]
 
     async def _match_legacy(
         self,
