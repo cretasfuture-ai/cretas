@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.impl.PermissionServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -93,6 +94,64 @@ class ToolPrincipalPolicyTest {
         assertThat(ToolPrincipalPolicy.withReadWriteComposites(Set.of(
                 "production:read", "production:write")))
                 .contains("production:read_write");
+    }
+
+    @Test
+    void rehydratesCanonicalPriceGrantSeparatelyFromReadWritePermissions() {
+        when(userRepository.findById(42L)).thenReturn(Optional.of(user));
+        when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
+        when(permissionService.getUserPermissions(user)).thenReturn(Set.of("inventory:read"));
+        when(permissionService.hasPermission(user, "procurement:price:view")).thenReturn(true);
+
+        ToolPrincipalPolicy.RehydratedPrincipal current = policy.rehydrate(
+                principal("F-REST", "restaurant", Set.of("fabricated_manager"),
+                        Set.of("procurement:price:view"))).orElseThrow();
+
+        assertThat(current.executionContext()).containsEntry("canViewPrices", true);
+        assertThat(current.principal().permissions())
+                .doesNotContain("procurement:price:view");
+    }
+
+    @Test
+    void realCanonicalPermissionServiceAllowsBossAndRejectsManagerDespiteClaims() {
+        PermissionServiceImpl canonical = new PermissionServiceImpl();
+        ToolPrincipalPolicy canonicalPolicy = new ToolPrincipalPolicy(
+                userRepository, factoryRepository, canonical);
+        when(userRepository.findById(42L)).thenReturn(Optional.of(user));
+        when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
+
+        user.setRoleCode("factory_super_admin");
+        ToolPrincipalPolicy.RehydratedPrincipal boss = canonicalPolicy.rehydrate(
+                principal("F-REST", "restaurant", Set.of("warehouse_manager"),
+                        Set.of("procurement:price:view"))).orElseThrow();
+        assertThat(boss.executionContext()).containsEntry("canViewPrices", true);
+
+        user.setRoleCode("warehouse_manager");
+        ToolPrincipalPolicy.RehydratedPrincipal manager = canonicalPolicy.rehydrate(
+                principal("F-REST", "restaurant", Set.of("factory_super_admin"),
+                        Set.of("procurement:price:view"))).orElseThrow();
+        assertThat(manager.executionContext()).containsEntry("canViewPrices", false);
+        assertThat(manager.principal().permissions())
+                .doesNotContain("procurement:price:view");
+    }
+
+    @Test
+    void realCanonicalPermissionServiceCoversRepresentativeAllowedPriceRoles() {
+        PermissionServiceImpl canonical = new PermissionServiceImpl();
+        for (String role : Set.of("procurement_manager", "finance_manager", "sales_manager",
+                "dispatcher", "production_manager", "restaurant_manager", "restaurant_owner",
+                "restaurant_purchaser", "permission_admin", "department_admin")) {
+            user.setRoleCode(role);
+            assertThat(canonical.hasPermission(user, "procurement:price:view"))
+                    .as("canonical price grant for %s", role)
+                    .isTrue();
+        }
+        for (String role : Set.of("warehouse_manager", "warehouse_worker", "quality_manager")) {
+            user.setRoleCode(role);
+            assertThat(canonical.hasPermission(user, "procurement:price:view"))
+                    .as("canonical price denial for %s", role)
+                    .isFalse();
+        }
     }
 
     private static ExecutionPrincipal principal(

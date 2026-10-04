@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.gateway;
 
+import com.cretas.aims.security.PriceSensitiveContext;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.gateway.ToolConfirmationLease.Lease;
@@ -370,9 +371,12 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         String arguments = objectMapper.writeValueAsString(parameters);
         ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
         ToolExecutor executor = resolved.executor();
-        String rawResponse = executor.execute(
-                toolCall, trustedExecutionContext(command, current, resolved));
-        return objectMapper.readTree(rawResponse);
+        try (PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
+                !canViewPrices(current))) {
+            String rawResponse = executor.execute(
+                    toolCall, trustedExecutionContext(command, current, resolved));
+            return objectMapper.readTree(rawResponse);
+        }
     }
 
     private static boolean isNonMutatingAction(ToolExecutor.ActionType actionType) {
@@ -400,9 +404,12 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             ToolCall toolCall = ToolCall.of(
                     command.requestId(), command.toolName(), arguments);
             ToolExecutor executor = resolved.executor();
-            String rawResponse = executor.preview(
-                    toolCall, trustedExecutionContext(command, current, resolved));
-            payload = objectMapper.readTree(rawResponse);
+            try (PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
+                    !canViewPrices(current))) {
+                String rawResponse = executor.preview(
+                        toolCall, trustedExecutionContext(command, current, resolved));
+                payload = objectMapper.readTree(rawResponse);
+            }
         } catch (Exception previewFailure) {
             return finishPreview(
                     command,
@@ -438,6 +445,10 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                 GatewayResultCode.TOOL_PREVIEW_FAILED,
                 payload,
                 "Tool preview failed");
+    }
+
+    private static boolean canViewPrices(RehydratedPrincipal current) {
+        return Boolean.TRUE.equals(current.executionContext().get("canViewPrices"));
     }
 
     private ToolExecutionResult finishPreview(
