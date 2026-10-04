@@ -57,8 +57,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         // 查询当日打卡记录
         LocalDateTime startOfDay = date.atStartOfDay();
         LocalDateTime endOfDay = date.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, startOfDay, endOfDay);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, startOfDay, endOfDay);
 
         // 获取工厂总员工数
         long totalEmployees = userRepository.countActiveUsers(factoryId);
@@ -84,7 +83,8 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             stats.setAbsentCount(totalEmployees);
             stats.setAverageHours(BigDecimal.ZERO);
             stats.setAttendanceRate(BigDecimal.ZERO);
-            stats.setProductivity(BigDecimal.ZERO);
+            // 工时统计没有生产批次产出来源，生产力指数不可用。
+            stats.setProductivity(null);
             return;
         }
 
@@ -150,18 +150,116 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             stats.setAttendanceRate(BigDecimal.ZERO);
         }
 
-        // 生产效率（基于平均工时与标准工时的比率）
-        BigDecimal expectedHours = BigDecimal.valueOf(STANDARD_WORK_MINUTES).divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-        if (expectedHours.compareTo(BigDecimal.ZERO) > 0 && stats.getAverageHours().compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal productivity = stats.getAverageHours()
-                    .divide(expectedHours, 4, RoundingMode.HALF_UP)
-                    .multiply(BigDecimal.valueOf(100));
-            // 限制在0-150范围内
-            productivity = productivity.min(BigDecimal.valueOf(150)).max(BigDecimal.ZERO);
-            stats.setProductivity(productivity.setScale(2, RoundingMode.HALF_UP));
-        } else {
-            stats.setProductivity(BigDecimal.ZERO);
+        // 工时/出勤事实不能推导真实产出，生产力指数保持不可用。
+        stats.setProductivity(null);
+    }
+
+    /**
+     * 使用一次工厂范围查询，并在服务层再次守住租户、软删除和时间窗口边界。
+     * Repository 查询也有这些条件，但二次过滤避免测试替身或未来查询变更把脏记录带入统计。
+     */
+    private List<TimeClockRecord> loadRecordsForRange(String factoryId, LocalDateTime start, LocalDateTime end) {
+        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
+                factoryId, start, end);
+        if (records == null || records.isEmpty()) {
+            return Collections.emptyList();
         }
+        return records.stream()
+                .filter(Objects::nonNull)
+                .filter(record -> factoryId.equals(record.getFactoryId()))
+                .filter(record -> record.getDeletedAt() == null)
+                .filter(record -> record.getUserId() != null)
+                .filter(record -> record.getClockInTime() != null)
+                .filter(record -> !record.getClockInTime().isBefore(start)
+                        && record.getClockInTime().isBefore(end))
+                .collect(Collectors.toList());
+    }
+
+    private Map<Long, User> loadFactoryUserMap(String factoryId) {
+        List<User> users = userRepository.findByFactoryId(factoryId);
+        if (users == null || users.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return users.stream()
+                .filter(Objects::nonNull)
+                .filter(user -> user.getId() != null)
+                .filter(user -> factoryId.equals(user.getFactoryId()))
+                .collect(Collectors.toMap(User::getId, user -> user, (first, ignored) -> first));
+    }
+
+    private TimeStatsDTO.DailyStats toDailyStats(LocalDate date, TimeStatsDTO dayStats) {
+        TimeStatsDTO.DailyStats daily = new TimeStatsDTO.DailyStats();
+        daily.setDate(date);
+        daily.setDayOfWeek(date.getDayOfWeek().toString());
+        daily.setIsWorkday(!isWeekend(date));
+        daily.setTotalHours(dayStats.getTotalHours());
+        daily.setActiveWorkers(dayStats.getActiveWorkers());
+        daily.setClockIns(dayStats.getTotalClockIns());
+        daily.setAttendanceRate(dayStats.getAttendanceRate());
+        return daily;
+    }
+
+    private void populateRangeAggregate(TimeStatsDTO stats, List<TimeClockRecord> records,
+                                        long totalEmployees) {
+        BigDecimal totalMinutes = records.stream()
+                .map(record -> record.getWorkDurationMinutes() != null
+                        ? BigDecimal.valueOf(record.getWorkDurationMinutes()) : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal regularMinutes = BigDecimal.ZERO;
+        BigDecimal overtimeMinutes = BigDecimal.ZERO;
+        for (TimeClockRecord record : records) {
+            int workMinutes = record.getWorkDurationMinutes() != null ? record.getWorkDurationMinutes() : 0;
+            if (workMinutes > STANDARD_WORK_MINUTES) {
+                regularMinutes = regularMinutes.add(BigDecimal.valueOf(STANDARD_WORK_MINUTES));
+                overtimeMinutes = overtimeMinutes.add(BigDecimal.valueOf(workMinutes - STANDARD_WORK_MINUTES));
+            } else {
+                regularMinutes = regularMinutes.add(BigDecimal.valueOf(workMinutes));
+            }
+        }
+        BigDecimal totalHours = totalMinutes.divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
+        Set<Long> activeUserIds = records.stream()
+                .map(TimeClockRecord::getUserId)
+                .collect(Collectors.toSet());
+        stats.setTotalHours(totalHours);
+        stats.setRegularHours(regularMinutes.divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP));
+        stats.setOvertimeHours(overtimeMinutes.divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP));
+        stats.setActiveWorkers(activeUserIds.size());
+        stats.setTotalClockIns((long) records.size());
+        stats.setLateCount(records.stream().filter(this::isLate).count());
+        stats.setEarlyLeaveCount(records.stream().filter(this::isEarlyLeave).count());
+        stats.setAbsentCount(Math.max(0, totalEmployees - activeUserIds.size()));
+        stats.setAverageHours(activeUserIds.isEmpty()
+                ? BigDecimal.ZERO
+                : totalHours.divide(BigDecimal.valueOf(activeUserIds.size()), 2, RoundingMode.HALF_UP));
+        stats.setAttendanceRate(totalEmployees > 0
+                ? BigDecimal.valueOf(activeUserIds.size()).multiply(BigDecimal.valueOf(100))
+                    .divide(BigDecimal.valueOf(totalEmployees), 2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO);
+        stats.setProductivity(null);
+    }
+
+    private TimeStatsDTO buildRangeStats(String factoryId, LocalDate startDate, LocalDate endDate,
+                                         List<TimeClockRecord> records) {
+        TimeStatsDTO stats = new TimeStatsDTO();
+        stats.setPeriod("range");
+        stats.setStartDate(startDate);
+        stats.setEndDate(endDate);
+        long totalEmployees = userRepository.countActiveUsers(factoryId);
+        List<TimeStatsDTO.DailyStats> dailyStatsList = new ArrayList<>();
+        LocalDate currentDate = startDate;
+        while (!currentDate.isAfter(endDate)) {
+            LocalDate day = currentDate;
+            List<TimeClockRecord> dayRecords = records.stream()
+                    .filter(record -> record.getClockInTime().toLocalDate().equals(day))
+                    .collect(Collectors.toList());
+            TimeStatsDTO dayStats = new TimeStatsDTO();
+            calculateStatsFromRecords(dayStats, dayRecords, totalEmployees);
+            dailyStatsList.add(toDailyStats(day, dayStats));
+            currentDate = currentDate.plusDays(1);
+        }
+        stats.setDailyStatsList(dailyStatsList);
+        populateRangeAggregate(stats, records, totalEmployees);
+        return stats;
     }
 
     /**
@@ -206,26 +304,11 @@ public class TimeStatsServiceImpl implements TimeStatsService {
     public TimeStatsDTO getDailyStatsRange(String factoryId, LocalDate startDate, LocalDate endDate) {
         log.info("获取日期范围统计: factoryId={}, startDate={}, endDate={}",
                 factoryId, startDate, endDate);
-        if (startDate.isAfter(endDate)) {
-            throw new BusinessException(400, "开始日期不能晚于结束日期")
-                    .withHint("请调整查询日期范围").withHintTarget("startDate");
-        }
-        TimeStatsDTO stats = new TimeStatsDTO();
-        stats.setPeriod("range");
-        stats.setStartDate(startDate);
-        stats.setEndDate(endDate);
-        // 生成每日统计列表
-        List<TimeStatsDTO.DailyStats> dailyStatsList = new ArrayList<>();
-        LocalDate currentDate = startDate;
-        while (!currentDate.isAfter(endDate)) {
-            TimeStatsDTO.DailyStats dailyStats = createDailyStats(currentDate);
-            dailyStatsList.add(dailyStats);
-            currentDate = currentDate.plusDays(1);
-        }
-        stats.setDailyStatsList(dailyStatsList);
-        // 汇总统计
-        calculateAggregateStats(stats, dailyStatsList);
-        return stats;
+        validateDateRange(startDate, endDate);
+        LocalDateTime start = startDate.atStartOfDay();
+        LocalDateTime end = endDate.plusDays(1).atStartOfDay();
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
+        return buildRangeStats(factoryId, startDate, endDate, records);
     }
     @Override
     @Transactional(readOnly = true)
@@ -265,13 +348,11 @@ public class TimeStatsServiceImpl implements TimeStatsService {
     public TimeStatsDTO getStatsByWorkType(String factoryId, LocalDate startDate, LocalDate endDate) {
         log.info("按工作类型统计: factoryId={}, startDate={}, endDate={}",
                 factoryId, startDate, endDate);
-        TimeStatsDTO stats = getDailyStatsRange(factoryId, startDate, endDate);
-
-        // 查询日期范围内的打卡记录
+        validateDateRange(startDate, endDate);
         LocalDateTime start = startDate.atStartOfDay();
         LocalDateTime end = endDate.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, start, end);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
+        TimeStatsDTO stats = buildRangeStats(factoryId, startDate, endDate, records);
 
         // 按workTypeName分组统计
         Map<String, TimeStatsDTO.WorkTypeStats> workTypeStatsMap = new HashMap<>();
@@ -310,19 +391,15 @@ public class TimeStatsServiceImpl implements TimeStatsService {
                 typeStats.setAverageHours(BigDecimal.ZERO);
             }
 
-            // 产出量和效率（需要从生产批次获取，暂时设置估算值）
-            typeStats.setOutput(typeStats.getTotalHours().multiply(BigDecimal.valueOf(10)));
-            if (typeStats.getTotalHours().compareTo(BigDecimal.ZERO) > 0) {
-                typeStats.setEfficiency(typeStats.getOutput().divide(typeStats.getTotalHours(), 2, RoundingMode.HALF_UP));
-            } else {
-                typeStats.setEfficiency(BigDecimal.ZERO);
-            }
+            // 工时记录没有生产批次产出来源，产出和效率指数不可用。
+            typeStats.setOutput(null);
+            typeStats.setEfficiency(null);
 
             workTypeStatsMap.put(workTypeName, typeStats);
         }
 
         // 如果没有工作类型数据，使用默认分类
-        if (workTypeStatsMap.isEmpty()) {
+        if (workTypeStatsMap.isEmpty() && !records.isEmpty()) {
             workTypeStatsMap.put("常规工作", createDefaultWorkTypeStats("常规工作", 1, records));
         }
 
@@ -355,12 +432,8 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             stats.setAverageHours(BigDecimal.ZERO);
         }
 
-        stats.setOutput(stats.getTotalHours().multiply(BigDecimal.valueOf(10)));
-        if (stats.getTotalHours().compareTo(BigDecimal.ZERO) > 0) {
-            stats.setEfficiency(stats.getOutput().divide(stats.getTotalHours(), 2, RoundingMode.HALF_UP));
-        } else {
-            stats.setEfficiency(BigDecimal.ZERO);
-        }
+        stats.setOutput(null);
+        stats.setEfficiency(null);
 
         return stats;
     }
@@ -369,13 +442,11 @@ public class TimeStatsServiceImpl implements TimeStatsService {
     public TimeStatsDTO getStatsByDepartment(String factoryId, LocalDate startDate, LocalDate endDate) {
         log.info("按部门统计: factoryId={}, startDate={}, endDate={}",
                 factoryId, startDate, endDate);
-        TimeStatsDTO stats = getDailyStatsRange(factoryId, startDate, endDate);
-
-        // 查询日期范围内的打卡记录
+        validateDateRange(startDate, endDate);
         LocalDateTime start = startDate.atStartOfDay();
         LocalDateTime end = endDate.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, start, end);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
+        TimeStatsDTO stats = buildRangeStats(factoryId, startDate, endDate, records);
 
         // 获取所有用户ID
         Set<Long> userIds = records.stream()
@@ -385,11 +456,10 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         // 查询用户部门信息
         Map<Long, String> userDepartmentMap = new HashMap<>();
         if (!userIds.isEmpty()) {
-            List<User> users = userRepository.findByFactoryId(factoryId);
-            for (User user : users) {
-                if (userIds.contains(user.getId())) {
-                    String dept = user.getDepartment();
-                    userDepartmentMap.put(user.getId(), dept != null ? dept : "未分配");
+            for (Map.Entry<Long, User> entry : loadFactoryUserMap(factoryId).entrySet()) {
+                if (userIds.contains(entry.getKey())) {
+                    String dept = entry.getValue().getDepartment();
+                    userDepartmentMap.put(entry.getKey(), dept != null ? dept : "未分配");
                 }
             }
         }
@@ -461,26 +531,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             departmentStatsMap.put(department, deptStats);
         }
 
-        // 确保有数据返回
-        if (departmentStatsMap.isEmpty()) {
-            departmentStatsMap.put("default", createEmptyDepartmentStats("全体员工"));
-        }
-
         stats.setDepartmentStats(departmentStatsMap);
-        return stats;
-    }
-
-    /**
-     * 创建空部门统计
-     */
-    private TimeStatsDTO.DepartmentStats createEmptyDepartmentStats(String departmentName) {
-        TimeStatsDTO.DepartmentStats stats = new TimeStatsDTO.DepartmentStats();
-        stats.setDepartmentName(departmentName);
-        stats.setTotalHours(BigDecimal.ZERO);
-        stats.setWorkerCount(0);
-        stats.setAverageHours(BigDecimal.ZERO);
-        stats.setOvertimeHours(BigDecimal.ZERO);
-        stats.setAttendanceRate(BigDecimal.ZERO);
         return stats;
     }
     @Override
@@ -496,8 +547,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         // 查询日期范围内的打卡记录
         LocalDateTime start = startDate.atStartOfDay();
         LocalDateTime end = endDate.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, start, end);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
 
         // 计算总投入工时
         BigDecimal totalMinutes = records.stream()
@@ -512,27 +562,24 @@ public class TimeStatsServiceImpl implements TimeStatsService {
                 .collect(Collectors.toSet());
         int workerCount = uniqueUsers.size();
 
-        // 估算产出量（基于工时的估算模型，每小时产出10单位）
-        BigDecimal outputPerHourRate = BigDecimal.valueOf(10);
-        BigDecimal totalOutput = totalInputHours.multiply(outputPerHourRate);
-        analysis.setTotalOutput(totalOutput);
+        // 工时记录没有生产批次产出来源，产出字段保持不可用。
+        analysis.setTotalOutput(null);
 
         // 时均产出
         if (totalInputHours.compareTo(BigDecimal.ZERO) > 0) {
-            analysis.setOutputPerHour(totalOutput.divide(totalInputHours, 2, RoundingMode.HALF_UP));
+            analysis.setOutputPerHour(null);
         } else {
-            analysis.setOutputPerHour(BigDecimal.ZERO);
+            analysis.setOutputPerHour(null);
         }
 
         // 人均产出
         if (workerCount > 0) {
-            analysis.setOutputPerWorker(totalOutput.divide(BigDecimal.valueOf(workerCount), 2, RoundingMode.HALF_UP));
+            analysis.setOutputPerWorker(null);
         } else {
-            analysis.setOutputPerWorker(BigDecimal.ZERO);
+            analysis.setOutputPerWorker(null);
         }
 
         // 计算效率指数（实际工时/标准工时）
-        long workDays = java.time.temporal.ChronoUnit.DAYS.between(startDate, endDate) + 1;
         long workingDays = countWorkingDays(startDate, endDate);
         BigDecimal expectedHours = BigDecimal.valueOf(workingDays)
                 .multiply(BigDecimal.valueOf(workerCount))
@@ -542,7 +589,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             BigDecimal efficiencyIndex = totalInputHours.divide(expectedHours, 4, RoundingMode.HALF_UP);
             analysis.setEfficiencyIndex(efficiencyIndex);
         } else {
-            analysis.setEfficiencyIndex(BigDecimal.ONE);
+            analysis.setEfficiencyIndex(null);
         }
 
         // 计算趋势（与前一周期对比）
@@ -550,7 +597,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         LocalDate prevEnd = startDate.minusDays(1);
         LocalDate prevStart = prevEnd.minusDays(periodDays - 1);
 
-        List<TimeClockRecord> prevRecords = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
+        List<TimeClockRecord> prevRecords = loadRecordsForRange(
                 factoryId, prevStart.atStartOfDay(), startDate.atStartOfDay());
 
         BigDecimal prevMinutes = prevRecords.stream()
@@ -570,31 +617,9 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             analysis.setTrend("无历史数据");
         }
 
-        // 获取各部门效率，找出最高效部门
-        TimeStatsDTO deptStats = getStatsByDepartment(factoryId, startDate, endDate);
-        if (deptStats.getDepartmentStats() != null && !deptStats.getDepartmentStats().isEmpty()) {
-            String mostEfficient = deptStats.getDepartmentStats().entrySet().stream()
-                    .filter(e -> e.getValue().getTotalHours() != null)
-                    .max(Comparator.comparing(e -> e.getValue().getTotalHours()))
-                    .map(Map.Entry::getKey)
-                    .orElse("未知");
-            analysis.setMostEfficientDepartment(mostEfficient);
-        } else {
-            analysis.setMostEfficientDepartment("暂无数据");
-        }
-
-        // 获取各工作类型效率
-        TimeStatsDTO workTypeStats = getStatsByWorkType(factoryId, startDate, endDate);
-        if (workTypeStats.getWorkTypeStats() != null && !workTypeStats.getWorkTypeStats().isEmpty()) {
-            String mostEfficientType = workTypeStats.getWorkTypeStats().entrySet().stream()
-                    .filter(e -> e.getValue().getEfficiency() != null)
-                    .max(Comparator.comparing(e -> e.getValue().getEfficiency()))
-                    .map(Map.Entry::getKey)
-                    .orElse("未知");
-            analysis.setMostEfficientWorkType(mostEfficientType);
-        } else {
-            analysis.setMostEfficientWorkType("暂无数据");
-        }
+        // 当前没有真实产出/效率来源，不能宣称最高效部门或工作类型。
+        analysis.setMostEfficientDepartment("不可用");
+        analysis.setMostEfficientWorkType("不可用");
 
         // 生成改进建议
         List<String> improvements = generateImprovementSuggestions(analysis, records);
@@ -616,6 +641,13 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             current = current.plusDays(1);
         }
         return workingDays;
+    }
+
+    private void validateDateRange(LocalDate startDate, LocalDate endDate) {
+        if (startDate.isAfter(endDate)) {
+            throw new BusinessException(400, "开始日期不能晚于结束日期")
+                    .withHint("请调整查询日期范围").withHintTarget("startDate");
+        }
     }
 
     /**
@@ -646,8 +678,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
 
         // 默认建议
         if (suggestions.isEmpty()) {
-            suggestions.add("继续保持良好的工作效率");
-            suggestions.add("定期回顾和优化工作流程");
+            suggestions.add("暂无足够数据生成改进建议");
         }
 
         return suggestions;
@@ -664,19 +695,14 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         // 查询日期范围内的打卡记录
         LocalDateTime start = startDate.atStartOfDay();
         LocalDateTime end = endDate.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, start, end);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
 
         // 按用户ID分组
         Map<Long, List<TimeClockRecord>> recordsByUser = records.stream()
                 .collect(Collectors.groupingBy(TimeClockRecord::getUserId));
 
         // 查询用户信息
-        Map<Long, User> userMap = new HashMap<>();
-        List<User> users = userRepository.findByFactoryId(factoryId);
-        for (User user : users) {
-            userMap.put(user.getId(), user);
-        }
+        Map<Long, User> userMap = loadFactoryUserMap(factoryId);
 
         // 计算每个员工的统计数据
         List<TimeStatsDTO.WorkerTimeStats> workerStatsList = new ArrayList<>();
@@ -714,7 +740,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
 
             // 出勤天数
             Set<LocalDate> attendanceDates = userRecords.stream()
-                    .map(TimeClockRecord::getClockDate)
+                    .map(record -> record.getClockInTime().toLocalDate())
                     .filter(Objects::nonNull)
                     .collect(Collectors.toSet());
             workerStats.setAttendanceDays(attendanceDates.size());
@@ -780,17 +806,20 @@ public class TimeStatsServiceImpl implements TimeStatsService {
                 factoryId, workerId, startDate, endDate);
 
         // 查询用户信息
-        Optional<User> userOpt = userRepository.findById(workerId.longValue());
+        Optional<User> userOpt = userRepository.findByIdAndFactoryId(workerId.longValue(), factoryId);
         if (!userOpt.isPresent()) {
             throw new ResourceNotFoundException("员工不存在: " + workerId);
         }
         User user = userOpt.get();
+        if (user.getId() == null || !Long.valueOf(workerId.longValue()).equals(user.getId())
+                || !factoryId.equals(user.getFactoryId())) {
+            throw new ResourceNotFoundException("员工不存在: " + workerId);
+        }
 
         // 查询日期范围内的打卡记录
         LocalDateTime start = startDate.atStartOfDay();
         LocalDateTime end = endDate.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, start, end);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
 
         // 过滤出该员工的记录
         List<TimeClockRecord> userRecords = records.stream()
@@ -837,7 +866,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
 
             // 出勤天数
             Set<LocalDate> attendanceDates = userRecords.stream()
-                    .map(TimeClockRecord::getClockDate)
+                    .map(record -> record.getClockInTime().toLocalDate())
                     .filter(Objects::nonNull)
                     .collect(Collectors.toSet());
             workerStats.setAttendanceDays(attendanceDates.size());
@@ -945,7 +974,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         comparativeStats.setAttendanceRate(attendanceChange);
 
         // 生产效率变化
-        BigDecimal productivityChange = safeSubtract(stats2.getProductivity(), stats1.getProductivity());
+        BigDecimal productivityChange = safeSubtractNullable(stats2.getProductivity(), stats1.getProductivity());
         comparativeStats.setProductivity(productivityChange);
 
         // 平均工时变化
@@ -959,6 +988,13 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         BigDecimal valA = a != null ? a : BigDecimal.ZERO;
         BigDecimal valB = b != null ? b : BigDecimal.ZERO;
         return valA.subtract(valB);
+    }
+
+    private BigDecimal safeSubtractNullable(BigDecimal a, BigDecimal b) {
+        if (a == null || b == null) {
+            return null;
+        }
+        return a.subtract(b);
     }
 
     private int safeSubtract(Integer a, Integer b) {
@@ -984,8 +1020,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         // 查询日期范围内的打卡记录
         LocalDateTime start = startDate.atStartOfDay();
         LocalDateTime end = endDate.plusDays(1).atStartOfDay();
-        List<TimeClockRecord> records = timeClockRecordRepository.findByFactoryIdAndClockDateBetween(
-                factoryId, start, end);
+        List<TimeClockRecord> records = loadRecordsForRange(factoryId, start, end);
 
         // 异常检测阈值
         int MAX_DAILY_WORK_MINUTES = 12 * 60; // 每天最大工作12小时
@@ -1062,8 +1097,8 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             report.append(formatValue(stats.getRegularHours())).append(",");
             report.append(formatValue(stats.getOvertimeHours())).append(",");
             report.append(stats.getActiveWorkers()).append(",");
-            report.append(formatValue(stats.getAttendanceRate())).append("%,");
-            report.append(formatValue(stats.getProductivity())).append("%\n\n");
+            report.append(formatPercentageValue(stats.getAttendanceRate())).append(",");
+            report.append(formatPercentageValue(stats.getProductivity())).append("\n\n");
 
             // 员工明细
             report.append("员工工时明细\n");
@@ -1077,7 +1112,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
                 report.append(formatValue(ws.getOvertimeHours())).append(",");
                 report.append(ws.getAttendanceDays()).append(",");
                 report.append(ws.getLateCount()).append(",");
-                report.append(formatValue(ws.getAttendanceRate())).append("%\n");
+                report.append(formatPercentageValue(ws.getAttendanceRate())).append("\n");
             }
 
         } else if ("json".equalsIgnoreCase(format)) {
@@ -1089,7 +1124,7 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             report.append("  \"overtimeHours\": ").append(formatValue(stats.getOvertimeHours())).append(",\n");
             report.append("  \"activeWorkers\": ").append(stats.getActiveWorkers()).append(",\n");
             report.append("  \"attendanceRate\": ").append(formatValue(stats.getAttendanceRate())).append(",\n");
-            report.append("  \"productivity\": ").append(formatValue(stats.getProductivity())).append(",\n");
+            report.append("  \"productivity\": ").append(formatJsonValue(stats.getProductivity())).append(",\n");
             report.append("  \"workerCount\": ").append(workerStats.size()).append("\n");
             report.append("}");
 
@@ -1104,8 +1139,8 @@ public class TimeStatsServiceImpl implements TimeStatsService {
             report.append("正常工时: ").append(formatValue(stats.getRegularHours())).append(" 小时\n");
             report.append("加班工时: ").append(formatValue(stats.getOvertimeHours())).append(" 小时\n");
             report.append("活跃员工数: ").append(stats.getActiveWorkers()).append(" 人\n");
-            report.append("出勤率: ").append(formatValue(stats.getAttendanceRate())).append("%\n");
-            report.append("生产效率: ").append(formatValue(stats.getProductivity())).append("%\n\n");
+            report.append("出勤率: ").append(formatPercentageValue(stats.getAttendanceRate())).append("\n");
+            report.append("生产效率: ").append(formatPercentageValue(stats.getProductivity())).append("\n\n");
             report.append("【员工排名Top10】\n");
             int count = 0;
             for (TimeStatsDTO.WorkerTimeStats ws : workerStats) {
@@ -1123,6 +1158,14 @@ public class TimeStatsServiceImpl implements TimeStatsService {
 
     private String formatValue(BigDecimal value) {
         return value != null ? value.setScale(2, RoundingMode.HALF_UP).toString() : "0.00";
+    }
+
+    private String formatPercentageValue(BigDecimal value) {
+        return value != null ? value.setScale(2, RoundingMode.HALF_UP) + "%" : "不可用";
+    }
+
+    private String formatJsonValue(BigDecimal value) {
+        return value != null ? formatValue(value) : "null";
     }
     @Override
     @Transactional(readOnly = true)
@@ -1215,81 +1258,8 @@ public class TimeStatsServiceImpl implements TimeStatsService {
         }
     }
     // ========== 私有辅助方法 ==========
-    private TimeStatsDTO.DailyStats createDailyStats(LocalDate date) {
-        TimeStatsDTO.DailyStats stats = new TimeStatsDTO.DailyStats();
-        stats.setDate(date);
-        stats.setDayOfWeek(date.getDayOfWeek().toString());
-        stats.setIsWorkday(!isWeekend(date));
-        Random random = new Random(date.toEpochDay());
-        stats.setTotalHours(new BigDecimal(200 + random.nextInt(100)));
-        stats.setActiveWorkers(20 + random.nextInt(10));
-        stats.setClockIns((long)(40 + random.nextInt(20)));
-        stats.setAttendanceRate(new BigDecimal(85 + random.nextInt(15)));
-        return stats;
-    }
     private boolean isWeekend(LocalDate date) {
         DayOfWeek day = date.getDayOfWeek();
         return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY;
-    }
-    private void calculateAggregateStats(TimeStatsDTO stats, List<TimeStatsDTO.DailyStats> dailyStatsList) {
-        if (dailyStatsList.isEmpty()) {
-            return;
-        }
-        BigDecimal totalHours = BigDecimal.ZERO;
-        int totalActiveWorkers = 0;
-        long totalClockIns = 0;
-        BigDecimal totalAttendanceRate = BigDecimal.ZERO;
-        for (TimeStatsDTO.DailyStats daily : dailyStatsList) {
-            totalHours = totalHours.add(daily.getTotalHours());
-            totalActiveWorkers += daily.getActiveWorkers();
-            totalClockIns += daily.getClockIns();
-            totalAttendanceRate = totalAttendanceRate.add(daily.getAttendanceRate());
-        }
-        stats.setTotalHours(totalHours);
-        stats.setActiveWorkers(totalActiveWorkers / dailyStatsList.size());
-        stats.setTotalClockIns(totalClockIns);
-        BigDecimal avgAttendanceRate = totalAttendanceRate.divide(
-                new BigDecimal(dailyStatsList.size()), 2, RoundingMode.HALF_UP);
-        stats.setAttendanceRate(avgAttendanceRate);
-        // 模拟其他统计数据
-        stats.setRegularHours(totalHours.multiply(new BigDecimal("0.85")));
-        stats.setOvertimeHours(totalHours.multiply(new BigDecimal("0.15")));
-        stats.setAverageHours(totalHours.divide(new BigDecimal(totalActiveWorkers), 2, RoundingMode.HALF_UP));
-        stats.setProductivity(new BigDecimal("88.5"));
-    }
-    private TimeStatsDTO.WorkTypeStats createMockWorkTypeStats(String typeName, Integer typeId) {
-        TimeStatsDTO.WorkTypeStats stats = new TimeStatsDTO.WorkTypeStats();
-        stats.setWorkTypeId(typeId);
-        stats.setWorkTypeName(typeName);
-        stats.setTotalHours(new BigDecimal(100 + typeId * 50));
-        stats.setWorkerCount(5 + typeId * 2);
-        stats.setAverageHours(stats.getTotalHours().divide(new BigDecimal(stats.getWorkerCount()), 2, RoundingMode.HALF_UP));
-        stats.setOutput(new BigDecimal(500 + typeId * 100));
-        stats.setEfficiency(new BigDecimal(5 + typeId));
-        return stats;
-    }
-    private TimeStatsDTO.DepartmentStats createMockDepartmentStats(String departmentName) {
-        TimeStatsDTO.DepartmentStats stats = new TimeStatsDTO.DepartmentStats();
-        stats.setDepartmentName(departmentName);
-        stats.setTotalHours(new BigDecimal("500"));
-        stats.setWorkerCount(10);
-        stats.setAverageHours(new BigDecimal("50"));
-        stats.setOvertimeHours(new BigDecimal("50"));
-        stats.setAttendanceRate(new BigDecimal("95.5"));
-        return stats;
-    }
-    private TimeStatsDTO.WorkerTimeStats createMockWorkerStats(Integer workerId) {
-        TimeStatsDTO.WorkerTimeStats stats = new TimeStatsDTO.WorkerTimeStats();
-        stats.setWorkerId(workerId);
-        stats.setWorkerName("员工" + workerId);
-        stats.setDepartment(workerId % 2 == 0 ? "生产部" : "加工部");
-        stats.setTotalHours(new BigDecimal(150 + workerId * 5));
-        stats.setRegularHours(new BigDecimal(130 + workerId * 4));
-        stats.setOvertimeHours(new BigDecimal(20 + workerId));
-        stats.setAttendanceDays(20);
-        stats.setLateCount(workerId % 3);
-        stats.setEarlyLeaveCount(workerId % 5);
-        stats.setAttendanceRate(new BigDecimal(90 + workerId % 10));
-        return stats;
     }
 }

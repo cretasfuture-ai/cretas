@@ -11,7 +11,6 @@ import {
   Surface,
   SegmentedButtons,
   Button,
-  IconButton,
   ProgressBar,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -590,15 +589,13 @@ function ProductionReportScreenContent() {
    * 渲染实时监控标签内容 - 使用API数据
    */
   const renderRealtimeTab = () => {
-    const getStatusColor = (status: string) => {
-      return status === 'running' ? '#4CAF50' : status === 'stopped' ? '#F44336' : '#FF9800';
-    };
-
-    // 计算设备统计
-    const runningEquipment = realtimeData?.equipmentStatus?.['running'] ?? 0;
-    const stoppedEquipment = realtimeData?.equipmentStatus?.['stopped'] ?? 0;
-    const maintenanceEquipment = realtimeData?.equipmentStatus?.['maintenance'] ?? 0;
-    const totalEquipment = runningEquipment + stoppedEquipment + maintenanceEquipment;
+    // The endpoint groups registered equipment states, without runtime samples.
+    const equipmentStates = Object.entries(realtimeData?.equipmentStatus ?? {});
+    const validCount = (count: number) => Number.isSafeInteger(count) && count >= 0;
+    const countSum = equipmentStates.reduce((total, [, count]) => total + count, 0);
+    const totalEquipment = equipmentStates.every(([, count]) => validCount(count)) && validCount(countSum)
+      ? countSum
+      : null;
 
     if (realtimeLoading) {
       return (
@@ -640,50 +637,41 @@ function ProductionReportScreenContent() {
               <Text style={styles.realtimeMainLabel}>进行中计划</Text>
             </View>
             <View style={styles.realtimeMainItem}>
-              <Text style={[styles.realtimeMainValue, { color: totalEquipment > 0 ? '#4CAF50' : '#999' }]}>
-                {totalEquipment > 0 ? ((runningEquipment / totalEquipment) * 100).toFixed(1) : 0}%
+              <Text style={[styles.realtimeMainValue, { color: '#2196F3' }]}>
+                {totalEquipment ?? t('production.unknownRate')}
               </Text>
-              <Text style={styles.realtimeMainLabel}>设备运行率</Text>
+              <Text style={styles.realtimeMainLabel}>{t('production.registeredEquipment')}</Text>
             </View>
           </View>
 
-          {/* 设备状态概览 */}
           <Divider style={styles.divider} />
-          <View style={styles.realtimeStatusRow}>
-            <View style={styles.realtimeStatusItem}>
-              <IconButton icon="play-circle" size={20} iconColor="#4CAF50" />
-              <Text style={styles.realtimeStatusText}>
-                运行中: {runningEquipment}
-              </Text>
-            </View>
-            <View style={styles.realtimeStatusItem}>
-              <IconButton icon="stop-circle" size={20} iconColor="#F44336" />
-              <Text style={styles.realtimeStatusText}>
-                已停止: {stoppedEquipment}
-              </Text>
-            </View>
-            <View style={styles.realtimeStatusItem}>
-              <IconButton icon="wrench" size={20} iconColor="#FF9800" />
-              <Text style={styles.realtimeStatusText}>
-                维护中: {maintenanceEquipment}
-              </Text>
-            </View>
-          </View>
+          <Text style={styles.realtimeStatusText}>{t('production.equipmentRegistrationBasis')}</Text>
+          <Text style={styles.realtimeStatusText}>
+            {t('production.equipmentRunningRate')}: {t('production.unknownRate')}
+          </Text>
         </Surface>
 
         {/* 设备状态详情 */}
         <Surface style={styles.realtimeCard} elevation={1}>
           <Text variant="titleMedium" style={styles.statsTitle}>
-            设备状态汇总
+            {t('production.registeredEquipmentStates')}
           </Text>
           <Divider style={styles.divider} />
           <View style={styles.lineStatusList}>
-            {Object.entries(realtimeData.equipmentStatus ?? {}).map(([status, count], index) => {
+            {equipmentStates.length === 0 && (
+              <Text>{t('production.noRegisteredEquipment')}</Text>
+            )}
+            {equipmentStates.map(([status, count]) => {
               const statusLabels: Record<string, string> = {
-                running: '运行中',
-                stopped: '已停止',
-                maintenance: '维护中',
-                idle: '空闲',
+                running: t('production.equipmentRunning'),
+                stopped: t('production.equipmentStopped'),
+                maintenance: t('production.equipmentMaintenance'),
+                idle: t('production.equipmentIdle'),
+                inactive: t('production.equipmentInactive'),
+                active: t('production.equipmentActive'),
+                scrapped: t('production.equipmentScrapped'),
+                fault: t('production.equipmentFault'),
+                offline: t('production.equipmentOffline'),
               };
               const statusColors: Record<string, string> = {
                 running: '#4CAF50',
@@ -695,18 +683,22 @@ function ProductionReportScreenContent() {
                 <View key={status} style={styles.lineStatusItem}>
                   <View style={styles.lineStatusLeft}>
                     <View style={[styles.lineStatusDot, { backgroundColor: statusColors[status] ?? '#666' }]} />
-                    <Text style={styles.lineStatusName}>{statusLabels[status] ?? status}</Text>
+                    <Text style={styles.lineStatusName}>
+                      {statusLabels[status.toLowerCase()] ?? `${t('production.unknownEquipmentState')} (${status})`}
+                    </Text>
                     <Chip
                       mode="flat"
                       compact
                       style={{ backgroundColor: status === 'running' ? '#E8F5E9' : status === 'stopped' ? '#FFEBEE' : '#FFF3E0' }}
                       textStyle={{ color: statusColors[status] ?? '#666', fontSize: 10 }}
                     >
-                      {count} 台
+                      {validCount(count) ? `${count} ${t('production.equipmentCountUnit')}` : t('production.unknownRate')}
                     </Chip>
                   </View>
                   <Text style={styles.lineStatusOutput}>
-                    {totalEquipment > 0 ? ((count / totalEquipment) * 100).toFixed(1) : 0}%
+                    {totalEquipment !== null && totalEquipment > 0
+                      ? `${((count / totalEquipment) * 100).toFixed(1)}%`
+                      : t('production.unknownRate')}
                   </Text>
                 </View>
               );

@@ -6,3 +6,5 @@
 - Native evidence: candidate9 production realtime has idle=3, active=4, scrapped=1, each displayed 0%; denominator only running/stopped/maintenance. Report endpoint counts FactoryEquipment.status registration, not telemetry.
 - Preserve factory/actor/module gates. Count all valid registered statuses in distribution, retain unknown status counts, label registration basis, do not treat active as measured live running. Missing operating samples must stay unknown. No backend, Entity, Repository, permissions, credentials or business writes.
 - Acceptance: ProductionReportScreenStatistics target + TypeScript + relevant RN gates; full RN CI before merge; native acceptance after a later audit APK containing final source. Do not equate APK9 with this source.
+
+- Candidate source frozen: 12 screen tests, 21 relevant gates, 5 i18n checks PASS; TypeScript PASS, diff and dispatch checks PASS. Full RN CI and native installation acceptance pending. No backend deployment or business mutations.
