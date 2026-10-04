@@ -22,7 +22,7 @@
 - `F006-MOBILE-R44-20261005` — `queued` — Owner root — Base `8b3a3d1a44c6` — 原料list忽略status参数，库位/到期页面请求available但无状态保证；corrected2源回执已撤销旧WT参数误报。先真机只读核状态/可操作性，再定窄scope及分页/状态/租户目标测试；未改后端/数据。
 - `F006-MOBILE-R45-20261005` — `in-progress` — Owner root/执行代理 — Base `8b3a3d1a44c690e25bb33e0e954b9c71ca0a5305` — 库存合计主管/员工真实读到正数价；独立WT修Advice仅价格统计value/delta，保数量/零/空及源图；真实MockMvc价格正反例+故障fail-closed、终审/PR/发布。0业务变更。
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #914/Java/APK15已验；R37召回/R38分页搜索、身份摘要菜单隔离、仓储AI入口已目标+类型+终审，待CI合入/APK16真机。定位重试成功未打卡；采购TEST供应商空物料已验。18角色深流程/QC照片/Mini调用未完；他租户写0。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #914/Java/APK15已验；#915页修复+R46角色闸56目标/类型/終审通过，待CI/APK17真机。APK16构建成功因旧CI红未装；R45统计价后端修复中。定位重试成功未打卡；18角色深流程/QC照片/Mini调用未完；他租户写0。
 
 
 

@@ -1106,8 +1106,8 @@ export function WHInventoryListScreen() {
         />
       )}
 
-      {!summaryAiAvailable && summaryFactoryId && user && ownerSnapshotIsCurrent && (
-        <Text style={styles.aiUnavailableText}>库存 AI 分析请联系仓储主管</Text>
+      {summaryFactoryId && user && ownerSnapshotIsCurrent && (
+        <Text style={styles.aiUnavailableText}>仓储主管可在 AI 对话中分析库存</Text>
       )}
 
       <RowActionBottomSheet

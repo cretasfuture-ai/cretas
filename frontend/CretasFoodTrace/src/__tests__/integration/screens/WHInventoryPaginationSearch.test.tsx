@@ -233,7 +233,7 @@ describe('WHInventoryListScreen pagination and search contract', () => {
     expect(getBatches).toHaveBeenCalledTimes(1);
     expect(getBatches).toHaveBeenCalledWith({ factoryId: 'F006', page: 1, size: 50 });
     expect(view.queryByTestId('sticky-footer-ai')).toBeNull();
-    expect(view.getByText('库存 AI 分析请联系仓储主管')).toBeTruthy();
+    expect(view.getByText('仓储主管可在 AI 对话中分析库存')).toBeTruthy();
   });
 
   it('uses a real two-level ancestor route for manager AI', async () => {
