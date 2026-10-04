@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-R12-PAGINATION-20261004` — `in-progress` — Owner: Codex/f006_mobile_r12_exec — Base `88de770f5d` — 🔒 SseStreamingService/SseConversationPaginationContractTest；修SSE上一页/边界，只信服务端schema页基准，保留next兼容及当前READ/owner门禁。详见archive/2026-10-04-f006-mobile-r12-pagination.md。
+
 - `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `fe9ef6b3bf` — R1 #876/R8 #891/R3/R4 #892已合且Java已发布；18角色71页仅L1。R2 CORE/R6/R7/R9、全角色深流程与Mini手机验收继续；本行不锁归档源码。
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
