@@ -4016,7 +4016,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -4024,7 +4024,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
@@ -4096,7 +4096,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -4104,7 +4104,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false

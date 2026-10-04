@@ -42,6 +42,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -823,13 +824,24 @@ public class ToolDispatchService {
             // 餐饮 agent 工作流铸, 通用预览无 token → confirm() 无从驱动,
             // 确认卡在前端无米下锅)。只对写工具铸 (读工具预览无确认语义)。
             if (writeGuardService.isWriteTool(tool) || writeGuardService.isWriteIntent(intent)) {
+                Map<String, Object> previewData = null;
                 try {
-                    Map<String, Object> previewData = null;
-                    try {
-                        previewData = objectMapper.readValue(resultJson, Map.class);
-                    } catch (Exception ignore) {
-                        // 预览体非 JSON 对象时 previewData 留空, 前端渲染 message 原文
-                    }
+                    previewData = objectMapper.readValue(resultJson, Map.class);
+                } catch (Exception ignore) {
+                    // 预览体非 JSON 对象时 previewData 留空, 前端渲染 message 原文
+                }
+                // 🔴 预览自己说了「不行」(success=false / canDo=false) 就**不铸 token**。
+                //    以前只看是不是写工具: 预览失败、超收、任务已完成……照样拿到一张可确认的票,
+                //    前端只能自己去 previewData 里翻 canDo 判断要不要亮「确认」——
+                //    一个没翻的客户端就能把一次被业务规则拦下的操作确认出去(确认时才 409 或更糟)。
+                //    「能不能确认」由产出端说了算: 没有票就没有确认按钮。
+                IntentExecuteResponse blocked = blockedPreviewResponse(previewData, intent);
+                if (blocked != null) {
+                    log.info("预览未通过, 不铸确认 token: tool={}, status={}, reason={}",
+                            tool.getToolName(), blocked.getStatus(), blocked.getMessage());
+                    return blocked;
+                }
+                try {
                     // 先提取改前/改后再铸 token — 让 token 侧也持久化对比数据
                     // (审计追溯: intent_preview_tokens.current_values/new_values)。
                     Map<String, Object> tokenCurrentValues = extractPreviewSection(
@@ -893,6 +905,94 @@ public class ToolDispatchService {
                     .executedAt(LocalDateTime.now())
                     .build();
         }
+    }
+
+    /** 预览被业务规则拦下 (canDo=false) 或预览本身失败 (success=false) 时的状态。 */
+    static final String PREVIEW_BLOCKED = "PREVIEW_BLOCKED";
+
+    /**
+     * 预览没通过时给出的回执; 预览通过 (或判不了) 返回 {@code null}。
+     *
+     * <p>判据与两端客户端此前各自在前端做的那一份相同 (RN {@code blockedPreviewReason}):
+     * <ul>
+     *   <li>{@code {success:false, error|message}} —— 工具预览失败 / 缺参数</li>
+     *   <li>{@code {success:true, data:{canDo:false, message}}} —— 业务边界 (超收 / 状态不对 …)</li>
+     * </ul>
+     *
+     * <p>回执形状 (字段不变, 只是状态与 confirmableAction 不同):
+     * <ul>
+     *   <li>{@code status}: 工具说缺参数 → {@code NEED_MORE_INFO} (带 clarificationQuestions,
+     *       与执行路径 {@link #parseToolResultToResponse} 的映射一致); 其余 → {@link #PREVIEW_BLOCKED}</li>
+     *   <li>{@code message / formattedText}: 原因原文 —— web {@code AIQuery} 对非卡片状态渲染 message,
+     *       RN 卡片对非 PREVIEW 状态渲染 formattedText ?? message。⚠️ 若仍回 {@code PREVIEW} 而无
+     *       confirmableAction, 两端都只会显示一句通用的「暂不支持一键确认」, 原因丢失</li>
+     *   <li>{@code resultData}: 完整预览体, 不丢细节</li>
+     *   <li>{@code confirmableAction}: 恒为 null —— 没有票就没有确认按钮</li>
+     * </ul>
+     *
+     * <p>⚠️ previewData 为 null (预览体不是 JSON 对象) 时判不了, 维持原行为 (照常铸 token)。
+     */
+    @SuppressWarnings("unchecked")
+    IntentExecuteResponse blockedPreviewResponse(Map<String, Object> previewData, AIIntentConfig intent) {
+        if (previewData == null) {
+            return null;
+        }
+        String reason = null;
+        String status = PREVIEW_BLOCKED;
+        List<String> questions = null;
+        if (Boolean.FALSE.equals(previewData.get("success"))) {
+            reason = firstText(previewData.get("message"), previewData.get("error"));
+            if (reason == null) {
+                reason = "预览没有通过，未执行任何操作。";
+            }
+            if (Boolean.TRUE.equals(previewData.get("needMoreInfo"))
+                    || "NEED_MORE_INFO".equals(previewData.get("status"))) {
+                status = "NEED_MORE_INFO";
+                Object q = previewData.get("clarificationQuestions");
+                if (q instanceof List) {
+                    questions = new ArrayList<>();
+                    for (Object item : (List<Object>) q) {
+                        if (item instanceof String && !((String) item).isBlank()) {
+                            questions.add((String) item);
+                        }
+                    }
+                }
+            }
+        } else {
+            Object nested = previewData.get("data");
+            Map<String, Object> data = nested instanceof Map ? (Map<String, Object>) nested : previewData;
+            if (Boolean.FALSE.equals(data.get("canDo"))) {
+                reason = firstText(data.get("message"));
+                if (reason == null) {
+                    reason = "当前条件下不能执行这个操作，未执行任何操作。";
+                }
+            }
+        }
+        if (reason == null) {
+            return null;
+        }
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .status(status)
+                .message(reason)
+                .formattedText(reason)
+                .clarificationQuestions(questions)
+                .resultData(previewData)
+                .aiMode("WRITE")
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    private static String firstText(Object... candidates) {
+        for (Object c : candidates) {
+            if (c instanceof String && !((String) c).isBlank()) {
+                return (String) c;
+            }
+        }
+        return null;
     }
 
     /**

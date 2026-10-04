@@ -83,6 +83,26 @@ public interface WorkProcessTaskService {
     int SENTINEL_OUTPUT_ORDER = 9999;
 
     /**
+     * 工序任务状态机 —— <b>唯一</b>的转换表。
+     *
+     * <p>写路径 ({@code start / complete / skip} 的 assertTransition) 与 AI 对话里的只读预览
+     * ({@code WorkProcessTaskStartTool / WorkProcessTaskCompleteTool#doPreview}) 都读这里,
+     * ⛔ 不要在预览里再抄一份: 两份一定会漂, 漂了之后预览说「能做」、确认时却 409。
+     */
+    static boolean isTransitionAllowed(Status from, Status to) {
+        if (from == null || to == null) {
+            return false;
+        }
+        return switch (to) {
+            case IN_PROGRESS -> from == Status.PENDING;
+            case COMPLETED -> from == Status.IN_PROGRESS;
+            case SKIPPED -> from == Status.PENDING || from == Status.IN_PROGRESS;
+            case CANCELLED -> from == Status.PENDING || from == Status.IN_PROGRESS;
+            case PENDING -> false; // 不可回退到初始态
+        };
+    }
+
+    /**
      * 列表 — 多过滤条件 + 分页.
      */
     PageResponse<WorkProcessTaskDTO> list(
