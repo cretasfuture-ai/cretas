@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
+import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
@@ -22,6 +23,8 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -62,9 +65,9 @@ class ListSummaryPriceIsolationContractTest {
 
     @BeforeEach
     void setUp() {
-        ListSummaryController controller = new ListSummaryController(listSummaryService);
+        ListSummaryController controller = new ListSummaryController(listSummaryService, permissionService, userRepository);
         objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
-        mockMvc = MockMvcBuilders.standaloneSetup(controller)
+        mockMvc = MockMvcBuilders.standaloneSetup(controller, new PublicSummaryTestController())
                 .setControllerAdvice(advice)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();
@@ -151,7 +154,8 @@ class ListSummaryPriceIsolationContractTest {
         ListSummaryResponse source = fixture();
         when(listSummaryService.computeSummary(eq(FACTORY), eq("inventory"), any(ListSummaryRequest.class)))
                 .thenReturn(source);
-        when(userRepository.findById(1005L)).thenReturn(Optional.empty());
+        User controllerUser = stubUser(1005L, false, true);
+        when(userRepository.findById(1005L)).thenReturn(Optional.of(controllerUser), Optional.empty());
 
         JsonNode response = postSummaryWithUnresolvedUser(1005L);
 
@@ -167,7 +171,10 @@ class ListSummaryPriceIsolationContractTest {
         ListSummaryResponse source = fixture();
         when(listSummaryService.computeSummary(eq(FACTORY), eq("inventory"), any(ListSummaryRequest.class)))
                 .thenReturn(source);
-        when(userRepository.findById(1006L)).thenThrow(new IllegalStateException("user database unavailable"));
+        User controllerUser = stubUser(1006L, false, true);
+        when(userRepository.findById(1006L))
+                .thenReturn(Optional.of(controllerUser))
+                .thenThrow(new IllegalStateException("user database unavailable"));
 
         JsonNode response = postSummaryWithUnresolvedUser(1006L);
 
@@ -180,10 +187,6 @@ class ListSummaryPriceIsolationContractTest {
     @Test
     @DisplayName("public request without userId remains pass-through")
     void publicRequestWithoutUserIdRemainsUnchanged() throws Exception {
-        ListSummaryResponse source = fixture();
-        when(listSummaryService.computeSummary(eq(FACTORY), eq("inventory"), any(ListSummaryRequest.class)))
-                .thenReturn(source);
-
         JsonNode response = postSummaryWithoutUserId();
 
         assertTrue(response.path("success").asBoolean());
@@ -202,7 +205,7 @@ class ListSummaryPriceIsolationContractTest {
     }
 
     private JsonNode postSummaryWithoutUserId() throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/mobile/{factoryId}/list-summary/{entityType}", FACTORY, "inventory")
+        MvcResult result = mockMvc.perform(post("/test-public-summary")
                         .contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isOk())
@@ -239,6 +242,7 @@ class ListSummaryPriceIsolationContractTest {
         user.setId(userId);
         user.setFactoryId(FACTORY);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        lenient().when(permissionService.hasAnyPermission(eq(user), any(String[].class))).thenReturn(true);
         lenient().when(permissionService.hasPermission(eq(user), eq(PRICE_PERMISSION))).thenReturn(canViewPrice);
         lenient().when(permissionService.hasPermission(eq(user), eq(FINANCE_PERMISSION))).thenReturn(canViewFinance);
         return user;
@@ -276,5 +280,13 @@ class ListSummaryPriceIsolationContractTest {
 
     private void assertJsonNull(JsonNode stat, String field) {
         assertTrue(stat.has(field) && stat.get(field).isNull(), field + " must be JSON null");
+    }
+
+    @RestController
+    private class PublicSummaryTestController {
+        @PostMapping("/test-public-summary")
+        ApiResponse<ListSummaryResponse> summary() {
+            return ApiResponse.success("查询成功", fixture());
+        }
     }
 }
