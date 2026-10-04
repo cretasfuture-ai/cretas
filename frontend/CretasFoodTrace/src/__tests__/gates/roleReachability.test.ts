@@ -274,6 +274,87 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     expect(out[0]?.values['viewer']).toBe('F');
   });
 
+  it('runtime-only：canonical 恒真 + 运行时状态单独标注，保留 U 诊断', () => {
+    const out = judgeSource(
+      [
+        "const hasHrEmployeeWriteModule = Boolean(selfModuleAccess?.some((module) => module.moduleCode === 'hr_employee' && module.effectiveAllowed));",
+        "const canWrite = Boolean(hasHrEmployeeWriteModule && hasModulePermission(user, 'hr', 'write'));",
+      ].join('\n'),
+      ['hr_admin'],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.verdict).toBe('UNDECIDED');
+    expect(out[0]?.runtimeOnly).toBe(true);
+    expect(out[0]?.values['hr_admin']).toBe('U');
+  });
+
+  it('runtime-only 阴性：OR/NOT/嵌套常量保持原始未知分类', () => {
+    const cases = [
+      "const canWrite = selfModuleAccess || hasModulePermission(user, 'hr', 'write');",
+      "const canWrite = selfModuleAccess && !hasModulePermission(user, 'hr', 'write');",
+      "const canWrite = selfModuleAccess && (hasModulePermission(user, 'hr', 'write') && false);",
+    ];
+    for (const code of cases) {
+      const out = judgeSource(code, ['hr_admin']);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.runtimeOnly).toBe(false);
+    }
+  });
+
+  it('runtime-only 阴性：canonical 恒假不能被未知运行时值掩盖', () => {
+    const out = judgeSource(
+      "const canWrite = runtimeModuleState || hasModulePermission(user, 'hr', 'write');",
+      ['viewer'],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.verdict).toBe('UNDECIDED');
+    expect(out[0]?.runtimeOnly).toBe(false);
+  });
+
+  it('runtime-only 阴性：角色间变化的 canonical 权限仍保留未知诊断', () => {
+    const out = judgeSource(
+      "const canWrite = runtimeModuleState && hasModulePermission(user, 'production', 'write');",
+      ['operator', 'viewer'],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.runtimeOnly).toBe(false);
+    expect(out[0]?.values['operator']).toBe('U');
+    expect(out[0]?.values['viewer']).toBe('F');
+  });
+
+  it('runtime-only 阴性：无法解析的用户/角色表达式不得被标成 runtime-only', () => {
+    const out = judgeSource(
+      "const canWrite = unknownRolePredicate(user) && hasModulePermission(user, 'hr', 'write');",
+      ['hr_admin'],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.verdict).toBe('UNDECIDED');
+    expect(out[0]?.runtimeOnly).toBe(false);
+  });
+
+  it('runtime-only 阴性：未解析的中性 bare alias 也不得冒充 runtime provenance', () => {
+    const out = judgeSource(
+      "const canWrite = runtimeModuleAlias && hasModulePermission(user, 'hr', 'write');",
+      ['hr_admin'],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.verdict).toBe('UNDECIDED');
+    expect(out[0]?.runtimeOnly).toBe(false);
+  });
+
+  it('runtime-only 阴性：把 selfModuleAccess 当普通参数或在 callback 调 helper 都拒绝 provenance', () => {
+    const cases = [
+      "const canWrite = unknownRolePredicate(selfModuleAccess) && hasModulePermission(user, 'hr', 'write');",
+      "const canWrite = Boolean(selfModuleAccess?.some((module) => unknownPermissionHelper(module))) && hasModulePermission(user, 'hr', 'write');",
+    ];
+    for (const code of cases) {
+      const out = judgeSource(code, ['hr_admin']);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.verdict).toBe('UNDECIDED');
+      expect(out[0]?.runtimeOnly).toBe(false);
+    }
+  });
+
   it('真实用例：ManagementScreen 只有 permission_admin / platform_admin 走得到', () => {
     // 这是本闸的第一个真实用例，也是「导航守卫不能漏」的证明：
     // 只看 Stack 注册会得出「所有角色都进得来」，必须算上 MainNavigator 里
@@ -283,6 +364,12 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     );
     expect(entry).toBeDefined();
     expect(entry?.[1]).toEqual(['permission_admin', 'platform_admin']);
+  });
+
+  it('真实用例：runtime-only 唯一来自 WorkSchedule，且仍保留 hr_admin=U', () => {
+    expect(RESULT.runtimeOnly).toHaveLength(1);
+    expect(RESULT.runtimeOnly[0]?.relFile).toContain('screens/hr/scheduling/WorkScheduleScreen.tsx');
+    expect(RESULT.runtimeOnly[0]?.values['hr_admin']).toBe('U');
   });
 
   it('真实用例：ManagementScreen 的 isAdmin 分支判定为空转', () => {
@@ -357,6 +444,8 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
       section('空转 VACUOUS', RESULT.vacuous),
       '',
       section('有效 EFFECTIVE', RESULT.effective),
+      '',
+      section('运行时未知 RUNTIME_ONLY', RESULT.runtimeOnly),
       '',
       section('判不了 UNDECIDED', RESULT.undecided),
       '',

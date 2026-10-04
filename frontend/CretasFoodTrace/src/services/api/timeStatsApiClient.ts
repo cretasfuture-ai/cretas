@@ -327,10 +327,10 @@ class TimeStatsApiClient {
     endDate?: string;
     factoryId?: string;
   }): Promise<{
-    totalCost: number;
-    totalWorkMinutes: number;
-    avgHourlyRate: number;
-    participatingBatches: number;
+    totalCost: number | null;
+    totalWorkMinutes: number | null;
+    avgHourlyRate: number | null;
+    participatingBatches: number | null;
     participatingEmployees: number;
   }> {
     const { factoryId, period, startDate, endDate } = params || {};
@@ -338,18 +338,35 @@ class TimeStatsApiClient {
     // 计算日期范围
     const dates = this.calculateDateRange(period, startDate, endDate);
 
-    const response = await apiClient.get<{ success: boolean; data: Record<string, unknown> }>(`${this.getPath(factoryId)}/productivity`, {
+    const response = await apiClient.get<{ success: boolean; data?: Record<string, unknown>; message?: string }>(`${this.getPath(factoryId)}/daily/range`, {
       params: dates
     });
 
+    if (!response || response.success !== true || !response.data || typeof response.data !== 'object' || Array.isArray(response.data)) {
+      throw new Error(response?.message || '劳动成本汇总返回格式无效');
+    }
+
     // 映射后端响应到前端期望的格式
     const data = response.data || {};
+    const required = ['totalHours', 'activeWorkers', 'startDate', 'endDate'];
+    if (required.some((key) => !Object.prototype.hasOwnProperty.call(data, key))) throw new Error('劳动成本汇总返回格式无效');
+    for (const key of ['totalHours', 'activeWorkers']) {
+      const value = data[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new Error('劳动成本汇总返回格式无效');
+      }
+    }
+    if (!Number.isInteger(data.activeWorkers) || (data.activeWorkers as number) < 0) throw new Error('劳动成本汇总返回格式无效');
+    if (data.startDate !== dates.startDate || data.endDate !== dates.endDate) throw new Error('劳动成本汇总日期范围不一致');
+    const totalHours = Number(data.totalHours);
+    const activeWorkers = Number(data.activeWorkers);
+    if (!Number.isFinite(totalHours) || !Number.isFinite(activeWorkers)) throw new Error('劳动成本汇总返回格式无效');
     return {
-      totalCost: Number(data.totalLaborCost) || 0,
-      totalWorkMinutes: Number(data.totalWorkMinutes) || 0,
-      avgHourlyRate: Number(data.avgHourlyRate) || 0,
-      participatingBatches: Number(data.batchCount) || 0,
-      participatingEmployees: Number(data.workerCount) || 0,
+      totalCost: null,
+      totalWorkMinutes: totalHours * 60,
+      avgHourlyRate: null,
+      participatingBatches: null,
+      participatingEmployees: activeWorkers,
     };
   }
 
@@ -365,29 +382,31 @@ class TimeStatsApiClient {
   }): Promise<{
     departmentId: string;
     departmentName: string;
-    cost: number;
-    percentage: number;
+    totalHours: number;
   }[]> {
     const { factoryId, period, startDate, endDate } = params || {};
 
     // 计算日期范围
     const dates = this.calculateDateRange(period, startDate, endDate);
 
-    const response = await apiClient.get<{ success: boolean; data: { departmentStats?: Array<{ department?: string; totalCost?: number }> } }>(`${this.getPath(factoryId)}/by-department`, {
+    const response = await apiClient.get<{ success: boolean; data?: { departmentStats?: Record<string, { totalHours?: number }> }; message?: string }>(`${this.getPath(factoryId)}/by-department`, {
       params: dates
     });
 
     // 映射后端响应到前端期望的格式
-    const rawDepts = response.data?.departmentStats;
-    const departments = Array.isArray(rawDepts) ? rawDepts : [];
-    const totalCost = departments.reduce((sum: number, d: { totalCost?: number }) => sum + (d.totalCost || 0), 0);
-
-    return departments.map((dept: { department?: string; totalCost?: number }, index: number) => ({
+    if (!response || response.success !== true || !response.data || typeof response.data !== 'object' || Array.isArray(response.data)) {
+      throw new Error(response?.message || '部门工时返回格式无效');
+    }
+    const rawDepts = response.data.departmentStats;
+    if (!rawDepts || typeof rawDepts !== 'object' || Array.isArray(rawDepts)) throw new Error('部门工时返回格式无效');
+    return Object.entries(rawDepts).map(([department, stats], index) => {
+      if (!stats || typeof stats.totalHours !== 'number' || !Number.isFinite(stats.totalHours) || stats.totalHours < 0) throw new Error('部门工时返回格式无效');
+      return {
       departmentId: String(index + 1),
-      departmentName: dept.department || '未知部门',
-      cost: dept.totalCost || 0,
-      percentage: totalCost > 0 ? Math.round(((dept.totalCost || 0) / totalCost) * 100) : 0,
-    }));
+      departmentName: department,
+      totalHours: stats.totalHours,
+      };
+    });
   }
 
   /**
@@ -397,6 +416,8 @@ class TimeStatsApiClient {
   async getWorkerHoursRank(params?: {
     limit?: number;
     period?: string;
+    startDate?: string;
+    endDate?: string;
     factoryId?: string;
   }): Promise<{
     rank: number;
@@ -406,28 +427,37 @@ class TimeStatsApiClient {
     totalMinutes: number;
     totalHours: number;
   }[]> {
-    const { factoryId, limit = 10, period } = params || {};
+    const { factoryId, limit = 10, period, startDate, endDate } = params || {};
 
     // 计算日期范围
-    const dates = this.calculateDateRange(period);
+    const dates = this.calculateDateRange(period, startDate, endDate);
 
-    const response = await apiClient.get<{ success: boolean; data: Array<{ userId?: number; workerName?: string; department?: string; totalMinutes?: number }> }>(`${this.getPath(factoryId)}/workers`, {
-      params: { ...dates, limit }
+    const response = await apiClient.get<{ success: boolean; data?: Array<{ workerId?: number; workerName?: string; department?: string; totalHours?: number }>; message?: string }>(`${this.getPath(factoryId)}/workers`, {
+      params: { ...dates, topN: limit }
     });
 
     // 映射后端响应到前端期望的格式，按工时排序
-    const workers = Array.isArray(response.data) ? response.data : [];
+    if (!response || response.success !== true || !Array.isArray(response.data)) throw new Error(response?.message || '员工工时返回格式无效');
+    const workers = response.data;
+    workers.forEach((worker) => {
+      if (!worker || typeof worker.workerId !== 'number' || !Number.isFinite(worker.workerId)
+        || !Number.isInteger(worker.workerId) || worker.workerId <= 0
+        || typeof worker.workerName !== 'string' || worker.workerName.trim() === ''
+        || typeof worker.totalHours !== 'number' || !Number.isFinite(worker.totalHours) || worker.totalHours < 0) {
+        throw new Error('员工工时返回格式无效');
+      }
+    });
     return workers
-      .sort((a: { totalMinutes?: number }, b: { totalMinutes?: number }) =>
-        (b.totalMinutes || 0) - (a.totalMinutes || 0))
+      .sort((a: { totalHours?: number }, b: { totalHours?: number }) =>
+        (b.totalHours ?? 0) - (a.totalHours ?? 0))
       .slice(0, limit)
-      .map((worker: { userId?: number; workerName?: string; department?: string; totalMinutes?: number }, index: number) => ({
+      .map((worker: { workerId?: number; workerName?: string; department?: string; totalHours?: number }, index: number) => ({
         rank: index + 1,
-        userId: worker.userId || 0,
-        userName: worker.workerName || '未知',
+        userId: worker.workerId!,
+        userName: worker.workerName!,
         department: worker.department,
-        totalMinutes: worker.totalMinutes || 0,
-        totalHours: Math.round(((worker.totalMinutes || 0) / 60) * 10) / 10,
+        totalMinutes: Math.round(worker.totalHours! * 60),
+        totalHours: worker.totalHours!,
       }));
   }
 
