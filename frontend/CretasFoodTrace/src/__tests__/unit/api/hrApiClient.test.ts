@@ -10,6 +10,7 @@ import { createApiMock, resetApiMock } from '../../utils/mockApiClient';
 jest.mock('../../../services/api/timeStatsApiClient', () => ({
   timeStatsApiClient: {
     getDailyStats: jest.fn(),
+    getEmployeeTimeStats: jest.fn(),
   },
 }));
 jest.mock('../../../services/api/whitelistApiClient', () => ({
@@ -319,6 +320,104 @@ describe('hrApiClient', () => {
         analysis,
       });
       expect(result).not.toHaveProperty('analysisId');
+    });
+  });
+
+  describe('performance sample wiring', () => {
+    it('uses one workers window for nullable sample averages and grades', async () => {
+      mock.onGet(`${BASE}/time-stats/workers`).reply(200, {
+        success: true,
+        data: [
+          { workerId: 7, workerName: '张三', efficiency: 80, attendanceRate: 100 },
+          { workerId: 8, workerName: '李四', efficiency: null, attendanceRate: 100 },
+        ],
+      });
+
+      const result = await hrApiClient.getPerformanceStats({ period: 'quarter' });
+
+      expect(result.avgScore).toBe(88);
+      expect(result.sampleSize).toBe(1);
+      expect(result.employees).toHaveLength(2);
+      expect(result.employees[0]).toMatchObject({ userId: 7, score: 88, grade: 'B' });
+      expect(result.employees[1]).toMatchObject({ userId: 8, score: null, grade: null });
+      expect(mock.history.get[0].params.topN).toBe(100);
+      expect(mock.history.get[0].params.startDate).toMatch(/^\d{4}-\d{2}-01$/);
+    });
+
+    it('keeps average unknown when the workers response has no scored samples', async () => {
+      mock.onGet(`${BASE}/time-stats/workers`).reply(200, { success: true, data: [] });
+
+      const result = await hrApiClient.getPerformanceStats({ period: 'month' });
+
+      expect(result.avgScore).toBeNull();
+      expect(result.sampleSize).toBe(0);
+      expect(result.gradeDistribution).toEqual([]);
+    });
+
+    it('requests an individual worker endpoint for personnel detail', async () => {
+      (timeStatsApiClient.getEmployeeTimeStats as jest.Mock).mockResolvedValue({
+        success: true,
+        data: {
+          workerId: 42,
+          workerName: '真实员工',
+          efficiency: 90,
+          attendanceRate: 95,
+          department: '生产部',
+        },
+      });
+
+      const result = await hrApiClient.getEmployeePerformance(42, {
+        period: 'week',
+        factoryId: DEFAULT_FACTORY_ID,
+      });
+
+      expect(timeStatsApiClient.getEmployeeTimeStats).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ startDate: expect.any(String), endDate: expect.any(String) }),
+        DEFAULT_FACTORY_ID,
+      );
+      expect(result).toMatchObject({ userId: 42, userName: '真实员工', score: 92, grade: 'A', attendance: 95 });
+    });
+
+    it('uses Monday as the start of a weekly performance window', async () => {
+      (timeStatsApiClient.getEmployeeTimeStats as jest.Mock).mockResolvedValue({
+        success: true,
+        data: { workerId: 42, workerName: '周样本', efficiency: 80, attendanceRate: 100 },
+      });
+      await hrApiClient.getEmployeePerformance(42, { period: 'week', factoryId: DEFAULT_FACTORY_ID });
+      const today = new Date();
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+      const expected = String(monday.getFullYear()) + '-' + String(monday.getMonth() + 1).padStart(2, '0') + '-' + String(monday.getDate()).padStart(2, '0');
+      expect((timeStatsApiClient.getEmployeeTimeStats as jest.Mock).mock.calls.at(-1)?.[1].startDate).toBe(expected);
+    });
+
+    it('keeps a measured zero distinct from an unknown sample', async () => {
+      mock.onGet(`${BASE}/time-stats/workers`).reply(200, {
+        success: true,
+        data: [{ workerId: 7, workerName: '零分员工', efficiency: 0, attendanceRate: 0 }],
+      });
+      const result = await hrApiClient.getPerformanceStats({ period: 'month' });
+      expect(result.avgScore).toBe(0);
+      expect(result.employees[0]).toMatchObject({ userId: 7, userName: '零分员工', score: 0, grade: 'E' });
+    });
+
+    it('surfaces false-success and malformed performance reads', async () => {
+      mock.onGet(`${BASE}/time-stats/workers`).reply(200, { success: false, message: '403 denied' });
+      await expect(hrApiClient.getPerformanceStats({ period: 'month', factoryId: DEFAULT_FACTORY_ID }))
+        .rejects.toThrow('403 denied');
+
+      (timeStatsApiClient.getEmployeeTimeStats as jest.Mock).mockResolvedValue({ success: false, message: '403 denied' });
+      await expect(hrApiClient.getEmployeePerformance(42, { factoryId: DEFAULT_FACTORY_ID }))
+        .rejects.toThrow('读取员工绩效失败');
+    });
+
+    it('rejects an employee performance response that identifies another worker', async () => {
+      (timeStatsApiClient.getEmployeeTimeStats as jest.Mock).mockResolvedValue({
+        success: true, data: { workerId: 43, workerName: '其他员工', efficiency: 90, attendanceRate: 95 },
+      });
+      await expect(hrApiClient.getEmployeePerformance(42, { factoryId: DEFAULT_FACTORY_ID }))
+        .rejects.toThrow('workerId 无效');
     });
   });
 });

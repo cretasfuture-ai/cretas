@@ -7,6 +7,12 @@ import {
   employeeAIApiClient,
   type EmployeeAnalysisResponse,
 } from './employeeAIApiClient';
+import type {
+  EmployeePerformance,
+  PerformanceGrade,
+  PerformancePeriod,
+  PerformanceStats,
+} from '../../types/hrNavigation';
 
 /**
  * HR管理API客户端
@@ -147,6 +153,56 @@ class HRApiClient {
       startDate: this.formatDate(firstDayLastMonth),
       endDate: this.formatDate(lastDayLastMonth),
     };
+  }
+
+  private getPerformanceDateRange(period: PerformancePeriod = 'month'): {
+    startDate: string;
+    endDate: string;
+  } {
+    const today = new Date();
+    const endDate = this.formatDate(today);
+    const start = new Date(today);
+
+    switch (period) {
+      case 'week':
+        // A reporting week starts on Monday. Sunday (0) therefore rolls back
+        // six days, while Monday (1) stays at the current date.
+        start.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+        break;
+      case 'quarter':
+        start.setMonth(Math.floor(today.getMonth() / 3) * 3, 1);
+        break;
+      case 'year':
+        start.setMonth(0, 1);
+        break;
+      case 'month':
+      default:
+        start.setDate(1);
+        break;
+    }
+
+    return { startDate: this.formatDate(start), endDate };
+  }
+
+  private scoreWorker(efficiency?: unknown, attendanceRate?: unknown): number | null {
+    const efficiencyValue = typeof efficiency === 'number' && Number.isFinite(efficiency)
+      ? Math.min(100, Math.max(0, efficiency))
+      : null;
+    const attendanceValue = typeof attendanceRate === 'number' && Number.isFinite(attendanceRate)
+      ? Math.min(100, Math.max(0, attendanceRate))
+      : null;
+
+    if (efficiencyValue === null || attendanceValue === null) return null;
+    return Math.round(efficiencyValue * 0.6 + attendanceValue * 0.4);
+  }
+
+  private gradeForScore(score: number | null): PerformanceGrade | null {
+    if (score === null) return null;
+    if (score >= 90) return 'A';
+    if (score >= 80) return 'B';
+    if (score >= 70) return 'C';
+    if (score >= 60) return 'D';
+    return 'E';
   }
 
   /**
@@ -446,98 +502,44 @@ class HRApiClient {
    * 从后端获取生产力指数，并从员工绩效列表计算等级分布
    */
   async getPerformanceStats(params?: {
-    period?: string;
+    period?: PerformancePeriod;
     departmentId?: string;
     factoryId?: string;
-  }): Promise<{
-    avgScore: number;
-    excellentCount: number;
-    needAttentionCount: number;
-    needImprovementCount: number;
-    gradeDistribution: { grade: string; count: number; percentage: number }[];
-  }> {
+  }): Promise<PerformanceStats & { employees: EmployeePerformance[] }> {
+    const period = params?.period || 'month';
     try {
-      // 计算日期范围
-      const today = new Date();
-      let startDate: string;
-      let endDate: string = this.formatDate(today);
-
-      switch (params?.period) {
-        case 'week':
-          const weekStart = new Date(today);
-          weekStart.setDate(today.getDate() - 7);
-          startDate = this.formatDate(weekStart);
-          break;
-        case 'year':
-          startDate = `${today.getFullYear()}-01-01`;
-          break;
-        case 'month':
-        default:
-          startDate = this.getFirstDayOfMonth();
-          break;
-      }
-
-      // 并行获取生产力数据和员工列表
-      const [productivityResponse, employeeListResult] = await Promise.allSettled([
-        apiClient.get<{
-          code: number;
-          data: {
-            efficiencyIndex?: number;
-            totalOutput?: number;
-            totalInputHours?: number;
-            outputPerWorker?: number;
-            outputPerHour?: number;
-            growthRate?: number;
-            improvements?: string[];
-          };
-          message: string;
-          success: boolean;
-        }>(`${this.getPath(params?.factoryId)}/time-stats/productivity`, {
-          params: { startDate, endDate },
-        }),
-        this.getEmployeePerformanceList({ factoryId: params?.factoryId, size: 100 }),
-      ]);
-
-      // 解析生产力数据
-      let avgScore = 0;
-      if (productivityResponse.status === 'fulfilled' &&
-          productivityResponse.value?.success &&
-          productivityResponse.value?.data) {
-        const data = productivityResponse.value.data;
-        // 将效率指数转换为分数 (0-100)
-        avgScore = Math.round((data.efficiencyIndex || 0) * 100);
-      }
-
-      // 从员工绩效列表计算等级分布
+      const employeeList = await this.getEmployeePerformanceList({
+        period,
+        factoryId: params?.factoryId,
+        size: 100,
+      });
+      const employees = employeeList.content;
+      const scoredEmployees = employees.filter((employee) => employee.score !== null);
+      const avgScore = scoredEmployees.length > 0
+        ? Math.round(scoredEmployees.reduce((sum, employee) => sum + (employee.score || 0), 0)
+            / scoredEmployees.length)
+        : null;
       let excellentCount = 0;
       let goodCount = 0;
       let needAttentionCount = 0;
       let needImprovementCount = 0;
-
-      if (employeeListResult.status === 'fulfilled' && employeeListResult.value?.content) {
-        const employees = employeeListResult.value.content;
-        for (const emp of employees) {
-          switch (emp.grade) {
-            case 'A':
-              excellentCount++;
-              break;
-            case 'B':
-              goodCount++;
-              break;
-            case 'C':
-              needAttentionCount++;
-              break;
-            case 'D':
-              needImprovementCount++;
-              break;
-          }
+      let dCount = 0;
+      let eCount = 0;
+      for (const employee of scoredEmployees) {
+        switch (employee.grade) {
+          case 'A': excellentCount++; break;
+          case 'B': goodCount++; break;
+          case 'C': needAttentionCount++; break;
+          case 'D': dCount++; needImprovementCount++; break;
+          case 'E': eCount++; needImprovementCount++; break;
         }
       }
-
-      const total = excellentCount + goodCount + needAttentionCount + needImprovementCount;
+      const total = scoredEmployees.length;
 
       return {
         avgScore,
+        sampleSize: scoredEmployees.length,
+        period,
         excellentCount,
         needAttentionCount,
         needImprovementCount,
@@ -545,19 +547,14 @@ class HRApiClient {
           { grade: 'A', count: excellentCount, percentage: Math.round((excellentCount / total) * 100) },
           { grade: 'B', count: goodCount, percentage: Math.round((goodCount / total) * 100) },
           { grade: 'C', count: needAttentionCount, percentage: Math.round((needAttentionCount / total) * 100) },
-          { grade: 'D', count: needImprovementCount, percentage: Math.round((needImprovementCount / total) * 100) },
+          { grade: 'D', count: dCount, percentage: Math.round((dCount / total) * 100) },
+          { grade: 'E', count: eCount, percentage: Math.round((eCount / total) * 100) },
         ] : [],
+        employees,
       };
     } catch (error) {
       console.error('[hrApiClient] 获取绩效统计失败:', error);
-      // 返回默认值
-      return {
-        avgScore: 0,
-        excellentCount: 0,
-        needAttentionCount: 0,
-        needImprovementCount: 0,
-        gradeDistribution: [],
-      };
+      throw error;
     }
   }
 
@@ -569,23 +566,15 @@ class HRApiClient {
     page?: number;
     size?: number;
     grade?: string;
+    period?: PerformancePeriod;
     factoryId?: string;
   }): Promise<{
-    content: {
-      userId: number;
-      userName: string;
-      department?: string;
-      position?: string;
-      score: number;
-      grade: string;
-    }[];
+    content: EmployeePerformance[];
     totalElements: number;
     totalPages: number;
   }> {
     try {
-      // 获取本月数据
-      const startDate = this.getFirstDayOfMonth();
-      const endDate = this.getToday();
+      const { startDate, endDate } = this.getPerformanceDateRange(params?.period || 'month');
       const topN = params?.size || 50;
 
       const response = await apiClient.get<{
@@ -612,28 +601,23 @@ class HRApiClient {
       }
 
       // 将后端数据转换为前端格式
-      const content = response.data.map((worker) => {
-        // 计算综合评分 (效率 * 0.6 + 出勤率 * 0.4)
-        const efficiency = worker.efficiency || 0;
-        const attendanceRate = worker.attendanceRate || 0;
-        const score = Math.round(efficiency * 0.6 + attendanceRate * 0.4);
-
-        // 根据分数确定等级
-        let grade: string;
-        if (score >= 90) grade = 'A';
-        else if (score >= 75) grade = 'B';
-        else if (score >= 60) grade = 'C';
-        else grade = 'D';
-
-        return {
-          userId: worker.workerId || worker.employeeId || 0,
-          userName: worker.workerName || worker.employeeName || '未知',
-          department: worker.department,
-          position: undefined,
-          score,
-          grade,
-        };
-      });
+      const content: EmployeePerformance[] = response.data
+        .map((worker): EmployeePerformance | null => {
+          const userId = worker.workerId ?? worker.employeeId;
+          if (userId === undefined || userId === null) return null;
+          const score = this.scoreWorker(worker.efficiency, worker.attendanceRate);
+          return {
+            userId,
+            userName: worker.workerName || worker.employeeName || '未知',
+            department: worker.department,
+            position: undefined,
+            score,
+            grade: this.gradeForScore(score),
+            efficiency: typeof worker.efficiency === 'number' ? worker.efficiency : null,
+            attendance: typeof worker.attendanceRate === 'number' ? worker.attendanceRate : null,
+          };
+        })
+        .filter((worker): worker is EmployeePerformance => worker !== null);
 
       // 如果指定了等级筛选
       const filteredContent = params?.grade
@@ -653,11 +637,48 @@ class HRApiClient {
       };
     } catch (error) {
       console.error('[hrApiClient] 获取员工绩效列表失败:', error);
+      throw error;
+    }
+  }
+
+  /** 获取指定员工在同一绩效窗口内的真实工时/出勤样本。 */
+  async getEmployeePerformance(
+    userId: number,
+    params?: { period?: PerformancePeriod; factoryId?: string }
+  ): Promise<EmployeePerformance | null> {
+    try {
+      const { startDate, endDate } = this.getPerformanceDateRange(params?.period || 'month');
+      const response = await timeStatsApiClient.getEmployeeTimeStats(
+        userId,
+        { startDate, endDate },
+        params?.factoryId
+      );
+      const worker = response?.data as (typeof response.data & {
+        workerId?: number;
+        workerName?: string;
+        attendanceRate?: number;
+        department?: string;
+      }) | undefined;
+      if (!response?.success) throw new Error('读取员工绩效失败');
+      if (!worker) throw new Error('员工绩效返回格式无效');
+      const wireUserId = worker.employeeId ?? worker.workerId;
+      if (!Number.isInteger(wireUserId) || wireUserId <= 0 || wireUserId !== userId) {
+        throw new Error('员工绩效返回的 workerId 无效');
+      }
+      const score = this.scoreWorker(worker.efficiency, worker.attendanceRate);
       return {
-        content: [],
-        totalElements: 0,
-        totalPages: 0,
+        userId: wireUserId,
+        userName: worker.employeeName || worker.workerName || '未知',
+        department: worker.department,
+        position: undefined,
+        score,
+        grade: this.gradeForScore(score),
+        efficiency: typeof worker.efficiency === 'number' ? worker.efficiency : null,
+        attendance: typeof worker.attendanceRate === 'number' ? worker.attendanceRate : null,
       };
+    } catch (error) {
+      console.warn('[hrApiClient] 获取员工个人绩效失败:', error);
+      throw error;
     }
   }
 

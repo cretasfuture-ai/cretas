@@ -91,11 +91,11 @@ export interface PayrollRecord {
 }
 
 export interface LaborCostAnalysis {
-  /** 计数/求和类：0 是合法读数（确实没人计件），所以保持非空。 */
-  totalWage: number;
-  totalPieceRateWage: number;
+  /** 工资可被价格权限遮罩为 null；合法零不等于存在工资记录。 */
+  totalWage: number | null;
+  totalPieceRateWage: number | null;
   totalPieceCount: number;
-  /** 这段期间**有计件记录**的人数 —— ⛔ 不是工厂的在册人数。 */
+  /** 后端按 periodEnd 的 workerDailyEfficiency 统计人数，不能代表期间工资记录数。 */
   workerCount: number;
   /**
    * 以下四个是**派生量**，分母（计件数 / 人数）为 0 时后端发 null。
@@ -106,7 +106,7 @@ export interface LaborCostAnalysis {
   averageEfficiency: number | null;
   avgPiecesPerWorker: number | null;
   avgWagePerWorker: number | null;
-  byEfficiencyRating: Record<string, { count: number; totalWage: number }>;
+  byEfficiencyRating: Record<string, { count: number; totalWage: number | null }>;
   byProcessStage: Record<string, { avgEfficiency: number; totalPieces: number }>;
 }
 
@@ -452,11 +452,21 @@ class WageApiClient {
     periodEnd: string,
     factoryId?: string
   ): Promise<LaborCostAnalysis> {
-    const response = await apiClient.get<{ code: number; data: LaborCostAnalysis; message: string; success: boolean }>(
+    const response = await apiClient.get<{ code: number; data?: LaborCostAnalysis; message?: string; success: boolean }>(
       `${this.getPath(factoryId)}/analysis/labor-cost`,
       { params: { periodStart, periodEnd } }
     );
-    return response.data;
+    if (!response || response.success !== true || !response.data || typeof response.data !== 'object') {
+      throw new Error(response?.message || '劳动成本分析返回格式无效');
+    }
+    const data = response.data;
+    if ((data.totalWage !== null && (typeof data.totalWage !== 'number' || !Number.isFinite(data.totalWage) || data.totalWage < 0))
+      || (data.totalPieceRateWage !== null && (typeof data.totalPieceRateWage !== 'number' || !Number.isFinite(data.totalPieceRateWage) || data.totalPieceRateWage < 0))
+      || typeof data.totalPieceCount !== 'number' || !Number.isInteger(data.totalPieceCount) || data.totalPieceCount < 0
+      || typeof data.workerCount !== 'number' || !Number.isInteger(data.workerCount) || data.workerCount < 0) {
+      throw new Error('劳动成本分析返回格式无效');
+    }
+    return data;
   }
 
   /**

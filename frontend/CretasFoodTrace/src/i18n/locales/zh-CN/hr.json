@@ -608,7 +608,7 @@
       },
       "confirmed": "已确认",
       "pending": "待确认",
-      "empty": "当日暂无排班安排",
+      "empty": "当日暂无排班",
       "emptyHint": "点击下方按钮添加排班",
       "addShift": "添加排班",
       "shifts": {
@@ -618,7 +618,38 @@
       },
       "assignedCount": "已分配/总数",
       "confirmedCount": "已确认",
-      "pendingCount": "待确认"
+      "pendingCount": "待确认",
+      "noFactory": "未绑定工厂，无法读取排班",
+      "readFailed": "排班读取失败，请重试",
+      "permissionTitle": "没有排班写权限",
+      "permissionRequired": "当前账号只能查看排班，无法保存或清除",
+      "permissionChanged": "登录身份或权限已变化，请重新打开页面",
+      "noShiftTitle": "班次未配置",
+      "noShiftConfigured": "当前工厂尚未配置可用班次",
+      "noShiftNextStep": "请先由管理员配置启用班次，再进行员工排班",
+      "previousDay": "前一天",
+      "nextDay": "后一天",
+      "addTitle": "添加排班",
+      "employee": "员工",
+      "chooseEmployee": "请选择员工",
+      "shift": "班次",
+      "chooseShift": "请选择班次",
+      "notes": "备注（可选）",
+      "confirmTitle": "确认排班",
+      "saveConfirm": "确认将 {{employee}} 安排在 {{date}} 的 {{shift}}？",
+      "overwriteConfirm": "{{employee}} 在 {{date}} 已有排班，将覆盖为 {{shift}}。确认继续？",
+      "saveSuccess": "排班已保存，并已重新读取确认",
+      "saveFailedTitle": "保存排班失败",
+      "saveFailed": "保存失败，请检查权限后重试",
+      "clearTitle": "清除排班",
+      "clearConfirm": "确认清除 {{employee}} 在 {{date}} 的排班？",
+      "clearSuccess": "排班已清除，并已重新读取确认",
+      "clearFailedTitle": "清除排班失败",
+      "clearFailed": "清除失败，请检查权限后重试",
+      "invalidFormTitle": "信息不完整",
+      "invalidForm": "请选择员工和已配置班次",
+      "unknownShift": "班次定义已不可用",
+      "statusUnknown": "状态未知"
     }
   },
   "production": {
@@ -746,18 +777,20 @@
     "performance": {
       "title": "绩效分析",
       "period": {
+        "week": "本周",
         "month": "本月",
         "quarter": "本季",
         "year": "本年"
       },
       "stats": {
-        "avgScore": "平均分",
+        "avgScore": "样本平均分（{{count}}人）",
         "excellent": "优秀",
         "needsAttention": "需关注"
       },
       "gradeDistribution": "绩效等级分布",
       "employeeList": "员工绩效列表",
-      "empty": "暂无绩效数据"
+      "empty": "暂无绩效数据",
+      "readFailed": "绩效读取失败，请重试"
     }
   },
   "anomalyTypes": {
