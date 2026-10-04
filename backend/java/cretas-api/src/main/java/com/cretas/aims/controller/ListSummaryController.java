@@ -1,16 +1,24 @@
 package com.cretas.aims.controller;
 
-import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Sprint 2 Track I — U-FOOTER-1 列表底部 sticky footer 实时合计.
@@ -39,26 +47,107 @@ import org.springframework.web.bind.annotation.*;
 public class ListSummaryController {
 
     private final ListSummaryService listSummaryService;
+    private final PermissionService permissionService;
+    private final UserRepository userRepository;
+
+    /**
+     * Entity-specific read gates. The sets mirror the permissions on the backing
+     * GET/list controllers, while keeping the summary endpoint's business gate
+     * narrower than its former cross-module OR union.
+     */
+    private static final Map<String, List<String>> ENTITY_READ_PERMISSIONS = Map.ofEntries(
+            Map.entry("salesOrder", List.of("sales:read", "sales:read_write", "finance:read", "procurement:read")),
+            Map.entry("purchaseOrder", List.of("procurement:read", "procurement:read_write",
+                    "sales:read", "warehouse:read", "warehouse:read_write", "finance:read")),
+            Map.entry("inventory", List.of("warehouse:read", "warehouse:read_write",
+                    "inventory:read", "inventory:read_write")),
+            // WastageRecord read routes are currently unannotated; its write and
+            // accounting routes are inventory/price/finance, so inventory read is
+            // the least-privilege domain read for this non-price summary.
+            Map.entry("wastage", List.of("restaurant:read", "restaurant:read_write",
+                    "inventory:read", "inventory:read_write")),
+            Map.entry("attendance", List.of("hr:read", "hr:read_write")),
+            Map.entry("returnOrder", List.of("sales:read", "sales:read_write",
+                    "procurement:read", "procurement:read_write", "finance:read", "finance:read_write")),
+            Map.entry("internalTransfer", List.of("inventory:read", "inventory:write")),
+            // Processing quality read routes are unannotated; quality:read_write
+            // protects the corresponding write route, so quality read is the
+            // bounded domain gate for this summary.
+            Map.entry("qualityInspection", List.of("quality:read", "quality:read_write")),
+            Map.entry("productionPlan", List.of("production:read", "production:read_write",
+                    "scheduling:read", "scheduling:read_write", "warehouse:read", "warehouse:read_write")),
+            Map.entry("shipment", List.of("sales:read", "sales:read_write",
+                    "warehouse:read", "warehouse:read_write")));
 
     @PostMapping("/{entityType}")
     @Operation(summary = "查询列表合计统计",
                description = "按 filterConditions 过滤后, 计算 count/sum/avg 等聚合 stat, 给底部 sticky footer 渲染")
-    @RequirePermission({"sales:read", "sales:read_write",
-                        "procurement:read", "procurement:read_write",
-                        "warehouse:read", "warehouse:read_write",
-                        "restaurant:read", "restaurant:read_write",
-                        "hr:read", "hr:read_write",
-                        "quality:read", "quality:read_write"})
     public ApiResponse<ListSummaryResponse> getSummary(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String entityType,
-            @RequestBody(required = false) ListSummaryRequest request) {
+            @RequestBody(required = false) ListSummaryRequest request,
+            HttpServletRequest httpRequest,
+            HttpServletResponse httpResponse) {
         if (request == null) {
             request = new ListSummaryRequest();
         }
+
+        User currentUser = resolveCurrentUser(httpRequest);
+        if (currentUser == null) {
+            return reject(httpResponse, 401, "用户未登录");
+        }
+
+        List<String> requiredPermissions = ENTITY_READ_PERMISSIONS.get(entityType);
+        if (requiredPermissions == null) {
+            return reject(httpResponse, 403, "不支持的列表合计实体类型");
+        }
+
+        boolean allowed;
+        try {
+            allowed = permissionService.hasAnyPermission(currentUser,
+                    requiredPermissions.toArray(String[]::new));
+        } catch (RuntimeException ex) {
+            log.warn("list-summary permission check failed for userId={}, entity={}: {}",
+                    currentUser.getId(), entityType, ex.getMessage());
+            allowed = false;
+        }
+        if (!allowed) {
+            return reject(httpResponse, 403, "当前角色无权读取该列表合计");
+        }
+
         log.debug("list-summary: factory={}, entity={}, filter={}",
                 factoryId, entityType, request.getFilterConditions());
         ListSummaryResponse response = listSummaryService.computeSummary(factoryId, entityType, request);
         return ApiResponse.success("查询成功", response);
+    }
+
+    private User resolveCurrentUser(HttpServletRequest request) {
+        Object rawUserId = request.getAttribute("userId");
+        Long userId;
+        if (rawUserId instanceof Long value) {
+            userId = value;
+        } else if (rawUserId instanceof Integer value) {
+            userId = value.longValue();
+        } else if (rawUserId instanceof String value) {
+            try {
+                userId = Long.valueOf(value);
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        } else {
+            return null;
+        }
+        try {
+            Optional<User> user = userRepository.findById(userId);
+            return user.orElse(null);
+        } catch (RuntimeException ex) {
+            log.warn("list-summary user lookup failed for userId={}: {}", userId, ex.getMessage());
+            return null;
+        }
+    }
+
+    private <T> ApiResponse<T> reject(HttpServletResponse response, int status, String message) {
+        response.setStatus(status);
+        return ApiResponse.error(status, message);
     }
 }

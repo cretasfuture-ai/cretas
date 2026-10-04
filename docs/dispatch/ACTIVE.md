@@ -19,9 +19,10 @@
 
 
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
-- `F006-MOBILE-R44-20261005` — `queued` — Owner root — Base `8b3a3d1a44c6` — 原料list忽略status参数，库位/到期页面请求available但无状态保证；corrected2源回执已撤销旧WT参数误报。先真机只读核状态/可操作性，再定窄scope及分页/状态/租户目标测试；未改后端/数据。
+- `F006-MOBILE-R44-20261005` — `queued` — Owner root/只读追踪 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — F006状态参数缺省/available/AVAILABLE三GET同200行含77已耗尽/用完。PageRequest有status但列表服务未用；库位/临期实际UI未复现；临期需保留EXPIRED，后续明确状态集及查询/JPA门禁。0变更。
+- `F006-MOBILE-R48-20261005` — `claimed` — Owner root/执行代理 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — 仓库员工列表1条但合计220，主管/老板220对220；三组只读实证。仅summary/MaterialBatchService及四测试；复用DataScopeResolver链约束合计/低库存，SELF/下级/部门/ALL与真实SQL控制，安全复核/CI/18角色回读。WT r48；0业务变更。
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #914/Java/APK15已验；#915合入/CI299套3088项通过，APK17已装待真机。R45价格脱敏49目标/安全终审通过归档，待制品/PR/发布/18角色回读。定位成功未打卡；深流程/QC照片/Mini未完；前台日历暂停点击；他租户写0。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #915/RN299套3088项/APK17已装；#916/Java14103/发布/18角色价格回读已验。R47权限67目标及安全终审通过归档，待制品/CI/发布/18角色成对回读；R44筛选待修。定位成功未打卡；前台变动停点击，深流程/QC/Mini未完；他租户写0。
 
 
 
@@ -101,6 +102,7 @@
 
 ## Scope 锁地图
 
+- `F006-MOBILE-R48-20261005`：WT r48；Base见任务行；仅ListSummaryServiceImpl、MaterialBatchServiceImpl、ListSummaryServiceImplProductionPlanTest、DataScopeServiceCoverageContractTest及新{ListSummaryInventory,MaterialBatchLowStock}DataScopeContractTest；SELF/部门/ALL/低库存回归+安全审查；ACTIVE root独占。
 
 
 
