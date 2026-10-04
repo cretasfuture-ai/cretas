@@ -2,6 +2,8 @@ package com.cretas.aims.controller.restaurant;
 
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.restaurant.DishCostCardResponse;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
@@ -96,6 +98,8 @@ class DishCostCardControllerTest {
     private ServletServerHttpRequest requestForUser(long userId) {
         MockHttpServletRequest servletReq = new MockHttpServletRequest();
         servletReq.setAttribute("userId", userId);
+        servletReq.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, "F001", "test_role"));
         return new ServletServerHttpRequest(servletReq);
     }
 

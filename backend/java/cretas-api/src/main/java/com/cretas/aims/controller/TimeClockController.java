@@ -6,6 +6,8 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.TimeClockRecord;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.TimeClockService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,6 +37,18 @@ public class TimeClockController {
 
     private final TimeClockService timeClockService;
 
+    /**
+     * The self-service attendance endpoints act on the caller's own records, keyed by users.id.
+     * ⚠️ A platform admin's id is from platform_admins, an independent sequence — passing it on
+     * would clock in, or read the attendance of, the factory user who happens to share that id.
+     * Platform admins have no attendance identity in a factory; the admin endpoints below serve them.
+     */
+    private static void requireFactoryUser() {
+        if (AuthenticatedActor.fromCurrentRequest().map(AuthenticatedActor::isPlatformAdmin).orElse(false)) {
+            throw new BusinessException(403, "平台管理员没有工厂考勤记录，请用工厂账号登录后打卡或查看");
+        }
+    }
+
     private static final String HR_EMPLOYEE_MODULE = "hr_employee";
 
     /**
@@ -53,6 +67,7 @@ public class TimeClockController {
         Double longitude = body != null && body.get("longitude") != null ? ((Number) body.get("longitude")).doubleValue() : null;
         log.info("上班打卡: factoryId={}, userId={}, location={}, lat={}, lng={}",
                  factoryId, userId, location, latitude, longitude);
+        requireFactoryUser();
         TimeClockRecord record = timeClockService.clockIn(factoryId, userId, location, device, latitude, longitude);
         return ApiResponse.success(record);
     }
@@ -67,6 +82,7 @@ public class TimeClockController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestAttribute("userId") @Parameter(description = "用户ID (从JWT token获取)", example = "22", hidden = true) Long userId) {
         log.info("下班打卡: factoryId={}, userId={}", factoryId, userId);
+        requireFactoryUser();
         TimeClockRecord record = timeClockService.clockOut(factoryId, userId);
         return ApiResponse.success(record);
     }
@@ -81,6 +97,7 @@ public class TimeClockController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestAttribute("userId") @Parameter(description = "用户ID (从JWT token获取)", example = "22", hidden = true) Long userId) {
         log.info("开始休息: factoryId={}, userId={}", factoryId, userId);
+        requireFactoryUser();
         TimeClockRecord record = timeClockService.breakStart(factoryId, userId);
         return ApiResponse.success(record);
     }
@@ -95,6 +112,7 @@ public class TimeClockController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestAttribute("userId") @Parameter(description = "用户ID (从JWT token获取)", example = "22", hidden = true) Long userId) {
         log.info("结束休息: factoryId={}, userId={}", factoryId, userId);
+        requireFactoryUser();
         TimeClockRecord record = timeClockService.breakEnd(factoryId, userId);
         return ApiResponse.success(record);
     }
@@ -108,6 +126,7 @@ public class TimeClockController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestAttribute("userId") @Parameter(description = "用户ID (从JWT token获取)", example = "22", hidden = true) Long userId) {
         log.info("获取打卡状态: factoryId={}, userId={}", factoryId, userId);
+        requireFactoryUser();
         Map<String, Object> status = timeClockService.getClockStatus(factoryId, userId);
         return ApiResponse.success(status);
     }
@@ -131,6 +150,7 @@ public class TimeClockController {
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
+        requireFactoryUser();
         PageResponse<TimeClockRecord> history = timeClockService.getClockHistory(
                 factoryId, userId, startDate, endDate, pageRequest);
         return ApiResponse.success(history);
@@ -145,6 +165,7 @@ public class TimeClockController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestAttribute("userId") @Parameter(description = "用户ID (从JWT token获取)", example = "22", hidden = true) Long userId) {
         log.info("获取今日打卡记录: factoryId={}, userId={}", factoryId, userId);
+        requireFactoryUser();
         TimeClockRecord record = timeClockService.getTodayRecord(factoryId, userId);
         return ApiResponse.success(record);
     }
@@ -180,6 +201,7 @@ public class TimeClockController {
             @Parameter(description = "结束日期", example = "2026-01-31", required = true) LocalDate endDate) {
         log.info("获取考勤统计: factoryId={}, userId={}, startDate={}, endDate={}",
                 factoryId, userId, startDate, endDate);
+        requireFactoryUser();
         Map<String, Object> statistics = timeClockService.getAttendanceStatistics(
                 factoryId, userId, startDate, endDate);
         return ApiResponse.success(statistics);
@@ -213,6 +235,7 @@ public class TimeClockController {
         pageRequest.setPage(page);
         pageRequest.setSize(size);
 
+        requireFactoryUser();
         PageResponse<TimeClockRecord> records = timeClockService.getClockHistory(
                 factoryId, userId, startDate, endDate, pageRequest);
         return ApiResponse.success(records);

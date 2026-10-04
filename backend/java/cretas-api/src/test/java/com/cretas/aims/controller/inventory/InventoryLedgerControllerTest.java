@@ -5,6 +5,8 @@ import com.cretas.aims.dto.inventory.InventoryLedgerDTO;
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.InventoryLedgerService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -81,6 +83,17 @@ class InventoryLedgerControllerTest {
                 .build();
     }
 
+    /** What JwtAuthInterceptor sets: the typed actor, not just a bare userId. */
+    private void asActor(AuthenticatedActorType type, long id, String role) {
+        String factoryId = type == AuthenticatedActorType.PLATFORM_ADMIN ? "PLATFORM" : FACTORY_ID;
+        when(request.getAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE))
+                .thenReturn(new AuthenticatedActor(type, id, factoryId, role));
+    }
+
+    private void asFactoryUser(long id) {
+        asActor(AuthenticatedActorType.FACTORY_USER, id, "test_role");
+    }
+
     private User buildUser(Long id, String username) {
         User u = new User();
         u.setId(id);
@@ -143,7 +156,7 @@ class InventoryLedgerControllerTest {
     @Test
     @DisplayName("C3 R2: userId 缺失 (request.getAttribute=null) → resolveCanViewPrices=false → Service 以 includePrices=false 调用")
     void exportLedger_noUserId_includesPricesFalse() throws Exception {
-        when(request.getAttribute("userId")).thenReturn(null);
+        when(request.getAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE)).thenReturn(null);
         when(ledgerService.exportInventoryLedger(
                 eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(false), any(OutputStream.class)))
                 .thenReturn("台账_2026-05.xlsx");
@@ -158,7 +171,7 @@ class InventoryLedgerControllerTest {
     @Test
     @DisplayName("C4 R2: userId 存在但用户不存在 (DB miss) → resolveCanViewPrices=false → includePrices=false")
     void exportLedger_userNotFound_includesPricesFalse() throws Exception {
-        when(request.getAttribute("userId")).thenReturn(42L);
+        asFactoryUser(42L);
         when(userRepository.findById(42L)).thenReturn(Optional.empty());
         when(ledgerService.exportInventoryLedger(
                 eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(false), any(OutputStream.class)))
@@ -177,7 +190,7 @@ class InventoryLedgerControllerTest {
     @DisplayName("C5 R2: 用户有双权限 (price:view + finance:read_write) → resolveCanViewPrices=true → includePrices=true")
     void exportLedger_financeUser_includesPricesTrue() throws Exception {
         User financeUser = buildUser(10L, "finance_mgr");
-        when(request.getAttribute("userId")).thenReturn(10L);
+        asFactoryUser(10L);
         when(userRepository.findById(10L)).thenReturn(Optional.of(financeUser));
         when(permissionService.hasPermission(financeUser, "procurement:price:view")).thenReturn(true);
         when(permissionService.hasPermission(financeUser, "finance:read_write")).thenReturn(true);
@@ -196,7 +209,7 @@ class InventoryLedgerControllerTest {
     @DisplayName("C6 R2: 用户只有 price:view 但缺 finance:read_write → resolveCanViewPrices=false → includePrices=false (双门验证)")
     void exportLedger_priceViewOnlyNoPrices() throws Exception {
         User warehouseUser = buildUser(20L, "warehouse_worker");
-        when(request.getAttribute("userId")).thenReturn(20L);
+        asFactoryUser(20L);
         when(userRepository.findById(20L)).thenReturn(Optional.of(warehouseUser));
         when(permissionService.hasPermission(warehouseUser, "procurement:price:view")).thenReturn(true);
         when(permissionService.hasPermission(warehouseUser, "finance:read_write")).thenReturn(false);
@@ -211,31 +224,82 @@ class InventoryLedgerControllerTest {
                 eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(false), any(OutputStream.class));
     }
 
-    @Test
-    @DisplayName("C7 R2: userId 为 Integer 类型 (而非 Long) → 正确转 Long, 不抛 ClassCastException")
-    void exportLedger_userIdAsInteger_noClassCast() throws Exception {
-        User user = buildUser(30L, "ops_user");
-        // JwtAuthInterceptor 有时以 Integer 存 userId
-        when(request.getAttribute("userId")).thenReturn(30);  // Integer 而非 Long
-        when(userRepository.findById(30L)).thenReturn(Optional.of(user));
-        when(permissionService.hasPermission(eq(user), anyString())).thenReturn(false);
-        when(ledgerService.exportInventoryLedger(
-                eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(false), any(OutputStream.class)))
+    /** Shared id: platform_admins.id and users.id are independent sequences, so they collide. */
+    private static final long SHARED_ID = 30L;
+
+    private void stubExport(boolean includePrices) throws Exception {
+        lenient().when(ledgerService.exportInventoryLedger(
+                eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(includePrices), any(OutputStream.class)))
                 .thenReturn("台账_2026-05.xlsx");
+    }
+
+    private void verifyExported(int times, boolean includePrices) throws Exception {
+        verify(ledgerService, times(times)).exportInventoryLedger(
+                eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(includePrices), any(OutputStream.class));
+    }
+
+    /** The factory user who happens to own SHARED_ID in users. */
+    private void collidingFactoryUser(boolean financeGrants) {
+        User user = buildUser(SHARED_ID, "colliding_factory_user");
+        lenient().when(userRepository.findById(SHARED_ID)).thenReturn(Optional.of(user));
+        lenient().when(permissionService.hasPermission(eq(user), anyString())).thenReturn(financeGrants);
+    }
+
+    @Test
+    @DisplayName("C7a 平台 bypass 角色导出含金额, 即使 users 里同 id 的工厂用户无财务权限; 不查 users")
+    void exportLedger_platformBypassRole_notJudgedAsCollidingUser() throws Exception {
+        collidingFactoryUser(false);
+        stubExport(true);
         stubResponseOutputStream();
 
-        // 不应抛 ClassCastException
-        assertDoesNotThrow(() ->
-                controller.exportLedger(FACTORY_ID, START, END, null, request, response));
-        verify(ledgerService).exportInventoryLedger(
-                eq(FACTORY_ID), eq(START), eq(END), isNull(), eq(false), any(OutputStream.class));
+        for (String role : AuthenticatedActor.FACTORY_BYPASS_PLATFORM_ROLES) {
+            asActor(AuthenticatedActorType.PLATFORM_ADMIN, SHARED_ID, role);
+            controller.exportLedger(FACTORY_ID, START, END, null, request, response);
+        }
+
+        verifyExported(AuthenticatedActor.FACTORY_BYPASS_PLATFORM_ROLES.size(), true);
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("C7b 平台其它角色导出不含金额, 即使 users 里同 id 的工厂用户有双权限; 不查 users")
+    void exportLedger_platformNonBypassRole_noPricesEvenIfCollidingUserHasThem() throws Exception {
+        collidingFactoryUser(true);
+        stubExport(false);
+        stubResponseOutputStream();
+
+        List<String> roles = List.of("auditor", "operation_admin", "system_admin");
+        for (String role : roles) {
+            asActor(AuthenticatedActorType.PLATFORM_ADMIN, SHARED_ID, role);
+            controller.exportLedger(FACTORY_ID, START, END, null, request, response);
+        }
+
+        verifyExported(roles.size(), false);
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("C7c 阴性对照: 同 id 的工厂用户保持自己的结果 (无权限→不含金额 / 双权限→含金额)")
+    void exportLedger_negativeControl_factoryUserWithSameIdKeepsOwnResult() throws Exception {
+        stubResponseOutputStream();
+        asFactoryUser(SHARED_ID);
+
+        collidingFactoryUser(false);
+        stubExport(false);
+        controller.exportLedger(FACTORY_ID, START, END, null, request, response);
+        verifyExported(1, false);
+
+        collidingFactoryUser(true);
+        stubExport(true);
+        controller.exportLedger(FACTORY_ID, START, END, null, request, response);
+        verifyExported(1, true);
     }
 
     @Test
     @DisplayName("C8 R2: permissionService 抛异常 → fail-CLOSED (includePrices=false), 不向上传播")
     void exportLedger_permissionServiceThrows_failClosed() throws Exception {
         User user = buildUser(50L, "admin_user");
-        when(request.getAttribute("userId")).thenReturn(50L);
+        asFactoryUser(50L);
         when(userRepository.findById(50L)).thenReturn(Optional.of(user));
         when(permissionService.hasPermission(eq(user), anyString()))
                 .thenThrow(new RuntimeException("权限服务暂不可用"));
@@ -281,7 +345,7 @@ class InventoryLedgerControllerTest {
     @Test
     @DisplayName("C10 幂等: 同参数两次 exportLedger → Service 被调用两次, 无状态副作用")
     void exportLedger_calledTwiceSameParams_idempotent() throws Exception {
-        when(request.getAttribute("userId")).thenReturn(null);
+        when(request.getAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE)).thenReturn(null);
         when(ledgerService.exportInventoryLedger(
                 anyString(), any(), any(), any(), anyBoolean(), any(OutputStream.class)))
                 .thenReturn("台账_2026-05.xlsx");

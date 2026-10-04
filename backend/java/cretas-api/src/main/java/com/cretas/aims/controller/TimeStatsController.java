@@ -6,6 +6,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.TimeStatsService;
 import com.cretas.aims.service.UserModuleAccessService;
@@ -277,6 +278,17 @@ public class TimeStatsController {
         Long actorId = parseActorId(request.getAttribute("userId"));
         if (actorId == null || workerId == null) {
             return false;
+        }
+
+        // ⚠️ Branch on actor type BEFORE any users lookup: a platform admin's id is from
+        // platform_admins, an independent sequence — it would pass the self check below against
+        // the worker who happens to share that id, or borrow that worker's HR grants.
+        AuthenticatedActor platformActor = AuthenticatedActor.current(request)
+                .filter(AuthenticatedActor::isPlatformAdmin)
+                .orElse(null);
+        if (platformActor != null) {
+            return platformActor.hasFactoryBypass()
+                    && findActiveUser(workerId.longValue(), factoryId) != null;
         }
 
         User actor = findActiveUser(actorId, factoryId);

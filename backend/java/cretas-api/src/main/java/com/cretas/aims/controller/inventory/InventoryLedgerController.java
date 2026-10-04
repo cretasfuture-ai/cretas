@@ -6,6 +6,7 @@ import com.cretas.aims.dto.inventory.InventoryLedgerDTO;
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.InventoryLedgerService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -197,22 +198,17 @@ public class InventoryLedgerController {
      * Fail-CLOSED: 无法解析用户 / 权限检查抛异常 → false (不含金额).
      */
     private boolean resolveCanViewPrices(HttpServletRequest request) {
-        Object userIdObj = request.getAttribute("userId");
-        if (userIdObj == null) {
+        AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
+        if (actor == null) {
             return false;
         }
-        Long userId;
-        if (userIdObj instanceof Long l) {
-            userId = l;
-        } else if (userIdObj instanceof Integer i) {
-            userId = i.longValue();
-        } else {
-            try {
-                userId = Long.parseLong(userIdObj.toString());
-            } catch (NumberFormatException e) {
-                return false;
-            }
+        // ⚠️ Branch on actor type BEFORE any users lookup: a platform admin's id is from
+        // platform_admins, an independent sequence, so users.findById(actor.id()) would answer
+        // with an unrelated factory account and include or drop amounts by its permissions.
+        if (actor.isPlatformAdmin()) {
+            return actor.hasFactoryBypass();
         }
+        Long userId = actor.id();
         try {
             User user = userRepository.findById(userId).orElse(null);
             if (user == null) {

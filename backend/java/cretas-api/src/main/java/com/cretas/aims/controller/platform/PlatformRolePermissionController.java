@@ -6,6 +6,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.permission.PlatformRolePermissionWriteService;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import com.cretas.aims.service.PermissionService;
@@ -14,6 +15,7 @@ import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -81,11 +83,25 @@ public class PlatformRolePermissionController {
             @PathVariable String role,
             @PathVariable String module,
             @RequestParam String level,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            HttpServletRequest request) {
 
         // step-2 (2026-09-06): 校验 / 防锁死守卫 / L1 写 / 同事务审计 / 缓存失效 全部委托给唯一的写服务,
         // 这里不再保留第二份守卫 (形态 D)。行为差异: 以前 token 取不到 userId 就写 updated_by=NULL,
         // 现在拒绝写 (审计行 changed_by NOT NULL) —— 这是有意的, 见 PlatformRolePermissionWriteService。
+        // ⚠️ 先按主体类型分支, 再查 users: 平台管理员的 id 来自 platform_admins, 与 users.id 是两条
+        // 独立序列 —— getUserFromToken 给的是平台 id, 再拿它去 users.findById 会把一个不相干的工厂账号
+        // 记成操作人 (审计 changed_by / changed_by_role), 还会按那个账号的角色过餐饮守卫。
+        AuthenticatedActor platformActor = AuthenticatedActor.current(request)
+                .filter(AuthenticatedActor::isPlatformAdmin)
+                .orElse(null);
+        if (platformActor != null) {
+            if (!platformActor.hasFactoryBypass()) {
+                throw new BusinessException(403, "平台角色 " + platformActor.role() + " 无权写入权限矩阵");
+            }
+            return ApiResponse.success(writeService.write(platformActor.id(), platformActor.role(),
+                    null, role, module, level, null).row());
+        }
         User actor = null;
         try {
             Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();

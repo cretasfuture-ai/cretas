@@ -11,6 +11,7 @@ import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.utils.DepartmentDisplayNames;
 import com.cretas.aims.entity.enums.HireType;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.UserService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
@@ -107,6 +108,12 @@ public class UserController {
             @Valid @RequestBody UpdateMyProfileRequest request) {
         // ⛔ 不用 SecurityUtils.getCurrentUserId() —— 本项目从不填充 SecurityContextHolder,
         //    那个方法恒返 null(2026-08-29 上线实测: 拿到 401 未登录)。见 SecurityUtils#currentUserId。
+        // ⚠️ A platform admin's id is from platform_admins, an independent sequence: passing it on
+        // would edit the factory user who happens to share that id. A platform admin has no profile here.
+        if (AuthenticatedActor.currentPlatformAdmin().isPresent()) {
+            throw new BusinessException(403, "平台管理员没有工厂账号资料可修改")
+                    .withHint("请用该工厂的账号登录后修改本人资料。");
+        }
         Long userId = com.cretas.aims.utils.SecurityUtils.currentUserId();
         if (userId == null) {
             throw new BusinessException(401, "未登录").withHint("请重新登录后再试");

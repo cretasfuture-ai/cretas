@@ -4,12 +4,12 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.attachment.LinkChipCountsDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
-import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.security.AttachmentPermissionResolver;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
@@ -91,7 +91,7 @@ public class AttachmentController {
             @RequestParam EntityType entityType,
             @RequestParam String entityId,
             HttpServletRequest request) {
-        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), entityType);
+        permissionResolver.requireRead(request, entityType);
         List<Attachment> list = attachmentService.queryByEntity(factoryId, entityType, entityId);
         return ResponseEntity.ok(ApiResponse.success(list));
     }
@@ -117,7 +117,7 @@ public class AttachmentController {
             @PathVariable String id,
             HttpServletRequest request) {
         Attachment attachment = attachmentService.getById(factoryId, id);
-        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), attachment.getEntityType());
+        permissionResolver.requireRead(request, attachment.getEntityType());
         return ResponseEntity.ok(ApiResponse.success(attachment));
     }
 
@@ -142,7 +142,7 @@ public class AttachmentController {
             @PathVariable String id,
             HttpServletRequest request) {
         Attachment attachment = attachmentService.getById(factoryId, id);
-        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), attachment.getEntityType());
+        permissionResolver.requireRead(request, attachment.getEntityType());
         String signedUrl = attachmentService.generateDownloadUrl(factoryId, id);
         HttpHeaders headers = new HttpHeaders();
         headers.setLocation(URI.create(signedUrl));
@@ -196,8 +196,7 @@ public class AttachmentController {
             @PathVariable String factoryId,
             @Valid @RequestBody RegisterAttachmentRequest req,
             HttpServletRequest request) {
-        User currentUser = permissionResolver.resolveCurrentUser(request);
-        permissionResolver.requireWrite(currentUser, req.getEntityType());
+        Long userId = permissionResolver.requireWrite(request, req.getEntityType());
         if (req.getFileSize() != null && req.getFileSize() > AttachmentPermissionResolver.MAX_UPLOAD_SIZE_BYTES) {
             throw new BusinessException(400, "文件超出 10MB 上限");
         }
@@ -206,7 +205,6 @@ public class AttachmentController {
             throw new BusinessException(400,
                     "不支持的文件类型: " + req.getFileType() + " — 仅允许 pdf / image / xlsx / docx / mp4");
         }
-        Long userId = currentUser.getId();
         Attachment saved = attachmentService.register(factoryId, req, userId);
         return ResponseEntity.ok(ApiResponse.success("上传成功", saved));
     }
@@ -233,9 +231,7 @@ public class AttachmentController {
             @Valid @RequestBody UpdateAttachmentRequest req,
             HttpServletRequest request) {
         Attachment existing = attachmentService.getById(factoryId, id);
-        User currentUser = permissionResolver.resolveCurrentUser(request);
-        permissionResolver.requireWrite(currentUser, existing.getEntityType());
-        Long userId = currentUser.getId();
+        Long userId = permissionResolver.requireWrite(request, existing.getEntityType());
         return ResponseEntity.ok(ApiResponse.success(attachmentService.update(factoryId, id, req, userId)));
     }
 
@@ -289,7 +285,7 @@ public class AttachmentController {
             @PathVariable String factoryId,
             @Valid @RequestBody BatchCountRequest req,
             HttpServletRequest request) {
-        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), req.getEntityType());
+        permissionResolver.requireRead(request, req.getEntityType());
         Map<String, Long> counts = attachmentService.countByEntities(factoryId, req.getEntityType(), req.getEntityIds());
         return ResponseEntity.ok(ApiResponse.success(counts));
     }
@@ -329,7 +325,7 @@ public class AttachmentController {
             @PathVariable String factoryId,
             @Valid @RequestBody Batch3ChipCountRequest req,
             HttpServletRequest request) {
-        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), req.getEntityType());
+        permissionResolver.requireRead(request, req.getEntityType());
         List<String> ids = req.getEntityIds() == null
                 ? java.util.Collections.emptyList()
                 : req.getEntityIds();
@@ -421,8 +417,8 @@ public class AttachmentController {
         private List<String> entityIds;
     }
 
+    /** Actor id from the typed JWT identity; the service treats {@code null} as 401. */
     private Long currentUserId(HttpServletRequest request) {
-        User currentUser = permissionResolver.resolveCurrentUser(request);
-        return currentUser == null ? null : currentUser.getId();
+        return AuthenticatedActor.current(request).map(AuthenticatedActor::id).orElse(null);
     }
 }

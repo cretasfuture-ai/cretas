@@ -6,6 +6,7 @@ import com.cretas.aims.entity.UserModuleAccess;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.permission.ProductionModuleRegistry;
 import com.cretas.aims.service.UserModuleAccessService;
@@ -59,7 +60,20 @@ public class UserModuleAccessController {
     public ApiResponse<List<UserModuleAccessService.ModuleAccessView>> get(
             @PathVariable String factoryId,
             @PathVariable String userId,
-            @RequestAttribute(value = "userId", required = false) Long callerId) {
+            @RequestAttribute(value = "userId", required = false) Long callerId,
+            HttpServletRequest request) {
+        // ⚠️ Branch on actor type BEFORE the self check and any users lookup: a platform admin's id
+        // is from platform_admins, an independent sequence — it would match the factory user who
+        // shares that id as "self", or borrow that user's system grants.
+        AuthenticatedActor platformActor = AuthenticatedActor.current(request)
+                .filter(AuthenticatedActor::isPlatformAdmin)
+                .orElse(null);
+        if (platformActor != null) {
+            if (!platformActor.hasFactoryBypass()) {
+                throw new BusinessException(403, "平台角色 " + platformActor.role() + " 无权查看工厂账号的模块权限");
+            }
+            return ApiResponse.success(userModuleAccessService.listEffectiveAccess(factoryId, userId));
+        }
         boolean self = callerId != null && String.valueOf(callerId).equals(userId);
         if (!self) {
             User caller = callerId == null ? null : userRepository.findById(callerId).orElse(null);

@@ -4,7 +4,6 @@ import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.InsertSlot;
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
@@ -13,9 +12,9 @@ import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.InsertSlotRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.security.CurrentOperatorResolver;
 import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.ImpactAnalysisService;
@@ -51,13 +50,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final InsertSlotRepository insertSlotRepository;
     private final ProductionPlanRepository productionPlanRepository;
     private final ProductTypeRepository productTypeRepository;
-    private final UserRepository userRepository;
     private final ProductionPlanMapper productionPlanMapper;
     private final ObjectMapper objectMapper;
     private final DecisionAuditService decisionAuditService;
     private final ImpactAnalysisService impactAnalysisService;
     private final ApprovalChainService approvalChainService;
     private final PushNotificationService pushNotificationService;
+    private final CurrentOperatorResolver currentOperatorResolver;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -338,7 +337,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         }
 
         // 获取操作用户信息
-        User operator = userRepository.findById(userId)
+        // Platform admin ids are not users ids — never look the operator up in users directly.
+        CurrentOperatorResolver.Operator operator = currentOperatorResolver.resolve(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User", userId));
 
         // 构建审批上下文，包含影响分析结果
@@ -399,8 +399,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     request.getNotes(),
                     needsApproval,
                     userId,
-                    operator.getFullName(),
-                    operator.getRole() != null ? operator.getRole() : "UNKNOWN",
+                    operator.displayName(),
+                    operator.role() != null ? operator.role() : "UNKNOWN",
                     config.getId(),
                     config.getVersion(),
                     config.getName()
@@ -417,8 +417,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     request.getNotes(),
                     needsApproval,
                     userId,
-                    operator.getFullName(),
-                    operator.getRole() != null ? operator.getRole() : "UNKNOWN"
+                    operator.displayName(),
+                    operator.role() != null ? operator.role() : "UNKNOWN"
             );
         }
 
@@ -493,18 +493,18 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         }
 
         // 获取审批人信息
-        User approver = userRepository.findById(approverId)
+        CurrentOperatorResolver.Operator approver = currentOperatorResolver.resolve(approverId)
                 .orElseThrow(() -> new EntityNotFoundException("User", approverId));
 
         if (approved) {
             // 批准
-            plan.approve(approverId, approver.getFullName(), comment);
+            plan.approve(approverId, approver.displayName(), comment);
             // 批准后可以开始执行
             plan.setStatus(ProductionPlanStatus.PENDING);
             log.info("强制插单已批准: planId={}", planId);
         } else {
             // 拒绝
-            plan.reject(approverId, approver.getFullName(), comment);
+            plan.reject(approverId, approver.displayName(), comment);
             plan.setStatus(ProductionPlanStatus.CANCELLED);
 
             // 释放时段
@@ -532,7 +532,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.REJECTED,
                 comment,
                 approverId,
-                approver.getFullName()
+                approver.displayName()
         );
 
         // 发送审批结果推送通知给申请人

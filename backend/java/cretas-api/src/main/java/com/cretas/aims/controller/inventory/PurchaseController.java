@@ -17,6 +17,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.PurchaseOrderPdfService;
@@ -148,9 +149,12 @@ public class PurchaseController {
         // 角色白名单 (procurement_manager / finance_manager / dispatcher / super_admin).
         if (status == PurchaseOrderStatus.PENDING_FINANCE_REVIEW) {
             User currentUser = resolveCurrentUser(authorization);
-            boolean canViewFinanceReview = currentUser != null
-                    && permissionService.hasPermission(currentUser,
-                            com.cretas.aims.service.impl.PermissionServiceImpl.FINANCE_REVIEW_VIEW_PERMISSION);
+            // Platform admins are decided by actor type (bypass roles allowed); their id is not a users id.
+            boolean canViewFinanceReview = AuthenticatedActor.currentPlatformAdmin()
+                    .map(AuthenticatedActor::hasFactoryBypass)
+                    .orElseGet(() -> currentUser != null
+                            && permissionService.hasPermission(currentUser,
+                                    com.cretas.aims.service.impl.PermissionServiceImpl.FINANCE_REVIEW_VIEW_PERMISSION));
             if (!canViewFinanceReview) {
                 log.warn("RBAC reject (#736): user={} role={} 无 procurement:finance_review:view, "
                         + "status=PENDING_FINANCE_REVIEW 拒绝访问",
@@ -234,8 +238,10 @@ public class PurchaseController {
         // 这里 mirror PermissionService.PRICE_VIEW_ROLES (镜像 @PriceSensitive JSON strip 决策),
         // 把 user 看不见的字段在 PDF 渲染入口替换为 "—".
         User currentUser = resolveCurrentUser(authorization);
-        boolean maskPriceByPermission = currentUser == null
-                || !permissionService.hasPermission(currentUser, PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION);
+        boolean maskPriceByPermission = AuthenticatedActor.currentPlatformAdmin()
+                .map(actor -> !actor.hasFactoryBypass())
+                .orElseGet(() -> currentUser == null
+                        || !permissionService.hasPermission(currentUser, PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION));
         boolean maskPrice = external || maskPriceByPermission;
 
         byte[] pdfBytes = purchaseOrderPdfService.generatePurchaseOrderPdf(factoryId, orderId, maskPrice, external);
@@ -714,6 +720,11 @@ public class PurchaseController {
      * null as "no permission" (closed-by-default).
      */
     private User resolveCurrentUser(String authorization) {
+        // ⚠️ For a platform token getUserFromToken returns the platform_admins id, an independent
+        // sequence — users.findById would answer with an unrelated factory account. Never look it up.
+        if (AuthenticatedActor.currentPlatformAdmin().isPresent()) {
+            return null;
+        }
         try {
             Long userId = extractUserId(authorization);
             if (userId == null) {

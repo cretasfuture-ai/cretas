@@ -6,6 +6,8 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.security.PriceSensitiveContext;
 import com.cretas.aims.service.MobileService;
@@ -38,6 +40,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /** Real MVC response advice/serialization against the service's existing wire keys. */
 class ArApQueryMoneyContractTest {
     private final ArApService service = mock(ArApService.class);
+
+    /** What JwtAuthInterceptor sets for factory user 9. */
+    private static final AuthenticatedActor FACTORY_USER_9 =
+            new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 9L, "F006", "finance_manager");
 
     @AfterEach
     void cleanup() { PriceSensitiveContext.clear(); }
@@ -73,7 +79,7 @@ class ArApQueryMoneyContractTest {
                 "monthlyTransactionCount", "customerCount", "supplierCount")) row.put(key, 2L);
         row.put("transactionsByType", List.of(Map.of("type", "客户回款", "count", 1L, "amount", new BigDecimal("9.5"))));
         when(service.getFinanceOverview("F006")).thenReturn(row);
-        var result = mvc(allowed, financeWrite).perform(get("/api/mobile/F006/finance/overview").requestAttr("userId", 9L))
+        var result = mvc(allowed, financeWrite).perform(get("/api/mobile/F006/finance/overview").requestAttr("userId", 9L).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, FACTORY_USER_9))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.receivableCount").value(2))
                 .andExpect(jsonPath("$.data.transactionsByType[0].count").value(1));
@@ -100,7 +106,7 @@ class ArApQueryMoneyContractTest {
         row.put("total", new BigDecimal("201"));
         when(service.getAgingAnalysis("F006", CounterpartyType.CUSTOMER)).thenReturn(List.of(row));
         var result = mvc(allowed, financeWrite).perform(get("/api/mobile/F006/finance/aging")
-                        .param("counterpartyType", "CUSTOMER").requestAttr("userId", 9L))
+                        .param("counterpartyType", "CUSTOMER").requestAttr("userId", 9L).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, FACTORY_USER_9))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data[0].counterpartyId").value("audit-customer"));
         for (String key : List.of("current", "days1_30", "days31_60", "days61_90", "days91_120", "days120plus", "total")) {
             if (allowed) result.andExpect(jsonPath("$.data[0]." + key).value(key.equals("total") || key.equals("days120plus") ? 201 : 0));
@@ -129,7 +135,7 @@ class ArApQueryMoneyContractTest {
         row.put("transactions", List.of(transaction));
         when(service.getStatement("F006", CounterpartyType.CUSTOMER, "audit-customer",
                 LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 3))).thenReturn(row);
-        var result = mvc(allowed, financeWrite).perform(get("/api/mobile/F006/finance/statement").requestAttr("userId", 9L)
+        var result = mvc(allowed, financeWrite).perform(get("/api/mobile/F006/finance/statement").requestAttr("userId", 9L).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, FACTORY_USER_9)
                         .param("counterpartyType", "CUSTOMER").param("counterpartyId", "audit-customer")
                         .param("startDate", "2026-10-01").param("endDate", "2026-10-03"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.transactionCount").value(1))

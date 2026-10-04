@@ -19,6 +19,7 @@ import com.cretas.aims.dto.sales.SalesOrderLinkCountsDTO;
 import com.cretas.aims.dto.sales.SalesProductInventorySummaryDTO;
 import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
 import com.cretas.aims.dto.yield.WipRowDTO;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -465,9 +466,12 @@ public class SalesController {
         // (SalesController:135 submit-for-review → status). viewer 不应看到该 list.
         if (status == SalesOrderStatus.PENDING_FINANCE_REVIEW) {
             User currentUser = resolveCurrentUser(authorization);
-            boolean canViewFinanceReview = currentUser != null
-                    && permissionService.hasPermission(currentUser,
-                            com.cretas.aims.service.impl.PermissionServiceImpl.FINANCE_REVIEW_VIEW_PERMISSION);
+            // Platform admins are decided by actor type (bypass roles allowed); their id is not a users id.
+            boolean canViewFinanceReview = AuthenticatedActor.currentPlatformAdmin()
+                    .map(AuthenticatedActor::hasFactoryBypass)
+                    .orElseGet(() -> currentUser != null
+                            && permissionService.hasPermission(currentUser,
+                                    com.cretas.aims.service.impl.PermissionServiceImpl.FINANCE_REVIEW_VIEW_PERMISSION));
             if (!canViewFinanceReview) {
                 log.warn("RBAC reject (#736): user={} role={} 无 finance_review 权限, "
                         + "sales status=PENDING_FINANCE_REVIEW 拒绝访问",
@@ -481,6 +485,9 @@ public class SalesController {
     }
 
     private User resolveCurrentUser(String authorization) {
+        // ⚠️ For a platform token getUserFromToken returns the platform_admins id, an independent
+        // sequence — users.findById would answer with an unrelated factory account. Never look it up.
+        if (AuthenticatedActor.currentPlatformAdmin().isPresent()) return null;
         if (authorization == null) return null;
         try {
             String token = TokenUtils.extractToken(authorization);
