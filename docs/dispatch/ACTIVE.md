@@ -6,14 +6,11 @@
 
 ## 在飞任务
 
-- `F006-MOBILE-R21-INVENTORY-PRICE-BACKEND-20261004` — `in-progress` — Owner: Codex/f006_mobile_r19_exec — Base `b2c884402b` — 🔒 MaterialBatchController库存统计金额段及1真实MVC契约；仓工估值403但统计泄金额已验，不授予权限。详见archive/2026-10-04-f006-mobile-r21-inventory-price.md。
-
-- `F006-MOBILE-R21-INVENTORY-PRICE-FRONTEND-20261004` — `in-progress` — Owner: Codex/f006_mobile_r14_exec — Base `0e0f0e2a68` — 🔒 WHInventoryListScreen金额卡及1组件契约；现有价格角色门、缺金额不假零，保留数量。详见archive/2026-10-04-f006-mobile-r21-inventory-price.md。
 
 
 
 
-- `F006-MOBILE-COMBINED10-20261004` — `review` — Owner: Codex/root — Base `b2c884402b` — 🔒 已冻结R10/R14/R17/R18/R19共26源码；整合目标检查、CI/PR/Java发布/APK10验收待完成。仅root整合写者。详见archive/2026-10-04-f006-mobile-combined10.md。
+
 
 - `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `b2c884402b` — Java到#900；18角色71页仅L1、R12真机分页通过。整合10、全角色深流程及Mini老板AI继续；Mini保持关闭；已授权启用谷歌服务，GPS重试成功、未打卡。本行不锁已归档源码。
 
