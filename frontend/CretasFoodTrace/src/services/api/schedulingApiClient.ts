@@ -156,6 +156,199 @@ export interface SupervisorTaskDTO {
   workshopLocation: string | null;
 }
 
+export interface BatchAssignmentApiItem {
+  batchId: string;
+  batchNumber: string;
+  productName: string;
+  status: string;
+  assignedCount: number | null;
+  requiredCount: number | null;
+  totalWorkHours: number | null;
+  laborCost: number | null;
+  assignedEmployees: Array<{ id: number; name: string }>;
+}
+
+export interface BatchAssignmentApiResponse {
+  content: BatchAssignmentApiItem[];
+  totalElements: number;
+  totalPages: number;
+  page: number;
+}
+
+export type BatchWorkerStatus = 'assigned' | 'working' | 'completed' | 'paused' | 'unknown';
+
+export interface BatchWorkerApiItem {
+  id: number;
+  userId: number;
+  userName: string;
+  workType: string;
+  /** Legacy dispatcher contract: missing work duration remains its historical zero value. */
+  workMinutes: number;
+  status: string;
+}
+
+export interface BatchWorkersApiResponse {
+  content: BatchWorkerApiItem[];
+  totalElements: number;
+}
+
+export interface HrBatchWorkerApiItem extends Omit<BatchWorkerApiItem, 'workMinutes' | 'status'> {
+  workMinutes: number | null;
+  status: BatchWorkerStatus;
+}
+
+export interface HrBatchWorkersApiResponse {
+  content: HrBatchWorkerApiItem[];
+  totalElements: number;
+}
+
+type BatchAssignmentWire = {
+  id?: unknown;
+  batchNumber?: unknown;
+  productName?: unknown;
+  productTypeName?: unknown;
+  status?: unknown;
+  workerCount?: unknown;
+  assignedWorkerCount?: unknown;
+  totalWorkMinutes?: unknown;
+  workDurationMinutes?: unknown;
+  laborCost?: unknown;
+  assignedEmployees?: unknown;
+};
+
+type BatchAssignmentPageWire = {
+  content?: unknown;
+  totalElements?: unknown;
+  totalPages?: unknown;
+  page?: unknown;
+};
+
+type BatchWorkerWire = {
+  sessionId?: unknown;
+  workerId?: unknown;
+  workerName?: unknown;
+  workMinutes?: unknown;
+  status?: unknown;
+  departmentName?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function optionalNumber(value: unknown, field: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (!isFiniteNumber(value)) throw new Error(`批次响应 ${field} 格式无效`);
+  return value;
+}
+
+function requiredNumber(value: unknown, field: string): number {
+  if (!isFiniteNumber(value)) throw new Error(`批次员工响应缺少有效 ${field}`);
+  return value;
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string') throw new Error(`批次响应缺少有效 ${field}`);
+  return value;
+}
+
+function isSuccessEnvelope<T>(value: unknown): value is ApiResponse<T> {
+  return isRecord(value) && value.success === true && 'data' in value;
+}
+
+function isBatchAssignmentPage(value: unknown): value is BatchAssignmentPageWire & {
+  content: unknown[];
+  totalElements: number;
+  totalPages: number;
+} {
+  return isRecord(value)
+    && Array.isArray(value.content)
+    && isFiniteNumber(value.totalElements)
+    && isFiniteNumber(value.totalPages);
+}
+
+function toBatchAssignmentItem(value: unknown): BatchAssignmentApiItem {
+  if (!isRecord(value)) throw new Error('批次列表包含无效项目');
+  const wire = value as BatchAssignmentWire;
+  const id = wire.id;
+  const batchNumber = requiredString(wire.batchNumber, 'batchNumber');
+  const status = requiredString(wire.status, 'status');
+  const productName = typeof wire.productName === 'string'
+    ? wire.productName
+    : typeof wire.productTypeName === 'string' ? wire.productTypeName : '';
+  const totalWorkMinutes = wire.totalWorkMinutes ?? wire.workDurationMinutes;
+  const totalWorkMinutesValue = optionalNumber(totalWorkMinutes, 'work minutes');
+  let assignedEmployees: Array<{ id: number; name: string }> = [];
+  if (wire.assignedEmployees !== undefined) {
+    if (!Array.isArray(wire.assignedEmployees)) throw new Error('批次列表 assignedEmployees 格式无效');
+    assignedEmployees = wire.assignedEmployees.map((entry) => {
+      if (!isRecord(entry)) throw new Error('批次列表包含无效 assigned employee');
+      return { id: requiredNumber(entry.id, 'assigned employee id'), name: typeof entry.name === 'string' ? entry.name : '' };
+    });
+  }
+
+  if (typeof id !== 'string' && !isFiniteNumber(id)) {
+    throw new Error('批次列表缺少有效 id');
+  }
+
+  return {
+    batchId: String(id),
+    batchNumber,
+    productName,
+    status,
+    // workerCount is the batch's operator count, not a contractual required-worker field.
+    // No supported required/assigned people field is available in this response contract.
+    assignedCount: null,
+    requiredCount: null,
+    totalWorkHours: totalWorkMinutesValue === null
+      ? null
+      : totalWorkMinutesValue / 60,
+    laborCost: optionalNumber(wire.laborCost, 'laborCost'),
+    assignedEmployees,
+  };
+}
+
+export function normalizeBatchWorkerStatus(value: unknown): BatchWorkerStatus {
+  if (typeof value !== 'string') return 'unknown';
+  switch (value.trim().toLowerCase()) {
+    case 'assigned': return 'assigned';
+    case 'working': return 'working';
+    case 'completed': return 'completed';
+    case 'paused': return 'paused';
+    default: return 'unknown';
+  }
+}
+
+function toBatchWorkerWire(value: unknown): {
+  id: number;
+  userId: number;
+  userName: string;
+  workType: string;
+  workMinutes: number | null;
+  status: BatchWorkerStatus;
+} {
+  if (!isRecord(value)) throw new Error('批次员工列表包含无效项目');
+  const wire = value as BatchWorkerWire;
+  const userId = requiredNumber(wire.workerId, 'workerId');
+  return {
+    id: isFiniteNumber(wire.sessionId) ? wire.sessionId : userId,
+    userId,
+    userName: typeof wire.workerName === 'string' ? wire.workerName : '',
+    workType: typeof wire.departmentName === 'string' ? wire.departmentName : '',
+    workMinutes: optionalNumber(wire.workMinutes, 'workMinutes'),
+    status: normalizeBatchWorkerStatus(wire.status),
+  };
+}
+
+function toLegacyBatchWorkerItem(value: unknown): BatchWorkerApiItem {
+  const item = toBatchWorkerWire(value);
+  return { ...item, workMinutes: item.workMinutes ?? 0, status: typeof (value as BatchWorkerWire).status === 'string' ? (value as BatchWorkerWire).status as string : 'ASSIGNED' };
+}
+
 // ========== API 客户端类 ==========
 
 class SchedulingApiClient {
@@ -1031,110 +1224,59 @@ class SchedulingApiClient {
   // ==================== HR 模块方法 ====================
 
   /**
-   * 获取批次分配列表 (HR模块)
-   * 调用 /processing/batches 获取批次列表，包含员工分配统计
+   * 获取批次分配列表 (HR模块)。
+   * 读取入口由 ProcessingController 的 production_plan module gate 保护；
+   * 此处只解析服务端 envelope，不把失败响应伪装成空列表。
    */
   async getBatchAssignments(params?: {
     status?: string;
     page?: number;
     size?: number;
     factoryId?: string;
-  }): Promise<{
-    content: {
-      batchId: string;
-      batchNumber: string;
-      productName: string;
-      status: string;
-      assignedCount: number;
-      requiredCount: number;
-      totalWorkHours: number;
-      laborCost: number;
-    }[];
-    totalElements: number;
-    totalPages: number;
-  }> {
+  }): Promise<BatchAssignmentApiResponse> {
     const fid = params?.factoryId || requireFactoryId();
-    const response = await apiClient.get<ApiResponse<{
-      content: Array<{
-        id: number | string;
-        batchNumber: string;
-        productTypeName?: string;
-        status: string;
-        assignedWorkerCount?: number;
-        plannedQuantity?: number;
-        totalWorkMinutes?: number;
-        laborCost?: number;
-      }>;
-      totalElements: number;
-      totalPages: number;
-    }>>(`/api/mobile/${fid}/processing/batches`, {
-      params: {
-        status: params?.status,
-        page: params?.page || 1,
-        size: params?.size || 20,
-      },
-    });
+    const response = await apiClient.get<ApiResponse<BatchAssignmentPageWire>>(
+      `/api/mobile/${fid}/processing/batches`,
+      {
+        params: {
+          status: params?.status,
+          page: params?.page || 1,
+          size: params?.size || 20,
+        },
+      }
+    );
 
-    if (response.success && response.data) {
-      return {
-        content: response.data.content.map(batch => ({
-          batchId: String(batch.id),
-          batchNumber: batch.batchNumber || '',
-          productName: batch.productTypeName || '',
-          status: batch.status || '',
-          assignedCount: batch.assignedWorkerCount || 0,
-          requiredCount: batch.plannedQuantity || 0,
-          totalWorkHours: (batch.totalWorkMinutes || 0) / 60,
-          laborCost: batch.laborCost || 0,
-        })),
-        totalElements: response.data.totalElements || 0,
-        totalPages: response.data.totalPages || 0,
-      };
+    if (!isSuccessEnvelope(response) || !isBatchAssignmentPage(response.data)) {
+      throw new Error(response?.message || '批次列表响应无效');
     }
-    return { content: [], totalElements: 0, totalPages: 0 };
+
+    return {
+      content: response.data.content.map(toBatchAssignmentItem),
+      totalElements: response.data.totalElements,
+      totalPages: response.data.totalPages,
+      page: response.data.page === undefined ? params?.page || 1 : requiredNumber(response.data.page, 'page'),
+    };
   }
 
   /**
    * 获取批次员工列表 (HR模块)
    * 调用 /processing/batches/{batchId}/workers 获取批次员工列表
    */
-  async getBatchWorkers(batchId: string, factoryId?: string): Promise<{
-    content: {
-      id: number;
-      userId: number;
-      userName: string;
-      workType: string;
-      workMinutes: number;
-      status: string;
-    }[];
-    totalElements: number;
-  }> {
+  async getBatchWorkers(batchId: string): Promise<BatchWorkersApiResponse>;
+  async getBatchWorkers(batchId: string, factoryId: string): Promise<HrBatchWorkersApiResponse>;
+  async getBatchWorkers(batchId: string, factoryId?: string): Promise<BatchWorkersApiResponse | HrBatchWorkersApiResponse> {
     const fid = factoryId || requireFactoryId();
-    const response = await apiClient.get<ApiResponse<Array<{
-      sessionId?: number;
-      workerId: number;
-      workerName?: string;
-      workMinutes?: number;
-      status?: string;
-      statusText?: string;
-      departmentName?: string;
-    }>>>(`/api/mobile/${fid}/processing/batches/${batchId}/workers`);
+    const response = await apiClient.get<ApiResponse<BatchWorkerWire[]>>(
+      `/api/mobile/${fid}/processing/batches/${batchId}/workers`
+    );
 
-    if (response.success && response.data) {
-      const workers = Array.isArray(response.data) ? response.data : [];
-      return {
-        content: workers.map(worker => ({
-          id: worker.sessionId || 0,
-          userId: worker.workerId || 0,
-          userName: worker.workerName || '',
-          workType: worker.departmentName || '生产',
-          workMinutes: worker.workMinutes || 0,
-          status: worker.status || 'ASSIGNED',
-        })),
-        totalElements: workers.length,
-      };
+    if (!isSuccessEnvelope(response) || !Array.isArray(response.data)) {
+      throw new Error(response?.message || '批次员工响应无效');
     }
-    return { content: [], totalElements: 0 };
+
+    return factoryId
+      ? { content: response.data.map(toBatchWorkerWire), totalElements: response.data.length }
+      : { content: response.data.map(toLegacyBatchWorkerItem), totalElements: response.data.length };
   }
 
   /**
@@ -1148,15 +1290,23 @@ class SchedulingApiClient {
   ): Promise<{ success: boolean }> {
     const fid = factoryId || requireFactoryId();
     const response = await apiClient.delete<ApiResponse<{
-      success?: boolean;
-      sessionId?: number;
-      workerId?: number;
-      message?: string;
+      success?: unknown;
+      sessionId?: unknown;
+      workerId?: unknown;
+      message?: unknown;
     }>>(`/api/mobile/${fid}/processing/batches/${batchId}/workers/${workerId}`);
-
-    return {
-      success: response.success && (response.data?.success !== false),
-    };
+    const data = isRecord(response?.data) ? response.data : null;
+    const responseWorkerId = data?.workerId;
+    const sessionId = data?.sessionId;
+    if (!isSuccessEnvelope(response) || !data || data.success !== true
+      || !isFiniteNumber(responseWorkerId) || responseWorkerId !== workerId
+      || !isFiniteNumber(sessionId) || !Number.isInteger(sessionId) || sessionId <= 0) {
+      const message = typeof data?.message === 'string'
+        ? data.message
+        : typeof response?.message === 'string' ? response.message : '移除员工失败';
+      throw new Error(message);
+    }
+    return { success: true };
   }
 
   /**

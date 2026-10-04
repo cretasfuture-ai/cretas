@@ -33,6 +33,8 @@ import { formatSummaryForAI } from "../../../utils/aiSummaryContext";
 type MCIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from 'react-i18next';
+import { useAuthStore } from '../../../store/authStore';
+import { canViewPrice } from '../../../utils/priceViewAccess';
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import {
@@ -137,6 +139,8 @@ export function WHInventoryListScreen() {
   const { t } = useTranslation('warehouse');
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
+  const user = useAuthStore((state) => state.user);
+  const priceVisible = canViewPrice(user);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -149,7 +153,7 @@ export function WHInventoryListScreen() {
    */
   const [hierarchyMap, setHierarchyMap] = useState<Record<string, MaterialPackagingHierarchy>>({});
   const [inventoryStats, setInventoryStats] = useState<{
-    totalValue: number;
+    totalValue: number | null;
     totalBatches: number;
     availableBatches: number;
     expiringBatchesCount: number;
@@ -275,9 +279,9 @@ export function WHInventoryListScreen() {
 
       // 处理库存统计
       if (statsResult.status === 'fulfilled') {
-        const statsResponse = statsResult.value as { success?: boolean; data?: { totalValue: number; totalBatches: number; availableBatches: number; expiringBatchesCount: number; inventoryByType?: Record<string, number> } };
+        const statsResponse = statsResult.value as { success?: boolean; data?: { totalValue?: number | null; totalBatches: number; availableBatches: number; expiringBatchesCount: number; inventoryByType?: Record<string, number> } };
         if (statsResponse.success && statsResponse.data) {
-          setInventoryStats(statsResponse.data);
+          setInventoryStats({ ...statsResponse.data, totalValue: statsResponse.data.totalValue ?? null });
         }
       }
 
@@ -356,7 +360,7 @@ export function WHInventoryListScreen() {
     nonKgBatchCount,
     loadedUnitKinds: loadedUnitKinds.length,
     warningCount: inventoryStats?.expiringBatchesCount ?? inventoryList.filter((i) => i.warningType !== "normal").length,
-    totalValue: inventoryStats?.totalValue ?? 0,
+    totalValue: inventoryStats?.totalValue ?? null,
   };
 
   const handleItemPress = (item: InventoryItem) => {
@@ -627,12 +631,16 @@ export function WHInventoryListScreen() {
               </Text>
               <Text style={styles.statsLabel}>已加载食材(kg)</Text>
             </View>
-            <View style={styles.statsItem}>
-              <Text style={styles.statsValue}>
-                ¥{stats.totalValue > 1000 ? `${(stats.totalValue / 1000).toFixed(0)}K` : stats.totalValue.toFixed(0)}
-              </Text>
-              <Text style={styles.statsLabel}>库存价值</Text>
-            </View>
+            {priceVisible && (
+              <View style={styles.statsItem} testID="wh-inventory-price-card">
+                <Text style={styles.statsValue} testID="wh-inventory-price">
+                  {stats.totalValue == null
+                    ? '金额未提供'
+                    : `¥${stats.totalValue > 1000 ? `${(stats.totalValue / 1000).toFixed(0)}K` : stats.totalValue.toFixed(0)}`}
+                </Text>
+                <Text style={styles.statsLabel}>库存价值</Text>
+              </View>
+            )}
             <View style={styles.statsItem}>
               <Text style={[styles.statsValue, { color: "#f44336" }]}>
                 {stats.warningCount}

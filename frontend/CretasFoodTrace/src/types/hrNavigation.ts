@@ -8,12 +8,14 @@
  */
 
 import type { NavigatorScreenParams } from '@react-navigation/native';
+import type { FAAIStackParamList } from './navigation';
 
 // ==================== HR 导航参数类型 ====================
 
 /** HR 主 Stack 参数 */
 export type HRStackParamList = {
   HRTabs: undefined;
+  AIChat: FAAIStackParamList['AIChat'];
   // Staff 详情页 (在 Tab 外显示)
   StaffDetail: { staffId: number };
   StaffAIAnalysis: { staffId: number };
@@ -323,11 +325,11 @@ export interface BatchAssignmentItem {
   batchNumber: string;
   productName: string;
   productSpec?: string;
-  status: 'in_progress' | 'pending' | 'completed';
-  assignedCount: number;
-  requiredCount: number;
-  totalWorkHours: number;
-  laborCost: number;
+  status: 'in_progress' | 'pending' | 'completed' | 'unknown';
+  assignedCount: number | null;
+  requiredCount: number | null;
+  totalWorkHours: number | null;
+  laborCost: number | null;
   assignedEmployees: {
     id: number;
     name: string;

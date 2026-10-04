@@ -35,6 +35,20 @@ import { VoiceMicButton } from '../../../components/common/VoiceMicButton';
 import { MarkdownRenderer } from '../../../components/common/MarkdownRenderer';
 import { aiApiClient } from '../../../services/api/aiApiClient';
 import type { IntentSSECallbacks } from '../../../services/api/aiApiClient';
+import { intentConfigApiClient, buildConfirmationProof } from '../../../services/api/intentConfigApiClient';
+import { AIWriteConfirmCard } from '../../../components/ai/AIWriteConfirmCard';
+import {
+  applyPreviewResponse,
+  classifyConfirmError,
+  classifyConfirmResponse,
+  isPreviewExpired,
+  previewRequestFailed,
+  writeConfirmFromStreamResult,
+  CANCELLED_REPLY,
+  EXPIRED_NOTICE,
+  type ConfirmOutcome,
+  type WriteConfirmState,
+} from '../../../components/ai/aiWriteConfirm';
 import type { FAAIStackParamList } from '../../../types/navigation';
 import { QuickActionCardGrid } from '../../../components/ai/QuickActionCardGrid';
 import { feedbackSounds } from '../../../services/audio/feedbackSounds';
@@ -175,6 +189,8 @@ interface Message {
   /** Bind launch metadata to the authenticated UI identity that received it. */
   agentRunFactoryId?: string;
   agentRunOwnerUserId?: string;
+  /** 写操作确认卡 (W0 写闸拦下的写意图: 预览 → 确认执行 / 取消) */
+  writeConfirm?: WriteConfirmState;
 }
 
 type AIChatRouteProp = RouteProp<FAAIStackParamList, 'AIChat'>;
@@ -343,6 +359,12 @@ function AIChatScreenContent() {
   const previewGenerationRef = useRef(0);
   const isMountedRef = useRef(true);
   const sendPendingRef = useRef(false);
+  // 写确认: 同一渲染里的连点靠这个同步锁挡住 (与 sendPendingRef 同一模式), 后端原子认领是最后一道
+  const writeConfirmPendingRef = useRef(false);
+  // 已发出的预览请求 `${messageId}:${previewAttempt}` —— 每次 (重新) 生成预览只请求一次
+  const requestedPreviewKeysRef = useRef(new Set<string>());
+  const sessionIdRef = useRef<string | null>(null);
+  sessionIdRef.current = sessionId;
   // 最近一次成功执行的「上一步」(见 readLastAction); 换账号/换厂时清空。
   const lastActionRef = useRef<HeldLastAction | null>(null);
 
@@ -377,6 +399,8 @@ function AIChatScreenContent() {
     if (previewTimer.current) clearTimeout(previewTimer.current);
     previewTimer.current = null;
     sendPendingRef.current = false;
+    writeConfirmPendingRef.current = false;
+    requestedPreviewKeysRef.current.clear();
     lastActionRef.current = null;
     setSessionId(null);
     setMessages([]);
@@ -709,6 +733,13 @@ function AIChatScreenContent() {
             }
           }
 
+          // 写操作被 W0 写闸拦下 (WRITE_CONFIRM_REQUIRED) 或直接回了可确认预览: 出确认卡。
+          // 气泡正文用确认卡给的话 —— PREVIEW 的 message 是工具预览的原始 JSON, 不能直接给人看。
+          const writeConfirm = writeConfirmFromStreamResult(result, messageText);
+          if (writeConfirm) {
+            replyMessage = writeConfirm.leadText;
+          }
+
           // 如果有结果文本且没有流式内容，显示结果
           if (replyMessage && !streamedContent) {
             streamedContent = replyMessage;
@@ -805,6 +836,7 @@ function AIChatScreenContent() {
                     agentRun,
                     agentRunFactoryId: agentRun ? factoryId : undefined,
                     agentRunOwnerUserId: agentRun ? String(user?.id ?? '') : undefined,
+                    writeConfirm,
                   }
                 : msg
             )
@@ -928,6 +960,143 @@ function AIChatScreenContent() {
     }
   };
 
+  // ==================== 写操作确认 (预览 → 确认执行 / 取消) ====================
+
+  /** 只改 messageId 那张卡; guard 不过 (旧回包 / 状态已变) 就原样返回。 */
+  const updateWriteConfirm = (
+    messageId: string,
+    guard: (state: WriteConfirmState) => boolean,
+    next: (state: WriteConfirmState) => WriteConfirmState,
+  ) => {
+    setMessages((prev) => prev.map((msg) => (
+      msg.id === messageId && msg.writeConfirm && guard(msg.writeConfirm)
+        ? { ...msg, writeConfirm: next(msg.writeConfirm) }
+        : msg
+    )));
+  };
+
+  const appendAssistantMessage = (extra: Partial<Message> & { content: string }) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: generateMessageId(), role: 'assistant', timestamp: new Date(), ...extra },
+    ]);
+    scrollToBottom();
+  };
+
+  /** 用「原话 + 被拦的 intentCode + sessionId」请求预览 (POST /preview, 服务端强制 previewOnly)。 */
+  const requestWritePreview = async (messageId: string, state: WriteConfirmState) => {
+    const attempt = state.previewAttempt;
+    const stillWaiting = (s: WriteConfirmState) => s.phase === 'preparing' && s.previewAttempt === attempt;
+    const factoryId = currentFactoryId;
+    try {
+      const response = await intentConfigApiClient.previewIntent({
+        userInput: state.userInput,
+        ...(state.intentCode ? { intentCode: state.intentCode } : {}),
+        ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+        ...(entityType ? { entityType } : {}),
+      }, factoryId);
+      if (!isCurrentActor()) return;
+      updateWriteConfirm(messageId, stillWaiting, (s) => applyPreviewResponse(s, response, Date.now()));
+    } catch (error) {
+      if (!isCurrentActor()) return;
+      updateWriteConfirm(messageId, stillWaiting, (s) => previewRequestFailed(s, error));
+    }
+  };
+
+  // 卡片进入 preparing (首次 / 重新生成) 时发一次预览请求
+  useEffect(() => {
+    if (!currentFactoryId) return;
+    for (const msg of messages) {
+      const state = msg.writeConfirm;
+      if (!state || state.phase !== 'preparing') continue;
+      const key = `${msg.id}:${state.previewAttempt}`;
+      if (requestedPreviewKeysRef.current.has(key)) continue;
+      requestedPreviewKeysRef.current.add(key);
+      void requestWritePreview(msg.id, state);
+    }
+  }, [messages]);
+
+  const handleWriteConfirm = async (messageId: string) => {
+    if (!isCurrentActor() || writeConfirmPendingRef.current) return;
+    const state = messages.find((msg) => msg.id === messageId)?.writeConfirm;
+    if (!state || state.phase !== 'ready' || !state.action) return;
+    if (isPreviewExpired(state, Date.now())) {
+      updateWriteConfirm(messageId, (s) => s.phase === 'ready', (s) => ({
+        ...s, phase: 'failed', failureKind: 'expired', notice: EXPIRED_NOTICE, canRegenerate: true,
+      }));
+      return;
+    }
+    // 同步加锁: 同一渲染里第二次点击看不到 phase=executing, 只能靠 ref 挡住
+    writeConfirmPendingRef.current = true;
+    const action = state.action;
+    const intentName = state.intentName;
+    updateWriteConfirm(messageId, (s) => s.phase === 'ready', (s) => ({ ...s, phase: 'executing', notice: undefined }));
+    let outcome: ConfirmOutcome;
+    let resultInner: Record<string, unknown> | undefined;
+    let resultMeta: { intentCode?: string; intentCategory?: string } = {};
+    try {
+      const response = await intentConfigApiClient.confirmIntent(buildConfirmationProof(action), currentFactoryId);
+      outcome = classifyConfirmResponse(response, intentName);
+      const inner = response?.resultData;
+      resultInner = inner && typeof inner === 'object' && !Array.isArray(inner)
+        ? (inner as Record<string, unknown>)
+        : undefined;
+      resultMeta = {
+        intentCode: response?.intentCode || state.intentCode,
+        intentCategory: response?.intentCategory ?? undefined,
+      };
+    } catch (error) {
+      outcome = classifyConfirmError(error, intentName);
+    } finally {
+      writeConfirmPendingRef.current = false;
+    }
+    if (!isCurrentActor()) return;
+
+    if (outcome.kind === 'done') {
+      const doneLabel = outcome.doneLabel;
+      updateWriteConfirm(messageId, (s) => s.phase === 'executing', (s) => ({ ...s, phase: 'done', doneLabel }));
+      appendAssistantMessage({
+        content: outcome.content,
+        richData: detectRichData(resultInner),
+        intentCode: resultMeta.intentCode,
+        intentCategory: resultMeta.intentCategory,
+      });
+      if (outcome.executed) feedbackSounds.onWriteSuccess(outcome.content, userRole);
+      return;
+    }
+    const { failureKind, notice, canRegenerate } = outcome;
+    updateWriteConfirm(messageId, (s) => s.phase === 'executing', (s) => ({
+      ...s, phase: 'failed', failureKind, notice, canRegenerate,
+    }));
+    feedbackSounds.onError(userRole);
+  };
+
+  const handleWriteCancel = (messageId: string) => {
+    if (!isCurrentActor() || writeConfirmPendingRef.current) return;
+    const state = messages.find((msg) => msg.id === messageId)?.writeConfirm;
+    if (!state || state.phase !== 'ready') return;
+    updateWriteConfirm(messageId, (s) => s.phase === 'ready', (s) => ({ ...s, phase: 'cancelled' }));
+    appendAssistantMessage({ content: CANCELLED_REPLY });
+  };
+
+  const handleWriteRegenerate = (messageId: string) => {
+    if (!isCurrentActor() || writeConfirmPendingRef.current) return;
+    updateWriteConfirm(
+      messageId,
+      (s) => s.phase === 'blocked' || s.phase === 'failed' || s.phase === 'ready',
+      (s) => ({
+        ...s,
+        phase: 'preparing',
+        previewAttempt: s.previewAttempt + 1,
+        action: undefined,
+        receivedAtMs: undefined,
+        notice: undefined,
+        failureKind: undefined,
+        canRegenerate: undefined,
+      }),
+    );
+  };
+
   // 渲染消息
   const renderMessage = (message: Message) => {
     const isUser = message.role === 'user';
@@ -997,6 +1166,14 @@ function AIChatScreenContent() {
               <RichContentRenderer data={message.richData} />
             )}
           </View>
+          {!message.isLoading && message.writeConfirm ? (
+            <AIWriteConfirmCard
+              state={message.writeConfirm}
+              onConfirm={() => { void handleWriteConfirm(message.id); }}
+              onCancel={() => handleWriteCancel(message.id)}
+              onRegenerate={() => handleWriteRegenerate(message.id)}
+            />
+          ) : null}
           {!message.isLoading
             && message.agentRun
             && message.agentRunFactoryId === currentFactoryId

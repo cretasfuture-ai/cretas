@@ -126,6 +126,12 @@ export interface PermissionCheckResult {
 export interface IntentExecuteRequest {
   /** 用户输入 */
   userInput: string;
+  /** 显式意图代码: 写确认预览时钉住被 W0 拦下的那个意图, 不再重新识别 */
+  intentCode?: string;
+  /** 服务端会话 ID (多轮对话续接) */
+  sessionId?: string;
+  /** 场景实体类型 (与流式请求一致) */
+  entityType?: string;
   /** 上下文参数 */
   context?: Record<string, unknown>;
 }
@@ -144,18 +150,68 @@ export interface IntentConfirmationProof {
   readonly idempotencyKey: string;
 }
 
-export interface ConfirmableAction extends IntentConfirmationProof {
-  readonly description?: string;
-  readonly expiresInSeconds?: number;
-  readonly previewData?: unknown;
+/**
+ * 预览响应上的可确认操作 (后端 IntentExecuteResponse.ConfirmableAction,
+ * ToolDispatchService.executeToolPreview 铸 token 后回填)。
+ *
+ * ⚠️ 后端**不回** requestId / idempotencyKey (builder 里没设) —— 它们是确认请求的
+ *    客户端关联 ID, 由 {@link buildConfirmationProof} 每次确认时现生成。
+ */
+export interface ConfirmableAction {
+  readonly confirmToken: string;
+  readonly commandDigest: string;
+  /** ISO instant */
+  readonly expiresAt: string;
+  readonly requestId?: string | null;
+  readonly idempotencyKey?: string | null;
+  readonly description?: string | null;
+  readonly expiresInSeconds?: number | null;
+  /** 工具预览 JSON: `{success:true, data:{...}}` 或 `{success:false, error|message}` */
+  readonly previewData?: Record<string, unknown> | null;
+  readonly currentValues?: Record<string, unknown> | null;
+  readonly newValues?: Record<string, unknown> | null;
+  readonly impactSummary?: string | null;
+  /** READ / WRITE / UPDATE / DELETE ... */
+  readonly actionType?: string | null;
+  /** LOW / MEDIUM / HIGH / CRITICAL */
+  readonly riskLevel?: string | null;
+}
+
+/** 客户端关联 ID: 8-128 位, ^[A-Za-z0-9][A-Za-z0-9._:-]*$ (IntentConfirmationRequest 的校验) */
+export function createConfirmRequestId(): string {
+  const random = Math.random().toString(36).slice(2, 12).padEnd(10, '0');
+  return `rn-${Date.now()}-${random}`;
+}
+
+/** 由预览给出的 confirmableAction 组装一份确认凭证 (每次确认现生成关联 ID)。 */
+export function buildConfirmationProof(action: ConfirmableAction): IntentConfirmationProof {
+  return {
+    confirmToken: action.confirmToken,
+    commandDigest: action.commandDigest,
+    expiresAt: action.expiresAt,
+    requestId: createConfirmRequestId(),
+    idempotencyKey: createConfirmRequestId(),
+  };
 }
 
 /**
  * 意图执行响应
  */
 export interface IntentExecuteResponse {
-  /** 是否成功 */
-  success: boolean;
+  /** 旧字段, 后端 IntentExecuteResponse 并没有它; 判成败读 status */
+  success?: boolean;
+  /** 后端状态: SUCCESS / COMPLETED / PREVIEW / WRITE_CONFIRM_REQUIRED / FAILED / PERMISSION_DENIED ... */
+  status?: string;
+  /** 格式化后的回复文本 */
+  formattedText?: string | null;
+  /** 意图类别 */
+  intentCategory?: string | null;
+  /** 缺失的权限码 (PERMISSION_DENIED 时) */
+  requiredPermission?: string | null;
+  /** 澄清问题 */
+  clarificationQuestions?: string[] | null;
+  /** 额外元数据 */
+  metadata?: Record<string, unknown> | null;
   /** 匹配的意图代码 */
   intentCode?: string;
   /** 意图名称 */

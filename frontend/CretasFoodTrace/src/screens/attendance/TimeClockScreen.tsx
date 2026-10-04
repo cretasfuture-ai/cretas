@@ -14,6 +14,7 @@ import * as Location from 'expo-location';
 import { timeclockApiClient } from '../../services/api/timeclockApiClient';
 import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
 import type { AttendanceStackParamList } from '../../types/navigation';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
 import { theme } from '../../theme';
@@ -190,6 +191,7 @@ export default function TimeClockScreen() {
   };
 
   const status = getCurrentStatus();
+  const canReadHr = hasModulePermission(user, 'hr', 'read');
   const clockInDisabled = loading || !gpsLocation || (lastClockIn && lastClockIn.clockInTime && !lastClockIn.clockOutTime);
   const clockOutDisabled = loading || !gpsLocation || !lastClockIn || !lastClockIn.clockInTime || !!lastClockIn.clockOutTime;
 
@@ -306,7 +308,7 @@ export default function TimeClockScreen() {
           <View style={styles.grid}>
             <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('AttendanceHistory')} style={styles.gridBtn}>{t('attendance.timeClock.historyRecords')}</NeoButton>
             <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('TimeStatistics', {})} style={styles.gridBtn}>{t('attendance.timeClock.timeStatistics')}</NeoButton>
-            <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('DepartmentAttendance')} style={styles.gridBtn}>{t('attendance.timeClock.departmentAttendance')}</NeoButton>
+            {canReadHr && <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('DepartmentAttendance')} style={styles.gridBtn}>{t('attendance.timeClock.departmentAttendance')}</NeoButton>}
           </View>
         </NeoCard>
 

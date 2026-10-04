@@ -48,9 +48,11 @@ import {
   judgeSource,
   BOOL_HELPERS,
   ALL_ROLES,
+  modulePermissionProbeUsers,
   type Finding,
 } from './lib/roleReachability';
 import * as permissionHelper from '../../utils/permissionHelper';
+import type { User } from '../../types/auth';
 
 const RESULT = analyze();
 
@@ -272,6 +274,43 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     expect(out[0]?.verdict).toBe('UNDECIDED');
     expect(out[0]?.values['operator']).toBe('U');
     expect(out[0]?.values['viewer']).toBe('F');
+  });
+
+  it('真实登录快照：TimeClock 的 hr read 具备 grant/deny 反例且屏仍可达', () => {
+    const finding = RESULT.findings.find(
+      (candidate) =>
+        candidate.relFile.endsWith('screens/attendance/TimeClockScreen.tsx') &&
+        candidate.key === "hasModulePermission(user, 'hr', 'read')",
+    );
+    expect(finding?.verdict).toBe('EFFECTIVE');
+    expect(finding?.values).toEqual({ equipment_admin: 'F', permission_admin: 'F', quality_manager: 'F' });
+    expect(finding?.probeValues?.equipment_admin).toEqual({ granted: 'T', denied: 'F' });
+
+    const snapshots = modulePermissionProbeUsers('equipment_admin', [
+      { module: 'hr', action: 'read' },
+    ]);
+    expect(permissionHelper.hasModulePermission(snapshots.granted, 'hr', 'read')).toBe(true);
+    expect(permissionHelper.hasModulePermission(snapshots.denied, 'hr', 'read')).toBe(false);
+    const screenEntry = [...RESULT.rolesByScreenFile.entries()].find(([file]) =>
+      file.endsWith(path.join('attendance', 'TimeClockScreen.tsx')),
+    );
+    expect(screenEntry?.[1]).toEqual(['equipment_admin', 'permission_admin', 'quality_manager']);
+  });
+
+  it('模块权限探针阴性与变异对照：默认回退保持恒假，篡改 grant 立即失效', () => {
+    const code = "const canRead = hasModulePermission(user, 'hr', 'read');";
+    const defaults = judgeSource(code, ['equipment_admin', 'quality_manager']);
+    expect(defaults[0]?.verdict).toBe('VACUOUS');
+    expect(defaults[0]?.values).toEqual({ equipment_admin: 'F', quality_manager: 'F' });
+
+    const snapshots = modulePermissionProbeUsers('equipment_admin', [
+      { module: 'hr', action: 'read' },
+    ]);
+    const mutated = {
+      ...snapshots.granted,
+      factoryUser: { ...snapshots.granted.factoryUser, modulePermissions: { hr: '-' as const } },
+    } as User;
+    expect(permissionHelper.hasModulePermission(mutated, 'hr', 'read')).toBe(false);
   });
 
   it('runtime-only：canonical 恒真 + 运行时状态单独标注，保留 U 诊断', () => {

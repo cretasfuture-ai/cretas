@@ -193,7 +193,31 @@
   "attendance": {
     "title": "考勤管理",
     "manage": {
-      "title": "考勤管理"
+      "title": "考勤管理",
+      "currentMonth": "本月范围",
+      "todayRange": "今日范围",
+      "unknownDate": "日期未知",
+      "ai": "分析当前考勤范围",
+      "aiDenied": "当前账号没有经营分析权限。",
+      "noPermission": "当前账号没有考勤读取权限，或人事模块尚未启用。",
+      "loadFailed": "考勤读取失败，请下拉重试。",
+      "malformed": "服务器返回的考勤数据格式无效。",
+      "empty": "当前明确范围内暂无考勤记录。",
+      "status": {
+        "normal": "正常",
+        "late": "迟到",
+        "earlyLeave": "早退",
+        "lateAndEarlyLeave": "迟到且早退",
+        "absent": "缺勤",
+        "working": "工作中",
+        "ended": "已结束",
+        "unknown": "状态未知"
+      },
+      "summary": {
+        "records": "已加载记录",
+        "users": "已加载员工",
+        "apiTotal": "接口总记录"
+      }
     },
     "anomaly": {
       "title": "异常记录",
@@ -661,10 +685,17 @@
       "workHours": "工时",
       "laborCost": "成本",
       "empty": "暂无批次任务",
+      "accessDenied": "暂无生产计划模块权限",
+      "accessDeniedHint": "当前账号不能读取生产批次任务，请联系工厂管理员。",
+      "factoryDisabled": "生产计划模块已关闭",
+      "factoryDisabledHint": "当前工厂未启用生产计划模块。",
+      "loadFailed": "批次任务加载失败",
+      "loadFailedHint": "读取批次任务失败，请稍后重试。",
       "status": {
         "inProgress": "进行中",
         "pending": "待处理",
-        "completed": "已完成"
+        "completed": "已完成",
+        "unknown": "未知"
       }
     },
     "batchWorkers": {
@@ -673,21 +704,27 @@
       "totalHours": "总工时",
       "working": "工作中",
       "empty": "暂无分配员工",
-      "emptyHint": "点击下方按钮添加员工",
+      "emptyHint": "当前批次暂无员工分配",
       "addWorker": "添加员工",
       "removeWorker": "移除员工",
       "removeConfirm": "确定要将 {name} 从该批次移除吗?",
       "removeSuccess": "移除成功",
       "removeFailed": "移除失败，请重试",
+      "staleAction": "账号权限或工厂已变化，请刷新后重试。",
+      "accessDenied": "暂无生产计划模块权限",
+      "accessDeniedHint": "当前账号不能读取批次员工，请联系工厂管理员。",
+      "factoryDisabled": "生产计划模块已关闭",
+      "factoryDisabledHint": "当前工厂未启用生产计划模块。",
+      "loadFailed": "批次员工加载失败",
+      "loadFailedHint": "读取批次员工失败，请稍后重试。",
       "noDepartment": "未分配部门",
       "workDuration": "工时",
       "status": {
+        "assigned": "已分配",
         "working": "工作中",
         "completed": "已完成",
-        "paused": "已暂停"
-      },
-      "alerts": {
-        "addComingSoon": "添加员工功能即将上线"
+        "paused": "已暂停",
+        "unknown": "未知"
       }
     }
   },
