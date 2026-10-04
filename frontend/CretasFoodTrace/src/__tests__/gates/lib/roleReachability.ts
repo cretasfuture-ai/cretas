@@ -68,7 +68,13 @@ import {
   isFactoryUser as authIsFactoryUser,
   getUserRole as authGetUserRole,
 } from '../../../types/auth';
-import type { User, FactoryRole, PlatformRole, Department } from '../../../types/auth';
+import type {
+  User,
+  FactoryRole,
+  PlatformRole,
+  Department,
+  ModulePermissionLevel,
+} from '../../../types/auth';
 import * as ph from '../../../utils/permissionHelper';
 
 // ==================== 目录常量 ====================
@@ -170,6 +176,44 @@ function userOf(role: string): User {
   /* istanbul ignore next -- 只在调用方传了不存在的角色时发生 */
   if (!u) throw new Error('未知角色: ' + role);
   return u;
+}
+
+function moduleLevelFor(probes: ModulePermissionProbe[], module: string): ModulePermissionLevel {
+  const actions = probes.filter((probe) => probe.module === module).map((probe) => probe.action);
+  return actions.includes('write') ? 'rw' : 'r';
+}
+
+/**
+ * Build the two concrete login snapshots used for a known module-permission
+ * atom.  The default role fixtures deliberately keep modulePermissions
+ * undefined so that legacy L1 fallback behavior remains visible; these copies
+ * model the explicit field returned by a real login response.
+ */
+export function modulePermissionProbeUsers(
+  role: string,
+  probes: ModulePermissionProbe[],
+): { granted: User; denied: User } {
+  const user = userOf(role);
+  if (user.userType !== 'factory' || probes.length === 0) {
+    return { granted: user, denied: user };
+  }
+  const modules = [...new Set(probes.map((probe) => probe.module))];
+  const grantedLevels = Object.fromEntries(
+    modules.map((module) => [module, moduleLevelFor(probes, module)]),
+  ) as Record<string, ModulePermissionLevel>;
+  const deniedLevels = Object.fromEntries(
+    modules.map((module) => [module, '-' as ModulePermissionLevel]),
+  ) as Record<string, ModulePermissionLevel>;
+  return {
+    granted: {
+      ...user,
+      factoryUser: { ...user.factoryUser, modulePermissions: grantedLevels },
+    },
+    denied: {
+      ...user,
+      factoryUser: { ...user.factoryUser, modulePermissions: deniedLevels },
+    },
+  };
 }
 
 // ==================== 权限谓词成员表 ====================
@@ -296,8 +340,13 @@ const ROLE_FIELD_PATHS: Record<string, (u: User) => string | undefined> = {
 
 export type Tri = 'T' | 'F' | 'U';
 
+export interface ModulePermissionProbe {
+  module: string;
+  action: 'read' | 'write';
+}
+
 export type Expr =
-  | { k: 'atom'; canon: string; run: (u: User) => boolean }
+  | { k: 'atom'; canon: string; run: (u: User) => boolean; moduleProbe?: ModulePermissionProbe }
   | { k: 'const'; value: boolean }
   | { k: 'not'; a: Expr }
   | { k: 'and'; a: Expr; b: Expr }
@@ -876,9 +925,16 @@ export function toExpr(node: ts.Node, ctx: FileCtx, depth = 0): Expr {
       }
       if (ok) {
         const args = literals;
+        const moduleProbe =
+          callee === 'hasModulePermission' &&
+          args.length === 2 &&
+          (args[1] === 'read' || args[1] === 'write')
+            ? { module: args[0]!, action: args[1] as 'read' | 'write' }
+            : undefined;
         return {
           k: 'atom',
           canon: callee + '(user' + args.map((s) => ", '" + s + "'").join('') + ')',
+          ...(moduleProbe ? { moduleProbe } : {}),
           run: (u) => {
             const fn = helper as unknown as (...a: unknown[]) => boolean;
             return !!fn(u, ...args);
@@ -1202,8 +1258,12 @@ export interface ReachEntry {
 }
 
 /** 某角色能走到的全部屏文件。守卫为 F 剪枝；U 视为可满足（盲区 1）。 */
-export function reachableScreensFor(role: string, dispatch: RoleDispatch[]): Map<string, Set<string>> {
-  const user = userOf(role);
+export function reachableScreensFor(
+  role: string,
+  dispatch: RoleDispatch[],
+  explicitUser?: User,
+): Map<string, Set<string>> {
+  const user = explicitUser ?? userOf(role);
   const entry = dispatch.find((d) => d.role === role);
   const out = new Map<string, Set<string>>();
   if (!entry) return out;
@@ -1364,6 +1424,8 @@ export interface Finding {
   roles: string[];
   /** role -> T/F/U */
   values: Record<string, Tri>;
+  /** Explicit login snapshots for direct hasModulePermission atoms. */
+  probeValues?: Record<string, { granted: Tri; denied: Tri }>;
   verdict: Verdict;
   /**
    * 运行时未知仍然保留在 findings 和完整报告里；只有当其中所有可判定的
@@ -1448,6 +1510,25 @@ function isRuntimeOnly(expr: Expr, roles: string[]): boolean {
   return projection.unknowns.every((unknown) => unknown.provenance === 'selfModuleAccess.some');
 }
 
+function modulePermissionProbes(expr: Expr): ModulePermissionProbe[] {
+  const out: ModulePermissionProbe[] = [];
+  const visit = (current: Expr): void => {
+    if (current.k === 'atom') {
+      if (current.moduleProbe) out.push(current.moduleProbe);
+      return;
+    }
+    if (current.k === 'not') return visit(current.a);
+    if (current.k === 'and' || current.k === 'or') {
+      visit(current.a);
+      visit(current.b);
+    }
+  };
+  visit(expr);
+  return out.filter((probe, index) =>
+    out.findIndex((candidate) => candidate.module === probe.module && candidate.action === probe.action) === index,
+  );
+}
+
 export function analyze(): AnalysisResult {
   const dispatch = parseRoleDispatch();
   const rolesByScreenFile = new Map<string, Set<string>>();
@@ -1477,6 +1558,23 @@ export function analyze(): AnalysisResult {
       const values: Record<string, Tri> = {};
       for (const role of roles) values[role] = evalExpr(branch.expr, userOf(role));
       const distinct = new Set(Object.values(values));
+      const probes = modulePermissionProbes(branch.expr);
+      const probeValues: Record<string, { granted: Tri; denied: Tri }> = {};
+      for (const role of roles) {
+        const snapshots = modulePermissionProbeUsers(role, probes);
+        if (snapshots.granted === snapshots.denied) continue;
+        const grantedReach = reachableScreensFor(role, dispatch, snapshots.granted);
+        const deniedReach = reachableScreensFor(role, dispatch, snapshots.denied);
+        if (!grantedReach.has(file) || !deniedReach.has(file)) continue;
+        const granted = evalExpr(branch.expr, snapshots.granted);
+        const denied = evalExpr(branch.expr, snapshots.denied);
+        if (granted !== denied && granted !== 'U' && denied !== 'U') {
+          probeValues[role] = { granted, denied };
+        }
+      }
+      const probeOpposite = Object.values(probeValues).some(
+        ({ granted, denied }) => (granted === 'T' && denied === 'F') || (granted === 'F' && denied === 'T'),
+      );
       let verdict: Verdict;
       let detail: string;
       if (roles.length === 0) {
@@ -1486,7 +1584,7 @@ export function analyze(): AnalysisResult {
         verdict = 'UNDECIDED';
         const who = roles.filter((r) => values[r] === 'U');
         detail = '依赖运行时数据或分析器读不懂: ' + who.slice(0, 4).join(', ');
-      } else if (distinct.size === 1) {
+      } else if (distinct.size === 1 && !probeOpposite) {
         verdict = 'VACUOUS';
         detail = distinct.has('T')
           ? '对全部 ' + roles.length + ' 个可达角色恒为真 —— 这道判断从不拒绝任何人'
@@ -1495,7 +1593,12 @@ export function analyze(): AnalysisResult {
         verdict = 'EFFECTIVE';
         const t = roles.find((r) => values[r] === 'T');
         const f = roles.find((r) => values[r] === 'F');
-        detail = '举得出反例: ' + String(t) + '=真 / ' + String(f) + '=假';
+        const probe = Object.entries(probeValues).find(
+          ([, pair]) => (pair.granted === 'T' && pair.denied === 'F') || (pair.granted === 'F' && pair.denied === 'T'),
+        );
+        detail = probe
+          ? '登录 modulePermissions 反例: ' + probe[0] + ' granted=' + probe[1].granted + ' / denied=' + probe[1].denied
+          : '举得出反例: ' + String(t) + '=真 / ' + String(f) + '=假';
       }
       const runtimeOnly = verdict === 'UNDECIDED' && isRuntimeOnly(branch.expr, roles);
       if (runtimeOnly) {
@@ -1508,6 +1611,7 @@ export function analyze(): AnalysisResult {
         sites: branch.sites.sort((a, b) => a.line - b.line),
         roles,
         values,
+        ...(Object.keys(probeValues).length > 0 ? { probeValues } : {}),
         verdict,
         runtimeOnly,
         detail,

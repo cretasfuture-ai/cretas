@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { ScrollView } from 'react-native';
 import { Chip } from 'react-native-paper';
 import DepartmentAttendanceScreen from '../../../screens/attendance/DepartmentAttendanceScreen';
@@ -116,12 +116,19 @@ describe('DepartmentAttendance read boundary', () => {
     useAuthStore.setState({ user: null, isAuthenticated: false });
   });
 
-  it('keeps the self clock screen and hides the department quicklink without HR read', async () => {
-    useAuthStore.setState({ user: user(11, 'F006', '-') });
+  it.each(['-', 'r'] as const)('keeps personal history available and follows login HR=%s for the department entry', async (hr) => {
+    useAuthStore.setState({ user: user(11, 'F006', hr) });
     const view = render(<TimeClockScreen />);
     await waitFor(() => expect(view.getByText('attendance.timeClock.todayRecords')).toBeTruthy());
-    expect(view.queryByText('attendance.timeClock.departmentAttendance')).toBeNull();
+    if (hr === '-') {
+      expect(view.queryByText('attendance.timeClock.departmentAttendance')).toBeNull();
+    } else {
+      fireEvent.press(view.getByText('attendance.timeClock.departmentAttendance'));
+      expect(mockNavigation.navigate).toHaveBeenCalledWith('DepartmentAttendance');
+    }
     expect(mockGetDepartmentAttendance).not.toHaveBeenCalled();
+    fireEvent.press(view.getByText('attendance.timeClock.historyRecords'));
+    expect(mockNavigation.navigate).toHaveBeenCalledWith('AttendanceHistory');
     view.unmount();
   });
 

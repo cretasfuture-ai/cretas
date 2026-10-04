@@ -6,3 +6,9 @@
 - Do not turn plannedQuantity into required worker count, ASSIGNED into working, invalid envelope into success empty or zero money/hours. Unknown remains unknown. Removal requires current canonical production write and self module, reconfirmed before DELETE after modal and after actor change. Unsupported add stub must not present enabled fake action; positive add workflow remains explicitly pending.
 - Read authority reflects ProcessingController RequireModule production_plan; its DELETE additionally requires production read_write. API response parsing must throw unsuccessful/malformed envelopes, use correct backend workerCount semantics only when proven, and preserve pagination.
 - Acceptance: three real behavior target suites + relevant gates + TypeScript; actor switch/late response/denied module/failed load/unknown counts/status/current-confirm write guards/false DELETE success controls. CI/full RN and phone compiled acceptance are separate future stages. No Git/remote/DB/phone/cache/child agents for worker.
+
+## Frozen source milestone for combined candidate
+
+R10 final6 26 target tests PASS, TSC PASS, independent P0/P1=0. Source-only f5961e168c3c382e82a8bcf311691d78b5568d04 integrated here. Raw renderer positive/negative actor commit probes retained. No new business record or grant.
+
+Source writing ended and integrated candidate is under root review. This archive is prepared for the merge commit; merge, production release and APK10/native acceptance are separate pending facts.
