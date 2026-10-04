@@ -8,6 +8,24 @@ jest.mock('../../../utils/factoryIdHelper', () => ({ getCurrentFactoryId: (id?: 
 describe('timeStatsApiClient labor cost readback', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it.each([
+    ['2026-09-28', 2026, 40],
+    ['2023-01-02', 2023, 2],
+    ['2034-01-02', 2034, 2],
+    ['2023-01-01', 2023, 1],
+    ['2025-12-29', 2025, 53],
+    ['2024-01-01', 2024, 1],
+  ])('serializes %s using the backend Monday/minimum-one-day week contract', async (date, year, week) => {
+    jest.mocked(apiClient.get).mockResolvedValue({ success: true, data: {} });
+    await timeStatsApiClient.getWeeklyStats(date, 'F006');
+    expect(apiClient.get).toHaveBeenCalledWith('/api/mobile/F006/time-stats/weekly', { params: { year, week } });
+  });
+
+  it.each(['2026-02-30', 'invalid', '2026-10-04T00:00:00Z'])('rejects invalid weekly date %s before a request', async (date) => {
+    await expect(timeStatsApiClient.getWeeklyStats(date, 'F006')).rejects.toThrow('日期格式无效');
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
   it('uses Monday as the concrete week start', () => {
     expect(periodDates('week', new Date(2026, 9, 7))).toEqual({ startDate: '2026-10-05', endDate: '2026-10-07' });
   });

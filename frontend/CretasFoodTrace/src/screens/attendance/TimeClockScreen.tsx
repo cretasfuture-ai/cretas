@@ -19,7 +19,8 @@ import type { AttendanceStackParamList } from '../../types/navigation';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
 import { theme } from '../../theme';
 import { handleError } from '../../utils/errorHandler';
-import { getCurrentPositionWithTimeout } from '../../utils/currentPosition';
+import { getCurrentPositionWithTimeout, getLocationFailureReason } from '../../utils/currentPosition';
+import { logger } from '../../utils/logger';
 
 type TimeClockNavigationProp = NativeStackNavigationProp<AttendanceStackParamList, 'TimeClockScreen'>;
 
@@ -34,7 +35,7 @@ export default function TimeClockScreen() {
   const [loadingRecords, setLoadingRecords] = useState(true);
   const [lastClockIn, setLastClockIn] = useState<any>(null);
   const [gpsLocation, setGpsLocation] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [locationState, setLocationState] = useState<'loading' | 'ready' | 'denied' | 'failed'>('loading');
+  const [locationState, setLocationState] = useState<'loading' | 'ready' | 'denied' | 'failed' | 'timed_out'>('loading');
   const locationRequestRef = useRef(0);
   const locationAbortRef = useRef<AbortController | null>(null);
 
@@ -103,8 +104,10 @@ export default function TimeClockScreen() {
       setLocationState('ready');
     } catch (error) {
       if (request !== locationRequestRef.current) return;
+      const reason = getLocationFailureReason(error);
       setGpsLocation(null);
-      setLocationState('failed');
+      setLocationState(reason === 'timeout' ? 'timed_out' : 'failed');
+      logger.warn('[TimeClock] Location request failed', { reason });
     }
   };
 
@@ -235,7 +238,7 @@ export default function TimeClockScreen() {
               ) : (
                 <View>
                   <Text style={styles.locationText}>
-                    {t(locationState === 'denied' ? 'attendance.timeClock.locationPermissionRequired' : 'attendance.timeClock.locationUnavailable')}
+                    {t(locationState === 'denied' ? 'attendance.timeClock.locationPermissionRequired' : locationState === 'timed_out' ? 'attendance.timeClock.locationTimedOut' : 'attendance.timeClock.locationUnavailable')}
                   </Text>
                   <NeoButton testID="timeclock-location-retry" variant="outline" icon="crosshairs-gps" onPress={loadGpsLocation}>
                     {t('common.retry')}

@@ -1,5 +1,12 @@
 import * as Location from 'expo-location';
 
+/** Safe diagnostic categories; never forward native messages or coordinates to logs. */
+export function getLocationFailureReason(error: unknown): 'timeout' | 'cancelled' | 'provider' {
+  if (error instanceof Error && error.message === 'Location request timed out') return 'timeout';
+  if (error instanceof Error && error.message === 'Location request cancelled') return 'cancelled';
+  return 'provider';
+}
+
 /** A fresh native location fix with a deadline and a removable listener. */
 export function getCurrentPositionWithTimeout(
   options: Location.LocationOptions,

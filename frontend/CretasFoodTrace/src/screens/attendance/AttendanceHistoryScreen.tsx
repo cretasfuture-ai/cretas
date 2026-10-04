@@ -693,9 +693,9 @@ export default function AttendanceHistoryScreen() {
 
             <DataTable.Pagination
               page={page}
-              numberOfPages={Math.ceil(filteredRecords.length / itemsPerPage)}
+              numberOfPages={Math.max(1, Math.ceil(filteredRecords.length / itemsPerPage))}
               onPageChange={(page) => setPage(page)}
-              label={`${from + 1}-${to} / ${filteredRecords.length}`}
+              label={`${filteredRecords.length === 0 ? 0 : from + 1}-${to} / ${filteredRecords.length}`}
               numberOfItemsPerPage={itemsPerPage}
               showFastPaginationControls
             />

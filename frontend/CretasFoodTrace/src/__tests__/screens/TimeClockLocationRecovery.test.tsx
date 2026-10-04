@@ -10,7 +10,7 @@ jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) =>
 jest.mock('../../store/authStore', () => ({
   useAuthStore: () => ({ user: { id: 42, userType: 'factory', factoryId: 'F006', factoryUser: { factoryId: 'F006' } } }),
 }));
-jest.mock('../../utils/currentPosition', () => ({ getCurrentPositionWithTimeout: jest.fn() }));
+jest.mock('../../utils/currentPosition', () => ({ ...jest.requireActual('../../utils/currentPosition'), getCurrentPositionWithTimeout: jest.fn() }));
 jest.mock('expo-location', () => ({ requestForegroundPermissionsAsync: jest.fn(), Accuracy: { High: 4 }, PermissionStatus: { GRANTED: 'granted', DENIED: 'denied' } }));
 jest.mock('../../services/api/timeclockApiClient', () => ({
   timeclockApiClient: { getTodayRecord: jest.fn(), clockIn: jest.fn(), clockOut: jest.fn() },
@@ -44,7 +44,7 @@ it('allows retry after timeout, then shows the successful real fix without auto 
     timestamp: 123,
   });
   render(<TimeClockScreen />);
-  await screen.findByText('attendance.timeClock.locationUnavailable');
+  await screen.findByText('attendance.timeClock.locationTimedOut');
   fireEvent.press(screen.getByTestId('timeclock-location-retry'));
   await screen.findByText('attendance.timeClock.locationSuccess');
   expect(screen.queryByTestId('timeclock-location-retry')).toBeNull();

@@ -5,9 +5,11 @@ import { Chip } from 'react-native-paper';
 import DepartmentAttendanceScreen from '../../../screens/attendance/DepartmentAttendanceScreen';
 import TimeClockScreen from '../../../screens/attendance/TimeClockScreen';
 import { useAuthStore } from '../../../store/authStore';
+import { logger } from '../../../utils/logger';
 
 const mockGetDepartmentAttendance = jest.fn();
 const mockGetTodayRecord = jest.fn();
+const mockGetPosition = jest.fn();
 const mockFocusCallbacks: Array<() => void | (() => void)> = [];
 const mockNavigation = { navigate: jest.fn(), goBack: jest.fn() };
 type TestRendererHandle = { toJSON: () => unknown; update: (element: React.ReactElement) => void; unmount: () => void; root: { findAllByType: (type: unknown) => Array<{ props: Record<string, unknown> }> } };
@@ -44,6 +46,14 @@ jest.mock('@react-navigation/native', () => ({
   },
 }));
 jest.mock('@react-native-community/datetimepicker', () => () => null);
+jest.mock('expo-location', () => ({
+  Accuracy: { High: 4 },
+  requestForegroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+}));
+jest.mock('../../../utils/currentPosition', () => ({
+  ...jest.requireActual('../../../utils/currentPosition'),
+  getCurrentPositionWithTimeout: (...args: unknown[]) => mockGetPosition(...args),
+}));
 jest.mock('../../../components/ui', () => {
   const ReactNative = require('react-native');
   const passthrough = ({ children }: { children: React.ReactNode }) => <>{children}</>;
@@ -106,6 +116,7 @@ describe('DepartmentAttendance read boundary', () => {
   beforeEach(() => {
     mockGetDepartmentAttendance.mockReset();
     mockGetTodayRecord.mockReset().mockResolvedValue({ success: true, data: null });
+    mockGetPosition.mockReset().mockResolvedValue({ coords: { latitude: 1, longitude: 2 } });
     mockNavigation.navigate.mockReset();
     mockNavigation.goBack.mockReset();
     mockFocusCallbacks.length = 0;
@@ -130,6 +141,26 @@ describe('DepartmentAttendance read boundary', () => {
     fireEvent.press(view.getByText('attendance.timeClock.historyRecords'));
     expect(mockNavigation.navigate).toHaveBeenCalledWith('AttendanceHistory');
     view.unmount();
+  });
+
+  it('distinguishes a timeout, logs only its category and acquires a real fix on retry', async () => {
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      mockGetPosition.mockRejectedValueOnce(new Error('Location request timed out'));
+      const view = render(<TimeClockScreen />);
+      await waitFor(() => expect(view.getByText('attendance.timeClock.locationTimedOut')).toBeTruthy());
+      expect(view.queryByText('attendance.timeClock.locationPermissionRequired')).toBeNull();
+      expect(view.queryByText('attendance.timeClock.locationSuccess')).toBeNull();
+      expect(warn).toHaveBeenCalledWith('[TimeClock] Location request failed', { reason: 'timeout' });
+      fireEvent.press(view.getByText('common.retry'));
+      await waitFor(() => expect(view.getByText('attendance.timeClock.locationSuccess')).toBeTruthy());
+      expect(view.getByText('Lat: 1.000000')).toBeTruthy();
+      expect(mockGetPosition).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      view.unmount();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('shows a truthful permission boundary and sends zero GETs when HR read is denied', async () => {
