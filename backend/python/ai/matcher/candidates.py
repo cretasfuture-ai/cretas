@@ -11,6 +11,8 @@
     补足用描述向量 (旧): 召回 75.6% / 首选对 41.9% / 自动执行判错 9.1%
     补足用 blend 0.35:   召回 82.4% / 首选对 46.9% / 自动执行判错 5.4%
 ⚠️ 纯检索 (不要 LLM 粗选) 召回相同但首选对只有 35.3% —— 检索只用来**补足**, 不替代粗选。
+   2026-10-04 补充: 加一层微调重排之后可以替代粗选 (向量 Top-50 → 重排, 召回 @20 79.1% vs 粗选 75.7%),
+   见 ai/matcher/rerank.py; 那条路要取 50 个, 所以 match() 可以临时指定 top_k。
 
 没有例句的意图 (或例句表还没建): 例句分 = 描述分, 退化成旧行为, 不报错。
 没有描述向量的意图 (描述太短被向量回填跳过, 2026-10-03 prod 有 2 个: 电子秤校准 / 电子秤故障排查):
@@ -70,7 +72,8 @@ class BlendRetriever:
         self.top_k = top_k
         self.blend = blend
 
-    async def match(self, query: str, factoryId: str, businessType: str) -> List[CandidateIntentDto]:
+    async def match(self, query: str, factoryId: str, businessType: str,
+                    top_k: Optional[int] = None) -> List[CandidateIntentDto]:
         global _missing_table_warned
         if self.pool is None:
             return []
@@ -94,7 +97,7 @@ class BlendRetriever:
         scores = blend_scores({r["intent_code"]: (None if r["similarity"] is None else float(r["similarity"]))
                                for r in desc_rows},
                               {r["intent_code"]: float(r["similarity"]) for r in ex_rows}, self.blend)
-        ranked = sorted(scores.items(), key=lambda kv: -kv[1])[: self.top_k]
+        ranked = sorted(scores.items(), key=lambda kv: -kv[1])[: (top_k or self.top_k)]
         return [
             CandidateIntentDto(
                 intentCode=c, intentName=meta[c]["intent_name"], intentCategory=meta[c].get("intent_category"),
