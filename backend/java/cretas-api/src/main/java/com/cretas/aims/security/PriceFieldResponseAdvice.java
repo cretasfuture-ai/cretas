@@ -637,6 +637,9 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             for (Field f : walk.getDeclaredFields()) {
                 if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
                 if (java.lang.reflect.Modifier.isTransient(f.getModifiers())) continue;
+                com.fasterxml.jackson.annotation.JsonIgnore jsonIgnore =
+                        f.getAnnotation(com.fasterxml.jackson.annotation.JsonIgnore.class);
+                if (jsonIgnore != null && jsonIgnore.value()) continue;
                 Class<?> type = f.getType();
                 if (type.isPrimitive()) continue;
                 // Skip declared leaf types (String / BigDecimal / dates / etc).

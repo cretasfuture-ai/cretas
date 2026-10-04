@@ -48,6 +48,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 
 import com.cretas.aims.annotation.RequirePermission;
@@ -229,7 +230,7 @@ public class SalesController {
 
         // Delegate to service (which publishes FinishedGoodsCreatedEvent with sourceType)
         FinishedGoodsBatch created = salesService.createOpeningFinishedGoodsBatch(factoryId, batch, userId);
-        return ApiResponse.success("期初成品入库成功", created);
+        return ApiResponse.success("期初成品入库成功", detachedFinishedGoods(created));
     }
 
     // ==================== T126 Phase 1: 成品库存 Web 闭环 ====================
@@ -252,7 +253,7 @@ public class SalesController {
         // F1: get userId from request attribute (NOT SecurityContextHolder — it's always empty here)
         Long userId = (Long) httpRequest.getAttribute("userId");
         FinishedGoodsBatch updated = salesService.editFinishedGoodsBatch(factoryId, batchId, request, userId);
-        return ApiResponse.success("编辑成功", updated);
+        return ApiResponse.success("编辑成功", detachedFinishedGoods(updated));
     }
 
     /**
@@ -273,7 +274,7 @@ public class SalesController {
         // F1: get userId from request attribute (NOT SecurityContextHolder)
         Long userId = (Long) httpRequest.getAttribute("userId");
         FinishedGoodsBatch updated = salesService.adjustFinishedGoodsQuantity(factoryId, batchId, request, userId);
-        return ApiResponse.success("调整成功", updated);
+        return ApiResponse.success("调整成功", detachedFinishedGoods(updated));
     }
 
     /**
@@ -912,10 +913,8 @@ public class SalesController {
 
     // 🔴 2026-08-22: 加 quality。质检的**报废**页要挑一个成品批次来报废,
     //   而这个列表只给 sales|inventory ⇒ 6 个质检/车间角色看得见、点下去必 403。
-    // ⚠️ **登记一处暴露**(⛔ 非豁免): FinishedGoodsBatch 带 unitPrice/unitCost,
-    //   且**没有** @PriceSensitive ⇒ 质检角色会看到成品单价/单位成本。
-    //   本轮判定可接受: 报废页本身就在显示「预估损失 ¥」, 这条流程本来就涉及金额。
-    //   ⛔ 不顺手给实体加 @PriceSensitive —— 那会同时改变销售侧既有页面的显示, 需单独验证。
+    // Prices are filtered by the existing price-view policy on detached response copies.
+    // Reading inventory must not change source entities or expose prices to read-only roles.
     @GetMapping("/finished-goods")
     @Operation(summary = "成品库存列表")
     @RequirePermission({"sales:read_write", "sales:read", "inventory:read", "quality:read", "quality:read_write"})
@@ -924,7 +923,7 @@ public class SalesController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<FinishedGoodsBatch> result = salesService.getFinishedGoodsBatches(factoryId, page, size);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", detachedFinishedGoodsPage(result));
     }
 
     @GetMapping("/finished-goods/available")
@@ -937,7 +936,40 @@ public class SalesController {
         // T4-D5 #572 Phase B-1: sourceWarehouseCode 可选; null/空时回落 WH-LOG (D5 默认).
         List<FinishedGoodsBatch> batches = salesService.getAvailableBatches(
                 factoryId, productTypeId, sourceWarehouseCode);
-        return ApiResponse.success("查询成功", batches);
+        return ApiResponse.success("查询成功", detachedFinishedGoodsList(batches));
+    }
+
+    private PageResponse<FinishedGoodsBatch> detachedFinishedGoodsPage(
+            PageResponse<FinishedGoodsBatch> source) {
+        if (source == null) {
+            return null;
+        }
+        PageResponse<FinishedGoodsBatch> copy = new PageResponse<>();
+        copy.setContent(detachedFinishedGoodsList(source.getContent()));
+        copy.setPage(source.getPage());
+        copy.setCurrentPage(source.getCurrentPage());
+        copy.setSize(source.getSize());
+        copy.setTotalElements(source.getTotalElements());
+        copy.setTotalPages(source.getTotalPages());
+        copy.setFirst(source.getFirst());
+        copy.setLast(source.getLast());
+        return copy;
+    }
+
+    private List<FinishedGoodsBatch> detachedFinishedGoodsList(List<FinishedGoodsBatch> source) {
+        if (source == null) {
+            return null;
+        }
+        return source.stream().map(this::detachedFinishedGoods).toList();
+    }
+
+    private FinishedGoodsBatch detachedFinishedGoods(FinishedGoodsBatch source) {
+        if (source == null) {
+            return null;
+        }
+        FinishedGoodsBatch copy = new FinishedGoodsBatch();
+        BeanUtils.copyProperties(source, copy, "factory", "productType");
+        return copy;
     }
 
     /**
@@ -954,9 +986,9 @@ public class SalesController {
     @RequirePermission({"sales:read_write", "sales:read", "inventory:read"})
     public ApiResponse<FinishedGoodsBatch> getFinishedGoodsBatch(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String batchId) {
+        @PathVariable @NotBlank String batchId) {
         FinishedGoodsBatch batch = salesService.getFinishedGoodsBatchById(factoryId, batchId);
-        return ApiResponse.success("查询成功", batch);
+        return ApiResponse.success("查询成功", detachedFinishedGoods(batch));
     }
 
     // ==================== 统计 ====================

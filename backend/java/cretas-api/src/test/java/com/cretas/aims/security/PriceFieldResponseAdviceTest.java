@@ -15,6 +15,10 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -135,6 +139,62 @@ class PriceFieldResponseAdviceTest {
         return order;
     }
 
+    @Test
+    @DisplayName("JsonIgnore child graph: ignored FinishedGoodsBatch prices stay unchanged and visible children remain traversable")
+    void jsonIgnoreChildGraph_preservesIgnoredBatchAndStripsVisibleChildPrice() {
+        asUser(10L, false);
+
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setUnitPrice(new BigDecimal("88.88"));
+        batch.setUnitCost(new BigDecimal("55.55"));
+
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductName("成品猪蹄");
+        item.setUnitPrice(new BigDecimal("120.00"));
+        item.setFinishedGoodsBatch(batch);
+
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setItems(List.of(item));
+
+        VisibleNestedHolder holder = new VisibleNestedHolder();
+        holder.record = record;
+        holder.visiblePriceItem = new PurchaseOrderItem();
+        holder.visiblePriceItem.setUnitPrice(new BigDecimal("123.45"));
+
+        run(holder);
+
+        assertEquals(new BigDecimal("120.00"), item.getUnitPrice(),
+                "SalesDeliveryItem.unitPrice has no @PriceSensitive annotation in this scope");
+        assertEquals("成品猪蹄", item.getProductName(), "visible delivery item remains traversable");
+        assertNull(holder.visiblePriceItem.getUnitPrice(),
+                "visible PurchaseOrderItem price sentinel is stripped");
+        assertEquals(new BigDecimal("88.88"), batch.getUnitPrice(),
+                "@JsonIgnore FinishedGoodsBatch.unitPrice remains untouched");
+        assertEquals(new BigDecimal("55.55"), batch.getUnitCost(),
+                "@JsonIgnore FinishedGoodsBatch.unitCost remains untouched");
+    }
+
+    @Test
+    @DisplayName("JsonIgnore(value=false) child graph remains traversable")
+    void jsonIgnoreFalse_childGraphStillStripsPrice() {
+        asUser(10L, false);
+
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setUnitPrice(new BigDecimal("77.77"));
+        VisibleNestedHolder holder = new VisibleNestedHolder();
+        holder.batch = batch;
+
+        run(holder);
+
+        assertNull(batch.getUnitPrice(), "@JsonIgnore(value=false) child remains traversable");
+    }
+
+    private static final class VisibleNestedHolder {
+        @JsonIgnore(value = false)
+        private FinishedGoodsBatch batch;
+        private SalesDeliveryRecord record;
+        private PurchaseOrderItem visiblePriceItem;
+    }
     // ───────── Tests ─────────
 
     @Test

@@ -399,7 +399,8 @@
       "temperature": "Temperature",
       "pressure": "Pressure",
       "speed": "Speed",
-      "power": "Power"
+      "power": "Power",
+      "notConnected": "Realtime parameters are not connected yet"
     },
     "performance": {
       "oee": "OEE (estimate)",
@@ -416,9 +417,12 @@
     "maintenanceRecords": {
       "date": "Date",
       "type": "Type",
+      "content": "Maintenance Content",
       "technician": "Technician",
       "cost": "Cost",
-      "empty": "No maintenance records"
+      "empty": "No maintenance records",
+      "expand": "Show all records",
+      "collapse": "Show fewer records"
     },
     "actions": {
       "viewAlerts": "View Factory Alerts",
