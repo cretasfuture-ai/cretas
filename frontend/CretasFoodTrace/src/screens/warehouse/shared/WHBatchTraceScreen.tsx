@@ -7,15 +7,17 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../../../store/authStore";
-import { WHInventoryStackParamList, WarehouseManagerTabParamList } from "../../../types/navigation";
+import { WHInventoryStackParamList } from "../../../types/navigation";
 import { MaterialBatch, materialBatchApiClient } from "../../../services/api/materialBatchApiClient";
 import { ImpactResponse, LineageNode, traceabilityApiClient } from "../../../services/api/traceabilityApiClient";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
-type TabNavigationProp = BottomTabNavigationProp<WarehouseManagerTabParamList>;
+type RecallParentNavigation = {
+  getState: () => { routeNames?: readonly string[] };
+  navigate: (name: string, params?: unknown) => void;
+};
 type RouteType = RouteProp<WHInventoryStackParamList, "WHBatchTrace">;
 type AuthUser = ReturnType<typeof useAuthStore.getState>["user"];
 
@@ -205,11 +207,14 @@ export function WHBatchTraceScreen() {
 
   const visible = traceData?.ownerKey === ownerKey ? traceData.data : null;
   const visibleError = errorOwnerKey === ownerKey ? loadError : null;
+  const recallParent = navigation.getParent<RecallParentNavigation>();
+  const recallAvailable = recallParent?.getState().routeNames?.includes("WHProfileTab") ?? false;
   const goBackIfCurrent = useCallback(() => { if (isLiveOwner()) navigation.goBack(); }, [isLiveOwner, navigation]);
   const openRecallIfCurrent = useCallback(() => {
     if (!isLiveOwner()) return;
-    const parent = navigation.getParent<TabNavigationProp>();
-    if (!parent) {
+    const parent = navigation.getParent<RecallParentNavigation>();
+    const routeNames = parent?.getState().routeNames ?? [];
+    if (!parent || !routeNames.includes("WHProfileTab")) {
       setActionError(t("messages.parentNavigationUnavailable"));
       setActionErrorOwnerKey(ownerKey);
       return;
@@ -225,7 +230,7 @@ export function WHBatchTraceScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <Header title={t("shared.batchTrace.title")} subtitle={visible.batch.batchNumber} onBack={goBackIfCurrent} />
       <ScrollView style={styles.content}>
-        <View style={styles.actions}><Button mode="outlined" onPress={openRecallIfCurrent}>{t("shared.batchTrace.recall")}</Button>{actionErrorOwnerKey === ownerKey && actionError ? <Text style={styles.error}>{actionError}</Text> : null}</View>
+        <View style={styles.actions}><Button mode="outlined" disabled={!recallAvailable} onPress={openRecallIfCurrent}>{recallAvailable ? t("shared.batchTrace.recall") : t("shared.batchTrace.recallUnavailable")}</Button>{!recallAvailable ? <Text style={styles.muted}>{t("shared.batchTrace.recallUnavailableHint")}</Text> : null}{actionErrorOwnerKey === ownerKey && actionError ? <Text style={styles.error}>{actionError}</Text> : null}</View>
         {visible.partial ? <View style={styles.warning}><Text style={styles.warningText}>{t("shared.batchTrace.partialFailure")}</Text><Button mode="outlined" onPress={() => void loadTraceData()}>{t("messages.retry")}</Button></View> : null}
         <Surface style={styles.card} elevation={1}><Text style={styles.cardTitle}>{t("shared.batchTrace.traceability")}</Text><Text>{visible.batch.materialName ?? t("messages.unknownMaterial")}</Text><Text>{t("shared.batchTrace.batchNumber")}: {visible.batch.batchNumber}</Text></Surface>
         <Section title={t("shared.batchTrace.events")}>

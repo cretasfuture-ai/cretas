@@ -16,7 +16,8 @@ const recordPrint = jest.fn();
 const printBatchLabel = jest.fn();
 const navigationNavigate = jest.fn();
 const parentNavigate = jest.fn();
-const parentNavigation = { navigate: parentNavigate };
+let parentRouteNames = ["WHProfileTab"];
+const parentNavigation = { navigate: parentNavigate, getState: () => ({ routeNames: parentRouteNames }) };
 const navigationGoBack = jest.fn();
 const mockTranslate = (key: string) => key;
 
@@ -123,6 +124,7 @@ beforeEach(() => {
   printBatchLabel.mockReset();
   navigationNavigate.mockReset();
   parentNavigate.mockReset();
+  parentRouteNames = ["WHProfileTab"];
   navigationGoBack.mockReset();
   getMaterialBatches.mockResolvedValue(listResponse([batch()]));
   getBatchById.mockResolvedValue({ success: true, data: batch() });
@@ -410,6 +412,10 @@ describe("warehouse material detail readback", () => {
     currentRecall?.();
     expect(parentNavigate).toHaveBeenCalledWith("WHProfileTab", { screen: "WHRecallManage" });
     parentNavigate.mockClear();
+    parentRouteNames = [];
+    currentRecall?.();
+    expect(parentNavigate).not.toHaveBeenCalled();
+    parentRouteNames = ["WHProfileTab"];
     const oldRecall = currentRecall;
     liveUser = { ...actor("warehouse_worker", "F006"), id: 79, username: "recall-worker" };
     await act(async () => { traceView.rerender(<WHBatchTraceScreen />); });

@@ -98,8 +98,8 @@ function setData(totalValue: number | null | undefined) {
     success: true,
     code: 200,
     message: '',
-    data: { content: [batch()], totalElements: 1, totalPages: 1 },
-  });
+    data: { content: [batch()], totalElements: 1, totalPages: 1, currentPage: 1 },
+  } as never);
   getStatistics.mockResolvedValue({
     success: true,
     code: 200,
@@ -132,14 +132,15 @@ describe('WHInventoryListScreen price visibility', () => {
     expect(view.queryByText('¥1K')).toBeNull();
   });
 
-  it('hides price for a missing actor while retaining quantity and count cards', async () => {
+  it('refuses to load inventory without a factory actor and issues no inventory requests', async () => {
     useAuthStore.setState({ user: null, isAuthenticated: false });
     const view = render(<WHInventoryListScreen />);
 
-    await waitFor(() => expect(view.getByText('批次总数')).toBeTruthy());
-    expect(view.getByText('已加载食材(kg)')).toBeTruthy();
-    expect(view.getAllByText('8').length).toBeGreaterThanOrEqual(3);
-    expect(view.queryByTestId('wh-inventory-price-card')).toBeNull();
+    await waitFor(() => expect(view.getByTestId('wh-inventory-load-error')).toBeTruthy());
+    expect(view.getByText(/缺少工厂身份/)).toBeTruthy();
+    expect(getBatches).not.toHaveBeenCalled();
+    expect(getStatistics).not.toHaveBeenCalled();
+    expect(listPackaging).not.toHaveBeenCalled();
   });
 
   it('shows an authorized nonzero total value and retains count cards', async () => {
