@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `F006-MOBILE-R16-BATCH-TENANT-20261004` — `in-progress` — Owner: Codex/root DIRECT — Base `defc450e3e` — 🔒 ProcessingServiceImpl.cancelWorkerAssignment及ProcessingBatchWorkerTenantContractTest；批次工厂归属校验先于session访问/取消。外厂真实写0。详见archive/2026-10-04-f006-mobile-r16-batch-tenant.md。
+
 - `F006-MOBILE-R10-HR-BATCHES-20261004` — `in-progress` — Owner: Codex/f006_mobile_r10_exec — Base `317888e518` — 🔒 HR批次两页、schedulingApi/hrNavigation、hr中英与3目标测试；修403假空/人数单位/状态及跨actor写门禁。不改后端/授予权限/已有业务。详见archive/2026-10-04-f006-mobile-r10-hr-batches.md。
 
 
