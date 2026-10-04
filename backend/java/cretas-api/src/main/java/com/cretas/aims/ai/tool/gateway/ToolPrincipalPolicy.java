@@ -65,6 +65,8 @@ public class ToolPrincipalPolicy {
             }
             Set<String> currentPermissions = withReadWriteComposites(
                     permissionService.getUserPermissions(user));
+            boolean canViewPrices = permissionService.hasPermission(
+                    user, "procurement:price:view");
             ExecutionPrincipal current = new ExecutionPrincipal(
                     factory.getId(),
                     currentBusinessType,
@@ -82,6 +84,7 @@ public class ToolPrincipalPolicy {
             context.put("userRole", currentRole);
             context.put("roleCode", currentRole);
             context.put("permissions", currentPermissions);
+            context.put("canViewPrices", canViewPrices);
             return Optional.of(new RehydratedPrincipal(current, Map.copyOf(context)));
         } catch (RuntimeException unavailableAuthorizationTruth) {
             return Optional.empty();

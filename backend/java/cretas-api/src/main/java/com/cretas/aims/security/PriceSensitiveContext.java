@@ -53,6 +53,29 @@ public final class PriceSensitiveContext {
     }
 
     /**
+     * Installs a price visibility decision for a synchronous tool invocation and restores the
+     * previous decision when the scope closes. This is safe for nested invocations and pooled
+     * worker threads.
+     */
+    public static Scope scoped(boolean hidePrices) {
+        Boolean previous = HIDE_PRICES.get();
+        HIDE_PRICES.set(hidePrices);
+        return () -> {
+            if (previous == null) {
+                HIDE_PRICES.remove();
+            } else {
+                HIDE_PRICES.set(previous);
+            }
+        };
+    }
+
+    @FunctionalInterface
+    public interface Scope extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    /**
      * Returns {@code true} when the property gated by {@code permission}
      * should be hidden in the current serialization. The Jackson modifier
      * uses this to short-circuit getter invocation.

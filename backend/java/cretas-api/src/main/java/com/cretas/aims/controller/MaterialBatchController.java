@@ -966,6 +966,7 @@ public class MaterialBatchController {
      * 获取库存统计
      */
     @GetMapping("/inventory/statistics")
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read", "production:read", "production:read_write"})
     @Operation(summary = "获取库存统计")
     public ApiResponse<Map<String, Object>> getInventoryStatistics(
             @Parameter(description = "工厂ID", required = true, example = "F001")
@@ -1074,6 +1075,7 @@ public class MaterialBatchController {
      * @return 低库存预警列表
      */
     @GetMapping("/low-stock")
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @Operation(summary = "获取低库存警告", description = "获取库存低于最低阈值的原材料列表")
     public ApiResponse<List<Map<String, Object>>> getLowStockWarnings(
             @Parameter(description = "工厂ID", required = true, example = "F001")
@@ -1136,6 +1138,7 @@ public class MaterialBatchController {
      * @return 库存预警列表
      */
     @GetMapping("/inventory/alerts")
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @Operation(summary = "获取库存预警（综合）",
                description = "获取所有类型的库存预警，包括低库存、即将过期、已过期")
     public ApiResponse<List<Map<String, Object>>> getInventoryAlerts(
@@ -1222,6 +1225,7 @@ public class MaterialBatchController {
      * - 距保质期不足1/3时标记需单独存放
      */
     @GetMapping("/inventory/expiry-warnings")
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @Operation(summary = "临期三级预警", description = "食品行业临期管理：30/60/90天三级预警 + 单独存放标记")
     public ApiResponse<Map<String, Object>> getExpiryWarnings(
             @Parameter(description = "工厂ID", required = true, example = "F001")

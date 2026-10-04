@@ -20,7 +20,6 @@
 
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
 - `F006-MOBILE-R44-20261005` — `queued` — Owner root/只读追踪 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — F006状态参数缺省/available/AVAILABLE三GET同200行含77已耗尽/用完。PageRequest有status但列表服务未用；库位/临期实际UI未复现；临期需保留EXPIRED，后续明确状态集及查询/JPA门禁。0变更。
-- `F006-MOBILE-R49-20261005` — `queued` — Owner root/只读追踪 — Base `a2cda2ac64bb5e7d20f790618c16cefee7bb7fff` — 库存工具DTO金额序列化到AI前缺少已证实脱敏边界；仅源码风险，未执行真实tool/LLM。仓库员工UI无AI路由；仓库主管SSE已接线但工作流未证实。先工具/Gateway真实角色正反例及价格权限复用，勿当线上泄露。0变更。
 
 - `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #917合并发布/Java14121/18角色列表合计权限回读通过，8可读10拒绝。R48行范围38目标/H2/安全终审通过归档，待制品/CI/发布/PG回读；R44筛选及R49 AI风险待查。APK17已装；定位成功未打卡；前台变动停点击，深流程/QC/Mini未完；他租户写0。
 
