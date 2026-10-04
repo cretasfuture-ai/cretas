@@ -66,6 +66,31 @@ public class WorkProcessTaskStartTool extends AbstractBusinessTool {
                 result);
     }
 
+    /**
+     * 只读预览 —— AI 对话里「预览 → 确认」的预览段 (RN / web 确认卡的数据源)。
+     * ⛔ 只读任务, 不调 {@code workProcessTaskService.start}; 规则见
+     * {@link WorkProcessTaskTransitionPreview}。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(
+            String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        return WorkProcessTaskTransitionPreview.start(
+                workProcessTaskService, factoryId, getLong(params, "taskId"));
+    }
+
+    @Override
+    protected String getParameterQuestion(String paramName) {
+        if ("taskId".equals(paramName)) {
+            return "请问要开始哪道工序任务？说任务编号就行。";
+        }
+        return super.getParameterQuestion(paramName);
+    }
+
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
     @Override
     public AccessMode getAccessMode() {

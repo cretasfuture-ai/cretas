@@ -537,13 +537,8 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
      * 状态机校验. 非法转换抛 BusinessException + actionHint.
      */
     private void assertTransition(Status from, Status to) {
-        boolean ok = switch (to) {
-            case IN_PROGRESS -> from == Status.PENDING;
-            case COMPLETED -> from == Status.IN_PROGRESS;
-            case SKIPPED -> from == Status.PENDING || from == Status.IN_PROGRESS;
-            case CANCELLED -> from == Status.PENDING || from == Status.IN_PROGRESS;
-            case PENDING -> false; // 不可回退到初始态
-        };
+        // 转换表只有一份, 在接口上 —— AI 预览读的也是它 (见 WorkProcessTaskService#isTransitionAllowed)。
+        boolean ok = WorkProcessTaskService.isTransitionAllowed(from, to);
         if (!ok) {
             throw new BusinessException(
                     409,
