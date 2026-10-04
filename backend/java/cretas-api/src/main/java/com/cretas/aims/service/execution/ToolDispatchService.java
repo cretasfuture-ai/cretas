@@ -391,11 +391,13 @@ public class ToolDispatchService {
             // Re-bind the authenticated principal immediately before hashing and Tool execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
 
-            // D11B migration lane: once the default-off flag and the independent allowlist both
-            // select a Tool, Gateway owns the attempt. Do not consult the legacy result cache,
-            // retry/correction loop, or direct executor afterwards, including on deny/timeout/fail.
-            if (intentDispatchGatewayMigrationEnabled
-                    && legacyToolMigrationRegistry.contains(tool.getToolName())) {
+            // This approved stock READ tool always needs Gateway identity, row and price scope,
+            // including ordinary mobile SSE calls while the broad migration flag is disabled.
+            // Other tools retain the independent default-off legacy migration allowlist.
+            // A selected Gateway attempt never enters legacy cache/retry on denial or failure.
+            if ("material_stock_summary".equals(tool.getToolName())
+                    || (intentDispatchGatewayMigrationEnabled
+                    && legacyToolMigrationRegistry.contains(tool.getToolName()))) {
                 return executeThroughMigrationGateway(
                         tool, factoryId, params, intent, userId, userRole);
             }
@@ -1176,9 +1178,11 @@ public class ToolDispatchService {
             String userRole) {
         String toolName = selectedTool.getToolName();
         try {
-            String expectedVersion = legacyToolMigrationRegistry.expectedVersion(toolName)
-                    .orElseThrow(() -> new SecurityException(
-                            "Legacy migration manifest binding disappeared"));
+            String expectedVersion = "material_stock_summary".equals(toolName)
+                    ? selectedTool.getVersion()
+                    : legacyToolMigrationRegistry.expectedVersion(toolName)
+                            .orElseThrow(() -> new SecurityException(
+                                    "Legacy migration manifest binding disappeared"));
             String callId = "intent-dispatch-" + java.util.UUID.randomUUID();
             ExecutionPrincipal principal = authenticatedToolPrincipalFactory.create(
                     factoryId, userId, userRole);

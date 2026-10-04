@@ -11,6 +11,13 @@ import org.springframework.security.core.context.SecurityContextHolder;
 public class SecurityUtils {
 
     /**
+     * Gateway-only trusted identity fallback for synchronous, non-HTTP tool execution.
+     * A plain ThreadLocal is deliberate: tool identity must never leak to a child or pooled
+     * worker thread, and request attributes remain the higher-priority production source.
+     */
+    private static final ThreadLocal<Long> TRUSTED_USER_ID = new ThreadLocal<>();
+
+    /**
      * 获取当前登录用户 ID —— <b>本项目唯一可用的取法</b>。
      *
      * <p>⛔ 不要用 {@link #getCurrentUserId()}：本项目<b>从不填充</b> Spring 的
@@ -31,10 +38,60 @@ public class SecurityUtils {
      * {@code BACKEND_HEALTH=pass}）<b>全绿</b> —— 判据只证明「发上去了」，
      * 不证明「跑得起来」。
      *
-     * @return 用户 ID；不在请求线程里（如 {@code @Async}）或未登录时返回 {@code null}
+     * @return request attribute 用户 ID；无 Servlet 请求时使用同步可信作用域，否则为 {@code null}
      */
     public static Long currentUserId() {
-        return toLong(currentRequestAttribute("userId"));
+        org.springframework.web.context.request.RequestAttributes attrs =
+                org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof org.springframework.web.context.request.ServletRequestAttributes servletAttrs) {
+            return toLong(servletAttrs.getRequest().getAttribute("userId"));
+        }
+        return TRUSTED_USER_ID.get();
+    }
+
+    /**
+     * Binds a rehydrated USER id for one synchronous tool call when no servlet request exists.
+     * The returned scope restores the previous value, including nested scopes and failures.
+     */
+    public static Scope trustedUserIdScope(Long userId) {
+        if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                instanceof org.springframework.web.context.request.ServletRequestAttributes) {
+            return Scope.NOOP;
+        }
+        Long previous = TRUSTED_USER_ID.get();
+        if (userId == null) {
+            TRUSTED_USER_ID.remove();
+        } else {
+            TRUSTED_USER_ID.set(userId);
+        }
+        return new Scope(previous);
+    }
+
+    public static final class Scope implements AutoCloseable {
+        private static final Scope NOOP = new Scope(null, false);
+        private final Long previous;
+        private final boolean active;
+
+        private Scope(Long previous) {
+            this(previous, true);
+        }
+
+        private Scope(Long previous, boolean active) {
+            this.previous = previous;
+            this.active = active;
+        }
+
+        @Override
+        public void close() {
+            if (!active) {
+                return;
+            }
+            if (previous == null) {
+                TRUSTED_USER_ID.remove();
+            } else {
+                TRUSTED_USER_ID.set(previous);
+            }
+        }
     }
 
     /**

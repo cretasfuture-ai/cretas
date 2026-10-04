@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.gateway;
 
 import com.cretas.aims.security.PriceSensitiveContext;
+import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.gateway.ToolConfirmationLease.Lease;
@@ -371,8 +372,9 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         String arguments = objectMapper.writeValueAsString(parameters);
         ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
         ToolExecutor executor = resolved.executor();
-        try (PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
-                !canViewPrices(current))) {
+        try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
+                PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
+                        !canViewPrices(current))) {
             String rawResponse = executor.execute(
                     toolCall, trustedExecutionContext(command, current, resolved));
             return objectMapper.readTree(rawResponse);
@@ -404,8 +406,9 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             ToolCall toolCall = ToolCall.of(
                     command.requestId(), command.toolName(), arguments);
             ToolExecutor executor = resolved.executor();
-            try (PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
-                    !canViewPrices(current))) {
+            try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
+                    PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
+                            !canViewPrices(current))) {
                 String rawResponse = executor.preview(
                         toolCall, trustedExecutionContext(command, current, resolved));
                 payload = objectMapper.readTree(rawResponse);
@@ -445,6 +448,18 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                 GatewayResultCode.TOOL_PREVIEW_FAILED,
                 payload,
                 "Tool preview failed");
+    }
+
+    private static SecurityUtils.Scope trustedUserScope(RehydratedPrincipal current) {
+        if (current != null && current.principal().principalType() == PrincipalType.USER) {
+            try {
+                return SecurityUtils.trustedUserIdScope(
+                        Long.valueOf(current.principal().principalId()));
+            } catch (NumberFormatException ignored) {
+                // Policy has already rejected malformed USER ids; retain fail-closed behaviour.
+            }
+        }
+        return SecurityUtils.trustedUserIdScope(null);
     }
 
     private static boolean canViewPrices(RehydratedPrincipal current) {
