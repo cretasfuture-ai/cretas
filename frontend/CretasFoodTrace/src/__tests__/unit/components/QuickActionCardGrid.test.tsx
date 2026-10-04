@@ -130,6 +130,15 @@ describe('牛业卡的落点', () => {
 });
 
 describe('存量卡的落点不变', () => {
+  it.each(['factory_super_admin', 'warehouse_manager'])('%s 查库存明确查询原材料，避免无选项的泛化澄清', (role) => {
+    const { screen, onSendIntent, onNavigate } = renderGrid(role, { factoryId: 'F006' });
+    expect(screen.getByText('查看原材料库存')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('quick-action-card-2'));
+    expect(onSendIntent).toHaveBeenCalledTimes(1);
+    expect(onSendIntent).toHaveBeenCalledWith('查询原材料库存');
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
   it('FA card-0 → onSendIntent("我要报工")；card-3 → onNavigate("BomAchievement")', () => {
     const { screen, onSendIntent, onNavigate } = renderGrid('factory_super_admin');
     fireEvent.press(screen.getByTestId('quick-action-card-0'));

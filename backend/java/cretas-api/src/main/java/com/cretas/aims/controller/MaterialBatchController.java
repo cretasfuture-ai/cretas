@@ -25,6 +25,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
@@ -968,9 +969,15 @@ public class MaterialBatchController {
     @Operation(summary = "获取库存统计")
     public ApiResponse<Map<String, Object>> getInventoryStatistics(
             @Parameter(description = "工厂ID", required = true, example = "F001")
-            @PathVariable @NotBlank String factoryId) {
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
 
         Map<String, Object> statistics = materialBatchService.getInventoryStatistics(factoryId);
+        if (priceMaskResolver.shouldMaskPrice(authorization) && statistics != null) {
+            Map<String, Object> maskedStatistics = new LinkedHashMap<>(statistics);
+            maskedStatistics.remove("totalValue");
+            statistics = maskedStatistics;
+        }
         return ApiResponse.success(statistics);
     }
 
