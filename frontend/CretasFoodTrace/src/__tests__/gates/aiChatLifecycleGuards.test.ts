@@ -133,6 +133,10 @@ function sending(behavior?: (args: StreamCall) => void | Promise<void>) {
         feedbackSounds: { onError: () => { state.audio++; }, onWriteSuccess: () => { state.audio++; }, onNeedMoreInfo: () => { state.audio++; } },
         aiApiClient: { executeIntentStream: async (...args: StreamCall) => { state.calls.push(args); if (behavior)
                 await behavior(args); } },
+        lastActionRef: { current: null as { value: Record<string, unknown>; receivedAt: number } | null },
+        readLastAction: extract<(metadata: unknown) => Record<string, unknown> | undefined>('readLastAction', {}),
+        pickFreshLastAction: extract<(held: unknown, now: number) => Record<string, unknown> | undefined>(
+            'pickFreshLastAction', { LAST_ACTION_MAX_AGE_MS: extract<number>('LAST_ACTION_MAX_AGE_MS', {}) }),
     };
     ctx.isCurrentActor = () => {
         const live = ctx.useAuthStore.getState();
@@ -157,3 +161,32 @@ test('rejection releases guard without replay and allows explicit retry', async 
     throw new Error('合成断连'); }); await s.send('第一次'); assert.equal(s.state.calls.length, 1); assert.equal(s.refs.sendPendingRef.current, false); assert.equal(s.state.messages.at(-1)?.content, '合成断连'); rejectFirst = false; await s.send('明确重试'); assert.equal(s.state.calls.length, 2); });
 test('unmount suppresses delayed response state/audio and releases pending', async () => { let finish!: () => void; const done = new Promise<void>(r => { finish = r; }); const s = sending(() => done); const pending = s.send('查询'); const callbacks = s.state.calls[0]![1]; const messages = JSON.stringify(s.state.messages); s.refs.isMountedRef.current = false; s.refs.sendPendingRef.current = false; callbacks.onToken('迟到'); callbacks.onResult({ status: 'SUCCESS', message: '迟到响应', intentCategory: 'WRITE' }); callbacks.onComplete({ status: 'SUCCESS' }); callbacks.onError('迟到错误'); finish(); await pending; assert.equal(JSON.stringify(s.state.messages), messages); assert.equal(s.state.audio, 0); assert.equal(s.refs.sendPendingRef.current, false); await s.send('卸载后提交'); assert.equal(s.state.calls.length, 1); });
 test('throw before request in analysis detection still releases guard', async () => { const s = sending(); s.ctx.detectAnalysisMode = () => { throw new Error('合成检测失败'); }; const send = extract<(text: string) => Promise<void>>('handleSend', s.ctx); await send('第一次'); assert.equal(s.refs.sendPendingRef.current, false); assert.equal(s.state.loading.at(-1), false); s.ctx.detectAnalysisMode = () => ({ mode: 'quick' }); await extract<(text: string) => Promise<void>>('handleSend', s.ctx)('明确再发'); assert.equal(s.state.calls.length, 1); });
+// 追问解读 (2026-10-04): 服务端给的 metadata.lastAction 随下一句带回去; 过期 / 不合规的不带。
+const START_LAST_ACTION = { intentCode: 'WORK_PROCESS_TASK_START', params: { taskId: 12 }, at: 1 };
+test('lastAction from a result rides along on the next send (and not on the first)', async () => {
+    const s = sending(args => {
+        if (s.state.calls.length === 1) args[1].onResult({ status: 'SUCCESS', message: '已开始', metadata: { lastAction: START_LAST_ACTION } });
+        args[1].onComplete({ status: 'SUCCESS' });
+    });
+    await s.send('开始包装工序');
+    await s.send('好了');
+    assert.equal(s.state.calls.length, 2);
+    assert.equal(s.state.calls[0]![4], undefined);
+    assert.deepEqual((s.state.calls[1]![4] as any).context.lastAction, START_LAST_ACTION);
+});
+test('stale lastAction (older than 10 minutes) is not sent; a fresh one is', async () => {
+    const s = sending();
+    s.ctx.lastActionRef.current = { value: START_LAST_ACTION, receivedAt: Date.now() - 10 * 60 * 1000 - 5000 };
+    await s.send('好了');
+    assert.equal(s.state.calls[0]![4], undefined);
+    s.ctx.lastActionRef.current = { value: START_LAST_ACTION, receivedAt: Date.now() - 60 * 1000 };
+    await s.send('好了');
+    assert.deepEqual((s.state.calls[1]![4] as any).context.lastAction, START_LAST_ACTION);
+});
+test('result metadata without a usable lastAction is not kept', async () => {
+    const s = sending(args => { args[1].onResult({ status: 'SUCCESS', metadata: { lastAction: { params: { taskId: 12 } } } }); args[1].onComplete({ status: 'SUCCESS' }); });
+    await s.send('第一次');
+    assert.equal(s.ctx.lastActionRef.current, null);
+    await s.send('好了');
+    assert.equal(s.state.calls[1]![4], undefined);
+});
