@@ -20,8 +20,8 @@ export interface ShipmentRecord {
   productName: string;
   quantity: number;
   unit: string;
-  unitPrice?: number;
-  totalAmount?: number;
+  unitPrice?: number | null;
+  totalAmount?: number | null;
   shipmentDate: string;
   deliveryAddress: string;
   logisticsCompany?: string;

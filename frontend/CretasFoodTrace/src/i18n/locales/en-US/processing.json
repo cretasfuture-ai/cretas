@@ -372,6 +372,7 @@
   "equipmentDetail": {
     "title": "Equipment Detail",
     "hours": "{{value}} hours",
+    "missingValue": "Not provided",
     "sections": {
       "basicInfo": "Basic Information",
       "realtimeParams": "Realtime Parameters",
@@ -422,7 +423,11 @@
       "cost": "Cost",
       "empty": "No maintenance records",
       "expand": "Show all records",
-      "collapse": "Show fewer records"
+      "collapse": "Show fewer records",
+      "missingDate": "Date not provided",
+      "missingTechnician": "Technician not provided",
+      "missingDescription": "Maintenance content not provided",
+      "missingCost": "Cost not provided"
     },
     "actions": {
       "viewAlerts": "View Factory Alerts",

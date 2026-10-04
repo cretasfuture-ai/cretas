@@ -3,6 +3,7 @@ package com.cretas.aims.controller.warehouse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.inventory.SalesDeliveryResponseCopies;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.SalesService;
@@ -48,7 +49,7 @@ public class WarehouseDeliveryController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesDeliveryRecord> result = salesService.getPendingWarehouseDeliveries(factoryId, page, size);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result));
     }
 
     /**
@@ -66,7 +67,7 @@ public class WarehouseDeliveryController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesDeliveryRecord> result = salesService.getWarehouseDeliveryHistory(factoryId, page, size);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result));
     }
 
     /**
@@ -107,7 +108,7 @@ public class WarehouseDeliveryController {
 
         SalesDeliveryRecord record = salesService.warehouseConfirmDelivery(
                 factoryId, deliveryId, actualQuantities, userId);
-        return ApiResponse.success("发货确认成功, 成品库存已扣减", record);
+        return ApiResponse.success("发货确认成功, 成品库存已扣减", SalesDeliveryResponseCopies.record(record));
     }
 
     private Long extractUserId(String authorization) {

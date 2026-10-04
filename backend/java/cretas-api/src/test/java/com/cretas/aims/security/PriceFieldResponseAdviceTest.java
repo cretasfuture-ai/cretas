@@ -163,8 +163,8 @@ class PriceFieldResponseAdviceTest {
 
         run(holder);
 
-        assertEquals(new BigDecimal("120.00"), item.getUnitPrice(),
-                "SalesDeliveryItem.unitPrice has no @PriceSensitive annotation in this scope");
+        assertNull(item.getUnitPrice(),
+                "SalesDeliveryItem.unitPrice is @PriceSensitive and must be stripped");
         assertEquals("成品猪蹄", item.getProductName(), "visible delivery item remains traversable");
         assertNull(holder.visiblePriceItem.getUnitPrice(),
                 "visible PurchaseOrderItem price sentinel is stripped");

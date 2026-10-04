@@ -13,7 +13,6 @@ import {
   Divider,
   ActivityIndicator,
   Button,
-  DataTable,
   ProgressBar,
 } from 'react-native-paper';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
@@ -83,9 +82,9 @@ interface RealtimeParameters {
 
 interface MaintenanceRecord {
   id: string;
-  date: string;
-  technician: string;
-  description: string;
+  date: string | null;
+  technician: string | null;
+  description: string | null;
   cost: number | null;
 }
 
@@ -265,11 +264,11 @@ export default function EquipmentDetailScreen() {
       const equipmentInfo: EquipmentInfo = {
         id: String(eq.id),
         name: eq.name,
-        model: eq.model || 'N/A',
-        manufacturer: eq.manufacturer || 'Unknown',
+        model: eq.model || t('equipmentDetail.missingValue'),
+        manufacturer: eq.manufacturer || t('equipmentDetail.missingValue'),
         status: mapStatus(eq.status),
-        location: eq.location || 'N/A',
-        installDate: eq.purchaseDate || 'Unknown',
+        location: eq.location || t('equipmentDetail.missingValue'),
+        installDate: eq.purchaseDate || t('equipmentDetail.missingValue'),
         lastMaintenanceDate: eq.lastMaintenanceDate,
         nextMaintenanceDate: eq.nextMaintenanceDate,
         operatorName: eq.operatorName,
@@ -278,9 +277,9 @@ export default function EquipmentDetailScreen() {
       const history: APIMaintenanceRecord[] = maintenanceHistoryResult || [];
       const records: MaintenanceRecord[] = history.map((record) => ({
         id: String(record.id),
-        date: record.maintenanceDate,
-        technician: record.performedBy || 'Unknown',
-        description: record.description || 'N/A',
+        date: record.maintenanceDate || null,
+        technician: record.performedBy || null,
+        description: record.description || null,
         cost: typeof record.cost === 'number' && Number.isFinite(record.cost) && record.cost >= 0 ? record.cost : null,
       }));
 
@@ -677,28 +676,45 @@ export default function EquipmentDetailScreen() {
           </View>
 
           {maintenanceRecords.length > 0 ? (
-            <DataTable>
-              <DataTable.Header>
-                <DataTable.Title>{t('equipmentDetail.maintenanceRecords.date')}</DataTable.Title>
-                <DataTable.Title>{t('equipmentDetail.maintenanceRecords.content')}</DataTable.Title>
-                <DataTable.Title>{t('equipmentDetail.maintenanceRecords.technician')}</DataTable.Title>
-                <DataTable.Title numeric>{t('equipmentDetail.maintenanceRecords.cost')}</DataTable.Title>
-              </DataTable.Header>
-
+            <View>
               {maintenanceRecords.slice(0, isMaintenanceExpanded ? undefined : 5).map((record) => (
-                <DataTable.Row key={record.id}>
-                  <DataTable.Cell>{record.date}</DataTable.Cell>
-                  <DataTable.Cell testID={`equipment-detail-maintenance-description-${record.id}`}>
-                    {record.description}
-                  </DataTable.Cell>
-                  <DataTable.Cell>{record.technician}</DataTable.Cell>
-                  <DataTable.Cell numeric>{record.cost === null ? 'N/A' : `¥${record.cost}`}</DataTable.Cell>
-                </DataTable.Row>
+                <View key={record.id} testID={`equipment-detail-maintenance-card-${record.id}`} style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceField}>
+                    <Text style={styles.maintenanceLabel}>{t('equipmentDetail.maintenanceRecords.date')}</Text>
+                    <Text style={styles.maintenanceValue}>
+                      {record.date || t('equipmentDetail.maintenanceRecords.missingDate')}
+                    </Text>
+                  </View>
+                  <View style={styles.maintenanceField}>
+                    <Text style={styles.maintenanceLabel}>{t('equipmentDetail.maintenanceRecords.technician')}</Text>
+                    <Text style={styles.maintenanceValue}>
+                      {record.technician || t('equipmentDetail.maintenanceRecords.missingTechnician')}
+                    </Text>
+                  </View>
+                  <View style={styles.maintenanceField}>
+                    <Text style={styles.maintenanceLabel}>{t('equipmentDetail.maintenanceRecords.cost')}</Text>
+                    <Text testID={`equipment-detail-maintenance-cost-${record.id}`} style={styles.maintenanceValue}>
+                      {record.cost === null
+                        ? t('equipmentDetail.maintenanceRecords.missingCost')
+                        : `¥${record.cost}`}
+                    </Text>
+                  </View>
+                  <View style={styles.maintenanceDescription}>
+                    <Text style={styles.maintenanceLabel}>{t('equipmentDetail.maintenanceRecords.content')}</Text>
+                    <Text
+                      testID={`equipment-detail-maintenance-description-${record.id}`}
+                      style={styles.maintenanceDescriptionValue}
+                    >
+                      {record.description || t('equipmentDetail.maintenanceRecords.missingDescription')}
+                    </Text>
+                  </View>
+                </View>
               ))}
               {maintenanceRecords.length > 5 && (
                 <Button
                   testID="equipment-detail-maintenance-toggle"
                   mode="text"
+                  style={styles.maintenanceToggle}
                   onPress={toggleMaintenanceExpanded}
                 >
                   {isMaintenanceExpanded
@@ -706,7 +722,7 @@ export default function EquipmentDetailScreen() {
                     : t('equipmentDetail.maintenanceRecords.expand')}
                 </Button>
               )}
-            </DataTable>
+            </View>
           ) : (
             <Text style={styles.emptyText}>{t('equipmentDetail.maintenanceRecords.empty')}</Text>
           )}
@@ -831,6 +847,46 @@ const styles = StyleSheet.create({
   },
   countChip: {
     backgroundColor: '#E3F2FD',
+  },
+  maintenanceCard: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  maintenanceField: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  maintenanceLabel: {
+    width: 88,
+    fontSize: 13,
+    color: '#666',
+  },
+  maintenanceValue: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#212121',
+  },
+  maintenanceDescription: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#EEEEEE',
+  },
+  maintenanceDescriptionValue: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#212121',
+  },
+  maintenanceToggle: {
+    minHeight: 44,
+    justifyContent: 'center',
   },
   infoRow: {
     flexDirection: 'row',

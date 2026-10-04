@@ -3,7 +3,7 @@
  * 对应原型: warehouse/order-detail.html
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   ScrollView,
@@ -11,27 +11,51 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from "react-native";
-import { Text, Surface, Divider, useTheme } from "react-native-paper";
+import { Text, Surface, Divider, Button, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { WHOutboundStackParamList } from "../../../types/navigation";
 import { shipmentApiClient, ShipmentRecord } from "../../../services/api/shipmentApiClient";
-import { handleError } from "../../../utils/errorHandler";
 import { formatDateTime as fmtDateTime, formatNumberWithCommas } from "../../../utils/formatters";
+import { useAuthStore } from "../../../store/authStore";
+import { useCanViewPrice } from "../../../store/canViewPriceStore";
 
 type NavigationProp = NativeStackNavigationProp<WHOutboundStackParamList>;
 type RouteType = RouteProp<WHOutboundStackParamList, "WHOrderDetail">;
+type AuthUser = ReturnType<typeof useAuthStore.getState>["user"];
+
+function factoryOf(user: AuthUser): string | null {
+  return user?.factoryUser?.factoryId ?? user?.factoryId ?? null;
+}
+
+function ownerKeyOf(user: AuthUser, orderId: string, factoryId: string | null): string {
+  return [
+    user?.id ?? "",
+    factoryId ?? "",
+    user?.userType ?? "",
+    user?.factoryUser?.role ?? user?.platformUser?.role ?? "",
+    JSON.stringify(user?.factoryUser?.modulePermissions ?? {}),
+    orderId,
+  ].join("|");
+}
+
+function shipmentForOwner(shipment: ShipmentRecord, orderId: string, factoryId: string): ShipmentRecord {
+  if (!shipment || shipment.id !== orderId || shipment.factoryId !== factoryId) {
+    throw new Error("订单详情身份校验失败，请重新打开当前单据");
+  }
+  return shipment;
+}
 
 interface OrderProduct {
   id: string;
   name: string;
   specification: string;
   quantity: number;
-  unit: string;
-  unitPrice: number;
-  amount: number;
+  unit: string | null;
+  unitPrice: number | null;
+  amount: number | null;
 }
 
 interface OrderDetail {
@@ -56,9 +80,7 @@ interface OrderDetail {
   products: OrderProduct[];
   summary: {
     totalQuantity: number;
-    totalAmount: number;
-    shippingFee: number;
-    finalAmount: number;
+    totalAmount: number | null;
   };
 }
 
@@ -87,28 +109,62 @@ export function WHOrderDetailScreen() {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
-  const { orderId } = route.params;
+  const user = useAuthStore((state) => state.user);
+  const canViewPrice = useCanViewPrice();
+  const orderId = route.params.orderId?.trim() ?? "";
+  const factoryId = factoryOf(user);
+  const ownerKey = ownerKeyOf(user, orderId, factoryId);
 
   // 状态管理
   const [loading, setLoading] = useState(true);
-  const [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null);
+  const [orderDetail, setOrderDetail] = useState<{ ownerKey: string; data: OrderDetail } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [errorOwnerKey, setErrorOwnerKey] = useState<string | null>(null);
+  const generationRef = useRef(0);
+  const renderContextRef = useRef({ ownerKey, orderId, user });
+  renderContextRef.current = { ownerKey, orderId, user };
+
+  const isLiveOwner = useCallback(() =>
+    useAuthStore.getState().user === user
+      && renderContextRef.current.ownerKey === ownerKey
+      && renderContextRef.current.orderId === orderId,
+    [orderId, ownerKey, user],
+  );
 
   // 加载订单数据
   const loadOrderData = useCallback(async () => {
-    if (!orderId) {
-      setLoading(false);
-      return;
-    }
-
+    const actor = user;
+    const requestOwnerKey = ownerKey;
+    if (!isLiveOwner()) return;
+    const generation = ++generationRef.current;
+    const isCurrent = () =>
+      useAuthStore.getState().user === actor
+      && isLiveOwner()
+      && renderContextRef.current.ownerKey === requestOwnerKey
+      && generationRef.current === generation;
+    setLoading(true);
+    setLoadError(null);
+    setErrorOwnerKey(null);
+    setOrderDetail(null);
     try {
-      const shipment = await shipmentApiClient.getShipmentById(orderId);
+      if (!actor || !factoryId || !orderId) {
+        throw new Error("无法确定当前工厂或订单，请重新打开当前单据");
+      }
+      const shipment = shipmentForOwner(
+        await shipmentApiClient.getShipmentById(orderId, factoryId),
+        orderId,
+        factoryId,
+      );
+      if (!isCurrent()) return;
 
       if (shipment) {
-        const quantity = shipment.quantity || 0;
-        const unitPrice = shipment.unitPrice || 0;
-        const totalAmount = shipment.totalAmount || (quantity * unitPrice);
+        const quantity = shipment.quantity ?? 0;
+        const unitPrice = canViewPrice ? shipment.unitPrice ?? null : null;
+        const totalAmount = canViewPrice ? shipment.totalAmount ?? null : null;
 
         setOrderDetail({
+          ownerKey: requestOwnerKey,
+          data: {
           orderNumber: shipment.shipmentNumber || shipment.orderNumber || `SH-${shipment.id}`,
           status: shipment.status || 'pending',
           statusLabel: getStatusLabel(shipment.status),
@@ -133,7 +189,7 @@ export function WHOrderDetailScreen() {
               name: shipment.productName || '商品',
               specification: '-',
               quantity: quantity,
-              unit: shipment.unit || 'kg',
+              unit: shipment.unit ?? null,
               unitPrice: unitPrice,
               amount: totalAmount,
             },
@@ -141,21 +197,28 @@ export function WHOrderDetailScreen() {
           summary: {
             totalQuantity: quantity,
             totalAmount: totalAmount,
-            shippingFee: 0,
-            finalAmount: totalAmount,
+          },
           },
         });
       }
-    } catch (error) {
-      handleError(error, { title: '加载订单详情失败' });
+    } catch (error: unknown) {
+      if (!isCurrent()) return;
+      setLoadError(error instanceof Error ? error.message : '加载订单详情失败，请点击重试');
+      setErrorOwnerKey(requestOwnerKey);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [orderId]);
+  }, [canViewPrice, factoryId, isLiveOwner, orderId, ownerKey, user]);
 
   useEffect(() => {
-    loadOrderData();
+    void loadOrderData();
   }, [loadOrderData]);
+
+  const visibleDetail = orderDetail?.ownerKey === ownerKey ? orderDetail.data : null;
+  const visibleError = errorOwnerKey === ownerKey ? loadError : null;
+  const goBackIfCurrent = useCallback(() => {
+    if (isLiveOwner()) navigation.goBack();
+  }, [isLiveOwner, navigation]);
 
   const getStatusStyle = (status: string) => {
     switch (status) {
@@ -171,11 +234,11 @@ export function WHOrderDetailScreen() {
   };
 
   // 加载状态
-  if (loading) {
+  if (loading || (!visibleDetail && !visibleError)) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <TouchableOpacity testID="warehouse-detail-back" style={styles.backButton} onPress={goBackIfCurrent}>
             <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>订单详情</Text>
@@ -189,12 +252,32 @@ export function WHOrderDetailScreen() {
     );
   }
 
-  // 空状态
-  if (!orderDetail) {
+  if (visibleError) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <TouchableOpacity testID="warehouse-detail-back" style={styles.backButton} onPress={goBackIfCurrent}>
+            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>订单详情</Text>
+          <View style={styles.headerRight} />
+        </View>
+        <View style={styles.loadingContainer}>
+          <MaterialCommunityIcons name="alert-circle-outline" size={64} color="#f57c00" />
+          <Text style={styles.loadingText}>{visibleError}</Text>
+          <Button mode="contained" onPress={() => void loadOrderData()} style={styles.retryButton}>
+            重试
+          </Button>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!visibleDetail) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <View style={styles.header}>
+          <TouchableOpacity testID="warehouse-detail-back" style={styles.backButton} onPress={goBackIfCurrent}>
             <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>订单详情</Text>
@@ -208,7 +291,8 @@ export function WHOrderDetailScreen() {
     );
   }
 
-  const statusStyle = getStatusStyle(orderDetail.status);
+  const orderForRender = visibleDetail;
+  const statusStyle = getStatusStyle(orderForRender.status);
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -216,7 +300,7 @@ export function WHOrderDetailScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={goBackIfCurrent}
         >
           <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
         </TouchableOpacity>
@@ -229,7 +313,7 @@ export function WHOrderDetailScreen() {
         <Surface style={styles.statusCard} elevation={1}>
           <View style={styles.statusHeader}>
             <View style={styles.statusLeft}>
-              <Text style={styles.orderNumber}>{orderDetail.orderNumber}</Text>
+              <Text style={styles.orderNumber}>{orderForRender.orderNumber}</Text>
               <View
                 style={[
                   styles.statusBadge,
@@ -237,7 +321,7 @@ export function WHOrderDetailScreen() {
                 ]}
               >
                 <Text style={[styles.statusText, { color: statusStyle.color }]}>
-                  {orderDetail.statusLabel}
+                  {orderForRender.statusLabel}
                 </Text>
               </View>
             </View>
@@ -245,12 +329,12 @@ export function WHOrderDetailScreen() {
           <View style={styles.timeInfo}>
             <View style={styles.timeRow}>
               <Text style={styles.timeLabel}>下单时间</Text>
-              <Text style={styles.timeValue}>{orderDetail.createdAt}</Text>
+            <Text style={styles.timeValue}>{orderForRender.createdAt}</Text>
             </View>
-            {orderDetail.deliveredAt && (
+            {orderForRender.deliveredAt && (
               <View style={styles.timeRow}>
                 <Text style={styles.timeLabel}>送达时间</Text>
-                <Text style={styles.timeValue}>{orderDetail.deliveredAt}</Text>
+                <Text style={styles.timeValue}>{orderForRender.deliveredAt}</Text>
               </View>
             )}
           </View>
@@ -262,19 +346,19 @@ export function WHOrderDetailScreen() {
           <View style={styles.infoGrid}>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>客户名称</Text>
-              <Text style={styles.infoValue}>{orderDetail.customer.name}</Text>
+              <Text style={styles.infoValue}>{orderForRender.customer.name}</Text>
             </View>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>联系人</Text>
-              <Text style={styles.infoValue}>{orderDetail.customer.contact}</Text>
+              <Text style={styles.infoValue}>{orderForRender.customer.contact}</Text>
             </View>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>联系电话</Text>
-              <Text style={styles.infoValue}>{orderDetail.customer.phone}</Text>
+              <Text style={styles.infoValue}>{orderForRender.customer.phone}</Text>
             </View>
             <View style={[styles.infoItem, { width: "100%" }]}>
               <Text style={styles.infoLabel}>收货地址</Text>
-              <Text style={styles.infoValue}>{orderDetail.customer.address}</Text>
+              <Text style={styles.infoValue}>{orderForRender.customer.address}</Text>
             </View>
           </View>
         </View>
@@ -285,19 +369,19 @@ export function WHOrderDetailScreen() {
           <View style={styles.infoGrid}>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>物流公司</Text>
-              <Text style={styles.infoValue}>{orderDetail.logistics.company}</Text>
+              <Text style={styles.infoValue}>{orderForRender.logistics.company}</Text>
             </View>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>运单号</Text>
-              <Text style={styles.infoValue}>{orderDetail.logistics.trackingNumber}</Text>
+              <Text style={styles.infoValue}>{orderForRender.logistics.trackingNumber}</Text>
             </View>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>司机</Text>
-              <Text style={styles.infoValue}>{orderDetail.logistics.driver}</Text>
+              <Text style={styles.infoValue}>{orderForRender.logistics.driver}</Text>
             </View>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>车牌号</Text>
-              <Text style={styles.infoValue}>{orderDetail.logistics.vehicleNo}</Text>
+              <Text style={styles.infoValue}>{orderForRender.logistics.vehicleNo}</Text>
             </View>
           </View>
         </View>
@@ -305,20 +389,23 @@ export function WHOrderDetailScreen() {
         {/* 产品明细 */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>产品明细</Text>
-          {orderDetail.products.map((product, index) => (
+          {orderForRender.products.map((product, index) => (
             <View key={product.id}>
               {index > 0 && <Divider style={styles.productDivider} />}
               <View style={styles.productItem}>
                 <View style={styles.productMain}>
                   <Text style={styles.productName}>{product.name}</Text>
                   <Text style={styles.productAmount}>
-                    ¥{formatNumberWithCommas(product.amount)}
+                    {canViewPrice && product.amount !== null
+                      ? `¥${formatNumberWithCommas(product.amount)}`
+                      : canViewPrice ? '金额未提供' : '无权限查看价格'}
                   </Text>
                 </View>
                 <View style={styles.productMeta}>
                   <Text style={styles.productSpec}>{product.specification}</Text>
                   <Text style={styles.productQty}>
-                    {product.quantity} {product.unit} × ¥{product.unitPrice}
+                    {product.quantity}{product.unit ? ` ${product.unit}` : ''}
+                    {canViewPrice && product.unitPrice !== null ? ` × ¥${product.unitPrice}` : ''}
                   </Text>
                 </View>
               </View>
@@ -330,27 +417,15 @@ export function WHOrderDetailScreen() {
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>商品总量</Text>
               <Text style={styles.summaryValue}>
-                {orderDetail.summary.totalQuantity} kg
+                {orderForRender.summary.totalQuantity}{orderForRender.products[0]?.unit ? ` ${orderForRender.products[0].unit}` : ''}
               </Text>
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>商品金额</Text>
               <Text style={styles.summaryValue}>
-                ¥{formatNumberWithCommas(orderDetail.summary.totalAmount)}
-              </Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>运费</Text>
-              <Text style={styles.summaryValue}>
-                {orderDetail.summary.shippingFee === 0
-                  ? "免运费"
-                  : `¥${orderDetail.summary.shippingFee}`}
-              </Text>
-            </View>
-            <View style={[styles.summaryRow, styles.totalRow]}>
-              <Text style={styles.totalLabel}>订单金额</Text>
-              <Text style={styles.totalValue}>
-                ¥{formatNumberWithCommas(orderDetail.summary.finalAmount)}
+                {canViewPrice && orderForRender.summary.totalAmount !== null
+                  ? `¥${formatNumberWithCommas(orderForRender.summary.totalAmount)}`
+                  : canViewPrice ? '金额未提供' : '无权限查看价格'}
               </Text>
             </View>
           </View>
@@ -376,6 +451,9 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
     color: "#666",
+  },
+  retryButton: {
+    marginTop: 16,
   },
   header: {
     backgroundColor: "#4CAF50",

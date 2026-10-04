@@ -5,6 +5,7 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
@@ -137,6 +138,7 @@ public class SalesDeliveryRecord extends BaseEntity {
     private Long shippedBy;
 
     @Column(name = "total_amount", precision = 15, scale = 2)
+    @PriceSensitive
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
     @Column(name = "remark", columnDefinition = "TEXT")

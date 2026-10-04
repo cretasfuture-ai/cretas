@@ -12,6 +12,7 @@ import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.RepairSalesOrderItemSourceWarehouseRequest;
 import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.inventory.SalesDeliveryResponseCopies;
 import com.cretas.aims.dto.sales.AdjustPriceRequest;
 import com.cretas.aims.dto.sales.AdjustPriceResponse;
 import com.cretas.aims.dto.sales.SalesPriceAdjustmentRecordDTO;
@@ -829,7 +830,7 @@ public class SalesController {
         Long userId = extractUserId(authorization);
         log.info("创建发货单: factoryId={}, customerId={}", factoryId, request.getCustomerId());
         SalesDeliveryRecord record = salesService.createDeliveryRecord(factoryId, request, userId);
-        return ApiResponse.success("发货单创建成功", record);
+        return ApiResponse.success("发货单创建成功", SalesDeliveryResponseCopies.record(record));
     }
 
     @GetMapping("/deliveries")
@@ -840,7 +841,7 @@ public class SalesController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesDeliveryRecord> result = salesService.getDeliveryRecords(factoryId, page, size);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result));
     }
 
     /**
@@ -858,7 +859,7 @@ public class SalesController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String deliveryId) {
         SalesDeliveryRecord record = salesService.getDeliveryRecordById(factoryId, deliveryId);
-        return ApiResponse.success("查询成功", record);
+        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.record(record));
     }
 
     @PostMapping("/deliveries/{deliveryId}/ship")
@@ -880,7 +881,7 @@ public class SalesController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String deliveryId) {
         SalesDeliveryRecord record = salesService.confirmDelivered(factoryId, deliveryId);
-        return ApiResponse.success("签收确认成功", record);
+        return ApiResponse.success("签收确认成功", SalesDeliveryResponseCopies.record(record));
     }
 
     @PostMapping("/deliveries/{deliveryId}/signature")
@@ -896,7 +897,7 @@ public class SalesController {
         SalesDeliveryRecord record = salesService.uploadDeliverySignature(
                 factoryId, deliveryId,
                 request.getPhotoUrls(), request.getSignedByName(), request.getRemark());
-        return ApiResponse.success("签收凭证已保存", record);
+        return ApiResponse.success("签收凭证已保存", SalesDeliveryResponseCopies.record(record));
     }
 
     @GetMapping("/deliveries/by-order/{orderId}")
@@ -906,7 +907,7 @@ public class SalesController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId) {
         List<SalesDeliveryRecord> records = salesService.getDeliveryRecordsByOrder(factoryId, orderId);
-        return ApiResponse.success("查询成功", records);
+        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.records(records));
     }
 
     // ==================== 成品库存 ====================
