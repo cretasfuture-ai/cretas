@@ -236,13 +236,18 @@ class TimeStatsApiClient {
   }
 
   async getWeeklyStats(weekStart: string, factoryId?: string): Promise<ApiResponse<WeeklyStats>> {
-    // 将日期转换为年份和ISO周数
-    const date = new Date(weekStart);
-    const year = date.getFullYear();
-    // 计算ISO周数
-    const firstDayOfYear = new Date(year, 0, 1);
+    // Match TimeStatsServiceImpl: Monday starts the week, minimum one day in week 1.
+    // UTC date arithmetic avoids local timezone and daylight-saving offsets.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw new Error('周统计日期格式无效');
+    const date = new Date(`${weekStart}T00:00:00.000Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== weekStart) {
+      throw new Error('周统计日期格式无效');
+    }
+    const year = date.getUTCFullYear();
+    const firstDayOfYear = new Date(`${weekStart.slice(0, 4)}-01-01T00:00:00.000Z`);
     const pastDaysOfYear = (date.getTime() - firstDayOfYear.getTime()) / 86400000;
-    const week = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+    const firstWeekday = firstDayOfYear.getUTCDay() || 7;
+    const week = Math.floor((pastDaysOfYear + firstWeekday - 1) / 7) + 1;
     return await apiClient.get(`${this.getPath(factoryId)}/weekly`, { params: { year, week } });
   }
 

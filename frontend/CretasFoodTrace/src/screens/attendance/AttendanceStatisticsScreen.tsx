@@ -1,49 +1,51 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import {
   Text,
   Appbar,
   Card,
   List,
   ActivityIndicator,
+  Button,
   SegmentedButtons,
   Divider,
   ProgressBar,
-  Chip,
 } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
-import { timeStatsApiClient, DailyStats, MonthlyStats, EmployeeTimeStats } from '../../services/api/timeStatsApiClient';
+import { timeStatsApiClient } from '../../services/api/timeStatsApiClient';
 import { useAuthStore } from '../../store/authStore';
-import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { formatDate } from '../../utils/formatters';
+import { getFactoryId, type User } from '../../types/auth';
+import { hasModulePermission } from '../../utils/permissionHelper';
+import {
+  AttendanceTimeStats,
+  parseDepartmentAttendanceStats,
+  parseFactoryAttendanceStats,
+  parsePersonalAttendanceStats,
+} from '../../utils/attendanceStats';
 
 // 创建AttendanceStatistics专用logger
 const attendanceStatsLogger = logger.createContextLogger('AttendanceStatistics');
+
+type StatsState = { queryKey: string; value: AttendanceTimeStats };
+type ErrorState = { queryKey: string; message: string };
+
+function attendanceActorKey(user: User | null | undefined): string {
+  if (!user) return 'none';
+  const factoryId = getFactoryId(user) || '';
+  const userId = user.id != null ? String(user.id) : user.username || '';
+  const role = user.userType === 'factory' ? user.factoryUser?.role || '' : user.userType;
+  const permissions = user.userType === 'factory' ? JSON.stringify(user.factoryUser?.modulePermissions || {}) : '';
+  return `${user.userType}:${userId}:${factoryId}:${role}:${permissions}`;
+}
 
 /**
  * 工时统计页面
  * 权限：操作员查看个人、部门管理员查看本部门、super_admin查看全厂
  * 功能：日报、月报、部门统计、员工统计
  */
-
-interface TimeStats {
-  totalHours: number;
-  regularHours: number;
-  overtimeHours: number;
-  averageDailyHours: number;
-  period: string;
-}
-
-interface EmployeeTimeRecord {
-  userId: number;
-  userName: string;
-  department: string;
-  totalHours: number;
-  regularHours: number;
-  overtimeHours: number;
-}
 
 export default function AttendanceStatisticsScreen() {
   const navigation = useNavigation();
@@ -53,8 +55,12 @@ export default function AttendanceStatisticsScreen() {
   const [loading, setLoading] = useState(true);
   const [timePeriod, setTimePeriod] = useState('today'); // today, week, month, custom
   const [viewDimension, setViewDimension] = useState('personal'); // personal, department, factory
-  const [stats, setStats] = useState<TimeStats | null>(null);
-  const [employeeRecords, setEmployeeRecords] = useState<EmployeeTimeRecord[]>([]);
+  const [statsState, setStatsState] = useState<StatsState | null>(null);
+  const [errorState, setErrorState] = useState<ErrorState | null>(null);
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const currentQueryRef = useRef('');
+  const previousQueryRef = useRef('');
 
   // 权限控制
   const userType = user?.userType || 'factory';
@@ -62,15 +68,18 @@ export default function AttendanceStatisticsScreen() {
   const isPlatformAdmin = userType === 'platform';
   const isSuperAdmin = roleCode === 'factory_super_admin';
   const isDepartmentAdmin = roleCode === 'department_admin';
-  const isOperator = roleCode === 'operator';
 
   // 根据权限限制可查看的维度
   const canViewFactory = isPlatformAdmin || isSuperAdmin;
   const canViewDepartment = canViewFactory || isDepartmentAdmin;
 
   useEffect(() => {
-    loadStats();
-  }, [timePeriod, viewDimension]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+    };
+  }, []);
 
   // 根据时间周期生成日期范围
   const getDateRange = (): { startDate: string; endDate: string } => {
@@ -108,196 +117,95 @@ export default function AttendanceStatisticsScreen() {
     };
   };
 
+  const capturedUser = user as User | null;
+  const factoryId = getFactoryId(capturedUser) || '';
+  const actorKey = attendanceActorKey(capturedUser);
+  const dateRange = getDateRange();
+  const queryKey = `${actorKey}:${factoryId}:${timePeriod}:${viewDimension}:${dateRange.startDate}:${dateRange.endDate}`;
+  if (previousQueryRef.current !== queryKey) {
+    previousQueryRef.current = queryKey;
+    currentQueryRef.current = queryKey;
+    requestIdRef.current += 1;
+  }
+
+  const visibleStats = statsState?.queryKey === queryKey ? statsState.value : null;
+  const visibleError = errorState?.queryKey === queryKey ? errorState.message : null;
+  const visibleLoading = loading || (!visibleStats && !visibleError);
+
+  useEffect(() => {
+    void loadStats();
+  }, [queryKey, roleCode]);
+
+  const liveActorMatches = (requiresHr = false) => {
+    const liveUser = useAuthStore.getState().user as User | null;
+    return mountedRef.current
+      && capturedUser !== null
+      && liveUser === capturedUser
+      && attendanceActorKey(liveUser) === actorKey
+      && getFactoryId(liveUser) === factoryId
+      && (!requiresHr || hasModulePermission(liveUser, 'hr', 'read'));
+  };
+
   const loadStats = async () => {
-    try {
-      setLoading(true);
-
-      // 根据时间维度和查看维度加载不同的统计数据
-      if (viewDimension === 'personal') {
-        // 个人统计
-        await loadPersonalStats();
-      } else if (viewDimension === 'department') {
-        // 部门统计
-        await loadDepartmentStats();
-      } else {
-        // 全厂统计
-        await loadFactoryStats();
-      }
-    } catch (error) {
-      attendanceStatsLogger.error('加载统计数据失败', error as Error, {
-        timePeriod,
-        viewDimension,
-        userId: user?.id,
-        factoryId: user?.factoryId,
-      });
-      Alert.alert(t('messages.error'), getErrorMsg(error) || t('attendance.statistics.errors.loadFailed'));
-    } finally {
+    if (currentQueryRef.current !== queryKey) return;
+    const requiresHr = viewDimension !== 'personal';
+    const canReadSelectedDimension = viewDimension === 'personal'
+      || (viewDimension === 'department' ? canViewDepartment : canViewFactory);
+    if (!canReadSelectedDimension || !liveActorMatches(requiresHr)) {
+      setStatsState(null);
+      setErrorState({ queryKey, message: t('attendance.manage.noPermission') });
       setLoading(false);
+      return;
     }
-  };
+    const requestId = ++requestIdRef.current;
+    const ownerQueryKey = queryKey;
+    const ownerUser = capturedUser;
+    const ownerFactoryId = factoryId;
+    const isCurrent = () => mountedRef.current
+      && requestId === requestIdRef.current
+      && currentQueryRef.current === ownerQueryKey
+      && liveActorMatches(requiresHr)
+      && canReadSelectedDimension
+      && getFactoryId(useAuthStore.getState().user as User | null) === ownerFactoryId;
 
-  const loadPersonalStats = async () => {
+    setStatsState(null);
+    setErrorState(null);
+    setLoading(true);
     try {
-      // 获取个人工时统计
-      const userId = user?.id;
-      if (!userId) {
-        throw new Error(t('attendance.statistics.errors.noUserId'));
+      if (!ownerUser || !ownerFactoryId) {
+        throw new Error('当前账号缺少工厂信息');
       }
-
-      const dateRange = getDateRange();
-      const response = await timeStatsApiClient.getEmployeeTimeStats(
-        Number(userId),
-        {
-          startDate: dateRange.startDate,
-          endDate: dateRange.endDate,
-        },
-        user?.factoryId
-      );
-
-      if (response.data) {
-        const data = response.data;
-        setStats({
-          totalHours: data.totalHours || 0,
-          regularHours: (data.totalHours || 0) - (data.overtimeHours || 0),
-          overtimeHours: data.overtimeHours || 0,
-          averageDailyHours: data.workDays ? (data.totalHours / data.workDays) : 0,
-          period: timePeriod,
-        });
-        setEmployeeRecords([]);
-
-        attendanceStatsLogger.info('个人工时统计加载成功', {
-          userId: user?.id,
-          timePeriod,
-          totalHours: data.totalHours || 0,
-          overtimeHours: data.overtimeHours || 0,
-        });
-      }
-    } catch (error) {
-      attendanceStatsLogger.warn('加载个人统计失败，使用默认数据', {
-        userId: user?.id,
-        timePeriod,
-        error: (error as Error).message,
-      });
-      // 使用模拟数据
-      setStats({
-        totalHours: 176,
-        regularHours: 160,
-        overtimeHours: 16,
-        averageDailyHours: 8,
-        period: timePeriod,
-      });
-      setEmployeeRecords([]);
-    }
-  };
-
-  const loadDepartmentStats = async () => {
-    try {
-      // 获取部门工时统计
-      const department = user?.factoryUser?.department || 'processing';
-      const dateRange = getDateRange();
-      const response = await timeStatsApiClient.getDepartmentTimeStats(
-        department,
-        {
-          startDate: dateRange.startDate,
-          endDate: dateRange.endDate,
-        },
-        user?.factoryId
-      );
-
-      if (response.data) {
-        const data = response.data;
-        setStats({
-          totalHours: data.totalHours || 0,
-          regularHours: data.totalHours || 0,
-          overtimeHours: 0,
-          averageDailyHours: data.averageHours || 0,
-          period: timePeriod,
-        });
-        setEmployeeRecords([]);
-
-        attendanceStatsLogger.info('部门工时统计加载成功', {
-          department: user?.factoryUser?.department,
-          timePeriod,
-          totalHours: data.totalHours || 0,
-          employeeCount: data.totalEmployees || 0,
-        });
-      }
-    } catch (error) {
-      attendanceStatsLogger.warn('加载部门统计失败，使用默认数据', {
-        department: user?.factoryUser?.department,
-        timePeriod,
-        error: (error as Error).message,
-      });
-      // 使用模拟数据
-      setStats({
-        totalHours: 880,
-        regularHours: 800,
-        overtimeHours: 80,
-        averageDailyHours: 8,
-        period: timePeriod,
-      });
-      setEmployeeRecords([
-        { userId: 1, userName: '张三', department: '加工部', totalHours: 176, regularHours: 160, overtimeHours: 16 },
-        { userId: 2, userName: '李四', department: '加工部', totalHours: 184, regularHours: 160, overtimeHours: 24 },
-        { userId: 3, userName: '王五', department: '加工部', totalHours: 168, regularHours: 160, overtimeHours: 8 },
-      ]);
-    }
-  };
-
-  const loadFactoryStats = async () => {
-    try {
-      // 获取全厂工时统计 (使用月度统计或日度统计)
-      let response;
-      if (timePeriod === 'month') {
-        response = await timeStatsApiClient.getMonthlyStats(
-          new Date().getFullYear(),
-          new Date().getMonth() + 1,
-          user?.factoryId
-        );
+      let parsedStats: AttendanceTimeStats;
+      if (viewDimension === 'personal') {
+        const userId = ownerUser.id;
+        if (!userId) throw new Error(t('attendance.statistics.errors.noUserId'));
+        const response = await timeStatsApiClient.getEmployeeTimeStats(Number(userId), dateRange, ownerFactoryId);
+        parsedStats = parsePersonalAttendanceStats(response, timePeriod);
+      } else if (viewDimension === 'department') {
+        const department = ownerUser.factoryUser?.department;
+        if (!department) throw new Error('当前账号缺少部门信息');
+        const response = await timeStatsApiClient.getDepartmentTimeStats(department, dateRange, ownerFactoryId);
+        parsedStats = parseDepartmentAttendanceStats(response, department, timePeriod);
+      } else if (timePeriod === 'month') {
+        const response = await timeStatsApiClient.getMonthlyStats(new Date().getFullYear(), new Date().getMonth() + 1, ownerFactoryId);
+        parsedStats = parseFactoryAttendanceStats(response, timePeriod);
+      } else if (timePeriod === 'week') {
+        const response = await timeStatsApiClient.getWeeklyStats(dateRange.startDate, ownerFactoryId);
+        parsedStats = parseFactoryAttendanceStats(response, timePeriod);
       } else {
-        response = await timeStatsApiClient.getDailyStats(
-          formatDate(new Date()) as string,
-          user?.factoryId
-        );
+        const response = await timeStatsApiClient.getDailyStats(dateRange.endDate, ownerFactoryId);
+        parsedStats = parseFactoryAttendanceStats(response, timePeriod);
       }
-
-      if (response.data) {
-        const data = response.data;
-        setStats({
-          totalHours: data.totalHours || 0,
-          regularHours: data.totalHours || 0,
-          overtimeHours: 0,
-          averageDailyHours: (timePeriod === 'month' && 'averageDailyHours' in data) ? data.averageDailyHours : 0,
-          period: timePeriod,
-        });
-        setEmployeeRecords([]);
-
-        attendanceStatsLogger.info('全厂工时统计加载成功', {
-          factoryId: user?.factoryId,
-          timePeriod,
-          totalHours: data.totalHours || 0,
-        });
-      }
+      if (isCurrent()) setStatsState({ queryKey: ownerQueryKey, value: parsedStats });
     } catch (error) {
-      attendanceStatsLogger.warn('加载全厂统计失败，使用默认数据', {
-        factoryId: user?.factoryId,
-        timePeriod,
-        error: (error as Error).message,
-      });
-      // 使用模拟数据
-      setStats({
-        totalHours: 3520,
-        regularHours: 3200,
-        overtimeHours: 320,
-        averageDailyHours: 8,
-        period: timePeriod,
-      });
-      setEmployeeRecords([
-        { userId: 1, userName: '张三', department: '加工部', totalHours: 176, regularHours: 160, overtimeHours: 16 },
-        { userId: 2, userName: '李四', department: '加工部', totalHours: 184, regularHours: 160, overtimeHours: 24 },
-        { userId: 3, userName: '王五', department: '质检部', totalHours: 168, regularHours: 160, overtimeHours: 8 },
-        { userId: 4, userName: '赵六', department: '物流部', totalHours: 192, regularHours: 160, overtimeHours: 32 },
-      ]);
+      if (isCurrent()) {
+        const message = error instanceof Error && error.message ? error.message : t('attendance.statistics.errors.loadFailed');
+        setStatsState(null);
+        setErrorState({ queryKey: ownerQueryKey, message });
+        attendanceStatsLogger.error('加载统计数据失败', new Error('attendance_stats_read_failed'));
+      }
+    } finally {
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -326,7 +234,7 @@ export default function AttendanceStatisticsScreen() {
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title={t('attendance.statistics.title')} />
-        <Appbar.Action icon="refresh" onPress={loadStats} />
+        <Appbar.Action testID="attendance-statistics-refresh" icon="refresh" onPress={loadStats} />
       </Appbar.Header>
 
       <ScrollView style={styles.content}>
@@ -362,12 +270,22 @@ export default function AttendanceStatisticsScreen() {
           </Card.Content>
         </Card>
 
-        {loading ? (
+        {visibleLoading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" />
             <Text style={styles.loadingText}>{t('attendance.statistics.loading')}</Text>
           </View>
-        ) : (
+        ) : visibleError ? (
+          <Card style={styles.errorCard} testID="attendance-statistics-error">
+            <Card.Content>
+              <Text style={styles.errorTitle}>{t('attendance.stats.loadFailedTitle')}</Text>
+              <Text style={styles.errorText}>{visibleError}</Text>
+              <Button testID="attendance-statistics-retry" mode="contained" onPress={() => { void loadStats(); }}>
+                {t('common.retry')}
+              </Button>
+            </Card.Content>
+          </Card>
+        ) : visibleStats ? (
           <>
             {/* Stats Summary Card */}
             <Card style={styles.summaryCard}>
@@ -379,40 +297,44 @@ export default function AttendanceStatisticsScreen() {
 
                 <View style={styles.statsGrid}>
                   <View style={styles.statBox}>
-                    <Text style={styles.statValue}>{Number(stats?.totalHours ?? 0).toFixed(1) || '0.0'}</Text>
+                    <Text style={styles.statValue}>{visibleStats.totalHours.toFixed(1)}</Text>
                     <Text style={styles.statLabel}>{t('attendance.statistics.totalHours')}</Text>
                   </View>
                   <View style={styles.statBox}>
                     <Text style={[styles.statValue, { color: '#2E7D32' }]}>
-                      {Number(stats?.regularHours ?? 0).toFixed(1) || '0.0'}
+                      {visibleStats.regularHours.toFixed(1)}
                     </Text>
                     <Text style={styles.statLabel}>{t('attendance.statistics.regularHours')}</Text>
                   </View>
                   <View style={styles.statBox}>
                     <Text style={[styles.statValue, { color: '#D32F2F' }]}>
-                      {Number(stats?.overtimeHours ?? 0).toFixed(1) || '0.0'}
+                      {visibleStats.overtimeHours.toFixed(1)}
                     </Text>
                     <Text style={styles.statLabel}>{t('attendance.statistics.overtimeHours')}</Text>
                   </View>
                   <View style={styles.statBox}>
                     <Text style={styles.statValue}>
-                      {Number(stats?.averageDailyHours ?? 0).toFixed(1) || '0.0'}
+                      {visibleStats.averageHours.toFixed(1)}
                     </Text>
-                    <Text style={styles.statLabel}>{t('attendance.statistics.avgDailyHours')}</Text>
+                    <Text style={styles.statLabel}>
+                      {t(viewDimension === 'personal'
+                        ? 'attendance.statistics.avgDailyHours'
+                        : 'attendance.statistics.avgEmployeeHours')}
+                    </Text>
                   </View>
                 </View>
 
                 {/* Visual Progress */}
-                {stats && stats.totalHours > 0 && (
+                {visibleStats.totalHours > 0 && (
                   <View style={styles.progressSection}>
                     <View style={styles.progressRow}>
                       <Text style={styles.progressLabel}>{t('attendance.statistics.regularPercent')}</Text>
                       <Text style={styles.progressValue}>
-                        {((stats.regularHours / stats.totalHours) * 100).toFixed(1)}%
+                        {((visibleStats.regularHours / visibleStats.totalHours) * 100).toFixed(1)}%
                       </Text>
                     </View>
                     <ProgressBar
-                      progress={stats.regularHours / stats.totalHours}
+                      progress={visibleStats.regularHours / visibleStats.totalHours}
                       color="#2E7D32"
                       style={styles.progressBar}
                     />
@@ -420,11 +342,11 @@ export default function AttendanceStatisticsScreen() {
                     <View style={styles.progressRow}>
                       <Text style={styles.progressLabel}>{t('attendance.statistics.overtimePercent')}</Text>
                       <Text style={styles.progressValue}>
-                        {((stats.overtimeHours / stats.totalHours) * 100).toFixed(1)}%
+                        {((visibleStats.overtimeHours / visibleStats.totalHours) * 100).toFixed(1)}%
                       </Text>
                     </View>
                     <ProgressBar
-                      progress={stats.overtimeHours / stats.totalHours}
+                      progress={visibleStats.overtimeHours / visibleStats.totalHours}
                       color="#D32F2F"
                       style={styles.progressBar}
                     />
@@ -433,61 +355,8 @@ export default function AttendanceStatisticsScreen() {
               </Card.Content>
             </Card>
 
-            {/* Employee Records List (for department and factory views) */}
-            {viewDimension !== 'personal' && employeeRecords.length > 0 && (
-              <Card style={styles.recordsCard}>
-                <Card.Content>
-                  <Text style={styles.recordsTitle}>{t('attendance.statistics.employeeDetails')}</Text>
-                  <Divider style={styles.divider} />
-
-                  {employeeRecords.map((record, index) => (
-                    <View key={record.userId} style={styles.recordItem}>
-                      <View style={styles.recordHeader}>
-                        <View style={styles.recordTitleRow}>
-                          <Text style={styles.recordName}>{record.userName}</Text>
-                          <Chip mode="flat" compact style={styles.departmentChip}>
-                            {record.department}
-                          </Chip>
-                        </View>
-                        <Text style={styles.recordTotal}>
-                          {Number(record.totalHours ?? 0).toFixed(1)}{t('attendance.statistics.hours')}
-                        </Text>
-                      </View>
-
-                      <View style={styles.recordDetails}>
-                        <View style={styles.recordDetailItem}>
-                          <List.Icon icon="clock-outline" style={styles.recordIcon} />
-                          <Text style={styles.recordDetailText}>
-                            {t('attendance.statistics.normal')}: {Number(record.regularHours ?? 0).toFixed(1)}h
-                          </Text>
-                        </View>
-                        <View style={styles.recordDetailItem}>
-                          <List.Icon icon="clock-fast" style={styles.recordIcon} />
-                          <Text style={[styles.recordDetailText, { color: '#D32F2F' }]}>
-                            {t('attendance.statistics.overtime')}: {Number(record.overtimeHours ?? 0).toFixed(1)}h
-                          </Text>
-                        </View>
-                      </View>
-
-                      {record.totalHours > 0 && (
-                        <ProgressBar
-                          progress={record.overtimeHours / record.totalHours}
-                          color="#D32F2F"
-                          style={styles.recordProgressBar}
-                        />
-                      )}
-
-                      {index < employeeRecords.length - 1 && (
-                        <Divider style={styles.recordDivider} />
-                      )}
-                    </View>
-                  ))}
-                </Card.Content>
-              </Card>
-            )}
-
             {/* Empty State for Personal View */}
-            {viewDimension === 'personal' && stats && stats.totalHours === 0 && (
+            {viewDimension === 'personal' && visibleStats.totalHours === 0 && (
               <Card style={styles.emptyCard}>
                 <Card.Content style={styles.emptyContent}>
                   <List.Icon icon="clock-outline" color="#999" />
@@ -497,7 +366,7 @@ export default function AttendanceStatisticsScreen() {
               </Card>
             )}
           </>
-        )}
+        ) : null}
 
         <View style={styles.bottomPadding} />
       </ScrollView>
@@ -520,6 +389,20 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 16,
     color: '#666',
+  },
+  errorCard: {
+    margin: 16,
+    marginBottom: 8,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#B71C1C',
+  },
+  errorText: {
+    color: '#666',
+    marginBottom: 12,
   },
   selectorCard: {
     margin: 16,
@@ -586,66 +469,6 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     marginBottom: 12,
-  },
-  recordsCard: {
-    margin: 16,
-    marginBottom: 8,
-  },
-  recordsTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  recordItem: {
-    paddingVertical: 12,
-  },
-  recordHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  recordTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  recordName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  departmentChip: {
-    height: 24,
-    backgroundColor: '#E3F2FD',
-  },
-  recordTotal: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2196F3',
-  },
-  recordDetails: {
-    flexDirection: 'row',
-    gap: 16,
-    marginBottom: 8,
-  },
-  recordDetailItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  recordIcon: {
-    margin: 0,
-    marginRight: 4,
-    width: 24,
-  },
-  recordDetailText: {
-    fontSize: 13,
-    color: '#666',
-  },
-  recordProgressBar: {
-    height: 6,
-    borderRadius: 3,
-  },
-  recordDivider: {
-    marginTop: 12,
   },
   emptyCard: {
     margin: 16,

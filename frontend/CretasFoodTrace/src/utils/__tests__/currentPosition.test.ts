@@ -1,5 +1,5 @@
 import * as Location from 'expo-location';
-import { getCurrentPositionWithTimeout } from '../currentPosition';
+import { getCurrentPositionWithTimeout, getLocationFailureReason } from '../currentPosition';
 
 jest.mock('expo-location', () => ({ watchPositionAsync: jest.fn() }));
 const watch = jest.mocked(Location.watchPositionAsync);
@@ -72,4 +72,17 @@ it('propagates provider failure and cleans up the deadline', async () => {
   watch.mockRejectedValue(new Error('GPS unavailable'));
   await expect(getCurrentPositionWithTimeout({})).rejects.toThrow('GPS unavailable');
   expect(jest.getTimerCount()).toBe(0);
+});
+
+it('classifies a real helper timeout without exposing the original error', async () => {
+  watch.mockResolvedValue({ remove: jest.fn() });
+  const failure = getCurrentPositionWithTimeout({}).catch(error => getLocationFailureReason(error));
+  jest.advanceTimersByTime(15000);
+  await expect(failure).resolves.toBe('timeout');
+});
+
+it('returns only safe categories for cancellation and arbitrary provider errors', () => {
+  expect(getLocationFailureReason(new Error('Location request cancelled'))).toBe('cancelled');
+  expect(getLocationFailureReason(new Error('provider coordinates Lat: 1.23 Lon: 4.56'))).toBe('provider');
+  expect(getLocationFailureReason(null)).toBe('provider');
 });

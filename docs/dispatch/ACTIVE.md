@@ -12,7 +12,10 @@
 
 
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `b2c884402b` — Java到#900；18角色71页仅L1、R12真机分页通过。整合10、全角色深流程及Mini老板AI继续；Mini保持关闭；已授权启用谷歌服务，GPS重试成功、未打卡。本行不锁已归档源码。
+
+
+
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `b2c884402b` — #905合入并发布Java；18角色138次只读复验通过。APK10老板库存分页/澄清、质检文案/库存金额隐藏通过；GPS10重试失败、未打卡。全角色深流程和Mini手机接入未完，Mini保持关闭。本行不锁已归档源码。
 
 
 
@@ -90,6 +93,9 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+
+
 
 
 
