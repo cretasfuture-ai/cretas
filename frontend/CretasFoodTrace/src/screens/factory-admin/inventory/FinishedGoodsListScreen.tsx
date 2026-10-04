@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { View, StyleSheet, FlatList, Alert, RefreshControl } from 'react-native';
 import { Text, Appbar, Card, Chip, ActivityIndicator, ProgressBar } from 'react-native-paper';
 import { useNavigation, CommonActions } from '@react-navigation/native';
@@ -9,17 +9,46 @@ import { RowActionBottomSheet } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useAuthStore } from '../../../store/authStore';
 import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
+import { useCanViewPrice } from '../../../store/canViewPriceStore';
+import { getFactoryId, type User } from '../../../types/auth';
+import { hasModulePermission } from '../../../utils/permissionHelper';
+
+function inventoryOwner(user: User | null | undefined): string {
+  if (!user) return 'none';
+  return JSON.stringify([user.userType, user.id ?? user.username, getFactoryId(user),
+    user.userType === 'factory' ? user.factoryUser?.role : user.userType,
+    user.userType === 'factory' ? user.factoryUser?.modulePermissions : null]);
+}
+
+function canReadFinishedGoods(user: User | null | undefined): boolean {
+  return !!user && ['inventory', 'sales', 'quality'].some(module => hasModulePermission(user, module, 'read'));
+}
 
 export default function FinishedGoodsListScreen() {
   const navigation = useNavigation();
   const { t } = useTranslation('warehouse');
   const user = useAuthStore((state) => state.user);
+  const canViewPrice = useCanViewPrice();
   const isOperationsReadOnly = isMobileBusinessObserver(user);
   const [batches, setBatches] = useState<FinishedGoodsBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<FinishedGoodsBatch | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+  const ownerKey = inventoryOwner(user);
+  const factoryId = getFactoryId(user);
+  const [dataOwnerKey, setDataOwnerKey] = useState<string | null>(null);
+  const currentOwnerRef = useRef(ownerKey);
+  currentOwnerRef.current = ownerKey;
+  const requestRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; requestRef.current += 1; };
+  }, []);
+  const ownsRenderedData = dataOwnerKey === ownerKey && canReadFinishedGoods(user);
+  const ownsLiveData = () => ownsRenderedData && currentOwnerRef.current === ownerKey
+    && inventoryOwner(useAuthStore.getState().user) === ownerKey;
 
   /**
    * 批次总量。后端发的是 producedQuantity / nominalQuantity, 没有 totalQuantity。
@@ -47,30 +76,51 @@ export default function FinishedGoodsListScreen() {
   };
 
   const handlers = useMemo(() => ({
-    'view-detail': (e: RowContext) => Alert.alert('查看详情', `批次 ${e.id}`),
-    transfer: (e: RowContext) => Alert.alert('调拨', `调拨批次 ${e.id} (待接调拨流程)`),
-    'view-price-history': (e: RowContext) => Alert.alert('价格历史', `批次 ${e.id}`),
-  }), []);
+    'view-detail': (e: RowContext) => { if (ownsLiveData()) Alert.alert('查看详情', `批次 ${e.id}`); },
+    transfer: (e: RowContext) => { if (ownsLiveData()) Alert.alert('调拨', `调拨批次 ${e.id} (待接调拨流程)`); },
+    'view-price-history': (e: RowContext) => { if (ownsLiveData()) Alert.alert('价格历史', `批次 ${e.id}`); },
+  }), [ownerKey, ownsRenderedData]);
 
   const sheetCtx: RowContext = selectedBatch
     ? { status: deriveStockStatus(selectedBatch), id: selectedBatch.id }
     : { status: '', id: '' };
   const rowActions = useRowActions('inventory', sheetCtx, { handlers });
 
-  const openSheet = (batch: FinishedGoodsBatch) => { setSelectedBatch(batch); setActionSheetVisible(true); };
-
-  const loadData = async () => {
-    try {
-      const res = await salesApiClient.getFinishedGoods({ page: 1, size: 100 });
-      if (res.success && res.data) {
-        setBatches(res.data.content || []);
-      }
-    } catch { Alert.alert(t('common:error.loadFailed'), t('finishedGoods.loadFailed')); }
-    finally { setLoading(false); setRefreshing(false); }
+  const openSheet = (batch: FinishedGoodsBatch) => {
+    if (!ownsLiveData()) return;
+    setSelectedBatch(batch); setActionSheetVisible(true);
   };
 
-  useEffect(() => { loadData(); }, []);
-  const onRefresh = () => { setRefreshing(true); loadData(); };
+  const loadData = useCallback(async () => {
+    const request = ++requestRef.current;
+    const ownsRequest = () => mountedRef.current && requestRef.current === request
+      && currentOwnerRef.current === ownerKey
+      && inventoryOwner(useAuthStore.getState().user) === ownerKey;
+    if (!factoryId || !canReadFinishedGoods(useAuthStore.getState().user)) {
+      if (ownsRequest()) { setBatches([]); setLoading(false); setRefreshing(false); }
+      return;
+    }
+    try {
+      const res = await salesApiClient.getFinishedGoods({ page: 1, size: 100 }, factoryId);
+      if (!ownsRequest()) return;
+      if (!res.success || !res.data || !Array.isArray(res.data.content)
+        || res.data.content.some(batch => batch.factoryId !== factoryId)) throw new Error('Invalid inventory response');
+      setBatches(res.data.content);
+      setDataOwnerKey(ownerKey);
+    } catch {
+      if (ownsRequest()) { setBatches([]); Alert.alert(t('common:error.loadFailed'), t('finishedGoods.loadFailed')); }
+    } finally { if (ownsRequest()) { setLoading(false); setRefreshing(false); } }
+  }, [ownerKey, factoryId, t]);
+
+  useEffect(() => {
+    setBatches([]); setDataOwnerKey(null); setLoading(true); setRefreshing(false);
+    setSelectedBatch(null); setActionSheetVisible(false);
+    void loadData();
+  }, [ownerKey, factoryId]);
+  const onRefresh = () => {
+    if (inventoryOwner(useAuthStore.getState().user) !== ownerKey) return;
+    setRefreshing(true); void loadData();
+  };
 
   const getStockStatus = (batch: FinishedGoodsBatch) => {
     if (batch.availableQuantity <= 0) return { label: t('finishedGoods.status.soldOut'), color: '#f56c6c' };
@@ -120,10 +170,14 @@ export default function FinishedGoodsListScreen() {
             <Text style={styles.metaText}>{t('finishedGoods.productionDate')}: {item.productionDate}</Text>
             {item.expireDate && <Text style={styles.metaText}>{t('finishedGoods.expiryDate')}: {item.expireDate}</Text>}
           </View>
-          {item.unitCost != null && (
+          {canViewPrice && item.unitCost != null && (
             <View style={styles.metaRow}>
               <Text style={styles.metaText}>{t('finishedGoods.unitCost')}: ¥{formatNumberWithCommas(item.unitCost)}</Text>
-              {item.storageLocation && <Text style={styles.metaText}>{t('finishedGoods.storageLocation')}: {item.storageLocation}</Text>}
+            </View>
+          )}
+          {item.storageLocation && (
+            <View style={styles.metaRow}>
+              <Text style={styles.metaText}>{t('finishedGoods.storageLocation')}: {item.storageLocation}</Text>
             </View>
           )}
         </Card.Content>
@@ -143,7 +197,7 @@ export default function FinishedGoodsListScreen() {
         <ActivityIndicator style={styles.loader} size="large" />
       ) : (
         <FlatList
-          data={batches}
+          data={ownsRenderedData ? batches : []}
           keyExtractor={item => item.id}
           renderItem={renderBatch}
           contentContainerStyle={styles.list}
@@ -153,13 +207,13 @@ export default function FinishedGoodsListScreen() {
       )}
 
       {!isOperationsReadOnly && <RowActionBottomSheet
-        visible={actionSheetVisible}
+        visible={ownsRenderedData && actionSheetVisible}
         onClose={() => setActionSheetVisible(false)}
         actions={rowActions}
         title={selectedBatch ? `成品 ${selectedBatch.batchNumber}` : ''}
         aiTriggerEnabled
         onAITrigger={() => {
-          if (!selectedBatch) return;
+          if (!selectedBatch || !ownsLiveData()) return;
           navigation.dispatch(CommonActions.navigate('FAAITab', {
             screen: 'AIChat',
             params: { entityType: 'INVENTORY', initialMessage: `${selectedBatch.batchNumber}: ` },

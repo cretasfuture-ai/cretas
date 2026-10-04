@@ -19,6 +19,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -28,7 +29,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 // Note: MaterialBatch list streamed → mapped → enriched via mapper.toDTO + peek warehouseCode/name.
-// finished_goods_batches serialized direct from entity (warehouseId already on entity).
+// Finished-goods responses use detached copies so price filtering cannot mutate repository entities.
 
 /**
  * 分仓库存查询 Controller (PR #309 B2=B, 2026-05-11 spec).
@@ -190,7 +191,12 @@ public class WarehouseInventoryController {
         // 6. Query finished-goods batches in this warehouse — uses idx_finished_batch_warehouse composite index.
         //    @Where(deleted_at IS NULL) on FinishedGoodsBatch entity excludes soft-deleted rows.
         List<FinishedGoodsBatch> products =
-                finishedGoodsBatchRepository.findByFactoryIdAndWarehouseId(effectiveFactoryId, warehouseId);
+                finishedGoodsBatchRepository.findByFactoryIdAndWarehouseId(effectiveFactoryId, warehouseId)
+                        .stream().map(source -> {
+                            FinishedGoodsBatch copy = new FinishedGoodsBatch();
+                            BeanUtils.copyProperties(source, copy, "factory", "productType");
+                            return copy;
+                        }).toList();
 
         Map<String, Object> data = new HashMap<>();
         data.put("factoryId", effectiveFactoryId);

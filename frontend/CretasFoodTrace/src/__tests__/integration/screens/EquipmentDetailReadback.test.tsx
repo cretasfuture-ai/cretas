@@ -162,8 +162,7 @@ describe('EquipmentDetailScreen real readback', () => {
     expect(maintenanceAlerts).not.toHaveBeenCalled();
     expect(warrantyAlerts).not.toHaveBeenCalled();
 
-    const actionButtons = view.UNSAFE_getAllByType(require('react-native').TouchableOpacity);
-    fireEvent.press(actionButtons[actionButtons.length - 2]);
+    fireEvent.press(view.getByTestId('equipment-detail-alerts-button'));
     expect(mockNavigate).toHaveBeenCalledWith('EquipmentAlerts', {});
   });
 
@@ -210,6 +209,146 @@ describe('EquipmentDetailScreen real readback', () => {
     const costCells = view.UNSAFE_getAllByProps({ numeric: true });
     expect(costCells.some((cell) => cell.props.children === '¥0')).toBe(true);
     expect(costCells.some((cell) => JSON.stringify(cell.props.children).includes('N/A'))).toBe(true);
+  });
+
+  it('shows real maintenance descriptions and expands all returned records without inventing a type', async () => {
+    const history = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      equipmentId: 42,
+      maintenanceDate: `2026-10-${String(index + 1).padStart(2, '0')}`,
+      cost: index === 0 ? 0 : null,
+      description: `真实维护内容-${index + 1}`,
+      performedBy: '现场技术员',
+    }));
+    jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue(equipment());
+    jest.spyOn(equipmentApiClient, 'getEquipmentMaintenanceHistory').mockResolvedValue(history as never);
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'calculateDepreciatedValue').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(null as never);
+    const view = render(<EquipmentDetailScreen />);
+
+    await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
+    expect(view.getByTestId('equipment-detail-maintenance-description-1').props.children).toBe('真实维护内容-1');
+    expect(view.queryByTestId('equipment-detail-maintenance-description-6')).toBeNull();
+    expect(view.queryByText('Routine Maintenance')).toBeNull();
+
+    fireEvent.press(view.getByTestId('equipment-detail-maintenance-toggle'));
+    expect(view.getByTestId('equipment-detail-maintenance-description-6').props.children).toBe('真实维护内容-6');
+    fireEvent.press(view.getByTestId('equipment-detail-maintenance-toggle'));
+    expect(view.queryByTestId('equipment-detail-maintenance-description-6')).toBeNull();
+  });
+
+  it.each([0, 5])('does not render a dead expand or maintenance-action button for %s records', async (count) => {
+    const history = Array.from({ length: count }, (_, index) => ({
+      id: index + 1,
+      equipmentId: 42,
+      maintenanceDate: `2026-10-${String(index + 1).padStart(2, '0')}`,
+      cost: 0,
+      description: `维护内容-${index + 1}`,
+      performedBy: '现场技术员',
+    }));
+    jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue(equipment());
+    jest.spyOn(equipmentApiClient, 'getEquipmentMaintenanceHistory').mockResolvedValue(history as never);
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'calculateDepreciatedValue').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(null as never);
+    const view = render(<EquipmentDetailScreen />);
+
+    await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
+    expect(view.queryByTestId('equipment-detail-maintenance-toggle')).toBeNull();
+    expect(view.queryByText('equipmentDetail.actions.maintenanceRecord')).toBeNull();
+    expect(view.getByTestId('equipment-detail-alerts-button')).toBeTruthy();
+  });
+
+  it('shows an explicit realtime-not-connected message when no parameters are returned', async () => {
+    mockSupportingReads();
+    jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue(equipment());
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(null as never);
+    const view = render(<EquipmentDetailScreen />);
+
+    await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
+    expect(view.getByTestId('equipment-detail-realtime-not-connected')).toBeTruthy();
+    expect(view.getByText('equipmentDetail.realtimeParams.notConnected')).toBeTruthy();
+  });
+
+  it('collapses maintenance history and rejects an old expand callback after actor change', async () => {
+    const firstHistory = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      equipmentId: 42,
+      maintenanceDate: `2026-10-${String(index + 1).padStart(2, '0')}`,
+      cost: 0,
+      description: `旧身份维护-${index + 1}`,
+      performedBy: '旧技术员',
+    }));
+    const secondHistory = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 11,
+      equipmentId: 42,
+      maintenanceDate: `2026-09-${String(index + 1).padStart(2, '0')}`,
+      cost: 0,
+      description: `新身份维护-${index + 1}`,
+      performedBy: '新技术员',
+    }));
+    jest.spyOn(equipmentApiClient, 'getEquipmentById')
+      .mockResolvedValueOnce(equipment())
+      .mockResolvedValueOnce(equipment(42, '身份切换设备'));
+    jest.spyOn(equipmentApiClient, 'getEquipmentMaintenanceHistory')
+      .mockResolvedValueOnce(firstHistory as never)
+      .mockResolvedValueOnce(secondHistory as never);
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'calculateDepreciatedValue').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(null as never);
+    const view = render(<EquipmentDetailScreen />);
+    await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
+    const oldExpand = view.getByTestId('equipment-detail-maintenance-toggle').props.onPress as () => void;
+    fireEvent.press(view.getByTestId('equipment-detail-maintenance-toggle'));
+    expect(view.getByTestId('equipment-detail-maintenance-description-6').props.children).toBe('旧身份维护-6');
+
+    act(() => { useAuthStore.setState({ user: { ...equipmentUser('rw'), id: 12, username: 'equipment-admin-2' } }); });
+    await waitFor(() => expect(view.getByText('身份切换设备')).toBeTruthy());
+    expect(view.queryByTestId('equipment-detail-maintenance-description-16')).toBeNull();
+    await act(async () => { oldExpand(); await Promise.resolve(); });
+    expect(view.queryByTestId('equipment-detail-maintenance-description-16')).toBeNull();
+  });
+
+  it('collapses maintenance history and rejects an old expand callback after device change', async () => {
+    const firstHistory = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      equipmentId: 42,
+      maintenanceDate: `2026-10-${String(index + 1).padStart(2, '0')}`,
+      cost: 0,
+      description: `旧设备维护-${index + 1}`,
+      performedBy: '旧技术员',
+    }));
+    const secondHistory = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 21,
+      equipmentId: 43,
+      maintenanceDate: `2026-09-${String(index + 1).padStart(2, '0')}`,
+      cost: 0,
+      description: `新设备维护-${index + 1}`,
+      performedBy: '新技术员',
+    }));
+    jest.spyOn(equipmentApiClient, 'getEquipmentById')
+      .mockResolvedValueOnce(equipment())
+      .mockResolvedValueOnce(equipment(43, '设备切换后', 'F007'));
+    jest.spyOn(equipmentApiClient, 'getEquipmentMaintenanceHistory')
+      .mockResolvedValueOnce(firstHistory as never)
+      .mockResolvedValueOnce(secondHistory as never);
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'calculateDepreciatedValue').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(null as never);
+    const view = render(<EquipmentDetailScreen />);
+    await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
+    const oldExpand = view.getByTestId('equipment-detail-maintenance-toggle').props.onPress as () => void;
+    fireEvent.press(view.getByTestId('equipment-detail-maintenance-toggle'));
+    expect(view.getByTestId('equipment-detail-maintenance-description-6').props.children).toBe('旧设备维护-6');
+
+    mockRouteParams.equipmentId = '43';
+    act(() => { useAuthStore.setState({ user: equipmentUser('rw', 'F007') }); });
+    await waitFor(() => expect(view.getByText('设备切换后')).toBeTruthy());
+    expect(view.queryByTestId('equipment-detail-maintenance-description-26')).toBeNull();
+    await act(async () => { oldExpand(); await Promise.resolve(); });
+    expect(view.queryByTestId('equipment-detail-maintenance-description-26')).toBeNull();
   });
 
   it('uses a safe fixed error category for the current detail failure', async () => {
@@ -362,8 +501,7 @@ describe('EquipmentDetailScreen real readback', () => {
     jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(efficiency() as never);
     const view = render(<EquipmentDetailScreen />);
     await waitFor(() => expect(view.getByText('切片设备')).toBeTruthy());
-    const actionButtons = view.UNSAFE_getAllByType(require('react-native').TouchableOpacity);
-    const retainedNavigation = actionButtons[actionButtons.length - 2].props.onPress as () => void;
+    const retainedNavigation = view.getByTestId('equipment-detail-alerts-button').props.onPress as () => void;
     mockNavigate.mockClear();
 
     act(() => { useAuthStore.setState({ user: equipmentUser('-', 'F006') }); });

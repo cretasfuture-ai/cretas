@@ -401,7 +401,8 @@
       "temperature": "温度",
       "pressure": "压力",
       "speed": "转速",
-      "power": "功率"
+      "power": "功率",
+      "notConnected": "实时参数尚未接入"
     },
     "performance": {
       "oee": "OEE（估算）",
@@ -418,9 +419,12 @@
     "maintenanceRecords": {
       "date": "日期",
       "type": "类型",
+      "content": "维护内容",
       "technician": "技术员",
       "cost": "费用",
-      "empty": "暂无维护记录"
+      "empty": "暂无维护记录",
+      "expand": "展开全部记录",
+      "collapse": "收起记录"
     },
     "actions": {
       "viewAlerts": "查看工厂告警",

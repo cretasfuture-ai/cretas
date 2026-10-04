@@ -84,7 +84,6 @@ interface RealtimeParameters {
 interface MaintenanceRecord {
   id: string;
   date: string;
-  type: string;
   technician: string;
   description: string;
   cost: number | null;
@@ -125,6 +124,8 @@ export default function EquipmentDetailScreen() {
   const [depreciatedValue, setDepreciatedValue] = useState<number | null>(null);
   const [usageStats, setUsageStats] = useState<EquipmentEfficiencyMetrics | null>(null);
   const [activeAlertsCount, setActiveAlertsCount] = useState<number | null>(null);
+  const [maintenanceExpanded, setMaintenanceExpanded] = useState(false);
+  const [maintenanceExpandedOwnerKey, setMaintenanceExpandedOwnerKey] = useState<string | null>(null);
   const [dataOwnerKey, setDataOwnerKey] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
   const mountedRef = useRef(true);
@@ -149,6 +150,10 @@ export default function EquipmentDetailScreen() {
       requestSequenceRef.current += 1;
     };
   }, []);
+  React.useEffect(() => {
+    setMaintenanceExpanded(false);
+    setMaintenanceExpandedOwnerKey(null);
+  }, [queryKey]);
 
   const canNavigateToFactoryAlerts = () => {
     const liveUser = useAuthStore.getState().user as User | null;
@@ -161,6 +166,18 @@ export default function EquipmentDetailScreen() {
 
   const navigateToFactoryAlerts = () => {
     if (canNavigateToFactoryAlerts()) navigation.navigate('EquipmentAlerts', {});
+  };
+
+  const isMaintenanceExpanded = maintenanceExpandedOwnerKey === queryKey && maintenanceExpanded;
+  const toggleMaintenanceExpanded = () => {
+    const liveUser = useAuthStore.getState().user as User | null;
+    if (currentQueryRef.current !== queryKey
+      || equipmentActorKey(liveUser) !== actorKey
+      || (getFactoryId(liveUser) || '') !== canonicalFactoryId
+      || String(equipmentId) !== normalizedEquipmentId
+      || !hasModulePermission(liveUser, 'equipment', 'read')) return;
+    setMaintenanceExpandedOwnerKey(queryKey);
+    setMaintenanceExpanded((expanded) => !expanded);
   };
 
   useFocusEffect(
@@ -262,7 +279,6 @@ export default function EquipmentDetailScreen() {
       const records: MaintenanceRecord[] = history.map((record) => ({
         id: String(record.id),
         date: record.maintenanceDate,
-        type: 'Routine Maintenance',
         technician: record.performedBy || 'Unknown',
         description: record.description || 'N/A',
         cost: typeof record.cost === 'number' && Number.isFinite(record.cost) && record.cost >= 0 ? record.cost : null,
@@ -386,6 +402,7 @@ export default function EquipmentDetailScreen() {
         <Appbar.Action
           icon="bell"
           onPress={navigateToFactoryAlerts}
+          testID="equipment-detail-alerts-header"
         />
       </Appbar.Header>
 
@@ -518,6 +535,12 @@ export default function EquipmentDetailScreen() {
           <Text variant="titleMedium" style={styles.sectionTitle}>
             {t('equipmentDetail.sections.realtimeParams')}
           </Text>
+
+          {Object.keys(parameters).length === 0 && (
+            <Text testID="equipment-detail-realtime-not-connected" style={styles.statsHint}>
+              {t('equipmentDetail.realtimeParams.notConnected')}
+            </Text>
+          )}
 
           {parameters.temperature !== undefined && (
             <View style={styles.parameterItem}>
@@ -657,19 +680,32 @@ export default function EquipmentDetailScreen() {
             <DataTable>
               <DataTable.Header>
                 <DataTable.Title>{t('equipmentDetail.maintenanceRecords.date')}</DataTable.Title>
-                <DataTable.Title>{t('equipmentDetail.maintenanceRecords.type')}</DataTable.Title>
+                <DataTable.Title>{t('equipmentDetail.maintenanceRecords.content')}</DataTable.Title>
                 <DataTable.Title>{t('equipmentDetail.maintenanceRecords.technician')}</DataTable.Title>
                 <DataTable.Title numeric>{t('equipmentDetail.maintenanceRecords.cost')}</DataTable.Title>
               </DataTable.Header>
 
-              {maintenanceRecords.slice(0, 5).map((record) => (
+              {maintenanceRecords.slice(0, isMaintenanceExpanded ? undefined : 5).map((record) => (
                 <DataTable.Row key={record.id}>
                   <DataTable.Cell>{record.date}</DataTable.Cell>
-                  <DataTable.Cell>{record.type}</DataTable.Cell>
+                  <DataTable.Cell testID={`equipment-detail-maintenance-description-${record.id}`}>
+                    {record.description}
+                  </DataTable.Cell>
                   <DataTable.Cell>{record.technician}</DataTable.Cell>
                   <DataTable.Cell numeric>{record.cost === null ? 'N/A' : `¥${record.cost}`}</DataTable.Cell>
                 </DataTable.Row>
               ))}
+              {maintenanceRecords.length > 5 && (
+                <Button
+                  testID="equipment-detail-maintenance-toggle"
+                  mode="text"
+                  onPress={toggleMaintenanceExpanded}
+                >
+                  {isMaintenanceExpanded
+                    ? t('equipmentDetail.maintenanceRecords.collapse')
+                    : t('equipmentDetail.maintenanceRecords.expand')}
+                </Button>
+              )}
             </DataTable>
           ) : (
             <Text style={styles.emptyText}>{t('equipmentDetail.maintenanceRecords.empty')}</Text>
@@ -682,17 +718,10 @@ export default function EquipmentDetailScreen() {
             mode="outlined"
             icon="bell"
             onPress={navigateToFactoryAlerts}
+            testID="equipment-detail-alerts-button"
             style={styles.actionButton}
           >
             {t('equipmentDetail.actions.viewAlerts')}
-          </Button>
-          <Button
-            mode="contained"
-            icon="wrench"
-            onPress={() => {}}
-            style={styles.actionButton}
-          >
-            {t('equipmentDetail.actions.maintenanceRecord')}
           </Button>
         </View>
       </ScrollView>

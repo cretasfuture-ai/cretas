@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
@@ -112,6 +113,7 @@ public class FinishedGoodsBatch extends BaseEntity {
     private BigDecimal packagingFactor;
 
     @Column(name = "unit_price", precision = 15, scale = 4)
+    @PriceSensitive
     private BigDecimal unitPrice;
 
     /**
@@ -122,6 +124,7 @@ public class FinishedGoodsBatch extends BaseEntity {
      * 区别于 {@link #unitPrice} (售价, 来自 product_types 主数据)。
      */
     @Column(name = "unit_cost", precision = 15, scale = 4)
+    @PriceSensitive
     private BigDecimal unitCost;
 
     /** 生产日期 */
