@@ -57,7 +57,9 @@ class ToolDescriptorCatalogTest {
         // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
         // (高风险软删除工具现在支持"确认前先看变更预览"), 不是退化。见 ApprovedToolSourceMetadataTest
         // / RuntimeToolPolicyLoaderTest 同步更新。requiresPermission 41 → 44 (+3): 同上 (b) 的重新分类。
-        assertThat(statistics.previewSupported()).isEqualTo(37);
+        // 2026-10-04: 37 → 39 (+2): work_process_task_start / work_process_task_complete 新增只读
+        // doPreview() (报工在 AI 对话里走「预览 → 确认」), 同 ToolDescriptorInventoryDriftTest 42 → 44。
+        assertThat(statistics.previewSupported()).isEqualTo(39);
         assertThat(statistics.requiresPermission()).isEqualTo(44);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)

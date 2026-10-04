@@ -185,7 +185,8 @@ class ToolDescriptorInventoryDriftTest {
 
         assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(61);
         assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(44);
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(42);
+        // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(44);
         assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(52);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
         assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(12);

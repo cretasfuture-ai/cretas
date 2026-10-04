@@ -68,6 +68,20 @@ describe('applyPreviewResponse', () => {
     expect(s.phase).toBe('blocked');
     expect(s.notice).toContain('1. 样品编号是多少?');
   });
+  it('PREVIEW_BLOCKED (后端 #907: 预览没通过不发令牌) → blocked, 只说原因, 不拼「手工操作」', () => {
+    const s = applyPreviewResponse(preparing(), {
+      status: 'PREVIEW_BLOCKED', message: '这道工序当前是「待开始」，不能直接完成。',
+    }, 0);
+    expect(s.phase).toBe('blocked');
+    expect(s.notice).toBe('这道工序当前是「待开始」，不能直接完成。');
+    expect(s.notice).not.toContain('手工操作');
+    expect(s.action).toBeUndefined();
+  });
+  it('对照: PREVIEW_UNSUPPORTED (功能不支持) 仍然带手工兜底那句', () => {
+    const s = applyPreviewResponse(preparing(), { status: 'PREVIEW_UNSUPPORTED', message: '预览模式暂不支持此意图类型' }, 0);
+    expect(s.notice).toContain('预览模式暂不支持此意图类型');
+    expect(s.notice).toContain('请到对应功能页面手工操作');
+  });
   it('对照: 完整 PREVIEW → ready 并记录本地接收时刻', () => {
     const s = applyPreviewResponse(preparing(), { status: 'PREVIEW', confirmableAction: ACTION }, 5000);
     expect(s.phase).toBe('ready');
