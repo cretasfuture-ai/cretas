@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { writeConfirmFromStreamResult } from '../../components/ai/aiWriteConfirm';
 const source = fs.readFileSync(path.resolve(__dirname, '../../screens/factory-admin/ai-analysis/AIChatScreen.tsx'), 'utf8');
 const ast = ts.createSourceFile('AIChatScreen.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 type Context = Record<string, unknown>;
@@ -126,6 +127,9 @@ function sending(behavior?: (args: StreamCall) => void | Promise<void>) {
         setMessages: (update: (previous: Message[]) => Message[]) => { state.messages = update(state.messages); },
         messages: [] as Message[], buildRecentTurns: () => [],
         scrollToBottom() { }, detectRichData: () => null, parseRestaurantAgentLaunch: () => undefined, t: (key: string) => key,
+        // 真实现: handleSend 的 onResult 用它判断要不要出写确认卡。少了它 onResult 会 ReferenceError,
+        // 而 handleSend 的 catch 会把它吞成一条错误消息 —— 下面 'success releases guard' 断言正文就是为抓这个。
+        writeConfirmFromStreamResult,
         feedbackSounds: { onError: () => { state.audio++; }, onWriteSuccess: () => { state.audio++; }, onNeedMoreInfo: () => { state.audio++; } },
         aiApiClient: { executeIntentStream: async (...args: StreamCall) => { state.calls.push(args); if (behavior)
                 await behavior(args); } },
@@ -147,7 +151,8 @@ test('cancel followed by explicit new voice remains usable', () => { const v = p
 test('two same-render presses create one stream while pending', async () => { let finish!: () => void; const done = new Promise<void>(r => { finish = r; }); const s = sending(() => done); const a = s.send('同一请求'); const b = s.send('同一请求'); assert.equal(s.state.calls.length, 1); finish(); await Promise.all([a, b]); assert.equal(s.refs.sendPendingRef.current, false); });
 test('send binds an AbortSignal as the sixth stream argument', async () => { const s = sending(); await s.send('带取消信号'); assert.equal(s.state.calls.length, 1); assert.ok(s.state.calls[0]![5] instanceof AbortSignal); });
 test('live auth actor mismatch refuses send before creating a stream', async () => { const s = sending(); s.ctx.useAuthStore.getState = () => ({ user: { id: 2 } as any, getUserRole: () => 'production_manager' }); await s.send('旧 actor 不应发送'); assert.equal(s.state.calls.length, 0); assert.equal(s.state.messages.length, 0); });
-test('success releases guard for an explicit second send', async () => { const s = sending(args => { args[1].onResult({ status: 'SUCCESS', message: '合成只读成功' }); args[1].onComplete({ status: 'SUCCESS' }); }); await s.send('第一次'); await s.send('明确第二次'); assert.equal(s.state.calls.length, 2); assert.equal(s.refs.sendPendingRef.current, false); });
+test('success releases guard for an explicit second send', async () => { const s = sending(args => { args[1].onResult({ status: 'SUCCESS', message: '合成只读成功' }); args[1].onComplete({ status: 'SUCCESS' }); }); await s.send('第一次'); assert.equal(s.state.messages.at(-1)?.content, '合成只读成功'); assert.equal(s.state.messages.at(-1)?.writeConfirm, undefined); await s.send('明确第二次'); assert.equal(s.state.calls.length, 2); assert.equal(s.refs.sendPendingRef.current, false); });
+test('write-confirm result attaches a preparing card with the original text and blocked intent', async () => { const s = sending(args => { args[1].onResult({ status: 'WRITE_CONFIRM_REQUIRED', intentCode: 'SYNTHETIC_WRITE', message: '合成写确认' }); args[1].onComplete({ status: 'WRITE_CONFIRM_REQUIRED' }); }); await s.send('合成写操作原话'); const last = s.state.messages.at(-1) as any; assert.equal(last.content, '合成写确认'); assert.equal(last.writeConfirm?.phase, 'preparing'); assert.equal(last.writeConfirm?.intentCode, 'SYNTHETIC_WRITE'); assert.equal(last.writeConfirm?.userInput, '合成写操作原话'); assert.equal(s.refs.sendPendingRef.current, false); });
 test('rejection releases guard without replay and allows explicit retry', async () => { let rejectFirst = true; const s = sending(() => { if (rejectFirst)
     throw new Error('合成断连'); }); await s.send('第一次'); assert.equal(s.state.calls.length, 1); assert.equal(s.refs.sendPendingRef.current, false); assert.equal(s.state.messages.at(-1)?.content, '合成断连'); rejectFirst = false; await s.send('明确重试'); assert.equal(s.state.calls.length, 2); });
 test('unmount suppresses delayed response state/audio and releases pending', async () => { let finish!: () => void; const done = new Promise<void>(r => { finish = r; }); const s = sending(() => done); const pending = s.send('查询'); const callbacks = s.state.calls[0]![1]; const messages = JSON.stringify(s.state.messages); s.refs.isMountedRef.current = false; s.refs.sendPendingRef.current = false; callbacks.onToken('迟到'); callbacks.onResult({ status: 'SUCCESS', message: '迟到响应', intentCategory: 'WRITE' }); callbacks.onComplete({ status: 'SUCCESS' }); callbacks.onError('迟到错误'); finish(); await pending; assert.equal(JSON.stringify(s.state.messages), messages); assert.equal(s.state.audio, 0); assert.equal(s.refs.sendPendingRef.current, false); await s.send('卸载后提交'); assert.equal(s.state.calls.length, 1); });
