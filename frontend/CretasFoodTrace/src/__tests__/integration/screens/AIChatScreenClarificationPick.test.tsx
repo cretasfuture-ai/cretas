@@ -321,6 +321,80 @@ describe('AIChatScreen 最近对话', () => {
   });
 });
 
+describe('AIChatScreen 追问确认 (lastAction)', () => {
+  const START_LAST_ACTION = {
+    intentCode: 'WORK_PROCESS_TASK_START', intentName: '开始工序', params: { taskId: 12 }, at: 1,
+  };
+
+  beforeEach(() => {
+    mockUser = factoryUser('F006');
+    mockRole = 'factory_super_admin';
+    mockExecuteIntentStream.mockReset();
+    // 1) 开始工序成功, 带回 lastAction
+    mockExecuteIntentStream.mockImplementationOnce(async (_m: string, callbacks: any) => {
+      callbacks.onResult?.({
+        status: 'SUCCESS', message: '已开始「包装」工序', intentCode: 'WORK_PROCESS_TASK_START',
+        metadata: { toolName: 'work_process_task_start', lastAction: START_LAST_ACTION },
+      });
+      callbacks.onComplete?.({ status: 'SUCCESS', cacheHit: false, totalLatencyMs: 500 });
+    });
+    // 2) 「好了」→ 服务端只回一个确认按钮
+    mockExecuteIntentStream.mockImplementationOnce(async (_m: string, callbacks: any) => {
+      callbacks.onResult?.({
+        status: 'NEED_CLARIFICATION', message: '您是要「完成工序」吗？（任务 12）',
+        intentCode: 'WORK_PROCESS_TASK_COMPLETE', metadata: { followUpRule: 'wp-done-after-start' },
+        suggestedActions: [{
+          actionCode: 'SELECT_INTENT', actionName: '完成工序（任务 12）',
+          parameters: { intentCode: 'WORK_PROCESS_TASK_COMPLETE', taskId: 12, followUpRule: 'wp-done-after-start' },
+        }],
+      });
+      callbacks.onComplete?.({ status: 'NEED_CLARIFICATION', cacheHit: false, totalLatencyMs: 300 });
+    });
+    mockExecuteIntentStream.mockImplementation(async (_m: string, callbacks: any) => {
+      callbacks.onResult?.({ status: 'SUCCESS', message: '已完成', intentCode: 'WORK_PROCESS_TASK_COMPLETE' });
+      callbacks.onComplete?.({ status: 'SUCCESS', cacheHit: false, totalLatencyMs: 300 });
+    });
+  });
+
+  it('成功结果里的 lastAction 随下一句带回去; 第一句不带', async () => {
+    const screen = render(<AIChatScreen />);
+    await send(screen, '开始包装工序');
+    await waitFor(() => expect(screen.getAllByText(/已开始「包装」工序/).length).toBeGreaterThan(0));
+    await send(screen, '好了');
+
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
+    expect(mockExecuteIntentStream.mock.calls[0][4]).toBeUndefined();
+    const [text, , , , options] = mockExecuteIntentStream.mock.calls[1];
+    expect(text).toBe('好了');
+    expect(options.intentCode).toBeUndefined();
+    expect(options.context.lastAction).toEqual(START_LAST_ACTION);
+    expect(options.context.recentTurns).toHaveLength(2);
+  });
+
+  it('点确认按钮: 原话 + 意图码 + 按钮上的其余参数一起带回', async () => {
+    const screen = render(<AIChatScreen />);
+    await send(screen, '开始包装工序');
+    await waitFor(() => expect(screen.getAllByText(/已开始「包装」工序/).length).toBeGreaterThan(0));
+    await send(screen, '好了');
+    await waitFor(() => expect(screen.getByTestId('suggested-action-0')).toBeTruthy());
+    expect(screen.queryByTestId('suggested-action-1')).toBeNull();
+    await act(async () => { fireEvent.press(screen.getByTestId('suggested-action-0')); });
+
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(3));
+    const [text, , , , options] = mockExecuteIntentStream.mock.calls[2];
+    expect(text).toBe('好了');
+    expect(options.intentCode).toBe('WORK_PROCESS_TASK_COMPLETE');
+    expect(options.context).toMatchObject({
+      taskId: 12,
+      followUpRule: 'wp-done-after-start',
+      clarificationSelection: true,
+      clarificationCandidates: ['WORK_PROCESS_TASK_COMPLETE'],
+      lastAction: START_LAST_ACTION,
+    });
+    expect(options.context.intentCode).toBeUndefined();
+  });
+});
+
 describe('buildRecentTurns', () => {
   const { buildRecentTurns } = require('../../../screens/factory-admin/ai-analysis/AIChatScreen');
 
