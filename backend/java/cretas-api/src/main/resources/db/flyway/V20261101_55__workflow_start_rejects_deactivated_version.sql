@@ -113,12 +113,6 @@ BEGIN
          AND activation.deleted_at IS NULL
     )
       INTO deactivated_version;
-    IF deactivated_version THEN
-      RAISE EXCEPTION
-        'Workflow % in factory % was deactivated; production cannot start on it',
-        NEW.selected_workflow_id, NEW.factory_id
-        USING ERRCODE = '23514';
-    END IF;
   END IF;
   RETURN NEW;
 END;
