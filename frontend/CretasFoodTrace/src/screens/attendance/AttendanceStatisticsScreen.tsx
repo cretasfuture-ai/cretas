@@ -149,13 +149,34 @@ export default function AttendanceStatisticsScreen() {
   const loadStats = async () => {
     if (currentQueryRef.current !== queryKey) return;
     const requiresHr = viewDimension !== 'personal';
-    const canReadSelectedDimension = viewDimension === 'personal'
-      || (viewDimension === 'department' ? canViewDepartment : canViewFactory);
-    if (!canReadSelectedDimension || !liveActorMatches(requiresHr)) {
+    const failRead = () => {
       setStatsState(null);
       setErrorState({ queryKey, message: t('attendance.manage.noPermission') });
       setLoading(false);
-      return;
+    };
+    if (viewDimension === 'personal') {
+      if (!liveActorMatches(false)) {
+        failRead();
+        return;
+      }
+    } else if (viewDimension === 'department') {
+      if (!canViewDepartment) {
+        failRead();
+        return;
+      }
+      if (!liveActorMatches(true)) {
+        failRead();
+        return;
+      }
+    } else {
+      if (!canViewFactory) {
+        failRead();
+        return;
+      }
+      if (!liveActorMatches(true)) {
+        failRead();
+        return;
+      }
     }
     const requestId = ++requestIdRef.current;
     const ownerQueryKey = queryKey;
@@ -165,7 +186,6 @@ export default function AttendanceStatisticsScreen() {
       && requestId === requestIdRef.current
       && currentQueryRef.current === ownerQueryKey
       && liveActorMatches(requiresHr)
-      && canReadSelectedDimension
       && getFactoryId(useAuthStore.getState().user as User | null) === ownerFactoryId;
 
     setStatsState(null);

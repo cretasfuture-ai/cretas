@@ -15,7 +15,7 @@
 
 
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `b2c884402b` — #905合入并发布Java；18角色138次只读复验通过。APK10老板库存分页/澄清、质检文案/库存金额隐藏通过；GPS10重试失败、未打卡。全角色深流程和Mini手机接入未完，Mini保持关闭。本行不锁已归档源码。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner: Codex/手机测试 — Base `b2c884402b` — #905 Java发布/18角色138次只读复验通过；PR909新统计/周数/GPS诊断118目标测试通过，待CI合并。APK11空历史0-0实测通过、GPS原生超时、未打卡；设备指标兜底与告警口径待修，全角色深流程/Mini未完、Mini关闭。
 
 
 

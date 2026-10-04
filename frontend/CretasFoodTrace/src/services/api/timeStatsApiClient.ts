@@ -240,7 +240,9 @@ class TimeStatsApiClient {
     // UTC date arithmetic avoids local timezone and daylight-saving offsets.
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw new Error('周统计日期格式无效');
     const date = new Date(`${weekStart}T00:00:00.000Z`);
-    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== weekStart) {
+    const [parsedYear, parsedMonth, parsedDay] = weekStart.split('-').map(Number);
+    if (!Number.isFinite(date.getTime()) || date.getUTCFullYear() !== parsedYear
+        || date.getUTCMonth() + 1 !== parsedMonth || date.getUTCDate() !== parsedDay) {
       throw new Error('周统计日期格式无效');
     }
     const year = date.getUTCFullYear();
