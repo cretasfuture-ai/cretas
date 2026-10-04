@@ -3285,6 +3285,10 @@ public class ProcessingServiceImpl implements ProcessingService {
     public Map<String, Object> cancelWorkerAssignment(String factoryId, Long batchId, Long workerId) {
         log.info("取消员工分配: factoryId={}, batchId={}, workerId={}", factoryId, batchId, workerId);
 
+        // 与查询/分配路径保持一致：先验证工厂归属，再访问或修改工作会话。
+        productionBatchRepository.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("批次不存在: " + batchId));
+
         // 查找活跃的工作会话
         BatchWorkSession session = batchWorkSessionRepository
                 .findActiveByBatchIdAndEmployeeId(batchId, workerId)
