@@ -17,6 +17,7 @@ import {
   isPreviewExpired,
   previewNote,
   previewRows,
+  quoteIntent,
   remainingSeconds,
   EXPIRED_NOTICE,
   type WriteConfirmState,
@@ -58,7 +59,7 @@ export function AIWriteConfirmCard({ state, onConfirm, onCancel, onRegenerate }:
     return () => clearInterval(timer);
   }, [state.phase, state.action, state.receivedAtMs]);
 
-  const intentLabel = `「${state.intentName}」`;
+  const intentLabel = quoteIntent(state.intentName);
 
   if (state.phase === 'cancelled' || state.phase === 'done') {
     return (

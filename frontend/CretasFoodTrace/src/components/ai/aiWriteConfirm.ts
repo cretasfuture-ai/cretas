@@ -58,6 +58,14 @@ export type ConfirmOutcome =
   | { kind: 'done'; content: string; doneLabel: string; executed: boolean }
   | { kind: 'failed'; failureKind: WriteConfirmFailureKind; notice: string; canRegenerate: boolean };
 
+/** 不知道意图中文名时的显示 (不加书名号) */
+export const GENERIC_INTENT_NAME = '这个操作';
+
+/** 「意图名」; 不知道名字时就说「这个操作」, 不出现「「这个操作」」 */
+export function quoteIntent(name: string): string {
+  return name && name !== GENERIC_INTENT_NAME ? `「${name}」` : GENERIC_INTENT_NAME;
+}
+
 const MANUAL_FALLBACK = '这个操作暂时不能在对话里确认执行，请到对应功能页面手工操作。';
 
 const PERMISSION_STATUSES = new Set(['PERMISSION_DENIED', 'NO_PERMISSION']);
@@ -114,7 +122,7 @@ function upper(value: unknown): string {
 
 function permissionNotice(intentName: string, backendMessage?: string): string {
   return backendMessage
-    ?? `你的账号没有执行「${intentName}」的权限，请联系工厂管理员开通后再试。`;
+    ?? `你的账号没有执行${quoteIntent(intentName)}的权限，请联系工厂管理员开通后再试。`;
 }
 
 /**
@@ -128,14 +136,16 @@ export function writeConfirmFromStreamResult(
 ): WriteConfirmState | undefined {
   const status = upper(result.status);
   const intentCode = str(result.intentCode);
-  const intentName = str(result.intentName) ?? intentCode ?? '该操作';
+  // SITE B (ToolDispatchService:200) 的拦截响应不带 intentName; ⛔ 不拿英文意图码顶替给一线看,
+  // 预览回来会带上真名替换掉。
+  const intentName = str(result.intentName) ?? GENERIC_INTENT_NAME;
   if (status === 'WRITE_CONFIRM_REQUIRED') {
     return {
       phase: 'preparing',
       intentCode,
       intentName,
       userInput,
-      leadText: str(result.message) ?? `「${intentName}」会修改数据，需要你确认后才会执行。`,
+      leadText: str(result.message) ?? `${quoteIntent(intentName)}会修改数据，需要你确认后才会执行。`,
       previewAttempt: 0,
     };
   }
@@ -149,7 +159,7 @@ export function writeConfirmFromStreamResult(
       previewAttempt: 0,
     };
     const applied = applyPreviewResponse(base, result as IntentExecuteResponse, nowMs);
-    return { ...applied, leadText: applied.action?.description ?? `「${applied.intentName}」需要你确认后才会执行。` };
+    return { ...applied, leadText: applied.action?.description ?? `${quoteIntent(applied.intentName)}需要你确认后才会执行。` };
   }
   return undefined;
 }
@@ -285,7 +295,7 @@ export function classifyConfirmResponse(
     return {
       kind: 'done',
       executed: true,
-      content: backendMessage ?? `「${intentName}」已执行。`,
+      content: backendMessage ?? `${quoteIntent(intentName)}已执行。`,
       doneLabel: '已执行',
     };
   }
@@ -319,7 +329,7 @@ export function classifyConfirmResponse(
   return {
     kind: 'failed',
     failureKind: 'rejected',
-    notice: backendMessage ?? `「${intentName}」没有执行成功，服务器没有给出原因。请稍后到对应页面查看。`,
+    notice: backendMessage ?? `${quoteIntent(intentName)}没有执行成功，服务器没有给出原因。请稍后到对应页面查看。`,
     canRegenerate: false,
   };
 }
@@ -333,7 +343,7 @@ export function classifyConfirmError(error: unknown, intentName: string): Confir
     return {
       kind: 'failed',
       failureKind: 'network',
-      notice: `网络异常，无法确认「${intentName}」是否已经执行。请先到对应页面查看结果；确认没有执行，再重新说一遍。`,
+      notice: `网络异常，无法确认${quoteIntent(intentName)}是否已经执行。请先到对应页面查看结果；确认没有执行，再重新说一遍。`,
       canRegenerate: false,
     };
   }
@@ -355,7 +365,7 @@ export function classifyConfirmError(error: unknown, intentName: string): Confir
   return {
     kind: 'failed',
     failureKind: 'rejected',
-    notice: `${backendMessage ?? `服务器出错（${status}）`}。无法确认「${intentName}」是否已经执行，请先到对应页面查看结果。`,
+    notice: `${backendMessage ?? `服务器出错（${status}）`}。无法确认${quoteIntent(intentName)}是否已经执行，请先到对应页面查看结果。`,
     canRegenerate: false,
   };
 }
@@ -418,7 +428,7 @@ export function impactText(state: WriteConfirmState): string {
   const backend = str(state.action?.impactSummary);
   if (backend) return backend;
   const at = upper(state.action?.actionType);
-  if (at === 'DELETE') return `此操作将删除「${state.intentName}」相关数据，确认后立即生效且不可自动恢复。`;
+  if (at === 'DELETE') return `此操作将删除${quoteIntent(state.intentName)}相关数据，确认后立即生效且不可自动恢复。`;
   if (at === 'UPDATE') return '此操作将修改现有数据，确认后立即生效。';
   return '此操作将写入数据，确认后立即生效。';
 }

@@ -382,6 +382,10 @@ describe('AIChatScreen 写操作确认卡', () => {
 
     await waitFor(() => expect(screen.getByTestId('ai-confirm-notice')).toBeTruthy());
     expect(flattenText(screen.getByTestId('ai-confirm-notice'))).toContain('没有执行任何操作');
+    // SITE B 拦截响应不带 intentName: 卡片说「这个操作」, ⛔ 不把英文意图码露给一线
+    const blockedCard = flattenText(screen.getByTestId('ai-confirm-card'));
+    expect(blockedCard).toContain('这个操作暂时不能执行');
+    expect(blockedCard).not.toContain('WAREHOUSE_RECEIVE_WITH_LIMIT');
     await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-regenerate')); });
     await waitFor(() => expect(screen.getByTestId('ai-confirm-execute')).toBeTruthy());
     expect(mockPreviewIntent).toHaveBeenCalledTimes(2);
