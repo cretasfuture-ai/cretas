@@ -114,7 +114,8 @@ class WorkflowProductionReferenceAdvisoryLockPostgresIntegrationTest {
             executeMigration(statement, "V20261029_83__revert_clerk_wip_allowance.sql");
             executeMigration(statement,
                     "V20261030_21__workflow_production_reference_advisory_lock.sql");
-            applyStartGuardMigrationIfPresent(statement);
+            executeMigration(statement,
+                    "V20261101_55__workflow_start_rejects_deactivated_version.sql");
             statement.execute("""
                     INSERT INTO public.product_process_workflows
                         (id, factory_id, product_type_id, status, definition_version)
@@ -401,19 +402,6 @@ class WorkflowProductionReferenceAdvisoryLockPostgresIntegrationTest {
                 SELECT count(*) FROM public.production_batches
                 WHERE factory_id = 'F006' AND status IN ('IN_PROGRESS', 'PRODUCING', 'PAUSED')
                 """);
-    }
-
-    /**
-     * Applies the start guard when the resource exists. Before the fix lands the resource is
-     * absent and the deactivation-first scenarios must go red; the probe line says which.
-     */
-    private static void applyStartGuardMigrationIfPresent(Statement statement)
-            throws IOException, SQLException {
-        ClassPathResource resource = new ClassPathResource(
-                "db/flyway/V20261101_55__workflow_start_rejects_deactivated_version.sql");
-        if (resource.exists()) {
-            statement.execute(new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
-        }
     }
 
     /** Observable for mutation runs: proves which function body this run executed. */
