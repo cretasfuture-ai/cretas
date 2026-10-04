@@ -193,7 +193,31 @@
   "attendance": {
     "title": "考勤管理",
     "manage": {
-      "title": "考勤管理"
+      "title": "考勤管理",
+      "currentMonth": "本月范围",
+      "todayRange": "今日范围",
+      "unknownDate": "日期未知",
+      "ai": "分析当前考勤范围",
+      "aiDenied": "当前账号没有经营分析权限。",
+      "noPermission": "当前账号没有考勤读取权限，或人事模块尚未启用。",
+      "loadFailed": "考勤读取失败，请下拉重试。",
+      "malformed": "服务器返回的考勤数据格式无效。",
+      "empty": "当前明确范围内暂无考勤记录。",
+      "status": {
+        "normal": "正常",
+        "late": "迟到",
+        "earlyLeave": "早退",
+        "lateAndEarlyLeave": "迟到且早退",
+        "absent": "缺勤",
+        "working": "工作中",
+        "ended": "已结束",
+        "unknown": "状态未知"
+      },
+      "summary": {
+        "records": "已加载记录",
+        "users": "已加载员工",
+        "apiTotal": "接口总记录"
+      }
     },
     "anomaly": {
       "title": "异常记录",

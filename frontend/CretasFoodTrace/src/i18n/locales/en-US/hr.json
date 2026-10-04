@@ -193,7 +193,31 @@
   "attendance": {
     "title": "Attendance Management",
     "manage": {
-      "title": "Attendance Management"
+      "title": "Attendance Management",
+      "currentMonth": "Current month",
+      "todayRange": "Today",
+      "unknownDate": "Date unknown",
+      "ai": "Analyze current attendance range",
+      "aiDenied": "This account cannot use business analysis.",
+      "noPermission": "This account cannot read attendance, or the HR module is not enabled.",
+      "loadFailed": "Attendance could not be loaded. Pull to retry.",
+      "malformed": "The server returned an invalid attendance response.",
+      "empty": "No attendance records in the selected range.",
+      "status": {
+        "normal": "Normal",
+        "late": "Late",
+        "earlyLeave": "Early leave",
+        "lateAndEarlyLeave": "Late and early leave",
+        "absent": "Absent",
+        "working": "Working",
+        "ended": "Ended",
+        "unknown": "Unknown"
+      },
+      "summary": {
+        "records": "Loaded records",
+        "users": "Loaded staff",
+        "apiTotal": "API total"
+      }
     },
     "anomaly": {
       "title": "Anomaly Records",

@@ -5,6 +5,7 @@
  */
 
 import React from 'react';
+import { View, Text } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import HRTabNavigator from './HRTabNavigator';
@@ -26,11 +27,24 @@ import LaborCostScreen from '../screens/hr/analytics/LaborCostScreen';
 import PerformanceScreen from '../screens/hr/analytics/PerformanceScreen';
 import BatchAssignmentScreen from '../screens/hr/production/BatchAssignmentScreen';
 import NewHiresScreen from '../screens/hr/home/NewHiresScreen';
+import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
+import { useAuthStore } from '../store/authStore';
+import { canUseAIQuery } from '../utils/permissionHelper';
+import { useTranslation } from 'react-i18next';
 
 import type { HRStackParamList } from '../types/hrNavigation';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<HRStackParamList>();
+
+function HRAIChatGuard() {
+  const user = useAuthStore((state) => state.user);
+  const { t } = useTranslation('hr');
+  if (!canUseAIQuery(user)) {
+    return <View><Text>{t('attendance.manage.aiDenied')}</Text></View>;
+  }
+  return <AIChatScreen />;
+}
 
 export default function HRNavigator() {
   return (
@@ -42,6 +56,7 @@ export default function HRNavigator() {
     >
       {/* 主 Tab 导航 */}
       <Stack.Screen name="HRTabs" component={HRTabNavigator} />
+      <Stack.Screen name="AIChat" component={HRAIChatGuard} />
 
       {/* 全局共享屏幕 - 可从任何 Tab 访问 */}
       <Stack.Screen name="StaffDetail" component={StaffDetailScreen} />

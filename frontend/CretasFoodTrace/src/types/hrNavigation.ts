@@ -8,12 +8,14 @@
  */
 
 import type { NavigatorScreenParams } from '@react-navigation/native';
+import type { FAAIStackParamList } from './navigation';
 
 // ==================== HR 导航参数类型 ====================
 
 /** HR 主 Stack 参数 */
 export type HRStackParamList = {
   HRTabs: undefined;
+  AIChat: FAAIStackParamList['AIChat'];
   // Staff 详情页 (在 Tab 外显示)
   StaffDetail: { staffId: number };
   StaffAIAnalysis: { staffId: number };
