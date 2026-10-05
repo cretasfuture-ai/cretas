@@ -322,6 +322,19 @@ assert_log_count 1 'WEB_BUILD build' "$CASE_LOG"
 assert_contains "$CASE_REPORT" '"build_mode": "web-fallback"'
 assert_contains "$CASE_REPORT" '"web": {"build": "success", "deploy": "success", "outcome": "deployed", "build_count": 1}'
 
+# 默认关(2026-10-05 起): 不带任何 CI 制品开关的发布, 一次都不该去探测 CI 制品,
+# 回执写 disabled。这是从行为上钉默认值 —— 只 grep 源码里的 `:-0` 钉不住
+# 「默认值在别处又被改回开」(例如解析参数后又被覆盖)。
+setup_repo both_fallback_default_off
+commit_change backend/java/cretas-api/Service.java
+commit_change web-admin/src/app.ts
+publish_head
+MOCK_JAVA_VALIDATE_FAILS=1 MOCK_WEB_VALIDATE_FAILS=1 \
+run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD
+assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java+web-fallback'
+assert_log_count 0 'CI_ARTIFACT_PROBE' "$CASE_LOG"
+assert_contains "$CASE_REPORT" '"ci_artifact": {"status": "disabled"'
+
 # 🔴 两边 manifest 都失效时, 两次回退构建【不能串行】。
 #
 # 这条以前没有任何用例: 套件里只有单边 fallback(上面那个 web-fallback), 所以
@@ -334,7 +347,7 @@ commit_change backend/java/cretas-api/Service.java
 commit_change web-admin/src/app.ts
 publish_head
 MOCK_JAVA_VALIDATE_FAILS=1 MOCK_WEB_VALIDATE_FAILS=1 \
-run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD
+run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD --prefer-ci-artifact
 assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java+web-fallback'
 assert_contains "$CASE_REPORT" '"build_mode": "java+web-fallback"'
 # 必须走并行构建器, 而不是各建各的。两个桩输出可区分:
@@ -356,7 +369,7 @@ commit_change backend/java/cretas-api/Service.java
 commit_change web-admin/src/app.ts
 publish_head
 MOCK_JAVA_VALIDATE_FAILS=1 MOCK_WEB_VALIDATE_FAILS=1 MOCK_CI_ARTIFACT=available \
-run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD
+run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD --prefer-ci-artifact
 assert_contains "$CASE_OUTPUT" '与 Web 构建并行'
 assert_log_count 1 'CI_ARTIFACT_FETCH' "$CASE_LOG"
 # Java 走了 CI 制品就不该再跑一遍本地 Maven

@@ -83,7 +83,7 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
   --tests '<本次目标测试>' \
   --stage-backend YES-STAGE  # 仅当用户要求合并后部署；只预上传，不安装/重启/切流
 
-# ⛔ 不跑 prewarm-main-artifact.sh，deploy 阶段必须带 --no-prefer-ci-artifact（脚本默认仍是开）：
+# ⛔ 不跑 prewarm-main-artifact.sh，deploy 阶段带 --no-prefer-ci-artifact（2026-10-05 起脚本默认已关，显式写上更清楚）：
 # CI 制品车道在本组织不通（私有仓无 attestation + 组织制品存储配额已满），等它只会白等再回落本地 Maven。
 # 加速靠 build 阶段的 manifest 复用：两阶段 --tests 完全一致、build 到合并之间无别的后端改动落 main，
 # deploy 阶段即 build=reused、零 Maven，约 1 分钟。
@@ -113,7 +113,7 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
 - `Compiling 1 source file` — 测试编译只编 `--tests` 命中的类（原先编全部 1146 个测试源，耗 41.4s 只为跑一个类）。不传 `-Dcretas.testIncludes` 时仍是全编，即旧行为。若命中不到目标类，surefire 找不到测试会**直接失败**，不会产出跳过测试的制品。
 - `切换后健康轮次 1/3` — 切流后稳定观察由 5 轮改为 3 轮（覆盖 ~36s）。**auto-rollback 未改动**：任一轮非 200/active 仍会切回旧 upstream 并从备份恢复 jar。
 
-**从 GitHub 取制品送上服务器**（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）由 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1` 编排。⚠️ **2026-09-15 起它不在常规发布路径上**：`release-cretas.sh` 的 `--prefer-ci-artifact` 在脚本里仍默认开，但这条 CI 制品车道在本组织不通（私有仓无 attestation、组织制品存储配额已满），所以常规发布一律带 `--no-prefer-ci-artifact`、不跑 `prewarm-main-artifact.sh`，加速只靠合并前 `--phase build --stage-backend YES-STAGE` 的 manifest 复用（来历见 `.claude/skills/deploy-backend/references/lock-and-history.md`）。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仅作排查与将来车道修通后的重新启用。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
+**从 GitHub 取制品送上服务器**（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）由 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1` 编排。⚠️ **2026-09-15 起它不在常规发布路径上**：`release-cretas.sh` 的 `--prefer-ci-artifact` 自 2026-10-05 起默认关，因为这条 CI 制品车道在本组织不通（私有仓无 attestation、组织制品存储配额已满），所以常规发布一律带 `--no-prefer-ci-artifact`、不跑 `prewarm-main-artifact.sh`，加速只靠合并前 `--phase build --stage-backend YES-STAGE` 的 manifest 复用（来历见 `.claude/skills/deploy-backend/references/lock-and-history.md`）。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仅作排查与将来车道修通后的重新启用。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
 
 ---
 

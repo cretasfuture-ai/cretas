@@ -272,14 +272,16 @@ if grep -qE '^[[:space:]]*(push|pull_request):' "$CI_YML"; then
     fail "$(basename "$CI_YML") 又长回了 push/pull_request 触发 —— 每个后端 PR 会多跑 17 分钟 Maven 并把 Actions 存储配额撑爆 (2026-09-15 拍板只留 dispatch)"
 fi
 
-# ---- --prefer-ci-artifact 默认开, 且必须有一个显式关闭出口 ----
-# 2026-07-31 Steve 拍板翻成默认开: 默认关的时候整条 CI 制品链路对日常发布形同不存在
-# (标准发布命令不带这个 flag), 实测 234s vs 405s。
-contains "$RELEASE_SCRIPT" 'CRETAS_RELEASE_PREFER_CI_ARTIFACT:-1'
-if grep -Fq -- 'CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1"' "$RELEASE_SCRIPT"; then
-    fail "--prefer-ci-artifact 退回了默认关 —— 那等于把整条 CI 制品链路从日常发布上摘掉"
+# ---- --prefer-ci-artifact 默认关, 两个方向都有显式出口 ----
+# 2026-07-31 曾翻成默认开(当时实测 234s vs 405s); 2026-10-05 翻回默认关: 本组织 CI 制品车道
+# 走不通(私有仓无 attestation + 制品存储配额), 默认开时探测到候选就走取制品路径、验签晚失败、
+# 再串行补建 Java, 比直接本地并行构建更慢, 常规发布只能每次手写 --no-prefer-ci-artifact。
+contains "$RELEASE_SCRIPT" 'CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1"'
+if grep -Fq -- 'CRETAS_RELEASE_PREFER_CI_ARTIFACT:-1}' "$RELEASE_SCRIPT"; then
+    fail "--prefer-ci-artifact 又变回了默认开 —— 车道没修通前, 漏写 --no-prefer-ci-artifact 的发布会走晚失败的慢路径"
 fi
-# 默认开就必须留可逆出口, 否则出问题时只能改脚本
+# 车道修通后要能不改脚本就开; 旧命令里的 --no-prefer-ci-artifact 也要继续认
+contains "$RELEASE_SCRIPT" '--prefer-ci-artifact)'
 contains "$RELEASE_SCRIPT" '--no-prefer-ci-artifact)'
 # 关掉时必须【显式导出 0】: 只导出 1 的话, --no-prefer-ci-artifact 配上环境里已有的 =1
 # 会变成 Java 侧关而 Web 侧开 —— 又一个"只在一半路径生效"的半吊子开关。
