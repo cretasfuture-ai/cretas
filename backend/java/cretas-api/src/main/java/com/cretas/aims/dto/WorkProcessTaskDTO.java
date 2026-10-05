@@ -3,7 +3,7 @@ package com.cretas.aims.dto;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -126,7 +126,7 @@ public class WorkProcessTaskDTO {
     @AllArgsConstructor
     public static class CompleteRequest {
         @NotNull(message = "actualQuantity 不能为空")
-        @Positive(message = "actualQuantity 必须大于 0")
+        @PositiveOrZero(message = "actualQuantity 不能是负数（没做出来就填 0）")
         private BigDecimal actualQuantity;
 
         @Size(max = 500, message = "notes 不能超过 500 字符")
