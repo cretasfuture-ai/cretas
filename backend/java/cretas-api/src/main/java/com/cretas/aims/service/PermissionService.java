@@ -2,6 +2,7 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.exception.BusinessException;
 
 import java.util.List;
 import java.util.Map;
@@ -150,7 +151,7 @@ public interface PermissionService {
      * Implementations without this strict capability are rejected by authorization callers.
      */
     default Map<String, String> resolveModuleLevelsForAuthorization(User user) {
-        throw new IllegalStateException("Authoritative module permissions unavailable");
+        throw new BusinessException(503, "权限配置暂时无法读取，请稍后重试");
     }
 
 

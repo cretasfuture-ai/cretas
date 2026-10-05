@@ -16,8 +16,10 @@ import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.WageCalculationService;
 import com.cretas.aims.service.WagePolicyService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -120,6 +122,11 @@ class MyWageControllerSelfScopeTest {
      * 它的两个 repo 是 {@code @Autowired(required = false)}, 留 null 时走 hardcoded 矩阵。
      */
     private final PermissionService realPermissionService = new PermissionServiceImpl();
+
+    @BeforeEach
+    void successfulEmptyPermissionRepositories() {
+        PermissionRepositoryFixtures.installSuccessfulEmpty((PermissionServiceImpl) realPermissionService);
+    }
 
     private MockMvc buildMockMvc() {
         MyWageController controller = new MyWageController(

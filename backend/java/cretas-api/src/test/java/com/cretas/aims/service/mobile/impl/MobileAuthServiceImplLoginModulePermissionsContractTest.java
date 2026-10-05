@@ -12,6 +12,11 @@ import com.cretas.aims.repository.SessionRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WhitelistRepository;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
+import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
 import com.cretas.aims.service.TempTokenService;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.service.mobile.MobileDeviceService;
@@ -19,6 +24,9 @@ import com.cretas.aims.utils.JwtUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,12 +39,14 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
 
 /**
  * BUG-RN-PERMISSION-MATRIX-DRIFTS-FROM-L1-20260906: 产品真实入口 {@code unifiedLogin}
@@ -138,5 +148,56 @@ class MobileAuthServiceImplLoginModulePermissionsContractTest {
 
         assertThat(response.getModulePermissions()).isNull();
         verify(permissionService, never()).resolveModuleLevels(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"L1", "L2"})
+    void unifiedLoginPropagatesActualPermissionRepositoryUnavailability(String layer) {
+        User user = salesManager();
+        when(platformAdminRepository.findByUsername(user.getUsername())).thenReturn(Optional.empty());
+        when(userRepository.findByFactoryIdAndUsername("F006", user.getUsername())).thenReturn(Optional.of(user));
+        PermissionServiceImpl actualPermissions = new PermissionServiceImpl();
+        PlatformRolePermissionRepository l1 = mock(PlatformRolePermissionRepository.class);
+        FactoryModuleConfigRepository l2 = mock(FactoryModuleConfigRepository.class);
+        PermissionRepositoryFixtures.successfulEmpty(l1, l2);
+        ReflectionTestUtils.setField(actualPermissions, "platformRepo", l1);
+        ReflectionTestUtils.setField(actualPermissions, "factoryConfigRepo", l2);
+        if ("L1".equals(layer)) {
+            when(l1.findByRoleCodeAndDeletedAtIsNull(anyString())).thenThrow(new RuntimeException("L1 unavailable"));
+        } else {
+            when(l2.findByFactoryIdAndConfigVersion("F006", 1)).thenThrow(new RuntimeException("L2 unavailable"));
+        }
+        ReflectionTestUtils.setField(service, "permissionService", actualPermissions);
+        MobileDTO.LoginRequest request = new MobileDTO.LoginRequest();
+        request.setFactoryId("F006"); request.setUsername(user.getUsername()); request.setPassword("fixture");
+
+        assertThatThrownBy(() -> service.unifiedLogin(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("权限配置暂时无法读取，请稍后重试")
+                .extracting("code").isEqualTo(503);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"L1", "L2"})
+    void ordinaryFactoryAdministratorLoginPreservesIndependentWildcardDuringOutage(String layer) {
+        User user = salesManager();
+        user.setRoleCode("factory_super_admin");
+        when(platformAdminRepository.findByUsername(user.getUsername())).thenReturn(Optional.empty());
+        when(userRepository.findByFactoryIdAndUsername("F006", user.getUsername())).thenReturn(Optional.of(user));
+        PermissionServiceImpl actualPermissions = new PermissionServiceImpl();
+        PlatformRolePermissionRepository l1 = mock(PlatformRolePermissionRepository.class);
+        FactoryModuleConfigRepository l2 = mock(FactoryModuleConfigRepository.class);
+        PermissionRepositoryFixtures.successfulEmpty(l1, l2);
+        ReflectionTestUtils.setField(actualPermissions, "platformRepo", l1);
+        ReflectionTestUtils.setField(actualPermissions, "factoryConfigRepo", l2);
+        if ("L1".equals(layer)) {
+            when(l1.findByRoleCodeAndDeletedAtIsNull(anyString())).thenThrow(new RuntimeException("L1 unavailable"));
+        } else {
+            when(l2.findByFactoryIdAndConfigVersion("F006", 1)).thenThrow(new RuntimeException("L2 unavailable"));
+        }
+        ReflectionTestUtils.setField(service, "permissionService", actualPermissions);
+        MobileDTO.LoginRequest request = new MobileDTO.LoginRequest();
+        request.setFactoryId("F006"); request.setUsername(user.getUsername()); request.setPassword("fixture");
+        assertThat(service.unifiedLogin(request).getModulePermissions()).containsEntry("*", "rw");
     }
 }

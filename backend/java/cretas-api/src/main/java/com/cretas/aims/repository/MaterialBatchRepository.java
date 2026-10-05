@@ -191,6 +191,26 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      */
     List<MaterialBatch> findByFactoryIdAndStatus(String factoryId, MaterialBatchStatus status);
 
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    List<MaterialBatch> findByFactoryIdAndStatusAndCreatedByIn(
+            String factoryId, MaterialBatchStatus status, Collection<Long> createdByList);
+
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    List<MaterialBatch> findByFactoryIdAndStatusAndWarehouseId(
+            String factoryId, MaterialBatchStatus status, String warehouseId);
+
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    List<MaterialBatch> findByFactoryIdAndStatusAndCreatedByInAndWarehouseId(
+            String factoryId, MaterialBatchStatus status, Collection<Long> createdByList, String warehouseId);
+
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    List<MaterialBatch> findByFactoryIdAndStatusAndMaterialTypeIdIn(
+            String factoryId, MaterialBatchStatus status, Collection<String> materialTypeIds);
+
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    List<MaterialBatch> findByFactoryIdAndStatusAndMaterialTypeIdInAndWarehouseId(
+            String factoryId, MaterialBatchStatus status, Collection<String> materialTypeIds, String warehouseId);
+
     /**
      * 跨工厂查找指定状态的批次 (M-WIP-1: 在制品 WIP 全局视图, admin scope).
      * EntityGraph 一并加载 materialType + supplier 以减少 N+1 query.
@@ -466,6 +486,15 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<MaterialBatch> findExpiringBatches(@Param("factoryId") String factoryId,
                                             @Param("warningDate") LocalDate warningDate);
 
+    @Query("SELECT b FROM MaterialBatch b WHERE b.factoryId = :factoryId " +
+           "AND b.createdBy IN :createdByList " +
+           "AND b.expireDate BETWEEN CURRENT_DATE AND :warningDate " +
+           "ORDER BY b.expireDate ASC")
+    List<MaterialBatch> findExpiringBatchesByCreatedByIn(
+            @Param("factoryId") String factoryId,
+            @Param("warningDate") LocalDate warningDate,
+            @Param("createdByList") Collection<Long> createdByList);
+
     /**
      * 查找已过期的批次
      */
@@ -473,6 +502,15 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.status != 'EXPIRED' " +
            "AND m.expireDate < CURRENT_DATE")
     List<MaterialBatch> findExpiredBatches(@Param("factoryId") String factoryId);
+
+    @Query("SELECT b FROM MaterialBatch b WHERE b.factoryId = :factoryId " +
+           "AND b.createdBy IN :createdByList " +
+           "AND b.status != 'EXPIRED' " +
+           "AND b.expireDate < :currentDate")
+    List<MaterialBatch> findExpiredBatchesByCreatedByIn(
+            @Param("factoryId") String factoryId,
+            @Param("currentDate") LocalDate currentDate,
+            @Param("createdByList") Collection<Long> createdByList);
 
     /**
      * 根据供应商查找批次

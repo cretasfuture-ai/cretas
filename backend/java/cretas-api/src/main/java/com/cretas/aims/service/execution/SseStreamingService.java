@@ -441,43 +441,15 @@ public class SseStreamingService {
                         "latencyMs", cacheHit.getLatencyMs()
                 ));
 
-                if (cacheHit.hasExecutionResult()) {
-                    IntentExecuteResponse cachedResponse = deserializeResponse(cacheHit.getExecutionResult());
-                    if (cachedResponse != null) {
-                        sendSseEvent(emitter, "result", cachedResponse);
-                        sendSseEvent(emitter, "complete", Map.of(
-                                "status", "SUCCESS",
-                                "cacheHit", true,
-                                "totalLatencyMs", System.currentTimeMillis() - startTime
-                        ));
-                        emitter.complete();
-                        return;
-                    }
-                }
-
-                IntentMatchResult cachedMatch = deserializeIntentResult(cacheHit.getIntentResult());
-                if (cachedMatch != null && cachedMatch.hasMatch()) {
-                    if (streamRestaurantWriteReadAmbiguity(
-                            emitter, restaurantWriteVerbSuppressedPlan,
-                            cachedMatch.getBestMatch(), request, startTime)) {
-                        return;
-                    }
-                    sendSseEvent(emitter, "intent_recognized", Map.of(
-                            "intentCode", cachedMatch.getBestMatch().getIntentCode(),
-                            "intentName", cachedMatch.getBestMatch().getIntentName(),
-                            "confidence", cachedMatch.getConfidence(),
-                            "matchMethod", "CACHE"
-                    ));
-                    executeAndStreamResult(emitter, factoryId, request, cachedMatch.getBestMatch(),
-                            userId, userRole, startTime, cachedMatch, factoryPackRoute);
-                    return;
-                }
+                // The factory/input cache has no actor, permissions, mode or conversation
+                // scope. A hit is metadata only, as on /execute: never replay business rows
+                // or old intent configuration/parameters. Continue fresh recognition so
+                // clarification, current admission and tool scope checks all run below.
+            } else {
+                sendSseEvent(emitter, "cache_miss", Map.of(
+                        "latencyMs", cacheHit.getLatencyMs()
+                ));
             }
-
-            // 3. 缓存未命中
-            sendSseEvent(emitter, "cache_miss", Map.of(
-                    "latencyMs", cacheHit.getLatencyMs()
-            ));
 
             // 4. 意图识别
             sendSseEvent(emitter, "progress", Map.of(
@@ -1139,15 +1111,15 @@ public class SseStreamingService {
 
         sendSseEvent(emitter, "result", response);
 
-        // 缓存结果
+        // Cache recognition only; business responses belong to the current actor.
         if (("COMPLETED".equals(response.getStatus()) || "SUCCESS".equals(response.getStatus()))
                 && recentTurns(request).isEmpty()      // 带上下文的结果不写入按原话缓存
                 && (request.getIntentCode() == null || request.getIntentCode().isBlank())) {
             // 显式意图码 (澄清按钮点选) 也不写: 那是这一个人的选择, 写进去会按原话回放给所有人
             try {
-                semanticCacheService.cacheResult(factoryId, request.getUserInput(), matchResult, response);
+                semanticCacheService.cacheIntentResult(factoryId, request.getUserInput(), matchResult);
             } catch (Exception e) {
-                log.warn("缓存执行结果失败: {}", e.getMessage());
+                log.warn("缓存意图结果失败: {}", e.getMessage());
             }
         }
 
@@ -1661,26 +1633,6 @@ public class SseStreamingService {
         } catch (JsonProcessingException e) {
             log.warn("序列化 SSE 事件数据失败: {}", e.getMessage());
             throw new IOException("Failed to serialize SSE event data", e);
-        }
-    }
-
-    private IntentExecuteResponse deserializeResponse(String json) {
-        if (json == null || json.isEmpty()) return null;
-        try {
-            return objectMapper.readValue(json, IntentExecuteResponse.class);
-        } catch (JsonProcessingException e) {
-            log.warn("反序列化执行结果失败: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private IntentMatchResult deserializeIntentResult(String json) {
-        if (json == null || json.isEmpty()) return null;
-        try {
-            return objectMapper.readValue(json, IntentMatchResult.class);
-        } catch (JsonProcessingException e) {
-            log.warn("反序列化意图结果失败: {}", e.getMessage());
-            return null;
         }
     }
 

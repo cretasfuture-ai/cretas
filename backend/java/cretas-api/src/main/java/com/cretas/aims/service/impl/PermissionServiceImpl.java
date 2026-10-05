@@ -4,6 +4,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.FactoryModuleConfig;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import com.cretas.aims.service.PermissionService;
@@ -41,6 +42,7 @@ public class PermissionServiceImpl implements PermissionService {
     private final Map<String, Boolean> resolveResult = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 5 * 60 * 1000;
     private static final String LEGACY_IMPORT_PERMISSION = "inventory:legacy_import";
+    public static final String PERMISSION_AVAILABILITY_MESSAGE = "权限配置暂时无法读取，请稍后重试";
 
     /**
      * 清除权限解析缓存. L1/L2 PUT API 调用时触发.
@@ -549,7 +551,9 @@ public class PermissionServiceImpl implements PermissionService {
 
         // 按 L2 → L1 → hardcoded fallback 顺序解析 permission level —— 唯一的一份链, 登录响应
         // modulePermissions (resolveModuleLevels) 也走它, ⛔ 不要在别处再抄一遍这三步。
-        String permType = resolveEffectiveLevel(user.getFactoryId(), role, module);
+        // A fresh authorization read must distinguish a successful empty result from an
+        // unavailable repository.  Only successful empty rows may reach the hardcoded fallback.
+        String permType = resolveEffectiveLevel(user.getFactoryId(), role, module, null, true);
 
         boolean result = checkAction(permType, action);
         resolveCache.put(cacheKey, new long[]{now + CACHE_TTL_MS});
@@ -561,7 +565,14 @@ public class PermissionServiceImpl implements PermissionService {
      * L2 查询: factory_module_configs.role_module_override JSONB.
      * 返回 normalized level (rw/r/w/-) 或 null (未配置).
      */
-    private String resolveLayer2(String factoryId, String roleCode, String moduleCode) {
+    private String resolveLayer2(String factoryId, String roleCode, String moduleCode,
+                                 boolean requireAvailable) {
+        if (factoryConfigRepo == null) {
+            if (requireAvailable) {
+                throw permissionConfigUnavailable(null);
+            }
+            return null;
+        }
         try {
             List<FactoryModuleConfig> configs = factoryConfigRepo.findByFactoryIdAndConfigVersion(factoryId, 1);
             for (FactoryModuleConfig cfg : configs) {
@@ -573,6 +584,9 @@ public class PermissionServiceImpl implements PermissionService {
                 if (level != null) return normalizeLevel(level);
             }
         } catch (Exception e) {
+            if (requireAvailable) {
+                throw permissionConfigUnavailable(e);
+            }
             log.warn("L2 override resolve failed for factory={}, role={}, module={}: {}",
                 factoryId, roleCode, moduleCode, e.getMessage());
         }
@@ -591,7 +605,7 @@ public class PermissionServiceImpl implements PermissionService {
         if (role == null || role == FactoryUserRole.unactivated) {
             return Collections.emptyMap();
         }
-        return resolveRoleModuleLevels(user.getFactoryId(), role);
+        return resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role));
     }
 
     @Override
@@ -615,7 +629,13 @@ public class PermissionServiceImpl implements PermissionService {
 
     @Override
     public Map<String, String> resolveRoleModuleLevels(String factoryId, FactoryUserRole role) {
-        return resolveRoleModuleLevels(factoryId, role, false);
+        return resolveRoleModuleLevels(factoryId, role, !isUnrestrictedRole(role));
+    }
+
+    // Ordinary administrator snapshots enumerate available module names but do not derive
+    // grants from those repositories. Strict tool authorization still requires a fresh snapshot.
+    private boolean isUnrestrictedRole(FactoryUserRole role) {
+        return role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin;
     }
 
     @Override
@@ -657,7 +677,7 @@ public class PermissionServiceImpl implements PermissionService {
         }
 
         for (String module : modules) {
-            String level = normalizeLevel(resolveEffectiveLevel(factoryId, role, module, snapshot));
+            String level = normalizeLevel(resolveEffectiveLevel(factoryId, role, module, snapshot, true));
             if (level == null) continue;
             levels.put(module, level);
         }
@@ -672,7 +692,7 @@ public class PermissionServiceImpl implements PermissionService {
 
     /** hasPermission 用的逐格版本: 每层各查一次 (外面有 5 分钟缓存)。 */
     private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module) {
-        return resolveEffectiveLevel(factoryId, role, module, null);
+        return resolveEffectiveLevel(factoryId, role, module, null, true);
     }
 
     /**
@@ -685,18 +705,23 @@ public class PermissionServiceImpl implements PermissionService {
      * @param snapshot 非 null 时 L2/L1 从快照取 (登录路径, 一次调用只查两次); null 时逐格查 (鉴权路径)
      */
     private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module, LayerSnapshot snapshot) {
+        return resolveEffectiveLevel(factoryId, role, module, snapshot, true);
+    }
+
+    private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module,
+                                         LayerSnapshot snapshot, boolean requireAvailable) {
         String permType = null;
 
         // L2: factory-level override
-        if (factoryId != null && factoryConfigRepo != null) {
+        if (factoryId != null) {
             permType = snapshot != null ? snapshot.l2().get(module)
-                    : resolveLayer2(factoryId, role.name(), module);
+                    : resolveLayer2(factoryId, role.name(), module, requireAvailable);
         }
 
         // L1: platform global default (from DB, seeded by Flyway V20260419_01)
-        if (permType == null && platformRepo != null) {
+        if (permType == null) {
             permType = snapshot != null ? denormalizeLevel(snapshot.l1().get(module))
-                    : resolveLayer1(role.name(), module);
+                    : resolveLayer1(role.name(), module, requireAvailable);
         }
 
         // Fallback: hardcoded PERMISSION_MATRIX (safety net)
@@ -712,7 +737,7 @@ public class PermissionServiceImpl implements PermissionService {
     /** L1 该角色的全部有效行, 一次查询, 值 normalize 成 rw/r/w/-. 查询失败 → 空 map (与 resolveLayer1 的 null 同义). */
     private Map<String, String> layer1LevelsForRole(String roleCode, boolean requireAvailable) {
         if (platformRepo == null) {
-            if (requireAvailable) throw new IllegalStateException("L1 permission repository unavailable");
+            if (requireAvailable) throw permissionConfigUnavailable(null);
             return Collections.emptyMap();
         }
         try {
@@ -724,7 +749,7 @@ public class PermissionServiceImpl implements PermissionService {
             }
             return out;
         } catch (Exception e) {
-            if (requireAvailable) throw new IllegalStateException("L1 permission snapshot unavailable", e);
+            if (requireAvailable) throw permissionConfigUnavailable(e);
             log.warn("L1 list resolve failed for role={}: {}", roleCode, e.getMessage());
             return Collections.emptyMap();
         }
@@ -733,7 +758,7 @@ public class PermissionServiceImpl implements PermissionService {
     /** L2 该工厂对该角色的全部覆盖格, 一次查询; 与 resolveLayer2 同一数据源、同一「第一个配置命中」顺序 (putIfAbsent). */
     private Map<String, String> layer2LevelsForRole(String factoryId, String roleCode, boolean requireAvailable) {
         if (factoryConfigRepo == null) {
-            if (requireAvailable) throw new IllegalStateException("L2 permission repository unavailable");
+            if (requireAvailable) throw permissionConfigUnavailable(null);
             return Collections.emptyMap();
         }
         try {
@@ -750,7 +775,7 @@ public class PermissionServiceImpl implements PermissionService {
             }
             return out;
         } catch (Exception e) {
-            if (requireAvailable) throw new IllegalStateException("L2 permission snapshot unavailable", e);
+            if (requireAvailable) throw permissionConfigUnavailable(e);
             log.warn("L2 list resolve failed for factory={}, role={}: {}", factoryId, roleCode, e.getMessage());
             return Collections.emptyMap();
         }
@@ -760,16 +785,31 @@ public class PermissionServiceImpl implements PermissionService {
      * L1 查询: platform_role_permissions 表.
      * 返回 legacy-format level (read_write/read/write/none) 或 null.
      */
-    private String resolveLayer1(String roleCode, String moduleCode) {
+    private String resolveLayer1(String roleCode, String moduleCode, boolean requireAvailable) {
+        if (platformRepo == null) {
+            if (requireAvailable) {
+                throw permissionConfigUnavailable(null);
+            }
+            return null;
+        }
         try {
             return platformRepo.findByRoleCodeAndModuleCodeAndDeletedAtIsNull(roleCode, moduleCode)
                 .map(PlatformRolePermission::getPermissionLevel)
                 .map(this::denormalizeLevel)  // DB 存 rw/r/w/-, checkAction 用 legacy format
                 .orElse(null);
         } catch (Exception e) {
+            if (requireAvailable) {
+                throw permissionConfigUnavailable(e);
+            }
             log.warn("L1 resolve failed for role={}, module={}: {}", roleCode, moduleCode, e.getMessage());
             return null;
         }
+    }
+
+    private BusinessException permissionConfigUnavailable(Exception cause) {
+        return cause == null
+                ? new BusinessException(503, PERMISSION_AVAILABILITY_MESSAGE)
+                : new BusinessException(503, PERMISSION_AVAILABILITY_MESSAGE, cause);
     }
 
     /**
