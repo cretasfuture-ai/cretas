@@ -233,3 +233,16 @@ async def test_empty_log_is_zero_with_denominator_in_report():
     rep = await ps.run(pool, apply=True)
     assert rep.log_rows == 0 and pool.executes == []
     assert "selection log rows read: 0" in ps.format_report(rep, applied=True)
+
+
+async def test_cli_exit_code_2_when_pool_cannot_be_opened(monkeypatch, capsys):
+    """三态 rc: 连不上库 = 没量到 (2), 不是「有问题」(1) 也不是「没问题」(0)。"""
+    import argparse
+
+    async def _boom(dsn):
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(ps, "_open_pool", _boom)
+    rc = await ps._amain(argparse.Namespace(apply=False, dsn="x"))
+    assert rc == 2
+    assert "INSTRUMENT DEAD" in capsys.readouterr().out

@@ -270,7 +270,11 @@ async def _open_pool(dsn: Optional[str]):
 
 
 async def _amain(args: argparse.Namespace) -> int:
-    pool = await _open_pool(args.dsn)
+    try:
+        pool = await _open_pool(args.dsn)
+    except Exception as ex:  # noqa: BLE001
+        print("INSTRUMENT DEAD: cannot open pool: %s: %s; nothing was measured" % (type(ex).__name__, ex))
+        return 2
     if pool is None:
         print("INSTRUMENT DEAD: no cretas pool (food_kb_db_url unset and no --dsn); nothing was measured")
         return 2
