@@ -448,6 +448,10 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/approval-chains', title: '审批链配置', icon: '', module: 'system' },
       { path: '/system/workflow-designer', title: '工作流设计器', icon: '', module: 'system' },
       { path: '/system/features', title: '功能模块配置', icon: '', module: 'system' },
+      // 2026-10-06 owner: 一线角色 (操作员/出成率录入员/仓库员/质检员) 的 AI 写操作
+      //   默认只开日常工作, 其余由工厂管理员在这里逐个开放。餐饮租户没有这四个角色 ⇒ 隐藏。
+      { path: '/system/ai-frontline-grants', title: '一线角色 AI 操作权限', icon: '', module: 'system',
+        hideForFactoryTypes: ['RESTAURANT'] },
       // Apr 18 2026 bug #48: Canvas 编辑器 router 限制 roles, sidebar 跟上不让 dispatcher/
       // 其他 system:read 角色看到菜单 (否则点进去 /403 体验差)
       { path: '/canvas-editor', title: 'Canvas 配置编辑器', icon: '', module: 'system', roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },

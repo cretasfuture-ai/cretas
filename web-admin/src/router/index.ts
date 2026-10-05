@@ -1722,6 +1722,15 @@ meta: { requiresAuth: true, title: 'SKU 管理', module: 'production', breadcrum
             meta: { requiresAuth: true, title: '功能模块配置', module: 'system' }
           },
           {
+            // 2026-10-06 owner: 一线角色 AI 写操作「在管理端去开放权限」。
+            // 读: system 模块可读即可; 写: 页内按 canWrite('system') 控件,
+            // 后端 PUT/DELETE 另限 factory_super_admin / permission_admin。
+            path: 'ai-frontline-grants',
+            name: 'SystemAiFrontlineGrants',
+            component: () => import('@/views/system/ai-frontline-grants/index.vue'),
+            meta: { requiresAuth: true, title: '一线角色 AI 操作权限', module: 'system' }
+          },
+          {
             path: 'pos',
             name: 'SystemPos',
             component: () => import('@/views/system/pos/list.vue'),
