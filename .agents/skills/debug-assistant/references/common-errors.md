@@ -4,7 +4,7 @@
 
 | 错误 | 原因 | 解决命令 |
 |------|------|----------|
-| `Unknown column 'xxx' in 'field list'` | Entity 字段与数据库不匹配 | `ALTER TABLE xxx ADD COLUMN created_at TIMESTAMP DEFAULT NOW()` |
+| `column "xxx" does not exist` | Entity 字段与数据库不匹配 | 补 Flyway 迁移（`backend/java/cretas-api/src/main/resources/db/flyway/`），不在 prod 手跑 DDL；见 `.claude/rules/database-entity-sync.md` |
 | `NullPointerException` | 空指针访问 | `ssh root@47.100.235.168 "grep -A30 'NullPointerException' /www/wwwroot/cretas/cretas-prod.log"` |
 | `Infinite recursion` (JSON) | 循环引用 | 添加 `@JsonIgnore` 或 `@JsonBackReference` |
 | `401 Unauthorized` | Token 过期/格式错误 | `echo "TOKEN" \| cut -d'.' -f2 \| base64 -d \| jq '.exp'` |
@@ -39,7 +39,7 @@
 | 错误 | 原因 | 解决命令 |
 |------|------|----------|
 | 端口被占用 | 旧进程未退出 | `ssh root@47.100.235.168 "ss -tlnp \| grep 10010"` |
-| 内存不足 | JVM 内存过大 | `java -Xmx512m -jar app.jar` |
+| 内存不足 / OOM | 堆上限在 systemd unit 里（两槽各自配置） | `grep Xmx /etc/systemd/system/cretas-backend*.service`；heap dump 在 `/www/wwwroot/cretas/logs/` |
 | JAR 大小异常 (81M) | .jar.new 覆盖了正常 JAR | `rm -f aims-0.0.1-SNAPSHOT.jar.new` 后重新部署 |
 | 健康检查超时 | Spring Boot 冷启动慢 | 等待 60s 后重试 |
 
@@ -50,19 +50,4 @@
 
 ## 快速诊断
 
-```bash
-# 检查后端日志
-ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/cretas-prod.log"
-
-# 检查 Python 日志
-ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/python-prod.log"
-
-# 验证 API 健康 (后端端口不对公网开放; 先读 139 upstream 定 active 槽)
-ssh root@47.100.235.168 "curl -s http://localhost:<active 槽>/api/mobile/health; curl -s http://localhost:8083/health"
-
-# 检查数据库
-ssh root@47.100.235.168 "sudo -u postgres psql cretas_prod_db -c 'SELECT 1'"
-
-# 前端环境
-npx expo doctor
-```
+用 `scripts/prod-check.sh`（只读，自动按 active 槽选日志），用法见 `SKILL.md`「快速诊断」。前端环境：`npx expo doctor`。
