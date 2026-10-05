@@ -8,6 +8,7 @@ import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -236,6 +237,7 @@ class ListSummaryEntityPermissionContractTest {
 
     private JsonNode postWithRealPermissionService(String entityType, Long userId, int status) throws Exception {
         PermissionService realPermissionService = new PermissionServiceImpl();
+        PermissionRepositoryFixtures.installSuccessfulEmpty((PermissionServiceImpl) realPermissionService);
         MockMvc realMockMvc = MockMvcBuilders.standaloneSetup(
                         new ListSummaryController(listSummaryService, realPermissionService, userRepository))
                 .addInterceptors(new PermissionInterceptor(realPermissionService, userRepository, objectMapper))

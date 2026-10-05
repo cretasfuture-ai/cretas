@@ -396,8 +396,10 @@ public class MaterialBatchController {
      * 按状态获取批次，可选 BOM 过滤 (防呆).
      *
      * <p>当传入 {@code productTypeId} 时，仅返回该产品 ACTIVE BOM 中包含的原料类型对应的批次。
-     * 若产品无 ACTIVE BOM 或 BOM 无明细，回退返回全部批次（不阻断操作员）。
+     * 生产选料仅支持 AVAILABLE；若产品无 ACTIVE BOM 或 BOM 无明细，返回空列表。
      */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read",
+            "production:read_write", "production:read"})
     @GetMapping("/status/{status}")
     @Operation(summary = "按状态获取批次", description = "可选传 productTypeId 按 BOM 过滤 (防呆)")
     public ApiResponse<List<MaterialBatchDTO>> getMaterialBatchesByStatus(
@@ -424,6 +426,7 @@ public class MaterialBatchController {
      * <p>当前为工厂作用域。跨工厂全局视图 (admin scope) 由 {@link MaterialBatchService#getAllWipBatches()} 提供,
      * 后续接入独立 admin endpoint 暴露 (需 platform_super_admin 角色)。</p>
      */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @GetMapping("/wip")
     @Operation(summary = "获取在制品 (WIP) 批次列表", description = "查询本工厂 PRODUCING_RESERVED 状态批次 (在制品)。")
     public ApiResponse<List<MaterialBatchDTO>> getWipBatches(
@@ -519,6 +522,7 @@ public class MaterialBatchController {
     /**
      * 获取即将过期的批次
      */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @GetMapping("/expiring")
     @Operation(summary = "获取即将过期的批次")
     public ApiResponse<List<MaterialBatchDTO>> getExpiringBatches(
@@ -534,6 +538,7 @@ public class MaterialBatchController {
     /**
      * 获取已过期的批次
      */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @GetMapping("/expired")
     @Operation(summary = "获取已过期的批次")
     public ApiResponse<List<MaterialBatchDTO>> getExpiredBatches(

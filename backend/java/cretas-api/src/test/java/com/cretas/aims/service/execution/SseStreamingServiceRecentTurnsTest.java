@@ -72,11 +72,12 @@ class SseStreamingServiceRecentTurnsTest {
                 eq("好了"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), eq(TURNS));
         verify(h.semanticCache, never()).queryCache(anyString(), anyString());
         verify(h.semanticCache, never()).cacheResult(anyString(), anyString(), any(), any());
+        verify(h.semanticCache, never()).cacheIntentResult(anyString(), anyString(), any());
     }
 
     @Test
-    void withoutRecentTurnsTheSemanticCacheIsReadAndWritten() throws Exception {
-        // 对照: 同一句话不带上下文时缓存照常读写 —— 证明上一条的「没碰缓存」来自上下文
+    void withoutRecentTurnsCacheMetadataIsReadAndOnlyRecognitionIsWritten() throws Exception {
+        // 对照: 同一句话不带上下文时缓存元数据照常读、只写识别 —— 证明上一条的「没碰缓存」来自上下文
         Harness h = new Harness();
         h.recognizes("好了", "WORK_PROCESS_TASK_COMPLETE");
 
@@ -87,7 +88,8 @@ class SseStreamingServiceRecentTurnsTest {
                 eq("好了"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(),
                 eq(List.of()));
         verify(h.semanticCache).queryCache("F001", "好了");
-        verify(h.semanticCache).cacheResult(eq("F001"), eq("好了"), any(), any());
+        verify(h.semanticCache).cacheIntentResult(eq("F001"), eq("好了"), any());
+        verify(h.semanticCache, never()).cacheResult(anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -101,6 +103,7 @@ class SseStreamingServiceRecentTurnsTest {
 
         assertThat(result.getStatus()).isEqualTo("COMPLETED");
         verify(h.semanticCache, never()).cacheResult(anyString(), anyString(), any(), any());
+        verify(h.semanticCache, never()).cacheIntentResult(anyString(), anyString(), any());
     }
 
     @Test

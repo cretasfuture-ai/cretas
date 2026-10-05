@@ -1,6 +1,8 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.entity.User;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +35,11 @@ class PermissionServiceImplProductionManagerClerkSplitTest {
 
     @InjectMocks
     private PermissionServiceImpl permissionService;
+
+    @BeforeEach
+    void successfulEmptyPermissionRepositories() {
+        PermissionRepositoryFixtures.installSuccessfulEmpty(permissionService);
+    }
 
     private User makeUser(String roleCode) {
         User u = new User();

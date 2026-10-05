@@ -9,6 +9,7 @@ import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
 import com.cretas.aims.annotation.RequirePermission;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -480,6 +481,7 @@ class FinanceRbacBugFixTest {
         @BeforeEach
         void setup() {
             permissionServiceImpl = new PermissionServiceImpl();
+            PermissionRepositoryFixtures.installSuccessfulEmpty(permissionServiceImpl);
         }
 
         private User userWithRole(FactoryUserRole role, String factoryId) {

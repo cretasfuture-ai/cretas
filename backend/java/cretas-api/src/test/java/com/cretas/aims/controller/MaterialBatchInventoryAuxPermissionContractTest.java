@@ -3,9 +3,12 @@ package com.cretas.aims.controller;
 import com.cretas.aims.config.PermissionInterceptor;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
+import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.MobileService;
@@ -31,7 +34,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * F006 module domain split, not a production role allowlist. JWT tenant protection is unchanged
  * and separately checked by real runtime negative controls. */
 class MaterialBatchInventoryAuxPermissionContractTest {
-    private static final List<String> ROUTES=List.of("inventory/statistics","low-stock","inventory/alerts","inventory/expiry-warnings");
+    private static final List<String> ROUTES=List.of("inventory/statistics","low-stock","inventory/alerts","inventory/expiry-warnings",
+            "status/AVAILABLE", "wip", "expiring", "expired");
     private static final String BASE="/api/mobile/F006/material-batches/";
     private final MaterialBatchService service=mock(MaterialBatchService.class);
     private final UserRepository users=mock(UserRepository.class);
@@ -45,6 +49,9 @@ class MaterialBatchInventoryAuxPermissionContractTest {
         actor=new User();actor.setId(99101L);actor.setFactoryId("F006");actor.setRoleCode(role);actor.setIsActive(true);
         when(users.findById(actor.getId())).thenReturn(actorPresent?Optional.of(actor):Optional.empty());
         ReflectionTestUtils.setField(policy,"platformRepo",platform);
+        FactoryModuleConfigRepository factory=mock(FactoryModuleConfigRepository.class);
+        PermissionRepositoryFixtures.successfulEmpty(platform,factory);
+        ReflectionTestUtils.setField(policy,"factoryConfigRepo",factory);
         when(platform.findByRoleCodeAndModuleCodeAndDeletedAtIsNull(anyString(),anyString())).thenAnswer(call->{
             PlatformRolePermission row=new PlatformRolePermission();row.setRoleCode(call.getArgument(0));row.setModuleCode(call.getArgument(1));
             row.setPermissionLevel(levels.getOrDefault(call.getArgument(1),"-"));return Optional.of(row);
@@ -55,6 +62,9 @@ class MaterialBatchInventoryAuxPermissionContractTest {
         when(service.getLowStockWarnings("F006")).thenReturn(List.of(Map.of("materialTypeName","fixture","currentQuantity",5,"minQuantity",10)));
         when(service.getExpiringBatches(eq("F006"),anyInt())).thenReturn(List.of());
         when(service.getExpiredBatches("F006")).thenReturn(List.of());
+        when(service.getWipBatches("F006")).thenReturn(List.of());
+        when(service.getMaterialBatchesByStatus(eq("F006"), eq(MaterialBatchStatus.AVAILABLE),
+                nullable(String.class), nullable(String.class))).thenReturn(List.of());
         return MockMvcBuilders.standaloneSetup(new MaterialBatchController(service,mobile,new PriceMaskResolver(mobile,users,policy),mock(OpeningInventoryService.class)))
                 .addInterceptors(new PermissionInterceptor(policy,users,new ObjectMapper())).build();
     }
@@ -83,12 +93,17 @@ class MaterialBatchInventoryAuxPermissionContractTest {
     @ParameterizedTest(name="{0} {3}") @MethodSource("roleRoutes")
     void actualRoleDomainsDenyBeforeBusinessAndPreserveProductionStatistics(String role,boolean inventoryRead,boolean productionRead,String route)throws Exception{
         Map<String,String> levels=Map.of("inventory",inventoryRead?"r":"-","warehouse","-","production",productionRead?"r":"-");
-        assertDomain(mvc(role,levels,true),route,inventoryRead||(route.equals("inventory/statistics")&&productionRead));
+        assertDomain(mvc(role,levels,true),route,
+                inventoryRead || (route.equals("inventory/statistics") && productionRead)
+                        || (route.equals("status/AVAILABLE") && productionRead));
     }
     static Stream<Arguments> aliases(){return Stream.of("warehouse","inventory","production").flatMap(module->Stream.of("r","rw").flatMap(level->ROUTES.stream().map(route->Arguments.of(module,level,route))));}
     @ParameterizedTest(name="{0}:{1} {2}") @MethodSource("aliases")
     void eachReadOrReadWriteAliasWorksWithoutOtherModuleGrants(String module,String level,String route)throws Exception{
-        assertDomain(mvc("hr_admin",Map.of(module,level),true),route,!module.equals("production")||route.equals("inventory/statistics"));
+        assertDomain(mvc("hr_admin",Map.of(module,level),true),route,
+                !module.equals("production")
+                        || route.equals("inventory/statistics")
+                        || route.equals("status/AVAILABLE"));
     }
     static Stream<Arguments> unavailableActors(){return ROUTES.stream().flatMap(route->Stream.of(Arguments.of(route,false),Arguments.of(route,true)));}
     @ParameterizedTest @MethodSource("unavailableActors")
@@ -112,6 +127,11 @@ class MaterialBatchInventoryAuxPermissionContractTest {
             case "low-stock" -> {result.andExpect(jsonPath("$.data[0].currentQuantity").value(5));verify(service).getLowStockWarnings("F006");}
             case "inventory/alerts" -> {result.andExpect(jsonPath("$.data[0].alertType").value("LOW_STOCK"));verify(service).getLowStockWarnings("F006");}
             case "inventory/expiry-warnings" -> {result.andExpect(jsonPath("$.data.summary.urgent").value(0));verify(service).getExpiringBatches("F006",90);}
+            case "status/AVAILABLE" -> verify(service).getMaterialBatchesByStatus(
+                    eq("F006"), eq(MaterialBatchStatus.AVAILABLE), nullable(String.class), nullable(String.class));
+            case "wip" -> verify(service).getWipBatches("F006");
+            case "expiring" -> verify(service).getExpiringBatches(eq("F006"), anyInt());
+            case "expired" -> verify(service).getExpiredBatches("F006");
             default -> throw new AssertionError("Unknown fixture route");
         }
     }

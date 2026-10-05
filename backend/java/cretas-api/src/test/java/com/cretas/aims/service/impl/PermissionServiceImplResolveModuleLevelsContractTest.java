@@ -4,6 +4,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.FactoryModuleConfig;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,9 +24,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -239,19 +240,14 @@ class PermissionServiceImplResolveModuleLevelsContractTest {
     }
 
     @Test
-    @DisplayName("仓库查询抛异常 ⇒ 退到硬编码兜底而不是抛出 (与 resolveLayer1 的 catch 同口径)")
-    void repositoryFailureFallsBackToHardcoded() {
+    @DisplayName("仓库查询抛异常 ⇒ 503 可用性错误，不把故障降成硬编码授权")
+    void repositoryFailurePropagatesAvailability() {
         when(platformRepo.findByRoleCodeAndDeletedAtIsNull(anyString())).thenThrow(new RuntimeException("db down"));
         when(platformRepo.findByRoleCodeAndModuleCodeAndDeletedAtIsNull(anyString(), anyString())).thenThrow(new RuntimeException("db down"));
 
         User u = user(FactoryUserRole.sales_manager, "F006");
-        Map<String, String> levels = service.resolveModuleLevels(u);
-        System.out.println("OBSERVED (db down) sales_manager levels = " + levels);
-
-        Set<String> hardKeys = hardcoded(FactoryUserRole.sales_manager).keySet();
-        assertThat(levels.keySet()).isEqualTo(hardKeys);
-        for (String module : hardKeys) {
-            assertThat(service.hasPermission(u, module + ":read")).isEqualTo(levelReads(levels.get(module)));
-        }
+        assertThatThrownBy(() -> service.resolveModuleLevels(u))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo(503);
     }
 }

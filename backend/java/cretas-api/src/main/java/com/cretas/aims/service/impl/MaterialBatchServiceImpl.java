@@ -280,6 +280,90 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         this.futurePlanMatchingService = futurePlanMatchingService;
     }
 
+    /** Resolve the current inventory row scope and reject a path factory mismatch. */
+    private DataScopeContext inventoryScope(String factoryId) {
+        DataScopeContext context = DataScopeContext.current();
+        if (context == null && SecurityUtils.currentUserId() != null) {
+            if (dataScopeResolver == null) {
+                throw new AccessDeniedException("Unable to resolve authenticated data scope");
+            }
+            context = dataScopeResolver.resolve(SecurityUtils.currentUserId());
+            if (context == null) {
+                throw new AccessDeniedException("Unable to resolve authenticated data scope");
+            }
+        }
+        if (context == null) {
+            throw new AccessDeniedException("Authenticated inventory context is required");
+        }
+        if (context.getScope() == null) {
+            throw new AccessDeniedException("Authenticated inventory scope is required");
+        }
+        if (context.getFactoryId() == null || context.getFactoryId().isBlank()) {
+            throw new AccessDeniedException("Authenticated inventory factory is required");
+        }
+        if (!context.getFactoryId().equals(factoryId)) {
+            throw new AccessDeniedException("Inventory factory does not match authenticated factory");
+        }
+        return context;
+    }
+
+    /** Return null for explicit ALL/no context, a creator list for row-scoped users, or empty for CUSTOM. */
+    private List<Long> inventoryCreatorIds(String factoryId) {
+        return inventoryCreatorIds(inventoryScope(factoryId));
+    }
+
+    private List<Long> inventoryCreatorIds(DataScopeContext context) {
+        if (context == null || !context.isFiltered()) {
+            return null;
+        }
+        if (context.getScope() == com.cretas.aims.entity.enums.DataScope.CUSTOM) {
+            return Collections.emptyList();
+        }
+        if (context.getUserId() == null) {
+            return Collections.emptyList();
+        }
+        if (context.getScope() == com.cretas.aims.entity.enums.DataScope.SELF) {
+            return List.of(context.getUserId());
+        }
+        if (context.getScope() == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                || context.getScope() == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+            List<Long> chain = dataScopeResolver == null
+                    ? List.of(context.getUserId())
+                    : dataScopeResolver.resolveCreatedByChain(context);
+            return chain == null || chain.isEmpty()
+                    ? List.of(context.getUserId()) : chain;
+        }
+        return null;
+    }
+
+    private User authenticatedInventoryActor(String factoryId) {
+        Long userId = SecurityUtils.currentUserId();
+        if (userId == null || userRepository == null) {
+            throw new AccessDeniedException("Authenticated inventory actor is required");
+        }
+        User actor = userRepository.findById(userId).orElse(null);
+        if (actor == null || actor.getFactoryId() == null || !factoryId.equals(actor.getFactoryId())) {
+            throw new AccessDeniedException("Inventory actor does not belong to the requested factory");
+        }
+        return actor;
+    }
+
+    private void requireInventoryReadPermission(String factoryId) {
+        User actor = authenticatedInventoryActor(factoryId);
+        if (permissionService == null || !permissionService.hasAnyPermission(actor,
+                "warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read")) {
+            throw new AccessDeniedException("Inventory read permission is required");
+        }
+    }
+
+    private void requireProductionSelectionPermission(String factoryId) {
+        User actor = authenticatedInventoryActor(factoryId);
+        if (permissionService == null || !permissionService.hasAnyPermission(actor,
+                "production:read_write", "production:read")) {
+            throw new AccessDeniedException("Production read permission is required for BOM selection");
+        }
+    }
+
     private void runConfiguredValidation(String factoryId, String operation, java.util.Map<String, Object> context) {
         if (validationRuleEvaluator == null) return;
         try {
@@ -832,22 +916,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 sort
             );
 
-        // Sprint 6 W2-B: 应用 DataScope chain. SELF / SELF_AND_BELOW / DEPT_AND_BELOW
-        // 走 createdByIn variant. ALL 保持原行为.
-        DataScopeContext dsCtx = DataScopeContext.current();
-        List<Long> chain = null;
-        if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
-            com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
-            if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
-                chain = List.of(dsCtx.getUserId());
-            } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
-                    || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
-                chain = dataScopeResolver != null
-                        ? dataScopeResolver.resolveCreatedByChain(dsCtx)
-                        : List.of(dsCtx.getUserId());
-                if (chain == null || chain.isEmpty()) chain = List.of(dsCtx.getUserId());
-            }
-            // CUSTOM → chain stays null → fallback ALL
+        // Sprint 6 W2-B: 应用 DataScope chain. CUSTOM 没有已实现的具体成员列表，必须收紧为空。
+        List<Long> chain = inventoryCreatorIds(factoryId);
+        if (chain != null && chain.isEmpty()) {
+            return PageResponse.of(List.of(), pageRequest.getPage(), pageRequest.getSize(), 0L);
         }
 
         Page<MaterialBatch> batchPage;
@@ -883,65 +955,83 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
+    @DataScope("created_by")
     public List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status) {
-        return materialBatchRepository.findByFactoryIdAndStatus(factoryId, status)
-                .stream()
-                .map(materialBatchMapper::toDTO)
-                .collect(Collectors.toList());
+        return getMaterialBatchesByStatus(factoryId, status, null, null);
     }
 
     @Override
+    @DataScope("created_by")
     public List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
                                                               String productTypeId) {
         return getMaterialBatchesByStatus(factoryId, status, productTypeId, null);
     }
 
     @Override
+    @DataScope("created_by")
     public List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
                                                               String productTypeId, String warehouseId) {
-        List<MaterialBatch> statusBatches = materialBatchRepository.findByFactoryIdAndStatus(factoryId, status)
-                .stream()
-                .filter(batch -> warehouseId == null || warehouseId.isBlank() || warehouseId.equals(batch.getWarehouseId()))
-                .collect(Collectors.toList());
+        DataScopeContext scope = inventoryScope(factoryId);
+        boolean hasProduct = productTypeId != null && !productTypeId.isBlank();
+        boolean hasWarehouse = warehouseId != null && !warehouseId.isBlank();
+        List<MaterialBatch> statusBatches;
 
-        // 无 productTypeId → 只按状态/仓库过滤
-        if (productTypeId == null || productTypeId.isBlank()) {
-            return statusBatches.stream()
-                    .map(materialBatchMapper::toDTO)
-                    .collect(Collectors.toList());
+        if (hasProduct) {
+            requireProductionSelectionPermission(factoryId);
+            if (status != MaterialBatchStatus.AVAILABLE) {
+                throw new AccessDeniedException("生产选料只能选择可用批次");
+            }
+            // 有合法 ACTIVE/current BOM 时，生产选料允许同厂跨收料人；仍由 factory + BOM + status
+            // (以及可选 warehouse) 三个数据库谓词共同限定，绝不因无 BOM 回退到全厂。
+            Set<String> bomMaterialTypeIds = new HashSet<>();
+            bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId.trim())
+                    .forEach(item -> {
+                        if (item.getMaterialTypeId() != null) {
+                            bomMaterialTypeIds.add(item.getMaterialTypeId());
+                        }
+                    });
+            if (bomMaterialTypeIds.isEmpty()) {
+                log.debug("BOM 过滤: 产品 {} 无 ACTIVE/current 配方明细, 返回空 {} 批次",
+                        productTypeId, status);
+                return Collections.emptyList();
+            }
+            statusBatches = hasWarehouse
+                    ? materialBatchRepository.findByFactoryIdAndStatusAndMaterialTypeIdInAndWarehouseId(
+                            factoryId, status, bomMaterialTypeIds, warehouseId)
+                    : materialBatchRepository.findByFactoryIdAndStatusAndMaterialTypeIdIn(
+                            factoryId, status, bomMaterialTypeIds);
+        } else {
+            requireInventoryReadPermission(factoryId);
+            List<Long> creatorIds = inventoryCreatorIds(scope);
+            if (creatorIds != null && creatorIds.isEmpty()) {
+                return Collections.emptyList();
+            }
+            if (creatorIds != null) {
+                statusBatches = hasWarehouse
+                        ? materialBatchRepository.findByFactoryIdAndStatusAndCreatedByInAndWarehouseId(
+                                factoryId, status, creatorIds, warehouseId)
+                        : materialBatchRepository.findByFactoryIdAndStatusAndCreatedByIn(
+                                factoryId, status, creatorIds);
+            } else {
+                statusBatches = hasWarehouse
+                        ? materialBatchRepository.findByFactoryIdAndStatusAndWarehouseId(factoryId, status, warehouseId)
+                        : materialBatchRepository.findByFactoryIdAndStatus(factoryId, status);
+            }
         }
 
-        // 1. 取当前 ACTIVE/current BOM 原料类型集合（唯一生产真值）。
-        Set<String> bomMaterialTypeIds = new HashSet<>();
-        bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId)
-                .forEach(item -> {
-                    if (item.getMaterialTypeId() != null) {
-                        bomMaterialTypeIds.add(item.getMaterialTypeId());
-                    }
-                });
-
-        // 2. 无当前生效 BOM 明细 → 返回空, 由前端明确提示先维护并激活 BOM。
-        if (bomMaterialTypeIds.isEmpty()) {
-            log.debug("BOM 过滤: 产品 {} 无 ACTIVE/current 配方明细, 返回空 {} 批次",
-                    productTypeId, status);
-            return Collections.emptyList();
-        }
-
-        // 3. 按状态/仓库结果, 再按 BOM 原料类型(并集)过滤
-        List<MaterialBatchDTO> filtered = statusBatches.stream()
-                .filter(b -> bomMaterialTypeIds.contains(b.getMaterialTypeId()))
-                .map(materialBatchMapper::toDTO)
-                .collect(Collectors.toList());
-
-        log.debug("BOM 过滤: 产品 {} BOM 含 {} 原料类型, 从全部 AVAILABLE 批次中筛出 {} 批",
-                productTypeId, bomMaterialTypeIds.size(), filtered.size());
-
-        return filtered;
+        return statusBatches.stream().map(materialBatchMapper::toDTO).collect(Collectors.toList());
     }
 
     @Override
+    @DataScope("created_by")
     public List<MaterialBatchDTO> getWipBatches(String factoryId) {
-        return materialBatchRepository.findByFactoryIdAndStatus(factoryId, MaterialBatchStatus.PRODUCING_RESERVED)
+        List<Long> creatorIds = inventoryCreatorIds(factoryId);
+        List<MaterialBatch> batches = creatorIds != null
+                ? (creatorIds.isEmpty() ? Collections.emptyList()
+                        : materialBatchRepository.findByFactoryIdAndStatusAndCreatedByIn(
+                                factoryId, MaterialBatchStatus.PRODUCING_RESERVED, creatorIds))
+                : materialBatchRepository.findByFactoryIdAndStatus(factoryId, MaterialBatchStatus.PRODUCING_RESERVED);
+        return batches
                 .stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
@@ -964,17 +1054,30 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
+    @DataScope("created_by")
     public List<MaterialBatchDTO> getExpiringBatches(String factoryId, Integer warningDays) {
         LocalDate warningDate = LocalDate.now().plusDays(warningDays);
-        List<MaterialBatch> batches = materialBatchRepository.findExpiringBatches(factoryId, warningDate);
+        List<Long> creatorIds = inventoryCreatorIds(factoryId);
+        List<MaterialBatch> batches = creatorIds != null
+                ? (creatorIds.isEmpty() ? Collections.emptyList()
+                        : materialBatchRepository.findExpiringBatchesByCreatedByIn(
+                                factoryId, warningDate, creatorIds))
+                : materialBatchRepository.findExpiringBatches(factoryId, warningDate);
         return batches.stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
     }
 
     @Override
+    @DataScope("created_by")
     public List<MaterialBatchDTO> getExpiredBatches(String factoryId) {
-        List<MaterialBatch> batches = materialBatchRepository.findExpiredBatches(factoryId);
+        LocalDate currentDate = LocalDate.now();
+        List<Long> creatorIds = inventoryCreatorIds(factoryId);
+        List<MaterialBatch> batches = creatorIds != null
+                ? (creatorIds.isEmpty() ? Collections.emptyList()
+                        : materialBatchRepository.findExpiredBatchesByCreatedByIn(
+                                factoryId, currentDate, creatorIds))
+                : materialBatchRepository.findExpiredBatches(factoryId);
         return batches.stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
@@ -1188,16 +1291,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     public List<Map<String, Object>> getLowStockWarnings(String factoryId) {
         List<Map<String, Object>> warnings = new ArrayList<>();
 
-        DataScopeContext dsCtx = DataScopeContext.current();
-        if (dsCtx == null && SecurityUtils.currentUserId() != null) {
-            if (dataScopeResolver == null) {
-                throw new AccessDeniedException("Unable to resolve authenticated data scope");
-            }
-            dsCtx = dataScopeResolver.resolve(SecurityUtils.currentUserId());
-            if (dsCtx == null) {
-                throw new AccessDeniedException("Unable to resolve authenticated data scope");
-            }
-        }
+        DataScopeContext dsCtx = inventoryScope(factoryId);
 
         List<String> visibleMaterialTypeIds = null;
 
@@ -1208,8 +1302,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 2. 获取各原材料类型的当前库存汇总
         Map<String, BigDecimal> stockMap = new HashMap<>();
         if (dsCtx != null && dsCtx.isFiltered()) {
-            List<Long> chain = dataScopeResolver == null
-                    ? List.of() : dataScopeResolver.resolveCreatedByChain(dsCtx);
+            List<Long> chain = inventoryCreatorIds(dsCtx);
             if (chain == null || chain.isEmpty()) {
                 return warnings;
             }

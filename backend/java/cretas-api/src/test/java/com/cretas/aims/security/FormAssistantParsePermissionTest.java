@@ -3,6 +3,8 @@ package com.cretas.aims.security;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +33,11 @@ class FormAssistantParsePermissionTest {
     };
 
     private final PermissionServiceImpl permissionService = new PermissionServiceImpl();
+
+    @BeforeEach
+    void successfulEmptyPermissionRepositories() {
+        PermissionRepositoryFixtures.installSuccessfulEmpty(permissionService);
+    }
 
     private User userWithRole(FactoryUserRole role) {
         User u = new User();
