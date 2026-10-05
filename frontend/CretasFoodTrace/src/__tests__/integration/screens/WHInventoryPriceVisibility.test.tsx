@@ -104,7 +104,7 @@ function setData(totalValue: number | null | undefined) {
     success: true,
     code: 200,
     message: '',
-    data: { totalValue, totalBatches: 8, availableBatches: 7, expiringBatchesCount: 0 },
+    data: { totalValue, totalBatches: 220, availableBatches: 219, expiringBatchesCount: 99 },
   });
   listPackaging.mockResolvedValue([]);
 }
@@ -127,7 +127,11 @@ describe('WHInventoryListScreen price visibility', () => {
 
     await waitFor(() => expect(view.getByText('批次总数')).toBeTruthy());
     expect(view.getByText('已加载食材(kg)')).toBeTruthy();
-    expect(view.getAllByText('8').length).toBeGreaterThanOrEqual(3);
+    expect(view.getByText('在库 1 批')).toBeTruthy();
+    expect(view.getByTestId('wh-inventory-total-batches').props.children).toBe(1);
+    expect(view.getByTestId('wh-inventory-warning-count').props.children).toBe(0);
+    expect(view.getByTestId('wh-inventory-quantity-batch-1').props.children).toBe('8');
+    expect(view.getByTestId('wh-inventory-batch-count-batch-1').props.children).toEqual([1, '个']);
     expect(view.queryByTestId('wh-inventory-price-card')).toBeNull();
     expect(view.queryByText('¥1K')).toBeNull();
   });
@@ -152,7 +156,11 @@ describe('WHInventoryListScreen price visibility', () => {
     expect(view.getByTestId('wh-inventory-price').props.children).toBe('¥1K');
     expect(view.getByText('批次总数')).toBeTruthy();
     expect(view.getByText('已加载食材(kg)')).toBeTruthy();
-    expect(view.getAllByText('8').length).toBeGreaterThanOrEqual(3);
+    expect(view.getByText('在库 1 批')).toBeTruthy();
+    expect(view.getByTestId('wh-inventory-total-batches').props.children).toBe(1);
+    expect(view.getByTestId('wh-inventory-warning-count').props.children).toBe(0);
+    expect(view.getByTestId('wh-inventory-quantity-batch-1').props.children).toBe('8');
+    expect(view.getByTestId('wh-inventory-batch-count-batch-1').props.children).toEqual([1, '个']);
   });
 
   it('preserves an authorized zero total value', async () => {
