@@ -180,6 +180,50 @@ afterEach(() => {
 });
 
 describe('WHInventoryListScreen pagination and search contract', () => {
+  it('renders scoped header and warning cards from complete pagination despite factory-wide stats, then clears them on owner switch', async () => {
+    setupStore(actor('F006', 77, 'warehouse_worker'));
+    const completeRows = Array.from({ length: 51 }, (_, index) => batch(
+      `scoped-${index + 1}`,
+      `SCOPED-${String(index + 1).padStart(3, '0')}`,
+      index === 0 ? '范围内预警批次' : `范围内批次${index + 1}`,
+    ));
+    completeRows[0]!.expiryDate = new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString();
+    getStatistics.mockResolvedValue({
+      success: true,
+      code: 200,
+      message: 'ok',
+      data: { totalValue: 22000, totalBatches: 220, availableBatches: 220, expiringBatchesCount: 99 },
+    });
+    const replacementPage = deferred<unknown>();
+    getBatches.mockImplementation(async (params) => {
+      if (params?.factoryId === 'F007') return replacementPage.promise as never;
+      return (params?.page ?? 1) === 1
+        ? page(completeRows.slice(0, 50), 2, 1)
+        : page(completeRows.slice(50), 2, 2);
+    });
+
+    const view = render(<WHInventoryListScreen />);
+
+    await waitFor(() => expect(view.getByText('范围内批次51')).toBeTruthy());
+    expect(view.getByText('在库 51 批')).toBeTruthy();
+    expect(view.queryByText(/已加载 51/)).toBeNull();
+    expect(view.getByText('批次总数')).toBeTruthy();
+    expect(view.getByText('预警数')).toBeTruthy();
+    expect(view.getByTestId('wh-inventory-total-batches').props.children).toBe(51);
+    expect(view.getByTestId('wh-inventory-warning-count').props.children).toBe(1);
+    expect(view.queryByTestId('wh-inventory-price-card')).toBeNull();
+
+    await act(async () => { useAuthStore.setState({ user: actor('F007', 88, 'warehouse_worker') }); });
+    await waitFor(() => expect(getBatches).toHaveBeenCalledWith({ factoryId: 'F007', page: 1, size: 50 }));
+    expect(view.queryByText('范围内批次51')).toBeNull();
+    expect(view.getByText('在库 0 批')).toBeTruthy();
+    expect(view.queryByText('¥22K')).toBeNull();
+
+    await act(async () => { replacementPage.resolve(page([batch('replacement', 'REPLACED-001', '替换批次', 'F007')], 1)); });
+    await waitFor(() => expect(view.getByText('替换批次')).toBeTruthy());
+    expect(view.queryByText('范围内预警批次')).toBeNull();
+  });
+
   it('loads server pages in order, deduplicates real ids, and searches material name or batch number', async () => {
     setupStore();
     getBatches.mockImplementation(async (params) =>
@@ -428,7 +472,7 @@ describe('WHInventoryListScreen pagination and search contract', () => {
     const view = render(<WHInventoryListScreen />);
     await waitFor(() => expect(view.getByText('旧缓存批次')).toBeTruthy());
     await waitFor(() => expect(view.getByText(/OLD-SUMMARY/)).toBeTruthy());
-    expect(view.getByText(/在库\s*99\s*批/)).toBeTruthy();
+    expect(view.getByText(/在库\s*1\s*批/)).toBeTruthy();
     fireEvent(view.getByTestId('wh-inventory-row-cached-old'), 'longPress');
     expect(view.getByTestId('wh-row-action-sheet')).toBeTruthy();
     const oldRefresh = view.getByTestId('wh-inventory-scroll').props.refreshControl.props.onRefresh as () => void;

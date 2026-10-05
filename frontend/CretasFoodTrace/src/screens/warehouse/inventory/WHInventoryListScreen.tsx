@@ -705,22 +705,9 @@ export function WHInventoryListScreen() {
     return true;
   });
 
-  // 统计数据
-  //
-  // 🔴 口径修正 (2026-08-02)。这里原先把三个**不同范围**的数混在一起显示, 而且都标错了:
-  //   1. total 取的是 inventoryStats.totalBatches —— 那是**批次数**(prod F006 = 296),
-  //      却被渲染成「在库 296 种」「物料种类 296」。同屏底部 sticky bar 写的
-  //      「共 296 批」才是对的, 同一个数在一屏里一处叫「种」一处叫「批」。
-  //   2. totalWeight 是 inventoryList 求和, 而 inventoryList 只有
-  //      getMaterialBatches({page:1,size:50}) 的 **50 条**(totalElements=296),
-  //      即"总量"只统计了 1/6 的数据。
-  //   3. 那 50 条单位不一致(实测 kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 5),
-  //      却一律当 kg 相加并标 kg —— 与 box 被当 kg 算导致投料偏大 25% 是同一类错误。
-  //
-  // 修法: 分清「全量(服务端)」与「已加载(本页)」两个范围, 各自只说自己能证明的事;
-  // 数量按单位分组, 绝不跨单位相加。
+  // 统计数据：列表已经完成当前身份的全部分页，数字必须与可见批次保持同一范围。
   const loadedCount = visibleInventoryList.length;
-  const totalBatches = visibleInventoryStats?.totalBatches ?? loadedCount;
+  const totalBatches = loadedCount;
 
   /** 已加载批次按单位分组求和 —— 只在同一单位内相加。 */
   const loadedQuantityByUnit = visibleInventoryList.reduce<Record<string, number>>((acc, i) => {
@@ -732,10 +719,9 @@ export function WHInventoryListScreen() {
   const nonKgBatchCount = visibleInventoryList.filter((i) => i.unit !== 'kg').length;
 
   const stats = {
-    // 批次总数 (全量, 服务端)
+    // 批次总数（当前身份完整分页后的可见批次）
     totalBatches,
-    // 本页已加载条数 —— 类型分项都只覆盖这些, 所以「全部」也必须用它, 否则
-    // 全部(296) 与 鲜品+冻品+干货(50) 当场对不上。
+    // 已加载条数 —— 类型分项与「全部」都覆盖当前身份的完整分页结果。
     loaded: loadedCount,
     fresh: visibleInventoryList.filter((i) => i.type === "fresh").length,
     frozen: visibleInventoryList.filter((i) => i.type === "frozen").length,
@@ -744,7 +730,7 @@ export function WHInventoryListScreen() {
     loadedKgQuantity,
     nonKgBatchCount,
     loadedUnitKinds: loadedUnitKinds.length,
-    warningCount: visibleInventoryStats?.expiringBatchesCount ?? visibleInventoryList.filter((i) => i.warningType !== "normal").length,
+    warningCount: visibleInventoryList.filter((i) => i.warningType !== "normal").length,
     totalValue: visibleInventoryStats?.totalValue ?? null,
   };
 
@@ -773,7 +759,7 @@ export function WHInventoryListScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>库存管理</Text>
-        {/* 口径修正: 296 是**批次数**不是物料种类; 且列表只加载了其中一页, 明说清楚。 */}
+        {/* 当前身份的完整分页结果与顶部批次数同源。 */}
         <Text style={styles.headerSubtitle}>
           在库 {stats.totalBatches} 批
           {stats.loaded < stats.totalBatches ? ` | 已加载 ${stats.loaded}` : ''}
@@ -865,8 +851,7 @@ export function WHInventoryListScreen() {
             ]}
             textStyle={selectedType === "all" ? styles.filterChipTextActive : undefined}
           >
-            {/* 口径修正: 类型分项只覆盖已加载的这一页, 「全部」必须同源,
-                否则 全部(296) 与 鲜品+冻品+干货(50) 当场对不上。 */}
+            {/* 类型分项与「全部」都覆盖当前身份的完整分页结果。 */}
             全部({stats.loaded})
           </Chip>
           <Chip
@@ -947,14 +932,14 @@ export function WHInventoryListScreen() {
 
                   <View style={styles.cardContent}>
                     <View style={styles.mainInfo}>
-                      <Text style={styles.quantityValue}>{formatQuantity(item.quantity)}</Text>
+                      <Text testID={`wh-inventory-quantity-${item.id}`} style={styles.quantityValue}>{formatQuantity(item.quantity)}</Text>
                       <Text style={styles.unitText}>{item.unit}</Text>
                     </View>
 
                     <View style={styles.metaInfo}>
                       <View style={styles.metaItem}>
                         <Text style={styles.metaLabel}>批次</Text>
-                        <Text style={styles.metaValue}>{item.batchCount}个</Text>
+                        <Text testID={`wh-inventory-batch-count-${item.id}`} style={styles.metaValue}>{item.batchCount}个</Text>
                       </View>
                       <View style={styles.metaItem}>
                         <Text style={styles.metaLabel}>库位</Text>
@@ -1056,7 +1041,7 @@ export function WHInventoryListScreen() {
           <View style={styles.statsGrid}>
             {/* 口径修正: 这个数是批次数, 不是物料种类 —— 底部 sticky bar 的「共 N 批」同源。 */}
             <View style={styles.statsItem}>
-              <Text style={styles.statsValue}>{stats.totalBatches}</Text>
+              <Text testID="wh-inventory-total-batches" style={styles.statsValue}>{stats.totalBatches}</Text>
               <Text style={styles.statsLabel}>批次总数</Text>
             </View>
             {/* 口径修正: 重量族折 kg 合并, 计数族按单位各自成组 —— 绝不跨量纲相加。 */}
@@ -1079,7 +1064,7 @@ export function WHInventoryListScreen() {
               </View>
             )}
             <View style={styles.statsItem}>
-              <Text style={[styles.statsValue, { color: "#f44336" }]}>
+              <Text testID="wh-inventory-warning-count" style={[styles.statsValue, { color: "#f44336" }]}>
                 {stats.warningCount}
               </Text>
               <Text style={styles.statsLabel}>预警数</Text>
