@@ -81,23 +81,16 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
   --phase build \
   --base-sha '<登记的 Base SHA>' \
   --tests '<本次目标测试>' \
-  --stage-backend YES-STAGE  # 仅当用户要求合并后部署；只预上传，不安装/重启/切流
+  --stage-backend YES-STAGE  # 合并前跑；只预上传，不安装/重启/切流
 
-# 合入后【先预热】，不能省：把 CI 制品的跨境运输挪出发布窗口。幂等，可丢后台。
-# 不预热则构建段 204s(本地 fallback) vs 25s(命中 CI 制品)，且 200s+ 构建期间常有
-# 并发 session 推进 origin/main → 构建全成功却被 exact-main 复检整体作废。
-# --tests 与下一步同选择器或更窄（判据是集合包含）。看到 PREWARM=done / already-warm 再往下。
-# PREWARM=unavailable（rc=3）= 本组织这条车道结构性不可用（私有仓签不上 attestation）：照常往下
-# 发布，只是构建走本地 Maven。⛔ 不要重跑预热，也不要停在这一步。
-./scripts/deploy/prewarm-main-artifact.sh \
-  --tests '<本次目标测试>' \
-  --wait 420
-
-# 合入后在 clean exact origin/main worktree 自动检测范围、复用 manifest 并安全串行发布：
+# 合入后在 clean exact origin/main worktree 复用 build 阶段的 manifest 并安全串行发布（≈1 min）。
+# 不跑 prewarm-main-artifact.sh，也不开 --prefer-ci-artifact（脚本默认开，所以要显式关）：
+# CI 制品车道在本组织不通（私有仓无 attestation、制品存储配额满），等它只是白等再回落本地构建。
 ./scripts/deploy/release-cretas.sh \
   --phase deploy \
   --base-sha '<登记的 Base SHA>' \
   --tests '<本次目标测试>' \
+  --no-prefer-ci-artifact \
   --confirm-prod YES-PROD
 
 # 成败判据只看这一条：DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好出现 1 次。
@@ -117,7 +110,7 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
 - `Compiling 1 source file` — 测试编译只编 `--tests` 命中的类（原先编全部 1146 个测试源，耗 41.4s 只为跑一个类）。不传 `-Dcretas.testIncludes` 时仍是全编，即旧行为。若命中不到目标类，surefire 找不到测试会**直接失败**，不会产出跳过测试的制品。
 - `切换后健康轮次 1/3` — 切流后稳定观察由 5 轮改为 3 轮（覆盖 ~36s）。**auto-rollback 未改动**：任一轮非 200/active 仍会切回旧 upstream 并从备份恢复 jar。
 
-**从 GitHub 取制品送上服务器**（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）由 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1` 编排。⚠️ **2026-07-31 起它已是常规发布的默认路径，不再是旁路**（此处原写「不加速常规发布」，已随 PR#2061 作废）：`release-cretas.sh` 在 `--prefer-ci-artifact`（默认开）下调用 `release-ci-artifact.sh`，后者调用这个编排器复用 CI 已构建的 JAR，命中时 Java 侧**零次 Maven**（实测构建段 204s → 25s）；Web 侧同理走 `release-web-ci-artifact.sh`。命中的前提是制品已产出，所以合并后先跑 `prewarm-main-artifact.sh`（发布与 E2E 去重复 第 1 条）。未命中才回退本地 Maven 构建 + rsync delta（那条路 delta 实测 9.6×、只传 ~20MB，而 OSS PUT 无 delta 必传全量 —— 两条路各自占优的场景不同，不要据此认为本地构建总是更快）。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仍是排查与人工回退用途。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
+**CI 制品车道（`--prefer-ci-artifact` → `release-ci-artifact.sh` → `Publish-GitHubArtifactViaLightsailOss.ps1`，`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`）在本组织不通**，常规发布一律 `--no-prefer-ci-artifact`；提速靠合并前 `--phase build --stage-backend` 的 manifest 复用。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 只作排查。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md` 与 `.claude/skills/deploy-backend/references/lock-and-history.md`。
 
 ---
 
@@ -287,8 +280,8 @@ frontend/CretasFoodTrace/src/
 
 ### 发布与 E2E 去重复
 
-1. **统一发布入口** - 预期合并后立即部署时，合并前在候选 worktree 跑 `./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<tests>' --stage-backend YES-STAGE`（只构建 + 预上传，不安装、不重启、不切流；ACTIVE 归档与 scope 释放进同一个最终 commit）；合并后先 `./scripts/deploy/prewarm-main-artifact.sh --tests '<同一选择器>' --wait 420`，看到 `PREWARM=done`/`already-warm` 再从 clean exact `origin/main` 跑 `--phase deploy --confirm-prod YES-PROD`。成败判据只看 `DEPLOY_EXIT=0` 且 `RELEASE_FINAL_STATUS` 恰好 1 次；回执 `build="reused"` / `build_count=0` 是正常成功；deploy 阶段不比对测试选择器，宣称「本次 selector 已门禁」前读 manifest 的 `target_tests`。开始生产发布后不再合入无关 PR，直到回执完成。
-2. **不要手工拼发布** - manifest / tree-cache 复用、SHA-256 与 JAR 完整性、exact-main 复检、Web dist 缓存与四方哈希、蓝绿切流观察与自动回滚都由脚本强制：不复制、不削弱、不手工重做。`deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` / `release-web-manifest.sh` 只作单组件与排查入口；缓存或校验失败只回退一次本地构建，不 retry；禁止为等 CI 制品原地空等（prewarm 只轮询不触发 CI）。默认安全串行；并行发布仅限两侧任意切换顺序均 API 兼容的独立发布，且显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`（或 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`）；跨端接口、迁移、认证契约一律串行。
+1. **统一发布入口** - 预期合并后立即部署时，合并前在候选 worktree 跑 `./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<tests>' --stage-backend YES-STAGE`（只构建 + 预上传，不安装、不重启、不切流；ACTIVE 归档与 scope 释放进同一个最终 commit）；合并后立即从 clean exact `origin/main` 跑 `--phase deploy --tests '<同一选择器>' --no-prefer-ci-artifact --confirm-prod YES-PROD`（不跑 `prewarm-main-artifact.sh`，原因见上方「部署到服务器」）。成败判据只看 `DEPLOY_EXIT=0` 且 `RELEASE_FINAL_STATUS` 恰好 1 次；回执 `build="reused"` / `build_count=0` 是正常成功；deploy 阶段不比对测试选择器，宣称「本次 selector 已门禁」前读 manifest 的 `target_tests`。开始生产发布后不再合入无关 PR，直到回执完成。
+2. **不要手工拼发布** - manifest / tree-cache 复用、SHA-256 与 JAR 完整性、exact-main 复检、Web dist 缓存与四方哈希、蓝绿切流观察与自动回滚都由脚本强制：不复制、不削弱、不手工重做。`deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` / `release-web-manifest.sh` 只作单组件与排查入口；缓存或校验失败只回退一次本地构建，不 retry；不等 CI 制品。默认安全串行；并行发布仅限两侧任意切换顺序均 API 兼容的独立发布，且显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`（或 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`）；跨端接口、迁移、认证契约一律串行。
 3. **蓝绿槽位** - 见 Server Operations 节：部署 / 核对前读真实 upstream，禁止假设某槽永久停用；相同制品 no-op 仍要读 upstream 并验证 active systemd 与健康。
 4. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
 5. **生产验收责任** - Codex 常规发布默认完成服务级验收（真实 upstream、systemd/端口、直连健康、网关 HTTP、Web 四方哈希；`verify-release.sh` 回执完整且成功时不重复手工检查）。完整线上只读业务验收与 F006 只读 UI E2E 由用户/QA 执行，用户明确要求时才由 Codex 运行，且生产只读模式的业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变时只重跑失败场景。

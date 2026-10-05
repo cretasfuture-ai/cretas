@@ -126,13 +126,26 @@ assert_contains "$DEPLOY_SKILL" '--stage-backend YES-STAGE'
 assert_contains "$DEPLOY_SKILL" 'Candidate archives are also keyed by the exact `web-admin` Git tree.'
 assert_contains "$AGENTS_FILE" '--stage-backend YES-STAGE'
 
-# 合并后先预热这一步必须【三处都有】: AGENTS.md(Codex 的固定上下文) + 两份 deploy skill。
-# 🔴 .agents/ 与 .claude/ 两份 SKILL.md 是【各自独立跟踪的副本, 且早已内容分叉】——
-# 只改一份的话, 另一个 agent 永远看不到这一步。这正是本仓库反复出问题的
-# 「同一件事由多处承载, 只改一处静默失效」那一类。
-assert_contains "$AGENTS_FILE" 'prewarm-main-artifact.sh'
-assert_contains "$DEPLOY_SKILL" 'prewarm-main-artifact.sh'
-assert_contains "$ROOT_DIR/.claude/skills/deploy-backend/SKILL.md" 'prewarm-main-artifact.sh'
+assert_not_contains() {
+    local file=$1
+    local unexpected=$2
+    if grep -Fq -- "$unexpected" "$file"; then
+        echo "FAIL: unexpected '$unexpected' in $file" >&2
+        exit 1
+    fi
+}
+
+# 发布口径必须【三处一致】: AGENTS.md(Codex 的固定上下文) + 两份 deploy skill。
+# 🔴 .agents/ 与 .claude/ 两份 SKILL.md 是各自独立跟踪的副本 —— 只改一份, 另一个
+# agent 照旧执行旧步骤(形态 D)。原先这里钉的是「合并后先 prewarm」; 2026-09-15 起
+# CI 制品车道在本组织不通, 口径反转为: 不跑 prewarm、deploy 显式 --no-prefer-ci-artifact
+# (脚本里 --prefer-ci-artifact 默认开)。所以三处都要: 点名 prewarm(告诉操作者别跑)、
+# 带 --no-prefer-ci-artifact、且不含可直接执行的 prewarm 命令行。
+for doc in "$AGENTS_FILE" "$DEPLOY_SKILL" "$ROOT_DIR/.claude/skills/deploy-backend/SKILL.md"; do
+    assert_contains "$doc" 'prewarm-main-artifact.sh'
+    assert_contains "$doc" '--no-prefer-ci-artifact'
+    assert_not_contains "$doc" './scripts/deploy/prewarm-main-artifact.sh'
+done
 # ⚠️ 原文钉的是 AGENTS.md 里那句 '按 `web-admin` Git tree 保留可恢复缓存' —— 该句已
 #    被改写(现在是「Web dist 缓存与四方哈希…由脚本强制」), 断言从此钉在一句不存在的
 #    话上。守的性质没变: **AGENTS.md 必须告诉操作者 web dist 是按树复用缓存、不手工重建**,
