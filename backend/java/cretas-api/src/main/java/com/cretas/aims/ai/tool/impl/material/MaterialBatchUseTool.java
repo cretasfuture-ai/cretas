@@ -188,7 +188,7 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
     /**
      * 与 App 同口径: App 的 {@code POST /material-batches/{id}/use} 要 warehouse/inventory 读写,
      * 一线里只有仓库员 (warehouse_worker) 带这个权限 ⇒ AI 也只多给它 (2026-10-05 一线 AI 入口)。
-     * 操作员 / 出成率录入员在 App 里领用不了, 这里也不给 —— 即使意图名单里列了它们。
+     * 操作员 / 出成率录入员在 App 里领用不了, 这里也不给 (意图名单也已去掉它们, V20261101_56)。
      */
     @Override
     public boolean hasPermission(String userRole) {

@@ -40,7 +40,7 @@ class MaterialBatchUseToolRoleTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"operator", "yield_operator", "quality_inspector", "viewer", ""})
-    @DisplayName("App 里领用不了的角色, AI 里也不行 —— 即使意图名单里列了 operator")
+    @DisplayName("App 里领用不了的角色, AI 里也不行")
     void rolesWithoutWarehouseWriteDenied(String role) {
         assertThat(tool.hasPermission(role)).isFalse();
     }
