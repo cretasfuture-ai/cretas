@@ -85,7 +85,7 @@ npm run report
 ```
 
 **环境变量**:
-- `BASE_URL` — 默认 `http://localhost:5173` (本地 Vite dev), 生产用 `http://47.100.235.168:8088`
+- `BASE_URL` — 默认 `http://localhost:5173` (本地 Vite dev), 生产用 `http://139.196.165.140:8086`（web-admin 在 139 网关）
 - 测试数据: `Test.xlsx` (11 sheets), 264 行财务数据, enrichment 约需 30-40s
 
 ---
@@ -144,7 +144,7 @@ bash tests/api/test_authentication.sh
 用它们登录一律 401（长相是「全挂」，容易被误读成应用坏了）。
 
 ✅ **F006「六膳门食品科技」是团队自己的测试租户，可以写入。**
-⛔ **LIUSHANMEN「六膳门」是真客户**（名字很像，别搞混），只读。
+**LIUSHANMEN「六膳门」是真客户**（名字很像，别搞混）：任务没点名它就不写它（点名时按常设授权，判据同 F006）。
 
 ## 参考
 

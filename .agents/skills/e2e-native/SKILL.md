@@ -17,7 +17,7 @@ description: Cretas React Native 原生 E2E 测试。使用 Maestro 执行原生
 | `inject {screen}` | 为指定屏幕注入 testID（如 `inject EnhancedLoginScreen`） |
 | `inject --batch {module}` | 批量为模块下所有屏幕注入 testID（如 `inject --batch factory-admin`） |
 | `gen {role}` | 为指定角色生成 Maestro 测试流（如 `gen factory_admin`） |
-| `gen all` | 为所有 8 角色生成基础测试流 |
+| `gen all` | 为账号表里的全部角色生成基础测试流 |
 | `run {role}` | 执行指定角色的 Maestro 测试流（如 `run factory_admin`） |
 | `run all` | 顺序执行所有角色的测试流 |
 | `report` | 基于最近一次 run 结果生成 Markdown 测试报告 |
@@ -58,7 +58,7 @@ description: Cretas React Native 原生 E2E 测试。使用 Maestro 执行原生
 用它们登录两个端点都 401 —— 长相是「E2E 全挂」，很容易被误读成应用坏了。
 
 ✅ **F006「六膳门食品科技」是团队自己的测试租户，可以写入。**
-⛔ **LIUSHANMEN「六膳门」是真客户**（名字很像，别搞混），只读。
+**LIUSHANMEN「六膳门」是真客户**（名字很像，别搞混）：任务没点名它就不写它（点名时按常设授权，判据同 F006）。
 
 ---
 

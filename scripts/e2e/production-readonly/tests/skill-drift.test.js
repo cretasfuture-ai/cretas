@@ -16,6 +16,8 @@ test('canonical skill and compatibility pointer both route production to the sha
   assert.match(canonical, /actualBusinessWrites.*0/);
   assert.match(canonical, /F006 Production-Write Exception/);
   assert.match(canonical, /factoryUser\.factoryId === 'F006'/);
+  assert.match(canonical, /standing-authorization-and-visual-acceptance\.md/);
+  assert.doesNotMatch(canonical, /every non-F006 tenant/);
   assert.match(canonical, /read-only run remains zero-write/);
   assert.match(pointer, /CANONICAL: \.agents\/skills\/e2e-web-admin\/SKILL\.md/);
   assert.match(pointer, /scripts\/e2e\/production-readonly/);
@@ -47,7 +49,8 @@ test('repository AGENTS policy pins production Web acceptance to the guarded MCP
   assert.match(agents, /nonprod-business-flow-audit\.mjs/);
   assert.match(agents, /F006 生产业务写入特例/);
   assert.match(agents, /factoryUser\.factoryId == 'F006'/);
-  assert.match(agents, /其他所有租户在生产环境的业务写入必须为 0/);
+  assert.match(agents, /非 F006 租户按常设授权/);
+  assert.doesNotMatch(agents, /其他所有租户在生产环境的业务写入必须为 0/);
 });
 
 test('production read-only README keeps the F006 write exception outside the guarded harness', () => {

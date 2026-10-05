@@ -52,7 +52,8 @@ import { chromium } from 'playwright';
 const OUT = process.env.E2E_OUT || '.playwright-mcp/codex-current';
 const BASE = process.env.E2E_ADMIN_URL || 'http://localhost:5173';
 
-const browser = await chromium.launch({ headless: true });
+// headed: see .claude/rules/playwright-headed-mode.md (fonts, hover states, per-chat port)
+const browser = await chromium.launch({ headless: false });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
 
@@ -175,7 +176,9 @@ include a pre-write row count. Stop if the tenant is missing or inconsistent,
 the record is shared/global, or a cascade could cross tenant boundaries. Report
 actual record IDs or row counts and fresh readback.
 
-This exception does not authorize migrations, Security/permission changes,
-global configuration, bulk destructive work, or any non-F006 write. Those
-remain separately authorized scopes. Do not add F006 mutations to the
+Non-F006 tenants follow the standing authorization in
+`.claude/rules/standing-authorization-and-visual-acceptance.md`: a task that names that tenant's data
+authorizes it, with the same checks pinned to that tenant; tenants the task
+does not name get zero writes. Migrations, Security/permission changes,
+global configuration, and bulk destructive work remain separately authorized. Do not add F006 mutations to the
 production read-only whitelist; a read-only run remains zero-write for F006.

@@ -22,6 +22,15 @@ assert_contains() {
     }
 }
 
+assert_not_contains() {
+    local file=$1
+    local forbidden=$2
+    if grep -Fq -- "$forbidden" "$file"; then
+        echo "FAIL: forbidden '$forbidden' still present in $file" >&2
+        exit 1
+    fi
+}
+
 # ⚠️ 找不到时必须**出声**。原版是 `grep -Fnm1 ... | cut -d: -f1` —— 命中不了就返回
 #    空串, 而调用点是 `x=$(line_number ...)`; 在 `set -euo pipefail` 下这条赋值语句
 #    直接带着 rc=1 杀掉整个脚本, **一个字都不打**。2026-09-06 这个用例在 CI 里
@@ -126,13 +135,15 @@ assert_contains "$DEPLOY_SKILL" '--stage-backend YES-STAGE'
 assert_contains "$DEPLOY_SKILL" 'Candidate archives are also keyed by the exact `web-admin` Git tree.'
 assert_contains "$AGENTS_FILE" '--stage-backend YES-STAGE'
 
-# 合并后先预热这一步必须【三处都有】: AGENTS.md(Codex 的固定上下文) + 两份 deploy skill。
-# 🔴 .agents/ 与 .claude/ 两份 SKILL.md 是【各自独立跟踪的副本, 且早已内容分叉】——
-# 只改一份的话, 另一个 agent 永远看不到这一步。这正是本仓库反复出问题的
-# 「同一件事由多处承载, 只改一处静默失效」那一类。
-assert_contains "$AGENTS_FILE" 'prewarm-main-artifact.sh'
-assert_contains "$DEPLOY_SKILL" 'prewarm-main-artifact.sh'
-assert_contains "$ROOT_DIR/.claude/skills/deploy-backend/SKILL.md" 'prewarm-main-artifact.sh'
+# 发布不走 CI 制品车道（2026-09-15 起：本组织无 attestation + 制品存储配额，prewarm 等 420s 纯浪费），
+# 这件事必须【三处一致】: AGENTS.md(Codex 的固定上下文) + 两份 deploy skill。
+# .agents/ 与 .claude/ 两份 SKILL.md 是各自独立跟踪的副本，只改一份的话另一个 agent 永远看不到。
+# 2026-10-05 前这里钉的是「三处都有 prewarm-main-artifact.sh」，守的是已作废的「合并后先预热」；
+# 三处改成「不跑 prewarm」后它仍是绿的（字面碰巧命中），所以换成正向钉 deploy 参数 + 反向钉预热调用。
+for f in "$AGENTS_FILE" "$DEPLOY_SKILL" "$ROOT_DIR/.claude/skills/deploy-backend/SKILL.md"; do
+    assert_contains "$f" '--no-prefer-ci-artifact'
+    assert_not_contains "$f" '--wait 420'
+done
 # ⚠️ 原文钉的是 AGENTS.md 里那句 '按 `web-admin` Git tree 保留可恢复缓存' —— 该句已
 #    被改写(现在是「Web dist 缓存与四方哈希…由脚本强制」), 断言从此钉在一句不存在的
 #    话上。守的性质没变: **AGENTS.md 必须告诉操作者 web dist 是按树复用缓存、不手工重建**,

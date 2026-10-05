@@ -5,7 +5,7 @@
 | 错误 | 原因 | 解决命令 |
 |------|------|----------|
 | `Unknown column 'xxx' in 'field list'` | Entity 字段与数据库不匹配 | `ALTER TABLE xxx ADD COLUMN created_at TIMESTAMP DEFAULT NOW()` |
-| `NullPointerException` | 空指针访问 | `ssh root@47.100.235.168 "grep -A30 'NullPointerException' /www/wwwroot/cretas/cretas-backend.log"` |
+| `NullPointerException` | 空指针访问 | `ssh root@47.100.235.168 "grep -A30 'NullPointerException' /www/wwwroot/cretas/cretas-prod.log"` |
 | `Infinite recursion` (JSON) | 循环引用 | 添加 `@JsonIgnore` 或 `@JsonBackReference` |
 | `401 Unauthorized` | Token 过期/格式错误 | `echo "TOKEN" \| cut -d'.' -f2 \| base64 -d \| jq '.exp'` |
 | `403 Forbidden` | 用户角色/工厂权限不匹配 | 检查 JWT 中的 role 和 factoryId |
@@ -16,7 +16,7 @@
 
 | 错误 | 原因 | 解决命令 |
 |------|------|----------|
-| `Network request failed` | 无法连接 API | `curl -s http://47.100.235.168:10010/api/mobile/health` |
+| `Network request failed` | 无法连接 API | 在 47 本机 `curl -s http://localhost:<active 槽>/api/mobile/health` |
 | `timeout exceeded` | 请求超时 | 检查网络/增加超时时间 |
 | `Property 'xxx' does not exist` | 类型定义缺失 | 更新 interface 添加属性 |
 | `Type 'xxx' is not assignable` | 类型不匹配 | 检查 API 响应类型，避免 `as any` |
@@ -52,17 +52,16 @@
 
 ```bash
 # 检查后端日志
-ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/cretas-backend.log"
+ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/cretas-prod.log"
 
 # 检查 Python 日志
-ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/code/backend/python/python-services.log"
+ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/python-prod.log"
 
-# 验证 API 健康
-curl -s http://47.100.235.168:10010/api/mobile/health
-curl -s http://47.100.235.168:8083/health
+# 验证 API 健康 (后端端口不对公网开放; 先读 139 upstream 定 active 槽)
+ssh root@47.100.235.168 "curl -s http://localhost:<active 槽>/api/mobile/health; curl -s http://localhost:8083/health"
 
 # 检查数据库
-ssh root@47.100.235.168 "sudo -u postgres psql cretas_db -c 'SELECT 1'"
+ssh root@47.100.235.168 "sudo -u postgres psql cretas_prod_db -c 'SELECT 1'"
 
 # 前端环境
 npx expo doctor

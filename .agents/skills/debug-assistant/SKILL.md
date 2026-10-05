@@ -28,7 +28,7 @@ description: 调试辅助工具。快速诊断后端、前端和数据库问题�
 echo "=== Health Check ===" && \
 echo -n "Java:   " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:10010/api/mobile/health && echo "" && \
 echo -n "Python: " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8083/health && echo "" && \
-echo -n "Web:    " && curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8088/ && echo ""
+echo -n "Web:    " && curl -s -o /dev/null -w "%{http_code}" http://139.196.165.140:8086/ && echo ""
 
 # 检查进程
 ssh root@47.100.235.168 "ps aux | grep -E 'java|uvicorn' | grep -v grep"

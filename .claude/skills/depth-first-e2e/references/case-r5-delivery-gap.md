@@ -113,5 +113,5 @@ Rule 10 prevents that outcome by making delivery a mandatory, enumerated step �
 - Rule 9 (independent Critic) — final R5-⑤ Critic didn't flag the delivery gap because it wasn't in their prompt scope
 
 **Related skills**:
-- `superpowers:finishing-a-development-branch` — dedicated skill for the "I have commits, now what?" question. Rule 10 essentially requires invoking a flow like this one.
+- `deploy-backend` — the "I have commits, now what?" path (merge to main, release from main, verify the running artifact). Rule 10 essentially requires walking it.
 - `engineering:deploy-checklist` — pre-deploy verification. Rule 10 should integrate with it when prod deploy is part of the round.

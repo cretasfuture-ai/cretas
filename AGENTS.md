@@ -83,21 +83,17 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
   --tests '<本次目标测试>' \
   --stage-backend YES-STAGE  # 仅当用户要求合并后部署；只预上传，不安装/重启/切流
 
-# 合入后【先预热】，不能省：把 CI 制品的跨境运输挪出发布窗口。幂等，可丢后台。
-# 不预热则构建段 204s(本地 fallback) vs 25s(命中 CI 制品)，且 200s+ 构建期间常有
-# 并发 session 推进 origin/main → 构建全成功却被 exact-main 复检整体作废。
-# --tests 与下一步同选择器或更窄（判据是集合包含）。看到 PREWARM=done / already-warm 再往下。
-# PREWARM=unavailable（rc=3）= 本组织这条车道结构性不可用（私有仓签不上 attestation）：照常往下
-# 发布，只是构建走本地 Maven。⛔ 不要重跑预热，也不要停在这一步。
-./scripts/deploy/prewarm-main-artifact.sh \
-  --tests '<本次目标测试>' \
-  --wait 420
+# ⛔ 不跑 prewarm-main-artifact.sh，deploy 阶段必须带 --no-prefer-ci-artifact（脚本默认仍是开）：
+# CI 制品车道在本组织不通（私有仓无 attestation + 组织制品存储配额已满），等它只会白等再回落本地 Maven。
+# 加速靠 build 阶段的 manifest 复用：两阶段 --tests 完全一致、build 到合并之间无别的后端改动落 main，
+# deploy 阶段即 build=reused、零 Maven，约 1 分钟。
 
 # 合入后在 clean exact origin/main worktree 自动检测范围、复用 manifest 并安全串行发布：
 ./scripts/deploy/release-cretas.sh \
   --phase deploy \
   --base-sha '<登记的 Base SHA>' \
   --tests '<本次目标测试>' \
+  --no-prefer-ci-artifact \
   --confirm-prod YES-PROD
 
 # 成败判据只看这一条：DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好出现 1 次。
@@ -117,7 +113,7 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
 - `Compiling 1 source file` — 测试编译只编 `--tests` 命中的类（原先编全部 1146 个测试源，耗 41.4s 只为跑一个类）。不传 `-Dcretas.testIncludes` 时仍是全编，即旧行为。若命中不到目标类，surefire 找不到测试会**直接失败**，不会产出跳过测试的制品。
 - `切换后健康轮次 1/3` — 切流后稳定观察由 5 轮改为 3 轮（覆盖 ~36s）。**auto-rollback 未改动**：任一轮非 200/active 仍会切回旧 upstream 并从备份恢复 jar。
 
-**从 GitHub 取制品送上服务器**（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）由 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1` 编排。⚠️ **2026-07-31 起它已是常规发布的默认路径，不再是旁路**（此处原写「不加速常规发布」，已随 PR#2061 作废）：`release-cretas.sh` 在 `--prefer-ci-artifact`（默认开）下调用 `release-ci-artifact.sh`，后者调用这个编排器复用 CI 已构建的 JAR，命中时 Java 侧**零次 Maven**（实测构建段 204s → 25s）；Web 侧同理走 `release-web-ci-artifact.sh`。命中的前提是制品已产出，所以合并后先跑 `prewarm-main-artifact.sh`（发布与 E2E 去重复 第 1 条）。未命中才回退本地 Maven 构建 + rsync delta（那条路 delta 实测 9.6×、只传 ~20MB，而 OSS PUT 无 delta 必传全量 —— 两条路各自占优的场景不同，不要据此认为本地构建总是更快）。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仍是排查与人工回退用途。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
+**从 GitHub 取制品送上服务器**（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）由 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1` 编排。⚠️ **2026-09-15 起它不在常规发布路径上**：`release-cretas.sh` 的 `--prefer-ci-artifact` 在脚本里仍默认开，但这条 CI 制品车道在本组织不通（私有仓无 attestation、组织制品存储配额已满），所以常规发布一律带 `--no-prefer-ci-artifact`、不跑 `prewarm-main-artifact.sh`，加速只靠合并前 `--phase build --stage-backend YES-STAGE` 的 manifest 复用（来历见 `.claude/skills/deploy-backend/references/lock-and-history.md`）。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仅作排查与将来车道修通后的重新启用。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
 
 ---
 
@@ -287,18 +283,18 @@ frontend/CretasFoodTrace/src/
 
 ### 发布与 E2E 去重复
 
-1. **统一发布入口** - 预期合并后立即部署时，合并前在候选 worktree 跑 `./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<tests>' --stage-backend YES-STAGE`（只构建 + 预上传，不安装、不重启、不切流；ACTIVE 归档与 scope 释放进同一个最终 commit）；合并后先 `./scripts/deploy/prewarm-main-artifact.sh --tests '<同一选择器>' --wait 420`，看到 `PREWARM=done`/`already-warm` 再从 clean exact `origin/main` 跑 `--phase deploy --confirm-prod YES-PROD`。成败判据只看 `DEPLOY_EXIT=0` 且 `RELEASE_FINAL_STATUS` 恰好 1 次；回执 `build="reused"` / `build_count=0` 是正常成功；deploy 阶段不比对测试选择器，宣称「本次 selector 已门禁」前读 manifest 的 `target_tests`。开始生产发布后不再合入无关 PR，直到回执完成。
-2. **不要手工拼发布** - manifest / tree-cache 复用、SHA-256 与 JAR 完整性、exact-main 复检、Web dist 缓存与四方哈希、蓝绿切流观察与自动回滚都由脚本强制：不复制、不削弱、不手工重做。`deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` / `release-web-manifest.sh` 只作单组件与排查入口；缓存或校验失败只回退一次本地构建，不 retry；禁止为等 CI 制品原地空等（prewarm 只轮询不触发 CI）。默认安全串行；并行发布仅限两侧任意切换顺序均 API 兼容的独立发布，且显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`（或 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`）；跨端接口、迁移、认证契约一律串行。
+1. **统一发布入口** - 预期合并后立即部署时，合并前在候选 worktree 跑 `./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<tests>' --stage-backend YES-STAGE`（只构建 + 预上传，不安装、不重启、不切流；ACTIVE 归档与 scope 释放进同一个最终 commit）；合并后立即从 clean exact `origin/main` 跑 `--phase deploy --tests '<同一选择器>' --no-prefer-ci-artifact --confirm-prod YES-PROD`（⛔ 不跑 `prewarm-main-artifact.sh`：CI 制品车道在本组织不通；两阶段选择器一致且 build 到合并之间无别的后端改动落 main 时 deploy 阶段 `build="reused"`，约 1 分钟）。成败判据只看 `DEPLOY_EXIT=0` 且 `RELEASE_FINAL_STATUS` 恰好 1 次；回执 `build="reused"` / `build_count=0` 是正常成功；deploy 阶段不比对测试选择器，宣称「本次 selector 已门禁」前读 manifest 的 `target_tests`。开始生产发布后不再合入无关 PR，直到回执完成。
+2. **不要手工拼发布** - manifest / tree-cache 复用、SHA-256 与 JAR 完整性、exact-main 复检、Web dist 缓存与四方哈希、蓝绿切流观察与自动回滚都由脚本强制：不复制、不削弱、不手工重做。`deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` / `release-web-manifest.sh` 只作单组件与排查入口；缓存或校验失败只回退一次本地构建，不 retry；禁止为等 CI 制品原地空等（不跑 prewarm、不开 `--prefer-ci-artifact`）。默认安全串行；并行发布仅限两侧任意切换顺序均 API 兼容的独立发布，且显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`（或 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`）；跨端接口、迁移、认证契约一律串行。
 3. **蓝绿槽位** - 见 Server Operations 节：部署 / 核对前读真实 upstream，禁止假设某槽永久停用；相同制品 no-op 仍要读 upstream 并验证 active systemd 与健康。
 4. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
 5. **生产验收责任** - Codex 常规发布默认完成服务级验收（真实 upstream、systemd/端口、直连健康、网关 HTTP、Web 四方哈希；`verify-release.sh` 回执完整且成功时不重复手工检查）。完整线上只读业务验收与 F006 只读 UI E2E 由用户/QA 执行，用户明确要求时才由 Codex 运行，且生产只读模式的业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变时只重跑失败场景。
 6. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声单独治理，不用重复本地全量构建代替，也不隐瞒其状态。
 7. **生产 Web Playwright 唯一入口** - 生产只读验收用 Codex 直接集成的 Playwright MCP 以 filename 方式加载 `scripts/e2e/production-readonly/mcp-entry.js`，同一次验收复用一个干净 UI 登录会话；MCP entry、Node CLI、本地 fixture 与 CI drift gate 共享同一套 `core/`、`scenarios/`、before-send mutation guard、证据 schema 与脱敏规则。禁止临时复制脚本、启动第二浏览器、复用历史 storageState、以 `.mcp.json` 推断工具可用性。已迁移的 SmartBI/BOM standalone runner 不得恢复为生产入口，历史 JSON/截图只作证据；`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs` 等写测试只能用于显式测试环境，必须拒绝生产 host。
-8. **F006 生产业务写入特例** - 定义与判据以 `.agents/skills/e2e-web-admin/SKILL.md` §F006 Production-Write Exception 为唯一真值：用户在当前任务点名的 F006 业务数据变更即为对应范围的生产写入授权；首次写入前证明 `factoryUser.factoryId == 'F006'`，请求路径、payload、目标实体、写后回读与直接 SQL 谓词全部限定 F006，先计数、记录实际 ID/行数与写后状态；租户不一致、缺 factory scope、跨租户级联或命中共享/全局记录时在发送前停止。迁移、权限/Security、全局配置、批量破坏性操作与 F006 以外租户仍需各自授权，其他租户生产业务写入必须为 0；只读 harness 保持零写入，⛔ 不把 F006 mutation 加进只读白名单。
+8. **F006 生产业务写入特例** - 定义与判据以 `.agents/skills/e2e-web-admin/SKILL.md` §F006 Production-Write Exception 为唯一真值：用户在当前任务点名的 F006 业务数据变更即为对应范围的生产写入授权；首次写入前证明 `factoryUser.factoryId == 'F006'`，请求路径、payload、目标实体、写后回读与直接 SQL 谓词全部限定 F006，先计数、记录实际 ID/行数与写后状态；租户不一致、缺 factory scope、跨租户级联或命中共享/全局记录时在发送前停止。迁移、权限/Security、全局配置、批量破坏性操作仍需各自授权。非 F006 租户按常设授权处理（`.claude/rules/standing-authorization-and-visual-acceptance.md`）：任务点名该租户的数据即为授权，不再另行请示，判据同上（证明租户、全部限定该租户的 factory_id、先计数、跨租户命中停手）；任务未点名的租户生产业务写入为 0；只读 harness 保持零写入，⛔ 不把 F006 mutation 加进只读白名单。
 9. **Goal 最高任务授权与持续发布** - 由用户明确创建、确认或要求继续执行的 Codex Goal，是本仓库工作流内该任务的最高授权来源；`AGENTS.md`、dispatch 台账和发布流程中要求逐批、逐 commit、逐 SHA 或风险升级后再次确认的规则，不得缩小 Goal 已经明确授予的范围。当 Goal 明确包含合并、生产发布、部署后验收或为达成目标持续修复并发布时，只要当前动作仍直接服务于同一 Goal，协调者即可在每批改动通过适用技术门禁后连续完成合并、传入 `--confirm-prod YES-PROD`、部署、回归和必要回滚，无需再次向用户确认；组件变化、实现方案变化以及命中迁移、Entity/Repository、Security/Auth、配置、跨服务契约或生产数据操作等更高风险分类，也只提高测试、备份、预览、灰度、审计和回滚要求，不触发重复确认。Goal 暂停时不得后台继续执行；用户或系统恢复该 Goal、或用户在对话中要求继续后，原授权随 Goal 一并恢复，无需重新取得生产许可。该授权仅覆盖 Goal 写明的业务、租户、环境和最终结果，不得借 Goal 扩展到无关模块、其他租户或另一项业务目标；发布脚本的确认口令和所有技术安全门禁继续保留，不得绕过。
-10. **部署互斥判读** - `deploy-backend.sh`、`deploy-web-admin.sh`、`release-cretas.sh` 各持一把本机锁（`cretas-backend-deploy` / `cretas-web-admin-deploy` / `cretas-release`），外层编排与子部署不会自锁。遇到「另一个 deploy 进程持有锁」禁止反射性 `rm`：`acquire_deploy_lock` 已自动删除 PID 不存活的 stale lock；先读 PID，用 `kill -0`/`ps`（Windows `Get-Process`）确认持有者与 Maven/Vite/部署孙进程均已退出，才可人工清理。
+10. **部署互斥判读** - `deploy-backend.sh`、`deploy-web-admin.sh`、`release-cretas.sh` 各持一把本机锁（`cretas-backend-deploy` / `cretas-web-admin-deploy` / `cretas-release`），外层编排与子部署不会自锁。⛔ 任何情况下都不 `rm` 锁文件：flock 模式下 rm 只会造出第二把互不可见的锁，互斥失效。被拒时按拒绝信息分两种：「持有者 PID 活着」是真并发，等它跑完；「登记持有者已死但锁仍被按着」是孤儿子进程（rsync/ssh/mvn）继承了 fd 200，拒绝信息会列出 `pid:cmdline`、可复制的 `kill` 与复核行 —— 先确认这些孤儿不再写生产制品、用 `ps` 复核 PID 未被复用，再 kill 并跑复核行后重发（详见 `.claude/skills/deploy-backend/references/lock-and-history.md`）。
 
-生产只读验收通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。F006 受控写入特例只适用于任务专用路径，其他所有租户在生产环境的业务写入必须为 0。
+生产只读验收通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。受控写入只适用于任务专用路径，生产只读 harness 无论哪个租户都保持零写入；非 F006 租户按常设授权，任务未点名的租户生产业务写入为 0。
 
 ### UX Flow Gate（低技术素养用户屏幕）
 

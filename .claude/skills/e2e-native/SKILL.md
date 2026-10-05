@@ -48,7 +48,7 @@ allowed-tools:
 | 质检员 | `f006_quality_insp` | `$TEST_QUALITY_INSP_PASS` | F006 | QualityInspectorNavigator |
 
 ⛔ F001 那套账号（`factory_admin1` / `workshop_sup1` …）是死值：迁移 `V20261029_68` 把工厂域收敛成只剩 F006 + LIUSHANMEN，F001 连同账号物理删除，用它们登录一律 401，长相是「E2E 全挂」，别误读成应用坏了。
-✅ F006「六膳门食品科技」是团队自己的测试租户，可以写入。⛔ LIUSHANMEN「六膳门」是真客户，名字很像，只读。
+✅ F006「六膳门食品科技」是团队自己的测试租户，可以写入。LIUSHANMEN「六膳门」是真客户，名字很像别搞混：任务没点名它就不写它（点名时按常设授权，判据同 F006）。
 
 ## 环境检查（run 前）
 
