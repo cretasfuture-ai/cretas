@@ -120,25 +120,31 @@ If shared prerequisites and deployed artifacts did not change, rerun only the fa
 
 ## F006 Production-Write Exception
 
-F006 is the only tenant-level exception to the repository's default
-production zero-write policy. A user request in the current task to create,
-update, delete, clean up, regress, or end-to-end verify specific F006 business
-data authorizes only that stated mutation scope.
+F006 is the team's own test tenant. A user request in the current task to
+create, update, delete, clean up, regress, or end-to-end verify specific F006
+business data authorizes that stated mutation scope.
+
+Other tenants follow the standing authorization in
+`.claude/rules/standing-authorization-and-visual-acceptance.md`: when the owner's task names a non-F006
+tenant's data, that is the authorization; do not ask again. The checks below
+are the same for every tenant, pinned to the tenant the task names. They are
+what make the write land in the right place, not a request for permission.
+Tenants the task does not name get zero production business writes.
 
 Before the first write:
 
 - Prove from the live login response or trusted session that
-  `factoryUser.factoryId === 'F006'`; also verify the visible page and target
-  API/entity belong to F006.
+  `factoryUser.factoryId === 'F006'` (or the named tenant's ID); also verify
+  the visible page and target API/entity belong to that tenant.
 - State the expected mutations and keep every request path, payload, entity,
-  readback, and direct-SQL predicate scoped to F006. Direct SQL must use an
-  explicit `factory_id = 'F006'` constraint or a provable foreign-key join to
-  an F006 parent, plus a pre-write row count.
+  readback, and direct-SQL predicate scoped to that tenant. Direct SQL must use
+  an explicit `factory_id = '<tenant>'` constraint or a provable foreign-key
+  join to a parent of that tenant, plus a pre-write row count.
 - Stop before send if tenant identity is missing or inconsistent, the target
-  is shared/global, or a cascade could affect another tenant.
+  is shared/global, or a cascade could affect a tenant other than the named one.
 - Record actual IDs or row counts and fresh readback after the write. Separate
   authorization remains required for migrations, Security/permissions, global
-  configuration, bulk destructive work, and every non-F006 tenant.
+  configuration, and bulk destructive work.
 
 Do not weaken `scripts/e2e/production-readonly/`, add F006 mutations to its
 query-only POST registry, or revive a retired production runner. A production
