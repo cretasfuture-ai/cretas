@@ -52,7 +52,8 @@ import { chromium } from 'playwright';
 const OUT = process.env.E2E_OUT || '.playwright-mcp/codex-current';
 const BASE = process.env.E2E_ADMIN_URL || 'http://localhost:5173';
 
-const browser = await chromium.launch({ headless: true });
+// headed: see .claude/rules/playwright-headed-mode.md (fonts, hover states, per-chat port)
+const browser = await chromium.launch({ headless: false });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
 

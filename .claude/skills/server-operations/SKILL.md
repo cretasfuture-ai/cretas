@@ -39,8 +39,8 @@ ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.con
 
 | 内容 | 服务器 | 路径 | 访问 |
 |---|---|---|---|
-| Java 后端 | **47** | `/www/wwwroot/cretas/`（jar `aims-0.0.1-SNAPSHOT.jar`，`.env.prod`，`restart-prod.sh`，`cretas-prod.log`，`logs/`） | 蓝绿 10010 / 10020 |
-| Python 服务 | **47** | `/www/wwwroot/cretas/code/backend/python/`（venv38，`python-services.log`） | 8083 |
+| Java 后端 | **47** | `/www/wwwroot/cretas/`（jar `aims-0.0.1-SNAPSHOT.jar`，`.env.prod`，`restart-prod.sh`，`logs/`；systemd 输出 `cretas-prod.log` / green 槽 `cretas-prod-green.log`） | 蓝绿 10010 / 10020 |
+| Python 服务 | **47** | `/www/wwwroot/cretas/code/backend/python/`（venv38，应用日志 `python-service.log`；systemd 输出 `/www/wwwroot/cretas/python-prod.log`） | 8083 |
 | Embedding gRPC | **47** | `/www/wwwroot/cretas/embedding-service/` | 9090 |
 | ONNX 模型 | **47** | `/www/wwwroot/cretas/models/gte-base-zh-finetuned-onnx-fixed/` | |
 | PostgreSQL / Redis | **47** | systemd | localhost only |
@@ -115,7 +115,7 @@ aliyun ecs AuthorizeSecurityGroup --RegionId cn-shanghai --SecurityGroupId <sg-i
 | 症状 | 排查 |
 |---|---|
 | Java 无法启动 | 先读 upstream 确定该看哪槽 → `journalctl -u cretas-backend(-green) -n 100` → `env | grep DB_` → `ss -tlnp | grep 1001` |
-| Python 502 / 500 | `ps aux | grep uvicorn` → `tail -50 python-services.log` → `ss -tlnp | grep 8083` |
+| Python 502 / 500 | `ps aux | grep uvicorn` → `tail -50 /www/wwwroot/cretas/python-prod.log` → `ss -tlnp | grep 8083` |
 | 前端白屏 | 浏览器 Console 看 API 地址 / CORS → 139 上 `nginx -t` → `ls /www/wwwroot/web-admin/index.html` → nginx 日志 |
 | DB 连接失败 | `systemctl status postgresql` → `pg_hba.conf` → `.env.prod` 密码 |
 | 磁盘满 | `du -sh /www/wwwroot/cretas/logs/* | sort -rh | head`；jar 备份 `.bak.*` 自动只留 3 份，历史命名的要手动清 |
