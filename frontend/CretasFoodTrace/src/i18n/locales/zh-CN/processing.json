@@ -536,6 +536,7 @@
       "deleteFailed": "删除设备失败",
       "statusUpdateSuccess": "设备状态更新成功",
       "statusUpdateFailed": "更新设备状态失败",
+      "duplicateCode": "设备编号已存在，请更换编号或返回列表查看。",
       "mutationErrorRetry": "请检查输入或网络后重试"
     }
   },

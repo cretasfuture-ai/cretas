@@ -534,6 +534,7 @@
       "deleteFailed": "Failed to delete equipment",
       "statusUpdateSuccess": "Equipment status updated successfully",
       "statusUpdateFailed": "Failed to update equipment status",
+      "duplicateCode": "Equipment code already exists. Choose a different code or return to the list.",
       "mutationErrorRetry": "Check the input or network connection and try again"
     }
   },
