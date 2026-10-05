@@ -24,7 +24,7 @@ class DataScopeServiceCoverageContractTest {
     private static final Map<String, String> EXPECTED_METHODS = expectedMethods();
 
     @Test
-    void exactlyEightReviewedServiceMethodsAreDataScoped() throws IOException {
+    void exactlyFourteenReviewedServiceMethodsAreDataScoped() throws IOException {
         Map<String, Integer> annotationCounts = new LinkedHashMap<>();
 
         try (var paths = Files.walk(SERVICES)) {
@@ -42,19 +42,34 @@ class DataScopeServiceCoverageContractTest {
         assertThat(annotationCounts)
                 .as("The production @DataScope surface changed; review the new method and its role acceptance before updating this contract")
                 .containsOnlyKeys(expectedFiles.toArray(String[]::new));
-        assertThat(annotationCounts.values()).containsOnly(1, 2);
-        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(8);
+        Map<String, Integer> expectedCounts = new LinkedHashMap<>();
+        EXPECTED_METHODS.keySet().forEach(key ->
+                expectedCounts.merge(key.substring(0, key.indexOf('#')), 1, Integer::sum));
+        assertThat(annotationCounts).isEqualTo(expectedCounts);
+        assertThat(annotationCounts.values()).containsOnly(1, 8);
+        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(14);
 
         EXPECTED_METHODS.forEach((methodKey, ignored) -> {
             try {
                 String[] parts = methodKey.split("#", 2);
                 String file = parts[0];
-                String method = parts[1];
+                String[] signature = parts[1].split("/", 2);
+                String method = signature[0];
                 String source = stripComments(Files.readString(SERVICES.resolve(file), StandardCharsets.UTF_8));
                 assertThat(source)
                         .as("%s must keep @DataScope on %s", file, method)
                         .containsPattern("(?s)@DataScope\\s*\\([^)]*\\).{0,500}\\b" + method + "\\s*\\(");
-            } catch (IOException e) {
+                Class<?> implementation = Class.forName("com.cretas.aims.service."
+                        + file.substring(0, file.length() - ".java".length()).replace('/', '.'));
+                long annotatedMatches = java.util.Arrays.stream(implementation.getDeclaredMethods())
+                        .filter(candidate -> candidate.getName().equals(method))
+                        .filter(candidate -> signature.length == 1
+                                || candidate.getParameterCount() == Integer.parseInt(signature[1]))
+                        .filter(candidate -> candidate.isAnnotationPresent(com.cretas.aims.annotation.DataScope.class))
+                        .count();
+                assertThat(annotatedMatches).as("%s must identify exactly one annotated signature", methodKey)
+                        .isEqualTo(1);
+            } catch (IOException | ClassNotFoundException e) {
                 throw new IllegalStateException(e);
             }
         });
@@ -65,6 +80,12 @@ class DataScopeServiceCoverageContractTest {
         expected.put("impl/CustomerServiceImpl.java#getCustomerList", "getCustomerList");
         expected.put("impl/MaterialBatchServiceImpl.java#getMaterialBatchList", "getMaterialBatchList");
         expected.put("impl/MaterialBatchServiceImpl.java#getLowStockWarnings", "getLowStockWarnings");
+        expected.put("impl/MaterialBatchServiceImpl.java#getMaterialBatchesByStatus/2", "status");
+        expected.put("impl/MaterialBatchServiceImpl.java#getMaterialBatchesByStatus/3", "status/warehouse");
+        expected.put("impl/MaterialBatchServiceImpl.java#getMaterialBatchesByStatus/4", "status/product/warehouse");
+        expected.put("impl/MaterialBatchServiceImpl.java#getWipBatches", "WIP");
+        expected.put("impl/MaterialBatchServiceImpl.java#getExpiringBatches", "expiring");
+        expected.put("impl/MaterialBatchServiceImpl.java#getExpiredBatches", "expired");
         expected.put("impl/QualityReturnOrderServiceImpl.java#list", "list");
         expected.put("inventory/impl/PurchaseServiceImpl.java#getPurchaseOrders", "getPurchaseOrders");
         expected.put("inventory/impl/ReturnOrderServiceImpl.java#getReturnOrders", "getReturnOrders");
