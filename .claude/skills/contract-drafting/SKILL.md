@@ -9,7 +9,7 @@ description: Use when drafting, revising, pricing, or auditing any contract, NDA
 
 对外合同不是写完就发的文字，是一串可核验的决定。核心原则：**拍板记录是唯一商务依据；发送稿里没有一个字是关于文件本身的；每处改动可被脚本核验。**
 
-**REQUIRED READING（动手前）**：本目录 `standards.md`（流程、条款原则、文字标准、坑）。条款写法查 `clauses.md`。
+**动手前先读**：本目录 `standards.md`（流程、条款原则、文字标准、坑）。条款写法查 `clauses.md`。
 
 ## When to Use
 

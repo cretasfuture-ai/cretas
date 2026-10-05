@@ -1,6 +1,6 @@
 ---
 name: depth-first-e2e
-description: Use when designing, running, or auditing multi-round E2E campaigns; enforcing numeric coverage thresholds; writing L3/L4 deep tests; a deep E2E test finds a real bug; reviewing E2E depth/coverage; or deciding whether an E2E round is test-complete versus delivery-complete. Triggers on "5 轮测试", "多轮 E2E", "E2E 综合测试", "spec §8.2 阈值", "测试覆盖率", "same-cause sweep", "深度测试", "depth-first".
+description: Use when designing, running, or auditing a multi-round E2E campaign, deciding whether an E2E round is deep (real submit + persistence readback) or shallow, or doing a same-cause sweep after a deep test finds a bug.
 ---
 
 # Depth-First E2E

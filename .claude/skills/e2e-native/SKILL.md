@@ -19,7 +19,7 @@ allowed-tools:
 | _(空)_ | 列出子命令和用法 |
 | `scan` / `scan --fix` | 扫描 `.tsx` 的 testID 覆盖率；`--fix` 额外给出建议的 testID 名，审核后用 Edit 注入 |
 | `inject {screen}` / `inject --batch {module}` | 为指定屏幕 / 模块下所有屏幕注入 testID |
-| `gen {role}` / `gen all` | 生成角色的 Maestro 测试流（8 角色各有独立 Navigator） |
+| `gen {role}` / `gen all` | 生成角色的 Maestro 测试流（7 个角色各有独立 Navigator，见下表） |
 | `run {role}` / `run all` | 执行测试流；可选 `--apk <path>`、`--device <id>` |
 | `report` | 基于最近一次 run 生成报告 |
 
@@ -56,7 +56,7 @@ allowed-tools:
 
 ## 关键约束
 
-1. 所有选择器用 `id:`（基于 testID），⛔ 禁止文本匹配（i18n 双语文本不稳定）、禁止坐标定位；用 `assertVisible` + `timeout` 等元素，`env:` 参数化凭证，`runFlow:` 复用 `common/_login.yaml` / `_logout.yaml` / `_wait_for_app.yaml`。
+1. 所有选择器用 `id:`（基于 testID），不用文本匹配（i18n 双语文本不稳定）和坐标定位；用 `assertVisible` + `timeout` 等元素，`env:` 参数化凭证，`runFlow:` 复用 `common/_login.yaml` / `_wait_for_app.yaml` / `_retry_load.yaml` / `_dismiss_anr.yaml`。
 2. 登录是同组件内状态切换（LandingView → LoginFormView），不是页面导航。
 3. 封装组件（`NeoButton` 等）要先确认 testID 透传到根元素（`grep -n testID src/components/common/NeoButton.tsx`），不透传就先改组件定义再在调用处加；改公共组件要告知用户。
 4. inject 只加 `testID` 属性，不动样式 / 逻辑；命名 `{screen}-{element}-{semantic}`，规则见 `references/testid-naming-convention.md`。扫描覆盖 TouchableOpacity / TextInput / Pressable / ScrollView / NeoButton / Paper Button·IconButton·FAB / FlatList·SectionList。

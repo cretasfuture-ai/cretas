@@ -1,11 +1,11 @@
 ---
 name: server-operations
-description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.165.140 网关), 内含全部 6 台机器的全局地图(cretas 2 台 + pomelo-x 2 台 + AWS 东京 VPN 2 台)。触发: SSH 上服务器; 部署/切流/健康检查/看日志/查端口/磁盘内存; systemd 服务与启动依赖链; 蓝绿槽位; smartbi 数据库 schema 变更硬规则(migration runner, 禁手动 psql DDL); 环境变量 .env.prod; 阿里云安全组; 数据库备份; 查服务器/数据库/阿里云凭证。凡涉及"服务器/部署/运维/systemd/日志/migration/凭证/安全组"必读。
+description: cretas 服务器运维：6 台机器地图、SSH 登录、systemd 与启动依赖、日志、端口、蓝绿槽位判定、smartbi 库 schema 迁移规则、数据库备份、阿里云安全组、凭证文件位置。发布流程见 deploy-backend。
 ---
 
-# 服务器运维规范
+# 服务器运维
 
-**最后更新**: 2026-09-05（合并原 `aliyun-operations` skill；删下线的 test 环境与历史叙事）
+**最后更新**: 2026-10-05（部署入口并入 `deploy-backend`，去掉重复与过期的发布说明）
 
 ## 全局服务器地图（6 台）
 
@@ -18,20 +18,24 @@ description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.
 | 5 | `52.196.123.155` | 2C / 0.9GB / 38GB | **东京 tokyo-a** VPN 主节点 + 制品缓存 | `ubuntu` + `~/.ssh/ai-egress-tokyo-windows_ed25519` 或 `LightsailDefaultKeyPair-ap-northeast-1.pem` | 无 |
 | 6 | `57.183.75.185` | 2C / 0.4GB / 19GB | **东京 tokyo-b** VPN 备节点 | `ubuntu` + `LightsailDefaultKeyPair-ap-northeast-1.pem` | 无 |
 
-1–4 阿里云，5–6 AWS Lightsail。不在表里的两台：加拿大 Mac mini（自建 CI runner，见 `ci-runner-routing.md`）和本机 Windows/RTX。**YOLO / LIUSHANMEN 的筛查、训练与目标测试只在本机 Windows/RTX 跑**（`scripts/windows/test-yolo-local.ps1`），不用 Mac mini / `canada-mini` / `codex-mac`；生产采集与门控上传的控制不变。⛔ 5 和 6 都在跑 VPN（openvpn / xray / arcway-agent），不是空闲备机，动它们 = 断网风险。规格是快照，可用内存 / 磁盘当场重测（`nproc; free -h; df -h /; uptime`）；四台里三台 systemd journal 无上限，根治是设 `SystemMaxUse=`。
+1–4 是阿里云，5–6 是 AWS Lightsail。
 
-## 🔴 蓝绿双槽：查 47 上的 Java 之前先读 upstream
+- 不在表里的：加拿大 Mac mini（自建 CI runner，见 `.claude/rules/ci-runner-routing.md`）和本机 Windows/RTX。YOLO / LIUSHANMEN 的筛查、训练与目标测试只在本机 Windows/RTX 跑（`scripts/windows/test-yolo-local.ps1`），不用 Mac mini；生产采集与门控上传的控制不变。
+- 5 和 6 都在跑 VPN（openvpn / xray / arcway-agent），不是空闲备机，动它们会断网。
+- 规格是快照，可用内存和磁盘当场重测（`nproc; free -h; df -h /; uptime`）。四台阿里云里有三台 systemd journal 没设上限，根治是设 `SystemMaxUse=`。
 
-prod Java 是 `10010` / `10020` 交替 active。**不要**照本文出现的 `10010` 直接 curl，那可能正是停用的那一槽；哪槽在跑的唯一权威是网关 upstream：
+## 蓝绿双槽：查 47 上的 Java 之前先读 upstream
+
+prod Java 在 `10010` / `10020` 之间交替 active。照着文档里的 `10010` 直接 curl，打到的可能正是停用的那一槽。哪槽在跑只看网关 upstream：
 
 ```bash
 ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.conf'
 # 例: server 47.100.235.168:10020;  # ACTIVE=10020 — auto-synced by deploy-backend.sh
 ```
 
-⛔ 别 grep `/www/server/panel/vhost/nginx/` 整个目录：里面混着历史 `.conf.bak*`，只看 `*.conf`（2026-08-19 曾据此数出 6 处「转发到 10010」而生效配置里一处都没有，差点报「生产挂了」）。
+别 grep `/www/server/panel/vhost/nginx/` 整个目录，只看 `*.conf`：目录里混着历史 `.conf.bak*`。2026-08-19 曾据此数出 6 处「转发到 10010」，而生效配置里一处都没有，差点报成「生产挂了」。
 
-## 内容分布（禁止搞混）
+## 内容分布
 
 | 内容 | 服务器 | 路径 | 访问 |
 |---|---|---|---|
@@ -46,11 +50,11 @@ ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.con
 | 餐饮平台模拟器 | **139** | `/www/wwwroot/mock-platform/`（服务 `cretas-mock-platform`，绑 `127.0.0.1:9200`，nginx 反代 `/mock/`） | 139/mock/ |
 | Mall 后端 | **139** | `mall-backend` service | 8080 |
 
-Showcase 与 mock-platform **只上 139，绝不上 47**（模拟器扮演「外部世界」，放到 47 破坏隔离前提；139 安全组只放行 80/443/8086，自开端口从 47 打过去一律 TIMEOUT）。模拟器健康判据用 `generator: running`，不能只看 `status: ok`。
+Showcase 和 mock-platform 只上 139，不上 47：模拟器扮演「外部世界」，放到 47 就破坏了隔离前提；而且 139 安全组只放行 80/443/8086，自开端口从 47 打过去一律 TIMEOUT。模拟器健康看 `generator: running`，光有 `status: ok` 不够。
 
 ## 环境
 
-47 只跑 **prod**：主库 `cretas_prod_db`、SmartBI 库 `smartbi_prod_db`。test 环境 2026-07-13 下线（内存紧张，prod Java OOM 后腾出 ~1.5G；prod JVM `-Xmx3g`，`HeapDumpOnOutOfMemoryError` 已开，dump 落 `/www/wwwroot/cretas/logs/`）。业务测试环境当前分配以 memory `project_macmini_test_env_is_live_with_f006` 为准（YOLO 例外见服务器地图）。
+47 只跑 prod：主库 `cretas_prod_db`、SmartBI 库 `smartbi_prod_db`。test 环境 2026-07-13 下线（prod Java OOM 后为它腾出 ~1.5G；prod JVM `-Xmx3g`，`HeapDumpOnOutOfMemoryError` 已开，dump 落 `/www/wwwroot/cretas/logs/`）。业务测试环境当前分配以 memory `project_macmini_test_env_is_live_with_f006` 为准。cretas 的库已全部是 PostgreSQL，MySQL 只在 vita 两台上。
 
 ## systemd
 
@@ -61,7 +65,7 @@ Showcase 与 mock-platform **只上 139，绝不上 47**（模拟器扮演「外
 | Python 服务 | 8083 | `cretas-python` | 环境变量内联（含 LLM 模型分配） |
 | Redis / PostgreSQL | 6379 / 5432 | `redis` / `postgresql` | |
 
-依赖链：`redis` + `postgresql` → `cretas-embedding` → `cretas-backend`；`cretas-python` 并行。生产环境变量集中在 `/www/wwwroot/cretas/.env.prod`（600）；改模型配置要同时改 systemd 单元与 `.env.prod`；改单元文件后 `systemctl daemon-reload` 再 `restart`。
+依赖链：`redis` + `postgresql` → `cretas-embedding` → `cretas-backend`；`cretas-python` 并行。生产环境变量集中在 `/www/wwwroot/cretas/.env.prod`（600）。Python 的模型配置在 systemd 单元里内联了一份，改模型要单元和 `.env.prod` 两处一起改；改完单元文件先 `systemctl daemon-reload` 再 `restart`。
 
 ```bash
 ssh root@47.100.235.168 "systemctl status cretas-backend cretas-backend-green cretas-python cretas-embedding --no-pager"
@@ -71,34 +75,24 @@ ssh root@47.100.235.168 "df -h && free -h"
 curl -s http://47.100.235.168:<active 槽>/api/mobile/health; curl -s http://47.100.235.168:8083/health
 ```
 
-常规发布和切流必须走仓库发布入口（见 `deploy-backend` skill）；手工 `systemctl restart` 只用于明确的故障处置，且先确认 active 槽位。
+发布、切流和单组件部署都走 `deploy-backend` skill 里的入口。手工 `systemctl restart` 只用于明确的故障处置，且先确认 active 槽位。
 
-## 部署入口
+## Smartbi 数据库 schema 变更
 
-| 目标 | 命令 |
-|---|---|
-| Java / Web 常规发布 | `./scripts/deploy/release-cretas.sh --phase build|deploy --base-sha <SHA> --tests '<tests>' --confirm-prod YES-PROD`（deploy 阶段强制 clean HEAD == origin/main；合并后先 `prewarm-main-artifact.sh`） |
-| 发布证据（只读） | `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod` |
-| Java 单组件 / 排查 | `./scripts/deploy/deploy-backend.sh --env prod` |
-| Python | `./scripts/deploy/deploy-smartbi-python.sh --env prod` |
-| Web | `./scripts/deploy/deploy-web-admin.sh --env prod` |
-| mock-platform | `./scripts/deploy/deploy-mock-platform.sh` |
+`smartbi_prod_db` 的 schema 变更走迁移文件，不手动跑 DDL。原因：2026-05-06 有八个迁移漏跑 prod，canary 4 小时后才发现 9 个 error；由 runner 统一 apply 才能保证 prod 与仓库一致、可追溯。
 
-禁止手动 rsync / ssh 拼命令部署。传输主通道 rsync（scp 兜底）；CI 制品走 `GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`（`Publish-GitHubArtifactViaLightsailOss.ps1`），细节 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。R2 / OSS 上传通道默认禁用（`ENABLE_R2=1` 紧急 opt-in）；⛔ 47 出网到 Cloudflare R2 极慢（10MB 200 秒没传完，阿里云 OSS 内网 1 秒），不要统一到 R2。
+做法：
 
-## ⛔ Smartbi 数据库 schema 变更（HARD RULE）
+1. 写 `backend/python/smartbi/database/migrations/V<YYYYMMDD>_<NN>__<description>.sql`。
+2. 通过 `./scripts/deploy/deploy-smartbi-python.sh --env prod` 自动 apply。runner 失败时 deploy ABORT，Python 不重启。
 
-**所有** smartbi 库（`smartbi_prod_db`）schema 变更必须：
-1. 写 `backend/python/smartbi/database/migrations/V<YYYYMMDD>_<NN>__<description>.sql`
-2. 通过 `./scripts/deploy/deploy-smartbi-python.sh --env prod` 自动 apply（runner 失败 → deploy ABORT，Python 不重启）
+紧急 hotfix 不得不 `ssh + psql -f` 时，事后立刻把 SQL 落成 `V*.sql` 提交，并手动 INSERT 进 `smartbi_migrations`（`filename, version, checksum, applied_by='manual-emergency'`，`ON CONFLICT (filename) DO NOTHING`），否则下次 runner 重新 apply 会报 DDL 已存在。tracker 的主键是 `filename` 不是 version（历史上 `V20260427_01` 有两个不同文件）。runner 自身有 bug 时的逃生门是 `SKIP_MIGRATIONS=1 ./scripts/deploy/deploy-smartbi-python.sh --env prod`，用完立刻修 runner。
 
-**禁止**手动 `ssh + psql -f` 跑 DDL，除非紧急 hotfix；hotfix 后必须立即把 SQL 落 `V*.sql` 提交，并手动 INSERT 进 `smartbi_migrations`（`filename, version, checksum, applied_by='manual-emergency'`，`ON CONFLICT (filename) DO NOTHING`），否则下次 runner re-apply 会报 DDL 已存在。逃生门 `SKIP_MIGRATIONS=1 ./scripts/deploy/deploy-smartbi-python.sh --env prod`（runner 自身有 bug 时），用完立刻修 runner。Tracker PRIMARY KEY 是 `filename` 不是 version（历史上 `V20260427_01` 有两个不同文件）。起因：2026-05-06 八个迁移漏跑 prod，canary 4 小时后才发现 9 个 error。
-
-Java 侧 Flyway：合并后、部署前 `mvn -o test -Dtest='FlywayVersionUniquenessTest,*RepositoryQueryValidationTest'`（git 对撞号一个字不报）。
+Java 侧 Flyway 撞号闸见 `worktree-and-main-only-deploy.md`（离线协议第 3 条）。
 
 ## 数据库备份
 
-`47:/www/wwwroot/cretas/scripts/backup-db.sh`，cron `0 3 * * *`；本地 `/www/wwwroot/cretas/backups` 保留 7 天；异地 `oss://cretas-db-backups/cretas-prod/` 保留 30 天（只备 `cretas_prod_db` + `smartbi_prod_db`；凭证 `47:/root/.ossutilconfig`，内网 endpoint `oss-cn-shanghai-internal`；上传后比对 `Content-Length` 与本地大小）。
+`47:/www/wwwroot/cretas/scripts/backup-db.sh`，cron `0 3 * * *`。本地 `/www/wwwroot/cretas/backups` 保留 7 天；异地 `oss://cretas-db-backups/cretas-prod/` 保留 30 天，只备 `cretas_prod_db` + `smartbi_prod_db`（凭证 `47:/root/.ossutilconfig`，内网 endpoint `oss-cn-shanghai-internal`；上传后比对 `Content-Length` 与本地大小）。
 
 ```bash
 ssh root@47.100.235.168 "sudo -u postgres psql cretas_prod_db -c '\dt'"
@@ -107,31 +101,27 @@ ssh root@47.100.235.168 "sudo -u postgres pg_dump cretas_prod_db > /tmp/cretas_b
 
 ## 阿里云安全组
 
-AK/SK、安全组 ID、已放行端口清单见 `aliyun-credentials.md`（gitignored）。
+AK/SK、安全组 ID、已放行端口清单见本目录 `aliyun-credentials.md`（gitignored）。
 
 ```bash
 aliyun ecs DescribeSecurityGroupAttribute --RegionId cn-shanghai --SecurityGroupId <sg-id>
 aliyun ecs AuthorizeSecurityGroup --RegionId cn-shanghai --SecurityGroupId <sg-id> --IpProtocol tcp --PortRange 8083/8083 --SourceCidrIp <你的IP>/32
 ```
 
-临时开白名单用完 `RevokeSecurityGroup` 收回；访问后端优先 SSH tunnel（`ssh -L 10010:localhost:<active 槽> root@47.100.235.168`）。
+临时白名单用完 `RevokeSecurityGroup` 收回；访问后端优先 SSH tunnel（`ssh -L 10010:localhost:<active 槽> root@47.100.235.168`）。
 
 ## 故障排查
 
 | 症状 | 排查 |
 |---|---|
-| Java 无法启动 | 先读 upstream 知道该看哪槽 → `journalctl -u cretas-backend(-green) -n 100` → `env | grep DB_` → `ss -tlnp | grep 1001` |
-| Python 502 | `ps aux | grep uvicorn` → `tail -50 python-services.log` → `ss -tlnp | grep 8083` |
-| 前端白屏 | 139 上 `nginx -t` → `ls /www/wwwroot/web-admin/index.html` → nginx 日志 |
+| Java 无法启动 | 先读 upstream 确定该看哪槽 → `journalctl -u cretas-backend(-green) -n 100` → `env | grep DB_` → `ss -tlnp | grep 1001` |
+| Python 502 / 500 | `ps aux | grep uvicorn` → `tail -50 python-services.log` → `ss -tlnp | grep 8083` |
+| 前端白屏 | 浏览器 Console 看 API 地址 / CORS → 139 上 `nginx -t` → `ls /www/wwwroot/web-admin/index.html` → nginx 日志 |
 | DB 连接失败 | `systemctl status postgresql` → `pg_hba.conf` → `.env.prod` 密码 |
 | 磁盘满 | `du -sh /www/wwwroot/cretas/logs/* | sort -rh | head`；jar 备份 `.bak.*` 自动只留 3 份，历史命名的要手动清 |
 
-## 注意事项
-
-- 不要直接删 `/www/wwwroot` 下的目录，先确认内容。
-- 数据库已是 PostgreSQL，不再有 MySQL。
-- 本地启动 Java 用 `mvn spring-boot:run` 不用 `java -jar`（后者 mmap 锁 fat jar 阻断 deploy）。
+`/www/wwwroot` 下的目录先确认内容再删，那里同时放着 prod 制品、备份和配置。
 
 ## 凭证
 
-本目录 `db-credentials.md` / `aliyun-credentials.md`（gitignored）：数据库密码、服务器登录、宝塔面板、阿里云 AccessKey。需要时直接读，⛔ 不把真值写进任何会 commit 的文件（含审查文档里的「引用原文」）。
+本目录 `db-credentials.md` / `aliyun-credentials.md`（gitignored）：数据库密码、服务器登录、宝塔面板、阿里云 AccessKey。需要时直接读。真值不写进任何会 commit 的文件，包括审查文档里的「引用原文」：曾经有审查文档引用原文把宝塔口令带回 tracked 树，secret 闸还两次全绿。

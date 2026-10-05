@@ -1,6 +1,6 @@
 ---
 name: smartbi-test-e2e
-description: SmartBI E2E 上传测试。把 /smartbi-test-data 生成的测试 Excel 通过浏览器上传到 SmartBI，验证 SSE 解析 → 图表 → KPI → AI 分析全流程。用户说 /smartbi-test-e2e、上传测试 Excel、SmartBI 上传验证时触发。
+description: SmartBI 测试：生成测试 Excel、在浏览器里上传验证 SSE 解析 → 图表 → KPI → AI 分析，以及跑 tests/e2e-smartbi 回归套件。用户说 /smartbi-test-e2e、生成或上传 SmartBI 测试数据时用。
 allowed-tools:
   - Bash
   - Read
@@ -8,41 +8,39 @@ allowed-tools:
   - Grep
 ---
 
-# SmartBI E2E 上传测试
+# SmartBI 测试
 
-用当前可用的 Playwright 浏览器工具（`playwright-rn` / plugin playwright MCP，或本地 `chromium.launch()` 脚本）走真实上传流程。
+三件事：生成测试 Excel → 上传走真实流程 → 需要时跑回归套件。账号用 `f006_admin`，口令 `$TEST_FACTORY_ADMIN_PASS`（本地 `.env.test`，不进仓库；`factory_admin1` 是死值）。
 
-## 参数（`$ARGUMENTS`）
+## 1. 生成测试数据（`$ARGUMENTS` 以 `gen` 开头时）
 
-| 输入 | 动作 |
-|------|------|
-| _(空)_ | 列出 `tests/test-data/` 可用文件让用户选 |
-| `factory {industry} {scenario}` / `factory` / `restaurant` | 单个或全部工厂 / 餐饮文件 |
-| `edge` / `stress l1` / `stress l2` / `all` | 边界 6 个 / 压力 L1、L2 各 2 个 / 全部 <10MB 文件 |
-| `--url http://...` | 覆盖默认 `http://localhost:5173` |
+| 类型 | 脚本 | 输出 | 数量 |
+|---|---|---|---|
+| 工厂 | `tests/generate_test_excel.py` | `tests/test-data/Test-mock-{industry}-{scenario}-s42.xlsx` | 12 文件 / ~264 sheets（food/mfg/retail × normal/growth/loss/sparse） |
+| 餐饮 | `tests/generate_restaurant_excel.py` | `tests/test-data/restaurant/` | 12 文件 / ~204 sheets（fish/hotpot/bakery × 同上） |
+| 边界 | `tests/generate_edge_cases.py` | `tests/test-data/edge-cases/` | 6 文件（宽表 120 列、混合类型、空区域、公式、数字列名、跨年同比） |
+| 压力 | `tests/generate_stress_test.py`（`--level l2` 含 L2） | `tests/test-data/stress/` | L1 2 文件；L2 再加 2 个、约 50MB、内存占用大 |
 
-文件位置：`tests/test-data/Test-mock-{industry}-{scenario}-s42.xlsx`、`restaurant/Restaurant-*.xlsx`、`edge-cases/Edge-*.xlsx`、`stress/Stress-*-L{1,2}-s42.xlsx`。文件不存在 → 提示先 `/smartbi-test-data gen {type}`。
+工厂、餐饮、边界三个脚本互不依赖，可以并行跑。生成后核对文件数和 sheet 数与上表一致；边界和 L1 压力文件里应有合并单元格，`Edge-formula-cells.xlsx` 里应有公式。清理时保留原始 `tests/test-data/Test.xlsx`，删之前先列出要删的文件。
 
-## 账号
+## 2. 上传验证
 
-`f006_admin`，口令 `$TEST_FACTORY_ADMIN_PASS`（本地 `.env.test`，不进仓库）。`factory_admin1` 是死值。
+参数：空 = 列出可用文件让用户选；`factory {industry} {scenario}` / `factory` / `restaurant` / `edge` / `stress l1|l2` / `all`；`--url` 覆盖默认 `http://localhost:5173`（Vite 常在 5173–5175 之间漂，先确认实际端口）。文件不存在就先生成。
 
-## 流程与判据
+流程：登录 → `{BASE_URL}/smart-bi/analysis` → `input[type="file"]` 用绝对路径上传 → 点「开始分析」→ 等 SSE 完成（"成功处理 N 个 Sheet"，上限 120s，超时截图记 TIMEOUT 换下一个）→ 检查 → 截图到 `tests/test-data/screenshots/{filename}-result.png`。
 
-登录 → `{BASE_URL}/smart-bi/analysis` → `input[type="file"]` 用**绝对路径**上传 → 点「开始分析 / 上传」→ 等 SSE 完成（"成功处理 N 个 Sheet" / "分析完成"，上限 120s，超时截图记 TIMEOUT 跳下一文件）→ 逐项验证 → 截图到 `tests/test-data/screenshots/{filename}-result.png`。
-
-| 检查项 | 通过标准 |
-|--------|----------|
-| SSE 完成 | "成功处理 N 个 Sheet" 出现 |
+| 检查 | 通过标准 |
+|---|---|
+| SSE | 出现 "成功处理 N 个 Sheet" |
 | Sheet 标签 | tab 数 = 预期 sheet 数 |
-| 数据表格 | 第一个 sheet 表格行数 > 0 |
-| 图表渲染 | 至少 1 个 `.chart-container canvas` / ECharts 实例 |
-| KPI 卡片 | 至少 1 个 |
+| 表格 | 第一个 sheet 行数 > 0 |
+| 图表 | 至少 1 个 ECharts 实例（canvas 不是 DOM 元素，点数据点要按坐标定位） |
+| KPI | 至少 1 张卡 |
 | AI 分析 | 文本 > 50 字 |
 | 控制台 | 无 500 / CORS / 致命错误 |
 
-批量模式逐文件执行，之间点「上传新文件 / 新建分析」或直接回到上传页。
+报告按文件列 `Sheets | 解析 | 图表 | KPI | AI | 结果`，加总计和截图目录。登录失败先 `curl` 前端和 `http://localhost:10010/api/mobile/health`；SSE 报错记下失败的 sheet 名。
 
-## 报告
+## 3. 回归套件 `tests/e2e-smartbi`
 
-按文件列 `Sheets | 解析 | 图表 | KPI | AI | 结果`，加总计（文件 / 通过 / 失败 / 图表数 / KPI 数）和截图目录。登录失败先 `curl http://localhost:5173` 与 `curl http://localhost:10010/api/mobile/health`；SSE ERROR 记失败的 sheet 名；图表失败查控制台里的具体 API。发现 Python / Java 解析问题用截图 + 控制台日志辅助定位。
+`npm install && npx playwright install chromium` 后 `npm run test:headed`；持续回归用 `npm run ralph-loop:headed`（`LOOPS=N` 限轮数）。按 `.claude/rules/playwright-headed-mode.md`，SmartBI dashboard 用有头模式跑。生产只读检查用 `BASE_URL=http://139.196.165.140:8086`（web-admin 在 139 网关，不在 47）。报告在 `tests/e2e-smartbi/reports/`。

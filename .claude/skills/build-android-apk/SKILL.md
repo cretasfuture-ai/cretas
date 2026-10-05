@@ -22,26 +22,10 @@ allowed-tools:
 ## 快速构建 (Release)
 
 ```bash
-# 1. 添加 CMake 路径修复 (必须! Windows 250字符限制)
-#    在 frontend/CretasFoodTrace/android/build.gradle 的末尾添加:
-cat >> frontend/CretasFoodTrace/android/build.gradle << 'GRADLE'
-
-// CMake path length workaround (Windows MAX_PATH)
-subprojects { subproject ->
-    def applyCmakeWorkaround = {
-        def androidExt = subproject.extensions.findByName('android')
-        if (androidExt != null) {
-            try {
-                if (androidExt.externalNativeBuild?.cmake?.path != null) {
-                    androidExt.externalNativeBuild.cmake.buildStagingDirectory = file("C:/b/${subproject.name}")
-                }
-            } catch (Exception ignored) {}
-        }
-    }
-    try { subproject.afterEvaluate { applyCmakeWorkaround() } }
-    catch (Exception e) { applyCmakeWorkaround() }
-}
-GRADLE
+# 1. 加 CMake 路径修复（Windows 路径 250 字符限制，见下文）。先确认 build.gradle 没有未提交改动，
+#    否则第 5 步的还原会把那些改动一起抹掉
+git status --short frontend/CretasFoodTrace/android/build.gradle   # 应为空
+cat .claude/skills/build-android-apk/references/cmake-workaround.gradle >> frontend/CretasFoodTrace/android/build.gradle
 
 # 2. 清理旧 CMake 缓存
 rm -rf node_modules/react-native-reanimated/android/.cxx
@@ -54,9 +38,10 @@ cmd //c "cd frontend\CretasFoodTrace\android && gradlew.bat assembleRelease"
 # 4. 复制到项目根目录
 cp frontend/CretasFoodTrace/android/app/build/outputs/apk/release/app-release.apk ./CretasFoodTrace.apk
 
-# 5. 清理 CMake 临时目录 + 恢复 build.gradle
+# 5. 清理 CMake 临时目录，还原 build.gradle（第 1 步确认过它原本是干净的；git diff 应只剩这段补丁）
 rm -rf C:/b
-git checkout frontend/CretasFoodTrace/android/build.gradle
+git diff --stat frontend/CretasFoodTrace/android/build.gradle
+git restore frontend/CretasFoodTrace/android/build.gradle
 ```
 
 ## Debug 构建
@@ -71,12 +56,12 @@ cmd //c "cd frontend\CretasFoodTrace\android && gradlew.bat assembleDebug"
 
 ## 关键注意事项
 
-### CMake 路径修复 (CRITICAL)
+### CMake 路径修复
 
-Windows 下 `react-native-reanimated` 的 CMake 对象路径超过 250 字符限制，必须用 `buildStagingDirectory` 重定向到短路径 (`C:/b/`)。
+Windows 下 `react-native-reanimated` 的 CMake 对象路径超过 250 字符限制，要用 `buildStagingDirectory` 重定向到短路径 (`C:/b/`)。
 
-- **构建前**: 添加 workaround 到 `build.gradle`
-- **构建后**: 用 `git checkout` 恢复 `build.gradle`（不要提交这个修改）
+- 补丁内容在 `references/cmake-workaround.gradle`，构建前追加、构建后还原，不提交。
+- 还原前确认 `build.gradle` 原本没有未提交改动：还原会连同那些改动一起丢掉。
 - **如果构建失败**: 先清理 `rm -rf node_modules/react-native-reanimated/android/.cxx`
 
 ### 其他注意事项
