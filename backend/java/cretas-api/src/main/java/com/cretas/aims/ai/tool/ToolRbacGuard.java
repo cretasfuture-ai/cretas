@@ -57,26 +57,38 @@ public class ToolRbacGuard {
     }
 
     /**
-     * 解析调用者的权限码集合 (spec §8.2 识别层候选过滤用)。
+     * 在给定的权限码里, 挑出调用者真正拥有的那些 (spec §8.2 识别层候选过滤用)。
      *
-     * <p>与 {@link #hasAnyPermission} <b>同源</b> —— 都是 {@code User} →
-     * {@link PermissionService} 的 L2 工厂覆盖 / L1 平台默认 / 硬编码矩阵三层, 这里不新造权限来源,
-     * 只是把"逐码问"换成"取全集"以便一次性收窄候选集。
+     * <p>每个码都走 {@link #hasAnyPermission} 同一个判定 ({@link PermissionService#hasAnyPermission}:
+     * L2 工厂覆盖 / L1 平台默认 / 硬编码矩阵三层 + 特例码), 所以结果与执行期鉴权<b>逐码一致</b>。
+     *
+     * <p>⛔ 不要换回 {@link PermissionService#getUserPermissions}「取全集」: 它只读硬编码矩阵、
+     * 只产出 {@code module:read} / {@code module:write}, 永远产不出 {@code module:read_write}
+     * 这类码 —— 2026-10-05 实测它让 OPERATE 模式把所有 {@code *:read_write} 写意图对所有角色剔掉。
+     * 权限码的动作词是开放集 ({@code procurement:price:view} …), 任何「枚举全集」都会漏;
+     * 只有拿意图上真实写着的码去问, 两边才是同一套词汇。
      *
      * <p><b>失败返回 null 而不是空集</b>: 空集会让候选过滤把所有写意图都剔掉, 等于用一次
      * User 查询失败静默改变用户看到的候选; null 表示"未知, 不按权限过滤", 把判定留给下游真正的
      * 鉴权门 ({@link com.cretas.aims.service.execution.IntentPermissionGate} / ToolRbacEnforcer)。
      * 候选过滤是收窄优化, <b>不是</b>授权点 —— 这里放行绝不等于有权限。
      *
-     * @return 权限码集合; null = 无法解析
+     * @param codes 要问的权限码 (单码, 不含逗号)
+     * @return 其中调用者拥有的码; null = 无法解析
      */
-    public java.util.Set<String> resolveUserPermissions(Map<String, Object> context) {
+    public java.util.Set<String> grantedAmong(Map<String, Object> context, java.util.Collection<String> codes) {
         try {
             User user = loadUser(context);
             if (user == null) {
                 return null;
             }
-            return permissionService.getUserPermissions(user);
+            java.util.Set<String> granted = new java.util.LinkedHashSet<>();
+            for (String code : codes) {
+                if (code != null && !code.isBlank() && permissionService.hasAnyPermission(user, code)) {
+                    granted.add(code);
+                }
+            }
+            return granted;
         } catch (Exception e) {
             log.warn("AI 候选过滤权限集解析失败 (跳过权限过滤): {}", e.getMessage());
             return null;

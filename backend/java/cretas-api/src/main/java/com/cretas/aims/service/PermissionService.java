@@ -69,6 +69,10 @@ public interface PermissionService {
     /**
      * 获取用户所有权限列表
      *
+     * <p>⚠️ 只读硬编码矩阵 (不看 L1 平台默认 / L2 工厂覆盖), 只产出 {@code module:read} /
+     * {@code module:write}, 产不出 {@code module:read_write} 等码 —— 它<b>不是</b>
+     * {@link #hasAnyPermission} 的全集。判「这个人能不能用某个码」请逐码问 {@link #hasAnyPermission}。
+     *
      * @param user 用户对象
      * @return 权限代码集合
      */
