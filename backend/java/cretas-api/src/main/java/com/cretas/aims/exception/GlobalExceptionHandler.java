@@ -1307,6 +1307,15 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(status, message));
     }
 
+    /** Service authorization denials are client errors; never expose policy details. */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ApiResponse<?> handleAccessDeniedException(
+            org.springframework.security.access.AccessDeniedException e) {
+        log.warn("[{}] 访问权限不足", generateTraceId());
+        return ApiResponse.error(ErrorCode.FORBIDDEN.getHttpStatus(), ErrorCode.FORBIDDEN.getUserMessage());
+    }
+
     /**
      * 处理其他 RuntimeException - 需脱敏
      */

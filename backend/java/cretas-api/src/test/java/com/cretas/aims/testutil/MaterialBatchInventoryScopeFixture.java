@@ -180,7 +180,7 @@ public final class MaterialBatchInventoryScopeFixture {
                 b -> b.getFactoryId().equals(invocation.getArgument(0))
                         && b.getStatus() != MaterialBatchStatus.EXPIRED
                         && b.getExpireDate() != null
-                        && b.getExpireDate().isBefore(invocation.getArgument(1))))
+                        && b.getExpireDate().isBefore(LocalDate.now())))
                 .when(repository).findExpiredBatches(anyString());
         doAnswer(invocation -> filtered(rows,
                 b -> b.getFactoryId().equals(invocation.getArgument(0))
