@@ -6,6 +6,7 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.service.execution.IntentPermissionGate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -197,8 +198,9 @@ public class IntentAccessModeFilter {
         if (userPermissions == null) {
             return true;
         }
-        String required = requiredPermission(factoryId, intentCode);
-        return required == null || required.isBlank() || userPermissions.contains(required);
+        // 逗号 = 任一即可 (与 IntentPermissionGate.check 同一语义); 整串 contains 会让任何多码意图恒被剔除。
+        List<String> required = IntentPermissionGate.splitCodes(requiredPermission(factoryId, intentCode));
+        return required.isEmpty() || required.stream().anyMatch(userPermissions::contains);
     }
 
     private String requiredPermission(String factoryId, String intentCode) {

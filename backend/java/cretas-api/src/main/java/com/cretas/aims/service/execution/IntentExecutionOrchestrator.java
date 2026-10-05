@@ -720,7 +720,7 @@ public class IntentExecutionOrchestrator {
                 // 拦截卡需要它来渲染"请切换到【操作】页"的导航。
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
                         request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId(),
-                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId));
+                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
                 return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
@@ -2639,13 +2639,13 @@ public class IntentExecutionOrchestrator {
      *
      * @return 权限码集合; null = 不按权限过滤 (真正的鉴权在 checkIntentPermission / ToolRbacEnforcer)
      */
-    private java.util.Set<String> resolveUserPermissionsForFiltering(String mode, Long userId) {
+    private java.util.Set<String> resolveUserPermissionsForFiltering(String mode, Long userId, String factoryId) {
         if (userId == null || intentPermissionGate == null
                 || !IntentAccessModeFilter.MODE_OPERATE.equalsIgnoreCase(mode)) {
             return null;
         }
         try {
-            return intentPermissionGate.resolveUserPermissions(userId);
+            return intentPermissionGate.resolveUserPermissions(userId, factoryId);
         } catch (Exception e) {
             log.warn("候选过滤权限集解析失败, 跳过权限过滤: userId={}, err={}", userId, e.getMessage());
             return null;
