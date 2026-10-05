@@ -17,7 +17,7 @@ description: Cretas React Native 原生 E2E 测试。使用 Maestro 执行原生
 | `inject {screen}` | 为指定屏幕注入 testID（如 `inject EnhancedLoginScreen`） |
 | `inject --batch {module}` | 批量为模块下所有屏幕注入 testID（如 `inject --batch factory-admin`） |
 | `gen {role}` | 为指定角色生成 Maestro 测试流（如 `gen factory_admin`） |
-| `gen all` | 为所有 8 角色生成基础测试流 |
+| `gen all` | 为账号表里的全部角色生成基础测试流 |
 | `run {role}` | 执行指定角色的 Maestro 测试流（如 `run factory_admin`） |
 | `run all` | 顺序执行所有角色的测试流 |
 | `report` | 基于最近一次 run 结果生成 Markdown 测试报告 |

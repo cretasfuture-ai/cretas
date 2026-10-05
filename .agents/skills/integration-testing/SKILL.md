@@ -85,7 +85,7 @@ npm run report
 ```
 
 **环境变量**:
-- `BASE_URL` — 默认 `http://localhost:5173` (本地 Vite dev), 生产用 `http://47.100.235.168:8088`
+- `BASE_URL` — 默认 `http://localhost:5173` (本地 Vite dev), 生产用 `http://139.196.165.140:8086`（web-admin 在 139 网关）
 - 测试数据: `Test.xlsx` (11 sheets), 264 行财务数据, enrichment 约需 30-40s
 
 ---

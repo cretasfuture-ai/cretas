@@ -59,17 +59,9 @@ first target navigation, and reuses one clean UI-login session. Do not paste an
 ad-hoc script into the tool call and do not launch a second browser.
 
 For local or write-capable non-production workflows, a standalone Node
-Playwright script using `chromium.launch()` remains acceptable:
-
-```javascript
-import { chromium } from 'playwright';
-
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage();
-await page.goto('http://localhost:5173', { waitUntil: 'domcontentloaded' });
-// interact, assert, capture evidence
-await browser.close();
-```
+Playwright script using `chromium.launch()` remains acceptable. Anything that
+runs against prod or staging UI is headed (`headless: false`), per
+`.claude/rules/playwright-headed-mode.md`.
 
 Use `.agents/skills/agent-browser` or available browser tools for exploratory inspection. Treat `.mcp.json` as historical MCP configuration, not as a guarantee that MCP tools are available in Codex.
 
