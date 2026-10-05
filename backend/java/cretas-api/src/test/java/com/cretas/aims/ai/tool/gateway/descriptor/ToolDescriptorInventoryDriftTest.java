@@ -183,7 +183,10 @@ class ToolDescriptorInventoryDriftTest {
         System.out.println("[TOOL_INVENTORY_COUNTS] actions=" + countActions(tools));
         System.out.println("[TOOL_INVENTORY_COUNTS] risks=" + countRisks(tools));
 
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(61);
+        // 2026-10-05: 61 → 63 (+2): work_process_task_start / work_process_task_complete 显式声明
+        // getActionType()=UPDATE (原先按工具名后缀推断成 READ, 确认卡影响说明措辞不对); 下面 actions 桶
+        // READ 445 → 443 / UPDATE 26 → 28 是同一处改动。
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(63);
         assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(44);
         // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(44);
@@ -194,9 +197,9 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 445L,
+                ToolExecutor.ActionType.READ, 443L,
                 ToolExecutor.ActionType.WRITE, 61L,
-                ToolExecutor.ActionType.UPDATE, 26L,
+                ToolExecutor.ActionType.UPDATE, 28L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 16L,

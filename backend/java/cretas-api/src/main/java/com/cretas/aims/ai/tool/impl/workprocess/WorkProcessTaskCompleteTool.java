@@ -117,6 +117,16 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool {
         return super.getParameterQuestion(paramName);
     }
 
+    /**
+     * 改的是已有任务的状态与实际产量 → UPDATE。⛔ 不写这个覆盖会落到
+     * {@code AbstractBusinessTool#getActionType} 的「按工具名后缀推断」: 名字里没有
+     * _create/_update/_delete 就是 READ, 确认卡的影响说明于是写成「立即执行」而不是「将修改……现有数据」。
+     */
+    @Override
+    public ActionType getActionType() {
+        return ActionType.UPDATE;
+    }
+
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
     @Override
     public AccessMode getAccessMode() {

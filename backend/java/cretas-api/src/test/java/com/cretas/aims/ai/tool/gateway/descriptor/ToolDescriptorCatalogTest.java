@@ -41,10 +41,14 @@ class ToolDescriptorCatalogTest {
         // ⚠️ 不逐工具手工拆分 (a)/(b) 对每个桶的贡献 —— 下面这组数字取自
         //   ToolDescriptorInventoryDriftTest(逐字段比对源码 585 个工具与清册, 该闸独立通过)
         //   跑出的真实统计, 不是手推算出来的, 避免编造一个自洽但不准的归因。
+        // 2026-10-05: READ 445 → 443 / UPDATE 26 → 28 (各 ±2, 其余桶不动): work_process_task_start /
+        // work_process_task_complete 由「按工具名后缀推断成 READ」改为显式声明 UPDATE (它们改任务状态,
+        // 确认卡的影响说明要用「将修改……现有数据」措辞)。同 ToolDescriptorInventoryDriftTest 的
+        // override actionType 61 → 63。riskLevel 桶不变 (UPDATE 的默认风险仍是 LOW)。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 445L,
+                ToolExecutor.ActionType.READ, 443L,
                 ToolExecutor.ActionType.WRITE, 61L,
-                ToolExecutor.ActionType.UPDATE, 26L,
+                ToolExecutor.ActionType.UPDATE, 28L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 16L,

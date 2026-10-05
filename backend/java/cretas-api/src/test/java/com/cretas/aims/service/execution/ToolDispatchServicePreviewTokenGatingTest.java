@@ -5,6 +5,7 @@ import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.impl.workprocess.WorkProcessTaskCompleteTool;
 import com.cretas.aims.ai.tool.impl.workprocess.WorkProcessTaskStartTool;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -208,6 +209,69 @@ class ToolDispatchServicePreviewTokenGatingTest {
         verify(previewTokenService, times(1)).createBoundToken(any());
 
         verify(service, never()).start(anyString(), anyLong(), any());
+    }
+
+    // ==================== 确认卡的 actionType / 影响说明 ====================
+
+    @Test
+    @DisplayName("真实 StartTool: 确认卡 actionType=UPDATE, 影响说明是「修改数据」措辞而不是「立即执行」")
+    void startToolConfirmCardCarriesModifyingActionType() throws Exception {
+        WorkProcessTaskService service = mock(WorkProcessTaskService.class);
+        WorkProcessTaskStartTool tool = new WorkProcessTaskStartTool(service);
+        ReflectionTestUtils.setField(tool, "objectMapper", mapper);
+        when(writeGuardService.isWriteTool(tool)).thenReturn(true);
+        when(service.getById(FACTORY, 12L)).thenReturn(task(Status.PENDING));
+
+        IntentExecuteResponse r = dispatch.executeToolPreview(tool, FACTORY, request(), intent, 42L, "operator");
+
+        assertThat(r.getConfirmableAction()).as("预览通过才有确认卡").isNotNull();
+        assertThat(r.getConfirmableAction().getActionType()).isEqualTo("UPDATE");
+        assertThat(r.getConfirmableAction().getImpactSummary())
+                .contains("将修改「开始工序」相关的现有数据")
+                .doesNotContain("立即执行");
+    }
+
+    @Test
+    @DisplayName("真实 CompleteTool: 确认卡 actionType=UPDATE, 影响说明是「修改数据」措辞")
+    void completeToolConfirmCardCarriesModifyingActionType() throws Exception {
+        WorkProcessTaskService service = mock(WorkProcessTaskService.class);
+        WorkProcessTaskCompleteTool tool = new WorkProcessTaskCompleteTool(service);
+        ReflectionTestUtils.setField(tool, "objectMapper", mapper);
+        when(writeGuardService.isWriteTool(tool)).thenReturn(true);
+        when(service.getById(FACTORY, 12L)).thenReturn(task(Status.IN_PROGRESS));
+        AIIntentConfig completeIntent = AIIntentConfig.builder()
+                .intentCode("WORK_PROCESS_TASK_COMPLETE")
+                .intentName("完成工序")
+                .intentCategory("PRODUCTION")
+                .toolName("work_process_task_complete")
+                .build();
+        IntentExecuteRequest req = IntentExecuteRequest.builder()
+                .intentCode(completeIntent.getIntentCode())
+                .userInput("完成工序任务 12, 产量 95.5")
+                .context(new java.util.HashMap<>(Map.of("taskId", 12, "actualQuantity", 95.5)))
+                .previewOnly(true)
+                .build();
+
+        IntentExecuteResponse r = dispatch.executeToolPreview(tool, FACTORY, req, completeIntent, 42L, "operator");
+
+        assertThat(r.getConfirmableAction()).as("预览通过才有确认卡").isNotNull();
+        assertThat(r.getConfirmableAction().getActionType()).isEqualTo("UPDATE");
+        assertThat(r.getConfirmableAction().getImpactSummary())
+                .contains("将修改「完成工序」相关的现有数据")
+                .doesNotContain("立即执行");
+    }
+
+    @Test
+    @DisplayName("对照: 声明 READ 的工具仍然是「立即执行」措辞 —— 修的是这两个工具的声明, 没动措辞表")
+    void genuinelyReadActionTypeKeepsExecuteWording() throws Exception {
+        ToolExecutor tool = writeTool("{\"success\":true,\"data\":{\"status\":\"PREVIEW\",\"canDo\":true,"
+                + "\"message\":\"确认？\",\"currentValues\":{\"状态\":\"待开始\"},\"newValues\":{\"状态\":\"进行中\"}}}");
+
+        IntentExecuteResponse r = preview(tool);
+
+        assertThat(r.getConfirmableAction()).isNotNull();
+        assertThat(r.getConfirmableAction().getActionType()).isEqualTo("READ");
+        assertThat(r.getConfirmableAction().getImpactSummary()).contains("确认后将立即执行「开始工序」");
     }
 
     // ==================== helpers ====================

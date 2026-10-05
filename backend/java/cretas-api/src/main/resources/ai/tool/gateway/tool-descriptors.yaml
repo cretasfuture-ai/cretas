@@ -4014,7 +4014,7 @@ descriptors:
   - toolName: "work_process_task_start"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.WorkProcessTaskStartTool"
     provenance: LEGACY_INFERRED
-    actionType: READ
+    actionType: UPDATE
     riskLevel: LOW
     supportsPreview: true
     requiresPermission: false
@@ -4022,7 +4022,7 @@ descriptors:
     version: "1.0.0"
     domainTags: ["work"]
     overrideFlags:
-      actionType: false
+      actionType: true
       riskLevel: false
       supportsPreview: true
       requiresPermission: false
@@ -4094,7 +4094,7 @@ descriptors:
   - toolName: "work_process_task_complete"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.WorkProcessTaskCompleteTool"
     provenance: LEGACY_INFERRED
-    actionType: READ
+    actionType: UPDATE
     riskLevel: LOW
     supportsPreview: true
     requiresPermission: false
@@ -4102,7 +4102,7 @@ descriptors:
     version: "1.0.0"
     domainTags: ["work"]
     overrideFlags:
-      actionType: false
+      actionType: true
       riskLevel: false
       supportsPreview: true
       requiresPermission: false
