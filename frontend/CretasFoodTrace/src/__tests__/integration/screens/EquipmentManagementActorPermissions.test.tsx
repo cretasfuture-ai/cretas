@@ -364,7 +364,25 @@ describe('EquipmentManagement actor and permission isolation', () => {
     expect(appAlert).not.toHaveBeenCalled();
   });
 
-  it('keeps create inputs open and reports a real mutation failure', async () => {
+  it('keeps create inputs open and maps the duplicate equipment-code failure', async () => {
+    getEquipments.mockResolvedValue({ content: [], totalElements: 0, totalPages: 0 });
+    createEquipment.mockRejectedValueOnce(new Error('数据已存在，请勿重复提交\n请检查表单中字段「factory_id, code」是否已存在,或返回列表查看已存在记录'));
+    const view = render(<EquipmentManagementScreen />);
+    await waitFor(() => expect(view.getByTestId('equipment-management-fab')).toBeTruthy());
+
+    fireEvent.press(view.getByTestId('equipment-management-fab'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy());
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '保留输入的设备');
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); });
+
+    await waitFor(() => expect(appAlert).toHaveBeenCalledWith(expect.any(String), 'equipmentManagement.messages.duplicateCode'));
+    const alertMessage = (appAlert as jest.Mock).mock.calls[(appAlert as jest.Mock).mock.calls.length - 1]?.[1] as string;
+    expect(alertMessage).not.toContain('factory_id');
+    expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy();
+    expect(view.getByTestId('equipment-management-create-name').props.value).toBe('保留输入的设备');
+  });
+
+  it('preserves the actual reason for a non-duplicate mutation failure', async () => {
     getEquipments.mockResolvedValue({ content: [], totalElements: 0, totalPages: 0 });
     createEquipment.mockRejectedValueOnce(new Error('设备名称已存在'));
     const view = render(<EquipmentManagementScreen />);

@@ -61,6 +61,22 @@ function equipmentActorKey(user: User | null | undefined): string {
   return `${user.userType}:${userId}:${factoryId}:${role}:${equipmentPermission}:${hrPermission}`;
 }
 
+function getEquipmentMutationError(
+  error: unknown,
+  fallback: string,
+  duplicateCodeMessage: string,
+): string {
+  const errorMessage = getErrorMsg(error);
+  const normalized = errorMessage.toLowerCase();
+  const isDuplicateCodeConstraint = normalized.includes('factory_id')
+    && normalized.includes('code')
+    && (normalized.includes('数据已存在')
+      || normalized.includes('duplicate')
+      || normalized.includes('unique')
+      || normalized.includes('already exists'));
+  return isDuplicateCodeConstraint ? duplicateCodeMessage : errorMessage || fallback;
+}
+
 export default function EquipmentManagementScreen() {
   const user = useAuthStore((state) => state.user);
   const actorKey = equipmentActorKey(user);
@@ -313,7 +329,14 @@ function EquipmentManagementContent() {
           equipmentName: validatedFormData.name,
           factoryId: context.factoryId,
         });
-        appAlert(t('equipmentManagement.messages.createFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
+        appAlert(
+          t('equipmentManagement.messages.createFailed'),
+          getEquipmentMutationError(
+            e,
+            t('equipmentManagement.messages.mutationErrorRetry'),
+            t('equipmentManagement.messages.duplicateCode'),
+          ),
+        );
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -343,7 +366,14 @@ function EquipmentManagementContent() {
           equipmentId: canonical.id,
           factoryId: context.factoryId,
         });
-        appAlert(t('equipmentManagement.messages.updateFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
+        appAlert(
+          t('equipmentManagement.messages.updateFailed'),
+          getEquipmentMutationError(
+            e,
+            t('equipmentManagement.messages.mutationErrorRetry'),
+            t('equipmentManagement.messages.duplicateCode'),
+          ),
+        );
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -371,7 +401,14 @@ function EquipmentManagementContent() {
           equipmentId: canonical.id,
           factoryId: context.factoryId,
         });
-        appAlert(t('equipmentManagement.messages.deleteFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
+        appAlert(
+          t('equipmentManagement.messages.deleteFailed'),
+          getEquipmentMutationError(
+            e,
+            t('equipmentManagement.messages.mutationErrorRetry'),
+            t('equipmentManagement.messages.duplicateCode'),
+          ),
+        );
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -400,7 +437,14 @@ function EquipmentManagementContent() {
           newStatus,
           factoryId: context.factoryId,
         });
-        appAlert(t('equipmentManagement.messages.statusUpdateFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
+        appAlert(
+          t('equipmentManagement.messages.statusUpdateFailed'),
+          getEquipmentMutationError(
+            e,
+            t('equipmentManagement.messages.mutationErrorRetry'),
+            t('equipmentManagement.messages.duplicateCode'),
+          ),
+        );
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
