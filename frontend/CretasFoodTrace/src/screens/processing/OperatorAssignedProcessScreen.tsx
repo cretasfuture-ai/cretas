@@ -12,6 +12,7 @@ import { theme } from '../../theme';
 import type { ShortageAlertDetailParams } from './ShortageAlertDetailScreen';
 import { isTaskClaimableBy, isTaskReportComplete } from '../../utils/operatorAssignedProcess';
 import { groupShortageRequests } from '../../utils/shortageRequestGrouping';
+import { FrontlineAIEntry } from '../../components/ai/FrontlineAIEntry';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
@@ -429,11 +430,18 @@ export default function OperatorAssignedProcessScreen() {
           </NeoButton>
         </View>
       )}
+      {/* 一线 AI 助手入口: 固定在底部、次级样式, 不抢「点批次报工」主操作; 加载/列表/空状态都在。组件自己判角色+熔断开关 */}
+      <FrontlineAIEntry containerStyle={styles.aiEntryDock} />
     </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  aiEntryDock: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
   centerContainer: {
     flex: 1,
     alignItems: 'center',

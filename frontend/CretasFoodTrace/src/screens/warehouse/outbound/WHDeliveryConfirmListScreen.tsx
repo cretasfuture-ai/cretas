@@ -31,6 +31,7 @@ import {
 import { handleError } from '../../../utils/errorHandler';
 import { displayUnit } from '../../../utils/packagingUnitConversion';
 import { formatDateTime } from '../../../utils/formatters';
+import { FrontlineAIEntry } from '../../../components/ai/FrontlineAIEntry';
 import {
   filterPendingDeliveries,
   isConfirmableDeliveryStatus,
@@ -453,12 +454,15 @@ export function WHDeliveryConfirmListScreen() {
 
         <View style={{ height: 24 }} />
       </ScrollView>
+      {/* 一线 AI 助手入口 (仅 warehouse_worker; 本屏与仓储主管共用, 组件自己判角色+熔断开关) */}
+      <FrontlineAIEntry containerStyle={styles.aiEntryDock} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
+  aiEntryDock: { paddingHorizontal: 16, paddingVertical: 8 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#666' },
   header: { backgroundColor: '#4CAF50', paddingHorizontal: 16, paddingVertical: 16 },

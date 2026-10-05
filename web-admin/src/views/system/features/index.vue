@@ -96,6 +96,8 @@ const moduleScreens: Record<string, Array<{ id: string; label: string }>> = {
     { id: 'ExcelUpload', label: 'Excel上传 (SmartBI首页)' },
     { id: 'NLQuery', label: 'AI自然语言查询 (SmartBI首页)' },
     { id: 'AIAnalysis', label: 'AI分析 (工厂管理Tab)' },
+    // 一线 AI 助手入口 = 熔断开关(默认开), 勾选即对本工厂关闭; 见 RN config/frontlineAIEntry.ts
+    { id: 'FrontlineAIChat', label: 'AI 助手入口 (操作员/仓库员/质检员首页)' },
     { id: 'Reports', label: '报表 (工厂管理Tab)' }
   ]
 };

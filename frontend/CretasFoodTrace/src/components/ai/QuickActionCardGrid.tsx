@@ -79,6 +79,35 @@ const RESTAURANT_CARDS: CardFactory = ({ onSendIntent }) => [
   { icon: 'chef-hat', label: '经营建议', description: '让 AI 综合诊断', action: () => onSendIntent('基于最近7天经营数据做一次综合诊断，按优先级给出三条有数据依据的行动建议') },
 ];
 
+// 一线角色卡组 (2026-10-05 owner: 一线角色给 AI 入口并加示例卡片)。
+// ⚠️ 每张卡发出去的那句话都在 prod 识别接口上逐角色量过: 16/16 直接落到目标意图、不触发反问;
+//    并且该角色在服务端有权执行 (意图名单见 V20261101_55, 原则「AI 能做的 = App 里本来就能做的」)。
+//    改措辞要重新量 —— 第一张卡就弹「您是想…」或被拒, 比没有卡更糟。
+//    实测被换掉的说法: 「低库存预警」「今天的出货记录」(都要反问); 「今天要发哪些货」落到会建单的意图。
+const PRODUCTION_LINE_CARDS: CardFactory = ({ onSendIntent }) => [
+  { icon: 'clipboard-check', label: '报工', description: '完成工序、填产量', action: () => onSendIntent('我要报工') },
+  { icon: 'format-list-checks', label: '我的任务', description: '今天要做的工序', action: () => onSendIntent('今天我的工序任务') },
+  { icon: 'clock-in', label: '上班打卡', description: '记录上班时间', action: () => onSendIntent('上班打卡') },
+  { icon: 'clock-out', label: '下班打卡', description: '记录下班时间', action: () => onSendIntent('下班打卡') },
+];
+
+const FRONTLINE_ROLE_CARDS: Record<string, CardFactory> = {
+  operator: PRODUCTION_LINE_CARDS,
+  yield_operator: PRODUCTION_LINE_CARDS,
+  warehouse_worker: ({ onSendIntent }) => [
+    { icon: 'magnify', label: '查库存', description: '原材料库存', action: () => onSendIntent('查询原材料库存') },
+    { icon: 'alert', label: '库存不足', description: '哪些原料快没了', action: () => onSendIntent('查一下库存不足的原料') },
+    { icon: 'calendar-alert', label: '快过期', description: '临期的原料', action: () => onSendIntent('快过期的原料有哪些') },
+    { icon: 'truck-delivery', label: '出货记录', description: '查看出货情况', action: () => onSendIntent('查询出货记录') },
+  ],
+  quality_inspector: ({ onSendIntent }) => [
+    { icon: 'clipboard-list', label: '待检批次', description: '今天要检的批次', action: () => onSendIntent('今天待质检的批次') },
+    { icon: 'alert-octagon', label: '登记不良', description: '记录质检问题', action: () => onSendIntent('登记质检不良') },
+    { icon: 'chart-bar', label: '质检统计', description: '合格率等数据', action: () => onSendIntent('质检统计') },
+    { icon: 'clock-in', label: '上班打卡', description: '记录上班时间', action: () => onSendIntent('上班打卡') },
+  ],
+};
+
 const ROLE_CARDS: Record<string, CardFactory> = {
   factory_super_admin: ({ onSendIntent, onNavigate }) => [
     { icon: 'clipboard-text', label: '生产报工', description: '记录产量和用料', action: () => onSendIntent('我要报工') },
@@ -103,7 +132,7 @@ const ROLE_CARDS: Record<string, CardFactory> = {
     { icon: 'package-up', label: '出库发货', description: '发货出库', action: () => onSendIntent('出库') },
     { icon: 'magnify', label: '查库存', description: '查看原材料库存', action: () => onSendIntent('查询原材料库存') },
     { icon: 'alert', label: '低库存', description: '库存预警查看', action: () => onSendIntent('低库存预警') },
-  ],
+  ],  ...FRONTLINE_ROLE_CARDS,
 };
 
 /** 卡组选择: 餐饮 > 牛业 > 角色。导出给测试钉「同一个 factoryId 落到同一组」。 */

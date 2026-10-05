@@ -925,6 +925,7 @@
     "title": "AI Chat",
     "welcome": "Hello! I'm your AI assistant, happy to help you.",
     "canHelp": "I can help you with:",
+    "voiceHint": "Tap the microphone below and say what you need to do.",
     "restaurantWelcome": "Hello! I am your restaurant operations AI assistant, using store, dish, order, inventory, and wastage data.",
     "restaurantCanHelp": "Choose an operations question or enter what you want to analyze:",
     "help1": "Analyze production cost trends, provide optimization suggestions",

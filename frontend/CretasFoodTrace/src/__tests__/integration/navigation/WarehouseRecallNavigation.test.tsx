@@ -115,6 +115,8 @@ jest.mock("../../../screens/warehouse/inventory/WHStocktakeDetailScreen", () => 
 jest.mock("../../../screens/warehouse/inventory/StocktakeEntryScreen", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../../screens/profile/FeedbackScreen", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../../navigation/OperatingReportStackNavigator", () => ({ __esModule: true, default: () => null }));
+// 2026-10-05 起仓库员根导航器注册 AIChat (一线 AI 入口); 真屏会拉 expo-speech 原生模块, 本测试不涉及它
+jest.mock("../../../screens/factory-admin/ai-analysis/AIChatScreen", () => ({ __esModule: true, default: () => null }));
 
 import WarehouseWorkerNavigator from "../../../navigation/WarehouseWorkerNavigator";
 import WarehouseManagerTabNavigator from "../../../navigation/WarehouseManagerTabNavigator";

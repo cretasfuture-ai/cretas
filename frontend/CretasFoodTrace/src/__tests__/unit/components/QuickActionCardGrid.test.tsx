@@ -164,6 +164,49 @@ describe('存量卡的落点不变', () => {
   });
 });
 
+// 一线卡组 (2026-10-05)。每句话都在 prod 识别接口上按角色量过 (16/16 直接落到目标意图、不反问),
+// 这里钉的就是**量过的那句话** —— 改措辞会红, 红了先去重新量, 再改这里。
+const FRONTLINE_CARDS: Record<string, Array<[string, string]>> = {
+  operator: [['报工', '我要报工'], ['我的任务', '今天我的工序任务'], ['上班打卡', '上班打卡'], ['下班打卡', '下班打卡']],
+  yield_operator: [['报工', '我要报工'], ['我的任务', '今天我的工序任务'], ['上班打卡', '上班打卡'], ['下班打卡', '下班打卡']],
+  warehouse_worker: [['查库存', '查询原材料库存'], ['库存不足', '查一下库存不足的原料'], ['快过期', '快过期的原料有哪些'], ['出货记录', '查询出货记录']],
+  quality_inspector: [['待检批次', '今天待质检的批次'], ['登记不良', '登记质检不良'], ['质检统计', '质检统计'], ['上班打卡', '上班打卡']],
+};
+
+describe('一线角色卡组', () => {
+  it('参数化的那一维真的不同: 四个角色, 三组不同的卡 (yield_operator 与 operator 同组)', () => {
+    expect(Object.keys(FRONTLINE_CARDS)).toHaveLength(4);
+    expect(new Set(Object.values(FRONTLINE_CARDS).map((c) => JSON.stringify(c))).size).toBe(3);
+  });
+
+  it.each(Object.keys(FRONTLINE_CARDS))('%s: 标签, 以及每张卡发出的正是量过的那句话; 不跳屏', (role) => {
+    const expected = FRONTLINE_CARDS[role]!;
+    const { screen, onSendIntent, onNavigate } = renderGrid(role);
+    expect(labels(screen)).toEqual(expected.map(([label]) => label));
+    expected.forEach(([, phrase], i) => {
+      fireEvent.press(screen.getByTestId(`quick-action-card-${i}`));
+      expect(onSendIntent).toHaveBeenLastCalledWith(phrase);
+    });
+    expect(onSendIntent).toHaveBeenCalledTimes(expected.length);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('换掉的说法不许回来 (它们在 prod 上要反问, 或落到会建单的意图)', () => {
+    const sent: string[] = [];
+    for (const role of Object.keys(FRONTLINE_CARDS)) {
+      const { screen, onSendIntent } = renderGrid(role);
+      for (let i = 0; screen.queryByTestId(`quick-action-card-${i}`); i += 1) {
+        fireEvent.press(screen.getByTestId(`quick-action-card-${i}`));
+      }
+      sent.push(...onSendIntent.mock.calls.map((c: unknown[]) => String(c[0])));
+    }
+    expect(sent).toHaveLength(16);
+    for (const bad of ['低库存预警', '今天的出货记录', '今天要发哪些货']) {
+      expect(sent).not.toContain(bad);
+    }
+  });
+});
+
 describe('视觉与无障碍', () => {
   it('每张卡都有 accessibilityLabel = 标签，role=button', () => {
     const { screen } = renderGrid('factory_super_admin', { factoryId: 'CATTLE_3701_001' });
