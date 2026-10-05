@@ -615,6 +615,17 @@ public class PermissionServiceImpl implements PermissionService {
 
     @Override
     public Map<String, String> resolveRoleModuleLevels(String factoryId, FactoryUserRole role) {
+        return resolveRoleModuleLevels(factoryId, role, false);
+    }
+
+    @Override
+    public Map<String, String> resolveModuleLevelsForAuthorization(User user) {
+        if (user == null) return Collections.emptyMap();
+        return resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true);
+    }
+
+    private Map<String, String> resolveRoleModuleLevels(
+            String factoryId, FactoryUserRole role, boolean requireAvailable) {
         if (role == null || role == FactoryUserRole.unactivated) {
             return Collections.emptyMap();
         }
@@ -624,8 +635,8 @@ public class PermissionServiceImpl implements PermissionService {
         // ⚠️ 这两张 map 只是「同一张表的一次性快照」, 链的顺序仍然只写在 resolveEffectiveLevel 里;
         //    hasPermission 走的是同一个方法的 snapshot == null 分支 (逐格查, 有 5 分钟缓存)。
         LayerSnapshot snapshot = new LayerSnapshot(
-                factoryId == null ? Collections.emptyMap() : layer2LevelsForRole(factoryId, role.name()),
-                layer1LevelsForRole(role.name()));
+                factoryId == null ? Collections.emptyMap() : layer2LevelsForRole(factoryId, role.name(), requireAvailable),
+                layer1LevelsForRole(role.name(), requireAvailable));
 
         // 模块全集: 三层里任一层为该角色登记过的模块。owner 2026-09-06 已裁定「以 L1 模块码为准」(#675/#689),
         // 这里取并集是为了让硬编码兜底独有的格 (L1 无行) 也进登录响应, 不是在挑清单。
@@ -699,8 +710,11 @@ public class PermissionServiceImpl implements PermissionService {
     }
 
     /** L1 该角色的全部有效行, 一次查询, 值 normalize 成 rw/r/w/-. 查询失败 → 空 map (与 resolveLayer1 的 null 同义). */
-    private Map<String, String> layer1LevelsForRole(String roleCode) {
-        if (platformRepo == null) return Collections.emptyMap();
+    private Map<String, String> layer1LevelsForRole(String roleCode, boolean requireAvailable) {
+        if (platformRepo == null) {
+            if (requireAvailable) throw new IllegalStateException("L1 permission repository unavailable");
+            return Collections.emptyMap();
+        }
         try {
             Map<String, String> out = new HashMap<>();
             for (PlatformRolePermission row : platformRepo.findByRoleCodeAndDeletedAtIsNull(roleCode)) {
@@ -710,14 +724,18 @@ public class PermissionServiceImpl implements PermissionService {
             }
             return out;
         } catch (Exception e) {
+            if (requireAvailable) throw new IllegalStateException("L1 permission snapshot unavailable", e);
             log.warn("L1 list resolve failed for role={}: {}", roleCode, e.getMessage());
             return Collections.emptyMap();
         }
     }
 
     /** L2 该工厂对该角色的全部覆盖格, 一次查询; 与 resolveLayer2 同一数据源、同一「第一个配置命中」顺序 (putIfAbsent). */
-    private Map<String, String> layer2LevelsForRole(String factoryId, String roleCode) {
-        if (factoryConfigRepo == null) return Collections.emptyMap();
+    private Map<String, String> layer2LevelsForRole(String factoryId, String roleCode, boolean requireAvailable) {
+        if (factoryConfigRepo == null) {
+            if (requireAvailable) throw new IllegalStateException("L2 permission repository unavailable");
+            return Collections.emptyMap();
+        }
         try {
             Map<String, String> out = new HashMap<>();
             List<FactoryModuleConfig> configs = factoryConfigRepo.findByFactoryIdAndConfigVersion(factoryId, 1);
@@ -732,6 +750,7 @@ public class PermissionServiceImpl implements PermissionService {
             }
             return out;
         } catch (Exception e) {
+            if (requireAvailable) throw new IllegalStateException("L2 permission snapshot unavailable", e);
             log.warn("L2 list resolve failed for factory={}, role={}: {}", factoryId, roleCode, e.getMessage());
             return Collections.emptyMap();
         }

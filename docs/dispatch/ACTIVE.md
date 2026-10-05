@@ -18,6 +18,7 @@
 
 
 
+- `F006-MOBILE-R56-20261005` — `queued` — Owner root — Base `c0417f2e5665b849cc65cb773d0f3728145a137e` — R55仅Gateway严格快照；HTTP/W9逐格权限repo异常fallback及缓存仍须真实Interceptor/Guard复核。测试设计见archive/2026-10-05-f006-mobile-r56-per-cell-availability-followup.md；未锁新源码。
 - `F006-MOBILE-R54-20261005` — `queued` — Owner root — Base `90e292646f4daee51012b258fb51c187da72573d` — 库存batch/WIP/expired同因源码风险，非线上泄露。只读复核HTTP权限/行范围后再锁源码；实际对照与分页设计见archive/2026-10-05-f006-mobile-r54-inventory-siblings-followup.md。
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
 - `F006-MOBILE-R44-20261005` — `queued` — Owner root/只读追踪 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — F006状态参数缺省/available/AVAILABLE三GET同200行含77已耗尽/用完。PageRequest有status但列表服务未用；库位/临期实际UI未复现；临期需保留EXPIRED，后续明确状态集及查询/JPA门禁。0变更。

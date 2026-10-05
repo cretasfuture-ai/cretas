@@ -65,6 +65,11 @@ class ToolGatewayPriceBoundaryContractTest {
     @BeforeEach
     void setUp() {
         permissionService = new PermissionServiceImpl();
+        // Successful empty canonical repositories retain the existing known-absent role fallback.
+        ReflectionTestUtils.setField(permissionService, "platformRepo", org.mockito.Mockito.mock(
+                com.cretas.aims.repository.permission.PlatformRolePermissionRepository.class));
+        ReflectionTestUtils.setField(permissionService, "factoryConfigRepo", org.mockito.Mockito.mock(
+                com.cretas.aims.repository.config.FactoryModuleConfigRepository.class));
         activeUser = new User();
         activeUser.setId(42L);
         activeUser.setFactoryId("F006");

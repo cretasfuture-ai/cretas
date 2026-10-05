@@ -49,7 +49,7 @@ class ToolPrincipalPolicyTest {
     void reloadsIdentityAndPermissionsAndIgnoresCommandClaims() {
         when(userRepository.findById(42L)).thenReturn(Optional.of(user));
         when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
-        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevels(user))
+        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevelsForAuthorization(user))
                 .thenReturn(Map.of("restaurant", "rw"));
 
         ExecutionPrincipal asserted = principal(
@@ -102,7 +102,7 @@ class ToolPrincipalPolicyTest {
     void rehydratesCanonicalPriceGrantSeparatelyFromReadWritePermissions() {
         when(userRepository.findById(42L)).thenReturn(Optional.of(user));
         when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
-        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevels(user)).thenReturn(Map.of("inventory", "r"));
+        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevelsForAuthorization(user)).thenReturn(Map.of("inventory", "r"));
         when(permissionService.hasPermission(user, "procurement:price:view")).thenReturn(true);
 
         ToolPrincipalPolicy.RehydratedPrincipal current = policy.rehydrate(

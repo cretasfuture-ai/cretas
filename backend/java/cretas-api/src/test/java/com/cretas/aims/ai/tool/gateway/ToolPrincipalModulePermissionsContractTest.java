@@ -48,7 +48,7 @@ class ToolPrincipalModulePermissionsContractTest {
         factory.setIsActive(true);
         lenient().when(userRepository.findById(42L)).thenReturn(Optional.of(user));
         lenient().when(factoryRepository.findById("F006")).thenReturn(Optional.of(factory));
-        lenient().when(permissionService.resolveModuleLevels(user)).thenReturn(Map.of(
+        lenient().when(permissionService.resolveModuleLevelsForAuthorization(user)).thenReturn(Map.of(
                 "inventory", "r", "warehouse", "rw", "future_axis", "w"));
         lenient().when(permissionService.hasPermission(user, "procurement:price:view")).thenReturn(false);
     }
@@ -59,7 +59,7 @@ class ToolPrincipalModulePermissionsContractTest {
         assertThat(result.principal().permissions()).containsExactlyInAnyOrder(
                 "inventory:read", "warehouse:read", "warehouse:write", "warehouse:read_write",
                 "future_axis:write");
-        verify(permissionService).resolveModuleLevels(user);
+        verify(permissionService).resolveModuleLevelsForAuthorization(user);
         verify(permissionService, never()).getUserPermissions(any());
     }
 
@@ -75,7 +75,7 @@ class ToolPrincipalModulePermissionsContractTest {
 
     @Test
     void missingCanonicalLevelsFailsClosedBeforeBusinessAdmission() {
-        when(permissionService.resolveModuleLevels(user)).thenReturn(Map.of());
+        when(permissionService.resolveModuleLevelsForAuthorization(user)).thenReturn(Map.of());
         assertThat(policy.rehydrate(principal()).orElseThrow().principal().permissions()).isEmpty();
     }
 
@@ -203,6 +203,88 @@ class ToolPrincipalModulePermissionsContractTest {
                 "future_axis:read", "future_axis:write", "future_axis:read_write");
         assertThat(f.runtime.resolve(command, trusted)).isPresent();
         assertThat(f.gateway.execute(command).status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+    }
+
+    @Test
+    void actualL1RepositoryOutageRejectsInsteadOfRestoringFallbackAllow() throws Exception {
+        var f = new ToolGatewayDataScopeBoundaryContractTest.StockFixture();
+        f.platformRows.add(level("warehouse_worker", "inventory", "-"));
+        f.platformRows.add(level("warehouse_worker", "warehouse", "-"));
+        when(f.l1.findByRoleCodeAndDeletedAtIsNull(anyString()))
+                .thenThrow(new IllegalStateException("offline L1 unavailable"));
+        var worker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            worker.submit(() -> {
+                assertThat(f.gateway.execute(f.command(101L)).status()).isEqualTo(ToolExecutionStatus.DENIED);
+                assertThat(f.queries).isEmpty();
+                ToolGatewayDataScopeBoundaryContractTest.assertCleanWorker();
+                doAnswer(i -> f.platformRows.stream()
+                        .filter(r -> r.getRoleCode().equals(i.getArgument(0))).toList())
+                        .when(f.l1).findByRoleCodeAndDeletedAtIsNull(anyString());
+                assertThat(f.gateway.execute(f.command(101L)).status()).isEqualTo(ToolExecutionStatus.DENIED);
+                assertThat(f.queries).isEmpty();
+                f.platformRows.clear(); // successful empty lookup permits the existing known-absent fallback
+                var recovered = f.gateway.execute(f.command(101L));
+                assertThat(recovered.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+                ToolGatewayDataScopeBoundaryContractTest.assertStock(recovered.payload(), java.util.List.of("A"), false);
+                ToolGatewayDataScopeBoundaryContractTest.assertCleanWorker();
+            }).get();
+        } finally { worker.shutdownNow(); }
+    }
+
+    @Test
+    void actualL2RepositoryOutageRejectsInsteadOfRestoringPlatformAllow() throws Exception {
+        var f = new ToolGatewayDataScopeBoundaryContractTest.StockFixture();
+        f.platformRows.add(level("warehouse_worker", "inventory", "r"));
+        f.platformRows.add(level("warehouse_worker", "warehouse", "-"));
+        f.factoryRows.add(FactoryModuleConfig.builder().factoryId("F006").moduleCode("inventory")
+                .configVersion(1).roleModuleOverride(Map.of("warehouse_worker", Map.of("inventory", "-"))).build());
+        when(f.l2.findByFactoryIdAndConfigVersion("F006", 1))
+                .thenThrow(new IllegalStateException("offline L2 unavailable"));
+        var worker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            worker.submit(() -> {
+                assertThat(f.gateway.execute(f.command(101L)).status()).isEqualTo(ToolExecutionStatus.DENIED);
+                assertThat(f.queries).isEmpty();
+                ToolGatewayDataScopeBoundaryContractTest.assertCleanWorker();
+                doAnswer(i -> f.factoryRows.stream()
+                        .filter(r -> r.getFactoryId().equals(i.getArgument(0))).toList())
+                        .when(f.l2).findByFactoryIdAndConfigVersion("F006", 1);
+                assertThat(f.gateway.execute(f.command(101L)).status()).isEqualTo(ToolExecutionStatus.DENIED);
+                assertThat(f.queries).isEmpty();
+                f.factoryRows.clear();
+                var recovered = f.gateway.execute(f.command(101L));
+                assertThat(recovered.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+                ToolGatewayDataScopeBoundaryContractTest.assertStock(recovered.payload(), java.util.List.of("A"), false);
+                ToolGatewayDataScopeBoundaryContractTest.assertCleanWorker();
+            }).get();
+        } finally { worker.shutdownNow(); }
+    }
+
+    @Test
+    void missingAuthorizationRepositoriesCannotSupplyTrustedSnapshot() {
+        for (String field : java.util.List.of("platformRepo", "factoryConfigRepo")) {
+            var f = new ToolGatewayDataScopeBoundaryContractTest.StockFixture();
+            ReflectionTestUtils.setField(f.canonical, field, null);
+            assertThat(f.gateway.execute(f.command(101L)).status()).isEqualTo(ToolExecutionStatus.DENIED);
+            assertThat(f.queries).isEmpty();
+            ToolGatewayDataScopeBoundaryContractTest.assertCleanWorker();
+        }
+    }
+
+    @Test
+    void nullStrictSnapshotRejectsIdentityBeforePriceAuthorization() {
+        when(permissionService.resolveModuleLevelsForAuthorization(user)).thenReturn(null);
+        assertThat(policy.rehydrate(principal())).isEmpty();
+        verify(permissionService, never()).hasPermission(any(), anyString());
+    }
+
+    @Test
+    void implementationWithoutStrictAuthorizationCapabilityFailsClosed() {
+        PermissionService unsupported = mock(PermissionService.class, CALLS_REAL_METHODS);
+        ToolPrincipalPolicy actual = new ToolPrincipalPolicy(userRepository, factoryRepository, unsupported);
+        assertThat(actual.rehydrate(principal())).isEmpty();
+        verify(unsupported, never()).getUserPermissions(any());
     }
 
     private static PlatformRolePermission level(String role, String module, String level) {

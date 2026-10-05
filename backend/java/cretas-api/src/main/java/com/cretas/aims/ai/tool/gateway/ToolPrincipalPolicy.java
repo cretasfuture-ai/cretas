@@ -63,8 +63,11 @@ public class ToolPrincipalPolicy {
             if (currentRole == null || currentRole.isBlank()) {
                 return Optional.empty();
             }
-            Set<String> currentPermissions = moduleLevelPermissions(
-                    permissionService.resolveModuleLevels(user));
+            Map<String, String> currentLevels = permissionService.resolveModuleLevelsForAuthorization(user);
+            if (currentLevels == null) {
+                return Optional.empty();
+            }
+            Set<String> currentPermissions = moduleLevelPermissions(currentLevels);
             boolean canViewPrices = permissionService.hasPermission(
                     user, "procurement:price:view");
             ExecutionPrincipal current = new ExecutionPrincipal(
