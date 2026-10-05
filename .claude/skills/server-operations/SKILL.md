@@ -5,7 +5,7 @@ description: cretas 服务器运维：6 台机器地图、SSH 登录、systemd �
 
 # 服务器运维
 
-**最后更新**: 2026-10-05（部署入口并入 `deploy-backend`，去掉重复与过期的发布说明）
+**最后更新**: 2026-10-05（部署入口并入 `deploy-backend`；补两槽 JVM 配置，更正 heap dump 的说法）
 
 ## 全局服务器地图（6 台）
 
@@ -35,6 +35,18 @@ ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.con
 
 别 grep `/www/server/panel/vhost/nginx/` 整个目录，只看 `*.conf`：目录里混着历史 `.conf.bak*`。2026-08-19 曾据此数出 6 处「转发到 10010」，而生效配置里一处都没有，差点报成「生产挂了」。
 
+### 两槽的 JVM 配置
+
+| 槽 | unit | 端口 | 日志 | JVM |
+|---|---|---|---|---|
+| blue | `cretas-backend` | 10010 | `cretas-prod.log` | `-Xms768m -Xmx3g -XX:MaxMetaspaceSize=512m -XX:+ExitOnOutOfMemoryError -XX:+UseG1GC` |
+| green | `cretas-backend-green` | 10020（管理端口 10022） | `cretas-prod-green.log` | 同上 |
+
+- 两个 unit 文件在 47 上手工维护（`/etc/systemd/system/cretas-backend{,-green}.service`），部署脚本不写它们，仓库里也没有副本。改一槽就要两槽一起改：2026-10-05 发现 green 一直是 `-Xmx2560m`，已对齐到 3g。核对：`grep -oE 'Xm[sx][0-9]+[gm]' /etc/systemd/system/cretas-backend*.service`。
+- 改完 `systemctl daemon-reload`，在该槽下次启动时生效。不要为了改堆去重启 active 槽，那就是停服；等下一次发布切到它。确认生效看运行中进程：`tr '\0' ' ' < /proc/<MainPID>/cmdline`。
+- OOM 时 JVM 直接退出，不留 heap dump。systemd `Restart=on-failure` 15s 后拉起，120s 内最多 3 次。查 OOM 就在该槽的日志里 grep `OutOfMemoryError`，再看 `journalctl -u <unit>`。
+- 切流期间两槽同时在跑，峰值是两份 3g 堆加元空间，机器总共 15GB 内存，而且 swap 常年在用。不要再往上调堆，除非先确认切流时还放得下。
+
 ## 内容分布
 
 | 内容 | 服务器 | 路径 | 访问 |
@@ -54,7 +66,7 @@ Showcase 和 mock-platform 只上 139，不上 47：模拟器扮演「外部世�
 
 ## 环境
 
-47 只跑 prod：主库 `cretas_prod_db`、SmartBI 库 `smartbi_prod_db`。test 环境 2026-07-13 下线（prod Java OOM 后为它腾出 ~1.5G；prod JVM `-Xmx3g`，`HeapDumpOnOutOfMemoryError` 已开，dump 落 `/www/wwwroot/cretas/logs/`）。业务测试环境当前分配以 memory `project_macmini_test_env_is_live_with_f006` 为准。cretas 的库已全部是 PostgreSQL，MySQL 只在 vita 两台上。
+47 只跑 prod：主库 `cretas_prod_db`、SmartBI 库 `smartbi_prod_db`。test 环境 2026-07-13 下线（prod Java OOM 后为它腾出 ~1.5G；JVM 配置见上方「两槽的 JVM 配置」）。业务测试环境当前分配以 memory `project_macmini_test_env_is_live_with_f006` 为准。cretas 的库已全部是 PostgreSQL，MySQL 只在 vita 两台上。
 
 ## systemd
 
