@@ -76,7 +76,10 @@
 | 层 | 在哪 | 怎么关 | 生效方式 | 作用范围 |
 |---|---|---|---|---|
 | ① 全局 OTA 常量 | `src/config/frontlineAIEntry.ts` 的 `FRONTLINE_AI_ENTRY_GLOBAL_ENABLED` | 改成 `false` → 合并 main → 推 OTA | OTA（无需商店发版） | 所有工厂 |
-| ② 按工厂远程配置 | 既有 `feature-config`（`factoryFeatureStore.isScreenEnabled`），屏幕 ID `FrontlineAIChat`，归属模块 `smartbi` | web-admin「系统 → 功能配置 → 智能BI → 禁用的屏幕」勾选「AI 助手入口（一线）」；或整个 smartbi 模块关掉 | 下次登录 / App 重启加载功能配置时生效（无需发版、无需 OTA） | 单个工厂 |
+| ② 按工厂远程配置 | 既有 `feature-config`（`factoryFeatureStore.isScreenEnabled`），屏幕 ID `FrontlineAIChat`，归属模块 `smartbi` | web-admin「系统 → 功能配置 → 智能BI → 详细配置 → 禁用的屏幕」勾选「AI 助手入口 (操作员/仓库员/质检员首页)」；或整个 smartbi 模块关掉 | 下次登录 / App 重启加载功能配置时生效（无需发版、无需 OTA） | 单个工厂 |
+
+⚠️ 第②层前提：该工厂要有 `smartbi` 这一行功能配置（`PUT /feature-config/smartbi` 对不存在的行回 400）。
+没有的话先在同一页点「初始化默认配置」。没有这一行时入口是**开**的（默认开），所以这只影响「想关的时候关不关得掉」。
 
 选择理由：
 - 第②层**复用既有机制**：`feature-config` 本来就是「后台开关 → RN 隐藏屏幕」的通道，`WarehouseWorkerNavigator`
@@ -85,6 +88,18 @@
 - 第①层补的是「全局一键关」：第②层是按工厂的，要全关得一家家点。
 - ⚠️ 已知性质：功能配置加载失败时 `isScreenEnabled` 返回 true（既有的向后兼容行为）⇒ 第②层 **fail-open**。
   可接受的理由：入口只是 UI，服务端逐意图鉴权不受影响；需要「确定关掉」时用第①层。
+
+## 测试与变异（2026-10-05）
+
+| 文件 | 守什么 |
+|---|---|
+| `src/__tests__/integration/navigation/FrontlineAIEntryNavigation.test.tsx` | 真导航器 + 真首页：三角色默认有入口且点了到 AIChat；全局 / 本工厂 / smartbi 关 ⇒ 入口和路由都没有；运行中被关掉当场消失；yield_operator 没有 |
+| `src/__tests__/integration/screens/AIChatScreenFrontlineRoles.test.tsx` | 三角色下欢迎区（F3）、澄清 / 追问确认 / 写确认卡都渲染、请求不带角色；场景过滤活着但入口路径不触发 |
+| `src/__tests__/unit/config/frontlineAIEntry.test.ts` | 纯判定 + 真 factoryFeatureStore（含 fail-open 那一格） |
+| `src/__tests__/unit/navigation/roleNavigatorBoundariesContract.test.ts` | 三个导航器里 AIChat 只注册一次、且只在开关后面（含正则阳性对照） |
+
+变异（每条先证明打进去了，再看红）：M1 判定忽略两层开关 → 17 红；M2 hook 丢掉全局常量（纯函数单测看不见）→ 3 红；
+M3 仓库员导航器无条件注册 AIChat → 4 红；M4 欢迎区恒显示「我可以帮您：」→ 3 红。全部用 Edit 还原，工作树干净。
 
 ## 不做的事
 
