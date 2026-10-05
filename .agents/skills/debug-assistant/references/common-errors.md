@@ -39,7 +39,7 @@
 | 错误 | 原因 | 解决命令 |
 |------|------|----------|
 | 端口被占用 | 旧进程未退出 | `ssh root@47.100.235.168 "ss -tlnp \| grep 10010"` |
-| 内存不足 / OOM | 堆上限在 systemd unit 里（两槽各自配置） | `grep Xmx /etc/systemd/system/cretas-backend*.service`；heap dump 在 `/www/wwwroot/cretas/logs/` |
+| 内存不足 / OOM | 两槽都是 `-Xmx3g` + `ExitOnOutOfMemoryError`：进程直接退出、systemd 15s 后拉起，不留 heap dump | 在该槽日志里 grep `OutOfMemoryError`；配置见 `.claude/skills/server-operations/SKILL.md`「两槽的 JVM 配置」 |
 | JAR 大小异常 (81M) | .jar.new 覆盖了正常 JAR | `rm -f aims-0.0.1-SNAPSHOT.jar.new` 后重新部署 |
 | 健康检查超时 | Spring Boot 冷启动慢 | 等待 60s 后重试 |
 
