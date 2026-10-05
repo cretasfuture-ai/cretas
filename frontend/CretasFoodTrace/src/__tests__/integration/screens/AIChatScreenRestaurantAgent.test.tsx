@@ -83,7 +83,11 @@ jest.mock('../../../components/ai/RichContentRenderer', () => ({
   RichContentRenderer: () => null,
   detectRichData: () => null,
 }));
-jest.mock('../../../components/ai/QuickActionCardGrid', () => ({ QuickActionCardGrid: () => null }));
+// 卡组网格不渲染; 但 AIChatScreen 用同一个 resolveCardFactory 决定欢迎语下一句 (2026-10-05 一线入口 F3), 取真的
+jest.mock('../../../components/ai/QuickActionCardGrid', () => ({
+  QuickActionCardGrid: () => null,
+  resolveCardFactory: jest.requireActual('../../../components/ai/QuickActionCardGrid').resolveCardFactory,
+}));
 jest.mock('../../../components/common/VoiceMicButton', () => ({ VoiceMicButton: () => null }));
 jest.mock('../../../services/audio/feedbackSounds', () => ({
   feedbackSounds: {

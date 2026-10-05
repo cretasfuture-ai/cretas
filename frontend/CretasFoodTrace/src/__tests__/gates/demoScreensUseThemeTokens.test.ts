@@ -46,6 +46,8 @@ export const GUARDED_FILES = [
   'components/ai/QuickActionCardGrid.tsx',
   // 2026-10-04 (rn-ai-write-confirm): AI 问答屏的写操作确认卡, 从写下第一行起就在闸里。
   'components/ai/AIWriteConfirmCard.tsx',
+  // 2026-10-05 (rn-frontline-ai-entry): 一线角色首页的 AI 助手入口, 从写下第一行起就在闸里。
+  'components/ai/FrontlineAIEntry.tsx',
 ] as const;
 
 const HEX6 = /#[0-9A-Fa-f]{6}\b/g;

@@ -34,7 +34,7 @@ describe('role-specific mobile navigator boundaries', () => {
     expect(source).not.toContain('PurchaseOrderCreateScreen');
   });
 
-  it('keeps warehouse workers on task stacks without manager home, AI or profile management', () => {
+  it('keeps warehouse workers on task stacks without manager home or profile management', () => {
     const source = read('navigation/WarehouseWorkerNavigator.tsx');
     expect(source).toContain('WHInboundStackNavigator');
     expect(source).toContain('WHOutboundStackNavigator');
@@ -42,7 +42,30 @@ describe('role-specific mobile navigator boundaries', () => {
     expect(source).toContain('MobileAccountScreen');
     expect(source).not.toContain('WHHomeStackNavigator');
     expect(source).not.toContain('WHProfileStackNavigator');
-    expect(source).not.toContain('AIChatScreen');
+  });
+
+  /**
+   * 2026-10-05 owner 裁定（Line B）：一线角色**默认就有** AI 助手，开关是熔断开关。
+   * 这条原来写的是「仓库员导航器里不许出现 AIChatScreen」—— 守的是旧需求（形态 C‴），
+   * 现在抬到性质：AI 对话**只能**经由熔断开关注册，且只注册一次（不许出现一条不受开关约束的旁路）。
+   * 行为层（开关关 ⇒ 入口和路由都没有）在 integration/navigation/FrontlineAIEntryNavigation.test.tsx。
+   */
+  it.each([
+    'navigation/WarehouseWorkerNavigator.tsx',
+    'navigation/OperatorNavigator.tsx',
+    'navigation/QualityInspectorNavigator.tsx',
+  ])('%s registers AIChat only behind the frontline AI kill switch', (file) => {
+    const code = readCode(file);
+    expect(code).toContain('useFrontlineAIEntryEnabled()');
+    expect(code.match(/name="AIChat"/g) ?? []).toHaveLength(1);
+    expect(code).toMatch(/\{aiEntryEnabled && \(\s*<RootStack\.Screen\s+name="AIChat"/);
+  });
+
+  it('阳性对照: 上面那条正则对一条不受开关约束的注册确实不匹配', () => {
+    const ungated = '<RootStack.Screen name="AIChat" component={AIChatScreen} />';
+    expect(ungated).not.toMatch(/\{aiEntryEnabled && \(\s*<RootStack\.Screen\s+name="AIChat"/);
+    const gated = '{aiEntryEnabled && (\n        <RootStack.Screen name="AIChat" component={AIChatScreen} />\n      )}';
+    expect(gated).toMatch(/\{aiEntryEnabled && \(\s*<RootStack\.Screen\s+name="AIChat"/);
   });
 
   it('locks unknown roles instead of granting a generic business workspace', () => {
