@@ -117,6 +117,10 @@ class ToolPrincipalPolicyTest {
     @Test
     void realCanonicalPermissionServiceAllowsBossAndRejectsManagerDespiteClaims() {
         PermissionServiceImpl canonical = new PermissionServiceImpl();
+        org.springframework.test.util.ReflectionTestUtils.setField(canonical, "platformRepo",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.permission.PlatformRolePermissionRepository.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(canonical, "factoryConfigRepo",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.config.FactoryModuleConfigRepository.class));
         ToolPrincipalPolicy canonicalPolicy = new ToolPrincipalPolicy(
                 userRepository, factoryRepository, canonical);
         when(userRepository.findById(42L)).thenReturn(Optional.of(user));

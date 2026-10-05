@@ -1,5 +1,7 @@
 # F006 R55 authorization availability — 2026-10-05
 
+Reopened `F006-MOBILE-R55-FIXTURE-20261005`, root sole Owner, Base `070b78044dab63285c7dd89d98c0376467871b47`. Frozen v2 independent review closed the production P1 but blocked final selector integration: `ToolPrincipalPolicyTest` real canonical rehydration fixture lacks strict L1/L2 repositories. Only this test file is reopened; inject successfully empty repository mocks, preserve strict production behavior and all assertions. Acceptance: Java21 `ToolPrincipalPolicyTest`, then immutable v3 freeze, independent review and final 36-class trusted selector build. No production, data or device edits in this fixture scope.
+
 Owner /root DIRECT; Base c0417f2e5665b849cc65cb773d0f3728145a137e. The frozen R51-R53 candidate is blocked by independent P1: canonical module-list repository failures are converted into absent layers, which can restore hardcoded allows over configured denies. No trusted build, push, PR or production action has occurred for that candidate.
 
 Exact additional/reopened source scope:
@@ -18,3 +20,5 @@ Before implementation, actual old Gateway/canonical permission-repository failur
 Acceptance: existing validated 35-class selector plus `PermissionServiceImplResolveModuleLevelsContractTest`; confirm that class exists before use. Targeted RED compiles existing Gateway contract tests against old API. Sequential Java21 Maven in this worktree; full logs and structured receipts private. Root owns docs, integration and release; no concurrent source owner.
 
 Candidate source frozen and scope released in this final candidate commit. Real L1/L2 query-outage behavior RED2 (SUCCEEDED instead of DENIED), restored five-class regression GREEN35; known absent, explicit deny, L2/L1, boss/worker price controls and same-worker recovery retained. Two final null/unsupported API unit assertions await the final trusted build after review. R56 records remaining per-cell/login outage fallback. No trusted build/PR/merge/deploy claimed. Reopen scope before further source edits.
+
+R55 fixture scope released in final v3 candidate. Only real canonical rehydration fixture now supplies successfully empty L1/L2 mocks. Existing assertions and production strict behavior preserved; actual PolicyTest 7/0/0/0 passed. Frozen v2 BLOCK_P1 retained privately. New immutable v3 review and final 36-class trusted build remain mandatory before publication.
