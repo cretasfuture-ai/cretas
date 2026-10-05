@@ -145,6 +145,16 @@ public interface PermissionService {
     Map<String, String> resolveModuleLevels(User user);
 
     /**
+     * Canonical authorization snapshot. Known empty successful queries may use the existing
+     * fallback; unavailable authorization repositories must throw rather than restore grants.
+     * Implementations without this strict capability are rejected by authorization callers.
+     */
+    default Map<String, String> resolveModuleLevelsForAuthorization(User user) {
+        throw new IllegalStateException("Authoritative module permissions unavailable");
+    }
+
+
+    /**
      * 同一条解析链的<b>角色级</b>入口: 不需要具体用户, 只要「哪个工厂 + 哪个角色」。
      *
      * <p>{@link #resolveModuleLevels(User)} 就是它加一层「从 user 取 factoryId/role」的壳 ——

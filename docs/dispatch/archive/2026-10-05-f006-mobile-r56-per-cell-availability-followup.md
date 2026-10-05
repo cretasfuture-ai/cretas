@@ -1,0 +1,7 @@
+# F006 R56 per-cell authorization availability — 2026-10-05
+
+Queued read-only investigation; Owner /root. Base c0417f2e5665b849cc65cb773d0f3728145a137e. No additional source scope claimed. R55 strictly rejects unavailable module snapshots at the Gateway; it does not repair other consumers' older per-cell/list fallback or five-minute cache behavior.
+
+`PermissionServiceImpl.resolveLayer1/resolveLayer2` catch repository errors and return absence; `hasPermission` uses the resulting `resolveEffectiveLevel` and caches the outcome. The existing `PermissionServiceImplResolveModuleLevelsContractTest` currently observes static module grants under an L1 outage. This is a source/isolated-observation risk, not proof of live F006 leakage.
+
+Next: actual PermissionInterceptor/ToolRbacGuard fixtures with configured L1 and factory L2 denies, repository query failure, successful missing-row fallback, existing cached decisions, recovery and boss/warehouse/production controls. Trace permission-cache invalidation before changing its contract. Determine the affected HTTP/native paths from the canonical permission declarations, register exact files and acceptance selectors, reproduce behavioral RED before implementation. No role grants, global switches, business writes or Repository query changes; if query declarations must change, add the real JPA startup gate. Do not present R55 as all authorization outage paths fixed.

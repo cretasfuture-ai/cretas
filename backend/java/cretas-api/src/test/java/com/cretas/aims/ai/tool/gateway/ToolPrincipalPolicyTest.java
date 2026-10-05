@@ -13,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -48,8 +49,8 @@ class ToolPrincipalPolicyTest {
     void reloadsIdentityAndPermissionsAndIgnoresCommandClaims() {
         when(userRepository.findById(42L)).thenReturn(Optional.of(user));
         when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
-        when(permissionService.getUserPermissions(user))
-                .thenReturn(Set.of("restaurant:read_write"));
+        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevelsForAuthorization(user))
+                .thenReturn(Map.of("restaurant", "rw"));
 
         ExecutionPrincipal asserted = principal(
                 "F-REST", "restaurant", Set.of("ADMIN"), Set.of("*:admin"));
@@ -58,7 +59,8 @@ class ToolPrincipalPolicyTest {
         assertThat(current.principal().tenantId()).isEqualTo("F-REST");
         assertThat(current.principal().businessType()).isEqualTo("RESTAURANT");
         assertThat(current.principal().roles()).containsExactly("restaurant_manager");
-        assertThat(current.principal().permissions()).containsExactly("restaurant:read_write");
+        assertThat(current.principal().permissions())
+                .containsExactlyInAnyOrder("restaurant:read", "restaurant:write", "restaurant:read_write");
         assertThat(current.executionContext())
                 .containsEntry("factoryId", "F-REST")
                 .containsEntry("businessType", "RESTAURANT")
@@ -100,7 +102,7 @@ class ToolPrincipalPolicyTest {
     void rehydratesCanonicalPriceGrantSeparatelyFromReadWritePermissions() {
         when(userRepository.findById(42L)).thenReturn(Optional.of(user));
         when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
-        when(permissionService.getUserPermissions(user)).thenReturn(Set.of("inventory:read"));
+        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevelsForAuthorization(user)).thenReturn(Map.of("inventory", "r"));
         when(permissionService.hasPermission(user, "procurement:price:view")).thenReturn(true);
 
         ToolPrincipalPolicy.RehydratedPrincipal current = policy.rehydrate(
@@ -115,6 +117,10 @@ class ToolPrincipalPolicyTest {
     @Test
     void realCanonicalPermissionServiceAllowsBossAndRejectsManagerDespiteClaims() {
         PermissionServiceImpl canonical = new PermissionServiceImpl();
+        org.springframework.test.util.ReflectionTestUtils.setField(canonical, "platformRepo",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.permission.PlatformRolePermissionRepository.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(canonical, "factoryConfigRepo",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.config.FactoryModuleConfigRepository.class));
         ToolPrincipalPolicy canonicalPolicy = new ToolPrincipalPolicy(
                 userRepository, factoryRepository, canonical);
         when(userRepository.findById(42L)).thenReturn(Optional.of(user));
@@ -152,6 +158,16 @@ class ToolPrincipalPolicyTest {
                     .as("canonical price denial for %s", role)
                     .isFalse();
         }
+    }
+
+    @Test
+    void translatesCanonicalModuleLevelsWithoutTrustingAssertedPermissions() {
+        assertThat(ToolPrincipalPolicy.moduleLevelPermissions(Map.of(
+                "inventory", "rw", "quality", "r", "production", "w", "new_axis", "-")))
+                .containsExactlyInAnyOrder(
+                        "inventory:read", "inventory:write", "inventory:read_write",
+                        "quality:read", "production:write")
+                .doesNotContain("new_axis:read", "new_axis:write");
     }
 
     private static ExecutionPrincipal principal(

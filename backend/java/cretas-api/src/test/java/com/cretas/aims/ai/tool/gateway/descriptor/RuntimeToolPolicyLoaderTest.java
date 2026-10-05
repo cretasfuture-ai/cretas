@@ -92,7 +92,12 @@ class RuntimeToolPolicyLoaderTest {
                     .containsExactlyInAnyOrder(FactoryType.FACTORY, FactoryType.CENTRAL_KITCHEN);
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
             assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
-            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.SKILL_WORKFLOW);
+            if (policy.toolName().equals("material_stock_summary")) {
+                assertThat(policy.allowedSources()).containsExactlyInAnyOrder(
+                        ToolExecutionSource.SKILL_WORKFLOW, ToolExecutionSource.AI_INTENT_DISPATCH);
+            } else {
+                assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.SKILL_WORKFLOW);
+            }
             assertThat(policy.dataClassification()).isEqualTo(DataClassification.CONFIDENTIAL);
         });
         assertThat(manifest.policies().get(0).dataClassification())

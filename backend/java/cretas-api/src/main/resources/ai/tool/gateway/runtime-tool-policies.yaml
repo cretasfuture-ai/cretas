@@ -131,7 +131,7 @@ policies:
     approvalPolicy: NOT_REQUIRED
     idempotencyPolicy: NOT_REQUIRED
     dataClassification: CONFIDENTIAL
-    allowedSources: [SKILL_WORKFLOW]
+    allowedSources: [SKILL_WORKFLOW, AI_INTENT_DISPATCH]
     egressPolicy:
       mode: DENY_ALL
       allowedDestinations: []

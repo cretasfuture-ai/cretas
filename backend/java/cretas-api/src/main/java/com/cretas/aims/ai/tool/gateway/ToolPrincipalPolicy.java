@@ -63,8 +63,11 @@ public class ToolPrincipalPolicy {
             if (currentRole == null || currentRole.isBlank()) {
                 return Optional.empty();
             }
-            Set<String> currentPermissions = withReadWriteComposites(
-                    permissionService.getUserPermissions(user));
+            Map<String, String> currentLevels = permissionService.resolveModuleLevelsForAuthorization(user);
+            if (currentLevels == null) {
+                return Optional.empty();
+            }
+            Set<String> currentPermissions = moduleLevelPermissions(currentLevels);
             boolean canViewPrices = permissionService.hasPermission(
                     user, "procurement:price:view");
             ExecutionPrincipal current = new ExecutionPrincipal(
@@ -115,5 +118,31 @@ public class ToolPrincipalPolicy {
             }
         }
         return Set.copyOf(expanded);
+    }
+
+    /** Converts the canonical module-level snapshot into the legacy admission permission codes. */
+    static Set<String> moduleLevelPermissions(Map<String, String> levels) {
+        if (levels == null || levels.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> permissions = new LinkedHashSet<>();
+        for (Map.Entry<String, String> entry : levels.entrySet()) {
+            String module = entry.getKey();
+            String level = entry.getValue();
+            if (module == null || module.isBlank() || level == null) {
+                continue;
+            }
+            String normalized = level.trim().toLowerCase(Locale.ROOT);
+            if ("r".equals(normalized) || "rw".equals(normalized)) {
+                permissions.add(module + ":read");
+            }
+            if ("w".equals(normalized) || "rw".equals(normalized)) {
+                permissions.add(module + ":write");
+            }
+            if ("rw".equals(normalized)) {
+                permissions.add(module + ":read_write");
+            }
+        }
+        return Set.copyOf(permissions);
     }
 }
