@@ -50,7 +50,7 @@ import {
   type WriteConfirmState,
 } from '../../../components/ai/aiWriteConfirm';
 import type { FAAIStackParamList } from '../../../types/navigation';
-import { QuickActionCardGrid } from '../../../components/ai/QuickActionCardGrid';
+import { QuickActionCardGrid, resolveCardFactory } from '../../../components/ai/QuickActionCardGrid';
 import { feedbackSounds } from '../../../services/audio/feedbackSounds';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
@@ -1235,6 +1235,13 @@ function AIChatScreenContent() {
     );
   };
 
+  // 与 QuickActionCardGrid 用同一个选择函数判断「这个角色有没有卡组」, 不另写一份角色清单
+  const hasWelcomeCards = resolveCardFactory({
+    userRole,
+    isRestaurantMode,
+    factoryId: currentFactoryId,
+  }) !== undefined;
+
   // 渲染欢迎消息 — P2: 使用大卡片网格替代小文字快捷问题
   const renderWelcome = () => (
     <View style={styles.welcomeContainer}>
@@ -1245,8 +1252,16 @@ function AIChatScreenContent() {
           <Text variant="bodyMedium" style={tone.onSurface}>
             {t(isRestaurantMode ? 'aiChat.restaurantWelcome' : 'aiChat.welcome')}
           </Text>
-          <Text variant="bodyMedium" style={[tone.onSurface, { marginTop: theme.custom.spacing.s }]}>
-            {t(isRestaurantMode ? 'aiChat.restaurantCanHelp' : 'aiChat.canHelp')}
+          {/* 没有卡组的角色(一线角色 / 调度 / HR …)下面什么都没有, 「我可以帮您：」就成了悬空冒号 ——
+              改成告诉他下一步怎么做 (spec rn-frontline-ai-entry F3)。有卡组的角色不变。 */}
+          <Text
+            testID="ai-chat-welcome-next-step"
+            variant="bodyMedium"
+            style={[tone.onSurface, { marginTop: theme.custom.spacing.s }]}
+          >
+            {t(isRestaurantMode
+              ? 'aiChat.restaurantCanHelp'
+              : hasWelcomeCards ? 'aiChat.canHelp' : 'aiChat.voiceHint')}
           </Text>
         </View>
       </View>

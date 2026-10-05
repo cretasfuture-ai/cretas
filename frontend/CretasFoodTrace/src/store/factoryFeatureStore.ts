@@ -9,6 +9,9 @@ import { apiClient } from '../services/api/apiClient';
 const SCREEN_TO_MODULE: Record<string, string> = {
   // Factory Admin tabs
   AIAnalysis: 'smartbi',
+  // 一线角色 AI 助手入口（熔断开关第②层，默认开）。与 AIAnalysis 同归 smartbi:
+  // 关掉一个工厂的 AI 模块时，一线入口不应比管理端更开放。见 config/frontlineAIEntry.ts
+  FrontlineAIChat: 'smartbi',
   Reports: 'production',
   SmartBI: 'smartbi',
   // Dispatcher tabs + home sections

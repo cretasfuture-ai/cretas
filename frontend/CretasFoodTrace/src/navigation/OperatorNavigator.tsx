@@ -9,9 +9,13 @@ import OperatorAssignedProcessScreen from '../screens/processing/OperatorAssigne
 import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
 import ShortageAlertDetailScreen from '../screens/processing/ShortageAlertDetailScreen';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+// 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
+import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
+import { useFrontlineAIEntryEnabled } from '../hooks/useFrontlineAIEntry';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
+const RootStack = createNativeStackNavigator<any>();
 
 /**
  * Operator 报工 Stack 导航器
@@ -33,7 +37,7 @@ function OperatorReportStackNavigator() {
  * Operator专用底部Tab导航器
  * 考勤、报工、工作、个人中心 四个tab
  */
-export function OperatorNavigator() {
+function OperatorTabNavigator() {
   // C1: Use safe-area insets so the tab bar clears Android gesture navigation bar.
   // insets.bottom is 0 on devices with hardware buttons; positive on gesture-nav devices.
   const insets = useSafeAreaInsets();
@@ -85,6 +89,22 @@ export function OperatorNavigator() {
         }}
       />
     </Tab.Navigator>
+  );
+}
+
+/**
+ * Operator 根导航器: Tab 外面包一层 Stack, 让 AI 对话盖住 tab 栏 (与仓储主管/车间主任同一结构)。
+ * AIChat 只在一线 AI 入口开关打开时注册 —— 熔断后首页按钮消失, 路由也不存在。
+ */
+export function OperatorNavigator() {
+  const aiEntryEnabled = useFrontlineAIEntryEnabled();
+  return (
+    <RootStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
+      <RootStack.Screen name="OperatorMain" component={OperatorTabNavigator} />
+      {aiEntryEnabled && (
+        <RootStack.Screen name="AIChat" component={AIChatScreen} options={{ headerShown: true, title: 'AI 助手' }} />
+      )}
+    </RootStack.Navigator>
   );
 }
 

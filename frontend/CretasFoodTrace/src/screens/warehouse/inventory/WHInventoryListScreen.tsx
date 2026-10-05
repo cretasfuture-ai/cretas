@@ -54,6 +54,7 @@ import { logger } from "../../../utils/logger";
 import { formatNumberWithCommas, formatDate } from "../../../utils/formatters";
 import {  } from "react-native";
 import { RowActionBottomSheet } from "../../../components/list";
+import { FrontlineAIEntry } from "../../../components/ai/FrontlineAIEntry";
 import { useRowActions, type RowContext } from "../../../hooks/useRowActions";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
@@ -1095,6 +1096,10 @@ export function WHInventoryListScreen() {
         <Text style={styles.aiUnavailableText}>仓储主管可在 AI 对话中分析库存</Text>
       )}
 
+      {/* 一线 AI 助手入口 (仅 warehouse_worker; 本屏与仓储主管共用, 组件自己判角色+熔断开关)。
+          与上面「库存汇总 → AI 分析」不是一回事: 那条带着金额汇总进对话, 仍只给主管/超管。 */}
+      <FrontlineAIEntry containerStyle={styles.aiEntryDock} />
+
       <RowActionBottomSheet
         visible={actionSheetOwned}
         onClose={() => setActionSheetVisible(false)}
@@ -1113,6 +1118,7 @@ export function WHInventoryListScreen() {
 }
 
 const styles = StyleSheet.create({
+  aiEntryDock: { paddingHorizontal: 16, paddingVertical: 8 },
   container: {
     flex: 1,
     backgroundColor: "#f5f5f5",

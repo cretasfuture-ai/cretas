@@ -12,6 +12,7 @@ import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchase
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
 import { warehouseReceivingApiClient } from '../../../services/api/warehouseReceivingApiClient';
+import { FrontlineAIEntry } from '../../../components/ai/FrontlineAIEntry';
 import {
   countInboundTasks,
   filterReceivingOrders,
@@ -338,11 +339,14 @@ export default function WHInboundListScreen() {
           )}
         </View>
       </ScrollView>
+      {/* 一线 AI 助手入口 (仅 warehouse_worker; 本屏与仓储主管共用, 组件自己判角色+熔断开关) */}
+      <FrontlineAIEntry containerStyle={styles.aiEntryDock} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  aiEntryDock: { paddingHorizontal: 16, paddingVertical: 8 },
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   header: { backgroundColor: '#4CAF50', paddingHorizontal: 16, paddingVertical: 16 },
   headerTitle: { color: '#FFF', fontSize: 22, fontWeight: '700' },

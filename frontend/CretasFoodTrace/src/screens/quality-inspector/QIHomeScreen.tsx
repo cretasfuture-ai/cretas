@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 import { useAuthStore } from '../../store/authStore';
+import { FrontlineAIEntry } from '../../components/ai/FrontlineAIEntry';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 
@@ -81,6 +82,9 @@ export default function QIHomeScreen() {
           </View>
         </TouchableRipple>
       </View>
+
+      {/* 一线 AI 助手入口: 排在两项本职任务之后, 次级样式。组件自己判角色+熔断开关 */}
+      <FrontlineAIEntry containerStyle={styles.aiEntry} />
     </ScrollView>
   );
 }
@@ -99,6 +103,7 @@ const styles = StyleSheet.create({
   userName: { marginTop: 2, fontSize: 20, fontWeight: '800', color: QI_COLORS.text },
   guide: { marginBottom: 12, fontSize: 16, fontWeight: '700', color: QI_COLORS.text },
   actions: { gap: 14 },
+  aiEntry: { marginTop: 22 },
   actionCard: {
     minHeight: 96,
     borderRadius: 17,

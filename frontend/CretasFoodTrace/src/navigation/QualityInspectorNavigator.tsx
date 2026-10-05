@@ -18,8 +18,12 @@ import QILabelQcSubmittedScreen from '../screens/quality-inspector/QILabelQcSubm
 import QIProfileScreen from '../screens/quality-inspector/QIProfileScreen';
 import QISettingsScreen from '../screens/quality-inspector/QISettingsScreen';
 import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspector';
+// 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
+import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
+import { useFrontlineAIEntryEnabled } from '../hooks/useFrontlineAIEntry';
 
 const Tab = createBottomTabNavigator();
+const RootStack = createNativeStackNavigator();
 const HomeStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
 const CaptureStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
 const RecordsStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
@@ -96,7 +100,27 @@ const TAB_ICONS: Record<string, TabIconName> = {
   QIProfileTab: 'person',
 };
 
+/**
+ * 质检员根导航器: Tab 外包一层 Stack, AI 对话盖住 tab 栏。
+ * 入口在首页 (FrontlineAIEntry); AIChat 只在一线 AI 入口开关打开时注册。
+ */
 export default function QualityInspectorNavigator() {
+  const aiEntryEnabled = useFrontlineAIEntryEnabled();
+  return (
+    <RootStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
+      <RootStack.Screen name="QIMain" component={QualityInspectorTabNavigator} />
+      {aiEntryEnabled && (
+        <RootStack.Screen
+          name="AIChat"
+          component={AIChatScreen}
+          options={{ ...stackScreenOptions, headerShown: true, title: 'AI 助手' }}
+        />
+      )}
+    </RootStack.Navigator>
+  );
+}
+
+function QualityInspectorTabNavigator() {
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 6);
 
