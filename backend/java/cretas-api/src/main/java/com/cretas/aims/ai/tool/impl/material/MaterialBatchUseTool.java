@@ -186,7 +186,9 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
     }
 
     /**
-     * 仅工厂管理员及以上可使用
+     * 与 App 同口径: App 的 {@code POST /material-batches/{id}/use} 要 warehouse/inventory 读写,
+     * 一线里只有仓库员 (warehouse_worker) 带这个权限 ⇒ AI 也只多给它 (2026-10-05 一线 AI 入口)。
+     * 操作员 / 出成率录入员在 App 里领用不了, 这里也不给 —— 即使意图名单里列了它们。
      */
     @Override
     public boolean hasPermission(String userRole) {
@@ -194,7 +196,8 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
                 "factory_super_admin".equals(userRole) ||
                 "platform_admin".equals(userRole) ||
                 "factory_admin".equals(userRole) ||
-                "warehouse_manager".equals(userRole);
+                "warehouse_manager".equals(userRole) ||
+                "warehouse_worker".equals(userRole);
     }
 
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
