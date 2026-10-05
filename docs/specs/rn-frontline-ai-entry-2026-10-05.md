@@ -93,7 +93,7 @@
 
 | 文件 | 守什么 |
 |---|---|
-| `src/__tests__/integration/navigation/FrontlineAIEntryNavigation.test.tsx` | 真导航器 + 真首页：三角色默认有入口且点了到 AIChat；全局 / 本工厂 / smartbi 关 ⇒ 入口和路由都没有；运行中被关掉当场消失；yield_operator 没有 |
+| `src/__tests__/integration/navigation/FrontlineAIEntryNavigation.test.tsx` | 真导航器 + 真首页：三角色默认有入口且点了到 AIChat；全局 / 本工厂 / smartbi 关 ⇒ 入口和路由都没有；运行中被关掉当场消失；yield_operator 与 operator 同样有入口；共用仓库员首页的 warehouse_manager 没有 |
 | `src/__tests__/integration/screens/AIChatScreenFrontlineRoles.test.tsx` | 三角色下欢迎区（F3）、澄清 / 追问确认 / 写确认卡都渲染、请求不带角色；场景过滤活着但入口路径不触发 |
 | `src/__tests__/unit/config/frontlineAIEntry.test.ts` | 纯判定 + 真 factoryFeatureStore（含 fail-open 那一格） |
 | `src/__tests__/unit/navigation/roleNavigatorBoundariesContract.test.ts` | 三个导航器里 AIChat 只注册一次、且只在开关后面（含正则阳性对照） |
@@ -103,15 +103,20 @@ M3 仓库员导航器无条件注册 AIChat → 4 红；M4 欢迎区恒显示「
 
 ## 不做的事
 
-- 不改服务端任何权限 / 意图配置。
 - 不 fork `AIChatScreen`；只改欢迎区一处文案分支。
-- 不给 `yield_operator`（出成率录入员，同样落到 `OperatorNavigator`）开入口——owner 只点名了三个角色，列为决策项。
-- 不 push / 不部署 / 不推 OTA。
+- 客户端不按角色藏任何意图；能不能执行只由服务端判。
 
-## Owner 决策项
+## Owner 决策（2026-10-05 已定）
 
-1. `yield_operator` 是否也给入口（同一个首页，加一个角色码即可）。
-2. 一线角色的示例卡组（候选，**需先逐条核实服务端放行**）：
-   操作员「我要报工」「我下一道工序是什么」；仓库员「查询原材料库存」「今天要发哪几单」；质检员「上一批拍检结果」。
-3. 是否要对一线角色限制某些意图（例如禁止一线账号走 AI 写入、只读问答）——这属于服务端意图配置
-   （`requiredPermission` / `requiredRoles`），不应在客户端做。
+1. **`yield_operator` 也给入口** —— 加进 `FRONTLINE_AI_ROLES`，与 operator 共用首页。
+2. **加示例卡片**（`QuickActionCardGrid` 的 `FRONTLINE_ROLE_CARDS`，每角色 4 张）。每句话都在 prod 识别接口上按角色量过，
+   16/16 直接落到目标意图、不反问；该角色在服务端也有权执行（见下条）。
+   - 操作员 / 出成率录入员：我要报工 · 今天我的工序任务 · 上班打卡 · 下班打卡
+   - 仓库员：查询原材料库存 · 查一下库存不足的原料 · 快过期的原料有哪些 · 查询出货记录
+   - 质检员：今天待质检的批次 · 登记质检不良 · 质检统计 · 上班打卡
+   - 被换掉的说法：「低库存预警」「今天的出货记录」（都要反问）、「今天要发哪些货」（落到会建单的意图）。
+   - 有卡组之后 F3 的「点麦克风说话」只剩无卡组角色（dispatcher、hr_admin 等）用。
+3. **不限制只读**。服务端权限按「AI 能做的 = App 里本来就能做的」对齐（后端 PR，`V20261101_55`）：
+   yield_operator 与 operator 同权；仓库员补上原料查询 / 低库存 / 临期 / 过期 / FIFO / 出货查询与统计 / 领用原料。
+   ⛔ 不给仓库员：库存报表（要 finance）、建出货单（要 sales）、调库存 / 改批次（08-20 内控裁定）。
+4. 实际产量可以填 0（后端 PR，REST 与 AI 两条路同口径）。

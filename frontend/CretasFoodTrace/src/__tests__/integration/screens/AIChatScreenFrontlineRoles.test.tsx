@@ -3,9 +3,9 @@
  * AIChatScreen 在一线角色下（Line B 2026-10-05, spec docs/specs/rn-frontline-ai-entry-2026-10-05.md）。
  *
  * 入口只是把人送进来；这里守「进来之后能用」：
- *   F3 欢迎区：一线角色没有卡组 ⇒ 不再显示悬空的「我可以帮您：」，改显示下一步怎么做
- *        ↔ 对照：有卡组的角色（factory_super_admin）仍是「我可以帮您：」+ 卡组
- *   F6 澄清按钮 / 追问确认按钮 / 写操作确认卡在三个一线角色下都渲染（客户端没有按角色藏东西）
+ *   F3 欢迎区：一线角色有自己的卡组（owner 2026-10-05 追加）⇒「我可以帮您：」+ 卡组
+ *        ↔ 对照：没有卡组的角色（dispatcher）不显示悬空的「我可以帮您：」，改显示点麦克风说话
+ *   F6 澄清按钮 / 追问确认按钮 / 写操作确认卡在四个一线角色下都渲染（客户端没有按角色藏东西）
  *        ↔ 对照：带 entityType 进来时场景过滤**确实会**滤掉不在白名单的建议 —— 证明过滤器活着，
  *          而一线入口不带 entityType，所以不受它影响
  *   权限：请求里不带角色（角色由服务端从 JWT 取），客户端无从绕过
@@ -93,7 +93,7 @@ jest.mock('../../../services/audio/feedbackSounds', () => ({
 
 const AIChatScreen = require('../../../screens/factory-admin/ai-analysis/AIChatScreen').default;
 
-const FRONTLINE_ROLES = ['operator', 'warehouse_worker', 'quality_inspector'];
+const FRONTLINE_ROLES = ['operator', 'yield_operator', 'warehouse_worker', 'quality_inspector'];
 
 function factoryUser(role: string) {
   return {
@@ -129,25 +129,27 @@ beforeEach(() => {
 
 describe('AIChatScreen 一线角色 · 欢迎区 (F3)', () => {
   it('参数化的那一维真的不同', () => {
-    expect(new Set(FRONTLINE_ROLES).size).toBe(3);
+    expect(new Set(FRONTLINE_ROLES).size).toBe(4);
   });
 
-  it.each(FRONTLINE_ROLES)('%s: 没有卡组, 欢迎区告诉他点麦克风说话, 不出现悬空的「我可以帮您：」', (role) => {
+  it.each(FRONTLINE_ROLES)('%s: 有自己的卡组 ⇒「我可以帮您：」+ 四张卡, 麦克风仍在', (role) => {
     asRole(role);
     const screen = render(<AIChatScreen />);
-    expect(flattenText(screen.getByTestId('ai-chat-welcome-next-step').props.children)).toBe(zhHome.aiChat.voiceHint);
-    expect(screen.queryByText(zhHome.aiChat.canHelp)).toBeNull();
-    expect(screen.queryByTestId('quick-action-card-grid')).toBeNull();
+    expect(screen.getByText(zhHome.aiChat.canHelp)).toBeTruthy();
+    expect(screen.getByTestId('quick-action-card-grid')).toBeTruthy();
+    expect(screen.getByTestId('quick-action-card-3')).toBeTruthy();
+    expect(screen.queryByTestId('quick-action-card-4')).toBeNull();
+    expect(screen.queryByText(zhHome.aiChat.voiceHint)).toBeNull();
     // 语音优先：麦克风就在
     expect(screen.getByTestId('voice-mic')).toBeTruthy();
   });
 
-  it('对照: 有卡组的角色仍是「我可以帮您：」+ 卡组', () => {
-    asRole('factory_super_admin');
+  it('对照: 没有卡组的角色 (dispatcher) 不出现悬空的「我可以帮您：」, 改为告诉他点麦克风说话', () => {
+    asRole('dispatcher');
     const screen = render(<AIChatScreen />);
-    expect(screen.getByText(zhHome.aiChat.canHelp)).toBeTruthy();
-    expect(screen.getByTestId('quick-action-card-grid')).toBeTruthy();
-    expect(screen.queryByText(zhHome.aiChat.voiceHint)).toBeNull();
+    expect(flattenText(screen.getByTestId('ai-chat-welcome-next-step').props.children)).toBe(zhHome.aiChat.voiceHint);
+    expect(screen.queryByText(zhHome.aiChat.canHelp)).toBeNull();
+    expect(screen.queryByTestId('quick-action-card-grid')).toBeNull();
   });
 });
 
