@@ -3,9 +3,16 @@ package com.cretas.aims.integration;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.MaterialSpecConfigService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -13,14 +20,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Material Batch Flow Integration Test
@@ -42,7 +56,61 @@ class MaterialBatchFlowTest {
     @Autowired(required = false)
     private MaterialSpecConfigService materialSpecConfigService;
 
+    @Autowired
+    private FactoryRepository factoryRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
     private static final String TEST_FACTORY_ID = "F001";
+
+    private RequestAttributes previousRequestAttributes;
+    private ServletRequestAttributes inventoryRequestAttributes;
+    private MockHttpServletRequest inventoryRequest;
+
+    @BeforeEach
+    void authenticateFactoryInventoryActor() {
+        assertThat(DataScopeContext.current()).isNull();
+        if (!factoryRepository.existsById(TEST_FACTORY_ID)) {
+            Factory factory = new Factory();
+            factory.setId(TEST_FACTORY_ID);
+            factory.setName("Material batch integration factory F001");
+            factory.setIndustry("FOOD");
+            factory.setIndustryCode("FOOD_GENERAL");
+            factoryRepository.saveAndFlush(factory);
+        }
+
+        // Each @Transactional test rolls back its actor. Resolve scope and permissions
+        // through the real service/aspect/repositories, rather than injecting ALL scope.
+        User actor = new User();
+        actor.setFactoryId(TEST_FACTORY_ID);
+        actor.setUsername("material_flow_" + UUID.randomUUID());
+        actor.setPasswordHash("integration-test-unused");
+        actor.setFullName("Material inventory integration actor");
+        actor.setIsActive(true);
+        actor.setRoleCode("factory_super_admin");
+        actor = userRepository.saveAndFlush(actor);
+
+        inventoryRequest = new MockHttpServletRequest();
+        inventoryRequest.setAttribute("userId", actor.getId());
+        inventoryRequest.setAttribute("factoryId", actor.getFactoryId());
+        inventoryRequest.setAttribute("role", actor.getRoleCode());
+        previousRequestAttributes = RequestContextHolder.getRequestAttributes();
+        inventoryRequestAttributes = new ServletRequestAttributes(inventoryRequest);
+        RequestContextHolder.setRequestAttributes(inventoryRequestAttributes);
+    }
+
+    @AfterEach
+    void restoreRequestContext() {
+        try {
+            assertThat(DataScopeContext.current()).isNull();
+        } finally {
+            if (inventoryRequestAttributes != null) {
+                inventoryRequestAttributes.requestCompleted();
+                RequestContextHolder.setRequestAttributes(previousRequestAttributes);
+            }
+        }
+    }
 
     // ==================== 1. 批次查询测试 ====================
 
@@ -198,5 +266,26 @@ class MaterialBatchFlowTest {
     @DisplayName("Test11: 验证服务依赖注入")
     void testServiceDependencies() {
         assertThat(materialBatchService).isNotNull();
+    }
+
+    @Test
+    @Order(12)
+    @Transactional
+    @DisplayName("Test12: 库存查询拒绝缺失登录身份")
+    void testInventoryQueryRejectsMissingActor() {
+        inventoryRequest.removeAttribute("userId");
+        assertThatThrownBy(() -> materialBatchService.getMaterialBatchList(
+                TEST_FACTORY_ID, new PageRequest()))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    @Order(13)
+    @Transactional
+    @DisplayName("Test13: 库存查询拒绝其他工厂")
+    void testInventoryQueryRejectsForeignFactory() {
+        assertThatThrownBy(() -> materialBatchService.getMaterialBatchesByStatus(
+                "F002", MaterialBatchStatus.AVAILABLE))
+                .isInstanceOf(AccessDeniedException.class);
     }
 }
