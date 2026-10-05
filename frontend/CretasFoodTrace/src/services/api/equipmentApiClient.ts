@@ -263,7 +263,9 @@ class EquipmentApiClient {
    * PUT /equipment/{equipmentId}/status
    */
   async updateEquipmentStatus(equipmentId: number, status: EquipmentStatus, factoryId?: string): Promise<Equipment> {
-    const response = await apiClient.put<ApiResponse<Equipment>>(`${this.getPath(factoryId)}/${equipmentId}/status`, { status });
+    const response = await apiClient.put<ApiResponse<Equipment>>(`${this.getPath(factoryId)}/${equipmentId}/status`, null, {
+      params: { status },
+    });
     return response.data;
   }
 

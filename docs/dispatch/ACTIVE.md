@@ -25,7 +25,7 @@
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
 - `F006-MOBILE-R44-20261005` — `queued` — Owner root/只读追踪 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — F006状态参数缺省/available/AVAILABLE三GET同200行含77已耗尽/用完。PageRequest有status但列表服务未用；库位/临期实际UI未复现；临期需保留EXPIRED，后续明确状态集及查询/JPA门禁。0变更。
 
-- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #921已发布46ef1d0362；640目标过，全量14428零红/64跳过。18角色162GET与162日志全匹配，有效BOM跨收料人选料通过；业务写0。手动JPA FAIL及等价证据保留。APK17已装，真机深流程/QC/Mini未验完。
+- `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #921/#923已合；18角色首页与162只读GET/日志核验，BOM跨收料人通过。APK18及老板Mini正常/忙碌/恢复已验；rex Canada永久sudo通过。设备QA900新增编辑已保存；R64参数/错误提示/详情修复本PR归档，待新APK实测。完整业务/QC/AI异常未全验。
 
 
 

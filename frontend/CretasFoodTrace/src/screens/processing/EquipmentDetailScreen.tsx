@@ -47,7 +47,7 @@ type EquipmentDetailScreenRouteProp = RouteProp<
   'EquipmentDetail'
 >;
 
-type EquipmentStatus = 'running' | 'idle' | 'maintenance' | 'offline';
+type EquipmentStatus = 'running' | 'idle' | 'inactive' | 'maintenance' | 'offline';
 
 function equipmentActorKey(user: User | null | undefined): string {
   if (!user) return 'none';
@@ -60,6 +60,7 @@ function equipmentActorKey(user: User | null | undefined): string {
 
 interface EquipmentInfo {
   id: string;
+  code: string;
   name: string;
   model: string;
   manufacturer: string;
@@ -250,7 +251,7 @@ export default function EquipmentDetailScreen() {
           case 'active':
             return 'running';
           case 'inactive':
-            return 'idle';
+            return 'inactive';
           case 'maintenance':
             return 'maintenance';
           case 'scrapped':
@@ -263,6 +264,7 @@ export default function EquipmentDetailScreen() {
       // Transform Equipment to EquipmentInfo
       const equipmentInfo: EquipmentInfo = {
         id: String(eq.id),
+        code: eq.code || eq.equipmentCode || t('equipmentDetail.missingValue'),
         name: eq.name,
         model: eq.model || t('equipmentDetail.missingValue'),
         manufacturer: eq.manufacturer || t('equipmentDetail.missingValue'),
@@ -352,6 +354,8 @@ export default function EquipmentDetailScreen() {
         return '#4CAF50';
       case 'idle':
         return '#2196F3';
+      case 'inactive':
+        return '#607D8B';
       case 'maintenance':
         return '#FF9800';
       case 'offline':
@@ -424,6 +428,7 @@ export default function EquipmentDetailScreen() {
               </Text>
             </View>
             <Chip
+              testID="equipment-detail-status"
               mode="flat"
               style={[
                 styles.statusChip,
@@ -470,7 +475,7 @@ export default function EquipmentDetailScreen() {
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>{t('equipmentDetail.basicInfo.equipmentId')}</Text>
-            <Text style={styles.infoValue}>{equipment.id}</Text>
+            <Text testID="equipment-detail-equipment-code" style={styles.infoValue}>{equipment.code}</Text>
           </View>
 
           <Divider style={styles.divider} />

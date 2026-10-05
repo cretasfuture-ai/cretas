@@ -436,6 +436,7 @@
     "status": {
       "running": "Running",
       "idle": "Idle",
+      "inactive": "Inactive",
       "maintenance": "Maintenance",
       "offline": "Offline"
     },
@@ -492,6 +493,7 @@
       "deleteMessage": "Are you sure you want to delete this equipment?",
       "fields": {
         "name": "Name",
+        "nameRequired": "Enter an equipment name",
         "code": "Code",
         "model": "Model",
         "location": "Location",
@@ -531,7 +533,8 @@
       "deleteSuccess": "Equipment deleted successfully",
       "deleteFailed": "Failed to delete equipment",
       "statusUpdateSuccess": "Equipment status updated successfully",
-      "statusUpdateFailed": "Failed to update equipment status"
+      "statusUpdateFailed": "Failed to update equipment status",
+      "mutationErrorRetry": "Check the input or network connection and try again"
     }
   },
   "equipmentMonitoring": {

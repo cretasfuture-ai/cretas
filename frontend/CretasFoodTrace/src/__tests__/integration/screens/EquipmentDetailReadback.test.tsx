@@ -166,6 +166,42 @@ describe('EquipmentDetailScreen real readback', () => {
     expect(mockNavigate).toHaveBeenCalledWith('EquipmentAlerts', {});
   });
 
+  it('renders the business equipment code instead of the database id', async () => {
+    mockSupportingReads();
+    mockRouteParams.equipmentId = '900';
+    jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue({
+      ...equipment(900),
+      code: 'E2E-F006-MOBILE-R64-20261005',
+      equipmentCode: 'E2E-F006-MOBILE-R64-20261005',
+    });
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(efficiency({ equipmentId: 900 }) as never);
+    const view = render(<EquipmentDetailScreen />);
+
+    await waitFor(() => expect(view.getByTestId('equipment-detail-equipment-code')).toBeTruthy());
+    expect(view.getByTestId('equipment-detail-equipment-code').props.children).toBe('E2E-F006-MOBILE-R64-20261005');
+    expect(view.queryByText('900')).toBeNull();
+  });
+
+  it('keeps inactive status distinct and does not fall back from a missing code to the database id', async () => {
+    mockSupportingReads();
+    mockRouteParams.equipmentId = '900';
+    jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue({
+      ...equipment(900),
+      code: '',
+      equipmentCode: undefined,
+      status: 'inactive',
+    });
+    jest.spyOn(equipmentApiClient, 'calculateOEE').mockResolvedValue(null as never);
+    jest.spyOn(equipmentApiClient, 'getEquipmentEfficiencyReport').mockResolvedValue(efficiency({ equipmentId: 900 }) as never);
+    const view = render(<EquipmentDetailScreen />);
+
+    await waitFor(() => expect(view.getByTestId('equipment-detail-equipment-code')).toBeTruthy());
+    expect(view.getByTestId('equipment-detail-equipment-code').props.children).toBe('equipmentDetail.missingValue');
+    expect(view.getByTestId('equipment-detail-status').props.children).toBe('equipmentDetail.status.inactive');
+    expect(view.queryByText('900')).toBeNull();
+  });
+
   it('shows N/A for missing efficiency metrics and failed OEE instead of inventing values', async () => {
     mockSupportingReads();
     jest.spyOn(equipmentApiClient, 'getEquipmentById').mockResolvedValue(equipment());

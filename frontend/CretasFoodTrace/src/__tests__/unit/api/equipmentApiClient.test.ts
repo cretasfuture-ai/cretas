@@ -122,7 +122,11 @@ describe('equipmentApiClient', () => {
   describe('updateEquipmentStatus', () => {
     it('should PUT /equipment/{id}/status and return updated equipment', async () => {
       const mockEquipment = { id: 1, status: 'maintenance' };
-      mock.onPut(`${BASE}/1/status`).reply(200, { data: mockEquipment });
+      mock.onPut(`${BASE}/1/status`).reply((config) => {
+        expect(config.data).toBeNull();
+        expect(config.params).toEqual({ status: 'maintenance' });
+        return [200, { data: mockEquipment }];
+      });
 
       const result = await equipmentApiClient.updateEquipmentStatus(1, 'maintenance');
       expect(result.status).toBe('maintenance');
