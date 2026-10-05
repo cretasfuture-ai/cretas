@@ -417,6 +417,12 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             throw new BusinessException(400, "actualQuantity 不能为空")
                     .withHint("请输入实际产量");
         }
+        // 负数不是产量。0 是合法值 (一道工序可以什么都没产出), 所以只拦 < 0。
+        // AI 预览 (WorkProcessTaskTransitionPreview#complete) 镜像这一条, 两处必须同改。
+        if (request.getActualQuantity().signum() < 0) {
+            throw new BusinessException(400, "实际产量不能是负数")
+                    .withHint("请输入大于或等于 0 的实际产量");
+        }
 
         WorkProcessTask task = loadOrThrow(factoryId, id);
         assertTransition(task.getStatus(), Status.COMPLETED);

@@ -192,6 +192,39 @@ class WorkProcessTaskTransitionPreviewToolTest {
     }
 
     @Test
+    @DisplayName("COMPLETE: 负数实际产量 → canDo=false PREVIEW_INVALID + 中文原因, 且不去读任务 (同写路径顺序)")
+    void completeNegativeQuantityRefused() throws Exception {
+        stubTask(FACTORY, task(Status.IN_PROGRESS)); // 任务本身是能完成的 —— 拒绝只能来自产量
+        for (double negative : new double[]{-1, -0.01, -95.5}) {
+            Map<String, Object> data = data(completeTool.preview(call("work_process_task_complete",
+                    Map.of("taskId", TASK_ID, "actualQuantity", negative)), ctx(FACTORY)));
+
+            assertThat(data.get("canDo")).as("" + negative).isEqualTo(false);
+            assertThat(data.get("status")).as("" + negative).isEqualTo("PREVIEW_INVALID");
+            assertThat(String.valueOf(data.get("message"))).as("" + negative)
+                    .contains("实际产量不能是负数").doesNotContain("actualQuantity");
+            assertThat(data).as("拒绝时不给对比表").doesNotContainKey("newValues");
+        }
+        verify(service, never()).getById(anyString(), anyLong());
+        assertNoMutation();
+    }
+
+    @Test
+    @DisplayName("COMPLETE 对照: 实际产量 0 合法 (什么都没产出), 与同一个任务的正数一样 canDo=true")
+    void completeZeroQuantityAllowed() throws Exception {
+        stubTask(FACTORY, task(Status.IN_PROGRESS));
+        for (Object ok : new Object[]{0, 0.0, 0.01, 95.5}) {
+            Map<String, Object> data = data(completeTool.preview(call("work_process_task_complete",
+                    Map.of("taskId", TASK_ID, "actualQuantity", ok)), ctx(FACTORY)));
+
+            assertThat(data.get("canDo")).as("" + ok).isEqualTo(true);
+            assertThat(data.get("status")).as("" + ok).isEqualTo("PREVIEW");
+            assertThat(rows(data, "newValues")).as("" + ok).containsKey("实际产量");
+        }
+        assertNoMutation();
+    }
+
+    @Test
     @DisplayName("COMPLETE: 完全没给实际产量 → 基类早退 NEED_MORE_INFO (success=false), 问句是人话")
     void completeMissingQuantityAsksForIt() throws Exception {
         Map<String, Object> root = parse(completeTool.preview(call("work_process_task_complete",
