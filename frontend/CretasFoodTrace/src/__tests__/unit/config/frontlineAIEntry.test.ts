@@ -18,24 +18,24 @@ describe('isFrontlineAIEntryEnabled', () => {
     expect(FRONTLINE_AI_ENTRY_GLOBAL_ENABLED).toBe(true);
   });
 
-  it('owner 点名的三个角色, 不多不少', () => {
-    expect([...FRONTLINE_AI_ROLES].sort()).toEqual(['operator', 'quality_inspector', 'warehouse_worker']);
+  it('owner 点名的四个角色, 不多不少', () => {
+    expect([...FRONTLINE_AI_ROLES].sort()).toEqual(['operator', 'quality_inspector', 'warehouse_worker', 'yield_operator']);
   });
 
-  it.each(['operator', 'warehouse_worker', 'quality_inspector'])('%s: 两层都开 ⇒ 显示', (role) => {
+  it.each(['operator', 'yield_operator', 'warehouse_worker', 'quality_inspector'])('%s: 两层都开 ⇒ 显示', (role) => {
     expect(isFrontlineAIEntryEnabled(role, remoteOn, true)).toBe(true);
   });
 
-  it.each(['operator', 'warehouse_worker', 'quality_inspector'])('%s: 全局关 ⇒ 不显示', (role) => {
+  it.each(['operator', 'yield_operator', 'warehouse_worker', 'quality_inspector'])('%s: 全局关 ⇒ 不显示', (role) => {
     expect(isFrontlineAIEntryEnabled(role, remoteOn, false)).toBe(false);
   });
 
-  it.each(['operator', 'warehouse_worker', 'quality_inspector'])('%s: 本工厂关 ⇒ 不显示', (role) => {
+  it.each(['operator', 'yield_operator', 'warehouse_worker', 'quality_inspector'])('%s: 本工厂关 ⇒ 不显示', (role) => {
     expect(isFrontlineAIEntryEnabled(role, remoteOff, true)).toBe(false);
   });
 
   // warehouse_manager 与仓库员共用收货/发货/库存三屏 —— 组件自己判角色, 主管不多出一个入口
-  it.each(['warehouse_manager', 'yield_operator', 'factory_super_admin', 'workshop_supervisor', 'viewer', '', null, undefined])(
+  it.each(['warehouse_manager', 'factory_super_admin', 'workshop_supervisor', 'viewer', '', null, undefined])(
     '非一线角色 %p ⇒ 不显示（即使两层都开）',
     (role) => {
       expect(isFrontlineAIEntryEnabled(role as string | null | undefined, remoteOn, true)).toBe(false);

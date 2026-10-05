@@ -1,7 +1,7 @@
 /**
  * 一线角色 AI 助手入口 —— 熔断开关（默认开）
  *
- * 2026-10-05 owner 裁定：operator / warehouse_worker / quality_inspector **默认就有** AI 助手入口；
+ * 2026-10-05 owner 裁定：operator / yield_operator / warehouse_worker / quality_inspector **默认就有** AI 助手入口；
  * 开关是用来**关掉**它的（熔断），不是用来打开它的。设计与 UX Flow Analysis 见
  * `docs/specs/rn-frontline-ai-entry-2026-10-05.md`。
  *
@@ -23,10 +23,10 @@ export const FRONTLINE_AI_ENTRY_GLOBAL_ENABLED = true;
 export const FRONTLINE_AI_SCREEN_ID = 'FrontlineAIChat';
 
 /**
- * 有入口的角色。owner 只点名了这三个。
- * ⚠️ `yield_operator` 也落到 OperatorNavigator（同一个首页），但**故意不加** —— 列为 owner 决策项。
+ * 有入口的角色。owner 先点名三个，2026-10-05 追加 `yield_operator`（与 operator 共用 OperatorNavigator 首页）。
+ * 一线角色**不限制只读**（owner 同日裁定）：能不能执行某个意图只由服务端按角色/权限判，客户端不加门。
  */
-export const FRONTLINE_AI_ROLES: readonly string[] = ['operator', 'warehouse_worker', 'quality_inspector'];
+export const FRONTLINE_AI_ROLES: readonly string[] = ['operator', 'yield_operator', 'warehouse_worker', 'quality_inspector'];
 
 /**
  * 纯函数判定，便于测试与变异。

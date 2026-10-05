@@ -14,7 +14,7 @@
  *   ① 默认（两层开关都开）三个一线角色首页都有入口，点它进 AIChat                     —— owner 裁定「默认开」
  *   ② 熔断：全局常量关 ⇒ 入口消失 **且** AIChat 路由不注册                             —— 让 ① 能红的对照
  *   ③ 熔断：本工厂 feature-config 禁用 FrontlineAIChat / 关掉 smartbi ⇒ 同上
- *   ④ 同一导航器里的非一线角色（yield_operator）没有入口、没有路由                        —— owner 只点名三个角色
+ *   ④ yield_operator 与 operator 共用 OperatorNavigator，同样有入口（owner 2026-10-05 追加）
  */
 import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
@@ -203,6 +203,7 @@ const CASES: Array<{ role: string; Navigator: React.ComponentType }> = [
   { role: 'operator', Navigator: OperatorNavigator },
   { role: 'warehouse_worker', Navigator: WarehouseWorkerNavigator },
   { role: 'quality_inspector', Navigator: QualityInspectorNavigator },
+  { role: 'yield_operator', Navigator: OperatorNavigator },
 ];
 
 async function renderHome(role: string, Navigator: React.ComponentType) {
@@ -219,8 +220,8 @@ beforeEach(() => {
 });
 
 describe('一线 AI 助手入口 · 默认开', () => {
-  it('参数化的那一维真的不同：三个角色、三个导航器、三个首页', () => {
-    expect(new Set(CASES.map((c) => c.role)).size).toBe(3);
+  it('参数化的那一维真的不同：四个角色、三个导航器、三个首页（yield_operator 与 operator 共用）', () => {
+    expect(new Set(CASES.map((c) => c.role)).size).toBe(4);
     expect(new Set(CASES.map((c) => c.Navigator)).size).toBe(3);
     expect(new Set(CASES.map((c) => HOME_MARKER[c.role])).size).toBe(3);
   });
@@ -278,8 +279,13 @@ describe('一线 AI 助手入口 · 熔断', () => {
 });
 
 describe('一线 AI 助手入口 · 角色边界', () => {
-  it('yield_operator 与 operator 共用首页，但不在 owner 点名的三个角色里 ⇒ 没有入口、没有路由', async () => {
-    const view = await renderHome('yield_operator', OperatorNavigator);
+  // 守「名单在起作用」的阴性对照: 共用首页的导航器里, 不在名单上的角色看不到入口。
+  // OperatorNavigator 只服务 operator / yield_operator, 两个都在名单上了 ⇒ 用仓库员首页上的
+  // warehouse_manager（主管与仓库员共用收货/发货/库存三屏）当对照。
+  it('warehouse_manager 与仓库员共用首页，但不在一线名单里 ⇒ 没有入口', async () => {
+    setUser('warehouse_manager');
+    const view = render(<WarehouseWorkerNavigator />);
+    await waitFor(() => expect(view.getByTestId(HOME_MARKER.warehouse_worker!)).toBeTruthy());
     expect(view.queryByTestId(ENTRY)).toBeNull();
     expect(mockRootRouteNames).not.toContain('AIChat');
   });
