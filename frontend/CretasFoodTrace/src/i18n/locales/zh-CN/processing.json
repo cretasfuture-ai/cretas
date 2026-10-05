@@ -438,6 +438,7 @@
     "status": {
       "running": "运行中",
       "idle": "空闲",
+      "inactive": "停用",
       "maintenance": "维护中",
       "offline": "离线"
     },
@@ -494,6 +495,7 @@
       "deleteMessage": "确定要删除此设备吗？",
       "fields": {
         "name": "名称",
+        "nameRequired": "请输入设备名称",
         "code": "编号",
         "model": "型号",
         "location": "位置",
@@ -533,7 +535,8 @@
       "deleteSuccess": "设备删除成功",
       "deleteFailed": "删除设备失败",
       "statusUpdateSuccess": "设备状态更新成功",
-      "statusUpdateFailed": "更新设备状态失败"
+      "statusUpdateFailed": "更新设备状态失败",
+      "mutationErrorRetry": "请检查输入或网络后重试"
     }
   },
   "equipmentMonitoring": {

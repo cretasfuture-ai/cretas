@@ -2,12 +2,15 @@ import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Menu } from 'react-native-paper';
+import { appAlert } from '../../../components/ui/AppDialog';
 
 import EquipmentManagementScreen from '../../../screens/processing/EquipmentManagementScreen';
 import { equipmentApiClient } from '../../../services/api/equipmentApiClient';
 import { userApiClient, type UserDTO } from '../../../services/api/userApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import type { User } from '../../../types/auth';
+
+jest.mock('../../../components/ui/AppDialog', () => ({ appAlert: jest.fn() }));
 
 const equipment = (factoryId: string, id = 7) => ({
   id,
@@ -63,6 +66,7 @@ describe('EquipmentManagement actor and permission isolation', () => {
   let getUsers: jest.SpiedFunction<typeof userApiClient.getUsers>;
 
   beforeEach(() => {
+    (appAlert as jest.Mock).mockClear();
     focusEffect.mockImplementation((callback: () => void) => {
       React.useEffect(() => {
         callback();
@@ -115,6 +119,7 @@ describe('EquipmentManagement actor and permission isolation', () => {
     await waitFor(() => expect(view.getByTestId('equipment-management-operator-hr-locked')).toBeTruthy());
     expect(view.queryByTestId('equipment-management-operator-picker')).toBeNull();
     expect(getUsers).not.toHaveBeenCalled();
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '新设备');
     await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); });
     await waitFor(() => expect(createEquipment).toHaveBeenCalledWith(
       expect.objectContaining({ operatorId: undefined }),
@@ -186,6 +191,7 @@ describe('EquipmentManagement actor and permission isolation', () => {
     fireEvent.press(view.getByTestId('equipment-management-fab'));
     await waitFor(() => expect(view.getByTestId('equipment-management-operator-hr-locked')).toBeTruthy());
     expect(view.queryByTestId('equipment-management-operator-99')).toBeNull();
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '新设备');
     await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); });
     await waitFor(() => expect(createEquipment).toHaveBeenCalledWith(
       expect.objectContaining({ operatorId: undefined }),
@@ -273,6 +279,7 @@ describe('EquipmentManagement actor and permission isolation', () => {
     expect(deleteEquipment).not.toHaveBeenCalled();
     expect(updateEquipmentStatus).not.toHaveBeenCalled();
     expect(createEquipment).not.toHaveBeenCalled();
+    expect(appAlert).not.toHaveBeenCalled();
   });
 
   it('removes old dialog name, operator, and confirmation on the first actor-switch render', async () => {
@@ -331,6 +338,7 @@ describe('EquipmentManagement actor and permission isolation', () => {
 
     fireEvent.press(view.getByTestId('equipment-management-fab'));
     await waitFor(() => expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy());
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '新设备');
     await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); });
     await waitFor(() => expect(createEquipment).toHaveBeenCalledWith(expect.any(Object), 'F006'));
 
@@ -339,5 +347,83 @@ describe('EquipmentManagement actor and permission isolation', () => {
     await waitFor(() => expect(view.getByTestId('equipment-management-submit-edit')).toBeTruthy());
     await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-edit')); });
     await waitFor(() => expect(updateEquipment).toHaveBeenCalledWith(7, expect.any(Object), 'F006'));
+  });
+
+  it('rejects a blank or whitespace-only name without sending a create request', async () => {
+    getEquipments.mockResolvedValue({ content: [], totalElements: 0, totalPages: 0 });
+    const view = render(<EquipmentManagementScreen />);
+    await waitFor(() => expect(view.getByTestId('equipment-management-fab')).toBeTruthy());
+
+    fireEvent.press(view.getByTestId('equipment-management-fab'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy());
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '   ');
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); });
+
+    await waitFor(() => expect(view.getByTestId('equipment-management-create-name-error')).toBeTruthy());
+    expect(createEquipment).not.toHaveBeenCalled();
+    expect(appAlert).not.toHaveBeenCalled();
+  });
+
+  it('keeps create inputs open and reports a real mutation failure', async () => {
+    getEquipments.mockResolvedValue({ content: [], totalElements: 0, totalPages: 0 });
+    createEquipment.mockRejectedValueOnce(new Error('设备名称已存在'));
+    const view = render(<EquipmentManagementScreen />);
+    await waitFor(() => expect(view.getByTestId('equipment-management-fab')).toBeTruthy());
+
+    fireEvent.press(view.getByTestId('equipment-management-fab'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy());
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '保留输入的设备');
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); });
+
+    await waitFor(() => expect(appAlert).toHaveBeenCalledWith(expect.any(String), '设备名称已存在'));
+    expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy();
+    expect(view.getByTestId('equipment-management-create-name').props.value).toBe('保留输入的设备');
+  });
+
+  it('ignores a late mutation failure after the actor changes', async () => {
+    getEquipments.mockResolvedValue({ content: [], totalElements: 0, totalPages: 0 });
+    const pending = deferred<ReturnType<typeof equipment>>();
+    createEquipment.mockReturnValueOnce(pending.promise);
+    const view = render(<EquipmentManagementScreen />);
+    await waitFor(() => expect(view.getByTestId('equipment-management-fab')).toBeTruthy());
+
+    fireEvent.press(view.getByTestId('equipment-management-fab'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-submit-create')).toBeTruthy());
+    fireEvent.changeText(view.getByTestId('equipment-management-create-name'), '旧账号设备');
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-create')); await Promise.resolve(); });
+
+    act(() => { useAuthStore.setState({ user: actor(22, 'F007', 'rw'), isAuthenticated: true }); });
+    await act(async () => { pending.reject(new Error('旧账号失败')); await pending.promise.catch(() => undefined); });
+
+    expect(appAlert).not.toHaveBeenCalled();
+    expect(view.queryByTestId('equipment-management-create-name')).toBeNull();
+  });
+
+  it('reports update, delete, and status failures while preserving their controls', async () => {
+    getEquipments.mockResolvedValue({ content: [equipment('F006')], totalElements: 1, totalPages: 1 });
+    const view = render(<EquipmentManagementScreen />);
+    await waitFor(() => expect(view.getByText('F006-设备')).toBeTruthy());
+
+    updateEquipment.mockRejectedValueOnce(new Error('更新失败'));
+    fireEvent.press(view.getByTestId('equipment-management-edit-7'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-submit-edit')).toBeTruthy());
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-submit-edit')); });
+    await waitFor(() => expect(appAlert).toHaveBeenCalledWith(expect.any(String), '更新失败'));
+    expect(view.getByTestId('equipment-management-submit-edit')).toBeTruthy();
+
+    deleteEquipment.mockRejectedValueOnce(new Error('删除失败'));
+    fireEvent.press(view.getByTestId('equipment-management-delete-7'));
+    await waitFor(() => expect(view.getByTestId('equipment-management-confirm-delete')).toBeTruthy());
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-confirm-delete')); });
+    await waitFor(() => expect(appAlert).toHaveBeenCalledWith(expect.any(String), '删除失败'));
+    expect(view.getByTestId('equipment-management-confirm-delete')).toBeTruthy();
+
+    updateEquipmentStatus.mockRejectedValueOnce(new Error('状态更新失败'));
+    const statusMenu = view.UNSAFE_getAllByType(Menu)[0];
+    fireEvent.press(statusMenu.props.anchor);
+    await waitFor(() => expect(view.getByTestId('equipment-management-status-maintenance')).toBeTruthy());
+    await act(async () => { fireEvent.press(view.getByTestId('equipment-management-status-maintenance')); });
+    await waitFor(() => expect(appAlert).toHaveBeenCalledWith(expect.any(String), '状态更新失败'));
+    expect(view.getByTestId('equipment-management-status-maintenance')).toBeTruthy();
   });
 });

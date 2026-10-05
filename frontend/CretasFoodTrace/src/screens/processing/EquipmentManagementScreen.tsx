@@ -32,6 +32,7 @@ import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components
 import { theme } from '../../theme';
 import { logger } from '../../utils/logger';
 import { hasModulePermission } from '../../utils/permissionHelper';
+import { getErrorMsg } from '../../utils/errorHandler';
 
 // Create EquipmentManagement context logger
 const equipmentMgmtLogger = logger.createContextLogger('EquipmentManagement');
@@ -114,6 +115,7 @@ function EquipmentManagementContent() {
   const [showOperatorMenu, setShowOperatorMenu] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [operatorLoadError, setOperatorLoadError] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   // Form State
   const [formData, setFormData] = useState<CreateEquipmentRequest>({
@@ -190,6 +192,7 @@ function EquipmentManagementContent() {
     setShowStatusMenu(false);
     setOperatorUsers([]);
     setOperatorLoadError(false);
+    setNameError(null);
   }, [renderActorKey, user]);
 
   // Load selectable operator users list
@@ -277,15 +280,25 @@ function EquipmentManagementContent() {
     }, [loadEquipments])
   );
 
-  // CRUD Handlers (unchanged logic, just simplified for brevity in visual refactor)
+  const getValidatedFormData = (): CreateEquipmentRequest | null => {
+    const trimmedName = formData.name.trim();
+    if (!trimmedName) {
+      setNameError(t('equipmentManagement.dialogs.fields.nameRequired'));
+      return null;
+    }
+    setNameError(null);
+    return { ...formData, name: trimmedName };
+  };
+
+  // CRUD handlers keep the dialog/form state on failure so the operator can correct and retry.
   const handleCreateEquipment = async () => {
       const context = captureActorContext();
       if (!isCurrentActorContext(context, true)) return;
-      // ... same logic as before ...
-      // For brevity, assuming successful creation for now
+      const validatedFormData = getValidatedFormData();
+      if (!validatedFormData) return;
       try {
         setLoading(true);
-        await equipmentApiClient.createEquipment(formData, context.factoryId);
+        await equipmentApiClient.createEquipment(validatedFormData, context.factoryId);
         if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.info('Equipment created successfully', {
           equipmentName: formData.name,
@@ -297,9 +310,10 @@ function EquipmentManagementContent() {
       } catch (e) {
         if (!isCurrentActorContext(context)) return;
         equipmentMgmtLogger.error('Failed to create equipment', e as Error, {
-          equipmentName: formData.name,
+          equipmentName: validatedFormData.name,
           factoryId: context.factoryId,
         });
+        appAlert(t('equipmentManagement.messages.createFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -310,9 +324,11 @@ function EquipmentManagementContent() {
       if (!isCurrentActorContext(context, true)) return;
       const canonical = canonicalSelectedEquipment(context);
       if (!canonical) return;
+      const validatedFormData = getValidatedFormData();
+      if (!validatedFormData) return;
       try {
           setLoading(true);
-          await equipmentApiClient.updateEquipment(canonical.id, formData, context.factoryId);
+          await equipmentApiClient.updateEquipment(canonical.id, validatedFormData, context.factoryId);
           if (!isCurrentActorContext(context)) return;
           equipmentMgmtLogger.info('Equipment updated successfully', {
             equipmentId: canonical.id,
@@ -327,6 +343,7 @@ function EquipmentManagementContent() {
           equipmentId: canonical.id,
           factoryId: context.factoryId,
         });
+        appAlert(t('equipmentManagement.messages.updateFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -354,6 +371,7 @@ function EquipmentManagementContent() {
           equipmentId: canonical.id,
           factoryId: context.factoryId,
         });
+        appAlert(t('equipmentManagement.messages.deleteFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -382,6 +400,7 @@ function EquipmentManagementContent() {
           newStatus,
           factoryId: context.factoryId,
         });
+        appAlert(t('equipmentManagement.messages.statusUpdateFailed'), getErrorMsg(e) || t('equipmentManagement.messages.mutationErrorRetry'));
       } finally {
         if (isCurrentActorContext(context)) setLoading(false);
       }
@@ -390,6 +409,7 @@ function EquipmentManagementContent() {
   // Dialog Openers
   const openCreateDialog = () => {
     setFormData({ name: '', code: '', type: 'processing', model: '', manufacturer: '', purchaseDate: '', location: '', specifications: '', operatorId: undefined, notes: '' });
+    setNameError(null);
     if (isCurrentActorContext(captureActorContext(), true, true)) void loadOperatorUsers();
     setShowCreateDialog(true);
   };
@@ -397,6 +417,7 @@ function EquipmentManagementContent() {
   const openEditDialog = (equipment: Equipment) => {
     setSelectedEquipment(equipment);
     setFormData({ ...equipment, purchasePrice: equipment.purchasePrice, depreciationYears: equipment.depreciationYears, maintenanceInterval: equipment.maintenanceInterval, operatorId: equipment.operatorId });
+    setNameError(null);
     if (isCurrentActorContext(captureActorContext(), true, true)) void loadOperatorUsers();
     setShowEditDialog(true);
   };
@@ -628,16 +649,17 @@ function EquipmentManagementContent() {
             <Dialog.ScrollArea style={{ maxHeight: 400, paddingHorizontal: 0 }}>
               <ScrollView>
                 <View style={{ paddingHorizontal: 24 }}>
-                  <TextInput label={t('equipmentManagement.dialogs.fields.name')} value={formData.name} onChangeText={text => setFormData({...formData, name: text})} mode="outlined" style={styles.input} />
-                  <TextInput label={t('equipmentManagement.dialogs.fields.code')} value={formData.code} onChangeText={text => setFormData({...formData, code: text})} mode="outlined" style={styles.input} />
-                  <TextInput label={t('equipmentManagement.dialogs.fields.model')} value={formData.model || ''} onChangeText={text => setFormData({...formData, model: text})} mode="outlined" style={styles.input} />
-                  <TextInput label={t('equipmentManagement.dialogs.fields.location')} value={formData.location || ''} onChangeText={text => setFormData({...formData, location: text})} mode="outlined" style={styles.input} />
+                  <TextInput testID="equipment-management-create-name" label={t('equipmentManagement.dialogs.fields.name')} value={formData.name} onChangeText={text => { setFormData({...formData, name: text}); setNameError(null); }} mode="outlined" style={styles.input} error={!!nameError} />
+                  {!!nameError && <Text testID="equipment-management-create-name-error" style={styles.fieldError}>{nameError}</Text>}
+                  <TextInput testID="equipment-management-create-code" label={t('equipmentManagement.dialogs.fields.code')} value={formData.code} onChangeText={text => setFormData({...formData, code: text})} mode="outlined" style={styles.input} />
+                  <TextInput testID="equipment-management-create-model" label={t('equipmentManagement.dialogs.fields.model')} value={formData.model || ''} onChangeText={text => setFormData({...formData, model: text})} mode="outlined" style={styles.input} />
+                  <TextInput testID="equipment-management-create-location" label={t('equipmentManagement.dialogs.fields.location')} value={formData.location || ''} onChangeText={text => setFormData({...formData, location: text})} mode="outlined" style={styles.input} />
 
                   {/* Operator selection */}
                   <Text style={styles.fieldLabel}>{t('equipmentManagement.dialogs.fields.operator')}</Text>
                   {renderOperatorField()}
 
-                  <TextInput label={t('equipmentManagement.dialogs.fields.notes')} value={formData.notes || ''} onChangeText={text => setFormData({...formData, notes: text})} mode="outlined" style={styles.input} multiline numberOfLines={2} />
+                  <TextInput testID="equipment-management-create-notes" label={t('equipmentManagement.dialogs.fields.notes')} value={formData.notes || ''} onChangeText={text => setFormData({...formData, notes: text})} mode="outlined" style={styles.input} multiline numberOfLines={2} />
                 </View>
               </ScrollView>
             </Dialog.ScrollArea>
@@ -653,16 +675,17 @@ function EquipmentManagementContent() {
             <Dialog.ScrollArea style={{ maxHeight: 400, paddingHorizontal: 0 }}>
               <ScrollView>
                 <View style={{ paddingHorizontal: 24 }}>
-                  <TextInput label={t('equipmentManagement.dialogs.fields.name')} value={formData.name} onChangeText={text => setFormData({...formData, name: text})} mode="outlined" style={styles.input} />
-                  <TextInput label={t('equipmentManagement.dialogs.fields.code')} value={formData.code} onChangeText={text => setFormData({...formData, code: text})} mode="outlined" style={styles.input} />
-                  <TextInput label={t('equipmentManagement.dialogs.fields.model')} value={formData.model || ''} onChangeText={text => setFormData({...formData, model: text})} mode="outlined" style={styles.input} />
-                  <TextInput label={t('equipmentManagement.dialogs.fields.location')} value={formData.location || ''} onChangeText={text => setFormData({...formData, location: text})} mode="outlined" style={styles.input} />
+                  <TextInput testID="equipment-management-edit-name" label={t('equipmentManagement.dialogs.fields.name')} value={formData.name} onChangeText={text => { setFormData({...formData, name: text}); setNameError(null); }} mode="outlined" style={styles.input} error={!!nameError} />
+                  {!!nameError && <Text testID="equipment-management-edit-name-error" style={styles.fieldError}>{nameError}</Text>}
+                  <TextInput testID="equipment-management-edit-code" label={t('equipmentManagement.dialogs.fields.code')} value={formData.code} onChangeText={text => setFormData({...formData, code: text})} mode="outlined" style={styles.input} />
+                  <TextInput testID="equipment-management-edit-model" label={t('equipmentManagement.dialogs.fields.model')} value={formData.model || ''} onChangeText={text => setFormData({...formData, model: text})} mode="outlined" style={styles.input} />
+                  <TextInput testID="equipment-management-edit-location" label={t('equipmentManagement.dialogs.fields.location')} value={formData.location || ''} onChangeText={text => setFormData({...formData, location: text})} mode="outlined" style={styles.input} />
 
                   {/* Operator selection */}
                   <Text style={styles.fieldLabel}>{t('equipmentManagement.dialogs.fields.operator')}</Text>
                   {renderOperatorField()}
 
-                  <TextInput label={t('equipmentManagement.dialogs.fields.notes')} value={formData.notes || ''} onChangeText={text => setFormData({...formData, notes: text})} mode="outlined" style={styles.input} multiline numberOfLines={2} />
+                  <TextInput testID="equipment-management-edit-notes" label={t('equipmentManagement.dialogs.fields.notes')} value={formData.notes || ''} onChangeText={text => setFormData({...formData, notes: text})} mode="outlined" style={styles.input} multiline numberOfLines={2} />
                 </View>
               </ScrollView>
             </Dialog.ScrollArea>
@@ -792,6 +815,10 @@ const styles = StyleSheet.create({
       color: theme.colors.textSecondary,
       marginBottom: 4,
       marginTop: 4,
+  },
+  fieldError: {
+      color: theme.colors.error,
+      marginBottom: 8,
   },
   operatorButton: {
       marginBottom: 12,
