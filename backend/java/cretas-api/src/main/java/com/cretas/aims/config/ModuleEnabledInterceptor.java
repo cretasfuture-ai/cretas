@@ -3,6 +3,7 @@ package com.cretas.aims.config;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.UserModuleAccessService;
 import com.cretas.aims.service.config.FactoryConfigService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -68,6 +69,21 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
             return false;
         }
 
+        // ⚠️ Branch on actor type BEFORE any users lookup: a platform admin's id is from
+        // platform_admins, an independent sequence, so users.findById(id) would answer with an
+        // unrelated factory account (on a fresh DB, id=1 is F999's phase2a_test_user) —
+        // refusing with 「不属于工厂」, or lending that account's module grants.
+        // Per-account module overrides are keyed by users.id and cannot describe a platform admin;
+        // the factory-level switch above still applies to everyone.
+        AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
+        if (actor != null && actor.isPlatformAdmin()) {
+            if (actor.hasFactoryBypass()) {
+                return true;
+            }
+            sendPlatformRoleDenied(response, actor, factoryId, moduleCode);
+            return false;
+        }
+
         User user = getCurrentUser(request);
         if (user == null) {
             sendUnauthorized(response, "用户未登录，无法校验账号模块访问权限");
@@ -97,6 +113,10 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         return null;
     }
 
+    /**
+     * 工厂账号路径: 只在主体不是平台管理员时才走到这里。JwtAuthInterceptor 设 userId 时同步设
+     * {@link AuthenticatedActor}; 没有 actor 只出现在直接注入 userId 的单测里, 按工厂账号处理。
+     */
     private User getCurrentUser(HttpServletRequest request) {
         Object userIdObj = request.getAttribute("userId");
         if (userIdObj == null) {
@@ -173,6 +193,29 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         meta.put("userId", user.getId());
         meta.put("username", user.getUsername());
         meta.put("factoryId", user.getFactoryId());
+        meta.put("module", moduleCode);
+        body.put("meta", meta);
+        response.getWriter().write(objectMapper.writeValueAsString(body));
+        response.getWriter().flush();
+    }
+
+    private void sendPlatformRoleDenied(
+            HttpServletResponse response,
+            AuthenticatedActor actor,
+            String factoryId,
+            String moduleCode) throws Exception {
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json;charset=UTF-8");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("code", 403);
+        body.put("success", false);
+        body.put("message", "平台角色 " + actor.role() + " 无权访问工厂 " + factoryId + " 的模块 " + moduleCode);
+        body.put("severity", "error");
+        body.put("actionHint", "请使用平台超级管理员账号，或用该工厂的账号登录后操作。");
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("actorType", actor.type().name());
+        meta.put("role", actor.role());
+        meta.put("factoryId", factoryId);
         meta.put("module", moduleCode);
         body.put("meta", meta);
         response.getWriter().write(objectMapper.writeValueAsString(body));

@@ -1,0 +1,65 @@
+package com.cretas.aims.security;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Typed identity established by {@code JwtAuthInterceptor} from a validated JWT.
+ *
+ * <p>Platform admin tokens are issued with the signed claim {@code factoryId = "PLATFORM"}
+ * ({@code MobileAuthServiceImpl#platformLogin} and its refresh path); every other access token
+ * carries the user's own factory. That claim is what decides the type.</p>
+ */
+public record AuthenticatedActor(
+        AuthenticatedActorType type,
+        Long id,
+        String factoryId,
+        String role) {
+
+    public static final String REQUEST_ATTRIBUTE = AuthenticatedActor.class.getName();
+
+    /** The {@code factoryId} claim carried by platform admin tokens. */
+    public static final String PLATFORM_FACTORY_ID = "PLATFORM";
+
+    /**
+     * Platform roles that may act on any factory's {@code /api/mobile/{factoryId}/**} endpoints:
+     * {@code JwtAuthInterceptor} lets them cross factories, {@code PermissionInterceptor} and
+     * {@code ModuleEnabledInterceptor} let them past the per-account checks (which are keyed by
+     * {@code users.id} and so cannot describe a platform admin). {@code PlatformRole} gives only
+     * {@code super_admin} {@code factory:all}; {@code system_admin}, {@code operation_admin} and
+     * {@code auditor} get none of this.
+     */
+    public static final Set<String> FACTORY_BYPASS_PLATFORM_ROLES = Set.of(
+            "super_admin", "platform_admin", "developer");
+
+    public AuthenticatedActor {
+        if (type == null || id == null || id <= 0) {
+            throw new IllegalArgumentException("Authenticated actor requires a type and positive id");
+        }
+    }
+
+    public static AuthenticatedActorType typeOf(String tokenFactoryId) {
+        return PLATFORM_FACTORY_ID.equals(tokenFactoryId)
+                ? AuthenticatedActorType.PLATFORM_ADMIN
+                : AuthenticatedActorType.FACTORY_USER;
+    }
+
+    public boolean isPlatformAdmin() {
+        return type == AuthenticatedActorType.PLATFORM_ADMIN;
+    }
+
+    /** A platform actor whose role is in {@link #FACTORY_BYPASS_PLATFORM_ROLES}. */
+    public boolean hasFactoryBypass() {
+        return isPlatformAdmin()
+                && role != null
+                && FACTORY_BYPASS_PLATFORM_ROLES.contains(role.toLowerCase(Locale.ROOT));
+    }
+
+    public static Optional<AuthenticatedActor> current(HttpServletRequest request) {
+        Object value = request == null ? null : request.getAttribute(REQUEST_ATTRIBUTE);
+        return value instanceof AuthenticatedActor actor ? Optional.of(actor) : Optional.empty();
+    }
+}

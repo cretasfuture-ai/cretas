@@ -4,6 +4,7 @@ import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.utils.CookieAuthHelper;
 import com.cretas.aims.utils.JwtUtil;
@@ -41,9 +42,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     private static final Logger log = LoggerFactory.getLogger(JwtAuthInterceptor.class);
 
     // 平台管理员角色列表，可访问所有工厂
-    private static final Set<String> PLATFORM_ADMIN_ROLES = Set.of(
-            "super_admin", "platform_admin", "developer"
-    );
+    private static final Set<String> PLATFORM_ADMIN_ROLES = AuthenticatedActor.FACTORY_BYPASS_PLATFORM_ROLES;
 
     // 匹配URL中的factoryId的正则表达式
     private static final Pattern FACTORY_ID_PATTERN = Pattern.compile("/api/mobile/([^/]+)/");
@@ -157,6 +156,13 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                     if (tokenRole != null) {
                         request.setAttribute("role", tokenRole);
                         log.debug("从JWT提取role: {}", tokenRole);
+                    }
+
+                    // 带类型的主体: 平台管理员 id 来自 platform_admins, 与 users.id 是两条独立序列,
+                    // 下游(PermissionInterceptor / ModuleEnabledInterceptor)必须先按类型分支再查 users.
+                    if (userId != null && userId > 0) {
+                        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(
+                                AuthenticatedActor.typeOf(tokenFactoryId), userId, tokenFactoryId, tokenRole));
                     }
                 } else {
                     log.warn("无效的JWT token");
