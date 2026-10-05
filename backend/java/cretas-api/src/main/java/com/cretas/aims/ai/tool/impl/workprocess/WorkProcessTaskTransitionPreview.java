@@ -21,7 +21,7 @@ import java.util.Map;
  *       {@code findByFactoryIdAndId}) —— 别厂的任务与「不存在」同一个长相, 不泄露存在性</li>
  *   <li>状态转换读 {@link WorkProcessTaskService#isTransitionAllowed} —— 写路径
  *       {@code assertTransition} 读的是同一张表</li>
- *   <li>完成必填实际产量 —— 同 {@code WorkProcessTaskServiceImpl#complete} 第一条校验</li>
+ *   <li>完成必填实际产量, 且不能为负 (0 允许) —— 同 {@code WorkProcessTaskServiceImpl#complete} 前两条校验</li>
  * </ul>
  *
  * <p>返回形状与其它写工具预览一致 ({@code ReceiveWithLimitTool}):
@@ -76,6 +76,15 @@ final class WorkProcessTaskTransitionPreview {
             r.put("taskId", taskId);
             return cannot(r, "PREVIEW_INVALID",
                     "没有读到有效的实际产量（需要一个数字），不能完成工序。请告诉我这道工序实际做了多少。");
+        }
+        // 镜像写路径: 负数不是产量, 0 允许 (一道工序可以什么都没产出)。
+        // 写路径 WorkProcessTaskServiceImpl#complete 同序同判据 —— 两处必须同改。
+        if (actualQuantity.signum() < 0) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("action", ACTION_COMPLETE);
+            r.put("taskId", taskId);
+            return cannot(r, "PREVIEW_INVALID",
+                    "实际产量不能是负数，不能完成工序。请告诉我这道工序实际做了多少（没做出来就填 0）。");
         }
         WorkProcessTaskDTO task = load(service, factoryId, taskId);
         if (task == null) {
