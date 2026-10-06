@@ -85,6 +85,44 @@ class AIEnterpriseServiceStreamTest {
     }
 
     @Test
+    void streamNeverForwardsAnInventedNumberEvenBeforeDone() throws Exception {
+        Fixture fixture = fixture();
+        com.cretas.aims.ai.grounding.FactoryNumberProvenance gate =
+                new com.cretas.aims.ai.grounding.FactoryNumberProvenance();
+        ReflectionTestUtils.setField(fixture.service, "numberProvenance", gate);
+        String invented = "本期总成本 ¥12.50。\n优化后每月可节省 ¥3,800。\n建议复核批次 B-1 的原料用量。";
+        doAnswer(invocation -> {
+            PythonSmartBIClient.GeneralAnalysisEventConsumer consumer = invocation.getArgument(4);
+            consumer.onEvent(new PythonSmartBIClient.GeneralAnalysisStreamEvent(
+                    "chunk", objectMapper.readTree(objectMapper.writeValueAsString(invented))));
+            consumer.onEvent(new PythonSmartBIClient.GeneralAnalysisStreamEvent(
+                    "done", objectMapper.readTree("{\"success\":true,\"answer\":"
+                            + objectMapper.writeValueAsString(invented) + "}")));
+            return null;
+        }).when(fixture.pythonClient).streamGeneralAnalysis(
+                anyString(), nullable(String.class), nullable(String.class),
+                any(PythonSmartBIClient.GeneralAnalysisCall.class), any());
+
+        SseEmitter emitter = fixture.service.analyzeTimeRangeCostStream(
+                "FACTORY-SSE", 77L,
+                LocalDateTime.of(2026, 7, 1, 0, 0), LocalDateTime.of(2026, 7, 19, 23, 59),
+                "overall", "分析成本", false, 0, fixture.httpRequest);
+
+        verify(fixture.quotaUsageRepository, timeout(3_000))
+                .incrementUsedCount(eq("FACTORY-SSE"), any(LocalDate.class), eq(1));
+        List<Map<String, Object>> payloads = earlyPayloads(emitter);
+        // 「必发生」: 正文确实发出来了 (恰好一条 answer + 一条 complete), 闸确实判了一次
+        List<Map<String, Object>> answers = payloads.stream()
+                .filter(p -> "answer".equals(p.get("type"))).toList();
+        assertEquals(1, answers.size(), "分片应缓存到 done 之后一次性发出: " + payloads);
+        assertTrue(payloads.stream().anyMatch(p -> "complete".equals(p.get("type"))));
+        assertEquals(1L, gate.total("cost-analysis-stream"));
+        // 「没发生」: 任何一条推给客户端的事件里都没有那个编造的数
+        assertTrue(payloads.stream().noneMatch(p -> p.toString().contains("3,800")), payloads.toString());
+        assertTrue(String.valueOf(answers.get(0).get("content")).contains("¥12.50"));
+    }
+
+    @Test
     void streamTransportFailureDoesNotConsumeQuotaOrInventSuccess() throws Exception {
         Fixture fixture = fixture();
         doThrow(new IOException("PRIVATE-UPSTREAM-DETAIL"))
