@@ -56,7 +56,7 @@ public class LeaveRequestServiceImpl implements LeaveRequestService {
                                BigDecimal durationHours, String reason) {
         validateDates(startDate, endDate, durationHours);
         // R4 防呆: 同期间已有 DRAFT/SUBMITTED/APPROVED 拒绝
-        var overlapping = repository.findOverlappingActive(factoryId, userId, startDate, endDate);
+        var overlapping = findOverlappingActive(factoryId, userId, startDate, endDate);
         if (!overlapping.isEmpty()) {
             var existing = overlapping.get(0);
             throw new BusinessException(409, String.format(
@@ -75,6 +75,13 @@ public class LeaveRequestServiceImpl implements LeaveRequestService {
                 .status(HrRequestStatus.DRAFT)
                 .build();
         return repository.save(req);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.List<LeaveRequest> findOverlappingActive(String factoryId, Long userId,
+                                                              LocalDate startDate, LocalDate endDate) {
+        return repository.findOverlappingActive(factoryId, userId, startDate, endDate);
     }
 
     @Override

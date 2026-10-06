@@ -54,4 +54,28 @@ public enum MaterialBatchStatus {
     public String getDescription() {
         return description;
     }
+
+    /**
+     * 批次状态本身是否禁止投产 (已过期 / 已报废 / 不良品 / 质检中)。
+     * 写路径 {@code MaterialBatchServiceImpl#assertMaterialBatchUsable} 与 AI 领用预览读的是这同一个判断。
+     * DEPLETED / USED_UP 不在此列: 它们由「剩余量不足」那道检查拦。
+     */
+    public boolean blocksProduction() {
+        return this == EXPIRED || this == SCRAPPED || this == DEFECTIVE || this == INSPECTING;
+    }
+
+    /** 配合 {@link #blocksProduction()}: 不可用于生产时对用户说的那句话 (写路径异常消息 / 预览原因共用)。 */
+    public String productionBlockedMessage() {
+        return "批次" + productionBlockedReason();
+    }
+
+    /** 不带「批次」主语的那半句 (预览前面接的是「批次号（原料名）」)。 */
+    public String productionBlockedReason() {
+        return displayName + "，不可用于生产";
+    }
+
+    /** 配合 {@link #blocksProduction()}: 该怎么办。 */
+    public String productionBlockedHint() {
+        return this == INSPECTING ? "请先完成质检放行后再投产" : "请选择可用批次";
+    }
 }

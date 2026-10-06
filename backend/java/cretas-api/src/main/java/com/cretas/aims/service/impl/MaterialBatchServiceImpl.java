@@ -1707,12 +1707,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      */
     private void assertMaterialBatchUsable(MaterialBatch batch) {
         MaterialBatchStatus st = batch.getStatus();
-        if (st == MaterialBatchStatus.EXPIRED
-                || st == MaterialBatchStatus.SCRAPPED
-                || st == MaterialBatchStatus.DEFECTIVE
-                || st == MaterialBatchStatus.INSPECTING) {
-            throw new BusinessException(409, "批次" + st.getDisplayName() + "，不可用于生产")
-                    .withHint(st == MaterialBatchStatus.INSPECTING ? "请先完成质检放行后再投产" : "请选择可用批次");
+        if (st != null && st.blocksProduction()) {
+            throw new BusinessException(409, st.productionBlockedMessage())
+                    .withHint(st.productionBlockedHint());
         }
     }
 

@@ -240,6 +240,18 @@ public abstract class AbstractBusinessTool extends AbstractTool {
     }
 
     /**
+     * 预览阶段缺哪些必填信息 (默认 = {@link #validateRequiredParams}, 与 execute 同一判据)。
+     *
+     * <p>只有 execute 自己<b>不靠 {@link #getRequiredParameters()} 拦缺参</b>的工具才需要覆盖:
+     * 例如 {@code MaterialBatchCreateTool} 的必填表是空的 (缺参时 execute 返回「请选供应商」的选择卡,
+     * 不写任何东西), 预览却必须把「缺原料 / 缺供应商」问出来, 否则确认卡就是一张空卡。
+     * 覆盖时仍只许<b>读</b> params, 返回的名字必须有 {@link #getParameterQuestion} 能问的人话。
+     */
+    protected List<String> previewMissingParameters(Map<String, Object> params) {
+        return validateRequiredParams(params);
+    }
+
+    /**
      * 预览入口 — 走 doPreview() 钩子
      */
     @Override
@@ -251,7 +263,7 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             Map<String, Object> params = parseArguments(toolCall);
             String factoryId = getFactoryId(context);
 
-            List<String> missingParams = validateRequiredParams(params);
+            List<String> missingParams = previewMissingParameters(params);
             if (!missingParams.isEmpty()) {
                 // 同 execute(): 这条早退以前是完全静默的。preview 是 Canvas narrow route
                 // 走的那条路, 静默早退让"工具拒绝了"和"工具没跑"无法区分。

@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.material;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.WritePreviewSupport;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
@@ -128,14 +129,13 @@ public class MaterialBatchCreateTool extends AbstractBusinessTool {
 
         // 1. 从用户输入中提取信息
         String extractedMaterial = extractMaterialName(userInput);
-        BigDecimal extractedQuantity = extractQuantity(userInput);
         String extractedUnit = extractUnit(userInput);
         String extractedSupplierName = extractSupplierName(userInput);
 
         // 2. 检查是否有完整参数传入（用户二次确认后的调用）
         String materialTypeId = getString(params, "materialTypeId");
         String supplierId = getString(params, "supplierId");
-        BigDecimal quantity = extractedQuantity != null ? extractedQuantity : getBigDecimal(params, "quantity");
+        BigDecimal quantity = effectiveQuantity(params);   // 预览读同一个方法
         String unit = extractedUnit != null ? extractedUnit : getString(params, "unit");
         BigDecimal totalValue = getBigDecimal(params, "totalValue");
 
@@ -298,6 +298,105 @@ public class MaterialBatchCreateTool extends AbstractBusinessTool {
             case "千克":
             default:
                 return quantity;
+        }
+    }
+
+    // ==================== 预览 (只读) ====================
+
+    /**
+     * 只读预览 —— AI 对话里「预览 → 确认」的预览段。⛔ 只读原料 / 供应商, 不调 {@code createMaterialBatch}。
+     *
+     * <p>🔴 <b>这个预览当前恒为「办不了」, 而且是对的</b>: {@link #executeCreate} 建的
+     * {@link CreateMaterialBatchRequest} 不带来源单据 (sourceDocType), 而
+     * {@code MaterialBatchServiceImpl#validateSourceDoc} 对「无来源单据的入库」一律 400
+     * (F4 守卫: 仓库无单不可建库存; 见 {@code MaterialBatchServiceImplInboundSourceGuardTest})。
+     * 所以确认之后 execute 必然失败 —— 预览不能替它先开一张「可确认」的票。
+     * ⛔ 不要为了让预览亮「确认」而在这里写死一个 sourceDocType: 那是把「库存必须有单据」的内部控制绕过去。
+     * 要让 AI 能办这件事, 正路是让工具接收并透传真实的来源单据 (需产品裁定), 不是改预览。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    /**
+     * execute 自己不靠必填表拦缺参 (缺原料 / 供应商时它回一张「请选供应商」的选择卡, 什么也不写),
+     * 预览却必须问清楚, 否则就是一张没有内容的确认卡。数量与 execute 同一取法: 先从用户原话里抽, 抽不到才看参数。
+     */
+    @Override
+    protected List<String> previewMissingParameters(Map<String, Object> params) {
+        List<String> missing = new ArrayList<>();
+        if (isBlank(getString(params, "materialTypeId"))) {
+            missing.add("materialTypeId");
+        }
+        if (effectiveQuantity(params) == null) {
+            missing.add("quantity");
+        }
+        if (isBlank(getString(params, "supplierId"))) {
+            missing.add("supplierId");
+        }
+        return missing;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        String userInput = getString(params, "userInput");
+        BigDecimal quantity = effectiveQuantity(params);
+        String unit = extractUnit(userInput);   // 与 doExecute 同: 单位只取用户原话里的, 抽不到按「公斤」
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            return WritePreviewSupport.blocked("PREVIEW_INVALID", "入库数量必须大于 0。请告诉我入库多少。", null);
+        }
+
+        String materialName;
+        try {
+            RawMaterialTypeDTO type = rawMaterialTypeService.getMaterialTypeById(
+                    factoryId, getString(params, "materialTypeId"));
+            materialName = type.getName();
+        } catch (RuntimeException notVisible) {
+            return WritePreviewSupport.blocked("MATERIAL_NOT_FOUND",
+                    "找不到这种原材料，或它不属于本工厂。请核对原材料名称后再试。", null);
+        }
+        String supplierName;
+        try {
+            supplierName = supplierService.getSupplierById(factoryId, getString(params, "supplierId")).getName();
+        } catch (RuntimeException notVisible) {
+            return WritePreviewSupport.blocked("SUPPLIER_NOT_FOUND",
+                    "找不到这个供应商，或它不属于本工厂。请核对供应商名称后再试。", null);
+        }
+
+        Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("materialName", materialName);
+        extra.put("supplierName", supplierName);
+        extra.put("quantityText", WritePreviewSupport.quantityText(quantity, unit));
+        return WritePreviewSupport.blocked("SOURCE_DOC_REQUIRED", String.format(
+                "「%s」入库 %s（供应商：%s）办不了：原料入库必须关联一张来源单据（采购到货通知、退料单、盘点单等），"
+                        + "在 AI 对话里直接新建原料批次不带这张单据，会被系统拒绝。"
+                        + "采购到货请说「确认收货」并带上订单号；其它入库请到 App 的入库页面办理。",
+                materialName, WritePreviewSupport.quantityText(quantity, unit), supplierName), extra);
+    }
+
+    /** execute 与预览共用的数量取法: 用户原话里抽到的优先, 抽不到才看参数。 */
+    private BigDecimal effectiveQuantity(Map<String, Object> params) {
+        BigDecimal extracted = extractQuantity(getString(params, "userInput"));
+        return extracted != null ? extracted : getBigDecimal(params, "quantity");
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+
+    @Override
+    protected String getParameterQuestion(String paramName) {
+        switch (paramName) {
+            case "materialTypeId":
+                return "请问入库的是哪种原材料？说名称就行。";
+            case "supplierId":
+                return "请问是哪个供应商送的货？说名称就行。";
+            case "quantity":
+                return "请问入库多少？（比如 500 公斤）";
+            default:
+                return super.getParameterQuestion(paramName);
         }
     }
 

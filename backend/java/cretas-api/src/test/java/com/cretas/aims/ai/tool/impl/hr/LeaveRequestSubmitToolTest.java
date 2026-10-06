@@ -117,12 +117,16 @@ class LeaveRequestSubmitToolTest {
         assertEquals(0, ((BigDecimal) result.get("requestedHours")).compareTo(new BigDecimal("24")));
         assertEquals(0, ((BigDecimal) result.get("availableHours")).compareTo(new BigDecimal("32")));
 
+        // 2026-10-06: 确认卡的文案改成人话 —— 旧断言守的是开发者口吻 (枚举码 ANNUAL / 用户编号 / 32h / ✓),
+        // 那正是要消灭的东西 (形态 C‴: 守历史, 不是守需求)。改成守「性质」+ 阴性对照: 中文假别、中文单位在, 枚举码与编号不在。
         String msg = result.get("message").toString();
-        assertTrue(msg.contains("ANNUAL"));
-        assertTrue(msg.contains(String.valueOf(USER_ID)));
-        assertTrue(msg.contains("32h"));
-        assertTrue(msg.contains("24"));
-        assertTrue(msg.contains("✓"));
+        assertTrue(msg.contains("年假"));
+        assertTrue(msg.contains("32 小时"));
+        assertTrue(msg.contains("24 小时"));
+        assertTrue(msg.contains("够用"));
+        assertFalse(msg.contains("ANNUAL"), msg);
+        assertFalse(msg.contains(String.valueOf(USER_ID)), msg);
+        assertEquals("年假", result.get("leaveTypeName"));
 
         // R1: preview does NOT call create/submit
         verify(leaveRequestService, never()).create(any(), any(), any(), any(), any(), any(), any());
@@ -157,10 +161,10 @@ class LeaveRequestSubmitToolTest {
         assertEquals("PREVIEW", result.get("status"));
         assertEquals(false, result.get("canDo"));
         String msg = result.get("message").toString();
-        assertTrue(msg.contains("⚠️"));
-        assertTrue(msg.contains("40"));   // requestedHours
-        assertTrue(msg.contains("16h"));  // availableHours
-        assertTrue(msg.contains("24"));   // shortage = 40-16
+        assertTrue(msg.contains("40 小时"), msg);   // requestedHours
+        assertTrue(msg.contains("16 小时"), msg);   // availableHours
+        assertTrue(msg.contains("还差 24 小时"), msg);   // shortage = 40-16
+        assertFalse(msg.contains("ANNUAL"), msg);
     }
 
     @Test
@@ -177,8 +181,10 @@ class LeaveRequestSubmitToolTest {
         assertEquals(true, result.get("canDo"));
         assertEquals(1L, result.get("requestedDays"));
         String msg = result.get("message").toString();
-        assertTrue(msg.contains("PERSONAL"));
+        assertTrue(msg.contains("事假"), msg);
+        assertFalse(msg.contains("PERSONAL"), msg);
         assertTrue(msg.contains("不占用月度余额"));
+        assertEquals(true, result.get("canDo"));
 
         // 非跟踪型不查 balance
         verify(leaveBalanceService, never()).getBalance(any(), any(), any(), any());
@@ -195,6 +201,7 @@ class LeaveRequestSubmitToolTest {
         Map<String, Object> result = invokeDoPreview(submitTool, FACTORY_ID, params, ctx());
 
         assertEquals("PREVIEW_INVALID", result.get("status"));
+        assertEquals(false, result.get("canDo"), "办不了必须带 canDo=false, 否则 ToolDispatchService 仍会铸确认 token");
         assertTrue(result.get("message").toString().contains("不能早于"));
         // 早期 short-circuit, 不查 balance, 不 create
         verify(leaveBalanceService, never()).getBalance(any(), any(), any(), any());
@@ -369,12 +376,15 @@ class LeaveRequestSubmitToolTest {
         Map<String, Object> result = invokeDoPreview(submitTool, FACTORY_ID, params, ctx());
 
         assertEquals("PREVIEW_INVALID", result.get("status"));
+        assertEquals(false, result.get("canDo"));
         assertEquals(400, ((Number) result.get("code")).intValue());
         String message = String.valueOf(result.get("message"));
-        assertTrue(message.contains("不支持的请假类型"),
-                "Expected message to mention 不支持的请假类型, got: " + message);
-        assertTrue(message.contains("ANNUAL"),
-                "Expected message to list ANNUAL as valid option, got: " + message);
+        // 2026-10-06: 可选项给中文名 (旧断言要求列出 ANNUAL 这种枚举码, 一线读不懂)
+        assertTrue(message.contains("不认识的请假类型"),
+                "Expected message to mention 不认识的请假类型, got: " + message);
+        assertTrue(message.contains("年假"),
+                "Expected message to list 年假 as valid option, got: " + message);
+        assertFalse(message.contains("ANNUAL"), "枚举码不给一线看: " + message);
     }
 
     // ─────────── Helpers ───────────

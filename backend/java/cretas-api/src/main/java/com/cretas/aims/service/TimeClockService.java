@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.TimeClockRecord;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Map;
 /**
  * 考勤打卡服务接口
@@ -13,6 +14,13 @@ import java.util.Map;
  * @since 2025-01-09
  */
 public interface TimeClockService {
+    /**
+     * 标准上班 / 下班时间 —— 迟到、早退的唯一判据。写路径 (TimeClockServiceImpl) 与 AI 预览
+     * (ClockInTool / ClockOutTool) 读的是同一份, 预览说「会记为迟到」就是写路径会记的那个。
+     */
+    LocalTime STANDARD_START_TIME = LocalTime.of(9, 0);
+    LocalTime STANDARD_END_TIME = LocalTime.of(18, 0);
+
     /**
      * 上班打卡（基本版本）
      */

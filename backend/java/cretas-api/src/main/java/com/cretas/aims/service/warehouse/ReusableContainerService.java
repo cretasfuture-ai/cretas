@@ -48,14 +48,24 @@ public class ReusableContainerService {
 
     public ReusableContainer getContainer(String factoryId, String id) {
         return containerRepo.findByIdAndFactoryId(id, factoryId)
-                .orElseThrow(() -> new IllegalArgumentException("周转耗材不存在: " + id));
+                .orElseThrow(() -> new ContainerNotFoundException(id));
     }
 
-    @Transactional
-    public ReusableContainerTransaction shipOut(String factoryId, String containerId,
-                                                Integer quantity, String customerId,
-                                                String customerName, String salesDeliveryId,
-                                                String remark) {
+    /**
+     * 周转耗材不存在 (或不属于本工厂)。仍是 {@link IllegalArgumentException} 且消息不变 —— 老调用方无感;
+     * AI 预览靠这个子类把「找不到」与其它业务拒绝分开, 给一线说人话而不是回显内部 id。
+     */
+    public static class ContainerNotFoundException extends IllegalArgumentException {
+        public ContainerNotFoundException(String id) {
+            super("周转耗材不存在: " + id);
+        }
+    }
+
+    /**
+     * 发出前置条件 (只读): 数量 > 0、周转框存在于本工厂、在库数量够。通过则返回该周转框。
+     * {@link #shipOut} 自己先走这里, AI 预览也走这里 —— 预览说「能发」与写路径放行是同一份判断。
+     */
+    public ReusableContainer assertShipOutAllowed(String factoryId, String containerId, Integer quantity) {
         if (quantity == null || quantity <= 0) {
             throw new IllegalArgumentException("发出数量必须大于 0");
         }
@@ -64,6 +74,28 @@ public class ReusableContainerService {
             throw new IllegalArgumentException("在库数量不足: 当前 " + c.getInWarehouseQuantity()
                     + " 需要 " + quantity);
         }
+        return c;
+    }
+
+    /** 归还前置条件 (只读): 数量 > 0、周转框存在于本工厂、在途(客户处)数量够。通过则返回该周转框。 */
+    public ReusableContainer assertReturnInAllowed(String factoryId, String containerId, Integer quantity) {
+        if (quantity == null || quantity <= 0) {
+            throw new IllegalArgumentException("归还数量必须大于 0");
+        }
+        ReusableContainer c = getContainer(factoryId, containerId);
+        if (c.getInTransitQuantity() < quantity) {
+            throw new IllegalArgumentException("在途(客户处)数量不足: 当前 "
+                    + c.getInTransitQuantity() + " 归还 " + quantity);
+        }
+        return c;
+    }
+
+    @Transactional
+    public ReusableContainerTransaction shipOut(String factoryId, String containerId,
+                                                Integer quantity, String customerId,
+                                                String customerName, String salesDeliveryId,
+                                                String remark) {
+        ReusableContainer c = assertShipOutAllowed(factoryId, containerId, quantity);
         c.setInWarehouseQuantity(c.getInWarehouseQuantity() - quantity);
         c.setInTransitQuantity(c.getInTransitQuantity() + quantity);
         containerRepo.save(c);
@@ -84,14 +116,7 @@ public class ReusableContainerService {
     public ReusableContainerTransaction returnIn(String factoryId, String containerId,
                                                  Integer quantity, String customerId,
                                                  String customerName, String remark) {
-        if (quantity == null || quantity <= 0) {
-            throw new IllegalArgumentException("归还数量必须大于 0");
-        }
-        ReusableContainer c = getContainer(factoryId, containerId);
-        if (c.getInTransitQuantity() < quantity) {
-            throw new IllegalArgumentException("在途(客户处)数量不足: 当前 "
-                    + c.getInTransitQuantity() + " 归还 " + quantity);
-        }
+        ReusableContainer c = assertReturnInAllowed(factoryId, containerId, quantity);
         c.setInTransitQuantity(c.getInTransitQuantity() - quantity);
         c.setInWarehouseQuantity(c.getInWarehouseQuantity() + quantity);
         containerRepo.save(c);

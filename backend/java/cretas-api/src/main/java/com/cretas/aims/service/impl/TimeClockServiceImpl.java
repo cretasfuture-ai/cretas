@@ -20,7 +20,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,9 +45,7 @@ public class TimeClockServiceImpl implements TimeClockService {
         this.userRepository = userRepository;
     }
 
-    // 标准上班时间（可以根据工厂设置调整）
-    private static final LocalTime STANDARD_START_TIME = LocalTime.of(9, 0); // 9:00
-    private static final LocalTime STANDARD_END_TIME = LocalTime.of(18, 0); // 18:00
+    // 标准上班 / 下班时间: 常量在 TimeClockService 接口上 (AI 预览读同一份), 此处直接继承使用。
     
     @Override
     @Transactional

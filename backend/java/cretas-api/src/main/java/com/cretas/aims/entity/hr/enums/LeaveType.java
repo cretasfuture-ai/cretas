@@ -11,29 +11,40 @@ package com.cretas.aims.entity.hr.enums;
  */
 public enum LeaveType {
     /** 病假 — 跟踪 LeaveBalance 月度上限 */
-    SICK,
+    SICK("病假"),
 
     /** 事假 — 不跟踪余额, 仅记录 */
-    PERSONAL,
+    PERSONAL("事假"),
 
     /** 年假 — 跟踪 LeaveBalance, 入职年限发放 */
-    ANNUAL,
+    ANNUAL("年假"),
 
     /** 婚假 */
-    MARRIAGE,
+    MARRIAGE("婚假"),
 
     /** 丧假 */
-    FUNERAL,
+    FUNERAL("丧假"),
 
     /** 产假 */
-    MATERNITY,
+    MATERNITY("产假"),
 
     /** 陪产假 */
-    PATERNITY,
+    PATERNITY("陪产假"),
 
     /** 调休 — 跟踪 LeaveBalance, OvertimeRequest(COMPTIME) approve 累计 */
-    COMPTIME,
+    COMPTIME("调休"),
 
     /** 其它 */
-    OTHER
+    OTHER("其它");
+
+    private final String displayName;
+
+    LeaveType(String displayName) {
+        this.displayName = displayName;
+    }
+
+    /** 中文名 —— 给人看的 (AI 确认卡 / 提示语) 一律用它, 不写枚举码。 */
+    public String getDisplayName() {
+        return displayName;
+    }
 }
