@@ -4,7 +4,9 @@ import com.cretas.aims.config.IndustryKnowledgeConfig;
 import com.cretas.aims.dto.ai.*;
 import com.cretas.aims.service.*;
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -29,6 +31,16 @@ public class AgentOrchestratorImpl implements AgentOrchestrator {
     private final KnowledgeFeedbackService knowledgeFeedbackService;
     private final IndustryKnowledgeConfig industryKnowledgeConfig;
     private final DashScopeClient dashScopeClient;
+
+    /**
+     * 数字出处闸。检索 Agent 至今只取行业知识 (没有工具调用), 所以源 = 喂给模型的提示词。
+     * 审核 Agent 还会因「我不知道 / 无法判断」退回 —— 那是在逼模型给确定的说法,
+     * 闸是这条路上唯一挡住它顺手编数的东西。默认实例保证裸构造也走闸。
+     */
+    @Autowired(required = false)
+    private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
+
+    static final String PROVENANCE_SITE = "agent-orchestrator";
 
     // 最大重试轮次
     private static final int MAX_RETRY_ROUNDS = 3;
@@ -213,7 +225,7 @@ public class AgentOrchestratorImpl implements AgentOrchestrator {
             );
 
             String analysis = dashScopeClient.chat(systemPrompt, userPrompt);
-            message.setAnalysisResult(analysis);
+            message.setAnalysisResult(numberProvenance.enforceText(PROVENANCE_SITE, analysis, userPrompt));
 
             log.debug("分析 Agent 完成: resultLength={}", analysis != null ? analysis.length() : 0);
 

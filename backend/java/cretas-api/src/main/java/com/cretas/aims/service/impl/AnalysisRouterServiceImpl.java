@@ -9,7 +9,9 @@ import com.cretas.aims.dto.ai.AnalysisTopic;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ToolRouterService;
 import com.cretas.aims.ai.client.PythonLLMClient;
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -31,6 +33,16 @@ public class AnalysisRouterServiceImpl implements AnalysisRouterService {
     private final PythonLLMClient pythonLLMClient;
     private final IndustryKnowledgeConfig industryKnowledgeConfig;
     private final IntentKnowledgeBase knowledgeBase;
+
+    /**
+     * 数字出处闸。这条分析路径<b>没有</b>查任何工厂数据 (见 {@link #getDataContext} 的 TODO),
+     * 模型能合法引用的数只有提示词里的行业知识和用户问题 —— 其余的数都是它写出来的。
+     * 默认实例保证裸构造 (单测) 也走闸。
+     */
+    @Autowired(required = false)
+    private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
+
+    static final String PROVENANCE_SITE = "analysis-router";
 
     // 业务领域关键词
     private static final Map<AnalysisTopic, List<String>> TOPIC_KEYWORDS = new HashMap<>();
@@ -164,6 +176,8 @@ public class AnalysisRouterServiceImpl implements AnalysisRouterService {
 
             log.info("✅ 分析完成: topic={}, responseLength={}",
                     context.getTopic(), analysisText != null ? analysisText.length() : 0);
+
+            analysisText = numberProvenance.enforceText(PROVENANCE_SITE, analysisText, analysisPrompt);
 
             return AnalysisResult.builder()
                     .success(true)

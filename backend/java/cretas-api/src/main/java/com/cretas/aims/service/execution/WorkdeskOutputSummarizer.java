@@ -1,11 +1,13 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -44,6 +46,17 @@ public class WorkdeskOutputSummarizer {
 
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 数字出处闸。非 final + 默认实例: 既有单测用两参构造器 new 出本类, 它们照样走闸
+     * (而不是因为字段为 null 静默跳过); Spring 下由容器注入同一个带计数器的 bean。
+     */
+    @Autowired(required = false)
+    private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
+
+    static final String PROVENANCE_SITE = "workdesk-summarizer";
+    static final String LLM_UNAVAILABLE_HEADER = " 数据摘要 (LLM 暂不可用, 显示结构化结果):";
+    static final String PROVENANCE_FALLBACK_HEADER = " 数据摘要 (AI 摘要里有无法与数据核对的数字, 改为显示系统返回的结构化结果):";
 
     @Value("${cretas.ai.workdesk-summarizer.enabled:true}")
     private boolean enabled;
@@ -104,6 +117,14 @@ public class WorkdeskOutputSummarizer {
                     summary.length());
             summary = null;
         }
+        // 数字出处闸: 模型摘要里每个数都得出自 resultData。有找不到出处的数 →
+        // 换成只由 resultData 拼出来的确定性摘要 (by construction 只含工具数)。
+        // ⚠️ 提示词里那句「不要编造」管不住这件事 —— 生产上它确实写过「比上月增长 43568.21%」。
+        if (summary != null && !summary.isBlank()) {
+            summary = numberProvenance.enforce(PROVENANCE_SITE, summary,
+                    () -> buildDeterministicFallback(resultData, response, PROVENANCE_FALLBACK_HEADER),
+                    stripUnderscoreKeys(resultData)).text();
+        }
         if (summary == null || summary.isBlank()) {
             // LLM unavailable (DashScope quota / network / timeout) OR returned dirty —
             // degrade gracefully to a deterministic Java-side strip-and-template summary
@@ -153,8 +174,12 @@ public class WorkdeskOutputSummarizer {
      * <p>Goal: pass the {@link #isDirty} check (no underscore keys, not
      * brace-heavy, not bare template) even when DashScope is rate-limited.
      */
-    @SuppressWarnings("unchecked")
     String buildDeterministicFallback(Object resultData, IntentExecuteResponse response) {
+        return buildDeterministicFallback(resultData, response, LLM_UNAVAILABLE_HEADER);
+    }
+
+    @SuppressWarnings("unchecked")
+    String buildDeterministicFallback(Object resultData, IntentExecuteResponse response, String header) {
         if (resultData == null) return null;
         Object cleaned = stripUnderscoreKeys(resultData);
         if (!(cleaned instanceof Map)) return null;
@@ -165,7 +190,7 @@ public class WorkdeskOutputSummarizer {
                 ? response.getIntentName() : "工作台";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(intentName).append(" 数据摘要 (LLM 暂不可用, 显示结构化结果):\n\n");
+        sb.append(intentName).append(header).append("\n\n");
 
         for (Map.Entry<String, Object> e : cleanedMap.entrySet()) {
             String key = e.getKey();
@@ -388,6 +413,9 @@ public class WorkdeskOutputSummarizer {
                 + "5. 若发现风险 (库存预警 / 应收过期 / 合规问题 / 告警), 在末尾列 '风险提示' 段落 (不要用 emoji / 装饰符号).\n"
                 + "6. 不要输出 _toolCount / _executionOrder / 内部 metadata 字段.\n"
                 + "7. 不要使用任何 emoji 或 Unicode 装饰符号 (B 端用户偏好纯文本).\n"
-                + "8. 输出不超过 800 字.\n";
+                + "8. 输出不超过 800 字.\n"
+                // 与数字出处闸同一条边界: 闸不认算术派生, 这里就不让模型去算 ——
+                // 否则算对了的占比也会被闸换成结构化摘要。
+                + "9. 只能引用数据里已经出现的数字, 不要自行计算合计 / 占比 / 环比 / 同比, 也不要估算.\n";
     }
 }

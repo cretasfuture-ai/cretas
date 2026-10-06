@@ -2,6 +2,7 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.dto.AIResponseDTO;
@@ -69,6 +70,10 @@ public class AIAnalysisService {
     @Autowired(required = false)
     private AIContextService aiContextService;
 
+    /** 数字出处闸。默认实例保证裸 new 出来的本类 (单测) 也走闸, 而不是因 null 跳过。 */
+    @Autowired(required = false)
+    private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
+
     /**
      * 判断是否使用 DashScope 直接调用
      */
@@ -124,41 +129,83 @@ public class AIAnalysisService {
                                            String customMessage,
                                            Boolean enableThinking,
                                            Integer thinkingBudget) {
+        // 喂给模型的正文只拼一次: 两条通道原来各拼一份 (逐字相同), 而数字出处闸要拿
+        // 「模型实际看到的那一份」当源 —— 两份就会漂, 闸就会拿错的源去比。
+        String llmInput;
+        try {
+            llmInput = buildCostLlmInput(factoryId, batchId, costData, customMessage);
+        } catch (Exception e) {
+            log.error("AI成本分析提示词构建失败: factoryId={}, batchId={}", factoryId, batchId);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("error", "AI服务暂时不可用，请稍后重试");
+            return errorResult;
+        }
+
+        Map<String, Object> result = null;
         // 路由：优先使用 DashScope 直接调用
         if (shouldUseDashScopeDirect()) {
             log.info("[DashScope Direct] 使用 DashScope 直接调用进行成本分析: factoryId={}, batchId={}", factoryId, batchId);
             try {
-                return analyzeCostDirect(factoryId, batchId, costData, customMessage, enableThinking, thinkingBudget);
+                result = analyzeCostDirect(factoryId, batchId, llmInput, enableThinking, thinkingBudget);
             } catch (Exception e) {
                 log.warn("[DashScope Direct] 直接调用失败，回退到 Python 服务: {}", e.getMessage());
                 // 回退到 Python 服务
             }
         }
 
-        return analyzeCostViaPython(factoryId, userId, batchId, costData, sessionId,
-                customMessage, enableThinking, thinkingBudget);
+        if (result == null) {
+            result = analyzeCostViaPython(factoryId, userId, batchId, llmInput, sessionId,
+                    enableThinking, thinkingBudget);
+        }
+        return gateCostAnalysisNumbers(result, costData, llmInput);
+    }
+
+    /**
+     * 数字出处闸 (成本分析)。本方法是全部 10 个成本分析调用点 (批次 / 时间范围 / 对比 /
+     * 日周月报 / 生产报表 / 加工服务) 的唯一汇合点, 所以闸只挂这一处。
+     *
+     * <p>源 = 成本数据本身 + 喂给模型的正文 (含预计算上下文与用户问题): 模型能合法引用的
+     * 数只有这两处里的。没有确定性模板可退 —— 分析正文本身就是产品 —— 所以删句加注。
+     */
+    private Map<String, Object> gateCostAnalysisNumbers(Map<String, Object> result,
+                                                        Map<String, Object> costData,
+                                                        String llmInput) {
+        if (result == null || !Boolean.TRUE.equals(result.get("success"))
+                || !(result.get("aiAnalysis") instanceof String analysis)) {
+            return result;
+        }
+        result.put("aiAnalysis", numberProvenance.enforceText(
+                COST_PROVENANCE_SITE, analysis, costData, llmInput));
+        return result;
+    }
+
+    static final String COST_PROVENANCE_SITE = "cost-analysis";
+    static final String EMPLOYEE_PROVENANCE_SITE = "employee-analysis";
+
+    /** 成本分析喂给模型的正文: 自定义问题或格式化成本数据, 前面接预计算上下文。 */
+    private String buildCostLlmInput(String factoryId, String batchId,
+                                     Map<String, Object> costData, String customMessage) {
+        String userMessage = customMessage != null && !customMessage.trim().isEmpty()
+                ? customMessage
+                : formatCostDataForAI(factoryId, batchId, costData);
+
+        // 注入预计算的上下文以减少 Token 消耗
+        String preComputedContext = buildPreComputedContext(factoryId, costData);
+        if (preComputedContext != null && !preComputedContext.isEmpty()) {
+            userMessage = preComputedContext + "\n\n" + userMessage;
+            log.info("已注入预计算上下文: factoryId={}", factoryId);
+        }
+        return userMessage;
     }
 
     /**
      * 通过 DashScope 直接调用进行成本分析
      */
     private Map<String, Object> analyzeCostDirect(String factoryId, String batchId,
-                                                   Map<String, Object> costData,
-                                                   String customMessage,
+                                                   String userMessage,
                                                    Boolean enableThinking,
                                                    Integer thinkingBudget) {
-        // 1. 格式化成本数据为 AI 提示词
-        String userMessage = customMessage != null && !customMessage.trim().isEmpty()
-                ? customMessage
-                : formatCostDataForAI(factoryId, batchId, costData);
-
-        // 1.1 注入预计算的上下文以减少 Token 消耗
-        String preComputedContext = buildPreComputedContext(factoryId, costData);
-        if (preComputedContext != null && !preComputedContext.isEmpty()) {
-            userMessage = preComputedContext + "\n\n" + userMessage;
-            log.info("[DashScope Direct] 已注入预计算上下文: factoryId={}", factoryId);
-        }
-
         // 2. 构建系统提示词
         String systemPrompt = buildCostAnalysisSystemPrompt();
 
@@ -216,13 +263,15 @@ public class AIAnalysisService {
 
             分析要求：
             1. 仔细分析提供的成本数据，识别成本异常点
-            2. 对比行业基准，评估各项指标是否达标
+            2. 数据里给出了基准就对照基准评估是否达标；数据里没有基准，不要引用任何行业数字
             3. 从原材料、人工、设备、质量、时间五个维度进行分析
-            4. 给出具体可行的优化建议，包括预估节省金额
+            4. 给出具体可行的优化建议；不要估算节省金额或预期效果的数字
             5. 识别潜在风险并提出预警
+            6. 只能引用数据里已经出现的数字，不要自行计算占比、合计或差值
+               （数据里没有的数字会被系统核对后删除）
 
             输出格式：
-            1. 成本概览 - 总成本、结构占比
+            1. 成本概览 - 总成本及数据中已给出的结构占比
             2. 异常分析 - 偏离基准的指标
             3. 问题诊断 - 根本原因分析
             4. 优化建议 - 具体措施和预期效果
@@ -454,24 +503,11 @@ public class AIAnalysisService {
      * 通过 Python 服务调用进行成本分析（原有逻辑）
      */
     private Map<String, Object> analyzeCostViaPython(String factoryId, Long userId, String batchId,
-                                                      Map<String, Object> costData,
+                                                      String message,
                                                       String sessionId,
-                                                      String customMessage,
                                                       Boolean enableThinking,
                                                       Integer thinkingBudget) {
         try {
-            // 1. 格式化成本数据为AI提示词
-            String message = customMessage != null && !customMessage.trim().isEmpty()
-                ? customMessage
-                : formatCostDataForAI(factoryId, batchId, costData);
-
-            // 1.1 注入预计算的上下文以减少 Token 消耗
-            String preComputedContext = buildPreComputedContext(factoryId, costData);
-            if (preComputedContext != null && !preComputedContext.isEmpty()) {
-                message = preComputedContext + "\n\n" + message;
-                log.info("[Python Service] 已注入预计算上下文: factoryId={}", factoryId);
-            }
-
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
                     .message(message)
                     .sessionId(sessionId != null && !sessionId.isBlank() ? sessionId : null)
@@ -945,7 +981,7 @@ public class AIAnalysisService {
                     factoryId,
                     requesterUserId != null ? requesterUserId.toString() : null,
                     request);
-            return buildEmployeeAnalysisResponse(employee, employeeData, response, startTime, endTime);
+            return buildEmployeeAnalysisResponse(employee, employeeData, response, startTime, endTime, message);
 
         } catch (Exception e) {
             log.error("员工AI分析失败: factoryId={}, employeeId={}, upstream unavailable",
@@ -1136,7 +1172,7 @@ public class AIAnalysisService {
     @SuppressWarnings("unchecked")
     private AIResponseDTO.EmployeeAnalysisResponse buildEmployeeAnalysisResponse(
             User employee, Map<String, Object> data, PythonGeneralAnalysisResponse aiResponse,
-            LocalDateTime startTime, LocalDateTime endTime) {
+            LocalDateTime startTime, LocalDateTime endTime, String llmInput) {
 
         Map<String, Object> employeeInfo = (Map<String, Object>) data.get("employee");
         Map<String, Object> attendanceData = (Map<String, Object>) data.get("attendance");
@@ -1261,7 +1297,9 @@ public class AIAnalysisService {
         response.setTrends(Collections.emptyList());
         notComputableMetrics.addAll(List.of("skills", "suggestions", "trends"));
 
-        response.setAiInsight(aiResponse.getEffectiveAnalysis());
+        // 数字出处闸: 洞察正文里的数必须出自喂给模型的事实正文 (或其结构化来源)。
+        response.setAiInsight(numberProvenance.enforceText(
+                EMPLOYEE_PROVENANCE_SITE, aiResponse.getEffectiveAnalysis(), data, llmInput));
 
         String upstreamSessionId = aiResponse.getSessionId();
         response.setSessionId(upstreamSessionId != null && !upstreamSessionId.isBlank()

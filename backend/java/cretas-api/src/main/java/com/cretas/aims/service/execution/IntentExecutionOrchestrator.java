@@ -177,6 +177,13 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private WorkdeskOutputSummarizer workdeskOutputSummarizer;
 
+    /** 数字出处闸 (带经营报告上下文的咨询回答)。默认实例保证裸构造的单测也走闸。 */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.FactoryNumberProvenance numberProvenance =
+            new com.cretas.aims.ai.grounding.FactoryNumberProvenance();
+
+    static final String CONVERSATIONAL_PROVENANCE_SITE = "conversational-with-report";
+
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
@@ -2384,8 +2391,11 @@ public class IntentExecutionOrchestrator {
     String generateConversationalResponse(String factoryId, String userInput, QuestionType questionType,
                                                    Boolean enableThinking, Integer thinkingBudget) {
         String systemPrompt;
+        // 只有「带了工厂经营报告当上下文」这一支是基于数据作答, 数字出处闸只挂它:
+        // 另两支没有任何数据进模型, 源池为空, 挂闸等于删掉所有常识性数字 (登记为故意不挂)。
+        String factoryAnalysisContext = null;
         if (questionType == QuestionType.GENERAL_QUESTION) {
-            String factoryAnalysisContext = getPrecomputedAnalysisContext(factoryId);
+            factoryAnalysisContext = getPrecomputedAnalysisContext(factoryId);
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
                 systemPrompt = """
                     你是白垩纪AI Agent的智能助手。用户正在询问一个关于生产管理、质量控制或成本优化的咨询问题。
@@ -2417,6 +2427,10 @@ public class IntentExecutionOrchestrator {
                 }
             } else {
                 response = dashScopeClient.chat(systemPrompt, userInput);
+            }
+            if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
+                response = numberProvenance.enforceText(
+                        CONVERSATIONAL_PROVENANCE_SITE, response, factoryAnalysisContext, userInput);
             }
             return response;
         } catch (Exception e) {
