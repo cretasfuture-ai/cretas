@@ -2,10 +2,15 @@ package com.cretas.aims.ai.tool.impl.material;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.ai.tool.WritePreviewSupport;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +19,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -48,6 +54,19 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
     @Autowired(required = false)
     private ProductionPlanRepository productionPlanRepository;
 
+    /**
+     * 「批次号 → 真实主键」的解析用。⛔ 不设 required=false: 缺了它整条批次号回退静默失效,
+     * 一线说批次号永远「找不到」(2026-10-06 prod 事故原形), 宁可启动时就炸。
+     * 只读 {@code findByFactoryIdAndBatchNumber} (工厂隔离)。
+     */
+    @Autowired
+    private MaterialBatchRepository materialBatchRepository;
+
+    /** 只说了原料名时, 追问里最多列几个候选批次。 */
+    static final int MAX_CANDIDATES = 5;
+    /** 候选搜索一次最多取多少条再在内存里按「可用 + 有剩余」过滤。 */
+    private static final int CANDIDATE_SEARCH_SIZE = 50;
+
     @Override
     public String getToolName() {
         return "material_batch_use";
@@ -65,10 +84,12 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
 
         Map<String, Object> properties = new HashMap<>();
 
-        // batchId: 批次ID（必需）
+        // batchId: 批次号（必需）。一线只认得批次号 (如 MT-20260829-9687), 认不得内部主键;
+        // 工具内部「先按主键、再按批次号」解析 (见 resolveBatch)。
         Map<String, Object> batchId = new HashMap<>();
         batchId.put("type", "string");
-        batchId.put("description", "原材料批次ID，用于唯一标识要消耗的批次");
+        batchId.put("description", "原材料批次号，例如 MT-20260829-9687。用户只说了原料名称、没说批次号时，"
+                + "原样填用户说的原料名称，不要编造批次号");
         properties.put("batchId", batchId);
 
         // quantity: 消耗数量（必需）
@@ -84,12 +105,8 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
         productionPlanId.put("description", "关联的生产计划ID，用于追溯原料使用去向");
         properties.put("productionPlanId", productionPlanId);
 
-        // reason: 使用原因（可选）
-        Map<String, Object> reason = new HashMap<>();
-        reason.put("type", "string");
-        reason.put("description", "使用/消耗原因说明，如：生产使用、样品制作、损耗等");
-        reason.put("maxLength", 500);
-        properties.put("reason", reason);
+        // ⛔ 不再给大模型一个 reason 槽: 写路径从不落库 reason (见 doPreview 注释), 留着它只会让模型
+        // 自己编一句「生产使用」填进去 (2026-10-06 prod 日志: 抽参抽出 [batchId, reason, quantity])。
 
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("batchId", "quantity"));
@@ -105,18 +122,25 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         // 1. 解析参数
-        String batchId = getString(params, "batchId");
+        String batchRef = getString(params, "batchId");
         BigDecimal quantity = getBigDecimal(params, "quantity");
         String productionPlanId = getString(params, "productionPlanId");
-        String reason = getString(params, "reason");
 
         // 2. 参数验证
         if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("消耗数量必须大于0");
         }
 
-        log.info("📦 执行原料消耗 - 批次: {}, 数量: {}, 生产计划: {}, 原因: {}",
-                batchId, quantity, productionPlanId, reason);
+        // 2.5 批次解析: 用户给的是批次号 (或老调用方给的主键), 写路径必须拿真实主键。
+        //     解析不到 = 与预览同一句人话, 不把「按主键查不到」的内部措辞漏给一线。
+        ResolvedBatch resolved = resolveBatch(factoryId, batchRef);
+        if (resolved == null) {
+            throw new ResourceNotFoundException(BATCH_NOT_FOUND_MESSAGE);
+        }
+        String batchId = resolved.id();
+
+        log.info("📦 执行原料消耗 - 批次: {} (用户给的: {}), 数量: {}, 生产计划: {}",
+                batchId, batchRef, quantity, productionPlanId);
 
         // 3. 调用服务执行消耗 (operatorId 写入 MaterialConsumption.recordedBy)
         MaterialBatchDTO updatedBatch = materialBatchService.useBatchMaterial(
@@ -185,14 +209,17 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
                     ? plan.get().getPlanNumber() : "已指定的生产计划";
         }
 
-        MaterialBatchDTO batch;
-        try {
-            batch = materialBatchService.getMaterialBatchById(factoryId, batchId);
-        } catch (BusinessException notVisible) {   // 含 ResourceNotFoundException (不存在) 与 403 (别厂)
-            // 别厂的批次与「不存在」同一个说法, 不泄露存在性
-            return WritePreviewSupport.blocked("BATCH_NOT_FOUND",
-                    "找不到这个原料批次，或它不属于本工厂。请核对批次号后再试。", null);
+        // 先按主键、再按批次号 (写路径同一个 resolveBatch)。别厂的批次与「不存在」同一个说法, 不泄露存在性。
+        ResolvedBatch resolved = resolveBatch(factoryId, batchId);
+        if (resolved == null) {
+            // 既不是主键也不是批次号 ⇒ 多半是只说了原料名: 列出本工厂该原料名下能领的批次让用户选
+            Map<String, Object> askOrBlock = askWhichBatch(factoryId, batchId);
+            if (askOrBlock != null) {
+                return askOrBlock;
+            }
+            return WritePreviewSupport.blocked("BATCH_NOT_FOUND", BATCH_NOT_FOUND_MESSAGE, null);
         }
+        MaterialBatchDTO batch = resolved.dto();
 
         // DTO 的 unit 字段 mapper 并不填 (execute 返回里的 unit 因此是 null), 真正的单位在 quantityUnit
         String unit = WritePreviewSupport.notBlank(batch.getQuantityUnit()) ? batch.getQuantityUnit() : batch.getUnit();
@@ -234,6 +261,148 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
         return WritePreviewSupport.ready(message, current, next, null);
     }
 
+    // ==================== 批次解析 (预览 / 执行共用) ====================
+
+    static final String BATCH_NOT_FOUND_MESSAGE = "找不到这个原料批次，或它不属于本工厂。请核对批次号后再试。";
+
+    /** 解析结果: {@code id} 一定是真实主键 (写路径用它), {@code dto} 是已通过本工厂校验的批次。 */
+    private record ResolvedBatch(String id, MaterialBatchDTO dto) {
+    }
+
+    /**
+     * 把用户给的「批次」解析成真实批次。<b>预览与执行必须共用这一个方法</b>, 否则预览能找到、执行找不到 (或反过来)。
+     *
+     * <ol>
+     *   <li>先按主键查 (老行为, 老调用方 / 前端按钮传的是主键), 且必须属于本工厂;</li>
+     *   <li>查不到再按 factoryId + 批次号查 (一线只认得批次号, 如 MT-20260829-9687), 同样必须属于本工厂;</li>
+     *   <li>都不命中返回 null —— 调用方据此决定是「找不到」还是「只说了原料名, 问他要哪个批次」。</li>
+     * </ol>
+     * 只读。⛔ 不在这里抛异常: 别厂的批次与不存在同一个出口, 不泄露存在性。
+     */
+    private ResolvedBatch resolveBatch(String factoryId, String ref) {
+        if (!WritePreviewSupport.notBlank(ref)) {
+            return null;
+        }
+        String key = ref.trim();
+        MaterialBatchDTO byId = readOwnBatch(factoryId, key);
+        if (byId != null) {
+            return new ResolvedBatch(key, byId);
+        }
+        Optional<MaterialBatch> byNumber = materialBatchRepository.findByFactoryIdAndBatchNumber(factoryId, key);
+        if (byNumber.isPresent() && factoryId.equals(byNumber.get().getFactoryId())
+                && WritePreviewSupport.notBlank(byNumber.get().getId())) {
+            String realId = byNumber.get().getId();
+            MaterialBatchDTO dto = readOwnBatch(factoryId, realId);
+            if (dto != null) {
+                return new ResolvedBatch(realId, dto);
+            }
+        }
+        return null;
+    }
+
+    /** 按主键读批次, 且必须属于本工厂 (service 抛 404 / 403 都当没有; 工具这一层再认一次 factoryId, 双保险)。 */
+    private MaterialBatchDTO readOwnBatch(String factoryId, String id) {
+        MaterialBatchDTO dto;
+        try {
+            dto = materialBatchService.getMaterialBatchById(factoryId, id);
+        } catch (BusinessException notVisible) {   // 含 ResourceNotFoundException (不存在) 与 403 (别厂)
+            return null;
+        }
+        return dto != null && factoryId.equals(dto.getFactoryId()) ? dto : null;
+    }
+
+    /**
+     * 用户没给批次号 / 主键 (多半只说了原料名): 在<b>本工厂</b>按名字搜, 把有剩余的可用批次列给他选。
+     * 只读; 读法与 App 里批次列表同一个 service 入口 ({@code getMaterialBatchList}, 沿用它的数据范围),
+     * 不新加绕过范围的查询。
+     *
+     * @return 追问 (有候选) / 拦下 (搜到了但没有能领的) / null (连名字都搜不到 ⇒ 调用方回「找不到」)
+     */
+    private Map<String, Object> askWhichBatch(String factoryId, String ref) {
+        String name = ref.trim();
+        PageRequest search = PageRequest.of(1, CANDIDATE_SEARCH_SIZE);
+        search.setKeyword(name);
+        PageResponse<MaterialBatchDTO> page = materialBatchService.getMaterialBatchList(factoryId, search);
+        List<MaterialBatchDTO> found = page == null || page.getContent() == null ? List.of() : page.getContent();
+        if (found.isEmpty()) {
+            return null;
+        }
+        List<MaterialBatchDTO> usable = new ArrayList<>();
+        for (MaterialBatchDTO b : found) {
+            if (b != null
+                    && MaterialBatchStatus.AVAILABLE.equals(b.getStatus())
+                    && b.getRemainingQuantity() != null
+                    && b.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0
+                    && factoryId.equals(b.getFactoryId())
+                    && WritePreviewSupport.notBlank(b.getBatchNumber())) {
+                usable.add(b);
+            }
+        }
+        String shownName = name.length() > 20 ? name.substring(0, 20) + "…" : name;
+        if (usable.isEmpty()) {
+            return WritePreviewSupport.blocked("NO_AVAILABLE_BATCH", "「" + shownName
+                    + "」名下现在没有能领用的批次（都已用完或不可用）。请核对原料名称，或直接说批次号。", null);
+        }
+        List<MaterialBatchDTO> shown = usable.size() > MAX_CANDIDATES ? usable.subList(0, MAX_CANDIDATES) : usable;
+        List<String> labels = new ArrayList<>();
+        List<Map<String, Object>> candidates = new ArrayList<>();
+        for (MaterialBatchDTO b : shown) {
+            String unit = WritePreviewSupport.notBlank(b.getQuantityUnit()) ? b.getQuantityUnit() : b.getUnit();
+            String remaining = WritePreviewSupport.quantityText(b.getRemainingQuantity(), unit);
+            labels.add(b.getBatchNumber() + "（"
+                    + (WritePreviewSupport.notBlank(b.getMaterialName()) ? b.getMaterialName() + "，" : "")
+                    + "剩 " + remaining + "）");
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("批次号", b.getBatchNumber());
+            c.put("原料", b.getMaterialName());
+            c.put("剩余数量", remaining);
+            candidates.add(c);
+        }
+        String question = "要领用哪个批次？「" + shownName + "」现在可用的批次有：" + String.join("、", labels)
+                + (usable.size() > MAX_CANDIDATES ? "（只列出前 " + MAX_CANDIDATES + " 个）" : "")
+                + "。请直接说批次号。";
+        return new BatchChoiceQuestion(question, candidates);
+    }
+
+    /**
+     * 预览里「要用户再补一句」的出口 —— 根级 {@code success=false, status=NEED_MORE_INFO}, 与基类缺参出口同形状
+     * ({@code ToolDispatchService.blockedPreviewResponse} 据此回 NEED_MORE_INFO、不铸确认 token)。
+     * 专用 Map 子类: 只有本工具自己构造得出来, {@link #buildSuccessResult} 才会改写它。
+     */
+    private static final class BatchChoiceQuestion extends LinkedHashMap<String, Object> {
+        private static final long serialVersionUID = 1L;
+        final String question;
+        final transient List<Map<String, Object>> candidates;
+
+        BatchChoiceQuestion(String question, List<Map<String, Object>> candidates) {
+            this.question = question;
+            this.candidates = candidates;
+            put("status", "NEED_MORE_INFO");
+        }
+    }
+
+    @Override
+    protected String buildSuccessResult(Object data) {
+        if (data instanceof BatchChoiceQuestion q) {
+            try {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", false);
+                result.put("status", "NEED_MORE_INFO");
+                result.put("needMoreInfo", true);
+                result.put("missingParameters", List.of("batchId"));
+                result.put("clarificationQuestions", List.of(q.question));
+                result.put("message", q.question);
+                result.put("error", q.question);
+                result.put("candidates", q.candidates);
+                return objectMapper.writeValueAsString(result);
+            } catch (Exception e) {
+                log.error("❌ 构建批次追问结果失败", e);
+                return buildErrorResult("响应处理失败");
+            }
+        }
+        return super.buildSuccessResult(data);
+    }
+
     /** 「批次号（原料名）」—— 一线认得出的名字, 不回显内部 id。 */
     private static String batchTitle(MaterialBatchDTO batch) {
         String number = WritePreviewSupport.notBlank(batch.getBatchNumber()) ? batch.getBatchNumber() : "原料批次";
@@ -257,8 +426,6 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
                 return "请问需要消耗多少数量？";
             case "productionPlanId":
                 return "请问这次消耗是用于哪个生产计划？（可选）";
-            case "reason":
-                return "请说明消耗原因。（可选）";
             default:
                 return super.getParameterQuestion(paramName);
         }
@@ -276,8 +443,6 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
                 return "消耗数量";
             case "productionPlanId":
                 return "生产计划ID";
-            case "reason":
-                return "使用原因";
             default:
                 return super.getParameterDisplayName(paramName);
         }
