@@ -1,5 +1,6 @@
 package com.cretas.aims.service.execution;
 
+import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.capability.FactoryCapabilityPack;
 import com.cretas.aims.ai.capability.FactoryCapabilityPackRoutingPolicy;
@@ -201,11 +202,15 @@ public class SseStreamingService {
         emitter.onError(e -> log.error("SSE connection error: factoryId={}", factoryId, e));
 
         var miniCancellation = registerMiniCancellation(emitter);
-        // 登录态 (SecurityContext) 是线程本地的: 不带过去, 流里的工具走到库存等「必须有登录上下文」的服务就抛
-        // 「Authenticated inventory context is required」(#921 之后, 2026-10-06 prod 仓库员「查库存」每次失败)。
-        // 在请求线程上捕获、在工作线程上设置并在结束时清掉 (线程池会复用线程)。
-        sseExecutor.execute(new org.springframework.security.concurrent.DelegatingSecurityContextRunnable(
-                () -> executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation)));
+        // 流在 intent-sse 工作线程上跑, 没有 Servlet 请求, SecurityUtils.currentUserId() 读不到人 ——
+        // 库存等「必须有登录上下文」的服务 (#921) 会抛 "Authenticated inventory context is required"
+        // (2026-10-06 prod: 仓库员「查库存」每次失败; #944 用 SecurityContext 传递没生效, 因为身份读的是这里)。
+        // userId 来自控制器已认证的请求, 在工作线程上绑成「可信用户」作用域, 结束时还原 (线程池复用线程)。
+        sseExecutor.execute(() -> {
+            try (SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId)) {
+                executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
+            }
+        });
 
         return emitter;
     }
