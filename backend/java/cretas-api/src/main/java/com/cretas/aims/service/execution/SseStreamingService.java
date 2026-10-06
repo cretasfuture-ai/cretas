@@ -103,6 +103,12 @@ public class SseStreamingService {
     @Autowired
     private WriteGuardService writeGuardService;
 
+    // 一线角色写操作开放名单 (#939)。入场 (7a.5) 就问: 没对这个角色开放的写操作, 不先抽参、不追问参数,
+    // 直接告诉他 (2026-10-06 真机: 操作员说「创建生产批次」被追问产品和数量, 答完才被拒)。
+    // required=true: 生产上由 Spring 保证接上; 只有裸构造的单测里为 null。
+    @Autowired
+    private com.cretas.aims.service.intent.FrontlineAiWriteGrantService frontlineWriteGrants;
+
     // 声明优先的写意图判定 (与 /execute 同一份实现)。required=false: 裸构造的单测不提供时
     // 回落纯 writeGuardService 启发式, 与 IntentExecutionOrchestrator 的处理一致。
     @Autowired(required = false)
@@ -597,6 +603,9 @@ public class SseStreamingService {
             //      ⛔ 先过意图权限再抽: 没权限的请求不许碰执行层 (SseSemanticCacheAdmissionContractTest 守的就是这条),
             //      也不该为一个注定被拒的请求花一次 LLM 抽参、再追问参数。权限只算这一次, 结果带进 7c (不重算)。
             String admissionDenied = permissionDeniedMessage(intent, userId, userRole);
+            if (admissionDenied == null) {
+                admissionDenied = frontlineWriteDenied(factoryId, userRole, intent);
+            }
             if (admissionDenied != null) {
                 streamNoPermission(emitter, intent, admissionDenied, startTime);
                 return;
@@ -1992,7 +2001,25 @@ public class SseStreamingService {
         if (choices.isBlank()) {
             return "当前没有可安全提供的业务选项，请重新描述您的需求。";
         }
+        // 只剩一个选项时不说「可能匹配多个操作」—— 2026-10-06 真机: 一个按钮配「请选择」读起来像坏了。
+        List<IntentExecuteResponse.SuggestedAction> intentChoices = actions.stream()
+                .filter(x -> x != null && "SELECT_INTENT".equals(x.getActionCode())
+                        && x.getActionName() != null && !x.getActionName().isBlank())
+                .toList();
+        if (intentChoices.size() == 1) {
+            return "您是要「" + intentChoices.get(0).getActionName() + "」吗？点下面确认；不是的话请换个说法。";
+        }
         return "您的请求可能匹配多个操作, 请选择您实际想做的:" + choices;
+    }
+
+    /** 一线角色 + 写操作 + 本厂未开放 ⇒ 拒绝说明; 否则 null。与执行入口 (ToolDispatchService) 同一判定。 */
+    private String frontlineWriteDenied(String factoryId, String userRole, AIIntentConfig intent) {
+        if (frontlineWriteGrants == null || intent == null) {
+            return null;
+        }
+        ToolExecutor tool = intent.getToolName() == null || intent.getToolName().isBlank()
+                ? null : toolRegistry.getExecutor(intent.getToolName()).orElse(null);
+        return frontlineWriteGrants.denyReason(factoryId, userRole, tool, intent).orElse(null);
     }
 
     private String streamChoicesLine(List<IntentExecuteResponse.SuggestedAction> actions) {
