@@ -189,7 +189,10 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(63);
         assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(44);
         // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(44);
+        // 2026-10-06: 44 → 52 (+8): 一线默认开放的 8 个日常写工具补只读预览 (clock_in / clock_out / material_batch_create /
+        // material_batch_use / reusable_container_ship_out / reusable_container_return_in / quality_check_create /
+        // quality_defect_record)。此前它们 supportsPreview=false, 一线点了只会看到「预览模式暂不支持此意图类型」。
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(52);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
         assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(53);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);

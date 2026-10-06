@@ -1,9 +1,17 @@
 package com.cretas.aims.ai.tool.impl.quality;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.WritePreviewSupport;
 import com.cretas.aims.entity.QualityDefect;
+import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.enums.DefectStatus;
 import com.cretas.aims.entity.enums.DefectType;
+import com.cretas.aims.exception.EntityNotFoundException;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.QualityDefectService;
+import com.cretas.aims.service.QualityInspectionService;
+import com.cretas.aims.service.RawMaterialTypeService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -25,6 +33,21 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
     @Autowired
     @Lazy
     private QualityDefectService qualityDefectService;
+
+    /** 只给预览用 (只读): 确认质检记录存在且属于本工厂, 与 recordDefect 的校验同一道。 */
+    @Autowired(required = false)
+    @Lazy
+    private QualityInspectionService qualityInspectionService;
+
+    /** 只给预览用 (只读): 把质检记录上的批次编号换成「批次号（产品名）」。 */
+    @Autowired(required = false)
+    @Lazy
+    private ProductionBatchRepository productionBatchRepository;
+
+    /** 只给预览用 (只读): 把关联物料 id 换成名字。 */
+    @Autowired(required = false)
+    @Lazy
+    private RawMaterialTypeService rawMaterialTypeService;
 
     @Override
     public String getToolName() {
@@ -112,6 +135,93 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         return result;
     }
 
+    /**
+     * 只读预览 —— AI 对话里「预览 → 确认」的预览段。⛔ 只读质检记录, 不调 {@code recordDefect}。
+     *
+     * <p>镜像 {@code QualityDefectServiceImpl#recordDefect} 的拒绝条件: 缺陷类型必须是九种代码之一
+     * (与 {@link #doExecute} 同一个 {@code DefectType.valueOf}, 只认代码、不认中文名 —— 认了中文名
+     * 而 execute 不认, 确认之后就会失败)、数量 &gt; 0、质检记录存在且属于本工厂。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        String inspectionId = getString(params, "qualityInspectionId");
+        String defectTypeStr = getString(params, "defectType");
+        BigDecimal quantity = getBigDecimal(params, "quantity");
+        String materialId = getString(params, "materialId");
+        String cause = getString(params, "cause");
+
+        DefectType defectType;
+        try {
+            defectType = DefectType.valueOf(defectTypeStr.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return WritePreviewSupport.blocked("PREVIEW_INVALID", String.format(
+                    "不认识的不良类型「%s」。可选：%s。", defectTypeStr, defectTypeOptions()), null);
+        }
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            return WritePreviewSupport.blocked("PREVIEW_INVALID",
+                    "不良数量必须大于 0。请告诉我发现了多少个不良。", null);
+        }
+
+        String inspectionTitle = "这条质检记录";
+        String inspectionResult = WritePreviewSupport.EMPTY;
+        if (qualityInspectionService != null) {
+            QualityInspection inspection;
+            try {
+                inspection = qualityInspectionService.getInspectionById(factoryId, inspectionId);
+            } catch (EntityNotFoundException | ResourceNotFoundException notVisible) {
+                return WritePreviewSupport.blocked("INSPECTION_NOT_FOUND",
+                        "找不到这条质检记录，或它不属于本工厂。请核对后再试。", null);
+            }
+            inspectionTitle = QualityPreviewSupport.inspectionTitle(inspection,
+                    QualityPreviewSupport.batchTitle(productionBatchRepository, factoryId,
+                            inspection.getProductionBatchId()));
+            inspectionResult = QualityPreviewSupport.resultLabel(inspection.getResult());
+        }
+
+        String typeName = defectType.getDisplayName();
+        Map<String, Object> current = new LinkedHashMap<>();
+        current.put("质检记录", inspectionTitle);
+        current.put("质检结果", inspectionResult);
+        Map<String, Object> next = new LinkedHashMap<>();
+        next.put("质检记录", inspectionTitle);
+        next.put("质检结果", inspectionResult);   // 登记不良不改质检结果, 两侧相同
+        next.put("新增不良", typeName + " × " + WritePreviewSupport.quantityText(quantity, null));
+        next.put("处理状态", DefectStatus.OPEN.getDisplayName());
+        if (WritePreviewSupport.notBlank(cause)) {
+            next.put("不良原因", cause);
+        }
+        if (WritePreviewSupport.notBlank(materialId)) {
+            next.put("关联物料", materialName(factoryId, materialId));
+        }
+        String message = String.format("确认在 %s 登记不良：%s %s？登记后状态是「%s」，等待分派处理。",
+                inspectionTitle, typeName, WritePreviewSupport.quantityText(quantity, null),
+                DefectStatus.OPEN.getDisplayName());
+        return WritePreviewSupport.ready(message, current, next, null);
+    }
+
+    private String materialName(String factoryId, String materialId) {
+        if (rawMaterialTypeService != null) {
+            try {
+                return rawMaterialTypeService.getMaterialTypeById(factoryId, materialId).getName();
+            } catch (RuntimeException notResolvable) {
+                // 查不到名字不拦 (写路径不校验物料), 但也不回显 id
+            }
+        }
+        return "已指定的物料";
+    }
+
+    private static String defectTypeOptions() {
+        return java.util.Arrays.stream(DefectType.values())
+                .map(DefectType::getDisplayName)
+                .collect(java.util.stream.Collectors.joining(" / "));
+    }
+
     private Long extractUserIdFromContext(Map<String, Object> context) {
         Object userIdObj = context.get("userId");
         if (userIdObj == null) return null;
@@ -126,10 +236,10 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
-            case "qualityInspectionId" -> "请问关联的质检记录 ID 是？";
+            case "qualityInspectionId" -> "请问是哪一条质检记录？";
             case "defectType" -> "请问缺陷类型是？(外观/重量/成分/微生物/包装/异物/感官/保质期/其他)";
             case "quantity" -> "请问不良数量是多少？";
-            case "materialId" -> "请问关联的物料 ID 是？(可选)";
+            case "materialId" -> "请问关联的是哪种物料？说名称就行（可选）";
             case "cause" -> "请描述缺陷原因 (可选)";
             default -> super.getParameterQuestion(paramName);
         };

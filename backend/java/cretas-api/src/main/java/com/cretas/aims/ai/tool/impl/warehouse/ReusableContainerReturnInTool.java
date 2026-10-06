@@ -75,6 +75,53 @@ public class ReusableContainerReturnInTool extends AbstractBusinessTool {
         return buildSimpleResult(customerName + " 归还 " + quantity + " 个周转框入库", tx);
     }
 
+    /**
+     * 只读预览 —— AI 对话里「预览 → 确认」的预览段。⛔ 只调校验 (assertReturnInAllowed), 不调 {@code returnIn};
+     * 规则见 {@link ReusableContainerPreview}。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        return ReusableContainerPreview.returnIn(service, factoryId,
+                getString(params, "containerId"), getInteger(params, "quantity"),
+                getString(params, "customerName"));
+    }
+
+    @Override
+    protected String getParameterQuestion(String paramName) {
+        switch (paramName) {
+            case "containerId":
+                return "请问是哪一种周转框？说名称就行。";
+            case "quantity":
+                return "请问归还多少个？";
+            case "customerId":
+                return "请问是哪个客户？说名称就行。";
+            case "customerName":
+                return "请问客户的名称是什么？";
+            default:
+                return super.getParameterQuestion(paramName);
+        }
+    }
+
+    @Override
+    protected String getParameterDisplayName(String paramName) {
+        switch (paramName) {
+            case "containerId":
+                return "周转框";
+            case "customerId":
+                return "客户";
+            case "customerName":
+                return "客户名称";
+            default:
+                return super.getParameterDisplayName(paramName);
+        }
+    }
+
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
     @Override
     public AccessMode getAccessMode() {

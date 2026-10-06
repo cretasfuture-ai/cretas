@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.*;
 
 /**
@@ -107,6 +108,29 @@ public class ClockInTool extends AbstractBusinessTool {
             log.error("签到打卡失败: factoryId={}, userId={}", factoryId, userId, e);
             throw e;
         }
+    }
+
+    /**
+     * 只读预览 —— AI 对话里「预览 → 确认」的预览段。⛔ 只读今天的打卡记录, 不调 {@code clockIn};
+     * 规则见 {@link ClockPreview}。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        // userId 在 context 里是基类 validateContext 保证的 (缺了在入口就拒绝), 与 execute 同一条前置
+        Long userId = getLong(context, "userId");
+        TimeClockRecord today = timeClockService.getTodayRecord(factoryId, userId);
+        return ClockPreview.clockIn(today, now(), getString(params, "location"));
+    }
+
+    /** 当前时间; 单独成方法只为测试能钉住「9 点前 / 9 点后」两种读数。 */
+    protected LocalDateTime now() {
+        return LocalDateTime.now();
     }
 
     @Override

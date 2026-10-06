@@ -172,16 +172,27 @@ public class TimeClockRecord extends BaseEntity {
     }
 
     /**
+     * 净工作分钟数 = 上下班间隔 - 休息时间。纯函数、不碰任何字段 ——
+     * 写路径 ({@link #calculateWorkDuration()}) 与 AI 下班打卡预览读的是同一份算法。
+     */
+    public static long netWorkMinutes(LocalDateTime in, LocalDateTime out,
+                                      LocalDateTime breakStart, LocalDateTime breakEnd) {
+        long totalMinutes = java.time.Duration.between(in, out).toMinutes();
+        if (breakStart != null && breakEnd != null) {
+            totalMinutes -= java.time.Duration.between(breakStart, breakEnd).toMinutes();
+        }
+        return totalMinutes;
+    }
+
+    /**
      * 计算工作时长
      */
     public void calculateWorkDuration() {
         if (clockInTime != null && clockOutTime != null) {
-            long totalMinutes = java.time.Duration.between(clockInTime, clockOutTime).toMinutes();
-            // 减去休息时间
+            long totalMinutes = netWorkMinutes(clockInTime, clockOutTime, breakStartTime, breakEndTime);
+            // 休息时间 (净时长里已减去, 这里只记下休息了多久)
             if (breakStartTime != null && breakEndTime != null) {
-                long breakMinutes = java.time.Duration.between(breakStartTime, breakEndTime).toMinutes();
-                this.breakDurationMinutes = (int) breakMinutes;
-                totalMinutes -= breakMinutes;
+                this.breakDurationMinutes = (int) java.time.Duration.between(breakStartTime, breakEndTime).toMinutes();
             }
             this.workDurationMinutes = (int) totalMinutes;
             // 计算加班时间（假设标准工作时间是8小时）

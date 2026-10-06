@@ -57,13 +57,14 @@ public class FrontlineAiWriteGrantService {
 
     /**
      * 默认开放的日常工作 —— 一线角色每天本来就在做、App 里本来就能做的写操作。
+     * MATERIAL_BATCH_CREATE 不在此列: 它的执行不带来源单据, 仓库「无单不可建库存」必拒, 开放了也办不成 (收货走 RECEIVE_CONFIRM_CREATE)。
      * ⚠️ 改这里等于改所有工厂的默认权限; 想给某个工厂多开, 用管理端, 不要改这里。
      */
     public static final Map<String, Set<String>> DEFAULT_OPEN = Map.of(
             "operator", PRODUCTION_LINE,
             "yield_operator", PRODUCTION_LINE,
             "warehouse_worker", union(SELF_SERVICE, Set.of(
-                    "MATERIAL_BATCH_CREATE", "RECEIVE_CONFIRM_CREATE", "RECEIVE_WITH_LIMIT",
+                    "RECEIVE_CONFIRM_CREATE", "RECEIVE_WITH_LIMIT",
                     "MATERIAL_BATCH_USE", "REUSABLE_CONTAINER_SHIP_OUT", "REUSABLE_CONTAINER_RETURN_IN")),
             "quality_inspector", union(SELF_SERVICE, Set.of(
                     "QUALITY_CHECK_CREATE", "QUALITY_DEFECT_RECORD", "SSOP_EXECUTE_COMPLETE", "FOOD_SAMPLE_CREATE")));

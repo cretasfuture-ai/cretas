@@ -1,7 +1,12 @@
 package com.cretas.aims.ai.tool.impl.material;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.WritePreviewSupport;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,8 +16,10 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 原材料批次使用/消耗工具
@@ -36,6 +43,10 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
     @Autowired
     @Lazy
     private MaterialBatchService materialBatchService;
+
+    /** 只给预览用 (只读): 与写路径 validateProductionPlanRef 一样可选, 缺省时不校验计划。 */
+    @Autowired(required = false)
+    private ProductionPlanRepository productionPlanRepository;
 
     @Override
     public String getToolName() {
@@ -137,6 +148,101 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
                 updatedBatch.getBatchNumber(), updatedBatch.getRemainingQuantity());
 
         return result;
+    }
+
+    /**
+     * 只读预览 —— AI 对话里「预览 → 确认」的预览段。⛔ 只读批次 / 生产计划, 不调 {@code useBatchMaterial}。
+     *
+     * <p>镜像 {@code MaterialBatchServiceImpl#useBatchMaterial} 的拒绝条件, 同一个顺序:
+     * 数量 &gt; 0 → 生产计划存在 → 批次属于本工厂 → 批次状态允许投产 ({@link MaterialBatchStatus#blocksProduction},
+     * 与写路径同一份) → 剩余量够。{@code reason} 写路径不会落库, 所以确认卡里也不展示它。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        String batchId = getString(params, "batchId");
+        BigDecimal quantity = getBigDecimal(params, "quantity");
+        String productionPlanId = getString(params, "productionPlanId");
+
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            return WritePreviewSupport.blocked("PREVIEW_INVALID",
+                    "领用数量必须大于 0。请告诉我要领多少。", null);
+        }
+
+        String planText = null;
+        if (productionPlanId != null && !productionPlanId.isBlank() && productionPlanRepository != null) {
+            Optional<ProductionPlan> plan = productionPlanRepository.findById(productionPlanId);
+            if (plan.isEmpty()) {
+                return WritePreviewSupport.blocked("PLAN_NOT_FOUND",
+                        "找不到你指定的生产计划，请核对后再试；不用关联生产计划的话不要填这一项。", null);
+            }
+            planText = factoryId.equals(plan.get().getFactoryId()) && plan.get().getPlanNumber() != null
+                    ? plan.get().getPlanNumber() : "已指定的生产计划";
+        }
+
+        MaterialBatchDTO batch;
+        try {
+            batch = materialBatchService.getMaterialBatchById(factoryId, batchId);
+        } catch (BusinessException notVisible) {   // 含 ResourceNotFoundException (不存在) 与 403 (别厂)
+            // 别厂的批次与「不存在」同一个说法, 不泄露存在性
+            return WritePreviewSupport.blocked("BATCH_NOT_FOUND",
+                    "找不到这个原料批次，或它不属于本工厂。请核对批次号后再试。", null);
+        }
+
+        // DTO 的 unit 字段 mapper 并不填 (execute 返回里的 unit 因此是 null), 真正的单位在 quantityUnit
+        String unit = WritePreviewSupport.notBlank(batch.getQuantityUnit()) ? batch.getQuantityUnit() : batch.getUnit();
+        String who = batchTitle(batch);
+        MaterialBatchStatus status = batch.getStatus();
+        if (status != null && status.blocksProduction()) {
+            return WritePreviewSupport.blocked("INVALID_STATUS",
+                    who + status.productionBlockedReason() + "。" + status.productionBlockedHint() + "。",
+                    null);
+        }
+        BigDecimal remaining = batch.getRemainingQuantity();
+        if (remaining.compareTo(quantity) < 0) {
+            return WritePreviewSupport.blocked("INSUFFICIENT_STOCK", String.format(
+                    "%s只剩 %s，不够领用 %s。请核对数量，或换一个批次。",
+                    who, WritePreviewSupport.quantityText(remaining, unit),
+                    WritePreviewSupport.quantityText(quantity, unit)), null);
+        }
+
+        BigDecimal after = remaining.subtract(quantity);
+        boolean usedUp = after.compareTo(BigDecimal.ZERO) == 0;
+        Map<String, Object> current = new LinkedHashMap<>();
+        current.put("原料批次", who);
+        current.put("剩余数量", WritePreviewSupport.quantityText(remaining, unit));
+        current.put("批次状态", statusLabel(status));
+        Map<String, Object> next = new LinkedHashMap<>();
+        next.put("原料批次", who);
+        next.put("剩余数量", WritePreviewSupport.quantityText(after, unit));
+        // 写路径: 剩余量降到 0 时批次状态变「已用完」
+        next.put("批次状态", usedUp ? MaterialBatchStatus.USED_UP.getDisplayName() : statusLabel(status));
+        next.put("本次领用", WritePreviewSupport.quantityText(quantity, unit));
+        if (planText != null) {
+            next.put("用于生产计划", planText);
+        }
+        String message = String.format("确认从 %s 领用 %s？剩余 %s → %s%s。",
+                who, WritePreviewSupport.quantityText(quantity, unit),
+                WritePreviewSupport.quantityText(remaining, unit),
+                WritePreviewSupport.quantityText(after, unit),
+                usedUp ? "，领完后这个批次会变成「已用完」" : "");
+        return WritePreviewSupport.ready(message, current, next, null);
+    }
+
+    /** 「批次号（原料名）」—— 一线认得出的名字, 不回显内部 id。 */
+    private static String batchTitle(MaterialBatchDTO batch) {
+        String number = WritePreviewSupport.notBlank(batch.getBatchNumber()) ? batch.getBatchNumber() : "原料批次";
+        return WritePreviewSupport.notBlank(batch.getMaterialName())
+                ? number + "（" + batch.getMaterialName() + "）" : number;
+    }
+
+    private static String statusLabel(MaterialBatchStatus status) {
+        return status == null ? WritePreviewSupport.EMPTY : status.getDisplayName();
     }
 
     /**

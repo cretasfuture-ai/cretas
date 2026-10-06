@@ -63,7 +63,9 @@ class ToolDescriptorCatalogTest {
         // / RuntimeToolPolicyLoaderTest 同步更新。requiresPermission 41 → 44 (+3): 同上 (b) 的重新分类。
         // 2026-10-04: 37 → 39 (+2): work_process_task_start / work_process_task_complete 新增只读
         // doPreview() (报工在 AI 对话里走「预览 → 确认」), 同 ToolDescriptorInventoryDriftTest 42 → 44。
-        assertThat(statistics.previewSupported()).isEqualTo(39);
+        // 2026-10-06: 39 → 47 (+8): 一线默认开放的 8 个日常写工具补只读 doPreview() (打卡 2 / 原料入库 + 领用 /
+        // 周转框发出 + 归还 / 质检任务 + 不良登记), 同 ToolDescriptorInventoryDriftTest 的 override supportsPreview 44 → 52。
+        assertThat(statistics.previewSupported()).isEqualTo(47);
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         assertThat(statistics.requiresPermission()).isEqualTo(45);

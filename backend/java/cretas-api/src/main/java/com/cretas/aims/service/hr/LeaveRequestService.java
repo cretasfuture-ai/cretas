@@ -23,6 +23,13 @@ public interface LeaveRequestService {
                        LocalDate startDate, LocalDate endDate,
                        BigDecimal durationHours, String reason);
 
+    /**
+     * 同一个人、日期有重叠的在途 / 已批准申请 (DRAFT / SUBMITTED / APPROVED) —— 只读。
+     * {@link #create} 的「同期间不能重复请假」就是用它判的; AI 预览读同一个方法, 预览说「撞期」与写路径拒绝是同一个判断。
+     */
+    java.util.List<LeaveRequest> findOverlappingActive(String factoryId, Long userId,
+                                                       LocalDate startDate, LocalDate endDate);
+
     LeaveRequest update(String factoryId, Long userId, String id,
                        LeaveType leaveType, LocalDate startDate, LocalDate endDate,
                        BigDecimal durationHours, String reason);

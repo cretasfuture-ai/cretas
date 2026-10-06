@@ -1991,7 +1991,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
@@ -1999,7 +1999,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: true
       hasPermission: true
       requiredPermissions: false
@@ -3113,7 +3113,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: WRITE
     riskLevel: MEDIUM
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -3121,7 +3121,7 @@ descriptors:
     overrideFlags:
       actionType: true
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
@@ -3133,7 +3133,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: WRITE
     riskLevel: MEDIUM
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -3141,7 +3141,7 @@ descriptors:
     overrideFlags:
       actionType: true
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
@@ -9160,7 +9160,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: WRITE
     riskLevel: MEDIUM
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -9168,7 +9168,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
@@ -9320,7 +9320,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
@@ -9328,7 +9328,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: true
       hasPermission: true
       requiredPermissions: false
@@ -9621,7 +9621,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: WRITE
     riskLevel: MEDIUM
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
@@ -9629,7 +9629,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: true
       hasPermission: true
       requiredPermissions: false
@@ -11462,7 +11462,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -11470,7 +11470,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
@@ -11482,7 +11482,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -11490,7 +11490,7 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false

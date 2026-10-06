@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.hr;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.WritePreviewSupport;
 import com.cretas.aims.entity.hr.LeaveBalance;
 import com.cretas.aims.entity.hr.LeaveRequest;
 import com.cretas.aims.entity.hr.enums.HrRequestStatus;
@@ -125,67 +126,95 @@ public class LeaveRequestSubmitTool extends AbstractBusinessTool {
     }
 
     /**
-     * R1 防呆: 计算 requestedHours, 查 LeaveBalance, 返回 canDo + 余额对比.
-     * 不创建任何 LeaveRequest.
+     * 只读预览 —— 不创建任何 LeaveRequest。给确认卡看的字段全是人话: 中文假别 / 日期区间 / 小时数 / 余额,
+     * 不回显用户编号与枚举码。
+     *
+     * <p>镜像 execute 的拒绝条件, 同一个顺序: 假别认得出 → 日期格式对 → 结束不早于开始 →
+     * 同期间没有在途 / 已批准的申请 ({@link LeaveRequestService#findOverlappingActive}, 与
+     * {@code create} 同一个方法) → (跟踪型假别) 月度余额够。
+     *
+     * <p>⚠️ 凡是「办不了」都必须带 {@code canDo=false}: {@code ToolDispatchService} 只认它来决定要不要铸确认 token。
+     * 以前这里的 PREVIEW_INVALID 分支没带 canDo, 于是「日期写反」「假别不认识」也会拿到一张可确认的票。
+     *
+     * <p>R1 防呆: 查 LeaveBalance 显示已获 / 已用 / 可用, 计算 requestedHours。
      */
     @Override
     protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
         Long userId = getUserId(context);
         if (userId == null) {
-            return Map.of(
-                    "status", "PREVIEW_ERROR",
-                    "message", "无法识别当前用户, 请重新登录后再试");
+            return WritePreviewSupport.blocked("PREVIEW_ERROR",
+                    "没有识别到当前登录的人，请重新登录后再试。", null);
         }
 
         LeaveType leaveType;
         LocalDate startDate;
         LocalDate endDate;
-        // R4位一体: surface friendly validation errors (parseLeaveType / LocalDate.parse may throw BusinessException
-        // or DateTimeParseException — both would otherwise fall to AbstractBusinessTool generic-catch which sanitizes
-        // message to "操作执行失败". Catch here + return PREVIEW_INVALID with the actual message preserved.
         try {
             leaveType = parseLeaveType(params);
             startDate = LocalDate.parse(getString(params, "startDate"));
             endDate = LocalDate.parse(getString(params, "endDate"));
         } catch (BusinessException e) {
-            return Map.of(
-                    "status", "PREVIEW_INVALID",
-                    "message", "⚠️ " + e.getMessage(),
-                    "code", e.getCode() != null ? e.getCode() : 400);
+            return WritePreviewSupport.blocked("PREVIEW_INVALID", String.format(
+                    "不认识的请假类型「%s」。可选：%s。",
+                    getString(params, "leaveType"), leaveTypeOptions()), Map.of("code", e.getCode() != null ? e.getCode() : 400));
         } catch (java.time.format.DateTimeParseException e) {
-            return Map.of(
-                    "status", "PREVIEW_INVALID",
-                    "message", "⚠️ 日期格式无效, 期望 YYYY-MM-DD: " + e.getParsedString(),
-                    "code", 400);
+            return WritePreviewSupport.blocked("PREVIEW_INVALID",
+                    "日期格式不对，请按「年-月-日」说，比如 2026-10-08。", Map.of("code", 400));
         }
 
         // 基础校验 — 提前在 Preview 暴露, 避免 Execute 才报错
         if (endDate.isBefore(startDate)) {
-            return Map.of(
-                    "status", "PREVIEW_INVALID",
-                    "message", String.format("⚠️ endDate %s 不能早于 startDate %s", endDate, startDate),
-                    "leaveType", leaveType.name(),
-                    "startDate", startDate.toString(),
-                    "endDate", endDate.toString());
+            return WritePreviewSupport.blocked("PREVIEW_INVALID", String.format(
+                    "结束日期（%s）不能早于开始日期（%s）。请重新告诉我请假的起止日期。", endDate, startDate), null);
         }
 
         BigDecimal requestedHours = computeDurationHours(params, startDate, endDate);
         long requestedDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
+        String typeName = leaveType.getDisplayName();
+        String period = String.format("%s ~ %s（%d 天，%s 小时）", startDate, endDate, requestedDays,
+                requestedHours.stripTrailingZeros().toPlainString());
+
+        // 与 create() 同一个撞期判断 (只读)
+        List<LeaveRequest> overlapping = leaveRequestService.findOverlappingActive(
+                factoryId, userId, startDate, endDate);
+        if (!overlapping.isEmpty()) {
+            LeaveRequest existing = overlapping.get(0);
+            Map<String, Object> dup = new LinkedHashMap<>();
+            dup.put("actionHint", "先在「我的请假」里撤回原申请，或换一个日期");
+            return WritePreviewSupport.blocked("DUPLICATE", String.format(
+                    "你在 %s ~ %s 已经有一条请假申请（%s），不能重复提交。请先撤回原申请，或换一个日期。",
+                    existing.getStartDate(), existing.getEndDate(),
+                    existing.getStatus() != null ? existing.getStatus().getDisplayName() : "处理中"), dup);
+        }
 
         Map<String, Object> preview = new LinkedHashMap<>();
         preview.put("status", "PREVIEW");
         preview.put("userId", userId);
         preview.put("leaveType", leaveType.name());
+        preview.put("leaveTypeName", typeName);
         preview.put("startDate", startDate.toString());
         preview.put("endDate", endDate.toString());
         preview.put("requestedDays", requestedDays);
         preview.put("requestedHours", requestedHours);
         preview.put("reason", getString(params, "reason", ""));
 
+        Map<String, Object> current = new LinkedHashMap<>();
+        current.put("请假类型", typeName);
+        Map<String, Object> next = new LinkedHashMap<>();
+        next.put("请假类型", typeName);
+        next.put("请假时间", period);
+        if (WritePreviewSupport.notBlank(getString(params, "reason"))) {
+            next.put("请假原因", getString(params, "reason"));
+        }
+        next.put("提交后", "进入审批流程（没有设置审批流时会自动批准）");
+        preview.put("currentValues", current);
+        preview.put("newValues", next);
+
         // R1 防呆: 余额仅对 跟踪型 leaveType 有意义
         if (BALANCE_TRACKED_TYPES.contains(leaveType)) {
             String yearMonth = YearMonth.from(startDate).toString();  // mirror Service's approve logic
+            String monthText = String.format("%d 年 %d 月", startDate.getYear(), startDate.getMonthValue());
             Optional<LeaveBalance> bOpt = leaveBalanceService.getBalance(
                     factoryId, userId, leaveType, yearMonth);
             if (bOpt.isPresent()) {
@@ -199,16 +228,14 @@ public class LeaveRequestSubmitTool extends AbstractBusinessTool {
                 preview.put("usedHours", b.getUsedHours());
                 preview.put("availableHours", balanceHours);
                 preview.put("canDo", canDo);
-                // R2 context: 含 用户 / 类型 / 起止 / 时长 / 余额
+                current.put(monthText + "可用余额", hoursText(balanceHours));
                 String msg = canDo
-                        ? String.format("✓ 用户 %d 提交 %s 申请 %s ~ %s (%d 天, %sh), %s %s 月余额 %sh 充足 (已获 %sh, 已用 %sh), 提交后由审批人审批",
-                                userId, leaveType.name(), startDate, endDate,
-                                requestedDays, requestedHours,
-                                leaveType.name(), yearMonth, balanceHours,
-                                b.getEarnedHours(), b.getUsedHours())
-                        : String.format("⚠️ 用户 %d %s 申请 %sh 超过 %s 月余额 %sh, 缺 %sh. 请缩短请假天数或先申请加班调休累计 COMPTIME 余额.",
-                                userId, leaveType.name(), requestedHours,
-                                yearMonth, balanceHours, requestedHours.subtract(balanceHours));
+                        ? String.format("确认提交%s申请？%s。%s可用余额 %s（已获 %s，已用 %s），够用。提交后进入审批流程（没有设置审批流时会自动批准）。",
+                                typeName, period, monthText + typeName,
+                                hoursText(balanceHours), hoursText(b.getEarnedHours()), hoursText(b.getUsedHours()))
+                        : String.format("%s申请 %s，超过 %s 的可用余额 %s，还差 %s。请缩短请假天数，或先累计调休余额。",
+                                typeName, hoursText(requestedHours), monthText,
+                                hoursText(balanceHours), hoursText(requestedHours.subtract(balanceHours)));
                 preview.put("message", msg);
             } else {
                 // 无余额记录 — 通常意味未发放 (年假) 或月初零余额
@@ -218,20 +245,30 @@ public class LeaveRequestSubmitTool extends AbstractBusinessTool {
                 preview.put("availableHours", BigDecimal.ZERO);
                 preview.put("canDo", false);
                 preview.put("message", String.format(
-                        "⚠️ 用户 %d 在 %s %s 月暂无余额记录, 申请 %sh 将提交但审批可能拒绝. 请联系 HR 确认 %s 发放情况.",
-                        userId, leaveType.name(), yearMonth, requestedHours, leaveType.name()));
+                        "你在 %s 还没有%s的余额记录，申请 %s 很可能被审批拒绝。请先联系 HR 确认%s的发放情况。",
+                        monthText, typeName, hoursText(requestedHours), typeName));
             }
         } else {
             // 非跟踪型 (PERSONAL/MARRIAGE/FUNERAL/MATERNITY/PATERNITY) — 仅记录, 不查余额
             preview.put("canDo", true);
             preview.put("message", String.format(
-                    "✓ 用户 %d 提交 %s 申请 %s ~ %s (%d 天, %sh), 此类型不占用月度余额, 提交后由审批人审批",
-                    userId, leaveType.name(), startDate, endDate, requestedDays, requestedHours));
+                    "确认提交%s申请？%s。这类假不占用月度余额，提交后进入审批流程（没有设置审批流时会自动批准）。",
+                    typeName, period));
         }
 
         log.info("LeaveRequestSubmit PREVIEW: factory={} user={} type={} {}~{} hours={} canDo={}",
                 factoryId, userId, leaveType, startDate, endDate, requestedHours, preview.get("canDo"));
         return preview;
+    }
+
+    private static String hoursText(BigDecimal hours) {
+        return hours.stripTrailingZeros().toPlainString() + " 小时";
+    }
+
+    private static String leaveTypeOptions() {
+        return java.util.Arrays.stream(LeaveType.values())
+                .map(LeaveType::getDisplayName)
+                .collect(java.util.stream.Collectors.joining(" / "));
     }
 
     /**
@@ -371,9 +408,9 @@ public class LeaveRequestSubmitTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "leaveType", "请问您要申请什么类型的请假？(年假ANNUAL/病假SICK/事假PERSONAL/调休COMPTIME/婚假MARRIAGE/丧假FUNERAL/产假MATERNITY/陪产假PATERNITY/其它OTHER)",
-                "startDate", "请问请假从哪一天开始？(格式 YYYY-MM-DD)",
-                "endDate", "请问请假到哪一天结束？(格式 YYYY-MM-DD, 包含当日)"
+                "leaveType", "请问您要申请什么类型的请假？可选：" + leaveTypeOptions() + "。",
+                "startDate", "请问请假从哪一天开始？比如 2026-10-08。",
+                "endDate", "请问请假到哪一天结束？比如 2026-10-10（包含这一天）。"
         );
         return questions.get(paramName);
     }
