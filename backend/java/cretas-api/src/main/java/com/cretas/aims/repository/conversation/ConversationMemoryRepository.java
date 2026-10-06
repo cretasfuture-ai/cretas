@@ -62,17 +62,20 @@ public interface ConversationMemoryRepository extends JpaRepository<Conversation
     int expireOldSessions(@Param("expireTime") LocalDateTime expireTime, @Param("now") LocalDateTime now);
 
     /**
-     * 根据工厂ID和用户ID查找最近的活跃会话
+     * 根据工厂ID和用户ID查找最近的活跃会话 (只取最新一条)。
      *
-     * @param factoryId 工厂ID
-     * @param userId    用户ID
-     * @return 对话记忆
+     * <p>⛔ 不要改回 {@code @Query("... ORDER BY m.lastActiveAt DESC")} + {@code Optional}: JPQL 没有 LIMIT,
+     * 同一用户有两条未删除会话 (正常状态 —— 带 sessionId 的请求会新建一条) 时
+     * {@code getSingleResult} 抛 NonUniqueResultException, 这个用户的 AI 对话整个打不开
+     * (2026-10-06 prod F006 operator 实测; 当时另有 CATTLE 1 人 19 条、MOCK_REST 1 人 386 条)。
      */
-    @Query("SELECT m FROM ConversationMemory m WHERE m.factoryId = :factoryId AND m.userId = :userId " +
-           "AND m.deletedAt IS NULL ORDER BY m.lastActiveAt DESC")
-    Optional<ConversationMemory> findLatestActiveByFactoryIdAndUserId(
-            @Param("factoryId") String factoryId,
-            @Param("userId") Long userId);
+    Optional<ConversationMemory> findFirstByFactoryIdAndUserIdAndDeletedAtIsNullOrderByLastActiveAtDesc(
+            String factoryId, Long userId);
+
+    /** 旧名字保留给现有调用方与测试桩, 语义同上 (只取最新一条)。 */
+    default Optional<ConversationMemory> findLatestActiveByFactoryIdAndUserId(String factoryId, Long userId) {
+        return findFirstByFactoryIdAndUserIdAndDeletedAtIsNullOrderByLastActiveAtDesc(factoryId, userId);
+    }
 
     /**
      * 查找需要更新摘要的会话
