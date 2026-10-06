@@ -95,7 +95,13 @@ class SkuGrossMarginToolTest {
     /** 一行「销售毛利 SQL」的结果 (列名与 OperatingReportGrossMarginQuery.SQL 一致)。 */
     private void sales(String id, String name, int lines, int costedLines, int zeroCostLines,
                        String revenue, String costedRevenue, String cost) {
+        sales(id, name, lines, costedLines, zeroCostLines, 0, revenue, costedRevenue, cost);
+    }
+
+    private void sales(String id, String name, int lines, int costedLines, int zeroCostLines, int missingPriceLines,
+                       String revenue, String costedRevenue, String cost) {
         Map<String, Object> row = new HashMap<>();
+        row.put("missing_price_line_count", missingPriceLines);
         row.put("product_type_id", id);
         row.put("product_name", name);
         row.put("unit", "kg");
@@ -268,6 +274,67 @@ class SkuGrossMarginToolTest {
         JsonNode n = item(result, "无零成本").get("realized");
         assertTrue(n.get("note").isNull(), "对照: 没有零成本明细时不出提示");
         assertEquals(1, countOccurrences(message(result), "成本为 0"));
+    }
+
+    // ---- 没有售价的明细: 不计入, 并明说 ----
+
+    @Test
+    void missingPriceLinesAreNamedInTheAnswerWithControl() throws Exception {
+        type("M", "有缺价明细", "100");
+        sales("M", "有缺价明细", 3, 2, 0, 1, "200", "200", "120");
+        type("N", "无缺价明细", "100");
+        sales("N", "无缺价明细", 2, 2, 0, 0, "200", "200", "120");
+
+        JsonNode result = run("{}");
+        JsonNode m = item(result, "有缺价明细").get("realized");
+        assertEquals("OK", m.get("status").asText());
+        assertEquals("其中 1 条明细没有售价，未计入", m.get("note").asText());
+        assertEquals(1, m.get("missingPriceLineCount").asInt());
+        assertTrue(message(result).contains("其中 1 条明细没有售价，未计入"), message(result));
+
+        JsonNode n = item(result, "无缺价明细").get("realized");
+        assertTrue(n.get("note").isNull(), "对照: 没有缺价明细时不出提示");
+        assertEquals(0, n.get("missingPriceLineCount").asInt());
+        assertEquals(1, countOccurrences(message(result), "没有售价"), message(result));
+    }
+
+    @Test
+    void allLinesWithoutPriceGivesNoRevenueAndNoMarginNotZero() throws Exception {
+        type("P", "全无售价", "100");
+        sales("P", "全无售价", 2, 0, 0, 2, "0", null, null);
+
+        JsonNode result = run("{\"productName\":\"全无售价\"}");
+        JsonNode r = item(result, "全无售价").get("realized");
+        assertEquals("NO_PRICE", r.get("status").asText());
+        assertTrue(r.get("marginRate").isNull());
+        assertTrue(r.get("revenue").isNull());
+        assertTrue(r.get("totalRevenue").isNull(), "没有售价 → 收入是「不知道」, 不是 0");
+        assertTrue(r.get("note").isNull(), "全部缺价时原因已在 reason 里, 不重复");
+        assertTrue(message(result).contains("都没有售价"), message(result));
+    }
+
+    @Test
+    void nullPriceLineFlowsThroughTheRealQueryIntoTheAnswer() throws Exception {
+        DriverManagerDataSource ds = new DriverManagerDataSource(
+                "jdbc:h2:mem:sku_tool_np_" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
+        JdbcTemplate jdbc = new JdbcTemplate(ds);
+        jdbc.execute("CREATE TABLE sales_orders (id VARCHAR(40) PRIMARY KEY, factory_id VARCHAR(40),"
+                + " order_date DATE, status VARCHAR(20), deleted_at TIMESTAMP)");
+        jdbc.execute("CREATE TABLE sales_order_items (sales_order_id VARCHAR(40), product_type_id VARCHAR(40),"
+                + " product_name VARCHAR(80), unit VARCHAR(10), quantity DECIMAL(15,4), unit_price DECIMAL(15,4),"
+                + " discount_rate DECIMAL(5,2), cost_unit_price DECIMAL(15,4), deleted_at TIMESTAMP)");
+        jdbc.update("INSERT INTO sales_orders VALUES ('o1','F1',DATE '2026-09-20','CONFIRMED',NULL)");
+        jdbc.update("INSERT INTO sales_order_items VALUES ('o1','MIX','混合产品','kg',2,100,0,60,NULL)");
+        jdbc.update("INSERT INTO sales_order_items VALUES ('o1','MIX','混合产品','kg',5,NULL,0,60,NULL)");
+        SkuGrossMarginTool real = newTool(new OperatingReportGrossMarginQuery(jdbc));
+
+        JsonNode result = mapper.readTree(real.execute(
+                ToolCall.of("t3", "report_sku_gross_margin", "{}"), Map.of("factoryId", "F1", "userId", 1L)));
+        JsonNode r = item(result, "混合产品").get("realized");
+        assertDecimal("40.00", r.get("marginRate"), "(200-120)/200, 不是 (200-420)/200");
+        assertDecimal("200.00", r.get("revenue"), "revenue");
+        assertDecimal("120.00", r.get("cost"), "cost");
+        assertTrue(message(result).contains("其中 1 条明细没有售价，未计入"), message(result));
     }
 
     // ---- 折扣 (百分数) 经由真实 SQL ----

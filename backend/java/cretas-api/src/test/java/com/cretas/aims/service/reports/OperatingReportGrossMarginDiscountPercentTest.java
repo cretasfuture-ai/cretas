@@ -46,6 +46,46 @@ class OperatingReportGrossMarginDiscountPercentTest {
                 cost == null ? null : new BigDecimal(cost));
     }
 
+    private void lineWith(String product, String qty, String price, String cost) {
+        jdbc.update("INSERT INTO sales_order_items VALUES ('o1',?,?,'kg',?,?,0,?,NULL)",
+                product, product, new BigDecimal(qty), price == null ? null : new BigDecimal(price),
+                cost == null ? null : new BigDecimal(cost));
+    }
+
+    @Test
+    void nullPriceLineIsExcludedFromRevenueAndCostAndCounted() {
+        lineWith("MIX", "2", "100", "60");
+        lineWith("MIX", "5", null, "60");   // 旧 SQL: 收入 0 但成本 300 照算 → 毛利 -110%
+        Map<String, Object> r = row("MIX");
+        assertNum("200", r.get("revenue"), "revenue excludes the unpriced line");
+        assertNum("200", r.get("costedRevenue"), "costedRevenue");
+        assertNum("120", r.get("cost"), "cost excludes the unpriced line's 5*60");
+        assertNum("80", r.get("grossProfit"), "grossProfit");
+        assertNum("0.4", r.get("marginRate"), "marginRate (80/200)");
+        assertNum("2", r.get("lineCount"), "lineCount stays the total");
+        assertNum("1", r.get("costedLineCount"), "costedLineCount counts priced+costed only");
+        assertNum("1", r.get("missingPriceLineCount"), "missingPriceLineCount");
+    }
+
+    @Test
+    void onlyNullPriceLinesGiveNoMarginAndNoCost() {
+        lineWith("NOPRICE", "2", null, "60");
+        Map<String, Object> r = row("NOPRICE");
+        assertNum("1", r.get("missingPriceLineCount"), "missingPriceLineCount");
+        assertNum("0", r.get("costedLineCount"), "costedLineCount");
+        assertTrue(r.get("cost") == null && r.get("grossProfit") == null && r.get("marginRate") == null,
+                "no price -> no cost/profit/margin, got " + r);
+    }
+
+    @Test
+    void zeroPriceIsAPriceNotAMissingPriceControl() {
+        lineWith("FREE", "2", "0", "60");
+        Map<String, Object> r = row("FREE");
+        assertNum("0", r.get("missingPriceLineCount"), "price 0 is not missing");
+        assertNum("1", r.get("costedLineCount"), "costed");
+        assertNum("120", r.get("cost"), "cost kept for a priced (free) line");
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> row(String productTypeId) {
         Map<String, Object> payload = query.fetch("F1", LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30));

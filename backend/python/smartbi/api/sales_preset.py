@@ -556,6 +556,8 @@ def _gross_margin_row(r) -> dict:
         "costCoverage": costed_revenue / revenue if revenue > 0 else None,
         "lineCount": int(r["line_count"]),
         "costedLineCount": costed_lines,
+        "zeroCostLineCount": int(r["zero_cost_line_count"]),
+        "missingPriceLineCount": int(r["missing_price_line_count"]),
     }
 
 
@@ -629,15 +631,21 @@ async def gross_margin(
                    SUM(COALESCE(soi.quantity, 0)) AS total_qty,
                    COUNT(DISTINCT soi.sales_order_id) AS order_count,
                    COUNT(*) AS line_count,
-                   COUNT(*) FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS costed_line_count,
-                   COUNT(*) FILTER (WHERE soi.cost_unit_price = 0) AS zero_cost_line_count,
-                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 - COALESCE(soi.discount_rate, 0) / 100)) AS revenue,
-                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
+                   COUNT(*) FILTER (WHERE soi.unit_price IS NULL) AS missing_price_line_count,
+                   COUNT(*) FILTER (WHERE soi.unit_price IS NOT NULL
+                                      AND soi.cost_unit_price IS NOT NULL) AS costed_line_count,
+                   COUNT(*) FILTER (WHERE soi.unit_price IS NOT NULL
+                                      AND soi.cost_unit_price = 0) AS zero_cost_line_count,
+                   SUM(COALESCE(soi.quantity, 0) * soi.unit_price
                        * (1 - COALESCE(soi.discount_rate, 0) / 100))
-                     FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS costed_revenue,
+                     FILTER (WHERE soi.unit_price IS NOT NULL) AS revenue,
+                   SUM(COALESCE(soi.quantity, 0) * soi.unit_price
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100))
+                     FILTER (WHERE soi.unit_price IS NOT NULL
+                               AND soi.cost_unit_price IS NOT NULL) AS costed_revenue,
                    SUM(COALESCE(soi.quantity, 0) * soi.cost_unit_price)
-                     FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS cost
+                     FILTER (WHERE soi.unit_price IS NOT NULL
+                               AND soi.cost_unit_price IS NOT NULL) AS cost
             FROM sales_order_items soi
             JOIN sales_orders so ON so.id = soi.sales_order_id
             WHERE so.factory_id = $1 AND so.order_date BETWEEN $2 AND $3

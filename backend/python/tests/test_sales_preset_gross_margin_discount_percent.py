@@ -57,9 +57,9 @@ def db(monkeypatch):
     connection.close()
 
 
-def add_line(db, product, discount, cost):
-    db.execute("INSERT INTO sales_order_items VALUES ('o1',?,?,2,'kg',100,?,?,NULL)",
-               (product, product, discount, cost))
+def add_line(db, product, discount, cost, qty=2, price=100):
+    db.execute("INSERT INTO sales_order_items VALUES ('o1',?,?,?,'kg',?,?,?,NULL)",
+               (product, product, qty, price, discount, cost))
 
 
 def margin_rows():
@@ -85,3 +85,36 @@ def test_discount_zero_and_null_control_is_unchanged(db):
     assert rows["ZERO"]["revenue"] == pytest.approx(200)
     assert rows["NULLD"]["revenue"] == pytest.approx(200)
     assert rows["ZERO"]["marginRate"] == pytest.approx(80 / 200)
+
+
+# ---- NULL unit_price: 不是「收入 0」, 是「没有售价, 不计入」, 并单独计数 ----
+
+def test_null_price_line_is_excluded_from_revenue_and_cost_and_counted(db):
+    add_line(db, "MIX", 0, 60)                       # 2 * 100, 成本 60
+    add_line(db, "MIX", 0, 60, qty=5, price=None)    # 没有售价: 旧 SQL 把它当收入 0 却照算成本 300
+    r = margin_rows()["MIX"]
+    assert r["revenue"] == pytest.approx(200)
+    assert r["costedRevenue"] == pytest.approx(200)
+    assert r["cost"] == pytest.approx(120)            # 不含无价明细的 5 * 60
+    assert r["marginRate"] == pytest.approx(80 / 200)  # 旧口径: (200 - 420) / 200 = -110%
+    assert r["lineCount"] == 2
+    assert r["costedLineCount"] == 1
+    assert r["missingPriceLineCount"] == 1
+
+
+def test_only_null_price_lines_give_no_margin_not_zero_revenue_margin(db):
+    add_line(db, "NOPRICE", 0, 60, price=None)
+    r = margin_rows()["NOPRICE"]
+    assert r["missingPriceLineCount"] == 1
+    assert r["lineCount"] == 1
+    assert r["costedLineCount"] == 0
+    assert r["cost"] is None and r["grossProfit"] is None and r["marginRate"] is None
+
+
+def test_zero_price_is_a_price_not_a_missing_price_control(db):
+    add_line(db, "FREE", 0, 60, price=0)              # 赠品: 有价格(0), 不是缺价格
+    r = margin_rows()["FREE"]
+    assert r["missingPriceLineCount"] == 0
+    assert r["costedLineCount"] == 1
+    assert r["revenue"] == pytest.approx(0)
+    assert r["cost"] == pytest.approx(120)

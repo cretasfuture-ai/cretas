@@ -180,7 +180,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     private Map<String, Object> buildRealized(Map<String, Object> row, LocalDate start, LocalDate end,
                                               boolean defaultPeriod) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("definition", "实际销售毛利: 销售订单明细 折后未税收入 − 成本单价×数量, 只算已回填成本的明细");
+        m.put("definition", "实际销售毛利: 销售订单明细 折后未税收入 − 成本单价×数量, 只算有售价且已回填成本的明细");
         Map<String, Object> period = new LinkedHashMap<>();
         period.put("startDate", start.toString());
         period.put("endDate", end.toString());
@@ -190,6 +190,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         int lines = row == null ? 0 : intOf(row.get("lineCount"));
         int costedLines = row == null ? 0 : intOf(row.get("costedLineCount"));
         int zeroCostLines = row == null ? 0 : intOf(row.get("zeroCostLineCount"));
+        int missingPriceLines = row == null ? 0 : intOf(row.get("missingPriceLineCount"));
         BigDecimal totalRevenue = row == null ? null : money(OperatingReportAssembler.number(row.get("revenue")));
         BigDecimal costedRevenue = row == null ? null : money(OperatingReportAssembler.number(row.get("costedRevenue")));
         BigDecimal cost = row == null ? null : money(OperatingReportAssembler.number(row.get("cost")));
@@ -203,9 +204,14 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
             status = "NO_SALES";
             reason = "所选期间没有销售记录";
             costedRevenue = null; cost = null; profit = null; marginRate = null; coverage = null; totalRevenue = null;
+        } else if (missingPriceLines == lines) {
+            // 全部明细都没有售价: 收入不是 0, 是不知道 —— 不给收入/毛利率
+            status = "NO_PRICE";
+            reason = "所选期间有 " + lines + " 条销售明细，但都没有售价，算不出收入和实际毛利率";
+            totalRevenue = null; costedRevenue = null; cost = null; profit = null; marginRate = null; coverage = null;
         } else if (costedLines == 0) {
             status = "NO_COST";
-            reason = "所选期间有 " + lines + " 条销售明细，但都没有回填成本，算不出实际毛利率";
+            reason = "所选期间有 " + lines + " 条有售价的销售明细，但都没有回填成本，算不出实际毛利率";
             costedRevenue = null; cost = null; profit = null; marginRate = null;
         } else if (marginRate == null) {
             status = "ZERO_REVENUE";
@@ -215,14 +221,21 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
             reason = null;
         }
         // 成本=0 仍按「已回填」计 (沿用销售毛利报表语义), 只是告诉用户
-        String note = (lines > 0 && costedLines > 0 && zeroCostLines > 0)
-                ? "其中 " + zeroCostLines + " 条明细成本为 0，可能是成本没回填" : null;
+        List<String> notes = new ArrayList<>();
+        if (lines > 0 && missingPriceLines > 0 && missingPriceLines < lines) {
+            notes.add("其中 " + missingPriceLines + " 条明细没有售价，未计入");
+        }
+        if (lines > 0 && costedLines > 0 && zeroCostLines > 0) {
+            notes.add("其中 " + zeroCostLines + " 条明细成本为 0，可能是成本没回填");
+        }
+        String note = notes.isEmpty() ? null : String.join("；", notes);
 
         m.put("status", status);
         m.put("reason", reason);
         m.put("lineCount", lines == 0 ? null : lines);
         m.put("costedLineCount", lines == 0 ? null : costedLines);
         m.put("zeroCostLineCount", lines == 0 ? null : zeroCostLines);
+        m.put("missingPriceLineCount", lines == 0 ? null : missingPriceLines);
         m.put("totalRevenue", totalRevenue);
         m.put("revenue", costedRevenue);          // 已回填成本明细的收入 = 毛利率的分母
         m.put("cost", cost);
