@@ -1,6 +1,16 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.ToolRbacEnforcer;
+import com.cretas.aims.ai.tool.ToolRbacGuard;
+import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.ToolEmbeddingRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.service.impl.ToolRouterServiceImpl;
+import com.cretas.aims.testutil.PermissionRepositoryFixtures;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -274,6 +284,79 @@ class SkuGrossMarginToolTest {
         JsonNode n = item(result, "无零成本").get("realized");
         assertTrue(n.get("note").isNull(), "对照: 没有零成本明细时不出提示");
         assertEquals(1, countOccurrences(message(result), "成本为 0"));
+    }
+
+    // ---- 价格权限门: 真实 enforcer + 真实 PermissionServiceImpl + 真实工具 (经 ToolRouter 执行入口) ----
+
+    private Object runViaRouter(String role) throws Exception {
+        PermissionServiceImpl permissions = new PermissionServiceImpl();
+        PermissionRepositoryFixtures.installSuccessfulEmpty(permissions);
+        UserRepository users = mock(UserRepository.class);
+        User user = new User();
+        user.setId(77L);
+        user.setFactoryId("F1");
+        user.setRoleCode(role);
+        when(users.findById(77L)).thenReturn(Optional.of(user));
+        ToolRbacGuard guard = new ToolRbacGuard();
+        ReflectionTestUtils.setField(guard, "userRepository", users);
+        ReflectionTestUtils.setField(guard, "permissionService", permissions);
+        ToolRbacEnforcer enforcer = new ToolRbacEnforcer();
+        ReflectionTestUtils.setField(enforcer, "rbacGuard", guard);
+
+        ToolRegistry registry = mock(ToolRegistry.class);
+        when(registry.getExecutor("report_sku_gross_margin")).thenReturn(Optional.of(tool));
+        ToolRouterServiceImpl router = new ToolRouterServiceImpl();
+        ReflectionTestUtils.setField(router, "toolRegistry", registry);
+        ReflectionTestUtils.setField(router, "objectMapper", mapper);
+        ReflectionTestUtils.setField(router, "toolEmbeddingRepository", mock(ToolEmbeddingRepository.class));
+        ReflectionTestUtils.setField(router, "writeGuardService", new WriteGuardService());
+        ReflectionTestUtils.setField(router, "toolRbacEnforcer", enforcer);
+
+        Map<String, Object> context = new HashMap<>();
+        context.put("factoryId", "F1");
+        context.put("userId", 77L);
+        context.put("userRole", role);
+        java.lang.reflect.Method m = ToolRouterServiceImpl.class.getDeclaredMethod(
+                "executeSingleTool", String.class, Map.class);
+        m.setAccessible(true);
+        try {
+            return m.invoke(router, "report_sku_gross_margin", context);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw (Exception) e.getCause();
+        }
+    }
+
+    @Test
+    void toolDeclaresThePriceViewPermissionTheAppUses() {
+        assertTrue(tool.requiresPermission());
+        assertEquals(Set.of("procurement:price:view"), tool.getRequiredPermissions());
+    }
+
+    @Test
+    void rolesWithoutPriceViewGetADenialAndNoNumbers() throws Exception {
+        type("A", "牛肉酱", "100");
+        pricedBatch("A", "60");
+        sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
+        for (String role : List.of("operator", "warehouse_manager", "quality_inspector")) {
+            IllegalStateException denied = assertThrows(IllegalStateException.class, () -> runViaRouter(role), role);
+            assertTrue(denied.getMessage().contains("没有权限"), denied.getMessage());
+            assertFalse(denied.getMessage().contains("36.84"), "denial must carry no numbers");
+        }
+        // 拒绝发生在查库之前: 没有价格权限的角色连 SQL 都没跑
+        verify(realizedQuery, org.mockito.Mockito.never()).fetch(any(), any(), any());
+    }
+
+    @Test
+    void rolesWithPriceViewGetTheNumbers_control() throws Exception {
+        type("A", "牛肉酱", "100");
+        pricedBatch("A", "60");
+        sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
+        for (String role : List.of("finance_manager", "factory_super_admin", "sales_manager")) {
+            Object result = runViaRouter(role);
+            JsonNode json = (JsonNode) result;
+            assertTrue(json.get("success").asBoolean(), role + ": " + json);
+            assertDecimal("36.84", item(json, "牛肉酱").get("realized").get("marginRate"), role + " realized.marginRate");
+        }
     }
 
     // ---- 没有售价的明细: 不计入, 并明说 ----

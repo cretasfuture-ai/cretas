@@ -390,6 +390,24 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         }
     }
 
+    /**
+     * 价格/成本数据门: 与 App 里同一份数据的入口同口径 ("AI 能做的 = App 能做的")。
+     * 销售毛利报表 (Python {@code /sales-preset/gross-margin}) 只对 PRICE_VIEW_ROLES 开放, web-admin
+     * finance/sku-margin 页用 {@code canViewPrice} (同一份白名单) 整页收起; 这份白名单在 Java 侧
+     * 的权限码就是 {@code procurement:price:view} ({@code PermissionServiceImpl.PRICE_VIEW_ROLES}),
+     * 中央 {@link com.cretas.aims.ai.tool.ToolRbacEnforcer} 在每条执行路径上按它判定 (fail-closed)。
+     * 本工具返回售价/收入/成本/毛利, 所以没有这个码的角色拿到的是拒绝, 不是数字。
+     */
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of("procurement:price:view");
+    }
+
     /** spec §8.2 只读查询, 无副作用 */
     @Override
     public AccessMode getAccessMode() {

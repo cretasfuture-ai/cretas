@@ -64,7 +64,9 @@ class ToolDescriptorCatalogTest {
         // 2026-10-04: 37 → 39 (+2): work_process_task_start / work_process_task_complete 新增只读
         // doPreview() (报工在 AI 对话里走「预览 → 确认」), 同 ToolDescriptorInventoryDriftTest 42 → 44。
         assertThat(statistics.previewSupported()).isEqualTo(39);
-        assertThat(statistics.requiresPermission()).isEqualTo(44);
+        // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
+        // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
+        assertThat(statistics.requiresPermission()).isEqualTo(45);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -81,12 +83,16 @@ class ToolDescriptorCatalogTest {
         // 工具悄悄长出未登记的权限仍然会被这道闸抓到。
         Set<String> legacyToolsWithKnownRequiredPermissions = Set.of(
                 "sales_create_invoice", "finance_invoice_request", "finance_invoice_request_from_order");
+        // 2026-10-06: 价格权限门 —— 显式登记而不是放宽上面的判据 (其它 LEGACY 工具仍必须是空集)
+        Set<String> legacyToolsWithPriceViewPermission = Set.of("report_sku_gross_margin");
         assertThat(catalog.inventory().descriptors())
                 .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
                     assertThat(entry.version()).isEqualTo("1.0.0");
                     if (legacyToolsWithKnownRequiredPermissions.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
+                    } else if (legacyToolsWithPriceViewPermission.contains(entry.toolName())) {
+                        assertThat(entry.requiredPermissions()).containsExactly("procurement:price:view");
                     } else {
                         assertThat(entry.requiredPermissions()).isEmpty();
                     }

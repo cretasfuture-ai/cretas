@@ -190,9 +190,10 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(44);
         // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(44);
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(52);
+        // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(53);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(12);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(13);
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(9);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
 
