@@ -89,7 +89,7 @@ public class ApprovalActionExecuteTool extends AbstractBusinessTool {
         Map<String, Object> instanceId = new HashMap<>();
         instanceId.put("type", "string");
         instanceId.put("description",
-                "工作流实例 ID (UUID, 36 chars). 可从 approval_pending_query 输出的 items[i].instanceId 取.");
+                "待审批流程单的编号. 可从待审批列表里取得.");
         properties.put("instanceId", instanceId);
 
         Map<String, Object> action = new HashMap<>();

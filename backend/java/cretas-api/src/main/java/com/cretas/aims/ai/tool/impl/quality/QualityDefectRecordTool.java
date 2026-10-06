@@ -47,7 +47,7 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("qualityInspectionId", Map.of(
                 "type", "string",
-                "description", "关联质检记录ID (quality_inspections.id, UUID)"));
+                "description", "关联质检记录编号"));
         properties.put("defectType", Map.of(
                 "type", "string",
                 "description", "缺陷类型",

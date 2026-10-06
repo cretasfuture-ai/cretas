@@ -73,14 +73,14 @@ public class LeaveRequestApproveTool extends AbstractBusinessTool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("leaveRequestId", Map.of(
                 "type", "string",
-                "description", "请假申请 ID (LeaveRequest.id, UUID)"));
+                "description", "请假申请编号"));
         properties.put("decision", Map.of(
                 "type", "string",
                 "description", "审批决定: APPROVE (通过) / REJECT (驳回)",
                 "enum", List.of("APPROVE", "REJECT")));
         properties.put("notes", Map.of(
                 "type", "string",
-                "description", "审批备注 — APPROVE 时可选, REJECT 时必填 (作为 rejectReason)"));
+                "description", "审批备注 — 批准时可选, 驳回时必填 (作为驳回原因)"));
 
         return Map.of(
                 "type", "object",
@@ -377,7 +377,7 @@ public class LeaveRequestApproveTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "leaveRequestId", "请提供要审批的请假申请 ID (leaveRequestId)。",
+                "leaveRequestId", "请提供要审批的请假申请编号。",
                 "decision", "请选择审批决定: APPROVE (通过) 或 REJECT (驳回)。",
                 "notes", "请填写驳回原因 (REJECT 时必填)。"
         );

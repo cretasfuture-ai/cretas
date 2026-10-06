@@ -122,8 +122,7 @@ public class LineageQueryTool extends AbstractBusinessTool {
 
         Map<String, Object> batchId = new HashMap<>();
         batchId.put("type", "string");
-        batchId.put("description", "批次主键 — UUID 字符串 (FinishedBatch/MaterialBatch) 或数字字符串 (ProductionBatch). "
-                + "只在已经拿到主键时用; 用户说的批号请放 batch_number");
+        batchId.put("description", "批次内部编号 — 只在已经拿到编号时用; 用户说的批号请填到批次号里");
         properties.put("batch_id", batchId);
 
         Map<String, Object> direction = new HashMap<>();

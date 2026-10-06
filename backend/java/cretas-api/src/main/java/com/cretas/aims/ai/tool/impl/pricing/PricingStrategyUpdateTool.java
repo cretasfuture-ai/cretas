@@ -46,11 +46,11 @@ public class PricingStrategyUpdateTool extends AbstractBusinessTool {
         schema.put("type", "object");
         Map<String, Object> properties = new HashMap<>();
 
-        properties.put("strategyId", Map.of("type", "string", "description", "策略ID (UUID)"));
-        properties.put("strategyCode", Map.of("type", "string", "description", "策略代码 (与 strategyId 二选一)"));
+        properties.put("strategyId", Map.of("type", "string", "description", "策略编号"));
+        properties.put("strategyCode", Map.of("type", "string", "description", "策略代码 (与策略编号二选一)"));
         properties.put("rulesJson", Map.of("type", "object", "description", "新的规则 JSON"));
         properties.put("scopeFilterJson", Map.of("type", "object",
-                "description", "scope 过滤 JSON (productCategories / customerGroups / regions)"));
+                "description", "适用范围过滤条件 (产品类别 / 客户分组 / 区域)"));
         properties.put("priority", Map.of("type", "integer", "description", "优先级"));
         properties.put("strategyName", Map.of("type", "string", "description", "显示名"));
         properties.put("validFrom", Map.of("type", "string", "description", "生效日期"));

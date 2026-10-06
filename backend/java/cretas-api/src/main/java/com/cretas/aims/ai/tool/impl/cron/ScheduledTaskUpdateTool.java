@@ -49,7 +49,7 @@ public class ScheduledTaskUpdateTool extends AbstractBusinessTool {
 
         Map<String, Object> taskId = new HashMap<>();
         taskId.put("type", "string");
-        taskId.put("description", "任务 UUID");
+        taskId.put("description", "任务编号");
         properties.put("taskId", taskId);
 
         Map<String, Object> taskName = new HashMap<>();
@@ -64,8 +64,7 @@ public class ScheduledTaskUpdateTool extends AbstractBusinessTool {
 
         Map<String, Object> handlerBeanName = new HashMap<>();
         handlerBeanName.put("type", "string");
-        handlerBeanName.put("description", "新的 handler bean 名称 (可选). "
-                + "调用 GET /api/mobile/scheduled-tasks/handlers 查询当前可用的 bean 名称列表.");
+        handlerBeanName.put("description", "新的任务处理器名称 (可选), 必须是系统里已有的处理器.");
         properties.put("handlerBeanName", handlerBeanName);
 
         Map<String, Object> enabled = new HashMap<>();

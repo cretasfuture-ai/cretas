@@ -50,7 +50,7 @@ public class ScheduledTaskToggleTool extends AbstractBusinessTool {
 
         Map<String, Object> taskId = new HashMap<>();
         taskId.put("type", "string");
-        taskId.put("description", "任务 UUID");
+        taskId.put("description", "任务编号");
         properties.put("taskId", taskId);
 
         Map<String, Object> enabled = new HashMap<>();

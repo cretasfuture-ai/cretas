@@ -47,9 +47,9 @@ public class AbacaWeightSummaryTool extends AbstractBusinessTool {
         schema.put("type", "object");
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("batchNumber", Map.of("type", "string",
-                "description", "原料批次号 (如 BAT-20260514-001), 与 batchId 二选一"));
+                "description", "原料批次号 (如 BAT-20260514-001), 与批次编号二选一"));
         properties.put("batchId", Map.of("type", "string",
-                "description", "原料批次 ID (UUID), 与 batchNumber 二选一"));
+                "description", "原料批次编号 (只在已经拿到时用, 通常直接说批次号即可), 与批次号二选一"));
         schema.put("properties", properties);
         // 二选一, 不能用 required 强制; 改由 doExecute 校验
         schema.put("required", List.of());

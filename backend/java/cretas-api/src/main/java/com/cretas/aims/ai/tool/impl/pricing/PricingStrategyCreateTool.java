@@ -60,7 +60,7 @@ public class PricingStrategyCreateTool extends AbstractBusinessTool {
         properties.put("rulesJson", Map.of("type", "object",
                 "description", "策略规则 JSON, 不同类型 shape 不同, 参见 spec §1"));
         properties.put("scopeFilterJson", Map.of("type", "object",
-                "description", "scope 过滤 JSON (productCategories / customerGroups / regions)"));
+                "description", "适用范围过滤条件 (产品类别 / 客户分组 / 区域)"));
         properties.put("priority", Map.of("type", "integer",
                 "description", "优先级, 数字小优先, 默认 100"));
         properties.put("validFrom", Map.of("type", "string", "description", "生效日期 YYYY-MM-DD"));

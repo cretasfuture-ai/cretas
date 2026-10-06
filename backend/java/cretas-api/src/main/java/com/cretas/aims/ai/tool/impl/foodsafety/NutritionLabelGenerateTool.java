@@ -106,19 +106,19 @@ public class NutritionLabelGenerateTool extends AbstractBusinessTool {
         Map<String, Object> bomRecipeId = new HashMap<>();
         bomRecipeId.put("type", "string");
         bomRecipeId.put("description",
-                "BomRecipe.id UUID — 当前 ACTIVE 版本 (二选一与 bomVersionId)");
+                "BOM 配方编号 — 当前生效版本 (与 BOM 版本编号二选一)");
         properties.put("bomRecipeId", bomRecipeId);
 
         Map<String, Object> bomVersionId = new HashMap<>();
         bomVersionId.put("type", "string");
         bomVersionId.put("description",
-                "BomVersion.id UUID — 历史 APPROVED 版本 (二选一与 bomRecipeId)");
+                "BOM 版本编号 — 历史已批准版本 (与 BOM 配方编号二选一)");
         properties.put("bomVersionId", bomVersionId);
 
         Map<String, Object> servingSize = new HashMap<>();
         servingSize.put("type", "number");
         servingSize.put("description",
-                "每份 g (GB 28050 §5.1.2 营养声称基准). 缺省取 BomRecipe.outputQuantityPerUnit");
+                "每份克数 (GB 28050 §5.1.2 营养声称基准). 缺省取配方的单位产出量");
         properties.put("servingSize", servingSize);
 
         schema.put("properties", properties);

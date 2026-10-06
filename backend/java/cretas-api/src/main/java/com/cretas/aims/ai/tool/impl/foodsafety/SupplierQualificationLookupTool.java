@@ -66,7 +66,7 @@ public class SupplierQualificationLookupTool extends AbstractBusinessTool {
 
         Map<String, Object> supplierId = new HashMap<>();
         supplierId.put("type", "string");
-        supplierId.put("description", "供应商 ID (必填). UUID");
+        supplierId.put("description", "供应商编号 (必填)");
         properties.put("supplierId", supplierId);
 
         Map<String, Object> qualificationType = new HashMap<>();

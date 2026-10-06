@@ -67,7 +67,7 @@ public class ScaleAddDeviceVisionTool extends AbstractBusinessTool {
         // cameraConfig: 摄像头配置/图片数据（必需）
         Map<String, Object> cameraConfig = new HashMap<>();
         cameraConfig.put("type", "object");
-        cameraConfig.put("description", "图片配置，包含 imageBase64 或 imageUrl");
+        cameraConfig.put("description", "图片配置，包含图片的 Base64 数据或图片网址");
         Map<String, Object> cameraConfigProps = new HashMap<>();
 
         Map<String, Object> imageBase64 = new HashMap<>();

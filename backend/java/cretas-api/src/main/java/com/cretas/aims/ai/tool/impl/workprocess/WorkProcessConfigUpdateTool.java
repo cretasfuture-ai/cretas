@@ -67,7 +67,7 @@ public class WorkProcessConfigUpdateTool extends AbstractBusinessTool {
         properties.put("workProcessNames", Map.of(
                 "type", "array",
                 "items", Map.of("type", "string"),
-                "description", "按顺序排列的工序名称列表 (匹配 WorkProcess.processName)"));
+                "description", "按顺序排列的工序名称列表 (对应工序库里的工序名)"));
 
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("productTypeId", "workProcessNames"));

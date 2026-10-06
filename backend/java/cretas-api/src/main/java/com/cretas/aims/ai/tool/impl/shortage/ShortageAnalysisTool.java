@@ -56,8 +56,8 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> salesOrderId = new HashMap<>();
         salesOrderId.put("type", "string");
-        salesOrderId.put("description", "销售单 ID (e.g. UUID 或单号)。"
-                + "若用户只提了单号 (e.g. 'SO-001'), 必要时先按单号搜出 ID 再调本 Tool。");
+        salesOrderId.put("description", "销售订单编号或订单号。"
+                + "若用户只提了订单号 (如 'SO-001'), 必要时先按订单号找到订单再分析。");
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("salesOrderId", salesOrderId);

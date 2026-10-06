@@ -47,7 +47,7 @@ public class BomReverseQueryTool extends AbstractBusinessTool {
                 "enum", Arrays.asList("RECIPES", "USAGE", "REPLACE_ANALYSIS"),
                 "description", "查询模式"));
         properties.put("materialId", Map.of("type", "string",
-                "description", "物料 ID (RECIPES/USAGE/REPLACE_ANALYSIS 的 oldMaterial)"));
+                "description", "物料编号 (反查配方、用量时是目标物料; 做替换分析时是被替换的物料)"));
         properties.put("newMaterialId", Map.of("type", "string",
                 "description", "新物料 ID (REPLACE_ANALYSIS 必填)"));
 

@@ -65,8 +65,7 @@ public class ScheduledTaskCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> handlerBeanName = new HashMap<>();
         handlerBeanName.put("type", "string");
-        handlerBeanName.put("description", "Spring bean 名称, 必须实现 TaskHandler 接口. "
-                + "调用 GET /api/mobile/scheduled-tasks/handlers 查询当前可用的 bean 名称列表 (默认包含 echoTaskHandler).");
+        handlerBeanName.put("description", "任务处理器名称, 必须是系统里已有的处理器 (默认有 echo 处理器可用).");
         properties.put("handlerBeanName", handlerBeanName);
 
         Map<String, Object> targetFactoryId = new HashMap<>();

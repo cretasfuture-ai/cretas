@@ -89,7 +89,7 @@ public class CustomerQualityStandardTool extends AbstractBusinessTool {
 
         Map<String, Object> customerId = new HashMap<>();
         customerId.put("type", "string");
-        customerId.put("description", "客户 ID (必填), UUID 形式");
+        customerId.put("description", "客户编号 (必填)");
         properties.put("customerId", customerId);
 
         schema.put("properties", properties);

@@ -42,7 +42,7 @@ public class AlertRuleToggleTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> ruleId = new HashMap<>();
         ruleId.put("type", "string");
-        ruleId.put("description", "告警规则 ID (UUID)");
+        ruleId.put("description", "告警规则编号");
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("ruleId", ruleId);

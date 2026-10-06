@@ -42,7 +42,7 @@ public class PricingStrategyToggleTool extends AbstractBusinessTool {
         schema.put("type", "object");
         Map<String, Object> properties = new HashMap<>();
         properties.put("strategyId", Map.of("type", "string", "description", "策略ID"));
-        properties.put("strategyCode", Map.of("type", "string", "description", "策略代码 (与 strategyId 二选一)"));
+        properties.put("strategyCode", Map.of("type", "string", "description", "策略代码 (与策略编号二选一)"));
         properties.put("enabled", Map.of("type", "boolean",
                 "description", "true = 启用, false = 禁用; null = toggle 当前状态"));
         schema.put("properties", properties);
