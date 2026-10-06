@@ -45,7 +45,10 @@ import java.util.regex.Pattern;
  *       (Python 侧同名闸第一次校准时把日期切成三个"数字", 命中率中位数被压到 5.6% ——
  *       这一步就是那次的解药。)</li>
  *   <li><b>时间窗口与 TopN 口径</b>: {@code 近7天}、{@code 最近30天}、{@code 过去3个月}、
- *       {@code 7天内}、{@code 前5名}、{@code Top 10}。它们是查询口径, 不是查出来的数。</li>
+ *       {@code 7天内}、{@code 前5名}、{@code Top 10}。它们是查询口径, 不是查出来的数。
+ *       (「前」后必须带量词, 否则「提前 30% 预警」会被吃掉。)</li>
+ *   <li><b>编码尾巴</b>: 紧跟在 {@code -}/{@code _} 后、而连接符前面是字母 / 点 / 省略号的数字
+ *       ({@code PB-PLAN-...-29206})。</li>
  *   <li><b>列表序号</b>: 行首的 {@code 1.} / {@code 2、} / {@code (3)} / {@code ## 4.}、
  *       冒号后的行内编号 {@code 建议：1. …}、{@code 第2步 / 第3点 / 第1条}。
  *       {@code 1.5kg} 不是序号 (点后紧跟数字)。</li>
@@ -55,7 +58,8 @@ import java.util.regex.Pattern;
  * <ol>
  *   <li><b>同值</b>: 数值相等 ({@code 38} = {@code 38.0} = {@code 38.00}), 千分位不影响。</li>
  *   <li><b>舍入</b>: 正文按它<b>写出来的小数位</b>对源数做四舍五入或截断后相等
- *       ({@code 12.3456 → 12.35 / 12.3 / 12})。容差由正文自己的精度决定, 不是全局常数。</li>
+ *       ({@code 12.3456 → 12.35 / 12.3}), 且舍掉的部分相对很小: 正文写出 ≥3 位有效数字,
+ *       或相对误差 ≤ 1% ({@code 96.7 → 97%} 认, {@code 6.4 → 6} 不认)。</li>
  *   <li><b>比率 ↔ 百分数</b>: 正文 {@code 85.3%} 认源里的 {@code 85.3} 或 {@code 0.853}。</li>
  *   <li><b>万 / 亿 / 千 量级</b>: 正文 {@code 12.35万} 认源里的 {@code 123456} (按 12.35 的精度舍入)
  *       或源里本来就写着的 {@code 12.35}。</li>
@@ -159,7 +163,9 @@ public class FactoryNumberProvenance {
     private static final Pattern WINDOW = Pattern.compile(
             "(?:近|最近|过去|未来|前|后)\\s*\\d{1,3}\\s*(?:个)?\\s*(?:自然|工作)?(?:天|日|周|星期|个月|月|年|小时|分钟)"
                     + "|\\d{1,3}\\s*(?:天|日|周|个月|小时|分钟)\\s*(?:内|以内)"
-                    + "|(?:前|Top|TOP|top)\\s*\\d{1,3}\\s*(?:名|位|大)?");
+                    // 「前」必须带量词: 不带时会吃掉「提前 30% 预警」的 30 (校准第一轮实测)
+                    + "|前\\s*\\d{1,3}\\s*(?:名|位|大|个|项|款|家|种)"
+                    + "|(?:Top|TOP|top)\\s*\\d{1,3}\\s*(?:名|位|大|个|项)?");
 
     private static final Pattern ORDINAL = Pattern.compile(
             "(?m)^[ \\t]*(?:#{1,6}[ \\t]*)?(?:[-*+>][ \\t]*)?(?:\\*\\*)?[(（]?\\d{1,2}[.、)）](?!\\d)"
@@ -255,9 +261,22 @@ public class FactoryNumberProvenance {
             String intPart = m.group(2);
             String frac = m.group(3);
             boolean negative = !m.group(1).isEmpty();
-            // 「50-60」里的 60: 负号前紧贴数字, 是区间分隔符不是负号
-            if (negative && m.start() > 0 && Character.isDigit(masked.charAt(m.start() - 1))) {
+            char before = m.start() > 0 ? masked.charAt(m.start() - 1) : ' ';
+            // 「50-60」「98%-99%」里的后一个数: 负号前是数字或百分号, 是区间分隔符不是负号
+            int tokenStart = m.start();
+            if (negative && (Character.isDigit(before) || before == '%' || before == '％')) {
                 negative = false;
+                tokenStart = m.start(2);
+            }
+            // 「PB-PLAN-...-29206」: 省略号截断的编码尾巴。数字紧跟在 - 或 _ 后面, 而那个
+            // 连接符前面是字母 / 点 / 省略号 / 下划线 / 连字符时, 这串数是编码的一段
+            // (校准第一轮实测: 成本分析正文里 4 处被当成了数)
+            int digitStart = m.start(2);
+            if (digitStart >= 2) {
+                char joiner = masked.charAt(digitStart - 1);
+                if ((joiner == '-' || joiner == '_') && isCodeJoiner(masked.charAt(digitStart - 2))) {
+                    continue;
+                }
             }
             String digits = intPart.replace(",", "");
             if (frac == null && !intPart.contains(",") && digits.length() >= ID_DIGITS) {
@@ -291,8 +310,8 @@ public class FactoryNumberProvenance {
                     end = k + 1;
                 }
             }
-            out.add(new NumberToken(text.substring(m.start(), end), mantissa, multiplier,
-                    percent, m.start(), end));
+            out.add(new NumberToken(text.substring(tokenStart, end), mantissa, multiplier,
+                    percent, tokenStart, end));
         }
         return out;
     }
@@ -310,6 +329,12 @@ public class FactoryNumberProvenance {
 
     static String mask(String text) {
         StringBuilder sb = new StringBuilder(text);
+        // markdown 强调符先抹成空格 (位置不变): 「2026 年 **8** 月」里的 ** 会把日期切断,
+        // 让 8 漏成一个"数" (校准第三轮实测)
+        for (int i = 0; i < sb.length(); i++) {
+            char c = sb.charAt(i);
+            if (c == '*' || c == '`') sb.setCharAt(i, ' ');
+        }
         for (Pattern p : new Pattern[]{CODE, DATE_TIME, WINDOW, ORDINAL}) {
             Matcher m = p.matcher(sb);
             List<int[]> spans = new ArrayList<>();
@@ -322,6 +347,11 @@ public class FactoryNumberProvenance {
             }
         }
         return sb.toString();
+    }
+
+    private static boolean isCodeJoiner(char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+                || c == '.' || c == '…' || c == '_' || c == '-';
     }
 
     private static boolean followedByMeasureUnit(String s, int i) {
@@ -356,10 +386,26 @@ public class FactoryNumberProvenance {
         return null;
     }
 
+    /**
+     * 舍入只在「舍掉的部分相对于这个数本身很小」时才算出处: 正文写出 ≥3 位有效数字,
+     * 或相对误差 ≤ 1%。
+     *
+     * <p>🔴 第一版只要求「按正文的小数位舍入后相等」。校准实测: 整数的舍入窗口宽到 1.5,
+     * 源池里随便一个 6.4 就让「6 个批次」有了出处, 19.6 让编造的「波动应 &lt;20%」有了出处,
+     * 「超过 2 万元」认了源里任何一个 15000~29999 —— 舍入规则自己成了恒真式的入口。
+     */
     private static boolean roundsTo(BigDecimal source, BigDecimal shown, int scale) {
-        return source.setScale(scale, RoundingMode.HALF_UP).compareTo(shown) == 0
+        boolean rounded = source.setScale(scale, RoundingMode.HALF_UP).compareTo(shown) == 0
                 || source.setScale(scale, RoundingMode.DOWN).compareTo(shown) == 0;
+        if (!rounded) return false;
+        if (shown.signum() == 0) return source.signum() == 0;
+        if (shown.precision() >= MIN_SIGNIFICANT_DIGITS_FOR_FREE_ROUNDING) return true;
+        BigDecimal err = source.subtract(shown).abs();
+        return err.compareTo(shown.abs().multiply(MAX_ROUNDING_RELATIVE_ERROR)) <= 0;
     }
+
+    private static final int MIN_SIGNIFICANT_DIGITS_FOR_FREE_ROUNDING = 3;
+    private static final BigDecimal MAX_ROUNDING_RELATIVE_ERROR = new BigDecimal("0.01");
 
     @SuppressWarnings("unchecked")
     private void walk(Object o, Set<BigDecimal> pool, int depth) {
