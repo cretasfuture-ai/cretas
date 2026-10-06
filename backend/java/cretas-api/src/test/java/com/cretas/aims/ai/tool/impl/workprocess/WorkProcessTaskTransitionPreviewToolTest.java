@@ -251,6 +251,125 @@ class WorkProcessTaskTransitionPreviewToolTest {
         assertNoMutation();
     }
 
+    // ==================== 确认卡只显示人认得的名字 (2026-10-06 prod 实测) ====================
+
+    private static final String PRODUCT_UUID = "eb0aa47b-1111-4222-8333-444455556666";
+
+    @Test
+    @DisplayName("确认卡: 产品显示名称、批次显示批次号; 任何一行都不是 UUID / 「#批次id」")
+    void confirmCardShowsProductNameAndBatchNumberNeverRawIds() throws Exception {
+        WorkProcessTaskDTO dto = task(Status.PENDING);
+        dto.setProductTypeId(PRODUCT_UUID);
+        dto.setProductionBatchId(10805L);
+        dto.setBatchNumber("PB-20261006-001");
+        dto.setProductTypeName("卤猪蹄");
+        stubTask(FACTORY, dto);
+
+        Map<String, Object> data = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+
+        for (String side : new String[]{"currentValues", "newValues"}) {
+            assertThat(rows(data, side)).as(side)
+                    .containsEntry("产品", "卤猪蹄")
+                    .containsEntry("批次", "PB-20261006-001");
+            assertThat(rows(data, side).values().stream().map(String::valueOf)).as(side)
+                    .noneMatch(v -> v.contains(PRODUCT_UUID) || v.contains("#10805"));
+        }
+    }
+
+    @Test
+    @DisplayName("确认卡对照: 产品名 / 批次号查不到 → 写「—」, 不回退成 UUID / 「#10805」")
+    void confirmCardShowsDashWhenNamesAreUnresolvable() throws Exception {
+        WorkProcessTaskDTO dto = task(Status.PENDING);
+        dto.setProductTypeId(PRODUCT_UUID);
+        dto.setProductTypeName(null);
+        dto.setProductionBatchId(10805L);
+        dto.setBatchNumber(null);
+        stubTask(FACTORY, dto);
+
+        Map<String, Object> data = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+
+        for (String side : new String[]{"currentValues", "newValues"}) {
+            assertThat(rows(data, side)).as(side).containsEntry("产品", "—").containsEntry("批次", "—");
+            assertThat(rows(data, side).values().stream().map(String::valueOf)).as(side)
+                    .noneMatch(v -> v.contains(PRODUCT_UUID) || v.contains("#10805"));
+        }
+    }
+
+    @Test
+    @DisplayName("确认卡: 计划数量两边都没有 → 整行不显示; 对照: 有计划数量时仍显示")
+    void rowsEmptyOnBothSidesAreOmitted() throws Exception {
+        WorkProcessTaskDTO noPlan = task(Status.PENDING);
+        noPlan.setPlannedQuantity(null);
+        noPlan.setPlannedUnit(null);
+        noPlan.setBatchNumber(null);
+        noPlan.setProductionBatchId(null);
+        stubTask(FACTORY, noPlan);
+
+        Map<String, Object> data = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+        for (String side : new String[]{"currentValues", "newValues"}) {
+            assertThat(rows(data, side)).as(side + " 无计划数量").doesNotContainKey("计划数量");
+            // 身份行例外: 批次查不到时显式写「—」, 不整行消失
+            assertThat(rows(data, side)).as(side + " 无批次").containsEntry("批次", "—");
+            // 「状态」两边不同、「工序任务」「产品」有值 —— 这些必须留
+            assertThat(rows(data, side)).as(side).containsKeys("工序任务", "产品", "状态");
+        }
+
+        // 对照: 同一个任务补上计划数量 → 那一行回来 (证明上面不是「所有行都被丢了」)
+        stubTask(FACTORY, task(Status.PENDING));
+        Map<String, Object> withPlan = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+        assertThat(rows(withPlan, "currentValues")).containsEntry("计划数量", "100 kg");
+        assertThat(rows(withPlan, "newValues")).containsEntry("计划数量", "100 kg");
+    }
+
+    @Test
+    @DisplayName("确认卡: 完成工序时「实际产量 — → 95 kg」只有一边有值, 必须保留")
+    void rowWithValueOnOneSideIsKept() throws Exception {
+        WorkProcessTaskDTO dto = task(Status.IN_PROGRESS);
+        dto.setPlannedQuantity(null);
+        dto.setPlannedUnit("kg");
+        stubTask(FACTORY, dto);
+
+        Map<String, Object> data = data(completeTool.preview(call("work_process_task_complete",
+                Map.of("taskId", TASK_ID, "actualQuantity", 95)), ctx(FACTORY)));
+
+        assertThat(rows(data, "currentValues")).containsEntry("实际产量", "—").doesNotContainKey("计划数量");
+        assertThat(rows(data, "newValues")).containsEntry("实际产量", "95 kg").doesNotContainKey("计划数量");
+    }
+
+    @Test
+    @DisplayName("确认卡: 负责人查不到姓名 → 「已指派」, 不写「#用户id」")
+    void unresolvableAssigneeIsNotShownAsRawId() throws Exception {
+        WorkProcessTaskDTO dto = task(Status.PENDING);
+        dto.setAssignedTo(777L);
+        dto.setAssignedToName(null);
+        stubTask(FACTORY, dto);
+
+        Map<String, Object> data = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+
+        assertThat(rows(data, "currentValues")).containsEntry("负责人", "已指派");
+        assertThat(rows(data, "newValues")).containsEntry("负责人", "已指派");
+    }
+
+    @Test
+    @DisplayName("开始工序的结果文案: 状态写中文「进行中」, 不是 IN_PROGRESS (prod 实测: 状态 → IN_PROGRESS)")
+    void startResultMessageUsesChineseStatusLabel() throws Exception {
+        WorkProcessTaskDTO started = task(Status.IN_PROGRESS);
+        when(service.start(eq(FACTORY), eq(TASK_ID), any())).thenReturn(started);
+
+        Map<String, Object> root = parse(startTool.execute(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+
+        @SuppressWarnings("unchecked")
+        String message = String.valueOf(((Map<String, Object>) root.get("data")).get("message"));
+        assertThat(message).contains("工序任务 12 已开始").contains("进行中")
+                .doesNotContain("IN_PROGRESS").doesNotContain("→");
+    }
+
     // ==================== helpers ====================
 
     private void assertNoMutation() {

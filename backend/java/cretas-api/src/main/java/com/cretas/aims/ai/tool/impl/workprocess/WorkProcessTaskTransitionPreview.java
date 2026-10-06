@@ -55,6 +55,7 @@ final class WorkProcessTaskTransitionPreview {
         next.put("状态", label(Status.IN_PROGRESS));
         // 写路径: 未指派的任务由开始的人认领 (WorkProcessTaskServiceImpl#start)。
         next.put("负责人", task.getAssignedTo() == null ? "确认人（你）" : assigneeText(task));
+        dropRowsEmptyOnBothSides(current, next);
         result.put("currentValues", current);
         result.put("newValues", next);
         result.put("status", "PREVIEW");
@@ -110,6 +111,7 @@ final class WorkProcessTaskTransitionPreview {
             current.put("备注", task.getNotes() != null ? task.getNotes() : "—");
             next.put("备注", notes);
         }
+        dropRowsEmptyOnBothSides(current, next);
         result.put("currentValues", current);
         result.put("newValues", next);
         result.put("status", "PREVIEW");
@@ -196,12 +198,49 @@ final class WorkProcessTaskTransitionPreview {
     private static Map<String, Object> identityRows(WorkProcessTaskDTO task) {
         Map<String, Object> rows = new LinkedHashMap<>();
         rows.put("工序任务", taskTitleBare(task));
-        rows.put("批次", task.getBatchNumber() != null ? task.getBatchNumber()
-                : (task.getProductionBatchId() != null ? "#" + task.getProductionBatchId() : "—"));
-        rows.put("产品", task.getProductTypeName() != null ? task.getProductTypeName()
-                : (task.getProductTypeId() != null ? task.getProductTypeId() : "—"));
+        // ⛔ 批次 / 产品只显示人能认的名字 (批次号、产品名)。名字查不到就写「—」,
+        //    不回退成内部编号: 2026-10-06 prod 实测确认卡把产品写成 UUID、批次写成「#10805」,
+        //    一线认不出那是哪一批 —— 内部 id 不是给人读的 (防呆 Rule 2 要的是「认得出」)。
+        rows.put("批次", notBlank(task.getBatchNumber()) ? task.getBatchNumber() : EMPTY);
+        rows.put("产品", notBlank(task.getProductTypeName()) ? task.getProductTypeName() : EMPTY);
         rows.put("计划数量", quantityText(task.getPlannedQuantity(), task.getPlannedUnit()));
         return rows;
+    }
+
+    /** 「没有值」的统一写法; 与 {@link #quantityText} 的缺值同一个字。 */
+    private static final String EMPTY = "—";
+
+    /**
+     * 身份行 (工序任务 / 批次 / 产品) 即使两边都没有值也保留, 显示「—」: 它们是「你正在动的是哪一个」
+     * 的确认依据 (防呆 Rule 2), 「这一项没查到」比整行悄悄消失更诚实。数据行 (计划数量等) 才按空丢弃。
+     */
+    private static final java.util.Set<String> IDENTITY_ROWS = java.util.Set.of("工序任务", "批次", "产品");
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    /**
+     * 改前 / 改后两侧都没有值的行不展示 —— 「计划数量 — → —」这种行什么信息都没有,
+     * 只会让人以为数据坏了。只丢「两边都空」的: 一边有值的行 (例如实际产量 — → 95 kg) 必须留。
+     * 身份行 ({@link #IDENTITY_ROWS}) 不在此列。两个 map 的键序一致 (都由 {@link #identityRows} 起头),
+     * 这里按键同步删除。
+     */
+    private static void dropRowsEmptyOnBothSides(Map<String, Object> current, Map<String, Object> next) {
+        for (String key : new java.util.ArrayList<>(current.keySet())) {
+            if (IDENTITY_ROWS.contains(key)) {
+                continue;
+            }
+            if (isEmptyCell(current.get(key)) && isEmptyCell(next.get(key))) {
+                current.remove(key);
+                next.remove(key);
+            }
+        }
+    }
+
+    private static boolean isEmptyCell(Object value) {
+        return value == null || EMPTY.equals(String.valueOf(value).trim())
+                || String.valueOf(value).isBlank();
     }
 
     private static String taskTitle(WorkProcessTaskDTO task) {
@@ -219,7 +258,8 @@ final class WorkProcessTaskTransitionPreview {
         if (task.getAssignedTo() == null) {
             return "未指派";
         }
-        return task.getAssignedToName() != null ? task.getAssignedToName() : "#" + task.getAssignedTo();
+        // 查不到姓名 (用户已删除) 时不写「#用户id」 —— 内部编号不是给人读的。
+        return notBlank(task.getAssignedToName()) ? task.getAssignedToName() : "已指派";
     }
 
     private static String unitOf(WorkProcessTaskDTO task) {
@@ -236,15 +276,7 @@ final class WorkProcessTaskTransitionPreview {
     }
 
     static String label(Status status) {
-        if (status == null) {
-            return "未知";
-        }
-        return switch (status) {
-            case PENDING -> "待开始";
-            case IN_PROGRESS -> "进行中";
-            case COMPLETED -> "已完成";
-            case SKIPPED -> "已跳过";
-            case CANCELLED -> "已取消";
-        };
+        // 状态中文名的唯一来源是枚举本身 (Status#getDisplayName), 这里不再自带一份 switch。
+        return status == null ? "未知" : status.getDisplayName();
     }
 }

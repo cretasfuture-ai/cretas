@@ -386,7 +386,20 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         WorkProcess def = workProcessRepository
                 .findByFactoryIdAndId(factoryId, task.getWorkProcessId())
                 .orElse(null);
-        return toDTO(task, def);
+        WorkProcessTaskDTO dto = toDTO(task, def);
+        // 单条读取也带上批次号 / 产品名 (此前只有列表路径带): AI 确认卡读的就是 getById,
+        // 缺了这两个名字, 卡片只能退回显示内部编号 (UUID / 「#10805」) —— 2026-10-06 prod 实测。
+        // 与列表路径同一对 loader, 查不到仍为 null (禁假数据)。
+        List<WorkProcessTask> one = List.of(task);
+        Map<Long, String> batchNumberMap = loadBatchNumbers(one);
+        Map<String, String> productNameMap = loadProductTypeNames(one);
+        if (task.getProductionBatchId() != null) {
+            dto.setBatchNumber(batchNumberMap.get(task.getProductionBatchId()));
+        }
+        if (task.getProductTypeId() != null) {
+            dto.setProductTypeName(productNameMap.get(task.getProductTypeId()));
+        }
+        return dto;
     }
 
     @Override

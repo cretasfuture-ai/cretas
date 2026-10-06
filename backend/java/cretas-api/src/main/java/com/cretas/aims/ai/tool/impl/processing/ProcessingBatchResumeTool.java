@@ -81,7 +81,7 @@ public class ProcessingBatchResumeTool extends AbstractBusinessTool {
         result.put("plannedQuantity", batch.getPlannedQuantity());
         result.put("unit", batch.getUnit());
         result.put("message", String.format("生产批次已恢复，批次号: %s，当前状态: %s",
-                batch.getBatchNumber(), batch.getStatus().name()));
+                batch.getBatchNumber(), batch.getStatus().getDescription()));
 
         log.info("生产批次恢复完成 - 批次ID: {}, 批次号: {}", batch.getId(), batch.getBatchNumber());
 

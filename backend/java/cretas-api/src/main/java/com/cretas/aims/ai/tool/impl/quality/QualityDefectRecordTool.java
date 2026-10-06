@@ -88,8 +88,11 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         try {
             defectType = DefectType.valueOf(defectTypeStr.toUpperCase());
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("无效的缺陷类型: " + defectTypeStr +
-                    ". 可选: APPEARANCE/WEIGHT/COMPOSITION/MICROBIAL/PACKAGING/FOREIGN_OBJECT/SENSORY/SHELF_LIFE/OTHER");
+            // 可选值给中文名 (枚举 getDisplayName), 不贴枚举码 —— 一线读不懂 FOREIGN_OBJECT。
+            String options = java.util.Arrays.stream(DefectType.values())
+                    .map(DefectType::getDisplayName)
+                    .collect(java.util.stream.Collectors.joining(" / "));
+            throw new IllegalArgumentException("无效的缺陷类型: " + defectTypeStr + "。可选: " + options);
         }
 
         Long userId = extractUserIdFromContext(context);

@@ -91,7 +91,7 @@ public class QualityDispositionExecuteTool extends AbstractBusinessTool {
 
         if (productionBatchId == null || actionCode == null) {
             Map<String, Object> result = new HashMap<>();
-            result.put("message", "请提供生产批次ID和处置动作。支持: RELEASE, CONDITIONAL_RELEASE, REWORK, SCRAP, HOLD");
+            result.put("message", "请提供生产批次ID和处置动作。支持: " + supportedActionLabels());
             return result;
         }
 
@@ -99,7 +99,8 @@ public class QualityDispositionExecuteTool extends AbstractBusinessTool {
 
         if (!VALID_ACTIONS.contains(actionCode)) {
             Map<String, Object> result = new HashMap<>();
-            result.put("message", "无效的处置动作: " + actionCode + "。支持: " + String.join(", ", VALID_ACTIONS));
+            result.put("message", "无效的处置动作: " + getDispositionActionDesc(actionCode)
+                    + "。支持: " + supportedActionLabels());
             return result;
         }
 
@@ -138,6 +139,12 @@ public class QualityDispositionExecuteTool extends AbstractBusinessTool {
         return buildSimpleResult(message, data);
     }
 
+    /** 给人看的可选动作 (中文名), 不贴枚举码 —— 一线读不懂 CONDITIONAL_RELEASE。 */
+    private String supportedActionLabels() {
+        return VALID_ACTIONS.stream().map(this::getDispositionActionDesc)
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
     private String getDispositionActionDesc(String action) {
         if (action == null) return "未知";
         return switch (action.toUpperCase()) {
@@ -155,7 +162,7 @@ public class QualityDispositionExecuteTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
             case "productionBatchId" -> "请提供要处置的生产批次ID";
-            case "action" -> "请选择处置动作: 放行(RELEASE), 条件放行(CONDITIONAL_RELEASE), 返工(REWORK), 报废(SCRAP), 待定(HOLD)";
+            case "action" -> "请选择处置动作: 放行, 条件放行, 返工, 报废, 待定";
             case "reason" -> "请说明处置原因";
             default -> super.getParameterQuestion(paramName);
         };

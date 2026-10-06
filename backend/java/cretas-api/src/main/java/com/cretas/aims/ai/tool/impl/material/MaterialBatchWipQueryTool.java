@@ -106,7 +106,7 @@ public class MaterialBatchWipQueryTool extends AbstractBusinessTool {
             if (materialTypeId != null && !materialTypeId.trim().isEmpty()) {
                 result.put("message", String.format("当前工厂 %s 没有物料类型 %s 的在制品批次", factoryId, materialTypeId));
             } else {
-                result.put("message", String.format("当前工厂 %s 没有在制品批次 (无 PRODUCING_RESERVED 状态批次)", factoryId));
+                result.put("message", String.format("当前工厂 %s 没有在制品批次 (没有「生产预留」状态的批次)", factoryId));
             }
         } else {
             result.put("message", String.format(

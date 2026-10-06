@@ -141,7 +141,7 @@ public class ProcessingBatchDetailTool extends AbstractBusinessTool {
         result.put("message", String.format("批次号: %s，产品: %s，状态: %s，计划产量: %s %s",
                 batch.getBatchNumber(),
                 batch.getProductName(),
-                batch.getStatus() != null ? batch.getStatus().name() : "N/A",
+                batch.getStatus() != null ? batch.getStatus().getDescription() : "未知",
                 batch.getPlannedQuantity(),
                 batch.getUnit()));
 
