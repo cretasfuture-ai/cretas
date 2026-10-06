@@ -201,7 +201,11 @@ public class SseStreamingService {
         emitter.onError(e -> log.error("SSE connection error: factoryId={}", factoryId, e));
 
         var miniCancellation = registerMiniCancellation(emitter);
-        sseExecutor.execute(() -> executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation));
+        // 登录态 (SecurityContext) 是线程本地的: 不带过去, 流里的工具走到库存等「必须有登录上下文」的服务就抛
+        // 「Authenticated inventory context is required」(#921 之后, 2026-10-06 prod 仓库员「查库存」每次失败)。
+        // 在请求线程上捕获、在工作线程上设置并在结束时清掉 (线程池会复用线程)。
+        sseExecutor.execute(new org.springframework.security.concurrent.DelegatingSecurityContextRunnable(
+                () -> executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation)));
 
         return emitter;
     }
