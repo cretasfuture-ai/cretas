@@ -71,6 +71,7 @@ class ToolDispatchServiceParameterGroundingTest {
     private WorkProcessTaskService service;
     private ParameterExtractionLearningService learning;
     private CorrectionAgentService correctionAgent;
+    private ToolResultValidatorService validator;
     private ToolDispatchService dispatch;
     private WorkProcessTaskCompleteTool completeTool;
     private final AIIntentConfig completeIntent = AIIntentConfig.builder()
@@ -84,13 +85,14 @@ class ToolDispatchServiceParameterGroundingTest {
         service = mock(WorkProcessTaskService.class);
         learning = mock(ParameterExtractionLearningService.class);
         correctionAgent = mock(CorrectionAgentService.class);
+        validator = mock(ToolResultValidatorService.class);
         ToolRegistry registry = mock(ToolRegistry.class);
         when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
         ToolCallRedundancyService redundancy = mock(ToolCallRedundancyService.class);
         when(redundancy.computeParametersHash(anyMap())).thenReturn("hash");
         dispatch = new ToolDispatchService(registry, mapper, llm, redundancy,
                 mock(SelfCorrectionService.class), correctionAgent, mock(ExternalVerifierService.class),
-                mock(ToolResultValidatorService.class), learning);
+                validator, learning);
         ReflectionTestUtils.setField(dispatch, "previewTokenService", previewTokenService);
         ReflectionTestUtils.setField(dispatch, "writeGuardService", writeGuard);
         ToolRbacEnforcer rbac = mock(ToolRbacEnforcer.class);
@@ -308,6 +310,126 @@ class ToolDispatchServiceParameterGroundingTest {
                 .context(writeGuard.withServerConfirmation(ctx)).build(), intent, 42L, "operator", null);
         assertThat(seen).hasSize(2);
         assertThat(seen.get(1)).containsEntry("quantity", 30);
+    }
+
+    // ==================== 纠错重试后主体重新绑定 ====================
+
+    /** 纠错代理把主体换成别家: factoryId=F999 / userId=999 / role=platform_admin (含各种别名)。 */
+    private static Map<String, Object> hijackedCorrection() {
+        Map<String, Object> m = new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30));
+        m.put("factoryId", "F999");
+        m.put("factory_id", "F999");
+        m.put("tenantId", "F999");
+        m.put("userId", 999);
+        m.put("user_id", 999);
+        m.put("actorUserId", 999);
+        m.put("userRole", "platform_admin");
+        m.put("role", "platform_admin");
+        return m;
+    }
+
+    /** 第一次按 firstResult 返回 (null = 抛异常), 之后成功; 记下每次的参数与执行上下文。 */
+    private ToolExecutor recordingTool(List<Map<String, Object>> args, List<Map<String, Object>> contexts,
+                                       String firstResult) {
+        int[] calls = {0};
+        return new ToolExecutor() {
+            @Override public String getToolName() { return "material_batch_query"; }
+            @Override public AccessMode getAccessMode() { return AccessMode.READ; }
+            @Override public String getDescription() { return "test"; }
+            @Override public Map<String, Object> getParametersSchema() {
+                return Map.of("type", "object",
+                        "properties", Map.of("quantity", Map.of("type", "number"),
+                                "batchId", Map.of("type", "string")),
+                        "required", List.of("batchId", "quantity"));
+            }
+            @Override public String execute(ToolCall toolCall, Map<String, Object> context) throws Exception {
+                args.add(mapper.readValue(toolCall.getFunction().getArguments(),
+                        new TypeReference<Map<String, Object>>() { }));
+                contexts.add(new HashMap<>(context));
+                if (calls[0]++ == 0) {
+                    if (firstResult == null) {
+                        throw new IllegalStateException("boom");
+                    }
+                    return firstResult;
+                }
+                return "{\"success\":true,\"data\":{\"ok\":1}}";
+            }
+        };
+    }
+
+    private void assertCallerIdentity(Map<String, Object> m) {
+        assertThat(m).containsEntry("factoryId", FACTORY).containsEntry("factory_id", FACTORY)
+                .containsEntry("tenantId", FACTORY).containsEntry("userRole", "operator")
+                .containsEntry("role", "operator");
+        assertThat(((Number) m.get("userId")).longValue()).isEqualTo(42L);
+        assertThat(((Number) m.get("user_id")).longValue()).isEqualTo(42L);
+        assertThat(((Number) m.get("actorUserId")).longValue()).isEqualTo(42L);
+        assertThat(m.toString()).doesNotContain("F999").doesNotContain("999,").doesNotContain("platform_admin");
+    }
+
+    private final AIIntentConfig queryIntent = AIIntentConfig.builder().intentCode("MATERIAL_BATCH_QUERY")
+            .intentName("q").intentCategory("MATERIAL").toolName("material_batch_query").build();
+
+    @Test
+    @DisplayName("异常重试: 纠错代理塞进来的 F999 / 999 / platform_admin 到不了工具, 重试仍以调用者身份执行")
+    void exceptionRetryRebindsCallerIdentity() throws Exception {
+        List<Map<String, Object>> args = new ArrayList<>();
+        List<Map<String, Object>> contexts = new ArrayList<>();
+        ToolExecutor tool = recordingTool(args, contexts, null);
+        when(correctionAgent.analyzeAndCorrect(anyString(), anyString(), anyMap(), anyString(), any(), anyInt()))
+                .thenReturn(new CorrectionAgentService.CorrectionResult(
+                        true, "x", hijackedCorrection(), "RETRY", null, 0.9));
+
+        IntentExecuteResponse r = dispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
+                .userInput("查 MB-7 的 30 公斤").context(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30)))
+                .build(), queryIntent, 42L, "operator", null);
+
+        assertThat(args).as("工具确实被重试了 (纠错路径真的走到)").hasSize(2);
+        assertThat(r.getStatus()).isEqualTo("SUCCESS");
+        assertCallerIdentity(args.get(1));
+        assertCallerIdentity(contexts.get(1));
+    }
+
+    @Test
+    @DisplayName("结果校验重试: 同样重新绑定调用者身份")
+    void validationRetryRebindsCallerIdentity() throws Exception {
+        List<Map<String, Object>> args = new ArrayList<>();
+        List<Map<String, Object>> contexts = new ArrayList<>();
+        // 第一次返回一个「看不出有效」的结果 → 走 LLM 结果校验 → 判无效 → 纠错重试
+        ToolExecutor tool = recordingTool(args, contexts, "{\"rows\":null,\"hint\":1}");
+        when(validator.validate(anyString(), anyString(), anyMap(), anyString()))
+                .thenReturn(new ToolResultValidatorService.ValidationResult(false,
+                        ToolResultValidatorService.ValidationIssue.NO_MATCH, "不匹配", 0.1, Map.of(), Map.of(), "x"));
+        when(correctionAgent.analyzeAndCorrect(anyString(), anyString(), anyMap(), anyString(), any(), anyInt()))
+                .thenReturn(new CorrectionAgentService.CorrectionResult(
+                        true, "x", hijackedCorrection(), "RETRY", null, 0.9));
+
+        dispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
+                .userInput("查 MB-7 的 30 公斤").context(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30)))
+                .build(), queryIntent, 42L, "operator", null);
+
+        assertThat(args).as("校验触发的重试真的走到").hasSize(2);
+        assertCallerIdentity(args.get(1));
+    }
+
+    @Test
+    @DisplayName("对照: 纠错不碰身份时重试照常执行, 带调用者身份, 纠错改的业务参数照收")
+    void ordinaryRetryStillRunsWithCallerIdentity() throws Exception {
+        List<Map<String, Object>> args = new ArrayList<>();
+        List<Map<String, Object>> contexts = new ArrayList<>();
+        ToolExecutor tool = recordingTool(args, contexts, null);
+        when(correctionAgent.analyzeAndCorrect(anyString(), anyString(), anyMap(), anyString(), any(), anyInt()))
+                .thenReturn(new CorrectionAgentService.CorrectionResult(true, "x",
+                        new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30, "unit", "kg")), "RETRY", null, 0.9));
+
+        IntentExecuteResponse r = dispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
+                .userInput("查 MB-7 的 30 公斤").context(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 3)))
+                .build(), queryIntent, 42L, "operator", null);
+
+        assertThat(r.getStatus()).isEqualTo("SUCCESS");
+        assertThat(args).hasSize(2);
+        assertThat(args.get(1)).containsEntry("quantity", 30).containsEntry("unit", "kg");
+        assertCallerIdentity(args.get(1));
     }
 
     // ==================== helpers ====================

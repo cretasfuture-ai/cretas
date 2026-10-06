@@ -41,16 +41,16 @@ import java.util.regex.Pattern;
  * <p>⚠️ 自由文本按<b>参数名</b>判定是代理判据: 本仓 Tool schema 没有「这是自由文本」的声明位。
  * 名字表只有一处 ({@link #FREE_TEXT_NAME_SUFFIXES}), 要扩就扩这里。
  */
-final class LlmParameterGrounding {
+public final class LlmParameterGrounding {
 
     private LlmParameterGrounding() {
     }
 
     /** accepted: 收下的参数 (数字已规整成 Number); dropped: 丢掉的参数名 → 原因 (不含值, 可直接进日志)。 */
-    record Result(Map<String, Object> accepted, Map<String, String> dropped) { }
+    public record Result(Map<String, Object> accepted, Map<String, String> dropped) { }
 
     /** 参数名 (小写) 以这些结尾就算自由文本: notes / rejectionReason / ackRemark / description …… */
-    static final List<String> FREE_TEXT_NAME_SUFFIXES = List.of(
+    public static final List<String> FREE_TEXT_NAME_SUFFIXES = List.of(
             "note", "notes", "remark", "remarks", "comment", "comments",
             "reason", "reasondetail", "memo", "description", "feedback");
 
@@ -85,7 +85,7 @@ final class LlmParameterGrounding {
      * @param parametersSchema 工具的 JSON schema (取 properties 的 type / enum 与 required 顺序)
      */
     @SuppressWarnings("unchecked")
-    static Result ground(Map<String, Object> llmValues, Map<String, Object> existingParams,
+    public static Result ground(Map<String, Object> llmValues, Map<String, Object> existingParams,
                          String userInput, Map<String, Object> parametersSchema) {
         Map<String, Object> accepted = new LinkedHashMap<>();
         Map<String, String> dropped = new LinkedHashMap<>();
@@ -154,7 +154,7 @@ final class LlmParameterGrounding {
     }
 
     /** 参数名是否算自由文本业务字段 (备注 / 原因 / 说明 / 描述 …)。 */
-    static boolean isFreeTextParam(String name) {
+    public static boolean isFreeTextParam(String name) {
         if (name == null) {
             return false;
         }

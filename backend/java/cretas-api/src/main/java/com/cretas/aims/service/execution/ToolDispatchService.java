@@ -565,7 +565,8 @@ public class ToolDispatchService {
                                         correctionResult.confidence());
 
                                 if (correctionResult.shouldRetry() && correctionResult.correctedParams() != null) {
-                                    replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool);
+                                    replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool,
+                                            factoryId, userId, userRole);
                                     params.put("_correctionStrategy", correctionResult.correctionStrategy());
                                     params.put("_retryAttempt", attempt);
                                     params.put("_validationIssue", validationResult.issue().name());
@@ -630,7 +631,8 @@ public class ToolDispatchService {
                     boolean shouldRetry = correctionResult != null && correctionResult.shouldRetry() && attempt < MAX_RETRIES;
 
                     if (shouldRetry && correctionResult.correctedParams() != null) {
-                        replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool);
+                        replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool,
+                                factoryId, userId, userRole);
                         params.put("_correctionStrategy", correctionResult.correctionStrategy());
                         params.put("_retryAttempt", attempt);
                         params.put("_confidence", correctionResult.confidence());
@@ -1314,9 +1316,14 @@ public class ToolDispatchService {
     /**
      * CRITIC 纠错给回的整套参数同样是 LLM 产出: 改动过的值也要过 {@link LlmParameterGrounding},
      * 没落地的退回原值 (原来没有就去掉) —— 纠错可以改格式、换成用户说过的数, 不能凭空造数或写备注。
+     *
+     * <p>整套参数被换掉之后, 主体身份 (factoryId / userId / role 及其别名) 按主路径同一个
+     * {@link TrustedExecutionContext#enforcePrincipal} 重新绑定: 纠错代理给回的 factoryId=F999 之类
+     * 不许到达工具 (以前换完参数就直接序列化执行, 主体由 LLM 输出决定)。两条重试路径都走这里。
      */
     private void replaceWithGroundedCorrection(Map<String, Object> params, Map<String, Object> corrected,
-                                               ToolExecutor tool) {
+                                               ToolExecutor tool, String factoryId, Long userId,
+                                               String userRole) {
         Map<String, Object> previous = new HashMap<>(params);
         Map<String, Object> changed = new HashMap<>();
         for (Map.Entry<String, Object> e : corrected.entrySet()) {
@@ -1340,6 +1347,7 @@ public class ToolDispatchService {
         if (!grounded.dropped().isEmpty()) {
             log.info("纠错参数未落地, 已退回原值: tool={}, dropped={}", tool.getToolName(), grounded.dropped());
         }
+        TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
     }
 
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
