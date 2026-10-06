@@ -170,8 +170,8 @@ class SseStreamingClarificationOptionsContractTest {
                 "WRITE_CANONICAL_SHOULD_NOT_SHOW", "不可信名称", "另一个不可信名称");
         assertThat(complete).containsEntry("status", "NEED_CLARIFICATION");
         verify(toolDispatch, never()).executeWithTool(any(), anyString(), any(), any(), any(), any(), any());
-        verify(dynamic, never()).trySkillRoute(anyString(), anyString(), any());
-        verify(dynamic, never()).tryExplicitSkillRouteForIntent(any(), anyString(), anyString(), any());
+        verify(dynamic, never()).trySkillRoute(anyString(), anyString(), any(), any());
+        verify(dynamic, never()).tryExplicitSkillRouteForIntent(any(), anyString(), anyString(), any(), any());
         verifyNoInteractions(replyClient);
     }
 
@@ -258,8 +258,8 @@ class SseStreamingClarificationOptionsContractTest {
         assertThat(result.getFormattedText()).isEqualTo(result.getMessage()).doesNotContain("OLD_FORGED_NAME");
         assertThat(complete).containsEntry("status", "NEED_CLARIFICATION");
         verify(toolDispatch, never()).executeWithTool(any(), anyString(), any(), any(), any(), any(), any());
-        verify(dynamic, never()).trySkillRoute(anyString(), anyString(), any());
-        verify(dynamic, never()).tryExplicitSkillRouteForIntent(any(), anyString(), anyString(), any());
+        verify(dynamic, never()).trySkillRoute(anyString(), anyString(), any(), any());
+        verify(dynamic, never()).tryExplicitSkillRouteForIntent(any(), anyString(), anyString(), any(), any());
         verifyNoInteractions(replyClient);
     }
 

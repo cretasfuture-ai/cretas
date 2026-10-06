@@ -536,11 +536,17 @@ public class SseStreamingService {
                 return;
             }
 
-            // 7a. Skill 路由
-            if (dynamicToolSelectionService.isSkillsEnabled()) {
+            // 7a. Skill 路由 —— 与 /execute (IntentExecutionOrchestrator 3.5) 同一前提:
+            // 只给「没绑工具」的意图 (WORKDESK 类, Skill 就是它的执行器), 且意图权限先过。
+            // 2026-10-06 生产: 这里曾对所有意图都先跑关键词 Skill, 操作员说「上班打卡」(已识别为
+            // CLOCK_IN) 被 0.30 分的人员排班 Skill 抢走, 跑了管理员级考勤统计, 卡没打上。
+            String streamBoundToolName = intent.getToolName();
+            boolean intentHasNoTool = streamBoundToolName == null || streamBoundToolName.isBlank();
+            if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool
+                    && permissionDeniedMessage(intent, userId, userRole) == null) {
                 try {
                     IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
-                            request.getUserInput(), factoryId, userId);
+                            request.getUserInput(), factoryId, userId, userRole);
                     if (skillResponse != null) {
                         sendSseEvent(emitter, "result", skillResponse);
                         sendSseEvent(emitter, "complete", Map.of(
@@ -554,20 +560,17 @@ public class SseStreamingService {
 
                     // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL intent (WORKDESK 等)
                     // 当 trySkillRoute (keyword 匹用户原文) 失败时, 用 intent_code 显式查 Skill.
-                    String streamBoundToolName = intent.getToolName();
-                    if (streamBoundToolName == null || streamBoundToolName.isBlank()) {
-                        IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
-                                .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
-                        if (explicitSkillResp != null) {
-                            sendSseEvent(emitter, "result", explicitSkillResp);
-                            sendSseEvent(emitter, "complete", Map.of(
-                                    "status", explicitSkillResp.getStatus(),
-                                    "cacheHit", false,
-                                    "totalLatencyMs", System.currentTimeMillis() - startTime
-                            ));
-                            emitter.complete();
-                            return;
-                        }
+                    IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
+                            .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
+                    if (explicitSkillResp != null) {
+                        sendSseEvent(emitter, "result", explicitSkillResp);
+                        sendSseEvent(emitter, "complete", Map.of(
+                                "status", explicitSkillResp.getStatus(),
+                                "cacheHit", false,
+                                "totalLatencyMs", System.currentTimeMillis() - startTime
+                        ));
+                        emitter.complete();
+                        return;
                     }
                 } catch (Exception e) {
                     log.warn("[SSE] Skill 路由异常，回退到 Tool: {}", e.getMessage());
@@ -1079,7 +1082,7 @@ public class SseStreamingService {
             // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
             // 7a Skill route 已尝试但仍 fall through 到 executeAndStreamResult 的 corner case).
             IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillFallback != null) {
                 log.info("[SSE] 显式 Skill 路由 (executeAndStreamResult fallback) 成功: intentCode={}",
                         intent.getIntentCode());

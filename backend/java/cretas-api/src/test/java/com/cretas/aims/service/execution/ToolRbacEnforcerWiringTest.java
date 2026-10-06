@@ -135,7 +135,14 @@ class ToolRbacEnforcerWiringTest {
         when(registry.isToolEnabledForFactory(eq(FACTORY), eq("customer_delete"))).thenReturn(true);
 
         ReflectionTestUtils.setField(skillExecutor, "writeGuardService", new WriteGuardService());
-        ReflectionTestUtils.setField(skillExecutor, "toolRbacEnforcer", denyingEnforcer());
+        // 2026-10-06: Skill 路径改为问 ToolPermissionChain (一线门 → 旧角色串 → RBAC), RBAC 仍是这里被隔离的那一层。
+        ReflectionTestUtils.setField(skillExecutor, "toolPermissionChain", new ToolPermissionChain(
+                denyingEnforcer(),
+                new com.cretas.aims.service.intent.FrontlineAiWriteGrantService(
+                        mock(com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository.class),
+                        new WriteGuardService(),
+                        mock(com.cretas.aims.service.intent.IntentConfigManagementService.class),
+                        mock(ToolRegistry.class))));
 
         SkillContext skillContext = SkillContext.builder()
                 .factoryId(FACTORY)

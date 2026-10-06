@@ -153,7 +153,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "今日跟谁", "F006", 100L);
+                intent, "今日跟谁", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
@@ -190,7 +190,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "5月经营怎么样", "F006", 200L);
+                intent, "5月经营怎么样", "F006", 200L, "factory_super_admin");
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
@@ -217,7 +217,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "随便问点啥", "F006", 100L);
+                intent, "随便问点啥", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNull();
     }
@@ -232,7 +232,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "今日跟谁", "F006", 100L);
+                intent, "今日跟谁", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNull();
         verify(mockSkillRouter, never()).executeSkill(any(), any(SkillContext.class));
@@ -243,7 +243,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
         when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                null, "随便", "F006", 100L);
+                null, "随便", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNull();
         verify(mockSkillRouter, never()).executeSkill(any(), any(SkillContext.class));
@@ -259,7 +259,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "随便", "F006", 100L);
+                intent, "随便", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNull();
         verify(mockSkillRouter, never()).executeSkill(any(), any(SkillContext.class));
@@ -277,7 +277,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "今日跟谁", "F006", 100L);
+                intent, "今日跟谁", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNull();
     }
@@ -298,7 +298,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "今日跟谁", "F006", 100L);
+                intent, "今日跟谁", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("FAILED");
@@ -328,7 +328,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "随便", "F006", 100L);
+                intent, "随便", "F006", 100L, "factory_super_admin");
 
         assertThat(response).isNull();
     }
@@ -357,7 +357,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "本月经营怎么样", "F006", 200L);
+                intent, "本月经营怎么样", "F006", 200L, "factory_super_admin");
 
         assertThat(response).isNotNull();  // 关键: 不是 null!
         assertThat(response.getStatus()).isEqualTo("FAILED");
@@ -389,7 +389,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "本月经营", "F006", 200L);
+                intent, "本月经营", "F006", 200L, "factory_super_admin");
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("FAILED");
@@ -414,7 +414,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
                 .build();
 
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
-                intent, "今日跟谁", "F006", null);
+                intent, "今日跟谁", "F006", null, "factory_super_admin");
 
         assertThat(response).isNotNull();
         ArgumentCaptor<SkillContext> ctxCaptor = ArgumentCaptor.forClass(SkillContext.class);

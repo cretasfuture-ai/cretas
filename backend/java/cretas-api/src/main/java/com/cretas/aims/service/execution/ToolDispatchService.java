@@ -226,16 +226,11 @@ public class ToolDispatchService {
             // 无条件 false (本意是"逼调用方走权限码"), 但本检查先于 enforcer 执行,
             // 导致 3 个原料只读查询对所有角色全拒 (超管也拒), 4 个写工具的
             // confirm 终点被拦死。仅保留给只有 legacy 角色逻辑的旧工具。
-            if (tool.requiresPermission()
-                    && tool.getRequiredPermissions().isEmpty()
-                    && !tool.hasPermission(userRole)) {
+            // 规则只有一份, 在 ToolPermissionChain —— Skill 路径也问它 (2026-10-06)。
+            if (ToolPermissionChain.legacyRoleDenied(tool, userRole)) {
                 log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
                 // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
-                String permDeniedMsg = String.format(
-                        "您当前的角色 (%s) 没有权限执行「%s」操作。可能原因: 1. 此操作需要更高的角色权限;"
-                        + " 2. 您所在的部门未被授权该功能; 3. 该操作涉及敏感数据需额外审批。"
-                        + "建议: 联系工厂管理员申请对应权限, 或改用您有权限的查询功能。",
-                        userRole != null ? userRole : "未知", intent.getIntentName());
+                String permDeniedMsg = ToolPermissionChain.legacyRoleDeniedMessage(userRole, intent.getIntentName());
                 return IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent.getIntentCode())

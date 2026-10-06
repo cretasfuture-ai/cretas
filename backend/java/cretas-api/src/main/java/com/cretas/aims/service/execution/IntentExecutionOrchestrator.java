@@ -849,7 +849,7 @@ public class IntentExecutionOrchestrator {
         if (dynamicToolSelectionService.isSkillsEnabled()
                 && (boundToolName == null || boundToolName.isBlank())) {
             IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
-                    request.getUserInput(), factoryId, userId);
+                    request.getUserInput(), factoryId, userId, userRole);
             if (skillResponse != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] Skill 优先匹配成功: total={}", count);
@@ -866,7 +866,7 @@ public class IntentExecutionOrchestrator {
             // Fix: 当 intent 已识别且 tool_name=NULL 时, 用 intent_code (UPPER_SNAKE) →
             // skill_name (lower-kebab) 直接 lookup Skill, 绕过 keyword 匹配.
             IntentExecuteResponse explicitSkillResponse = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillResponse != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
@@ -934,7 +934,7 @@ public class IntentExecutionOrchestrator {
             // (覆盖 dynamicToolSelectionService.isSkillsEnabled() = false 但 SkillRouter
             // 仍可用 / Skill 已注册但 keyword 没匹的 corner case).
             IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillFallback != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] 显式 Skill 路由 (NoMatch fallback) 成功: intentCode={}, total={}",
@@ -1127,7 +1127,7 @@ public class IntentExecutionOrchestrator {
             // Sprint 9 P0.1 fix (2026-05-21): explicit intent path 同 execute() 一样需 Skill fallback.
             // 显式传 intent_code 走这分支 (e.g. Workdesk 前端按钮直接 POST intent_code).
             IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillFallback != null) {
                 log.info("[Explicit-Intent] 显式 Skill 路由成功: intentCode={}", intent.getIntentCode());
                 response = explicitSkillFallback;

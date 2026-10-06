@@ -1,12 +1,16 @@
 package com.cretas.aims.service.execution;
 
+import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.service.intent.FrontlineAiWriteGrantService;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -34,17 +38,33 @@ public class ClarificationCandidateService {
     private final IntentPermissionGate permissionGate;
     private final IntentAccessModeFilter accessModeFilter;
     private final WriteGuardService writeGuardService;
+    /** 一线角色写操作开放名单 (#939)。为空只发生在裸构造的单测里 —— 那时一线角色的写意图一律不出按钮。 */
+    private final FrontlineAiWriteGrantService frontlineWriteGrants;
+    /** 判「写」要看意图绑定的工具 (与执行期 W0 同一判据)。 */
+    private final ToolRegistry toolRegistry;
+
+    public ClarificationCandidateService(
+            IntentConfigManagementService configService,
+            IntentPermissionGate permissionGate,
+            IntentAccessModeFilter accessModeFilter,
+            WriteGuardService writeGuardService) {
+        this(configService, permissionGate, accessModeFilter, writeGuardService, null, null);
+    }
 
     @Autowired
     public ClarificationCandidateService(
             IntentConfigManagementService configService,
             IntentPermissionGate permissionGate,
             IntentAccessModeFilter accessModeFilter,
-            WriteGuardService writeGuardService) {
+            WriteGuardService writeGuardService,
+            @Lazy FrontlineAiWriteGrantService frontlineWriteGrants,
+            @Lazy ToolRegistry toolRegistry) {
         this.configService = configService;
         this.permissionGate = permissionGate;
         this.accessModeFilter = accessModeFilter;
         this.writeGuardService = writeGuardService;
+        this.frontlineWriteGrants = frontlineWriteGrants;
+        this.toolRegistry = toolRegistry;
     }
 
     /**
@@ -84,7 +104,7 @@ public class ClarificationCandidateService {
                     if (config == null
                             || !domainAllowed(config, factoryDomain)
                             || !modeAllowed(config, factoryId, mode)
-                            || !permissionAllowed(config, factoryId, userId, userRole)) {
+                            || !callerMayUse(config, factoryId, userId, userRole)) {
                         continue;
                     }
                     actions.add(toSelectAction(config, factoryId, candidate));
@@ -160,6 +180,40 @@ public class ClarificationCandidateService {
             return accessModeFilter != null
                     ? !accessModeFilter.isWriteIntent(config)
                     : !writeGuardService.isWriteIntent(config);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 当前调用者能不能用这个意图: 意图权限 (权限码 / 旧 requiredRoles) 且没被一线写操作门挡住。
+     *
+     * <p>澄清按钮 (本类) 与 Skill 抢先路由的预检 ({@link DynamicToolSelectionService#trySkillRoute})
+     * 共用这一份 —— 「按钮里出现的」与「Skill 能替你跑的」不许比执行期放得更宽。
+     */
+    boolean callerMayUse(AIIntentConfig config, String factoryId, Long userId, String userRole) {
+        return permissionAllowed(config, factoryId, userId, userRole)
+                && frontlineAllowed(config, factoryId, userRole);
+    }
+
+    /**
+     * 一线角色 + 写意图 + 本厂没开放 ⇒ 不出这个选项 (2026-10-06: 此前按钮照出, 点了才被 #939 的门拒绝)。
+     * 与执行期同一个判定 ({@link FrontlineAiWriteGrantService#denyReason}: 默认清单 + 本厂开放记录)。
+     */
+    private boolean frontlineAllowed(AIIntentConfig config, String factoryId, String userRole) {
+        if (!FrontlineAiWriteGrantService.isFrontline(userRole)) {
+            return true;
+        }
+        if (frontlineWriteGrants == null) {
+            return false;
+        }
+        try {
+            ToolExecutor tool = null;
+            String toolName = config.getToolName();
+            if (toolRegistry != null && toolName != null && !toolName.isBlank()) {
+                tool = toolRegistry.getExecutor(toolName).orElse(null);
+            }
+            return frontlineWriteGrants.denyReason(factoryId, userRole, tool, config).isEmpty();
         } catch (Exception ignored) {
             return false;
         }
