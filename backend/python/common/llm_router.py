@@ -1883,6 +1883,44 @@ def _extract_upstream_error(body_json: Dict[str, Any]) -> Optional[str]:
     return (safe or "error_body")[:80]
 
 
+def _has_valid_tool_calls(requested_tools: bool, body_json: Dict[str, Any]) -> bool:
+    """True iff the caller asked for tools AND the assistant answered with
+    non-empty, well-formed ``tool_calls``.
+
+    A function-calling answer legitimately has an EMPTY ``content`` (qwen3.8-flash
+    returns ``{"content": "", "tool_calls": [{"function": {"name", "arguments"}}]}``).
+    `_validate_output` only sees the text, so it used to judge that answer "empty"
+    and fall back — 2026-10-06 prod: two HTTP 200 qwen answers rejected, chain
+    exhausted, caller got a bare 500.
+
+    "Well-formed" = every call has a non-blank function name and ``arguments`` that
+    is a JSON object (or already a dict). Anything weaker would turn "accept tool
+    answers" into "accept anything", so a malformed call still falls back.
+    """
+    if not requested_tools:
+        return False
+    try:
+        msg = (body_json.get("choices") or [{}])[0].get("message") or {}
+        calls = msg.get("tool_calls")
+        if not isinstance(calls, list) or not calls:
+            return False
+        for call in calls:
+            fn = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(fn, dict):
+                return False
+            name = fn.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return False
+            args = fn.get("arguments")
+            if isinstance(args, dict):
+                continue
+            if not isinstance(args, str) or not isinstance(json.loads(args), dict):
+                return False
+        return True
+    except Exception:  # noqa: BLE001 - malformed shape == not a valid tool call
+        return False
+
+
 def _validate_output(slot: SLOT, content: str) -> Optional[str]:
     """Return an invalidity reason (→ fall to next model) or None if the output is
     acceptable for this slot. Cheap, deterministic — the free half of a FrugalGPT
@@ -2274,6 +2312,21 @@ def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
         return None
 
 
+class LLMChainExhausted(RuntimeError):
+    """Every candidate in the slot's chain failed or was rejected.
+
+    A ``RuntimeError`` subclass with the SAME message as before, so every existing
+    ``except RuntimeError`` caller is unaffected. The HTTP layer catches this
+    specific type (not RuntimeError) to answer 503 instead of a bare 500 without
+    also swallowing unrelated RuntimeErrors (bugs) as "providers unavailable".
+    """
+
+    def __init__(self, slot: str, errors: List[str]):
+        self.slot = slot
+        self.errors = list(errors)
+        super().__init__(f"[llm_router] All providers exhausted for {slot}: {'; '.join(errors)}")
+
+
 async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],
@@ -2439,7 +2492,14 @@ async def call_chain(
                 # JSON body is NOT success. Fall to the next chain entry instead of
                 # handing garbage to the caller (do NOT record CB success on bad output).
                 content = _extract_content(body_json)
-                invalid = _validate_output(slot, content)
+                if not content and _has_valid_tool_calls(
+                    bool(req_payload.get("tools")), body_json
+                ):
+                    # function-calling answer: empty text is the NORMAL shape here,
+                    # the answer lives in `tool_calls` (returned as-is below).
+                    invalid = None
+                else:
+                    invalid = _validate_output(slot, content)
                 if not invalid and content_validator is not None:
                     try:
                         invalid = content_validator(content)
@@ -2509,7 +2569,7 @@ async def call_chain(
             errors.append(f"{account}/{model}: {type(e).__name__}")
             continue
 
-    raise RuntimeError(f"[llm_router] All providers exhausted for {slot.value}: {'; '.join(errors)}")
+    raise LLMChainExhausted(slot.value, errors)
 
 
 # ---------------------------------------------------------------------------
