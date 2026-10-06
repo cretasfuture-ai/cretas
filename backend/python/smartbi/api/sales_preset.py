@@ -343,13 +343,13 @@ async def product_rank(
                    SUM(soi.quantity) AS total_qty,
                    MAX(soi.unit) AS unit,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 - COALESCE(soi.discount_rate, 0))) AS total_amount,
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100)) AS total_amount,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
                        * COALESCE(soi.tax_rate, 0) / 100
-                       * (1 - COALESCE(soi.discount_rate, 0))) AS tax_amount,
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100)) AS tax_amount,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
                        * (1 + COALESCE(soi.tax_rate, 0) / 100)
-                       * (1 - COALESCE(soi.discount_rate, 0))) AS total_amount_with_tax,
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100)) AS total_amount_with_tax,
                    COUNT(DISTINCT soi.sales_order_id) AS order_count
             FROM sales_order_items soi
             JOIN sales_orders so ON so.id = soi.sales_order_id
@@ -630,10 +630,11 @@ async def gross_margin(
                    COUNT(DISTINCT soi.sales_order_id) AS order_count,
                    COUNT(*) AS line_count,
                    COUNT(*) FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS costed_line_count,
+                   COUNT(*) FILTER (WHERE soi.cost_unit_price = 0) AS zero_cost_line_count,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 - COALESCE(soi.discount_rate, 0))) AS revenue,
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100)) AS revenue,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 - COALESCE(soi.discount_rate, 0)))
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100))
                      FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS costed_revenue,
                    SUM(COALESCE(soi.quantity, 0) * soi.cost_unit_price)
                      FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS cost

@@ -20,10 +20,11 @@ public class OperatingReportGrossMarginQuery {
                    COUNT(DISTINCT soi.sales_order_id) AS order_count,
                    COUNT(*) AS line_count,
                    COUNT(*) FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS costed_line_count,
+                   COUNT(*) FILTER (WHERE soi.cost_unit_price = 0) AS zero_cost_line_count,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 - COALESCE(soi.discount_rate, 0))) AS revenue,
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100)) AS revenue,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)
-                       * (1 - COALESCE(soi.discount_rate, 0)))
+                       * (1 - COALESCE(soi.discount_rate, 0) / 100))
                      FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS costed_revenue,
                    SUM(COALESCE(soi.quantity, 0) * soi.cost_unit_price)
                      FILTER (WHERE soi.cost_unit_price IS NOT NULL) AS cost
@@ -57,7 +58,7 @@ public class OperatingReportGrossMarginQuery {
             product.put("productTypeId",row.get("product_type_id"));product.put("productName",row.get("product_name"));
             product.put("unit",row.get("unit"));product.put("quantity",row.get("total_qty"));
             product.put("orderCount",row.get("order_count"));product.put("lineCount",row.get("line_count"));
-            product.put("costedLineCount",costedLines);product.put("revenue",rowRevenue);product.put("costedRevenue",rowCostedRevenue);
+            product.put("costedLineCount",costedLines);product.put("zeroCostLineCount",number(row.get("zero_cost_line_count")));product.put("revenue",rowRevenue);product.put("costedRevenue",rowCostedRevenue);
             product.put("cost",rowCost);product.put("grossProfit",profit);product.put("marginRate",margin);
             product.put("costCoverage",ratio(rowCostedRevenue,rowRevenue)); products.add(product);
             revenue=revenue.add(rowRevenue);costedRevenue=costedRevenue.add(rowCostedRevenue);

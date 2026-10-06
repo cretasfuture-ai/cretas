@@ -2,6 +2,10 @@
 
 SQLite executes the unchanged aggregate query; this is arithmetic/filter/ranking
 coverage, not a PostgreSQL production integration test. No business DB is used.
+
+discount_rate is a PERCENT (25 = 25% off), matching SalesOrderItem.getLineAmount
+(discountRate / 100). These cases used 0.25 / 1 while the SQL read the column as a
+fraction; both the SQL and these inputs were corrected together.
 """
 import asyncio
 import sqlite3
@@ -71,8 +75,8 @@ def report():
 @pytest.mark.parametrize('discount,net,tax,gross', [
     (None, 200, 20, 220),
     (0, 200, 20, 220),
-    (0.25, 150, 15, 165),
-    (1, 0, 0, 0),
+    (25, 150, 15, 165),
+    (100, 0, 0, 0),
 ])
 def test_discount_applies_to_net_tax_and_gross(query_db, discount, net, tax, gross):
     add_line(query_db, discount)
@@ -86,7 +90,7 @@ def test_discount_applies_to_net_tax_and_gross(query_db, discount, net, tax, gro
 
 
 def test_mixed_line_discounts_aggregate_without_changing_quantity(query_db):
-    add_line(query_db, 0.25)
+    add_line(query_db, 25)
     add_line(query_db, None, quantity=1, price=50)
     row, = report()
     assert row['taxableAmount'] == pytest.approx(200)
@@ -97,7 +101,7 @@ def test_mixed_line_discounts_aggregate_without_changing_quantity(query_db):
 
 
 def test_rank_uses_discounted_tax_inclusive_sum(query_db):
-    add_line(query_db, 0.25)
+    add_line(query_db, 25)
     add_line(query_db, 0, product='PLAIN', quantity=1, price=175)
     rows = report()
     assert [row['productTypeId'] for row in rows] == ['PLAIN', 'DISCOUNTED']
@@ -107,7 +111,7 @@ def test_rank_uses_discounted_tax_inclusive_sum(query_db):
 
 
 def test_discount_keeps_tenant_date_status_and_soft_delete_filters(query_db):
-    add_line(query_db, 0.25)
+    add_line(query_db, 25)
     excluded = [
         ('other-tenant', 'F007', '2026-09-15', 'CONFIRMED', None),
         ('outside-range', 'F006', '2026-08-31', 'CONFIRMED', None),
