@@ -89,6 +89,11 @@ public class ToolDispatchService {
     @Autowired
     private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
 
+    // 一线角色 AI 写操作开放名单 (owner 2026-10-06: 先收窄, 管理端可开放)。执行与预览两个入口都问它,
+    // 未开放的写操作连确认卡都不出。required=true: 生产上由 Spring 保证接上; 只有裸构造的单测里为 null。
+    @Autowired
+    private com.cretas.aims.service.intent.FrontlineAiWriteGrantService frontlineWriteGrants;
+
     /**
      * F5 fault-injection hook (optional). Bean exists only under
      * {@code dev-fault-injection} Spring profile; remains {@code null} in prod.
@@ -145,6 +150,11 @@ public class ToolDispatchService {
                         .formattedText(disabledMsg)
                         .executedAt(LocalDateTime.now())
                         .build();
+            }
+
+            IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
+            if (frontlineDenied != null) {
+                return frontlineDenied;
             }
 
             // previewOnly is a hard no-write contract. If the tool has no explicit safe preview,
@@ -769,12 +779,40 @@ public class ToolDispatchService {
     }
 
     /**
+     * 一线角色 + 写操作 + 未开放 ⇒ 拒绝 (不出确认卡、不执行)。其它情况返回 null, 继续原有流程。
+     */
+    private IntentExecuteResponse frontlineWriteDenied(ToolExecutor tool, String factoryId,
+                                                       AIIntentConfig intent, String userRole) {
+        if (frontlineWriteGrants == null) {
+            return null;
+        }
+        java.util.Optional<String> reason = frontlineWriteGrants.denyReason(factoryId, userRole, tool, intent);
+        if (reason.isEmpty()) {
+            return null;
+        }
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent != null ? intent.getIntentCode() : null)
+                .intentName(intent != null ? intent.getIntentName() : null)
+                .intentCategory(intent != null ? intent.getIntentCategory() : null)
+                .status("PERMISSION_DENIED")
+                .message(reason.get())
+                .formattedText(reason.get())
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /**
      * Tool 预览执行
      */
     public IntentExecuteResponse executeToolPreview(ToolExecutor tool, String factoryId,
                                                      IntentExecuteRequest request,
                                                      AIIntentConfig intent,
                                                      Long userId, String userRole) {
+        IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
+        if (frontlineDenied != null) {
+            return frontlineDenied;
+        }
         try {
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);

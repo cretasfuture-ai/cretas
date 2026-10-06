@@ -1,4 +1,4 @@
--- generated-from c0e3be9970fe 2026-09-14 16:42:47Z
+-- generated-from f247266bf5d8 2026-10-05 17:07:16Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 --
@@ -9,7 +9,7 @@
 --    ⛔ 不要为了让某一对变成 INFO 而加特例; 要换判据就整体换掉这个代理。
 --
 -- 🔴 区分度实测(⛔ 不许只报结论 —— 近 100% 与「探测器匹配一切」读数相同, 形态 A‴):
---    依据 ① repo: 带 @Table 的实体 432 个, 其中**没有** Repository 接口的只有
+--    依据 ① repo: 带 @Table 的实体 433 个, 其中**没有** Repository 接口的只有
 --       3 个 ⇒ 探测器分得开(不是恒真), 但在本语料上几乎人人有 Repository。
 --    依据 ② notfound: yes 的有 0/62 对。为 0 是**预期**的 ——
 --       带 @NotFound 的关联在收集阶段(条件 A)就被 continue 掉了, 根本走不到这里;
