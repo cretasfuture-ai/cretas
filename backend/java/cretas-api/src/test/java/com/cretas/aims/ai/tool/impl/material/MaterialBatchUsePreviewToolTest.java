@@ -70,6 +70,8 @@ class MaterialBatchUsePreviewToolTest {
         tool = new MaterialBatchUseTool();
         ReflectionTestUtils.setField(tool, "materialBatchService", service);
         ReflectionTestUtils.setField(tool, "productionPlanRepository", planRepo);
+        // 批次号回退用的仓储: 默认桩 (Optional.empty) = 「批次号也查不到」; 本类的用例都走主键 / 找不到两条路
+        ReflectionTestUtils.setField(tool, "materialBatchRepository", mock(MaterialBatchRepository.class));
         injectMapper(tool);
         when(service.getMaterialBatchById(FACTORY, BATCH_ID)).thenReturn(dto(MaterialBatchStatus.AVAILABLE, "100"));
     }
@@ -263,6 +265,8 @@ class MaterialBatchUsePreviewToolTest {
         // 兜底: 预览期间 service 上除了「读批次」没有任何别的调用 (这个接口上的所有写方法一并覆盖);
         // atLeast(0) 只是把「读批次」标成已核对, 好让 verifyNoMoreInteractions 只剩别的调用可抓
         verify(service, org.mockito.Mockito.atLeast(0)).getMaterialBatchById(anyString(), anyString());
+        // 只说了原料名时, 预览会走列表搜索 (只读) 找候选批次 —— 同样是读
+        verify(service, org.mockito.Mockito.atLeast(0)).getMaterialBatchList(anyString(), any());
         org.mockito.Mockito.verifyNoMoreInteractions(service);
     }
 
