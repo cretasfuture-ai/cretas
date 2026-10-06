@@ -124,7 +124,7 @@ class IntentExecutionOrchestratorNumberProvenanceTest {
         AIIntentConfig intent = workdeskIntent();
         when(aiIntentService.getIntentByCode(FACTORY, "DAILY_CUSTOMER_FOLLOWUP")).thenReturn(Optional.of(intent));
         when(aiIntentService.hasPermission("DAILY_CUSTOMER_FOLLOWUP", ROLE)).thenReturn(true);
-        when(dynamic.tryExplicitSkillRouteForIntent(eq(intent), any(), eq(FACTORY), eq(USER)))
+        when(dynamic.tryExplicitSkillRouteForIntent(eq(intent), any(), eq(FACTORY), eq(USER), eq(ROLE)))
                 .thenReturn(skillResponse());
         when(llm.chatFast(anyString(), anyString())).thenReturn(llmSummary);
         return orchestrator.executeWithExplicitIntent(FACTORY,

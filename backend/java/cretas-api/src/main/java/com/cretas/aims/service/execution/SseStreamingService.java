@@ -594,6 +594,13 @@ public class SseStreamingService {
 
             // 7a.5 写意图先抽参 —— 与显式意图路径 (/preview、按钮点选) 同一个方法, 结果留在 context:
             //      Slot Filling 只追问真正没抽到的; 被 W0 拦下时随确认卡带去预览 (见 attachPreviewParams)。
+            //      ⛔ 先过意图权限再抽: 没权限的请求不许碰执行层 (SseSemanticCacheAdmissionContractTest 守的就是这条),
+            //      也不该为一个注定被拒的请求花一次 LLM 抽参、再追问参数。权限只算这一次, 结果带进 7c (不重算)。
+            String admissionDenied = permissionDeniedMessage(intent, userId, userRole);
+            if (admissionDenied != null) {
+                streamNoPermission(emitter, intent, admissionDenied, startTime);
+                return;
+            }
             prefillWriteToolParameters(request, intent);
 
             // 7b. Slot Filling
@@ -623,10 +630,10 @@ public class SseStreamingService {
                 }
             }
 
-            // 7c. 执行意图 (Tool)
+            // 7c. 执行意图 (Tool) —— 权限已在 7a.5 判过
             executeAndStreamResult(
                     emitter, factoryId, request, intent, userId, userRole, startTime,
-                    matchResult, factoryPackRoute);
+                    matchResult, factoryPackRoute, true);
 
         } catch (Exception e) {
             log.error("SSE 执行失败: factoryId={}, error={}", factoryId, e.getMessage(), e);
@@ -1015,24 +1022,27 @@ public class SseStreamingService {
                                          IntentMatchResult matchResult,
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
-        String deniedMessage = permissionDeniedMessage(intent, userId, userRole);
-        if (deniedMessage != null) {
-            IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("NO_PERMISSION")
-                    .message(deniedMessage)
-                    .formattedText(deniedMessage)
-                    .executedAt(LocalDateTime.now())
-                    .build();
-            sendSseEvent(emitter, "result", noPermissionResponse);
-            sendSseEvent(emitter, "complete", Map.of(
-                    "status", "NO_PERMISSION",
-                    "totalLatencyMs", System.currentTimeMillis() - startTime
-            ));
-            emitter.complete();
-            return;
+        executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
+                matchResult, factoryPackRoute, false);
+    }
+
+    /**
+     * @param permissionAlreadyChecked 调用方刚用 {@link #permissionDeniedMessage} 判过且放行 —— 不重算
+     *        (每个请求只算一次意图权限; 其它入口一律传 false)。
+     */
+    private void executeAndStreamResult(SseEmitter emitter, String factoryId,
+                                         IntentExecuteRequest request, AIIntentConfig intent,
+                                         Long userId, String userRole, long startTime,
+                                         IntentMatchResult matchResult,
+                                         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
+                                         boolean permissionAlreadyChecked)
+            throws IOException {
+        if (!permissionAlreadyChecked) {
+            String deniedMessage = permissionDeniedMessage(intent, userId, userRole);
+            if (deniedMessage != null) {
+                streamNoPermission(emitter, intent, deniedMessage, startTime);
+                return;
+            }
         }
 
         IntentExecuteResponse factoryPackResponse =
@@ -1162,6 +1172,25 @@ public class SseStreamingService {
      * 没声明 → 保留 requiredRoles 旧判定。返回 null 表示放行, 否则是给用户看的拒绝原因。
      * 执行前 ({@link #executeAndStreamResult}) 与追问确认按钮出按钮前共用这一份。
      */
+    private void streamNoPermission(SseEmitter emitter, AIIntentConfig intent, String deniedMessage,
+                                    long startTime) throws IOException {
+        IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .status("NO_PERMISSION")
+                .message(deniedMessage)
+                .formattedText(deniedMessage)
+                .executedAt(LocalDateTime.now())
+                .build();
+        sendSseEvent(emitter, "result", noPermissionResponse);
+        sendSseEvent(emitter, "complete", Map.of(
+                "status", "NO_PERMISSION",
+                "totalLatencyMs", System.currentTimeMillis() - startTime
+        ));
+        emitter.complete();
+    }
+
     private String permissionDeniedMessage(AIIntentConfig intent, Long userId, String userRole) {
         String requiredPermission = intent.getRequiredPermission();
         if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
