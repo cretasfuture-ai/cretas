@@ -116,6 +116,32 @@ public class ThreePriceComparisonService {
         return rows;
     }
 
+    /**
+     * 单个 SKU 的「目录价理论毛利」: 与 {@link #compareBySku} 的 salesPrice / actualCost / grossMargin
+     * 三列<b>同一口径、同一组私有 helper</b> (目录价 = {@code ProductType.unitPrice},
+     * 实际成本 = 最近一条已算出 unitCost 的批次, 毛利率 = (价 - 成本) / 价 × 100)。
+     *
+     * <p>不做任何兜底: 缺目录价 / 无已定价批次 → 对应字段 null, 毛利率 null, 由调用方说明缺哪一边。
+     * 不查标准成本 (只有 compareBySku 的超支判定才需要)。
+     */
+    @Transactional(readOnly = true)
+    public CatalogMargin catalogMarginFor(String factoryId, ProductType pt) {
+        BigDecimal salesPrice = pt.getUnitPrice();
+        ProductionBatch latestPriced = resolveLatestPricedBatch(factoryId, pt.getId());
+        BigDecimal actualCost = latestPriced != null ? latestPriced.getUnitCost() : null;
+        return new CatalogMargin(
+                salesPrice,
+                actualCost,
+                computeGrossMarginPct(salesPrice, actualCost),
+                latestPriced != null ? latestPriced.getBatchNumber() : null,
+                latestPriced != null ? latestPriced.getCreatedAt() : null);
+    }
+
+    /** {@link #catalogMarginFor} 的结果; 毛利率为百分数 (42.5 = 42.5%), 任一价缺失 → null。 */
+    public record CatalogMargin(BigDecimal salesPrice, BigDecimal actualCost, BigDecimal grossMarginPct,
+                                String costBatchNumber, java.time.LocalDateTime costAsOf) {
+    }
+
     private ProductionBatch resolveLatestPricedBatch(String factoryId, String productTypeId) {
         List<ProductionBatch> recent = productionBatchRepository
                 .findRecentPricedBatches(factoryId, productTypeId, PageRequest.of(0, 1));
