@@ -113,46 +113,40 @@ class SseStreamingServiceSlotContinuationTest {
     }
 
     /**
-     * prod 2026-10-06: 仓库员点「查库存」每次「操作执行失败」—— 流在 intent-sse 工作线程上跑, 登录态没带过去,
-     * 库存服务读不到 SecurityContext 就抛 "Authenticated inventory context is required"。
-     * 跑在真实入口 executeStream (不是直接调 executeStreamAsync, 那样恰好绕过了线程切换)。
+     * prod 2026-10-06: 仓库员点「查库存」每次「操作执行失败」—— 流在 intent-sse 工作线程上跑, 没有 Servlet 请求,
+     * SecurityUtils.currentUserId() 读不到人, 库存服务就抛 "Authenticated inventory context is required"。
+     * 跑在真实入口 executeStream (直接调 executeStreamAsync 恰好绕过了线程切换)。
+     * (#944 先用 SecurityContext 传递, 没生效 —— 因为身份读的不是 SecurityContext; 这条断言读的就是库存服务读的那个值。)
      */
     @Test
-    void streamWorkerThreadSeesTheCallersAuthenticationAndItIsClearedAfterwards() throws Exception {
+    void streamWorkerThreadResolvesTheCallerAsCurrentUserAndNothingLeaksToTheNextRequest() throws Exception {
         Harness h = new Harness();
-        java.util.concurrent.atomic.AtomicReference<Object> seen = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Long> seen = new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<String> workerThread = new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         when(h.aiIntentService.recognizeIntentWithConfidence(
                 anyString(), eq(F), eq(3), eq(USER), eq(ROLE), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
-                    var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
-                    seen.set(auth == null ? "NONE" : auth.getName());
+                    seen.set(com.cretas.aims.utils.SecurityUtils.currentUserId());
                     workerThread.set(Thread.currentThread().getName());
                     done.countDown();
                     return IntentMatchResult.builder().userInput("x").confidence(0.0).build();
                 });
-        org.springframework.security.core.context.SecurityContext ctx =
-                org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
-        ctx.setAuthentication(new org.springframework.security.authentication.TestingAuthenticationToken("f006_warehouse_worker", "n", "ROLE_USER"));
-        org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
-        try {
-            h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").build(), USER, ROLE);
-        } finally {
-            org.springframework.security.core.context.SecurityContextHolder.clearContext();
-        }
+
+        h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").build(), USER, ROLE);
+
         assertThat(done.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("工作线程真的跑到了识别 (必发生的读数)").isTrue();
         assertThat(workerThread.get()).as("确实是切到了工作线程").isEqualTo("intent-sse");
-        assertThat(seen.get()).as("工作线程上拿到的是调用者的登录态").isEqualTo("f006_warehouse_worker");
-        // 线程池复用线程: 做完要清掉, 下一个请求不能继承上一个人的登录态
-        java.util.concurrent.atomic.AtomicReference<Object> next = new java.util.concurrent.atomic.AtomicReference<>();
+        assertThat(seen.get()).as("工作线程上 SecurityUtils.currentUserId() = 调用者").isEqualTo(USER);
+        // 线程池复用线程: 做完要还原, 下一个任务不能继承上一个人
+        java.util.concurrent.atomic.AtomicReference<Long> next = new java.util.concurrent.atomic.AtomicReference<>(-1L);
         java.util.concurrent.CountDownLatch done2 = new java.util.concurrent.CountDownLatch(1);
         ((java.util.concurrent.ExecutorService) ReflectionTestUtils.getField(h.service, "sseExecutor")).execute(() -> {
-            next.set(org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication());
+            next.set(com.cretas.aims.utils.SecurityUtils.currentUserId());
             done2.countDown();
         });
         assertThat(done2.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
-        assertThat(next.get()).as("工作线程复用时没有残留上一个人的登录态").isNull();
+        assertThat(next.get()).as("复用线程时没有残留上一个人").isNull();
     }
 
     @ParameterizedTest
