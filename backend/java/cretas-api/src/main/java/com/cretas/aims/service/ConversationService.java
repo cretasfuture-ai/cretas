@@ -55,6 +55,27 @@ public interface ConversationService {
             List<String> clarificationQuestions);
 
     /**
+     * 开始参数收集对话, 并把<b>这一句里已经抽到的参数</b>先记进会话 (2026-10-06)。
+     *
+     * <p>「做完了，产量0」抽到了 actualQuantity=0、缺 taskId: 下一句「1827」补齐时,
+     * 执行要拿到的是 {taskId=1827, actualQuantity=0} —— 以前会话只记缺的那一个, 产量要靠
+     * 从「1827」里重新抽, 实测被模型编成了 0 和一句备注。
+     *
+     * @param alreadyCollected 已抽到的参数 (只记非空值; 不会被当成待问槽位)
+     */
+    default ConversationResponse startParameterCollection(
+            String factoryId,
+            Long userId,
+            String intentCode,
+            String intentName,
+            List<RequiredParameter> requiredParameters,
+            List<String> clarificationQuestions,
+            java.util.Map<String, Object> alreadyCollected) {
+        return startParameterCollection(factoryId, userId, intentCode, intentName,
+                requiredParameters, clarificationQuestions);
+    }
+
+    /**
      * 继续多轮对话
      *
      * 自动根据会话模式 (INTENT_RECOGNITION 或 PARAMETER_COLLECTION) 处理用户回复。

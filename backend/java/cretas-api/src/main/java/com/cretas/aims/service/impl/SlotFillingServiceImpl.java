@@ -509,10 +509,11 @@ public class SlotFillingServiceImpl implements SlotFillingService {
         Integer maxConversationRounds = 5;
 
         try {
+            // 已抽到的参数一并记进会话: 下一句补齐缺的那个时, 续轮执行要带上它们 (见 SseStreamingService 缺参续轮)
             ConversationService.ConversationResponse conversationResp =
                     conversationService.startParameterCollection(
                             factoryId, userId, intent.getIntentCode(), intent.getIntentName(),
-                            requiredParams, clarificationQuestions);
+                            requiredParams, clarificationQuestions, extractedParams);
 
             if (conversationResp != null && conversationResp.getSessionId() != null) {
                 sessionId = conversationResp.getSessionId();
