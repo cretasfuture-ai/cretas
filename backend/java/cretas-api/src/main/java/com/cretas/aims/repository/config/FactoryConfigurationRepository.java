@@ -15,7 +15,7 @@ import java.util.Optional;
 public interface FactoryConfigurationRepository extends JpaRepository<FactoryConfiguration, Long> {
     Optional<FactoryConfiguration> findByFactoryIdAndStatus(String factoryId, String status);
 
-    @Query("SELECT fc FROM FactoryConfiguration fc WHERE fc.factoryId = :factoryId AND fc.status = 'PUBLISHED' ORDER BY fc.configVersion DESC")
+    @Query("SELECT fc FROM FactoryConfiguration fc WHERE fc.factoryId = :factoryId AND fc.status = 'PUBLISHED' ORDER BY fc.configVersion DESC LIMIT 1")
     Optional<FactoryConfiguration> findLatestPublished(@Param("factoryId") String factoryId);
 
     @Query("SELECT fc FROM FactoryConfiguration fc WHERE fc.factoryId = :factoryId AND fc.status = 'DRAFT' ORDER BY fc.configVersion DESC LIMIT 1")
