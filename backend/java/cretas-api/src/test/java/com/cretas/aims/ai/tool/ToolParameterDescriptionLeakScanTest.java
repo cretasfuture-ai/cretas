@@ -31,8 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>三层:
  * <ol>
- *   <li>硬闸: 任何参数描述都不许出现 UUID; 类型标注 「(Long)」等只允许 Line B 并行修复中的
- *       {@code work_process_task_*} (合并后删掉 {@link #LINE_B_PENDING_PREFIX} 豁免);</li>
+ *   <li>硬闸: 任何参数描述都不许出现 UUID 或类型标注 「(Long)」等 (工序任务工具已随同批修复, 无豁免);</li>
  *   <li>硬闸: <b>必填</b>参数描述不许出现驼峰字段名 —— 例外只有 {@code canvas_*} 画布设计工具
  *       (设计者要填的就是英文驼峰字段代码, 例子必须是驼峰);</li>
  *   <li>棘轮: <b>可选</b>参数描述里的驼峰字段名 (LLM 要照着产出 JSON 键, 如 {additiveCode, usageAmount})
@@ -47,8 +46,6 @@ class ToolParameterDescriptionLeakScanTest {
     private static final Pattern UUID_WORD = Pattern.compile("\\bUUID\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern CAMEL_CASE = Pattern.compile("\\b[a-z]+[A-Z][A-Za-z0-9]*\\b");
 
-    /** Line B 并行修复的四个 WorkProcessTask*Tool 的工具名前缀 (类型标注豁免, 合并后删除)。 */
-    private static final String LINE_B_PENDING_PREFIX = "work_process_task_";
     /** 画布设计工具: 必填参数的描述里举驼峰字段代码就是它的格式要求。 */
     private static final String CANVAS_PREFIX = "canvas_";
     /** 可选参数里驼峰字段名条数的上限 (2026-10-06 修后实测 29), 只许减。 */
@@ -68,7 +65,7 @@ class ToolParameterDescriptionLeakScanTest {
     // ==================== 真实工具扫描 ====================
 
     @Test
-    @DisplayName("硬闸: 没有任何参数描述含 UUID; 类型标注仅限 Line B 在修的工序任务工具")
+    @DisplayName("硬闸: 没有任何参数描述含 UUID 或类型标注")
     void noUuidOrTypeAnnotationsInAnyParameterDescription() throws Exception {
         ScanResult r = scanRegisteredTools();
         assertThat(r.unscannable()).as("读不出 schema 的工具 (仪器盲区, 必须为 0)").isEmpty();
@@ -78,8 +75,7 @@ class ToolParameterDescriptionLeakScanTest {
         assertThat(uuid).as("参数描述里不许出现 UUID").isEmpty();
 
         List<Finding> typed = r.findings().stream()
-                .filter(f -> f.rule().equals("类型标注"))
-                .filter(f -> !f.tool().startsWith(LINE_B_PENDING_PREFIX)).toList();
+                .filter(f -> f.rule().equals("类型标注")).toList();
         assertThat(typed).as("参数描述里不许出现 (Long) 等类型标注").isEmpty();
     }
 
