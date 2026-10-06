@@ -1377,8 +1377,8 @@ public class IntentExecutionOrchestrator {
                     candidateActions.add(IntentExecuteResponse.SuggestedAction.builder()
                             .actionCode("SELECT_INTENT")
                             .actionName(candidate.getIntentName())
-                            .description(candidate.getDescription() != null ? candidate.getDescription() :
-                                    String.format("置信度: %.0f%%", candidate.getConfidence() * 100))
+                            // 副标题只给人话, 不再用「置信度」兜底 (见 ClarificationButtonText)
+                            .description(ClarificationButtonText.subtitle(candidate.getDescription()))
                             .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
                             .parameters(params)
                             .build());

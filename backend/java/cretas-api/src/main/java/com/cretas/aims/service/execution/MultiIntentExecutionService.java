@@ -289,9 +289,8 @@ public class MultiIntentExecutionService {
             actions.add(IntentExecuteResponse.SuggestedAction.builder()
                     .actionCode(intent.getIntentCode())
                     .actionName(intent.getIntentName())
-                    .description(String.format("置信度: %.0f%% - %s",
-                            intent.getConfidence() * 100,
-                            intent.getReasoning() != null ? intent.getReasoning() : ""))
+                    // 副标题只给人话: 不显示「置信度: xx%」(识别分数不是给一线看的), 也不贴 LLM 的识别理由
+                    // (那是内部推理文本, 可能带意图码)。按钮只留功能名。规则见 ClarificationButtonText。
                     .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
                     .parameters(params)
                     .build());
@@ -332,6 +331,12 @@ public class MultiIntentExecutionService {
                 .build();
     }
 
+    /** 「执行: 描述」; 描述为空或是开发者备注时不显示副标题 (旧写法会显示「执行: null」)。 */
+    private static String describeForButton(String description) {
+        String subtitle = ClarificationButtonText.subtitle(description);
+        return subtitle == null ? null : "执行: " + subtitle;
+    }
+
     private IntentExecuteResponse buildMultiIntentConfirmationResponse(IntentMatchResult intentResult) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
 
@@ -339,7 +344,7 @@ public class MultiIntentExecutionService {
             actions.add(IntentExecuteResponse.SuggestedAction.builder()
                     .actionCode(intentResult.getBestMatch().getIntentCode())
                     .actionName(intentResult.getBestMatch().getIntentName())
-                    .description("执行: " + intentResult.getBestMatch().getDescription())
+                    .description(describeForButton(intentResult.getBestMatch().getDescription()))
                     .build());
         }
 
@@ -348,7 +353,7 @@ public class MultiIntentExecutionService {
                 actions.add(IntentExecuteResponse.SuggestedAction.builder()
                         .actionCode(intent.getIntentCode())
                         .actionName(intent.getIntentName())
-                        .description(intent.getReasoning())
+                        .description(ClarificationButtonText.subtitle(intent.getReasoning()))
                         .build());
             }
         }

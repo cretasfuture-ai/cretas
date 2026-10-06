@@ -242,10 +242,10 @@ public class ClarificationCandidateService {
 
     static IntentExecuteResponse.SuggestedAction toSelectAction(
             String factoryId, String intentCode, String intentName, String description, Double confidence) {
-        String canonicalDescription = description;
-        if (canonicalDescription == null || canonicalDescription.isBlank()) {
-            canonicalDescription = confidence == null ? null : String.format("置信度: %.0f%%", confidence * 100);
-        }
+        // 副标题只给人话: 没有描述 → 不显示 (⛔ 不再用「置信度: 39%」兜底, 识别分数不是给一线看的);
+        // 描述里是开发者备注 (Sprint / Loop / 驼峰字段名 …) 也不显示。规则见 ClarificationButtonText。
+        // confidence 形参保留是为了不动调用方签名, 不再进入任何用户可见文本。
+        String canonicalDescription = ClarificationButtonText.subtitle(description);
         HashMap<String, Object> parameters = new HashMap<>();
         parameters.put("intentCode", intentCode);
         return IntentExecuteResponse.SuggestedAction.builder()
