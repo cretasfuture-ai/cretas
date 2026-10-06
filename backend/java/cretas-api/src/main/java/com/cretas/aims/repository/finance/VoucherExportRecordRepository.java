@@ -24,7 +24,7 @@ public interface VoucherExportRecordRepository extends JpaRepository<VoucherExpo
            "  AND r.periodEnd = :periodEnd " +
            "  AND r.createdAt >= :createdAfter " +
            "  AND r.deletedAt IS NULL " +
-           "ORDER BY r.createdAt DESC")
+           "ORDER BY r.createdAt DESC LIMIT 1")
     Optional<VoucherExportRecord> findRecentExport(
             @Param("factoryId") String factoryId,
             @Param("exportType") String exportType,
