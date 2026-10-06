@@ -233,6 +233,35 @@ class SseStreamingServiceSlotContinuationTest {
 
     // ------------------------------------------------------------------
 
+    // ==================== 入场就问一线开放名单 (2026-10-06 真机 #12) ====================
+
+    @Test
+    void unopenedWriteForAFrontlineRoleIsRefusedAtAdmissionBeforeAnyParameterQuestion() throws Exception {
+        Harness h = new Harness();
+        h.recognizes("帮我创建一个生产批次", h.batchCreate);
+
+        IntentExecuteResponse r = h.execute(IntentExecuteRequest.builder().userInput("帮我创建一个生产批次").build());
+
+        assertThat(r.getStatus()).isEqualTo("NO_PERMISSION");
+        assertThat(r.getMessage()).contains("创建生产批次").contains("还没有对操作员开放");
+        assertThat(h.sessions).as("不追问参数 —— 没有建缺参会话").isEmpty();
+        verify(h.toolDispatchService, never()).extractParametersWithLLM(anyString(), any(), anyMap());
+        verify(h.toolDispatchService, never()).executeWithTool(eq(h.batchTool), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void sameWriteProceedsOnceTheFactoryHasOpenedItForTheRole() throws Exception {
+        Harness h = new Harness();
+        h.grants.add(com.cretas.aims.entity.config.AiFrontlineIntentGrant.builder()
+                .factoryId(F).roleCode(ROLE).intentCode("PRODUCTION_BATCH_CREATE").grantedAt(LocalDateTime.now()).build());
+        h.recognizes("帮我创建一个生产批次", h.batchCreate);
+
+        IntentExecuteResponse r = h.execute(IntentExecuteRequest.builder().userInput("帮我创建一个生产批次").build());
+
+        assertThat(r.getStatus()).as("开放后照常走: 缺参就问, 不缺就到写确认").isIn("NEED_MORE_INFO", "WRITE_CONFIRM_REQUIRED");
+        verify(h.toolDispatchService).extractParametersWithLLM(anyString(), eq(h.batchTool), anyMap());
+    }
+
     private static final class Harness {
         final AIIntentService aiIntentService = mock(AIIntentService.class);
         final ToolRegistry toolRegistry = mock(ToolRegistry.class);
@@ -255,6 +284,13 @@ class SseStreamingServiceSlotContinuationTest {
         final AIIntentConfig complete = intent("WORK_PROCESS_TASK_COMPLETE", "完成工序", completeTool);
         final AIIntentConfig start = intent("WORK_PROCESS_TASK_START", "开始工序", startTool);
         final AIIntentConfig query = intent("PROCESS_TASK_QUERY", "工序任务查询", queryTool);
+        final ToolExecutor batchTool = tool("production_batch_create", ToolExecutor.AccessMode.WRITE,
+                Map.of("productName", Map.of("type", "string", "description", "产品名称"),
+                        "quantity", Map.of("type", "number", "description", "数量")),
+                List.of("productName", "quantity"));
+        final AIIntentConfig batchCreate = intent("PRODUCTION_BATCH_CREATE", "创建生产批次", batchTool);
+        /** 本厂的一线开放记录 (内存), 由真 FrontlineAiWriteGrantService 读。 */
+        final List<com.cretas.aims.entity.config.AiFrontlineIntentGrant> grants = new java.util.ArrayList<>();
 
         Harness() throws Exception {
             FactoryRepository factoryRepository = mock(FactoryRepository.class);
@@ -289,15 +325,22 @@ class SseStreamingServiceSlotContinuationTest {
             ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
             ReflectionTestUtils.setField(service, "slotFillingService", slotFilling);
             ReflectionTestUtils.setField(service, "conversationService", conversations);
+            com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository grantRepo =
+                    mock(com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository.class);
+            when(grantRepo.findByFactoryIdAndRevokedAtIsNull(anyString())).thenAnswer(inv -> List.copyOf(grants));
+            ReflectionTestUtils.setField(service, "frontlineWriteGrants",
+                    new com.cretas.aims.service.intent.FrontlineAiWriteGrantService(grantRepo, new WriteGuardService(),
+                            mock(com.cretas.aims.service.intent.IntentConfigManagementService.class), toolRegistry));
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
 
-            for (AIIntentConfig intent : List.of(complete, start, query)) {
+            for (AIIntentConfig intent : List.of(complete, start, query, batchCreate)) {
                 when(aiIntentService.getIntentByCode(F, intent.getIntentCode())).thenReturn(Optional.of(intent));
                 when(aiIntentService.hasPermission(intent.getIntentCode(), ROLE)).thenReturn(true);
             }
             stubDispatch(completeTool, complete, "WRITE_CONFIRM_REQUIRED");
             stubDispatch(startTool, start, "WRITE_CONFIRM_REQUIRED");
             stubDispatch(queryTool, query, "COMPLETED");
+            stubDispatch(batchTool, batchCreate, "WRITE_CONFIRM_REQUIRED");
         }
 
         /** 会话表: 内存 map, save 时像 JPA 一样补 sessionId / lastActiveAt。 */
