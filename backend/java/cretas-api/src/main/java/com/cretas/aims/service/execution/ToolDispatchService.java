@@ -565,8 +565,7 @@ public class ToolDispatchService {
                                         correctionResult.confidence());
 
                                 if (correctionResult.shouldRetry() && correctionResult.correctedParams() != null) {
-                                    params.clear();
-                                    params.putAll(correctionResult.correctedParams());
+                                    replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool);
                                     params.put("_correctionStrategy", correctionResult.correctionStrategy());
                                     params.put("_retryAttempt", attempt);
                                     params.put("_validationIssue", validationResult.issue().name());
@@ -631,8 +630,7 @@ public class ToolDispatchService {
                     boolean shouldRetry = correctionResult != null && correctionResult.shouldRetry() && attempt < MAX_RETRIES;
 
                     if (shouldRetry && correctionResult.correctedParams() != null) {
-                        params.clear();
-                        params.putAll(correctionResult.correctedParams());
+                        replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool);
                         params.put("_correctionStrategy", correctionResult.correctionStrategy());
                         params.put("_retryAttempt", attempt);
                         params.put("_confidence", correctionResult.confidence());
@@ -1313,6 +1311,37 @@ public class ToolDispatchService {
                 && !rule.isBlank();
     }
 
+    /**
+     * CRITIC 纠错给回的整套参数同样是 LLM 产出: 改动过的值也要过 {@link LlmParameterGrounding},
+     * 没落地的退回原值 (原来没有就去掉) —— 纠错可以改格式、换成用户说过的数, 不能凭空造数或写备注。
+     */
+    private void replaceWithGroundedCorrection(Map<String, Object> params, Map<String, Object> corrected,
+                                               ToolExecutor tool) {
+        Map<String, Object> previous = new HashMap<>(params);
+        Map<String, Object> changed = new HashMap<>();
+        for (Map.Entry<String, Object> e : corrected.entrySet()) {
+            if (!java.util.Objects.equals(previous.get(e.getKey()), e.getValue())) {
+                changed.put(e.getKey(), e.getValue());
+            }
+        }
+        Object userInput = previous.get("userInput");
+        LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
+                changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema());
+        params.clear();
+        params.putAll(corrected);
+        params.putAll(grounded.accepted());
+        for (String key : grounded.dropped().keySet()) {
+            if (previous.containsKey(key)) {
+                params.put(key, previous.get(key));
+            } else {
+                params.remove(key);
+            }
+        }
+        if (!grounded.dropped().isEmpty()) {
+            log.info("纠错参数未落地, 已退回原值: tool={}, dropped={}", tool.getToolName(), grounded.dropped());
+        }
+    }
+
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {
         Map<String, Object> extractedParams = new HashMap<>();
@@ -1355,8 +1384,10 @@ public class ToolDispatchService {
 
                 请仔细分析用户输入，提取其中包含的参数值。
                 - 如果用户明确提供了某个参数的值，请提取它
-                - 如果用户没有提供某个参数，不要猜测或编造，直接忽略该参数
+                - 如果用户没有提供某个参数，不要猜测或编造，直接忽略该参数（不要填 0 或默认值）
                 - 参数值应该是用户原文中的信息，不要修改或翻译
+                - 同一个数字只填给一个参数；备注、原因、说明这类文字参数只照抄用户原话，
+                  用户没说就不填，不要写你自己的分析或提示
 
                 请使用 extract_parameters 工具返回提取的参数。
                 """, tool.getToolName(), tool.getDescription() != null ? tool.getDescription() : "执行业务操作");
@@ -1372,11 +1403,21 @@ public class ToolDispatchService {
                         try {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> args = objectMapper.readValue(argumentsJson, Map.class);
+                            Map<String, Object> raw = new HashMap<>();
                             for (Map.Entry<String, Object> entry : args.entrySet()) {
                                 if (entry.getValue() != null &&
                                     !(entry.getValue() instanceof String && ((String) entry.getValue()).isEmpty())) {
-                                    extractedParams.put(entry.getKey(), entry.getValue());
+                                    raw.put(entry.getKey(), entry.getValue());
                                 }
+                            }
+                            // LLM 给的数字 / 备注必须在用户原话或上下文里落得了地, 否则丢掉 (参数保持缺失,
+                            // 必填的由工具走 NEED_MORE_INFO 追问)。规则只有一份, 见 LlmParameterGrounding。
+                            LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
+                                    raw, existingParams, userInput, parametersSchema);
+                            extractedParams.putAll(grounded.accepted());
+                            if (!grounded.dropped().isEmpty()) {
+                                log.info("LLM 参数未落地, 已丢弃: tool={}, dropped={}",
+                                        tool.getToolName(), grounded.dropped());
                             }
                             log.info("LLM 参数提取成功: tool={}, extracted={}", tool.getToolName(), extractedParams.keySet());
                         } catch (JsonProcessingException e) {

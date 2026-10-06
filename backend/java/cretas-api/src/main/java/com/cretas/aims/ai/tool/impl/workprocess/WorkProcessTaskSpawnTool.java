@@ -43,7 +43,7 @@ public class WorkProcessTaskSpawnTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("productionBatchId", Map.of(
                 "type", "integer",
-                "description", "生产批次ID (Long)"));
+                "description", "生产批次编号"));
         properties.put("productTypeId", Map.of(
                 "type", "string",
                 "description", "产品类型ID (该批次绑定的产品)"));

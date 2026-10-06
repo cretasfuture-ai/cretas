@@ -43,7 +43,7 @@ public class WorkProcessTaskStartTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("taskId", Map.of(
                 "type", "integer",
-                "description", "工序任务ID (Long)"));
+                "description", "工序任务编号"));
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("taskId"));
         return schema;
