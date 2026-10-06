@@ -1,5 +1,6 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.dto.AIResponseDTO;
@@ -278,6 +279,86 @@ class AIAnalysisServicePythonClientTest {
                 "FACTORY-EMP", 99L, 5L, 30, null, null));
 
         assertEquals("员工AI分析失败", failure.getMessage());
+    }
+
+    // ==================== 数字出处闸 (入口 = analyzeCost / analyzeEmployee) ====================
+
+    @Test
+    void costAnalysisKeepsAnswerWhoseNumbersAllComeFromCostData() throws Exception {
+        FactoryNumberProvenance gate = installGate();
+        Map<String, Object> costData = new HashMap<>();
+        costData.put("totalCost", new java.math.BigDecimal("1234.5"));
+        costData.put("yieldRate", new java.math.BigDecimal("0.962"));
+        String answer = "本批次总成本 ¥1,234.50，良品率 96.2%。建议复核原料损耗。";
+        when(pythonClient.analyzeGeneral(anyString(), anyString(), any()))
+                .thenReturn(PythonGeneralAnalysisResponse.builder().success(true).answer(answer).build());
+
+        Map<String, Object> result = service.analyzeCost(
+                "FACTORY-COST", 42L, "batch-7", costData, null, "analyze this batch", false, 0);
+
+        assertEquals(answer, result.get("aiAnalysis"));
+        // 「必发生」: 闸确实对这一条判了一次 (而不是没跑到)
+        assertEquals(1L, gate.total("cost-analysis"));
+        assertEquals(1L, gate.count("cost-analysis", FactoryNumberProvenance.Decision.PASS));
+    }
+
+    @Test
+    void costAnalysisDropsSentenceWithInventedSavingsEstimate() throws Exception {
+        FactoryNumberProvenance gate = installGate();
+        Map<String, Object> costData = new HashMap<>();
+        costData.put("totalCost", new java.math.BigDecimal("1234.5"));
+        when(pythonClient.analyzeGeneral(anyString(), anyString(), any()))
+                .thenReturn(PythonGeneralAnalysisResponse.builder().success(true)
+                        .answer("本批次总成本 ¥1,234.50。\n优化后预计每月可节省 ¥8,600。\n建议复核原料损耗。")
+                        .build());
+
+        Map<String, Object> result = service.analyzeCost(
+                "FACTORY-COST", 42L, "batch-7", costData, null, "analyze this batch", false, 0);
+
+        String shown = (String) result.get("aiAnalysis");
+        assertFalse(shown.contains("8,600"), shown);
+        assertTrue(shown.contains("¥1,234.50"), shown);
+        assertTrue(shown.contains("建议复核原料损耗"), shown);
+        assertTrue(shown.contains("未能与本次查询返回的数据核对一致"), shown);
+        assertEquals(1L, gate.count("cost-analysis", FactoryNumberProvenance.Decision.REDACTED));
+    }
+
+    @Test
+    void costAnalysisAcceptsNumbersTheUserTypedIntoTheQuestion() throws Exception {
+        installGate();
+        when(pythonClient.analyzeGeneral(anyString(), anyString(), any()))
+                .thenReturn(PythonGeneralAnalysisResponse.builder().success(true)
+                        .answer("目标成本 ¥5,000 以内的批次需要单独核对。").build());
+
+        Map<String, Object> result = service.analyzeCost(
+                "FACTORY-COST", 42L, "batch-7", new HashMap<>(), null, "成本超过5000的批次有哪些", false, 0);
+
+        assertEquals("目标成本 ¥5,000 以内的批次需要单独核对。", result.get("aiAnalysis"));
+    }
+
+    @Test
+    void employeeInsightDropsInventedAttendanceRate() throws Exception {
+        FactoryNumberProvenance gate = installGate();
+        User employee = employee(5L, "FACTORY-EMP");
+        when(userRepository.findByIdAndFactoryId(5L, "FACTORY-EMP")).thenReturn(Optional.of(employee));
+        stubEmployeeFacts(employee, List.of(), 120, 2L, 3L, 5L, 180, 2L, 4L, 3L);
+        when(pythonClient.analyzeGeneral(anyString(), anyString(), any()))
+                .thenReturn(PythonGeneralAnalysisResponse.builder().success(true)
+                        .aiAnalysis("该员工参与 3 个批次，质检 4 次通过 3 次。\n出勤率约 96.5%，高于部门平均。\n建议关注质检复核。")
+                        .build());
+
+        AIResponseDTO.EmployeeAnalysisResponse result = service.analyzeEmployee(
+                "FACTORY-EMP", 99L, 5L, 30, null, null);
+
+        assertFalse(result.getAiInsight().contains("96.5"), result.getAiInsight());
+        assertTrue(result.getAiInsight().contains("参与 3 个批次"), result.getAiInsight());
+        assertEquals(1L, gate.total("employee-analysis"));
+    }
+
+    private FactoryNumberProvenance installGate() {
+        FactoryNumberProvenance gate = new FactoryNumberProvenance();
+        ReflectionTestUtils.setField(service, "numberProvenance", gate);
+        return gate;
     }
 
     @Test

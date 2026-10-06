@@ -1560,8 +1560,233 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             return sb.toString().trim();
         }
 
+        // 2026-10-06: 工具结果的两种常见形状 —— 信封 {message, data:{tasks:[…], total}} 和平铺
+        // {message, tasks:[…], total} —— 都带「行列表」, 但没有 content。此前一律掉进下面的
+        // formatDataSummary: 信封得到「包含 2 项数据指标」, 平铺得到「tasks: 16条」(英文键漏给用户),
+        // 16 个工序任务一条都没列出来 (prod 实测: 「今天我的工序任务」)。
+        String rowListText = formatRowList(data);
+        if (rowListText != null) {
+            return rowListText;
+        }
+
+        // 信封里没有行列表: 工具自己说的那句话比「包含 N 项数据指标」这种占位模板诚实。
+        Map<String, Object> envelopeInner = envelopeInner(data);
+        String toolMessage = envelopeMessage(data);
+        if (envelopeInner != null && toolMessage != null) {
+            return appendLabelledNumbers(new StringBuilder(toolMessage), envelopeInner).toString().trim();
+        }
+
         // Summarize available data keys to avoid generic "暂无数据"
         return formatDataSummary("查询完成", data);
+    }
+
+    // ==================== 行列表 (信封 / 平铺) ====================
+
+    /** 文本里最多列几行; 手机气泡里再多就是一面墙。 */
+    private static final int ROW_LIST_MAX_ROWS = 8;
+
+    /** 找行列表时优先认的键 (其余键里的 List<Map> 按行数取最大的)。 */
+    private static final List<String> ROW_LIST_KEYS = List.of(
+            "content", "items", "tasks", "records", "rows", "list", "batches", "results", "data");
+
+    /** 信封里允许出现的外层键: 只有这些键时才把 data 当作内层载荷拆开。 */
+    private static final java.util.Set<String> ENVELOPE_KEYS = java.util.Set.of(
+            "message", "data", "success", "status", "code");
+
+    /** 总数键 (按序取第一个数字)。 */
+    private static final List<String> TOTAL_KEYS = List.of("total", "totalElements", "totalCount", "count");
+
+    /** 行标题候选字段 (人认得的名字, 按序取第一个非空)。 */
+    private static final List<String> ROW_TITLE_KEYS = List.of(
+            "processName", "name", "title", "materialName", "productName", "productTypeName",
+            "customerName", "supplierName", "equipmentName", "deviceName", "workerName",
+            "employeeName", "fullName", "itemName", "batchNumber");
+
+    private static final java.util.regex.Pattern UUID_PATTERN = java.util.regex.Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
+
+    /**
+     * 信封: 外层只有 {message, data, success, status, code} 且 data 是 Map。
+     * 是信封返回内层载荷, 否则 null。
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> envelopeInner(Map<String, Object> data) {
+        if (data == null || !(data.get("data") instanceof Map)) {
+            return null;
+        }
+        for (String key : data.keySet()) {
+            if (key != null && !key.startsWith("_") && !ENVELOPE_KEYS.contains(key)) {
+                return null;
+            }
+        }
+        return (Map<String, Object>) data.get("data");
+    }
+
+    /** 信封上工具自己的那句话 (外层 message 优先, 其次内层 message); 没有返回 null。 */
+    private String envelopeMessage(Map<String, Object> data) {
+        Map<String, Object> inner = envelopeInner(data);
+        if (inner == null) {
+            return null;
+        }
+        String outer = getString(data, "message");
+        if (outer != null && !outer.isBlank()) {
+            return outer.trim();
+        }
+        String in = getString(inner, "message");
+        return in != null && !in.isBlank() ? in.trim() : null;
+    }
+
+    /**
+     * 把「行列表」渲染成可读文本: 工具那句话 + 前几行 + 「共 N 条」。
+     * 没有行列表 (或列表里不是 Map) 返回 null, 由调用方走原有路径。
+     *
+     * <p>只用结果里<b>已有</b>的字段, 不编。字段没有的行段直接省略, 不补「未知」。
+     */
+    private String formatRowList(Map<String, Object> data) {
+        Map<String, Object> payload = envelopeInner(data);
+        if (payload == null) {
+            payload = data;
+        }
+        List<Map<String, Object>> rows = findRowList(payload);
+        if (rows == null) {
+            return null;
+        }
+        String header = envelopeMessage(data);
+        if (header == null) {
+            String own = getString(data, "message");
+            header = own != null && !own.isBlank() ? own.trim() : "查询完成";
+        }
+        Integer declaredTotal = null;
+        for (String key : TOTAL_KEYS) {
+            declaredTotal = getInteger(payload, key);
+            if (declaredTotal != null) break;
+        }
+        int total = declaredTotal != null ? declaredTotal : rows.size();
+
+        StringBuilder sb = new StringBuilder(header);
+        int shown = 0;
+        for (Map<String, Object> row : rows) {
+            if (shown >= ROW_LIST_MAX_ROWS) break;
+            String line = describeRow(row);
+            if (line == null) continue;
+            sb.append("\n").append(++shown).append(". ").append(line);
+        }
+        sb.append("\n共 ").append(total).append(" 条");
+        if (shown > 0 && total > shown) {
+            sb.append("，以上是前 ").append(shown).append(" 条");
+        }
+        sb.append("。");
+        return appendLabelledNumbers(sb, payload).toString().trim();
+    }
+
+    /** 在 payload 里找「行列表」: 先按常用键, 再取行数最多的 List&lt;Map&gt;; 没有返回 null。 */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> findRowList(Map<String, Object> payload) {
+        if (payload == null) return null;
+        for (String key : ROW_LIST_KEYS) {
+            List<Map<String, Object>> candidate = rowListOrNull(payload.get(key));
+            if (candidate != null) return candidate;
+        }
+        List<Map<String, Object>> best = null;
+        for (Map.Entry<String, Object> e : payload.entrySet()) {
+            if (e.getKey() == null || e.getKey().startsWith("_")) continue;
+            List<Map<String, Object>> candidate = rowListOrNull(e.getValue());
+            if (candidate != null && (best == null || candidate.size() > best.size())) {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    /** 元素是 Map 的 List (空列表也算 —— 「共 0 条」是有意义的答案); 其它返回 null。 */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> rowListOrNull(Object value) {
+        if (!(value instanceof List<?> list)) return null;
+        for (Object element : list) {
+            if (!(element instanceof Map)) return null;
+        }
+        return (List<Map<String, Object>>) list;
+    }
+
+    /**
+     * 一行的人话: 「标题 · 产品 · 批次号 · 状态」。每段都来自行里已有的字段;
+     * 内部编号 (UUID)、枚举码一律不显示。一段都凑不出返回 null。
+     */
+    private String describeRow(Map<String, Object> row) {
+        List<String> parts = new java.util.ArrayList<>();
+        String title = null;
+        String titleKey = null;
+        for (String key : ROW_TITLE_KEYS) {
+            String v = displayableText(row.get(key));
+            if (v != null) {
+                title = v;
+                titleKey = key;
+                break;
+            }
+        }
+        if (title != null) parts.add(title);
+        String product = displayableText(row.get("productName"));
+        if (product == null) product = displayableText(row.get("productTypeName"));
+        if (product != null && !"productName".equals(titleKey) && !"productTypeName".equals(titleKey)) {
+            parts.add(product);
+        }
+        String batch = displayableText(row.get("batchNumber"));
+        if (batch != null && !"batchNumber".equals(titleKey)) parts.add(batch);
+        String status = rowStatusLabel(row);
+        if (status != null) parts.add(status);
+        return parts.isEmpty() ? null : String.join(" · ", parts);
+    }
+
+    /** 可以直接给人看的文本: 非空标量, 不是 UUID (批次号 / 产品名即便全大写也照常显示, 枚举码只在状态那一段拦)。 */
+    private String displayableText(Object value) {
+        if (value == null || value instanceof Map || value instanceof List) return null;
+        String text = value.toString().trim();
+        if (text.isEmpty() || UUID_PATTERN.matcher(text).matches()) {
+            return null;
+        }
+        return text;
+    }
+
+    /**
+     * 行状态的中文名。顺序: 行自带的中文展示字段 → 工序任务状态 (行里有 processName) →
+     * 通用状态表。翻不出中文就<b>不显示</b>, 绝不回退成英文码。
+     */
+    private String rowStatusLabel(Map<String, Object> row) {
+        for (String key : List.of("statusDisplayName", "statusDisplay", "statusLabel", "statusName")) {
+            String label = displayableText(row.get(key));
+            if (label != null) return label;
+        }
+        Object raw = row.get("status");
+        if (raw == null) return null;
+        String code = raw.toString().trim();
+        if (code.isEmpty()) return null;
+        if (row.get("processName") != null) {
+            String workProcess = com.cretas.aims.entity.workprocess.WorkProcessTask.Status.displayNameOf(code);
+            if (workProcess != null) return workProcess;
+        }
+        String translated = translateStatus(code);
+        if (translated.equals(code)) {
+            // 状态表没认出来: 本来就是中文就原样给, 否则是英文码 —— 不显示。
+            return code.codePoints().anyMatch(cp -> cp >= 0x4E00 && cp <= 0x9FFF) ? code : null;
+        }
+        return translated;
+    }
+
+    /** 只追加有中文名的数字指标 (humanizeKey 认识的键), 最多 5 条; 英文键不外泄。 */
+    private StringBuilder appendLabelledNumbers(StringBuilder sb, Map<String, Object> payload) {
+        int count = 0;
+        for (Map.Entry<String, Object> entry : payload.entrySet()) {
+            if (count >= 5) break;
+            String key = entry.getKey();
+            if (key == null || key.startsWith("_") || !(entry.getValue() instanceof Number)) continue;
+            String label = humanizeKey(key);
+            if (label.equals(key)) continue;
+            sb.append("\n- ").append(label).append(": ")
+              .append(QUANTITY_FORMATTER.format(((Number) entry.getValue()).doubleValue()));
+            count++;
+        }
+        return sb;
     }
 
     /**
@@ -1695,6 +1920,11 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         if (status == null) return "未知";
         return switch (status.toLowerCase()) {
             case "pending" -> "待处理";
+            case "in_progress" -> "进行中";
+            case "skipped" -> "已跳过";
+            case "planned", "planning" -> "计划中";
+            case "producing" -> "生产中";
+            case "paused" -> "已暂停";
             case "shipped" -> "已发货";
             case "delivered" -> "已送达";
             case "completed" -> "已完成";

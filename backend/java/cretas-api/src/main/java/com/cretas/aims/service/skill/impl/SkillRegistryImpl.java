@@ -536,11 +536,16 @@ public class SkillRegistryImpl implements SkillRegistry {
                         "- opportunity_funnel_stats: 商机漏斗 8 阶段统计 (活跃 + 加权预期值)\n" +
                         "- commission_pending_total: 待付提成总额 + 按销售员拆分\n" +
                         "- accounts_receivable_aging: 应收账龄 6 桶 (60+ 天高风险标记)\n\n" +
+                        // ⚠️ 这 8 个 Tool 只取本期一个期间, 没有任何一个返回上月数据;
+                        // 原来这里要求「vs 上月 ±Y%」/「利润率 Y%」, 等于要求模型编数。
+                        // 毛利率用 income_statement_query 已算好的 grossMarginPercent。
+                        "只能使用 Tool 输出里已有的数字; Tool 没有返回上月数据, 不要写环比 / 同比, " +
+                        "也不要自行计算利润率或占比.\n" +
                         "输出格式 (markdown):\n" +
                         "📊 期间状态: {OPEN/PENDING_CLOSE/CLOSED} {未结账警告(若适用)}\n" +
-                        "💰 营业收入: ¥X (vs 上月 ±Y%)\n" +
-                        "💸 营业成本: ¥X (vs 上月 ±Y%)\n" +
-                        "💵 净利润: ¥X (利润率 Y%)\n" +
+                        "💰 营业收入: ¥X\n" +
+                        "💸 营业成本: ¥X (成本未过账时写 '成本数据缺失', 不要写 0)\n" +
+                        "💵 净利润: ¥X (毛利率 取 grossMarginPercent; 缺失时写 '不可计算')\n" +
                         "💼 工资成本: ¥X (按件 ¥A + 按时 ¥B + 加班 ¥C)\n" +
                         "🎯 商机漏斗: 活跃 N 个 (¥X 预估 / ¥Y 加权)\n" +
                         "📑 三表已生成 [资产负债表] [利润表] [现金流量表] (点击跳转 /finance/three-statements)\n" +

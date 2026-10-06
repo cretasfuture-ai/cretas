@@ -79,7 +79,7 @@ public class WechatRecordRecentQueryTool extends AbstractBusinessTool {
 
         Map<String, Object> customerId = new HashMap<>();
         customerId.put("type", "string");
-        customerId.put("description", "可选 — 仅查指定客户 UUID");
+        customerId.put("description", "可选 — 仅查指定客户");
         properties.put("customerId", customerId);
 
         Map<String, Object> limit = new HashMap<>();

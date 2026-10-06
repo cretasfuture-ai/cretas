@@ -70,7 +70,7 @@ public class SampleToBomTool extends AbstractBusinessTool {
 
         Map<String, Object> sampleId = new HashMap<>();
         sampleId.put("type", "string");
-        sampleId.put("description", "ProductSample.id (UUID). 必填.");
+        sampleId.put("description", "产品样品编号. 必填.");
         properties.put("sampleId", sampleId);
 
         Map<String, Object> referenceSku = new HashMap<>();

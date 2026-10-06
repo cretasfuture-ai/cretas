@@ -314,7 +314,7 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
             String upper = lineStr.trim().toUpperCase();
             if (!VALID_LINES.contains(upper)) {
                 vc.errorResult = buildErr(
-                        "productionLine 必须为: DEDICATED_LINE_A / DEDICATED_LINE_B / SHARED_LINE / OTHER",
+                        "生产线必须是以下之一: 专用线 A / 专用线 B / 共用线 / 其他",
                         "INVALID_PARAM");
                 return vc;
             }

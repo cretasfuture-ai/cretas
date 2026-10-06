@@ -51,7 +51,7 @@ public class ScheduledTaskRunNowTool extends AbstractBusinessTool {
 
         Map<String, Object> taskId = new HashMap<>();
         taskId.put("type", "string");
-        taskId.put("description", "任务 UUID");
+        taskId.put("description", "任务编号");
         properties.put("taskId", taskId);
 
         schema.put("properties", properties);

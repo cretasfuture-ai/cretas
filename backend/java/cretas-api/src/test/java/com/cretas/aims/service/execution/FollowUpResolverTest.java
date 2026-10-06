@@ -64,6 +64,40 @@ class FollowUpResolverTest {
         assertThat(f.get().params()).containsEntry("taskId", 12L).containsEntry("actualQuantity", expected);
     }
 
+    /**
+     * prod e2e 2026-10-06 第 6 条: 「开始1827」之后说「做完了，产量0」—— 产量 0 是合法值 (一线产量可填 0),
+     * 以前 0 被当成「数字不合规」, 整句不命中, 掉回正常识别去缺参追问。只报产量 (「做了95.5公斤」) 也算完工。
+     */
+    @ParameterizedTest
+    @CsvSource({"'做完了，产量0',0", "产量0,0", "做完了，产量是零,0", "做了95.5公斤,95.5", "'完成了，做了95.5公斤',95.5",
+            "'做了95.5公斤，完成了',95.5", "一共做了60箱,60", "好了产量0.0,0"})
+    void doneWithAZeroOrQuantityOnlyReportCarriesTheQuantity(String input, String expected) {
+        Optional<FollowUpResolver.FollowUp> f = resolve(input, last("WORK_PROCESS_TASK_START", Map.of("taskId", 1827)));
+
+        assertThat(f).as(input).isPresent();
+        assertThat(f.get().ruleId()).isEqualTo(FollowUpResolver.RULE_WP_DONE);
+        assertThat(f.get().intentCode()).isEqualTo("WORK_PROCESS_TASK_COMPLETE");
+        assertThat(f.get().params()).containsEntry("taskId", 1827L);
+        assertThat(new BigDecimal(String.valueOf(f.get().params().get("actualQuantity"))))
+                .isEqualByComparingTo(expected);
+        assertThat(f.get().summary()).contains("任务 1827").contains("数量 " + f.get().params().get("actualQuantity"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"60", "1827", "产量多少", "做了吗", "做了-5公斤"})
+    void aBareNumberOrAQuestionAfterStartIsNotACompletion(String input) {
+        // 对照: 只报产量必须带引导词; 光一个数 / 问句不算完工
+        assertThat(resolve(input, last("WORK_PROCESS_TASK_START", Map.of("taskId", 1827)))).as(input).isEmpty();
+    }
+
+    @Test
+    void zeroIsStillRejectedForQuantityChanges() {
+        // 对照: 「产量可为 0」只放在完工这一条; 「改成0」仍然不出按钮
+        Map<String, Object> params = Map.of("batchId", "MB-7", "quantity", 20, "unit", "kg");
+        assertThat(resolve("改成0公斤", last("MATERIAL_BATCH_USE", params))).isEmpty();
+        assertThat(resolve("做了95.5公斤", last("WORK_PROCESS_TASK_COMPLETE", Map.of("taskId", 1827)))).isEmpty();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"好了", "做完了", "包装完了"})
     void doneDoesNotFireWithoutAStartedTask(String input) {

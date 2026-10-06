@@ -84,13 +84,13 @@ public class SupplierDeliveryEtaTool extends AbstractBusinessTool {
         Map<String, Object> materialTypeId = new HashMap<>();
         materialTypeId.put("type", "string");
         materialTypeId.put("description",
-                "可选 — 指定 materialTypeId 仅返该物料对应供应商. 不填则按 supplierId 维度返.");
+                "可选 — 指定物料类型, 仅返回该物料对应的供应商. 不填则按供应商维度返回.");
         properties.put("materialTypeId", materialTypeId);
 
         Map<String, Object> supplierId = new HashMap<>();
         supplierId.put("type", "string");
         supplierId.put("description",
-                "可选 — 指定 supplierId 仅返该供应商. 不填则返工厂全部供应商 (Top 20).");
+                "可选 — 指定供应商, 仅返回该供应商. 不填则返回工厂全部供应商 (前 20 家).");
         properties.put("supplierId", supplierId);
 
         schema.put("properties", properties);

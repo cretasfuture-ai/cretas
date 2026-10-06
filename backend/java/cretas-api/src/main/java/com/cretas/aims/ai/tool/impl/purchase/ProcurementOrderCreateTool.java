@@ -115,7 +115,7 @@ public class ProcurementOrderCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> supplierId = new HashMap<>();
         supplierId.put("type", "string");
-        supplierId.put("description", "供应商 ID (必填, 选自 recommendedSuppliers ranked top 3)");
+        supplierId.put("description", "供应商 (必填, 从推荐的前 3 家里选)");
         properties.put("supplierId", supplierId);
 
         Map<String, Object> quantity = new HashMap<>();

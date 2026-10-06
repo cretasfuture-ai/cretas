@@ -1,6 +1,7 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -308,11 +309,99 @@ class WorkdeskOutputSummarizerTest {
         response.setResultData(Map.of("customer_priority_query", Map.of("count", 16)));
         response.setIntentName("今日客户跟进");
 
-        when(mockLlm.chatFast(anyString(), anyString())).thenReturn("今日有 50 个客户需要跟进.");
+        // 摘要里的 16 出自 resultData。原来这里是「50 个客户」—— 50 只在脏的 message 原文里
+        // (limit / 50 条明细), 不在喂给模型的 resultData 里; 数字出处闸会 (也应该) 把它换掉,
+        // 那个场景见 apply_llmInventsNumber_replacedByDeterministicFallback。这条测守的是
+        // 「raw JSON 的 message 被替换」, 不是「模型写什么数都照登」。
+        when(mockLlm.chatFast(anyString(), anyString())).thenReturn("今日有 16 个客户需要跟进.");
 
         summarizer.apply(response);
 
         // message dirty (raw JSON) → replaced
-        assertThat(response.getMessage()).isEqualTo("今日有 50 个客户需要跟进.");
+        assertThat(response.getMessage()).isEqualTo("今日有 16 个客户需要跟进.");
+    }
+
+    // ==================== 数字出处闸 (入口 = apply) ====================
+
+    private FactoryNumberProvenance installGate() {
+        FactoryNumberProvenance gate = new FactoryNumberProvenance();
+        ReflectionTestUtils.setField(summarizer, "numberProvenance", gate);
+        return gate;
+    }
+
+    private IntentExecuteResponse dirtyWorkdeskResponse() {
+        IntentExecuteResponse response = new IntentExecuteResponse();
+        String bare = "查询完成\n包含 5 项数据指标 — 详情请查看下方数据卡片或对应报表模块。";
+        response.setFormattedText(bare);
+        response.setMessage(bare);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("customer_priority_query", Map.of("count", 16, "message", "共 16 个客户已按优先级排序"));
+        data.put("customer_revenue_trend", Map.of("total", new java.math.BigDecimal("611355.40")));
+        data.put("_toolCount", 5);
+        response.setResultData(data);
+        response.setIntentName("今日客户跟进");
+        return response;
+    }
+
+    @Test
+    void apply_llmOnlyToolNumbers_passesUnchanged() {
+        FactoryNumberProvenance gate = installGate();
+        IntentExecuteResponse response = dirtyWorkdeskResponse();
+        String llmSummary = "今日有 16 个客户需要跟进, 近 30 天客户收入合计约 61.14 万元.";
+        when(mockLlm.chatFast(anyString(), anyString())).thenReturn(llmSummary);
+
+        summarizer.apply(response);
+
+        assertThat(response.getFormattedText()).isEqualTo(llmSummary);
+        assertThat(response.getMessage()).isEqualTo(llmSummary);
+        // 「必发生」: 闸对这次摘要判了恰好一次 —— 上面的「原样」不是因为闸没跑
+        assertThat(gate.total(WorkdeskOutputSummarizer.PROVENANCE_SITE)).isEqualTo(1);
+        assertThat(gate.count(WorkdeskOutputSummarizer.PROVENANCE_SITE,
+                FactoryNumberProvenance.Decision.PASS)).isEqualTo(1);
+    }
+
+    @Test
+    void apply_llmInventsNumber_replacedByDeterministicFallback() {
+        FactoryNumberProvenance gate = installGate();
+        IntentExecuteResponse response = dirtyWorkdeskResponse();
+        // 生产上真出现过的那个数 (见上面 isDirty_cleanChineseSummary 的样本)
+        when(mockLlm.chatFast(anyString(), anyString()))
+                .thenReturn("今日有 16 个客户需要跟进, 销售额比上月增长 43568.21%.");
+
+        summarizer.apply(response);
+
+        assertThat(response.getFormattedText())
+                .doesNotContain("43568")
+                .contains(WorkdeskOutputSummarizer.PROVENANCE_FALLBACK_HEADER.trim())
+                .contains("16 项");
+        assertThat(response.getMessage()).isEqualTo(response.getFormattedText());
+        assertThat(summarizer.isDirty(response.getFormattedText())).isFalse();
+        assertThat(gate.count(WorkdeskOutputSummarizer.PROVENANCE_SITE,
+                FactoryNumberProvenance.Decision.FALLBACK_TEMPLATE)).isEqualTo(1);
+    }
+
+    @Test
+    void apply_llmCountsByStatusItself_replaced() {
+        // 校准实测里最常见的一类: 模型自己按状态去数「有几个」, 而且多数数错了
+        installGate();
+        IntentExecuteResponse response = dirtyWorkdeskResponse();
+        when(mockLlm.chatFast(anyString(), anyString()))
+                .thenReturn("今日有 16 个客户需要跟进, 其中 VIP 客户 5 个.");
+
+        summarizer.apply(response);
+
+        assertThat(response.getFormattedText()).doesNotContain("VIP 客户 5 个");
+    }
+
+    @Test
+    void apply_datesAndWindowsInSummary_areNotTreatedAsNumbers() {
+        installGate();
+        IntentExecuteResponse response = dirtyWorkdeskResponse();
+        String llmSummary = "截至 2026-10-03, 近 7 天共 16 个客户需要跟进, 排序依据:\n1. 优先级\n2. 金额";
+        when(mockLlm.chatFast(anyString(), anyString())).thenReturn(llmSummary);
+
+        summarizer.apply(response);
+
+        assertThat(response.getFormattedText()).isEqualTo(llmSummary);
     }
 }

@@ -69,7 +69,7 @@ public class CustomerRevenueTrendTool extends AbstractBusinessTool {
 
         Map<String, Object> customerId = new HashMap<>();
         customerId.put("type", "string");
-        customerId.put("description", "可选 — 仅查单客户 UUID. 留空 = 全 factory 汇总");
+        customerId.put("description", "可选 — 只看某一个客户时填客户编号. 留空 = 全厂汇总");
         properties.put("customerId", customerId);
 
         Map<String, Object> periodMonths = new HashMap<>();

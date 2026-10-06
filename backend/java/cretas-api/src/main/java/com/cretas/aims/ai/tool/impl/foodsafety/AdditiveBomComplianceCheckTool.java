@@ -108,13 +108,13 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
         Map<String, Object> productTypeId = new HashMap<>();
         productTypeId.put("type", "string");
         productTypeId.put("description",
-                "产品类型 ID (productTypeId), 二选一 (优先于 bomRecipeId). e.g. 'P-叮咚卤猪蹄'");
+                "产品类型, 二选一 (优先于配方编号). e.g. 'P-叮咚卤猪蹄'");
         properties.put("productTypeId", productTypeId);
 
         Map<String, Object> bomRecipeId = new HashMap<>();
         bomRecipeId.put("type", "string");
         bomRecipeId.put("description",
-                "BOM Recipe ID (UUID), 二选一. e.g. 'a1b2c3d4-...'");
+                "BOM 配方编号, 二选一");
         properties.put("bomRecipeId", bomRecipeId);
 
         Map<String, Object> foodCategory = new HashMap<>();

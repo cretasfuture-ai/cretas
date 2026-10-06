@@ -39,6 +39,13 @@ public class SkillContext {
     private String userId;
 
     /**
+     * 用户角色 (服务端认证得到的, 不来自请求体/LLM)。
+     * Skill 编排里每个工具都按它过与直接执行同一条权限链 ({@code ToolPermissionChain}):
+     * 一线角色写操作门、旧式角色串判定都要它。缺了它, 那两道门对 Skill 路径等于不存在。
+     */
+    private String userRole;
+
+    /**
      * 会话ID
      * 用于多轮对话追踪和上下文延续
      */

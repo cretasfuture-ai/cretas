@@ -138,6 +138,13 @@ public class SseStreamingService {
     /** 追问解读规则表 (纯函数, 无依赖)。 */
     private final FollowUpResolver followUpResolver = new FollowUpResolver();
 
+    /**
+     * 参数收集会话 (缺参追问) 的读写。缺席时 (裸构造的单测) 不做缺参续轮, 行为同旧版。
+     * 会话由 7b 的 SlotFillingService 建, 这里只负责「下一句是不是在回答它」。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.ConversationService conversationService;
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -274,6 +281,8 @@ public class SseStreamingService {
                         "confidence", 1.0d,
                         "matchMethod", "EXPLICIT"));
                 recordClarificationSelection(factoryId, userId, userRole, request, intent);
+                // 点了按钮 = 用户自己选了要做什么; 之前没答完的缺参追问作废, 免得下一个数字被它截走
+                closeOpenSlotSession(factoryId, userId, request, "explicit-intent");
                 executeAndStreamResult(
                         emitter, factoryId, request, intent, userId, userRole, startTime,
                         IntentMatchResult.builder()
@@ -336,6 +345,12 @@ public class SseStreamingService {
             // 2026-10-04 追问解读: 「好了 / 下一个 / 再加十公斤 / 批了吧」+ App 带回的 lastAction
             // → 确认按钮 (不执行)。在早期问题类型检测之前 —— 否则「好了」会被当闲聊流式回复;
             // 显式意图码 (点了按钮回来) 已在上面处理, 不会再进这里。能力包受限路由与餐饮租户不走。
+            // 2026-10-06 缺参续轮在它前面: 上一轮刚问了「请提供工序任务ID」, 「1827」是在回答那个问题。
+            if (!factoryPackConstrained && !restaurantTenant
+                    && streamSlotContinuation(emitter, factoryId, request, userId, userRole, startTime,
+                            factoryPackRoute)) {
+                return;
+            }
             if (!factoryPackConstrained && !restaurantTenant
                     && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
                 return;
@@ -536,11 +551,17 @@ public class SseStreamingService {
                 return;
             }
 
-            // 7a. Skill 路由
-            if (dynamicToolSelectionService.isSkillsEnabled()) {
+            // 7a. Skill 路由 —— 与 /execute (IntentExecutionOrchestrator 3.5) 同一前提:
+            // 只给「没绑工具」的意图 (WORKDESK 类, Skill 就是它的执行器), 且意图权限先过。
+            // 2026-10-06 生产: 这里曾对所有意图都先跑关键词 Skill, 操作员说「上班打卡」(已识别为
+            // CLOCK_IN) 被 0.30 分的人员排班 Skill 抢走, 跑了管理员级考勤统计, 卡没打上。
+            String streamBoundToolName = intent.getToolName();
+            boolean intentHasNoTool = streamBoundToolName == null || streamBoundToolName.isBlank();
+            if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool
+                    && permissionDeniedMessage(intent, userId, userRole) == null) {
                 try {
                     IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
-                            request.getUserInput(), factoryId, userId);
+                            request.getUserInput(), factoryId, userId, userRole);
                     if (skillResponse != null) {
                         sendSseEvent(emitter, "result", skillResponse);
                         sendSseEvent(emitter, "complete", Map.of(
@@ -554,25 +575,33 @@ public class SseStreamingService {
 
                     // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL intent (WORKDESK 等)
                     // 当 trySkillRoute (keyword 匹用户原文) 失败时, 用 intent_code 显式查 Skill.
-                    String streamBoundToolName = intent.getToolName();
-                    if (streamBoundToolName == null || streamBoundToolName.isBlank()) {
-                        IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
-                                .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
-                        if (explicitSkillResp != null) {
-                            sendSseEvent(emitter, "result", explicitSkillResp);
-                            sendSseEvent(emitter, "complete", Map.of(
-                                    "status", explicitSkillResp.getStatus(),
-                                    "cacheHit", false,
-                                    "totalLatencyMs", System.currentTimeMillis() - startTime
-                            ));
-                            emitter.complete();
-                            return;
-                        }
+                    IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
+                            .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
+                    if (explicitSkillResp != null) {
+                        sendSseEvent(emitter, "result", explicitSkillResp);
+                        sendSseEvent(emitter, "complete", Map.of(
+                                "status", explicitSkillResp.getStatus(),
+                                "cacheHit", false,
+                                "totalLatencyMs", System.currentTimeMillis() - startTime
+                        ));
+                        emitter.complete();
+                        return;
                     }
                 } catch (Exception e) {
                     log.warn("[SSE] Skill 路由异常，回退到 Tool: {}", e.getMessage());
                 }
             }
+
+            // 7a.5 写意图先抽参 —— 与显式意图路径 (/preview、按钮点选) 同一个方法, 结果留在 context:
+            //      Slot Filling 只追问真正没抽到的; 被 W0 拦下时随确认卡带去预览 (见 attachPreviewParams)。
+            //      ⛔ 先过意图权限再抽: 没权限的请求不许碰执行层 (SseSemanticCacheAdmissionContractTest 守的就是这条),
+            //      也不该为一个注定被拒的请求花一次 LLM 抽参、再追问参数。权限只算这一次, 结果带进 7c (不重算)。
+            String admissionDenied = permissionDeniedMessage(intent, userId, userRole);
+            if (admissionDenied != null) {
+                streamNoPermission(emitter, intent, admissionDenied, startTime);
+                return;
+            }
+            prefillWriteToolParameters(request, intent);
 
             // 7b. Slot Filling
             if (userId != null && !Boolean.TRUE.equals(request.getSkipSlotFilling())
@@ -601,10 +630,10 @@ public class SseStreamingService {
                 }
             }
 
-            // 7c. 执行意图 (Tool)
+            // 7c. 执行意图 (Tool) —— 权限已在 7a.5 判过
             executeAndStreamResult(
                     emitter, factoryId, request, intent, userId, userRole, startTime,
-                    matchResult, factoryPackRoute);
+                    matchResult, factoryPackRoute, true);
 
         } catch (Exception e) {
             log.error("SSE 执行失败: factoryId={}, error={}", factoryId, e.getMessage(), e);
@@ -993,24 +1022,27 @@ public class SseStreamingService {
                                          IntentMatchResult matchResult,
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
-        String deniedMessage = permissionDeniedMessage(intent, userId, userRole);
-        if (deniedMessage != null) {
-            IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("NO_PERMISSION")
-                    .message(deniedMessage)
-                    .formattedText(deniedMessage)
-                    .executedAt(LocalDateTime.now())
-                    .build();
-            sendSseEvent(emitter, "result", noPermissionResponse);
-            sendSseEvent(emitter, "complete", Map.of(
-                    "status", "NO_PERMISSION",
-                    "totalLatencyMs", System.currentTimeMillis() - startTime
-            ));
-            emitter.complete();
-            return;
+        executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
+                matchResult, factoryPackRoute, false);
+    }
+
+    /**
+     * @param permissionAlreadyChecked 调用方刚用 {@link #permissionDeniedMessage} 判过且放行 —— 不重算
+     *        (每个请求只算一次意图权限; 其它入口一律传 false)。
+     */
+    private void executeAndStreamResult(SseEmitter emitter, String factoryId,
+                                         IntentExecuteRequest request, AIIntentConfig intent,
+                                         Long userId, String userRole, long startTime,
+                                         IntentMatchResult matchResult,
+                                         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
+                                         boolean permissionAlreadyChecked)
+            throws IOException {
+        if (!permissionAlreadyChecked) {
+            String deniedMessage = permissionDeniedMessage(intent, userId, userRole);
+            if (deniedMessage != null) {
+                streamNoPermission(emitter, intent, deniedMessage, startTime);
+                return;
+            }
         }
 
         IntentExecuteResponse factoryPackResponse =
@@ -1071,6 +1103,7 @@ public class SseStreamingService {
             if (toolOpt.isPresent()) {
                 log.info("[SSE] 使用 Tool 执行: intentCode={}, toolName={}", intent.getIntentCode(), toolName);
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, matchResult);
+                attachPreviewParams(response, request, toolOpt.get());
             } else {
                 log.warn("[SSE] Tool 未找到: toolName={}", toolName);
                 response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
@@ -1079,7 +1112,7 @@ public class SseStreamingService {
             // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
             // 7a Skill route 已尝试但仍 fall through 到 executeAndStreamResult 的 corner case).
             IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillFallback != null) {
                 log.info("[SSE] 显式 Skill 路由 (executeAndStreamResult fallback) 成功: intentCode={}",
                         intent.getIntentCode());
@@ -1139,6 +1172,25 @@ public class SseStreamingService {
      * 没声明 → 保留 requiredRoles 旧判定。返回 null 表示放行, 否则是给用户看的拒绝原因。
      * 执行前 ({@link #executeAndStreamResult}) 与追问确认按钮出按钮前共用这一份。
      */
+    private void streamNoPermission(SseEmitter emitter, AIIntentConfig intent, String deniedMessage,
+                                    long startTime) throws IOException {
+        IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .status("NO_PERMISSION")
+                .message(deniedMessage)
+                .formattedText(deniedMessage)
+                .executedAt(LocalDateTime.now())
+                .build();
+        sendSseEvent(emitter, "result", noPermissionResponse);
+        sendSseEvent(emitter, "complete", Map.of(
+                "status", "NO_PERMISSION",
+                "totalLatencyMs", System.currentTimeMillis() - startTime
+        ));
+        emitter.complete();
+    }
+
     private String permissionDeniedMessage(AIIntentConfig intent, Long userId, String userRole) {
         String requiredPermission = intent.getRequiredPermission();
         if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
@@ -1220,6 +1272,233 @@ public class SseStreamingService {
                 .executedAt(LocalDateTime.now())
                 .build(), startTime);
         return true;
+    }
+
+    /**
+     * 缺参续轮 (2026-10-06)。上一轮 Slot Filling 问了「请提供工序任务ID」并建了参数收集会话,
+     * 结果里的 {@code sessionId} 就是那个会话 —— App 把它当会话 id 原样带回来。这一句「1827」要接着
+     * 填进那个槽、继续<b>同一个意图</b>, 而不是当一句新话重新识别 (prod 实测: 会话建了, 从没被读过,
+     * 「1827」出了澄清按钮「开始工序 / 查询温度记录」)。
+     *
+     * <h3>规则 —— 什么时候算「在回答那个问题」</h3>
+     * <ol>
+     *   <li>请求带的 sessionId 指向一个参数收集会话, 按 工厂 + 本人 查得到 (别人的 / 别厂的查不到);</li>
+     *   <li>会话仍 ACTIVE 且没超时 (cretas.ai.conversation.timeout-minutes, 默认 10 分钟);</li>
+     *   <li>这句话「像一个值」({@link SlotAnswerRule}): 数字型槽位 = 去掉数字和包装词后什么都不剩。</li>
+     * </ol>
+     * 1、2 不满足 → 当没有会话, 正常识别。3 不满足 → 用户换话题了: 关掉这个会话再正常识别 ——
+     * 否则十分钟内随便一个数字都会被这个旧问题截走。显式意图码 (点了按钮) 不进这里, 见
+     * {@link #closeOpenSlotSession}。
+     *
+     * <p>补齐之后用「会话里已收集的全部参数」(含首句抽到的, 见 SlotFillingServiceImpl) 走显式意图执行:
+     * 权限 / 审批 / 业态门 / W0 写确认全部照常, 写操作照样只出确认卡。
+     *
+     * @return true 表示已经流出响应, 调用方必须就地 return
+     */
+    private boolean streamSlotContinuation(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                           Long userId, String userRole, long startTime,
+                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
+            throws IOException {
+        Optional<com.cretas.aims.entity.conversation.ConversationSession> open =
+                openSlotSession(factoryId, userId, request);
+        if (open.isEmpty()) {
+            return false;
+        }
+        com.cretas.aims.entity.conversation.ConversationSession session = open.get();
+        String slotSessionId = session.getSessionId();
+        List<com.cretas.aims.entity.conversation.ConversationSession.RequiredParameter> pending =
+                session.getRequiredParameters().stream().filter(p -> !p.isCollected()).toList();
+        if (!SlotAnswerRule.looksLikeAnswer(request.getUserInput(), pending,
+                text -> knowledgeBase.matchPhrase(text).isPresent())) {
+            log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 关闭会话后正常识别: session={}, pending={}",
+                    slotSessionId, pending.stream().map(p -> p.getName()).toList());
+            conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            return false;
+        }
+        Optional<AIIntentConfig> target = session.getKnownIntentCode() == null
+                ? Optional.empty()
+                : aiIntentService.getIntentByCode(factoryId, session.getKnownIntentCode());
+        if (target.isEmpty()) {
+            log.info("[SSE][SlotContinuation] 会话的意图已不在用, 关闭会话: session={}, intent={}",
+                    slotSessionId, session.getKnownIntentCode());
+            conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            return false;
+        }
+        AIIntentConfig intent = target.get();
+
+        com.cretas.aims.service.ConversationService.ConversationResponse reply =
+                conversationService.continueConversation(factoryId, userId, slotSessionId, request.getUserInput());
+        if (reply == null || reply.getStatus() == null
+                || reply.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.CANCELLED
+                || reply.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.TIMEOUT) {
+            return false;
+        }
+
+        if (reply.isCompleted()) {
+            Map<String, Object> context = new HashMap<>();
+            if (request.getContext() != null) {
+                context.putAll(request.getContext());
+            }
+            // 会话里记的是服务端自己收集的值, 盖过同名的客户端字段
+            conversationService.getSession(factoryId, userId, slotSessionId)
+                    .map(com.cretas.aims.entity.conversation.ConversationSession::getCollectedParameters)
+                    .ifPresent(context::putAll);
+            request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+            request.setIntentCode(intent.getIntentCode());
+            log.info("[SSE][SlotContinuation] 缺参已补齐, 继续原意图: session={}, intent={}, params={}",
+                    slotSessionId, intent.getIntentCode(), context.keySet());
+            Map<String, Object> recognized = new LinkedHashMap<>();
+            recognized.put("intentCode", intent.getIntentCode());
+            recognized.put("intentName", intent.getIntentName());
+            recognized.put("intentCategory", intent.getIntentCategory());
+            recognized.put("confidence", 1.0d);
+            recognized.put("matchMethod", "SLOT_CONTINUATION");
+            sendSseEvent(emitter, "intent_recognized", recognized);
+            executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
+                    IntentMatchResult.builder()
+                            .bestMatch(intent)
+                            .confidence(1.0d)
+                            .matchMethod(IntentMatchResult.MatchMethod.EXACT)
+                            .requiresConfirmation(false)
+                            .questionType(QuestionType.OPERATIONAL_COMMAND)
+                            .build(),
+                    factoryPackRoute);
+            return true;
+        }
+
+        // 还缺别的 / 轮次用尽: 把会话的下一问 (或结束语) 原样流出, 会话 id 不变
+        String message = reply.getMessage() == null ? "" : reply.getMessage().replace("**", "").strip();
+        boolean stillCollecting = reply.getStatus()
+                == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.ACTIVE;
+        streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .status(stillCollecting ? "NEED_MORE_INFO" : reply.getStatus().name())
+                .message(message)
+                .formattedText(message)
+                .sessionId(slotSessionId)
+                .executedAt(LocalDateTime.now())
+                .build(), startTime);
+        return true;
+    }
+
+    /** 请求点名的、本人本厂的、仍在收集参数且没超时的会话。查询失败一律当没有。 */
+    private Optional<com.cretas.aims.entity.conversation.ConversationSession> openSlotSession(
+            String factoryId, Long userId, IntentExecuteRequest request) {
+        if (conversationService == null || userId == null || request == null
+                || request.getSessionId() == null || request.getSessionId().isBlank()
+                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return conversationService.getSession(factoryId, userId, request.getSessionId())
+                    .filter(com.cretas.aims.entity.conversation.ConversationSession::isParameterCollectionMode)
+                    .filter(s -> s.getStatus()
+                            == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.ACTIVE)
+                    .filter(s -> !s.isExpired());
+        } catch (Exception e) {
+            log.warn("[SSE][SlotContinuation] 查参数收集会话失败, 按没有会话处理: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /** 用户点了按钮 (显式意图码): 之前没答完的缺参追问作废。 */
+    private void closeOpenSlotSession(String factoryId, Long userId, IntentExecuteRequest request, String reason) {
+        Optional<com.cretas.aims.entity.conversation.ConversationSession> open =
+                openSlotSession(factoryId, userId, request);
+        if (open.isPresent()) {
+            log.info("[SSE][SlotContinuation] 关闭未答完的缺参追问: session={}, reason={}",
+                    open.get().getSessionId(), reason);
+            conversationService.cancelConversation(factoryId, userId, open.get().getSessionId());
+        }
+    }
+
+    /**
+     * 写意图在流式入口先抽参 (2026-10-06)。调用的是显式意图路径用的<b>同一个方法</b>
+     * ({@link ToolDispatchService#extractParametersWithLLM}) —— 抽什么、接受什么由那里定, 这里不复制。
+     *
+     * <p>为什么只对写: 写意图在 executeWithTool 里先被 W0 拦下, 走不到它自己的抽参步骤;
+     * 以前这一步要等 App 再调 /preview 时重新抽一遍, prod 2026-10-06 那一次 (/api/llm/tool-call 500)
+     * 失败了, 于是「开始1827号工序任务」被反问任务号, 而流式这边其实已经抽到了 1827。
+     * 读意图不提前: executeWithTool 会先用学习规则、再用同一个方法补缺, 提前跑会绕过学习规则。
+     * 抽到的只补 context 里没有的键。
+     */
+    private void prefillWriteToolParameters(IntentExecuteRequest request, AIIntentConfig intent) {
+        String toolName = intent.getToolName();
+        if (toolName == null || toolName.isBlank()
+                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+            return;
+        }
+        Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+        if (tool.isEmpty() || writeGuardService == null
+                || !(writeGuardService.isWriteTool(tool.get()) || writeGuardService.isWriteIntent(intent))) {
+            return;
+        }
+        Map<String, Object> context = new HashMap<>();
+        if (request.getContext() != null) {
+            context.putAll(request.getContext());
+        }
+        Map<String, Object> extracted;
+        try {
+            extracted = toolDispatchService.extractParametersWithLLM(request.getUserInput(), tool.get(), context);
+        } catch (Exception e) {
+            log.warn("[SSE] 写意图抽参失败, 交给 Slot Filling: intentCode={}, error={}",
+                    intent.getIntentCode(), e.getMessage());
+            return;
+        }
+        if (extracted == null || extracted.isEmpty()) {
+            return;
+        }
+        extracted.forEach(context::putIfAbsent);
+        request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+        log.info("[SSE] 写意图抽参: intentCode={}, keys={}", intent.getIntentCode(), extracted.keySet());
+    }
+
+    /** 主体键与确认类键不随确认卡带去预览 (预览端会按 JWT 重新绑定, 这里也不给它们出门的机会)。 */
+    private static final Set<String> PREVIEW_PARAM_EXCLUDED = Set.of(
+            "factoryId", "factory_id", "tenantId", "tenant_id", "userId", "user_id",
+            "actorUserId", "actor_user_id", "userRole", "user_role", "role",
+            "userInput", "intentCode", "confirmed", "forceExecute", "force_execute");
+    private static final int MAX_PREVIEW_PARAM_CHARS = 200;
+
+    /**
+     * 写操作被 W0 拦下 (WRITE_CONFIRM_REQUIRED) 时, 把这一轮已经定下来的工具参数写进
+     * {@code metadata.previewParams}。App 请求 /preview 时原样放进 context —— 预览不用再从原话
+     * 重新抽一遍 (那一遍可能失败, 也可能抽得和这里不一样), 追问确认按钮带来的 taskId 也到得了预览。
+     *
+     * <p>只带工具 schema 里声明的参数、只带标量。这些值本来就来自这个用户自己的话 / 他点的按钮,
+     * /preview 也本来就接受 context; 带回去不给任何新权限 —— 预览端照样重绑主体、照样出确认卡。
+     */
+    void attachPreviewParams(IntentExecuteResponse response, IntentExecuteRequest request, ToolExecutor tool) {
+        if (response == null || !"WRITE_CONFIRM_REQUIRED".equals(response.getStatus())
+                || request == null || request.getContext() == null || tool == null) {
+            return;
+        }
+        Map<String, Object> schema = tool.getParametersSchema();
+        if (schema == null || !(schema.get("properties") instanceof Map<?, ?> properties) || properties.isEmpty()) {
+            return;
+        }
+        Map<String, Object> previewParams = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : request.getContext().entrySet()) {
+            String key = e.getKey();
+            Object value = e.getValue();
+            if (key == null || !properties.containsKey(key) || PREVIEW_PARAM_EXCLUDED.contains(key)) {
+                continue;
+            }
+            if (value instanceof Number || value instanceof Boolean
+                    || (value instanceof String s && !s.isBlank() && s.length() <= MAX_PREVIEW_PARAM_CHARS)) {
+                previewParams.put(key, value);
+            }
+        }
+        if (previewParams.isEmpty()) {
+            return;
+        }
+        Map<String, Object> metadata = response.getMetadata() != null
+                ? new LinkedHashMap<>(response.getMetadata()) : new LinkedHashMap<>();
+        metadata.put("previewParams", previewParams);
+        response.setMetadata(metadata);
     }
 
     private void persistSuccessfulReadPagination(String factoryId, Long userId,

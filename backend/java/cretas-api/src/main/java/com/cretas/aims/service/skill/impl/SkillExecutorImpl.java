@@ -62,9 +62,11 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
-    // W9 红线 (AI-RBAC 系统性收口) — SITE D: central RBAC enforce alongside the W0 write-guard.
+    // W9 红线 + 2026-10-06 — SITE D: 与 ToolDispatchService.executeWithTool 同一条角色门链
+    // (一线写操作门 → 旧式角色串 → 中央 RBAC)。此前这里只接了 RBAC, 旧式角色串与一线门对 Skill
+    // 路径不存在, 生产上操作员经 Skill 跑了管理员级的「全员考勤统计」。为空 (裸构造的单测) 时拒绝执行。
     @Autowired
-    private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
+    private com.cretas.aims.service.execution.ToolPermissionChain toolPermissionChain;
 
     /**
      * Canonical inventory workflow adapter. Optional field injection preserves the legacy
@@ -728,7 +730,11 @@ public class SkillExecutorImpl implements SkillExecutor {
                     String toolName = toolNode.has("tool_name") ?
                             toolNode.get("tool_name").asText() : null;
 
-                    if (toolName != null && toolRegistry.hasExecutor(toolName)) {
+                    // 2026-10-06: LLM 只能在 Skill 自己声明的工具里排顺序, 不能点名别的工具 ——
+                    // 抢先路由前的预检 (DynamicToolSelectionService) 只检查声明的那几个。
+                    if (toolName != null && !skill.hasTool(toolName)) {
+                        log.warn("LLM 计划里的工具不在 Skill {} 的声明内, 丢弃: {}", skill.getName(), toolName);
+                    } else if (toolName != null && toolRegistry.hasExecutor(toolName)) {
                         Map<String, Object> toolParams = new HashMap<>();
                         if (toolNode.has("params")) {
                             try {
@@ -871,25 +877,33 @@ public class SkillExecutorImpl implements SkillExecutor {
             throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
         }
 
-        // W9 红线 (AI-RBAC 系统性收口) — SITE D: Skill orchestration bypasses Site B. Central RBAC enforce.
-        // skCtx/params may lack userId, so build an RBAC context from the SkillContext (userId source of
-        // truth). Fail-closed: if SkillContext carries no userId, the enforcer denies mapped write tools.
+        // SITE D: Skill orchestration bypasses Site B. Same role-gate chain as executeWithTool.
+        // Identity comes from the SkillContext (server-authenticated), never from params — params
+        // here are LLM-extracted and must not be able to carry a userId/userRole of their own.
+        String factoryId = context != null ? context.getFactoryId() : null;
+        Long userId = context != null ? parseUserId(context.getUserId()) : null;
+        String userRole = context != null ? context.getUserRole() : null;
         java.util.Map<String, Object> rbacCtx = new java.util.HashMap<>(
                 skCtx != null ? skCtx : java.util.Map.of());
-        if (context != null) {
-            if (context.getUserId() != null) {
-                rbacCtx.put("userId", context.getUserId());
-            }
-            if (context.getFactoryId() != null) {
-                rbacCtx.put("factoryId", context.getFactoryId());
-            }
+        com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                rbacCtx, factoryId, userId, userRole);
+        if (toolPermissionChain == null) {
+            throw new IllegalStateException("权限校验暂不可用，未执行「" + toolName + "」。");
         }
-        if (!toolRbacEnforcer.isAllowed(wgTool, rbacCtx)) {
-            log.warn("W9 AI-RBAC (skill): denied tool={}", toolName);
-            throw new IllegalStateException(toolRbacEnforcer.denyMessage(wgTool, rbacCtx));
+        Optional<String> denied = toolPermissionChain.denyReason(wgTool, factoryId, userRole, null, rbacCtx);
+        if (denied.isPresent()) {
+            log.warn("Skill 工具权限拒绝: tool={}, userRole={}", toolName, userRole);
+            throw new IllegalStateException(denied.get());
         }
 
         ToolExecutor executor = executorOpt.get();
+
+        // Bind every identity alias (userRole/role/user_id ...) to the authenticated principal so an
+        // LLM-extracted "userRole" cannot reach the tool, neither via arguments nor via context —
+        // same binding as executeWithTool.
+        Map<String, Object> trustedParams = new HashMap<>(params != null ? params : Map.of());
+        com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                trustedParams, factoryId, userId, userRole);
 
         // Build ToolCall
         ToolCall toolCall = ToolCall.builder()
@@ -897,14 +911,12 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .type("function")
                 .function(ToolCall.FunctionCall.builder()
                         .name(toolName)
-                        .arguments(objectMapper.writeValueAsString(params))
+                        .arguments(objectMapper.writeValueAsString(trustedParams))
                         .build())
                 .build();
 
         // Build execution context
-        Map<String, Object> execContext = new HashMap<>(params);
-        execContext.put("factoryId", context.getFactoryId());
-        execContext.put("userId", context.getUserId());
+        Map<String, Object> execContext = new HashMap<>(trustedParams);
         execContext.put("sessionId", context.getSessionId());
 
         long startTime = System.currentTimeMillis();
@@ -918,6 +930,17 @@ public class SkillExecutorImpl implements SkillExecutor {
             return objectMapper.readTree(result);
         } catch (Exception e) {
             return result;
+        }
+    }
+
+    private static Long parseUserId(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(userId.trim());
+        } catch (NumberFormatException e) {
+            return null;   // RBAC 按缺 userId 处理 = 拒绝 (fail-closed)
         }
     }
 

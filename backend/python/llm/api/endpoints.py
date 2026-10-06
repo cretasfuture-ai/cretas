@@ -29,11 +29,12 @@ import logging
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from common.llm_router import SLOT, call_chain, call_chain_stream
+from common.llm_router import SLOT, LLMChainExhausted, call_chain, call_chain_stream
 from common.llm_metrics import llm_caller_context
+from common.responses import ErrorCode, error_response
 
 logger = logging.getLogger(__name__)
 
@@ -187,14 +188,34 @@ async def chat_stream(req: LLMRequest) -> StreamingResponse:
     )
 
 
-@router.post("/tool-call")
-async def tool_call(req: LLMRequest) -> Dict[str, Any]:
-    """Function-calling passthrough — transparently forwards tools / tool_choice."""
+@router.post("/tool-call", response_model=None)
+async def tool_call(req: LLMRequest) -> Union[Dict[str, Any], JSONResponse]:
+    """Function-calling passthrough — transparently forwards tools / tool_choice.
+
+    Every provider failing/being rejected answers **503** with the project's
+    unified error body (``code=SERVICE_UNAVAILABLE``, ``data.reason=
+    LLM_PROVIDERS_EXHAUSTED``), not the global handler's bare
+    ``500 INTERNAL_ERROR`` — the Java caller (PythonLLMClient) can then tell
+    "no LLM answered" from "the service broke" and ask for what it needs
+    instead of re-asking the user. 2026-10-06 prod: AI parameter extraction hit
+    the bare 500 and the user was asked for a task number already given.
+    """
     slot = _parse_slot(req.slot)
     _validate_tool_choice(req.tool_choice)
     payload = _build_payload(req)
     with llm_caller_context(req.caller or "llm_api.tool_call"):
-        return await call_chain(slot, payload)
+        try:
+            return await call_chain(slot, payload)
+        except LLMChainExhausted as exc:
+            logger.warning("[llm_api.tool_call] %s", exc)
+            return JSONResponse(
+                status_code=503,
+                content=error_response(
+                    str(exc)[:500],
+                    ErrorCode.SERVICE_UNAVAILABLE,
+                    data={"reason": "LLM_PROVIDERS_EXHAUSTED", "slot": exc.slot},
+                ),
+            )
 
 
 @router.post("/intent-classify")

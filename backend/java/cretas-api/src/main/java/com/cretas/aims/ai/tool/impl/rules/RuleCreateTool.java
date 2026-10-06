@@ -50,7 +50,7 @@ public class RuleCreateTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> properties = new HashMap<>();
         properties.put("ruleCode", Map.of("type", "string",
-                "description", "规则代码 (factoryId 内唯一), 英文蛇形, 如 po_blacklist / vip_discount"));
+                "description", "规则代码 (本工厂内唯一), 英文小写加下划线, 如 po_blacklist / vip_discount"));
         properties.put("ruleName", Map.of("type", "string", "description", "规则显示名"));
         properties.put("scope", Map.of("type", "string", "enum", List.of("ORDER", "INVENTORY", "CUSTOMER", "CUSTOM"),
                 "description", "适用范围"));

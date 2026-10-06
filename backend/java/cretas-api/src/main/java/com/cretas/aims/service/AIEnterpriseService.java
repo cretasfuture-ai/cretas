@@ -98,6 +98,17 @@ public class AIEnterpriseService {
     @Autowired
     private PythonSmartBIClient pythonSmartBIClient;
 
+    /**
+     * 数字出处闸 (流式成本分析)。非流式的成本分析都汇合在
+     * {@link AIAnalysisService#analyzeCost}, 闸挂在那里; 只有流式这一条不经过它。
+     * 默认实例保证裸 new 出来的本类 (单测) 也走闸。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.FactoryNumberProvenance numberProvenance =
+            new com.cretas.aims.ai.grounding.FactoryNumberProvenance();
+
+    static final String STREAM_PROVENANCE_SITE = "cost-analysis-stream";
+
     @Autowired
     private com.cretas.aims.utils.JwtUtil jwtUtil;
 
@@ -905,12 +916,16 @@ public class AIEnterpriseService {
                                 enableThinking,
                                 thinkingBudget,
                                 false);
+                // 正文分片先缓存、不转发: 数字出处闸要看完整正文才能判定, 而已经推给
+                // 客户端的分片收不回来。代价是正文不再逐字出现 (进度事件照常推送)。
+                StringBuilder bufferedAnswer = new StringBuilder();
                 pythonSmartBIClient.streamGeneralAnalysis(
                         factoryId,
                         userId != null ? userId.toString() : null,
                         trustedUserRole,
                         streamRequest,
-                        event -> forwardGeneralAnalysisEvent(event, emitter));
+                        event -> forwardGeneralAnalysisEvent(
+                                event, emitter, bufferedAnswer, batchesData, promptMessage));
 
                 // 6. 消耗配额
                 int quotaCost = getQuotaCostFromConfig(factoryId, "time_range");
@@ -957,27 +972,37 @@ public class AIEnterpriseService {
 
     private void forwardGeneralAnalysisEvent(
             PythonSmartBIClient.GeneralAnalysisStreamEvent event,
-            SseEmitter emitter) throws java.io.IOException {
+            SseEmitter emitter,
+            StringBuilder bufferedAnswer,
+            Object costSource,
+            String llmInput) throws java.io.IOException {
         switch (event.event()) {
             case "status" -> emitter.send(SseEmitter.event()
                     .name("progress")
                     .data(Map.of(
                             "type", "progress",
                             "message", event.data().asText("正在分析..."))));
-            case "chunk" -> emitter.send(SseEmitter.event()
-                    .name("answer")
-                    .data(Map.of(
-                            "type", "answer",
-                            "content", event.data().asText())));
+            case "chunk" -> bufferedAnswer.append(event.data().asText());
             case "charts" -> emitter.send(SseEmitter.event()
                     .name("progress")
                     .data(Map.of(
                             "type", "progress",
                             "message", "分析图表已生成")));
             case "done" -> {
+                String answer = event.data().path("answer").asText();
+                if (answer == null || answer.isBlank()) {
+                    answer = bufferedAnswer.toString();
+                }
+                String checked = numberProvenance.enforceText(
+                        STREAM_PROVENANCE_SITE, answer, costSource, llmInput);
+                emitter.send(SseEmitter.event()
+                        .name("answer")
+                        .data(Map.of(
+                                "type", "answer",
+                                "content", checked)));
                 Map<String, Object> completion = new HashMap<>();
                 completion.put("type", "complete");
-                completion.put("analysis", event.data().path("answer").asText());
+                completion.put("analysis", checked);
                 if (event.data().has("processingTimeMs")) {
                     completion.put("responseTimeMs", event.data().path("processingTimeMs").asLong());
                 }

@@ -177,6 +177,7 @@ def _gm_row(pid, name, revenue, costed_revenue, cost, lines, costed_lines):
         "product_type_id": pid, "product_name": name, "unit": "kg",
         "total_qty": Decimal("10"), "order_count": 1,
         "line_count": lines, "costed_line_count": costed_lines,
+        "zero_cost_line_count": 0, "missing_price_line_count": 0,
         "revenue": Decimal(revenue),
         "costed_revenue": Decimal(costed_revenue) if costed_revenue is not None else None,
         "cost": Decimal(cost) if cost is not None else None,

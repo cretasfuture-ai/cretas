@@ -71,7 +71,7 @@ public class OpportunityTransitionStageTool extends AbstractBusinessTool {
 
         Map<String, Object> id = new HashMap<>();
         id.put("type", "string");
-        id.put("description", "商机 UUID, 必填");
+        id.put("description", "商机编号, 必填");
         properties.put("id", id);
 
         Map<String, Object> newStage = new HashMap<>();

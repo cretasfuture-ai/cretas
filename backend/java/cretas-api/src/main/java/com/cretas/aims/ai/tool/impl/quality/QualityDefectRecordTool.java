@@ -47,7 +47,7 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("qualityInspectionId", Map.of(
                 "type", "string",
-                "description", "关联质检记录ID (quality_inspections.id, UUID)"));
+                "description", "关联质检记录编号"));
         properties.put("defectType", Map.of(
                 "type", "string",
                 "description", "缺陷类型",
@@ -88,8 +88,11 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         try {
             defectType = DefectType.valueOf(defectTypeStr.toUpperCase());
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("无效的缺陷类型: " + defectTypeStr +
-                    ". 可选: APPEARANCE/WEIGHT/COMPOSITION/MICROBIAL/PACKAGING/FOREIGN_OBJECT/SENSORY/SHELF_LIFE/OTHER");
+            // 可选值给中文名 (枚举 getDisplayName), 不贴枚举码 —— 一线读不懂 FOREIGN_OBJECT。
+            String options = java.util.Arrays.stream(DefectType.values())
+                    .map(DefectType::getDisplayName)
+                    .collect(java.util.stream.Collectors.joining(" / "));
+            throw new IllegalArgumentException("无效的缺陷类型: " + defectTypeStr + "。可选: " + options);
         }
 
         Long userId = extractUserIdFromContext(context);

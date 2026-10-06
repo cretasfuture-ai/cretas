@@ -177,6 +177,13 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private WorkdeskOutputSummarizer workdeskOutputSummarizer;
 
+    /** 数字出处闸 (带经营报告上下文的咨询回答)。默认实例保证裸构造的单测也走闸。 */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.FactoryNumberProvenance numberProvenance =
+            new com.cretas.aims.ai.grounding.FactoryNumberProvenance();
+
+    static final String CONVERSATIONAL_PROVENANCE_SITE = "conversational-with-report";
+
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
@@ -849,7 +856,7 @@ public class IntentExecutionOrchestrator {
         if (dynamicToolSelectionService.isSkillsEnabled()
                 && (boundToolName == null || boundToolName.isBlank())) {
             IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
-                    request.getUserInput(), factoryId, userId);
+                    request.getUserInput(), factoryId, userId, userRole);
             if (skillResponse != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] Skill 优先匹配成功: total={}", count);
@@ -866,7 +873,7 @@ public class IntentExecutionOrchestrator {
             // Fix: 当 intent 已识别且 tool_name=NULL 时, 用 intent_code (UPPER_SNAKE) →
             // skill_name (lower-kebab) 直接 lookup Skill, 绕过 keyword 匹配.
             IntentExecuteResponse explicitSkillResponse = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillResponse != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
@@ -934,7 +941,7 @@ public class IntentExecutionOrchestrator {
             // (覆盖 dynamicToolSelectionService.isSkillsEnabled() = false 但 SkillRouter
             // 仍可用 / Skill 已注册但 keyword 没匹的 corner case).
             IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillFallback != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] 显式 Skill 路由 (NoMatch fallback) 成功: intentCode={}, total={}",
@@ -1127,7 +1134,7 @@ public class IntentExecutionOrchestrator {
             // Sprint 9 P0.1 fix (2026-05-21): explicit intent path 同 execute() 一样需 Skill fallback.
             // 显式传 intent_code 走这分支 (e.g. Workdesk 前端按钮直接 POST intent_code).
             IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
             if (explicitSkillFallback != null) {
                 log.info("[Explicit-Intent] 显式 Skill 路由成功: intentCode={}", intent.getIntentCode());
                 response = explicitSkillFallback;
@@ -1377,8 +1384,8 @@ public class IntentExecutionOrchestrator {
                     candidateActions.add(IntentExecuteResponse.SuggestedAction.builder()
                             .actionCode("SELECT_INTENT")
                             .actionName(candidate.getIntentName())
-                            .description(candidate.getDescription() != null ? candidate.getDescription() :
-                                    String.format("置信度: %.0f%%", candidate.getConfidence() * 100))
+                            // 副标题只给人话, 不再用「置信度」兜底 (见 ClarificationButtonText)
+                            .description(ClarificationButtonText.subtitle(candidate.getDescription()))
                             .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
                             .parameters(params)
                             .build());
@@ -2384,8 +2391,11 @@ public class IntentExecutionOrchestrator {
     String generateConversationalResponse(String factoryId, String userInput, QuestionType questionType,
                                                    Boolean enableThinking, Integer thinkingBudget) {
         String systemPrompt;
+        // 只有「带了工厂经营报告当上下文」这一支是基于数据作答, 数字出处闸只挂它:
+        // 另两支没有任何数据进模型, 源池为空, 挂闸等于删掉所有常识性数字 (登记为故意不挂)。
+        String factoryAnalysisContext = null;
         if (questionType == QuestionType.GENERAL_QUESTION) {
-            String factoryAnalysisContext = getPrecomputedAnalysisContext(factoryId);
+            factoryAnalysisContext = getPrecomputedAnalysisContext(factoryId);
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
                 systemPrompt = """
                     你是白垩纪AI Agent的智能助手。用户正在询问一个关于生产管理、质量控制或成本优化的咨询问题。
@@ -2417,6 +2427,10 @@ public class IntentExecutionOrchestrator {
                 }
             } else {
                 response = dashScopeClient.chat(systemPrompt, userInput);
+            }
+            if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
+                response = numberProvenance.enforceText(
+                        CONVERSATIONAL_PROVENANCE_SITE, response, factoryAnalysisContext, userInput);
             }
             return response;
         } catch (Exception e) {

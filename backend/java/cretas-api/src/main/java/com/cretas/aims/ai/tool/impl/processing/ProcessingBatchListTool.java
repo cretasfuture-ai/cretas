@@ -167,7 +167,7 @@ public class ProcessingBatchListTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "status":
-                return "请问要筛选哪种状态的批次？（PLANNED/IN_PROGRESS/PAUSED/COMPLETED/CANCELLED，可选）";
+                return "请问要筛选哪种状态的批次？（计划中 / 生产中 / 已暂停 / 已完成 / 已取消，可选）";
             case "page":
                 return "请问要查看第几页？（默认第1页）";
             case "size":

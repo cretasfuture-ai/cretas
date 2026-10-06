@@ -66,6 +66,28 @@ public class DynamicToolSelectionService {
 
     private static final double DYNAMIC_LEARN_MIN_SIMILARITY = 0.55;
 
+    /**
+     * Skill 关键词匹配要多强才允许<b>抢在已识别意图前面</b>执行 (2026-10-06, 原为写死的 0.3)。
+     *
+     * <p>依据 (3519 题线上回放 full_replay_r2_20261006 + 生产 30 天日志): 关键词分 &ge;0.3 的 41 题里
+     * 只有 15 题是 Skill 该接的 (精度 0.37), 错接的最高分 0.4914 (「给华润做个供应商评估」→ 采购分析);
+     * &ge;0.5 剩 3 题全对, &ge;0.6 剩 2 题全对。取 0.6 给错接的最高分留 0.11 的余量。
+     * 生产 30 天里这条路由只触发过 1 次 —— 就是 0.30 分的「上班打卡」→ 人员排班。
+     * 「上班打卡」= 6 个触发词命中 1 个 (0.6×1/6) + 覆盖 2/4 字 (0.4×0.5) = 0.30。
+     */
+    @org.springframework.beans.factory.annotation.Value("${cretas.skills.preempt-min-score:0.6}")
+    private double skillPreemptMinScore = 0.6;
+
+    /** Skill 里每个工具都要过与直接执行同一条角色门 (见 {@link #skillPreemptionBlocker})。 */
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private ToolPermissionChain toolPermissionChain;
+
+    /** 「这个人能不能用这个意图」—— 与澄清按钮同一份判定。 */
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private ClarificationCandidateService clarificationCandidateService;
+
     // R14c: 餐饮租户 dynamic no-tool 死胡同出口 (误匹配 SYSTEM_HELP 等无候选工具
     // 的意图, 如「你们能做什么」) 先问 Python tiered 路由再放弃。
     @Autowired(required = false)
@@ -299,11 +321,20 @@ public class DynamicToolSelectionService {
     }
 
     /**
-     * 尝试 Skill 路由
+     * 尝试 Skill 路由 (按 Skill 触发词匹配用户原文, 抢在意图自己的执行器前面)。
+     *
+     * <p>原本的用途 (见 docs/audits/sprint-9-workdesk-intent-fix-rca.md): 意图<b>没有绑定工具</b>
+     * (WORKDESK 类) 时由 Skill 接手。2026-10-06 起只有同时满足两条才抢先, 否则返回 null 交回正常流程:
+     * <ol>
+     *   <li>匹配足够强: 分数 &ge; {@link #skillPreemptMinScore};</li>
+     *   <li>当前用户对 Skill 里<b>每一个</b>工具都有权: 工具角色门 ({@link ToolPermissionChain}) 通过,
+     *       且绑定该工具的意图里至少一个对他开放 (与澄清按钮同一判定); 没有意图绑定的工具,
+     *       一线角色一律不放 —— 一线角色经 Skill 拿到的不能比经意图拿到的多。</li>
+     * </ol>
      *
      * @return IntentExecuteResponse if Skill matched and executed, null otherwise
      */
-    public IntentExecuteResponse trySkillRoute(String userQuery, String factoryId, Long userId) {
+    public IntentExecuteResponse trySkillRoute(String userQuery, String factoryId, Long userId, String userRole) {
         if (skillRouterService == null || !skillRouterService.isSkillsEnabled()) {
             return null;
         }
@@ -315,8 +346,15 @@ public class DynamicToolSelectionService {
 
             var bestMatch = matchingSkills.get(0);
             double score = bestMatch.calculateMatchScore(userQuery);
-            if (score < 0.3) {
-                log.debug("Skill 匹配分数太低 ({} < 0.3)，跳过: skill={}", score, bestMatch.getName());
+            if (score < skillPreemptMinScore) {
+                log.info("Skill 匹配不够强, 不抢先 ({} < {}): skill={}",
+                        String.format("%.2f", score), skillPreemptMinScore, bestMatch.getName());
+                return null;
+            }
+            Optional<String> blocked = skillPreemptionBlocker(bestMatch, factoryId, userId, userRole);
+            if (blocked.isPresent()) {
+                log.info("Skill 不抢先 (当前角色不能使用其中的工具): skill={}, role={}, 原因={}",
+                        bestMatch.getName(), userRole, blocked.get());
                 return null;
             }
 
@@ -325,6 +363,7 @@ public class DynamicToolSelectionService {
             com.cretas.aims.dto.skill.SkillContext skillContext = com.cretas.aims.dto.skill.SkillContext.builder()
                     .factoryId(factoryId)
                     .userId(userId != null ? userId.toString() : null)
+                    .userRole(userRole)
                     .userQuery(userQuery)
                     .extractedParams(new HashMap<>())
                     .build();
@@ -358,6 +397,60 @@ public class DynamicToolSelectionService {
     }
 
     /**
+     * Skill 抢先前的权限预检。返回空 = 当前用户能用 Skill 里的每个工具; 非空 = 第一个不能用的原因。
+     * 判定全部复用既有规则, 本方法只负责「对 Skill 可能跑到的每个工具都问一遍」。
+     */
+    Optional<String> skillPreemptionBlocker(com.cretas.aims.dto.skill.SkillDefinition skill,
+                                            String factoryId, Long userId, String userRole) {
+        if (toolPermissionChain == null || clarificationCandidateService == null || configService == null) {
+            return Optional.of("权限预检不可用");
+        }
+        java.util.LinkedHashSet<String> toolNames = new java.util.LinkedHashSet<>();
+        if (skill.getTools() != null) {
+            toolNames.addAll(skill.getTools());
+        }
+        if (skill.getExecutionGraph() != null) {
+            for (com.cretas.aims.dto.skill.SkillDefinition.ExecutionNode node : skill.getExecutionGraph()) {
+                if (node.getToolName() != null) toolNames.add(node.getToolName());
+                if (node.getFallbackTool() != null) toolNames.add(node.getFallbackTool());
+            }
+        }
+        if (toolNames.isEmpty()) {
+            return Optional.of("Skill 未声明工具");
+        }
+        List<AIIntentConfig> intents = configService.getAllIntents(factoryId);
+        for (String toolName : toolNames) {
+            Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+            if (tool.isEmpty()) {
+                continue;   // 未注册的工具执行时会被跳过 / 报错, 跑不到
+            }
+            Map<String, Object> trusted = new HashMap<>();
+            TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
+            Optional<String> denied = toolPermissionChain.denyReason(tool.get(), factoryId, userRole, null, trusted);
+            if (denied.isPresent()) {
+                return Optional.of(toolName + ": " + denied.get());
+            }
+            List<AIIntentConfig> owners = intents == null ? List.of() : intents.stream()
+                    .filter(i -> i != null && toolName.equals(i.getToolName()))
+                    .filter(i -> Boolean.TRUE.equals(i.getIsActive()) && i.getDeletedAt() == null)
+                    .collect(Collectors.toList());
+            if (owners.isEmpty()) {
+                if (com.cretas.aims.service.intent.FrontlineAiWriteGrantService.isFrontline(userRole)) {
+                    return Optional.of(toolName + ": 没有对应的意图, 一线角色不能经 Skill 使用");
+                }
+                continue;
+            }
+            boolean anyOpen = owners.stream().anyMatch(i ->
+                    clarificationCandidateService.callerMayUse(i, factoryId, userId, userRole));
+            if (!anyOpen) {
+                return Optional.of(toolName + ": 对应意图 " + owners.stream()
+                        .map(AIIntentConfig::getIntentCode).collect(Collectors.joining("/")) + " 未对当前角色开放");
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
      * 通过 intent_code → skill_name 显式映射执行 Skill (绕过 keyword 匹配).
      *
      * <p>Sprint 9 P0.1 fix (2026-05-21) — Sprint 8 WORKDESK intents (`DAILY_CUSTOMER_FOLLOWUP`
@@ -379,7 +472,8 @@ public class DynamicToolSelectionService {
     public IntentExecuteResponse tryExplicitSkillRouteForIntent(AIIntentConfig intent,
                                                                   String userQuery,
                                                                   String factoryId,
-                                                                  Long userId) {
+                                                                  Long userId,
+                                                                  String userRole) {
         if (skillRouterService == null || !skillRouterService.isSkillsEnabled()) {
             return null;
         }
@@ -394,6 +488,7 @@ public class DynamicToolSelectionService {
             com.cretas.aims.dto.skill.SkillContext skillContext = com.cretas.aims.dto.skill.SkillContext.builder()
                     .factoryId(factoryId)
                     .userId(userId != null ? userId.toString() : null)
+                    .userRole(userRole)
                     .userQuery(userQuery)
                     .extractedParams(new HashMap<>())
                     .build();

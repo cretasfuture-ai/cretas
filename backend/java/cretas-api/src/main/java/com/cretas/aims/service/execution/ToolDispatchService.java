@@ -226,16 +226,11 @@ public class ToolDispatchService {
             // 无条件 false (本意是"逼调用方走权限码"), 但本检查先于 enforcer 执行,
             // 导致 3 个原料只读查询对所有角色全拒 (超管也拒), 4 个写工具的
             // confirm 终点被拦死。仅保留给只有 legacy 角色逻辑的旧工具。
-            if (tool.requiresPermission()
-                    && tool.getRequiredPermissions().isEmpty()
-                    && !tool.hasPermission(userRole)) {
+            // 规则只有一份, 在 ToolPermissionChain —— Skill 路径也问它 (2026-10-06)。
+            if (ToolPermissionChain.legacyRoleDenied(tool, userRole)) {
                 log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
                 // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
-                String permDeniedMsg = String.format(
-                        "您当前的角色 (%s) 没有权限执行「%s」操作。可能原因: 1. 此操作需要更高的角色权限;"
-                        + " 2. 您所在的部门未被授权该功能; 3. 该操作涉及敏感数据需额外审批。"
-                        + "建议: 联系工厂管理员申请对应权限, 或改用您有权限的查询功能。",
-                        userRole != null ? userRole : "未知", intent.getIntentName());
+                String permDeniedMsg = ToolPermissionChain.legacyRoleDeniedMessage(userRole, intent.getIntentName());
                 return IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent.getIntentCode())
@@ -565,8 +560,8 @@ public class ToolDispatchService {
                                         correctionResult.confidence());
 
                                 if (correctionResult.shouldRetry() && correctionResult.correctedParams() != null) {
-                                    params.clear();
-                                    params.putAll(correctionResult.correctedParams());
+                                    replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool,
+                                            factoryId, userId, userRole);
                                     params.put("_correctionStrategy", correctionResult.correctionStrategy());
                                     params.put("_retryAttempt", attempt);
                                     params.put("_validationIssue", validationResult.issue().name());
@@ -631,8 +626,8 @@ public class ToolDispatchService {
                     boolean shouldRetry = correctionResult != null && correctionResult.shouldRetry() && attempt < MAX_RETRIES;
 
                     if (shouldRetry && correctionResult.correctedParams() != null) {
-                        params.clear();
-                        params.putAll(correctionResult.correctedParams());
+                        replaceWithGroundedCorrection(params, correctionResult.correctedParams(), tool,
+                                factoryId, userId, userRole);
                         params.put("_correctionStrategy", correctionResult.correctionStrategy());
                         params.put("_retryAttempt", attempt);
                         params.put("_confidence", correctionResult.confidence());
@@ -1313,6 +1308,43 @@ public class ToolDispatchService {
                 && !rule.isBlank();
     }
 
+    /**
+     * CRITIC 纠错给回的整套参数同样是 LLM 产出: 改动过的值也要过 {@link LlmParameterGrounding},
+     * 没落地的退回原值 (原来没有就去掉) —— 纠错可以改格式、换成用户说过的数, 不能凭空造数或写备注。
+     *
+     * <p>整套参数被换掉之后, 主体身份 (factoryId / userId / role 及其别名) 按主路径同一个
+     * {@link TrustedExecutionContext#enforcePrincipal} 重新绑定: 纠错代理给回的 factoryId=F999 之类
+     * 不许到达工具 (以前换完参数就直接序列化执行, 主体由 LLM 输出决定)。两条重试路径都走这里。
+     */
+    private void replaceWithGroundedCorrection(Map<String, Object> params, Map<String, Object> corrected,
+                                               ToolExecutor tool, String factoryId, Long userId,
+                                               String userRole) {
+        Map<String, Object> previous = new HashMap<>(params);
+        Map<String, Object> changed = new HashMap<>();
+        for (Map.Entry<String, Object> e : corrected.entrySet()) {
+            if (!java.util.Objects.equals(previous.get(e.getKey()), e.getValue())) {
+                changed.put(e.getKey(), e.getValue());
+            }
+        }
+        Object userInput = previous.get("userInput");
+        LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
+                changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema());
+        params.clear();
+        params.putAll(corrected);
+        params.putAll(grounded.accepted());
+        for (String key : grounded.dropped().keySet()) {
+            if (previous.containsKey(key)) {
+                params.put(key, previous.get(key));
+            } else {
+                params.remove(key);
+            }
+        }
+        if (!grounded.dropped().isEmpty()) {
+            log.info("纠错参数未落地, 已退回原值: tool={}, dropped={}", tool.getToolName(), grounded.dropped());
+        }
+        TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+    }
+
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {
         Map<String, Object> extractedParams = new HashMap<>();
@@ -1355,8 +1387,10 @@ public class ToolDispatchService {
 
                 请仔细分析用户输入，提取其中包含的参数值。
                 - 如果用户明确提供了某个参数的值，请提取它
-                - 如果用户没有提供某个参数，不要猜测或编造，直接忽略该参数
+                - 如果用户没有提供某个参数，不要猜测或编造，直接忽略该参数（不要填 0 或默认值）
                 - 参数值应该是用户原文中的信息，不要修改或翻译
+                - 同一个数字只填给一个参数；备注、原因、说明这类文字参数只照抄用户原话，
+                  用户没说就不填，不要写你自己的分析或提示
 
                 请使用 extract_parameters 工具返回提取的参数。
                 """, tool.getToolName(), tool.getDescription() != null ? tool.getDescription() : "执行业务操作");
@@ -1372,11 +1406,21 @@ public class ToolDispatchService {
                         try {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> args = objectMapper.readValue(argumentsJson, Map.class);
+                            Map<String, Object> raw = new HashMap<>();
                             for (Map.Entry<String, Object> entry : args.entrySet()) {
                                 if (entry.getValue() != null &&
                                     !(entry.getValue() instanceof String && ((String) entry.getValue()).isEmpty())) {
-                                    extractedParams.put(entry.getKey(), entry.getValue());
+                                    raw.put(entry.getKey(), entry.getValue());
                                 }
+                            }
+                            // LLM 给的数字 / 备注必须在用户原话或上下文里落得了地, 否则丢掉 (参数保持缺失,
+                            // 必填的由工具走 NEED_MORE_INFO 追问)。规则只有一份, 见 LlmParameterGrounding。
+                            LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
+                                    raw, existingParams, userInput, parametersSchema);
+                            extractedParams.putAll(grounded.accepted());
+                            if (!grounded.dropped().isEmpty()) {
+                                log.info("LLM 参数未落地, 已丢弃: tool={}, dropped={}",
+                                        tool.getToolName(), grounded.dropped());
                             }
                             log.info("LLM 参数提取成功: tool={}, extracted={}", tool.getToolName(), extractedParams.keySet());
                         } catch (JsonProcessingException e) {

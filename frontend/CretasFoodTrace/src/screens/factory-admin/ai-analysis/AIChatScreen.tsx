@@ -749,13 +749,11 @@ function AIChatScreenContent() {
           let suggestedActions: SuggestedAction[] = [];
           const status = result.status as string | undefined;
 
-          // NEED_MORE_INFO: 优先使用 clarificationQuestions 构建友好回复
-          if (status === 'NEED_MORE_INFO' && Array.isArray(result.clarificationQuestions)
-              && (result.clarificationQuestions as string[]).length > 0) {
-            const questions = result.clarificationQuestions as string[];
-            replyMessage = `为了完成操作，还需要以下信息：\n\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n\n请直接告诉我，或点击下方选项。`;
-            streamedContent = replyMessage;
-          }
+          // NEED_MORE_INFO: 优先使用 clarificationQuestions 构建友好回复 (正文在下面选项定下来之后再拼:
+          // 「或点击下方选项」只在真的有选项时才说 —— prod 2026-10-06 没有选项也这么说了)
+          const needMoreInfoQuestions = status === 'NEED_MORE_INFO' && Array.isArray(result.clarificationQuestions)
+            ? (result.clarificationQuestions as unknown[]).filter((q): q is string => typeof q === 'string' && q.trim() !== '')
+            : [];
 
           // 重定向到表单
           if (result.actionCode === 'REDIRECT_TO_PLAN_FORM' || result.redirectAction === 'REDIRECT_TO_PLAN_FORM') {
@@ -819,6 +817,12 @@ function AIChatScreenContent() {
             suggestedActions = suggestedActions.filter(
               (a) => a.value === 'SELECT_INTENT' || sceneConfig.allowedActionCodes.includes(a.value)
             );
+          }
+
+          if (needMoreInfoQuestions.length > 0) {
+            const tail = suggestedActions.length > 0 ? '请直接告诉我，或点击下方选项。' : '请直接告诉我。';
+            replyMessage = `为了完成操作，还需要以下信息：\n\n${needMoreInfoQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n\n${tail}`;
+            streamedContent = replyMessage;
           }
 
           // 更新消息
@@ -994,6 +998,8 @@ function AIChatScreenContent() {
         ...(state.intentCode ? { intentCode: state.intentCode } : {}),
         ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
         ...(entityType ? { entityType } : {}),
+        // 流式那一轮已经定下的参数 (任务号 / 产量 …), 预览不必再从原话重新抽
+        ...(state.previewContext ? { context: state.previewContext } : {}),
       }, factoryId);
       if (!isCurrentActor()) return;
       updateWriteConfirm(messageId, stillWaiting, (s) => applyPreviewResponse(s, response, Date.now()));
@@ -1034,9 +1040,11 @@ function AIChatScreenContent() {
     let outcome: ConfirmOutcome;
     let resultInner: Record<string, unknown> | undefined;
     let resultMeta: { intentCode?: string; intentCategory?: string } = {};
+    let confirmedLastAction: Record<string, unknown> | undefined;
     try {
       const response = await intentConfigApiClient.confirmIntent(buildConfirmationProof(action), currentFactoryId);
       outcome = classifyConfirmResponse(response, intentName);
+      confirmedLastAction = readLastAction(response?.metadata);
       const inner = response?.resultData;
       resultInner = inner && typeof inner === 'object' && !Array.isArray(inner)
         ? (inner as Record<string, unknown>)
@@ -1053,6 +1061,12 @@ function AIChatScreenContent() {
     if (!isCurrentActor()) return;
 
     if (outcome.kind === 'done') {
+      // 确认卡做成的那一步与流式成功一样记成「上一步」: 「开始1827」确认之后说「做完了，产量0」,
+      // 服务端才能把它解读成「完成 1827」的确认按钮 (FollowUpResolver)。只认真的执行了 —— 演示环境 /
+      // 提交审批 (executed=false) 什么都没做, 不能当上一步。
+      if (outcome.executed && confirmedLastAction) {
+        lastActionRef.current = { value: confirmedLastAction, receivedAt: Date.now() };
+      }
       const doneLabel = outcome.doneLabel;
       updateWriteConfirm(messageId, (s) => s.phase === 'executing', (s) => ({ ...s, phase: 'done', doneLabel }));
       appendAssistantMessage({

@@ -90,7 +90,7 @@ public class FoodSampleCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> materialBatchId = new HashMap<>();
         materialBatchId.put("type", "string");
-        materialBatchId.put("description", "MaterialBatch.id (必填) UUID 字符串. 可通过 batchNumber 查找");
+        materialBatchId.put("description", "原料批次编号 (必填). 可凭批次号查到");
         properties.put("materialBatchId", materialBatchId);
 
         Map<String, Object> productName = new HashMap<>();

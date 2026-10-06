@@ -141,5 +141,33 @@ public class WorkProcessTask extends BaseEntity {
         public boolean isTerminal() {
             return this == COMPLETED || this == SKIPPED || this == CANCELLED;
         }
+
+        /**
+         * 面向一线的中文状态名 —— 工序任务状态给人看的<b>唯一</b>来源。
+         *
+         * <p>确认卡 ({@code WorkProcessTaskTransitionPreview}) 、AI 结果文案、列表文本都读它;
+         * ⛔ 不要在别处再写一份 switch (两份会漂, 本仓形态 D)。
+         */
+        public String getDisplayName() {
+            return switch (this) {
+                case PENDING -> "待开始";
+                case IN_PROGRESS -> "进行中";
+                case COMPLETED -> "已完成";
+                case SKIPPED -> "已跳过";
+                case CANCELLED -> "已取消";
+            };
+        }
+
+        /** 状态码 → 中文名; 空 / 不认识的码返回 {@code null} (调用方决定不显示, 不回退成英文码)。 */
+        public static String displayNameOf(String code) {
+            if (code == null || code.isBlank()) {
+                return null;
+            }
+            try {
+                return valueOf(code.trim().toUpperCase(java.util.Locale.ROOT)).getDisplayName();
+            } catch (IllegalArgumentException unknown) {
+                return null;
+            }
+        }
     }
 }

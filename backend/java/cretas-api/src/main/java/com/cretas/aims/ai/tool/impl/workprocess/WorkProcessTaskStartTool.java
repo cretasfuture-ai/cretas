@@ -43,7 +43,7 @@ public class WorkProcessTaskStartTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("taskId", Map.of(
                 "type", "integer",
-                "description", "工序任务ID (Long)"));
+                "description", "工序任务编号"));
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("taskId"));
         return schema;
@@ -62,7 +62,9 @@ public class WorkProcessTaskStartTool extends AbstractBusinessTool {
         WorkProcessTaskDTO result = workProcessTaskService.start(factoryId, taskId, operatorId);
         log.info("AI 工具开始工序 task={}, operator={}", taskId, operatorId);
         return buildSimpleResult(
-                String.format("工序任务 %d 已开始 (状态 → IN_PROGRESS)", taskId),
+                // ⛔ 状态给人看中文 (枚举 getDisplayName), 不写枚举码 —— 2026-10-06 prod 实测一线看到「状态 → IN_PROGRESS」。
+                String.format("工序任务 %d 已开始（状态：%s）", taskId,
+                        WorkProcessTaskTransitionPreview.label(result.getStatus())),
                 result);
     }
 

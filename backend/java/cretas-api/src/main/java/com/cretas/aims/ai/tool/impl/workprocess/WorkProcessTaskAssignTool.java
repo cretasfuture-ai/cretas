@@ -42,10 +42,10 @@ public class WorkProcessTaskAssignTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("taskId", Map.of(
                 "type", "integer",
-                "description", "工序任务ID (Long)"));
+                "description", "工序任务编号"));
         properties.put("assignedTo", Map.of(
                 "type", "integer",
-                "description", "责任人用户ID (Long)"));
+                "description", "责任人的员工编号"));
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("taskId", "assignedTo"));
         return schema;

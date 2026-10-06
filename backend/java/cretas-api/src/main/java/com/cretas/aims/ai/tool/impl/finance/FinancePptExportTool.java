@@ -40,11 +40,11 @@ public class FinancePptExportTool extends AbstractBusinessTool {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("chart_images", Map.of(
             "type", "object",
-            "description", "图表截图，格式: {chartType: base64PNG}"
+            "description", "图表截图 (按图表类型分别给出图片数据)"
         ));
         props.put("analysis_results", Map.of(
             "type", "object",
-            "description", "AI分析结果，格式: {chartType: 分析文本}"
+            "description", "AI分析结果 (按图表类型分别给出分析文字)"
         ));
         props.put("year", Map.of("type", "integer", "description", "分析年份"));
         props.put("company_name", Map.of("type", "string", "description", "公司名称"));

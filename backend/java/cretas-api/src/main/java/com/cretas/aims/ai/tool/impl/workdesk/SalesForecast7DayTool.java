@@ -85,7 +85,7 @@ public class SalesForecast7DayTool extends AbstractBusinessTool {
         Map<String, Object> productTypeId = new HashMap<>();
         productTypeId.put("type", "string");
         productTypeId.put("description",
-                "可选 — 指定 productTypeId 仅返该产品预测. 不填则返 Top 20 产品.");
+                "可选 — 指定产品类型, 仅返回该产品的预测. 不填则返回销量前 20 的产品.");
         properties.put("productTypeId", productTypeId);
 
         schema.put("properties", properties);

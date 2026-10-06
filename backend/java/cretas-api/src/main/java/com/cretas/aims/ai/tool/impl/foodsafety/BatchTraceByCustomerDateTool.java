@@ -68,7 +68,7 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
 
         Map<String, Object> customerId = new HashMap<>();
         customerId.put("type", "string");
-        customerId.put("description", "客户 UUID (必填). 可由 customer_search Tool 通过客户名解析");
+        customerId.put("description", "客户编号 (必填). 只知道客户名称时, 先按名称找到这个客户");
         properties.put("customerId", customerId);
 
         Map<String, Object> date = new HashMap<>();

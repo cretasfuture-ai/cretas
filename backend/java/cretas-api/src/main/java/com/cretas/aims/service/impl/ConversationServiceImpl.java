@@ -116,6 +116,20 @@ public class ConversationServiceImpl implements ConversationService {
             String intentName,
             List<RequiredParameter> requiredParameters,
             List<String> clarificationQuestions) {
+        return startParameterCollection(factoryId, userId, intentCode, intentName,
+                requiredParameters, clarificationQuestions, Collections.emptyMap());
+    }
+
+    @Override
+    @Transactional
+    public ConversationResponse startParameterCollection(
+            String factoryId,
+            Long userId,
+            String intentCode,
+            String intentName,
+            List<RequiredParameter> requiredParameters,
+            List<String> clarificationQuestions,
+            Map<String, Object> alreadyCollected) {
 
         log.info("开始参数收集对话: factory={}, user={}, intent={}, params={}",
                 factoryId, userId, intentCode, requiredParameters.size());
@@ -143,6 +157,16 @@ public class ConversationServiceImpl implements ConversationService {
                 factoryId, userId, intentCode, sessionParams, initialQuestion);
         session.setMaxRounds(maxRounds);
         session.setTimeoutMinutes(timeoutMinutes);
+        // 这一句里已经抽到的参数先记上: 补齐缺的那个之后执行要一起带走 (不在待问清单里, 不会被追问)
+        if (alreadyCollected != null && !alreadyCollected.isEmpty()) {
+            Map<String, String> collected = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : alreadyCollected.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null && !String.valueOf(e.getValue()).isBlank()) {
+                    collected.put(e.getKey(), String.valueOf(e.getValue()));
+                }
+            }
+            session.setCollectedParameters(collected);
+        }
 
         sessionRepository.save(session);
 
@@ -941,6 +965,23 @@ public class ConversationServiceImpl implements ConversationService {
                     .extractedParams(new HashMap<>())
                     .successful(true)
                     .build();
+        }
+
+        // 只差一个数字型参数、这句话又只是在报一个数 (「1827」「1827号」) → 直接填, 不问模型。
+        // 数就在原话里; 交给模型反而给了它编别的值的机会 (prod 2026-10-06: 「1827」被抽出产量 0 和一句备注)。
+        if (uncollectedParams.size() == 1
+                && com.cretas.aims.service.execution.SlotAnswerRule.isNumericType(uncollectedParams.get(0).getType())) {
+            Optional<List<String>> numbers =
+                    com.cretas.aims.service.execution.SlotAnswerRule.numbersOnly(userReply);
+            if (numbers.isPresent() && numbers.get().size() == 1) {
+                Map<String, String> direct = new HashMap<>();
+                direct.put(uncollectedParams.get(0).getName(), numbers.get().get(0));
+                return LlmParameterExtractionResult.builder()
+                        .extractedParams(direct)
+                        .successful(true)
+                        .reasoning("回复只含一个数, 直接填入唯一的数字型槽位")
+                        .build();
+            }
         }
 
         // 如果 DashScope 不可用，尝试简单提取

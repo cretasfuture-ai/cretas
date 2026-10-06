@@ -60,12 +60,12 @@ public class CustomerPriceMemoryQueryTool extends AbstractBusinessTool {
 
         Map<String, Object> customerName = new HashMap<>();
         customerName.put("type", "string");
-        customerName.put("description", "客户名称 (customerId 未提供时按名称精确匹配)");
+        customerName.put("description", "客户名称 (没有客户编号时按名称精确匹配)");
         properties.put("customerName", customerName);
 
         Map<String, Object> productTypeId = new HashMap<>();
         productTypeId.put("type", "string");
-        productTypeId.put("description", "产品类型 ID (必填). 注意是 productTypeId 不是 materialId.");
+        productTypeId.put("description", "产品类型编号 (必填). 注意是成品的产品类型, 不是原料.");
         properties.put("productTypeId", productTypeId);
 
         schema.put("properties", properties);

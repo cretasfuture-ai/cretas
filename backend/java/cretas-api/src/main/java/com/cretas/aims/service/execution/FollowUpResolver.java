@@ -21,7 +21,10 @@ import java.util.regex.Pattern;
  * <h3>规则表</h3>
  * <pre>
  * 规则 id                    上一步                               这一句 (类)       → 意图 (参数)
- * wp-done-after-start        WORK_PROCESS_TASK_START              DONE (可带数量)   → WORK_PROCESS_TASK_COMPLETE {taskId, actualQuantity?}
+ * wp-done-after-start        WORK_PROCESS_TASK_START              DONE (可带数量,   → WORK_PROCESS_TASK_COMPLETE {taskId, actualQuantity?}
+ *                                                                 数量可为 0) 或
+ *                                                                 只报产量 (「产量0」
+ *                                                                 「做了95.5公斤」)
  * wp-next-after-complete     WORK_PROCESS_TASK_COMPLETE           NEXT              → WORK_PROCESS_TASK_START {}
  * qty-change-same-intent     MATERIAL_BATCH_USE/CONSUME/          QTY_CHANGE        → 同一意图 {原参数, quantity 调整后}
  *                            RESERVE/RELEASE (params 带 quantity)
@@ -58,7 +61,7 @@ public final class FollowUpResolver {
     private static final String NUM =
             "([0-9]{1,6}(?:\\.[0-9]{1,3})?|(?:[零一二两三四五六七八九十百]|千(?!克)){1,6})";
     private static final String UNIT = "(公斤|千克|kg|KG|Kg|斤|克|g|吨|箱|袋|件|个|包|桶|瓶|盒|份|筐|盘)?";
-    private static final String QTY_LEAD = "(?:一共|总共|共|产量|数量是?|做了)?";
+    private static final String QTY_LEAD = "(?:一共|总共|共|产量是?|数量是?|做了)?";
     private static final String HAN = "\\u4e00-\\u9fa5";
 
     /** 「好了 / 做完了 / 包装完了」; X完了 的 X 另行排除「用完 / 卖完 / 没完」这类不是完工的说法。 */
@@ -69,6 +72,12 @@ public final class FollowUpResolver {
             "^(?:" + QTY_LEAD + NUM + UNIT + "[，,]?)?" + DONE_CORE + "(?:[，,]?" + QTY_LEAD + NUM + UNIT + ")?$");
     // DONE 的分组: 1=前数量 2=前单位 3=核心 4=X完了的X 5=后数量 6=后单位
     private static final Pattern DONE_X_EXCLUDED = Pattern.compile("[用卖吃没花烧喝坏不未别零一二两三四五六七八九十百千]");
+    /**
+     * 刚开始一道工序后只报产量 (「产量0」「做了95.5公斤」「一共做了60箱」) 也是在说做完了 ——
+     * 必须带产量引导词, 光一个数 (「60」) 不算。分组: 1=数量 2=单位。
+     */
+    private static final Pattern DONE_QTY_ONLY = Pattern.compile(
+            "^(?:产量是?|做了|一共做了|总共做了|共做了|一共|总共)" + NUM + UNIT + "$");
 
     private static final Pattern NEXT = Pattern.compile(
             "^(?:下一个|下一道|下一个工序|下一道工序|下个|下个工序|接着来|继续下一个|继续下一道|开始下一个|做下一个)吧?$");
@@ -119,19 +128,23 @@ public final class FollowUpResolver {
 
         if (last.is("WORK_PROCESS_TASK_START", "work_process_task_start")) {
             Matcher m = DONE.matcher(text);
-            if (m.matches() && (m.group(4) == null || !DONE_X_EXCLUDED.matcher(m.group(4)).find())) {
+            Matcher qtyOnly = DONE_QTY_ONLY.matcher(text);
+            boolean done = m.matches() && (m.group(4) == null || !DONE_X_EXCLUDED.matcher(m.group(4)).find());
+            if (done || qtyOnly.matches()) {
                 Map<String, Object> out = new LinkedHashMap<>();
                 copy(p, out, "taskId");
-                String num = m.group(1) != null ? m.group(1) : m.group(5);
+                String num = done ? (m.group(1) != null ? m.group(1) : m.group(5)) : qtyOnly.group(1);
+                String unit = done ? (m.group(2) != null ? m.group(2) : m.group(6)) : qtyOnly.group(2);
                 if (num != null) {
-                    BigDecimal qty = parseNumber(num);
+                    // 产量可以是 0 (owner 2026-10-05: 一线「产量可填 0」), 与「再加 / 改成」的数量不同
+                    BigDecimal qty = parseQuantityAllowingZero(num);
                     if (qty == null) {
                         return Optional.empty();
                     }
                     out.put("actualQuantity", LastActionContract.normalize(qty));
                 }
                 return Optional.of(new FollowUp(RULE_WP_DONE, "WORK_PROCESS_TASK_COMPLETE", out,
-                        summarize(out, m.group(2) != null ? m.group(2) : m.group(6))));
+                        summarize(out, unit)));
             }
         }
 
@@ -277,6 +290,14 @@ public final class FollowUpResolver {
         }
         String t = input.replaceAll("[\\s\\u3000]+", "");
         return t.replaceAll("^[，,。.！!~～、]+", "").replaceAll("[，,。.！!~～、]+$", "");
+    }
+
+    /** 同 {@link #parseNumber}, 但「0 / 0.0 / 零」是合法值 0 (完工产量可以是 0)。负数仍不认。 */
+    static BigDecimal parseQuantityAllowingZero(String raw) {
+        if (raw != null && (raw.equals("零") || raw.matches("0+(\\.0+)?"))) {
+            return BigDecimal.ZERO;
+        }
+        return parseNumber(raw);
     }
 
     /** 阿拉伯数字或中文数字 (十=10, 二十=20, 一百五=150, 两=2, 一百零五=105)。不合规返回 null。 */

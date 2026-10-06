@@ -129,6 +129,50 @@ class WorkProcessTaskServiceImplTest {
     }
 
     @Test
+    @DisplayName("getById: 带出批次号和产品名 (AI 确认卡读它; 此前只有列表路径带, 卡片退回显示 UUID / #批次id)")
+    void getById_enrichesBatchNumberAndProductName() {
+        String productTypeId = "eb0aa47b-1111-4222-8333-444455556666";
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID).factoryId(FACTORY_ID).workProcessId(WP_ID)
+                .productionBatchId(10805L).productTypeId(productTypeId)
+                .status(WorkProcessTask.Status.PENDING).build();
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID)).thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID)).thenReturn(Optional.empty());
+        when(productionBatchRepository.findByIdIn(any())).thenReturn(List.of(
+                ProductionBatch.builder().id(10805L).factoryId(FACTORY_ID).batchNumber("PB-20261006-001").build()));
+        ProductType product = new ProductType();
+        product.setId(productTypeId);
+        product.setName("卤猪蹄");
+        when(productTypeRepository.findByIdIn(any())).thenReturn(List.of(product));
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertEquals("PB-20261006-001", dto.getBatchNumber());
+        assertEquals("卤猪蹄", dto.getProductTypeName());
+    }
+
+    @Test
+    @DisplayName("getById 对照: 批次 / 产品查不到 → 两个名字保持 null (禁假数据), 不抛、不回填 id")
+    void getById_unresolvableNamesStayNull() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID).factoryId(FACTORY_ID).workProcessId(WP_ID)
+                .productionBatchId(10805L).productTypeId("pt-gone")
+                .status(WorkProcessTask.Status.PENDING).build();
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID)).thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID)).thenReturn(Optional.empty());
+        when(productionBatchRepository.findByIdIn(any())).thenReturn(List.of());
+        when(productTypeRepository.findByIdIn(any())).thenReturn(List.of());
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertNull(dto.getBatchNumber());
+        assertNull(dto.getProductTypeName());
+        // 对照: 这两个查询确实发生了 —— null 来自「查不到」, 不是「没去查」
+        verify(productionBatchRepository).findByIdIn(any());
+        verify(productTypeRepository).findByIdIn(any());
+    }
+
+    @Test
     @DisplayName("legacy DTO: 工序产出单位误填成工序名时回落任务计划单位")
     void getById_legacyInvalidOutputUnitFallsBackToPlannedUnit() {
         WorkProcessTask task = WorkProcessTask.builder()

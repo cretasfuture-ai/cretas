@@ -44,10 +44,10 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("taskId", Map.of(
                 "type", "integer",
-                "description", "工序任务ID (Long)"));
+                "description", "工序任务编号"));
         properties.put("actualQuantity", Map.of(
                 "type", "number",
-                "description", "实际产量 (按工序产出单位计, 如工金 / 件 / kg)"));
+                "description", "实际产量（一个数字，单位按这道工序的产出单位，如公斤或件）"));
         properties.put("notes", Map.of(
                 "type", "string",
                 "description", "备注 (选填), 如质量异常 / 特殊情况说明"));

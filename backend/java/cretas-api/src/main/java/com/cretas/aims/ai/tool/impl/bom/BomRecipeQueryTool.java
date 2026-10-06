@@ -36,11 +36,11 @@ public class BomRecipeQueryTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> productTypeId = new HashMap<>();
         productTypeId.put("type", "string");
-        productTypeId.put("description", "产品类型 ID — 取当前生效 BOM. 与 recipeId 二选一.");
+        productTypeId.put("description", "产品类型 — 取当前生效的 BOM 配方. 与配方编号二选一.");
 
         Map<String, Object> recipeId = new HashMap<>();
         recipeId.put("type", "string");
-        recipeId.put("description", "BOM 配方 ID (UUID) — 取详情. 与 productTypeId 二选一.");
+        recipeId.put("description", "BOM 配方编号 — 取配方详情. 与产品类型二选一.");
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("productTypeId", productTypeId);

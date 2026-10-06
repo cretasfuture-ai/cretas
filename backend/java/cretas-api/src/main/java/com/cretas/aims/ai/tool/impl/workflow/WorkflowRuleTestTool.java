@@ -51,7 +51,7 @@ public class WorkflowRuleTestTool extends AbstractBusinessTool {
 
         Map<String, Object> ruleId = new HashMap<>();
         ruleId.put("type", "string");
-        ruleId.put("description", "WorkflowRule.id (UUID)");
+        ruleId.put("description", "流转规则编号");
         properties.put("ruleId", ruleId);
 
         Map<String, Object> mockContext = new HashMap<>();

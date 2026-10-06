@@ -104,9 +104,10 @@ public class QualityReturnCreateTool extends AbstractBusinessTool {
         result.put("targetId", saved.getTargetId());
         result.put("quantity", saved.getQuantity());
         result.put("status", saved.getStatus().name());
-        result.put("message", String.format("已创建退回单 %s (%s, %s 数量 %s), 状态 DRAFT, 待确认",
+        result.put("message", String.format("已创建退回单 %s (%s, %s 数量 %s), 状态「%s」, 待确认",
                 saved.getReturnNumber(), saved.getTargetType().getDisplayName(),
-                targetName != null ? targetName : targetId, saved.getQuantity()));
+                targetName != null ? targetName : targetId, saved.getQuantity(),
+                saved.getStatus().getDisplayName()));
         return result;
     }
 

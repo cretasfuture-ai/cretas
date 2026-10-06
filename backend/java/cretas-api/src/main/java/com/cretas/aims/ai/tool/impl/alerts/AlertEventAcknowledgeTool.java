@@ -47,7 +47,7 @@ public class AlertEventAcknowledgeTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> eventId = new HashMap<>();
         eventId.put("type", "string");
-        eventId.put("description", "告警事件 ID (UUID)");
+        eventId.put("description", "告警事件编号");
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("eventId", eventId);

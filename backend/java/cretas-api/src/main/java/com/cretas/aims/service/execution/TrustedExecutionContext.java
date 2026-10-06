@@ -8,7 +8,7 @@ import java.util.Set;
  * Builds execution arguments from untrusted request data while binding the
  * authenticated principal supplied by the server-side call path.
  */
-final class TrustedExecutionContext {
+public final class TrustedExecutionContext {
 
     private static final Set<String> RESERVED_PRINCIPAL_KEYS = Set.of(
             "factoryId", "factory_id",
@@ -33,7 +33,7 @@ final class TrustedExecutionContext {
         return trustedContext;
     }
 
-    static void enforcePrincipal(Map<String, Object> context,
+    public static void enforcePrincipal(Map<String, Object> context,
                                  String factoryId,
                                  Long userId,
                                  String userRole) {
