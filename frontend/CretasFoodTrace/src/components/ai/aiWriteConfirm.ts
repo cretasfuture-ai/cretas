@@ -38,6 +38,12 @@ export interface WriteConfirmState {
   intentName: string;
   /** 用户原话 —— 预览请求用它, 与被拦的那次请求同一句 */
   userInput: string;
+  /**
+   * 流式那一轮已经定下来的工具参数 (服务端 metadata.previewParams): 预览请求原样放进 context,
+   * 预览就不用再从原话重新抽一遍 (prod 2026-10-06: 那一遍失败, 「开始1827号工序任务」被反问任务号);
+   * 追问确认按钮带来的 taskId / 产量也靠它到得了预览。
+   */
+  previewContext?: Record<string, unknown>;
   /** 气泡正文 (不是 PREVIEW 那串原始 JSON) */
   leadText: string;
   action?: ConfirmableAction;
@@ -126,6 +132,23 @@ function permissionNotice(intentName: string, backendMessage?: string): string {
 }
 
 /**
+ * 服务端随 WRITE_CONFIRM_REQUIRED 给的 metadata.previewParams → 预览请求的 context。
+ * 只收标量 (字符串 / 有限数字 / 布尔); 没有或不合规返回 undefined (预览照旧只带原话)。
+ */
+export function readPreviewParams(metadata: unknown): Record<string, unknown> | undefined {
+  const raw = asRecord(asRecord(metadata)?.previewParams);
+  if (!raw) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string' || typeof value === 'boolean'
+        || (typeof value === 'number' && Number.isFinite(value))) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
  * 流式结果 → 确认卡初始状态。不是写确认就返回 undefined (普通读结果不出卡)。
  * PREVIEW + confirmableAction 也可能直接从流里来, 那就直接进 ready。
  */
@@ -140,11 +163,13 @@ export function writeConfirmFromStreamResult(
   // 预览回来会带上真名替换掉。
   const intentName = str(result.intentName) ?? GENERIC_INTENT_NAME;
   if (status === 'WRITE_CONFIRM_REQUIRED') {
+    const previewContext = readPreviewParams(result.metadata);
     return {
       phase: 'preparing',
       intentCode,
       intentName,
       userInput,
+      ...(previewContext ? { previewContext } : {}),
       leadText: str(result.message) ?? `${quoteIntent(intentName)}会修改数据，需要你确认后才会执行。`,
       previewAttempt: 0,
     };

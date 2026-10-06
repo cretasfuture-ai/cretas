@@ -103,6 +103,25 @@ describe('AIChat server-owned session binding', () => {
     expect(JSON.stringify(firstSource.options.body)).not.toMatch(/sessionId/);
   });
 
+  it('a slot-filling result session id is reported after the start session, so the screen keeps the slot one', async () => {
+    // 缺参追问 (NEED_MORE_INFO) 的 result.sessionId 是参数收集会话; 它必须在 start 的会话之后报给屏幕,
+    // 屏幕「最后一次 onSessionId」就是下一句要带回去的那个 (AIChatScreenDialogContinuity 依赖这条顺序)
+    const onSessionId = jest.fn();
+    const onResult = jest.fn();
+    const stream = aiApiClient.executeIntentStream('做完了，产量0', { onSessionId, onResult }, 'F006');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const source = mockEventSources[0];
+    source.emit('start', { data: JSON.stringify({ message: '开始', sessionId: 'mem-1' }) });
+    source.emit('result', {
+      data: JSON.stringify({ status: 'NEED_MORE_INFO', sessionId: 'slot-1', clarificationQuestions: ['请提供工序任务ID'] }),
+    });
+    source.emit('complete', { data: JSON.stringify({ status: 'NEED_MORE_INFO', cacheHit: false }) });
+    await stream;
+
+    expect(onSessionId.mock.calls.map((c) => c[0])).toEqual(['mem-1', 'slot-1']);
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'slot-1' }));
+  });
+
   it('aborts before opening SSE without reading auth or creating a network source', async () => {
     const controller = new AbortController();
     controller.abort();
