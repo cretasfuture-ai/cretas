@@ -63,10 +63,25 @@ describe('applyPreviewResponse', () => {
     expect(s.phase).toBe('blocked');
     expect(s.notice).toContain('请到对应功能页面手工操作');
   });
-  it('NEED_MORE_INFO → blocked, 列出要补的信息', () => {
+  it('NEED_MORE_INFO → asking (追问, 不是 blocked 拒绝), 内容就是问题本身', () => {
     const s = applyPreviewResponse(preparing(), { status: 'NEED_MORE_INFO', clarificationQuestions: ['样品编号是多少?'] }, 0);
-    expect(s.phase).toBe('blocked');
-    expect(s.notice).toContain('1. 样品编号是多少?');
+    expect(s.phase).toBe('asking');
+    expect(s.notice).toBe('样品编号是多少?');
+    expect(s.action).toBeUndefined();
+  });
+  it('NEED_MORE_INFO 多个问题才编号; 没有问题列表时用后端原话', () => {
+    const many = applyPreviewResponse(preparing(), { status: 'NEED_MORE_INFO', clarificationQuestions: ['哪个批次?', '领多少?'] }, 0);
+    expect(many.phase).toBe('asking');
+    expect(many.notice).toBe('1. 哪个批次?\n2. 领多少?');
+    const said = applyPreviewResponse(preparing(), { status: 'NEED_MORE_INFO', message: '请直接说批次号。' }, 0);
+    expect(said.phase).toBe('asking');
+    expect(said.notice).toBe('请直接说批次号。');
+  });
+  it('对照: PREVIEW_BLOCKED / 权限 / 不支持 仍是 blocked 拒绝, 不会被当成追问', () => {
+    const blocked = applyPreviewResponse(preparing(), { status: 'PREVIEW_BLOCKED', message: '批次已用完' }, 0);
+    expect(blocked.phase).toBe('blocked');
+    expect(applyPreviewResponse(preparing(), { status: 'PERMISSION_DENIED' }, 0).phase).toBe('blocked');
+    expect(applyPreviewResponse(preparing(), { status: 'PREVIEW_UNSUPPORTED' }, 0).phase).toBe('blocked');
   });
   it('PREVIEW_BLOCKED (后端 #907: 预览没通过不发令牌) → blocked, 只说原因, 不拼「手工操作」', () => {
     const s = applyPreviewResponse(preparing(), {

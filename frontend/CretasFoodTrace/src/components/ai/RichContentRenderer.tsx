@@ -7,7 +7,13 @@
 
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
-import { getListCellValue, getListDisplayKeys } from './richListPresentation';
+import {
+  buildDetailRows,
+  formatColumnName,
+  formatDisplayValue as formatValue,
+  getListCellValue,
+  getListDisplayKeys,
+} from './richListPresentation';
 
 export interface RichData {
   /** Content type hint from backend (optional) */
@@ -128,17 +134,16 @@ function ListRenderer({ items, pagination }: { items: unknown[]; pagination: Ric
 // ==================== Detail Card Renderer ====================
 
 function DetailRenderer({ detail }: { detail: Record<string, unknown> }) {
-  const displayEntries = Object.entries(detail)
-    .filter(([k, v]) => v !== null && v !== undefined && k !== 'factoryId' &&
-                         typeof v !== 'object')
-    .slice(0, 12);
+  // 只给一线看得懂的行: 中文标签、中文状态、数量带单位, 内部编号不显示 (见 buildDetailRows)
+  const rows = buildDetailRows(detail);
+  if (rows.length === 0) return null;
 
   return (
-    <View style={detailStyles.container}>
-      {displayEntries.map(([key, value]) => (
-        <View key={key} style={detailStyles.row}>
-          <Text style={detailStyles.label}>{formatColumnName(key)}</Text>
-          <Text style={detailStyles.value} numberOfLines={2}>{formatValue(value)}</Text>
+    <View style={detailStyles.container} testID="ai-detail-card">
+      {rows.map(row => (
+        <View key={row.key} style={detailStyles.row}>
+          <Text style={detailStyles.label}>{row.label}</Text>
+          <Text style={detailStyles.value} numberOfLines={2}>{row.value}</Text>
         </View>
       ))}
     </View>
@@ -165,42 +170,6 @@ function StatsRenderer({ stats }: { stats: Record<string, unknown> }) {
 }
 
 // ==================== Helpers ====================
-
-const COLUMN_NAMES: Record<string, string> = {
-  orderNumber: '订单编号', planNumber: '计划编号', batchNumber: '批次号',
-  transferNumber: '调拨编号', returnNumber: '退货编号',
-  status: '状态', productName: '产品', productTypeName: '产品类型',
-  quantity: '数量', plannedQuantity: '计划数量', actualQuantity: '实际数量',
-  totalAmount: '总金额', unitPrice: '单价', price: '价格',
-  supplierId: '供应商', customerName: '客户', supplierName: '供应商',
-  createdAt: '创建时间', updatedAt: '更新时间', plannedDate: '计划日期',
-  message: '消息', remark: '备注', notes: '备注',
-  totalOrders: '总订单', totalElements: '总记录数',
-  currentPage: '当前页', hasMore: '有更多',
-  statusDisplayName: '状态',
-  materialName: '物料名称', materialCode: '物料编码',
-  materialCategory: '物料类别', materialMainCategory: '物料大类',
-  currentQuantity: '账面数量', unit: '单位', quantityUnit: '单位',
-};
-
-function formatColumnName(key: string): string {
-  return COLUMN_NAMES[key] || key
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, s => s.toUpperCase())
-    .trim();
-}
-
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) return '-';
-  if (typeof value === 'boolean') return value ? '是' : '否';
-  if (typeof value === 'number') {
-    if (Number.isInteger(value)) return value.toLocaleString();
-    return value.toFixed(2);
-  }
-  const str = String(value);
-  // Truncate long values
-  return str.length > 50 ? str.substring(0, 47) + '...' : str;
-}
 
 // ==================== Styles ====================
 

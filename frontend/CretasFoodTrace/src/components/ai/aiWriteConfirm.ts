@@ -22,6 +22,11 @@ export type WriteConfirmPhase =
   | 'ready'
   /** 预览没通过 / 不支持 / 无权限 —— 没有「确认执行」按钮 */
   | 'blocked'
+  /**
+   * 工具缺参数在追问 (后端 NEED_MORE_INFO): 不是「办不了」, 是「还差一句话」。
+   * 渲染成普通追问气泡, ⛔ 不用「暂时不能执行」的红色拒绝样式 (prod 2026-10-07: 领用原料问批次号被当成报错)。
+   */
+  | 'asking'
   /** 确认请求在途 */
   | 'executing'
   /** 已执行 (或后端明确说没执行, 如演示环境 —— 见 doneLabel) */
@@ -248,13 +253,13 @@ export function applyPreviewResponse(
     const questions = Array.isArray(response.clarificationQuestions)
       ? response.clarificationQuestions.filter((q): q is string => typeof q === 'string' && q.trim() !== '')
       : [];
-    // 服务端开了参数收集会话 (带 sessionId): 下一句直接回答就行, 不用把整句话重说一遍
-    const answerable = str(response.sessionId) !== undefined;
-    const tail = answerable ? '请直接回答上面的问题，不用重新说一遍。' : '请补充后重新说一遍。';
-    const ask = questions.length > 0
-      ? `还需要以下信息：\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n${tail}`
-      : (backendMessage ?? `还缺少必要信息，${tail}`);
-    return { ...base, phase: 'blocked', notice: ask, canRegenerate: false };
+    // 内容就是问题本身: 一个问题原样给 (问题里已经说了怎么答, 例「请直接说批次号」); 多个才编号。
+    const ask = questions.length === 1
+      ? questions[0]
+      : questions.length > 1
+        ? questions.map((q, i) => `${i + 1}. ${q}`).join('\n')
+        : (backendMessage ?? '还缺少必要信息，请直接告诉我。');
+    return { ...base, phase: 'asking', notice: ask, canRegenerate: false };
   }
   if (status === 'PREVIEW_BLOCKED') {
     // 后端 (#907) 预览没通过 (业务规则不允许 / 预览失败) 就不发令牌, 原因在 message 里。
