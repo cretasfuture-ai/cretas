@@ -8,6 +8,11 @@ Some entries have owner-approved pay-as-you-go billing. Warehouse-only visual
 candidates require LLM_WAREHOUSE_CANDIDATES_ENABLED=1; the DeepSeek candidate
 retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 
+⚠️ 2026-10-07: `aistore` / `deepseek` / `zhipu` 三类账号已整体清出(Steve 复审裁定
+「清掉死通道, 大模型后备只留我们自己的阿里云账号」, 见 `_REGISTRY_AUDIT_DATE` 上方)。
+今天在册的只有 aliyun_c_vl / aliyun_a_vl / aliyun_b_vl 三个逻辑账号; 文本槽的链
+全部来自 `_TEXT_TAIL`(三账号轮转 qwen3.8-flash)。下面 09-15 那段是当时的订正, 存档。
+
 ⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
 aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
 账号只剩 `aistore` / `deepseek` / `zhipu`, aliyun 三个通用账号已整体退场。
@@ -124,7 +129,44 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # ⚠️ 推日期不改变 prod 行为: _MINIMAL_SAFE_SET 现在等于整张注册表(10/10), stale 与否
 #   _refuse_reason 对 10 条的结果逐条相同(09-16 用两个日期各算一遍实测, 见 PR 描述)。
 # ⚠️ 每日探针 cron 在 47 上最后一次跑是 09-10, 之后没日志 —— 与本仓 cron 告警无人读同源。
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 9, 16)  # 09-16 复审: 0 删 0 增, 见上
+#
+# ── 2026-10-07 复审 (Steve 裁定「清掉死通道, 大模型后备只留我们自己的阿里云账号」) ──
+# 证据: prod 47 上 `python -m scripts.probe_llm_registry` 同一套 `_run()`(经 normalize →
+#   _apply_slot_params, 判非空 content), 从 8083 进程 environ 只导 LLM_* 前缀;
+#   2026-10-07 10:27 CST 共探 14 条, ok 4 / 非 ok 10。逐条读数见下面 `_REGISTRY_AUDIT_PROBE`。
+# 删 6 条(三类账号整体出局, 连同 _MINIMAL_SAFE_SET / _CAPABILITY / _PLAN_SCHEMA_VIOLATIONS /
+#   _TEXT_TAIL / _QUALITY_TIER_POOL / _SLOT_POOLS / _ABSOLUTE_LAST / _provider_config /
+#   DEFAULT_CHAIN 里按这三类账号键的条目):
+#   · aistore DeepSeek-V4-Flash-A / Qwen3-235B-A22B / Qwen3-32B   401, 09-13 已过期
+#   · deepseek deepseek-v4-flash / deepseek-v4-pro                  401 key 无效(至少自 09-10)
+#   · zhipu glm-4.5-air                                             429 配额用尽
+# 留 8 条(aliyun 三个逻辑账号的全部现存条目, 一条未加):
+#   · 活: aliyun_c_vl / aliyun_a_vl qwen3.8-flash、aliyun_a_vl qwen3.7-flash、
+#         aliyun_a_vl deepseek-v4.1-flash(仓库专用, 仍需 LLM_WAREHOUSE_V41_ENABLED=1)
+#   · 🔴 当天 403 quota 的 4 条**原样保留, 报 owner 裁定**(brief: aliyun 条目死了只报告,
+#     ⛔ 不自作主张删/留): aliyun_b_vl qwen3.8-flash(文本地板与 VL 链的第三跳)、
+#     aliyun_a_vl kimi-k3 / qwen3.8-27b / qwen3.8-max-0902(仓库识图候选)。
+#     403 FreeTierOnly = 「用完即停」生效, 不计费; 链上表现是一跳 403 → 下一跳。
+# ⇒ 文本槽从此**只有** aliyun 三账号轮转 qwen3.8-flash; 三个都不可用时 call_chain
+#   抛 LLMChainExhausted 并逐条列出原因(明确失败, ⛔ 不静默降级)。
+# 下次到期: 2026-10-28 是最后一个不超龄日, 10-29 起 test_registry_audit_date_is_not_stale 变红。
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 10, 7)  # 10-07 复审: 删 6 留 8, 见上
+#: 复审当天对**注册表每一条**的探针读数(值是读数本身, ⛔ 不是布尔)。
+#: 由 test_registry_audit_has_a_probe_reading_for_every_entry 钉住两件事:
+#:   ① 键集合 == `_SAFE_MODELS` 的键集合 —— 新增/保留一条却没有当天读数 ⇒ 红;
+#:   ② `_REGISTRY_AUDIT_PROBE_DATE == _REGISTRY_AUDIT_DATE` —— **只推审计日期** ⇒ 红。
+#: ⇒ 推日期必须同时换上新一轮的逐条读数, 「只推日期过闸」在结构上做不到不留痕。
+_REGISTRY_AUDIT_PROBE_DATE = datetime.date(2026, 10, 7)
+_REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
+    ("aliyun_c_vl", "qwen3.8-flash"): "ok 200",
+    ("aliyun_a_vl", "qwen3.8-flash"): "ok 200",
+    ("aliyun_a_vl", "qwen3.7-flash"): "ok 200",
+    ("aliyun_a_vl", "deepseek-v4.1-flash"): "ok 200 (仓库专用, 需 LLM_WAREHOUSE_V41_ENABLED=1)",
+    ("aliyun_b_vl", "qwen3.8-flash"): "quota 403 —— 保留, 报 owner 裁定",
+    ("aliyun_a_vl", "kimi-k3"): "quota 403 —— 保留, 报 owner 裁定",
+    ("aliyun_a_vl", "qwen3.8-27b"): "quota 403 —— 保留, 报 owner 裁定(本就不在自动池)",
+    ("aliyun_a_vl", "qwen3.8-max-0902"): "quota 403 —— 保留, 报 owner 裁定",
+}
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
 # (探针 200 但控制台无余量的最危险: 可能是「用完即停」没覆盖它、其实在计费,
@@ -313,31 +355,16 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_a_vl", "qwen3.8-flash"): None,
     ("aliyun_b_vl", "qwen3.8-flash"): None,
     ("aliyun_a_vl", "qwen3.7-flash"): None,
-    # ── 上海电信 AI Store (owner 2026-08-13 confirmed 25M quota points and
-    #    automatic stop on exhaustion; synthetic live probes passed) ──
-    # The account is valid for about one month.  We deliberately hard-stop on
-    # 2026-09-13 even if the upstream would continue serving: a conservative
-    # availability cutoff is safer than assuming that an expired grant still
-    # has the same billing boundary.
-    ("aistore", "DeepSeek-V4-Flash-A"): _d(2026, 9, 13),
-    ("aistore", "Qwen3-235B-A22B"): _d(2026, 9, 13),
-    ("aistore", "Qwen3-32B"): _d(2026, 9, 13),
+    # ══ 2026-10-07 三类账号出局 ════════════════════════════════════
+    # 原在此处的 aistore ×3(09-13 真额度到期)、deepseek 官方 ×2(2026-11-15 是自设
+    # 复审点, 按量付费)、zhipu glm-4.5-air(无到期日的文本地板)全部删除 ——
+    # 复审读数与裁定见文件上方 `_REGISTRY_AUDIT_DATE` 处。旧条目与其日期语义说明
+    # 在 git 历史里(本 commit 的父提交)。
+    # ⛔ 加回任何一条 = 同时改 tests/test_llm_router_registry.py 的冻结表与
+    #    test_llm_router_fallback.py::test_the_deleted_accounts_are_really_gone ——
+    #    那一步必须是显式的, 并带当天探针读数。
 
-    # ── DeepSeek 官方 (2026-08-15 加, 接 aistore 9-13 到期的悬崖) ──────
-    # 🔴 这两条的日期语义与上面 aistore 那三条**完全不同**, 不要照着读:
-    #
-    #   aistore 的 2026-09-13 = **真的额度到期**, 那天之后再调就是越界。
-    #   下面的 2026-11-15     = **我们自己设的强制复审点**。按量付费本身
-    #                           没有到期日, 这个日期的作用是「到那天回来看
-    #                           一眼实际花了多少、还要不要留」。
-    #
-    # ⚠️ 不写清这一条, 下一个人会以为 DeepSeek 也会在那天断掉, 于是要么提前
-    #    做一次不必要的迁移, 要么在它「过期」时以为线上出了故障。
-    # 从 2026-08-15 起算三个月 —— 早一点复审比晚一点安全。
-    ("deepseek", "deepseek-v4-flash"): _d(2026, 11, 15),
-    ("deepseek", "deepseek-v4-pro"): _d(2026, 11, 15),
-
-    # ══ 2026-08-15 账号收敛 ════════════════════════════════════════
+    # ══ 2026-08-15 账号收敛 (历史, 已被 10-07 再次收敛取代) ═══════════════
     # owner 裁定:「暂时限制用 ai store 和 deepseek 还有 zhipu, **后面我有要求
     # 的时候我们再说**」。⇒ 删掉 aliyun_a/b/c、aliyun_a_deepseek、tencent、ark
     # 六个账号的**条目**(19 条), 留 aistore 3 + deepseek 2 + zhipu 1。
@@ -428,10 +455,7 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     #      走生产管线 0/6 全 http400。快 ≠ 能用。
     # ⛔ ("ark", "deepseek-v4-flash-ga-260731") 删除 08-13: **429 TooManyRequests**。
 
-    # zhipu: 既有地板, 钉在 _TEXT_TAIL 最后一位(08-09 事故结论, 见那里)。
-    #   ⚠️ 今天两轮读数打架: 3.6s len=48 / 4.2s len=0。抖, 但它本来就在最后一位,
-    #      只有前面全挂才会走到 —— 保留, 不因单轮空读数移除(移除要稳定证据)。
-    ("zhipu", "glm-4.5-air"): None,
+    # zhipu: 2026-10-07 删除(429 配额用尽, 自 09-16 复审起持续), 见文件上方复审段。
 }
 
 # ── 2026-08-10 探针复审剔除 ──────────────────────────────────────────────
@@ -494,33 +518,12 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     ("aliyun_a_vl", "kimi-k3"),
     ("aliyun_a_vl", "qwen3.8-max-0902"),
     ("aliyun_a_vl", "deepseek-v4.1-flash"),
-    # AI Store's account-level auto-stop was explicitly confirmed by the owner;
-    # these remain admissible when the older shared registry becomes stale, but
-    # _refuse_reason still hard-drops all three at their 2026-09-13 expiry.
-    ("aistore", "DeepSeek-V4-Flash-A"),
-    ("aistore", "Qwen3-235B-A22B"),
-    ("aistore", "Qwen3-32B"),
-    # ── DeepSeek 官方 (2026-08-15) ────────────────────────────────────
-    # 🔴 只加进 `_SAFE_MODELS` 是**不够的**, 这一条是实测出来的:
-    #
-    #   `_REGISTRY_AUDIT_DATE(2026-08-13) + _REGISTRY_MAX_AGE_DAYS(21)`
-    #   ⇒ **2026-09-04** 起 registry 超龄, `_refuse_reason` 把不在本集合里的
-    #     一律判 "registry_stale"。实测:
-    #        只加 _SAFE_MODELS  -> _refuse_reason(...) == 'registry_stale'
-    #        同时加入本集合      -> _refuse_reason(...) is None
-    #   ⇒ 不加进来的话, 它在 **09-04** 就死了 —— 比它要接的 9-13 悬崖**早 9 天**,
-    #     恰好在最需要它的那天是不可用的。
-    #
-    # ⛔ 否决过的替代方案: 「复审时 bump _REGISTRY_AUDIT_DATE」。那是 21 天一次
-    #    的手工续期, 而本集合的注释白纸黑字写着「它只在 registry 超龄时才被用到,
-    #    所以它坏了不会有任何日常信号报出来」。**依赖「有人记得」的兜底不是兜底。**
-    #
-    # ⚠️ 本集合当前健康度已单独立项(见 smartbi/scripts/minimal_safe_set_liveness.py):
-    #    2026-08-15 实测 8 条里 2 条死于配额、3 条中位超单跳预算; 扣掉 9-13 过期的
-    #    aistore 三条后, 既活着又在 6.0s 内的只剩 zhipu 一条。加这两条正是补上
-    #    这个集合眼下最缺的东西: 一条**快的、跑道长的**。
-    ("deepseek", "deepseek-v4-flash"),
-    ("deepseek", "deepseek-v4-pro"),
+    # 2026-10-07: aistore ×3 / deepseek 官方 ×2 / zhipu ×1 随注册表一并删除
+    # (复审段见 `_REGISTRY_AUDIT_DATE`)。保留下来的教训(原 deepseek 段, 2026-08-15 实测):
+    # 🔴 新候选只加进 `_SAFE_MODELS` 是**不够的** —— registry 一超龄, 不在本集合里的
+    #    一律被 `_refuse_reason` 判 "registry_stale"。⛔ 否决过的替代方案:「复审时
+    #    bump _REGISTRY_AUDIT_DATE」—— **依赖「有人记得」的兜底不是兜底。**
+    #    本集合的存活性由 smartbi/scripts/minimal_safe_set_liveness.py 单独量。
     # ── VL (2026-09-15) ───────────────────────────────────────────────
     # 两条都进, 理由见本集合上方那段: registry 自 2026-09-04 起已超龄,
     # 不在本集合里的 pair 会被 `_refuse_reason` 判 'registry_stale' 直接拒掉 ——
@@ -539,7 +542,8 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     #    最长 + 当天探针通过的」—— 而「跑道最长」恰恰是今天全部死掉的那批。
     #    判据: **fail-safe 集合的存活性要和主池一起量, 每轮都要**。它只在
     #    registry 超龄时才被用到, 所以它坏了不会有任何日常信号报出来。
-    ("zhipu", "glm-4.5-air"),   # 既有文本地板(2026-08-15: tencent/minimax 同行已删)
+    # (原此处的 zhipu/glm-4.5-air 文本地板 2026-10-07 删除; 文本地板现在就是上面
+    #  三条 aliyun_*_vl qwen3.8-flash, 它们本来就在本集合里。)
 })
 
 
@@ -599,10 +603,7 @@ _CAPABILITY_PASS_FLOOR = 0.5
 #    它被钉在 _TEXT_TAIL 最后一位是 08-09 一次生产事故的结论(某些槽稳定超时,
 #    连累后面 4 个健康候选被熔断)。一次好读数推翻不了那条判据。
 _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
-    # Shanghai Telecom AI Store, 2026-08-13.  Measured through the production
-    # normalize -> slot-params -> T3 contract path, six real restaurant cases.
-    ("aistore", "DeepSeek-V4-Flash-A"): (1.0, 3.0),
-    ("aistore", "Qwen3-235B-A22B"): (1.0, 3.5),
+    # 2026-10-07: aistore ×2 / zhipu ×1 的读数随账号出局一并删除(见 _REGISTRY_AUDIT_DATE)。
     # ── 2026-08-13 重测: `python -m smartbi.scripts.llm_capability_rank
     #    --slot review` + `--slot reasoning`, 生产凭证、生产 prompt、生产判据 ──
     #
@@ -634,7 +635,6 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     # 还能答的那个」, 它的读数却是最少被刷新的。08-13 已经实测到两条地板
     # (ark/deepseek-v4-flash-ga-260731 与 tencent/hy3)在 24 小时内死亡。
     ("tencent", "minimax-m2.7"): (1.0, 15.0),
-    ("zhipu", "glm-4.5-air"): (1.0, 1.8),
 }
 
 
@@ -660,11 +660,7 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
 #    「稳定零越界」与「会编枚举」两档, 所以下面的 `_plan_schema_tier` 也只分档。
 _PLAN_SCHEMA_MEASURED_AT = datetime.date(2026, 8, 10)
 _PLAN_SCHEMA_VIOLATIONS: Dict[Tuple[str, str], int] = {
-    # Same-day seven-case schema probe.  DeepSeek stayed within the prompt's
-    # enums; Qwen invented yesterday + next_week, so it is not admitted to the
-    # semantic MAPPER/REVIEW pools despite passing the basic JSON contract.
-    ("aistore", "DeepSeek-V4-Flash-A"): 0,
-    ("aistore", "Qwen3-235B-A22B"): 2,
+    # 2026-10-07: aistore ×2 的读数随账号出局一并删除(见 _REGISTRY_AUDIT_DATE)。
     ("aliyun_a", "qwen3.7-flash"): 0,
     ("aliyun_a", "qwen3.8-max"): 0,
     ("aliyun_b", "qwen3.8-max"): 0,
@@ -921,8 +917,16 @@ def slot_has_usable_provider(slot: "SLOT") -> bool:
     「猜它还行不行」的逻辑 —— 那会变成第二处可用性定义。
     """
     today = _today()
+    chain = SLOT_MODELS.get(slot, ())
+    if not chain:
+        # 🔴 2026-10-07: 链本身是空的 = **一个通道都没有**, ⛔ 不是「没配 key」。
+        #    下面那条 `configured == 0 → True` 的豁免是给「测试环境不配 key」用的;
+        #    空链原来也会落进它(configured 恒为 0)而被报成「可用」—— 一个结构上
+        #    无后备的槽在入口预检里显示为健康。清掉 aistore/deepseek/zhipu 之后
+        #    「没有后备」是真实可能的状态, 必须明确报出来。
+        return False
     configured = 0
-    for account, model in SLOT_MODELS.get(slot, ()):
+    for account, model in chain:
         _base_url, api_key = _provider_config(account)
         if not api_key:
             continue
@@ -1333,21 +1337,15 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     ("aliyun_c_vl", "qwen3.8-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
     ("aliyun_b_vl", "qwen3.8-flash"),
-    # 非 DashScope 地板 —— 到期日为 None → _expiry_of 返回 _FAR_FUTURE →
-    # _build_chain 的排序必然把它们放在所有 aliyun 条目之后。
-    #
-    # ⛔ zhipu 必须留在**最后一位** —— 这条来自 2026-08-09 的一次生产事故(PR #2411):
-    #    zhipu 在某些槽上会稳定超时, 而链是**串行且共享同一个总预算**。它排在前面
-    #    会把预算吃光, 后面本来 0.5-1.1s 就能答的候选**因为分不到时间而跟着超时**,
-    #    连续 2 次即被熔断 60 秒。当天实测有 4 个健康候选被这样连坐熔断。
-    #    判据: **把一个会超时的候选排在前面, 等于把它后面的健康候选一起拖下水。**
-    #    这几条到期日都是 None, 稳定排序原样保留书写顺序 —— 顺序由这几行决定。
-    #
-    # ── 2026-08-13 重建 ─────────────────────────────────────────
-    # 上一版的三条快地板里有**两条今天死了**: ark/deepseek-v4-flash-ga-260731 (429)
-    # 与 tencent/hy3 (402)。它们是 08-12 刚以「0.8s / 1.0s」加进来的。
-    # 现在这三条均为 2026-08-13 实测(len≥8 且跨轮一致):
-    ("zhipu", "glm-4.5-air"),                         # 钉死在最后一位, 见上
+    # 🔴 2026-10-07: 上面三条从「地板」变成了文本槽的**全部**候选 ——
+    #    aistore / deepseek / zhipu 已整体出局(Steve:「大模型后备只留我们自己的阿里云
+    #    账号」), 文本 `_SLOT_POOLS` 全空。三条到期日都是 None, 稳定排序保留书写顺序
+    #    c → a → b(与 VL 同序: 实测 c 最快、b 最慢)。
+    #    三个账号都不可用时 call_chain 抛 LLMChainExhausted 并逐条列出原因 ——
+    #    ⛔ 不再有任何「非 DashScope 地板」, 也不许为了「多一条后备」把死通道加回来。
+    #    ⚠️ 2026-10-07 探针: aliyun_b_vl 当天 403 quota(保留, 已报 owner)。
+    # (原此处的 zhipu/glm-4.5-air 及其「必须留在最后一位」的 08-09 事故判据, 迁到
+    #  `_ABSOLUTE_LAST` 注释里存档 —— 那条判据针对的候选已不在册, 机制仍在。)
 ]
 
 # ══ 资格层 ══════════════════════════════════════════════════════════════
@@ -1389,11 +1387,9 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 # ≤4s), 各写一份 21 行迟早漂移成两张不一致的表。将来若真分化(例如 REVIEW 需要
 # 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
 _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
-    # AI Store quota expires first and is explicitly use-it-or-lose-it.  The A
-    # DeepSeek endpoint is the restaurant-quality head.  Qwen 235B passed the
-    # basic JSON contract but invented two time enums in the seven-case schema
-    # probe, so it is deliberately absent from this semantic quality pool.
-    ("aistore", "DeepSeek-V4-Flash-A"),
+    # 🔴 2026-10-07: 本池**为空**。原有两条 aistore/DeepSeek-V4-Flash-A 与
+    #    deepseek/deepseek-v4-flash 随账号出局删除; INSIGHTS/REVIEW 的链全部来自
+    #    `_TEXT_TAIL`(aliyun 三账号 qwen3.8-flash)。下面是历史注释, 存档。
     # 🔴 2026-08-13 清空重建: 上一版 13 个条目**今天实测全部 403**(见 _SAFE_MODELS
     #    段落)。不是"淘汰几个", 是这个池一个活口都不剩 —— aliyun 三个账号今天只剩
     #    4 类模型有额度, 其中 qwen3.5-ocr 是 OCR SKU、另外三个都是 _THINKING_ONLY,
@@ -1407,42 +1403,27 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     #    干活)。它仍在 _SAFE_MODELS(owner 控制台确认 + 计费安全), 只是进不了链。
     # DeepSeek 官方 (2026-08-15): 6/6 契约, 中位 1.06s —— 关思考、≤4s、通用文本,
     # 三条都满足。它是 aistore/DeepSeek-V4-Flash-A 9-13 到期后的**对位替代**。
-    # ⛔ 顺序不表示链序: 跨到期日的先后由 _build_chain 按到期日升序算。
-    ("deepseek", "deepseek-v4-flash"),                # 6/6  1.06s
+    # (2026-10-07 删: 401 key 无效。)
 ]
 
 # 每个槽只声明「够资格」的候选。⛔ 这里的顺序**不是**最终链顺序 ——
 # 它只在「同一到期日」时生效(_build_chain 用稳定排序), 表达的是质量优先级。
 # 跨到期日的先后由 _build_chain 按到期日升序算, 人不要在这里排。
 _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # 🔴 2026-08-13: CHAT / CHART / MAPPER 三个池的**全部原有条目今天实测 403**。
-    #    它们清一色是 aliyun 的 flash / v4-flash / 3.8-max, 昨天还都是双证通过的。
-    #    重建后三池只剩两条, 且都在 tencent —— aliyun 今天没有任何模型同时满足
-    #    「有额度 + 通用文本 + 关思考可用」。
+    # 🔴 2026-10-07: 七个文本槽(CHAT / SIMPLE_TEXT / CHART / MAPPER / INSIGHTS /
+    #    REVIEW / REASONING)的池**全部为空** —— 原有条目清一色是 aistore / deepseek,
+    #    随三类账号出局删除(复审段见 `_REGISTRY_AUDIT_DATE`)。这些槽的链 = `_TEXT_TAIL`
+    #    (aliyun 三账号 qwen3.8-flash), 由 `_build_chain` 统一追加。
+    #    ⛔ 空池不是遗漏: 要往某个文本槽加专属候选, 先过 `_SAFE_MODELS`(控制台余量 ∩
+    #       探针双证), 再按该槽的契约(延迟 / JSON / 思考开关)放进来。
     #
     # CHAT — 高频低延迟, 关思考。只收关思考档 ≤2s 的通用文本模型。
-    SLOT.CHAT: [
-        ("aistore", "DeepSeek-V4-Flash-A"),
-        ("deepseek", "deepseek-v4-flash"),         # 1.06s 关思考后
-    ],
-    # SIMPLE_TEXT — low-risk rewrite / summary / classification only.  Keeping
-    # Qwen3-32B in a separate slot prevents it from silently receiving semantic
-    # planning, chart or restaurant-review prompts when a larger model fails.
-    SLOT.SIMPLE_TEXT: [
-        ("aistore", "Qwen3-32B"),
-        # 🔴 2026-08-16 补: A1「七槽统一 aistore→deepseek→zhipu」**漏了这一槽**。
-        #    接班人体检实测(推 today 到 9-14): 别的六个槽到期后还剩
-        #    `['deepseek','zhipu']` 两个, 而 SIMPLE_TEXT 只剩 `['zhipu']` ——
-        #    aistore 一到期它就是**单点无兜底**, 与那一轮的意图相反。
-        # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
-        ("deepseek", "deepseek-v4-flash"),
-    ],
+    SLOT.CHAT: [],
+    # SIMPLE_TEXT — low-risk rewrite / summary / classification only.
+    # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
+    SLOT.SIMPLE_TEXT: [],
     # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
-    SLOT.CHART: [
-        ("aistore", "DeepSeek-V4-Flash-A"),
-        ("aistore", "Qwen3-235B-A22B"),
-        ("deepseek", "deepseek-v4-flash"),
-    ],
+    SLOT.CHART: [],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 强制:
     # 池内不得含 _THINKING_ONLY / _SLOW_MODELS / Max 档。
@@ -1456,13 +1437,9 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #    机器翻译, hy-role / hunyuan-role-latest 是角色扮演)虽然是**目前唯一的
     #    亚秒级活口**(0.68-0.81s), 也**没有**放进任何池 —— 它们连 llm_capability_rank
     #    都没跑过, "快"不是"会输出合契约的 JSON"的证据。要用先测。
-    SLOT.MAPPER: [
-        ("aistore", "DeepSeek-V4-Flash-A"),
-        # 契约是「短 JSON, 快而有界」: deepseek-v4-flash 关思考后 1.06s,
-        # 非 _THINKING_ONLY / 非 _SLOW_MODELS / 非 Max 档 —— 三条硬约束都过,
-        # 由 test_mapper_uses_bounded_fast_models_without_max_or_reasoners 守。
-        ("deepseek", "deepseek-v4-flash"),
-    ],
+    # 池内约束(非 _THINKING_ONLY / 非 _SLOW_MODELS / 非 Max 档)由
+    # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 守。
+    SLOT.MAPPER: [],
     # INSIGHTS / REVIEW — 共用质量档池, 见上方 _QUALITY_TIER_POOL 定义。
     SLOT.INSIGHTS: list(_QUALITY_TIER_POOL),
     SLOT.REVIEW: list(_QUALITY_TIER_POOL),
@@ -1489,8 +1466,8 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         # 🔴 统一的是「用哪些模型」, ⛔ 不是「怎么调用它们」: 本槽的 `{}` 与
         #    chart/mapper 的严格 JSON、chat 等的 enable_thinking:False 必须
         #    保持区分 —— 把 profile 也统一等于让 reasoning 丢掉思考。
-        ("aistore", "DeepSeek-V4-Flash-A"),
-        ("deepseek", "deepseek-v4-flash"),
+        # (2026-10-07: 原有 aistore / deepseek 两条随账号出局删除, 本池为空,
+        #  链 = `_TEXT_TAIL`。)
     ],
     # VL — 2026-09-15 重新接上(OPS-VL-SLOT-QWEN38-FLASH-20260915, Steve 拍板)。
     #
@@ -1526,17 +1503,21 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
 }
 
 # 绝对置底 —— `_build_chain` 排序键的第 2 位, 优先于能力档/延迟档/到期日。
-# 目前只有 zhipu/glm-4.5-air: 08-09 生产事故(PR #2411)证明它在某些槽上会稳定
-# 超时, 而链是**串行且共享同一个总预算**, 它排在前面会把后面本来 0.5-1.1s 就能
-# 答的候选一起拖到超时、连续 2 次即熔断 60 秒(当天实测连坐 4 个健康候选)。
+# 🔴 2026-10-07: **当前为空**。唯一的成员 zhipu/glm-4.5-air 随账号出局删除。
+#    机制保留(删条目不删机制): 它是「必须排最后」这类不变量的唯一结构载体,
+#    由 test_llm_router_registry.py::test_absolute_last_mechanism_still_sinks_its_members
+#    用合成成员钉住, 免得空集合让它悄悄失效。
+# 存档(为什么需要它): 08-09 生产事故(PR #2411)证明 zhipu 在某些槽上会稳定超时,
+# 而链是**串行且共享同一个总预算**, 它排在前面会把后面本来 0.5-1.1s 就能答的
+# 候选一起拖到超时、连续 2 次即熔断 60 秒(当天实测连坐 4 个健康候选)。
 # ⛔ 往这里加条目 = 声明"这个候选只在其它全挂时才可接受", 需要同等级别的实测证据。
-_ABSOLUTE_LAST: frozenset = frozenset({("zhipu", "glm-4.5-air")})
+_ABSOLUTE_LAST: frozenset = frozenset()
 
 # VL 槽不追加文本地板 —— 文本模型看不见图片, 追加只会把「明确失败」变成
 # 「拿一段瞎猜的文字冒充图片理解」。这个集合是 _build_chain 的唯一例外,
 # 也是 test_every_text_slot_has_a_floor 的唯一豁免项。
 #
-# DECISION (2026-10-02) 同理: 契约是 top_logprobs, 而文本地板(zhipu)没有在这个
+# DECISION (2026-10-02) 同理: 契约是 top_logprobs, 而文本地板(当时是 zhipu)没有在这个
 # 契约下测过 —— 追加它只会把「拿不到概率 → 明确失败, 调用方回旧路径」变成
 # 「拿到一个没有概率的字母」。
 _NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION})
@@ -1742,6 +1723,10 @@ _TOKENHUB_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
 # all 8 reachable Ark models — none rejected the field.
 _ARK_DISABLE_THINKING: Dict[str, Any] = {"type": "disabled"}
 
+# ⚠️ 2026-10-07: zhipu / aistore / deepseek 三个账号已清出注册表与 `_provider_config`,
+#    下面三张 thinking 翻译表及 `_apply_slot_params` 里对应的分支**刻意保留**
+#    (与 08-15 收敛时同一条裁定: 删条目不删机制 —— #580 删 deepseek 时连 thinking
+#    注入一起删了, 加回来差点 DOA)。它们今天不会被任何链走到。
 # Zhipu's OpenAI-compatible endpoint uses the same object shape for GLM-4.5+
 # (not DashScope's ``enable_thinking`` boolean).  Without this translation the
 # model defaults to dynamic thinking and can spend the caller's entire output
@@ -1961,55 +1946,21 @@ def _provider_config(account: str) -> Tuple[str, str]:
         # (~999K intact on Steve's screenshot 2026-05-13) — independent of the
         # qwen-* quota that the `aliyun_a` slot consumes. After #580 Option 2
         # this is now the SOLE DeepSeek-class entry in the chain.
-        # Shanghai Telecom AI Store: OpenAI-compatible endpoint.  The API key
-        # is production-secret-only; no fallback to another env name prevents
-        # an unrelated credential from being sent to this provider by mistake.
-        "aistore": (
-            os.getenv("LLM_AISTORE_BASE_URL", "https://ai.api.coregpu.cn/v1"),
-            os.getenv("LLM_AISTORE_API_KEY", ""),
-        ),
-        # DeepSeek official (2026-08-15, re-added). #580 Option 2 曾经删掉它
-        # ("top up DeepSeek balance + re-add `deepseek` chain entry —
-        # entire removal was 1 file"), 现在按那条路径加回来。
         #
-        # 🔴 为什么现在加: aistore 三条 2026-09-13 硬到期, 而它们是
-        #    CHAT/INSIGHTS/CHART/MAPPER/REVIEW **五个槽的链首**。
-        #    2026-08-15 实测 `_MINIMAL_SAFE_SET` 8 条里已有 2 条死于配额、
-        #    3 条中位超单跳预算 —— 扣掉 aistore 三条后, 既活着又在 6.0s 内的
-        #    只剩 zhipu 一条, 而它被 08-09 事故钉在 `_TEXT_TAIL` 末位。
+        # 🔴 2026-10-07: "aistore" / "deepseek" / "zhipu" 三个映射**删除**(Steve 复审裁定
+        #    「清掉死通道, 大模型后备只留我们自己的阿里云账号」; 读数 401 / 401 / 429,
+        #    见 `_REGISTRY_AUDIT_DATE`)。删映射是第二道闸: 即使有人只把条目加回
+        #    `_SAFE_MODELS`, 没有 base_url+key 的账号在 call_chain 里也只会落进
+        #    `empty_api_key`, 不会真的发请求。环境里残留的 LLM_AISTORE_* /
+        #    LLM_DEEPSEEK_* / LLM_ZHIPU_* 变量因此不再被读取(由
+        #    test_llm_router_registry.py::test_removed_channel_cannot_be_revived_by_env_alone 钉住)。
+        #    ⚠️ smartbi/config.py 里还有 kb_chat_provider="deepseek" 等 4 个字段, 2026-10-07
+        #       `git grep kb_chat_` 只命中定义本身、无任何读取方 —— 死配置, 不在本次范围。
         #
-        # ⛔ 与 aistore 同一条纪律: **不 fallback 到 LLM_API_KEY 或任何别的
-        #    key**。写成 `os.getenv(..., "")` 而不是 `or os.getenv("LLM_API_KEY")`
-        #    —— 把一个不相干的凭证发给这个 provider 是计费事故, 不是便利。
-        #    由 test_deepseek_key_never_falls_back_to_an_unrelated_secret 钉住。
-        #
-        # ⚠️ 这是**按量付费**账号(仓里有 $19.49/12 天的成本前科, 见本文件
-        #    History 段 May 9 2026)。
-        #
-        # 🔴 它**不在**链尾, 而是在**第 2 位** —— 这一条必须写清, 因为它与
-        #    「付费的排最后」这个直觉相反, 而直觉在这里是错的:
-        #    `_build_chain` 按**到期日升序**排, 而本条目带一个 2026-11-15 的
-        #    **复审日**, 免费的 tencent/ark/zhipu 没有到期日(_FAR_FUTURE)
-        #    ⇒ 复审日把它排到了那三个免费候选**前面**。实测派生链:
-        #        aistore → **deepseek** → tencent → ark → minimax → zhipu
-        #    ⇒ 合并当天起, aistore 每失败一次(实测约 9% 超时)就会立刻走一次
-        #      **付费**调用, 不必等 9-13。
-        #    ⇒ 这是 owner 的成本裁定, 不是实现细节。⛔ 不许靠手工重排改它
-        #      (那违反「人不要在这里排」); 要改只能改到期日语义。
-        "deepseek": (
-            os.getenv("LLM_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-            os.getenv("LLM_DEEPSEEK_API_KEY", ""),
-        ),
-        # tencent (TokenHub, June 1 2026): 腾讯云 TokenHub 90-day free trial,
-        # OpenAI-compatible. "用完即停" like aliyun (no silent paid billing), so
-        # placed by quality: deepseek-v4-pro heads REASONING/INSIGHTS, tencent
-        # fast models sit 2nd elsewhere, rest in _TEXT_TAIL. See top-of-file note.
-        "zhipu": (
-            os.getenv("LLM_ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-            os.getenv("LLM_ZHIPU_API_KEY", ""),
-        ),
         # ── aliyun_c_vl (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────
         #
+        # ⚠️ 下面「只服务视觉槽」一段是 09-15 当时的设计; 同日晚些时候三个 `_vl` 账号
+        #    就因文本链死透被放进了 `_TEXT_TAIL`, 2026-10-07 起更是文本槽的**全部**候选。
         # 🔴 **只服务视觉槽**, 名字里的 `_vl` 就是那道结构闸: 它不出现在
         #    任何文本 `_SLOT_POOLS` 条目里, 所以「aliyun 悄悄回到 chat/review」
         #    这件事**在结构上做不到**, 不靠谁记得。
@@ -2080,10 +2031,11 @@ def _provider_config(account: str) -> Tuple[str, str]:
 # 回来服务 VL 一个槽)。⛔ 不要照那句已经作废的话推理链的形状 ——
 # **唯一权威是 `_build_chain(slot)` 的实际输出**, 想知道链长什么样就跑它一次。
 #
-# 今天的通用文本链(实测, 2026-09-15):
-#   aistore → deepseek → zhipu(地板, _ABSOLUTE_LAST 绝对置底)
-# VL 槽:
-#   aliyun_c_vl/qwen3.8-flash  (单条, 见 _SLOT_POOLS[SLOT.VL] 处的说明)
+# 今天的通用文本链(2026-10-07 清理后, 由 tests/golden/llm_router_chains.txt 冻结):
+#   aliyun_c_vl → aliyun_a_vl → aliyun_b_vl (均为 qwen3.8-flash, 全部来自 _TEXT_TAIL)
+#   三个都不可用 ⇒ LLMChainExhausted, 逐条列原因; ⛔ 没有任何非阿里云后备。
+# VL 槽: 同上三账号 c → a → b(见 _SLOT_POOLS[SLOT.VL] 处的说明)。
+# (2026-09-15 时的文本链是 aistore → deepseek → zhipu, 存档。)
 #
 # Each provider's 403/AllocationQuota.FreeTierOnly + 429 triggers fallback
 # per `_is_quota_exhausted`. After a full cascade exhausts the chain raises
@@ -2110,6 +2062,8 @@ def _provider_config(account: str) -> Tuple[str, str]:
 # Re-audit recommended ~every 2 weeks or whenever "All providers exhausted"
 # log line reappears (per `tests/qa-llm-quota/audit-matrix.md` cadence note).
 DEFAULT_CHAIN: List[str] = [
+    # 2026-10-07: 只剩阿里云三个逻辑账号(Steve 复审裁定, 见 `_REGISTRY_AUDIT_DATE`)。
+    # 下面 08-15 的注释是上一次收敛时写的, 存档。
     # 2026-08-15: 收敛到三个账号(owner 裁定「暂时限制用 ai store 和
     # deepseek 还有 zhipu, 后面我有要求的时候我们再说」)。
     # ⛔ 删的是**条目**不是**机制**: DashScope 的 enable_thinking 双开关、
@@ -2118,7 +2072,7 @@ DEFAULT_CHAIN: List[str] = [
     #    什么, 而**删机制的账是在重新要用的时候才结的**: #580 删 deepseek
     #    时注释写「entire removal was 1 file」, 这次加回来才发现少了
     #    thinking 注入那一半, 差点 DOA。
-    "aistore", "deepseek", "zhipu",
+    "aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl",
 ]
 
 
@@ -2327,6 +2281,26 @@ class LLMChainExhausted(RuntimeError):
         super().__init__(f"[llm_router] All providers exhausted for {slot}: {'; '.join(errors)}")
 
 
+def _no_candidates_reason(slot: SLOT, chain: Optional[List[str]], tag: str) -> str:
+    """链在**发出任何请求之前**就是空的时, 给出一条能读懂的原因并 ERROR 日志。
+
+    🔴 2026-10-07 (aistore / deepseek / zhipu 清出注册表): 「没有后备」从理论状态
+    变成了可能的真实状态 —— 槽池被清空、或调用方还拿着已删账号做 `chain=` 过滤
+    (scripts/corpus_judge.py 的 ``["zhipu"]``、几个一次性验收脚本的 ``["deepseek"]``)。
+    原行为: 循环一次不跑, 抛 ``All providers exhausted for chat: `` —— 冒号后面
+    **什么都没有**, 与 2026-08-16 那次「空 key 静默三周」是同一个形状。
+    ⇒ 现在明确说出是哪一种空: 槽本身空 / 过滤器一个都没匹配上(并列出槽里实际有哪些账号)。
+    """
+    if chain is not None:
+        have = sorted({a for a, _m in SLOT_MODELS.get(slot, [])})
+        reason = (f"no_candidates: account filter {list(chain)} matches nothing in the "
+                  f"{slot.value} chain (accounts on it: {have})")
+    else:
+        reason = f"no_candidates: the {slot.value} chain is empty"
+    logger.error(f"[{tag}] slot={slot.value} {reason} — no channel to try, failing explicitly")
+    return reason
+
+
 async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],
@@ -2372,6 +2346,9 @@ async def call_chain(
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
+    if not slot_chain:
+        # 没有任何通道可试 —— 明确失败, ⛔ 不返回空结构、不静默降级(见 _no_candidates_reason)。
+        raise LLMChainExhausted(slot.value, [_no_candidates_reason(slot, chain, "llm_router")])
     # SLOT_MODELS order is computed once at import time by _build_chain (expiry-first
     # stable sort over _SLOT_POOLS + _TEXT_TAIL, see _build_chain's docstring) — this
     # function does NOT re-sort it. _refuse_reason drops expired/unsafe entries so
@@ -2613,6 +2590,11 @@ async def call_chain_stream(
     slot_chain = SLOT_MODELS.get(slot, [])
     if chain is not None:
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
+    if not slot_chain:
+        raise RuntimeError(
+            f"[llm_router_stream] All providers exhausted for {slot.value}: "
+            f"{_no_candidates_reason(slot, chain, 'llm_router_stream')}"
+        )
     # SLOT_MODELS order is computed once at import time by _build_chain (expiry-first
     # stable sort); this function does not re-sort it either — see call_chain above.
     client = get_llm_http_client()
