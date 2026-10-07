@@ -110,6 +110,9 @@ public class SseStreamingService {
     @Autowired
     private com.cretas.aims.service.intent.FrontlineAiWriteGrantService frontlineWriteGrants;
 
+    @Autowired(required = false)
+    private FactoryFollowUpService factoryFollowUpService;
+
     // 声明优先的写意图判定 (与 /execute 同一份实现)。required=false: 裸构造的单测不提供时
     // 回落纯 writeGuardService 启发式, 与 IntentExecutionOrchestrator 的处理一致。
     @Autowired(required = false)
@@ -1159,6 +1162,11 @@ public class SseStreamingService {
             response.setSessionId(request.getSessionId());
         }
         persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
+
+        if (factoryFollowUpService != null) {
+            response.setFollowUps(factoryFollowUpService.suggest(
+                    factoryId, userId, userRole, intent, response.getStatus()));
+        }
 
         sendSseEvent(emitter, "result", response);
 
