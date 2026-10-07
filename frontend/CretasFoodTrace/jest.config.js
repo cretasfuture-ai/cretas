@@ -118,6 +118,8 @@ module.exports = {
     //   上一轮尝试 ② 之所以更糟, 是因为它锚定到【真的】react-native-paper;
     //   真身在这套 RN mock 下加载不起来。锚定到【手写替身】就不会。
     '^react-native-paper$': '<rootDir>/src/__tests__/mocks/reactNativePaper.tsx',
+    // Let chat typography tests mount the real Markdown renderer, rather than the RN package alias.
+    '^react-native-markdown-display$': '<rootDir>/node_modules/react-native-markdown-display/src/index.js',
     // 宽泛匹配：react-native 本体 + 子路径 + react-native-xxx 三方包 → __mocks__/react-native.js
     'react-native': 'react-native'
   },

@@ -105,7 +105,7 @@ function ListRenderer({ items, pagination }: { items: unknown[]; pagination: Ric
                 <View key={key} style={listStyles.dataField}>
                   <Text style={[listStyles.headerCell, { color: theme.colors.onSurfaceVariant }]}>{formatColumnName(key)}</Text>
                   <Text style={[listStyles.dataCell, { color: theme.colors.onSurface }]} numberOfLines={2}>
-                    {formatValue(getListCellValue(row, key))}
+                    {formatValue(getListCellValue(row, key), key)}
                   </Text>
                 </View>
               ))}
@@ -159,7 +159,7 @@ function StatsRenderer({ stats }: { stats: Record<string, unknown> }) {
     <View style={statsStyles.container}>
       {numericEntries.map(([key, value]) => (
         <View key={key} style={[statsStyles.card, { backgroundColor: theme.colors.primaryContainer, borderColor: theme.colors.outlineVariant }]}>
-          <Text style={[statsStyles.value, { color: theme.colors.primary }]}>{formatValue(value)}</Text>
+          <Text style={[statsStyles.value, { color: theme.colors.primary }]}>{formatValue(value, key)}</Text>
           <Text style={[statsStyles.label, { color: theme.colors.onSurfaceVariant }]}>{formatColumnName(key)}</Text>
         </View>
       ))}

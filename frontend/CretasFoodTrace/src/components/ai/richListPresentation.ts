@@ -81,14 +81,19 @@ export function formatColumnName(key: string): string {
   return COLUMN_NAMES[key] || '';
 }
 
-export function formatDisplayValue(value: unknown): string {
+export function formatDisplayValue(value: unknown, key?: string): string {
   if (value === null || value === undefined) return '暂无数据';
   if (typeof value === 'boolean') return value ? '是' : '否';
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return '暂无数据';
-    return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    return value.toLocaleString(undefined, { maximumFractionDigits: 20 });
   }
   const str = String(value);
+  if (!str.trim()) return '暂无数据';
+  // Decimal quantities can arrive as strings; identifiers must retain their original digits.
+  if (key && QUANTITY_KEYS.has(key) && /^-?\d+(?:\.\d+)?$/.test(str.trim())) {
+    return str.trim().includes('.') ? str.trim().replace(/0+$/, '').replace(/\.$/, '') : str.trim();
+  }
   // Truncate long values
   return str.length > 50 ? str.substring(0, 47) + '...' : str;
 }
@@ -139,10 +144,10 @@ export function buildDetailRows(detail: Record<string, unknown>): DetailRow[] {
       } else {
         continue; // 英文码翻不出来: 不显示, 不回退成英文
       }
-    } else if (QUANTITY_KEYS.has(key) && unitText && value !== null) {
-      text = `${formatDisplayValue(value)} ${unitText}`;
+    } else if (QUANTITY_KEYS.has(key) && unitText && value !== null && String(value).trim() !== '') {
+      text = `${formatDisplayValue(value, key)} ${unitText}`;
     } else {
-      text = formatDisplayValue(value);
+      text = formatDisplayValue(value, key);
     }
     // entries 已按「有中文标签」筛过, ?? key 只为满足类型, 不会走到
     rows.push({ key, label: COLUMN_NAMES[key] ?? key, value: text });

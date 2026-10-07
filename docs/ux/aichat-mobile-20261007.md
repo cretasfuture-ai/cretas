@@ -50,3 +50,5 @@
 ## 验证边界
 
 真实挂载 AIChatScreen 的测试桩仅覆盖网络/大模型 IO，不伪造后端业务结果；写操作仍走预览→确认→执行。浏览器截图若使用 fixture，只证明布局与交互，不代表真实业务验收。
+
+正文样式必须进入 Markdown 的文字节点，不能只设置外层 View；共用 MarkdownRenderer 增加可选 bodyStyle，默认调用行为保持一致。Jest 为该包增加精确映射，避免宽泛 react-native 映射把 Markdown 包替换为 RN 本体。剩余数量为十进制字符串时仅按数量字段去尾零，批次号等标识保留原样。

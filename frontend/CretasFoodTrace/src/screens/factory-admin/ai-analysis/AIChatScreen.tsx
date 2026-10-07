@@ -1283,7 +1283,7 @@ function AIChatScreenContent() {
           <View style={[styles.aiMessageBubble, styles.loadingBubble, tone.aiBubble]}>
             <ActivityIndicator size="small" color={theme.colors.primary} />
             <Text variant="bodyMedium" style={[styles.loadingText, tone.muted]}>
-              {showSlowLoading ? '正在处理' : (streamStatus || '正在理解你的话…')}
+              {showSlowLoading ? '正在处理' : '正在理解你的话…'}
             </Text>
             {showSlowLoading && <View testID="ai-chat-loading-skeleton" style={[styles.loadingSkeleton, tone.loadingSkeleton]} />}
           </View>
@@ -1323,14 +1323,14 @@ function AIChatScreenContent() {
                 流式中仍用 Text (逐字追加 + 光标, markdown 半截标记无意义)。
                 ⚠️ 两条路都保留 `\n`: 后端 Tool 让「每头牛一行」, 这里不许把换行吞掉。 */}
             {message.isLoading ? (
-              <Text variant="bodyMedium" style={tone.onSurface}>
+              <Text variant="bodyMedium" style={[tone.onSurface, styles.answerText]}>
                 {message.content}
                 {message.content ? (
                   <Text variant="bodyMedium" style={[styles.streamingCursor, tone.primaryText]}>|</Text>
                 ) : null}
               </Text>
             ) : message.error ? null : (
-              <MarkdownRenderer content={message.content} style={styles.answerText} />
+              <MarkdownRenderer content={message.content} bodyStyle={[styles.answerText, tone.onSurface]} />
             )}
             {/* 结构化数据富组件渲染（表格/卡片/统计） */}
             {!message.isLoading && message.richData && (

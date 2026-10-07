@@ -17,7 +17,8 @@ import {
   TextInput,
   ActivityIndicator,
 } from 'react-native';
-import { IconButton, useTheme } from 'react-native-paper';
+import { useTheme } from 'react-native-paper';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { AppTheme } from '../../theme';
 import { useAuthStore } from '../../store/authStore';
 import { apiClient } from '../../services/api/apiClient';
@@ -192,7 +193,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
     return (
       <View style={styles.container}>
         <View style={styles.submittedRow}>
-          <IconButton icon="check-circle" size={44} iconColor={theme.colors.primary} />
+          <MaterialCommunityIcons name="check-circle" size={24} color={theme.colors.primary} />
           <Text style={[styles.submittedText, { color: theme.colors.primary }]}>已提交反馈，感谢您的帮助</Text>
         </View>
       </View>
@@ -212,7 +213,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
             onPress={handleThumbsUp}
             disabled={isSubmitting}
           >
-            <IconButton icon="thumb-up-outline" size={44} iconColor={theme.colors.primary} />
+            <MaterialCommunityIcons name="thumb-up-outline" size={24} color={theme.colors.primary} />
           </TouchableOpacity>
           <TouchableOpacity
             accessibilityRole="button"
@@ -221,7 +222,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
             onPress={handleThumbsDown}
             disabled={isSubmitting}
           >
-            <IconButton icon="thumb-down-outline" size={44} iconColor={theme.colors.error} />
+            <MaterialCommunityIcons name="thumb-down-outline" size={24} color={theme.colors.error} />
           </TouchableOpacity>
         </View>
       </View>
@@ -236,6 +237,9 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
             {FEEDBACK_TAGS.map((tag) => (
               <TouchableOpacity
                 key={tag.value}
+                accessibilityRole="button"
+                accessibilityLabel={`反馈原因：${tag.label}`}
+                accessibilityState={{ selected: selectedTags.includes(tag.value) }}
                 style={[
                   styles.tag,
                   { backgroundColor: theme.colors.surface, borderColor: theme.colors.outline },
@@ -334,6 +338,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   tag: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderWidth: 1,
