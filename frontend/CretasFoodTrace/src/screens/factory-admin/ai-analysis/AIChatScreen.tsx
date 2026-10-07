@@ -1284,7 +1284,7 @@ function AIChatScreenContent() {
       return (
         <Pressable key={message.id} style={styles.userMessageRow} onLongPress={() => handleCopyMessage(message)} delayLongPress={450}>
           <View style={[styles.userMessageBubble, tone.userBubble]}>
-            <Text variant="bodyMedium" style={tone.onPrimaryContainer}>{message.content}</Text>
+              <Text variant="bodyMedium" style={[tone.onPrimaryContainer, styles.answerText]}>{message.content}</Text>
           </View>
           <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
         </Pressable>
@@ -1328,7 +1328,7 @@ function AIChatScreenContent() {
           </View>
           {message.error && !message.isLoading ? (
             <View testID="ai-chat-error-banner" style={[styles.errorBanner, tone.errorBanner]}>
-              <Text variant="bodyMedium" style={tone.errorBannerText}>{message.content}</Text>
+              <Text variant="bodyMedium" style={[tone.errorBannerText, styles.answerText]}>{message.content}</Text>
               {message.userQuestion ? (
                 <TouchableOpacity
                   testID="ai-chat-retry"
@@ -1410,8 +1410,9 @@ function AIChatScreenContent() {
               ))}
             </View>
           )}
-          {/* 食品回答走知识质量反馈，其他回答走后端意图识别反馈契约。 */}
+          {/* 仅已完成回答显示统一答案质量反馈；错误状态不可评分。 */}
           {!message.isLoading &&
+            !message.error &&
             message.intentCode &&
             message.userQuestion && (
               <FeedbackWidget

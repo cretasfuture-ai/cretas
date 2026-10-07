@@ -71,7 +71,8 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
     logQueryCalledRef.current = true;
 
     const logQuery = async () => {
-      if (!factoryId || !question) return;
+      const isFoodKnowledgeAnswer = intentCode === 'FOOD_KNOWLEDGE' || Boolean(foodKbMetadata);
+      if (!factoryId || !question || !isFoodKnowledgeAnswer) return;
       try {
         // 从引用中提取 top1 文档信息
         const top1Citation = foodKbMetadata?.citations?.[0];
@@ -157,7 +158,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
         setFeedbackSubmitted(true);
         setIsExpanded(false);
       } else {
-        appAlert('提交失败', response.message || '反馈没有保存，请稍后重试。');
+        appAlert('提交失败', '反馈没有保存，请稍后重试。');
       }
     } catch (error) {
       console.error('提交反馈失败:', error);
