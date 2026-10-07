@@ -26,6 +26,12 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
     Page<QualityInspection> findByFactoryId(String factoryId, Pageable pageable);
 
     /**
+     * 某位质检员在本工厂的质检记录 (排序由 Pageable 带)。AI 对话「登记不良」缺质检记录时,
+     * 列出该质检员最近几条让他选 (只读)。⚠️ 必须带 factoryId —— 本方法不是跨厂查询。
+     */
+    Page<QualityInspection> findByFactoryIdAndInspectorId(String factoryId, Long inspectorId, Pageable pageable);
+
+    /**
      * 按检测结果过滤 —— 「不良品处置」屏只要 FAIL / CONDITIONAL。
      *
      * <p>🔴 2026-08-28 逐屏走查: 那个屏本来就在传 {@code result=FAIL} 和

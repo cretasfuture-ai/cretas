@@ -18,12 +18,15 @@ import com.cretas.aims.service.impl.QualityDefectServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -40,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -61,6 +65,7 @@ class QualityToolsPreviewTest {
     private static final String INSPECTION_ID = "qi-1";
 
     private QualityInspectionService inspectionService;
+    private QualityInspectionRepository inspectionRepository;
     private QualityDefectService defectService;
     private ProductionBatchRepository batchRepo;
     private UserRepository userRepo;
@@ -71,6 +76,7 @@ class QualityToolsPreviewTest {
     @BeforeEach
     void setUp() throws Exception {
         inspectionService = mock(QualityInspectionService.class);
+        inspectionRepository = mock(QualityInspectionRepository.class);
         defectService = mock(QualityDefectService.class);
         batchRepo = mock(ProductionBatchRepository.class);
         userRepo = mock(UserRepository.class);
@@ -85,6 +91,7 @@ class QualityToolsPreviewTest {
         defectTool = new QualityDefectRecordTool();
         ReflectionTestUtils.setField(defectTool, "qualityDefectService", defectService);
         ReflectionTestUtils.setField(defectTool, "qualityInspectionService", inspectionService);
+        ReflectionTestUtils.setField(defectTool, "qualityInspectionRepository", inspectionRepository);
         ReflectionTestUtils.setField(defectTool, "productionBatchRepository", batchRepo);
         ReflectionTestUtils.setField(defectTool, "rawMaterialTypeService", materialTypeService);
         injectMapper(defectTool);
@@ -321,6 +328,9 @@ class QualityToolsPreviewTest {
     @Test
     @DisplayName("登记不良: 缺质检记录 / 缺类型 / 缺数量 → 各自 NEED_MORE_INFO, 追问互不相同且是人话")
     void defectAsksInPlainChinese() throws Exception {
+        // 缺质检记录时问的是「最近的质检记录」候选清单 (见下面 defectMissingInspection* 系列), 这里只钉三问互不相同
+        when(inspectionRepository.findByFactoryId(eq(FACTORY), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspection("qi-1", FACTORY))));
         Set<String> seen = new LinkedHashSet<>();
         for (String missing : new String[]{"qualityInspectionId", "defectType", "quantity"}) {
             Map<String, Object> a = defectArgs();
@@ -377,6 +387,251 @@ class QualityToolsPreviewTest {
         assertThat(allowed).isEqualTo(1);   // 只有「本厂 × 数量1」
         assertThat(refused).isEqualTo(5);
         verify(defectRepo, times(1)).save(any(QualityDefect.class));   // 必发生: 真实写路径放行的那一格确实落库了
+    }
+
+    // ==================== quality_defect_record: 质检记录按人话指 (2026-10-07) ====================
+
+    private static final long OTHER_BATCH_ID = 13L;
+
+    private static Map<String, Object> ctxAs(String role, long userId) {
+        Map<String, Object> c = ctx(FACTORY, userId);
+        c.put("userRole", role);
+        return c;
+    }
+
+    private static QualityInspection inspectionOf(String id, long batchId, long inspectorId, LocalDate date, String result) {
+        return QualityInspection.builder().id(id).factoryId(FACTORY).productionBatchId(batchId)
+                .inspectorId(inspectorId).inspectionDate(date).result(result).build();
+    }
+
+    private void stubOtherBatch() {
+        ProductionBatch other = new ProductionBatch();
+        other.setId(OTHER_BATCH_ID);
+        other.setFactoryId(FACTORY);
+        other.setBatchNumber("B20261005-02");
+        other.setProductName("酱牛肉");
+        when(batchRepo.findByIdAndFactoryId(OTHER_BATCH_ID, FACTORY)).thenReturn(Optional.of(other));
+    }
+
+    private static Map<String, Object> argsWithoutInspection() {
+        Map<String, Object> a = defectArgs();
+        a.remove("qualityInspectionId");
+        return a;
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    @DisplayName("登记不良缺质检记录: 质检员 → 列出他自己最近的质检记录 (批次号/产品/日期/结果, 最多 5 条, 不回显内部编号), 不写库; 全厂读法一次都没走")
+    void defectMissingInspectionListsOwnRecentRecords() throws Exception {
+        stubOtherBatch();
+        // 他自己的 7 条 (仓库按 Pageable 只会回 5 条, 这里故意多给, 钉住「再兜一次」)
+        List<QualityInspection> mine = new java.util.ArrayList<>();
+        mine.add(inspectionOf("uuid-aaaaaaaa-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PENDING"));
+        mine.add(inspectionOf("uuid-aaaaaaaa-2", OTHER_BATCH_ID, USER, LocalDate.of(2026, 10, 5), "PASS"));
+        for (int i = 3; i <= 7; i++) {
+            mine.add(inspectionOf("uuid-aaaaaaaa-" + i, BATCH_ID, USER, LocalDate.of(2026, 10, 4).minusDays(i), "PASS"));
+        }
+        when(inspectionRepository.findByFactoryIdAndInspectorId(eq(FACTORY), eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(mine));
+        // 阴性对照: 全厂读法里有别人做的质检记录, 质检员视角下不许出现
+        when(inspectionRepository.findByFactoryId(eq(FACTORY), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspectionOf("uuid-bbbbbbbb", OTHER_BATCH_ID, 99L, LocalDate.of(2026, 10, 7), "FAIL"))));
+
+        String json = defectTool.preview(call("quality_defect_record", argsWithoutInspection()), ctxAs("quality_inspector", USER));
+
+        Map<String, Object> root = parse(json);
+        assertThat(root.get("success")).isEqualTo(false);
+        assertThat(root.get("status")).isEqualTo("NEED_MORE_INFO");
+        assertThat((List<String>) root.get("missingParameters")).containsExactly("qualityInspectionId");
+        String question = needMoreInfoQuestions(json).get(0);   // 含 assertPlainChinese: 无 UUID / 驼峰 / 枚举码
+        assertThat(question).contains("要登记在哪一条质检记录上").contains("你最近的质检有")
+                .contains("B20261006-01（卤猪蹄），2026-10-06，待检验")
+                .contains("B20261005-02（酱牛肉），2026-10-05，合格")
+                .contains("请在话里带上批次号")
+                .doesNotContain("uuid-").doesNotContain("编号");
+        // 最多 5 条: 候选结构化清单与文案都是 5 条
+        assertThat((List<Object>) root.get("candidates")).hasSize(5);
+        assertThat(question.split("；")).hasSize(5);
+        // 范围: 质检员只读自己的, 别人的 (全厂读法) 一次都没碰; 候选里没有别人那条 FAIL
+        verify(inspectionRepository, never()).findByFactoryId(anyString(), any(Pageable.class));
+        assertThat(question).doesNotContain("不合格");
+        // 只读: 一次写都没有
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+        verifyNoMoreInteractions(defectService);
+
+        // 读法: 5 条一页, 日期近的在前 (先按日期、再按创建时间倒序)
+        org.mockito.ArgumentCaptor<Pageable> page = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        verify(inspectionRepository).findByFactoryIdAndInspectorId(eq(FACTORY), eq(USER), page.capture());
+        assertThat(page.getValue().getPageSize()).isEqualTo(5);
+        assertThat(page.getValue().getSort().getOrderFor("inspectionDate").getDirection())
+                .isEqualTo(org.springframework.data.domain.Sort.Direction.DESC);
+    }
+
+    @Test
+    @DisplayName("登记不良缺质检记录 (对照): 其它角色沿用本工厂范围 —— 看得到别人做的; 质检员始终只读自己的")
+    void defectMissingInspectionScopeByRole() throws Exception {
+        stubOtherBatch();
+        when(inspectionRepository.findByFactoryId(eq(FACTORY), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspectionOf("qi-9", OTHER_BATCH_ID, 99L, LocalDate.of(2026, 10, 7), "FAIL"))));
+        when(inspectionRepository.findByFactoryIdAndInspectorId(eq(FACTORY), eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspectionOf("qi-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PASS"))));
+
+        // 非质检员 (管理员): 全厂范围, 别人做的那条在; 措辞不说「你的」
+        String admin = needMoreInfoQuestions(defectTool.preview(
+                call("quality_defect_record", argsWithoutInspection()), ctxAs("factory_super_admin", USER))).get(0);
+        assertThat(admin).contains("B20261005-02（酱牛肉），2026-10-07，不合格").doesNotContain("你最近的质检");
+        verify(inspectionRepository, never()).findByFactoryIdAndInspectorId(anyString(), anyLong(), any(Pageable.class));
+
+        // 质检员: 只有自己的那条
+        String inspector = needMoreInfoQuestions(defectTool.preview(
+                call("quality_defect_record", argsWithoutInspection()), ctxAs("quality_inspector", USER))).get(0);
+        assertThat(inspector).contains("B20261006-01（卤猪蹄），2026-10-06，合格").doesNotContain("酱牛肉");
+
+        // 质检员那一次没有走全厂读法 (不会因为他的记录少就退回「全厂」把别人的列给他): 全厂读法只有管理员那一次
+        verify(inspectionRepository, times(1)).findByFactoryId(anyString(), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("登记不良缺质检记录: 他名下一条都没有 → 说清楚没有可登记的 (阻止, 不铸确认); 有一条时就是追问 (对照)")
+    void defectMissingInspectionWithNoRecordsIsBlocked() throws Exception {
+        when(inspectionRepository.findByFactoryIdAndInspectorId(eq(FACTORY), eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        Map<String, Object> blocked = data(defectTool.preview(
+                call("quality_defect_record", argsWithoutInspection()), ctxAs("quality_inspector", USER)));
+        assertThat(blocked.get("canDo")).isEqualTo(false);
+        assertThat(blocked.get("status")).isEqualTo("NO_INSPECTION");
+        assertThat(String.valueOf(blocked.get("message"))).contains("没有可以登记不良的质检记录");
+
+        when(inspectionRepository.findByFactoryIdAndInspectorId(eq(FACTORY), eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspectionOf("qi-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PASS"))));
+        assertThat(needMoreInfoQuestions(defectTool.preview(
+                call("quality_defect_record", argsWithoutInspection()), ctxAs("quality_inspector", USER)))).hasSize(1);
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("登记不良: 说的认不出 (乱写 / 别厂批次号) → 列候选, 不回显他说的那串, 不放行; 认得出的批次号放行 (对照)")
+    void defectUnresolvableReferenceListsCandidatesWithoutEchoing() throws Exception {
+        when(inspectionRepository.findByFactoryIdAndInspectorId(eq(FACTORY), eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspectionOf("qi-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PASS"))));
+        when(inspectionService.getInspectionById(eq(FACTORY), anyString()))
+                .thenThrow(new EntityNotFoundException("QualityInspection", "x"));
+        // 别厂的批次号: 查得到批次, 但不属于本厂 → 当没有
+        ProductionBatch foreign = new ProductionBatch();
+        foreign.setId(77L);
+        foreign.setFactoryId("F999");
+        foreign.setBatchNumber("B-FOREIGN-01");
+        when(batchRepo.findByFactoryIdAndBatchNumber(FACTORY, "B-FOREIGN-01")).thenReturn(Optional.of(foreign));
+        when(inspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(77L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inspectionOf("qi-foreign", 77L, USER, LocalDate.of(2026, 10, 6), "PASS"))));
+
+        for (String junk : new String[]{"卤猪蹄那一批", "B-FOREIGN-01", "第3条"}) {
+            Map<String, Object> a = defectArgs();
+            a.put("qualityInspectionId", junk);
+            String q = needMoreInfoQuestions(defectTool.preview(call("quality_defect_record", a), ctxAs("quality_inspector", USER))).get(0);
+            assertThat(q).as(junk).startsWith("没有找到你说的那条质检记录").contains("B20261006-01（卤猪蹄）").doesNotContain(junk);
+        }
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+
+        // 对照: 本厂批次号认得出 → 放行, 确认卡写的是人话标题
+        stubBatchNumberToInspection("B20261006-01", List.of(inspectionOf("qi-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PENDING")));
+        Map<String, Object> ok = defectArgs();
+        ok.put("qualityInspectionId", "B20261006-01");
+        Map<String, Object> d = data(defectTool.preview(call("quality_defect_record", ok), ctxAs("quality_inspector", USER)));
+        assertThat(d.get("canDo")).isEqualTo(true);
+        assertThat(String.valueOf(d.get("message"))).contains("B20261006-01（卤猪蹄）").doesNotContain("qi-1");
+    }
+
+    private void stubBatchNumberToInspection(String batchNumber, List<QualityInspection> inspections) {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(BATCH_ID);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber(batchNumber);
+        batch.setProductName("卤猪蹄");
+        when(batchRepo.findByFactoryIdAndBatchNumber(FACTORY, batchNumber)).thenReturn(Optional.of(batch));
+        when(inspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(BATCH_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(inspections));
+        when(inspectionService.getInspectionById(eq(FACTORY), eq(batchNumber)))
+                .thenThrow(new EntityNotFoundException("QualityInspection", batchNumber));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    @DisplayName("登记不良: 说批次号 → 预览与执行解析到同一条真实主键; 预览一次不写库, 执行才写且用的是真实主键 (必发生对照)")
+    void defectBatchNumberResolvesToRealKeyInPreviewAndExecute() throws Exception {
+        stubBatchNumberToInspection("B20261006-01", List.of(inspectionOf("qi-real-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PENDING")));
+        Map<String, Object> args = defectArgs();
+        args.put("qualityInspectionId", "B20261006-01");
+
+        Map<String, Object> d = data(defectTool.preview(call("quality_defect_record", args), ctxAs("quality_inspector", USER)));
+        assertThat(d.get("canDo")).isEqualTo(true);
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());   // 预览一次不写库
+        verifyNoMoreInteractions(defectService);
+
+        QualityDefect saved = QualityDefect.builder().id("d-1").qualityInspectionId("qi-real-1")
+                .defectType(DefectType.APPEARANCE).quantity(BigDecimal.valueOf(3)).status(com.cretas.aims.entity.enums.DefectStatus.OPEN).build();
+        when(defectService.recordDefect(anyString(), anyString(), any(), any(), any(), any(), any())).thenReturn(saved);
+        Map<String, Object> exec = parse(defectTool.execute(call("quality_defect_record", args), ctxAs("quality_inspector", USER)));
+        assertThat(exec.get("success")).as(String.valueOf(exec)).isEqualTo(true);
+        org.mockito.ArgumentCaptor<String> id = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(defectService, times(1)).recordDefect(eq(FACTORY), id.capture(), any(), eq(DefectType.APPEARANCE), any(), any(), any());
+        assertThat(id.getValue()).isEqualTo("qi-real-1");   // 写路径拿到的是真实主键, 不是他说的批次号
+    }
+
+    @Test
+    @DisplayName("登记不良: 主键仍然认 (老调用方 / 按钮传主键), 且优先于批次号")
+    void defectPrimaryKeyStillWorks() throws Exception {
+        stubInspection(INSPECTION_ID, FACTORY, "PENDING");
+        Map<String, Object> d = data(defectTool.preview(call("quality_defect_record", defectArgs()), ctxAs("quality_inspector", USER)));
+        assertThat(d.get("canDo")).isEqualTo(true);
+        verify(batchRepo, never()).findByFactoryIdAndBatchNumber(anyString(), anyString());   // 主键命中就不去按批次号找
+    }
+
+    @Test
+    @DisplayName("登记不良: 同一批次有多条质检记录 → 取日期最近的一条, 确认卡当面写明条数; 只有一条时不加这句 (对照)")
+    void defectSameBatchManyInspectionsPicksLatestAndSaysSo() throws Exception {
+        QualityInspection latest = inspectionOf("qi-latest", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PENDING");
+        QualityInspection older = inspectionOf("qi-older", BATCH_ID, USER, LocalDate.of(2026, 10, 1), "PASS");
+        stubBatchNumberToInspection("B20261006-01", List.of(latest, older));
+        Map<String, Object> args = defectArgs();
+        args.put("qualityInspectionId", "B20261006-01");
+        Map<String, Object> d = data(defectTool.preview(call("quality_defect_record", args), ctxAs("quality_inspector", USER)));
+        assertThat(d.get("canDo")).isEqualTo(true);
+        assertThat(String.valueOf(d.get("message"))).contains("这个批次有 2 条质检记录").contains("2026-10-06 的质检");
+
+        stubBatchNumberToInspection("B20261006-01", List.of(latest));
+        String single = String.valueOf(data(defectTool.preview(call("quality_defect_record", args), ctxAs("quality_inspector", USER))).get("message"));
+        assertThat(single).doesNotContain("条质检记录，这是日期最近");
+    }
+
+    @Test
+    @DisplayName("登记不良执行: 说的认不出 → 报「找不到」且一次都没写; 认得出才写 (阴性 + 必发生配对)")
+    void defectExecuteWithUnresolvableReferenceWritesNothing() throws Exception {
+        when(inspectionService.getInspectionById(eq(FACTORY), anyString()))
+                .thenThrow(new EntityNotFoundException("QualityInspection", "x"));
+        Map<String, Object> bad = defectArgs();
+        bad.put("qualityInspectionId", "没有这个批次");
+        Map<String, Object> exec = parse(defectTool.execute(call("quality_defect_record", bad), ctxAs("quality_inspector", USER)));
+        assertThat(exec.get("success")).isEqualTo(false);
+        assertThat(String.valueOf(exec.get("error"))).contains("找不到这条质检记录").doesNotContain("没有这个批次");
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    @DisplayName("登记不良 schema: 质检记录不在必填里 (对话缺参追问不再去要「编号」), 字段说明教模型填批次号且不要编造; 执行期仍三项必填")
+    void defectSchemaDoesNotAskForInternalId() throws Exception {
+        Map<String, Object> schema = defectTool.getParametersSchema();
+        assertThat((List<String>) schema.get("required")).containsExactly("defectType", "quantity");
+        Map<String, Object> prop = (Map<String, Object>) ((Map<String, Object>) schema.get("properties")).get("qualityInspectionId");
+        String description = String.valueOf(prop.get("description"));
+        assertThat(description).contains("批次号").contains("不要编造").doesNotContain("编号").doesNotContain("ID");
+        // 对照: 执行期的必填校验没放松 —— 缺质检记录直接执行仍被拦
+        Map<String, Object> exec = parse(defectTool.execute(call("quality_defect_record", argsWithoutInspection()), ctxAs("quality_inspector", USER)));
+        assertThat(exec.get("success")).isEqualTo(false);
+        assertThat(exec.get("status")).isEqualTo("NEED_MORE_INFO");
+        assertThat(String.valueOf(exec.get("message"))).contains("说批次号就行");
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
     }
 
     // ==================== helpers ====================
