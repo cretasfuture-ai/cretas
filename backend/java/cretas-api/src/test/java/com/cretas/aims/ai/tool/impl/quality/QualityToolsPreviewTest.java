@@ -575,7 +575,8 @@ class QualityToolsPreviewTest {
         verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());   // 预览一次不写库
         verifyNoMoreInteractions(defectService);
 
-        QualityDefect saved = QualityDefect.builder().id("d-1").qualityInspectionId("qi-real-1")
+        String defectUuid = "58bd6a77-8beb-4f16-8b1f-79b97f8bdb35";
+        QualityDefect saved = QualityDefect.builder().id(defectUuid).qualityInspectionId("qi-real-1")
                 .defectType(DefectType.APPEARANCE).quantity(BigDecimal.valueOf(3)).status(com.cretas.aims.entity.enums.DefectStatus.OPEN).build();
         ProductionBatch batch = new ProductionBatch();
         batch.setId(BATCH_ID);
@@ -587,10 +588,43 @@ class QualityToolsPreviewTest {
         assertThat(exec.get("success")).as(String.valueOf(exec)).isEqualTo(true);
         assertThat(String.valueOf(((Map<?, ?>) exec.get("data")).get("message")))
                 .isEqualTo("已登记不良：外观缺陷 3 个，登记在 B20261006-01 的质检上，状态：待处理。")
-                .doesNotContain("d-1").doesNotContain("qi-real-1");
+                .doesNotContain(defectUuid).doesNotContain("qi-real-1");
+        assertThat(((Map<?, ?>) exec.get("data")).get("defectId")).isEqualTo(defectUuid);
         org.mockito.ArgumentCaptor<String> id = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(defectService, times(1)).recordDefect(eq(FACTORY), id.capture(), any(), eq(DefectType.APPEARANCE), any(), any(), any());
         assertThat(id.getValue()).isEqualTo("qi-real-1");   // 写路径拿到的是真实主键, 不是他说的批次号
+    }
+
+    @Test
+    @DisplayName("登记不良: 成功文案所需批次号读取失败时先报未登记, 且不发生写入")
+    void defectBatchDisplayFailureDoesNotWrite() throws Exception {
+        stubBatchNumberToInspection("B20261006-01", List.of(
+                inspectionOf("qi-real-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PENDING")));
+        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY)).thenReturn(Optional.empty());
+
+        Map<String, Object> exec = parse(defectTool.execute(
+                call("quality_defect_record", Map.of(
+                        "qualityInspectionId", "B20261006-01",
+                        "defectType", "外观不良",
+                        "quantity", 2)), ctxAs("quality_inspector", USER)));
+
+        assertThat(exec.get("success")).isEqualTo(false);
+        assertThat(String.valueOf(exec)).contains("不良尚未登记").contains("无法读取生产批次号");
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("登记不良: 缺少质检记录读取器时不使用该批次兜底, 直接拒绝且不写")
+    void defectMissingInspectionReaderDoesNotWrite() throws Exception {
+        ReflectionTestUtils.setField(defectTool, "qualityInspectionService", null);
+        Map<String, Object> exec = parse(defectTool.execute(
+                call("quality_defect_record", Map.of(
+                        "qualityInspectionId", "B20261006-01",
+                        "defectType", "外观不良",
+                        "quantity", 2)), ctxAs("quality_inspector", USER)));
+
+        assertThat(String.valueOf(exec)).contains("不良尚未登记").contains("无法读取质检记录");
+        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
     }
 
     @Test

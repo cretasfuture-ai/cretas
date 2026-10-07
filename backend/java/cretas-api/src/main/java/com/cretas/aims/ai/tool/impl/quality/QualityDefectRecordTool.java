@@ -8,6 +8,7 @@ import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.DefectStatus;
 import com.cretas.aims.entity.enums.DefectType;
 import com.cretas.aims.exception.EntityNotFoundException;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
@@ -65,12 +66,12 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
     @Lazy
     private QualityDefectService qualityDefectService;
 
-    /** 只给预览用 (只读): 确认质检记录存在且属于本工厂, 与 recordDefect 的校验同一道。 */
+    /** 预览和执行共用的只读解析: 确认质检记录存在且属于本工厂。 */
     @Autowired(required = false)
     @Lazy
     private QualityInspectionService qualityInspectionService;
 
-    /** 只给预览用 (只读): 把质检记录上的批次编号换成「批次号（产品名）」。 */
+    /** 预览和执行展示使用的只读批次号解析。 */
     @Autowired(required = false)
     @Lazy
     private ProductionBatchRepository productionBatchRepository;
@@ -171,16 +172,16 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         Long userId = extractUserIdFromContext(context);
 
         // 用户给的是批次号 (或老调用方给的主键): 写路径必须拿真实主键, 与预览同一个 resolveInspection。
-        String inspectionId = inspectionRef;
-        String inspectionBatchNumber = "该批次";
-        if (qualityInspectionService != null) {
-            Resolution resolved = resolveInspection(factoryId, inspectionRef);
-            if (resolved.inspection() == null) {
-                throw new ResourceNotFoundException(INSPECTION_NOT_FOUND_MESSAGE);
-            }
-            inspectionId = resolved.inspection().getId();
-            inspectionBatchNumber = batchNumber(factoryId, resolved.inspection().getProductionBatchId());
+        if (qualityInspectionService == null) {
+            throw new BusinessException("不良尚未登记：无法读取质检记录。请稍后重试，确认成功后再继续。");
         }
+        String inspectionId = inspectionRef;
+        Resolution resolved = resolveInspection(factoryId, inspectionRef);
+        if (resolved.inspection() == null) {
+            throw new ResourceNotFoundException(INSPECTION_NOT_FOUND_MESSAGE);
+        }
+        inspectionId = resolved.inspection().getId();
+        String inspectionBatchNumber = batchNumber(factoryId, resolved.inspection().getProductionBatchId());
 
         QualityDefect saved = qualityDefectService.recordDefect(
                 factoryId, inspectionId, materialId, defectType, quantity, cause, userId);
@@ -436,8 +437,8 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("success", false);
                 result.put("status", "NEED_MORE_INFO");
-                result.put("needMoreInfo", true);
                 result.put("missingParameters", List.of("qualityInspectionId"));
+                result.put("needMoreInfo", true);
                 result.put("clarificationQuestions", List.of(q.question));
                 result.put("message", q.question);
                 result.put("error", q.question);
@@ -504,12 +505,13 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
 
     private String batchNumber(String factoryId, Long productionBatchId) {
         if (productionBatchRepository == null || productionBatchId == null) {
-            throw new IllegalStateException("登记成功但无法读取生产批次号");
+            throw new BusinessException("不良尚未登记：无法读取生产批次号。请稍后重试，确认成功后再继续。");
         }
         return productionBatchRepository.findByIdAndFactoryId(productionBatchId, factoryId)
                 .map(ProductionBatch::getBatchNumber)
                 .filter(WritePreviewSupport::notBlank)
-                .orElseThrow(() -> new IllegalStateException("登记成功但无法读取生产批次号"));
+                .orElseThrow(() -> new BusinessException(
+                        "不良尚未登记：无法读取生产批次号。请稍后重试，确认成功后再继续."));
     }
 
     private Long extractUserIdFromContext(Map<String, Object> context) {
