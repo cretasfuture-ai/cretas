@@ -7,6 +7,7 @@ import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.service.intent.FrontlineAiWriteGrantService;
+import com.cretas.aims.service.intent.FrontlineReadAudience;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -104,7 +105,9 @@ public class ClarificationCandidateService {
                     if (config == null
                             || !domainAllowed(config, factoryDomain)
                             || !modeAllowed(config, factoryId, mode)
-                            || !callerMayUse(config, factoryId, userId, userRole)) {
+                            || !callerMayUse(config, factoryId, userId, userRole)
+                            // 读意图没配 required_roles 时上面全放行; 仓库工作台那几个对一线角色按受众名单再收一次
+                            || !FrontlineReadAudience.offeredTo(code, userRole)) {
                         continue;
                     }
                     actions.add(toSelectAction(config, factoryId, candidate));
