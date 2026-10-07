@@ -1,31 +1,16 @@
 /**
  * AiOperationCard 的预览行 (AI 对话标准 H2 / H3 / V3), 真实挂载 AiOperationCard, 只 mock API。
  *
- * H3 的真值不是手写的数字, 而是 RN 的 `previewRows` (同一份 fixture 直接喂给它数行) ——
- * web 这份规则是 RN 的拷贝, 会漂, 所以再单独读 RN 源文件逐键对比 KEY_LABELS / HIDDEN_KEYS。
+ * H3 的真值是「改前那张卡的行」(下面冻结的 PRE_CHANGE_SKIP_KEYS 规则): 业务行一行都不能少。
+ * 标签 (KEY_LABELS) 与系统键 (HIDDEN_KEYS) 是 RN 那份的拷贝, 会漂, 所以读 RN 源文件逐键对比。
+ * ⚠️ 与 RN previewRows 不同: RN 会藏没有 label 的英文键, web 不藏 (已报 organizer 裁定)。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import ts from 'typescript';
 
-/**
- * 直接 import RN 那份 .ts 会让 vite 去读 frontend/CretasFoodTrace/tsconfig.json (extends expo, worktree 里没有 node_modules)。
- * 所以读源文本、用 typescript 转成 CommonJS 再执行 —— 拿到的仍是 RN 真实的 previewRows, 不是我手抄的一份。
- */
 const RN_FILE = resolve(__dirname, '../../../../../../../frontend/CretasFoodTrace/src/components/ai/aiWriteConfirm.ts');
-function loadRnPreviewRows(): (action: unknown) => Array<{ key: string; label: string; value: string }> {
-  const out = ts.transpileModule(readFileSync(RN_FILE, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  }).outputText;
-  const mod: { exports: Record<string, unknown> } = { exports: {} };
-  new Function('exports', 'module', 'require', out)(mod.exports, mod, () => {
-    throw new Error('RN aiWriteConfirm 不应有运行时 import');
-  });
-  return mod.exports.previewRows as ReturnType<typeof loadRnPreviewRows>;
-}
-const rnPreviewRows = loadRnPreviewRows();
 
 const confirmIntentActionMock = vi.fn();
 const messageBoxConfirmMock = vi.fn(async () => 'confirm');
@@ -70,66 +55,61 @@ function mountCard(response: unknown) {
 const rowKeys = (w: ReturnType<typeof mountCard>) =>
   w.findAll('[data-testid="aiop-rows"] .op-preview-key, [data-testid="aiop-rows"] .op-diff-key').map((n) => n.text());
 
-describe('AiOperationCard 预览行 = RN previewRows (H3)', () => {
+/**
+ * 改前 (origin/main a137c1c140) 的 AiOperationCard 只跳过这 8 个系统键, 其余 previewData 键全部成行。
+ * 冻结在这里当 H3 的「改前」基线: 改后的业务行一行都不能比它少。
+ */
+const PRE_CHANGE_SKIP_KEYS = new Set(['factoryId', 'factory_id', 'userId', 'user_id', 'userRole', 'role', 'intentCode', 'userInput']);
+const preChangeRowKeys = (data: Record<string, unknown>) => Object.keys(data).filter((k) => !PRE_CHANGE_SKIP_KEYS.has(k));
+
+describe('AiOperationCard 预览行: 业务字段一行都不藏 (H3 优先于 V3)', () => {
   beforeEach(() => {
     confirmIntentActionMock.mockReset();
     messageBoxConfirmMock.mockClear();
   });
 
-  it('flat 预览: 行数等于 RN previewRows 的行数, 中文键和已知键一个不少', () => {
-    const expected = rnPreviewRows(flatResponse().confirmableAction as never);
-    // 阳性对照: fixture 确实有行 (行数 0 的比较没有意义)
-    expect(expected.length).toBeGreaterThan(0);
-
+  it('flat 预览: 行数与改前相同 (10 行), 已知键显示中文, 中文键原样, 未知英文键照原样显示键名', () => {
+    const before = preChangeRowKeys(FLAT_PREVIEW_DATA);
+    // 阳性对照: 基线真的有行, 而且包含三类键
+    expect(before.length).toBe(10);
     const w = mountCard(flatResponse());
     const keys = rowKeys(w);
-    expect(keys.length).toBe(expected.length);
-    expect(keys).toEqual(expected.map((r) => r.label));
-
-    // 所有中文键都在
-    for (const k of Object.keys(FLAT_PREVIEW_DATA).filter((k) => /[一-鿿]/.test(k))) {
-      expect(keys).toContain(k);
+    expect(keys.length).toBe(before.length);
+    for (const k of before) {
+      expect(keys).toContain(k in KEY_LABELS ? KEY_LABELS[k] : k);
     }
-    // 所有已知键 (有 label) 都在, 显示的是中文 label
-    for (const k of Object.keys(FLAT_PREVIEW_DATA).filter((k) => k in KEY_LABELS)) {
-      expect(keys).toContain(KEY_LABELS[k]);
-    }
+    // 未知英文键 (改前就在) 仍然在, 值也在 —— 用户要在看得见全部写入内容的前提下点确认
+    for (const k of ['plannedQty', 'Batch_Weird', 'productId']) expect(keys).toContain(k);
+    expect(w.text()).toContain('eb0aa47b');
+    // 已知英文键显示中文, 不再露英文键名
+    expect(keys).not.toContain('batchNumber');
+    expect(keys).not.toContain('supplierName');
   });
 
-  it('阴性对照: 无 label 的英文键整行不显示, 系统键不显示, 英文键名不泄漏', () => {
-    const w = mountCard(flatResponse());
-    const text = w.text();
-    for (const hidden of ['plannedQty', 'Batch_Weird', 'productId', 'factoryId', 'userInput', 'batchNumber', 'supplierName']) {
-      expect(text).not.toContain(hidden);
-    }
-    // 未知英文键的值也不出现 (整行不显示, 不是只换名字)
-    expect(text).not.toContain('eb0aa47b');
-    expect(text).not.toContain('Batch_Weird');
+  it('阴性对照: 系统键仍不显示 (改前改后都不显示)', () => {
+    const text = mountCard(flatResponse()).text();
+    for (const hidden of ['factoryId', 'userInput']) expect(text).not.toContain(hidden);
   });
 
-  it('diff 预览: 行数等于 RN previewRows, 中文键在, 未知英文键不在', () => {
-    const expected = rnPreviewRows(diffResponse().confirmableAction as never);
-    expect(expected.length).toBeGreaterThan(0);
+  it('diff 预览: 行数与改前相同 (3 行), 未知英文键 Weird_key 仍在且值都在', () => {
+    const before = Array.from(new Set([...Object.keys(DIFF_CURRENT), ...Object.keys(DIFF_NEXT)])).filter((k) => !PRE_CHANGE_SKIP_KEYS.has(k));
+    expect(before.length).toBe(3);
     const w = mountCard(diffResponse());
     const keys = rowKeys(w);
-    expect(keys.length).toBe(expected.length);
-    expect(keys).toEqual(expected.map((r) => r.label));
-    expect(keys).toContain('数量');
-    expect(keys).toContain('批次号');
-    expect(w.text()).not.toContain('Weird_key');
-    // 值也都在 (当前 / 修改后)
-    expect(w.text()).toContain(String(DIFF_CURRENT['数量']));
-    expect(w.text()).toContain(String(DIFF_NEXT['数量']));
+    expect(keys.length).toBe(before.length);
+    expect(keys).toEqual(expect.arrayContaining(['数量', '批次号', 'Weird_key']));
+    for (const v of [DIFF_CURRENT['数量'], DIFF_NEXT['数量'], DIFF_CURRENT['Weird_key'], DIFF_NEXT['Weird_key']]) {
+      expect(w.text()).toContain(String(v));
+    }
   });
 
-  it('对象值按「键：值」逐项显示, 不是 JSON; 对象里的未知英文键同样不显示', () => {
-    const w = mountCard(flatResponse());
-    const text = w.text();
+  it('对象值按「键：值」逐项显示, 不是 JSON; 对象里的键也一个不藏', () => {
+    const text = mountCard(flatResponse()).text();
     expect(text).toContain('名称：甲供应商');
+    expect(text).toContain('code：X1');
+    expect(text).toContain('contactPhone：123');
     expect(text).not.toContain('{');
     expect(text).not.toContain('"');
-    expect(text).not.toContain('contactPhone');
-    expect(text).not.toContain('X1');
   });
 
   it('null 值写文字状态, 不显示「—」', () => {

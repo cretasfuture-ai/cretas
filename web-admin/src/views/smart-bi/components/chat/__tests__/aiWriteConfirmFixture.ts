@@ -10,7 +10,7 @@ export const FLAT_PREVIEW_DATA: Record<string, unknown> = {
   notes: null,
   unit: 'kg',
   supplierName: { 名称: '甲供应商', code: 'X1', contactPhone: '123' },
-  // 未知英文键: 按 RN 规则整行不显示
+  // 未知英文键 (没有 label): web 照原样显示键名, 一行都不藏 (H3 优先于 V3)
   plannedQty: 5,
   Batch_Weird: 'x',
   productId: 'eb0aa47b-1111-2222-3333-444455556666',

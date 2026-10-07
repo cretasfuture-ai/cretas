@@ -91,12 +91,12 @@ describe('AiOperationCard', () => {
     const wrapper = mountCard(previewResponse);
     expect(wrapper.text()).toContain('原料入库 — 操作预览');
     expect(wrapper.text()).toContain('入库 五花肉 200kg');
-    // 2026-10-08 AI 对话标准 V3: 键走 label —— 已知键 quantity 显示成「数量」, 不显示英文键名;
-    // 没有 label 的英文键 material 整行不显示 (与 RN previewRows 同一规则, 见 AiOperationCard.rows.spec.ts)
+    // 2026-10-08 AI 对话标准: 已知键 quantity 显示成「数量」(V3); 没有 label 的 material 照原样保留整行 (H3: 写确认卡不藏业务行)
     expect(wrapper.text()).toContain('数量');
     expect(wrapper.text()).toContain('200kg');
     expect(wrapper.text()).not.toContain('quantity');
-    expect(wrapper.text()).not.toContain('material');
+    expect(wrapper.text()).toContain('material');
+    expect(wrapper.text()).toContain('五花肉');
     // 内部键不进预览网格
     for (const hidden of ['factoryId', 'userId', 'userRole', 'intentCode', 'userInput']) {
       expect(wrapper.text()).not.toContain(hidden);
