@@ -44,6 +44,29 @@ class SlotAnswerRuleTest {
         assertThat(SlotAnswerRule.numbersOnly("查一下95.5")).isEmpty();
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"MT-20260829-9687", "MT-20260829-9687-02", " mt-20260829-9687 ", "RB20261007001", "1827"})
+    void aWholeCodeIsAnAnswerToATextSlotWhateverItsLength(String reply) {
+        assertThat(SlotAnswerRule.codeToken(reply)).contains(reply.strip());
+        // 即使「已知命令」判定恒为真也算回答: 编号不可能是一条命令
+        assertThat(SlotAnswerRule.looksLikeAnswer(reply, PRODUCT, t -> true)).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"MT-20260829-9687 帮我领用", "查MT-20260829-9687", "yes", "ok", "上班打卡", "MT 20260829", "", "-1-"})
+    void aSentenceOrABareWordIsNotACode(String reply) {
+        assertThat(SlotAnswerRule.codeToken(reply)).isEmpty();
+    }
+
+    @Test
+    void aCodeDoesNotAnswerANumericOnlyOrDateSlot() {
+        // 数字型槽位只认「报数」; 日期槽位不能把任何带数字的东西当值
+        assertThat(SlotAnswerRule.looksLikeAnswer("MT-20260829-9687", TASK_ID, t -> false)).isFalse();
+        assertThat(SlotAnswerRule.isFreeTextType("DATE")).isFalse();
+        assertThat(SlotAnswerRule.isFreeTextType("TEXT")).isTrue();
+        assertThat(SlotAnswerRule.isFreeTextType(null)).isTrue();
+    }
+
     @Test
     void noPendingSlotMeansNothingIsAnAnswer() {
         assertThat(SlotAnswerRule.looksLikeAnswer("1827", List.of(), t -> false)).isFalse();

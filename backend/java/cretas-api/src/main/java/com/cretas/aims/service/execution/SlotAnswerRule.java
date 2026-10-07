@@ -48,6 +48,31 @@ public final class SlotAnswerRule {
         return type != null && NUMERIC_TYPES.contains(type.trim().toUpperCase(Locale.ROOT));
     }
 
+    /** 文本型槽位里「一个编号」的写法: 字母 / 数字开头, 中间可有 - _ . # /, 不含空白。 */
+    private static final Pattern CODE_TOKEN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._#/-]{2,39}");
+    private static final Set<String> FREE_TEXT_TYPES = Set.of("TEXT", "STRING", "BATCH_ID");
+
+    /** 文本型 (可直接把原话当值的) 槽位: 类型没写 / TEXT / STRING / BATCH_ID。日期、布尔、选择不算。 */
+    public static boolean isFreeTextType(String type) {
+        return type == null || type.isBlank() || FREE_TEXT_TYPES.contains(type.trim().toUpperCase(Locale.ROOT));
+    }
+
+    /**
+     * 这句话是否<b>就是一个编号</b> (批次号 {@code MT-20260829-9687}、单号 …): 去掉首尾空白后整句符合
+     * {@link #CODE_TOKEN} 且至少含一个数字。是的话原样返回 —— 值就在原话里, 不需要模型再「理解」一遍。
+     * 英文单词 (yes / ok) 不含数字, 不算; 中文一律不算 (名称走模型 / 工具自己的解析)。
+     */
+    public static Optional<String> codeToken(String reply) {
+        if (reply == null) {
+            return Optional.empty();
+        }
+        String text = reply.strip();
+        if (!CODE_TOKEN.matcher(text).matches() || text.chars().noneMatch(Character::isDigit)) {
+            return Optional.empty();
+        }
+        return Optional.of(text);
+    }
+
     /**
      * 这句话是否只是在报数: 是的话返回其中的数字 (按出现顺序), 否则 empty。
      * 小数点在去标点之前先取数字, 所以「95.5」不会被拆成两个数。
@@ -83,11 +108,15 @@ public final class SlotAnswerRule {
         if (reply == null || pending == null || pending.isEmpty()) {
             return false;
         }
+        boolean allNumeric = pending.stream().allMatch(p -> isNumericType(p.getType()));
+        // 一个完整的编号 (批次号常常超过 16 个字符) 只要有文本型槽位在等就算回答, 不受长度限制
+        if (!allNumeric && pending.stream().anyMatch(p -> isFreeTextType(p.getType())) && codeToken(reply).isPresent()) {
+            return true;
+        }
         String compact = PUNCTUATION.matcher(reply).replaceAll("");
         if (compact.isEmpty() || compact.length() > MAX_ANSWER_CHARS) {
             return false;
         }
-        boolean allNumeric = pending.stream().allMatch(p -> isNumericType(p.getType()));
         if (allNumeric) {
             Optional<List<String>> numbers = numbersOnly(reply);
             return numbers.isPresent() && numbers.get().size() <= pending.size();

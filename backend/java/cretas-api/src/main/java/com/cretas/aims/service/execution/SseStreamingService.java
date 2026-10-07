@@ -1494,22 +1494,7 @@ public class SseStreamingService {
                 || request == null || request.getContext() == null || tool == null) {
             return;
         }
-        Map<String, Object> schema = tool.getParametersSchema();
-        if (schema == null || !(schema.get("properties") instanceof Map<?, ?> properties) || properties.isEmpty()) {
-            return;
-        }
-        Map<String, Object> previewParams = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> e : request.getContext().entrySet()) {
-            String key = e.getKey();
-            Object value = e.getValue();
-            if (key == null || !properties.containsKey(key) || PREVIEW_PARAM_EXCLUDED.contains(key)) {
-                continue;
-            }
-            if (value instanceof Number || value instanceof Boolean
-                    || (value instanceof String s && !s.isBlank() && s.length() <= MAX_PREVIEW_PARAM_CHARS)) {
-                previewParams.put(key, value);
-            }
-        }
+        Map<String, Object> previewParams = declaredScalarParams(request.getContext(), tool);
         if (previewParams.isEmpty()) {
             return;
         }
@@ -1517,6 +1502,34 @@ public class SseStreamingService {
                 ? new LinkedHashMap<>(response.getMetadata()) : new LinkedHashMap<>();
         metadata.put("previewParams", previewParams);
         response.setMetadata(metadata);
+    }
+
+    /**
+     * 从 {@code source} 里挑出「工具 schema 声明过、且是标量」的参数, 去掉主体键与确认类键。
+     * 随确认卡带去预览 ({@link #attachPreviewParams}) 与预览追问开会话时记下已收集的参数
+     * ({@code ToolDispatchService#openPreviewQuestionSession}) 共用这<b>一份</b>规则 —— 两处各写一份会漂。
+     */
+    static Map<String, Object> declaredScalarParams(Map<String, Object> source, ToolExecutor tool) {
+        Map<String, Object> picked = new LinkedHashMap<>();
+        if (source == null || tool == null) {
+            return picked;
+        }
+        Map<String, Object> schema = tool.getParametersSchema();
+        if (schema == null || !(schema.get("properties") instanceof Map<?, ?> properties) || properties.isEmpty()) {
+            return picked;
+        }
+        for (Map.Entry<String, Object> e : source.entrySet()) {
+            String key = e.getKey();
+            Object value = e.getValue();
+            if (key == null || !properties.containsKey(key) || PREVIEW_PARAM_EXCLUDED.contains(key)) {
+                continue;
+            }
+            if (value instanceof Number || value instanceof Boolean
+                    || (value instanceof String s && !s.isBlank() && s.length() <= MAX_PREVIEW_PARAM_CHARS)) {
+                picked.put(key, value);
+            }
+        }
+        return picked;
     }
 
     private void persistSuccessfulReadPagination(String factoryId, Long userId,
