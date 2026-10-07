@@ -151,6 +151,94 @@ class ReleaseDecisionToolTest {
         assertTrue(ex.getMessage().contains("notes"));
     }
 
+    // ── 给人看的话里没有状态枚举码 (2026-10-07 质检员真测: 同类工具里也有拼英文状态码的) ──
+
+    private MaterialBatch batchWith(String number, MaterialBatchStatus status) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("mb-" + number);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setBatchNumber(number);
+        batch.setStatus(status);
+        batch.setReceiptQuantity(new BigDecimal("28"));
+        batch.setQuantityUnit("kg");
+        when(materialBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, number))
+                .thenReturn(Optional.of(batch));
+        return batch;
+    }
+
+    /** 文案里一个状态枚举码都不许有 (循环全部取值), 也不许有 status= 这种开发者写法。 */
+    private static void assertNoStatusCode(String message) {
+        assertNotNull(message);
+        for (MaterialBatchStatus s : MaterialBatchStatus.values()) {
+            assertFalse(message.contains(s.name()), "文案里漏出状态码 " + s.name() + ": " + message);
+        }
+        assertFalse(message.contains("status="), "文案里漏出 status=: " + message);
+    }
+
+    @Test
+    @DisplayName("UT-RD-09: preview 文案 — 放行 / 已放行 / 终态拒绝 三条都用中文状态名, 无枚举码; 状态码字段仍保留给机器")
+    void previewMessagesUseChineseStatusNames() throws Exception {
+        batchWith("B-P1", MaterialBatchStatus.INSPECTING);
+        batchWith("B-P2", MaterialBatchStatus.AVAILABLE);
+        batchWith("B-P3", MaterialBatchStatus.EXPIRED);
+
+        Map<String, Object> ok = invoke("doPreview", FACTORY_ID,
+                Map.of("batchNumber", "B-P1", "decision", "RELEASED"), ctx());
+        Map<String, Object> already = invoke("doPreview", FACTORY_ID,
+                Map.of("batchNumber", "B-P2", "decision", "RELEASED"), ctx());
+        Map<String, Object> terminal = invoke("doPreview", FACTORY_ID,
+                Map.of("batchNumber", "B-P3", "decision", "RELEASED"), ctx());
+
+        // 必发生的对照: 三条分支真的走到了各自的出口 (状态各不相同), 不是都落在同一条
+        assertEquals("PREVIEW", ok.get("status"));
+        assertEquals("ALREADY_RELEASED", already.get("status"));
+        assertEquals("INVALID_TRANSITION", terminal.get("status"));
+
+        String okMsg = ok.get("message").toString();
+        assertNoStatusCode(okMsg);
+        assertTrue(okMsg.contains("「质检中」") && okMsg.contains("「可用」"), okMsg);
+        String alreadyMsg = already.get("message").toString();
+        assertNoStatusCode(alreadyMsg);
+        assertTrue(alreadyMsg.contains("「可用」"), alreadyMsg);
+        String terminalMsg = terminal.get("message").toString();
+        assertNoStatusCode(terminalMsg);
+        assertTrue(terminalMsg.contains("「已过期」"), terminalMsg);
+        assertFalse(terminalMsg.contains("DEPLETED/USED_UP"), terminalMsg);
+
+        // 机器读的字段不动
+        assertEquals("INSPECTING", ok.get("currentStatus"));
+        assertEquals("AVAILABLE", ok.get("newStatus"));
+    }
+
+    @Test
+    @DisplayName("UT-RD-10: execute 文案 — 成功 / 已在目标状态 / 终态拒绝 三条都用中文状态名, 无枚举码")
+    @SuppressWarnings("unchecked")
+    void executeMessagesUseChineseStatusNames() throws Exception {
+        MaterialBatch fresh = batchWith("B-E1", MaterialBatchStatus.INSPECTING);
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenReturn(fresh);
+        batchWith("B-E2", MaterialBatchStatus.AVAILABLE);
+        batchWith("B-E3", MaterialBatchStatus.SCRAPPED);
+
+        Map<String, Object> done = invoke("doExecute", FACTORY_ID,
+                Map.of("batchNumber", "B-E1", "decision", "RELEASED", "notes", "全部通过"), ctx());
+        Map<String, Object> again = invoke("doExecute", FACTORY_ID,
+                Map.of("batchNumber", "B-E2", "decision", "RELEASED"), ctx());
+        IllegalStateException terminal = assertThrows(IllegalStateException.class, () ->
+                invoke("doExecute", FACTORY_ID, Map.of("batchNumber", "B-E3", "decision", "RELEASED"), ctx()));
+
+        String doneMsg = done.get("message").toString();
+        assertNoStatusCode(doneMsg);
+        assertTrue(doneMsg.contains("「质检中」→「可用」"), doneMsg);
+        // 已在目标状态: 走幂等出口, 状态码仍在 data 里给机器 (这里直接是 data 本身)
+        String againMsg = again.get("message").toString();
+        assertNoStatusCode(againMsg);
+        assertTrue(againMsg.contains("「可用」"), againMsg);
+        assertEquals("ALREADY_RELEASED", again.get("status"));
+        assertNoStatusCode(terminal.getMessage());
+        assertTrue(terminal.getMessage().contains("「已报废」"), terminal.getMessage());
+        assertEquals(MaterialBatchStatus.AVAILABLE, fresh.getStatus());
+    }
+
     // ── helpers ──
     private Map<String, Object> ctx() {
         Map<String, Object> ctx = new HashMap<>();

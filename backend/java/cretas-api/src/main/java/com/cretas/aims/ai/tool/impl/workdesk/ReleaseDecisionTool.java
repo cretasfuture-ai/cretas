@@ -192,14 +192,14 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             result.put("canDo", false);
             result.put("status", "ALREADY_RELEASED");
             result.put("message", String.format(
-                    "ℹ️ 批次 %s 已是 AVAILABLE (已放行), 无需重复决策", batchNumber));
+                    "ℹ️ 批次 %s 已是「%s」(已放行), 无需重复决策", batchNumber, statusLabel(currentStatus)));
             return result;
         }
         if ("REJECTED".equals(decision) && currentStatus == MaterialBatchStatus.DEFECTIVE) {
             result.put("canDo", false);
             result.put("status", "ALREADY_REJECTED");
             result.put("message", String.format(
-                    "ℹ️ 批次 %s 已是 DEFECTIVE (已退货), 无需重复决策", batchNumber));
+                    "ℹ️ 批次 %s 已是「%s」(已退货), 无需重复决策", batchNumber, statusLabel(currentStatus)));
             return result;
         }
 
@@ -210,18 +210,18 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             result.put("canDo", false);
             result.put("status", "INVALID_TRANSITION");
             result.put("message", String.format(
-                    "⛔ 批次 %s 当前 status=%s 不可改 (DEPLETED/USED_UP/EXPIRED/SCRAPPED 等终态)",
-                    batchNumber, currentStatus.name()));
+                    "⛔ 批次 %s 当前状态是「%s」, 不可修改 (已耗尽 / 已用完 / 已过期 / 已报废等终态)",
+                    batchNumber, statusLabel(currentStatus)));
             return result;
         }
 
         result.put("canDo", true);
         result.put("message", String.format(
-                "🔒 [BLOCKING] 确认决策 → 批次 %s (%s %s), 从 %s 变更为 %s. " +
+                "🔒 [BLOCKING] 确认决策 → 批次 %s (%s %s), 从「%s」变更为「%s」. " +
                 "%s. 此决策记入 audit log 不可撤销.",
                 batchNumber, batch.getReceiptQuantity(), batch.getQuantityUnit(),
-                currentStatus != null ? currentStatus.name() : "UNKNOWN",
-                newStatus.name(),
+                statusLabel(currentStatus),
+                statusLabel(newStatus),
                 "RELEASED".equals(decision) ? "放行后可用于生产/出货" : "退货后不可用, 待后续处置"));
         return result;
     }
@@ -267,13 +267,12 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             data.put("batchNumber", batchNumber);
             data.put("currentStatus", prevStatus.name());
             data.put("message", String.format(
-                    "ℹ️ 批次 %s 已是 %s, 决策未重复执行", batchNumber, prevStatus.name()));
+                    "ℹ️ 批次 %s 已是「%s」, 决策未重复执行", batchNumber, statusLabel(prevStatus)));
             return data;
         }
         if (flip == FlipDecision.INVALID_TERMINAL) {
             throw new IllegalStateException(String.format(
-                    "批次 %s 当前 status=%s 不可改 (终态)", batchNumber,
-                    prevStatus != null ? prevStatus.name() : "UNKNOWN"));
+                    "批次 %s 当前状态是「%s」, 不可修改 (终态)", batchNumber, statusLabel(prevStatus)));
         }
 
         batch.setStatus(newStatus);
@@ -291,13 +290,18 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
                 : "批次已退货, 请联系采购员协调退货流程");
 
         String message = String.format(
-                "%s 批次 %s 决策已执行: %s → %s%s",
+                "%s 批次 %s 决策已执行: 「%s」→「%s」%s",
                 "RELEASED".equals(decision) ? "✅" : "⛔",
                 batchNumber,
-                prevStatus != null ? prevStatus.name() : "UNKNOWN",
-                newStatus.name(),
+                statusLabel(prevStatus),
+                statusLabel(newStatus),
                 notes.isBlank() ? "" : " (备注: " + notes + ")");
         return buildSimpleResult(message, data);
+    }
+
+    /** 给人看的状态名 (枚举自带的中文名); 没有状态写「未知」。⛔ 不把 INSPECTING 这类状态码拼进文案。 */
+    private static String statusLabel(MaterialBatchStatus status) {
+        return status != null ? status.getDisplayName() : "未知";
     }
 
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */

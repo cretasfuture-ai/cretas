@@ -101,6 +101,8 @@ public class ReceiveQualityCheckTodayTool extends AbstractBusinessTool {
                             b.getCreatedAt().toLocalDate(), today)
                     : null);
             row.put("status", b.getStatus().name());
+            // 状态码给机器读, 中文名给人看 (卡片 / 摘要读这个, 不读英文码)
+            row.put("statusDisplay", b.getStatus().getDisplayName());
             inspectingRows.add(row);
         }
 
@@ -110,16 +112,18 @@ public class ReceiveQualityCheckTodayTool extends AbstractBusinessTool {
         data.put("inspectingCount", inspectingRows.size());
         data.put("inspectingBatches", inspectingRows);
 
+        // ⛔ 状态码 (INSPECTING) 不进给一线看的文案 —— 用枚举自带的中文名「质检中」。
+        String inspectingLabel = "「" + MaterialBatchStatus.INSPECTING.getDisplayName() + "」";
         String message;
         if (inspectingRows.isEmpty() && todayCount == 0) {
-            message = "今日暂无新入库批次, 也无 INSPECTING 状态待质检, 仓库可正常发料";
+            message = "今日暂无新入库批次, 也没有" + inspectingLabel + "的待质检批次, 仓库可正常发料";
         } else if (inspectingRows.isEmpty()) {
-            message = String.format("今日新入库 %d 批, 暂未触发 INSPECTING 状态. "
-                    + "如需逐批 QC, 请仓管员手动标记 INSPECTING 状态", todayCount);
+            message = String.format("今日新入库 %d 批, 暂时没有标为%s的批次. "
+                    + "如需逐批质检, 请仓管员先把批次标为%s", todayCount, inspectingLabel, inspectingLabel);
         } else {
-            message = String.format("⚠️ %d 批 INSPECTING 等待 QC (其中今日入库 %d 批). "
+            message = String.format("⚠️ %d 批%s等待质检 (其中今日入库 %d 批). "
                     + "请通知质量主管尽快验收, 避免阻塞领料",
-                    inspectingRows.size(), todayCount);
+                    inspectingRows.size(), inspectingLabel, todayCount);
         }
         return buildSimpleResult(message, data);
     }

@@ -166,11 +166,18 @@ describe('存量卡的落点不变', () => {
 
 // 一线卡组 (2026-10-05)。每句话都在 prod 识别接口上按角色量过 (16/16 直接落到目标意图、不反问),
 // 这里钉的就是**量过的那句话** —— 改措辞会红, 红了先去重新量, 再改这里。
-const FRONTLINE_CARDS: Record<string, Array<[string, string]>> = {
+// 第三项 = 这张卡随话带的意图码 (没有 = 只发文字、由识别层认)。质检员「待检批次 / 质检统计」带码直达:
+// 2026-10-07 本机 + prod 识别接口量过, 只发文字时各给两个近邻意图 (今日待质检批次/今日待收货清单、质检统计/质量报表) 弹二选一。
+const FRONTLINE_CARDS: Record<string, Array<[string, string, string?]>> = {
   operator: [['报工', '我要报工'], ['我的任务', '今天我的工序任务'], ['上班打卡', '上班打卡'], ['下班打卡', '下班打卡']],
   yield_operator: [['报工', '我要报工'], ['我的任务', '今天我的工序任务'], ['上班打卡', '上班打卡'], ['下班打卡', '下班打卡']],
   warehouse_worker: [['查库存', '查询原材料库存'], ['库存不足', '查一下库存不足的原料'], ['快过期', '快过期的原料有哪些'], ['出货记录', '查询出货记录']],
-  quality_inspector: [['待检批次', '今天待质检的批次'], ['登记不良', '登记质检不良'], ['质检统计', '质检统计'], ['上班打卡', '上班打卡']],
+  quality_inspector: [
+    ['待检批次', '今天待质检的批次', 'RECEIVE_QUALITY_CHECK_TODAY'],
+    ['登记不良', '登记质检不良'],
+    ['质检统计', '质检统计', 'QUALITY_STATS'],
+    ['上班打卡', '上班打卡'],
+  ],
 };
 
 describe('一线角色卡组', () => {
@@ -183,12 +190,34 @@ describe('一线角色卡组', () => {
     const expected = FRONTLINE_CARDS[role]!;
     const { screen, onSendIntent, onNavigate } = renderGrid(role);
     expect(labels(screen)).toEqual(expected.map(([label]) => label));
-    expected.forEach(([, phrase], i) => {
+    expected.forEach(([, phrase, intentCode], i) => {
       fireEvent.press(screen.getByTestId(`quick-action-card-${i}`));
-      expect(onSendIntent).toHaveBeenLastCalledWith(phrase);
+      // 带码的卡: (话, 码); 不带码的卡: 只有话一个参数 (不多传 undefined, 也不偷带码)
+      if (intentCode) {
+        expect(onSendIntent).toHaveBeenLastCalledWith(phrase, intentCode);
+      } else {
+        expect(onSendIntent).toHaveBeenLastCalledWith(phrase);
+      }
     });
     expect(onSendIntent).toHaveBeenCalledTimes(expected.length);
     expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('只有质检员的两张读卡带意图码; 其余一线卡 (含质检员的写卡与打卡) 一张都不带', () => {
+    const withCode: string[] = [];
+    for (const role of Object.keys(FRONTLINE_CARDS)) {
+      const { screen, onSendIntent } = renderGrid(role);
+      for (let i = 0; screen.queryByTestId(`quick-action-card-${i}`); i += 1) {
+        fireEvent.press(screen.getByTestId(`quick-action-card-${i}`));
+      }
+      onSendIntent.mock.calls.forEach((c: unknown[]) => {
+        if (c.length > 1) withCode.push(`${role}:${String(c[0])}=${String(c[1])}`);
+      });
+    }
+    expect(withCode).toEqual([
+      'quality_inspector:今天待质检的批次=RECEIVE_QUALITY_CHECK_TODAY',
+      'quality_inspector:质检统计=QUALITY_STATS',
+    ]);
   });
 
   it('换掉的说法不许回来 (它们在 prod 上要反问, 或落到会建单的意图)', () => {

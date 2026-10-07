@@ -89,6 +89,48 @@ class ReceiveQualityCheckTodayToolTest {
         assertTrue(result.get("message").toString().contains("无"));
     }
 
+    /**
+     * 2026-10-07 质检员真测: 回复里漏出「INSPECTING 状态」(英文状态码)。三条分支各自拼文案, 逐条钉:
+     * 给人看的话里一个枚举码都不许有 (循环 MaterialBatchStatus 全部取值, 不只是 INSPECTING),
+     * 且必须有中文状态名「质检中」(必发生的对照: 文案不是空的 / 不是被整句删掉了)。
+     */
+    @Test
+    @DisplayName("UT-RQC-04: 三条分支的文案都用中文状态名「质检中」, 不出现任何状态枚举码")
+    @SuppressWarnings("unchecked")
+    void messagesNeverLeakStatusCodes() throws Exception {
+        // 分支 1: 今日无入库、无质检中
+        when(materialBatchRepository.findByFactoryIdAndStatus(anyString(), eq(MaterialBatchStatus.INSPECTING)))
+                .thenReturn(List.of());
+        when(materialBatchRepository.countByFactoryIdAndReceiptDateAfter(anyString(), any())).thenReturn(0L);
+        String none = invokeDoExecute(Map.of(), ctx()).get("message").toString();
+
+        // 分支 2: 今日有入库、无质检中
+        when(materialBatchRepository.countByFactoryIdAndReceiptDateAfter(anyString(), any())).thenReturn(3L);
+        String inboundOnly = invokeDoExecute(Map.of(), ctx()).get("message").toString();
+
+        // 分支 3: 有质检中的批次
+        when(materialBatchRepository.findByFactoryIdAndStatus(anyString(), eq(MaterialBatchStatus.INSPECTING)))
+                .thenReturn(List.of(batch("b1", MaterialBatchStatus.INSPECTING)));
+        Map<String, Object> waiting = invokeDoExecute(Map.of(), ctx());
+        String waitingMsg = waiting.get("message").toString();
+
+        java.util.Set<String> distinct = new java.util.HashSet<>(List.of(none, inboundOnly, waitingMsg));
+        assertEquals(3, distinct.size(), "三条分支的文案必须各不相同 (参数化的那一维真的在变)");
+        for (String msg : List.of(none, inboundOnly, waitingMsg)) {
+            assertTrue(msg.contains("质检中"), "缺中文状态名「质检中」: " + msg);
+            for (MaterialBatchStatus s : MaterialBatchStatus.values()) {
+                assertFalse(msg.contains(s.name()), "文案里漏出状态码 " + s.name() + ": " + msg);
+            }
+            assertFalse(msg.contains("QC"), "文案里漏出英文缩写 QC: " + msg);
+        }
+
+        // 结构化数据: 机器读的 status 码保留, 给人看的 statusDisplay 是中文
+        Map<String, Object> data = (Map<String, Object>) waiting.get("data");
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) data.get("inspectingBatches");
+        assertEquals("INSPECTING", rows.get(0).get("status"));
+        assertEquals("质检中", rows.get(0).get("statusDisplay"));
+    }
+
     // ── helpers ──
     private MaterialBatch batch(String id, MaterialBatchStatus status) {
         MaterialBatch b = new MaterialBatch();
