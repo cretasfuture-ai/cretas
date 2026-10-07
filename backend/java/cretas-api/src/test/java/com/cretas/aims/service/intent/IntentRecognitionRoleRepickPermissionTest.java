@@ -99,9 +99,23 @@ class IntentRecognitionRoleRepickPermissionTest {
                 "[\"factory_super_admin\"]", "[\"调整库存\", \"修改库存\"]");
         adjust.setSensitivityLevel("HIGH");
         catalog.put("MATERIAL_ADJUST_QUANTITY", adjust);
+        // 所有角色都能用、只登记了裸话题词「库存」的泛化读意图 (照抄副本): 本机实测它曾把仓库员 / 操作员的
+        // 库存问句全接走, 回「未返回可直接展示的明细数据」。只说了话题的词不算证据。
+        catalog.put("SMART_INDICATOR_QUERY", intent("SMART_INDICATOR_QUERY", "智能指标分析", "smart_indicator_query",
+                null, "[\"指标\", \"库存\", \"分析一下\"]"));
         // 仓库员能用的写意图 (领用): 用来证明「换上来的只能是读」
         catalog.put("MATERIAL_BATCH_USE", intent("MATERIAL_BATCH_USE", "领用原料", "material_batch_use",
                 "[\"factory_super_admin\", \"warehouse_worker\"]", "[\"领用原料\", \"领料\"]"));
+        catalog.put("MATERIAL_LOW_STOCK_ALERT", intent("MATERIAL_LOW_STOCK_ALERT", "低库存预警", "material_low_stock_alert",
+                "[\"factory_super_admin\", \"department_admin\", \"warehouse_worker\"]", "[\"低库存\", \"库存预警\"]"));
+        // 所有角色可用的出货查询: 本机实测是「查一下库存」的句式近邻 (「查一下出货」0.85)
+        catalog.put("SHIPMENT_QUERY", intent("SHIPMENT_QUERY", "出货查询", "shipment_query", null,
+                "[\"出货查询\", \"查一下出货\"]"));
+        // 餐饮意图 (平台级, 不分厂): 短语向量库里与工厂短语混在一起
+        AIIntentConfig restaurantStock = intent("RESTAURANT_INGREDIENT_STOCK", "食材库存", "restaurant_ingredient_stock",
+                null, "[\"食材库存\", \"看看库存\"]");
+        restaurantStock.setBusinessType("RESTAURANT");
+        catalog.put("RESTAURANT_INGREDIENT_STOCK", restaurantStock);
 
         AIIntentConfigRepository repo = mock(AIIntentConfigRepository.class);
         when(repo.findByFactoryIdOrPlatformLevel(FACTORY)).thenAnswer(inv -> new ArrayList<>(catalog.values()));
@@ -118,6 +132,10 @@ class IntentRecognitionRoleRepickPermissionTest {
                 "report_inventory", tool("report_inventory", AccessMode.READ),
                 "material_batch_query", tool("material_batch_query", AccessMode.READ),
                 "material_adjust_quantity", tool("material_adjust_quantity", AccessMode.WRITE),
+                "smart_indicator_query", tool("smart_indicator_query", AccessMode.READ),
+                "material_low_stock_alert", tool("material_low_stock_alert", AccessMode.READ),
+                "shipment_query", tool("shipment_query", AccessMode.READ),
+                "restaurant_ingredient_stock", tool("restaurant_ingredient_stock", AccessMode.READ),
                 "material_batch_use", tool("material_batch_use", AccessMode.WRITE));
         when(registry.getExecutor(anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(tools.get(inv.getArgument(0, String.class))));
@@ -148,13 +166,52 @@ class IntentRecognitionRoleRepickPermissionTest {
         ReflectionTestUtils.setField(facade, "roleRepicker", repicker);
     }
 
-    /** embedding 桩: 照本机真实语义近邻的形状 —— 被拒的库存报表排第一, 仓库员能用的写 (领用) 排在读前面。 */
+    private static SemanticMatchResult near(String code, String phrase, double sim) {
+        return SemanticMatchResult.semanticMatch(code, sim, phrase, 1L);
+    }
+
+    /**
+     * 本机真实语义近邻 (2026-10-07 本机 F006 副本 + embedding 9090, findTopKMatches 阈值 0.5 的读数原样照抄)。
+     * 形状要点: 餐饮的「看看库存」排在工厂意图前面; 「查一下库存」的近邻里有只像句式的「查一下出货」。
+     */
+    private static final Map<String, List<SemanticMatchResult>> LIVE_NEIGHBOURS = Map.of(
+            "查库存", List.of(
+                    near("REPORT_INVENTORY", "查库存", 1.00),
+                    near("RESTAURANT_INGREDIENT_STOCK", "库存查询", 0.94),
+                    near("MATERIAL_ADJUST_QUANTITY", "调整库存", 0.81)),
+            "看下库存", List.of(
+                    near("RESTAURANT_INGREDIENT_STOCK", "看看库存", 0.96),
+                    near("MATERIAL_BATCH_QUERY", "睇下库存", 0.94),
+                    near("REPORT_INVENTORY", "帮我看库存", 0.91),
+                    near("MATERIAL_LOW_STOCK_ALERT", "库存还够吗", 0.83)),
+            "查一下库存", List.of(
+                    near("RESTAURANT_INGREDIENT_STOCK", "看看库存", 0.94),
+                    near("REPORT_INVENTORY", "查库存", 0.88),
+                    near("SHIPMENT_QUERY", "查一下出货", 0.87),
+                    near("MATERIAL_BATCH_QUERY", "睇下库存", 0.86),
+                    near("MATERIAL_ADJUST_QUANTITY", "调整库存", 0.83),
+                    near("MATERIAL_LOW_STOCK_ALERT", "库存还够吗", 0.81)),
+            "库存情况", List.of(
+                    near("REPORT_INVENTORY", "库存情况", 1.00),
+                    near("MATERIAL_BATCH_QUERY", "库存多少", 0.90),
+                    near("RESTAURANT_INGREDIENT_STOCK", "库存", 0.88),
+                    near("MATERIAL_LOW_STOCK_ALERT", "库存充足吗", 0.83)),
+            // ⚠️ 这一条是构造的 (本机没量): 给被拒的写意图配一个仓库员能用的读近邻, 证明写不会被换成读
+            "调整库存", List.of(
+                    near("MATERIAL_ADJUST_QUANTITY", "调整库存", 1.00),
+                    near("MATERIAL_BATCH_QUERY", "查询库存", 0.86)),
+            "库存还有多少", List.of(
+                    near("MATERIAL_BATCH_QUERY", "还有多少库存", 0.98),
+                    near("REPORT_INVENTORY", "库存有多少", 0.94)));
+
+    /**
+     * embedding 桩 (外部 IO): 照抄本机读数。⚠️「查一下出货」本机实测 0.85, 这里抬到 0.87 排在「睇下库存」(0.86)
+     * 前面 —— 让「只像句式的近邻按分数会赢」这件事在本测试里成立, 话题规则被去掉时必须红。
+     */
     private void semanticNeighboursAvailable() {
         when(semantic.isSemanticMatchingAvailable()).thenReturn(true);
-        when(semantic.findTopKMatches(anyString(), anyInt(), anyDouble())).thenReturn(List.of(
-                SemanticMatchResult.semanticMatch("REPORT_INVENTORY", 0.95, "库存查询", 1L),
-                SemanticMatchResult.semanticMatch("MATERIAL_BATCH_USE", 0.90, "库存领用", 1L),
-                SemanticMatchResult.semanticMatch("MATERIAL_BATCH_QUERY", 0.88, "查询库存", 1L)));
+        when(semantic.findTopKMatches(anyString(), anyInt(), anyDouble()))
+                .thenAnswer(inv -> LIVE_NEIGHBOURS.getOrDefault(inv.getArgument(0, String.class), List.of()));
     }
 
     private IntentMatchResult recognize(String input, long userId, String role) {
@@ -195,7 +252,20 @@ class IntentRecognitionRoleRepickPermissionTest {
     }
 
     @Test
-    @DisplayName("仓库员 4 句短语表命中: 有语义近邻时都改选原料批次查询, 跳过他能用的写 (领用)")
+    @DisplayName("构造: 他能用的写意图 (领用) 排在近邻最前面也不会被换上来, 换上来的只能是读")
+    void admissibleWriteNeighbourIsNeverSubstituted() {
+        when(semantic.isSemanticMatchingAvailable()).thenReturn(true);
+        when(semantic.findTopKMatches(anyString(), anyInt(), anyDouble())).thenReturn(List.of(
+                near("MATERIAL_BATCH_USE", "库存领用", 0.97),
+                near("MATERIAL_BATCH_QUERY", "睇下库存", 0.94)));
+        assertThat(configService.hasPermission("MATERIAL_BATCH_USE", "warehouse_worker"))
+                .as("前提: 领用对仓库员开放, 否则本条测的是权限不是读写").isTrue();
+        IntentMatchResult r = recognize("看下库存", WAREHOUSE_USER, "warehouse_worker");
+        assertThat(code(r)).isEqualTo("MATERIAL_BATCH_QUERY");
+    }
+
+    @Test
+    @DisplayName("仓库员 4 句短语表命中: 照本机近邻都改选原料批次查询, 跳过餐饮意图与只像句式的「查一下出货」")
     void warehouseWorkerAllPhraseHitsLandOnReadHeCanUse() {
         semanticNeighboursAvailable();
         List<String> got = new ArrayList<>();

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.intent;
 
+import com.cretas.aims.ai.tool.BusinessTypeScope;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
@@ -33,9 +34,11 @@ import java.util.Set;
  * <b>执行门会拒绝这个人</b>, 就在<b>这个人能用的读意图</b>里按同一句话的证据重选一个:
  * <ol>
  *   <li>识别自己给出的候选 ({@code topCandidates}, 置信度 ≥ minScore) —— 识别层最完整的排序</li>
- *   <li>意图配置里写着的说法 ({@code keywords}) 原样出现在这句话里 —— 配置者亲手登记的证据, 长的优先</li>
+ *   <li>意图配置里写着的说法 ({@code keywords}, ≥ 3 字) 原样出现在这句话里 —— 配置者亲手登记的证据, 长的优先</li>
  *   <li>语义近邻 (短语向量, 相似度 ≥ minScore)</li>
  * </ol>
+ * 2、3 两类是本类自己找的证据, 必须带「话题」({@link #topicOf}: 原话与被拒意图共有的片段), 只像句式的近邻
+ * (「查一下出货」之于「查一下库存」) 进不来; 换上来的意图还必须与本厂业态兼容 ({@link BusinessTypeScope})。
  * 找不到就原样返回, 执行门照旧给出「没有权限」—— 本类从不把「拒绝」变成「放行」。
  *
  * <p><b>判「能不能用」= 执行门本身</b>: 与 {@code SseStreamingService#permissionDeniedMessage} /
@@ -61,8 +64,12 @@ public class RoleAwareIntentRepicker {
     /** 语义近邻取多少个短语 (按短语算, 同一意图多个短语会去重)。 */
     static final int SEMANTIC_TOP_K = 20;
 
-    /** 说法证据的最短长度: 单字 (「库」「查」) 不算证据。 */
-    static final int MIN_KEYWORD_LENGTH = 2;
+    /**
+     * 说法证据的最短长度。两个字的词只说了话题、没说要干什么: 本机 F006 副本实测「智能指标分析」
+     * (SMART_INDICATOR_QUERY, 所有角色可用) 登记了裸词「库存」, 按 2 字算时仓库员「看下库存」、操作员「查库存」
+     * 全被换成它, 回一句「未返回可直接展示的明细数据」—— 比如实的「没有权限」更糟。三个字起才算一个说法 (「查库存」)。
+     */
+    static final int MIN_KEYWORD_LENGTH = 3;
 
     private final IntentConfigManagementService configService;
     private final IntentAccessModeFilter accessModeFilter;
@@ -112,8 +119,12 @@ public class RoleAwareIntentRepicker {
             return result;
         }
 
-        Map<String, String> pool = candidatePool(result, userInput, factoryId);
+        Set<String> topic = topicOf(userInput, best);
+        Map<String, String> pool = candidatePool(result, userInput, factoryId, topic);
+        log.info("[RoleRepick] role={} 不能用 {}, 话题 {}, 候选池 {} 个: {}", userRole, best.getIntentCode(), topic,
+                pool.size(), pool.entrySet().stream().limit(8).map(e -> e.getKey() + "<" + e.getValue() + ">").toList());
         String input = userInput.toLowerCase(Locale.ROOT);
+        String businessDomain = businessDomainOf(factoryId);
         for (Map.Entry<String, String> entry : pool.entrySet()) {
             String code = entry.getKey();
             if (code.equals(best.getIntentCode())) {
@@ -124,7 +135,9 @@ public class RoleAwareIntentRepicker {
                 continue;
             }
             AIIntentConfig candidate = cfg.get();
-            if (accessModeFilter.isWriteIntent(candidate)
+            // 业态隔离: 短语向量库里工厂与餐饮短语混在一起 (本机实测「看下库存」最近的是餐饮的「看看库存」)
+            if (!BusinessTypeScope.isCompatible(candidate.getBusinessType(), businessDomain)
+                    || accessModeFilter.isWriteIntent(candidate)
                     || deniedByExecutionGate(candidate, userId, userRole)
                     || hitsNegativeKeyword(candidate, input)) {
                 continue;
@@ -162,8 +175,70 @@ public class RoleAwareIntentRepicker {
         }
     }
 
-    /** 候选池: 意图码 → 证据来源 (按优先级插入, 先到先得)。 */
-    Map<String, String> candidatePool(IntentMatchResult result, String userInput, String factoryId) {
+    /**
+     * 「这句话问的是什么东西」: 用户原话与被拒意图 (名称 + 登记说法) 共有的二字片段。
+     *
+     * <p>为什么要它: 短语向量的近邻里混着<b>只像句式、不像话题</b>的 —— 本机实测「查一下库存」的近邻里
+     * 「查一下出货」(出货查询) 0.85、「查一下供应商」0.84, 与真正同话题的「睇下库存」(原料批次查询) 0.86 挤在一起,
+     * 按分数挑会把库存问题换成出货查询。要求换上来的证据 (说法 / 近邻短语) 至少带一个话题片段, 句式近邻就进不来。
+     * 话题取「原话 ∩ 被拒意图」而不是写一张停用词表: 被拒意图之所以被选中, 就是因为它和原话说的是同一样东西。
+     */
+    static Set<String> topicOf(String userInput, AIIntentConfig denied) {
+        StringBuilder text = new StringBuilder();
+        if (denied.getIntentName() != null) {
+            text.append(denied.getIntentName()).append(' ');
+        }
+        for (String kw : safeKeywords(denied)) {
+            if (kw != null) {
+                text.append(kw).append(' ');
+            }
+        }
+        Set<String> topic = new LinkedHashSet<>(bigrams(userInput));
+        topic.retainAll(bigrams(text.toString()));
+        return topic;
+    }
+
+    /** 去空白后的相邻二字片段 (小写)。中文按字, 英文按字母 —— 两边同一种切法即可。 */
+    static Set<String> bigrams(String s) {
+        Set<String> out = new LinkedHashSet<>();
+        if (s == null) {
+            return out;
+        }
+        String[] parts = s.toLowerCase(Locale.ROOT).split("\\s+");
+        for (String p : parts) {
+            for (int i = 0; i + 2 <= p.length(); i++) {
+                out.add(p.substring(i, i + 2));
+            }
+        }
+        return out;
+    }
+
+    private static boolean carriesTopic(String evidence, Set<String> topic) {
+        if (topic.isEmpty() || evidence == null) {
+            return false;
+        }
+        for (String b : bigrams(evidence)) {
+            if (topic.contains(b)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String businessDomainOf(String factoryId) {
+        try {
+            return configService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            return null;  // isCompatible(null 业态) 按工厂处理: 只排除餐饮意图
+        }
+    }
+
+    /**
+     * 候选池: 意图码 → 证据来源 (按优先级插入, 先到先得)。
+     * 识别候选是排序器的输出, 直接收; 说法与语义近邻是本类自己找的证据, 必须带话题 ({@link #topicOf})。
+     */
+    Map<String, String> candidatePool(IntentMatchResult result, String userInput, String factoryId,
+                                      Set<String> topic) {
         Map<String, String> pool = new LinkedHashMap<>();
 
         List<IntentMatchResult.CandidateIntent> candidates = result.getTopCandidates();
@@ -176,13 +251,21 @@ public class RoleAwareIntentRepicker {
             }
         }
 
+        if (topic.isEmpty()) {
+            return pool;  // 说不清这句话问的是什么, 就不自己找证据
+        }
+
         for (Map.Entry<String, String> hit : keywordHits(userInput, factoryId)) {
-            pool.putIfAbsent(hit.getKey(), "keyword:" + hit.getValue());
+            if (carriesTopic(hit.getValue(), topic)) {
+                pool.putIfAbsent(hit.getKey(), "keyword:" + hit.getValue());
+            }
         }
 
         for (SemanticMatchResult s : semanticNeighbours(userInput)) {
-            pool.putIfAbsent(s.getIntentCode(),
-                    "semantic:" + s.getMatchedPhrase() + "@" + String.format("%.2f", s.getSimilarity()));
+            if (carriesTopic(s.getMatchedPhrase(), topic)) {
+                pool.putIfAbsent(s.getIntentCode(),
+                        "semantic:" + s.getMatchedPhrase() + "@" + String.format("%.2f", s.getSimilarity()));
+            }
         }
         return pool;
     }
