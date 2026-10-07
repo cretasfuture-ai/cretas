@@ -35,6 +35,7 @@ export function AIWriteConfirmCard({ state, onConfirm, onCancel, onRegenerate }:
   const tone = useMemo(() => ({
     card: { backgroundColor: theme.colors.surface, borderColor: theme.colors.primary },
     dangerCard: { backgroundColor: theme.colors.surface, borderColor: theme.colors.error },
+    askCard: { backgroundColor: theme.colors.surfaceVariant, borderColor: theme.colors.outlineVariant },
     onSurface: { color: theme.colors.onSurface },
     muted: { color: theme.colors.onSurfaceVariant },
     primaryText: { color: theme.colors.primary },
@@ -79,6 +80,15 @@ export function AIWriteConfirmCard({ state, onConfirm, onCancel, onRegenerate }:
           <ActivityIndicator size="small" color={theme.colors.primary} />
           <Text variant="bodyMedium" style={[styles.inlineText, tone.muted]}>正在生成操作预览…</Text>
         </View>
+      </View>
+    );
+  }
+
+  if (state.phase === 'asking') {
+    // 追问不是报错: 中性底色 + 问题原话, 没有标题、没有红色提示条、没有按钮 (回答就是下一句话)
+    return (
+      <View testID="ai-confirm-card" style={[styles.card, tone.askCard]} accessibilityLiveRegion="polite">
+        <Text testID="ai-confirm-question" variant="bodyLarge" style={tone.onSurface}>{state.notice}</Text>
       </View>
     );
   }

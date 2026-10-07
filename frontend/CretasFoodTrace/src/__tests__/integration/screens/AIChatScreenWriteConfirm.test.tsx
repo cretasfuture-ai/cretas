@@ -356,6 +356,51 @@ describe('AIChatScreen 写操作确认卡', () => {
     expect(mockConfirmIntent).not.toHaveBeenCalled();
   });
 
+  // prod 2026-10-07: 领用原料缺批次号, 后端回 NEED_MORE_INFO (问「要领用哪个批次」), App 却画成红色的
+  // 「「使用原料」暂时不能执行」—— 像报错。追问要是普通气泡, 真正的办不了 (PREVIEW_BLOCKED) 才是拒绝样式。
+  it('预览回 NEED_MORE_INFO (追问): 画成普通追问, 标题不是「暂时不能执行」, 没有红色提示条和任何按钮', async () => {
+    installBlockedWriteStream();
+    const QUESTION = '要领用哪个批次？「2015胸肉」现在可用的批次有：MT-20260829-9687（2015胸肉，剩 1 kg）。请直接说批次号。';
+    mockPreviewIntent.mockResolvedValue({
+      intentCode: 'MATERIAL_BATCH_USE',
+      intentName: '使用原料',
+      status: 'NEED_MORE_INFO',
+      message: QUESTION,
+      formattedText: QUESTION,
+      clarificationQuestions: [QUESTION],
+    });
+    const screen = render(<AIChatScreen />);
+    await send(screen, '领用 2015胸肉 0.1 公斤');
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-question')).toBeTruthy());
+    const card = flattenText(screen.getByTestId('ai-confirm-card'));
+    expect(card).toBe(QUESTION);
+    expect(card).not.toContain('暂时不能执行');
+    expect(screen.queryByTestId('ai-confirm-notice')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-regenerate')).toBeNull();
+    expect(mockConfirmIntent).not.toHaveBeenCalled();
+  });
+
+  it('对照: 预览回 PREVIEW_BLOCKED (办不了) 仍是红色拒绝样式 —— 标题「暂时不能执行」+ 提示条原因', async () => {
+    installBlockedWriteStream();
+    mockPreviewIntent.mockResolvedValue({
+      intentCode: 'MATERIAL_BATCH_USE',
+      intentName: '使用原料',
+      status: 'PREVIEW_BLOCKED',
+      message: '批次 MT-20260829-9687 剩余 1 kg，不够领用 5 kg。',
+      formattedText: '批次 MT-20260829-9687 剩余 1 kg，不够领用 5 kg。',
+    });
+    const screen = render(<AIChatScreen />);
+    await send(screen, '领用 MT-20260829-9687 5 公斤');
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-notice')).toBeTruthy());
+    expect(flattenText(screen.getByTestId('ai-confirm-card'))).toContain('「使用原料」暂时不能执行');
+    expect(flattenText(screen.getByTestId('ai-confirm-notice'))).toContain('不够领用 5 kg');
+    expect(screen.queryByTestId('ai-confirm-question')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
+  });
+
   it('后端不支持预览 (如工序报工): 显示原因 + 去对应页面手工操作, 不渲染「确认执行」', async () => {
     installBlockedWriteStream();
     mockPreviewIntent.mockResolvedValue({
@@ -372,6 +417,49 @@ describe('AIChatScreen 写操作确认卡', () => {
     expect(notice).toContain('预览模式暂不支持此意图类型');
     expect(notice).toContain('请到对应功能页面手工操作');
     expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
+  });
+
+  describe('预览追问 (NEED_MORE_INFO) 的答案接得回来 (2026-10-07 真机: 答批次号被当新话识别成溯源查询)', () => {
+    const ASK = {
+      intentCode: 'MATERIAL_BATCH_USE',
+      intentName: '领用原料',
+      status: 'NEED_MORE_INFO',
+      clarificationQuestions: ['要领用哪个批次？「2015胸肉」现在可用的批次有：MT-20260829-9687（2015胸肉，剩 12.5 kg）。请直接说批次号。'],
+    };
+
+    it('带 sessionId 的预览追问: 下一句流式请求带着这个 sessionId', async () => {
+      installBlockedWriteStream();
+      mockPreviewIntent.mockResolvedValue({ ...ASK, sessionId: 'sess-ask-1' });
+      const screen = render(<AIChatScreen />);
+      await send(screen, '领用2015胸肉0.1公斤');
+      await waitFor(() => expect(screen.getByTestId('ai-confirm-question')).toBeTruthy());
+      const notice = flattenText(screen.getByTestId('ai-confirm-question'));
+      expect(notice).toContain('要领用哪个批次');
+
+      mockExecuteIntentStream.mockClear();
+      await send(screen, 'MT-20260829-9687');
+
+      await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));   // 必发生: 第二句真的发出去了
+      const [text, , , , options] = mockExecuteIntentStream.mock.calls[0];
+      expect(text).toBe('MT-20260829-9687');
+      expect(options.sessionId).toBe('sess-ask-1');
+    });
+
+    it('对照: 追问没带 sessionId (服务端没开会话) → 追问照常显示, 下一句不带这个 id', async () => {
+      installBlockedWriteStream();
+      mockPreviewIntent.mockResolvedValue({ ...ASK });
+      const screen = render(<AIChatScreen />);
+      await send(screen, '领用2015胸肉0.1公斤');
+      await waitFor(() => expect(screen.getByTestId('ai-confirm-question')).toBeTruthy());
+      expect(flattenText(screen.getByTestId('ai-confirm-question'))).toContain('要领用哪个批次');
+
+      mockExecuteIntentStream.mockClear();
+      await send(screen, 'MT-20260829-9687');
+
+      await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));
+      const [, , , , options] = mockExecuteIntentStream.mock.calls[0];
+      expect(options.sessionId).toBe('sess-write-1');   // 流式那一轮自己的会话, 不是追问会话
+    });
   });
 
   it('预览请求网络失败: 明确说没有执行, 可重新生成预览', async () => {
