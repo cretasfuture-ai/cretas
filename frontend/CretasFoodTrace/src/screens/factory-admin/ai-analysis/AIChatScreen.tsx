@@ -1209,6 +1209,8 @@ function AIChatScreenContent() {
         richData: detectRichData(resultInner),
         intentCode: resultMeta.intentCode,
         intentCategory: resultMeta.intentCategory,
+        userQuestion: state.userInput,
+        sessionIdForReply: sessionIdRef.current || undefined,
       });
       if (outcome.executed) feedbackSounds.onWriteSuccess(outcome.content, userRole);
       return;
