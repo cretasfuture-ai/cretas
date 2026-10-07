@@ -18,58 +18,61 @@ import java.util.Optional;
 @Service
 public class FactoryFollowUpService {
 
-    private static final Map<String, List<Candidate>> BY_COMPLETED_INTENT = Map.of(
-            "WORK_PROCESS_TASK_START", List.of(
-                    new Candidate("PRODUCTION_STATUS_QUERY", "查看生产进度", "要不要查看当前生产进度？")),
-            "WORK_PROCESS_TASK_COMPLETE", List.of(
-                    new Candidate("PRODUCTION_STATUS_QUERY", "查询生产进度", "查询当前生产进度")),
-            "MATERIAL_BATCH_USE", List.of(
+    private static final List<Candidate> INVENTORY_READS = List.of(
+            new Candidate("MATERIAL_TODAY_RECEIVING_QUERY", "今日待收货", "查询今日待收货清单"),
+            new Candidate("MATERIAL_LOW_STOCK_ALERT", "查看低库存", "查询低库存原材料预警"),
+            new Candidate("MATERIAL_EXPIRING_ALERT", "查看临期原料", "查询未来7天即将过期的原材料"));
+    private static final List<Candidate> QUALITY_READS = List.of(
+            new Candidate("QUALITY_CHECK_QUERY", "查看质检记录", "查询质检记录"),
+            new Candidate("RECEIVE_QUALITY_CHECK_TODAY", "今日待质检", "查询今天待质检的批次"),
+            new Candidate("QUALITY_STATS", "本月质检统计", "查询本月质检统计"));
+
+    private static final Map<String, List<Candidate>> BY_COMPLETED_INTENT = Map.ofEntries(
+            Map.entry("WORK_PROCESS_TASK_START", List.of(
+                    new Candidate("PROCESS_TASK_QUERY", "我的工序任务", "查询今天我的工序任务"))),
+            Map.entry("WORK_PROCESS_TASK_COMPLETE", List.of(
+                    new Candidate("PROCESS_TASK_QUERY", "我的工序任务", "查询今天我的工序任务"))),
+            Map.entry("MATERIAL_BATCH_USE", List.of(
                     new Candidate("MATERIAL_BATCH_QUERY", "查询原料库存", "查询原材料库存"),
-                    new Candidate("MATERIAL_TODAY_RECEIVING_QUERY", "查询今日待收货", "查询今日待收货清单")),
-            "MATERIAL_BATCH_CONSUME", List.of(
-                    new Candidate("MATERIAL_BATCH_QUERY", "查询原料库存", "查询原材料库存")),
-            "QUALITY_CHECK_CREATE", List.of(
-                    new Candidate("QUALITY_CHECK_QUERY", "查询质检记录", "查询我的质检记录")),
-            "QUALITY_DEFECT_RECORD", List.of(
-                    new Candidate("QUALITY_CHECK_QUERY", "查询质检记录", "查询我的质检记录")),
-            "MATERIAL_BATCH_QUERY", List.of(
-                    new Candidate("INVENTORY_QUERY", "查询库存不足", "查询库存不足的原料")),
-            "QUALITY_CHECK_QUERY", List.of(
-                    new Candidate("QUALITY_INSPECTION_RESULT_QUERY", "查询检验结果", "查询我的质检结果")));
+                    new Candidate("MATERIAL_TODAY_RECEIVING_QUERY", "查询今日待收货", "查询今日待收货清单"))),
+            Map.entry("MATERIAL_BATCH_CONSUME", INVENTORY_READS),
+            Map.entry("QUALITY_CHECK_CREATE", QUALITY_READS),
+            Map.entry("QUALITY_DEFECT_RECORD", QUALITY_READS),
+            Map.entry("MATERIAL_BATCH_QUERY", INVENTORY_READS),
+            Map.entry("MATERIAL_TODAY_RECEIVING_QUERY", List.of(
+                    new Candidate("MATERIAL_BATCH_QUERY", "查看原料库存", "查询原材料库存"),
+                    new Candidate("MATERIAL_LOW_STOCK_ALERT", "查看低库存", "查询低库存原材料预警"))),
+            Map.entry("QUALITY_CHECK_QUERY", QUALITY_READS),
+            Map.entry("QUALITY_STATS", QUALITY_READS),
+            Map.entry("RECEIVE_QUALITY_CHECK_TODAY", QUALITY_READS));
 
     private final AIIntentService aiIntentService;
     private final FrontlineAiWriteGrantService frontlineWriteGrants;
     private final ToolRegistry toolRegistry;
     private final IntentPermissionGate intentPermissionGate;
     private final BusinessTypeGate businessTypeGate;
-
-    public FactoryFollowUpService(AIIntentService aiIntentService,
-                                  FrontlineAiWriteGrantService frontlineWriteGrants,
-                                  ToolRegistry toolRegistry) {
-        this(aiIntentService, frontlineWriteGrants, toolRegistry, null, null);
-    }
+    private final ToolPermissionChain toolPermissionChain;
 
     @org.springframework.beans.factory.annotation.Autowired
     public FactoryFollowUpService(AIIntentService aiIntentService,
                                   FrontlineAiWriteGrantService frontlineWriteGrants,
                                   ToolRegistry toolRegistry,
                                   IntentPermissionGate intentPermissionGate,
-                                  BusinessTypeGate businessTypeGate) {
+                                  BusinessTypeGate businessTypeGate,
+                                  ToolPermissionChain toolPermissionChain) {
         this.aiIntentService = aiIntentService;
         this.frontlineWriteGrants = frontlineWriteGrants;
         this.toolRegistry = toolRegistry;
         this.intentPermissionGate = intentPermissionGate;
         this.businessTypeGate = businessTypeGate;
-    }
-
-    public List<IntentExecuteResponse.FollowUpSuggestion> suggest(
-            String factoryId, String userRole, AIIntentConfig completedIntent, String status) {
-        return suggest(factoryId, null, userRole, completedIntent, status);
+        this.toolPermissionChain = toolPermissionChain;
     }
 
     public List<IntentExecuteResponse.FollowUpSuggestion> suggest(
             String factoryId, Long userId, String userRole, AIIntentConfig completedIntent, String status) {
-        if (completedIntent == null || !("COMPLETED".equals(status) || "SUCCESS".equals(status))) {
+        if (completedIntent == null || userId == null || userRole == null || factoryId == null
+                || !"FACTORY".equalsIgnoreCase(businessTypeGate.resolveDomain(factoryId))
+                || !("COMPLETED".equals(status) || "SUCCESS".equals(status))) {
             return List.of();
         }
         if (BY_COMPLETED_INTENT.get(completedIntent.getIntentCode()) == null) {
@@ -78,6 +81,9 @@ public class FactoryFollowUpService {
 
         Map<String, IntentExecuteResponse.FollowUpSuggestion> unique = new LinkedHashMap<>();
         for (Candidate candidate : BY_COMPLETED_INTENT.getOrDefault(completedIntent.getIntentCode(), List.of())) {
+            if (candidate.intentCode().equals(completedIntent.getIntentCode())) {
+                continue;
+            }
             if (!FrontlineReadAudience.offeredTo(candidate.intentCode(), userRole)) {
                 continue;
             }
@@ -85,7 +91,7 @@ public class FactoryFollowUpService {
             if (target.isEmpty() || !Boolean.TRUE.equals(target.get().getIsActive())
                     || !toolRegistry.isToolEnabledForFactory(factoryId, target.get().getToolName())
                     || !permissionAllowed(factoryId, userId, target.get(), userRole)
-                    || businessTypeGateBlocked(factoryId, target.get())) {
+                    || businessTypeGate.check(factoryId, target.get()).isPresent()) {
                 continue;
             }
             AIIntentConfig targetIntent = target.get();
@@ -103,16 +109,15 @@ public class FactoryFollowUpService {
     }
 
     private boolean permissionAllowed(String factoryId, Long userId, AIIntentConfig intent, String userRole) {
-        if (intentPermissionGate != null) {
-            IntentPermissionGate.PermissionCheck check = intentPermissionGate.check(intent, userId, userRole);
-            if (check.isDenied()) return false;
-            if (check.isAllowed()) return true;
+        IntentPermissionGate.PermissionCheck check = intentPermissionGate.check(intent, userId, userRole);
+        if (check.isDenied() || (check.isLegacy()
+                && !aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole))) return false;
+        ToolExecutor targetTool = executor(intent.getToolName()).orElse(null);
+        if (toolPermissionChain.denyReason(targetTool, factoryId, userRole, intent,
+                Map.of("factoryId", factoryId, "userId", userId, "userRole", userRole)).isPresent()) {
+            return false;
         }
-        return aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole);
-    }
-
-    private boolean businessTypeGateBlocked(String factoryId, AIIntentConfig intent) {
-        return businessTypeGate != null && businessTypeGate.check(factoryId, intent).isPresent();
+        return true;
     }
 
     private Optional<ToolExecutor> executor(String toolName) {

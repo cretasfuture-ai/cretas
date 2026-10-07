@@ -1163,9 +1163,16 @@ public class SseStreamingService {
         }
         persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
 
-        if (factoryFollowUpService != null) {
-            response.setFollowUps(factoryFollowUpService.suggest(
-                    factoryId, userId, userRole, intent, response.getStatus()));
+        if (factoryFollowUpService != null
+                && !isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId))) {
+            try {
+                response.setFollowUps(factoryFollowUpService.suggest(
+                        factoryId, userId, userRole, intent, response.getStatus()));
+            } catch (Exception e) {
+                // An unavailable suggestion dependency must not discard the completed business answer.
+                log.warn("[SSE] Factory follow-up lookup unavailable: {}", e.getMessage());
+                response.setFollowUps(List.of());
+            }
         }
 
         sendSseEvent(emitter, "result", response);
