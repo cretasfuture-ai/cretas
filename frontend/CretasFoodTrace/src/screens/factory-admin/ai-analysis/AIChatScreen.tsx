@@ -1285,7 +1285,7 @@ function AIChatScreenContent() {
         userRole={userRole}
         isRestaurantMode={isRestaurantMode}
         factoryId={currentFactoryId}
-        onSendIntent={(text) => handleSend(text)}
+        onSendIntent={(text, intentCode) => handleSend(text, intentCode ? { intentCode } : undefined)}
         onNavigate={handleCardNavigate}
       />
     </View>

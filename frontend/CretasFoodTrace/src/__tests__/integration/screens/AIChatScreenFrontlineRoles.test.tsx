@@ -246,6 +246,50 @@ describe('AIChatScreen 一线角色 · 澄清 / 追问确认 / 写确认卡 (F6)
   });
 });
 
+describe('AIChatScreen 一线卡片 · 带意图码直达 (质检员 2026-10-07)', () => {
+  function installOk() {
+    mockExecuteIntentStream.mockImplementation(async (_m: string, callbacks: any) => {
+      callbacks.onResult?.({ status: 'SUCCESS', message: '好的' });
+      callbacks.onComplete?.({ status: 'SUCCESS', cacheHit: false, totalLatencyMs: 1 });
+    });
+  }
+
+  async function pressCard(screen: ReturnType<typeof render>, index: number) {
+    await act(async () => { fireEvent.press(screen.getByTestId(`quick-action-card-${index}`)); });
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));
+    return mockExecuteIntentStream.mock.calls[0];
+  }
+
+  it.each([
+    [0, '今天待质检的批次', 'RECEIVE_QUALITY_CHECK_TODAY'],
+    [2, '质检统计', 'QUALITY_STATS'],
+  ])('质检员 card-%i「%s」: 请求里带着意图码 %s (服务端不再识别、不再弹二选一)', async (index, phrase, code) => {
+    asRole('quality_inspector');
+    installOk();
+    const screen = render(<AIChatScreen />);
+    const [text, , factoryId, , options] = await pressCard(screen, index);
+    expect(text).toBe(phrase);
+    expect(factoryId).toBe('F006');
+    expect(options?.intentCode).toBe(code);
+    // 卡片直达不是「澄清点选」: 不带 clarificationSelection, 否则会被记成一条「用户替系统选了」的学习样本
+    expect(JSON.stringify(options ?? {})).not.toContain('clarificationSelection');
+  });
+
+  it.each([
+    ['quality_inspector', 1, '登记质检不良'],
+    ['quality_inspector', 3, '上班打卡'],
+    ['warehouse_worker', 0, '查询原材料库存'],
+    ['operator', 1, '今天我的工序任务'],
+  ])('对照: %s card-%i「%s」只发文字, 请求里没有意图码', async (role, index, phrase) => {
+    asRole(role);
+    installOk();
+    const screen = render(<AIChatScreen />);
+    const [text, , , , options] = await pressCard(screen, index);
+    expect(text).toBe(phrase);
+    expect(options?.intentCode).toBeUndefined();
+  });
+});
+
 describe('AIChatScreen 场景过滤 (F6 对照: 过滤器活着, 一线入口不触发它)', () => {
   const MIXED_RESULT = {
     status: 'NEED_CLARIFICATION',
