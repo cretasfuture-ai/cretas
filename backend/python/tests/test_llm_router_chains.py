@@ -139,17 +139,26 @@ def test_measured_failures_never_precede_measured_passes(monkeypatch):
     # 办: **造一个合成的不达标条目**, 让规则重新有东西可判。
     # ⛔ 合成条目必须真的进 _CAPABILITY(monkeypatch), 不能只在测试里假设它存在 ——
     #    否则测的是我脑子里的排序, 不是 _build_chain 的排序。
-    real_pool = [p for p in llm_router._SLOT_POOLS[SLOT.REVIEW]
-                 if p in llm_router._CAPABILITY]
-    assert real_pool, "REVIEW 池里没有任何被测过的条目, 无法构造本用例"
-    victim = real_pool[0]
+    # 🔴 2026-10-07: 原来从 REVIEW 池里挑一条**已测过**的当 victim(那条是
+    #    aistore/DeepSeek-V4-Flash-A)。aistore 出局后七个文本池全空, 链全部来自
+    #    `_TEXT_TAIL`(本规则豁免地板), 文本槽上这条规则**无从判起**。
+    #    ⇒ 换到仍有「非地板主体」的槽(WAREHOUSE_VL), 造**一对**合成读数:
+    #      主体书写顺序的第一条判不达标、最后一条判达标 —— 不排序的话它们恰好违规,
+    #      所以这条闸只有在 _build_chain 真的按能力档排时才绿。
+    tail = set(llm_router._TEXT_TAIL)
+    with mock.patch.object(llm_router, "_today",
+                           lambda: llm_router._CAPABILITY_MEASURED_AT):
+        body0 = [p for p in llm_router._build_chain(SLOT.WAREHOUSE_VL) if p not in tail]
+    assert len(body0) >= 2, f"WAREHOUSE_VL 主体不足两条, 无法构造本用例: {body0}"
+    victim, passer = body0[0], body0[-1]
     synthetic = dict(llm_router._CAPABILITY)
     synthetic[victim] = (0.0, 0.1)      # 合成: 判它不达标
+    synthetic[passer] = (1.0, 1.0)      # 合成: 判它达标
     monkeypatch.setattr(llm_router, "_CAPABILITY", synthetic)
 
     failing = _failing_pairs()
     assert victim in failing, "合成的不达标条目没有被 _failing_pairs 识别"
-    tail = set(llm_router._TEXT_TAIL)
+    judged = 0
     # ⚠️ 把"今天"钉在测量当天再重建链, **不读 import 期算好的 SLOT_MODELS**。
     #    否则这条闸会在 2026-08-31(测量日 + 21 天)那天因为能力表超龄、排序
     #    退回纯到期日而变红 —— 红得完全正确却与"排序规则被改坏"无关, 就是
@@ -169,11 +178,14 @@ def test_measured_failures_never_precede_measured_passes(monkeypatch):
             continue
         for i, pair in enumerate(body):
             if pair in failing:
+                judged += 1
                 assert i > worst_pass, (
                     f"{slot.value}: 实测不达标的 {pair} 排在位置 {i}, "
                     f"而实测达标的模型最晚才排到 {worst_pass} —— "
                     f"排序键对「这个模型今天还活着吗」失聪了"
                 )
+    # 阳性对照: 至少有一个槽里「不达标 vs 达标」真的被比较过, 否则上面恒真。
+    assert judged, "没有任何槽同时含达标与不达标的主体条目 —— 闸空转了"
 
 
 def test_stale_capability_table_falls_back_to_expiry_order():
@@ -217,6 +229,19 @@ def test_schema_violators_never_precede_schema_clean_models(monkeypatch):
     被丢弃要么走错分支。
     """
     tail = set(llm_router._TEXT_TAIL)
+    # 🔴 2026-10-07: 越界表里**在链上**的条目只有 aistore 两条(DeepSeek 0 / Qwen235B 2,
+    #    同在 CHART 池), 随账号出局删除后, 表里剩下的条目没有一条在任何链上 ——
+    #    原断言变成**恒真**(「两档都存在」仍然成立, 但它们一个都不在链上)。
+    #    ⇒ 按上一条的做法造一对合成读数, 打在仍有主体的 WAREHOUSE_VL 上:
+    #      书写顺序第一条判越界、最后一条判零越界 —— 不排序就恰好违规。
+    with mock.patch.object(llm_router, "_today",
+                           lambda: llm_router._PLAN_SCHEMA_MEASURED_AT):
+        body0 = [p for p in llm_router._build_chain(SLOT.WAREHOUSE_VL) if p not in tail]
+    assert len(body0) >= 2, f"WAREHOUSE_VL 主体不足两条, 无法构造本用例: {body0}"
+    synthetic = dict(llm_router._PLAN_SCHEMA_VIOLATIONS)
+    synthetic[body0[0]] = 2
+    synthetic[body0[-1]] = 0
+    monkeypatch.setattr(llm_router, "_PLAN_SCHEMA_VIOLATIONS", synthetic)
     violators = {p for p, n in llm_router._PLAN_SCHEMA_VIOLATIONS.items() if n}
     clean = {p for p, n in llm_router._PLAN_SCHEMA_VIOLATIONS.items() if n == 0}
     assert violators and clean, (
@@ -226,6 +251,7 @@ def test_schema_violators_never_precede_schema_clean_models(monkeypatch):
     with mock.patch.object(llm_router, "_today",
                            lambda: llm_router._PLAN_SCHEMA_MEASURED_AT):
         chains = {slot: llm_router._build_chain(slot) for slot in SLOT}
+    compared = 0
 
     for slot, chain in chains.items():
         body = [p for p in chain if p not in tail]
@@ -238,8 +264,12 @@ def test_schema_violators_never_precede_schema_clean_models(monkeypatch):
             if bad not in violators:
                 continue
             for j, good in enumerate(body):
+                if good in clean and rank(good) == rank(bad):
+                    compared += 1
                 if good in clean and j > i and rank(good) == rank(bad):
                     raise AssertionError(
                         f"{slot.value}: 实测越界的 {bad} 排在位置 {i}, "
                         f"而同档位、实测零越界的 {good} 却排在 {j} —— "
                         f"排序对「这个模型会不会编枚举值」失聪了")
+    # 阳性对照: 至少比较过一对「越界 vs 零越界」, 否则上面恒真。
+    assert compared, "没有任何槽同时含越界与零越界的同档主体条目 —— 闸空转了"

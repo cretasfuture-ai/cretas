@@ -34,7 +34,11 @@ import pytest
 from common import llm_router
 from common.llm_router import SLOT, call_chain
 
-_CHAIN = [("aistore", "DeepSeek-V4-Flash-A"), ("deepseek", "deepseek-v4-flash")]
+# 2026-10-07: aistore / deepseek 清出注册表(Steve 复审裁定), 夹具换成在册的阿里云两个
+# 逻辑账号 —— 正好也是 10-06 那次生产事故里**真的回了 200 + tool_calls** 的两跳。
+_CHAIN = [("aliyun_c_vl", "qwen3.8-flash"), ("aliyun_a_vl", "qwen3.8-flash")]
+#: 两跳同一个 DashScope 端点, 只能按 Authorization 里的 key 认账号。
+_KEY_TO_ACCOUNT = {"key_c_fake": "aliyun_c_vl", "key_a_fake": "aliyun_a_vl"}
 
 _TOOLS = [
     {
@@ -82,7 +86,8 @@ class _Client:
         self.call_log: List[Tuple[str, str]] = []
 
     async def post(self, url, headers=None, json=None, timeout=None):  # noqa: A002
-        account = "aistore" if "coregpu" in url else "deepseek" if "deepseek" in url else "?"
+        auth = (headers or {}).get("Authorization", "")
+        account = next((a for k, a in _KEY_TO_ACCOUNT.items() if k in auth), "?")
         self.call_log.append((account, (json or {}).get("model", "?")))
         return self.by_account[account]
 
@@ -92,9 +97,9 @@ def _chain(monkeypatch):
     llm_router._CB_FAILURES.clear()
     llm_router._CB_LAST_FAIL.clear()
     llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
-    monkeypatch.setenv("LLM_AISTORE_API_KEY", "key_aistore_fake")
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "key_deepseek_fake")
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 10, 7))
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAIN)
     yield
     llm_router._CB_FAILURES.clear()
@@ -120,8 +125,8 @@ _GOOD_TEXT = _resp(200, payload=_completion("今日入库3批，均合格。"))
 async def test_empty_content_with_tool_calls_is_accepted_on_first_provider(monkeypatch):
     qwen_like = _completion("", _qwen_tool_call())
     client = _install(monkeypatch, {
-        "aistore": _resp(200, payload=qwen_like),
-        "deepseek": _GOOD_TEXT,
+        "aliyun_c_vl":_resp(200, payload=qwen_like),
+        "aliyun_a_vl":_GOOD_TEXT,
     })
 
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS, "tool_choice": "auto"})
@@ -132,14 +137,14 @@ async def test_empty_content_with_tool_calls_is_accepted_on_first_provider(monke
     assert calls[0]["function"]["name"] == "extract_params"
     assert json.loads(calls[0]["function"]["arguments"]) == {"taskId": 1827}
     # 对照: 熔断计数也要记成功 (被判 invalid 的不会记)
-    assert llm_router._CB_FAILURES.get("aistore/DeepSeek-V4-Flash-A", 0) == 0
+    assert llm_router._CB_FAILURES.get(f"{_CHAIN[0][0]}/{_CHAIN[0][1]}", 0) == 0
 
 
 @pytest.mark.asyncio
 async def test_dict_arguments_are_also_well_formed(monkeypatch):
     """部分兼容网关把 arguments 直接给对象而不是 JSON 串 —— 同样是合法的。"""
     body = _completion("", _qwen_tool_call(arguments={"taskId": 1827}))
-    client = _install(monkeypatch, {"aistore": _resp(200, payload=body), "deepseek": _GOOD_TEXT})
+    client = _install(monkeypatch, {"aliyun_c_vl":_resp(200, payload=body), "aliyun_a_vl":_GOOD_TEXT})
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert result == body
     assert client.call_log == [_CHAIN[0]]
@@ -149,8 +154,8 @@ async def test_dict_arguments_are_also_well_formed(monkeypatch):
 async def test_control_empty_content_without_tool_calls_still_falls_back(monkeypatch):
     """对照: 正文空、也没有 tool_calls (带 tools 的请求) —— 仍判 empty, 落下一跳。"""
     client = _install(monkeypatch, {
-        "aistore": _resp(200, payload=_completion("")),
-        "deepseek": _GOOD_TEXT,
+        "aliyun_c_vl":_resp(200, payload=_completion("")),
+        "aliyun_a_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert client.call_log == _CHAIN, f"空答案必须回退到第二家, 实际 {client.call_log}"
@@ -161,8 +166,8 @@ async def test_control_empty_content_without_tool_calls_still_falls_back(monkeyp
 async def test_control_normal_chat_empty_content_still_rejected(monkeypatch):
     """对照: 普通聊天 (没要 tools) 的空正文照旧拒。"""
     client = _install(monkeypatch, {
-        "aistore": _resp(200, payload=_completion("")),
-        "deepseek": _GOOD_TEXT,
+        "aliyun_c_vl":_resp(200, payload=_completion("")),
+        "aliyun_a_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG})
     assert client.call_log == _CHAIN
@@ -173,8 +178,8 @@ async def test_control_normal_chat_empty_content_still_rejected(monkeypatch):
 async def test_control_tool_calls_without_a_tools_request_do_not_rescue_empty_content(monkeypatch):
     """对照: 没要 tools 却带回 tool_calls + 空正文 —— 不是调用方要的东西, 仍拒。"""
     client = _install(monkeypatch, {
-        "aistore": _resp(200, payload=_completion("", _qwen_tool_call())),
-        "deepseek": _GOOD_TEXT,
+        "aliyun_c_vl":_resp(200, payload=_completion("", _qwen_tool_call())),
+        "aliyun_a_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG})
     assert client.call_log == _CHAIN
@@ -201,8 +206,8 @@ async def test_control_tool_calls_without_a_tools_request_do_not_rescue_empty_co
 async def test_control_malformed_tool_calls_are_rejected(monkeypatch, bad_calls):
     """对照: 畸形 tool_calls 不能被当成合法答案 (否则「放宽」变成「什么都收」)。"""
     client = _install(monkeypatch, {
-        "aistore": _resp(200, payload=_completion("", bad_calls)),
-        "deepseek": _GOOD_TEXT,
+        "aliyun_c_vl":_resp(200, payload=_completion("", bad_calls)),
+        "aliyun_a_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert client.call_log == _CHAIN, f"畸形 tool_calls 应回退, 实际 {client.call_log}"
@@ -213,7 +218,7 @@ async def test_control_malformed_tool_calls_are_rejected(monkeypatch, bad_calls)
 async def test_non_empty_content_behaviour_is_unchanged(monkeypatch):
     """既有行为不动: 带 tools 但正文有字 —— 照旧按正文收。"""
     body = _completion("好的，我来开始。", _qwen_tool_call())
-    client = _install(monkeypatch, {"aistore": _resp(200, payload=body), "deepseek": _GOOD_TEXT})
+    client = _install(monkeypatch, {"aliyun_c_vl":_resp(200, payload=body), "aliyun_a_vl":_GOOD_TEXT})
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert result == body
     assert client.call_log == [_CHAIN[0]]
@@ -240,7 +245,7 @@ def _tool_call_body() -> Dict[str, Any]:
 
 def test_endpoint_returns_tool_calls_to_the_caller(monkeypatch):
     qwen_like = _completion("", _qwen_tool_call())
-    client = _install(monkeypatch, {"aistore": _resp(200, payload=qwen_like), "deepseek": _GOOD_TEXT})
+    client = _install(monkeypatch, {"aliyun_c_vl":_resp(200, payload=qwen_like), "aliyun_a_vl":_GOOD_TEXT})
 
     resp = _http_client().post("/api/llm/tool-call", json=_tool_call_body())
 
@@ -258,15 +263,15 @@ def test_endpoint_exhaustion_is_an_explicit_503_not_a_bare_500(monkeypatch):
     对照 (同一个测试里): 同一个端点, 一家给出合法答案 -> 200。
     """
     # 必收对照先跑: 证明这条路在「有答案」时是通的, 下面的 503 才有意义
-    _install(monkeypatch, {"aistore": _resp(200, payload=_completion("", _qwen_tool_call())),
-                           "deepseek": _GOOD_TEXT})
+    _install(monkeypatch, {"aliyun_c_vl":_resp(200, payload=_completion("", _qwen_tool_call())),
+                           "aliyun_a_vl":_GOOD_TEXT})
     assert _http_client().post("/api/llm/tool-call", json=_tool_call_body()).status_code == 200
 
     llm_router._CB_FAILURES.clear()
     llm_router._CB_LAST_FAIL.clear()
     client = _install(monkeypatch, {
-        "aistore": _resp(200, payload=_completion("")),              # 空答案
-        "deepseek": _resp(401, "invalid api key"),                   # 死 key
+        "aliyun_c_vl":_resp(200, payload=_completion("")),              # 空答案
+        "aliyun_a_vl":_resp(401, "invalid api key"),                   # 死 key
     })
     resp = _http_client().post("/api/llm/tool-call", json=_tool_call_body())
 

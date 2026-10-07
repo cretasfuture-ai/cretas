@@ -1,4 +1,24 @@
-"""Shanghai Telecom AI Store integration guards for the shared LLM router."""
+"""Shanghai Telecom AI Store —— 通道已于 2026-10-07 清出, 本文件守它留下的东西。
+
+🔴 2026-10-07 Steve 复审裁定「清掉死通道, 大模型后备只留我们自己的阿里云账号」:
+   aistore 三条(09-13 已过期, prod 探针 401)从 `_SAFE_MODELS` / `_MINIMAL_SAFE_SET` /
+   各槽池 / `_provider_config` 删除。「它真的不在了」由
+   test_llm_router_registry.py::test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling
+   与 ::test_removed_channel_cannot_be_revived_by_env_alone 守。
+
+⛔ 原来那几条「aistore 是五个槽的链首 / Qwen3-32B 只在 SIMPLE_TEXT / key 不回落」
+   的断言随通道一起删 —— 它们的主语不在了, 改成别的模型去断言位置就不是同一件事。
+
+本文件留下来守两件仍然成立的事:
+  1. **thinking 翻译机制**(`_AISTORE_THINKING_OBJECT_MODELS` + `_apply_slot_params`
+     的 aistore 分支)按「删条目不删机制」保留 —— 它的实测结论表与精确型号匹配
+     仍然要钉住, 否则哪天加回来又是 #580 那种「少了 thinking 注入那一半」。
+     ⚠️ 原版按 SLOT_MODELS 里**链上**的 aistore 条目遍历; 链上已经没有了,
+     那样写会「一个都没扫到」(闸空转)。⇒ 改成**每个槽 × 登记表里每个型号**直接
+     打 `_apply_slot_params`, 不再依赖链成员。
+  2. 2xx-带-error-体 的回退(call_chain 与 call_chain_stream)—— 与账号无关的机制,
+     原来借 aistore→deepseek 两跳来测, 现在借在册的 aliyun_c_vl→aliyun_a_vl。
+"""
 
 from __future__ import annotations
 
@@ -22,33 +42,6 @@ def _reset_router_state():
     llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
 
 
-def test_aistore_models_are_explicitly_allowlisted_and_expire():
-    expiry = datetime.date(2026, 9, 13)
-    assert llm_router._SAFE_MODELS[("aistore", "DeepSeek-V4-Flash-A")] == expiry
-    assert llm_router._SAFE_MODELS[("aistore", "Qwen3-235B-A22B")] == expiry
-    assert llm_router._SAFE_MODELS[("aistore", "Qwen3-32B")] == expiry
-    assert llm_router._refuse_reason(
-        "aistore", "DeepSeek-V4-Flash-A", expiry,
-    ) == "expired"
-
-
-def test_aistore_key_never_falls_back_to_an_unrelated_secret(monkeypatch):
-    monkeypatch.delenv("LLM_AISTORE_API_KEY", raising=False)
-    monkeypatch.setenv("LLM_API_KEY", "must-not-be-reused")
-    base_url, api_key = llm_router._provider_config("aistore")
-    assert base_url == "https://ai.api.coregpu.cn/v1"
-    assert api_key == ""
-
-
-# 每个**出现在链上**的 aistore 模型都必须在这里有一条实测结论。
-# ⛔ 往任何池子里加 aistore 模型而不在这里登记 ⇒ 下面那道闸变红。
-#
-# 为什么闸要钉这张表而不是钉三个写死的名字: 关思考与不关思考在这个端点上
-# 差 1.4s vs 8.5s(见下), 而**悬崖正好落在单跳预算 6.0s 的两侧**。它靠
-# `_AISTORE_THINKING_OBJECT_MODELS` 的**字符串精确匹配**守着 —— 型号改一个
-# 字母、或新模型漏登记, `model in frozenset` 静默为 False, 那个模型每次调用
-# 都是 8.5s + 空 content, 而只认三个字面量的闸照绿。
-#
 # ⛔ 不能写成「所有 aistore 模型都必须拿到开关」—— 那是错的, 见 DeepSeek-V4-Flash。
 _AISTORE_THINKING_VERDICT: dict[str, tuple[bool, str]] = {
     # 模型: (是否必须拿到关闭开关, 依据)
@@ -56,59 +49,38 @@ _AISTORE_THINKING_VERDICT: dict[str, tuple[bool, str]] = {
         True,
         "2026-08-15 生产端点实测: 带 thinking:disabled 1.43/1.43/1.56s、"
         "reasoning_tokens=None; 去掉该字段 8.03/8.13/8.95s、reasoning_tokens=800 "
-        "(把 max_tokens 全烧在思考上)、content_len=0、finish_reason=length。"
-        "⇒ 没有这个开关它会思考, 思考量随请求波动: 实测 4 次落在 5.69~8.95s, "
-        "其中 3 次超过 6.0s 单跳预算; 最坏情况把 max_tokens 全烧在 reasoning 上、"
-        "content 为空 (finish_reason=length)。"
-        "⛔ 不要写「必然」—— 有一次 5.69s / rt=402 / content=539 字符, 低于预算且非空。",
+        "(把 max_tokens 全烧在思考上)、content_len=0、finish_reason=length。",
     ),
     "DeepSeek-V4-Flash": (
         False,
         "2026-08-15 同批实测: 生产路径**不**注入该字段, 而它 2.17/2.24s、"
-        "reasoning_tokens=None、finish_reason=stop ⇒ 这个变体默认就不思考, "
-        "不需要开关。⚠️ 它当前不在任何池里; 若要启用需先过 _SAFE_MODELS "
-        "(owner 控制台确认), 本条只是把实测结论留痕。",
+        "reasoning_tokens=None、finish_reason=stop ⇒ 这个变体默认就不思考。",
     ),
     "Qwen3-235B-A22B": (
         True,
-        "随 _AISTORE_THINKING_OBJECT_MODELS 一并登记(2026-08-13 上线时的实测结论)。"
-        "⚠️ 未经 2026-08-15 那轮 with/without 对照复测。",
+        "随 _AISTORE_THINKING_OBJECT_MODELS 一并登记(2026-08-13 上线时的实测结论)。",
     ),
     "Qwen3-32B": (
         True,
-        "同 Qwen3-235B-A22B。⚠️ 未经 2026-08-15 那轮 with/without 对照复测。",
+        "同 Qwen3-235B-A22B。",
     ),
 }
 
 
-def test_every_aistore_model_on_a_chain_has_a_recorded_thinking_verdict():
-    """闸钉的是**耦合**, 不是三个写死的名字。
+def test_aistore_thinking_translation_matches_the_recorded_verdict_on_every_slot():
+    """机制钉的是**耦合**: 登记表的结论 × 槽 profile ⇒ 注入与否。
 
-    ⛔ 判据来自 SLOT_MODELS(真正会上线的链), 不是我手写的名单 ——
-       「一个都没找到」最像「一切正常」, 所以最后 assert 总数 > 0。
+    与链成员无关(链上已经没有 aistore) —— 每个槽 × 每个登记型号直接过一遍
+    `_apply_slot_params`。最后 assert 扫到的组合数 > 0, 防闸空转。
     """
     base = {"messages": [{"role": "user", "content": "return json"}]}
-    checked: list[tuple[str, str]] = []
-    missing: list[tuple[str, str]] = []
-
-    for slot, chain in llm_router.SLOT_MODELS.items():
-        for account, model in chain:
-            if account != "aistore":
-                continue
-            checked.append((slot.value, model))
-            verdict = _AISTORE_THINKING_VERDICT.get(model)
-            if verdict is None:
-                missing.append((slot.value, model))
-                continue
-            needs_switch, why = verdict
-            # 🔴 2026-08-15 (A1): 拿不拿开关**还取决于槽的 profile** ——
-            #    REASONING 的 profile 是 `{}`(思考故意开着, 预算 30s), 那里
-            #    **不该**注入。原来只比登记表, 编码了「aistore 只出现在关思考的
-            #    槽上」这个 A1 之前才成立的前提。
-            wants_off = (llm_router._SLOT_PARAMS.get(slot) or {}).get(
-                "enable_thinking") is False
+    checked = 0
+    for slot in SLOT:
+        wants_off = (llm_router._SLOT_PARAMS.get(slot) or {}).get(
+            "enable_thinking") is False
+        for model, (needs_switch, why) in _AISTORE_THINKING_VERDICT.items():
             expected = needs_switch and wants_off
-            out = llm_router._apply_slot_params(slot, account, model, base)
+            out = llm_router._apply_slot_params(slot, "aistore", model, base)
             got = out.get("thinking") == {"type": "disabled"}
             assert got == expected, (
                 f"{slot.value}/{model}: 登记 needs_switch={needs_switch} × "
@@ -119,24 +91,12 @@ def test_every_aistore_model_on_a_chain_has_a_recorded_thinking_verdict():
             assert "enable_thinking" not in out, (
                 f"{slot.value}/{model}: 混进了 DashScope 的 enable_thinking"
             )
-
-    assert not missing, (
-        "这些 aistore 模型已经在链上, 但没有 thinking 结论登记 —— "
-        "先实测 with/without 再补进 _AISTORE_THINKING_VERDICT: "
-        f"{sorted(set(missing))}"
-    )
-    assert checked, (
-        "一个 aistore 条目都没扫到 —— 闸空转了。"
-        "要么链变了, 要么 SLOT_MODELS 的形状变了, 先查闸本身。"
-    )
+            checked += 1
+    assert checked == len(list(SLOT)) * len(_AISTORE_THINKING_VERDICT)
 
 
 def test_aistore_thinking_switch_is_keyed_by_the_exact_model_string():
-    """阳性对照: 型号名差一个字母, 开关就静默失效。
-
-    这条不是重复上面那条 —— 它证明**那个失效是静默的**, 也就是为什么
-    上面那道闸必须存在。
-    """
+    """阳性对照: 型号名差一个字母, 开关就静默失效 —— 这就是上面那道闸的理由。"""
     base = {"messages": [{"role": "user", "content": "return json"}]}
     real = llm_router._apply_slot_params(
         SLOT.REVIEW, "aistore", "DeepSeek-V4-Flash-A", base)
@@ -150,24 +110,18 @@ def test_aistore_thinking_switch_is_keyed_by_the_exact_model_string():
     )
 
 
-def test_qwen32_is_confined_to_the_simple_text_slot():
-    pair = ("aistore", "Qwen3-32B")
-    assert pair in llm_router._SLOT_POOLS[SLOT.SIMPLE_TEXT]
-    for slot, pool in llm_router._SLOT_POOLS.items():
-        if slot is SLOT.SIMPLE_TEXT:
-            continue
-        assert pair not in pool, f"Qwen3-32B leaked into complex slot {slot.value}"
+# ── 2xx + error 体的回退: 与账号无关的机制, 用在册的两个阿里云账号来测 ──────────
+_TWO_HOPS = [
+    ("aliyun_c_vl", "qwen3.8-flash"),
+    ("aliyun_a_vl", "qwen3.8-flash"),
+]
 
 
-def test_restaurant_slots_prefer_aistore_deepseek_and_confine_qwen235():
-    deepseek = ("aistore", "DeepSeek-V4-Flash-A")
-    qwen = ("aistore", "Qwen3-235B-A22B")
-    for slot in (SLOT.CHAT, SLOT.INSIGHTS, SLOT.CHART, SLOT.MAPPER, SLOT.REVIEW):
-        assert llm_router.SLOT_MODELS[slot][0] == deepseek
-    chart_chain = llm_router.SLOT_MODELS[SLOT.CHART]
-    assert chart_chain.index(qwen) > chart_chain.index(deepseek)
-    for slot in (SLOT.CHAT, SLOT.INSIGHTS, SLOT.MAPPER, SLOT.REVIEW):
-        assert qwen not in llm_router._SLOT_POOLS[slot]
+def _patch_two_hops(monkeypatch):
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "fake-c")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "fake-a")
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 10, 7))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, list(_TWO_HOPS))
 
 
 class _Response:
@@ -183,17 +137,7 @@ class _Response:
 
 @pytest.mark.asyncio
 async def test_http_200_error_body_falls_back(monkeypatch):
-    monkeypatch.setenv("LLM_AISTORE_API_KEY", "fake-aistore")
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "fake-deepseek")
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 13))
-    monkeypatch.setitem(
-        llm_router.SLOT_MODELS,
-        SLOT.CHAT,
-        [
-            ("aistore", "DeepSeek-V4-Flash-A"),
-            ("deepseek", "deepseek-v4-flash"),
-        ],
-    )
+    _patch_two_hops(monkeypatch)
     good = {"choices": [{"message": {"content": "后备模型正常返回"}}]}
 
     class _Client:
@@ -218,17 +162,7 @@ async def test_http_200_error_body_falls_back(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stream_error_event_before_content_falls_back(monkeypatch):
-    monkeypatch.setenv("LLM_AISTORE_API_KEY", "fake-aistore")
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "fake-deepseek")
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 13))
-    monkeypatch.setitem(
-        llm_router.SLOT_MODELS,
-        SLOT.CHAT,
-        [
-            ("aistore", "DeepSeek-V4-Flash-A"),
-            ("deepseek", "deepseek-v4-flash"),
-        ],
-    )
+    _patch_two_hops(monkeypatch)
 
     class _StreamResponse:
         status_code = 200

@@ -36,8 +36,11 @@
 
 ## 硬约束 9 —— 主读数是「哪几条死了」, 必须配一个「一定会活」的对照
 
-阳性对照 `aistore/DeepSeek-V4-Flash-A`(同日已实测活着)。
+阳性对照 `aliyun_c_vl/qwen3.8-flash`(2026-10-07 prod 探针 200, 且是文本槽产品链链头)。
 **它要是也报死, 那是仪器坏了, 不是全都死了。** ⇒ rc=2, 整轮作废。
+⚠️ 2026-10-07 前的对照是 `aistore/DeepSeek-V4-Flash-A` —— 它随 aistore 出局(Steve 复审
+   裁定只留阿里云账号)。⛔ 不改的话对照**永远找不到**(它不在任何链上 ⇒ rows 里没有它),
+   脚本每次都 rc=2, 读数恒作废而不是恒绿 —— 方向是安全的, 但等于这台仪器停了。
 
 ## 三态(硬约束 4)
 
@@ -53,7 +56,7 @@ import httpx
 from common import llm_router as R
 from smartbi.scripts.llm_capability_rank import _query_set, _score_one
 
-POSITIVE_CONTROL = ("aistore", "DeepSeek-V4-Flash-A")
+POSITIVE_CONTROL = ("aliyun_c_vl", "qwen3.8-flash")
 N_QUERIES = 2
 
 #: profile 指纹 -> (代表槽, 人读的名字)。⛔ 代表槽只用来取 profile, 与槽语义无关。
@@ -104,8 +107,10 @@ async def main() -> int:
     n_calls = sum(len(units[p]) for p in measured) * len(queries)
 
     print(f"scope={args.scope}  白名单 {len(entries)} 条")
+    import datetime as _dt
+    _stale_from = R._REGISTRY_AUDIT_DATE + _dt.timedelta(days=R._REGISTRY_MAX_AGE_DAYS + 1)
     print(f"_REGISTRY_AUDIT_DATE={R._REGISTRY_AUDIT_DATE} "
-          f"+{R._REGISTRY_MAX_AGE_DAYS}d ⇒ 2026-09-04 起收缩到 _MINIMAL_SAFE_SET")
+          f"+{R._REGISTRY_MAX_AGE_DAYS}d ⇒ {_stale_from} 起收缩到 _MINIMAL_SAFE_SET")
     print(f"在池/链上的 {len(measured)} 条, 共 {n_calls} 次调用 "
           f"({len(queries)} 题 × 每条所在的每种 profile)")
     print(f"⛔ 不在任何池/链上的 {len(orphans)} 条 —— **纯死重, 与存活无关**, 不调用\n")
