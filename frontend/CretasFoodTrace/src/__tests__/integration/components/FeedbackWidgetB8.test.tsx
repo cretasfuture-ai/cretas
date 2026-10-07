@@ -22,7 +22,7 @@ describe('B8 FeedbackWidget actual component', () => {
   it('submits all completed intent ratings with intentCode and sessionId', async () => {
     post.mockResolvedValue({ success: true, data: { success: true } });
     const view = renderFeedback();
-    fireEvent.press(view.UNSAFE_getAllByType(TouchableOpacity)[1]);
+    fireEvent.press(view.getByLabelText('这个回答有帮助'));
     await waitFor(() => expect(post).toHaveBeenCalled());
     const submitCall = post.mock.calls.find((call: unknown[]) => String(call[0]).includes('/food-kb/feedback/submit'));
     expect(submitCall).toBeDefined();
@@ -32,7 +32,7 @@ describe('B8 FeedbackWidget actual component', () => {
   it('does not claim nested Python failure as submitted and keeps retry path', async () => {
     post.mockResolvedValue({ success: true, data: { success: false, message: '数据库暂时不可用' } });
     const view = renderFeedback();
-    fireEvent.press(view.UNSAFE_getAllByType(TouchableOpacity)[1]);
+    fireEvent.press(view.getByLabelText('这个回答有帮助'));
     await waitFor(() => expect(post).toHaveBeenCalled());
     expect(view.queryByText('已提交反馈，感谢您的帮助')).toBeNull();
     expect(view.UNSAFE_getAllByType(TouchableOpacity).length).toBeGreaterThan(0);
