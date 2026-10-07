@@ -374,6 +374,51 @@ describe('AIChatScreen 写操作确认卡', () => {
     expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
   });
 
+  describe('预览追问 (NEED_MORE_INFO) 的答案接得回来 (2026-10-07 真机: 答批次号被当新话识别成溯源查询)', () => {
+    const ASK = {
+      intentCode: 'MATERIAL_BATCH_USE',
+      intentName: '领用原料',
+      status: 'NEED_MORE_INFO',
+      clarificationQuestions: ['要领用哪个批次？「2015胸肉」现在可用的批次有：MT-20260829-9687（2015胸肉，剩 12.5 kg）。请直接说批次号。'],
+    };
+
+    it('带 sessionId 的预览追问: 提示直接回答, 下一句流式请求带着这个 sessionId', async () => {
+      installBlockedWriteStream();
+      mockPreviewIntent.mockResolvedValue({ ...ASK, sessionId: 'sess-ask-1' });
+      const screen = render(<AIChatScreen />);
+      await send(screen, '领用2015胸肉0.1公斤');
+      await waitFor(() => expect(screen.getByTestId('ai-confirm-notice')).toBeTruthy());
+      const notice = flattenText(screen.getByTestId('ai-confirm-notice'));
+      expect(notice).toContain('要领用哪个批次');
+      expect(notice).toContain('不用重新说一遍');
+      expect(notice).not.toContain('请补充后重新说一遍');
+
+      mockExecuteIntentStream.mockClear();
+      await send(screen, 'MT-20260829-9687');
+
+      await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));   // 必发生: 第二句真的发出去了
+      const [text, , , , options] = mockExecuteIntentStream.mock.calls[0];
+      expect(text).toBe('MT-20260829-9687');
+      expect(options.sessionId).toBe('sess-ask-1');
+    });
+
+    it('对照: 追问没带 sessionId (服务端没开会话) → 仍说「请补充后重新说一遍」, 下一句不带这个 id', async () => {
+      installBlockedWriteStream();
+      mockPreviewIntent.mockResolvedValue({ ...ASK });
+      const screen = render(<AIChatScreen />);
+      await send(screen, '领用2015胸肉0.1公斤');
+      await waitFor(() => expect(screen.getByTestId('ai-confirm-notice')).toBeTruthy());
+      expect(flattenText(screen.getByTestId('ai-confirm-notice'))).toContain('请补充后重新说一遍');
+
+      mockExecuteIntentStream.mockClear();
+      await send(screen, 'MT-20260829-9687');
+
+      await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(1));
+      const [, , , , options] = mockExecuteIntentStream.mock.calls[0];
+      expect(options.sessionId).toBe('sess-write-1');   // 流式那一轮自己的会话, 不是追问会话
+    });
+  });
+
   it('预览请求网络失败: 明确说没有执行, 可重新生成预览', async () => {
     installBlockedWriteStream();
     mockPreviewIntent.mockRejectedValueOnce(new Error('Network Error')).mockResolvedValueOnce(previewOk());

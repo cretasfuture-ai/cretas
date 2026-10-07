@@ -1002,6 +1002,14 @@ function AIChatScreenContent() {
         ...(state.previewContext ? { context: state.previewContext } : {}),
       }, factoryId);
       if (!isCurrentActor()) return;
+      // 预览追问 (比如「要领用哪个批次？」) 服务端开了参数收集会话: 记下它的 id, 用户下一句的回答
+      // 带着它发出去, 服务端就接着填槽继续同一个意图 (2026-10-07 真机: 答案被当新话识别成溯源查询)。
+      const askedSessionId = response?.status === 'NEED_MORE_INFO' && typeof response.sessionId === 'string'
+        ? response.sessionId.trim() : '';
+      if (askedSessionId) {
+        sessionIdRef.current = askedSessionId;
+        setSessionId(askedSessionId);
+      }
       updateWriteConfirm(messageId, stillWaiting, (s) => applyPreviewResponse(s, response, Date.now()));
     } catch (error) {
       if (!isCurrentActor()) return;

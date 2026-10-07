@@ -210,6 +210,11 @@ export interface IntentExecuteResponse {
   requiredPermission?: string | null;
   /** 澄清问题 */
   clarificationQuestions?: string[] | null;
+  /**
+   * 服务端参数收集会话 id。预览追问 (NEED_MORE_INFO) 带它: 下一句把它原样放进流式请求的 sessionId,
+   * 服务端就把那句话当成这个问题的答案接着填, 不重新识别。
+   */
+  sessionId?: string | null;
   /** 额外元数据 */
   metadata?: Record<string, unknown> | null;
   /** 匹配的意图代码 */

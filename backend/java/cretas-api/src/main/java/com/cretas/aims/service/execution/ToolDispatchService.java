@@ -24,6 +24,7 @@ import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.calibration.CorrectionRecord;
 import com.cretas.aims.entity.calibration.ToolCallRecord;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
@@ -72,6 +73,10 @@ public class ToolDispatchService {
 
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
+
+    /** 预览追问开参数收集会话用 (见 {@link #openPreviewQuestionSession}); 没有它时预览追问照旧、只是没人接答案。 */
+    @Autowired(required = false)
+    private ConversationService conversationService;
 
     // W0 write-guard (intent-w0) — SITE B. This is the direct-Tool execution choke point reached
     // by the main execute() ToolDirect branch AND by executeWithExplicitIntent. The guard blocks a
@@ -874,6 +879,9 @@ public class ToolDispatchService {
                 if (blocked != null) {
                     log.info("预览未通过, 不铸确认 token: tool={}, status={}, reason={}",
                             tool.getToolName(), blocked.getStatus(), blocked.getMessage());
+                    if ("NEED_MORE_INFO".equals(blocked.getStatus())) {
+                        openPreviewQuestionSession(tool, factoryId, userId, intent, params, previewData, blocked);
+                    }
                     return blocked;
                 }
                 try {
@@ -1019,6 +1027,81 @@ public class ToolDispatchService {
                 .aiMode("WRITE")
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * 预览发出的追问也要有人接答案 (2026-10-07, prod 真机: 「领用2015胸肉0.1公斤」→ 预览问「要领用哪个批次？」→
+     * 答「MT-20260829-9687」被当一句新话, 识别成批次溯源查询, 0.1 公斤丢了)。
+     *
+     * <p>SSE 入口的 Slot Filling 缺参会开一个参数收集会话, 下一句由 {@code SseStreamingService#streamSlotContinuation}
+     * 接着填槽、继续同一个意图。预览出口 (这里) 以前不开 —— 追问发出去就没了下文。现在同样开一个:
+     * 意图 = 被预览的意图; 待问的槽 = 工具说缺的那几个 ({@code missingParameters}); 已收集 = 这一轮预览用到的、
+     * 工具 schema 声明过的标量参数 (含 quantity=0.1; 待问的槽不带, 免得把「2015胸肉」这种旧值当答案);
+     * 会话 id 放进回执 {@code sessionId}, App 把它原样带回下一句。
+     *
+     * <p>⛔ 不开会话的情况: 没有会话服务 / 没有主体 / 工具没说缺哪个槽 (答案无处可填, 开了只会截走下一句)。
+     * 开会话失败不破坏追问本身 (App 退回老行为: 让用户重新说一遍)。
+     */
+    @SuppressWarnings("unchecked")
+    private void openPreviewQuestionSession(ToolExecutor tool, String factoryId, Long userId, AIIntentConfig intent,
+                                            Map<String, Object> params, Map<String, Object> previewData,
+                                            IntentExecuteResponse asked) {
+        if (conversationService == null || userId == null || factoryId == null || previewData == null) {
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        if (previewData.get("missingParameters") instanceof List<?> names) {
+            for (Object n : names) {
+                if (n instanceof String s && !s.isBlank() && !missing.contains(s)) {
+                    missing.add(s);
+                }
+            }
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+        Map<String, Object> properties = tool.getParametersSchema() != null
+                && tool.getParametersSchema().get("properties") instanceof Map
+                ? (Map<String, Object>) tool.getParametersSchema().get("properties") : Map.of();
+        List<ConversationService.RequiredParameter> required = new ArrayList<>();
+        for (String name : missing) {
+            Object def = properties.get(name);
+            String type = def instanceof Map<?, ?> d && d.get("type") instanceof String t ? t : null;
+            Object description = def instanceof Map<?, ?> d2 ? d2.get("description") : null;
+            required.add(ConversationService.RequiredParameter.builder()
+                    .name(name)
+                    .label(description instanceof String text && !text.isBlank() ? text : name)
+                    .type(slotTypeOf(type))
+                    .collected(false)
+                    .build());
+        }
+        Map<String, Object> collected = SseStreamingService.declaredScalarParams(params, tool);
+        missing.forEach(collected::remove);
+        try {
+            ConversationService.ConversationResponse started = conversationService.startParameterCollection(
+                    factoryId, userId, intent.getIntentCode(), intent.getIntentName(), required,
+                    asked.getClarificationQuestions() != null ? asked.getClarificationQuestions() : List.of(),
+                    collected);
+            if (started != null && started.getSessionId() != null && !started.getSessionId().isBlank()) {
+                asked.setSessionId(started.getSessionId());
+                log.info("预览追问已开参数收集会话: sessionId={}, intent={}, asking={}, carried={}",
+                        started.getSessionId(), intent.getIntentCode(), missing, collected.keySet());
+            }
+        } catch (Exception e) {
+            log.warn("预览追问开会话失败 (追问照常返回): intent={}, error={}", intent.getIntentCode(), e.getMessage());
+        }
+    }
+
+    private static String slotTypeOf(String jsonType) {
+        if (jsonType == null) {
+            return "TEXT";
+        }
+        switch (jsonType.toLowerCase()) {
+            case "integer": return "INTEGER";
+            case "number": return "NUMBER";
+            case "boolean": return "BOOLEAN";
+            default: return "TEXT";
+        }
     }
 
     private static String firstText(Object... candidates) {

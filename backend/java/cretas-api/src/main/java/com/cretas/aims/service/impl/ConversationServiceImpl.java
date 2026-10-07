@@ -984,6 +984,22 @@ public class ConversationServiceImpl implements ConversationService {
             }
         }
 
+        // 只差一个文本型槽位、这句话整句就是一个编号 (「MT-20260829-9687」) → 同样直接填, 不问模型。
+        // 预览追问「要领用哪个批次？」的答案就是这种 (2026-10-07); 编号原样就是值, 交给模型只会多一次出错机会。
+        if (uncollectedParams.size() == 1
+                && com.cretas.aims.service.execution.SlotAnswerRule.isFreeTextType(uncollectedParams.get(0).getType())) {
+            Optional<String> code = com.cretas.aims.service.execution.SlotAnswerRule.codeToken(userReply);
+            if (code.isPresent()) {
+                Map<String, String> direct = new HashMap<>();
+                direct.put(uncollectedParams.get(0).getName(), code.get());
+                return LlmParameterExtractionResult.builder()
+                        .extractedParams(direct)
+                        .successful(true)
+                        .reasoning("回复整句就是一个编号, 直接填入唯一的文本型槽位")
+                        .build();
+            }
+        }
+
         // 如果 DashScope 不可用，尝试简单提取
         if (dashScopeClient == null || !dashScopeClient.isAvailable()) {
             log.debug("DashScope 不可用，使用简单提取");

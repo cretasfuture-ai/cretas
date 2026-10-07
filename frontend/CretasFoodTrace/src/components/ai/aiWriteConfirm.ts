@@ -248,9 +248,12 @@ export function applyPreviewResponse(
     const questions = Array.isArray(response.clarificationQuestions)
       ? response.clarificationQuestions.filter((q): q is string => typeof q === 'string' && q.trim() !== '')
       : [];
+    // 服务端开了参数收集会话 (带 sessionId): 下一句直接回答就行, 不用把整句话重说一遍
+    const answerable = str(response.sessionId) !== undefined;
+    const tail = answerable ? '请直接回答上面的问题，不用重新说一遍。' : '请补充后重新说一遍。';
     const ask = questions.length > 0
-      ? `还需要以下信息：\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n请补充后重新说一遍。`
-      : (backendMessage ?? '还缺少必要信息，请补充后重新说一遍。');
+      ? `还需要以下信息：\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n${tail}`
+      : (backendMessage ?? `还缺少必要信息，${tail}`);
     return { ...base, phase: 'blocked', notice: ask, canRegenerate: false };
   }
   if (status === 'PREVIEW_BLOCKED') {
