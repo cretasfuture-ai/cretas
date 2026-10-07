@@ -94,7 +94,7 @@ const HIDDEN_KEYS = new Set([
 
 /**
  * 已确认存在的业务键 → 中文标签 (取自 ReceiveWithLimitTool.doPreview 等写工具的预览载荷)。
- * 不在表里的键原样显示 —— ⛔ 不靠猜去翻译没见过的键。
+ * 不在表里的键隐藏 —— ⛔ 不把英文内部字段泄漏给一线用户。
  */
 const KEY_LABELS: Record<string, string> = {
   orderNumber: '单号',
@@ -115,6 +115,9 @@ const KEY_LABELS: Record<string, string> = {
   notes: '备注',
   reason: '原因',
   warningIfOver: '提醒',
+  defectType: '缺陷类型',
+  defectQuantity: '缺陷数量',
+  statusDisplayName: '状态',
 };
 
 function str(value: unknown): string | undefined {
@@ -445,7 +448,7 @@ export function previewRows(action: ConfirmableAction | undefined): PreviewRow[]
     const cur = asRecord(action.currentValues) ?? {};
     const keys = Array.from(new Set([...Object.keys(cur), ...Object.keys(next)]));
     return keys
-      .filter((k) => !HIDDEN_KEYS.has(k))
+      .filter((k) => !HIDDEN_KEYS.has(k) && KEY_LABELS[k] !== undefined)
       .map((k) => {
         const before = formatValue(cur[k]);
         const value = formatValue(next[k]);
@@ -456,7 +459,7 @@ export function previewRows(action: ConfirmableAction | undefined): PreviewRow[]
   if (!root) return [];
   const data = asRecord(root.data) ?? root;
   return Object.entries(data)
-    .filter(([k]) => !HIDDEN_KEYS.has(k) && k !== 'data')
+    .filter(([k]) => !HIDDEN_KEYS.has(k) && k !== 'data' && KEY_LABELS[k] !== undefined)
     .map(([k, v]) => ({ key: k, label: labelOf(k), value: formatValue(v) }));
 }
 

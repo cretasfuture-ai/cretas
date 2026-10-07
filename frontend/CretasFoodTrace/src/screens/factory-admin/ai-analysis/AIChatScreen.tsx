@@ -1413,6 +1413,7 @@ function AIChatScreenContent() {
           {/* 仅已完成回答显示统一答案质量反馈；错误状态不可评分。 */}
           {!message.isLoading &&
             !message.error &&
+            !message.writeConfirm &&
             message.intentCode &&
             message.userQuestion && (
               <FeedbackWidget

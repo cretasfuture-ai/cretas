@@ -159,9 +159,9 @@ describe('previewRows', () => {
     const rows = previewRows({ ...ACTION, currentValues: { quantity: 10, factoryId: 'F' }, newValues: { quantity: 12 } });
     expect(rows).toEqual([{ key: 'quantity', label: '数量', before: '10', value: '12', changed: true }]);
   });
-  it('对照: 没有 newValues 时读 previewData.data, 不认识的键原样显示', () => {
+  it('对照: 没有 newValues 时只显示已知中文标签, 隐藏不认识的键', () => {
     const rows = previewRows({ ...ACTION, newValues: {}, previewData: { success: true, data: { sampleCode: 'S-1', canDo: true } } });
-    expect(rows).toEqual([{ key: 'sampleCode', label: 'sampleCode', value: 'S-1' }]);
+    expect(rows).toEqual([]);
   });
 });
 

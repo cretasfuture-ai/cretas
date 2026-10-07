@@ -206,6 +206,8 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
         <Text style={[styles.promptText, { color: theme.colors.onSurfaceVariant }]}>这个回答有帮助吗？</Text>
         <View style={styles.buttonsContainer}>
           <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="这个回答有帮助"
             style={styles.iconButton}
             onPress={handleThumbsUp}
             disabled={isSubmitting}
@@ -213,6 +215,8 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
             <IconButton icon="thumb-up-outline" size={44} iconColor={theme.colors.primary} />
           </TouchableOpacity>
           <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="这个回答没有帮助"
             style={styles.iconButton}
             onPress={handleThumbsDown}
             disabled={isSubmitting}
