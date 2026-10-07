@@ -3,7 +3,8 @@
  * 包含: 用户信息、账户设置、帮助与支持、关于
  */
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from "react-native";
+import { appAlert } from "../../../components/ui/AppDialog";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -55,7 +56,7 @@ export function FAProfileScreen() {
     const accountLabel = displayName
       ? `${displayName}（${roleName}）`
       : `@${user?.username ?? ''}（${roleName}）`;
-    Alert.alert(
+    appAlert(
       t('menu.logout'),
       `确定退出 ${accountLabel} 吗？`,
       [

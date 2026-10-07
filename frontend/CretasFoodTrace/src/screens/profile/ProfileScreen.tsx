@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Platform } from 'react-native';
+import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { Text, Avatar, List, Divider, Portal, Dialog, TextInput, HelperText, ActivityIndicator, Chip, Card } from 'react-native-paper';
 import { useAuthStore } from '../../store/authStore';
 import { useNavigation, CommonActions } from '@react-navigation/native';
@@ -7,6 +7,7 @@ import { useLanguageStore, LANGUAGE_NAMES, type SupportedLanguage } from '../../
 import { userApiClient } from '../../services/api/userApiClient';
 import { platformAPI } from '../../services/api/platformApiClient';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
+import { appAlert } from '../../components/ui/AppDialog';
 import { theme } from '../../theme';
 import { logger } from '../../utils/logger';
 import { handleError } from '../../utils/errorHandler';
@@ -131,13 +132,10 @@ export default function ProfileScreen() {
       : `@${user?.username ?? ''}`;
     const confirmMessage = `确定退出 ${accountLabel} 吗？`;
 
-    if (Platform.OS === 'web') {
-      if (window.confirm(confirmMessage)) {
-        doLogout();
-      }
-      return;
-    }
-    Alert.alert('退出登录', confirmMessage, [
+    // 2026-10-07: 不再走 Platform.OS === 'web' → window.confirm / Alert.alert。
+    // Expo Web 上 Alert.alert 是 no-op, window.confirm 在内置浏览器 / 自动化 / iframe 里会被静默吞掉
+    // (点「退出登录」没反应, 2026-10-06 真机); appAlert 用 RN <Modal> 渲染, web 与原生行为一致。
+    appAlert('退出登录', confirmMessage, [
       { text: '取消', style: 'cancel' },
       { text: '退出', style: 'destructive', onPress: doLogout }
     ]);

@@ -54,23 +54,24 @@ const ZERO = new Set(['screens/processing', 'screens/warehouse', 'screens/qualit
 const IGNORED = new Set(['screens/restaurant']);
 /** 2026-09-06 实测 screens/restaurant 的 Alert.alert( 数; 餐饮屏不动 ⇒ 这个数不该变 */
 const RESTAURANT_PINNED = 51;
-/** 2026-09-06 实测 (codemod 第一刀之后), ⛔ 只许往下调 */
+/** 2026-09-06 实测 (codemod 第一刀之后), ⛔ 只许往下调
+ *  2026-10-07: 「我的」页退出登录改 appAlert (profileLogoutConfirm.test.tsx) —— factory-admin/dispatcher/workshop-supervisor/profile 各 -1, hr 收紧到实测 36 */
 const BASELINE: Record<string, number> = {
-  'screens/factory-admin': 357,
+  'screens/factory-admin': 356,
   'screens/platform': 297,
   'screens/management': 198,
-  'screens/dispatcher': 154,
+  'screens/dispatcher': 153,
   components: 51,
-  'screens/hr': 40,
+  'screens/hr': 36,
   'screens/reports': 26,
   hooks: 23,
   'screens/attendance': 22,
-  'screens/workshop-supervisor': 19,
+  'screens/workshop-supervisor': 18,
   'screens/production': 17,
   'screens/factory': 16,
   'screens/alerts': 14,
   'screens/auth': 12,
-  'screens/profile': 11,
+  'screens/profile': 10,
   'screens/demo': 10,
   'screens/rd': 9,
   'screens/smartbi': 8,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { appAlert } from '../../components/ui/AppDialog';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -33,10 +33,7 @@ export default function QIProfileScreen() {
       ? `${user.fullName}（${t('profile.inspector')}）`
       : `@${user?.username ?? ''}（${t('profile.inspector')}）`;
     const message = `确定退出 ${account} 吗？`;
-    if (Platform.OS === 'web') {
-      if (window.confirm(message)) logout();
-      return;
-    }
+    // 单一路径: web 与原生都走 appAlert (RN <Modal>); 不再在 web 用 window.confirm —— 内置浏览器 / iframe 里它被静默吞掉
     appAlert('退出登录', message, [
       { text: '取消', style: 'cancel' },
       { text: '退出', style: 'destructive', onPress: logout },

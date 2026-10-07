@@ -23,7 +23,6 @@ import {
   TouchableOpacity,
   RefreshControl,
   Alert,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,6 +31,7 @@ import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useLanguageStore, LANGUAGE_NAMES, type SupportedLanguage } from '../../../store/languageStore';
 import { useAuthStore } from '../../../store/authStore';
 import { CommonActions } from '@react-navigation/native';
+import { appAlert } from '../../../components/ui/AppDialog';
 
 // 主题颜色
 const DISPATCHER_THEME = {
@@ -295,13 +295,8 @@ export default function DSProfileScreen() {
       );
     };
 
-    if (Platform.OS === 'web') {
-      if (window.confirm(confirmMessage)) {
-        doLogout();
-      }
-      return;
-    }
-    Alert.alert(
+    // appAlert: web 上用 RN <Modal> 渲染确认框 (Alert.alert 在 Expo Web 是 no-op, window.confirm 在内置浏览器里会被吞)
+    appAlert(
       '退出登录',
       confirmMessage,
       [
