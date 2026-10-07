@@ -69,17 +69,38 @@ function buildUserInput(history: ChatMessage[], latest: string): string {
   ].join('\n');
 }
 
+/**
+ * 请求抛错时给业务用户看的话 (AI 对话标准 W2): 超时说超时; 英文 / HTTP 码原文不露;
+ * 后端给的中文业务原因 (如「权限不足」) 保留。「没有保存任何数据」由抽屉在失败消息下统一补。
+ */
+function failureText(error: unknown): string {
+  const e = error as { message?: string; code?: string } | null;
+  const detail = (e?.message ?? '').trim();
+  if (e?.code === 'ECONNABORTED' || /timeout|超时/i.test(detail)) {
+    return 'AI 响应超时，请重试或手动填写表单。';
+  }
+  const chineseReason = /[一-龥]/.test(detail) && !/[A-Za-z]{4,}/.test(detail) && !/\b[45]\d\d\b/.test(detail);
+  return chineseReason ? `AI 解析失败：${detail}` : 'AI 解析失败，请重试或手动填写表单。';
+}
+
 export function useAiChat(config: AiEntryConfig) {
   const factoryId = useFactoryId();
   const messages = ref<ChatMessage[]>([]);
   const loading = ref(false);
   const previewParams = ref<TableRow | null>(null);
+  /** 开发者遥测 (E1): 只有抽屉在 ?aiDebug=1 时才读它显示。 */
+  const lastConfidence = ref<number | null>(null);
 
   /** 跨轮累积的字段值；预览卡片基于它，而不是单轮返回。 */
   let collected: TableRow = {};
 
   function say(content: string) {
     messages.value.push({ role: 'assistant', content });
+  }
+
+  /** 解析失败 / 超时: 同样是一条助手消息, 但带 failed 标记, 抽屉据此补「没有保存任何数据」和「重试」。 */
+  function fail(content: string) {
+    messages.value.push({ role: 'assistant', content, failed: true });
   }
 
   async function sendMessage(text: string) {
@@ -112,10 +133,11 @@ export function useAiChat(config: AiEntryConfig) {
         // 显示成「操作成功」, 然后什么也没发生: 用户看到"成功"却拿不到结果,
         // 排查的人也不会想到去看一个写着成功的气泡。
         // 包装层文案描述的是 HTTP 调用本身, 与业务成败无关, 不能进这条链。
-        say(result?.message || 'AI 解析失败，请重试或手动填写表单。');
+        fail(result?.message || 'AI 解析失败，请重试或手动填写表单。');
         return;
       }
 
+      lastConfidence.value = typeof result.confidence === 'number' ? result.confidence : null;
       collected = mergeValues(collected, result.fieldValues);
       const missing = missingRequiredFields(config, collected);
 
@@ -135,11 +157,23 @@ export function useAiChat(config: AiEntryConfig) {
           : `还需要补充：${missingLabels}`);
       }
     } catch (error: unknown) {
-      const detail = (error as { message?: string })?.message;
-      say(detail ? `AI 解析失败：${detail}` : 'AI 解析失败，请重试或手动填写表单。');
+      fail(failureText(error));
     } finally {
       loading.value = false;
     }
+  }
+
+  /**
+   * 重试: 撤掉失败的那条助手回复和触发它的用户消息, 再把同一句话发一遍
+   * (历史里不留失败的那一轮, 不重复出现用户气泡)。只重新解析, 不写任何东西。
+   */
+  async function retry() {
+    if (loading.value) return;
+    const lastReply = messages.value[messages.value.length - 1];
+    const lastUser = messages.value[messages.value.length - 2];
+    if (!lastReply?.failed || lastUser?.role !== 'user') return;
+    messages.value.splice(messages.value.length - 2, 2);
+    await sendMessage(lastUser.content);
   }
 
   function continueEditing() {
@@ -156,6 +190,7 @@ export function useAiChat(config: AiEntryConfig) {
     messages.value = [];
     loading.value = false;
     previewParams.value = null;
+    lastConfidence.value = null;
     collected = {};
   }
 
@@ -163,7 +198,9 @@ export function useAiChat(config: AiEntryConfig) {
     messages,
     loading,
     previewParams,
+    lastConfidence,
     sendMessage,
+    retry,
     continueEditing,
     confirmParams,
     reset,
