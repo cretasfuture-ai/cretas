@@ -1,4 +1,4 @@
-import { getListCellValue, getListDisplayKeys } from '../richListPresentation';
+import { buildDetailRows, formatColumnName, getListCellValue, getListDisplayKeys } from '../richListPresentation';
 
 describe('material inventory table', () => {
   const batch = {
@@ -37,5 +37,15 @@ describe('material inventory table', () => {
     expect(getListDisplayKeys(order)).toEqual(['orderNumber', 'status', 'quantity', 'unit', 'totalAmount']);
     expect(getListCellValue(order, 'status')).toBe('SHIPPED');
     expect(getListCellValue({ ...batch, status: 'NEW_STATUS' }, 'status')).toBe('NEW_STATUS');
+  });
+});
+
+describe('中文键 (后端已给人话标签) 不被当成未知英文键藏掉 (organizer 审 #954, 2026-10-07)', () => {
+  it('列表 / 统计 / 详情: 中文键原样显示, 没标签的英文内部字段仍隐藏', () => {
+    expect(formatColumnName('今天的打卡')).toBe('今天的打卡');
+    expect(formatColumnName('internalFoo')).toBe('');
+    expect(getListDisplayKeys({ 工序: '卤制', 状态: '进行中', internalFoo: 'x' })).toEqual(['工序', '状态']);
+    const rows = buildDetailRows({ 剩余数量: '0.8 kg', internalFoo: 'x', message: '重复的一句话' });
+    expect(rows.map((r) => r.label)).toEqual(['剩余数量']);
   });
 });

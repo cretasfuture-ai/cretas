@@ -1,10 +1,11 @@
 import React, { Component, ErrorInfo } from 'react';
-import { StyleSheet, View, Text, ScrollView } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, type StyleProp, type TextStyle } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 
 interface MarkdownRendererProps {
   content: string;
   style?: object;
+  bodyStyle?: StyleProp<TextStyle>;
 }
 
 interface ErrorBoundaryState {
@@ -16,10 +17,10 @@ interface ErrorBoundaryState {
  * 错误边界组件 - 捕获 Markdown 渲染错误
  */
 class MarkdownErrorBoundary extends Component<
-  { children: React.ReactNode; fallbackContent: string },
+  { children: React.ReactNode; fallbackContent: string; bodyStyle?: StyleProp<TextStyle> },
   ErrorBoundaryState
 > {
-  constructor(props: { children: React.ReactNode; fallbackContent: string }) {
+  constructor(props: { children: React.ReactNode; fallbackContent: string; bodyStyle?: StyleProp<TextStyle> }) {
     super(props);
     this.state = { hasError: false };
   }
@@ -38,7 +39,7 @@ class MarkdownErrorBoundary extends Component<
       // 渲染失败时显示纯文本
       return (
         <ScrollView style={fallbackStyles.container}>
-          <Text style={fallbackStyles.text}>{this.props.fallbackContent}</Text>
+          <Text style={[fallbackStyles.text, this.props.bodyStyle]}>{this.props.fallbackContent}</Text>
         </ScrollView>
       );
     }
@@ -71,7 +72,7 @@ const fallbackStyles = StyleSheet.create({
  * @version 1.2.0 - 添加错误边界和安全渲染
  * @since 2025-12-23
  */
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, style }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, style, bodyStyle }) => {
   // 处理空内容，避免 "Input data should be a String" 错误
   if (!content || typeof content !== 'string') {
     return null;
@@ -89,8 +90,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, sty
 
   return (
     <View style={[styles.container, style]}>
-      <MarkdownErrorBoundary fallbackContent={cleanedContent}>
-        <Markdown style={markdownStyles}>
+      <MarkdownErrorBoundary fallbackContent={cleanedContent} bodyStyle={bodyStyle}>
+        <Markdown style={bodyStyle ? {
+          ...markdownStyles,
+          body: { ...markdownStyles.body, ...StyleSheet.flatten(bodyStyle) },
+          paragraph: { ...markdownStyles.paragraph, ...StyleSheet.flatten(bodyStyle) },
+        } : markdownStyles}>
           {cleanedContent}
         </Markdown>
       </MarkdownErrorBoundary>
