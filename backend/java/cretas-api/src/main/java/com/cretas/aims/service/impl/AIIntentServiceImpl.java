@@ -333,8 +333,16 @@ public class AIIntentServiceImpl implements AIIntentService {
         // shouldUsePythonMatcher(factoryId) honours both the master flag and
         // the Phase 2B canary whitelist (#73 §1.4) so stage 2/3 can dispatch
         // to Python only for whitelisted factoryIds.
-        if (shouldUsePythonMatcher(factoryId) && pythonClient != null && intentResultCache != null
-                && userInput != null && factoryId != null) {
+        boolean pythonCandidate = shouldUsePythonMatcher(factoryId) && pythonClient != null
+                && intentResultCache != null && userInput != null && factoryId != null;
+        // 2026-10-07: Python /api/ai/intent/match 的 userId 是必填项。没有调用者身份时发出去的请求
+        // 必然 422, 而且会被熔断器记成一次失败 (拖累其它租户的正常识别)。⛔ 不用 0 / 空串顶替身份 ——
+        // 明确选择: 不调 Python, 走权威的旧路径, 并留一条可观测的告警 + 计数。
+        if (pythonCandidate && userId == null) {
+            log.warn("识别请求没有调用者 userId, 跳过 Python 匹配直接走旧路径: factoryId={}", factoryId);
+            recordStageHit("PYTHON_SKIPPED_NO_USER");
+        }
+        if (pythonCandidate && userId != null) {
             String role = userRole != null ? userRole : "";
             String businessType;
             try {
@@ -376,7 +384,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                 PythonIntentMatchRequest req = PythonIntentMatchRequest.builder()
                         .query(userInput)
                         .factoryId(factoryId)
-                        .userId(userId != null ? String.valueOf(userId) : null)
+                        .userId(String.valueOf(userId))   // 上面的闸保证非空; Python 侧必填
                         .username(null)
                         .role(role)
                         .businessType(businessType)

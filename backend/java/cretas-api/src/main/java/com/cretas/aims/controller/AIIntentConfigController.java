@@ -203,13 +203,26 @@ public class AIIntentConfigController {
     @Operation(summary = "测试意图识别", description = "输入文本测试意图识别结果（支持操作类型检测）")
     public ResponseEntity<ApiResponse<IntentRecognitionResult>> recognizeIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
-            @RequestBody IntentRecognitionRequest request) {
+            @RequestBody IntentRecognitionRequest request,
+            HttpServletRequest httpRequest) {
 
         log.debug("Recognizing intent for input: {}", request.getUserInput());
 
+        // 🔴 2026-10-07: 这里原来传 (userId=null, role=null)。识别层的 Python 分支把 userId 下发给
+        // /api/ai/intent/match, 而 Python 侧 userId 必填 —— 缺了就是每次 422 (还会被熔断器记成失败)。
+        // /execute 和 SSE 入口都带了, 只有这个诊断入口漏传, 所以线上日志里该接口 0 次 422。
+        // 身份只认 token (Bearer / cookie), ⛔ 不取请求体里客户端自报的字段; 解不出来就拒绝, 不用 0 / null 顶替。
+        String token = extractToken(httpRequest);
+        Long userId = token == null ? null : jwtUtil.getUserIdFromToken(token);
+        if (userId == null) {
+            throw new BusinessException(401, "无法确定当前登录用户，意图识别已取消")
+                    .withHint("请重新登录后再试");
+        }
+        String userRole = jwtUtil.getRoleFromToken(token);
+
         // 使用带操作类型检测的增强版识别方法 (BUG-001/002 修复)
         IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(
-                request.getUserInput(), factoryId, 1, null, null);
+                request.getUserInput(), factoryId, 1, userId, userRole);
 
         IntentRecognitionResult result = new IntentRecognitionResult();
         result.setUserInput(request.getUserInput());

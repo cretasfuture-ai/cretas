@@ -113,7 +113,8 @@ public class TestIntentMatchingTool extends AbstractTool {
                 return testSpecificIntent(userInput, intentCode, factoryId);
             } else {
                 // 测试所有意图，返回Top N
-                return testAllIntents(userInput, factoryId, topN);
+                return testAllIntents(userInput, factoryId, topN,
+                        getUserId(context), getUserRole(context));
             }
 
         } catch (IllegalArgumentException e) {
@@ -163,9 +164,12 @@ public class TestIntentMatchingTool extends AbstractTool {
     /**
      * 测试所有意图
      */
-    private String testAllIntents(String userInput, String factoryId, int topN) throws Exception {
-        // 使用AIIntentService的增强识别方法 (传递null作为userId和userRole，因为这是测试工具)
-        IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(userInput, factoryId, topN, null, null);
+    private String testAllIntents(String userInput, String factoryId, int topN,
+                                  Long userId, String userRole) throws Exception {
+        // 2026-10-07: 原来这里传 (null, null) —— Python 识别分支要求 userId (缺了 422)。
+        // 工具上下文里本来就有调用者 (validateContext 强制要求 userId 键), 照实传下去。
+        IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(
+                userInput, factoryId, topN, userId, userRole);
 
         // 构建返回结果
         Map<String, Object> resultData = new HashMap<>();
