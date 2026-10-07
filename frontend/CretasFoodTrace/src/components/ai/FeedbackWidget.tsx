@@ -192,7 +192,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
       <View style={styles.container}>
         <View style={styles.submittedRow}>
           <IconButton icon="check-circle" size={44} iconColor={theme.colors.primary} />
-          <Text style={styles.submittedText}>已提交反馈，感谢您的帮助</Text>
+          <Text style={[styles.submittedText, { color: theme.colors.primary }]}>已提交反馈，感谢您的帮助</Text>
         </View>
       </View>
     );
@@ -202,7 +202,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
     <View style={styles.container}>
       {/* 点赞/点踩按钮行 */}
       <View style={styles.buttonRow}>
-        <Text style={styles.promptText}>这个回答有帮助吗？</Text>
+        <Text style={[styles.promptText, { color: theme.colors.onSurfaceVariant }]}>这个回答有帮助吗？</Text>
         <View style={styles.buttonsContainer}>
           <TouchableOpacity
             style={styles.iconButton}
@@ -223,8 +223,8 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
 
       {/* 点踩后展开的表单 */}
       {isExpanded && (
-        <View style={styles.expandedForm}>
-          <Text style={styles.formLabel}>请告诉我们原因：</Text>
+        <View style={[styles.expandedForm, { backgroundColor: theme.colors.surfaceVariant }]}>
+          <Text style={[styles.formLabel, { color: theme.colors.onSurface }]}>请告诉我们原因：</Text>
 
           {/* 标签选择 */}
           <View style={styles.tagsContainer}>
@@ -233,14 +233,15 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
                 key={tag.value}
                 style={[
                   styles.tag,
-                  selectedTags.includes(tag.value) && styles.tagSelected,
+                  { backgroundColor: theme.colors.surface, borderColor: theme.colors.outline },
+                  selectedTags.includes(tag.value) && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
                 ]}
                 onPress={() => toggleTag(tag.value)}
               >
                 <Text
                   style={[
                     styles.tagText,
-                    selectedTags.includes(tag.value) && styles.tagTextSelected,
+                    { color: selectedTags.includes(tag.value) ? theme.colors.onPrimary : theme.colors.onSurfaceVariant },
                   ]}
                 >
                   {tag.label}
@@ -251,9 +252,9 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
 
           {/* 文本输入 */}
           <TextInput
-            style={styles.textInput}
+            style={[styles.textInput, { backgroundColor: theme.colors.surface, borderColor: theme.colors.outline, color: theme.colors.onSurface }]}
             placeholder="详细说明（可选）"
-            placeholderTextColor="#999"
+            placeholderTextColor={theme.colors.onSurfaceVariant}
             value={feedbackText}
             onChangeText={setFeedbackText}
             multiline
@@ -263,14 +264,14 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
 
           {/* 提交按钮 */}
           <TouchableOpacity
-            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+            style={[styles.submitButton, { backgroundColor: theme.colors.primary }, isSubmitting && { backgroundColor: theme.colors.surfaceVariant }]}
             onPress={handleSubmitNegative}
             disabled={isSubmitting || selectedTags.length === 0}
           >
             {isSubmitting ? (
-              <ActivityIndicator size="small" color="#fff" />
+              <ActivityIndicator size="small" color={theme.colors.onPrimary} />
             ) : (
-              <Text style={styles.submitButtonText}>提交反馈</Text>
+              <Text style={[styles.submitButtonText, { color: theme.colors.onPrimary }]}>提交反馈</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -284,7 +285,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
   },
   buttonRow: {
     flexDirection: 'row',
@@ -293,7 +293,6 @@ const styles = StyleSheet.create({
   },
   promptText: {
     fontSize: 13,
-    color: '#666',
   },
   buttonsContainer: {
     flexDirection: 'row',
@@ -311,18 +310,15 @@ const styles = StyleSheet.create({
   },
   submittedText: {
     fontSize: 13,
-    color: '#52c41a',
     marginLeft: 4,
   },
   expandedForm: {
     marginTop: 12,
     padding: 12,
-    backgroundColor: '#fafafa',
     borderRadius: 8,
   },
   formLabel: {
     fontSize: 13,
-    color: '#333',
     fontWeight: '500',
     marginBottom: 8,
   },
@@ -335,46 +331,30 @@ const styles = StyleSheet.create({
   tag: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#d9d9d9',
     borderRadius: 4,
   },
-  tagSelected: {
-    backgroundColor: '#1890ff',
-    borderColor: '#1890ff',
-  },
   tagText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  tagTextSelected: {
-    color: '#fff',
+    fontSize: 13,
   },
   textInput: {
-    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#d9d9d9',
     borderRadius: 4,
     padding: 8,
     fontSize: 13,
-    color: '#333',
     minHeight: 60,
     textAlignVertical: 'top',
     marginBottom: 12,
   },
   submitButton: {
-    backgroundColor: '#1890ff',
     borderRadius: 4,
     paddingVertical: 10,
+    minHeight: 44,
     alignItems: 'center',
-  },
-  submitButtonDisabled: {
-    backgroundColor: '#d9d9d9',
+    justifyContent: 'center',
   },
   submitButtonText: {
     fontSize: 14,
-    color: '#fff',
     fontWeight: '500',
   },
 });

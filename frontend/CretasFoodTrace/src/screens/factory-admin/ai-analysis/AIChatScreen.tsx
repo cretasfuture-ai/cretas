@@ -203,6 +203,8 @@ interface Message {
   agentRunOwnerUserId?: string;
   /** 写操作确认卡 (W0 写闸拦下的写意图: 预览 → 确认执行 / 取消) */
   writeConfirm?: WriteConfirmState;
+  /** 可独立呈现的可恢复错误状态。 */
+  error?: boolean;
 }
 
 type AIChatRouteProp = RouteProp<FAAIStackParamList, 'AIChat'>;
@@ -340,6 +342,10 @@ function AIChatScreenContent() {
     primaryButtonIdle: { backgroundColor: theme.colors.primaryContainer },
     subtleButton: { backgroundColor: theme.colors.surfaceVariant },
     loadingSkeleton: { backgroundColor: theme.colors.outlineVariant },
+    errorBanner: { backgroundColor: theme.colors.errorContainer, borderColor: theme.colors.error },
+    errorBannerText: { color: theme.colors.onErrorContainer },
+    retryButton: { backgroundColor: theme.colors.error },
+    retryText: { color: theme.colors.onError },
   }), [theme]);
 
   // 从路由参数获取场景类型
@@ -555,6 +561,7 @@ function AIChatScreenContent() {
 
   useEffect(() => {
     navigation.setOptions?.({
+      headerTintColor: theme.colors.onPrimary,
       headerRight: () => (
         <TouchableOpacity
           testID="ai-chat-new-conversation"
@@ -563,7 +570,7 @@ function AIChatScreenContent() {
           onPress={requestNewConversation}
           style={{ minWidth: 80, minHeight: 44, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}
         >
-          <Text variant="labelLarge" style={{ color: theme.colors.primary }}>新对话</Text>
+          <Text variant="labelLarge" style={{ color: theme.colors.onPrimary }}>新对话</Text>
         </TouchableOpacity>
       ),
     });
@@ -677,22 +684,20 @@ function AIChatScreenContent() {
       setInputText('');
       setIsLoading(true);
       setStreamStatus(null);
-      if (typeof setTimeout === 'function') {
-        slowTimer = setTimeout(() => {
-          if (isCurrentStream()) setStreamStatus('正在处理');
-        }, 3000);
-        timeoutTimer = setTimeout(() => {
-          if (isCurrentStream()) {
-            setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId
-              ? { ...msg, content: '这次没处理完，请再说一遍。没有执行任何写操作，写操作都要先经过确认卡。', isLoading: false }
-              : msg));
-            setStreamStatus(null);
-            setIsLoading(false);
-            sendPendingRef.current = false;
-            controller.abort();
-          }
-        }, 30_000);
-      }
+      slowTimer = setTimeout(() => {
+        if (isCurrentStream()) setStreamStatus('正在处理');
+      }, 3000);
+      timeoutTimer = setTimeout(() => {
+        if (isCurrentStream()) {
+          setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId
+            ? { ...msg, content: '这次没处理完，请再说一遍。没有执行任何写操作，写操作都要先经过确认卡。', isLoading: false, error: true }
+            : msg));
+          setStreamStatus(null);
+          setIsLoading(false);
+          sendPendingRef.current = false;
+          controller.abort();
+        }
+      }, AI_CHAT_TIMEOUT_MS);
       const modeResult = detectAnalysisMode(messageText);
 
       const userMessage: Message = {
@@ -1012,6 +1017,7 @@ function AIChatScreenContent() {
                       return '这次没有处理成功，请检查网络后再试。没有执行任何写操作。';
                     })(),
                     isLoading: false,
+                    error: true,
                   }
                 : msg
             )
@@ -1067,7 +1073,7 @@ function AIChatScreenContent() {
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMessageId
-              ? { ...msg, content: errorMessage, isLoading: false }
+              ? { ...msg, content: errorMessage, isLoading: false, error: true }
               : msg
           )
         );
@@ -1312,7 +1318,7 @@ function AIChatScreenContent() {
                   <Text variant="bodyMedium" style={[styles.streamingCursor, tone.primaryText]}>|</Text>
                 ) : null}
               </Text>
-            ) : (
+            ) : message.error ? null : (
               <MarkdownRenderer content={message.content} />
             )}
             {/* 结构化数据富组件渲染（表格/卡片/统计） */}
@@ -1320,6 +1326,23 @@ function AIChatScreenContent() {
               <RichContentRenderer data={message.richData} />
             )}
           </View>
+          {message.error && !message.isLoading ? (
+            <View testID="ai-chat-error-banner" style={[styles.errorBanner, tone.errorBanner]}>
+              <Text variant="bodyMedium" style={tone.errorBannerText}>{message.content}</Text>
+              {message.userQuestion ? (
+                <TouchableOpacity
+                  testID="ai-chat-retry"
+                  accessibilityRole="button"
+                  accessibilityLabel="再试一次"
+                  style={[styles.retryButton, tone.retryButton]}
+                  onPress={() => { void handleSend(message.userQuestion); }}
+                  disabled={isLoading}
+                >
+                  <Text variant="labelLarge" style={tone.retryText}>再试一次</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
           {!message.isLoading && message.writeConfirm ? (
             <AIWriteConfirmCard
               state={message.writeConfirm}
@@ -1639,6 +1662,22 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     marginLeft: 10,
+  },
+  errorBanner: {
+    marginTop: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 12,
+    gap: 8,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    minWidth: 88,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   streamingCursor: {
     fontWeight: '300',

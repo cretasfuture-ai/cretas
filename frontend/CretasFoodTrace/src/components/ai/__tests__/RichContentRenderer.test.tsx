@@ -36,6 +36,15 @@ const BATCH_USE_RESULT = {
 };
 
 describe('写操作结果卡: 给一线看的中文', () => {
+  it('缺值显示暂无数据，真实 0 保留，精度不被压成 0.00', () => {
+    const data = detectRichData({ batchId: 'b-1', batchNumber: 'MT-1', remainingQuantity: null, consumedQuantity: 0, unit: 'kg', status: 'AVAILABLE' });
+    render(<RichContentRenderer data={data!} />);
+    expect(screen.getByText('暂无数据')).toBeTruthy();
+    expect(screen.getByText('0 kg')).toBeTruthy();
+    expect(screen.getByText('可用')).toBeTruthy();
+    expect(screen.queryByText('0.00 kg')).toBeNull();
+  });
+
   it('领用成功: 中文标签 + 数量带单位 + 状态翻成中文, 不显示内部编号和英文标签', () => {
     const data = detectRichData({ ...BATCH_USE_RESULT });
     expect(data?.dataType).toBe('DETAIL');
