@@ -677,6 +677,13 @@ function AIChatScreenContent() {
     let resultData: Record<string, unknown> | null = null;
     let slowTimer: ReturnType<typeof setTimeout> | null = null;
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearStreamTimers = () => {
+      if (slowTimer) clearTimeout(slowTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      slowTimer = null;
+      timeoutTimer = null;
+    };
+    controller.signal.addEventListener('abort', clearStreamTimers, { once: true });
 
     // React state updates do not synchronously guard another press in this render.
     sendPendingRef.current = true;
@@ -1082,8 +1089,8 @@ function AIChatScreenContent() {
       setIsLoading(false);
     } finally {
       if (abortControllerRef.current === controller) abortControllerRef.current = null;
-      if (slowTimer) clearTimeout(slowTimer);
-      if (timeoutTimer) clearTimeout(timeoutTimer);
+      controller.signal.removeEventListener('abort', clearStreamTimers);
+      clearStreamTimers();
       if (isCurrentStream()) {
         sendPendingRef.current = false;
         setIsLoading(false);
@@ -1254,7 +1261,9 @@ function AIChatScreenContent() {
     appAlert('复制消息', '要把这条消息复制到剪贴板吗？', [
       { text: '取消', style: 'cancel' },
       { text: '复制', onPress: () => {
-        void import('expo-clipboard').then(({ setStringAsync }) => setStringAsync(message.content));
+        void import('expo-clipboard')
+          .then(({ setStringAsync }) => setStringAsync(message.content))
+          .catch(() => appAlert('复制失败', '暂时无法复制，请稍后重试。'));
       } },
     ]);
   }, []);
