@@ -277,7 +277,7 @@ class QualityToolsPreviewTest {
     }
 
     @Test
-    @DisplayName("登记不良: 九种不良代码 (大小写不拘) 都放行并显示中文名; 中文名 / 乱写 → canDo=false (execute 同样不认中文名)")
+    @DisplayName("登记不良: 九种不良代码和常见中文说法都统一放行; 未知说法仍明确拒绝")
     void defectTypes() throws Exception {
         stubInspection(INSPECTION_ID, FACTORY, "PENDING");
         Set<String> shown = new LinkedHashSet<>();
@@ -290,7 +290,14 @@ class QualityToolsPreviewTest {
         }
         assertThat(shown).hasSize(DefectType.values().length);   // 参数化那一维真的在变
 
-        for (String bad : new String[]{"外观缺陷", "SCRATCH"}) {
+        for (String alias : new String[]{"外观", "外观不良", "外观问题", "重量", "分量不够", "缺斤少两",
+                "成分", "微生物", "包装", "异物", "感官", "保质期", "其它"}) {
+            Map<String, Object> a = defectArgs();
+            a.put("defectType", alias);
+            Map<String, Object> d = data(defectTool.preview(call("quality_defect_record", a), ctx(FACTORY, USER)));
+            assertThat(d.get("canDo")).as(alias).isEqualTo(true);
+        }
+        for (String bad : new String[]{"外观缺陷XYZ", "SCRATCH"}) {
             Map<String, Object> a = defectArgs();
             a.put("defectType", bad);
             Map<String, Object> d = data(defectTool.preview(call("quality_defect_record", a), ctx(FACTORY, USER)));
@@ -447,7 +454,7 @@ class QualityToolsPreviewTest {
         assertThat(question).contains("要登记在哪一条质检记录上").contains("你最近的质检有")
                 .contains("B20261006-01（卤猪蹄），2026-10-06，待检验")
                 .contains("B20261005-02（酱牛肉），2026-10-05，合格")
-                .contains("请在话里带上批次号")
+                .contains("直接说批次号就行")
                 .doesNotContain("uuid-").doesNotContain("编号");
         // 最多 5 条: 候选结构化清单与文案都是 5 条
         assertThat((List<Object>) root.get("candidates")).hasSize(5);
@@ -570,9 +577,17 @@ class QualityToolsPreviewTest {
 
         QualityDefect saved = QualityDefect.builder().id("d-1").qualityInspectionId("qi-real-1")
                 .defectType(DefectType.APPEARANCE).quantity(BigDecimal.valueOf(3)).status(com.cretas.aims.entity.enums.DefectStatus.OPEN).build();
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(BATCH_ID);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("B20261006-01");
+        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY)).thenReturn(Optional.of(batch));
         when(defectService.recordDefect(anyString(), anyString(), any(), any(), any(), any(), any())).thenReturn(saved);
         Map<String, Object> exec = parse(defectTool.execute(call("quality_defect_record", args), ctxAs("quality_inspector", USER)));
         assertThat(exec.get("success")).as(String.valueOf(exec)).isEqualTo(true);
+        assertThat(String.valueOf(((Map<?, ?>) exec.get("data")).get("message")))
+                .isEqualTo("已登记不良：外观缺陷 3 个，登记在 B20261006-01 的质检上，状态：待处理。")
+                .doesNotContain("d-1").doesNotContain("qi-real-1");
         org.mockito.ArgumentCaptor<String> id = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(defectService, times(1)).recordDefect(eq(FACTORY), id.capture(), any(), eq(DefectType.APPEARANCE), any(), any(), any());
         assertThat(id.getValue()).isEqualTo("qi-real-1");   // 写路径拿到的是真实主键, 不是他说的批次号
