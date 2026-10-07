@@ -73,6 +73,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `python-java-port.md` - Java→Python parity port 12 rules（只在 backend/python/smartbi_compat 加载；案例库 `docs/rules-casebook/python-java-port-cases.md`）
 - `coding-conventions.md` - 响应格式/TS 类型/字段命名/JWT（代码目录）
 - `fool-proof-design.md` - 防呆设计 5 规则（frontend/web-admin）
+- `ai-chat-ui.md` - AI 对话界面：指向唯一标准 `docs/ux/ai-chat-standard.md`（助手全宽无气泡、一线硬约束、遥测不用 `__DEV__` 当开关、只有完成的回答有反馈）
 - `playwright-headed-mode.md` - E2E headed 强制（tests）
 
 ## UX Flow Gate（低技术素养用户屏幕）
