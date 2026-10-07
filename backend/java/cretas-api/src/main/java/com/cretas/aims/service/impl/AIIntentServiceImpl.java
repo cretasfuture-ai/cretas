@@ -87,6 +87,14 @@ public class AIIntentServiceImpl implements AIIntentService {
     private com.cretas.aims.service.intent.IntentAccessModeFilter accessModeFilter;
 
     /**
+     * 2026-10-07: 选中的意图执行门会拒绝这个人时, 在他能用的读意图里按同一句话重选
+     * (仓库员「查库存」被短语表选成库存报表 → 没权限)。三个来源 (缓存 / Python / 旧管线) 的出口都过它。
+     * required=false 以免裸构造的单测被迫提供。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.RoleAwareIntentRepicker roleRepicker;
+
+    /**
      * Phase 2B-α (T20): feature flag controlling Python matcher dispatch.
      * Default false — legacy in-process matching only. Toggling true causes
      * {@link #recognizeIntentWithConfidence(String, String, int, Long, String, String)}
@@ -371,7 +379,9 @@ public class AIIntentServiceImpl implements AIIntentService {
                     recordStageHit("PYTHON_CACHE_HIT");
                     // 缓存键不含 mode, 存的是未过滤结果 —— 过滤只能发生在返回前, 且必须产出副本,
                     // 否则咨询 tab 的一次剔除会把缓存对象改掉, 串到操作 tab。
-                    return applyAccessModeFilter(cached, factoryId, mode, userPermissions);
+                    return applyAccessModeFilter(
+                            applyRoleRepick(cached, userInput, factoryId, userId, userRole),
+                            factoryId, mode, userPermissions);
                 }
             } catch (Exception e) {
                 log.warn("IntentResultCache.get failed (ignoring, will hit Python): {}", e.getMessage());
@@ -413,7 +423,9 @@ public class AIIntentServiceImpl implements AIIntentService {
                     }
                     recordStageHit("PYTHON_MATCH");
                     // 先缓存未过滤结果 (上面), 再对返回值做 mode 过滤 —— 顺序不能反。
-                    return applyAccessModeFilter(pyResult, factoryId, mode, userPermissions);
+                    return applyAccessModeFilter(
+                            applyRoleRepick(pyResult, userInput, factoryId, userId, userRole),
+                            factoryId, mode, userPermissions);
                 }
                 // 决策层明确判「以上都不是」(2026-10-03, 防曲解): 这是一个结论, 不是「没答出来」——
                 // 回落旧路径会让它去猜一个意图 (「先别入库」被猜成入库)。不缓存, 原样返回。
@@ -448,7 +460,26 @@ public class AIIntentServiceImpl implements AIIntentService {
         }
         // legacy pipeline 也必须过滤: Python 分支默认关闭 (canary 白名单), 绝大多数流量走这里,
         // 只在 Python 侧过滤等于没接线。
-        return applyAccessModeFilter(legacyResult, factoryId, mode, userPermissions);
+        return applyAccessModeFilter(
+                applyRoleRepick(legacyResult, userInput, factoryId, userId, userRole),
+                factoryId, mode, userPermissions);
+    }
+
+    /**
+     * 选中的意图这个人用不了 → 在他能用的读意图里重选 (见 {@code RoleAwareIntentRepicker})。
+     * 重选器缺失 (裸构造单测) 或出错时原样返回: 执行门照旧拒绝, 不会因此多放行任何东西。
+     */
+    private IntentMatchResult applyRoleRepick(IntentMatchResult result, String userInput, String factoryId,
+                                              Long userId, String userRole) {
+        if (result == null || roleRepicker == null) {
+            return result;
+        }
+        try {
+            return roleRepicker.repick(result, userInput, factoryId, userId, userRole);
+        } catch (Exception e) {
+            log.warn("角色重选失败, 回落原识别结果 (执行门照旧鉴权): err={}", e.getMessage());
+            return result;
+        }
     }
 
     /**
