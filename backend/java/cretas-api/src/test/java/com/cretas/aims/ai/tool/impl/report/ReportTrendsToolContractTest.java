@@ -77,6 +77,25 @@ class ReportTrendsToolContractTest {
         assertThat(execute(Map.of("period", "week"), Map.of()).at("/data/comparison/comparisonType").asText()).isEqualTo("MOM");
     }
 
+    @Test
+    void dailyProductionWithExplicitYoyStillCompares() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
+        JsonNode data = execute(Map.of("period", "week"), Map.of("userInput", "每天产量同比去年同期"));
+        System.out.println("OBS daily-production-yoy=" + data.at("/data/comparison/comparisonType") + " base="
+                + data.at("/data/comparison/basePeriodStart") + " current=" + data.at("/data/comparison/currentPeriodStart"));
+        assertThat(data.at("/data/comparison/comparisonType").asText()).isEqualTo("YOY");
+    }
+
+    @Test
+    void currentPeriodMissingDataReturnsNullWithoutSubtractFailure() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), null, null);
+        JsonNode data = execute(Map.of("period", "month"), Map.of());
+        System.out.println("OBS current-missing outputRate=" + data.at("/data/comparison/comparison/outputChangeRate")
+                + " message=" + data.at("/data/comparison/comparison/outputChangeMessage"));
+        assertThat(data.at("/data/comparison/comparison/outputChangeRate").isNull()).isTrue();
+        assertThat(data.at("/data/comparison/comparison/outputChangeMessage").asText()).isEqualTo("本期无数据，无法计算环比");
+    }
+
     private JsonNode execute(Map<String, Object> params, Map<String, Object> extra) throws Exception {
         var context = new java.util.HashMap<String, Object>(Map.of("factoryId", FACTORY, "userId", 1309L)); context.putAll(extra);
         return objectMapper.readTree(tool.execute(ToolCall.of("test-report", "report_trends", objectMapper.writeValueAsString(params)), context));

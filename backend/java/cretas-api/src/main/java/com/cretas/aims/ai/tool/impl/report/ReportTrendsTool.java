@@ -113,7 +113,8 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         String comparisonType = getString(params, "comparisonType");
         String userInput = firstNonBlank(getString(context, "userInput"), getString(context, "input"),
                 getString(context, "message"));
-        boolean dailyOnly = containsAny(userInput, "只要每日", "日序列", "每日走势", "每天", "不比较");
+        boolean explicitComparison = containsAny(userInput, "同比", "去年同期", "上年同期", "环比", "上期", "上月");
+        boolean dailyOnly = !explicitComparison && containsAny(userInput, "只要每日", "日序列", "每日走势", "每天", "不比较");
         if (comparisonType == null && containsAny(userInput, "同比", "去年同期", "上年同期")) comparisonType = "YOY";
 
         // 调用服务获取趋势分析报表数据
@@ -137,18 +138,22 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         if (endDateStr != null) queryConditions.put("endDate", endDateStr);
         result.put("queryConditions", queryConditions);
 
-        if (!dailyOnly && "PRODUCTION".equalsIgnoreCase(metric)
-                && (comparisonType != null || !"today".equalsIgnoreCase(period))) {
+        if (!dailyOnly && "PRODUCTION".equalsIgnoreCase(metric)) {
             String type = comparisonType == null ? "MOM" : comparisonType.toUpperCase(Locale.ROOT);
             LocalDate[] current = resolvePeriod(period, startDateStr, endDateStr, days);
             long periodLength = current[1].toEpochDay() - current[0].toEpochDay() + 1;
             LocalDate[] previous = "YOY".equals(type)
                     ? new LocalDate[]{current[0].minusYears(1), current[1].minusYears(1)}
-                    : new LocalDate[]{current[0].minusDays(periodLength), current[0].minusDays(1)};
+                    : new LocalDate[]{current[0].minusMonths(1), current[0].minusMonths(1).plusDays(periodLength - 1)};
             Map<String, Object> comparison = reportService.getPeriodComparisonReport(
                     factoryId, previous[0], previous[1], current[0], current[1]);
             comparison.put("comparisonType", type);
             comparison.put("comparisonLabel", "YOY".equals(type) ? "同比" : "环比");
+            comparison.put("basePeriodStart", previous[0].toString());
+            comparison.put("basePeriodEnd", previous[1].toString());
+            comparison.put("currentPeriodStart", current[0].toString());
+            comparison.put("currentPeriodEnd", current[1].toString());
+            comparison.put("dataBasis", "production_plans.end_time; SUM(actual_quantity), SUM(actual_material_cost + actual_labor_cost + actual_equipment_cost + actual_other_cost); factoryId=" + factoryId);
             addUnavailableMessages(comparison, type);
             result.put("comparison", comparison);
         }
@@ -188,8 +193,15 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         Map<String, Object> values = (Map<String, Object>) comparison.get("comparison");
         if (values == null) return;
         String label = "YOY".equals(type) ? "同比" : "环比";
-        if (values.get("outputChangeRate") == null) values.put("outputChangeMessage", "上期无数据，无法计算" + label);
-        if (values.get("costChangeRate") == null) values.put("costChangeMessage", "上期无数据，无法计算" + label);
+        Map<String, Object> base = (Map<String, Object>) comparison.get("period1");
+        Map<String, Object> current = (Map<String, Object>) comparison.get("period2");
+        if (values.get("outputChangeRate") == null) values.put("outputChangeMessage", missingMessage(base, current, "output", label));
+        if (values.get("costChangeRate") == null) values.put("costChangeMessage", missingMessage(base, current, "cost", label));
+    }
+
+    private String missingMessage(Map<String, Object> base, Map<String, Object> current, String key, String label) {
+        if (current == null || current.get(key) == null) return "本期无数据，无法计算" + label;
+        return "上期无数据，无法计算" + label;
     }
 
     @Override
