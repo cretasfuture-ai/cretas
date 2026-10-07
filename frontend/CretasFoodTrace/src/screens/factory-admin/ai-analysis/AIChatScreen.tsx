@@ -395,7 +395,8 @@ function AIChatScreenContent() {
     primaryButton: { backgroundColor: theme.colors.primary },
     primaryButtonIdle: { backgroundColor: theme.colors.primaryContainer },
     subtleButton: { backgroundColor: theme.colors.surfaceVariant },
-    loadingSkeleton: { backgroundColor: theme.colors.outlineVariant },
+    // 骨架条: outlineVariant(#F3F4F6) 落在页面背景 #F5F5F5 上看不见 (网页版实测), 用 textTertiary 再整体压淡
+    loadingSkeleton: { backgroundColor: theme.colors.textTertiary },
     errorBanner: { backgroundColor: theme.colors.errorContainer, borderColor: theme.colors.error },
     errorBannerText: { color: theme.colors.onErrorContainer },
     retryButton: { backgroundColor: theme.colors.error },
@@ -1702,6 +1703,8 @@ const styles = StyleSheet.create({
   },
   loadingSkeletonGroup: {
     gap: 8,
+    // 与条上的 0.6↔1 闪烁相乘, 实际 0.21↔0.35: 看得见但不抢正文
+    opacity: 0.35,
   },
   loadingSkeletonBar: {
     height: 14,

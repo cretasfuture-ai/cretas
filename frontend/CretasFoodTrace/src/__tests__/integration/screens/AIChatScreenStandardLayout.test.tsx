@@ -521,18 +521,40 @@ describe('标准 T1: 对话区一套字体栈 (web)', () => {
     return loaded;
   }
 
-  it('web: chatFontFamily 是系统栈, withChatFonts 换主题; 原生: 空对象、主题原样返回', () => {
+  it('web: chatFontFamily 是系统栈; 原生: 空对象 (原生端字体用 Paper 平台默认)', () => {
     const web = loadIsolated('web', ['../../../components/ai/chatTypography']);
     const nativeSide = loadIsolated('ios', ['../../../components/ai/chatTypography']);
-    const { CHAT_FONT_STACK, chatFontFamily, withChatFonts } = web.chatTypography;
+    const { CHAT_FONT_STACK, chatFontFamily } = web.chatTypography;
     expect(CHAT_FONT_STACK).toMatch(/-apple-system.*"PingFang SC".*"Microsoft YaHei".*sans-serif/);
     expect(CHAT_FONT_STACK).not.toMatch(/Noto|Playfair/);
     expect(chatFontFamily).toEqual({ fontFamily: CHAT_FONT_STACK });
-    const theme = { colors: {}, fonts: { bodyLarge: { fontFamily: 'Roboto' } } };
-    expect(withChatFonts(theme)).not.toBe(theme);
     expect(nativeSide.chatTypography.chatFontFamily).toEqual({});
-    expect(nativeSide.chatTypography.withChatFonts(theme)).toBe(theme);
     web.rtl.cleanup(); nativeSide.rtl.cleanup();
+  });
+
+  it('withChatFonts (T1 / T2): 两个平台都把字距 0 交给 configureFonts; 只有 web 交字体栈 (原生端保留平台默认字体)', () => {
+    const configOf = (os: 'web' | 'ios') => {
+      let config: Record<string, unknown> | undefined;
+      let replaced = false;
+      jest.isolateModules(() => {
+        require('react-native').Platform.OS = os;
+        const paper = require('react-native-paper');
+        const spy = jest.spyOn(paper, 'configureFonts').mockImplementation((arg: any) => { config = arg?.config; return { marker: os }; });
+        const { withChatFonts } = require('../../../components/ai/chatTypography');
+        const theme = { colors: {}, fonts: { bodyLarge: { fontFamily: 'Roboto', letterSpacing: 0.15 } } };
+        replaced = withChatFonts(theme).fonts.marker === os;
+        spy.mockRestore();
+      });
+      return { config, replaced };
+    };
+    const web = configOf('web');
+    const ios = configOf('ios');
+    expect(web.replaced).toBe(true);
+    expect(web.config).toEqual({ fontFamily: expect.stringContaining('-apple-system'), letterSpacing: 0 });
+    expect(ios.replaced).toBe(true);
+    expect(ios.config).toEqual({ letterSpacing: 0 });
+    // 对照: 原生端不许把 web 的字体栈带过去
+    expect(ios.config).not.toHaveProperty('fontFamily');
   });
 
   it('web: 反馈栏与富文本卡里的原生 Text 都用系统栈; 对照: 原生端不写 fontFamily', () => {

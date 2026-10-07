@@ -16,10 +16,16 @@ export const CHAT_FONT_STACK =
 export const chatFontFamily: { fontFamily?: string } =
   Platform.OS === 'web' ? { fontFamily: CHAT_FONT_STACK } : {};
 
-/** 对话面的嵌套 Paper 主题: web 上把 fonts 换成系统字体栈, 其它平台原样返回。⛔ 不改全局 src/theme。 */
+/**
+ * 对话面的嵌套 Paper 主题。⛔ 不改全局 src/theme。
+ * - 字距一律 0 (标准 T2): MD3 的 bodyLarge 自带 0.15px, 网页版实测欢迎语 / 加载文字都是 0.15px。
+ * - 字体栈只在 web 上换; iOS / Android 不传 fontFamily, configureFonts 保留各平台默认 (System / sans-serif)。
+ */
 export function withChatFonts<T extends MD3Theme>(theme: T): T {
-  if (Platform.OS !== 'web') return theme;
-  return { ...theme, fonts: configureFonts({ config: { fontFamily: CHAT_FONT_STACK } }) };
+  const config = Platform.OS === 'web'
+    ? { fontFamily: CHAT_FONT_STACK, letterSpacing: 0 }
+    : { letterSpacing: 0 };
+  return { ...theme, fonts: configureFonts({ config }) };
 }
 
 /** 遥测显式开关。⛔ 不用 __DEV__ (标准 E2) */
