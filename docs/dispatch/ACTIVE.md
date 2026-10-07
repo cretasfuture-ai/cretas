@@ -6,8 +6,9 @@
 
 ## 在飞任务
 
-- `QI-DEFECT-CLOSEOUT-20261007` — `in-progress` — Owner root/qi_defect — Base `000054905703651450d2d52e109da4a3131221dc` — A1–A4质检登记修复；scope与验收见下；只到PR，不合并部署。
-- `AICHAT-MOBILE-20261007` — `in-progress` — Owner root/aichat_mobile — Base `000054905703651450d2d52e109da4a3131221dc` — B1–B9工厂AI手机界面；scope与验收见下；只到PR，不改餐饮。
+- `QI-DEFECT-CLOSEOUT-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — A1/A3/A4完成，四项运行时变异已红并恢复；A2显式首次缺参续轮未获全链证据，保留卡配置；root最终选择器；只到PR，不合并部署。
+- `AICHAT-MOBILE-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — PR #954，head 282d58d04a；195测试/tsc/九项变异/手机截图通过；后端追问生成待Owner；只到PR，不合并部署。
+- `AICHAT-INTERACTION-TESTS-20261007` — `review` — Owner root — Base `1b67367c7d` — 独立B5/B6/B7测试已交root且进入PR #954；8测试通过；九项最终变异由root重验；保留scope至合并归档。
 
 
 
@@ -109,7 +110,8 @@
 ## Scope 锁地图
 
 - `QI-DEFECT-CLOSEOUT-20261007`：QualityDefectRecordTool、缺陷类型词表/追问、必要SSE续轮及对应Java测试、质检首页卡片配置与对应RN测试。验收：Quality*Test,SseStreaming*Test,ToolDispatch*Test,Clarification*Test,FrontlineAiWriteGrant*Test + RN目标jest/tsc；禁止Entity/Repository/迁移/生产写入。
-- `AICHAT-MOBILE-20261007`：RN AIChatScreen、components/ai/**、相关API类型/客户端/测试、docs/ux/aichat-mobile-20261007.md；验收：真实挂载jest、tsc、375×812截图、逐项变异；禁止餐饮分支/后端写接口改动；QuickActionCardGrid质检卡意图由A独占。
+- `AICHAT-MOBILE-20261007`：RN AIChatScreen、components/ai/**、common/MarkdownRenderer正文样式接口、jest.config精确MD映射、相关API类型/客户端/测试、docs/ux/aichat-mobile-20261007.md；root最终验证；验收真实挂载jest/tsc/375×812截图/变异；禁餐饮/后端写接口；质检卡意图A独占。
+- `AICHAT-INTERACTION-TESTS-20261007`：B worktree新建src/__tests__/integration/screens/AIChatScreenInteractions20261007.test.tsx及D:/Temp/claude/codex-aichat-evidence/interaction-*脚本证据；验收npx jest该文件与逐行为变异；只IO/native边界桩，不改实现/台账/其他测试。共享jest串行，B主Owner暂不测试。
 
 
 
