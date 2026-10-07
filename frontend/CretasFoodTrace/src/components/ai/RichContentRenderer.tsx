@@ -16,6 +16,7 @@ import {
   getListCellValue,
   getListDisplayKeys,
 } from './richListPresentation';
+import { chatFontFamily } from './chatTypography';
 
 export interface RichData {
   /** Content type hint from backend (optional) */
@@ -103,8 +104,8 @@ function ListRenderer({ items, pagination }: { items: unknown[]; pagination: Ric
             <View key={idx} style={[listStyles.dataRow, { borderColor: theme.colors.outlineVariant }, idx % 2 === 0 && { backgroundColor: theme.colors.surfaceVariant }]}>
               {displayKeys.map(key => (
                 <View key={key} style={listStyles.dataField}>
-                  <Text style={[listStyles.headerCell, { color: theme.colors.onSurfaceVariant }]}>{formatColumnName(key)}</Text>
-                  <Text style={[listStyles.dataCell, { color: theme.colors.onSurface }]} numberOfLines={2}>
+                  <Text style={[listStyles.headerCell, { color: theme.colors.onSurfaceVariant }, chatFontFamily]}>{formatColumnName(key)}</Text>
+                  <Text style={[listStyles.dataCell, { color: theme.colors.onSurface }, chatFontFamily]} numberOfLines={2}>
                     {formatValue(getListCellValue(row, key), key)}
                   </Text>
                 </View>
@@ -117,7 +118,7 @@ function ListRenderer({ items, pagination }: { items: unknown[]; pagination: Ric
       {/* Pagination footer */}
       {pagination.totalElements !== undefined && (
         <View style={listStyles.footer}>
-          <Text style={[listStyles.footerText, { color: theme.colors.onSurfaceVariant }]}>
+          <Text style={[listStyles.footerText, { color: theme.colors.onSurfaceVariant }, chatFontFamily]}>
             共 {pagination.totalElements} 条 · 第 {pagination.currentPage}/{pagination.totalPages} 页
             {pagination.hasMore ? ' · 说"下一页"查看更多' : ''}
           </Text>
@@ -139,8 +140,8 @@ function DetailRenderer({ detail }: { detail: Record<string, unknown> }) {
     <View style={[detailStyles.container, { backgroundColor: theme.colors.surfaceVariant, borderColor: theme.colors.outlineVariant }]} testID="ai-detail-card">
       {rows.map(row => (
         <View key={row.key} style={[detailStyles.row, { borderColor: theme.colors.outlineVariant }]}>
-          <Text style={[detailStyles.label, { color: theme.colors.onSurfaceVariant }]}>{row.label}</Text>
-          <Text style={[detailStyles.value, { color: theme.colors.onSurface }]} numberOfLines={2}>{row.value}</Text>
+          <Text style={[detailStyles.label, { color: theme.colors.onSurfaceVariant }, chatFontFamily]}>{row.label}</Text>
+          <Text style={[detailStyles.value, { color: theme.colors.onSurface }, chatFontFamily]} numberOfLines={2}>{row.value}</Text>
         </View>
       ))}
     </View>
@@ -159,8 +160,8 @@ function StatsRenderer({ stats }: { stats: Record<string, unknown> }) {
     <View style={statsStyles.container}>
       {numericEntries.map(([key, value]) => (
         <View key={key} style={[statsStyles.card, { backgroundColor: theme.colors.primaryContainer, borderColor: theme.colors.outlineVariant }]}>
-          <Text style={[statsStyles.value, { color: theme.colors.primary }]}>{formatValue(value, key)}</Text>
-          <Text style={[statsStyles.label, { color: theme.colors.onSurfaceVariant }]}>{formatColumnName(key)}</Text>
+          <Text style={[statsStyles.value, { color: theme.colors.primary }, chatFontFamily]}>{formatValue(value, key)}</Text>
+          <Text style={[statsStyles.label, { color: theme.colors.onSurfaceVariant }, chatFontFamily]}>{formatColumnName(key)}</Text>
         </View>
       ))}
     </View>

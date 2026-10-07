@@ -17,12 +17,16 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   Pressable,
+  Animated,
+  AccessibilityInfo,
+  useWindowDimensions,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
-import { Text, useTheme } from 'react-native-paper';
+import { Text, useTheme, PaperProvider } from 'react-native-paper';
 import type { AppTheme } from '../../../theme';
 import { useTranslation } from 'react-i18next';
 import i18next from 'i18next';
@@ -58,6 +62,7 @@ import {
   RESTAURANT_AGENT_RUN_ROUTE,
 } from '../../../types/restaurantAgentRun';
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
+import { AI_DEBUG_TELEMETRY, chatFontFamily, withChatFonts } from '../../../components/ai/chatTypography';
 import { isRestaurant } from '../../../utils/factoryType';
 import { currentShanghaiIsoDate } from '../../../utils/shanghaiDate';
 import { appAlert } from '../../../components/ui/AppDialog';
@@ -205,6 +210,14 @@ interface Message {
   writeConfirm?: WriteConfirmState;
   /** 可独立呈现的可恢复错误状态。 */
   error?: boolean;
+  /** 服务端回的 result.status (仅流式回答); 澄清 / 追问 / 对话继续不算「完成的回答」, 不出反馈 (标准 F4) */
+  resultStatus?: string;
+}
+
+/** 还在等用户下一步的状态: 这样的消息不是「完成的回答」, 不挂 👍/👎 */
+const PENDING_RESULT_STATUSES = ['NEED_CLARIFICATION', 'NEED_MORE_INFO', 'CONVERSATION_CONTINUE', 'ACTIVE'];
+export function isPendingStatus(status: string | undefined): boolean {
+  return status !== undefined && PENDING_RESULT_STATUSES.includes(status);
 }
 
 type AIChatRouteProp = RouteProp<FAAIStackParamList, 'AIChat'>;
@@ -298,6 +311,44 @@ const SCENE_CONFIG: Record<string, {
   },
 };
 
+/** 骨架三条的宽度 (标准 W1): 92% / 78% / 62% */
+const SKELETON_BAR_WIDTHS = ['92%', '78%', '62%'] as const;
+/** 闪烁周期 1500ms: 0.6 → 1 → 0.6 各 750ms */
+const SKELETON_HALF_CYCLE_MS = 750;
+
+/**
+ * 等回答时的骨架屏 (标准 W1): 立即出现, 三条闪烁条, 开了「减少动态效果」时静止。
+ * ⚠️ 上面一行文字由调用方给 —— 对仓管员「骨架」本身不是一个看得懂的信号, 文字不许去掉。
+ */
+function LoadingSkeleton({ barStyle }: { barStyle: StyleProp<ViewStyle> }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    let cancelled = false;
+    let loop: Animated.CompositeAnimation | null = null;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((reduceMotion) => {
+        if (cancelled || reduceMotion) return;
+        loop = Animated.loop(Animated.sequence([
+          Animated.timing(pulse, { toValue: 0.6, duration: SKELETON_HALF_CYCLE_MS, useNativeDriver: Platform.OS !== 'web' }),
+          Animated.timing(pulse, { toValue: 1, duration: SKELETON_HALF_CYCLE_MS, useNativeDriver: Platform.OS !== 'web' }),
+        ]));
+        loop.start();
+      })
+      .catch(() => { /* 读不到系统设置就保持静止, 骨架照样显示 */ });
+    return () => {
+      cancelled = true;
+      loop?.stop();
+    };
+  }, [pulse]);
+  return (
+    <View testID="ai-chat-loading-skeleton" style={styles.loadingSkeletonGroup}>
+      {SKELETON_BAR_WIDTHS.map((width) => (
+        <Animated.View key={width} style={[styles.loadingSkeletonBar, barStyle, { width, opacity: pulse }]} />
+      ))}
+    </View>
+  );
+}
+
 export default function AIChatScreen() {
   const { user } = useAuthStore();
   const getUserRole = useAuthStore((state) => state.getUserRole);
@@ -317,10 +368,15 @@ function AIChatScreenContent() {
   const route = useRoute<AIChatRouteProp>();
   const { user } = useAuthStore();
   const isRestaurantMode = isRestaurant(user);
-  const { t, i18n } = useTranslation('home');
+  const { t } = useTranslation('home');
   const scrollViewRef = useRef<ScrollView>(null);
   const shouldAutoScrollRef = useRef(true);
   const theme = useTheme<AppTheme>();
+  // 对话面单独一套字体栈 (标准 T1): 嵌套 Paper 主题只在 web 上换 fonts, 原生端原样返回; ⛔ 不改全局 src/theme
+  const chatTheme = useMemo(() => withChatFonts(theme), [theme]);
+  const { width: windowWidth } = useWindowDimensions();
+  // 用户气泡最宽 min(内容列 78%, 320) (标准 L2)
+  const userBubbleMaxWidth = Math.min((windowWidth - 32) * 0.78, 320);
   // 颜色层: 布局在文件底部的 StyleSheet, 颜色全部从这里取 token, 渲染时合并。
   // ⛔ 本文件不许出现 #RRGGBB / fontSize: 10..13 (闸: gates/demoScreensUseThemeTokens)。
   const tone = useMemo(() => ({
@@ -330,8 +386,6 @@ function AIChatScreenContent() {
     onPrimaryContainer: { color: theme.colors.onPrimaryContainer },
     primaryText: { color: theme.colors.primary },
     errorText: { color: theme.colors.error },
-    avatar: { backgroundColor: theme.colors.primaryContainer },
-    aiBubble: { backgroundColor: theme.colors.surface, ...theme.custom.shadows.small },
     // 用户气泡用 primaryContainer/onPrimaryContainer (6.83:1); onPrimary on primary 只有 3.24:1, 正文过不了 AA
     userBubble: { backgroundColor: theme.colors.primaryContainer },
     suggestedAction: { backgroundColor: theme.colors.primaryContainer, borderColor: theme.colors.primary },
@@ -485,17 +539,6 @@ function AIChatScreenContent() {
       handleSend(screen);
     }
   }, [navigation]);
-
-  // 头像是装饰, 不是按钮: 用 MaterialCommunityIcons 而不是 IconButton (后者 role=button), 并对读屏隐藏。
-  const renderAssistantAvatar = () => (
-    <View
-      style={[styles.aiAvatar, tone.avatar]}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-    >
-      <MaterialCommunityIcons name="robot" size={20} color={theme.colors.onPrimaryContainer} />
-    </View>
-  );
 
   // 实时检测当前输入的分析模式
   const detectedMode = useMemo(() => {
@@ -954,6 +997,7 @@ function AIChatScreenContent() {
                     content: streamedContent || replyMessage || t('aiChat.defaultReply'),
                     intentCode: (result.intentCode as string) || msg.intentCode,
                     intentCategory: result.intentCategory as string | undefined,
+                    resultStatus: status,
                     suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
                     followUps: followUps.length > 0 ? followUps : undefined,
                     foodKbMetadata: foodKbMeta,
@@ -1270,22 +1314,16 @@ function AIChatScreenContent() {
 
   const renderMessage = (message: Message) => {
     const isUser = message.role === 'user';
-    const timestampText = message.timestamp.toLocaleTimeString(i18n.language, {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
 
-    // 流式加载状态：无内容时显示思考动画+进度状态，有内容时显示内容+光标
+    // 等回答: 立即给骨架屏 + 一行文字 (标准 W1)。文字 3 秒后由「正在理解你的话…」换成「正在处理」。
     if (message.isLoading && !message.content) {
       return (
-        <View key={message.id} style={styles.messageRow}>
-          {renderAssistantAvatar()}
-          <View style={[styles.aiMessageBubble, styles.loadingBubble, tone.aiBubble]}>
-            <ActivityIndicator size="small" color={theme.colors.primary} />
-            <Text variant="bodyMedium" style={[styles.loadingText, tone.muted]}>
+        <View key={message.id} style={styles.assistantMessageRow}>
+          <View testID="ai-chat-assistant-body" style={styles.aiMessageContainer}>
+            <Text variant="bodyLarge" style={[styles.loadingText, tone.muted]}>
               {showSlowLoading ? '正在处理' : '正在理解你的话…'}
             </Text>
-            {showSlowLoading && <View testID="ai-chat-loading-skeleton" style={[styles.loadingSkeleton, tone.loadingSkeleton]} />}
+            <LoadingSkeleton barStyle={tone.loadingSkeleton} />
           </View>
         </View>
       );
@@ -1294,20 +1332,28 @@ function AIChatScreenContent() {
     if (isUser) {
       return (
         <Pressable key={message.id} style={styles.userMessageRow} onLongPress={() => handleCopyMessage(message)} delayLongPress={450}>
-          <View style={[styles.userMessageBubble, tone.userBubble]}>
-              <Text variant="bodyMedium" style={[tone.onPrimaryContainer, styles.answerText]}>{message.content}</Text>
+          <View testID="ai-chat-user-bubble" style={[styles.userMessageBubble, tone.userBubble, { maxWidth: userBubbleMaxWidth }]}>
+            <Text variant="bodyLarge" style={[tone.onPrimaryContainer, styles.answerText]}>{message.content}</Text>
           </View>
-          <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
         </Pressable>
       );
     }
 
+    // 「完成的回答」才挂 👍/👎 (标准 F4): 不在加载、没出错、不是确认卡、没有澄清选项、状态不是在等用户下一步
+    const isCompletedAnswer = !message.isLoading
+      && !message.error
+      && !message.writeConfirm
+      && !(message.suggestedActions?.length)
+      && !isPendingStatus(message.resultStatus)
+      && Boolean(message.intentCode)
+      && Boolean(message.userQuestion);
+
     return (
-      <Pressable key={message.id} style={styles.messageRow} onLongPress={() => handleCopyMessage(message)} delayLongPress={450}>
-        {renderAssistantAvatar()}
-        <View style={styles.aiMessageContainer}>
-          {/* 分析模式 + 耗时是工程遥测, 只在 __DEV__ 下给开发者看, 不露给老板 */}
-          {__DEV__ && message.mode && !message.isLoading && (
+      <Pressable key={message.id} style={styles.assistantMessageRow} onLongPress={() => handleCopyMessage(message)} delayLongPress={450}>
+        <View testID="ai-chat-assistant-body" style={styles.aiMessageContainer}>
+          {/* 分析模式 + 耗时是工程遥测, 只在显式开关 EXPO_PUBLIC_AI_DEBUG_TELEMETRY=1 下给开发者看
+              (⛔ 不用 __DEV__: 网页版是开发服务器, 恒为 true), 不露给业务用户 */}
+          {AI_DEBUG_TELEMETRY && message.mode && !message.isLoading && (
             <View testID="ai-telemetry-row" style={styles.modeIndicatorRow}>
               <AIModeIndicator mode={message.mode} size="small" />
               {message.responseTimeMs ? (
@@ -1317,26 +1363,25 @@ function AIChatScreenContent() {
               ) : null}
             </View>
           )}
-          <View style={[styles.aiMessageBubble, tone.aiBubble]}>
-            {/* 2026-07-24: resolver 答案已 markdown 化 (加粗/列表/引用块) —
-                纯 Text 会露出裸 ** 星号, 完成态走 MarkdownRenderer;
-                流式中仍用 Text (逐字追加 + 光标, markdown 半截标记无意义)。
-                ⚠️ 两条路都保留 `\n`: 后端 Tool 让「每头牛一行」, 这里不许把换行吞掉。 */}
-            {message.isLoading ? (
-              <Text variant="bodyMedium" style={[tone.onSurface, styles.answerText]}>
-                {message.content}
-                {message.content ? (
-                  <Text variant="bodyMedium" style={[styles.streamingCursor, tone.primaryText]}>|</Text>
-                ) : null}
-              </Text>
-            ) : message.error ? null : (
-              <MarkdownRenderer content={message.content} bodyStyle={[styles.answerText, tone.onSurface]} />
-            )}
-            {/* 结构化数据富组件渲染（表格/卡片/统计） */}
-            {!message.isLoading && message.richData && (
-              <RichContentRenderer data={message.richData} />
-            )}
-          </View>
+          {/* 助手回答直接排在页面背景上: 无气泡 / 无头像 / 无时间戳 (标准 L1 / L4) */}
+          {/* 2026-07-24: resolver 答案已 markdown 化 (加粗/列表/引用块) —
+              纯 Text 会露出裸 ** 星号, 完成态走 MarkdownRenderer;
+              流式中仍用 Text (逐字追加 + 光标, markdown 半截标记无意义)。
+              ⚠️ 两条路都保留 `\n`: 后端 Tool 让「每头牛一行」, 这里不许把换行吞掉。 */}
+          {message.isLoading ? (
+            <Text variant="bodyLarge" style={[tone.onSurface, styles.answerText]}>
+              {message.content}
+              {message.content ? (
+                <Text variant="bodyLarge" style={[styles.streamingCursor, tone.primaryText]}>|</Text>
+              ) : null}
+            </Text>
+          ) : message.error ? null : (
+            <MarkdownRenderer content={message.content} bodyStyle={[styles.answerText, tone.onSurface, chatFontFamily]} />
+          )}
+          {/* 结构化数据富组件渲染（表格/卡片/统计） */}
+          {!message.isLoading && message.richData && (
+            <RichContentRenderer data={message.richData} />
+          )}
           {message.error && !message.isLoading ? (
             <View testID="ai-chat-error-banner" style={[styles.errorBanner, tone.errorBanner]}>
               <Text variant="bodyMedium" style={[tone.errorBannerText, styles.answerText]}>{message.content}</Text>
@@ -1375,7 +1420,7 @@ function AIChatScreenContent() {
               autoStart={message.agentRun.autoStart}
             />
           ) : null}
-          {/* 显示建议操作按钮 (当需要澄清时) */}
+          {/* 显示建议操作按钮 (当需要澄清时): 竖排、占满正文列、一个样式 (标准 F3) */}
           {!message.isLoading && message.suggestedActions && message.suggestedActions.length > 0 && (
             <View style={styles.suggestedActionsContainer}>
               {message.suggestedActions.map((action, index) => (
@@ -1389,12 +1434,12 @@ function AIChatScreenContent() {
                   onPress={() => handleSuggestedActionClick(action, message.id)}
                   disabled={isLoading}
                 >
-                  <Text variant="labelLarge" style={[styles.centeredText, tone.onPrimaryContainer]}>
+                  <Text variant="bodyLarge" style={[styles.leftAlignedText, tone.onPrimaryContainer]}>
                     {action.label}
                   </Text>
                   {/* 只有当 description 与 label 不同时才显示 */}
                   {action.description && action.description !== action.label && (
-                    <Text variant="bodySmall" style={[styles.centeredText, styles.suggestedActionDesc, tone.muted]}>
+                    <Text variant="bodySmall" numberOfLines={1} style={[styles.leftAlignedText, styles.suggestedActionDesc, tone.muted]}>
                       {action.description}
                     </Text>
                   )}
@@ -1402,31 +1447,29 @@ function AIChatScreenContent() {
               ))}
             </View>
           )}
+          {/* 追问芯片 (后端明确给了 followUps 才渲染): 横排换行, 至少 40px 高 (标准 S3 / F2) */}
           {!message.isLoading && message.followUps && message.followUps.length > 0 && (
-            <View testID="ai-chat-followups" style={styles.suggestedActionsContainer}>
+            <View testID="ai-chat-followups" style={styles.followUpContainer}>
               {message.followUps.map((followUp, index) => (
                 <TouchableOpacity
                   key={`${followUp.question}-${index}`}
                   testID={`ai-chat-followup-${index}`}
                   accessibilityRole="button"
                   accessibilityLabel={followUp.label}
-                  style={[styles.suggestedActionButton, tone.suggestedAction]}
+                  style={[styles.followUpChip, tone.suggestedAction]}
                   onPress={() => { void handleSend(followUp.question, { displayText: followUp.label }); }}
                   disabled={isLoading}
                 >
-                  <Text variant="labelLarge" numberOfLines={1} ellipsizeMode="tail" style={[styles.centeredText, tone.onPrimaryContainer]}>
+                  <Text variant="bodyLarge" numberOfLines={1} ellipsizeMode="tail" style={[styles.centeredText, tone.onPrimaryContainer]}>
                     {followUp.label}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           )}
-          {/* 仅已完成回答显示统一答案质量反馈；错误状态不可评分。 */}
-          {!message.isLoading &&
-            !message.error &&
-            !message.writeConfirm &&
-            message.intentCode &&
-            message.userQuestion && (
+          {/* 仅「完成的回答」显示统一答案质量反馈 (标准 F4); 澄清 / 追问 / 确认卡 / 错误都不出 */}
+          {isCompletedAnswer && message.userQuestion && message.intentCode ? (
+            <View testID="ai-chat-feedback">
               <FeedbackWidget
                 queryId={message.id}
                 question={message.userQuestion}
@@ -1435,10 +1478,8 @@ function AIChatScreenContent() {
                 intentCode={message.intentCode}
                 foodKbMetadata={message.foodKbMetadata}
               />
-            )}
-          {!message.isLoading && (
-            <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
-          )}
+            </View>
+          ) : null}
         </View>
       </Pressable>
     );
@@ -1455,17 +1496,16 @@ function AIChatScreenContent() {
   const renderWelcome = () => (
     <View style={styles.welcomeContainer}>
       {/* AI 欢迎消息 */}
-      <View style={styles.messageRow}>
-        {renderAssistantAvatar()}
-        <View style={[styles.aiMessageBubble, tone.aiBubble]}>
-          <Text variant="bodyMedium" style={tone.onSurface}>
+      <View style={styles.assistantMessageRow}>
+        <View testID="ai-chat-assistant-body" style={styles.aiMessageContainer}>
+          <Text variant="bodyLarge" style={tone.onSurface}>
             {t(isRestaurantMode ? 'aiChat.restaurantWelcome' : 'aiChat.welcome')}
           </Text>
           {/* 没有卡组的角色(一线角色 / 调度 / HR …)下面什么都没有, 「我可以帮您：」就成了悬空冒号 ——
               改成告诉他下一步怎么做 (spec rn-frontline-ai-entry F3)。有卡组的角色不变。 */}
           <Text
             testID="ai-chat-welcome-next-step"
-            variant="bodyMedium"
+            variant="bodyLarge"
             style={[tone.onSurface, { marginTop: theme.custom.spacing.s }]}
           >
             {t(isRestaurantMode
@@ -1489,6 +1529,7 @@ function AIChatScreenContent() {
   const canSend = !isLoading && inputText.trim().length > 0;
 
   return (
+    <PaperProvider theme={chatTheme}>
     <SafeAreaView style={[styles.container, tone.screen]} edges={['top']}>
       {/* 消息区域 */}
       <KeyboardAvoidingView
@@ -1498,6 +1539,7 @@ function AIChatScreenContent() {
       >
         <ScrollView
           ref={scrollViewRef}
+          testID="ai-chat-thread"
           style={styles.messagesContainer}
           contentContainerStyle={styles.messagesContent}
           onScroll={handleMessageScroll}
@@ -1523,8 +1565,8 @@ function AIChatScreenContent() {
               </TouchableOpacity>
             </View>
           )}
-          {/* 输入时的模式预判 (快速/深度) 也是遥测, 只在 __DEV__ 下显示 */}
-          {__DEV__ && detectedMode && showKeyboard && (
+          {/* 输入时的模式预判 (快速/深度) 也是遥测, 只在显式开关下显示 (标准 E2, ⛔ 不用 __DEV__) */}
+          {AI_DEBUG_TELEMETRY && detectedMode && showKeyboard && (
             <View testID="ai-input-mode-row" style={styles.inputModeIndicator}>
               <AIModeIndicator mode={detectedMode.mode} size="small" />
               <Text variant="bodySmall" style={[styles.flex1, tone.muted]}>
@@ -1544,16 +1586,18 @@ function AIChatScreenContent() {
                 disabled={isLoading}
                 style={StyleSheet.flatten([styles.roundButton, tone.subtleButton])}
               />
-              <View style={[styles.inputWrapper, tone.inputWrapper]}>
+              <View testID="ai-chat-input-frame" style={[styles.inputWrapper, tone.inputWrapper]}>
                 <TextInput
                   testID="ai-chat-input"
                   accessibilityLabel={t('aiChat.inputLabel')}
-                  style={[styles.input, theme.fonts.bodyLarge, tone.onSurface]}
+                  style={[styles.input, chatTheme.fonts.bodyLarge, tone.onSurface]}
                   value={inputText}
                   onChangeText={setInputText}
                   placeholder={t('aiChat.inputPlaceholder')}
                   placeholderTextColor={theme.colors.onSurfaceVariant}
                   multiline
+                  // web 上 textarea 初始 rows=1, 靠内容长高 (标准 S4: 单行 40-44px)
+                  numberOfLines={Platform.OS === 'web' ? 1 : undefined}
                   maxLength={500}
                   editable={!isLoading}
                 />
@@ -1608,6 +1652,7 @@ function AIChatScreenContent() {
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
+    </PaperProvider>
   );
 }
 
@@ -1629,56 +1674,38 @@ const styles = StyleSheet.create({
   welcomeContainer: {
     flex: 1,
   },
-  messageRow: {
-    flexDirection: 'row',
-    marginBottom: 16,
+  // 间距 (标准 S1): 用户消息之后 8 (同一轮用户 → 助手), 助手消息之后 24 (轮与轮之间)
+  assistantMessageRow: {
+    marginBottom: 24,
   },
   userMessageRow: {
     alignItems: 'flex-end',
-    marginBottom: 16,
+    marginBottom: 8,
   },
-  aiAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    marginRight: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  // 助手正文列: 占满内容宽 (屏宽 - 32), 没有背景 / 阴影 / 圆角 / 内边距 (标准 L1)
   aiMessageContainer: {
-    flex: 1,
-  },
-  aiMessageBubble: {
-    borderRadius: 12,
-    borderTopLeftRadius: 0,
-    padding: 12,
-    maxWidth: '85%',
+    alignSelf: 'stretch',
   },
   answerText: {
     fontSize: 16,
     lineHeight: 24,
+    letterSpacing: 0,
   },
-  loadingBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  // 用户气泡 (标准 L2): 四角都是 12, 内边距 12 / 10; maxWidth 在渲染时按窗口宽度算
   userMessageBubble: {
     borderRadius: 12,
-    borderTopRightRadius: 0,
-    padding: 12,
-    maxWidth: '75%',
-  },
-  timestamp: {
-    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   loadingText: {
-    marginLeft: 8,
+    marginBottom: 8,
   },
-  loadingSkeleton: {
-    width: 56,
-    height: 10,
+  loadingSkeletonGroup: {
+    gap: 8,
+  },
+  loadingSkeletonBar: {
+    height: 14,
     borderRadius: 5,
-    marginLeft: 10,
   },
   errorBanner: {
     marginTop: 8,
@@ -1713,21 +1740,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  // 输入框 (标准 S4): 单行 44px、圆角 8、内边距 12, 随内容长高到 120
   inputWrapper: {
     flex: 1,
-    borderRadius: 20,
+    borderRadius: 8,
     borderWidth: 1,
     marginHorizontal: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    minHeight: 48,
-    maxHeight: 100,
+    paddingHorizontal: 12,
+    paddingVertical: 0,
+    minHeight: 44,
+    maxHeight: 120,
     justifyContent: 'center',
   },
   input: {
-    maxHeight: 80,
+    // 单行: 24 行高 + 2×9 = 42, 加外框上下各 1px 边线 = 44 (paddingVertical 10 会撑到 46, 超出 S4 的 40-44)
+    paddingVertical: 9,
+    maxHeight: 118,
   },
-  // 模式指示器相关样式 (仅 __DEV__)
+  // 模式指示器相关样式 (仅显式遥测开关下)
   modeIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1745,25 +1775,42 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     gap: 8,
   },
-  // 建议操作按钮样式
+  // 澄清选项 (标准 F3): 竖排、占满正文列、一个样式; 只给澄清选项用, 追问芯片另有一套
   suggestedActionsContainer: {
+    marginTop: 8,
+    flexDirection: 'column',
+    gap: 8,
+  },
+  suggestedActionButton: {
+    alignSelf: 'stretch',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  // 追问芯片 (标准 S3 / F2): 横排换行、至少 40px 高、最宽 220、标签单行省略
+  followUpContainer: {
     marginTop: 8,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  suggestedActionButton: {
+  followUpChip: {
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 14,
-    paddingVertical: 14,
-    minWidth: 80,
+    paddingVertical: 8,
     minHeight: 40,
     maxWidth: 220,
     justifyContent: 'center',
   },
   centeredText: {
     textAlign: 'center',
+  },
+  leftAlignedText: {
+    textAlign: 'left',
   },
   suggestedActionDesc: {
     marginTop: 2,

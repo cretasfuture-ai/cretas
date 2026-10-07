@@ -73,7 +73,14 @@ jest.mock('react-native', () => {
     InteractionManager: { runAfterInteractions: (fn: any) => { fn?.(); return { cancel: jest.fn() }; } },
     useWindowDimensions: () => ({ width: 375, height: 812, scale: 2, fontScale: 1 }), useColorScheme: () => 'light',
     PixelRatio: { get: () => 2, getFontScale: () => 1 }, NativeModules: {}, NativeEventEmitter: jest.fn(),
-    Animated: { View: C('Animated.View'), Text: C('Animated.Text'), ScrollView: C('Animated.ScrollView') },
+    // 骨架屏 (标准 W1) 用 Animated.Value / loop 与 AccessibilityInfo; 这份手写 mock 原来没有它们
+    Animated: {
+      View: C('Animated.View'), Text: C('Animated.Text'), ScrollView: C('Animated.ScrollView'),
+      Value: function Value(this: any, v: number) { this.v = v; },
+      timing: () => ({ start: jest.fn(), stop: jest.fn() }), sequence: () => ({ start: jest.fn(), stop: jest.fn() }),
+      loop: () => ({ start: jest.fn(), stop: jest.fn() }),
+    },
+    AccessibilityInfo: { isReduceMotionEnabled: () => Promise.resolve(false) },
   };
   const ScrollView = React.forwardRef((props: any, ref: any) => {
     React.useImperativeHandle(ref, () => ({ scrollToEnd: (...args: unknown[]) => mockScrollToEnd(...args) }), []);

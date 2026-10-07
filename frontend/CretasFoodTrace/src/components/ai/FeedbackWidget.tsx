@@ -23,6 +23,7 @@ import type { AppTheme } from '../../theme';
 import { useAuthStore } from '../../store/authStore';
 import { apiClient } from '../../services/api/apiClient';
 import { appAlert } from '../ui/AppDialog';
+import { chatFontFamily } from './chatTypography';
 
 /** 食品知识库查询的元数据，用于 log-query */
 export interface FoodKBQueryMetadata {
@@ -194,7 +195,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
       <View style={styles.container}>
         <View style={styles.submittedRow}>
           <MaterialCommunityIcons name="check-circle" size={24} color={theme.colors.primary} />
-          <Text style={[styles.submittedText, { color: theme.colors.primary }]}>已提交反馈，感谢您的帮助</Text>
+          <Text style={[styles.submittedText, { color: theme.colors.primary }, chatFontFamily]}>已提交反馈，感谢您的帮助</Text>
         </View>
       </View>
     );
@@ -204,7 +205,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
     <View style={styles.container}>
       {/* 点赞/点踩按钮行 */}
       <View style={styles.buttonRow}>
-        <Text style={[styles.promptText, { color: theme.colors.onSurfaceVariant }]}>这个回答有帮助吗？</Text>
+        <Text style={[styles.promptText, { color: theme.colors.onSurfaceVariant }, chatFontFamily]}>这个回答有帮助吗？</Text>
         <View style={styles.buttonsContainer}>
           <TouchableOpacity
             accessibilityRole="button"
@@ -230,7 +231,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
       {/* 点踩后展开的表单 */}
       {isExpanded && (
         <View style={[styles.expandedForm, { backgroundColor: theme.colors.surfaceVariant }]}>
-          <Text style={[styles.formLabel, { color: theme.colors.onSurface }]}>请告诉我们原因：</Text>
+          <Text style={[styles.formLabel, { color: theme.colors.onSurface }, chatFontFamily]}>请告诉我们原因：</Text>
 
           {/* 标签选择 */}
           <View style={styles.tagsContainer}>
@@ -251,6 +252,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
                   style={[
                     styles.tagText,
                     { color: selectedTags.includes(tag.value) ? theme.colors.onPrimary : theme.colors.onSurfaceVariant },
+                    chatFontFamily,
                   ]}
                 >
                   {tag.label}
@@ -261,7 +263,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
 
           {/* 文本输入 */}
           <TextInput
-            style={[styles.textInput, { backgroundColor: theme.colors.surface, borderColor: theme.colors.outline, color: theme.colors.onSurface }]}
+            style={[styles.textInput, { backgroundColor: theme.colors.surface, borderColor: theme.colors.outline, color: theme.colors.onSurface }, chatFontFamily]}
             placeholder="详细说明（可选）"
             placeholderTextColor={theme.colors.onSurfaceVariant}
             value={feedbackText}
@@ -280,7 +282,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
             {isSubmitting ? (
               <ActivityIndicator size="small" color={theme.colors.onPrimary} />
             ) : (
-              <Text style={[styles.submitButtonText, { color: theme.colors.onPrimary }]}>提交反馈</Text>
+              <Text style={[styles.submitButtonText, { color: theme.colors.onPrimary }, chatFontFamily]}>提交反馈</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -291,9 +293,8 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
 
 const styles = StyleSheet.create({
   container: {
+    // 不画分隔线: 之前的 borderTopWidth: 1 没给颜色, 在 web 上是一条贯穿的黑线 (标准 F5)
     marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
   },
   buttonRow: {
     flexDirection: 'row',
@@ -308,8 +309,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   iconButton: {
-    width: 48,
-    height: 48,
+    minWidth: 44,
+    minHeight: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
