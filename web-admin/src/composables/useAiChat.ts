@@ -88,8 +88,6 @@ export function useAiChat(config: AiEntryConfig) {
   const messages = ref<ChatMessage[]>([]);
   const loading = ref(false);
   const previewParams = ref<TableRow | null>(null);
-  /** 开发者遥测 (E1): 只有抽屉在 ?aiDebug=1 时才读它显示。 */
-  const lastConfidence = ref<number | null>(null);
 
   /** 跨轮累积的字段值；预览卡片基于它，而不是单轮返回。 */
   let collected: TableRow = {};
@@ -137,7 +135,6 @@ export function useAiChat(config: AiEntryConfig) {
         return;
       }
 
-      lastConfidence.value = typeof result.confidence === 'number' ? result.confidence : null;
       collected = mergeValues(collected, result.fieldValues);
       const missing = missingRequiredFields(config, collected);
 
@@ -190,7 +187,6 @@ export function useAiChat(config: AiEntryConfig) {
     messages.value = [];
     loading.value = false;
     previewParams.value = null;
-    lastConfidence.value = null;
     collected = {};
   }
 
@@ -198,7 +194,6 @@ export function useAiChat(config: AiEntryConfig) {
     messages,
     loading,
     previewParams,
-    lastConfidence,
     sendMessage,
     retry,
     continueEditing,

@@ -364,27 +364,12 @@ describe('W2 · 超时与失败: 没有保存任何数据 + 重试', () => {
 
 // ===================== 6. 遥测 (E1 / E2) =====================
 
-describe('E1 / E2 · 遥测默认不显示, ?aiDebug=1 才显示', () => {
-  it('默认 (vitest 下 import.meta.env.DEV 恒为 true): 没有遥测行, 文本不含置信度 / 耗时 / token', async () => {
+describe('E1 · 遥测不给业务用户看', () => {
+  it('默认 (vitest 下 import.meta.env.DEV 恒为 true): 文本不含置信度 / 耗时 / token / 意图码; 对照: 同一次渲染里预览行确实出来了', async () => {
     expect(import.meta.env.DEV).toBe(true);
     const w = await previewFor(PURCHASE_ORDER_CONFIG, FULL_FIXTURES[2].values);
-    expect(w.find('[data-testid="aie-telemetry"]').exists()).toBe(false);
-    const text = w.text();
-    expect(text).not.toMatch(/置信度|\b\d+ms\b|token|快速响应|PURCHASE_ORDER/i);
-  });
-
-  it('?aiDebug=1: 遥测行出现, 带置信度和实体类型; 同一份回答、同一个组件', async () => {
-    const w = await previewFor(PURCHASE_ORDER_CONFIG, FULL_FIXTURES[2].values, { aiDebug: '1' });
-    const row = w.find('[data-testid="aie-telemetry"]');
-    expect(row.exists()).toBe(true);
-    expect(row.text()).toContain('置信度');
-    expect(row.text()).toContain('91%');
-    expect(row.text()).toContain('PURCHASE_ORDER');
-  });
-
-  it('?aiDebug=0 / 其它值 → 不显示', async () => {
-    const w = await previewFor(PURCHASE_ORDER_CONFIG, FULL_FIXTURES[2].values, { aiDebug: '0' });
-    expect(w.find('[data-testid="aie-telemetry"]').exists()).toBe(false);
+    expect(w.findAll('.preview-row').length).toBe(PURCHASE_ORDER_CONFIG.fields.length);
+    expect(w.text()).not.toMatch(/置信度|\d+ms|token|快速响应|PURCHASE_ORDER/i);
   });
 });
 

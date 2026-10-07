@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onBeforeUnmount } from 'vue';
-import { useRoute } from 'vue-router';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { useAiChat } from '@/composables/useAiChat';
@@ -19,14 +18,7 @@ const emit = defineEmits<{
   'guard-action': [];
 }>();
 
-const { messages, loading, previewParams, lastConfidence, sendMessage, retry, continueEditing, confirmParams, reset } = useAiChat(props.config);
-
-/**
- * AI 对话标准 E1 / E2: 置信度、实体类型这类开发者遥测默认不给业务用户看, URL 带 `?aiDebug=1` 才显示。
- * ⛔ 不用 import.meta.env.DEV 当开关: 本地 dev server 上它恒为 true, 验收时就会漏出来。
- */
-const route = useRoute();
-const aiDebug = computed(() => route?.query?.aiDebug === '1');
+const { messages, loading, previewParams, sendMessage, retry, continueEditing, confirmParams, reset } = useAiChat(props.config);
 
 /** W1: 骨架屏 3 条, 宽度 92% / 78% / 62%; 超过 3 秒没回就把文字从「正在理解」换成「正在处理」 */
 const SKELETON_BAR_WIDTHS = [92, 78, 62] as const;
@@ -491,11 +483,6 @@ watch(() => props.modelValue, (visible) => {
                   </div>
                 </div>
               </Transition>
-
-              <!-- E1 / E2: 开发者遥测, 只有 ?aiDebug=1 才显示 -->
-              <div v-if="aiDebug && lastConfidence !== null" class="debug-telemetry" data-testid="aie-telemetry">
-                置信度 {{ Math.round(lastConfidence * 100) }}% · {{ config.entityType }}
-              </div>
 
               <!-- Preview Card -->
               <Transition name="card-pop">
@@ -1149,14 +1136,6 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
 // 开了「减少动态效果」时骨架条静止
 @media (prefers-reduced-motion: reduce) {
   .skeleton-bar { animation: none; }
-}
-
-// E1 / E2: 只有 ?aiDebug=1 才渲染
-.debug-telemetry {
-  margin: 0 0 12px;
-  font-size: 12px;
-  color: #909399;
-  font-family: 'Fira Code', Menlo, Consolas, monospace;
 }
 
 // ==================== Preview Card ====================
