@@ -8,6 +8,7 @@ import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.DefectStatus;
 import com.cretas.aims.entity.enums.DefectType;
 import com.cretas.aims.exception.EntityNotFoundException;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
@@ -47,6 +48,9 @@ import java.util.*;
 @Component
 public class QualityDefectRecordTool extends AbstractBusinessTool {
 
+    /** 用户常说法统一映射到枚举；追问、预览和执行都只通过这一处解析。 */
+    private static final Map<String, DefectType> DEFECT_TYPE_ALIASES = buildDefectTypeAliases();
+
     /** 追问里最多列几条最近的质检记录。 */
     static final int MAX_CANDIDATES = 5;
 
@@ -62,12 +66,12 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
     @Lazy
     private QualityDefectService qualityDefectService;
 
-    /** 只给预览用 (只读): 确认质检记录存在且属于本工厂, 与 recordDefect 的校验同一道。 */
+    /** 预览和执行共用的只读解析: 确认质检记录存在且属于本工厂。 */
     @Autowired(required = false)
     @Lazy
     private QualityInspectionService qualityInspectionService;
 
-    /** 只给预览用 (只读): 把质检记录上的批次编号换成「批次号（产品名）」。 */
+    /** 预览和执行展示使用的只读批次号解析。 */
     @Autowired(required = false)
     @Lazy
     private ProductionBatchRepository productionBatchRepository;
@@ -156,10 +160,8 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         String materialId = getString(params, "materialId");
         String cause = getString(params, "cause");
 
-        DefectType defectType;
-        try {
-            defectType = DefectType.valueOf(defectTypeStr.toUpperCase());
-        } catch (IllegalArgumentException e) {
+        DefectType defectType = parseDefectType(defectTypeStr);
+        if (defectType == null) {
             // 可选值给中文名 (枚举 getDisplayName), 不贴枚举码 —— 一线读不懂 FOREIGN_OBJECT。
             String options = java.util.Arrays.stream(DefectType.values())
                     .map(DefectType::getDisplayName)
@@ -170,14 +172,17 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         Long userId = extractUserIdFromContext(context);
 
         // 用户给的是批次号 (或老调用方给的主键): 写路径必须拿真实主键, 与预览同一个 resolveInspection。
-        String inspectionId = inspectionRef;
-        if (qualityInspectionService != null) {
-            Resolution resolved = resolveInspection(factoryId, inspectionRef);
-            if (resolved.inspection() == null) {
-                throw new ResourceNotFoundException(INSPECTION_NOT_FOUND_MESSAGE);
-            }
-            inspectionId = resolved.inspection().getId();
+        if (qualityInspectionService == null) {
+            throw new BusinessException("不良尚未登记：无法读取质检记录。请稍后重试，确认成功后再继续。");
         }
+        String inspectionId = inspectionRef;
+        Resolution resolved = resolveInspection(factoryId, inspectionRef);
+        if (resolved.inspection() == null) {
+            throw new ResourceNotFoundException(INSPECTION_NOT_FOUND_MESSAGE);
+        }
+        inspectionId = resolved.inspection().getId();
+        // 只用于成功消息里的人话标签: 读不到批次号 (例如来料质检没有生产批次) 不能挡住登记本身, 退回用质检日期描述。
+        String inspectionBatchNumber = inspectionLabel(factoryId, resolved.inspection());
 
         QualityDefect saved = qualityDefectService.recordDefect(
                 factoryId, inspectionId, materialId, defectType, quantity, cause, userId);
@@ -189,17 +194,17 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         result.put("defectTypeDisplay", saved.getDefectType().getDisplayName());
         result.put("quantity", saved.getQuantity());
         result.put("status", saved.getStatus().name());
-        result.put("message", String.format("已登记不良: %s (%s) 数量 %s, 待分派处理",
-                saved.getDefectType().getDisplayName(), saved.getId(), saved.getQuantity()));
+        result.put("message", String.format("已登记不良：%s %s 个，登记在 %s 的质检上，状态：%s。",
+                saved.getDefectType().getDisplayName(), WritePreviewSupport.quantityText(saved.getQuantity(), null),
+                inspectionBatchNumber, DefectStatus.OPEN.getDisplayName()));
         return result;
     }
 
     /**
      * 只读预览 —— AI 对话里「预览 → 确认」的预览段。⛔ 只读质检记录, 不调 {@code recordDefect}。
      *
-     * <p>镜像 {@code QualityDefectServiceImpl#recordDefect} 的拒绝条件: 缺陷类型必须是九种代码之一
-     * (与 {@link #doExecute} 同一个 {@code DefectType.valueOf}, 只认代码、不认中文名 —— 认了中文名
-     * 而 execute 不认, 确认之后就会失败)、数量 &gt; 0、质检记录存在且属于本工厂。
+     * <p>镜像 {@code QualityDefectServiceImpl#recordDefect} 的拒绝条件: 缺陷类型必须能由统一词表
+     * 解析为九种类型之一 (与 {@link #doExecute} 共用同一个解析方法)、数量 &gt; 0、质检记录存在且属于本工厂。
      */
     @Override
     public boolean supportsPreview() {
@@ -215,10 +220,8 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         String materialId = getString(params, "materialId");
         String cause = getString(params, "cause");
 
-        DefectType defectType;
-        try {
-            defectType = DefectType.valueOf(defectTypeStr.toUpperCase());
-        } catch (IllegalArgumentException e) {
+        DefectType defectType = parseDefectType(defectTypeStr);
+        if (defectType == null) {
             return WritePreviewSupport.blocked("PREVIEW_INVALID", String.format(
                     "不认识的不良类型「%s」。可选：%s。", defectTypeStr, defectTypeOptions()), null);
         }
@@ -391,7 +394,7 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
         String who = SELF_SCOPED_ROLE.equals(role) ? "你最近的质检有：" : "最近的质检有：";
         String question = (refGiven ? "没有找到你说的那条质检记录。" : "")
                 + "要登记在哪一条质检记录上？" + who + String.join("；", labels)
-                + "。请在话里带上批次号，例如「" + firstBatchNumber(recent, factoryId) + " 外观不良 3 个」。";
+                + "。直接说批次号就行，例如「" + firstBatchNumber(recent, factoryId) + "」。";
         return new InspectionChoiceQuestion(question, candidates);
     }
 
@@ -435,8 +438,8 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("success", false);
                 result.put("status", "NEED_MORE_INFO");
-                result.put("needMoreInfo", true);
                 result.put("missingParameters", List.of("qualityInspectionId"));
+                result.put("needMoreInfo", true);
                 result.put("clarificationQuestions", List.of(q.question));
                 result.put("message", q.question);
                 result.put("error", q.question);
@@ -467,6 +470,61 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
                 .collect(java.util.stream.Collectors.joining(" / "));
     }
 
+    private static Map<String, DefectType> buildDefectTypeAliases() {
+        Map<String, DefectType> aliases = new LinkedHashMap<>();
+        alias(aliases, DefectType.APPEARANCE, "外观", "外观不良", "外观问题", "外观缺陷");
+        alias(aliases, DefectType.WEIGHT, "重量", "重量不良", "重量问题", "重量不达标", "分量不够", "缺斤少两");
+        alias(aliases, DefectType.COMPOSITION, "成分", "成分不良", "成分异常", "成分问题");
+        alias(aliases, DefectType.MICROBIAL, "微生物", "微生物不良", "微生物超标", "微生物问题");
+        alias(aliases, DefectType.PACKAGING, "包装", "包装不良", "包装缺陷", "包装问题");
+        alias(aliases, DefectType.FOREIGN_OBJECT, "异物", "异物不良", "异物问题");
+        alias(aliases, DefectType.SENSORY, "感官", "感官不良", "感官异常", "感官问题");
+        alias(aliases, DefectType.SHELF_LIFE, "保质期", "保质期不良", "保质期问题", "保质期异常");
+        alias(aliases, DefectType.OTHER, "其他", "其它", "其他问题", "其它问题");
+        for (DefectType type : DefectType.values()) {
+            aliases.put(type.name(), type);
+        }
+        return Collections.unmodifiableMap(aliases);
+    }
+
+    private static void alias(Map<String, DefectType> aliases, DefectType type, String... values) {
+        for (String value : values) {
+            aliases.put(value, type);
+        }
+    }
+
+    private static DefectType parseDefectType(String value) {
+        if (!WritePreviewSupport.notBlank(value)) {
+            return null;
+        }
+        DefectType type = DEFECT_TYPE_ALIASES.get(value.trim());
+        if (type != null) {
+            return type;
+        }
+        return DEFECT_TYPE_ALIASES.get(value.trim().toUpperCase(Locale.ROOT));
+    }
+
+    /** 成功消息里描述这条质检记录: 优先生产批次号, 读不到就用「<日期> 的那条质检」, 不抛异常。 */
+    private String inspectionLabel(String factoryId, com.cretas.aims.entity.QualityInspection inspection) {
+        try {
+            return batchNumber(factoryId, inspection.getProductionBatchId());
+        } catch (BusinessException noBatch) {
+            return inspection.getInspectionDate() != null
+                    ? inspection.getInspectionDate() + " 那条记录" : "所选记录";
+        }
+    }
+
+    private String batchNumber(String factoryId, Long productionBatchId) {
+        if (productionBatchRepository == null || productionBatchId == null) {
+            throw new BusinessException("不良尚未登记：无法读取生产批次号。请稍后重试，确认成功后再继续。");
+        }
+        return productionBatchRepository.findByIdAndFactoryId(productionBatchId, factoryId)
+                .map(ProductionBatch::getBatchNumber)
+                .filter(WritePreviewSupport::notBlank)
+                .orElseThrow(() -> new BusinessException(
+                        "不良尚未登记：无法读取生产批次号。请稍后重试，确认成功后再继续."));
+    }
+
     private Long extractUserIdFromContext(Map<String, Object> context) {
         Object userIdObj = context.get("userId");
         if (userIdObj == null) return null;
@@ -482,7 +540,7 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
             case "qualityInspectionId" -> "请问登记在哪一条质检记录上？说批次号就行";
-            case "defectType" -> "请问缺陷类型是？(外观/重量/成分/微生物/包装/异物/感官/保质期/其他)";
+            case "defectType" -> "请问缺陷类型是？(" + defectTypeOptions() + ")";
             case "quantity" -> "请问不良数量是多少？";
             case "materialId" -> "请问关联的是哪种物料？说名称就行（可选）";
             case "cause" -> "请描述缺陷原因 (可选)";

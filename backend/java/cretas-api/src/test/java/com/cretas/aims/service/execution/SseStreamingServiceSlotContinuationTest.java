@@ -206,6 +206,28 @@ class SseStreamingServiceSlotContinuationTest {
     }
 
     @Test
+    void explicitQualityDefectCodeClosesAnOpenParameterQuestionInsteadOfContinuingIt() throws Exception {
+        Harness h = new Harness();
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+        AIIntentConfig quality = AIIntentConfig.builder().intentCode("QUALITY_DEFECT_RECORD")
+                .intentName("登记质检不良").intentCategory("QUALITY").businessType("FACTORY")
+                .sensitivityLevel("LOW").toolName("quality_defect_record").build();
+        when(h.aiIntentService.getIntentByCode(F, "QUALITY_DEFECT_RECORD")).thenReturn(Optional.of(quality));
+        when(h.aiIntentService.hasPermission("QUALITY_DEFECT_RECORD", "quality_inspector")).thenReturn(true);
+
+        h.executeAs(IntentExecuteRequest.builder().userInput("登记质检不良")
+                .intentCode("QUALITY_DEFECT_RECORD").sessionId(sessionId).build(), "quality_inspector");
+
+        assertThat(h.sessions.get(sessionId).getStatus())
+                .as("显式不同命令会关闭已有缺参会话")
+                .isEqualTo(ConversationSession.SessionStatus.CANCELLED);
+        verify(h.aiIntentService, never()).recognizeIntentWithConfidence(
+                eq("登记质检不良"), anyString(), anyInt(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void anExpiredSessionIsNotContinued() throws Exception {
         Harness h = new Harness();
         h.recognizes("做完了，产量0", h.complete);
@@ -422,6 +444,40 @@ class SseStreamingServiceSlotContinuationTest {
         assertThat(h.sessions).isEmpty();
     }
 
+    @Test
+    void qualityDefectPreviewQuestionContinuesWithOnlyTheBatchNumber() throws Exception {
+        Harness h = new Harness();
+        QualityDefectPreviewLeg preview = new QualityDefectPreviewLeg(h);
+
+        IntentExecuteResponse asked = preview.preview("登记外观不良2个", Map.of(
+                "defectType", "外观不良", "quantity", 2));
+
+        assertThat(asked.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(asked.getSessionId()).isNotBlank();
+        assertThat(h.sessions.get(asked.getSessionId()).getCollectedParameters())
+                .containsEntry("defectType", "外观不良")
+                .containsEntry("quantity", "2")
+                .doesNotContainKey("qualityInspectionId");
+
+        // 让真实 SSE 入口续轮，使用真实 ToolDispatchService + QualityDefectRecordTool。
+        when(h.toolRegistry.getExecutor("quality_defect_record")).thenReturn(Optional.of(preview.tool));
+        ReflectionTestUtils.setField(h.service, "toolDispatchService", preview.dispatch);
+        IntentExecuteResponse answered = h.executeAs("B20261006-01", asked.getSessionId(), "quality_inspector");
+
+        assertThat(answered.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        assertThat(answered.getIntentCode()).isEqualTo("QUALITY_DEFECT_RECORD");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> previewParams = (Map<String, Object>) answered.getMetadata().get("previewParams");
+        assertThat(previewParams).containsEntry("qualityInspectionId", "B20261006-01")
+                .containsEntry("defectType", "外观不良").containsEntry("quantity", "2");
+        IntentExecuteResponse card = preview.preview("B20261006-01", previewParams);
+        assertThat(card.getStatus()).isEqualTo("PREVIEW");
+        assertThat(card.getConfirmableAction()).isNotNull();
+        assertThat(h.sessions.get(asked.getSessionId()).getStatus())
+                .isEqualTo(ConversationSession.SessionStatus.COMPLETED);
+        verify(preview.defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
     // ------------------------------------------------------------------
 
     // ==================== 入场就问一线开放名单 (2026-10-06 真机 #12) ====================
@@ -512,6 +568,74 @@ class SseStreamingServiceSlotContinuationTest {
             return dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder()
                     .intentCode("MATERIAL_BATCH_USE").userInput(userInput).context(new HashMap<>(context))
                     .previewOnly(true).build(), useIntent, USER, PREVIEW_ROLE, null);
+        }
+    }
+
+    /** 质检登记的真实预览/续轮组件，外部服务和模型才使用桩。 */
+    private static final class QualityDefectPreviewLeg {
+        static final String ROLE = "quality_inspector";
+        final ToolDispatchService dispatch;
+        final com.cretas.aims.ai.tool.impl.quality.QualityDefectRecordTool tool =
+                new com.cretas.aims.ai.tool.impl.quality.QualityDefectRecordTool();
+        final com.cretas.aims.service.QualityDefectService defectService = mock(com.cretas.aims.service.QualityDefectService.class);
+        final com.cretas.aims.repository.ProductionBatchRepository batchRepo =
+                mock(com.cretas.aims.repository.ProductionBatchRepository.class);
+        final AIIntentConfig intent;
+
+        QualityDefectPreviewLeg(Harness h) throws Exception {
+            com.cretas.aims.service.QualityInspectionService inspections = mock(com.cretas.aims.service.QualityInspectionService.class);
+            com.cretas.aims.repository.QualityInspectionRepository inspectionRepo =
+                    mock(com.cretas.aims.repository.QualityInspectionRepository.class);
+            when(inspections.getInspectionById(eq(F), anyString()))
+                    .thenThrow(new com.cretas.aims.exception.EntityNotFoundException("QualityInspection", "batch-number"));
+            com.cretas.aims.entity.QualityInspection inspection = com.cretas.aims.entity.QualityInspection.builder()
+                    .id("qi-1").factoryId(F).productionBatchId(99L).inspectorId(USER)
+                    .inspectionDate(java.time.LocalDate.of(2026, 10, 6)).result("PENDING").build();
+            when(inspectionRepo.findByFactoryIdAndInspectorId(eq(F), eq(USER), any()))
+                    .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(inspection)));
+            when(inspectionRepo.findByFactoryIdAndProductionBatchId(eq(F), eq(99L), any()))
+                    .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(inspection)));
+            com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+            batch.setId(99L);
+            batch.setFactoryId(F);
+            batch.setBatchNumber("B20261006-01");
+            batch.setProductName("卤猪蹄");
+            when(batchRepo.findByIdAndFactoryId(99L, F)).thenReturn(Optional.of(batch));
+            when(batchRepo.findByFactoryIdAndBatchNumber(F, "B20261006-01")).thenReturn(Optional.of(batch));
+            ReflectionTestUtils.setField(tool, "qualityDefectService", defectService);
+            ReflectionTestUtils.setField(tool, "qualityInspectionService", inspections);
+            ReflectionTestUtils.setField(tool, "qualityInspectionRepository", inspectionRepo);
+            ReflectionTestUtils.setField(tool, "productionBatchRepository", batchRepo);
+            com.cretas.aims.ai.tool.PreviewToolTestSupport.injectMapper(tool);
+
+            ToolRegistry registry = mock(ToolRegistry.class);
+            when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
+            when(registry.getExecutor("quality_defect_record")).thenReturn(Optional.of(tool));
+            dispatch = new ToolDispatchService(registry, new ObjectMapper(), mock(DashScopeClient.class),
+                    mock(com.cretas.aims.service.calibration.ToolCallRedundancyService.class),
+                    mock(com.cretas.aims.service.calibration.SelfCorrectionService.class),
+                    mock(com.cretas.aims.service.calibration.CorrectionAgentService.class),
+                    mock(com.cretas.aims.service.calibration.ExternalVerifierService.class),
+                    mock(com.cretas.aims.service.calibration.ToolResultValidatorService.class),
+                    mock(ParameterExtractionLearningService.class));
+            com.cretas.aims.service.PreviewTokenService tokens = mock(com.cretas.aims.service.PreviewTokenService.class);
+            when(tokens.createBoundToken(any())).thenReturn(com.cretas.aims.entity.intent.IntentPreviewToken.builder()
+                    .token("tok-quality").commandDigest("digest-quality")
+                    .expiresAt(LocalDateTime.now().plusMinutes(5)).build());
+            ReflectionTestUtils.setField(dispatch, "previewTokenService", tokens);
+            ReflectionTestUtils.setField(dispatch, "writeGuardService", new WriteGuardService());
+            ReflectionTestUtils.setField(dispatch, "conversationService", h.conversations);
+            intent = AIIntentConfig.builder().intentCode("QUALITY_DEFECT_RECORD").intentName("登记质检不良")
+                    .intentCategory("QUALITY").businessType("FACTORY").sensitivityLevel("LOW")
+                    .toolName("quality_defect_record").build();
+            when(h.aiIntentService.getIntentByCode(F, "QUALITY_DEFECT_RECORD")).thenReturn(Optional.of(intent));
+            when(h.aiIntentService.hasPermission("QUALITY_DEFECT_RECORD", ROLE)).thenReturn(true);
+        }
+
+        IntentExecuteResponse preview(String userInput, Map<String, Object> context) {
+            return dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder()
+                    .intentCode("QUALITY_DEFECT_RECORD").userInput(userInput)
+                    .context(new HashMap<>(context)).previewOnly(true).build(), intent, USER, ROLE, null);
         }
     }
 
@@ -651,7 +775,15 @@ class SseStreamingServiceSlotContinuationTest {
         }
 
         IntentExecuteResponse execute(IntentExecuteRequest request) throws Exception {
-            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, F, request, USER, ROLE);
+            return executeAs(request, ROLE);
+        }
+
+        IntentExecuteResponse executeAs(String userInput, String sessionId, String role) throws Exception {
+            return executeAs(IntentExecuteRequest.builder().userInput(userInput).sessionId(sessionId).build(), role);
+        }
+
+        IntentExecuteResponse executeAs(IntentExecuteRequest request, String role) throws Exception {
+            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, F, request, USER, role);
             ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
             verify(service, org.mockito.Mockito.atLeastOnce()).sendSseEvent(eq(emitter), eq("result"), result.capture());
             List<Object> all = result.getAllValues();
