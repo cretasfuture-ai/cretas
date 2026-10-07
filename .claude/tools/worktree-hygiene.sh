@@ -6,7 +6,7 @@
 #
 # --apply 的处理 (每个 worktree 独立判断, 分支一律保留, 不删本地分支, 不 push):
 #   保留: 主仓库 / 当前所在 worktree / .codex/worktrees 下的(Codex 的) / --keep 指定的(调用方先用 list_sessions 把 isRunning 的 cwd 传进来)
-#         / locked 的 / 近 120 分钟内有过动静的(index 或 HEAD 被碰过 = 多半有人在用)
+#         / locked 的 / 近 120 分钟内 HEAD 动过的(提交/切分支 = 多半有人在用; WH_NO_RECENT=1 可关闭)
 #   其余: 有未提交改动 -> 先在它自己的分支上 WIP commit (detached 且有改动 -> 跳过并报告, 不替它建分支)
 #         -> 摘 junction (只摘链接) -> git worktree remove (⛔ 绝不加 --force) -> 删不掉就报告, 不强删
 set -u
@@ -27,9 +27,10 @@ mapfile -t paths < <(git -C "$main_wt" worktree list --porcelain | awk '/^worktr
 count=${#paths[@]}
 echo "worktree 总数: $count (上限 $MAX)"
 
-recent() { # 120 分钟内 index/HEAD 被碰过
+recent() { # 120 分钟内 HEAD 动过(提交/切分支)。⛔ 不看 index: git status 本身会刷新 index mtime, 体检自己就会把全部判成「近期活动」
+  [ "${WH_NO_RECENT:-0}" = 1 ] && return 1
   local g; g=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 1
-  [ -n "$(find "$g/index" "$g/HEAD" -mmin -120 2>/dev/null)" ]
+  [ -n "$(find "$g/HEAD" -mmin -120 2>/dev/null)" ]
 }
 is_keep() {
   local p; p=$(norm "$1")
