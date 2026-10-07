@@ -596,11 +596,15 @@ class QualityToolsPreviewTest {
     }
 
     @Test
-    @DisplayName("登记不良: 成功文案所需批次号读取失败时先报未登记, 且不发生写入")
-    void defectBatchDisplayFailureDoesNotWrite() throws Exception {
+    @DisplayName("登记不良: 读不到生产批次号 (只影响成功消息的标签) 不挡登记: 照常写入一次, 消息退回用质检日期描述, 不露内部编号")
+    void defectBatchLabelMissingStillWritesWithDateLabel() throws Exception {
+        // organizer 2026-10-07 审 #955: 批次号只是成功消息里的人话标签, 读不到不能让登记失败 (来料质检可能没有生产批次)。
         stubBatchNumberToInspection("B20261006-01", List.of(
                 inspectionOf("qi-real-1", BATCH_ID, USER, LocalDate.of(2026, 10, 6), "PENDING")));
         when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY)).thenReturn(Optional.empty());
+        QualityDefect saved = QualityDefect.builder().id("58bd6a77-8beb-4f16-8b1f-79b97f8bdb35").qualityInspectionId("qi-real-1")
+                .defectType(DefectType.APPEARANCE).quantity(BigDecimal.valueOf(2)).status(com.cretas.aims.entity.enums.DefectStatus.OPEN).build();
+        when(defectService.recordDefect(anyString(), anyString(), any(), any(), any(), any(), any())).thenReturn(saved);
 
         Map<String, Object> exec = parse(defectTool.execute(
                 call("quality_defect_record", Map.of(
@@ -608,9 +612,11 @@ class QualityToolsPreviewTest {
                         "defectType", "外观不良",
                         "quantity", 2)), ctxAs("quality_inspector", USER)));
 
-        assertThat(exec.get("success")).isEqualTo(false);
-        assertThat(String.valueOf(exec)).contains("不良尚未登记").contains("无法读取生产批次号");
-        verify(defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+        assertThat(exec.get("success")).as(String.valueOf(exec)).isEqualTo(true);
+        assertThat(String.valueOf(((Map<?, ?>) exec.get("data")).get("message")))
+                .isEqualTo("已登记不良：外观缺陷 2 个，登记在 2026-10-06 那条记录 的质检上，状态：待处理。")
+                .doesNotContain("58bd6a77").doesNotContain("qi-real-1");
+        verify(defectService, times(1)).recordDefect(eq(FACTORY), eq("qi-real-1"), any(), eq(DefectType.APPEARANCE), any(), any(), any());
     }
 
     @Test

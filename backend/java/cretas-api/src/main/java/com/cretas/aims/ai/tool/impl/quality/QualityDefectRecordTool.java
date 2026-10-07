@@ -181,7 +181,8 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
             throw new ResourceNotFoundException(INSPECTION_NOT_FOUND_MESSAGE);
         }
         inspectionId = resolved.inspection().getId();
-        String inspectionBatchNumber = batchNumber(factoryId, resolved.inspection().getProductionBatchId());
+        // 只用于成功消息里的人话标签: 读不到批次号 (例如来料质检没有生产批次) 不能挡住登记本身, 退回用质检日期描述。
+        String inspectionBatchNumber = inspectionLabel(factoryId, resolved.inspection());
 
         QualityDefect saved = qualityDefectService.recordDefect(
                 factoryId, inspectionId, materialId, defectType, quantity, cause, userId);
@@ -501,6 +502,16 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
             return type;
         }
         return DEFECT_TYPE_ALIASES.get(value.trim().toUpperCase(Locale.ROOT));
+    }
+
+    /** 成功消息里描述这条质检记录: 优先生产批次号, 读不到就用「<日期> 的那条质检」, 不抛异常。 */
+    private String inspectionLabel(String factoryId, com.cretas.aims.entity.QualityInspection inspection) {
+        try {
+            return batchNumber(factoryId, inspection.getProductionBatchId());
+        } catch (BusinessException noBatch) {
+            return inspection.getInspectionDate() != null
+                    ? inspection.getInspectionDate() + " 那条记录" : "所选记录";
+        }
     }
 
     private String batchNumber(String factoryId, Long productionBatchId) {
