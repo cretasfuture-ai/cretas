@@ -356,6 +356,51 @@ describe('AIChatScreen 写操作确认卡', () => {
     expect(mockConfirmIntent).not.toHaveBeenCalled();
   });
 
+  // prod 2026-10-07: 领用原料缺批次号, 后端回 NEED_MORE_INFO (问「要领用哪个批次」), App 却画成红色的
+  // 「「使用原料」暂时不能执行」—— 像报错。追问要是普通气泡, 真正的办不了 (PREVIEW_BLOCKED) 才是拒绝样式。
+  it('预览回 NEED_MORE_INFO (追问): 画成普通追问, 标题不是「暂时不能执行」, 没有红色提示条和任何按钮', async () => {
+    installBlockedWriteStream();
+    const QUESTION = '要领用哪个批次？「2015胸肉」现在可用的批次有：MT-20260829-9687（2015胸肉，剩 1 kg）。请直接说批次号。';
+    mockPreviewIntent.mockResolvedValue({
+      intentCode: 'MATERIAL_BATCH_USE',
+      intentName: '使用原料',
+      status: 'NEED_MORE_INFO',
+      message: QUESTION,
+      formattedText: QUESTION,
+      clarificationQuestions: [QUESTION],
+    });
+    const screen = render(<AIChatScreen />);
+    await send(screen, '领用 2015胸肉 0.1 公斤');
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-question')).toBeTruthy());
+    const card = flattenText(screen.getByTestId('ai-confirm-card'));
+    expect(card).toBe(QUESTION);
+    expect(card).not.toContain('暂时不能执行');
+    expect(screen.queryByTestId('ai-confirm-notice')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-regenerate')).toBeNull();
+    expect(mockConfirmIntent).not.toHaveBeenCalled();
+  });
+
+  it('对照: 预览回 PREVIEW_BLOCKED (办不了) 仍是红色拒绝样式 —— 标题「暂时不能执行」+ 提示条原因', async () => {
+    installBlockedWriteStream();
+    mockPreviewIntent.mockResolvedValue({
+      intentCode: 'MATERIAL_BATCH_USE',
+      intentName: '使用原料',
+      status: 'PREVIEW_BLOCKED',
+      message: '批次 MT-20260829-9687 剩余 1 kg，不够领用 5 kg。',
+      formattedText: '批次 MT-20260829-9687 剩余 1 kg，不够领用 5 kg。',
+    });
+    const screen = render(<AIChatScreen />);
+    await send(screen, '领用 MT-20260829-9687 5 公斤');
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-notice')).toBeTruthy());
+    expect(flattenText(screen.getByTestId('ai-confirm-card'))).toContain('「使用原料」暂时不能执行');
+    expect(flattenText(screen.getByTestId('ai-confirm-notice'))).toContain('不够领用 5 kg');
+    expect(screen.queryByTestId('ai-confirm-question')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
+  });
+
   it('后端不支持预览 (如工序报工): 显示原因 + 去对应页面手工操作, 不渲染「确认执行」', async () => {
     installBlockedWriteStream();
     mockPreviewIntent.mockResolvedValue({
