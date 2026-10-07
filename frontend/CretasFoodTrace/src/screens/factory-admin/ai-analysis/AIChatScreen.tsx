@@ -18,6 +18,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
@@ -59,6 +60,10 @@ import {
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
 import { isRestaurant } from '../../../utils/factoryType';
 import { currentShanghaiIsoDate } from '../../../utils/shanghaiDate';
+import { appAlert } from '../../../components/ui/AppDialog';
+
+export const AI_CHAT_TIMEOUT_MS = 30_000;
+const AUTO_SCROLL_THRESHOLD = 120;
 
 // 建议操作类型
 interface SuggestedAction {
@@ -67,6 +72,11 @@ interface SuggestedAction {
   description?: string;
   params?: Record<string, unknown>;
   data?: Record<string, unknown>;
+}
+
+interface FollowUpSuggestion {
+  label: string;
+  question: string;
 }
 
 interface RestaurantAgentLaunch {
@@ -172,6 +182,8 @@ interface Message {
   responseTimeMs?: number;
   /** 需要澄清时的建议操作列表 */
   suggestedActions?: SuggestedAction[];
+  /** 后端明确标记的下一步问题；澄清候选不复用此字段。 */
+  followUps?: FollowUpSuggestion[];
   /** 会话ID (用于多轮对话) */
   sessionIdForReply?: string;
   /** 意图类别（用于判断是否显示反馈组件） */
@@ -305,6 +317,7 @@ function AIChatScreenContent() {
   const isRestaurantMode = isRestaurant(user);
   const { t, i18n } = useTranslation('home');
   const scrollViewRef = useRef<ScrollView>(null);
+  const shouldAutoScrollRef = useRef(true);
   const theme = useTheme<AppTheme>();
   // 颜色层: 布局在文件底部的 StyleSheet, 颜色全部从这里取 token, 渲染时合并。
   // ⛔ 本文件不许出现 #RRGGBB / fontSize: 10..13 (闸: gates/demoScreensUseThemeTokens)。
@@ -326,6 +339,7 @@ function AIChatScreenContent() {
     primaryButton: { backgroundColor: theme.colors.primary },
     primaryButtonIdle: { backgroundColor: theme.colors.primaryContainer },
     subtleButton: { backgroundColor: theme.colors.surfaceVariant },
+    loadingSkeleton: { backgroundColor: theme.colors.outlineVariant },
   }), [theme]);
 
   // 从路由参数获取场景类型
@@ -350,6 +364,7 @@ function AIChatScreenContent() {
   const [inputText, setInputText] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showSlowLoading, setShowSlowLoading] = useState(false);
 
   // P1: Voice-first input mode
   const [showKeyboard, setShowKeyboard] = useState(false);
@@ -487,13 +502,73 @@ function AIChatScreenContent() {
 
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
+    if (!shouldAutoScrollRef.current) return;
     setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
+      if (shouldAutoScrollRef.current) scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 100);
+  }, []);
+
+  const handleMessageScroll = useCallback((event: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    shouldAutoScrollRef.current = distanceFromBottom <= AUTO_SCROLL_THRESHOLD;
   }, []);
 
   // 用于取消流式请求的 AbortController
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const resetConversation = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    ++previewGenerationRef.current;
+    if (previewTimer.current) clearTimeout(previewTimer.current);
+    previewTimer.current = null;
+    sendPendingRef.current = false;
+    writeConfirmPendingRef.current = false;
+    requestedPreviewKeysRef.current.clear();
+    lastActionRef.current = null;
+    sessionIdRef.current = null;
+    setSessionId(null);
+    setMessages([]);
+    setInputText('');
+    setPreviewText('');
+    setStreamStatus(null);
+    setIsLoading(false);
+  }, []);
+
+  const requestNewConversation = useCallback(() => {
+    const hasPendingWrite = messages.some((message) => message.writeConfirm?.phase === 'ready');
+    const hasExecutingWrite = messages.some((message) => message.writeConfirm?.phase === 'executing');
+    if (hasExecutingWrite) {
+      appAlert('操作正在执行', '请等待当前操作完成后再开始新对话。');
+      return;
+    }
+    if (!hasPendingWrite) {
+      resetConversation();
+      return;
+    }
+    appAlert('确认开始新对话', '还有未确认的操作卡，丢弃后不会执行任何写入。', [
+      { text: '继续保留', style: 'cancel' },
+      { text: '丢弃并开始', style: 'destructive', onPress: resetConversation },
+    ]);
+  }, [messages, resetConversation]);
+
+  useEffect(() => {
+    navigation.setOptions?.({
+      headerRight: () => (
+        <TouchableOpacity
+          testID="ai-chat-new-conversation"
+          accessibilityRole="button"
+          accessibilityLabel="新对话"
+          onPress={requestNewConversation}
+          style={{ minWidth: 80, minHeight: 44, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}
+        >
+          <Text variant="labelLarge" style={{ color: theme.colors.primary }}>新对话</Text>
+        </TouchableOpacity>
+      ),
+    });
+    return () => navigation.setOptions?.({ headerRight: undefined });
+  }, [navigation, requestNewConversation, theme.colors.primary]);
 
   // 清理函数
   useEffect(() => {
@@ -524,6 +599,9 @@ function AIChatScreenContent() {
 
   // 流式状态文本（显示处理进度）
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
+  useEffect(() => {
+    setShowSlowLoading(streamStatus === '正在处理');
+  }, [streamStatus]);
 
   // 处理建议选项点击
   const handleSuggestedActionClick = async (action: SuggestedAction, messageId: string) => {
@@ -590,6 +668,8 @@ function AIChatScreenContent() {
     const assistantMessageId = generateMessageId();
     let streamedContent = '';
     let resultData: Record<string, unknown> | null = null;
+    let slowTimer: ReturnType<typeof setTimeout> | null = null;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
     // React state updates do not synchronously guard another press in this render.
     sendPendingRef.current = true;
@@ -597,6 +677,22 @@ function AIChatScreenContent() {
       setInputText('');
       setIsLoading(true);
       setStreamStatus(null);
+      if (typeof setTimeout === 'function') {
+        slowTimer = setTimeout(() => {
+          if (isCurrentStream()) setStreamStatus('正在处理');
+        }, 3000);
+        timeoutTimer = setTimeout(() => {
+          if (isCurrentStream()) {
+            setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId
+              ? { ...msg, content: '这次没处理完，请再说一遍。没有执行任何写操作，写操作都要先经过确认卡。', isLoading: false }
+              : msg));
+            setStreamStatus(null);
+            setIsLoading(false);
+            sendPendingRef.current = false;
+            controller.abort();
+          }
+        }, 30_000);
+      }
       const modeResult = detectAnalysisMode(messageText);
 
       const userMessage: Message = {
@@ -747,7 +843,19 @@ function AIChatScreenContent() {
 
           // 提取建议操作
           let suggestedActions: SuggestedAction[] = [];
+          let followUps: FollowUpSuggestion[] = [];
           const status = result.status as string | undefined;
+          const rawFollowUps = Array.isArray(result.followUps)
+            ? result.followUps
+            : Array.isArray(result.nextQuestions) ? result.nextQuestions : [];
+          followUps = (rawFollowUps as unknown[]).map((item) => {
+            if (typeof item === 'string') return { label: item, question: item };
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+            const candidate = item as Record<string, unknown>;
+            const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
+            const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+            return question && label ? { label, question } : undefined;
+          }).filter((item): item is FollowUpSuggestion => item !== undefined);
 
           // NEED_MORE_INFO: 优先使用 clarificationQuestions 构建友好回复 (正文在下面选项定下来之后再拼:
           // 「或点击下方选项」只在真的有选项时才说 —— prod 2026-10-06 没有选项也这么说了)
@@ -835,6 +943,7 @@ function AIChatScreenContent() {
                     intentCode: (result.intentCode as string) || msg.intentCode,
                     intentCategory: result.intentCategory as string | undefined,
                     suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
+                    followUps: followUps.length > 0 ? followUps : undefined,
                     foodKbMetadata: foodKbMeta,
                     richData,
                     agentRun,
@@ -896,7 +1005,12 @@ function AIChatScreenContent() {
               msg.id === assistantMessageId
                 ? {
                     ...msg,
-                    content: message || t('aiChat.networkError'),
+                    content: (() => {
+                      const raw = message || '';
+                      if (/timeout|aborted|abort|超时/i.test(raw)) return '这次没处理完，请再说一遍。没有执行任何写操作，写操作都要先经过确认卡。';
+                      if (/factory|工厂标识/i.test(raw)) return '当前账号没有关联工厂，请重新登录后再试。';
+                      return '这次没有处理成功，请检查网络后再试。没有执行任何写操作。';
+                    })(),
                     isLoading: false,
                   }
                 : msg
@@ -944,7 +1058,12 @@ function AIChatScreenContent() {
         );
       } else {
         // 无内容时显示错误
-        const errorMessage = error instanceof Error ? error.message : t('aiChat.networkError');
+        const rawError = error instanceof Error ? error.message : '';
+        const errorMessage = /timeout|aborted|abort|超时/i.test(rawError)
+          ? '这次没处理完，请再说一遍。没有执行任何写操作，写操作都要先经过确认卡。'
+          : (/factory|工厂标识/i.test(rawError)
+            ? '当前账号没有关联工厂，请重新登录后再试。'
+            : '这次没有处理成功，请检查网络后再试。没有执行任何写操作。');
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMessageId
@@ -957,6 +1076,8 @@ function AIChatScreenContent() {
       setIsLoading(false);
     } finally {
       if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      if (slowTimer) clearTimeout(slowTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
       if (isCurrentStream()) {
         sendPendingRef.current = false;
         setIsLoading(false);
@@ -1120,6 +1241,16 @@ function AIChatScreenContent() {
   };
 
   // 渲染消息
+  const handleCopyMessage = useCallback((message: Message) => {
+    if (!message.content || message.isLoading) return;
+    appAlert('复制消息', '要把这条消息复制到剪贴板吗？', [
+      { text: '取消', style: 'cancel' },
+      { text: '复制', onPress: () => {
+        void import('expo-clipboard').then(({ setStringAsync }) => setStringAsync(message.content));
+      } },
+    ]);
+  }, []);
+
   const renderMessage = (message: Message) => {
     const isUser = message.role === 'user';
     const timestampText = message.timestamp.toLocaleTimeString(i18n.language, {
@@ -1135,8 +1266,9 @@ function AIChatScreenContent() {
           <View style={[styles.aiMessageBubble, styles.loadingBubble, tone.aiBubble]}>
             <ActivityIndicator size="small" color={theme.colors.primary} />
             <Text variant="bodyMedium" style={[styles.loadingText, tone.muted]}>
-              {streamStatus || t('aiChat.thinking')}
+              {showSlowLoading ? '正在处理' : (streamStatus || '正在理解你的话…')}
             </Text>
+            {showSlowLoading && <View testID="ai-chat-loading-skeleton" style={[styles.loadingSkeleton, tone.loadingSkeleton]} />}
           </View>
         </View>
       );
@@ -1144,17 +1276,17 @@ function AIChatScreenContent() {
 
     if (isUser) {
       return (
-        <View key={message.id} style={styles.userMessageRow}>
+        <Pressable key={message.id} style={styles.userMessageRow} onLongPress={() => handleCopyMessage(message)} delayLongPress={450}>
           <View style={[styles.userMessageBubble, tone.userBubble]}>
             <Text variant="bodyMedium" style={tone.onPrimaryContainer}>{message.content}</Text>
           </View>
           <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
-        </View>
+        </Pressable>
       );
     }
 
     return (
-      <View key={message.id} style={styles.messageRow}>
+      <Pressable key={message.id} style={styles.messageRow} onLongPress={() => handleCopyMessage(message)} delayLongPress={450}>
         {renderAssistantAvatar()}
         <View style={styles.aiMessageContainer}>
           {/* 分析模式 + 耗时是工程遥测, 只在 __DEV__ 下给开发者看, 不露给老板 */}
@@ -1236,9 +1368,28 @@ function AIChatScreenContent() {
               ))}
             </View>
           )}
-          {/* 显示反馈组件（仅食品知识类意图） */}
+          {!message.isLoading && message.followUps && message.followUps.length > 0 && (
+            <View testID="ai-chat-followups" style={styles.suggestedActionsContainer}>
+              {message.followUps.map((followUp, index) => (
+                <TouchableOpacity
+                  key={`${followUp.question}-${index}`}
+                  testID={`ai-chat-followup-${index}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={followUp.label}
+                  style={[styles.suggestedActionButton, tone.suggestedAction]}
+                  onPress={() => { void handleSend(followUp.question, { displayText: followUp.label }); }}
+                  disabled={isLoading}
+                >
+                  <Text variant="labelLarge" numberOfLines={1} ellipsizeMode="tail" style={[styles.centeredText, tone.onPrimaryContainer]}>
+                    {followUp.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {/* 食品回答走知识质量反馈，其他回答走后端意图识别反馈契约。 */}
           {!message.isLoading &&
-            message.intentCategory === 'FOOD_KNOWLEDGE' &&
+            message.intentCode &&
             message.userQuestion && (
               <FeedbackWidget
                 queryId={message.id}
@@ -1253,7 +1404,7 @@ function AIChatScreenContent() {
             <Text variant="bodySmall" style={[styles.timestamp, tone.muted]}>{timestampText}</Text>
           )}
         </View>
-      </View>
+      </Pressable>
     );
   };
 
@@ -1313,6 +1464,8 @@ function AIChatScreenContent() {
           ref={scrollViewRef}
           style={styles.messagesContainer}
           contentContainerStyle={styles.messagesContent}
+          onScroll={handleMessageScroll}
+          scrollEventThrottle={100}
           onContentSizeChange={scrollToBottom}
         >
           {messages.length === 0 ? renderWelcome() : messages.map(renderMessage)}
@@ -1481,6 +1634,12 @@ const styles = StyleSheet.create({
   loadingText: {
     marginLeft: 8,
   },
+  loadingSkeleton: {
+    width: 56,
+    height: 10,
+    borderRadius: 5,
+    marginLeft: 10,
+  },
   streamingCursor: {
     fontWeight: '300',
   },
@@ -1543,7 +1702,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 14,
     minWidth: 80,
-    minHeight: 48,
+    minHeight: 40,
+    maxWidth: 220,
     justifyContent: 'center',
   },
   centeredText: {

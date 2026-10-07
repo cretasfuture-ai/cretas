@@ -8,7 +8,7 @@ export function getListDisplayKeys(row: Record<string, unknown>): string[] {
   }
   return Object.keys(row)
     .filter(key => !key.endsWith('Id') && key !== 'id' && key !== 'factoryId' &&
-      typeof row[key] !== 'object')
+      (row[key] === null || typeof row[key] !== 'object') && COLUMN_NAMES[key] !== undefined)
     .slice(0, 5);
 }
 
@@ -78,18 +78,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** 没有中文标签时的兜底 (列表表头 / 统计卡仍在用; 详情卡不走这里, 见 buildDetailRows)。 */
 export function formatColumnName(key: string): string {
-  return COLUMN_NAMES[key] || key
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, s => s.toUpperCase())
-    .trim();
+  return COLUMN_NAMES[key] || '';
 }
 
 export function formatDisplayValue(value: unknown): string {
-  if (value === null || value === undefined) return '-';
+  if (value === null || value === undefined) return '暂无数据';
   if (typeof value === 'boolean') return value ? '是' : '否';
   if (typeof value === 'number') {
-    if (Number.isInteger(value)) return value.toLocaleString();
-    return value.toFixed(2);
+    if (!Number.isFinite(value)) return '暂无数据';
+    return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
   }
   const str = String(value);
   // Truncate long values
@@ -120,8 +117,8 @@ function isCodeKey(key: string): boolean {
  */
 export function buildDetailRows(detail: Record<string, unknown>): DetailRow[] {
   const entries = Object.entries(detail).filter(([key, value]) =>
-    value !== null && value !== undefined && typeof value !== 'object'
-    && key !== 'factoryId' && !isInternalId(key, value) && COLUMN_NAMES[key] !== undefined);
+    value !== undefined && (value === null || typeof value !== 'object')
+    && key !== 'factoryId' && key !== 'message' && !isInternalId(key, value) && COLUMN_NAMES[key] !== undefined);
 
   const hasDisplayName = detail.statusDisplayName != null && String(detail.statusDisplayName).trim() !== '';
   const unitKey = UNIT_KEYS.find(k => typeof detail[k] === 'string' && String(detail[k]).trim() !== '');
@@ -142,7 +139,7 @@ export function buildDetailRows(detail: Record<string, unknown>): DetailRow[] {
       } else {
         continue; // 英文码翻不出来: 不显示, 不回退成英文
       }
-    } else if (QUANTITY_KEYS.has(key) && unitText) {
+    } else if (QUANTITY_KEYS.has(key) && unitText && value !== null) {
       text = `${formatDisplayValue(value)} ${unitText}`;
     } else {
       text = formatDisplayValue(value);

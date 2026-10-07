@@ -42,9 +42,9 @@ describe('写操作结果卡: 给一线看的中文', () => {
     render(<RichContentRenderer data={data!} />);
 
     expect(screen.getByText('剩余数量')).toBeTruthy();
-    expect(screen.getByText('0.90 kg')).toBeTruthy();
+    expect(screen.getByText('0.9 kg')).toBeTruthy();
     expect(screen.getByText('已领用数量')).toBeTruthy();
-    expect(screen.getByText('0.10 kg')).toBeTruthy();
+    expect(screen.getByText('0.1 kg')).toBeTruthy();
     expect(screen.getByText('批次号')).toBeTruthy();
     expect(screen.getByText('MT-20260829-9687')).toBeTruthy();
     expect(screen.getByText('状态')).toBeTruthy();

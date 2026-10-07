@@ -16,11 +16,12 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
-import { IconButton } from 'react-native-paper';
+import { IconButton, useTheme } from 'react-native-paper';
+import type { AppTheme } from '../../theme';
 import { useAuthStore } from '../../store/authStore';
 import { apiClient } from '../../services/api/apiClient';
+import { appAlert } from '../ui/AppDialog';
 
 /** 食品知识库查询的元数据，用于 log-query */
 export interface FoodKBQueryMetadata {
@@ -54,6 +55,7 @@ interface FeedbackWidgetProps {
 }
 
 export function FeedbackWidget({ queryId, question, answer, sessionId, intentCode, foodKbMetadata }: FeedbackWidgetProps) {
+  const theme = useTheme<AppTheme>();
   const factoryId = useAuthStore(s => s.getFactoryId());
   const token = useAuthStore(s => s.tokens?.accessToken);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
@@ -147,17 +149,19 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
         }
       );
 
-      if (response.success) {
+      const nestedSuccess = response.data && typeof response.data === 'object' && !Array.isArray(response.data)
+        ? (response.data as Record<string, unknown>).success
+        : undefined;
+      const accepted = response.success === true && nestedSuccess !== false;
+      if (accepted) {
         setFeedbackSubmitted(true);
         setIsExpanded(false);
-        // 可选：显示简短的成功提示
-        // Alert.alert('感谢反馈', '您的反馈已提交');
       } else {
-        Alert.alert('提交失败', response.message || '请稍后重试');
+        appAlert('提交失败', response.message || '反馈没有保存，请稍后重试。');
       }
     } catch (error) {
       console.error('提交反馈失败:', error);
-      Alert.alert('提交失败', '网络错误，请稍后重试');
+      appAlert('提交失败', '反馈没有保存，请检查网络后重试。');
     } finally {
       setIsSubmitting(false);
     }
@@ -177,7 +181,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
   // 点踩后的提交按钮
   const handleSubmitNegative = () => {
     if (selectedTags.length === 0) {
-      Alert.alert('请选择反馈标签', '请至少选择一个反馈原因');
+      appAlert('请选择反馈标签', '请至少选择一个反馈原因。');
       return;
     }
     handleSubmit(false);
@@ -187,7 +191,7 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
     return (
       <View style={styles.container}>
         <View style={styles.submittedRow}>
-          <IconButton icon="check-circle" size={16} iconColor="#52c41a" />
+          <IconButton icon="check-circle" size={44} iconColor={theme.colors.primary} />
           <Text style={styles.submittedText}>已提交反馈，感谢您的帮助</Text>
         </View>
       </View>
@@ -205,14 +209,14 @@ export function FeedbackWidget({ queryId, question, answer, sessionId, intentCod
             onPress={handleThumbsUp}
             disabled={isSubmitting}
           >
-            <IconButton icon="thumb-up-outline" size={20} iconColor="#52c41a" />
+            <IconButton icon="thumb-up-outline" size={44} iconColor={theme.colors.primary} />
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.iconButton}
             onPress={handleThumbsDown}
             disabled={isSubmitting}
           >
-            <IconButton icon="thumb-down-outline" size={20} iconColor="#ff4d4f" />
+            <IconButton icon="thumb-down-outline" size={44} iconColor={theme.colors.error} />
           </TouchableOpacity>
         </View>
       </View>
@@ -296,8 +300,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   iconButton: {
-    width: 36,
-    height: 36,
+    width: 48,
+    height: 48,
     justifyContent: 'center',
     alignItems: 'center',
   },

@@ -155,9 +155,9 @@ describe('AIChatScreen 写操作成功后的结果卡', () => {
 
     // 正向: 中文标签 + 带单位的数 + 中文状态
     expect(screen.getByText('剩余数量')).toBeTruthy();
-    expect(screen.getByText('0.90 kg')).toBeTruthy();
+    expect(screen.getByText('0.9 kg')).toBeTruthy();
     expect(screen.getByText('已领用数量')).toBeTruthy();
-    expect(screen.getByText('0.10 kg')).toBeTruthy();
+    expect(screen.getByText('0.1 kg')).toBeTruthy();
     expect(screen.getByText('批次号')).toBeTruthy();
     expect(screen.getByText('MT-20260829-9687')).toBeTruthy();
     expect(screen.getByText('可用')).toBeTruthy();
