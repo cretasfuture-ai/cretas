@@ -83,6 +83,12 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         days.put("maximum", 365);
         properties.put("days", days);
 
+        Map<String, Object> comparisonType = new HashMap<>();
+        comparisonType.put("type", "string");
+        comparisonType.put("description", "对比方式：MOM=环比（默认），YOY=同比（去年同期）。只要日序列时可省略。");
+        comparisonType.put("enum", Arrays.asList("MOM", "YOY"));
+        properties.put("comparisonType", comparisonType);
+
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
 
@@ -104,6 +110,11 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         String endDateStr = getString(params, "endDate");
         String metric = getString(params, "metric", "PRODUCTION");
         Integer days = getInteger(params, "days", 30);
+        String comparisonType = getString(params, "comparisonType");
+        String userInput = firstNonBlank(getString(context, "userInput"), getString(context, "input"),
+                getString(context, "message"));
+        boolean dailyOnly = containsAny(userInput, "只要每日", "日序列", "每日走势", "每天", "不比较");
+        if (comparisonType == null && containsAny(userInput, "同比", "去年同期", "上年同期")) comparisonType = "YOY";
 
         // 调用服务获取趋势分析报表数据
         Map<String, Object> trendsData = reportService.getTrendsDashboard(factoryId, period, metric, days);
@@ -126,9 +137,59 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         if (endDateStr != null) queryConditions.put("endDate", endDateStr);
         result.put("queryConditions", queryConditions);
 
+        if (!dailyOnly && "PRODUCTION".equalsIgnoreCase(metric)
+                && (comparisonType != null || !"today".equalsIgnoreCase(period))) {
+            String type = comparisonType == null ? "MOM" : comparisonType.toUpperCase(Locale.ROOT);
+            LocalDate[] current = resolvePeriod(period, startDateStr, endDateStr, days);
+            long periodLength = current[1].toEpochDay() - current[0].toEpochDay() + 1;
+            LocalDate[] previous = "YOY".equals(type)
+                    ? new LocalDate[]{current[0].minusYears(1), current[1].minusYears(1)}
+                    : new LocalDate[]{current[0].minusDays(periodLength), current[0].minusDays(1)};
+            Map<String, Object> comparison = reportService.getPeriodComparisonReport(
+                    factoryId, current[0], current[1], previous[0], previous[1]);
+            comparison.put("comparisonType", type);
+            comparison.put("comparisonLabel", "YOY".equals(type) ? "同比" : "环比");
+            addUnavailableMessages(comparison, type);
+            result.put("comparison", comparison);
+        }
+
         log.info("趋势分析报表查询完成 - 工厂ID: {}, 指标: {}, 天数: {}", factoryId, metric, days);
 
         return result;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) if (value != null && !value.isBlank()) return value;
+        return null;
+    }
+
+    private boolean containsAny(String value, String... needles) {
+        if (value == null) return false;
+        for (String needle : needles) if (value.contains(needle)) return true;
+        return false;
+    }
+
+    private LocalDate[] resolvePeriod(String period, String startDateStr, String endDateStr, Integer days) {
+        if (startDateStr != null && endDateStr != null) return new LocalDate[]{LocalDate.parse(startDateStr), LocalDate.parse(endDateStr)};
+        LocalDate end = LocalDate.now();
+        LocalDate start = switch (period.toLowerCase(Locale.ROOT)) {
+            case "today" -> end;
+            case "week" -> end.minusDays(6);
+            case "quarter" -> end.with(end.getMonth().firstMonthOfQuarter()).withDayOfMonth(1);
+            case "year" -> end.withDayOfYear(1);
+            default -> end.withDayOfMonth(1);
+        };
+        if ("today".equalsIgnoreCase(period) && days != null && days > 1) start = end.minusDays(days - 1L);
+        return new LocalDate[]{start, end};
+    }
+
+    @SuppressWarnings("unchecked")
+    private void addUnavailableMessages(Map<String, Object> comparison, String type) {
+        Map<String, Object> values = (Map<String, Object>) comparison.get("comparison");
+        if (values == null) return;
+        String label = "YOY".equals(type) ? "同比" : "环比";
+        if (values.get("outputChangeRate") == null) values.put("outputChangeMessage", "上期无数据，无法计算" + label);
+        if (values.get("costChangeRate") == null) values.put("costChangeMessage", "上期无数据，无法计算" + label);
     }
 
     @Override

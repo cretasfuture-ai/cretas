@@ -994,14 +994,14 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                     .multiply(BigDecimal.valueOf(100));
             comparison.put("outputChangeRate", outputChange);
         } else {
-            comparison.put("outputChangeRate", BigDecimal.ZERO);
+            comparison.put("outputChangeRate", null);
         }
         if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal costChange = cost2.subtract(cost1).divide(cost1, 4, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100));
             comparison.put("costChangeRate", costChange);
         } else {
-            comparison.put("costChangeRate", BigDecimal.ZERO);
+            comparison.put("costChangeRate", null);
         }
         report.put("comparison", comparison);
         return report;
