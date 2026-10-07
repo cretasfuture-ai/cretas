@@ -295,9 +295,11 @@ describe('标准 F4/F5/F6: 只有完成的回答才有反馈', () => {
     const view = render(<AIChatScreen />);
     await send(view, '查库存');
     await waitFor(() => expect(view.getByTestId('ai-chat-feedback')).toBeTruthy());
-    const inner = view.getByTestId('ai-chat-feedback').children[0] as any;
-    const containerStyle = StyleSheet.flatten(inner.props.style) || {};
-    expect(containerStyle.borderTopWidth ?? 0).toBe(0);
+    // 反馈栏里所有带样式的节点: 没有一个画顶边线 (对照: 反馈栏容器 marginTop 12 的那一层确实被扫到了, 不是空扫)
+    const styled = view.getByTestId('ai-chat-feedback').findAll((node: any) => node.props?.style !== undefined)
+      .map((node: any) => StyleSheet.flatten(node.props.style) || {});
+    expect(styled.some((style: any) => style.marginTop === 12)).toBe(true);
+    expect(styled.filter((style: any) => (style.borderTopWidth ?? 0) > 0)).toEqual([]);
     for (const label of ['这个回答有帮助', '这个回答没有帮助']) {
       const style = flat(view.getByLabelText(label));
       expect(style.minWidth).toBeGreaterThanOrEqual(44);
