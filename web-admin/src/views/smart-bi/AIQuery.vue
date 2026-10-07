@@ -1054,10 +1054,14 @@ const sseRetryVisible = ref(false);
  * AI 对话标准 W2 / H5: 超时和失败的文案必须明确说「没有执行任何写操作」
  * (用户在对话里发的可能是写请求, 超时 / 失败后最怕的是不知道「到底办没办」)。
  */
+// 餐饮租户不在本次标准范围内: 文案保持原样 (withNoWriteNote 原样返回, 超时文案用旧句)。
 const NO_WRITE_NOTE = '没有执行任何写操作';
-const SSE_TIMEOUT_TEXT = `连接超时，服务响应较慢（${NO_WRITE_NOTE}）。可以点「重新提问」再试一次。`;
+const SSE_TIMEOUT_TEXT_LEGACY = '连接超时，服务响应较慢。';
+const SSE_TIMEOUT_TEXT_STD = `连接超时，服务响应较慢（${NO_WRITE_NOTE}）。可以点「重新提问」再试一次。`;
+const sseTimeoutText = computed(() => (isRestaurantTenant.value ? SSE_TIMEOUT_TEXT_LEGACY : SSE_TIMEOUT_TEXT_STD));
 function withNoWriteNote(text: string): string {
-  return text.includes(NO_WRITE_NOTE) ? text : `${text}（${NO_WRITE_NOTE}）`;
+  if (isRestaurantTenant.value || text.includes(NO_WRITE_NOTE)) return text;
+  return `${text}（${NO_WRITE_NOTE}）`;
 }
 let sseWarningTimer: ReturnType<typeof setTimeout> | null = null;
 let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1729,7 +1733,9 @@ async function tryJavaIntentChat(
       responseStatus === 'FAILED' ||
       responseStatus === 'ERROR'
     ) {
-      msg.content = customerSafeAnswer(res.message || res.formattedText || '已理解您的问题，但暂时无法完成分析。');
+      const failedText = customerSafeAnswer(res.message || res.formattedText || '已理解您的问题，但暂时无法完成分析。');
+      // W2 / H5: 失败 / 拒绝类状态的文案说明没有执行任何写操作 (WRITE_CONFIRM_REQUIRED 只是「需要确认」, 不是失败)
+      msg.content = responseStatus === 'WRITE_CONFIRM_REQUIRED' ? failedText : withNoWriteNote(failedText);
       msg.loading = false;
       return 'handled';
     }
@@ -1934,7 +1940,7 @@ async function handleSendMessage() {
         const idx = getMessageIndex();
         if (idx !== -1) {
           const msg = chatHistory.value[idx];
-          msg.content = SSE_TIMEOUT_TEXT;
+          msg.content = sseTimeoutText.value;
           msg.loading = false;
         }
         scrollToBottom();
@@ -2767,7 +2773,7 @@ function handleKeydown(event: KeyboardEvent) {
                 </span>
               </div>
               <!-- SSE retry button shown after 15s timeout -->
-              <div v-if="sseRetryVisible && !message.loading && !message.streaming && message.content === SSE_TIMEOUT_TEXT" class="sse-retry-area" data-testid="aiq-timeout">
+              <div v-if="sseRetryVisible && !message.loading && !message.streaming && message.content === sseTimeoutText" class="sse-retry-area" data-testid="aiq-timeout">
                 <span class="sse-retry-text">{{ message.content }}</span>
                 <el-button type="primary" :size="uiBtnSize" :icon="Refresh" @click="handleSseRetry">重新提问</el-button>
               </div>
