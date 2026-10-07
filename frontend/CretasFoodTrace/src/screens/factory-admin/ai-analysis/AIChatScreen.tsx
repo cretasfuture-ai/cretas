@@ -1319,7 +1319,7 @@ function AIChatScreenContent() {
                 ) : null}
               </Text>
             ) : message.error ? null : (
-              <MarkdownRenderer content={message.content} />
+              <MarkdownRenderer content={message.content} style={styles.answerText} />
             )}
             {/* 结构化数据富组件渲染（表格/卡片/统计） */}
             {!message.isLoading && message.richData && (
@@ -1640,6 +1640,10 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 0,
     padding: 12,
     maxWidth: '85%',
+  },
+  answerText: {
+    fontSize: 16,
+    lineHeight: 24,
   },
   loadingBubble: {
     flexDirection: 'row',
