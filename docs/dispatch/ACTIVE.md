@@ -6,6 +6,9 @@
 
 ## 在飞任务
 
+- `QI-DEFECT-CLOSEOUT-20261007` — `in-progress` — Owner root/qi_defect — Base `000054905703651450d2d52e109da4a3131221dc` — A1–A4质检登记修复；scope与验收见下；只到PR，不合并部署。
+- `AICHAT-MOBILE-20261007` — `in-progress` — Owner root/aichat_mobile — Base `000054905703651450d2d52e109da4a3131221dc` — B1–B9工厂AI手机界面；scope与验收见下；只到PR，不改餐饮。
+
 
 
 
@@ -104,6 +107,9 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `QI-DEFECT-CLOSEOUT-20261007`：QualityDefectRecordTool、缺陷类型词表/追问、必要SSE续轮及对应Java测试、质检首页卡片配置与对应RN测试。验收：Quality*Test,SseStreaming*Test,ToolDispatch*Test,Clarification*Test,FrontlineAiWriteGrant*Test + RN目标jest/tsc；禁止Entity/Repository/迁移/生产写入。
+- `AICHAT-MOBILE-20261007`：RN AIChatScreen、components/ai/**、相关API类型/客户端/测试、docs/ux/aichat-mobile-20261007.md；验收：真实挂载jest、tsc、375×812截图、逐项变异；禁止餐饮分支/后端写接口改动；QuickActionCardGrid质检卡意图由A独占。
 
 
 
