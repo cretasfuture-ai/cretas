@@ -153,7 +153,7 @@ public class ReportTrendsTool extends AbstractBusinessTool {
             comparison.put("basePeriodEnd", previous[1].toString());
             comparison.put("currentPeriodStart", current[0].toString());
             comparison.put("currentPeriodEnd", current[1].toString());
-            comparison.put("dataBasis", "production_plans.end_time; SUM(actual_quantity), SUM(actual_material_cost + actual_labor_cost + actual_equipment_cost + actual_other_cost); factoryId=" + factoryId);
+            comparison.put("dataBasis", "按工厂和生产结束时间汇总：实际产量、物料成本、人工成本、设备成本及其他成本；工厂=" + factoryId);
             addUnavailableMessages(comparison, type);
             result.put("comparison", comparison);
         }

@@ -3,8 +3,10 @@ package com.cretas.aims.ai.tool.impl.report;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.ProcessingService;
+import com.cretas.aims.service.impl.ProcessingServiceImpl;
 import com.cretas.aims.service.impl.ReportServiceImpl;
 import com.cretas.aims.service.report.impl.ProductionReportServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,19 +28,27 @@ class ReportTrendsToolContractTest {
     private static final String FACTORY = "F006";
     private final ObjectMapper objectMapper = new ObjectMapper();
     @Mock private ProductionPlanRepository productionPlanRepository;
-    @Mock private ProcessingService processingService;
+    @Mock private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+    @InjectMocks private ProcessingServiceImpl processingService;
     @InjectMocks private ProductionReportServiceImpl productionReportService;
     private ReportTrendsTool tool;
 
     @BeforeEach
     void setUp() throws Exception {
+        var processing = productionReportService.getClass().getDeclaredField("processingService");
+        processing.setAccessible(true); processing.set(productionReportService, processingService);
         var reportService = new ReportServiceImpl(null, null, productionReportService, null, null);
         tool = new ReportTrendsTool();
         var service = ReportTrendsTool.class.getDeclaredField("reportService");
         service.setAccessible(true); service.set(tool, reportService);
         var mapper = com.cretas.aims.ai.tool.AbstractTool.class.getDeclaredField("objectMapper");
         mapper.setAccessible(true); mapper.set(tool, objectMapper);
-        when(processingService.getTrendAnalysis(eq(FACTORY), anyString(), anyInt())).thenReturn(Map.of("trendData", java.util.List.of()));
+        lenient().when(productionBatchRepository.calculateDailyOutput(anyString(), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(BigDecimal.ONE);
+        lenient().when(productionBatchRepository.calculateDailyYieldRate(anyString(), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(new BigDecimal("95"));
+        lenient().when(productionBatchRepository.calculateDailyCost(anyString(), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(new BigDecimal("2"));
     }
 
     @Test
@@ -94,6 +104,18 @@ class ReportTrendsToolContractTest {
                 + " message=" + data.at("/data/comparison/comparison/outputChangeMessage"));
         assertThat(data.at("/data/comparison/comparison/outputChangeRate").isNull()).isTrue();
         assertThat(data.at("/data/comparison/comparison/outputChangeMessage").asText()).isEqualTo("本期无数据，无法计算环比");
+    }
+
+    @Test
+    void provenancePassesRealOutputCostRateAndRejectsFabricatedRate() {
+        var gate = new FactoryNumberProvenance();
+        Map<String, Object> source = Map.of("output", new BigDecimal("12"), "cost", new BigDecimal("110"), "rate", new BigDecimal("20"));
+        var pass = gate.enforce("report-trends", "本期产量12，成本110，环比增长20%。", null, source);
+        var fake = gate.enforce("report-trends", "本期产量12，成本110，环比增长77%。", null, source);
+        System.out.println("OBS provenance pass=" + pass.decision() + " fake=" + fake.decision() + " fakeUnsourced=" + fake.audit().unsourced().size());
+        assertThat(pass.decision()).isEqualTo(FactoryNumberProvenance.Decision.PASS);
+        assertThat(fake.decision()).isEqualTo(FactoryNumberProvenance.Decision.REDACTED);
+        assertThat(fake.audit().unsourced()).hasSize(1);
     }
 
     private JsonNode execute(Map<String, Object> params, Map<String, Object> extra) throws Exception {
