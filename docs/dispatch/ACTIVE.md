@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `CODEX-DEF-E-20261007` — `review` — Owner root — Base `a137c1c140` — 首次/续轮/闸已证，仅卡带码；Java24→24，RN37→39，三变异恢复；archive/2026-10-07-codex-e-quality-direct-intent.json；仅PR。
+
 - `QI-DEFECT-CLOSEOUT-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — A1/A3/A4完成，四项运行时变异已红并恢复；A2显式首次缺参续轮未获全链证据，保留卡配置；root最终选择器；只到PR，不合并部署。
 - `AICHAT-MOBILE-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — PR #954，head 282d58d04a；195测试/tsc/九项变异/手机截图通过；后端追问生成待Owner；只到PR，不合并部署。
 - `AICHAT-INTERACTION-TESTS-20261007` — `review` — Owner root — Base `1b67367c7d` — 独立B5/B6/B7测试已交root且进入PR #954；8测试通过；九项最终变异由root重验；保留scope至合并归档。
@@ -108,6 +110,8 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `CODEX-DEF-E-20261007`：QuickActionCardGrid仅质检卡码/注释及挂载测试、SseStreamingServiceSlotContinuationTest；mvn目标+jest/tsc/变异；禁样式布局/餐饮/后端生产代码。
 
 - `QI-DEFECT-CLOSEOUT-20261007`：QualityDefectRecordTool、缺陷类型词表/追问、必要SSE续轮及对应Java测试、质检首页卡片配置与对应RN测试。验收：Quality*Test,SseStreaming*Test,ToolDispatch*Test,Clarification*Test,FrontlineAiWriteGrant*Test + RN目标jest/tsc；禁止Entity/Repository/迁移/生产写入。
 - `AICHAT-MOBILE-20261007`：RN AIChatScreen、components/ai/**、common/MarkdownRenderer正文样式接口、jest.config精确MD映射、相关API类型/客户端/测试、docs/ux/aichat-mobile-20261007.md；root最终验证；验收真实挂载jest/tsc/375×812截图/变异；禁餐饮/后端写接口；质检卡意图A独占。

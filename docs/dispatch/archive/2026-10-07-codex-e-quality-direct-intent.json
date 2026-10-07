@@ -1,0 +1,27 @@
+{
+  "taskId": "CODEX-DEF-E-20261007",
+  "baseSha": "a137c1c140761baaabc575d578a486ded5c0dfe8",
+  "state": "review",
+  "dependency": "Existing #952, #954 and #955 already in the base; no dependency on D or F",
+  "change": "QuickActionCardGrid quality defect card now sends QUALITY_DEFECT_RECORD with the existing phrase. No backend production change and no style or layout change.",
+  "proof": [
+    "First explicit SSE request reaches WRITE_CONFIRM_REQUIRED; the client's safe preview returns NEED_MORE_INFO and opens the existing #952 collection session.",
+    "When the first utterance supplies defect type and quantity, a batch-only answer resumes the same intent and produces a confirmable preview without a business write.",
+    "The exact card phrase also opens a collection session; missing defect type and quantity are not invented.",
+    "Operator is allowed by the legacy role lookup in the test but still receives the unopened-write denial; no session or confirmation token is minted. Quality inspector is the paired positive control."
+  ],
+  "backendCommand": "mvn -B -Dtest=SseStreamingServiceSlotContinuationTest -Dcretas.testIncludes=com/cretas/aims/service/execution/SseStreamingServiceSlotContinuationTest.java test",
+  "backendBaseline": { "tests": 24, "failures": 0, "errors": 0, "skipped": 0 },
+  "backendBranch": { "tests": 24, "failures": 0, "errors": 0, "skipped": 0 },
+  "frontendCommand": "npx jest src/__tests__/unit/components/QuickActionCardGrid.test.tsx src/__tests__/integration/screens/AIChatScreenWriteConfirm.test.tsx --runInBand --json",
+  "frontendBaseline": { "tests": 39, "passed": 37, "failed": 2 },
+  "frontendBranch": { "tests": 39, "passed": 39, "failed": 0 },
+  "mutations": [
+    { "change": "Bypass ToolDispatchService frontline admission", "observable": "E_MUTANT_ADMISSION_BYPASS=operator; E_OPERATOR_STATUS=WRITE_CONFIRM_REQUIRED", "redAssertion": "explicitQualityCodeForUnopenedOperatorIsRefusedBeforePreviewSessionOrToken expects PERMISSION_DENIED", "failures": 1 },
+    { "change": "Skip #952 session creation for QUALITY_DEFECT_RECORD", "observable": "E_MUTANT_NO_SESSION=QUALITY_DEFECT_RECORD; NEED_MORE_INFO SESSION=null", "redAssertion": "first explicit, exact card phrase and existing quality preview tests require a nonblank session ID", "failures": 3 },
+    { "change": "Remove the card intent code", "observable": "E_DEFECT_CARD_CALL=[登记质检不良] instead of the two-argument phrase/code call", "redAssertion": "Mounted grid callback assertions", "failures": 2 }
+  ],
+  "restoration": "All runtime mutations restored with apply_patch; ToolDispatchService has zero final diff. yarn.lock restored and excluded.",
+  "evidenceDirectory": "D:/Temp/claude/codex-def-evidence/E",
+  "limits": "No merge, deployment, OTA or production AI calls. Shared 10010/3011 processes and the supplied local-e2e directory were not changed. Full production acceptance remains organizer responsibility."
+}
