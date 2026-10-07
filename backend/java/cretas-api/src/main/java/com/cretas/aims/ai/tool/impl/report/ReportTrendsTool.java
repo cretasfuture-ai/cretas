@@ -113,9 +113,11 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         String comparisonType = getString(params, "comparisonType");
         String userInput = firstNonBlank(getString(context, "userInput"), getString(context, "input"),
                 getString(context, "message"));
-        boolean explicitComparison = containsAny(userInput, "同比", "去年同期", "上年同期", "环比", "上期", "上月");
-        boolean dailyOnly = !explicitComparison && containsAny(userInput, "只要每日", "日序列", "每日走势", "每天", "不比较");
-        if (comparisonType == null && containsAny(userInput, "同比", "去年同期", "上年同期")) comparisonType = "YOY";
+        boolean explicitComparison = containsAny(userInput, "同比", "去年同期", "上年同期", "环比", "对比", "比上期");
+        boolean dailyOnly = containsAny(userInput, "不比较", "只要日序列")
+                || (!explicitComparison && containsAny(userInput, "日序列", "每日", "每天", "逐日", "按天"));
+        if (containsAny(userInput, "同比", "去年同期", "上年同期")) comparisonType = "YOY";
+        else if (containsAny(userInput, "环比")) comparisonType = "MOM";
 
         // 调用服务获取趋势分析报表数据
         Map<String, Object> trendsData = reportService.getTrendsDashboard(factoryId, period, metric, days);
@@ -138,13 +140,14 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         if (endDateStr != null) queryConditions.put("endDate", endDateStr);
         result.put("queryConditions", queryConditions);
 
-        if (!dailyOnly && "PRODUCTION".equalsIgnoreCase(metric)) {
+        if (!dailyOnly && Set.of("PRODUCTION", "COST", "ALL").contains(metric.toUpperCase(Locale.ROOT))) {
             String type = comparisonType == null ? "MOM" : comparisonType.toUpperCase(Locale.ROOT);
-            LocalDate[] current = resolvePeriod(period, startDateStr, endDateStr, days);
-            long periodLength = current[1].toEpochDay() - current[0].toEpochDay() + 1;
+            LocalDate[] current = resolvePeriod(period, startDateStr, endDateStr, days, params.containsKey("days") && !params.containsKey("period"));
+            boolean customRange = startDateStr != null || endDateStr != null
+                    || (params.containsKey("days") && !params.containsKey("period"));
             LocalDate[] previous = "YOY".equals(type)
                     ? new LocalDate[]{current[0].minusYears(1), current[1].minusYears(1)}
-                    : new LocalDate[]{current[0].minusMonths(1), current[0].minusMonths(1).plusDays(periodLength - 1)};
+                    : previousPeriod(current, period, customRange);
             Map<String, Object> comparison = reportService.getPeriodComparisonReport(
                     factoryId, previous[0], previous[1], current[0], current[1]);
             comparison.put("comparisonType", type);
@@ -174,18 +177,33 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         return false;
     }
 
-    private LocalDate[] resolvePeriod(String period, String startDateStr, String endDateStr, Integer days) {
-        if (startDateStr != null && endDateStr != null) return new LocalDate[]{LocalDate.parse(startDateStr), LocalDate.parse(endDateStr)};
-        LocalDate end = LocalDate.now();
+    private LocalDate[] resolvePeriod(String period, String startDateStr, String endDateStr, Integer days, boolean customDays) {
+        LocalDate end = endDateStr == null ? LocalDate.now() : LocalDate.parse(endDateStr);
         LocalDate start = switch (period.toLowerCase(Locale.ROOT)) {
             case "today" -> end;
-            case "week" -> end.minusDays(6);
+            case "week" -> end.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
             case "quarter" -> end.with(end.getMonth().firstMonthOfQuarter()).withDayOfMonth(1);
             case "year" -> end.withDayOfYear(1);
             default -> end.withDayOfMonth(1);
         };
-        if ("today".equalsIgnoreCase(period) && days != null && days > 1) start = end.minusDays(days - 1L);
+        if (customDays && days != null && days > 0) start = end.minusDays(days - 1L);
+        if (startDateStr != null) start = LocalDate.parse(startDateStr);
+        if (end.isBefore(start)) throw new IllegalArgumentException("结束日期不能早于开始日期");
         return new LocalDate[]{start, end};
+    }
+
+    private LocalDate[] previousPeriod(LocalDate[] current, String period, boolean customRange) {
+        if (customRange) {
+            long length = java.time.temporal.ChronoUnit.DAYS.between(current[0], current[1]) + 1;
+            return new LocalDate[]{current[0].minusDays(length), current[0].minusDays(1)};
+        }
+        return switch (period.toLowerCase(Locale.ROOT)) {
+            case "today" -> new LocalDate[]{current[0].minusDays(1), current[1].minusDays(1)};
+            case "week" -> new LocalDate[]{current[0].minusWeeks(1), current[1].minusWeeks(1)};
+            case "quarter" -> new LocalDate[]{current[0].minusMonths(3), current[1].minusMonths(3)};
+            case "year" -> new LocalDate[]{current[0].minusYears(1), current[1].minusYears(1)};
+            default -> new LocalDate[]{current[0].minusMonths(1), current[1].minusMonths(1)};
+        };
     }
 
     @SuppressWarnings("unchecked")
@@ -200,6 +218,10 @@ public class ReportTrendsTool extends AbstractBusinessTool {
     }
 
     private String missingMessage(Map<String, Object> base, Map<String, Object> current, String key, String label) {
+        if (base == null || base.get(key) == null
+                || new java.math.BigDecimal(base.get(key).toString()).signum() <= 0) {
+            return "上期无数据，无法计算" + label;
+        }
         if (current == null || current.get(key) == null) return "本期无数据，无法计算" + label;
         return "上期无数据，无法计算" + label;
     }
