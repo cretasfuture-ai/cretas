@@ -146,7 +146,7 @@ public class ReportTrendsTool extends AbstractBusinessTool {
                     ? new LocalDate[]{current[0].minusYears(1), current[1].minusYears(1)}
                     : new LocalDate[]{current[0].minusDays(periodLength), current[0].minusDays(1)};
             Map<String, Object> comparison = reportService.getPeriodComparisonReport(
-                    factoryId, current[0], current[1], previous[0], previous[1]);
+                    factoryId, previous[0], previous[1], current[0], current[1]);
             comparison.put("comparisonType", type);
             comparison.put("comparisonLabel", "YOY".equals(type) ? "同比" : "环比");
             addUnavailableMessages(comparison, type);
