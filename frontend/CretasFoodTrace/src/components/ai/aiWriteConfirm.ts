@@ -433,6 +433,15 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+/**
+ * 确认卡上能显示的键: 有中文标签的英文键, 或者键本身就是中文 (写工具预览大多直接用中文键,
+ * 如「今天的打卡」「剩余数量」)。只隐藏没有标签的英文内部字段。
+ * ⛔ 不能只认 KEY_LABELS: 那样中文键全被藏掉, 确认卡变成空卡, 用户在看不到改动的情况下点确认。
+ */
+function isShowableKey(key: string): boolean {
+  return KEY_LABELS[key] !== undefined || /[\u4e00-\u9fff]/.test(key);
+}
+
 function labelOf(key: string): string {
   return KEY_LABELS[key] ?? key;
 }
@@ -448,7 +457,7 @@ export function previewRows(action: ConfirmableAction | undefined): PreviewRow[]
     const cur = asRecord(action.currentValues) ?? {};
     const keys = Array.from(new Set([...Object.keys(cur), ...Object.keys(next)]));
     return keys
-      .filter((k) => !HIDDEN_KEYS.has(k) && KEY_LABELS[k] !== undefined)
+      .filter((k) => !HIDDEN_KEYS.has(k) && isShowableKey(k))
       .map((k) => {
         const before = formatValue(cur[k]);
         const value = formatValue(next[k]);
@@ -459,7 +468,7 @@ export function previewRows(action: ConfirmableAction | undefined): PreviewRow[]
   if (!root) return [];
   const data = asRecord(root.data) ?? root;
   return Object.entries(data)
-    .filter(([k]) => !HIDDEN_KEYS.has(k) && k !== 'data' && KEY_LABELS[k] !== undefined)
+    .filter(([k]) => !HIDDEN_KEYS.has(k) && k !== 'data' && isShowableKey(k))
     .map(([k, v]) => ({ key: k, label: labelOf(k), value: formatValue(v) }));
 }
 

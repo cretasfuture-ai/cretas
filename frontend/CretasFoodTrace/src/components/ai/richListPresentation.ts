@@ -8,7 +8,7 @@ export function getListDisplayKeys(row: Record<string, unknown>): string[] {
   }
   return Object.keys(row)
     .filter(key => !key.endsWith('Id') && key !== 'id' && key !== 'factoryId' &&
-      (row[key] === null || typeof row[key] !== 'object') && COLUMN_NAMES[key] !== undefined)
+      (row[key] === null || typeof row[key] !== 'object') && (COLUMN_NAMES[key] !== undefined || isChineseKey(key)))
     .slice(0, 5);
 }
 
@@ -78,7 +78,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** 没有中文标签时的兜底 (列表表头 / 统计卡仍在用; 详情卡不走这里, 见 buildDetailRows)。 */
 export function formatColumnName(key: string): string {
-  return COLUMN_NAMES[key] || '';
+  return COLUMN_NAMES[key] || (isChineseKey(key) ? key : '');
+}
+
+/** 键本身就是中文 (后端已给人话标签) ⇒ 原样显示; 只隐藏没有中文标签的英文内部字段。 */
+export function isChineseKey(key: string): boolean {
+  return /[\u4e00-\u9fff]/.test(key);
 }
 
 export function formatDisplayValue(value: unknown, key?: string): string {
@@ -123,7 +128,7 @@ function isCodeKey(key: string): boolean {
 export function buildDetailRows(detail: Record<string, unknown>): DetailRow[] {
   const entries = Object.entries(detail).filter(([key, value]) =>
     value !== undefined && (value === null || typeof value !== 'object')
-    && key !== 'factoryId' && key !== 'message' && !isInternalId(key, value) && COLUMN_NAMES[key] !== undefined);
+    && key !== 'factoryId' && key !== 'message' && !isInternalId(key, value) && (COLUMN_NAMES[key] !== undefined || isChineseKey(key)));
 
   const hasDisplayName = detail.statusDisplayName != null && String(detail.statusDisplayName).trim() !== '';
   const unitKey = UNIT_KEYS.find(k => typeof detail[k] === 'string' && String(detail[k]).trim() !== '');

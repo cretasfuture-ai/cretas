@@ -163,6 +163,18 @@ describe('previewRows', () => {
     const rows = previewRows({ ...ACTION, newValues: {}, previewData: { success: true, data: { sampleCode: 'S-1', canDo: true } } });
     expect(rows).toEqual([]);
   });
+  it('写工具预览用中文键 (打卡 / 领用 / 质检的 currentValues/newValues): 确认卡必须显示这些行, 不能是空卡', () => {
+    // 2026-10-07 organizer 审 #954: 只认 KEY_LABELS 会把中文键全藏掉, 用户在看不到改动的情况下点确认。
+    const rows = previewRows({
+      ...ACTION,
+      currentValues: { 今天的打卡: '还没有上班打卡', internalFooId: 'x-1' },
+      newValues: { 今天的打卡: '上班 14:46', 考勤记为: '迟到', internalFooId: 'x-2' },
+    });
+    expect(rows.map((r) => r.key)).toEqual(['今天的打卡', '考勤记为']);
+    expect(rows[0]).toEqual(expect.objectContaining({ label: '今天的打卡', before: '还没有上班打卡', value: '上班 14:46', changed: true }));
+    // 对照: 没有中文标签的英文内部字段照样隐藏
+    expect(rows.find((r) => r.key === 'internalFooId')).toBeUndefined();
+  });
 });
 
 describe('buildConfirmationProof', () => {
