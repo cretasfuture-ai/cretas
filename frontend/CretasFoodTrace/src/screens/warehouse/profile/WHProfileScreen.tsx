@@ -11,7 +11,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Platform,
 } from "react-native";
 import {
   Text,
@@ -224,12 +223,7 @@ export function WHProfileScreen() {
       : `@${user?.username ?? ''}（${userInfo.role}）`;
     const confirmMessage = `确定退出 ${accountLabel} 吗？`;
 
-    if (Platform.OS === 'web') {
-      if (window.confirm(confirmMessage)) {
-        logout();
-      }
-      return;
-    }
+    // 单一路径: web 与原生都走 appAlert (RN <Modal>); 不再在 web 用 window.confirm —— 内置浏览器 / iframe 里它被静默吞掉
     appAlert(t('profile.dialogs.logoutTitle'), confirmMessage, [
       { text: t('profile.dialogs.cancel'), style: "cancel" },
       {

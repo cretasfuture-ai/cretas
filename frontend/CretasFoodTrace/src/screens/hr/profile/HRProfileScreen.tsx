@@ -7,8 +7,9 @@
 
 import React, { useState, useCallback } from 'react';
 import {
-  View, ScrollView, StyleSheet, TouchableOpacity, Alert, Platform,
+  View, ScrollView, StyleSheet, TouchableOpacity, Alert,
 } from 'react-native';
+import { appAlert } from '../../../components/ui/AppDialog';
 import { Text, Card, Avatar, Divider, ActivityIndicator } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect, CommonActions } from '@react-navigation/native';
@@ -43,20 +44,8 @@ export default function HRProfileScreen() {
   };
 
   const handleLogout = async () => {
-    if (Platform.OS === 'web') {
-      if (window.confirm(t('profile.logoutMessage'))) {
-        setLoading(true);
-        try {
-          await logout();
-        } catch (error) {
-          console.error('退出失败:', error);
-        } finally {
-          setLoading(false);
-        }
-      }
-      return;
-    }
-    Alert.alert(t('profile.logoutConfirm'), t('profile.logoutMessage'), [
+    // 单一路径: web 与原生都走 appAlert (RN <Modal>); Alert.alert 在 Expo Web 是 no-op, window.confirm 在内置浏览器里被吞
+    appAlert(t('profile.logoutConfirm'), t('profile.logoutMessage'), [
       { text: t('profile.cancel'), style: 'cancel' },
       { text: t('profile.confirm'), style: 'destructive', onPress: async () => {
         setLoading(true);

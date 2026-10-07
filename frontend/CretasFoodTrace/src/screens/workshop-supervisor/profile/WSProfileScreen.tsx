@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Icon } from "react-native-paper";
+import { appAlert } from "../../../components/ui/AppDialog";
 import { useTranslation } from "react-i18next";
 import * as Application from 'expo-application';
 import { WSProfileStackParamList } from "../../../types/navigation";
@@ -65,7 +66,7 @@ export function WSProfileScreen() {
     const accountLabel = displayName
       ? `${displayName}（${roleName}）`
       : `@${user?.username ?? ''}（${roleName}）`;
-    Alert.alert(
+    appAlert(
       t('profile.menu.logout'),
       `确定退出 ${accountLabel} 吗？`,
       [
