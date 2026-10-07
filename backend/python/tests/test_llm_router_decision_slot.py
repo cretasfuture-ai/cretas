@@ -36,7 +36,13 @@ def test_decision_pool_rejects_an_unverified_pair(monkeypatch):
 
 def test_decision_has_no_text_floor():
     assert SLOT.DECISION in llm_router._NO_TEXT_TAIL_SLOTS
-    assert ("zhipu", "glm-4.5-air") not in llm_router.SLOT_MODELS[SLOT.DECISION]
+    # 2026-10-07: 原断言「zhipu 不在 DECISION 链上」—— zhipu 出局后它恒真。
+    #    改成直接比: 链 == 登记表筛出的池, 一条都没被追加(文本地板的成员
+    #    aliyun_*_vl qwen3.8-flash 有两条同时在池里, 所以不能只看「地板成员在不在」)。
+    expected = [p for p in llm_router._LOGPROB_ORDER if p in llm_router._LOGPROB_VERIFIED]
+    assert llm_router.SLOT_MODELS[SLOT.DECISION] == expected
+    assert ("aliyun_b_vl", "qwen3.8-flash") not in llm_router.SLOT_MODELS[SLOT.DECISION], (
+        "文本地板里不在 logprob 登记表的那条被追加进来了")
 
 
 def test_empty_content_is_not_invalid_for_decision_but_is_for_mapper():

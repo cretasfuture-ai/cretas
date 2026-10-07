@@ -166,10 +166,11 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
         f"MAPPER 链头 {chain[0]} 是实测不达标的模型 —— 每次调用都先撞一跳"
     )
     # 🔴 2026-08-15: 原来点名 ("tencent","minimax-m2.7") 当地板 —— 账号收敛后
-    #    地板是 zhipu。守的是「链尾有个非 aistore 的地板」这个**性质**。
-    assert any(a == "zhipu" for a, _m in chain), (
-        f"MAPPER 链尾没有非 aistore 的地板: {chain}")
-    assert ("zhipu", "glm-4.5-air") in chain
+    #    地板是 zhipu。守的是「链尾有个地板」这个**性质**。
+    # 🔴 2026-10-07: zhipu 也出局了(Steve:「后备只留我们自己的阿里云账号」)。
+    #    性质不变, 只是不再点名: 链非空且链尾是 `_TEXT_TAIL` 的成员。
+    assert chain, "MAPPER 是空链"
+    assert chain[-1] in llm_router._TEXT_TAIL, f"MAPPER 链尾不是文本地板: {chain}"
     pool = llm_router._SLOT_POOLS[SLOT.MAPPER]      # pool only — floor excluded
     assert all(model not in llm_router._THINKING_ONLY for _a, model in pool)
     assert all(model not in llm_router._SLOW_MODELS for _a, model in pool)
@@ -204,42 +205,25 @@ def test_insights_and_review_share_the_quality_tier_pool():
     )
 
 
-def test_review_still_reaches_a_non_aliyun_floor_after_aliyun_exhausts():
-    """2026-08-09 rewrite inverts the old head-of-chain guarantee: expiry-first
-    ordering means REVIEW now LEADS with the earliest-expiring aliyun pairs
-    (from _QUALITY_TIER_POOL, real dates) and the non-aliyun floor sits at the
-    structural tail (_TEXT_TAIL entries have expiry=None -> _FAR_FUTURE, which
-    always sorts last). That reversal is the whole point of the rewrite (use
-    the expiring grants before they're wasted) — what must still hold is that
-    the non-aliyun floor is reachable at all, and strictly after every aliyun
-    entry, once aliyun is exhausted.
+def test_review_fallback_is_our_aliyun_accounts_only_and_spans_several_quotas():
+    """🔴 2026-10-07 需求反转(形态 C‴), ⛔ 不是「断言改松了」。
+
+    原版 `test_review_still_reaches_a_non_aliyun_floor_after_aliyun_exhausts` 要求
+    REVIEW 链上**必须有**非阿里云地板(当时是 zhipu)。Steve 10-07 复审裁定正相反:
+    「清掉死通道, 大模型后备只留我们自己的阿里云账号」—— 那条断言守的是已经不想要的
+    旧行为, 红得理直气壮, 修回去就是把死通道请回来。
+
+    它背后真正的风险(「一家出事整槽清空」)仍然存在, 换一种表达守住:
+      ① 链非空, 且只含我们自己的阿里云逻辑账号;
+      ② 跨 ≥2 个账号 —— 免费额度**按账号**算, 一个账号 403 之后切下一个拿到的是
+         另一份额度(同 VL 三账号轮转的理由)。
     """
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
-    non_aliyun = [(a, m) for a, m in chain if a not in llm_router._ALIYUN_ACCOUNTS]
-    assert non_aliyun, "REVIEW has no non-aliyun floor at all"
-    aliyun_idx = [i for i, (a, _m) in enumerate(chain)
-                  if a in llm_router._ALIYUN_ACCOUNTS]
-    if not aliyun_idx:
-        # 🔴 2026-08-13: REVIEW 链里**一个 aliyun 条目都没有**了。当天 aliyun 三个
-        #    账号仅存 4 类模型有额度, 其中 qwen3.5-ocr 是 OCR SKU(实测对业务问句
-        #    只复读三个字), 另外三个都是 _THINKING_ONLY —— 没有一个满足质量档的
-        #    「关思考 ≤4s 通用文本」。本条要守的是「非 aliyun 地板可达」, 那一半
-        #    仍然有效且已在上面断过; 「严格排在 aliyun 之后」在没有 aliyun 时空真。
-        #    ⚠️ 不把它写成 pass 掉的绿灯 —— 留下这段, 等 aliyun 有额度回来时它会
-        #       自动重新开始守那一半。
-        return
-    last_aliyun_idx = max(aliyun_idx)
-    # 2026-09-15: aliyun 三个 VL 账号被放进 _TEXT_TAIL 当文本地板(到期日 None), 于是
-    # 「aliyun 条目」不再等于「有到期日的 grant」—— 带日期的非 aliyun 头(aistore/deepseek)
-    # 会排在它们前面, 那是排序规则的正确结果, 不是漂移。这里守的不变量收窄成本意:
-    # 钉死在最后一位的非 aliyun 地板(zhipu, 见 _TEXT_TAIL 注释)必须仍在**所有** aliyun 之后。
-    tail_floor = llm_router._TEXT_TAIL[-1]
-    assert tail_floor[0] not in llm_router._ALIYUN_ACCOUNTS, "结构地板必须是非 aliyun"
-    assert tail_floor in chain, f"REVIEW 链丢了结构地板 {tail_floor}"
-    assert chain.index(tail_floor) > last_aliyun_idx, (
-        "structural non-aliyun floor precedes an aliyun pair -- floor should be the "
-        "structural tail (None expiry -> _FAR_FUTURE)"
-    )
+    assert chain, "REVIEW 是空链"
+    ours = {"aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl"}
+    foreign = [(a, m) for a, m in chain if a not in ours]
+    assert not foreign, f"REVIEW 链上出现了非阿里云后备: {foreign}"
+    assert len({a for a, _m in chain}) >= 2, f"REVIEW 只靠一个账号的额度: {chain}"
 
 
 def test_no_slot_keeps_an_aliyun_grant_expired_by_august_3():
@@ -537,15 +521,20 @@ def test_refuse_rejects_unregistered_landmine():
     assert llm_router._refuse_reason("aliyun_b", "glm-5.2", _TODAY) == "not_allowlisted"
 
 
-def test_refuse_hard_drops_expired():
+def test_refuse_hard_drops_expired(monkeypatch):
     # ⛔ 同样不写死模型名(见 test_llm_router_budget 里那段): 写死的那个一旦被探针
     #    淘汰, 本条会红在 not_allowlisted —— 那是「测试引用了不存在的模型」,
-    #    不是「过期拒绝坏了」, 而两者长得一模一样。取注册表里到期最早的那条。
-    dated = [(exp, pair) for pair, exp in llm_router._SAFE_MODELS.items() if exp]
-    assert dated, "注册表里没有任何带到期日的条目, 本用例无法构造"
-    earliest_exp, pair = min(dated)
-    after = earliest_exp + datetime.timedelta(days=1)
-    assert llm_router._refuse_reason(pair[0], pair[1], after) == "expired"
+    #    不是「过期拒绝坏了」, 而两者长得一模一样。
+    # 🔴 2026-10-07: 注册表里**已经没有任何带到期日的条目**(带日期的 aistore /
+    #    deepseek 随账号出局, 剩下 8 条都是 None)。原来「取到期最早的那条」当场失去
+    #    对象 —— ⇒ 构造一条合成的带日期条目, ⛔ 不依赖生产表碰巧有一条。
+    expiry = _TODAY + datetime.timedelta(days=5)
+    ghost = ("aliyun_c_vl", "__dated-ghost__")
+    monkeypatch.setitem(llm_router._SAFE_MODELS, ghost, expiry)
+    assert llm_router._refuse_reason(*ghost, expiry + datetime.timedelta(days=1)) == "expired"
+    assert llm_router._refuse_reason(*ghost, expiry) == "expired"          # 当天即拒(>=)
+    # 阴性对照: 到期前一天放行 —— 否则上面可能只是「一律拒」
+    assert llm_router._refuse_reason(*ghost, expiry - datetime.timedelta(days=1)) is None
 
 
 def test_refuse_denylist_veto():
@@ -805,10 +794,14 @@ def _patch_keys(monkeypatch):
     2026-08-15 收敛账号(aistore/deepseek/zhipu)时这批用例集体变红, 而红的原因
     (`not_allowlisted`)与被测行为**毫无关系** —— 很容易被读成「我这次改坏了什么」。
     ⇒ 换账号时只需改这里和 `_CHAT_SMOKE_CHAIN`, ⛔ 不要去改各用例的断言。
+
+    🔴 2026-10-07: aistore/deepseek/zhipu 清出注册表, 第二次整批换成在册的阿里云
+       三个逻辑账号。`_ScriptedClient` 按 key 子串认账号, 夹具名是 aliyun_c/a/b
+       (不带 `_vl`) —— 所以各用例的 by_account 键与 call_log 用的是夹具名。
     """
-    monkeypatch.setenv("LLM_AISTORE_API_KEY", "key_aistore_fake")
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "key_deepseek_fake")
-    monkeypatch.setenv("LLM_ZHIPU_API_KEY", "key_zhipu_fake")
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
+    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
 
 
 # 2026-08-09: the real SLOT_MODELS[SLOT.CHAT] head (qwen3.7-flash* on b/c) was
@@ -822,8 +815,11 @@ def _patch_keys(monkeypatch):
 # 📌 判据: **夹具里的模型名也是会过期的数据。** 它不像 golden 那样有闸盯着,
 #    坏了的表现是一整批用例集体报同一个与被测行为无关的错(not_allowlisted),
 #    很容易被读成"我这次改坏了什么"。
-_CHAT_SMOKE_CHAIN = [("aistore", "DeepSeek-V4-Flash-A"),
-                     ("deepseek", "deepseek-v4-flash")]
+_CHAT_SMOKE_CHAIN = [("aliyun_c_vl", "qwen3.8-flash"),
+                     ("aliyun_a_vl", "qwen3.8-flash")]
+#: `_ScriptedClient` 记下的名字(按 key 子串认, 不带 `_vl`), 与上面一一对应。
+_CHAT_SMOKE_CALL_LOG = [("aliyun_c", "qwen3.8-flash"),
+                        ("aliyun_a", "qwen3.8-flash")]
 
 
 @pytest.mark.asyncio
@@ -851,13 +847,13 @@ async def test_call_chain_falls_through_403_to_next(monkeypatch):
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     ok = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
-        "aistore": _fake_response(403, "AllocationQuota.FreeTierOnly"),
-        "deepseek": _fake_response(200, json_payload=ok),
+        "aliyun_c": _fake_response(403, "AllocationQuota.FreeTierOnly"),
+        "aliyun_a": _fake_response(200, json_payload=ok),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
     assert result == ok
-    assert client.call_log == _CHAT_SMOKE_CHAIN
+    assert client.call_log == _CHAT_SMOKE_CALL_LOG
 
 
 @pytest.mark.asyncio
@@ -875,21 +871,17 @@ async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
     _patch_keys(monkeypatch)
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
     # ⚠️ 这两个账号是**任意的** —— 测的是 SetLimitExceeded 的缓存行为, 与是
-    #    哪家 provider 无关。2026-08-15 收敛账号时换成保留的两家。
-    first_account, first_model = "aistore", "DeepSeek-V4-Flash-A"
-    second_account, second_model = "zhipu", "glm-4.5-air"
-    monkeypatch.setitem(
-        llm_router.SLOT_MODELS,
-        SLOT.CHAT,
-        [(first_account, first_model), (second_account, second_model)],
-    )
+    #    哪家 provider 无关。2026-08-15 收敛账号时换成保留的两家;
+    #    2026-10-07 再换成在册的阿里云两个逻辑账号。
+    (first_account, first_model), (second_account, second_model) = _CHAT_SMOKE_CHAIN
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, list(_CHAT_SMOKE_CHAIN))
     good = {"choices": [{"message": {"content": "餐饮经营数据已完成分析。"}}]}
     client = _ScriptedClient({
-        first_account: _fake_response(
+        _CHAT_SMOKE_CALL_LOG[0][0]: _fake_response(
             429,
             '{"error":{"code":"SetLimitExceeded","message":"model service has been paused"}}',
         ),
-        second_account: _fake_response(200, json_payload=good),
+        _CHAT_SMOKE_CALL_LOG[1][0]: _fake_response(200, json_payload=good),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
 
@@ -899,7 +891,7 @@ async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
     )
 
     assert result == good
-    assert client.call_log == [(first_account, first_model), (second_account, second_model)]
+    assert client.call_log == _CHAT_SMOKE_CALL_LOG
     assert llm_router._quota_should_skip(f"{first_account}/{first_model}") is True
 
 
@@ -911,8 +903,8 @@ async def test_call_chain_rejects_empty_body_and_falls_back(monkeypatch):
     empty = {"choices": [{"message": {"content": ""}}]}
     good = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
-        "aistore": _fake_response(200, json_payload=empty),   # 200 but garbage
-        "deepseek": _fake_response(200, json_payload=good),
+        "aliyun_c": _fake_response(200, json_payload=empty),   # 200 but garbage
+        "aliyun_a": _fake_response(200, json_payload=good),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
@@ -941,10 +933,11 @@ async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypa
         #    individually times out instead (verified empirically); 4 candidates
         #    … reliably trips the explicit branch」。
         #    本地凑巧绿(时序), **CI 红** —— 注释我读了, 没照做。
-        # ⚠️ 这里用两条 aistore 只是为了凑够条数; 本用例测的是**预算耗尽的分支**,
+        # ⚠️ 这里挑哪四条只是为了凑够条数; 本用例测的是**预算耗尽的分支**,
         #    与是哪几个模型无关(_SlowClient 对所有请求一律 sleep)。
-        [("aistore", "DeepSeek-V4-Flash-A"), ("aistore", "Qwen3-235B-A22B"),
-         ("deepseek", "deepseek-v4-flash"), ("zhipu", "glm-4.5-air")],
+        #    2026-10-07: 换成在册且无需额外开关的四条阿里云条目(原 aistore/deepseek/zhipu 已出局)。
+        [("aliyun_c_vl", "qwen3.8-flash"), ("aliyun_a_vl", "qwen3.8-flash"),
+         ("aliyun_b_vl", "qwen3.8-flash"), ("aliyun_a_vl", "qwen3.7-flash")],
     )
 
     class _SlowClient(_ScriptedClient):
@@ -1121,8 +1114,8 @@ async def test_call_chain_content_validator_rejects_a_200_and_falls_through(monk
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     good = {"choices": [{"message": {"content": '{"intent":"X","confidence":0.95}'}}]}
     client = _ScriptedClient({
-        "aistore": _fake_response(200, json_payload=pill),
-        "deepseek": _fake_response(200, json_payload=good),
+        "aliyun_c": _fake_response(200, json_payload=pill),
+        "aliyun_a": _fake_response(200, json_payload=good),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
 
@@ -1151,7 +1144,7 @@ async def test_call_chain_without_a_content_validator_keeps_the_first_200(monkey
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     client = _ScriptedClient({
-        "aistore": _fake_response(200, json_payload=pill),
+        "aliyun_c": _fake_response(200, json_payload=pill),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
@@ -1168,8 +1161,8 @@ async def test_a_raising_content_validator_does_not_kill_the_request(monkeypatch
     first = {"choices": [{"message": {"content": "text one"}}]}
     second = {"choices": [{"message": {"content": "text two"}}]}
     client = _ScriptedClient({
-        "aistore": _fake_response(200, json_payload=first),
-        "deepseek": _fake_response(200, json_payload=second),
+        "aliyun_c": _fake_response(200, json_payload=first),
+        "aliyun_a": _fake_response(200, json_payload=second),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     calls = {"n": 0}
@@ -1398,16 +1391,25 @@ def test_the_deleted_accounts_are_really_gone():
     """
     import inspect
     src = inspect.getsource(llm_router._provider_config)
+    # 2026-10-07: aistore / deepseek / zhipu 加入名单(Steve 复审裁定「清掉死通道,
+    # 大模型后备只留我们自己的阿里云账号」)。
     for account in ("aliyun_a", "aliyun_b", "aliyun_c", "aliyun_a_deepseek",
-                    "tencent", "ark"):
+                    "tencent", "ark", "aistore", "deepseek", "zhipu"):
         assert f'"{account}": (' not in src, (
             f"{account} 又出现在 _provider_config 里 —— "
-            "2026-08-15 owner 裁定收敛到 aistore/deepseek/zhipu 三家")
+            "2026-10-07 起只留 aliyun_c_vl / aliyun_a_vl / aliyun_b_vl")
         assert not any(a == account for a, _m in llm_router._SAFE_MODELS), (
             f"{account} 又出现在 _SAFE_MODELS 里")
+        assert not any(a == account for a, _m in llm_router._MINIMAL_SAFE_SET), (
+            f"{account} 又出现在 _MINIMAL_SAFE_SET 里")
+    # 阳性对照: 同一个判据对在册账号必须「找得到」, 否则上面的「找不到」可能只是
+    # 源码取错了函数。
+    assert '"aliyun_c_vl": (' in src
     # ⛔ 机制**必须还在**(裁定: 删条目不删机制) —— 它们是加回来时的另一半
     for sym in ("_TOKENHUB_ENABLE_THINKING_MODELS", "_TOKENHUB_THINKING_OBJECT_MODELS",
-                "_ARK_DISABLE_THINKING", "_THINKING_ONLY", "_REASONING_ONLY"):
+                "_ARK_DISABLE_THINKING", "_THINKING_ONLY", "_REASONING_ONLY",
+                "_AISTORE_THINKING_OBJECT_MODELS", "_DEEPSEEK_THINKING_OBJECT_MODELS",
+                "_ZHIPU_THINKING_OBJECT_MODELS", "_ABSOLUTE_LAST"):
         assert hasattr(llm_router, sym), (
             f"{sym} 被一起删了 —— #580 删 deepseek 时就是这样, "
             "加回来才发现少了 thinking 注入那一半")
@@ -1425,3 +1427,123 @@ def test_vl_accounts_actually_receive_enable_thinking_false():
             f"VL {account}/{model}: enable_thinking 没有下发 (得到 {p.get('enable_thinking')!r})"
             " —— 账号不在 _ALIYUN_ACCOUNTS 里, 模型会默认开思考"
         )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 2026-10-07: 「没有后备」的明确行为
+#
+# aistore / deepseek / zhipu 清出之后, 文本槽只剩阿里云三个账号轮转 qwen3.8-flash。
+# 三个都不可用时必须**明确失败**: 抛 LLMChainExhausted、逐条说清每一跳为什么不行,
+# ⛔ 不返回空结构、不静默降级。每条「失败」断言都配一条同形的「成功」对照。
+# ════════════════════════════════════════════════════════════════════════
+
+_PRODUCT_TEXT_CHAIN = [("aliyun_c_vl", "qwen3.8-flash"),
+                       ("aliyun_a_vl", "qwen3.8-flash"),
+                       ("aliyun_b_vl", "qwen3.8-flash")]
+
+
+@pytest.fixture
+def _isolated_quota_state(monkeypatch, tmp_path):
+    """403 会把 quota-skip 落盘到系统临时目录 —— 换成本用例自己的文件, 不污染本机。"""
+    monkeypatch.setattr(llm_router, "_QUOTA_STATE_PATH", str(tmp_path / "quota.json"))
+
+
+@pytest.mark.asyncio
+async def test_all_aliyun_channels_down_is_an_explicit_exhaustion(monkeypatch, _isolated_quota_state):
+    """被测的链就是**产品链本身**(SLOT_MODELS[CHAT]), ⛔ 不是测试里新编的一条。
+
+    主读数: 三个账号都 403 ⇒ LLMChainExhausted, 消息里三跳**逐条**带原因。
+    必然读数: 三个账号**都真的被试过**(call_log 长度 3) —— 否则「抛错」可能只是
+    循环没跑。
+    """
+    _patch_keys(monkeypatch)
+    assert llm_router.SLOT_MODELS[SLOT.CHAT] == _PRODUCT_TEXT_CHAIN, (
+        "CHAT 产品链变了 —— 本用例的前提要跟着重看")
+    quota = _fake_response(403, "AllocationQuota.FreeTierOnly")
+    client = _ScriptedClient({"aliyun_c": quota, "aliyun_a": quota, "aliyun_b": quota})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    with pytest.raises(llm_router.LLMChainExhausted) as ei:
+        await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert [a for a, _m in client.call_log] == ["aliyun_c", "aliyun_a", "aliyun_b"]
+    assert ei.value.slot == "chat"
+    for account, model in _PRODUCT_TEXT_CHAIN:
+        assert f"{account}/{model}: quota 403" in ei.value.errors, (
+            f"{account} 那一跳的原因没进错误消息: {ei.value.errors}")
+    assert isinstance(ei.value, RuntimeError), "老调用方的 except RuntimeError 必须还接得住"
+
+
+@pytest.mark.asyncio
+async def test_one_aliyun_channel_alive_is_selected(monkeypatch, _isolated_quota_state):
+    """阳性对照(与上一条同形): 只有最后一个账号活着时, 链走到它并返回它的答案。"""
+    _patch_keys(monkeypatch)
+    quota = _fake_response(403, "AllocationQuota.FreeTierOnly")
+    ok = {"choices": [{"message": {"content": "阿里云 b 账号接住了。"}}]}
+    client = _ScriptedClient({"aliyun_c": quota, "aliyun_a": quota,
+                              "aliyun_b": _fake_response(200, json_payload=ok)})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert result == ok
+    assert [a for a, _m in client.call_log] == ["aliyun_c", "aliyun_a", "aliyun_b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["empty_slot", "filter_matches_nothing"])
+async def test_no_candidate_at_all_fails_explicitly_without_calling_anyone(monkeypatch, how):
+    """链在**发请求之前**就是空的: 槽池被清空, 或调用方还拿着已删账号做过滤
+    (scripts/corpus_judge.py 的 ["zhipu"] 今天就是这样)。
+
+    🔴 原行为: 抛 `All providers exhausted for chat: ` —— 冒号后面**什么都没有**。
+    现在: 抛 LLMChainExhausted 且原因里写明 no_candidates 与是哪一种空。
+    """
+    _patch_keys(monkeypatch)
+    client = _ScriptedClient({})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    payload = {"messages": [{"role": "user", "content": "hi"}]}
+    if how == "empty_slot":
+        monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, [])
+        kwargs = {}
+        expect = "chain is empty"
+    else:
+        kwargs = {"chain": ["zhipu"]}
+        expect = "matches nothing"
+
+    with pytest.raises(llm_router.LLMChainExhausted) as ei:
+        await call_chain(SLOT.CHAT, payload, **kwargs)
+    msg = str(ei.value)
+    assert "no_candidates" in msg and expect in msg, msg
+    assert msg.rstrip().endswith(":") is False, f"原因又空了: {msg!r}"
+    assert client.call_log == [], f"没有候选却发出了请求: {client.call_log}"
+
+
+@pytest.mark.asyncio
+async def test_no_candidate_stream_also_fails_explicitly(monkeypatch):
+    """流式路径同一条纪律: 过滤器一个都没匹配上 ⇒ 带 no_candidates 的 RuntimeError。"""
+    _patch_keys(monkeypatch)
+    with pytest.raises(RuntimeError) as ei:
+        async for _ev in llm_router.call_chain_stream(
+                SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]},
+                chain=["deepseek"]):
+            pass
+    assert "no_candidates" in str(ei.value), str(ei.value)
+
+
+def test_entry_precheck_reports_an_empty_chain_as_unusable(monkeypatch):
+    """`slot_has_usable_provider`(餐饮入口的容量预检)对空链必须说「不可用」。
+
+    🔴 原行为: 空链时 configured==0, 落进「一个 key 都没配 = 配置问题, 放行」的豁免,
+       返回 True —— 一个结构上没有任何后备的槽在入口显示为健康。
+    对照 ①: 同一个槽、产品链、配了 key ⇒ True。
+    对照 ②: 产品链、一个 key 都没配 ⇒ 仍是 True(那条豁免本身不许被这次改动带坏)。
+    """
+    _patch_keys(monkeypatch)
+    assert llm_router.slot_has_usable_provider(SLOT.REVIEW) is True        # 对照 ①
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.REVIEW, [])
+    assert llm_router.slot_has_usable_provider(SLOT.REVIEW) is False       # 主读数
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.REVIEW, list(_PRODUCT_TEXT_CHAIN))
+    for env in ("LLM_ALIYUN_C_API_KEY", "LLM_ALIYUN_A_API_KEY", "LLM_ALIYUN_B_API_KEY"):
+        monkeypatch.setenv(env, "")
+    assert llm_router.slot_has_usable_provider(SLOT.REVIEW) is True        # 对照 ②

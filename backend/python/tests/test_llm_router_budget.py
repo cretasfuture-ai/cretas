@@ -35,12 +35,13 @@ class _GoodResponse:
 
 @pytest.mark.asyncio
 async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypatch):
-    # ⚠️ 账号是**任意的**(见下), 所以三家的 key 都设上 —— 只设某一家的话,
+    # ⚠️ 账号是**任意的**(见下), 所以在册各家的 key 都设上 —— 只设某一家的话,
     #    下面挑中别家时会因为空 key 被 `if not api_key: continue` **静默跳过**,
     #    报错是「All providers exhausted」而不是「key 没设」。
-    monkeypatch.setenv("LLM_AISTORE_API_KEY", "key_aistore_fake")
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "key_deepseek_fake")
-    monkeypatch.setenv("LLM_ZHIPU_API_KEY", "key_zhipu_fake")
+    # 2026-10-07: aistore/deepseek/zhipu 清出注册表, 在册的只剩阿里云三个逻辑账号。
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
+    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
     monkeypatch.setattr(
         llm_router,
         "_today",
@@ -53,11 +54,17 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     #    从注册表现取两个同账号的条目, 淘汰谁都不影响。
     # 🔴 2026-08-15: 原来写死 aliyun_c —— 账号收敛后它不存在了。
     #    本用例只需要「同一账号上的两个条目」, 是哪家无关 ⇒ 从注册表现挑。
+    # 🔴 2026-10-07: 只挑 `_refuse_reason` 放行的条目。清理后排第一的账号是
+    #    aliyun_a_vl, 它的前两条(deepseek-v4.1-flash / kimi-k3)需要仓库专用开关,
+    #    不挑掉的话本用例会红在 warehouse_*_not_enabled —— 与预算行为无关。
     from collections import Counter
-    _by_acct = Counter(a for a, _m in llm_router._SAFE_MODELS)
+    _day = datetime.date(2026, 8, 9)
+    _callable = [p for p in llm_router._SAFE_MODELS
+                 if llm_router._refuse_reason(*p, _day) is None]
+    _by_acct = Counter(a for a, _m in _callable)
     _acct = next((a for a, n in sorted(_by_acct.items()) if n >= 2), None)
-    assert _acct, f"没有任何账号有 2 个以上条目, 无法构造本用例: {dict(_by_acct)}"
-    c_pairs = sorted(p for p in llm_router._SAFE_MODELS if p[0] == _acct)
+    assert _acct, f"没有任何账号有 2 个以上可调条目, 无法构造本用例: {dict(_by_acct)}"
+    c_pairs = sorted(p for p in _callable if p[0] == _acct)
     slow_head, healthy = c_pairs[0], c_pairs[1]
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.MAPPER, [slow_head, healthy])
     good = {"choices": [{"message": {"content": '{"intent":"ok"}'}}]}

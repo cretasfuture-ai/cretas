@@ -32,6 +32,12 @@
 ⚠️ 而这条断言本身**仍然要留着** —— 它守的是「空 key 不许静默」这个性质，
    ⛔ 与「今天空不空」无关；哪天再被清空，它还得响。
 
+## 🔧 主语换了（2026-10-07）
+
+deepseek 通道整体清出（Steve 复审裁定「大模型后备只留我们自己的阿里云账号」）——
+`_provider_config("deepseek")` 不再存在，拿它测只会落进 no_candidates，量的就不是
+「空 key」这一支了。⇒ 性质不变，主语换成在册的 `aliyun_c_vl`（`LLM_ALIYUN_C_API_KEY`）。
+
 ## 三条断言
 
 1. 空 key ⇒ `errors` 里出现 `empty_api_key`（异常消息里看得见）
@@ -53,10 +59,19 @@ import common.llm_router as R
 @pytest.fixture(autouse=True)
 def _reset_warned():
     """⚠️ 「只喊一次」是**进程级**状态 —— 每条用例前必须清，
-    否则前一条用例喊过之后，后一条永远看不到 warning（假绿）。"""
+    否则前一条用例喊过之后，后一条永远看不到 warning（假绿）。
+
+    2026-10-07: 阳性对照现在打在**产品链链头** aliyun_c_vl 上，连不上会记一次熔断
+    失败 —— 进程级状态，不清会漏到别的测试文件，所以熔断/配额表一并清。"""
     R._EMPTY_KEY_WARNED.clear()
+    R._CB_FAILURES.clear()
+    R._CB_LAST_FAIL.clear()
+    R._QUOTA_EXHAUSTED_UNTIL.clear()
     yield
     R._EMPTY_KEY_WARNED.clear()
+    R._CB_FAILURES.clear()
+    R._CB_LAST_FAIL.clear()
+    R._QUOTA_EXHAUSTED_UNTIL.clear()
 
 
 #: 🔴 用 `setenv` 把**环境变量置空**, ⛔ 不打桩 `_provider_config`。
@@ -65,9 +80,9 @@ def _reset_warned():
 #:       打桩那个函数等于绕过了正要验的那一层
 #:    ② `monkeypatch.setattr(R, "_provider_config", ...)` 会让
 #:       `test_mutation_targets_are_reachable` 的棘轮从 25 涨到 26(实测)
-def _call_with_empty_key(monkeypatch, account="deepseek"):
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "")     # 存在, 但值为空
-    monkeypatch.setenv("LLM_DEEPSEEK_BASE_URL", "https://example.invalid/v1")
+def _call_with_empty_key(monkeypatch, account="aliyun_c_vl"):
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "")     # 存在, 但值为空
+    monkeypatch.setenv("LLM_ALIYUN_C_BASE_URL", "https://example.invalid/v1")
     # 链钉死到那个账号 ⇒ 一定走到「空 key」那一支
     payload = {"messages": [{"role": "user", "content": "x"}], "max_tokens": 8}
     with pytest.raises(RuntimeError) as ei:
@@ -107,11 +122,11 @@ def test_healthy_key_leaves_no_such_trace(monkeypatch, caplog):
     出现了的话，上面两条断言在任何情况下都成立 ⇒ 不区分好坏。
     """
     # 阳性对照也走 setenv: 给一个**非空**的假 key ⇒ 走到真发请求那一步再失败
-    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "sk-" + "k" * 20)
-    monkeypatch.setenv("LLM_DEEPSEEK_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "sk-" + "k" * 20)
+    monkeypatch.setenv("LLM_ALIYUN_C_BASE_URL", "https://example.invalid/v1")
     payload = {"messages": [{"role": "user", "content": "x"}], "max_tokens": 8}
     with caplog.at_level(logging.WARNING):
         with pytest.raises(Exception) as ei:   # 连不上 example.invalid，必然失败
-            asyncio.run(R.call_chain(R.SLOT.CHAT, payload, chain=["deepseek"]))
+            asyncio.run(R.call_chain(R.SLOT.CHAT, payload, chain=["aliyun_c_vl"]))
     assert "empty_api_key" not in str(ei.value)
     assert not [r for r in caplog.records if "API key 为空" in r.message]
