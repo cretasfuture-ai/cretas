@@ -819,7 +819,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         }
         String sanitized = stripHtmlTags(userInput);
         QueryPreprocessorService.NegationKind veto = detectVetoKind(sanitized);
-        if (veto != QueryPreprocessorService.NegationKind.NONE
+        if (veto == QueryPreprocessorService.NegationKind.VETO_READ || veto == QueryPreprocessorService.NegationKind.VETO_WRITE
                 || shouldBypassEarlyPhraseShortcutForStoreReference(sanitized)) return Optional.empty();
         Optional<String> match = knowledgeBase.matchPhrase(filterFillerWordsForPhrase(sanitized), domain);
         if (match.isEmpty() || (!expectedCodes.isEmpty() && !expectedCodes.contains(match.get()))) return Optional.empty();
@@ -828,10 +828,14 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 .filter(c -> Boolean.TRUE.equals(c.getIsActive()) && c.getDeletedAt() == null)
                 .filter(c -> BusinessTypeScope.isCompatible(c.getBusinessType(), domain)).findFirst().orElse(null);
         if (cfg == null) return Optional.empty();
-        return Optional.of(IntentMatchResult.builder().userInput(sanitized).bestMatch(cfg)
+        var result = IntentMatchResult.builder().userInput(sanitized).bestMatch(cfg)
+                .confidence(0.96).matchMethod(MatchMethod.PHRASE_MATCH);
+        // Keep the original normal early-phrase result contract. Only the
+        // explicit preflight supplies its authoritative candidate metadata.
+        if (!expectedCodes.isEmpty()) result
                 .topCandidates(List.of(CandidateIntent.fromConfig(cfg, 0.96, 96, Collections.emptyList(), MatchMethod.PHRASE_MATCH)))
-                .confidence(0.96).matchMethod(MatchMethod.PHRASE_MATCH).matchedKeywords(Collections.emptyList())
-                .isStrongSignal(true).requiresConfirmation(false).build());
+                .matchedKeywords(Collections.emptyList()).isStrongSignal(true).requiresConfirmation(false);
+        return Optional.of(result.build());
     }
 
     static boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {

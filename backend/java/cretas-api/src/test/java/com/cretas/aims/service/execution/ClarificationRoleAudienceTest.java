@@ -142,6 +142,15 @@ class ClarificationRoleAudienceTest {
 
     @Test
     void qualityRecordsAreOnlyOfferedToQualityInspectorAmongFrontlineRoles() {
+        AIIntentConfig qualityRecords = AIIntentConfig.builder().intentCode("QUALITY_CHECK_QUERY")
+                .intentName("质检记录").businessType("FACTORY").intentCategory("QUERY").sensitivityLevel("LOW").build();
+        qualityRecords.setIsActive(true);
+        when(configService.getIntentByCode(FACTORY, "QUALITY_CHECK_QUERY")).thenReturn(Optional.of(qualityRecords));
+        assertThat(offered("quality_inspector", "QUALITY_CHECK_QUERY", "QUALITY_STATS"))
+                .containsExactly("QUALITY_CHECK_QUERY", "QUALITY_STATS");
+        assertThat(offered("warehouse_worker", "QUALITY_CHECK_QUERY", "QUALITY_STATS")).containsExactly("QUALITY_STATS");
+        assertThat(offered("factory_super_admin", "QUALITY_CHECK_QUERY", "QUALITY_STATS"))
+                .containsExactly("QUALITY_CHECK_QUERY", "QUALITY_STATS");
         assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "quality_inspector")).isTrue();
         assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "warehouse_worker")).isFalse();
         assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "operator")).isFalse();
