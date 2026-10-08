@@ -80,6 +80,23 @@ describe('approval workflow AI draft compiler', () => {
     expect(() => compile(spec)).toThrow('汇聚模式无效')
   })
 
+  it.each(['', ' ', null])('accepts empty condition metadata without changing existing edges: %s', condition => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    edges[0].condition = '#amount > 100'
+    const echoedSpec = { ...spec, edges: edges.map(edge => ({ ...edge, condition })) }
+    const draft = compileApprovalWorkflowAiDraft({ spec: echoedSpec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })
+    expect(draft.nodes[1].label).toBe('质量经理验收')
+    expect(draft.edges).toEqual(edges)
+  })
+
+  it.each(['#amount > 0', '#bypass == true', 0])('rejects AI expression injection: %s', condition => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    const injected = { ...spec, edges: edges.map(edge => ({ ...edge, condition })) }
+    expect(() => compileApprovalWorkflowAiDraft({ spec: injected, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })).toThrow('AI 不能写入表达式')
+  })
+
   it('maps only real factory roles and users into a reversible local draft', () => {
     const draft = compile({
       name: '采购订单审批',

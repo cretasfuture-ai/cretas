@@ -128,7 +128,9 @@ export function compileApprovalWorkflowAiDraft(
   const edgePairs = new Set<string>()
   const edges = rawEdges.map((value, index): ApprovalWorkflowEdge => {
     const raw = asRecord(value, `第 ${index + 1} 条连线`)
-    if ('condition' in raw) {
+    // Full AI specs may echo an empty transport field; it must not erase existing conditions.
+    if ('condition' in raw && raw.condition != null
+      && (typeof raw.condition !== 'string' || raw.condition.trim() !== '')) {
       throw new Error('AI 不能写入表达式，请改用金额阈值或默认分支')
     }
     const id = requiredId(raw.id, `第 ${index + 1} 条连线`)
