@@ -91,6 +91,8 @@ public class ReportTrendsTool extends AbstractBusinessTool {
 
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
+        // 只有可选参数, 但「这周 / 同比 / 不比较」要靠抽参才能读出来 (#967)
+        schema.put(com.cretas.aims.service.execution.ToolDispatchService.EXTRACT_OPTIONAL_FLAG, true);
 
         return schema;
     }

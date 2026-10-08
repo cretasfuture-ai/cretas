@@ -72,6 +72,19 @@ class ReportTrendsDisplayContractTest {
         return result;
     }
 
+    /** organizer 审 #967: 只有可选参数、没声明开关的读工具, 执行时不许多调一次大模型 (延迟 + 费用)。 */
+    @Test void optionalOnlyToolWithoutFlagNeverCallsLlmForExtraction() throws Exception {
+        com.cretas.aims.ai.tool.ToolExecutor plain = mock(com.cretas.aims.ai.tool.ToolExecutor.class);
+        when(plain.getToolName()).thenReturn("plain_read");
+        when(plain.getParametersSchema()).thenReturn(Map.of("type","object",
+            "properties",Map.of("days",Map.of("type","integer")),"required",List.of()));
+        Map<String,Object> out = dispatch.extractParametersWithLLM("最近7天的情况", plain, new HashMap<>());
+        assertThat(out).isEmpty();
+        verify(llm, never()).chatWithTools(anyString(), anyString(), anyList());
+        // 对照: ReportTrendsTool 声明了开关, 同样只有可选参数却会抽 (必发生)
+        assertThat(tool.getParametersSchema().get(ToolDispatchService.EXTRACT_OPTIONAL_FLAG)).isEqualTo(true);
+    }
+
     @Test void weekMomUsesOptionalExtractionAndDisplaysBothPeriods() throws Exception {
         String text=run("这周产量环比怎么样","{\"period\":\"week\",\"comparisonType\":\"MOM\",\"days\":88,\"startDate\":\"2020-01-01\"}");
         verify(llm).chatWithTools(anyString(),eq("这周产量环比怎么样"),anyList());
