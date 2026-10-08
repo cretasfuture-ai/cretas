@@ -32,23 +32,25 @@
               <span>AI 对话</span>
             </el-button>
           </template>
+          <div class="ai-history" data-testid="ai-history">
           <div class="panel-header">
             <div>
               <div class="panel-title">{{ title }}</div>
               <div class="panel-subtitle">AI 只修改当前指定范围，生成草稿后仍需人工确认</div>
             </div>
-            <el-tag size="small" type="info">{{ modeLabel }}</el-tag>
+            <el-tag size="small" type="info" data-testid="ai-mode-label">{{ modeLabel }}</el-tag>
           </div>
-          <div ref="messagesRef" class="chat-messages">
+          <div ref="messagesRef" class="chat-messages" data-testid="ai-chat-thread">
             <div v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
-              <div class="message-content">{{ msg.content }}</div>
-              <div v-if="msg.diffPreview?.length" class="diff-preview">
+              <div class="message-content" :data-testid="msg.role === 'user' ? 'ai-chat-user-bubble' : 'ai-chat-assistant-body'">{{ msg.content }}</div>
+              <div v-if="msg.diffPreview?.length" class="diff-preview" data-testid="ai-diff-preview">
                 <template v-for="(diff, diffIndex) in msg.diffPreview" :key="diffIndex">
-                  <div v-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)" class="draft-step-list">
+                  <div v-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)" class="draft-step-list" data-testid="ai-diff-item">
                     <div
                       v-for="(step, stepIndex) in getDraftSteps(diff.params)"
                       :key="stepIndex"
                       class="draft-step-card"
+                      data-testid="ai-draft-step"
                     >
                       <span class="step-order">{{ step.processOrder }}</span>
                       <span class="step-name">{{ step.processName }}</span>
@@ -66,22 +68,37 @@
                         show-icon
                       />
                     </div>
-                    <el-button class="apply-draft-btn" size="small" type="primary" @click="emitDraft(diff.params, msg.sourceIdentity)">
+                    <el-button class="apply-draft-btn" type="primary" data-testid="ai-diff-apply" @click="emitDraft(diff.params, msg.sourceIdentity)">
                       应用 {{ getDraftSteps(diff.params).length }} 道工序到草稿
                     </el-button>
                   </div>
-                  <div v-else class="diff-item">
+                  <div v-else class="diff-item" data-testid="ai-diff-item">
                     <div class="diff-text">
-                      <el-tag size="small" type="warning">{{ diff.type }}</el-tag>
+                      <el-tag size="small" type="warning" data-testid="ai-diff-type">{{ diffTypeLabel(diff.type) }}</el-tag>
                       <span>{{ diff.description }}</span>
                     </div>
-                    <el-button size="small" type="primary" link @click="emitDraft(diff.params, msg.sourceIdentity)">
+                    <el-button class="diff-apply" type="primary" link data-testid="ai-diff-apply" @click="emitDraft(diff.params, msg.sourceIdentity)">
                       应用到草稿
                     </el-button>
                   </div>
                 </template>
               </div>
             </div>
+
+            <!-- W1: 加载用骨架屏 (3 条 + 一行文字), 不用转圈 -->
+            <div v-if="loading" class="message assistant">
+              <div class="loading-skeleton" data-testid="ai-chat-loading-skeleton" role="status" aria-live="polite">
+                <span
+                  v-for="w in SKELETON_BAR_WIDTHS"
+                  :key="w"
+                  class="skeleton-bar"
+                  data-testid="ai-chat-skeleton-bar"
+                  :style="{ width: `${w}%` }"
+                />
+                <span class="skeleton-caption">正在生成工序草稿…</span>
+              </div>
+            </div>
+          </div>
           </div>
         </el-popover>
 
@@ -125,6 +142,16 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Aim, MagicStick, Menu, Top } from '@element-plus/icons-vue';
 import { gsap } from 'gsap';
 import request from '@/api/request';
+import {
+  AI_MODE_LABELS,
+  AI_TIMEOUT_MESSAGE,
+  AI_FAILURE_MESSAGE,
+  SKELETON_BAR_WIDTHS,
+  diffTypeLabel,
+  isNearBottom,
+  startAiRequestTimer,
+  type AiRequestTimer,
+} from '@/utils/aiConfigAssistant';
 
 type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -176,7 +203,8 @@ const emit = defineEmits<{
   applyDraft: [draft: Record<string, unknown>, sourceIdentity: SourceIdentity];
 }>();
 
-const modeLabel = computed(() => 'Plan');
+// V3: 模式名给用户看中文 (这个面板固定走 plan: 只出草稿, 点「应用」才写进编辑器草稿)
+const modeLabel = computed(() => AI_MODE_LABELS.plan);
 const hasSelectionContext = computed(() => (
   Boolean(props.contextLabel)
   && props.contextLabel !== '当前范围：整个 Workflow'
@@ -196,6 +224,7 @@ const contextChipRef = ref<HTMLElement | null>(null);
 const messagesRef = ref<HTMLElement>();
 const messages = ref<ChatMessage[]>(initialMessages());
 let requestGeneration = 0;
+let activeTimer: AiRequestTimer | null = null;
 
 onMounted(() => {
   if (!panelRef.value || prefersReducedMotion()) return;
@@ -209,6 +238,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  activeTimer?.cancel();
   gsap.killTweensOf(panelRef.value);
   gsap.killTweensOf(contextChipRef.value);
 });
@@ -233,6 +263,8 @@ function prefersReducedMotion(): boolean {
 
 watch(() => `${props.factoryId}:${props.productTypeId}`, () => {
   requestGeneration += 1;
+  activeTimer?.cancel();
+  activeTimer = null;
   input.value = '';
   loading.value = false;
   messages.value = initialMessages();
@@ -254,8 +286,10 @@ async function send(): Promise<void> {
   const generation = ++requestGeneration;
   historyVisible.value = true;
   input.value = '';
-  messages.value.push({ role: 'user', content: text, sourceIdentity });
+  pushMessage({ role: 'user', content: text, sourceIdentity }, true);
   loading.value = true;
+  const timer = startAiRequestTimer();
+  activeTimer = timer;
   try {
     const res = await request.post<AIChatResponse>(endpoint, {
       message: text,
@@ -265,12 +299,12 @@ async function send(): Promise<void> {
         productTypeId: sourceIdentity.productTypeId,
         context,
       },
-    });
+    }, { signal: timer.signal });
     if (!isCurrentRequest(generation, sourceIdentity)) return;
     const data = res.data ?? {};
     // D1 B-1: when diffs are empty (tool failure surfaced as error reply), show guidance text
     const hasDiffs = Array.isArray(data.diffs) && data.diffs.length > 0;
-    messages.value.push({
+    pushMessage({
       role: 'assistant',
       content: data.reply || (hasDiffs ? '已生成草稿，请审核后应用。' : '无法生成草稿，请检查工序描述'),
       sourceIdentity,
@@ -279,18 +313,24 @@ async function send(): Promise<void> {
   } catch (e) {
     if (!isCurrentRequest(generation, sourceIdentity)) return;
     console.error('[WorkProcessAIChatPanel] send failed:', e);
-    messages.value.push({
+    // W2 / H5: 超时与失败都说人话, 并明说配置没有任何改动 (「应用到草稿」要用户自己点)
+    pushMessage({
       role: 'assistant',
-      content: 'AI 服务暂不可用，请稍后重试。',
+      content: timer.timedOut ? AI_TIMEOUT_MESSAGE : AI_FAILURE_MESSAGE,
       sourceIdentity,
     });
   } finally {
-    if (!isCurrentRequest(generation, sourceIdentity)) return;
-    loading.value = false;
-    await nextTick();
-    if (!isCurrentRequest(generation, sourceIdentity)) return;
-    scrollMessagesToBottom();
+    timer.done();
+    if (activeTimer === timer) activeTimer = null;
+    if (isCurrentRequest(generation, sourceIdentity)) loading.value = false;
   }
+}
+
+/** N1: 先量「本来是不是在底部附近」, 再追加内容; 用户自己发消息 (force) 一定滚 */
+function pushMessage(msg: ChatMessage, force = false): void {
+  const follow = force || isNearBottom(messagesRef.value);
+  messages.value.push(msg);
+  if (follow) void nextTick().then(scrollMessagesToBottom);
 }
 
 function initialMessages(): ChatMessage[] {
@@ -365,7 +405,7 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   min-height: 84px;
   padding: 10px 10px 8px;
   border: 1px solid var(--el-border-color-light);
-  border-radius: 16px;
+  border-radius: 8px;
   background: var(--el-bg-color);
   box-shadow: 0 4px 10px rgb(31 62 92 / 13%);
   transition: border-color 160ms ease, box-shadow 160ms ease;
@@ -374,6 +414,11 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 .work-process-ai-chat-panel:focus-within {
   border-color: var(--el-color-primary-light-5);
   box-shadow: 0 5px 12px rgb(31 62 92 / 16%);
+}
+
+/* T1: 对话区自己声明系统字体栈 (不改全局 --font-family) */
+.ai-history {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
 .panel-header {
@@ -390,7 +435,7 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 
 .panel-subtitle {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--el-text-color-secondary);
 }
 
@@ -398,7 +443,7 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   max-height: min(480px, 56vh);
   overflow-y: auto;
   margin-top: 12px;
@@ -415,28 +460,28 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 .ai-composer-tools { gap: 2px; min-width: 0; }
 .ai-history-button, .quick-prompt-button { flex: 0 0 auto; }
 .ai-history-button {
-  min-height: 30px; margin: 0; padding-inline: 9px; border-radius: 8px;
+  min-height: 32px; margin: 0; padding-inline: 9px; border-radius: 8px;
   color: var(--el-text-color-regular); font-weight: 550;
 }
 .ai-history-button :deep(.el-icon) { font-size: 14px; }
 .ai-context-attachment {
-  align-self: flex-start; gap: 6px; max-width: min(100%, 520px); min-height: 28px;
+  align-self: flex-start; gap: 6px; max-width: min(100%, 520px); min-height: 32px;
   overflow: hidden; padding: 0 9px; border: 1px solid var(--el-border-color-lighter);
   border-radius: 999px; color: var(--el-text-color-regular); background: var(--el-fill-color-lighter);
-  font-size: 12px; font-weight: 550; white-space: nowrap;
+  font-size: 13px; font-weight: 550; white-space: nowrap;
 }
 .ai-context-attachment > span { overflow: hidden; text-overflow: ellipsis; }
 .ai-context-attachment :deep(.el-icon) { flex: 0 0 auto; color: var(--el-color-primary); }
 .quick-prompt-button {
-  min-height: 30px; margin: 0; padding-inline: 9px; border-radius: 8px;
+  min-height: 32px; margin: 0; padding-inline: 9px; border-radius: 8px;
   color: var(--el-text-color-regular);
 }
 .quick-prompt-button:hover { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .ai-single-input { width: 100%; }
 .ai-single-input :deep(.el-textarea__inner) {
-  min-height: 34px !important; max-height: 92px; padding: 6px 2px;
+  min-height: 40px !important; max-height: 104px; padding: 8px 2px;
   border: 0; border-radius: 0; background: transparent; box-shadow: none;
-  font-size: 14px; line-height: 22px; overflow-y: auto;
+  font-size: 16px; line-height: 24px; overflow-y: auto;
 }
 .ai-single-input :deep(.el-textarea__inner:hover),
 .ai-single-input :deep(.el-textarea__inner:focus) { box-shadow: none; }
@@ -450,28 +495,50 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   max-width: calc(100vw - 32px); padding: 14px !important; border-radius: 12px !important;
 }
 
+/* T2: 正文 16px / 行高 1.6 */
 .message {
-  max-width: 95%;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 16px;
+  line-height: 1.6;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* L1 / L3: 助手回答与欢迎语全宽, 无头像、无气泡 (无背景 / 边框 / 阴影) */
+.message.system,
+.message.assistant {
+  align-self: stretch;
+  width: 100%;
 }
 
 .message.system {
-  align-self: center;
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-lighter);
+  color: var(--el-text-color-regular);
 }
 
+/* L2: 只有用户消息是浅色气泡, 靠右, 最宽 min(78%, 320px), 四角圆角 12, 内边距 10px 12px */
 .message.user {
   align-self: flex-end;
+  max-width: min(78%, 320px);
+  padding: 10px 12px;
+  border-radius: 12px;
   background: var(--el-color-primary-light-9);
 }
 
-.message.assistant {
-  align-self: flex-start;
-  background: var(--el-fill-color-light);
+.message-content {
+  white-space: pre-wrap;
+}
+
+/* W1: 骨架屏 —— 3 条, 高 14, 圆角 5, 1.5s 闪烁 */
+.loading-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.skeleton-bar {
+  display: block; height: 14px; border-radius: 5px;
+  background: linear-gradient(90deg, var(--el-fill-color, #f0f2f5) 25%, var(--el-fill-color-darker, #e6e8eb) 37%, var(--el-fill-color, #f0f2f5) 63%);
+  background-size: 400% 100%;
+  animation: wp-ai-skeleton-shimmer 1.5s ease-in-out infinite;
+}
+.skeleton-caption { margin-top: 4px; font-size: 13px; color: var(--el-text-color-secondary); }
+@keyframes wp-ai-skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
 }
 
 .diff-preview {
@@ -487,6 +554,7 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   justify-content: space-between;
   gap: 8px;
   padding: 6px;
+  font-size: 13px;
   border: 1px dashed var(--el-border-color);
   border-radius: 6px;
   background: var(--el-bg-color);
@@ -515,7 +583,7 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   border: 1px solid var(--el-border-color-light);
   border-radius: 6px;
   background: var(--el-bg-color);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .step-order {
@@ -535,12 +603,16 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 }
 
 .step-assignee {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
 .missing-warning {
   margin-top: 4px;
+}
+
+.diff-apply {
+  min-height: 32px;
 }
 
 .apply-draft-btn {
@@ -556,5 +628,6 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 }
 @media (prefers-reduced-motion: reduce) {
   .work-process-ai-chat-panel, .ai-send-button { transition: none; }
+  .skeleton-bar { animation: none; }
 }
 </style>

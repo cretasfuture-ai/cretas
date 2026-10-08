@@ -86,9 +86,10 @@ describe('WorkProcessAIChatPanel identity isolation', () => {
     const vm = wrapper.vm as unknown as PanelVm;
     vm.input = 'Generate B';
     await vm.send();
+    // 请求体 (含选区 context) 与改前一致; 第三个参数是 W2 新增的 30 秒超时 signal, 不是请求体的一部分
     expect(requestMocks.post).toHaveBeenCalledWith('/workflow-ai', expect.objectContaining({
       params: expect.objectContaining({ context: selectionContext }),
-    }));
+    }), { signal: expect.any(AbortSignal) });
     const assistant = vm.messages.find((message) => message.role === 'assistant');
     expect(assistant?.sourceIdentity).toEqual({ factoryId: 'F007', productTypeId: 'PT-B' });
 

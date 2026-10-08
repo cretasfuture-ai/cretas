@@ -67,8 +67,15 @@ export const applyTemplate = (factoryId: string, templateCode: string) =>
   request.post(`${v2(factoryId)}/apply-template/${templateCode}`)
 
 // AI Agent
-export const aiChat = (factoryId: string, body: { message: string; mode: string; moduleCode?: string }) =>
-  request.post(`${v2(factoryId)}/ai/chat`, body)
+// options.signal: 调用方的 30 秒超时 (AbortController); 不传时请求与改前完全一致
+export const aiChat = (
+  factoryId: string,
+  body: { message: string; mode: string; moduleCode?: string },
+  options?: { signal?: AbortSignal },
+) =>
+  options?.signal
+    ? request.post(`${v2(factoryId)}/ai/chat`, body, { signal: options.signal })
+    : request.post(`${v2(factoryId)}/ai/chat`, body)
 
 export interface ApplyDiffResult {
   index: number
