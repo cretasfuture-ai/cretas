@@ -414,18 +414,22 @@ describe('标准 W1: 加载用骨架屏', () => {
 });
 
 describe('H3 / H4: 一线硬约束不削弱', () => {
-  it('7. 确认卡行数不变: ai-confirm-rows 子节点数 = previewRows(action).length (中文键 / 英文已知键显示, 未知英文键与系统键隐藏)', async () => {
+  it('7. 确认卡业务行一行都不藏: ai-confirm-rows 子节点数 = previewData 去掉系统键后的键数 (中文键 / 已知英文键 / 未知英文键都显示)', async () => {
     const view = await openReadyCard();
     const expected = previewRows(PREVIEW.confirmableAction);
     const rows = view.getByTestId('ai-confirm-rows');
     const rendered = React.Children.toArray(rows.props.children).length;
-    // 同一份数据, origin/main 上 previewRows 也是这 4 行 (见报告里的实测读数)
-    expect(expected.map((r) => r.key)).toEqual(['orderNumber', '今天的打卡', '剩余数量', 'yourProposedQty']);
+    // origin/main 上同一份数据是 4 行 (藏掉了未知英文键 internalFlag); 2026-10-08 起业务行不藏 (H3), 是 5 行 —— 只多不少
+    expect(expected.map((r) => r.key)).toEqual(['orderNumber', '今天的打卡', '剩余数量', 'yourProposedQty', 'internalFlag']);
     expect(rendered).toBe(expected.length);
-    expect(rendered).toBe(4);
+    expect(rendered).toBe(5);
     expect(view.getByText('今天的打卡')).toBeTruthy();
     expect(view.getByText('已打卡')).toBeTruthy();
-    expect(view.queryByText('internalFlag')).toBeNull();
+    // 未知英文键照原样显示键名, 值也在
+    expect(view.getByText('internalFlag')).toBeTruthy();
+    expect(view.getByText('7')).toBeTruthy();
+    // 阴性对照: 系统键 canDo 不显示
+    expect(view.queryByText('canDo')).toBeNull();
     // 外框占满正文列, 不再收缩成 92%
     const card = flat(view.getByTestId('ai-confirm-card'));
     expect(card.alignSelf).toBe('stretch');
