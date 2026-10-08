@@ -16,7 +16,7 @@ interface QuickActionCardGridProps {
   /**
    * 卡片发一句话。`intentCode` 给了就是「这张卡要办的事只有这一件」: 随请求带上, 服务端不再识别 / 反问,
    * 直接按这个意图走 (权限 / 写确认 / 业态门照常过, 与澄清按钮点选同一条显式意图通道)。
-   * ⛔ 只给「意图唯一、不缺参数」的卡: 缺参的写操作走显式通道不会建缺参追问会话, 答不上下一句。
+   * 缺参写卡须验证 W0 → 安全预览 → #952 参数收集会话 → SSE 续轮，确认前不执行。
    */
   onSendIntent: (text: string, intentCode?: string) => void;
   onNavigate: (screen: string, params?: Record<string, unknown>) => void;
@@ -107,10 +107,10 @@ const FRONTLINE_ROLE_CARDS: Record<string, CardFactory> = {
   ],
   // 待检批次 / 质检统计 带意图码直达 (2026-10-07 真测: 只发文字时识别层各给两个近邻意图, 弹出
   // 「今日待质检批次 / 今日待收货清单」「质检统计 / 质量报表」二选一; 点卡片的人不该再被问一次)。
-  // 登记不良 / 上班打卡不带: 它们要补参数, 走识别 + 缺参追问才有会话接得住下一句 (识别分 0.93 / 0.98, 不反问)。
+  // 登记不良复用 #952 预览追问会话，显式首次请求/批次号续轮及未开放角色拒绝已有真实入口测试。
   quality_inspector: ({ onSendIntent }) => [
     { icon: 'clipboard-list', label: '待检批次', description: '今天要检的批次', action: () => onSendIntent('今天待质检的批次', 'RECEIVE_QUALITY_CHECK_TODAY') },
-    { icon: 'alert-octagon', label: '登记不良', description: '记录质检问题', action: () => onSendIntent('登记质检不良') },
+    { icon: 'alert-octagon', label: '登记不良', description: '记录质检问题', action: () => onSendIntent('登记质检不良', 'QUALITY_DEFECT_RECORD') },
     { icon: 'chart-bar', label: '质检统计', description: '合格率等数据', action: () => onSendIntent('质检统计', 'QUALITY_STATS') },
     { icon: 'clock-in', label: '上班打卡', description: '记录上班时间', action: () => onSendIntent('上班打卡') },
   ],
