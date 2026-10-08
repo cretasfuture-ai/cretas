@@ -137,18 +137,18 @@ class IntentRecognitionRoleRepickPermissionTest {
         configService = new IntentConfigManagementServiceImpl(repo);
 
         ToolRegistry registry = mock(ToolRegistry.class);
-        Map<String, ToolExecutor> tools = Map.of(
-                "report_inventory", tool("report_inventory", AccessMode.READ),
-                "material_batch_query", tool("material_batch_query", AccessMode.READ),
-                "material_adjust_quantity", tool("material_adjust_quantity", AccessMode.WRITE),
-                "smart_indicator_query", tool("smart_indicator_query", AccessMode.READ),
-                "material_low_stock_alert", tool("material_low_stock_alert", AccessMode.READ),
-                "shipment_query", tool("shipment_query", AccessMode.READ),
-                "quality_check_query", tool("quality_check_query", AccessMode.READ),
-                "report_trends", tool("report_trends", AccessMode.READ),
-                "report_production", tool("report_production", AccessMode.READ),
-                "restaurant_ingredient_stock", tool("restaurant_ingredient_stock", AccessMode.READ),
-                "material_batch_use", tool("material_batch_use", AccessMode.WRITE));
+        Map<String, ToolExecutor> tools = Map.ofEntries(
+                Map.entry("report_inventory", tool("report_inventory", AccessMode.READ)),
+                Map.entry("material_batch_query", tool("material_batch_query", AccessMode.READ)),
+                Map.entry("material_adjust_quantity", tool("material_adjust_quantity", AccessMode.WRITE)),
+                Map.entry("smart_indicator_query", tool("smart_indicator_query", AccessMode.READ)),
+                Map.entry("material_low_stock_alert", tool("material_low_stock_alert", AccessMode.READ)),
+                Map.entry("shipment_query", tool("shipment_query", AccessMode.READ)),
+                Map.entry("quality_check_query", tool("quality_check_query", AccessMode.READ)),
+                Map.entry("report_trends", tool("report_trends", AccessMode.READ)),
+                Map.entry("report_production", tool("report_production", AccessMode.READ)),
+                Map.entry("restaurant_ingredient_stock", tool("restaurant_ingredient_stock", AccessMode.READ)),
+                Map.entry("material_batch_use", tool("material_batch_use", AccessMode.WRITE)));
         when(registry.getExecutor(anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(tools.get(inv.getArgument(0, String.class))));
         accessModeFilter = new IntentAccessModeFilter(configService, new WriteGuardService(), registry);
