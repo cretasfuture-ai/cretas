@@ -3912,8 +3912,12 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("销售环比", "ORDER_MOM_ANALYSIS");
         phraseToIntentMapping.put("订单环比", "ORDER_MOM_ANALYSIS");
         phraseToIntentMapping.put("销售比上月", "ORDER_MOM_ANALYSIS");
-        phraseToIntentMapping.put("产量环比", "PROCESSING_MOM_ANALYSIS");
-        phraseToIntentMapping.put("产量比上月", "PROCESSING_MOM_ANALYSIS");
+        // G2: 明确比较词的产量问句统一走趋势报表；趋势工具从原话解析 MOM/YOY。
+        // PROCESSING_* 保留给内部组合意图，不让短语层把用户送进澄清。
+        phraseToIntentMapping.put("产量环比", "REPORT_TRENDS");
+        phraseToIntentMapping.put("产量比上月", "REPORT_TRENDS");
+        phraseToIntentMapping.put("产量比上周", "REPORT_TRENDS");
+        phraseToIntentMapping.put("产量相比上周", "REPORT_TRENDS");
         phraseToIntentMapping.put("质检环比", "QUALITY_MOM_ANALYSIS");
         phraseToIntentMapping.put("库存环比", "MATERIAL_MOM_ANALYSIS");
         phraseToIntentMapping.put("考勤环比", "ATTENDANCE_MOM_ANALYSIS");
@@ -3923,8 +3927,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("订单同比", "ORDER_YOY_ANALYSIS");
         phraseToIntentMapping.put("销售比去年", "ORDER_YOY_ANALYSIS");
         phraseToIntentMapping.put("去年同期销售", "ORDER_YOY_ANALYSIS");
-        phraseToIntentMapping.put("产量同比", "PROCESSING_YOY_ANALYSIS");
-        phraseToIntentMapping.put("产量比去年", "PROCESSING_YOY_ANALYSIS");
+        phraseToIntentMapping.put("产量同比", "REPORT_TRENDS");
+        phraseToIntentMapping.put("产量比去年", "REPORT_TRENDS");
+        phraseToIntentMapping.put("同比产量", "REPORT_TRENDS");
         phraseToIntentMapping.put("质检同比", "QUALITY_YOY_ANALYSIS");
         phraseToIntentMapping.put("库存同比", "MATERIAL_YOY_ANALYSIS");
         phraseToIntentMapping.put("考勤同比", "ATTENDANCE_YOY_ANALYSIS");

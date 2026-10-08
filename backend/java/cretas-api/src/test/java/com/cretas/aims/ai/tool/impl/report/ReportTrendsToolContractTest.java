@@ -138,6 +138,47 @@ class ReportTrendsToolContractTest {
     }
 
     @Test
+    void explicitWeekPhraseUsesWeekWhenPeriodWasNotProvided() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
+        JsonNode data = execute(Map.of(), Map.of("userInput", "这周产量环比怎么样"));
+        assertThat(data.at("/data/period").asText()).isEqualTo("week");
+        assertThat(data.at("/data/comparison/comparisonType").asText()).isEqualTo("MOM");
+        assertThat(data.at("/data/comparison/basePeriodStart").asText())
+                .isEqualTo(LocalDate.now().with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY)).minusWeeks(1).toString());
+    }
+
+    @Test
+    void explicitPeriodStillWinsOverWeekPhrase() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
+        JsonNode data = execute(Map.of("period", "month"), Map.of("userInput", "这周产量环比怎么样"));
+        assertThat(data.at("/data/period").asText()).isEqualTo("month");
+    }
+    @Test
+    void previousYearPhraseOverridesMomAndUsesTheActualPriorYear() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
+        JsonNode data = execute(Map.of("period", "month", "comparisonType", "MOM"), Map.of("userInput", "这个月产量比去年怎么样"));
+        assertThat(data.at("/data/comparison/comparisonType").asText()).isEqualTo("YOY");
+        assertThat(data.at("/data/comparison/basePeriodStart").asText()).isEqualTo(LocalDate.now().withDayOfMonth(1).minusYears(1).toString());
+    }
+    @Test
+    void currentYearPhraseUsesTheWholeYearWithoutDependingOnOptionalExtraction() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
+        JsonNode data = execute(Map.of(), Map.of("userInput", "今年产量比去年怎么样"));
+        assertThat(data.at("/data/period").asText()).isEqualTo("year");
+        assertThat(data.at("/data/comparison/comparisonType").asText()).isEqualTo("YOY");
+        assertThat(data.at("/data/comparison/currentPeriodStart").asText()).isEqualTo(LocalDate.now().withDayOfYear(1).toString());
+        assertThat(data.at("/data/comparison/basePeriodStart").asText()).isEqualTo(LocalDate.now().minusYears(1).withDayOfYear(1).toString());
+    }
+    @Test
+    void previousWeekPhraseOverridesYoyAndKeepsComparisonAlongsideDailyValues() throws Exception {
+        stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
+        JsonNode data = execute(Map.of("comparisonType", "YOY"), Map.of("userInput", "本周每日产量比上周怎么样"));
+        assertThat(data.at("/data/period").asText()).isEqualTo("week");
+        assertThat(data.at("/data/comparison/comparisonType").asText()).isEqualTo("MOM");
+        assertThat(data.at("/data/comparison/basePeriodStart").asText()).isEqualTo(LocalDate.now().with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY)).minusWeeks(1).toString());
+    }
+
+    @Test
     void todayComparesOneDayToYesterdayWithMonthPositive() throws Exception {
         stubPeriods(new BigDecimal("10"), new BigDecimal("100"), new BigDecimal("12"), new BigDecimal("110"));
         JsonNode today = execute(Map.of("period", "today"), Map.of("userInput", "今天环比"));
