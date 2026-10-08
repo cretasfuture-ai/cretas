@@ -85,6 +85,19 @@ interface FollowUpSuggestion {
   intentCode?: string;
 }
 
+function mapFollowUps(raw: unknown): FollowUpSuggestion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    if (typeof item === 'string') return { label: item, question: item };
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const candidate = item as Record<string, unknown>;
+    const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
+    const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+    const intentCode = typeof candidate.intentCode === 'string' ? candidate.intentCode.trim() : undefined;
+    return question && label ? { label, question, intentCode } : undefined;
+  }).filter((item): item is FollowUpSuggestion => item !== undefined);
+}
+
 interface RestaurantAgentLaunch {
   schemaVersion: '1.0';
   routeCode: typeof RESTAURANT_AGENT_RUN_ROUTE;
@@ -905,15 +918,7 @@ function AIChatScreenContent() {
           const rawFollowUps = Array.isArray(result.followUps)
             ? result.followUps
             : Array.isArray(result.nextQuestions) ? result.nextQuestions : [];
-          followUps = (rawFollowUps as unknown[]).map((item) => {
-            if (typeof item === 'string') return { label: item, question: item };
-            if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
-            const candidate = item as Record<string, unknown>;
-            const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
-            const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
-            const intentCode = typeof candidate.intentCode === 'string' ? candidate.intentCode.trim() : undefined;
-            return question && label ? { label, question, intentCode } : undefined;
-          }).filter((item): item is FollowUpSuggestion => item !== undefined);
+          followUps = mapFollowUps(rawFollowUps);
 
           // NEED_MORE_INFO: 优先使用 clarificationQuestions 构建友好回复 (正文在下面选项定下来之后再拼:
           // 「或点击下方选项」只在真的有选项时才说 —— prod 2026-10-06 没有选项也这么说了)
@@ -1230,10 +1235,12 @@ function AIChatScreenContent() {
     let resultInner: Record<string, unknown> | undefined;
     let resultMeta: { intentCode?: string; intentCategory?: string } = {};
     let confirmedLastAction: Record<string, unknown> | undefined;
+    let confirmedFollowUps: FollowUpSuggestion[] = [];
     try {
       const response = await intentConfigApiClient.confirmIntent(buildConfirmationProof(action), currentFactoryId);
       outcome = classifyConfirmResponse(response, intentName);
       confirmedLastAction = readLastAction(response?.metadata);
+      confirmedFollowUps = mapFollowUps(response?.followUps);
       const inner = response?.resultData;
       resultInner = inner && typeof inner === 'object' && !Array.isArray(inner)
         ? (inner as Record<string, unknown>)
@@ -1260,6 +1267,7 @@ function AIChatScreenContent() {
       updateWriteConfirm(messageId, (s) => s.phase === 'executing', (s) => ({ ...s, phase: 'done', doneLabel }));
       appendAssistantMessage({
         content: outcome.content,
+        followUps: outcome.executed && confirmedFollowUps.length > 0 ? confirmedFollowUps : undefined,
         richData: detectRichData(resultInner),
         intentCode: resultMeta.intentCode,
         intentCategory: resultMeta.intentCategory,

@@ -73,6 +73,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class IntentExecutionOrchestrator {
+    @Autowired(required = false)
+    private FactoryFollowUpService factoryFollowUpService;
 
     private static final Pattern COMMAND_DIGEST_PATTERN = Pattern.compile("^[0-9a-f]{64}$");
 
@@ -1313,6 +1315,15 @@ public class IntentExecutionOrchestrator {
                         .message("执行结果状态记录失败，请勿重复提交并联系管理员")
                         .executedAt(LocalDateTime.now())
                         .build();
+            }
+            if (toolSucceeded && factoryFollowUpService != null) {
+                try {
+                    response.setFollowUps(factoryFollowUpService.suggest(
+                            factoryId, userId, userRole, intentConfig, response.getStatus()));
+                } catch (Exception e) {
+                    log.warn("[Confirm] Factory follow-up lookup unavailable: {}", e.getMessage());
+                    response.setFollowUps(List.of());
+                }
             }
             return response != null ? response : IntentExecuteResponse.builder()
                     .status("FAILED")
