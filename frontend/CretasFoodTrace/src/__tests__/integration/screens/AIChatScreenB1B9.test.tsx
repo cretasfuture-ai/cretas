@@ -39,10 +39,8 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => lookup(zhHome, key) ?? key, i18n: { language: 'zh-CN' } }) }));
 jest.mock('i18next', () => ({ __esModule: true, default: { language: 'zh-CN' } }));
 jest.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children, ...props }: any) => { const { View } = require('react-native'); return <View {...props}>{children}</View>; } }));
-jest.mock('../../../services/ai', () => ({ aiService: {}, detectAnalysisMode: () => ({ mode: 'quick' }) }));
-jest.mock('../../../components/ai/AIModeIndicator', () => ({ AIModeIndicator: () => null }));
+jest.mock('../../../services/ai', () => ({ aiService: {}, detectAnalysisMode: jest.requireActual('../../../services/ai/modeDetector').detectAnalysisMode }));
 jest.mock('../../../components/common/VoiceMicButton', () => ({ VoiceMicButton: () => null }));
-jest.mock('../../../components/ai/RestaurantGrossMarginRunCard', () => ({ RestaurantGrossMarginRunCard: () => null }));
 jest.mock('../../../services/audio/feedbackSounds', () => ({ feedbackSounds: { onWriteSuccess: jest.fn(), onNeedMoreInfo: jest.fn(), onError: jest.fn() } }));
 jest.mock('../../../services/api/apiClient', () => ({ apiClient: { post: jest.fn(async () => ({ success: true, data: { success: true } })) } }));
 
@@ -82,6 +80,23 @@ describe('AIChatScreen B1/B9 real mount', () => {
     fireEvent.press(view.getByTestId('ai-chat-followup-0'));
     await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
     expect(mockExecuteIntentStream.mock.calls[1][0]).toBe('请查看当前低库存物料');
+    expect(mockExecuteIntentStream.mock.calls[1][4]?.intentCode).toBeUndefined();
+  });
+
+  it('B1 preserves a supplied follow-up intent code with the complete question', async () => {
+    mockExecuteIntentStream.mockImplementationOnce(async (_input: string, callbacks: any) => {
+      callbacks.onResult?.({ status: 'COMPLETED', message: '库存已查完', intentCode: 'MATERIAL_BATCH_QUERY',
+        followUps: [{ label: '今日待收货', question: '查询今日待收货清单', intentCode: 'MATERIAL_TODAY_RECEIVING_QUERY' }] });
+      callbacks.onComplete?.({ status: 'COMPLETED', totalLatencyMs: 100 });
+    });
+    const view = render(<AIChatScreen />);
+    await send(view, '查库存');
+    fireEvent.press(view.getByTestId('ai-chat-followup-0'));
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
+    const request = mockExecuteIntentStream.mock.calls[1];
+    process.stdout.write(`D_CHIP_REQUEST=${JSON.stringify({ question: request[0], intentCode: request[4]?.intentCode })}\n`);
+    expect(request[0]).toBe('查询今日待收货清单');
+    expect(request[4]?.intentCode).toBe('MATERIAL_TODAY_RECEIVING_QUERY');
   });
 
   it('B1/B9 has no fake follow-up chips and hides empty cards after a message', async () => {
