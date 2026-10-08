@@ -174,7 +174,7 @@ const FRONTLINE_CARDS: Record<string, Array<[string, string, string?]>> = {
   warehouse_worker: [['查库存', '查询原材料库存'], ['库存不足', '查一下库存不足的原料'], ['快过期', '快过期的原料有哪些'], ['出货记录', '查询出货记录']],
   quality_inspector: [
     ['待检批次', '今天待质检的批次', 'RECEIVE_QUALITY_CHECK_TODAY'],
-    ['登记不良', '登记质检不良'],
+    ['登记不良', '登记质检不良', 'QUALITY_DEFECT_RECORD'],
     ['质检统计', '质检统计', 'QUALITY_STATS'],
     ['上班打卡', '上班打卡'],
   ],
@@ -192,6 +192,9 @@ describe('一线角色卡组', () => {
     expect(labels(screen)).toEqual(expected.map(([label]) => label));
     expected.forEach(([, phrase, intentCode], i) => {
       fireEvent.press(screen.getByTestId(`quick-action-card-${i}`));
+      if (role === 'quality_inspector' && i === 1) {
+        process.stdout.write('E_DEFECT_CARD_CALL=' + JSON.stringify(onSendIntent.mock.calls[onSendIntent.mock.calls.length - 1]) + '\n');
+      }
       // 带码的卡: (话, 码); 不带码的卡: 只有话一个参数 (不多传 undefined, 也不偷带码)
       if (intentCode) {
         expect(onSendIntent).toHaveBeenLastCalledWith(phrase, intentCode);
@@ -203,7 +206,7 @@ describe('一线角色卡组', () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
-  it('只有质检员的两张读卡带意图码; 其余一线卡 (含质检员的写卡与打卡) 一张都不带', () => {
+  it('质检员两张读卡和登记不良带意图码; 其余一线卡与打卡不带', () => {
     const withCode: string[] = [];
     for (const role of Object.keys(FRONTLINE_CARDS)) {
       const { screen, onSendIntent } = renderGrid(role);
@@ -216,6 +219,7 @@ describe('一线角色卡组', () => {
     }
     expect(withCode).toEqual([
       'quality_inspector:今天待质检的批次=RECEIVE_QUALITY_CHECK_TODAY',
+      'quality_inspector:登记质检不良=QUALITY_DEFECT_RECORD',
       'quality_inspector:质检统计=QUALITY_STATS',
     ]);
   });

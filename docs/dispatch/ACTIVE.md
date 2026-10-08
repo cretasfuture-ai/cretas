@@ -6,6 +6,7 @@
 
 ## 在飞任务
 
+- `CODEX-DEF-E-20261007` — `review` — Owner root — Base `a137c1c140` — 首次/续轮/闸已证，仅卡带码；Java24→24，RN62→65，三变异恢复；archive/2026-10-07-codex-e-quality-direct-intent.json；仅PR。
 - `CODEX-DEF-F-20261007` — `review` — Owner root — Base `a137c1c140` — REPORT_TRENDS两期对比/零空null/真实出处；基线0/13→13/13，六变异红后恢复；F006只读两期3/8；PR#958，仅PR不合并部署。
 
 - `QI-DEFECT-CLOSEOUT-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — A1/A3/A4完成，四项运行时变异已红并恢复；A2显式首次缺参续轮未获全链证据，保留卡配置；root最终选择器；只到PR，不合并部署。
@@ -111,6 +112,7 @@
 
 ## Scope 锁地图
 
+- `CODEX-DEF-E-20261007`：QuickActionCardGrid仅质检卡码/注释及Grid/WriteConfirm/FrontlineRoles挂载测试、SseStreamingServiceSlotContinuationTest；mvn目标+jest/tsc/变异；禁样式布局/餐饮/后端生产代码。
 - `CODEX-DEF-F-20261007`：ReportTrendsTool、现有PeriodComparison服务实现（仅必要最小修正）及对应Java测试；禁止Entity/Repository/迁移/餐饮。验收mvn真实Tool两期/null/同比/日序列+变异；F006 SELECT-only，root复核。
 
 - `QI-DEFECT-CLOSEOUT-20261007`：QualityDefectRecordTool、缺陷类型词表/追问、必要SSE续轮及对应Java测试、质检首页卡片配置与对应RN测试。验收：Quality*Test,SseStreaming*Test,ToolDispatch*Test,Clarification*Test,FrontlineAiWriteGrant*Test + RN目标jest/tsc；禁止Entity/Repository/迁移/生产写入。

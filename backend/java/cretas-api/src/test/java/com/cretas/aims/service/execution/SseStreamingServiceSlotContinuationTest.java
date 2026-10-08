@@ -478,6 +478,94 @@ class SseStreamingServiceSlotContinuationTest {
         verify(preview.defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
     }
 
+    @Test
+    void firstExplicitQualityCardRequestUsesPreviewSessionThenBatchOnlyAnswerReachesConfirmCard() throws Exception {
+        Harness h = new Harness();
+        QualityDefectPreviewLeg preview = new QualityDefectPreviewLeg(h);
+        preview.wireStreaming(h);
+        com.cretas.aims.ai.dto.ChatCompletionResponse extraction = mock(com.cretas.aims.ai.dto.ChatCompletionResponse.class);
+        when(preview.extractionLlm.chatWithTools(anyString(), eq("登记外观不良2个"), any())).thenReturn(extraction);
+        when(preview.extractionLlm.hasToolCalls(extraction)).thenReturn(true);
+        when(preview.extractionLlm.getFirstToolCall(extraction)).thenReturn(com.cretas.aims.ai.dto.ToolCall.of(
+                "extract-quality", "extract_parameters", "{\"defectType\":\"外观不良\",\"quantity\":2}"));
+
+        IntentExecuteResponse first = h.executeAs(IntentExecuteRequest.builder()
+                .intentCode("QUALITY_DEFECT_RECORD").userInput("登记外观不良2个").build(), QualityDefectPreviewLeg.ROLE);
+        System.out.println("E_EXPLICIT_FIRST_STATUS=" + first.getStatus());
+        assertThat(first.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        // 与真实客户端一样：收到 W0 后用原话及服务器 previewParams 请求安全预览。
+        IntentExecuteResponse asked = preview.preview("登记外观不良2个", previewParams(first));
+        System.out.println("E_PREVIEW_QUESTION_STATUS=" + asked.getStatus() + " SESSION=" + asked.getSessionId());
+        assertThat(asked.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(asked.getSessionId()).isNotBlank();
+        assertThat(h.sessions.get(asked.getSessionId()).getCollectedParameters())
+                .containsEntry("defectType", "外观不良").containsEntry("quantity", "2");
+        verify(preview.tokens, never()).createBoundToken(any());
+
+        IntentExecuteResponse continued = h.executeAs("B20261006-01", asked.getSessionId(), QualityDefectPreviewLeg.ROLE);
+        assertThat(continued.getIntentCode()).isEqualTo("QUALITY_DEFECT_RECORD");
+        assertThat(continued.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        assertThat(previewParams(continued)).containsEntry("qualityInspectionId", "B20261006-01")
+                .containsEntry("defectType", "外观不良").containsEntry("quantity", "2");
+        IntentExecuteResponse card = preview.preview("B20261006-01", previewParams(continued));
+        System.out.println("E_CONTINUED_CARD_STATUS=" + card.getStatus() + " TOKEN=" + (card.getConfirmableAction() != null));
+        assertThat(card.getStatus()).isEqualTo("PREVIEW");
+        assertThat(card.getConfirmableAction()).isNotNull();
+        verify(preview.tokens).createBoundToken(any());
+        assertThat(h.sessions.get(asked.getSessionId()).getStatus()).isEqualTo(ConversationSession.SessionStatus.COMPLETED);
+        verify(h.aiIntentService, never()).recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), anyLong(),
+                anyString(), any(), any(), any(), any());
+        verify(preview.defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void explicitQualityCodeForUnopenedOperatorIsRefusedBeforePreviewSessionOrToken() throws Exception {
+        Harness h = new Harness();
+        QualityDefectPreviewLeg preview = new QualityDefectPreviewLeg(h);
+        preview.wireStreaming(h);
+        // 保证传统角色检查允许，以证明拒绝来自一线开放名单而非其它权限门。
+        when(h.aiIntentService.hasPermission("QUALITY_DEFECT_RECORD", ROLE)).thenReturn(true);
+        IntentExecuteResponse refused = h.executeAs(IntentExecuteRequest.builder()
+                .intentCode("QUALITY_DEFECT_RECORD").userInput("登记外观不良2个").build(), ROLE);
+        System.out.println("E_OPERATOR_STATUS=" + refused.getStatus() + " MESSAGE=" + refused.getMessage());
+        assertThat(refused.getStatus()).isEqualTo("PERMISSION_DENIED");
+        assertThat(refused.getMessage()).contains("还没有对操作员开放");
+        assertThat(h.sessions).isEmpty();
+        // 直接预览同样守入场闸，不能绕过 stream 铸出确认票。
+        IntentExecuteResponse previewRefused = preview.dispatch.executeWithTool(preview.tool, F,
+                IntentExecuteRequest.builder().intentCode("QUALITY_DEFECT_RECORD").userInput("登记外观不良2个")
+                        .previewOnly(true).context(new HashMap<>(Map.of("qualityInspectionId", "B20261006-01",
+                                "defectType", "外观不良", "quantity", 2))).build(), preview.intent, USER, ROLE, null);
+        assertThat(previewRefused.getStatus()).isEqualTo("PERMISSION_DENIED");
+        assertThat(previewRefused.getMessage()).contains("还没有对操作员开放");
+        verify(preview.tokens, never()).createBoundToken(any());
+        verify(preview.defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void exactQualityCardPhraseWithExplicitCodeAsksForMissingDetailsAndOpensSession() throws Exception {
+        Harness h = new Harness();
+        QualityDefectPreviewLeg preview = new QualityDefectPreviewLeg(h);
+        preview.wireStreaming(h);
+        IntentExecuteResponse first = h.executeAs(IntentExecuteRequest.builder()
+                .intentCode("QUALITY_DEFECT_RECORD").userInput("登记质检不良").build(), QualityDefectPreviewLeg.ROLE);
+        assertThat(first.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        IntentExecuteResponse asked = preview.preview("登记质检不良", previewParams(first));
+        System.out.println("E_EXACT_CARD_QUESTION=" + asked.getStatus() + " SESSION=" + asked.getSessionId());
+        assertThat(asked.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(asked.getSessionId()).isNotBlank();
+        assertThat(h.sessions.get(asked.getSessionId()).getKnownIntentCode()).isEqualTo("QUALITY_DEFECT_RECORD");
+        assertThat(asked.getClarificationQuestions()).isNotEmpty();
+        verify(preview.tokens, never()).createBoundToken(any());
+        verify(preview.defectService, never()).recordDefect(anyString(), anyString(), any(), any(), any(), any(), any());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> previewParams(IntentExecuteResponse response) {
+        return response.getMetadata() != null && response.getMetadata().get("previewParams") instanceof Map
+                ? (Map<String, Object>) response.getMetadata().get("previewParams") : Map.of();
+    }
+
     // ------------------------------------------------------------------
 
     // ==================== 入场就问一线开放名单 (2026-10-06 真机 #12) ====================
@@ -581,6 +669,9 @@ class SseStreamingServiceSlotContinuationTest {
         final com.cretas.aims.repository.ProductionBatchRepository batchRepo =
                 mock(com.cretas.aims.repository.ProductionBatchRepository.class);
         final AIIntentConfig intent;
+        final ToolRegistry registry = new ToolRegistry();
+        final DashScopeClient extractionLlm = mock(DashScopeClient.class);
+        final com.cretas.aims.service.PreviewTokenService tokens = mock(com.cretas.aims.service.PreviewTokenService.class);
 
         QualityDefectPreviewLeg(Harness h) throws Exception {
             com.cretas.aims.service.QualityInspectionService inspections = mock(com.cretas.aims.service.QualityInspectionService.class);
@@ -608,17 +699,14 @@ class SseStreamingServiceSlotContinuationTest {
             ReflectionTestUtils.setField(tool, "productionBatchRepository", batchRepo);
             com.cretas.aims.ai.tool.PreviewToolTestSupport.injectMapper(tool);
 
-            ToolRegistry registry = mock(ToolRegistry.class);
-            when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
-            when(registry.getExecutor("quality_defect_record")).thenReturn(Optional.of(tool));
-            dispatch = new ToolDispatchService(registry, new ObjectMapper(), mock(DashScopeClient.class),
+            registry.registerExternal(tool.getToolName(), tool);
+            dispatch = new ToolDispatchService(registry, new ObjectMapper(), extractionLlm,
                     mock(com.cretas.aims.service.calibration.ToolCallRedundancyService.class),
                     mock(com.cretas.aims.service.calibration.SelfCorrectionService.class),
                     mock(com.cretas.aims.service.calibration.CorrectionAgentService.class),
                     mock(com.cretas.aims.service.calibration.ExternalVerifierService.class),
                     mock(com.cretas.aims.service.calibration.ToolResultValidatorService.class),
                     mock(ParameterExtractionLearningService.class));
-            com.cretas.aims.service.PreviewTokenService tokens = mock(com.cretas.aims.service.PreviewTokenService.class);
             when(tokens.createBoundToken(any())).thenReturn(com.cretas.aims.entity.intent.IntentPreviewToken.builder()
                     .token("tok-quality").commandDigest("digest-quality")
                     .expiresAt(LocalDateTime.now().plusMinutes(5)).build());
@@ -630,6 +718,22 @@ class SseStreamingServiceSlotContinuationTest {
                     .toolName("quality_defect_record").build();
             when(h.aiIntentService.getIntentByCode(F, "QUALITY_DEFECT_RECORD")).thenReturn(Optional.of(intent));
             when(h.aiIntentService.hasPermission("QUALITY_DEFECT_RECORD", ROLE)).thenReturn(true);
+        }
+
+        void wireStreaming(Harness h) {
+            ReflectionTestUtils.setField(h.service, "toolRegistry", registry);
+            ReflectionTestUtils.setField(h.service, "toolDispatchService", dispatch);
+            ReflectionTestUtils.setField(h.service, "knowledgeBase", new IntentKnowledgeBase());
+            com.cretas.aims.service.intent.IntentConfigManagementService configs =
+                    mock(com.cretas.aims.service.intent.IntentConfigManagementService.class);
+            when(configs.resolveBusinessDomain(F)).thenReturn("FACTORY");
+            ReflectionTestUtils.setField(h.service, "businessTypeGate", new BusinessTypeGate(configs));
+            com.cretas.aims.service.intent.FrontlineAiWriteGrantService grants =
+                    new com.cretas.aims.service.intent.FrontlineAiWriteGrantService(
+                            mock(com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository.class),
+                            new WriteGuardService(), configs, registry);
+            ReflectionTestUtils.setField(h.service, "frontlineWriteGrants", grants);
+            ReflectionTestUtils.setField(dispatch, "frontlineWriteGrants", grants);
         }
 
         IntentExecuteResponse preview(String userInput, Map<String, Object> context) {
