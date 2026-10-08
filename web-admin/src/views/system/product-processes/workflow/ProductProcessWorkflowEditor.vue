@@ -278,6 +278,7 @@
         <VueFlow
           v-else
           id="product-process-workflow"
+          data-testid="workflow-canvas"
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
           :class="['workflow-canvas', {
@@ -1091,7 +1092,7 @@ import {
 } from '@/api/processProduction';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
-import { previewWorkflowAiSpec, type WorkflowAiPreview } from './workflowAiPreview';
+import { previewWorkflowAiDefinitions, workflowAiStableJson, type WorkflowAiPreview } from './workflowAiPreview';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
@@ -1326,6 +1327,11 @@ const activation = ref<ProductProcessWorkflowActivation | null>(null);
 const loadedDefinitionIdentity = ref<WorkflowIdentity | null>(null);
 const flowNodes = ref<Node[]>([]);
 const flowEdges = ref<Edge[]>([]);
+// The preview and apply buttons must consume the same compiled after-canvas;
+// re-running the compiler would generate fresh node ids and could diverge from
+// the rows the user reviewed. Entries are replaced when the canvas revision is
+// rechecked by the chat panel.
+const preparedAiDefinitions = new Map<string, ProductProcessWorkflowDefinition>();
 const loading = ref(false);
 const catalogLoading = ref(false);
 const loadedCatalogFactoryId = ref<string | null>(null);
@@ -6738,9 +6744,15 @@ async function reloadLatestDefinition(identity: WorkflowIdentity): Promise<void>
   }
 }
 
-function previewWorkflowSpec(spec: unknown): WorkflowAiPreview {
+async function previewWorkflowSpec(spec: unknown): Promise<WorkflowAiPreview> {
   if (!currentLoadedIdentity() || !canEdit.value) return { ok: false, message: '当前画布尚未加载或不可编辑，未应用配置。' };
-  return previewWorkflowAiSpec(currentDefinition(), spec);
+  const identity = currentLoadedIdentity()!;
+  const before = currentDefinition();
+  const compiled = await compileWorkflowSpec(spec as WorkflowSpec, identity, true);
+  if (!compiled) return { ok: false, message: '当前规格包含尚未匹配的工序，应用前无法完整编译差异。' };
+  const key = `${identity.factoryId}:${identity.productTypeId}:${workflowAiStableJson(spec)}:${workflowAiStableJson(before)}`;
+  preparedAiDefinitions.set(key, compiled);
+  return previewWorkflowAiDefinitions(before, compiled);
 }
 
 async function applyWorkflowAIDraft(
@@ -6757,10 +6769,20 @@ async function applyWorkflowAIDraft(
   }
   const { identity } = target;
   // 长久方案: AI 返回「语义规格」时走确定性编译器建图 (弃补丁)。旧的 patch 路径保留兜底。
-  // ⚠️ 这条 return 是**交棒**不是失败 —— buildWorkflowFromSpec 自己负责所有提示,
+  // ⚠️ 这条 return 是**交棒**不是失败 —— compileWorkflowSpec 自己负责所有提示,
   // 并且同样被 aiDraftNeverFailsSilently 那道闸盯着。
   if (payload.spec && typeof payload.spec === 'object') {
-    await buildWorkflowFromSpec(payload.spec as WorkflowSpec, identity);
+    const before = currentDefinition();
+    const key = `${identity.factoryId}:${identity.productTypeId}:${workflowAiStableJson(payload.spec)}:${workflowAiStableJson(before)}`;
+    const prepared = preparedAiDefinitions.get(key);
+    if (prepared) {
+      remember();
+      hydrate(prepared);
+      dirty.value = true;
+      await fitCanvas();
+    } else {
+      await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
+    }
     return;
   }
   if (!Array.isArray(payload.patches)) {
@@ -6825,11 +6847,14 @@ interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
  * MVP: 线性链 + 每步首产出 (多产出/分流 后续迭代)。工序匹配不到就现场创建 (复用 #13 逻辑);
  * 产出 SKU 先不自动建, 留待用户绑定 (安全)。
  */
-async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdentity): Promise<void> {
+async function compileWorkflowSpec(spec: WorkflowSpec, identity: WorkflowIdentity, dryRun = false): Promise<ProductProcessWorkflowDefinition | null> {
   const steps = Array.isArray(spec.steps)
     ? spec.steps.filter((s) => s && (s.process || '').trim())
     : [];
-  if (!steps.length) { ElMessage.warning('AI 规格里没有可用的工序步骤'); return; }
+  if (!steps.length) {
+    if (!dryRun) ElMessage.warning('AI 规格里没有可用的工序步骤');
+    return null;
+  }
 
   // 1) 预解析每步工序 (匹配已有 / 现场创建), async 先做完再建图
   const resolved: WorkProcessItem[] = [];
@@ -6847,9 +6872,10 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
       const outKind = step.outputs?.[0]?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
       const processCategory = (step.processCategory || '').trim();
       if (!workProcessCategories.value.includes(processCategory)) {
-        ElMessage.error(`工序「${name}」缺少有效类别，请先在工序管理中维护或在 AI 规格中选择已有类别`);
-        return;
+        if (!dryRun) ElMessage.error(`工序「${name}」缺少有效类别，请先在工序管理中维护或在 AI 规格中选择已有类别`);
+        return null;
       }
+      if (dryRun) return null;
       try {
         const resp = await createWorkProcess(identity.factoryId, {
           processName: name, processCategory,
@@ -6864,7 +6890,10 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         console.error('[buildWorkflowFromSpec] createWorkProcess failed', error);
       }
     }
-    if (!wp) { ElMessage.error(`工序「${name}」无法匹配或创建，AI 建流程中止`); return; }
+    if (!wp) {
+      if (!dryRun) ElMessage.error(`工序「${name}」无法匹配或创建，AI 建流程中止`);
+      return null;
+    }
     resolved.push(wp);
   }
 
@@ -6872,12 +6901,12 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
   // Catalog creation above must only run after that confirmation; cancellation never enters here.
   // ⛔ 同上: 用户已经点过「生成并替换」, 再静默退出就是「AI 没起作用」的观感。
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) {
-    ElMessage.warning({
+    if (!dryRun) ElMessage.warning({
       message: '确认之后画布已经切换或变为不可编辑，本次没有生成任何工序，画布保持原样。请切回原产品重试。',
       duration: 0,
       showClose: true,
     });
-    return;
+    return null;
   }
 
   // 3) 确定性建图 (sync in mutate, 复用 createProcessBranch): 入口原料 → 逐步 工序+产出
@@ -6885,7 +6914,8 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
   let mergeInputCount = 0;  // #4 合流额外投入原料端口数
   // 阶段 4: 被类别闸/数值域拒掉的调味行。⛔ 不能静默丢 —— 用户会以为 AI 照做了。
   const seasoningRejections: string[] = [];
-  mutate(() => {
+  let compiledDefinition: ProductProcessWorkflowDefinition | null = null;
+  const compileGraph = () => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
     const rawName = (spec.rawMaterials?.[0] || '入口原料').trim();
@@ -7077,9 +7107,15 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
       // 主链沿首产出继续 (多产出的其余分支是终端支流)
       prevMaterial = serializeFlowNode(outputNode);
     });
-    flowNodes.value = nodes;
-    flowEdges.value = edges;
-  });
+    compiledDefinition = { ...currentDefinition(), nodes: nodes as unknown as ProductProcessWorkflowDefinition['nodes'], edges: edges as unknown as ProductProcessWorkflowDefinition['edges'] };
+    if (!dryRun) {
+      flowNodes.value = nodes;
+      flowEdges.value = edges;
+    }
+  };
+  if (dryRun) compileGraph();
+  else mutate(compileGraph);
+  if (dryRun) return compiledDefinition;
   await nextTick();
   await handleAutoLayout();
   const parts = [`已按 AI 描述生成 ${steps.length} 道工序流程`];
@@ -7097,6 +7133,7 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
       message: `以下调味配置未采纳（AI 给的值不符合规则）：${seasoningRejections.join('；')}`,
     });
   }
+  return compiledDefinition;
 }
 
 function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boolean {

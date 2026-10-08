@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { previewWorkflowAiSpec, workflowAiStableJson } from '../workflowAiPreview';
+import { previewWorkflowAiDefinitions, previewWorkflowAiSpec, workflowAiStableJson } from '../workflowAiPreview';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
 import { EMPTY_CANVAS, LARGE_SPEC, LARGE_PATHS } from './workflowAiPreview.fixture';
 
 describe('workflow AI complete change projection', () => {
+  it('diffs the complete semantic before/after canvas, including compiler-only fields', () => {
+    const before = {
+      ...EMPTY_CANVAS,
+      nodes: [{ id: 'process1', kind: 'PROCESS', data: { processName: '前处理', reportingRequired: false, ports: [] } },
+        { id: 'finished', kind: 'FINISHED_GOOD', data: { name: '成品', packagingBindings: [{ materialName: '成品盒' }] } }],
+      edges: [{ id: 'old-edge', source: 'process1', target: 'finished' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const after = {
+      ...before,
+      nodes: [{ id: 'new-process', kind: 'PROCESS', data: { processName: '前处理', reportingRequired: true, ports: [] } },
+        { id: 'new-finished', kind: 'FINISHED_GOOD', data: { name: '成品' } }],
+      edges: [{ id: 'new-edge', source: 'new-process', target: 'new-finished' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const preview = previewWorkflowAiDefinitions(before, after);
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('是否报工：否 → 是');
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('包材配置');
+    expect(preview.rows.some(row => row.path.startsWith('canvas.edges'))).toBe(false);
+  });
+
   it('projects compiler defaults and preserved terminal packaging loss into the confirmation diff', () => {
     const graph = {
       ...EMPTY_CANVAS,

@@ -24,6 +24,54 @@ export function workflowAiStableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * Diff the exact semantic canvas definitions produced before and after the
+ * shared Workflow compiler. Runtime ids and layout coordinates are generated
+ * values, so they are normalized while every business field, node and edge is
+ * retained. This is the confirmation-card source of truth for mounted AI use.
+ */
+export function previewWorkflowAiDefinitions(
+  before: ProductProcessWorkflowDefinition,
+  after: ProductProcessWorkflowDefinition,
+): WorkflowAiPreview {
+  const normalize = (definition: ProductProcessWorkflowDefinition): Record<string, unknown> => {
+    const index = new Map(definition.nodes.map((node, i) => [node.id, i]));
+    return {
+      nodes: definition.nodes.map(node => ({ kind: node.kind, data: node.data })),
+      edges: definition.edges.map(edge => ({
+        source: index.get(edge.source), sourceHandle: edge.sourceHandle,
+        target: index.get(edge.target), targetHandle: edge.targetHandle,
+      })),
+    };
+  };
+  const beforeValue = normalize(before);
+  const afterValue = normalize(after);
+  const rows: WorkflowAiChangeRow[] = [];
+  const add = (path: string, label: string, from: unknown, to: unknown): void => {
+    if (workflowAiStableJson(from) === workflowAiStableJson(to)) return;
+    if (path.endsWith('.packagingBindings')) {
+      rows.push({ path, text: `${label}：${display(from)} → ${display(to)}` });
+      return;
+    }
+    if (record(from) || record(to)) {
+      const a = record(from) ? from : {};
+      const b = record(to) ? to : {};
+      [...new Set([...Object.keys(a), ...Object.keys(b)])]
+        .forEach(key => add(`${path}.${key}`, `${label} · ${labels[key] || key}`, a[key], b[key]));
+      return;
+    }
+    if (Array.isArray(from) || Array.isArray(to)) {
+      const a = Array.isArray(from) ? from : [];
+      const b = Array.isArray(to) ? to : [];
+      for (let i = 0; i < Math.max(a.length, b.length); i += 1) add(`${path}[${i}]`, `${label} ${i + 1}`, a[i], b[i]);
+      return;
+    }
+    rows.push({ path, text: `${label}：${display(from)} → ${display(to)}` });
+  };
+  add('canvas', '画布', beforeValue, afterValue);
+  return { ok: true, rows, revision: workflowAiStableJson(beforeValue) };
+}
+
 function display(value: unknown): string {
   if (value === undefined) return '未设置';
   if (value === null) return 'null';

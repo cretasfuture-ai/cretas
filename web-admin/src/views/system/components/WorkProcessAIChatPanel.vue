@@ -222,7 +222,7 @@ const props = withDefaults(defineProps<{
   context?: Record<string, unknown>;
   contextLabel?: string;
   quickPrompts?: string[];
-  previewSpec?: (spec: unknown) => WorkflowAiPreview;
+  previewSpec?: (spec: unknown) => WorkflowAiPreview | Promise<WorkflowAiPreview>;
 }>(), {
   title: 'AI 配工序',
   productTypeId: '',
@@ -342,7 +342,7 @@ async function send(): Promise<void> {
       role: 'assistant',
       content: data.reply || (hasDiffs ? '已生成草稿，请审核后应用。' : '无法生成草稿，请检查工序描述'),
       sourceIdentity,
-      diffPreview: (data.diffs || []).map(prepareDiff),
+      diffPreview: await Promise.all((data.diffs || []).map(prepareDiff)),
     });
   } catch (e) {
     if (!isCurrentRequest(generation, sourceIdentity)) return;
@@ -397,10 +397,10 @@ function isCurrentSource(identity: SourceIdentity): boolean {
     && identity.productTypeId === props.productTypeId;
 }
 
-function prepareDiff(diff: ChatDiff): ChatDiff {
+async function prepareDiff(diff: ChatDiff): Promise<ChatDiff> {
   if (diff.type !== 'PRODUCT_PROCESS_WORKFLOW_SPEC') return diff;
   const spec = JSON.parse(JSON.stringify(diff.params.spec ?? null));
-  const preview = props.previewSpec?.(spec);
+  const preview = await props.previewSpec?.(spec);
   if (!preview || preview.ok === false) return { ...diff, previewError: preview && preview.ok === false ? preview.message : '当前画布无法预览，未应用配置。' };
   return { ...diff, proposal: { spec, rows: preview.rows, revision: preview.revision, state: 'pending' } };
 }
@@ -418,11 +418,11 @@ function cancelSpecProposal(diff: ChatDiff): void {
   if (diff.proposal?.state === 'pending') diff.proposal.state = 'cancelled';
 }
 
-function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity): void {
+async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity): Promise<void> {
   const proposal = diff.proposal;
   if (!proposal || proposal.state !== 'pending' || props.disabled || loading.value
     || !sourceIdentity || !isCurrentSource(sourceIdentity)) return;
-  const recheck = props.previewSpec?.(proposal.spec);
+  const recheck = await props.previewSpec?.(proposal.spec);
   if (!recheck || recheck.ok === false) {
     diff.previewError = recheck && recheck.ok === false ? recheck.message : '当前画布无法预览，未应用配置。';
     diff.proposal = undefined;
