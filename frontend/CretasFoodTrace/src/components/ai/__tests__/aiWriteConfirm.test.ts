@@ -159,9 +159,22 @@ describe('previewRows', () => {
     const rows = previewRows({ ...ACTION, currentValues: { quantity: 10, factoryId: 'F' }, newValues: { quantity: 12 } });
     expect(rows).toEqual([{ key: 'quantity', label: '数量', before: '10', value: '12', changed: true }]);
   });
-  it('对照: 没有 newValues 时只显示已知中文标签, 隐藏不认识的键', () => {
+  it('没有 newValues 时出 previewData 的键值: 没有 label 的英文键照原样显示 (业务行不藏, H3), 系统键 canDo 不显示', () => {
     const rows = previewRows({ ...ACTION, newValues: {}, previewData: { success: true, data: { sampleCode: 'S-1', canDo: true } } });
-    expect(rows).toEqual([]);
+    expect(rows).toEqual([{ key: 'sampleCode', label: 'sampleCode', value: 'S-1' }]);
+  });
+  it('空值写「暂无」, 对象按「键：值」逐项 (不是 JSON), 对象里的系统键也跳过', () => {
+    const rows = previewRows({
+      ...ACTION,
+      newValues: {},
+      previewData: { data: { notes: null, supplierName: { 名称: '甲供应商', code: 'X1', factoryId: 'F' }, batchNumber: '' } },
+    });
+    expect(rows).toEqual([
+      { key: 'notes', label: '备注', value: '暂无' },
+      { key: 'supplierName', label: '供应商', value: '名称：甲供应商；code：X1' },
+      { key: 'batchNumber', label: '批次号', value: '暂无' },
+    ]);
+    for (const r of rows) expect(r.value).not.toMatch(/^—$|[{}"]/);
   });
   it('写工具预览用中文键 (打卡 / 领用 / 质检的 currentValues/newValues): 确认卡必须显示这些行, 不能是空卡', () => {
     // 2026-10-07 organizer 审 #954: 只认 KEY_LABELS 会把中文键全藏掉, 用户在看不到改动的情况下点确认。
@@ -170,10 +183,12 @@ describe('previewRows', () => {
       currentValues: { 今天的打卡: '还没有上班打卡', internalFooId: 'x-1' },
       newValues: { 今天的打卡: '上班 14:46', 考勤记为: '迟到', internalFooId: 'x-2' },
     });
-    expect(rows.map((r) => r.key)).toEqual(['今天的打卡', '考勤记为']);
+    expect(rows.map((r) => r.key)).toEqual(['今天的打卡', 'internalFooId', '考勤记为']);
     expect(rows[0]).toEqual(expect.objectContaining({ label: '今天的打卡', before: '还没有上班打卡', value: '上班 14:46', changed: true }));
-    // 对照: 没有中文标签的英文内部字段照样隐藏
-    expect(rows.find((r) => r.key === 'internalFooId')).toBeUndefined();
+    // 2026-10-08 起没有 label 的英文键也显示 (业务行不藏, H3): 照原样显示键名, 改前改后的值都在
+    expect(rows[1]).toEqual(expect.objectContaining({ label: 'internalFooId', before: 'x-1', value: 'x-2', changed: true }));
+    // 新增字段 (改前没有) 的「改前」写「暂无」, 不写「—」
+    expect(rows[2]).toEqual(expect.objectContaining({ label: '考勤记为', before: '暂无', value: '迟到' }));
   });
 });
 

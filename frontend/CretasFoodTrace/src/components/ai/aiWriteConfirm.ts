@@ -425,21 +425,24 @@ export interface PreviewRow {
   changed?: boolean;
 }
 
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—';
+/** 算不出 / 没填的值用文字写状态 (AI 对话标准 V1), ⛔ 不显示「—」/ 空 */
+export const EMPTY_VALUE_TEXT = '暂无';
+
+/** 值 → 文字。对象按「键：值」逐项 (键走 labelOf, 系统键跳过), ⛔ 不用 JSON.stringify; 数组逐项用「、」连接。 */
+function formatValue(value: unknown, depth = 0): string {
+  if (value === null || value === undefined || value === '') return EMPTY_VALUE_TEXT;
+  if (Array.isArray(value)) {
+    const items = value.map((v) => formatValue(v, depth + 1)).filter((t) => t !== EMPTY_VALUE_TEXT);
+    return items.length ? items.join('、') : EMPTY_VALUE_TEXT;
+  }
   if (typeof value === 'object') {
-    try { return JSON.stringify(value); } catch { return String(value); }
+    if (depth >= 3) return EMPTY_VALUE_TEXT;
+    const parts = Object.entries(value as Record<string, unknown>)
+      .filter(([k]) => !HIDDEN_KEYS.has(k))
+      .map(([k, v]) => `${labelOf(k)}：${formatValue(v, depth + 1)}`);
+    return parts.length ? parts.join('；') : EMPTY_VALUE_TEXT;
   }
   return String(value);
-}
-
-/**
- * 确认卡上能显示的键: 有中文标签的英文键, 或者键本身就是中文 (写工具预览大多直接用中文键,
- * 如「今天的打卡」「剩余数量」)。只隐藏没有标签的英文内部字段。
- * ⛔ 不能只认 KEY_LABELS: 那样中文键全被藏掉, 确认卡变成空卡, 用户在看不到改动的情况下点确认。
- */
-function isShowableKey(key: string): boolean {
-  return KEY_LABELS[key] !== undefined || /[\u4e00-\u9fff]/.test(key);
 }
 
 function labelOf(key: string): string {
@@ -449,6 +452,12 @@ function labelOf(key: string): string {
 /**
  * 给用户看的关键内容: 有 newValues 时出「当前 → 修改后」对比行;
  * 否则出 previewData.data 的键值 (剥掉 success/data 外壳和系统键)。
+ *
+ * 🔴 业务字段一行都不藏 (AI 对话标准 H3 优先于 V3; Steve 2026-10-08 让按更好的选择定, 与 web 的 AiOperationCard 统一):
+ * 只跳过 HIDDEN_KEYS 里的系统键。中文键原样; 有 KEY_LABELS 的英文键显示中文; **没有 label 的英文键照原样显示键名**
+ * —— 藏掉一行写入内容 (例如计划数量 plannedQty) 让用户看不到就点确认, 比露出一个英文键名更糟。
+ * 新的英文键要补进 KEY_LABELS (web 那份同步补, 有逐键对比的测试), ⛔ 不是在这里藏掉。
+ * ⛔ 也不许回退成「只认 KEY_LABELS」: 那会连中文键一起藏掉, 确认卡变成空卡 (#954)。
  */
 export function previewRows(action: ConfirmableAction | undefined): PreviewRow[] {
   if (!action) return [];
@@ -457,7 +466,7 @@ export function previewRows(action: ConfirmableAction | undefined): PreviewRow[]
     const cur = asRecord(action.currentValues) ?? {};
     const keys = Array.from(new Set([...Object.keys(cur), ...Object.keys(next)]));
     return keys
-      .filter((k) => !HIDDEN_KEYS.has(k) && isShowableKey(k))
+      .filter((k) => !HIDDEN_KEYS.has(k))
       .map((k) => {
         const before = formatValue(cur[k]);
         const value = formatValue(next[k]);
@@ -468,7 +477,7 @@ export function previewRows(action: ConfirmableAction | undefined): PreviewRow[]
   if (!root) return [];
   const data = asRecord(root.data) ?? root;
   return Object.entries(data)
-    .filter(([k]) => !HIDDEN_KEYS.has(k) && k !== 'data' && isShowableKey(k))
+    .filter(([k]) => !HIDDEN_KEYS.has(k) && k !== 'data')
     .map(([k, v]) => ({ key: k, label: labelOf(k), value: formatValue(v) }));
 }
 
