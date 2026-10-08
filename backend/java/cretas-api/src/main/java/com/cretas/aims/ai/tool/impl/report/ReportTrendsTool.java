@@ -111,7 +111,7 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         String metric = getString(params, "metric", "PRODUCTION");
         Integer days = getInteger(params, "days", 30);
         String comparisonType = getString(params, "comparisonType");
-        String userInput = firstNonBlank(getString(context, "userInput"), getString(context, "input"),
+        String userInput = firstNonBlank(getString(params, "userInput"), getString(context, "userInput"), getString(context, "input"),
                 getString(context, "message"));
         boolean explicitComparison = containsAny(userInput, "同比", "去年同期", "上年同期", "环比", "对比", "比上期");
         boolean dailyOnly = containsAny(userInput, "不比较", "只要日序列")

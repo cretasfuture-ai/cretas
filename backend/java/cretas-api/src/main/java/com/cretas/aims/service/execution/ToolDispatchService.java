@@ -44,6 +44,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -1439,11 +1440,12 @@ public class ToolDispatchService {
 
             @SuppressWarnings("unchecked")
             List<String> requiredParams = (List<String>) parametersSchema.get("required");
-            if (requiredParams == null || requiredParams.isEmpty()) {
-                return extractedParams;
-            }
-
-            List<String> missingParams = requiredParams.stream()
+            // Optional-only tools still carry user-specified filters (period, comparison, days).
+            Map<String, Object> properties = parametersSchema.get("properties") instanceof Map<?, ?> p
+                    ? (Map<String, Object>) p : Map.of();
+            Collection<String> candidates = requiredParams == null || requiredParams.isEmpty()
+                    ? properties.keySet() : requiredParams;
+            List<String> missingParams = candidates.stream()
                     .filter(p -> !existingParams.containsKey(p) ||
                                  existingParams.get(p) == null ||
                                  (existingParams.get(p) instanceof String &&
