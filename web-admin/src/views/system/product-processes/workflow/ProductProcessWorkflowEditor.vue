@@ -562,6 +562,7 @@
               :context-label="aiContextLabel"
               :quick-prompts="aiQuickPrompts"
               :preview-spec="previewWorkflowSpec"
+              :apply-spec="applyWorkflowAIDraft"
               @apply-draft="applyWorkflowAIDraft"
             />
           </div>
@@ -6757,10 +6758,15 @@ async function previewWorkflowSpec(spec: unknown): Promise<WorkflowAiPreview> {
   return previewWorkflowAiDefinitions(before, compiled);
 }
 
+interface WorkflowSpecApplyResult {
+  status: 'applied' | 'review';
+  preview?: WorkflowAiPreview;
+}
+
 async function applyWorkflowAIDraft(
   payload: Record<string, unknown>,
   sourceIdentity?: WorkflowIdentity,
-): Promise<void> {
+): Promise<WorkflowSpecApplyResult | void> {
   // ⛔ 这里以前是一条裸 return, 4 种原因("没有 sourceIdentity / 画布没加载完 /
   // 画布是另一个产品 / 没有写权限")全部静默退出 —— 客户看到的就是「AI 改完我也看不到区别」。
   const target = resolveAiDraftTarget(sourceIdentity);
@@ -6796,10 +6802,10 @@ async function applyWorkflowAIDraft(
             duration: 0,
             showClose: true,
           });
-          return;
+          return { status: 'review', preview: actual };
         }
         await applyPreparedWorkflowDefinition(materialized, identity);
-        return;
+        return { status: 'applied' };
       }
       const applied = prepared;
       if (!applied) return;
@@ -6812,6 +6818,7 @@ async function applyWorkflowAIDraft(
         return;
       }
       await applyPreparedWorkflowDefinition(applied, identity);
+      return { status: 'applied' };
     } else {
       await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
     }
@@ -6852,7 +6859,8 @@ async function applyWorkflowAIDraft(
   remember();
   hydrate(proposed.definition);
   dirty.value = true;
-  await fitCanvas();
+    await fitCanvas();
+  return { status: 'applied' };
 }
 
 /** Consume the exact definition reviewed by the panel while preserving the normal edit/save bookkeeping. */

@@ -199,6 +199,10 @@ interface SourceIdentity {
   factoryId: string;
   productTypeId: string;
 }
+interface SpecApplyResult {
+  status: 'applied' | 'review';
+  preview?: WorkflowAiPreview;
+}
 
 interface ChatMessage {
   role: ChatRole;
@@ -224,6 +228,7 @@ const props = withDefaults(defineProps<{
   contextLabel?: string;
   quickPrompts?: string[];
   previewSpec?: (spec: unknown) => WorkflowAiPreview | Promise<WorkflowAiPreview>;
+  applySpec?: (draft: Record<string, unknown>, sourceIdentity: SourceIdentity) => void | SpecApplyResult | Promise<void | SpecApplyResult>;
 }>(), {
   title: 'AI 配工序',
   productTypeId: '',
@@ -451,9 +456,18 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     diff.previewError = '画布已变化，已刷新全部改动，请重新审核并应用。';
     return;
   }
+  const applyResult = props.applySpec
+    ? await props.applySpec({ ...diff.params, spec: proposal.spec }, sourceIdentity)
+    : (emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity), undefined);
+  if (applyResult?.status === 'review' && applyResult.preview?.ok) {
+    proposal.rows = applyResult.preview.rows;
+    proposal.revision = applyResult.preview.revision;
+    proposal.applying = false;
+    diff.previewError = '应用前画布计划发生变化，已刷新改动，请重新审核。';
+    return;
+  }
   proposal.applying = false;
   proposal.state = 'submitted';
-  emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity);
 }
 
 interface DraftStep {
