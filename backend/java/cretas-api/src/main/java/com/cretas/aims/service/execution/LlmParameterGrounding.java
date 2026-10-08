@@ -112,6 +112,14 @@ public final class LlmParameterGrounding {
             boolean hasEnum = prop.get("enum") instanceof Collection<?>;
             boolean numericType = "integer".equals(type) || "number".equals(type);
 
+            // Relative periods belong to the tool's calendar logic, not invented LLM dates.
+            if ("date".equals(prop.get("format")) && value instanceof String date
+                    && !date.equals(existing.get(key))
+                    && !dateMentioned(userInput, date)) {
+                dropped.put(key, "日期不在用户原话中");
+                continue;
+            }
+
             if (value == null || value instanceof Boolean || value instanceof Map || value instanceof Collection) {
                 accepted.put(key, value);
                 continue;
@@ -373,6 +381,24 @@ public final class LlmParameterGrounding {
             }
         }
         return sb.toString();
+    }
+
+    private static boolean dateMentioned(String input, String date) {
+        if (input == null) return false;
+        if (input.contains(date)) return true;
+        Matcher explicit = Pattern.compile("(\\d{4})年(\\d{1,2})月(\\d{1,2})日(?:\\s*(?:至|到)\\s*(\\d{1,2})日)?").matcher(input);
+        while (explicit.find()) {
+            try {
+                int year = Integer.parseInt(explicit.group(1));
+                int month = Integer.parseInt(explicit.group(2));
+                if (java.time.LocalDate.of(year, month, Integer.parseInt(explicit.group(3))).toString().equals(date)) return true;
+                if (explicit.group(4) != null
+                        && java.time.LocalDate.of(year, month, Integer.parseInt(explicit.group(4))).toString().equals(date)) return true;
+            } catch (java.time.DateTimeException ignored) {
+                // An invalid explicit date is not evidence for a different date.
+            }
+        }
+        return false;
     }
 
     private static String normalizeText(String s) {
