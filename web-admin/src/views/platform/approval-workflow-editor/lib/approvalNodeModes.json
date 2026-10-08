@@ -1,0 +1,4 @@
+{
+  "approval": ["ANY", "ALL"],
+  "join": ["ALL", "N_OF_M", "ANY"]
+}
