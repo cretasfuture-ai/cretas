@@ -350,8 +350,9 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         if (cfg == null) return Optional.empty();
         long now = System.currentTimeMillis();
         IntentMatchResult result = IntentMatchResult.builder().userInput(sanitized).bestMatch(cfg)
-                .topCandidates(List.of(CandidateIntent.fromConfig(cfg, 0.99, 99, List.of(match.get()), MatchMethod.PHRASE_MATCH)))
-                .confidence(0.99).matchMethod(MatchMethod.PHRASE_MATCH).isStrongSignal(true).build();
+                .topCandidates(List.of(CandidateIntent.fromConfig(cfg, 0.96, 96, Collections.emptyList(), MatchMethod.PHRASE_MATCH)))
+                .confidence(0.96).matchMethod(MatchMethod.PHRASE_MATCH).matchedKeywords(Collections.emptyList())
+                .isStrongSignal(true).requiresConfirmation(false).build();
         saveIntentMatchRecord(result, factoryId, userId, sessionId, false);
         return Optional.of(attachTiming(result, now, now));
     }
