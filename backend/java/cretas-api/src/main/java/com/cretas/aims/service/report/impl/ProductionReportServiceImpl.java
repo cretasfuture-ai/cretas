@@ -977,31 +977,31 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal cost1 = productionPlanRepository.calculateTotalCostBetweenDates(
                 factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59));
         Map<String, Object> period1Data = new HashMap<>();
-        period1Data.put("output", output1 != null ? output1 : BigDecimal.ZERO);
-        period1Data.put("cost", cost1 != null ? cost1 : BigDecimal.ZERO);
+        period1Data.put("output", output1);
+        period1Data.put("cost", cost1);
         report.put("period1", period1Data);
         BigDecimal output2 = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59));
         BigDecimal cost2 = productionPlanRepository.calculateTotalCostBetweenDates(
                 factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59));
         Map<String, Object> period2Data = new HashMap<>();
-        period2Data.put("output", output2 != null ? output2 : BigDecimal.ZERO);
-        period2Data.put("cost", cost2 != null ? cost2 : BigDecimal.ZERO);
+        period2Data.put("output", output2);
+        period2Data.put("cost", cost2);
         report.put("period2", period2Data);
         Map<String, Object> comparison = new HashMap<>();
-        if (output1 != null && output1.compareTo(BigDecimal.ZERO) > 0) {
+        if (output1 != null && output1.compareTo(BigDecimal.ZERO) > 0 && output2 != null) {
             BigDecimal outputChange = output2.subtract(output1).divide(output1, 4, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100));
             comparison.put("outputChangeRate", outputChange);
         } else {
-            comparison.put("outputChangeRate", BigDecimal.ZERO);
+            comparison.put("outputChangeRate", null);
         }
-        if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0) {
+        if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0 && cost2 != null) {
             BigDecimal costChange = cost2.subtract(cost1).divide(cost1, 4, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100));
             comparison.put("costChangeRate", costChange);
         } else {
-            comparison.put("costChangeRate", BigDecimal.ZERO);
+            comparison.put("costChangeRate", null);
         }
         report.put("comparison", comparison);
         return report;

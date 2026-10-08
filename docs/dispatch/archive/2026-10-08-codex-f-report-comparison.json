@@ -1,0 +1,28 @@
+{
+  "taskId": "CODEX-DEF-F-20261007",
+  "baseSha": "a137c1c140761baaabc575d578a486ded5c0dfe8",
+  "state": "review",
+  "dependency": "No dependency on D or E",
+  "cause": "REPORT_TRENDS only called getTrendsDashboard for a daily series, despite advertising MOM/YOY. Existing getPeriodComparisonReport was not wired, coalesced missing period values into zero, and could subtract null current values.",
+  "change": "Wire real getPeriodComparisonReport with base first/current second for production and cost (including ALL). Default MOM; user同比/去年同期 selects YOY and overrides an incorrect extracted MOM. Explicit daily-only input keeps the original series. Calendar day/week/month/quarter/year moves back one matching period; explicit dates/custom days compare adjacent equal-length ranges. Include both date ranges and business data basis. Missing/zero baseline or missing current returns null rates with Chinese explanation, including both-missing base priority.",
+  "realEntry": "ReportTrendsTool.execute -> actual ReportServiceImpl -> actual ProductionReportServiceImpl -> actual ProcessingServiceImpl. Only ProductionPlanRepository/ProductionBatchRepository external IO mocked. Period fixtures depend on query dates, not invocation order.",
+  "numberProvenance": "Real FactoryNumberProvenance.enforce receives the actual serialized tool result data, including nested comparison figures. Six claims for base/current output, cost and rates all PASS; fabricated 77% REDACTED with one unsourced claim. No manual source-number map.",
+  "backendCommand": "mvn -B -Dmaven.compiler.useIncrementalCompilation=false -Dtest=ReportTrendsToolContractTest -Dcretas.testIncludes=com/cretas/aims/ai/tool/impl/report/ReportTrendsToolContractTest.java test",
+  "backendBaseline": {"tests": 13, "passed": 0, "failures": 13, "errors": 0, "skipped": 0},
+  "backendBranch": {"tests": 13, "passed": 13, "failures": 0, "errors": 0, "skipped": 0},
+  "baselineMethod": "Copied identical final ContractTest into a detached worktree at a137c1c140, touched timestamp, verified SHA256 C4AF90CF5AF43DDC49544DB5ECEF5C8C3A9F9FEAA75D6D5CBBF86791F888215D and no production diff, then ran identical command. Counts read from preserved Surefire XML. Earlier compile-only attempts are not the reported baseline.",
+  "mutations": [
+    {"change": "Return zero for unavailable rates", "observable": "F_MUTANT_ZERO_OUTPUT_RATE=0; F_MUTANT_ZERO_COST_RATE=0", "tests": 12, "failures": 2, "assertions": ["zeroOrMissingBaseProducesNullAndLocalizedReason", "currentPeriodMissingDataReturnsNullWithoutSubtractFailure"]},
+    {"change": "Force YOY to MOM", "observable": "F_MUTANT_YOY_TO_MOM=MOM plus actual base period dates", "tests": 12, "failures": 3, "assertions": ["userInputYoyUsesLastYearAndPassesBaseThenCurrent", "explicitUserYoyOverridesExtractedMomParameter", "dailyProductionWithExplicitYoyStillCompares"]},
+    {"change": "Remove daily-only guard", "observable": "F_MUTANT_DAILY_COMPARISON=true,dailyOnly=true and comparison actually present", "tests": 12, "failures": 2, "assertions": ["explicitDailyOnlyWinsWithoutFabricatingComparisonAndCostHasPositiveComparison", "dailySequenceDoesNotCompareButPlainWeekDoes"]},
+    {"change": "Drop comparison subtree from actual tool result", "observable": "F_MUTANT_DROP_COMPARISON and provenance changes PASS to REDACTED", "tests": 12, "failures": 12, "primaryAssertion": "provenancePassesRealOutputCostRateAndRejectsFabricatedRate; remaining result-contract assertions also fail"},
+    {"change": "Return fractions instead of percentage points", "observable": "F_MUTANT_RATE_AS_FRACTION=0.2000; F_MUTANT_COST_AS_FRACTION=0.1000", "tests": 13, "failures": 4, "assertions": ["explicitDailyOnlyWinsWithoutFabricatingComparisonAndCostHasPositiveComparison", "realExecuteCalculatesPositiveMomFromRepositoryValues", "customSevenDayRangeComparesImmediatelyPreviousSevenDays", "userInputYoyUsesLastYearAndPassesBaseThenCurrent"]},
+    {"change": "Skip missing baseline explanation priority", "observable": "F_MUTANT_CURRENT_PRIORITY and actual message incorrectly says current period", "tests": 13, "failures": 1, "assertion": "missingBothPeriodsExplainsMissingBaseWithoutInventingZero"}
+  ],
+  "restoration": "All mutations restored via apply_patch; no MUTANT/false-and marker left. Final restored 13-case suite completed: 13 passed, zero failures/errors. The first four mutation runs used the 12-case suite; the new both-missing case expanded final baseline/branch to 13.",
+  "prodReadOnlySql": {"factoryId": "F006", "currentStart": "2026-09-24", "currentEnd": "2026-09-30", "currentOutput": 3.00, "currentRows": 3, "baseStart": "2026-09-17", "baseEnd": "2026-09-23", "baseOutput": 8.00, "baseRows": 2, "derivedMomPercent": -62.5, "basis": "production_plans.end_time / SUM(actual_quantity)", "sql": "prod-sql-f006-exact.sql", "rawResult": "prod-sql-f006-period-values.txt"},
+  "dataLimits": "Historical production data available in two exact windows; not presented as current-month availability. Zero/missing and numeric edge cases use local repository fixtures through actual business methods. Existing quality/efficiency/inventory/revenue series have no matching two-period aggregate in this service and are not assigned invented comparison figures.",
+  "frontend": "No frontend changes; no RN suites/tsc needed for this backend-only PR",
+  "limits": "PR only; no merge, deployment, OTA, production AI calls, migration, Entity/Repository changes or ai_intent_configs modifications. Organizer owns merge and production acceptance.",
+  "evidenceDirectory": "D:/Temp/claude/codex-def-evidence/F"
+}
