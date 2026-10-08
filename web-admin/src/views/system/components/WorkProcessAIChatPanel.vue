@@ -447,7 +447,7 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     diff.previewError = error instanceof Error ? error.message : '当前画布预览失败，未应用配置。';
     return;
   }
-  if (!isCurrentSource(sourceIdentity) || props.disabled || loading.value || proposal.state !== 'pending') {
+  if (!isCurrentSource(sourceIdentity) || loading.value || proposal.state !== 'pending') {
     proposal.applying = false;
     return;
   }
@@ -469,7 +469,7 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
   try {
     if (props.applySpec) {
       const result = await props.applySpec({ ...diff.params, spec: proposal.spec }, sourceIdentity);
-      applyResult = result ?? { status: 'applied' };
+      applyResult = result === undefined ? { status: 'applied' } : result as SpecApplyResult;
     } else {
       emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity);
       applyResult = { status: 'applied' };
@@ -479,7 +479,14 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     diff.previewError = error instanceof Error ? error.message : '应用配置失败，画布未改变。';
     return;
   }
-  if (!isCurrentSource(sourceIdentity) || props.disabled || loading.value || proposal.state !== 'pending') {
+  // The editor callback is authoritative: an applied result means the canvas
+  // already changed, even if permission/loading props changed in the same tick.
+  if (applyResult?.status === 'applied') {
+    proposal.applying = false;
+    if (isCurrentSource(sourceIdentity)) proposal.state = 'submitted';
+    return;
+  }
+  if (!isCurrentSource(sourceIdentity) || loading.value || proposal.state !== 'pending') {
     proposal.applying = false;
     return;
   }
