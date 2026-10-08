@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import random
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -38,6 +39,19 @@ SPECIAL_OPTIONS = [
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
 STRICT_SYSTEM = "你是业务系统的请求分类器。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
+REQUEST_PURPOSE_RULES = (
+    "先判断用户此刻想得到什么，再选功能；提到某功能不等于要求现在调用它。"
+    "询问现有业务的事实、数量、状态、比较，或根据最近对话补充、纠正一个明确请求，"
+    "属于当前业务请求；间接表达的真实查询也要理解，不要只因用了条件词就拒绝。"
+    "只问界面位置、按钮怎么点、操作教程、应该找谁，或讨论尚未成立的条件、未来愿望、"
+    "是否应该采取某个动作，不能改解成现在查询或更改业务数据。"
+    "这类话选择 NONE（当前没有要调用的业务功能），意愿或指代仍不清楚则选 CLARIFY；"
+    "不要擅自补出用户未表达的操作意愿。"
+    "明确询问整个系统有什么功能可以选择使用帮助；它不是具体业务操作教程的替代答案。"
+    "条件已经满足且明确要求现在办理，或上下文已确认要办理的请求，应选择对应业务功能。"
+    "对当前业务请求，保留用户要处理的具体对象、动作和范围；"
+    "不要把具体对象的数据查询扩大成全局总览，也不要把明确的登记或修改改解成查询已有记录。"
+)
 
 # 角色码 -> (称呼, 说明)。说明进提示词, 帮模型理解「同一句话不同人说意思不同」。
 ROLE_LABELS: Dict[str, tuple] = {
@@ -177,6 +191,35 @@ class Decision:
     choose_ms: int = 0
 
 
+class RequestPurpose(str, Enum):
+    CURRENT = "CURRENT"
+    INFORMATION_ONLY = "INFORMATION_ONLY"
+    UNRESOLVED = "UNRESOLVED"
+
+
+def parse_request_purpose(content: str) -> Optional[RequestPurpose]:
+    try:
+        value = json.loads(content)
+        if not isinstance(value, dict) or set(value) != {"purpose"}:
+            return None
+        return RequestPurpose(value["purpose"])
+    except (ValueError, TypeError):
+        return None
+
+
+def build_purpose_messages(query: str, role: Optional[str],
+                           history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
+    system = ("判断用户当前的交际目的，不选业务功能，也不判定操作权限。" + REQUEST_PURPOSE_RULES +
+              "礼貌、委婉和间接表达的实际办理请求仍是 CURRENT；已经确定办理意愿但缺少业务参数也仍是 CURRENT。"
+              "只有对象和事情都清楚，且只是讲述已完成的事或致谢，才不是再次办理。"
+              "简短状态回复若没有可用上文、无法判断在说哪件事，属于 UNRESOLVED，不能认定为单纯汇报。"
+              "只输出 JSON，且只有 purpose 字段：CURRENT=当前请求业务事实或办理操作；"
+              "INFORMATION_ONLY=只咨询教程、讨论未触发条件/建议/愿望、否定或报告已完成操作；"
+              "UNRESOLVED=无法判断当前是否要办理或对话指代仍不明。")
+    return [{"role":"system", "content":system},
+            {"role":"user", "content":f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+
+
 class DecisionMatcher:
     def __init__(self, timeout_s: float = 6.0, k: int = 20, shortlist_size: int = 8):
         self.timeout_s = timeout_s
@@ -191,6 +234,25 @@ class DecisionMatcher:
             return await call_chain(SLOT.DECISION, payload, timeout=self.timeout_s,
                                     total_timeout=self.timeout_s, body_validator=body_validator,
                                     content_validator=content_validator)
+
+    async def request_purpose(self, query: str, role: Optional[str],
+                              history: Optional[List[Dict[str, Any]]] = None) -> Optional[RequestPurpose]:
+        """Generated semantic disposition, never an invented probability or permission grant.
+
+        Separate from the function chooser: related function names cannot force a
+        tutorial/hypothetical statement into an active request. Missing model evidence
+        remains unknown; the orchestrator asks instead of guessing a legacy intent.
+        """
+        def valid(content):
+            return None if parse_request_purpose(content) is not None else "bad_request_purpose_json"
+        payload={"messages":build_purpose_messages(query,role,history),"max_tokens":32}
+        try:
+            body=await self._call(payload,content_validator=valid)
+            content=((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            return parse_request_purpose(content)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("request purpose unavailable: %s",str(ex)[:200])
+            return None
 
     async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
                         history: Optional[List[Dict[str, Any]]] = None) -> Optional[List[str]]:

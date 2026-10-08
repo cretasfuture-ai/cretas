@@ -39,7 +39,7 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, intent_text
+from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, RequestPurpose, intent_text
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
@@ -146,6 +146,32 @@ class Orchestrator:
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
 
         retriever = self.candidate_retriever or self.semantic_matcher
+        # Determine the speech act separately from choosing a related function.
+        # This generates a semantic disposition, not confidence or execution permission.
+        if bool(getattr(self.config, "decision_special_options", False)):
+            t=time.time()
+            purpose=await self.decision_matcher.request_purpose(query,role,history)
+            timing["requestPurposeMs"]=int((time.time()-t)*1000)
+            if purpose != RequestPurpose.CURRENT:
+                result=IntentMatchResultDto.empty(userInput=query)
+                result.matchMethod=MatchMethod.LLM
+                result.questionType=QuestionType.CONVERSATIONAL
+                # Java recognizes this as an explicit no-business-action conclusion,
+                # rather than falling back to its legacy keyword/vector guesses.
+                timing["decisionNone"]=1
+                if purpose == RequestPurpose.INFORMATION_ONLY:
+                    timing["requestPurposeInformation"]=1
+                    result.requiresConfirmation=True
+                    result.clarificationQuestion="您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
+                else:
+                    timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"]=1
+                    result.requiresConfirmation=True
+                    result.clarificationQuestion=("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
+                                                  if purpose is not None else
+                                                  "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
+                timing["totalMs"]=int((time.time()-t0)*1000)
+                result.timingMs=timing
+                return result
         # ===== ② 候选 (重排路): 向量 Top-N → 微调重排 → 前 K, 0 token =====
         # 带对话历史的轮次不走这条: 重排只看这一句, LLM 粗选能看到前文。
         codes = None
