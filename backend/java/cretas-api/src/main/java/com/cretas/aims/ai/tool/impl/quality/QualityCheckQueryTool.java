@@ -4,6 +4,8 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.QualityInspectionService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,12 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
     @Autowired
     @Lazy
     private QualityInspectionService qualityInspectionService;
+
+    @Autowired
+    private ProductionBatchRepository productionBatchRepository;
+
+    @Autowired
+    private MaterialBatchRepository materialBatchRepository;
 
     @Override
     public String getToolName() {
@@ -151,7 +159,7 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
 
         // 转换为结果Map列表
         List<Map<String, Object>> inspectionList = content != null ?
-                content.stream().map(this::toResultMap).collect(Collectors.toList()) :
+                content.stream().map(i -> toResultMap(i, factoryId)).collect(Collectors.toList()) :
                 Collections.emptyList();
 
         // 构建返回结果
@@ -175,9 +183,9 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         StringBuilder msg = new StringBuilder();
         if (inspectionList.isEmpty()) {
             msg.append(String.format("当前没有匹配的质检记录 (第 %d 页, 查询条件: ", page));
-            if (batchIdStr != null) msg.append("批次=").append(batchIdStr).append(", ");
-            if (status != null) msg.append("状态=").append(status).append(", ");
-            if (checkType != null) msg.append("类型=").append(checkType).append(", ");
+            if (batchIdStr != null) msg.append("已按指定批次筛选, ");
+            if (status != null) msg.append("状态=").append(getResultDisplayName(status)).append(", ");
+            if (checkType != null) msg.append("类型=").append(getCheckTypeDisplayName(checkType)).append(", ");
             msg.append("总计 ").append(totalElements).append(" 条记录)。");
             msg.append("建议: 1. 调整查询条件 (批次号 / 状态 / 类型); 2. 进入质检管理模块查看待审批批次; 3. 检查 HACCP 监控数据。");
         } else {
@@ -186,10 +194,12 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
             int preview = Math.min(3, inspectionList.size());
             for (int i = 0; i < preview; i++) {
                 Map<String, Object> item = inspectionList.get(i);
-                msg.append("\n").append(i + 1).append(". 批次 ").append(item.getOrDefault("batchId", "-"))
-                        .append(", 类型: ").append(item.getOrDefault("checkType", "-"))
-                        .append(", 状态: ").append(item.getOrDefault("status", "-"))
-                        .append(", 合格率: ").append(item.getOrDefault("passRate", "-")).append("%");
+                msg.append("\n").append(i + 1).append(". 批次: ").append(item.get("batchNumber"))
+                        .append(", 类型: ").append(item.get("checkTypeDisplay"))
+                        .append(", 结果: ").append(item.get("resultDisplay"))
+                        .append(", 状态: ").append(item.get("statusDisplay"))
+                        .append(", 合格率: ").append(item.get("passRate") == null
+                                ? "未记录合格率" : item.get("passRate") + "%");
             }
             if (inspectionList.size() > preview) {
                 msg.append("\n其余 ").append(inspectionList.size() - preview).append(" 条记录请在质检详情页查看。");
@@ -225,7 +235,7 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
     /**
      * 转换为结果Map
      */
-    private Map<String, Object> toResultMap(QualityInspection inspection) {
+    private Map<String, Object> toResultMap(QualityInspection inspection, String factoryId) {
         Map<String, Object> map = new HashMap<>();
         map.put("inspectionId", inspection.getId());
         map.put("productionBatchId", inspection.getProductionBatchId());
@@ -240,14 +250,46 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         map.put("qualityGrade", inspection.getQualityGrade());
         map.put("defectRate", inspection.getDefectRate());
         map.put("notes", inspection.getNotes());
+        map.put("batchNumber", resolveBatchNumber(inspection, factoryId));
+        map.put("resultDisplay", getResultDisplayName(inspection.getResult()));
+        map.put("statusDisplay", getResultDisplayName(inspection.getResult()));
 
         // 提取质检类型
         String checkType = extractCheckType(inspection.getNotes());
         if (checkType != null) {
             map.put("checkType", checkType);
         }
+        map.put("checkTypeDisplay", checkType != null ? getCheckTypeDisplayName(checkType)
+                : inspection.getInspectionMode() == QualityInspection.InspectionMode.FULL_INSPECTION ? "全检"
+                : inspection.getInspectionMode() == QualityInspection.InspectionMode.SAMPLING ? "抽检"
+                : "未记录检验类型");
 
         return map;
+    }
+
+    private String resolveBatchNumber(QualityInspection inspection, String factoryId) {
+        if (inspection.getMaterialBatchId() != null) {
+            String number = materialBatchRepository.findByIdAndFactoryId(inspection.getMaterialBatchId(), factoryId)
+                    .map(b -> b.getBatchNumber()).filter(n -> !n.isBlank()).orElse(null);
+            if (number != null) return number;
+        }
+        if (inspection.getProductionBatchId() != null) {
+            String number = productionBatchRepository.findByIdAndFactoryId(inspection.getProductionBatchId(), factoryId)
+                    .map(b -> b.getBatchNumber()).filter(n -> !n.isBlank()).orElse(null);
+            if (number != null) return number;
+        }
+        return "关联批次信息不可用";
+    }
+
+    private String getResultDisplayName(String result) {
+        if (result == null || result.isBlank()) return "未记录检验结果";
+        return switch (result.toUpperCase(Locale.ROOT)) {
+            case "PASS" -> "合格";
+            case "FAIL" -> "不合格";
+            case "CONDITIONAL" -> "条件通过";
+            case "PENDING" -> "待检验";
+            default -> "检验结果待确认";
+        };
     }
 
     /**
@@ -269,14 +311,14 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
      * 获取质检类型显示名称
      */
     private String getCheckTypeDisplayName(String checkType) {
-        if (checkType == null) return "未知";
+        if (checkType == null) return "未记录检验类型";
         return switch (checkType.toUpperCase()) {
             case "SENSORY" -> "感官检验";
             case "PHYSICAL" -> "物理检验";
             case "CHEMICAL" -> "化学检验";
             case "MICROBIOLOGICAL" -> "微生物检验";
             case "MATERIAL" -> "原材料检验";
-            default -> checkType;
+            default -> "检验类型待确认";
         };
     }
 

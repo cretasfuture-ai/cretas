@@ -407,7 +407,9 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         String message = getString(data, "message");
 
         if (message != null) {
-            sb.append(message).append("\n\n");
+            // The query tool owns the row presentation (batch, type, result and status).
+            // Appending a second partial list drops those fields and repeats records.
+            return message;
         } else if (content == null || content.isEmpty()) {
             return "当前暂无质检记录。可在质检管理模块创建新的质检任务。";
         } else {
