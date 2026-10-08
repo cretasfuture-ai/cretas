@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue';
+import { ref, nextTick, watch, computed, onBeforeUnmount } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { useAiChat } from '@/composables/useAiChat';
-import type { AiEntryConfig } from './types';
+import { ITEM_KEY_LABELS, type AiEntryConfig } from './types';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -18,7 +18,22 @@ const emit = defineEmits<{
   'guard-action': [];
 }>();
 
-const { messages, loading, previewParams, sendMessage, continueEditing, confirmParams, reset } = useAiChat(props.config);
+const { messages, loading, previewParams, sendMessage, retry, continueEditing, confirmParams, reset } = useAiChat(props.config);
+
+/** W1: 骨架屏 3 条, 宽度 92% / 78% / 62%; 超过 3 秒没回就把文字从「正在理解」换成「正在处理」 */
+const SKELETON_BAR_WIDTHS = [92, 78, 62] as const;
+const slowLoading = ref(false);
+let slowTimer: ReturnType<typeof setTimeout> | null = null;
+function clearSlowTimer() {
+  if (slowTimer) clearTimeout(slowTimer);
+  slowTimer = null;
+}
+watch(loading, (isLoading) => {
+  clearSlowTimer();
+  slowLoading.value = false;
+  if (isLoading) slowTimer = setTimeout(() => { slowLoading.value = true; }, 3000);
+});
+onBeforeUnmount(clearSlowTimer);
 
 const chatInput = ref('');
 const chatContainer = ref<HTMLElement | null>(null);
@@ -84,14 +99,27 @@ function renderMarkdown(content: string): string {
   }
 }
 
-function scrollToBottom() {
+/**
+ * AI 对话标准 N1: 只有用户本来就在底部附近 (120px 内) 才自动滚到底; 往上翻着看别的时, 新内容不把人拽回去。
+ * 「本来」要在新内容渲染之前量, 所以用 flush:'pre' 的 watch 记一笔 (渲染之后量 scrollHeight 已经变大了)。
+ * 用户自己发消息 / 点重试 (force) 一定滚。
+ */
+let followBottom = true;
+function isNearBottom(): boolean {
+  const el = chatContainer.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= 120;
+}
+watch([() => messages.value.length, previewParams], () => { followBottom = isNearBottom(); }, { flush: 'pre' });
+
+function scrollToBottom(force = false) {
   nextTick(() => {
-    if (chatContainer.value) {
-      chatContainer.value.scrollTo({
-        top: chatContainer.value.scrollHeight,
-        behavior: 'smooth',
-      });
-    }
+    if (!chatContainer.value) return;
+    if (!force && !followBottom) return;
+    chatContainer.value.scrollTo({
+      top: chatContainer.value.scrollHeight,
+      behavior: 'smooth',
+    });
   });
 }
 
@@ -99,8 +127,15 @@ async function handleSend() {
   const text = chatInput.value.trim();
   if (!text || loading.value) return;
   chatInput.value = '';
-  scrollToBottom();
+  scrollToBottom(true);
   await sendMessage(text);
+  await nextTick();
+  scrollToBottom();
+}
+
+async function handleRetry() {
+  scrollToBottom(true);
+  await retry();
   await nextTick();
   scrollToBottom();
 }
@@ -117,6 +152,7 @@ async function handleExampleClick(example: string) {
   showTutorial.value = false;
   tutorialActive.value = false;
   chatInput.value = '';
+  scrollToBottom(true);
   await sendMessage(example);
   await nextTick();
   scrollToBottom();
@@ -141,16 +177,28 @@ function isFieldFilled(key: string): boolean {
   return true;
 }
 
+/** V1: 没填 / 算不出的值用文字写状态, 不写 `—` / `-` / 空 */
+const EMPTY_VALUE_TEXT = '暂无';
+
+/**
+ * 明细项的键名: 有中文名的显示中文; 没有的英文键**照原样显示键名, 不藏**
+ * (写入前用户要看得见 AI 收集到的全部内容 —— 标准 H3 优先于 V3; ⛔ 不回落成驼峰拆分)。
+ */
+function itemKeyLabel(key: string): string {
+  return Object.prototype.hasOwnProperty.call(ITEM_KEY_LABELS, key) ? ITEM_KEY_LABELS[key] : key;
+}
+
 function formatPreviewValue(key: string, value: unknown): string {
-  if (value === null || value === undefined || value === '') return '未填写';
+  if (value === null || value === undefined || value === '') return EMPTY_VALUE_TEXT;
   if (Array.isArray(value)) {
-    if (value.length === 0) return '未填写';
+    if (value.length === 0) return EMPTY_VALUE_TEXT;
     return value.map((item, i) => {
       if (typeof item === 'object' && item !== null) {
+        // 过滤规则与改前一致 (空串 / 0 / null 不进文本); 只改键名的写法, 不改哪些值显示
         const parts = Object.entries(item)
           .filter(([, v]) => v !== '' && v !== 0 && v !== null)
-          .map(([k, v]) => `${k}: ${v}`);
-        return `(${i + 1}) ${parts.join(', ')}`;
+          .map(([k, v]) => `${itemKeyLabel(k)}：${v}`);
+        return `(${i + 1}) ${parts.join('，')}`;
       }
       return String(item);
     }).join('\n');
@@ -365,11 +413,7 @@ watch(() => props.modelValue, (visible) => {
             <div class="chat-messages" ref="chatContainer">
               <!-- Welcome -->
               <div v-if="messages.length === 0" class="welcome-area">
-                <div class="welcome-avatar">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#2D8B57" stroke-width="1.5">
-                    <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1.5" fill="#2D8B57"/><circle cx="15.5" cy="16" r="1.5" fill="#2D8B57"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>
-                  </svg>
-                </div>
+                <!-- L3: 欢迎语也是助手消息 —— 全宽、无头像、无气泡 -->
                 <div class="welcome-text">{{ config.welcomeMessage }}</div>
                 <div class="welcome-hint">点击下方示例快速开始，或直接输入你的需求</div>
                 <div class="quick-examples">
@@ -389,26 +433,53 @@ watch(() => props.modelValue, (visible) => {
               <!-- Messages with animation -->
               <TransitionGroup name="msg-slide">
                 <div v-for="(msg, index) in messages" :key="'msg-'+index" :class="['chat-message', msg.role]">
-                  <!-- Avatar -->
-                  <div class="msg-avatar" v-if="msg.role === 'assistant'">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2D8B57" stroke-width="2">
-                      <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1.5" fill="#2D8B57"/><circle cx="15.5" cy="16" r="1.5" fill="#2D8B57"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>
-                    </svg>
+                  <!-- L2: 只有用户消息是浅色气泡 -->
+                  <div
+                    v-if="msg.role === 'user'"
+                    class="user-bubble"
+                    data-testid="aie-user-bubble"
+                    v-html="renderMarkdown(msg.content)"
+                  />
+                  <!-- L1: 助手回答全宽, 无头像、无气泡; L4: 不打时间 -->
+                  <div v-else class="assistant-column">
+                    <div
+                      class="assistant-body"
+                      data-testid="aie-assistant-body"
+                      v-html="renderMarkdown(msg.content)"
+                    />
+                    <!-- W2 / H5: 解析失败或超时都明说「没有保存任何数据」, 并给重试 -->
+                    <div v-if="msg.failed" class="failed-note" data-testid="aie-failed-note">
+                      <span class="failed-note-text">没有保存任何数据。</span>
+                      <el-button
+                        class="retry-btn"
+                        data-testid="aie-retry"
+                        :disabled="loading"
+                        @click="handleRetry"
+                      >重试</el-button>
+                    </div>
                   </div>
-                  <div class="chat-bubble" v-html="renderMarkdown(msg.content)" />
                 </div>
               </TransitionGroup>
 
+              <!-- W1: 加载用骨架屏 (3 条 + 一行文字), 不用转圈 -->
               <Transition name="fade-up">
                 <div v-if="loading" class="chat-message assistant">
-                  <div class="msg-avatar">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2D8B57" stroke-width="2">
-                      <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1.5" fill="#2D8B57"/><circle cx="15.5" cy="16" r="1.5" fill="#2D8B57"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>
-                    </svg>
-                  </div>
-                  <div class="chat-bubble loading-bubble">
-                    <span class="dot-anim"><span /><span /><span /></span>
-                    <span class="loading-text">思考中</span>
+                  <div class="assistant-column">
+                    <div
+                      class="loading-skeleton"
+                      data-testid="aie-loading-skeleton"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <span
+                        v-for="w in SKELETON_BAR_WIDTHS"
+                        :key="w"
+                        class="skeleton-bar"
+                        data-testid="aie-skeleton-bar"
+                        :style="{ width: `${w}%` }"
+                      />
+                      <span class="skeleton-caption">{{ slowLoading ? '正在处理…' : '正在理解你的话…' }}</span>
+                    </div>
                   </div>
                 </div>
               </Transition>
@@ -430,6 +501,7 @@ watch(() => props.modelValue, (visible) => {
                       v-for="field in config.fields"
                       :key="field.key"
                       class="preview-row"
+                      data-testid="aie-preview-row"
                       :class="{ 'is-empty': !isFieldFilled(field.key) }"
                     >
                       <span class="preview-label">
@@ -439,11 +511,11 @@ watch(() => props.modelValue, (visible) => {
                       <span class="preview-value" :class="{ 'is-array': Array.isArray(previewParams[field.key]) }">
                         {{ formatPreviewValue(field.key, previewParams[field.key]) }}
                       </span>
+                      <!-- V1: 没填的行由「暂无」文字表达, 状态格不再画 `—` -->
                       <span class="preview-status">
                         <svg v-if="isFieldFilled(field.key)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#67c23a" stroke-width="2.5">
                           <polyline points="20 6 9 17 4 12"/>
                         </svg>
-                        <span v-else class="status-dash">—</span>
                       </span>
                     </div>
                   </div>
@@ -550,12 +622,16 @@ watch(() => props.modelValue, (visible) => {
 .anim-step, .anim-section { animation: fadeSlideIn 0.4s ease-out both; }
 .anim-chip { animation: chipSlideIn 0.3s ease-out both; }
 
+// T1: 对话区自己声明系统字体栈 (⛔ 不改全局 --font-family: 全局以 Noto Sans SC 打头, 改它是另一个决定)
+$ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
 // ==================== Drawer Header ====================
 .drawer-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   width: 100%;
+  font-family: $ai-font-stack;
 }
 
 .drawer-header-left {
@@ -565,7 +641,7 @@ watch(() => props.modelValue, (visible) => {
 }
 
 .scope-badge {
-  font-size: 11px;
+  font-size: 12px;
   color: #7A8599;
   background: #F4F6F9;
   border: 1px solid #EDF2F7;
@@ -578,6 +654,7 @@ watch(() => props.modelValue, (visible) => {
 .tutorial-btn {
   font-size: 13px;
   color: #2D8B57;
+  min-height: 32px; // S2: 鼠标按钮 ≥ 32px
   padding: 4px 12px;
   border-radius: 6px;
   transition: all 0.2s;
@@ -590,6 +667,7 @@ watch(() => props.modelValue, (visible) => {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 100px);
+  font-family: $ai-font-stack;
 }
 
 .chat-area-wrapper {
@@ -697,7 +775,7 @@ watch(() => props.modelValue, (visible) => {
 }
 
 .demo-input-mock {
-  .demo-label { font-size: 11px; color: #7A8599; margin-bottom: 8px; }
+  .demo-label { font-size: 12px; color: #7A8599; margin-bottom: 8px; }
   .demo-typing {
     background: #fff;
     border: 1px solid #EDF2F7;
@@ -893,25 +971,15 @@ watch(() => props.modelValue, (visible) => {
 
 // ==================== Welcome Area ====================
 .welcome-area {
+  // L3: 欢迎语也是助手消息 —— 全宽、左对齐、无头像、无气泡
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 40px 20px 20px;
+  align-items: stretch;
+  padding: 24px 0 20px;
   animation: fadeSlideIn 0.4s ease-out both;
 }
 
-.welcome-avatar {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(45, 139, 87, 0.08), rgba(64, 158, 255, 0.08));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 16px;
-}
-
-.welcome-text { font-size: 16px; font-weight: 600; color: #1A2332; margin-bottom: 6px; }
+.welcome-text { font-size: 16px; line-height: 1.6; font-weight: 600; color: #1A2332; margin-bottom: 6px; }
 .welcome-hint { font-size: 13px; color: #7A8599; margin-bottom: 24px; }
 
 .quick-examples {
@@ -923,13 +991,14 @@ watch(() => props.modelValue, (visible) => {
 
 .quick-example-chip {
   display: flex;
-  align-items: flex-start;
   gap: 10px;
-  padding: 12px 14px;
+  align-items: center;
+  min-height: 40px; // S3: 芯片 ≥ 32px (这里取 40, 示例句子长, 单手好点)
+  padding: 10px 14px;
   background: #fff;
   border: 1px solid #EDF2F7;
   border-radius: 10px;
-  font-size: 13px;
+  font-size: 16px;
   color: #1A2332;
   cursor: pointer;
   transition: all 0.25s ease;
@@ -968,83 +1037,105 @@ watch(() => props.modelValue, (visible) => {
 }
 
 .chat-message {
-  margin-bottom: 16px;
   display: flex;
   align-items: flex-start;
-  gap: 8px;
 }
 
+// S1: 同一轮用户 → 助手 8px, 轮与轮之间 20px
 .chat-message.user {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
-.msg-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(45, 139, 87, 0.08), rgba(64, 158, 255, 0.08));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-top: 2px;
+.chat-message.assistant {
+  margin-bottom: 20px;
 }
 
-.chat-message.user .chat-bubble {
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
-  color: white;
-  text-align: left;
-  border-radius: 14px 14px 4px 14px;
-  box-shadow: 0 2px 8px rgba(45, 139, 87, 0.15);
-}
-
-.chat-message.assistant .chat-bubble {
-  background: #fff;
+// L2: 只有用户消息是浅色气泡, 靠右; 圆角四角 12, 内边距 10px 12px, 最宽 min(78%, 480px)
+.user-bubble {
+  background: #EEF3F0;
   color: #1A2332;
-  border-radius: 14px 14px 14px 4px;
-  border: 1px solid #EDF2F7;
-  box-shadow: 0 1px 4px rgba(45, 139, 87, 0.04);
+  text-align: left;
+  border-radius: 12px;
+  padding: 10px 12px;
+  max-width: min(78%, 480px);
+  word-break: break-word;
+  font-size: 16px;
+  line-height: 1.6;
+
+  :deep(p) { margin: 0; }
+  :deep(ul), :deep(ol) { padding-left: 20px; margin: 4px 0; }
 }
 
-.chat-bubble {
-  padding: 10px 14px;
-  border-radius: 14px;
-  max-width: 80%;
-  word-break: break-word;
-  line-height: 1.6;
-  font-size: 14px;
+// L1: 助手回答全宽, 没有头像、没有气泡 (无背景 / 边框 / 阴影), 正文直接排在抽屉背景上
+.assistant-column {
+  width: 100%;
+  min-width: 0;
+}
 
-  :deep(p) { margin: 4px 0; }
+.assistant-body {
+  width: 100%;
+  color: #1A2332;
+  word-break: break-word;
+  font-size: 16px;
+  line-height: 1.6;
+
+  :deep(p) { margin: 0 0 8px; }
+  :deep(p:last-child) { margin-bottom: 0; }
   :deep(ul), :deep(ol) { padding-left: 20px; margin: 4px 0; }
   :deep(code) { background: rgba(45, 139, 87, 0.06); padding: 2px 4px; border-radius: 4px; font-size: 13px; }
   :deep(strong) { font-weight: 600; color: #1A2332; }
 }
 
-.loading-bubble {
-  color: #7A8599;
-  font-style: normal;
+// W2 / H5: 失败 / 超时 —— 明说没有保存任何数据, 并给重试 (按钮 ≥ 32px)
+.failed-note {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
-.loading-text { font-size: 13px; }
+.failed-note-text { font-size: 14px; color: #C45656; }
 
-.dot-anim {
-  display: inline-flex;
-  gap: 3px;
+.retry-btn { min-height: 32px; }
 
-  span {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #2D8B57;
-    opacity: 0.4;
-    animation: pulse 1.2s infinite;
+// W1: 骨架屏 —— 3 条, 高 14, 圆角 5, 1.5s 闪烁
+.loading-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
 
-    &:nth-child(2) { animation-delay: 0.2s; }
-    &:nth-child(3) { animation-delay: 0.4s; }
-  }
+.skeleton-bar {
+  display: block;
+  height: 14px;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    var(--el-fill-color, #f0f2f5) 25%,
+    var(--el-fill-color-darker, #e6e8eb) 37%,
+    var(--el-fill-color, #f0f2f5) 63%
+  );
+  background-size: 400% 100%;
+  animation: aie-skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-caption {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary, #909399);
+}
+
+@keyframes aie-skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+// 开了「减少动态效果」时骨架条静止
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar { animation: none; }
 }
 
 // ==================== Preview Card ====================
@@ -1079,7 +1170,7 @@ watch(() => props.modelValue, (visible) => {
 
 .preview-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   padding: 10px 0;
   border-bottom: 1px solid #F4F6F9;
   font-size: 14px;
@@ -1100,8 +1191,12 @@ watch(() => props.modelValue, (visible) => {
 
 .preview-value {
   flex: 1;
+  min-width: 0;
   color: #1A2332;
   font-weight: 500;
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere; // 抽屉窄时长明细自己换行, 不撑出横向滚动 (G1)
   &.is-array { white-space: pre-line; }
 }
 
@@ -1110,8 +1205,6 @@ watch(() => props.modelValue, (visible) => {
   flex-shrink: 0;
   text-align: center;
 }
-
-.status-dash { color: #ddd; font-size: 12px; }
 
 .preview-actions {
   padding: 12px 16px;
@@ -1134,8 +1227,9 @@ watch(() => props.modelValue, (visible) => {
   gap: 8px;
   background: #F4F6F9;
   border: 1px solid #EDF2F7;
-  border-radius: 12px;
-  padding: 6px 6px 6px 14px;
+  // S4: 圆角 8、单行高 42 (40–44)、内边距左 12、可随内容长高 (autosize 最多 4 行 ≈ 114px, 远低于 200px)
+  border-radius: 8px;
+  padding: 3px 4px 3px 12px;
   transition: border-color 0.2s, box-shadow 0.2s;
 
   &:focus-within {
@@ -1148,18 +1242,18 @@ watch(() => props.modelValue, (visible) => {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    padding: 4px 0;
-    font-size: 14px;
-    line-height: 1.5;
+    padding: 5px 0; // 24px 行高 + 上下 5px = 34px 单行
+    font-size: 16px;
+    line-height: 24px;
     resize: none;
     min-height: unset !important;
   }
 }
 
 .send-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 34px; // S2: ≥ 32px; 外框单行 42px = 34 + 内边距 3×2 + 边框 1×2
+  height: 34px;
+  border-radius: 8px;
   border: none;
   background: #EDF2F7;
   color: #bbb;
@@ -1186,8 +1280,8 @@ watch(() => props.modelValue, (visible) => {
 
 .input-hint {
   text-align: center;
-  font-size: 11px;
-  color: #bbb;
+  font-size: 12px;
+  color: #909399;
   margin-top: 6px;
   letter-spacing: 0.02em;
 }
