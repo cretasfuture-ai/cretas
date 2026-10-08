@@ -9,6 +9,12 @@ vi.mock('@/api/smartbi/restaurant-synthesis', () => ({
   askRestaurantIntent: (...args: unknown[]) => mocks.askIntent(...args),
 }));
 
+// 面板按租户分流版式 (useAuthStore().businessDomain)。这三条测的是餐饮问题的路由与失败文案,
+// 所以固定成餐饮租户; 工厂租户的新版式见 AnalysisChatPanel.standard.spec.ts。
+vi.mock('@/store/modules/auth', () => ({
+  useAuthStore: () => ({ factoryId: 'DEMO_REST', businessDomain: 'RESTAURANT' }),
+}));
+
 vi.mock('element-plus', () => ({
   ElInput: { name: 'ElInput', template: '<input />' },
   ElButton: { name: 'ElButton', template: '<button @click="$emit(\'click\')"><slot /></button>' },
