@@ -45,7 +45,31 @@
               <div class="message-content" :data-testid="msg.role === 'user' ? 'ai-chat-user-bubble' : 'ai-chat-assistant-body'">{{ msg.content }}</div>
               <div v-if="msg.diffPreview?.length" class="diff-preview" data-testid="ai-diff-preview">
                 <template v-for="(diff, diffIndex) in msg.diffPreview" :key="diffIndex">
-                  <div v-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)" class="draft-step-list" data-testid="ai-diff-item">
+                  <div v-if="diff.type === 'PRODUCT_PROCESS_WORKFLOW_SPEC'" class="workflow-change-preview" data-testid="workflow-spec-preview">
+                    <template v-if="diff.proposal">
+                      <strong>全部 {{ diff.proposal.rows.length }} 项改动</strong>
+                      <p class="preview-impact">生成后将替换整个当前画布，可撤销；未匹配的工序会在应用时新建。原字段和未支持字段照原样列出，请核对生成结果后保存。</p>
+                      <div class="workflow-plan-steps" aria-label="AI 方案工序明细">
+                        <div v-for="(step, stepIndex) in getSpecSteps(diff.proposal.spec)" :key="stepIndex" data-testid="workflow-spec-step">
+                          <strong>{{ stepIndex + 1 }} · {{ step.process }}</strong>
+                          <div>类别：{{ step.processCategory ?? '未提供（按工序目录解析）' }}；负责人：{{ step.responsibleWorkerName ?? step.responsibleWorkerId ?? '未提供' }}</div>
+                          <div>产出：{{ formatSpecValue(step.outputs) }}</div>
+                          <div>额外原料：{{ formatSpecValue(step.inputs) }}；辅料 / 调料：{{ formatSpecValue(step.seasonings) }}</div>
+                        </div>
+                      </div>
+                      <p v-if="diff.previewError" role="status">{{ diff.previewError }}</p>
+                      <ol class="workflow-change-list">
+                        <li v-for="row in diff.proposal.rows" :key="row.path" :data-change-path="row.path" data-testid="workflow-change-row">{{ row.text }}</li>
+                      </ol>
+                      <div v-if="diff.proposal.state === 'pending'" class="workflow-preview-actions">
+                        <el-button type="primary" :disabled="disabled || loading" data-testid="workflow-spec-apply" @click="applySpecProposal(diff, msg.sourceIdentity)">应用配置</el-button>
+                        <el-button data-testid="workflow-spec-cancel" @click="cancelSpecProposal(diff)">取消</el-button>
+                      </div>
+                      <p v-else role="status">{{ diff.proposal.state === 'cancelled' ? '已取消，画布没有改动。' : '已提交应用，请检查画布后保存。' }}</p>
+                    </template>
+                    <p v-else role="status">{{ diff.previewError }}</p>
+                  </div>
+                  <div v-else-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)" class="draft-step-list" data-testid="ai-diff-item">
                     <div
                       v-for="(step, stepIndex) in getDraftSteps(diff.params)"
                       :key="stepIndex"
@@ -142,6 +166,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Aim, MagicStick, Menu, Top } from '@element-plus/icons-vue';
 import { gsap } from 'gsap';
 import request from '@/api/request';
+import { workflowAiStableJson, type WorkflowAiPreview, type WorkflowAiChangeRow } from '@/views/system/product-processes/workflow/workflowAiPreview';
 import {
   AI_MODE_LABELS,
   AI_TIMEOUT_MESSAGE,
@@ -160,6 +185,13 @@ interface ChatDiff {
   tool: string;
   params: Record<string, unknown>;
   description: string;
+  previewError?: string;
+  proposal?: {
+    spec: unknown;
+    rows: WorkflowAiChangeRow[];
+    revision: string;
+    state: 'pending' | 'submitted' | 'cancelled';
+  };
 }
 
 interface SourceIdentity {
@@ -190,6 +222,7 @@ const props = withDefaults(defineProps<{
   context?: Record<string, unknown>;
   contextLabel?: string;
   quickPrompts?: string[];
+  previewSpec?: (spec: unknown) => WorkflowAiPreview;
 }>(), {
   title: 'AI 配工序',
   productTypeId: '',
@@ -284,6 +317,7 @@ async function send(): Promise<void> {
   const moduleCode = props.moduleCode;
   const context = props.context;
   const generation = ++requestGeneration;
+  messages.value.forEach(message => message.diffPreview?.forEach(cancelSpecProposal));
   historyVisible.value = true;
   input.value = '';
   pushMessage({ role: 'user', content: text, sourceIdentity }, true);
@@ -308,7 +342,7 @@ async function send(): Promise<void> {
       role: 'assistant',
       content: data.reply || (hasDiffs ? '已生成草稿，请审核后应用。' : '无法生成草稿，请检查工序描述'),
       sourceIdentity,
-      diffPreview: data.diffs || [],
+      diffPreview: (data.diffs || []).map(prepareDiff),
     });
   } catch (e) {
     if (!isCurrentRequest(generation, sourceIdentity)) return;
@@ -361,6 +395,48 @@ function emitDraft(draft: Record<string, unknown>, sourceIdentity?: SourceIdenti
 function isCurrentSource(identity: SourceIdentity): boolean {
   return identity.factoryId === props.factoryId
     && identity.productTypeId === props.productTypeId;
+}
+
+function prepareDiff(diff: ChatDiff): ChatDiff {
+  if (diff.type !== 'PRODUCT_PROCESS_WORKFLOW_SPEC') return diff;
+  const spec = JSON.parse(JSON.stringify(diff.params.spec ?? null));
+  const preview = props.previewSpec?.(spec);
+  if (!preview || preview.ok === false) return { ...diff, previewError: preview && preview.ok === false ? preview.message : '当前画布无法预览，未应用配置。' };
+  return { ...diff, proposal: { spec, rows: preview.rows, revision: preview.revision, state: 'pending' } };
+}
+
+function getSpecSteps(spec: unknown): Record<string, unknown>[] {
+  if (!spec || typeof spec !== 'object' || !Array.isArray((spec as Record<string, unknown>).steps)) return [];
+  return (spec as { steps: Record<string, unknown>[] }).steps;
+}
+
+function formatSpecValue(value: unknown): string {
+  return value === undefined ? '未提供' : JSON.stringify(value);
+}
+
+function cancelSpecProposal(diff: ChatDiff): void {
+  if (diff.proposal?.state === 'pending') diff.proposal.state = 'cancelled';
+}
+
+function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity): void {
+  const proposal = diff.proposal;
+  if (!proposal || proposal.state !== 'pending' || props.disabled || loading.value
+    || !sourceIdentity || !isCurrentSource(sourceIdentity)) return;
+  const recheck = props.previewSpec?.(proposal.spec);
+  if (!recheck || recheck.ok === false) {
+    diff.previewError = recheck && recheck.ok === false ? recheck.message : '当前画布无法预览，未应用配置。';
+    diff.proposal = undefined;
+    return;
+  }
+  if (recheck.revision !== proposal.revision
+    || workflowAiStableJson(recheck.rows) !== workflowAiStableJson(proposal.rows)) {
+    proposal.rows = recheck.rows;
+    proposal.revision = recheck.revision;
+    diff.previewError = '画布已变化，已刷新全部改动，请重新审核并应用。';
+    return;
+  }
+  proposal.state = 'submitted';
+  emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity);
 }
 
 interface DraftStep {
@@ -547,6 +623,14 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   gap: 6px;
   margin-top: 8px;
 }
+
+.workflow-change-preview { min-width: 0; }
+.workflow-plan-steps { display: grid; gap: 8px; margin: 8px 0; }
+.workflow-plan-steps > div { padding: 6px 8px; border-left: 2px solid var(--el-border-color); overflow-wrap: anywhere; }
+.preview-impact { color: var(--el-text-color-secondary); margin: 6px 0; }
+.workflow-change-list { padding-left: 22px; margin: 8px 0; }
+.workflow-change-list li { margin: 5px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.workflow-preview-actions { display: flex; gap: 8px; margin-top: 10px; }
 
 .diff-item {
   display: flex;

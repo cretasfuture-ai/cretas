@@ -2,6 +2,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
+import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import { BOM_OVERLAY_PREFIX, isBomOverlayNode, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
@@ -23,6 +24,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/api/request', () => ({
+  default: { get: apiMocks.get, post: apiMocks.post, put: apiMocks.put },
   get: apiMocks.get,
   post: apiMocks.post,
   put: apiMocks.put,
@@ -368,6 +370,43 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         canCompleteAutomatically: true,
       },
     });
+  });
+
+  it('workflow spec reply and cancel leave the real editor untouched; apply then creates and builds', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() });
+    const spec = { rawMaterials: ['猪蹄原料'], steps: [{ process: '现场切分', processCategory: '加工',
+      outputs: [{ kind: 'SEMI_FINISHED', name: '切分肉', unit: 'g' }] }] };
+    apiMocks.post.mockResolvedValue({ data: { reply: '已生成可审核的 Workflow 本地补丁', diffs: [{
+      type: 'PRODUCT_PROCESS_WORKFLOW_SPEC', params: { spec }, description: '已生成可审核的 Workflow 本地补丁',
+    }] } });
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const wrapper = await mountEditorWrapper(false, true);
+    const vm = wrapper.vm as unknown as EditorVm;
+    const panel = wrapper.getComponent(WorkProcessAIChatPanel);
+    const chat = panel.vm as unknown as { input: string; send: () => Promise<void> };
+    const before = JSON.stringify(vm.flowNodes);
+    const historyBefore = vm.history.length;
+    chat.input = '新建切分流程';
+    await chat.send();
+    await flushPromises();
+    expect(panel.findAll('[data-testid="workflow-change-row"]').length).toBeGreaterThan(0);
+    expect(apiMocks.post).toHaveBeenCalledOnce();
+    expect(apiMocks.createWorkProcess).not.toHaveBeenCalled();
+    expect(JSON.stringify(vm.flowNodes)).toBe(before);
+    expect(vm.history).toHaveLength(historyBefore);
+    await panel.get('[data-testid="workflow-spec-cancel"]').trigger('click');
+    expect(apiMocks.createWorkProcess).not.toHaveBeenCalled();
+    expect(JSON.stringify(vm.flowNodes)).toBe(before);
+    expect(vm.history).toHaveLength(historyBefore);
+    chat.input = '再生成切分流程';
+    await chat.send();
+    await flushPromises();
+    await panel.get('[data-testid="workflow-spec-apply"]').trigger('click');
+    await flushPromises();
+    expect(apiMocks.createWorkProcess).toHaveBeenCalledOnce();
+    expect(vm.flowNodes.some(node => node.data.processName === '现场切分')).toBe(true);
+    expect(vm.history.length).toBeGreaterThan(historyBefore);
+    expect(confirm).not.toHaveBeenCalled(); // No second dialog after catalog writes.
   });
 
   it('adds the process, derived finished output, and both edges in one undo snapshot', async () => {
@@ -1664,7 +1703,7 @@ function newestRawMaterial(vm: EditorVm): EditorNode {
   return created;
 }
 
-async function mountEditorWrapper(rawOwnerMode = false): Promise<VueWrapper> {
+async function mountEditorWrapper(rawOwnerMode = false, realAiPanel = false): Promise<VueWrapper> {
   const wrapper: VueWrapper = shallowMount(ProductProcessWorkflowEditor, {
     props: {
       factoryId: 'F006',
@@ -1673,6 +1712,11 @@ async function mountEditorWrapper(rawOwnerMode = false): Promise<VueWrapper> {
       canWrite: true,
       rawOwnerMode,
     },
+    global: realAiPanel ? { stubs: {
+      WorkProcessAIChatPanel: false,
+      ElPopover: { template: '<div><slot name="reference"/><slot/></div>' },
+      ElButton: { template: '<button><slot/></button>' },
+    } } : {},
   });
   mountedWrappers.push(wrapper);
   await flushPromises();

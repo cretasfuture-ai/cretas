@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest';
+import { previewWorkflowAiSpec, workflowAiStableJson } from '../workflowAiPreview';
+import type { ProductProcessWorkflowDefinition } from '../types';
+
+import { EMPTY_CANVAS, LARGE_SPEC, LARGE_PATHS } from './workflowAiPreview.fixture';
+
+describe('workflow AI complete change projection', () => {
+  it('lists every independent field including unknown keys, false, zero and null without mutating the graph', () => {
+    const before = workflowAiStableJson(EMPTY_CANVAS);
+    const preview = previewWorkflowAiSpec(EMPTY_CANVAS, LARGE_SPEC);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows.map(row => row.path)).toEqual(LARGE_PATHS);
+    expect(preview.rows).toHaveLength(29);
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('mystery · literal：未设置 → <原样>');
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('后续锅比例：未设置 → 0');
+    expect(workflowAiStableJson(EMPTY_CANVAS)).toBe(before);
+  });
+
+  it('shows deletions, order changes and all output/input changes against topology rather than screen position', () => {
+    const graph = {
+      ...EMPTY_CANVAS,
+      nodes: [
+        { id: 'raw', kind: 'RAW_MATERIAL', data: { name: '肉' } },
+        { id: 'a', kind: 'PROCESS', data: { processName: '切分', processCategory: '加工', ports: [], responsibleWorkerName: '李师傅' } },
+        { id: 'b', kind: 'PROCESS', data: { processName: '装盒', processCategory: '包装', ports: [] } },
+        { id: 'c', kind: 'PROCESS', data: { processName: '称重', ports: [] } },
+      ], edges: [{ source: 'raw', target: 'a' }, { source: 'a', target: 'b' }, { source: 'b', target: 'c' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const preview = previewWorkflowAiSpec(graph, { rawMaterials: ['肉'], steps: [
+      { process: '装盒', processCategory: '包装', inputs: [], outputs: [] },
+      { process: '切分', processCategory: '加工', responsibleWorkerName: '张师傅', inputs: [], outputs: [] },
+    ] });
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows.map(row => row.path)).toEqual([
+      'steps[0].order', 'steps[1].order', 'steps[1].responsibleWorkerName', 'removed[2]', 'removed[2].fields.process',
+      'removed[2].fields.outputs', 'removed[2].fields.inputs',
+    ]);
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('负责人：李师傅 → 张师傅');
+  });
+
+  it.each([null, {}, { steps: [] }, { steps: [{ process: 12 }] }])('rejects malformed spec %j without executing', spec => {
+    expect(previewWorkflowAiSpec(EMPTY_CANVAS, spec).ok).toBe(false);
+  });
+});
