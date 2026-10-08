@@ -5,6 +5,44 @@ import type { ProductProcessWorkflowDefinition } from '../types';
 import { EMPTY_CANVAS, LARGE_SPEC, LARGE_PATHS } from './workflowAiPreview.fixture';
 
 describe('workflow AI complete change projection', () => {
+  it.each(['bound', 'unbound'])('pairs a third-stage replacement by unchanged %s material neighbours and exposes all three reporting changes', binding => {
+    const kinds = ['RAW_MATERIAL', 'PROCESS', 'SEMI_FINISHED', 'PROCESS', 'SEMI_FINISHED', 'PROCESS', 'FINISHED_GOOD'];
+    const names = ['原料', '前处理', '半成品一', '后处理', '半成品二', '装盒', '成品'];
+    const before = { ...EMPTY_CANVAS, nodes: kinds.map((kind, index) => ({
+      id: `old-${index}`, kind,
+      data: kind === 'PROCESS' ? { processName: names[index], workProcessId: `WP-${index}`, reportingRequired: false, ports: [] }
+        : { name: names[index], skuId: binding === 'bound' ? `SKU-${index}` : '', ...(index === 6 ? { packagingBindings: [{ materialName: '成品盒', materialTypeId: 'PK-1', standardQuantity: 1, unit: '盒' }] } : {}) },
+    })), edges: Array.from({ length: 6 }, (_, index) => ({ source: `old-${index}`, target: `old-${index + 1}` })) } as unknown as ProductProcessWorkflowDefinition;
+    const after = JSON.parse(JSON.stringify(before)) as ProductProcessWorkflowDefinition;
+    after.nodes.forEach((node, index) => {
+      node.id = `generated-${index}`;
+      if (node.kind === 'PROCESS') node.data.reportingRequired = true;
+      if (index === 5) { node.data.processName = '前处理'; node.data.workProcessId = 'WP-1'; }
+      if (index === 6) delete node.data.packagingBindings;
+    });
+    after.edges = after.edges.map((edge, index) => ({ ...edge, source: `generated-${index}`, target: `generated-${index + 1}` }));
+    after.nodes.reverse(); // The serializer may store nodes in any order.
+    const preview = previewWorkflowAiDefinitions(before, after);
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows).toHaveLength(6); // Three flags, packaging, third-stage name and catalog binding.
+    expect(preview.rows.filter(row => row.path.endsWith('.reportingRequired'))).toHaveLength(3);
+    expect(preview.rows.filter(row => row.text.includes('免报 → 报工'))).toHaveLength(3);
+    expect(preview.rows.some(row => row.path.endsWith('.packagingBindings') && row.text.includes('成品盒 1盒'))).toBe(true);
+    expect(preview.rows.some(row => row.path.startsWith('canvas.edges'))).toBe(false);
+  });
+
+  it('keeps the reviewed revision when an added catalog placeholder materializes without business changes', () => {
+    const before = { ...EMPTY_CANVAS, nodes: [{ id: 'raw', kind: 'RAW_MATERIAL', data: { name: '原料', skuId: 'RM-1' } }], edges: [] } as unknown as ProductProcessWorkflowDefinition;
+    const pending = { ...before, nodes: [...before.nodes, { id: 'new-p', kind: 'PROCESS', data: { processName: '切分', workProcessId: '__pending__:切分', reportingRequired: true, ports: [] } }], edges: [{ source: 'raw', target: 'new-p' }] } as unknown as ProductProcessWorkflowDefinition;
+    const real = JSON.parse(JSON.stringify(pending)) as ProductProcessWorkflowDefinition;
+    real.nodes[1].data.workProcessId = 'CATALOG-CREATED';
+    const reviewed = previewWorkflowAiDefinitions(before, pending);
+    const materialized = previewWorkflowAiDefinitions(before, real);
+    expect(materialized).toEqual(reviewed);
+    real.nodes[1].data.inputUnit = 'g';
+    expect(previewWorkflowAiDefinitions(before, real)).not.toEqual(reviewed); // A real catalog default must still require review.
+  });
+
   it('pairs nodes by business identity and graph position, independent of storage order', () => {
     const before = {
       ...EMPTY_CANVAS,

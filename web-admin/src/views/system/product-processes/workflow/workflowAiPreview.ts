@@ -46,7 +46,13 @@ export function previewWorkflowAiDefinitions(
     const node = definition.nodes.find(item => item.id === id);
     if (!node) return '';
     const data = node.data as Record<string, unknown>;
-    return `${node.kind}:${String(data.processName ?? data.name ?? '')}:${String(data.ordinal ?? '')}`;
+    const neighbours = definition.edges.filter(edge => edge.source === id || edge.target === id)
+      .map(edge => {
+        const other = definition.nodes.find(item => item.id === (edge.source === id ? edge.target : edge.source));
+        return `${edge.source === id ? 'out' : 'in'}:${other?.kind}:${String(other?.data.name ?? other?.data.processName ?? '')}`;
+      }).sort().join('|');
+    const master = String(data.workProcessId ?? data.skuId ?? '');
+    return `${node.kind}:${String(data.processName ?? data.name ?? '')}:${master.startsWith('__pending__:') ? '' : master}:${neighbours}`;
   };
   const topoOrder = (definition: ProductProcessWorkflowDefinition): string[] => {
     const incoming = new Map(definition.nodes.map(node => [node.id, 0]));
@@ -61,9 +67,72 @@ export function previewWorkflowAiDefinitions(
       });
       ready.sort((a, b) => nodeSortKey(definition, a).localeCompare(nodeSortKey(definition, b)));
     }
-    definition.nodes.forEach(node => { if (!order.includes(node.id)) order.push(node.id); });
+    [...definition.nodes].sort((a, b) => nodeSortKey(definition, a.id).localeCompare(nodeSortKey(definition, b.id)))
+      .forEach(node => { if (!order.includes(node.id)) order.push(node.id); });
     return order;
   };
+  // Match across versions before assigning reference keys. A regenerated node
+  // id or a renamed stage is not itself a new business node.
+  const beforeKeys = new Map<string, string>();
+  const afterKeys = new Map<string, string>();
+  const matchedAfter = new Set<string>();
+  const unmatchedBefore = new Set(before.nodes.map(node => node.id));
+  const unmatchedAfter = new Set(after.nodes.map(node => node.id));
+  const occurrences = new Map<string, number>();
+  const byBeforeId = new Map(before.nodes.map(node => [node.id, node]));
+  const byAfterId = new Map(after.nodes.map(node => [node.id, node]));
+  topoOrder(before).forEach(id => {
+    const node = byBeforeId.get(id)!;
+    const base = `${node.kind}:${String(node.data.processName ?? node.data.name ?? '')}`;
+    const ordinal = occurrences.get(base) || 0;
+    occurrences.set(base, ordinal + 1);
+    beforeKeys.set(id, `${base}#${ordinal}`);
+  });
+  const pair = (oldId: string, newId: string) => {
+    afterKeys.set(newId, beforeKeys.get(oldId)!);
+    matchedAfter.add(newId); unmatchedBefore.delete(oldId); unmatchedAfter.delete(newId);
+  };
+  for (const id of [...unmatchedBefore]) {
+    if (unmatchedAfter.has(id) && byBeforeId.get(id)?.kind === byAfterId.get(id)?.kind) pair(id, id);
+  }
+  const pairUnique = (signature: (node: ProductProcessWorkflowDefinition['nodes'][number], definition: ProductProcessWorkflowDefinition) => string) => {
+    const collect = (ids: Set<string>, nodes: Map<string, ProductProcessWorkflowDefinition['nodes'][number]>, definition: ProductProcessWorkflowDefinition) => {
+      const result = new Map<string, string[]>();
+      ids.forEach(id => { const key = signature(nodes.get(id)!, definition); if (key) result.set(key, [...(result.get(key) || []), id]); });
+      return result;
+    };
+    const old = collect(unmatchedBefore, byBeforeId, before);
+    const next = collect(unmatchedAfter, byAfterId, after);
+    old.forEach((ids, key) => { const targets = next.get(key); if (ids.length === 1 && targets?.length === 1) pair(ids[0], targets[0]); });
+  };
+  pairUnique(node => {
+    const master = node.kind === 'PROCESS' ? node.data.workProcessId : node.data.skuId;
+    return master && !String(master).startsWith('__pending__:') ? `${node.kind}:master:${master}` : '';
+  });
+  pairUnique(node => {
+    const name = node.data.processName ?? node.data.name;
+    return name ? `${node.kind}:name:${name}` : '';
+  });
+  // A replacement can change both catalog id and name. Its unchanged material
+  // neighbours identify the same stage without relying on storage position.
+  pairUnique((node, definition) => {
+    if (node.kind !== 'PROCESS') return '';
+    const neighbours = definition.edges.filter(edge => edge.source === node.id || edge.target === node.id)
+      .map(edge => {
+        const other = definition.nodes.find(item => item.id === (edge.source === node.id ? edge.target : edge.source));
+        if (!other || other.kind === 'PROCESS') return '';
+        const identity = String(other.data.skuId || '').trim() || String(other.data.name || '').trim();
+        return identity ? `${edge.source === node.id ? 'out' : 'in'}:${other.kind}:${identity}` : '';
+      }).filter(Boolean).sort();
+    return neighbours.length ? `PROCESS:neighbours:${neighbours.join('|')}` : '';
+  });
+  topoOrder(after).filter(id => unmatchedAfter.has(id)).forEach(id => {
+    const node = byAfterId.get(id)!;
+    const base = `${node.kind}:${String(node.data.processName ?? node.data.name ?? '')}`;
+    const ordinal = occurrences.get(base) || 0;
+    occurrences.set(base, ordinal + 1);
+    afterKeys.set(id, `${base}#${ordinal}`);
+  });
   const normalizeData = (
     value: unknown,
     nodeIndex: Map<string, string>,
@@ -88,17 +157,7 @@ export function previewWorkflowAiDefinitions(
     return result;
   };
   const normalize = (definition: ProductProcessWorkflowDefinition): Record<string, unknown> => {
-    const occurrences = new Map<string, number>();
-    const keys = new Map<string, string>();
-    const rank = new Map(topoOrder(definition).map((id, index) => [id, index]));
-    [...definition.nodes].sort((a, b) => (rank.get(a.id) || 0) - (rank.get(b.id) || 0) || a.id.localeCompare(b.id)).forEach(node => {
-      const data = node.data as Record<string, unknown>;
-      const name = node.kind === 'PROCESS' ? data.processName : data.name;
-      const base = `${node.kind}:${String(name ?? '')}`;
-      const ordinal = occurrences.get(base) || 0;
-      occurrences.set(base, ordinal + 1);
-      keys.set(node.id, `${base}#${ordinal}`);
-    });
+    const keys = definition === before ? beforeKeys : afterKeys;
     const nodeIndex = new Map([...keys.entries()]);
     const handles = new Map<string, string>();
     definition.nodes.filter(node => node.kind === 'PROCESS').forEach(node => {
@@ -117,13 +176,7 @@ export function previewWorkflowAiDefinitions(
           // A pending catalog item becomes a real id during apply. For a newly
           // added semantic process, compare the reviewed plan by process name;
           // preserve real ids for existing processes so same-name rebindings remain visible.
-          const pendingNames = new Set(before.nodes.filter(item => item.kind === 'PROCESS'
-            && String((item.data as Record<string, unknown>).workProcessId || '').startsWith('__pending__:'))
-            .map(item => String((item.data as Record<string, unknown>).processName || '')));
-          if (String(data.workProcessId || '').startsWith('__pending__:')
-            || (definition === after && pendingNames.has(String(data.processName || '')))) {
-            data.workProcessId = '__pending__';
-          }
+          if (definition === after && !matchedAfter.has(node.id)) delete data.workProcessId;
           const ports = Array.isArray(data.ports) ? data.ports as Record<string, unknown>[] : [];
           const portKeys = new Map(ports.map((port, index) => [String(port.id), `port:${port.direction}:${nodeIndex.get(String(port.materialNodeId)) || ''}:${port.ordinal ?? index}`]));
           data.ports = ports.map(port => ({ ...port, id: portKeys.get(String(port.id)) || `port:${port.direction}:${port.ordinal ?? 0}` }));
@@ -179,7 +232,7 @@ export function previewWorkflowAiDefinitions(
               const name = String(payload?.processName || payload?.name || '');
               return `${kind}${name ? `「${name}」` : ''}`;
             })()
-            : `${label} · ${labels[key] || key}`;
+            : key === 'nodes' || key === 'edges' ? label : `${label} · ${labels[key] || key}`;
           add(`${path}.${key}`, nodeLabel, a[key], b[key]);
         });
       return;
@@ -194,8 +247,15 @@ export function previewWorkflowAiDefinitions(
         const edgeText = (edge: unknown, verb: string) => {
           const item = record(edge) ? edge : {};
           const endpoint = (value: unknown) => String(value || '未绑定').replace(/^PROCESS:/, '工序').replace(/^RAW_MATERIAL:/, '原料').replace(/^SEMI_FINISHED:/, '半成品').replace(/^FINISHED_GOOD:/, '成品').replace(/#\d+$/, '');
-          const handle = item.sourceHandle || item.targetHandle;
-          return `${verb}连接：${endpoint(item.source)} → ${endpoint(item.target)}${handle ? `（端口${String(handle).replace(/^port:[^:]*:/, '')}）` : ''}`;
+          const handle = (value: unknown, direction: string) => {
+            if (!value) return '';
+            const raw = String(value);
+            const port = raw.match(/^port:(INPUT|OUTPUT):(.+):(\d+)$/);
+            if (port) return `第${Number(port[3]) + 1}个${port[1] === 'INPUT' ? '投入' : '产出'}口（${displayReference(port[2])}）`;
+            if (raw === 'input' || raw === 'output') return raw === 'input' ? '投入口' : '产出口';
+            return `${direction}口（自定义端口已变更）`;
+          };
+          return `${verb}连接：${endpoint(item.source)}【${handle(item.sourceHandle, '产出')}】 → ${endpoint(item.target)}【${handle(item.targetHandle, '投入')}】`;
         };
         a.filter(edge => !afterEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.removed[${index}]`, text: edgeText(edge, '删除') }));
         b.filter(edge => !beforeEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.added[${index}]`, text: edgeText(edge, '新增') }));
@@ -224,11 +284,12 @@ export function previewWorkflowAiDefinitions(
 
 function display(value: unknown): string {
   if (value === undefined) return '未设置';
-  if (value === null) return 'null';
+  if (value === null) return '空值';
   if (value === '') return '空字符串';
   if (value === true) return '是';
   if (value === false) return '否';
-  return typeof value === 'string' ? value : workflowAiStableJson(value);
+  const modes: Record<string, string> = { ACTUAL_IO: '实际投入与产出', ACTUAL_WEIGHT: '实际重量', INPUT: '投入', OUTPUT: '产出', MAIN: '主产出', CO_PRODUCT: '联产品', BY_PRODUCT: '副产品' };
+  return typeof value === 'string' ? modes[value] || value : workflowAiStableJson(value);
 }
 
 function displayKind(value: unknown): string {
