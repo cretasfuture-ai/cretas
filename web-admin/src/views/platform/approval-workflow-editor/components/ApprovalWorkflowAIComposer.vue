@@ -260,10 +260,11 @@ async function send() {
       lastStatus.value = same
       return
     }
-    const intro = `下面是全部 ${preview.rows.length} 项改动，确认后点「应用配置」才会写入草稿：`
+    // 不拼 AI 的 reply: 实测后端回的是「当前审批草稿已更新」—— 按旧的自动套用写的, 和「还没写入」矛盾。
+    // 改了什么由下面逐项列表说全, 不靠这句话。
     pushMessage({
       role: 'assistant',
-      content: data.reply ? `${data.reply} ${intro}` : intro,
+      content: `下面是全部 ${preview.rows.length} 项改动，确认后点「应用配置」才会写入草稿：`,
       proposal: { spec, rows: preview.rows, state: 'pending' },
     })
     lastStatus.value = `有 ${preview.rows.length} 项改动待确认`

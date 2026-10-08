@@ -294,6 +294,17 @@ describe('🔴 H2: 预览 → 用户确认 → 执行 (965-3)', () => {
     expect(w.find('.last-status').text()).toBe('这次修改未通过画布校验，草稿保持不变。');
   });
 
+  it('没点之前不说「已更新」: 后端 reply 是按旧自动套用写的 (本机实测原话), 预览消息不拼它', async () => {
+    h.post.mockResolvedValue({ data: { reply: '当前审批草稿已更新', diffs: [{ type: 'APPROVAL_WORKFLOW_SPEC', params: { spec: SPEC } }] } });
+    const w = mountComposer();
+    await send(w, '把节点改为采购主管审批');
+    const thread = w.find('[data-testid="ai-chat-thread"]').text();
+    expect(thread).not.toContain('已更新');
+    expect(thread).toContain('确认后点「应用配置」才会写入草稿');
+    await clickApply(w);
+    expect(w.find('.last-status').text()).toContain('当前草稿已更新');
+  });
+
   it('方案和当前草稿一样 (0 项改动): 不给应用按钮, 直说没有改动', async () => {
     h.post.mockResolvedValue(WITH_SPEC);
     previewSpec.mockReturnValue({ ok: true, rows: [] });
