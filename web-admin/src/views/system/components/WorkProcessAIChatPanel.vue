@@ -498,13 +498,9 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     diff.previewError = '应用前画布计划发生变化，已刷新改动，请重新审核。';
     return;
   }
-  if (applyResult?.status !== 'applied') {
-    proposal.applying = false;
-    diff.previewError = '应用未完成，方案仍待审核。';
-    return;
-  }
+  // 走到这里只剩「没应用成功」(applied 已在上面提前返回): 方案仍待审核
   proposal.applying = false;
-  proposal.state = 'submitted';
+  diff.previewError = '应用未完成，方案仍待审核。';
 }
 
 interface DraftStep {
