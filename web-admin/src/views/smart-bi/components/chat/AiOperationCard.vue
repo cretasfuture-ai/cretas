@@ -17,6 +17,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Loading, WarningFilled, InfoFilled, Lock, Clock, CircleCheckFilled } from '@element-plus/icons-vue';
 import { confirmIntentAction, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 import { permissionDisplayName } from './permissionNames';
+import { previewRows, isDiffPreview, type PreviewRow } from './aiWriteConfirmRows';
 
 const props = defineProps<{
   response: IntentExecuteResponse;
@@ -29,53 +30,30 @@ const emit = defineEmits<{
 }>();
 
 const status = computed(() => String(props.response.status || '').toUpperCase());
-const intentName = computed(() => props.response.intentName || props.response.intentCode || '该操作');
+/**
+ * 意图的中文名。⛔ 没有名字时不回退到 intentCode (内部编码 `MATERIAL_INBOUND` 不给业务用户看, 标准 V3),
+ * 显示「这项操作」。
+ */
+const GENERIC_INTENT_NAME = '这项操作';
+const intentName = computed(() => props.response.intentName || GENERIC_INTENT_NAME);
+/** 句子里用的「意图名」: 有名字加书名号, 没有名字就是「这项操作」(不出现「「这项操作」」) */
+const intentLabel = computed(() => (
+  intentName.value === GENERIC_INTENT_NAME ? GENERIC_INTENT_NAME : `「${intentName.value}」`
+));
 const confirmable = computed(() => props.response.confirmableAction ?? null);
 
-// ── 预览键值网格 (Rule 2: 上下文必带身份信息; 跳过系统内部键) ──────────────
-const SKIP_KEYS = new Set([
-  'factoryId', 'factory_id', 'userId', 'user_id', 'userRole', 'role', 'intentCode', 'userInput',
-]);
-
-const previewEntries = computed<Array<[string, string]>>(() => {
-  const data = confirmable.value?.previewData;
-  if (!data || typeof data !== 'object') return [];
-  return Object.entries(data)
-    .filter(([k]) => !SKIP_KEYS.has(k))
-    .map(([k, v]) => [k, formatValue(v)]);
-});
-
-function formatValue(v: unknown): string {
-  if (v === null || v === undefined) return '—';
-  if (typeof v === 'object') {
-    try { return JSON.stringify(v); } catch { return String(v); }
-  }
-  return String(v);
-}
+// ── 预览行: 与 RN aiWriteConfirm.previewRows 同一套规则 (H3 / V3) ───────────
+// 有 label 的键 + 中文键显示, 无 label 的英文键不显示; 对象值按「键：值」逐项, 不 JSON.stringify。
+const rows = computed<PreviewRow[]>(() => previewRows(confirmable.value));
+const isDiff = computed(() => isDiffPreview(confirmable.value));
 
 // ── 写操作影响契约 (2026-07-24): 改前/改后对比 + 影响说明 + 双重确认 ──────
-/** 改前/改后对比行: [字段, 当前值, 修改后值, 是否变化]。CREATE 类无当前值。 */
-const diffEntries = computed<Array<[string, string, string, boolean]>>(() => {
-  const cur = confirmable.value?.currentValues;
-  const next = confirmable.value?.newValues;
-  if (!next || typeof next !== 'object' || Object.keys(next).length === 0) return [];
-  const keys = new Set([...Object.keys(cur || {}), ...Object.keys(next)]);
-  const rows: Array<[string, string, string, boolean]> = [];
-  for (const k of keys) {
-    if (SKIP_KEYS.has(k)) continue;
-    const a = formatValue((cur as Record<string, unknown> | null | undefined)?.[k]);
-    const b = formatValue((next as Record<string, unknown>)[k]);
-    rows.push([k, a, b, a !== b]);
-  }
-  return rows;
-});
-
 /** 影响说明: 后端 impactSummary 优先; 缺失时按 actionType 给确定性兜底文案。 */
 const impactText = computed(() => {
   const backend = confirmable.value?.impactSummary;
   if (backend) return backend;
   const at = String(confirmable.value?.actionType || '').toUpperCase();
-  if (at === 'DELETE') return `此操作将删除「${intentName.value}」相关数据，确认后立即生效且不可自动恢复。`;
+  if (at === 'DELETE') return `此操作将删除${intentLabel.value}相关数据，确认后立即生效且不可自动恢复。`;
   if (at === 'UPDATE') return '此操作将修改现有数据，确认后立即生效。';
   return '此操作将写入数据，确认后立即生效。';
 });
@@ -193,7 +171,7 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
   <div v-else-if="status === 'WRITE_CONFIRM_REQUIRED'" class="op-card op-card--confirm">
     <div class="op-card-header">
       <el-icon><WarningFilled /></el-icon>
-      <span>「{{ intentName }}」需要确认</span>
+      <span>{{ intentLabel }}需要确认</span>
     </div>
     <div class="op-card-body op-card-transient">
       <el-icon class="is-loading"><Loading /></el-icon>
@@ -227,20 +205,20 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
           class="op-impact-alert"
         />
         <!-- 改前/改后对比表 (写操作契约: 对比) -->
-        <div v-if="diffEntries.length" class="op-diff-table">
+        <div v-if="isDiff && rows.length" class="op-diff-table" data-testid="aiop-rows">
           <div class="op-diff-head">字段</div>
           <div class="op-diff-head">当前</div>
           <div class="op-diff-head">修改后</div>
-          <template v-for="[key, cur, next, changed] in diffEntries" :key="key">
-            <div class="op-diff-key">{{ key }}</div>
-            <div class="op-diff-cur">{{ cur }}</div>
-            <div class="op-diff-next" :class="{ 'op-diff-changed': changed }">{{ next }}</div>
+          <template v-for="row in rows" :key="row.key">
+            <div class="op-diff-key">{{ row.label }}</div>
+            <div class="op-diff-cur">{{ row.before }}</div>
+            <div class="op-diff-next" :class="{ 'op-diff-changed': row.changed }">{{ row.value }}</div>
           </template>
         </div>
-        <div v-else-if="previewEntries.length" class="op-preview-grid">
-          <template v-for="[key, value] in previewEntries" :key="key">
-            <div class="op-preview-key">{{ key }}</div>
-            <div class="op-preview-value">{{ value }}</div>
+        <div v-else-if="!isDiff && rows.length" class="op-preview-grid" data-testid="aiop-rows">
+          <template v-for="row in rows" :key="row.key">
+            <div class="op-preview-key">{{ row.label }}</div>
+            <div class="op-preview-value">{{ row.value }}</div>
           </template>
         </div>
         <pre v-else class="op-preview-raw">{{ response.message }}</pre>
@@ -252,12 +230,12 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
         </span>
         <el-button
           type="primary"
-          size="small"
+          size="default"
           :loading="phase === 'pending'"
           :disabled="phase === 'pending' || isExpired"
           @click="handleConfirm"
         >确认执行</el-button>
-        <el-button size="small" :disabled="phase === 'pending'" @click="handleCancel">取消</el-button>
+        <el-button size="default" :disabled="phase === 'pending'" @click="handleCancel">取消</el-button>
       </div>
     </template>
   </div>

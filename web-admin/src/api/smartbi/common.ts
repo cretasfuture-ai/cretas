@@ -968,6 +968,20 @@ const COLUMN_NAME_MAP: Record<string, string> = {
   'ytd_budget': '累计预算',
 };
 
+/**
+ * 只查表: 列名在 COLUMN_NAME_MAP 里 (精确或忽略大小写) 就给中文名, 否则 null。
+ * 与 humanizeColumnName 不同: 查不到时不改写 / 不截断 / 不清空, 由调用方决定怎么显示。
+ * (AI 对话表格表头用它: 未知英文列要「照原样显示」, 不许被改写成别的样子或藏起来。)
+ */
+export function lookupColumnLabel(col: string): string | null {
+  if (Object.prototype.hasOwnProperty.call(COLUMN_NAME_MAP, col)) return COLUMN_NAME_MAP[col];
+  const lower = col.toLowerCase();
+  for (const [key, val] of Object.entries(COLUMN_NAME_MAP)) {
+    if (key.toLowerCase() === lower) return val;
+  }
+  return null;
+}
+
 /** Replace circled number characters ②③④⑤... with (2)(3)(4)(5)... */
 export function sanitizeCircledNumbers(text: string): string {
   return text.replace(/[②③④⑤⑥⑦⑧⑨⑩]/g, m => {
