@@ -1,0 +1,4 @@
+{
+  "approval": ["approverRoleLabels", "approverUserLabels", "delegateUserLabel"],
+  "notify": ["notifyRoleLabels"]
+}

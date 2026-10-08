@@ -42,8 +42,6 @@ describe('approval workflow AI draft compiler', () => {
     ]
     const spec = { startNodeId: 'start', nodes: nodes.map(n => {
       const config = { ...n.config }
-      delete config.approverRoleLabels
-      delete config.approverUserLabels
       return { ...n, config, label: n.id === 'quality' ? '质量经理验收' : n.label }
     }), edges }
     return { nodes, edges, spec }
@@ -69,6 +67,36 @@ describe('approval workflow AI draft compiler', () => {
   it('still rejects unknown config keys while allowing a paired legal mode', () => {
     const { nodes, edges, spec } = renameFixture('ANY')
     spec.nodes[1].config = { ...spec.nodes[1].config, bypassApprovals: true }
+    expect(() => compileApprovalWorkflowAiDraft({ spec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })).toThrow('不支持的配置')
+  })
+
+  it('ignores spoofed derived labels and recomputes them from real directory values', () => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    spec.nodes[1].config.approverRoleLabels = ['伪造角色']
+    spec.nodes[1].config.approverUserLabels = ['伪造审批人']
+    const draft = compileApprovalWorkflowAiDraft({ spec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })
+    expect(draft.nodes[1].config).toEqual(nodes[1].config)
+    expect(spec.nodes[1].config.approverRoleLabels).toEqual(['伪造角色'])
+  })
+
+  it('ignores delegate and notification display fields without changing configuration', () => {
+    const spec = { startNodeId: 'start', nodes: [
+      { id: 'start', type: 'start', config: {} },
+      { id: 'approval', type: 'approval', config: { delegateUserId: '42', delegateUserLabel: '伪造' } },
+      { id: 'notify', type: 'notify', config: { notifyRoles: ['factory_super_admin'], notifyRoleLabels: ['伪造'] } },
+      { id: 'end', type: 'end', config: { outcome: 'APPROVED' } },
+    ], edges: [{ id: 'e1', source: 'start', target: 'approval' },
+      { id: 'e2', source: 'approval', target: 'notify' }, { id: 'e3', source: 'notify', target: 'end' }] }
+    const draft = compile(spec)
+    expect(draft.nodes[1].config).toEqual({ delegateUserId: '42', delegateUserLabel: '六扇门管理员（liushanmen_admin）' })
+    expect(draft.nodes[2].config).toEqual({ notifyRoles: ['factory_super_admin'], notifyRoleLabels: ['工厂总管理员'] })
+  })
+
+  it.each(['bypassApprovals', 'approverRoleLabel', 'unknownDisplayLabels'])('still rejects unknown configuration %s with derived labels present', key => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    spec.nodes[1].config = { ...spec.nodes[1].config, [key]: true }
     expect(() => compileApprovalWorkflowAiDraft({ spec, currentName: '质检放行', currentNodes: nodes,
       currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })).toThrow('不支持的配置')
   })
