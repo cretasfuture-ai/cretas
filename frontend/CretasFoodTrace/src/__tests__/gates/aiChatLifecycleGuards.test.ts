@@ -11,15 +11,17 @@ const source = fs.readFileSync(path.resolve(__dirname, '../../screens/factory-ad
 const ast = ts.createSourceFile('AIChatScreen.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 type Context = Record<string, unknown>;
 function declaration(name: string): string {
-    let found: ts.VariableDeclaration | undefined;
+    let found: ts.VariableDeclaration | ts.FunctionDeclaration | undefined;
     function walk(node: ts.Node): void {
         if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name)
+            found = node;
+        if (ts.isFunctionDeclaration(node) && node.name?.text === name)
             found = node;
         ts.forEachChild(node, walk);
     }
     walk(ast);
     assert(found, name);
-    return `const ${found.getText(ast)};globalThis.extracted=${name};`;
+    return `${ts.isVariableDeclaration(found) ? 'const ' : ''}${found.getText(ast)};globalThis.extracted=${name};`;
 }
 function run<T>(code: string, context: Context): T {
     const sandbox = vm.createContext({ console: { log() { }, warn() { }, error() { } }, Date, Math, JSON, Error, AbortController, ...context });
@@ -133,6 +135,8 @@ function sending(behavior?: (args: StreamCall) => void | Promise<void>) {
         // 真实现: handleSend 的 onResult 用它判断要不要出写确认卡。少了它 onResult 会 ReferenceError,
         // 而 handleSend 的 catch 会把它吞成一条错误消息 —— 下面 'success releases guard' 断言正文就是为抓这个。
         writeConfirmFromStreamResult,
+        // Extract the screen's actual shared mapper; do not replace this dependency with a stub.
+        mapFollowUps: extract<(raw: unknown) => unknown[]>('mapFollowUps', {}),
         feedbackSounds: { onError: () => { state.audio++; }, onWriteSuccess: () => { state.audio++; }, onNeedMoreInfo: () => { state.audio++; } },
         aiApiClient: { executeIntentStream: async (...args: StreamCall) => { state.calls.push(args); if (behavior)
                 await behavior(args); } },
