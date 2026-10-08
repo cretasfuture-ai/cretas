@@ -262,6 +262,44 @@ describe('AIChatScreen 写操作确认卡', () => {
     expect(mockOnWriteSuccess).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['quality_inspector', 'warehouse_manager'])('确认写成功映射读追问并能点击完整问题：%s', async (role) => {
+    mockRole = role;
+    const label = role === 'quality_inspector' ? '查看质检记录' : '查询今日待收货';
+    const question = role === 'quality_inspector' ? '查询质检记录' : '查询今日待收货清单';
+    const intentCode = role === 'quality_inspector' ? 'QUALITY_CHECK_QUERY' : 'MATERIAL_TODAY_RECEIVING_QUERY';
+    mockConfirmIntent.mockResolvedValue({ status: 'SUCCESS', message: '已完成登记',
+      followUps: [{ label, question, intentCode }] });
+    const screen = await openReadyCard();
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-execute')); });
+    await waitFor(() => expect(screen.getByTestId('ai-chat-followup-0')).toBeTruthy());
+    expect(flattenText(screen.getByTestId('ai-chat-followup-0'))).toContain(label);
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-chat-followup-0')); });
+    await waitFor(() => expect(mockExecuteIntentStream).toHaveBeenCalledTimes(2));
+    const call = mockExecuteIntentStream.mock.calls[1];
+    expect(call[0]).toBe(question);
+    expect(call[4]).toMatchObject({ intentCode });
+    expect(mockConfirmIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('确认失败或没有候选时不生成追问，正文仍显示实际结果', async () => {
+    mockConfirmIntent.mockResolvedValue({ status: 'FAILED', message: '执行被拒绝',
+      followUps: [{ label: '不应出现', question: '查询质检记录', intentCode: 'QUALITY_CHECK_QUERY' }] });
+    const screen = await openReadyCard();
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-execute')); });
+    await waitFor(() => expect(screen.getAllByText('执行被拒绝').length).toBeGreaterThan(0));
+    expect(screen.queryByTestId('ai-chat-followups')).toBeNull();
+    expect(mockConfirmIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('确认成功但后端没有读候选时保持为空', async () => {
+    mockConfirmIntent.mockResolvedValue({ status: 'SUCCESS', message: '已完成登记', followUps: [] });
+    const screen = await openReadyCard();
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-execute')); });
+    await waitFor(() => expect(screen.getAllByText('已完成登记').length).toBeGreaterThan(0));
+    expect(screen.queryByTestId('ai-chat-followups')).toBeNull();
+    expect(mockConfirmIntent).toHaveBeenCalledTimes(1);
+  });
+
   it('连点「确认执行」(同一渲染里两次 + 在途时再点): confirm 仍然只调用一次', async () => {
     let resolveConfirm!: (v: unknown) => void;
     mockConfirmIntent.mockImplementation(() => new Promise((resolve) => { resolveConfirm = resolve; }));
