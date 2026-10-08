@@ -66,6 +66,12 @@ import { AI_DEBUG_TELEMETRY, chatFontFamily, withChatFonts } from '../../../comp
 import { isRestaurant } from '../../../utils/factoryType';
 import { currentShanghaiIsoDate } from '../../../utils/shanghaiDate';
 import { appAlert } from '../../../components/ui/AppDialog';
+import {
+  clarificationAccessibilityLabel,
+  measureScrollbarWidth,
+  shouldShowActionDescriptions,
+  threadRightPadding,
+} from '../../../components/ai/chatThreadLayout';
 
 export const AI_CHAT_TIMEOUT_MS = 30_000;
 const AUTO_SCROLL_THRESHOLD = 120;
@@ -83,6 +89,19 @@ interface FollowUpSuggestion {
   label: string;
   question: string;
   intentCode?: string;
+}
+
+function mapFollowUps(raw: unknown): FollowUpSuggestion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    if (typeof item === 'string') return { label: item, question: item };
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const candidate = item as Record<string, unknown>;
+    const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
+    const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+    const intentCode = typeof candidate.intentCode === 'string' ? candidate.intentCode.trim() : undefined;
+    return question && label ? { label, question, intentCode } : undefined;
+  }).filter((item): item is FollowUpSuggestion => item !== undefined);
 }
 
 interface RestaurantAgentLaunch {
@@ -372,6 +391,8 @@ function AIChatScreenContent() {
   const { t } = useTranslation('home');
   const scrollViewRef = useRef<ScrollView>(null);
   const shouldAutoScrollRef = useRef(true);
+  // web 上经典滚动条占掉的宽度; 算进右边距, 让正文列始终是 屏宽 − 32 (标准 L1)
+  const [threadScrollbarWidth, setThreadScrollbarWidth] = useState(0);
   const theme = useTheme<AppTheme>();
   // 对话面单独一套字体栈 (标准 T1): 嵌套 Paper 主题只在 web 上换 fonts, 原生端原样返回; ⛔ 不改全局 src/theme
   const chatTheme = useMemo(() => withChatFonts(theme), [theme]);
@@ -558,6 +579,18 @@ function AIChatScreenContent() {
       if (shouldAutoScrollRef.current) scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 100);
   }, []);
+
+  const syncThreadScrollbarWidth = useCallback(() => {
+    if (Platform.OS !== 'web') return;
+    const scrollView = scrollViewRef.current as unknown as { getScrollableNode?: () => unknown } | null;
+    const width = measureScrollbarWidth(scrollView?.getScrollableNode?.());
+    setThreadScrollbarWidth((prev) => (prev === width ? prev : width));
+  }, []);
+
+  const handleThreadContentSizeChange = useCallback(() => {
+    scrollToBottom();
+    syncThreadScrollbarWidth();
+  }, [scrollToBottom, syncThreadScrollbarWidth]);
 
   const handleMessageScroll = useCallback((event: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -905,15 +938,7 @@ function AIChatScreenContent() {
           const rawFollowUps = Array.isArray(result.followUps)
             ? result.followUps
             : Array.isArray(result.nextQuestions) ? result.nextQuestions : [];
-          followUps = (rawFollowUps as unknown[]).map((item) => {
-            if (typeof item === 'string') return { label: item, question: item };
-            if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
-            const candidate = item as Record<string, unknown>;
-            const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
-            const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
-            const intentCode = typeof candidate.intentCode === 'string' ? candidate.intentCode.trim() : undefined;
-            return question && label ? { label, question, intentCode } : undefined;
-          }).filter((item): item is FollowUpSuggestion => item !== undefined);
+          followUps = mapFollowUps(rawFollowUps);
 
           // NEED_MORE_INFO: 优先使用 clarificationQuestions 构建友好回复 (正文在下面选项定下来之后再拼:
           // 「或点击下方选项」只在真的有选项时才说 —— prod 2026-10-06 没有选项也这么说了)
@@ -1230,10 +1255,12 @@ function AIChatScreenContent() {
     let resultInner: Record<string, unknown> | undefined;
     let resultMeta: { intentCode?: string; intentCategory?: string } = {};
     let confirmedLastAction: Record<string, unknown> | undefined;
+    let confirmedFollowUps: FollowUpSuggestion[] = [];
     try {
       const response = await intentConfigApiClient.confirmIntent(buildConfirmationProof(action), currentFactoryId);
       outcome = classifyConfirmResponse(response, intentName);
       confirmedLastAction = readLastAction(response?.metadata);
+      confirmedFollowUps = mapFollowUps(response?.followUps);
       const inner = response?.resultData;
       resultInner = inner && typeof inner === 'object' && !Array.isArray(inner)
         ? (inner as Record<string, unknown>)
@@ -1260,6 +1287,7 @@ function AIChatScreenContent() {
       updateWriteConfirm(messageId, (s) => s.phase === 'executing', (s) => ({ ...s, phase: 'done', doneLabel }));
       appendAssistantMessage({
         content: outcome.content,
+        followUps: outcome.executed && confirmedFollowUps.length > 0 ? confirmedFollowUps : undefined,
         richData: detectRichData(resultInner),
         intentCode: resultMeta.intentCode,
         intentCategory: resultMeta.intentCategory,
@@ -1426,12 +1454,12 @@ function AIChatScreenContent() {
           {/* 显示建议操作按钮 (当需要澄清时): 竖排、占满正文列、一个样式 (标准 F3) */}
           {!message.isLoading && message.suggestedActions && message.suggestedActions.length > 0 && (
             <View style={styles.suggestedActionsContainer}>
-              {message.suggestedActions.map((action, index) => (
+              {message.suggestedActions.map((action, index, group) => (
                 <TouchableOpacity
                   key={index}
                   testID={`suggested-action-${index}`}
                   accessibilityRole="button"
-                  accessibilityLabel={action.label}
+                  accessibilityLabel={clarificationAccessibilityLabel(action)}
                   accessibilityState={{ disabled: isLoading }}
                   style={[styles.suggestedActionButton, tone.suggestedAction]}
                   onPress={() => handleSuggestedActionClick(action, message.id)}
@@ -1440,8 +1468,8 @@ function AIChatScreenContent() {
                   <Text variant="bodyLarge" style={[styles.leftAlignedText, tone.onPrimaryContainer]}>
                     {action.label}
                   </Text>
-                  {/* 只有当 description 与 label 不同时才显示 */}
-                  {action.description && action.description !== action.label && (
+                  {/* 标准 F3: 同组说明要么都显示、要么都不显示 (只要有一个没有, 整组不显示; 说明已并进无障碍标签) */}
+                  {shouldShowActionDescriptions(group) && (
                     <Text variant="bodySmall" numberOfLines={1} style={[styles.leftAlignedText, styles.suggestedActionDesc, tone.muted]}>
                       {action.description}
                     </Text>
@@ -1547,10 +1575,14 @@ function AIChatScreenContent() {
           ref={scrollViewRef}
           testID="ai-chat-thread"
           style={styles.messagesContainer}
-          contentContainerStyle={styles.messagesContent}
+          contentContainerStyle={[
+            styles.messagesContent,
+            threadScrollbarWidth > 0 ? { paddingRight: threadRightPadding(threadScrollbarWidth) } : null,
+          ]}
           onScroll={handleMessageScroll}
           scrollEventThrottle={100}
-          onContentSizeChange={scrollToBottom}
+          onLayout={syncThreadScrollbarWidth}
+          onContentSizeChange={handleThreadContentSizeChange}
         >
           {messages.length === 0 ? renderWelcome() : messages.map(renderMessage)}
         </ScrollView>

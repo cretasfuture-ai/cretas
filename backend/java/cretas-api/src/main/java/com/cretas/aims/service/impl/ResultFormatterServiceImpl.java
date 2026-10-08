@@ -536,7 +536,7 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "REPORT_KPI" -> formatKPIReport(data);
             case "REPORT_DASHBOARD_OVERVIEW" -> formatDashboardReport(data);
             case "REPORT_ANOMALY" -> formatAnomalyReport(data);
-            case "REPORT_TRENDS" -> formatTrendsReport(data);
+            case "REPORT_TRENDS" -> formatTrendsReport(topLevel);
             case "COST_QUERY", "COST_TREND_ANALYSIS" -> formatCostQueryResult(topLevel);
             case "SCHEDULING_LIST" -> formatSchedulingListResult(topLevel);
             case "PRODUCTION_STATUS_QUERY" -> formatProductionStatus(data);
@@ -952,6 +952,25 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
 
     @SuppressWarnings("unchecked")
     private String formatTrendsReport(Map<String, Object> data) {
+        Map<String, Object> comparison = asMap(data.get("comparison"));
+        if (comparison != null) {
+            Map<String, Object> base = asMap(comparison.get("period1"));
+            Map<String, Object> current = asMap(comparison.get("period2"));
+            Map<String, Object> changes = asMap(comparison.get("comparison"));
+            if (base != null && current != null && changes != null) {
+                String label = getString(comparison, "comparisonLabel");
+                StringBuilder text = new StringBuilder("趋势分析报告\n");
+                text.append("本期：").append(comparison.get("currentPeriodStart")).append(" 至 ").append(comparison.get("currentPeriodEnd")).append("\n");
+                text.append("上期：").append(comparison.get("basePeriodStart")).append(" 至 ").append(comparison.get("basePeriodEnd")).append("\n");
+                appendTrendComparison(text, "产量", "output", base, current, changes, label);
+                appendTrendComparison(text, "成本", "cost", base, current, changes, label);
+                String basis = getString(comparison, "dataBasis");
+                if (basis != null) text.append("数据出处：").append(basis);
+                return text.toString();
+            }
+        }
+        Map<String, Object> nested = asMap(data.get("data"));
+        if (nested != null) data = nested;
         Object trendDataObj = data.get("trendData");
         if (trendDataObj instanceof List) {
             List<Map<String, Object>> trendData = (List<Map<String, Object>>) trendDataObj;
@@ -969,6 +988,20 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         }
         // Fallback: summarize whatever data keys are present
         return formatDataSummary("趋势分析报告", data);
+    }
+
+    private void appendTrendComparison(StringBuilder text, String name, String key,
+            Map<String, Object> base, Map<String, Object> current, Map<String, Object> changes, String label) {
+        text.append(name).append("：本期 ").append(trendNumber(current.get(key)))
+                .append("，上期 ").append(trendNumber(base.get(key))).append("；");
+        Object rate = changes.get(key + "ChangeRate");
+        if (rate != null) text.append(label).append("变化率 ").append(trendNumber(rate)).append("%");
+        else text.append(changes.get(key + "ChangeMessage"));
+        text.append("\n");
+    }
+
+    private String trendNumber(Object value) {
+        return value == null ? "暂无数据" : QUANTITY_FORMATTER.format(new BigDecimal(value.toString()));
     }
 
     private String formatCostQueryResult(Map<String, Object> data) {

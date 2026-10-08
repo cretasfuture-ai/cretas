@@ -13,6 +13,8 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -141,27 +143,52 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         if (ACTION_CREATE.equals(action)) {
             draft.setProcessName(getRequiredText(params, "processName", "工序名称不能为空"));
             WorkProcessDTO existing = findExisting(factoryId, draft);
-            Map<String, Object> preview = new HashMap<>();
+            Map<String, Object> preview = previewParameters(action, draft);
             preview.put("status", existing == null ? "PREVIEW" : "DUPLICATE");
-            preview.put("action", ACTION_CREATE);
-            preview.put("processName", draft.getProcessName());
-            preview.put("processCategory", draft.getProcessCategory());
             preview.put("existingId", existing != null ? existing.getId() : "");
-            preview.put("message", existing == null ? "将创建工序: " + draft.getProcessName()
+            preview.put("message", existing == null ? "将创建工序: " + draft.getProcessName() + previewFields(draft)
                     : "已存在同名同类别工序，建议直接复用: " + existing.getProcessName());
             return preview;
         }
         if (ACTION_UPDATE.equals(action)) {
             String id = getRequiredText(params, "id", "更新工序时必须提供 id");
-            return Map.of(
-                    "status", "PREVIEW",
-                    "action", ACTION_UPDATE,
-                    "id", id,
-                    "processName", Objects.toString(draft.getProcessName(), ""),
-                    "processCategory", Objects.toString(draft.getProcessCategory(), ""),
-                    "message", "将更新工序 " + id);
+            Map<String, Object> preview = previewParameters(action, draft);
+            preview.put("status", "PREVIEW");
+            preview.put("id", id);
+            preview.put("message", "将更新工序 " + id + previewFields(draft));
+            return preview;
         }
         throw new BusinessException(400, "不支持的工序操作: " + action);
+    }
+
+    /** Use the same normalized DTO as apply; absent fields must remain absent (especially updates). */
+    private Map<String, Object> previewParameters(String action, WorkProcessDTO draft) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("action", action);
+        putPresent(values, "processName", draft.getProcessName());
+        putPresent(values, "processCategory", draft.getProcessCategory());
+        putPresent(values, "estimatedMinutes", draft.getEstimatedMinutes());
+        putPresent(values, "standardYieldMin", draft.getStandardYieldMin());
+        putPresent(values, "standardYieldMax", draft.getStandardYieldMax());
+        putPresent(values, "needsInput", draft.getNeedsInput());
+        putPresent(values, "standardHourlyRate", draft.getStandardHourlyRate());
+        return values;
+    }
+
+    private void putPresent(Map<String, Object> values, String key, Object value) {
+        if (value != null) values.put(key, value);
+    }
+
+    private String previewFields(WorkProcessDTO draft) {
+        List<String> fields = new ArrayList<>();
+        if (draft.getProcessName() != null) fields.add("工序名称：" + draft.getProcessName());
+        if (draft.getProcessCategory() != null) fields.add("工序类别：" + draft.getProcessCategory());
+        if (draft.getEstimatedMinutes() != null) fields.add("预估工时：" + draft.getEstimatedMinutes() + " 分钟");
+        if (draft.getStandardHourlyRate() != null) fields.add("标准时薪：" + draft.getStandardHourlyRate().toPlainString() + " 元/小时");
+        if (draft.getStandardYieldMin() != null) fields.add("出成率下限：" + draft.getStandardYieldMin().toPlainString());
+        if (draft.getStandardYieldMax() != null) fields.add("出成率上限：" + draft.getStandardYieldMax().toPlainString());
+        if (draft.getNeedsInput() != null) fields.add("需录投入量：" + (draft.getNeedsInput() ? "是" : "否"));
+        return fields.isEmpty() ? "" : "\n" + String.join("\n", fields);
     }
 
     @Override

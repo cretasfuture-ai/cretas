@@ -198,6 +198,7 @@ export function buildConfirmationProof(action: ConfirmableAction): IntentConfirm
  * 意图执行响应
  */
 export interface IntentExecuteResponse {
+  followUps?: Array<{ label: string; question: string; intentCode?: string }> | null;
   /** 旧字段, 后端 IntentExecuteResponse 并没有它; 判成败读 status */
   success?: boolean;
   /** 后端状态: SUCCESS / COMPLETED / PREVIEW / WRITE_CONFIRM_REQUIRED / FAILED / PERMISSION_DENIED ... */

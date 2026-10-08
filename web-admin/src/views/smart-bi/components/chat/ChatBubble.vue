@@ -282,22 +282,50 @@ function alertType(level: string): 'error' | 'warning' {
   color: var(--el-text-color-primary, #303133);
   white-space: pre-wrap;
 }
-.bubble-std .bubble-content-markdown {
-  :deep(h1), :deep(h2), :deep(h3) { font-size: 18px; line-height: 1.5; }
-  :deep(strong) { color: inherit; }
-  :deep(code) { font-size: 13px; }
-  :deep(pre) { max-width: 100%; }
-  :deep(blockquote) { border-left-color: var(--el-border-color, #dcdfe6); }
-  :deep(.bubble-records) { display: flex; flex-direction: column; gap: 8px; margin: 0.5em 0; }
-  :deep(.bubble-record) {
-    border: 1px solid var(--el-border-color-lighter, #ebeef5);
-    border-radius: 8px;
-    padding: 8px 12px;
-  }
-  :deep(.bubble-record-row) { display: flex; gap: 12px; justify-content: space-between; }
-  :deep(.bubble-record-key) { font-size: 13px; color: var(--el-text-color-secondary, #909399); flex-shrink: 0; }
-  :deep(.bubble-record-val) { text-align: right; min-width: 0; }
+/*
+ * ⚠️ 每条都写全选择器, ⛔ 不写成 `.bubble-content-markdown { :deep(ol) {...} }` 这种嵌套:
+ * 嵌套会被编译成 `.bubble-content-markdown [data-v-x] ol` —— 要求 v-html 内容里有带 data-v 的节点, 而一个都没有,
+ * 整块规则静默失效 (2026-10-08 本机实测: ol 的 padding-left 是 0, 序号挤到正文列左边 17px、压在面板边上;
+ * 记录卡没有边框)。写全之后编译成 `.bubble-std .bubble-content-markdown[data-v-x] ol`, 才打得到 v-html 内容。
+ * 上面旧版式那块嵌套同样失效, 餐饮已废弃, 不动。
+ */
+.bubble-std .bubble-content-markdown :deep(p) { margin: 0.4em 0; }
+.bubble-std .bubble-content-markdown :deep(h1),
+.bubble-std .bubble-content-markdown :deep(h2),
+.bubble-std .bubble-content-markdown :deep(h3) { margin: 0.6em 0 0.3em; font-size: 18px; line-height: 1.5; font-weight: 600; }
+/* 有序 / 无序列表: 序号留在正文列里 (助手正文没有内边距, 不给 padding-left 序号就跑到列外) */
+.bubble-std .bubble-content-markdown :deep(ul),
+.bubble-std .bubble-content-markdown :deep(ol) { margin: 0.3em 0; padding-left: 1.5em; }
+.bubble-std .bubble-content-markdown :deep(li) { margin: 0.15em 0; }
+.bubble-std .bubble-content-markdown :deep(strong) { font-weight: 600; color: inherit; }
+.bubble-std .bubble-content-markdown :deep(code) {
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  font-size: 13px;
 }
+.bubble-std .bubble-content-markdown :deep(pre) {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+.bubble-std .bubble-content-markdown :deep(blockquote) {
+  margin: 0.4em 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--el-border-color, #dcdfe6);
+  color: var(--el-text-color-secondary, #909399);
+}
+.bubble-std .bubble-content-markdown :deep(.bubble-records) { display: flex; flex-direction: column; gap: 8px; margin: 0.5em 0; }
+.bubble-std .bubble-content-markdown :deep(.bubble-record) {
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.bubble-std .bubble-content-markdown :deep(.bubble-record-row) { display: flex; gap: 12px; justify-content: space-between; }
+.bubble-std .bubble-content-markdown :deep(.bubble-record-key) { font-size: 13px; color: var(--el-text-color-secondary, #909399); flex-shrink: 0; }
+.bubble-std .bubble-content-markdown :deep(.bubble-record-val) { text-align: right; min-width: 0; }
 .bubble-std .bubble-alert-item :deep(.el-alert__title) {
   font-family: var(--bubble-std-font);
 }

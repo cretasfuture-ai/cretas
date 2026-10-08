@@ -44,6 +44,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -1428,6 +1429,9 @@ public class ToolDispatchService {
         TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
     }
 
+    /** 工具 schema 顶层开关: 只有可选参数的工具要不要在执行前让大模型抽可选参数 (默认不抽)。 */
+    public static final String EXTRACT_OPTIONAL_FLAG = "x-llm-extract-optional";
+
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {
         Map<String, Object> extractedParams = new HashMap<>();
@@ -1439,11 +1443,17 @@ public class ToolDispatchService {
 
             @SuppressWarnings("unchecked")
             List<String> requiredParams = (List<String>) parametersSchema.get("required");
-            if (requiredParams == null || requiredParams.isEmpty()) {
+            // Optional-only tools still carry user-specified filters (period, comparison, days).
+            Map<String, Object> properties = parametersSchema.get("properties") instanceof Map<?, ?> p
+                    ? (Map<String, Object>) p : Map.of();
+            // ⛔ 只对显式声明 x-llm-extract-optional=true 的工具抽可选参数 (organizer 审 #967):
+            // 这里每次工具执行都会进来, 不加开关等于给所有只有可选参数的读工具每次多一次大模型调用 (延迟 + 费用)。
+            boolean optionalOnly = requiredParams == null || requiredParams.isEmpty();
+            if (optionalOnly && !Boolean.TRUE.equals(parametersSchema.get(EXTRACT_OPTIONAL_FLAG))) {
                 return extractedParams;
             }
-
-            List<String> missingParams = requiredParams.stream()
+            Collection<String> candidates = optionalOnly ? properties.keySet() : requiredParams;
+            List<String> missingParams = candidates.stream()
                     .filter(p -> !existingParams.containsKey(p) ||
                                  existingParams.get(p) == null ||
                                  (existingParams.get(p) instanceof String &&

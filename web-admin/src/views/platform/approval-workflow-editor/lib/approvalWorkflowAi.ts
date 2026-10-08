@@ -6,6 +6,7 @@ import type {
   NodeType,
 } from '@/api/approvalWorkflow'
 import { formatUserLabel } from './approvalDirectory'
+import nodeModes from './approvalNodeModes.json'
 
 const NODE_TYPES = new Set<NodeType>([
   'start',
@@ -27,6 +28,7 @@ const CONFIG_KEYS: Record<NodeType, Set<string>> = {
     'timeoutMinutes',
     'departmentIds',
     'delegateUserId',
+    'mode',
   ]),
   condition: new Set(['description']),
   parallel: new Set(['description']),
@@ -126,7 +128,9 @@ export function compileApprovalWorkflowAiDraft(
   const edgePairs = new Set<string>()
   const edges = rawEdges.map((value, index): ApprovalWorkflowEdge => {
     const raw = asRecord(value, `第 ${index + 1} 条连线`)
-    if ('condition' in raw) {
+    // Full AI specs may echo an empty transport field; it must not erase existing conditions.
+    if ('condition' in raw && raw.condition != null
+      && (typeof raw.condition !== 'string' || raw.condition.trim() !== '')) {
       throw new Error('AI 不能写入表达式，请改用金额阈值或默认分支')
     }
     const id = requiredId(raw.id, `第 ${index + 1} 条连线`)
@@ -349,6 +353,12 @@ function normalizeNodeConfig(options: NormalizeNodeConfigOptions): Record<string
   const merged: Record<string, unknown> = { ...options.base }
   const patch = options.patch
   if (options.type === 'approval') {
+    if ('mode' in patch) {
+      if (typeof patch.mode !== 'string' || !nodeModes.approval.includes(patch.mode)) {
+        throw new Error('审批模式无效')
+      }
+      merged.mode = patch.mode
+    }
     if ('approverRoles' in patch) {
       const roles = uniqueStrings(patch.approverRoles)
       assertDirectoryValues(roles, options.roleByCode, options.currentRoleCodes, '审批角色')
@@ -415,7 +425,7 @@ function normalizeNodeConfig(options: NormalizeNodeConfigOptions): Record<string
   } else if (options.type === 'join') {
     if ('mode' in patch) {
       const mode = String(patch.mode)
-      if (!['ALL', 'N_OF_M', 'ANY'].includes(mode)) throw new Error('汇聚模式无效')
+      if (!nodeModes.join.includes(mode)) throw new Error('汇聚模式无效')
       merged.mode = mode
     }
     if ('n' in patch) merged.n = boundedInteger(patch.n, 2, 2, 20, '汇聚数量')

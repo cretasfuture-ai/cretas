@@ -28,10 +28,35 @@ const STATUS_NAMES: Record<string, string> = {
   INSPECTED: '已检验', PASS: '合格', FAIL: '不合格', CONDITIONAL: '有条件放行',
 };
 
+/**
+ * 质检记录的「质检结果」(result 键, 标签就叫质检结果, 只在质检里出现): 这里 PENDING 就是「待检验」——
+ * 后端格式化同一批记录写的也是「待检验」(QUALITY_CHECK_QUERY 实测, 2026-10-08)。
+ * ⛔ 不把 PENDING 放进通用 STATUS_NAMES: status 键在工序任务里 PENDING 是「待开始」。
+ */
+const QUALITY_RESULT_NAMES: Record<string, string> = {
+  PASS: '合格', FAIL: '不合格', CONDITIONAL: '有条件放行', PENDING: '待检验',
+};
+
+/** 值是状态码 / 结果码的键: 必须翻成中文才显示。 */
+function isCodeKey(key: string): boolean {
+  return key === 'status' || key === 'result';
+}
+
+/** 状态码 / 结果码 → 中文; 认不出返回 undefined。列表单元格和详情卡共用这一份 (两边不再各翻各的)。 */
+function codeToChinese(key: string, value: string): string | undefined {
+  const code = value.trim().toUpperCase();
+  if (key === 'result') return QUALITY_RESULT_NAMES[code] ?? STATUS_NAMES[code];
+  return STATUS_NAMES[code];
+}
+
+/**
+ * 列表单元格的值: 状态 / 结果码翻成中文 (与详情卡同一份映射)。
+ * 认不出的码原样显示 —— 列表是一行一条记录, ⛔ 不靠藏掉业务值来消除英文。
+ */
 export function getListCellValue(row: Record<string, unknown>, key: string): unknown {
   const value = row[key];
-  if (key === 'status' && 'batchNumber' in row && 'materialName' in row && typeof value === 'string') {
-    return MATERIAL_STATUS_NAMES[value.toUpperCase()] ?? value;
+  if (isCodeKey(key) && typeof value === 'string') {
+    return codeToChinese(key, value) ?? value;
   }
   return value;
 }
@@ -113,11 +138,6 @@ function isInternalId(key: string, value: unknown): boolean {
   return key === 'id' || /Id$/.test(key) || (typeof value === 'string' && UUID_RE.test(value));
 }
 
-/** 值是状态码 / 结果码的键: 必须翻成中文才显示。 */
-function isCodeKey(key: string): boolean {
-  return key === 'status' || key === 'result';
-}
-
 /**
  * 详情结果卡的行 (给一线看的):
  *  - 内部编号 (xxxId / id / UUID 值) 不显示;
@@ -141,7 +161,7 @@ export function buildDetailRows(detail: Record<string, unknown>): DetailRow[] {
     if (key === 'status' && hasDisplayName) continue;
     let text: string;
     if (isCodeKey(key) && typeof value === 'string') {
-      const zh = STATUS_NAMES[value.trim().toUpperCase()];
+      const zh = codeToChinese(key, value);
       if (zh !== undefined) {
         text = zh;
       } else if (/[一-鿿]/.test(value)) {

@@ -336,9 +336,27 @@ describe('标准 F3: 澄清选项一个样式', () => {
     expect(pick(styles[2])).toEqual(pick(styles[0]));
     // 竖排: 容器是 column
     expect(inheritedStyle(view.getByTestId('suggested-action-0'), 'flexDirection')).toBe('column');
-    // 说明文字: 只有与标签不同的才出, 单行, 小字
-    const desc = view.getByText('把这道工序报完工');
-    expect(desc.props.numberOfLines).toBe(1);
+    // F3 (Codex 本机验收 A2, 2026-10-08): 同组只有一个带说明 ⇒ 整组都不显示说明 (以前只显示这一个, 按钮高 48/64/48)
+    expect(view.queryByText('把这道工序报完工')).toBeNull();
+    // 说明没丢: 并进无障碍标签; 没说明的选项标签就是名字本身
+    expect(view.getByTestId('suggested-action-0').props.accessibilityLabel).toBe('完成工序，把这道工序报完工');
+    expect(view.getByTestId('suggested-action-1').props.accessibilityLabel).toBe('记录抄码品称重');
+  });
+
+  it('5c. 同组每个都有说明: 每个都显示, 单行 (阳性对照: 说明不是被一刀切掉的)', async () => {
+    replyWith({
+      ...THREE_OPTIONS,
+      suggestedActions: [
+        { actionCode: 'SELECT_INTENT', actionName: '完成工序', description: '把这道工序报完工', parameters: { intentCode: 'WORK_PROCESS_TASK_COMPLETE' } },
+        { actionCode: 'SELECT_INTENT', actionName: '记录抄码品称重', description: '记一次抄码品的重量', parameters: { intentCode: 'ABACA_WEIGHT_LOG' } },
+      ],
+    }, 'NEED_CLARIFICATION');
+    const view = render(<AIChatScreen />);
+    await send(view, '就是六十箱');
+    await waitFor(() => expect(view.getByTestId('suggested-action-1')).toBeTruthy());
+    for (const text of ['把这道工序报完工', '记一次抄码品的重量']) {
+      expect(view.getByText(text).props.numberOfLines).toBe(1);
+    }
   });
 
   it('5b. 追问芯片是另一套样式 (横排换行 / 最宽 220 / 至少 40), 不和澄清选项共用', async () => {

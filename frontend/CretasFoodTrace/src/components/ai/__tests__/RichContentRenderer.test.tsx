@@ -133,3 +133,26 @@ describe('写操作结果卡: 给一线看的中文', () => {
     expect(screen.queryByText('INSPECTED')).toBeNull();
   });
 });
+
+// ==================== 质检记录列表 (A3, Codex 本机验收 2026-10-08) ====================
+// 质检员「查看质检记录」: 列表单元格显示 PENDING / FAIL / PASS。数据形状取自本机 QUALITY_CHECK_QUERY 真实 resultData (键名一字不差, 截 3 行)。
+const QUALITY_CHECK_QUERY_RESULT = {
+  queryConditions: {}, totalPages: 2, hasMore: true, currentPage: 1, totalElements: 17,
+  content: [
+    { result: 'PENDING', qualityGrade: 'B', inspectionId: '0f270888-3cf6-436d-a742-a244f8921921', notes: null, failCount: 5, defectRate: 6.25, passRate: 94, inspectorId: 1309, sampleSize: 80, productionBatchId: 10766, inspectionDate: '2026-08-18', passCount: 75 },
+    { result: 'FAIL', qualityGrade: 'D', inspectionId: '9b480fba-1858-49e2-960e-d8e023007c77', notes: null, failCount: 5, defectRate: 100, passRate: 0, inspectorId: 1309, sampleSize: 5, productionBatchId: 10766, inspectionDate: '2026-08-18', passCount: 0 },
+    { result: 'PASS', qualityGrade: 'A', inspectionId: 'bb5fbe12-a9ad-4ad7-9c62-f413c29acd7d', notes: '', failCount: 0, defectRate: 0, passRate: 100, inspectorId: 1558, sampleSize: 4, productionBatchId: 10786, inspectionDate: '2026-08-21', passCount: 4 },
+  ],
+};
+
+it('A3: 质检记录列表的「质检结果」显示中文 (待检验 / 不合格 / 合格), 不露英文码', () => {
+  const data = detectRichData(QUALITY_CHECK_QUERY_RESULT);
+  expect(data?.dataType).toBe('LIST');
+  render(<RichContentRenderer data={data!} />);
+  // 阳性: 「质检结果」这一列确实渲染了 3 次
+  expect(screen.getAllByText('质检结果')).toHaveLength(3);
+  expect(screen.getByText('待检验')).toBeTruthy();
+  expect(screen.getByText('不合格')).toBeTruthy();
+  expect(screen.getByText('合格')).toBeTruthy();
+  for (const code of ['PENDING', 'FAIL', 'PASS']) expect(screen.queryByText(code)).toBeNull();
+});

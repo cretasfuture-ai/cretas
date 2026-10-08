@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ApprovalDirectory } from '@/api/approvalWorkflow'
+import type { ApprovalDirectory, ApprovalWorkflowNode, ApprovalWorkflowEdge } from '@/api/approvalWorkflow'
 import {
   compileApprovalWorkflowAiDraft,
   describeApprovalWorkflowAiChanges,
@@ -28,6 +28,79 @@ function compile(spec: unknown) {
 }
 
 describe('approval workflow AI draft compiler', () => {
+  function renameFixture(mode: unknown) {
+    const nodes: ApprovalWorkflowNode[] = [
+      { id: 'start', type: 'start', label: '开始', position: { x: 0, y: 0 }, config: {} },
+      { id: 'quality', type: 'approval', label: '质量经理审核', position: { x: 0, y: 100 },
+        config: { mode, approverRoles: ['factory_super_admin'], approverRoleLabels: ['工厂总管理员'],
+          approverUserIds: ['42'], approverUserLabels: ['六扇门管理员（liushanmen_admin）'], requiredApprovers: 1 } },
+      { id: 'end', type: 'end', label: '结束', position: { x: 0, y: 200 }, config: { outcome: 'APPROVED' } },
+    ]
+    const edges: ApprovalWorkflowEdge[] = [
+      { id: 'e1', source: 'start', target: 'quality', priority: 0 },
+      { id: 'e2', source: 'quality', target: 'end', priority: 0 },
+    ]
+    const spec = { startNodeId: 'start', nodes: nodes.map(n => {
+      const config = { ...n.config }
+      delete config.approverRoleLabels
+      delete config.approverUserLabels
+      return { ...n, config, label: n.id === 'quality' ? '质量经理验收' : n.label }
+    }), edges }
+    return { nodes, edges, spec }
+  }
+
+  it.each(['ANY', 'ALL'])('renames an existing %s approval without changing config, nodes or edges', mode => {
+    const { nodes, edges, spec } = renameFixture(mode)
+    const before = structuredClone(nodes)
+    const draft = compileApprovalWorkflowAiDraft({ spec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })
+    expect(draft.nodes).toEqual(nodes.map(n => ({ ...n, label: n.id === 'quality' ? '质量经理验收' : n.label })))
+    expect(draft.edges).toEqual(edges)
+    expect(draft.nodes[1].config).toEqual(nodes[1].config)
+    expect(nodes).toEqual(before)
+  })
+
+  it.each(['INVALID', 'N_OF_M', 1, null])('rejects illegal approval mode %s', mode => {
+    const { nodes, edges, spec } = renameFixture(mode)
+    expect(() => compileApprovalWorkflowAiDraft({ spec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })).toThrow()
+  })
+
+  it('still rejects unknown config keys while allowing a paired legal mode', () => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    spec.nodes[1].config = { ...spec.nodes[1].config, bypassApprovals: true }
+    expect(() => compileApprovalWorkflowAiDraft({ spec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })).toThrow('不支持的配置')
+  })
+
+  it.each(['ALL', 'ANY', 'N_OF_M'])('keeps the existing join mode %s contract', mode => {
+    const spec = { startNodeId: 'start', nodes: [
+      { id: 'start', type: 'start', config: {} },
+      { id: 'join', type: 'join', config: { mode, n: 2 } },
+      { id: 'end', type: 'end', config: { outcome: 'APPROVED' } },
+    ], edges: [{ id: 'e1', source: 'start', target: 'join' }, { id: 'e2', source: 'join', target: 'end' }] }
+    expect(compile(spec).nodes[1].config).toEqual({ mode, n: 2 })
+    spec.nodes[1].config.mode = 'INVALID'
+    expect(() => compile(spec)).toThrow('汇聚模式无效')
+  })
+
+  it.each(['', ' ', null])('accepts empty condition metadata without changing existing edges: %s', condition => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    edges[0].condition = '#amount > 100'
+    const echoedSpec = { ...spec, edges: edges.map(edge => ({ ...edge, condition })) }
+    const draft = compileApprovalWorkflowAiDraft({ spec: echoedSpec, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })
+    expect(draft.nodes[1].label).toBe('质量经理验收')
+    expect(draft.edges).toEqual(edges)
+  })
+
+  it.each(['#amount > 0', '#bypass == true', 0])('rejects AI expression injection: %s', condition => {
+    const { nodes, edges, spec } = renameFixture('ANY')
+    const injected = { ...spec, edges: edges.map(edge => ({ ...edge, condition })) }
+    expect(() => compileApprovalWorkflowAiDraft({ spec: injected, currentName: '质检放行', currentNodes: nodes,
+      currentEdges: edges, decisionType: 'QUALITY_RELEASE', directory })).toThrow('AI 不能写入表达式')
+  })
+
   it('maps only real factory roles and users into a reversible local draft', () => {
     const draft = compile({
       name: '采购订单审批',
