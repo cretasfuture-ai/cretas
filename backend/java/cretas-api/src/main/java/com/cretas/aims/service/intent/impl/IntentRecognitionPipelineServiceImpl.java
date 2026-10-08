@@ -326,6 +326,24 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     private static final String[] READ_ONLY_SUFFIXES = {"_QUERY", "_LIST", "_STATS", "_HISTORY", "_DETAIL"};
 
     // ======================================================================================
+
+    @Override
+    public Optional<IntentMatchResult> recognizeExpectedEarlyPhrase(String userInput, String factoryId,
+                                                                      Long userId, String sessionId,
+                                                                      Set<String> expectedCodes) {
+        if (userInput == null || userInput.isBlank() || factoryId == null || factoryId.isBlank()
+                || expectedCodes == null || expectedCodes.isEmpty()) return Optional.empty();
+        String domain;
+        try { domain = configService.resolveBusinessDomain(factoryId); }
+        catch (Exception e) { return Optional.empty(); }
+        if (!"FACTORY".equalsIgnoreCase(domain) && !"RESTAURANT".equalsIgnoreCase(domain)) return Optional.empty();
+        long now = System.currentTimeMillis();
+        IntentMatchResult result = tryEarlyPhraseMatch(userInput, factoryId, domain, expectedCodes).orElse(null);
+        if (result == null) return Optional.empty();
+        saveIntentMatchRecord(result, factoryId, userId, sessionId, false);
+        return Optional.of(attachTiming(result, now, now));
+    }
+
     // PUBLIC INTERFACE METHODS
     // ======================================================================================
     // The methods below are the public API of this service.
@@ -473,28 +491,11 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // Prevents preprocessor from stripping keywords like "收款", "开票", "研发需求"
         // W1b T3: VETO_WRITE("别开始生产") 守卫此短路,使其跳过 → 落到下游 policy 转读孪生。
         if (!negationVetoWrite && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
-            String rawNormalized = userInput.toLowerCase().trim();
-            String rawPhraseInput = filterFillerWordsForPhrase(rawNormalized);
-            Optional<String> earlyPhraseMatch = knowledgeBase.matchPhrase(rawPhraseInput, businessDomain);
-            if (earlyPhraseMatch.isPresent()) {
-                String matchedCode = earlyPhraseMatch.get();
-                List<AIIntentConfig> allIntents = configService.getAllIntents(factoryId);
-                Optional<AIIntentConfig> intentOpt = allIntents.stream()
-                        .filter(i -> i.getIntentCode().equals(matchedCode))
-                        .findFirst();
-                if (intentOpt.isPresent()) {
-                    AIIntentConfig intent = intentOpt.get();
-                    log.info("[v33.1-EarlyPhrase] Pre-preprocess phrase match: input='{}', intentCode={}",
-                            rawPhraseInput, matchedCode);
-                    IntentMatchResult result = IntentMatchResult.builder()
-                            .userInput(userInput)
-                            .bestMatch(intent)
-                            .confidence(0.96)
-                            .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
-                            .build();
+            Optional<IntentMatchResult> early = tryEarlyPhraseMatch(userInput, factoryId, businessDomain, Collections.emptySet());
+            if (early.isPresent()) {
+                    IntentMatchResult result = early.get();
                     saveIntentMatchRecord(result, factoryId, userId, sessionId, false);
                     return attachTiming(result, startTimeMs, preprocessEndMs);
-                }
             }
         }
 
@@ -807,6 +808,34 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         }
 
         return attachTiming(result, startTimeMs, preprocessEndMs);
+    }
+
+    /** Shared, auditable early phrase matcher used by both the normal and expected-code entry points. */
+    private Optional<IntentMatchResult> tryEarlyPhraseMatch(String userInput, String factoryId,
+                                                              String domain, Set<String> expectedCodes) {
+        if (userInput == null || userInput.isBlank() || factoryId == null || factoryId.isBlank()
+                || domain == null || (!"FACTORY".equalsIgnoreCase(domain) && !"RESTAURANT".equalsIgnoreCase(domain))) {
+            return Optional.empty();
+        }
+        String sanitized = stripHtmlTags(userInput);
+        QueryPreprocessorService.NegationKind veto = detectVetoKind(sanitized);
+        if (veto == QueryPreprocessorService.NegationKind.VETO_READ || veto == QueryPreprocessorService.NegationKind.VETO_WRITE
+                || shouldBypassEarlyPhraseShortcutForStoreReference(sanitized)) return Optional.empty();
+        Optional<String> match = knowledgeBase.matchPhrase(filterFillerWordsForPhrase(sanitized), domain);
+        if (match.isEmpty() || (!expectedCodes.isEmpty() && !expectedCodes.contains(match.get()))) return Optional.empty();
+        AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
+                .filter(c -> match.get().equals(c.getIntentCode()))
+                .filter(c -> Boolean.TRUE.equals(c.getIsActive()) && c.getDeletedAt() == null)
+                .filter(c -> BusinessTypeScope.isCompatible(c.getBusinessType(), domain)).findFirst().orElse(null);
+        if (cfg == null) return Optional.empty();
+        var result = IntentMatchResult.builder().userInput(sanitized).bestMatch(cfg)
+                .confidence(0.96).matchMethod(MatchMethod.PHRASE_MATCH);
+        // Keep the original normal early-phrase result contract. Only the
+        // explicit preflight supplies its authoritative candidate metadata.
+        if (!expectedCodes.isEmpty()) result
+                .topCandidates(List.of(CandidateIntent.fromConfig(cfg, 0.96, 96, Collections.emptyList(), MatchMethod.PHRASE_MATCH)))
+                .matchedKeywords(Collections.emptyList()).isStrongSignal(true).requiresConfirmation(false);
+        return Optional.of(result.build());
     }
 
     static boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {

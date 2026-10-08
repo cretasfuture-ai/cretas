@@ -20,6 +20,7 @@ import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.intent.FrontlineAiWriteGrantService;
+import com.cretas.aims.service.intent.FrontlineReadAudience;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -122,8 +123,13 @@ class ClarificationRoleAudienceTest {
                 .contains(RECEIVING).hasSizeGreaterThanOrEqualTo(2);
         for (String code : com.cretas.aims.service.intent.FrontlineReadAudience.listedIntentCodes()) {
             when(configService.getIntentByCode(FACTORY, code)).thenReturn(Optional.of(config(code)));
-            assertThat(offered("quality_inspector", QC_TODAY, code)).as(code).containsExactly(QC_TODAY);
-            assertThat(offered("warehouse_worker", QC_TODAY, code)).as(code).containsExactly(QC_TODAY, code);
+            if ("QUALITY_CHECK_QUERY".equals(code)) {
+                assertThat(FrontlineReadAudience.offeredTo(code, "quality_inspector")).as(code).isTrue();
+                assertThat(FrontlineReadAudience.offeredTo(code, "warehouse_worker")).as(code).isFalse();
+            } else {
+                assertThat(offered("quality_inspector", QC_TODAY, code)).as(code).containsExactly(QC_TODAY);
+                assertThat(offered("warehouse_worker", QC_TODAY, code)).as(code).containsExactly(QC_TODAY, code);
+            }
         }
     }
 
@@ -132,6 +138,23 @@ class ClarificationRoleAudienceTest {
         // 对照: 质检统计 / 质量报表 对质检员照旧给 (过滤器只拿掉名单里的, 不是见一线角色就收紧)
         assertThat(offered("quality_inspector", "QUALITY_STATS", "REPORT_QUALITY"))
                 .containsExactly("QUALITY_STATS", "REPORT_QUALITY");
+    }
+
+    @Test
+    void qualityRecordsAreOnlyOfferedToQualityInspectorAmongFrontlineRoles() {
+        AIIntentConfig qualityRecords = AIIntentConfig.builder().intentCode("QUALITY_CHECK_QUERY")
+                .intentName("质检记录").businessType("FACTORY").intentCategory("QUERY").sensitivityLevel("LOW").build();
+        qualityRecords.setIsActive(true);
+        when(configService.getIntentByCode(FACTORY, "QUALITY_CHECK_QUERY")).thenReturn(Optional.of(qualityRecords));
+        assertThat(offered("quality_inspector", "QUALITY_CHECK_QUERY", "QUALITY_STATS"))
+                .containsExactly("QUALITY_CHECK_QUERY", "QUALITY_STATS");
+        assertThat(offered("warehouse_worker", "QUALITY_CHECK_QUERY", "QUALITY_STATS")).containsExactly("QUALITY_STATS");
+        assertThat(offered("factory_super_admin", "QUALITY_CHECK_QUERY", "QUALITY_STATS"))
+                .containsExactly("QUALITY_CHECK_QUERY", "QUALITY_STATS");
+        assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "quality_inspector")).isTrue();
+        assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "warehouse_worker")).isFalse();
+        assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "operator")).isFalse();
+        assertThat(FrontlineReadAudience.offeredTo("QUALITY_CHECK_QUERY", "factory_super_admin")).isTrue();
     }
 
     @Test

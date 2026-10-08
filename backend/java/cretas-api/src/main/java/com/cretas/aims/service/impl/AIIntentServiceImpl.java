@@ -55,7 +55,6 @@ public class AIIntentServiceImpl implements AIIntentService {
     private final IntentRecognitionPipelineService pipelineService;
     private final IntentConfigManagementService configService;
     private final IntentFeedbackLearningService feedbackService;
-
     /**
      * P4 Task 4.3: optional conversation context service.
      * Non-final so Spring can inject it independently of @RequiredArgsConstructor.
@@ -63,7 +62,6 @@ public class AIIntentServiceImpl implements AIIntentService {
      */
     @Autowired(required = false)
     private ConversationStateService conversationStateService;
-
     /**
      * Phase 2B-α (T20): optional Python AI matcher client.
      * required=false so existing tests + production-without-Python-deployed still work.
@@ -93,6 +91,7 @@ public class AIIntentServiceImpl implements AIIntentService {
      */
     @Autowired(required = false)
     private com.cretas.aims.service.intent.RoleAwareIntentRepicker roleRepicker;
+
 
     /**
      * Phase 2B-α (T20): feature flag controlling Python matcher dispatch.
@@ -337,6 +336,20 @@ public class AIIntentServiceImpl implements AIIntentService {
                                                             List<Map<String, String>> history) {
         List<Map<String, String>> turns = history == null ? Collections.emptyList() : history;
         boolean contextual = !turns.isEmpty();
+        Optional<IntentMatchResult> earlyPhrase = pipelineService.recognizeExpectedEarlyPhrase(
+                userInput, factoryId, userId, sessionId, java.util.Set.of("QUALITY_CHECK_QUERY"));
+        if (earlyPhrase.isPresent() && earlyPhrase.get().hasMatch()
+                && earlyPhrase.get().getBestMatch() != null
+                && "QUALITY_CHECK_QUERY".equals(earlyPhrase.get().getBestMatch().getIntentCode())
+                && earlyPhrase.get().getMatchMethod() == IntentMatchResult.MatchMethod.PHRASE_MATCH
+                && earlyPhrase.get().getConfidence() != null && earlyPhrase.get().getConfidence() >= 0.96
+                && !Boolean.TRUE.equals(earlyPhrase.get().getRequiresConfirmation())
+                && (earlyPhrase.get().getClarificationQuestion() == null
+                    || earlyPhrase.get().getClarificationQuestion().isBlank())) {
+            recordStageHit(earlyPhrase.get().getMatchMethod().name());
+            return applyAccessModeFilter(applyRoleRepick(earlyPhrase.get(), userInput, factoryId, userId, userRole),
+                    factoryId, mode, userPermissions);
+        }
         // ===== Phase 2B-α: optional Python matcher branch =====
         // shouldUsePythonMatcher(factoryId) honours both the master flag and
         // the Phase 2B canary whitelist (#73 §1.4) so stage 2/3 can dispatch
@@ -464,6 +477,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                 applyRoleRepick(legacyResult, userInput, factoryId, userId, userRole),
                 factoryId, mode, userPermissions);
     }
+
 
     /**
      * 选中的意图这个人用不了 → 在他能用的读意图里重选 (见 {@code RoleAwareIntentRepicker})。

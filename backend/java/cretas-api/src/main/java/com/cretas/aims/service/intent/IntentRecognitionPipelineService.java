@@ -6,6 +6,7 @@ import com.cretas.aims.entity.config.AIIntentConfig;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Intent Recognition Pipeline Service
@@ -24,6 +25,10 @@ public interface IntentRecognitionPipelineService {
      */
     IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
                                                      Long userId, String userRole, String sessionId);
+
+    Optional<IntentMatchResult> recognizeExpectedEarlyPhrase(String userInput, String factoryId,
+                                                              Long userId, String sessionId,
+                                                              Set<String> expectedCodes);
 
     /**
      * Simple recognition (regex + keyword, no confidence scoring).
