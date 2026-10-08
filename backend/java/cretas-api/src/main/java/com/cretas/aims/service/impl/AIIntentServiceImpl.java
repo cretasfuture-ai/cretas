@@ -339,9 +339,13 @@ public class AIIntentServiceImpl implements AIIntentService {
         Optional<IntentMatchResult> earlyPhrase = pipelineService.recognizeExpectedEarlyPhrase(
                 userInput, factoryId, userId, sessionId, java.util.Set.of("QUALITY_CHECK_QUERY"));
         if (earlyPhrase.isPresent() && earlyPhrase.get().hasMatch()
+                && earlyPhrase.get().getBestMatch() != null
                 && "QUALITY_CHECK_QUERY".equals(earlyPhrase.get().getBestMatch().getIntentCode())
                 && earlyPhrase.get().getMatchMethod() == IntentMatchResult.MatchMethod.PHRASE_MATCH
-                && earlyPhrase.get().getConfidence() >= 0.96) {
+                && earlyPhrase.get().getConfidence() != null && earlyPhrase.get().getConfidence() >= 0.96
+                && !Boolean.TRUE.equals(earlyPhrase.get().getRequiresConfirmation())
+                && (earlyPhrase.get().getClarificationQuestion() == null
+                    || earlyPhrase.get().getClarificationQuestion().isBlank())) {
             recordStageHit(earlyPhrase.get().getMatchMethod().name());
             return applyAccessModeFilter(applyRoleRepick(earlyPhrase.get(), userInput, factoryId, userId, userRole),
                     factoryId, mode, userPermissions);
