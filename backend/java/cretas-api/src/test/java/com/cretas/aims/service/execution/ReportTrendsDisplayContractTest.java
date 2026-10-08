@@ -117,7 +117,20 @@ class ReportTrendsDisplayContractTest {
     @Test void zeroBaseExplanationSurvivesFormatterWithoutInventedRate() throws Exception {
         when(reports.getPeriodComparisonReport(anyString(),any(),any(),any(),any())).thenAnswer(inv -> comparison(0,12,null));
         String text=run("这周产量环比怎么样","{\"period\":\"week\"}");
-        assertThat(text).contains("本期 12","上期 0","上期无数据，无法计算环比").doesNotContain("产量：本期 12，上期 0；环比变化率");
+        assertThat(text).contains("本期 12","上期 0","上期产量为0，无法计算环比").doesNotContain("产量：本期 12，上期 0；环比变化率");
+    }
+
+    @Test void dailyProductionShowsMissingValueAndEmptyRangeWithoutInventingZero() throws Exception {
+        Map<String,Object> point=new HashMap<>();point.put("date","2026-10-08");point.put("output",null);
+        when(reports.getTrendsDashboard(anyString(),anyString(),anyString(),anyInt()))
+                .thenReturn(Map.of("productionTrend",List.of(point),"materialTrend",List.of()));
+        String missing=run("最近30天产量日序列","{\"days\":30}");
+        assertThat(missing).contains("2026-10-08\n产量：暂无数据").doesNotContain("产量：0", "materialTrend");
+        when(reports.getTrendsDashboard(anyString(),anyString(),anyString(),anyInt()))
+                .thenReturn(Map.of("productionTrend",List.of()));
+        assertThat(run("最近30天产量日序列","{\"days\":30}"))
+                .contains("所选时间范围暂无数据").doesNotContain("产量：0");
+        verify(reports,never()).getPeriodComparisonReport(anyString(),any(),any(),any(),any());
     }
 
     @Test void explicitChineseRangeIsGroundedWithoutInventingAnAdditionalDate() throws Exception {

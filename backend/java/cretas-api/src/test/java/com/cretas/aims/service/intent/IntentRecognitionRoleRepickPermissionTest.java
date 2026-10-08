@@ -116,6 +116,10 @@ class IntentRecognitionRoleRepickPermissionTest {
                 "[\"出货查询\", \"查一下出货\"]"));
         catalog.put("QUALITY_CHECK_QUERY", intent("QUALITY_CHECK_QUERY", "质检记录查询", "quality_check_query",
                 "[\"factory_super_admin\", \"quality_inspector\"]", "[\"质检记录\", \"最近的质检记录\"]"));
+        catalog.put("REPORT_TRENDS", intent("REPORT_TRENDS", "趋势报表", "report_trends", null,
+                "[\"趋势报表\", \"趋势分析\"]"));
+        catalog.put("REPORT_PRODUCTION", intent("REPORT_PRODUCTION", "生产报表", "report_production", null,
+                "[\"生产报表\", \"产量怎么样\"]"));
         // 餐饮意图 (平台级, 不分厂): 短语向量库里与工厂短语混在一起
         AIIntentConfig restaurantStock = intent("RESTAURANT_INGREDIENT_STOCK", "食材库存", "restaurant_ingredient_stock",
                 null, "[\"食材库存\", \"看看库存\"]");
@@ -133,16 +137,18 @@ class IntentRecognitionRoleRepickPermissionTest {
         configService = new IntentConfigManagementServiceImpl(repo);
 
         ToolRegistry registry = mock(ToolRegistry.class);
-        Map<String, ToolExecutor> tools = Map.of(
-                "report_inventory", tool("report_inventory", AccessMode.READ),
-                "material_batch_query", tool("material_batch_query", AccessMode.READ),
-                "material_adjust_quantity", tool("material_adjust_quantity", AccessMode.WRITE),
-                "smart_indicator_query", tool("smart_indicator_query", AccessMode.READ),
-                "material_low_stock_alert", tool("material_low_stock_alert", AccessMode.READ),
-                "shipment_query", tool("shipment_query", AccessMode.READ),
-                "quality_check_query", tool("quality_check_query", AccessMode.READ),
-                "restaurant_ingredient_stock", tool("restaurant_ingredient_stock", AccessMode.READ),
-                "material_batch_use", tool("material_batch_use", AccessMode.WRITE));
+        Map<String, ToolExecutor> tools = Map.ofEntries(
+                Map.entry("report_inventory", tool("report_inventory", AccessMode.READ)),
+                Map.entry("material_batch_query", tool("material_batch_query", AccessMode.READ)),
+                Map.entry("material_adjust_quantity", tool("material_adjust_quantity", AccessMode.WRITE)),
+                Map.entry("smart_indicator_query", tool("smart_indicator_query", AccessMode.READ)),
+                Map.entry("material_low_stock_alert", tool("material_low_stock_alert", AccessMode.READ)),
+                Map.entry("shipment_query", tool("shipment_query", AccessMode.READ)),
+                Map.entry("quality_check_query", tool("quality_check_query", AccessMode.READ)),
+                Map.entry("report_trends", tool("report_trends", AccessMode.READ)),
+                Map.entry("report_production", tool("report_production", AccessMode.READ)),
+                Map.entry("restaurant_ingredient_stock", tool("restaurant_ingredient_stock", AccessMode.READ)),
+                Map.entry("material_batch_use", tool("material_batch_use", AccessMode.WRITE)));
         when(registry.getExecutor(anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(tools.get(inv.getArgument(0, String.class))));
         accessModeFilter = new IntentAccessModeFilter(configService, new WriteGuardService(), registry);
@@ -338,5 +344,18 @@ class IntentRecognitionRoleRepickPermissionTest {
         IntentMatchResult r = recognize("查一下最近的质检记录", ADMIN_USER, "quality_inspector");
         assertThat(code(r)).isEqualTo("QUALITY_CHECK_QUERY");
         assertThat(r.getMatchMethod()).isEqualTo(IntentMatchResult.MatchMethod.PHRASE_MATCH);
+    }
+
+    @Test
+    @DisplayName("G2 真实 recognize 入口: 明确产量比较直达 REPORT_TRENDS, 模糊产量保持原路由")
+    void productionComparisonsUseTrendAtRecognizeEntry() {
+        for (String query : List.of("这周产量环比怎么样", "这个月产量同比",
+                "这周产量比上周怎么样", "这个月产量比去年")) {
+            IntentMatchResult r = recognize(query, ADMIN_USER, "factory_super_admin");
+            assertThat(code(r)).as(query).isEqualTo("REPORT_TRENDS");
+            assertThat(r.getMatchMethod()).as(query).isEqualTo(IntentMatchResult.MatchMethod.PHRASE_MATCH);
+        }
+        assertThat(code(recognize("产量怎么样", ADMIN_USER, "factory_super_admin")))
+                .isEqualTo("REPORT_PRODUCTION");
     }
 }

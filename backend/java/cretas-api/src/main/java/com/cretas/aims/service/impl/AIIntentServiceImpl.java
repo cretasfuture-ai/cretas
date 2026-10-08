@@ -337,10 +337,10 @@ public class AIIntentServiceImpl implements AIIntentService {
         List<Map<String, String>> turns = history == null ? Collections.emptyList() : history;
         boolean contextual = !turns.isEmpty();
         Optional<IntentMatchResult> earlyPhrase = pipelineService.recognizeExpectedEarlyPhrase(
-                userInput, factoryId, userId, sessionId, java.util.Set.of("QUALITY_CHECK_QUERY"));
+                userInput, factoryId, userId, sessionId, java.util.Set.of("QUALITY_CHECK_QUERY", "REPORT_TRENDS"));
         if (earlyPhrase.isPresent() && earlyPhrase.get().hasMatch()
                 && earlyPhrase.get().getBestMatch() != null
-                && "QUALITY_CHECK_QUERY".equals(earlyPhrase.get().getBestMatch().getIntentCode())
+                && java.util.Set.of("QUALITY_CHECK_QUERY", "REPORT_TRENDS").contains(earlyPhrase.get().getBestMatch().getIntentCode())
                 && earlyPhrase.get().getMatchMethod() == IntentMatchResult.MatchMethod.PHRASE_MATCH
                 && earlyPhrase.get().getConfidence() != null && earlyPhrase.get().getConfidence() >= 0.96
                 && !Boolean.TRUE.equals(earlyPhrase.get().getRequiresConfirmation())

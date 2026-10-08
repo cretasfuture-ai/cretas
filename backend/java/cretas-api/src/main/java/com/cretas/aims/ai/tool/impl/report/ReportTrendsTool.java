@@ -115,11 +115,18 @@ public class ReportTrendsTool extends AbstractBusinessTool {
         String comparisonType = getString(params, "comparisonType");
         String userInput = firstNonBlank(getString(params, "userInput"), getString(context, "userInput"), getString(context, "input"),
                 getString(context, "message"));
-        boolean explicitComparison = containsAny(userInput, "同比", "去年同期", "上年同期", "环比", "对比", "比上期");
+        boolean explicitComparison = containsAny(userInput, "同比", "去年同期", "上年同期", "环比", "对比", "比上期", "比上周", "比去年");
         boolean dailyOnly = containsAny(userInput, "不比较", "只要日序列")
                 || (!explicitComparison && containsAny(userInput, "日序列", "每日", "每天", "逐日", "按天"));
-        if (containsAny(userInput, "同比", "去年同期", "上年同期")) comparisonType = "YOY";
-        else if (containsAny(userInput, "环比")) comparisonType = "MOM";
+        if (containsAny(userInput, "同比", "去年同期", "上年同期", "比去年")) comparisonType = "YOY";
+        else if (containsAny(userInput, "环比", "比上周")) comparisonType = "MOM";
+        if (containsAny(userInput, "这周", "本周", "上周", "比上周")
+                && !params.containsKey("period") && startDateStr == null && endDateStr == null) {
+            period = "week";
+        } else if (containsAny(userInput, "今年", "本年")
+                && !params.containsKey("period") && startDateStr == null && endDateStr == null) {
+            period = "year";
+        }
 
         // 调用服务获取趋势分析报表数据
         Map<String, Object> trendsData = reportService.getTrendsDashboard(factoryId, period, metric, days);
@@ -220,9 +227,11 @@ public class ReportTrendsTool extends AbstractBusinessTool {
     }
 
     private String missingMessage(Map<String, Object> base, Map<String, Object> current, String key, String label) {
-        if (base == null || base.get(key) == null
-                || new java.math.BigDecimal(base.get(key).toString()).signum() <= 0) {
+        if (base == null || base.get(key) == null) {
             return "上期无数据，无法计算" + label;
+        }
+        if (new java.math.BigDecimal(base.get(key).toString()).signum() == 0) {
+            return "上期" + ("output".equals(key) ? "产量" : "成本") + "为0，无法计算" + label;
         }
         if (current == null || current.get(key) == null) return "本期无数据，无法计算" + label;
         return "上期无数据，无法计算" + label;

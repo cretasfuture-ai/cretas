@@ -971,8 +971,31 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
                 return text.toString();
             }
         }
+        String seriesMetric = getString(data, "metric");
         Map<String, Object> nested = asMap(data.get("data"));
         if (nested != null) data = nested;
+        Object production = data.get("productionTrend");
+        if (production instanceof List<?> rows && (seriesMetric == null
+                || "PRODUCTION".equalsIgnoreCase(seriesMetric) || "ALL".equalsIgnoreCase(seriesMetric))) {
+            if (rows.isEmpty()) return "产量日序列\n所选时间范围暂无数据。";
+            StringBuilder text = new StringBuilder("产量日序列\n");
+            Map<String, Object> first = asMap(rows.get(0));
+            Map<String, Object> last = asMap(rows.get(rows.size() - 1));
+            if (first != null && last != null) {
+                text.append("起止日期：").append(first.get("date")).append(" 至 ").append(last.get("date"))
+                        .append("（含首尾，共 ").append(rows.size()).append(" 个日数据点）\n");
+            }
+            // 每日拆行，手机正文无需横向滚动；不把完整日序列缩成条数摘要。
+            for (Object row : rows) {
+                Map<String, Object> point = asMap(row);
+                if (point == null) continue;
+                text.append("\n").append(point.get("date")).append("\n产量：")
+                        .append(trendNumber(point.containsKey("output") ? point.get("output") : point.get("value")))
+                        .append("\n");
+            }
+            text.append("\n数据出处：生产批次，按批次创建日期汇总每日实际产量。");
+            return text.toString();
+        }
         Object trendDataObj = data.get("trendData");
         if (trendDataObj instanceof List) {
             List<Map<String, Object>> trendData = (List<Map<String, Object>>) trendDataObj;

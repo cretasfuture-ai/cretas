@@ -37,6 +37,17 @@ class IntentKnowledgeBaseTest {
     }
 
     @Test
+    @DisplayName("G2: 产量环比/同比及上周/去年比较直达 REPORT_TRENDS")
+    void productionComparisonsUseTrendReportPhrase() {
+        for (String query : new String[]{
+                "这周产量环比怎么样", "这个月产量同比", "这周产量比上周怎么样", "这个月产量比去年"}) {
+            assertEquals(Optional.of("REPORT_TRENDS"), kb.matchPhrase(query, "FACTORY"), query);
+        }
+        assertEquals(Optional.of("REPORT_PRODUCTION"),
+                kb.matchPhrase("产量怎么样", "FACTORY"));
+    }
+
+    @Test
     @DisplayName("Round 6 — literal spec keyword '帮我看上月损溢异常' routes to RESTAURANT_ECONOMICS_ANALYSIS (restaurant)")
     void specLiteralPhraseRoutesToEconomicsAnalysisForRestaurant() {
         Optional<String> result = kb.matchPhrase("帮我看上月损溢异常", "RESTAURANT");
