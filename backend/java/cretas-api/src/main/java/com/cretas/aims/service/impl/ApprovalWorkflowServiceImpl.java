@@ -48,6 +48,9 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             "start", "approval", "condition", "parallel", "join", "notify", "end");
 
     private static final Set<String> VALID_JOIN_MODES = Set.of("ALL", "N_OF_M", "ANY");
+    // Preserve legacy approval metadata; execution still uses requiredApprovers.
+    // ApprovalNodeModeContractTest pins these sets to the frontend's consumed JSON contract.
+    private static final Set<String> VALID_APPROVAL_MODES = Set.of("ANY", "ALL");
 
     // ==================== CRUD ====================
 
@@ -471,6 +474,13 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             }
             if ("start".equals(n.getType())) startCount++;
             if ("end".equals(n.getType())) endCount++;
+            if ("approval".equals(n.getType()) && n.getConfig() != null && n.getConfig().containsKey("mode")) {
+                Object mode = n.getConfig().get("mode");
+                if (!(mode instanceof String) || !VALID_APPROVAL_MODES.contains(mode)) {
+                    errors.add("approval 节点 " + n.getId() + " mode 字段非法: " + mode
+                            + " (合法: " + VALID_APPROVAL_MODES + ")");
+                }
+            }
             // join 节点 mode 字段校验
             if ("join".equals(n.getType())) {
                 Object mode = n.getConfig() == null ? null : n.getConfig().get("mode");
