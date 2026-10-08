@@ -6,6 +6,7 @@ import type {
   NodeType,
 } from '@/api/approvalWorkflow'
 import { formatUserLabel } from './approvalDirectory'
+import displayFields from './approvalDisplayFields.json'
 import nodeModes from './approvalNodeModes.json'
 
 const NODE_TYPES = new Set<NodeType>([
@@ -87,7 +88,13 @@ export function compileApprovalWorkflowAiDraft(
     if (existing && existing.type !== type) {
       throw new Error(`Cell“${id}”不能改变类型`)
     }
-    const configPatch = raw.config == null ? {} : asRecord(raw.config, `Cell“${id}”配置`)
+    const rawConfig = raw.config == null ? {} : asRecord(raw.config, `Cell“${id}”配置`)
+    // Echoed labels are derived from the factory directory, never AI configuration.
+    const ignoredFields: readonly string[] = type === 'approval'
+      ? displayFields.approval : type === 'notify' ? displayFields.notify : []
+    const configPatch = Object.fromEntries(
+      Object.entries(rawConfig).filter(([key]) => !ignoredFields.includes(key)),
+    )
     for (const key of Object.keys(configPatch)) {
       if (!CONFIG_KEYS[type].has(key)) {
         throw new Error(`Cell“${id}”包含不支持的配置“${key}”`)

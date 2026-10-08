@@ -21,6 +21,37 @@ class ApprovalNodeModeContractTest {
     final ApprovalWorkflowRepository repository = mock(ApprovalWorkflowRepository.class);
     final ApprovalWorkflowServiceImpl service = new ApprovalWorkflowServiceImpl(repository, mapper);
 
+    @Test void frontendIgnoredDisplayFieldsMatchBackendSaveContract() throws Exception {
+        Path root=Path.of("").toAbsolutePath();
+        while(root!=null&&!Files.isDirectory(root.resolve("web-admin"))) root=root.getParent();
+        assertNotNull(root);
+        var contract=mapper.readTree(root.resolve("web-admin/src/views/platform/approval-workflow-editor/lib/approvalDisplayFields.json").toFile());
+        Map<String,List<String>> expected=Map.of("approval",List.of("approverRoleLabels","approverUserLabels","delegateUserLabel"),
+            "notify",List.of("notifyRoleLabels"));
+        assertEquals(expected,mapper.convertValue(contract,Map.class));
+        var workflow=graph("ANY");
+        var nodes=service.deserializeNodes(workflow.getNodesJson());
+        var config=new HashMap<>(nodes.get(1).getConfig());
+        expected.get("approval").forEach(key->config.put(key,key.equals("delegateUserLabel")?"展示标签":List.of("展示标签")));
+        nodes.get(1).setConfig(config);
+        var notice=new ApprovalWorkflowNode(); notice.setId("notice"); notice.setType("notify"); notice.setLabel("通知");
+        notice.setConfig(Map.of("notifyRoles",List.of("quality_manager"),"notifyRoleLabels",List.of("质量经理")));
+        nodes.add(notice);
+        workflow.setEdgesJson("""
+            [{"id":"e1","source":"start","target":"quality"},{"id":"e2","source":"quality","target":"notice"},
+             {"id":"e3","source":"notice","target":"end"}]
+            """);
+        var patch=new ApprovalWorkflow(); patch.setNodesJson(service.serializeNodes(nodes));
+        when(repository.save(workflow)).thenAnswer(i->i.getArgument(0));
+        var saved=service.update("F006","local-workflow",patch,false);
+        assertEquals(config,service.deserializeNodes(saved.getNodesJson()).get(1).getConfig());
+        verify(repository).save(workflow);
+        config.put("mode","INVALID");
+        patch.setNodesJson(service.serializeNodes(nodes));
+        assertThrows(BusinessException.class,()->service.update("F006","local-workflow",patch,false));
+        verify(repository,times(1)).save(workflow);
+    }
+
     ApprovalWorkflow graph(String mode) throws Exception {
         var workflow = new ApprovalWorkflow();
         workflow.setId("local-workflow"); workflow.setFactoryId("F006"); workflow.setPublishStatus("draft");
