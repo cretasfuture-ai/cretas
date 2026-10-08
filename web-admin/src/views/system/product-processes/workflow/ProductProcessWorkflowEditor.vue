@@ -2753,6 +2753,9 @@ function scheduleAutoSave(): void {
 // 每次改动 (dirty 置 true) 都重排防抖定时器 —— 定时器 2.5s 后从"最后一次改动"起算,
 // 不再依赖 dirty 的 false→true 一次性 transition (那样一次跳过/失败就永久停摆)。
 watch(dirty, (isDirty) => { if (isDirty) scheduleAutoSave(); });
+watch(canEdit, (isEditable, wasEditable) => {
+  if (isEditable && !wasEditable && dirty.value) scheduleAutoSave();
+});
 watch(
   () => flowNodes.value
     .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
@@ -6759,7 +6762,7 @@ async function previewWorkflowSpec(spec: unknown): Promise<WorkflowAiPreview> {
 }
 
 interface WorkflowSpecApplyResult {
-  status: 'applied' | 'review';
+  status: 'applied' | 'review' | 'aborted';
   preview?: WorkflowAiPreview;
 }
 
@@ -6773,7 +6776,7 @@ async function applyWorkflowAIDraft(
   if (!target.ok) {
     // sticky: 这是一次「你点了但什么都没发生」的解释, 3 秒消失等于没说。
     ElMessage.warning({ message: target.reason, duration: 0, showClose: true });
-    return;
+    return { status: 'aborted' };
   }
   const { identity } = target;
   // 长久方案: AI 返回「语义规格」时走确定性编译器建图 (弃补丁)。旧的 patch 路径保留兜底。
@@ -6794,7 +6797,7 @@ async function applyWorkflowAIDraft(
         // the graph. Preview only supplied a read-only placeholder plan.
         const reviewed = previewWorkflowAiDefinitions(before, prepared);
         const materialized = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity, false, false);
-        if (!materialized || !isLoadedIdentityCurrent(identity) || !canEdit.value) return;
+        if (!materialized || !isLoadedIdentityCurrent(identity) || !canEdit.value) return { status: 'aborted' };
         const actual = previewWorkflowAiDefinitions(before, materialized);
         if (reviewed.ok && actual.ok && workflowAiStableJson(reviewed.rows) !== workflowAiStableJson(actual.rows)) {
           ElMessage.warning({
@@ -6802,40 +6805,43 @@ async function applyWorkflowAIDraft(
             duration: 0,
             showClose: true,
           });
+          // Promote the materialized, catalog-backed plan so the refreshed
+          // confirmation is stable and the next click consumes it directly.
+          preparedAiDefinitions.set(key, materialized);
           return { status: 'review', preview: actual };
         }
-        await applyPreparedWorkflowDefinition(materialized, identity);
-        return { status: 'applied' };
+        return (await applyPreparedWorkflowDefinition(materialized, identity))
+          ? { status: 'applied' } : { status: 'aborted' };
       }
       const applied = prepared;
-      if (!applied) return;
+      if (!applied) return { status: 'aborted' };
       if (!isLoadedIdentityCurrent(identity) || !canEdit.value) {
         ElMessage.warning({
           message: '确认之后画布已经切换或变为不可编辑，本次 Workflow 没有应用，草稿保持原样。',
           duration: 0,
           showClose: true,
         });
-        return;
+        return { status: 'aborted' };
       }
-      await applyPreparedWorkflowDefinition(applied, identity);
-      return { status: 'applied' };
+      return (await applyPreparedWorkflowDefinition(applied, identity))
+        ? { status: 'applied' } : { status: 'aborted' };
     } else {
-      await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
+      const compiled = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
+      return compiled ? { status: 'applied' } : { status: 'aborted' };
     }
-    return;
   }
   if (!Array.isArray(payload.patches)) {
     ElMessage.warning('AI 没有返回合法的 Workflow 描述');
-    return;
+    return { status: 'aborted' };
   }
   const proposed = applyWorkflowPatches(currentDefinition(), payload.patches);
   if (proposed.errors.length > 0) {
     ElMessage.warning(proposed.errors[0]);
-    return;
+    return { status: 'aborted' };
   }
   if (proposed.summary.length === 0) {
     ElMessage.warning('AI 补丁均未通过安全校验，未修改本地草稿');
-    return;
+    return { status: 'aborted' };
   }
   try {
     await ElMessageBox.confirm(
@@ -6844,7 +6850,7 @@ async function applyWorkflowAIDraft(
       { type: 'warning', confirmButtonText: '应用到草稿' },
     );
   } catch {
-    return;
+    return { status: 'aborted' };
   }
   // ⛔ 也曾是裸 return —— 而这一条最伤: 用户**已经**在确认框里点了「应用到草稿」,
   // 然后什么都没发生。画布在确认框打开期间被切走 / 权限被回收都会走到这里。
@@ -6854,12 +6860,12 @@ async function applyWorkflowAIDraft(
       duration: 0,
       showClose: true,
     });
-    return;
+    return { status: 'aborted' };
   }
   remember();
   hydrate(proposed.definition);
   dirty.value = true;
-    await fitCanvas();
+  await fitCanvas();
   return { status: 'applied' };
 }
 
@@ -6867,14 +6873,14 @@ async function applyWorkflowAIDraft(
 async function applyPreparedWorkflowDefinition(
   applied: ProductProcessWorkflowDefinition,
   identity: WorkflowIdentity,
-): Promise<void> {
+): Promise<boolean> {
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) {
     ElMessage.warning({
       message: '确认之后画布已经切换或变为不可编辑，本次 Workflow 没有应用，草稿保持原样。',
       duration: 0,
       showClose: true,
     });
-    return;
+    return false;
   }
   remember();
   hydrate(applied);
@@ -6882,7 +6888,8 @@ async function applyPreparedWorkflowDefinition(
   workflowBomSyncPreflight.value = null;
   dirty.value = true;
   scheduleAutoSave();
-  await fitCanvas();
+  void fitCanvas();
+  return true;
 }
 
 interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string; byproduct?: boolean }
@@ -7046,12 +7053,14 @@ async function compileWorkflowSpec(
   // 阶段 4: 被类别闸/数值域拒掉的调味行。⛔ 不能静默丢 —— 用户会以为 AI 照做了。
   const seasoningRejections: string[] = [];
   let compiledDefinition: ProductProcessWorkflowDefinition | null = null;
+  let previewGraphSeed = 0;
+  const nextCompileGraphId = () => (dryRun ? --previewGraphSeed : nextGraphIdSeed());
   const compileGraph = () => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
     const rawName = (spec.rawMaterials?.[0] || '入口原料').trim();
     const rawNode: Node = {
-      id: `material:raw:${nextGraphIdSeed()}`,
+      id: `material:raw:${nextCompileGraphId()}`,
       type: 'material',
       position: { x: 32, y: 32 },
       data: { kind: 'RAW_MATERIAL', name: rawName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: '' },
@@ -7065,7 +7074,7 @@ async function compileWorkflowSpec(
         productTypeId: identity.productTypeId,
         productName: props.productName || identity.productTypeId,
         productUnit: finishedGoodSkuOptions.value.find((option) => option.id === identity.productTypeId)?.unit || '',
-        timestamp: nextGraphIdSeed(),
+        timestamp: nextCompileGraphId(),
       });
       const outputs = Array.isArray(step.outputs) && step.outputs.length ? step.outputs : [{}];
       const isLastStep = i === steps.length - 1;
@@ -7130,8 +7139,8 @@ async function compileWorkflowSpec(
       outputs.slice(1).forEach((extra, extraIdx) => {
         const kind = extra?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
         const unit = extra?.unit || String(processData.outputUnit || '');
-        const matId = `material:output:${nextGraphIdSeed()}`;
-        const portId = `output:${nextGraphIdSeed()}`;
+        const matId = `material:output:${nextCompileGraphId()}`;
+        const portId = `output:${nextCompileGraphId()}`;
         // #5 分流产出同样尝试自动绑定 SKU (唯一精确同名; 否则留待用户绑定)。
         const extraSku = matchOutputSkuByName(extra?.name, kind, outputSkuOptions.value);
         if (extraSku) autoBoundCount += 1;
@@ -7166,8 +7175,8 @@ async function compileWorkflowSpec(
         ? step.inputs.map((s) => (s || '').trim()).filter(Boolean)
         : [];
       extraInputs.forEach((inName, inIdx) => {
-        const rawId = `material:raw:${nextGraphIdSeed()}`;
-        const inPortId = `input:${nextGraphIdSeed()}`;
+        const rawId = `material:raw:${nextCompileGraphId()}`;
+        const inPortId = `input:${nextCompileGraphId()}`;
         nodes.push({
           id: rawId,
           type: 'material',

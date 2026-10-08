@@ -20,7 +20,7 @@ describe('workflow AI complete change projection', () => {
     } as unknown as ProductProcessWorkflowDefinition;
     const preview = previewWorkflowAiDefinitions(before, after);
     if (!preview.ok) throw new Error(preview.message);
-    expect(preview.rows.map(row => row.text).join('\n')).toContain('是否报工：否 → 是');
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('是否报工：免报 → 报工');
     expect(preview.rows.map(row => row.text).join('\n')).toContain('包材配置');
     expect(preview.rows.some(row => row.path.startsWith('canvas.edges'))).toBe(false);
   });

@@ -8,8 +8,16 @@ export type WorkflowAiPreview =
 const labels: Record<string, string> = {
   rawMaterials: '入口原料', process: '名称', processCategory: '类别',
   responsibleWorkerId: '负责人 ID', responsibleWorkerName: '负责人',
-  outputs: '产出', kind: '类型 kind', name: '名称', unit: '单位', byproduct: '是否副产',
+  outputs: '产出', kind: '类型', name: '名称', unit: '单位', byproduct: '是否副产',
   packagingBindings: '包材配置', reportingRequired: '是否报工',
+  skuCode: 'SKU 编码', skuId: 'SKU', bound: '绑定状态', specification: '规格',
+  reportingSelectionMode: '报工模式', allowFinishedGoodsSource: '允许成品投入',
+  allowMultipleUpstreamSources: '允许多投入', conversionRule: '单位换算规则',
+  workProcessId: '工序目录', key: '节点', processName: '工序名称', inputUnit: '投入单位', outputUnit: '产出单位',
+  ports: '端口', direction: '方向', materialNodeId: '物料节点', materialName: '物料名称', materialKind: '物料类型', ordinal: '顺序',
+  portGroups: '端口组', label: '标签', mode: '模式', minSelections: '最少选择', maxSelections: '最多选择', materialBindings: '辅料配置',
+  materialTypeId: '物料档案', standardQuantity: '标准用量', baseUnit: '基础单位', isByproduct: '是否副产', isRework: '是否回料', isDefective: '是否不良品',
+  reworkPolicy: '回料策略', sources: '回料来源', inputRatioPercent: '投入比例', expression: '换算表达式',
   inputs: '额外原料投入', seasonings: '辅料 / 调料投入', dosagePerKgG: '每 kg 投入克数',
   subsequentPotRatio: '后续锅比例', injectionAmount: '注射量',
 };
@@ -38,7 +46,7 @@ export function previewWorkflowAiDefinitions(
     const occurrences = new Map<string, number>();
     return new Set(definition.nodes.filter(node => node.kind === 'PROCESS').map(node => {
       const name = String((node.data as Record<string, unknown>).processName ?? '');
-      const base = `PROCESS:${name}`;
+      const base = `PROCESS#${occurrences.size}`;
       const ordinal = occurrences.get(base) || 0;
       occurrences.set(base, ordinal + 1);
       return `${base}#${ordinal}`;
@@ -71,10 +79,11 @@ export function previewWorkflowAiDefinitions(
   const normalize = (definition: ProductProcessWorkflowDefinition): Record<string, unknown> => {
     const occurrences = new Map<string, number>();
     const keys = new Map<string, string>();
+    let processOrdinal = 0;
     definition.nodes.forEach(node => {
       const data = node.data as Record<string, unknown>;
       const name = node.kind === 'PROCESS' ? data.processName : data.name;
-      const base = `${node.kind}:${String(name ?? '')}`;
+      const base = node.kind === 'PROCESS' ? `PROCESS#${processOrdinal++}` : `${node.kind}:${String(name ?? '')}`;
       const ordinal = occurrences.get(base) || 0;
       occurrences.set(base, ordinal + 1);
       keys.set(node.id, `${base}#${ordinal}`);
@@ -94,6 +103,7 @@ export function previewWorkflowAiDefinitions(
         const data = { ...(node.data as Record<string, unknown>) };
         if (node.kind === 'PROCESS') {
           const processKey = keys.get(node.id);
+          if (!owns(data, 'reportingRequired')) data.reportingRequired = false;
           // A pending catalog item becomes a real id during apply. For a newly
           // added semantic process, compare the reviewed plan by process name;
           // preserve real ids for existing processes so same-name rebindings remain visible.
@@ -119,9 +129,10 @@ export function previewWorkflowAiDefinitions(
         return data;
       })(), nodeIndex),
     })).sort((a, b) => String(a.key).localeCompare(String(b.key)));
+    const nodeMap = Object.fromEntries(nodes.map(node => [String(node.key), { kind: node.kind, ...(node.data as Record<string, unknown>) }]));
     return {
       ...Object.fromEntries(Object.entries(definition).filter(([key]) => !['nodes', 'edges', 'viewport'].includes(key))),
-      nodes,
+      nodes: nodeMap,
       edges: definition.edges.map(edge => ({
         source: keys.get(edge.source),
         sourceHandle: handles.get(`${edge.source}:${edge.sourceHandle}`) || edge.sourceHandle,
@@ -134,16 +145,31 @@ export function previewWorkflowAiDefinitions(
   const afterValue = normalize(after);
   const rows: WorkflowAiChangeRow[] = [];
   const add = (path: string, label: string, from: unknown, to: unknown): void => {
+    if (path.endsWith('.key')) return;
     if (workflowAiStableJson(from) === workflowAiStableJson(to)) return;
     if (path.endsWith('.packagingBindings')) {
-      rows.push({ path, text: `${label}：${display(from)} → ${display(to)}` });
+      const packaging = (value: unknown) => Array.isArray(value) && value.length
+        ? value.map(item => record(item) ? `${String(item.materialName || item.name || '包材')} ${item.standardQuantity ?? ''}${item.unit || ''}`.trim() : display(item)).join('、')
+        : display(value);
+      rows.push({ path, text: `${label}：${packaging(from)} → ${packaging(to)}` });
       return;
     }
     if (record(from) || record(to)) {
       const a = record(from) ? from : {};
       const b = record(to) ? to : {};
       [...new Set([...Object.keys(a), ...Object.keys(b)])]
-        .forEach(key => add(`${path}.${key}`, `${label} · ${labels[key] || key}`, a[key], b[key]));
+        .forEach(key => {
+          const nodeLabel = path === 'canvas.nodes'
+            ? (() => {
+              const parts = key.split(':');
+              const kind = parts[0] === 'PROCESS' ? '工序' : parts[0] === 'RAW_MATERIAL' ? '原料' : parts[0] === 'SEMI_FINISHED' ? '半成品' : parts[0] === 'FINISHED_GOOD' ? '成品' : '节点';
+              const payload = (record(a[key]) ? a[key] : b[key]) as Record<string, unknown>;
+              const name = String(payload?.processName || payload?.name || '');
+              return `${kind}${name ? `「${name}」` : ''}`;
+            })()
+            : `${label} · ${labels[key] || key}`;
+          add(`${path}.${key}`, nodeLabel, a[key], b[key]);
+        });
       return;
     }
     if (Array.isArray(from) || Array.isArray(to)) {
@@ -152,7 +178,14 @@ export function previewWorkflowAiDefinitions(
       for (let i = 0; i < Math.max(a.length, b.length); i += 1) add(`${path}[${i}]`, `${label} ${i + 1}`, a[i], b[i]);
       return;
     }
-    rows.push({ path, text: `${label}：${display(from)} → ${display(to)}` });
+    const shown = path.endsWith('.workProcessId')
+      ? (value: unknown) => value === undefined || value === null || value === '' ? '未绑定目录' : String(value) === String(from) && String(from) === String(to) ? '已绑定目录' : value === from ? '原目录' : '新目录'
+      : path.endsWith('.kind')
+      ? displayKind
+      : label.includes('是否报工')
+      ? (value: unknown) => value === true ? '报工' : value === false ? '免报' : display(value)
+      : display;
+    rows.push({ path, text: `${label}：${shown(from)} → ${shown(to)}` });
   };
   add('canvas', '画布', beforeValue, afterValue);
   return { ok: true, rows, revision: workflowAiStableJson(beforeValue) };
@@ -165,6 +198,10 @@ function display(value: unknown): string {
   if (value === true) return '是';
   if (value === false) return '否';
   return typeof value === 'string' ? value : workflowAiStableJson(value);
+}
+
+function displayKind(value: unknown): string {
+  return ({ RAW_MATERIAL: '原料', PROCESS: '工序', SEMI_FINISHED: '半成品', FINISHED_GOOD: '成品' } as Record<string, string>)[String(value)] || display(value);
 }
 
 /** Pure projection: never resolves/creates catalog entries or hydrates the canvas. */

@@ -11,7 +11,7 @@
       type="textarea"
       :autosize="{ minRows: 1, maxRows: 4 }"
       resize="none"
-      :disabled="disabled || loading"
+      :disabled="disabled || loading || hasApplyingProposal"
       :placeholder="placeholder"
       @keydown.enter.exact.prevent="send"
       @keydown.ctrl.enter.prevent="send"
@@ -48,8 +48,8 @@
                   <div v-if="diff.type === 'PRODUCT_PROCESS_WORKFLOW_SPEC'" class="workflow-change-preview" data-testid="workflow-spec-preview">
                     <template v-if="diff.proposal">
                       <strong>全部 {{ diff.proposal.rows.length }} 项改动</strong>
-                      <p class="preview-impact">生成后将替换整个当前画布，可撤销；未匹配的工序会在应用时新建。原字段和未支持字段照原样列出，请核对生成结果后保存。</p>
-                      <div class="workflow-plan-steps" aria-label="AI 方案工序明细">
+                      <p class="preview-impact">生成后将替换整个当前画布，可撤销；未匹配的工序会在应用时新建。这里仅列出实际将写入画布的改动，请核对生成结果后保存。</p>
+                      <div v-if="false" class="workflow-plan-steps" aria-label="AI 方案工序明细">
                         <div v-for="(step, stepIndex) in getSpecSteps(diff.proposal.spec)" :key="stepIndex" data-testid="workflow-spec-step">
                           <strong>{{ stepIndex + 1 }} · {{ step.process }}</strong>
                           <div>类别：{{ step.processCategory ?? '未提供（按工序目录解析）' }}；负责人：{{ step.responsibleWorkerName ?? step.responsibleWorkerId ?? '未提供' }}</div>
@@ -63,7 +63,7 @@
                       </ol>
                       <div v-if="diff.proposal.state === 'pending'" class="workflow-preview-actions">
                         <el-button type="primary" :disabled="disabled || loading || diff.proposal.applying" data-testid="workflow-spec-apply" @click="applySpecProposal(diff, msg.sourceIdentity)">应用配置</el-button>
-                        <el-button data-testid="workflow-spec-cancel" @click="cancelSpecProposal(diff)">取消</el-button>
+                        <el-button :disabled="diff.proposal.applying" data-testid="workflow-spec-cancel" @click="cancelSpecProposal(diff)">取消</el-button>
                       </div>
                       <p v-else role="status">{{ diff.proposal.state === 'cancelled' ? '已取消，画布没有改动。' : '已提交应用，请检查画布后保存。' }}</p>
                     </template>
@@ -200,7 +200,7 @@ interface SourceIdentity {
   productTypeId: string;
 }
 interface SpecApplyResult {
-  status: 'applied' | 'review';
+  status: 'applied' | 'review' | 'aborted';
   preview?: WorkflowAiPreview;
 }
 
@@ -262,6 +262,9 @@ const panelRef = ref<HTMLElement | null>(null);
 const contextChipRef = ref<HTMLElement | null>(null);
 const messagesRef = ref<HTMLElement>();
 const messages = ref<ChatMessage[]>(initialMessages());
+const hasApplyingProposal = computed(() => messages.value.some(message => (
+  message.diffPreview?.some(diff => diff.proposal?.applying) ?? false
+)));
 let requestGeneration = 0;
 let activeTimer: AiRequestTimer | null = null;
 
@@ -311,7 +314,7 @@ watch(() => `${props.factoryId}:${props.productTypeId}`, () => {
 
 async function send(): Promise<void> {
   const text = input.value.trim();
-  if (!text || props.disabled || !props.productTypeId) {
+  if (!text || props.disabled || !props.productTypeId || hasApplyingProposal.value) {
     return;
   }
 
@@ -423,6 +426,7 @@ function formatSpecValue(value: unknown): string {
 }
 
 function cancelSpecProposal(diff: ChatDiff): void {
+  if (diff.proposal?.applying) return;
   if (diff.proposal?.state === 'pending') diff.proposal.state = 'cancelled';
 }
 
@@ -456,14 +460,30 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     diff.previewError = '画布已变化，已刷新全部改动，请重新审核并应用。';
     return;
   }
-  const applyResult = props.applySpec
-    ? await props.applySpec({ ...diff.params, spec: proposal.spec }, sourceIdentity)
-    : (emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity), undefined);
+  let applyResult: SpecApplyResult | undefined;
+  try {
+    applyResult = props.applySpec
+      ? await props.applySpec({ ...diff.params, spec: proposal.spec }, sourceIdentity)
+      : (emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity), { status: 'applied' as const });
+  } catch (error) {
+    proposal.applying = false;
+    diff.previewError = error instanceof Error ? error.message : '应用配置失败，画布未改变。';
+    return;
+  }
+  if (!isCurrentSource(sourceIdentity) || props.disabled || loading.value || proposal.state !== 'pending') {
+    proposal.applying = false;
+    return;
+  }
   if (applyResult?.status === 'review' && applyResult.preview?.ok) {
     proposal.rows = applyResult.preview.rows;
     proposal.revision = applyResult.preview.revision;
     proposal.applying = false;
     diff.previewError = '应用前画布计划发生变化，已刷新改动，请重新审核。';
+    return;
+  }
+  if (applyResult?.status !== 'applied') {
+    proposal.applying = false;
+    diff.previewError = '应用未完成，方案仍待审核。';
     return;
   }
   proposal.applying = false;

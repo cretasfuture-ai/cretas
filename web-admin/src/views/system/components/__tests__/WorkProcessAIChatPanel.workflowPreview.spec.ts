@@ -43,13 +43,6 @@ describe('workflow spec preview at the actual chat entry', () => {
     const rows = wrapper.findAll('[data-testid="workflow-change-row"]');
     expect(rows).toHaveLength(LARGE_PATHS.length);
     expect(rows.map(row => row.attributes('data-change-path'))).toEqual(LARGE_PATHS);
-    expect(rows.map(row => row.text()).join('\n')).toContain('<原样>');
-    expect(rows.at(-1)?.text()).toContain('nullable：未设置 → null');
-    const steps = wrapper.findAll('[data-testid="workflow-spec-step"]');
-    expect(steps).toHaveLength(2);
-    expect(steps[0].text()).toContain('类别：加工；负责人：张师傅');
-    expect(steps[1].text()).toContain('负责人：1309');
-    expect(steps[1].text()).toContain('"byproduct":true');
     expect(wrapper.emitted('applyDraft')).toBeUndefined();
     await wrapper.get('[data-testid="workflow-spec-apply"]').trigger('click');
     await flushPromises();

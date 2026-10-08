@@ -421,6 +421,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(appliedDiff.ok).toBe(true);
     if (appliedDiff.ok) {
       expect(appliedDiff.rows.map(row => row.text).sort()).toEqual([...secondReviewedRows].sort());
+      expect(appliedDiff.rows.some(row => row.text.includes('是否报工'))).toBe(true);
     }
   });
 
