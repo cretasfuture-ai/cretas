@@ -447,7 +447,7 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     diff.previewError = error instanceof Error ? error.message : '当前画布预览失败，未应用配置。';
     return;
   }
-  if (!isCurrentSource(sourceIdentity) || loading.value || proposal.state !== 'pending') {
+  if (!isCurrentSource(sourceIdentity) || props.disabled || loading.value || proposal.state !== 'pending') {
     proposal.applying = false;
     return;
   }
