@@ -22,10 +22,43 @@
           </template>
           <div class="history-panel" data-testid="approval-ai-history">
             <strong>审批 Workflow AI</strong>
-            <span>只修改当前草稿；运行版本和在途审批不受影响。</span>
+            <span>先列出改动，点「应用配置」才写入当前草稿；运行版本和在途审批不受影响。</span>
             <div ref="messageListRef" class="message-list" data-testid="ai-chat-thread">
               <div v-for="(message, index) in messages" :key="index" :class="['message', message.role]">
                 <div class="message-content" :data-testid="message.role === 'user' ? 'ai-chat-user-bubble' : 'ai-chat-assistant-body'">{{ message.content }}</div>
+                <!-- 预览 → 用户确认 → 执行: 逐项改动一条不藏, 点「应用配置」才调 applySpec -->
+                <div v-if="message.proposal" class="change-preview" data-testid="ai-diff-preview">
+                  <ul class="change-list">
+                    <li
+                      v-for="(row, rowIndex) in message.proposal.rows"
+                      :key="rowIndex"
+                      :class="['change-row', row.kind]"
+                      data-testid="ai-diff-item"
+                    >
+                      <span class="change-kind">{{ CHANGE_KIND_LABELS[row.kind] }}</span>
+                      <span class="change-text">{{ row.text }}</span>
+                    </li>
+                  </ul>
+                  <div v-if="message.proposal.state === 'pending' || message.proposal.state === 'applying'" class="change-actions">
+                    <el-button
+                      type="primary"
+                      data-testid="ai-diff-apply"
+                      :loading="message.proposal.state === 'applying'"
+                      :disabled="disabled || message.proposal.state === 'applying'"
+                      @click="applyProposal(message.proposal)"
+                    >
+                      应用配置
+                    </el-button>
+                    <el-button
+                      data-testid="ai-diff-cancel"
+                      :disabled="message.proposal.state === 'applying'"
+                      @click="cancelProposal(message.proposal)"
+                    >
+                      取消
+                    </el-button>
+                  </div>
+                  <span v-else class="change-state" data-testid="ai-diff-state">{{ PROPOSAL_STATE_LABELS[message.proposal.state] }}</span>
+                </div>
               </div>
 
               <!-- W1: 加载用骨架屏 (3 条 + 一行文字), 不用转圈 -->
@@ -71,7 +104,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch } from 'vue'
 import request from '@/api/request'
 import {
   AI_TIMEOUT_MESSAGE,
@@ -81,6 +114,7 @@ import {
   startAiRequestTimer,
   type AiRequestTimer,
 } from '@/utils/aiConfigAssistant'
+import type { ApprovalAiPreview, ApprovalWorkflowChangeRow } from '../lib/approvalWorkflowAi'
 
 interface ChatDiff {
   type: string
@@ -92,9 +126,32 @@ interface AIChatResponse {
   diffs?: ChatDiff[]
 }
 
+type ProposalState = 'pending' | 'applying' | 'applied' | 'cancelled' | 'rejected' | 'expired'
+
+interface Proposal {
+  spec: unknown
+  rows: ApprovalWorkflowChangeRow[]
+  state: ProposalState
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  proposal?: Proposal
+}
+
+const CHANGE_KIND_LABELS: Record<ApprovalWorkflowChangeRow['kind'], string> = {
+  add: '新增',
+  remove: '删除',
+  change: '修改',
+}
+const PROPOSAL_STATE_LABELS: Record<ProposalState, string> = {
+  pending: '',
+  applying: '',
+  applied: '已应用到草稿',
+  cancelled: '已取消，草稿没有改动',
+  rejected: '未通过画布校验，草稿没有改动',
+  expired: '已有更新的方案，这一份不再可用',
 }
 
 const props = withDefaults(defineProps<{
@@ -102,6 +159,9 @@ const props = withDefaults(defineProps<{
   context: Record<string, unknown>
   contextLabel?: string
   disabled?: boolean
+  /** 只校验 + 算逐项改动, 不动画布 */
+  previewSpec: (spec: unknown) => ApprovalAiPreview
+  /** 用户点「应用配置」后才调用 */
   applySpec: (spec: unknown) => Promise<boolean>
 }>(), {
   contextLabel: '当前范围：整个审批画布',
@@ -149,6 +209,10 @@ async function send() {
   const text = input.value.trim()
   if (!text || props.disabled || loading.value) return
   const generation = ++requestGeneration
+  // 新问题一发, 旧的待确认方案就作废: 免得用户点到一份过期方案
+  messages.value.forEach((message) => {
+    if (message.proposal?.state === 'pending') message.proposal.state = 'expired'
+  })
   input.value = ''
   lastStatus.value = ''
   historyVisible.value = true // 让骨架屏 / 回复看得见
@@ -167,7 +231,7 @@ async function send() {
       },
       { signal: timer.signal },
     )
-    // 回复已到手: 30 秒超时只管「等 AI」, 不管后面本地套用草稿这一步
+    // 回复已到手: 30 秒超时只管「等 AI」, 不管后面用户确认 / 套用草稿
     timer.done()
     if (generation !== requestGeneration) return
     const data = response.data ?? {}
@@ -183,16 +247,27 @@ async function send() {
       lastStatus.value = guidance
       return
     }
-    const applied = await props.applySpec(spec)
-    if (!applied) {
-      const rejected = '这次修改未通过画布校验，草稿保持不变。'
+    const preview = props.previewSpec(spec)
+    if (preview.ok === false) {
+      const rejected = `这次修改未通过画布校验，草稿保持不变：${preview.message}`
       pushMessage({ role: 'assistant', content: rejected })
       lastStatus.value = rejected
       return
     }
-    const success = '已完成，当前草稿已更新，可用“撤销”恢复。'
-    pushMessage({ role: 'assistant', content: success })
-    lastStatus.value = success
+    if (!preview.rows.length) {
+      const same = 'AI 给出的方案和当前草稿一样，没有需要应用的改动。'
+      pushMessage({ role: 'assistant', content: same })
+      lastStatus.value = same
+      return
+    }
+    // 不拼 AI 的 reply: 实测后端回的是「当前审批草稿已更新」—— 按旧的自动套用写的, 和「还没写入」矛盾。
+    // 改了什么由下面逐项列表说全, 不靠这句话。
+    pushMessage({
+      role: 'assistant',
+      content: `下面是全部 ${preview.rows.length} 项改动，确认后点「应用配置」才会写入草稿：`,
+      proposal: { spec, rows: preview.rows, state: 'pending' },
+    })
+    lastStatus.value = `有 ${preview.rows.length} 项改动待确认`
   } catch (error) {
     if (generation !== requestGeneration) return
     console.error('[ApprovalWorkflowAIComposer] request failed', error)
@@ -208,6 +283,49 @@ async function send() {
       await nextTick()
     }
   }
+}
+
+async function applyProposal(proposal: Proposal) {
+  if (proposal.state !== 'pending' || props.disabled) return
+  // 预览之后用户可能手动改过画布: 应用前重新算一次, 和看到的不一样就刷新列表、让用户再确认
+  // 方案存在响应式的消息记录里; 交出去的必须是 AI 给的原对象, 不是代理
+  const proposedSpec = toRaw(proposal.spec)
+  const recheck = props.previewSpec(proposedSpec)
+  if (recheck.ok === false) {
+    proposal.state = 'rejected'
+    const rejected = `这次修改未通过画布校验，草稿保持不变：${recheck.message}`
+    pushMessage({ role: 'assistant', content: rejected })
+    lastStatus.value = rejected
+    return
+  }
+  if (JSON.stringify(recheck.rows) !== JSON.stringify(proposal.rows)) {
+    proposal.rows = recheck.rows
+    const refreshed = '草稿在预览之后有变动，上面的改动已按当前草稿重新列出，请再确认一次。'
+    pushMessage({ role: 'assistant', content: refreshed })
+    lastStatus.value = refreshed
+    return
+  }
+  proposal.state = 'applying'
+  const applied = await props.applySpec(proposedSpec)
+  if (!applied) {
+    proposal.state = 'rejected'
+    const rejected = '这次修改未通过画布校验，草稿保持不变。'
+    pushMessage({ role: 'assistant', content: rejected })
+    lastStatus.value = rejected
+    return
+  }
+  proposal.state = 'applied'
+  const success = '已完成，当前草稿已更新，可用“撤销”恢复。'
+  pushMessage({ role: 'assistant', content: success })
+  lastStatus.value = success
+}
+
+function cancelProposal(proposal: Proposal) {
+  if (proposal.state !== 'pending') return
+  proposal.state = 'cancelled'
+  const cancelled = '已取消，草稿没有任何改动。'
+  pushMessage({ role: 'assistant', content: cancelled })
+  lastStatus.value = cancelled
 }
 
 async function runQuickPrompt(prompt: string) {
@@ -313,6 +431,25 @@ async function runQuickPrompt(prompt: string) {
   border-radius: 12px;
   background: #eef6ff;
 }
+
+/* 逐项改动: 全部列出, 不折叠、不截断 (长了靠对话记录本身滚动) */
+.change-preview { margin-top: 8px; }
+.change-list { margin: 0; padding: 0; list-style: none; }
+.change-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #edf1f6;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.change-kind { flex: none; font-weight: 600; }
+.change-row.add .change-kind { color: #2f7d32; }
+.change-row.remove .change-kind { color: #c62828; }
+.change-row.change .change-kind { color: #a15c00; }
+.change-text { min-width: 0; word-break: break-word; }
+.change-actions { display: flex; gap: 8px; margin-top: 10px; }
+.change-state { display: block; margin-top: 8px; color: #5d6879; font-size: 13px; }
 
 /* W1: 骨架屏 —— 3 条, 高 14, 圆角 5, 1.5s 闪烁 */
 .loading-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }

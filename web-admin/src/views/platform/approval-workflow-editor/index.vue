@@ -319,6 +319,7 @@
               :context="aiContext"
               :context-label="aiContextLabel"
               :disabled="!canEditDraft || directoryLoading || Boolean(directoryError)"
+              :preview-spec="previewAiSpec"
               :apply-spec="applyAiSpec"
             />
           </section>
@@ -412,7 +413,12 @@ import {
   stepsToGraph,
   type ApprovalStep,
 } from './lib/stepGraph'
-import { compileApprovalWorkflowAiDraft } from './lib/approvalWorkflowAi'
+import {
+  compileApprovalWorkflowAiDraft,
+  describeApprovalWorkflowAiChanges,
+  type ApprovalAiPreview,
+  type ApprovalWorkflowGraph,
+} from './lib/approvalWorkflowAi'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
   getApprovalDirectory,
@@ -1127,30 +1133,53 @@ async function loadApprovalAiDirectory() {
   }
 }
 
+function currentAiGraph(): ApprovalWorkflowGraph {
+  return {
+    name: workflowName.value,
+    nodes: nodes.value.map((node) => ({
+      id: node.id,
+      type: (node.type ?? 'approval') as NodeType,
+      label: String(node.data?.label ?? node.id),
+      position: { x: node.position.x, y: node.position.y },
+      config: (node.data?.config as Record<string, unknown>) ?? {},
+    })),
+    edges: edges.value.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      label: edge.label ? String(edge.label) : undefined,
+      condition: (edge.data?.condition as string) || undefined,
+      priority: Number(edge.data?.priority ?? 0),
+    })),
+  }
+}
+
+function compileAiSpec(spec: unknown, current: ApprovalWorkflowGraph) {
+  return compileApprovalWorkflowAiDraft({
+    spec,
+    currentName: current.name,
+    currentNodes: current.nodes,
+    currentEdges: current.edges,
+    decisionType: selectedDecisionType.value,
+    directory: approvalDirectory.value,
+  })
+}
+
+/** AI 写配置先预览: 只校验 + 算逐项改动, 画布一点不动 (应用要等用户点「应用配置」) */
+function previewAiSpec(spec: unknown): ApprovalAiPreview {
+  if (!canEditDraft.value) return { ok: false, message: '当前草稿不可编辑' }
+  try {
+    const current = currentAiGraph()
+    return { ok: true, rows: describeApprovalWorkflowAiChanges(current, compileAiSpec(spec, current)) }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'AI 草稿无法应用' }
+  }
+}
+
 async function applyAiSpec(spec: unknown): Promise<boolean> {
   if (!canEditDraft.value) return false
   try {
-    const draft = compileApprovalWorkflowAiDraft({
-      spec,
-      currentName: workflowName.value,
-      currentNodes: nodes.value.map((node) => ({
-        id: node.id,
-        type: (node.type ?? 'approval') as NodeType,
-        label: String(node.data?.label ?? node.id),
-        position: { x: node.position.x, y: node.position.y },
-        config: (node.data?.config as Record<string, unknown>) ?? {},
-      })),
-      currentEdges: edges.value.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        label: edge.label ? String(edge.label) : undefined,
-        condition: (edge.data?.condition as string) || undefined,
-        priority: Number(edge.data?.priority ?? 0),
-      })),
-      decisionType: selectedDecisionType.value,
-      directory: approvalDirectory.value,
-    })
+    const draft = compileAiSpec(spec, currentAiGraph())
     captureHistory()
     workflowName.value = draft.name
     // VueFlow validates edge endpoints as soon as the edge model changes.

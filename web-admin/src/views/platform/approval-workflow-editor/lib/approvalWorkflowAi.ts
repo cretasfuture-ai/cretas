@@ -177,6 +177,167 @@ export function compileApprovalWorkflowAiDraft(
   }
 }
 
+export interface ApprovalWorkflowGraph {
+  name: string
+  nodes: ApprovalWorkflowNode[]
+  edges: ApprovalWorkflowEdge[]
+}
+
+export interface ApprovalWorkflowChangeRow {
+  kind: 'add' | 'remove' | 'change'
+  text: string
+}
+
+/** 预览结果: 校验通过给逐项改动; 不通过给原因 (画布不动) */
+export type ApprovalAiPreview =
+  | { ok: true; rows: ApprovalWorkflowChangeRow[] }
+  | { ok: false; message: string }
+
+/** 每个配置项: 中文名 + 展示用的已解析标签字段 (有则优先读它) */
+const CONFIG_FIELD_LABELS: Record<string, { label: string; display?: string }> = {
+  approverRoles: { label: '审批角色', display: 'approverRoleLabels' },
+  approverUserIds: { label: '审批人', display: 'approverUserLabels' },
+  requiredApprovers: { label: '审批人数' },
+  timeoutMinutes: { label: '审批时限（分钟）' },
+  departmentIds: { label: '限定部门' },
+  delegateUserId: { label: '超时转派人', display: 'delegateUserLabel' },
+  notifyRoles: { label: '通知角色', display: 'notifyRoleLabels' },
+  channels: { label: '通知渠道' },
+  notifyTemplate: { label: '通知模板' },
+  mode: { label: '汇聚方式' },
+  n: { label: '汇聚数量' },
+  outcome: { label: '结束结果' },
+  description: { label: '说明' },
+}
+/** 展示字段由上面的源字段派生, 不单独成行 (源字段变了它才会变) */
+const DERIVED_DISPLAY_KEYS = new Set(
+  Object.values(CONFIG_FIELD_LABELS).map((field) => field.display).filter(Boolean) as string[],
+)
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+  channels: { wechat: '微信', dingtalk: '钉钉', email: '邮件' },
+  mode: { ALL: '全部通过', ANY: '任一通过', N_OF_M: '指定人数通过' },
+  outcome: { APPROVED: '通过', REJECTED: '驳回', TIMEOUT: '超时', CANCELLED: '取消' },
+}
+const EMPTY_TEXT = '暂无'
+
+/**
+ * AI 方案相对当前草稿的逐项改动 —— 给用户在「应用配置」前看的, 一条不藏:
+ * 名称、增删节点、节点改名、每个配置项、增删连线、连线端点 / 条件 / 优先级。
+ * 不认识的配置项也照样列出 (用原键名), 不因为不会翻译就跳过。位置不比 (应用后会自动排版)。
+ */
+export function describeApprovalWorkflowAiChanges(
+  before: ApprovalWorkflowGraph,
+  after: ApprovalWorkflowGraph,
+): ApprovalWorkflowChangeRow[] {
+  const rows: ApprovalWorkflowChangeRow[] = []
+  if ((before.name || '') !== (after.name || '')) {
+    rows.push({ kind: 'change', text: `审批名称：${before.name || EMPTY_TEXT} → ${after.name || EMPTY_TEXT}` })
+  }
+
+  const beforeNodes = new Map(before.nodes.map((node) => [node.id, node]))
+  const afterNodes = new Map(after.nodes.map((node) => [node.id, node]))
+
+  after.nodes.forEach((node) => {
+    const old = beforeNodes.get(node.id)
+    if (!old) {
+      rows.push({ kind: 'add', text: `新增${friendlyNodeLabel(node.type)}节点「${nodeName(node)}」` })
+      configKeys({}, node.config ?? {}).forEach((key) => {
+        rows.push({
+          kind: 'add',
+          text: `「${nodeName(node)}」${configLabel(key)}：${configValue(key, node.config ?? {})}`,
+        })
+      })
+      return
+    }
+    if (nodeName(old) !== nodeName(node)) {
+      rows.push({ kind: 'change', text: `节点「${nodeName(old)}」改名为「${nodeName(node)}」` })
+    }
+    const oldConfig = old.config ?? {}
+    const newConfig = node.config ?? {}
+    configKeys(oldConfig, newConfig).forEach((key) => {
+      const from = configValue(key, oldConfig)
+      const to = configValue(key, newConfig)
+      if (stableJson(oldConfig[key]) === stableJson(newConfig[key])) return
+      rows.push({ kind: 'change', text: `「${nodeName(node)}」${configLabel(key)}：${from} → ${to}` })
+    })
+  })
+  before.nodes.forEach((node) => {
+    if (!afterNodes.has(node.id)) {
+      rows.push({ kind: 'remove', text: `删除${friendlyNodeLabel(node.type)}节点「${nodeName(node)}」` })
+    }
+  })
+
+  const endpoint = (id: string) => nodeName(afterNodes.get(id) ?? beforeNodes.get(id) ?? { id, type: 'approval' })
+  const route = (edge: ApprovalWorkflowEdge) => `「${endpoint(edge.source)}」→「${endpoint(edge.target)}」`
+  const beforeEdges = new Map(before.edges.map((edge) => [edge.id, edge]))
+  const afterEdgeIds = new Set(after.edges.map((edge) => edge.id))
+  after.edges.forEach((edge) => {
+    const old = beforeEdges.get(edge.id)
+    if (!old) {
+      rows.push({ kind: 'add', text: `新增连线 ${route(edge)}，条件：${edgeCondition(edge)}` })
+      return
+    }
+    if (old.source !== edge.source || old.target !== edge.target) {
+      rows.push({ kind: 'change', text: `连线 ${route(old)} 改为 ${route(edge)}` })
+    }
+    if (edgeCondition(old) !== edgeCondition(edge)) {
+      rows.push({ kind: 'change', text: `连线 ${route(edge)} 条件：${edgeCondition(old)} → ${edgeCondition(edge)}` })
+    } else if ((old.condition || '') !== (edge.condition || '')) {
+      // 标签没变而表达式变了: 照实列出表达式, 不因为标签一样就藏掉
+      rows.push({
+        kind: 'change',
+        text: `连线 ${route(edge)} 条件表达式：${old.condition || EMPTY_TEXT} → ${edge.condition || EMPTY_TEXT}`,
+      })
+    }
+    if ((old.priority ?? 0) !== (edge.priority ?? 0)) {
+      rows.push({ kind: 'change', text: `连线 ${route(edge)} 优先级：${old.priority ?? 0} → ${edge.priority ?? 0}` })
+    }
+  })
+  before.edges.forEach((edge) => {
+    if (!afterEdgeIds.has(edge.id)) {
+      rows.push({ kind: 'remove', text: `删除连线 ${route(edge)}` })
+    }
+  })
+  return rows
+}
+
+function nodeName(node: Pick<ApprovalWorkflowNode, 'id' | 'type' | 'label'>): string {
+  return node.label?.trim() || friendlyNodeLabel(node.type) || node.id
+}
+
+function configKeys(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])]
+    .filter((key) => !DERIVED_DISPLAY_KEYS.has(key))
+}
+
+function configLabel(key: string): string {
+  return CONFIG_FIELD_LABELS[key]?.label ?? key
+}
+
+function configValue(key: string, config: Record<string, unknown>): string {
+  const displayKey = CONFIG_FIELD_LABELS[key]?.display
+  const raw = displayKey && config[displayKey] != null && config[key] != null ? config[displayKey] : config[key]
+  const labels = VALUE_LABELS[key]
+  const text = (value: unknown) => (labels?.[String(value)] ?? String(value))
+  if (raw == null || raw === '') return EMPTY_TEXT
+  if (Array.isArray(raw)) return raw.length ? raw.map(text).join('、') : EMPTY_TEXT
+  if (typeof raw === 'object') return stableJson(raw)
+  return text(raw)
+}
+
+function edgeCondition(edge: ApprovalWorkflowEdge): string {
+  if (edge.label === 'DEFAULT') return '默认分支'
+  return edge.label?.trim() || edge.condition?.trim() || '无条件'
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return ''
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`
+}
+
 interface NormalizeNodeConfigOptions {
   id: string
   type: NodeType

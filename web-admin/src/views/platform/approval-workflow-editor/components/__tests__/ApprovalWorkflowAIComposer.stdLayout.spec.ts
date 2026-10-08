@@ -4,11 +4,11 @@
  *
  * 它是对话界面: 用户发一句话 -> 助手回一条, 历史在弹层里。判断见 PR 描述。
  *
- * 🔴 「套用到草稿」这一步 (H2 / H4):
- *   这个组件没有「应用」按钮 —— 回复里带 APPROVAL_WORKFLOW_SPEC 就直接调 props.applySpec(spec) 套到本地草稿 (可撤销, 不落库)。
- *   所以守的是: 没发之前 0 次; 回复里有 spec 恰好 1 次且参数就是那个 spec 对象; 回复里没有 spec / 超时 / 失败 0 次;
- *   有多个 spec 时只用第一个 (改前行为)。它也没有 diff 预览列表 (approvalWorkflowUx.source.spec 钉着), 所以没有「藏条目」这个维度。
- *   BASELINE 是在 origin/main 的旧组件上跑同一份 fixture 得到的。
+ * 🔴 「套用到草稿」这一步 (H2 / H4) —— 2026-10-08 organizer 裁定改为「预览 → 用户确认 → 执行」(965-3):
+ *   AI 回复带 APPROVAL_WORKFLOW_SPEC 时只调 props.previewSpec(spec) 列出逐项改动 (一条不藏),
+ *   用户点「应用配置」才调 props.applySpec(spec); 点「取消」什么都不改。
+ *   守的是: AI 返回后、用户没点之前 applySpec 0 次; 点了恰好 1 次且参数就是那个 spec 对象;
+ *   回复里没有 spec / 预览校验不过 / 超时 / 失败 / 取消 0 次; 多个 spec 时只用第一个 (改前行为)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
@@ -46,9 +46,20 @@ const POPOVER_STUB = {
 
 let wrappers: VueWrapper[] = [];
 let applySpec: ReturnType<typeof vi.fn>;
+let previewSpec: ReturnType<typeof vi.fn>;
+/** 12 行: 比任何「默认只显示前 N 条」的阈值都多, 用来证明一条不藏 */
+const ROWS = Array.from({ length: 12 }, (_, i) => ({
+  kind: (['add', 'remove', 'change'] as const)[i % 3],
+  text: `第 ${i + 1} 项改动：节点「审批 ${i + 1}」审批角色：甲 → 乙`,
+}));
 function mountComposer() {
   const w = mount(ApprovalWorkflowAIComposer, {
-    props: { factoryId: 'F001', context: CONTEXT, applySpec: (s: unknown) => applySpec(s) },
+    props: {
+      factoryId: 'F001',
+      context: CONTEXT,
+      previewSpec: (s: unknown) => previewSpec(s),
+      applySpec: (s: unknown) => applySpec(s),
+    },
     global: { stubs: { ...ELEMENT_STUBS, 'el-popover': POPOVER_STUB } },
     attachTo: document.body,
   });
@@ -62,10 +73,17 @@ async function send(w: VueWrapper, text: string) {
   await btn.trigger('click');
   await flushPromises();
 }
+async function clickApply(w: VueWrapper) {
+  const btns = w.findAll('[data-testid="ai-diff-apply"]');
+  if (!btns.length) throw new Error('找不到「应用配置」按钮');
+  await btns[btns.length - 1].trigger('click');
+  await flushPromises();
+}
 
 beforeEach(() => {
   h.post = vi.fn();
   applySpec = vi.fn().mockResolvedValue(true);
+  previewSpec = vi.fn().mockReturnValue({ ok: true, rows: ROWS });
   Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
@@ -153,13 +171,15 @@ describe('W1 骨架屏 / W2 超时与失败', () => {
     expect(applySpec).not.toHaveBeenCalled();
   });
 
-  it('W2: 回复已到手后不再受 30 秒限制 —— applySpec 慢于 30 秒也照常完成, 不出超时文案', async () => {
+  it('W2: 回复已到手后不再受 30 秒限制 —— 用户确认 + applySpec 慢于 30 秒也照常完成, 不出超时文案', async () => {
     vi.useFakeTimers();
     h.post.mockResolvedValue(WITH_SPEC);
     let finish!: (v: boolean) => void;
     applySpec.mockImplementation(() => new Promise<boolean>((r) => { finish = r; }));
     const w = mountComposer();
     await send(w, '把节点改为采购主管审批');
+    await vi.advanceTimersByTimeAsync(31_000); // 用户看预览看了 31 秒
+    await clickApply(w);
     expect(applySpec).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(45_000);
     finish(true);
@@ -202,33 +222,127 @@ describe('V3 中文', () => {
   });
 });
 
-describe('🔴 H2: 套用到草稿 (applySpec) 这一步', () => {
-  it('没发之前 0 次; 回复带 spec 恰好 1 次, 参数就是那个 spec 对象; 成功文案不变', async () => {
+describe('🔴 H2: 预览 → 用户确认 → 执行 (965-3)', () => {
+  it('阴性对照: AI 返回后、用户没点之前 applySpec 0 次; 预览列出全部 12 项 (一条不藏), 有「应用配置」「取消」', async () => {
     h.post.mockResolvedValue(WITH_SPEC);
     const w = mountComposer();
-    expect(applySpec).not.toHaveBeenCalled();
     await send(w, '把节点改为采购主管审批');
+    expect(previewSpec).toHaveBeenCalledTimes(1);
+    expect(previewSpec.mock.calls[0][0]).toBe(SPEC);
+    expect(applySpec).not.toHaveBeenCalled();
+    const items = w.findAll('[data-testid="ai-diff-item"]');
+    expect(items).toHaveLength(ROWS.length);
+    ROWS.forEach((row, i) => expect(items[i].text()).toContain(row.text));
+    expect(items.every((item) => item.isVisible())).toBe(true);
+    expect(w.find('[data-testid="ai-diff-apply"]').text()).toBe('应用配置');
+    expect(w.find('[data-testid="ai-diff-cancel"]').text()).toBe('取消');
+    expect(w.find('.last-status').text()).toBe('有 12 项改动待确认');
+  });
+
+  it('点「应用配置」: applySpec 恰好 1 次, 参数就是那个 spec 对象; 成功文案不变; 按钮消失; 连点也只 1 次', async () => {
+    h.post.mockResolvedValue(WITH_SPEC);
+    let finish!: (v: boolean) => void;
+    applySpec.mockImplementation(() => new Promise<boolean>((r) => { finish = r; }));
+    const w = mountComposer();
+    await send(w, '把节点改为采购主管审批');
+    const btn = w.find('[data-testid="ai-diff-apply"]');
+    await btn.trigger('click');
+    await btn.trigger('click');
+    await flushPromises();
+    finish(true);
+    await flushPromises();
     expect(applySpec).toHaveBeenCalledTimes(1);
     expect(applySpec.mock.calls[0]).toHaveLength(1);
     expect(applySpec.mock.calls[0][0]).toBe(SPEC);
     expect(w.find('.last-status').text()).toBe('已完成，当前草稿已更新，可用“撤销”恢复。');
+    expect(w.findAll('[data-testid="ai-diff-apply"]')).toHaveLength(0);
+    expect(w.find('[data-testid="ai-diff-state"]').text()).toBe('已应用到草稿');
+    // 改动列表在应用之后仍留在记录里, 用户能回看自己应用了什么
+    expect(w.findAll('[data-testid="ai-diff-item"]')).toHaveLength(ROWS.length);
   });
 
-  it('阴性对照: 回复里没有 spec -> 0 次, 助手原话保留; 画布校验不通过 -> 文案不变', async () => {
+  it('点「取消」: applySpec 0 次, 说草稿没有改动, 不能再应用', async () => {
+    h.post.mockResolvedValue(WITH_SPEC);
+    const w = mountComposer();
+    await send(w, '把节点改为采购主管审批');
+    await w.find('[data-testid="ai-diff-cancel"]').trigger('click');
+    await flushPromises();
+    expect(applySpec).not.toHaveBeenCalled();
+    expect(w.find('.last-status').text()).toBe('已取消，草稿没有任何改动。');
+    expect(w.findAll('[data-testid="ai-diff-apply"]')).toHaveLength(0);
+  });
+
+  it('阴性对照: 回复里没有 spec -> 不预览、0 次, 助手原话保留; 预览校验不过 -> 说原因、没有应用按钮; applySpec 返回 false -> 文案不变', async () => {
     h.post.mockResolvedValue(NO_SPEC);
     const w = mountComposer();
     await send(w, '随便说点什么');
+    expect(previewSpec).not.toHaveBeenCalled();
     expect(applySpec).not.toHaveBeenCalled();
     expect(w.find('[data-testid="ai-chat-thread"]').text()).toContain('这个需求我没理解');
 
     h.post.mockResolvedValue(WITH_SPEC);
-    applySpec.mockResolvedValue(false);
+    previewSpec.mockReturnValueOnce({ ok: false, message: '汇聚模式无效' });
     await send(w, '再来一次');
+    expect(applySpec).not.toHaveBeenCalled();
+    expect(w.findAll('[data-testid="ai-diff-apply"]')).toHaveLength(0);
+    expect(w.find('.last-status').text()).toBe('这次修改未通过画布校验，草稿保持不变：汇聚模式无效');
+
+    applySpec.mockResolvedValue(false);
+    await send(w, '第三次');
+    await clickApply(w);
     expect(applySpec).toHaveBeenCalledTimes(1);
     expect(w.find('.last-status').text()).toBe('这次修改未通过画布校验，草稿保持不变。');
   });
 
-  it('改前行为: 回复里有多个 spec 时只套第一个', async () => {
+  it('没点之前不说「已更新」: 后端 reply 是按旧自动套用写的 (本机实测原话), 预览消息不拼它', async () => {
+    h.post.mockResolvedValue({ data: { reply: '当前审批草稿已更新', diffs: [{ type: 'APPROVAL_WORKFLOW_SPEC', params: { spec: SPEC } }] } });
+    const w = mountComposer();
+    await send(w, '把节点改为采购主管审批');
+    const thread = w.find('[data-testid="ai-chat-thread"]').text();
+    expect(thread).not.toContain('已更新');
+    expect(thread).toContain('确认后点「应用配置」才会写入草稿');
+    await clickApply(w);
+    expect(w.find('.last-status').text()).toContain('当前草稿已更新');
+  });
+
+  it('方案和当前草稿一样 (0 项改动): 不给应用按钮, 直说没有改动', async () => {
+    h.post.mockResolvedValue(WITH_SPEC);
+    previewSpec.mockReturnValue({ ok: true, rows: [] });
+    const w = mountComposer();
+    await send(w, '把节点改为采购主管审批');
+    expect(w.findAll('[data-testid="ai-diff-apply"]')).toHaveLength(0);
+    expect(w.find('.last-status').text()).toContain('没有需要应用的改动');
+    expect(applySpec).not.toHaveBeenCalled();
+  });
+
+  it('预览之后草稿被手动改过: 点「应用配置」先不应用, 列表按当前草稿刷新, 再点才应用', async () => {
+    h.post.mockResolvedValue(WITH_SPEC);
+    const w = mountComposer();
+    await send(w, '把节点改为采购主管审批');
+    const refreshed = [{ kind: 'change', text: '节点「审批」改名为「采购审批」' }];
+    previewSpec.mockReturnValue({ ok: true, rows: refreshed });
+    await clickApply(w);
+    expect(applySpec).not.toHaveBeenCalled();
+    expect(w.findAll('[data-testid="ai-diff-item"]').map((n) => n.text())).toEqual(['修改节点「审批」改名为「采购审批」']);
+    expect(w.find('.last-status').text()).toContain('请再确认一次');
+    await clickApply(w);
+    expect(applySpec).toHaveBeenCalledTimes(1);
+  });
+
+  it('新发一句后旧方案作废: 旧的「应用配置」消失, 只能应用最新的', async () => {
+    h.post.mockResolvedValue(WITH_SPEC);
+    const w = mountComposer();
+    await send(w, '第一句');
+    h.post.mockResolvedValue({ data: { reply: 'y', diffs: [{ type: 'APPROVAL_WORKFLOW_SPEC', params: { spec: SPEC_2 } }] } });
+    await send(w, '第二句');
+    expect(w.findAll('[data-testid="ai-diff-apply"]')).toHaveLength(1);
+    expect(w.findAll('[data-testid="ai-diff-state"]').map((n) => n.text())).toEqual(['已有更新的方案，这一份不再可用']);
+    await clickApply(w);
+    expect(applySpec).toHaveBeenCalledTimes(1);
+    expect(applySpec.mock.calls[0][0]).toBe(SPEC_2);
+  });
+
+  it('改前行为: 回复里有多个 spec 时只预览 / 应用第一个', async () => {
     h.post.mockResolvedValue({
       data: { reply: 'x', diffs: [
         { type: 'APPROVAL_WORKFLOW_SPEC', params: { spec: SPEC } },
@@ -237,6 +351,9 @@ describe('🔴 H2: 套用到草稿 (applySpec) 这一步', () => {
     });
     const w = mountComposer();
     await send(w, '两个方案');
+    expect(previewSpec).toHaveBeenCalledTimes(1);
+    expect(previewSpec.mock.calls[0][0]).toBe(SPEC);
+    await clickApply(w);
     expect(applySpec).toHaveBeenCalledTimes(1);
     expect(applySpec.mock.calls[0][0]).toBe(SPEC);
   });

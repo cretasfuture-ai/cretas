@@ -62,13 +62,17 @@ describe('approval workflow business UX contract', () => {
     expect(properties).toContain('超时转派（可选）')
   })
 
-  it('places AI at the canvas bottom and directly applies its local draft result', () => {
+  // 2026-10-08 organizer 裁定 (965-3): AI 写配置一律「预览 → 用户确认 → 执行」, 不再直接套用。
+  // 行为由 ApprovalWorkflowAIComposer.stdLayout.spec 真挂载守着; 这里只钉接线。
+  it('places AI at the canvas bottom and applies its draft only after the user confirms the preview', () => {
     expect(editor).toContain('class="approval-ai-dock"')
+    expect(editor).toContain(':preview-spec="previewAiSpec"')
     expect(editor).toContain(':apply-spec="applyAiSpec"')
     expect(ai).toContain("diff.type === 'APPROVAL_WORKFLOW_SPEC'")
-    expect(ai).toContain('await props.applySpec(spec)')
-    expect(ai).not.toContain('diff-preview')
-    expect(ai).not.toContain('确认')
+    expect(ai).toContain('props.previewSpec(spec)')
+    expect(ai).not.toContain('props.applySpec(spec)')
+    expect(ai).toContain('await props.applySpec(proposedSpec)')
+    expect(ai).toContain('应用配置')
     expect(ai).not.toContain('<el-icon')
     expect(ai).toContain('AI 对话')
     expect(ai).toContain('快捷问题')
