@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { ElAlert } from 'element-plus';
@@ -6,9 +7,58 @@ import type { ChatTurn } from '@/types/restaurant-chat';
 import RestaurantChartBlock from './RestaurantChartBlock.vue';
 import { sanitizeCustomerAiText } from './customerAiText';
 
-defineProps<{
+/**
+ * variant (AI 对话标准, docs/ux/ai-chat-standard):
+ *  - 'legacy'   (默认): 餐饮 RestaurantChatPanel 的旧版式, 渲染必须与改前逐字相同。
+ *  - 'standard': 工厂租户的新版式 —— 助手全宽无头像无气泡、用户浅色气泡 min(78%, 320px)、
+ *                系统字体栈 16px/1.6、markdown 表格改成记录卡 (窄面板不横向滚动)。
+ * ⛔ 新增版式只能挂在 variant 后面, 默认值不许改成 'standard'。
+ */
+const props = withDefaults(defineProps<{
   turn: ChatTurn;
-}>();
+  variant?: 'standard' | 'legacy';
+}>(), {
+  variant: 'legacy',
+});
+
+const isStandard = computed(() => props.variant === 'standard');
+
+/**
+ * 窄面板按手机规则 (标准 §3 / G1): markdown 表格 → 「一条记录一张卡」。
+ * 输入是已经过 DOMPurify 的 HTML; 输出再过一遍 DOMPurify。
+ */
+function tablesToRecordCards(html: string): string {
+  if (!html.includes('<table')) return html;
+  const doc = new DOMParser().parseFromString(`<div id="rc-root">${html}</div>`, 'text/html');
+  const root = doc.getElementById('rc-root');
+  if (!root) return html;
+  root.querySelectorAll('table').forEach((table) => {
+    const heads = Array.from(table.querySelectorAll('thead th')).map((th) => th.textContent?.trim() ?? '');
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    if (heads.length === 0 || rows.length === 0) return;
+    const wrap = doc.createElement('div');
+    wrap.className = 'bubble-records';
+    rows.forEach((tr) => {
+      const card = doc.createElement('div');
+      card.className = 'bubble-record';
+      Array.from(tr.children).forEach((cell, i) => {
+        const line = doc.createElement('div');
+        line.className = 'bubble-record-row';
+        const key = doc.createElement('span');
+        key.className = 'bubble-record-key';
+        key.textContent = heads[i] ?? '';
+        const val = doc.createElement('span');
+        val.className = 'bubble-record-val';
+        val.innerHTML = cell.innerHTML;
+        line.append(key, val);
+        card.append(line);
+      });
+      wrap.append(card);
+    });
+    table.replaceWith(wrap);
+  });
+  return DOMPurify.sanitize(root.innerHTML);
+}
 
 /**
  * Synthesis answers are markdown (mirrors mobile-rest-ai's renderMarkdown /
@@ -19,7 +69,8 @@ defineProps<{
 function renderMarkdown(text: string): string {
   if (!text) return '';
   try {
-    return DOMPurify.sanitize(marked.parse(sanitizeCustomerAiText(text), { breaks: true, gfm: true }) as string);
+    const html = DOMPurify.sanitize(marked.parse(sanitizeCustomerAiText(text), { breaks: true, gfm: true }) as string);
+    return isStandard.value ? tablesToRecordCards(html) : html;
   } catch {
     // marked can throw on pathological input; NEVER feed raw text into v-html
     // (cached answers are tenant-shared) — HTML-escape so a parse failure cannot
@@ -37,8 +88,8 @@ function alertType(level: string): 'error' | 'warning' {
 </script>
 
 <template>
-  <div class="chat-bubble" :class="`bubble-${turn.role}`">
-    <div v-if="turn.role === 'ai'" class="bubble-avatar">&#8478;</div>
+  <div class="chat-bubble" :class="[`bubble-${turn.role}`, { 'bubble-std': isStandard }]">
+    <div v-if="turn.role === 'ai' && !isStandard" class="bubble-avatar">&#8478;</div>
     <div class="bubble-body">
       <!-- 🔒 反回扣(anti-kickback) alerts — shown ABOVE the answer (fool-proof
            Rule 1/2: visible before the narrative, never buried). -->
@@ -74,6 +125,7 @@ function alertType(level: string): 'error' | 'warning' {
       <slot name="followups" />
       <div v-if="turn.error" class="bubble-error">{{ turn.error }}</div>
     </div>
+    <slot name="actions" />
   </div>
 </template>
 
@@ -176,5 +228,84 @@ function alertType(level: string): 'error' | 'warning' {
   color: #8b1a1a;
   font-size: 12px;
   margin-top: 6px;
+}
+
+/* ───────── variant="standard" (工厂租户, AI 对话标准) ─────────
+ * 以下选择器全部以 .bubble-std 打头: variant 缺省 / 'legacy' 时这个 class 不存在,
+ * 餐饮 RestaurantChatPanel 完全不受影响。
+ * L1 助手全宽无头像无气泡 · L2 用户浅色气泡 min(78%, 320px)/圆角 12/内边距 10px 12px
+ * T1 系统字体栈 · T2 16px/1.6 · T3 小字 ≥ 12px (不出现 10-11px)
+ */
+.bubble-std {
+  --bubble-std-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 4px;
+  margin-bottom: 16px;
+  font-family: var(--bubble-std-font);
+  letter-spacing: 0;
+}
+.bubble-std.bubble-user {
+  align-items: flex-end;
+}
+.bubble-std.bubble-ai {
+  align-items: stretch;
+}
+.bubble-std.bubble-user .bubble-body {
+  background: var(--el-fill-color, #f0f2f5);
+  color: var(--el-text-color-primary, #303133);
+  max-width: min(78%, 320px);
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-family: var(--bubble-std-font);
+  overflow-wrap: anywhere;
+}
+.bubble-std.bubble-ai .bubble-body {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.bubble-std .bubble-content {
+  font-family: var(--bubble-std-font);
+  font-size: 16px;
+  line-height: 1.6;
+  letter-spacing: 0;
+  color: var(--el-text-color-primary, #303133);
+  overflow-wrap: anywhere;
+}
+.bubble-std.bubble-user .bubble-content {
+  color: var(--el-text-color-primary, #303133);
+  white-space: pre-wrap;
+}
+.bubble-std .bubble-content-markdown {
+  :deep(h1), :deep(h2), :deep(h3) { font-size: 18px; line-height: 1.5; }
+  :deep(strong) { color: inherit; }
+  :deep(code) { font-size: 13px; }
+  :deep(pre) { max-width: 100%; }
+  :deep(blockquote) { border-left-color: var(--el-border-color, #dcdfe6); }
+  :deep(.bubble-records) { display: flex; flex-direction: column; gap: 8px; margin: 0.5em 0; }
+  :deep(.bubble-record) {
+    border: 1px solid var(--el-border-color-lighter, #ebeef5);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  :deep(.bubble-record-row) { display: flex; gap: 12px; justify-content: space-between; }
+  :deep(.bubble-record-key) { font-size: 13px; color: var(--el-text-color-secondary, #909399); flex-shrink: 0; }
+  :deep(.bubble-record-val) { text-align: right; min-width: 0; }
+}
+.bubble-std .bubble-alert-item :deep(.el-alert__title) {
+  font-family: var(--bubble-std-font);
+}
+.bubble-std .bubble-alert-item :deep(.el-alert__description) {
+  font-family: var(--bubble-std-font);
+  font-size: 13px;
+}
+.bubble-std .bubble-error {
+  font-size: 13px;
 }
 </style>
