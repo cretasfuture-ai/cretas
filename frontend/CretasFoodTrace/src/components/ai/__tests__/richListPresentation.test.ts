@@ -49,3 +49,26 @@ describe('中文键 (后端已给人话标签) 不被当成未知英文键藏掉
     expect(rows.map((r) => r.label)).toEqual(['剩余数量']);
   });
 });
+
+describe('A3: 列表单元格与详情卡用同一份状态 / 结果中文 (Codex 本机验收 2026-10-08)', () => {
+  const inspection = { result: 'PENDING', qualityGrade: 'B', passRate: 94, inspectionDate: '2026-08-18', notes: null };
+
+  it('质检结果码: 列表与详情翻成同一个中文', () => {
+    for (const [code, zh] of [['PENDING', '待检验'], ['FAIL', '不合格'], ['PASS', '合格'], ['CONDITIONAL', '有条件放行']]) {
+      const row = { ...inspection, result: code };
+      expect(getListCellValue(row, 'result')).toBe(zh);
+      expect(buildDetailRows(row).find((r) => r.key === 'result')?.value).toBe(zh);
+    }
+  });
+
+  it('通用状态码在非库存列表里也翻 (以前只翻库存批次)', () => {
+    expect(getListCellValue({ processName: '卤制', status: 'IN_PROGRESS' }, 'status')).toBe('进行中');
+    expect(getListCellValue({ orderNumber: 'SO-1', status: 'COMPLETED' }, 'status')).toBe('已完成');
+  });
+
+  it('阴性对照: status 键上的 PENDING 不猜 (工序里是待开始), 认不出的码原样显示、不藏', () => {
+    expect(getListCellValue({ processName: '卤制', status: 'PENDING' }, 'status')).toBe('PENDING');
+    expect(getListCellValue({ ...inspection, result: 'WEIRD_CODE' }, 'result')).toBe('WEIRD_CODE');
+    expect(getListCellValue({ ...inspection, qualityGrade: 'B' }, 'qualityGrade')).toBe('B');
+  });
+});
