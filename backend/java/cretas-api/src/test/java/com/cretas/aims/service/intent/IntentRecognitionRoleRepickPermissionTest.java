@@ -13,6 +13,8 @@ import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.service.SemanticIntentMatcher;
 import com.cretas.aims.service.impl.AIIntentServiceImpl;
+import com.cretas.aims.cache.IntentResultCache;
+import com.cretas.aims.client.PythonAiMatcherClient;
 import com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl;
 import com.cretas.aims.service.intent.impl.IntentRecognitionPipelineServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +35,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * 仓库员说「查库存」—— 走<b>真的</b>识别入口 ({@link AIIntentServiceImpl#recognizeIntentWithConfidence}, SSE 与
@@ -111,6 +114,8 @@ class IntentRecognitionRoleRepickPermissionTest {
         // 所有角色可用的出货查询: 本机实测是「查一下库存」的句式近邻 (「查一下出货」0.85)
         catalog.put("SHIPMENT_QUERY", intent("SHIPMENT_QUERY", "出货查询", "shipment_query", null,
                 "[\"出货查询\", \"查一下出货\"]"));
+        catalog.put("QUALITY_CHECK_QUERY", intent("QUALITY_CHECK_QUERY", "质检记录查询", "quality_check_query",
+                "[\"factory_super_admin\", \"quality_inspector\"]", "[\"质检记录\", \"最近的质检记录\"]"));
         // 餐饮意图 (平台级, 不分厂): 短语向量库里与工厂短语混在一起
         AIIntentConfig restaurantStock = intent("RESTAURANT_INGREDIENT_STOCK", "食材库存", "restaurant_ingredient_stock",
                 null, "[\"食材库存\", \"看看库存\"]");
@@ -135,6 +140,7 @@ class IntentRecognitionRoleRepickPermissionTest {
                 "smart_indicator_query", tool("smart_indicator_query", AccessMode.READ),
                 "material_low_stock_alert", tool("material_low_stock_alert", AccessMode.READ),
                 "shipment_query", tool("shipment_query", AccessMode.READ),
+                "quality_check_query", tool("quality_check_query", AccessMode.READ),
                 "restaurant_ingredient_stock", tool("restaurant_ingredient_stock", AccessMode.READ),
                 "material_batch_use", tool("material_batch_use", AccessMode.WRITE));
         when(registry.getExecutor(anyString()))
@@ -324,5 +330,13 @@ class IntentRecognitionRoleRepickPermissionTest {
         IntentMatchResult r = recognize("查库存", WAREHOUSE_USER, null);
         assertThat(code(r)).isEqualTo("REPORT_INVENTORY");
         assertThat(repicked(r)).isFalse();
+    }
+
+    @Test
+    @DisplayName("G1 真实 recognize 入口: 最近的质检记录直达 QUALITY_CHECK_QUERY")
+    void recentQualityRecordUsesQualityQueryAtRecognizeEntry() {
+        IntentMatchResult r = recognize("查一下最近的质检记录", ADMIN_USER, "quality_inspector");
+        assertThat(code(r)).isEqualTo("QUALITY_CHECK_QUERY");
+        assertThat(r.getMatchMethod()).isEqualTo(IntentMatchResult.MatchMethod.PHRASE_MATCH);
     }
 }

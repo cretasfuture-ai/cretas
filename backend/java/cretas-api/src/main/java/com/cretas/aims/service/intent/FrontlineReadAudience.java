@@ -25,7 +25,9 @@ public final class FrontlineReadAudience {
     private static final Map<String, Set<String>> ONLY_FOR = Map.of(
             // 仓库收货工作台: 今日 / 明日到货的采购单待收清单 (仓管查; 质检员 / 操作员在 App 里没有这个入口)
             "MATERIAL_TODAY_RECEIVING_QUERY", Set.of("warehouse_worker"),
-            "WAREHOUSE_TODAY_RECEIVING_PENDING", Set.of("warehouse_worker"));
+            "WAREHOUSE_TODAY_RECEIVING_PENDING", Set.of("warehouse_worker"),
+            // G1: 质检记录属于质检员工作台；仓管员不应在澄清按钮中拿到该记录入口。
+            "QUALITY_CHECK_QUERY", Set.of("quality_inspector"));
 
     private FrontlineReadAudience() {
     }

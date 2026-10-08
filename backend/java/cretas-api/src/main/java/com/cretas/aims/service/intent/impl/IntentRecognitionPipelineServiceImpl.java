@@ -326,6 +326,36 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     private static final String[] READ_ONLY_SUFFIXES = {"_QUERY", "_LIST", "_STATS", "_HISTORY", "_DETAIL"};
 
     // ======================================================================================
+
+    @Override
+    public Optional<IntentMatchResult> recognizeExpectedEarlyPhrase(String userInput, String factoryId,
+                                                                      Long userId, String sessionId,
+                                                                      Set<String> expectedCodes) {
+        if (userInput == null || userInput.isBlank() || factoryId == null || factoryId.isBlank()
+                || expectedCodes == null || expectedCodes.isEmpty()) return Optional.empty();
+        String domain;
+        try { domain = configService.resolveBusinessDomain(factoryId); }
+        catch (Exception e) { return Optional.empty(); }
+        if (!"FACTORY".equalsIgnoreCase(domain) && !"RESTAURANT".equalsIgnoreCase(domain)) return Optional.empty();
+        String sanitized = stripHtmlTags(userInput);
+        QueryPreprocessorService.NegationKind veto = detectVetoKind(sanitized);
+        if (veto != QueryPreprocessorService.NegationKind.NONE
+                || shouldBypassEarlyPhraseShortcutForStoreReference(sanitized)) return Optional.empty();
+        Optional<String> match = knowledgeBase.matchPhrase(filterFillerWordsForPhrase(sanitized), domain);
+        if (match.isEmpty() || !expectedCodes.contains(match.get())) return Optional.empty();
+        AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
+                .filter(c -> match.get().equals(c.getIntentCode()))
+                .filter(c -> Boolean.TRUE.equals(c.getIsActive()) && c.getDeletedAt() == null)
+                .filter(c -> BusinessTypeScope.isCompatible(c.getBusinessType(), domain)).findFirst().orElse(null);
+        if (cfg == null) return Optional.empty();
+        long now = System.currentTimeMillis();
+        IntentMatchResult result = IntentMatchResult.builder().userInput(sanitized).bestMatch(cfg)
+                .topCandidates(List.of(CandidateIntent.fromConfig(cfg, 0.99, 99, List.of(match.get()), MatchMethod.PHRASE_MATCH)))
+                .confidence(0.99).matchMethod(MatchMethod.PHRASE_MATCH).isStrongSignal(true).build();
+        saveIntentMatchRecord(result, factoryId, userId, sessionId, false);
+        return Optional.of(attachTiming(result, now, now));
+    }
+
     // PUBLIC INTERFACE METHODS
     // ======================================================================================
     // The methods below are the public API of this service.
