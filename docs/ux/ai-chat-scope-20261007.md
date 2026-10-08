@@ -20,7 +20,15 @@
 | W2 | web-admin `components/ai-entry/AiEntryDrawer.vue`（1194 行，抽屉宽 45%） | 6 个列表页：采购订单、库存、生产计划、生产批次、销售订单、产品 | L1 头像和气泡（981、1001）；L2 80%；T2 14px；T3 11px（568、1189） | **Sonnet** | `codex/claude-aiui-web-entry-drawer` | P2 |
 | W3 | web-admin 配置助手：`platform/canvas-editor/components/AIChatPanel.vue`（140 行，300px 侧栏），以及 `WorkProcessAIChatPanel.vue` | 平台 / 超级管理员（router/index.ts:2367-2375）；工序配置 | T3 13px、12px；E1 英文模式名 Autopilot / Plan / Action、`diff.type` 原样输出；W2 没有超时；N1 无条件滚动。⚠️ `WorkProcessAIChatPanel` 有两份（system/components 560 行、system/work-processes 315 行），先确认哪份在用 | **Sonnet** | `codex/claude-aiui-web-config-assistants` | P3（内部配置工具，用户少） |
 
-## 二、需要裁定（裁定前不动）
+## 二、裁定结果（Steve 2026-10-08）
+
+- Q1 → **按工厂处理，要改**。它也挂在餐饮页 `views/restaurant/analytics/platform.vue` 上，所以只对工厂租户换新版式，餐饮租户保持原样（分支 `codex/claude-aiui-web-analysis-panel`）。
+- Q2 → 随 Q1：`ChatBubble` / `ChatTypingIndicator` 只加默认值是旧样式的可选 prop，餐饮渲染逐字不变。
+- 骨架屏一律配文字：同意。
+- 手机确认卡与 web 统一为「业务行一行都不藏」：按更好的选择定（#963）。
+- W3 配置助手：做（分支 `codex/claude-aiui-web-config-assistants`）。
+
+### 原问题（存档）
 
 | # | 文件 | 问题 | 我的建议 |
 |---|---|---|---|
@@ -60,6 +68,9 @@
 | R1+R2 工厂 AIChatScreen | #959 | 待合并 |
 | W1 web-admin AIQuery + AiOperationCard | #961 | 待合并 |
 | R3 AILayoutAssistant | — | 不做（餐饮专属），本地分支留底 |
-| W2 AiEntryDrawer、W3 配置助手 | — | 未开工 |
+| W2 web-admin AI 录入抽屉 | #962 | 待合并 |
+| 手机确认卡不藏行 | #963（叠在 #959 上） | 待合并 |
+| Q1 AnalysisChatPanel（工厂租户） | — | 进行中 |
+| W3 配置助手 | — | 进行中 |
 
-**写确认卡的行规则（W1 中定下，供裁定）**：web 的 AiOperationCard 一行业务字段都不藏，没有中文 label 的英文键照原样显示键名（H3 优先于 V3）。RN 的 `aiWriteConfirm.ts` `previewRows` 是 main 上原有的行为，会藏掉没有 label 的英文键（例如 `plannedQty`）。两端口径不一致，需要 organizer 或 Steve 定：RN 是否也改成不藏？
+**写确认卡的行规则（W1 中定下，供裁定）**：web 的 AiOperationCard 一行业务字段都不藏，没有中文 label 的英文键照原样显示键名（H3 优先于 V3）。RN 的 `aiWriteConfirm.ts` `previewRows` 是 main 上原有的行为，会藏掉没有 label 的英文键（例如 `plannedQty`）。两端口径不一致。→ Steve 2026-10-08：按更好的选择定，RN 也改成不藏（#963）。
