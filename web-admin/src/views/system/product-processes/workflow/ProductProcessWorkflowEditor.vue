@@ -6748,9 +6748,11 @@ async function previewWorkflowSpec(spec: unknown): Promise<WorkflowAiPreview> {
   if (!currentLoadedIdentity() || !canEdit.value) return { ok: false, message: '当前画布尚未加载或不可编辑，未应用配置。' };
   const identity = currentLoadedIdentity()!;
   const before = currentDefinition();
+  const key = `${identity.factoryId}:${identity.productTypeId}:${workflowAiStableJson(spec)}:${workflowAiStableJson(before)}`;
+  const cached = preparedAiDefinitions.get(key);
+  if (cached) return previewWorkflowAiDefinitions(before, cached);
   const compiled = await compileWorkflowSpec(spec as WorkflowSpec, identity, true);
   if (!compiled) return { ok: false, message: '当前规格包含尚未匹配的工序，应用前无法完整编译差异。' };
-  const key = `${identity.factoryId}:${identity.productTypeId}:${workflowAiStableJson(spec)}:${workflowAiStableJson(before)}`;
   preparedAiDefinitions.set(key, compiled);
   return previewWorkflowAiDefinitions(before, compiled);
 }
@@ -6776,10 +6778,40 @@ async function applyWorkflowAIDraft(
     const key = `${identity.factoryId}:${identity.productTypeId}:${workflowAiStableJson(payload.spec)}:${workflowAiStableJson(before)}`;
     const prepared = preparedAiDefinitions.get(key);
     if (prepared) {
-      remember();
-      hydrate(prepared);
-      dirty.value = true;
-      await fitCanvas();
+      const hasPendingCatalogProcess = prepared.nodes.some((node) => (
+        node.kind === 'PROCESS'
+        && String((node.data as ProcessNodeData).workProcessId || '').startsWith('__pending__:')
+      ));
+      if (hasPendingCatalogProcess) {
+        // Preserve the original apply-time catalog creation and mutation path;
+        // it already creates the real process, records history, and lays out
+        // the graph. Preview only supplied a read-only placeholder plan.
+        const reviewed = previewWorkflowAiDefinitions(before, prepared);
+        const materialized = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity, false, false);
+        if (!materialized || !isLoadedIdentityCurrent(identity) || !canEdit.value) return;
+        const actual = previewWorkflowAiDefinitions(before, materialized);
+        if (reviewed.ok && actual.ok && workflowAiStableJson(reviewed.rows) !== workflowAiStableJson(actual.rows)) {
+          ElMessage.warning({
+            message: '工序目录创建后方案发生变化，画布保持原样，请重新审核。',
+            duration: 0,
+            showClose: true,
+          });
+          return;
+        }
+        await applyPreparedWorkflowDefinition(materialized, identity);
+        return;
+      }
+      const applied = prepared;
+      if (!applied) return;
+      if (!isLoadedIdentityCurrent(identity) || !canEdit.value) {
+        ElMessage.warning({
+          message: '确认之后画布已经切换或变为不可编辑，本次 Workflow 没有应用，草稿保持原样。',
+          duration: 0,
+          showClose: true,
+        });
+        return;
+      }
+      await applyPreparedWorkflowDefinition(applied, identity);
     } else {
       await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
     }
@@ -6823,6 +6855,28 @@ async function applyWorkflowAIDraft(
   await fitCanvas();
 }
 
+/** Consume the exact definition reviewed by the panel while preserving the normal edit/save bookkeeping. */
+async function applyPreparedWorkflowDefinition(
+  applied: ProductProcessWorkflowDefinition,
+  identity: WorkflowIdentity,
+): Promise<void> {
+  if (!isLoadedIdentityCurrent(identity) || !canEdit.value) {
+    ElMessage.warning({
+      message: '确认之后画布已经切换或变为不可编辑，本次 Workflow 没有应用，草稿保持原样。',
+      duration: 0,
+      showClose: true,
+    });
+    return;
+  }
+  remember();
+  hydrate(applied);
+  editSeq += 1;
+  workflowBomSyncPreflight.value = null;
+  dirty.value = true;
+  scheduleAutoSave();
+  await fitCanvas();
+}
+
 interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string; byproduct?: boolean }
 /** 一味调料/辅料投入。与补丁路的 materialBinding 同形状, 同一套约束。 */
 interface WorkflowSpecSeasoning {
@@ -6841,13 +6895,63 @@ interface WorkflowSpecStep {
 }
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
+/** Same load-time metadata projection as hydrate(), operating on detached JSON. */
+function projectCompiledDefinitionMetadata(input: ProductProcessWorkflowDefinition): ProductProcessWorkflowDefinition {
+  const next = toPlainWorkflowValue(input);
+  const materials = new Map(next.nodes.filter(node => node.kind !== 'PROCESS').map(node => [node.id, node]));
+  next.nodes = next.nodes.map((node) => {
+    if (node.kind === 'RAW_MATERIAL' && !String(node.data.skuId || '')) {
+      const option = resolveRawMaterialByExactName(String(node.data.name || ''), rawMaterialOptions.value, bomRawMaterialIdList.value);
+      if (option) Object.assign(node.data, {
+        name: option.name,
+        skuId: option.id,
+        skuCode: option.code || option.id,
+        baseUnit: workflowReportingUnit('RAW_MATERIAL', option.unit || String(node.data.baseUnit || 'kg')),
+        bound: true,
+      });
+    }
+    if (node.kind === 'PROCESS') {
+      const data = node.data as ProcessNodeData;
+      const projected = {
+        ...data,
+        ports: data.ports.map((port) => {
+        const material = port.materialNodeId ? materials.get(port.materialNodeId) : undefined;
+        return {
+          ...port,
+          materialName: String(material?.data.name || port.materialName || ''),
+          skuId: String(material?.data.skuId || port.skuId || ''),
+          materialKind: (material?.kind || port.materialKind) as ProcessPort['materialKind'],
+          unit: String(material?.data.baseUnit || port.unit || ''),
+        };
+        }),
+      };
+      const reconciled = reconcileProcessPortQuantities(projected, unitCatalog.value);
+      node.data = {
+        ...reconciled,
+        ports: [...reconciled.ports],
+        conversionRule: { ...reconciled.conversionRule },
+      } as ProcessNodeData;
+    }
+    return node;
+  });
+  return next;
+}
+
 /**
  * 长久方案确定性编译器 (#7 弃补丁): 把 LLM 的「语义规格」建成合法图, 复用 createProcessBranch /
  * createWorkProcess —— LLM 不产任何 node/edge/id, 图 100% 自洽, 不会再"整批被拒"。
  * MVP: 线性链 + 每步首产出 (多产出/分流 后续迭代)。工序匹配不到就现场创建 (复用 #13 逻辑);
  * 产出 SKU 先不自动建, 留待用户绑定 (安全)。
  */
-async function compileWorkflowSpec(spec: WorkflowSpec, identity: WorkflowIdentity, dryRun = false): Promise<ProductProcessWorkflowDefinition | null> {
+async function compileWorkflowSpec(
+  spec: WorkflowSpec,
+  identity: WorkflowIdentity,
+  dryRun = false,
+  commit = true,
+): Promise<ProductProcessWorkflowDefinition | null> {
+  const operationGeneration = loadGeneration;
+  const canContinue = () => loadGeneration === operationGeneration
+    && isLoadedIdentityCurrent(identity) && canEdit.value;
   const steps = Array.isArray(spec.steps)
     ? spec.steps.filter((s) => s && (s.process || '').trim())
     : [];
@@ -6875,19 +6979,38 @@ async function compileWorkflowSpec(spec: WorkflowSpec, identity: WorkflowIdentit
         if (!dryRun) ElMessage.error(`工序「${name}」缺少有效类别，请先在工序管理中维护或在 AI 规格中选择已有类别`);
         return null;
       }
-      if (dryRun) return null;
+      if (dryRun) {
+        wp = {
+          id: `__pending__:${name}`,
+          processName: name,
+          defaultOutputMaterialKind: outKind,
+        } as WorkProcessItem;
+      }
+      if (dryRun && wp) {
+        resolved.push(wp);
+        continue;
+      }
       try {
+        if (!canContinue()) return null;
         const resp = await createWorkProcess(identity.factoryId, {
           processName: name, processCategory,
           defaultOutputMaterialKind: outKind as WorkProcessItem['defaultOutputMaterialKind'],
           isActive: true,
         });
+        if (!canContinue()) {
+          ElMessage.warning({
+            message: '工序目录创建期间画布身份或权限已变化，已停止后续创建；请重新审核剩余工序。',
+            duration: 0,
+            showClose: true,
+          });
+          return null;
+        }
         if (resp.success && resp.data) {
           wp = resp.data;
           workProcessOptions.value = [resp.data, ...workProcessOptions.value];
         }
       } catch (error) {
-        console.error('[buildWorkflowFromSpec] createWorkProcess failed', error);
+        console.error('[compileWorkflowSpec] createWorkProcess failed', error);
       }
     }
     if (!wp) {
@@ -7107,15 +7230,29 @@ async function compileWorkflowSpec(spec: WorkflowSpec, identity: WorkflowIdentit
       // 主链沿首产出继续 (多产出的其余分支是终端支流)
       prevMaterial = serializeFlowNode(outputNode);
     });
-    compiledDefinition = { ...currentDefinition(), nodes: nodes as unknown as ProductProcessWorkflowDefinition['nodes'], edges: edges as unknown as ProductProcessWorkflowDefinition['edges'] };
-    if (!dryRun) {
+    if (dryRun || !commit) {
+      const compiledNodes = nodes.map((node) => {
+        const data = toPlainWorkflowValue(node.data || {}) as Record<string, unknown>;
+        const kind = data.kind as ProductProcessNodeKind;
+        delete data.kind;
+        return { id: node.id, kind, position: snapPosition(node.position), data: data as ProductProcessWorkflowNode['data'] };
+      });
+      const compiledEdges = edges.map((edge) => ({
+        id: edge.id, source: edge.source, sourceHandle: edge.sourceHandle || 'output',
+        target: edge.target, targetHandle: edge.targetHandle || 'input',
+      }));
+      compiledDefinition = projectCompiledDefinitionMetadata({
+        ...currentDefinition(), nodes: compiledNodes, edges: compiledEdges,
+      });
+    } else {
       flowNodes.value = nodes;
       flowEdges.value = edges;
+      compiledDefinition = currentDefinition();
     }
   };
-  if (dryRun) compileGraph();
+  if (dryRun || !commit) compileGraph();
   else mutate(compileGraph);
-  if (dryRun) return compiledDefinition;
+  if (dryRun || !commit) return compiledDefinition;
   await nextTick();
   await handleAutoLayout();
   const parts = [`已按 AI 描述生成 ${steps.length} 道工序流程`];

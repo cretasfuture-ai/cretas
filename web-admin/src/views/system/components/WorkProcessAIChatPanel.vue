@@ -62,7 +62,7 @@
                         <li v-for="row in diff.proposal.rows" :key="row.path" :data-change-path="row.path" data-testid="workflow-change-row">{{ row.text }}</li>
                       </ol>
                       <div v-if="diff.proposal.state === 'pending'" class="workflow-preview-actions">
-                        <el-button type="primary" :disabled="disabled || loading" data-testid="workflow-spec-apply" @click="applySpecProposal(diff, msg.sourceIdentity)">应用配置</el-button>
+                        <el-button type="primary" :disabled="disabled || loading || diff.proposal.applying" data-testid="workflow-spec-apply" @click="applySpecProposal(diff, msg.sourceIdentity)">应用配置</el-button>
                         <el-button data-testid="workflow-spec-cancel" @click="cancelSpecProposal(diff)">取消</el-button>
                       </div>
                       <p v-else role="status">{{ diff.proposal.state === 'cancelled' ? '已取消，画布没有改动。' : '已提交应用，请检查画布后保存。' }}</p>
@@ -191,6 +191,7 @@ interface ChatDiff {
     rows: WorkflowAiChangeRow[];
     revision: string;
     state: 'pending' | 'submitted' | 'cancelled';
+    applying?: boolean;
   };
 }
 
@@ -338,11 +339,13 @@ async function send(): Promise<void> {
     const data = res.data ?? {};
     // D1 B-1: when diffs are empty (tool failure surfaced as error reply), show guidance text
     const hasDiffs = Array.isArray(data.diffs) && data.diffs.length > 0;
+    const preparedDiffs = await Promise.all((data.diffs || []).map(prepareDiff));
+    if (!isCurrentRequest(generation, sourceIdentity)) return;
     pushMessage({
       role: 'assistant',
       content: data.reply || (hasDiffs ? '已生成草稿，请审核后应用。' : '无法生成草稿，请检查工序描述'),
       sourceIdentity,
-      diffPreview: await Promise.all((data.diffs || []).map(prepareDiff)),
+      diffPreview: preparedDiffs,
     });
   } catch (e) {
     if (!isCurrentRequest(generation, sourceIdentity)) return;
@@ -421,8 +424,20 @@ function cancelSpecProposal(diff: ChatDiff): void {
 async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity): Promise<void> {
   const proposal = diff.proposal;
   if (!proposal || proposal.state !== 'pending' || props.disabled || loading.value
-    || !sourceIdentity || !isCurrentSource(sourceIdentity)) return;
-  const recheck = await props.previewSpec?.(proposal.spec);
+    || proposal.applying || !sourceIdentity || !isCurrentSource(sourceIdentity)) return;
+  proposal.applying = true;
+  let recheck: WorkflowAiPreview | undefined;
+  try {
+    recheck = await props.previewSpec?.(proposal.spec);
+  } catch (error) {
+    proposal.applying = false;
+    diff.previewError = error instanceof Error ? error.message : '当前画布预览失败，未应用配置。';
+    return;
+  }
+  if (!isCurrentSource(sourceIdentity) || props.disabled || loading.value || proposal.state !== 'pending') {
+    proposal.applying = false;
+    return;
+  }
   if (!recheck || recheck.ok === false) {
     diff.previewError = recheck && recheck.ok === false ? recheck.message : '当前画布无法预览，未应用配置。';
     diff.proposal = undefined;
@@ -432,9 +447,11 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     || workflowAiStableJson(recheck.rows) !== workflowAiStableJson(proposal.rows)) {
     proposal.rows = recheck.rows;
     proposal.revision = recheck.revision;
+    proposal.applying = false;
     diff.previewError = '画布已变化，已刷新全部改动，请重新审核并应用。';
     return;
   }
+  proposal.applying = false;
   proposal.state = 'submitted';
   emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity);
 }

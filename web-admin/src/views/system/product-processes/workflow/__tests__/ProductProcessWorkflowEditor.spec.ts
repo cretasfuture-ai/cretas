@@ -5,6 +5,7 @@ import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import { BOM_OVERLAY_PREFIX, isBomOverlayNode, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
 import type { ProductProcessWorkflowDefinition } from '../types';
+import { previewWorkflowAiDefinitions } from '../workflowAiPreview';
 
 const apiMocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -115,6 +116,7 @@ vi.mock('@vue-flow/controls', async () => {
 });
 
 interface EditorVm {
+  currentDefinition: () => ProductProcessWorkflowDefinition;
   flowNodes: EditorNode[];
   flowEdges: Array<{
     id: string;
@@ -385,11 +387,14 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const panel = wrapper.getComponent(WorkProcessAIChatPanel);
     const chat = panel.vm as unknown as { input: string; send: () => Promise<void> };
     const before = JSON.stringify(vm.flowNodes);
+    const beforeDefinition = vm.currentDefinition();
     const historyBefore = vm.history.length;
     chat.input = '新建切分流程';
     await chat.send();
     await flushPromises();
-    expect(panel.findAll('[data-testid="workflow-change-row"]').length).toBeGreaterThan(0);
+    const previewRows = panel.findAll('[data-testid="workflow-change-row"]');
+    expect(previewRows.length).toBeGreaterThan(0);
+    expect(previewRows.some(row => row.text().includes('是否报工'))).toBe(true);
     expect(apiMocks.post).toHaveBeenCalledOnce();
     expect(apiMocks.createWorkProcess).not.toHaveBeenCalled();
     expect(JSON.stringify(vm.flowNodes)).toBe(before);
@@ -399,14 +404,24 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(JSON.stringify(vm.flowNodes)).toBe(before);
     expect(vm.history).toHaveLength(historyBefore);
     chat.input = '再生成切分流程';
+    const reviewedBefore = vm.currentDefinition();
     await chat.send();
     await flushPromises();
+    const allReviewedRows = panel.findAll('[data-testid="workflow-change-row"]');
+    const secondReviewedRows = allReviewedRows.slice(-previewRows.length).map(row => row.text());
+    expect(secondReviewedRows.length).toBeGreaterThan(0);
     await panel.get('[data-testid="workflow-spec-apply"]').trigger('click');
     await flushPromises();
     expect(apiMocks.createWorkProcess).toHaveBeenCalledOnce();
     expect(vm.flowNodes.some(node => node.data.processName === '现场切分')).toBe(true);
     expect(vm.history.length).toBeGreaterThan(historyBefore);
     expect(confirm).not.toHaveBeenCalled(); // No second dialog after catalog writes.
+    const after = vm.currentDefinition();
+    const appliedDiff = previewWorkflowAiDefinitions(reviewedBefore, after);
+    expect(appliedDiff.ok).toBe(true);
+    if (appliedDiff.ok) {
+      expect(appliedDiff.rows.map(row => row.text).sort()).toEqual([...secondReviewedRows].sort());
+    }
   });
 
   it('adds the process, derived finished output, and both edges in one undo snapshot', async () => {

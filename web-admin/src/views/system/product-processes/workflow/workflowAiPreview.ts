@@ -34,14 +34,100 @@ export function previewWorkflowAiDefinitions(
   before: ProductProcessWorkflowDefinition,
   after: ProductProcessWorkflowDefinition,
 ): WorkflowAiPreview {
+  const semanticProcessKeys = (definition: ProductProcessWorkflowDefinition): Set<string> => {
+    const occurrences = new Map<string, number>();
+    return new Set(definition.nodes.filter(node => node.kind === 'PROCESS').map(node => {
+      const name = String((node.data as Record<string, unknown>).processName ?? '');
+      const base = `PROCESS:${name}`;
+      const ordinal = occurrences.get(base) || 0;
+      occurrences.set(base, ordinal + 1);
+      return `${base}#${ordinal}`;
+    }));
+  };
+  const beforeProcessKeys = semanticProcessKeys(before);
+  const normalizeData = (
+    value: unknown,
+    nodeIndex: Map<string, string>,
+    key?: string,
+  ): unknown => {
+    if (Array.isArray(value)) {
+      if (key === 'portIds') return value.map((item, index) => typeof item === 'string' && item.startsWith('port:') ? item : `port-${index}`);
+      return value.map(item => normalizeData(item, nodeIndex, key));
+    }
+    if (!record(value)) return value;
+    const result: Record<string, unknown> = {};
+    Object.keys(value).sort().forEach(field => {
+      // Port and policy ids are compiler generated; node references are mapped
+      // to semantic node keys so regenerated UUIDs never become user rows.
+      if (field === 'id' && (key === 'ports' || key === 'portGroups')) return;
+      if ((field === 'materialNodeId' || field === 'substituteOfNodeId' || field === 'reworkNodeId') && typeof value[field] === 'string') {
+        result[field] = nodeIndex.get(value[field] as string) || value[field];
+        return;
+      }
+      result[field] = normalizeData(value[field], nodeIndex, field);
+    });
+    return result;
+  };
   const normalize = (definition: ProductProcessWorkflowDefinition): Record<string, unknown> => {
-    const index = new Map(definition.nodes.map((node, i) => [node.id, i]));
+    const occurrences = new Map<string, number>();
+    const keys = new Map<string, string>();
+    definition.nodes.forEach(node => {
+      const data = node.data as Record<string, unknown>;
+      const name = node.kind === 'PROCESS' ? data.processName : data.name;
+      const base = `${node.kind}:${String(name ?? '')}`;
+      const ordinal = occurrences.get(base) || 0;
+      occurrences.set(base, ordinal + 1);
+      keys.set(node.id, `${base}#${ordinal}`);
+    });
+    const nodeIndex = new Map([...keys.entries()]);
+    const handles = new Map<string, string>();
+    definition.nodes.filter(node => node.kind === 'PROCESS').forEach(node => {
+      const ports = Array.isArray((node.data as Record<string, unknown>).ports)
+        ? (node.data as Record<string, unknown>).ports as Record<string, unknown>[] : [];
+      ports.forEach((port, index) => handles.set(`${node.id}:${String(port.id)}`, `port:${port.direction}:${nodeIndex.get(String(port.materialNodeId)) || ''}:${port.ordinal ?? index}`));
+    });
+    const nodes = definition.nodes.map(node => ({
+      key: keys.get(node.id), kind: node.kind,
+      // Preserve stable catalog ids as business data. Only the explicit
+      // preview placeholder is normalized; apply maps it to the real id.
+      data: normalizeData((() => {
+        const data = { ...(node.data as Record<string, unknown>) };
+        if (node.kind === 'PROCESS') {
+          const processKey = keys.get(node.id);
+          // A pending catalog item becomes a real id during apply. For a newly
+          // added semantic process, compare the reviewed plan by process name;
+          // preserve real ids for existing processes so same-name rebindings remain visible.
+          if (!beforeProcessKeys.has(String(processKey))) {
+            // Catalog identity is an implementation detail for a new process;
+            // the visible change is its semantic name/category and graph data.
+            delete data.workProcessId;
+          } else if (String(data.workProcessId || '').startsWith('__pending__:')) {
+            data.workProcessId = '__pending__';
+          }
+          const ports = Array.isArray(data.ports) ? data.ports as Record<string, unknown>[] : [];
+          const portKeys = new Map(ports.map((port, index) => [String(port.id), `port:${port.direction}:${nodeIndex.get(String(port.materialNodeId)) || ''}:${port.ordinal ?? index}`]));
+          data.ports = ports.map(port => ({ ...port, id: portKeys.get(String(port.id)) || `port:${port.direction}:${port.ordinal ?? 0}` }));
+          if (Array.isArray(data.portGroups)) {
+            data.portGroups = (data.portGroups as Record<string, unknown>[]).map(group => ({
+              ...group,
+              portIds: Array.isArray(group.portIds)
+                ? (group.portIds as unknown[]).map(id => portKeys.get(String(id)) || String(id))
+                : group.portIds,
+            }));
+          }
+        }
+        return data;
+      })(), nodeIndex),
+    })).sort((a, b) => String(a.key).localeCompare(String(b.key)));
     return {
-      nodes: definition.nodes.map(node => ({ kind: node.kind, data: node.data })),
+      ...Object.fromEntries(Object.entries(definition).filter(([key]) => !['nodes', 'edges', 'viewport'].includes(key))),
+      nodes,
       edges: definition.edges.map(edge => ({
-        source: index.get(edge.source), sourceHandle: edge.sourceHandle,
-        target: index.get(edge.target), targetHandle: edge.targetHandle,
-      })),
+        source: keys.get(edge.source),
+        sourceHandle: handles.get(`${edge.source}:${edge.sourceHandle}`) || edge.sourceHandle,
+        target: keys.get(edge.target),
+        targetHandle: handles.get(`${edge.target}:${edge.targetHandle}`) || edge.targetHandle,
+      })).sort((a, b) => workflowAiStableJson(a).localeCompare(workflowAiStableJson(b))),
     };
   };
   const beforeValue = normalize(before);
