@@ -183,7 +183,10 @@ describe('AIChatScreen B3/B4/B8 real result components', () => {
     const chip = StyleSheet.flatten(view.getByTestId('ai-chat-followup-0').props.style);
     expect(chip.minHeight).toBeGreaterThanOrEqual(40);
     expect(chip.maxWidth).toBeLessThanOrEqual(220);
-    expect(StyleSheet.flatten(view.getByLabelText('这个回答有帮助').props.style).height).toBeGreaterThanOrEqual(44);
+    // 性质是「触摸区至少 44」: 标准 F6 之后 👍/👎 写成 minWidth/minHeight (原来是固定 48×48), 两种写法都认
+    const thumbUp = StyleSheet.flatten(view.getByLabelText('这个回答有帮助').props.style);
+    expect(thumbUp.height ?? thumbUp.minHeight).toBeGreaterThanOrEqual(44);
+    expect(thumbUp.width ?? thumbUp.minWidth).toBeGreaterThanOrEqual(44);
     fireEvent.press(view.getByLabelText('这个回答没有帮助'));
     expect(StyleSheet.flatten(view.getByLabelText('反馈原因：不准确').props.style).minHeight).toBeGreaterThanOrEqual(44);
   });

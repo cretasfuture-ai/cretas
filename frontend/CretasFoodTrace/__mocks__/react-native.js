@@ -201,6 +201,13 @@ module.exports = {
   })),
   useColorScheme: jest.fn(() => 'light'),
   useWindowDimensions: jest.fn(() => ({ width: 375, height: 812, scale: 2, fontScale: 1 })),
+  // 2026-10-08: 对话骨架屏读「减少动态效果」。jest.config 的宽泛 'react-native' 映射让
+  // `react-native/Libraries/...` 全落到 safe-area-context 的替身上, 真的 AccessibilityInfo 够不着, 这里补一个。
+  AccessibilityInfo: {
+    isReduceMotionEnabled: jest.fn(() => Promise.resolve(false)),
+    addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+    announceForAccessibility: jest.fn(),
+  },
   Appearance: {
     getColorScheme: () => 'light',
     addChangeListener: jest.fn(() => ({ remove: jest.fn() })),

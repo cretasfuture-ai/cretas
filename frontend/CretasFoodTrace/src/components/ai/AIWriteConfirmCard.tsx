@@ -207,7 +207,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 12,
     padding: 14,
-    maxWidth: '92%',
+    // 结构化结果卡占满正文列 (标准 L5), 不再收缩成 92%
+    alignSelf: 'stretch',
   },
   collapsed: {
     marginTop: 8,

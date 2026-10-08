@@ -198,13 +198,48 @@ describe('AIChatScreen 第五幕 polish', () => {
       expect(screen.queryByTestId('ai-input-mode-row')).toBeNull();
     });
 
-    it('对照：__DEV__ 下同一条回答渲染模式 chip 与耗时', async () => {
+    // 标准 E2: 遥测开关是显式的 EXPO_PUBLIC_AI_DEBUG_TELEMETRY=1, 不再看 __DEV__
+    // (RN 网页版是开发服务器, __DEV__ 恒为 true, 业务用户验收时遥测就是这么漏出来的)。
+    it('阴性：没设开关时，即使 __DEV__ = true 也没有模式 chip、没有「4.2s」', async () => {
       (globalThis as any).__DEV__ = true;
       installTextReply('本批来自 6 头牛。');
       const screen = render(<AIChatScreen />);
       await send(screen, '这批来自哪几头牛');
-      await waitFor(() => expect(screen.getByTestId('ai-telemetry-row')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('本批来自 6 头牛。')).toBeTruthy());
+      expect(screen.queryByTestId('ai-telemetry-row')).toBeNull();
+      expect(screen.queryByText('MODE_CHIP')).toBeNull();
+      expect(screen.queryByText('4.2s')).toBeNull();
+    });
+
+    it('对照：开关设为 1 时同一条回答渲染模式 chip 与耗时', async () => {
+      (globalThis as any).__DEV__ = false;
+      installTextReply('本批来自 6 头牛。');
+      const saved = process.env.EXPO_PUBLIC_AI_DEBUG_TELEMETRY;
+      const savedSkip = process.env.RNTL_SKIP_AUTO_CLEANUP;
+      process.env.EXPO_PUBLIC_AI_DEBUG_TELEMETRY = '1';
+      // 隔离表里再加载一份 RTL 会在 test 内注册 afterEach 而报错; 关掉自动清理, 末尾手动 cleanup
+      process.env.RNTL_SKIP_AUTO_CLEANUP = 'true';
+      let rtl: any; let Screen: any; let ReactIso: any;
+      try {
+        // 开关在模块加载时读一次, 所以要在隔离的模块表里重新加载屏幕 (连 react / RTL 一起, 否则 hooks 对不上)
+        jest.isolateModules(() => {
+          ReactIso = require('react');
+          rtl = require('@testing-library/react-native');
+          Screen = require('../../../screens/factory-admin/ai-analysis/AIChatScreen').default;
+        });
+      } finally {
+        if (saved === undefined) delete process.env.EXPO_PUBLIC_AI_DEBUG_TELEMETRY;
+        else process.env.EXPO_PUBLIC_AI_DEBUG_TELEMETRY = saved;
+        if (savedSkip === undefined) delete process.env.RNTL_SKIP_AUTO_CLEANUP;
+        else process.env.RNTL_SKIP_AUTO_CLEANUP = savedSkip;
+      }
+      const screen = rtl.render(ReactIso.createElement(Screen));
+      rtl.fireEvent.press(screen.getByTestId('keyboard-toggle-btn'));
+      rtl.fireEvent.changeText(screen.getByTestId('ai-chat-input'), '这批来自哪几头牛');
+      await rtl.act(async () => { rtl.fireEvent.press(screen.getByTestId('ai-chat-send-btn')); });
+      await rtl.waitFor(() => expect(screen.getByTestId('ai-telemetry-row')).toBeTruthy());
       expect(screen.getByText('4.2s')).toBeTruthy();
+      rtl.cleanup();
     });
   });
 
