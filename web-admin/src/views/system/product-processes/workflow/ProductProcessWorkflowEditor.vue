@@ -560,6 +560,7 @@
               :context="selectedNodeContext"
               :context-label="aiContextLabel"
               :quick-prompts="aiQuickPrompts"
+              :preview-spec="previewWorkflowSpec"
               @apply-draft="applyWorkflowAIDraft"
             />
           </div>
@@ -1090,6 +1091,7 @@ import {
 } from '@/api/processProduction';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
+import { previewWorkflowAiSpec, type WorkflowAiPreview } from './workflowAiPreview';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
@@ -6736,6 +6738,11 @@ async function reloadLatestDefinition(identity: WorkflowIdentity): Promise<void>
   }
 }
 
+function previewWorkflowSpec(spec: unknown): WorkflowAiPreview {
+  if (!currentLoadedIdentity() || !canEdit.value) return { ok: false, message: '当前画布尚未加载或不可编辑，未应用配置。' };
+  return previewWorkflowAiSpec(currentDefinition(), spec);
+}
+
 async function applyWorkflowAIDraft(
   payload: Record<string, unknown>,
   sourceIdentity?: WorkflowIdentity,
@@ -6861,15 +6868,8 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
     resolved.push(wp);
   }
 
-  // 2) 会替换当前画布 → 二次确认
-  if (flowNodes.value.length > 0) {
-    try {
-      await ElMessageBox.confirm(
-        `将按 AI 描述生成 ${steps.length} 道工序的流程图，替换当前画布内容（可撤销）。继续？`,
-        'AI 生成工序流程', { type: 'warning', confirmButtonText: '生成并替换' },
-      );
-    } catch { return; }
-  }
+  // The chat panel has already shown every change and received explicit confirmation.
+  // Catalog creation above must only run after that confirmation; cancellation never enters here.
   // ⛔ 同上: 用户已经点过「生成并替换」, 再静默退出就是「AI 没起作用」的观感。
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) {
     ElMessage.warning({
