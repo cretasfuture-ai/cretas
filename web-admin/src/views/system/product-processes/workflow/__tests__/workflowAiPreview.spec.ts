@@ -5,6 +5,36 @@ import type { ProductProcessWorkflowDefinition } from '../types';
 import { EMPTY_CANVAS, LARGE_SPEC, LARGE_PATHS } from './workflowAiPreview.fixture';
 
 describe('workflow AI complete change projection', () => {
+  it('projects compiler defaults and preserved terminal packaging loss into the confirmation diff', () => {
+    const graph = {
+      ...EMPTY_CANVAS,
+      nodes: [
+        { id: 'raw', kind: 'RAW_MATERIAL', data: { name: '原料', baseUnit: 'kg' } },
+        { id: 'process', kind: 'PROCESS', data: {
+          processName: '前处理', reportingRequired: false, ports: [
+            { direction: 'INPUT', materialNodeId: 'raw', unit: 'kg' },
+            { direction: 'OUTPUT', materialNodeId: 'finished', unit: 'kg', materialKind: 'FINISHED_GOOD' },
+          ],
+        } },
+        { id: 'finished', kind: 'FINISHED_GOOD', data: {
+          name: '成品', baseUnit: 'kg', packagingBindings: [{ materialName: '成品盒', standardQuantity: 1, unit: '盒' }],
+        } },
+      ],
+      edges: [{ source: 'raw', target: 'process' }, { source: 'process', target: 'finished' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const preview = previewWorkflowAiSpec(graph, {
+      rawMaterials: ['原料'],
+      steps: [{ process: '前处理', outputs: [{ kind: 'FINISHED_GOOD', name: '成品', unit: 'kg', byproduct: false }] }],
+    });
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows.map(row => row.path)).toEqual([
+      'steps[0].outputs[0].packagingBindings',
+      'steps[0].reportingRequired',
+    ]);
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('是否报工：否 → 是');
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('包材配置');
+  });
+
   it('lists every independent field including unknown keys, false, zero and null without mutating the graph', () => {
     const before = workflowAiStableJson(EMPTY_CANVAS);
     const preview = previewWorkflowAiSpec(EMPTY_CANVAS, LARGE_SPEC);

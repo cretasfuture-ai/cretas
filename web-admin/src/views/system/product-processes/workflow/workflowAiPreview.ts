@@ -9,6 +9,7 @@ const labels: Record<string, string> = {
   rawMaterials: '入口原料', process: '名称', processCategory: '类别',
   responsibleWorkerId: '负责人 ID', responsibleWorkerName: '负责人',
   outputs: '产出', kind: '类型 kind', name: '名称', unit: '单位', byproduct: '是否副产',
+  packagingBindings: '包材配置', reportingRequired: '是否报工',
   inputs: '额外原料投入', seasonings: '辅料 / 调料投入', dosagePerKgG: '每 kg 投入克数',
   subsequentPotRatio: '后续锅比例', injectionAmount: '注射量',
 };
@@ -45,6 +46,14 @@ export function previewWorkflowAiSpec(
   const add = (path: string, text: string) => rows.push({ path, text });
   const diff = (path: string, label: string, from: unknown, to: unknown): void => {
     if (workflowAiStableJson(from) === workflowAiStableJson(to)) return;
+    // Packaging is one user-visible binding. Keep it as one confirmation row;
+    // expanding its implementation fields would make the card claim several
+    // independent edits although the generator either preserves or drops the
+    // binding as a single terminal-output property.
+    if (path.endsWith('.packagingBindings')) {
+      add(path, `${label}：${display(from)} → ${display(to)}`);
+      return;
+    }
     if (record(from) || record(to)) {
       const a = record(from) ? from : {};
       const b = record(to) ? to : {};
@@ -83,6 +92,7 @@ export function previewWorkflowAiSpec(
   }
   before.nodes.filter(node => !ordered.includes(node)).forEach(node => ordered.push(node));
   const processes = ordered.filter(node => node.kind === 'PROCESS');
+  const compilerDefaultsReporting = processes.some(node => owns(node.data as Record<string, unknown>, 'reportingRequired'));
   const oldSteps = processes.map(node => {
     const data = node.data as Record<string, unknown>;
     const ports = Array.isArray(data.ports) ? data.ports as Record<string, unknown>[] : [];
@@ -93,6 +103,9 @@ export function previewWorkflowAiSpec(
         name: material?.data.name ?? port.materialName,
         unit: material?.data.baseUnit ?? port.unit,
         byproduct: material?.data.isByproduct ?? false,
+        ...(material && owns(material.data as Record<string, unknown>, 'packagingBindings')
+          ? { packagingBindings: material.data.packagingBindings }
+          : {}),
       };
     });
     const inputs = ports.filter(port => port.direction === 'INPUT')
@@ -102,6 +115,10 @@ export function previewWorkflowAiSpec(
       .map(node => node!.data.name);
     const step: Record<string, unknown> = { process: data.processName, outputs, inputs };
     if (data.processCategory != null) step.processCategory = data.processCategory;
+    // Keep the loaded value in the old projection. The compiler creates every
+    // generated process branch with reportingRequired=true; the projected spec
+    // below supplies that implicit default when the AI omitted the field.
+    if (owns(data, 'reportingRequired')) step.reportingRequired = data.reportingRequired;
     ['responsibleWorkerId', 'responsibleWorkerName', 'injectionAmount'].forEach(key => {
       if (owns(data, key)) step[key] = data[key];
     });
@@ -127,7 +144,16 @@ export function previewWorkflowAiSpec(
       used.add(oldIndex);
       if (oldIndex !== index) add(`steps[${index}].order`, `${label}顺序：${oldIndex + 1} → ${index + 1}`);
     }
-    diff(`steps[${index}]`, label, oldIndex < 0 ? undefined : oldSteps[oldIndex], step);
+      const projectedStep = compilerDefaultsReporting
+        ? {
+          ...step,
+          ...(owns(step, 'inputs') ? {} : { inputs: [] }),
+          ...(!owns(step, 'reportingRequired')
+            ? { reportingRequired: true }
+            : {}),
+        }
+        : step;
+      diff(`steps[${index}]`, label, oldIndex < 0 ? undefined : oldSteps[oldIndex], projectedStep);
   });
   oldSteps.forEach((step, index) => {
     if (!used.has(index)) {
