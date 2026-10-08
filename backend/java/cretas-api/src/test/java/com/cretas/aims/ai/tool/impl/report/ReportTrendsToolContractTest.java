@@ -67,7 +67,7 @@ class ReportTrendsToolContractTest {
         JsonNode data = execute(Map.of("period", "month"), Map.of());
         assertThat(data.at("/data/comparison/comparison/outputChangeRate").isNull()).isTrue();
         assertThat(data.at("/data/comparison/comparison/costChangeRate").isNull()).isTrue();
-        assertThat(data.at("/data/comparison/comparison/outputChangeMessage").asText()).isEqualTo("上期无数据，无法计算环比");
+        assertThat(data.at("/data/comparison/comparison/outputChangeMessage").asText()).isEqualTo("上期产量为0，无法计算环比");
     }
 
     @Test
@@ -219,6 +219,49 @@ class ReportTrendsToolContractTest {
         JsonNode result = objectMapper.readTree(tool.execute(ToolCall.of("test-report", "report_trends", objectMapper.writeValueAsString(params)), context));
         System.out.println("F_TOOL_RESULT=" + result);
         return result;
+    }
+
+    @Test
+    void realServiceDailySeriesDisplaysEveryDateAndValueWithInclusiveRange() throws Exception {
+        LocalDate end = LocalDate.now();
+        when(productionBatchRepository.calculateDailyOutput(eq(FACTORY), any(), any()))
+                .thenAnswer(call -> BigDecimal.valueOf(java.time.temporal.ChronoUnit.DAYS.between(
+                        end.minusDays(30), call.<LocalDateTime>getArgument(1).toLocalDate()) + 1));
+        JsonNode result = execute(Map.of("days", 30), Map.of("userInput", "最近30天产量日序列"));
+        JsonNode series = result.at("/data/data/productionTrend");
+        // Existing shared analytics uses now-minus-days through today, both inclusive.
+        // Preserve that contract, but tell the user the exact endpoints and count.
+        assertThat(series.size()).isEqualTo(31);
+        assertThat(result.at("/data/comparison").isMissingNode()).isTrue();
+        verify(productionPlanRepository, never()).calculateOutputBetweenDates(anyString(), any(), any());
+        verify(productionBatchRepository, times(31)).calculateDailyOutput(eq(FACTORY), any(), any());
+        String display = formatResult(result);
+        assertThat(display).contains("起止日期：" + end.minusDays(30) + " 至 " + end,
+                "含首尾，共 31 个日数据点", "按批次创建日期", "产量日序列");
+        for (int i = 0; i < series.size(); i++) {
+            assertThat(display).contains("\n" + end.minusDays(30).plusDays(i) + "\n产量：" + (i + 1) + "\n");
+        }
+        assertThat(display).doesNotContain("productionTrend", "materialTrend", "period:", "变化率", "|");
+        System.out.println("OBS daily actual-points=" + series.size() + " display=" + display);
+    }
+
+    @Test
+    void comparisonStillDisplaysCalculatedRateRatherThanDailySummary() throws Exception {
+        stubPeriods(new BigDecimal("80"), new BigDecimal("100"), new BigDecimal("120"), new BigDecimal("110"));
+        String positive = formatResult(execute(Map.of("period", "week"), Map.of("userInput", "这周产量环比怎么样")));
+        assertThat(positive).contains("本期 120", "上期 80", "环比变化率 50%").doesNotContain("产量日序列");
+        reset(productionPlanRepository);
+        stubPeriods(BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("120"), new BigDecimal("110"));
+        String zero = formatResult(execute(Map.of("period", "week"), Map.of("userInput", "这周产量环比怎么样")));
+        assertThat(zero).contains("上期 0", "上期产量为0，无法计算环比", "上期成本为0，无法计算环比")
+                .doesNotContain("变化率 0%", "上期无数据");
+    }
+
+    private String formatResult(JsonNode result) {
+        var response = com.cretas.aims.dto.ai.IntentExecuteResponse.builder()
+                .intentCode("REPORT_TRENDS").intentCategory("REPORT").status("SUCCESS")
+                .resultData(objectMapper.convertValue(result.get("data"), Map.class)).build();
+        return new com.cretas.aims.service.impl.ResultFormatterServiceImpl().format(response);
     }
 
     @Test

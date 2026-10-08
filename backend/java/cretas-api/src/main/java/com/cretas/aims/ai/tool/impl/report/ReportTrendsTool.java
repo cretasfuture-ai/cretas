@@ -227,9 +227,11 @@ public class ReportTrendsTool extends AbstractBusinessTool {
     }
 
     private String missingMessage(Map<String, Object> base, Map<String, Object> current, String key, String label) {
-        if (base == null || base.get(key) == null
-                || new java.math.BigDecimal(base.get(key).toString()).signum() <= 0) {
+        if (base == null || base.get(key) == null) {
             return "上期无数据，无法计算" + label;
+        }
+        if (new java.math.BigDecimal(base.get(key).toString()).signum() == 0) {
+            return "上期" + ("output".equals(key) ? "产量" : "成本") + "为0，无法计算" + label;
         }
         if (current == null || current.get(key) == null) return "本期无数据，无法计算" + label;
         return "上期无数据，无法计算" + label;
