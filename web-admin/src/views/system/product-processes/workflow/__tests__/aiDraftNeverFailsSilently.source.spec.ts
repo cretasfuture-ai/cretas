@@ -72,7 +72,8 @@ function silentReturns(name: string): string[] {
   const offenders: string[] = [];
   const lineOf = (index: number) => startLine + body.slice(0, index).split('\n').length - 1;
 
-  const re = /(^|[^\w.$])return;/g;
+  // G4 (2026-10-08) 起编译/应用拆成返回值的函数: `return null;` / `return false;` 同样是退出路径
+  const re = /(^|[^\w.$])return(?: null| false)?;/g;
   let match = re.exec(body);
   while (match !== null) {
     const at = match.index + match[1].length;
@@ -95,9 +96,32 @@ function silentReturns(name: string): string[] {
     // ② 用户主动点了取消（ElMessageBox reject）—— 故意静默，已登记
     const isUserCancel = /\bcatch\s*(\([^)]*\))?\s*$/.test(header.trim());
     // ③ 交棒给另一个同样被本闸盯着的函数 —— 不是失败路径
-    const isDelegation = /await\s+buildWorkflowFromSpec\s*\(/.test(block);
+    const isDelegation = /await\s+(compileWorkflowSpec|applyPreparedWorkflowDefinition)\s*\(/.test(block);
+    // ④ 页面已切换到别的产品/版本 (加载代际变了): 这次操作作废, 不该再弹提示 —— 故意静默, 已登记
+    const lineText = (body.split('\n')[lineOf(at) - startLine] ?? '').trim();
+    const isStaleOperation = /^if \(!canContinue\(\)\) return null;$/.test(lineText);
 
-    if (!hasFeedback && !isUserCancel && !isDelegation) {
+    // ⑤ 回调里的 return (.map/.filter 的 `(row) => { ... return null; }`) 是过滤一行, 不是函数退出
+    const isCallbackReturn = (() => {
+      // 一路往外找包住这条 return 的大括号, 任何一层是箭头函数体就算回调
+      let cursor = open;
+      while (cursor > 0) {
+        if (/=>\s*$/.test(body.slice(Math.max(0, cursor - 40), cursor).trimEnd())) return true;
+        let d = 0;
+        let next = -1;
+        for (let i = cursor - 1; i >= 0; i -= 1) {
+          if (body[i] === '}') d += 1;
+          else if (body[i] === '{') {
+            if (d === 0) { next = i; break; }
+            d -= 1;
+          }
+        }
+        cursor = next;
+      }
+      return false;
+    })();
+
+    if (!hasFeedback && !isUserCancel && !isDelegation && !isStaleOperation && !isCallbackReturn) {
       const line = body.split('\n')[lineOf(at) - startLine] ?? '';
       offenders.push(`${name} 第 ${lineOf(at)} 行: ${line.trim()}`);
     }
@@ -109,12 +133,17 @@ function silentReturns(name: string): string[] {
 describe('AI 生成的工序「应用到草稿」不许静默失败', () => {
   it('仪器自检：两个函数都真的被解析到了（否则「零静默」是恒真式）', () => {
     const apply = functionBody('applyWorkflowAIDraft');
-    const build = functionBody('buildWorkflowFromSpec');
+    // G4 把 buildWorkflowFromSpec 拆成 compileWorkflowSpec (编译, 预览时 dryRun 不弹提示) + applyPreparedWorkflowDefinition (落到画布)
+    const build = functionBody('compileWorkflowSpec');
+    const prepared = functionBody('applyPreparedWorkflowDefinition');
     expect(apply.body.length, 'applyWorkflowAIDraft 函数体为空 —— 解析器坏了').toBeGreaterThan(400);
-    expect(build.body.length, 'buildWorkflowFromSpec 函数体为空 —— 解析器坏了').toBeGreaterThan(400);
+    expect(build.body.length, 'compileWorkflowSpec 函数体为空 —— 解析器坏了').toBeGreaterThan(400);
+    expect(prepared.body.length, 'applyPreparedWorkflowDefinition 函数体为空 —— 解析器坏了').toBeGreaterThan(200);
     // 阳性对照: 这两个函数里确实有 return; 语句可供本闸检查。
-    expect(apply.body).toContain('return;');
-    expect(build.body).toContain('return;');
+    // G4 后 applyWorkflowAIDraft 的出口都带返回值 (交棒 / 提示后 return false), 自检只要求它确实有出口
+    expect(apply.body).toContain('return');
+    expect(build.body).toMatch(/return null;/);
+    expect(prepared.body).toMatch(/return false;/);
   });
 
   it('applyWorkflowAIDraft: 没有任何无提示的退出路径', () => {
@@ -124,9 +153,16 @@ describe('AI 生成的工序「应用到草稿」不许静默失败', () => {
     ).toEqual([]);
   });
 
-  it('buildWorkflowFromSpec: 没有任何无提示的退出路径', () => {
+  it('compileWorkflowSpec: 没有任何无提示的退出路径', () => {
     expect(
-      silentReturns('buildWorkflowFromSpec'),
+      silentReturns('compileWorkflowSpec'),
+      '这些退出路径不给用户任何提示 —— 用户会读成「AI 没起作用」',
+    ).toEqual([]);
+  });
+
+  it('applyPreparedWorkflowDefinition: 没有任何无提示的退出路径', () => {
+    expect(
+      silentReturns('applyPreparedWorkflowDefinition'),
       '这些退出路径不给用户任何提示 —— 用户会读成「AI 没起作用」',
     ).toEqual([]);
   });
