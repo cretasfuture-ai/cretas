@@ -262,6 +262,7 @@ describe('AIChatScreen 一线卡片 · 带意图码直达 (质检员 2026-10-07)
 
   it.each([
     [0, '今天待质检的批次', 'RECEIVE_QUALITY_CHECK_TODAY'],
+    [1, '登记质检不良', 'QUALITY_DEFECT_RECORD'],
     [2, '质检统计', 'QUALITY_STATS'],
   ])('质检员 card-%i「%s」: 请求里带着意图码 %s (服务端不再识别、不再弹二选一)', async (index, phrase, code) => {
     asRole('quality_inspector');
@@ -276,7 +277,6 @@ describe('AIChatScreen 一线卡片 · 带意图码直达 (质检员 2026-10-07)
   });
 
   it.each([
-    ['quality_inspector', 1, '登记质检不良'],
     ['quality_inspector', 3, '上班打卡'],
     ['warehouse_worker', 0, '查询原材料库存'],
     ['operator', 1, '今天我的工序任务'],

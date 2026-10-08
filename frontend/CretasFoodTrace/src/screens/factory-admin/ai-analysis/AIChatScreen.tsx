@@ -82,6 +82,7 @@ interface SuggestedAction {
 interface FollowUpSuggestion {
   label: string;
   question: string;
+  intentCode?: string;
 }
 
 interface RestaurantAgentLaunch {
@@ -910,7 +911,8 @@ function AIChatScreenContent() {
             const candidate = item as Record<string, unknown>;
             const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
             const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
-            return question && label ? { label, question } : undefined;
+            const intentCode = typeof candidate.intentCode === 'string' ? candidate.intentCode.trim() : undefined;
+            return question && label ? { label, question, intentCode } : undefined;
           }).filter((item): item is FollowUpSuggestion => item !== undefined);
 
           // NEED_MORE_INFO: 优先使用 clarificationQuestions 构建友好回复 (正文在下面选项定下来之后再拼:
@@ -1458,7 +1460,10 @@ function AIChatScreenContent() {
                   accessibilityRole="button"
                   accessibilityLabel={followUp.label}
                   style={[styles.followUpChip, tone.suggestedAction]}
-                  onPress={() => { void handleSend(followUp.question, { displayText: followUp.label }); }}
+                  onPress={() => { void handleSend(followUp.question, {
+                    displayText: followUp.label,
+                    ...(followUp.intentCode ? { intentCode: followUp.intentCode } : {}),
+                  }); }}
                   disabled={isLoading}
                 >
                   <Text variant="bodyLarge" numberOfLines={1} ellipsizeMode="tail" style={[styles.centeredText, tone.onPrimaryContainer]}>

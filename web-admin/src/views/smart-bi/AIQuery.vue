@@ -42,6 +42,7 @@ import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads,
 import { executeIntent, fetchCachedXlsx, submitIntentFeedback, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 import { usePermissionStore } from '@/store/modules/permission';
 import AiOperationCard from './components/chat/AiOperationCard.vue';
+import { buildBackendColumnLabels, resolveColumnLabel, columnMinWidth } from './components/chat/aiTableColumns';
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
 import { pickDefaultDataSource } from './composables/useDataSourceSelect';
@@ -104,6 +105,22 @@ const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+
+/**
+ * AI 对话标准 E2: 开发者遥测的显式开关。URL 带 `?aiDebug=1` 才显示意图码 / 置信度 / 耗时 / SQL / warnings /
+ * 「秒回」/「已物化 N」这类给开发者看的东西; 默认业务用户一律看不到。
+ * ⛔ 不用 import.meta.env.DEV 当开关: 本地 dev server 上它恒为 true, 验收时就会漏出来。
+ */
+const aiDebug = computed(() => route.query?.aiDebug === '1');
+
+/**
+ * AI 对话标准 S2/S3: 对话区按钮、芯片 ≥ 32px (Element Plus default 尺寸 = 32px, small = 24px)。
+ * 餐饮租户保持原样 (small) —— 餐饮不在本次标准范围内。
+ */
+const uiBtnSize = computed<'small' | 'default'>(() => (isRestaurantTenant.value ? 'small' : 'default'));
+
+/** AI 对话标准 W1: 骨架屏 3 条, 宽度 92% / 78% / 62% */
+const SKELETON_BAR_WIDTHS = [92, 78, 62] as const;
 
 // 输入框
 const inputQuery = ref('');
@@ -1033,6 +1050,19 @@ const isTyping = ref(false);
 // SSE 降级状态
 const sseWarningVisible = ref(false);
 const sseRetryVisible = ref(false);
+/**
+ * AI 对话标准 W2 / H5: 超时和失败的文案必须明确说「没有执行任何写操作」
+ * (用户在对话里发的可能是写请求, 超时 / 失败后最怕的是不知道「到底办没办」)。
+ */
+// 餐饮租户不在本次标准范围内: 文案保持原样 (withNoWriteNote 原样返回, 超时文案用旧句)。
+const NO_WRITE_NOTE = '没有执行任何写操作';
+const SSE_TIMEOUT_TEXT_LEGACY = '连接超时，服务响应较慢。';
+const SSE_TIMEOUT_TEXT_STD = `连接超时，服务响应较慢（${NO_WRITE_NOTE}）。可以点「重新提问」再试一次。`;
+const sseTimeoutText = computed(() => (isRestaurantTenant.value ? SSE_TIMEOUT_TEXT_LEGACY : SSE_TIMEOUT_TEXT_STD));
+function withNoWriteNote(text: string): string {
+  if (isRestaurantTenant.value || text.includes(NO_WRITE_NOTE)) return text;
+  return `${text}（${NO_WRITE_NOTE}）`;
+}
 let sseWarningTimer: ReturnType<typeof setTimeout> | null = null;
 let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRetryQuery = '';
@@ -1298,14 +1328,14 @@ async function requestOperationPreview(
       msg.operationResponse = res;
     } else {
       msg.operationResponse = undefined;
-      msg.content = customerSafeAnswer(res.message || res.formattedText || '操作预览生成失败，请重试。');
+      msg.content = customerSafeAnswer(res.message || res.formattedText || withNoWriteNote('操作预览生成失败，请重试。'));
     }
   } catch {
     const i = idx();
     if (i === -1) return;
     const msg = chatHistory.value[i];
     msg.operationResponse = undefined;
-    msg.content = '操作预览生成失败，请稍后重试。';
+    msg.content = withNoWriteNote('操作预览生成失败，请稍后重试。');
   } finally {
     scrollToBottom();
   }
@@ -1703,7 +1733,9 @@ async function tryJavaIntentChat(
       responseStatus === 'FAILED' ||
       responseStatus === 'ERROR'
     ) {
-      msg.content = customerSafeAnswer(res.message || res.formattedText || '已理解您的问题，但暂时无法完成分析。');
+      const failedText = customerSafeAnswer(res.message || res.formattedText || '已理解您的问题，但暂时无法完成分析。');
+      // W2 / H5: 失败 / 拒绝类状态的文案说明没有执行任何写操作 (WRITE_CONFIRM_REQUIRED 只是「需要确认」, 不是失败)
+      msg.content = responseStatus === 'WRITE_CONFIRM_REQUIRED' ? failedText : withNoWriteNote(failedText);
       msg.loading = false;
       return 'handled';
     }
@@ -1908,7 +1940,7 @@ async function handleSendMessage() {
         const idx = getMessageIndex();
         if (idx !== -1) {
           const msg = chatHistory.value[idx];
-          msg.content = '连接超时，服务响应较慢。';
+          msg.content = sseTimeoutText.value;
           msg.loading = false;
         }
         scrollToBottom();
@@ -2037,6 +2069,8 @@ async function handleSendMessage() {
       } else if (error && error.length < 100) {
         friendlyMessage = error;
       }
+      // W2 / H5: 失败文案一律说明没有执行任何写操作
+      friendlyMessage = withNoWriteNote(friendlyMessage);
 
       // Fall back to non-streaming
       try {
@@ -2157,7 +2191,7 @@ async function handleNL2SQLQuery(query: string) {
       chatHistory.value[idx] = {
         id: assistantId,
         role: 'assistant',
-        content: res.message || '查询失败',
+        content: withNoWriteNote(res.message || '查询失败'),
         timestamp: new Date(),
         sqlResult: res.sql ? res : undefined,
         loading: false,
@@ -2169,7 +2203,7 @@ async function handleNL2SQLQuery(query: string) {
       chatHistory.value[idx] = {
         id: assistantId,
         role: 'assistant',
-        content: '查询失败，请稍后重试',
+        content: withNoWriteNote('查询失败，请稍后重试'),
         timestamp: new Date(),
         loading: false,
       };
@@ -2563,6 +2597,32 @@ function handleNewTopic() {
   scrollToBottom(true);
 }
 
+/**
+ * V3 表头: 后端给的中文 label > 中文列名原样 > web-admin 已有列名映射 > 英文列名照原样。
+ * 一列都不隐藏。餐饮租户保持原样 (列名原样), 不在本次标准范围内。
+ */
+function messageColumnLabel(message: ChatMessage, col: string): string {
+  if (isRestaurantTenant.value) return col;
+  return resolveColumnLabel(col, buildBackendColumnLabels(message.sqlResult?.fields));
+}
+
+/** G1: 非餐饮租户 ≤ 8 列不设固定 min-width (自适应, 1440 宽不横滚); 餐饮保持 100。 */
+function tableColumnMinWidth(columnCount: number): string | undefined {
+  return isRestaurantTenant.value ? '100' : columnMinWidth(columnCount);
+}
+
+/** N2: 悬停出现的「复制」按钮 —— 复制这条消息的正文 (助手 / 用户都有)。 */
+async function handleCopyMessage(message: ChatMessage) {
+  const text = message.content || '';
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    ElMessage.success('已复制');
+  } catch {
+    ElMessage.error('复制失败，请手动选中文字复制');
+  }
+}
+
 // 格式化时间
 function formatTime(date: Date): string {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
@@ -2663,24 +2723,49 @@ function handleKeydown(event: KeyboardEvent) {
       />
 
       <!-- 对话历史区 -->
-      <div class="chat-history" ref="chatContainerRef" @scroll="onChatScroll">
+      <!-- AI 对话标准 (docs/ux/ai-chat-standard.md §3): 非餐饮租户走 .ai-std 版式 ——
+           助手全宽无头像无气泡、不打时间戳、一套系统字体栈; 餐饮租户保持原样 (不在本次标准范围内)。 -->
+      <div class="chat-history" :class="{ 'ai-std': !isRestaurantTenant }" ref="chatContainerRef" @scroll="onChatScroll">
+        <div class="chat-thread" data-testid="aiq-thread">
         <div
           v-for="(message, msgIdx) in chatHistory"
           :key="message.id"
           class="chat-message"
           :class="message.role"
         >
-          <div class="message-avatar">
+          <div v-if="isRestaurantTenant" class="message-avatar">
             <el-icon v-if="message.role === 'user'"><User /></el-icon>
             <el-icon v-else><Cpu /></el-icon>
           </div>
           <div class="message-content">
-            <div class="message-header">
+            <div v-if="isRestaurantTenant" class="message-header">
               <span class="role-name">{{ message.role === 'user' ? '我' : 'AI 助手' }}</span>
               <span class="message-time">{{ formatTime(message.timestamp) }}</span>
             </div>
-            <div class="message-body">
-              <div v-if="message.loading" class="loading-indicator">
+            <div class="message-body" :data-testid="message.role === 'assistant' ? 'aiq-assistant-body' : 'aiq-user-bubble'">
+              <!-- W1: 非餐饮租户加载中用骨架屏 (3 条, 92% / 78% / 62%) + 一行进度文字, 不用单个转圈 -->
+              <div
+                v-if="message.loading && !isRestaurantTenant"
+                class="loading-skeleton"
+                data-testid="aiq-loading-skeleton"
+                role="status"
+                aria-live="polite"
+              >
+                <span
+                  v-for="w in SKELETON_BAR_WIDTHS"
+                  :key="w"
+                  class="skeleton-bar"
+                  data-testid="aiq-skeleton-bar"
+                  :style="{ width: `${w}%` }"
+                ></span>
+                <div class="skeleton-caption">
+                  <span>{{ message.content || '正在思考...' }}</span>
+                  <span v-if="sseWarningVisible && !sseRetryVisible" class="sse-warning-hint">
+                    <el-icon><Warning /></el-icon> 网络连接不稳定
+                  </span>
+                </div>
+              </div>
+              <div v-else-if="message.loading" class="loading-indicator">
                 <el-icon class="is-loading"><Loading /></el-icon>
                 <span>{{ message.content || '正在思考...' }}</span>
                 <span v-if="sseWarningVisible && !sseRetryVisible" class="sse-warning-hint">
@@ -2688,9 +2773,9 @@ function handleKeydown(event: KeyboardEvent) {
                 </span>
               </div>
               <!-- SSE retry button shown after 15s timeout -->
-              <div v-if="sseRetryVisible && !message.loading && !message.streaming && message.content === '连接超时，服务响应较慢。'" class="sse-retry-area">
+              <div v-if="sseRetryVisible && !message.loading && !message.streaming && message.content === sseTimeoutText" class="sse-retry-area" data-testid="aiq-timeout">
                 <span class="sse-retry-text">{{ message.content }}</span>
-                <el-button type="primary" size="small" :icon="Refresh" @click="handleSseRetry">重新提问</el-button>
+                <el-button type="primary" :size="uiBtnSize" :icon="Refresh" @click="handleSseRetry">重新提问</el-button>
               </div>
               <template v-else>
                 <!-- AI 读写分离: 咨询 tab 撞写意图 → 拦截卡 (前往操作页 / 只读提示) -->
@@ -2705,7 +2790,7 @@ function handleKeydown(event: KeyboardEvent) {
                   <el-button
                     v-if="hasAnyWrite"
                     type="primary"
-                    size="small"
+                    :size="uiBtnSize"
                     class="read-blocked-jump"
                     @click="handleJumpToOperate(message)"
                   >前往操作页</el-button>
@@ -2717,6 +2802,8 @@ function handleKeydown(event: KeyboardEvent) {
                   :response="message.operationResponse"
                   :factory-id="factoryId ?? ''"
                 />
+                <!-- 非餐饮租户加载中: 状态文字已在骨架屏下面那一行, 不再把同一句话当正文渲染第二遍 -->
+                <template v-else-if="message.role === 'assistant' && message.loading && !isRestaurantTenant"></template>
                 <div v-else-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ customerSafeAnswer(message.content) }}</div>
                 <div v-else-if="message.role === 'assistant'" class="message-text markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <div v-else class="message-text">{{ message.content }}</div>
@@ -2735,7 +2822,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <div v-if="message.role === 'assistant' && !message.streaming && message.truncated" class="truncated-retry-bar">
                   <el-button
                     type="primary"
-                    size="small"
+                    :size="uiBtnSize"
                     :icon="Refresh"
                     plain
                     @click="handleTruncatedRetry(message)"
@@ -2837,40 +2924,46 @@ function handleKeydown(event: KeyboardEvent) {
                 </div>
 
                 <!-- NL2SQL 结果面板 -->
-                <div v-if="message.sqlResult" class="sql-result-panel">
+                <!-- E1/E2: 意图码、置信度、耗时、SQL、warnings 是开发者遥测, 只有 ?aiDebug=1 才显示;
+                     业务用户只看到「共 N 行」。 -->
+                <div v-if="message.sqlResult && (aiDebug || message.sqlResult.rowCount != null)" class="sql-result-panel" data-testid="aiq-sql-panel">
                   <div class="sql-meta">
-                    <el-tag size="small" :type="message.sqlResult.success ? 'success' : 'danger'">
-                      {{ message.sqlResult.intent || 'QUERY' }}
-                    </el-tag>
-                    <span v-if="message.sqlResult.confidence" class="sql-confidence">
-                      置信度 {{ (message.sqlResult.confidence * 100).toFixed(0) }}%
-                    </span>
-                    <span v-if="message.sqlResult.executionTimeMs" class="sql-time">
-                      {{ message.sqlResult.executionTimeMs }}ms
-                    </span>
-                    <span v-if="message.sqlResult.rowCount != null" class="sql-rows">
-                      {{ message.sqlResult.rowCount }} 行
+                    <template v-if="aiDebug">
+                      <el-tag size="small" :type="message.sqlResult.success ? 'success' : 'danger'" data-testid="aiq-sql-intent">
+                        {{ message.sqlResult.intent || 'QUERY' }}
+                      </el-tag>
+                      <span v-if="message.sqlResult.confidence" class="sql-confidence" data-testid="aiq-sql-confidence">
+                        置信度 {{ (message.sqlResult.confidence * 100).toFixed(0) }}%
+                      </span>
+                      <span v-if="message.sqlResult.executionTimeMs" class="sql-time" data-testid="aiq-sql-time">
+                        {{ message.sqlResult.executionTimeMs }}ms
+                      </span>
+                    </template>
+                    <span v-if="message.sqlResult.rowCount != null" class="sql-rows" data-testid="aiq-sql-rows">
+                      共 {{ message.sqlResult.rowCount }} 行
                     </span>
                   </div>
-                  <div v-if="message.sqlResult.sql" class="sql-code">
-                    <pre><code>{{ message.sqlResult.sql }}</code></pre>
-                  </div>
-                  <div v-if="message.sqlResult.warnings?.length" class="sql-warnings">
-                    <el-tag v-for="(w, i) in message.sqlResult.warnings" :key="i" size="small" type="warning" style="margin: 2px">
-                      {{ w }}
-                    </el-tag>
-                  </div>
+                  <template v-if="aiDebug">
+                    <div v-if="message.sqlResult.sql" class="sql-code" data-testid="aiq-sql-code">
+                      <pre><code>{{ message.sqlResult.sql }}</code></pre>
+                    </div>
+                    <div v-if="message.sqlResult.warnings?.length" class="sql-warnings" data-testid="aiq-sql-warnings">
+                      <el-tag v-for="(w, i) in message.sqlResult.warnings" :key="i" size="small" type="warning" style="margin: 2px">
+                        {{ w }}
+                      </el-tag>
+                    </div>
+                  </template>
                 </div>
 
-                <!-- 表格展示 -->
-                <div v-if="message.table" class="message-table">
+                <!-- 表格展示: 一列都不隐藏 (V3 只换表头文字); ≤ 8 列自适应列宽不横滚 (G1) -->
+                <div v-if="message.table" class="message-table" data-testid="aiq-table">
                   <el-table :data="message.table.data" stripe border size="small" max-height="400">
                     <el-table-column
                       v-for="col in message.table.columns"
                       :key="col"
-                      :label="col"
+                      :label="messageColumnLabel(message, col)"
                       :prop="col"
-                      min-width="100"
+                      :min-width="tableColumnMinWidth(message.table.columns.length)"
                     />
                   </el-table>
                 </div>
@@ -2885,7 +2978,7 @@ function handleKeydown(event: KeyboardEvent) {
                   class="message-deep-analysis"
                 >
                   <el-button
-                    size="small"
+                    :size="uiBtnSize"
                     type="primary"
                     plain
                     :icon="ChatDotRound"
@@ -2894,7 +2987,7 @@ function handleKeydown(event: KeyboardEvent) {
                     深入分析 / 为什么这样
                   </el-button>
                   <el-button
-                    size="small"
+                    :size="uiBtnSize"
                     plain
                     @click="triggerImprovementSuggestions(message)"
                   >
@@ -2911,7 +3004,7 @@ function handleKeydown(event: KeyboardEvent) {
                   <el-button
                     v-for="(q, i) in relatedFollowups(message.templateCode)"
                     :key="i"
-                    size="small"
+                    :size="uiBtnSize"
                     type="info"
                     plain
                     round
@@ -2932,7 +3025,7 @@ function handleKeydown(event: KeyboardEvent) {
                   <el-button
                     v-for="(f, i) in message.suggestedFollowups"
                     :key="i"
-                    size="small"
+                    :size="uiBtnSize"
                     type="info"
                     plain
                     round
@@ -2954,7 +3047,7 @@ function handleKeydown(event: KeyboardEvent) {
                   <el-button
                     v-for="(f, i) in timeFollowups(msgIdx > 0 ? chatHistory[msgIdx - 1]?.content : '')"
                     :key="i"
-                    size="small"
+                    :size="uiBtnSize"
                     type="success"
                     plain
                     round
@@ -2972,19 +3065,23 @@ function handleKeydown(event: KeyboardEvent) {
                 >
                   <span class="feedback-label">这个回答有用吗?</span>
                   <el-button
-                    size="small"
+                    :size="uiBtnSize"
                     :type="message.feedbackValue === 1 ? 'success' : 'default'"
                     plain
                     @click="sendFeedback(message, 1)"
  > 有用</el-button>
                   <el-button
-                    size="small"
+                    :size="uiBtnSize"
                     :type="message.feedbackValue === -1 ? 'danger' : 'default'"
                     plain
                     @click="sendFeedback(message, -1)"
  > 不准确</el-button>
                 </div>
               </template>
+            </div>
+            <!-- N2: 悬停 (或键盘聚焦) 时出现「复制」; 助手和用户消息都有 -->
+            <div v-if="!isRestaurantTenant && !message.loading && message.content" class="message-actions">
+              <el-button text :size="uiBtnSize" data-testid="aiq-copy" @click="handleCopyMessage(message)">复制</el-button>
             </div>
           </div>
         </div>
@@ -3001,7 +3098,7 @@ function handleKeydown(event: KeyboardEvent) {
               v-for="cat in templateCategories"
               :key="cat.key"
               :type="selectedCategory === cat.key ? 'primary' : 'default'"
-              size="small"
+              :size="uiBtnSize"
               round
               @click="selectedCategory = selectedCategory === cat.key ? '' : cat.key"
             >
@@ -3009,7 +3106,7 @@ function handleKeydown(event: KeyboardEvent) {
             </el-button>
             <el-button
               v-if="selectedCategory"
-              size="small"
+              :size="uiBtnSize"
               text
               @click="selectedCategory = ''"
             >
@@ -3033,6 +3130,7 @@ function handleKeydown(event: KeyboardEvent) {
             </div>
           </div>
         </div>
+        </div><!-- /.chat-thread -->
       </div>
 
       <!-- 快捷问题 (hide when conversation has started to save space) -->
@@ -3087,7 +3185,7 @@ function handleKeydown(event: KeyboardEvent) {
           <el-button
             v-for="(q, index) in quickQuestions"
             :key="index"
-            size="small"
+            :size="uiBtnSize"
             round
             @click="handleQuickQuestion(q)"
           >
@@ -3097,11 +3195,12 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
 
       <!-- 输入区域 -->
-      <div class="input-area">
+      <div class="input-area" :class="{ 'ai-std-input': !isRestaurantTenant }" data-testid="aiq-input-area">
         <el-autocomplete
           v-model="inputQuery"
           ref="inputRef"
           class="query-autocomplete"
+          :size="isRestaurantTenant ? 'default' : 'large'"
           :fetch-suggestions="fetchAutocomplete"
           :placeholder="queryPlaceholder"
           :aria-label="isRestaurantTenant
@@ -3118,7 +3217,8 @@ function handleKeydown(event: KeyboardEvent) {
           <template #default="{ item }">
             <div class="suggestion-item">
               <span class="suggestion-text">{{ item.value }}</span>
- <span class="suggestion-tag"> 秒回</span>
+ <!-- 「秒回」是命中缓存的内部标记 (E1「快速响应」徽标同类): 业务用户不看, ?aiDebug=1 才显示; 餐饮保持原样 -->
+ <span v-if="aiDebug || isRestaurantTenant" class="suggestion-tag"> 秒回</span>
             </div>
           </template>
         </el-autocomplete>
@@ -3144,7 +3244,7 @@ function handleKeydown(event: KeyboardEvent) {
             v-for="chip in recommendChips"
             :key="chip.code"
             class="recommend-chip"
-            size="small"
+            :size="uiBtnSize"
             round
             :type="chip.isRecommended ? 'primary' : 'default'"
             :plain="!chip.isRecommended"
@@ -3152,8 +3252,9 @@ function handleKeydown(event: KeyboardEvent) {
             @click="handleRecommendChip(chip)"
           >
             {{ recommendChipLabel(chip) }}
+            <!-- 「已物化 N」是缓存命中数, 开发者遥测: 只有 ?aiDebug=1 才显示 -->
             <el-tag
-              v-if="chip.materializationCount > 0"
+              v-if="aiDebug && chip.materializationCount > 0"
               class="recommend-chip-badge"
               size="small"
               :type="chip.isRecommended ? 'success' : 'info'"
@@ -3544,6 +3645,171 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
+// ── AI 对话标准 (docs/ux/ai-chat-standard.md §3, 桌面 1440 宽) ──────────────
+// 只作用于 .chat-history.ai-std (= 非餐饮租户); 上面 .chat-message 的原样式不动, 餐饮租户继续用它。
+.chat-history.ai-std {
+  // T1: 对话区一套系统字体栈 (⛔ 不改全局 --font-family)
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+  // L1: 消息列居中, 最宽 768px, 不铺满 1440
+  .chat-thread {
+    max-width: 768px;
+    margin: 0 auto;
+  }
+
+  .template-section {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .template-label {
+    font-size: 16px;
+  }
+
+  .template-desc {
+    font-size: 13px;
+  }
+
+  .chat-message {
+    gap: 0;
+
+    .message-content {
+      min-width: 0;
+    }
+
+    // L1: 助手消息无头像、无气泡 —— 正文直接排在页面上
+    &.assistant {
+      display: block;
+
+      .message-content {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .message-body {
+        padding: 0;
+        background: transparent;
+        box-shadow: none;
+        border: 0;
+        border-radius: 0;
+      }
+    }
+
+    // L2: 只有用户消息是浅色气泡, 靠右, 最宽 min(70%, 560px), 圆角 12, 内边距 10px 12px
+    &.user {
+      margin-bottom: 8px;
+
+      .message-content {
+        max-width: min(70%, 560px);
+      }
+
+      .message-body {
+        padding: 10px 12px;
+        background: var(--el-fill-color, #f0f2f5);
+        color: var(--el-text-color-primary, #303133);
+        border-radius: 12px;
+      }
+
+      .message-text {
+        color: var(--el-text-color-primary, #303133);
+      }
+    }
+
+    // T2 / T4: 正文 16px, 行高 1.6, 字距 0; 标题 18-20px
+    .message-text {
+      font-size: 16px;
+      line-height: 1.6;
+      letter-spacing: 0;
+
+      &.markdown-body {
+        :deep(h1) { font-size: 20px; }
+        :deep(h2) { font-size: 18px; }
+        :deep(h3) { font-size: 16px; }
+        :deep(code) { font-size: 13px; }
+        :deep(th), :deep(td) { font-size: 13px; }
+      }
+    }
+
+    .sse-retry-area .sse-retry-text {
+      font-size: 16px;
+    }
+
+    // L5 / G1: 结果表格占满正文列
+    .message-table {
+      max-width: 100%;
+    }
+
+    // N2: 悬停 / 键盘聚焦时出现「复制」
+    .message-actions {
+      display: flex;
+      min-height: 32px;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+
+    &.user .message-actions {
+      justify-content: flex-end;
+    }
+
+    &:hover .message-actions,
+    &:focus-within .message-actions {
+      opacity: 1;
+    }
+  }
+
+  // W1: 骨架屏 —— 3 条, 高 14, 圆角 5, 1.5s 闪烁
+  .loading-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0;
+  }
+
+  .skeleton-bar {
+    display: block;
+    height: 14px;
+    border-radius: 5px;
+    background: linear-gradient(
+      90deg,
+      var(--el-fill-color, #f0f2f5) 25%,
+      var(--el-fill-color-darker, #e6e8eb) 37%,
+      var(--el-fill-color, #f0f2f5) 63%
+    );
+    background-size: 400% 100%;
+    animation: aiq-skeleton-shimmer 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-caption {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--el-text-color-secondary, #909399);
+  }
+}
+
+@keyframes aiq-skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+// S4: 输入框圆角 8、单行高 40-44、最高 200、内边距 12、正文 16px
+.input-area.ai-std-input {
+  .query-autocomplete {
+    :deep(.el-input__wrapper) {
+      min-height: 40px;
+      max-height: 200px;
+      padding: 1px 12px;
+      border-radius: 8px;
+    }
+
+    :deep(.el-input__inner) {
+      font-size: 16px;
+    }
+  }
+}
+
 // 快捷问题
 .quick-questions {
   padding: 12px 20px;
@@ -3889,6 +4155,9 @@ function handleKeydown(event: KeyboardEvent) {
 @media (prefers-reduced-motion: reduce) {
   .quick-questions--restaurant .restaurant-primary-questions .el-button,
   .template-card { transition: none; }
+
+  // W1: 「减少动态效果」时骨架屏静止
+  .chat-history.ai-std .skeleton-bar { animation: none; }
 }
 
 // ── AI 读写分离 (2026-07-23) ──────────────────────────────────────────
@@ -3969,7 +4238,7 @@ function handleKeydown(event: KeyboardEvent) {
     white-space: nowrap;
   }
   .suggestion-tag {
-    font-size: 11px;
+    font-size: 12px;
     color: #67c23a;
     margin-left: 12px;
     flex-shrink: 0;

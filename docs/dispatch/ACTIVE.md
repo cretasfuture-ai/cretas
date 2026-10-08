@@ -6,37 +6,10 @@
 
 ## 在飞任务
 
-- `QI-DEFECT-CLOSEOUT-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — A1/A3/A4完成，四项运行时变异已红并恢复；A2显式首次缺参续轮未获全链证据，保留卡配置；root最终选择器；只到PR，不合并部署。
-- `AICHAT-MOBILE-20261007` — `review` — Owner root — Base `000054905703651450d2d52e109da4a3131221dc` — PR #954，head 282d58d04a；195测试/tsc/九项变异/手机截图通过；后端追问生成待Owner；只到PR，不合并部署。
-- `AICHAT-INTERACTION-TESTS-20261007` — `review` — Owner root — Base `1b67367c7d` — 独立B5/B6/B7测试已交root且进入PR #954；8测试通过；九项最终变异由root重验；保留scope至合并归档。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
 - `F006-MOBILE-R44-20261005` — `queued` — Owner root/只读追踪 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — F006状态参数缺省/available/AVAILABLE三GET同200行含77已耗尽/用完。PageRequest有status但列表服务未用；库位/临期实际UI未复现；临期需保留EXPIRED，后续明确状态集及查询/JPA门禁。0变更。
 
 - `F006-MOBILE-CAMPAIGN-20261003` — `in-progress` — Owner root/手机测试 — Base `b2c884402b` — #921/#923已合；18角色首页与162只读GET/日志核验，BOM跨收料人通过。APK18及老板Mini正常/忙碌/恢复已验；rex Canada永久sudo通过。设备QA900新增编辑已保存；R64参数/错误提示/详情修复本PR归档，待新APK实测。完整业务/QC/AI异常未全验。
-
-
-
-
-
-
-
 
 - `CRETAS-ORG-20261003-ORGANIZER` — `review` — Owner: `01a10269-8fb3-7432-a2bf-89fde67ac88e` — Base `71b4e430cba9405a9a2d270214ea62e796d6d3f3` — 独占本批ACTIVE/archive；四修复合并、旧业务FAIL/pending保留；35e固定制品及新两题预算见archive。
 
@@ -47,12 +20,6 @@
 - `CRETAS-ORG-20261003-G5` — `blocked` — Owner: `01a10277-181f-7f71-83ce-ea033d6d2876` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR884已合并、代码scope已释放；标准22过，新版本真样本未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G6` — `blocked` — Owner: `01a10277-199d-7fa2-b130-369d12f7e030` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR882已合并、代码scope已释放；41目标过，无设备/业务新验收。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
 - `CRETAS-ORG-20261003-G7` — `blocked` — Owner: `01a10277-1af9-7203-b775-96ff673b87f8` — Base `e89e75057c2eab8d961010ae9a53f02442132aa6` — PR885草稿hold；新MASS合同0/1/名称漂移，UNKNOWN未发、剩1暂停；原FAIL保留，来源/UI未验。 详细scope见archive/2026-10-03-local-organizer-seven-sessions.md。
-
-
-
-
-
-
 
 每条 ≤ 300 字：ID / 状态 / Owner / Base / 一句话目标与当前阻塞点。详情锚点 = `archive/2026-09-05-active-entries.md#<小写 id>`。
 
@@ -109,25 +76,6 @@
 
 ## Scope 锁地图
 
-- `QI-DEFECT-CLOSEOUT-20261007`：QualityDefectRecordTool、缺陷类型词表/追问、必要SSE续轮及对应Java测试、质检首页卡片配置与对应RN测试。验收：Quality*Test,SseStreaming*Test,ToolDispatch*Test,Clarification*Test,FrontlineAiWriteGrant*Test + RN目标jest/tsc；禁止Entity/Repository/迁移/生产写入。
-- `AICHAT-MOBILE-20261007`：RN AIChatScreen、components/ai/**、common/MarkdownRenderer正文样式接口、jest.config精确MD映射、相关API类型/客户端/测试、docs/ux/aichat-mobile-20261007.md；root最终验证；验收真实挂载jest/tsc/375×812截图/变异；禁餐饮/后端写接口；质检卡意图A独占。
-- `AICHAT-INTERACTION-TESTS-20261007`：B worktree新建src/__tests__/integration/screens/AIChatScreenInteractions20261007.test.tsx及D:/Temp/claude/codex-aichat-evidence/interaction-*脚本证据；验收npx jest该文件与逐行为变异；只IO/native边界桩，不改实现/台账/其他测试。共享jest串行，B主Owner暂不测试。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915`：仅新建 `scripts/e2e/shenglong-demo/**`；⛔ 不改后端/前端代码、不 SQL 直插、凭证不入库。
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。
@@ -139,7 +87,6 @@
 - `FEATURE-F006-R2-WORKPROCESS-DEDUP-001`：Java WorkProcess/Workflow/SKU 关联、DTO/Repository/Service/Controller、Flyway/JPA tests；Web 工序治理及排序/单位字段移除与目标测试；不得迁移既有业务引用或治理生产重复组。
 - `FEATURE-F006-R2-BOM-SUBSTITUTE-001`：BOM 替代关系的 Web、版本/计划/领料/报工/成本/追溯快照与目标测试；Java CORE 已完成，父任务不得重复修改 CORE Flyway/Entity，必须与统一 Workflow/BOM 任务串行。
 
-
 ## 阻塞项
 
 - LIUSHANMEN：21 条空 `storage_type` 等待 Owner 向客户取得真实储存类型；结论到达前保持零写入，不猜填。
@@ -150,8 +97,6 @@
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
 
 ## 维护规则
-
-
 
 - 只记当前在飞（`queued`/`claimed`/`in-progress`/`review`/`blocked`）；`merged`/`done` 立即移入带日期的 `archive/`，同一 commit 释放 scope 锁。
 - **每条 ≤ 300 字**（含缩进续行）：ID、状态、Owner、Base SHA、一句话目标与阻塞点。判据读数、终审记录、增量日志一律写 `archive/<日期>-*.md` 并链接，⛔ 不在本文件开 `###` 小节。全文 ≤ 30,000 bytes。

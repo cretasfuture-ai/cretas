@@ -39,7 +39,23 @@ export interface AiEntryConfig {
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** 助手这条是「解析失败 / 超时」: 抽屉在它下面写「没有保存任何数据」并给「重试」。 */
+  failed?: boolean;
 }
+
+/**
+ * 预览卡里「明细数组」每一项的键 → 中文名。来源是后端 form-prompts/factory/*.md 里
+ * items 下的字段说明 (AiEntryDrawer.stdLayout.spec 读那几份 md 逐键对账)。
+ * ⛔ 没在这里的键不许藏: 预览里照原样显示键名 (写入前用户要看得见全部内容, 标准 H3 优先于 V3)。
+ */
+export const ITEM_KEY_LABELS: Readonly<Record<string, string>> = {
+  materialName: '物料名称', // 采购 prompt 写「原料名称」、入库写「物料名称」: 取并集更宽的那个
+  productName: '产品名称',
+  quantity: '数量',
+  receivedQuantity: '收货数量',
+  unit: '单位',
+  unitPrice: '单价',
+};
 
 // ======================== Entity Configs ========================
 

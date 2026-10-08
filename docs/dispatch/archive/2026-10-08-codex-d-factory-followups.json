@@ -1,0 +1,30 @@
+{
+  "taskId": "CODEX-DEF-D-20261007",
+  "baseSha": "a137c1c140761baaabc575d578a486ded5c0dfe8",
+  "state": "review",
+  "dependency": "No dependency on E or F; #954 already in base",
+  "cause": "Factory result DTO and SSE completion never generated followUps. The existing RN chip renderer already consumes result.followUps and sends the full question.",
+  "reference": "Restaurant Python intent service generates suggested_followups at the intent/topic/time/scope layer and serializes suggestedFollowups. Read only; no restaurant or Python modifications.",
+  "change": "FactoryFollowUpService selects related real read intents, then checks active configuration, factory tool enablement, FrontlineReadAudience, existing role/RBAC permission gates and FrontlineAiWriteGrantService write classification. Successful factory tool results receive label/question/intentCode. Missing eligible targets produce an empty array without filler.",
+  "realEntry": "Public SseStreamingService.executeStream -> real AIIntentServiceImpl/config manager -> real ToolDispatchService -> actual MaterialBatchQueryTool/QualityCheckQueryTool/QualityDefectRecordTool and real business services. Only repository/network IO is mocked; actual gates and tool registry are instantiated.",
+  "backendCommand": "mvn -B -Dmaven.compiler.useIncrementalCompilation=false -Dtest=SseFactoryFollowUpContractTest,FactoryFollowUpServiceContractTest -Dcretas.testIncludes=com/cretas/aims/service/execution/*FollowUp*ContractTest.java test",
+  "backendBaseline": {"tests": 10, "passed": 1, "failures": 9, "errors": 0, "skipped": 0},
+  "backendFinal": {"tests": 10, "passed": 10, "failures": 0, "errors": 0, "skipped": 0},
+  "baselineMethod": "Identical final ContractTest sources were copied and timestamps touched in a detached worktree at the exact base SHA. Production sources remained unchanged. Same command; results read from Surefire XML.",
+  "frontendCommand": "npx jest src/__tests__/integration/screens/AIChatScreenB1B9.test.tsx --runInBand --json && npx tsc --noEmit",
+  "frontendBaseline": {"tests": 8, "passed": 7, "failures": 1, "tscExit": 0},
+  "frontendBranch": {"tests": 8, "passed": 8, "failures": 0, "tscExit": 0},
+  "mutations": [
+    {"change": "Bypass FrontlineReadAudience", "observable": "D_MUTANT_ROLE_FILTER_BYPASS and receiving suggestion for QC", "failures": 1, "assertion": "audienceFilterExcludesWarehouseReceivingForQualityInspectorWithWarehousePositive"},
+    {"change": "Introduce QUALITY_CHECK_CREATE candidate and bypass write exclusion", "observable": "D_MUTANT_WRITE_ALLOWED=QUALITY_CHECK_CREATE:true", "failures": 3, "assertions": ["inactiveReadIsRemovedAndNoAlternativeIsInvented", "qualityResultOffersQualityReadsWithoutWarehouseFunctions", "confirmedWriteCompletesThroughRealToolAndOffersOnlyReads"]},
+    {"change": "Invent inventory suggestion when filtered candidates are empty", "observable": "D_MUTANT_EMPTY_FILLER=MATERIAL_BATCH_QUERY", "failures": 2, "assertions": ["inactiveReadIsRemovedAndNoAlternativeIsInvented", "unavailableTargetsProduceExplicitEmptyArrayWhileAnswerStillCompletes"]},
+    {"change": "Drop follow-up intent code on chip dispatch", "observable": "D_CHIP_REQUEST has the complete question but no intentCode", "failures": 1, "assertion": "B1 preserves a supplied follow-up intent code with the complete question; legacy no-code control still passes"}
+  ],
+  "restoration": "Every mutant restored with apply_patch. Final service source matches the committed non-mutant implementation; final XML 10/10 green.",
+  "frontendProductionDiff": "AIChatScreen only: optional intentCode type at line 80, incoming field mapping at lines 869-870, existing handleSend options at lines 1416-1419. Browser proof first showed full question without code re-entering clarification; preserving server read-intent code uses the existing explicit channel. No styling, layout or other AI UI change.",
+  "screenshots": ["D-仓管-追问芯片.png", "D-质检员-追问芯片.png"],
+  "browserAcceptance": "Real 3012 UI bound to own 10030: warehouse MATERIAL_BATCH_QUERY SUCCESS -> 3 read chips -> clicked complete receiving question with MATERIAL_TODAY_RECEIVING_QUERY -> SUCCESS; QC QUALITY_STATS SUCCESS -> 2 QC-only chips -> complete question with QUALITY_CHECK_QUERY -> SUCCESS and 17 real records. Sanitized request/result JSON saved, no response stubs.",
+  "localData": "Read-only snapshot of existing local F006 database into separate codex_def_d_app_20261007 database; separate SmartBI database. Active warehouse and QC intent codes checked via SQL. Existing 10010/3011 and supplied local-e2e directory remain untouched.",
+  "limits": "PR only. No merge, deployment, OTA, production AI execution, migration or ai_intent_configs data changes. Production acceptance belongs to organizer.",
+  "evidenceDirectory": "D:/Temp/claude/codex-def-evidence/D"
+}

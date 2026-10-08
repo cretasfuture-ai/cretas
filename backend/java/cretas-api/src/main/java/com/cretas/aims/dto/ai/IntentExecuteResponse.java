@@ -172,6 +172,12 @@ public class IntentExecuteResponse {
     private List<SuggestedAction> suggestedActions;
 
     /**
+     * Factory SSE follow-up questions. These are read-only, permission-filtered
+     * next questions and deliberately separate from clarification actions.
+     */
+    private List<FollowUpSuggestion> followUps;
+
+    /**
      * 可执行的确认操作 (预览模式下返回)
      */
     private ConfirmableAction confirmableAction;
@@ -277,6 +283,16 @@ public class IntentExecuteResponse {
         private String description;
         private String endpoint; // API端点
         private Map<String, Object> parameters;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class FollowUpSuggestion {
+        private String label;
+        private String question;
+        private String intentCode;
     }
 
     /**
