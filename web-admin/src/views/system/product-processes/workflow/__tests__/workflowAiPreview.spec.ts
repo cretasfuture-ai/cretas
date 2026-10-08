@@ -5,6 +5,55 @@ import type { ProductProcessWorkflowDefinition } from '../types';
 import { EMPTY_CANVAS, LARGE_SPEC, LARGE_PATHS } from './workflowAiPreview.fixture';
 
 describe('workflow AI complete change projection', () => {
+  it('pairs nodes by business identity and graph position, independent of storage order', () => {
+    const before = {
+      ...EMPTY_CANVAS,
+      nodes: [
+        { id: 'raw', kind: 'RAW_MATERIAL', data: { name: '原料', skuId: 'RM-1' } },
+        { id: 'p1', kind: 'PROCESS', data: { processName: '切分', workProcessId: 'WP-1', reportingRequired: false, ports: [] } },
+        { id: 'p2', kind: 'PROCESS', data: { processName: '切分', workProcessId: 'WP-2', reportingRequired: false, ports: [] } },
+        { id: 'fin', kind: 'FINISHED_GOOD', data: { name: '成品', skuId: 'FG-1' } },
+      ],
+      edges: [{ source: 'raw', target: 'p1' }, { source: 'p1', target: 'p2' }, { source: 'p2', target: 'fin' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const after = {
+      ...before,
+      // React Flow may persist a different array order and regenerate runtime ids.
+      nodes: [
+        { id: 'new-fin', kind: 'FINISHED_GOOD', data: { name: '成品', skuId: 'FG-1' } },
+        { id: 'new-p2', kind: 'PROCESS', data: { processName: '切分', workProcessId: 'WP-2', reportingRequired: true, ports: [] } },
+        { id: 'new-raw', kind: 'RAW_MATERIAL', data: { name: '原料', skuId: 'RM-1' } },
+        { id: 'new-p1', kind: 'PROCESS', data: { processName: '切分', workProcessId: 'WP-1', reportingRequired: false, ports: [] } },
+      ],
+      edges: [{ source: 'new-p2', target: 'new-fin' }, { source: 'new-raw', target: 'new-p1' }, { source: 'new-p1', target: 'new-p2' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const preview = previewWorkflowAiDefinitions(before, after);
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows).toHaveLength(1);
+    expect(preview.rows[0].text).toContain('免报 → 报工');
+    expect(preview.rows[0].text).not.toMatch(/p1|p2|UUID/);
+  });
+
+  it('reports connection set additions and same-name packaging archive switches', () => {
+    const before = {
+      ...EMPTY_CANVAS,
+      nodes: [
+        { id: 'p', kind: 'PROCESS', data: { processName: '包装', workProcessId: 'WP-P', reportingRequired: false, ports: [] } },
+        { id: 'f', kind: 'FINISHED_GOOD', data: { name: '成品', skuId: 'FG-1', packagingBindings: [{ materialName: '成品盒', materialTypeId: 'PK-1', standardQuantity: 1, unit: '盒' }] } },
+      ], edges: [{ source: 'p', target: 'f' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const after = {
+      ...before,
+      nodes: [{ ...before.nodes[0] }, { ...before.nodes[1], data: { ...before.nodes[1].data, packagingBindings: [{ materialName: '成品盒', materialTypeId: 'PK-2', standardQuantity: 1, unit: '盒' }] } }],
+      edges: [{ source: 'p', target: 'f' }, { source: 'f', target: 'p' }],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const preview = previewWorkflowAiDefinitions(before, after);
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows.some(row => row.path.startsWith('canvas.edges.added[') && row.text.includes('新增连接'))).toBe(true);
+    expect(preview.rows.some(row => row.text.includes('档案绑定已切换'))).toBe(true);
+    expect(preview.rows.every(row => !row.text.includes('PK-1') && !row.text.includes('PK-2'))).toBe(true);
+  });
+
   it('diffs the complete semantic before/after canvas, including compiler-only fields', () => {
     const before = {
       ...EMPTY_CANVAS,

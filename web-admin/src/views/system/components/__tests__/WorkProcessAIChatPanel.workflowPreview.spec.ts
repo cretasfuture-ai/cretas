@@ -8,11 +8,12 @@ const io = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('@/api/request', () => ({ default: { post: io.post } }));
 vi.mock('gsap', () => ({ gsap: { from: vi.fn(), fromTo: vi.fn(), killTweensOf: vi.fn() } }));
 
-function panel() {
+function panel(options: { applySpec?: (draft: Record<string, unknown>) => void | Promise<{ status: 'applied' | 'aborted' }> } = {}) {
   const graph = structuredClone(EMPTY_CANVAS);
   const wrapper = mount(WorkProcessAIChatPanel, {
     props: { factoryId: 'F006', productTypeId: 'PT-PIG-400', endpoint: '/workflow-ai', moduleCode: 'product_process_workflow_config',
-      previewSpec: spec => previewWorkflowAiSpec(graph, spec) },
+      previewSpec: spec => previewWorkflowAiSpec(graph, spec),
+      applySpec: options.applySpec },
     global: { stubs: {
       ElPopover: { template: '<div><slot name="reference"/><slot/></div>' },
       ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<textarea :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)"/>' },
@@ -82,6 +83,28 @@ describe('workflow spec preview at the actual chat entry', () => {
     await wrapper.setProps({ productTypeId: 'PT-OTHER' });
     expect(wrapper.findAll('[data-testid="workflow-spec-apply"]')).toHaveLength(0);
     expect(wrapper.emitted('applyDraft')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('uses the real apply callback once, blocks double-send while awaiting, and aborts on late permission loss', async () => {
+    let resolveApply!: (result: { status: 'applied' | 'aborted' }) => void;
+    const applySpec = vi.fn(() => new Promise<{ status: 'applied' | 'aborted' }>(resolve => { resolveApply = resolve; }));
+    const { wrapper } = panel({ applySpec });
+    await send(wrapper);
+    const apply = wrapper.get('[data-testid="workflow-spec-apply"]');
+    await apply.trigger('click');
+    await apply.trigger('click');
+    expect(applySpec).toHaveBeenCalledTimes(1);
+    await wrapper.get('[data-testid="workflow-spec-cancel"]').trigger('click');
+    expect(wrapper.find('[data-testid="workflow-spec-apply"]').exists()).toBe(true);
+    await wrapper.get('textarea').setValue('新的请求');
+    await wrapper.get('[aria-label="发送给 Workflow AI"]').trigger('click');
+    expect(io.post).toHaveBeenCalledTimes(1);
+    await wrapper.setProps({ disabled: true });
+    resolveApply({ status: 'aborted' });
+    await flushPromises();
+    expect(wrapper.emitted('applyDraft')).toBeUndefined();
+    expect(wrapper.find('[data-testid="workflow-spec-apply"]').exists()).toBe(true);
     wrapper.unmount();
   });
 });

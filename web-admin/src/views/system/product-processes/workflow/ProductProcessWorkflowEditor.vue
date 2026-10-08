@@ -1333,6 +1333,7 @@ const flowEdges = ref<Edge[]>([]);
 // the rows the user reviewed. Entries are replaced when the canvas revision is
 // rechecked by the chat panel.
 const preparedAiDefinitions = new Map<string, ProductProcessWorkflowDefinition>();
+const preparedAiWarnings = new Map<string, string[]>();
 const loading = ref(false);
 const catalogLoading = ref(false);
 const loadedCatalogFactoryId = ref<string | null>(null);
@@ -1340,6 +1341,9 @@ const loadedCatalogCanWrite = ref(false);
 const saving = ref(false);
 const publishing = ref(false);
 const workflowBomSyncPreflight = ref<WorkflowBomSyncPreflight | null>(null);
+// Rejection details from the shared AI compiler are part of the review surface;
+// dry-run must not drop them merely because it has no persistence side effect.
+const workflowAiRejectionWarnings = ref<string[]>([]);
 const workflowBomSyncIssues = computed(() => (
   workflowBomSyncBlockingIssues(workflowBomSyncPreflight.value)
 ));
@@ -6754,11 +6758,17 @@ async function previewWorkflowSpec(spec: unknown): Promise<WorkflowAiPreview> {
   const before = currentDefinition();
   const key = `${identity.factoryId}:${identity.productTypeId}:${workflowAiStableJson(spec)}:${workflowAiStableJson(before)}`;
   const cached = preparedAiDefinitions.get(key);
-  if (cached) return previewWorkflowAiDefinitions(before, cached);
+  if (cached) {
+    const cachedPreview = previewWorkflowAiDefinitions(before, cached);
+    return cachedPreview.ok ? { ...cachedPreview, warnings: [...(preparedAiWarnings.get(key) || [])] } : cachedPreview;
+  }
+  workflowAiRejectionWarnings.value = [];
   const compiled = await compileWorkflowSpec(spec as WorkflowSpec, identity, true);
   if (!compiled) return { ok: false, message: '当前规格包含尚未匹配的工序，应用前无法完整编译差异。' };
   preparedAiDefinitions.set(key, compiled);
-  return previewWorkflowAiDefinitions(before, compiled);
+  preparedAiWarnings.set(key, [...workflowAiRejectionWarnings.value]);
+  const preview = previewWorkflowAiDefinitions(before, compiled);
+  return preview.ok ? { ...preview, warnings: [...workflowAiRejectionWarnings.value] } : preview;
 }
 
 interface WorkflowSpecApplyResult {
@@ -6799,7 +6809,7 @@ async function applyWorkflowAIDraft(
         const materialized = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity, false, false);
         if (!materialized || !isLoadedIdentityCurrent(identity) || !canEdit.value) return { status: 'aborted' };
         const actual = previewWorkflowAiDefinitions(before, materialized);
-        if (reviewed.ok && actual.ok && workflowAiStableJson(reviewed.rows) !== workflowAiStableJson(actual.rows)) {
+        if (reviewed.ok && actual.ok && reviewed.revision !== actual.revision) {
           ElMessage.warning({
             message: '工序目录创建后方案发生变化，画布保持原样，请重新审核。',
             duration: 0,
@@ -6808,7 +6818,10 @@ async function applyWorkflowAIDraft(
           // Promote the materialized, catalog-backed plan so the refreshed
           // confirmation is stable and the next click consumes it directly.
           preparedAiDefinitions.set(key, materialized);
-          return { status: 'review', preview: actual };
+          preparedAiWarnings.set(key, [...workflowAiRejectionWarnings.value]);
+          return { status: 'review', preview: actual.ok
+            ? { ...actual, warnings: [...workflowAiRejectionWarnings.value] }
+            : actual };
         }
         return (await applyPreparedWorkflowDefinition(materialized, identity))
           ? { status: 'applied' } : { status: 'aborted' };
@@ -7269,7 +7282,12 @@ async function compileWorkflowSpec(
   };
   if (dryRun || !commit) compileGraph();
   else mutate(compileGraph);
-  if (dryRun || !commit) return compiledDefinition;
+  if (dryRun || !commit) {
+    if (seasoningRejections.length > 0) {
+      workflowAiRejectionWarnings.value = [...seasoningRejections];
+    }
+    return compiledDefinition;
+  }
   await nextTick();
   await handleAutoLayout();
   const parts = [`已按 AI 描述生成 ${steps.length} 道工序流程`];

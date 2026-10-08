@@ -58,6 +58,9 @@
                         </div>
                       </div>
                       <p v-if="diff.previewError" role="status">{{ diff.previewError }}</p>
+                      <ul v-if="diff.proposal.warnings?.length" class="workflow-preview-warnings" data-testid="workflow-spec-warnings">
+                        <li v-for="warning in diff.proposal.warnings" :key="warning">未采纳：{{ warning }}</li>
+                      </ul>
                       <ol class="workflow-change-list">
                         <li v-for="row in diff.proposal.rows" :key="row.path" :data-change-path="row.path" data-testid="workflow-change-row">{{ row.text }}</li>
                       </ol>
@@ -192,6 +195,7 @@ interface ChatDiff {
     revision: string;
     state: 'pending' | 'submitted' | 'cancelled';
     applying?: boolean;
+    warnings?: string[];
   };
 }
 
@@ -413,7 +417,7 @@ async function prepareDiff(diff: ChatDiff): Promise<ChatDiff> {
   const spec = JSON.parse(JSON.stringify(diff.params.spec ?? null));
   const preview = await props.previewSpec?.(spec);
   if (!preview || preview.ok === false) return { ...diff, previewError: preview && preview.ok === false ? preview.message : '当前画布无法预览，未应用配置。' };
-  return { ...diff, proposal: { spec, rows: preview.rows, revision: preview.revision, state: 'pending' } };
+  return { ...diff, proposal: { spec, rows: preview.rows, revision: preview.revision, warnings: preview.warnings, state: 'pending' } };
 }
 
 function getSpecSteps(spec: unknown): Record<string, unknown>[] {
@@ -456,15 +460,20 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     || workflowAiStableJson(recheck.rows) !== workflowAiStableJson(proposal.rows)) {
     proposal.rows = recheck.rows;
     proposal.revision = recheck.revision;
+    proposal.warnings = recheck.warnings;
     proposal.applying = false;
     diff.previewError = '画布已变化，已刷新全部改动，请重新审核并应用。';
     return;
   }
   let applyResult: SpecApplyResult | undefined;
   try {
-    applyResult = props.applySpec
-      ? await props.applySpec({ ...diff.params, spec: proposal.spec }, sourceIdentity)
-      : (emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity), { status: 'applied' as const });
+    if (props.applySpec) {
+      const result = await props.applySpec({ ...diff.params, spec: proposal.spec }, sourceIdentity);
+      applyResult = result ?? { status: 'applied' };
+    } else {
+      emitDraft({ ...diff.params, spec: proposal.spec }, sourceIdentity);
+      applyResult = { status: 'applied' };
+    }
   } catch (error) {
     proposal.applying = false;
     diff.previewError = error instanceof Error ? error.message : '应用配置失败，画布未改变。';
@@ -477,6 +486,7 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
   if (applyResult?.status === 'review' && applyResult.preview?.ok) {
     proposal.rows = applyResult.preview.rows;
     proposal.revision = applyResult.preview.revision;
+    proposal.warnings = applyResult.preview.warnings;
     proposal.applying = false;
     diff.previewError = '应用前画布计划发生变化，已刷新改动，请重新审核。';
     return;

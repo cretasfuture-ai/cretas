@@ -2,7 +2,7 @@ import type { ProductProcessWorkflowDefinition } from './types';
 
 export interface WorkflowAiChangeRow { path: string; text: string }
 export type WorkflowAiPreview =
-  | { ok: true; rows: WorkflowAiChangeRow[]; revision: string }
+  | { ok: true; rows: WorkflowAiChangeRow[]; revision: string; warnings?: string[] }
   | { ok: false; message: string };
 
 const labels: Record<string, string> = {
@@ -42,17 +42,28 @@ export function previewWorkflowAiDefinitions(
   before: ProductProcessWorkflowDefinition,
   after: ProductProcessWorkflowDefinition,
 ): WorkflowAiPreview {
-  const semanticProcessKeys = (definition: ProductProcessWorkflowDefinition): Set<string> => {
-    const occurrences = new Map<string, number>();
-    return new Set(definition.nodes.filter(node => node.kind === 'PROCESS').map(node => {
-      const name = String((node.data as Record<string, unknown>).processName ?? '');
-      const base = `PROCESS#${occurrences.size}`;
-      const ordinal = occurrences.get(base) || 0;
-      occurrences.set(base, ordinal + 1);
-      return `${base}#${ordinal}`;
-    }));
+  const nodeSortKey = (definition: ProductProcessWorkflowDefinition, id: string): string => {
+    const node = definition.nodes.find(item => item.id === id);
+    if (!node) return '';
+    const data = node.data as Record<string, unknown>;
+    return `${node.kind}:${String(data.processName ?? data.name ?? '')}:${String(data.ordinal ?? '')}`;
   };
-  const beforeProcessKeys = semanticProcessKeys(before);
+  const topoOrder = (definition: ProductProcessWorkflowDefinition): string[] => {
+    const incoming = new Map(definition.nodes.map(node => [node.id, 0]));
+    definition.edges.forEach(edge => incoming.set(edge.target, (incoming.get(edge.target) || 0) + 1));
+    const ready = definition.nodes.filter(node => !incoming.get(node.id)).map(node => node.id)
+      .sort((a, b) => nodeSortKey(definition, a).localeCompare(nodeSortKey(definition, b)));
+    const order: string[] = [];
+    while (ready.length) {
+      const id = ready.shift()!; order.push(id);
+      definition.edges.filter(edge => edge.source === id).sort((a, b) => `${nodeSortKey(definition, a.target)}:${String(a.sourceHandle || '')}`.localeCompare(`${nodeSortKey(definition, b.target)}:${String(b.sourceHandle || '')}`)).forEach(edge => {
+        const next = (incoming.get(edge.target) || 0) - 1; incoming.set(edge.target, next); if (!next) ready.push(edge.target);
+      });
+      ready.sort((a, b) => nodeSortKey(definition, a).localeCompare(nodeSortKey(definition, b)));
+    }
+    definition.nodes.forEach(node => { if (!order.includes(node.id)) order.push(node.id); });
+    return order;
+  };
   const normalizeData = (
     value: unknown,
     nodeIndex: Map<string, string>,
@@ -79,11 +90,11 @@ export function previewWorkflowAiDefinitions(
   const normalize = (definition: ProductProcessWorkflowDefinition): Record<string, unknown> => {
     const occurrences = new Map<string, number>();
     const keys = new Map<string, string>();
-    let processOrdinal = 0;
-    definition.nodes.forEach(node => {
+    const rank = new Map(topoOrder(definition).map((id, index) => [id, index]));
+    [...definition.nodes].sort((a, b) => (rank.get(a.id) || 0) - (rank.get(b.id) || 0) || a.id.localeCompare(b.id)).forEach(node => {
       const data = node.data as Record<string, unknown>;
       const name = node.kind === 'PROCESS' ? data.processName : data.name;
-      const base = node.kind === 'PROCESS' ? `PROCESS#${processOrdinal++}` : `${node.kind}:${String(name ?? '')}`;
+      const base = `${node.kind}:${String(name ?? '')}`;
       const ordinal = occurrences.get(base) || 0;
       occurrences.set(base, ordinal + 1);
       keys.set(node.id, `${base}#${ordinal}`);
@@ -102,16 +113,15 @@ export function previewWorkflowAiDefinitions(
       data: normalizeData((() => {
         const data = { ...(node.data as Record<string, unknown>) };
         if (node.kind === 'PROCESS') {
-          const processKey = keys.get(node.id);
           if (!owns(data, 'reportingRequired')) data.reportingRequired = false;
           // A pending catalog item becomes a real id during apply. For a newly
           // added semantic process, compare the reviewed plan by process name;
           // preserve real ids for existing processes so same-name rebindings remain visible.
-          if (!beforeProcessKeys.has(String(processKey))) {
-            // Catalog identity is an implementation detail for a new process;
-            // the visible change is its semantic name/category and graph data.
-            delete data.workProcessId;
-          } else if (String(data.workProcessId || '').startsWith('__pending__:')) {
+          const pendingNames = new Set(before.nodes.filter(item => item.kind === 'PROCESS'
+            && String((item.data as Record<string, unknown>).workProcessId || '').startsWith('__pending__:'))
+            .map(item => String((item.data as Record<string, unknown>).processName || '')));
+          if (String(data.workProcessId || '').startsWith('__pending__:')
+            || (definition === after && pendingNames.has(String(data.processName || '')))) {
             data.workProcessId = '__pending__';
           }
           const ports = Array.isArray(data.ports) ? data.ports as Record<string, unknown>[] : [];
@@ -151,7 +161,9 @@ export function previewWorkflowAiDefinitions(
       const packaging = (value: unknown) => Array.isArray(value) && value.length
         ? value.map(item => record(item) ? `${String(item.materialName || item.name || '包材')} ${item.standardQuantity ?? ''}${item.unit || ''}`.trim() : display(item)).join('、')
         : display(value);
-      rows.push({ path, text: `${label}：${packaging(from)} → ${packaging(to)}` });
+      const bindings = (value: unknown) => Array.isArray(value) ? value.map(item => record(item) ? String(item.materialTypeId || item.skuId || '') : '').join('|') : '';
+      const switched = bindings(from) !== bindings(to) && bindings(from) !== '' && bindings(to) !== '';
+      rows.push({ path, text: `${label}：${packaging(from)} → ${packaging(to)}${switched ? '（档案绑定已切换）' : ''}` });
       return;
     }
     if (record(from) || record(to)) {
@@ -175,20 +187,39 @@ export function previewWorkflowAiDefinitions(
     if (Array.isArray(from) || Array.isArray(to)) {
       const a = Array.isArray(from) ? from : [];
       const b = Array.isArray(to) ? to : [];
+      if (path === 'canvas.edges') {
+        const keyOf = (edge: unknown) => workflowAiStableJson(edge);
+        const beforeEdges = new Set(a.map(keyOf));
+        const afterEdges = new Set(b.map(keyOf));
+        const edgeText = (edge: unknown, verb: string) => {
+          const item = record(edge) ? edge : {};
+          const endpoint = (value: unknown) => String(value || '未绑定').replace(/^PROCESS:/, '工序').replace(/^RAW_MATERIAL:/, '原料').replace(/^SEMI_FINISHED:/, '半成品').replace(/^FINISHED_GOOD:/, '成品').replace(/#\d+$/, '');
+          const handle = item.sourceHandle || item.targetHandle;
+          return `${verb}连接：${endpoint(item.source)} → ${endpoint(item.target)}${handle ? `（端口${String(handle).replace(/^port:[^:]*:/, '')}）` : ''}`;
+        };
+        a.filter(edge => !afterEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.removed[${index}]`, text: edgeText(edge, '删除') }));
+        b.filter(edge => !beforeEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.added[${index}]`, text: edgeText(edge, '新增') }));
+        return;
+      }
       for (let i = 0; i < Math.max(a.length, b.length); i += 1) add(`${path}[${i}]`, `${label} ${i + 1}`, a[i], b[i]);
       return;
     }
-    const shown = path.endsWith('.workProcessId')
-      ? (value: unknown) => value === undefined || value === null || value === '' ? '未绑定目录' : String(value) === String(from) && String(from) === String(to) ? '已绑定目录' : value === from ? '原目录' : '新目录'
+    const shown = path.endsWith('.workProcessId') || path.endsWith('.skuId') || path.endsWith('.materialTypeId')
+      ? (value: unknown) => value === undefined || value === null || value === '' ? '未绑定档案' : String(from) !== String(to) && value === from ? '原档案（档案绑定已切换）' : String(from) !== String(to) && value === to ? '新档案（档案绑定已切换）' : String(value)
       : path.endsWith('.kind')
       ? displayKind
+      : path.endsWith('.materialNodeId') || path.endsWith('.substituteOfNodeId') || path.endsWith('.reworkNodeId')
+      ? (value: unknown) => displayReference(value)
       : label.includes('是否报工')
       ? (value: unknown) => value === true ? '报工' : value === false ? '免报' : display(value)
       : display;
     rows.push({ path, text: `${label}：${shown(from)} → ${shown(to)}` });
   };
   add('canvas', '画布', beforeValue, afterValue);
-  return { ok: true, rows, revision: workflowAiStableJson(beforeValue) };
+  // One revision covers both sides: the current canvas and the semantic plan.
+  // This lets the panel detect a changed canvas while the editor can also
+  // detect catalog materialization drift without comparing formatted rows.
+  return { ok: true, rows, revision: workflowAiStableJson({ before: beforeValue, after: afterValue }) };
 }
 
 function display(value: unknown): string {
@@ -202,6 +233,15 @@ function display(value: unknown): string {
 
 function displayKind(value: unknown): string {
   return ({ RAW_MATERIAL: '原料', PROCESS: '工序', SEMI_FINISHED: '半成品', FINISHED_GOOD: '成品' } as Record<string, string>)[String(value)] || display(value);
+}
+
+function displayReference(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '未绑定节点';
+  const raw = String(value);
+  const match = raw.match(/^(RAW_MATERIAL|PROCESS|SEMI_FINISHED|FINISHED_GOOD):(.+?)(?:#\d+)?$/);
+  if (!match) return raw.startsWith('uuid') || raw.length > 24 ? '档案绑定已切换' : raw;
+  const kind = displayKind(match[1]);
+  return `${kind}「${match[2]}」`;
 }
 
 /** Pure projection: never resolves/creates catalog entries or hydrates the canvas. */
