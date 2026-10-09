@@ -97,7 +97,7 @@ def test_request_purpose_in_real_match_entry(monkeypatch,query,model_choice,matc
         assert data['requiresConfirmation'] is True
         assert data['timingMs']['requestPurposeUnavailable']==1
         assert '暂时无法' in data['clarificationQuestion']
-        assert not any(p['max_tokens']==1 for p in observed)
+        # organizer 2026-10-09: 说话意图与选择器并行跑, 选择器可能已被调用, 但其结果绝不被采用 (上面 bestMatch 为空)
     else:
         assert data['bestMatch']['intentCode']=='MATERIAL_BATCH_QUERY'
         assert data['requiresConfirmation'] is False
@@ -107,3 +107,44 @@ def test_request_purpose_in_real_match_entry(monkeypatch,query,model_choice,matc
 def test_unknown_purpose_is_not_current(raw):
     assert parse_request_purpose(raw) is None
     assert parse_request_purpose('{"purpose":"CURRENT"}').value=='CURRENT'
+
+
+def test_purpose_runs_concurrently_with_chooser(monkeypatch):
+    """organizer 2026-10-09: 串行时线上 p50 684→1124ms。两次模型调用必须重叠, 总时长约等于较慢的那一个。"""
+    import asyncio, time
+    async def embedding(_query):return [0.0]*768
+    monkeypatch.setattr(candidates,'get_embedding_cached',embedding)
+    monkeypatch.setattr(api,'get_current_snapshot',lambda:IntentSnapshot(rows=[ROW]))
+    monkeypatch.setattr(registry,'get_registry',lambda:registry.RegistrySnapshot())
+    dec=DecisionMatcher()
+    spans={}
+    async def model(payload,**kwargs):
+        kind={32:'purpose',1:'choose'}.get(payload['max_tokens'],'shortlist')
+        start=time.perf_counter()
+        if kind in ('purpose','choose'):
+            await asyncio.sleep(0.3)
+        spans[kind]=(start,time.perf_counter())
+        if kind=='purpose':
+            return {'choices':[{'message':{'content':json.dumps({'purpose':'CURRENT'})}}]}
+        if kind=='shortlist':
+            return {'choices':[{'message':{'content':json.dumps({'candidates':['MATERIAL_BATCH_QUERY']})}}]}
+        letter=re.search(r'^([A-T])\. MATERIAL_BATCH_QUERY：',payload['messages'][1]['content'],re.M).group(1)
+        return {'choices':[{'logprobs':{'content':[{'top_logprobs':[{'token':letter,'logprob':0.0}]}]}}]}
+    monkeypatch.setattr(dec,'_call',model)
+    retriever=BlendRetriever(Pool())
+    app=FastAPI()
+    @app.middleware('http')
+    async def local_auth(request:Request,call_next):
+        request.state.auth_method='internal';request.state.factory_id='F006'
+        return await call_next(request)
+    app.include_router(api.router)
+    app.state.ai_orchestrator=Orchestrator(retriever,None,None,decision_matcher=dec,
+        candidate_retriever=retriever,config=AIConfig(decision_business_types='FACTORY',decision_special_options=True))
+    response=TestClient(app).post('/api/ai/intent/match',json={
+        'query':'请查当前原料的可用库存','factoryId':'F006','businessType':'FACTORY','userId':'1686','role':'operator','history':[]},
+        headers={'X-Factory-Id':'F006'})
+    data=response.json()['data']
+    assert data['bestMatch']['intentCode']=='MATERIAL_BATCH_QUERY'   # 必发生: 现在办的请求照常选中
+    assert 'purpose' in spans and 'choose' in spans
+    p0,p1=spans['purpose']; c0,c1=spans['choose']
+    assert c0 < p1, f'选择器在说话意图结束后才开始 = 串行 (purpose {p0:.3f}-{p1:.3f}, choose {c0:.3f}-{c1:.3f})'

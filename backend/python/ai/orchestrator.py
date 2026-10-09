@@ -148,30 +148,40 @@ class Orchestrator:
         retriever = self.candidate_retriever or self.semantic_matcher
         # Determine the speech act separately from choosing a related function.
         # This generates a semantic disposition, not confidence or execution permission.
+        # organizer 2026-10-09: 与候选召回、决策选择并行跑 (串行时 p50 684→1124ms); 只在用到结论时才 await。
+        purpose_task = None
         if bool(getattr(self.config, "decision_special_options", False)):
-            t=time.time()
-            purpose=await self.decision_matcher.request_purpose(query,role,history)
-            timing["requestPurposeMs"]=int((time.time()-t)*1000)
-            if purpose != RequestPurpose.CURRENT:
-                result=IntentMatchResultDto.empty(userInput=query)
-                result.matchMethod=MatchMethod.LLM
-                result.questionType=QuestionType.CONVERSATIONAL
-                # Java recognizes this as an explicit no-business-action conclusion,
-                # rather than falling back to its legacy keyword/vector guesses.
-                timing["decisionNone"]=1
-                if purpose == RequestPurpose.INFORMATION_ONLY:
-                    timing["requestPurposeInformation"]=1
-                    result.requiresConfirmation=True
-                    result.clarificationQuestion="您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
-                else:
-                    timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"]=1
-                    result.requiresConfirmation=True
-                    result.clarificationQuestion=("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
-                                                  if purpose is not None else
-                                                  "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
-                timing["totalMs"]=int((time.time()-t0)*1000)
-                result.timingMs=timing
-                return result
+            purpose_started = time.time()
+            purpose_task = asyncio.ensure_future(self.decision_matcher.request_purpose(query, role, history))
+
+        async def purpose_block() -> Optional[IntentMatchResultDto]:
+            """purpose != CURRENT ⇒ 返回「先问清楚」的结论; CURRENT 或未启用 ⇒ None (继续原决策)。"""
+            if purpose_task is None:
+                return None
+            purpose = await purpose_task
+            timing["requestPurposeMs"] = int((time.time() - purpose_started) * 1000)
+            if purpose == RequestPurpose.CURRENT:
+                return None
+            result = IntentMatchResultDto.empty(userInput=query)
+            result.matchMethod = MatchMethod.LLM
+            result.questionType = QuestionType.CONVERSATIONAL
+            # Java recognizes this as an explicit no-business-action conclusion,
+            # rather than falling back to its legacy keyword/vector guesses.
+            timing["decisionNone"] = 1
+            if purpose == RequestPurpose.INFORMATION_ONLY:
+                timing["requestPurposeInformation"] = 1
+                result.requiresConfirmation = True
+                result.clarificationQuestion = "您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
+            else:
+                timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"] = 1
+                result.requiresConfirmation = True
+                result.clarificationQuestion = ("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
+                                                if purpose is not None else
+                                                "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
+            timing["totalMs"] = int((time.time() - t0) * 1000)
+            result.timingMs = timing
+            return result
+
         # ===== ② 候选 (重排路): 向量 Top-N → 微调重排 → 前 K, 0 token =====
         # 带对话历史的轮次不走这条: 重排只看这一句, LLM 粗选能看到前文。
         codes = None
@@ -204,7 +214,7 @@ class Orchestrator:
                 if len(codes) >= self.config.decision_k:
                     break
         if not codes:
-            return None
+            return await purpose_block()
 
         # ===== ② 决策: 读概率 =====
         t = time.time()
@@ -215,6 +225,10 @@ class Orchestrator:
         else:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history)
         timing["decisionMs"] = int((time.time() - t) * 1000)
+        # 说话意图不是「现在办」⇒ 不采用刚选出的业务意图 (结论在这里才用到, 前面一直在并行跑)
+        purpose_result = await purpose_block()
+        if purpose_result is not None:
+            return purpose_result
         if not probs:
             return None
         p_none = float(probs.pop(NONE_KEY, 0.0) or 0.0)
