@@ -14,6 +14,7 @@ from ai.dto import CandidateIntentDto, MatchMethod
 from ai.matcher.decision import (
     LETTERS,
     DecisionMatcher,
+    RequestPurpose,
     build_choice_messages,
     build_shortlist_messages,
     history_block,
@@ -48,6 +49,9 @@ class FakeDecision:
         self.short_calls = self.choose_calls = 0
         self.seen_options = None
         self.seen_history = []
+
+    async def request_purpose(self, query, role, history=None):
+        return RequestPurpose.CURRENT
 
     async def shortlist(self, query, role, visible, history=None):
         self.short_calls += 1
