@@ -821,7 +821,11 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         QueryPreprocessorService.NegationKind veto = detectVetoKind(sanitized);
         if (veto == QueryPreprocessorService.NegationKind.VETO_READ || veto == QueryPreprocessorService.NegationKind.VETO_WRITE
                 || shouldBypassEarlyPhraseShortcutForStoreReference(sanitized)) return Optional.empty();
-        Optional<String> match = knowledgeBase.matchPhrase(filterFillerWordsForPhrase(sanitized), domain);
+        // 放行入口 (expectedCodes 非空) 只认够具体的短语; 普通入口行为不变
+        String phraseInput = filterFillerWordsForPhrase(sanitized);
+        Optional<String> match = expectedCodes.isEmpty()
+                ? knowledgeBase.matchPhrase(phraseInput, domain)
+                : knowledgeBase.matchSpecificPhrase(phraseInput, domain);
         if (match.isEmpty() || (!expectedCodes.isEmpty() && !expectedCodes.contains(match.get()))) return Optional.empty();
         AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
                 .filter(c -> match.get().equals(c.getIntentCode()))
