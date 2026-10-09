@@ -8716,6 +8716,27 @@ public class IntentKnowledgeBase {
      * @param input 用户输入
      * @param businessDomain "FACTORY" 或 "RESTAURANT"
      */
+    /** 「够具体」的短语至少几个字: 2 字的「质检」这类泛词只配做候选, 不配跳过后面的识别直接定意图。 */
+    public static final int SPECIFIC_PHRASE_MIN_LENGTH = 4;
+
+    /**
+     * 与 {@link #matchPhrase(String, String)} 同一张表、同一套命中规则, 但只有命中的短语本身够具体
+     * (≥ {@value #SPECIFIC_PHRASE_MIN_LENGTH} 字) 才返回。给「精确短语直接放行、跳过决策层」的入口用 (#977/#979):
+     * 2026-10-09 实测「登记质检不良」被 2 字短语「质检」命中成 QUALITY_CHECK_QUERY 并跳过了决策层, 而决策层本来选对 QUALITY_DEFECT_RECORD。
+     */
+    public Optional<String> matchSpecificPhrase(String input, String businessDomain) {
+        if (input == null || input.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        Map<String, String> businessSpecificMap = "RESTAURANT".equals(businessDomain)
+                ? restaurantPhraseMapping : phraseToIntentMapping;
+        Optional<Map.Entry<String, String>> hit = doMatchPhraseEntry(input, businessSpecificMap);
+        if (hit.isEmpty()) {
+            hit = doMatchPhraseEntry(input, commonPhraseMapping);
+        }
+        return hit.filter(e -> e.getKey().length() >= SPECIFIC_PHRASE_MIN_LENGTH).map(Map.Entry::getValue);
+    }
+
     public Optional<String> matchPhrase(String input, String businessDomain) {
         if (input == null || input.trim().isEmpty()) {
             return Optional.empty();
@@ -8832,6 +8853,11 @@ public class IntentKnowledgeBase {
      * v32: 核心短语匹配逻辑（从 matchPhrase 抽取）
      */
     private Optional<String> doMatchPhrase(String input, Map<String, String> phraseMap) {
+        return doMatchPhraseEntry(input, phraseMap).map(Map.Entry::getValue);
+    }
+
+    /** 同 {@link #doMatchPhrase}, 但连同命中的短语一起返回 (调用方要判断命中的是不是够具体)。 */
+    private Optional<Map.Entry<String, String>> doMatchPhraseEntry(String input, Map<String, String> phraseMap) {
         if (input == null || input.trim().isEmpty() || phraseMap.isEmpty()) {
             return Optional.empty();
         }
@@ -8891,7 +8917,7 @@ public class IntentKnowledgeBase {
                     String intentCode = entry.getValue();
                     log.debug("短语匹配成功: inputLength={}, phrase='{}', intent='{}', coverage={}",
                             input.length(), entry.getKey(), intentCode, String.format("%.2f", coverageRatio));
-                    return Optional.of(intentCode);
+                    return Optional.of(Map.entry(entry.getKey(), intentCode));
                 } else {
                     log.debug("短语匹配跳过(覆盖率不足): inputLength={}, phrase='{}', coverage={}",
                             input.length(), entry.getKey(), String.format("%.2f", coverageRatio));
