@@ -32,7 +32,10 @@
     if (!DESKTOP) return;
     var secs = document.querySelectorAll('section, .band, .quote-band, .v6-ops');
     secs.forEach(function(sec){
-      if (sec.querySelector('.eye-stage, .biz-h')) return;      /* pinned stages */
+      /* pinned stages: v6-motion.js 晚于本文件才给 .biz/.band/.shots 加 pin 类,
+         所以按区块本身判断, 不能等 .biz-h/.is-expand/.is-stage 出现 */
+      var PINNED = '.eye-stage, .biz, .biz-h, .band, .shots';
+      if (sec.matches(PINNED) || sec.querySelector(PINNED)) return;
       if (sec.closest('.v6-hero, .ai-hero, .c-hero, .d-hero')) return;
       if (sec.classList.contains('v6-hero')) return;
       gsap.to(sec, {
@@ -74,15 +77,23 @@
 
   /* Photo-card 3D tilt (desktop) */
   if (FINE) document.querySelectorAll('.v6-photo-card').forEach(function(card){
-    var rx = gsap.quickTo(card, 'rotationX', {duration:.5, ease:'power3.out'});
-    var ry = gsap.quickTo(card, 'rotationY', {duration:.5, ease:'power3.out'});
-    gsap.set(card, {transformPerspective: 900});
+    /* 透视和 quickTo 都在第一次悬停时才建: 初始化时卡片还带着 .v6-reveal 的
+       translateY(130px), 此刻任何 gsap 读写都会把 y=130 读进缓存并写成内联样式,
+       卡片从此永远低 130px (首页三张业务卡错位的根因)。 */
+    var rx, ry;
+    card.addEventListener('pointerenter', function(){
+      if (rx) return;
+      gsap.set(card, {transformPerspective: 900});
+      rx = gsap.quickTo(card, 'rotationX', {duration:.5, ease:'power3.out'});
+      ry = gsap.quickTo(card, 'rotationY', {duration:.5, ease:'power3.out'});
+    });
     card.addEventListener('pointermove', function(e){
+      if (!rx) return;
       var r = card.getBoundingClientRect();
       ry(((e.clientX - r.left) / r.width - .5) * 6);
       rx(-((e.clientY - r.top) / r.height - .5) * 6);
     });
-    card.addEventListener('pointerleave', function(){ rx(0); ry(0); });
+    card.addEventListener('pointerleave', function(){ if (rx) { rx(0); ry(0); } });
     var img = card.querySelector('img');
     if (img) {
       card.addEventListener('pointerenter', function(){ gsap.to(img, {scale: 1.24, duration: .8, ease: 'power3.out'}); });
