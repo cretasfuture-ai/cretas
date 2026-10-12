@@ -51,17 +51,20 @@ def replace(p,content,meta):
 backup=pathlib.Path('/www/backup/cretas-showcase')/data['head']
 manifest=backup/'manifest.json'
 if data['action']=='rollback':
-    receipt=json.loads(manifest.read_text())
-    if receipt['head']!=data['head']: raise RuntimeError('rollback head mismatch')
-    rows=receipt['files']
-    # Refuse to overwrite a concurrent release or a manual edit.
-    for row in rows:
-        if sha(target(row['path']).read_bytes())!=row['new']:
-            raise RuntimeError('rollback current content differs: '+row['path'])
-        if sha((backup/row['path']).read_bytes())!=row['old']:
-            raise RuntimeError('rollback backup differs: '+row['path'])
-    for row in reversed(rows):
-        replace(target(row['path']),(backup/row['path']).read_bytes(),row)
+    try:
+        receipt=json.loads(manifest.read_text())
+        if receipt['head']!=data['head']: raise RuntimeError('rollback head mismatch')
+        rows=receipt['files']
+        # Refuse to overwrite a concurrent release or a manual edit.
+        for row in rows:
+            if sha(target(row['path']).read_bytes())!=row['new']:
+                raise RuntimeError('rollback current content differs: '+row['path'])
+            if sha((backup/row['path']).read_bytes())!=row['old']:
+                raise RuntimeError('rollback backup differs: '+row['path'])
+        for row in reversed(rows):
+            replace(target(row['path']),(backup/row['path']).read_bytes(),row)
+    except BaseException as error:
+        raise RuntimeError('ROLLBACK_BLOCKED: '+str(error))
     print(json.dumps({'status':'rolled_back','files':len(rows),'head':data['head']}));sys.exit(0)
 paths=[]
 for row in data['files']:
@@ -91,9 +94,9 @@ try:
     for p,old,new,meta in paths:
         if p.read_bytes()!=new: raise RuntimeError('readback mismatch')
 except BaseException:
-    if any(p.read_bytes()!=new for p,old,new,meta in changed):
-        raise RuntimeError('ROLLBACK_BLOCKED: concurrent change before rollback; nothing restored')
     try:
+        if any(p.read_bytes()!=new for p,old,new,meta in changed):
+            raise RuntimeError('concurrent change before rollback; nothing restored')
         for p,old,new,meta in reversed(changed): replace(p,old,meta)
     except BaseException as error:
         raise RuntimeError('ROLLBACK_BLOCKED: restoration failed: '+str(error))
@@ -169,7 +172,12 @@ def main(argv=None):
         if git('status', '--porcelain') or head != git('rev-parse', 'origin/main').decode():
             raise RuntimeError('publication requires clean exact origin/main')
     if action == 'rollback':
-        print(json.dumps({'final_status':'rolled_back','receipt':remote({'head':head,'action':action})}))
+        try:
+            receipt = remote({'head':head,'action':action})
+        except Exception as error:
+            print(json.dumps({'final_status':'rollback_blocked','error':str(error)}))
+            raise
+        print(json.dumps({'final_status':'rolled_back','receipt':receipt}))
         return
     subprocess.run(['git', 'merge-base', '--is-ancestor', args.base, head], cwd=REPO, check=True)
     rows = []

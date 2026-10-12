@@ -166,6 +166,15 @@ class PublishTransactionTest(unittest.TestCase):
                          (after.st_mode & 0o777, after.st_uid, after.st_gid))
 
 class PublishEntryTest(unittest.TestCase):
+    def test_explicit_rollback_failure_emits_final_status(self):
+        output=io.StringIO()
+        with patch.object(publisher,'git',return_value=b'a'*40), \
+             patch.object(publisher,'remote',side_effect=publisher.RollbackBlocked('concurrent edit')), \
+             contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(publisher.RollbackBlocked,'concurrent edit'):
+                publisher.main(['--base','a'*40,'--expected-head','a'*40,'--rollback','--confirm-prod','YES-PROD'])
+        self.assertEqual(json.loads(output.getvalue())['final_status'],'rollback_blocked')
+
     def test_already_published_https_failure_makes_no_rollback_write(self):
         with patch.object(publisher,'remote',return_value={'status':'already_published'}) as ssh, \
              patch.object(publisher,'verify_https',side_effect=RuntimeError('network failure')), \

@@ -12,7 +12,7 @@
 
 ## Validation before publication
 
-- `python platform/scripts/test_publish_restaurant_removal.py`: Windows: 15 passed / 2 Linux-only skips；139 上 /tmp 隔离 Linux: 17 passed。覆盖未确认默认只读、expected-head/dirty/main前进拒绝、基线/路径拒绝、幂等备份、失败回滚、HTTPS失败真实文件恢复、并发修改阻断回滚及 mode/uid/gid 恢复、已发布版本HTTPS失败零回滚、临时symlink防护及全批次并发回滚拒绝。
+- `python platform/scripts/test_publish_restaurant_removal.py`: Windows: 16 passed / 2 Linux-only skips；139 上 /tmp 隔离 Linux: 18 passed。覆盖未确认默认只读、expected-head/dirty/main前进拒绝、基线/路径拒绝、幂等备份、失败回滚、HTTPS失败真实文件恢复、并发修改阻断回滚及 mode/uid/gid 恢复、已发布版本HTTPS失败零回滚、临时symlink防护及全批次并发回滚拒绝。
 - Four changed JS files: `node --check` passed; `git diff --check` passed.
 - Browser: 8 primary pages × desktop 1440/mobile 390: no dining links/copy and no horizontal overflow.
 - Homepage: desktop 1440/tablet 768/mobile 390 × normal/reduced motion: 6 passed; mobile/reduced motion zero pinned sections and no Lenis; all reveal content visible after scrolling; no pageerror.
