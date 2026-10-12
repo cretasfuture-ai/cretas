@@ -19,8 +19,8 @@
 <meta property="og:image" content="https://cretaceousfuture.com/assets/img/og-card.jpg">
 <meta property="og:url" content="https://cretaceousfuture.com/">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/css/v6.css?v=20261012b">
-<link rel="stylesheet" href="/css/v6-motion.css?v=20261012b">
+<link rel="stylesheet" href="/css/v6.css?v=20261012c">
+<link rel="stylesheet" href="/css/v6-motion.css?v=20261012c">
 <script>document.documentElement.classList.add('v6-js')</script>
 <style>
 /* Reveal must never gate content: without JS (or if the observer never fires)
@@ -34,7 +34,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .hero-wrap{position:relative}
 .hero-wrap .v6-glow{top:20px;height:420px}
 .v6-hero{height:min(78vh,640px)}
-.v6-hero-mask img{object-position:center 40%}
+/* 放大漂移(1.35→1)以人物头部为原点, 否则发网和脸被裁掉 */
+.v6-hero-mask img{object-position:center 22%;transform-origin:62% 18%}
 .hero-copy{position:absolute;left:clamp(24px,5.5vw,80px);top:50%;transform:translateY(-50%);
   max-width:min(48%,560px);z-index:2}
 .hero-copy h1{font-size:clamp(34px,5.4vw,62px);font-weight:900;color:#fff;line-height:1.26;
@@ -46,8 +47,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .hero-cta .v6-link:hover{opacity:1}
 
 /* AI 识别框 (desktop overlay) */
-.ai-box-1{right:5%;top:12%;width:clamp(170px,19vw,270px);height:64%}
-.ai-box-2{left:34%;top:58%;width:clamp(130px,14vw,190px);height:30%}
+.ai-box-1{right:17%;top:9%;width:clamp(170px,20vw,290px);height:70%}
+.ai-box-2{left:40%;top:62%;width:clamp(150px,17vw,250px);height:30%}
 .ai-box-1 .v6-ai-tag{top:-16px;left:0}
 .ai-box-2 .v6-ai-tag{bottom:-16px;left:0}
 
@@ -126,8 +127,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   background-repeat:no-repeat;z-index:2;box-shadow:0 0 20px rgba(0,226,138,.12)}
 .band .bdet span{position:absolute;top:-16px;left:0;background:var(--v6-tag);color:#04140d;
   font-family:var(--v6-mono);font-size:12px;font-weight:800;padding:3px 11px;border-radius:99px;white-space:nowrap}
-.band .bd1{right:24%;top:16%;width:clamp(150px,15vw,220px);height:50%}
-.band .bd2{right:6%;top:56%;width:clamp(120px,11vw,170px);height:20%}
+.band .bd1{right:27%;top:17%;width:clamp(190px,16vw,260px);height:46%}
+.band .bd2{left:47%;top:81%;width:clamp(170px,17vw,260px);height:13%}
 .band .bd2 span{top:auto;bottom:-16px;background:rgba(4,20,13,.8);color:var(--v6-tag)}
 .band .bscan{position:absolute;left:0;right:0;height:2px;z-index:2;
   background:linear-gradient(90deg,transparent,rgba(0,226,138,.85),transparent);
@@ -307,12 +308,12 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="v6-glow"></div>
   <div class="v6-hero" data-v6-eye>
     <div class="v6-hero-mask">
-      <picture><source type="image/webp" srcset="/assets/img/hero-kitchen-480.webp 480w, /assets/img/hero-kitchen-768.webp 768w, /assets/img/hero-kitchen-1200.webp 1200w" sizes="100vw"><img fetchpriority="high" decoding="async" width="1440" height="810" alt="卤味加工场景，AI 正在识别工序与出品" src="/assets/img/hero-kitchen.jpg"></picture>
+      <picture><source type="image/webp" srcset="/assets/img/factory-line-480.webp 480w, /assets/img/factory-line-768.webp 768w, /assets/img/factory-line-1200.webp 1200w, /assets/img/factory-line-1440.webp 1440w" sizes="100vw"><img fetchpriority="high" decoding="async" width="1440" height="810" alt="食品工厂卤制品分拣线，工人戴发网口罩手套作业，AI 识别工序与出品" src="/assets/img/factory-line.jpg"></picture>
     </div>
     <div class="v6-hero-scrim"></div>
 
     <div class="v6-ai-box ai-box-1">
-      <span class="v6-ai-tag">操作员 · 装盘工序 98.2%</span>
+      <span class="v6-ai-tag">操作员 · 摆盘工序 98.2%</span>
     </div>
     <div class="v6-ai-box ai-box-2" style="border-color:rgba(0,226,138,.55);box-shadow:none">
       <span class="v6-ai-tag v6-ai-tag--dark">出品 ×3 · 已计数</span>
@@ -323,12 +324,12 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <p>白垩纪把 AI 装进车间、仓库、货车和账本，看得见每道工序，算得清每一分钱。</p>
       <div class="hero-cta">
         <a class="v6-btn" href="mailto:stevenj4xie@gmail.com">预约演示</a>
-        <a class="v6-link" href="/demo.html">3 分钟了解 Cretas →</a>
+        <a class="v6-link" href="/demo.html">看在线演示 →</a>
       </div>
     </div>
 
     <div class="v6-live-bar">
-      <span class="v6-live-dot">● LIVE</span>
+      <span class="v6-live-dot">● 示意</span>
       <span id="liveTicker">酱卤车间 · 第 3 道工序进行中</span>
     </div>
   </div>
@@ -337,8 +338,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <!-- 三业务 -->
 <section class="biz">
   <div class="v6-glow" style="top:-60px;height:115%"></div>
-  <h2 class="v6-reveal">三门生意，一个 AI 底座</h2>
-  <p class="sub v6-reveal">每一条业务线，AI 都在里面干活，不是挂名的“智能”。</p>
+  <h2 class="v6-reveal">车间、货车、账本，同一个 AI 在干活</h2>
+  <p class="sub v6-reveal">从一块原料进厂，到一车货送到客户手上，AI 跟着每一张单子走，有事直接用大白话问它。</p>
   <div class="biz-grid">
 
     <a class="v6-photo-card v6-reveal" href="/solutions-factory.html" style="box-shadow:0 16px 38px rgba(92,64,38,.22)">
@@ -352,7 +353,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
     <a class="v6-photo-card v6-reveal" href="/solutions-logistics.html" style="box-shadow:0 16px 38px rgba(60,74,90,.2);transition-delay:.1s">
       <picture><source type="image/webp" srcset="/assets/img/truck-480.webp 480w, /assets/img/truck-768.webp 768w, /assets/img/truck-1200.webp 1200w" sizes="(max-width:900px) 100vw, 560px"><img decoding="async" width="1440" height="810" style="object-position:center 88%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线" loading="lazy" src="/assets/img/truck.jpg"></picture>
-      <span class="card-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
+      <span class="card-tag">示例 · 6 趟 → 5 趟 · 省 ¥430/天</span>
       <div class="shade"></div>
       <div class="title"><b>物流配送</b><small>十辆车，一个人调</small></div>
     </a>
@@ -369,10 +370,10 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 <!-- 视觉 AI 全宽带 -->
 <section class="band">
-  <div class="bmask"><picture><source type="image/webp" srcset="/assets/img/band-kitchen-480.webp 480w, /assets/img/band-kitchen-768.webp 768w, /assets/img/band-kitchen-1200.webp 1200w, /assets/img/band-kitchen-1600.webp 1600w" sizes="100vw"><img decoding="async" width="1600" height="1067" alt="食品加工实时画面，AI 识别框正在跟踪作业" loading="lazy" src="/assets/img/band-kitchen.jpg"></picture></div>
+  <div class="bmask"><picture><source type="image/webp" srcset="/assets/img/factory-ppe-480.webp 480w, /assets/img/factory-ppe-768.webp 768w, /assets/img/factory-ppe-1200.webp 1200w, /assets/img/factory-ppe-1440.webp 1440w" sizes="100vw"><img decoding="async" width="1440" height="810" alt="食品工厂车间画面，AI 识别框跟踪工人的发网、口罩、手套和出品" loading="lazy" src="/assets/img/factory-ppe.jpg"></picture></div>
   <div class="bscrim"></div>
   <div class="bscan"></div>
-  <div class="bdet bd1"><span>操作员 · 分割工序 97.6%</span></div>
+  <div class="bdet bd1"><span>穿戴合规 · 发网 口罩 手套 ✓</span></div>
   <div class="bdet bd2"><span>出品 ×12 · 已计件</span></div>
   <div class="bcopy">
     <h2>摄像头，就是 AI 的眼睛。</h2>
@@ -384,7 +385,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <!-- 产品实拍带 -->
 <section class="shots">
   <h2 class="v6-reveal">不是概念图，是每天在跑的系统</h2>
-  <p class="sub v6-reveal">下面每一张都是真实界面，工作流编辑器、调度地图，客户每天就用这些干活。</p>
+  <p class="sub v6-reveal">下面都是系统的真实界面截图，图里的业务数据是示例。</p>
   <div class="srow">
 
     <figure><picture><source type="image/webp" srcset="/assets/img/shots/workflow-480.webp 480w, /assets/img/shots/workflow-768.webp 768w, /assets/img/shots/workflow-1200.webp 1200w" sizes="(max-width:900px) 100vw, 1100px"><img loading="lazy" decoding="async" class="v6-shot" width="1280" height="662" alt="可视化工作流编辑器：拖拽编排工序与物料流转" src="/assets/img/shots/workflow.png"></picture>
@@ -400,7 +401,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="ops-inner">
     <div>
       <h2 class="v6-reveal">此刻，<span>AI 正在干活。</span></h2>
-      <p class="v6-reveal">这不是演示数据的样子，接入 Cretas 后，你的系统里每天就是这样一条条滚过去的。</p>
+      <p class="v6-reveal">这是某一天的示例流水。接入 Cretas 后，这些提醒按你自己的数据，一条条推到你手机上。</p>
       <a class="v6-btn v6-reveal" href="mailto:stevenj4xie@gmail.com">预约演示</a>
     </div>
     <div class="opsfeed" aria-hidden="true">
@@ -436,7 +437,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 <!-- 护城河三条 -->
 <section class="moat">
-  <h2 class="v6-reveal">AI 谁都在讲，这三件事别人做不到</h2>
+  <h2 class="v6-reveal">敢把账交给系统，靠的是这三件事</h2>
   <p class="sub v6-reveal">工具可以抄，立场和根基抄不走。</p>
   <div class="trio">
     <div class="mo v6-reveal">
@@ -507,7 +508,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <section class="quote-band">
   <div class="v6-quote v6-reveal">
     “AI 不是噱头，是你的运营班底。”
-    <small>— 三条业务线跑在同一个底座上，这句话我们敢写在首页。</small>
+    <small>— 工厂、物流和 AI 跑在同一套系统里，数据只录一次。</small>
   </div>
   <a class="quote-cta v6-reveal" href="/demo.html">看看 AI 怎么干活 →</a>
 </section>
@@ -530,10 +531,10 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <script src="/js/ScrollTrigger.min.js"></script>
 <script src="/js/lenis.min.js"></script>
 <script src="/js/v6-eye.js?v=20261012b"></script>
-<script src="/js/v6-premium.js?v=20261012b"></script>
+<script src="/js/v6-premium.js?v=20261012c"></script>
 <!-- 七个滚动/指针签名动效 + 边界光束 + 思考球。必须在 v6-premium.js 之后
      (要覆盖它建立的触发器), 且在 v6-intro.js 之前 (要先挂上 v6:enter 监听) -->
-<script src="/js/v6-motion.js?v=20261012b"></script>
+<script src="/js/v6-motion.js?v=20261012c"></script>
 <script src="/js/v6-intro.js?v=20261012b"></script>
 <script>
 /* Safety net: guarantee no reveal section ever stays hidden (slow JS / headless / IO miss). */

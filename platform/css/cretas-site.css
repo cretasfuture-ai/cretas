@@ -145,7 +145,7 @@ section{position:relative;padding:96px 0}
 .pcard h3{font-size:22px;margin-bottom:12px}.pcard p{color:var(--text-2);font-size:15px}
 .pcard .tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
 .pcard .tag{font-family:var(--font-mono);font-size:11.5px;color:var(--text-3);border:1px solid var(--line);border-radius:8px;padding:4px 10px}
-.col-7{grid-column:span 7}.col-5{grid-column:span 5}.col-6{grid-column:span 6}.col-4{grid-column:span 4}.col-8{grid-column:span 8}
+.col-7{grid-column:span 7}.col-5{grid-column:span 5}.col-6{grid-column:span 6}.col-4{grid-column:span 4}.col-8{grid-column:span 8}.col-12{grid-column:span 12}
 
 /* ---------- hub cards (homepage -> sub-pages) ---------- */
 .hub-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}

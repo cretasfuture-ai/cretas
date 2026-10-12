@@ -5,7 +5,7 @@
   --v6-bg-a:#fdfcfa; --v6-bg-b:#faf8f4; --v6-ink:#111; --v6-ink-2:#57534e;
   /* --v6-cta-ink 原为 #00875c = 4.43:1(差 0.07 不达标)。它出现在案例链接/步骤标签/
      词流带高亮/实拍标尺十几处, 改这一个值等于一次性修好全部。
-     ⚠️ 判达标要按**最差底色**算, 不是米白底: 餐饮页的 .tag 压在浅绿底
+     ⚠️ 判达标要按**最差底色**算, 不是米白底: 压在浅绿底上的 .tag 在
      rgb(227,247,240) 上, 那里最吃亏。现 #007a55 → 米白底 5.23:1 / 浅绿底 4.81:1 */
   --v6-cta:#00b377; --v6-cta-ink:#007a55; --v6-tag:#00e28a; --v6-tag-bg:rgba(4,20,13,.5);
   /* 说明性小字(拟物卡 .ph / 时间戳 .now / 旧值 .old / 实拍标尺)统一到这一档。
@@ -150,6 +150,8 @@ html.v6-js .v6-ai-box{animation:v6HeroFade 1.3s ease-out .65s both}
     padding-bottom:4px}
   nav.v6-nav div.nav-links::-webkit-scrollbar{display:none}
   nav.v6-nav div.nav-links a{flex:0 0 auto;white-space:nowrap}
+  /* 横向滚动行在 390 宽只露出前 4 个, 「预约演示」排在最后会落在屏幕外 */
+  nav.v6-nav div.nav-links a.v6-btn-ghost{order:-1}
 }
 .v6-shot{border-radius:12px;box-shadow:0 14px 34px rgba(60,60,60,.18);overflow:hidden;display:block;width:100%;max-width:100%;height:auto}
 
