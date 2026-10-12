@@ -39,7 +39,8 @@ class PublishTransactionTest(unittest.TestCase):
             code = code.replace('import base64, fcntl,', 'import base64,')
             code = code.replace('fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)', '')
             code = re.sub(r'^lock=.*$', "lock=open('"+(Path(self.temp.name)/'lock').as_posix()+"','w')", code, flags=re.M)
-            code = code.replace("os.chown(tmp,meta['uid'],meta['gid'])", '')
+            code = code.replace("os.fchmod(fd,meta['mode'])", "os.chmod(tmp,meta['mode'])")
+            code = code.replace("os.fchown(fd,meta['uid'],meta['gid'])", '')
         output = io.StringIO()
         namespace = {}
         with patch('sys.stdin', io.StringIO(json.dumps(data))), contextlib.redirect_stdout(output):
@@ -123,6 +124,35 @@ class PublishTransactionTest(unittest.TestCase):
             self.run_transaction(action='rollback')
         self.assertEqual((self.root/'index.html').read_bytes(), b'new index.html')
 
+    @unittest.skipIf(os.name == 'nt', 'Linux symlink/O_EXCL test executed on gateway /tmp')
+    def test_preexisting_temp_symlink_cannot_modify_outside_file(self):
+        self.rows=self.rows[:1]
+        outside=Path(self.temp.name)/'outside'
+        outside.write_bytes(b'protected')
+        os.symlink(outside,self.root/'.cretas-publish-poison')
+        with patch.object(tempfile,'_get_candidate_names',return_value=iter(['poison','safe'])):
+            self.run_transaction()
+        self.assertEqual(outside.read_bytes(),b'protected')
+        self.assertEqual((self.root/'index.html').read_bytes(),b'new index.html')
+
+    def test_concurrent_edit_blocks_entire_exception_rollback(self):
+        name='third.html';(self.root/name).write_bytes(b'old third.html')
+        self.rows.append({'path':name,'baseline':hashlib.sha256(b'old third.html').hexdigest(),
+                          'content':base64.b64encode(b'new third.html').decode()})
+        original=os.replace;calls=0
+        def fail_third(src,dst):
+            nonlocal calls
+            calls+=1
+            if calls==3:
+                (self.root/'index.html').write_bytes(b'concurrent edit')
+                raise OSError('injected write failure')
+            original(src,dst)
+        with patch('os.replace',fail_third):
+            with self.assertRaisesRegex(RuntimeError,'ROLLBACK_BLOCKED'):
+                self.run_transaction()
+        self.assertEqual((self.root/'index.html').read_bytes(),b'concurrent edit')
+        self.assertEqual((self.root/'demo.html').read_bytes(),b'new demo.html')
+
     @unittest.skipIf(os.name == 'nt', 'Linux ownership metadata tested on the gateway in /tmp')
     def test_linux_rollback_preserves_mode_uid_gid(self):
         p=self.root/'index.html'
@@ -136,6 +166,14 @@ class PublishTransactionTest(unittest.TestCase):
                          (after.st_mode & 0o777, after.st_uid, after.st_gid))
 
 class PublishEntryTest(unittest.TestCase):
+    def test_already_published_https_failure_makes_no_rollback_write(self):
+        with patch.object(publisher,'remote',return_value={'status':'already_published'}) as ssh, \
+             patch.object(publisher,'verify_https',side_effect=RuntimeError('network failure')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError,'made no changes'):
+                publisher.publish_and_verify({'head':'a'*40,'action':'publish','files':[]})
+            self.assertEqual(ssh.call_count,1)
+
     def test_origin_main_advance_rejects_before_ssh(self):
         def git(*args):
             if args == ('rev-parse','origin/main'): return b'b'*40

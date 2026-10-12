@@ -24,7 +24,7 @@ REVIEWED_LIVE_BASELINES = {
 }
 
 REMOTE = '''
-import base64, fcntl, hashlib, json, os, pathlib, re, sys
+import base64, fcntl, hashlib, json, os, pathlib, re, sys, tempfile
 data=json.load(sys.stdin)
 root=pathlib.Path('/www/wwwroot/showcase/cretaceousfuture').resolve()
 lock=os.fdopen(os.open('/tmp/cretas-showcase-publish.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600),'r+')
@@ -36,13 +36,17 @@ def target(name):
     if root not in p.parents or (root/name).is_symlink(): raise RuntimeError('invalid path')
     return p
 def replace(p,content,meta):
-    tmp=p.with_name(p.name+'.publish-'+data['head'][:12])
+    fd,name=tempfile.mkstemp(prefix='.cretas-publish-',dir=str(p.parent))
+    tmp=pathlib.Path(name)
     try:
-        tmp.write_bytes(content)
-        os.chmod(tmp,meta['mode'])
-        os.chown(tmp,meta['uid'],meta['gid'])
+        os.fchmod(fd,meta['mode'])
+        os.fchown(fd,meta['uid'],meta['gid'])
+        with os.fdopen(fd,'wb') as stream:
+            fd=None
+            stream.write(content)
         os.replace(tmp,p)
     finally:
+        if fd is not None: os.close(fd)
         if tmp.exists(): tmp.unlink()
 backup=pathlib.Path('/www/backup/cretas-showcase')/data['head']
 manifest=backup/'manifest.json'
@@ -87,9 +91,12 @@ try:
     for p,old,new,meta in paths:
         if p.read_bytes()!=new: raise RuntimeError('readback mismatch')
 except BaseException:
-    for p,old,new,meta in reversed(changed):
-        if p.read_bytes()!=new: raise RuntimeError('rollback blocked by concurrent change')
-        replace(p,old,meta)
+    if any(p.read_bytes()!=new for p,old,new,meta in changed):
+        raise RuntimeError('ROLLBACK_BLOCKED: concurrent change before rollback; nothing restored')
+    try:
+        for p,old,new,meta in reversed(changed): replace(p,old,meta)
+    except BaseException as error:
+        raise RuntimeError('ROLLBACK_BLOCKED: restoration failed: '+str(error))
     raise
 print(json.dumps({'status':'published','files':len(paths),'backup':str(backup),'head':data['head']}))
 '''
@@ -97,13 +104,17 @@ print(json.dumps({'status':'published','files':len(paths),'backup':str(backup),'
 def git(*args):
     return subprocess.check_output(['git', *args], cwd=REPO).strip()
 
+class RollbackBlocked(RuntimeError):
+    pass
+
 def remote(payload):
     program = base64.b64encode(REMOTE.encode()).decode()
     command = "python3 -c \"import base64;exec(base64.b64decode('" + program + "'))\""
     result = subprocess.run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',HOST,command],
                             input=json.dumps(payload).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
-        raise RuntimeError(result.stderr.decode(errors='replace').strip())
+        message = result.stderr.decode(errors='replace').strip()
+        raise (RollbackBlocked if 'ROLLBACK_BLOCKED:' in message else RuntimeError)(message)
     return json.loads(result.stdout)
 
 def verify_https(rows, head):
@@ -118,11 +129,15 @@ def publish_and_verify(payload):
     try:
         result = remote(payload)
     except Exception as error:
-        print(json.dumps({'final_status':'publish_failed','error':str(error)}))
+        print(json.dumps({'final_status':'rollback_blocked' if isinstance(error,RollbackBlocked) else 'publish_failed',
+                          'error':str(error)}))
         raise
     try:
         verify_https(payload['files'], payload['head'])
     except Exception as error:
+        if result['status'] != 'published':
+            print(json.dumps({'final_status':'verification_failed_no_change','verification_error':str(error)}))
+            raise RuntimeError('HTTPS verification failed; this invocation made no changes') from error
         try:
             restored = remote(dict(payload, action='rollback'))
         except Exception as rollback_error:
