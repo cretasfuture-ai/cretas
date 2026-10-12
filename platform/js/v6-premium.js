@@ -16,7 +16,7 @@
   var FINE = window.matchMedia('(pointer: fine)').matches;
 
   /* ============ Lenis smooth scroll (the premium-feel foundation) ========= */
-  if (window.Lenis && DESKTOP && FINE) {
+  if (window.Lenis) {
     var lenis = new Lenis({ autoRaf: false, lerp: 0.1 });
     gsap.ticker.add(function(t){ lenis.raf(t * 1000); });
     gsap.ticker.lagSmoothing(0);
@@ -35,13 +35,8 @@
       if (sec.querySelector('.eye-stage, .biz-h')) return;      /* pinned stages */
       if (sec.closest('.v6-hero, .ai-hero, .c-hero, .d-hero')) return;
       if (sec.classList.contains('v6-hero')) return;
-      /* v6-motion.js 接管的段落: 自己 pin 或 sticky, 离场由它们各自的时间线
-         负责。按类名判断而不是按 .biz-h / .is-expand —— 那些类是 v6-motion
-         之后才加上的, 此处先执行, 判不到。 */
-      if (sec.matches('.biz, .band, .shots')) return;
-      if (sec.closest('.v6-stack')) return;
       gsap.to(sec, {
-        opacity: .75, y: -18, ease: 'none',
+        opacity: 0, y: -180, scale: .92, ease: 'none',
         scrollTrigger: { trigger: sec, start: 'bottom 34%', end: 'bottom -12%', scrub: true }
       });
     });
@@ -58,7 +53,7 @@
     h.classList.add('v6-lines');
     h.classList.remove('v6-reveal');
     gsap.from(h.querySelectorAll('.v6-li'), {
-      yPercent: 35, duration: .65, ease: 'expo.out', stagger: .06,
+      yPercent: 130, duration: .95, ease: 'expo.out', stagger: .12,
       scrollTrigger: { trigger: h, start: 'top 88%', once: true }
     });
   });
@@ -69,19 +64,16 @@
     var yTo = gsap.quickTo(btn, 'y', {duration:.4, ease:'power3.out'});
     btn.addEventListener('pointermove', function(e){
       var r = btn.getBoundingClientRect();
-      xTo((e.clientX - r.left - r.width/2) * .08);
-      yTo((e.clientY - r.top - r.height/2) * .08);
+      xTo((e.clientX - r.left - r.width/2) * .3);
+      yTo((e.clientY - r.top - r.height/2) * .35);
     });
     btn.addEventListener('pointerleave', function(){
-      xTo(0); yTo(0);
+      gsap.to(btn, {x:0, y:0, duration:.7, ease:'elastic.out(1,.45)'});
     });
   });
 
-  /* Photo-card 3D tilt (desktop).
-     Cards inside .biz-grid are excluded: v6-motion.js drives their rotationY on
-     the 3D ring, and two owners of the same property fight each other. */
+  /* Photo-card 3D tilt (desktop) */
   if (FINE) document.querySelectorAll('.v6-photo-card').forEach(function(card){
-    if (card.closest('.biz-grid')) return;
     var rx = gsap.quickTo(card, 'rotationX', {duration:.5, ease:'power3.out'});
     var ry = gsap.quickTo(card, 'rotationY', {duration:.5, ease:'power3.out'});
     gsap.set(card, {transformPerspective: 900});
@@ -100,11 +92,11 @@
 
   /* Hero image settle + drift; copy drifts away; full-bleed band drift */
   document.querySelectorAll('.v6-hero-mask img').forEach(function(img){
-    gsap.fromTo(img, { scale: 1.08, yPercent: -4 }, { scale: 1, yPercent: 4, ease: 'none',
+    gsap.fromTo(img, { scale: 1.35, yPercent: -12 }, { scale: 1, yPercent: 16, ease: 'none',
       scrollTrigger: { trigger: img.closest('.v6-hero'), start: 'top top', end: 'bottom top', scrub: 0.8 } });
   });
   document.querySelectorAll('.v6-hero .hero-copy').forEach(function(copy){
-    gsap.to(copy, { yPercent: -12, opacity: .85, ease: 'none',
+    gsap.to(copy, { yPercent: -60, opacity: 0.08, ease: 'none',
       scrollTrigger: { trigger: copy.closest('.v6-hero'), start: 'top top', end: 'bottom 22%', scrub: 0.8 } });
   });
   document.querySelectorAll('.v6-photo-card img').forEach(function(img){
@@ -112,8 +104,10 @@
     gsap.fromTo(img, { yPercent: -9 }, { yPercent: 9, ease: 'none',
       scrollTrigger: { trigger: img.closest('.v6-photo-card'), start: 'top bottom', end: 'bottom top', scrub: 0.8 } });
   });
-  /* .band 的图不再做视差: v6-motion.js 让整段从内嵌卡片扩张到全屏, 再叠一层
-     垂直漂移会把扩张读成"图在自己动"; 流体透镜的副本也要和底图逐像素对齐。 */
+  document.querySelectorAll('.band .bmask img').forEach(function(img){
+    gsap.fromTo(img, { yPercent: -9 }, { yPercent: 9, ease: 'none',
+      scrollTrigger: { trigger: img.closest('.band'), start: 'top bottom', end: 'bottom top', scrub: 0.8 } });
+  });
 
   /* Pointer spotlight in heroes (desktop) */
   if (FINE) document.querySelectorAll('.hero-wrap, .ai-hero').forEach(function(hero){
@@ -141,10 +135,45 @@
     window.v6Eye(host, { gap: host.classList.contains('ai-hero') ? 34 : 30 });
   });
 
-  /* ============ HOME — 已移交 v6-motion.js ==============================
-     四业务横向画廊 → 3D 环形轮播 + 滚动吸附 (initBizRing)
-     视觉 AI 带 scale 雏形 → 全屏扩展转场 + 流体透镜 (initBandExpand/initFluidLens)
-     两处都需要 pin 与逐卡 3D 姿态, 留在这里会和新层争同一批属性。 */
+  /* ============ HOME — pinned horizontal gallery ========================= */
+  var bizGrid = document.querySelector('.biz-grid');
+  if (bizGrid && DESKTOP) {
+    var cards = gsap.utils.toArray(bizGrid.children);
+    cards.forEach(function(c){ c.classList.remove('v6-reveal'); c.classList.add('in'); });
+    document.querySelector('.biz').classList.add('biz-h');
+    var travel = function(){ return Math.max(0, bizGrid.scrollWidth - bizGrid.clientWidth); };
+    function spotlight(){
+      /* the card nearest viewport center is "lit"; others recede slightly */
+      var vc = window.innerWidth / 2;
+      cards.forEach(function(c){
+        var r = c.getBoundingClientRect();
+        var off = (r.left + r.width/2) - vc;
+        var d = Math.min(1, Math.abs(off) / (window.innerWidth * .7));
+        gsap.set(c, { scale: 1 - d * .06, filter: 'brightness(' + (1.04 - d * .18) + ')' });
+        var im = c.querySelector('img');
+        if (im) gsap.set(im, { xPercent: Math.max(-5, Math.min(5, off / window.innerWidth * -10)) });
+      });
+    }
+    gsap.to(bizGrid, {
+      x: function(){ return -travel(); }, ease: 'none',
+      scrollTrigger: {
+        trigger: '.biz', start: 'top top', end: function(){ return '+=' + (travel() + 200); },
+        pin: true, scrub: 0.8, invalidateOnRefresh: true,
+        onUpdate: spotlight, onRefresh: spotlight,
+        onLeave: function(){ gsap.to(cards, {scale:1, filter:'brightness(1)', duration:.5, ease:'power2.out'});
+          cards.forEach(function(c){ var im=c.querySelector('img'); if(im) gsap.to(im,{xPercent:0,duration:.5}); }); }
+      }
+    });
+    spotlight();
+  }
+  var band = document.querySelector('.band');
+  if (band) {
+    gsap.fromTo(band, { scale: .72, borderRadius: '56px' }, { scale: 1, borderRadius: '0px', ease: 'none',
+      scrollTrigger: { trigger: band, start: 'top 85%', end: 'top 25%', scrub: 0.8 } });
+    gsap.from(band.querySelectorAll('.bcopy > *'), { y: 26, opacity: 0, duration: .8,
+      ease: 'power4.out', stagger: .09,
+      scrollTrigger: { trigger: band, start: 'top 55%', once: true } });
+  }
 
   /* ============ FACTORY — pinned 3-chapter vision story ================== */
   var stage = document.querySelector('.eye-stage');
@@ -232,6 +261,85 @@
     });
   }
 
+  /* 数字滚到位。终值写在 HTML 里, 这里只在触发时才建 tween ——
+     不触发就是终值, 动效永远不是内容的开关。 */
+  function v6Count(scope, dur, delay){
+    if (!scope) return;
+    var nodes = scope.matches('[data-count]') ? [scope] : scope.querySelectorAll('[data-count]');
+    gsap.utils.toArray(nodes).forEach(function(n){
+      var to = parseFloat(n.getAttribute('data-count'));
+      if (isNaN(to)) return;
+      var dec = +(n.getAttribute('data-dec') || 0),
+          pre = n.getAttribute('data-pre') || '',
+          suf = n.getAttribute('data-suf') || '',
+          grp = n.getAttribute('data-group') === '1',
+          o   = { v: 0 };
+      gsap.to(o, { v: to, duration: dur, delay: delay || 0, ease: 'power2.out',
+        onUpdate: function(){
+          n.textContent = pre + (grp
+            ? o.v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })
+            : o.v.toFixed(dec)) + suf;
+        } });
+    });
+  }
+
+  /* ---- RESTAURANT 问答实录: 答得出来的「抹开」(像被逐字算出来),
+     答不出来的不抹开 —— 只是浮现, 然后把缺的数据一条条点出来。
+     动作本身就是那句话: 一个在产出, 一个在拒绝产出。 */
+  var asklist = document.querySelector('.asklist');
+  if (asklist) gsap.utils.toArray('.ask-i').forEach(function(row){
+    row.classList.remove('v6-reveal'); row.classList.add('in');
+    var ans   = row.querySelector('.a'),
+        why   = row.querySelector('.why'),
+        pill  = row.querySelector('.tagno'),
+        metas = row.querySelectorAll('.m span'),
+        chips = row.querySelectorAll('.miss span'),
+        refuse = row.classList.contains('no');
+    ScrollTrigger.create({ trigger: row, start: 'top 84%', once: true, onEnter: function(){
+      var tl = gsap.timeline();
+      if (ans && !refuse) {
+        tl.fromTo(ans, { clipPath: 'inset(0 100% 0 0)' },
+                       { clipPath: 'inset(0 0% 0 0)', duration: .8, ease: 'expo.out' }, 0);
+        v6Count(ans, .8, 0);
+      } else if (ans) {
+        if (pill) tl.from(pill, { opacity: 0, scale: .92, duration: .32, ease: 'power3.out' }, 0);
+        tl.from(ans, { opacity: 0, y: 7, duration: .44, ease: 'power3.out' }, .1);
+      }
+      if (metas.length) {
+        tl.from(metas, { opacity: 0, y: 6, duration: .45, ease: 'power3.out', stagger: .08 }, .34);
+        v6Count(row.querySelector('.m'), .7, .34);
+      }
+      if (chips.length) tl.from(chips, { opacity: 0, y: 9, duration: .42, ease: 'power3.out', stagger: .1 }, .38);
+      if (why)          tl.from(why,   { opacity: 0, y: 8, duration: .52, ease: 'power3.out' }, .52);
+    }});
+  });
+
+  /* ---- RESTAURANT 经济账: 一条编排好的时间线, 成本依次降下来。
+     不是各自淡入 —— 顺序本身就是论点。 */
+  var ecSteps = document.querySelector('.ec-steps');
+  if (ecSteps) {
+    var ecs = gsap.utils.toArray('.ec-s');
+    ecs.forEach(function(s){ s.classList.remove('v6-reveal'); s.classList.add('in'); });
+    ScrollTrigger.create({ trigger: ecSteps, start: 'top 78%', once: true, onEnter: function(){
+      var tl = gsap.timeline();
+      ecs.forEach(function(s, i){
+        var at = i * .28;
+        tl.from(s.querySelectorAll('.n, .t'), { opacity: 0, y: 10, duration: .5, ease: 'power3.out', stagger: .06 }, at)
+          .from(s.querySelector('.v'),        { opacity: 0, y: 12, duration: .55, ease: 'power3.out' }, at + .06)
+          .from(s.querySelector('.ec-bar i'), { scaleX: 0, duration: .9, ease: 'expo.out' }, at + .14)
+          .from(s.querySelector('.d'),        { opacity: 0, y: 8, duration: .5, ease: 'power3.out' }, at + .3);
+        v6Count(s.querySelector('.v'), .9, at + .14);
+      });
+    }});
+  }
+  var ecVs = document.querySelector('.ec-vs');
+  if (ecVs) {
+    var vsItems = gsap.utils.toArray(ecVs.children);
+    vsItems.forEach(function(s){ s.classList.remove('v6-reveal'); s.classList.add('in'); });
+    gsap.from(vsItems, { opacity: 0, y: 14, duration: .6, ease: 'power3.out', stagger: .1,
+      scrollTrigger: { trigger: ecVs, start: 'top 88%', once: true } });
+  }
+
   /* ============ LOGISTICS — truck: scroll-eased, then free cruise ======== */
   var route = document.querySelector('.route');
   if (route) {
@@ -266,7 +374,7 @@
   if (trips) {
     var bars = trips.querySelectorAll('.tbar');
     gsap.from(bars, { scaleX: 0, transformOrigin: 'left center', duration: 1.1,
-      ease: 'power3.out', stagger: .06,
+      ease: 'power3.out', stagger: .12,
       scrollTrigger: { trigger: trips, start: 'top 80%', once: true,
         onEnter: function(){
           bars.forEach(function(bar, bi){

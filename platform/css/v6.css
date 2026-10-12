@@ -107,26 +107,24 @@ h1,h2,h3,.v6-quote{font-family:var(--v6-display)}
 .v6-quote small{font-size:14px;font-weight:400;color:#6d6862;display:block;margin-top:8px}
 .v6-section{padding:clamp(28px,6vw,72px) clamp(16px,4vw,48px)}
 /* Reveal: small distance + long expo ease = glide, not pop. JS staggers siblings. */
-.v6-reveal{opacity:0;transform:translateY(24px);transition:opacity .45s ease-out,transform .65s cubic-bezier(.16,1,.3,1)}
+.v6-reveal{opacity:0;transform:translateY(130px);transition:opacity .95s ease-out,transform 1.35s cubic-bezier(.16,1,.3,1)}
 /* 进场变体 — v6.js 按元素类型自动分配, 同一屏混排不同手法 */
-.v6-reveal.rv-l{transform:translateX(-24px)}
-.v6-reveal.rv-r{transform:translateX(24px)}
+.v6-reveal.rv-l{transform:translateX(-22vw);transition:opacity .95s ease-out,transform 1.4s cubic-bezier(.16,1,.3,1)}
+.v6-reveal.rv-r{transform:translateX(22vw);transition:opacity .95s ease-out,transform 1.4s cubic-bezier(.16,1,.3,1)}
 /* 原为 cubic-bezier(.3,1.35,.4,1) —— 控制点 y>1 会冲过终点再弹回来。
    真实物体是平滑减速的, 回弹读起来偏廉价。换成 expo 收尾: 起步快、尾巴长, 更有质感。 */
-.v6-reveal.rv-pop{transform:scale(.97) translateY(18px)}
-.v6-reveal.rv-blur{transform:translateY(24px)}
-.v6-reveal.rv-clipx{transform:translateX(-18px)}
+.v6-reveal.rv-pop{transform:scale(.35) translateY(140px);transition:opacity .6s ease-out,transform 1.25s cubic-bezier(.16,1,.3,1)}
+.v6-reveal.rv-blur{transform:translateY(90px) scale(1.12);filter:blur(38px);transition:opacity .9s ease-out,transform 1.3s cubic-bezier(.16,1,.3,1),filter 1.25s ease-out}
+.v6-reveal.rv-clipx{transform:none;clip-path:inset(0 100% 0 0);transition:opacity .5s ease-out,clip-path 1.05s cubic-bezier(.7,0,.2,1)}
 /* 同上, 原为 cubic-bezier(.2,1.2,.3,1) 的过冲回弹 */
-.v6-reveal.rv-tilt{transform:translateY(24px)}
-.v6-reveal.rv-rise{transform:translateY(24px)}
+.v6-reveal.rv-tilt{transform:rotate(-11deg) translateY(190px) scale(.85);transition:opacity .9s ease-out,transform 1.45s cubic-bezier(.16,1,.3,1)}
+.v6-reveal.rv-rise{transform:translateY(38vh);transition:opacity 1s ease-out,transform 1.5s cubic-bezier(.16,1,.3,1)}
 @media (max-width:768px){
-  .v6-reveal.rv-l,.v6-reveal.rv-r{transform:translateY(18px)}
-  .v6-reveal.rv-blur{transform:translateY(18px)}
+  .v6-reveal.rv-l,.v6-reveal.rv-r{transform:translateY(80px)}
+  .v6-reveal.rv-blur{transform:translateY(60px)}
 }
 html,body{overflow-x:clip}
 .v6-reveal.in{opacity:1;transform:none;filter:none;clip-path:inset(0 0 0 0)}
-html:not(.v6-js) .v6-reveal{opacity:1;transform:none;filter:none;clip-path:none}
-a:focus-visible,button:focus-visible{outline:3px solid var(--v6-cta);outline-offset:5px}
 
 /* Hero entrance choreography — the one signature moment per page */
 @keyframes v6HeroRise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
@@ -208,24 +206,22 @@ html.v6-js .v6-ai-box{animation:v6HeroFade 1.3s ease-out .65s both,v6BoxTrack 7.
 
 /* ---- Intro overlay「AI 开机」---- */
 html.v6-lock{overflow:hidden}
-#v6Intro{position:fixed;top:80px;right:24px;z-index:5;background:#10271e;color:#fff;display:none;
-  pointer-events:none;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.12)}
-#v6Intro.is-greeting{display:block;animation:v6Greeting .22s ease-out both}
-@keyframes v6Greeting{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-#v6Intro .icore{position:relative;text-align:center;padding:18px 22px}
-#v6Intro .ilogo{position:relative;width:32px;height:32px;margin:0 auto 12px}
+#v6Intro{position:fixed;inset:0;z-index:99;background:#070a08;display:flex;align-items:center;justify-content:center;
+  clip-path:inset(0 0 0 0);cursor:pointer}
+#v6Intro .icore{position:relative;text-align:center;padding:40px}
+#v6Intro .ilogo{position:relative;width:80px;height:80px;margin:0 auto 24px}
 #v6Intro .ilogo svg{width:100%;height:100%;display:block}
-#v6Intro .ibox{display:none}
+#v6Intro .ibox{position:absolute;inset:-22px;pointer-events:none}
 #v6Intro .ibox .c{position:absolute;width:16px;height:16px;border:2.5px solid #00e28a}
 #v6Intro .ibox .c1{top:0;left:0;border-right:none;border-bottom:none}
 #v6Intro .ibox .c2{top:0;right:0;border-left:none;border-bottom:none}
 #v6Intro .ibox .c3{bottom:0;left:0;border-right:none;border-top:none}
 #v6Intro .ibox .c4{bottom:0;right:0;border-left:none;border-top:none}
 #v6Intro .itag{font-family:var(--v6-mono);font-size:12.5px;color:#00e28a;letter-spacing:2px;margin-bottom:26px}
-#v6Intro .icheck{display:none}
+#v6Intro .icheck{list-style:none;margin:0 auto 34px;padding:0;display:inline-block;text-align:left}
 #v6Intro .icheck li{font-family:var(--v6-mono);font-size:13.5px;color:rgba(255,255,255,.78);padding:5px 0;display:flex;gap:10px;align-items:center}
 #v6Intro .icheck li svg{flex:0 0 14px}
-#v6Intro .ihint{display:none}
+#v6Intro .ihint{font-size:13px;color:rgba(255,255,255,.5);display:flex;flex-direction:column;align-items:center;gap:8px}
 #v6Intro .ihint .ar{width:20px;height:20px;border-right:2px solid rgba(0,226,138,.8);border-bottom:2px solid rgba(0,226,138,.8);
   transform:rotate(45deg);animation:v6HintDip 1.6s ease-in-out infinite}
 @keyframes v6HintDip{0%,100%{transform:rotate(45deg) translate(0,0);opacity:.9}50%{transform:rotate(45deg) translate(5px,5px);opacity:.4}}
@@ -310,7 +306,7 @@ body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 .v6-btn-ghost{transition:background .3s ease,transform .3s ease}
 .v6-btn-ghost:hover{background:#2a2a28;transform:translateY(-1px)}
 /* 滚动进度条 */
-#v6Progress{position:fixed;top:0;left:0;height:2.5px;width:100%;transform:scaleX(0);transform-origin:left;z-index:98;pointer-events:none;
+#v6Progress{position:fixed;top:0;left:0;height:2.5px;width:0;z-index:98;pointer-events:none;
   background:linear-gradient(90deg,var(--v6-cta),var(--v6-tag));border-radius:0 2px 2px 0}
 /* 细滚动条 (webkit) */
 ::-webkit-scrollbar{width:11px}

@@ -53,11 +53,11 @@ function v6RevealInit(){
     groups.get(p).push(e);
   });
   function v6Show(el){
-    var d = Math.min(el.__v6i || 0, 5) * 55;
+    var d = Math.min(el.__v6i || 0, 7) * 110;
     el.style.transitionDelay = d + 'ms';
     el.classList.add('in');
     /* clear delay after it has played so hover/other transitions aren't lagged */
-    setTimeout(function(){ el.style.transitionDelay = ''; }, d + 750);
+    setTimeout(function(){ el.style.transitionDelay = ''; }, d + 1600);
   }
   /* ⚠ 变体若把元素的几何压成 0, IntersectionObserver 会永远报不相交 ——
      reveal 于是永不触发, 元素永久不可见。rv-clipx 的初始态是
@@ -73,7 +73,7 @@ function v6RevealInit(){
       (proxied.get(t) || []).forEach(v6Show);
       io.unobserve(t);
     });
-  }, { threshold: 0.01, rootMargin: '0px 0px -3% 0px' });
+  }, { threshold: 0.01, rootMargin: '0px 0px -8% 0px' });
   els.forEach(function(e){
     var zeroGeom = /(^| )rv-clipx( |$)/.test(e.className);
     var target = (zeroGeom && e.parentElement) ? e.parentElement : e;
@@ -129,7 +129,7 @@ function v6ProgressInit(){
   function frame(){
     ticking = false;
     var h = document.documentElement.scrollHeight - window.innerHeight;
-    bar.style.transform = 'scaleX(' + (h > 0 ? Math.min(1, window.scrollY / h) : 0) + ')';
+    bar.style.width = (h > 0 ? (window.scrollY / h) * 100 : 0) + '%';
   }
   window.addEventListener('scroll', function(){
     if(!ticking){ ticking = true; requestAnimationFrame(frame); }

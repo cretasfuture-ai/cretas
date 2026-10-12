@@ -11,17 +11,12 @@ import urllib.request
 FILES = ['css/v6.css', 'js/v6.js', 'js/v6-intro.js', 'js/v6-motion.js',
          'js/v6-premium.js', 'index.html', 'demo.html', 'solutions-factory.html',
          'solutions-logistics.html', 'solutions-ai.html', 'solutions-custom.html',
-         'smartbi.html', 'cockpit.html', 'sitemap.xml',
-         'solutions-restaurant.html', 'restaurantbi-example/index.html']
+         'smartbi.html', 'cockpit.html']
 HOST = 'root@139.196.165.140'
 ROOT = '/www/wwwroot/showcase/cretaceousfuture'
 REPO = Path(__file__).resolve().parents[2]
-# Reviewed live drift; complete pre-change sources retained in local evidence.
-REVIEWED_LIVE_BASELINES = {
-    'solutions-restaurant.html': '50940d1b25ebb012b683be67a1a6e4f4da7ece8a2df0ff46471b7d2782d2baa1',
-    'js/v6.js': 'fd8b704c68a384d9f81b30460ea46cba7c772d2d9f81d8a3115781599e7f8fe3',
-    'js/v6-premium.js': '4cc153b0004c8e66ddc1d01d84ada25373d8caab832b3ff52bf1272ced49adf7',
-}
+# This release starts from the previous verified deployment, with no live drift.
+REVIEWED_LIVE_BASELINES = {}
 
 REMOTE = '''
 import base64, fcntl, hashlib, json, os, pathlib, re, sys, tempfile
