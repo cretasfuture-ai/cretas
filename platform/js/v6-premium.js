@@ -16,7 +16,7 @@
   var FINE = window.matchMedia('(pointer: fine)').matches;
 
   /* ============ Lenis smooth scroll (the premium-feel foundation) ========= */
-  if (window.Lenis) {
+  if (window.Lenis && DESKTOP && FINE) {
     var lenis = new Lenis({ autoRaf: false, lerp: 0.1 });
     gsap.ticker.add(function(t){ lenis.raf(t * 1000); });
     gsap.ticker.lagSmoothing(0);
@@ -41,7 +41,7 @@
       if (sec.matches('.biz, .band, .shots')) return;
       if (sec.closest('.v6-stack')) return;
       gsap.to(sec, {
-        opacity: 0, y: -180, scale: .92, ease: 'none',
+        opacity: .75, y: -18, ease: 'none',
         scrollTrigger: { trigger: sec, start: 'bottom 34%', end: 'bottom -12%', scrub: true }
       });
     });
@@ -58,7 +58,7 @@
     h.classList.add('v6-lines');
     h.classList.remove('v6-reveal');
     gsap.from(h.querySelectorAll('.v6-li'), {
-      yPercent: 130, duration: .95, ease: 'expo.out', stagger: .12,
+      yPercent: 35, duration: .65, ease: 'expo.out', stagger: .06,
       scrollTrigger: { trigger: h, start: 'top 88%', once: true }
     });
   });
@@ -69,11 +69,11 @@
     var yTo = gsap.quickTo(btn, 'y', {duration:.4, ease:'power3.out'});
     btn.addEventListener('pointermove', function(e){
       var r = btn.getBoundingClientRect();
-      xTo((e.clientX - r.left - r.width/2) * .3);
-      yTo((e.clientY - r.top - r.height/2) * .35);
+      xTo((e.clientX - r.left - r.width/2) * .08);
+      yTo((e.clientY - r.top - r.height/2) * .08);
     });
     btn.addEventListener('pointerleave', function(){
-      gsap.to(btn, {x:0, y:0, duration:.7, ease:'elastic.out(1,.45)'});
+      xTo(0); yTo(0);
     });
   });
 
@@ -100,11 +100,11 @@
 
   /* Hero image settle + drift; copy drifts away; full-bleed band drift */
   document.querySelectorAll('.v6-hero-mask img').forEach(function(img){
-    gsap.fromTo(img, { scale: 1.35, yPercent: -12 }, { scale: 1, yPercent: 16, ease: 'none',
+    gsap.fromTo(img, { scale: 1.08, yPercent: -4 }, { scale: 1, yPercent: 4, ease: 'none',
       scrollTrigger: { trigger: img.closest('.v6-hero'), start: 'top top', end: 'bottom top', scrub: 0.8 } });
   });
   document.querySelectorAll('.v6-hero .hero-copy').forEach(function(copy){
-    gsap.to(copy, { yPercent: -60, opacity: 0.08, ease: 'none',
+    gsap.to(copy, { yPercent: -12, opacity: .85, ease: 'none',
       scrollTrigger: { trigger: copy.closest('.v6-hero'), start: 'top top', end: 'bottom 22%', scrub: 0.8 } });
   });
   document.querySelectorAll('.v6-photo-card img').forEach(function(img){
@@ -266,7 +266,7 @@
   if (trips) {
     var bars = trips.querySelectorAll('.tbar');
     gsap.from(bars, { scaleX: 0, transformOrigin: 'left center', duration: 1.1,
-      ease: 'power3.out', stagger: .12,
+      ease: 'power3.out', stagger: .06,
       scrollTrigger: { trigger: trips, start: 'top 80%', once: true,
         onEnter: function(){
           bars.forEach(function(bar, bi){

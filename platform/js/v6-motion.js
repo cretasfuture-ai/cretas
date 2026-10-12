@@ -57,7 +57,7 @@
     heroPlayed = true;
     document.querySelectorAll('.hero-copy h1.v6-split').forEach(function(h){
       gsap.to(h.querySelectorAll('.v6-ch'), {
-        yPercent: 0, opacity: 1, duration: .95, ease: 'expo.out', stagger: .035
+        yPercent: 0, opacity: 1, duration: .65, ease: 'expo.out', stagger: .02
       });
     });
   }
@@ -67,7 +67,7 @@
      停在「字全藏着」的状态 —— 入场动画不能变成内容的门。 */
   if (document.getElementById('v6Intro')) {
     window.addEventListener('v6:enter', playHeroTitles, { once: true });
-    setTimeout(playHeroTitles, 8200);
+    setTimeout(playHeroTitles, 1800);
   } else {
     playHeroTitles();
   }
@@ -220,7 +220,7 @@
 
     ScrollTrigger.create({
       trigger: shots, start: 'center center',
-      end: '+=' + (figs.length * 72) + '%',
+      end: '+=' + (figs.length * 45) + '%',
       pin: true, scrub: true, anticipatePin: 1,
       onUpdate: function(self){
         show(Math.min(figs.length - 1, Math.floor(self.progress * figs.length)));
@@ -273,7 +273,7 @@
 
     var tl = gsap.timeline({
       scrollTrigger: {
-        trigger: band, start: 'top top', end: '+=170%',
+        trigger: band, start: 'top top', end: '+=90%',
         pin: true, scrub: .7, anticipatePin: 1
       }
     });
@@ -466,8 +466,8 @@
     initBizRing();
     initShotsStage();
     initBandExpand();
-    initFluidLens();
-    initStack();
+    // Keep the visual story clear; avoid a second distortion layer.
+    // Case studies and onboarding stay in the normal reading flow.
     initBeams();
     initOrbs();
 

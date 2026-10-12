@@ -1,56 +1,29 @@
-/* 开场序章「AI 开机」— homepage only.
-   Sequence: 4 logo blocks light up (green last) → AI lock-box snaps onto the logo
-   → three mono self-check lines → "scroll to enter" hint. Any wheel / touch /
-   click / key reveals the site (overlay clips upward, hero settles).
-   Plays once per session; skipped for reduced-motion / no-JS / repeat visits. */
+/* Brief brand greeting; content and scrolling stay available throughout. */
 (function(){
   var el = document.getElementById('v6Intro');
-  if(!el) return;
-  /* 序章让位的信号。首屏标题的逐字入场(v6-motion.js)等这一下才开演, 否则字
-     会在还盖着的黑幕后面白白播完。任何一条退出路径都必须发, 包括"根本没播"
-     的那几条 —— 漏发一条, 标题就会一直藏着直到兜底定时器救场。 */
-  function enter(){ try { window.dispatchEvent(new Event('v6:enter')); } catch(e){} }
-
-  var RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!el) return;
+  var motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var desktop = window.matchMedia('(min-width: 900px) and (pointer: fine)');
   var seen = false;
   try { seen = sessionStorage.getItem('cretasIntroSeen') === '1'; } catch(e){}
-  if(seen || RM || !window.gsap){ el.remove(); enter(); return; }
-
-  document.documentElement.classList.add('v6-lock');
-  var revealed = false;
-
-  var tl = gsap.timeline({defaults:{ease:'power4.out'}});
-  tl.from('#v6Intro .iblk', {scale:0, opacity:0, duration:.55, stagger:.14, ease:'back.out(2.2)'}, .3)
-    .from('#v6Intro .ibox', {scale:1.6, opacity:0, duration:.6, ease:'expo.out'}, '-=.15')
-    .from('#v6Intro .ibox .c', {scale:0, duration:.35, stagger:.05, ease:'back.out(3)'}, '<')
-    .from('#v6Intro .itag', {opacity:0, y:8, duration:.4}, '-=.2')
-    .from('#v6Intro .icheck li', {opacity:0, x:-14, duration:.4, stagger:.22}, '+=.05')
-    .from('#v6Intro .ihint', {opacity:0, y:10, duration:.5}, '+=.1');
-
-  function reveal(){
-    if(revealed) return;
-    revealed = true;
-    try { sessionStorage.setItem('cretasIntroSeen', '1'); } catch(e){}
-    ['wheel','touchmove','keydown'].forEach(function(ev){ window.removeEventListener(ev, reveal); });
-    tl.kill();
-    var out = gsap.timeline({onComplete: function(){
-      el.remove();
-      document.documentElement.classList.remove('v6-lock');
-      if(window.__v6lenis) window.__v6lenis.start();
-      if(window.ScrollTrigger) ScrollTrigger.refresh();
-      enter();                      /* 兜底: 上面那次若被打断, 这里补发 */
-    }});
-    out.to('#v6Intro .icore', {y:-40, opacity:0, duration:.45, ease:'power3.in'})
-       .to(el, {clipPath:'inset(0 0 100% 0)', duration:.85, ease:'expo.inOut'}, '-=.15')
-       .from('.v6-hero-mask img', {scale:1.1, duration:1.1, ease:'expo.out'}, '-=.5')
-       /* 幕布刚擦过标题所在的高度就开演, 而不是等整幕落完 —— 两个动作要接得上 */
-       .add(enter, '-=.72');
+  window.dispatchEvent(new Event('v6:enter'));
+  if (seen || motion.matches || !desktop.matches) { el.remove(); return; }
+  el.classList.add('is-greeting');
+  try { sessionStorage.setItem('cretasIntroSeen', '1'); } catch(e){}
+  var timer;
+  function dismiss(){
+    clearTimeout(timer);
+    window.removeEventListener('wheel', dismiss);
+    window.removeEventListener('keydown', dismiss);
+    window.removeEventListener('pointerdown', dismiss);
+    motion.removeEventListener('change', dismiss);
+    desktop.removeEventListener('change', dismiss);
+    el.remove();
   }
-
-  window.addEventListener('wheel', reveal, {passive:true});
-  window.addEventListener('touchmove', reveal, {passive:true});
-  window.addEventListener('keydown', reveal);
-  el.addEventListener('click', reveal);
-  /* never trap the visitor: auto-enter after 7s idle */
-  setTimeout(reveal, 7000);
+  window.addEventListener('wheel', dismiss, {passive:true});
+  window.addEventListener('keydown', dismiss);
+  window.addEventListener('pointerdown', dismiss);
+  motion.addEventListener('change', dismiss);
+  desktop.addEventListener('change', dismiss);
+  timer = setTimeout(dismiss, 1200);
 })();
