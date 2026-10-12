@@ -101,6 +101,43 @@ class PublishTransactionTest(unittest.TestCase):
             self.run_transaction()
         self.assertEqual((self.root/'index.html').read_bytes(), b'old index.html')
 
+    def add_new_file(self, content=b'new image'):
+        (self.root/'assets').mkdir(exist_ok=True)
+        self.rows.insert(0,{'path':'assets/new.webp','baseline':None,
+                            'content':base64.b64encode(content).decode()})
+        return self.root/'assets'/'new.webp'
+
+    def test_new_file_published_idempotent_and_rollback_deletes_it(self):
+        new=self.add_new_file()
+        self.assertEqual(self.run_transaction(True)['status'], 'baseline_verified')
+        self.assertFalse(new.exists())
+        self.assertEqual(self.run_transaction()['status'], 'published')
+        self.assertEqual(new.read_bytes(), b'new image')
+        self.assertEqual(self.run_transaction()['status'], 'already_published')
+        self.assertEqual(self.run_transaction(action='rollback')['status'], 'rolled_back')
+        self.assertFalse(new.exists())
+        self.assertEqual((self.root/'index.html').read_bytes(), b'old index.html')
+
+    def test_new_file_with_other_content_rejects_entire_batch(self):
+        new=self.add_new_file()
+        new.write_bytes(b'someone else')
+        with self.assertRaisesRegex(RuntimeError, 'new file already exists'):
+            self.run_transaction()
+        self.assertEqual(new.read_bytes(), b'someone else')
+        self.assertEqual((self.root/'index.html').read_bytes(), b'old index.html')
+
+    def test_failed_batch_removes_new_file_it_created(self):
+        new=self.add_new_file()
+        # the last file's parent is a regular file: validation passes, the write
+        # fails mid-batch (also for root), after the new file was already created
+        self.rows[2]['path']='blocker/demo.html'
+        self.rows[2]['baseline']=None
+        (self.root/'blocker').write_bytes(b'not a directory')
+        with self.assertRaises(Exception):
+            self.run_transaction()
+        self.assertFalse(new.exists())
+        self.assertEqual((self.root/'index.html').read_bytes(), b'old index.html')
+
     def test_guarded_successful_release_rollback(self):
         self.run_transaction()
         self.assertEqual(self.run_transaction(action='rollback')['status'], 'rolled_back')
@@ -202,8 +239,9 @@ class PublishEntryTest(unittest.TestCase):
 
     def test_missing_confirmation_defaults_to_readonly(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'platform').mkdir();(root/'platform/index.html').write_bytes(b'new')
-            with patch.object(publisher,'REPO',root),patch.object(publisher,'FILES',['index.html']), \
+            root=Path(tmp);(root/'platform/assets').mkdir(parents=True);(root/'platform/index.html').write_bytes(b'new')
+            (root/'platform/assets/new.webp').write_bytes(b'img')
+            with patch.object(publisher,'REPO',root),patch.object(publisher,'FILES',['index.html']),                  patch.object(publisher,'NEW_FILES',['assets/new.webp']), \
                  patch.object(publisher,'git',return_value=b'a'*40), \
                  patch.object(publisher.subprocess,'run'), \
                  patch.object(publisher.subprocess,'check_output',return_value=b'old'), \
@@ -211,6 +249,11 @@ class PublishEntryTest(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 publisher.main(['--base','a'*40,'--expected-head','a'*40])
                 self.assertEqual(ssh.call_args[0][0]['action'],'check')
+                rows={r['path']:r for r in ssh.call_args[0][0]['files']}
+                self.assertIsNone(rows['assets/new.webp']['baseline'])
+                self.assertIsNotNone(rows['index.html']['baseline'])
+                # new assets go first, before the pages that reference them
+                self.assertEqual(ssh.call_args[0][0]['files'][0]['path'],'assets/new.webp')
 
     def test_dirty_tree_rejects_before_ssh(self):
         def git(*args):

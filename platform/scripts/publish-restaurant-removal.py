@@ -8,7 +8,14 @@ import subprocess
 import urllib.request
 
 # Assets precede pages that reference their new cache-busting version.
-FILES = ['css/v6.css', 'js/v6.js', 'js/v6-intro.js', 'js/v6-motion.js',
+# NEW_FILES do not exist on the server yet: they must be absent (or already
+# identical) before publication, and rollback deletes them.
+NEW_FILES = ['assets/img/factory-line-480.webp', 'assets/img/factory-line-768.webp',
+             'assets/img/factory-line-1200.webp', 'assets/img/factory-line-1440.webp',
+             'assets/img/factory-line.jpg', 'assets/img/factory-ppe-480.webp',
+             'assets/img/factory-ppe-768.webp', 'assets/img/factory-ppe-1200.webp',
+             'assets/img/factory-ppe-1440.webp', 'assets/img/factory-ppe.jpg']
+FILES = ['css/cretas-site.css', 'css/v6.css', 'css/v6-motion.css', 'js/v6-motion.js',
          'js/v6-premium.js', 'index.html', 'demo.html', 'solutions-factory.html',
          'solutions-logistics.html', 'solutions-ai.html', 'solutions-custom.html',
          'smartbi.html', 'cockpit.html']
@@ -54,21 +61,31 @@ if data['action']=='rollback':
         for row in rows:
             if sha(target(row['path']).read_bytes())!=row['new']:
                 raise RuntimeError('rollback current content differs: '+row['path'])
-            if sha((backup/row['path']).read_bytes())!=row['old']:
+            if row['old'] is not None and sha((backup/row['path']).read_bytes())!=row['old']:
                 raise RuntimeError('rollback backup differs: '+row['path'])
         for row in reversed(rows):
-            replace(target(row['path']),(backup/row['path']).read_bytes(),row)
+            if row['old'] is None: target(row['path']).unlink()
+            else: replace(target(row['path']),(backup/row['path']).read_bytes(),row)
     except BaseException as error:
         raise RuntimeError('ROLLBACK_BLOCKED: '+str(error))
     print(json.dumps({'status':'rolled_back','files':len(rows),'head':data['head']}));sys.exit(0)
 paths=[]
 for row in data['files']:
-    p=target(row['path']);old=p.read_bytes();new=base64.b64decode(row['content'])
-    if sha(old) not in (row['baseline'],sha(new)):
-        raise RuntimeError('live baseline differs: '+row['path'])
-    stat=p.stat()
-    meta={'path':row['path'],'mode':stat.st_mode & 0o777,'uid':stat.st_uid,'gid':stat.st_gid,
-          'old':sha(old),'new':sha(new)}
+    p=target(row['path']);new=base64.b64decode(row['content'])
+    if row['baseline'] is None:
+        old=p.read_bytes() if p.exists() else None
+        if old is not None and old!=new:
+            raise RuntimeError('new file already exists with other content: '+row['path'])
+        stat=p.parent.stat()
+        meta={'path':row['path'],'mode':0o644,'uid':stat.st_uid,'gid':stat.st_gid,
+              'old':None,'new':sha(new)}
+    else:
+        old=p.read_bytes()
+        if sha(old) not in (row['baseline'],sha(new)):
+            raise RuntimeError('live baseline differs: '+row['path'])
+        stat=p.stat()
+        meta={'path':row['path'],'mode':stat.st_mode & 0o777,'uid':stat.st_uid,'gid':stat.st_gid,
+              'old':sha(old),'new':sha(new)}
     paths.append((p,old,new,meta))
 if data['action']=='check':
     print(json.dumps({'status':'baseline_verified','files':len(paths)}));sys.exit(0)
@@ -79,12 +96,13 @@ if any(old==new for p,old,new,meta in paths):
 backup.mkdir(parents=True,exist_ok=True)
 if manifest.exists(): raise RuntimeError('release backup already exists; use a new reviewed commit')
 for p,old,new,meta in paths:
+    if old is None: continue
     b=backup/p.relative_to(root);b.parent.mkdir(parents=True,exist_ok=True);b.write_bytes(old)
 manifest.write_text(json.dumps({'head':data['head'],'files':[meta for p,old,new,meta in paths]}))
 changed=[]
 try:
     for p,old,new,meta in paths:
-        if p.read_bytes()!=old: raise RuntimeError('concurrent change before replacement')
+        if (p.read_bytes() if p.exists() else None)!=old: raise RuntimeError('concurrent change before replacement')
         replace(p,new,meta);changed.append((p,old,new,meta))
     for p,old,new,meta in paths:
         if p.read_bytes()!=new: raise RuntimeError('readback mismatch')
@@ -92,7 +110,9 @@ except BaseException:
     try:
         if any(p.read_bytes()!=new for p,old,new,meta in changed):
             raise RuntimeError('concurrent change before rollback; nothing restored')
-        for p,old,new,meta in reversed(changed): replace(p,old,meta)
+        for p,old,new,meta in reversed(changed):
+            if old is None: p.unlink()
+            else: replace(p,old,meta)
     except BaseException as error:
         raise RuntimeError('ROLLBACK_BLOCKED: restoration failed: '+str(error))
     raise
@@ -175,7 +195,9 @@ def main(argv=None):
         print(json.dumps({'final_status':'rolled_back','receipt':receipt}))
         return
     subprocess.run(['git', 'merge-base', '--is-ancestor', args.base, head], cwd=REPO, check=True)
-    rows = []
+    rows = [{'path':name, 'baseline':None,
+             'content':base64.b64encode((REPO / 'platform' / name).read_bytes()).decode()}
+            for name in NEW_FILES]
     for name in FILES:
         old = subprocess.check_output(['git', 'show', f'{args.base}:platform/{name}'], cwd=REPO)
         new = (REPO / 'platform' / name).read_bytes()
