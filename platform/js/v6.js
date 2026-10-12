@@ -52,19 +52,37 @@ function v6RevealInit(){
     e.__v6i = groups.get(p).length;
     groups.get(p).push(e);
   });
+  function v6Show(el){
+    var d = Math.min(el.__v6i || 0, 5) * 55;
+    el.style.transitionDelay = d + 'ms';
+    el.classList.add('in');
+    /* clear delay after it has played so hover/other transitions aren't lagged */
+    setTimeout(function(){ el.style.transitionDelay = ''; }, d + 750);
+  }
+  /* ⚠ 变体若把元素的几何压成 0, IntersectionObserver 会永远报不相交 ——
+     reveal 于是永不触发, 元素永久不可见。rv-clipx 的初始态是
+     clip-path:inset(0 100% 0 0)(裁成 0 宽), 正好踩中: 实测同一元素同一位置,
+     带 clip 时 isIntersecting=false / rect 0x0, 解除后 ratio 立刻是 1。
+     这类元素改为观察其父元素, 视觉与时序不变。 */
+  var proxied = new Map();
   var io = new IntersectionObserver(function(entries){
     entries.forEach(function(en){
       if(!en.isIntersecting) return;
-      var el = en.target;
-      var d = Math.min(el.__v6i || 0, 7) * 110;
-      el.style.transitionDelay = d + 'ms';
-      el.classList.add('in');
-      io.unobserve(el);
-      /* clear delay after it has played so hover/other transitions aren't lagged */
-      setTimeout(function(){ el.style.transitionDelay = ''; }, d + 1600);
+      var t = en.target;
+      if(t.classList.contains('v6-reveal')) v6Show(t);
+      (proxied.get(t) || []).forEach(v6Show);
+      io.unobserve(t);
     });
-  }, { threshold: 0.01, rootMargin: '0px 0px -8% 0px' });
-  els.forEach(function(e){ io.observe(e); });
+  }, { threshold: 0.01, rootMargin: '0px 0px -3% 0px' });
+  els.forEach(function(e){
+    var zeroGeom = /(^| )rv-clipx( |$)/.test(e.className);
+    var target = (zeroGeom && e.parentElement) ? e.parentElement : e;
+    if(target !== e){
+      if(!proxied.has(target)) proxied.set(target, []);
+      proxied.get(target).push(e);
+    }
+    io.observe(target);
+  });
 }
 
 /* Ambient glow drifts slightly with scroll — continuity between sections. */
@@ -111,7 +129,7 @@ function v6ProgressInit(){
   function frame(){
     ticking = false;
     var h = document.documentElement.scrollHeight - window.innerHeight;
-    bar.style.width = (h > 0 ? (window.scrollY / h) * 100 : 0) + '%';
+    bar.style.transform = 'scaleX(' + (h > 0 ? Math.min(1, window.scrollY / h) : 0) + ')';
   }
   window.addEventListener('scroll', function(){
     if(!ticking){ ticking = true; requestAnimationFrame(frame); }
