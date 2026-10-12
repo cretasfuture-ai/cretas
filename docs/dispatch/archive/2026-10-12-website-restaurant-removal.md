@@ -12,7 +12,7 @@
 
 ## Validation before publication
 
-- `python platform/scripts/test_publish_restaurant_removal.py`: 5 passed. 真实临时文件验证零写入检查、并发基线拒绝、路径逃逸拒绝、幂等与备份、半途失败回滚。
+- `python platform/scripts/test_publish_restaurant_removal.py`: Windows: 13 passed / 1 Linux-only skip；139 上 /tmp 隔离 Linux: 14 passed。覆盖未确认默认只读、expected-head/dirty/main前进拒绝、基线/路径拒绝、幂等备份、失败回滚、HTTPS失败真实文件恢复、并发修改阻断回滚及 mode/uid/gid 恢复。
 - Four changed JS files: `node --check` passed; `git diff --check` passed.
 - Browser: 8 primary pages × desktop 1440/mobile 390: no dining links/copy and no horizontal overflow.
 - Homepage: desktop 1440/tablet 768/mobile 390 × normal/reduced motion: 6 passed; mobile/reduced motion zero pinned sections and no Lenis; all reveal content visible after scrolling; no pageerror.
@@ -22,4 +22,4 @@
 
 ## Release boundary
 
-Java/Web orchestrator does not cover `platform/`; this change includes a narrow static publisher. It requires clean exact origin/main for writes, holds a server flock, validates the entire live baseline before any writes, backs up changed files outside the webroot, atomically replaces each file and restores replaced files on transaction failure, then compares every public HTTPS response to the source bytes. Only the 16 allowlisted website files are uploaded. PR/CI, merge, production publication and live browser acceptance remain separate states and are recorded in the final delivery receipt.
+Java/Web orchestrator does not cover `platform/`; this change includes a narrow static publisher. It defaults to read-only; writes require an explicit YES-PROD flag, exact expected HEAD and clean exact origin/main. It holds a server flock, validates the whole live baseline, saves original bytes/metadata to a HEAD-keyed manifest outside the webroot, publishes assets before pages, restores content/metadata on transaction failure, and automatically performs guarded rollback on HTTPS verification failure. The rollback path checks current/new and backup/old hashes for the entire batch before restoring anything. Only the 16 allowlisted website files are uploaded. PR/CI, merge, production publication and live browser acceptance remain separate states and are recorded in the final delivery receipt.
