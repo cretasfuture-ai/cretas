@@ -87,6 +87,28 @@ class PythonSmartBIClientTransportSecurityTest {
     }
 
     @Test
+    void parseExcelHandsJavaRowsKeyedByTheOriginalHeaders() throws Exception {
+        // Real /auto-parse body shape (F006 区域销售, 2026-10-13): rows keyed by the
+        // standard names, mappings still carrying the original headers.
+        MockWebServer server = startServer();
+        server.enqueue(json(200, "{\"success\":true,"
+                + "\"headers\":[\"区域\",\"sales_amount\",\"sales_amount_2\"],"
+                + "\"fieldMappings\":[{\"originalColumn\":\"区域\",\"standardField\":\"区域\"},"
+                + "{\"originalColumn\":\"Q1(万元)\",\"standardField\":\"sales_amount\"},"
+                + "{\"originalColumn\":\"Q2(万元)\",\"standardField\":\"sales_amount_2\"}],"
+                + "\"previewData\":[{\"区域\":\"上海\",\"sales_amount\":141.9,\"sales_amount_2\":151.1}]}"));
+        PythonSmartBIClient client = newClient(server, 0, "parse-secret");
+
+        com.cretas.aims.dto.smartbi.ExcelParseResponse parsed = client.parseExcel(
+                new org.springframework.mock.web.MockMultipartFile(
+                        "file", "sample.xlsx", "application/octet-stream", new byte[]{1, 2, 3}),
+                "F006", null, 2, 0, null, null);
+
+        assertThat(parsed.getHeaders()).containsExactly("区域", "Q1(万元)", "Q2(万元)");
+        assertThat(parsed.getPreviewData().get(0)).containsOnlyKeys("区域", "Q1(万元)", "Q2(万元)");
+    }
+
+    @Test
     void crossAuthorityAndBlankSecretFailBeforeNetwork() throws Exception {
         MockWebServer origin = startServer();
         MockWebServer other = startServer();

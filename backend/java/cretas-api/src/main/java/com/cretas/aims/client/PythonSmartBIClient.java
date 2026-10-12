@@ -342,7 +342,7 @@ public class PythonSmartBIClient {
                 .post(bodyBuilder.build())
                 .build();
 
-        return executeWithRetry(request, ExcelParseResponse.class);
+        return ParsedHeaderRestorer.restore(executeWithRetry(request, ExcelParseResponse.class));
     }
 
     // ==================== 大文件异步解析 ====================
@@ -437,7 +437,7 @@ public class PythonSmartBIClient {
             if ("COMPLETED".equals(st)) {
                 log.info("[async-parse] uploadId={} COMPLETED after {}s",
                         uploadId, (attempt + 1) * ASYNC_POLL_INTERVAL_MS / 1000);
-                return buildParseResponseFromAsyncStatus(status, uploadId);
+                return ParsedHeaderRestorer.restore(buildParseResponseFromAsyncStatus(status, uploadId));
             }
             if ("FAILED".equals(st)) {
                 String errMsg = (String) status.getOrDefault("error", "异步解析失败");
