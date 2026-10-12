@@ -14,7 +14,6 @@ materialize_upload handles the rest.
 """
 from __future__ import annotations
 
-import gc
 import json
 import logging
 import time
@@ -308,7 +307,10 @@ async def materialize_upload(
     backend = PolarsBackend(df_final)
     frames.clear()
     del frames, batch, sample
-    gc.collect()
+    # No explicit gc.collect() here: the chunks are freed by refcount on `del`.
+    # A full collection on this request path held the GIL for >5s on a worker
+    # with a swapped-out heap and got the worker killed mid-request (see main.py
+    # gc.freeze note).
     logger.info(
         f"[materializer] upload {upload_id}: polars DF built, "
         f"chunks released (row_count={backend.row_count()})"

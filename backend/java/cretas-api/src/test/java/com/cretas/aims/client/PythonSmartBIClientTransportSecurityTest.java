@@ -57,6 +57,36 @@ class PythonSmartBIClientTransportSecurityTest {
     }
 
     @Test
+    void healthProbeRetriesOnceAfterStaleConnection() throws Exception {
+        // 2026-10-13 F006: a uvicorn worker restart left a dead keep-alive conn in
+        // the pool; the probe failed once and the cached "unavailable" failed all
+        // three sheets. One retry on a fresh connection must recover.
+        MockWebServer server = startServer();
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+        server.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        PythonSmartBIClient client = newClient(server, 0, "health-secret");
+
+        assertThat(client.isAvailable()).isTrue();
+        assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void healthProbeGivesUpAfterSecondConnectionFailureAndNeverRetriesHttpErrors() throws Exception {
+        MockWebServer twiceDown = startServer();
+        twiceDown.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+        twiceDown.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+        twiceDown.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        assertThat(newClient(twiceDown, 0, "s").isAvailable()).isFalse();
+        assertThat(twiceDown.getRequestCount()).isEqualTo(2);
+
+        MockWebServer unhealthy = startServer();
+        unhealthy.enqueue(new MockResponse().setResponseCode(503));
+        unhealthy.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        assertThat(newClient(unhealthy, 0, "s").isAvailable()).isFalse();
+        assertThat(unhealthy.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
     void crossAuthorityAndBlankSecretFailBeforeNetwork() throws Exception {
         MockWebServer origin = startServer();
         MockWebServer other = startServer();

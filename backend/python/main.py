@@ -18,6 +18,7 @@ _smartbi_dir = Path(__file__).parent / "smartbi"
 if str(_smartbi_dir) not in sys.path:
     sys.path.insert(0, str(_smartbi_dir))
 
+import gc  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
@@ -1233,6 +1234,17 @@ async def lifespan(app: FastAPI):
                 logger.info("[startup] AI learning cron skipped (no pg_pool)")
         except Exception as e:
             logger.warning(f"[startup] AI orchestrator init failed: {e}")
+
+    # Move everything allocated during startup (modules, torch, routers, static
+    # tables: ~526k tracked objects) into the GC's permanent generation. A full
+    # gc.collect() otherwise walks all of it while holding the GIL; on a worker
+    # whose idle heap has been swapped out that walk page-faults for >5s, the
+    # uvicorn supervisor's health ping (timeout_worker_healthcheck=5) goes
+    # unanswered and it kills the worker mid-request (2026-10-12 F006 upload:
+    # "Child process died" -> Java "unexpected end of stream").
+    gc.collect()
+    gc.freeze()
+    logger.info(f"[startup] gc.freeze: {gc.get_freeze_count()} startup objects excluded from collection")
 
     yield
 

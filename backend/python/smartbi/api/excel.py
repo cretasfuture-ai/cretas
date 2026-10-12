@@ -1126,9 +1126,8 @@ async def auto_parse_excel(
                 # scope, so we just rebind to None instead of `del` (avoids
                 # NameError if any late-binding code path touches it).
                 _csv_preparsed_df = df_csv  # keep reference for executor call
-                content = None  # release 263MB bytes buffer
-                import gc as _gc
-                _gc.collect()
+                content = None  # release 263MB bytes buffer (freed by refcount;
+                # no full gc.collect() on the request path — see main.py gc.freeze)
                 logger.info(f"[mem-free] released content buffer after CSV parse; df_csv={df_csv.shape}")
 
                 headers_csv = [str(c) for c in df_csv.columns]
