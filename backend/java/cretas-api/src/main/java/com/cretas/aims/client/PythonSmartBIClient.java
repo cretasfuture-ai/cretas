@@ -213,30 +213,45 @@ public class PythonSmartBIClient {
      */
     private boolean checkAvailability() {
         try {
-            Request request = new Request.Builder()
-                    .url(serviceBaseUrl.newBuilder().addPathSegment("health").build())
-                    .get()
-                    .build();
-
-            try (Response response = httpClient.newCall(request).execute()) {
-                boolean available = response.isSuccessful()
-                        && readJsonBody(response.body(), PythonServiceHealthResponse.class).isHealthy();
-                serviceAvailable.set(available);
+            return probeHealth();
+        } catch (IOException first) {
+            // GET /health 是幂等的, 连接层失败只重试这一次。典型场景: Python 的 uvicorn
+            // worker 被重启后, 连接池里指向它的 keep-alive 连接已失效, 第一次复用就报
+            // "unexpected end of stream"; 失败的连接被淘汰后, 第二次会新建连接。
+            // 不重试的话, 这次失败会被缓存 healthCheckInterval 那么久, 期间每个 Sheet
+            // 都直接判「Python SmartBI 服务不可用」(2026-10-13 F006 实测三张 Sheet 一起失败)。
+            // 客户端整体仍是 retryOnConnectionFailure(false), 不会重放非幂等的 POST。
+            log.info("Python SmartBI 健康检查连接失败, 换新连接重试一次: {}", first.getMessage());
+            try {
+                return probeHealth();
+            } catch (IOException e) {
+                serviceAvailable.set(false);
                 lastHealthCheck.set(System.currentTimeMillis());
-
-                if (available) {
-                    log.debug("Python SmartBI 服务健康检查通过");
-                } else {
-                    log.warn("Python SmartBI 服务健康检查失败: status={}", response.code());
-                }
-
-                return available;
+                log.warn("Python SmartBI 服务不可达: {}", e.getMessage());
+                return false;
             }
-        } catch (IOException e) {
-            serviceAvailable.set(false);
+        }
+    }
+
+    private boolean probeHealth() throws IOException {
+        Request request = new Request.Builder()
+                .url(serviceBaseUrl.newBuilder().addPathSegment("health").build())
+                .get()
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            boolean available = response.isSuccessful()
+                    && readJsonBody(response.body(), PythonServiceHealthResponse.class).isHealthy();
+            serviceAvailable.set(available);
             lastHealthCheck.set(System.currentTimeMillis());
-            log.warn("Python SmartBI 服务不可达: {}", e.getMessage());
-            return false;
+
+            if (available) {
+                log.debug("Python SmartBI 服务健康检查通过");
+            } else {
+                log.warn("Python SmartBI 服务健康检查失败: status={}", response.code());
+            }
+
+            return available;
         }
     }
 
@@ -327,7 +342,7 @@ public class PythonSmartBIClient {
                 .post(bodyBuilder.build())
                 .build();
 
-        return executeWithRetry(request, ExcelParseResponse.class);
+        return ParsedHeaderRestorer.restore(executeWithRetry(request, ExcelParseResponse.class));
     }
 
     // ==================== 大文件异步解析 ====================
@@ -422,7 +437,7 @@ public class PythonSmartBIClient {
             if ("COMPLETED".equals(st)) {
                 log.info("[async-parse] uploadId={} COMPLETED after {}s",
                         uploadId, (attempt + 1) * ASYNC_POLL_INTERVAL_MS / 1000);
-                return buildParseResponseFromAsyncStatus(status, uploadId);
+                return ParsedHeaderRestorer.restore(buildParseResponseFromAsyncStatus(status, uploadId));
             }
             if ("FAILED".equals(st)) {
                 String errMsg = (String) status.getOrDefault("error", "异步解析失败");

@@ -57,6 +57,58 @@ class PythonSmartBIClientTransportSecurityTest {
     }
 
     @Test
+    void healthProbeRetriesOnceAfterStaleConnection() throws Exception {
+        // 2026-10-13 F006: a uvicorn worker restart left a dead keep-alive conn in
+        // the pool; the probe failed once and the cached "unavailable" failed all
+        // three sheets. One retry on a fresh connection must recover.
+        MockWebServer server = startServer();
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+        server.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        PythonSmartBIClient client = newClient(server, 0, "health-secret");
+
+        assertThat(client.isAvailable()).isTrue();
+        assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void healthProbeGivesUpAfterSecondConnectionFailureAndNeverRetriesHttpErrors() throws Exception {
+        MockWebServer twiceDown = startServer();
+        twiceDown.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+        twiceDown.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+        twiceDown.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        assertThat(newClient(twiceDown, 0, "s").isAvailable()).isFalse();
+        assertThat(twiceDown.getRequestCount()).isEqualTo(2);
+
+        MockWebServer unhealthy = startServer();
+        unhealthy.enqueue(new MockResponse().setResponseCode(503));
+        unhealthy.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        assertThat(newClient(unhealthy, 0, "s").isAvailable()).isFalse();
+        assertThat(unhealthy.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void parseExcelHandsJavaRowsKeyedByTheOriginalHeaders() throws Exception {
+        // Real /auto-parse body shape (F006 区域销售, 2026-10-13): rows keyed by the
+        // standard names, mappings still carrying the original headers.
+        MockWebServer server = startServer();
+        server.enqueue(json(200, "{\"success\":true,"
+                + "\"headers\":[\"区域\",\"sales_amount\",\"sales_amount_2\"],"
+                + "\"fieldMappings\":[{\"originalColumn\":\"区域\",\"standardField\":\"区域\"},"
+                + "{\"originalColumn\":\"Q1(万元)\",\"standardField\":\"sales_amount\"},"
+                + "{\"originalColumn\":\"Q2(万元)\",\"standardField\":\"sales_amount_2\"}],"
+                + "\"previewData\":[{\"区域\":\"上海\",\"sales_amount\":141.9,\"sales_amount_2\":151.1}]}"));
+        PythonSmartBIClient client = newClient(server, 0, "parse-secret");
+
+        com.cretas.aims.dto.smartbi.ExcelParseResponse parsed = client.parseExcel(
+                new org.springframework.mock.web.MockMultipartFile(
+                        "file", "sample.xlsx", "application/octet-stream", new byte[]{1, 2, 3}),
+                "F006", null, 2, 0, null, null);
+
+        assertThat(parsed.getHeaders()).containsExactly("区域", "Q1(万元)", "Q2(万元)");
+        assertThat(parsed.getPreviewData().get(0)).containsOnlyKeys("区域", "Q1(万元)", "Q2(万元)");
+    }
+
+    @Test
     void crossAuthorityAndBlankSecretFailBeforeNetwork() throws Exception {
         MockWebServer origin = startServer();
         MockWebServer other = startServer();
