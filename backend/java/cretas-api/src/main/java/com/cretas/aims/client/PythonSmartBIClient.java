@@ -66,6 +66,9 @@ import java.util.regex.Pattern;
 @Component
 public class PythonSmartBIClient {
 
+    /** Idle connections are dropped after this; must stay below uvicorn's --timeout-keep-alive (5s). */
+    static final long PYTHON_IDLE_KEEP_ALIVE_SECONDS = 4;
+
     private final PythonSmartBIConfig config;
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -130,6 +133,12 @@ public class PythonSmartBIClient {
                 .followRedirects(false)
                 .followSslRedirects(false)
                 .retryOnConnectionFailure(false)
+                // 专用连接池, 空闲连接 4s 就回收: uvicorn 默认 --timeout-keep-alive 5s 后会关掉空闲连接,
+                // 而共享池默认留 5 分钟。OkHttp 只对非 GET 做完整的连接存活检查, 健康探针 (GET)
+                // 会复用对端已关闭的连接 → "unexpected end of stream"; Python 重启后池里全是死连接,
+                // 重试一次也会再拿到另一条死连接 (2026-10-13 22:14 部署后实测, 三张 Sheet 全判不可用)。
+                // 必须短于服务端的 keep-alive, 让连接在服务端关掉之前就被我们自己丢掉。
+                .connectionPool(new ConnectionPool(8, PYTHON_IDLE_KEEP_ALIVE_SECONDS, TimeUnit.SECONDS))
                 .addInterceptor(chain -> {
                     Request original = chain.request();
                     requireSameServiceAuthority(original.url());

@@ -2,6 +2,7 @@ package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.mockwebserver.MockResponse;
@@ -68,6 +69,32 @@ class PythonSmartBIClientTransportSecurityTest {
 
         assertThat(client.isAvailable()).isTrue();
         assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void idleConnectionsAreDroppedBeforeUvicornClosesThem() throws Exception {
+        // uvicorn closes idle keep-alive connections after 5s. If the pool keeps them
+        // longer, the next GET /health reuses a dead socket ("unexpected end of stream";
+        // 2026-10-13 22:14, right after a Python restart, every sheet was rejected).
+        assertThat(PythonSmartBIClient.PYTHON_IDLE_KEEP_ALIVE_SECONDS).isLessThan(5);
+
+        MockWebServer server = startServer();
+        server.enqueue(json(200, "{\"status\":\"healthy\"}"));
+        PythonSmartBIClient client = newClient(server, 0, "pool-secret");
+        Field clientField = PythonSmartBIClient.class.getDeclaredField("httpClient");
+        clientField.setAccessible(true);
+        ConnectionPool pool = ((OkHttpClient) clientField.get(client)).connectionPool();
+
+        assertThat(client.isAvailable()).isTrue();
+        assertThat(pool.idleConnectionCount()).isEqualTo(1);   // kept for reuse right after
+
+        long deadline = System.nanoTime() + Duration.ofMillis(4800).toNanos();
+        while (pool.idleConnectionCount() > 0 && System.nanoTime() < deadline) {
+            Thread.sleep(100);
+        }
+        assertThat(pool.idleConnectionCount())
+                .as("idle connection must be evicted before uvicorn's 5s keep-alive")
+                .isZero();
     }
 
     @Test
