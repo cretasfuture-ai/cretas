@@ -135,4 +135,18 @@ public class FormTemplate extends BaseEntity {
     public void incrementVersion() {
         this.version = (this.version == null ? 0 : this.version) + 1;
     }
+
+    // Typed audit namespace for explicit platform assembly writes.
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "created_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType createdActorType;
+
+    @jakarta.persistence.Column(name = "created_actor_id")
+    private Long createdActorId;
+
+    public void setCreatedActor(com.cretas.aims.security.ActorRef actor) {
+        createdActorType = actor == null ? null : actor.type();
+        createdActorId = actor == null ? null : actor.id();
+        createdBy = actor == null ? null : actor.factoryUserId();
+    }
 }

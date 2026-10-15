@@ -37,6 +37,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.validation.ProductConfigurationReadinessService;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
+import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -85,6 +86,9 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class BomRecipeServiceImpl implements BomRecipeService {
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AssemblyActivationActorResolver actorResolver;
 
     private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final int MAX_VERSIONS_PER_PRODUCT = 10;
@@ -385,6 +389,27 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     public BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId) {
         // 对外入口(手动「生效该草稿」/ AI 工具 / Controller)一律没有「正在发布的工艺」。
         return activateRecipe(factoryId, recipeId, operatorId, null);
+    }
+
+    @Override
+    @Transactional
+    public BomRecipe activateRecipeAsActor(String factoryId, String recipeId,
+                                            com.cretas.aims.security.ActorRef actor) {
+        java.util.Objects.requireNonNull(actor, "Activation actor is required");
+        if (actorResolver == null) {
+            throw new BusinessException(403, "Typed BOM activation is unavailable").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
+        }
+        actorResolver.authorize(actor, factoryId, java.util.Set.of("factory-blueprint:activation:workflow"));
+        BomRecipe activated = activateRecipe(factoryId, recipeId, actor.factoryUserId());
+        // Platform ids are deliberately never projected into activated_by (users.id).
+        // The typed audit columns are the authoritative actor namespace.
+        for (BomRecipe member : activationFamily(factoryId, activated)) {
+            if (member.getActivatedActorType() == null || member.getActivatedActorId() == null) {
+                member.setActivationActor(actor);
+                recipeRepo.save(member);
+            }
+        }
+        return recipeRepo.findById(recipeId).orElse(activated);
     }
 
     /**
@@ -1961,6 +1986,22 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     public Optional<BomRecipe> getCurrentRecipe(String factoryId, String productTypeId) {
         return recipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                 factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<BomRecipe> findOwnedRecipe(String factoryId, String recipeId) {
+        if (recipeId == null || recipeId.isBlank()) return Optional.empty();
+        return recipeRepo.findById(recipeId)
+                .filter(r -> factoryId != null && factoryId.equals(r.getFactoryId()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<BomRecipeItem> getRecipeItems(String factoryId, String recipeId) {
+        return findOwnedRecipe(factoryId, recipeId)
+                .map(r -> itemRepo.findByRecipeIdOrderBySortOrderAsc(r.getId()))
+                .orElseGet(List::of);
     }
 
     @Override

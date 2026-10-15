@@ -7,6 +7,7 @@ import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 
 import java.util.List;
 import java.util.Optional;
+import com.cretas.aims.security.ActorRef;
 
 public interface ProductProcessWorkflowService {
 
@@ -36,6 +37,14 @@ public interface ProductProcessWorkflowService {
             String revisionHash,
             Integer definitionVersion,
             Long operatorId);
+
+    default WorkflowPublishAndActivateResponse publishAndActivateAsActor(
+            String factoryId, String productTypeId, Long lockVersion, String idempotencyKey,
+            Long revisionId, String revisionHash, Integer definitionVersion, ActorRef actor) {
+        throw new UnsupportedOperationException("Typed Workflow publication is required");
+    }
+
+    ProductProcessWorkflowDTO snapshot(String factoryId, String productTypeId, Long lockVersion);
 
     /** 只读: 当前配置以及仍被已正式报工计划绑定的历史版本。 */
     List<ProductProcessWorkflowVersionSummaryDTO> listVersions(String factoryId, String productTypeId);

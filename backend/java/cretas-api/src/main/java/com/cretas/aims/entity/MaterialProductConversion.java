@@ -173,4 +173,31 @@ public class MaterialProductConversion extends BaseEntity {
 
         return baseUsage;
     }
+
+    // Typed audit namespace for explicit platform assembly writes.
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "created_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType createdActorType;
+
+    @jakarta.persistence.Column(name = "created_actor_id")
+    private Long createdActorId;
+
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "updated_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType updatedActorType;
+
+    @jakarta.persistence.Column(name = "updated_actor_id")
+    private Long updatedActorId;
+
+    public void setCreatedActor(com.cretas.aims.security.ActorRef actor) {
+        createdActorType = actor == null ? null : actor.type();
+        createdActorId = actor == null ? null : actor.id();
+        createdBy = actor == null ? null : actor.factoryUserId();
+    }
+
+    public void setUpdatedActor(com.cretas.aims.security.ActorRef actor) {
+        updatedActorType = actor == null ? null : actor.type();
+        updatedActorId = actor == null ? null : actor.id();
+        updatedBy = actor == null ? null : actor.factoryUserId();
+    }
 }

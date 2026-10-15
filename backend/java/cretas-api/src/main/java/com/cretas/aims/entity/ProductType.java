@@ -360,7 +360,7 @@ public class ProductType extends BaseEntity {
     private Boolean isActive = true;
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
-    @Column(name = "created_by", nullable = false)
+    @Column(name = "created_by")
     private Long createdBy;
     // 关联关系 (使用 @JsonIgnore 防止循环引用)
     @JsonIgnore
@@ -380,4 +380,19 @@ public class ProductType extends BaseEntity {
     @JsonIgnore
     @OneToMany(mappedBy = "productType", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<ProductionPlan> productionPlans = new ArrayList<>();
+
+    // Typed audit namespace for explicit platform assembly writes.
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType actorType;
+
+    @jakarta.persistence.Column(name = "actor_id")
+    private Long actorId;
+
+    public void setActor(com.cretas.aims.security.ActorRef actor) {
+        java.util.Objects.requireNonNull(actor, "Actor identity is required");
+        this.actorType = actor.type();
+        this.actorId = actor.id();
+        this.createdBy = actor.factoryUserId();
+    }
 }

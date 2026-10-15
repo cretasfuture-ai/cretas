@@ -55,4 +55,12 @@ public interface BlueprintVersionHistoryRepository extends JpaRepository<Bluepri
      * 查询特定变更类型的版本历史
      */
     List<BlueprintVersionHistory> findByBlueprintIdAndChangeTypeOrderByVersionDesc(String blueprintId, String changeType);
+
+    Optional<BlueprintVersionHistory> findByFactoryIdAndIdempotencyKeyAndDeletedAtIsNull(
+            String factoryId, String idempotencyKey);
+
+    List<BlueprintVersionHistory> findByFactoryIdAndDeletedAtIsNullOrderByVersionDesc(String factoryId);
+
+    Optional<BlueprintVersionHistory> findByFactoryIdAndVersionAndDeletedAtIsNull(
+            String factoryId, Integer version);
 }

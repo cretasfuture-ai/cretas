@@ -71,7 +71,7 @@ public class FactoryConfiguration {
     @Column(name = "change_summary", columnDefinition = "TEXT")
     private String changeSummary;
 
-    @Column(name = "created_by", nullable = false)
+    @Column(name = "created_by")
     private Long createdBy;
 
     @Column(name = "created_at")
@@ -92,5 +92,31 @@ public class FactoryConfiguration {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    // Typed audit namespace for explicit platform assembly writes.
+    @jakarta.persistence.Column(name = "published_actor_type", length = 32)
+    private String publishedActorType;
+
+    @jakarta.persistence.Column(name = "published_actor_id")
+    private Long publishedActorId;
+
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "created_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType createdActorType;
+
+    @jakarta.persistence.Column(name = "created_actor_id")
+    private Long createdActorId;
+
+    public void setCreatedActor(com.cretas.aims.security.ActorRef actor) {
+        createdActorType = actor == null ? null : actor.type();
+        createdActorId = actor == null ? null : actor.id();
+        createdBy = actor == null ? null : actor.factoryUserId();
+    }
+
+    public void setPublishedActor(com.cretas.aims.security.ActorRef actor) {
+        publishedActorType = actor == null ? null : actor.type().name();
+        publishedActorId = actor == null ? null : actor.id();
+        publishedBy = actor == null ? null : actor.factoryUserId();
     }
 }

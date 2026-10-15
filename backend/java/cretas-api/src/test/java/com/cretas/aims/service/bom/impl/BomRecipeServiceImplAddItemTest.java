@@ -9,6 +9,9 @@ import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
@@ -105,6 +108,9 @@ class BomRecipeServiceImplAddItemTest {
     @InjectMocks
     BomRecipeServiceImpl service;
 
+    @Mock
+    AssemblyActivationActorResolver actorResolver;
+
     private BomRecipe recipe;
     private BomRecipeItem existingItem;
     /** The Hibernate-managed list instance that must NOT be replaced. */
@@ -112,6 +118,7 @@ class BomRecipeServiceImplAddItemTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(service, "actorResolver", actorResolver);
         recipe = new BomRecipe();
         recipe.setId("RECIPE-ORPHAN-TEST");
         recipe.setFactoryId("F006");
@@ -198,6 +205,18 @@ class BomRecipeServiceImplAddItemTest {
                             member.getOutputUnit(),
                             BomWorkflowRevisionService.CostAllocationBasis.DECLARED));
                 });
+    }
+
+    @Test
+    @DisplayName("typed BOM activation rejects before touching recipe state")
+    void typedActivationRejectsBeforeWrite() {
+        ActorRef platform = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 77L);
+        doThrow(new BusinessException(403, "denied")).when(actorResolver)
+                .authorize(eq(platform), eq("F006"), anySet());
+
+        assertThatThrownBy(() -> service.activateRecipeAsActor("F006", "RECIPE-ORPHAN-TEST", platform))
+                .isInstanceOf(BusinessException.class);
+        verifyNoInteractions(recipeRepo, itemRepo);
     }
 
     /** Minimal pinned Workflow graph owning one RAW input slot per fixture material. */

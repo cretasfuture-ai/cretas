@@ -32,6 +32,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
 import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
+import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
 import com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflowService {
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AssemblyActivationActorResolver actorResolver;
 
     private final ProductProcessWorkflowRepository repository;
     private final ProductProcessWorkflowRevisionRepository revisionRepository;
@@ -220,6 +224,75 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 .orElse(null);
         return workflowBomSynchronizationService.preflight(
                 factoryId, productTypeId, target);
+    }
+
+    @Override
+    @Transactional
+    public WorkflowPublishAndActivateResponse publishAndActivateAsActor(
+            String factoryId, String productTypeId, Long lockVersion, String idempotencyKey,
+            Long revisionId, String revisionHash, Integer definitionVersion,
+            com.cretas.aims.security.ActorRef actor) {
+        java.util.Objects.requireNonNull(actor, "Actor identity is required");
+        if (actorResolver == null) {
+            throw new BusinessException(403, "Typed Workflow publication is unavailable").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
+        }
+        actorResolver.authorize(actor, factoryId, java.util.Set.of("factory-blueprint:activation:workflow"));
+        // Keep the legacy user FK null for platform actors. The typed actor is persisted
+        // on the activation row immediately after the existing transactional workflow path.
+        WorkflowPublishAndActivateResponse result = publishAndActivate(
+                factoryId, productTypeId, lockVersion, idempotencyKey,
+                revisionId, revisionHash, definitionVersion, actor.factoryUserId());
+        activationRepository.findByFactoryIdAndProductTypeId(factoryId, productTypeId)
+                .ifPresent(row -> {
+                    ProductProcessWorkflowActivationDTO activation = result.getActivation();
+                    boolean exactActivation = activation != null
+                            && java.util.Objects.equals(row.getId(), activation.getId())
+                            && java.util.Objects.equals(row.getActiveWorkflowId(), activation.getActiveWorkflowId())
+                            && java.util.Objects.equals(row.getActiveDefinitionVersion(), activation.getActiveDefinitionVersion());
+                    if (!result.isReplayed() && exactActivation
+                            && row.getActorType() == null && row.getActorId() == null) {
+                        row.setActor(actor);
+                        activationRepository.save(row);
+                    }
+                });
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public ProductProcessWorkflowDTO snapshot(String factoryId, String productTypeId, Long lockVersion) {
+        requireWorkflowOwner(factoryId, productTypeId);
+        ProductProcessWorkflow draft = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
+                .map(row -> repository.lockByIdAndFactoryId(row.getId(), factoryId)
+                        .filter(r -> r.getStatus() == ProductProcessWorkflow.Status.DRAFT)
+                        .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")))
+                .orElseThrow(() -> new BusinessException(409, "没有可另存的 Workflow 草稿")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING"));
+        assertCurrentVersion(lockVersion, draft);
+        ProductProcessWorkflowDTO definition = toDTO(draft);
+        validator.validateForDraft(definition);
+        unitValidator.validate(factoryId, definition);
+
+        ProductProcessWorkflow frozen = new ProductProcessWorkflow();
+        frozen.setFactoryId(factoryId);
+        frozen.setProductTypeId(productTypeId);
+        frozen.setSchemaVersion(draft.getSchemaVersion());
+        frozen.setStatus(ProductProcessWorkflow.Status.SNAPSHOT);
+        frozen.setDefinitionVersion(draft.getDefinitionVersion());
+        frozen.setNodesJson(draft.getNodesJson());
+        frozen.setEdgesJson(draft.getEdgesJson());
+        frozen.setViewportJson(draft.getViewportJson());
+        frozen.setUnitReviewRequired(draft.getUnitReviewRequired());
+        frozen = repository.saveAndFlush(frozen);
+        ProductProcessWorkflowRevision revision = revisionSnapshotService.capture(frozen);
+        frozen.setCurrentRevisionId(revision.getId());
+        frozen.setCurrentRevisionHash(revision.getRevisionHash());
+        repository.saveAndFlush(frozen);
+
+        draft.setDefinitionVersion(draft.getDefinitionVersion() + 1);
+        draft.setCurrentRevisionId(null);
+        draft.setCurrentRevisionHash(null);
+        return toDTO(repository.saveAndFlush(draft));
     }
 
     @Override

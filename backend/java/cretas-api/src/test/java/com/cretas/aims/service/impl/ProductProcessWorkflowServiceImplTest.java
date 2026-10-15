@@ -1,5 +1,7 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.entity.ProductProcessWorkflowActivation;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
@@ -9,6 +11,9 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -52,6 +57,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 
 @DisplayName("产品工序 Workflow 服务")
 @ExtendWith(MockitoExtension.class)
@@ -105,6 +113,9 @@ class ProductProcessWorkflowServiceImplTest {
     private ProductProcessWorkflowValidator validator;
     private ProductProcessWorkflowServiceImpl service;
 
+    @Mock
+    private AssemblyActivationActorResolver actorResolver;
+
     @BeforeEach
     void setUp() {
         ObjectMapper objectMapper = new ObjectMapper();
@@ -115,6 +126,14 @@ class ProductProcessWorkflowServiceImplTest {
                 activationRepository, productionPlanService,
                 objectMapper, validator, catalogValidator, unitValidator,
                 productTypeRepository, rawMaterialTypeRepository);
+        try {
+            var field = ProductProcessWorkflowServiceImpl.class.getDeclaredField("actorResolver");
+            field.setAccessible(true);
+            field.set(service, actorResolver);
+            service = spy(service);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
         com.cretas.aims.entity.ProductProcessWorkflowRevision revision =
                 new com.cretas.aims.entity.ProductProcessWorkflowRevision();
         revision.setId(91L);
@@ -144,6 +163,72 @@ class ProductProcessWorkflowServiceImplTest {
         lenient().when(repository.lockByIdAndFactoryId(1L, FACTORY_ID)).thenAnswer(invocation ->
                 repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                         FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT));
+    }
+
+    @Test
+    @DisplayName("typed Workflow authority failure happens before any legacy write")
+    void typedPublishRejectsBeforeLegacyServiceCall() {
+        ActorRef platform = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 77L);
+        doThrow(new BusinessException(403, "denied"))
+                .when(actorResolver).authorize(eq(platform), eq(FACTORY_ID), any());
+
+        assertThrows(BusinessException.class, () -> service.publishAndActivateAsActor(
+                FACTORY_ID, PRODUCT_ID, 1L, "key", 91L, "hash", 1, platform));
+        verifyNoInteractions(repository, activationRepository, workflowActivationService,
+                workflowBomSynchronizationService);
+    }
+
+    @Test
+    @DisplayName("typed Workflow replay keeps the original activation actor")
+    void typedPublishReplayDoesNotOverwriteActivationActor() {
+        ActorRef first = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 77L);
+        ActorRef replay = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 88L);
+        ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();
+        activation.setId(4L);
+        activation.setActiveWorkflowId(9L);
+        activation.setActiveDefinitionVersion(2);
+        when(activationRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(Optional.of(activation));
+        ProductProcessWorkflowActivationDTO activationDto = new ProductProcessWorkflowActivationDTO();
+        activationDto.setId(4L);
+        activationDto.setActiveWorkflowId(9L);
+        activationDto.setActiveDefinitionVersion(2);
+        WorkflowPublishAndActivateResponse response = WorkflowPublishAndActivateResponse.builder()
+                .idempotencyKey("key").replayed(false).activation(activationDto).build();
+        doReturn(response).when(service).publishAndActivate(anyString(), anyString(), any(),
+                anyString(), any(), anyString(), any(), any());
+
+        service.publishAndActivateAsActor(FACTORY_ID, PRODUCT_ID, 1L, "key", 91L, "hash", 1, first);
+        service.publishAndActivateAsActor(FACTORY_ID, PRODUCT_ID, 1L, "key", 91L, "hash", 1, replay);
+
+        assertEquals(AuthenticatedActorType.PLATFORM_ADMIN, activation.getActorType());
+        assertEquals(77L, activation.getActorId());
+        assertNull(activation.getActivatedBy());
+        verify(activationRepository, times(1)).save(activation);
+    }
+
+    @Test
+    @DisplayName("typed Workflow replay does not attribute an unknown historical activation")
+    void typedPublishReplayWithUnknownOriginalActorDoesNotWrite() {
+        ActorRef caller = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 88L);
+        ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();
+        activation.setId(4L);
+        activation.setActiveWorkflowId(9L);
+        activation.setActiveDefinitionVersion(2);
+        when(activationRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(Optional.of(activation));
+        WorkflowPublishAndActivateResponse response = WorkflowPublishAndActivateResponse.builder()
+                .idempotencyKey("key").replayed(true)
+                .activation(new ProductProcessWorkflowActivationDTO())
+                .build();
+        doReturn(response).when(service).publishAndActivate(anyString(), anyString(), any(),
+                anyString(), any(), anyString(), any(), any());
+
+        service.publishAndActivateAsActor(FACTORY_ID, PRODUCT_ID, 1L, "key", 91L, "hash", 1, caller);
+
+        assertNull(activation.getActorType());
+        assertNull(activation.getActorId());
+        verify(activationRepository, never()).save(any());
     }
 
     @Test

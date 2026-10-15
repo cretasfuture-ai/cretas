@@ -41,6 +41,18 @@ public class BlueprintVersionHistory extends BaseEntity {
     @Column(name = "blueprint_id", nullable = false, length = 36)
     private String blueprintId;
 
+    @Column(name = "factory_id", length = 50)
+    private String factoryId;
+
+    @Column(name = "schema_version", length = 50)
+    private String schemaVersion;
+
+    @Column(name = "lifecycle_state", length = 20)
+    private String lifecycleState;
+
+    @Column(name = "idempotency_key", length = 100)
+    private String idempotencyKey;
+
     /**
      * 版本号
      */
@@ -83,11 +95,37 @@ public class BlueprintVersionHistory extends BaseEntity {
     @Column(name = "published_at")
     private LocalDateTime publishedAt;
 
+    @Column(name = "published_by")
+    private Long publishedBy;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "published_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType publishedActorType;
+    @Column(name = "published_actor_id")
+    private Long publishedActorId;
+
     /**
      * 创建人
      */
     @Column(name = "created_by")
     private Long createdBy;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "created_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType createdActorType;
+    @Column(name = "created_actor_id")
+    private Long createdActorId;
+
+    public void setPublishedActor(com.cretas.aims.security.ActorRef actor) {
+        publishedActorType = actor == null ? null : actor.type();
+        publishedActorId = actor == null ? null : actor.id();
+        publishedBy = actor == null ? null : actor.factoryUserId();
+    }
+    public void setCreatedActor(com.cretas.aims.security.ActorRef actor) {
+        createdActorType = actor == null ? null : actor.type();
+        createdActorId = actor == null ? null : actor.id();
+        createdBy = actor == null ? null : actor.factoryUserId();
+    }
 
     @PrePersist
     protected void onCreate() {

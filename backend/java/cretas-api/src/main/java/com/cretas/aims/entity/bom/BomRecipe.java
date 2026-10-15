@@ -263,4 +263,19 @@ public class BomRecipe extends BaseEntity {
     public static boolean bearsOwnInputRows(OutputRole role) {
         return role != OutputRole.BY_PRODUCT && role != OutputRole.CO_PRODUCT;
     }
+
+    // Typed audit namespace for explicit platform assembly writes.
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "activated_actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType activatedActorType;
+
+    @jakarta.persistence.Column(name = "activated_actor_id")
+    private Long activatedActorId;
+
+    public void setActivationActor(com.cretas.aims.security.ActorRef actor) {
+        java.util.Objects.requireNonNull(actor, "Activation actor is required");
+        this.activatedActorType = actor.type();
+        this.activatedActorId = actor.id();
+        this.activatedBy = actor.factoryUserId();
+    }
 }

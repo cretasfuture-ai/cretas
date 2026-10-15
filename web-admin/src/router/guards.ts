@@ -4,7 +4,9 @@
  */
 import type { Router } from 'vue-router';
 import type { ModuleName } from '@/store/modules/permission';
+import type { User } from '@/types/auth';
 import { isDemoFactoryId, resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
+import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
 
 // 白名单路由 - 不需要登录
 const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
@@ -179,6 +181,18 @@ export function setupRouterGuards(router: Router) {
       // 跳转到 Mobile 专属提示页面
       next({ path: '/mobile-only', query: { role: blockedRole } });
       return;
+    }
+
+    // Assembly is platform-only and backend-controlled. Direct URLs stay
+    // blocked for factory roles and while the capability endpoint is off.
+    if (to.meta.assemblyFeature === true) {
+      const roles = to.meta.roles as string[] | undefined;
+      if (!roles?.includes(authStore.currentRole)
+        || !isFactoryAssemblyPlatformUser(authStore.user as User | null)
+        || !(await getFactoryAssemblyEnabled())) {
+        next('/404');
+        return;
+      }
     }
 
     // 检查角色路由白名单 (判定抽在 isPathAllowedForRole, 与跨模块入口按钮共用同一份)

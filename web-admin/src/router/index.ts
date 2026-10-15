@@ -19,6 +19,7 @@ import {
 import { RESTAURANT_DECISION_ROLES } from '@/views/restaurant/restaurantRoleExperience';
 
 const platformAdminOnlyRoles = ['platform_admin'];
+const factoryAssemblyRoles = ['platform_admin'];
 const restaurantDecisionRoles = [
   'factory_super_admin',
   'platform_admin',
@@ -2422,6 +2423,33 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
           requiresAuth: true,
           showInMenu: true,
           roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+
+      {
+        path: 'factory-onboarding',
+        name: 'FactoryOnboarding',
+        component: () => import('@/views/platform/factory-onboarding/index.vue'),
+        meta: {
+          title: '对话建厂',
+          icon: 'ChatDotRound',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: factoryAssemblyRoles,
+          assemblyFeature: true,
+        },
+      },
+      {
+        path: 'factory-review',
+        name: 'FactoryBuildReview',
+        component: () => import('@/views/platform/factory-review/index.vue'),
+        meta: {
+          title: '建厂复核',
+          icon: 'DocumentChecked',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: factoryAssemblyRoles,
+          assemblyFeature: true,
         },
       },
 

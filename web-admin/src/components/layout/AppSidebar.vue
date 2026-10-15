@@ -6,7 +6,9 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { useWorkspaceStore } from '@/store/modules/workspace';
+import type { User as AuthUser } from '@/types/auth';
 import { get } from '@/api/request';
+import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
 import { startVisibleBadgeRefresh } from '@/utils/badgeRefreshTimer';
 import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
@@ -30,6 +32,9 @@ const roleCode = computed(() => authStore.currentRole);
 
 // R19: Canvas module enable/disable — hide disabled modules from sidebar
 const disabledModuleCodes = ref<string[]>([]);
+// Backend-authoritative assembly switch. Keep the default closed until the
+// platform capability endpoint explicitly returns enabled=true.
+const factoryAssemblyEnabled = ref(false);
 const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
   sales_order: 'sales', purchase_order: 'procurement', production_plan: 'production',
   quality_inspection: 'quality', hr_employee: 'hr', equipment: 'equipment',
@@ -125,6 +130,15 @@ watch(
   (factoryId) => { void fetchDisabledModules(factoryId); },
   { immediate: true },
 );
+watch(
+  () => authStore.user,
+  async (user) => {
+    factoryAssemblyEnabled.value = isFactoryAssemblyPlatformUser(user as AuthUser | null)
+      ? await getFactoryAssemblyEnabled()
+      : false;
+  },
+  { immediate: true },
+);
 const disabledSidebarModules = computed(() => {
   const set = new Set<string>();
   for (const code of disabledModuleCodes.value) {
@@ -164,6 +178,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
+  const assemblyEnabled = factoryAssemblyEnabled.value;
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(authStore.factoryId)) {
@@ -188,6 +203,9 @@ function canSeeMenuItem(item: MenuItem): boolean {
   }
   // R19: Canvas module enable/disable — hide disabled modules
   if (disabledSet.has(item.module)) {
+    return false;
+  }
+  if (item.assemblyFeature && !assemblyEnabled) {
     return false;
   }
   if (!item.roles || item.roles.length === 0) {

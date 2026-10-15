@@ -370,7 +370,7 @@ public class RawMaterialType extends BaseEntity {
      * <p>外键关联 users 表，记录创建此原材料类型的用户</p>
      * <p>类型为 Long，与 User.id 保持一致</p>
      */
-    @Column(name = "created_by", nullable = false)
+    @Column(name = "created_by")
     private Long createdBy;
 
     // ========== 可选分类主编码 ==========
@@ -446,4 +446,19 @@ public class RawMaterialType extends BaseEntity {
     @JsonIgnore
     @OneToMany(mappedBy = "materialType", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<MaterialProductConversion> conversions = new ArrayList<>();
+
+    // Typed audit namespace for explicit platform assembly writes.
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @jakarta.persistence.Column(name = "actor_type", length = 32)
+    private com.cretas.aims.security.AuthenticatedActorType actorType;
+
+    @jakarta.persistence.Column(name = "actor_id")
+    private Long actorId;
+
+    public void setActor(com.cretas.aims.security.ActorRef actor) {
+        java.util.Objects.requireNonNull(actor, "Actor identity is required");
+        this.actorType = actor.type();
+        this.actorId = actor.id();
+        this.createdBy = actor.factoryUserId();
+    }
 }

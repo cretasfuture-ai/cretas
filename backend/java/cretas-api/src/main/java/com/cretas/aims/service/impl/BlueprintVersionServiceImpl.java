@@ -127,6 +127,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
     @Override
     public BlueprintVersionDTO.VersionChangeSummary compareVersions(String blueprintId,
                                                                      Integer fromVersion, Integer toVersion) {
+        getBlueprintOrThrow(blueprintId);
         log.info("比较版本: {} v{} -> v{}", blueprintId, fromVersion, toVersion);
 
         BlueprintVersionHistory from = versionHistoryRepository
@@ -215,6 +216,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
     @Override
     public FactoryBindingDTO getFactoryBinding(String factoryId) {
         return bindingRepository.findByFactoryIdAndDeletedAtIsNull(factoryId)
+                .filter(b -> blueprintRepository.findByIdAndDeletedAtIsNull(b.getBlueprintId()).isPresent())
                 .map(b -> {
                     FactoryTypeBlueprint blueprint = blueprintRepository
                             .findByIdAndDeletedAtIsNull(b.getBlueprintId())
@@ -262,6 +264,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
 
         FactoryBlueprintBinding binding = bindingRepository.findByFactoryIdAndDeletedAtIsNull(factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("工厂未绑定蓝图: " + factoryId));
+        getBlueprintOrThrow(binding.getBlueprintId());
 
         if (autoUpdate != null) {
             binding.setAutoUpdate(autoUpdate);
@@ -301,6 +304,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
 
         FactoryBlueprintBinding binding = bindingRepository.findByFactoryIdAndDeletedAtIsNull(factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("工厂未绑定蓝图: " + factoryId));
+        getBlueprintOrThrow(binding.getBlueprintId());
 
         Integer fromVersion = binding.getAppliedVersion();
         Integer targetVersionParam = request.getTargetVersion();
@@ -384,6 +388,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
 
         FactoryBlueprintBinding binding = bindingRepository.findByFactoryIdAndDeletedAtIsNull(factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("工厂未绑定蓝图: " + factoryId));
+        getBlueprintOrThrow(binding.getBlueprintId());
 
         Integer fromVersion = binding.getAppliedVersion();
         if (targetVersion == null) {
@@ -409,6 +414,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
 
     @Override
     public void notifyFactoriesOfNewVersion(String blueprintId, Integer version) {
+        getBlueprintOrThrow(blueprintId);
         log.info("通知工厂新版本: {} v{}", blueprintId, version);
 
         List<FactoryBlueprintBinding> bindings = bindingRepository
@@ -429,6 +435,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
     @Override
     @Transactional
     public int processAutoUpdates(String blueprintId) {
+        getBlueprintOrThrow(blueprintId);
         log.info("处理自动更新: {}", blueprintId);
 
         List<FactoryBlueprintBinding> autoUpdateFactories = bindingRepository
@@ -465,6 +472,7 @@ public class BlueprintVersionServiceImpl implements BlueprintVersionService {
 
         FactoryBlueprintBinding binding = bindingRepository.findByFactoryIdAndDeletedAtIsNull(factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("工厂未绑定蓝图: " + factoryId));
+        getBlueprintOrThrow(binding.getBlueprintId());
 
         Integer currentVersion = binding.getAppliedVersion();
 
