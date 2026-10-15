@@ -59,4 +59,16 @@ describe('current indicator evidence', () => {
     expect(wrapper.text()).toContain('数据源连接失败');
     wrapper.unmount();
   });
+
+  it('discloses the current-cost basis of the Python dish margin', async () => {
+    vi.mocked(getIndicatorDetail).mockResolvedValue({ code: 'RESTAURANT_DISH_MARGIN', name: '菜品毛利率',
+      category: 'RESTAURANT', computeStrategy: 'CACHED', isActive: true, factoryId: 'F-TEST' });
+    vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'RESTAURANT_DISH_MARGIN', name: '菜品毛利率',
+      value: null, alertLevel: null, fromCache: false, status: 'NO_DATA', source: 'PYTHON_ENDPOINT:RESTAURANT_DISH_MARGIN' });
+    const wrapper = await open();
+    expect(wrapper.text()).toContain('不代表历史成本还原');
+    expect(wrapper.text()).toContain('成本未完整覆盖时不出值');
+    expect(wrapper.findComponent({ name: 'ThresholdGauge' }).props('currentValue')).toBeNull();
+    wrapper.unmount();
+  });
 });

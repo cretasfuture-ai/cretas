@@ -85,6 +85,12 @@
             <template v-if="currentValueData.computedAt"> · 计算于 {{ formatDateTime(currentValueData.computedAt) }}</template>
           </template>
         </p>
+        <p
+          v-if="detail.code === 'RESTAURANT_DISH_MARGIN' && currentValueData?.source?.startsWith('PYTHON_ENDPOINT:')"
+          class="muted"
+        >
+          使用当前成本快照计算，不代表历史成本还原；成本未完整覆盖时不出值。
+        </p>
       </el-card>
 
       <!-- 历史快照 -->
