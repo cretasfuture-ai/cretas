@@ -15,6 +15,26 @@ import {
 } from '../processSheetUnits';
 
 describe('processSheetUnits', () => {
+  it('keeps kg upstream quantity separate from additional per-port packaging counts', () => {
+    expect(resolveWorkflowProcessSheetUnits({
+      processName: '烘烤',
+      inputs: [
+        { workflowPortId: 'bag', materialKind: 'RAW_MATERIAL', unit: '个' },
+        { workflowPortId: 'dough', materialKind: 'SEMI_FINISHED', unit: 'kg' },
+      ],
+      output: { workflowPortId: 'bread', materialKind: 'FINISHED_GOOD', unit: '个' },
+    })).toEqual({ inputUnit: 'kg', outputUnit: '个' });
+  });
+
+  it('still rejects heterogeneous upstream units and missing additional material units', () => {
+    for (const inputs of [
+      [{ materialKind: 'SEMI_FINISHED' as const, unit: 'kg' }, { materialKind: 'SEMI_FINISHED' as const, unit: '个' }],
+      [{ materialKind: 'SEMI_FINISHED' as const, unit: 'kg' }, { materialKind: 'RAW_MATERIAL' as const, unit: '' }],
+    ]) {
+      expect(() => resolveWorkflowProcessSheetUnits({ inputs, output: { unit: '个' } })).toThrow();
+    }
+  });
+
   it('uses the product-process override as input and the process output unit as output', () => {
     expect(resolveProcessSheetUnits({ unitOverride: '只', defaultUnit: 'kg', defaultOutputUnit: '袋' }))
       .toEqual({ inputUnit: '只', outputUnit: '袋' });

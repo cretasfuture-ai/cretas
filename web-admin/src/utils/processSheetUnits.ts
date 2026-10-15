@@ -153,7 +153,8 @@ export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits 
 
 /**
  * Workflow 报工的单位只认端口快照，不接受 plannedUnit、产品单位或 kg 默认值。
- * 当前保存请求只有一个 inputUnit，因此多投入必须同单位；异单位不能静默取第一个。
+ * inputUnit 表示上游主投入量；追加原料逐端口保留自己的单位，不加入主投入分母。
+ * 没有上游时，原料投入仍须能合并为同一种计量单位。
  */
 export function resolveWorkflowProcessSheetUnits(config: WorkflowUnitConfig): ProcessSheetUnits {
   const processLabel = nonBlank(config.processName) ?? '未命名工序';
@@ -169,7 +170,9 @@ export function resolveWorkflowProcessSheetUnits(config: WorkflowUnitConfig): Pr
     }
     return reportingUnit(port, unit);
   });
-  const distinctInputUnits = [...new Set(inputUnits)];
+  const hasUpstream = config.inputs.some((port) => port.materialKind === 'SEMI_FINISHED' || port.materialKind === 'FINISHED_GOOD');
+  const distinctInputUnits = [...new Set(inputUnits.filter((_, index) =>
+    !hasUpstream || config.inputs![index].materialKind !== 'RAW_MATERIAL'))];
   if (distinctInputUnits.length !== 1) {
     throw new Error(`工序「${processLabel}」投入端口单位不一致：${distinctInputUnits.join('、')}`);
   }
