@@ -268,7 +268,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         // 生成令牌（使用 "platform_" 前缀区分平台管理员，包含角色信息和PLATFORM工厂ID）
         String role = admin.getPlatformRole() != null ? admin.getPlatformRole().name().toLowerCase() : "auditor";
         // 平台管理员使用 factoryId="PLATFORM" 以通过跨工厂权限验证
-        String token = jwtUtil.generateToken(admin.getId(), "PLATFORM", admin.getUsername(), role);
+        String token = jwtUtil.generatePlatformToken(admin.getId(), admin.getUsername(), role);
         String refreshToken = jwtUtil.generateRefreshToken("platform_" + admin.getId());
 
         // 更新最后登录时间
@@ -277,6 +277,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
 
         // 构建响应
         return MobileDTO.LoginResponse.builder()
+                .actorType("PLATFORM_ADMIN")
                 .userId(admin.getId())
                 .username(admin.getUsername())
                 .factoryId(null) // 平台管理员没有 factoryId
@@ -319,9 +320,10 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                         .orElseThrow(() -> new ResourceNotFoundException("平台管理员不存在"));
 
                 String role = admin.getPlatformRole() != null ? admin.getPlatformRole().name().toLowerCase() : "auditor";
-                String newToken = jwtUtil.generateToken(admin.getId(), "PLATFORM", admin.getUsername(), role);
+                String newToken = jwtUtil.generatePlatformToken(admin.getId(), admin.getUsername(), role);
 
                 return MobileDTO.LoginResponse.builder()
+                        .actorType("PLATFORM_ADMIN")
                         .token(newToken)
                         .refreshToken(refreshToken)
                         .expiresIn(3600L)

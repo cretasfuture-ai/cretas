@@ -81,6 +81,9 @@ public class MobileDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class LoginResponse {
+        /** Explicit account namespace, independent of overlapping numeric IDs and role aliases. */
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private String actorType;
         private Long userId;
         private String username;
         private String factoryId;

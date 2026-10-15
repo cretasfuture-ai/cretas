@@ -61,6 +61,15 @@ import static org.mockito.Mockito.mock;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class MobileAuthServiceImplLoginModulePermissionsContractTest {
 
+    @Test
+    void serializedFactoryResponseKeepsExistingShapeWhilePlatformHasExplicitNamespace() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var factory = MobileDTO.LoginResponse.builder().userId(62L).factoryId("F1").role("factory_super_admin").build();
+        var platform = MobileDTO.LoginResponse.builder().userId(62L).role("super_admin").actorType("PLATFORM_ADMIN").build();
+        assertThat(mapper.readTree(mapper.writeValueAsString(factory)).has("actorType")).isFalse();
+        assertThat(mapper.readTree(mapper.writeValueAsString(platform)).get("actorType").asText()).isEqualTo("PLATFORM_ADMIN");
+    }
+
     @Mock private UserRepository userRepository;
     @Mock private SessionRepository sessionRepository;
     @Mock private PlatformAdminRepository platformAdminRepository;
@@ -131,6 +140,7 @@ class MobileAuthServiceImplLoginModulePermissionsContractTest {
     @Test
     @DisplayName("平台管理员登录: modulePermissions 为 null (RN 对平台管理员短路放行, 不读它), 不调 resolveModuleLevels")
     void platformAdminLoginLeavesModulePermissionsNull() {
+        when(jwtUtil.generatePlatformToken(1L, "platform_root", "super_admin")).thenReturn("typed-platform-jwt");
         PlatformAdmin admin = new PlatformAdmin();
         admin.setId(1L);
         admin.setUsername("platform_root");
@@ -147,7 +157,26 @@ class MobileAuthServiceImplLoginModulePermissionsContractTest {
         System.out.println("OBSERVED platform admin modulePermissions = " + response.getModulePermissions());
 
         assertThat(response.getModulePermissions()).isNull();
+        assertThat(response.getToken()).isEqualTo("typed-platform-jwt");
+        assertThat(response.getActorType()).isEqualTo("PLATFORM_ADMIN");
+        verify(jwtUtil).generatePlatformToken(1L, "platform_root", "super_admin");
+        verify(jwtUtil, never()).generateToken(anyLong(), anyString(), anyString(), anyString());
         verify(permissionService, never()).resolveModuleLevels(any());
+    }
+
+    @Test
+    void platformRefreshUsesExplicitPlatformIssuerAndLiveRole() {
+        PlatformAdmin admin = new PlatformAdmin(); admin.setId(62L);
+        admin.setUsername("platform_root"); admin.setPlatformRole(PlatformRole.super_admin);
+        when(jwtUtil.validateToken("refresh-platform")).thenReturn(true);
+        when(jwtUtil.getUserIdFromTokenAsString("refresh-platform")).thenReturn("platform_62");
+        when(platformAdminRepository.findById(62L)).thenReturn(Optional.of(admin));
+        when(jwtUtil.generatePlatformToken(62L, "platform_root", "super_admin")).thenReturn("typed-platform-jwt");
+        var response = service.refreshToken("refresh-platform");
+        assertThat(response.getToken()).isEqualTo("typed-platform-jwt");
+        assertThat(response.getActorType()).isEqualTo("PLATFORM_ADMIN");
+        verify(jwtUtil, never()).generateToken(anyLong(), anyString(), anyString(), anyString());
+        verify(userRepository, never()).findById(anyLong());
     }
 
     @ParameterizedTest

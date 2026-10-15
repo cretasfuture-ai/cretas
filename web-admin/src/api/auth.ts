@@ -7,6 +7,7 @@ import type { User, AuthTokens, LoginRequest, LoginResponse } from '@/types/auth
 
 // 登录响应数据 — 后端 UnifiedLoginResponse 实际返回的扁平字段
 interface LoginData {
+  actorType?: 'PLATFORM_ADMIN' | 'FACTORY_USER';
   accessToken: string;
   refreshToken?: string;
   tokenType?: string;
