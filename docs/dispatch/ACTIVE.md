@@ -107,7 +107,3 @@
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
 
-- `PLATFORM-ASSEMBLY-20261015` — `in-progress` — Owner: /root；Base: 095ce82d2fc357fa415ea55f8612579cf011bbb1；Scope: 建厂专属Java/迁移/门禁、web-admin平台入口、Python factory_assembly及main条件注册。默认关闭、平台专用，不碰生产/已有工厂自动初始化。验收: 目标Java/Python、真实PG迁移+JPA、前端构建、私有UI正反对照；共享修复另PR。
-- `PLATFORM-ASSEMBLY-PG-20261015` — `in-progress` — Owner: platform_migrations；Base: a39038c68e36ff23d32eef5398bb87afe33fd746；Scope: 新建厂db/flyway新增SQL、独立迁移门禁/清单，不改历史SQL/Java/ACTIVE；验收: native PG空基线及已有库升级、V42原样、零既有业务更新；回传版本顺序/日志。
-- `PLATFORM-ASSEMBLY-TAXONOMY-20261015` — `in-progress` — Owner: platform_taxonomy；Base: a39038c68e36ff23d32eef5398bb87afe33fd746；Scope: 新增materialdraft及MaterialDraftPromoter、blueprint/interview/FactoryBuildApply{Service,Validator}、PlatformAssemblyInterviewController DTO分类部分；适配main节点ID分类，禁止恢复旧编码/改共享分类；验收: 目标适配测试。
-- `PLATFORM-ASSEMBLY-FORMAL-20261015` — `in-progress` — Owner: platform_formal；Base: a39038c68e36ff23d32eef5398bb87afe33fd746；Scope: Workflow/BOM/FactoryConfig正式服务增量ActorRef重载、新建厂formal调用及专用测试；保留旧接口行为，禁止共享业务修复；验收: 目标真实服务权限/读回/重放测试，由root串行Maven。
