@@ -508,8 +508,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     }
 
     private boolean isPackagingCategory(String category) {
-        return category != null
-                && ("PACKAGING".equalsIgnoreCase(category.trim()) || "包材".equals(category.trim()));
+        return com.cretas.aims.entity.material.MaterialMainCategory.PACKAGING.equals(
+                com.cretas.aims.entity.material.MaterialMainCategory.of(category));
     }
 
     private String normalizeRequiredName(String name) {
