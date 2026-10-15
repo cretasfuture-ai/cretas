@@ -30,4 +30,6 @@ Root 的 AN2 验收 scope 追加：新增 IndicatorPythonBridgePostgresAcceptanc
 
 Root 的指标展示 scope 追加：既有 IndicatorDetailDrawer.vue 及目标测试，显示 Python 菜品毛利的当前成本快照口径；只在相关 code/source 显示，不改变数值。新 Python wrapper 对部分成本覆盖不出全店 KPI（NO_DATA），不复制旧函数的计算逻辑。
 
+独立复核补强：AN2 原 scope 包含唯一菜品毛利 code 与固定 endpoint 双向绑定（fresh/cache）、独立 wrong-period 控制、覆盖率精确等于 1 控制。Root 修复既有抽屉强制重算对 FAILED/NO_DATA 的假成功提示，真实 0 仍为成功；页面目标测试 7/7 通过，日志 indicator/web-recompute-green.log。真实链路 fixture 导入生产 main.app，关闭无关 lifespan，未替换真实 middleware/router/Gold 算法。
+
 VS2 实施设计约束：Linux API 只调度、持久化和验收回执；上海 Windows 本地 worker 仅调用命名函数，不调用 cycle/deploy，不接受客户端命令/URL/本地路径。任务、配方、数据、模型和独立验收必须绑定厂/项目/版本/哈希。租约超时不自动重跑训练；训练、评测、独立验收与启用分别留证。平台规划必须显式 PLATFORM_ADMIN namespace 与目标厂，不能伪装 FACTORY_USER。六膳门专用硬编码不可作为 generic/OCR 默认 runner。

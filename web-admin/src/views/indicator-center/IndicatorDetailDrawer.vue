@@ -358,11 +358,21 @@ async function onRecompute() {
     const result = await recomputeIndicator(props.factoryId, props.code);
     currentValueData.value = result;
     valueError.value = null;
+    if (result.status === 'FAILED') {
+      ElMessage.error('指标重算失败，请检查数据源后重试');
+      return;
+    }
+    if (result.status !== 'AVAILABLE' || result.value == null || !Number.isFinite(result.value)) {
+      ElMessage.warning(result.status === 'NO_DATA' ? '暂无业务数据，未生成新的计算快照' : '暂无可用计算结果');
+      return;
+    }
     ElMessage.success(`重算完成: ${result.value ?? '—'}`);
     emit('recomputed', props.code);
     // 重新加载详情 + 历史 (新增了一条 version)
     await Promise.all([loadDetail(), loadVersions()]);
   } catch (e) {
+    currentValueData.value = null;
+    valueError.value = e instanceof Error ? e.message : '指标重算失败，请重试';
     // ApiError 已被 request.ts 拦截展示 toast, 此处只 console.
     console.warn('[IndicatorDetailDrawer] recompute failed:', e);
   } finally {

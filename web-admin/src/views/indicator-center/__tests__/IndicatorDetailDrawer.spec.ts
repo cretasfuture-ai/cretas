@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import Drawer from '../IndicatorDetailDrawer.vue';
-import { getIndicatorDetail, getIndicatorValue, getIndicatorThresholds, listIndicatorVersions } from '@/api/indicator';
+import { getIndicatorDetail, getIndicatorValue, getIndicatorThresholds, listIndicatorVersions, recomputeIndicator } from '@/api/indicator';
 
 vi.mock('@/api/indicator', () => ({
   getIndicatorDetail: vi.fn(), getIndicatorValue: vi.fn(), getIndicatorThresholds: vi.fn(),
   listIndicatorVersions: vi.fn(), recomputeIndicator: vi.fn(),
 }));
-vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => false }) }));
+vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
+vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => true }) }));
 vi.mock('@/utils/echarts', () => ({ default: { init: vi.fn() } }));
 vi.mock('@/composables/useChartInsight', () => ({ useChartInsight: () => ({ insight: ref(null), loading: ref(false) }) }));
 
@@ -69,6 +71,39 @@ describe('current indicator evidence', () => {
     expect(wrapper.text()).toContain('不代表历史成本还原');
     expect(wrapper.text()).toContain('成本未完整覆盖时不出值');
     expect(wrapper.findComponent({ name: 'ThresholdGauge' }).props('currentValue')).toBeNull();
+    wrapper.unmount();
+  });
+
+  it.each(['FAILED', 'NO_DATA'] as const)('does not announce a %s recomputation as success', async (status) => {
+    vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'KPI', name: '测试指标', value: 123,
+      alertLevel: null, status: 'AVAILABLE' });
+    vi.mocked(recomputeIndicator).mockResolvedValue({ code: 'KPI', name: '测试指标', value: null,
+      alertLevel: null, status });
+    const wrapper = await open();
+    const button = wrapper.findAll('el-button, el-button-stub').find(node => node.text().includes('强制重算'));
+    expect(button).toBeDefined();
+    await button!.trigger('click');
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'ThresholdGauge' }).props('currentValue')).toBeNull();
+    expect(ElMessage.success).not.toHaveBeenCalled();
+    expect(wrapper.emitted('recomputed')).toBeUndefined();
+    expect(status === 'FAILED' ? ElMessage.error : ElMessage.warning).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+
+  it('announces a successful real-zero recomputation and refreshes its snapshot', async () => {
+    vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'KPI', name: '测试指标', value: null,
+      alertLevel: null, status: 'NO_DATA' });
+    vi.mocked(recomputeIndicator).mockResolvedValue({ code: 'KPI', name: '测试指标', value: 0,
+      alertLevel: null, status: 'AVAILABLE' });
+    const wrapper = await open();
+    const button = wrapper.findAll('el-button, el-button-stub').find(node => node.text().includes('强制重算'));
+    await button!.trigger('click');
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'ThresholdGauge' }).props('currentValue')).toBe(0);
+    expect(ElMessage.success).toHaveBeenCalledWith('重算完成: 0');
+    expect(wrapper.emitted('recomputed')).toEqual([['KPI']]);
+    expect(listIndicatorVersions).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
 });

@@ -41,7 +41,10 @@ $fixtureEnvironment = @{
     FOOD_KB_POSTGRES_USER = $PgUser
     FOOD_KB_POSTGRES_PASSWORD = ''
     INTERNAL_API_SECRET = 'local-indicator-acceptance-only-secret'
-    PYTHONPATH = "$pythonRoot;$pythonRoot\smartbi"
+    JWT_SECRET = 'local-indicator-acceptance-jwt-secret'
+    JWT_AUTH_ENABLED = 'true'
+    VISION_TRAINING_DRAFT_DIR = (Join-Path $EvidenceDir 'runtime-state')
+    PYTHONPATH = $pythonRoot
 }
 $savedEnvironment = @{}
 $pythonProcess = $null
@@ -53,7 +56,7 @@ try {
     }
     $pythonProcess = Start-Process -FilePath $Python -ArgumentList @(
         '-m', 'uvicorn', 'indicator_bridge_app:app', '--app-dir', ('"' + $fixtureRoot + '"'),
-        '--host', '127.0.0.1', '--port', '18085'
+        '--host', '127.0.0.1', '--port', '18085', '--lifespan', 'off'
     ) -WorkingDirectory $pythonRoot -WindowStyle Hidden -PassThru `
       -RedirectStandardOutput (Join-Path $EvidenceDir 'python-server.log') `
       -RedirectStandardError (Join-Path $EvidenceDir 'python-server-error.log')
@@ -85,7 +88,7 @@ try {
         java_port = 10059; python_port = 18085; anonymous_status = 401; cross_factory_status = 403
         maven_exit = $testExit; production_writes = 0
         source_head = (& git -C $RepoRoot rev-parse HEAD)
-        scope = 'real Java Controller/Service/client and Python middleware/router/Gold function with private PostgreSQL; Java production auth excluded'
+        scope = 'real Java Controller/Service/client and Python main.app/middleware/router/Gold function with private PostgreSQL; Java production auth and unrelated Python lifespan excluded'
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $EvidenceDir 'cross-service-receipt.json') -Encoding utf8
     Write-Output 'INDICATOR_BRIDGE_ACCEPTANCE=pass'
 } finally {
