@@ -28,21 +28,29 @@ class BomActivationActorFamilyContractTest {
         var actor = new ActorRef(type, 77L);
         var first = member("one");
         var second = member("two");
+        var addedDuringActivation = member("three");
+        var actualFamily = List.of(first, second, addedDuringActivation);
         when(repo.findById("one")).thenReturn(Optional.of(first));
         when(repo.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
                 "TEST", "family", BomRecipe.Status.DRAFT)).thenAnswer(call ->
                 List.of(first, second).stream().filter(row -> row.getStatus() == BomRecipe.Status.DRAFT).toList());
+        when(repo.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                "TEST", "family", BomRecipe.Status.ACTIVE)).thenAnswer(call ->
+                actualFamily.stream().filter(row -> row.getStatus() == BomRecipe.Status.ACTIVE).toList());
         doAnswer(call -> {
-            first.setStatus(BomRecipe.Status.ACTIVE);
-            second.setStatus(BomRecipe.Status.ACTIVE);
+            for (var row : actualFamily) {
+                row.setStatus(BomRecipe.Status.ACTIVE);
+                row.setActivatedBy(actor.factoryUserId());
+            }
             return first;
         }).when(service).activateRecipe("TEST", "one", actor.factoryUserId(), null);
 
         assertThatCode(() -> service.activateRecipeAsActor("TEST", "one", actor)).doesNotThrowAnyException();
-        for (var row : List.of(first, second)) {
+        for (var row : actualFamily) {
             assertThat(row.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
             assertThat(row.getActivatedActorType()).isEqualTo(type);
             assertThat(row.getActivatedActorId()).isEqualTo(77L);
+            assertThat(row.getActivatedBy()).isEqualTo(actor.factoryUserId());
             verify(repo).save(row);
         }
         verify(service).activateRecipe("TEST", "one", actor.factoryUserId(), null);

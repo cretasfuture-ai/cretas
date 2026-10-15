@@ -400,10 +400,16 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new BusinessException(403, "平台建厂配方转正服务未启用").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
         }
         actorResolver.authorize(actor, factoryId, java.util.Set.of("factory-blueprint:activation:workflow"));
-        // Capture the validated DRAFT family before activation changes every member
-        // to ACTIVE. A second DRAFT-only lookup after that transition is empty.
-        List<BomRecipe> family = activationFamily(factoryId, loadRecipe(factoryId, recipeId));
         BomRecipe activated = activateRecipe(factoryId, recipeId, actor.factoryUserId());
+        // Audit the actual ACTIVE family, including members seen by activation
+        // under READ COMMITTED. DRAFT members no longer exist after the transition.
+        List<BomRecipe> family = activated.getBomFamilyId() == null ? List.of(activated)
+                : recipeRepo.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                        factoryId, activated.getBomFamilyId(), BomRecipe.Status.ACTIVE);
+        if (family.stream().noneMatch(member -> member.getId().equals(activated.getId()))) {
+            throw bomError(409, "激活后的 BOM Family 未包含目标配方",
+                    "BOM_FAMILY_ACTIVE_REQUIRED", "请刷新配方后重试", "bomFamily");
+        }
         // Platform ids are deliberately never projected into activated_by (users.id).
         // The typed audit columns are the authoritative actor namespace.
         for (BomRecipe member : family) {
