@@ -29,10 +29,24 @@ TaskSpec 必填：factory_id、workstation_id、task_family、product_scope、pa
 
 任何阶段失败、无 runner、无回执、跨厂证据或未经人工审核的数据都不能变成成功。回执必须携带工厂、项目、任务族、版本和真实哈希；训练成功不推导独立验收通过，验收通过不推导已启用。
 
-## 本版运行边界
+## 平台建厂和本地执行接线
 
-本版 HTTP 入口只提供模板、预览、保存和计划读回，没有训练、发布或启用端点。六膳门 adapter 仅提供命名阶段契约；未注入经审核的本地 runner 时保持 pending，默认无任何专用工厂绑定。实际本地计算继续走 `scripts/windows/liushanmen-vision-lab.ps1`，遵守上海 Windows/RTX 3060 计算规则，不向 Mac 派工。
+平台建厂沿用该入口自己的已验证 `PLATFORM_ADMIN` 身份与目标工厂校验，Java 固定代理 `/api/platform/factories/{factoryId}/vision-training` 到 Python `/api/vision-training/platform/factories/{factory_id}`。平台身份不会借用同数字 ID 的工厂用户身份。预览、保存、已存项目、阶段计划、执行记录仍使用同一套 SOP 服务与存储，不另建训练向导或模型管理系统。平台建厂功能开关保持与原入口一致；封闭 v2 能力目录不新增虚构的视觉能力项。
+
+步骤为：选择本厂任务和工位/产品/包装范围 → 选择已登记的本厂训练方案或先补齐标准 → 显式预览和保存 → 按顺序提交采集、数据集、候选训练、评测 → 刷新读回本厂执行记录。选择已登记配方时使用服务端绑定的数据、方案、人工标准和独立验收版本；修改版本须新建项目并重新登记输入。浏览器不传可执行命令、文件路径、模型 URL 或可信输入哈希。
+
+后台将执行任务保存于代码树之外的 SQLite 队列。命名 Windows worker 仅能领取自身工厂/项目范围内的任务，通过租约和心跳持有执行权，使用既有 `collect`、`build_dataset`、`train_candidate`、`evaluate_candidate`，回传完整身份和产物回执。重复提交相同身份返回同一任务；过期或身份冲突不能自动重训。成功训练、独立验收和启用仍分别判断；HTTP 队列不接收独立验收或启用执行请求。
+
+六膳门 adapter 是 `liushanmen-visionlab-v1`，只对明确登记的工厂与该专用任务开放。通用检测/OCR 模板没有已验证的通用 runner，未登记时可定义和保存任务，执行保持阻塞；不能将已有六膳门权重、类别、托盘几何或指标换个工厂名直接复用。
+
+服务器通过绝对路径 `VISION_TRAINING_REGISTRY_FILE` 读取代码树之外的操作员配置，格式包含 `recipes`、`worker_bindings`、`specialized_factory_allowlist`。默认三者皆空，不启用任何工厂。每项配方须绑定工厂、任务族、模板/SOP/版本、配置 SHA-256 和当前阶段输入 SHA-256；新产物经本地核对后再登记下一阶段输入。worker 记录只含 `worker_id`、`token_env`、`factory_ids`、可选 `project_ids`；令牌由命名环境变量提供，不能写入配置或仓库。每个 worker 使用独立令牌，与服务间内部凭据分开。
+
+本机执行入口为 `scripts/windows/vision-sop-worker.ps1 -Registration <本机外部注册文件> -Once`，只消费一个已排队任务；空队列不启动计算。注册文件限定本机项目根目录、配置/输入文件与其哈希、服务地址白名单、worker 名称及环境变量名。运行前须提供 worker 专属凭据及内部服务凭据，凭据不通过命令行输出。执行和提交失败返回非零结果；回执 hash 表示完整性，不能当作 GPU 实际运行或模型效果的独立证明。
+
+本地计算遵守上海 Windows/RTX 3060 规则，不向 Mac 派工；日常原入口 `scripts/windows/liushanmen-vision-lab.ps1` 保留。队列不会启动客户训练、改变现有自动任务或切换生产模型。原图、人工 JSON、固定划分、保护集、正常集、ONNX 一致性、延迟和回退门禁继续使用已有实现。
 
 草稿使用代码目录之外的绝对持久目录：Linux 默认 `/var/lib/cretas/vision-training`，Windows 默认用户目录 `.cretas-state/vision-training`，可由 `VISION_TRAINING_DRAFT_DIR` 指定。相对路径、代码树内路径拒绝；启动验证创建、写入、读回和原子替换。多 worker 按相同预览只能原子创建同一份草稿。
 
-建厂仓库现有封闭 v2 能力目录未在本批更改；本接口供后续版本显式接入。完整对话建厂 UI、真实训练 runner、各厂数据采集及模型效果验收分别交付，不能用本版编排测试代签。
+草稿与队列在应用导入时不创建目录或打开数据库，启动时再检查持久卷。队列终态回执是阶段读回的持久来源，避免“队列完成、草稿未更新”造成永久不一致。重新启动后仍须读回同一工厂项目、阶段和产物。
+
+当前接线的单测、HTTP/数据库读回、实际平台入口验收和各厂真实模型训练/效果验收分别记录；不得用模拟 adapter 或合成样本的编排测试代签真实模型效果。平台建厂底座由其任务独立交付，未合入/释放前本批不覆盖其未提交入口或安全类型，也不宣称已完成该入口的端到端验收。

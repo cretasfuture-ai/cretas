@@ -53,3 +53,21 @@ AN2 单独进入 review/发布切片，代码 Owner 已释放该指标 scope，V
 AN2-CI 窄scope（Owner implement_analysis_provenance；Base bf42051bfa3e2e52d4b566e4dcaa9d7b7846a621）只登记 backend/python/pytest.ini 的 anyio marker，原14条目标测试（12桥接+2标记）通过；提交8fbd51e75a383fa69a86b02c65e4e49067fe3920。该scope已释放。CI原始单失败/9921pass日志保留 indicator/release/ci-python-failed.log，不把失败称全绿。
 
 候选4b7725e613完成统一构建：Java发布目标37/37，Maven BUILD SUCCESS；Web构建成功。JAR f069f2ef3e452ca7176a55eaf0ea9ce47ff03140a034e857dbae0cb377397559 已预上传（未安装/切流）。marker登记及本台账不改变Java/Web树，复用该制品，不重新构建。真实manifest保存built-java.manifest/built-web.manifest；初次调用额外指定的manifest回执路径未作用于build，最终部署使用默认受校验cache路径，不以初次报告的空元数据代替manifest。
+
+## VS3 root scope lock
+
+任务 CONNECT-DATA-VISION-20261015-VS3；Owner root；Base 739b30272d（指标PR #988；最终接线在合入后以fresh main收口）。独占新增 controller/vision/PlatformVisionTrainingController.java 与目标ContractTest、PythonSmartBIClient.java 新命名vision bridge段及其新ContractTest、web-admin/src/api/visionTraining.ts、新 components/vision-training/** 及目标测试、main.py挂载、vision SOP文档和dispatch。平台建厂现有 index.vue/安全类型/迁移仍属 PLATFORM-ASSEMBLY-20261015，待其合入/释放后才挂载组件，禁止复制其未提交代码或另建建厂流程。
+
+API固定平台前缀/有限操作，不允许任意Python URL。平台actor使用建厂任务提供的AuthenticatedActor namespace；正平台身份和目标工厂存在性均验证后才转发。模板/预览/保存/回读/阶段/配方/排队沿用VS2契约，无自动启用。验收：Java Client实际HTTP合同与平台/工厂同ID阴性；Vue状态/工厂切换/保存排队合同；实际新平台入口→Java→Python草稿/队列持久化读回，生产/真实客户训练0。缺建厂依赖不得假报已接通。
+
+AN2 已于 2026-10-15 合入 PR #988，merge 4b0209edd95e7f854a7bec659c8d50eccc168b3c。适用9项CI通过：Java fast-contracts 2984/0fail/0error/3skip（目标新合同9条确实执行），Python 9922pass/166skip/153deselected/2xfail（self-hosted特定排除），Web5253pass/5skip；Java full suite明确skipped。源码树未变，复用已通过真实PG/UI证据与可信制品。
+
+AN2 发布：clean exact-main release tree cretas-analysis-provenance-20261015；Python部署exit0，统一Java/Web部署exit0，RELEASE_FINAL_STATUS=deployed恰好1次，build均reused。回执 indicator/release/reports/cretas-1792062042-938.json；实际active cretas-backend-green:10020，JAR f069f2ef3e452ca7176a55eaf0ea9ce47ff03140a034e857dbae0cb377397559；Web四方哈希pass。任务特有runtime-feature.json确认新class标记存在、旧unsupported/阴性标记不存在，真实Python路由匿名401/跨厂403/非法窗口422/内部F006只读200，当前窗口NO_DATA。生产业务写入0，未跑生产UI业务验收。汇总delivery-an2.json，不重复标准健康核验。
+
+VS3 root配置接线scope追加：新增vision_training/server_registration.py、目标test_vision_training_server_registration.py；main.py统一mount factory/platform/worker runtime，外部registry只读，worker密钥仅从命名环境变量取；默认无recipe/worker/专用工厂。修改既有test_vision_training_entry_contract.py以核对真实三命名空间挂载。VS2 owner继续独占queue/runtime/worker/models/router修复；根不并发修改这些文件。
+
+VS2 Owner于73c459430d后释放代码scope；root接管sop_worker.py及worker_contract最后两项consumer修复：真实安全YAML语义/重复键拒绝，以及每个评估图片路径必须匹配manifest锁定的预登记hash。旧实现两条断言均红（consumer-mutation-red.log），恢复修复后跑冻结目标集；未执行真实模型训练。
+
+VS-HTTP验收任务 CONNECT-DATA-VISION-20261015-HTTP；Owner implement_vision_sop；Base19860076ce（root冻结候选另记录内容hash）。只允许读取root树产品文件，在Documents/cretas-connect-20261015/vision/http-runner中创建非敏感脚本/回执，在D:/CretasVisionLab/acceptance/connect-sop-20261015中创建独占合成测试数据，开启并关闭自身loopback18087/18088服务。实际main middleware/router→队列→Windows现有collect函数→完成回执/重启读回；匿名/错worker/跨厂阴性。不改任何repo文件、原有客户数据/任务/模型，不训练、无生产网络或业务写。验收脚本exit0并返回factory/project/job/真实函数/实际下载hash及重启读回证据；不得把collect链路称模型训练或完整Java/平台入口验收。
+
+Python独立交付切片 CONNECT-DATA-VISION-20261015-PY：Owner root，Base4b0209edd95e7f854a7bec659c8d50eccc168b3c，worktree cretas-vision-runner-connect-20261015 / codex/vision-sop-python-ready-20261015。仅19个Python/PSworker/SOP与dispatch文件，产品内容与已验b39899df24逐文件相同，目标75pass/1warning；无Java/Web/Entity/迁移/平台底座源码。复用该内容证据，适用CI另跑。本批默认registry空，生产不登记客户worker/配方、不训练、不启用。VS3 Java/Web接线待平台底座交付，不能将Python后端发布称整个平台接入完成。

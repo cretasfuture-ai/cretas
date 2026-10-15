@@ -251,6 +251,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler"""
     logger.info("Python Services starting up...")
     verify_draft_storage(_vision_training_draft_dir)
+    _vision_training_runtime.startup_probe()
     logger.info(f"Debug mode: {get_settings().debug}")
     logger.info(f"LLM Model: {get_settings().llm_model}")
 
@@ -1362,6 +1363,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Food KB shutdown error: {e}")
 
+    _vision_training_runtime.close()
     logger.info("Python Services shutting down...")
 
 
@@ -1722,11 +1724,21 @@ else:
 
 # Versioned, factory-scoped training drafts for conversational factory setup.
 # The router plans stages only; no request starts training or activates a model.
-from vision_training.router import create_file_backed_router  # noqa: E402
-from vision_training.runtime import resolve_draft_root, verify_draft_storage  # noqa: E402
+from vision_training.runtime import create_file_backed_runtime, resolve_draft_root, verify_draft_storage  # noqa: E402
+from vision_training.server_registration import load_server_registration  # noqa: E402
 
 _vision_training_draft_dir = resolve_draft_root(os.getenv("VISION_TRAINING_DRAFT_DIR"))
-app.include_router(create_file_backed_router(_vision_training_draft_dir))
+_vision_training_registration = load_server_registration()
+_vision_training_runtime = create_file_backed_runtime(
+    draft_root=_vision_training_draft_dir,
+    job_db=_vision_training_draft_dir / "jobs.sqlite3",
+    recipe_catalog=_vision_training_registration.recipes,
+    worker_bindings=_vision_training_registration.worker_bindings,
+    specialized_factory_allowlist=_vision_training_registration.specialized_factory_allowlist,
+)
+app.include_router(_vision_training_runtime.routers.factory)
+app.include_router(_vision_training_runtime.routers.platform)
+app.include_router(_vision_training_runtime.routers.worker)
 
 # =====================================================
 # Client Requirement API Routes
