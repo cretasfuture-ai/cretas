@@ -49,3 +49,7 @@ VS2 实施设计约束：Linux API 只调度、持久化和验收回执；上海
 AN2 验收回执：冻结源 fa9b9e125348168d31a1c3d8d774462fd48e46aa，真实主服务 middleware/router/Gold→私有 PG，Java 1 test/0 failure/error/skip；实际抽屉真实零、NO_DATA、FAILED 与重算提示均通过，console/page errors=0；匿名401、跨厂403；真实0/50/99.9和版本窗口回读、错code无快照。证据 Documents/cretas-connect-20261015/indicator/{cross-service-receipt.json,ui-result.json,ui-pg-readback.json,ui-*.png}。Java生产鉴权和无关Python lifespan明确排除，生产业务写入0。源码根因复核5项闭合，后续CI/发布分别留证。
 
 AN2 单独进入 review/发布切片，代码 Owner 已释放该指标 scope，VS2 继续独立分支实施。私有 Python18085/Java10059/Vite31759/PG55458 已按启动PID与专属data目录核验并停止，数据和证据保留。发布目标 selector：PythonIndicatorSourceContractTest,IndicatorQueryServiceImplTest,PythonSmartBIClientTransportSecurityTest；真实 PG/UI 证据按上述冻结源码复用，不把 opt-in 未执行当发布测试通过。
+
+AN2-CI 窄scope（Owner implement_analysis_provenance；Base bf42051bfa3e2e52d4b566e4dcaa9d7b7846a621）只登记 backend/python/pytest.ini 的 anyio marker，原14条目标测试（12桥接+2标记）通过；提交8fbd51e75a383fa69a86b02c65e4e49067fe3920。该scope已释放。CI原始单失败/9921pass日志保留 indicator/release/ci-python-failed.log，不把失败称全绿。
+
+候选4b7725e613完成统一构建：Java发布目标37/37，Maven BUILD SUCCESS；Web构建成功。JAR f069f2ef3e452ca7176a55eaf0ea9ce47ff03140a034e857dbae0cb377397559 已预上传（未安装/切流）。marker登记及本台账不改变Java/Web树，复用该制品，不重新构建。真实manifest保存built-java.manifest/built-web.manifest；初次调用额外指定的manifest回执路径未作用于build，最终部署使用默认受校验cache路径，不以初次报告的空元数据代替manifest。
