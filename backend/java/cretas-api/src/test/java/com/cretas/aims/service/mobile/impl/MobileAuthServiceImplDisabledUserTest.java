@@ -93,9 +93,12 @@ class MobileAuthServiceImplDisabledUserTest {
         admin.setUsername("synthetic-platform");
         admin.setPlatformRole(PlatformRole.super_admin);
         when(admins.findById(101L)).thenReturn(Optional.of(admin));
+        when(jwt.generatePlatformToken(101L, "synthetic-platform", "super_admin"))
+                .thenReturn("synthetic-new-access");
         assertEquals("synthetic-new-access", service.refreshToken("synthetic-refresh").getToken());
         verifyNoInteractions(users);
-        verify(jwt).generateToken(101L, "PLATFORM", "synthetic-platform", "super_admin");
+        verify(jwt).generatePlatformToken(101L, "synthetic-platform", "super_admin");
+        verify(jwt, never()).generateToken(anyLong(), anyString(), anyString(), anyString());
     }
 
     @Test
