@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -167,11 +168,24 @@ class IndicatorQueryServiceImplTest {
         when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
                 .thenReturn(Optional.of(ind));
 
+        when(indicatorComputationRepository.findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(IND_ID))
+                .thenReturn(List.of(newComputation("JPA_AGGREGATE", CODE)));
+        when(strategyRegistry.find(CODE)).thenReturn(Optional.of(mock(
+                com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy.class)));
+        IndicatorVersion evidence = new IndicatorVersion();
+        evidence.setFactoryId(FACTORY_ID);
+        evidence.setPeriodStart(START);
+        evidence.setPeriodEnd(END);
+        evidence.setComputedAt(ind.getLastComputedAt());
+        evidence.setValue(ind.getLastValue());
+        evidence.setComputeSource("REAL_BUSINESS:" + CODE);
+        when(indicatorVersionRepository.findFirstByIndicatorIdOrderByComputedAtDesc(IND_ID))
+                .thenReturn(Optional.of(evidence));
         IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
 
         assertEquals(new BigDecimal("70.1234"), result.value());
         assertTrue(result.cacheHit());
-        assertEquals("cache", result.source());
+        assertEquals("REAL_BUSINESS:" + CODE, result.source());
         verify(pythonSmartBIClient, never())
                 .fetchIndicatorValue(anyString(), anyString(), any(), any());
         verify(indicatorVersionRepository, never()).save(any());

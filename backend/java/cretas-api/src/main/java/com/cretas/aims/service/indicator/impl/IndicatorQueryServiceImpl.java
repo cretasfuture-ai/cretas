@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
+import java.util.Objects;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -146,13 +147,37 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         if (lastValue != null && withinTtl) {
             List<IndicatorComputation> configured = indicatorComputationRepository
                     .findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(ind.getId());
-            if (!configured.isEmpty() && "PYTHON_ENDPOINT".equals(configured.get(0).getComputeType())
-                    && !pythonSmartBIClient.supportsIndicatorValueEndpoint()) {
-                return new IndicatorValueResult(null, null, false, "PYTHON_ENDPOINT:" + ind.getCode(),
+            String type = configured.isEmpty() ? "" : configured.get(0).getComputeType();
+            String source;
+            if ("JPA_AGGREGATE".equals(type)) {
+                source = "REAL_BUSINESS:" + ind.getCode();
+                if (strategyRegistry.find(ind.getCode()).isEmpty()) {
+                    return new IndicatorValueResult(null, null, false, "REAL_BUSINESS_MISSING:" + ind.getCode(),
+                            IndicatorValueResult.FAILED);
+                }
+            } else if ("PYTHON_ENDPOINT".equals(type)) {
+                source = "PYTHON_ENDPOINT:" + ind.getCode();
+                if (!pythonSmartBIClient.supportsIndicatorValueEndpoint()) {
+                    return new IndicatorValueResult(null, null, false, source, IndicatorValueResult.FAILED);
+                }
+            } else {
+                return new IndicatorValueResult(null, null, false, "UNKNOWN:" + ind.getCode(),
                         IndicatorValueResult.FAILED);
             }
-            return new IndicatorValueResult(lastValue, lastComputed, true, "cache",
-                    IndicatorValueResult.AVAILABLE);
+            // Reuse the immutable version as evidence of factory, source and
+            // business period. A recent number alone cannot prove its scope.
+            Optional<IndicatorVersion> version = indicatorVersionRepository
+                    .findFirstByIndicatorIdOrderByComputedAtDesc(ind.getId());
+            LocalDate expectedStart = start != null ? start : LocalDate.now().withDayOfMonth(1);
+            LocalDate expectedEnd = end != null ? end : LocalDate.now();
+            if (version.filter(v -> factoryId.equals(v.getFactoryId())
+                    && source.equals(v.getComputeSource())
+                    && expectedStart.equals(v.getPeriodStart()) && expectedEnd.equals(v.getPeriodEnd())
+                    && Objects.equals(lastComputed, v.getComputedAt())
+                    && v.getValue() != null && lastValue.compareTo(v.getValue()) == 0).isPresent()) {
+                return new IndicatorValueResult(lastValue, lastComputed, true, source,
+                        IndicatorValueResult.AVAILABLE);
+            }
         }
 
         // Cache miss / 过期: fetch + 更新 lastValue + 落 version
