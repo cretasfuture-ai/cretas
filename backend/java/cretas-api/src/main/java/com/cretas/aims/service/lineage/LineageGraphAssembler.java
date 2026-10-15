@@ -19,6 +19,7 @@ import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.lineage.BatchLineageClosureRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
+import com.cretas.aims.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -168,6 +169,12 @@ public class LineageGraphAssembler {
                                                          int maxDepth) {
         TraceabilityDTO.LineageSection section =
                 assemble(factoryId, rootType, rootId, maxDepth, true, false);
+        // An empty graph only proves that no edges were returned. Verify the
+        // root before reporting zero recorded impact. Existing graph evidence
+        // remains queryable even if its historical root has been archived.
+        if (section.getNodeCount() == 0) {
+            requireExistingImpactRoot(factoryId, rootType, rootId);
+        }
         List<TraceabilityDTO.LineageNode> all = section.getDescendants() == null
                 ? List.of()
                 : section.getDescendants().stream()
@@ -193,6 +200,32 @@ public class LineageGraphAssembler {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+
+    private void requireExistingImpactRoot(String factoryId, String rootType, String rootId) {
+        String ownerFactory = switch (rootType) {
+            case LineageEdgeRecorder.NODE_MATERIAL_BATCH -> materialBatchRepository.findById(rootId)
+                    .map(MaterialBatch::getFactoryId).orElse(null);
+            case LineageEdgeRecorder.NODE_PRODUCTION_BATCH -> {
+                final long id;
+                try {
+                    id = Long.parseLong(rootId);
+                } catch (NumberFormatException error) {
+                    throw new BusinessException(400, "生产批次 ID 必须为数字").withHintTarget("batchId");
+                }
+                yield productionBatchRepository.findById(id).map(ProductionBatch::getFactoryId).orElse(null);
+            }
+            case LineageEdgeRecorder.NODE_FINISHED_BATCH -> finishedGoodsBatchRepository.findById(rootId)
+                    .map(FinishedGoodsBatch::getFactoryId).orElse(null);
+            case LineageEdgeRecorder.NODE_SHIPMENT_RECORD -> salesDeliveryRecordRepository.findById(rootId)
+                    .map(SalesDeliveryRecord::getFactoryId).orElse(null);
+            default -> throw new BusinessException(400, "不支持的批次类型");
+        };
+        if (factoryId == null || !factoryId.equals(ownerFactory)) {
+            throw new BusinessException(404, "当前工厂未找到该批次，无法判断召回影响面")
+                    .withHint("请核对批次类型和 ID；零条血缘记录不能证明批次存在")
+                    .withHintTarget("batchId");
+        }
+    }
 
     private static List<TraceabilityDTO.LineageNode> byType(List<TraceabilityDTO.LineageNode> nodes,
                                                             String nodeType) {

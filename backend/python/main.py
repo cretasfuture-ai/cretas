@@ -250,6 +250,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan handler"""
     logger.info("Python Services starting up...")
+    verify_draft_storage(_vision_training_draft_dir)
     logger.info(f"Debug mode: {get_settings().debug}")
     logger.info(f"LLM Model: {get_settings().llm_model}")
 
@@ -1716,6 +1717,14 @@ if _label_qc_available:
     app.include_router(label_qc_router, prefix="/api/label-qc", tags=["包装标签质检"])
 else:
     logger.warning("Label QC routes not registered")
+
+# Versioned, factory-scoped training drafts for conversational factory setup.
+# The router plans stages only; no request starts training or activates a model.
+from vision_training.router import create_file_backed_router  # noqa: E402
+from vision_training.runtime import resolve_draft_root, verify_draft_storage  # noqa: E402
+
+_vision_training_draft_dir = resolve_draft_root(os.getenv("VISION_TRAINING_DRAFT_DIR"))
+app.include_router(create_file_backed_router(_vision_training_draft_dir))
 
 # =====================================================
 # Client Requirement API Routes

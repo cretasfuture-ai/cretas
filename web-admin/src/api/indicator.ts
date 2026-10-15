@@ -99,6 +99,9 @@ export interface IndicatorValueResponse {
   alertLevel: AlertLevel;
   computedAt?: string | null;
   fromCache: boolean;
+  cacheHit?: boolean;
+  source?: string;
+  status?: 'AVAILABLE' | 'NO_DATA' | 'NOT_COMPUTED' | 'FAILED';
 }
 
 /**
