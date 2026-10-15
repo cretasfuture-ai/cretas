@@ -61,3 +61,5 @@ Base SHA: `8ffe5a551704ba962af75566292d1fe8656db06a`。关联建厂仓库只读�
 ### 尚未交付
 
 关联建厂仓库封闭 v2 目录与完整无代码 UI 未改；五个 API 为显式后续接入口。未启动真实采集/训练，未动原图、人工标签、保护集、历史模型或计划任务；未签任何新工厂模型效果。生产部署/生产只读业务验收分别依发布回执和后续验收记录判定。
+
+发布前补查：底层 PythonSmartBIClient.fetchIndicatorValue 原有未实现 stub 直接返 ZERO。scope 增加该方法、supportsIndicatorValueEndpoint 能力声明和 PythonIndicatorSourceContractTest（root 唯一 Owner）。改为显式 UnsupportedOperationException，经既有服务返回 FAILED/null/null 时间；CACHED 在已配置但未实现的 Python 源上也不能返回旧占位缓存，不删除历史快照。真实业务 JPA 聚合与 SmartBI 已有分析接口直接复用，通用 Python 指标桥接仍未接入，不能把此项写成已接通。

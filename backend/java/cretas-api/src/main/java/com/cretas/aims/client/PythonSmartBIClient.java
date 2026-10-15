@@ -2997,33 +2997,24 @@ public class PythonSmartBIClient {
     // ==================== 指标中心 (Phase 1 Sprint 1 Day 4) ====================
 
     /**
-     * 取指标计算值 — Phase 2B 真实接入前的 stub.
-     *
-     * <p>Day 4 IndicatorQueryServiceImpl 调用入口; 当前实现返 {@link BigDecimal#ZERO},
-     * 不实际发 HTTP. Phase 2B Python 端点上线后, 此方法改为:
-     * <pre>
-     *   POST {pythonEndpoint}
-     *   Headers: X-Internal-Secret, X-Factory-Id
-     *   Body: {"factoryId":..., "periodStart":..., "periodEnd":...}
-     *   Response: {"value": "12.34", "scale": 4}
-     * </pre>
-     *
-     * <p>调用方 (IndicatorQueryServiceImpl#fetchFromPython) 已处理 stub 返 ZERO 的语义,
-     * 不需要本方法抛错告知 stub 状态.
+     * Python 指标桥接尚未实现。调用方必须收到明确失败，不能把占位值当成业务零。
+     * 未来接入须先登记端点与取值契约并验证工厂、时间窗和实际响应；不接受任意 URL。
      *
      * @param factoryId      工厂 ID
      * @param pythonEndpoint Python 端点路径 (IndicatorComputation.computeSource)
      * @param start          业务时间窗起
      * @param end            业务时间窗止
-     * @return 指标取值 — Phase 1 stub 返 {@link BigDecimal#ZERO}
+     * @throws UnsupportedOperationException until a real indicator endpoint contract is implemented
      */
     public java.math.BigDecimal fetchIndicatorValue(String factoryId, String pythonEndpoint,
                                                      java.time.LocalDate start,
                                                      java.time.LocalDate end) {
-        // Phase 1 Day 4: stub returning ZERO. Phase 2B will replace with real HTTP call.
-        log.debug("fetchIndicatorValue (stub): factoryId={}, endpoint={}, start={}, end={}",
-                factoryId, pythonEndpoint, start, end);
-        return java.math.BigDecimal.ZERO;
+        throw new UnsupportedOperationException("Python indicator endpoint is not implemented; no measured value is available");
+    }
+
+    /** Also prevents cached values from the historical ZERO stub being advertised as current data. */
+    public boolean supportsIndicatorValueEndpoint() {
+        return false;
     }
 
     /**

@@ -30,9 +30,7 @@ import java.util.List;
  * <p>核心职责: 按 {@link Indicator#getComputeStrategy()} 字段分支选择计算路径:
  * REALTIME / PRECOMPUTED / CACHED. 见 {@link #computeForCode}.
  *
- * <p>Phase 2B Python 端点真实接入前，{@link PythonSmartBIClient#fetchIndicatorValue} 为 stub
- * 返 {@link BigDecimal#ZERO}; 本 Service 不感知 stub vs 真实 — 调用方约定后续 Phase 2B 替换 stub
- * 时本 Service 不需改动。
+ * <p>JPA_AGGREGATE 使用已登记业务策略。Python 指标桥接未实现时显式失败，不能产生业务零。
  *
  * <p>每次 fetch Python (cached 过期 / realtime) 会落 {@link IndicatorVersion} 快照，
  * 用于历史趋势分析。precomputed 不落 version (由 scheduler 维护已经写过).
@@ -146,6 +144,13 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         boolean withinTtl = lastComputed != null && ttl != null &&
                 lastComputed.isAfter(LocalDateTime.now().minusSeconds(ttl));
         if (lastValue != null && withinTtl) {
+            List<IndicatorComputation> configured = indicatorComputationRepository
+                    .findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(ind.getId());
+            if (!configured.isEmpty() && "PYTHON_ENDPOINT".equals(configured.get(0).getComputeType())
+                    && !pythonSmartBIClient.supportsIndicatorValueEndpoint()) {
+                return new IndicatorValueResult(null, null, false, "PYTHON_ENDPOINT:" + ind.getCode(),
+                        IndicatorValueResult.FAILED);
+            }
             return new IndicatorValueResult(lastValue, lastComputed, true, "cache",
                     IndicatorValueResult.AVAILABLE);
         }
