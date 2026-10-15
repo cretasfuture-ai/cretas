@@ -66,10 +66,17 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         String strategy = ind.getComputeStrategy();
         log.debug("computeForCode: code={}, factoryId={}, strategy={}", code, factoryId, strategy);
 
+        LocalDate effectiveStart = periodStart != null
+                ? periodStart : LocalDate.now().withDayOfMonth(1);
+        LocalDate effectiveEnd = periodEnd != null ? periodEnd : LocalDate.now();
+        if (effectiveStart.isAfter(effectiveEnd)) {
+            throw new BusinessException("periodStart 不能晚于 periodEnd");
+        }
+
         return switch (strategy == null ? "" : strategy) {
-            case "REALTIME"    -> computeRealtime(ind, factoryId, periodStart, periodEnd);
+            case "REALTIME"    -> computeRealtime(ind, factoryId, effectiveStart, effectiveEnd);
             case "PRECOMPUTED" -> computePrecomputed(ind);
-            case "CACHED"      -> computeCached(ind, factoryId, periodStart, periodEnd);
+            case "CACHED"      -> computeCached(ind, factoryId, effectiveStart, effectiveEnd);
             default            -> throw new BusinessException(
                     "Unknown computeStrategy: " + strategy + " (indicator code=" + code + ")");
         };
@@ -157,7 +164,8 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
                 }
             } else if ("PYTHON_ENDPOINT".equals(type)) {
                 source = "PYTHON_ENDPOINT:" + ind.getCode();
-                if (!pythonSmartBIClient.supportsIndicatorValueEndpoint()) {
+                if (!pythonSmartBIClient.supportsIndicatorValueEndpoint(
+                        configured.isEmpty() ? null : configured.get(0).getComputeSource())) {
                     return new IndicatorValueResult(null, null, false, source, IndicatorValueResult.FAILED);
                 }
             } else {
@@ -292,7 +300,7 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
     void saveVersion(Indicator ind, String factoryId, BigDecimal value,
                      LocalDate start, LocalDate end, LocalDateTime computedAt,
                      String computeSourceLabel) {
-        LocalDate effectiveStart = start != null ? start : LocalDate.now();
+        LocalDate effectiveStart = start != null ? start : LocalDate.now().withDayOfMonth(1);
         LocalDate effectiveEnd = end != null ? end : LocalDate.now();
         IndicatorVersion version = new IndicatorVersion();
         version.setFactoryId(factoryId);

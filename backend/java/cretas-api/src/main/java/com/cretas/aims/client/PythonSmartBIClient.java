@@ -36,6 +36,9 @@ import java.io.InputStream;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -2996,25 +2999,98 @@ public class PythonSmartBIClient {
 
     // ==================== 指标中心 (Phase 1 Sprint 1 Day 4) ====================
 
-    /**
-     * Python 指标桥接尚未实现。调用方必须收到明确失败，不能把占位值当成业务零。
-     * 未来接入须先登记端点与取值契约并验证工厂、时间窗和实际响应；不接受任意 URL。
-     *
-     * @param factoryId      工厂 ID
-     * @param pythonEndpoint Python 端点路径 (IndicatorComputation.computeSource)
-     * @param start          业务时间窗起
-     * @param end            业务时间窗止
-     * @throws UnsupportedOperationException until a real indicator endpoint contract is implemented
-     */
-    public java.math.BigDecimal fetchIndicatorValue(String factoryId, String pythonEndpoint,
-                                                     java.time.LocalDate start,
-                                                     java.time.LocalDate end) {
-        throw new UnsupportedOperationException("Python indicator endpoint is not implemented; no measured value is available");
+    private static final String DISH_MARGIN_INDICATOR_PATH =
+            "/api/smartbi/indicator/restaurant-dish-margin";
+    private static final Set<String> INDICATOR_ENDPOINT_ALIASES = Set.of(
+            "/api/smartbi/restaurant-ops/gross-margin",
+            DISH_MARGIN_INDICATOR_PATH);
+
+    /** Fetch the typed dish-margin contract; aliases are intentionally allowlisted. */
+    public BigDecimal fetchIndicatorValue(String factoryId, String pythonEndpoint,
+                                          LocalDate start, LocalDate end) {
+        if (!supportsIndicatorValueEndpoint(pythonEndpoint)) {
+            throw new IllegalArgumentException("unsupported Python indicator endpoint: " + pythonEndpoint);
+        }
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new IllegalArgumentException("factoryId is required");
+        }
+        LocalDate effectiveStart = start != null ? start : LocalDate.now().withDayOfMonth(1);
+        LocalDate effectiveEnd = end != null ? end : LocalDate.now();
+        if (effectiveStart.isAfter(effectiveEnd)) {
+            throw new IllegalArgumentException("indicator period_start must not be after period_end");
+        }
+
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments(DISH_MARGIN_INDICATOR_PATH.substring(1))
+                .addQueryParameter("factory_id", factoryId)
+                .addQueryParameter("period_start", effectiveStart.toString())
+                .addQueryParameter("period_end", effectiveEnd.toString())
+                .build();
+        Request request = new Request.Builder()
+                .url(url)
+                .get()
+                .header("X-Factory-Id", factoryId)
+                .build();
+        JsonNode root;
+        try {
+            root = executeWithRetry(request, JsonNode.class);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Python indicator HTTP request failed", ex);
+        }
+        if (!root.path("success").asBoolean(false) || !root.path("data").isObject()) {
+            throw new IllegalStateException("Python indicator response was not successful");
+        }
+        JsonNode data = root.path("data");
+        if (!factoryId.equals(data.path("factory_id").asText(null))
+                || !effectiveStart.toString().equals(data.path("period_start").asText(null))
+                || !effectiveEnd.toString().equals(data.path("period_end").asText(null))) {
+            throw new IllegalStateException("Python indicator response scope does not match request");
+        }
+        if (!"REAL_BUSINESS:RESTAURANT_DISH_MARGIN".equals(data.path("source").asText(null))
+                || !"%".equals(data.path("unit").asText(null))) {
+            throw new IllegalStateException("Python indicator response source contract is invalid");
+        }
+        String status = data.path("status").asText(null);
+        if (!"AVAILABLE".equals(status) && !"NO_DATA".equals(status)) {
+            throw new IllegalStateException("Python indicator response has invalid status: " + status);
+        }
+        JsonNode valueNode = data.get("value");
+        if ("NO_DATA".equals(status)) {
+            if (valueNode != null && !valueNode.isNull()) {
+                throw new IllegalStateException("Python indicator NO_DATA response must have null value");
+            }
+            return null;
+        }
+        if (valueNode == null || valueNode.isNull() || !valueNode.isValueNode()) {
+            throw new IllegalStateException("Python indicator AVAILABLE response has no value");
+        }
+        BigDecimal value;
+        try {
+            value = valueNode.isNumber() ? valueNode.decimalValue() : new BigDecimal(valueNode.asText());
+        } catch (NumberFormatException ex) {
+            throw new IllegalStateException("Python indicator value is not numeric", ex);
+        }
+        if (valueNode.isDouble() && !Double.isFinite(valueNode.doubleValue())) {
+            throw new IllegalStateException("Python indicator value is not finite");
+        }
+        if (data.path("computed_at").isMissingNode() || data.path("computed_at").isNull()) {
+            throw new IllegalStateException("Python indicator AVAILABLE response has no computed_at");
+        }
+        try {
+            LocalDateTime.parse(data.path("computed_at").asText());
+        } catch (RuntimeException ex) {
+            throw new IllegalStateException("Python indicator computed_at is invalid", ex);
+        }
+        return value;
     }
 
-    /** Also prevents cached values from the historical ZERO stub being advertised as current data. */
+    /** Compatibility probe; concrete callers must use the endpoint-aware overload. */
     public boolean supportsIndicatorValueEndpoint() {
         return false;
+    }
+
+    public boolean supportsIndicatorValueEndpoint(String pythonEndpoint) {
+        return config.isEnabled() && INDICATOR_ENDPOINT_ALIASES.contains(pythonEndpoint);
     }
 
     /**
