@@ -66,11 +66,21 @@ def test_anonymous_cross_factory_and_platform_callers_cannot_create_drafts(tmp_p
 def test_main_mounts_persistent_router_outside_optional_feature_imports():
     import ast
     main = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8"))
-    assert any(isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+    mounts = [node.value.args[0] for node in main.body
+               if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
                and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "include_router"
-               and node.value.args and isinstance(node.value.args[0], ast.Call)
-               and isinstance(node.value.args[0].func, ast.Name)
-               and node.value.args[0].func.id == "create_file_backed_router" for node in main.body)
+               and node.value.args]
+    for namespace in ("factory", "platform", "worker"):
+        assert any(isinstance(arg, ast.Attribute) and arg.attr == namespace
+                   and isinstance(arg.value, ast.Attribute) and arg.value.attr == "routers"
+                   and isinstance(arg.value.value, ast.Name)
+                   and arg.value.value.id == "_vision_training_runtime" for arg in mounts)
+    runtime = next(node.value for node in main.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "_vision_training_runtime"
+                           for target in node.targets))
+    assert isinstance(runtime, ast.Call) and runtime.func.id == "create_file_backed_runtime"
+    assert {keyword.arg for keyword in runtime.keywords} >= {
+        "draft_root", "job_db", "recipe_catalog", "worker_bindings", "specialized_factory_allowlist"}
 
 
 def test_durable_directory_cannot_be_inside_the_deployed_tree(tmp_path):
@@ -106,3 +116,42 @@ def test_storage_without_atomic_draft_creation_fails_startup(tmp_path, monkeypat
     with pytest.raises(OSError):
         verify_draft_storage(tmp_path / "persistent")
     assert not list((tmp_path / "persistent").iterdir())
+
+
+def test_shared_runtime_enforces_real_middleware_for_platform_and_named_worker(tmp_path, monkeypatch):
+    from vision_training.router import WorkerBinding
+    from vision_training.runtime import create_file_backed_runtime
+
+    internal = "local-internal-transport-secret-32-bytes"
+    worker_token = "local-independent-worker-secret-32-bytes"
+    monkeypatch.setenv("INTERNAL_API_SECRET", internal)
+    root = tmp_path / "persistent"
+    runtime = create_file_backed_runtime(draft_root=root, job_db=root / "jobs.sqlite3",
+        worker_bindings=(WorkerBinding("local-A", worker_token, frozenset({"VT-TEST"})),))
+    assert not root.exists()
+    app = FastAPI()
+    app.add_middleware(JWTAuthMiddleware, jwt_secret=SECRET)
+    for router in (runtime.routers.factory, runtime.routers.platform, runtime.routers.worker):
+        app.include_router(router)
+    client = TestClient(app)
+    worker_headers = {"X-Worker-Id": "local-A", "X-Worker-Token": worker_token}
+    claim = "/api/vision-training/worker/jobs/claim"
+    assert client.post(claim, headers=worker_headers, json={}).status_code == 401
+    factory_headers = {**worker_headers, "Authorization": "Bearer " + token()}
+    assert client.post(claim, headers=factory_headers, json={}).status_code == 401
+    assert not root.exists()
+    internal_headers = {**worker_headers, "X-Internal-Secret": internal}
+    assert client.post(claim, headers={**internal_headers, "X-Worker-Token": "wrong"}, json={}).status_code == 401
+    claimed = client.post(claim, headers=internal_headers, json={})
+    assert claimed.status_code == 200 and claimed.json()["data"] is None
+    platform = "/api/vision-training/platform/factories/VT-TEST/templates"
+    assert client.get(platform, headers={"Authorization": "Bearer " + token(role="super_admin")}).status_code == 401
+    platform_headers = {"X-Internal-Secret": internal, "X-Actor-Type": "PLATFORM_ADMIN",
+                        "X-User-Id": "123", "X-User-Role": "super_admin", "X-Factory-Id": "VT-TEST"}
+    response = client.get(platform, headers=platform_headers)
+    assert response.status_code == 200
+    assert all(item["scope"] == "generic" for item in response.json()["data"]["templates"])
+    assert client.get(platform, headers={**platform_headers, "X-Actor-Type": "FACTORY_USER"}).status_code == 403
+    assert client.get(platform, headers={**platform_headers, "X-Factory-Id": "FOREIGN"}).status_code == 403
+    assert not list(root.glob("*.json"))
+    runtime.close()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -58,6 +59,7 @@ class FactoryContext(StrictModel):
     factory_id: str = Field(min_length=1, max_length=100)
     actor_id: str = Field(min_length=1, max_length=100)
     roles: tuple[str, ...] = ()
+    actor_type: Literal["FACTORY_USER", "PLATFORM_ADMIN", "WORKER"] = "FACTORY_USER"
 
     @field_validator("factory_id", "actor_id")
     @classmethod
@@ -65,6 +67,134 @@ class FactoryContext(StrictModel):
         if not value.strip():
             raise ValueError("value must not be blank")
         return value
+
+
+class JobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+class JobIdentity(StrictModel):
+    """Immutable scope and input identity for one local execution request."""
+
+    factory_id: str = Field(min_length=1, max_length=100)
+    project_id: str = Field(min_length=1, max_length=100)
+    task_family: str = Field(min_length=1, max_length=100)
+    template_id: str = Field(min_length=1, max_length=100)
+    template_version: str = Field(min_length=1, max_length=100)
+    sop_version: str = Field(min_length=1, max_length=100)
+    data_version: str = Field(min_length=1, max_length=100)
+    recipe_version: str = Field(min_length=1, max_length=100)
+    human_standard_version: str = Field(min_length=1, max_length=100)
+    independent_acceptance_version: str = Field(min_length=1, max_length=100)
+    recipe_id: str | None = Field(default=None, max_length=100)
+    ocr_rules_version: str | None = Field(default=None, max_length=100)
+    preview_hash: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    config_hash: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    input_hash: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    source_asset_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+
+
+class VisionJob(StrictModel):
+    job_id: str = Field(min_length=1, max_length=160)
+    identity: JobIdentity
+    stage: StageName
+    adapter_id: str | None = Field(default=None, max_length=100)
+    status: JobStatus = JobStatus.QUEUED
+    attempts: int = Field(default=0, ge=0)
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    blocked_reason: str | None = None
+    receipt: "JobReceipt | None" = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class JobReceipt(StrictModel):
+    """Worker receipt with the complete immutable job identity attached."""
+
+    job_id: str = Field(min_length=1, max_length=160)
+    identity: JobIdentity
+    stage: StageName
+    status: ReceiptStatus
+    receipt_hash: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    stage_receipt: "StageReceipt"
+    asset_receipts: tuple["AssetReceipt", ...] = ()
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class EnqueueRequest(StrictModel):
+    stage: StageName
+    config_hash: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    input_hash: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    recipe_id: str | None = Field(default=None, max_length=100)
+
+
+class RecipeAvailability(StrictModel):
+    recipe_id: str = Field(min_length=1, max_length=100)
+    factory_id: str = Field(min_length=1, max_length=100)
+    task_family: str = Field(min_length=1, max_length=100)
+    recipe_version: str = Field(min_length=1, max_length=100)
+    available: bool = False
+    reason: str = ""
+    template_id: str | None = Field(default=None, max_length=100)
+    template_version: str | None = Field(default=None, max_length=100)
+    sop_version: str | None = Field(default=None, max_length=100)
+    data_version: str | None = Field(default=None, max_length=100)
+    human_standard_version: str | None = Field(default=None, max_length=100)
+    independent_acceptance_version: str | None = Field(default=None, max_length=100)
+    ocr_rules_version: str | None = Field(default=None, max_length=100)
+    config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    stage_input_hashes: dict[str, str] = Field(default_factory=dict)
+    stage_source_asset_hashes: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("stage_input_hashes")
+    @classmethod
+    def _stage_hashes(cls, value: dict[str, str]) -> dict[str, str]:
+        allowed = {item.value for item in StageName}
+        if any(stage not in allowed or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest) for stage, digest in value.items()):
+            raise ValueError("stage_input_hashes must contain stage names and 64-character digests")
+        return value
+
+    @field_validator("stage_source_asset_hashes")
+    @classmethod
+    def _stage_source_hashes(cls, value: dict[str, str]) -> dict[str, str]:
+        allowed = {item.value for item in StageName}
+        if any(stage not in allowed or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest) for stage, digest in value.items()):
+            raise ValueError("stage_source_asset_hashes must contain stage names and 64-character digests")
+        return value
+
+    @model_validator(mode="after")
+    def _available_recipe_is_complete(self) -> "RecipeAvailability":
+        required = (
+            self.template_id,
+            self.template_version,
+            self.sop_version,
+            self.data_version,
+            self.human_standard_version,
+            self.independent_acceptance_version,
+            self.config_sha256,
+        )
+        if self.available and (any(value is None or not str(value).strip() for value in required) or not self.stage_input_hashes):
+            raise ValueError("available recipe must bind template, SOP, all task versions, config, and stage input hashes")
+        return self
+
+
+class WorkerClaimRequest(StrictModel):
+    project_id: str | None = Field(default=None, max_length=100)
+    lease_seconds: int = Field(default=900, ge=1, le=86400)
+
+
+class WorkerHeartbeatRequest(StrictModel):
+    lease_seconds: int = Field(default=900, ge=1, le=86400)
+
+
+class WorkerCompletion(StrictModel):
+    job_id: str = Field(min_length=1, max_length=160)
+    receipt: JobReceipt
 
 
 class TaskSpec(StrictModel):
@@ -79,6 +209,7 @@ class TaskSpec(StrictModel):
     recipe_version: str = Field(min_length=1, max_length=100)
     human_standard_version: str = Field(min_length=1, max_length=100)
     independent_acceptance_version: str = Field(min_length=1, max_length=100)
+    recipe_id: str | None = Field(default=None, max_length=100)
     ocr_rules_version: str | None = Field(default=None, max_length=100)
 
     @field_validator(
@@ -201,6 +332,7 @@ class TrainingProjectDraft(StrictModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     receipts: tuple[StageReceipt, ...] = ()
+    asset_receipts: tuple[AssetReceipt, ...] = ()
 
 
 class StagePlanItem(StrictModel):
@@ -224,3 +356,10 @@ class ValidationReport(StrictModel):
     valid: bool
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+
+
+# These models refer to receipts declared later in this module.  Rebuilding at
+# import time keeps validation strict while retaining the readable declaration
+# order above.
+VisionJob.model_rebuild()
+JobReceipt.model_rebuild()

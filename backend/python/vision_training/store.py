@@ -20,6 +20,8 @@ from .models import TrainingProjectDraft
 class DraftStore(Protocol):
     def get(self, project_id: str) -> TrainingProjectDraft | None: ...
 
+    def list(self, factory_id: str) -> tuple[TrainingProjectDraft, ...]: ...
+
     def create_if_absent(self, draft: TrainingProjectDraft) -> TrainingProjectDraft: ...
 
     def put(self, draft: TrainingProjectDraft) -> TrainingProjectDraft: ...
@@ -43,6 +45,10 @@ class InMemoryDraftStore:
     def get(self, project_id: str) -> TrainingProjectDraft | None:
         with self._lock:
             return self._items.get(project_id)
+
+    def list(self, factory_id: str) -> tuple[TrainingProjectDraft, ...]:
+        with self._lock:
+            return tuple(item for item in self._items.values() if item.spec.factory_id == factory_id)
 
     def put(self, draft: TrainingProjectDraft) -> TrainingProjectDraft:
         with self._lock:
@@ -86,6 +92,19 @@ class FileDraftStore:
             if not path.is_file():
                 return None
             return TrainingProjectDraft.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+    def list(self, factory_id: str) -> tuple[TrainingProjectDraft, ...]:
+        with self._lock:
+            self._ensure_root()
+            items: list[TrainingProjectDraft] = []
+            for path in sorted(self.root.glob("*.json")):
+                try:
+                    draft = TrainingProjectDraft.model_validate(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    continue
+                if draft.spec.factory_id == factory_id:
+                    items.append(draft)
+            return tuple(items)
 
     def put(self, draft: TrainingProjectDraft) -> TrainingProjectDraft:
         path = self._path(draft.project_id)

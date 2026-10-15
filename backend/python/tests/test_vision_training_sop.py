@@ -290,6 +290,27 @@ def test_stage_receipt_failure_is_read_back_and_idempotent() -> None:
     assert service.stage_plan(project.project_id).items[1].status is ReceiptStatus.FAILED
 
 
+def test_plan_preserves_recorded_execution_while_missing_future_assets_block_progress() -> None:
+    service = VisionTrainingService()
+    project = make_project(service)
+    train = StageReceipt(
+        receipt_id="train-real-1",
+        stage=StageName.TRAIN,
+        status=ReceiptStatus.SUCCEEDED,
+        project_id=project.project_id,
+        factory_id="F001",
+        task_family="packaging-detection",
+        training_executed=True,
+    )
+    service.record_stage_receipt(project.project_id, train)
+    plan = service.stage_plan(project.project_id)
+    by_stage = {item.stage: item for item in plan.items}
+    assert by_stage[StageName.TRAIN].status is ReceiptStatus.SUCCEEDED
+    assert plan.training_success is False
+    assert plan.accepted is False and plan.enabled is False
+    assert plan.status.value == "blocked"
+
+
 class FakeRunner:
     @staticmethod
     def _receipt(draft, stage, **extra):
