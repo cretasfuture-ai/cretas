@@ -71,7 +71,7 @@ def receipt(
         data_version="photos-v3",
         recipe_version="recipe-v2",
         human_standard_version="human-v1",
-        sha256=f"sha-{kind}",
+        sha256="0" * 64,
         reviewed_only=reviewed_only,
         unreviewed_count=unreviewed_count,
         protected_holdout_excluded=protected_holdout_excluded,
@@ -154,6 +154,22 @@ def test_authenticated_factory_context_is_required_to_match_requested_scope() ->
             spec(factory_id="F001"),
             factory_context=FactoryContext(factory_id="F002", actor_id="user-1"),
         )
+
+
+def test_specialized_template_requires_explicit_factory_binding() -> None:
+    service = VisionTrainingService()
+    with pytest.raises(ScopeViolationError, match="no explicit binding"):
+        service.preview(spec(factory_id="F006", task_family="liushanmen-tray-label-detection"))
+
+    bound = VisionTrainingService(
+        specialized_factory_allowlist={"liushanmen-tray": ("F006",)},
+    )
+    preview = bound.preview(
+        spec(factory_id="F006", task_family="liushanmen-tray-label-detection")
+    )
+    bound.save_draft(preview)
+    with pytest.raises(ScopeViolationError, match="no explicit binding"):
+        VisionTrainingService().save_draft(preview)
 
 
 def test_asset_validation_blocks_cross_factory_and_unreviewed_data() -> None:
@@ -267,35 +283,98 @@ def test_stage_receipt_failure_is_read_back_and_idempotent() -> None:
 
 
 class FakeRunner:
+    @staticmethod
+    def _receipt(draft, stage, **extra):
+        return {
+            "receipt_id": f"{stage}-1",
+            "stage": stage,
+            "status": "succeeded",
+            "project_id": draft.project_id,
+            "factory_id": draft.spec.factory_id,
+            "task_family": draft.spec.task_family,
+            **extra,
+        }
+
     def collect(self, draft):
-        return {"receipt_id": "collect-1", "status": "succeeded", "message": "fake collect"}
+        return self._receipt(draft, "collect", message="fake collect")
 
     def build_dataset(self, draft):
-        return {"receipt_id": "dataset-1", "status": "succeeded", "message": "fake dataset"}
+        return self._receipt(draft, "dataset", message="fake dataset")
 
     def train(self, draft):
-        return {"receipt_id": "train-1", "status": "succeeded", "training_executed": False, "message": "not run"}
+        return self._receipt(draft, "train", training_executed=True, message="fake train")
 
     def evaluate(self, draft):
-        return {"receipt_id": "eval-1", "status": "pending", "message": "not run"}
+        return self._receipt(draft, "evaluate", message="fake evaluate")
 
     def deploy(self, draft):
         raise AssertionError("deploy must not be called by this test")
 
 
 def test_liushanmen_adapter_is_opt_in_and_has_no_default_weight_or_runner() -> None:
-    service = VisionTrainingService()
+    service = VisionTrainingService(
+        specialized_factory_allowlist={"liushanmen-tray": ("F006",)},
+    )
     project = service.save_draft(service.preview(spec(factory_id="F006", task_family="liushanmen-tray-label-detection")))
-    adapter = LiushanmenVisionLabAdapter()
+    with pytest.raises(ScopeViolationError, match="no explicit binding"):
+        LiushanmenVisionLabAdapter().run_stage(project, StageName.TRAIN)
+    adapter = LiushanmenVisionLabAdapter(allowed_factory_ids=("F006",))
     pending = adapter.run_stage(project, StageName.TRAIN)
     assert pending.status is ReceiptStatus.PENDING
     assert pending.training_executed is False
     assert not hasattr(adapter, "model_path")
 
     registry = AdapterRegistry()
-    registry.register(LiushanmenVisionLabAdapter(FakeRunner()))
+    registry.register(LiushanmenVisionLabAdapter(FakeRunner(), allowed_factory_ids=("F006",)))
     assert registry.for_template(project.template).adapter_id == "liushanmen-visionlab-v1"
     fake_receipt = registry.for_template(project.template).run_stage(project, StageName.TRAIN)
     assert fake_receipt.status is ReceiptStatus.SUCCEEDED
     with pytest.raises(AdapterNotRegisteredError):
         AdapterRegistry().for_template(project.template)
+
+
+def test_adapter_cannot_rewrite_cross_scope_receipt_or_fake_training_success() -> None:
+    class CrossScopeRunner(FakeRunner):
+        def train(self, draft):
+            return {
+                "receipt_id": "train-cross",
+                "stage": "train",
+                "status": "succeeded",
+                "project_id": draft.project_id,
+                "factory_id": "F999",
+                "task_family": draft.spec.task_family,
+                "training_executed": True,
+            }
+
+    class FakeUnexecutedRunner(FakeRunner):
+        def train(self, draft):
+            return self._receipt(draft, "train", training_executed=False)
+
+    service = VisionTrainingService(
+        specialized_factory_allowlist={"liushanmen-tray": ("F006",)},
+    )
+    project = service.save_draft(
+        service.preview(spec(factory_id="F006", task_family="liushanmen-tray-label-detection"))
+    )
+    cross = LiushanmenVisionLabAdapter(CrossScopeRunner(), allowed_factory_ids=("F006",))
+    with pytest.raises(ScopeViolationError, match="factory_id"):
+        cross.run_stage(project, StageName.TRAIN)
+    unexecuted = LiushanmenVisionLabAdapter(FakeUnexecutedRunner(), allowed_factory_ids=("F006",))
+    with pytest.raises(InvalidTaskSpecError, match="training_executed=true"):
+        unexecuted.run_stage(project, StageName.TRAIN)
+
+
+def test_asset_hash_and_scope_limits_are_fail_closed() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        invalid = receipt("project", "dataset").model_dump()
+        invalid["sha256"] = "short"
+        AssetReceipt(**invalid)
+    with pytest.raises(ValidationError):
+        TaskSpec(
+            **{
+                **spec().model_dump(),
+                "product_scope": tuple(f"SKU-{index}" for index in range(101)),
+            }
+        )

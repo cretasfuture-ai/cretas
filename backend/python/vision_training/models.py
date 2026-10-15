@@ -55,8 +55,8 @@ class FactoryContext(StrictModel):
     ``factory_id`` is only a requested scope and is never an identity source.
     """
 
-    factory_id: str = Field(min_length=1)
-    actor_id: str = Field(min_length=1)
+    factory_id: str = Field(min_length=1, max_length=100)
+    actor_id: str = Field(min_length=1, max_length=100)
     roles: tuple[str, ...] = ()
 
     @field_validator("factory_id", "actor_id")
@@ -70,16 +70,16 @@ class FactoryContext(StrictModel):
 class TaskSpec(StrictModel):
     """Everything a conversational factory setup must make explicit."""
 
-    factory_id: str = Field(min_length=1)
-    workstation_id: str = Field(min_length=1)
-    task_family: str = Field(min_length=1)
-    product_scope: tuple[str, ...] = Field(min_length=1)
-    packaging_scope: tuple[str, ...] = Field(min_length=1)
-    data_version: str = Field(min_length=1)
-    recipe_version: str = Field(min_length=1)
-    human_standard_version: str = Field(min_length=1)
-    independent_acceptance_version: str = Field(min_length=1)
-    ocr_rules_version: str | None = None
+    factory_id: str = Field(min_length=1, max_length=100)
+    workstation_id: str = Field(min_length=1, max_length=100)
+    task_family: str = Field(min_length=1, max_length=100)
+    product_scope: tuple[str, ...] = Field(min_length=1, max_length=100)
+    packaging_scope: tuple[str, ...] = Field(min_length=1, max_length=100)
+    data_version: str = Field(min_length=1, max_length=100)
+    recipe_version: str = Field(min_length=1, max_length=100)
+    human_standard_version: str = Field(min_length=1, max_length=100)
+    independent_acceptance_version: str = Field(min_length=1, max_length=100)
+    ocr_rules_version: str | None = Field(default=None, max_length=100)
 
     @field_validator(
         "factory_id",
@@ -99,7 +99,7 @@ class TaskSpec(StrictModel):
     @field_validator("product_scope", "packaging_scope")
     @classmethod
     def _scope_items(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if not value or any(not item.strip() for item in value):
+        if not value or len(value) > 100 or any(not item.strip() or len(item) > 100 for item in value):
             raise ValueError("scope must contain at least one non-blank item")
         if len(set(value)) != len(value):
             raise ValueError("scope items must be unique")
@@ -153,7 +153,7 @@ class AssetReceipt(StrictModel):
     data_version: str = Field(min_length=1)
     recipe_version: str = Field(min_length=1)
     human_standard_version: str = Field(min_length=1)
-    sha256: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
     reviewed_only: bool = False
     unreviewed_count: int = Field(default=0, ge=0)
     protected_holdout_excluded: bool = False

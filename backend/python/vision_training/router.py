@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -77,11 +77,15 @@ def create_router(
     service: VisionTrainingService | None = None,
     *,
     store: DraftStore | None = None,
+    specialized_factory_allowlist: Mapping[str, Collection[str]] | None = None,
     factory_context_dependency: Callable[[Request], FactoryContext] = require_factory_context,
 ) -> APIRouter:
-    if service is not None and store is not None:
-        raise ValueError("pass either service or store, not both")
-    coordinator = service or VisionTrainingService(store=store)
+    if service is not None and (store is not None or specialized_factory_allowlist is not None):
+        raise ValueError("pass either service or store/specialized_factory_allowlist, not both")
+    coordinator = service or VisionTrainingService(
+        store=store,
+        specialized_factory_allowlist=specialized_factory_allowlist,
+    )
     router = APIRouter(prefix="/api/vision-training", tags=["Vision Training"])
     @router.post("/preview")
     def preview(request: PreviewRequest, context: FactoryContext = Depends(factory_context_dependency)) -> dict[str, object]:
@@ -126,6 +130,7 @@ def create_router(
 def create_file_backed_router(
     store_root: str | Path,
     *,
+    specialized_factory_allowlist: Mapping[str, Collection[str]] | None = None,
     factory_context_dependency: Callable[[Request], FactoryContext] = require_factory_context,
 ) -> APIRouter:
     """Build a router with lazy local persistence for the host entry point.
@@ -136,6 +141,7 @@ def create_file_backed_router(
 
     return create_router(
         store=FileDraftStore(store_root),
+        specialized_factory_allowlist=specialized_factory_allowlist,
         factory_context_dependency=factory_context_dependency,
     )
 

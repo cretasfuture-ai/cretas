@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Collection, Mapping
 from datetime import datetime, timezone
 from typing import Iterable
 from pydantic import ValidationError
@@ -68,9 +69,14 @@ class VisionTrainingService:
         *,
         store: DraftStore | None = None,
         catalog: TemplateCatalog | None = None,
+        specialized_factory_allowlist: Mapping[str, Collection[str]] | None = None,
     ) -> None:
         self.store = store or InMemoryDraftStore()
         self.catalog = catalog or TemplateCatalog()
+        self.specialized_factory_allowlist = {
+            template_id: frozenset(factory_ids)
+            for template_id, factory_ids in (specialized_factory_allowlist or {}).items()
+        }
 
     @staticmethod
     def _check_context(spec: TaskSpec, context: FactoryContext | None) -> None:
@@ -103,6 +109,15 @@ class VisionTrainingService:
             )
         return template
 
+    def _check_specialized_factory(self, template: TaskTemplate, factory_id: str) -> None:
+        if template.scope != "specialized":
+            return
+        allowed = self.specialized_factory_allowlist.get(template.template_id, frozenset())
+        if factory_id not in allowed:
+            raise ScopeViolationError(
+                f"specialized template {template.template_id!r} has no explicit binding for factory {factory_id!r}"
+            )
+
     def preview(
         self,
         spec: TaskSpec | dict[str, object],
@@ -113,6 +128,7 @@ class VisionTrainingService:
         parsed = _coerce_spec(spec)
         self._check_context(parsed, factory_context)
         template = self._template(parsed, template_id)
+        self._check_specialized_factory(template, parsed.factory_id)
         preview_hash = _hash_preview(parsed, template)
         warnings: list[str] = []
         if template.scope == "specialized":
@@ -142,6 +158,7 @@ class VisionTrainingService:
         # of template policy.  Rebuild the template from the server catalog
         # and compare the complete model before accepting the hash.
         canonical_template = self._template(preview.spec, preview.template.template_id)
+        self._check_specialized_factory(canonical_template, preview.spec.factory_id)
         if preview.template != canonical_template:
             raise PreviewMismatchError("preview template does not match the registered catalog")
         if preview.stage_plan != canonical_template.stages:

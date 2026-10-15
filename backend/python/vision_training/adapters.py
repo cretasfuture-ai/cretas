@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Iterable
 from typing import Any, Protocol
 
-from .errors import AdapterNotRegisteredError, InvalidTaskSpecError
-from .models import ProjectStatus, StageName, StageReceipt, TaskTemplate, TrainingProjectDraft
+from .errors import AdapterNotRegisteredError, InvalidTaskSpecError, ScopeViolationError
+from .models import StageName, StageReceipt, TaskTemplate, TrainingProjectDraft
 
 
 class ExistingVisionLabRunner(Protocol):
@@ -41,17 +41,23 @@ def _coerce_receipt(
     draft: TrainingProjectDraft,
     stage: StageName,
 ) -> StageReceipt:
-    if isinstance(value, StageReceipt):
-        return value
-    return StageReceipt.model_validate(
-        {
-            **value,
-            "stage": stage,
-            "project_id": draft.project_id,
-            "factory_id": draft.spec.factory_id,
-            "task_family": draft.spec.task_family,
-        }
-    )
+    receipt = value if isinstance(value, StageReceipt) else StageReceipt.model_validate(value)
+    mismatches: list[str] = []
+    if receipt.stage != stage:
+        mismatches.append("stage")
+    if receipt.project_id != draft.project_id:
+        mismatches.append("project_id")
+    if receipt.factory_id != draft.spec.factory_id:
+        mismatches.append("factory_id")
+    if receipt.task_family != draft.spec.task_family:
+        mismatches.append("task_family")
+    if mismatches:
+        raise ScopeViolationError(
+            "adapter receipt scope mismatch: " + ", ".join(mismatches)
+        )
+    if stage == StageName.TRAIN and receipt.status.value == "succeeded" and not receipt.training_executed:
+        raise InvalidTaskSpecError("succeeded training receipt must set training_executed=true")
+    return receipt
 
 
 class LiushanmenVisionLabAdapter:
@@ -67,8 +73,14 @@ class LiushanmenVisionLabAdapter:
     template_id = "liushanmen-tray"
     task_family = "liushanmen-tray-label-detection"
 
-    def __init__(self, runner: ExistingVisionLabRunner | None = None) -> None:
+    def __init__(
+        self,
+        runner: ExistingVisionLabRunner | None = None,
+        *,
+        allowed_factory_ids: Iterable[str] = (),
+    ) -> None:
         self.runner = runner
+        self.allowed_factory_ids = frozenset(allowed_factory_ids)
 
     def supports(self, template: TaskTemplate) -> bool:
         return (
@@ -80,6 +92,10 @@ class LiushanmenVisionLabAdapter:
     def run_stage(self, draft: TrainingProjectDraft, stage: StageName) -> StageReceipt:
         if not self.supports(draft.template):
             raise InvalidTaskSpecError("六膳门 adapter cannot run a generic or other factory template")
+        if draft.spec.factory_id not in self.allowed_factory_ids:
+            raise ScopeViolationError(
+                "六膳门 adapter has no explicit binding for this factory"
+            )
         runner_method: dict[StageName, str] = {
             StageName.COLLECT: "collect",
             StageName.DATASET: "build_dataset",
