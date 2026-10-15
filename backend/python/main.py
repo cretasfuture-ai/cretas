@@ -1452,6 +1452,8 @@ app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance
 app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
 app.include_router(restaurant_staffing.router, prefix="/api/smartbi", tags=["Restaurant Staffing"])
 app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
+from smartbi.api import indicator_bridge  # noqa: E402
+app.include_router(indicator_bridge.router)
 app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier Price Gold"])
 app.include_router(price_anomaly.router, prefix="/api/smartbi", tags=["Price Anomaly Deterrence"])
 app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
