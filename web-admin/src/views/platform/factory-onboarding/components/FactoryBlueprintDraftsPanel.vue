@@ -28,8 +28,8 @@
 
     <p v-if="loadingWriteOrder" class="drafts-muted">正在读取写入顺序…</p>
 
-    <ol v-if="rows.length" class="drafts-rows">
-      <li v-for="(row, index) in rows" :key="row.capabilityId" class="drafts-row"
+    <ol v-if="continuationRows.length" class="drafts-rows">
+      <li v-for="(row, index) in continuationRows" :key="row.capabilityId" class="drafts-row"
           :data-testid="`draft-row-${row.capabilityId}`">
         <div class="drafts-row-main">
           <span class="drafts-index">{{ index + 1 }}</span>
@@ -131,6 +131,7 @@ const props = defineProps<{
   blueprint: {
     id: string
     version: number
+    lifecycleState?: string
     capabilities?: Array<{ id: string; label: string }> | null
   }
 }>()
@@ -147,6 +148,9 @@ const canConfirm = computed(() => canConfirmBlueprintDrafts({
 }, props.factoryId))
 
 const rows = ref<DraftWriteOrderRow[]>([])
+const continuationRows = computed(() => ['PUBLISHED', 'APPLIED'].includes(props.blueprint.lifecycleState ?? '')
+  ? rows.value.filter(row => ['workflow', 'bom'].includes(row.capabilityId))
+  : rows.value)
 const loadingWriteOrder = ref(false)
 const writeOrderError = ref('')
 const written = ref<WrittenCapability[] | null>(null)
@@ -263,6 +267,8 @@ function needsProposal(row: DraftWriteOrderRow): boolean {
   return row.adapterMode === 'MODULE_DRAFT'
     && row.entryOpen
     && row.proposalOpen
+    && (!['PUBLISHED', 'APPLIED'].includes(props.blueprint.lifecycleState ?? '')
+      || ['workflow', 'bom'].includes(row.capabilityId))
     && (row.dependenciesWithoutOpenEntry ?? []).length === 0
 }
 
@@ -281,7 +287,7 @@ async function loadAll() {
   ])
 }
 
-watch(() => [props.factoryId, props.blueprint.id, canConfirm.value] as const, () => { void loadAll() }, { immediate: true })
+watch(() => [props.factoryId, props.blueprint.id, props.blueprint.lifecycleState, canConfirm.value] as const, () => { void loadAll() }, { immediate: true })
 </script>
 
 <style scoped>

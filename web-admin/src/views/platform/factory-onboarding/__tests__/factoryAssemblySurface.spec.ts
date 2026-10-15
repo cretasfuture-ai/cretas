@@ -281,6 +281,12 @@ describe('Agent 工厂装配主流程入口', () => {
     expect(page).toContain('resolveProductTypeIdByCode')
     expect(page).toContain("name: 'ProductProcesses'")
     expect(preview).toContain('此刻未发布')
+    const handler = page.slice(page.indexOf('async function goWorkflow('), page.indexOf('async function goWorkflow(') + 1800)
+    const platform = handler.indexOf('if (authStore.isPlatform)')
+    expect(platform).toBeGreaterThan(0)
+    expect(handler.slice(platform, handler.indexOf('try {'))).toContain('step.value = 1')
+    expect(handler.slice(platform, handler.indexOf('try {'))).toContain('return')
+    expect(platform).toBeLessThan(handler.indexOf('resolveProductTypeIdByCode'))
   })
 
   it('权威状态按验证、零写模拟、蓝图发布和显式应用逐步解锁', () => {

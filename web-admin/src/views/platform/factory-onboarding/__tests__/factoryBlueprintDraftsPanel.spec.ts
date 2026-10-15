@@ -222,6 +222,20 @@ beforeEach(() => {
 })
 
 describe('FactoryBlueprintDraftsPanel', () => {
+  it.each(['PUBLISHED', 'APPLIED'])('continues only BOM and Workflow after configuration is %s', async (lifecycleState) => {
+    api.getDraftWriteOrder.mockResolvedValue({ data: { capabilities: [row('products'), row('workflow'), row('bom')] } })
+    api.getDraftProposal.mockResolvedValue({ data: { status: 'BLOCKED', items: [], blockers: [] } })
+    const w = mount(FactoryBlueprintDraftsPanel, {
+      props: { factoryId: 'F006', factoryName: '示范工厂', blueprint: { ...blueprint, lifecycleState } },
+      global: { stubs },
+    })
+    await flushPromises()
+    expect(w.find('[data-testid="draft-row-products"]').exists()).toBe(false)
+    expect(w.find('[data-testid="draft-row-workflow"]').exists()).toBe(true)
+    expect(w.find('[data-testid="draft-row-bom"]').exists()).toBe(true)
+    expect(api.getDraftProposal.mock.calls.map(call => call[2]).sort()).toEqual(['bom', 'workflow'])
+    w.unmount()
+  })
   it('uses distinct real materialize keys for same-number factory and platform actors', async () => {
     const keys: string[] = []
     for (const userType of ['factory', 'platform']) {
@@ -666,7 +680,7 @@ describe('FactoryBlueprintDraftsPanel', () => {
     expect(w.find('[data-testid="draft-confirm"]').exists()).toBe(false)
   })
 
-  it('is mounted on the onboarding page only for a VALIDATED blueprint, between the blockers and the action bar', () => {
+  it('is mounted for validated and subsequent configuration states, between blockers and the action bar', () => {
     const page = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'index.vue'), 'utf8')
     expect(page).toContain("import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'")
     const tagAt = page.indexOf('<FactoryBlueprintDraftsPanel')
@@ -676,7 +690,7 @@ describe('FactoryBlueprintDraftsPanel', () => {
     // 页面里不止一个 .acts; 要的是服务端阻断项之后的那一个(step 1 的按钮区)
     expect(tagAt).toBeLessThan(page.indexOf('<div class="acts">', blockersAt))
     const tag = page.slice(tagAt, page.indexOf('/>', tagAt))
-    expect(tag).toContain(`v-if="canonicalBlueprint?.lifecycleState === 'VALIDATED'"`)
+    expect(tag).toContain(`['VALIDATED', 'PUBLISHED', 'APPLIED'].includes(canonicalBlueprint.lifecycleState)`)
     expect(tag).toContain(':blueprint="canonicalBlueprint"')
     expect(tag).toContain(':factory-id="factoryId"')
   })

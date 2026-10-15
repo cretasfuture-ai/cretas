@@ -270,7 +270,9 @@ public final class FactoryBlueprintActivationCenter {
         verifyBlueprintAuthority(new ActivationPlanRequest(approved.plan().factoryId(),
                 approved.plan().blueprintId(), approved.plan().blueprintVersion(),
                 approved.plan().blueprintDigest(), approved.plan().requestedActor(),
-                Set.of(), List.of()), drift);
+                Set.of(), approved.plan().modules().stream().map(module -> new DraftCandidate(
+                        module.capabilityId(), module.draftId(), module.expectedRevision(),
+                        module.expectedDigest(), "DRAFT", Map.of())).toList()), drift);
         if (!drift.isEmpty()) {
             throw new IllegalArgumentException("Blueprint authority drifted since approval: "
                     + drift.get(0).code());
@@ -551,7 +553,11 @@ public final class FactoryBlueprintActivationCenter {
                 || response.getVersion() == null
                 || request.blueprintVersion() != response.getVersion()
                 || !("DRAFT".equals(response.getLifecycleState())
-                     || "VALIDATED".equals(response.getLifecycleState()))) {
+                     || "VALIDATED".equals(response.getLifecycleState())
+                     || (!request.candidates().isEmpty() && request.candidates().stream().allMatch(candidate ->
+                         "workflow".equals(candidate.capabilityId())
+                         && com.cretas.aims.blueprint.draftentry.BlueprintDraftLifecycle.allows(
+                             response.getLifecycleState(), candidate.capabilityId()))))) {
             issues.add(issue("BLUEPRINT_LINEAGE_MISMATCH", request.blueprintId(),
                     "服务端当前 Blueprint 与 activation 请求的身份或版本不一致",
                     "刷新当前 Blueprint 后重新预览"));

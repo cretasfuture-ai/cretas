@@ -156,7 +156,7 @@ public class FactoryWorkflowDraftMaterializationService {
                 .factoryId(factoryId)
                 .productTypeId(operation.targetProductTypeId())
                 .idempotencyKey(idempotencyKey)
-                .operatorId(request.operatorId())
+                .operatorId(new com.cretas.aims.security.ActorRef(request.actorType(), request.operatorId()).factoryUserId())
                 .actorType(request.actorType())
                 .actorId(request.operatorId())
                 .requestDigest(requestDigest)
@@ -182,8 +182,12 @@ public class FactoryWorkflowDraftMaterializationService {
             if (request.mode() == DraftMode.SNAPSHOT_AND_REPLACE) {
                 ProductProcessWorkflowDTO nextDraft = workflowService.snapshot(
                         factoryId, operation.targetProductTypeId(), prepared.currentDefinition().getLockVersion());
+                desired.setId(nextDraft.getId());
+                desired.setVersion(nextDraft.getVersion());
                 desired.setLockVersion(nextDraft.getLockVersion());
             } else if (request.mode() == DraftMode.MERGE_EXISTING) {
+                desired.setId(prepared.currentDefinition().getId());
+                desired.setVersion(prepared.currentDefinition().getVersion());
                 desired.setLockVersion(prepared.currentDefinition().getLockVersion());
             } else {
                 desired.setLockVersion(null);

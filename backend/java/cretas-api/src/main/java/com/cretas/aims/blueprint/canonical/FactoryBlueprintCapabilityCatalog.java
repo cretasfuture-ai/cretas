@@ -278,13 +278,20 @@ public class FactoryBlueprintCapabilityCatalog {
     }
 
     private int recipeCount(ApplyAIInitRequest payload) {
-        return payload != null && payload.getSuggestedData() != null
-                && payload.getSuggestedData().getWorkProcesses() != null
-                ? (int) payload.getSuggestedData().getWorkProcesses().stream()
+        if (payload == null || payload.getSuggestedData() == null) return 0;
+        var data = payload.getSuggestedData();
+        // Explicit material-to-product facts also express recipe intent. A recipe
+        // using only raw materials must not require an invented auxiliary material.
+        int conversions = data.getConversionRates() == null ? 0 : (int) data.getConversionRates().stream()
+                .filter(item -> item != null && item.getFromCode() != null && !item.getFromCode().isBlank()
+                        && item.getToCode() != null && !item.getToCode().isBlank())
+                .map(item -> item.getToCode()).distinct().count();
+        return conversions + (data.getWorkProcesses() != null
+                ? (int) data.getWorkProcesses().stream()
                         .filter(item -> (item.getAuxMaterials() != null && !item.getAuxMaterials().isEmpty())
                                 || (item.getPackMaterials() != null && !item.getPackMaterials().isEmpty()))
                         .count()
-                : 0;
+                : 0);
     }
 
     /**

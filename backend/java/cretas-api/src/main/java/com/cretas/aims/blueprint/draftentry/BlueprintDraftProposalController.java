@@ -52,7 +52,6 @@ import java.util.regex.Pattern;
 public class BlueprintDraftProposalController {
 
     public static final String SCHEMA_VERSION = "factory-blueprint-draft-proposal/v1";
-    private static final Set<String> PROPOSABLE_BLUEPRINT_STATES = Set.of("DRAFT", "VALIDATED");
     /** Set by the user's confirmation or by the server, never by a proposal. */
     private static final List<String> CONFIRMATION_FIELDS = List.of("confirmedPreviewDigest", "idempotencyKey", "operatorId");
     private static final Pattern SEGMENT = Pattern.compile("([A-Za-z][A-Za-z0-9]*)(?:\\[(\\d+)])?");
@@ -109,8 +108,8 @@ public class BlueprintDraftProposalController {
 
         BlueprintResponse blueprint = blueprints.current(factoryId);
         if (blueprint == null || !blueprintId.equals(blueprint.getId())
-                || !PROPOSABLE_BLUEPRINT_STATES.contains(blueprint.getLifecycleState())) {
-            throw new BusinessException(409, "只能按本厂当前处于草稿或已校验状态的蓝图预填，请刷新蓝图后重试")
+                || !BlueprintDraftLifecycle.allows(blueprint.getLifecycleState(), capabilityId)) {
+            throw new BusinessException(409, "当前蓝图状态不允许预填这项草稿；配置发布或应用后仅可继续办理 BOM 与 Workflow，请刷新蓝图后重试")
                     .withCode("BLUEPRINT_DRAFT_BLUEPRINT_NOT_CURRENT").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
         }
         if (blueprint.getSourcePayload() == null) {

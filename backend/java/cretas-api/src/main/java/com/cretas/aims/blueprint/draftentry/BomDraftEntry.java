@@ -44,7 +44,6 @@ import java.util.stream.Collectors;
 @Component
 public class BomDraftEntry extends TypedCapabilityDraftEntry<BomDraftRequest> {
 
-    private static final Set<String> CURRENT_BLUEPRINT_STATES = Set.of("DRAFT", "VALIDATED");
 
     /**
      * What preview answers. {@code preview} is the command's own preview (absent when the assembler could not
@@ -151,7 +150,7 @@ public class BomDraftEntry extends TypedCapabilityDraftEntry<BomDraftRequest> {
         BlueprintResponse blueprint = blueprints.current(request.factoryId());
         if (blueprint == null || !Objects.equals(request.blueprintId(), blueprint.getId())
                 || blueprint.getVersion() == null || request.blueprintVersion() != blueprint.getVersion()
-                || !CURRENT_BLUEPRINT_STATES.contains(blueprint.getLifecycleState())
+                || !BlueprintDraftLifecycle.allows(blueprint.getLifecycleState(), capabilityId())
                 || blueprint.getSourcePayload() == null) {
             throw new BusinessException(409, "请求里的蓝图不是本厂当前处于草稿或已校验状态的蓝图版本，请刷新蓝图后重新预填")
                     .withCode("BOM_DRAFT_BLUEPRINT_NOT_CURRENT").withHintTarget("blueprintVersion").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");

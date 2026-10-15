@@ -63,7 +63,6 @@ import java.util.UUID;
 @Service
 public class MasterDataDraftPromotionService {
 
-    static final Set<String> PROMOTABLE_LIFECYCLES = Set.of("DRAFT", "VALIDATED");
     /** Width of one preview window; a preview stays executable for the rest of its window plus one more. */
     static final long WINDOW_MINUTES = 15;
     private static final String DIGEST_PATTERN = "[0-9a-f]{64}";
@@ -113,7 +112,7 @@ public class MasterDataDraftPromotionService {
                                     String capabilityId, String draftId, PreviewRequest request) {
         DraftPromoter promoter = require(capabilityId);
         operators.resolveDraft(http, factoryId, promoter.permission());
-        Lineage lineage = currentLineage(factoryId, blueprintId, true);
+        Lineage lineage = currentLineage(factoryId, blueprintId, capabilityId);
         DraftSnapshot draft = ownedDraft(promoter, lineage, draftId, false);
         draft = promoter.withPromotionInput(draft, request == null ? null
                 : promotionInput(capabilityId, request.taxIncludedUnitPrice(), request.packagingRoles()));
@@ -142,7 +141,7 @@ public class MasterDataDraftPromotionService {
         if (prior.isPresent()) return replay(promoter, prior.get(), capabilityId, draftId, confirmed,
                 body == null ? null : promotionInput(capabilityId, body.taxIncludedUnitPrice(), body.packagingRoles()));
 
-        Lineage lineage = currentLineage(factoryId, blueprintId, true);
+        Lineage lineage = currentLineage(factoryId, blueprintId, capabilityId);
         DraftSnapshot draft = ownedDraft(promoter, lineage, draftId, true);
         draft = promoter.withPromotionInput(draft, body == null ? null
                 : promotionInput(capabilityId, body.taxIncludedUnitPrice(), body.packagingRoles()));
@@ -230,7 +229,7 @@ public class MasterDataDraftPromotionService {
     public PromotionList list(HttpServletRequest http, String factoryId, String blueprintId) {
         DraftOperator operator = operators.resolveDraftForAny(http, factoryId,
                 promoters.values().stream().map(DraftPromoter::permission).toList());
-        Lineage lineage = currentLineage(factoryId, blueprintId, false);
+        Lineage lineage = currentLineage(factoryId, blueprintId, null);
         Set<String> visible = new TreeSet<>();
         promoters.values().stream().filter(p -> operator.permissions().contains(p.permission()))
                 .forEach(p -> visible.add(p.capabilityId()));
@@ -264,12 +263,13 @@ public class MasterDataDraftPromotionService {
         }
     }
 
-    private Lineage currentLineage(String factoryId, String blueprintId, boolean requirePromotableLifecycle) {
+    private Lineage currentLineage(String factoryId, String blueprintId, String capabilityId) {
         BlueprintResponse blueprint = blueprints.current(factoryId);
         if (blueprint == null || blueprint.getId() == null || !blueprint.getId().equals(blueprintId)) {
             throw notCurrent("只能转正本厂当前蓝图下的草稿，请刷新蓝图后重试");
         }
-        if (requirePromotableLifecycle && !PROMOTABLE_LIFECYCLES.contains(blueprint.getLifecycleState())) {
+        if (capabilityId != null && !com.cretas.aims.blueprint.draftentry.BlueprintDraftLifecycle.allows(
+                blueprint.getLifecycleState(), capabilityId)) {
             throw notCurrent("蓝图当前状态是「" + blueprint.getLifecycleState()
                     + "」，只有草稿或已校验的蓝图下的草稿可以转正");
         }
