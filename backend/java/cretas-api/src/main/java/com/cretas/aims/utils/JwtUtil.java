@@ -79,6 +79,23 @@ public class JwtUtil {
     /**
      * 创建Token
      */
+    /** Explicit platform namespace for new platform-only features; factory token issuance is unchanged. */
+    public String generatePlatformToken(Long id, String username, String role) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("userId", id);
+        claims.put("factoryId", "PLATFORM");
+        claims.put("username", username);
+        claims.put("role", role);
+        claims.put("actorType", "PLATFORM_ADMIN");
+        return createToken(claims, username);
+    }
+
+    public boolean isExplicitPlatformToken(String token) {
+        Claims claims = getClaimsFromToken(token);
+        return claims != null && "PLATFORM_ADMIN".equals(claims.get("actorType", String.class))
+                && "PLATFORM".equals(claims.get("factoryId", String.class));
+    }
+
     private String createToken(Map<String, Object> claims, String subject) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expiration);

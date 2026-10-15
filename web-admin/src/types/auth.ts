@@ -6,7 +6,11 @@
 
 // 平台角色 (PlatformAdmin表)
 export const PLATFORM_ROLES = {
-  PLATFORM_ADMIN: 'platform_admin'
+  PLATFORM_ADMIN: 'platform_admin',
+  SUPER_ADMIN: 'super_admin',
+  SYSTEM_ADMIN: 'system_admin',
+  OPERATION_ADMIN: 'operation_admin',
+  AUDITOR: 'auditor',
 } as const;
 
 // 工厂角色 (User表) - 15角色系统

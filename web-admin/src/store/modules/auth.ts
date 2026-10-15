@@ -71,7 +71,11 @@ export const useAuthStore = defineStore('auth', () => {
   const currentRole = computed(() => {
     const u = user.value as User | null;
     if (!u) return 'unactivated';
-    if (isPlatformUser(u)) return u.platformUser?.role || 'unactivated';
+    if (isPlatformUser(u)) {
+      // Keep the existing Web permission/menu alias while retaining the server role.
+      const role = u.platformUser?.role;
+      return role === 'super_admin' ? 'platform_admin' : role || 'unactivated';
+    }
     if (isFactoryUser(u)) {
       const role = String(u.factoryUser?.role || 'unactivated');
       // Legacy platform accounts are still returned by the production auth
@@ -189,6 +193,22 @@ export const useAuthStore = defineStore('auth', () => {
 
   // 把后端登录响应 (扁平字段) 落地为 token + user. login 与 demoLogin 共用.
   function applyLoginData(data: any) {
+    if (data.actorType === 'PLATFORM_ADMIN') {
+      const role: unknown = data.role;
+      if (data.factoryId || (role !== 'super_admin' && role !== 'system_admin'
+        && role !== 'operation_admin' && role !== 'auditor' && role !== 'platform_admin')) {
+        throw new Error('平台登录身份或工厂范围无效');
+      }
+      const id = Number(data.userId);
+      if (!Number.isSafeInteger(id) || id <= 0) throw new Error('平台登录身份无效');
+      if (data.token || data.accessToken) localStorage.setItem('cretas_access_token', data.token || data.accessToken);
+      setUser({
+        id, username: data.username, fullName: data.profile?.name || '', email: '',
+        isActive: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        userType: 'platform', platformUser: { role, permissions: data.permissions || [] },
+      });
+      return;
+    }
     // Store token in localStorage as fallback for when HttpOnly cookies
     // don't work (e.g. certain browser policies, cross-origin scenarios).
     if (data.token || data.accessToken) {
