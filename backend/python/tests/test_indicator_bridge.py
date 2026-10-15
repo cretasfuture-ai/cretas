@@ -93,7 +93,7 @@ async def test_bridge_distinguishes_real_zero_and_no_sample(monkeypatch):
 
 @pytest.mark.anyio
 async def test_bridge_excludes_partial_cost_coverage(monkeypatch):
-    for ratio in (0.75, 1.2):
+    for ratio in (0.75, 1.2, 1.0000000005):
         app = _app(monkeypatch, {"totalRevenueWithCost": 100, "avgRate": 0.4, "coverage": {"revenueRatio": ratio}})
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

@@ -73,10 +73,7 @@ async def restaurant_dish_margin_indicator(
     # industry-default costs and therefore is not this typed indicator.
     coverage = result.get("coverage") or {}
     coverage_ratio = _decimal(coverage.get("revenueRatio"))
-    complete_cost_coverage = (
-        coverage_ratio is not None
-        and (coverage_ratio - Decimal("1")).copy_abs() <= Decimal("0.000000001")
-    )
+    complete_cost_coverage = coverage_ratio == Decimal("1")
     reason = None
     if total_revenue is None or total_revenue <= 0 or rate is None:
         value = None

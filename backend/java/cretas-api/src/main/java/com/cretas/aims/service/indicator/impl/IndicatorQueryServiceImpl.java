@@ -44,6 +44,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class IndicatorQueryServiceImpl implements IndicatorQueryService {
 
+    private static final String SUPPORTED_PYTHON_INDICATOR_CODE = "RESTAURANT_DISH_MARGIN";
+
     private final IndicatorRepository indicatorRepository;
     private final IndicatorVersionRepository indicatorVersionRepository;
     private final IndicatorComputationRepository indicatorComputationRepository;
@@ -164,7 +166,8 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
                 }
             } else if ("PYTHON_ENDPOINT".equals(type)) {
                 source = "PYTHON_ENDPOINT:" + ind.getCode();
-                if (!pythonSmartBIClient.supportsIndicatorValueEndpoint(
+                if (!SUPPORTED_PYTHON_INDICATOR_CODE.equals(ind.getCode())
+                        || !pythonSmartBIClient.supportsIndicatorValueEndpoint(
                         configured.isEmpty() ? null : configured.get(0).getComputeSource())) {
                     return new IndicatorValueResult(null, null, false, source, IndicatorValueResult.FAILED);
                 }
@@ -263,6 +266,12 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         }
 
         if ("PYTHON_ENDPOINT".equals(type)) {
+            if (!SUPPORTED_PYTHON_INDICATOR_CODE.equals(ind.getCode())) {
+                log.warn("fetchFromPython: no typed bridge registered for code={} — returning FAILED",
+                        ind.getCode());
+                return new FetchOutcome(null, "PYTHON_ENDPOINT:" + ind.getCode(),
+                        IndicatorValueResult.FAILED);
+            }
             try {
                 BigDecimal value = pythonSmartBIClient.fetchIndicatorValue(
                         factoryId, primary.getComputeSource(), start, end);
