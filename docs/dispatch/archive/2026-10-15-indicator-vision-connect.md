@@ -32,4 +32,6 @@ Root 的指标展示 scope 追加：既有 IndicatorDetailDrawer.vue 及目标�
 
 独立复核补强：AN2 原 scope 包含唯一菜品毛利 code 与固定 endpoint 双向绑定（fresh/cache）、独立 wrong-period 控制、覆盖率精确等于 1 控制。Root 修复既有抽屉强制重算对 FAILED/NO_DATA 的假成功提示，真实 0 仍为成功；页面目标测试 7/7 通过，日志 indicator/web-recompute-green.log。真实链路 fixture 导入生产 main.app，关闭无关 lifespan，未替换真实 middleware/router/Gold 算法。
 
+Root 私有 UI 验收 scope：web-admin/tests/e2e/indicator-bridge/{fixture.html,browser.mjs}；只准 127.0.0.1:31759→10059→18085→专属 PG55458，真实抽屉与 API 不 mock。Java fixture 可选 HOLD_FOR_UI 窗口追加本月真实零和错配 code 控制；生产 Java 鉴权排除，固定本地组件角色不算鉴权验收。命令 scripts/windows/test-indicator-bridge.ps1 -HoldForUi 与 web-admin 下 VITE_BACKEND_URL=http://127.0.0.1:10059 的独占 Vite31759，再运行 browser.mjs。不得访问生产 host。
+
 VS2 实施设计约束：Linux API 只调度、持久化和验收回执；上海 Windows 本地 worker 仅调用命名函数，不调用 cycle/deploy，不接受客户端命令/URL/本地路径。任务、配方、数据、模型和独立验收必须绑定厂/项目/版本/哈希。租约超时不自动重跑训练；训练、评测、独立验收与启用分别留证。平台规划必须显式 PLATFORM_ADMIN namespace 与目标厂，不能伪装 FACTORY_USER。六膳门专用硬编码不可作为 generic/OCR 默认 runner。

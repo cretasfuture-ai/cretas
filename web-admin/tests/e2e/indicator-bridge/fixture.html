@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="UTF-8"><title>Python 指标桥接本地验收</title>
+<div id="app"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue';
+import { createPinia } from 'pinia';
+import ElementPlus from 'element-plus';
+import 'element-plus/dist/index.css';
+import Drawer from '/src/views/indicator-center/IndicatorDetailDrawer.vue';
+import { usePermissionStore } from '/src/store/modules/permission.ts';
+if (location.origin !== 'http://127.0.0.1:31759') throw Error('Private loopback fixture only');
+const pinia = createPinia();
+// Java production auth is excluded by the dedicated Spring fixture. This sets
+// only the local component role; it is not evidence for production auth.
+usePermissionStore(pinia).setRole('factory_super_admin', 'IND-BRIDGE-A', 'RESTAURANT', '1', { skipDbLoad: true });
+const App = { setup() {
+  const visible = ref(false), factory = ref('IND-BRIDGE-A'), code = ref('RESTAURANT_DISH_MARGIN');
+  const open = (id, metric) => { factory.value = id; code.value = metric; visible.value = true; };
+  return () => h('main', [
+    h('h1', '独立本地测试库 · 实际指标抽屉'),
+    h('button', { id: 'open-zero', onClick: () => open('IND-BRIDGE-A', 'RESTAURANT_DISH_MARGIN') }, '本厂真实零'),
+    h('button', { id: 'open-empty', onClick: () => open('IND-BRIDGE-B', 'RESTAURANT_DISH_MARGIN') }, '另一厂本月无数据'),
+    h('button', { id: 'open-invalid', onClick: () => open('IND-BRIDGE-A', 'MISMATCHED_KPI') }, '错误指标来源控制'),
+    h(Drawer, { modelValue: visible.value, 'onUpdate:modelValue': value => visible.value = value,
+      factoryId: factory.value, code: code.value }),
+  ]);
+} };
+createApp(App).use(pinia).use(ElementPlus).mount('#app');
+</script></html>

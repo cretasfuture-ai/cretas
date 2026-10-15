@@ -76,9 +76,9 @@ describe('current indicator evidence', () => {
 
   it.each(['FAILED', 'NO_DATA'] as const)('does not announce a %s recomputation as success', async (status) => {
     vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'KPI', name: '测试指标', value: 123,
-      alertLevel: null, status: 'AVAILABLE' });
+      alertLevel: null, fromCache: false, status: 'AVAILABLE' });
     vi.mocked(recomputeIndicator).mockResolvedValue({ code: 'KPI', name: '测试指标', value: null,
-      alertLevel: null, status });
+      alertLevel: null, fromCache: false, status });
     const wrapper = await open();
     const button = wrapper.findAll('el-button, el-button-stub').find(node => node.text().includes('强制重算'));
     expect(button).toBeDefined();
@@ -93,9 +93,9 @@ describe('current indicator evidence', () => {
 
   it('announces a successful real-zero recomputation and refreshes its snapshot', async () => {
     vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'KPI', name: '测试指标', value: null,
-      alertLevel: null, status: 'NO_DATA' });
+      alertLevel: null, fromCache: false, status: 'NO_DATA' });
     vi.mocked(recomputeIndicator).mockResolvedValue({ code: 'KPI', name: '测试指标', value: 0,
-      alertLevel: null, status: 'AVAILABLE' });
+      alertLevel: null, fromCache: false, status: 'AVAILABLE' });
     const wrapper = await open();
     const button = wrapper.findAll('el-button, el-button-stub').find(node => node.text().includes('强制重算'));
     await button!.trigger('click');

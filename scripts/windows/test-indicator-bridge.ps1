@@ -3,7 +3,8 @@ param(
     [string]$Python = 'B:\anaconda3\python.exe',
     [string]$Maven = 'C:\Users\Steve\tools\apache-maven-3.9.9\bin\mvn.cmd',
     [string]$EvidenceDir = (Join-Path $env:TEMP 'cretas-indicator-bridge-acceptance'),
-    [string]$PgUser = 'trace_acceptance'
+    [string]$PgUser = 'trace_acceptance',
+    [switch]$HoldForUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,7 @@ $EvidenceDir = (Resolve-Path -LiteralPath $EvidenceDir).Path
 # drops or migrates a database; both fixtures independently check the target.
 $fixtureEnvironment = @{
     CRETAS_INDICATOR_BRIDGE_PG_VERIFY = 'true'
+    CRETAS_INDICATOR_BRIDGE_HOLD_FOR_UI = "$($HoldForUi.IsPresent)".ToLowerInvariant()
     CRETAS_WORKFLOW_PG_URL = "jdbc:postgresql://127.0.0.1:55458/$databaseName"
     CRETAS_WORKFLOW_PG_USER = $PgUser
     CRETAS_INDICATOR_BRIDGE_EVIDENCE_DIR = $EvidenceDir
@@ -79,6 +81,12 @@ try {
         'X-Factory-Id' = 'IND-BRIDGE-A'
     }
     if ($foreign.StatusCode -ne 403) { throw 'Cross-factory negative control was not rejected' }
+    if ($HoldForUi) {
+        foreach ($name in @('ui-http-ready.txt', 'ui-done.txt')) {
+            $previousMarker = Join-Path $EvidenceDir $name
+            if (Test-Path -LiteralPath $previousMarker) { Remove-Item -LiteralPath $previousMarker }
+        }
+    }
     Set-Location -LiteralPath $javaRoot
     & $Maven test '-Dtest=IndicatorPythonBridgePostgresAcceptanceTest' *> (Join-Path $EvidenceDir 'java-python-pg-green.log')
     $testExit = $LASTEXITCODE
@@ -87,6 +95,7 @@ try {
         status = 'pass'; database = $databaseName; address = '127.0.0.1:55458'
         java_port = 10059; python_port = 18085; anonymous_status = 401; cross_factory_status = 403
         maven_exit = $testExit; production_writes = 0
+        ui_verified = $HoldForUi.IsPresent
         source_head = (& git -C $RepoRoot rev-parse HEAD)
         scope = 'real Java Controller/Service/client and Python main.app/middleware/router/Gold function with private PostgreSQL; Java production auth and unrelated Python lifespan excluded'
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $EvidenceDir 'cross-service-receipt.json') -Encoding utf8

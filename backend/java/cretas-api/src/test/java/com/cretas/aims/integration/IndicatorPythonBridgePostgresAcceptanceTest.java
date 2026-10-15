@@ -128,6 +128,23 @@ class IndicatorPythonBridgePostgresAcceptanceTest {
             Files.writeString(root.resolve("java-python-pg-period.json"), fifty.toPrettyString());
             Files.writeString(root.resolve("java-python-pg-no-data.json"), unpriced.toPrettyString());
             Files.writeString(root.resolve("java-python-pg-foreign.json"), other.toPrettyString());
+            if ("true".equals(System.getenv("CRETAS_INDICATOR_BRIDGE_HOLD_FOR_UI"))) {
+                // Additional owned fixtures for the actual drawer's default current-month query.
+                jdbc.update("insert into fact_pos_transaction values (5,'IND-BRIDGE-A',current_date)");
+                jdbc.update("insert into fact_pos_item values (5,'IND-BRIDGE-A','pos-a',10,100)");
+                jdbc.update("insert into indicators(id,factory_id,code,name,category,unit,is_active,compute_strategy,created_at,updated_at) values ('bad-ui','IND-BRIDGE-A','MISMATCHED_KPI','错误来源控制','RESTAURANT','%',true,'REALTIME',now(),now())");
+                jdbc.update("insert into indicator_computations(id,indicator_id,compute_type,compute_source,is_active,priority,created_at,updated_at) values ('bad-ui','bad-ui','PYTHON_ENDPOINT','/api/smartbi/restaurant-ops/gross-margin',true,1,now(),now())");
+                Files.writeString(root.resolve("ui-http-ready.txt"), "loopback:10059; private indicator fixtures only");
+                long deadline = System.currentTimeMillis() + 240_000;
+                while (!Files.exists(root.resolve("ui-done.txt")) && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(300);
+                }
+                assertThat(Files.readString(root.resolve("ui-done.txt"))).isEqualTo("PASS");
+                assertThat(jdbc.queryForObject("select count(*) from indicator_versions where indicator_id='bad-ui'", Integer.class)).isZero();
+                assertThat(jdbc.queryForObject("select count(*) from fact_pos_item where factory_id='IND-BRIDGE-B'", Integer.class)).isEqualTo(1);
+                Files.writeString(root.resolve("ui-pg-readback.json"), mapper.writeValueAsString(jdbc.queryForList(
+                        "select factory_id,value,period_start,period_end from indicator_versions where factory_id in ('IND-BRIDGE-A','IND-BRIDGE-B') order by factory_id,period_start")));
+            }
         }
     }
 
