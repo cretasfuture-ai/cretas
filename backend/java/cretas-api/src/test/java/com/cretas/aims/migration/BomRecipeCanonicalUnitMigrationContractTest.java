@@ -11,6 +11,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BomRecipeCanonicalUnitMigrationContractTest {
 
     @Test
+    void latestRepairRetainsNonblankInvariantWithoutChangingBusinessRows() throws IOException {
+        String sql = Files.readString(Path.of(
+                "src/main/resources/db/flyway/V20261101_58__bom_units_catalog_authority.sql"));
+        assertThat(sql).contains("UnitContractService", "DROP CONSTRAINT IF EXISTS chk_bri_unit",
+                "CHECK (unit IS NOT NULL AND btrim(unit) <> '')");
+        assertThat(sql).doesNotContain("unit IN", "UPDATE ", "DELETE ", "INSERT ");
+    }
+
+    @Test
     void removesLegacyStaticWhitelistInFavorOfUnitContractService() throws IOException {
         String sql = Files.readString(Path.of(
                 "src/main/resources/db/flyway/V20260720_03__bom_recipe_item_canonical_units.sql"));
