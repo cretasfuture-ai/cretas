@@ -579,6 +579,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                         + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                                 .withSeverity("BLOCKING");
                     }
+                    // An explicitly selected Workflow packaging port is already
+                    // allocated above. Do not add the same BOM input a second time.
+                    if (hasExplicitPackagingInput(req, item)) {
+                        continue;
+                    }
                     requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
                             item.getMaterialTypeId(),
                             item.getMaterialName(),
@@ -648,6 +653,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
         }
         return requirements;
+    }
+
+    private static boolean hasExplicitPackagingInput(ProcessSheetRowRequest req, BomRecipeItem item) {
+        String portId = item.getWorkflowInputPortId();
+        return portId != null && !portId.isBlank() && req.getRawMaterialInputs() != null
+                && req.getRawMaterialInputs().stream().anyMatch(input ->
+                        !Boolean.TRUE.equals(input.getAutomatic())
+                                && portId.equals(input.getWorkflowPortId())
+                                && Objects.equals(item.getMaterialTypeId(), input.getSkuId())
+                                && input.getQuantity() != null && input.getQuantity().signum() > 0);
     }
 
     private BigDecimal normalizeQuantity(BigDecimal quantity) {

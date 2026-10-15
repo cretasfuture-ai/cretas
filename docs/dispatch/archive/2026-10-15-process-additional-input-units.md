@@ -8,3 +8,17 @@
 - Frontend: `processSheetUnits.spec.ts` and mounted `ProcessDataTable.workflowContext.spec.ts`: 36 passed. Initial added positive case failed with the actual mixed-input error, then passed after the fix. Source-reading backend gate ends in ContractTest and is selected by Java Gate.
 - Private evidence: `Documents/assembly-integration-assessment-20261015/process-additional-units-red.log`, `process-additional-units-verified.log`, `target-ui/additional-input-units-{red,green}.log`. No credentials or customer data committed. Final UI readback and exact-head CI are separate evidence recorded in the platform closure report.
 - Production untouched. This does not introduce cross-dimensional conversion or add packaging quantities to mass totals.
+- Real UI additionally exposed two adjacent defects: RAW controls hid required upstream selectors (both card/table mounted tests first failed, then passed); explicitly entered packaging was allocated again automatically from BOM. Automatic packaging now skips only a nonautomatic, positive input matching the exact BOM Workflow port and SKU, after validating the BOM quantity. Other port/SKU, automatic and zero cases retain automatic requirements. Backend final related selection: 31/0/0, BUILD SUCCESS; packaging regression first had 1 assertion failure/0 errors. Final process-sheet component scope: 197 passed across 30 files; utility plus mounted context: 38 passed; frozen Web build:check passed.
+- The isolated positive plan completed reporting, one packaging allocation of 10, actual settlement into 10 available finished units, and stop/closure. A separate pre-fix test plan exposed an existing reversal residual: report reversal leaves unsettled `material_consumptions`, causing later settlement to count old entries. That failed case is retained and not counted as accepted; the reversal module is outside this scoped fix and was not changed.
+
+## UX Flow Analysis
+
+Production clerk, using the existing process sheet to report one batch. The mixed-input process must show both its counted packaging and its upstream dough before output and confirmation. The prior mutually exclusive template hides the upstream controls whenever RAW inputs exist, leaving the clerk unable to finish.
+
+| Step | Visible context | Action | Expected result |
+| --- | --- | --- | --- |
+| 1 | Fixed BOM packaging, upstream product, batch and available quantity | Select inputs and enter actual quantities | Separate port units and traceable sources |
+| 2 | Fixed output SKU/unit, date and execution fields | Enter output and work time | Required fields and quantity bounds keep submission disabled until complete |
+| 3 | Existing confirmation with inputs and output | Confirm reporting | One inventory deduction per input, preserved data on failure |
+
+Friction: hidden required upstream controls (HIGH, fool-proof rules 1/5). Response: reuse the existing source-table component beside RAW controls, visible by default in both card/table modes. Keep fixed SKU/unit context (rule 2), constrained batch selectors (rule 3), existing confirmation and error recovery (rules 4/5); no new workflow or alternate bookkeeping path.

@@ -294,8 +294,10 @@ const workflowUpstreamInputs = computed(() => {
   if (!props.workflowContext || props.isFirstProcess === true) return [];
   return props.workflowContext.inputs.filter((port) => port.materialKind !== 'RAW_MATERIAL');
 });
+const hasMixedWorkflowInputs = computed(() => workflowUpstreamInputs.value.length > 0
+  && props.workflowContext?.inputs.some((port) => port.materialKind === 'RAW_MATERIAL') === true);
 const isMultiSource = computed(() => supportsUpstreamSources.value && (
-  props.allowMultipleUpstreamSources === true || workflowUpstreamInputs.value.length > 1
+  props.allowMultipleUpstreamSources === true || workflowUpstreamInputs.value.length > 1 || hasMixedWorkflowInputs.value
 ));
 const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiSource.value);
 
@@ -884,7 +886,7 @@ function blankRow(): SheetRow {
     potCount: 1,
     potRawKgs: [],
     laborExpanded: false,
-    mixExpanded: workflowUpstreamInputs.value.length > 1,
+    mixExpanded: workflowUpstreamInputs.value.length > 1 || hasMixedWorkflowInputs.value,
     multiOutputs: initMultiOutputs(),
   };
 }
@@ -3686,7 +3688,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           </template>
 
           <!-- 多来源混批: configured by ProductWorkProcess.allowMultipleUpstreamSources -->
-          <template v-else-if="isMultiSource">
+          <template v-if="isMultiSource">
             <div data-testid="upstream-sources-toggle" class="sp-card-field sp-card-field-full">
               <label class="sp-card-label">{{ sourceTitle }}</label>
               <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">

@@ -196,6 +196,23 @@ describe('ProcessDataTable.vue workflow-planned-output banner (2B Task F2)', () 
     getAvailableRawBatches.mockResolvedValue({ success: true, data: [] });
   });
 
+  it.each(['card', 'table'] as const)('shows upstream and counted RAW controls together in %s mode', async (viewMode) => {
+    const wrapper = mountChaoshuiTable({ workflowContext: {
+      processName: '烘烤', processOrder: 2,
+      inputs: [
+        { workflowPortId: 'bag', materialKind: 'RAW_MATERIAL', skuId: 'BAG', materialName: '食品袋', unit: '个', required: true, skuResolved: true },
+        { workflowPortId: 'dough', materialKind: 'SEMI_FINISHED', skuId: 'DOUGH', materialName: '面团', unit: 'kg', required: true, skuResolved: true },
+      ],
+      output: { workflowPortId: 'bread', materialKind: 'FINISHED_GOOD', skuId: 'BREAD', materialName: '面包', unit: '个', finished: true, skuResolved: true },
+    } });
+    await wrapper.setProps({ viewMode });
+    await clickAddRow(wrapper);
+    expect(wrapper.find('[data-testid="material-input-total"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="upstream-source-line"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="upstream-source-line"]').text()).toContain('面团');
+    wrapper.unmount();
+  });
+
   it('shows the workflow-planned output (name/unit/成品-半成品 tag) and required raw input hint read-only, when workflowContext is present', async () => {
     const wrapper = mountTable({
       workflowNodeId: 'N1',

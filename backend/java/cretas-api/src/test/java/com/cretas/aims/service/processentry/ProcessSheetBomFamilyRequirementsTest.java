@@ -32,6 +32,29 @@ import static org.mockito.Mockito.when;
 
 class ProcessSheetBomFamilyRequirementsTest {
 
+    @Test
+    void explicitPositivePackagingAtTheExactBomPortIsNotAutomaticallyAllocatedAgain() throws Throwable {
+        stubPinnedFamily(recipe("BOM-A", "SKU-A", "个"));
+        BomRecipeItem bag = packaging("BAG", "食品袋", "个", "1");
+        bag.setWorkflowInputPortId("bag-port");
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-A")).thenReturn(List.of(bag));
+        var request = new ProcessSheetRowRequest();
+        request.setOutputs(List.of(output("SKU-A", "个", "10")));
+        var explicit = new ProcessSheetRowRequest.RawInput();
+        explicit.setWorkflowPortId("bag-port"); explicit.setSkuId("BAG"); explicit.setQuantity(BigDecimal.TEN);
+        request.setRawMaterialInputs(List.of(explicit));
+        assertThat(requirements(request)).isEmpty();
+        explicit.setWorkflowPortId("another-port");
+        assertThat(requirements(request)).singleElement().satisfies(row ->
+                assertThat(row.quantity()).isEqualByComparingTo("10"));
+        explicit.setWorkflowPortId("bag-port"); explicit.setAutomatic(true);
+        assertThat(requirements(request)).hasSize(1);
+        explicit.setAutomatic(false); explicit.setQuantity(BigDecimal.ZERO);
+        assertThat(requirements(request)).hasSize(1);
+        explicit.setQuantity(BigDecimal.TEN); explicit.setSkuId("OTHER");
+        assertThat(requirements(request)).hasSize(1);
+    }
+
     private final ProductionPlanRepository planRepository = mock(ProductionPlanRepository.class);
     private final BomRecipeRepository recipeRepository = mock(BomRecipeRepository.class);
     private final BomRecipeItemRepository itemRepository = mock(BomRecipeItemRepository.class);
