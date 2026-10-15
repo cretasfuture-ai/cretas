@@ -1,0 +1,6 @@
+{
+  "ocr_rules_version": "ocr-rules-v1",
+  "purpose": "Explicit OCR normalization and human adjudication rules",
+  "applies_to": ["generic-packaging-ocr"],
+  "does_not_apply_to": ["generic-packaging-detection", "liushanmen-tray"]
+}

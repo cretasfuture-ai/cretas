@@ -1,0 +1,12 @@
+{
+  "template_id": "generic-packaging-ocr",
+  "version": "v1",
+  "task_family": "packaging-ocr",
+  "title": "Generic packaging OCR",
+  "scope": "generic",
+  "required_fields": ["factory_id", "workstation_id", "task_family", "product_scope", "packaging_scope", "data_version", "recipe_version", "human_standard_version", "independent_acceptance_version", "ocr_rules_version"],
+  "required_receipts": ["dataset", "model", "evaluation"],
+  "ocr_rules_required": true,
+  "human_standard": "human-reviewed text regions and an OCR rules receipt",
+  "independent_acceptance": "factory-owned blind OCR set with a separate acceptance receipt"
+}
