@@ -44,7 +44,7 @@ export interface FormalExecution {
 const options = { baseURL: '', _silent: true } as const
 type Envelope<T> = { success: boolean; data: T; message?: string }
 const base = (factoryId: string, blueprintId: string) =>
-  `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/formal-activation`
+  `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/formal-activation`
 
 export function previewFormal(factoryId: string, blueprintId: string, selection: FormalSelection): Promise<Envelope<FormalPlan>> {
   return request.post(`${base(factoryId, blueprintId)}/preview`, selection, options)

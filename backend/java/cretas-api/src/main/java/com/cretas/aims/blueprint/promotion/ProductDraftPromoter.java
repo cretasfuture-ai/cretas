@@ -110,13 +110,7 @@ class ProductDraftPromoter implements DraftPromoter {
         dto.setName(source.getDesiredName());
         dto.setUnit(source.getDesiredUnit());
         dto.setProductCategory(source.getDesiredProductCategory());
-        dto.setCreatedBy(actor.factoryUserId());
-        String id = productTypeService.createProductType(factoryId, dto).getId();
-        ProductType created = productTypeRepository.findByIdAndFactoryId(id, factoryId)
-                .orElseThrow(() -> new IllegalStateException("正式产品创建后无法在目标工厂读回"));
-        created.setActor(actor);
-        productTypeRepository.saveAndFlush(created);
-        return id;
+        return productTypeService.createProductTypeAsActor(factoryId, dto, actor).getId();
     }
 
     @Override

@@ -2,7 +2,7 @@
  * 建厂草稿(蓝图 → 各能力 DRAFT) API client.
  *
  * 后端: BlueprintDraftCatalogController / BlueprintDraftProposalController / BlueprintDraftController
- *       @ /api/platform/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}/drafts
+ *       @ /api/platform/factory-assembly/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}/drafts
  *
  * 一条链:
  *   1. GET  {base}                               写入顺序 + 各能力入口是否开放(平台管理员也能读)
@@ -193,7 +193,7 @@ export type DraftMaterializeBody = Record<string, unknown> & {
 // ==================== 调用 ====================
 
 function base(factoryId: string, blueprintId: string) {
-  return `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/drafts`
+  return `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/drafts`
 }
 
 export function getDraftWriteOrder(factoryId: string, blueprintId: string) {

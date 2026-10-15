@@ -227,9 +227,11 @@ public class MaterialsDraftProposer implements CapabilityDraftProposer {
             labelSource = label == null ? null : "sourcePayload.suggestedData.workProcesses[*]."
                     + ("包材".equals(label) ? "packMaterials" : "auxMaterials") + "[name=" + name + "]";
         }
-        Category l1 = null;
+        Category l1 = currentCategory;
         String classificationReason;
-        if (label == null) {
+        if (currentCategory != null) {
+            classificationReason = null;
+        } else if (label == null) {
             classificationReason = !name.isEmpty() && roleConflicts.contains(name)
                     ? "这个物料在工序里既被列为辅料又被列为包材，无法判断分类"
                     : "建厂访谈没有给这个物料的分类，它也不在任何工序的辅料/包材清单里";

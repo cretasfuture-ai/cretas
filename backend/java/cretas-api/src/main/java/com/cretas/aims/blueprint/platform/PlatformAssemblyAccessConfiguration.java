@@ -45,8 +45,7 @@ public class PlatformAssemblyAccessConfiguration implements WebMvcConfigurer {
                 }
                 return true;
             }
-        }).addPathPatterns("/api/platform/factory-assembly/**",
-                "/api/platform/factories/*/ai-initialize/**").order(2);
+        }).addPathPatterns("/api/platform/factory-assembly/**").order(2);
     }
 
     void authorize(HttpServletRequest request) {

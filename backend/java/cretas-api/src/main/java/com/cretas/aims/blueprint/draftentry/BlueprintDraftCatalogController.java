@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
  */
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @RestController
-@RequestMapping("/api/platform/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}/drafts")
+@RequestMapping("/api/platform/factory-assembly/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}/drafts")
 public class BlueprintDraftCatalogController {
 
     public static final String SCHEMA_VERSION = "factory-blueprint-draft-write-order/v1";

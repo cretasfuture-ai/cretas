@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.*;
 /** The public request contains selections, never a client plan, actor, graph or permissions. */
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @RestController
-@RequestMapping("/api/platform/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}/formal-activation")
+@RequestMapping("/api/platform/factory-assembly/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}/formal-activation")
 public class FactoryAssemblyActivationController {
     private static final Set<String> SELECTION_FIELDS = Set.of("capabilityId", "configDraftId",
             "workflowDraftId", "bomDraftId", "criticalControlsDraftId");

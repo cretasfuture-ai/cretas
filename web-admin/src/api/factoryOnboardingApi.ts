@@ -508,7 +508,7 @@ type Envelope<T> = { success: boolean; data: T; message?: string }
 
 export function startFactoryBuildConversation(factoryId: string, forceRestart = false) {
   return request.post<unknown, Envelope<ConversationResponse>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse`,
     undefined,
     forceRestart ? { ...ABS, params: { forceRestart: true } } : ABS
   )
@@ -517,8 +517,7 @@ export function startFactoryBuildConversation(factoryId: string, forceRestart = 
 // ==================== 2. 回答 / 进度 ====================
 
 /**
- * 继续对话。走的是**已有**的通用会话路由 —— 后端 ConversationServiceImpl
- * 会自动分流到参数收集分支, 不需要建厂专用的 reply 端点。
+ * 继续平台建厂专用会话；与普通工厂的会话存储和回复入口隔离。
  */
 export function replyFactoryBuildConversation(
   factoryId: string,
@@ -527,7 +526,7 @@ export function replyFactoryBuildConversation(
   requestId: string
 ) {
   return request.post<unknown, Envelope<ConversationResponse>>(
-    `/api/mobile/${encodeURIComponent(factoryId)}/conversation/${encodeURIComponent(sessionId)}/reply`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}/reply`,
     { userReply, requestId },
     ABS
   )
@@ -535,7 +534,7 @@ export function replyFactoryBuildConversation(
 
 export function getFactoryBuildProgress(factoryId: string, sessionId: string) {
   return request.get<unknown, Envelope<FactoryBuildProgress>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}`,
     ABS
   )
 }
@@ -543,7 +542,7 @@ export function getFactoryBuildProgress(factoryId: string, sessionId: string) {
 /** Read-only recovery probe. It never creates, cancels or restarts a conversation. */
 export function getRecoverableFactoryBuildConversation(factoryId: string) {
   return request.get<unknown, Envelope<FactoryBuildProgress | null>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/recoverable`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/recoverable`,
     ABS
   )
 }
@@ -563,7 +562,7 @@ export function submitStructuredAnswers(
   answers: Record<string, string | string[]>
 ) {
   return request.post<unknown, Envelope<FactoryBuildProgress>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}/answers`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}/answers`,
     answers,
     ABS
   )
@@ -595,7 +594,7 @@ export interface InterviewDefaultsSection {
 
 export function getInterviewDefaults(factoryId: string) {
   return request.get<unknown, Envelope<InterviewDefaultsSection[]>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/interview-defaults`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/interview-defaults`,
     ABS
   )
 }
@@ -612,7 +611,7 @@ export function aiInitializeFactory(
   }
 ) {
   return request.post<unknown, Envelope<AIFactoryInitResult>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize`,
     payload,
     ABS
   )
@@ -642,7 +641,7 @@ export function previewAIInitializedConfig(
   payload: ApplyAIInitRequest
 ) {
   return request.post<unknown, Envelope<PlannedChange[]>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/preview`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/preview`,
     payload,
     ABS
   )
@@ -896,7 +895,7 @@ export function saveCanonicalFactoryBlueprintDraft(
   }
 ) {
   return request.post<unknown, Envelope<CanonicalFactoryBlueprint>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/draft`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/draft`,
     payload,
     ABS
   )
@@ -904,7 +903,7 @@ export function saveCanonicalFactoryBlueprintDraft(
 
 export function getCurrentCanonicalFactoryBlueprint(factoryId: string) {
   return request.get<unknown, Envelope<CanonicalFactoryBlueprint | null>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/current`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/current`,
     ABS
   )
 }
@@ -914,14 +913,14 @@ export function getCanonicalFactoryCapabilityCatalog(factoryId: string, catalogV
     ? `?catalogVersion=${encodeURIComponent(catalogVersion)}`
     : ''
   return request.get<unknown, Envelope<CanonicalCapabilityCatalog>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/catalog${versionQuery}`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/catalog${versionQuery}`,
     ABS
   )
 }
 
 export function getCanonicalFactoryBlueprintVersions(factoryId: string, blueprintId: string) {
   return request.get<unknown, Envelope<CanonicalFactoryBlueprintVersion[]>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/versions`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/versions`,
     ABS,
   )
 }
@@ -930,7 +929,7 @@ export function getCanonicalFactoryBlueprintVersion(
   factoryId: string, blueprintId: string, version: number,
 ) {
   return request.get<unknown, Envelope<CanonicalFactoryBlueprintVersionDetail>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/versions/${version}`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/versions/${version}`,
     ABS,
   )
 }
@@ -942,7 +941,7 @@ function canonicalBlueprintOperation(
   payload: CanonicalBlueprintOperationRequest
 ) {
   return request.post<unknown, Envelope<CanonicalFactoryBlueprint>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/${operation}`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/${operation}`,
     payload,
     ABS
   )
@@ -970,7 +969,7 @@ export function acceptCanonicalFactoryBlueprintCapabilities(
   payload: CanonicalBlueprintOperationRequest & { decisions: CanonicalCapabilityAcceptanceDecision[] },
 ) {
   return request.post<unknown, Envelope<CanonicalFactoryBlueprint>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/accept`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}/accept`,
     payload,
     ABS,
   )
@@ -985,7 +984,7 @@ export function applyAIInitializedConfig(
   payload: ApplyAIInitRequest
 ) {
   return request.post<unknown, Envelope<ApplyAIInitResult>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/apply`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/apply`,
     payload,
     ABS
   )
@@ -1145,7 +1144,7 @@ export interface FactoryBuildReview {
 
 export function getFactoryBuildReview(factoryId: string) {
   return request.get<unknown, Envelope<FactoryBuildReview>>(
-    `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/review`,
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/review`,
     ABS
   )
 }

@@ -34,7 +34,7 @@ class PlatformAssemblyAccessContractTest {
     }
 
     private MockHttpServletRequest bearer(String id, String role) {
-        var request = new MockHttpServletRequest("POST", "/api/platform/factories/NEW/ai-initialize/preview");
+        var request = new MockHttpServletRequest("POST", "/api/platform/factory-assembly/factories/NEW/ai-initialize/preview");
         String token = id.startsWith("platform_")
                 ? jwt.generatePlatformToken(Long.parseLong(id.substring(9)), "platform-test", role)
                 : jwt.generateToken(id, role);

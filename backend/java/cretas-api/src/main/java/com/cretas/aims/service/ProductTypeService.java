@@ -18,6 +18,9 @@ public interface ProductTypeService {
      * 创建产品类型
      */
     ProductTypeDTO createProductType(String factoryId, ProductTypeDTO dto);
+
+    ProductTypeDTO createProductTypeAsActor(String factoryId, ProductTypeDTO dto,
+                                           com.cretas.aims.security.ActorRef actor);
      /**
      * 更新产品类型
       */

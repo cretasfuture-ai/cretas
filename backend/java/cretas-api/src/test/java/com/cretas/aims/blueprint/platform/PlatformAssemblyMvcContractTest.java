@@ -36,10 +36,12 @@ class PlatformAssemblyMvcContractTest {
     @RestController
     static class Writes {
         final AtomicInteger calls = new AtomicInteger();
-        @PostMapping("/api/platform/factories/NEW/ai-initialize/preview")
+        @PostMapping("/api/platform/factory-assembly/factories/NEW/ai-initialize/preview")
         String platform() { calls.incrementAndGet(); return "platform"; }
         @GetMapping("/api/mobile/EXISTING/products")
         String ordinary() { return "ordinary"; }
+        @PostMapping("/api/platform/factories/EXISTING/ai-initialize")
+        String historicalPlatformPreview() { return "historical"; }
     }
 
     @RestControllerAdvice
@@ -70,7 +72,9 @@ class PlatformAssemblyMvcContractTest {
                     PlatformAssemblyAccessConfiguration.CapabilitiesController.class);
             context.refresh();
             MockMvc mvc = MockMvcBuilders.webAppContextSetup(context).build();
-            String endpoint = "/api/platform/factories/NEW/ai-initialize/preview";
+            mvc.perform(post("/api/platform/factories/EXISTING/ai-initialize"))
+                    .andExpect(status().isOk()).andExpect(content().string("historical"));
+            String endpoint = "/api/platform/factory-assembly/factories/NEW/ai-initialize/preview";
             String platform = "Bearer " + jwt.generatePlatformToken(62L, "platform-test", "super_admin");
             String factory = "Bearer " + jwt.generateToken("62", "factory_super_admin");
             mvc.perform(post(endpoint)).andExpect(status().isUnauthorized());

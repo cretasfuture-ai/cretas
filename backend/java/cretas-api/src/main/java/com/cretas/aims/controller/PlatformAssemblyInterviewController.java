@@ -77,7 +77,7 @@ import java.util.Set;
 @Slf4j
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @RestController
-@RequestMapping("/api/platform")
+@RequestMapping("/api/platform/factory-assembly")
 @Tag(name = "行业模板包", description = "行业模板包管理相关接口，包括模板包列表查询、详情获取、创建/更新/删除、设为默认、使用情况统计、工厂模板初始化等功能。用于平台管理员创建行业标准配置模板，工厂可快速导入使用")
 @Validated
 public class PlatformAssemblyInterviewController {
@@ -95,6 +95,9 @@ public class PlatformAssemblyInterviewController {
 
     @Autowired
     private JwtUtil jwtUtil;
+
+    @Autowired
+    private FactoryAssemblyConversationService assemblyConversations;
 
     /**
      * 能对这个工厂做建厂类操作的角色。
@@ -355,7 +358,7 @@ public class PlatformAssemblyInterviewController {
      *
      * ## 为什么需要这个端点
      *
-     * `POST /api/platform/factories/{id}/ai-initialize` **只生成不落库** —— 方法体里
+     * `POST /api/platform/factory-assembly/factories/{id}/ai-initialize` **只生成不落库** —— 方法体里
      * 一次写入调用都没有, 拿到 AI 结果直接构造响应返回。而唯一的落库路径
      * `initialize-templates` 只接**预制模板包 ID**, 接不了 AI 产出。
      * 于是「对话建厂」到生成为止就断了。
@@ -905,7 +908,7 @@ public class PlatformAssemblyInterviewController {
     @PostMapping("/factories/{factoryId}/ai-initialize/converse")
     @Operation(summary = "开始对话建厂",
                description = "开一个多轮参数收集会话, 逐项问齐建厂所需信息。"
-                           + "回复走 /api/mobile/{factoryId}/conversation/{sessionId}/reply")
+                           + "回复使用平台建厂专用会话接口")
     public ApiResponse<FactoryAssemblyConversationService.ConversationResponse> startFactoryBuildConversation(
             @PathVariable @Parameter(description = "目标工厂ID") String factoryId,
             @RequestParam(defaultValue = "false")
@@ -916,6 +919,20 @@ public class PlatformAssemblyInterviewController {
         ConversationActor actor = conversationActorOf(httpRequest);
         return ApiResponse.success(
                 interviewService.startFactoryBuildConversation(factoryId, actor, forceRestart));
+    }
+
+    public record FactoryBuildReplyRequest(
+            @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 10000) String userReply,
+            @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 100) String requestId) { }
+
+    @PostMapping("/factories/{factoryId}/ai-initialize/converse/{sessionId}/reply")
+    public ApiResponse<FactoryAssemblyConversationService.ConversationResponse> replyFactoryBuildConversation(
+            @PathVariable String factoryId, @PathVariable String sessionId,
+            @jakarta.validation.Valid @RequestBody FactoryBuildReplyRequest reply,
+            HttpServletRequest request) {
+        requireBuildAccess(factoryId, request, "回复建厂访谈");
+        return ApiResponse.success(assemblyConversations.continueConversation(factoryId,
+                conversationActorOf(request), sessionId, reply.userReply(), reply.requestId()));
     }
 
     /**

@@ -2,7 +2,7 @@
  * 建厂草稿「转正」API client: 把一份已写入的主数据草稿(产品 / 物料 / 工序)新建为正式数据。
  *
  * 后端: MasterDataDraftPromotionController
- *       @ /api/platform/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}
+ *       @ /api/platform/factory-assembly/factories/{factoryId}/ai-initialize/blueprints/{blueprintId}
  *
  *   POST drafts/{capabilityId}/{draftId}/promotion/preview   预览(只读), 拿 promotionPreviewDigest
  *   POST drafts/{capabilityId}/{draftId}/promotion           确认转正(只新建正式数据, 草稿行不变)
@@ -88,7 +88,7 @@ export interface PromotionList {
 }
 
 function base(factoryId: string, blueprintId: string) {
-  return `/api/platform/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}`
+  return `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/blueprints/${encodeURIComponent(blueprintId)}`
 }
 
 function draftPath(factoryId: string, blueprintId: string, capabilityId: string, draftId: string) {

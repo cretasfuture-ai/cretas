@@ -28,7 +28,7 @@ import java.util.List;
  */
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @RestController
-@RequestMapping("/api/platform/factories/{factoryId}/ai-initialize/blueprints")
+@RequestMapping("/api/platform/factory-assembly/factories/{factoryId}/ai-initialize/blueprints")
 @RequiredArgsConstructor
 public class CanonicalFactoryBlueprintController {
 
