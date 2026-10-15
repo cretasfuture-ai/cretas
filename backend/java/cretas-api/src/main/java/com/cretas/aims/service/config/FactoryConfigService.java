@@ -4,6 +4,7 @@ import com.cretas.aims.dto.config.*;
 
 import java.util.List;
 import java.util.Map;
+import com.cretas.aims.security.ActorRef;
 
 public interface FactoryConfigService {
 
@@ -29,11 +30,17 @@ public interface FactoryConfigService {
     // ========== 配置写操作 ==========
     void saveModuleConfig(String factoryId, String moduleCode, ModuleConfigDTO config, Long operatorId);
     void toggleModule(String factoryId, String moduleCode, boolean enabled, Long operatorId);
+    default void toggleModuleByActor(String factoryId, String moduleCode, boolean enabled, ActorRef actor) {
+        toggleModule(factoryId, moduleCode, enabled, actor.factoryUserId());
+    }
     void updateFieldConfig(String factoryId, String moduleCode, String fieldCode,
                            FieldConfigDTO fieldConfig, Long operatorId);
 
     // ========== 发布与版本 ==========
     void publishConfig(String factoryId, Long operatorId, String changeSummary);
+    default void publishConfigByActor(String factoryId, ActorRef actor, String changeSummary) {
+        publishConfig(factoryId, actor.factoryUserId(), changeSummary);
+    }
     void rollbackConfig(String factoryId, int targetVersion, Long operatorId);
 
     // ========== 模板 ==========
@@ -69,4 +76,6 @@ public interface FactoryConfigService {
     Map<String, Object> reorderFields(String factoryId, String moduleCode,
                                        List<String> fieldOrder, Long expectedVersion,
                                        Long operatorId);
+
+    ModuleGateStatus describeModuleGate(String factoryId);
 }

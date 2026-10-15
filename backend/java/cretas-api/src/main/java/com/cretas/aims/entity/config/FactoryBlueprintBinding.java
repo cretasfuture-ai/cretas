@@ -51,8 +51,15 @@ public class FactoryBlueprintBinding extends BaseEntity {
     /**
      * 当前应用的蓝图版本
      */
-    @Column(name = "applied_version", nullable = false)
+    @Column(name = "applied_version")
     private Integer appliedVersion;
+
+    @Column(name = "published_version")
+    private Integer publishedVersion;
+
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private Long rowVersion;
 
     /**
      * 最新可用版本 (蓝图当前版本)

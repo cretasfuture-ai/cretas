@@ -97,8 +97,8 @@ public class FactoryBlueprintServiceImpl implements FactoryBlueprintService {
     public FactoryTypeBlueprint updateBlueprint(String id, CreateBlueprintRequest request) {
         log.info("更新蓝图: {}", id);
 
+        FactoryTypeBlueprint blueprint = getBlueprintById(id);
         try {
-            FactoryTypeBlueprint blueprint = getBlueprintById(id);
             blueprint.setName(request.getName());
             blueprint.setDescription(request.getDescription());
             blueprint.setIndustryType(request.getIndustryType());
@@ -280,8 +280,8 @@ public class FactoryBlueprintServiceImpl implements FactoryBlueprintService {
     public List<BlueprintApplicationResult> getFactoryApplicationHistory(String factoryId) {
         List<BlueprintApplication> applications = applicationRepository.findByFactoryIdAndDeletedAtIsNull(factoryId);
 
-        return applications.stream().map(app -> {
-            FactoryTypeBlueprint blueprint = blueprintRepository.findById(app.getBlueprintId()).orElse(null);
+        return applications.stream().filter(app -> app.getOperationType() == null).map(app -> {
+            FactoryTypeBlueprint blueprint = blueprintRepository.findByIdAndDeletedAtIsNull(app.getBlueprintId()).orElse(null);
 
             return BlueprintApplicationResult.builder()
                     .applicationId(app.getId())

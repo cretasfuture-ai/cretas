@@ -56,6 +56,11 @@ public interface BomRecipeService {
     /** 激活草稿: DRAFT → ACTIVE, 同产品其他 is_current=TRUE 的版本设为 FALSE. */
     BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId);
 
+    default BomRecipe activateRecipeAsActor(String factoryId, String recipeId,
+                                             com.cretas.aims.security.ActorRef actor) {
+        throw new UnsupportedOperationException("Typed BOM activation is required");
+    }
+
     /**
      * 发布链路专用: 带 {@code publishingWorkflowId} 激活一份(及其 family), 让「所钉工艺必须已启用」的 lineage 闸
      * 对正在发布的那个 workflow 放行。实现类早有此方法, 2026-09-02 收编 DRAFT family 时才需要从接口调它。
@@ -92,6 +97,10 @@ public interface BomRecipeService {
 
     /** 取详情 (含 items). */
     BomRecipe getRecipe(String factoryId, String recipeId);
+
+    Optional<BomRecipe> findOwnedRecipe(String factoryId, String recipeId);
+
+    List<BomRecipeItem> getRecipeItems(String factoryId, String recipeId);
 
     /** 取产品当前生效 BOM (status=ACTIVE + is_current=TRUE). */
     Optional<BomRecipe> getCurrentRecipe(String factoryId, String productTypeId);

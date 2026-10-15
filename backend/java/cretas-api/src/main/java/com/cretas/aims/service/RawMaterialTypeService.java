@@ -21,6 +21,8 @@ public interface RawMaterialTypeService {
      * 创建原材料类型
      */
     RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto);
+    RawMaterialTypeDTO createMaterialTypeAsActor(String factoryId, RawMaterialTypeDTO dto,
+                                               com.cretas.aims.security.ActorRef actor);
      /**
      * 更新原材料类型
       */

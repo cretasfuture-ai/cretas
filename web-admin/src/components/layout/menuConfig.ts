@@ -17,11 +17,14 @@ export interface MenuItem {
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
   groupLabel?: string;
+  /** Backend-authoritative feature gate for platform-only assembly surfaces. */
+  assemblyFeature?: boolean;
   /** 真实待办计数 key。接口失败时隐藏，不允许用 0 伪装成功。 */
   badgeKey?: import('@/store/modules/taskBadges').TaskBadgeKey;
 }
 
 const PLATFORM_ADMIN_ONLY = ['platform_admin'];
+const FACTORY_ASSEMBLY_ROLES = ['platform_admin'];
 const RESTAURANT_ADMIN_ROLES = ['factory_super_admin', 'platform_admin', 'permission_admin'];
 const RESTAURANT_ANALYTICS_ALL = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_ALL_ROLES];
 const RESTAURANT_ANALYTICS_DECISION = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_DECISION_ROLES];
@@ -485,7 +488,11 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['RESTAURANT'] },
       // 餐饮 Phase A A-3 Task 3.5: data quality queue admin page
       { path: '/system/data-quality-queue', title: '数据质量队列', icon: '', module: 'system',
-        roles: PLATFORM_ADMIN_ONLY }
+        roles: PLATFORM_ADMIN_ONLY },
+      { path: '/factory-onboarding', title: '对话建厂', icon: 'ChatDotRound', module: 'system',
+        roles: FACTORY_ASSEMBLY_ROLES, assemblyFeature: true, groupLabel: '平台建厂' },
+      { path: '/factory-review', title: '建厂复核', icon: 'DocumentChecked', module: 'system',
+        roles: FACTORY_ASSEMBLY_ROLES, assemblyFeature: true },
     ]
   },
   {

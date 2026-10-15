@@ -1,0 +1,165 @@
+package com.cretas.aims.blueprint.interview;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 把访谈第 {@code productSkus} 题(「卖出去的成品有哪几种规格?」)的自由文本里的
+ * <b>包装换算</b>解析成结构化的三元组。
+ *
+ * <p>为什么要有它: 2026-08-12 实测, 客户答的「带鱼段按斤卖，一箱20斤」会被
+ * {@code assembleDescription} 原样溶进 factoryDescription 的一行自由文本里,
+ * 而生成端的 productTypes schema 里根本没有 level1Unit / boxConversionCoefficient 两个位置 ——
+ * 于是这句话从头到尾没有任何一层把它变成换算边, 落库后
+ * {@code product_unit_conversions} 是空的。这个类负责在<b>喂给模型之前</b>先把它
+ * 摆成「1 箱 = 20 斤」的样子, 让模型只需要做「哪个产品」的绑定, 不必再从散文里抠数字。
+ *
+ * <h3>⛔ 三条自律</h3>
+ * <ol>
+ *   <li><b>不认识就不输出</b>。单位是不是单位<b>问权威表</b>(传进来的 normalizer),
+ *       ⛔ 不在这里自建单位词表 —— 仓里已经因为「私有别名表影子化权威表」栽过。
+ *       「一箱20大袋」解析不出来就当没有, 不猜。</li>
+ *   <li><b>方向写死</b>: {@code 1 个 level1Unit = coefficient 个 unit}。反了是 N 倍的错。</li>
+ *   <li><b>只解析, 不绑定产品</b>。产品名只当 hint 传下去 —— 一段话里哪个规格属于
+ *       哪个 SKU 是语义活, 交给模型; 这里硬猜只会造出「看起来很准的错配」。</li>
+ * </ol>
+ */
+public final class SkuPackagingSpecParser {
+
+    /**
+     * 「一箱20斤」这一形。
+     *
+     * <p>必须以数量词开头(一/每/1) —— 否则「按斤卖20件」这种也会被当成包装规格。
+     * 两端的单位写法都限制在 1~4 个汉字/字母, 且最终要过权威表那一关。
+     */
+    private static final Pattern PACKAGING = Pattern.compile(
+            "[一每1１]\\s*(?<l1>[\\p{IsHan}A-Za-z]{1,4}?)\\s*(?:装|有|=|＝|是|为|:|：)?\\s*"
+                    + "(?<n>\\d+(?:\\.\\d+)?)\\s*(?<u>[\\p{IsHan}A-Za-z]{1,4})");
+
+    /** 「带鱼段按斤卖」→「带鱼段」 */
+    private static final Pattern SELLS_BY = Pattern.compile("按[^，,]{0,6}?卖$");
+
+    private SkuPackagingSpecParser() {
+    }
+
+    /**
+     * @param productHint  这条规格前面那段文字(通常是产品名); 抠不出来就是 null
+     * @param level1Unit   一级(包装)单位<b>原文</b>, 如「箱」
+     * @param level1Code   归一后的码, 如 {@code case}
+     * @param coefficient  1 个 level1Unit = 几个 unit
+     * @param unit         计量单位原文, 如「斤」
+     * @param unitCode     归一后的码, 如 {@code jin}
+     */
+    public record Spec(
+            String productHint,
+            String level1Unit,
+            String level1Code,
+            BigDecimal coefficient,
+            String unit,
+            String unitCode) {
+    }
+
+    /**
+     * @param answer     {@code productSkus} 的原文
+     * @param normalizer 原文单位 → 权威码; 认不出来返回 null。⛔ 唯一的单位判据来源
+     */
+    public static List<Spec> parse(String answer, Function<String, String> normalizer) {
+        List<Spec> out = new ArrayList<>();
+        if (answer == null || answer.isBlank() || normalizer == null) {
+            return out;
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        for (String clause : answer.split("[；;。\\r\\n]")) {
+            if (clause.isBlank()) {
+                continue;
+            }
+            Matcher m = PACKAGING.matcher(clause);
+            int previousEnd = 0;
+            while (m.find()) {
+                String level1 = m.group("l1");
+                String unit = m.group("u");
+                BigDecimal coefficient = new BigDecimal(m.group("n"));
+                String level1Code = normalizer.apply(level1);
+                String unitCode = normalizer.apply(unit);
+                // 认不出、方向自指、系数非正 —— 三种都直接当没解析到, ⛔ 不猜也不补
+                if (level1Code == null || unitCode == null
+                        || level1Code.equals(unitCode)
+                        || coefficient.signum() <= 0) {
+                    previousEnd = m.end();
+                    continue;
+                }
+                String hint = productHint(clause.substring(previousEnd, m.start()));
+                if (seen.add(hint + "\0" + level1Code + "\0"
+                        + coefficient.stripTrailingZeros().toPlainString() + "\0" + unitCode)) {
+                    out.add(new Spec(hint, level1, level1Code, coefficient, unit, unitCode));
+                }
+                previousEnd = m.end();
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 渲染成喂给生成端的一段 —— ⛔ 解析不出来就返回空串, <b>一个字都不加</b>。
+     *
+     * <p>放在这里而不是 controller 里, 是为了这段文字本身可以被断言:
+     * 「模型看到的到底是什么」是这条链上最容易悄悄变空的一环。
+     */
+    public static String renderSection(List<Spec> specs) {
+        if (specs == null || specs.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("\n\n成品包装规格（已从「成品规格」那一答里解析出来）：\n");
+        for (Spec s : specs) {
+            sb.append("  - ");
+            if (s.productHint() != null) {
+                sb.append(s.productHint()).append("：");
+            }
+            sb.append("1 ").append(s.level1Unit()).append(" = ")
+              .append(s.coefficient().stripTrailingZeros().toPlainString())
+              .append(" ").append(s.unit()).append("\n");
+        }
+        sb.append("⛔ 上面每一条都要落到对应产品的 level1Unit / boxConversionCoefficient / unit 三个字段上，")
+          .append("方向就是「1 个 level1Unit = boxConversionCoefficient 个 unit」，不许反。\n")
+          // ⛔ 2026-08-12 A/B 实测逼出来的一句。只说「落到那三个字段」不够 ——
+          //    模型会**额外**再往 conversionRates 里写一份, 而且为了凑 toCode
+          //    凭空造出 SPICY_BEEF_BOX 这类不存在的码。校验器逐条比对
+          //    (fromCode 要在 materialTypes、toCode 要在 productTypes), 于是
+          //    「9 处不合规」→ 整次 apply 400, **一行都不写**。
+          //    A/B 对照(同一份描述, 只差这一段):
+          //      A 不加这一段 -> conversionRates 0 条, 三个字段 5/5 正确, apply 200
+          //      B 加了但没这句禁令 -> conversionRates 5 条**全是编的**, apply 400
+          //    判据: 给模型的指令说「要做 X」还不够, 它可能**顺手把 X 也做到别处去**。
+          //          能造成整次失败的那个「别处」必须点名禁止。
+          .append("⛔ 不要把这些写进 conversionRates —— 那张表是**原料之间**的换算")
+          .append("（fromCode 必须是 materialTypes 里已有的码）。产品的包装层级只走上面那三个字段；")
+          .append("写进 conversionRates 会因为找不到对应的码而导致整次落库失败。\n");
+        return sb.toString();
+    }
+
+    private static String productHint(String before) {
+        if (before == null) {
+            return null;
+        }
+        String text = before.trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        // 「带鱼段按斤卖，」→ 取第一个分隔符之前 →「带鱼段按斤卖」→ 去掉「按…卖」
+        // Java's default split discards trailing empty segments. A separator-only
+        // bridge between two package specs (for example the comma in
+        // "每袋200g，一箱20袋") therefore produces a zero-length array. Keep the
+        // empty segment so a missing product hint remains null instead of making
+        // progress rendering fail after the interview has already accepted it.
+        String head = text.split("[，,、]", -1)[0].trim();
+        head = SELLS_BY.matcher(head).replaceAll("").trim();
+        head = head.replaceAll("^[的和与及]+|[:：的]+$", "").trim();
+        return head.isEmpty() ? null : head;
+    }
+}

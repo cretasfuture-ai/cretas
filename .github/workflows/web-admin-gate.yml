@@ -21,6 +21,7 @@ on:
       - main
     paths:
       - 'web-admin/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/blueprint/interview/InterviewDefaults.java'
       - '.github/workflows/web-admin-gate.yml'
       # 🔴 2026-08-14: unitDisplayContract.spec.ts 直接读**后端**权威表源码比对
       # (backend/.../UnitContractServiceImpl.java), 它的文档写着「后端加了新单位而前端
@@ -113,6 +114,7 @@ on:
   pull_request:
     paths:
       - 'web-admin/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/blueprint/interview/InterviewDefaults.java'
       - '.github/workflows/web-admin-gate.yml'
       # 🔴 2026-08-14: unitDisplayContract.spec.ts 直接读**后端**权威表源码比对
       # (backend/.../UnitContractServiceImpl.java), 它的文档写着「后端加了新单位而前端

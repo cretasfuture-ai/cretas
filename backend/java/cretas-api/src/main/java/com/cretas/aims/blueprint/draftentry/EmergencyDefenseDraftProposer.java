@@ -1,0 +1,21 @@
+package com.cretas.aims.blueprint.draftentry;
+import com.cretas.aims.entity.alertpolicydraft.AlertPolicyDraft;
+import com.cretas.aims.entity.tracerecalldraft.TraceRecallPlanDraft;
+import com.cretas.aims.repository.alertpolicydraft.AlertPolicyDraftRepository;
+import com.cretas.aims.repository.tracerecalldraft.TraceRecallPlanDraftRepository;
+import com.cretas.aims.service.emergencydefensedraft.EmergencyDefensePlanDraftCommand;
+import com.cretas.aims.service.emergencydefensedraft.EmergencyDefensePlanDraftModels.*;
+import org.springframework.data.domain.*;
+import org.springframework.stereotype.Component;
+import java.util.*;
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
+@Component public class EmergencyDefenseDraftProposer implements CapabilityDraftProposer {
+ private static final String WHY="蓝图没有应急场景、影响等级、隔离动作、责任、证据与演练频率的完整事实";
+ private static <E extends Enum<E>> List<Option> opts(Class<E> c){return Arrays.stream(c.getEnumConstants()).map(e->new Option(e.name(),e.name())).toList();}
+ private static <E extends Enum<E>> String ec(Class<E> c){return Arrays.stream(c.getEnumConstants()).map(Enum::name).collect(java.util.stream.Collectors.joining("、"))+" 之一";}
+ private static List<RequiredInput> fields(){return List.of(RequiredInput.text("planCode","计划编码",WHY,"最长 64 位",64),RequiredInput.text("title","标题",WHY,"最长 200 位",200),RequiredInput.oneOf("scenarioType","场景",WHY,ec(ScenarioType.class),opts(ScenarioType.class)),RequiredInput.oneOf("impactTier","影响等级",WHY,ec(ImpactTier.class),opts(ImpactTier.class)),RequiredInput.text("detectionAlertPolicyCode","告警策略",WHY,"最长 128 位",128),RequiredInput.text("traceRecallSegmentKey","追溯片段",WHY,"最长 200 位",200).allowNull(),RequiredInput.values("containmentActions","隔离动作",WHY,"至少 1 项","动作",1,10,RequiredInput.oneOf("action","动作",WHY,ec(ContainmentAction.class),opts(ContainmentAction.class))),RequiredInput.oneOf("responsibleRole","责任角色",WHY,ec(ResponsibleRole.class),opts(ResponsibleRole.class)),RequiredInput.values("requiredEvidence","证据",WHY,"至少 1 项","证据",1,10,RequiredInput.oneOf("evidence","证据",WHY,ec(EvidenceType.class),opts(EvidenceType.class))),RequiredInput.integer("drillFrequencyDays","演练周期",WHY,"1–3650",1,3650).allowNull(),RequiredInput.text("changeReason","变更原因",WHY,"1–500 字",500));}
+ private final TraceRecallPlanDraftRepository traces; private final AlertPolicyDraftRepository alerts;
+ public EmergencyDefenseDraftProposer(TraceRecallPlanDraftRepository t,AlertPolicyDraftRepository a){traces=t;alerts=a;}
+ public String capabilityId(){return EmergencyDefensePlanDraftCommand.CAPABILITY_ID;}
+ public Proposed propose(Source s){var tr=traces.findAll(Example.of(new TraceRecallPlanDraft()),Sort.by(Sort.Direction.DESC,"createdAt")).stream().filter(x->s.factoryId().equals(x.getFactoryId())&&s.blueprint().getId().equals(x.getBlueprintId())&&s.blueprint().getVersion().longValue()==x.getBlueprintVersion()&&s.sourceDigest().equals(x.getSourceDigest())&&"DRAFT".equals(x.getStatus())&&x.getDesiredDigest()!=null&&x.getDesiredDigest().matches("[0-9a-f]{64}")).findFirst().orElse(null);var al=alerts.findAll(Example.of(new AlertPolicyDraft()),Sort.by(Sort.Direction.DESC,"createdAt")).stream().filter(x->s.factoryId().equals(x.getFactoryId())&&s.blueprint().getId().equals(x.getBlueprintId())&&s.blueprint().getVersion().longValue()==x.getBlueprintVersion()&&s.sourceDigest().equals(x.getSourceDigest())&&"DRAFT".equals(x.getStatus())&&x.getDesiredDigest()!=null&&x.getDesiredDigest().matches("[0-9a-f]{64}")).findFirst().orElse(null);if(tr==null||al==null)return Proposed.blocked("UPSTREAM_MISSING","应急防御必须绑定同版本追溯召回和告警策略草稿","先完成追溯召回和告警策略草稿");var req=new DraftRequest(s.factoryId(),s.blueprint().getId(),s.blueprint().getVersion(),s.sourceDigest(),new TraceRecallPin(tr.getId(),tr.getDesiredDigest()),new AlertPolicyPin(al.getId(),al.getDesiredDigest()),List.of(),null,null,0);return Proposed.single(capabilityId(),"应急防御计划",req,List.of(RequiredInput.list("plans","应急计划",WHY,"至少 1 条","计划",1,100,fields())),List.of());}
+}

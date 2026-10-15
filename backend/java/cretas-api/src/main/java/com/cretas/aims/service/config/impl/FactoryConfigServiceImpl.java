@@ -10,6 +10,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.auth.UserMenuPermissionRepository;
 import com.cretas.aims.repository.config.*;
 import com.cretas.aims.service.config.FactoryConfigService;
+import com.cretas.aims.service.config.ModuleGateStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,11 +20,18 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
 
 @Slf4j
 @Service("canvasFactoryConfigService")
 @RequiredArgsConstructor
 public class FactoryConfigServiceImpl implements FactoryConfigService {
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AssemblyActivationActorResolver actorResolver;
+
+    private transient ThreadLocal<ActorRef> typedActor = ThreadLocal.withInitial(() -> null);
 
     private final ModuleSchemaRepository moduleSchemaRepository;
     private final FactoryConfigurationRepository factoryConfigurationRepository;
@@ -373,6 +381,16 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
 
     @Override
     @Transactional
+    public void toggleModuleByActor(String factoryId, String moduleCode, boolean enabled, ActorRef actor) {
+        if (actor == null) throw new IllegalArgumentException("actor is required");
+        requireTypedAuthority(factoryId, actor);
+        typedActor.set(actor);
+        try { toggleModule(factoryId, moduleCode, enabled, actor.factoryUserId()); }
+        finally { typedActor.remove(); }
+    }
+
+    @Override
+    @Transactional
     public void updateFieldConfig(String factoryId, String moduleCode, String fieldCode,
                                   FieldConfigDTO fieldConfig, Long operatorId) {
         moduleSchemaRepository.findByModuleCode(moduleCode)
@@ -432,6 +450,8 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
         draft.setStatus("PUBLISHED");
         draft.setPublishedAt(LocalDateTime.now());
         draft.setPublishedBy(operatorId);
+        ActorRef actor = typedActor.get();
+        if (actor != null) draft.setPublishedActor(actor);
         draft.setChangeSummary(changeSummary);
         factoryConfigurationRepository.save(draft);
 
@@ -451,6 +471,16 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
         }
 
         log.info("工厂 {} 配置版本 {} 已发布", factoryId, draft.getConfigVersion());
+    }
+
+    @Override
+    @Transactional
+    public void publishConfigByActor(String factoryId, ActorRef actor, String changeSummary) {
+        if (actor == null) throw new IllegalArgumentException("actor is required");
+        requireTypedAuthority(factoryId, actor);
+        typedActor.set(actor);
+        try { publishConfig(factoryId, actor.factoryUserId(), changeSummary); }
+        finally { typedActor.remove(); }
     }
 
     @Override
@@ -1032,6 +1062,8 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
                     draft.setConfigVersion(getNextVersion(factoryId));
                     draft.setStatus("DRAFT");
                     draft.setCreatedBy(operatorId);
+                    ActorRef actor = typedActor.get();
+                    if (actor != null) draft.setCreatedActor(actor);
                     FactoryConfiguration saved = factoryConfigurationRepository.save(draft);
 
                     // 从上个 published 版本 copy 所有 module configs 到新 draft
@@ -1285,10 +1317,73 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
                 .beforeValue(before)
                 .afterValue(after)
                 .diffSummary(summary)
-                .operatorId(operatorId)
-                .operatorType("USER")
+                .operatorId(typedActor.get() == null ? operatorId : typedActor.get().id())
+                .operatorType(typedActor.get() == null ? "USER" : typedActor.get().type().name())
                 .build();
         configChangeLogRepository.save(changeLog);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ModuleGateStatus describeModuleGate(String factoryId) {
+        Optional<FactoryConfiguration> published = factoryConfigurationRepository.findLatestPublished(factoryId);
+        String pending = pendingWorkflowStatus(factoryId);
+        if (published.isEmpty()) {
+            List<String> disabled = disabledModuleCodesInUnpublishedDraft(factoryId);
+            if (!disabled.isEmpty()) {
+                return new ModuleGateStatus(false, ModuleGateStatus.Reason.PENDING_PUBLISH,
+                        "模块已关闭但配置尚未发布: " + String.join(", ", disabled),
+                        null, 0, List.of(), pending, disabled);
+            }
+            return new ModuleGateStatus(false, ModuleGateStatus.Reason.NO_PUBLISHED_CONFIG,
+                    "本厂没有已发布配置版本，工厂级模块开关当前不生效。",
+                    null, 0, List.of(), pending, List.of());
+        }
+        int version = published.get().getConfigVersion();
+        List<FactoryModuleConfig> rows = factoryModuleConfigRepository.findAll().stream()
+                .filter(r -> factoryId.equals(r.getFactoryId())).toList();
+        int current = 0;
+        List<String> stale = new ArrayList<>();
+        for (FactoryModuleConfig row : rows) {
+            if (Objects.equals(row.getConfigVersion(), version)) current++;
+            else stale.add(row.getModuleCode());
+        }
+        stale = stale.stream().distinct().sorted().toList();
+        if (current > 0) return new ModuleGateStatus(true, ModuleGateStatus.Reason.EFFECTIVE,
+                "工厂级模块开关生效中", version, current, stale, null, List.of());
+        if (!stale.isEmpty()) return new ModuleGateStatus(false,
+                ModuleGateStatus.Reason.MODULE_ROWS_ON_STALE_VERSION,
+                "模块开关行与已发布版本不一致", version, 0, stale, null, List.of());
+        return new ModuleGateStatus(false, ModuleGateStatus.Reason.NO_MODULE_ROWS_AT_PUBLISHED_VERSION,
+                "已发布配置没有模块开关行", version, 0, List.of(), null, List.of());
+    }
+
+    private List<String> disabledModuleCodesInUnpublishedDraft(String factoryId) {
+        Set<Integer> versions = new HashSet<>();
+        factoryConfigurationRepository.findDraft(factoryId).ifPresent(c -> versions.add(c.getConfigVersion()));
+        factoryConfigurationRepository.findLatestPending(factoryId).ifPresent(c -> versions.add(c.getConfigVersion()));
+        factoryConfigurationRepository.findLatestApproved(factoryId).ifPresent(c -> versions.add(c.getConfigVersion()));
+        if (versions.isEmpty()) return List.of();
+        return factoryModuleConfigRepository.findAll().stream()
+                .filter(r -> factoryId.equals(r.getFactoryId()) && versions.contains(r.getConfigVersion()))
+                .filter(r -> Boolean.FALSE.equals(r.getEnabled()))
+                .map(FactoryModuleConfig::getModuleCode).filter(Objects::nonNull).distinct().sorted().toList();
+    }
+
+    private String pendingWorkflowStatus(String factoryId) {
+        if (factoryConfigurationRepository.findLatestApproved(factoryId).isPresent()) return "APPROVED";
+        if (factoryConfigurationRepository.findLatestPending(factoryId).isPresent()) return "PENDING_REVIEW";
+        if (factoryConfigurationRepository.findDraft(factoryId).isPresent()) return "DRAFT";
+        return null;
+    }
+
+    private void requireTypedAuthority(String factoryId, ActorRef actor) {
+        if (actorResolver == null) {
+            throw new BusinessException(403, "平台建厂配置应用服务未启用")
+                    .withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
+        }
+        actorResolver.authorize(actor, factoryId,
+                Set.of("factory-blueprint:activation:modules"));
     }
 
     @Override
