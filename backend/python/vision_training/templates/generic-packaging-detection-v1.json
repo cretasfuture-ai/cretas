@@ -1,0 +1,11 @@
+{
+  "template_id": "generic-packaging-detection",
+  "version": "v1",
+  "task_family": "packaging-detection",
+  "title": "Generic packaging detection",
+  "scope": "generic",
+  "required_fields": ["factory_id", "workstation_id", "task_family", "product_scope", "packaging_scope", "data_version", "recipe_version", "human_standard_version", "independent_acceptance_version"],
+  "required_receipts": ["dataset", "model", "evaluation"],
+  "human_standard": "human-reviewed labels with an immutable source manifest",
+  "independent_acceptance": "factory-owned holdout with a separate acceptance receipt"
+}

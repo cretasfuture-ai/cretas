@@ -1,0 +1,12 @@
+{
+  "template_id": "liushanmen-tray",
+  "version": "v1",
+  "task_family": "liushanmen-tray-label-detection",
+  "title": "六膳门 tray label adapter",
+  "scope": "specialized",
+  "adapter_id": "liushanmen-visionlab-v1",
+  "required_fields": ["factory_id", "workstation_id", "task_family", "product_scope", "packaging_scope", "data_version", "recipe_version", "human_standard_version", "independent_acceptance_version"],
+  "required_receipts": ["dataset", "model", "evaluation"],
+  "human_standard": "the existing VisionLab human-reviewed receipt contract",
+  "independent_acceptance": "the existing VisionLab protected holdout and independent normal-set gates"
+}

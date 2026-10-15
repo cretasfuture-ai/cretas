@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
+import java.util.Objects;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -30,9 +31,7 @@ import java.util.List;
  * <p>核心职责: 按 {@link Indicator#getComputeStrategy()} 字段分支选择计算路径:
  * REALTIME / PRECOMPUTED / CACHED. 见 {@link #computeForCode}.
  *
- * <p>Phase 2B Python 端点真实接入前，{@link PythonSmartBIClient#fetchIndicatorValue} 为 stub
- * 返 {@link BigDecimal#ZERO}; 本 Service 不感知 stub vs 真实 — 调用方约定后续 Phase 2B 替换 stub
- * 时本 Service 不需改动。
+ * <p>JPA_AGGREGATE 使用已登记业务策略。Python 指标桥接未实现时显式失败，不能产生业务零。
  *
  * <p>每次 fetch Python (cached 过期 / realtime) 会落 {@link IndicatorVersion} 快照，
  * 用于历史趋势分析。precomputed 不落 version (由 scheduler 维护已经写过).
@@ -110,23 +109,25 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
     IndicatorValueResult computeRealtime(Indicator ind, String factoryId,
                                           LocalDate start, LocalDate end) {
         FetchOutcome outcome = fetchFromPython(ind, factoryId, start, end);
-        LocalDateTime computedAt = LocalDateTime.now();
-        if (outcome.value() != null) {
+        LocalDateTime computedAt = computedAtFor(outcome);
+        if (IndicatorValueResult.AVAILABLE.equals(outcome.status())) {
             saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
         }
-        return new IndicatorValueResult(outcome.value(), computedAt, false, "python");
+        return toResult(outcome, computedAt, false);
     }
 
     /**
      * PRECOMPUTED — 直接返 lastValue (Phase 2C scheduler 维护). 不调 Python 不落 version.
-     * 如果 lastValue 为 null (scheduler 还没跑过), 返 ZERO 而不是抛错 — 让前端展示 "—".
+     * 如果 lastValue 为 null (scheduler 还没跑过), 保持 null 和真实的计算时间，
+     * 让前端展示 "—" 而不是伪造 0 或当前时间.
      */
     IndicatorValueResult computePrecomputed(Indicator ind) {
-        BigDecimal value = ind.getLastValue() != null ? ind.getLastValue() : BigDecimal.ZERO;
-        LocalDateTime computedAt = ind.getLastComputedAt() != null
-                ? ind.getLastComputedAt()
-                : LocalDateTime.now();
-        return new IndicatorValueResult(value, computedAt, true, "precomputed");
+        BigDecimal value = ind.getLastValue();
+        LocalDateTime computedAt = ind.getLastComputedAt();
+        String status = value != null
+                ? IndicatorValueResult.AVAILABLE
+                : (computedAt == null ? IndicatorValueResult.NOT_COMPUTED : IndicatorValueResult.NO_DATA);
+        return new IndicatorValueResult(value, computedAt, true, "precomputed", status);
     }
 
     /**
@@ -144,37 +145,82 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         boolean withinTtl = lastComputed != null && ttl != null &&
                 lastComputed.isAfter(LocalDateTime.now().minusSeconds(ttl));
         if (lastValue != null && withinTtl) {
-            return new IndicatorValueResult(lastValue, lastComputed, true, "cache");
+            List<IndicatorComputation> configured = indicatorComputationRepository
+                    .findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(ind.getId());
+            String type = configured.isEmpty() ? "" : configured.get(0).getComputeType();
+            String source;
+            if ("JPA_AGGREGATE".equals(type)) {
+                source = "REAL_BUSINESS:" + ind.getCode();
+                if (strategyRegistry.find(ind.getCode()).isEmpty()) {
+                    return new IndicatorValueResult(null, null, false, "REAL_BUSINESS_MISSING:" + ind.getCode(),
+                            IndicatorValueResult.FAILED);
+                }
+            } else if ("PYTHON_ENDPOINT".equals(type)) {
+                source = "PYTHON_ENDPOINT:" + ind.getCode();
+                if (!pythonSmartBIClient.supportsIndicatorValueEndpoint()) {
+                    return new IndicatorValueResult(null, null, false, source, IndicatorValueResult.FAILED);
+                }
+            } else {
+                return new IndicatorValueResult(null, null, false, "UNKNOWN:" + ind.getCode(),
+                        IndicatorValueResult.FAILED);
+            }
+            // Reuse the immutable version as evidence of factory, source and
+            // business period. A recent number alone cannot prove its scope.
+            Optional<IndicatorVersion> version = indicatorVersionRepository
+                    .findFirstByIndicatorIdOrderByComputedAtDesc(ind.getId());
+            LocalDate expectedStart = start != null ? start : LocalDate.now().withDayOfMonth(1);
+            LocalDate expectedEnd = end != null ? end : LocalDate.now();
+            if (version.filter(v -> factoryId.equals(v.getFactoryId())
+                    && source.equals(v.getComputeSource())
+                    && expectedStart.equals(v.getPeriodStart()) && expectedEnd.equals(v.getPeriodEnd())
+                    && Objects.equals(lastComputed, v.getComputedAt())
+                    && v.getValue() != null && lastValue.compareTo(v.getValue()) == 0).isPresent()) {
+                return new IndicatorValueResult(lastValue, lastComputed, true, source,
+                        IndicatorValueResult.AVAILABLE);
+            }
         }
 
         // Cache miss / 过期: fetch + 更新 lastValue + 落 version
         // Phase B step 5: ratio strategies 无样本返 null → skip persistence
         // (column NOT NULL + Rule 21 honest data 让 UI 渲 "—" 而非 "0%" 误导)
         FetchOutcome outcome = fetchFromPython(ind, factoryId, start, end);
-        LocalDateTime computedAt = LocalDateTime.now();
-        if (outcome.value() != null) {
+        LocalDateTime computedAt = computedAtFor(outcome);
+        if (IndicatorValueResult.AVAILABLE.equals(outcome.status())) {
             ind.setLastValue(outcome.value());
             ind.setLastComputedAt(computedAt);
             indicatorRepository.save(ind);
             saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
         }
-        return new IndicatorValueResult(outcome.value(), computedAt, false, "python");
+        return toResult(outcome, computedAt, false);
     }
 
     /**
-     * 单次 fetch 返回结果 — value + compute_source label (避免 saveVersion 重复查 repo).
+     * 单次 fetch 返回结果 — value + compute_source label + status (避免 saveVersion
+     * 重复查 repo，也不把配置错误或无样本伪装成零).
      */
-    record FetchOutcome(BigDecimal value, String sourceLabel) {}
+    record FetchOutcome(BigDecimal value, String sourceLabel, String status) {}
+
+    private static LocalDateTime computedAtFor(FetchOutcome outcome) {
+        return IndicatorValueResult.AVAILABLE.equals(outcome.status())
+                ? LocalDateTime.now() : null;
+    }
+
+    private static IndicatorValueResult toResult(FetchOutcome outcome,
+                                                  LocalDateTime computedAt,
+                                                  boolean cacheHit) {
+        return new IndicatorValueResult(outcome.value(), computedAt, cacheHit,
+                outcome.sourceLabel(), outcome.status());
+    }
 
     /**
      * 调 Python 端点取值 — 走 IndicatorComputation 主策略 (priority 最低的启用条目).
      *
      * <p>Sprint 12 Phase B: 新增 {@code JPA_AGGREGATE} 分支, 走
      * {@link IndicatorComputationStrategyRegistry} 找 Java strategy 真接业务表 SQL aggregate.
-     * 跟 PYTHON_ENDPOINT 平级 — Registry 找不到 strategy 返 ZERO stub 不抛错.
+     * 跟 PYTHON_ENDPOINT 平级 — Registry 找不到 strategy 标记 FAILED 不抛错.
      *
-     * <p>若没有启用策略 / 主策略类型未识别, 返 ZERO 并 log warn — 不抛错.
-     * (避免一个指标配置错误 cascade 影响其他指标.)
+     * <p>若没有启用策略 / 主策略类型未识别, 返回 FAILED 并 log warn — 不抛错，
+     * 但不把配置错误伪装成业务零.
      */
     FetchOutcome fetchFromPython(Indicator ind, String factoryId,
                                   LocalDate start, LocalDate end) {
@@ -183,7 +229,7 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         if (strategies.isEmpty()) {
             log.warn("fetchFromPython: no active computation for indicator id={}, code={}",
                     ind.getId(), ind.getCode());
-            return new FetchOutcome(BigDecimal.ZERO, "UNKNOWN:" + ind.getCode());
+            return new FetchOutcome(null, "UNKNOWN:" + ind.getCode(), IndicatorValueResult.FAILED);
         }
         IndicatorComputation primary = strategies.get(0);
         String type = primary.getComputeType();
@@ -192,23 +238,43 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         if ("JPA_AGGREGATE".equals(type)) {
             Optional<IndicatorComputationStrategy> strategyOpt = strategyRegistry.find(ind.getCode());
             if (strategyOpt.isEmpty()) {
-                log.warn("fetchFromPython: JPA_AGGREGATE configured but no strategy registered for code={} — returning ZERO stub",
+                log.warn("fetchFromPython: JPA_AGGREGATE configured but no strategy registered for code={} — returning FAILED",
                         ind.getCode());
-                return new FetchOutcome(BigDecimal.ZERO, "REAL_BUSINESS_MISSING:" + ind.getCode());
+                return new FetchOutcome(null, "REAL_BUSINESS_MISSING:" + ind.getCode(),
+                        IndicatorValueResult.FAILED);
             }
-            BigDecimal value = strategyOpt.get().compute(factoryId, start, end);
-            return new FetchOutcome(value, "REAL_BUSINESS:" + ind.getCode());
+            try {
+                BigDecimal value = strategyOpt.get().compute(factoryId, start, end);
+                return outcomeFor(value, "REAL_BUSINESS:" + ind.getCode());
+            } catch (RuntimeException ex) {
+                log.warn("fetchFromPython: real business strategy failed for code={}: {}",
+                        ind.getCode(), ex.getMessage());
+                return new FetchOutcome(null, "REAL_BUSINESS:" + ind.getCode(),
+                        IndicatorValueResult.FAILED);
+            }
         }
 
         if ("PYTHON_ENDPOINT".equals(type)) {
-            BigDecimal value = pythonSmartBIClient.fetchIndicatorValue(
-                    factoryId, primary.getComputeSource(), start, end);
-            return new FetchOutcome(value, "PYTHON_ENDPOINT:" + ind.getCode());
+            try {
+                BigDecimal value = pythonSmartBIClient.fetchIndicatorValue(
+                        factoryId, primary.getComputeSource(), start, end);
+                return outcomeFor(value, "PYTHON_ENDPOINT:" + ind.getCode());
+            } catch (RuntimeException ex) {
+                log.warn("fetchFromPython: Python endpoint failed for code={}: {}",
+                        ind.getCode(), ex.getMessage());
+                return new FetchOutcome(null, "PYTHON_ENDPOINT:" + ind.getCode(),
+                        IndicatorValueResult.FAILED);
+            }
         }
 
-        log.warn("fetchFromPython: unrecognized computeType={} for code={} — returning ZERO stub",
+        log.warn("fetchFromPython: unrecognized computeType={} for code={} — returning FAILED",
                 type, ind.getCode());
-        return new FetchOutcome(BigDecimal.ZERO, "UNKNOWN:" + ind.getCode());
+        return new FetchOutcome(null, "UNKNOWN:" + ind.getCode(), IndicatorValueResult.FAILED);
+    }
+
+    private static FetchOutcome outcomeFor(BigDecimal value, String sourceLabel) {
+        return new FetchOutcome(value, sourceLabel,
+                value == null ? IndicatorValueResult.NO_DATA : IndicatorValueResult.AVAILABLE);
     }
 
     /**

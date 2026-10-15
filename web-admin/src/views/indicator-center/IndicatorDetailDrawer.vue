@@ -78,6 +78,13 @@
           :alert-level="currentAlertLevel"
           :loading="valueLoading || thresholdsLoading"
         />
+        <p v-if="!valueLoading" class="muted" data-testid="indicator-evidence">
+          {{ valueError || valueStatusText }}
+          <template v-if="currentValueData">
+            · 来源：{{ valueSourceText }}
+            <template v-if="currentValueData.computedAt"> · 计算于 {{ formatDateTime(currentValueData.computedAt) }}</template>
+          </template>
+        </p>
       </el-card>
 
       <!-- 历史快照 -->
@@ -228,6 +235,7 @@ const versionsTotal = ref(0);
 
 const loading = ref(false);
 const valueLoading = ref(false);
+const valueError = ref<string | null>(null);
 const thresholdsLoading = ref(false);
 const versionsLoading = ref(false);
 const recomputing = ref(false);
@@ -245,11 +253,23 @@ const drawerTitle = computed(() => {
   return detail.value ? `${detail.value.name} - 指标详情` : '指标详情';
 });
 
-const currentValue = computed(() => {
-  if (currentValueData.value?.value !== undefined && currentValueData.value?.value !== null) {
-    return currentValueData.value.value;
-  }
-  return detail.value?.lastValue ?? null;
+// The requested current value owns this slot. Explicit null or a failed query
+// cannot be replaced with a different historical snapshot from the detail API.
+const currentValue = computed(() => currentValueData.value?.value ?? null);
+const valueStatusText = computed(() => {
+  const state = currentValueData.value?.status;
+  if (state === 'NOT_COMPUTED') return '未计算';
+  if (state === 'FAILED') return '计算失败';
+  if (state === 'NO_DATA') return '暂无业务数据';
+  return currentValue.value == null ? '暂无可用值' : '当前值';
+});
+const valueSourceText = computed(() => {
+  const source = currentValueData.value?.source || '';
+  if (source.startsWith('REAL_BUSINESS:')) return '业务数据';
+  if (source.startsWith('PYTHON_ENDPOINT:')) return '数据分析服务';
+  if (source === 'cache') return '已保存的计算快照';
+  if (source === 'precomputed') return '预计算快照';
+  return '来源未提供';
 });
 
 const currentAlertLevel = computed<AlertLevel>(() => {
@@ -272,11 +292,12 @@ async function loadDetail() {
 async function loadValue() {
   if (!props.code) return;
   valueLoading.value = true;
+  valueError.value = null;
+  currentValueData.value = null;
   try {
     currentValueData.value = await getIndicatorValue(props.factoryId, props.code);
   } catch (e) {
-    // 静默 — 详情 detail.lastValue 兜底
-    console.warn('[IndicatorDetailDrawer] value load failed:', e);
+    valueError.value = e instanceof Error ? e.message : '指标值查询失败，请重试';
   } finally {
     valueLoading.value = false;
   }
@@ -330,6 +351,7 @@ async function onRecompute() {
   try {
     const result = await recomputeIndicator(props.factoryId, props.code);
     currentValueData.value = result;
+    valueError.value = null;
     ElMessage.success(`重算完成: ${result.value ?? '—'}`);
     emit('recomputed', props.code);
     // 重新加载详情 + 历史 (新增了一条 version)
@@ -346,6 +368,7 @@ function onClose() {
   // reset 状态便于下次打开
   detail.value = null;
   currentValueData.value = null;
+  valueError.value = null;
   thresholds.value = [];
   versions.value = [];
   versionsTotal.value = 0;

@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -45,14 +46,14 @@ import static org.mockito.Mockito.when;
  * <p>覆盖策略分支:
  * <ol>
  *   <li>PRECOMPUTED — 直接返 lastValue, 不调 Python 不落 version</li>
- *   <li>PRECOMPUTED + lastValue=null — 返 ZERO 不抛错</li>
+ *   <li>PRECOMPUTED + lastValue=null — 保持 null / NOT_COMPUTED, 不伪造时间</li>
  *   <li>CACHED + 命中 TTL — 返 lastValue, 不调 Python</li>
  *   <li>CACHED + 过期 — 调 Python + 更新 lastValue + 落 version</li>
  *   <li>CACHED + 首次 (lastComputedAt=null) — 调 Python + 更新</li>
  *   <li>REALTIME — 调 Python + 落 version, 不更新 lastValue</li>
  *   <li>未知 strategy — 抛 BusinessException</li>
  *   <li>指标不存在 — 抛 BusinessException</li>
- *   <li>computation 不是 PYTHON_ENDPOINT — fetchFromPython 返 ZERO</li>
+ *   <li>computation 不是 PYTHON_ENDPOINT — FAILED, 不伪装成业务 ZERO</li>
  * </ol>
  *
  * @author Cretas Team
@@ -140,17 +141,19 @@ class IndicatorQueryServiceImplTest {
     }
 
     @Test
-    @DisplayName("PRECOMPUTED + lastValue=null: 返 ZERO 不抛错")
-    void computesPrecomputedNullValueReturnsZero() {
+    @DisplayName("PRECOMPUTED + lastValue=null: 保持 null / NOT_COMPUTED, 不伪造 now")
+    void computesPrecomputedNullValuePreservesUncomputedState() {
         Indicator ind = newIndicator("PRECOMPUTED", null, null, 3600);
         when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
                 .thenReturn(Optional.of(ind));
 
         IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
 
-        assertEquals(BigDecimal.ZERO, result.value());
+        assertEquals(null, result.value());
+        assertEquals(null, result.computedAt());
         assertTrue(result.cacheHit());
         assertEquals("precomputed", result.source());
+        assertEquals(IndicatorValueResult.NOT_COMPUTED, result.status());
     }
 
     // ====================================================================
@@ -165,11 +168,24 @@ class IndicatorQueryServiceImplTest {
         when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
                 .thenReturn(Optional.of(ind));
 
+        when(indicatorComputationRepository.findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(IND_ID))
+                .thenReturn(List.of(newComputation("JPA_AGGREGATE", CODE)));
+        when(strategyRegistry.find(CODE)).thenReturn(Optional.of(mock(
+                com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy.class)));
+        IndicatorVersion evidence = new IndicatorVersion();
+        evidence.setFactoryId(FACTORY_ID);
+        evidence.setPeriodStart(START);
+        evidence.setPeriodEnd(END);
+        evidence.setComputedAt(ind.getLastComputedAt());
+        evidence.setValue(ind.getLastValue());
+        evidence.setComputeSource("REAL_BUSINESS:" + CODE);
+        when(indicatorVersionRepository.findFirstByIndicatorIdOrderByComputedAtDesc(IND_ID))
+                .thenReturn(Optional.of(evidence));
         IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
 
         assertEquals(new BigDecimal("70.1234"), result.value());
         assertTrue(result.cacheHit());
-        assertEquals("cache", result.source());
+        assertEquals("REAL_BUSINESS:" + CODE, result.source());
         verify(pythonSmartBIClient, never())
                 .fetchIndicatorValue(anyString(), anyString(), any(), any());
         verify(indicatorVersionRepository, never()).save(any());
@@ -195,7 +211,9 @@ class IndicatorQueryServiceImplTest {
 
         assertEquals(new BigDecimal("75.5000"), result.value());
         assertFalse(result.cacheHit());
-        assertEquals("python", result.source());
+        assertEquals("PYTHON_ENDPOINT:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.AVAILABLE, result.status());
+        assertNotNull(result.computedAt());
 
         ArgumentCaptor<Indicator> indCap = ArgumentCaptor.forClass(Indicator.class);
         verify(indicatorRepository).save(indCap.capture());
@@ -229,9 +247,33 @@ class IndicatorQueryServiceImplTest {
         IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
 
         assertFalse(result.cacheHit());
-        assertEquals("python", result.source());
+        assertEquals("PYTHON_ENDPOINT:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.AVAILABLE, result.status());
+        assertNotNull(result.computedAt());
         verify(pythonSmartBIClient, times(1))
                 .fetchIndicatorValue(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("CACHED + 真实零: ZERO 仍是 AVAILABLE, 保留来源和计算时间")
+    void computesCachedRealZeroAsAvailableValue() {
+        Indicator ind = newIndicator("CACHED", null, null, 3600);
+        IndicatorComputation comp = newComputation("PYTHON_ENDPOINT", "/api/smartbi/indicator/count");
+        when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
+                .thenReturn(Optional.of(ind));
+        when(indicatorComputationRepository.findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(IND_ID))
+                .thenReturn(List.of(comp));
+        when(pythonSmartBIClient.fetchIndicatorValue(any(), any(), any(), any()))
+                .thenReturn(BigDecimal.ZERO);
+
+        IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
+
+        assertEquals(BigDecimal.ZERO, result.value());
+        assertEquals(IndicatorValueResult.AVAILABLE, result.status());
+        assertEquals("PYTHON_ENDPOINT:" + CODE, result.source());
+        assertNotNull(result.computedAt());
+        verify(indicatorRepository).save(any(Indicator.class));
+        verify(indicatorVersionRepository).save(any(IndicatorVersion.class));
     }
 
     // ====================================================================
@@ -257,12 +299,38 @@ class IndicatorQueryServiceImplTest {
 
         assertEquals(new BigDecimal("85.5000"), result.value());
         assertFalse(result.cacheHit());
-        assertEquals("python", result.source());
+        assertEquals("PYTHON_ENDPOINT:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.AVAILABLE, result.status());
+        assertNotNull(result.computedAt());
         verify(pythonSmartBIClient, times(1))
                 .fetchIndicatorValue(any(), any(), any(), any());
         verify(indicatorVersionRepository).save(any());
         // Realtime 不更新 lastValue
         verify(indicatorRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("JPA_AGGREGATE 无样本: 保持 null / NO_DATA, 不落假快照")
+    void computesJpaAggregateNoDataWithoutPersisting() {
+        Indicator ind = newIndicator("CACHED", null, null, 3600);
+        IndicatorComputation comp = newComputation("JPA_AGGREGATE", null);
+        com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy strategy =
+                org.mockito.Mockito.mock(com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy.class);
+        when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
+                .thenReturn(Optional.of(ind));
+        when(indicatorComputationRepository.findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(IND_ID))
+                .thenReturn(List.of(comp));
+        when(strategyRegistry.find(CODE)).thenReturn(Optional.of(strategy));
+        when(strategy.compute(FACTORY_ID, START, END)).thenReturn(null);
+
+        IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
+
+        assertEquals(null, result.value());
+        assertEquals(null, result.computedAt());
+        assertEquals("REAL_BUSINESS:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.NO_DATA, result.status());
+        verify(indicatorRepository, never()).save(any());
+        verify(indicatorVersionRepository, never()).save(any());
     }
 
     // ====================================================================
@@ -293,8 +361,8 @@ class IndicatorQueryServiceImplTest {
     }
 
     @Test
-    @DisplayName("computation 不是 PYTHON_ENDPOINT: fetchFromPython 返 ZERO 不抛错")
-    void cachedWithJpaQueryStubReturnsZero() {
+    @DisplayName("computation 不是 PYTHON_ENDPOINT: 标记 FAILED, 不伪装成业务 ZERO")
+    void cachedWithUnknownComputationReturnsFailure() {
         Indicator ind = newIndicator("CACHED", null, null, 3600);
         IndicatorComputation stub = newComputation("JPA_QUERY",
                 "SELECT 0 -- TODO: Phase 2B");
@@ -306,18 +374,19 @@ class IndicatorQueryServiceImplTest {
 
         IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
 
-        assertEquals(BigDecimal.ZERO, result.value());
-        assertEquals("python", result.source());  // Still labelled python (called fetchFromPython)
+        assertEquals(null, result.value());
+        assertEquals("UNKNOWN:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.FAILED, result.status());
+        assertEquals(null, result.computedAt());
         verify(pythonSmartBIClient, never())
                 .fetchIndicatorValue(anyString(), anyString(), any(), any());
-        // Still updates lastValue + saves version (consistent with cache-miss path)
-        verify(indicatorRepository).save(any());
-        verify(indicatorVersionRepository).save(any());
+        verify(indicatorRepository, never()).save(any());
+        verify(indicatorVersionRepository, never()).save(any());
     }
 
     @Test
-    @DisplayName("CACHED + 没有 active computation: fetchFromPython 返 ZERO")
-    void cachedNoComputationReturnsZero() {
+    @DisplayName("CACHED + 没有 active computation: 标记 FAILED, 不伪装成业务 ZERO")
+    void cachedNoComputationReturnsFailure() {
         Indicator ind = newIndicator("CACHED", null, null, 3600);
         when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
                 .thenReturn(Optional.of(ind));
@@ -327,8 +396,35 @@ class IndicatorQueryServiceImplTest {
 
         IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
 
-        assertEquals(BigDecimal.ZERO, result.value());
+        assertEquals(null, result.value());
+        assertEquals("UNKNOWN:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.FAILED, result.status());
+        assertEquals(null, result.computedAt());
         verify(pythonSmartBIClient, never())
                 .fetchIndicatorValue(anyString(), anyString(), any(), any());
+        verify(indicatorRepository, never()).save(any());
+        verify(indicatorVersionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("PYTHON_ENDPOINT 异常: 标记 FAILED、无计算时间且不写回缓存")
+    void cachedPythonFailureDoesNotBecomeZeroOrFresh() {
+        Indicator ind = newIndicator("CACHED", null, null, 3600);
+        IndicatorComputation comp = newComputation("PYTHON_ENDPOINT", "/api/smartbi/indicator/failing");
+        when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(CODE, FACTORY_ID))
+                .thenReturn(Optional.of(ind));
+        when(indicatorComputationRepository.findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(IND_ID))
+                .thenReturn(List.of(comp));
+        when(pythonSmartBIClient.fetchIndicatorValue(any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("upstream unavailable"));
+
+        IndicatorValueResult result = service.computeForCode(CODE, FACTORY_ID, START, END);
+
+        assertEquals(null, result.value());
+        assertEquals(null, result.computedAt());
+        assertEquals("PYTHON_ENDPOINT:" + CODE, result.source());
+        assertEquals(IndicatorValueResult.FAILED, result.status());
+        verify(indicatorRepository, never()).save(any());
+        verify(indicatorVersionRepository, never()).save(any());
     }
 }

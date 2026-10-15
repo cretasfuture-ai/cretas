@@ -102,6 +102,9 @@ class IndicatorQueryToolTest {
 
         assertEquals("GREEN", data.get("breachLevel"));
         assertEquals(new BigDecimal("96.50"), data.get("currentValue"));
+        assertEquals("AVAILABLE", data.get("valueStatus"));
+        assertEquals("REAL_BUSINESS:" + CODE, data.get("source"));
+        assertNotNull(data.get("latestComputedAt"));
         assertEquals(3, data.get("trendSize"));
         Map<String, Object> indicatorMap = (Map<String, Object>) data.get("indicator");
         assertEquals(CODE, indicatorMap.get("code"));
@@ -200,6 +203,9 @@ class IndicatorQueryToolTest {
         Map<String, Object> data = (Map<String, Object>) result.get("data");
 
         assertNull(data.get("currentValue"));
+        assertEquals("NOT_COMPUTED", data.get("valueStatus"));
+        assertNull(data.get("source"));
+        assertNull(data.get("latestComputedAt"));
         assertNull(data.get("breachLevel"));
         assertEquals(0, data.get("trendSize"));
         assertTrue(((String) result.get("message")).contains("暂无数据"));
@@ -306,6 +312,7 @@ class IndicatorQueryToolTest {
         v.setPeriodStart(periodDate);
         v.setPeriodEnd(periodDate);
         v.setComputedAt(LocalDateTime.now());
+        v.setComputeSource("REAL_BUSINESS:" + CODE);
         return v;
     }
 
