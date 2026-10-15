@@ -825,7 +825,7 @@
         </div>
 
         <FactoryBlueprintDraftsPanel
-          v-if="canonicalBlueprint?.lifecycleState === 'VALIDATED'"
+          v-if="canonicalBlueprint && ['VALIDATED', 'PUBLISHED', 'APPLIED'].includes(canonicalBlueprint.lifecycleState)"
           :factory-id="factoryId"
           :factory-name="factoryName || canonicalBlueprint.factoryName"
           :blueprint="canonicalBlueprint"
@@ -1651,6 +1651,14 @@ function goReview() {
 
 async function goWorkflow(productCode: string) {
   clearFlowIssue()
+  if (authStore.isPlatform) {
+    // Platform publication stays in its signed assembly namespace. The ordinary
+    // factory canvas deliberately requires a factory account.
+    step.value = 1
+    await nextTick()
+    document.querySelector('[data-testid="blueprint-drafts-panel"]')?.scrollIntoView({ behavior: 'smooth' })
+    return
+  }
   try {
     const productTypeId = await resolveProductTypeIdByCode(factoryId.value, productCode)
     if (!productTypeId) {
