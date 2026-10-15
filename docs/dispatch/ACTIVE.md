@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `CONNECT-DATA-VISION-20261015` — `in-progress` — Owner root；Base a39038c68e36ff23d32eef5398bb87afe33fd746；AN2 #988已合入并部署，真实PG/UI及线上桥接通过。VS2 Owner implement_vision_sop独占队列/worker修复；root独占main/外部registry/Java proxy/新视觉面板，待平台底座释放后挂载。锁与证据见当日archive。
+- `CONNECT-DATA-VISION-20261015` — `blocked` — Owner root；Base 7ebe070569f4ec4986dc773d32b3e66a25e02026；#988指标/#990视觉SOP后端已发布，75目标/9969CI及真实HTTP collect通过。剩Java代理/新视觉组件挂平台入口；等PLATFORM-ASSEMBLY合入/释放。Python scope已释放；证据见当日archive。
 
 - `F006-MOBILE-R33-20261004` — `queued` — Owner root — Base `a98b634d0936` — WHInboundDetail空价伪0/无闸；无仓库调用点，先核可达，再测权限/零空/owner；private同因扫描已记。
 - `F006-MOBILE-R44-20261005` — `queued` — Owner root/只读追踪 — Base `3db04cc0a13a573a0c2646475b9645da0215acf3` — F006状态参数缺省/available/AVAILABLE三GET同200行含77已耗尽/用完。PageRequest有status但列表服务未用；库位/临期实际UI未复现；临期需保留EXPIRED，后续明确状态集及查询/JPA门禁。0变更。
