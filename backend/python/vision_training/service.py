@@ -172,15 +172,6 @@ class VisionTrainingService:
         # The preview hash is the idempotency key.  An existing draft is
         # returned verbatim so a repeated save cannot erase receipts or move
         # its original creation time.
-        existing = self.store.get(project_id)
-        if existing is not None:
-            if (
-                existing.preview_hash != preview.preview_hash
-                or existing.spec != preview.spec
-                or existing.template != canonical_template
-            ):
-                raise PreviewMismatchError("draft identity does not match the preview")
-            return existing
         now = datetime.now(timezone.utc)
         draft = TrainingProjectDraft(
             project_id=project_id,
@@ -191,7 +182,24 @@ class VisionTrainingService:
             created_at=now,
             updated_at=now,
         )
-        return self.store.put(draft)
+        try:
+            return self.store.create_if_absent(draft)
+        except ValueError as exc:
+            raise PreviewMismatchError("draft identity does not match the preview") from exc
+
+    def available_templates(self, factory_id: str) -> tuple[TaskTemplate, ...]:
+        """Return the catalog visible to one trusted factory context."""
+
+        available: list[TaskTemplate] = []
+        for template in self.catalog.all():
+            if template.scope == "generic":
+                available.append(template)
+                continue
+            if factory_id in self.specialized_factory_allowlist.get(
+                template.template_id, frozenset()
+            ):
+                available.append(template)
+        return tuple(available)
 
     def readback(self, project_id: str) -> TrainingProjectDraft:
         draft = self.store.get(project_id)

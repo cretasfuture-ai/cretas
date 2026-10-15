@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import multiprocessing as mp
 from pathlib import Path
 import sys
 
@@ -43,6 +44,17 @@ def test_preview_endpoint_does_not_save_and_readback_requires_explicit_save() ->
     response = client.post("/api/vision-training/preview", json={"spec": valid_spec()})
     assert response.status_code == 200
     assert "no draft was saved" in response.json()["message"]
+
+
+def test_authenticated_templates_expose_schema_and_hide_unbound_specialized_template() -> None:
+    client = TestClient(app_with_context())
+    response = client.get("/api/vision-training/templates")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    template_ids = {item["template_id"] for item in data["templates"]}
+    assert {"generic-packaging-detection", "generic-packaging-ocr"} <= template_ids
+    assert "liushanmen-tray" not in template_ids
+    assert "factory_id" in data["taskSpecSchema"]["properties"]
 
 
 def test_default_dependency_fails_closed_without_trusted_context() -> None:
@@ -100,3 +112,50 @@ def test_file_backed_router_is_lazy(tmp_path: Path) -> None:
     root = tmp_path / "drafts"
     create_file_backed_router(root)
     assert not root.exists()
+
+
+def _atomic_create_worker(root: str, payload: dict[str, object], result_queue) -> None:
+    from vision_training.models import TrainingProjectDraft
+    from vision_training.store import FileDraftStore
+
+    draft = TrainingProjectDraft.model_validate(payload)
+    result = FileDraftStore(root).create_if_absent(draft)
+    result_queue.put(result.created_at.isoformat())
+
+
+def test_file_store_atomic_create_returns_one_readback_for_two_processes(tmp_path: Path) -> None:
+    from vision_training.service import VisionTrainingService
+    from vision_training.models import TaskSpec
+    from vision_training.store import FileDraftStore
+
+    spec_payload = {
+        "factory_id": "F001",
+        "workstation_id": "ws-01",
+        "task_family": "packaging-detection",
+        "product_scope": ("SKU-01",),
+        "packaging_scope": ("tray",),
+        "data_version": "photos-v3",
+        "recipe_version": "recipe-v2",
+        "human_standard_version": "human-v1",
+        "independent_acceptance_version": "acceptance-v1",
+    }
+
+    service = VisionTrainingService()
+    draft = service.save_draft(service.preview(TaskSpec(**spec_payload)))
+    payload = draft.model_dump(mode="json")
+    root = tmp_path / "atomic"
+    context = mp.get_context("spawn")
+    result_queue = context.Queue()
+    workers = [
+        context.Process(target=_atomic_create_worker, args=(str(root), payload, result_queue))
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=30)
+        assert worker.exitcode == 0
+    created_at_values = [result_queue.get(timeout=5) for _ in workers]
+    readback = FileDraftStore(root).get(draft.project_id)
+    assert readback is not None
+    assert set(created_at_values) == {readback.created_at.isoformat()}

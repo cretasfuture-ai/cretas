@@ -12,6 +12,7 @@ from .errors import VisionTrainingError
 from .models import FactoryContext, ProjectPreview, TaskSpec
 from .service import VisionTrainingService
 from .store import DraftStore, FileDraftStore
+from .templates import SOP_VERSION
 
 
 FACTORY_ROLES = frozenset(
@@ -102,6 +103,21 @@ def create_router(
         except VisionTrainingError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         return {"success": True, "message": "draft saved explicitly; no training was executed", "data": result.model_dump(mode="json")}
+
+    @router.get("/templates")
+    def templates(context: FactoryContext = Depends(factory_context_dependency)) -> dict[str, object]:
+        return {
+            "success": True,
+            "message": "templates available for authenticated factory",
+            "data": {
+                "sopVersion": SOP_VERSION,
+                "templates": [
+                    template.model_dump(mode="json")
+                    for template in coordinator.available_templates(context.factory_id)
+                ],
+                "taskSpecSchema": TaskSpec.model_json_schema(),
+            },
+        }
 
     @router.get("/drafts/{project_id}")
     def readback(project_id: str, context: FactoryContext = Depends(factory_context_dependency)) -> dict[str, object]:

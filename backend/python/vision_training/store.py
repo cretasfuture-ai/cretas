@@ -20,7 +20,19 @@ from .models import TrainingProjectDraft
 class DraftStore(Protocol):
     def get(self, project_id: str) -> TrainingProjectDraft | None: ...
 
+    def create_if_absent(self, draft: TrainingProjectDraft) -> TrainingProjectDraft: ...
+
     def put(self, draft: TrainingProjectDraft) -> TrainingProjectDraft: ...
+
+
+def _same_identity(left: TrainingProjectDraft, right: TrainingProjectDraft) -> bool:
+    return (
+        left.project_id == right.project_id
+        and left.preview_hash == right.preview_hash
+        and left.sop_version == right.sop_version
+        and left.spec == right.spec
+        and left.template == right.template
+    )
 
 
 class InMemoryDraftStore:
@@ -38,6 +50,16 @@ class InMemoryDraftStore:
             if existing is not None and (
                 existing.spec != draft.spec or existing.template != draft.template
             ):
+                raise ValueError(f"draft identity is immutable: {draft.project_id}")
+            self._items[draft.project_id] = draft
+            return draft
+
+    def create_if_absent(self, draft: TrainingProjectDraft) -> TrainingProjectDraft:
+        with self._lock:
+            existing = self._items.get(draft.project_id)
+            if existing is not None:
+                if _same_identity(existing, draft):
+                    return existing
                 raise ValueError(f"draft identity is immutable: {draft.project_id}")
             self._items[draft.project_id] = draft
             return draft
@@ -86,3 +108,33 @@ class FileDraftStore:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
         return draft
+
+    def create_if_absent(self, draft: TrainingProjectDraft) -> TrainingProjectDraft:
+        path = self._path(draft.project_id)
+        payload = json.dumps(draft.model_dump(mode="json"), ensure_ascii=False, indent=2)
+        with self._lock:
+            self._ensure_root()
+            temporary_path: str | None = None
+            fd, temporary_path = tempfile.mkstemp(
+                prefix=f"{draft.project_id}.", suffix=".create", dir=self.root
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    # A hard-link publish is create-if-absent on the same
+                    # filesystem: exactly one process can win the link.
+                    os.link(temporary_path, path)
+                except FileExistsError:
+                    existing = self.get(draft.project_id)
+                    if existing is None:
+                        raise RuntimeError("draft appeared but could not be read")
+                    if _same_identity(existing, draft):
+                        return existing
+                    raise ValueError(f"draft identity is immutable: {draft.project_id}")
+                return draft
+            finally:
+                if temporary_path and os.path.exists(temporary_path):
+                    os.unlink(temporary_path)

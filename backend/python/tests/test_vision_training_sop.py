@@ -115,6 +115,14 @@ def test_explicit_save_readback_is_idempotent_and_preview_mismatch_fails(tmp_pat
     assert first.project_id == second.project_id
     assert service.readback(first.project_id).preview_hash == preview.preview_hash
 
+    same_identity = first.model_copy(update={"created_at": first.created_at.replace(year=2025)})
+    assert FileDraftStore(tmp_path).create_if_absent(same_identity).created_at == first.created_at
+    different_identity = first.model_copy(
+        update={"spec": first.spec.model_copy(update={"data_version": "photos-other"})}
+    )
+    with pytest.raises(ValueError, match="identity"):
+        FileDraftStore(tmp_path).create_if_absent(different_identity)
+
     altered = preview.model_copy(update={"spec": preview.spec.model_copy(update={"data_version": "photos-v4"})})
     with pytest.raises(PreviewMismatchError):
         service.save_draft(altered)
