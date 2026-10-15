@@ -274,7 +274,7 @@ def test_worker_registration_rejects_escape_and_generic_runner(tmp_path, monkeyp
     with pytest.raises(sop_worker.WorkerBlockedError, match="generic"):
         sop_worker.VisionLabSOPWorker(registration).execute("train")
     escaping = registration.__class__(
-        **{**registration.__dict__, "input_refs": {"train": "..\\outside.json"}}
+        **{**registration.__dict__, "input_refs": {"train": str(Path("..") / "outside.json")}}
     )
     with pytest.raises(sop_worker.WorkerConfigurationError, match="escapes"):
         escaping.validate()
