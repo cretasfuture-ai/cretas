@@ -1379,7 +1379,7 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
 
     private void requireTypedAuthority(String factoryId, ActorRef actor) {
         if (actorResolver == null) {
-            throw new BusinessException(403, "Typed configuration activation is unavailable")
+            throw new BusinessException(403, "平台建厂配置应用服务未启用")
                     .withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
         }
         actorResolver.authorize(actor, factoryId,

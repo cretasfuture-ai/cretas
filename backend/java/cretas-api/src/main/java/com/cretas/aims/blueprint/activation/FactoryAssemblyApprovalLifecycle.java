@@ -234,6 +234,6 @@ public class FactoryAssemblyApprovalLifecycle {
     }
 
     private static BusinessException invalid(String message) {
-        return new BusinessException(409, message).withCode("ASSEMBLY_APPROVAL_INVALID");
+        return new BusinessException(409, message).withCode("ASSEMBLY_APPROVAL_INVALID").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
     }
 }

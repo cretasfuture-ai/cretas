@@ -234,7 +234,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             com.cretas.aims.security.ActorRef actor) {
         java.util.Objects.requireNonNull(actor, "Actor identity is required");
         if (actorResolver == null) {
-            throw new BusinessException(403, "Typed Workflow publication is unavailable").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
+            throw new BusinessException(403, "平台建厂工艺发布服务未启用").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
         }
         actorResolver.authorize(actor, factoryId, java.util.Set.of("factory-blueprint:activation:workflow"));
         // Keep the legacy user FK null for platform actors. The typed actor is persisted
@@ -265,9 +265,11 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         ProductProcessWorkflow draft = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
                 .map(row -> repository.lockByIdAndFactoryId(row.getId(), factoryId)
                         .filter(r -> r.getStatus() == ProductProcessWorkflow.Status.DRAFT)
-                        .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")))
+                        .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")
+                                .withHint("请重新加载当前工厂的工艺草稿")))
                 .orElseThrow(() -> new BusinessException(409, "没有可另存的 Workflow 草稿")
-                        .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING"));
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
+                        .withHint("请先保存当前工厂的工艺草稿，再另存为新版本"));
         assertCurrentVersion(lockVersion, draft);
         ProductProcessWorkflowDTO definition = toDTO(draft);
         validator.validateForDraft(definition);

@@ -288,7 +288,7 @@ public class CriticalControlDraftCommand {
                             row.getDecisionAlgorithmVersion())
                     || !controlKey(row.getHazardItemId(), row.getParameterCode())
                             .equals(row.getControlKey())
-                    || !unitSnapshot.equals(row.getUnitSnapshotDigest())) {
+                    || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(unitSnapshot, row.getUnitSnapshotDigest())) {
                 throw invalid(409, "关键控制算法或单位快照回读不一致",
                         "CRITICAL_CONTROL_DRAFT_ITEM_READBACK_MISMATCH");
             }
@@ -597,7 +597,7 @@ public class CriticalControlDraftCommand {
         if (item == null || item.parameterType() == null) return null;
         CanonicalUnit unit = units.describe(factoryId, item.unit()).orElse(null);
         UnitDimension expected = expectedDimension(item.parameterType());
-        if (unit == null || !unit.active() || !item.unit().equals(unit.code())
+        if (unit == null || !unit.active() || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(item.unit(), unit.code())
                 || unit.dimension() != expected) {
             issues.add(issue("CRITICAL_CONTROL_UNIT_NOT_SUPPORTED", target + ".unit",
                     "限值单位必须是当前工厂已启用的精确 canonical code，且量纲与参数类型一致",

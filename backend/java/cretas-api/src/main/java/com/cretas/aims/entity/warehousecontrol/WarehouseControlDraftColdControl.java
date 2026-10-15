@@ -24,6 +24,7 @@ import java.math.BigDecimal;
                 @UniqueConstraint(name = "uk_warehouse_control_draft_cold_ordinal",
                         columnNames = {"draft_id", "ordinal"})
         })
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE warehouse_control_draft_cold_controls SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

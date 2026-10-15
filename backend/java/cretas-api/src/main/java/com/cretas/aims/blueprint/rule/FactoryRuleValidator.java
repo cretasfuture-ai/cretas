@@ -88,7 +88,7 @@ public final class FactoryRuleValidator {
                 "CATALOG_LOCK_REQUIRED", "$", "规则必须锁定变量目录和单位目录摘要",
                 "回读版本化目录并保存 exact version/digest"));
         if (!rule.unitCatalogDigest().isBlank()
-                && !rule.unitCatalogDigest().equals(units.catalogDigest(rule.factoryId()))) issues.add(issue(
+                && !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(rule.unitCatalogDigest(), units.catalogDigest(rule.factoryId()))) issues.add(issue(
                 "UNIT_CATALOG_DRIFT", "$.unitCatalogDigest", "规则锁定摘要与当前单位目录不一致",
                 "重新编译并复核规则，禁止跟随单位目录漂移"));
         if (catalog == null) {
@@ -241,7 +241,7 @@ public final class FactoryRuleValidator {
                     "变量未在版本化目录中注册: " + expression.variableId(), "先注册并锁定变量目录"));
             return new NodeInfo(expression.valueType(), expression.unit(), 1, 1);
         }
-        if (expression.valueType() != definition.type() || !expression.unit().equals(definition.unit())) {
+        if (expression.valueType() != definition.type() || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(expression.unit(), definition.unit())) {
             issues.add(issue("VARIABLE_CONTRACT_MISMATCH", path,
                     "AST 变量类型/单位与目录定义不一致", "从变量目录生成引用，不允许自由改写"));
         }

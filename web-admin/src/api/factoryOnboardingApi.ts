@@ -1027,7 +1027,7 @@ export async function fetchCurrentFactoryConfig(factoryId: string): Promise<Curr
   }
   const rowsOf = async (path: string) =>
     safe(async () => pick<Record<string, unknown>>(
-      await request.get(`/api/mobile/${fid}/${path}`, ABS), (x) => x))
+    await request.get(`/${fid}/${path}`), (x) => x))
 
   const [templates, products, materials, conversions] = await Promise.all([
     rowsOf('form-templates'),

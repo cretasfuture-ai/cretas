@@ -151,7 +151,7 @@ public class FactoryAssemblyActivationController {
                             || module.activeRevision() != current.activeRevision()
                             || !module.activeDigest().equals(current.activeDigest())) {
                         throw new BusinessException(409, "当前正式运行态与此执行回执不一致")
-                                .withCode("ASSEMBLY_RUNTIME_READBACK_DRIFTED");
+                                .withCode("ASSEMBLY_RUNTIME_READBACK_DRIFTED").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
                     }
                     return current;
                 })
@@ -221,6 +221,6 @@ public class FactoryAssemblyActivationController {
         }
     }
     private static BusinessException invalid(String message) {
-        return new BusinessException(409, message).withCode("ASSEMBLY_FORMAL_REQUEST_INVALID");
+        return new BusinessException(409, message).withCode("ASSEMBLY_FORMAL_REQUEST_INVALID").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
     }
 }

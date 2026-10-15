@@ -329,6 +329,6 @@ public class BlueprintWorkflowPublicationService {
     }
 
     private static BusinessException conflict(String code, String message) {
-        return new BusinessException(409, message).withCode(code);
+        return new BusinessException(409, message).withCode(code).withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
     }
 }

@@ -22,6 +22,7 @@ import org.hibernate.type.SqlTypes;
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_factory_workflow_draft_materialization_key",
                 columnNames = {"factory_id", "idempotency_key"}))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE factory_workflow_draft_materialization_ledger SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

@@ -31,6 +31,7 @@ import org.hibernate.annotations.Where;
                         columnNames = {"id", "factory_id"}),
                 @UniqueConstraint(name = "uk_master_data_draft_promotion_idempotency",
                         columnNames = {"factory_id", "idempotency_key"})})
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE master_data_draft_promotions SET deleted_at = NOW(), lock_version = lock_version + 1 WHERE id = ? AND lock_version = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

@@ -284,9 +284,20 @@ public class FactoryAssemblyConversationSession {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ReplyReceipt {
         private String extractionOutcome;
-        private int currentRound;
-        private int maxRounds;
-        private String status;
+        @com.fasterxml.jackson.annotation.JsonIgnore private int receiptRound;
+        @com.fasterxml.jackson.annotation.JsonIgnore private int receiptMaxRounds;
+        @com.fasterxml.jackson.annotation.JsonIgnore private String receiptStatus;
+        public int getCurrentRound() { return receiptRound; }
+        public void setCurrentRound(int value) { receiptRound = value; }
+        public int getMaxRounds() { return receiptMaxRounds; }
+        public void setMaxRounds(int value) { receiptMaxRounds = value; }
+        public String getStatus() { return receiptStatus; }
+        public void setStatus(String value) { receiptStatus = value; }
+        public static class ReplyReceiptBuilder {
+            public ReplyReceiptBuilder currentRound(int value) { receiptRound = value; return this; }
+            public ReplyReceiptBuilder maxRounds(int value) { receiptMaxRounds = value; return this; }
+            public ReplyReceiptBuilder status(String value) { receiptStatus = value; return this; }
+        }
         private boolean completed;
         private String message;
         private String intentCode;

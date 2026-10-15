@@ -13,6 +13,7 @@ import org.hibernate.type.SqlTypes;
 /** Only server-generated plans are stored; HTTP bodies never supply either JSON field. */
 @Entity
 @Table(name = "factory_assembly_approvals")
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE factory_assembly_approvals SET deleted_at = NOW(), lock_version = lock_version + 1 WHERE id = ? AND lock_version = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter @Setter
 public class FactoryAssemblyApproval extends BaseEntity {

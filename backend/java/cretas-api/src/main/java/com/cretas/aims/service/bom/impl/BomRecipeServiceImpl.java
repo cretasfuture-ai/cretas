@@ -397,7 +397,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                                             com.cretas.aims.security.ActorRef actor) {
         java.util.Objects.requireNonNull(actor, "Activation actor is required");
         if (actorResolver == null) {
-            throw new BusinessException(403, "Typed BOM activation is unavailable").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
+            throw new BusinessException(403, "平台建厂配方转正服务未启用").withCode("ASSEMBLY_ACTIVATION_FORBIDDEN");
         }
         actorResolver.authorize(actor, factoryId, java.util.Set.of("factory-blueprint:activation:workflow"));
         BomRecipe activated = activateRecipe(factoryId, recipeId, actor.factoryUserId());

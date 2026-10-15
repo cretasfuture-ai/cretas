@@ -20,6 +20,7 @@ import org.hibernate.annotations.Where;
                 columnNames = {"draft_id", "flow_type", "from_zone_code", "to_zone_code"}),
         @UniqueConstraint(name = "uk_hygienic_zone_draft_flow_ordinal", columnNames = {"draft_id", "ordinal"})
 })
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE hygienic_zone_draft_flows SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

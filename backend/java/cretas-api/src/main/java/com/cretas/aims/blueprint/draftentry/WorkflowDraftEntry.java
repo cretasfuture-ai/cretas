@@ -219,11 +219,11 @@ public class WorkflowDraftEntry extends TypedCapabilityDraftEntry<WorkflowDraftR
                 || !CURRENT_BLUEPRINT_STATES.contains(blueprint.getLifecycleState())
                 || blueprint.getSourcePayload() == null) {
             throw new BusinessException(409, "请求里的蓝图不是本厂当前处于草稿或已校验状态的蓝图版本，请刷新蓝图后重新预填")
-                    .withCode("WORKFLOW_DRAFT_BLUEPRINT_NOT_CURRENT").withHintTarget("blueprintVersion");
+                    .withCode("WORKFLOW_DRAFT_BLUEPRINT_NOT_CURRENT").withHintTarget("blueprintVersion").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
         }
         if (!Objects.equals(request.sourceDigest(), BlueprintSourceDigest.of(blueprint))) {
             throw new BusinessException(409, "请求的蓝图血缘(sourceDigest)与当前蓝图不一致，蓝图内容已变化，请重新预填")
-                    .withCode("WORKFLOW_DRAFT_SOURCE_DIGEST_MISMATCH").withHintTarget("sourceDigest");
+                    .withCode("WORKFLOW_DRAFT_SOURCE_DIGEST_MISMATCH").withHintTarget("sourceDigest").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
         }
         return blueprint;
     }

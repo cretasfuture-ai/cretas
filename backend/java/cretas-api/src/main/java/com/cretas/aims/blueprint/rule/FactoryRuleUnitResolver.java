@@ -13,6 +13,12 @@ public interface FactoryRuleUnitResolver {
 
     Optional<UnitDescriptor> describe(String factoryId, String unit);
 
+    default boolean sameQuantityUnit(String factoryId, String left, String right) {
+        var a = describe(factoryId, left);
+        var b = describe(factoryId, right);
+        return a.isPresent() && b.isPresent() && a.get().code().equals(b.get().code());
+    }
+
     Conversion convert(String factoryId, BigDecimal value, String fromUnit, String toUnit, Instant at);
 
     record UnitDescriptor(String code, UnitDimension dimension) {

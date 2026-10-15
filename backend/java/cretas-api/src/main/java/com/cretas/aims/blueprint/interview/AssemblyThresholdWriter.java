@@ -46,7 +46,8 @@ public class AssemblyThresholdWriter {
                 .or(() -> rows.findByFactoryIdAndThresholdKey("*", key))
                 .map(FactoryThreshold::getValueType)
                 .orElseThrow(() -> new BusinessException(409,
-                        "标准“" + key + "”尚未登记值类型，不能通过建厂猜测类型；请先在正式阈值中心登记"));
+                        "标准“" + key + "”尚未登记值类型，不能通过建厂猜测类型；请先在正式阈值中心登记")
+                        .withHint("请先在正式阈值中心登记该标准的值类型，再刷新建厂预览"));
     }
 
     @Transactional

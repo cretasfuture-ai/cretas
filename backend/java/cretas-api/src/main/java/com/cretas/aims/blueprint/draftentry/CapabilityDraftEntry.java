@@ -56,7 +56,7 @@ public interface CapabilityDraftEntry {
      */
     default void requireBlueprintContext(String factoryId, String blueprintId) {
         throw new BusinessException(409, "这类建厂草稿没有绑定蓝图，入口未实现蓝图核对，暂不能写入")
-                .withCode("BLUEPRINT_DRAFT_BLUEPRINT_CONTEXT_UNVERIFIED");
+                .withCode("BLUEPRINT_DRAFT_BLUEPRINT_CONTEXT_UNVERIFIED").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
     }
 
     Object preview(JsonNode request);

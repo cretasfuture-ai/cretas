@@ -26,6 +26,7 @@ import org.hibernate.annotations.Where;
                                 "allergen"})
         }, indexes = @Index(name = "idx_allergen_label_declaration_parent",
                 columnList = "factory_id,draft_id,ordinal"))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE allergen_label_draft_declarations SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

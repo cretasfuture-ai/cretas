@@ -148,7 +148,7 @@ public class CanonicalFactoryBlueprintService {
         if (replay.isPresent()) {
             Map<String, Object> result = readMap(replay.get().getOperationResult());
             if (result == null || !Objects.equals(requestDigest, result.get("requestDigest"))) {
-                throw new BusinessException(409, "同一幂等键对应的建厂请求或操作人已变化，请使用新幂等键");
+                throw new BusinessException(409, "同一幂等键对应的建厂请求或操作人已变化，请使用新幂等键").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
             }
             if (result.get("response") == null) {
                 throw state("建厂保存回执缺少原始结果，不能安全重放");

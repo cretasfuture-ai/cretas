@@ -627,6 +627,22 @@ class NotNullColumnsHaveEntityDefaultsContractTest {
      * 找不到声明行时抛异常而不是静默返回 false —— 判「没有初始化」的前提是
      * 「确实看到了这行声明」, 不能用「没找到」冒充「找到了但没初始化」。
      */
+    private static Pattern fieldDeclarationPattern(String fieldName) {
+        return Pattern.compile("\\b(?:private|protected|public)\\s+(?:static\\s+)?(?:final\\s+)?"
+                + "[^\\n;()]*?\\b" + Pattern.quote(fieldName) + "\\b(?=\\s*(?:=|;))");
+    }
+
+    @Test void fieldScannerDistinguishesAFieldFromSameNamedBuilderMethods() {
+        String source = "private Integer currentRound = 0;\n"
+                + "public Builder currentRound(int value) { return this; }";
+        assertEquals(1, fieldDeclarationPattern("currentRound").matcher(source).results().count());
+        assertEquals(0, fieldDeclarationPattern("currentRound").matcher(
+                "public Builder currentRound(int value) { return this; }").results().count());
+        assertEquals(2, fieldDeclarationPattern("currentRound").matcher(
+                source + "\nprivate int currentRound;").results().count(),
+                "Real duplicate field declarations must remain ambiguous and fail closed");
+    }
+
     private static boolean hasSourceInitializer(Path sourceRoot, Class<?> declaringClass, String fieldName)
             throws IOException {
         Path file = sourceRoot.resolve(declaringClass.getName().replace('.', '/') + ".java");
@@ -643,9 +659,7 @@ class NotNullColumnsHaveEntityDefaultsContractTest {
         // 有些初始化表达式本身跨行 (e.g. 枚举常量单独另起一行), 逼着整段落在
         // 一行内会把这类字段的声明整行漏掉。「有没有初始化」改成看字段名后
         // 紧跟的第一个非空白字符是 '=' 还是 ';'。
-        Pattern fieldDecl = Pattern.compile(
-                "\\b(?:private|protected|public)\\s+(?:static\\s+)?(?:final\\s+)?"
-                        + "[^\\n;()]*?\\b" + Pattern.quote(fieldName) + "\\b");
+        Pattern fieldDecl = fieldDeclarationPattern(fieldName);
         Matcher m = fieldDecl.matcher(content);
         List<Integer> ends = new ArrayList<>();
         while (m.find()) {

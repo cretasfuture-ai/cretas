@@ -48,6 +48,7 @@ import org.hibernate.annotations.Where;
 @Table(name = "factory_build_plan_snapshots", indexes = {
         @Index(name = "idx_fbps_factory", columnList = "factory_id")
 })
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE factory_build_plan_snapshots SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Data
 @EqualsAndHashCode(callSuper = true)

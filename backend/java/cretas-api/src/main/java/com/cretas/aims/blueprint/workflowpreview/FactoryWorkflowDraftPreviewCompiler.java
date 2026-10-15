@@ -162,7 +162,7 @@ public final class FactoryWorkflowDraftPreviewCompiler {
                     "CATALOG_DRIFT", "Resolve", "catalog", "请求锁定的解析目录版本/摘要已漂移", "刷新并重新编译"));
         }
         if (request.unitCatalogDigest().isBlank()
-                || !request.unitCatalogDigest().equals(units.catalogDigest(request.factoryId()))) issues.add(block(
+                || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(request.unitCatalogDigest(), units.catalogDigest(request.factoryId()))) issues.add(block(
                 "UNIT_CATALOG_DRIFT", "Normalize", "units", "单位目录摘要为空或已漂移", "刷新单位目录并重新编译"));
         if (request.route() == null || !"READY".equals(request.route().status())
                 || !request.route().topologyComplete() || request.route().graph() == null) issues.add(block(

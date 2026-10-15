@@ -25,6 +25,7 @@ import java.math.BigDecimal;
                 columnNames = {"item_id", "draft_id", "factory_id", "candidate_ref_type", "candidate_ref_id"})
 }, indexes = @Index(name = "idx_bom_draft_substitute_parent",
         columnList = "factory_id,draft_id,item_id,priority"))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE bom_recipe_draft_substitutes SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

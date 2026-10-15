@@ -64,7 +64,7 @@ public class BlueprintDraftWrittenController {
         BlueprintResponse blueprint = blueprints.current(factoryId);
         if (blueprint == null || !blueprintId.equals(blueprint.getId())) {
             throw new BusinessException(409, "只能查看本厂当前蓝图的建厂草稿，请刷新蓝图后重试")
-                    .withCode("BLUEPRINT_DRAFT_BLUEPRINT_NOT_CURRENT");
+                    .withCode("BLUEPRINT_DRAFT_BLUEPRINT_NOT_CURRENT").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
         }
         if (blueprint.getSourcePayload() == null) {
             return ApiResponse.success(new WrittenView(SCHEMA_VERSION, blueprint.getId(), blueprint.getVersion(),

@@ -325,7 +325,9 @@ public final class FactoryRuleSimulator {
     }
 
     private Eval align(Eval value, String targetUnit, String factoryId, Instant evaluationTime) {
-        if (value.unit.equals(targetUnit) || value.unit.isBlank() && targetUnit.isBlank()) return value;
+        if (value.unit.isBlank() && targetUnit.isBlank()) return value;
+        if (units.sameQuantityUnit(factoryId, value.unit, targetUnit))
+            return Eval.number(value.type, value.number, targetUnit, value.observations);
         var conversion = units.convert(factoryId, value.number, value.unit, targetUnit, evaluationTime);
         if (!conversion.succeeded()) return Eval.unknown(value.type,
                 "UNIT_CONVERSION_FAILED:" + conversion.errorCode());

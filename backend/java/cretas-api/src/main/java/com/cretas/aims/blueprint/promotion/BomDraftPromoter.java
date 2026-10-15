@@ -245,9 +245,9 @@ class BomDraftPromoter implements DraftPromoter {
 
     @Override
     public void validateReplayInput(String factoryId, String liveTargetId, Object input) {
-        recipes.findById(liveTargetId).filter(row -> factoryId.equals(row.getFactoryId())).orElseThrow(() -> new BusinessException(409, "正式配方不属于当前工厂").withCode("BOM_PRODUCT_NOT_LIVE"));
+        recipes.findById(liveTargetId).filter(row -> factoryId.equals(row.getFactoryId())).orElseThrow(() -> new BusinessException(409, "正式配方不属于当前工厂").withCode("BOM_PRODUCT_NOT_LIVE").withHint("请选择当前工厂的正式配方并重新预览"));
         List<Blocker> invalid = new ArrayList<>(); Map<String, String> requested = roles(input, invalid); Map<String, String> actual = new TreeMap<>();
-        for (BomRecipeItem item : recipeItems.findByRecipeIdOrderBySortOrderAsc(liveTargetId)) { if (!factoryId.equals(item.getFactoryId())) throw new BusinessException(409, "正式配方明细工厂不一致").withCode("BOM_PRODUCT_NOT_LIVE"); if ("PACKAGING".equals(item.getMaterialCategory())) { if (item.getWorkflowInputPortId() == null || item.getPackagingRole() == null || actual.containsKey(item.getWorkflowInputPortId())) invalid.add(Blocker.of("BOM_PACKAGING_ROLE_INVALID", "正式包材端口或角色不完整", "核对原正式配方")); else actual.put(item.getWorkflowInputPortId(), item.getPackagingRole()); } }
+        for (BomRecipeItem item : recipeItems.findByRecipeIdOrderBySortOrderAsc(liveTargetId)) { if (!factoryId.equals(item.getFactoryId())) throw new BusinessException(409, "正式配方明细工厂不一致").withCode("BOM_PRODUCT_NOT_LIVE").withHint("请刷新建厂预览，核对草稿版本后重新确认操作"); if ("PACKAGING".equals(item.getMaterialCategory())) { if (item.getWorkflowInputPortId() == null || item.getPackagingRole() == null || actual.containsKey(item.getWorkflowInputPortId())) invalid.add(Blocker.of("BOM_PACKAGING_ROLE_INVALID", "正式包材端口或角色不完整", "核对原正式配方")); else actual.put(item.getWorkflowInputPortId(), item.getPackagingRole()); } }
         if (!invalid.isEmpty() || !actual.equals(requested)) throw new BusinessException(409, "包材角色与原正式配方不一致，本次没有新增写入").withCode("PROMOTION_PREVIEW_STALE").withHint("核对原预览及正式配方的包材角色后再确认");
     }
 

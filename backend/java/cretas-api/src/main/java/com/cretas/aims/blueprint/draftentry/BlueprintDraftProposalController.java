@@ -111,7 +111,7 @@ public class BlueprintDraftProposalController {
         if (blueprint == null || !blueprintId.equals(blueprint.getId())
                 || !PROPOSABLE_BLUEPRINT_STATES.contains(blueprint.getLifecycleState())) {
             throw new BusinessException(409, "只能按本厂当前处于草稿或已校验状态的蓝图预填，请刷新蓝图后重试")
-                    .withCode("BLUEPRINT_DRAFT_BLUEPRINT_NOT_CURRENT");
+                    .withCode("BLUEPRINT_DRAFT_BLUEPRINT_NOT_CURRENT").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
         }
         if (blueprint.getSourcePayload() == null) {
             return ApiResponse.success(blocked(capabilityId, blueprint, new Blocker("BLUEPRINT_SOURCE_MISSING",

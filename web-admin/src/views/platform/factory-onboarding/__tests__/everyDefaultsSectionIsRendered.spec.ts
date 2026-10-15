@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { readJavaSource } from '@/utils/__tests__/javaSource'
 
 /**
  * 后端 `interview-defaults` 给的每一段，前端都得**接**或**显式声明不接**。
@@ -24,6 +23,8 @@ import { readJavaSource } from '@/utils/__tests__/javaSource'
  */
 describe('interview-defaults 的每一段都要有去处', () => {
   const HERE = dirname(fileURLToPath(import.meta.url))
+  const readJavaSource = (_name: string) => readFileSync(resolve(HERE, '../../../../../..',
+    'backend/java/cretas-api/src/main/java/com/cretas/aims/blueprint/interview/InterviewDefaults.java'), 'utf8')
   const PAGE = readFileSync(resolve(HERE, '..', 'index.vue'), 'utf8')
   const EDITOR = readFileSync(resolve(HERE, '..', 'components', 'FactoryAssemblyDetailEditor.vue'), 'utf8')
   const SURFACE = `${PAGE}\n${EDITOR}`

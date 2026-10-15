@@ -1,11 +1,14 @@
 package com.cretas.aims.entity.equipmentplan;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*; import lombok.*; import lombok.experimental.SuperBuilder; import org.hibernate.annotations.Where;
-@Entity @Table(name="equipment_plan_draft_entries",
+@Entity
+@Table(name="equipment_plan_draft_entries",
  uniqueConstraints={
   @UniqueConstraint(name="uk_equipment_plan_entry_id_factory",columnNames={"id","factory_id"}),
   @UniqueConstraint(name="uk_equipment_plan_entry_parent_ordinal",columnNames={"draft_id","factory_id","ordinal"})
- }, indexes=@Index(name="idx_equipment_plan_entry_parent", columnList="factory_id,draft_id,ordinal")) @Where(clause="deleted_at IS NULL")
+ }, indexes=@Index(name="idx_equipment_plan_entry_parent", columnList="factory_id,draft_id,ordinal"))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE equipment_plan_draft_entries SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
+@Where(clause="deleted_at IS NULL")
 @Getter @Setter @SuperBuilder @NoArgsConstructor @AllArgsConstructor
 public class EquipmentCalibrationPlanDraftEntry extends BaseEntity {
  @Id @Column(length=36, nullable=false, updatable=false) private String id;

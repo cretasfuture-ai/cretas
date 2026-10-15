@@ -68,7 +68,7 @@ public class AccountsDraftEntry extends TypedCapabilityDraftEntry<DraftRequest> 
                      || "VALIDATED".equals(current.getLifecycleState()))
                 || !sourceMatches(request.sourceDigest(), current)) {
             throw new BusinessException(409, "岗位草稿来源与当前蓝图不一致，请刷新蓝图后重新预览")
-                    .withCode("ACCOUNTS_BLUEPRINT_SOURCE_MISMATCH");
+                    .withCode("ACCOUNTS_BLUEPRINT_SOURCE_MISMATCH").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
         }
     }
 

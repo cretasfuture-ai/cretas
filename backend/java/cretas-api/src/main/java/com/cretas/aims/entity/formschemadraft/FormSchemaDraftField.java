@@ -26,6 +26,7 @@ import org.hibernate.annotations.Where;
                         columnNames = {"form_id", "factory_id", "field_key"})
         }, indexes = @Index(name = "idx_form_schema_field_form",
                 columnList = "factory_id,form_id,ordinal"))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE form_schema_draft_fields SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

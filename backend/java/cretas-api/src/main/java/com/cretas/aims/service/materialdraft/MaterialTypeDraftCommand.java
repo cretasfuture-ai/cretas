@@ -523,7 +523,7 @@ public class MaterialTypeDraftCommand {
                 || !preview.desired().classificationSegmentCode().equals(row.getDesiredClassificationSegmentCode())
                 || !preview.desired().primaryCategoryCode().equals(row.getDesiredPrimaryCategoryCode())
                 || !preview.desired().category().equals(row.getDesiredCategory())
-                || !preview.desired().unit().equals(row.getDesiredUnit())
+                || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(preview.desired().unit(), row.getDesiredUnit())
                 || !preview.desiredDigest().equals(row.getDesiredDigest())
                 || !preview.previewDigest().equals(row.getPreviewDigest())) {
             throw invalid(409, "物料草稿回读与已确认 ChangeSet 不一致",

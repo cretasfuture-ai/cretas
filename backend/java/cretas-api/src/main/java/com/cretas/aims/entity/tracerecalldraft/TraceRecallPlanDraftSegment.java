@@ -25,6 +25,7 @@ import org.hibernate.annotations.Where;
                 columnNames = {"draft_id", "factory_id", "segment_key"})
 }, indexes = @Index(name = "idx_trace_recall_segment_parent",
         columnList = "factory_id,draft_id,ordinal"))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE trace_recall_plan_draft_segments SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter @Setter @SuperBuilder @NoArgsConstructor @AllArgsConstructor
 public class TraceRecallPlanDraftSegment extends BaseEntity {

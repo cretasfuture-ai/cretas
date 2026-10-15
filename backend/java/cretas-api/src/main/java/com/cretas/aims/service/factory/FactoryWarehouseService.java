@@ -75,7 +75,7 @@ public class FactoryWarehouseService {
                 .ifPresent(existing -> {
                     throw new BusinessException(409, "存放区 " + trimmedCode + " 已存在，id=" + existing.getId())
                             .withCode("WAREHOUSE_CODE_DUPLICATE")
-                            .withHintTarget("code");
+                            .withHintTarget("code").withHint("请刷新建厂预览，核对草稿版本后重新确认操作");
                 });
 
         FactoryWarehouse w = new FactoryWarehouse();

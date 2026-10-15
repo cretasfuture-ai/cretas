@@ -741,7 +741,7 @@ public class QualityReleaseTemplateDraftCommand {
             return null;
         }
         CanonicalUnit unit = units.describe(factoryId, item.unit()).orElse(null);
-        if (unit == null || !unit.active() || !item.unit().equals(unit.code())) {
+        if (unit == null || !unit.active() || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(item.unit(), unit.code())) {
             issues.add(issue("QUALITY_RELEASE_UNIT_NOT_SUPPORTED", target + ".unit",
                     "数值规格单位必须是当前工厂启用的精确 canonical code",
                     "从单位目录选择单位"));
@@ -885,15 +885,15 @@ public class QualityReleaseTemplateDraftCommand {
                 && Objects.equals(row.getExpectedBoolean(), item.expectedBoolean())
                 && row.getReleaseEffect().equals(current.releaseEffect().name())
                 && Objects.equals(row.getUnitCode(), unit == null ? null : unit.code())
-                && Objects.equals(row.getUnitDimension(), unit == null ? null : unit.dimension().name())
-                && Objects.equals(row.getUnitBaseCode(), unit == null ? null : unit.baseCode())
+                && com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(row.getUnitDimension(), unit == null ? null : unit.dimension().name())
+                && com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(row.getUnitBaseCode(), unit == null ? null : unit.baseCode())
                 && Objects.equals(decimal(row.getUnitFactorToBase()),
                     decimal(unit == null ? null : unit.factorToBase()))
-                && Objects.equals(row.getUnitDisplayName(), unit == null ? null : unit.displayName())
-                && Objects.equals(row.getUnitDisplayScale(), unit == null ? null : unit.displayScale())
+                && com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(row.getUnitDisplayName(), unit == null ? null : unit.displayName())
+                && com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(row.getUnitDisplayScale(), unit == null ? null : unit.displayScale())
                 && Objects.equals(row.getUnitConversionFamily(),
                     unit == null ? null : unit.conversionFamily())
-                && Objects.equals(row.getUnitSnapshotDigest(), unit == null ? null : unitSnapshot(unit))
+                && com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(row.getUnitSnapshotDigest(), unit == null ? null : unitSnapshot(unit))
                 && Objects.equals(decimal(row.getTolerance()), decimal(item.tolerance()))
                 && row.getStandardReference().equals(item.standardReference())
                 && row.getInspectionMethod().equals(item.inspectionMethod())

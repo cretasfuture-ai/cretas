@@ -26,6 +26,7 @@ import org.hibernate.annotations.Where;
                         columnNames = {"draft_id", "factory_id", "point_code"})
         }, indexes = @Index(name = "idx_env_monitoring_point_parent",
                 columnList = "factory_id,draft_id,ordinal"))
+@org.hibernate.annotations.SQLDelete(sql = "UPDATE environmental_monitoring_template_draft_points SET deleted_at = NOW() WHERE id = ?", check = org.hibernate.annotations.ResultCheckStyle.COUNT)
 @Where(clause = "deleted_at IS NULL")
 @Getter
 @Setter

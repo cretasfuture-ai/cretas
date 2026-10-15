@@ -448,7 +448,7 @@ public class WarehouseControlDraftCommand {
                     || !expected.location().equals(found.location()) || expected.active() != found.active()
                     || !expected.controlBasis().equals(found.controlBasis())
                     || !expected.currentSnapshotDigest().equals(found.currentSnapshotDigest())
-                    || !WarehouseControlDraftModels.TEMPERATURE_UNIT.equals(found.temperatureUnit())
+                    || !com.cretas.aims.blueprint.FactoryBlueprintSnapshotEquality.sameConfirmedValue(WarehouseControlDraftModels.TEMPERATURE_UNIT, found.temperatureUnit())
                     || !WarehouseControlDraftModels.DEVIATION_ALGORITHM.equals(found.deviationAlgorithm())) {
                 throw readbackMismatch();
             }

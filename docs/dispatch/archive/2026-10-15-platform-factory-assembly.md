@@ -66,6 +66,32 @@ Python namespace mutation changed actual source, caused an assertion failure,
 then exact-source restoration returned green. Shared alias mutation is in #993.
 Final frozen build and CI execution results are recorded in the integration PR.
 
+Integration gates also exposed source-repository assumptions. Fixes keep the main
+ratchets intact: all 70 new soft-delete entities declare their own delete SQL;
+26 versioned tombstones atomically increment lock_version and check row count.
+Real PostgreSQL tests cover physical-row retention, query invisibility, stale
+delete rejection and two-transaction stale-update rejection after deletion.
+The final real PostgreSQL class passed 8 tests. Removing the version increment
+from the actual execution entity made the reverse-concurrency test fail with
+1 assertion failure and 0 errors; exact source restoration passed that test.
+All 150 entity-declared unique keys were independently checked against the native
+Flyway V63 indexes: every matching key is full, not partial. Identity/tenant keys,
+request idempotency keys and membership keys inside an immutable draft version
+are intentionally retained; registration records that decision per key.
+
+Quantity identity uses factory canonical-unit authority. Confirmation metadata,
+canonical-code requirements and snapshot digests remain exact comparisons, so
+an alias cannot silently change a confirmed replay. An alias simulation test
+checks that input 公斤 produces the declared output kg without changing value.
+The existing 10 rule compiler scenarios are reused, not rebuilt.
+
+The field-default source scanner now distinguishes actual fields from same-named
+builder methods; positive, method-only and duplicate-field controls retain its
+fail-closed behavior. Nested receipt serialization/getters/builders preserve their
+public JSON contract. New 409 guards carry action hints and new user messages
+are Chinese. Web gate trigger coverage includes the exact InterviewDefaults
+source it reads; the legacy menu test now includes the gated platform group.
+
 Native Flyway built from main schema baseline 20261101.37 through V62, then
 applied V63 on the same owned fixture. No sentinel factory business changes.
 Real PostgreSQL-dialect JPA query/context tests passed; V63 nullable binding was

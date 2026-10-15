@@ -121,7 +121,7 @@ public class PackagingDraftCommand {
         for (int index = 0; index < request.items().size(); index++) {
             PackagingItem item = request.items().get(index);
             String target = "items[" + index + "]";
-            validateItemShape(item, target, issues);
+            validateItemShape(request.factoryId(), item, target, issues);
             if (item == null) {
                 sourceSnapshot.append("missing-item|");
                 continue;
@@ -335,7 +335,7 @@ public class PackagingDraftCommand {
         }
     }
 
-    private void validateItemShape(PackagingItem item, String target, List<DraftIssue> issues) {
+    private void validateItemShape(String factoryId, PackagingItem item, String target, List<DraftIssue> issues) {
         if (item == null) {
             issues.add(issue("PACKAGING_ITEM_REQUIRED", target, "包装条目不能为空", "补充 typed 包装条目"));
             return;
@@ -372,7 +372,7 @@ public class PackagingDraftCommand {
             issues.add(issue("PACKAGING_SORT_ORDER_INVALID", target + ".sortOrder",
                     "排序值必须在 0 到 10000 之间", "修正排序值"));
         }
-        if (item.packageUnit().equalsIgnoreCase(item.containedUnit())) {
+        if (units.areEquivalent(factoryId, item.packageUnit(), item.containedUnit())) {
             issues.add(issue("PACKAGING_SELF_CONTAINMENT_FORBIDDEN", target,
                     "包装单位不能包含自身", "选择明确的内层单位"));
         }

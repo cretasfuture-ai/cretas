@@ -464,7 +464,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
     expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
     expect(childGroupLabels('/scheduling')).toEqual(['日常调度', '基础资料', '工厂智能调度', '资源与预警', '调度配置']);
-    expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理']);
+    expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理', '平台建厂']);
   });
 
   it('exposes four logistics modules only to LOGISTICS tenants', () => {

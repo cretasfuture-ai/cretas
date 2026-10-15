@@ -225,7 +225,8 @@ public class FactoryBuildApplyValidator {
                 continue;
             }
             if (isBlank(process.getOutputUnit())
-                    || !product.getUnit().trim().equalsIgnoreCase(process.getOutputUnit().trim())) {
+                    || unitContractService == null
+                    || !unitContractService.areEquivalent(factoryId, product.getUnit(), process.getOutputUnit())) {
                 issues.add(new BlueprintSemanticIssue(
                         "FINISHED_OUTPUT_UNIT_MISMATCH", "routes",
                         "产品「" + product.getName() + "」基本单位是 " + product.getUnit()

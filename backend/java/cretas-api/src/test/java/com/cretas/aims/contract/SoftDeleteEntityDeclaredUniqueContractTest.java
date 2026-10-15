@@ -137,6 +137,22 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
             //    （我改这一条时就先后撞了两次重复键：User#cols:username 与 ScaleProtocolConfig#…）。
     ));
 
+    static {
+        // New assembly tables are absent from production: use the real migrated
+        // nonproduction V63 indexes, audited independently from these annotations.
+        // Retention reasons are per key; the exact-set assertion below is unchanged.
+        try {
+            for (String line : Files.readAllLines(Path.of("src/test/resources/platform-assembly-permanent-unique-keys.tsv"), StandardCharsets.UTF_8)) {
+                if (line.isBlank() || line.startsWith("#")) continue;
+                String[] entry=line.split("\t",2);
+                if (entry.length!=2 || entry[1].isBlank() || REGISTERED.putIfAbsent(entry[0],entry[1])!=null)
+                    throw new IllegalStateException("Invalid or duplicate assembly unique-key registration: "+line);
+            }
+        } catch (IOException failure) {
+            throw new ExceptionInInitializerError(failure);
+        }
+    }
+
     @Test
     void everyDeclaredUniqueOnASoftDeletedEntityIsRegistered() throws IOException {
         List<String> found = new ArrayList<>();
