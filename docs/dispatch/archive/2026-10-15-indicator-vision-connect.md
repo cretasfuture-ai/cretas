@@ -35,3 +35,17 @@ Root 的指标展示 scope 追加：既有 IndicatorDetailDrawer.vue 及目标�
 Root 私有 UI 验收 scope：web-admin/tests/e2e/indicator-bridge/{fixture.html,browser.mjs}；只准 127.0.0.1:31759→10059→18085→专属 PG55458，真实抽屉与 API 不 mock。Java fixture 可选 HOLD_FOR_UI 窗口追加本月真实零和错配 code 控制；生产 Java 鉴权排除，固定本地组件角色不算鉴权验收。命令 scripts/windows/test-indicator-bridge.ps1 -HoldForUi 与 web-admin 下 VITE_BACKEND_URL=http://127.0.0.1:10059 的独占 Vite31759，再运行 browser.mjs。不得访问生产 host。
 
 VS2 实施设计约束：Linux API 只调度、持久化和验收回执；上海 Windows 本地 worker 仅调用命名函数，不调用 cycle/deploy，不接受客户端命令/URL/本地路径。任务、配方、数据、模型和独立验收必须绑定厂/项目/版本/哈希。租约超时不自动重跑训练；训练、评测、独立验收与启用分别留证。平台规划必须显式 PLATFORM_ADMIN namespace 与目标厂，不能伪装 FACTORY_USER。六膳门专用硬编码不可作为 generic/OCR 默认 runner。
+
+## VS2 scope lock
+
+任务 ID CONNECT-DATA-VISION-20261015-VS2；Base fa9b9e125348168d31a1c3d8d774462fd48e46aa；Owner /root/implement_vision_sop；独立完整 worktree C:/Users/Steve/cretas-vision-runner-connect-20261015。AN2 真实跨服务及本地 UI 验收已通过，可开始实施。
+
+允许：backend/python/vision_training/**（复用已有 service/draft/adapter，不另建一套 SOP）、tests/test_vision_training*.py；新增 tools/vision-lab/sop_worker.py 及其目标测试、新 scripts/windows/vision-sop-worker.ps1。main.py、auth_middleware.py、PythonSmartBIClient、Java/Web、dispatch、现有 vision_lab/tray_workflow 函数文件不在 scope。不得改数据/模型/计划任务、启动客户训练或远程计算。
+
+实现：持久 SQLite 调度与幂等/原子 claim、绑定厂/项目/版本/preview/config/input hash 的 worker 回执、复用现有命名函数的本地 worker、显式工厂和配方注册。租约超时冻结，禁止自动重复训练。普通用户不能提交 worker 回执。generic/OCR 无已登记真实 runner 时显式阻塞。平台专用规划 API 只接受内部已验证 PLATFORM_ADMIN 命名空间，不把平台管理员 ID 借成工厂用户；root 后续 Java proxy 负责真实平台身份与目标厂验证。
+
+验收：原有 vision SOP 测试及新增队列并发/幂等、错厂/错版本/错哈希/过期 lease、worker 鉴权、generic 与专用模型隔离、无任意命令/URL/路径入口。可以使用临时 synthetic manifest 与 fake adapter 测编排；不能将其称为真实训练、模型准确率或独立工厂验收。原模型/原图/人工标注与生产写入均为 0。
+
+AN2 验收回执：冻结源 fa9b9e125348168d31a1c3d8d774462fd48e46aa，真实主服务 middleware/router/Gold→私有 PG，Java 1 test/0 failure/error/skip；实际抽屉真实零、NO_DATA、FAILED 与重算提示均通过，console/page errors=0；匿名401、跨厂403；真实0/50/99.9和版本窗口回读、错code无快照。证据 Documents/cretas-connect-20261015/indicator/{cross-service-receipt.json,ui-result.json,ui-pg-readback.json,ui-*.png}。Java生产鉴权和无关Python lifespan明确排除，生产业务写入0。源码根因复核5项闭合，后续CI/发布分别留证。
+
+AN2 单独进入 review/发布切片，代码 Owner 已释放该指标 scope，VS2 继续独立分支实施。私有 Python18085/Java10059/Vite31759/PG55458 已按启动PID与专属data目录核验并停止，数据和证据保留。发布目标 selector：PythonIndicatorSourceContractTest,IndicatorQueryServiceImplTest,PythonSmartBIClientTransportSecurityTest；真实 PG/UI 证据按上述冻结源码复用，不把 opt-in 未执行当发布测试通过。
