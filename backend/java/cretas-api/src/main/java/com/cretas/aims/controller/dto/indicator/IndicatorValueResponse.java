@@ -17,7 +17,7 @@ import java.util.Map;
 /**
  * 指标取值响应 DTO — wraps {@link IndicatorValueResult} for HTTP.
  *
- * <p>携带计算值 + 计算时刻 + 来源 (cache/python/precomputed) + 业务时间窗 + 指标基本信息.
+ * <p>携带计算值 + 计算时刻 + 来源 + 数据状态 + 业务时间窗 + 指标基本信息.
  *
  * @author Cretas Team
  * @since 2026-05-22 (Phase 1 Sprint 1 Day 5)
@@ -48,8 +48,11 @@ public class IndicatorValueResponse {
     @Schema(description = "缓存命中标识")
     private Boolean cacheHit;
 
-    @Schema(description = "来源标签: cache / python / precomputed")
+    @Schema(description = "来源标签: cache / precomputed / PYTHON_ENDPOINT:* / REAL_BUSINESS:*")
     private String source;
+
+    @Schema(description = "数据状态: AVAILABLE / NO_DATA / NOT_COMPUTED / FAILED")
+    private String status;
 
     @Schema(description = "业务时间窗起 (查询入参回显)")
     private LocalDate periodStart;
@@ -84,6 +87,7 @@ public class IndicatorValueResponse {
                 .computedAt(result.computedAt())
                 .cacheHit(result.cacheHit())
                 .source(result.source())
+                .status(result.status())
                 .periodStart(periodStart)
                 .periodEnd(periodEnd)
                 .build();
@@ -105,6 +109,7 @@ public class IndicatorValueResponse {
                 .computedAt(result.computedAt())
                 .cacheHit(result.cacheHit())
                 .source(result.source())
+                .status(result.status())
                 .periodStart(periodStart)
                 .periodEnd(periodEnd)
                 .actionHint(extractActionHint(ind))

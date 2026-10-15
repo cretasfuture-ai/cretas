@@ -180,15 +180,25 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
         BigDecimal currentValue = latestOpt
                 .map(IndicatorVersion::getValue)
                 .orElse(indicator.getLastValue());
+        String valueSource = latestOpt
+                .map(IndicatorVersion::getComputeSource)
+                .orElse(currentValue == null ? null : "indicator.lastValue");
+        String valueStatus = currentValue != null
+                ? "AVAILABLE"
+                : (latestOpt.isPresent() || indicator.getLastComputedAt() != null
+                        ? "NO_DATA" : "NOT_COMPUTED");
         String breachLevel = evaluateBreachLevel(currentValue, thresholds);
 
         // 6) Build result
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("indicator", serializeIndicator(indicator));
         result.put("currentValue", currentValue);
+        result.put("valueStatus", valueStatus);
+        result.put("source", valueSource);
         result.put("breachLevel", breachLevel);
+        result.put("latestComputedAt", latestOpt.map(IndicatorVersion::getComputedAt)
+                .orElse(indicator.getLastComputedAt()));
         latestOpt.ifPresent(v -> {
-            result.put("latestComputedAt", v.getComputedAt());
             result.put("latestPeriodStart", v.getPeriodStart());
             result.put("latestPeriodEnd", v.getPeriodEnd());
             result.put("latestAlertLevel", v.getAlertLevel());

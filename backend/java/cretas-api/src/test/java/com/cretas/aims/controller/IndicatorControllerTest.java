@@ -210,6 +210,7 @@ class IndicatorControllerTest {
         assertEquals(new BigDecimal("95.50"), v.getValue());
         assertEquals(false, v.getCacheHit());
         assertEquals("python", v.getSource());
+        assertEquals(IndicatorValueResult.AVAILABLE, v.getStatus());
         assertEquals(start, v.getPeriodStart());
         assertEquals(end, v.getPeriodEnd());
         verify(indicatorQueryService).computeForCode("FACTORY_YIELD_RATE", FACTORY_ID, start, end);
