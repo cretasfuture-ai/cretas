@@ -140,6 +140,8 @@ const authStore = useAuthStore()
 const canConfirm = computed(() => canConfirmBlueprintDrafts({
   isFactory: !!authStore.isFactory,
   isPlatform: !!authStore.isPlatform,
+  platformRole: authStore.user && 'platformUser' in authStore.user
+    ? String(authStore.user.platformUser?.role ?? '') : '',
   currentRole: String(authStore.currentRole ?? ''),
   factoryId: String(authStore.factoryId ?? ''),
 }, props.factoryId))

@@ -102,10 +102,28 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         return material;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver assemblyActorResolver;
+
     @Override
     @Transactional
     @CacheEvict(value = "materialTypes", key = "#factoryId")
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
+        return createMaterialTypeInternal(factoryId, dto, null);
+    }
+
+    @Override
+    @Transactional
+    @CacheEvict(value = "materialTypes", key = "#factoryId")
+    public RawMaterialTypeDTO createMaterialTypeAsActor(String factoryId, RawMaterialTypeDTO dto,
+                                                       com.cretas.aims.security.ActorRef actor) {
+        if (assemblyActorResolver == null) throw new BusinessException(403, "平台建厂物料写入未启用");
+        assemblyActorResolver.authorize(actor, factoryId, Set.of("factory-blueprint:master-data:material"));
+        return createMaterialTypeInternal(factoryId, dto, actor);
+    }
+
+    private RawMaterialTypeDTO createMaterialTypeInternal(String factoryId, RawMaterialTypeDTO dto,
+                                                         com.cretas.aims.security.ActorRef actor) {
         com.cretas.aims.entity.enums.TaxTreatment taxTreatment = dto.getTaxTreatment() != null
                 ? dto.getTaxTreatment() : com.cretas.aims.entity.enums.TaxTreatment.TAXABLE;
 
@@ -191,6 +209,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setIsActive(true);
         // 使用从Controller传入的createdBy，如果为null则使用默认值1
         materialType.setCreatedBy(dto.getCreatedBy() != null ? dto.getCreatedBy() : 1L);
+        if (actor != null) materialType.setActor(actor);
         materialType.setCreatedAt(LocalDateTime.now());
         materialType.setUpdatedAt(LocalDateTime.now());
 

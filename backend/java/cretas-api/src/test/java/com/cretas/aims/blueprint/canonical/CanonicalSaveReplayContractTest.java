@@ -57,6 +57,48 @@ class CanonicalSaveReplayContractTest {
         return request;
     }
 
+    @Test void configurationPreflightDoesNotPublishOrEraseBlockedWorkflow() {
+        var blockedWorkflow = CapabilityView.builder().id("workflow").label("Workflow")
+                .status("BLOCKED").missingDependencies(List.of("bom")).build();
+        var snapshot = catalog.current();
+        when(catalog.load("v1")).thenReturn(snapshot);
+        when(catalog.derive(any(), anyList(), any())).thenReturn(List.of(blockedWorkflow));
+        service.saveDraft("F1", request(), actor);
+        when(rows.lockCurrentByFactoryId("F1")).thenAnswer(call -> Optional.of(stored));
+        var operation = new OperationRequest(); operation.setIdempotencyKey("validate-config"); operation.setExpectedRowVersion(0L);
+        var validated = service.validate("F1", stored.getId(), operation, actor);
+        assertThat(validated.getValidation().isValid()).isTrue();
+        assertThat(validated.getCapabilities().get(0).getStatus()).isEqualTo("BLOCKED");
+        assertThat(validated.getCapabilities().get(0).getMissingDependencies()).containsExactly("bom");
+        operation.setIdempotencyKey("simulate-config");
+        var simulated = service.simulate("F1", stored.getId(), operation, actor);
+        assertThat(simulated.getSimulation().isSafe()).isTrue();
+        assertThat(simulated.getSimulation().getChecks().get("capabilityDependenciesReady")).isTrue();
+        assertThat(simulated.getSimulation().getWorkflow()).containsEntry("state", "NOT_PUBLISHED")
+                .containsEntry("simulationExecuted", false).containsEntry("businessWriteCount", 0);
+        operation.setIdempotencyKey("publish-config");
+        var published = service.publish("F1", stored.getId(), operation, actor);
+        assertThat(published.getLatestReceipt().getResult()).containsEntry("workflowPublished", false);
+        assertThat(published.getWorkflowState()).isEqualTo("NOT_PUBLISHED");
+    }
+
+    @Test void blockedNonWorkflowCapabilityStillRefusesConfigurationPreflight() {
+        var blocked = CapabilityView.builder().id("routes").label("路线")
+                .status("BLOCKED").missingDependencies(List.of("products")).build();
+        var snapshot = catalog.current();
+        when(catalog.load("v1")).thenReturn(snapshot);
+        when(catalog.derive(any(), anyList(), any())).thenReturn(List.of(blocked));
+        service.saveDraft("F1", request(), actor);
+        when(rows.lockCurrentByFactoryId("F1")).thenAnswer(call -> Optional.of(stored));
+        var operation = new OperationRequest(); operation.setIdempotencyKey("validate-blocked"); operation.setExpectedRowVersion(0L);
+        var result = service.validate("F1", stored.getId(), operation, actor);
+        assertThat(result.getValidation().isValid()).isFalse();
+        assertThat(result.getValidation().getBlockingIssues()).extracting(ValidationIssue::getCapabilityId).containsExactly("routes");
+        operation.setIdempotencyKey("simulate-blocked");
+        assertThatThrownBy(() -> service.simulate("F1", stored.getId(), operation, actor))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+    }
+
     @Test void exactReplayReturnsOriginalWithoutPlanningOrWritingAgain() {
         service.saveDraft("F1", request(), actor);
         clearInvocations(rows, planner, factories);

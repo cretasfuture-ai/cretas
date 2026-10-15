@@ -272,6 +272,8 @@ export interface TypeItem {
   /** product_types / raw_material_types 的 unit 列是 NOT NULL —— 空值后端会拒 */
   unit: string
   description?: string
+  /** Explicit material storage choice; absent means still awaiting confirmation. */
+  storageType?: 'fresh' | 'frozen' | 'dry' | 'normal' | null
   /** 决定产品进入 Workflow/销售等下游目录；普通工厂成品默认 FINISHED_PRODUCT */
   productCategory?: string
   /** 一级包装单位；与 boxConversionCoefficient 成对出现 */

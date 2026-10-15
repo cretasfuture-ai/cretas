@@ -66,6 +66,36 @@ public class FactoryBuildApplyValidator {
     @Autowired
     private AssemblyThresholdWriter assemblyThresholdWriter;
 
+    private static final Map<String, String> STORAGE_LABELS = Map.of(
+            "fresh", "新鲜", "frozen", "冻货", "dry", "干货", "normal", "常温");
+
+    public static String materialStorageLabel(String value) {
+        return value == null ? null : STORAGE_LABELS.get(value);
+    }
+
+    void checkMaterialStorage(List<String> problems, String factoryId, List<ApplyAIInitRequest.TypeItem> items) {
+        if (items == null) return;
+        for (var item : items) {
+            if (item == null || isBlank(item.getCode()) || isBlank(item.getName())) continue;
+            boolean packaging = com.cretas.aims.entity.material.MaterialMainCategory.PACKAGING.equals(
+                    com.cretas.aims.entity.material.MaterialMainCategory.of(item.getCategory()));
+            if (packaging && !isBlank(item.getStorageType())) {
+                problems.add("包材「" + item.getName() + "」不适用储存类型，请清空后重新保存");
+                continue;
+            }
+            if (!isBlank(item.getStorageType()) && materialStorageLabel(item.getStorageType()) == null) {
+                problems.add("物料「" + item.getName() + "」的储存类型无效，请明确选择新鲜、冻货、干货或常温");
+                continue;
+            }
+            boolean exists = rawMaterialTypeRepository.findByFactoryIdAndCode(factoryId, item.getCode()).isPresent()
+                    || rawMaterialTypeRepository.existsByFactoryIdAndNormalizedName(factoryId,
+                        com.cretas.aims.util.EntityNameNormalizer.normalize(item.getName()));
+            if (!exists && !packaging && isBlank(item.getStorageType())) {
+                problems.add("物料「" + item.getName() + "」尚未确认储存类型，请在专业复核的物料表中选择后重新保存");
+            }
+        }
+    }
+
     /** 返回全部不合规之处(不是遇到第一个就返回) —— 让提交方一次看清要改哪些。 */
     public List<String> validateApplyRequest(ApplyAIInitRequest req, String factoryId) {
         List<String> problems = new ArrayList<>();
@@ -95,6 +125,7 @@ public class FactoryBuildApplyValidator {
                     req.getSuggestedData().getProductTypes());
             checkTypeItems(problems, "materialTypes",
                     req.getSuggestedData().getMaterialTypes());
+            checkMaterialStorage(problems, factoryId, req.getSuggestedData().getMaterialTypes());
             checkPackaging(problems, factoryId, req.getSuggestedData().getProductTypes());
             checkConversions(problems, req.getSuggestedData(), factoryId);
             checkWorkProcesses(problems, req.getSuggestedData().getWorkProcesses());

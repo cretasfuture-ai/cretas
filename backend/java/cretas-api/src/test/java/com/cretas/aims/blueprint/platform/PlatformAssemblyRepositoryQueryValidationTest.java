@@ -48,12 +48,13 @@ class PlatformAssemblyRepositoryQueryValidationTest {
         history.setCreatedAt(java.time.LocalDateTime.now()); history.setUpdatedAt(java.time.LocalDateTime.now());
         entityManager.persist(history);
         var binding = new com.cretas.aims.entity.config.FactoryBlueprintBinding();
-        binding.setFactoryId(factory); binding.setBlueprintId(blueprint.getId()); binding.setAppliedVersion(1); binding.setPublishedVersion(1);
+        binding.setFactoryId(factory); binding.setBlueprintId(blueprint.getId()); binding.setAppliedVersion(null); binding.setPublishedVersion(1);
         binding.setCreatedAt(java.time.LocalDateTime.now()); binding.setUpdatedAt(java.time.LocalDateTime.now());
         entityManager.persist(binding); entityManager.flush(); entityManager.clear();
         assertThat(entityManager.find(com.cretas.aims.entity.config.BlueprintApplication.class, application.getId()).getRecoveryPlan()).contains("remaining");
         assertThat(entityManager.find(com.cretas.aims.entity.config.BlueprintVersionHistory.class, history.getId()).getFactoryId()).isEqualTo(factory);
         assertThat(entityManager.find(com.cretas.aims.entity.config.FactoryBlueprintBinding.class, binding.getId()).getPublishedVersion()).isEqualTo(1);
+        assertThat(entityManager.find(com.cretas.aims.entity.config.FactoryBlueprintBinding.class, binding.getId()).getAppliedVersion()).isNull();
         assertThat(blueprints.findById(blueprint.getId()).orElseThrow().getRequestDigest()).isEqualTo("a".repeat(64));
     }
 

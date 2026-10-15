@@ -519,7 +519,9 @@ public class FactoryBuildApplyService {
                         dto.setName(EntityNameNormalizer.normalize(m.getName()));
                         dto.setUnit(m.getUnit());
                         dto.setCategory(l1);
-                        RawMaterialTypeDTO saved = rawMaterialTypeService.createMaterialType(factoryId, dto);
+                        dto.setStorageType(m.getStorageType());
+                        dto.setCreatedBy(actor.factoryUserId());
+                        RawMaterialTypeDTO saved = rawMaterialTypeService.createMaterialTypeAsActor(factoryId, dto, actor);
                         // ⛔ service 自己生成编码(用户配的规则或 UUID), 与载荷里的码不同 ——
                         //    转换率是按码连接的, 不记这张映射就会在下一步解析不到。
                         materialCodeRemap.put(m.getCode(), saved.getCode());
@@ -545,6 +547,7 @@ public class FactoryBuildApplyService {
                     rt.setName(EntityNameNormalizer.normalize(m.getName()));
                     rt.setUnit(unitContractService.storageUnit(factoryId, m.getUnit()));
                     rt.setIsActive(true);
+                    applyMaterialStorage(rt, m);
                     if (created) {
                         rt.setActor(actor);
                     }
@@ -919,6 +922,11 @@ public class FactoryBuildApplyService {
      * An omitted category means an ordinary finished product for a new row, while
      * an overwrite without this field preserves the existing business identity.
      */
+    static void applyMaterialStorage(RawMaterialType material, ApplyAIInitRequest.TypeItem item) {
+        if (com.cretas.aims.entity.material.MaterialMainCategory.PACKAGING.equals(material.getMainCategory())) material.setStorageType(null);
+        else if (item.getStorageType() != null) material.setStorageType(item.getStorageType());
+    }
+
     static String resolveProductCategory(ApplyAIInitRequest.TypeItem item, ProductType productType) {
         String requested = item == null ? null : item.getProductCategory();
         if (requested != null && !requested.isBlank()) {

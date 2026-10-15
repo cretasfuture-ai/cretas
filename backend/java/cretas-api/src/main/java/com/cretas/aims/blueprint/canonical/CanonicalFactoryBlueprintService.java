@@ -312,7 +312,7 @@ public class CanonicalFactoryBlueprintService {
         CatalogSnapshot catalog = lockedCatalog(blueprint);
         List<CapabilityView> capabilities = capabilityCatalog.derive(catalog, changes, payload);
         List<ValidationIssue> blockers = new ArrayList<>(capabilities.stream()
-                .filter(capability -> "BLOCKED".equals(capability.getStatus()))
+                .filter(this::blocksConfiguration)
                 .map(capability -> ValidationIssue.builder()
                         .code("MISSING_CAPABILITY_DEPENDENCY")
                         .capabilityId(capability.getId())
@@ -372,6 +372,12 @@ public class CanonicalFactoryBlueprintService {
         return toResponse(blueprint, receipt);
     }
 
+    private boolean blocksConfiguration(CapabilityView capability) {
+        // Workflow publication has independent BOM and engine gates. Preserve its
+        // BLOCKED view without blocking unrelated configuration application.
+        return "BLOCKED".equals(capability.getStatus()) && !"workflow".equals(capability.getId());
+    }
+
     private ValidationIssue validationIssue(BlueprintSemanticIssue issue) {
         return ValidationIssue.builder()
                 .code(issue.code())
@@ -422,7 +428,7 @@ public class CanonicalFactoryBlueprintService {
                     .build());
         }
         capabilities.stream()
-                .filter(capability -> "BLOCKED".equals(capability.getStatus()))
+                .filter(this::blocksConfiguration)
                 .map(capability -> ValidationIssue.builder()
                         .code("MISSING_CAPABILITY_DEPENDENCY")
                         .capabilityId(capability.getId())
@@ -461,7 +467,7 @@ public class CanonicalFactoryBlueprintService {
         checks.put("catalogDigestLocked", true);
         checks.put("domainApplyValidationPassed", true);
         checks.put("capabilityDependenciesReady", capabilities.stream()
-                .noneMatch(capability -> "BLOCKED".equals(capability.getStatus())));
+                .noneMatch(this::blocksConfiguration));
         checks.put("plannedChangesClassified", changes.stream()
                 .noneMatch(change -> "unclassified".equals(capabilityCatalog.capabilityId(catalog, change))));
         checks.put("businessWriteCountZero", true);

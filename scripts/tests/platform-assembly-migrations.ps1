@@ -51,7 +51,7 @@ $expected = @(
  'V20261103_49__typed_canonical_blueprint_actors.sql',
  'V20261103_53__critical_control_temperature_snapshot.sql','V20261103_59__material_draft_update_promotion.sql',
  'V20261103_60__factory_assembly_conversation_sessions.sql','V20261103_61__assembly_catalog_and_snapshot_dependencies.sql',
- 'V20261103_62__assembly_plan_result_snapshot.sql'
+ 'V20261103_62__assembly_plan_result_snapshot.sql','V20261103_63__assembly_binding_unapplied_version.sql'
 )
 foreach ($name in $expected) { if (-not (Test-Path (Join-Path $flyway $name))) { throw "missing migration: $name" } }
 $v42 = 'V20261103_42__bom_draft_promotion_capability.sql'
@@ -107,7 +107,7 @@ try {
     $afterSentinel = (& $pg -h 127.0.0.1 -p $port -U $user -d $Database -Atc "select md5(row(id,name,description,industry_type,default_config,form_templates,rule_templates,product_type_templates,department_templates,is_active,version)::text) from factory_type_blueprints where id='assembly-gate-sentinel'").Trim()
     if ($beforeSentinel -ne $afterSentinel) { throw "sentinel business row changed: before=$beforeSentinel after=$afterSentinel" }
     $history = (& $pg -h 127.0.0.1 -p $port -U $user -d $Database -Atc "select max(version::text) || ':' || count(*) from flyway_schema_history where success").Trim()
-    if ($history -ne '20261103.62:37') { throw "Flyway history assertion failed: $history" }
+    if ($history -ne '20261103.63:38') { throw "Flyway history assertion failed: $history" }
     "PASS true-Flyway baseline+upgrade: history=$history selected_tables=5 conversation_rows=0 business_rows_before_after=$beforeRows sentinel_hash=$beforeSentinel" | Add-Content $log
 } finally {
     if ($created -and -not $KeepDatabase) { Invoke-Psql 'postgres' @('-v','ON_ERROR_STOP=1','-c',"DROP DATABASE `"$Database`"") }

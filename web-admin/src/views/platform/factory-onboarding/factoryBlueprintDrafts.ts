@@ -828,6 +828,7 @@ export async function hashedIdempotencyKey(prefix: string, capabilityId: string,
 export interface DraftAuthLike {
   isFactory: boolean
   isPlatform?: boolean
+  platformRole?: string
   currentRole: string
   factoryId: string
 }
@@ -838,7 +839,7 @@ export function canConfirmBlueprintDrafts(auth: DraftAuthLike, factoryId: string
     && ((auth.isFactory === true && auth.isPlatform !== true
       && auth.currentRole === 'factory_super_admin' && auth.factoryId === factoryId)
       || (auth.isPlatform === true && auth.isFactory !== true
-        && auth.currentRole === 'super_admin'))
+        && auth.platformRole === 'super_admin'))
 }
 
 // ==================== 行状态 ====================

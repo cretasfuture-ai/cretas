@@ -36,7 +36,8 @@
           <el-table-column label="编码" min-width="140"><template #default="{ row }"><el-input v-model="row.code" @update:model-value="changed" /></template></el-table-column>
           <el-table-column label="名称" min-width="150"><template #default="{ row }"><el-input v-model="row.name" @update:model-value="changed" /></template></el-table-column>
           <el-table-column label="单位" width="110"><template #default="{ row }"><el-input v-model="row.unit" @update:model-value="changed" /></template></el-table-column>
-          <el-table-column label="L1 分类" width="130"><template #default="{ row }"><el-input v-model="row.category" placeholder="原料/辅料/包材" @update:model-value="changed" /></template></el-table-column>
+          <el-table-column label="L1 分类" width="130"><template #default="{ row }"><el-input v-model="row.category" placeholder="原料/辅料/包材" @update:model-value="() => { if (isPackagingCategory(row.category)) row.storageType = null; changed() }" /></template></el-table-column>
+          <el-table-column label="储存类型" width="150"><template #default="{ row }"><el-select v-model="row.storageType" :disabled="isPackagingCategory(row.category)" :placeholder="isPackagingCategory(row.category) ? '包材不适用' : '请明确选择'" clearable @change="changed"><el-option label="新鲜" value="fresh" /><el-option label="冻货" value="frozen" /><el-option label="干货" value="dry" /><el-option label="常温" value="normal" /></el-select></template></el-table-column>
           <el-table-column label="说明" min-width="170"><template #default="{ row }"><el-input v-model="row.description" @update:model-value="changed" /></template></el-table-column>
           <el-table-column width="64" fixed="right"><template #default="{ $index }"><el-button link type="danger" @click="remove(suggestedData.materialTypes, $index)">删除</el-button></template></el-table-column>
         </el-table>
@@ -309,6 +310,10 @@ const platformCount = computed(() => moduleRows.value.length + thresholds.value.
 const alertCount = computed(() => alerts.value.length + metricWatches.value.length)
 
 function changed() { emit('changed') }
+// Display hint only; the server validates against MaterialMainCategory.
+function isPackagingCategory(category?: string | null) {
+  return ['包材', '包辅材', 'PACKAGING', 'PACKAGE'].includes((category ?? '').trim().toUpperCase())
+}
 function remove<T>(rows: T[], index: number) { rows.splice(index, 1); changed() }
 const productCategoryOptions = [
   { value: 'FINISHED_PRODUCT', label: '成品' },

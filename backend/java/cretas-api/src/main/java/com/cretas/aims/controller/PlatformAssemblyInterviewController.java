@@ -754,6 +754,8 @@ public class PlatformAssemblyInterviewController {
             private String name;
             private String unit;
             private String description;
+            /** Material storage choice explicitly confirmed by the user. */
+            private String storageType;
 
             /**
              * 产品业务类别。产品缺省按 FINISHED_PRODUCT；物料项不使用此字段。

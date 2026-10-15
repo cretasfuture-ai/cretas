@@ -1661,6 +1661,11 @@ if hasattr(data_sync, 'router') and data_sync.router is not None:
 # =====================================================
 app.include_router(ai_proxy.router, prefix="/api/ai", tags=["AI Proxy"])
 
+# Dedicated platform contract; ordinary factory AI endpoints keep their behaviour.
+if os.getenv("CRETAS_PLATFORM_FACTORY_ASSEMBLY_ENABLED", "false").lower() == "true":
+    from factory_assembly import api as factory_assembly_api
+    app.include_router(factory_assembly_api.router, prefix="/api/platform/factory-assembly")
+
 # Optional: classifier router (requires torch + transformers)
 if classifier is not None:
     app.include_router(classifier.router, prefix="/api/classifier", tags=["Intent Classifier"])

@@ -200,6 +200,7 @@ public class FactoryBuildPlanService {
                 String detail = t.getName() + " / " + t.getUnit()
                         + (exists ? "" : " / " + (l1 != null ? "分类 " + l1
                                 : "⚠️ 未分类(本厂 L1 里没有对应的类, 落库后按类别筛选看不到它)"));
+                if (t.getStorageType() != null) detail += " / 储存 " + FactoryBuildApplyValidator.materialStorageLabel(t.getStorageType());
                 out.add(change("原料类型", t.getCode(), detail, exists, overwrite));
             }
         }

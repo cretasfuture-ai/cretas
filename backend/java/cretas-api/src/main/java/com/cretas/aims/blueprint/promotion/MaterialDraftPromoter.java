@@ -396,11 +396,7 @@ class MaterialDraftPromoter implements DraftPromoter {
         if (plan.packaging()) dto.setTaxIncludedUnitPrice(source.taxIncludedUnitPrice());
         // Platform actors intentionally leave the legacy factory-user FK null.
         dto.setCreatedBy(actor.factoryUserId());
-        String id = materialTypeService.createMaterialType(factoryId, dto).getId();
-        RawMaterialType created = materialTypeRepository.findByIdAndFactoryId(id, factoryId)
-                .orElseThrow(() -> new IllegalStateException("正式物料创建后无法在目标工厂读回"));
-        created.setActor(actor);
-        materialTypeRepository.saveAndFlush(created);
+        String id = materialTypeService.createMaterialTypeAsActor(factoryId, dto, actor).getId();
         return id;
     }
 

@@ -146,7 +146,7 @@ public class FactoryBlueprintCapabilityCatalog {
             int count = counts.getOrDefault(capabilityId, 0);
             boolean included = count > 0;
             List<String> missing = safeList(definition.getDependsOn()).stream()
-                    .filter(dependency -> dependencyRequired(capabilityId, dependency, payload))
+                    .filter(dependency -> dependencyRequired(capabilityId, dependency, payload, counts))
                     .filter(dependency -> {
                         CapabilityView dependencyView = built.get(dependency);
                         return dependencyView == null || !"READY".equals(dependencyView.getStatus());
@@ -190,7 +190,12 @@ public class FactoryBlueprintCapabilityCatalog {
     }
 
     private boolean dependencyRequired(String capabilityId, String dependency,
-                                       ApplyAIInitRequest payload) {
+                                       ApplyAIInitRequest payload, Map<String, Integer> counts) {
+        // No module changes retains the formal service's default-open scope.
+        // Do not invent module writes just to permit form/alert configuration.
+        if ("modules".equals(dependency) && Set.of("forms", "alerts").contains(capabilityId)) {
+            return counts.getOrDefault("modules", 0) > 0;
+        }
         if (!"workflow".equals(capabilityId) || !"critical-controls".equals(dependency)) {
             return true;
         }

@@ -292,10 +292,12 @@ describe('who can confirm', () => {
     expect(canConfirmBlueprintDrafts({ ...factoryAdmin, factoryId: '' }, '')).toBe(false)
   })
   it('allows verified platform super/system namespace and rejects role-only or mixed identities', () => {
-    const platform = { isFactory: false, isPlatform: true, currentRole: 'super_admin', factoryId: '' }
+    const platform = { isFactory: false, isPlatform: true, currentRole: 'platform_admin', platformRole: 'super_admin', factoryId: '' }
     expect(canConfirmBlueprintDrafts(platform, 'F006')).toBe(true)
-    expect(canConfirmBlueprintDrafts({ ...platform, currentRole: 'system_admin' }, 'F006')).toBe(false)
-    expect(canConfirmBlueprintDrafts({ ...platform, currentRole: 'support_admin' }, 'F006')).toBe(false)
+    expect(canConfirmBlueprintDrafts({ ...platform, platformRole: 'platform_admin' }, 'F006')).toBe(false)
+    expect(canConfirmBlueprintDrafts({ ...platform, platformRole: undefined }, 'F006')).toBe(false)
+    expect(canConfirmBlueprintDrafts({ ...platform, platformRole: 'system_admin' }, 'F006')).toBe(false)
+    expect(canConfirmBlueprintDrafts({ ...platform, platformRole: 'support_admin' }, 'F006')).toBe(false)
     expect(canConfirmBlueprintDrafts({ ...platform, isPlatform: false }, 'F006')).toBe(false)
     expect(canConfirmBlueprintDrafts({ ...platform, isFactory: true }, 'F006')).toBe(false)
     expect(canConfirmBlueprintDrafts(platform, '')).toBe(false)

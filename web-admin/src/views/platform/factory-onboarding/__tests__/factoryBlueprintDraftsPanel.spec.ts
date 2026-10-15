@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const auth = vi.hoisted(() => ({ isFactory: true, isPlatform: false, currentRole: 'factory_super_admin', factoryId: 'F006',
-  user: { id: 7, userType: 'factory' } as { id: number; userType: string } | null }))
+  user: { id: 7, userType: 'factory' } as { id: number; userType: string; platformUser?: { role: string } } | null }))
 const api = vi.hoisted(() => ({
   getDraftWriteOrder: vi.fn(),
   getWrittenDrafts: vi.fn(),
@@ -225,7 +225,7 @@ describe('FactoryBlueprintDraftsPanel', () => {
   it('uses distinct real materialize keys for same-number factory and platform actors', async () => {
     const keys: string[] = []
     for (const userType of ['factory', 'platform']) {
-      auth.user = { id: 7, userType }
+      auth.user = { id: 7, userType, ...(userType === 'platform' ? { platformUser: { role: 'super_admin' } } : {}) }
       auth.isFactory = userType === 'factory'; auth.isPlatform = userType === 'platform'
       auth.currentRole = userType === 'factory' ? 'factory_super_admin' : 'super_admin'
       auth.factoryId = userType === 'factory' ? 'F006' : ''
@@ -270,7 +270,8 @@ describe('FactoryBlueprintDraftsPanel', () => {
   })
 
   it('actual platform namespace opens proposal, written readback and promotion records', async () => {
-    auth.isFactory = false; auth.isPlatform = true; auth.currentRole = 'super_admin'; auth.factoryId = ''
+    auth.isFactory = false; auth.isPlatform = true; auth.currentRole = 'platform_admin'; auth.factoryId = ''
+    auth.user = { id: 7, userType: 'platform', platformUser: { role: 'super_admin' } }
     const w = mountPanel(); await flushPromises()
     expect(api.getWrittenDrafts).toHaveBeenCalledWith('F006', 'bp-1')
     expect(api.getDraftProposal).toHaveBeenCalled()
