@@ -71,3 +71,15 @@ VS2 Owner于73c459430d后释放代码scope；root接管sop_worker.py及worker_co
 VS-HTTP验收任务 CONNECT-DATA-VISION-20261015-HTTP；Owner implement_vision_sop；Base19860076ce（root冻结候选另记录内容hash）。只允许读取root树产品文件，在Documents/cretas-connect-20261015/vision/http-runner中创建非敏感脚本/回执，在D:/CretasVisionLab/acceptance/connect-sop-20261015中创建独占合成测试数据，开启并关闭自身loopback18087/18088服务。实际main middleware/router→队列→Windows现有collect函数→完成回执/重启读回；匿名/错worker/跨厂阴性。不改任何repo文件、原有客户数据/任务/模型，不训练、无生产网络或业务写。验收脚本exit0并返回factory/project/job/真实函数/实际下载hash及重启读回证据；不得把collect链路称模型训练或完整Java/平台入口验收。
 
 Python独立交付切片 CONNECT-DATA-VISION-20261015-PY：Owner root，Base4b0209edd95e7f854a7bec659c8d50eccc168b3c，worktree cretas-vision-runner-connect-20261015 / codex/vision-sop-python-ready-20261015。仅19个Python/PSworker/SOP与dispatch文件，产品内容与已验b39899df24逐文件相同，目标75pass/1warning；无Java/Web/Entity/迁移/平台底座源码。复用该内容证据，适用CI另跑。本批默认registry空，生产不登记客户worker/配方、不训练、不启用。VS3 Java/Web接线待平台底座交付，不能将Python后端发布称整个平台接入完成。
+
+## 2026-10-15 后端交付与入口待办
+
+Python切片已合入PR #990，head951a5fbd0c230896acb8398299497e9cbff490a6，merge7ebe070569f4ec4986dc773d32b3e66a25e02026。适用5项CI均成功；Python9969pass/166skip/153deselected/2xfail，6个vision测试文件共75条确实执行。首次CI单失败来自Windows反斜杠夹具在Linux上不是路径分隔符；改native路径、保留越界拒绝断言，产品不变。失败与成功日志均保留，不删断言、不把排除项算通过。
+
+真实HTTP验收通过：main.app完整middleware/router→平台草稿/队列→PS worker -Once→既有VisionLab.collect下载合成PNG→真实字节hash匹配→HTTP complete→重启同receipt hash；普通factoryJWT假worker/错worker401、跨厂403、第二次no_job，18087/18088关闭。factory VISION-HTTP-A/B，project vtp-5af073c40ba1285db495，job vjob-8739785f27010955b670d80d85dee8ae。回执Documents/cretas-connect-20261015/vision/http-runner/http-acceptance-receipt.json，源码hash与b39899df24相同；无客户数据、GPU训练、独立验收或启用。
+
+2026-10-15 19:38从clean exact-main7ebe070569单独发布Python，deploy exit0；依赖cache hit、142项既有SmartBI迁移全部up-to-date，无Java/Web/平台迁移随行。production-after.json校验运行源码hash、三类路由、匿名/未登记worker401；registry未配置，drafts=0/jobs=0，业务写0。Python scope（main/runtime/队列/worker/registry/测试）本次释放；后续接入不重训、不改自动任务状态。
+
+VS3保留：新Java代理/Controller基于平台已提交但未合入的6e86f5ff8d30cc3e15a7ebe8f0ebb94f1b62888d固定快照，7条合同0fail/error/skip；Vue8+API3条与typecheck通过；实际组件经私有代理到main持久化保存、reload恢复、厂B隔离通过，UI结果明确排除真实平台入口与Java/生产身份。Java/Web源保留在root分支codex/vision-platform-ready-20261015（f2f77d7e3f），组合编译分支codex/vision-assembly-validation-20261015（68de9f0274）仅验证，不得整支合并或部署。
+
+剩余scope仅Java vision bridge/Controller及新Vue API/组件挂载。平台Owner仍持有factory-onboarding/index.vue，6e86为WIP、无PR且不在main；该任务默认关闭/无生产边界不变。platform-entry-mount.patch已准备并apply--check通过但未应用；待底座合入/释放后用真实平台入口→Java typed actor/目标厂校验→Python读回补全UI正反验收。母任务blocked表示此具体外部依赖，不表示模型训练已完成。详情见外部证据vision/handoff-platform-entry.md。
