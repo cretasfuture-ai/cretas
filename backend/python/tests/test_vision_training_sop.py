@@ -120,6 +120,33 @@ def test_explicit_save_readback_is_idempotent_and_preview_mismatch_fails(tmp_pat
         service.save_draft(altered)
 
 
+def test_save_rebuilds_canonical_template_and_preserves_receipts_on_retry() -> None:
+    service = VisionTrainingService()
+    preview = service.preview(spec())
+    tampered_template = preview.template.model_copy(update={"required_receipts": ()})
+    tampered_preview = preview.model_copy(update={"template": tampered_template})
+    with pytest.raises(PreviewMismatchError, match="registered catalog"):
+        service.save_draft(tampered_preview)
+    with pytest.raises(PreviewMismatchError, match="content hash"):
+        service.save_draft(preview.model_copy(update={"preview_id": "preview-forged"}))
+
+    first = service.save_draft(preview)
+    created_at = first.created_at
+    stage_receipt = StageReceipt(
+        receipt_id="collect-retry-1",
+        stage=StageName.COLLECT,
+        status=ReceiptStatus.FAILED,
+        project_id=first.project_id,
+        factory_id="F001",
+        task_family="packaging-detection",
+        message="synthetic failure",
+    )
+    with_receipt = service.record_stage_receipt(first.project_id, stage_receipt)
+    retried = service.save_draft(preview)
+    assert retried.created_at == created_at
+    assert retried.receipts == with_receipt.receipts
+
+
 def test_authenticated_factory_context_is_required_to_match_requested_scope() -> None:
     service = VisionTrainingService()
     with pytest.raises(ScopeViolationError):
@@ -159,6 +186,51 @@ def test_training_success_does_not_auto_accept_or_enable() -> None:
     assert plan.enabled is False
     assert plan.status.value == "evaluated"
     assert any("not inferred" in blocker for blocker in plan.blockers)
+
+
+def test_invalid_asset_scope_cannot_report_successful_train_or_acceptance_items() -> None:
+    service = VisionTrainingService()
+    project = make_project(service)
+    assets = (
+        receipt(project.project_id, "dataset"),
+        receipt(project.project_id, "model", training_success=True),
+        receipt(
+            project.project_id,
+            "evaluation",
+            factory_id="F999",
+            independent=True,
+            acceptance_status="passed",
+        ),
+    )
+    plan = service.stage_plan(project.project_id, assets)
+    by_stage = {item.stage: item for item in plan.items}
+    assert plan.status.value == "blocked"
+    assert plan.training_success is False
+    assert plan.accepted is False
+    assert by_stage[StageName.TRAIN].status is not ReceiptStatus.SUCCEEDED
+    assert by_stage[StageName.EVALUATE].status is not ReceiptStatus.SUCCEEDED
+    assert by_stage[StageName.INDEPENDENT_ACCEPTANCE].status is not ReceiptStatus.SUCCEEDED
+
+
+def test_failed_evaluation_is_explicitly_failed_and_never_accepted() -> None:
+    service = VisionTrainingService()
+    project = make_project(service)
+    failed_evaluation = receipt(
+        project.project_id,
+        "evaluation",
+        independent=True,
+        acceptance_status="failed",
+    )
+    assets = (
+        receipt(project.project_id, "dataset"),
+        receipt(project.project_id, "model", training_success=True),
+        failed_evaluation,
+    )
+    plan = service.stage_plan(project.project_id, assets)
+    by_stage = {item.stage: item for item in plan.items}
+    assert plan.status.value == "blocked"
+    assert by_stage[StageName.EVALUATE].status is ReceiptStatus.FAILED
+    assert plan.accepted is False
 
 
 def test_independent_pass_is_explicit_but_enablement_remains_separate() -> None:

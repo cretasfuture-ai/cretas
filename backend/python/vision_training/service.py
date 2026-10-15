@@ -6,8 +6,6 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Iterable
-from uuid import uuid4
-
 from pydantic import ValidationError
 
 from .errors import (
@@ -138,18 +136,39 @@ class VisionTrainingService:
         factory_context: FactoryContext | None = None,
     ) -> TrainingProjectDraft:
         self._check_context(preview.spec, factory_context)
-        expected_hash = _hash_preview(preview.spec, preview.template)
+        if preview.sop_version != SOP_VERSION:
+            raise PreviewMismatchError("preview SOP version is not supported")
+        # Treat the client preview as an acknowledgement, never as a source
+        # of template policy.  Rebuild the template from the server catalog
+        # and compare the complete model before accepting the hash.
+        canonical_template = self._template(preview.spec, preview.template.template_id)
+        if preview.template != canonical_template:
+            raise PreviewMismatchError("preview template does not match the registered catalog")
+        if preview.stage_plan != canonical_template.stages:
+            raise PreviewMismatchError("preview stage plan does not match the registered template")
+        expected_hash = _hash_preview(preview.spec, canonical_template)
         if preview.preview_hash != expected_hash:
             raise PreviewMismatchError("preview no longer matches its task specification or template")
+        if preview.preview_id != f"preview-{expected_hash[:20]}":
+            raise PreviewMismatchError("preview id does not match its canonical content hash")
         project_id = f"vtp-{preview.preview_hash[:20]}"
-        # The preview is the idempotency key.  Reusing its timestamp means a
-        # repeated explicit save produces the same draft content, while later
-        # receipt updates may still advance ``updated_at``.
-        now = preview.generated_at
+        # The preview hash is the idempotency key.  An existing draft is
+        # returned verbatim so a repeated save cannot erase receipts or move
+        # its original creation time.
+        existing = self.store.get(project_id)
+        if existing is not None:
+            if (
+                existing.preview_hash != preview.preview_hash
+                or existing.spec != preview.spec
+                or existing.template != canonical_template
+            ):
+                raise PreviewMismatchError("draft identity does not match the preview")
+            return existing
+        now = datetime.now(timezone.utc)
         draft = TrainingProjectDraft(
             project_id=project_id,
-            sop_version=preview.sop_version,
-            template=preview.template,
+            sop_version=SOP_VERSION,
+            template=canonical_template,
             spec=preview.spec,
             preview_hash=preview.preview_hash,
             created_at=now,
@@ -274,7 +293,11 @@ class VisionTrainingService:
         draft = self.readback(project_id)
         self._check_context(draft.spec, factory_context)
         assets = tuple(receipts)
-        report = self.validate_assets(project_id, assets, factory_context=factory_context) if assets else ValidationReport(valid=False, errors=("no asset receipts supplied",))
+        report = (
+            self.validate_assets(project_id, assets, factory_context=factory_context)
+            if assets
+            else ValidationReport(valid=False, errors=("no asset receipts supplied",))
+        )
         by_kind = {item.kind: item for item in assets}
         stage_receipts = {item.stage: item for item in draft.receipts}
         items: list[StagePlanItem] = []
@@ -282,37 +305,104 @@ class VisionTrainingService:
         items.append(StagePlanItem(stage=StageName.PREVIEW, status=ReceiptStatus.SUCCEEDED, reason="preview generated"))
         for stage in (StageName.COLLECT, StageName.DATASET):
             receipt = stage_receipts.get(stage)
+            stage_status = receipt.status if receipt else ReceiptStatus.PENDING
+            if receipt and not report.valid and stage_status == ReceiptStatus.SUCCEEDED:
+                stage_status = ReceiptStatus.PENDING
             items.append(StagePlanItem(
                 stage=stage,
-                status=receipt.status if receipt else ReceiptStatus.PENDING,
+                status=stage_status,
                 receipt_id=receipt.receipt_id if receipt else None,
-                reason=receipt.message if receipt else "not executed",
+                reason=(
+                    "blocked by asset validation"
+                    if receipt and not report.valid and receipt.status == ReceiptStatus.SUCCEEDED
+                    else receipt.message if receipt else "not executed"
+                ),
             ))
         model = by_kind.get("model")
-        train_success = bool(model and model.status == ReceiptStatus.SUCCEEDED and model.training_success)
+        train_success = bool(
+            report.valid
+            and model
+            and model.status == ReceiptStatus.SUCCEEDED
+            and model.training_success
+        )
         train_receipt = stage_receipts.get(StageName.TRAIN)
+        train_status = (
+            ReceiptStatus.SUCCEEDED
+            if train_success
+            else ReceiptStatus.FAILED
+            if model and model.status == ReceiptStatus.FAILED
+            else train_receipt.status
+            if train_receipt
+            else ReceiptStatus.PENDING
+        )
+        if not report.valid and train_status == ReceiptStatus.SUCCEEDED:
+            train_status = ReceiptStatus.PENDING
         items.append(StagePlanItem(
             stage=StageName.TRAIN,
-            status=ReceiptStatus.SUCCEEDED if train_success else (train_receipt.status if train_receipt else ReceiptStatus.PENDING),
+            status=train_status,
             receipt_id=train_receipt.receipt_id if train_receipt else None,
-            reason="training receipt succeeded; acceptance remains separate" if train_success else "training not executed",
+            reason=(
+                "training receipt succeeded; acceptance remains separate"
+                if train_success
+                else "blocked by asset validation"
+                if not report.valid and train_status == ReceiptStatus.PENDING
+                else "training not executed"
+            ),
         ))
         evaluation = by_kind.get("evaluation")
-        eval_success = bool(evaluation and evaluation.status == ReceiptStatus.SUCCEEDED)
+        eval_success = bool(
+            report.valid
+            and evaluation
+            and evaluation.status == ReceiptStatus.SUCCEEDED
+        )
         eval_receipt = stage_receipts.get(StageName.EVALUATE)
+        eval_status = (
+            ReceiptStatus.SUCCEEDED
+            if eval_success
+            else ReceiptStatus.FAILED
+            if evaluation and (
+                evaluation.status == ReceiptStatus.FAILED
+                or evaluation.acceptance_status == "failed"
+            )
+            else eval_receipt.status
+            if eval_receipt
+            else ReceiptStatus.PENDING
+        )
+        if not report.valid and eval_status == ReceiptStatus.SUCCEEDED:
+            eval_status = ReceiptStatus.PENDING
         items.append(StagePlanItem(
             stage=StageName.EVALUATE,
-            status=ReceiptStatus.SUCCEEDED if eval_success else (eval_receipt.status if eval_receipt else ReceiptStatus.PENDING),
+            status=eval_status,
             receipt_id=eval_receipt.receipt_id if eval_receipt else None,
-            reason="evaluation receipt succeeded" if eval_success else "evaluation not executed",
+            reason=(
+                "evaluation receipt succeeded"
+                if eval_success
+                else "evaluation failed"
+                if eval_status == ReceiptStatus.FAILED
+                else "blocked by asset validation"
+                if not report.valid
+                else "evaluation not executed"
+            ),
         ))
-        accepted = bool(evaluation and evaluation.independent and evaluation.acceptance_status == "passed")
-        if not accepted:
+        accepted = bool(
+            report.valid
+            and evaluation
+            and evaluation.status == ReceiptStatus.SUCCEEDED
+            and evaluation.independent
+            and evaluation.acceptance_status == "passed"
+        )
+        if not accepted and report.valid:
             blockers.append("independent acceptance is explicit and is not inferred from training success")
         items.append(StagePlanItem(
             stage=StageName.INDEPENDENT_ACCEPTANCE,
             status=ReceiptStatus.SUCCEEDED if accepted else ReceiptStatus.PENDING,
-            reason="independent acceptance receipt passed" if accepted else "pending independent acceptance",
+            reason=(
+                "independent acceptance receipt passed"
+                if accepted
+                else "blocked by asset validation"
+                if not report.valid
+                else "pending independent acceptance"
+            ),
         ))
         if not accepted:
             blockers.append("model enablement is blocked until independent acceptance passes")

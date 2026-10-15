@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
@@ -10,6 +11,20 @@ from pydantic import BaseModel, ConfigDict
 from .errors import VisionTrainingError
 from .models import FactoryContext, ProjectPreview, TaskSpec
 from .service import VisionTrainingService
+from .store import DraftStore, FileDraftStore
+
+
+FACTORY_ROLES = frozenset(
+    {
+        "factory_super_admin",
+        "quality_manager",
+        "factory_admin",
+        "factory_manager",
+        "factory_user",
+        "quality",
+        "owner",
+    }
+)
 
 
 class PreviewRequest(BaseModel):
@@ -37,20 +52,36 @@ def require_factory_context(request: Request) -> FactoryContext:
     actor_id = getattr(state, "user_id", None)
     if not isinstance(factory_id, str) or not factory_id.strip():
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="trusted factory context is required")
-    if not isinstance(actor_id, str) or not actor_id.strip():
+    if isinstance(actor_id, bool) or actor_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="trusted actor context is required")
+    if isinstance(actor_id, int):
+        if actor_id <= 0:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="trusted actor context is required")
+        actor_id = str(actor_id)
+    elif isinstance(actor_id, str):
+        actor_id = actor_id.strip()
+        if not actor_id or (actor_id.isdigit() and int(actor_id) <= 0):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="trusted actor context is required")
+    else:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="trusted actor context is required")
     roles = getattr(state, "role", ())
     if isinstance(roles, str):
         roles = (roles,)
-    return FactoryContext(factory_id=factory_id, actor_id=actor_id, roles=tuple(roles or ()))
+    trusted_roles = tuple(role for role in (roles or ()) if isinstance(role, str) and role in FACTORY_ROLES)
+    if not trusted_roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="factory role is required")
+    return FactoryContext(factory_id=factory_id, actor_id=actor_id, roles=trusted_roles)
 
 
 def create_router(
     service: VisionTrainingService | None = None,
     *,
+    store: DraftStore | None = None,
     factory_context_dependency: Callable[[Request], FactoryContext] = require_factory_context,
 ) -> APIRouter:
-    coordinator = service or VisionTrainingService()
+    if service is not None and store is not None:
+        raise ValueError("pass either service or store, not both")
+    coordinator = service or VisionTrainingService(store=store)
     router = APIRouter(prefix="/api/vision-training", tags=["Vision Training"])
     @router.post("/preview")
     def preview(request: PreviewRequest, context: FactoryContext = Depends(factory_context_dependency)) -> dict[str, object]:
@@ -90,6 +121,23 @@ def create_router(
         return {"success": True, "message": "stage plan readback", "data": result.model_dump(mode="json")}
 
     return router
+
+
+def create_file_backed_router(
+    store_root: str | Path,
+    *,
+    factory_context_dependency: Callable[[Request], FactoryContext] = require_factory_context,
+) -> APIRouter:
+    """Build a router with lazy local persistence for the host entry point.
+
+    ``FileDraftStore`` does not create its directory until the first draft is
+    written, so importing this module remains side-effect free.
+    """
+
+    return create_router(
+        store=FileDraftStore(store_root),
+        factory_context_dependency=factory_context_dependency,
+    )
 
 
 router = create_router()

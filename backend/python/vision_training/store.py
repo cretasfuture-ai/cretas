@@ -48,8 +48,10 @@ class FileDraftStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
+
+    def _ensure_root(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, project_id: str) -> Path:
         if not project_id or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in project_id):
@@ -67,6 +69,7 @@ class FileDraftStore:
         path = self._path(draft.project_id)
         payload = json.dumps(draft.model_dump(mode="json"), ensure_ascii=False, indent=2)
         with self._lock:
+            self._ensure_root()
             existing = self.get(draft.project_id)
             if existing is not None and (
                 existing.spec != draft.spec or existing.template != draft.template

@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from vision_training.router import create_router
+from vision_training.router import create_file_backed_router, create_router
 from vision_training.service import VisionTrainingService
 
 
@@ -54,3 +54,49 @@ def test_default_dependency_fails_closed_without_trusted_context() -> None:
     app.include_router(router)
     response = TestClient(app).post("/api/vision-training/preview", json={"spec": valid_spec()})
     assert response.status_code == 401
+
+
+def test_jwt_middleware_state_accepts_positive_integer_user_id_and_factory_role() -> None:
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class FakeJWTState(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            request.state.factory_id = "F001"
+            request.state.user_id = 123
+            request.state.role = "quality_manager"
+            return await call_next(request)
+
+    app = FastAPI()
+    app.add_middleware(FakeJWTState)
+    app.include_router(create_router(VisionTrainingService()))
+    response = TestClient(app).post("/api/vision-training/preview", json={"spec": valid_spec()})
+    assert response.status_code == 200
+
+
+def test_platform_role_zero_and_boolean_user_ids_fail_closed() -> None:
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class StateMiddleware(BaseHTTPMiddleware):
+        def __init__(self, app, user_id, role):
+            super().__init__(app)
+            self.user_id = user_id
+            self.role = role
+
+        async def dispatch(self, request, call_next):
+            request.state.factory_id = "F001"
+            request.state.user_id = self.user_id
+            request.state.role = self.role
+            return await call_next(request)
+
+    for user_id, role, expected in ((1, "PLATFORM_ADMIN", 403), (0, "quality_manager", 401), (True, "quality_manager", 401)):
+        app = FastAPI()
+        app.add_middleware(StateMiddleware, user_id=user_id, role=role)
+        app.include_router(create_router(VisionTrainingService()))
+        response = TestClient(app).post("/api/vision-training/preview", json={"spec": valid_spec()})
+        assert response.status_code == expected
+
+
+def test_file_backed_router_is_lazy(tmp_path: Path) -> None:
+    root = tmp_path / "drafts"
+    create_file_backed_router(root)
+    assert not root.exists()
