@@ -304,13 +304,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             allocations.addAll(productionStockAllocationService.plan(
                     factoryId, planId, req.getMaterialInputTotals()));
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
-            if (req.getInputQuantity() == null) {
-                // PlannedAllocation 永远是 kg；不能直接把 1000g + 2kg 相加成 1002。
-                req.setInputQuantity(allocations.stream()
-                        .map(ProductionStockAllocationService.PlannedAllocation::quantity)
-                        .reduce(BigDecimal.ZERO, BigDecimal::add));
-            }
-            req.setInputUnit("kg");
+            applyAllocatedInputQuantity(req, allocations);
         } else if (req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty()) {
             if (productionStockAllocationService == null) {
                 throw new BusinessException(500, "生产库批次锁定服务未启用，不能正式提交")
@@ -322,12 +316,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             allocations.addAll(productionStockAllocationService.planExplicit(
                     factoryId, planId, req.getRawMaterialInputs()));
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
-            if (req.getInputQuantity() == null) {
-                req.setInputQuantity(allocations.stream()
-                        .map(ProductionStockAllocationService.PlannedAllocation::quantity)
-                        .reduce(BigDecimal.ZERO, BigDecimal::add));
-            }
-            req.setInputUnit("kg");
+            applyAllocatedInputQuantity(req, allocations);
         }
 
         boolean producesFinishedGoods = req.isFinished()
@@ -590,6 +579,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                         + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                                 .withSeverity("BLOCKING");
                     }
+                    // An explicitly selected Workflow packaging port is already
+                    // allocated above. Do not add the same BOM input a second time.
+                    if (hasExplicitPackagingInput(req, item)) {
+                        continue;
+                    }
                     requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
                             item.getMaterialTypeId(),
                             item.getMaterialName(),
@@ -659,6 +653,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
         }
         return requirements;
+    }
+
+    private static boolean hasExplicitPackagingInput(ProcessSheetRowRequest req, BomRecipeItem item) {
+        String portId = item.getWorkflowInputPortId();
+        return portId != null && !portId.isBlank() && req.getRawMaterialInputs() != null
+                && req.getRawMaterialInputs().stream().anyMatch(input ->
+                        !Boolean.TRUE.equals(input.getAutomatic())
+                                && portId.equals(input.getWorkflowPortId())
+                                && Objects.equals(item.getMaterialTypeId(), input.getSkuId())
+                                && input.getQuantity() != null && input.getQuantity().signum() > 0);
     }
 
     private BigDecimal normalizeQuantity(BigDecimal quantity) {
@@ -4054,7 +4058,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        List<String> units = descriptor.getInputs().stream()
+        // Every port must remain valid even when its quantity is separate from
+        // the group-level upstream denominator (e.g. bags counted in pieces).
+        descriptor.getInputs().forEach(port -> requireWorkflowPortUnit(port.getUnit(), "投入"));
+        List<String> units = workflowQuantityInputs(descriptor.getInputs()).stream()
                 .map(port -> requireWorkflowPortUnit(port.getUnit(), "投入"))
                 .distinct()
                 .toList();
@@ -4066,6 +4073,32 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("Workflow");
         }
         return units.get(0);
+    }
+
+    private static List<WorkflowClerkSheetConfigDTO.PortDescriptor> workflowQuantityInputs(
+            List<WorkflowClerkSheetConfigDTO.PortDescriptor> ports) {
+        boolean hasUpstream = ports.stream().anyMatch(port ->
+                "SEMI_FINISHED".equals(port.getMaterialKind()) || "FINISHED_GOOD".equals(port.getMaterialKind()));
+        return hasUpstream ? ports.stream()
+                .filter(port -> !"RAW_MATERIAL".equals(port.getMaterialKind())).toList() : ports;
+    }
+
+    private static void applyAllocatedInputQuantity(ProcessSheetRowRequest req,
+            List<ProductionStockAllocationService.PlannedAllocation> allocations) {
+        if (req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty()) {
+            if (req.getInputQuantity() == null || req.getInputQuantity().signum() <= 0) {
+                throw new BusinessException(409, "有上游投料时必须填写主投入数量，不能用追加原料或包材数量代替")
+                        .withCode("PROCESS_SHEET_UPSTREAM_INPUT_QUANTITY_REQUIRED")
+                        .withHint("请核对上游实际投料数量后重新提交");
+            }
+            return; // Per-port RAW allocations never change the upstream denominator or its unit.
+        }
+        if (req.getInputQuantity() == null) {
+            req.setInputQuantity(allocations.stream()
+                    .map(ProductionStockAllocationService.PlannedAllocation::quantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add));
+        }
+        req.setInputUnit("kg");
     }
 
     /**
@@ -4151,7 +4184,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 String selectedSkuId = resolveAllowedInputSku(port, input.getSkuId());
+                String portUnit = requireWorkflowPortUnit(port.getUnit(), "投入");
+                assertConfiguredUnit(factoryId, input.getUnit(), portUnit, "投入");
                 assertNonNegativeWorkflowInput(input.getQuantity());
+                input.setUnit(portUnit);
                 input.setSkuId(selectedSkuId);
                 input.setWorkflowPortId(port.getWorkflowPortId());
                 if (input.getMaterialNodeId() == null) input.setMaterialNodeId(port.getMaterialNodeId());
@@ -4178,7 +4214,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (requireCompleteSelections) {
             validatePortSelections(ports, submitted, "INPUT");
         }
-        List<String> normalizedUnits = ports.stream()
+        // Additional raw inputs retain per-port quantities/units above. They must
+        // not be added to the upstream quantity used for the process yield.
+        List<String> normalizedUnits = workflowQuantityInputs(ports).stream()
                 .filter(port -> submitted.contains(port.getWorkflowPortId()))
                 .map(port -> normalizeReportingUnit(requireWorkflowPortUnit(port.getUnit(), "投入")))
                 .distinct()
@@ -4189,7 +4227,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         boolean allMass = normalizedUnits.stream().allMatch(unit -> "kg".equals(unit) || "g".equals(unit));
         if (normalizedUnits.size() == 1) {
             req.setInputUnit(requireWorkflowPortUnit(
-                    ports.stream().filter(port -> submitted.contains(port.getWorkflowPortId())).findFirst().orElseThrow().getUnit(),
+                    workflowQuantityInputs(ports).stream().filter(port -> submitted.contains(port.getWorkflowPortId())).findFirst().orElseThrow().getUnit(),
                     "投入"));
         } else if (allMass) {
             req.setInputUnit("kg"); // 组级 inputQuantity 的内部统一口径
