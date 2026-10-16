@@ -20,8 +20,8 @@ import java.util.UUID;
  * <p>入库完成后，若实收数量与 PO 数量存在差异（超出超收上限或少收），
  * 系统自动生成本单，采购员在单上做 ACCEPT/RETURN 决策。
  *
- * <p>事务边界：decideException(RETURN_OVER) 调用 ReturnOrderService 使用
- * {@code REQUIRES_NEW} 隔离，防止异常单决策事务被 ReturnOrder 创建失败拖垮。
+ * <p>事务边界：decideException(RETURN_OVER) 调用 ReturnOrderService 加入同一
+ * 决策事务，异常单状态、退货单和关联 ID 原子提交或一起回滚。
  *
  * @see com.cretas.aims.entity.enums.ExceptionDecision
  */
@@ -170,8 +170,8 @@ public class PurchaseException extends BaseEntity {
     /**
      * HIGH (并发幂等): 乐观锁版本号。
      * 防止两个并发 decideException(RETURN_OVER) 都读到 returnOrderId==null + PENDING
-     * 各自创建一张退货单 (重复供应商退货)。两并发事务读同 version → 一个 save 成功 (version+1),
-     * 另一个 save 抛 OptimisticLockingFailureException 回滚 → 只生成一张退货单。
+     * 各自创建一张退货单 (重复供应商退货)。服务层先对异常单行加悲观锁，后到者读取到
+     * 已处理状态并拒绝，不会创建第二张退货单。
      */
     @Version
     @Column(name = "version")
