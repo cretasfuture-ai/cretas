@@ -15,6 +15,7 @@ import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.ArApService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -22,6 +23,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -38,6 +43,10 @@ public class ArApServiceImpl implements ArApService {
     private final ArApTransactionRepository transactionRepository;
     private final CustomerRepository customerRepository;
     private final SupplierRepository supplierRepository;
+
+    /** Batch approval/rejection must open one independent transaction per item. */
+    @Autowired(required = false)
+    private PlatformTransactionManager transactionManager;
 
     /** R20 audit Q1: PO status validation for AP invariant.
      *  R21 audit S2: required=true (was =false fail-open hole). Repo is always present. */
@@ -1064,8 +1073,8 @@ public class ArApServiceImpl implements ArApService {
 
     /**
      * R29 P2 batch approve. Per-id error capture — single failure doesn't abort
-     * the rest. Each approveAdjustment is its own @Transactional so failures are
-     * isolated.
+     * the rest. Each item is executed through an explicit REQUIRES_NEW
+     * TransactionTemplate, and is counted only after its transaction commits.
      */
     @Override
     public java.util.Map<String, Object> batchApproveAdjustments(
@@ -1078,14 +1087,18 @@ public class ArApServiceImpl implements ArApService {
             throw new BusinessException(400, "批量审批一次不超过 100 条")
                     .withHint("请分批操作, 每次最多 100 条").withHintTarget("ids");
         }
+        TransactionTemplate itemTransaction = newBatchItemTransaction();
         int approvedCount = 0;
         java.util.List<java.util.Map<String, String>> failures = new java.util.ArrayList<>();
         for (String id : transactionIds) {
             try {
-                approveAdjustment(factoryId, id, approvedBy);
+                itemTransaction.execute(status -> {
+                    approveAdjustment(factoryId, id, approvedBy);
+                    return null;
+                });
                 approvedCount++;
             } catch (RuntimeException e) {
-                failures.add(java.util.Map.of("id", id, "reason", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                failures.add(java.util.Map.of("id", id, "reason", batchFailureReason(e)));
             }
         }
         java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
@@ -1110,14 +1123,18 @@ public class ArApServiceImpl implements ArApService {
             throw new BusinessException(400, "批量驳回一次不超过 100 条")
                     .withHint("请分批操作, 每次最多 100 条").withHintTarget("ids");
         }
+        TransactionTemplate itemTransaction = newBatchItemTransaction();
         int rejectedCount = 0;
         java.util.List<java.util.Map<String, String>> failures = new java.util.ArrayList<>();
         for (String id : transactionIds) {
             try {
-                rejectAdjustment(factoryId, id, approvedBy, reason);
+                itemTransaction.execute(status -> {
+                    rejectAdjustment(factoryId, id, approvedBy, reason);
+                    return null;
+                });
                 rejectedCount++;
             } catch (RuntimeException e) {
-                failures.add(java.util.Map.of("id", id, "reason", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                failures.add(java.util.Map.of("id", id, "reason", batchFailureReason(e)));
             }
         }
         java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
@@ -1126,6 +1143,26 @@ public class ArApServiceImpl implements ArApService {
         result.put("failedCount", failures.size());
         result.put("failures", failures);
         return result;
+    }
+
+    private TransactionTemplate newBatchItemTransaction() {
+        if (transactionManager == null) {
+            throw new BusinessException(503, "批量调整事务组件未就绪")
+                    .withHint("请联系管理员检查事务配置").withHintTarget("事务组件");
+        }
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template;
+    }
+
+    private String batchFailureReason(RuntimeException error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof OptimisticLockingFailureException
+                    || cause instanceof jakarta.persistence.OptimisticLockException) {
+                return "该调整或余额已被其他操作修改，请刷新后重试";
+            }
+        }
+        return error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
     }
 
     @Override
