@@ -68,11 +68,11 @@ describe('员工账号管理 — R-1 / R-2', () => {
 
   it('R-2① 编辑框要能回显本人现有部门 —— ⛔ 不能读那个恒为 null 的字段', () => {
     /*
-     * 后端 UserMapper.toDTO 写死 `.department(null)`，真实值在 departmentDisplayName。
-     * 原来两处 prefill 都先读 departmentName / department ⇒ 编辑框**永远空白**，
-     * 保存时又把空值送回去。这是「没法编辑部门」的另一半。
+     * 新 DTO 的 departmentCode 保留原始部门，优先用于编辑/查看；
+     * 兼容没有该字段的旧响应时仍回退到 departmentDisplayName。
+     * 两个入口都必须读同一顺序，避免用翻译后的展示名覆盖原始值。
      */
-    const prefills = list.match(/department: String\(row\.departmentDisplayName/g) ?? [];
+    const prefills = list.match(/department: String\(row\.departmentCode \?\? row\.departmentDisplayName/g) ?? [];
     expect(prefills.length, '两个入口(编辑/查看)都要回显，只改一处会漂').toBe(2);
     // 阴性对照：⛔ 不许再有「先读 departmentName」的旧顺序
     expect(list).not.toMatch(/department: row\.departmentName/);

@@ -300,7 +300,7 @@ function handleView(row: TableRow) {
     // 真实值放在 departmentDisplayName。原来第一个读的是不存在的 departmentName,
     // 第二个读的是恒 null 的 department ⇒ 编辑框里的部门**永远是空的**,
     // 无论那个人实际在哪个部门。(用户报的「没法编辑部门」有一半是这个。)
-    department: String(row.departmentCode ?? row.departmentName ?? row.department ?? ''),
+    department: String(row.departmentCode ?? row.departmentDisplayName ?? row.departmentName ?? row.department ?? ''),
     reportsTo: row.reportsTo == null ? null : Number(row.reportsTo),
     isActive: row.isActive === true || row.status === 'ACTIVE',
   });
@@ -321,7 +321,7 @@ function handleEdit(row: TableRow) {
     // 真实值放在 departmentDisplayName。原来第一个读的是不存在的 departmentName,
     // 第二个读的是恒 null 的 department ⇒ 编辑框里的部门**永远是空的**,
     // 无论那个人实际在哪个部门。(用户报的「没法编辑部门」有一半是这个。)
-    department: String(row.departmentCode ?? row.departmentName ?? row.department ?? ''),
+    department: String(row.departmentCode ?? row.departmentDisplayName ?? row.departmentName ?? row.department ?? ''),
     reportsTo: row.reportsTo == null ? null : Number(row.reportsTo),
     isActive: row.isActive === true || row.status === 'ACTIVE',
   });
