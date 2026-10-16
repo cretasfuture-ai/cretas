@@ -4,9 +4,10 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.enums.ExceptionDecision;
 import com.cretas.aims.entity.inventory.PurchaseException;
-import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.PurchaseExceptionService;
-import com.cretas.aims.utils.TokenUtils;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.exception.BusinessException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +33,6 @@ import java.util.Map;
 public class PurchaseExceptionController {
 
     private final PurchaseExceptionService purchaseExceptionService;
-    private final MobileService mobileService;
 
     // ─── 查询异常单列表 ────────────────────────────────────────────────────────
 
@@ -58,9 +58,14 @@ public class PurchaseExceptionController {
             @RequestHeader("Authorization") String authorization,
             HttpServletRequest request,
             @RequestBody Map<String, String> body) {
-        Long userId = extractUserId(authorization);
-        // D-6 鉴权：callerRole 从 request attribute 读（JwtAuthInterceptor 设置；SecurityContext 永空）
-        String callerRole = (String) request.getAttribute("role");
+        AuthenticatedActor actor = AuthenticatedActor.current(request)
+                .orElseThrow(() -> new BusinessException(401, "请重新登录后处理采购异常"));
+        // 责任人及退货 createdBy 属于工厂 users 命名空间，平台账号不能凭同数字 ID 代办。
+        if (actor.type() != AuthenticatedActorType.FACTORY_USER || !factoryId.equals(actor.factoryId())) {
+            throw new BusinessException(403, "采购异常决策须由本工厂责任采购人或主管账号处理");
+        }
+        Long userId = actor.id();
+        String callerRole = actor.role();
         String decisionStr = body.get("decision");
         String notes = body.get("notes");
 
@@ -79,10 +84,4 @@ public class PurchaseExceptionController {
         return ApiResponse.success("决策已记录", updated);
     }
 
-    // ─── 私有工具 ────────────────────────────────────────────────────────────
-
-    private Long extractUserId(String authorization) {
-        String token = TokenUtils.extractToken(authorization);
-        return mobileService.getUserFromToken(token).getId();
-    }
 }

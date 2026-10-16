@@ -31,6 +31,8 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
@@ -87,6 +89,10 @@ class PurchaseExceptionServiceTest {
         var materialField = PurchaseExceptionServiceImpl.class.getDeclaredField("rawMaterialTypeRepository");
         materialField.setAccessible(true);
         materialField.set(exceptionService, rawMaterialTypeRepository);
+        // Production uses the pessimistic factory-scoped lookup. Keep the existing
+        // fixture declarations readable while making them exercise that entry point.
+        when(exceptionRepository.findByIdAndFactoryIdForUpdate(anyString(), anyString()))
+                .thenAnswer(inv -> exceptionRepository.findById(inv.getArgument(0)));
         // Repository save: return the same entity with an id assigned
         when(exceptionRepository.save(any(PurchaseException.class)))
                 .thenAnswer(inv -> {
@@ -181,6 +187,39 @@ class PurchaseExceptionServiceTest {
             PurchaseException ex = result.get(0);
             assertEquals(OWNER_USER_ID, ex.getOwnerUserId(), "ownerUserId 应写入异常单");
             assertEquals("张三", ex.getOwnerName(), "ownerName 应写入异常单");
+        }
+
+        @Test
+        @DisplayName("异常单编号不按待处理数量复用已处理编号")
+        void exceptionNumber_usesHighestExistingSequenceIncludingResolvedRows() {
+            String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+            PurchaseException resolved = new PurchaseException();
+            resolved.setExceptionNumber("EX-" + FACTORY_ID + "-" + today + "-0010");
+            resolved.setStatus("RESOLVED");
+            when(exceptionRepository.findHighestNumberForPrefix(eq(FACTORY_ID), anyString()))
+                    .thenReturn(List.of(resolved.getExceptionNumber()));
+
+            List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
+                    FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L, null, null);
+
+            assertEquals("EX-" + FACTORY_ID + "-" + today + "-0011",
+                    result.get(0).getExceptionNumber());
+        }
+
+        @Test
+        @DisplayName("异常单编号忽略无法解析的历史后缀")
+        void exceptionNumber_ignoresMalformedHighestSuffix() {
+            String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+            when(exceptionRepository.findHighestNumberForPrefix(eq(FACTORY_ID), anyString()))
+                    .thenReturn(List.of());
+
+            List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
+                    FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L, null, null);
+
+            assertEquals("EX-" + FACTORY_ID + "-" + today + "-0001",
+                    result.get(0).getExceptionNumber());
         }
     }
 
@@ -305,9 +344,14 @@ class PurchaseExceptionServiceTest {
             ex.setStatus("RESOLVED");
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
 
-            assertThrows(BusinessException.class, () ->
+            BusinessException error = assertThrows(BusinessException.class, () ->
                     exceptionService.decideException("EXC-001", FACTORY_ID,
                             ExceptionDecision.ACCEPT_OVER, null, OWNER_USER_ID, null));
+            assertEquals(Integer.valueOf(409), error.getCode());
+            assertEquals("PURCHASE_EXCEPTION_ALREADY_RESOLVED", error.getErrorCode());
+            assertTrue(error.getActionHint().contains("刷新"));
+            verify(exceptionRepository, never()).save(any());
+            verifyNoInteractions(returnOrderService);
         }
 
         @Test
@@ -476,8 +520,8 @@ class PurchaseExceptionServiceTest {
         }
 
         @Test
-        @DisplayName("退货单创建失败 (REQUIRES_NEW 隔离) → 异常单仍标 RESOLVED, 不回滚")
-        void returnOver_returnOrderCreationFails_exceptionStillResolved() {
+        @DisplayName("退货单创建非预期失败 → 决策回滚, 不留下孤儿退货单")
+        void returnOver_returnOrderCreationFails_rollsBackDecision() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
             stubValidReturnSource(ex);
@@ -485,12 +529,13 @@ class PurchaseExceptionServiceTest {
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenThrow(new RuntimeException("退货单创建失败 (模拟)"));
 
-            // 异常单决策本身不应抛 (失败被隔离 + catch)
-            assertDoesNotThrow(() ->
+            // 非预期异常也必须 fail-loud；真实事务会回滚已保存的 RESOLVED 状态。
+            assertThrows(RuntimeException.class, () ->
                     exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
                             null, OWNER_USER_ID, null));
 
-            assertEquals("RESOLVED", ex.getStatus(), "退货单创建失败不应回滚异常单 RESOLVED");
+            assertEquals("RESOLVED", ex.getStatus(),
+                    "纯 Mockito 单测没有事务回滚；真实 PG 合同测试验证持久化状态回到 PENDING");
             assertNull(ex.getReturnOrderId(), "退货单创建失败, 不应回写 returnOrderId");
         }
 
@@ -580,16 +625,15 @@ class PurchaseExceptionServiceTest {
         }
 
         @Test
-        @DisplayName("MEDIUM: 退货单创建抛非业务异常 (瞬时基础设施) → best-effort 吞, 异常单仍 RESOLVED")
-        void returnOver_runtimeExceptionFromCreate_bestEffortSwallow() {
+        @DisplayName("MEDIUM: 退货单创建抛非业务异常 → fail-loud, 不吞成假成功")
+        void returnOver_runtimeExceptionFromCreate_failLoud() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
             stubValidReturnSource(ex);
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenThrow(new RuntimeException("瞬时 DB 连接失败"));
 
-            // 非业务异常 best-effort 吞: 决策不抛, 异常单仍 RESOLVED (可手动补建退货单)。
-            assertDoesNotThrow(() ->
+            assertThrows(RuntimeException.class, () ->
                     exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
                             null, OWNER_USER_ID, null));
             assertEquals("RESOLVED", ex.getStatus());

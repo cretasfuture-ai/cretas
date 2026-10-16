@@ -29,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -43,8 +44,8 @@ import java.util.Set;
 /**
  * 采购异常单 Service 实现（SP6）
  *
- * <p>decideException(RETURN_OVER) 使用 REQUIRES_NEW 隔离退货单创建，
- * 防止 doomed-tx 传播回本事务（参见 feedback_failsoft_catch_cannot_save_doomed_tx）。
+ * <p>decideException(RETURN_OVER) 在同一事务中锁定异常单并创建、关联退货单，
+ * 使并发决策只能提交一条完整结果，不会留下孤儿退货单。
  *
  * <p>D-6 责任绑定：generateExceptionsForReceive 从调用方传入 ownerUserId/ownerName
  * （通常来自 PurchaseOrder.createdBy + User.username）。
@@ -86,10 +87,10 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
     private NotificationService notificationService;
 
     /**
-     * Self-injection (proxy) 用于触发 RETURN_OVER 退货单创建的 {@code REQUIRES_NEW} 事务边界。
+     * Self-injection (proxy) 用于触发 RETURN_OVER 退货单创建时加入当前事务边界。
      *
-     * <p>退货单创建 ({@link #createReturnOrderForException}) 必须跑独立事务: 创建失败抛
-     * {@code BusinessException} 只回滚退货单自身, 不 doom 父事务 (异常单 RESOLVED 状态仍持久化)。
+     * <p>退货单创建 ({@link #createReturnOrderForException}) 必须加入决策事务，
+     * 使创建失败同时回滚决策状态和退货单写入。
      * 参考 {@code ReverseTransferService} R6 self-proxy 范式 (本仓库多次复发的 doomed-tx 防御)。
      *
      * <p>单测兼容: 单测直接 new 实例 ({@code self} 为 null), 通过 {@link #proxy()} fallback 到 this。
@@ -98,7 +99,7 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
     @Lazy
     private PurchaseExceptionServiceImpl self;
 
-    /** Self-proxy fallback: Spring 注入则用代理 (触发 REQUIRES_NEW), 单测下 self==null 退回 this。 */
+    /** Self-proxy fallback: Spring 注入则用代理 (触发 REQUIRED join), 单测下 self==null 退回 this。 */
     private PurchaseExceptionServiceImpl proxy() {
         return self != null ? self : this;
     }
@@ -187,8 +188,8 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
     // ─── decideException ───────────────────────────────────────────────────
 
     /**
-     * REQUIRES_NEW：decideException 如果触发 RETURN_OVER 分支，
-     * 退货单创建失败不得 doom 本事务（异常单本身状态变更仍持久化）。
+     * REQUIRES_NEW：作为外部决策入口建立独立工作单元；RETURN_OVER 的退货单
+     * 创建和异常单关联在该工作单元内原子提交。
      *
      * <p>注意：@Transactional(propagation=REQUIRES_NEW) 仅在真正调用
      * 子 @Service（另一 Spring bean）时才能在 REQUIRES_NEW 下正确隔离。
@@ -207,14 +208,16 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
             Long decisionBy,
             String callerRole) {
 
-        PurchaseException pe = exceptionRepository.findById(exceptionId)
+        PurchaseException pe = exceptionRepository.findByIdAndFactoryIdForUpdate(exceptionId, factoryId)
                 .orElseThrow(() -> new BusinessException("采购异常单不存在: " + exceptionId));
 
         if (!factoryId.equals(pe.getFactoryId())) {
             throw new BusinessException(403, "无权操作此异常单");
         }
         if (!"PENDING".equals(pe.getStatus())) {
-            throw new BusinessException("异常单已处理（status=" + pe.getStatus() + "），无法再次决策");
+            throw new BusinessException(409, "异常单已处理（status=" + pe.getStatus() + "），无法再次决策")
+                    .withCode("PURCHASE_EXCEPTION_ALREADY_RESOLVED")
+                    .withHint("请刷新「采购管理 → 入库异常」列表，查看已生效的处理决定，无需重复提交。");
         }
 
         // D-6 责任绑定鉴权：本人或主管角色才可决策（Fool-proof Rule 2 — 指明责任人是谁）
@@ -239,9 +242,8 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
         }
 
         // BLOCKER 3: RETURN_OVER 必须能创建采购退货单 (ReturnOrder.counterpartyId = supplierId, NOT NULL)。
-        // 若异常单无供应商信息 (supplierId 空), 退货单创建会在 REQUIRES_NEW 内抛 → fail-soft catch 吞掉
-        // → 异常单变 RESOLVED 但无退货单 → 用户看到"处理成功" (降级假成功, 违反禁降级)。
-        // 在【翻 RESOLVED 之前】前置校验, 让操作员看到明确错误, 决策不提交 (校验在 catch 外, fail-loud)。
+        // 若异常单无供应商信息 (supplierId 空), 退货单创建会被拒绝。
+        // 在【翻 RESOLVED 之前】前置校验, 让操作员看到明确错误, 决策不提交。
         if (decision == ExceptionDecision.RETURN_OVER
                 && (pe.getSupplierId() == null || pe.getSupplierId().isBlank())) {
             throw new BusinessException(422, "无供应商信息, 无法创建采购退货单")
@@ -265,29 +267,14 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
         //
         // 幂等: 仅在 returnOrderId 尚未设置时创建 (重复决策已被上面的 PENDING 守卫拦截,
         // 此处双保险防御历史脏数据 / 并发)。
-        // 事务隔离: 退货单创建走 self-proxy REQUIRES_NEW, 失败只回滚退货单, 异常单 RESOLVED 仍持久化。
+        // 事务原子性: 退货单创建走 self-proxy REQUIRED，失败时异常单和退货单一起回滚。
         if (decision == ExceptionDecision.RETURN_OVER && saved.getReturnOrderId() == null) {
-            try {
-                ReturnOrder returnOrder = proxy().createReturnOrderForException(saved, decisionBy, notes);
-                // 退货单创建成功 (独立事务已 commit) → 回写关联 ID 到异常单。
-                saved.setReturnOrderId(returnOrder.getId());
-                saved = exceptionRepository.save(saved);
-                log.info("[SP6] 异常单 {} RETURN_OVER 已生成采购退货单 {} (退货单号 {}), 待财务审批",
-                        saved.getExceptionNumber(), returnOrder.getId(), returnOrder.getReturnNumber());
-            } catch (BusinessException be) {
-                // MEDIUM: 收窄 fail-soft — 退货单创建的【业务规则拒绝】(deliberate, 如缺必填/校验失败)
-                // 必须 fail-loud, 不能吞成"异常单 RESOLVED 但无退货单"的降级假成功 (违反禁降级)。
-                // re-throw 会回滚本事务 (RESOLVED flip), 操作员看到明确错误, 不留半截状态。
-                // (BLOCKER 3 的 supplierId 空校验已在 catch 外前置, 此处兜结构性/下游业务拒绝。)
-                log.warn("[SP6] 异常单 {} RETURN_OVER 退货单创建被业务规则拒绝 (回滚决策, fail-loud): {}",
-                        saved.getExceptionNumber(), be.getMessage());
-                throw be;
-            } catch (Exception e) {
-                // 仅【真·非预期/瞬时基础设施错误】才 best-effort 吞 (异常单仍 RESOLVED, 可手动补建退货单),
-                // 避免 doomed-tx 拖垮异常单决策。结构性编程错误已由上面 BusinessException 分支 fail-loud。
-                log.error("[SP6] 异常单 {} RETURN_OVER 退货单创建遇非预期错误 (异常单仍标 RESOLVED, 可手动补建): {}",
-                        saved.getExceptionNumber(), e.getMessage(), e);
-            }
+            ReturnOrder returnOrder = proxy().createReturnOrderForException(saved, decisionBy, notes);
+            // 退货单创建成功 → 回写关联 ID；二者随当前事务一起提交。
+            saved.setReturnOrderId(returnOrder.getId());
+            saved = exceptionRepository.save(saved);
+            log.info("[SP6] 异常单 {} RETURN_OVER 已生成采购退货单 {} (退货单号 {}), 待财务审批",
+                    saved.getExceptionNumber(), returnOrder.getId(), returnOrder.getReturnNumber());
         }
 
         return saved;
@@ -305,14 +292,14 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
      * <p>状态: 初始 DRAFT (ReturnOrderService.createReturnOrder 强制), 不自动审批 —— 客户红线
      * "退货必须先财务审批", 退货单后续走 submit → approve → finance-approve → complete 链。
      *
-     * <p>{@code REQUIRES_NEW}: 独立事务, 创建失败只回滚退货单自身, 不污染异常单 RESOLVED 状态。
+     * <p>{@code REQUIRED}: 加入 decideException 的事务，创建失败会回滚异常单决策及退货单写入。
      *
      * @param exception  已 RESOLVED 的 RETURN_OVER 异常单
      * @param decisionBy 决策人 userId (退货单 createdBy)
      * @param notes      决策备注 (并入退货原因)
      * @return 新建的退货单 (DRAFT)
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRED)
     public ReturnOrder createReturnOrderForException(PurchaseException exception, Long decisionBy, String notes) {
         CreateReturnOrderRequest request = new CreateReturnOrderRequest();
         request.setReturnType(ReturnType.PURCHASE_RETURN.name());
@@ -567,7 +554,21 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
 
     private String generateExceptionNumber(String factoryId) {
         String date = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        long count = exceptionRepository.countPendingByFactoryId(factoryId) + 1;
-        return String.format("EX-%s-%s-%04d", factoryId, date, count);
+        String prefix = "EX-" + factoryId + "-" + date + "-";
+        // Serialize factory/day allocation in the surrounding @Transactional unit. A max query
+        // without this lock lets two first writers observe the same max and collide on the
+        // partial unique index before either transaction is visible to the other.
+        exceptionRepository.lockExceptionNumberSequence(prefix);
+        List<String> highest = exceptionRepository.findHighestNumberForPrefix(factoryId, prefix);
+        BigInteger next = BigInteger.ONE;
+        if (highest != null && !highest.isEmpty() && highest.get(0) != null) {
+            String number = highest.get(0);
+            try {
+                next = new BigInteger(number.substring(prefix.length())).add(BigInteger.ONE);
+            } catch (RuntimeException invalidSequence) {
+                throw new IllegalStateException("采购异常单编号序列无效: " + number, invalidSequence);
+            }
+        }
+        return String.format("%s%04d", prefix, next);
     }
 }
