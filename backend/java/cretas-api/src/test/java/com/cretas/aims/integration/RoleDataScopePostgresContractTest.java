@@ -425,6 +425,69 @@ class RoleDataScopePostgresContractTest {
         });
     }
 
+    @Test void paymentRoutesInheritSourceOrderOwnerAndRejectBeforeBusinessCalls() throws Exception {
+        fixture((jdbc,resolver,policies)->{
+            jdbc.execute("CREATE TABLE sales_orders(id varchar,factory_id varchar,created_by bigint,deleted_at timestamp)");
+            jdbc.execute("CREATE TABLE payment_records(id varchar,factory_id varchar,sales_order_id varchar,deleted_at timestamp)");
+            jdbc.execute("INSERT INTO sales_orders VALUES('OWN_ORDER','F1',56,null),('OTHER_ORDER','F1',66,null),('FOREIGN_ORDER','F2',56,null),('DELETED_ORDER','F1',56,now()),('UNKNOWN_ORDER','F1',null,null)");
+            jdbc.execute("INSERT INTO payment_records VALUES('OWN','F1','OWN_ORDER',null),('HIDDEN','F1','OTHER_ORDER',null),('FOREIGN','F1','FOREIGN_ORDER',null),('DELETED_PARENT','F1','DELETED_ORDER',null),('UNKNOWN','F1','UNKNOWN_ORDER',null),('ORPHAN','F1','MISSING',null),('DELETED','F1','OWN_ORDER',now())");
+            policies.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,0),56L);
+            var service=mock(com.cretas.aims.service.finance.PaymentRecordService.class);
+            var repository=mock(com.cretas.aims.repository.PaymentRecordRepository.class);
+            when(service.getPayment("F1","OWN")).thenReturn(new com.cretas.aims.entity.finance.PaymentRecord());
+            when(service.listPaymentsBySalesOrder("F1","OWN_ORDER")).thenReturn(List.of());
+            when(repository.findCustomerPaymentsInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
+            var controller=new com.cretas.aims.controller.finance.PaymentRecordController(service,repository,resolver);
+            var proxy=new AspectJProxyFactory(controller);proxy.addAspect(new DataScopeAspect(resolver));
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup((Object)proxy.getProxy())
+                    .addInterceptors(new DataScopeRouteInterceptor(resolver,jdbc)).setControllerAdvice(new RouteErrors()).build();
+            var identity=new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,56L,"F1","warehouse_manager");
+            for(String suffix:List.of("/HIDDEN","/FOREIGN","/DELETED_PARENT","/UNKNOWN","/ORPHAN","/DELETED","/by-sales-order/OTHER_ORDER")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments"+suffix)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F2/finance/payments/by-customer").param("customerId","C1")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F2/finance/payments/OWN")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            for(String operation:List.of("verify","reject")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/mobile/F1/finance/payments/HIDDEN/"+operation)
+                        .contentType("application/json").content("{\"reason\":\"denied\"}")
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            verifyNoInteractions(service,repository);
+            for(String suffix:List.of("/OWN","/by-sales-order/OWN_ORDER")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments"+suffix)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            }
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments/by-customer").param("customerId","C1")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            when(service.recordPayment(eq("F1"),eq("SO-OWN"),eq(new java.math.BigDecimal("40.00")),
+                    eq(com.cretas.aims.entity.enums.PaymentMethod.BANK_TRANSFER),isNull(),eq("REF"),isNull(),eq(56L),eq("memo")))
+                    .thenReturn(new com.cretas.aims.entity.finance.PaymentRecord());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/mobile/F1/finance/payments/record")
+                    .contentType("application/json")
+                    .content("{\"salesOrderId\":\"SO-OWN\",\"amount\":\"40.00\",\"paymentMethod\":\"BANK_TRANSFER\",\"paymentReference\":\"REF\",\"remark\":\"memo\"}")
+                      .requestAttr("userId",56L).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            verify(service).getPayment("F1","OWN");verify(service).listPaymentsBySalesOrder("F1","OWN_ORDER");
+            verify(service).recordPayment(eq("F1"),eq("SO-OWN"),eq(new java.math.BigDecimal("40.00")),
+                    eq(com.cretas.aims.entity.enums.PaymentMethod.BANK_TRANSFER),isNull(),eq("REF"),isNull(),eq(56L),eq("memo"));
+            verify(repository).findCustomerPaymentsInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any());
+            assertThat(DataScopeContext.current()).isNull();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM payment_records",Integer.class)).isEqualTo(7);
+        });
+    }
+
     public static class Probe {
         @DataScope("created_by") public com.cretas.aims.entity.enums.DataScope currentScope() { return DataScopeContext.current().getScope(); }
         @DataScope("created_by") public Long currentOwner() {

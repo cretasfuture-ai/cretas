@@ -23,6 +23,13 @@ public interface PaymentRecordRepository extends JpaRepository<PaymentRecord, St
     Page<PaymentRecord> findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, String customerId, Pageable pageable);
 
+    /** Customer receipts inherit the source order's owner, not the recording accountant. */
+    @Query("SELECT p FROM PaymentRecord p JOIN SalesOrder o ON o.id = p.salesOrderId AND o.factoryId = p.factoryId " +
+            "WHERE p.factoryId = :factoryId AND p.customerId = :customerId AND p.deletedAt IS NULL " +
+            "AND o.deletedAt IS NULL AND o.createdBy IN :owners ORDER BY p.createdAt DESC")
+    Page<PaymentRecord> findCustomerPaymentsInOrderScope(@Param("factoryId") String factoryId,
+            @Param("customerId") String customerId, @Param("owners") List<Long> owners, Pageable pageable);
+
     List<PaymentRecord> findBySalesOrderIdAndDeletedAtIsNull(String salesOrderId);
 
     /** Factory-scoped lookup for sales order tab. */

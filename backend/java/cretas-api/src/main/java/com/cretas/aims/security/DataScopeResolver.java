@@ -287,6 +287,21 @@ public class DataScopeResolver {
             throw new com.cretas.aims.exception.BusinessException(403,"该记录不在当前账号的数据范围内");
     }
 
+    /** Typed identity captured before asynchronous execution; platform ids never resolve as users. */
+    public void assertActorCanAccess(String factoryId, Long createdBy, AuthenticatedActor actor) {
+        if (actor == null)
+            throw new com.cretas.aims.exception.BusinessException(401,"缺少已认证数据访问身份");
+        if (actor.hasFactoryBypass()) return;
+        if (actor.isPlatformAdmin() || !factoryId.equals(actor.factoryId()))
+            throw new com.cretas.aims.exception.BusinessException(403,"无权访问其他工厂数据");
+        DataScopeContext context = resolve(actor.id());
+        if (context == null || !factoryId.equals(context.getFactoryId()))
+            throw new com.cretas.aims.exception.BusinessException(403,"无有效工厂数据身份");
+        if (context.getScope() == DataScope.ALL) return;
+        if (createdBy == null || !resolveCreatedByChain(context).contains(createdBy))
+            throw new com.cretas.aims.exception.BusinessException(403,"该记录不在当前账号的数据范围内");
+    }
+
     // ==================== Sprint 6 W2-B: chain resolution ====================
 
     /** BFS 最大深度, 防 reportsTo 环 (理论不该有) 或意外深嵌套. */

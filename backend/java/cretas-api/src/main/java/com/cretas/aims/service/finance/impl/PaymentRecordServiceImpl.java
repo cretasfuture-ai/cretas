@@ -35,6 +35,9 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
     private final ApplicationEventPublisher eventPublisher;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.DataScopeResolver dataScopeResolver;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.DynamicFieldService dynamicFieldService;
@@ -62,6 +65,16 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
         SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(salesOrderId, factoryId)
                 .orElseThrow(() -> new com.cretas.aims.exception.ResourceNotFoundException(
                         "销售订单不存在: " + salesOrderId));
+        // Check both servlet calls and trusted user scopes used by asynchronous AI tools.
+        boolean http = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null;
+        Long toolUserId = com.cretas.aims.utils.SecurityUtils.currentUserId();
+        var actor = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null);
+        if (http || toolUserId != null || actor != null) {
+            if (dataScopeResolver == null)
+                throw new com.cretas.aims.exception.BusinessException(503, "数据范围组件未就绪，访问已停止");
+            if (http) dataScopeResolver.assertCanAccess(factoryId, so.getCreatedBy());
+            else dataScopeResolver.assertActorCanAccess(factoryId, so.getCreatedBy(), actor);
+        }
         if (so.getStatus() == null
                 || !com.cretas.aims.domain.OrderUsageWhitelists.SO_INVOICEABLE.contains(so.getStatus())) {
             throw new com.cretas.aims.exception.BusinessException(409,

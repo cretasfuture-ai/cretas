@@ -209,8 +209,10 @@ public class SseStreamingService {
         // 库存等「必须有登录上下文」的服务 (#921) 会抛 "Authenticated inventory context is required"
         // (2026-10-06 prod: 仓库员「查库存」每次失败; #944 用 SecurityContext 传递没生效, 因为身份读的是这里)。
         // userId 来自控制器已认证的请求, 在工作线程上绑成「可信用户」作用域, 结束时还原 (线程池复用线程)。
+        var actor = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null);
         sseExecutor.execute(() -> {
-            try (SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId)) {
+            try (var actorScope = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(actor);
+                 SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId)) {
                 executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
             }
         });
