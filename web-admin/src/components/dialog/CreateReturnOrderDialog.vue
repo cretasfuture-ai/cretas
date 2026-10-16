@@ -86,6 +86,7 @@ interface DialogRow {
 
 const formRef = ref<FormInstance>();
 const submitting = ref(false);
+const requestId = ref('');
 
 const form = ref<{
   returnDate: string;
@@ -158,7 +159,7 @@ const selectedRows = computed(() =>
 
 // fool-proof-design Rule 1: 逐行判断是否超出源单数量 — 供 :class 红框/红字 + 页面级提交禁用共用.
 function isRowOverflow(row: DialogRow): boolean {
-  return row.selected && row.maxQuantity > 0 && row.quantity > row.maxQuantity;
+  return row.selected && (isPurchaseReturn.value || row.maxQuantity > 0) && row.quantity > row.maxQuantity;
 }
 
 const hasOverflow = computed(() =>
@@ -177,6 +178,7 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open) {
+      requestId.value = props.returnType === 'PURCHASE_RETURN' ? crypto.randomUUID() : '';
       // Reset form on open; populate items from props.
       form.value = {
         returnDate: toDateString(new Date()),
@@ -222,7 +224,7 @@ async function handleSubmit(): Promise<void> {
   // R1 boundary check (defense-in-depth — UI already disables submit).
   // sticky (duration:0 + showClose): 别让绕开 UI 的最后防线消息一闪而过.
   for (const it of selectedRows.value) {
-    if (it.maxQuantity > 0 && it.quantity > it.maxQuantity) {
+    if ((isPurchaseReturn.value || it.maxQuantity > 0) && it.quantity > it.maxQuantity) {
       ElMessage({
         type: 'error',
         duration: 0,
@@ -233,6 +235,8 @@ async function handleSubmit(): Promise<void> {
     }
   }
 
+  // Validation is asynchronous: a second click may have entered before it resolved.
+  if (submitting.value || !props.modelValue) return;
   submitting.value = true;
   try {
     const itemsPayload: CreateReturnOrderItemRequest[] = selectedRows.value.map(
@@ -248,6 +252,7 @@ async function handleSubmit(): Promise<void> {
     );
 
     const created = await createReturnOrder(props.factoryId, {
+      ...(isPurchaseReturn.value ? { requestId: requestId.value } : {}),
       returnType: props.returnType,
       counterpartyId: props.counterpartyId,
       sourceOrderId: props.sourceOrderId,
@@ -258,9 +263,9 @@ async function handleSubmit(): Promise<void> {
       items: itemsPayload,
     });
 
-    ElMessage.success(
-      `退货单已创建 (DRAFT 草稿, ${created.returnNumber}). 请到 ${menuPathLabel.value} 菜单提交审批.`,
-    );
+    ElMessage.success(created.status === 'DRAFT'
+      ? `退货单已创建 (DRAFT 草稿, ${created.returnNumber}). 请到 ${menuPathLabel.value} 菜单提交审批.`
+      : `该退货请求已处理 (${created.returnNumber})，请到 ${menuPathLabel.value} 查看当前状态。`);
     emit('success', created);
     emit('update:modelValue', false);
   } catch (e: unknown) {
@@ -295,7 +300,7 @@ async function handleSubmit(): Promise<void> {
       :closable="false"
       style="margin-bottom: 12px"
       :title="`源单: ${sourceOrderNumber || sourceOrderId} ｜ ${counterpartyLabel}: ${counterpartyName || counterpartyId}`"
-      :description="isPurchaseReturn ? `请按下表库存单位填写数量。提交后到 ${menuPathLabel} 完成业务审批、财务审批和出货；有货退货完成后生成待审批的应付调整，调整审批后余额才会变动。` : `提交后退货单为 DRAFT 草稿. 请到 ${menuPathLabel} 菜单提交审批; 财务/管理员审批通过后才会触发库存或退款动作. 退货数量不能超过源单数量.`"
+      :description="isPurchaseReturn ? `请按下表库存单位填写数量。剩余可退已扣除其他待完成及已完成退货。提交后到 ${menuPathLabel} 完成业务审批、财务审批和出货；有货退货完成后生成待审批的应付调整，调整审批后余额才会变动。` : `提交后退货单为 DRAFT 草稿. 请到 ${menuPathLabel} 菜单提交审批; 财务/管理员审批通过后才会触发库存或退款动作. 退货数量不能超过源单数量.`"
     />
 
     <el-form
@@ -400,7 +405,7 @@ async function handleSubmit(): Promise<void> {
         <el-table-column v-if="isPurchaseReturn" label="库存单位" width="95">
           <template #default="{ row }">{{ row.unit || '—' }}</template>
         </el-table-column>
-        <el-table-column label="源单数量" width="110" align="right">
+        <el-table-column :label="isPurchaseReturn ? '剩余可退' : '源单数量'" width="110" align="right">
           <template #default="{ row }">{{ row.maxQuantity }}</template>
         </el-table-column>
         <el-table-column label="退货数量" width="160">
@@ -420,7 +425,7 @@ async function handleSubmit(): Promise<void> {
               :disabled="!row.selected"
               :class="{ 'over-limit-input': isRowOverflow(row) }"
             />
-            <div v-if="row.selected && row.maxQuantity > 0" class="over-limit-hint" :class="{ 'over-limit-hint--danger': isRowOverflow(row) }">
+            <div v-if="row.selected && (isPurchaseReturn || row.maxQuantity > 0)" class="over-limit-hint" :class="{ 'over-limit-hint--danger': isRowOverflow(row) }">
               最多可退 {{ row.maxQuantity }}
             </div>
           </template>

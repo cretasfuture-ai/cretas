@@ -74,6 +74,23 @@ export interface ReturnOrder {
   updatedAt?: string;
 }
 
+export interface PurchaseReturnAvailability {
+  purchaseOrderId: string;
+  items: {
+    materialTypeId: string;
+    baseUnit: string;
+    receivedQuantity: number;
+    returnedQuantity: number;
+    remainingQuantity: number;
+  }[];
+}
+
+export async function getPurchaseReturnAvailability(factoryId: string, purchaseOrderId: string): Promise<PurchaseReturnAvailability> {
+  const res = await get<PurchaseReturnAvailability>(`/${factoryId}/return-orders/purchase-source/${encodeURIComponent(purchaseOrderId)}/availability`);
+  if (!res.success || !res.data) throw new Error(res.message || '读取采购累计可退额度失败');
+  return res.data;
+}
+
 export interface CreateReturnOrderItemRequest {
   materialTypeId?: string | null;
   productTypeId?: string | null;
@@ -85,6 +102,8 @@ export interface CreateReturnOrderItemRequest {
 }
 
 export interface CreateReturnOrderRequest {
+  /** Stable for retries of one purchase-return form. */
+  requestId?: string;
   returnType: ReturnType;
   counterpartyId: string;
   sourceOrderId?: string | null;

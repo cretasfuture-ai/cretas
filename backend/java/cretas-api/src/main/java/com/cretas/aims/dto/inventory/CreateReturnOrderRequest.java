@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Pattern;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -19,6 +20,11 @@ import java.util.Map;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CreateReturnOrderRequest {
+
+    /** Optional client retry key. It is scoped by factory and actor by the service. */
+    @Pattern(regexp = "^$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            message = "请求幂等键必须是UUID")
+    private String requestId;
 
     @NotBlank(message = "退货类型不能为空")
     @Size(max = 50, message = "退货类型长度不能超过50个字符")

@@ -42,6 +42,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("markers/purchase-order","purchase_orders",List.of("id")),
         new Resource("customers","customers",List.of("customerId")),
         new Resource("material-batches","material_batches",List.of("batchId")),
+        new Resource("return-orders/purchase-source","purchase_orders",List.of("purchaseOrderId")),
         new Resource("return-orders","return_orders",List.of("returnOrderId")),
         new Resource("quality-return-orders","quality_return_orders",List.of("id")));
     @Override public boolean preHandle(HttpServletRequest request,HttpServletResponse response,Object handler) {

@@ -32,6 +32,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -52,6 +53,13 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     private final ReturnOrderItemRepository returnOrderItemRepository;
     private final ArApService arApService;
     private final ApplicationEventPublisher applicationEventPublisher;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private EntityManager entityManager;
+
+    /** Purchase-return source lock/capacity gate. Optional only for legacy unit-test construction. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PurchaseReturnCapacityService purchaseReturnCapacityService;
 
     // T-RTA Phase C (issue #571): create DEFECTIVE FinishedGoodsBatch in the factory's
     // 成品仓 (WH-FG, via WarehouseResolver#resolveFinishedGoodsId) on sales return
@@ -131,6 +139,16 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @Transactional
     public ReturnOrder createReturnOrder(String factoryId, CreateReturnOrderRequest request, Long userId) {
         ReturnType returnType = ReturnType.valueOf(request.getReturnType());
+        PurchaseReturnCapacityService.Preparation purchasePreparation = null;
+        if (returnType == ReturnType.PURCHASE_RETURN) {
+            if (purchaseReturnCapacityService == null) {
+                throw new BusinessException(503, "采购退货容量组件未就绪").withCode("PURCHASE_RETURN_CAPACITY_UNAVAILABLE");
+            }
+            purchasePreparation = purchaseReturnCapacityService.prepare(factoryId, request, userId);
+            if (purchasePreparation.isReplay()) {
+                return purchasePreparation.existingOrder();
+            }
+        }
 
         // Round 11 T2: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
@@ -147,6 +165,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         String returnNumber = generateReturnNumber(factoryId, returnType);
 
         ReturnOrder order = new ReturnOrder();
+        if (purchasePreparation != null && purchasePreparation.deterministicId() != null) {
+            order.setId(purchasePreparation.deterministicId());
+        }
         order.setFactoryId(factoryId);
         order.setReturnNumber(returnNumber);
         order.setReturnType(returnType);
@@ -161,7 +182,18 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         order.setWithGoods(request.getWithGoods() != null ? request.getWithGoods() : Boolean.TRUE);
         order.setCreatedBy(userId);
 
-        order = returnOrderRepository.save(order);
+        if (purchasePreparation != null && purchasePreparation.deterministicId() != null) {
+            if (entityManager == null) {
+                throw new BusinessException(503, "采购退货幂等持久化组件未就绪")
+                        .withCode("PURCHASE_RETURN_IDEMPOTENCY_PERSIST_UNAVAILABLE");
+            }
+            // A retry key owns this primary key. persist() is deliberate: save() may
+            // choose merge() for a non-null id and overwrite a concurrent row.
+            entityManager.persist(order);
+            entityManager.flush();
+        } else {
+            order = returnOrderRepository.save(order);
+        }
 
         BigDecimal totalAmount = BigDecimal.ZERO;
         List<ReturnOrderItem> items = new ArrayList<>();
@@ -189,7 +221,11 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
         returnOrderItemRepository.saveAll(items);
         order.setTotalAmount(totalAmount);
-        order = returnOrderRepository.save(order);
+        if (purchasePreparation != null && purchasePreparation.deterministicId() != null) {
+            entityManager.flush();
+        } else {
+            order = returnOrderRepository.save(order);
+        }
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink double-write.
         // ReturnOrder.sourceOrderId stays for backward compat; new code reads via
