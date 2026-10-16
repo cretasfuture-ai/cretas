@@ -14,7 +14,7 @@
         <div class="att-row">
           <div class="att-thumb" @click="open(att)">
             <el-image
-              v-if="att.fileCategory === 'PHOTO'"
+              v-if="att.fileCategory === 'PHOTO' && !isPdf(att)"
               :src="att.thumbnailUrl ?? att.fileUrl"
               fit="cover"
               :preview-src-list="[att.fileUrl]"
@@ -28,7 +28,7 @@
               controls
               @click.stop
             />
-            <div v-else class="thumb-icon">{{ categoryIcon(att.fileCategory) }}</div>
+            <div v-else class="thumb-icon">{{ isPdf(att) ? 'PDF' : categoryIcon(att.fileCategory) }}</div>
           </div>
           <div class="att-meta">
             <div class="att-name" :title="att.fileName">{{ att.fileName }}</div>
@@ -126,8 +126,13 @@ watch(
   { immediate: true },
 );
 
+function isPdf(att: Attachment): boolean {
+  return att.fileType?.split(';', 1)[0].trim().toLowerCase() === 'application/pdf'
+    || /\.pdf$/i.test(att.fileName);
+}
+
 function open(att: Attachment): void {
-  if (att.fileCategory === 'PHOTO') return; // el-image preview 已处理
+  if (att.fileCategory === 'PHOTO' && !isPdf(att)) return; // el-image preview 已处理
   window.open(att.fileUrl, '_blank');
 }
 
