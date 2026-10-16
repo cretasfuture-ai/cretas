@@ -22,6 +22,13 @@ public interface InvoiceRecordRepository extends JpaRepository<InvoiceRecord, St
     Page<InvoiceRecord> findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, String customerId, Pageable pageable);
 
+    /** Automatic invoices inherit the source order's owner, not their nullable requester. */
+    @Query("SELECT i FROM InvoiceRecord i JOIN SalesOrder o ON o.id = i.salesOrderId AND o.factoryId = i.factoryId " +
+            "WHERE i.factoryId = :factoryId AND i.customerId = :customerId AND i.deletedAt IS NULL " +
+            "AND o.deletedAt IS NULL AND o.createdBy IN :owners ORDER BY i.createdAt DESC")
+    Page<InvoiceRecord> findCustomerInvoicesInOrderScope(@Param("factoryId") String factoryId,
+            @Param("customerId") String customerId, @Param("owners") List<Long> owners, Pageable pageable);
+
     Page<InvoiceRecord> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, InvoiceStatus status, Pageable pageable);
 
     /**

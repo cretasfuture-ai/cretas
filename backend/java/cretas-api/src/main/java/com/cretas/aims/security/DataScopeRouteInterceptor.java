@@ -29,6 +29,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("warehouse/receiving/receipts","purchase_receive_records",List.of("receiptId","orderId")),
         new Resource("warehouse/receiving/tasks","purchase_orders",List.of("taskId")),
         new Resource("finance/invoices/by-sales-order","sales_orders",List.of("salesOrderId")),
+        new Resource("finance/invoices","invoice_records",List.of("invoiceId")),
         new Resource("finance/payments/by-sales-order","sales_orders",List.of("salesOrderId")),
         new Resource("production-plans/by-sales-order","sales_orders",List.of("salesOrderId")),
         new Resource("reference-data/customers","customers",List.of("id")),
@@ -74,9 +75,13 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         DataScopeContext context=resolver.resolve(actor.id());
         if (context==null || !factory.equals(context.getFactoryId())) throw new BusinessException(403,"无有效工厂数据身份");
         if (context.getScope()==DataScope.ALL) return true;
+        // These retired endpoints only return 410 with a migration hint; they cannot create records.
+        if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // These two paginated controller queries bind @DataScope and filter child creators in SQL.
         if (request.getMethod().equals("GET") && Set.of("sales/orders/by-customer", "return-orders/by-customer").contains(path)) return true;
         if (request.getMethod().equals("GET") && path.equals("quotes/by-customer")
+                && ((HandlerMethod) handler).hasMethodAnnotation(com.cretas.aims.annotation.DataScope.class)) return true;
+        if (request.getMethod().equals("GET") && path.equals("finance/invoices/by-customer")
                 && ((HandlerMethod) handler).hasMethodAnnotation(com.cretas.aims.annotation.DataScope.class)) return true;
         if (resource!=null) {
             if (resource.root().equals("warehouse/receiving/tasks")
@@ -85,7 +90,9 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
             String key=resource.keys().stream().filter(k->vars.get(k) instanceof String).findFirst().orElse(null);
             if (key!=null) {
                 String id=(String)vars.get(key), sql;
-                if (resource.table().equals("operational_quotes"))
+                if (resource.table().equals("invoice_records"))
+                    sql="SELECT o.created_by FROM invoice_records i JOIN sales_orders o ON o.id=i.sales_order_id AND o.factory_id=i.factory_id WHERE i.factory_id=? AND i.id::text=? AND i.deleted_at IS NULL AND o.deleted_at IS NULL";
+                else if (resource.table().equals("operational_quotes"))
                     sql="SELECT submitted_by_user_id FROM operational_quotes WHERE factory_id=? AND id::text=? AND deleted_at IS NULL";
                 else if (resource.table().equals("sales_delivery_records") && key.equals("orderId"))
                     sql="SELECT created_by FROM sales_orders WHERE factory_id=? AND id::text=?";
