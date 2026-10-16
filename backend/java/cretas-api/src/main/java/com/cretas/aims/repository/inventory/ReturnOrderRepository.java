@@ -53,6 +53,10 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String
     Page<ReturnOrder> findByFactoryIdAndCounterpartyIdAndReturnTypeOrderByCreatedAtDesc(
             String factoryId, String counterpartyId, ReturnType returnType, Pageable pageable);
 
+    Page<ReturnOrder> findByFactoryIdAndCounterpartyIdAndReturnTypeAndCreatedByInOrderByCreatedAtDesc(
+            String factoryId, String counterpartyId, ReturnType returnType,
+            Collection<Long> createdByList, Pageable pageable);
+
     @Query("SELECT COUNT(r) FROM ReturnOrder r WHERE r.factoryId = :factoryId AND r.returnDate = :date")
     long countByFactoryIdAndDate(@Param("factoryId") String factoryId, @Param("date") LocalDate date);
 

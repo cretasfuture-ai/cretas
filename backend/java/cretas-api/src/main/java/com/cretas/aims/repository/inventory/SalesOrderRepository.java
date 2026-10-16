@@ -90,6 +90,9 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     Page<SalesOrder> findByFactoryIdAndCustomerIdOrderByCreatedAtDesc(
             String factoryId, String customerId, Pageable pageable);
 
+    Page<SalesOrder> findByFactoryIdAndCustomerIdAndCreatedByInOrderByCreatedAtDesc(
+            String factoryId, String customerId, Collection<Long> createdByList, Pageable pageable);
+
     @Query("SELECT so FROM SalesOrder so WHERE so.factoryId = :factoryId " +
             "AND so.orderDate BETWEEN :startDate AND :endDate ORDER BY so.orderDate DESC")
     List<SalesOrder> findByFactoryIdAndDateRange(

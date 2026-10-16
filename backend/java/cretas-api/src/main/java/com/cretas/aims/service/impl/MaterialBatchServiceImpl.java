@@ -282,6 +282,15 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     /** Resolve the current inventory row scope and reject a path factory mismatch. */
     private DataScopeContext inventoryScope(String factoryId) {
+        var actor = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (actor != null) {
+            if (actor.hasFactoryBypass()) return DataScopeContext.builder().userId(actor.id())
+                    .factoryId(factoryId).roleCode(actor.role()).scope(com.cretas.aims.entity.enums.DataScope.ALL).column("created_by").build();
+            if (actor.isPlatformAdmin() || !factoryId.equals(actor.factoryId()))
+                throw new AccessDeniedException("Inventory factory does not match authenticated identity");
+        } else if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+            throw new AccessDeniedException("Authenticated inventory identity is required");
+        }
         DataScopeContext context = DataScopeContext.current();
         if (context == null && SecurityUtils.currentUserId() != null) {
             if (dataScopeResolver == null) {
@@ -337,7 +346,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     private User authenticatedInventoryActor(String factoryId) {
-        Long userId = SecurityUtils.currentUserId();
+        var typed = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (typed != null && (typed.isPlatformAdmin() || !factoryId.equals(typed.factoryId())))
+            throw new AccessDeniedException("Inventory actor does not belong to the requested factory");
+        Long userId = typed == null ? SecurityUtils.currentUserId() : typed.id();
         if (userId == null || userRepository == null) {
             throw new AccessDeniedException("Authenticated inventory actor is required");
         }
@@ -349,6 +361,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     private void requireInventoryReadPermission(String factoryId) {
+        var typed = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (typed != null && typed.hasFactoryBypass()) return;
         User actor = authenticatedInventoryActor(factoryId);
         if (permissionService == null || !permissionService.hasAnyPermission(actor,
                 "warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read")) {
@@ -357,6 +371,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     private void requireProductionSelectionPermission(String factoryId) {
+        var typed = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (typed != null && typed.hasFactoryBypass()) return;
         User actor = authenticatedInventoryActor(factoryId);
         if (permissionService == null || !permissionService.hasAnyPermission(actor,
                 "production:read_write", "production:read")) {
@@ -792,6 +808,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 账实红线 (2026-08-20 owner 裁定): 任何角色都不能经"编辑批次"直接改账实数量/成本/溯源归属/入库日期。
         // ⚠️ 这里刻意**不看 callerRole** —— 仓管主管/工厂总监/财务/平台管理员一律拦。
@@ -843,6 +860,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // W4 红线: 删除批次 = 无单据移除库存。纯操作员不可删, 需管理员。
         if (!isPrivilegedInventoryRole(callerRole)) {
@@ -872,6 +890,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权查看该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         return materialBatchMapper.toDTO(batch);
     }
@@ -1102,6 +1121,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 计算新数量
         BigDecimal newQuantity = batch.getCurrentQuantity().add(adjustmentQuantity);
@@ -1149,6 +1169,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         batch.setStatus(MaterialBatchStatus.EXPIRED);
         materialBatchRepository.save(batch);
@@ -1166,6 +1187,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         batch.setStatus(MaterialBatchStatus.USED_UP);
         // 注意: currentQuantity 是计算属性，不能直接设置
@@ -1187,6 +1209,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 检查可用数量
         if (batch.getCurrentQuantity().compareTo(quantity) < 0) {
@@ -1216,6 +1239,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 释放预留数量
         BigDecimal currentReserved = batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO;
@@ -1240,6 +1264,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 检查可用数量是否充足
         if (batch.getCurrentQuantity().compareTo(quantity) < 0) {
@@ -1830,6 +1855,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // W-03 defense (Round 7): reject negative newQuantity before it reaches the
         // receipt_quantity arithmetic — otherwise it propagated to a DB constraint
@@ -1936,6 +1962,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         LocalDate oldReceiptDate = batch.getReceiptDate();
         if (Objects.equals(oldReceiptDate, newReceiptDate)) {
@@ -2036,6 +2063,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         batch.setStatus(status);
         batch = materialBatchRepository.save(batch);
@@ -2053,6 +2081,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 🔴 2026-08-13: 必须挡在「剩余是否够」之前 —— 负数天然满足 remaining >= quantity,
         // 会一路走到 reserved += 负数, 把 reserved 推成负值。而 currentQuantity =
@@ -2116,6 +2145,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 🔴 2026-08-13: 同 reserveBatchMaterial —— 负数满足「预留够不够」这道比较,
         // 然后 reserved -= 负数 变成**用释放接口做预留**。同样挡在充足性检查之前。
@@ -2178,6 +2208,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // C-B1 fix: recordedBy 走 FK→users 必须真实操作人, 提前校验避免 INSERT 失败。
         if (operatorId == null) {
@@ -2367,6 +2398,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "批次不属于该工厂")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 3. 验证批次状态（只有鲜品可以转冻品）
         if (batch.getStatus() != MaterialBatchStatus.FRESH) {
@@ -2428,6 +2460,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(403, "批次不属于该工厂")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
         // 3. 验证批次状态（只有冻品可以撤销）
         if (batch.getStatus() != MaterialBatchStatus.FROZEN) {

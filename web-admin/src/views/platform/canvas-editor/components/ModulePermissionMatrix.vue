@@ -76,6 +76,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { get } from '@/api/request';
 import {
   getPlatformPermissions,
   getFactoryOverride,
@@ -117,15 +118,28 @@ function isOverridden(role: string, module: string): boolean {
   return row?.l2[module] !== undefined;
 }
 
+let loadGeneration = 0;
+const loadedFactory = ref('');
 async function load() {
+  const generation = ++loadGeneration;
+  const factory = props.factoryId;
+  const current = () => generation === loadGeneration && factory === props.factoryId;
+  loadedFactory.value = '';
   if (!props.factoryId) return;
   loading.value = true;
+  rows.value = [];
   dirty.value = new Map();
   try {
-    const [l1Flat, l2Map] = await Promise.all([
+    const [l1Flat, l2Map, catalogue] = await Promise.all([
       getPlatformPermissions(),
-      getFactoryOverride(props.factoryId),
+      getFactoryOverride(factory),
+      get<Array<{ name: string }>>(`/${factory}/roles`),
     ]);
+    if (!current()) return;
+    if (!catalogue.success || !Array.isArray(catalogue.data) || !catalogue.data.every(role =>
+      role && typeof role.name === 'string' && role.name.length > 0)) {
+      throw new Error('未能读取本厂角色目录，不能编辑权限');
+    }
     // Group L1 by role
     const l1ByRole = new Map<string, Record<string, PermissionLevel>>();
     for (const p of l1Flat) {
@@ -133,7 +147,10 @@ async function load() {
       l1ByRole.get(p.roleCode)![p.moduleCode] = p.permissionLevel;
     }
     // Build rows
-    const roleNames = Array.from(l1ByRole.keys()).sort();
+    const roleNames = Array.from(new Set([
+      ...catalogue.data.map(role => role.name).filter(role => role !== 'platform_admin'),
+    ])).sort();
+    loadedFactory.value = factory;
     rows.value = roleNames.map(roleCode => {
       const l1 = l1ByRole.get(roleCode) || {};
       const l2 = (l2Map[roleCode] || {}) as Record<string, PermissionLevel>;
@@ -146,9 +163,9 @@ async function load() {
       return { role: roleCode, l1, l2, effective };
     });
   } catch (e: any) {
-    ElMessage.error('加载权限矩阵失败: ' + (e?.message || 'unknown'));
+    if (current()) ElMessage.error('加载权限矩阵失败: ' + (e?.message || 'unknown'));
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
@@ -174,20 +191,25 @@ function resetOverride(role: string, module: string) {
 }
 
 async function save() {
-  if (!props.factoryId || dirty.value.size === 0) return;
+  const factory = loadedFactory.value;
+  if (!factory || factory !== props.factoryId || loading.value || saving.value || dirty.value.size === 0) return;
+  const generation = loadGeneration;
+  const current = () => generation === loadGeneration && factory === props.factoryId;
   saving.value = true;
   const failed: DirtyCell[] = [];
   const succeeded: DirtyCell[] = [];
   try {
-    for (const cell of dirty.value.values()) {
+    for (const cell of Array.from(dirty.value.values())) {
+      if (!current()) return;
       try {
-        await updateFactoryOverride(props.factoryId, cell.role, cell.module, cell.level);
+        await updateFactoryOverride(factory, cell.role, cell.module, cell.level);
         succeeded.push(cell);
       } catch (e: any) {
         failed.push(cell);
         console.warn('[ModulePermissionMatrix] PUT failed for', cell, e);
       }
     }
+    if (!current()) return;
     if (failed.length === 0) {
       ElMessage.success(`已保存 ${succeeded.length} 处覆盖`);
       dirty.value.clear();

@@ -186,6 +186,7 @@ public class OperationalQuoteController {
      * Paginated, newest first, soft-deleted excluded.
      */
     @GetMapping("/by-customer")
+    @com.cretas.aims.annotation.RequirePermission({"sales:read_write", "sales:read"})
     public ResponseEntity<?> listByCustomer(
             @PathVariable String factoryId,
             @RequestParam String customerId,

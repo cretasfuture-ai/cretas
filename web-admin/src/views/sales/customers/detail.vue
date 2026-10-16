@@ -41,14 +41,14 @@
       >
         <KeepAlive>
           <component
-            v-if="t.component"
+            v-if="t.component && customer"
             :is="t.component"
             :customer-id="customerId"
             :customer="customer"
             @changed="refreshCustomer"
           />
           <PlaceholderTab
-            v-else
+            v-else-if="!t.component"
             :tab-name="t.label"
             :status="t.status || '功能开发中'"
             :workaround-hint="t.workaround"

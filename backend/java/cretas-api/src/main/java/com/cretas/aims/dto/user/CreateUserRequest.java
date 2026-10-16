@@ -81,6 +81,26 @@ public class CreateUserRequest {
     @Size(max = 50, message = "部门名称长度不能超过50个字符")
     private String department;
 
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean departmentProvided;
+
+    public void setDepartment(String department) {
+        this.department = department;
+        this.departmentProvided = true;
+    }
+
+    @Schema(description = "直属上级工厂用户ID；更新时省略保留，显式null清除")
+    @jakarta.validation.constraints.Positive(message = "直属上级ID必须为正数")
+    private Long reportsTo;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean reportsToProvided;
+
+    public void setReportsTo(Long reportsTo) {
+        this.reportsTo = reportsTo;
+        this.reportsToProvided = true;
+    }
+
     @Schema(description = "职位")
     @Size(max = 100, message = "职位长度不能超过100个字符")
     private String position;

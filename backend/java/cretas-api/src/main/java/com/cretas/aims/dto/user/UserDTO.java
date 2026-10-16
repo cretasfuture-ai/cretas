@@ -61,6 +61,12 @@ public class UserDTO {
     @Schema(description = "部门显示名称")
     private String departmentDisplayName;
 
+    @Schema(description = "部门原始代码，用于编辑回填")
+    private String departmentCode;
+
+    @Schema(description = "直属上级工厂用户ID")
+    private Long reportsTo;
+
     @Schema(description = "职位")
     private String position;
 

@@ -244,6 +244,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             throw new BusinessException(403, "无权访问该退货单")
                     .withHint("当前退货单不属于该工厂, 无法访问");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "return_orders");
         return order;
     }
 

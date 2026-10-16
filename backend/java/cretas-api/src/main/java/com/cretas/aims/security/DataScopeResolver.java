@@ -8,6 +8,7 @@ import com.cretas.aims.repository.RoleDefinitionRepository;
 import com.cretas.aims.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -90,18 +91,30 @@ public class DataScopeResolver {
 
     private final UserRepository userRepository;
     private final RoleDefinitionRepository roleDefinitionRepository;
+    private final JdbcTemplate jdbcTemplate;
     private final Clock clock;
     private final ConcurrentMap<String, Instant> lastWarnedAt = new ConcurrentHashMap<>();
 
-    @Autowired
     public DataScopeResolver(UserRepository userRepository, RoleDefinitionRepository roleDefinitionRepository) {
-        this(userRepository, roleDefinitionRepository, Clock.systemUTC());
+        this(userRepository, roleDefinitionRepository, null, Clock.systemUTC());
     }
 
     /** Package-visible: 测试注入可控 {@link Clock}, 验证节流窗口. */
     DataScopeResolver(UserRepository userRepository, RoleDefinitionRepository roleDefinitionRepository, Clock clock) {
+        this(userRepository, roleDefinitionRepository, null, clock);
+    }
+
+    @Autowired
+    public DataScopeResolver(UserRepository userRepository, RoleDefinitionRepository roleDefinitionRepository,
+                             JdbcTemplate jdbcTemplate) {
+        this(userRepository, roleDefinitionRepository, jdbcTemplate, Clock.systemUTC());
+    }
+
+    DataScopeResolver(UserRepository userRepository, RoleDefinitionRepository roleDefinitionRepository,
+                      JdbcTemplate jdbcTemplate, Clock clock) {
         this.userRepository = userRepository;
         this.roleDefinitionRepository = roleDefinitionRepository;
+        this.jdbcTemplate = jdbcTemplate;
         this.clock = clock;
     }
 
@@ -122,7 +135,7 @@ public class DataScopeResolver {
         }
         User user = userOpt.get();
         String roleCode = user.getRoleCode();
-        DataScope scope = resolveScopeForRole(roleCode);
+        DataScope scope = resolveScopeForRole(user.getFactoryId(), roleCode);
 
         return DataScopeContext.builder()
                 .userId(userId)
@@ -204,6 +217,29 @@ public class DataScopeResolver {
         }
     }
 
+    /** Factory-specific override takes precedence over the legacy role definition. */
+    public DataScope resolveScopeForRole(String factoryId, String roleCode) {
+        if (jdbcTemplate == null) return resolveScopeForRole(roleCode);
+        if ("factory_super_admin".equals(roleCode) || "platform_admin".equals(roleCode)) return DataScope.ALL;
+        try {
+            String configured = jdbcTemplate.queryForObject(
+                    "SELECT data_scope FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?",
+                    String.class, factoryId, roleCode);
+            if (configured != null) {
+                DataScope result = DataScope.valueOf(configured);
+                if (result == DataScope.CUSTOM) throw new IllegalArgumentException("unsupported scope");
+                return result;
+            }
+        } catch (org.springframework.dao.EmptyResultDataAccessException ignored) {
+            // No tenant override: continue to the legacy role definition.
+        } catch (RuntimeException ex) {
+            throw new com.cretas.aims.exception.BusinessException(503, "无法读取工厂数据范围，访问已停止");
+        }
+        DataScope legacy = resolveScopeForRole(roleCode);
+        if (legacy == DataScope.CUSTOM) throw new com.cretas.aims.exception.BusinessException(503, "尚未支持自定义数据范围，访问已停止");
+        return legacy;
+    }
+
     /**
      * role_code 维度节流: 同一角色的失败 WARN 在 {@link #WARN_THROTTLE} 窗口内只打一次.
      * 两个调用方共用同一套节流状态 ({@link #lastWarnedAt}): 查询异常 (表/列缺失等) 与
@@ -219,6 +255,36 @@ public class DataScopeResolver {
         }
         lastWarnedAt.put(roleCode, now);
         log.warn("DataScopeResolver: {}", reason);
+    }
+
+    public static void requireRecordAccess(DataScopeResolver resolver, String factory, Long creator, String resource) {
+        if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() instanceof org.springframework.web.context.request.ServletRequestAttributes attributes
+                && !resource.equals(attributes.getRequest().getAttribute(DataScopeRouteInterceptor.RESOURCE_ATTRIBUTE))) return;
+        // Trusted internal FIFO/production/AR calls keep their existing factory checks.
+        if (resolver == null) {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null)
+                throw new com.cretas.aims.exception.BusinessException(503,"数据范围组件未就绪，访问已停止");
+            return;
+        }
+        resolver.assertCanAccess(factory,creator);
+    }
+    /** Record access uses the same factory role policy as list filtering. */
+    public void assertCanAccess(String factoryId, Long createdBy) {
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (actor == null) {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null)
+                throw new com.cretas.aims.exception.BusinessException(401,"缺少已认证数据访问身份");
+            return; // Internal jobs have no HTTP actor.
+        }
+        if (actor.hasFactoryBypass()) return;
+        if (actor.isPlatformAdmin() || !factoryId.equals(actor.factoryId()))
+            throw new com.cretas.aims.exception.BusinessException(403,"无权访问其他工厂数据");
+        DataScopeContext context = resolve(actor.id());
+        if (context == null || !factoryId.equals(context.getFactoryId()))
+            throw new com.cretas.aims.exception.BusinessException(403,"无有效工厂数据身份");
+        if (context.getScope() == DataScope.ALL) return;
+        if (createdBy == null || !resolveCreatedByChain(context).contains(createdBy))
+            throw new com.cretas.aims.exception.BusinessException(403,"该记录不在当前账号的数据范围内");
     }
 
     // ==================== Sprint 6 W2-B: chain resolution ====================
@@ -276,12 +342,16 @@ public class DataScopeResolver {
                     if (mgrId == null) continue;
                     List<Long> subs = userRepository.findSubordinateIdsByReportsTo(factoryId, mgrId);
                     for (Long subId : subs) {
-                        if (subId != null && visited.add(subId)) {
+                        if (subId != null) {
+                            if (!visited.add(subId)) return List.of(selfId);
                             frontier.add(subId);
                         }
                     }
                 }
                 depth++;
+            }
+            for (Long deepest : frontier) {
+                if (!userRepository.findSubordinateIdsByReportsTo(factoryId, deepest).isEmpty()) return List.of(selfId);
             }
         } catch (Exception ex) {
             log.warn("DataScopeResolver: SELF_AND_BELOW chain resolution failed for user {}: {}, fallback [self]",

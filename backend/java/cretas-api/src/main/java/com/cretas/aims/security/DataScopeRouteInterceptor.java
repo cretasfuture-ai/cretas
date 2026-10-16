@@ -1,0 +1,107 @@
+package com.cretas.aims.security;
+
+import com.cretas.aims.entity.enums.DataScope;
+import com.cretas.aims.exception.BusinessException;
+import jakarta.servlet.http.*;
+import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.HandlerMapping;
+import java.util.*;
+
+/** External alternate reads fail closed until their queries support the same row policy. */
+@Component
+@RequiredArgsConstructor
+public class DataScopeRouteInterceptor implements HandlerInterceptor {
+    private final DataScopeResolver resolver;
+    private final JdbcTemplate jdbc;
+    public static final String RESOURCE_ATTRIBUTE=DataScopeRouteInterceptor.class.getName()+".resource";
+    private record Resource(String root,String table,List<String> keys) {}
+    private static final List<Resource> RESOURCES=List.of(
+        new Resource("sales/orders","sales_orders",List.of("orderId")),
+        new Resource("sales/deliveries","sales_delivery_records",List.of("deliveryId","parentDeliveryId","orderId")),
+        new Resource("warehouse/deliveries","sales_delivery_records",List.of("deliveryId")),
+        new Resource("purchase/orders","purchase_orders",List.of("orderId","orderNumber")),
+        new Resource("purchase/receives","purchase_receive_records",List.of("receiveId","orderId")),
+        new Resource("warehouse/receiving/receipts","purchase_receive_records",List.of("receiptId","orderId")),
+        new Resource("warehouse/receiving/tasks","purchase_orders",List.of("taskId")),
+        new Resource("finance/invoices/by-sales-order","sales_orders",List.of("salesOrderId")),
+        new Resource("finance/payments/by-sales-order","sales_orders",List.of("salesOrderId")),
+        new Resource("production-plans/by-sales-order","sales_orders",List.of("salesOrderId")),
+        new Resource("reference-data/customers","customers",List.of("id")),
+        new Resource("reference-data/sales-orders","sales_orders",List.of("id")),
+        new Resource("reference-data/purchase-orders","purchase_orders",List.of("id")),
+        new Resource("reference-data/batches","material_batches",List.of("id")),
+        new Resource("markers/sales-order","sales_orders",List.of("id")),
+        new Resource("markers/purchase-order","purchase_orders",List.of("id")),
+        new Resource("customers","customers",List.of("customerId")),
+        new Resource("material-batches","material_batches",List.of("batchId")),
+        new Resource("return-orders","return_orders",List.of("returnOrderId")),
+        new Resource("quality-return-orders","quality_return_orders",List.of("id")));
+    @Override public boolean preHandle(HttpServletRequest request,HttpServletResponse response,Object handler) {
+        if (!(handler instanceof HandlerMethod)) return true;
+        Object raw=request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+        if (!(raw instanceof Map<?,?> vars) || !(vars.get("factoryId") instanceof String factory)) return true;
+        String base="/api/mobile/{factoryId}/";
+        Object matched=request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        String pattern=matched==null ? "" : matched.toString();
+        if (!pattern.startsWith(base)) return true;
+        String path=pattern.substring(base.length());
+        Resource resource=RESOURCES.stream().filter(r->path.equals(r.root()) || path.startsWith(r.root()+"/")).findFirst().orElse(null);
+        if (resource==null && vars.get("recordId") instanceof String && vars.get("moduleCode") instanceof String module) {
+            String table=Map.of("sales_order","sales_orders","purchase_order","purchase_orders","customer","customers",
+                    "material_batch","material_batches","return_order","return_orders","quality_return_order","quality_return_orders").get(module);
+            if (table!=null) resource=new Resource("",table,List.of("recordId"));
+        }
+        // Purchase's unrelated-record shortcuts also cannot expose global order statistics.
+        boolean aggregateShortcut=Set.of("quotes/by-customer", "finance/invoices/by-customer", "finance/payments/by-customer").contains(path)
+            || path.equals("sales/statistics") || path.equals("inventory/by-warehouse") || path.startsWith("list-summary/") || path.startsWith("workflow-stats/")
+            || path.equals("purchase/statistics") || path.equals("purchase/receiving-tasks")
+            || (path.startsWith("warehouse/receiving/") && !path.equals("warehouse/receiving/default-warehouse") && resource==null);
+        if (resource==null && !aggregateShortcut) return true;
+        if (resource!=null) request.setAttribute(RESOURCE_ATTRIBUTE, switch(resource.table()) {
+            case "sales_delivery_records" -> "sales_orders";
+            case "purchase_receive_records" -> "purchase_orders";
+            default -> resource.table();
+        });
+        AuthenticatedActor actor=AuthenticatedActor.current(request).orElseThrow(()->new BusinessException(401,"缺少已认证数据访问身份"));
+        if (actor.hasFactoryBypass()) return true;
+        if (actor.isPlatformAdmin() || !factory.equals(actor.factoryId())) throw new BusinessException(403,"无权访问其他工厂数据");
+        DataScopeContext context=resolver.resolve(actor.id());
+        if (context==null || !factory.equals(context.getFactoryId())) throw new BusinessException(403,"无有效工厂数据身份");
+        if (context.getScope()==DataScope.ALL) return true;
+        // These two paginated controller queries bind @DataScope and filter child creators in SQL.
+        if (request.getMethod().equals("GET") && Set.of("sales/orders/by-customer", "return-orders/by-customer").contains(path)) return true;
+        if (resource!=null) {
+            if (resource.root().equals("warehouse/receiving/tasks")
+                    && !path.equals("warehouse/receiving/tasks/{taskId}/close-short"))
+                throw new BusinessException(403,"当前数据范围不支持此收货任务查询或客户来料操作，请使用主列表");
+            String key=resource.keys().stream().filter(k->vars.get(k) instanceof String).findFirst().orElse(null);
+            if (key!=null) {
+                String id=(String)vars.get(key), sql;
+                if (resource.table().equals("sales_delivery_records") && key.equals("orderId"))
+                    sql="SELECT created_by FROM sales_orders WHERE factory_id=? AND id::text=?";
+                else if (resource.table().equals("sales_delivery_records"))
+                    // Linked deliveries inherit order ownership; standalone samples inherit customer ownership.
+                    sql="SELECT CASE WHEN NULLIF(d.sales_order_id,'') IS NULL THEN c.created_by ELSE o.created_by END FROM sales_delivery_records d LEFT JOIN sales_orders o ON o.id=d.sales_order_id AND o.factory_id=d.factory_id LEFT JOIN customers c ON c.id=d.customer_id AND c.factory_id=d.factory_id WHERE d.factory_id=? AND d.id::text=?";
+                else if(resource.table().equals("purchase_receive_records") && (key.equals("receiveId") || key.equals("receiptId")))
+                    sql="SELECT o.created_by FROM purchase_receive_records r JOIN purchase_orders o ON o.id=r.purchase_order_id AND o.factory_id=r.factory_id WHERE r.factory_id=? AND r.id::text=?";
+                else {
+                    String table=resource.table().equals("purchase_receive_records") ? "purchase_orders" : resource.table();
+                    String column=key.equals("orderNumber") ? "order_number" : "id::text";
+                    sql="SELECT created_by FROM "+table+" WHERE factory_id=? AND "+column+"=?";
+                }
+                List<Long> owners=jdbc.query(sql,(rs,n)->rs.getObject(1,Long.class),factory,id);
+                if (owners.size()!=1) throw new BusinessException(403,"该记录不在当前数据范围或不存在");
+                resolver.assertCanAccess(factory,owners.get(0)); return true;
+            }
+            if (path.equals(resource.root()) && request.getMethod().equals("GET")
+                    && Set.of("sales/orders","purchase/orders","customers","material-batches","return-orders","quality-return-orders").contains(resource.root())) return true;
+            // Child creation checks the locked parent in the service before its first write.
+            if (path.equals(resource.root()) && request.getMethod().equals("POST")) return true;
+        }
+        throw new BusinessException(403,"当前数据范围不支持此快捷查询或批量操作，请使用主列表");
+    }
+}

@@ -102,17 +102,20 @@ async function fetchList() {
   try {
     const res = await get<PageResp>(`/${factoryId.value}/finance/payments/by-customer`, {
       params: { customerId: props.customerId, page: currentPage.value, size: pageSize },
+      _silent: true,
     });
     if (!res.success || !res.data) throw new Error(res.message || '加载失败');
     payments.value = res.data.content;
     totalElements.value = res.data.totalElements;
     state.value = payments.value.length === 0 ? 'empty' : 'ready';
-  } catch (e: any) {
-    const status = e?.response?.status || e?.code;
-    const backendMsg = e?.response?.data?.message || e?.message;
+  } catch (e: unknown) {
+    const error = e as { status?: number; code?: string | number; message?: string; response?: { status?: number; data?: { message?: string } } };
+    const status = error?.status || error?.response?.status || error?.code;
+    const backendMsg = error?.response?.data?.message || error?.message;
     if (status === 403) {
       state.value = 'error';
-      errorMsg.value = '无权查看此客户的收款记录';
+      errorMsg.value = '当前数据范围或权限不支持此客户快捷页，请使用已授权的主列表';
+      return;
     } else {
       state.value = 'error';
       errorMsg.value = backendMsg || '加载失败';

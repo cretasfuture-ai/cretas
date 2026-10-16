@@ -499,6 +499,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     public PurchaseOrder getPurchaseOrderById(String factoryId, String orderId) {
         PurchaseOrder order = purchaseOrderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在"));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "purchase_orders");
         if (!order.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权访问该采购订单")
                     .withHint("当前采购订单不属于该工厂, 无法访问");
@@ -511,6 +512,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     public PurchaseOrder getPurchaseOrderByNumber(String factoryId, String orderNumber) {
         PurchaseOrder order = purchaseOrderRepository.findByFactoryIdAndOrderNumber(factoryId, orderNumber)
                 .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在: " + orderNumber));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "purchase_orders");
         hydrateSalesOrderNumber(order);
         return order;
     }
@@ -2129,6 +2131,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (request.getPurchaseOrderId() != null && !request.getPurchaseOrderId().isEmpty()) {
             order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(request.getPurchaseOrderId(), factoryId)
                     .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+            DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "purchase_orders");
             if (order.getStatus() != PurchaseOrderStatus.FINANCE_APPROVED
                     && order.getStatus() != PurchaseOrderStatus.PARTIAL_RECEIVED) {
                 throw new BusinessException(409, "采购订单完成财务审核后才能进入仓储收货")

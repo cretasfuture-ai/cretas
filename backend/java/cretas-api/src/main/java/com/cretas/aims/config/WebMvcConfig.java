@@ -3,6 +3,7 @@ package com.cretas.aims.config;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import com.cretas.aims.security.DataScopeRouteInterceptor;
 
 /**
  * Spring MVC配置
@@ -20,18 +21,21 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final PermissionInterceptor permissionInterceptor;
     private final RequireRoleInterceptor requireRoleInterceptor;
     private final ModuleEnabledInterceptor moduleEnabledInterceptor;
+    private final DataScopeRouteInterceptor dataScopeRouteInterceptor;
 
     // 构造器注入 - Spring 确保依赖已就绪
     public WebMvcConfig(JwtAuthInterceptor jwtAuthInterceptor,
                         DemoReadOnlyInterceptor demoReadOnlyInterceptor,
                         PermissionInterceptor permissionInterceptor,
                         RequireRoleInterceptor requireRoleInterceptor,
-                        ModuleEnabledInterceptor moduleEnabledInterceptor) {
+                        ModuleEnabledInterceptor moduleEnabledInterceptor,
+                        DataScopeRouteInterceptor dataScopeRouteInterceptor) {
         this.jwtAuthInterceptor = jwtAuthInterceptor;
         this.demoReadOnlyInterceptor = demoReadOnlyInterceptor;
         this.permissionInterceptor = permissionInterceptor;
         this.requireRoleInterceptor = requireRoleInterceptor;
         this.moduleEnabledInterceptor = moduleEnabledInterceptor;
+        this.dataScopeRouteInterceptor = dataScopeRouteInterceptor;
     }
 
     @Override
@@ -98,6 +102,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns(swaggerWhitelist)
                 .excludePathPatterns(publicWhitelist)   // 排除公开分享端点 (#872)
                 .order(5);
+
+        registry.addInterceptor(dataScopeRouteInterceptor)
+                .addPathPatterns("/api/mobile/**")
+                .excludePathPatterns(swaggerWhitelist)
+                .excludePathPatterns(publicWhitelist)
+                .order(6);
 
         WebMvcConfigurer.super.addInterceptors(registry);
     }
