@@ -1,7 +1,7 @@
 <!--
   Sprint 4 W1 S-CUSTOMER-TAB-1: tab 9 报价单 by customer.
   Backend: GET /api/mobile/{factoryId}/quotes/by-customer?customerId= (Phase D3 added).
-  RBAC: canViewPrice mask on quotedPrice / quoteTotalAmount per spec §7.2.
+  RBAC: canViewPrice masks unitPrice; quotes have unit prices, not order totals.
 -->
 <template>
   <div class="quotes-tab">
@@ -26,7 +26,7 @@
 
     <template v-else>
       <el-table :data="quotes" border stripe size="small">
-        <el-table-column label="报价单号" prop="quoteNumber" width="170" />
+        <el-table-column label="报价单号" prop="quoteNo" width="170" />
         <el-table-column label="创建日期" prop="createdAt" width="170">
           <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
         </el-table-column>
@@ -35,16 +35,10 @@
             <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="产品类型" prop="productTypeName" min-width="140" show-overflow-tooltip />
+        <el-table-column label="产品 ID" prop="productTypeId" min-width="140" show-overflow-tooltip />
         <el-table-column label="报价" align="right" width="140">
           <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.quotedPrice) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="总额" align="right" width="140">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.quoteTotalAmount) }}</span>
+            <span v-if="canViewPrice">{{ formatMoney(row.unitPrice) }}<template v-if="row.unit">/{{ row.unit }}</template></span>
             <span v-else class="masked">****</span>
           </template>
         </el-table-column>
@@ -76,12 +70,12 @@ import { get } from '@/api/request';
 
 interface QuoteRow {
   id: string;
-  quoteNumber?: string;
+  quoteNo?: string;
   customerId: string;
-  productTypeName?: string;
+  productTypeId?: string;
   status?: string;
-  quotedPrice?: number;
-  quoteTotalAmount?: number;
+  unitPrice?: number;
+  unit?: string;
   validUntil?: string;
   createdAt?: string;
 }

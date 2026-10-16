@@ -175,7 +175,10 @@ async function handleSubmitPrice() {
   submitting.value = true;
   try {
     const { id, quoteNo: _qn, ...body } = submitPriceForm.value;
-    const res = await put(`/${factoryId.value}/quotes/${id}/submit-price`, body);
+    const res = await put(`/${factoryId.value}/quotes/${id}/submit-price`, {
+      ...body,
+      validUntil: body.validUntil || null,
+    });
     if (res.success) {
       const margin = res.data?.marginRate ? `(毛利率 ${(Number(res.data.marginRate) * 100).toFixed(2)}%)` : '';
       ElMessage.success(`报价已提交审批 ${margin}`);

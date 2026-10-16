@@ -143,7 +143,7 @@ class RoleDataScopePostgresContractTest {
             assertThat(jdbc.queryForObject("SELECT count(*) FROM "+RouteProbe.table(resource)+" WHERE remark IS NOT NULL",Integer.class)).isZero();
         });
     }
-    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings={"quotes/by-customer","finance/invoices/by-customer","finance/payments/by-customer","sales/orders/by-status","sales/statistics","reference-data/customers","reference-data/sales-orders","reference-data/purchase-orders","reference-data/batches","inventory/by-warehouse"}) void unsafeAlternateReadIsRejectedButAllScopePreservesIt(String alternate) throws Exception {
+    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings={"quotes/by-customer","finance/invoices/by-customer","finance/payments/by-customer","sales/orders/by-status","sales/statistics","reference-data/customers","reference-data/quotes","reference-data/sales-orders","reference-data/purchase-orders","reference-data/batches","inventory/by-warehouse"}) void unsafeAlternateReadIsRejectedButAllScopePreservesIt(String alternate) throws Exception {
         fixture((jdbc,resolver,service) -> {
             service.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,0),56L);
             var probe=new RouteProbe(jdbc);
@@ -176,7 +176,7 @@ class RoleDataScopePostgresContractTest {
         }
         @org.springframework.web.bind.annotation.GetMapping({"/sales/deliveries/by-order/{orderId}","/finance/invoices/by-sales-order/{salesOrderId}","/finance/payments/by-sales-order/{salesOrderId}","/production-plans/by-sales-order/{salesOrderId}"})
         public String linkedTab() { reads++;return "allowed linked data"; }
-        @org.springframework.web.bind.annotation.GetMapping({"/quotes/by-customer","/finance/invoices/by-customer","/finance/payments/by-customer","/sales/orders/by-status","/sales/statistics","/reference-data/customers","/reference-data/sales-orders","/reference-data/purchase-orders","/reference-data/batches","/inventory/by-warehouse"}) public String shortcut() { reads++;return "unsafe legacy shortcut"; }
+        @org.springframework.web.bind.annotation.GetMapping({"/quotes/by-customer","/finance/invoices/by-customer","/finance/payments/by-customer","/sales/orders/by-status","/sales/statistics","/reference-data/customers","/reference-data/quotes","/reference-data/sales-orders","/reference-data/purchase-orders","/reference-data/batches","/inventory/by-warehouse"}) public String shortcut() { reads++;return "unsafe legacy shortcut"; }
     }
     @org.springframework.web.bind.annotation.RestControllerAdvice
     static class RouteErrors {
@@ -323,6 +323,57 @@ class RoleDataScopePostgresContractTest {
                 if(id.equals("HIDDEN"))assertThat(probe.reads).isZero();
             }
             assertThat(probe.reads).isEqualTo(1);
+        });
+    }
+
+    @Test void quoteRoutesUsePersistedSubmitterPolicyAndDoNotOpenUnscopedLists() throws Exception {
+        fixture((jdbc,resolver,service)->{
+            jdbc.execute("CREATE TABLE operational_quotes(id varchar,factory_id varchar,submitted_by_user_id bigint,deleted_at timestamp)");
+            jdbc.execute("INSERT INTO operational_quotes VALUES('OWN','F1',56,null),('HIDDEN','F1',66,null),('FOREIGN','F2',56,null),('DELETED','F1',56,now()),('UNKNOWN','F1',null,null)");
+            service.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,0),56L);
+            var quoteService=mock(com.cretas.aims.service.sales.OperationalQuoteService.class);
+            when(quoteService.getQuote("F1","OWN")).thenReturn(new com.cretas.aims.entity.sales.OperationalQuote());
+            var repository=mock(com.cretas.aims.repository.sales.OperationalQuoteRepository.class);
+            when(repository.findByFactoryIdAndCustomerIdAndSubmittedByUserIdInAndDeletedAtIsNullOrderByCreatedAtDesc(eq("F1"),eq("C1"),eq(List.of(56L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
+            var controller=new com.cretas.aims.controller.sales.OperationalQuoteController(quoteService,repository,resolver);
+            var proxy=new AspectJProxyFactory(controller);proxy.addAspect(new DataScopeAspect(resolver));
+            var references=mock(com.cretas.aims.controller.ReferenceDataController.class,withSettings().defaultAnswer(CALLS_REAL_METHODS));
+            org.springframework.test.util.ReflectionTestUtils.setField(references,"quoteRepository",repository);
+            when(repository.findByIdAndFactoryIdAndDeletedAtIsNull("OWN","F1")).thenReturn(Optional.of(new com.cretas.aims.entity.sales.OperationalQuote()));
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup((Object)proxy.getProxy(),references)
+                    .addInterceptors(new DataScopeRouteInterceptor(resolver,jdbc)).setControllerAdvice(new RouteErrors()).build();
+            var identity=new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,56L,"F1","warehouse_manager");
+            for(String suffix:List.of("/HIDDEN","/FOREIGN","/DELETED","/UNKNOWN","","/active")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/quotes"+suffix)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            for(String id:List.of("HIDDEN","FOREIGN","DELETED","UNKNOWN")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/reference-data/quotes/"+id)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/mobile/F1/quotes/HIDDEN/submit-price")
+                    .contentType("application/json").content("{\"unitPrice\":12}").requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F2/quotes/by-customer").param("customerId","C1")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            verifyNoInteractions(quoteService,repository);
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/quotes/OWN")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/reference-data/quotes/OWN")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/quotes/by-customer").param("customerId","C1")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            verify(repository).findByFactoryIdAndCustomerIdAndSubmittedByUserIdInAndDeletedAtIsNullOrderByCreatedAtDesc(eq("F1"),eq("C1"),eq(List.of(56L)),any());
+            verify(quoteService).getQuote("F1","OWN");
+            verify(repository).findByIdAndFactoryIdAndDeletedAtIsNull("OWN","F1");
+            assertThat(DataScopeContext.current()).isNull();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM operational_quotes",Integer.class)).isEqualTo(5);
         });
     }
 

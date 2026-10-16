@@ -38,6 +38,7 @@ public class OperationalQuoteController {
 
     private final OperationalQuoteService quoteService;
     private final com.cretas.aims.repository.sales.OperationalQuoteRepository quoteRepository;
+    private final com.cretas.aims.security.DataScopeResolver dataScopeResolver;
 
     /**
      * AUD-5 B-A3 sister sweep (edge audit 2026-05-20): explicit length caps mirror PG
@@ -155,12 +156,14 @@ public class OperationalQuoteController {
 
     /** 详情 (factory-scoped) */
     @GetMapping("/{quoteId}")
+    @RequirePermission({"sales:read_write", "sales:read"})
     public ResponseEntity<?> getQuote(@PathVariable String factoryId, @PathVariable String quoteId) {
         return ResponseEntity.ok(Map.of("success", true, "data", quoteService.getQuote(factoryId, quoteId)));
     }
 
     /** 列表 — 支持按 status 过滤 */
     @GetMapping
+    @RequirePermission({"sales:read_write", "sales:read"})
     public ResponseEntity<?> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String status,
@@ -173,6 +176,7 @@ public class OperationalQuoteController {
 
     /** 销售下单时拉取有效报价 (APPROVED + 未过期 + 同客户同产品) */
     @GetMapping("/active")
+    @RequirePermission({"sales:read_write", "sales:read"})
     public ResponseEntity<?> getActive(
             @PathVariable String factoryId,
             @RequestParam String customerId,
@@ -186,6 +190,7 @@ public class OperationalQuoteController {
      * Paginated, newest first, soft-deleted excluded.
      */
     @GetMapping("/by-customer")
+    @com.cretas.aims.annotation.DataScope("submitted_by_user_id")
     @com.cretas.aims.annotation.RequirePermission({"sales:read_write", "sales:read"})
     public ResponseEntity<?> listByCustomer(
             @PathVariable String factoryId,
@@ -194,9 +199,13 @@ public class OperationalQuoteController {
             @RequestParam(defaultValue = "20") int size) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
-        var p = quoteRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
-                factoryId, customerId,
-                org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
+        var pageable = PageRequest.of(safePage - 1, safeSize);
+        var scope = com.cretas.aims.security.DataScopeContext.current();
+        var p = scope != null && scope.isFiltered()
+                ? quoteRepository.findByFactoryIdAndCustomerIdAndSubmittedByUserIdInAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    factoryId, customerId, dataScopeResolver.resolveCreatedByChain(scope), pageable)
+                : quoteRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    factoryId, customerId, pageable);
         return ResponseEntity.ok(Map.of("success", true, "data", Map.of(
                 "content", p.getContent(),
                 "totalElements", p.getTotalElements(),
