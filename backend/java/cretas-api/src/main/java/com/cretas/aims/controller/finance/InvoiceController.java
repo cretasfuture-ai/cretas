@@ -30,6 +30,7 @@ public class InvoiceController {
 
     private final InvoiceService invoiceService;
     private final com.cretas.aims.repository.InvoiceRecordRepository invoiceRecordRepository;
+    private final com.cretas.aims.security.DataScopeResolver dataScopeResolver;
 
     @RequireModule("finance_ar")
     @PostMapping("/request")
@@ -131,6 +132,7 @@ public class InvoiceController {
      * Paginated, newest first, soft-deleted excluded.
      */
     @GetMapping("/by-customer")
+    @com.cretas.aims.annotation.DataScope("created_by")
     @RequirePermission({"finance:read_write", "finance:read", "sales:read_write", "sales:read"})
     public ResponseEntity<?> listByCustomer(
             @PathVariable String factoryId,
@@ -139,8 +141,13 @@ public class InvoiceController {
             @RequestParam(defaultValue = "20") int size) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
-        var p = invoiceRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
-                factoryId, customerId, PageRequest.of(safePage - 1, safeSize));
+        var pageable = PageRequest.of(safePage - 1, safeSize);
+        var scope = com.cretas.aims.security.DataScopeContext.current();
+        var p = scope != null && scope.isFiltered()
+                ? invoiceRecordRepository.findCustomerInvoicesInOrderScope(
+                    factoryId, customerId, dataScopeResolver.resolveCreatedByChain(scope), pageable)
+                : invoiceRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    factoryId, customerId, pageable);
         return ResponseEntity.ok(Map.of("success", true, "data", Map.of(
                 "content", p.getContent(),
                 "totalElements", p.getTotalElements(),

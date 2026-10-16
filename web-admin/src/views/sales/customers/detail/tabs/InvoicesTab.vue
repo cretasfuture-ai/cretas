@@ -47,7 +47,9 @@
             <span v-else class="masked">****</span>
           </template>
         </el-table-column>
-        <el-table-column label="开票日期" prop="invoiceDate" width="120" />
+        <el-table-column label="开票日期" width="120">
+          <template #default="{ row }">{{ row.issuedAt ? new Date(row.issuedAt).toLocaleDateString('zh-CN') : '—' }}</template>
+        </el-table-column>
       </el-table>
 
       <el-pagination
@@ -80,7 +82,7 @@ interface InvoiceRow {
   amount?: number;
   taxAmount?: number;
   totalAmount?: number;
-  invoiceDate?: string;
+  issuedAt?: string;
 }
 
 interface PageResp {

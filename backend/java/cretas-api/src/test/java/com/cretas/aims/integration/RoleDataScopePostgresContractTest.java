@@ -377,6 +377,54 @@ class RoleDataScopePostgresContractTest {
         });
     }
 
+    @Test void invoiceRoutesInheritSourceOrderOwnerAndRejectBeforeBusinessCalls() throws Exception {
+        fixture((jdbc,resolver,policies)->{
+            jdbc.execute("CREATE TABLE sales_orders(id varchar,factory_id varchar,created_by bigint,deleted_at timestamp)");
+            jdbc.execute("CREATE TABLE invoice_records(id varchar,factory_id varchar,sales_order_id varchar,deleted_at timestamp)");
+            jdbc.execute("INSERT INTO sales_orders VALUES('OWN_ORDER','F1',56,null),('OTHER_ORDER','F1',66,null),('FOREIGN_ORDER','F2',56,null),('DELETED_ORDER','F1',56,now()),('UNKNOWN_ORDER','F1',null,null)");
+            jdbc.execute("INSERT INTO invoice_records VALUES('OWN','F1','OWN_ORDER',null),('HIDDEN','F1','OTHER_ORDER',null),('FOREIGN','F1','FOREIGN_ORDER',null),('DELETED_PARENT','F1','DELETED_ORDER',null),('UNKNOWN','F1','UNKNOWN_ORDER',null),('ORPHAN','F1','MISSING',null),('DELETED','F1','OWN_ORDER',now())");
+            policies.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,0),56L);
+            var service=mock(com.cretas.aims.service.finance.InvoiceService.class);
+            var repository=mock(com.cretas.aims.repository.InvoiceRecordRepository.class);
+            when(service.getInvoice("F1","OWN")).thenReturn(new com.cretas.aims.entity.finance.InvoiceRecord());
+            when(service.listInvoicesBySalesOrder("F1","OWN_ORDER")).thenReturn(List.of());
+            when(repository.findCustomerInvoicesInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
+            var controller=new com.cretas.aims.controller.finance.InvoiceController(service,repository,resolver);
+            var proxy=new AspectJProxyFactory(controller);proxy.addAspect(new DataScopeAspect(resolver));
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup((Object)proxy.getProxy())
+                    .addInterceptors(new DataScopeRouteInterceptor(resolver,jdbc)).setControllerAdvice(new RouteErrors()).build();
+            var identity=new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,56L,"F1","warehouse_manager");
+            for(String suffix:List.of("/HIDDEN","/FOREIGN","/DELETED_PARENT","/UNKNOWN","/ORPHAN","/DELETED","","/by-sales-order/OTHER_ORDER")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/invoices"+suffix)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            for(String retired:List.of("request","request-from-order")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/mobile/F1/finance/invoices/"+retired)
+                        .contentType("application/json").content("{}").requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isGone());
+            }
+            for(String operation:List.of("approve","reject","issue")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/mobile/F1/finance/invoices/HIDDEN/"+operation)
+                        .contentType("application/json").content("{\"notes\":\"denied\"}").requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F2/finance/invoices/by-customer").param("customerId","C1")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            verifyNoInteractions(service,repository);
+            for(String suffix:List.of("/OWN","/by-sales-order/OWN_ORDER","/by-customer?customerId=C1")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/invoices"+suffix)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            }
+            verify(service).getInvoice("F1","OWN");verify(service).listInvoicesBySalesOrder("F1","OWN_ORDER");
+            verify(repository).findCustomerInvoicesInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any());
+            assertThat(DataScopeContext.current()).isNull();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM invoice_records",Integer.class)).isEqualTo(7);
+        });
+    }
+
     public static class Probe {
         @DataScope("created_by") public com.cretas.aims.entity.enums.DataScope currentScope() { return DataScopeContext.current().getScope(); }
         @DataScope("created_by") public Long currentOwner() {
