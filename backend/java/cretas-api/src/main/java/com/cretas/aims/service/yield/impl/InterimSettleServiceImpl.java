@@ -32,6 +32,7 @@ import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.InterimSettleService;
+import com.cretas.aims.service.reversal.ReversalConsumptionCleanupService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -95,6 +96,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
 
+    /** Spring-only collaborator; direct legacy Mockito constructors omit it. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private ReversalConsumptionCleanupService reversalConsumptionCleanupService;
+
     /**
      * PRODUCTION_TO_FINISHED 血缘边接线点。required=false 不改构造器（本类构造器被单测直接 new）。
      * 成品只记 production_plan_id，故走 by-plan 对齐；对不齐不写边。
@@ -142,6 +147,13 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         }
 
         LocalDateTime now = LocalDateTime.now();
+
+        // Repair legacy DONE whole-order reversals before selecting deductions.
+        // The helper enumerates authoritative plan batches, including old rows
+        // whose process-sheet rows were already soft-deleted.
+        if (reversalConsumptionCleanupService != null) {
+            reversalConsumptionCleanupService.cleanupHistoricalDoneReversals(factoryId, planId, now);
+        }
 
         // session_seq = 上次 + 1 (首次 = 1)
         int sessionSeq = settlementRepository
