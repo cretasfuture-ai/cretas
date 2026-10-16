@@ -118,6 +118,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
         String tokenFactoryId = null;
         String tokenRole = null;
+        boolean platformPrincipal = false;
         Long userId = null;
 
         if (token != null) {
@@ -154,6 +155,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
                     // 提取role (可选)
                     tokenRole = jwtUtil.getRoleFromToken(token);
+                    platformPrincipal = jwtUtil.isExplicitPlatformToken(token);
                     if (tokenRole != null) {
                         request.setAttribute("role", tokenRole);
                         log.debug("从JWT提取role: {}", tokenRole);
@@ -172,7 +174,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         String requestUri = request.getRequestURI();
 
         if (userId != null
-                && !isPlatformPrincipal(tokenFactoryId, tokenRole)
+                && !platformPrincipal
                 && !isPublicEndpoint(requestUri)
                 && !requestUri.startsWith("/api/internal/")) {
             User user = userRepository.findById(userId).orElse(null);
@@ -188,12 +190,20 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         // 401 而非 403 是有意的: 前端对 401 走「refresh → 失败 → 清凭证 → 登录页」,
         // 403 只会在当前屏弹一条错, 会话仍挂着.
         if (userId != null && tokenFactoryId != null
-                && !isPlatformPrincipal(tokenFactoryId, tokenRole)
+                && !platformPrincipal
                 && !isPublicEndpoint(requestUri)
                 && isFactoryClosed(tokenFactoryId)) {
             log.warn("工厂已关停, 拒绝在线会话: userId={}, factoryId={}, uri={}", userId, tokenFactoryId, requestUri);
             sendUnauthorizedResponse(response, FACTORY_CLOSED_MESSAGE, "该工厂服务已停用, 如有疑问请联系平台管理员");
             return false;
+        }
+
+        if (userId != null) {
+            var actorType = platformPrincipal
+                    ? com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN
+                    : com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER;
+            request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                    new com.cretas.aims.security.AuthenticatedActor(actorType, userId, tokenFactoryId, tokenRole));
         }
 
         // Admin API 权限验证 — 仅允许已认证用户(平台管理员或工厂管理员)访问
@@ -217,7 +227,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             }
 
             // 检查是否有平台管理员角色
-            if (tokenRole == null || !PLATFORM_ADMIN_ROLES.contains(tokenRole.toLowerCase())) {
+            if (!platformPrincipal || tokenRole == null || !PLATFORM_ADMIN_ROLES.contains(tokenRole.toLowerCase())) {
                 log.warn("平台API权限不足: userId={}, role={}, uri={}",
                         userId, tokenRole, requestUri);
                 sendForbiddenResponse(response, "无权访问平台管理API，需要平台管理员权限");
@@ -263,7 +273,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             }
 
             // URL中包含factoryId，需要验证权限（403 场景）
-            if (!validateFactoryAccess(urlFactoryId, tokenFactoryId, tokenRole)) {
+            if (!validateFactoryAccess(urlFactoryId, tokenFactoryId, platformPrincipal ? tokenRole : null)) {
                 log.warn("跨工厂访问被拒绝: userId={}, tokenFactoryId={}, urlFactoryId={}, role={}",
                         userId, tokenFactoryId, urlFactoryId, tokenRole);
                 sendForbiddenResponse(response, "无权访问该工厂数据");

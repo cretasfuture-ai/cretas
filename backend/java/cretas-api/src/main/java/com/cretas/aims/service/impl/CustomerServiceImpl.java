@@ -120,6 +120,7 @@ public class CustomerServiceImpl implements CustomerService {
         log.info("更新客户: factoryId={}, customerId={}", factoryId, customerId);
         Customer customer = customerRepository.findByIdAndFactoryId(customerId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Customer", customerId));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, customer.getCreatedBy(), "customers");
         // Optimistic lock: compare client-supplied version against DB version.
         // Note: we can't just setVersion() on the managed entity — Hibernate locks its
         // dirty-check against the version observed at findById time, so setVersion()
@@ -152,6 +153,7 @@ public class CustomerServiceImpl implements CustomerService {
         log.info("删除客户: factoryId={}, customerId={}", factoryId, customerId);
         Customer customer = customerRepository.findByIdAndFactoryId(customerId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Customer", customerId));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, customer.getCreatedBy(), "customers");
         // 检查是否有关联的出货记录
         if (customerRepository.hasRelatedShipments(customerId)) {
             throw new BusinessException(409, "客户有关联的出货记录，无法删除")
@@ -165,6 +167,7 @@ public class CustomerServiceImpl implements CustomerService {
     public CustomerDTO getCustomerById(String factoryId, String customerId) {
         Customer customer = customerRepository.findByIdAndFactoryId(customerId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Customer", customerId));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, customer.getCreatedBy(), "customers");
         return customerMapper.toDTO(customer);
     }
 

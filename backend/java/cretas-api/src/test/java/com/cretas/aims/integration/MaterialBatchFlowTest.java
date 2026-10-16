@@ -93,6 +93,8 @@ class MaterialBatchFlowTest {
 
         inventoryRequest = new MockHttpServletRequest();
         inventoryRequest.setAttribute("userId", actor.getId());
+        inventoryRequest.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,actor.getId(),actor.getFactoryId(),actor.getRoleCode()));
         inventoryRequest.setAttribute("factoryId", actor.getFactoryId());
         inventoryRequest.setAttribute("role", actor.getRoleCode());
         previousRequestAttributes = RequestContextHolder.getRequestAttributes();
@@ -274,9 +276,11 @@ class MaterialBatchFlowTest {
     @DisplayName("Test12: 库存查询拒绝缺失登录身份")
     void testInventoryQueryRejectsMissingActor() {
         inventoryRequest.removeAttribute("userId");
+        inventoryRequest.removeAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE);
         assertThatThrownBy(() -> materialBatchService.getMaterialBatchList(
                 TEST_FACTORY_ID, new PageRequest()))
-                .isInstanceOf(AccessDeniedException.class);
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(401));
     }
 
     @Test

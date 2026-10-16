@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { get } from '@/api/request';
+import { get, put } from '@/api/request';
+import { ElMessage } from 'element-plus';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -25,17 +26,61 @@ const permissionsLoading = ref(false);
 /** 取权限失败时的原因。非空 = 这次没读到, ⛔ 与「这个角色真的没有权限」不是同一件事。 */
 const permissionsError = ref('');
 
-// Sprint 5 Track G: 数据权限 tab (read-only stub, edit defer Sprint 6)
 const viewTab = ref<'function' | 'data'>('function');
-// 默认 stub 值: 一线员工 SELF, 其他 ALL — backend V20260519_05 实际写入 role_definitions
-function deriveDataScope(roleName: string): string {
-  if (['operator', 'warehouse_worker', 'warehouse_operator', 'quality_inspector'].includes(roleName)) {
-    return 'SELF';
-  }
-  return 'ALL';
+type ScopeCode = 'ALL' | 'SELF' | 'SELF_AND_BELOW' | 'DEPT_AND_BELOW';
+interface RoleScope { roleCode: string; scope: ScopeCode; configured: boolean; version: number; editable: boolean }
+const scopeLabels: Record<ScopeCode, string> = { ALL: '全工厂', SELF: '仅本人创建', SELF_AND_BELOW: '本人及下属创建', DEPT_AND_BELOW: '同部门创建' };
+const roleScope = ref<RoleScope | null>(null);
+const selectedScope = ref<ScopeCode | null>(null);
+const scopeError = ref('');
+const scopeLoading = ref(false);
+const scopeSaving = ref(false);
+let scopeRequest = 0;
+let scopeSaveRequest = 0;
+function clearScope() {
+  ++scopeRequest; ++scopeSaveRequest; roleScope.value = null; selectedScope.value = null; scopeError.value = '';
+  scopeLoading.value = false; scopeSaving.value = false;
 }
-// 用普通 ref + watch viewingRole 更新, 而非 computed (radio v-model 需 writable)
-const dataScopeStub = ref<string>('ALL');
+function validScope(value: unknown, role: string): value is RoleScope {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as Record<string, unknown>;
+  return row.roleCode === role && typeof row.scope === 'string' && Object.hasOwn(scopeLabels, row.scope)
+    && typeof row.configured === 'boolean' && typeof row.editable === 'boolean'
+    && typeof row.version === 'number' && Number.isSafeInteger(row.version) && row.version >= 0;
+}
+async function loadDataScope(tab: string | number) {
+  if (tab !== 'data' || !factoryId.value || !viewingRole.value) return;
+  const request = ++scopeRequest;
+  const factory = factoryId.value, role = String(viewingRole.value.name);
+  const current = () => request === scopeRequest && factory === factoryId.value
+    && role === viewingRole.value?.name && viewDialogVisible.value;
+  roleScope.value = null; selectedScope.value = null; scopeError.value = ''; scopeLoading.value = true;
+  try {
+    const response = await get<RoleScope>('/' + factory + '/roles/' + role + '/data-scope');
+    if (!current()) return;
+    if (!response.success || !validScope(response.data, role)) throw new Error(response.message || '数据范围返回格式无效');
+    roleScope.value = response.data; selectedScope.value = response.data.scope;
+  } catch (error) {
+    if (current()) scopeError.value = error instanceof Error ? error.message : '读取数据范围失败';
+  } finally { if (current()) scopeLoading.value = false; }
+}
+async function saveDataScope() {
+  if (!roleScope.value?.editable || !selectedScope.value || scopeSaving.value || !factoryId.value || !viewingRole.value) return;
+  const factory = factoryId.value, role = String(viewingRole.value.name), request = scopeRequest;
+  const current = () => request === scopeRequest && factory === factoryId.value
+    && role === viewingRole.value?.name && viewDialogVisible.value;
+  const saveRequest = ++scopeSaveRequest;
+  scopeSaving.value = true; scopeError.value = '';
+  try {
+    const response = await put<RoleScope>('/' + factory + '/roles/' + role + '/data-scope',
+      { scope: selectedScope.value, version: roleScope.value.version });
+    if (!current()) return;
+    if (!response.success || !validScope(response.data, role)) throw new Error(response.message || '数据范围保存失败');
+    ElMessage.success('数据范围已保存'); await loadDataScope('data');
+  } catch (error) {
+    if (current()) scopeError.value = error instanceof Error ? error.message : '数据范围保存失败';
+  } finally { if (saveRequest === scopeSaveRequest) scopeSaving.value = false; }
+}
 
 // 2026-09-07: 这里原本是「编辑角色」弹窗的全部状态与提交逻辑。它是**不可达的死代码**:
 //  · 表格里那个「编辑」按钮写着 `disabled` + tooltip「角色编辑功能开发中」⇒ 打不开;
@@ -49,7 +94,7 @@ async function handleViewPermissions(row: TableRow) {
   viewingRole.value = row;
   viewDialogVisible.value = true;
   viewTab.value = 'function';  // 默认显功能权限 tab
-  dataScopeStub.value = deriveDataScope(row.name);  // Sprint 5 Track G stub
+  clearScope();
   permissionsLoading.value = true;
   permissionsError.value = '';
   try {
@@ -281,8 +326,8 @@ onMounted(async () => {
     </el-card>
 
     <!-- 查看权限 Dialog -->
-    <el-dialog v-model="viewDialogVisible" :title="`${viewingRole?.displayName} — 权限详情`" width="600px" destroy-on-close>
-      <el-tabs v-model="viewTab" type="border-card">
+    <el-dialog v-model="viewDialogVisible" @closed="clearScope" :title="`${viewingRole?.displayName} — 权限详情`" width="600px" destroy-on-close>
+      <el-tabs v-model="viewTab" type="border-card" @tab-change="loadDataScope">
         <!-- Tab 1: 功能权限 (existing) -->
         <el-tab-pane label="功能权限" name="function">
           <!-- 取不到就说取不到 (核心原则 1)。⛔ 这里以前会现编一张表填进去,
@@ -313,30 +358,22 @@ onMounted(async () => {
 
         <!-- Tab 2: 数据权限 (Sprint 5 Track G stub — backend live, frontend Sprint 6 sweep) -->
         <el-tab-pane label="数据权限" name="data">
-          <el-alert
-            title="数据权限维度"
-            type="info"
-            :closable="false"
-            description="后端 framework 已上线 (5 级 scope: ALL/DEPT_AND_BELOW/SELF_AND_BELOW/SELF/CUSTOM). 当前角色的默认范围见下表; 自定义编辑功能尚未开放."
-            style="margin-bottom: 16px"
-          />
-          <el-form label-width="100px" disabled>
-            <el-form-item label="数据范围">
-              <el-radio-group v-model="dataScopeStub">
-                <el-radio value="ALL">全工厂 (默认)</el-radio>
-                <el-radio value="DEPT_AND_BELOW">本部门 + 下属部门</el-radio>
-                <el-radio value="SELF_AND_BELOW">自己 + 下属</el-radio>
-                <el-radio value="SELF">仅自己创建</el-radio>
-                <el-radio value="CUSTOM">自定义 (尚未开放)</el-radio>
+          <div v-loading="scopeLoading">
+            <el-alert title="工厂内角色数据范围" type="info" :closable="false"
+              description="按记录创建人限制已接入的销售、采购、客户、原料批次和退货列表/详情。功能权限仍需单独授权；同部门不包含下级部门；上级或部门资料未维护时只显示本人创建记录。关联收发货继承来源订单范围，无订单发货继承客户范围。自定义范围暂不支持。受限账号尚未接入范围筛选的快捷查询、统计、导出和批量操作会明确拒绝，请使用主列表。" />
+            <el-alert v-if="scopeError" data-testid="role-data-scope-error" title="无法读取或保存数据范围"
+              :description="scopeError" type="error" :closable="false" />
+            <div v-if="roleScope" data-testid="role-data-scope-result">
+              <p>当前生效：{{ scopeLabels[roleScope.scope] }}</p>
+              <p>{{ roleScope.configured ? '本工厂已配置' : '继承角色默认范围' }}</p>
+              <el-radio-group v-model="selectedScope" :disabled="!roleScope.editable || scopeSaving">
+                <el-radio v-for="(text, code) in scopeLabels" :key="code" :value="code">{{ text }}</el-radio>
               </el-radio-group>
-            </el-form-item>
-            <el-form-item label="生效说明">
-              <el-text type="info" size="small">
-                销售单 list 已实施 POC (SELF scope 仅看自己创建的订单).
-                
-              </el-text>
-            </el-form-item>
-          </el-form>
+              <el-button v-if="roleScope.editable" type="primary" :loading="scopeSaving"
+                :disabled="selectedScope === roleScope.scope" @click="saveDataScope">保存数据范围</el-button>
+              <p v-else>当前角色或账号不允许修改数据范围。</p>
+            </div>
+          </div>
         </el-tab-pane>
       </el-tabs>
       <template #footer>

@@ -76,7 +76,8 @@ class UserMapperUpdateFieldParityTest {
                     + "⛔ 不能落到这个「有值就覆盖」的方法里",
             "password", "要过 PasswordEncoder，在 service 层处理",
             "roleCode", "更新时由 service 决定；这里已有 BR-13 的修复，见方法内注释",
-            "isActive", "Apr 18 Bug #57：null/true/false 三态语义，显式放在 service 层"
+            "isActive", "Apr 18 Bug #57：null/true/false 三态语义，显式放在 service 层",
+            "reportsTo", "由 UserService 在工厂锁内验证同厂、启用状态、循环与深度后更新；组织契约覆盖写入和显式清空"
     );
 
     private static User baseline() {

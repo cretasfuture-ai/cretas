@@ -48,6 +48,8 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final FactoryRepository factoryRepository;
     private final UserMapper userMapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.jdbc.core.JdbcTemplate organizationJdbc;
     private final PasswordEncoder passwordEncoder;
     private final com.cretas.aims.utils.ExcelUtil excelUtil;
 
@@ -83,7 +85,9 @@ public class UserServiceImpl implements UserService {
         if (request.getEmail() == null || request.getEmail().isBlank()) {
             request.setEmail(request.getUsername() + "@cretas.com"); // 默认邮箱
         }
+        if (request.isReportsToProvided()) validateReportingManager(factoryId, null, request.getReportsTo());
         User user = userMapper.toEntity(request, factoryId);
+        if (request.isReportsToProvided()) user.setReportsTo(request.getReportsTo());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
 
         // 保存用户
@@ -124,6 +128,9 @@ public class UserServiceImpl implements UserService {
 @Override
     @Transactional
     public UserDTO updateUser(String factoryId, Long userId, CreateUserRequest request) {
+        if (organizationJdbc != null) organizationJdbc.query(
+                "SELECT pg_advisory_xact_lock(hashtextextended('user-reporting:' || ?, 0))",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> { }, factoryId);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User", String.valueOf(userId)));
 
@@ -133,6 +140,7 @@ public class UserServiceImpl implements UserService {
                     .withHint("当前用户不属于该工厂, 无法操作");
         }
 
+        if (request.isReportsToProvided()) validateReportingManager(factoryId, userId, request.getReportsTo());
         // ── R-1 (2026-08-20): 允许改用户名, 但它是**登录凭证**, 不是普通字段 ──
         //
         // 之前前端把输入框写死 `:disabled="dialogMode === 'edit'"`, 谁都改不了。
@@ -161,6 +169,7 @@ public class UserServiceImpl implements UserService {
 
         // 更新用户信息
         userMapper.updateEntity(user, request);
+        if (request.isReportsToProvided()) user.setReportsTo(request.getReportsTo());
 
         // ⚠️ username 必须在这里落, ⛔ 不能丢进 userMapper.updateEntity ——
         // 那里是「有值就覆盖」的无条件复制, 而改用户名必须先过上面那道查重。
@@ -196,6 +205,56 @@ public class UserServiceImpl implements UserService {
         }
         log.info("更新用户成功: userId={}", userId);
         return userMapper.toDTO(user);
+    }
+
+    private void validateReportingManager(String factoryId, Long userId, Long managerId) {
+        if (organizationJdbc == null) throw new BusinessException(503, "组织关系组件未就绪");
+        // Same-factory reporting changes serialize until transaction commit.
+        organizationJdbc.query("SELECT pg_advisory_xact_lock(hashtextextended('user-reporting:' || ?, 0))",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> { }, factoryId);
+        java.util.Set<Long> visited = new java.util.HashSet<>();
+        Long current = managerId;
+        while (current != null) {
+            if (current.equals(userId)) throw new BusinessException(400, "不能将本人或下属设为直属上级");
+            if (!visited.add(current)) throw new BusinessException(400, "直属上级关系存在循环，请先修正组织关系");
+            if (visited.size() > 10) throw new BusinessException(400, "直属上级关系超过支持的10层，请检查组织关系");
+            // Native reads observe the previous transaction, even if JWT lookup cached a JPA user.
+            List<Map<String, Object>> managers = organizationJdbc.queryForList(
+                    "SELECT factory_id, is_active, reports_to FROM users WHERE id = ? AND deleted_at IS NULL", current);
+            if (managers.size() != 1) throw new BusinessException(404, "直属上级不存在");
+            Map<String, Object> manager = managers.get(0);
+            if (!factoryId.equals(manager.get("factory_id"))) throw new BusinessException(403, "直属上级必须属于同一工厂");
+            if (!Boolean.TRUE.equals(manager.get("is_active"))) throw new BusinessException(400, "直属上级必须为在职账号");
+            Object next = manager.get("reports_to");
+            current = next == null ? null : ((Number) next).longValue();
+        }
+        // Include inactive descendants: reactivation must not bypass the topology depth limit.
+        // Clearing a parent cannot deepen an existing subtree; a new user has no descendants.
+        if (managerId == null || userId == null) return;
+        int ancestorDepth = visited.size();
+        java.util.Set<Long> descendants = new java.util.HashSet<>();
+        descendants.add(userId);
+        java.util.Deque<Long> frontier = new java.util.ArrayDeque<>();
+        frontier.add(userId);
+        int descendantDepth = 0;
+        while (!frontier.isEmpty()) {
+            int levelSize = frontier.size();
+            for (int index = 0; index < levelSize; index++) {
+                Long parentId = frontier.remove();
+                List<Map<String, Object>> children = organizationJdbc.queryForList(
+                        "SELECT id FROM users WHERE factory_id = ? AND reports_to = ? AND deleted_at IS NULL",
+                        factoryId, parentId);
+                if (!children.isEmpty() && ancestorDepth + descendantDepth + 1 > 10)
+                    throw new BusinessException(400, "直属上级关系超过支持的10层，请检查组织关系");
+                for (Map<String, Object> child : children) {
+                    Long childId = ((Number) child.get("id")).longValue();
+                    if (!descendants.add(childId))
+                        throw new BusinessException(400, "直属上级关系存在循环，请先修正组织关系");
+                    frontier.add(childId);
+                }
+            }
+            descendantDepth++;
+        }
     }
 
     @Override

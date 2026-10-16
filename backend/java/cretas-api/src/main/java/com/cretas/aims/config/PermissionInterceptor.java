@@ -65,6 +65,12 @@ public class PermissionInterceptor implements HandlerInterceptor {
             return true;
         }
 
+        var typed = com.cretas.aims.security.AuthenticatedActor.current(request).orElse(null);
+        if (typed != null && typed.isPlatformAdmin()) {
+            if (typed.hasFactoryBypass()) return true;
+            sendError(response, HttpServletResponse.SC_FORBIDDEN, "该平台角色无权访问工厂业务权限");
+            return false;
+        }
         // 获取当前用户
         User user = getCurrentUser(request);
         if (user == null) {
@@ -241,8 +247,14 @@ public class PermissionInterceptor implements HandlerInterceptor {
             return null;
         }
 
-        Optional<User> userOpt = userRepository.findById(userId);
-        return userOpt.orElse(null);
+        var typed = com.cretas.aims.security.AuthenticatedActor.current(request).orElse(null);
+        if (typed != null) {
+            if (typed.isPlatformAdmin()) return null;
+            userId = typed.id();
+        }
+        User user = userRepository.findById(userId).orElse(null);
+        if (typed != null && (user == null || !java.util.Objects.equals(typed.factoryId(), user.getFactoryId()))) return null;
+        return user;
     }
 
     /**

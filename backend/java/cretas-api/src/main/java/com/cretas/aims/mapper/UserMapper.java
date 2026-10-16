@@ -39,6 +39,8 @@ public class UserMapper {
                 .isActive(user.getIsActive())
                 .roleCode(user.getRoleEnum())
                 .roleDisplayName(user.getPosition()) // 使用position作为显示名称
+                .departmentCode(user.getDepartment())
+                .reportsTo(user.getReportsTo())
                 .department(null) // department现在是String，不是枚举
                 // 缺陷 15 (2026-09-01): 原来是**原样透传 code** —— 账号管理/HR/工牌/导出/
                 // RN 个人信息与新员工屏都在把 `procurement`/`warehouse` 这种内部 code
@@ -152,7 +154,8 @@ public class UserMapper {
         //    现在是 department。三次都是「新建路径写了、更新路径漏了」, 症状都是
         //    **保存成功但没生效**(不报错, 所以没人发现)。
         //    ⇒ 有断言钉这件事: UserMapperUpdateFieldParityTest 逐字段比对两条路径。
-        applyDepartment(user, request.getDepartment());
+        if (request.isDepartmentProvided() && request.getDepartment() == null) user.setDepartment(null);
+        else applyDepartment(user, request.getDepartment());
     }
 
     /**

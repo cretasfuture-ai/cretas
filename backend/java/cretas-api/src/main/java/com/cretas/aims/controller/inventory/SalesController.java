@@ -83,6 +83,9 @@ import java.util.Set;
 @Tag(name = "销售管理", description = "销售订单、发货出库、成品库存（工厂/餐饮通用）")
 public class SalesController {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.security.DataScopeResolver dataScopeResolver;
+
     private final SalesService salesService;
     private final MobileService mobileService;
     private final PermissionService permissionService;
@@ -303,6 +306,7 @@ public class SalesController {
      * Paginated, newest first. Repo-backed (bypass service for minimal blast radius).
      */
     @GetMapping("/orders/by-customer")
+    @com.cretas.aims.annotation.DataScope("created_by")
     @Operation(summary = "客户档案 360° tab 7 销售单 by customer")
     @RequirePermission({"sales:read_write", "sales:read"})
     public ApiResponse<PageResponse<SalesOrder>> listOrdersByCustomer(
@@ -312,9 +316,12 @@ public class SalesController {
             @RequestParam(defaultValue = "20") int size) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
-        var p = salesOrderRepository.findByFactoryIdAndCustomerIdOrderByCreatedAtDesc(
-                factoryId, customerId,
-                org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
+        var pageable = org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize);
+        var scope = com.cretas.aims.security.DataScopeContext.current();
+        var p = scope != null && scope.isFiltered()
+                ? salesOrderRepository.findByFactoryIdAndCustomerIdAndCreatedByInOrderByCreatedAtDesc(
+                    factoryId, customerId, dataScopeResolver.resolveCreatedByChain(scope), pageable)
+                : salesOrderRepository.findByFactoryIdAndCustomerIdOrderByCreatedAtDesc(factoryId, customerId, pageable);
         var result = PageResponse.of(p.getContent(), safePage, safeSize, p.getTotalElements());
         return ApiResponse.success("查询成功", result);
     }

@@ -71,6 +71,13 @@ public class FactoryRoleModuleOverrideController {
             @PathVariable String module,
             @RequestParam(required = false) String level) {
 
+        try {
+            var roleValue = com.cretas.aims.entity.enums.FactoryUserRole.valueOf(role);
+            if (!roleValue.isActive() || roleValue == com.cretas.aims.entity.enums.FactoryUserRole.platform_admin)
+                throw new IllegalArgumentException();
+        } catch (IllegalArgumentException invalid) {
+            throw new com.cretas.aims.exception.BusinessException(400, "请选择有效的工厂业务角色");
+        }
         assertModuleAllowed(module);
         if (level != null && !ALLOWED_LEVELS.contains(level)) {
             throw new IllegalArgumentException("无效权限级别: " + level);

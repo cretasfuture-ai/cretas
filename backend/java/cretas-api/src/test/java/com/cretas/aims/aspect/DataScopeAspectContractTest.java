@@ -34,6 +34,8 @@ class DataScopeAspectContractTest {
     void resolvesUserIdFromJwtRequestAttributeAndPushesScopeForTheServiceCall() throws Throwable {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "1552");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,1552L,"F006","sales_manager"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 
         DataScopeContext resolved = DataScopeContext.builder()
@@ -64,16 +66,26 @@ class DataScopeAspectContractTest {
     }
 
     @Test
-    void anonymousRequestStillProceedsWithoutInventingADataScope() throws Throwable {
-        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
-        when(resolver.resolve(null)).thenReturn(null);
-
+    void anonymousHttpRequestIsRejectedWithoutInventingADataScope() throws Throwable {
+        MockHttpServletRequest legacyOnly = new MockHttpServletRequest();
+        legacyOnly.setAttribute("userId", "1552");
+        legacyOnly.setAttribute("factoryId", "F006");
+        legacyOnly.setAttribute("role", "factory_super_admin");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(legacyOnly));
         ProceedingJoinPoint joinPoint = joinPoint();
-        when(joinPoint.proceed()).thenReturn("anonymous-result");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> aspect.aroundDataScope(joinPoint, annotation("", "")))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,e->assertThat(e.getCode()).isEqualTo(401));
+        org.mockito.Mockito.verifyNoInteractions(resolver);
+        verify(joinPoint,org.mockito.Mockito.never()).proceed();
+        assertThat(DataScopeContext.current()).isNull();
+    }
 
-        assertThat(aspect.aroundDataScope(joinPoint, annotation("", "")))
-                .isEqualTo("anonymous-result");
-        verify(resolver).resolve(null);
+    @Test void internalCallWithoutAnHttpRequestStillProceeds() throws Throwable {
+        RequestContextHolder.resetRequestAttributes();
+        ProceedingJoinPoint joinPoint=joinPoint();
+        when(joinPoint.proceed()).thenReturn("internal-result");
+        assertThat(aspect.aroundDataScope(joinPoint,annotation("", ""))).isEqualTo("internal-result");
+        org.mockito.Mockito.verifyNoInteractions(resolver);
         assertThat(DataScopeContext.current()).isNull();
     }
 
@@ -81,6 +93,8 @@ class DataScopeAspectContractTest {
     void springProxyBindsTheMethodAnnotationBeforeReadingItsColumn() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "1552");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,1552L,"F006","sales_manager"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 
         DataScopeContext resolved = DataScopeContext.builder()

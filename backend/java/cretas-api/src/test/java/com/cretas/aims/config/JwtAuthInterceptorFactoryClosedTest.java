@@ -117,6 +117,7 @@ class JwtAuthInterceptorFactoryClosedTest {
     @Test
     @DisplayName("平台管理员不经过这道闸 —— 关厂是他们操作的, 不能把自己锁在外面")
     void platformAdmin_notChecked() throws Exception {
+        when(jwtUtil.isExplicitPlatformToken(anyString())).thenReturn(true);
         tokenOf("PLATFORM", "platform_admin");
         MockHttpServletResponse resp = new MockHttpServletResponse();
 

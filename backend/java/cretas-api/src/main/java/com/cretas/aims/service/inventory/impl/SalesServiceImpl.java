@@ -907,6 +907,7 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(403, "无权访问该销售订单")
                     .withHint("当前销售订单不属于该工厂, 无法访问");
         }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "sales_orders");
         org.hibernate.Hibernate.initialize(order.getSuppliedMaterials());
         return order;
     }
@@ -998,6 +999,7 @@ public class SalesServiceImpl implements SalesService {
     public SalesOrder confirmOrder(String factoryId, String orderId, Long initiatorUserId) {
         SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + orderId));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "sales_orders");
         runConfiguredValidation(factoryId, "STATUS_CHANGE", Map.of(
                 "status", order.getStatus().name(), "targetStatus", "CONFIRMED"));
         if (order.getStatus() != SalesOrderStatus.DRAFT) {
@@ -1031,6 +1033,7 @@ public class SalesServiceImpl implements SalesService {
     public SalesOrder submitForFinanceReview(String factoryId, String orderId, Long initiatorUserId) {
         SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + orderId));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "sales_orders");
         runConfiguredValidation(factoryId, "STATUS_CHANGE", Map.of(
                 "status", order.getStatus().name(), "targetStatus", "PENDING_FINANCE_REVIEW"));
         if (order.getStatus() != SalesOrderStatus.CONFIRMED
@@ -1304,6 +1307,7 @@ public class SalesServiceImpl implements SalesService {
                                           String notes) {
         SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + orderId));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "sales_orders");
         if (workflowEngine == null) {
             throw new BusinessException(503, "OA 审批服务不可用")
                     .withCode("SALES_APPROVAL_ENGINE_UNAVAILABLE");
@@ -2798,6 +2802,8 @@ public class SalesServiceImpl implements SalesService {
         // 验证客户
         Customer deliveryCustomer = customerRepository.findByIdAndFactoryId(request.getCustomerId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("客户不存在或不属于当前组织"));
+        if (request.getSalesOrderId() == null || request.getSalesOrderId().isBlank())
+            DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, deliveryCustomer.getCreatedBy(), "sales_orders");
 
         // R23 audit C3: was inline {FINANCE_APPROVED, CONFIRMED, PROCESSING, PARTIAL_DELIVERED}
         // — distinct from SO_SHIPPABLE because delivery here allows CONFIRMED (e.g.,
@@ -2809,6 +2815,7 @@ public class SalesServiceImpl implements SalesService {
             SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(
                             request.getSalesOrderId(), factoryId)
                     .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在或不属于当前组织"));
+            DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "sales_orders");
             if (order.getStatus() == null
                     || !com.cretas.aims.domain.OrderUsageWhitelists.SO_DELIVERABLE.contains(order.getStatus())) {
                 throw new BusinessException(409, "只有财务已批准/已确认/处理中/部分发货状态的订单可以创建发货单")

@@ -29,6 +29,9 @@ import java.util.Map;
 @RequirePermission({"sales:read_write", "procurement:read_write"})
 public class ReturnOrderController {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.security.DataScopeResolver dataScopeResolver;
+
     private final ReturnOrderService returnOrderService;
     private final MobileService mobileService;
     private final com.cretas.aims.repository.inventory.ReturnOrderRepository returnOrderRepository;
@@ -152,6 +155,7 @@ public class ReturnOrderController {
      * (ReturnOrder 没有 customerId 字段, 用 counterpartyId+returnType 组合标识销售退货.)
      */
     @GetMapping("/by-customer")
+    @com.cretas.aims.annotation.DataScope("created_by")
     @Operation(summary = "客户档案 360° tab 17 销售退货 by customer")
     @RequirePermission({"sales:read_write", "sales:read"})
     public ApiResponse<PageResponse<ReturnOrder>> listReturnsByCustomer(
@@ -161,9 +165,13 @@ public class ReturnOrderController {
             @RequestParam(defaultValue = "20") int size) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
-        var p = returnOrderRepository.findByFactoryIdAndCounterpartyIdAndReturnTypeOrderByCreatedAtDesc(
-                factoryId, customerId, ReturnType.SALES_RETURN,
-                org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
+        var pageable = org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize);
+        var scope = com.cretas.aims.security.DataScopeContext.current();
+        var p = scope != null && scope.isFiltered()
+                ? returnOrderRepository.findByFactoryIdAndCounterpartyIdAndReturnTypeAndCreatedByInOrderByCreatedAtDesc(
+                    factoryId, customerId, ReturnType.SALES_RETURN, dataScopeResolver.resolveCreatedByChain(scope), pageable)
+                : returnOrderRepository.findByFactoryIdAndCounterpartyIdAndReturnTypeOrderByCreatedAtDesc(
+                    factoryId, customerId, ReturnType.SALES_RETURN, pageable);
         var result = PageResponse.of(p.getContent(), safePage, safeSize, p.getTotalElements());
         return ApiResponse.success("查询成功", result);
     }

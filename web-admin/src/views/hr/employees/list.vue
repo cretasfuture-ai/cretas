@@ -159,9 +159,55 @@ const defaultForm = {
   role: '',
   employeeCode: '',
   department: '',
+  reportsTo: null as number | null,
   isActive: true,
 };
 const formData = reactive({ ...defaultForm });
+const departmentChanged = ref(false);
+const managerChanged = ref(false);
+const managerOptions = ref<{ id: number; label: string }[]>([]);
+const managersLoading = ref(false);
+const managersError = ref('');
+let managerRequest = 0;
+
+async function loadManagers() {
+  const requestId = ++managerRequest;
+  const selectedFactory = factoryId.value;
+  managersLoading.value = true; managersError.value = ''; managerOptions.value = [];
+  try {
+    const candidates: { id: number; label: string }[] = [];
+    let total = -1;
+    for (let page = 1; page <= 50; page++) {
+      const response = await get<{ content: TableRow[]; totalElements: number }>(`/${selectedFactory}/users`, { params: { page, size: 100 } });
+      if (!response.success || !Array.isArray(response.data?.content) || !Number.isSafeInteger(response.data.totalElements) || response.data.totalElements < 0) throw new Error('上级账号列表返回不完整');
+      if (total !== -1 && total !== response.data.totalElements) throw new Error('上级账号列表已变化，请重新打开');
+      total = response.data.totalElements;
+      if (response.data.content.length !== Math.min(100, total - (page - 1) * 100)) throw new Error('上级账号列表分页不完整');
+      for (const row of response.data.content) {
+        const id = Number(row.id);
+        if (!Number.isSafeInteger(id) || id <= 0 || row.factoryId !== selectedFactory) throw new Error('上级账号范围无效');
+        if (row.isActive === true && String(row.id) !== String(formData.id)) candidates.push({ id, label: row.fullName ? `${row.fullName}（${row.username}）` : String(row.username) });
+      }
+      if (page * 100 >= total) {
+        if (requestId === managerRequest && selectedFactory === factoryId.value) managerOptions.value = candidates;
+        return;
+      }
+      if (response.data.content.length !== 100) throw new Error('上级账号列表分页不完整');
+    }
+    throw new Error('上级账号过多，请联系管理员');
+  } catch (error) {
+    if (requestId === managerRequest && selectedFactory === factoryId.value) managersError.value = error instanceof Error ? error.message : '读取上级账号失败';
+  } finally { if (requestId === managerRequest) managersLoading.value = false; }
+}
+
+function loadOrganizationFields(row: TableRow) {
+  formData.department = String(row.departmentCode ?? row.departmentName ?? row.department ?? '');
+  formData.reportsTo = row.reportsTo == null ? null : Number(row.reportsTo);
+  departmentChanged.value = false; managerChanged.value = false;
+  void loadManagers();
+}
+
+
 
 /**
  * 部门下拉的**建议项** —— ⛔ 不是权威清单。
@@ -236,6 +282,8 @@ const isViewMode = computed(() => dialogMode.value === 'view');
 function handleAdd() {
   dialogMode.value = 'add';
   Object.assign(formData, defaultForm);
+  departmentChanged.value = false; managerChanged.value = false;
+  void loadManagers();
   dialogVisible.value = true;
 }
 
@@ -252,9 +300,11 @@ function handleView(row: TableRow) {
     // 真实值放在 departmentDisplayName。原来第一个读的是不存在的 departmentName,
     // 第二个读的是恒 null 的 department ⇒ 编辑框里的部门**永远是空的**,
     // 无论那个人实际在哪个部门。(用户报的「没法编辑部门」有一半是这个。)
-    department: String(row.departmentDisplayName || row.departmentName || row.department || ''),
+    department: String(row.departmentCode ?? row.departmentDisplayName ?? row.departmentName ?? row.department ?? ''),
+    reportsTo: row.reportsTo == null ? null : Number(row.reportsTo),
     isActive: row.isActive === true || row.status === 'ACTIVE',
   });
+  loadOrganizationFields(formData);
   dialogVisible.value = true;
 }
 
@@ -271,9 +321,11 @@ function handleEdit(row: TableRow) {
     // 真实值放在 departmentDisplayName。原来第一个读的是不存在的 departmentName,
     // 第二个读的是恒 null 的 department ⇒ 编辑框里的部门**永远是空的**,
     // 无论那个人实际在哪个部门。(用户报的「没法编辑部门」有一半是这个。)
-    department: String(row.departmentDisplayName || row.departmentName || row.department || ''),
+    department: String(row.departmentCode ?? row.departmentDisplayName ?? row.departmentName ?? row.department ?? ''),
+    reportsTo: row.reportsTo == null ? null : Number(row.reportsTo),
     isActive: row.isActive === true || row.status === 'ACTIVE',
   });
+  loadOrganizationFields(formData);
   dialogVisible.value = true;
 }
 
@@ -332,7 +384,7 @@ async function handleDelete(row: TableRow) {
 }
 
 async function handleSubmit() {
-  if (!formRef.value) return;
+  if (!formRef.value || managersLoading.value || managersError.value) return;
   await formRef.value.validate();
   submitting.value = true;
   try {
@@ -342,7 +394,8 @@ async function handleSubmit() {
       phone: formData.phone.trim() || undefined,
       roleCode: formData.role,
       employeeCode: formData.employeeCode,
-      department: formData.department || undefined,
+      ...(departmentChanged.value ? { department: formData.department || null } : {}),
+      ...(managerChanged.value ? { reportsTo: formData.reportsTo ?? null } : {}),
       // Apr 18 2026 bug #47: 后端字段兼容 — 有的接口读 isActive, 有的读 status
       // 一起送避免在职/离职 切换后列表显示不一致。
       isActive: formData.isActive,
@@ -536,7 +589,7 @@ function getRoleText(role: string) {
             ⇒ 这里给的是**建议项**(该工厂当前在用的部门 + 本人现值), 并允许直接输入新部门。
           -->
           <el-select
-            v-model="formData.department"
+            v-model="formData.department" @change="departmentChanged = true"
             placeholder="请选择或直接输入部门"
             clearable
             filterable
@@ -550,13 +603,19 @@ function getRoleText(role: string) {
             没有合适的？直接输入新部门名即可。
           </div>
         </el-form-item>
+        <el-form-item label="直属上级" prop="reportsTo">
+          <el-select v-model="formData.reportsTo" placeholder="未配置直属上级" clearable filterable style="width: 100%" :loading="managersLoading" :disabled="managersLoading || !!managersError" @change="managerChanged = true">
+            <el-option v-for="manager in managerOptions" :key="manager.id" :label="manager.label" :value="manager.id" />
+          </el-select>
+        </el-form-item>
+        <el-alert v-if="managersError" :title="managersError" type="error" :closable="false" />
         <el-form-item label="状态" prop="isActive">
           <el-switch v-model="formData.isActive" active-text="在职" inactive-text="离职" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">{{ isViewMode ? '关闭' : '取消' }}</el-button>
-        <el-button v-if="!isViewMode" type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
+        <el-button v-if="!isViewMode" type="primary" :loading="submitting" :disabled="managersLoading || !!managersError" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
   </div>

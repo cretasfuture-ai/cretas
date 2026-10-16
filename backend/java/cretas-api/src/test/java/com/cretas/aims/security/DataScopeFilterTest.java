@@ -260,9 +260,20 @@ class DataScopeFilterTest {
         DataScopeContext ctx = DataScopeContext.builder()
                 .userId(100L).factoryId("F001").scope(DataScope.SELF_AND_BELOW).build();
         java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
-        // 应返 {100, 200} 然后停 (visited set)
-        assertEquals(2, chain.size());
-        assertTrue(chain.contains(100L) && chain.contains(200L));
+        // Invalid topology must not grant the other participant's records.
+        assertEquals(java.util.List.of(100L), chain);
+        assertFalse(chain.contains(200L), "环中的其他账号不得获得授权");
+    }
+
+    @Test
+    void resolveCreatedByChain_excessiveDepthFallsBackToSelf() {
+        for (long id = 100; id <= 110; id++) {
+            when(userRepository.findSubordinateIdsByReportsTo("F001", id))
+                    .thenReturn(java.util.List.of(id + 1));
+        }
+        var context = DataScopeContext.builder().userId(100L).factoryId("F001")
+                .scope(DataScope.SELF_AND_BELOW).build();
+        assertEquals(java.util.List.of(100L), resolver.resolveCreatedByChain(context));
     }
 
     @Test

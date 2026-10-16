@@ -105,6 +105,8 @@ class MaterialBatchLowStockDataScopeContractTest {
     void authenticatedDirectInvocationResolvesAllScopeForStatisticsSelfCall() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "101");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         when(resolver.resolve(101L)).thenReturn(context(DataScope.ALL, 101L));
         when(batchRepository.sumQuantityByMaterialType("F006"))
@@ -119,6 +121,8 @@ class MaterialBatchLowStockDataScopeContractTest {
     void authenticatedResolutionFailureRejectsBeforeReadingTypesOrBatches() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "101");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         when(resolver.resolve(101L)).thenReturn(null);
 

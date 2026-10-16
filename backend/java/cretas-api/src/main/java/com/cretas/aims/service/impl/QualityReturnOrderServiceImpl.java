@@ -176,8 +176,10 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
     @Override
     @Transactional(readOnly = true)
     public QualityReturnOrder get(String factoryId, String id) {
-        return returnOrderRepository.findByIdAndFactoryId(id, factoryId)
+        QualityReturnOrder order = returnOrderRepository.findByIdAndFactoryId(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("退回单不存在或不属于当前工厂"));
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, order.getCreatedBy(), "quality_return_orders");
+        return order;
     }
 
     @Override

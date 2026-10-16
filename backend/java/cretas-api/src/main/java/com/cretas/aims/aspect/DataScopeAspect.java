@@ -3,6 +3,8 @@ package com.cretas.aims.aspect;
 import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,10 +45,21 @@ public class DataScopeAspect {
 
     private final DataScopeResolver resolver;
 
-    @Around("@annotation(scope)")
+    @Around("@annotation(scope) || @within(scope)")
     public Object aroundDataScope(ProceedingJoinPoint pjp, DataScope scope) throws Throwable {
-        Long userId = SecurityUtils.currentUserId();
-        DataScopeContext ctx = resolver.resolve(userId);
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (actor == null) {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null)
+                throw new BusinessException(401,"缺少已认证数据访问身份");
+            return pjp.proceed();
+        }
+        if (actor.isPlatformAdmin()) {
+            if (!actor.hasFactoryBypass()) throw new BusinessException(403,"平台角色无权访问工厂数据");
+            return pjp.proceed(); // Platform identity is never resolved as a colliding factory user.
+        }
+        DataScopeContext ctx = resolver.resolve(actor.id());
+        if (ctx == null || actor.factoryId() == null || !actor.factoryId().equals(ctx.getFactoryId()))
+            throw new BusinessException(403,"无有效工厂数据身份");
 
         if (ctx == null) {
             // 匿名访问 / user 不存在: 走原方法, 不 setup context. Service 看 current()==null 自行处理.
@@ -56,6 +69,13 @@ public class DataScopeAspect {
             return pjp.proceed();
         }
 
+        if (scope == null) {
+            var signature = (org.aspectj.lang.reflect.MethodSignature) pjp.getSignature();
+            var method = org.springframework.aop.support.AopUtils.getMostSpecificMethod(signature.getMethod(), pjp.getTarget().getClass());
+            scope = org.springframework.core.annotation.AnnotatedElementUtils.findMergedAnnotation(method, DataScope.class);
+            if (scope == null) scope = org.springframework.core.annotation.AnnotatedElementUtils.findMergedAnnotation(pjp.getTarget().getClass(), DataScope.class);
+            if (scope == null) throw new BusinessException(503,"无法解析数据范围声明，访问已停止");
+        }
         // 解析 annotation column 优先级: column() > value() > "created_by" default
         String annotatedColumn = !scope.column().isEmpty() ? scope.column()
                 : !scope.value().isEmpty() ? scope.value()

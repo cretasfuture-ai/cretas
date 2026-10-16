@@ -75,6 +75,8 @@ class MaterialBatchInventorySiblingDataScopeContractTest {
         service = (MaterialBatchService) proxyFactory.getProxy();
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "101");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     }
 
@@ -99,9 +101,9 @@ class MaterialBatchInventorySiblingDataScopeContractTest {
     void foreignFactoryContextIsRejectedBeforeRepositoryRead() {
         actor.setFactoryId("F007");
 
-        org.junit.jupiter.api.Assertions.assertThrows(
-                org.springframework.security.access.AccessDeniedException.class,
-                () -> service.getWipBatches("F006"));
+        assertThatThrownBy(() -> service.getWipBatches("F006"))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(403));
     }
 
     @Test
@@ -124,6 +126,8 @@ class MaterialBatchInventorySiblingDataScopeContractTest {
 
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "101");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         // A real resolver never emits a null scope; exercise that defensive branch
         // directly with a synthetic context and do not count it as resolver evidence.
@@ -136,7 +140,8 @@ class MaterialBatchInventorySiblingDataScopeContractTest {
         actor.setFactoryId(null);
 
         assertThatThrownBy(() -> service.getWipBatches("F006"))
-                .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(403));
     }
 
     @org.junit.jupiter.params.ParameterizedTest
