@@ -130,6 +130,13 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
                     .withHintTarget("nodes");
         }
 
+        // Purchase runtime resolves approvers by role. An enabled published
+        // definition must not be changed into a user-only route in place.
+        if (Boolean.TRUE.equals(existing.getEnabled())
+                && "published".equals(existing.getPublishStatus())) {
+            assertPurchaseApprovalRolesForActivation(existing);
+        }
+
         return workflowRepository.save(existing);
     }
 
@@ -255,6 +262,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             throw new BusinessException(400, "发布前校验失败: " + validation.get("errors"))
                     .withHint("请先修复 graph 错误再发布");
         }
+        assertPurchaseApprovalRolesForActivation(workflow);
 
         List<ApprovalWorkflow> previousActive =
                 workflowRepository.findActiveByDecisionType(
@@ -304,6 +312,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
                         .withCode("OA_WORKFLOW_NOT_PUBLISHED")
                         .withHint("请先完成校验并发布该草稿");
             }
+            assertPurchaseApprovalRolesForActivation(workflow);
             boolean otherActive = workflowRepository
                     .findActiveByDecisionType(factoryId, workflow.getDecisionType())
                     .stream()
@@ -331,6 +340,42 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             throw new BusinessException(409, "该审批业务尚未接入画布运行时，不能发布或启用")
                     .withCode("OA_BUSINESS_NOT_WIRED")
                     .withHint("画布草稿已保留；完成业务状态投影和审批实例接入后再发布");
+        }
+    }
+
+    /**
+     * Purchase approval execution resolves assignees from approver roles.
+     * User ids may supplement that route, but cannot replace it. Keep this
+     * check at activation boundaries so drafts remain editable and no prior
+     * active version is disabled before an invalid candidate is rejected.
+     */
+    private void assertPurchaseApprovalRolesForActivation(ApprovalWorkflow workflow) {
+        if (workflow == null || workflow.getDecisionType() != DecisionType.PURCHASE_ORDER_APPROVAL) {
+            return;
+        }
+
+        for (ApprovalWorkflowNode node : deserializeNodes(workflow.getNodesJson())) {
+            if (!"approval".equalsIgnoreCase(node.getType())) {
+                continue;
+            }
+            Object configuredRoles = node.getConfig() == null
+                    ? null : node.getConfig().get("approverRoles");
+            boolean hasConfiguredRole = false;
+            if (configuredRoles instanceof Iterable<?> iterable) {
+                for (Object value : iterable) {
+                    if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                        hasConfiguredRole = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasConfiguredRole) {
+                String nodeLabel = StringUtils.hasText(node.getLabel()) ? node.getLabel() : node.getId();
+                throw new BusinessException(422, "采购订单审批节点必须配置审批角色: " + nodeLabel)
+                        .withCode("PURCHASE_APPROVER_ROLE_REQUIRED")
+                        .withHint("请配置至少一个有效的审批角色；指定审批人不能替代审批角色路由")
+                        .withHintTarget("nodes");
+            }
         }
     }
 

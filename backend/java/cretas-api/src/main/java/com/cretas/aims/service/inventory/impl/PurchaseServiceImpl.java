@@ -1468,13 +1468,15 @@ public class PurchaseServiceImpl implements PurchaseService {
                 if (item.getMaterialTypeId() == null || item.getUnitPrice() == null) continue;
                 MaterialPriceComparisonDTO dto = buildPriceComparison(factoryId,
                         item.getMaterialTypeId(), item.getMaterialName(),
-                        item.getUnitPrice(), threshold);
+                        normalizeOrderPriceForComparison(factoryId, item), threshold);
                 if (Boolean.TRUE.equals(dto.getPriceAlert())) {
                     count++;
                 }
             }
             return count;
         } catch (Exception e) {
+            if (e instanceof BusinessException business
+                    && "PURCHASE_PRICE_CONVERSION_REQUIRED".equals(business.getErrorCode())) throw business;
             log.warn("三价计数失败 (fail-open 返 0): orderId={}, error={}", order.getId(), e.getMessage());
             return 0;
         }
@@ -1564,7 +1566,8 @@ public class PurchaseServiceImpl implements PurchaseService {
             for (PurchaseOrderItem item : items) {
                 if (item.getMaterialTypeId() == null || item.getUnitPrice() == null) continue;
                 MaterialPriceComparisonDTO dto = buildPriceComparison(factoryId,
-                        item.getMaterialTypeId(), item.getMaterialName(), item.getUnitPrice(), priceThreshold);
+                        item.getMaterialTypeId(), item.getMaterialName(),
+                        normalizeOrderPriceForComparison(factoryId, item), priceThreshold);
                 if (Boolean.TRUE.equals(dto.getPriceAlert())) {
                     alertCount++;
                 }
@@ -1574,6 +1577,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                         String.format("三价标红 %d 项 (偏差 > %s%%)", alertCount, priceThreshold));
             }
         } catch (Exception e) {
+            if (e instanceof BusinessException business
+                    && "PURCHASE_PRICE_CONVERSION_REQUIRED".equals(business.getErrorCode())) throw business;
             log.warn("三价评估失败 (fail-open → APPROVED): orderId={}, error={}", order.getId(), e.getMessage());
         }
 
@@ -3386,7 +3391,7 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         return items.stream()
                 .map(item -> buildPriceComparison(factoryId, item.getMaterialTypeId(),
-                        item.getMaterialName(), item.getUnitPrice(), threshold))
+                        item.getMaterialName(), normalizeOrderPriceForComparison(factoryId, item), threshold))
                 .collect(Collectors.toList());
     }
 
@@ -3483,6 +3488,69 @@ public class PurchaseServiceImpl implements PurchaseService {
                 .bomProductNames(bomProductNames)
                 .dataSourceHint(dataSourceHint)
                 .build();
+    }
+
+    /**
+     * 将采购行合同价归一到物料库存基本单位后再参与三价比较。
+     *
+     * <p>采购价的分母是订单锁定的采购包装（例如 元/箱），而移动均价和 BOM
+     * 单价按物料库存基本单位（例如 元/kg）存储。优先使用订单行落库时的两个快照：
+     * {@code quantityToPriceFactor} 表示采购数量单位到计价单位，
+     * {@code packageToBaseFactorSnapshot} 表示采购包装到库存基本单位。这样历史订单
+     * 不会因当前主数据换算关系变化而漂移；存量缺少快照时才复用现有单位契约。
+     */
+    private BigDecimal normalizeOrderPriceForComparison(String factoryId, PurchaseOrderItem item) {
+        BigDecimal unitPrice = item.getUnitPrice();
+        if (unitPrice == null) return null;
+        try {
+            String quantityUnit = canonicalUnit(factoryId,
+                    firstNonBlank(item.getPurchasePackageUnitSnapshot(), item.getUnit()), "采购数量单位");
+            String rawBaseUnit = item.getInventoryBaseUnitSnapshot();
+            if (rawBaseUnit == null || rawBaseUnit.isBlank()) {
+                rawBaseUnit = materialTypeRepository.findById(item.getMaterialTypeId())
+                        .filter(material -> factoryId.equals(material.getFactoryId()))
+                        .map(RawMaterialType::getUnit)
+                        .orElseThrow(() -> new BusinessException(422, "缺少同工厂物料的库存基本单位"));
+            }
+            String baseUnit = canonicalUnit(factoryId, rawBaseUnit, "库存基本单位");
+            String priceUnit = canonicalUnit(factoryId,
+                    firstNonBlank(item.getPriceUnit(), quantityUnit), "采购计价单位");
+
+            BigDecimal packageToBase = item.getPackageToBaseFactorSnapshot();
+            if (packageToBase != null && packageToBase.signum() <= 0) {
+                throw new BusinessException(422, "采购订单行缺少有效的包装到基本单位换算")
+                        .withCode("PURCHASE_PRICE_CONVERSION_REQUIRED");
+            }
+            if (packageToBase == null) {
+                packageToBase = conversionFactor(factoryId, item.getMaterialTypeId(), quantityUnit, baseUnit);
+            }
+            if (packageToBase == null || packageToBase.signum() <= 0) {
+                throw new BusinessException(422, "采购订单行缺少有效的包装到基本单位换算")
+                        .withCode("PURCHASE_PRICE_CONVERSION_REQUIRED");
+            }
+
+            BigDecimal quantityToPrice = item.getQuantityToPriceFactor();
+            if (quantityToPrice != null && quantityToPrice.signum() <= 0) {
+                throw new BusinessException(422, "采购订单行缺少有效的数量到计价单位换算")
+                        .withCode("PURCHASE_PRICE_CONVERSION_REQUIRED");
+            }
+            if (quantityToPrice == null) {
+                // A legacy row may have the package snapshot but no quantity-price snapshot.
+                // Derive only through the authoritative unit contract; never assume factor=1
+                // for an ambiguous packaging unit.
+                quantityToPrice = conversionFactor(factoryId, item.getMaterialTypeId(),
+                        quantityUnit, priceUnit);
+            }
+            if (quantityToPrice == null || quantityToPrice.signum() <= 0) {
+                throw new BusinessException(422, "采购订单行缺少有效的数量到计价单位换算");
+            }
+
+            return unitPrice.multiply(quantityToPrice)
+                    .divide(packageToBase, 12, java.math.RoundingMode.HALF_UP);
+        } catch (BusinessException e) {
+            throw new BusinessException(422, "采购比价无法确定基本单位价格：" + e.getMessage())
+                    .withCode("PURCHASE_PRICE_CONVERSION_REQUIRED");
+        }
     }
 
     /**

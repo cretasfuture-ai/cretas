@@ -116,6 +116,9 @@ class PurchaseServiceOaSubmissionTest {
         item.setMaterialName("原料A");
         item.setQuantity(BigDecimal.TEN);
         item.setUnit("kg");
+        item.setPurchasePackageUnitSnapshot("kg");
+        item.setInventoryBaseUnitSnapshot("kg");
+        item.setPackageToBaseFactorSnapshot(BigDecimal.ONE);
         item.setPriceUnit("kg");
         item.setQuantityToPriceFactor(BigDecimal.ONE);
         item.setUnitPrice(BigDecimal.TEN);
