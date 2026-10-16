@@ -103,6 +103,7 @@ class JwtAuthInterceptorDisabledUserTest {
 
     @Test
     void platformPrincipalWithCollidingNumericIdDoesNotReadOrdinaryUser() throws Exception {
+        when(jwt.isExplicitPlatformToken("synthetic-access")).thenReturn(true);
         when(jwt.getFactoryIdFromToken("synthetic-access")).thenReturn("PLATFORM");
         when(jwt.getRoleFromToken("synthetic-access")).thenReturn("platform_admin");
         assertTrue(interceptor.preHandle(request("GET", "/api/mobile/SIM24A/a", true), new MockHttpServletResponse(), null));

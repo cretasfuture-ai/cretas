@@ -48,7 +48,8 @@ public class RoleDataScopeService {
         } else {
             changed = jdbc.update("UPDATE factory_role_data_scopes SET data_scope=?,version=version+1,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE factory_id=? AND role_code=? AND version=?",request.scope().name(),actorId,factory,role,request.version());
         }
-        if (changed != 1) throw new BusinessException(409,"数据范围已被其他人修改，请刷新后重试");
+        if (changed != 1) throw new BusinessException(409,"数据范围已被其他人修改，请刷新后重试")
+                .withHint("请刷新角色权限页面，重新选择数据范围后保存");
         return read(factory,role,true);
     }
 }

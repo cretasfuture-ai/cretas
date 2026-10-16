@@ -96,6 +96,8 @@ class MaterialBatchSelectionScopeContractTest {
         service = (MaterialBatchService) proxyFactory.getProxy();
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", "101");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         moduleLevels.put("inventory", "r");
         moduleLevels.put("production", "r");
@@ -182,6 +184,7 @@ class MaterialBatchSelectionScopeContractTest {
         when(bomRepository.findCurrentByProduct("F006", "PT-1")).thenReturn(List.of(item));
         http().perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                 .get("/api/mobile/F006/material-batches/status/AVAILABLE").requestAttr("userId", 101L)
+                .requestAttr(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"))
                 .param("productTypeId", "PT-1").param("warehouseId", "WH-RAW"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data[0].id").value("A"))
@@ -192,7 +195,8 @@ class MaterialBatchSelectionScopeContractTest {
     void actualHttpProductionOnlyWithoutBomCannotUseOrdinaryInventory() throws Exception {
         moduleLevels.put("inventory", "-");
         http().perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                .get("/api/mobile/F006/material-batches/status/AVAILABLE").requestAttr("userId", 101L))
+                .get("/api/mobile/F006/material-batches/status/AVAILABLE").requestAttr("userId", 101L)
+                .requestAttr(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker")))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
         verifyNoInteractions(repository, bomRepository);
     }
@@ -202,6 +206,7 @@ class MaterialBatchSelectionScopeContractTest {
         moduleLevels.put("production", "-");
         http().perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                 .get("/api/mobile/F006/material-batches/status/AVAILABLE").requestAttr("userId", 101L)
+                .requestAttr(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,101L,"F006","warehouse_worker"))
                 .param("productTypeId", "PT-1"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
         verifyNoInteractions(repository, bomRepository);

@@ -42,7 +42,10 @@ class RoleDataScopePostgresContractTest {
             service.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,0),56L);
             service.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.ALL,1),56L);
             assertThatThrownBy(() -> service.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,1),56L))
-                .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getCode()).isEqualTo(409));
+                .isInstanceOfSatisfying(BusinessException.class,e->{
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getActionHint()).contains("刷新角色权限页面");
+                });
             assertThat(service.read("F1","warehouse_manager",true).scope()).isEqualTo(com.cretas.aims.entity.enums.DataScope.ALL);
             assertThat(service.read("F1","warehouse_manager",true).version()).isEqualTo(2);
         });
