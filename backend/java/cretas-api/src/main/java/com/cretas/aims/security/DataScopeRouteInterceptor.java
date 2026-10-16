@@ -20,6 +20,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
     public static final String RESOURCE_ATTRIBUTE=DataScopeRouteInterceptor.class.getName()+".resource";
     private record Resource(String root,String table,List<String> keys) {}
     private static final List<Resource> RESOURCES=List.of(
+        new Resource("quotes","operational_quotes",List.of("quoteId")),
         new Resource("sales/orders","sales_orders",List.of("orderId")),
         new Resource("sales/deliveries","sales_delivery_records",List.of("deliveryId","parentDeliveryId","orderId")),
         new Resource("warehouse/deliveries","sales_delivery_records",List.of("deliveryId")),
@@ -31,6 +32,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("finance/payments/by-sales-order","sales_orders",List.of("salesOrderId")),
         new Resource("production-plans/by-sales-order","sales_orders",List.of("salesOrderId")),
         new Resource("reference-data/customers","customers",List.of("id")),
+        new Resource("reference-data/quotes","operational_quotes",List.of("id")),
         new Resource("reference-data/sales-orders","sales_orders",List.of("id")),
         new Resource("reference-data/purchase-orders","purchase_orders",List.of("id")),
         new Resource("reference-data/batches","material_batches",List.of("id")),
@@ -74,6 +76,8 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         if (context.getScope()==DataScope.ALL) return true;
         // These two paginated controller queries bind @DataScope and filter child creators in SQL.
         if (request.getMethod().equals("GET") && Set.of("sales/orders/by-customer", "return-orders/by-customer").contains(path)) return true;
+        if (request.getMethod().equals("GET") && path.equals("quotes/by-customer")
+                && ((HandlerMethod) handler).hasMethodAnnotation(com.cretas.aims.annotation.DataScope.class)) return true;
         if (resource!=null) {
             if (resource.root().equals("warehouse/receiving/tasks")
                     && !path.equals("warehouse/receiving/tasks/{taskId}/close-short"))
@@ -81,7 +85,9 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
             String key=resource.keys().stream().filter(k->vars.get(k) instanceof String).findFirst().orElse(null);
             if (key!=null) {
                 String id=(String)vars.get(key), sql;
-                if (resource.table().equals("sales_delivery_records") && key.equals("orderId"))
+                if (resource.table().equals("operational_quotes"))
+                    sql="SELECT submitted_by_user_id FROM operational_quotes WHERE factory_id=? AND id::text=? AND deleted_at IS NULL";
+                else if (resource.table().equals("sales_delivery_records") && key.equals("orderId"))
                     sql="SELECT created_by FROM sales_orders WHERE factory_id=? AND id::text=?";
                 else if (resource.table().equals("sales_delivery_records"))
                     // Linked deliveries inherit order ownership; standalone samples inherit customer ownership.

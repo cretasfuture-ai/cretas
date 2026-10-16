@@ -30,6 +30,10 @@ public interface OperationalQuoteRepository extends JpaRepository<OperationalQuo
     Page<OperationalQuote> findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, String customerId, Pageable pageable);
 
+    /** Submitter is the creator; the assigned pricing user is not the owner. */
+    Page<OperationalQuote> findByFactoryIdAndCustomerIdAndSubmittedByUserIdInAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String customerId, List<Long> submitters, Pageable pageable);
+
     /** 按工厂分页 (不限状态) */
     Page<OperationalQuote> findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, Pageable pageable);
