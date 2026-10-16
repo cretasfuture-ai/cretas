@@ -12,9 +12,14 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseExceptionRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.inventory.PurchaseExceptionService;
 import com.cretas.aims.service.inventory.ReturnOrderService;
 import com.cretas.aims.service.notification.NotificationService;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.UnitUsageScene;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -66,6 +72,14 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
 
     /** 读时补齐可读单号与供应商名 —— 异常表里只有两个 UUID。 */
     private final PurchaseOrderRepository purchaseOrderRepository;
+
+    /** Optional authority for legacy rows whose immutable packaging snapshot is absent. */
+    @Autowired(required = false)
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    /** Optional unit authority; snapshots remain the source of truth for historical PO rows. */
+    @Autowired(required = false)
+    private UnitContractService unitContractService;
 
     /** 可选通知服务：未配置时静默跳过（不影响主流程） */
     @Autowired(required = false)
@@ -313,13 +327,14 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
         }
         request.setReason(reason);
 
-        // 退货行: 退超收差值。单价取自源采购单对应物料行 (PurchaseException 无 unitPrice 字段)。
-        BigDecimal unitPrice = resolveUnitPrice(exception);
+        // 退货行: generic ReturnOrder 按原料库存基本单位扣减，因此这里必须先把异常单位
+        // 换成同厂源 PO 唯一物料行的库存基本单位，并把 PO 未税包装价换成含税基本单位价。
+        PurchaseReturnLine returnLine = resolveReturnLine(exception);
         CreateReturnOrderRequest.ReturnOrderItemDTO item = new CreateReturnOrderRequest.ReturnOrderItemDTO();
         item.setMaterialTypeId(exception.getMaterialTypeId());
         item.setItemName(exception.getMaterialName());
-        item.setQuantity(exception.getExceptionQty());
-        item.setUnitPrice(unitPrice);
+        item.setQuantity(returnLine.quantity());
+        item.setUnitPrice(returnLine.unitPrice());
         item.setReason(reason);
         request.setItems(List.of(item));
 
@@ -327,29 +342,161 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
         return returnOrderService.createReturnOrder(exception.getFactoryId(), request, decisionBy);
     }
 
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final int RETURN_UNIT_PRICE_SCALE = 4;
+
+    private record PurchaseReturnLine(BigDecimal quantity, BigDecimal unitPrice) { }
+
     /**
-     * 取源采购单中该物料行的未税单价 (退货金额口径)。
-     * 找不到对应行 (历史脏数据 / PO 已删) → 返 null, 退货单价为空, lineAmount 按 0 计 (退货金额 0,
-     * 财务审批时人工核对), 不阻断退货单创建。
+     * Resolve the DTO boundary used by generic purchase-return inventory deduction.
+     * PO snapshots are immutable and take precedence over current material master data.
      */
-    private BigDecimal resolveUnitPrice(PurchaseException exception) {
+    private PurchaseReturnLine resolveReturnLine(PurchaseException exception) {
         if (exception.getPurchaseOrderId() == null || exception.getMaterialTypeId() == null) {
-            return null;
+            throw returnConversionError("异常单缺少源采购单或物料");
+        }
+        var sourceOrderOptional = purchaseOrderRepository
+                .findByIdAndFactoryId(exception.getPurchaseOrderId(), exception.getFactoryId());
+        if (sourceOrderOptional == null || sourceOrderOptional.isEmpty()) {
+            throw returnConversionError("源采购单不存在或不属于当前工厂");
+        }
+        PurchaseOrder sourceOrder = sourceOrderOptional.get();
+
+        List<PurchaseOrderItem> sourceItems = purchaseOrderItemRepository.findByPurchaseOrderId(sourceOrder.getId());
+        if (sourceItems == null) sourceItems = List.of();
+        List<PurchaseOrderItem> matches = sourceItems.stream()
+                .filter(i -> exception.getMaterialTypeId().equals(i.getMaterialTypeId()))
+                .toList();
+        if (matches.size() != 1) {
+            throw returnConversionError(matches.isEmpty()
+                    ? "源采购单缺少对应物料行"
+                    : "源采购单对应物料行不唯一");
+        }
+        PurchaseOrderItem item = matches.get(0);
+        if (item.getUnitPrice() == null || item.getUnitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+            throw returnConversionError("源采购单物料行缺少有效单价");
+        }
+
+        String purchaseUnit = firstText(item.getPurchasePackageUnitSnapshot(), item.getUnit());
+        String baseUnit = firstText(item.getInventoryBaseUnitSnapshot(), legacyBaseUnit(exception, item));
+        if (baseUnit == null) {
+            throw returnConversionError("源采购单缺少库存基本单位");
+        }
+        BigDecimal packageToBase = positive(item.getPackageToBaseFactorSnapshot());
+        if (packageToBase == null && sameUnit(purchaseUnit, baseUnit, exception.getFactoryId())) {
+            packageToBase = BigDecimal.ONE;
+        }
+        if (packageToBase == null && purchaseUnit != null) {
+            packageToBase = convertedQuantity(BigDecimal.ONE, purchaseUnit, baseUnit, exception);
+        }
+
+        BigDecimal returnQuantity = resolveReturnQuantity(exception, purchaseUnit, baseUnit, packageToBase);
+        if (returnQuantity == null || returnQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw returnConversionError("异常数量无法换算为库存基本单位");
         }
         try {
-            List<PurchaseOrderItem> poItems =
-                    purchaseOrderItemRepository.findByPurchaseOrderId(exception.getPurchaseOrderId());
-            return poItems.stream()
-                    .filter(i -> exception.getMaterialTypeId().equals(i.getMaterialTypeId()))
-                    .map(PurchaseOrderItem::getUnitPrice)
-                    .filter(java.util.Objects::nonNull)
-                    .findFirst()
-                    .orElse(null);
-        } catch (Exception e) {
-            log.warn("[SP6] 取采购单 {} 物料 {} 单价失败, 退货单价留空: {}",
-                    exception.getPurchaseOrderId(), exception.getMaterialTypeId(), e.getMessage());
+            // ReturnOrderService deducts purchase returns at scale 2. Refuse a lossy
+            // conversion (e.g. 1 g -> .001 kg) instead of silently deducting zero.
+            returnQuantity = returnQuantity.setScale(2, RoundingMode.UNNECESSARY);
+        } catch (ArithmeticException ex) {
+            throw returnConversionError("异常数量换算结果不能按库存精度精确表达（最多两位小数）");
+        }
+
+        String priceUnit = firstText(item.getPriceUnit(), purchaseUnit);
+        BigDecimal priceFactor = positive(item.getQuantityToPriceFactor());
+        if (priceFactor == null && sameUnit(priceUnit, purchaseUnit, exception.getFactoryId())) {
+            priceFactor = BigDecimal.ONE;
+        }
+        if (priceFactor == null || packageToBase == null || packageToBase.compareTo(BigDecimal.ZERO) <= 0) {
+            throw returnConversionError("源采购单缺少有效的计价/包装换算");
+        }
+        BigDecimal taxRate = item.getTaxRate() == null ? BigDecimal.ZERO : item.getTaxRate();
+        if (taxRate.compareTo(BigDecimal.ZERO) < 0) {
+            throw returnConversionError("源采购单税率无效");
+        }
+        BigDecimal taxMultiplier = BigDecimal.ONE.add(taxRate.divide(HUNDRED, 12, RoundingMode.HALF_UP));
+        BigDecimal baseUnitPrice = item.getUnitPrice()
+                .multiply(priceFactor)
+                .divide(packageToBase, 12, RoundingMode.HALF_UP)
+                .multiply(taxMultiplier)
+                .setScale(RETURN_UNIT_PRICE_SCALE, RoundingMode.HALF_UP);
+        return new PurchaseReturnLine(returnQuantity, baseUnitPrice);
+    }
+
+    private BigDecimal resolveReturnQuantity(PurchaseException exception, String purchaseUnit,
+                                             String baseUnit, BigDecimal packageToBase) {
+        String exceptionUnit = exception.getUnit();
+        if (exceptionUnit == null || exception.getExceptionQty() == null) return null;
+        if (sameUnit(exceptionUnit, baseUnit, exception.getFactoryId())) {
+            return exception.getExceptionQty();
+        }
+        if (packageToBase != null && sameUnit(exceptionUnit, purchaseUnit, exception.getFactoryId())) {
+            return exception.getExceptionQty().multiply(packageToBase);
+        }
+        return convertedQuantity(exception.getExceptionQty(), exceptionUnit, baseUnit, exception);
+    }
+
+    private BigDecimal convertedQuantity(BigDecimal quantity, String fromUnit, String toUnit,
+                                        PurchaseException exception) {
+        if (unitContractService == null || fromUnit == null || toUnit == null) return null;
+        try {
+            UnitConversionContext context = new UnitConversionContext(
+                    exception.getFactoryId(), exception.getMaterialTypeId(), fromUnit, toUnit,
+                    LocalDateTime.now(), UnitUsageScene.INVENTORY, 12, RoundingMode.HALF_UP);
+            UnitConversionResult result = unitContractService.convert(quantity, context);
+            return result != null && result.succeeded() ? result.quantity() : null;
+        } catch (RuntimeException ex) {
+            log.warn("[SP6] 采购退货单位换算失败 {} -> {}: {}", fromUnit, toUnit, ex.getMessage());
             return null;
         }
+    }
+
+    private String legacyBaseUnit(PurchaseException exception, PurchaseOrderItem item) {
+        if (rawMaterialTypeRepository == null || item.getMaterialTypeId() == null) return null;
+        try {
+            var material = rawMaterialTypeRepository.findById(item.getMaterialTypeId());
+            if (material == null) return null;
+            return material
+                    .filter(value -> exception.getFactoryId().equals(value.getFactoryId()))
+                    .map(com.cretas.aims.entity.RawMaterialType::getUnit)
+                    .orElse(null);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private boolean sameUnit(String left, String right, String factoryId) {
+        if (left == null || right == null) return false;
+        String l = canonicalUnit(factoryId, left);
+        String r = canonicalUnit(factoryId, right);
+        return l.equalsIgnoreCase(r);
+    }
+
+    private String canonicalUnit(String factoryId, String raw) {
+        if (unitContractService != null) {
+            try {
+                var normalized = unitContractService.normalize(factoryId, raw);
+                if (normalized != null && normalized.recognized() && normalized.code() != null) {
+                    return normalized.code().trim();
+                }
+            } catch (RuntimeException ignored) {
+                // Fall through to the immutable snapshot literal.
+            }
+        }
+        return raw.trim();
+    }
+
+    private String firstText(String first, String second) {
+        return first != null && !first.isBlank() ? first : (second != null && !second.isBlank() ? second : null);
+    }
+
+    private BigDecimal positive(BigDecimal value) {
+        return value != null && value.compareTo(BigDecimal.ZERO) > 0 ? value : null;
+    }
+
+    private BusinessException returnConversionError(String message) {
+        return new BusinessException(422, message)
+                .withCode("PURCHASE_RETURN_UNIT_CONVERSION_UNAVAILABLE");
     }
 
     // ─── listExceptions ────────────────────────────────────────────────────

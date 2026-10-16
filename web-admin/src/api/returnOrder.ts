@@ -67,6 +67,8 @@ export interface ReturnOrder {
   approvedBy?: number | null;
   approvedAt?: string | null;
   remark?: string | null;
+  /** Completion may create a pending financial adjustment before balances change. */
+  completionHint?: string | null;
   items?: ReturnOrderItem[];
   createdAt?: string;
   updatedAt?: string;

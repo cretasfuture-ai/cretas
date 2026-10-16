@@ -133,8 +133,12 @@ async function runAction(
   }
   submitting.value = true;
   try {
-    await fn(factoryId.value, row.id);
-    ElMessage({ message: `${actionLabel}成功`, type: 'success', duration: 3000 });
+    const updated = await fn(factoryId.value, row.id);
+    if (updated.completionHint) {
+      ElMessage({ message: updated.completionHint, type: 'warning', duration: 0, showClose: true });
+    } else {
+      ElMessage({ message: `${actionLabel}成功`, type: 'success', duration: 3000 });
+    }
     loadData();
   } catch (err: unknown) {
     // 4-in-1 sticky error: 原样显示后端 message (含财审门 hint)
