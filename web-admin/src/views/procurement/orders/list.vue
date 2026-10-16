@@ -36,6 +36,7 @@ import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import { usePurchaseReturnSource, type PurchaseReturnSourceOrder } from './usePurchaseReturnSource';
+import { getPurchaseReturnAvailability } from '@/api/returnOrder';
 import { copyPurchaseOrder } from '@/api/orderCopy';
 import { resolveReferenceByName } from '@/utils/referenceResolver';
 // M-10 (2026-08-20 手动测试台账): 精确状态文案 + 展示归类, 与后端
@@ -120,6 +121,7 @@ const {
   visible: returnDialogVisible, source: returnDialogRow, items: returnDialogItems,
   sourceFactoryId: returnDialogFactoryId, open: openReturnSource, close: closeReturnSource,
 } = usePurchaseReturnSource(factoryId, {
+  availability: getPurchaseReturnAvailability,
   async order(factory, id) {
     const response = await get<PurchaseReturnSourceOrder>(`/${factory}/purchase/orders/${encodeURIComponent(id)}`);
     if (!response.success || !response.data) throw new Error('读取采购退货来源失败');

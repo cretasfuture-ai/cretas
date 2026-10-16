@@ -3,6 +3,7 @@ package com.cretas.aims.controller.inventory;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateReturnOrderRequest;
+import com.cretas.aims.dto.inventory.PurchaseReturnAvailability;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.ReturnOrder;
@@ -36,6 +37,9 @@ public class ReturnOrderController {
     private final MobileService mobileService;
     private final com.cretas.aims.repository.inventory.ReturnOrderRepository returnOrderRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.impl.PurchaseReturnCapacityService purchaseReturnCapacityService;
+
     @PostMapping
     @Operation(summary = "创建退货单")
     public ApiResponse<ReturnOrder> createReturnOrder(
@@ -59,6 +63,20 @@ public class ReturnOrderController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ReturnOrder> result = returnOrderService.getReturnOrders(factoryId, returnType, status, page, size);
         return ApiResponse.success("查询成功", result);
+    }
+
+    @GetMapping("/purchase-source/{purchaseOrderId}/availability")
+    @Operation(summary = "查询采购退货可退余额")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<PurchaseReturnAvailability> purchaseReturnAvailability(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String purchaseOrderId) {
+        if (purchaseReturnCapacityService == null) {
+            throw new com.cretas.aims.exception.BusinessException(503, "采购退货容量组件未就绪")
+                    .withCode("PURCHASE_RETURN_CAPACITY_UNAVAILABLE");
+        }
+        return ApiResponse.success("查询成功",
+                purchaseReturnCapacityService.availability(factoryId, purchaseOrderId));
     }
 
     @GetMapping("/{returnOrderId}")

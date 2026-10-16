@@ -1,5 +1,7 @@
 import { ref, watch, type Ref } from 'vue';
 import { buildPurchaseReturnItems, type PurchaseReturnSourceLine } from './purchaseReturnItems';
+import type { PurchaseReturnAvailability } from '@/api/returnOrder';
+import { canonicalUnitCode } from '@/utils/unitPricing';
 
 export interface PurchaseReturnSourceOrder extends Record<string, unknown> {
   id: string | number;
@@ -9,6 +11,7 @@ export interface PurchaseReturnSourceOrder extends Record<string, unknown> {
 interface Readers {
   order(factoryId: string, id: string): Promise<PurchaseReturnSourceOrder>;
   baseUnit(factoryId: string, materialId: string): Promise<string>;
+  availability(factoryId: string, id: string): Promise<PurchaseReturnAvailability>;
 }
 
 export function usePurchaseReturnSource(factoryId: Readonly<Ref<string>>, readers: Readers) {
@@ -36,9 +39,21 @@ export function usePurchaseReturnSource(factoryId: Readonly<Ref<string>>, reader
       if (!Array.isArray(order.items) || order.items.length === 0) throw new Error('采购单无明细，无法发起退货');
       const missing = [...new Set(order.items.filter(it => !it.inventoryBaseUnitSnapshot).map(it => String(it.materialTypeId || '')).filter(Boolean))];
       const baseUnits = new Map<string, string>();
-      await Promise.all(missing.map(async materialId => baseUnits.set(materialId, await readers.baseUnit(factory, materialId))));
+      const [availability] = await Promise.all([
+        readers.availability(factory, id),
+        Promise.all(missing.map(async materialId => baseUnits.set(materialId, await readers.baseUnit(factory, materialId)))),
+      ]);
       if (!current()) return false;
-      items.value = buildPurchaseReturnItems(order.items, baseUnits);
+      if (availability.purchaseOrderId !== id) throw new Error('累计可退额度与源采购单不一致');
+      items.value = buildPurchaseReturnItems(order.items, baseUnits).map(item => {
+        const matches = availability.items.filter(line => line.materialTypeId === item.materialTypeId);
+        const capacity = matches[0];
+        if (matches.length !== 1 || canonicalUnitCode(capacity.baseUnit) !== canonicalUnitCode(item.unit) ||
+            !Number.isFinite(capacity.remainingQuantity) || capacity.remainingQuantity < 0) {
+          throw new Error('无法确定物料的剩余可退数量或库存单位');
+        }
+        return { ...item, maxQuantity: capacity.remainingQuantity };
+      });
       source.value = order;
       sourceFactoryId.value = factory;
       visible.value = true;
