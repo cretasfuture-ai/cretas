@@ -18,7 +18,7 @@
  *
  * 防呆 R2 (context): header shows source order # + counterparty name.
  * 防呆 R1 (max boundary): per-row max = source line qty, exceeding disables submit.
- * 防呆 R4 (idempotent): backend createReturnOrder dedup'd on sourceOrderId.
+ * Source row limits are UI bounds, not a proof of cumulative return idempotency.
  */
 import { ref, computed, watch, nextTick } from 'vue';
 import { ElMessage, type FormInstance } from 'element-plus';
@@ -42,6 +42,8 @@ interface ReturnSourceItem {
   unitPrice?: number | null;
   /** Cap for return quantity (purchased qty / delivered qty). */
   maxQuantity: number;
+  /** Inventory base unit supplied by purchase source normalization. */
+  unit?: string;
   /** Batch (if known). */
   batchNumber?: string | null;
 }
@@ -75,6 +77,7 @@ interface DialogRow {
   itemName: string;
   unitPrice?: number | null;
   maxQuantity: number;
+  unit?: string;
   batchNumber?: string | null;
   selected: boolean;
   quantity: number;
@@ -187,6 +190,7 @@ watch(
           itemName: it.itemName,
           unitPrice: it.unitPrice ?? null,
           maxQuantity: it.maxQuantity,
+          unit: it.unit,
           batchNumber: it.batchNumber ?? null,
           // Default: all rows with positive max are pre-selected at full qty
           selected: it.maxQuantity > 0,
@@ -291,7 +295,7 @@ async function handleSubmit(): Promise<void> {
       :closable="false"
       style="margin-bottom: 12px"
       :title="`源单: ${sourceOrderNumber || sourceOrderId} ｜ ${counterpartyLabel}: ${counterpartyName || counterpartyId}`"
-      :description="`提交后退货单为 DRAFT 草稿. 请到 ${menuPathLabel} 菜单提交审批; 财务/管理员审批通过后才会触发库存或退款动作. 退货数量不能超过源单数量.`"
+      :description="isPurchaseReturn ? `请按下表库存单位填写数量。提交后到 ${menuPathLabel} 完成业务审批、财务审批和出货；有货退货完成后生成待审批的应付调整，调整审批后余额才会变动。` : `提交后退货单为 DRAFT 草稿. 请到 ${menuPathLabel} 菜单提交审批; 财务/管理员审批通过后才会触发库存或退款动作. 退货数量不能超过源单数量.`"
     />
 
     <el-form
@@ -393,6 +397,9 @@ async function handleSubmit(): Promise<void> {
         >
           <template #default="{ row }">{{ row.itemName }}</template>
         </el-table-column>
+        <el-table-column v-if="isPurchaseReturn" label="库存单位" width="95">
+          <template #default="{ row }">{{ row.unit || '—' }}</template>
+        </el-table-column>
         <el-table-column label="源单数量" width="110" align="right">
           <template #default="{ row }">{{ row.maxQuantity }}</template>
         </el-table-column>
@@ -406,7 +413,7 @@ async function handleSubmit(): Promise<void> {
             <el-input-number
               v-model="row.quantity"
               :min="0"
-              :precision="3"
+              :precision="isPurchaseReturn ? 2 : 3"
               :controls="false"
               size="small"
               style="width: 100%"
