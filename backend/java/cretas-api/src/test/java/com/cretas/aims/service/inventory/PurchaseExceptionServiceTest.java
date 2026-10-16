@@ -6,12 +6,15 @@ import com.cretas.aims.entity.enums.ReceiveDecisionStatus;
 import com.cretas.aims.entity.enums.ReceiveExceptionType;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.PurchaseException;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseExceptionRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.inventory.ReturnOrderService;
 import com.cretas.aims.service.inventory.impl.PurchaseExceptionServiceImpl;
@@ -64,6 +67,9 @@ class PurchaseExceptionServiceTest {
     @Mock
     private PurchaseOrderItemRepository purchaseOrderItemRepository;
 
+    @Mock
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
     @InjectMocks
     private PurchaseExceptionServiceImpl exceptionService;
 
@@ -77,7 +83,10 @@ class PurchaseExceptionServiceTest {
     private static final Long OTHER_USER_ID = 99L;
 
     @BeforeEach
-    void setup() {
+    void setup() throws Exception {
+        var materialField = PurchaseExceptionServiceImpl.class.getDeclaredField("rawMaterialTypeRepository");
+        materialField.setAccessible(true);
+        materialField.set(exceptionService, rawMaterialTypeRepository);
         // Repository save: return the same entity with an id assigned
         when(exceptionRepository.save(any(PurchaseException.class)))
                 .thenAnswer(inv -> {
@@ -193,6 +202,9 @@ class PurchaseExceptionServiceTest {
             ex.setPurchaseOrderId(PO_ID);
             // BLOCKER 3: RETURN_OVER 路径需要 supplierId (否则前置校验 422)。
             ex.setSupplierId("SUP-DEFAULT");
+            ex.setMaterialTypeId("MAT-DEFAULT");
+            ex.setMaterialName("默认物料");
+            ex.setUnit("kg");
             ex.setExceptionQty(BigDecimal.TEN);
             ex.setCreatedBy(1L);
             ex.setOwnerUserId(OWNER_USER_ID);
@@ -236,6 +248,7 @@ class PurchaseExceptionServiceTest {
         void returnOver_resolvesException() {
             PurchaseException ex = pendingOverException();
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
+            stubValidReturnSource(ex);
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenReturn(stubReturnOrder("RO-1", "RT-PUR-20260101-0001"));
 
@@ -394,11 +407,16 @@ class PurchaseExceptionServiceTest {
         void returnOver_createsPurchaseReturnOrder() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            stubValidReturnSource(ex);
 
             // 源采购单该物料行单价 = 10.00
             PurchaseOrderItem poItem = new PurchaseOrderItem();
             poItem.setMaterialTypeId(MATERIAL_TYPE_ID);
+            poItem.setUnit("kg");
+            poItem.setPriceUnit("kg");
+            poItem.setQuantityToPriceFactor(BigDecimal.ONE);
             poItem.setUnitPrice(new BigDecimal("10.0000"));
+            poItem.setTaxRate(BigDecimal.ZERO);
             when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));
 
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(CreateReturnOrderRequest.class), eq(OWNER_USER_ID)))
@@ -445,21 +463,16 @@ class PurchaseExceptionServiceTest {
         }
 
         @Test
-        @DisplayName("退货单价: 源 PO 无对应物料行 → 单价 null, 退货单仍创建 (不阻断)")
-        void returnOver_noPoUnitPrice_stillCreates() {
+        @DisplayName("源 PO 无对应物料行 → 明确拒绝, 不创建退货单")
+        void returnOver_noPoUnitPrice_rejects() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            stubValidReturnSource(ex);
             when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of()); // 无行
-            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
-                    .thenReturn(stubReturnOrder("RO-NEW2", "RT-PUR-20260101-0002"));
 
-            exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
-                    null, OWNER_USER_ID, null);
-
-            ArgumentCaptor<CreateReturnOrderRequest> reqCaptor = ArgumentCaptor.forClass(CreateReturnOrderRequest.class);
-            verify(returnOrderService).createReturnOrder(eq(FACTORY_ID), reqCaptor.capture(), eq(OWNER_USER_ID));
-            assertNull(reqCaptor.getValue().getItems().get(0).getUnitPrice(), "无 PO 单价时退货单价应为 null");
-            assertEquals("RO-NEW2", ex.getReturnOrderId());
+            assertThrows(BusinessException.class, () -> exceptionService.decideException("EXC-RT-001",
+                    FACTORY_ID, ExceptionDecision.RETURN_OVER, null, OWNER_USER_ID, null));
+            verify(returnOrderService, never()).createReturnOrder(anyString(), any(), anyLong());
         }
 
         @Test
@@ -467,7 +480,7 @@ class PurchaseExceptionServiceTest {
         void returnOver_returnOrderCreationFails_exceptionStillResolved() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
-            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            stubValidReturnSource(ex);
             // 退货单创建抛异常 (模拟 doomed-tx / 校验失败)
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenThrow(new RuntimeException("退货单创建失败 (模拟)"));
@@ -486,7 +499,7 @@ class PurchaseExceptionServiceTest {
         void returnOver_passesExceptionFactoryId() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
-            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            stubValidReturnSource(ex);
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenReturn(stubReturnOrder("RO-X", "RT-PUR-X"));
 
@@ -554,7 +567,7 @@ class PurchaseExceptionServiceTest {
         void returnOver_businessExceptionFromCreate_failLoud() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
-            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            stubValidReturnSource(ex);
             // ReturnOrderService 因下游业务规则拒绝 (e.g. 校验失败)
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenThrow(new BusinessException(409, "退货单下游业务校验失败"));
@@ -571,7 +584,7 @@ class PurchaseExceptionServiceTest {
         void returnOver_runtimeExceptionFromCreate_bestEffortSwallow() {
             PurchaseException ex = pendingOverException30();
             when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
-            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            stubValidReturnSource(ex);
             when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
                     .thenThrow(new RuntimeException("瞬时 DB 连接失败"));
 
@@ -582,6 +595,29 @@ class PurchaseExceptionServiceTest {
             assertEquals("RESOLVED", ex.getStatus());
             assertNull(ex.getReturnOrderId());
         }
+    }
+
+    private void stubValidReturnSource(PurchaseException exception) {
+        PurchaseOrder source = new PurchaseOrder();
+        source.setId(exception.getPurchaseOrderId());
+        source.setFactoryId(exception.getFactoryId());
+        when(purchaseOrderRepository.findByIdAndFactoryId(exception.getPurchaseOrderId(), exception.getFactoryId()))
+                .thenReturn(Optional.of(source));
+        PurchaseOrderItem item = new PurchaseOrderItem();
+        item.setMaterialTypeId(exception.getMaterialTypeId());
+        item.setUnit(exception.getUnit());
+        item.setPriceUnit(exception.getUnit());
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        item.setUnitPrice(BigDecimal.TEN);
+        item.setTaxRate(BigDecimal.ZERO);
+        when(purchaseOrderItemRepository.findByPurchaseOrderId(exception.getPurchaseOrderId()))
+                .thenReturn(List.of(item));
+        RawMaterialType material = new RawMaterialType();
+        material.setId(exception.getMaterialTypeId());
+        material.setFactoryId(exception.getFactoryId());
+        material.setUnit(exception.getUnit());
+        when(rawMaterialTypeRepository.findById(exception.getMaterialTypeId()))
+                .thenReturn(Optional.of(material));
     }
 
     /** 构造一个最小 ReturnOrder stub (DRAFT) 供 mock 返回。 */
