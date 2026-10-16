@@ -37,6 +37,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.entity.enums.NotificationType;
 import com.cretas.aims.service.NotificationService;
 import com.cretas.aims.service.reversal.ReportReversalService;
+import com.cretas.aims.service.reversal.ReversalConsumptionCleanupService;
 import com.cretas.aims.service.wip.WipLedgerEntries;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -120,7 +121,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * 不破坏既有 ReportReversalListNamesTest 的显式构造调用. 未注入 (老 context / 单测未提供)
      * → 跳过清字段 (旧行为, 不抛异常).
      */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Autowired
     private ProductionPlanRepository productionPlanRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -175,6 +176,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.WorkshopReportReservationService workshopReservationService;
+
+    /** Exact-batch cleanup of unposted consumption during an atomic reversal. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private ReversalConsumptionCleanupService reversalConsumptionCleanupService;
 
     /**
      * SP12 快速撤回时间窗口 (分钟)。
@@ -350,6 +355,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // not a reason to mark the reversal DONE without restoring the settlement.
         requireSettlementDependencies(log_.getPlanId());
 
+        if (reversalConsumptionCleanupService != null) {
+            reversalConsumptionCleanupService.lockReversalScope(factoryId, log_.getBatchId(), log_.getPlanId());
+        }
+
         Long batchId = log_.getBatchId();
         List<Long> revertedTxnIds = new ArrayList<>();
         List<Long> revertedInTxnIds = new ArrayList<>();
@@ -511,6 +520,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         // ①.1 软删除逐道录入物化行。取消计划的兜底门禁会读取这些行，必须与 YIELD 报工同进退。
         softDeleteProcessSheetRows(factoryId, batchId, log_.getPlanId(), now);
+
+        // Remove stale unposted raw-consumption rows owned by this reversed batch.
+        // Posted rows and quantities are never changed.
+        if (reversalConsumptionCleanupService != null) {
+            reversalConsumptionCleanupService.softDeleteUnpostedForReversedBatch(
+                    factoryId, batchId, log_.getPlanId(), now);
+        }
 
         // ①.5 复位该批次工序任务 (BUG-1 联动修复的撤回路径):
         // OUTPUT 报工提交现在会把 WorkProcessTask 置 COMPLETED(终态) — 整单撤回软删了全部

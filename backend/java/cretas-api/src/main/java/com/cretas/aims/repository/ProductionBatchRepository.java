@@ -446,6 +446,10 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanId(
             @Param("factoryId") String factoryId, @Param("productionPlanId") String productionPlanId);
 
+    /** Cleanup-only lineage lookup: includes CLERK_WIP batches for reversal repair. */
+    java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+            String factoryId, String productionPlanId);
+
     /**
      * 三价对比看板 (per-SKU): 某产品最近一条已算出 {@code unitCost} 的批次 (按创建时间倒序).
      *
