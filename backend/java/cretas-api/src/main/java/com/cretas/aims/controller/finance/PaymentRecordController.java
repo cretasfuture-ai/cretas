@@ -29,6 +29,7 @@ public class PaymentRecordController {
 
     private final PaymentRecordService paymentRecordService;
     private final com.cretas.aims.repository.PaymentRecordRepository paymentRecordRepository;
+    private final com.cretas.aims.security.DataScopeResolver dataScopeResolver;
 
     /**
      * AUD-5 B-A3 sister sweep (edge audit 2026-05-20): explicit length caps mirror PG
@@ -148,6 +149,7 @@ public class PaymentRecordController {
      * Paginated, newest first, soft-deleted excluded.
      */
     @GetMapping("/by-customer")
+    @com.cretas.aims.annotation.DataScope("created_by")
     @RequirePermission({"finance:read_write", "sales:read_write"})
     public ResponseEntity<?> listByCustomer(
             @PathVariable String factoryId,
@@ -156,8 +158,13 @@ public class PaymentRecordController {
             @RequestParam(defaultValue = "20") int size) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
-        var p = paymentRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
-                factoryId, customerId, PageRequest.of(safePage - 1, safeSize));
+        var pageable = PageRequest.of(safePage - 1, safeSize);
+        var scope = com.cretas.aims.security.DataScopeContext.current();
+        var p = scope != null && scope.isFiltered()
+                ? paymentRecordRepository.findCustomerPaymentsInOrderScope(
+                    factoryId, customerId, dataScopeResolver.resolveCreatedByChain(scope), pageable)
+                : paymentRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    factoryId, customerId, pageable);
         return ResponseEntity.ok(Map.of("success", true, "data", Map.of(
                 "content", p.getContent(),
                 "totalElements", p.getTotalElements(),

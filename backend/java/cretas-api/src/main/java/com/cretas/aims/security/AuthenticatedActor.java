@@ -18,6 +18,29 @@ public record AuthenticatedActor(
         String role) {
 
     public static final String REQUEST_ATTRIBUTE = AuthenticatedActor.class.getName();
+    private static final ThreadLocal<AuthenticatedActor> TRUSTED_ASYNC_ACTOR = new ThreadLocal<>();
+
+    /** Captured server-side identity for one pooled worker; never derived from a numeric id. */
+    public static ActorScope trustedAsyncScope(AuthenticatedActor actor) {
+        AuthenticatedActor previous = TRUSTED_ASYNC_ACTOR.get();
+        if (actor == null) TRUSTED_ASYNC_ACTOR.remove();
+        else TRUSTED_ASYNC_ACTOR.set(actor);
+        return new ActorScope(previous);
+    }
+
+    public static Optional<AuthenticatedActor> fromCurrentExecution() {
+        if (RequestContextHolder.getRequestAttributes() != null) return fromCurrentRequest();
+        return Optional.ofNullable(TRUSTED_ASYNC_ACTOR.get());
+    }
+
+    public static final class ActorScope implements AutoCloseable {
+        private final AuthenticatedActor previous;
+        private ActorScope(AuthenticatedActor previous) { this.previous = previous; }
+        @Override public void close() {
+            if (previous == null) TRUSTED_ASYNC_ACTOR.remove();
+            else TRUSTED_ASYNC_ACTOR.set(previous);
+        }
+    }
 
     /**
      * Platform roles that may act on any factory's {@code /api/mobile/{factoryId}/**} endpoints:
