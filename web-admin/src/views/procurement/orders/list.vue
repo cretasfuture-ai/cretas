@@ -35,6 +35,7 @@ import {
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
+import { usePurchaseReturnSource, type PurchaseReturnSourceOrder } from './usePurchaseReturnSource';
 import { copyPurchaseOrder } from '@/api/orderCopy';
 import { resolveReferenceByName } from '@/utils/referenceResolver';
 // M-10 (2026-08-20 手动测试台账): 精确状态文案 + 展示归类, 与后端
@@ -115,34 +116,29 @@ function moreRowActionsFor(row: TableRow) {
   return purchaseOrderMoreActions(rowActionsFor(row));
 }
 // 退货 dialog state (#860 follow-up — wires existing backend ReturnOrderController).
-const returnDialogVisible = ref(false);
-const returnDialogRow = ref<TableRow | null>(null);
-const returnDialogItems = computed(() => {
-  const row = returnDialogRow.value;
-  if (!row || !Array.isArray(row.items)) return [];
-  return (row.items as TableRow[]).map((it) => ({
-    id: it.id,
-    materialTypeId: it.materialTypeId ? String(it.materialTypeId) : null,
-    productTypeId: null as string | null,
-    itemName: String(it.materialName || it.itemName || '-'),
-    unitPrice: Number(it.unitPrice) || 0,
-    // For procurement, cap return at ordered quantity (no per-line received-qty
-    // hydration on list endpoint; service-side over-return guard will reject).
-    maxQuantity: Number(it.quantity) || 0,
-    batchNumber: it.batchNumber ? String(it.batchNumber) : null,
-  }));
+const {
+  visible: returnDialogVisible, source: returnDialogRow, items: returnDialogItems,
+  sourceFactoryId: returnDialogFactoryId, open: openReturnSource, close: closeReturnSource,
+} = usePurchaseReturnSource(factoryId, {
+  async order(factory, id) {
+    const response = await get<PurchaseReturnSourceOrder>(`/${factory}/purchase/orders/${encodeURIComponent(id)}`);
+    if (!response.success || !response.data) throw new Error('读取采购退货来源失败');
+    return response.data;
+  },
+  async baseUnit(factory, id) {
+    const material = await get<{ unit?: string }>(`/${factory}/raw-material-types/${encodeURIComponent(id)}`);
+    if (!material.success || !material.data?.unit) throw new Error('无法确定源物料的库存基本单位');
+    return material.data.unit;
+  },
 });
-function openReturnDialog(row: TableRow): void {
-  if (!Array.isArray(row.items) || row.items.length === 0) {
-    ElMessage.warning('采购单无明细, 无法发起退货. 请打开订单详情确认.');
-    return;
+async function openReturnDialog(row: TableRow): Promise<void> {
+  try { await openReturnSource(String(row.id)); }
+  catch (error: unknown) {
+    ElMessage({ type: 'error', message: error instanceof Error ? error.message : '读取采购退货来源失败', duration: 0, showClose: true });
   }
-  returnDialogRow.value = row;
-  returnDialogVisible.value = true;
 }
 function handleReturnSuccess(): void {
-  returnDialogVisible.value = false;
-  returnDialogRow.value = null;
+  closeReturnSource();
   void loadData();
 }
 
@@ -1778,7 +1774,7 @@ function handleAiFill(params: TableRow) {
     <CreateReturnOrderDialog
       v-if="returnDialogRow"
       v-model="returnDialogVisible"
-      :factory-id="factoryId"
+      :factory-id="returnDialogFactoryId"
       return-type="PURCHASE_RETURN"
       :source-order-id="String(returnDialogRow.id)"
       :source-order-number="String(returnDialogRow.orderNumber || returnDialogRow.id)"
