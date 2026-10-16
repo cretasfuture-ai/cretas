@@ -216,7 +216,8 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
         }
         if (!"PENDING".equals(pe.getStatus())) {
             throw new BusinessException(409, "异常单已处理（status=" + pe.getStatus() + "），无法再次决策")
-                    .withCode("PURCHASE_EXCEPTION_ALREADY_RESOLVED");
+                    .withCode("PURCHASE_EXCEPTION_ALREADY_RESOLVED")
+                    .withHint("请刷新「采购管理 → 入库异常」列表，查看已生效的处理决定，无需重复提交。");
         }
 
         // D-6 责任绑定鉴权：本人或主管角色才可决策（Fool-proof Rule 2 — 指明责任人是谁）

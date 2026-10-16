@@ -344,9 +344,14 @@ class PurchaseExceptionServiceTest {
             ex.setStatus("RESOLVED");
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
 
-            assertThrows(BusinessException.class, () ->
+            BusinessException error = assertThrows(BusinessException.class, () ->
                     exceptionService.decideException("EXC-001", FACTORY_ID,
                             ExceptionDecision.ACCEPT_OVER, null, OWNER_USER_ID, null));
+            assertEquals(Integer.valueOf(409), error.getCode());
+            assertEquals("PURCHASE_EXCEPTION_ALREADY_RESOLVED", error.getErrorCode());
+            assertTrue(error.getActionHint().contains("刷新"));
+            verify(exceptionRepository, never()).save(any());
+            verifyNoInteractions(returnOrderService);
         }
 
         @Test

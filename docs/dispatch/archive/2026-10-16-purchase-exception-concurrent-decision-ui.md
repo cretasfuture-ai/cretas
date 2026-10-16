@@ -37,6 +37,7 @@ Preparing the real UI fixture also exposed a pending-count-based exception numbe
 - Change child propagation back to `REQUIRES_NEW`: association failure leaves one return; expected-zero assertion fails (1 failure, 0 errors).
 - Restore both changes: all target groups pass with `BUILD SUCCESS`.
 - Real UI then exposed PostgreSQL bind inference with the application's `stringtype=unspecified` connection setting. The repository test now uses that setting: it reproduced SQLSTATE 42P18 before the explicit text casts and passes after them. Only that affected real JPA test was rerun; unchanged service, actor, unit and rollback evidence is reused.
+- First final CI run executed 15,318 tests and found one new failure: the global 409-hint coverage contract. The resolved-exception 409 now tells the operator to refresh the exception list and view the effective decision; the existing resolved-case test checks status, semantic code, hint and zero downstream writes. The failed gate and affected decision tests are rerun before a new final CI; the baseline is unchanged. Core UI/stock/payable evidence is reused because this increment only adds the action hint.
 - PostgreSQL CI explicitly selects both new database test classes; the actor contract matches the normal contract selector. Final CI results belong to the PR's exact-head checks and delivery comment.
 - Workflow gates: 12 merge-result assertions and 5 selector assertions pass. The ACTIVE gate passes while the task is registered; its final scope release is checked again at delivery.
 
