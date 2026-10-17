@@ -862,6 +862,7 @@
           >确认应用配置</el-button>
           <el-tag v-if="canonicalBlueprint?.lifecycleState === 'APPLIED'" type="success" effect="plain">配置已应用 · Workflow 仍待单独发布</el-tag>
         </div>
+        <FactoryBasicsHandoff v-if="canonicalBlueprint?.lifecycleState === 'APPLIED'" />
       </el-card>
 
       <el-card v-if="step === 0 && proposalNeedsCorrection && generated?.suggestedData && generated.schemas"
@@ -883,6 +884,7 @@
           :sub-title="applied?.message"
         >
           <template #extra>
+            <FactoryBasicsHandoff v-if="applied?.success && canonicalBlueprint?.lifecycleState !== 'APPLIED'" />
             <div class="closeout-rail" aria-label="建厂收尾顺序">
               <div class="closeout-step" :class="applied?.success ? 'done-step' : 'attention-step'">
                 <span>1</span><div><strong>{{ applied?.success ? '配置写入' : '部分写入' }}</strong><small>已取得服务端结构化回执</small></div>
@@ -1056,6 +1058,7 @@ import FactoryConversationFactLedger from './components/FactoryConversationFactL
 import FactoryConversationRoutePreview from './components/FactoryConversationRoutePreview.vue'
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
+import FactoryBasicsHandoff from './components/FactoryBasicsHandoff.vue'
 import type { FormalCapability, FormalExecution } from '@/api/factoryBlueprintActivationApi'
 import { formalRuntimeCounts } from './factoryBlueprintFormalState'
 import { selectedMetricInterviewAnswer } from './metricInterviewAnswer'
