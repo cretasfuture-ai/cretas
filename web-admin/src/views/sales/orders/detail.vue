@@ -994,6 +994,7 @@ function openDeliveryDialog() {
       packagingSpecId: it.packagingSpecId,
       unitPrice: it.unitPrice,
       taxRate: it.taxRate,
+      quotedGrossUnitPrice: it.quotedGrossUnitPrice,
       // T4-D5 (issue #553): propagate per-line source warehouse code from the
       // sales order item. Backend SalesServiceImpl.createDeliveryRecord stores
       // it on SalesDeliveryItem; allocation logic doesn't filter yet but the
@@ -2596,7 +2597,7 @@ async function handleQuickPayFull() {
           <template #default="{ row }">{{ formatAmount(Number(row.deliveredQuantity || 0) * Number(row.unitPrice || 0)) }}</template>
         </el-table-column>
         <el-table-column v-if="canViewPrice" label="税额" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(Number(row.deliveredQuantity || 0) * Number(row.unitPrice || 0) * Number(row.taxRate || 0) / 100) }}</template>
+          <template #default="{ row }">{{ formatAmount(deliveryMoney([row]).tax) }}</template>
         </el-table-column>
       </el-table>
       <div v-if="canViewPrice" class="delivery-amount-summary">

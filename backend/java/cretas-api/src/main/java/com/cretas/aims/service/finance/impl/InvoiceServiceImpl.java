@@ -322,6 +322,14 @@ public class InvoiceServiceImpl implements InvoiceService {
             BigDecimal lineTax = lineAmount
                     .multiply(taxRate)
                     .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+            if (item.getUnitPrice() != null && item.getQuotedGrossUnitPrice() != null) {
+                BigDecimal delivered = item.getDeliveredQuantity();
+                BigDecimal effectiveQty = delivered != null && delivered.signum() > 0
+                        ? delivered : (item.getQuantity() != null ? item.getQuantity() : BigDecimal.ZERO);
+                // Keep the approved gross quotation and the shipment receivable in agreement.
+                lineTax = effectiveQty.multiply(item.getQuotedGrossUnitPrice())
+                        .setScale(2, RoundingMode.HALF_UP).subtract(lineAmount);
+            }
 
             TaxBreakdownEntry entry = grouped.computeIfAbsent(key,
                     k -> new TaxBreakdownEntry(k, BigDecimal.ZERO, BigDecimal.ZERO, 0));

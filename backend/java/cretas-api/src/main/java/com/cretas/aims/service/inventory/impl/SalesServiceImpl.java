@@ -5610,16 +5610,28 @@ public class SalesServiceImpl implements SalesService {
                     ? record.getTotalAmount() : BigDecimal.ZERO;
         }
         java.util.Map<Long, BigDecimal> taxRateByOrderItemId = new java.util.HashMap<>();
+        java.util.Map<Long, BigDecimal> quotedGrossByOrderItemId = new java.util.HashMap<>();
         if (order != null && order.getItems() != null) {
             for (SalesOrderItem oi : order.getItems()) {
                 if (oi.getId() != null) {
                     taxRateByOrderItemId.put(oi.getId(), oi.getTaxRate());
+                    if (oi.getQuotedGrossUnitPrice() != null) {
+                        quotedGrossByOrderItemId.put(oi.getId(), oi.getQuotedGrossUnitPrice());
+                    }
                 }
             }
         }
         BigDecimal total = BigDecimal.ZERO;
         for (SalesDeliveryItem item : record.getItems()) {
             if (item.getUnitPrice() == null || item.getDeliveredQuantity() == null) {
+                continue;
+            }
+            // Approved quotation gross price is authoritative for the exact source line.
+            // Reversing the four-decimal net price loses cents; legacy NULL keeps its formula.
+            BigDecimal quotedGross = quotedGrossByOrderItemId.get(item.getSalesOrderItemId());
+            if (quotedGross != null) {
+                total = total.add(item.getDeliveredQuantity().multiply(quotedGross)
+                        .setScale(2, java.math.RoundingMode.HALF_UP));
                 continue;
             }
             BigDecimal net = item.getDeliveredQuantity().multiply(item.getUnitPrice())

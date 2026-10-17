@@ -280,11 +280,14 @@ export function roundMoney(value: number): number {
 export function deliveryMoney(items: RowLike[]): { untaxed: number; tax: number; taxIncluded: number } {
   return items.reduce<{ untaxed: number; tax: number; taxIncluded: number }>((sum, item) => {
     const untaxed = roundMoney(quantity(item.deliveredQuantity) * quantity(item.unitPrice));
-    const tax = roundMoney(untaxed * quantity(item.taxRate) / 100);
+    const taxIncluded = item.quotedGrossUnitPrice != null
+      ? roundMoney(quantity(item.deliveredQuantity) * quantity(item.quotedGrossUnitPrice))
+      : roundMoney(untaxed + roundMoney(untaxed * quantity(item.taxRate) / 100));
+    const tax = roundMoney(taxIncluded - untaxed);
     return {
       untaxed: roundMoney(sum.untaxed + untaxed),
       tax: roundMoney(sum.tax + tax),
-      taxIncluded: roundMoney(sum.taxIncluded + untaxed + tax),
+      taxIncluded: roundMoney(sum.taxIncluded + taxIncluded),
     };
   }, { untaxed: 0, tax: 0, taxIncluded: 0 });
 }
