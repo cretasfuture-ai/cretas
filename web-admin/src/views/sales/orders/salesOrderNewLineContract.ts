@@ -6,6 +6,7 @@ import {
 
 export interface SalesOrderPackagingSpec {
   id?: string | null;
+  name?: string | null;
   packageUnit?: string | null;
   baseUnit?: string | null;
   conversionFactor?: number | null;
@@ -89,7 +90,11 @@ export function salesOrderUnitOptions(product: SalesOrderPricedProduct): string[
 export function packagingSpecIdForUnit(
   product: SalesOrderPricedProduct,
   unit: string,
+  selectedId?: string,
 ): string | undefined {
+  if (selectedId !== undefined) {
+    return salesPackagingOptions(product, unit).find(spec => spec.id === selectedId)?.id || undefined;
+  }
   const unitCode = canonicalUnitCode(unit);
   const matching = (product.packagingSpecs || []).filter((spec) =>
     spec.active !== false
@@ -99,6 +104,18 @@ export function packagingSpecIdForUnit(
   const selected = matching.find((spec) => spec.defaultSpec === true)
     || (matching.length === 1 ? matching[0] : undefined);
   return selected?.id ? String(selected.id) : undefined;
+}
+
+export function salesPackagingOptions(product: SalesOrderPricedProduct, unit: string): SalesOrderPackagingSpec[] {
+  return (product.packagingSpecs || []).filter(spec => spec.active !== false && Boolean(spec.id)
+    && canonicalUnitCode(spec.packageUnit || '') === canonicalUnitCode(unit));
+}
+
+export function salesPackagingSelectionError(product: SalesOrderPricedProduct, unit: string, selectedId?: string): string | null {
+  const matching = salesPackagingOptions(product, unit);
+  if (selectedId && !matching.some(spec => spec.id === selectedId)) return '所选包装规格已失效或与单位不一致，请重新选择';
+  if (matching.length > 1 && !selectedId) return '所选单位存在多个包装规格，请明确选择本行包装规格';
+  return null;
 }
 
 export function ambiguousPackagingUnit(product: SalesOrderPricedProduct, unit: string): boolean {

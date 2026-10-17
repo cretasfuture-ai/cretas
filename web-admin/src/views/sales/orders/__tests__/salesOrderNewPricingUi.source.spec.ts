@@ -22,6 +22,11 @@ describe('sales order full-page pricing and unit UI', () => {
     expect(source).toContain('unitPrice: line.unitPrice');
     expect(source).not.toContain('unitPrice: untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate)');
     expect(source).toContain('taxRate: line.taxRate');
-    expect(source).toContain('packagingSpecId: packagingSpecIdForUnit(line.product, line.unit)');
+    expect(source).toContain('packagingSpecId: packagingSpecIdForUnit(line.product, line.unit, line.packagingSpecId)');
+    expect(source).toContain('salesPackagingSelectionError(line.product, line.unit, line.packagingSpecId)');
+    expect(source).toContain('row.packagingSpecId = undefined; dirty = true');
+    expect(source).toContain('v-model="row.packagingSpecId" :options="salesPackagingOptions(row.product, row.unit)"');
+    expect(source).toContain('product = { ...product, packagingSpecs: response.data }');
+    expect(source).toContain('包装规格加载失败，未添加产品，请重试');
   });
 });
