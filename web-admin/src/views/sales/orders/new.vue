@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -30,6 +30,7 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 import SalesPackagingSelect from './components/SalesPackagingSelect.vue';
+import { canOrderFromQuote, type OrderQuote } from '../quotes/quoteOrderContract';
 const deliveryDatePicker = ref<InstanceType<typeof OrderDeliveryDatePicker>>();
 
 type Warehouse = TableRow & { id: string; code: string; name: string; type?: string; isActive?: boolean };
@@ -59,6 +60,10 @@ type SalesLine = {
 type SuppliedMaterial = { materialTypeId: string; materialName: string; expectedQuantity: number; unit: string; expectedArrivalAt: string; targetWarehouseId: string };
 
 const router = useRouter();
+const route = useRoute();
+const requestedQuoteId = typeof route.query.quoteId === 'string' ? route.query.quoteId : '';
+const orderQuote = ref<OrderQuote | null>(null);
+const quoteLoadError = ref('');
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
@@ -274,6 +279,7 @@ function onMaterialSupplyModeChange(): void {
 }
 
 function validate(): string | null {
+  if (requestedQuoteId && !orderQuote.value) return quoteLoadError.value || '引用报价尚未加载成功，不能保存订单';
   if (!form.value.customerId) return '请选择客户';
   if (!form.value.processingMode || !form.value.materialSupplyMode) return '请选择加工方式和物料供应方式';
   if (!form.value.items.length) return '请至少添加一个成品或半成品';
@@ -333,6 +339,7 @@ async function submit(): Promise<void> {
   loading.value = true;
   try {
     const response = await post(`/${factoryId.value}/sales/orders`, {
+      quoteId: orderQuote.value?.id,
       customerId: form.value.customerId,
       orderDate: toDateString(new Date()),
       requiredDeliveryDate: form.value.requiredDeliveryDate || undefined,
@@ -374,9 +381,35 @@ async function leave(): Promise<void> {
   } catch { /* keep editing */ }
 }
 
-onMounted(() => {
-  void loadCustomers();
-  void loadProducts();
+async function loadOrderQuote(): Promise<void> {
+  if (!requestedQuoteId) return;
+  try {
+    const response = await get<OrderQuote>(`/${factoryId.value}/quotes/${encodeURIComponent(requestedQuoteId)}`);
+    const quote = response.data;
+    if (!response.success || !quote || quote.factoryId !== factoryId.value || !canOrderFromQuote(quote, toDateString(new Date())))
+      throw new Error('报价尚未批准、已过期或不属于当前工厂');
+    const product = products.value.find(p => String(p.id) === quote.productTypeId);
+    if (!product || !customers.value.some(c => String(c.id) === quote.customerId)) throw new Error('报价客户或产品当前不可用');
+    const unit = canonicalUnitCodeKeepingCount(quote.unit);
+    if (!salesOrderUnitOptions(product).includes(unit)) throw new Error('报价单位不属于当前SKU可销售单位，请修订报价');
+    await addProduct(product);
+    const line = form.value.items.find(i => String(i.product.id) === quote.productTypeId);
+    if (!line) throw new Error('报价产品的包装规格未加载成功');
+    form.value.customerId = quote.customerId;
+    line.unit = unit;
+    line.quantity = Math.max(1, Number(quote.minOrderQty) || 0);
+    line.taxIncludedUnitPrice = Number(quote.unitPrice);
+    recalculateSalesUnitPrice(line);
+    orderQuote.value = quote;
+  } catch (error) {
+    quoteLoadError.value = error instanceof Error ? error.message : '引用报价加载失败，请重试';
+    ElMessage.error(quoteLoadError.value);
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadCustomers(), loadProducts()]);
+  await loadOrderQuote();
   void loadWarehouses();
   void loadInventorySummary();
 });
@@ -397,6 +430,8 @@ onMounted(() => {
     </div>
 
     <el-alert v-if="!sourceWarehouses.length && !loadingWarehouses" type="warning" :closable="false" show-icon title="当前没有合法来源仓库，保存会被阻止。请先配置 RAW / WORKSHOP / WIP / LINESIDE / LOGISTICS / FINISHED 仓库。" />
+    <el-alert v-if="orderQuote" type="info" :closable="false" :title="`引用已批准报价 ${orderQuote.quoteNo}：含税 ${orderQuote.unitPrice}/${orderQuote.unit}。客户、产品、单位和含税价必须与报价一致；需要议价请先修订并重新审批。`" />
+    <el-alert v-else-if="quoteLoadError" type="error" :closable="false" :title="quoteLoadError" />
     <el-form :model="form" label-width="120px" class="order-form">
       <el-card shadow="never" class="content-card">
         <template #header><span class="section-title">客户与订单信息</span></template>

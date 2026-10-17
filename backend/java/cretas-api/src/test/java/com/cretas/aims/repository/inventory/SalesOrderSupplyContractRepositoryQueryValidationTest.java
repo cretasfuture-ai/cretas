@@ -41,6 +41,8 @@ class SalesOrderSupplyContractRepositoryQueryValidationTest {
                 .getAttribute("processingMode")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(SalesOrderItem.class)
                 .getAttribute("materialSupplyMode")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(SalesOrderItem.class)
+                .getAttribute("quotedGrossUnitPrice").getJavaType()).isEqualTo(java.math.BigDecimal.class);
     }
 }
 
