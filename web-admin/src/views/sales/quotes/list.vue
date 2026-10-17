@@ -19,8 +19,12 @@ import { Plus, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import type { TableRow } from '@/types/api';
+import { useRouter } from 'vue-router';
+import { toDateString } from '@/utils/dateFormat';
+import { canOrderFromQuote } from './quoteOrderContract';
 
 const authStore = useAuthStore();
+const router = useRouter();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
@@ -346,8 +350,10 @@ async function handleRevise(row: TableRow) {
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" align="center" fixed="right">
+        <el-table-column label="操作" width="300" align="center" fixed="right">
           <template #default="{ row }">
+            <el-button v-if="canWrite && canOrderFromQuote(row, toDateString(new Date()))" type="primary" link size="small"
+                       @click="router.push({ path: '/sales/orders/new', query: { quoteId: String(row.id) } })">按报价下单</el-button>
             <el-button v-if="row.status === 'PENDING_QUOTE' && canWrite" type="primary" link size="small"
                        @click="openSubmitPriceDialog(row)">录价</el-button>
             <el-button v-if="row.status === 'PENDING_APPROVAL' && canWrite" type="success" link size="small"

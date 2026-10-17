@@ -65,6 +65,11 @@ public class SalesOrderItem extends BaseEntity {
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
+    /** Approved gross unit price, captured only for newly validated quote orders. */
+    @PriceSensitive
+    @Column(name = "quoted_gross_unit_price", precision = 15, scale = 2)
+    private BigDecimal quotedGrossUnitPrice;
+
     @PriceSensitive
     @Column(name = "discount_rate", precision = 5, scale = 2)
     private BigDecimal discountRate = BigDecimal.ZERO;
@@ -251,9 +256,9 @@ public class SalesOrderItem extends BaseEntity {
     }
 
     /**
-     * 含税行金额 = lineAmount × (1 + taxRate/100).
+     * 含税行金额；报价快照存在时按批准含税单价计价，否则保持历史公式。
      *
-     * <p>Mirrors {@code PurchaseOrderItem.getLineAmountWithTax()} (D-11) exactly:
+     * <p>Preserves the existing visibility, discount and tax contracts:
      * <ul>
      *   <li>{@code @PriceSensitive} — stripped to {@code null} for roles without
      *       {@code procurement:price:view}, consistent with PO side.
@@ -275,6 +280,9 @@ public class SalesOrderItem extends BaseEntity {
         BigDecimal amount = getLineAmount();
         // Defensive: getLineAmount() returns null when unitPrice stripped.
         if (amount == null) return null;
+        if (quotedGrossUnitPrice != null) {
+            return quantity.multiply(quotedGrossUnitPrice).setScale(2, BigDecimal.ROUND_HALF_UP);
+        }
         if (taxRate == null || taxRate.compareTo(BigDecimal.ZERO) == 0) return amount;
         BigDecimal taxMultiplier = BigDecimal.ONE.add(
                 taxRate.divide(new BigDecimal("100"), 6, BigDecimal.ROUND_HALF_UP));

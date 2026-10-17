@@ -431,6 +431,9 @@ public class SalesServiceImpl implements SalesService {
     private jakarta.persistence.EntityManager entityManager;
 
     @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.sales.OperationalQuoteOrderGuard operationalQuoteOrderGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired
     public SalesServiceImpl(SalesOrderRepository salesOrderRepository,
                             SalesOrderItemRepository salesOrderItemRepository,
                             SalesDeliveryRecordRepository deliveryRecordRepository,
@@ -483,6 +486,10 @@ public class SalesServiceImpl implements SalesService {
     @Loggable(module = "SALES_ORDER", action = "CREATE", entityType = "SalesOrder",
               summary = "'创建销售单 客户=' + #request.customerId")
     public SalesOrder createSalesOrder(String factoryId, CreateSalesOrderRequest request, Long userId) {
+        BigDecimal quotedGrossUnitPrice = null;
+        if (request.getQuoteId() != null && !request.getQuoteId().isBlank()) {
+            quotedGrossUnitPrice = operationalQuoteOrderGuard.validateCreate(factoryId, request);
+        }
         validateSupplyContract(
                 request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
         assertItemsAreSellable(factoryId, request.getItems());
@@ -639,7 +646,7 @@ public class SalesServiceImpl implements SalesService {
             // Canvas-Pricing Phase 4b (2026-05-18): apply 价格策略 (TIERED / PROMOTION / MEMBER / BUNDLE).
             // 此处用 calculate() 写 PricingApplicationLog (审计 audit), CYCLE 策略由月底批处理路径处理.
             // pricingEngine 为 null 时 (老 jar 部署), 完全跳过 — 走原 resolvedUnitPrice (legacy fallback).
-            if (pricingEngine != null
+            if (quotedGrossUnitPrice == null && pricingEngine != null
                     && resolvedUnitPrice != null
                     && resolvedUnitPrice.signum() > 0
                     && itemDTO.getQuantity() != null
@@ -731,7 +738,9 @@ public class SalesServiceImpl implements SalesService {
                             order.getOrderNumber(), itemDTO.getProductTypeId(), e.getMessage());
                 }
             }
-            item.setUnitPrice(resolvedUnitPrice);
+            item.setUnitPrice(quotedGrossUnitPrice == null ? resolvedUnitPrice
+                    : resolvedUnitPrice.setScale(4, java.math.RoundingMode.HALF_UP));
+            item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
 
             // ── E-5 毛利红线预警 (W1 追溯矩阵 E-5; 非阻断决策修正 2026-06-10) ──────────────
             // 决策 (SP3 spec §6.3 / SP5 spec §8): 低于红线只"预警"不"卡死"
@@ -822,6 +831,9 @@ public class SalesServiceImpl implements SalesService {
             totalAmount = totalAmount.add(lineAmount != null ? lineAmount : BigDecimal.ZERO);
         }
 
+        if (quotedGrossUnitPrice != null) {
+            operationalQuoteOrderGuard.validateConfirmation(factoryId, order, items);
+        }
         salesOrderItemRepository.saveAll(items);
 
         List<SalesOrderSuppliedMaterialRequirement> suppliedMaterials = List.of();
@@ -1007,6 +1019,10 @@ public class SalesServiceImpl implements SalesService {
                     .withHint("请刷新订单列表查看最新状态");
         }
         checkTransitionAllowed(factoryId, order.getStatus().name(), "CONFIRMED");
+        if (order.getQuoteId() != null && !order.getQuoteId().isBlank()) {
+            operationalQuoteOrderGuard.validateConfirmation(factoryId, order,
+                    salesOrderItemRepository.findBySalesOrderId(orderId));
+        }
         order.setStatus(SalesOrderStatus.CONFIRMED);
         order.setConfirmedAt(LocalDateTime.now());
         SalesOrder saved = salesOrderRepository.save(order);
@@ -2219,6 +2235,12 @@ public class SalesServiceImpl implements SalesService {
                 SalesOrder.class, orderId);
         }
 
+        BigDecimal quotedGrossUnitPrice = null;
+        if (order.getQuoteId() != null && !order.getQuoteId().isBlank()) {
+            quotedGrossUnitPrice = operationalQuoteOrderGuard.validateUpdate(factoryId, order, request,
+                    request.getItems() == null || request.getItems().isEmpty()
+                            ? salesOrderItemRepository.findBySalesOrderId(orderId) : List.of());
+        }
         validateSupplyContract(
                 request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
         CustomerStockFulfillmentMode requestedFulfillmentMode =
@@ -2321,7 +2343,9 @@ public class SalesServiceImpl implements SalesService {
                 } else {
                     applyPackagingSelection(factoryId, itemDTO, item);
                 }
-                item.setUnitPrice(itemDTO.getUnitPrice());
+                item.setUnitPrice(quotedGrossUnitPrice == null ? itemDTO.getUnitPrice()
+                        : itemDTO.getUnitPrice().setScale(4, java.math.RoundingMode.HALF_UP));
+                item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
                 item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
                 // SP4 updateSalesOrder: 同 createSalesOrder 三层 default 链 — item 显式 > SO.defaultTaxRate > 0
                 BigDecimal effectiveTaxRateUpdate = itemDTO.getTaxRate();
@@ -2352,6 +2376,9 @@ public class SalesServiceImpl implements SalesService {
                 // E-2 空价草稿: unitPrice null → getLineAmount() null, 该行贡献 0 (同 createSalesOrder 防 NPE)
                 BigDecimal lineAmount = item.getLineAmount();
                 totalAmount = totalAmount.add(lineAmount != null ? lineAmount : BigDecimal.ZERO);
+            }
+            if (quotedGrossUnitPrice != null) {
+                operationalQuoteOrderGuard.validateConfirmation(factoryId, order, newItems);
             }
             salesOrderItemRepository.saveAll(newItems);
             order.setTotalAmount(totalAmount);
@@ -2610,6 +2637,9 @@ public class SalesServiceImpl implements SalesService {
         validatePersistedSupplyContract(source);
         // 强制初始化 items (lazy collection)
         org.hibernate.Hibernate.initialize(source.getItems());
+        if (source.getQuoteId() != null && !source.getQuoteId().isBlank()) {
+            operationalQuoteOrderGuard.validateConfirmation(factoryId, source, source.getItems());
+        }
 
         String newOrderNumber = generateSalesOrderNumber(factoryId);
 
@@ -2662,6 +2692,7 @@ public class SalesServiceImpl implements SalesService {
             // 新行不该再带英文。storageUnit 幂等, 源行已规范时这里是恒等。
             newItem.setUnit(storageUnit(factoryId, srcItem.getUnit()));
             newItem.setUnitPrice(srcItem.getUnitPrice());
+            newItem.setQuotedGrossUnitPrice(srcItem.getQuotedGrossUnitPrice());
             newItem.setDiscountRate(srcItem.getDiscountRate() != null
                     ? srcItem.getDiscountRate() : BigDecimal.ZERO);
             newItem.setCostUnitPrice(srcItem.getCostUnitPrice());
@@ -2702,6 +2733,10 @@ public class SalesServiceImpl implements SalesService {
             newOrder.setSuppliedMaterials(new ArrayList<>(copiedRequirements));
         }
         newOrder.setTotalAmount(totalAmount);
+        if (newOrder.getQuoteId() != null && !newOrder.getQuoteId().isBlank()) {
+            newOrder.setTaxAmount(newItems.stream().map(i -> i.getLineAmountWithTax().subtract(i.getLineAmount()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2, java.math.RoundingMode.HALF_UP));
+        }
         newOrder = salesOrderRepository.save(newOrder);
 
         log.info("复制销售订单: source={}({}) → new={}({}), items={}",
