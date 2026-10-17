@@ -157,6 +157,14 @@
             <el-option label="补货（缺货，要求供应商补发）" value="REQUEST_RESUPPLY" />
           </el-select>
         </el-form-item>
+        <el-alert
+          v-if="decisionForm.decision === 'REQUEST_RESUPPLY'"
+          title="补发沿用原采购单"
+          description="记录决定后，由仓储按原采购单的剩余待收数量办理补发收货；决定本身不会生成库存、应付或新采购单。"
+          type="info"
+          :closable="false"
+          class="mb-16"
+        />
         <el-form-item label="备注" prop="notes">
           <el-input
             v-model="decisionForm.notes"
@@ -213,6 +221,13 @@
             <span v-else class="text-muted">—</span>
           </el-descriptions-item>
           <el-descriptions-item label="处理备注" :span="2">{{ currentRow.decisionNotes || '—' }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentRow.decision === 'REQUEST_RESUPPLY'" label="补发收货" :span="2">
+            <el-link v-if="canAccessWarehouse && currentRow.purchaseOrderId" type="primary" @click="goToResupply(currentRow.purchaseOrderId)">
+              前往原采购单待收任务
+            </el-link>
+            <span v-else>请联系仓储按原采购单办理补发收货。</span>
+            <p class="text-muted">按剩余待收数量补收；已收齐或已关闭的订单不会再次生成待收任务。</p>
+          </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatDate(currentRow.createdAt) }}</el-descriptions-item>
           <el-descriptions-item label="处理时间">{{ formatDate(currentRow.decisionAt) }}</el-descriptions-item>
         </el-descriptions>
@@ -271,6 +286,7 @@ const authStore = useAuthStore()
 const permStore = usePermissionStore()
 const factoryId = computed(() => authStore.factoryId)
 const canWrite = computed(() => permStore.canWrite('procurement'))
+const canAccessWarehouse = computed(() => permStore.canAccess('warehouse'))
 
 // D-6 鉴权：当前用户 ID 和角色（用于"处理"按钮禁用判断）
 const currentUserId = computed(() => authStore.user?.id ?? null)
@@ -417,6 +433,12 @@ function goToReturns() {
   router.push('/procurement/returns')
 }
 
+function goToResupply(purchaseOrderId: string) {
+  if (!canAccessWarehouse.value || !purchaseOrderId) return
+  detailDialogVisible.value = false
+  router.push({ path: '/warehouse/materials', query: { purchaseOrderId } })
+}
+
 async function submitDecision() {
   if (!decisionFormRef.value) return
   await decisionFormRef.value.validate(async (valid) => {
@@ -446,6 +468,17 @@ async function submitDecision() {
           ).then(() => {
             router.push('/procurement/returns')
           }).catch(() => { /* 留在本页 */ })
+        } else if (updated?.decision === 'REQUEST_RESUPPLY' && updated.purchaseOrderId) {
+          fetchData()
+          if (canAccessWarehouse.value) {
+            ElMessageBox.confirm(
+              '补货决定已记录。请按原采购单的剩余待收数量办理补发收货；已收齐或已关闭的订单不会再次生成待收任务。是否前往仓储？',
+              '继续办理补发收货',
+              { confirmButtonText: '前往待收任务', cancelButtonText: '留在本页', type: 'success' },
+            ).then(() => goToResupply(updated.purchaseOrderId)).catch(() => { /* 可从异常详情继续办理 */ })
+          } else {
+            ElMessage({ message: '补货决定已记录，请联系仓储按原采购单办理补发收货。', type: 'success', duration: 5000 })
+          }
         } else {
           ElMessage({ message: '处理成功', type: 'success', duration: 3000 })
           fetchData()
