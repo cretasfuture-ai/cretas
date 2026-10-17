@@ -2479,6 +2479,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                     PurchaseOrderItem poItem = resolvePurchaseOrderItem(
                             poItems, item.getPurchaseOrderItemId(), item.getMaterialTypeId());
                     BigDecimal poQty = poItem != null ? poItem.getQuantity() : null;
+                    // updateOrderReceiveStatus 已累加本次收货，差异应以同一 PO 单位下的
+                    // 累计实收比较整单采购量。补齐尾货不能再被误报为少收。
+                    BigDecimal cumulativeQty = poItem != null ? poItem.getReceivedQuantity() : null;
                     purchaseExceptionService.generateExceptionsForReceive(
                             factoryId,
                             record.getId(),
@@ -2487,8 +2490,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                             item.getMaterialTypeId(),
                             item.getMaterialName(),
                             poQty,
-                            item.getReceivedQuantity(),
-                            item.getUnit(),
+                            cumulativeQty,
+                            poItem != null ? poItem.getUnit() : item.getUnit(),
                             userId,
                             finalOwnerUserId,
                             finalOwnerName);
