@@ -69,6 +69,53 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
 
     private PurchaseServiceImpl service;
 
+    @Test
+    void supplementalReceiptCompletesOrder_doesNotCreateAnotherShortage() {
+        assertSupplementalException("10", "8", "2", "个", null);
+    }
+
+    @Test
+    void supplementalReceiptStillShort_reportsOnlyCumulativeRemainder() {
+        assertSupplementalException("10", "7", "1", "箱", "2");
+    }
+
+    @Test
+    void supplementalReceiptOver_reportsOnlyCumulativeExcess() {
+        assertSupplementalException("10", "8", "3", "kg", "1");
+    }
+
+    private void assertSupplementalException(String ordered, String prior, String incoming, String unit, String expectedDifference) {
+        stubConfirmFlow(new BigDecimal(ordered), new BigDecimal(incoming));
+        PurchaseOrderItem orderItem = purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID).get(0);
+        orderItem.setReceivedQuantity(new BigDecimal(prior));
+        orderItem.setUnit(unit);
+        PurchaseReceiveRecord receipt = receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY).orElseThrow();
+        receipt.getItems().get(0).setUnit(unit);
+        var exceptions = mock(com.cretas.aims.repository.inventory.PurchaseExceptionRepository.class);
+        lenient().when(exceptions.save(any(com.cretas.aims.entity.inventory.PurchaseException.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        var exceptionService = new PurchaseExceptionServiceImpl(exceptions,
+                mock(com.cretas.aims.service.inventory.ReturnOrderService.class),
+                purchaseOrderItemRepository, purchaseOrderRepository);
+        ReflectionTestUtils.setField(service, "purchaseExceptionService", exceptionService);
+
+        service.confirmReceive(FACTORY, RECEIVE_ID, PURCHASER_ID);
+
+        assertEquals(0, new BigDecimal(prior).add(new BigDecimal(incoming)).compareTo(orderItem.getReceivedQuantity()));
+        if (expectedDifference == null) {
+            verify(exceptions, never()).save(any());
+        } else {
+            var captured = ArgumentCaptor.forClass(com.cretas.aims.entity.inventory.PurchaseException.class);
+            verify(exceptions).save(captured.capture());
+            assertEquals(0, new BigDecimal(expectedDifference).compareTo(captured.getValue().getExceptionQty()));
+            assertEquals(unit, captured.getValue().getUnit());
+            assertEquals(new BigDecimal(prior).add(new BigDecimal(incoming)).compareTo(new BigDecimal(ordered)) > 0
+                    ? com.cretas.aims.entity.enums.ReceiveExceptionType.OVER_RECEIVE
+                    : com.cretas.aims.entity.enums.ReceiveExceptionType.UNDER_RECEIVE,
+                    captured.getValue().getExceptionType());
+        }
+    }
+
     private static final String FACTORY      = "F006";
     private static final String PO_ID        = "PO-LSM-001";
     private static final String RECEIVE_ID   = "RCV-LSM-001";
