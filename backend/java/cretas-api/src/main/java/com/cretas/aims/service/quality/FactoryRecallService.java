@@ -32,6 +32,7 @@ import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.TraceabilityService;
 import com.cretas.aims.service.inventory.ReturnOrderService;
+import com.cretas.aims.service.unit.UnitContractService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
@@ -88,6 +89,9 @@ public class FactoryRecallService {
     private final TraceabilityService traceabilityService;
     private final LinkArrayService linkArrayService;
     private final ObjectMapper objectMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private UnitContractService unitContractService;
 
     /** Existing adjustment history is the only source of proof for post-receipt disposal. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -155,7 +159,8 @@ public class FactoryRecallService {
         List<ShipmentEvidence> evidence = shipmentEvidence(factoryId, batch);
         if (evidence.isEmpty()) {
             throw new BusinessException(409, "该批次没有可量化的已发货记录，不能发起召回")
-                    .withCode("RECALL_SHIPMENT_EVIDENCE_REQUIRED");
+                    .withCode("RECALL_SHIPMENT_EVIDENCE_REQUIRED")
+                    .withHint("请先核对已发货记录、出货数量和批次单位，再发起召回");
         }
 
         FinishedGoodsBatch finishedGoodsBatch = lockSourceFinishedGoods(factoryId, batch);
@@ -234,7 +239,8 @@ public class FactoryRecallService {
         ReturnLedger ledger = returnLedger(factoryId, event.getId(), batch, evidence, shipment);
         if (ledger.overage().signum() > 0) {
             throw new BusinessException(409, "历史退货数量超过该出货单实际数量: " + ledger.overage())
-                    .withCode("RECALL_RETURN_OVERAGE");
+                    .withCode("RECALL_RETURN_OVERAGE")
+                    .withHint("请核对历史退货数量与出货单实际数量后再登记");
         }
         for (ReturnOrder order : ledger.orders()) {
             if (isPending(order)) {
@@ -243,12 +249,14 @@ public class FactoryRecallService {
                     return returnSummary(order, batch);
                 }
                 throw new BusinessException(409, "该出货单已有待处理退货，请先完成或驳回原退货单")
-                        .withCode("RECALL_RETURN_PENDING");
+                        .withCode("RECALL_RETURN_PENDING")
+                        .withHint("请先完成或驳回该出货单已有的待处理退货");
             }
         }
         if (quantity.compareTo(ledger.remaining()) > 0) {
             throw new BusinessException(409, "退货数量超过该出货单剩余可登记数量: " + ledger.remaining())
-                    .withCode("RECALL_RETURN_QUANTITY_EXCEEDED");
+                    .withCode("RECALL_RETURN_QUANTITY_EXCEEDED")
+                    .withHint("请按出货单剩余可退数量调整本次登记数量");
         }
 
         CreateReturnOrderRequest request = new CreateReturnOrderRequest();
@@ -324,7 +332,8 @@ public class FactoryRecallService {
         }
         if (!blockers.isEmpty()) {
             throw new BusinessException(409, blockers.stream().map(FactoryRecallDTO.Blocker::getMessage)
-                    .collect(Collectors.joining("；"))).withCode("RECALL_CLOSE_BLOCKED");
+                    .collect(Collectors.joining("；"))).withCode("RECALL_CLOSE_BLOCKED")
+                    .withHint("请按阻断项逐项完成库存隔离、退货和客户确认后再结案");
         }
 
         event.setStatus(COMPLETED);
@@ -354,7 +363,8 @@ public class FactoryRecallService {
         RecallEvent event = findActiveEventForBatch(factoryId, batchId);
         if (event != null) {
             throw new BusinessException(409, "批次处于召回处理中，完成召回前不得放行库存")
-                    .withCode("RECALL_ACTIVE_RELEASE_BLOCKED");
+                    .withCode("RECALL_ACTIVE_RELEASE_BLOCKED")
+                    .withHint("请先完成或关闭该批次的召回流程，再放行库存");
         }
     }
 
@@ -450,12 +460,12 @@ public class FactoryRecallService {
                     && delivery.getStatus() != com.cretas.aims.entity.enums.SalesDeliveryStatus.DELIVERED)
                     || isBlank(delivery.getId()) || isBlank(delivery.getCustomerId())
                     || isBlank(delivery.getSalesOrderId()) || !Objects.equals(factoryId, delivery.getFactoryId())) continue;
-            if (!Objects.equals(source.getUnit(), row.getUnit())) continue;
+            if (!sameUnit(factoryId, source.getUnit(), row.getUnit())) continue;
             if (seenDeliveries.contains(delivery.getId())) continue;
             List<SalesDeliveryItem> matching = nullSafe(delivery.getItems()).stream()
                     .filter(item -> item != null && Objects.equals(source.getId(), item.getFinishedGoodsBatchId())
                             && Objects.equals(batch.getProductTypeId(), item.getProductTypeId())
-                            && Objects.equals(source.getUnit(), item.getUnit()))
+                            && sameUnit(factoryId, source.getUnit(), item.getUnit()))
                     .toList();
             AllocationEvidence allocation = allocationEvidence(factoryId, source, batch, delivery);
             if (matching.isEmpty() && allocation.quantity().signum() <= 0) continue;
@@ -468,7 +478,8 @@ public class FactoryRecallService {
                     || allocation.missingPrice();
             if (missingPrice || prices.size() != 1) {
                 throw new BusinessException(409, "出货单同 SKU 实际单价不唯一，不能安全生成召回退货")
-                        .withCode("RECALL_SHIPMENT_PRICE_AMBIGUOUS");
+                        .withCode("RECALL_SHIPMENT_PRICE_AMBIGUOUS")
+                        .withHint("请先核对该出货单同 SKU 的实际单价，确保只有一个有效单价");
             }
             ShipmentEvidenceBuilder builder = byDelivery.computeIfAbsent(delivery.getId(), ignored ->
                     new ShipmentEvidenceBuilder(delivery, prices.iterator().next(), source.getUnit()));
@@ -504,7 +515,7 @@ public class FactoryRecallService {
             if (item == null || !Objects.equals(delivery.getId(), item.getDeliveryRecordId())
                     || !Objects.equals(batch.getProductTypeId(), item.getProductTypeId())) continue;
             String unit = allocation.getUnit() == null ? item.getUnit() : allocation.getUnit();
-            if (!Objects.equals(source.getUnit(), unit)) continue;
+            if (!sameUnit(factoryId, source.getUnit(), unit)) continue;
             quantity = quantity.add(allocation.getAllocatedQty());
             if (item.getUnitPrice() == null) missingPrice = true;
             else prices.add(item.getUnitPrice().stripTrailingZeros());
@@ -527,7 +538,8 @@ public class FactoryRecallService {
                 relevant.add(order);
             } else if (multiShipmentSameOrder) {
                 throw new BusinessException(409, "历史退货缺少精确出货单关联，无法在多个 shipment 间猜分配")
-                        .withCode("RECALL_RETURN_SHIPMENT_AMBIGUOUS");
+                        .withCode("RECALL_RETURN_SHIPMENT_AMBIGUOUS")
+                        .withHint("请补齐退货与具体出货单的关联后重试");
             } else {
                 relevant.add(order);
             }
@@ -594,7 +606,8 @@ public class FactoryRecallService {
                 || (batch.getProductionPlanId() != null
                 && !Objects.equals(batch.getProductionPlanId(), source.getProductionPlanId()))) {
             throw new BusinessException(409, "找不到与生产批次严格匹配的成品库存批次")
-                    .withCode("RECALL_SOURCE_FINISHED_BATCH_REQUIRED");
+                    .withCode("RECALL_SOURCE_FINISHED_BATCH_REQUIRED")
+                    .withHint("请核对同工厂、同 SKU、同批次号和原生单位的成品库存批次");
         }
         return source;
     }
@@ -635,7 +648,7 @@ public class FactoryRecallService {
                     && item.getQuantity() != null && candidate.getProducedQuantity() != null
                     && returnedBatchStatusAllowsReceipt(candidate, factoryId, item.getQuantity())
                     && Objects.equals(batch.getProductTypeId(), candidate.getProductTypeId())
-                    && Objects.equals(source.getUnit(), candidate.getUnit())
+                    && sameUnit(factoryId, source.getUnit(), candidate.getUnit())
                     && zero(candidate.getShippedQuantity())
                     && zero(candidate.getReservedQuantity())
                     && returnedQuantityProven(candidate, item.getQuantity(), factoryId));
@@ -807,7 +820,8 @@ public class FactoryRecallService {
 
     private ProductionBatch requireBatchForEvent(String factoryId, RecallEvent event) {
         ProductionBatch batch = batchForEvent(factoryId, event);
-        if (batch == null) throw new BusinessException(409, "召回事件缺少生产批次关联");
+        if (batch == null) throw new BusinessException(409, "召回事件缺少生产批次关联")
+                .withHint("请先补齐召回事件与生产批次的关联后重试");
         return batch;
     }
 
@@ -881,7 +895,8 @@ public class FactoryRecallService {
 
     private void ensureOpen(RecallEvent event) {
         if (COMPLETED.equals(event.getStatus())) {
-            throw new BusinessException(409, "召回事件已结案");
+            throw new BusinessException(409, "召回事件已结案")
+                    .withHint("请刷新召回状态，已结案事件不能重复操作");
         }
     }
 
@@ -945,7 +960,8 @@ public class FactoryRecallService {
 
     private ShipmentEvidence findShipment(String factoryId, List<ShipmentEvidence> evidence, String shipmentId) {
         return evidence.stream().filter(item -> Objects.equals(item.shipmentId(), shipmentId)).findFirst()
-                .orElseThrow(() -> new BusinessException(409, "出货单不是该召回批次的真实出货记录"));
+                .orElseThrow(() -> new BusinessException(409, "出货单不是该召回批次的真实出货记录")
+                        .withHint("请从该召回批次的真实出货记录中选择出货单"));
     }
 
     private String sourceUnit(String factoryId, ProductionBatch batch) {
@@ -984,6 +1000,17 @@ public class FactoryRecallService {
     }
 
     private boolean isBlank(String value) { return value == null || value.isBlank(); }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
+    }
 
     private static <T> List<T> nullSafe(List<T> source) { return source == null ? Collections.emptyList() : source; }
 

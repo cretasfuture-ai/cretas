@@ -1147,7 +1147,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         // AR/AP冲减 already happened at approve time — just flip status.
         boolean withGoods = Boolean.TRUE.equals(order.getWithGoods());
         if (withGoods) {
-            if (order.getReturnDate() == null) throw new BusinessException(409, "实物退货缺少会计日期，请核对后重试");
+            if (order.getReturnDate() == null) throw new BusinessException(409, "实物退货缺少会计日期，请核对后重试")
+                    .withHint("请停止完成退货并联系管理员核对原退货日期，确认来源完整且会计期间开放后再继续");
             accountingPeriodService.assertOpen(factoryId, order.getReturnDate().getYear(), order.getReturnDate().getMonthValue());
         }
         List<ResolvedSalesReturnLine> resolvedSalesReturnLines = List.of();

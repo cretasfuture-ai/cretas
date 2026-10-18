@@ -64,17 +64,20 @@ public class ReturnOrderFinancialFollowUpService {
         // The same parent row is locked by the original return completion path.
         // Serializing on it prevents two recovery requests from creating two credits.
         if (!ReturnOrderRowLock.lockAndRefresh(entityManager, order, factoryId)) {
-            throw new BusinessException(409, "退货单已失效，请刷新后重试");
+            throw new BusinessException(409, "退货单已失效，请刷新后重试")
+                    .withHint("请刷新销售退货详情，确认退货仍为有效状态后重新提交应收调整");
         }
         if (!Objects.equals(factoryId, order.getFactoryId()) || !eligible(order)) {
             throw new BusinessException(409, "仅已完成的实物销售退货可重新提交应收调整")
-                    .withCode("RETURN_ADJUSTMENT_NOT_ELIGIBLE");
+                    .withCode("RETURN_ADJUSTMENT_NOT_ELIGIBLE")
+                    .withHint("请在销售退货详情完成实物入库并经审批，再提交应收调整");
         }
         List<ArApTransaction> rows = adjustments(factoryId, order);
         String state = ReturnAdjustmentEvidence.state(order, rows);
         if ("APPROVED".equals(state)) {
             throw new BusinessException(409, "该退货应收调整已经生效，请勿重复提交")
-                    .withCode("RETURN_ADJUSTMENT_ALREADY_APPROVED");
+                    .withCode("RETURN_ADJUSTMENT_ALREADY_APPROVED")
+                    .withHint("请打开退货财务跟进确认已有应收调整，无需重复提交");
         }
         if ("PENDING".equals(state)) {
             return rows.stream().filter(row -> row.getApprovalStatus() == ArApApprovalStatus.PENDING)
@@ -82,7 +85,8 @@ public class ReturnOrderFinancialFollowUpService {
         }
         if (!"REJECTED".equals(state) && !"MISSING".equals(state)) {
             throw new BusinessException(409, "原退货调整证据不一致，请先由财务核对")
-                    .withCode("RETURN_ADJUSTMENT_INCONSISTENT");
+                    .withCode("RETURN_ADJUSTMENT_INCONSISTENT")
+                    .withHint("请打开退货财务跟进和应收应付调整列表，核对原调整后再重提");
         }
         String previous = rows.stream().map(ArApTransaction::getId).sorted().limit(1).findFirst().orElse("");
         return arApService.recordAdjustment(factoryId, CounterpartyType.CUSTOMER, order.getCounterpartyId(),
@@ -98,7 +102,8 @@ public class ReturnOrderFinancialFollowUpService {
         ReturnOrder order = returnOrderRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "退货单不存在"));
         if (!Objects.equals(factoryId, order.getFactoryId())) throw new BusinessException(403, "退货单不属于当前工厂");
-        if (order.getReturnType() != ReturnType.SALES_RETURN) throw new BusinessException(409, "本入口仅处理销售退货应收调整");
+        if (order.getReturnType() != ReturnType.SALES_RETURN) throw new BusinessException(409, "本入口仅处理销售退货应收调整")
+                .withHint("请从销售退货详情的财务跟进入口提交应收调整");
         return order;
     }
 

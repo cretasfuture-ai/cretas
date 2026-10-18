@@ -784,15 +784,18 @@ public class ReturnRefundService {
         if (id == null || id.isBlank()) throw conflict("退货缺少源销售单，不能猜测退款归属");
         if (lock) {
             return salesOrderRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
-                    .orElseThrow(() -> new BusinessException(409, "源销售单不存在或不属于当前工厂"));
+                    .orElseThrow(() -> new BusinessException(409, "源销售单不存在或不属于当前工厂")
+                            .withHint("请停止退款并联系管理员核对退货单与源销售单归属，确认来源完整后再重试"));
         }
         return salesOrderRepository.findById(id).filter(row -> Objects.equals(factoryId, row.getFactoryId()))
-                .orElseThrow(() -> new BusinessException(409, "源销售单不存在或不属于当前工厂"));
+                .orElseThrow(() -> new BusinessException(409, "源销售单不存在或不属于当前工厂")
+                        .withHint("请停止退款并联系管理员核对退货单与源销售单归属，确认来源完整后再重试"));
     }
 
     private void lockOrder(ReturnOrder order, String factoryId) {
         if (!ReturnOrderRowLock.lockAndRefresh(entityManager, order, factoryId)) {
-            throw new BusinessException(409, "退货单已失效，请刷新后重试");
+            throw new BusinessException(409, "退货单已失效，请刷新后重试")
+                    .withHint("请刷新退货详情后重新发起退款");
         }
     }
 
@@ -837,7 +840,8 @@ public class ReturnRefundService {
     }
 
     private static BusinessException conflict(String message) {
-        return new BusinessException(409, message);
+        return new BusinessException(409, message)
+                .withHint("请打开退货详情核对源销售单与客户，再重新提交退款");
     }
 
     private record Eligibility(String status, String reason, BigDecimal refundableAmount) {

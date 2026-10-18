@@ -65,11 +65,13 @@ public class DisposalCostAccountingService {
         }
         var result = new java.util.ArrayList<Voucher>();
         for (Voucher original : findHistory(factoryId,String.valueOf(recordId))) {
-            if (!factoryId.equals(original.getFactoryId())) throw new BusinessException(409,"报废凭证工厂不匹配");
+            if (!factoryId.equals(original.getFactoryId())) throw new BusinessException(409,"报废凭证工厂不匹配")
+                    .withHint("请在当前工厂的报废凭证历史中核对来源，不要跨工厂查看");
             result.add(original);
             if (original.getReversalVoucherId() == null) {
                 if (original.getStatus() == com.cretas.aims.entity.enums.VoucherStatus.REVERSED) {
-                    throw new BusinessException(409,"已冲销的报废凭证缺少红字关联，请财务核对");
+                    throw new BusinessException(409,"已冲销的报废凭证缺少红字关联，请财务核对")
+                            .withHint("请联系财务管理员核对原凭证与红字冲销凭证关联，确认完整后再继续");
                 }
                 continue;
             }
@@ -80,7 +82,8 @@ public class DisposalCostAccountingService {
                     || !"VOUCHER_REVERSAL".equals(red.getSourceBusinessType())
                     || !original.getId().equals(red.getOriginalVoucherId())
                     || !original.getId().equals(red.getSourceBusinessId())) {
-                throw new BusinessException(409,"报废红字凭证与原凭证关联不完整，请财务核对");
+                throw new BusinessException(409,"报废红字凭证与原凭证关联不完整，请财务核对")
+                        .withHint("请联系财务管理员核对原凭证与红字冲销凭证关联，确认完整后再继续");
             }
             result.add(red);
         }
@@ -97,10 +100,12 @@ public class DisposalCostAccountingService {
         }
         if (amount == null || amount.signum() < 0) {
             throw new BusinessException(409, "处置缺少真实成本，不能生成费用凭证")
-                    .withCode("DISPOSAL_COST_REQUIRED");
+                    .withCode("DISPOSAL_COST_REQUIRED")
+                    .withHint("请由财务通过现有批次成本更正流程补齐真实成本，再回到报损审批过账");
         }
         if (record.getFinishedGoodsBatchId() == null && record.getMaterialBatchId() == null) {
-            throw new BusinessException(409, "处置缺少可核验库存批次").withCode("DISPOSAL_COST_EVIDENCE_INCOMPLETE");
+            throw new BusinessException(409, "处置缺少可核验库存批次").withCode("DISPOSAL_COST_EVIDENCE_INCOMPLETE")
+                    .withHint("请联系质量和财务管理员核对原报废审批的库存批次证据，已审批记录不能直接修改");
         }
         LocalDate date = disposalDate(record);
         accountingPeriodService.assertOpen(record.getFactoryId(), date.getYear(), date.getMonthValue());
@@ -132,7 +137,8 @@ public class DisposalCostAccountingService {
         BigDecimal unitCost = batch.getUnitCost();
         if (unitCost == null || unitCost.signum() < 0) {
             throw new BusinessException(409, "成本证据不完整，不能重估报废")
-                    .withCode("DISPOSAL_COST_EVIDENCE_INCOMPLETE");
+                    .withCode("DISPOSAL_COST_EVIDENCE_INCOMPLETE")
+                    .withHint("请由财务通过现有批次成本更正流程核对成品批次单位成本后，再处理报废成本");
         }
         List<DisposalRecord> records = entityManager.createQuery(
                         "select d from DisposalRecord d where d.factoryId=:factory and "
@@ -142,7 +148,8 @@ public class DisposalCostAccountingService {
         for (DisposalRecord record : records) {
             assertPhysicalDisposal(record);
             if (record.getDisposalQuantity() == null || record.getDisposalQuantity().signum() <= 0) {
-                throw new BusinessException(409, "处置数量缺失，不能重估报废").withCode("DISPOSAL_QUANTITY_REQUIRED");
+                throw new BusinessException(409, "处置数量缺失，不能重估报废").withCode("DISPOSAL_QUANTITY_REQUIRED")
+                        .withHint("请联系质量和财务管理员核对原报废审批数量，确认原始证据完整后再更正成本");
             }
             LocalDate date = disposalDate(record);
             accountingPeriodService.assertOpen(factoryId, date.getYear(), date.getMonthValue());
@@ -151,7 +158,8 @@ public class DisposalCostAccountingService {
             String id = String.valueOf(record.getId());
             List<Voucher> history = findHistory(factoryId,id);
             Voucher active = history.stream().filter(v -> v.getStatus() == com.cretas.aims.entity.enums.VoucherStatus.POSTED)
-                    .reduce((a, b) -> { throw new BusinessException(409, "同一处置存在多个有效凭证").withCode("DISPOSAL_VOUCHER_DUPLICATE"); })
+                    .reduce((a, b) -> { throw new BusinessException(409, "同一处置存在多个有效凭证").withCode("DISPOSAL_VOUCHER_DUPLICATE")
+                            .withHint("请联系财务管理员通过现有冲销流程核对重复凭证，再重估"); })
                     .orElse(null);
             BigDecimal activeAmount = active == null ? null : voucherAmount(active);
             if (active != null) {
@@ -166,7 +174,8 @@ public class DisposalCostAccountingService {
                 continue;
             }
             if (previous != null && activeAmount != null && previous.compareTo(activeAmount) != 0) {
-                throw new BusinessException(409, "处置实际损失与有效凭证金额不一致").withCode("DISPOSAL_VOUCHER_AMOUNT_MISMATCH");
+                throw new BusinessException(409, "处置实际损失与有效凭证金额不一致").withCode("DISPOSAL_VOUCHER_AMOUNT_MISMATCH")
+                        .withHint("请联系财务管理员核对实际损失与有效凭证金额，通过成本更正流程处理后再重估");
             }
             if (active != null) {
                 voucherService.reverseDisposalCostVoucher(factoryId,record.getId(),active.getId(),actorId);
@@ -178,12 +187,14 @@ public class DisposalCostAccountingService {
             if (active == null && !history.isEmpty()
                     && (previous == null || previous.signum() != 0 || !allHistoryReversed)) {
                 throw new BusinessException(409, "处置历史存在但没有唯一有效凭证，需人工核对后补齐")
-                        .withCode("DISPOSAL_VOUCHER_HISTORY_INCOMPLETE");
+                        .withCode("DISPOSAL_VOUCHER_HISTORY_INCOMPLETE")
+                        .withHint("请联系财务管理员核对报废凭证历史，通过成本更正流程补齐后再重估");
             }
             if (active == null && history.isEmpty() && !hasPhysicalEvidence(factoryId, finishedGoodsBatchId,
                     record.getId(), record.getDisposalQuantity())) {
                 throw new BusinessException(409, "历史报废缺少 SCRAP 数量日志证据，不能补齐凭证")
-                        .withCode("DISPOSAL_PHYSICAL_EVIDENCE_REQUIRED");
+                        .withCode("DISPOSAL_PHYSICAL_EVIDENCE_REQUIRED")
+                        .withHint("请先在报损记录核对库存报废数量调整日志，再由财务核对凭证完整性");
             }
             if (revised.signum() > 0) {
                 voucherService.createManual(factoryId, VoucherType.EXPENSE, date,
@@ -201,20 +212,23 @@ public class DisposalCostAccountingService {
         if (record == null || !"SCRAP".equals(record.getDisposalType())
                 && !"DESTROY".equals(record.getDisposalType())) {
             throw new BusinessException(409, "仅 SCRAP/DESTROY 支持费用过账；RECYCLE/RETURN/DONATE 口径尚未定义")
-                    .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED");
+                    .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED")
+                    .withHint("请由财务确认处置方式的过账口径，按实际报废或销毁的业务事实处理");
         }
     }
 
     private LocalDate disposalDate(DisposalRecord record) {
         LocalDateTime value = record.getDisposalDate();
-        if (value == null) throw new BusinessException(409, "处置日期缺失").withCode("DISPOSAL_DATE_REQUIRED");
+        if (value == null) throw new BusinessException(409, "处置日期缺失").withCode("DISPOSAL_DATE_REQUIRED")
+                .withHint("请联系质量和财务管理员核对原报废审批日期和会计期间，已审批记录不能直接修改");
         return value.toLocalDate();
     }
 
     private static String inventoryCode(DisposalRecord record) {
         if (record.getFinishedGoodsBatchId() != null) return INVENTORY_CODE;
         if (record.getMaterialBatchId() != null) return "1403";
-        throw new BusinessException(409, "处置库存科目无法确定").withCode("DISPOSAL_INVENTORY_ACCOUNT_REQUIRED");
+        throw new BusinessException(409, "处置库存科目无法确定").withCode("DISPOSAL_INVENTORY_ACCOUNT_REQUIRED")
+                .withHint("请联系质量和财务管理员核对原报废审批的库存批次来源，确认原始证据完整后再继续");
     }
 
     private List<VoucherEntrySpec> entries(BigDecimal amount, String inventoryCode, String description) {
@@ -226,7 +240,8 @@ public class DisposalCostAccountingService {
         if (voucher.getTotalDebit() == null || voucher.getTotalCredit() == null
                 || voucher.getTotalDebit().compareTo(voucher.getTotalCredit()) != 0
                 || voucher.getEntries() == null || voucher.getEntries().isEmpty()) {
-            throw new BusinessException(409, "处置历史凭证不平或缺少分录").withCode("DISPOSAL_VOUCHER_INVALID");
+            throw new BusinessException(409, "处置历史凭证不平或缺少分录").withCode("DISPOSAL_VOUCHER_INVALID")
+                    .withHint("请由财务打开报废凭证历史，核对借贷平衡和分录");
         }
         return voucher.getTotalDebit();
     }
@@ -241,11 +256,13 @@ public class DisposalCostAccountingService {
                 || !date.equals(voucher.getVoucherDate())
                 || voucherAmount(voucher).compareTo(expectedAmount) != 0) {
             throw new BusinessException(409, "处置已有凭证状态、来源、日期或金额不一致")
-                    .withCode("DISPOSAL_VOUCHER_INVALID");
+                    .withCode("DISPOSAL_VOUCHER_INVALID")
+                    .withHint("请在凭证历史核对来源、状态、日期和金额后再继续");
         }
         String inventory = inventoryCode(record);
         if (voucher.getEntries().size() != 2) {
-            throw new BusinessException(409, "处置凭证分录结构不正确").withCode("DISPOSAL_VOUCHER_INVALID");
+            throw new BusinessException(409, "处置凭证分录结构不正确").withCode("DISPOSAL_VOUCHER_INVALID")
+                    .withHint("请由财务打开凭证详情，核对分录是否完整后再继续");
         }
         boolean expense = false;
         boolean stock = false;
@@ -259,7 +276,8 @@ public class DisposalCostAccountingService {
         }
         if (!expense || !stock) {
             throw new BusinessException(409, "处置凭证必须为 6711 借、库存科目贷")
-                    .withCode("DISPOSAL_VOUCHER_INVALID");
+                    .withCode("DISPOSAL_VOUCHER_INVALID")
+                    .withHint("请由财务核对凭证详情，确保 6711 借方与库存科目贷方金额一致");
         }
     }
 

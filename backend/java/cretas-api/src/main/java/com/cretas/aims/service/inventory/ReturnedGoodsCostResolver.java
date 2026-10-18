@@ -8,6 +8,7 @@ import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,9 @@ public class ReturnedGoodsCostResolver {
 
     private final ReturnOrderRepository returnOrderRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
+    @Autowired
+    private UnitContractService unitContractService;
 
     @Autowired(required = false)
     private ReturnOrderItemRepository returnOrderItemRepository;
@@ -109,7 +113,7 @@ public class ReturnedGoodsCostResolver {
         if (source == null || !factoryId.equals(source.getFactoryId())
                 || !returnedBatch.getProductTypeId().equals(source.getProductTypeId())
                 || !item.getBatchNumber().trim().equals(source.getBatchNumber())
-                || !returnedBatch.getUnit().equals(source.getUnit())
+                || !sameUnit(factoryId, returnedBatch.getUnit(), source.getUnit())
                 || source.getUnitCost() == null || source.getUnitCost().signum() < 0) {
             return Optional.empty();
         }
@@ -133,6 +137,17 @@ public class ReturnedGoodsCostResolver {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     public record ResolvedCost(BigDecimal unitCost, String sourceBatchId, String sourceBatchNumber,

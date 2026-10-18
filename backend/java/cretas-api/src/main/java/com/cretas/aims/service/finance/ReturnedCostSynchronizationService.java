@@ -9,6 +9,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,8 @@ public class ReturnedCostSynchronizationService {
     private final FinishedGoodsAdjustmentLogRepository logs;
     private final AccountingPeriodService periods;
     private final DisposalCostAccountingService disposals;
+    @org.springframework.beans.factory.annotation.Autowired
+    private UnitContractService unitContractService;
     @PersistenceContext private EntityManager entityManager;
 
     @Transactional
@@ -61,7 +64,7 @@ public class ReturnedCostSynchronizationService {
                     || !Objects.equals(source.getProductTypeId(),line.getProductTypeId())
                     || !Objects.equals(source.getBatchNumber(),line.getBatchNumber())
                     || !Objects.equals(child.getProductTypeId(),source.getProductTypeId())
-                    || !Objects.equals(child.getUnit(),source.getUnit())
+                    || !sameUnit(factory, child.getUnit(), source.getUnit())
                     || (child.getOwnership()!=null && child.getOwnership()!=InventoryOwnership.COMPANY_OWNED)
                     || line.getQuantity()==null || line.getQuantity().signum()<=0
                     || child.getProducedQuantity()==null || child.getProducedQuantity().signum()<0)
@@ -118,5 +121,18 @@ public class ReturnedCostSynchronizationService {
         if(date==null || periods.getStatus(factory,date.getYear(),date.getMonthValue())!=AccountingPeriod.Status.OPEN)
             throw conflict("退货或再次出货期间已进入结账，请先反结账再更正来源成本");
     }
-    private BusinessException conflict(String message) {return new BusinessException(409,message).withCode("RETURN_COST_SYNC_BLOCKED");}
+    private BusinessException conflict(String message) {return new BusinessException(409,message)
+            .withCode("RETURN_COST_SYNC_BLOCKED")
+            .withHint("请核对退货单、回库批次、原生单位和成本快照后重试");}
+
+    private boolean sameUnit(String factory, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factory, left);
+        String canonicalRight = unitContractService.storageUnit(factory, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
+    }
 }

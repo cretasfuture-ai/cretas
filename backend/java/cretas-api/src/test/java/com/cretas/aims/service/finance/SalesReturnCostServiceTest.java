@@ -14,11 +14,13 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.ReturnedGoodsCostResolver;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -40,12 +42,17 @@ class SalesReturnCostServiceTest {
     @Mock private ReturnedGoodsCostResolver returnedGoodsCostResolver;
     @Mock private VoucherRepository voucherRepository;
     @Mock private FinishedGoodsAdjustmentLogRepository adjustmentLogRepository;
+    @Mock private UnitContractService unitContractService;
     private SalesReturnCostService service;
 
     @BeforeEach
     void setUp() {
         service = new SalesReturnCostService(returnOrderRepository, finishedGoodsBatchRepository,
                 returnedGoodsCostResolver, voucherRepository, adjustmentLogRepository);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(any(), any())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+        ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
     }
 
     @Test

@@ -1074,7 +1074,8 @@ public class ArApServiceImpl implements ArApService {
     private static void rejectRefundReversalSource(String sourceType) {
         if (com.cretas.aims.service.voucher.ReturnRefundReversalEvidence.SOURCE.equals(sourceType)) {
             throw new BusinessException(409, "退款撤销必须从原退款详情审核，确保应收、资金和凭证同步处理")
-                    .withCode("RETURN_REFUND_REVERSAL_USE_SOURCE");
+                    .withCode("RETURN_REFUND_REVERSAL_USE_SOURCE")
+                    .withHint("请打开原退款详情，从退款撤销入口提交审核");
         }
     }
 
@@ -1105,7 +1106,8 @@ public class ArApServiceImpl implements ArApService {
                 .setParameter("factoryId", factoryId)
                 .getResultList();
         if (locked == null || locked.isEmpty()) {
-            throw new BusinessException(409, "调整记录已失效，请刷新后重试");
+            throw new BusinessException(409, "调整记录已失效，请刷新后重试")
+                    .withHint("请刷新应收应付调整列表后重新处理该记录");
         }
         entityManager.refresh(txn);
         lockCounterparty(txn.getCounterpartyType(), txn.getCounterpartyId(), factoryId);

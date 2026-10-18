@@ -40,6 +40,7 @@ import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.inventory.ByproductCreditService;
 import com.cretas.aims.service.production.DefectCountResolver;
 import com.cretas.aims.service.voucher.VoucherService;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -99,6 +100,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     /** 盘点补录待办要读结单时的三态结论 (2026-08-27)。 */
     private final ProductionSettlementRepository productionSettlementRepository;
     private final ProductionBatchRepository productionBatchRepository;
+
+    @Autowired
+    private UnitContractService unitContractService;
 
     @Autowired(required = false)
     private UserRepository userRepository;
@@ -351,7 +355,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         DefectCountResolver.BackfillDecision backfill = DefectCountResolver.decideBatchBackfill(
                 resolved, batches.size());
         boolean backfilledBatch = false;
-        if (backfill.write() && hasProvableLegacyGoodOutput(settlement, batches.get(0))) {
+        if (backfill.write() && hasProvableLegacyGoodOutput(factoryId, settlement, batches.get(0))) {
             com.cretas.aims.entity.ProductionBatch batch = batches.get(0);
             batch.setDefectQuantity(backfill.quantity());
             batch.setActualQuantity(batch.getGoodQuantity().add(backfill.quantity()));
@@ -389,7 +393,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
      * good output is already independently readable.  A defect count alone cannot
      * manufacture that good quantity or its unit.
      */
-    private boolean hasProvableLegacyGoodOutput(ProductionSettlement settlement,
+    private boolean hasProvableLegacyGoodOutput(String factoryId, ProductionSettlement settlement,
                                                 com.cretas.aims.entity.ProductionBatch batch) {
         if (settlement == null || batch == null
                 || settlement.getActualFinishedQuantity() == null
@@ -400,11 +404,22 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         String batchUnit = batch.getUnit().trim();
         String settlementUnit = settlement.getQuantityUnit().trim();
-        if (batchUnit.isEmpty() || settlementUnit.isEmpty() || !Objects.equals(batchUnit, settlementUnit)) {
+        if (batchUnit.isEmpty() || settlementUnit.isEmpty() || !sameUnit(factoryId, batchUnit, settlementUnit)) {
             return false;
         }
         return batch.getActualQuantity().compareTo(settlement.getActualFinishedQuantity()) == 0
                 && batch.getGoodQuantity().compareTo(batch.getActualQuantity()) == 0;
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     

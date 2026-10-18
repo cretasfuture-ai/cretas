@@ -51,7 +51,8 @@ public class QualityDispositionDecisionGuard {
         else entityManager.refresh(current);
         if (!Objects.equals(factoryId, current.getFactoryId())
                 || !Objects.equals(batchId, current.getProductionBatchId())) {
-            throw new BusinessException(409, "质检记录已变更，请重新查看后操作");
+            throw new BusinessException(409, "质检记录已变更，请重新查看后操作")
+                    .withHint("请刷新质检详情后重新发起处置");
         }
         return current;
     }
@@ -73,10 +74,12 @@ public class QualityDispositionDecisionGuard {
                 if (!Objects.equals(current.getFactoryId(), audit.getFactoryId())) continue;
                 if (Boolean.TRUE.equals(audit.getRequiresApproval())
                         && audit.getApprovalStatus() == DecisionAuditLog.ApprovalStatus.PENDING) {
-                    throw new BusinessException(409, "本批次已有待审批处置，请先处理原申请");
+                    throw new BusinessException(409, "本批次已有待审批处置，请先处理原申请")
+                            .withHint("请打开本批次待审批处置申请，完成审批或驳回后再发起");
                 }
                 if (inspection.getId().equals(current.getId()) && completedTerminal(audit)) {
-                    throw new BusinessException(409, "本次质检已有最终处置；如需重新处理，请先登记新的复检记录");
+                    throw new BusinessException(409, "本次质检已有最终处置；如需重新处理，请先登记新的复检记录")
+                            .withHint("请在质检详情登记新的复检记录后再发起处置");
                 }
             }
         }
@@ -88,7 +91,8 @@ public class QualityDispositionDecisionGuard {
         // The caller has not approved its own row yet, so only an earlier winner is terminal.
         for (DecisionAuditLog audit : audits.findByEntityTypeAndEntityIdOrderByCreatedAtDesc("QualityInspection", current.getId())) {
             if (Objects.equals(current.getFactoryId(), audit.getFactoryId()) && completedTerminal(audit)) {
-                throw new BusinessException(409, "本次质检已有最终处置，不能再批准冲突申请");
+                throw new BusinessException(409, "本次质检已有最终处置，不能再批准冲突申请")
+                        .withHint("请打开该质检的处置申请，使用当前有效申请完成审批");
             }
         }
     }
@@ -97,7 +101,8 @@ public class QualityDispositionDecisionGuard {
         for (QualityInspection other : batchInspections(current)) {
             if (other.getCreatedAt() != null && current.getCreatedAt() != null
                     && other.getCreatedAt().isAfter(current.getCreatedAt())) {
-                throw new BusinessException(409, "本批次已有更新的质检记录，请重新复核后申请处置");
+                throw new BusinessException(409, "本批次已有更新的质检记录，请重新复核后申请处置")
+                        .withHint("请刷新批次质检记录，按最新记录重新复核并申请处置");
             }
         }
     }
@@ -109,7 +114,8 @@ public class QualityDispositionDecisionGuard {
         try {
             return TERMINAL.contains(objectMapper.readTree(audit.getOutputResult()).path("action").asText());
         } catch (Exception invalidAudit) {
-            throw new BusinessException(409, "原处置记录无法核对，请先检查处置历史");
+            throw new BusinessException(409, "原处置记录无法核对，请先检查处置历史")
+                    .withHint("请联系质量管理员打开处置历史核对原申请记录后再操作");
         }
     }
 }

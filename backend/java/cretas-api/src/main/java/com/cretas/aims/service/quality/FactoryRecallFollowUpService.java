@@ -17,6 +17,7 @@ import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,9 @@ public class FactoryRecallFollowUpService {
     private final DisposalRecordRepository disposalRecordRepository;
     private final ArApTransactionRepository arApTransactionRepository;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private UnitContractService unitContractService;
 
     @Transactional(readOnly = true)
     public FactoryRecallDTO.FollowUpView get(String factoryId, Long eventId) {
@@ -171,7 +175,7 @@ public class FactoryRecallFollowUpService {
                 if (source == null || !Objects.equals(factoryId, source.getFactoryId())
                         || !Objects.equals(batch.getBatchNumber(), source.getBatchNumber())
                         || !Objects.equals(batch.getProductTypeId(), source.getProductTypeId())
-                        || !Objects.equals(unit, source.getUnit())) {
+                        || !sameUnit(factoryId, unit, source.getUnit())) {
                     issues.add(issue("RETURN_SOURCE_AMBIGUOUS", "退货行稳定来源与召回批次不一致，无法映射退回库存"));
                     return new StockResolution(false);
                 }
@@ -189,7 +193,7 @@ public class FactoryRecallFollowUpService {
                             && (!stableLineLink || Objects.equals(matchedItem.getId(), candidate.getReturnOrderItemId()))
                             && Objects.equals(batch.getProductTypeId(), candidate.getProductTypeId())
                             && unit != null && !unit.isBlank()
-                            && Objects.equals(unit, candidate.getUnit())
+                            && sameUnit(factoryId, unit, candidate.getUnit())
                             && candidate.getShippedQuantity() != null
                             && candidate.getShippedQuantity().signum() == 0
                             && candidate.getReservedQuantity() != null
@@ -379,6 +383,17 @@ public class FactoryRecallFollowUpService {
 
     private FactoryRecallDTO.FollowUpIssue issue(String code, String message) {
         return FactoryRecallDTO.FollowUpIssue.builder().code(code).message(message).build();
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     private record StockEvidence(BigDecimal remaining, BigDecimal disposed,

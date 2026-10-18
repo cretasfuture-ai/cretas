@@ -6,6 +6,8 @@ import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.enums.DefectCountOutcome;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
+import com.cretas.aims.service.unit.UnitContractService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -20,13 +22,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class StocktakeDefectCompletionTest {
     @Mock ProductionSettlementRepository settlements;
     @Mock ProductionBatchRepository batches;
+    @Mock UnitContractService unitContractService;
     @InjectMocks FactoryStocktakeServiceImpl service;
+
+    @BeforeEach
+    void wireUnitContract() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString()))
+                .thenAnswer(invocation -> com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+    }
 
     private ProductionSettlement pending(String factory, String plan) {
         ProductionSettlement s = new ProductionSettlement();

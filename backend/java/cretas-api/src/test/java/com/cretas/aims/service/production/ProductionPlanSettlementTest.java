@@ -91,6 +91,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -145,6 +146,7 @@ class ProductionPlanSettlementTest {
     @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
     @Mock private CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -153,6 +155,9 @@ class ProductionPlanSettlementTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
         service = new ProductionPlanServiceImpl(
                 productionPlanRepository, productionBatchRepository,
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
@@ -183,6 +188,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard",
                 customerSuppliedSettlementCoverageGuard);
         ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
+        ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
         lenient().when(workshopReservationService.releaseForPlan(any(), any()))
                 .thenReturn(BigDecimal.ZERO);

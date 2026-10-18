@@ -86,6 +86,7 @@ public class ReturnVoucherPostingGuard {
     }
 
     private BusinessException invalid(String message) {
-        return new BusinessException(409, message).withCode("RETURN_VOUCHER_EVIDENCE_INVALID");
+        return new BusinessException(409, message).withCode("RETURN_VOUCHER_EVIDENCE_INVALID")
+                .withHint("请打开退货财务跟进，核对实物退货、应收调整和凭证后再过账");
     }
 }

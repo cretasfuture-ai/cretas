@@ -62,6 +62,7 @@ final class ShipmentCostRows {
     }
     private static BusinessException incomplete() {
         return new BusinessException(409, "出货批次扣库记录或单位不完整，本次未结转，请核对实际出货批次和数量")
-                .withCode("SHIPMENT_COST_SOURCE_INCOMPLETE");
+                .withCode("SHIPMENT_COST_SOURCE_INCOMPLETE")
+                .withHint("请联系仓库和财务管理员核对发货详情、扣库记录和单位，确认原始证据完整后重新结转");
     }
 }

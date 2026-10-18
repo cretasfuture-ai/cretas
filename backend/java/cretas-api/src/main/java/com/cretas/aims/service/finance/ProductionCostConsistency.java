@@ -68,7 +68,8 @@ public class ProductionCostConsistency {
             LocalDate date = value instanceof java.sql.Date d ? d.toLocalDate() : (LocalDate) value;
             if (periods.getStatus(factoryId, date.getYear(), date.getMonthValue()) != AccountingPeriod.Status.OPEN) {
                 throw new BusinessException(409, String.format("%d-%02d 已进入结账流程，请先由财务反结账，再更正成本并重新结转", date.getYear(), date.getMonthValue()))
-                        .withCode("COST_PERIOD_NOT_OPEN");
+                        .withCode("COST_PERIOD_NOT_OPEN")
+                        .withHint("请联系财务在结账管理中反结账对应期间，再更正成本并重新结转");
             }
         }
     }
@@ -77,7 +78,8 @@ public class ProductionCostConsistency {
         if (date == null) throw new BusinessException(400,"确认发货前必须填写实际发运日期").withCode("SHIPMENT_DATE_REQUIRED");
         if (periods.getStatus(factoryId,date.getYear(),date.getMonthValue()) != AccountingPeriod.Status.OPEN) {
             throw new BusinessException(409,"出货日期所属期间未开放，请先由财务核对或反结账，再确认出货")
-                    .withCode("SHIPMENT_PERIOD_NOT_OPEN");
+                    .withCode("SHIPMENT_PERIOD_NOT_OPEN")
+                    .withHint("请联系财务在结账管理中核对或反结账对应期间，再确认发货");
         }
     }
 

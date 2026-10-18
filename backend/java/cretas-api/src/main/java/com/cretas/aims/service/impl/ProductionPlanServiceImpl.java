@@ -147,6 +147,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.finance.ReturnedCostSynchronizationService returnedCostSynchronizationService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public ProductionPlanServiceImpl(
             ProductionPlanRepository productionPlanRepository,
@@ -6310,14 +6313,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 && Objects.equals(outputProductTypeId, batchProductTypeId)
                 && (isBlank(line.getReportedBatchNumber()) || isBlank(batch.getBatchNumber())
                 || Objects.equals(line.getReportedBatchNumber(), batch.getBatchNumber()))
-                && Objects.equals(canonicalReceiptUnit(line.getQuantityUnit()),
-                canonicalReceiptUnit(batch.getUnit()));
+                && sameUnit(factoryId, line.getQuantityUnit(), batch.getUnit());
     }
 
     private boolean hasMatchingQualityUnit(ProductionSettlement settlement, ProductionBatch batch) {
-        String settlementUnit = canonicalReceiptUnit(trimToNull(settlement.getQuantityUnit()));
-        String batchUnit = canonicalReceiptUnit(trimToNull(batch.getUnit()));
-        return settlementUnit != null && batchUnit != null && settlementUnit.equals(batchUnit);
+        return sameUnit(settlement.getFactoryId(), settlement.getQuantityUnit(), batch.getUnit());
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        String leftValue = trimToNull(left);
+        String rightValue = trimToNull(right);
+        if (leftValue == null || rightValue == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, leftValue);
+        String canonicalRight = unitContractService.storageUnit(factoryId, rightValue);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     @Override

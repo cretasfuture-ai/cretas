@@ -18,6 +18,7 @@ import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -48,6 +50,7 @@ class FactoryRecallFollowUpServiceContractTest {
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private DisposalRecordRepository disposalRecordRepository;
     @Mock private ArApTransactionRepository arApTransactionRepository;
+    @Mock private UnitContractService unitContractService;
 
     private FactoryRecallFollowUpService service;
     private RecallEvent event;
@@ -60,6 +63,10 @@ class FactoryRecallFollowUpServiceContractTest {
     void setUp() {
         service = new FactoryRecallFollowUpService(recallService, finishedGoodsBatchRepository,
                 disposalRecordRepository, arApTransactionRepository, new ObjectMapper());
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+        ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
         event = RecallEvent.builder().id(EVENT_ID).factoryId(FACTORY).status("COMPLETED").build();
         batch = new ProductionBatch();
         batch.setId(BATCH_ID);

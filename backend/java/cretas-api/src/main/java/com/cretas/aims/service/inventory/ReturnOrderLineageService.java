@@ -8,6 +8,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,9 @@ public class ReturnOrderLineageService {
 
     private final ReturnOrderRepository returnOrderRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private UnitContractService unitContractService;
 
     @Transactional(readOnly = true)
     public ReturnOrderLineageDTO get(String factoryId, String returnOrderId) {
@@ -110,8 +114,19 @@ public class ReturnOrderLineageService {
                 .filter(batch -> batch != null
                         && Objects.equals(factoryId, batch.getFactoryId())
                         && Objects.equals(item.getProductTypeId(), batch.getProductTypeId())
-                        && (source.unit() == null || Objects.equals(source.unit(), batch.getUnit())))
+                        && (source.unit() == null || sameUnit(factoryId, source.unit(), batch.getUnit())))
                 .toList();
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     private ReturnOrderLineageDTO.ReturnedStock toReturnedStock(FinishedGoodsBatch batch) {

@@ -16,6 +16,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.service.inventory.ReturnedGoodsCostResolver;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -42,6 +43,8 @@ public class SalesReturnCostService {
     private final ReturnedGoodsCostResolver returnedGoodsCostResolver;
     private final VoucherRepository voucherRepository;
     private final FinishedGoodsAdjustmentLogRepository adjustmentLogRepository;
+    @org.springframework.beans.factory.annotation.Autowired
+    private UnitContractService unitContractService;
 
     /** Returns the unrounded total cost of physical sales returns in the date range. */
     public BigDecimal returnedCost(String factoryId, LocalDate start, LocalDate end) {
@@ -183,7 +186,7 @@ public class SalesReturnCostService {
                 || !Objects.equals(item.getProductTypeId(), source.getProductTypeId())
                 || !Objects.equals(item.getBatchNumber(), source.getBatchNumber())
                 || !Objects.equals(returnedBatch.getProductTypeId(), source.getProductTypeId())
-                || !Objects.equals(returnedBatch.getUnit(), source.getUnit())) {
+                || !sameUnit(factoryId, returnedBatch.getUnit(), source.getUnit())) {
             throw conflict("退货行的源批次、SKU、单位或工厂不匹配");
         }
         if (source.getUnitCost() == null || source.getUnitCost().signum() < 0) {
@@ -238,6 +241,18 @@ public class SalesReturnCostService {
     }
 
     private static BusinessException conflict(String message) {
-        return new BusinessException(409, message);
+        return new BusinessException(409, message)
+                .withHint("请核对已完成实物退货、回库批次和源批次单位成本后重试");
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 }

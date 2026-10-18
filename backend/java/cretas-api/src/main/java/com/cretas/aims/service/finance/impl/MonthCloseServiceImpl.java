@@ -69,7 +69,8 @@ public class MonthCloseServiceImpl implements MonthCloseService {
                 || !java.util.Objects.equals(year,finalReport.getEndYear())
                 || !java.util.Objects.equals(month,finalReport.getStartMonth())
                 || !java.util.Objects.equals(month,finalReport.getEndMonth())) {
-            throw new BusinessException(409,"最终利润表与工厂或结账期间不一致");
+            throw new BusinessException(409,"最终利润表与工厂或结账期间不一致")
+                    .withHint("请从当前工厂重新生成该期间最终利润表，再提交结账核对");
         }
         return reconcile(factoryId, year, month, finalReport);
     }
@@ -87,7 +88,8 @@ public class MonthCloseServiceImpl implements MonthCloseService {
         boolean alreadyClosed = existing
                 .map(p -> p.getStatus() == AccountingPeriod.Status.CLOSED)
                 .orElse(false);
-        if (finalClose && !alreadyClosed) throw new BusinessException(409, "最终对账需要已结账期间");
+        if (finalClose && !alreadyClosed) throw new BusinessException(409, "最终对账需要已结账期间")
+                .withHint("请先完成该期间结账，再生成最终利润表并进行最终对账");
         checks.add(MonthCloseReconciliationDTO.CheckItem.builder()
                 .name("期间状态")
                 .passed(finalClose || !alreadyClosed)

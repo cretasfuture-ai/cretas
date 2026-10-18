@@ -154,6 +154,7 @@ public final class ReturnRefundEvidence {
     }
 
     private static BusinessException invalid(String message) {
-        return new BusinessException(409, message).withCode("RETURN_REFUND_EVIDENCE_INVALID");
+        return new BusinessException(409, message).withCode("RETURN_REFUND_EVIDENCE_INVALID")
+                .withHint("请打开退款详情核对退货、应收调整和凭证后再继续");
     }
 }

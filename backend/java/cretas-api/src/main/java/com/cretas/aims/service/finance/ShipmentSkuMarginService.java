@@ -128,7 +128,8 @@ public class ShipmentSkuMarginService {
         return revenue.signum() == 0 ? null : profit.multiply(BigDecimal.valueOf(100)).divide(revenue, 2, RoundingMode.HALF_UP);
     }
     private static BusinessException incomplete(String message) {
-        return new BusinessException(409, message).withCode("SHIPMENT_MARGIN_SOURCE_INCOMPLETE");
+        return new BusinessException(409, message).withCode("SHIPMENT_MARGIN_SOURCE_INCOMPLETE")
+                    .withHint("请在出货来源明细核对缺失的批次、成本或售价，联系仓库和财务管理员确认原始证据后重新查询");
     }
     private record Key(String product, String unit) {}
     private record Line(Long id, String product, String name, String unit, BigDecimal quantity, BigDecimal price) {}

@@ -51,3 +51,8 @@ Scope：源45日常提交涉及的backend Java/Python、tools/vision-lab、web-a
 整合专项：新主线补入的财务报表测试构造参数、批量调整事务fixture补齐锁/期间依赖；并发样例移除与真实工厂串行锁冲突的屏障，保留两笔均成功/余额22和同笔一赢家断言。16类首轮69项中4项fixture失败保留日志；其余13类通过，修后3类专项15项通过。最终制品绑定后续冻结SHA重新执行全部132类。
 
 退款权限交叉收口（P36-REFUND-SCOPE-20261018 / P36-REFUND-SCOPE-TESTS-20261018，Base 31947a157f）：主线行级范围与新增RETURN_REFUND/RETURN_REFUND_REVERSAL来源同时生效时，旧owner投影不识别两来源。现统一复用退款申请→实物退货→销售单的同厂、未删除、SALES方向、订单/客户一致链路；AR另约束来源与交易类型配对，拒绝采购链接及错往来方。退款原凭证、红字镜像、来源访问和scalar详情与CTE列表共享该来源。精确return-refunds/requestId入口纳入现有DataScope拦截，受限账号同厂他人/断链/外厂/删除/缺失样本在业务service前403，本人200，ALL沿既有策略。真实PG18项单字段破坏/恢复、alias ledger、退款+撤销净额、JPA真实来源、原凭证/镜像ID及净额与路由校验均覆盖。退款8类47项与路由2类58项通过，均0失败/0错误/0跳过。增量编译曾保留旧@Query内联常量class导致一次JPA读数作废，已刷新消费者并取得通过；最终官方clean132类必须完整重编，319版1198项及制品不得替代最终版本证明。两任务随本PR合入释放scope。
+
+
+全量发布门禁补正（P36-RELEASE-UNIT-GUARDS / P36-RELEASE-ACTION-HINTS，Base 5a477da1cec9）：首次最终全量CI39129502037真实测得4项新增失败，未合并或部署。13处裸单位比较改为当前factoryId下现有UnitContractService.storageUnit，缺服务明确失败，保留个/件/只区分和不同单位负例。九个服务为FactoryStocktake、ReturnedCostSynchronization、SalesReturnCost、ProductionPlan、Traceability、ReturnOrderLineage、ReturnedGoodsCostResolver、FactoryRecallFollowUp、FactoryRecall；十个直接构造测试补齐单位依赖，增加box/盒正例及缺服务拒绝断言。84个新增409抛出点补充中文动作提示，缺口281恢复至原冻结197；独立真值复核将已审批报损、已付款退款、历史出货的虚假编辑提示改为核对原始证据和真实批次成本更正/退款撤销入口，不更改业务守卫。AR枚举测试保留原迁移不变，校验后续退款迁移67的实际ck_aat_type定义。
+
+17类192项定向测试通过，0失败/0错误/0跳过。首次定向编译曾发现测试anyString导入遗漏，执行后又发现3个Mockito构造夹具未自动注入字段，已显式补齐并保留原业务断言。独立风险复核未发现上述增量P0/P1语义阻塞；单位目录重复读取的性能优化为后续非阻塞项，本批不扩大。两项scope随本PR合入释放。最终冻结版本必须另跑正式统一制品、真实JPA、CI全量；主线#1027收货行级范围接入后增加其4个目标测试并重新验证新库启动，旧5a的通过证据不冒充新源码通过。

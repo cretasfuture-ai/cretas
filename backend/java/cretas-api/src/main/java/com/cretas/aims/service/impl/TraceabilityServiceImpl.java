@@ -100,6 +100,9 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     @Autowired
     private BatchLineageEdgeRepository batchLineageEdgeRepository;
 
+    @Autowired
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
 
     /** 血缘查询允许的根节点类型（与 BatchLineageEdge.sourceType 取值集一致）。 */
     private static final Set<String> LINEAGE_ROOT_TYPES = Set.of(
@@ -486,7 +489,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                         .outputWeight(doubleValue(s.payload.get("outputQuantity")))
                         .inputUnit(processSheetInputUnit(s.payload))
                         .outputUnit(processSheetOutputUnit(s.payload))
-                        .lossRate(calcLossRate(s.payload.get("inputQuantity"), s.payload.get("outputQuantity"),
+                        .lossRate(calcLossRate(factoryId, s.payload.get("inputQuantity"), s.payload.get("outputQuantity"),
                                 processSheetInputUnit(s.payload), processSheetOutputUnit(s.payload)))
                         .passRate(null)
                         // Process-sheet payloads do not carry a verified worker identity.
@@ -541,8 +544,9 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         }
     }
 
-    private Double calcLossRate(Object inputValue, Object outputValue, String inputUnit, String outputUnit) {
-        if (inputUnit == null || outputUnit == null || !inputUnit.equals(outputUnit)) {
+    private Double calcLossRate(String factoryId, Object inputValue, Object outputValue,
+                                String inputUnit, String outputUnit) {
+        if (inputUnit == null || outputUnit == null || !sameUnit(factoryId, inputUnit, outputUnit)) {
             return null;
         }
         Double input = doubleValue(inputValue);
@@ -551,6 +555,17 @@ public class TraceabilityServiceImpl implements TraceabilityService {
             return null;
         }
         return (input - output) / input;
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     private String processSheetInputUnit(Map<String, Object> payload) {

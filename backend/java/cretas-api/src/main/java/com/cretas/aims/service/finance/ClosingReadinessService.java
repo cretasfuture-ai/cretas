@@ -20,10 +20,12 @@ public class ClosingReadinessService {
         long drafts=vouchers.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
                 factory,VoucherStatus.DRAFT,range.atDay(1),range.atEndOfMonth());
         if(drafts>0) throw new BusinessException(409,"本期间还有"+drafts+"张待过账凭证，请先审核过账或作废，再锁账")
-                .withCode("CLOSING_PENDING_VOUCHERS");
+                .withCode("CLOSING_PENDING_VOUCHERS")
+                .withHint("请打开财务凭证列表，逐张审核过账或作废后再锁账");
         long pending=countPendingAdjustments(factory,year,month);
         if(pending>0) throw new BusinessException(409,"本期间还有"+pending+"笔应收应付调整待审核，请先处理后再锁账")
-                .withCode("CLOSING_PENDING_ADJUSTMENTS");
+                .withCode("CLOSING_PENDING_ADJUSTMENTS")
+                .withHint("请打开应收应付调整列表，完成待审核记录后再锁账");
     }
 
     public long countPendingAdjustments(String factory,int year,int month) {

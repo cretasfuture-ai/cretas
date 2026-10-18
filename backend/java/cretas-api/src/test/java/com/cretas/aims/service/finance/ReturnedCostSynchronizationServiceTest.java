@@ -2,6 +2,7 @@ package com.cretas.aims.service.finance;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.repository.inventory.*;
+import com.cretas.aims.service.unit.UnitContractService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,7 @@ import java.time.LocalDate;
 import java.util.*;
 import static org.mockito.Mockito.*;
 import static org.assertj.core.api.Assertions.*;
+import org.springframework.test.util.ReflectionTestUtils;
 class ReturnedCostSynchronizationServiceTest {
     final ReturnOrderItemRepository items=mock(ReturnOrderItemRepository.class);
     final ReturnOrderRepository orders=mock(ReturnOrderRepository.class);
@@ -19,10 +21,15 @@ class ReturnedCostSynchronizationServiceTest {
     final FinishedGoodsAdjustmentLogRepository logs=mock(FinishedGoodsAdjustmentLogRepository.class);
     final AccountingPeriodService periods=mock(AccountingPeriodService.class);
     final DisposalCostAccountingService disposals=mock(DisposalCostAccountingService.class);
+    final UnitContractService unitContractService=mock(UnitContractService.class);
     final EntityManager em=mock(EntityManager.class);final Query q=mock(Query.class,RETURNS_SELF);
     final ReturnedCostSynchronizationService service=new ReturnedCostSynchronizationService(items,orders,batches,logs,periods,disposals);
     FinishedGoodsBatch source,child;
     @BeforeEach void setup() {
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+        ReflectionTestUtils.setField(service,"unitContractService",unitContractService);
         ReflectionTestUtils.setField(service,"entityManager",em);when(em.createNativeQuery(anyString())).thenReturn(q);
         source=fg("SOURCE","B1","8.0000");child=fg("CHILD","RTN-RO-1","7.0000");child.setReturnOrderItemId(1L);
         var line=new ReturnOrderItem();line.setId(1L);line.setReturnOrderId("RO");line.setBatchNumber("B1");line.setProductTypeId("SKU");line.setQuantity(BigDecimal.ONE);

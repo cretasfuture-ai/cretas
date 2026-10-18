@@ -72,6 +72,7 @@ class TraceabilityServiceImplTest {
     @Mock private SalesDeliveryItemRepository salesDeliveryItemRepository;
     @Mock private SalesDeliveryRecordRepository salesDeliveryRecordRepository;
     @Mock private BatchLineageEdgeRepository batchLineageEdgeRepository;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -79,6 +80,11 @@ class TraceabilityServiceImplTest {
 
     @BeforeEach
     void wireOptionalSalesRepositories() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
         // Mockito constructor injection does not subsequently wire optional Spring fields.
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         ReflectionTestUtils.setField(service, "salesDeliveryItemBatchAllocationRepository", salesDeliveryItemBatchAllocationRepository);

@@ -274,8 +274,9 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (record != null && record.getStatus() != SalesDeliveryStatus.DRAFT
                 && record.getStatus() != SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
                 && record.getStatus() != SalesDeliveryStatus.PICKED) {
-            throw new BusinessException(409,"出货后批次分配已冻结，不能清空；请走现有退货或更正流程")
-                    .withCode("BATCH_ALLOCATION_FROZEN");
+            throw new BusinessException(409,"出货后批次分配已冻结，不能清空，请走现有退货或更正流程")
+                    .withCode("BATCH_ALLOCATION_FROZEN")
+                    .withHint("请在发货详情进入退货或更正流程处理已出货记录，不能清空批次分配");
         }
         allocationRepository.deleteByFactoryIdAndDeliveryItemId(factoryId, deliveryItemId);
     }

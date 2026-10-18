@@ -266,13 +266,15 @@ public class VoucherServiceImpl implements VoucherService {
         Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
         if (!VoucherPostingLock.lockAndRefresh(entityManager, v, factoryId)) {
-            throw new BusinessException(409, "凭证已失效，请刷新后重试");
+            throw new BusinessException(409, "凭证已失效，请刷新后重试")
+                    .withHint("请刷新财务凭证列表，确认凭证状态后重新操作");
         }
         if (v.getStatus() != VoucherStatus.DRAFT) {
             throw new IllegalStateException("仅待过账凭证可执行此操作，请刷新查看当前状态");
         }
         if (v.getEntries() == null || v.getEntries().isEmpty()) {
-            throw new BusinessException(409, "凭证没有分录，请先补全后过账");
+            throw new BusinessException(409, "凭证没有分录，请先补全后过账")
+                    .withHint("请由财务在凭证详情核对并补齐分录后再过账");
         }
         v.validateBalanced();
         if ("RETURN_ORDER".equals(v.getSourceBusinessType()) || "RETURN_REFUND".equals(v.getSourceBusinessType())) {
@@ -342,7 +344,8 @@ public class VoucherServiceImpl implements VoucherService {
 
         // Use the same lock as posting, so a stale DRAFT cannot erase a concurrently posted voucher.
         if (!VoucherPostingLock.lockAndRefresh(entityManager, v, factoryId)) {
-            throw new BusinessException(409, "凭证已失效，请刷新后重试");
+            throw new BusinessException(409, "凭证已失效，请刷新后重试")
+                    .withHint("请刷新财务凭证列表，确认凭证状态后重新操作");
         }
 
         // H-BUG-4 (2026-06-21 transcript-e2e R1): 已作废凭证不可重复"作废" (幂等终态)。
@@ -358,11 +361,13 @@ public class VoucherServiceImpl implements VoucherService {
         }
         if ("RETURN_REFUND".equals(v.getSourceBusinessType())) {
             throw new BusinessException(409, "客户退款凭证已有人工付款事实，不支持通用作废或冲销，请由财务核对")
-                    .withCode("RETURN_REFUND_VOID_FORBIDDEN");
+                    .withCode("RETURN_REFUND_VOID_FORBIDDEN")
+                    .withHint("请从退款详情核对退款流水，并使用退款撤销流程处理");
         }
         if ("DISPOSAL_RECORD".equals(v.getSourceBusinessType()) || "DISPOSAL_RECORD_REVISION".equals(v.getSourceBusinessType())) {
             throw new BusinessException(409,"报废凭证不能单独作废或冲销，请通过成本更正流程同步处理库存损失和账务")
-                    .withCode("DISPOSAL_VOUCHER_VOID_FORBIDDEN");
+                    .withCode("DISPOSAL_VOUCHER_VOID_FORBIDDEN")
+                    .withHint("请联系财务管理员从来源批次的成本更正流程同步处理，不能单独作废报废凭证");
         }
         // 红字冲销凭证本身 (original_voucher_id 非 null) 不允许再被作废/冲销 — 它已是账务终态。
         if (v.getOriginalVoucherId() != null) {
@@ -400,16 +405,19 @@ public class VoucherServiceImpl implements VoucherService {
         if (!Objects.equals(factoryId,record.getFactoryId()) || !"APPROVED".equals(record.getStatus())
                 || !Boolean.TRUE.equals(record.getIsApproved()) || record.getActualLoss()==null || record.getActualLoss().signum()<=0
                 || record.getDisposalDate()==null || !("SCRAP".equals(record.getDisposalType()) || "DESTROY".equals(record.getDisposalType()))) {
-            throw new BusinessException(409,"报废审批、日期或实际损失证据不完整，不能冲销");
+            throw new BusinessException(409,"报废审批、日期或实际损失证据不完整，不能冲销")
+                    .withHint("请核对报废审批、日期和实际损失后，再从成本更正流程冲销");
         }
         Voucher original=voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId,factoryId)
                 .orElseThrow(()->new BusinessException(404,"报废凭证不存在或不属于当前工厂"));
-        if (!VoucherPostingLock.lockAndRefresh(entityManager,original,factoryId)) throw new BusinessException(409,"报废凭证已失效");
+        if (!VoucherPostingLock.lockAndRefresh(entityManager,original,factoryId)) throw new BusinessException(409,"报废凭证已失效")
+                .withHint("请刷新报废凭证历史，确认当前凭证状态后再冲销");
         String id=String.valueOf(disposalId), type=original.getSourceBusinessType(), source=original.getSourceBusinessId();
         if (!("DISPOSAL_RECORD".equals(type) && id.equals(source)
                 || "DISPOSAL_RECORD_REVISION".equals(type) && source!=null && source.matches(id+"#r[1-9]\\d*"))
                 || original.getOriginalVoucherId()!=null || original.getReversalVoucherId()!=null) {
-            throw new BusinessException(409,"凭证与本次报废来源不匹配，不能冲销");
+            throw new BusinessException(409,"凭证与本次报废来源不匹配，不能冲销")
+                    .withHint("请在报废记录中核对来源凭证后，从成本更正流程重试");
         }
         com.cretas.aims.service.finance.DisposalCostAccountingService.validatePostedVoucher(original,record,
                 record.getDisposalDate().toLocalDate(),record.getActualLoss(),type,source);
@@ -437,7 +445,8 @@ public class VoucherServiceImpl implements VoucherService {
         }
         if (request.getStatus() != PaymentRequestStatus.PAID) {
             throw new BusinessException(409, "仅已付款退款申请可以撤销")
-                    .withCode("RETURN_REFUND_REVERSAL_STATUS_INVALID");
+                    .withCode("RETURN_REFUND_REVERSAL_STATUS_INVALID")
+                    .withHint("请打开退款详情确认已付款后，再提交退款撤销");
         }
         if (request.getReturnOrderId() == null || request.getArapTransactionId() == null) {
             throw reversalEvidenceInvalid("原退款申请缺少退货和退款流水来源");
@@ -498,7 +507,8 @@ public class VoucherServiceImpl implements VoucherService {
         // Acquire the same row lock as post/void, then refresh before choosing DRAFT/POSTED behavior.
         if (!VoucherPostingLock.lockAndRefresh(entityManager, original, factoryId)) {
             throw new BusinessException(409, "原退款凭证已失效，请刷新后重试")
-                    .withCode("RETURN_REFUND_REVERSAL_VOUCHER_STALE");
+                    .withCode("RETURN_REFUND_REVERSAL_VOUCHER_STALE")
+                    .withHint("请刷新退款详情和原凭证后重新提交撤销");
         }
         ReturnRefundEvidence.requireMatchingVoucher(factoryId, request, original);
         LocalDate reversalDate = reversal.getTransactionDate();
@@ -521,11 +531,13 @@ public class VoucherServiceImpl implements VoucherService {
             return original;
         }
         throw new BusinessException(409, "原退款凭证当前状态不可撤销")
-                .withCode("RETURN_REFUND_REVERSAL_VOUCHER_STATUS_INVALID");
+                .withCode("RETURN_REFUND_REVERSAL_VOUCHER_STATUS_INVALID")
+                .withHint("请刷新退款详情，按原退款凭证当前状态处理撤销");
     }
 
     private static BusinessException reversalEvidenceInvalid(String message) {
-        return new BusinessException(409, message).withCode("RETURN_REFUND_REVERSAL_EVIDENCE_INVALID");
+        return new BusinessException(409, message).withCode("RETURN_REFUND_REVERSAL_EVIDENCE_INVALID")
+                .withHint("请打开退款详情核对退货、应收调整和凭证后再撤销");
     }
 
     /**
@@ -645,7 +657,8 @@ public class VoucherServiceImpl implements VoucherService {
         }
         if ("RETURN_REFUND".equals(sourceBusinessType)) {
             throw new BusinessException(409, "客户退款凭证必须绑定真实退款流水，不支持手工凭证冒用")
-                    .withCode("RETURN_REFUND_MANUAL_FORBIDDEN");
+                    .withCode("RETURN_REFUND_MANUAL_FORBIDDEN")
+                    .withHint("请从退款详情发起真实退款流程，不能手工创建退款凭证");
         }
         // Only system closing products may enter the locked period being closed.
         // Stocktake, opening stock and wastage also reuse this method and must respect the gate.
@@ -769,21 +782,26 @@ public class VoucherServiceImpl implements VoucherService {
     private void assertReturnRefundEvidence(String factoryId, Voucher voucher) {
         if (paymentRequestRepo == null || arApTransactionRepo == null) {
             throw new BusinessException(409, "退款凭证证据校验服务未就绪")
-                    .withCode("RETURN_REFUND_EVIDENCE_UNAVAILABLE");
+                    .withCode("RETURN_REFUND_EVIDENCE_UNAVAILABLE")
+                    .withHint("请联系管理员恢复退款凭证校验服务后，再从退款详情重试");
         }
         PaymentRequest request = paymentRequestRepo.findById(voucher.getSourceBusinessId())
                 .orElseThrow(() -> new BusinessException(409, "找不到原退款记录")
-                        .withCode("RETURN_REFUND_EVIDENCE_INVALID"));
+                        .withCode("RETURN_REFUND_EVIDENCE_INVALID")
+                        .withHint("请打开退款详情核对原退款申请是否仍存在，再重试"));
         if (request.getReturnOrderId() == null || request.getArapTransactionId() == null) {
             throw new BusinessException(409, "退款凭证缺少退货和结清流水来源")
-                    .withCode("RETURN_REFUND_EVIDENCE_INVALID");
+                    .withCode("RETURN_REFUND_EVIDENCE_INVALID")
+                    .withHint("请停止过账并联系财务管理员核对退款申请、退货单和应收流水来源，不要手工补录已入账事实");
         }
         ReturnOrder order = returnOrderRepo.findById(request.getReturnOrderId())
                 .orElseThrow(() -> new BusinessException(409, "找不到退款原退货单")
-                        .withCode("RETURN_REFUND_EVIDENCE_INVALID"));
+                        .withCode("RETURN_REFUND_EVIDENCE_INVALID")
+                        .withHint("请停止过账并联系财务管理员核对原退款申请与销售退货单来源，确认关联完整后再重试"));
         ArApTransaction tx = arApTransactionRepo.findById(request.getArapTransactionId())
                 .orElseThrow(() -> new BusinessException(409, "找不到退款结清流水")
-                        .withCode("RETURN_REFUND_EVIDENCE_INVALID"));
+                        .withCode("RETURN_REFUND_EVIDENCE_INVALID")
+                        .withHint("请停止过账并联系财务管理员核对原退款应收流水，确认来源完整后再重试"));
         ReturnRefundEvidence.requireMatchingLedger(order, request, tx);
         ReturnRefundEvidence.requireMatchingVoucher(factoryId, request, voucher);
     }
@@ -793,7 +811,8 @@ public class VoucherServiceImpl implements VoucherService {
         assertReturnRefundEvidence(factoryId, voucher);
         PaymentRequest request = paymentRequestRepo.findById(voucher.getSourceBusinessId())
                 .orElseThrow(() -> new BusinessException(409, "找不到原退款记录")
-                        .withCode("RETURN_REFUND_EVIDENCE_INVALID"));
+                        .withCode("RETURN_REFUND_EVIDENCE_INVALID")
+                        .withHint("请打开退款详情核对原退款申请是否仍存在，再重试"));
         Voucher requested = Voucher.builder().factoryId(factoryId).sourceBusinessType("RETURN_REFUND")
                 .sourceBusinessId(request.getId()).voucherType(expectedType).status(voucher.getStatus())
                 .totalDebit(expectedEntries == null ? null : expectedEntries.stream()

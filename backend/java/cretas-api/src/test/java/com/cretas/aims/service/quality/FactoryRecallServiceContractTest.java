@@ -32,6 +32,7 @@ import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.TraceabilityService;
 import com.cretas.aims.service.inventory.ReturnOrderService;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -81,6 +82,7 @@ class FactoryRecallServiceContractTest {
     @Mock private EntityManager entityManager;
     @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
     @Mock private DisposalRecordRepository disposalRecordRepository;
+    @Mock private UnitContractService unitContractService;
 
     private ProductionBatch batch;
     private FinishedGoodsBatch source;
@@ -88,6 +90,10 @@ class FactoryRecallServiceContractTest {
 
     @BeforeEach
     void setUp() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
         ReflectionTestUtils.setField(service, "entityManager", entityManager);
         ReflectionTestUtils.setField(service, "finishedGoodsAdjustmentLogRepository",
                 finishedGoodsAdjustmentLogRepository);

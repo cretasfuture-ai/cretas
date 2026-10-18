@@ -8,6 +8,7 @@ import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,12 +33,18 @@ class ReturnedGoodsCostResolverContractTest {
     @Mock private ReturnOrderRepository returnOrderRepository;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private ReturnOrderItemRepository returnOrderItemRepository;
+    @Mock private UnitContractService unitContractService;
 
     private ReturnedGoodsCostResolver resolver;
 
     @BeforeEach
     void setUp() {
         resolver = new ReturnedGoodsCostResolver(returnOrderRepository, finishedGoodsBatchRepository);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+        ReflectionTestUtils.setField(resolver, "unitContractService", unitContractService);
         ReflectionTestUtils.setField(resolver, "returnOrderItemRepository", returnOrderItemRepository);
     }
 
@@ -58,6 +65,37 @@ class ReturnedGoodsCostResolverContractTest {
         assertThat(result.orElseThrow().unitCost()).isEqualByComparingTo("6.4165");
         assertThat(result.orElseThrow().sourceBatchId()).isEqualTo("source-PB-9");
         assertThat(result.orElseThrow().itemIndex()).isOne();
+    }
+
+    @Test
+    void resolvesEnglishPackagingAliasAgainstLocalizedStoredUnit() {
+        ReturnOrder order = returnOrder();
+        FinishedGoodsBatch source = source("PB-9", "SKU-9", "box", "6.4165");
+        FinishedGoodsBatch returned = returned("RTN-" + RETURN_NUMBER + "-1", "SKU-9", "盒", "10");
+
+        when(returnOrderRepository.findByFactoryIdAndReturnNumber(FACTORY, RETURN_NUMBER))
+                .thenReturn(Optional.of(order));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "PB-9"))
+                .thenReturn(Optional.of(source));
+
+        assertThat(resolver.resolve(FACTORY, returned)).isPresent();
+    }
+
+    @Test
+    void missingUnitContractFailsClosed() {
+        ReflectionTestUtils.setField(resolver, "unitContractService", null);
+        ReturnOrder order = returnOrder();
+        FinishedGoodsBatch source = source("PB-9", "SKU-9", "盒", "6.4165");
+        FinishedGoodsBatch returned = returned("RTN-" + RETURN_NUMBER + "-1", "SKU-9", "盒", "10");
+
+        when(returnOrderRepository.findByFactoryIdAndReturnNumber(FACTORY, RETURN_NUMBER))
+                .thenReturn(Optional.of(order));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "PB-9"))
+                .thenReturn(Optional.of(source));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> resolver.resolve(FACTORY, returned))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("UnitContractService is required for unit identity checks");
     }
 
     @Test

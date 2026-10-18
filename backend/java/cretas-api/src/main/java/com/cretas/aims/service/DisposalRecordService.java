@@ -236,7 +236,8 @@ public class DisposalRecordService implements IDisposalRecordService {
 
         if (!"SCRAP".equals(record.getDisposalType()) && !"DESTROY".equals(record.getDisposalType())) {
             throw new BusinessException(409, "仅 SCRAP/DESTROY 支持实物扣减与费用过账；其它处置方式需先确定财务口径")
-                    .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED");
+                    .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED")
+                    .withHint("请由财务确认处置方式的过账口径，实际报废或销毁的记录可从报损审批继续");
         }
 
         // 幂等防重 (2026-06-12, Codex Gate2): 已审批/已拒绝 (终态) 不可重复操作.
@@ -481,7 +482,8 @@ public class DisposalRecordService implements IDisposalRecordService {
     private BigDecimal valuate(BigDecimal qty, BigDecimal unitPrice, BigDecimal estimatedLoss) {
         if (unitPrice == null) {
             throw new BusinessException(409, "批次缺少真实单位成本，无法生成处置费用凭证")
-                    .withCode("DISPOSAL_COST_REQUIRED");
+                    .withCode("DISPOSAL_COST_REQUIRED")
+                    .withHint("请通过现有批次成本更正流程补齐成品批次成本，再回到报损审批重新提交");
         }
         return qty.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP);
     }

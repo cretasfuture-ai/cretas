@@ -98,6 +98,7 @@ public final class ReturnRefundReversalEvidence {
 
     private static BusinessException invalid() {
         return new BusinessException(409, "退款撤销的来源、审批、款项收回或冲销凭证证据不一致，请由财务核对")
-                .withCode("RETURN_REFUND_REVERSAL_EVIDENCE_INVALID");
+                .withCode("RETURN_REFUND_REVERSAL_EVIDENCE_INVALID")
+                .withHint("请由财务打开退款详情，核对来源、审批、收回款项和冲销凭证");
     }
 }

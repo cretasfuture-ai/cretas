@@ -9,10 +9,12 @@ import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -30,6 +32,18 @@ class ReturnOrderLineageServiceContractTest {
 
     @Mock private ReturnOrderRepository returnOrderRepository;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    @Mock private UnitContractService unitContractService;
+
+    private ReturnOrderLineageService service() {
+        ReturnOrderLineageService service = new ReturnOrderLineageService(
+                returnOrderRepository, finishedGoodsBatchRepository);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+        ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
+        return service;
+    }
 
     @Test
     void stableItemIdsKeepSameSkuLinesMappedAfterCollectionReorder() {
@@ -46,8 +60,7 @@ class ReturnOrderLineageServiceContractTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndReturnOrderItemId(FACTORY, 11L))
                 .thenReturn(List.of(returned("RTN-A", "SKU-SAME", "kg", "2", 11L)));
 
-        ReturnOrderLineageDTO result = new ReturnOrderLineageService(
-                returnOrderRepository, finishedGoodsBatchRepository).get(FACTORY, "RO-1");
+        ReturnOrderLineageDTO result = service().get(FACTORY, "RO-1");
 
         assertThat(result.getLines()).extracting(ReturnOrderLineageDTO.Line::getReturnOrderItemId)
                 .containsExactly(12L, 11L);
@@ -70,8 +83,7 @@ class ReturnOrderLineageServiceContractTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "SRC-B"))
                 .thenReturn(Optional.of(source("SRC-B-ID", "SRC-B", "SKU-SAME", "kg")));
 
-        ReturnOrderLineageDTO result = new ReturnOrderLineageService(
-                returnOrderRepository, finishedGoodsBatchRepository).get(FACTORY, "RO-LEGACY");
+        ReturnOrderLineageDTO result = service().get(FACTORY, "RO-LEGACY");
 
         assertThat(result.getLines()).extracting(ReturnOrderLineageDTO.Line::getSourceStatus)
                 .containsExactly("UNKNOWN", "UNKNOWN");
@@ -86,8 +98,7 @@ class ReturnOrderLineageServiceContractTest {
         order.setFactoryId("F007");
         when(returnOrderRepository.findById("RO-FOREIGN")).thenReturn(Optional.of(order));
 
-        assertThatThrownBy(() -> new ReturnOrderLineageService(
-                returnOrderRepository, finishedGoodsBatchRepository).get(FACTORY, "RO-FOREIGN"))
+        assertThatThrownBy(() -> service().get(FACTORY, "RO-FOREIGN"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("无权访问");
     }

@@ -460,7 +460,8 @@ public class CanvasFoodSafetyController {
 
         if (factoryRecallService != null && factoryRecallService.isManagedRecall(factoryId, id)) {
             throw new BusinessException(409, "该召回关联真实批次，请在「质量管理 → 批次召回」中核对退货与隔离库存后结案")
-                    .withCode("RECALL_USE_BUSINESS_WORKFLOW");
+                    .withCode("RECALL_USE_BUSINESS_WORKFLOW")
+                    .withHint("请打开「质量管理 → 批次召回」，按召回详情完成退货与隔离库存处理后结案");
         }
 
         // AUD-4 explicit version check
