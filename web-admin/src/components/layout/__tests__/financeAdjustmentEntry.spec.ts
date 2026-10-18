@@ -14,7 +14,7 @@ import type { FactoryType, User } from '@/types/auth';
 import { resolveModuleRegistryItem } from '@/config/moduleRegistry';
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-const permissionApi = vi.hoisted(() => ({ getPlatformPermissions: vi.fn(), getFactoryOverride: vi.fn(), getUserModuleAccess: vi.fn() }));
+const permissionApi = vi.hoisted(() => ({ getCurrentModulePermissions: vi.fn(), getPlatformPermissions: vi.fn(), getFactoryOverride: vi.fn(), getUserModuleAccess: vi.fn() }));
 vi.mock('@/api/request', () => ({ ...api, ApiError: class extends Error {} }));
 vi.mock('@/api/permissionApi', () => permissionApi);
 let pinia: ReturnType<typeof createPinia>;
@@ -24,6 +24,7 @@ function identity(factoryType: FactoryType = 'FACTORY', level: 'rw' | 'r' | '-' 
   useAuthStore().setUser(user);
   const p = usePermissionStore(); p.setRole('finance_manager', 'FIN-UNIT', factoryType, 86, { skipDbLoad: true });
   p.dbPermissions = { ...p.currentPermissions, finance: level }; p.isDbLoaded = true;
+  permissionApi.getCurrentModulePermissions.mockResolvedValue({ ...p.currentPermissions });
   permissionApi.getPlatformPermissions.mockResolvedValue(Object.entries(p.currentPermissions).map(([moduleCode, permissionLevel]) => ({ roleCode: 'finance_manager', moduleCode, permissionLevel })));
   return p;
 }

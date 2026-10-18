@@ -23,7 +23,7 @@ Task `NEW-FACTORY-BASICS-20261017`；Owner root；Base `74685b5c2b0c5fcbdd9745a6
 | 研发默认仓 | 仅开展研发时配置 | 无研发业务时不适用，不自动创建研发仓 | 本样本不开展研发，未配置，不作为缺陷 |
 | 供应商与客户 | 在实际业务档案UI维护，不宣称全部由蓝图自动生成 | 采购/销售可选择真实同工厂对象；必要交易资料按业务要求补齐 | [采购供应商](../dispatch/archive/2026-10-16-new-factory-purchase-receiving-ui.md)、[客户及报价](../dispatch/archive/2026-10-16-customer-quote-row-scope-ui.md)、开票/收款权限证据复用；本批读回1供应商/5客户 |
 | 工序、BOM与Workflow | 工序基础资料可随蓝图应用；BOM转正及Workflow双人发布独立进行 | 配置应用成功不等于工艺已发布，也不等于生产业务已完成 | [正式发布→生产结算闭环](../dispatch/archive/2026-10-16-platform-bom-workflow-ui.md)及[撤回重报](../dispatch/archive/2026-10-16-reversal-consumption-ui.md)复用 |
-| 员工、角色、审批 | 工厂管理员独立交付 | 不由基础资料清单自动宣称完成；各岗位授权与越权拒绝看专项结果 | [新厂权限](../dispatch/archive/2026-10-16-new-factory-permissions-ui.md)及后续三项客户快捷页专项证据复用，剩余岗位矩阵另批处理 |
+| 员工、角色、审批 | 工厂管理员独立交付 | 不由基础资料清单自动宣称完成；各岗位授权与越权拒绝看专项结果 | [新厂权限](../dispatch/archive/2026-10-16-new-factory-permissions-ui.md)、三项客户快捷页及[五岗位最终矩阵](new-factory-role-matrix-ui.md)证据；其他角色和未覆盖策略边界见矩阵说明 |
 
 ## 本批补验及代码边界
 

@@ -20,7 +20,7 @@ vi.mock('@/api/permissionApi', () => permissionApiMocks);
 /** 用真实权限矩阵造探针 —— 行为断言全部经它, 不拿手写的假权限自证。 */
 function probeFor(role: string) {
   const store = usePermissionStore();
-  store.setRole(role, 'F006', 'FACTORY', '1309');
+  store.setRole(role, 'F006', 'FACTORY', '1309', { skipDbLoad: true });
   return (module: string) => store.canWrite(module);
 }
 

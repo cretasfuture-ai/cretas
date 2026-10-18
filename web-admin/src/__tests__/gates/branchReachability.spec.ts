@@ -76,12 +76,8 @@ import {
 } from './lib/branchReachability';
 
 /**
- * 让 `loadFromDb` 立即失败。
- *
- * ⚠️ 这**不改变模型**：不 mock 时 axios 在 jsdom 里最终也失败，同样回落 hardcoded
- *    `PERMISSION_MATRIX`。落到的状态一模一样（`isDbLoaded === false &&
- *    dbPermissions === null`，`buildHarness` 逐个主体断言了这一点）。
- *    差别只有速度：实测 50 条路由 **4106ms → 86ms**（48 倍）。
+ * 网络调用不是本分析器的测量对象。buildHarness 显式 skipDbLoad，
+ * 保留按本地角色默认值量静态分支的原模型；真实加载失败的拒绝由权限 store 测试覆盖。
  */
 vi.mock('@/api/permissionApi', () => ({
   getPlatformPermissions: () => Promise.reject(new Error('gate: offline by design')),

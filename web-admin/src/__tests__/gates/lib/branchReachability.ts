@@ -85,8 +85,8 @@
  *  1. **主体是笛卡尔积**：25 个工厂角色 × 3 种工厂类型，其中不少组合现实中不存在
  *     （`restaurant_chef` 开在 `FACTORY` 租户）。方向是**保守的**：主体多 ⇒ 更容易
  *     举出反例 ⇒ 只会把「空转」误判成「有效」，不会反过来。棘轮量的是空转数，宁可少报。
- *  2. **合成 user 不带后端权限**：`loadFromDb` 在测试环境必然失败 ⇒ `dbPermissions`
- *     为 null ⇒ 走 hardcoded `PERMISSION_MATRIX`。这是「按角色默认权限」的模型，
+ *  2. **合成 user 不带后端权限**：显式跳过加载，`dbPermissions`
+ *     为 null，走 hardcoded `PERMISSION_MATRIX`。这是「按角色默认权限」的模型，
  *     不是「按某个真实账号」。L2 工厂覆盖 / L4 用户覆盖不在视野内。
  *  3. **只看视图文件自己**。视图里渲染的子组件（`src/components/**`）里的权限分支
  *     不在本分析器视野内 —— 那是下一道闸的事。
@@ -202,7 +202,7 @@ interface PiniaPermissionStore {
   hasAnyWriteAccess: () => boolean;
   canViewPrice: boolean;
   getPermissionLevel: (m: string) => string;
-  setRole: (role: string, factoryId?: string, factoryType?: string, userId?: string | number) => void;
+  setRole: (role: string, factoryId?: string, factoryType?: string, userId?: string | number, options?: { skipDbLoad?: boolean }) => void;
   [k: string]: unknown;
 }
 
@@ -1495,10 +1495,8 @@ let harnessPromise: Promise<Harness> | null = null;
 /**
  * 建起「真守卫 + 真 store」的台架。
  *
- * ⚠️ 调用方（spec）必须先 `vi.mock('@/api/permissionApi', …)` 让三个接口**立即失败** ——
- *    不 mock 也能跑（axios 在 jsdom 里最终也会失败并回落 hardcoded 矩阵），
- *    但实测慢 48 倍（4106ms / 50 条 → 86ms / 50 条）。
- *    落到的**状态是同一个**：`isDbLoaded === false && dbPermissions === null`，
+ * 显式跳过权限加载，隔离真实接口与网络失败的拒绝行为。
+ *    模型状态保持 `isDbLoaded === false && dbPermissions === null`，
  *    `buildHarness` 会逐个主体断言这一点。
  */
 export function buildHarness(): Promise<Harness> {
@@ -1524,7 +1522,13 @@ export function buildHarness(): Promise<Harness> {
       const auth = authMod.useAuthStore() as unknown as PiniaAuthStore;
       const perm = permMod.usePermissionStore() as unknown as PiniaPermissionStore;
       auth.user = syntheticUser(role, factoryType, isPlatform);
-      perm.setRole(role, isPlatform ? '' : PROBE_FACTORY_ID, factoryType, 1);
+      // This analyzer models local role defaults, not an authoritative API load.
+      perm.setRole(role, isPlatform ? '' : PROBE_FACTORY_ID, factoryType, 1, { skipDbLoad: true });
+      const setIdentity = perm.setRole.bind(perm);
+      perm.setRole = (nextRole, factory, type, user) => setIdentity(nextRole, factory, type, user, { skipDbLoad: true });
+      // Guards also request refresh. Keep this static-default model isolated there;
+      // permission predicates and the production guard itself remain real.
+      perm.loadFromDb = async () => undefined;
       principals.push({
         id: role + '@' + (factoryType || '-'),
         role,
@@ -1541,7 +1545,7 @@ export function buildHarness(): Promise<Harness> {
       for (const ft of FACTORY_TYPES) mk(role, ft, false);
     }
 
-    // 让 loadFromDb 的失败落定，再确认每个主体都停在「hardcoded 矩阵」这个模型上。
+    // 确认每个主体都停在「hardcoded 矩阵」这个明确隔离的模型上。
     await new Promise((r) => setTimeout(r, 0));
     for (const p of principals) {
       if (p.perm.isDbLoaded || p.perm.dbPermissions !== null) {

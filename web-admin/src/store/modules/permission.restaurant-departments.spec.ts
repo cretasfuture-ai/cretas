@@ -36,7 +36,7 @@ const DEPTS = [
 
 function storeAs(role: string, factoryType = 'RESTAURANT') {
   const store = usePermissionStore();
-  store.setRole(role, 'R001', factoryType, '1309');
+  store.setRole(role, 'R001', factoryType, '1309', { skipDbLoad: true });
   return store;
 }
 
