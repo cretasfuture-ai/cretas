@@ -134,6 +134,14 @@ export function downloadAttachmentUrl(id: string, factoryId?: string): string {
   return `/api/mobile${basePath(factoryId)}/${id}/download`;
 }
 
+/** Fresh authorized link for in-page private-file previews. Never persist the expiring URL. */
+export function getAttachmentDownloadUrl(
+  id: string,
+  factoryId?: string,
+): Promise<{ success: boolean; data: { url: string } }> {
+  return request.get(`${basePath(factoryId)}/${encodeURIComponent(id)}/download-url`);
+}
+
 /** 4. 取 OSS pre-signed PUT URL — 5min. */
 export function getUploadUrl(
   fileName: string,
