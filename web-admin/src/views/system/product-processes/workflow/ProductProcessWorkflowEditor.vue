@@ -184,7 +184,7 @@
             <template v-else>BOM v{{ line.activeVersion }}<template v-if="line.draftVersion != null"> → 草稿 v{{ line.draftVersion }}</template></template>
           </span>
           <span v-if="pendingAnchorMove" class="version-chip version-chip--move">
-            发布后移到「{{ pendingAnchorMove.name }}」
+            建议存放在「{{ pendingAnchorMove.name }}」
           </span>
           <span class="version-status-more">{{ bomVersionPanelOpen ? '收起' : '详情' }}</span>
         </button>
@@ -220,8 +220,8 @@
           </p>
           <p v-if="pendingAnchorMove" class="version-status-row" data-testid="pending-anchor-move">
             <strong>存放位置</strong>
-            发布后这张图会自动移到「{{ pendingAnchorMove.name }}」名下（系统研判：{{ workflowClassificationLabel }}）。
-            版本历史整条跟着走，已启用记录与在跑的生产计划不受影响。
+            系统建议将当前图存放在「{{ pendingAnchorMove.name }}」名下（系统研判：{{ workflowClassificationLabel }}）。
+            发布会保留当前存放位置、版本历史和历史身份；生产计划按真实终端产出 SKU 通过既有路线解析。
           </p>
           <p class="version-status-hint">
             画布上的辅料 / 包材显示的是可编辑版本的内容；用量与锅序直接在下方工序的
@@ -2410,14 +2410,12 @@ const derivedWorkflowClassification = computed(() => classifyCanvasTopology(
   stripBomOverlayEdges(flowEdges.value),
 ));
 /**
- * 发布后归属对象会被搬到哪 —— null = 不会搬。
+ * 基于画布拓扑给出存放位置建议 —— null = 当前归属已足够明确。
  *
- * 后端 PR #2488 在发布时按研判自动重锚(单原料多成品 → 归到那个共享原料), 那是一次真实的
- * 数据搬迁: 整条版本谱系换 product_type_id, 图会从「成品X 的工艺图」挪到「原料Y 的工艺图」下。
- * ⛔ 这种事不能等发布完才让用户发现 —— 界面必须提前说出来。
+ * 该建议帮助用户在发布前确认目录位置。发布保持当前归属对象、版本谱系和历史身份，
+ * 不自动搬迁；生产计划按真实终端产出 SKU 交给既有 resolver 匹配。
  *
- * 规则与后端 WorkflowAnchorPolicy 一一对应: 单成品→成品; 单原料多成品→主根原料;
- * 联产/不完整→不动。
+ * 单成品提示成品位置；单原料多成品提示主根原料位置；联产/不完整不提出跨对象建议。
  */
 const pendingAnchorMove = computed<{ skuId: string; name: string } | null>(() => {
   const cls = derivedWorkflowClassification.value;
@@ -2434,7 +2432,7 @@ const pendingAnchorMove = computed<{ skuId: string; name: string } | null>(() =>
 });
 
 // 2026-08-11: 逐产品的「需要动手」现在由成品 Cell 上的气泡就近提示, 顶部不再抢版面自动展开
-// —— 那正是 Steve 说的「占用了太多空间」。只有跨对象的事(归属搬迁)才值得默认展开,
+// —— 只有跨对象的存放位置建议才值得默认展开,
 // 因为它不属于任何单个 Cell, 没有别的地方能说。
 watch(pendingAnchorMove, (move) => {
   if (move && !bomVersionPanelTouched.value) bomVersionPanelOpen.value = true;

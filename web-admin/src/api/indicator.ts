@@ -48,6 +48,37 @@ export type AlertLevel = 'GREEN' | 'YELLOW' | 'RED' | null;
 /** 指标值计算状态；列表卡片用它区分未配置、暂无业务数据和计算失败。 */
 export type IndicatorValueStatus = 'AVAILABLE' | 'NO_DATA' | 'NOT_COMPUTED' | 'FAILED';
 
+export type ApplicabilityStatus = 'APPLICABLE' | 'BLOCKED' | 'NOT_APPLICABLE' | 'NEEDS_CONFIRMATION';
+export type ApplicabilityBasis = 'CONFIGURATION_ONLY' | 'PROPOSED_CONFIGURATION';
+export interface IndicatorApplicabilityMetric {
+  code: string;
+  name: string;
+  status: ApplicabilityStatus;
+  reason: string;
+  requiredFacts: string[];
+}
+export interface IndicatorApplicabilityProduct {
+  productId: string;
+  productName?: string;
+  profile: { unit?: string; inputUnit?: string; gramsPerUnit?: number | null; multiOutput?: boolean | null };
+  metrics: IndicatorApplicabilityMetric[];
+}
+export interface IndicatorApplicabilityReport {
+  factoryId: string;
+  basis: ApplicabilityBasis;
+  overallStatus: 'COMPLETE' | 'PARTIAL' | 'BLOCKED';
+  products: IndicatorApplicabilityProduct[];
+  metrics: IndicatorApplicabilityMetric[];
+}
+export interface PlannedIndicatorProductSpec {
+  productId: string;
+  productName?: string;
+  unit?: string;
+  inputUnit?: string;
+  gramsPerUnit?: number | null;
+  multiOutput?: boolean | null;
+}
+
 /**
  * 阈值运算符
  *
@@ -207,6 +238,13 @@ export async function listIndicators(
   }
   return res.data || [];
 }
+
+export async function getIndicatorApplicability(factoryId: string): Promise<IndicatorApplicabilityReport> {
+  const res = await get<IndicatorApplicabilityReport>(`/${factoryId}/indicators/applicability`);
+  if (!res.success || !res.data) throw new ApiError(res.message || '指标适用性读取失败', res.code);
+  return res.data;
+}
+
 
 /**
  * 2. 获取指标树 (父子结构, 后端已组装 children)

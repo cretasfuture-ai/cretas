@@ -13,7 +13,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 「归属对象按研判自动更改」的规则闸。
+ * 「根据拓扑建议存放对象」的规则闸；发布不搬迁历史身份。
  *
  * <p>Steve 2026-08-11 的判据: 研判早就能认出「原料分流」并显示在顶部, 但没有任何代码拿这个结论去改
  * 归属对象 —— 「你只是标注原料分流不是很根治」。本测试钉住四种研判各自该给出什么归属。
@@ -68,7 +68,7 @@ class WorkflowAnchorPolicyTest {
     }
 
     @Test
-    @DisplayName("🔴 单原料多成品(原料分流) → 归属对象自动变成那个共享原料, 不再钉在某一个成品上")
+    @DisplayName("🔴 单原料多成品(原料分流) → 建议存放在共享原料下，发布不迁移历史")
     void rawMaterialSplitAnchorsToTheSharedRawMaterial() {
         ProductProcessWorkflowDTO dto = graph(
                 List.of(

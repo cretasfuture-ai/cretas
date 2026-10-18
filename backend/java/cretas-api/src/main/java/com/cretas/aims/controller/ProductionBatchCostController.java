@@ -44,6 +44,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @RequireModule("production_report")
 public class ProductionBatchCostController {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.production.FormalFinishedOutputScope formalFinishedOutputScope;
 
     private final YieldReportService yieldReportService;
     private final OrderCostBreakdownService orderCostBreakdownService;
@@ -120,6 +122,9 @@ public class ProductionBatchCostController {
 
         LocalDateTime since = LocalDateTime.now().minusDays(days);
         List<Object[]> rows = productionBatchRepository.findFinishedBatchSummaries(factoryId, since, productTypeId);
+        java.util.Set<String> visible = formalFinishedOutputScope.visibleBatchNumbers(factoryId,
+                rows.stream().filter(r -> r[0] != null).map(r -> r[0].toString()).toList());
+        rows = rows.stream().filter(r -> r[0] == null || visible.contains(r[0].toString())).toList();
 
         List<FinishedBatchSummaryDTO> result = rows.stream().map(r -> {
             BigDecimal totalCost = r[7] != null ? new BigDecimal(r[7].toString()) : null;

@@ -220,11 +220,25 @@ public class OrderCostBreakdownService {
         boolean outputConversionComplete = true;
         String auditOutputUnit = null;
 
+        // MaterialConsumption is also the authority for whether a submitted multi-output group
+        // already recorded packaging. The input fact is written once (on the first output row),
+        // so its sibling outputs must not synthesize a second packaging cost from their BOM.
+        Map<Long, List<MaterialConsumption>> directConsumptionsByBatch = new LinkedHashMap<>();
+        for (ProductionBatch batch : batches) {
+            List<MaterialConsumption> rows = consumptionRepository
+                    .findByProductionBatchIdAndFactoryId(batch.getId(), factoryId);
+            directConsumptionsByBatch.put(batch.getId(), rows == null ? List.of() : rows);
+        }
+        MultiOutputPackagingScope multiOutputPackagingScope = resolveMultiOutputPackagingScope(
+                factoryId, batches, directConsumptionsByBatch);
+
         // 结单领用行按【计划】存, 而本循环按【批次】走 —— 同一个计划的多个批次不能各加一遍,
         // 否则原料成本翻倍。用这个集合保证每个计划只并入一次。
         java.util.Set<String> settlementPlansMerged = new java.util.HashSet<>();
         for (ProductionBatch b : batches) {
             auditBatches.add(b);
+            boolean unreportedMultiOutputOwnerPlaceholder =
+                    isUnreportedMultiOutputOwnerPlaceholder(b, multiOutputPackagingScope);
             // ── 辅料先估的三个读数 (per batch, 见下方 estimateAuxByBomRatio) ──────────────
             //   ① 本批调料桶的起点: 循环结束时 seasoning 一点没涨 = 这批的辅料成本【一条都没归集】
             //      (既没有报工的 SEASONING materialCost, 也没有实际耗用行, 上游 WIP 链也没带来)
@@ -242,11 +256,12 @@ public class OrderCostBreakdownService {
             // estimateAuxByBomRatio javadoc「什么叫没有实际耗用」)。
             java.util.Set<String> recordedMaterialTypeIds = new java.util.HashSet<>();
             List<MaterialConsumption> batchConsumptions = new ArrayList<>(
-                    consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), factoryId));
+                    directConsumptionsByBatch.getOrDefault(b.getId(), List.of()));
             batchConsumptions.addAll(
                     settlementConsumptionsFor(factoryId, b, batchConsumptions, settlementPlansMerged));
             boolean hasActualPackaging = batchConsumptions.stream()
-                    .anyMatch(c -> "PACKAGING".equalsIgnoreCase(c.getSourceType()));
+                    .anyMatch(c -> "PACKAGING".equalsIgnoreCase(c.getSourceType()))
+                    || multiOutputPackagingScope.actualPackagingCoveredBatchIds().contains(b.getId());
             boolean hasActualSeasoning = batchConsumptions.stream()
                     .anyMatch(c -> "SEASONING".equalsIgnoreCase(c.getSourceType()));
             ProductionPlan plan = b.getProductionPlanId() == null ? null
@@ -314,7 +329,7 @@ public class OrderCostBreakdownService {
                 }
 
                 BigDecimal output = positiveOrNull(y.getLastStepOutput(), b.getActualQuantity(), b.getQuantity());
-                if (output != null) {
+                if (output != null && !unreportedMultiOutputOwnerPlaceholder) {
                     auditOutputQuantity = auditOutputQuantity.add(output);
                     auditOutputUnit = mergeUnit(auditOutputUnit, y.getLastStepOutputUnit());
                     BigDecimal outputKg = toPinnedKilograms(output, y.getLastStepOutputUnit(), plan);
@@ -355,7 +370,7 @@ public class OrderCostBreakdownService {
             } else {
                 other = other.add(b.getOtherCost());
             }
-            if (b.getQuantity() != null) {
+            if (b.getQuantity() != null && !unreportedMultiOutputOwnerPlaceholder) {
                 boxCount += b.getQuantity().intValue();
             }
             for (MaterialConsumption c : batchConsumptions) {
@@ -686,6 +701,111 @@ public class OrderCostBreakdownService {
             }
         }
         return dto;
+    }
+
+    /**
+     * Recognize only persisted, submitted multi-output siblings whose payload identity agrees with
+     * their factory-scoped materialized batches. Packaging written on any member then covers the
+     * whole report group. Draft/legacy rows, malformed JSON, foreign batches and single outputs do
+     * not suppress the existing per-batch pinned-BOM guard.
+     */
+    private MultiOutputPackagingScope resolveMultiOutputPackagingScope(
+            String factoryId,
+            List<ProductionBatch> batches,
+            Map<Long, List<MaterialConsumption>> directConsumptionsByBatch) {
+        if (processSheetRowRepository == null || objectMapper == null || batches == null || batches.isEmpty()) {
+            return MultiOutputPackagingScope.empty();
+        }
+        Map<Long, ProductionBatch> batchesById = batches.stream()
+                .filter(Objects::nonNull)
+                .filter(batch -> batch.getId() != null)
+                .collect(Collectors.toMap(ProductionBatch::getId, batch -> batch, (left, right) -> left,
+                        LinkedHashMap::new));
+        Map<String, List<Long>> groups = new LinkedHashMap<>();
+        java.util.Set<String> planIds = batches.stream()
+                .map(ProductionBatch::getProductionPlanId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+        for (String planId : planIds) {
+            List<com.cretas.aims.entity.processentry.ProcessSheetRow> rows =
+                    processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+            if (rows == null) {
+                continue;
+            }
+            for (com.cretas.aims.entity.processentry.ProcessSheetRow row : rows) {
+                if (row == null
+                        || !com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_SUBMITTED
+                                .equals(row.getSubmissionStatus())
+                        || !Objects.equals(factoryId, row.getFactoryId())
+                        || !Objects.equals(planId, row.getPlanId())
+                        || row.getBatchId() == null) {
+                    continue;
+                }
+                ProductionBatch batch = batchesById.get(row.getBatchId());
+                com.cretas.aims.dto.processentry.ProcessSheetRowRequest request =
+                        parseRowPayload(row.getRowPayload());
+                if (batch == null || !Objects.equals(factoryId, batch.getFactoryId())
+                        || !Objects.equals(planId, batch.getProductionPlanId())
+                        || com.cretas.aims.entity.enums.ProductionBatchStatus.CANCELLED
+                                .equals(batch.getStatus())
+                        || row.getBatchNumber() == null
+                        || !Objects.equals(row.getBatchNumber(), batch.getBatchNumber())
+                        || request == null || !Boolean.TRUE.equals(request.getMultiOutputMember())
+                        || request.getMultiOutputBaseRowId() == null
+                        || request.getMultiOutputBaseRowId().isBlank()
+                        || !Objects.equals(batch.getProductTypeId(), request.getProductTypeId())) {
+                    continue;
+                }
+                String groupKey = planId + "|" + row.getProcessCode() + "|" + row.getProcessOrder()
+                        + "|" + request.getMultiOutputBaseRowId();
+                groups.computeIfAbsent(groupKey, ignored -> new ArrayList<>()).add(batch.getId());
+            }
+        }
+        java.util.Set<Long> covered = new java.util.HashSet<>();
+        java.util.Set<String> verifiedPlanIds = new java.util.HashSet<>();
+        for (List<Long> memberIds : groups.values()) {
+            java.util.Set<String> products = memberIds.stream()
+                    .map(batchesById::get)
+                    .filter(Objects::nonNull)
+                    .map(ProductionBatch::getProductTypeId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            if (memberIds.stream().distinct().count() < 2 || products.size() < 2) {
+                continue;
+            }
+            ProductionBatch first = batchesById.get(memberIds.get(0));
+            if (first != null && first.getProductionPlanId() != null) {
+                verifiedPlanIds.add(first.getProductionPlanId());
+            }
+            boolean groupHasActualPackaging = memberIds.stream()
+                    .flatMap(id -> directConsumptionsByBatch.getOrDefault(id, List.of()).stream())
+                    .anyMatch(c -> "PACKAGING".equalsIgnoreCase(c.getSourceType()));
+            if (groupHasActualPackaging) {
+                covered.addAll(memberIds);
+            }
+        }
+        return new MultiOutputPackagingScope(java.util.Set.copyOf(covered),
+                java.util.Set.copyOf(verifiedPlanIds));
+    }
+
+    private static boolean isUnreportedMultiOutputOwnerPlaceholder(
+            ProductionBatch batch, MultiOutputPackagingScope scope) {
+        if (batch == null || batch.getProductTypeId() == null || batch.getProductionPlanId() == null
+                || !scope.verifiedPlanIds().contains(batch.getProductionPlanId())) {
+            return false;
+        }
+        Map<String, String> ids = batch.getSelectedBomRecipeIdsByProduct();
+        Map<String, Integer> versions = batch.getSelectedBomVersionsByProduct();
+        return ids != null && !ids.isEmpty() && versions != null && !versions.isEmpty()
+                && Objects.equals(ids.keySet(), versions.keySet())
+                && !ids.containsKey(batch.getProductTypeId());
+    }
+
+    private record MultiOutputPackagingScope(java.util.Set<Long> actualPackagingCoveredBatchIds,
+                                              java.util.Set<String> verifiedPlanIds) {
+        private static MultiOutputPackagingScope empty() {
+            return new MultiOutputPackagingScope(java.util.Set.of(), java.util.Set.of());
+        }
     }
 
     /**
@@ -1537,7 +1657,15 @@ public class OrderCostBreakdownService {
                     recipe.getId(), ex.getMessage());
             return null;
         }
-        if (items == null || items.isEmpty()) {
+        if (items == null) {
+            return null;
+        }
+        // Multi-output CO_PRODUCT/BY_PRODUCT members may intentionally own no input rows: the
+        // shared input/packaging fact belongs to the report group. Their zero-item recipe is still
+        // a valid snapshot only when recipe identity, version and output basis above/below verify.
+        // MAIN keeps the historical fail-closed behavior.
+        if (items.isEmpty()
+                && com.cretas.aims.entity.bom.BomRecipe.bearsOwnInputRows(recipe.getOutputRole())) {
             return null;
         }
         List<Map<String, Object>> rows = new ArrayList<>();

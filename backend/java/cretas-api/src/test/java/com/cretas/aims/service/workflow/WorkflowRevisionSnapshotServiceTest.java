@@ -54,6 +54,15 @@ class WorkflowRevisionSnapshotServiceTest {
                 new ObjectMapper());
     }
 
+    @Test void ownerIsPartOfTheImmutableRevisionIdentity() {
+        var revision = revision(9L, "[]", "[]", "{\"x\":0,\"y\":0,\"zoom\":1}");
+        String savedHash = service.hash(revision); revision.setRevisionHash(savedHash);
+        revision.setProductTypeId("RAW-REANCHORED");
+        assertNotEquals(savedHash, service.hash(revision));
+        revision.setProductTypeId(PRODUCT_ID);
+        assertEquals(savedHash, service.hash(revision));
+    }
+
     @Test
     void canonicalHashSurvivesJsonbObjectKeyReorderingAndWhitespace() {
         ProductProcessWorkflow first = workflow(

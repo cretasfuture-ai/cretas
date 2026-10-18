@@ -579,11 +579,6 @@ public class ProductionPlanController {
 
         Long userId = extractUserId(authorization);
         log.info("核对生产结单: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
-        if (request.isConfirm()) {
-            ProductionSettlementPrefillResponse auditedPrefill = customerSuppliedSettlementCoverageGuard.audit(
-                    factoryId, planId, productionPlanService.getSettlementPrefill(factoryId, planId));
-            customerSuppliedSettlementCoverageGuard.requireCleanForOneClick(auditedPrefill);
-        }
         ProductionSettlementResponse response =
                 productionPlanService.settleProduction(factoryId, planId, request, userId);
         return ApiResponse.success("生产结单已提交", response);

@@ -2,8 +2,10 @@ package com.cretas.aims.service.yield.bom;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.exception.BusinessException;
 
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 一个生产批次的成本该按<b>哪一版 BOM</b> 算。
@@ -54,13 +56,26 @@ public final class BatchBomBinding {
      * 所以要用 {@code batch.productTypeId} 去查。</p>
      */
     public static Resolved resolve(ProductionBatch batch, ProductionPlan plan) {
-        if (batch != null && batch.getProductTypeId() != null) {
+        if (batch != null) {
             Map<String, String> ids = batch.getSelectedBomRecipeIdsByProduct();
             Map<String, Integer> versions = batch.getSelectedBomVersionsByProduct();
-            String recipeId = ids == null ? null : ids.get(batch.getProductTypeId());
-            Integer version = versions == null ? null : versions.get(batch.getProductTypeId());
-            if (recipeId != null && version != null) {
-                return new Resolved(recipeId, version, Source.BATCH);
+            boolean hasIds = ids != null && !ids.isEmpty();
+            boolean hasVersions = versions != null && !versions.isEmpty();
+            if (hasIds || hasVersions) {
+                if (!hasIds || !hasVersions || !Objects.equals(ids.keySet(), versions.keySet())
+                        || ids.values().stream().anyMatch(value -> value == null || value.isBlank())
+                        || versions.values().stream().anyMatch(value -> value == null || value <= 0)
+                        || batch.getProductTypeId() == null || batch.getProductTypeId().isBlank()) {
+                    throw incompleteBatchBinding();
+                }
+                String productTypeId = batch.getProductTypeId();
+                if (ids.containsKey(productTypeId)) {
+                    return new Resolved(ids.get(productTypeId), versions.get(productTypeId), Source.BATCH);
+                }
+                // A non-empty pair of maps is the immutable batch snapshot. A runtime owner/raw
+                // placeholder may legitimately be absent from a terminal multi-output A/B map;
+                // falling through to the plan scalar would falsely bind it to output A.
+                return new Resolved(null, null, Source.NONE);
             }
         }
         if (plan != null && plan.getSelectedBomRecipeId() != null
@@ -69,6 +84,12 @@ public final class BatchBomBinding {
                     Source.PLAN);
         }
         return new Resolved(null, null, Source.NONE);
+    }
+
+    private static BusinessException incompleteBatchBinding() {
+        return new BusinessException(409, "批次锁定的 BOM 配方与版本映射不完整")
+                .withCode("BATCH_BOM_BINDING_INCOMPLETE")
+                .withHint("请保留该批次并联系管理员核对创建时的 BOM 快照");
     }
 
     /**

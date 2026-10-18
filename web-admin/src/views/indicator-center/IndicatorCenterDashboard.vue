@@ -42,6 +42,8 @@
       <p class="period-hint">此期间用于实际出成率、生产良品率和完整成本；其他指标沿用各自口径。</p>
     </el-card>
 
+    <IndicatorApplicability :factory-id="factoryId || ''" :actor-key="actorKey" />
+
     <!-- 头部 -->
     <div class="page-header">
       <div class="title-block">
@@ -255,6 +257,7 @@ import IndicatorDetailDrawer from './IndicatorDetailDrawer.vue';
 import B2BRealDataSection from './B2BRealDataSection.vue';
 import FinishedBatchEvidence from './FinishedBatchEvidence.vue';
 import ProductProductionResults from './ProductProductionResults.vue';
+import IndicatorApplicability from '@/components/indicators/IndicatorApplicability.vue';
 import { isValidPeriod } from './actualFlowPeriod';
 
 const authStore = useAuthStore();

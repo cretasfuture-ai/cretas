@@ -99,9 +99,72 @@ class FgQuantityUnitConverterTest {
     }
 
     @Test
-    @DisplayName("双方都非计数单位但字符串不同(kg vs 斤) → 换算系数未知, 诚实 null")
+    @DisplayName("不支持的非科学单位 → 换算系数未知, 诚实 null")
     void bothNonCountDifferentStrings_returnsNull() {
-        assertNull(FgQuantityUnitConverter.convert(new BigDecimal("10"), "kg", "斤", new BigDecimal("120")));
+        assertNull(FgQuantityUnitConverter.convert(new BigDecimal("10"), "kg", "stone", new BigDecimal("120")));
+    }
+
+    @Test
+    @DisplayName("科学质量单位→包装单位: 500g/盒 时 500g 应为 1 盒")
+    void gramsToBoxUsesMassFactorAndPackagingWeight() {
+        assertEquals(0, new BigDecimal("1.00").compareTo(
+                FgQuantityUnitConverter.convert(new BigDecimal("500"), "g", "box", new BigDecimal("500"))));
+    }
+
+    @Test
+    @DisplayName("包装单位→科学质量单位: 500g/盒 时 1盒 应为 500g")
+    void boxToGramsUsesMassFactorAndPackagingWeight() {
+        assertEquals(0, new BigDecimal("500.000").compareTo(
+                FgQuantityUnitConverter.convert(new BigDecimal("1"), "box", "g", new BigDecimal("500"))));
+    }
+
+    @Test
+    @DisplayName("科学质量别名按内置因子换算: 公斤→克")
+    void chineseMassAliasUsesBuiltInFactor() {
+        assertEquals(0, new BigDecimal("1000").compareTo(
+                FgQuantityUnitConverter.convert(new BigDecimal("1"), "公斤", "克", null)));
+    }
+
+    @Test
+    @DisplayName("同一科学量纲的体积单位按内置因子换算")
+    void volumeUnitsUseBuiltInFactor() {
+        assertEquals(0, new BigDecimal("1000").compareTo(
+                FgQuantityUnitConverter.convert(new BigDecimal("1"), "升", "毫升", null)));
+    }
+
+    @Test
+    @DisplayName("体积与包装单位禁止借用 gramsPerUnit 换算")
+    void volumeToPackagingFailsClosed() {
+        assertNull(FgQuantityUnitConverter.convert(
+                new BigDecimal("1"), "l", "box", new BigDecimal("500")));
+    }
+
+    @Test
+    @DisplayName("外层箱/case 无包装快照时不得借用每盒克重")
+    void caseToMassRequiresPackagingSnapshot() {
+        assertNull(FgQuantityUnitConverter.convert(new BigDecimal("1"), "case", "g", new BigDecimal("500")));
+        assertNull(FgQuantityUnitConverter.convert(new BigDecimal("5000"), "g", "case", new BigDecimal("500")));
+    }
+
+    @Test
+    @DisplayName("case 包装快照展开为 10 盒后按每盒克重换算")
+    void caseSnapshotExpandsBeforeMassConversion() {
+        assertEquals(0, new BigDecimal("5000").compareTo(FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("1"), "case", "g", new BigDecimal("500"),
+                "箱", "盒", new BigDecimal("10"),
+                null, null, null)));
+    }
+
+    @Test
+    @DisplayName("box/盒 快照别名可展开，其他计数单位仍不合并")
+    void boxSnapshotAliasExpandsButDistinctCountsDoNot() {
+        assertEquals(0, new BigDecimal("1").compareTo(FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("5000"), "g", "box", new BigDecimal("500"),
+                null, null, null,
+                "盒", "个", new BigDecimal("10"))));
+        assertNull(FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("1"), "件", "个", new BigDecimal("500"),
+                null, null, null, null, null, null));
     }
 
     @Test

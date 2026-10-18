@@ -852,4 +852,36 @@ class ProcessSheetYieldCardTest {
                 .sourceWorkProcessTaskId(taskId)
                 .build();
     }
+    @Test
+    void freshRawWeight_convertsMixedMassAndExcludesPackagingAndSeasoning() throws Exception {
+        ProcessSheetRow row = sheetRow(1, 42L, "MIXED-MASS");
+        ProcessSheetRowRequest req = sheetPayload("999", "1");
+        req.setRawMaterialInputs(List.of(raw("1000", "g", "RAW_MATERIAL"),
+                raw("2", "斤", "RAW_MATERIAL"), raw("1", "kg", null),
+                raw("200", "个", "PACKAGING"), raw("5", "kg", "SEASONING")));
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(row));
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class)).thenReturn(req);
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of());
+        assertThat(service.getInventoryYieldCard(FACTORY, PLAN_ID).getFirst().getFreshRawInput())
+                .isEqualByComparingTo("3");
+    }
+
+    @Test
+    void freshRawWeight_rejectsVolumeWithoutDensity() throws Exception {
+        ProcessSheetRow row = sheetRow(1, 42L, "VOLUME");
+        ProcessSheetRowRequest req = sheetPayload("1", "1");
+        req.setRawMaterialInputs(List.of(raw("500", "ml", "RAW_MATERIAL")));
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(row));
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class)).thenReturn(req);
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.getInventoryYieldCard(FACTORY, PLAN_ID))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("千克");
+    }
+
+    private ProcessSheetRowRequest.RawInput raw(String quantity, String unit, String sourceType) {
+        ProcessSheetRowRequest.RawInput raw = new ProcessSheetRowRequest.RawInput();
+        raw.setMaterialBatchId("actual-raw-batch"); raw.setQuantity(new BigDecimal(quantity));
+        raw.setUnit(unit); raw.setSourceType(sourceType); return raw;
+    }
 }

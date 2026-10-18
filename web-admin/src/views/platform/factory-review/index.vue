@@ -70,6 +70,10 @@
               description="要么这份快照是在系统补上回执存档之前存的（老记录），要么那次落库没有成功。
                            ⛔ 这不等于「建厂什么都没写」——库里的行数以每一屏第三列为准。" />
 
+    <FactoryReadiness v-if="canonicalBlueprint" :factory-id="factoryId"
+      :blueprint-id="canonicalBlueprint.id" :row-version="canonicalBlueprint.rowVersion"
+      :actor-key="String(authStore.user?.id ?? '')" />
+
     <template v-if="loaded && review?.planned?.length">
       <el-steps :active="idx" align-center finish-status="success" class="steps">
         <el-step v-for="c in REVIEW_CLASSES" :key="c.key" :title="c.title" />
@@ -286,6 +290,7 @@ import {
   type CanonicalFactoryBlueprint,
 } from '@/api/factoryOnboardingApi'
 import FactoryBlueprintAcceptance from './components/FactoryBlueprintAcceptance.vue'
+import FactoryReadiness from './components/FactoryReadiness.vue'
 
 /**
  * 一类主数据在复核里的全部坐标。

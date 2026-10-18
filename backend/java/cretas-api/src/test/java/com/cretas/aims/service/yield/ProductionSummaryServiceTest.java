@@ -57,6 +57,27 @@ class ProductionSummaryServiceTest {
     }
 
     @Test
+    void multiOutput_usesOnePlanCostPoolAndExcludesUnreportedPlaceholder() {
+        var a = item(1, "COMPLETED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, null, new BigDecimal("0.5"));
+        a.setBatchNumber("A"); a.setProductTypeId("sku-a"); a.setFreshRawInput(new BigDecimal("3"));
+        var b = item(1, "COMPLETED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, null, BigDecimal.ONE);
+        b.setBatchNumber("B"); b.setProductTypeId("sku-b"); b.setFreshRawInput(BigDecimal.ZERO);
+        ProductionBatch ba = clkB(BigDecimal.ONE); ba.setBatchNumber("A");
+        ProductionBatch bb = clkB(BigDecimal.ONE); bb.setBatchNumber("B");
+        ProductionBatch placeholder = clkB(new BigDecimal("200")); placeholder.setBatchNumber("PLAN-PLACEHOLDER");
+        when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(List.of(a, b));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
+                .thenReturn(List.of(placeholder, ba, bb));
+        when(orderCostBreakdownService.computeByPlan("F006", "P1", false))
+                .thenReturn(OrderCostBreakdownDTO.builder().totalCost(new BigDecimal("31")).build());
+        var result = service.computeSummary("F006", "P1", false);
+        assertThat(result.getTotalRawInput()).isEqualByComparingTo("3");
+        assertThat(result.getTotalFinishedOutput()).isEqualByComparingTo("2");
+        assertThat(result.getTotalCost()).isEqualByComparingTo("31");
+        verify(orderCostBreakdownService, never()).computeByBatch(anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
     void totalRawInput_sumsFirstProcessAcrossBatches() {
         when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(List.of(
                 item(1, "IN_PROGRESS", new BigDecimal("2.0"), new BigDecimal("1.8"), new BigDecimal("0.2"), null),

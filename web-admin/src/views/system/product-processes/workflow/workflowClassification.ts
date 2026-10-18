@@ -38,9 +38,8 @@ export interface WorkflowClassification {
   /**
    * 这张图的**主根投入** skuId —— 替代组里那个不是别人替代品的原料; 没有根投入时为 null。
    *
-   * 与后端 {@code WorkflowAnchorPolicy#primaryRootSku} 同口径。顶部用它显示
-   * 「发布后这张图会移到「XX」名下」—— 归属对象按研判自动重锚(后端 PR #2488)是发布时
-   * 才发生的数据搬迁, 界面必须**提前说出来**, 不能让用户发布完才发现图换了地方。
+   * 与后端拓扑研判的主根投入同口径。编辑器用它提示建议的存放位置；发布不会
+   * 自动改写归属对象、版本谱系或历史身份，实际生产匹配仍按终端产出 SKU 由既有 resolver 判断。
    */
   primaryRootSkuId: string | null;
 }

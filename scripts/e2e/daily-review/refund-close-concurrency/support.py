@@ -5,14 +5,15 @@ from decimal import Decimal
 import json,requests,psycopg,psutil,os
 
 ROOT=Path(__file__).resolve().parents[4]
-PROFILE=os.environ.get('DAILY_REVIEW_PROFILE','P30');assert PROFILE in ('P30','P31','P34')
+PROFILE=os.environ.get('DAILY_REVIEW_PROFILE','P30');assert PROFILE in ('P30','P31','P34','P37')
 OUT=Path.home()/('Documents/cretas-connect-20261015/factory-data-'+PROFILE.lower())
 FACTORY='FOOD_3101_001';DATABASE='p30_refund_close_20261018' if PROFILE=='P30' else 'p31_finance_closeout_20261018';SOURCE='p14_new_factory_20261016' if PROFILE=='P30' else 'p30_refund_close_20261018'
 PORT=10066 if PROFILE=='P30' else 10068
 if PROFILE=='P34':DATABASE,SOURCE,PORT='p34_disposal_guard_20261018','p31_finance_closeout_20261018',10070
+if PROFILE=='P37':DATABASE,SOURCE,PORT='p37_factory_generality_20261018','p34_disposal_guard_20261018',10072
 BASE='http://127.0.0.1:'+str(PORT)+'/api/mobile/'+FACTORY
 assert (date.today().year,date.today().month)==(2026,10),'Fixture period expired; do not run against another month'
-runtime=json.loads((OUT/'runtime.json').read_text());assert runtime['owner']==({'P30':'P30-REFUND-CLOSE-RACE-20261018','P31':'P31-FINANCE-CLOSEOUT-20261018','P34':'P34-DISPOSAL-LIFECYCLE-GUARD-20261018'}[PROFILE]) and runtime['database']==DATABASE
+runtime=json.loads((OUT/'runtime.json').read_text());assert runtime['owner']==({'P30':'P30-REFUND-CLOSE-RACE-20261018','P31':'P31-FINANCE-CLOSEOUT-20261018','P34':'P34-DISPOSAL-LIFECYCLE-GUARD-20261018','P37':'P37-FACTORY-GENERALITY-20261018'}[PROFILE]) and runtime['database']==DATABASE
 proc=psutil.Process(runtime['javaPid']);assert proc.name().lower()=='java.exe' and '@'+runtime['javaArgFile'] in proc.cmdline()
 argfile=Path(runtime['javaArgFile']);args=[json.loads(line) for line in argfile.read_text(encoding='utf-8').splitlines() if line.strip()]
 assert argfile.stat().st_mtime<=proc.create_time(),'Runtime argument file changed after launch'
@@ -47,7 +48,7 @@ def dbconnect(database=DATABASE,readonly=True):
  assert d.execute('select current_database()').fetchone()[0]==database
  return d
 TABLES=['customers','sales_orders','sales_order_items','return_orders','return_order_items','payment_requests','payment_records','ar_ap_transactions','vouchers','voucher_entries','accounting_periods','finished_goods_batches','material_batches','material_batch_adjustments','sales_delivery_records','sales_delivery_items','sales_delivery_item_batch_allocations','production_plans','production_batches','production_settlements','production_settlement_output_lines','indicators','indicator_versions']
-if PROFILE in ('P31','P34'):TABLES+=['disposal_records','finished_goods_adjustment_log','batch_lineage_edges']
+if PROFILE in ('P31','P34','P37'):TABLES+=['disposal_records','finished_goods_adjustment_log','batch_lineage_edges']
 def snapshot(database=DATABASE):
  with dbconnect(database) as d:
   result={}

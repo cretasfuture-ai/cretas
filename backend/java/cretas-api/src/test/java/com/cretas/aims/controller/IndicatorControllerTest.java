@@ -17,6 +17,7 @@ import com.cretas.aims.repository.indicator.IndicatorThresholdRepository;
 import com.cretas.aims.repository.indicator.IndicatorTreeNodeRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.service.indicator.IndicatorQueryService;
+import com.cretas.aims.service.indicator.FactoryIndicatorApplicabilityService;
 import com.cretas.aims.service.indicator.dto.IndicatorValueResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -74,7 +75,16 @@ class IndicatorControllerTest {
     @Mock IndicatorTreeNodeRepository indicatorTreeNodeRepository;
     @Mock IndicatorThresholdRepository indicatorThresholdRepository;
     @Mock IndicatorVersionRepository indicatorVersionRepository;
+    @Mock FactoryIndicatorApplicabilityService applicabilityService;
     @InjectMocks IndicatorController controller;
+
+    @Test
+    @DisplayName("适用性读取缺少认证 actor → 401，不允许匿名读取全工厂产品配置")
+    void applicabilityRequiresAuthenticatedActor() {
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> controller.getApplicability(FACTORY_ID));
+        assertEquals(401, error.getCode());
+    }
 
     // ====================================================================
     // Test 1: listIndicators with category filter

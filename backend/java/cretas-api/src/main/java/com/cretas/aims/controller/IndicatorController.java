@@ -5,6 +5,7 @@ import com.cretas.aims.controller.dto.indicator.IndicatorListResponse;
 import com.cretas.aims.controller.dto.indicator.IndicatorTreeNodeResponse;
 import com.cretas.aims.controller.dto.indicator.IndicatorValueResponse;
 import com.cretas.aims.controller.dto.indicator.ThresholdResponse;
+import com.cretas.aims.controller.dto.indicator.IndicatorApplicabilityResponse;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.indicator.Indicator;
@@ -17,6 +18,11 @@ import com.cretas.aims.repository.indicator.IndicatorThresholdRepository;
 import com.cretas.aims.repository.indicator.IndicatorTreeNodeRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.service.indicator.IndicatorQueryService;
+import com.cretas.aims.service.indicator.FactoryIndicatorApplicabilityService;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.entity.enums.DataScope;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.indicator.dto.IndicatorValueResult;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -91,6 +97,30 @@ public class IndicatorController {
     private final IndicatorTreeNodeRepository indicatorTreeNodeRepository;
     private final IndicatorThresholdRepository indicatorThresholdRepository;
     private final IndicatorVersionRepository indicatorVersionRepository;
+    private final FactoryIndicatorApplicabilityService applicabilityService;
+    private final DataScopeResolver dataScopeResolver;
+
+    @GetMapping("/applicability")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
+    @Operation(summary = "读取指标适用性", description = "只读配置适用性说明，不代表已有运行数据")
+    public ApiResponse<IndicatorApplicabilityResponse> getApplicability(
+            @PathVariable @NotBlank String factoryId) {
+        requireApplicabilityScope(factoryId);
+        return ApiResponse.success(applicabilityService.assess(factoryId));
+    }
+
+    private void requireApplicabilityScope(String factoryId) {
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest().orElse(null);
+        if (actor == null) throw new BusinessException(401, "缺少已认证数据访问身份");
+        if (actor.hasFactoryBypass()) return;
+        if (actor.factoryId() == null || !factoryId.equals(actor.factoryId())) {
+            throw new BusinessException(403, "无权访问其他工厂指标配置");
+        }
+        DataScopeContext scope = dataScopeResolver == null ? null : dataScopeResolver.resolve(actor.id());
+        if (scope == null || scope.getScope() != DataScope.ALL) {
+            throw new BusinessException(403, "当前数据范围不支持读取全工厂指标配置");
+        }
+    }
 
     /**
      * Sprint 12 Phase D (#266): 统一构造 "指标不存在" 404 异常, 满足 4 位一体.

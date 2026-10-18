@@ -2,6 +2,7 @@ package com.cretas.aims.service.yield.bom;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 批次的成本按<b>它创建时绑定的那一版 BOM</b> 算。
@@ -80,23 +82,52 @@ class BatchBomBindingContractTest {
     }
 
     @Test
-    @DisplayName("批次只有一半 (有 recipeId 没 version) 也算没钉 —— 半个绑定不能用")
-    void halfBindingIsNotABinding() {
-        // 只有 recipeId 没 version, 无法确定是哪一版 ⇒ 必须退回计划, ⛔ 不许拿当前版本凑
-        var r = BatchBomBinding.resolve(batch("recipe-A", null), plan("recipe-B", 9));
-        assertThat(r.source()).isEqualTo(BatchBomBinding.Source.PLAN);
-        assertThat(r.recipeId()).isEqualTo("recipe-B");
+    @DisplayName("批次只有一半绑定时失败关闭, 不许把未知批次伪装成计划绑定")
+    void halfBindingFailsClosed() {
+        assertThatThrownBy(() -> BatchBomBinding.resolve(batch("recipe-A", null), plan("recipe-B", 9)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(409);
+                    assertThat(business.getErrorCode()).isEqualTo("BATCH_BOM_BINDING_INCOMPLETE");
+                });
     }
 
     @Test
-    @DisplayName("批次的 map 里没有本产品的键 → 退回计划")
-    void mapWithoutThisProductFallsBack() {
+    @DisplayName("权威多产出 map 没有运行时 owner → NONE, 不误借计划标量的产出 A")
+    void authoritativeMapWithoutRuntimeOwnerMeansNone() {
         ProductionBatch b = new ProductionBatch();
         b.setProductTypeId(PRODUCT);
         b.setSelectedBomRecipeIdsByProduct(Map.of("other-product", "recipe-X"));
         b.setSelectedBomVersionsByProduct(Map.of("other-product", 5));
         var r = BatchBomBinding.resolve(b, plan("recipe-B", 9));
-        assertThat(r.source()).isEqualTo(BatchBomBinding.Source.PLAN);
+        assertThat(r.source()).isEqualTo(BatchBomBinding.Source.NONE);
+        assertThat(r.pinned()).isFalse();
+    }
+
+    @Test
+    @DisplayName("权威 map 的 key 集不一致时失败关闭")
+    void mismatchedAuthoritativeMapsFailClosed() {
+        ProductionBatch b = new ProductionBatch();
+        b.setProductTypeId(PRODUCT);
+        b.setSelectedBomRecipeIdsByProduct(Map.of(PRODUCT, "recipe-A", "product-B", "recipe-B"));
+        b.setSelectedBomVersionsByProduct(Map.of(PRODUCT, 3));
+
+        assertThatThrownBy(() -> BatchBomBinding.resolve(b, plan("recipe-plan", 9)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("映射不完整");
+    }
+
+    @Test
+    @DisplayName("权威 map 存在但批次产品身份缺失时失败关闭")
+    void authoritativeMapWithoutProductIdentityFailsClosed() {
+        ProductionBatch b = new ProductionBatch();
+        b.setSelectedBomRecipeIdsByProduct(Map.of(PRODUCT, "recipe-A"));
+        b.setSelectedBomVersionsByProduct(Map.of(PRODUCT, 3));
+
+        assertThatThrownBy(() -> BatchBomBinding.resolve(b, plan("recipe-plan", 9)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("映射不完整");
     }
 
     // ==================== 同产品跨批次版本不一致 ====================

@@ -97,8 +97,8 @@ public class FactoryActualProductionMetrics {
                   AND (b.batch_type IS NULL OR b.batch_type <> 'CLERK_WIP')
                   AND (b.production_plan_id IS NULL OR (p.status = 'COMPLETED' AND p.deleted_at IS NULL))
                   AND b.end_time >= ?2 AND b.end_time < ?3
-                ORDER BY b.id
-                """).setParameter(1, factoryId).setParameter(2, start.atStartOfDay())
+                """ + com.cretas.aims.service.production.FormalFinishedOutputScope.SQL_PREDICATE
+                + " ORDER BY b.id").setParameter(1, factoryId).setParameter(2, start.atStartOfDay())
                 .setParameter(3, end.plusDays(1).atStartOfDay()).getResultList();
     }
 

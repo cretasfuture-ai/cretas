@@ -54,8 +54,12 @@ public class ProductionSummaryService {
 
         List<ProductionBatch> planBatches =
                 productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        java.util.Set<String> reportedFinishedBatches = items.stream()
+                .filter(i -> "COMPLETED".equals(i.getStatus()) && i.getBatchNumber() != null)
+                .map(ProcessSheetInventoryItem::getBatchNumber).collect(java.util.stream.Collectors.toSet());
         BigDecimal totalFinishedOutput = planBatches.stream()
                 .filter(b -> "REGULAR".equals(b.getBatchType()))
+                .filter(b -> reportedFinishedBatches.isEmpty() || reportedFinishedBatches.contains(b.getBatchNumber()))
                 .map(b -> nz(b.getQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -98,6 +102,15 @@ public class ProductionSummaryService {
         BigDecimal totalCost = null;
         String costNote = null;
         if (!maskPrice) {
+            boolean multipleSkus = items.stream().filter(i -> "COMPLETED".equals(i.getStatus()))
+                    .map(ProcessSheetInventoryItem::getProductTypeId).filter(java.util.Objects::nonNull)
+                    .distinct().limit(2).count() > 1;
+            if (multipleSkus) {
+                // Shared input edges belong to the plan cost pool, not each output batch.
+                var breakdown = orderCostBreakdownService.computeByPlan(factoryId, planId, false);
+                totalCost = breakdown == null ? null : breakdown.getTotalCost();
+                costNote = totalCost == null ? "计划成本尚未完整归集，请在成本明细中核对缺项" : null;
+            } else {
             // 🔴 2026-09-02: 原来 nz(cb.getTotalCost()) 把「成本未知」折成 0 相加, 小吃吧线屏幕上
             //    写着「总成本 ¥0」而 cost-breakdown 明明说 costComplete=false。改为任一批次未知 ⇒ 总成本 null + 说明。
             java.util.List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO> breakdowns = planBatches.stream()
@@ -108,6 +121,7 @@ public class ProductionSummaryService {
             SummaryCostRollup.Result rolled = SummaryCostRollup.rollup(breakdowns);
             totalCost = rolled.total();
             costNote = rolled.note();
+            }
         }
 
         java.util.List<ProductionSummaryDTO.BatchLine> lines = items.stream()
