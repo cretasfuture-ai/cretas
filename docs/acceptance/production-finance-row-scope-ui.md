@@ -43,6 +43,8 @@
 
 首轮native CI的三条新增范围门禁均实跑通过，但暴露两处旧测试夹具问题：根列表仍断言一律403；并发未固定交错，合法串行余额22被误判失败。仅更新两类测试：根列表使用分页且非空的授权记录阳性，保留隐藏/跨厂/写前拒绝断言；供应商读取后加同步屏障强制同版本冲突，保留单胜者及余额断言。两类共62项，失败的两条路由方法精准重跑通过，其余60项证据复用，临时数据库均删除。取消未完成全量以免浪费，测试冻结后重启最终必需CI；产品源码、Web及UI证据不变，Web CI已通过5685项、跳过5项。
 
+后续native 100项及迁移/JDBC提交验证全通过。全量15473项发现5条旧测试适配失败：4条凭证standalone控制器未注入必需范围组件；1条CI契约仍匹配旧native选择器。仅为旧ALL场景显式注入范围组件，并将选择器断言扩展为包含三条新门禁及原并发门禁，权限断言未放宽；精准复验5/5、BUILD SUCCESS。产品源码不变，保留失败全量及棘轮清单，修正测试后重启必需CI；不改失败基线。冻结Web打包另行完成（76秒、退出0），未重复本机前端测试。
+
 业务增量仅：本人计划可逆备注恢复后的时间戳；测试付款1元、1条账行、1条分配、1张草稿凭证和2条分录；两张既有凭证DRAFT转POSTED作授权/隐藏金额对照。无库存、收发货、报工、结算或真实资金操作。其他原业务字段逐行不变；策略版本因UI保存递增。
 
 私有证据在既有 `assembly-integration-assessment-20261015/target-ui`：`business-scope-ui-results.json`、`business-scope-ui-independent-verification.json`、`business-scope-allowed-mutations.json`、`business-scope-local-test-receipt.json`、`business-scope-source-freeze.json`、截图和文件。本仓只存脱敏结论，不提交账号、令牌、启动参数或原始业务样本。
