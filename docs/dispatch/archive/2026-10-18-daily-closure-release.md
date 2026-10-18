@@ -43,3 +43,5 @@ Scope：源45日常提交涉及的backend Java/Python、tools/vision-lab、web-a
 若上线后已产生AR_REFUND事实，不得直接回退到不识别该枚举的旧后端，须使用兼容修复或向前修复；保留迁移与凭证历史，禁止以删账回滚。
 
 归档任务：P14-FACTORY-METRICS-20261016、P31-FINANCE-CLOSEOUT-20261018、P36-VISION-CAPACITY-20261018、P36-DAILY-CLOSURE-RELEASE-20261018。本PR合入时释放这些scope；原体验worktree及数据保留。
+
+集成补验：统一制品首轮真实执行1038项发现4类旧测试接线/样本缺口，未发布。补齐期间服务、资金引用锁、PG方言和SKU临时表；批量调整的实体锁桥接在同一真实PG事务中执行advisory/FOR UPDATE并重读，未使用空锁替代。不同调整同一供应商通过工厂锁串行后要求两笔均成功、余额10+5+7=22；同笔并发仍只允许一赢家。4类20项专项0失败/0错误/0跳过，最终统一制品另跑。仅测试变化，Web/Python源码树不变，复用同树完整回归证据。

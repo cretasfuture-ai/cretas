@@ -48,6 +48,10 @@ class FactoryActualMetricsPostgresTest {
                         statement.execute("INSERT INTO pg_temp.production_batches VALUES (1,'A',9,8,'kg',1,'FA','PA',null,null,'COMPLETED','2026-10-16 10:00'),(2,'B',11,10,'kg',1,'FA','PB',null,null,'COMPLETED','2026-10-16 23:59'),(3,'FOREIGN',1,1,'kg',0,'FB','PC',null,null,'COMPLETED','2026-10-16 10:00'),(4,'WIP',1,1,'kg',0,'FA','PA',null,'CLERK_WIP','COMPLETED','2026-10-16 10:00'),(5,'DELETED',1,1,'kg',0,'FA','PA','2026-10-16',null,'COMPLETED','2026-10-16 10:00'),(6,'UNSETTLED',1,1,'kg',0,'FA','PD',null,null,'COMPLETED','2026-10-16 10:00'),(7,'OUTSIDE',1,1,'kg',0,'FA',null,null,null,'COMPLETED','2026-10-17 00:00')");
                         statement.execute("INSERT INTO pg_temp.production_settlements VALUES ('OLD','PA','FA','COUNTED',99,'kg','2026-10-16 09:00'),('ACTIVE','PA','FA','COUNTED',1,'kg',null),('B-ACTIVE','PB','FA','COUNTED',1,'kg',null)");
                         statement.execute("INSERT INTO pg_temp.production_settlement_output_lines VALUES ('OLD','FA',null),('ACTIVE','FA',null),('ACTIVE','FA','2026-10-16 09:00'),('B-ACTIVE','FA',null)");
+                        statement.execute("CREATE TEMP TABLE product_types (id text, factory_id text, name text) ON COMMIT DROP");
+                        statement.execute("INSERT INTO pg_temp.product_types VALUES ('SKU-A','FA','散装'),('SKU-B','FA','盒装')");
+                        statement.execute("ALTER TABLE pg_temp.production_batches ADD COLUMN product_type_id text");
+                        statement.execute("UPDATE pg_temp.production_batches SET product_type_id=CASE WHEN id=1 THEN 'SKU-A' ELSE 'SKU-B' END");
                     }
                 });
                 YieldReportService reporting = mock(YieldReportService.class);
@@ -73,6 +77,10 @@ class FactoryActualMetricsPostgresTest {
                 assertThat(metrics.compute("FA", day, day, GOOD_OUTPUT_RATE)).isEqualByComparingTo("90");
                 assertThat(metrics.compute("FA", day, day, YIELD_RATE)).isEqualByComparingTo("90");
                 assertThat(metrics.compute("FA", day.plusDays(2), day.plusDays(2), TOTAL_COST)).isNull();
+                var byProduct = metrics.byProduct("FA", day, day, false);
+                assertThat(byProduct.getProducts()).extracting("productTypeId").containsExactly("SKU-A", "SKU-B");
+                assertThat(byProduct.getProducts()).allSatisfy(product ->
+                        assertThat(product.getTotalCost()).isEqualByComparingTo("100"));
                 verify(reporting, never()).getYield(eq("FA"), longThat(id -> id > 2));
             } finally {
                 transaction.rollback();

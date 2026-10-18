@@ -79,7 +79,8 @@ class BatchAdjustmentAtomicityPostgresContractTest {
                 + "transaction_type VARCHAR(40) NOT NULL, counterparty_type VARCHAR(40) NOT NULL, "
                 + "counterparty_id VARCHAR(191) NOT NULL, amount NUMERIC(15,2) NOT NULL, "
                 + "balance_after NUMERIC(15,2), approval_status VARCHAR(40) NOT NULL, operated_by BIGINT, "
-                + "approved_by BIGINT, approved_at TIMESTAMP, remark VARCHAR(500), version BIGINT NOT NULL)");
+                + "approved_by BIGINT, approved_at TIMESTAMP, remark VARCHAR(500), version BIGINT NOT NULL, "
+                + "transaction_date DATE NOT NULL DEFAULT CURRENT_DATE, deleted_at TIMESTAMP)");
     }
 
     @AfterAll
@@ -185,17 +186,17 @@ class BatchAdjustmentAtomicityPostgresContractTest {
         ArApServiceImpl service = service(null, null);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<?> first = pool.submit(() -> service.batchApproveAdjustments(FACTORY, List.of("ADJ-A"), 2L));
-            Future<?> second = pool.submit(() -> service.batchApproveAdjustments(FACTORY, List.of("ADJ-B"), 3L));
-            first.get();
-            second.get();
+            var first = pool.submit(() -> service.batchApproveAdjustments(FACTORY, List.of("ADJ-A"), 2L));
+            var second = pool.submit(() -> service.batchApproveAdjustments(FACTORY, List.of("ADJ-B"), 3L));
+            assertThat(first.get()).containsEntry("approvedCount", 1).containsEntry("failedCount", 0);
+            assertThat(second.get()).containsEntry("approvedCount", 1).containsEntry("failedCount", 0);
         } finally {
             pool.shutdownNow();
         }
         BigDecimal balance = balance("suppliers", SUPPLIER);
-        assertThat(balance).isIn(new BigDecimal("15.00"), new BigDecimal("17.00"));
+        assertThat(balance).isEqualByComparingTo("22.00");
         long approved = List.of("ADJ-A", "ADJ-B").stream().filter(id -> "APPROVED".equals(status(id))).count();
-        assertThat(approved).isEqualTo(1);
+        assertThat(approved).isEqualTo(2);
     }
 
     @Test
@@ -232,12 +233,40 @@ class BatchAdjustmentAtomicityPostgresContractTest {
         });
         ArApServiceImpl service = new ArApServiceImpl(transactions, customers, suppliers);
         ReflectionTestUtils.setField(service, "transactionManager", transactionManager);
+        ReflectionTestUtils.setField(service, "entityManager", transactionBoundEntityManager());
+        ReflectionTestUtils.setField(service, "accountingPeriodService",
+                mock(com.cretas.aims.service.finance.AccountingPeriodService.class));
         return service;
+    }
+
+    /** Execute the service's real advisory/row locks on the item's JDBC transaction. */
+    private jakarta.persistence.EntityManager transactionBoundEntityManager() {
+        var em = mock(jakarta.persistence.EntityManager.class);
+        var named = new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc);
+        when(em.createNativeQuery(anyString())).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            var parameters = new java.util.HashMap<String, Object>();
+            var query = mock(jakarta.persistence.Query.class);
+            when(query.setParameter(anyString(), any())).thenAnswer(binding -> {
+                parameters.put(binding.getArgument(0), binding.getArgument(1));
+                return query;
+            });
+            when(query.getResultList()).thenAnswer(ignored -> named.queryForList(sql, parameters).stream()
+                    .map(row -> row.values().iterator().next()).toList());
+            when(query.getSingleResult()).thenAnswer(ignored -> named.queryForObject(sql, parameters, Object.class));
+            return query;
+        });
+        org.mockito.Mockito.doAnswer(invocation -> {
+            ArApTransaction target = invocation.getArgument(0);
+            org.springframework.beans.BeanUtils.copyProperties(findTransaction(target.getId()).orElseThrow(), target);
+            return null;
+        }).when(em).refresh(any(ArApTransaction.class));
+        return em;
     }
 
     private Optional<ArApTransaction> findTransaction(String id) {
         return jdbc.query("SELECT id,factory_id,transaction_type,counterparty_type,counterparty_id,amount,"
-                        + "approval_status,operated_by,balance_after,approved_by,approved_at,remark,version "
+                        + "approval_status,operated_by,balance_after,approved_by,approved_at,remark,version,transaction_date "
                         + "FROM ar_ap_transactions WHERE id=?", rows -> rows.next() ? Optional.of(transaction(rows)) : Optional.empty(), id);
     }
 
@@ -292,6 +321,7 @@ class BatchAdjustmentAtomicityPostgresContractTest {
         value.setApprovedAt(approvedAt == null ? null : approvedAt.toLocalDateTime());
         value.setRemark(rows.getString("remark"));
         value.setVersion(rows.getLong("version"));
+        value.setTransactionDate(rows.getDate("transaction_date").toLocalDate());
         return value;
     }
 
