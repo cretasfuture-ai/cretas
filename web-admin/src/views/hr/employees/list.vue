@@ -163,6 +163,7 @@ const defaultForm = {
   isActive: true,
 };
 const formData = reactive({ ...defaultForm });
+const initialUsername = ref('');
 const departmentChanged = ref(false);
 const managerChanged = ref(false);
 const managerOptions = ref<{ id: number; label: string }[]>([]);
@@ -282,6 +283,7 @@ const isViewMode = computed(() => dialogMode.value === 'view');
 function handleAdd() {
   dialogMode.value = 'add';
   Object.assign(formData, defaultForm);
+  initialUsername.value = '';
   departmentChanged.value = false; managerChanged.value = false;
   void loadManagers();
   dialogVisible.value = true;
@@ -289,6 +291,7 @@ function handleAdd() {
 
 function handleView(row: TableRow) {
   dialogMode.value = 'view';
+  initialUsername.value = row.username || '';
   Object.assign(formData, {
     id: row.id,
     fullName: row.fullName || '',
@@ -310,6 +313,7 @@ function handleView(row: TableRow) {
 
 function handleEdit(row: TableRow) {
   dialogMode.value = 'edit';
+  initialUsername.value = row.username || '';
   Object.assign(formData, {
     id: row.id,
     fullName: row.fullName || '',
@@ -390,7 +394,6 @@ async function handleSubmit() {
   try {
     const payload: Record<string, any> = {
       fullName: formData.fullName,
-      username: formData.username,
       phone: formData.phone.trim() || undefined,
       roleCode: formData.role,
       employeeCode: formData.employeeCode,
@@ -401,6 +404,9 @@ async function handleSubmit() {
       isActive: formData.isActive,
       status: formData.isActive ? 'ACTIVE' : 'INACTIVE',
     };
+    if (dialogMode.value === 'add' || formData.username !== initialUsername.value) {
+      payload.username = formData.username;
+    }
     if (dialogMode.value === 'add') {
       payload.password = '123456';
       payload.email = (formData.username || 'user') + '@cretas.com';
