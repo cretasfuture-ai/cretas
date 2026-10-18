@@ -41,6 +41,8 @@
 
 本地相关测试按类去重86类、575项通过，0失败/错误/跳过。这是多次目标运行汇总，不冒称一次全量；仅补失败类和UI修复5项（BUILD SUCCESS）。真实 JPA Context、三条原生 PG 门禁及66000行凭证样本通过。Windows wrapper的2项平台跳过单列，最终native runner仍须执行。冻结后只跑一次必要最终PR CI；实际 Tests run、BUILD、head和手动合并结果以PR及最终回执为准。
 
+首轮native CI的三条新增范围门禁均实跑通过，但暴露两处旧测试夹具问题：根列表仍断言一律403；并发未固定交错，合法串行余额22被误判失败。仅更新两类测试：根列表使用分页且非空的授权记录阳性，保留隐藏/跨厂/写前拒绝断言；供应商读取后加同步屏障强制同版本冲突，保留单胜者及余额断言。两类共62项，失败的两条路由方法精准重跑通过，其余60项证据复用，临时数据库均删除。取消未完成全量以免浪费，测试冻结后重启最终必需CI；产品源码、Web及UI证据不变，Web CI已通过5685项、跳过5项。
+
 业务增量仅：本人计划可逆备注恢复后的时间戳；测试付款1元、1条账行、1条分配、1张草稿凭证和2条分录；两张既有凭证DRAFT转POSTED作授权/隐藏金额对照。无库存、收发货、报工、结算或真实资金操作。其他原业务字段逐行不变；策略版本因UI保存递增。
 
 私有证据在既有 `assembly-integration-assessment-20261015/target-ui`：`business-scope-ui-results.json`、`business-scope-ui-independent-verification.json`、`business-scope-allowed-mutations.json`、`business-scope-local-test-receipt.json`、`business-scope-source-freeze.json`、截图和文件。本仓只存脱敏结论，不提交账号、令牌、启动参数或原始业务样本。
