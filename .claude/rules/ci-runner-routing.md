@@ -6,6 +6,7 @@
 - SSH 使用 `morrowward-us-mini`，每次连接先确认 `Auroras-Mac-mini.local / aurora`。本机 LaunchAgent `com.cretas.ci-primary` 每 60 秒检查本机 VM 和两个白名单 runner，不查询加拿大。旧 `~/cretas-ci-failover.sh` 只转发到本机 primary，原 failover plist 已退役。
 - 监督脚本 `~/.local/lib/cretas-ci-primary/cretas_ci_primary.py`；配置 `~/.config/cretas/ci-primary.json`；状态 `~/.local/state/cretas-ci-primary/latest.json`；本次回执 `~/.local/state/ci-build-migration-20261018/`。VM/服务启动前检查 110 GiB；每个新 job 的只读 hook 要求宿主机至少 125 GiB，以保护 100 GiB 保留空间。
 - 两个 runner 共用 Maven 串行锁，等锁最多 5 分钟（退出码 75）；单次 Maven 生命周期最多 90 分钟（退出码 124），为 120 分钟 job 的报告与棘轮步骤留出时间。Maven 默认 1 GiB、独立 javac 上限 2 GiB、测试 JVM 默认 3 GiB；工作流显式堆参数保持优先。用 `reuseForks=false` 在测试类间启动独立 JVM，避免跨类累积 Spring 上下文。测试选择器、断言、PostgreSQL 真实验证与既有棘轮基线保持原样。
+- 独立类 JVM 配合负向选择器可能重复执行 Nested 测试并覆盖先前失败 XML；Maven 包装器流式保留输出并记住失败摘要。若最终 XML 不能由现有棘轮可靠判红，则返回 86，避免 `maven.test.failure.ignore` 造成误绿。选择器、断言、基线和真实样本量阈值不改。独立真实 JUnit 阳性样本已验证该保护；完整 nightly 39148327770 在 Aurora 用时 65分04秒通过，最终 15,880 条测试记录、117 跳过、零失败错误，基线哈希未变；3,215 条原日志摘要经最终保护回放退出 0。
 - **runner 不全局注入 `spring.test.context.cache.maxSize`。** 历史说明记录过压缓存使共享 H2 关闭的风险；当前 `java-full-nightly.yml` 自身已有显式缓存参数，保留该受版本管理的行为，不扩散到其他门禁。运行参数改变后必须以实际重门禁/全量棘轮读数确认容量，不能只凭 runner online 或轻量 canary 宣称全量可用。
 - 加拿大四个 runner 在停止接单、GitHub busy=false、两次确认无 Runner.Worker 后停用，宿主机 CI 自启也已禁用。数据、VM 磁盘、原注册和配置保留；回滚先排空目标、核对最新记录与路由，不能直接恢复旧 watchdog。
 - Assembly 路由与六道实际门禁见 [PR #232](https://github.com/cretasfuture-ai/cretas-factory-assembly/pull/232)。完整验收记录由上述回执目录保存，区分配置、离线测试、实际 CI、全量棘轮、合并和应用发布。当前任务不进行应用部署或生产业务写入。

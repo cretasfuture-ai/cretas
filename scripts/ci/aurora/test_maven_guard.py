@@ -28,6 +28,7 @@ sys.exit(37 if 'fail' in sys.argv else 0)
         self.wrapper = self.root/'mvn'
         self.wrapper.write_text(script.replace('/usr/local/bin/mvn',str(stub)))
         self.wrapper.chmod(0o700)
+        (self.root/'maven_output_guard.py').write_bytes(Path(__file__).with_name('maven_output_guard.py').read_bytes())
         self.env = dict(os.environ,HOME=str(self.root))
         for key in ('MAVEN_OPTS','JAVA_TOOL_OPTIONS'): self.env.pop(key,None)
     def rows(self):
