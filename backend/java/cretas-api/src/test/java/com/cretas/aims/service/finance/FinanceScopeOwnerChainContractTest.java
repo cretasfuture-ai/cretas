@@ -41,6 +41,7 @@ class FinanceScopeOwnerChainContractTest {
     @Mock private PurchaseReceiveRecordRepository receiveRepository;
     @Mock private ReturnOrderRepository returnOrderRepository;
     @Mock private BusinessRowScope businessRowScope;
+    @Mock private com.cretas.aims.repository.inventory.PaymentRequestRepository paymentRequestRepository;
 
     private FinanceRowScopeQuery query;
 
@@ -50,6 +51,7 @@ class FinanceScopeOwnerChainContractTest {
                 purchaseOrderRepository, deliveryRepository, receiveRepository, returnOrderRepository,
                 allocationRepository);
         ReflectionTestUtils.setField(query, "businessRowScope", businessRowScope);
+        ReflectionTestUtils.setField(query, "paymentRequestRepository", paymentRequestRepository);
         org.mockito.Mockito.lenient().when(businessRowScope.creatorIds("F1")).thenReturn(List.of(11L));
     }
 
@@ -232,6 +234,52 @@ class FinanceScopeOwnerChainContractTest {
         payable.setSourceId("broken");
         payable.setPurchaseOrderId("PO-OWN");
         assertThat(query.resolveOwner(payment)).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"RETURN_REFUND", "RETURN_REFUND_REVERSAL"})
+    void refundAndReversalShareTheIntactSourceOwnerAndNeverFallBack(String source) {
+        var tx = transaction("RF-TX", 99L, "SO-OWN", source, "RF-REQUEST");
+        var type = "RETURN_REFUND".equals(source)
+                ? com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND
+                : com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT;
+        tx.setTransactionType(type);
+        tx.setCounterpartyType(com.cretas.aims.entity.enums.CounterpartyType.CUSTOMER);
+        tx.setCounterpartyId("C1");
+        var request = new com.cretas.aims.entity.inventory.PaymentRequest();
+        request.setId("RF-REQUEST"); request.setFactoryId("F1");
+        request.setSourceType(com.cretas.aims.entity.enums.PaymentSourceType.SALES);
+        request.setSalesOrderId("SO-OWN"); request.setCustomerId("C1"); request.setReturnOrderId("RF-RETURN");
+        var returned = new ReturnOrder(); returned.setId("RF-RETURN"); returned.setFactoryId("F1");
+        returned.setReturnType(ReturnType.SALES_RETURN); returned.setSourceOrderId("SO-OWN"); returned.setCounterpartyId("C1");
+        var order = new SalesOrder(); order.setId("SO-OWN"); order.setFactoryId("F1"); order.setCreatedBy(11L);
+        when(paymentRequestRepository.findById("RF-REQUEST")).thenReturn(Optional.of(request));
+        when(returnOrderRepository.findByIdAndFactoryId("RF-RETURN", "F1")).thenReturn(Optional.of(returned));
+        when(salesOrderRepository.findByIdAndFactoryId("SO-OWN", "F1")).thenReturn(Optional.of(order));
+        when(transactionRepository.findByIdAndFactoryId("RF-TX", "F1")).thenReturn(Optional.of(tx));
+        assertThat(query.requireTransactionAccess("F1", "RF-TX")).isSameAs(tx);
+        assertThat(query.resolveOwner(tx)).isEqualTo(11L);
+        request.setStatus(com.cretas.aims.entity.enums.PaymentRequestStatus.CANCELLED);
+        assertThat(query.resolveOwner(tx)).isEqualTo(11L); // cancellation must retain historical ownership
+        request.setFactoryId("F2"); assertThat(query.resolveOwner(tx)).isNull(); request.setFactoryId("F1");
+        request.softDelete(); assertThat(query.resolveOwner(tx)).isNull(); request.restore();
+        request.setPurchaseOrderId("PO-OTHER"); assertThat(query.resolveOwner(tx)).isNull(); request.setPurchaseOrderId(null);
+        request.setCustomerId("C-OTHER"); assertThat(query.resolveOwner(tx)).isNull(); request.setCustomerId("C1");
+        request.setSourceType(com.cretas.aims.entity.enums.PaymentSourceType.PURCHASE);
+        assertThat(query.resolveOwner(tx)).isNull(); request.setSourceType(com.cretas.aims.entity.enums.PaymentSourceType.SALES);
+        tx.setSalesOrderId("SO-OTHER"); assertThat(query.resolveOwner(tx)).isNull(); tx.setSalesOrderId("SO-OWN");
+        tx.setPurchaseOrderId("PO-OTHER"); assertThat(query.resolveOwner(tx)).isNull(); tx.setPurchaseOrderId(null);
+        tx.setTransactionType(com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE);
+        assertThat(query.resolveOwner(tx)).isNull(); tx.setTransactionType(type);
+        tx.setCounterpartyType(com.cretas.aims.entity.enums.CounterpartyType.SUPPLIER);
+        assertThat(query.resolveOwner(tx)).isNull(); tx.setCounterpartyType(com.cretas.aims.entity.enums.CounterpartyType.CUSTOMER);
+        returned.setCounterpartyId("C-OTHER"); assertThat(query.resolveOwner(tx)).isNull(); returned.setCounterpartyId("C1");
+        returned.setSourceOrderId("SO-OTHER"); assertThat(query.resolveOwner(tx)).isNull(); returned.setSourceOrderId("SO-OWN");
+        returned.setFactoryId("F2"); assertThat(query.resolveOwner(tx)).isNull(); returned.setFactoryId("F1");
+        tx.setSourceId("MISSING"); assertThat(query.resolveOwner(tx)).isNull(); tx.setSourceId("RF-REQUEST");
+        order.setCreatedBy(22L);
+        assertThatThrownBy(() -> query.requireTransactionAccess("F1", "RF-TX"))
+                .isInstanceOfSatisfying(BusinessException.class, error -> assertThat(error.getCode()).isEqualTo(403));
     }
 
     private static ArApTransaction transaction(String id, Long operator, String salesOrderId,

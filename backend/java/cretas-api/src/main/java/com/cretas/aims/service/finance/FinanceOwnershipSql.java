@@ -49,6 +49,18 @@ public final class FinanceOwnershipSql {
             + "AND pa_all.deleted_at IS NULL)=1 "
             + "AND (t.purchase_order_id IS NULL OR t.purchase_order_id=payable4.purchase_order_id))";
 
+    /** Authoritative refund-request owner, shared by AR/AP and voucher projections. */
+    public static final String REFUND_REQUEST_OWNER =
+            "(SELECT refund_so.created_by FROM return_orders refund_ro "
+            + "JOIN sales_orders refund_so ON refund_so.id=refund_ro.source_order_id "
+            + "AND refund_so.factory_id=refund_ro.factory_id AND refund_so.deleted_at IS NULL "
+            + "WHERE refund_ro.id=refund_request.return_order_id "
+            + "AND refund_ro.factory_id=refund_request.factory_id AND refund_ro.deleted_at IS NULL "
+            + "AND refund_ro.return_type='SALES_RETURN' AND refund_request.source_type='SALES' "
+            + "AND refund_request.purchase_order_id IS NULL "
+            + "AND refund_request.sales_order_id=refund_ro.source_order_id "
+            + "AND refund_request.customer_id=refund_ro.counterparty_id)";
+
     /** Expression for the fixed native-query alias {@code t}. */
     public static final String AR_AP_OWNER_T =
             "(CASE "
@@ -65,6 +77,13 @@ public final class FinanceOwnershipSql {
             + "AND (t.purchase_order_id IS NULL OR t.purchase_order_id=r.purchase_order_id) "
             + "AND r.deleted_at IS NULL) "
             + "WHEN t.source_type='PAYABLE_SETTLEMENT' THEN " + PAYABLE_SETTLEMENT_OWNER_T + " "
+            + "WHEN (t.source_type='RETURN_REFUND' AND t.transaction_type='AR_REFUND' "
+            + "OR t.source_type='RETURN_REFUND_REVERSAL' AND t.transaction_type='AR_ADJUSTMENT') "
+            + "AND t.purchase_order_id IS NULL AND t.counterparty_type='CUSTOMER' THEN "
+            + "(SELECT " + REFUND_REQUEST_OWNER + " FROM payment_requests refund_request "
+            + "WHERE refund_request.id=t.source_id AND refund_request.factory_id=t.factory_id "
+            + "AND refund_request.deleted_at IS NULL AND t.sales_order_id=refund_request.sales_order_id "
+            + "AND t.counterparty_id=refund_request.customer_id) "
             + "WHEN t.source_type='RETURN_ORDER' THEN "
             + "(SELECT " + RETURN_ORDER_OWNER_RO + " "
             + "FROM return_orders ro "
@@ -116,7 +135,8 @@ public final class FinanceOwnershipSql {
     /** Returns the same owner projection for another validated SQL alias. */
     public static String arApOwner(String alias) {
         validateAlias(alias);
-        return AR_AP_OWNER_T.replace("t.", alias + ".");
+        return AR_AP_OWNER_T.replaceAll("(?<![A-Za-z0-9_])t\\.",
+                java.util.regex.Matcher.quoteReplacement(alias + "."));
     }
 
     private static void validateAlias(String alias) {

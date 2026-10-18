@@ -36,7 +36,8 @@ public class VoucherRowScopeQuery {
         List<Object> args = new ArrayList<>();
         args.add(voucherId);
         args.add(factoryId);
-        for (int i = 0; i < 14; i++) args.addAll(creators);
+        // Eight owner branches, once for the voucher and once for its original.
+        for (int i = 0; i < 16; i++) args.addAll(creators);
         Boolean visible = jdbc.queryForObject(sql, Boolean.class, args.toArray());
         return Boolean.TRUE.equals(visible);
     }
@@ -57,6 +58,9 @@ public class VoucherRowScopeQuery {
                 + "LEFT JOIN purchase_orders po3 ON ro.return_type='PURCHASE_RETURN' AND po3.id=ro.source_order_id "
                 + "AND po3.factory_id=ro.factory_id AND po3.deleted_at IS NULL "
                 + "WHERE ro.id=? AND ro.factory_id=? AND ro.deleted_at IS NULL";
+        else if ("RETURN_REFUND".equals(sourceType)) sql = "SELECT " + FinanceOwnershipSql.REFUND_REQUEST_OWNER
+                + " FROM payment_requests refund_request WHERE refund_request.id=? "
+                + "AND refund_request.factory_id=? AND refund_request.deleted_at IS NULL";
         else if ("PRODUCTION_PLAN".equals(sourceType)) sql = "SELECT created_by FROM production_plans WHERE id=? AND factory_id=? AND deleted_at IS NULL";
         else if ("INTERNAL_TRANSFER".equals(sourceType)) sql = "SELECT requested_by FROM internal_transfers WHERE id=? AND (source_factory_id=? OR target_factory_id=?) AND deleted_at IS NULL";
         else if ("CASH_RECEIPT".equals(sourceType) || "CASH_PAYMENT".equals(sourceType)) {
@@ -85,6 +89,9 @@ public class VoucherRowScopeQuery {
                 + "LEFT JOIN purchase_orders po3 ON ro.return_type='PURCHASE_RETURN' AND po3.id=ro.source_order_id AND po3.factory_id=ro.factory_id AND po3.deleted_at IS NULL "
                 + "WHERE ro.id=" + voucherAlias + ".source_business_id AND ro.factory_id=" + voucherAlias + ".factory_id AND ro.deleted_at IS NULL AND "
                 + FinanceOwnershipSql.returnOrderOwner("ro", "so3", "po3") + " IN " + ownerIn + "))"
+                + " OR (" + voucherAlias + ".source_business_type='RETURN_REFUND' AND EXISTS (SELECT 1 FROM payment_requests refund_request "
+                + "WHERE refund_request.id=" + voucherAlias + ".source_business_id AND refund_request.factory_id=" + voucherAlias + ".factory_id "
+                + "AND refund_request.deleted_at IS NULL AND " + FinanceOwnershipSql.REFUND_REQUEST_OWNER + " IN " + ownerIn + "))"
                 + " OR (" + voucherAlias + ".source_business_type='INTERNAL_TRANSFER' AND EXISTS (SELECT 1 FROM internal_transfers it WHERE it.id=" + voucherAlias + ".source_business_id AND (it.source_factory_id=" + voucherAlias + ".factory_id OR it.target_factory_id=" + voucherAlias + ".factory_id) AND it.deleted_at IS NULL AND it.requested_by IN " + ownerIn + "))"
                 + " OR (" + voucherAlias + ".source_business_type='PRODUCTION_PLAN' AND EXISTS (SELECT 1 FROM production_plans pp WHERE pp.id=" + voucherAlias + ".source_business_id AND pp.factory_id=" + voucherAlias + ".factory_id AND pp.deleted_at IS NULL AND pp.created_by IN " + ownerIn + "))"
                 + " OR (" + voucherAlias + ".source_business_type IN ('CASH_RECEIPT','CASH_PAYMENT') AND EXISTS (SELECT 1 FROM ar_ap_transactions t WHERE t.id=" + voucherAlias + ".source_business_id AND t.factory_id=" + voucherAlias + ".factory_id AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.arApOwner("t") + " IN " + ownerIn + "))"

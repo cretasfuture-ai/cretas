@@ -120,6 +120,42 @@ class RoleDataScopePostgresContractTest {
         });
     }
 
+    @Test void refundSourceDetailChecksUpstreamOwnerBeforeCallingBusinessService() throws Exception {
+        fixture((jdbc,resolver,scopes) -> {
+            jdbc.execute("CREATE TABLE sales_orders(id varchar PRIMARY KEY,factory_id varchar,created_by bigint,deleted_at timestamp)");
+            jdbc.execute("CREATE TABLE return_orders(id varchar PRIMARY KEY,factory_id varchar,return_type varchar,source_order_id varchar,counterparty_id varchar,deleted_at timestamp)");
+            jdbc.execute("CREATE TABLE payment_requests(id varchar PRIMARY KEY,factory_id varchar,return_order_id varchar,sales_order_id varchar,source_type varchar,purchase_order_id varchar,customer_id varchar,deleted_at timestamp)");
+            jdbc.update("INSERT INTO sales_orders VALUES ('SO-OWN','F1',56,NULL),('SO-OTHER','F1',66,NULL)");
+            jdbc.update("INSERT INTO return_orders VALUES ('RET-OWN','F1','SALES_RETURN','SO-OWN','C1',NULL),('RET-OTHER','F1','SALES_RETURN','SO-OTHER','C1',NULL)");
+            jdbc.update("INSERT INTO payment_requests VALUES ('REQ-OWN','F1','RET-OWN','SO-OWN','SALES',NULL,'C1',NULL),"
+                    +"('REQ-OTHER','F1','RET-OTHER','SO-OTHER','SALES',NULL,'C1',NULL),"
+                    +"('REQ-BROKEN','F1','RET-OWN','SO-OTHER','SALES',NULL,'C1',NULL),"
+                    +"('REQ-FOREIGN','F2','RET-OWN','SO-OWN','SALES',NULL,'C1',NULL),"
+                    +"('REQ-DELETED','F1','RET-OWN','SO-OWN','SALES',NULL,'C1',CURRENT_TIMESTAMP)");
+            scopes.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.SELF,0),56L);
+            var refunds=org.mockito.Mockito.mock(com.cretas.aims.service.inventory.ReturnRefundService.class);
+            var controller=new com.cretas.aims.controller.inventory.ReturnRefundSourceController(refunds);
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+                    .addInterceptors(new DataScopeRouteInterceptor(resolver,jdbc)).setControllerAdvice(new RouteErrors()).build();
+            var identity=new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,56L,"F1","warehouse_manager");
+            for(String id:List.of("REQ-OTHER","REQ-BROKEN","REQ-FOREIGN","REQ-DELETED","MISSING")) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/return-refunds/"+id)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            }
+            org.mockito.Mockito.verifyNoInteractions(refunds);
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/return-refunds/REQ-OWN")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            org.mockito.Mockito.verify(refunds).getByRequest("F1","REQ-OWN");
+            scopes.update("F1","warehouse_manager",new RoleDataScopeService.Update(com.cretas.aims.entity.enums.DataScope.ALL,1),56L);
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/return-refunds/REQ-OTHER")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            org.mockito.Mockito.verify(refunds).getByRequest("F1","REQ-OTHER");
+        });
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"sales/orders","purchase/orders","customers","material-batches","return-orders","quality-return-orders","reference-data/customers","reference-data/sales-orders","reference-data/purchase-orders","reference-data/batches","markers/sales-order","markers/purchase-order"})
     void hiddenExternalIdReadAndWriteAreBlockedBeforeBusinessHandler(String resource) throws Exception {

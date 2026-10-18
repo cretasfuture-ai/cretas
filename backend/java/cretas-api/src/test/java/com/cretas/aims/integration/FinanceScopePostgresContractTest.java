@@ -39,12 +39,15 @@ class FinanceScopePostgresContractTest {
                 insertFixture(jdbc);
 
                 String owner = FinanceOwnershipSql.arApOwner("t");
+                assertThat(jdbc.queryForObject("SELECT " + FinanceOwnershipSql.arApOwner("ledger")
+                                + " FROM ar_ap_transactions ledger WHERE ledger.id='REFUND_OWN'",
+                        Long.class)).isEqualTo(11L);
                 String predicate = " FROM ar_ap_transactions t"
                         + " WHERE t.factory_id=? AND t.deleted_at IS NULL AND " + owner + "=?";
 
                 Integer owner11Count = jdbc.queryForObject(
                         "SELECT count(*)" + predicate, Integer.class, "F1", 11L);
-                assertThat(owner11Count).isEqualTo(7);
+                assertThat(owner11Count).isEqualTo(9);
                 BigDecimal owner11Amount = jdbc.queryForObject(
                         "SELECT COALESCE(SUM(t.amount), 0)" + predicate, BigDecimal.class, "F1", 11L);
                 assertThat(owner11Amount).isEqualByComparingTo("50.00");
@@ -53,7 +56,8 @@ class FinanceScopePostgresContractTest {
                         "SELECT t.id" + predicate + " ORDER BY t.id",
                         (rs, row) -> rs.getString(1), "F1", 11L);
                 assertThat(owner11Ids).containsExactly(
-                        "AP_SETTLED", "DELIVERY_OWN", "MANUAL_OWN", "RECEIVE_OWN", "RETURN_OWN",
+                        "AP_SETTLED", "DELIVERY_OWN", "MANUAL_OWN", "RECEIVE_OWN", "REFUND_OWN",
+                        "REFUND_REVERSAL", "RETURN_OWN",
                         "SETTLED_PAYMENT", "SO_OWN");
 
                 Integer owner22Count = jdbc.queryForObject(
@@ -74,9 +78,40 @@ class FinanceScopePostgresContractTest {
 
                 assertThat(jdbc.queryForObject(
                         "SELECT count(*) FROM ar_ap_transactions t WHERE t.factory_id=?"
-                                + " AND t.id IN ('UNKNOWN_SOURCE', 'BROKEN_DELIVERY', 'CROSS_FACTORY', 'MISMATCHED_DELIVERY', 'MISMATCHED_RETURN')"
+                                + " AND t.id IN ('UNKNOWN_SOURCE', 'BROKEN_DELIVERY', 'CROSS_FACTORY', 'MISMATCHED_DELIVERY', 'MISMATCHED_RETURN', 'REFUND_BAD_TYPE', 'REFUND_DELETED', 'REFUND_MISSING', 'REFUND_BAD_SO_T', 'REFUND_BAD_CUSTOMER_T', 'REFUND_BAD_PURCHASE_T', 'REFUND_BAD_RETURN_T')"
                                 + " AND " + owner + " IS NULL",
-                        Integer.class, "F1")).isEqualTo(5);
+                        Integer.class, "F1")).isEqualTo(12);
+
+                // Mutate one link at a time: no surviving direct-order/operator fallback is allowed.
+                String[][] brokenLinks = {
+                    {"payment_requests","factory_id","REFUND_PR","'F2'","'F1'"},
+                    {"payment_requests","deleted_at","REFUND_PR","CURRENT_TIMESTAMP","NULL"},
+                    {"payment_requests","source_type","REFUND_PR","'PURCHASE'","'SALES'"},
+                    {"payment_requests","purchase_order_id","REFUND_PR","'PO_OWN'","NULL"},
+                    {"payment_requests","sales_order_id","REFUND_PR","'SO_HIDDEN'","'SO_OWN'"},
+                    {"payment_requests","customer_id","REFUND_PR","'C2'","'C1'"},
+                    {"return_orders","factory_id","RETURN_OWN","'F2'","'F1'"},
+                    {"return_orders","deleted_at","RETURN_OWN","CURRENT_TIMESTAMP","NULL"},
+                    {"return_orders","counterparty_id","RETURN_OWN","'C2'","'C1'"},
+                    {"return_orders","source_order_id","RETURN_OWN","'SO_HIDDEN'","'SO_OWN'"},
+                    {"return_orders","return_type","RETURN_OWN","'PURCHASE_RETURN'","'SALES_RETURN'"},
+                    {"sales_orders","factory_id","SO_OWN","'F2'","'F1'"},
+                    {"sales_orders","deleted_at","SO_OWN","CURRENT_TIMESTAMP","NULL"},
+                    {"ar_ap_transactions","purchase_order_id","REFUND_OWN","'PO_OWN'","NULL"},
+                    {"ar_ap_transactions","sales_order_id","REFUND_OWN","'SO_HIDDEN'","'SO_OWN'"},
+                    {"ar_ap_transactions","transaction_type","REFUND_OWN","'AR_INVOICE'","'AR_REFUND'"},
+                    {"ar_ap_transactions","counterparty_type","REFUND_OWN","'SUPPLIER'","'CUSTOMER'"},
+                    {"ar_ap_transactions","counterparty_id","REFUND_OWN","'C2'","'C1'"}
+                };
+                for (String[] link : brokenLinks) {
+                    String update="UPDATE " + link[0] + " SET " + link[1] + "=";
+                    jdbc.update(update + link[3] + " WHERE id=?", link[2]);
+                    assertThat(jdbc.query("SELECT " + owner + " FROM ar_ap_transactions t WHERE id='REFUND_OWN'",
+                            (rs,n)->rs.getObject(1,Long.class)).get(0)).as(link[0]+"."+link[1]).isNull();
+                    jdbc.update(update + link[4] + " WHERE id=?", link[2]);
+                    assertThat(jdbc.query("SELECT " + owner + " FROM ar_ap_transactions t WHERE id='REFUND_OWN'",
+                            (rs,n)->rs.getObject(1,Long.class)).get(0)).isEqualTo(11L);
+                }
 
                 jdbc.update("UPDATE ar_ap_transactions SET amount=100, "
                                 + "transaction_date=CURRENT_DATE - INTERVAL '1 day' WHERE id='MANUAL_OWN'");
@@ -126,8 +161,12 @@ class FinanceScopePostgresContractTest {
                 + "purchase_order_id varchar(64), deleted_at timestamp NULL)");
         statement.execute("CREATE TABLE return_orders ("
                 + "id varchar(64) PRIMARY KEY, factory_id varchar(64) NOT NULL,"
-                + "return_type varchar(32), source_order_id varchar(64),"
+                + "return_type varchar(32), source_order_id varchar(64), counterparty_id varchar(64),"
                 + "created_by bigint, deleted_at timestamp NULL)");
+        statement.execute("CREATE TABLE payment_requests ("
+                + "id varchar(64) PRIMARY KEY, factory_id varchar(64) NOT NULL, source_type varchar(32),"
+                + "sales_order_id varchar(64), purchase_order_id varchar(64), return_order_id varchar(64),"
+                + "customer_id varchar(64), deleted_at timestamp NULL)");
         statement.execute("CREATE TABLE ar_ap_transactions ("
                 + "id varchar(64) PRIMARY KEY, factory_id varchar(64) NOT NULL,"
                 + "deleted_at timestamp NULL, sales_order_id varchar(64),"
@@ -149,9 +188,14 @@ class FinanceScopePostgresContractTest {
                 "DELIVERY_OWN", "F1", "SO_OWN");
         jdbc.update("INSERT INTO purchase_receive_records VALUES (?, ?, ?, NULL)",
                 "RECEIVE_OWN", "F1", "PO_OWN");
-        jdbc.update("INSERT INTO return_orders VALUES (?, ?, ?, ?, ?, NULL), (?, ?, ?, ?, ?, NULL)",
-                "RETURN_OWN", "F1", "SALES_RETURN", "SO_OWN", 99L,
-                "RETURN_MISMATCH", "F1", "SALES_RETURN", "SO_OWN", 99L);
+        jdbc.update("INSERT INTO return_orders VALUES (?, ?, ?, ?, ?, ?, NULL), (?, ?, ?, ?, ?, ?, NULL)",
+                "RETURN_OWN", "F1", "SALES_RETURN", "SO_OWN", "C1", 99L,
+                "RETURN_MISMATCH", "F1", "SALES_RETURN", "SO_OWN", "C1", 99L);
+        jdbc.update("INSERT INTO return_orders(id,factory_id,return_type,source_order_id,counterparty_id,created_by) VALUES ('REFUND_WRONG_RETURN','F1','SALES_RETURN','SO_HIDDEN','C1',99)");
+        jdbc.update("INSERT INTO payment_requests (id,factory_id,source_type,sales_order_id,purchase_order_id,return_order_id,customer_id,deleted_at) VALUES "
+                + "('REFUND_PR','F1','SALES','SO_OWN',NULL,'RETURN_OWN','C1',NULL),"
+                + "('REFUND_PR_BAD','F1','PURCHASE','SO_OWN',NULL,'RETURN_OWN','C1',NULL),"
+                + "('REFUND_PR_DELETED','F1','SALES','SO_OWN',NULL,'RETURN_OWN','C1',CURRENT_TIMESTAMP)");
 
         jdbc.update("INSERT INTO ar_ap_transactions "
                         + "(id, factory_id, deleted_at, sales_order_id, purchase_order_id, source_type, source_id, operated_by, transaction_date, amount) VALUES"
@@ -163,6 +207,11 @@ class FinanceScopePostgresContractTest {
                         + " (?, ?, NULL, NULL, NULL, 'SALES_DELIVERY', ?, ?, CURRENT_DATE, 10),"
                         + " (?, ?, NULL, NULL, NULL, 'PURCHASE_RECEIVE', ?, ?, CURRENT_DATE, 10),"
                         + " (?, ?, NULL, NULL, NULL, 'RETURN_ORDER', ?, ?, CURRENT_DATE, 10),"
+                        + " (?, ?, NULL, ?, NULL, 'RETURN_REFUND', ?, ?, CURRENT_DATE, 15),"
+                        + " (?, ?, NULL, ?, NULL, 'RETURN_REFUND_REVERSAL', ?, ?, CURRENT_DATE, -15),"
+                        + " (?, ?, NULL, ?, NULL, 'RETURN_REFUND', ?, ?, CURRENT_DATE, 15),"
+                        + " (?, ?, NULL, ?, NULL, 'RETURN_REFUND', ?, ?, CURRENT_DATE, 15),"
+                        + " (?, ?, NULL, ?, NULL, 'RETURN_REFUND', ?, ?, CURRENT_DATE, 15),"
                         + " (?, ?, NULL, NULL, NULL, 'UNKNOWN', ?, ?, CURRENT_DATE, 10),"
                         + " (?, ?, NULL, NULL, NULL, 'SALES_DELIVERY', ?, ?, CURRENT_DATE, 10),"
                         + " (?, ?, NULL, ?, NULL, 'SALES_DELIVERY', ?, ?, CURRENT_DATE, 10),"
@@ -175,12 +224,30 @@ class FinanceScopePostgresContractTest {
                 "DELIVERY_OWN", "F1", "DELIVERY_OWN", 99L,
                 "RECEIVE_OWN", "F1", "RECEIVE_OWN", 99L,
                 "RETURN_OWN", "F1", "RETURN_OWN", 99L,
+                "REFUND_OWN", "F1", "SO_OWN", "REFUND_PR", 99L,
+                "REFUND_REVERSAL", "F1", "SO_OWN", "REFUND_PR", 99L,
+                "REFUND_BAD_TYPE", "F1", "SO_OWN", "REFUND_PR_BAD", 99L,
+                "REFUND_DELETED", "F1", "SO_OWN", "REFUND_PR_DELETED", 99L,
+                "REFUND_MISSING", "F1", "SO_OWN", "REFUND_PR_MISSING", 99L,
                 "UNKNOWN_SOURCE", "F1", "UNKNOWN_ID", 11L,
                 "BROKEN_DELIVERY", "F1", "MISSING_DELIVERY", 11L,
                 "MISMATCHED_DELIVERY", "F1", "SO_HIDDEN", "DELIVERY_OWN", 11L,
                 "MISMATCHED_RETURN", "F1", "SO_HIDDEN", "RETURN_MISMATCH", 11L);
         jdbc.update("UPDATE ar_ap_transactions SET transaction_type='AR_INVOICE' "
                 + "WHERE factory_id='F1' AND transaction_type IS NULL");
+        jdbc.update("UPDATE ar_ap_transactions SET transaction_type='AR_REFUND' WHERE id='REFUND_OWN'");
+        jdbc.update("UPDATE ar_ap_transactions SET transaction_type='AR_ADJUSTMENT' WHERE id='REFUND_REVERSAL'");
+        jdbc.update("UPDATE ar_ap_transactions SET transaction_type='AR_REFUND' WHERE id IN ('REFUND_BAD_TYPE','REFUND_DELETED','REFUND_MISSING')");
+        jdbc.update("INSERT INTO payment_requests (id,factory_id,source_type,sales_order_id,purchase_order_id,return_order_id,customer_id,deleted_at) VALUES "
+                + "('REFUND_BAD_SO_PR','F1','SALES','SO_HIDDEN',NULL,'RETURN_OWN','C1',NULL),"
+                + "('REFUND_BAD_CUSTOMER_PR','F1','SALES','SO_OWN',NULL,'RETURN_OWN','C2',NULL),"
+                + "('REFUND_BAD_PURCHASE_PR','F1','SALES','SO_OWN','PO_OWN','RETURN_OWN','C1',NULL),"
+                + "('REFUND_BAD_RETURN_PR','F1','SALES','SO_OWN',NULL,'REFUND_WRONG_RETURN','C1',NULL)");
+        jdbc.update("INSERT INTO ar_ap_transactions (id,factory_id,sales_order_id,purchase_order_id,source_type,source_id,operated_by,transaction_type,transaction_date,amount,counterparty_type,counterparty_id) VALUES "
+                + "('REFUND_BAD_SO_T','F1','SO_OWN',NULL,'RETURN_REFUND','REFUND_BAD_SO_PR',99,'AR_REFUND',CURRENT_DATE,1,'CUSTOMER','C1'),"
+                + "('REFUND_BAD_CUSTOMER_T','F1','SO_OWN',NULL,'RETURN_REFUND','REFUND_BAD_CUSTOMER_PR',99,'AR_REFUND',CURRENT_DATE,1,'CUSTOMER','C2'),"
+                + "('REFUND_BAD_PURCHASE_T','F1','SO_OWN','PO_OWN','RETURN_REFUND','REFUND_BAD_PURCHASE_PR',99,'AR_REFUND',CURRENT_DATE,1,'CUSTOMER','C1'),"
+                + "('REFUND_BAD_RETURN_T','F1','SO_OWN',NULL,'RETURN_REFUND','REFUND_BAD_RETURN_PR',99,'AR_REFUND',CURRENT_DATE,1,'CUSTOMER','C1')");
 
         jdbc.update("INSERT INTO ar_ap_transactions "
                         + "(id, factory_id, deleted_at, purchase_order_id, source_type, source_id, operated_by, transaction_type, transaction_date, amount) "

@@ -33,6 +33,9 @@ public class FinanceRowScopeQuery {
     @Autowired(required = false)
     private BusinessRowScope businessRowScope;
 
+    @Autowired
+    private com.cretas.aims.repository.inventory.PaymentRequestRepository paymentRequestRepository;
+
     public FinanceRowScopeQuery(ArApTransactionRepository transactionRepository,
                                 SalesOrderRepository salesOrderRepository,
                                 PurchaseOrderRepository purchaseOrderRepository,
@@ -170,6 +173,10 @@ public class FinanceRowScopeQuery {
                             transaction.getSalesOrderId(), transaction.getPurchaseOrderId()))
                     .orElse(null);
         }
+        if ("RETURN_REFUND".equals(transaction.getSourceType())
+                || "RETURN_REFUND_REVERSAL".equals(transaction.getSourceType())) {
+            return resolveRefundOwner(transaction);
+        }
         if ("PAYABLE_SETTLEMENT".equals(transaction.getSourceType())) {
             return resolvePayableSettlementOwner(transaction);
         }
@@ -186,6 +193,33 @@ public class FinanceRowScopeQuery {
             return transaction.getOperatedBy();
         }
         return null;
+    }
+
+    /** A refund and its cancellation inherit the same intact request/return/order owner. */
+    private Long resolveRefundOwner(ArApTransaction transaction) {
+        boolean original = "RETURN_REFUND".equals(transaction.getSourceType());
+        if (paymentRequestRepository == null || !hasText(transaction.getSourceId())
+                || transaction.getTransactionType() != (original
+                    ? com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND
+                    : com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT)
+                || transaction.getCounterpartyType() != com.cretas.aims.entity.enums.CounterpartyType.CUSTOMER
+                || transaction.getPurchaseOrderId() != null) return null;
+        String factoryId = transaction.getFactoryId();
+        var request = paymentRequestRepository.findById(transaction.getSourceId())
+                .filter(p -> factoryId.equals(p.getFactoryId()) && p.getDeletedAt() == null
+                        && p.getSourceType() == com.cretas.aims.entity.enums.PaymentSourceType.SALES
+                        && p.getPurchaseOrderId() == null
+                        && hasText(p.getReturnOrderId()) && hasText(p.getSalesOrderId())
+                        && p.getSalesOrderId().equals(transaction.getSalesOrderId())
+                        && hasText(p.getCustomerId()) && p.getCustomerId().equals(transaction.getCounterpartyId()))
+                .orElse(null);
+        if (request == null) return null;
+        return returnOrderRepository.findByIdAndFactoryId(request.getReturnOrderId(), factoryId)
+                .filter(r -> factoryId.equals(r.getFactoryId()) && r.getDeletedAt() == null
+                        && r.getReturnType() == com.cretas.aims.entity.enums.ReturnType.SALES_RETURN
+                        && request.getCustomerId().equals(r.getCounterpartyId()))
+                .flatMap(r -> resolveReturnOrderOwner(factoryId, r, request.getSalesOrderId(), null))
+                .orElse(null);
     }
 
     /**
