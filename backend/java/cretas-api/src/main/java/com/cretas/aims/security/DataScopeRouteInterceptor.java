@@ -45,6 +45,10 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("return-orders/purchase-source","purchase_orders",List.of("purchaseOrderId")),
         new Resource("return-orders","return_orders",List.of("returnOrderId")),
         new Resource("quality-return-orders","quality_return_orders",List.of("id")));
+    private static boolean rowScopeSupported(HandlerMethod method) {
+        return org.springframework.core.annotation.AnnotatedElementUtils.hasAnnotation(method.getMethod(),RowScopeSupported.class)
+                || org.springframework.core.annotation.AnnotatedElementUtils.hasAnnotation(method.getBeanType(),RowScopeSupported.class);
+    }
     @Override public boolean preHandle(HttpServletRequest request,HttpServletResponse response,Object handler) {
         if (!(handler instanceof HandlerMethod)) return true;
         Object raw=request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
@@ -85,27 +89,48 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         AuthenticatedActor actor=AuthenticatedActor.current(request).orElseThrow(()->new BusinessException(401,"缺少已认证数据访问身份"));
         if (actor.hasFactoryBypass()) return true;
         if (actor.isPlatformAdmin() || !factory.equals(actor.factoryId())) throw new BusinessException(403,"无权访问其他工厂数据");
+        // Only this summary branch binds the same explicit creator predicate as production lists.
+        if (request.getMethod().equals("POST") && path.equals("list-summary/{entityType}")
+                && "productionPlan".equals(vars.get("entityType"))
+                && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.ListSummaryController.class)
+                && BusinessRowScope.resolve(request,factory,resolver,jdbc) != null) return true;
+        if (request.getMethod().equals("GET") && Set.of("workflow-stats/production","workflow-stats/finance").contains(path)
+                && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.WorkflowStatsController.class)
+                && rowScopeSupported((HandlerMethod) handler)
+                && BusinessRowScope.resolve(request,factory,resolver,jdbc) != null) return true;
+        if (unsupportedScopeDomain != null) {
+            List<Long> creators = BusinessRowScope.resolve(request, factory, resolver, jdbc);
+            if (creators == null) return true;
+            HandlerMethod method = (HandlerMethod) handler;
+            String controller = method.getBeanType().getName();
+            if (Set.of("com.cretas.aims.controller.finance.AccountController",
+                    "com.cretas.aims.controller.finance.VoucherSubjectMappingController",
+                    "com.cretas.aims.controller.finance.VoucherExportConfigController",
+                    "com.cretas.aims.controller.finance.AccountingPeriodController").contains(controller)) {
+                if (request.getMethod().equals("GET")) return true;
+                throw new BusinessException(403,"此操作修改全工厂财务配置或期间，需要全工厂数据范围");
+            }
+            if (controller.equals("com.cretas.aims.controller.finance.MonthCloseController"))
+                throw new BusinessException(403,"月结属于全工厂操作，需要全工厂数据范围");
+            if (!rowScopeSupported(method))
+                throw new BusinessException(403,"当前数据范围尚不支持" + unsupportedScopeDomain + "入口，访问已停止");
+            if (unsupportedScopeDomain.equals("生产计划") && vars.get("planId") instanceof String planId) {
+                List<Long> owners=jdbc.query("SELECT created_by FROM production_plans WHERE factory_id=? AND id=? AND deleted_at IS NULL",
+                        (rs,n)->rs.getObject(1,Long.class),factory,planId);
+                if (owners.size()!=1 || owners.get(0)==null || !creators.contains(owners.get(0)))
+                    throw new BusinessException(403,"该生产计划不在当前账号的数据范围内");
+            }
+            return true;
+        }
+        if (request.getMethod().equals("GET") && resource != null && path.equals(resource.root())
+                && Set.of("finance/invoices","finance/payments").contains(path)
+                && rowScopeSupported((HandlerMethod) handler)) {
+            BusinessRowScope.resolve(request,factory,resolver,jdbc);
+            return true;
+        }
         DataScopeContext context=resolver.resolve(actor.id());
         if (context==null || !factory.equals(context.getFactoryId())) throw new BusinessException(403,"无有效工厂数据身份");
         if (context.getScope()==DataScope.ALL) return true;
-        if (unsupportedScopeDomain != null) {
-            String roleCode = context.getRoleCode();
-            if (roleCode == null || roleCode.isBlank())
-                throw new BusinessException(503,"无法读取工厂数据范围，访问已停止");
-            final Long configured;
-            try {
-                configured = jdbc.queryForObject(
-                        "SELECT COUNT(*) FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?",
-                        Long.class, factory, roleCode);
-            } catch (RuntimeException ex) {
-                throw new BusinessException(503,"无法读取工厂数据范围，访问已停止",ex);
-            }
-            if (configured == null)
-                throw new BusinessException(503,"无法读取工厂数据范围，访问已停止");
-            if (configured > 0)
-                throw new BusinessException(403,"当前受限数据范围尚不支持" + unsupportedScopeDomain + "入口，已拒绝访问，请联系管理员确认适用的数据范围");
-            return true;
-        }
         // These retired endpoints only return 410 with a migration hint; they cannot create records.
         if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // The payment service checks the locked source order before its first write.

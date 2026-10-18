@@ -1,6 +1,7 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.InterimSettleReversalRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductType;
@@ -19,6 +20,8 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -38,6 +41,7 @@ class ProductionPlanRepositoryQueryValidationTest {
 
     @Autowired TestEntityManager entityManager;
     @Autowired ProductionPlanRepository productionPlanRepository;
+    @Autowired InterimSettleReversalRequestRepository interimSettleReversalRequestRepository;
     @Autowired ProductionBatchRepository productionBatchRepository;
     @Autowired MaterialBatchRepository materialBatchRepository;
     @Autowired MaterialConsumptionRepository materialConsumptionRepository;
@@ -184,6 +188,113 @@ class ProductionPlanRepositoryQueryValidationTest {
         assertThat(productionBatchRepository
                 .countAllPhysicalByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
                 .isZero();
+    }
+
+    @Test
+    void creatorScopedProductionPlanQueriesBootBeforePagination() {
+        assertThat(productionPlanRepository
+                .findByFactoryIdAndCreatedByIn("F-JPA-ROW-SCOPE", java.util.List.of(7001L, 7002L)))
+                .isEmpty();
+        assertThat(productionPlanRepository
+                .findByFactoryIdAndCreatedByInAndSourceOrderIdExact(
+                        "F-JPA-ROW-SCOPE", java.util.List.of(7001L, 7002L), "SO-JPA-ROW-SCOPE"))
+                .isEmpty();
+
+        Specification<ProductionPlan> scoped = (root, query, criteriaBuilder) -> criteriaBuilder.and(
+                criteriaBuilder.equal(root.get("factoryId"), "F-JPA-ROW-SCOPE"),
+                root.get("createdBy").in(java.util.List.of(7001L, 7002L)));
+        assertThat(productionPlanRepository.findAll(scoped, PageRequest.of(0, 1))).isEmpty();
+    }
+
+    @Test
+    void creatorScopedReversalRequestQueryBootsAndFiltersBeforePageCount() {
+        assertThat(interimSettleReversalRequestRepository
+                .findByFactoryIdWithFiltersAndProductionPlanIds(
+                        "F-JPA-ROW-SCOPE",
+                        InterimSettleReversalRequest.Status.PENDING_APPROVAL,
+                        "NO-SUCH-PLAN",
+                        java.util.List.of("NO-SUCH-PLAN"),
+                        PageRequest.of(0, 1)))
+                .isEmpty();
+    }
+
+    @Test
+    void creatorScopedSpecificationFiltersRowsBeforePageTotal() {
+        Factory factory = new Factory();
+        factory.setId("F-JPA-ROW-SCOPE");
+        factory.setName("JPA production-plan row-scope factory");
+        factory.setType(FactoryType.FACTORY);
+        factory.setLevel(0);
+        factory.setIsActive(true);
+        factory.setManuallyVerified(false);
+        factory.setAiWeeklyQuota(20);
+        entityManager.persist(factory);
+
+        User owner = new User();
+        owner.setFactoryId(factory.getId());
+        owner.setUsername("jpa-row-scope-owner");
+        owner.setPasswordHash("test-only");
+        owner.setIsActive(true);
+        entityManager.persist(owner);
+        User outside = new User();
+        outside.setFactoryId(factory.getId());
+        outside.setUsername("jpa-row-scope-outside");
+        outside.setPasswordHash("test-only");
+        outside.setIsActive(true);
+        entityManager.persist(outside);
+        entityManager.flush();
+
+        ProductType product = new ProductType();
+        product.setId("P-JPA-ROW-SCOPE");
+        product.setFactoryId(factory.getId());
+        product.setCreatedBy(owner.getId());
+        product.setCode("ROW-SCOPE-PRODUCT");
+        product.setName("Row scope product");
+        product.setUnit("box");
+        product.setCategory("FINISHED_PRODUCT");
+        product.setProductCategory("FINISHED_PRODUCT");
+        product.setIsActive(true);
+        entityManager.persist(product);
+
+        ProductionPlan visible = rowScopedPlan(factory.getId(), product.getId(), owner.getId(), "VISIBLE");
+        ProductionPlan hidden = rowScopedPlan(factory.getId(), product.getId(), outside.getId(), "HIDDEN");
+        entityManager.persist(visible);
+        entityManager.persist(hidden);
+        entityManager.flush();
+        entityManager.clear();
+
+        Specification<ProductionPlan> scoped = (root, query, criteriaBuilder) -> criteriaBuilder.and(
+                criteriaBuilder.equal(root.get("factoryId"), factory.getId()),
+                root.get("createdBy").in(java.util.List.of(owner.getId())));
+        org.springframework.data.domain.Page<ProductionPlan> page =
+                productionPlanRepository.findAll(scoped, PageRequest.of(0, 1));
+
+        assertThat(page.getTotalElements()).isEqualTo(1);
+        assertThat(page.getContent()).extracting(ProductionPlan::getId).containsExactly(visible.getId());
+        assertThat(productionPlanRepository.findByFactoryIdAndCreatedByIn(
+                factory.getId(), java.util.List.of(owner.getId())))
+                .extracting(ProductionPlan::getId)
+                .containsExactly(visible.getId());
+    }
+
+    private static ProductionPlan rowScopedPlan(String factoryId, String productId,
+                                                Long createdBy, String suffix) {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-JPA-ROW-SCOPE-" + suffix);
+        plan.setFactoryId(factoryId);
+        plan.setPlanNumber("PLAN-JPA-ROW-SCOPE-" + suffix);
+        plan.setProductTypeId(productId);
+        plan.setPlannedQuantity(BigDecimal.ONE);
+        plan.setPlannedUnit("box");
+        plan.setPlannedDate(LocalDate.of(2026, 10, 18));
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setSourceType(PlanSourceType.MANUAL);
+        plan.setCreatedBy(createdBy);
+        plan.setSourceOrderIds(null);
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        return plan;
     }
 
     @Test

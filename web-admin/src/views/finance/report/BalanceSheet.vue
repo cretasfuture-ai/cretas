@@ -29,6 +29,9 @@
         </div>
       </template>
 
+      <el-alert v-if="data?.scopeApplied" type="info" :closable="false" show-icon
+        :title="data.scopeLabel" :description="data.scopeNote" style="margin-bottom: 16px;" />
+
       <!-- 防呆 R5: 期间未结账 WARN — 跳到 period 页 -->
       <el-alert
         v-if="data && data.periodStatus !== 'CLOSED'"

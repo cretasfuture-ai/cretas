@@ -52,6 +52,22 @@ public interface InvoiceRecordRepository extends JpaRepository<InvoiceRecord, St
                                         @Param("invoiceType") String invoiceType,
                                         Pageable pageable);
 
+    @Query(value = "SELECT i.* FROM invoice_records i JOIN sales_orders o ON o.id=i.sales_order_id "
+            + "AND o.factory_id=i.factory_id AND o.deleted_at IS NULL "
+            + "WHERE i.factory_id=:factoryId AND i.deleted_at IS NULL "
+            + "AND (CAST(:status AS text) IS NULL OR i.status=CAST(:status AS text)) "
+            + "AND (CAST(:invoiceType AS text) IS NULL OR i.invoice_type=CAST(:invoiceType AS text)) "
+            + "AND o.created_by IN (:owners) ORDER BY i.created_at DESC",
+            countQuery = "SELECT COUNT(*) FROM invoice_records i JOIN sales_orders o ON o.id=i.sales_order_id "
+            + "AND o.factory_id=i.factory_id AND o.deleted_at IS NULL "
+            + "WHERE i.factory_id=:factoryId AND i.deleted_at IS NULL "
+            + "AND (CAST(:status AS text) IS NULL OR i.status=CAST(:status AS text)) "
+            + "AND (CAST(:invoiceType AS text) IS NULL OR i.invoice_type=CAST(:invoiceType AS text)) "
+            + "AND o.created_by IN (:owners)", nativeQuery = true)
+    Page<InvoiceRecord> searchInvoicesInOrderScope(@Param("factoryId") String factoryId,
+            @Param("status") String status, @Param("invoiceType") String invoiceType,
+            @Param("owners") List<Long> owners, Pageable pageable);
+
     List<InvoiceRecord> findBySalesOrderIdAndDeletedAtIsNull(String salesOrderId);
 
     /** Factory-scoped lookup — enforces tenant isolation. */

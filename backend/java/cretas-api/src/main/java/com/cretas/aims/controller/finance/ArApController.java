@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
+import com.cretas.aims.security.RowScopeSupported;
 
 @Slf4j
 @RestController
@@ -36,6 +37,7 @@ import com.cretas.aims.annotation.RequireModule;
 @RequiredArgsConstructor
 @Tag(name = "应收应付管理", description = "AR/AP 交易记录、对账单、账龄分析")
 @RequirePermission("finance:read_write")
+@RowScopeSupported
 public class ArApController {
 
     private final ArApService arApService;
@@ -44,6 +46,9 @@ public class ArApController {
     /** R23 audit C4: conditional module check for /adjustment endpoint (counterpartyType-dependent). */
     private final FactoryConfigService factoryConfigService;
     private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.finance.FinanceRowScopeQuery financeRowScopeQuery;
 
     /**
      * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): explicit length caps mirror PG
@@ -75,7 +80,7 @@ public class ArApController {
         ArApTransaction transaction = arApService.recordReceivable(
                 factoryId, request.getCounterpartyId(), request.getOrderId(),
                 request.getAmount(), request.getDueDate(), userId, request.getRemark());
-        return ApiResponse.success("应收记录创建成功", transaction);
+        return ApiResponse.success("应收记录创建成功", projectTransaction(factoryId, transaction));
     }
 
     @RequireModule("finance_ar")
@@ -96,7 +101,7 @@ public class ArApController {
                 factoryId, request.getCounterpartyId(), request.getOrderId(),
                 request.getAmount(), method, request.getPaymentReference(),
                 userId, request.getRemark());
-        return ApiResponse.success("收款记录创建成功", transaction);
+        return ApiResponse.success("收款记录创建成功", projectTransaction(factoryId, transaction));
     }
 
     // ==================== 应付（AP） ====================
@@ -117,7 +122,7 @@ public class ArApController {
         ArApTransaction transaction = arApService.recordPayable(
                 factoryId, request.getCounterpartyId(), request.getOrderId(),
                 request.getAmount(), request.getDueDate(), userId, request.getRemark());
-        return ApiResponse.success("应付记录创建成功", transaction);
+        return ApiResponse.success("应付记录创建成功", projectTransaction(factoryId, transaction));
     }
 
     // R23 audit C4: was @RequireModule("finance_ar") — wrong, this is AP payment.
@@ -136,7 +141,7 @@ public class ArApController {
         ArApTransaction transaction = arApService.recordApPayment(
                 factoryId, request.getCounterpartyId(), request.getAmount(),
                 method, request.getPaymentReference(), userId, request.getRemark());
-        return ApiResponse.success("付款记录创建成功", transaction);
+        return ApiResponse.success("付款记录创建成功", projectTransaction(factoryId, transaction));
     }
 
     // ==================== 手工调整 ====================
@@ -163,7 +168,7 @@ public class ArApController {
         ArApTransaction transaction = arApService.recordAdjustment(
                 factoryId, counterpartyType, request.getCounterpartyId(),
                 request.getAmount(), userId, request.getRemark());
-        return ApiResponse.success("调整记录已提交, 等待审批", transaction);
+        return ApiResponse.success("调整记录已提交, 等待审批", projectTransaction(factoryId, transaction));
     }
 
     /**
@@ -181,7 +186,7 @@ public class ArApController {
             @RequestHeader("Authorization") String authorization) {
         Long approverId = extractUserId(authorization);
         ArApTransaction transaction = arApService.approveAdjustment(factoryId, transactionId, approverId);
-        return ApiResponse.success("调整已审批通过", transaction);
+        return ApiResponse.success("调整已审批通过", projectTransaction(factoryId, transaction));
     }
 
     /**
@@ -197,7 +202,7 @@ public class ArApController {
             @RequestParam(required = false) String reason) {
         Long approverId = extractUserId(authorization);
         ArApTransaction transaction = arApService.rejectAdjustment(factoryId, transactionId, approverId, reason);
-        return ApiResponse.success("调整已驳回", transaction);
+        return ApiResponse.success("调整已驳回", projectTransaction(factoryId, transaction));
     }
 
     // ==================== 查询 ====================
@@ -213,7 +218,7 @@ public class ArApController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ArApTransaction> result = arApService.getTransactions(
                 factoryId, counterpartyType, counterpartyId, page, size);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", projectTransactions(factoryId, result));
     }
 
     /**
@@ -239,7 +244,7 @@ public class ArApController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ArApTransaction> result = arApService.getPendingAdjustments(
                 factoryId, counterpartyType, minAmount, maxAmount, fromDate, toDate, page, size);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", projectTransactions(factoryId, result));
     }
 
     /**
@@ -327,6 +332,7 @@ public class ArApController {
             @PathVariable @NotBlank String factoryId,
             @RequestParam @NotBlank String customerId,
             @RequestParam BigDecimal amount) {
+        requireAllFactoryScope(factoryId);
         boolean withinLimit = arApService.checkCreditLimit(factoryId, customerId, amount);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("customerId", customerId);
@@ -340,6 +346,37 @@ public class ArApController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    private void requireAllFactoryScope(String factoryId) {
+        if (financeRowScopeQuery == null) {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+                throw new BusinessException(503, "数据范围组件未就绪，访问已停止");
+            }
+            return;
+        }
+        financeRowScopeQuery.requireAll(factoryId);
+    }
+
+    private ArApTransaction projectTransaction(String factoryId, ArApTransaction transaction) {
+        if (financeRowScopeQuery == null) {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+                throw new BusinessException(503, "数据范围组件未就绪，访问已停止");
+            }
+            return transaction;
+        }
+        return financeRowScopeQuery.responseTransaction(factoryId, transaction);
+    }
+
+    private PageResponse<ArApTransaction> projectTransactions(String factoryId,
+                                                               PageResponse<ArApTransaction> transactions) {
+        if (financeRowScopeQuery == null) {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+                throw new BusinessException(503, "数据范围组件未就绪，访问已停止");
+            }
+            return transactions;
+        }
+        return financeRowScopeQuery.responseTransactions(factoryId, transactions);
     }
 
     // ==================== 期初建账修正 (opening AP correction) ====================
@@ -361,6 +398,7 @@ public class ArApController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody com.cretas.aims.dto.finance.OpeningApCorrectionRequest request) {
+        requireAllFactoryScope(factoryId);
         Long userId = extractUserId(authorization);
         log.info("期初建账修正(幽灵应付红冲): factoryId={}, apCount={}", factoryId,
                 request.getApTransactionIds() != null ? request.getApTransactionIds().size() : 0);

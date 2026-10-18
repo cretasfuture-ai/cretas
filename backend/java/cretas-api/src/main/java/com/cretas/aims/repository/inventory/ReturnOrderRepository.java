@@ -12,9 +12,12 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.Collection;
+import java.util.Optional;
 
 @Repository
 public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String> {
+
+    Optional<ReturnOrder> findByIdAndFactoryId(String id, String factoryId);
 
     Page<ReturnOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 

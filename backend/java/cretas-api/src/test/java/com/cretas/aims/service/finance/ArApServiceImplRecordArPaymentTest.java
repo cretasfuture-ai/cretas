@@ -16,6 +16,7 @@ import com.cretas.aims.repository.finance.ArApPaymentAllocationRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.finance.impl.ArApServiceImpl;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -60,6 +61,7 @@ class ArApServiceImplRecordArPaymentTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private ArApPaymentAllocationRepository allocationRepository;
+    @Mock private FinanceRowScopeQuery financeRowScopeQuery;
 
     private ArApServiceImpl service() {
         ArApServiceImpl service = new ArApServiceImpl(transactionRepository, customerRepository, supplierRepository);
@@ -134,6 +136,23 @@ class ArApServiceImplRecordArPaymentTest {
         verify(transactionRepository, never())
                 .findOpenArInvoicesForSettlementBySalesOrderId(any(), any());
         verify(allocationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("受限收款超额错误不暴露全厂客户余额")
+    void restrictedOverageErrorDoesNotExposeGlobalBalance() {
+        ArApServiceImpl service = service();
+        ReflectionTestUtils.setField(service, "financeRowScopeQuery", financeRowScopeQuery);
+        when(financeRowScopeQuery.creators(FACTORY)).thenReturn(List.of(11L));
+        when(customerRepository.findByIdAndFactoryId(CUSTOMER, FACTORY))
+                .thenReturn(Optional.of(customer("100.00")));
+
+        BusinessException error = assertThrows(BusinessException.class, () -> service.recordArPayment(
+                FACTORY, CUSTOMER, null, new BigDecimal("150.00"), PaymentMethod.BANK_TRANSFER,
+                "OVERAGE-SCOPE", 11L, "test"));
+
+        assertTrue(error.getMessage().contains("超过应收余额"));
+        assertTrue(!error.getMessage().contains("100.00"));
     }
 
     @Test

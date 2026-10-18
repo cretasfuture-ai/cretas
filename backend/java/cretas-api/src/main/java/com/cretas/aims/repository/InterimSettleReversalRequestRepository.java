@@ -38,6 +38,19 @@ public interface InterimSettleReversalRequestRepository
             @Param("planId") String planId,
             Pageable pageable);
 
+    /** Row-scoped approval-center list; creator scope is resolved to plan IDs before paging/counting. */
+    @Query("SELECT r FROM InterimSettleReversalRequest r WHERE r.factoryId = :factoryId "
+            + "AND (CAST(:status AS string) IS NULL OR r.status = :status) "
+            + "AND r.productionPlanId IN :planIds "
+            + "AND (CAST(:planId AS string) IS NULL OR r.productionPlanId = :planId) "
+            + "ORDER BY r.requestedAt DESC")
+    Page<InterimSettleReversalRequest> findByFactoryIdWithFiltersAndProductionPlanIds(
+            @Param("factoryId") String factoryId,
+            @Param("status") InterimSettleReversalRequest.Status status,
+            @Param("planId") String planId,
+            @Param("planIds") List<String> planIds,
+            Pageable pageable);
+
     /**
      * 盘点告警: 某工厂在时间窗内 已执行 的撤销申请 (executed_at ∈ [start, end])。
      * 半成品盘点据此在盘点列上标撤销告警点 (READ-ONLY on 撤销审计)。

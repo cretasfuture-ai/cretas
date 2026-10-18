@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.service.finance.VoucherOwnershipSql;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Collection;
 import java.util.Optional;
 
 @Repository
@@ -49,6 +51,62 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
                                   @Param("sourceBusinessType") String sourceBusinessType,
                                   Pageable pageable);
 
+    @Query(value = "SELECT * FROM vouchers v WHERE v.factory_id = :factoryId AND v.deleted_at IS NULL " +
+           "AND v.id IN (:voucherIds) " +
+           "AND (CAST(:status AS text) IS NULL OR v.status = CAST(:status AS text)) " +
+           "AND (CAST(:voucherType AS text) IS NULL OR v.voucher_type = CAST(:voucherType AS text)) " +
+           "AND (CAST(:sourceBusinessType AS text) IS NULL OR v.source_business_type = CAST(:sourceBusinessType AS text)) " +
+           "ORDER BY v.voucher_date DESC, v.created_at DESC",
+           countQuery = "SELECT COUNT(*) FROM vouchers v WHERE v.factory_id = :factoryId AND v.deleted_at IS NULL " +
+           "AND v.id IN (:voucherIds) " +
+           "AND (CAST(:status AS text) IS NULL OR v.status = CAST(:status AS text)) " +
+           "AND (CAST(:voucherType AS text) IS NULL OR v.voucher_type = CAST(:voucherType AS text)) " +
+           "AND (CAST(:sourceBusinessType AS text) IS NULL OR v.source_business_type = CAST(:sourceBusinessType AS text))",
+           nativeQuery = true)
+    Page<Voucher> searchVouchersInScope(@Param("factoryId") String factoryId,
+                                        @Param("status") String status,
+                                        @Param("voucherType") String voucherType,
+                                        @Param("sourceBusinessType") String sourceBusinessType,
+                                        @Param("voucherIds") Collection<String> voucherIds,
+                                        Pageable pageable);
+
+    @Query(value = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT v.* FROM vouchers v JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND v.deleted_at IS NULL "
+            + "AND (CAST(:status AS text) IS NULL OR v.status=CAST(:status AS text)) "
+            + "AND (CAST(:voucherType AS text) IS NULL OR v.voucher_type=CAST(:voucherType AS text)) "
+            + "AND (CAST(:sourceBusinessType AS text) IS NULL OR v.source_business_type=CAST(:sourceBusinessType AS text)) "
+            + "ORDER BY v.voucher_date DESC, v.created_at DESC",
+           countQuery = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT COUNT(*) FROM vouchers v JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND v.deleted_at IS NULL "
+            + "AND (CAST(:status AS text) IS NULL OR v.status=CAST(:status AS text)) "
+            + "AND (CAST(:voucherType AS text) IS NULL OR v.voucher_type=CAST(:voucherType AS text)) "
+            + "AND (CAST(:sourceBusinessType AS text) IS NULL OR v.source_business_type=CAST(:sourceBusinessType AS text))",
+           nativeQuery = true)
+    Page<Voucher> searchVouchersInOwnerScope(@Param("factoryId") String factoryId,
+                                              @Param("status") String status,
+                                              @Param("voucherType") String voucherType,
+                                              @Param("sourceBusinessType") String sourceBusinessType,
+                                              @Param("ownerIdsJson") String ownerIdsJson,
+                                              Pageable pageable);
+
+    @Query(value = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT v.* FROM vouchers v JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND v.voucher_date BETWEEN :from AND :to AND v.deleted_at IS NULL",
+           nativeQuery = true)
+    List<Voucher> findByFactoryIdAndOwnerScopeAndVoucherDateBetweenAndDeletedAtIsNull(
+            @Param("factoryId") String factoryId, @Param("from") LocalDate from,
+            @Param("to") LocalDate to, @Param("ownerIdsJson") String ownerIdsJson);
+
+    @Query(value = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT COUNT(*) FROM vouchers v JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND v.status=:status AND v.voucher_date BETWEEN :from AND :to AND v.deleted_at IS NULL",
+           nativeQuery = true)
+    long countByFactoryIdAndOwnerScopeAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+            @Param("factoryId") String factoryId, @Param("ownerIdsJson") String ownerIdsJson,
+            @Param("status") String status, @Param("from") LocalDate from, @Param("to") LocalDate to);
+
     /** Factory-scoped lookup — enforces tenant isolation. */
     Optional<Voucher> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
@@ -66,6 +124,9 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
     @Query("SELECT v FROM Voucher v WHERE v.factoryId = ?1 AND v.voucherDate BETWEEN ?2 AND ?3 AND v.deletedAt IS NULL")
     List<Voucher> findByFactoryIdAndDateRange(String factoryId, LocalDate from, LocalDate to);
 
+    List<Voucher> findByFactoryIdAndIdInAndVoucherDateBetweenAndDeletedAtIsNull(
+            String factoryId, Collection<String> voucherIds, LocalDate from, LocalDate to);
+
     /**
      * F006 财务审计 Bug 6 (2026-07-04): 统计期间内待过账 (DRAFT) 凭证数 — 官方报表切到
      * POSTED-only 口径后, 用于给财务人员一个"为什么报表数字看着少"的可见提示
@@ -73,6 +134,9 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
      */
     long countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
             String factoryId, VoucherStatus status, LocalDate from, LocalDate to);
+
+    long countByFactoryIdAndIdInAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+            String factoryId, Collection<String> voucherIds, VoucherStatus status, LocalDate from, LocalDate to);
 
     long countByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, VoucherStatus status);
 

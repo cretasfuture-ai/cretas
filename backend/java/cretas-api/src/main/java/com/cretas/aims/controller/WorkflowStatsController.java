@@ -2,7 +2,10 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.WorkflowStatsDTO;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
 import com.cretas.aims.service.workflow.WorkflowStatsService;
+import com.cretas.aims.service.workflow.WorkflowStatsRowScopeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -13,6 +16,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.List;
 
 /**
  * 业务流程图导航 (U-NAV-1) — 工作流统计接口.
@@ -34,6 +40,13 @@ public class WorkflowStatsController {
 
     private final WorkflowStatsService workflowStatsService;
 
+    /** Optional field preserves the existing one-argument constructor used by internal tests. */
+    @Autowired(required = false)
+    private WorkflowStatsRowScopeService workflowStatsRowScopeService;
+
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+
     @GetMapping("/sales")
     @Operation(summary = "销售工作流统计", description = "返回销售订单 3 节点 (待审/进行中/已完成) 数量")
     public ApiResponse<WorkflowStatsDTO> getSalesStats(
@@ -50,17 +63,31 @@ public class WorkflowStatsController {
     }
 
     @GetMapping("/production")
+    @RowScopeSupported
     @Operation(summary = "生产工作流统计")
     public ApiResponse<WorkflowStatsDTO> getProductionStats(
             @PathVariable @NotBlank String factoryId) {
-        return ApiResponse.success(workflowStatsService.getProductionStats(factoryId));
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        return ApiResponse.success(creatorIds == null
+                ? workflowStatsService.getProductionStats(factoryId)
+                : requiredRowScopeService().getProductionStats(factoryId, creatorIds));
     }
 
     @GetMapping("/finance")
+    @RowScopeSupported
     @Operation(summary = "财务工作流统计", description = "复合 InvoiceRecord + PaymentRecord (待开票/待回款/已收款)")
     public ApiResponse<WorkflowStatsDTO> getFinanceStats(
             @PathVariable @NotBlank String factoryId) {
-        return ApiResponse.success(workflowStatsService.getFinanceStats(factoryId));
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        return ApiResponse.success(creatorIds == null
+                ? workflowStatsService.getFinanceStats(factoryId)
+                : requiredRowScopeService().getFinanceStats(factoryId, creatorIds));
+    }
+
+    private WorkflowStatsRowScopeService requiredRowScopeService() {
+        if (workflowStatsRowScopeService == null)
+            throw new com.cretas.aims.exception.BusinessException(503,"行级统计组件未就绪，访问已停止");
+        return workflowStatsRowScopeService;
     }
 
     @GetMapping("/inventory")

@@ -4,10 +4,15 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
 import com.cretas.aims.dto.processentry.ProcessChainEntryResult;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -18,9 +23,22 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/production-plans/{planId}/process-entry")
 @RequiredArgsConstructor
+@RowScopeSupported
 public class ClerkProcessEntryController {
 
     private final ClerkProcessEntryService service;
+
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+    @Autowired(required = false)
+    private ProductionPlanRepository productionPlanRepository;
+
+    private void requirePlanScope(String factoryId, String planId) {
+        if (productionPlanRepository == null) return;
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(403, "无权访问该计划"));
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, plan.getCreatedBy());
+    }
 
     @RequirePermission({"production:read_write"})
     @PostMapping
@@ -29,6 +47,7 @@ public class ClerkProcessEntryController {
             @PathVariable @NotBlank String planId,
             @RequestAttribute("userId") Long userId,
             @Valid @RequestBody ProcessChainEntryRequest request) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success("逐道录入成功", service.recordChain(factoryId, planId, request, userId));
     }
 }

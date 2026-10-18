@@ -4203,7 +4203,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 <el-dropdown-menu>
                   <el-dropdown-item command="template">下载导入模板</el-dropdown-item>
                   <el-dropdown-item v-if="canWrite" command="import">导入 Excel</el-dropdown-item>
-                  <el-dropdown-item command="export">导出当前筛选</el-dropdown-item>
+                  <el-dropdown-item command="export">导出授权范围</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>

@@ -34,6 +34,9 @@
         </div>
       </template>
 
+      <el-alert v-if="data?.scopeApplied" type="info" :closable="false" show-icon
+        :title="data.scopeLabel" :description="data.scopeNote" style="margin-bottom: 16px;" />
+
       <el-alert
         type="info"
         show-icon

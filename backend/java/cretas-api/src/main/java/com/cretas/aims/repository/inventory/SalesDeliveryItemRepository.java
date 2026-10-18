@@ -60,6 +60,25 @@ public interface SalesDeliveryItemRepository extends JpaRepository<SalesDelivery
                                                  @Param("startDate") LocalDate startDate,
                                                  @Param("endDate") LocalDate endDate);
 
+    /** Quantity-amount ledger scope: shipped goods inherit ownership from the source sales order. */
+    @Query("SELECT r.deliveryDate, i.deliveredQuantity, b.unitCost, " +
+            "       COALESCE(b.productTypeId, i.productTypeId), b.batchNumber, " +
+            "       COALESCE(i.productName, b.productName), r.deliveryNumber " +
+            "FROM SalesDeliveryItem i JOIN i.deliveryRecord r JOIN r.salesOrder so " +
+            "  LEFT JOIN i.finishedGoodsBatch b " +
+            "WHERE r.factoryId = :factoryId AND so.factoryId = :factoryId " +
+            "  AND so.createdBy IN :owners " +
+            "  AND r.deliveryDate BETWEEN :startDate AND :endDate " +
+            "  AND r.status IN (com.cretas.aims.entity.enums.SalesDeliveryStatus.SHIPPED, " +
+            "                   com.cretas.aims.entity.enums.SalesDeliveryStatus.DELIVERED) " +
+            "  AND i.deletedAt IS NULL AND r.deletedAt IS NULL " +
+            "ORDER BY r.deliveryDate ASC")
+    List<Object[]> findShippedMovementsForLedgerInSourceOwnerScope(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("owners") java.util.Collection<Long> owners);
+
     /**
      * 结转成本 (COGS) 聚合: 期内已发货成品的销售成本 = Σ 发货数量 × 批次单位成本。
      *

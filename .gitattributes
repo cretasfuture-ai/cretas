@@ -48,3 +48,11 @@ frontend/CretasFoodTrace/src/screens/processing/ProcessTaskDetailScreen.tsx whit
 frontend/CretasFoodTrace/src/services/api/materialBatchApiClient.ts whitespace=trailing-space,cr-at-eol
 frontend/CretasFoodTrace/src/screens/processing/ProcessTaskHistoryScreen.tsx whitespace=trailing-space,cr-at-eol
 frontend/CretasFoodTrace/src/screens/processing/ProcessRunOverviewScreen.tsx whitespace=trailing-space,cr-at-eol
+
+# Existing CRLF blobs touched by production/finance row scope. Keep real space
+# checks strict without converting whole legacy controllers in a behavior fix.
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionPlanController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/finance/ArApController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/finance/InvoiceController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/finance/PaymentRecordController.java whitespace=trailing-space,cr-at-eol
+web-admin/src/views/finance/ar-ap/index.vue whitespace=trailing-space,cr-at-eol

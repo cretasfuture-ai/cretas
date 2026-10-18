@@ -82,6 +82,10 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     List<SalesOrder> findByFactoryIdAndStatusInOrderByCreatedAtDesc(
             String factoryId, Collection<SalesOrderStatus> statuses, Pageable pageable);
 
+    Page<SalesOrder> findByFactoryIdAndCreatedByInAndStatusInOrderByCreatedAtDesc(
+            String factoryId, Collection<Long> createdByList,
+            Collection<SalesOrderStatus> statuses, Pageable pageable);
+
     Optional<SalesOrder> findByFactoryIdAndOrderNumber(String factoryId, String orderNumber);
 
     List<SalesOrder> findByFactoryIdAndCustomerId(String factoryId, String customerId);
@@ -184,6 +188,8 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     Optional<SalesOrder> findByIdAndFactoryIdForUpdate(
             @Param("id") String id, @Param("factoryId") String factoryId);
 
+    Optional<SalesOrder> findByIdAndFactoryId(String id, String factoryId);
+
     /** Only explicitly marked completions are candidates; historical nulls are never scanned. */
     @Query("SELECT so FROM SalesOrder so WHERE so.status = " +
             "com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED " +
@@ -268,4 +274,20 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     List<SalesOrder> findByFactoryIdAndInvoiceTodoStatusAndInvoiceTodoAttemptsGreaterThanEqualOrderByUpdatedAtDesc(
             String factoryId, String invoiceTodoStatus, Integer invoiceTodoAttempts,
             Pageable pageable);
+
+    @Query(value = "SELECT so FROM SalesOrder so WHERE so.factoryId = :factoryId "
+            + "AND so.createdBy IN :owners "
+            + "AND so.status = com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED "
+            + "AND so.invoiceTodoStatus = 'FAILED' "
+            + "AND COALESCE(so.invoiceTodoAttempts, 0) >= :maxAttempts "
+            + "ORDER BY so.updatedAt DESC",
+            countQuery = "SELECT COUNT(so) FROM SalesOrder so WHERE so.factoryId = :factoryId "
+            + "AND so.createdBy IN :owners "
+            + "AND so.status = com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED "
+            + "AND so.invoiceTodoStatus = 'FAILED' "
+            + "AND COALESCE(so.invoiceTodoAttempts, 0) >= :maxAttempts")
+    Page<SalesOrder> findFailedInvoiceTodosInScope(@Param("factoryId") String factoryId,
+                                                    @Param("owners") Collection<Long> owners,
+                                                    @Param("maxAttempts") int maxAttempts,
+                                                    Pageable pageable);
 }

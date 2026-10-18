@@ -57,6 +57,13 @@ public class IncomeStatementService {
     public IncomeStatementDTO generate(String factoryId,
                                        Integer startYear, Integer startMonth,
                                        Integer endYear, Integer endMonth) {
+        return generate(factoryId, startYear, startMonth, endYear, endMonth, null);
+    }
+
+    public IncomeStatementDTO generate(String factoryId,
+                                       Integer startYear, Integer startMonth,
+                                       Integer endYear, Integer endMonth,
+                                       List<String> voucherIds) {
         validateInput(factoryId, startYear, startMonth, endYear, endMonth);
 
         LocalDate startDate = YearMonth.of(startYear, startMonth).atDay(1);
@@ -71,8 +78,13 @@ public class IncomeStatementService {
         // F006 财务审计 Bug 6 (2026-07-04): 官方报表切到 POSTED-only 口径 (排除 DRAFT 未审草稿);
         // 同时排除结转产物 (PL_CLOSING/COST_CARRYOVER 红冲镜像) — 否则已结账期间的利润表会显示
         // 营业收入=0/成本=0 (被结转分录清零), 见 aggregateBySubjectExcludingDraftAndClosing javadoc。
-        List<SubjectAggregateRow> aggregates = voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(
-                factoryId, startDate, endDate);
+        List<Long> ownerScope = VoucherRowScopeContext.currentCreators();
+        List<SubjectAggregateRow> aggregates = ownerScope != null
+                ? mapSubjectRows(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosingInOwnerScopeNative(
+                        factoryId, startDate, endDate, VoucherOwnershipSql.ownerIdsJson(ownerScope)))
+                : voucherIds == null
+                ? voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(factoryId, startDate, endDate)
+                : voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosingInScope(factoryId, startDate, endDate, voucherIds);
 
         // Step 2: 预取 Account 索引
         List<Account> allAccounts = accountRepo.findVisibleToFactory(factoryId);
@@ -153,8 +165,14 @@ public class IncomeStatementService {
         }
 
         // 待过账 (DRAFT) 凭证数 — 见 pendingDraftVoucherCount javadoc。
-        long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
-                factoryId, VoucherStatus.DRAFT, startDate, endDate);
+        long pendingDraftCount = ownerScope != null
+                ? voucherRepo.countByFactoryIdAndOwnerScopeAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherOwnershipSql.ownerIdsJson(ownerScope), VoucherStatus.DRAFT.name(), startDate, endDate)
+                : voucherIds == null
+                ? voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, startDate, endDate)
+                : voucherRepo.countByFactoryIdAndIdInAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, voucherIds, VoucherStatus.DRAFT, startDate, endDate);
 
         return IncomeStatementDTO.builder()
                 .costDataAvailable(costDataAvailable)
@@ -178,6 +196,12 @@ public class IncomeStatementService {
                 .generatedAt(LocalDateTime.now().toString())
                 .pendingDraftVoucherCount(pendingDraftCount)
                 .build();
+    }
+
+    private List<SubjectAggregateRow> mapSubjectRows(List<Object[]> rows) {
+        return rows.stream().map(row -> new SubjectAggregateRow(
+                (String) row[0], (String) row[1], (BigDecimal) row[2], (BigDecimal) row[3],
+                ((Number) row[4]).longValue())).toList();
     }
 
     private void validateInput(String factoryId, Integer startYear, Integer startMonth,

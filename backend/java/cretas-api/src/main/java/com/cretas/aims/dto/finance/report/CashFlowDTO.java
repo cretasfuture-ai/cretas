@@ -77,6 +77,11 @@ public class CashFlowDTO {
      */
     private Long pendingDraftVoucherCount;
 
+    /** Whether this response is a source-owner restricted projection rather than the full factory report. */
+    private Boolean scopeApplied;
+    private String scopeLabel;
+    private String scopeNote;
+
     /**
      * 单笔现金活动 — 对手科目 + 流入流出.
      */

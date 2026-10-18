@@ -13,9 +13,14 @@ import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,11 +34,30 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/production-plans/{planId}/process-sheet")
 @RequiredArgsConstructor
+@RowScopeSupported
 public class ProcessSheetController {
 
     private final ProcessSheetService service;
     private final WorkflowClerkSheetService workflowClerkSheetService;
     private final ProductionStockAllocationService stockAllocationService;
+
+    /**
+     * This controller is a nested production-plan entry point, so the route
+     * interceptor allows it through and the plan owner is checked here before
+     * any row id or stock operation is accepted. Optional injection preserves
+     * the existing standalone controller tests that do not build Spring.
+     */
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+    @Autowired(required = false)
+    private ProductionPlanRepository productionPlanRepository;
+
+    private void requirePlanScope(String factoryId, String planId) {
+        if (productionPlanRepository == null) return;
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(403, "无权访问该计划"));
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, plan.getCreatedBy());
+    }
 
     @RequirePermission({"production:read_write"})
     @PostMapping("/row")
@@ -42,6 +66,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestAttribute("userId") Long userId,
             @Valid @RequestBody ProcessSheetRowRequest req) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success("保存成功", service.saveRow(factoryId, planId, req, userId));
     }
 
@@ -53,6 +78,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestAttribute("userId") Long userId,
             @Valid @RequestBody ProcessSheetRowRequest req) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success("草稿保存成功", service.saveDraft(factoryId, planId, req, userId));
     }
 
@@ -64,6 +90,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestAttribute("userId") Long userId,
             @Valid @RequestBody ProcessSheetRowRequest req) {
+        requirePlanScope(factoryId, planId);
         try {
             return ResponseEntity.ok(ApiResponse.success(
                     "正式提交成功", service.submitRow(factoryId, planId, req, userId)));
@@ -85,6 +112,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @PathVariable @NotBlank String clientRowId,
             @RequestAttribute("userId") Long userId) {
+        requirePlanScope(factoryId, planId);
         service.deleteRow(factoryId, planId, clientRowId, userId);
         return ApiResponse.success("删除成功", null);
     }
@@ -119,6 +147,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId,
             @RequestBody List<ProcessSheetRowRequest.MaterialInputTotal> ports) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success(stockAllocationService.availability(factoryId, planId, ports));
     }
 
@@ -129,6 +158,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestParam @NotBlank String process,
             @RequestParam(required = false) Integer processOrder) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success(service.getInventory(factoryId, planId, process, processOrder));
     }
 
@@ -146,6 +176,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestParam @NotBlank String process,
             @RequestParam(required = false) Integer processOrder) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success(service.getRows(factoryId, planId, process, processOrder));
     }
 
@@ -161,6 +192,7 @@ public class ProcessSheetController {
     public ApiResponse<List<ProcessSheetInventoryItem>> getInventoryYieldCard(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success(service.getInventoryYieldCard(factoryId, planId));
     }
 
@@ -179,6 +211,7 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @PathVariable @NotBlank String clientRowId,
             @RequestParam @NotBlank String process) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success(service.getRowHistory(factoryId, planId, process, clientRowId));
     }
 
@@ -195,6 +228,7 @@ public class ProcessSheetController {
     public ApiResponse<WorkflowClerkSheetConfigDTO> getWorkflowConfig(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId) {
+        requirePlanScope(factoryId, planId);
         return ApiResponse.success(workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId));
     }
 }

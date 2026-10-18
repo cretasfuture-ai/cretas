@@ -15,6 +15,7 @@ import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +44,9 @@ public class ArApServiceImpl implements ArApService {
     private final ArApTransactionRepository transactionRepository;
     private final CustomerRepository customerRepository;
     private final SupplierRepository supplierRepository;
+
+    @Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
 
     /** Batch approval/rejection must open one independent transaction per item. */
     @Autowired(required = false)
@@ -131,6 +135,7 @@ public class ArApServiceImpl implements ArApService {
     public ArApTransaction recordReceivable(String factoryId, String customerId,
                                              String salesOrderId, BigDecimal amount,
                                              LocalDate dueDate, Long operatedBy, String remark) {
+        requireSalesOrderOwner(factoryId, salesOrderId, operatedBy);
         // Canvas V2: DB-driven validation
         if (validationRuleEvaluator != null) {
             try {
@@ -187,6 +192,7 @@ public class ArApServiceImpl implements ArApService {
                                                     String salesOrderId, String sourceType, String sourceId,
                                                     BigDecimal amount,
                                                     LocalDate dueDate, Long operatedBy, String remark) {
+        requireSalesOrderOwner(factoryId, salesOrderId, operatedBy);
         // 所有跳过条件都是 READ / 校验，绝不写库、绝不抛 —— 保证共享事务不被 doom。
 
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
@@ -267,6 +273,7 @@ public class ArApServiceImpl implements ArApService {
     public ArApTransaction recordPayable(String factoryId, String supplierId,
                                           String purchaseOrderId, BigDecimal amount,
                                           LocalDate dueDate, Long operatedBy, String remark) {
+        requirePurchaseOrderOwner(factoryId, purchaseOrderId, operatedBy);
         if (amount == null) {
             throw new BusinessException(400, "缺少金额，需补录单价/金额")
                     .withHint("请先补录送货单总金额、行金额或单价后再确认挂账")
@@ -318,6 +325,7 @@ public class ArApServiceImpl implements ArApService {
                                                  String purchaseOrderId, String sourceType, String sourceId,
                                                  BigDecimal amount,
                                                  LocalDate dueDate, Long operatedBy, String remark) {
+        requirePurchaseOrderOwner(factoryId, purchaseOrderId, operatedBy);
         // 所有跳过条件都是 READ / 校验，绝不写库、绝不抛 —— 保证共享事务不被 doom。
 
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
@@ -395,6 +403,7 @@ public class ArApServiceImpl implements ArApService {
                                                    String sourceType, String sourceId,
                                                    BigDecimal amount, LocalDate dueDate,
                                                    Long operatedBy, String remark) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireSourceOwner(factoryId, sourceType, sourceId);
         if (amount == null) {
             throw new BusinessException(400, "缺少金额，需补录单价/金额")
                     .withHint("请先补录送货单总金额、行金额或单价后再确认挂账")
@@ -449,6 +458,7 @@ public class ArApServiceImpl implements ArApService {
     @Transactional
     public ArApTransaction reverseOpeningPayable(String factoryId, String apTransactionId,
                                                  String reason, Long operatedBy) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireTransactionAccess(factoryId, apTransactionId);
         if (apTransactionId == null || apTransactionId.isBlank()) {
             throw new BusinessException(400, "待红冲的应付交易ID不能为空").withHintTarget("apTransactionId");
         }
@@ -513,6 +523,7 @@ public class ArApServiceImpl implements ArApService {
                                             String salesOrderId, BigDecimal amount,
                                             PaymentMethod method, String paymentReference,
                                             Long operatedBy, String remark) {
+        requireSalesOrderOwner(factoryId, salesOrderId, operatedBy);
         // Round 8-α Fix: Canvas validation rules were bypassed on recordArPayment (see R8-α Gap #4).
         // ValidationRuleEvaluator was injected but only used in recordReceivable. Now also fires
         // on payment with {amount, customerId, method} context so rules like "收款 > 100万 require
@@ -561,7 +572,10 @@ public class ArApServiceImpl implements ArApService {
         // 超额防护：收款金额不能超过客户应收余额
         BigDecimal currentBalance = customer.getCurrentBalance() != null ? customer.getCurrentBalance() : BigDecimal.ZERO;
         if (currentBalance.compareTo(BigDecimal.ZERO) > 0 && amount.compareTo(currentBalance) > 0) {
-            throw new BusinessException(409, "收款金额(" + amount + ")超过客户应收余额(" + currentBalance + ")")
+            String message = isRestrictedScope(factoryId)
+                    ? "收款金额超过应收余额"
+                    : "收款金额(" + amount + ")超过客户应收余额(" + currentBalance + ")";
+            throw new BusinessException(409, message)
                     .withHint("请减少收款金额, 或先核对客户应收余额").withHintTarget("amount");
         }
 
@@ -760,6 +774,7 @@ public class ArApServiceImpl implements ArApService {
     public ArApTransaction recordApPayment(String factoryId, String supplierId,
                                             BigDecimal amount, PaymentMethod method,
                                             String paymentReference, Long operatedBy, String remark) {
+        requireOwner(factoryId, operatedBy);
         // Round 8-α Fix: Canvas validation rules on finance_ap PAYMENT now fire.
         if (validationRuleEvaluator != null) {
             try {
@@ -825,6 +840,11 @@ public class ArApServiceImpl implements ArApService {
                                              String counterpartyId, BigDecimal amount,
                                              Long operatedBy, String remark,
                                              String sourceType, String sourceId) {
+        if (financeRowScopeQuery != null && sourceType != null && !sourceType.isBlank()) {
+            financeRowScopeQuery.requireSourceOwner(factoryId, sourceType, sourceId);
+        } else {
+            requireOwner(factoryId, operatedBy);
+        }
         // R23 audit C2: Pre-R23 this immediately mutated balance and saved APPROVED — bypass
         // of dual-control. R23: insert PENDING + DO NOT mutate balance. Customer/supplier
         // balance changes only on approveAdjustment() by a 2nd user with elevated permission.
@@ -879,6 +899,9 @@ public class ArApServiceImpl implements ArApService {
                     && txn.getTransactionType() != ArApTransactionType.AP_ADJUSTMENT) {
                 continue;
             }
+            if (financeRowScopeQuery != null) {
+                financeRowScopeQuery.requireTransactionAccess(factoryId, txn.getId());
+            }
             // System cascade cancel — NO 4-eyes (not a manual dual-control reject). Balance untouched.
             // No CANCELLED enum value exists (DB CHECK) → reuse REJECTED, which by definition never
             // mutates balance and persists as historical evidence.
@@ -906,7 +929,9 @@ public class ArApServiceImpl implements ArApService {
     @Override
     @Transactional
     public ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy) {
-        ArApTransaction txn = transactionRepository.findById(transactionId)
+        ArApTransaction txn = financeRowScopeQuery != null
+                ? financeRowScopeQuery.requireTransactionAccess(factoryId, transactionId)
+                : transactionRepository.findById(transactionId)
                 .filter(t -> factoryId.equals(t.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("调整记录不存在: " + transactionId));
 
@@ -961,7 +986,9 @@ public class ArApServiceImpl implements ArApService {
     @Override
     @Transactional
     public ArApTransaction rejectAdjustment(String factoryId, String transactionId, Long approvedBy, String reason) {
-        ArApTransaction txn = transactionRepository.findById(transactionId)
+        ArApTransaction txn = financeRowScopeQuery != null
+                ? financeRowScopeQuery.requireTransactionAccess(factoryId, transactionId)
+                : transactionRepository.findById(transactionId)
                 .filter(t -> factoryId.equals(t.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("调整记录不存在: " + transactionId));
 
@@ -1004,6 +1031,14 @@ public class ArApServiceImpl implements ArApService {
                                                           int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "transactionDate"));
         Page<ArApTransaction> result;
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            if (owners.isEmpty()) return PageResponse.of(List.of(), page, size, 0L);
+            result = transactionRepository.findScopedTransactions(factoryId,
+                    counterpartyType != null ? counterpartyType.name() : null,
+                    counterpartyId, owners, pageRequest.withSort(Sort.unsorted()));
+            return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+        }
 
         if (counterpartyId != null) {
             result = transactionRepository.findByFactoryIdAndCounterpartyTypeAndCounterpartyIdOrderByTransactionDateDesc(
@@ -1026,6 +1061,13 @@ public class ArApServiceImpl implements ArApService {
     @Override
     public PageResponse<ArApTransaction> getPendingAdjustments(String factoryId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            if (owners.isEmpty()) return PageResponse.of(List.of(), page, size, 0L);
+            Page<ArApTransaction> scoped = transactionRepository.findScopedPendingAdjustments(
+                    factoryId, null, null, null, null, null, owners, pageRequest.withSort(Sort.unsorted()));
+            return PageResponse.of(scoped.getContent(), page, size, scoped.getTotalElements());
+        }
         Page<ArApTransaction> result = transactionRepository.findPendingAdjustments(factoryId, pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
@@ -1045,6 +1087,16 @@ public class ArApServiceImpl implements ArApService {
             int page, int size) {
         boolean noFilters = counterpartyType == null && minAmount == null && maxAmount == null
                 && fromDate == null && toDate == null;
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            if (owners.isEmpty()) return PageResponse.of(List.of(), page, size, 0L);
+            // Native SQL supplies its own snake_case ordering; entity property sorts are invalid here.
+            PageRequest scopedPage = PageRequest.of(page - 1, size);
+            Page<ArApTransaction> scoped = transactionRepository.findScopedPendingAdjustments(
+                    factoryId, counterpartyType != null ? counterpartyType.name() : null,
+                    minAmount, maxAmount, fromDate, toDate, owners, scopedPage);
+            return PageResponse.of(scoped.getContent(), page, size, scoped.getTotalElements());
+        }
         if (noFilters) return getPendingAdjustments(factoryId, page, size);
 
         // Fetch wider result, then apply Java-level filters
@@ -1087,6 +1139,7 @@ public class ArApServiceImpl implements ArApService {
             throw new BusinessException(400, "批量审批一次不超过 100 条")
                     .withHint("请分批操作, 每次最多 100 条").withHintTarget("ids");
         }
+        preflightBatchScope(factoryId, transactionIds);
         TransactionTemplate itemTransaction = newBatchItemTransaction();
         int approvedCount = 0;
         java.util.List<java.util.Map<String, String>> failures = new java.util.ArrayList<>();
@@ -1123,6 +1176,7 @@ public class ArApServiceImpl implements ArApService {
             throw new BusinessException(400, "批量驳回一次不超过 100 条")
                     .withHint("请分批操作, 每次最多 100 条").withHintTarget("ids");
         }
+        preflightBatchScope(factoryId, transactionIds);
         TransactionTemplate itemTransaction = newBatchItemTransaction();
         int rejectedCount = 0;
         java.util.List<java.util.Map<String, String>> failures = new java.util.ArrayList<>();
@@ -1155,6 +1209,14 @@ public class ArApServiceImpl implements ArApService {
         return template;
     }
 
+    /** Reject a mixed hidden/visible batch before opening any per-item transaction. */
+    private void preflightBatchScope(String factoryId, java.util.List<String> transactionIds) {
+        if (financeRowScopeQuery == null || financeRowScopeQuery.creators(factoryId) == null) return;
+        for (String id : transactionIds) {
+            financeRowScopeQuery.requireTransactionAccess(factoryId, id);
+        }
+    }
+
     private String batchFailureReason(RuntimeException error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
             if (cause instanceof OptimisticLockingFailureException
@@ -1165,29 +1227,105 @@ public class ArApServiceImpl implements ArApService {
         return error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
     }
 
+    private void requireOwner(String factoryId, Long operatedBy) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireOwner(factoryId, operatedBy);
+    }
+
+    private List<Long> scopeOwners(String factoryId) {
+        return financeRowScopeQuery == null ? null : financeRowScopeQuery.creators(factoryId);
+    }
+
+    private boolean isRestrictedScope(String factoryId) {
+        return financeRowScopeQuery != null && financeRowScopeQuery.creators(factoryId) != null;
+    }
+
+    private ArApTransaction statementProjection(ArApTransaction source) {
+        ArApTransaction copy = new ArApTransaction();
+        org.springframework.beans.BeanUtils.copyProperties(source, copy);
+        copy.setBalanceAfter(null);
+        return copy;
+    }
+
+    /** Restricted statements use transaction meaning, independent of stored sign. */
+    private BigDecimal scopedStatementAmount(ArApTransaction transaction) {
+        if (transaction == null || transaction.getAmount() == null
+                || transaction.getTransactionType() == null) return null;
+        return switch (transaction.getTransactionType()) {
+            case AR_PAYMENT, AR_CREDIT_NOTE, AP_PAYMENT, AP_CREDIT_NOTE ->
+                    transaction.getAmount().abs().negate();
+            case AR_ADJUSTMENT, AP_ADJUSTMENT ->
+                    transaction.getApprovalStatus() == com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED
+                            ? transaction.getAmount() : null;
+            default -> transaction.getAmount();
+        };
+    }
+
+    private void requireSalesOrderOwner(String factoryId, String salesOrderId, Long operatedBy) {
+        if (financeRowScopeQuery == null) return;
+        if (salesOrderId == null || salesOrderId.isBlank()) {
+            financeRowScopeQuery.requireOwner(factoryId, operatedBy);
+        } else {
+            financeRowScopeQuery.requireSalesOrderOwner(factoryId, salesOrderId);
+        }
+    }
+
+    private void requirePurchaseOrderOwner(String factoryId, String purchaseOrderId, Long operatedBy) {
+        if (financeRowScopeQuery == null) return;
+        if (purchaseOrderId == null || purchaseOrderId.isBlank()) {
+            financeRowScopeQuery.requireOwner(factoryId, operatedBy);
+        } else {
+            financeRowScopeQuery.requirePurchaseOrderOwner(factoryId, purchaseOrderId);
+        }
+    }
+
     @Override
     public Map<String, Object> getStatement(String factoryId, CounterpartyType counterpartyType,
                                              String counterpartyId,
                                              LocalDate startDate, LocalDate endDate) {
         Map<String, Object> statement = new LinkedHashMap<>();
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            statement.put("scopeApplied", true);
+            statement.put("scopeLabel", "当前授权范围");
+        }
+        if (owners != null && owners.isEmpty()) {
+            statement.put("counterpartyId", counterpartyId);
+            statement.put("counterpartyType", counterpartyType.name());
+            statement.put("startDate", startDate.toString());
+            statement.put("endDate", endDate.toString());
+            statement.put("openingBalance", BigDecimal.ZERO);
+            statement.put("periodDebit", BigDecimal.ZERO);
+            statement.put("periodCredit", BigDecimal.ZERO);
+            statement.put("closingBalance", BigDecimal.ZERO);
+            statement.put("transactions", List.of());
+            statement.put("transactionCount", 0);
+            return statement;
+        }
 
-        // 期初余额：startDate之前最后一笔交易的balanceAfter
-        List<BigDecimal> openingBalances = transactionRepository.findOpeningBalance(
-                factoryId, counterpartyType, counterpartyId, startDate);
+        // Restricted scope uses an owner-filtered signed sum, never a global running snapshot.
+        List<BigDecimal> openingBalances = owners == null
+                ? transactionRepository.findOpeningBalance(factoryId, counterpartyType, counterpartyId, startDate)
+                : transactionRepository.findScopedOpeningBalance(factoryId, counterpartyType.name(), counterpartyId,
+                        startDate, owners);
         BigDecimal openingBalance = openingBalances.isEmpty() ? BigDecimal.ZERO : openingBalances.get(0);
 
         // 本期交易明细
-        List<ArApTransaction> transactions = transactionRepository.findByCounterpartyAndDateRange(
-                factoryId, counterpartyType, counterpartyId, startDate, endDate);
+        List<ArApTransaction> transactions = owners == null
+                ? transactionRepository.findByCounterpartyAndDateRange(
+                        factoryId, counterpartyType, counterpartyId, startDate, endDate)
+                : transactionRepository.findScopedByCounterpartyAndDateRange(
+                        factoryId, counterpartyType.name(), counterpartyId, startDate, endDate, owners);
 
         // 本期发生额（借方/贷方）
         BigDecimal periodDebit = BigDecimal.ZERO;  // 挂账增加
         BigDecimal periodCredit = BigDecimal.ZERO;  // 付款减少
         for (ArApTransaction t : transactions) {
-            if (t.getAmount().compareTo(BigDecimal.ZERO) > 0) {
-                periodDebit = periodDebit.add(t.getAmount());
+            BigDecimal amount = owners == null ? t.getAmount() : scopedStatementAmount(t);
+            if (amount == null) continue;
+            if (amount.compareTo(BigDecimal.ZERO) > 0) {
+                periodDebit = periodDebit.add(amount);
             } else {
-                periodCredit = periodCredit.add(t.getAmount().abs());
+                periodCredit = periodCredit.add(amount.abs());
             }
         }
 
@@ -1201,7 +1339,9 @@ public class ArApServiceImpl implements ArApService {
         statement.put("periodDebit", periodDebit);
         statement.put("periodCredit", periodCredit);
         statement.put("closingBalance", closingBalance);
-        statement.put("transactions", transactions);
+        // Only constrained statements use defensive copies; ALL keeps the legacy response shape.
+        statement.put("transactions", owners == null
+                ? transactions : transactions.stream().map(this::statementProjection).toList());
         statement.put("transactionCount", transactions.size());
 
         return statement;
@@ -1211,10 +1351,16 @@ public class ArApServiceImpl implements ArApService {
     public List<Map<String, Object>> getAgingAnalysis(String factoryId, CounterpartyType counterpartyType) {
         // 获取所有挂账交易（未完全冲销的）
         List<ArApTransaction> invoices;
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null && owners.isEmpty()) return List.of();
         if (counterpartyType == CounterpartyType.CUSTOMER) {
-            invoices = transactionRepository.findOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31));
+            invoices = owners == null
+                    ? transactionRepository.findOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31))
+                    : transactionRepository.findScopedOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31), owners);
         } else {
-            invoices = transactionRepository.findOverduePayables(factoryId, LocalDate.of(9999, 12, 31));
+            invoices = owners == null
+                    ? transactionRepository.findOverduePayables(factoryId, LocalDate.of(9999, 12, 31))
+                    : transactionRepository.findScopedOverduePayables(factoryId, LocalDate.of(9999, 12, 31), owners);
         }
 
         // 按交易对手分组，计算账龄桶
@@ -1264,12 +1410,39 @@ public class ArApServiceImpl implements ArApService {
     @Override
     public Map<String, Object> getFinanceOverview(String factoryId) {
         Map<String, Object> overview = new LinkedHashMap<>();
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            overview.put("scopeApplied", true);
+            overview.put("scopeLabel", "当前授权范围");
+        }
+        if (owners != null && owners.isEmpty()) {
+            overview.put("totalReceivable", BigDecimal.ZERO);
+            overview.put("totalPayable", BigDecimal.ZERO);
+            overview.put("netPosition", BigDecimal.ZERO);
+            overview.put("overdueReceivable", BigDecimal.ZERO);
+            overview.put("overduePayable", BigDecimal.ZERO);
+            overview.put("overdueARCount", 0);
+            overview.put("overdueAPCount", 0);
+            overview.put("payableCount", 0L);
+            overview.put("receivableCount", 0L);
+            overview.put("monthlyTransactionCount", 0L);
+            overview.put("customerCount", 0L);
+            overview.put("supplierCount", 0L);
+            overview.put("transactionsByType", List.of());
+            return overview;
+        }
 
-        BigDecimal totalReceivable = transactionRepository.sumReceivables(factoryId);
-        BigDecimal totalPayable = transactionRepository.sumPayables(factoryId);
+        BigDecimal totalReceivable = owners == null ? transactionRepository.sumReceivables(factoryId)
+                : transactionRepository.sumReceivablesScoped(factoryId, owners);
+        BigDecimal totalPayable = owners == null ? transactionRepository.sumPayables(factoryId)
+                : transactionRepository.sumPayablesScoped(factoryId, owners);
 
-        List<ArApTransaction> overdueAR = transactionRepository.findOverdueReceivables(factoryId, LocalDate.now());
-        List<ArApTransaction> overdueAP = transactionRepository.findOverduePayables(factoryId, LocalDate.now());
+        List<ArApTransaction> overdueAR = owners == null
+                ? transactionRepository.findOverdueReceivables(factoryId, LocalDate.now())
+                : transactionRepository.findScopedOverdueReceivables(factoryId, LocalDate.now(), owners);
+        List<ArApTransaction> overdueAP = owners == null
+                ? transactionRepository.findOverduePayables(factoryId, LocalDate.now())
+                : transactionRepository.findScopedOverduePayables(factoryId, LocalDate.now(), owners);
 
         BigDecimal overdueARAmount = overdueAR.stream()
                 .map(ArApTransaction::getAmount)
@@ -1294,11 +1467,17 @@ public class ArApServiceImpl implements ArApService {
         // approval-gated aggregation as sumPayables/sumReceivables above) — count counterparties
         // whose net balance is still outstanding (>0). FE label changed to "N 家未结" to match
         // what's actually counted (counterparties, not individual transaction lines).
-        long payableCounterpartyCount = transactionRepository.sumByCounterparty(factoryId, CounterpartyType.SUPPLIER)
+        List<Object[]> payableRows = owners == null
+                ? transactionRepository.sumByCounterparty(factoryId, CounterpartyType.SUPPLIER)
+                : transactionRepository.sumByCounterpartyScoped(factoryId, CounterpartyType.SUPPLIER.name(), owners);
+        List<Object[]> receivableRows = owners == null
+                ? transactionRepository.sumByCounterparty(factoryId, CounterpartyType.CUSTOMER)
+                : transactionRepository.sumByCounterpartyScoped(factoryId, CounterpartyType.CUSTOMER.name(), owners);
+        long payableCounterpartyCount = payableRows
                 .stream()
                 .filter(row -> row[2] != null && ((BigDecimal) row[2]).compareTo(BigDecimal.ZERO) > 0)
                 .count();
-        long receivableCounterpartyCount = transactionRepository.sumByCounterparty(factoryId, CounterpartyType.CUSTOMER)
+        long receivableCounterpartyCount = receivableRows
                 .stream()
                 .filter(row -> row[2] != null && ((BigDecimal) row[2]).compareTo(BigDecimal.ZERO) > 0)
                 .count();
@@ -1315,19 +1494,25 @@ public class ArApServiceImpl implements ArApService {
         // ▎`|| 0` 把「这个字段不存在」翻译成了「本月一笔交易都没有」。
         LocalDate monthStart = LocalDate.now().withDayOfMonth(1);
         LocalDate monthEnd = monthStart.plusMonths(1).minusDays(1);
-        overview.put("monthlyTransactionCount",
-                transactionRepository.countByFactoryIdAndTransactionDateBetween(factoryId, monthStart, monthEnd));
-        overview.put("customerCount", transactionRepository.countDistinctCounterpartiesInPeriod(
-                factoryId, CounterpartyType.CUSTOMER, monthStart, monthEnd));
-        overview.put("supplierCount", transactionRepository.countDistinctCounterpartiesInPeriod(
-                factoryId, CounterpartyType.SUPPLIER, monthStart, monthEnd));
+        overview.put("monthlyTransactionCount", owners == null
+                ? transactionRepository.countByFactoryIdAndTransactionDateBetween(factoryId, monthStart, monthEnd)
+                : transactionRepository.countScopedByFactoryIdAndTransactionDateBetweenNative(factoryId, monthStart, monthEnd, owners));
+        overview.put("customerCount", owners == null
+                ? transactionRepository.countDistinctCounterpartiesInPeriod(factoryId, CounterpartyType.CUSTOMER, monthStart, monthEnd)
+                : transactionRepository.countDistinctScopedCounterpartiesInPeriod(factoryId, CounterpartyType.CUSTOMER.name(), monthStart, monthEnd, owners));
+        overview.put("supplierCount", owners == null
+                ? transactionRepository.countDistinctCounterpartiesInPeriod(factoryId, CounterpartyType.SUPPLIER, monthStart, monthEnd)
+                : transactionRepository.countDistinctScopedCounterpartiesInPeriod(factoryId, CounterpartyType.SUPPLIER.name(), monthStart, monthEnd, owners));
 
         // 按类型统计
-        List<Object[]> stats = transactionRepository.statisticsByType(factoryId);
+        List<Object[]> stats = owners == null ? transactionRepository.statisticsByType(factoryId)
+                : transactionRepository.statisticsByTypeScoped(factoryId, owners);
         List<Map<String, Object>> typeStats = new ArrayList<>();
         for (Object[] row : stats) {
             Map<String, Object> stat = new LinkedHashMap<>();
-            stat.put("type", ((ArApTransactionType) row[0]).getDisplayName());
+            ArApTransactionType type = row[0] instanceof ArApTransactionType value
+                    ? value : ArApTransactionType.valueOf(String.valueOf(row[0]));
+            stat.put("type", type.getDisplayName());
             stat.put("count", row[1]);
             stat.put("amount", row[2]);
             typeStats.add(stat);

@@ -17,6 +17,7 @@ import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApPaymentAllocationRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.PayableSettlementService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -45,6 +46,9 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
     private final SupplierRepository supplierRepository;
     private final ApplicationEventPublisher eventPublisher;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
+
     @Override
     @Transactional
     public PayableSettlementResult settle(
@@ -54,6 +58,7 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
             Long operatedBy) {
         requireText(factoryId, "factoryId");
         requireText(payableTransactionId, "payableTransactionId");
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireTransactionAccess(factoryId, payableTransactionId);
         if (request == null) {
             throw badRequest("付款请求不能为空", "request");
         }
@@ -196,7 +201,10 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
     @Transactional(readOnly = true)
     public List<UnallocatedApPaymentDTO> listUnallocatedPayments(String factoryId) {
         requireText(factoryId, "factoryId");
-        return transactionRepository.findUnallocatedApPayments(factoryId).stream()
+        List<ArApTransaction> payments = financeRowScopeQuery == null
+                ? transactionRepository.findUnallocatedApPayments(factoryId)
+                : scopedUnallocated(factoryId);
+        return payments.stream()
                 .map(payment -> UnallocatedApPaymentDTO.builder()
                         .paymentTransactionId(payment.getId())
                         .paymentTransactionNumber(payment.getTransactionNumber())
@@ -210,6 +218,12 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
                         .anomalyCode(LEGACY_UNALLOCATED_CODE)
                         .build())
                 .toList();
+    }
+
+    private List<ArApTransaction> scopedUnallocated(String factoryId) {
+        List<Long> owners = financeRowScopeQuery.creators(factoryId);
+        return owners == null ? transactionRepository.findUnallocatedApPayments(factoryId)
+                : owners.isEmpty() ? List.of() : transactionRepository.findScopedUnallocatedApPayments(factoryId, owners);
     }
 
     private PayableSettlementResult replayResult(

@@ -218,6 +218,8 @@ function handleAgingTypeChange() { loadAging(); }
         </div>
       </template>
 
+      <el-alert v-if="canViewPrice && overview?.scopeApplied" type="info" :closable="false" show-icon
+        title="仅显示当前授权范围内的账目与金额，不代表全工厂余额。" />
       <el-tabs v-if="canViewPrice" v-model="activeTab">
         <!-- 概览 Tab -->
         <el-tab-pane label="财务概览" name="overview">
@@ -266,7 +268,7 @@ function handleAgingTypeChange() { loadAging(); }
             <el-table-column prop="amount" label="金额" width="130" align="right">
               <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
             </el-table-column>
-            <el-table-column prop="balanceAfter" label="余额" width="130" align="right">
+            <el-table-column v-if="overview && !overview.scopeApplied" prop="balanceAfter" label="余额" width="130" align="right">
               <template #default="{ row }">
                 {{ formatAmount(row.balanceAfter) }}
                 <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"
@@ -307,7 +309,7 @@ function handleAgingTypeChange() { loadAging(); }
             <el-table-column prop="amount" label="金额" width="130" align="right">
               <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
             </el-table-column>
-            <el-table-column prop="balanceAfter" label="余额" width="130" align="right">
+            <el-table-column v-if="overview && !overview.scopeApplied" prop="balanceAfter" label="余额" width="130" align="right">
               <template #default="{ row }">
                 {{ formatAmount(row.balanceAfter) }}
                 <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"

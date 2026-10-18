@@ -10,6 +10,7 @@ import com.cretas.aims.repository.PaymentRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.finance.PaymentRecordService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -35,6 +36,9 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
     private final ApplicationEventPublisher eventPublisher;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.security.DataScopeResolver dataScopeResolver;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -48,6 +52,7 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
                                         PaymentMethod method, LocalDate paymentDate,
                                         String paymentReference, String receiptUrl,
                                         Long recordedBy, String remark) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireSalesOrderOwner(factoryId, salesOrderId);
         // R23 audit C1: cross-tenant + status validation. Pre-R23 this called findById() with
         // NO factoryId filter and NO status check — F001 user could POST F002's salesOrderId,
         // leaking F002 customer data into F001 payment_records, AND any user could record
@@ -147,6 +152,7 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
     @Transactional
     public PaymentRecord recordExpenseReimbursement(String factoryId, String expenseRequestId,
                                                     BigDecimal amount, Long recordedBy, String remark) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireOwner(factoryId, recordedBy);
         PaymentRecord record = new PaymentRecord();
         record.setFactoryId(factoryId);
         record.setPaymentNumber(generatePaymentNumber());
@@ -242,6 +248,13 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
     @Override
     public Page<PaymentRecord> listPayments(String factoryId, PaymentRecordStatus status,
                                              PaymentMethod method, Pageable pageable) {
+        java.util.List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            if (owners.isEmpty()) return Page.empty(pageable);
+            return paymentRecordRepository.searchPaymentsInOrderScope(
+                    factoryId, status != null ? status.name() : null,
+                    method != null ? method.name() : null, owners, pageable);
+        }
         return paymentRecordRepository.searchPayments(
                 factoryId,
                 status != null ? status.name() : null,
@@ -253,19 +266,32 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
     public PaymentRecord getPayment(String factoryId, String paymentId) {
         PaymentRecord record = paymentRecordRepository.findById(paymentId)
                 .orElseThrow(() -> new IllegalArgumentException("收款记录不存在: " + paymentId));
-        // 跨租户校验: 收款记录须属于当前工厂 (防止越权查看/确认/驳回其它工厂的收款记录)
         if (record.getFactoryId() == null || !record.getFactoryId().equals(factoryId)) {
             throw new com.cretas.aims.exception.BusinessException(403,
                     "无权操作该收款记录 / 该收款记录不属于当前工厂")
                     .withHint("请确认收款记录 ID 是否属于本工厂");
+        }
+        if (financeRowScopeQuery != null) {
+            if (record.getSalesOrderId() != null && !record.getSalesOrderId().isBlank()) {
+                financeRowScopeQuery.requireSalesOrderOwner(factoryId, record.getSalesOrderId());
+            } else if (isExpenseReimbursement(record)) {
+                financeRowScopeQuery.requireOwner(factoryId, record.getRecordedBy());
+            } else {
+                financeRowScopeQuery.requireOwner(factoryId, null);
+            }
         }
         return record;
     }
 
     @Override
     public java.util.List<PaymentRecord> listPaymentsBySalesOrder(String factoryId, String salesOrderId) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireSalesOrderOwner(factoryId, salesOrderId);
         return paymentRecordRepository
                 .findByFactoryIdAndSalesOrderIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, salesOrderId);
+    }
+
+    private java.util.List<Long> scopeOwners(String factoryId) {
+        return financeRowScopeQuery == null ? null : financeRowScopeQuery.recordCreators(factoryId);
     }
 
     private void updateSalesOrderPaymentStatus(String salesOrderId, String factoryId) {

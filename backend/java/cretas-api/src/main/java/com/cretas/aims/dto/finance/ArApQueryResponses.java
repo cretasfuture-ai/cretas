@@ -2,6 +2,7 @@ package com.cretas.aims.dto.finance;
 
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.security.PriceSensitive;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -13,6 +14,10 @@ public final class ArApQueryResponses {
 
     @Data
     public static class Overview {
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private Boolean scopeApplied;
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private String scopeLabel;
         @PriceSensitive private BigDecimal totalReceivable;
         @PriceSensitive private BigDecimal totalPayable;
         @PriceSensitive private BigDecimal netPosition;
@@ -50,6 +55,10 @@ public final class ArApQueryResponses {
 
     @Data
     public static class Statement {
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private Boolean scopeApplied;
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private String scopeLabel;
         private String counterpartyId;
         private String counterpartyType;
         private String startDate;
