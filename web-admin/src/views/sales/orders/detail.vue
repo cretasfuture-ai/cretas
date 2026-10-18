@@ -10,6 +10,7 @@ import { initialTaxIncludedUnitPrice } from './salesOrderNewLineContract';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
+import DeliverySignatureReceipt from './components/DeliverySignatureReceipt.vue';
 import type { Attachment } from '@/api/attachment';
 import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
@@ -93,6 +94,7 @@ const approvalProgress = ref<SalesOrderApprovalProgress | null>(null);
 const deliveries = ref<TableRow[]>([]);
 const signatureDialogVisible = ref(false);
 const signatureTarget = ref<TableRow | null>(null);
+const signatureReceiptTarget = ref<TableRow | null>(null);
 const signatureUploadKey = ref(0);
 const signaturePhotoUrls = ref<string[]>([]);
 const signatureQueue = ref({ total: 0, pending: 0, failed: 0 });
@@ -1164,6 +1166,10 @@ function deliveryQuantitySummary(row: TableRow): string {
 }
 
 function deliveryAuditSummary(row: TableRow): string {
+  if (['DELIVERED', 'SIGNED'].includes(String(row.status || ''))) {
+    if (row.recordRole === 'MASTER') return '签收汇总：以子发运签收记录为准';
+    return `客户签收：${row.signedByName || '未记录签收人'} · ${row.signedAt ? formatBusinessDateTime(row.signedAt) : '未记录签收时间'}`;
+  }
   const shipped = ['SHIPPED', 'DELIVERED', 'SIGNED'].includes(String(row.status || ''));
   const operator = row.shippedByName || (row.shippedBy ? `用户 #${row.shippedBy}` : '待仓库处理');
   const time = shipped ? (row.updatedAt || row.shippedAt || '时间待记录') : (row.createdAt || '时间待记录');
@@ -2450,6 +2456,8 @@ async function handleQuickPayFull() {
                     >等待仓库确认</el-button>
                   </el-tooltip>
                   <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="openSignatureDialog(row)">填写凭证并签收</el-button>
+                  <el-button v-if="['DELIVERED', 'SIGNED'].includes(String(row.status)) && row.recordRole !== 'MASTER'"
+                    type="primary" link size="small" @click="signatureReceiptTarget = row">查看签收凭证</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -2867,6 +2875,17 @@ async function handleQuickPayFull() {
           @click="submitDeliveredWithSignature"
         >保存凭证并确认签收</el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog :model-value="Boolean(signatureReceiptTarget)" title="查看签收凭证" width="620px"
+      destroy-on-close @update:model-value="(value: boolean) => { if (!value) signatureReceiptTarget = null; }">
+      <DeliverySignatureReceipt v-if="signatureReceiptTarget" :key="String(signatureReceiptTarget.id)"
+        :factory-id="factoryId" :delivery-id="String(signatureReceiptTarget.id)"
+        :photo-urls="existingSignaturePhotoUrls(signatureReceiptTarget.signaturePhotoUrls)"
+        :signed-by-name="String(signatureReceiptTarget.signedByName || '')"
+        :signed-at="String(signatureReceiptTarget.signedAt || '')"
+        :remark="String(signatureReceiptTarget.signatureRemark || '')" />
+      <template #footer><el-button @click="signatureReceiptTarget = null">关闭</el-button></template>
     </el-dialog>
 
     <!-- ─── 批次分配对话框 (P0-13 强制批次追溯) ─── -->

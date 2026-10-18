@@ -149,6 +149,30 @@ public class AttachmentController {
         return new ResponseEntity<>(headers, HttpStatus.FOUND);
     }
 
+    /** Authorized in-page preview without a cross-origin authenticated redirect. */
+    @GetMapping("/{id}/download-url")
+    @RequirePermission(value = {
+            "procurement:read", "procurement:read_write",
+            "sales:read", "sales:read_write",
+            "finance:read", "finance:read_write",
+            "quality:read", "quality:read_write",
+            "production:read", "production:read_write",
+            "warehouse:read", "warehouse:read_write",
+            "hr:read", "hr:read_write",
+            "work_report:read", "work_report:read_write",
+            "restaurant:read", "restaurant:read_write",
+            "rd:read", "rd:read_write",
+            "system:read", "system:read_write"
+    })
+    public ResponseEntity<ApiResponse<Map<String, String>>> downloadUrl(
+            @PathVariable String factoryId, @PathVariable String id, HttpServletRequest request) {
+        Attachment attachment = attachmentService.getById(factoryId, id);
+        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), attachment.getEntityType());
+        String url = attachmentService.generateDownloadUrl(factoryId, id);
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(ApiResponse.success(Map.of("url", url)));
+    }
+
     // ==================== 4. Upload URL (pre-signed PUT) ====================
 
     @PostMapping("/upload-url")
