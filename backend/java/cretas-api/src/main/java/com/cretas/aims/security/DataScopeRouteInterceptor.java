@@ -65,7 +65,18 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
             || path.equals("sales/statistics") || path.equals("inventory/by-warehouse") || path.startsWith("list-summary/") || path.startsWith("workflow-stats/")
             || path.equals("purchase/statistics") || path.equals("purchase/receiving-tasks")
             || (path.startsWith("warehouse/receiving/") && !path.equals("warehouse/receiving/default-warehouse") && resource==null);
-        if (resource==null && !aggregateShortcut) return true;
+        // Production and finance have additional endpoints whose queries are not yet bound to
+        // DataScopeContext. Keep them inside the typed actor/scope checks instead of letting the
+        // generic resource-null compatibility return expose a factory-wide result or write.
+        String unsupportedScopeDomain = null;
+        if (resource == null) {
+            if (path.equals("production-plans") || path.startsWith("production-plans/")) {
+                unsupportedScopeDomain = "生产计划";
+            } else if (path.equals("finance") || path.startsWith("finance/")) {
+                unsupportedScopeDomain = "财务";
+            }
+        }
+        if (resource==null && !aggregateShortcut && unsupportedScopeDomain == null) return true;
         if (resource!=null) request.setAttribute(RESOURCE_ATTRIBUTE, switch(resource.table()) {
             case "sales_delivery_records" -> "sales_orders";
             case "purchase_receive_records" -> "purchase_orders";
@@ -77,6 +88,24 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         DataScopeContext context=resolver.resolve(actor.id());
         if (context==null || !factory.equals(context.getFactoryId())) throw new BusinessException(403,"无有效工厂数据身份");
         if (context.getScope()==DataScope.ALL) return true;
+        if (unsupportedScopeDomain != null) {
+            String roleCode = context.getRoleCode();
+            if (roleCode == null || roleCode.isBlank())
+                throw new BusinessException(503,"无法读取工厂数据范围，访问已停止");
+            final Long configured;
+            try {
+                configured = jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?",
+                        Long.class, factory, roleCode);
+            } catch (RuntimeException ex) {
+                throw new BusinessException(503,"无法读取工厂数据范围，访问已停止",ex);
+            }
+            if (configured == null)
+                throw new BusinessException(503,"无法读取工厂数据范围，访问已停止");
+            if (configured > 0)
+                throw new BusinessException(403,"当前受限数据范围尚不支持" + unsupportedScopeDomain + "入口，已拒绝访问，请联系管理员确认适用的数据范围");
+            return true;
+        }
         // These retired endpoints only return 410 with a migration hint; they cannot create records.
         if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // The payment service checks the locked source order before its first write.
