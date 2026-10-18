@@ -183,8 +183,8 @@ class BatchAdjustmentAtomicityPostgresContractTest {
     void concurrentDifferentAdjustmentsCannotLoseSupplierBalanceUpdate() throws Exception {
         insertTransaction("ADJ-A", CounterpartyType.SUPPLIER, SUPPLIER, "5.00", 1L);
         insertTransaction("ADJ-B", CounterpartyType.SUPPLIER, SUPPLIER, "7.00", 1L);
-        // Force both transactions to read the same version; otherwise legal serial execution reaches 22.
-        ArApServiceImpl service = service(null, new java.util.concurrent.CyclicBarrier(2));
+        // Real factory/counterparty locks serialize concurrent changes; both must commit without losing either amount.
+        ArApServiceImpl service = service(null, null);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             var first = pool.submit(() -> service.batchApproveAdjustments(FACTORY, List.of("ADJ-A"), 2L));
