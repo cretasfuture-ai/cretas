@@ -16,6 +16,7 @@ import type { TableRow } from '@/types/api';
 //   ⛔ 又不能从导航栏跨进销售/采购模块。
 //   ⇒ 抽屉**不注册任何路由** —— 物理上进不了侧边栏, URL 也始终停在 /finance/*。
 import OrderPeekDrawer from '../components/OrderPeekDrawer.vue';
+import InvoicePdfDownload from '@/components/finance/InvoicePdfDownload.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -353,7 +354,7 @@ function peekOrder(id: string) {
         <el-table-column prop="requestedAt" label="申请时间" width="170" />
         <el-table-column prop="invoicePdfUrl" label="发票PDF" width="90" align="center">
           <template #default="{ row }">
-            <a v-if="row.invoicePdfUrl" :href="row.invoicePdfUrl" target="_blank">查看</a>
+            <InvoicePdfDownload v-if="row.invoicePdfUrl" :factory-id="factoryId" :invoice-id="row.id" :file-name="row.invoiceFileName" />
             <span v-else>-</span>
           </template>
         </el-table-column>

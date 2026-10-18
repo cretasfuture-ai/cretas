@@ -11,6 +11,7 @@ import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import DeliverySignatureReceipt from './components/DeliverySignatureReceipt.vue';
+import InvoicePdfDownload from '@/components/finance/InvoicePdfDownload.vue';
 import type { Attachment } from '@/api/attachment';
 import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
@@ -2307,7 +2308,7 @@ async function handleQuickPayFull() {
             </template>
 
             <div class="tab-toolbar">
-              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已开票 {{ formatAmount(order.invoicedAmount || 0) }}</span>
+              <span v-if="canViewPrice" class="tab-hint">订单未税总额 {{ formatAmount(order.totalAmount) }} / 已开票（含税）{{ formatAmount(order.invoicedAmount || 0) }}</span>
               <span class="tab-hint">全部发货完成后，系统自动按税率分组生成待审核开票记录</span>
             </div>
 
@@ -2351,9 +2352,7 @@ async function handleQuickPayFull() {
                   <el-button v-if="row.status === 'REQUESTED' && canWrite" type="success" link size="small" @click="handleApproveInvoice(row.id)">通过</el-button>
                   <el-button v-if="row.status === 'REQUESTED' && canWrite" type="danger" link size="small" @click="handleRejectInvoice(row.id)">驳回</el-button>
                   <el-button v-if="row.status === 'APPROVED' && canWrite" type="primary" link size="small" @click="openIssueDialog(row.id)">上传发票</el-button>
-                  <el-link v-if="row.invoicePdfUrl" :href="row.invoicePdfUrl" target="_blank" type="primary" underline="hover" :download="row.invoiceFileName || ''">
-                    下载{{ row.invoiceFileName ? ` (${row.invoiceFileName})` : '' }}
-                  </el-link>
+                  <InvoicePdfDownload v-if="row.invoicePdfUrl" :factory-id="factoryId" :invoice-id="row.id" :file-name="row.invoiceFileName" />
                 </template>
               </el-table-column>
             </el-table>

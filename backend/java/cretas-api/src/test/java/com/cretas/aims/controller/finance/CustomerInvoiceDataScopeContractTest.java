@@ -25,7 +25,8 @@ class CustomerInvoiceDataScopeContractTest {
             return List.of(3L,4L);
         });
         var repo=mock(InvoiceRecordRepository.class,withSettings().defaultAnswer(i->Page.class.isAssignableFrom(i.getMethod().getReturnType())?Page.empty():RETURNS_DEFAULTS.answer(i)));
-        var controller=new InvoiceController(mock(InvoiceService.class),repo,resolver);
+        var controller=new InvoiceController(mock(InvoiceService.class),repo,resolver,
+                mock(com.cretas.aims.service.OssService.class), mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class));
         var proxy=new AspectJProxyFactory(controller); proxy.addAspect(new DataScopeAspect(resolver));
         var request=new MockHttpServletRequest();
         request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,3L,"F1","sales_manager"));

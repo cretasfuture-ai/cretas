@@ -389,7 +389,8 @@ class RoleDataScopePostgresContractTest {
             when(service.getInvoice("F1","OWN")).thenReturn(new com.cretas.aims.entity.finance.InvoiceRecord());
             when(service.listInvoicesBySalesOrder("F1","OWN_ORDER")).thenReturn(List.of());
             when(repository.findCustomerInvoicesInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
-            var controller=new com.cretas.aims.controller.finance.InvoiceController(service,repository,resolver);
+            var controller=new com.cretas.aims.controller.finance.InvoiceController(service,repository,resolver,
+                    mock(com.cretas.aims.service.OssService.class), mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class));
             var proxy=new AspectJProxyFactory(controller);proxy.addAspect(new DataScopeAspect(resolver));
             var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup((Object)proxy.getProxy())
                     .addInterceptors(new DataScopeRouteInterceptor(resolver,jdbc)).setControllerAdvice(new RouteErrors()).build();

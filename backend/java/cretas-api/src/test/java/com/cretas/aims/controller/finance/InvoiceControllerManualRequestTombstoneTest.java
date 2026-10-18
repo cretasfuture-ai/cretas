@@ -15,7 +15,8 @@ class InvoiceControllerManualRequestTombstoneTest {
 
     private final InvoiceService invoiceService = mock(InvoiceService.class);
     private final InvoiceController controller = new InvoiceController(
-            invoiceService, mock(InvoiceRecordRepository.class), mock(com.cretas.aims.security.DataScopeResolver.class));
+            invoiceService, mock(InvoiceRecordRepository.class), mock(com.cretas.aims.security.DataScopeResolver.class),
+            mock(com.cretas.aims.service.OssService.class), mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class));
 
     @Test
     void amountBasedManualRequest_isGoneAndDoesNotCallService() {
