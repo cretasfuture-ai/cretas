@@ -58,8 +58,12 @@ public class WarehouseReceivingController {
     private final SalesOrderSuppliedMaterialRequirementService suppliedMaterialRequirementService;
     private final CustomerMaterialArrivalNoticeService arrivalNoticeService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.inventory.ReceivingTaskVisibility taskVisibility;
+
     @RequireModule("warehouse")
     @GetMapping("/tasks")
+    @com.cretas.aims.security.RowScopeSupported
     @Operation(summary = "仓储待收货任务")
     @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:write"})
     public ApiResponse<List<PurchaseReceivingTaskResponse>> getTasks(
@@ -118,7 +122,9 @@ public class WarehouseReceivingController {
                             .build())
                     .toList());
         }
-        return ApiResponse.success("查询成功", tasks);
+        if (taskVisibility == null && org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null)
+            throw new BusinessException(503, "收货任务数据范围组件未就绪，访问已停止");
+        return ApiResponse.success("查询成功", taskVisibility == null ? tasks : taskVisibility.filter(factoryId, tasks));
     }
 
     @RequireModule("warehouse")

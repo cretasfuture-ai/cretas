@@ -46,6 +46,30 @@ class PurchaseServiceImplReceivingTaskTest {
 
     private PurchaseServiceImpl service;
 
+    @Test
+    void receivingScopeIsBoundBeforeStatusPageLimitAndHiddenDirectLookupReadsNoItems() {
+        var scope = mock(com.cretas.aims.security.BusinessRowScope.class);
+        ReflectionTestUtils.setField(service,"receivingRowScope",scope);
+        when(scope.recordCreatorIds(FACTORY)).thenReturn(List.of(11L,22L));
+        for (var status : List.of(PurchaseOrderStatus.FINANCE_APPROVED,PurchaseOrderStatus.PARTIAL_RECEIVED)) {
+            when(orderRepository.findByFactoryIdAndStatusAndCreatedByInOrderByCreatedAtDesc(
+                    eq(FACTORY),eq(status),eq(List.of(11L,22L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
+        }
+        assertTrue(service.getPendingReceivingTasks(FACTORY,null,null).isEmpty());
+        verify(orderRepository,never()).findByFactoryIdAndStatusOrderByCreatedAtDesc(any(),any(),any());
+        var hidden=order(PurchaseOrderStatus.FINANCE_APPROVED);
+        hidden.setCreatedBy(33L);
+        when(orderRepository.findByIdAndFactoryIdAndCreatedByIn(PO_ID,FACTORY,List.of(11L,22L))).thenReturn(Optional.empty());
+        assertTrue(service.getPendingReceivingTasks(FACTORY,PO_ID,null).isEmpty());
+        when(orderRepository.findByFactoryIdAndOrderNumberAndCreatedByIn(FACTORY,hidden.getOrderNumber(),List.of(11L,22L))).thenReturn(Optional.empty());
+        assertTrue(service.getPendingReceivingTasks(FACTORY,null,hidden.getOrderNumber()).isEmpty());
+        assertTrue(service.getPendingReceivingTasks(FACTORY,"missing",null).isEmpty());
+        assertTrue(service.getPendingReceivingTasks(FACTORY,null,"missing").isEmpty());
+        verify(orderRepository,never()).findByIdAndFactoryId(any(),any());
+        verify(orderRepository,never()).findByFactoryIdAndOrderNumber(any(),any());
+        verifyNoInteractions(itemRepository,receiveRepository);
+    }
+
     @BeforeEach
     void setUp() {
         service = new PurchaseServiceImpl(orderRepository, itemRepository, receiveRepository,
