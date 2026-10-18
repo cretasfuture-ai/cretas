@@ -183,7 +183,8 @@ class BatchAdjustmentAtomicityPostgresContractTest {
     void concurrentDifferentAdjustmentsCannotLoseSupplierBalanceUpdate() throws Exception {
         insertTransaction("ADJ-A", CounterpartyType.SUPPLIER, SUPPLIER, "5.00", 1L);
         insertTransaction("ADJ-B", CounterpartyType.SUPPLIER, SUPPLIER, "7.00", 1L);
-        ArApServiceImpl service = service(null, null);
+        // Force both transactions to read the same version; otherwise legal serial execution reaches 22.
+        ArApServiceImpl service = service(null, new java.util.concurrent.CyclicBarrier(2));
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             var first = pool.submit(() -> service.batchApproveAdjustments(FACTORY, List.of("ADJ-A"), 2L));
@@ -213,13 +214,17 @@ class BatchAdjustmentAtomicityPostgresContractTest {
         assertThat(status("GUARD")).isEqualTo("PENDING");
     }
 
-    private ArApServiceImpl service(String failTransactionId, String unused) {
+    private ArApServiceImpl service(String failTransactionId, java.util.concurrent.CyclicBarrier supplierReadBarrier) {
         ArApTransactionRepository transactions = mock(ArApTransactionRepository.class);
         SupplierRepository suppliers = mock(SupplierRepository.class);
         CustomerRepository customers = mock(CustomerRepository.class);
         when(transactions.findById(anyString())).thenAnswer(invocation -> findTransaction(invocation.getArgument(0)));
         when(suppliers.findByIdAndFactoryId(anyString(), anyString()))
-                .thenAnswer(invocation -> findSupplier(invocation.getArgument(0), invocation.getArgument(1)));
+                .thenAnswer(invocation -> {
+                    Optional<Supplier> supplier = findSupplier(invocation.getArgument(0), invocation.getArgument(1));
+                    if (supplierReadBarrier != null) supplierReadBarrier.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    return supplier;
+                });
         when(customers.findByIdAndFactoryId(anyString(), anyString()))
                 .thenAnswer(invocation -> findCustomer(invocation.getArgument(0), invocation.getArgument(1)));
         when(suppliers.save(any(Supplier.class))).thenAnswer(invocation -> saveSupplier(invocation.getArgument(0)));

@@ -19,6 +19,8 @@ import java.util.List;
 @Repository
 public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String> {
 
+    Optional<ReturnOrder> findByIdAndFactoryId(String id, String factoryId);
+
     Page<ReturnOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
     Page<ReturnOrder> findByFactoryIdAndReturnTypeOrderByCreatedAtDesc(String factoryId, ReturnType returnType, Pageable pageable);

@@ -56,7 +56,9 @@ class JavaPrGateTieringContractTest {
                         "ref: ${{ github.event.pull_request.head.sha }}")
                 .contains("postgres-reversal-concurrency:")
                 .contains("bash \"$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh\" \"$MVN\" -B test")
-                .contains("-Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT")
+                .contains("-Dtest=ProductionScopePostgresContractTest,FinanceScopePostgresContractTest,"
+                        + "VoucherLedgerScopePostgresContractTest,ReportReversalLogRepositoryPostgresConcurrencyIT,"
+                        + "ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT")
                 .doesNotContain("localhost:5432/$DB");
 
         assertThat(read(REPO_ROOT.resolve("scripts/ci/run-with-test-postgres.sh")))

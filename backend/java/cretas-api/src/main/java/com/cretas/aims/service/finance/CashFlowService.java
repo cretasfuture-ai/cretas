@@ -67,6 +67,13 @@ public class CashFlowService {
     public CashFlowDTO generate(String factoryId,
                                 Integer startYear, Integer startMonth,
                                 Integer endYear, Integer endMonth) {
+        return generate(factoryId, startYear, startMonth, endYear, endMonth, null);
+    }
+
+    public CashFlowDTO generate(String factoryId,
+                                Integer startYear, Integer startMonth,
+                                Integer endYear, Integer endMonth,
+                                List<String> voucherIds) {
         if (factoryId == null || factoryId.isBlank()) {
             throw new IllegalArgumentException("factoryId is required");
         }
@@ -90,7 +97,14 @@ public class CashFlowService {
         }
 
         // 拉期间内含现金的 vouchers (entry-driven)
-        List<Voucher> cashVouchers = voucherRepo.findByFactoryIdAndDateRange(factoryId, startDate, endDate);
+        List<Long> ownerScope = VoucherRowScopeContext.currentCreators();
+        List<Voucher> cashVouchers = ownerScope != null
+                ? voucherRepo.findByFactoryIdAndOwnerScopeAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, startDate, endDate, VoucherOwnershipSql.ownerIdsJson(ownerScope))
+                : voucherIds == null
+                ? voucherRepo.findByFactoryIdAndDateRange(factoryId, startDate, endDate)
+                : voucherRepo.findByFactoryIdAndIdInAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, voucherIds, startDate, endDate);
 
         // 期间累计 inflow/outflow by counterpart code
         // key = counterpartCode, value = {inflow, outflow}
@@ -210,14 +224,20 @@ public class CashFlowService {
         // (voucherEntryRepo.aggregateBySubjectExcludingDraft) 保证与资产负债表现金科目余额口径
         // 完全一致 (排 VOID/DRAFT, 保留 REVERSED — 与本方法上面的 voucher 过滤条件同一原则).
         // 历史 bug: 曾硬编码 0, 导致任何不从数据起点开始的区间现金流量表期末余额低报.
-        BigDecimal beginningCash = computeCashBalance(factoryId, startDate.minusDays(1));
+        BigDecimal beginningCash = computeCashBalance(factoryId, startDate.minusDays(1), voucherIds);
         BigDecimal endingCash = beginningCash.add(netIncrease).setScale(2, RoundingMode.HALF_UP);
 
         // F006 财务审计 Bug 6 follow-up (2026-07-04): 待过账 (DRAFT) 凭证数 — 现金流量表已切
         // POSTED-only 口径, 用此字段告知财务人员"报表数字看着少"的原因 (fool-proof Rule 5),
         // 而非悄悄漏算不说明. 与 BalanceSheetDTO/IncomeStatementDTO.pendingDraftVoucherCount 同一原则.
-        long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
-                factoryId, VoucherStatus.DRAFT, startDate, endDate);
+        long pendingDraftCount = ownerScope != null
+                ? voucherRepo.countByFactoryIdAndOwnerScopeAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherOwnershipSql.ownerIdsJson(ownerScope), VoucherStatus.DRAFT.name(), startDate, endDate)
+                : voucherIds == null
+                ? voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, startDate, endDate)
+                : voucherRepo.countByFactoryIdAndIdInAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, voucherIds, VoucherStatus.DRAFT, startDate, endDate);
 
         return CashFlowDTO.builder()
                 .factoryId(factoryId)
@@ -252,7 +272,14 @@ public class CashFlowService {
                                  Integer startYear, Integer startMonth,
                                  Integer endYear, Integer endMonth,
                                  OutputStream out) {
-        CashFlowDTO dto = generate(factoryId, startYear, startMonth, endYear, endMonth);
+        return exportCashFlow(factoryId, startYear, startMonth, endYear, endMonth, out, null);
+    }
+
+    public String exportCashFlow(String factoryId,
+                                 Integer startYear, Integer startMonth,
+                                 Integer endYear, Integer endMonth,
+                                 OutputStream out, List<String> voucherIds) {
+        CashFlowDTO dto = generate(factoryId, startYear, startMonth, endYear, endMonth, voucherIds);
         List<List<Object>> rows = buildCashFlowRows(dto);
         writeRawRows(out, rows, "现金流量表");
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
@@ -407,12 +434,17 @@ public class CashFlowService {
      *
      * @param asOfDate 累计截止日 (含); 若早于 EPOCH_START (理论上不会发生) 返回 0
      */
-    private BigDecimal computeCashBalance(String factoryId, LocalDate asOfDate) {
+    private BigDecimal computeCashBalance(String factoryId, LocalDate asOfDate, List<String> voucherIds) {
         if (asOfDate.isBefore(EPOCH_START)) {
             return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         }
-        List<SubjectAggregateRow> aggregates =
-                voucherEntryRepo.aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, asOfDate);
+        List<Long> ownerScope = VoucherRowScopeContext.currentCreators();
+        List<SubjectAggregateRow> aggregates = ownerScope != null
+                ? mapSubjectRows(voucherEntryRepo.aggregateBySubjectExcludingDraftInOwnerScopeNative(
+                        factoryId, EPOCH_START, asOfDate, VoucherOwnershipSql.ownerIdsJson(ownerScope)))
+                : voucherIds == null
+                ? voucherEntryRepo.aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, asOfDate)
+                : voucherEntryRepo.aggregateBySubjectExcludingDraftInScope(factoryId, EPOCH_START, asOfDate, voucherIds);
         BigDecimal balance = BigDecimal.ZERO;
         for (SubjectAggregateRow row : aggregates) {
             if (row.getSubjectCode() != null && CASH_CODES.contains(row.getSubjectCode())) {
@@ -420,5 +452,11 @@ public class CashFlowService {
             }
         }
         return balance.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private List<SubjectAggregateRow> mapSubjectRows(List<Object[]> rows) {
+        return rows.stream().map(row -> new SubjectAggregateRow(
+                (String) row[0], (String) row[1], (BigDecimal) row[2], (BigDecimal) row[3],
+                ((Number) row[4]).longValue())).toList();
     }
 }

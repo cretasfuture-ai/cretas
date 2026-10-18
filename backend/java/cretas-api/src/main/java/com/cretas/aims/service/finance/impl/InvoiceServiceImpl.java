@@ -14,6 +14,7 @@ import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.finance.InvoiceService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -49,6 +50,9 @@ public class InvoiceServiceImpl implements InvoiceService {
     private final OssService ossService;
     private final ApplicationEventPublisher eventPublisher;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
+
     /** F-INV-1 gap-fill: PDF→PNG→vision OCR, 解析失败仅记 ocr_error_message。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DashScopeVisionClient dashScopeVisionClient;
@@ -74,6 +78,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     @Transactional
     public InvoiceRecord requestInvoice(String factoryId, String salesOrderId, BigDecimal amount,
                                          BigDecimal taxAmount, String invoiceType, Long requestedBy, String remark) {
+        requireSalesOrderOwner(factoryId, salesOrderId);
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "amount", amount != null ? amount : BigDecimal.ZERO,
             "invoiceType", invoiceType != null ? invoiceType : "",
@@ -173,6 +178,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public InvoiceRecord requestInvoiceFromOrder(String factoryId, String salesOrderId,
                                                   String invoiceType, Long requestedBy, String remark) {
+        requireSalesOrderOwner(factoryId, salesOrderId);
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "salesOrderId", salesOrderId != null ? salesOrderId : "",
             "invoiceType", invoiceType != null ? invoiceType : ""));
@@ -456,6 +462,13 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     public Page<InvoiceRecord> listInvoices(String factoryId, InvoiceStatus status, InvoiceType invoiceType, Pageable pageable) {
+        java.util.List<Long> owners = scopeOwners(factoryId);
+        if (owners != null) {
+            if (owners.isEmpty()) return Page.empty(pageable);
+            return invoiceRecordRepository.searchInvoicesInOrderScope(
+                    factoryId, status != null ? status.name() : null,
+                    invoiceType != null ? invoiceType.name() : null, owners, pageable);
+        }
         return invoiceRecordRepository.searchInvoices(
                 factoryId,
                 status != null ? status.name() : null,
@@ -465,14 +478,31 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     public InvoiceRecord getInvoice(String factoryId, String invoiceId) {
-        return invoiceRecordRepository.findByIdAndFactoryIdAndDeletedAtIsNull(invoiceId, factoryId)
+        InvoiceRecord record = invoiceRecordRepository.findByIdAndFactoryIdAndDeletedAtIsNull(invoiceId, factoryId)
                 .orElseThrow(() -> new IllegalArgumentException("开票记录不存在或无权访问: " + invoiceId));
+        if (financeRowScopeQuery != null) {
+            if (record.getSalesOrderId() == null || record.getSalesOrderId().isBlank()) {
+                financeRowScopeQuery.requireOwner(factoryId, null);
+            } else {
+                financeRowScopeQuery.requireSalesOrderOwner(factoryId, record.getSalesOrderId());
+            }
+        }
+        return record;
     }
 
     @Override
     public List<InvoiceRecord> listInvoicesBySalesOrder(String factoryId, String salesOrderId) {
+        requireSalesOrderOwner(factoryId, salesOrderId);
         return invoiceRecordRepository
                 .findByFactoryIdAndSalesOrderIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, salesOrderId);
+    }
+
+    private java.util.List<Long> scopeOwners(String factoryId) {
+        return financeRowScopeQuery == null ? null : financeRowScopeQuery.recordCreators(factoryId);
+    }
+
+    private void requireSalesOrderOwner(String factoryId, String salesOrderId) {
+        if (financeRowScopeQuery != null) financeRowScopeQuery.requireSalesOrderOwner(factoryId, salesOrderId);
     }
 
     private void updateSalesOrderInvoiceStatus(String salesOrderId) {

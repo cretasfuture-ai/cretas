@@ -58,6 +58,42 @@ public interface SalesDeliveryItemRepository extends JpaRepository<SalesDelivery
         return ShipmentCostRows.movements(findShippedCostSources(factoryId, startDate, endDate));
     }
 
+    @Query(value = """
+        SELECT r.delivery_date, e.quantity_used, b.unit_cost,
+               COALESCE(b.product_type_id,i.product_type_id), b.batch_number,
+               COALESCE(i.product_name,b.product_name), r.delivery_number,
+               i.id, i.delivered_quantity, i.unit, b.unit, p.grams_per_unit,
+               i.packaging_unit,i.packaging_base_unit,i.packaging_factor,
+               b.packaging_unit,b.packaging_base_unit,b.packaging_factor,e.id,
+               (SELECT COUNT(*) FROM sales_delivery_item_batch_allocations a
+                WHERE a.factory_id=r.factory_id AND a.delivery_item_id=CAST(i.id AS varchar) AND a.deleted_at IS NULL),e.unit
+        FROM sales_delivery_items i JOIN sales_delivery_records r ON r.id=i.delivery_record_id
+        JOIN sales_orders so ON so.id=r.sales_order_id AND so.factory_id=r.factory_id AND so.deleted_at IS NULL
+        LEFT JOIN batch_lineage_edges e ON e.factory_id=r.factory_id AND e.target_id=r.id
+            AND e.target_type='SHIPMENT_RECORD' AND e.source_type='FINISHED_BATCH'
+            AND e.edge_type='FINISHED_TO_SHIPMENT' AND e.deleted_at IS NULL
+            AND jsonb_extract_path_text(e.meta,'shipmentCarrier')='SALES_DELIVERY_RECORD'
+            AND jsonb_extract_path_text(e.meta,'origin')='SALES_DELIVERY_SHIPMENT'
+            AND jsonb_extract_path_text(e.meta,'deliveryItemId')=CAST(i.id AS varchar)
+        LEFT JOIN finished_goods_batches b ON b.id=e.source_id
+            AND b.factory_id=r.factory_id AND b.product_type_id=i.product_type_id AND b.deleted_at IS NULL
+        LEFT JOIN product_types p ON p.id=i.product_type_id AND p.factory_id=r.factory_id AND p.deleted_at IS NULL
+        WHERE so.created_by IN (:owners) AND r.factory_id=:factoryId AND r.delivery_date BETWEEN :startDate AND :endDate
+          AND COALESCE(r.record_role,'LEGACY')<>'MASTER'
+          AND r.status IN ('SHIPPED','DELIVERED') AND i.deleted_at IS NULL AND r.deleted_at IS NULL
+        ORDER BY r.delivery_date,r.id,i.id,e.id
+        """, nativeQuery = true)
+    List<Object[]> findShippedCostSourcesInSourceOwnerScope(@Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
+            @Param("owners") java.util.Collection<Long> owners);
+
+    /** Identical lineage/unit cost semantics for source-owner restricted ledgers. */
+    default List<Object[]> findShippedMovementsForLedgerInSourceOwnerScope(
+            String factoryId, LocalDate startDate, LocalDate endDate, java.util.Collection<Long> owners) {
+        if (owners.isEmpty()) return List.of();
+        return ShipmentCostRows.movements(findShippedCostSourcesInSourceOwnerScope(factoryId, startDate, endDate, owners));
+    }
+
     default Object[] aggregateShippedCogs(String factoryId, LocalDate startDate, LocalDate endDate) {
         return ShipmentCostRows.aggregate(findShippedMovementsForLedger(factoryId, startDate, endDate), false);
     }

@@ -30,6 +30,14 @@ public interface ProductionTransitLedgerRepository extends JpaRepository<Product
     List<ProductionTransitLedger> findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, String productionPlanId);
 
+    /** Row-scoped reconciliation list; the plan IDs are filtered before ledger pagination/mapping. */
+    List<ProductionTransitLedger> findByFactoryIdAndProductionPlanIdInAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, List<String> productionPlanIds);
+
+    /** Row-scoped reconciliation list with status filter applied in the database. */
+    List<ProductionTransitLedger> findByFactoryIdAndStatusAndProductionPlanIdInAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String status, List<String> productionPlanIds);
+
     /** Factory-wide list for web-admin reconciliation page, ordered newest first. */
     List<ProductionTransitLedger> findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(String factoryId);
 

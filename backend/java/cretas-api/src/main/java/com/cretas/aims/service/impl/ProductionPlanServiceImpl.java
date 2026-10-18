@@ -43,6 +43,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.security.BusinessRowScope;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -67,6 +68,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -402,6 +404,53 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.reversal.ReportReversalService reportReversalService;
 
+    /** Optional so existing non-HTTP jobs and unit tests retain their original contract. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+
+    private List<Long> visiblePlanCreators(String factoryId) {
+        return BusinessRowScope.creators(businessRowScope, factoryId);
+    }
+
+    private void requireVisiblePlan(String factoryId, ProductionPlan plan) {
+        if (!factoryId.equals(plan.getFactoryId())) {
+            throw new BusinessException(403, "无权访问该生产计划")
+                    .withHint("当前生产计划不属于该工厂, 无法访问");
+        }
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, plan.getCreatedBy());
+    }
+
+    private Specification<ProductionPlan> planScope(String factoryId, List<Long> creatorIds) {
+        return (root, query, cb) -> {
+            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("factoryId"), factoryId));
+            if (creatorIds != null) {
+                if (creatorIds.isEmpty()) return cb.disjunction();
+                predicates.add(root.get("createdBy").in(creatorIds));
+            }
+            return cb.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+    }
+
+    private Specification<ProductionPlan> planKeyword(String keyword) {
+        return (root, query, cb) -> {
+            if (keyword == null || keyword.isBlank()) return cb.conjunction();
+            var productType = root.join("productType", jakarta.persistence.criteria.JoinType.LEFT);
+            String pattern = "%" + keyword.toLowerCase(Locale.ROOT) + "%";
+            return cb.or(
+                    cb.like(cb.lower(root.get("planNumber")), pattern),
+                    cb.like(cb.lower(productType.get("name")), pattern));
+        };
+    }
+
+    private Specification<ProductionPlan> planStatus(ProductionPlanStatus status) {
+        return (root, query, cb) -> cb.equal(root.get("status"), status);
+    }
+
+    private Specification<ProductionPlan> planStatusIn(Collection<ProductionPlanStatus> statuses) {
+        return (root, query, cb) -> root.get("status").in(statuses);
+    }
+
     /**
      * 解析某工厂的"免工序报工默认值" (Fable 审计修复 — 多租户安全).
      *
@@ -565,6 +614,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在")
                         .withCode("PRODUCTION_PLAN_NOT_FOUND"));
+        requireVisiblePlan(factoryId, plan);
         requirePlanNotStarted(factoryId, planId, plan);
 
         return applyCurrentAuthorityToPlan(factoryId, plan);
@@ -1922,6 +1972,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     throw new BusinessException(403, "无权关联其他工厂的销售订单")
                             .withHint("销售订单不属于该工厂, 请选择本工厂的订单").withHintTarget("sourceOrderId");
                 }
+                BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
                 // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
                 assertSalesOrderFinanceApproved(so, "sourceOrderId");
                 snapshotSalesOwnershipContract(request, so,
@@ -1953,6 +2004,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(404, "销售订单行不存在或不属于本工厂")
                     .withHint("请刷新销售订单列表后重新选择").withHintTarget("sourceOrderItemId");
         }
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
         // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
         assertSalesOrderFinanceApproved(so, "sourceOrderItemId");
 
@@ -2099,6 +2151,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHint("只能合并本工厂的销售订单")
                             .withHintTarget("sourceOrderIds");
                 }
+                BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
                 assertSalesOrderFinanceApproved(so, "sourceOrderIds");
                 assertCompatibleOwnershipContract(plan, so, extraSoId);
             }
@@ -2132,6 +2185,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionPlanDTO createProductionPlan(String factoryId, CreateProductionPlanRequest request, Long userId) {
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, userId);
         if (request.getSourceType() == null) {
             request.setSourceType(PlanSourceType.MANUAL);
         }
@@ -2341,6 +2395,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(req.getSourceOrderId(), factoryId)
                 .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
                         "销售订单不存在或不属于当前工厂: " + req.getSourceOrderId()));
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
 
         java.util.List<ProductionPlan> relatedPlans = new java.util.ArrayList<>(
                 productionPlanRepository.findByFactoryIdAndSourceOrderIdExact(factoryId, so.getId()));
@@ -2394,6 +2449,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(400,
                             "合并的销售订单不存在或不属于当前工厂: " + extraId)
                             .withHintTarget("extraSourceOrderIds"));
+            BusinessRowScope.requireOwner(businessRowScope, factoryId, extraSo.getCreatedBy());
             assertSalesOrderFinanceApproved(extraSo, "extraSourceOrderIds");
             extraOrderById.put(extraId, extraSo);
             extraItemsByOrder.put(extraId,
@@ -2617,6 +2673,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .filter(p -> factoryId.equals(p.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         if (plan.getSourceType() != PlanSourceType.CUSTOMER_ORDER
                 || plan.getStatus() != ProductionPlanStatus.PENDING) {
@@ -2688,6 +2745,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanDTO commitDraftProductionPlan(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
@@ -2714,7 +2772,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (windowDays <= 0) windowDays = 7;  // 默认 7 天
         LocalDate today = LocalDate.now();
         LocalDate upperBound = today.plusDays(windowDays);
-        List<ProductionPlan> plans = productionPlanRepository.findDeliveryWarnPlans(factoryId, upperBound);
+        Specification<ProductionPlan> warning = (root, query, cb) -> cb.and(
+                cb.isNotNull(root.get("expectedCompletionDate")),
+                cb.lessThan(root.get("expectedCompletionDate"), upperBound),
+                cb.not(root.get("status").in(ProductionPlanStatus.COMPLETED, ProductionPlanStatus.CANCELLED)));
+        List<ProductionPlan> plans = productionPlanRepository.findAll(
+                planScope(factoryId, visiblePlanCreators(factoryId)).and(warning),
+                Sort.by(Sort.Direction.ASC, "expectedCompletionDate"));
         return plans.stream()
                 .map(p -> classifyDeliveryWarn(p, today))
                 .collect(Collectors.toList());
@@ -2774,6 +2838,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         runConfiguredValidation(factoryId, "UPDATE", updateCtx);
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -2838,6 +2903,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             UpdatePlanScheduleMetaRequest request) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
@@ -2885,6 +2951,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public void deleteProductionPlan(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -2995,12 +3062,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanDTO getProductionPlanById(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
-
-        // 验证工厂ID
-        if (!plan.getFactoryId().equals(factoryId)) {
-            throw new BusinessException(403, "无权查看该生产计划")
-                    .withHint("当前生产计划不属于该工厂, 无法查看");
-        }
+        requireVisiblePlan(factoryId, plan);
 
         return toDTOWithConversionInfo(plan);
     }
@@ -3022,6 +3084,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             );
 
         Page<ProductionPlan> planPage;
+        List<Long> creatorIds = visiblePlanCreators(factoryId);
 
         // headed-audit 修复 (2026-07-03): keyword 之前从未被应用到查询, 搜索框全无效。
         // 空白/空字符串一律当"未提供"处理 (null), 交给 repository 端的 CAST null-guard。
@@ -3033,24 +3096,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (pageRequest.getStatus() != null && !pageRequest.getStatus().isEmpty()) {
             String statusFilter = pageRequest.getStatus().toUpperCase();
             if ("UNFINISHED".equals(statusFilter) || "ACTIVE".equals(statusFilter)) {
-                planPage = productionPlanRepository.findByFactoryIdAndStatusInAndKeyword(
-                        factoryId,
-                        List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS),
-                        keyword,
-                        pageable);
+                planPage = productionPlanRepository.findAll(
+                        planScope(factoryId, creatorIds)
+                                .and(planStatusIn(List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS)))
+                                .and(planKeyword(keyword)), pageable);
                 log.info("按未完成状态过滤生产计划: factoryId={}, status={}, keyword={}", factoryId, statusFilter, keyword);
             } else {
                 try {
                     ProductionPlanStatus status = ProductionPlanStatus.valueOf(statusFilter);
-                    planPage = productionPlanRepository.findByFactoryIdAndStatusAndKeyword(factoryId, status, keyword, pageable);
+                    planPage = productionPlanRepository.findAll(
+                            planScope(factoryId, creatorIds).and(planStatus(status)).and(planKeyword(keyword)), pageable);
                     log.info("按状态过滤生产计划: factoryId={}, status={}, keyword={}", factoryId, status, keyword);
                 } catch (IllegalArgumentException e) {
                     log.warn("无效的状态值: {}, 返回全部数据 (keyword={})", pageRequest.getStatus(), keyword);
-                    planPage = productionPlanRepository.findByFactoryIdAndKeyword(factoryId, keyword, pageable);
+                    planPage = productionPlanRepository.findAll(
+                            planScope(factoryId, creatorIds).and(planKeyword(keyword)), pageable);
                 }
             }
         } else {
-            planPage = productionPlanRepository.findByFactoryIdAndKeyword(factoryId, keyword, pageable);
+            planPage = productionPlanRepository.findAll(
+                    planScope(factoryId, creatorIds).and(planKeyword(keyword)), pageable);
         }
 
         List<ProductionPlanDTO> planDTOs = planPage.getContent().stream()
@@ -3068,7 +3133,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional(readOnly = true)
     public List<ProductionPlanDTO> getProductionPlansByStatus(String factoryId, ProductionPlanStatus status) {
-        return productionPlanRepository.findByFactoryIdAndStatus(factoryId, status)
+        List<Long> creatorIds = visiblePlanCreators(factoryId);
+        return productionPlanRepository.findAll(planScope(factoryId, creatorIds).and(planStatus(status)))
                 .stream()
                 .map(this::toDTOWithConversionInfo)
                 .collect(Collectors.toList());
@@ -3077,23 +3143,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional(readOnly = true)
     public List<ProductionPlanDTO> getProductionPlansByDateRange(String factoryId, LocalDate startDate, LocalDate endDate) {
-        // 暂时注释 - 数据库表中没有planned_date字段
-        // return productionPlanRepository.findByDateRange(factoryId, startDate, endDate)
-        //         .stream()
-        //         .map(productionPlanMapper::toDTO)
-        //         .collect(Collectors.toList());
-        return new ArrayList<>();
+        List<Long> creatorIds = visiblePlanCreators(factoryId);
+        Specification<ProductionPlan> date = (root, query, cb) ->
+                cb.between(root.get("plannedDate"), startDate, endDate);
+        return productionPlanRepository.findAll(planScope(factoryId, creatorIds).and(date)).stream()
+                .map(this::toDTOWithConversionInfo)
+                .collect(Collectors.toList());
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ProductionPlanDTO> getTodayProductionPlans(String factoryId) {
-        // 暂时注释 - 数据库表中没有planned_date字段
-        // return productionPlanRepository.findTodayPlans(factoryId)
-        //         .stream()
-        //         .map(productionPlanMapper::toDTO)
-        //         .collect(Collectors.toList());
-        return new ArrayList<>();
+        List<Long> creatorIds = visiblePlanCreators(factoryId);
+        Specification<ProductionPlan> today = (root, query, cb) ->
+                cb.equal(root.get("plannedDate"), LocalDate.now());
+        return productionPlanRepository.findAll(planScope(factoryId, creatorIds).and(today)).stream()
+                .map(this::toDTOWithConversionInfo)
+                .collect(Collectors.toList());
     }
 
     @Override
@@ -3101,6 +3167,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanMaterialAdvisoryDTO getMaterialAdvisory(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权查看该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法查看");
@@ -3175,6 +3242,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // R6 (2026-06-14): 悲观写锁取计划, 并发双击/重试串行化。第二个请求拿锁后看到已 IN_PROGRESS → 409。
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -3328,6 +3396,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                 BigDecimal actualQuantity, Long completedBy) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
@@ -3476,6 +3545,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId))
                 : productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                         .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         Optional<ProductionSettlement> sameRequest = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
@@ -3969,6 +4039,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         List<ProductionSettlementPrefillResponse.Issue> issues = new ArrayList<>();
 
@@ -5170,6 +5241,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional(readOnly = true)
     public ProductionSettlementResponse getProductionSettlement(String factoryId, String planId) {
+        if (visiblePlanCreators(factoryId) != null) {
+            ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+            requireVisiblePlan(factoryId, plan);
+        }
         // 🔴 2026-08-19: 这里原来是 requireProductionSettlement(...) —— 没有结单行就抛 404。
         //    那是把**合法空态**当成了错误 (存货生产走小结, 这张表里本来就没有行),
         //    而列表批量拉状态时会把它弹成全局红条, 报的还是**别的计划**。
@@ -5190,6 +5266,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionSettlementResponse bridgeByStockSettlement(String factoryId, String planId) {
+        if (visiblePlanCreators(factoryId) != null) {
+            ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+            requireVisiblePlan(factoryId, plan);
+        }
         ProductionSettlement settlement = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
                 .orElseGet(() -> bridgeProductionSettlementForWarehouse(factoryId, planId));
@@ -5213,6 +5294,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         ProductionSettlement settlement = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
                 .orElseGet(() -> bridgeProductionSettlementForWarehouse(factoryId, planId));
@@ -6251,6 +6333,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         ProductionSettlement settlement = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产结单", "productionPlanId", planId));
@@ -6929,6 +7012,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionSettlementBomEligibilityResponse getSettlementBomEligibility(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         BomSettlementEligibility eligibility =
                 resolveBomEligibilityForSettlement(factoryId, plan, null);
         return ProductionSettlementBomEligibilityResponse.builder()
@@ -7270,6 +7354,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 所有补建入口都锁同一 plan；拿锁后必须重读，保证重复 GET/刷新只创建一行。
         Optional<ProductionSettlement> raced = productionSettlementRepository
@@ -7786,9 +7871,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Transactional
     public com.cretas.aims.dto.production.ProductionCostRecalculationResponse recalculateSettledPlanCosts(
             String factoryId, String planId) {
-        if (productionCostConsistency != null) productionCostConsistency.assertChangeAllowed(factoryId, planId);
-        productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
+        if (productionCostConsistency != null) productionCostConsistency.assertChangeAllowed(factoryId, planId);
         if (productionSettlementRepository == null || productionSettlementOutputLineRepository == null
                 || orderCostBreakdownService == null) {
             throw new BusinessException(500, "结单成本重算依赖不可用, 本次未执行");
@@ -8075,6 +8161,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId) {
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
             .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -8322,6 +8409,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public String requestCancelWithApproval(String factoryId, String planId, String reason, Long userId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂");
@@ -8356,6 +8444,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // PENDING_APPROVAL 计划被接上, 它会正确冲销而非旧版只置 CANCELLED。新撤回一律走批次级整单撤回。
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(plan.getFactoryId(), plan);
 
         if (plan.getStatus() != ProductionPlanStatus.PENDING_APPROVAL) {
             throw new BusinessException(409, "生产计划不处于待审批状态，无法执行撤回")
@@ -8431,6 +8520,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanDTO lockProductionPlan(String factoryId, String planId, String reason, Long userId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
@@ -8466,6 +8556,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanDTO unlockProductionPlan(String factoryId, String planId, Long userId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
@@ -8490,6 +8581,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanDTO pauseProduction(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -8515,6 +8607,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanDTO resumeProduction(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -8542,9 +8635,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                BigDecimal laborCost,
                                                BigDecimal equipmentCost,
                                                BigDecimal otherCost) {
-        if (productionCostConsistency != null) productionCostConsistency.assertChangeAllowed(factoryId, planId);
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
+        if (productionCostConsistency != null) productionCostConsistency.assertChangeAllowed(factoryId, planId);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -8633,6 +8727,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public void assignMaterialBatches(String factoryId, String planId, List<String> batchIds) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -8649,6 +8744,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public void recordMaterialConsumption(String factoryId, String planId, String batchId, BigDecimal quantity, Long operatorId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -8713,9 +8809,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @Override
     public Map<String, Object> getProductionStatistics(String factoryId, LocalDate startDate, LocalDate endDate) {
-        // 暂时注释 - 数据库表中没有planned_date字段
-        // List<ProductionPlan> plans = productionPlanRepository.findByDateRange(factoryId, startDate, endDate);
-        List<ProductionPlan> plans = new ArrayList<>();
+        Specification<ProductionPlan> date = (root, query, cb) -> {
+            if (startDate == null || endDate == null) return cb.conjunction();
+            return cb.between(root.get("plannedDate"), startDate, endDate);
+        };
+        List<ProductionPlan> plans = productionPlanRepository.findAll(
+                planScope(factoryId, visiblePlanCreators(factoryId)).and(date));
 
         Map<String, Object> statistics = new HashMap<>();
         statistics.put("totalPlans", plans.size());
@@ -8744,10 +8843,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     public List<ProductionPlanDTO> getPendingPlansToExecute(String factoryId) {
         // N1b: 待执行列表即车间未完成列表, 包含已下达未开工(PENDING)和进行中(IN_PROGRESS)。
-        List<ProductionPlan> plans = productionPlanRepository.findByFactoryIdAndStatusIn(
-            factoryId,
-            List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS)
-        );
+        List<ProductionPlan> plans = productionPlanRepository.findAll(
+                planScope(factoryId, visiblePlanCreators(factoryId))
+                        .and(planStatusIn(List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS))));
         return plans.stream()
             .filter(plan -> plan.getDeletedAt() == null)
             .map(productionPlanMapper::toDTO)
@@ -8771,14 +8869,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // through but currently no-op — ProductionPlanImportDTO has no cost/price
         // columns. When export is extended to include actualMaterialCost / laborCost /
         // etc., honor maskPrice by swapping to a masked DTO. PR #450 sweep matrix row 9.
-        List<ProductionPlan> plans = productionPlanRepository.findByFactoryId(factoryId);
-        // Filter by date range using expectedCompletionDate
-        List<ProductionPlanImportDTO> exportData = plans.stream()
-                .filter(p -> {
-                    if (startDate == null || endDate == null) return true;
-                    LocalDate date = p.getExpectedCompletionDate();
-                    return date != null && !date.isBefore(startDate) && !date.isAfter(endDate);
-                })
+        Specification<ProductionPlan> date = (root, query, cb) -> {
+            if (startDate == null || endDate == null) return cb.conjunction();
+            return cb.between(root.get("expectedCompletionDate"), startDate, endDate);
+        };
+        List<ProductionPlanImportDTO> exportData = productionPlanRepository
+                .findAll(planScope(factoryId, visiblePlanCreators(factoryId)).and(date)).stream()
                 .map(this::toImportDTO)
                 .collect(Collectors.toList());
         return excelUtil.exportToExcel(exportData, ProductionPlanImportDTO.class, "生产计划");
@@ -9057,6 +9153,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 第二个请求拿锁后看到计划已 IN_PROGRESS → 状态校验抛 409, 幂等拒绝。
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
 
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
@@ -9409,6 +9506,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
         if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
             throw new BusinessException(400, "仅存货生产计划可停产");
         }

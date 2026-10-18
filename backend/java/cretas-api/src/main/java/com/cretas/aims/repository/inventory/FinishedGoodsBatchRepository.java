@@ -20,6 +20,14 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
 
     Page<FinishedGoodsBatch> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
+    /** Quantity-amount ledger scope: finished goods ownership is the batch creator. */
+    Page<FinishedGoodsBatch> findByFactoryIdAndCreatedByInOrderByCreatedAtDesc(
+            String factoryId, java.util.Collection<Long> owners, Pageable pageable);
+
+    Page<FinishedGoodsBatch> findByFactoryIdAndCreatedByInAndProductionDateBetweenOrderByCreatedAtDesc(
+            String factoryId, java.util.Collection<Long> owners,
+            java.time.LocalDate startDate, java.time.LocalDate endDate, Pageable pageable);
+
     /** Disposal may consume only stock still physically present and not reserved for an order. */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.status IN :statuses " +

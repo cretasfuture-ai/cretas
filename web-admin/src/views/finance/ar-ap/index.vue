@@ -419,6 +419,8 @@ function handleAgingTypeChange() { void loadAging(); }
         <el-button v-if="sourceReturnId" link type="primary" @click="openSourceReturn(sourceReturnId)">返回原退货单</el-button>
         <el-button link @click="router.replace({ query: {} })">查看全部流水</el-button>
       </el-alert>
+      <el-alert v-if="canViewPrice && overview?.scopeApplied" type="info" :closable="false" show-icon
+        title="仅显示当前授权范围内的账目与金额，不代表全工厂余额。" />
       <el-tabs v-if="canViewPrice" v-model="activeTab">
         <!-- 概览 Tab -->
         <el-tab-pane v-if="!hasReturnContext" label="财务概览" name="overview">
@@ -469,7 +471,7 @@ function handleAgingTypeChange() { void loadAging(); }
             <el-table-column prop="amount" label="金额" width="130" align="right">
               <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
             </el-table-column>
-            <el-table-column prop="balanceAfter" label="交易后余额（历史快照）" width="170" align="right">
+            <el-table-column v-if="!overview?.scopeApplied" prop="balanceAfter" label="交易后余额（历史快照）" width="170" align="right">
               <template #default="{ row }">
                 {{ formatAmount(row.balanceAfter) }}
                 <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"
@@ -512,7 +514,7 @@ function handleAgingTypeChange() { void loadAging(); }
             <el-table-column prop="amount" label="金额" width="130" align="right">
               <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
             </el-table-column>
-            <el-table-column prop="balanceAfter" label="交易后余额（历史快照）" width="170" align="right">
+            <el-table-column v-if="!overview?.scopeApplied" prop="balanceAfter" label="交易后余额（历史快照）" width="170" align="right">
               <template #default="{ row }">
                 {{ formatAmount(row.balanceAfter) }}
                 <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"

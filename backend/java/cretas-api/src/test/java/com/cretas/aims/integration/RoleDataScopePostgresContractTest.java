@@ -388,6 +388,11 @@ class RoleDataScopePostgresContractTest {
             var repository=mock(com.cretas.aims.repository.InvoiceRecordRepository.class);
             when(service.getInvoice("F1","OWN")).thenReturn(new com.cretas.aims.entity.finance.InvoiceRecord());
             when(service.listInvoicesBySalesOrder("F1","OWN_ORDER")).thenReturn(List.of());
+            var visibleInvoice = new com.cretas.aims.entity.finance.InvoiceRecord();
+            visibleInvoice.setId("OWN"); visibleInvoice.setFactoryId("F1"); visibleInvoice.setSalesOrderId("OWN_ORDER");
+            when(service.listInvoices(eq("F1"),isNull(),isNull(),any()))
+                    .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(visibleInvoice),
+                            org.springframework.data.domain.PageRequest.of(0,20),1));
             when(repository.findCustomerInvoicesInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
             var controller=new com.cretas.aims.controller.finance.InvoiceController(service,repository,resolver,
                     mock(com.cretas.aims.service.OssService.class), mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class));
@@ -395,7 +400,7 @@ class RoleDataScopePostgresContractTest {
             var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup((Object)proxy.getProxy())
                     .addInterceptors(new DataScopeRouteInterceptor(resolver,jdbc)).setControllerAdvice(new RouteErrors()).build();
             var identity=new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,56L,"F1","warehouse_manager");
-            for(String suffix:List.of("/HIDDEN","/FOREIGN","/DELETED_PARENT","/UNKNOWN","/ORPHAN","/DELETED","","/by-sales-order/OTHER_ORDER")) {
+            for(String suffix:List.of("/HIDDEN","/FOREIGN","/DELETED_PARENT","/UNKNOWN","/ORPHAN","/DELETED","/by-sales-order/OTHER_ORDER")) {
                 mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/invoices"+suffix)
                         .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
                         .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
@@ -414,6 +419,13 @@ class RoleDataScopePostgresContractTest {
                     .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
             verifyNoInteractions(service,repository);
+            // The connected root list now delegates to the source-scoped service, rather than blanket 403.
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/invoices")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.content.length()").value(1))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.content[0].id").value("OWN"));
+            verify(service).listInvoices(eq("F1"),isNull(),isNull(),any());
             for(String suffix:List.of("/OWN","/by-sales-order/OWN_ORDER","/by-customer?customerId=C1")) {
                 mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/invoices"+suffix)
                         .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
@@ -437,6 +449,11 @@ class RoleDataScopePostgresContractTest {
             var repository=mock(com.cretas.aims.repository.PaymentRecordRepository.class);
             when(service.getPayment("F1","OWN")).thenReturn(new com.cretas.aims.entity.finance.PaymentRecord());
             when(service.listPaymentsBySalesOrder("F1","OWN_ORDER")).thenReturn(List.of());
+            var visiblePayment = new com.cretas.aims.entity.finance.PaymentRecord();
+            visiblePayment.setId("OWN"); visiblePayment.setFactoryId("F1"); visiblePayment.setSalesOrderId("OWN_ORDER");
+            when(service.listPayments(eq("F1"),isNull(),isNull(),any()))
+                    .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(visiblePayment),
+                            org.springframework.data.domain.PageRequest.of(0,20),1));
             when(repository.findCustomerPaymentsInOrderScope(eq("F1"),eq("C1"),eq(List.of(56L)),any())).thenReturn(org.springframework.data.domain.Page.empty());
             var controller=new com.cretas.aims.controller.finance.PaymentRecordController(service,repository,resolver);
             var proxy=new AspectJProxyFactory(controller);proxy.addAspect(new DataScopeAspect(resolver));
@@ -448,9 +465,6 @@ class RoleDataScopePostgresContractTest {
                         .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
                         .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
             }
-            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments")
-                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
-                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F2/finance/payments/by-customer").param("customerId","C1")
                     .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
@@ -464,6 +478,12 @@ class RoleDataScopePostgresContractTest {
                         .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
             }
             verifyNoInteractions(service,repository);
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments")
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.content.length()").value(1))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.content[0].id").value("OWN"));
+            verify(service).listPayments(eq("F1"),isNull(),isNull(),any());
             for(String suffix:List.of("/OWN","/by-sales-order/OWN_ORDER")) {
                 mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/mobile/F1/finance/payments"+suffix)
                         .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,identity))

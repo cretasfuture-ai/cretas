@@ -122,4 +122,13 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
            "AND w.deletedAt IS NULL " +
            "ORDER BY w.processOrder ASC, w.createdAt DESC")
     List<SemiFinishedInventory> findByFactoryIdForWeightView(@Param("factoryId") String factoryId);
+
+    /** Quantity-amount ledger scope: WIP ownership follows its source production batch. */
+    @Query("SELECT w FROM SemiFinishedInventory w JOIN ProductionBatch b ON w.batchId = b.id " +
+           "WHERE w.factoryId = :factoryId AND b.factoryId = :factoryId " +
+           "AND b.createdBy IN :owners AND w.deletedAt IS NULL " +
+           "ORDER BY w.processOrder ASC, w.createdAt DESC")
+    List<SemiFinishedInventory> findByFactoryIdForWeightViewAndSourceOwnerIn(
+            @Param("factoryId") String factoryId,
+            @Param("owners") java.util.Collection<Long> owners);
 }

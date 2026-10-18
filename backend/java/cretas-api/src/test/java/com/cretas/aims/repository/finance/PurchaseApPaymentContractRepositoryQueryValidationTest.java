@@ -64,6 +64,9 @@ class PurchaseApPaymentContractRepositoryQueryValidationTest {
 
         assertThat(transactionRepository.findPayableForSettlement("F-JPA", "AP-I-1")).isPresent();
         assertThat(transactionRepository.findPayableForSettlement("F-OTHER", "AP-I-1")).isEmpty();
+        assertThat(allocationRepository.findByFactoryIdAndPaymentTransactionIdOrderByCreatedAtAsc(
+                "F-JPA", "AP-P-1")).extracting(ArApPaymentAllocation::getId)
+                .containsExactly("ALLOC-1");
         List<ArApTransaction> anomalies = transactionRepository.findUnallocatedApPayments("F-JPA");
         assertThat(anomalies).extracting(ArApTransaction::getId).containsExactly("AP-P-OLD");
         assertThat(entityManager.getMetamodel().entity(ArApTransaction.class).getAttribute("version")).isNotNull();

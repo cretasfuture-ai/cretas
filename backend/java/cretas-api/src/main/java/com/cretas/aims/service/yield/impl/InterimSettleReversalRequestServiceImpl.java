@@ -10,6 +10,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.InterimSettleReversalRequestRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.security.BusinessRowScope;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.yield.InterimSettleReversalRequestService;
 import com.cretas.aims.service.yield.InterimSettleReversalService;
@@ -58,6 +59,10 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
 
+    /** Optional row scope; absent in existing internal jobs/tests, which retain the legacy contract. */
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+
     /** 1天时间窗 (小时)。小结 postedAt 起算; 超过即不允许撤销 (走盘点调整)。 */
     private static final long REVERSE_WINDOW_HOURS = 24;
 
@@ -78,6 +83,7 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
                                                           String reason, Long userId) {
         ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, plan.getCreatedBy());
         if (reason == null || reason.isBlank()) {
             throw new BusinessException(400, "撤销原因必填")
                     .withCode("INTERIM_REVERSE_REASON_REQUIRED")
@@ -212,7 +218,23 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
     @Transactional(readOnly = true)
     public Page<InterimSettleReversalRequestDTO> list(String factoryId,
             InterimSettleReversalRequest.Status status, String planId, Pageable pageable) {
-        return requestRepository.findByFactoryIdWithFilters(factoryId, status, planId, pageable)
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        if (creatorIds != null && creatorIds.isEmpty()) {
+            return Page.empty(pageable);
+        }
+        if (creatorIds == null) {
+            return requestRepository.findByFactoryIdWithFilters(factoryId, status, planId, pageable)
+                    .map(InterimSettleReversalRequestDTO::from);
+        }
+        List<String> visiblePlanIds = planRepository.findByFactoryIdAndCreatedByIn(factoryId, creatorIds).stream()
+                .map(ProductionPlan::getId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (visiblePlanIds.isEmpty() || (planId != null && !visiblePlanIds.contains(planId))) {
+            return Page.empty(pageable);
+        }
+        return requestRepository.findByFactoryIdWithFiltersAndProductionPlanIds(
+                        factoryId, status, planId, visiblePlanIds, pageable)
                 .map(InterimSettleReversalRequestDTO::from);
     }
 
@@ -223,6 +245,9 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
     private InterimSettleReversalRequest loadPending(String requestId, String factoryId) {
         InterimSettleReversalRequest req = requestRepository.findByIdAndFactoryId(requestId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "撤销申请不存在: " + requestId));
+        ProductionPlan plan = planRepository.findByIdAndFactoryId(req.getProductionPlanId(), factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + req.getProductionPlanId()));
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, plan.getCreatedBy());
         if (req.getStatus() != InterimSettleReversalRequest.Status.PENDING_APPROVAL) {
             throw new BusinessException(409, "撤销申请状态 [" + req.getStatus() + "] 不支持该操作, 需 PENDING_APPROVAL")
                     .withCode("INTERIM_REVERSE_REQUEST_NOT_PENDING")

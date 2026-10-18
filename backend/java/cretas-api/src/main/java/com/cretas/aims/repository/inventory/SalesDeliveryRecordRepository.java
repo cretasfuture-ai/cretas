@@ -33,6 +33,8 @@ public interface SalesDeliveryRecordRepository extends JpaRepository<SalesDelive
 
     Optional<SalesDeliveryRecord> findByFactoryIdAndDeliveryNumber(String factoryId, String deliveryNumber);
 
+    Optional<SalesDeliveryRecord> findByIdAndFactoryId(String id, String factoryId);
+
     /**
      * Issue #739 idempotency: find existing in-progress (DRAFT / PENDING_WAREHOUSE_CONFIRM / PICKED)
      * delivery for a sales order. Used to prevent duplicate drafts when user double-clicks "快速出库".

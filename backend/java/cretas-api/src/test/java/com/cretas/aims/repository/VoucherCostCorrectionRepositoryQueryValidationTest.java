@@ -40,6 +40,10 @@ class VoucherCostCorrectionRepositoryQueryValidationTest {
         Voucher expense=save(FACTORY,VoucherType.EXPENSE,VoucherStatus.REVERSED,"20",null,false,"6601");
         save(FACTORY,VoucherType.EXPENSE,VoucherStatus.POSTED,"20",expense.getId(),true,"6601");
         assertCost("270.95");
+        var visible=vouchers.findAll().stream().filter(v->FACTORY.equals(v.getFactoryId())).map(Voucher::getId).toList();
+        var scoped=entries.aggregateBySubjectExcludingDraftAndClosingInScope(FACTORY,DATE.withDayOfMonth(1),DATE,visible)
+                .stream().filter(r->"6401".equals(r.getSubjectCode())).findFirst().orElseThrow();
+        assertEquals(0,new BigDecimal("270.95").compareTo(scoped.getTotalDebit().subtract(scoped.getTotalCredit())));
         var rows=entries.aggregateBySubjectExcludingDraftAndClosing(FACTORY,DATE.withDayOfMonth(1),DATE);
         var ordinary=rows.stream().filter(r->"6601".equals(r.getSubjectCode())).findFirst().orElseThrow();
         assertEquals(0,ordinary.getTotalDebit().compareTo(ordinary.getTotalCredit()));

@@ -13,6 +13,10 @@ import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
+import com.cretas.aims.service.finance.VoucherRowScopeQuery;
+import com.cretas.aims.service.finance.VoucherOwnershipSql;
 import com.cretas.aims.service.voucher.VoucherService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +25,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -53,9 +58,15 @@ public class VoucherController {
     private final VoucherRepository voucherRepo;
     private final VoucherEntryRepository voucherEntryRepo;
 
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+    @Autowired(required = false)
+    private VoucherRowScopeQuery voucherRowScopeQuery;
+
     // ==================== Read ====================
 
     @GetMapping
+    @RowScopeSupported
     public ResponseEntity<?> list(
             @PathVariable String factoryId,
             @RequestParam(value = "status", required = false) VoucherStatus status,
@@ -84,13 +95,20 @@ public class VoucherController {
         String sourceBusinessTypeParam =
                 (sourceBusinessType != null && !sourceBusinessType.isBlank()) ? sourceBusinessType.trim() : null;
         PageRequest pageable = PageRequest.of(page - 1, size);
-        Page<Voucher> result = voucherRepo.searchVouchers(
-                factoryId, statusStr, typeStr, sourceBusinessTypeParam, pageable);
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        VoucherRowScopeQuery scopeQuery = requiredScopeQuery(creators);
+        Page<Voucher> result = creators == null
+                ? voucherRepo.searchVouchers(factoryId, statusStr, typeStr, sourceBusinessTypeParam, pageable)
+                : voucherRepo.searchVouchersInOwnerScope(factoryId, statusStr, typeStr, sourceBusinessTypeParam,
+                        VoucherOwnershipSql.ownerIdsJson(creators), pageable);
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 
     @GetMapping("/{id}")
+    @RowScopeSupported
     public ResponseEntity<?> detail(@PathVariable String factoryId, @PathVariable String id) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        requireVoucherAccess(factoryId, id, creators);
         Optional<Voucher> v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId);
         if (v.isEmpty()) {
             return ResponseEntity.status(404).body(Map.of("success", false, "message", "凭证不存在"));
@@ -99,10 +117,13 @@ public class VoucherController {
     }
 
     @GetMapping("/by-business/{businessType}/{businessId}")
+    @RowScopeSupported
     public ResponseEntity<?> findByBusiness(
             @PathVariable String factoryId,
             @PathVariable String businessType,
             @PathVariable String businessId) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        requireSourceAccess(factoryId, businessType, businessId, creators);
         Optional<Voucher> v = voucherService.findBySourceBusiness(businessType, businessId);
         // 跨租户校验 (Rule 8 sweep): findBySourceBusiness 按 businessType+businessId 全局查询不带 factory,
         // 返回的凭证可能属于别厂。仅当凭证归属当前工厂时才返回, 否则视作"未生成"(不泄漏别厂凭证存在性)。
@@ -124,10 +145,13 @@ public class VoucherController {
     // Issue #712 fix (2026-05-17): replaced raw Map<String,Object> bodies with typed DTOs + @Valid.
 
     @PostMapping("/generate")
+    @RowScopeSupported
     @RequirePermission("finance:read_write")
     public ResponseEntity<?> generate(
             @PathVariable String factoryId,
             @Valid @RequestBody VoucherGenerateRequest req) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        requireSourceAccess(factoryId, req.getBusinessType(), req.getBusinessId(), creators);
         Voucher v = voucherService.createFromBusiness(factoryId, req.getBusinessType(), req.getBusinessId());
         return ResponseEntity.ok(Map.of("success", true, "data", v, "message", "凭证已生成"));
     }
@@ -137,6 +161,9 @@ public class VoucherController {
     public ResponseEntity<?> batchGenerate(
             @PathVariable String factoryId,
             @Valid @RequestBody VoucherBatchGenerateRequest req) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        if (creators != null) throw new com.cretas.aims.exception.BusinessException(403,
+                "批量生成凭证会扫描全工厂来源，需要全工厂数据范围");
         int count = voucherService.batchCreateForFactory(factoryId, req.getBusinessType());
         Map<String, Object> data = new HashMap<>();
         data.put("businessType", req.getBusinessType());
@@ -145,11 +172,14 @@ public class VoucherController {
     }
 
     @PostMapping("/{id}/post")
+    @RowScopeSupported
     @RequirePermission("finance:read_write")
     public ResponseEntity<?> post(
             @PathVariable String factoryId,
             @PathVariable String id,
             @RequestAttribute(value = "userId", required = false) Long userId) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        requireVoucherAccess(factoryId, id, creators);
         Voucher v = voucherService.post(factoryId, id, userId);
         return ResponseEntity.ok(Map.of("success", true, "data", v, "message", "凭证已过账"));
     }
@@ -160,11 +190,16 @@ public class VoucherController {
      * (成功/幂等跳过/失败+原因), 一张失败不影响其余凭证。
      */
     @PostMapping("/batch-post")
+    @RowScopeSupported
     @RequirePermission("finance:read_write")
     public ResponseEntity<?> batchPost(
             @PathVariable String factoryId,
             @Valid @RequestBody VoucherBatchPostRequest req,
             @RequestAttribute(value = "userId", required = false) Long userId) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        VoucherRowScopeQuery scopeQuery = requiredScopeQuery(creators);
+        if (scopeQuery != null)
+            req.getVoucherIds().forEach(id -> scopeQuery.requireVoucherAccess(factoryId, id, creators));
         List<VoucherBatchPostResultDTO> results = voucherService.batchPost(factoryId, req.getVoucherIds(), userId);
         long successCount = results.stream().filter(VoucherBatchPostResultDTO::isSuccess).count();
         long failureCount = results.size() - successCount;
@@ -179,12 +214,15 @@ public class VoucherController {
     }
 
     @PostMapping("/{id}/void")
+    @RowScopeSupported
     @RequirePermission("finance:read_write")
     public ResponseEntity<?> voidVoucher(
             @PathVariable String factoryId,
             @PathVariable String id,
             @Valid @RequestBody VoucherVoidRequest req,
             @RequestAttribute(value = "userId", required = false) Long userId) {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        requireVoucherAccess(factoryId, id, creators);
         String reason = (req.getReason() == null || req.getReason().isBlank()) ? "未填写原因" : req.getReason();
         voucherService.voidVoucher(factoryId, id, reason, userId);
         return ResponseEntity.ok(Map.of("success", true, "message", "凭证已作废"));
@@ -219,6 +257,7 @@ public class VoucherController {
      * @return 聚合行列表 (按 entryCount DESC)
      */
     @GetMapping("/aggregate-by-auxiliary")
+    @RowScopeSupported
     public ResponseEntity<?> aggregateByAuxiliary(
             @PathVariable String factoryId,
             @RequestParam("type") AuxiliaryType type,
@@ -228,12 +267,41 @@ public class VoucherController {
             return ResponseEntity.badRequest().body(
                     Map.of("success", false, "message", "from 不能晚于 to", "code", "INVALID_DATE_RANGE"));
         }
-        List<AuxiliaryAggregateRow> rows = voucherEntryRepo.aggregateByAuxiliary(factoryId, type, from, to);
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        VoucherRowScopeQuery scopeQuery = requiredScopeQuery(creators);
+        List<AuxiliaryAggregateRow> rows = creators == null
+                ? voucherEntryRepo.aggregateByAuxiliary(factoryId, type, from, to)
+                : mapAuxiliaryRows(voucherEntryRepo.aggregateByAuxiliaryInOwnerScopeNative(
+                        factoryId, type.name(), from, to, VoucherOwnershipSql.ownerIdsJson(creators)));
         Map<String, Object> data = new HashMap<>();
         data.put("auxiliaryType", type);
         data.put("dateRange", Map.of("from", from, "to", to));
         data.put("rows", rows);
         data.put("totalEntities", rows.size());
         return ResponseEntity.ok(Map.of("success", true, "data", data));
+    }
+
+    private VoucherRowScopeQuery requiredScopeQuery(List<Long> creators) {
+        if (creators != null && voucherRowScopeQuery == null) {
+            throw new com.cretas.aims.exception.BusinessException(503, "财务行级范围组件未就绪，访问已停止");
+        }
+        return voucherRowScopeQuery;
+    }
+
+    private void requireVoucherAccess(String factoryId, String voucherId, List<Long> creators) {
+        VoucherRowScopeQuery query = requiredScopeQuery(creators);
+        if (query != null) query.requireVoucherAccess(factoryId, voucherId, creators);
+    }
+
+    private void requireSourceAccess(String factoryId, String sourceType, String sourceId, List<Long> creators) {
+        VoucherRowScopeQuery query = requiredScopeQuery(creators);
+        if (query != null) query.requireSourceAccess(factoryId, sourceType, sourceId, creators);
+    }
+
+    private List<AuxiliaryAggregateRow> mapAuxiliaryRows(List<Object[]> rows) {
+        return rows.stream().map(row -> new AuxiliaryAggregateRow(
+                AuxiliaryType.valueOf(String.valueOf(row[0])), (String) row[1],
+                (java.math.BigDecimal) row[2], (java.math.BigDecimal) row[3],
+                (java.math.BigDecimal) row[4], ((Number) row[5]).longValue())).toList();
     }
 }

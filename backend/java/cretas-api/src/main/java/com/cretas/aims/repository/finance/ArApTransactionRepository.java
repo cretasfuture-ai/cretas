@@ -16,9 +16,151 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import jakarta.persistence.LockModeType;
+import com.cretas.aims.service.finance.FinanceOwnershipSql;
 
 @Repository
 public interface ArApTransactionRepository extends JpaRepository<ArApTransaction, String> {
+
+    Optional<ArApTransaction> findByIdAndFactoryId(String id, String factoryId);
+
+    /** DB-side owner filter; source rows with unknown/cross-factory provenance evaluate to NULL. */
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t "
+            + "WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL "
+            + "AND (CAST(:counterpartyType AS text) IS NULL OR t.counterparty_type=CAST(:counterpartyType AS text)) "
+            + "AND (CAST(:counterpartyId AS text) IS NULL OR t.counterparty_id=:counterpartyId) "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.transaction_date DESC, t.created_at DESC",
+            countQuery = "SELECT COUNT(*) FROM ar_ap_transactions t "
+            + "WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL "
+            + "AND (CAST(:counterpartyType AS text) IS NULL OR t.counterparty_type=CAST(:counterpartyType AS text)) "
+            + "AND (CAST(:counterpartyId AS text) IS NULL OR t.counterparty_id=:counterpartyId) "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)",
+            nativeQuery = true)
+    Page<ArApTransaction> findScopedTransactions(@Param("factoryId") String factoryId,
+            @Param("counterpartyType") String counterpartyType,
+            @Param("counterpartyId") String counterpartyId,
+            @Param("owners") List<Long> owners, Pageable pageable);
+
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.deleted_at IS NULL AND t.approval_status='PENDING' "
+            + "AND t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT') "
+            + "AND (CAST(:counterpartyType AS text) IS NULL OR t.counterparty_type=CAST(:counterpartyType AS text)) "
+            + "AND (CAST(:minAmount AS numeric) IS NULL OR ABS(t.amount)>=CAST(:minAmount AS numeric)) "
+            + "AND (CAST(:maxAmount AS numeric) IS NULL OR ABS(t.amount)<=CAST(:maxAmount AS numeric)) "
+            + "AND (CAST(:fromDate AS date) IS NULL OR t.created_at>=CAST(:fromDate AS date)) "
+            + "AND (CAST(:toDate AS date) IS NULL OR t.created_at<CAST(:toDate AS date)+INTERVAL '1 day') "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.created_at DESC",
+            countQuery = "SELECT COUNT(*) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.deleted_at IS NULL AND t.approval_status='PENDING' "
+            + "AND t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT') "
+            + "AND (CAST(:counterpartyType AS text) IS NULL OR t.counterparty_type=CAST(:counterpartyType AS text)) "
+            + "AND (CAST(:minAmount AS numeric) IS NULL OR ABS(t.amount)>=CAST(:minAmount AS numeric)) "
+            + "AND (CAST(:maxAmount AS numeric) IS NULL OR ABS(t.amount)<=CAST(:maxAmount AS numeric)) "
+            + "AND (CAST(:fromDate AS date) IS NULL OR t.created_at>=CAST(:fromDate AS date)) "
+            + "AND (CAST(:toDate AS date) IS NULL OR t.created_at<CAST(:toDate AS date)+INTERVAL '1 day') "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)",
+            nativeQuery = true)
+    Page<ArApTransaction> findScopedPendingAdjustments(@Param("factoryId") String factoryId,
+            @Param("counterpartyType") String counterpartyType,
+            @Param("minAmount") BigDecimal minAmount,
+            @Param("maxAmount") BigDecimal maxAmount,
+            @Param("fromDate") LocalDate fromDate,
+            @Param("toDate") LocalDate toDate,
+            @Param("owners") List<Long> owners, Pageable pageable);
+
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.counterparty_type=:counterpartyType AND t.counterparty_id=:counterpartyId "
+            + "AND t.transaction_date BETWEEN :startDate AND :endDate AND t.deleted_at IS NULL "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.transaction_date ASC, t.created_at ASC", nativeQuery = true)
+    List<ArApTransaction> findScopedByCounterpartyAndDateRange(
+            @Param("factoryId") String factoryId, @Param("counterpartyType") String counterpartyType,
+            @Param("counterpartyId") String counterpartyId, @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT COALESCE(SUM(CASE "
+            + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') "
+            + "AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_INVOICE','AP_INVOICE') THEN t.amount "
+            + "ELSE 0 END), 0) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.counterparty_type=:counterpartyType AND t.counterparty_id=:counterpartyId "
+            + "AND t.transaction_date<:startDate AND t.deleted_at IS NULL "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
+    List<BigDecimal> findScopedOpeningBalance(@Param("factoryId") String factoryId,
+            @Param("counterpartyType") String counterpartyType, @Param("counterpartyId") String counterpartyId,
+            @Param("startDate") LocalDate startDate, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.transaction_type='AR_INVOICE' AND t.outstanding_amount IS NOT NULL "
+            + "AND t.outstanding_amount>0 AND t.due_date IS NOT NULL AND t.due_date<:today "
+            + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.due_date ASC", nativeQuery = true)
+    List<ArApTransaction> findScopedOverdueReceivables(@Param("factoryId") String factoryId,
+            @Param("today") LocalDate today, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.transaction_type='AP_INVOICE' AND t.outstanding_amount IS NOT NULL "
+            + "AND t.outstanding_amount>0 AND t.due_date IS NOT NULL AND t.due_date<:today "
+            + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.due_date ASC", nativeQuery = true)
+    List<ArApTransaction> findScopedOverduePayables(@Param("factoryId") String factoryId,
+            @Param("today") LocalDate today, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT COALESCE(SUM(CASE WHEN t.transaction_type='AR_INVOICE' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AR_REFUND') AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END),0) "
+            + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.counterparty_type='CUSTOMER' "
+            + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
+    BigDecimal sumReceivablesScoped(@Param("factoryId") String factoryId, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT COALESCE(SUM(CASE WHEN t.transaction_type='AP_INVOICE' THEN t.amount "
+            + "WHEN t.transaction_type='AP_ADJUSTMENT' AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END),0) "
+            + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.counterparty_type='SUPPLIER' "
+            + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
+    BigDecimal sumPayablesScoped(@Param("factoryId") String factoryId, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT t.counterparty_id, t.counterparty_name, SUM(CASE "
+            + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "
+            + "ELSE t.amount END) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.counterparty_type=:type AND t.deleted_at IS NULL "
+            + "AND (t.transaction_type NOT IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') OR t.approval_status='APPROVED') "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "GROUP BY t.counterparty_id,t.counterparty_name", nativeQuery = true)
+    List<Object[]> sumByCounterpartyScoped(@Param("factoryId") String factoryId,
+            @Param("type") String type, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT COUNT(*) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.transaction_date BETWEEN :from AND :to AND t.deleted_at IS NULL "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
+    long countScopedByFactoryIdAndTransactionDateBetweenNative(@Param("factoryId") String factoryId,
+            @Param("from") LocalDate from, @Param("to") LocalDate to, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT COUNT(DISTINCT t.counterparty_id) FROM ar_ap_transactions t "
+            + "WHERE t.factory_id=:factoryId AND t.counterparty_type=:type AND t.transaction_date BETWEEN :from AND :to "
+            + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
+    long countDistinctScopedCounterpartiesInPeriod(@Param("factoryId") String factoryId,
+            @Param("type") String type, @Param("from") LocalDate from, @Param("to") LocalDate to,
+            @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT t.transaction_type, COUNT(*), COALESCE(SUM(CASE "
+            + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') THEN 0 ELSE t.amount END),0) "
+            + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "GROUP BY t.transaction_type", nativeQuery = true)
+    List<Object[]> statisticsByTypeScoped(@Param("factoryId") String factoryId, @Param("owners") List<Long> owners);
+
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
+            + "AND t.transaction_type='AP_PAYMENT' AND t.deleted_at IS NULL "
+            + "AND NOT EXISTS (SELECT a.id FROM ar_ap_payment_allocations a WHERE a.factory_id=t.factory_id "
+            + "AND a.payment_transaction_id=t.id AND a.deleted_at IS NULL) "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.transaction_date DESC,t.created_at DESC", nativeQuery = true)
+    List<ArApTransaction> findScopedUnallocatedApPayments(@Param("factoryId") String factoryId,
+            @Param("owners") List<Long> owners);
 
     /** Serialize all settlements of one AP invoice and keep factory isolation in the lock query. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)

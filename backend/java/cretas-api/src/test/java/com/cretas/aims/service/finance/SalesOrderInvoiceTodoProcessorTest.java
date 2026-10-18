@@ -10,6 +10,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import com.cretas.aims.exception.BusinessException;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import java.util.Optional;
 import java.util.List;
@@ -26,7 +28,13 @@ class SalesOrderInvoiceTodoProcessorTest {
 
     @Mock SalesOrderRepository salesOrderRepository;
     @Mock InvoiceService invoiceService;
+    @Mock FinanceRowScopeQuery financeRowScopeQuery;
     @InjectMocks SalesOrderInvoiceTodoProcessor processor;
+
+    @org.junit.jupiter.api.BeforeEach
+    void connectScopeComponent() {
+        org.springframework.test.util.ReflectionTestUtils.setField(processor,"financeRowScopeQuery",financeRowScopeQuery);
+    }
 
     @Test
     void successfulProcessingMarksTodoDoneAfterInvoiceRequest() {
@@ -140,5 +148,26 @@ class SalesOrderInvoiceTodoProcessorTest {
         verifyNoInteractions(invoiceService);
         verify(salesOrderRepository, never()).claimInvoiceTodo(
                 anyString(), anyString(), any(LocalDateTime.class), any(LocalDateTime.class), anyInt());
+    }
+
+    @Test
+    void restrictedFailedTodoListUsesDatabaseOwnerPredicate() {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-OWNED");
+        order.setFactoryId("F006");
+        order.setCreatedBy(11L);
+        order.setOrderNumber("SO-OWNED");
+        order.setInvoiceTodoAttempts(5);
+        order.setInvoiceTodoLastError("needs review");
+        when(financeRowScopeQuery.recordCreators("F006")).thenReturn(List.of(11L));
+        when(salesOrderRepository.findFailedInvoiceTodosInScope(
+                eq("F006"), eq(List.of(11L)), eq(5), any(PageRequest.class)))
+                .thenReturn(new PageImpl<>(List.of(order), PageRequest.of(0, 50), 1));
+
+        assertThat(processor.listFailedTodos("F006"))
+                .singleElement().satisfies(row -> assertThat(row.get("salesOrderId")).isEqualTo("SO-OWNED"));
+        verify(salesOrderRepository, never())
+                .findByFactoryIdAndInvoiceTodoStatusAndInvoiceTodoAttemptsGreaterThanEqualOrderByUpdatedAtDesc(
+                        anyString(), anyString(), anyInt(), any(PageRequest.class));
     }
 }

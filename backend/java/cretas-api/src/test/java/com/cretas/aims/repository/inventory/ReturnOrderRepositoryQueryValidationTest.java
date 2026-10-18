@@ -51,6 +51,8 @@ class ReturnOrderRepositoryQueryValidationTest {
         assertThatNoException().isThrownBy(() -> returnOrderRepository
                 .findByFactoryIdAndReturnTypeAndSourceOrderIdOrderByCreatedAtDesc(
                         "F006", ReturnType.PURCHASE_RETURN, "po-test"));
+        assertThatNoException().isThrownBy(() -> returnOrderRepository
+                .findByIdAndFactoryId("return-test", "F006"));
     }
 
     @Test

@@ -70,6 +70,14 @@ class SalesOrderInvoiceTodoRepositoryQueryValidationTest {
         assertThat(salesOrderRepository.findInvoiceTodoCandidates(
                 LocalDateTime.now(), 5, org.springframework.data.domain.PageRequest.of(0, 10)))
                 .isEmpty();
+        assertThat(salesOrderRepository.findByFactoryIdAndCreatedByInAndStatusInOrderByCreatedAtDesc(
+                "F006", java.util.List.of(creatorId), java.util.List.of(SalesOrderStatus.COMPLETED),
+                org.springframework.data.domain.PageRequest.of(0, 10)))
+                .isEmpty();
+        assertThat(salesOrderRepository.findFailedInvoiceTodosInScope(
+                "F006", java.util.List.of(creatorId), 5,
+                org.springframework.data.domain.PageRequest.of(0, 10)))
+                .isEmpty();
         assertThat(salesOrderRepository.claimInvoiceTodo(
                 "missing", "F006", LocalDateTime.now(), LocalDateTime.now().plusMinutes(10), 5))
                 .isZero();

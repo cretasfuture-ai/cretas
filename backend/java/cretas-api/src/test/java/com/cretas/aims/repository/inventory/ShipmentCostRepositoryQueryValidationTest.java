@@ -46,7 +46,8 @@ public class ShipmentCostRepositoryQueryValidationTest {
         ProductType p=new ProductType();p.setId("p23-sku");p.setFactoryId(F);p.setCode("p23");p.setName("盒装");p.setUnit("盒");p.setCreatedBy(u.getId());p.setGramsPerUnit(new BigDecimal("500"));em.persist(p);
         Customer c=new Customer();c.setId("p23-customer");c.setFactoryId(F);c.setCode("p23-customer");c.setCustomerCode("p23-customer");c.setName("测试客户");c.setCreatedBy(u.getId());em.persist(c);
         FinishedGoodsBatch a=batch("a","6.4165"),b=batch("b","6.9165");
-        SalesDeliveryRecord r=new SalesDeliveryRecord();r.setId("p23-delivery");r.setFactoryId(F);r.setDeliveryNumber("p23-delivery");r.setDeliveryDate(DATE);r.setCustomerId(c.getId());r.setShippedBy(u.getId());r.setStatus(SalesDeliveryStatus.SHIPPED);em.persist(r);
+        SalesOrder order=new SalesOrder();order.setId("p23-order");order.setFactoryId(F);order.setOrderNumber("p23-order");order.setCustomerId(c.getId());order.setOrderDate(DATE);order.setCreatedBy(u.getId());em.persist(order);
+        SalesDeliveryRecord r=new SalesDeliveryRecord();r.setId("p23-delivery");r.setFactoryId(F);r.setSalesOrderId(order.getId());r.setDeliveryNumber("p23-delivery");r.setDeliveryDate(DATE);r.setCustomerId(c.getId());r.setShippedBy(u.getId());r.setStatus(SalesDeliveryStatus.SHIPPED);em.persist(r);
         SalesDeliveryItem item=new SalesDeliveryItem();item.setDeliveryRecordId(r.getId());item.setProductTypeId(p.getId());item.setUnit("盒");item.setDeliveredQuantity(BigDecimal.TEN);item.setFinishedGoodsBatchId(a.getId());em.persist(item);em.flush();
         edge(F,item.getId(),a,"4");edge(F,item.getId(),b,"6");
         var historical=edge(F,item.getId(),b,"999");
@@ -56,6 +57,12 @@ public class ShipmentCostRepositoryQueryValidationTest {
         em.flush();
         assertCost("67.1650");assertEquals(2,repo.findShippedMovementsForLedger(F,DATE,DATE).size());
         b.setUnitCost(new BigDecimal("7.4165"));em.flush();assertCost("70.1650");
+        var scoped=repo.findShippedMovementsForLedgerInSourceOwnerScope(F,DATE,DATE,java.util.List.of(u.getId()));
+        assertEquals(2,scoped.size());
+        assertEquals(0,new BigDecimal("70.1650").compareTo((BigDecimal)ShipmentCostRows.aggregate(scoped,false)[0]));
+        assertEquals(0,repo.findShippedMovementsForLedgerInSourceOwnerScope(F,DATE,DATE,java.util.List.of(u.getId()+999)).size());
+        assertEquals(0,repo.findShippedMovementsForLedgerInSourceOwnerScope("OTHER",DATE,DATE,java.util.List.of(u.getId())).size());
+        assertTrue(repo.findShippedMovementsForLedgerInSourceOwnerScope(F,DATE,DATE,java.util.List.of()).isEmpty());
         assertEquals(0L,repo.aggregateMissingCost(F,DATE,DATE)[1]);
         assertEquals(0L,repo.aggregateShippedCogs("OTHER",DATE,DATE)[2]);
         if (!version.contains("H2")) {

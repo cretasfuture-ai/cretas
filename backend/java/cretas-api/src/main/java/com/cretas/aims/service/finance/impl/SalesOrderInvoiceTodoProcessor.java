@@ -4,6 +4,7 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.finance.InvoiceService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,6 +34,9 @@ public class SalesOrderInvoiceTodoProcessor {
 
     private final SalesOrderRepository salesOrderRepository;
     private final InvoiceService invoiceService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
 
     @Value("${cretas.finance.invoice-todo.max-attempts:5}")
     private int maxAttempts = DEFAULT_MAX_ATTEMPTS;
@@ -69,6 +73,9 @@ public class SalesOrderInvoiceTodoProcessor {
     private boolean claimAndProcess(String factoryId, String salesOrderId) {
         if (factoryId == null || salesOrderId == null) {
             return false;
+        }
+        if (financeRowScopeQuery != null) {
+            financeRowScopeQuery.requireSalesOrderOwner(factoryId, salesOrderId);
         }
         LocalDateTime now = LocalDateTime.now();
         int claimed = salesOrderRepository.claimInvoiceTodo(
@@ -134,24 +141,42 @@ public class SalesOrderInvoiceTodoProcessor {
         if (factoryId == null || salesOrderId == null) {
             return false;
         }
+        if (financeRowScopeQuery != null) {
+            financeRowScopeQuery.requireSalesOrderOwner(factoryId, salesOrderId);
+        }
         return salesOrderRepository.retryFailedInvoiceTodo(salesOrderId, factoryId) == 1;
     }
 
     /** Tenant-scoped dead-letter workbench; never returns invoice/order financial payloads. */
     public List<Map<String, Object>> listFailedTodos(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) return List.of();
-        return salesOrderRepository
-                .findByFactoryIdAndInvoiceTodoStatusAndInvoiceTodoAttemptsGreaterThanEqualOrderByUpdatedAtDesc(
-                        factoryId, "FAILED", effectiveMaxAttempts(),
-                        org.springframework.data.domain.PageRequest.of(0, effectiveBatchSize()))
+        java.util.List<SalesOrder> orders;
+        java.util.List<Long> owners = financeRowScopeQuery == null
+                ? null : financeRowScopeQuery.recordCreators(factoryId);
+        if (owners != null && owners.isEmpty()) return List.of();
+        if (owners == null) {
+            orders = salesOrderRepository
+                    .findByFactoryIdAndInvoiceTodoStatusAndInvoiceTodoAttemptsGreaterThanEqualOrderByUpdatedAtDesc(
+                            factoryId, "FAILED", effectiveMaxAttempts(),
+                            org.springframework.data.domain.PageRequest.of(0, effectiveBatchSize()));
+        } else {
+            orders = salesOrderRepository.findFailedInvoiceTodosInScope(
+                    factoryId, owners, effectiveMaxAttempts(),
+                    org.springframework.data.domain.PageRequest.of(0, effectiveBatchSize())).getContent();
+        }
+        return orders
                 .stream()
-                .map(order -> Map.<String, Object>of(
-                        "salesOrderId", order.getId(),
-                        "orderNumber", order.getOrderNumber() == null ? order.getId() : order.getOrderNumber(),
-                        "attempts", order.getInvoiceTodoAttempts() == null ? 0 : order.getInvoiceTodoAttempts(),
-                        "lastError", order.getInvoiceTodoLastError() == null ? "未记录失败原因" : order.getInvoiceTodoLastError(),
-                        "updatedAt", order.getUpdatedAt() == null ? "" : order.getUpdatedAt().toString()))
+                .map(this::failedTodoView)
                 .toList();
+    }
+
+    private Map<String, Object> failedTodoView(SalesOrder order) {
+        return Map.of(
+                "salesOrderId", order.getId(),
+                "orderNumber", order.getOrderNumber() == null ? order.getId() : order.getOrderNumber(),
+                "attempts", order.getInvoiceTodoAttempts() == null ? 0 : order.getInvoiceTodoAttempts(),
+                "lastError", order.getInvoiceTodoLastError() == null ? "未记录失败原因" : order.getInvoiceTodoLastError(),
+                "updatedAt", order.getUpdatedAt() == null ? "" : order.getUpdatedAt().toString());
     }
 
     private int effectiveMaxAttempts() {

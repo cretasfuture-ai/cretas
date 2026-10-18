@@ -14,6 +14,9 @@ export interface LineItem {
 }
 
 export interface BalanceSheetDTO {
+  scopeApplied?: boolean;
+  scopeLabel?: string;
+  scopeNote?: string;
   factoryId: string;
   year: number;
   month: number;
@@ -37,6 +40,9 @@ export interface BalanceSheetDTO {
 }
 
 export interface IncomeStatementDTO {
+  scopeApplied?: boolean;
+  scopeLabel?: string;
+  scopeNote?: string;
   factoryId: string;
   startYear: number;
   startMonth: number;
@@ -69,6 +75,9 @@ export interface CashFlowActivity {
 }
 
 export interface CashFlowDTO {
+  scopeApplied?: boolean;
+  scopeLabel?: string;
+  scopeNote?: string;
   factoryId: string;
   startYear: number;
   startMonth: number;

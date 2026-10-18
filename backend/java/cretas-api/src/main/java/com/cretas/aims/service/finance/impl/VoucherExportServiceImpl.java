@@ -44,6 +44,8 @@ import com.cretas.aims.repository.finance.VoucherExportRecordRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.service.finance.VoucherExportService;
+import com.cretas.aims.service.finance.VoucherRowScopeContext;
+import com.cretas.aims.service.finance.VoucherOwnershipSql;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
@@ -142,8 +144,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         }
 
         VoucherExportConfig config = resolveConfig(factoryId, req.getTargetSystem());
-        List<Voucher> vouchers = voucherRepo.findByFactoryIdAndDateRange(
-                factoryId, req.getStartDate(), req.getEndDate());
+        List<Voucher> vouchers = findVoucherDateRange(factoryId, req.getStartDate(), req.getEndDate());
 
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of(
@@ -501,7 +502,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         List<SubjectAggregateRow> openingAggregates = loadOpeningAggregates(factoryId, req.getStartDate());
         // F006 财务审计 Bug 6 (2026-07-04): 官方报表切 POSTED-only (排除 DRAFT 未审草稿), 见
         // aggregateBySubjectExcludingDraft javadoc。
-        List<SubjectAggregateRow> currentAggregates = entryRepo.aggregateBySubjectExcludingDraft(
+        List<SubjectAggregateRow> currentAggregates = aggregateBySubjectExcludingDraft(
                 factoryId, req.getStartDate(), req.getEndDate());
         List<SubjectBalanceLine> balanceLines = buildSubjectBalanceLines(
                 factoryId, openingAggregates, currentAggregates);
@@ -604,8 +605,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         List<SubjectLedgerLine> lines = buildSubjectLedgerLines(
                 factoryId,
                 loadOpeningAggregates(factoryId, req.getStartDate()),
-                entryRepo.aggregateBySubjectExcludingDraft(factoryId, req.getStartDate(), req.getEndDate()),
-                entryRepo.aggregateBySubjectExcludingDraft(
+                aggregateBySubjectExcludingDraft(factoryId, req.getStartDate(), req.getEndDate()),
+                aggregateBySubjectExcludingDraft(
                         factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
 
         List<List<Object>> rows = new ArrayList<>();
@@ -709,7 +710,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         List<SubjectLedgerLine> lines = buildSubjectLedgerLines(
                 factoryId,
                 loadOpeningAggregates(factoryId, req.getStartDate()),
-                entryRepo.aggregateBySubjectExcludingDraft(factoryId, req.getStartDate(), req.getEndDate()),
+                aggregateBySubjectExcludingDraft(factoryId, req.getStartDate(), req.getEndDate()),
                 List.of());
         validateTrialBalance(lines);
 
@@ -759,9 +760,9 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         // COST_CARRYOVER 红冲镜像) — 否则已结账期间会显示营收/成本=0, 见
         // aggregateBySubjectExcludingDraftAndClosing javadoc。
         IncomeAmounts period = buildIncomeAmounts(factoryId,
-                entryRepo.aggregateBySubjectExcludingDraftAndClosing(factoryId, req.getStartDate(), req.getEndDate()));
+                aggregateBySubjectExcludingDraftAndClosing(factoryId, req.getStartDate(), req.getEndDate()));
         IncomeAmounts yearToDate = buildIncomeAmounts(factoryId,
-                entryRepo.aggregateBySubjectExcludingDraftAndClosing(
+                aggregateBySubjectExcludingDraftAndClosing(
                         factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
 
         List<List<Object>> rows = new ArrayList<>();
@@ -891,10 +892,20 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
     private List<InventoryMovement> buildInventoryMovements(String factoryId, VoucherExportRequestDTO req) {
         List<InventoryMovement> movements = new ArrayList<>();
+        List<Long> owners = VoucherRowScopeContext.currentCreators();
+        if (owners != null && owners.isEmpty()) {
+            return movements;
+        }
+        boolean restricted = owners != null;
         LocalDateTime startTime = req.getStartDate().atStartOfDay();
         LocalDateTime endTime = req.getEndDate().plusDays(1).atStartOfDay().minusNanos(1);
 
-        for (MaterialBatch batch : materialBatchRepo.findByFactoryId(factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()) {
+        List<MaterialBatch> materialBatches = restricted
+                ? materialBatchRepo.findByFactoryIdAndCreatedByInAndReceiptDateBetween(
+                factoryId, owners, req.getStartDate(), req.getEndDate(),
+                PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()
+                : materialBatchRepo.findByFactoryId(factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent();
+        for (MaterialBatch batch : materialBatches) {
             if (batch.getReceiptDate() == null || batch.getReceiptDate().isBefore(req.getStartDate())
                     || batch.getReceiptDate().isAfter(req.getEndDate())) {
                 continue;
@@ -921,7 +932,10 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         // ⚠️ 未知来源**不静默**: 既不计入(会凭空造成本), 也不假装没发生 —— 计数并打日志。
         int excludedKnown = 0;
         java.util.Map<String, Integer> excludedUnknown = new java.util.TreeMap<>();
-        for (MaterialConsumption consumption : materialConsumptionRepo.findByTimeRange(factoryId, startTime, endTime)) {
+        List<MaterialConsumption> consumptions = restricted
+                ? materialConsumptionRepo.findByTimeRangeAndSourceOwnerIn(factoryId, startTime, endTime, owners)
+                : materialConsumptionRepo.findByTimeRange(factoryId, startTime, endTime);
+        for (MaterialConsumption consumption : consumptions) {
             String sourceType = consumption.getSourceType();
             if (!VoucherConsumptionSourcePolicy.isProductionConsumption(sourceType)) {
                 if (VoucherConsumptionSourcePolicy.isKnownExclusion(sourceType)) {
@@ -964,7 +978,10 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         // 均锚在 SFI 创建日期 createdAt。产出(入)锚在创建日期本就正确; 但消耗(出)是后续逐次投料下游累加的,
         // 并无按日期可查的逐笔消耗流水 (consumedQuantity 就地累加, 无 dated 事件表), 故消耗时点被折进创建当期。
         // 期内数量净额 (入=产量, 出=累计消耗) 与真实在库一致, 仅消耗的逐期分布不精确 — 待有逐笔投料流水后再细化。
-        for (SemiFinishedInventory wip : semiFinishedInventoryRepo.findByFactoryIdForWeightView(factoryId)) {
+        List<SemiFinishedInventory> wipRows = restricted
+                ? semiFinishedInventoryRepo.findByFactoryIdForWeightViewAndSourceOwnerIn(factoryId, owners)
+                : semiFinishedInventoryRepo.findByFactoryIdForWeightView(factoryId);
+        for (SemiFinishedInventory wip : wipRows) {
             LocalDate date = wip.getCreatedAt() == null ? null : wip.getCreatedAt().toLocalDate();
             if (!within(date, req.getStartDate(), req.getEndDate())) {
                 continue;
@@ -992,8 +1009,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         // 已知口径限制: producedQuantity 为批次当前(含后续 disposal/feed/退货调整后)累计产量, 锚在生产日期;
         // 逐笔调整(FinishedGoodsAdjustmentLog)未按其真实日期单列, 故批次生命周期内的调整时点被折进生产当期,
         // 但期内数量净额仍正确 (入=当前产量, 出=逐笔发货) — 逐期数量净额与真实在库一致。
-        for (FinishedGoodsBatch batch : finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(
-                factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()) {
+        List<FinishedGoodsBatch> finishedGoodsBatches = restricted
+                ? finishedGoodsBatchRepo.findByFactoryIdAndCreatedByInAndProductionDateBetweenOrderByCreatedAtDesc(
+                factoryId, owners, req.getStartDate(), req.getEndDate(),
+                PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()
+                : finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(
+                factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent();
+        for (FinishedGoodsBatch batch : finishedGoodsBatches) {
             LocalDate date = batch.getProductionDate();
             if (!within(date, req.getStartDate(), req.getEndDate())) {
                 continue;
@@ -1012,8 +1034,12 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         // 成品发出流水: 逐笔真实发货 (SalesDeliveryItem, 按发货单 delivery_date 归期), 金额按 unitCost (诚实 null)。
         // F006 财务审计 Bug 7: 旧实现读 batch.shippedQuantity(生命周期累计)并盖在生产日期上 × 售价,
         // 把跨月的全部发货历史都记进生产当月 → 逐期收发存被污染。改为逐笔发货 + 各自真实发货日 + 成本口径。
-        for (Object[] row : salesDeliveryItemRepo.findShippedMovementsForLedger(
-                factoryId, req.getStartDate(), req.getEndDate())) {
+        List<Object[]> shippedRows = restricted
+                ? salesDeliveryItemRepo.findShippedMovementsForLedgerInSourceOwnerScope(
+                factoryId, req.getStartDate(), req.getEndDate(), owners)
+                : salesDeliveryItemRepo.findShippedMovementsForLedger(
+                factoryId, req.getStartDate(), req.getEndDate());
+        for (Object[] row : shippedRows) {
             LocalDate shipDate = (LocalDate) row[0];
             BigDecimal shippedQty = nvl((BigDecimal) row[1]);
             if (shippedQty.compareTo(BigDecimal.ZERO) <= 0) {
@@ -1122,6 +1148,37 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         return nvl(a).subtract(nvl(b));
     }
 
+    /**
+     * Applies the request-local row scope before any export query materializes or aggregates rows.
+     * ALL requests retain the existing repository path; SELF requests carry the pre-resolved
+     * visible voucher ids from the controller.
+     */
+    private List<Voucher> findVoucherDateRange(String factoryId, LocalDate from, LocalDate to) {
+        List<Long> owners = VoucherRowScopeContext.currentCreators();
+        return owners == null
+                ? voucherRepo.findByFactoryIdAndDateRange(factoryId, from, to)
+                : voucherRepo.findByFactoryIdAndOwnerScopeAndVoucherDateBetweenAndDeletedAtIsNull(
+                        factoryId, from, to, VoucherOwnershipSql.ownerIdsJson(owners));
+    }
+
+    private List<SubjectAggregateRow> aggregateBySubjectExcludingDraft(
+            String factoryId, LocalDate from, LocalDate to) {
+        List<Long> owners = VoucherRowScopeContext.currentCreators();
+        return owners == null
+                ? entryRepo.aggregateBySubjectExcludingDraft(factoryId, from, to)
+                : mapSubjectRows(entryRepo.aggregateBySubjectExcludingDraftInOwnerScopeNative(
+                        factoryId, from, to, VoucherOwnershipSql.ownerIdsJson(owners)));
+    }
+
+    private List<SubjectAggregateRow> aggregateBySubjectExcludingDraftAndClosing(
+            String factoryId, LocalDate from, LocalDate to) {
+        List<Long> owners = VoucherRowScopeContext.currentCreators();
+        return owners == null
+                ? entryRepo.aggregateBySubjectExcludingDraftAndClosing(factoryId, from, to)
+                : mapSubjectRows(entryRepo.aggregateBySubjectExcludingDraftAndClosingInOwnerScopeNative(
+                        factoryId, from, to, VoucherOwnershipSql.ownerIdsJson(owners)));
+    }
+
     private String firstNonBlank(String first, String second) {
         if (first != null && !first.isBlank()) {
             return first;
@@ -1143,7 +1200,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
         // F006 财务审计 Bug 6 (2026-07-04): 期初余额是上期已 CLOSED 的真实账面, 排除 DRAFT
         // (未审草稿绝不该出现在"已关账期"的期初余额里)。
-        return entryRepo.aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, previousMonth.atEndOfMonth());
+        return aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, previousMonth.atEndOfMonth());
     }
 
     private List<SubjectBalanceLine> buildSubjectBalanceLines(
@@ -1264,8 +1321,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
      * (未财审草稿仍可在此追溯查看)。两者都始终排除 VOID (作废凭证从未过账, 无财务效应)。
      */
     private List<VoucherLine> loadVoucherLines(String factoryId, VoucherExportRequestDTO req, boolean excludeDraft) {
-        List<Voucher> vouchers = voucherRepo.findByFactoryIdAndDateRange(
-                        factoryId, req.getStartDate(), req.getEndDate()).stream()
+        List<Voucher> vouchers = findVoucherDateRange(factoryId, req.getStartDate(), req.getEndDate()).stream()
                 .filter(v -> v.getStatus() != VoucherStatus.VOID)
                 .filter(v -> !excludeDraft || v.getStatus() != VoucherStatus.DRAFT)
                 .sorted(Comparator
@@ -1302,8 +1358,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         //   - REVERSED: 已被红字冲销的原凭证 → 冲销凭证 (POSTED) 自身仍会被导出对冲, 原凭证不再重复流出
         // 凭证生命周期: DRAFT (createFromBusiness) → POSTED (finance post) / 直建 POSTED (结转/红冲)。
         // 故导入模板锁定 POSTED-only。
-        List<Voucher> vouchers = voucherRepo.findByFactoryIdAndDateRange(
-                        factoryId, req.getStartDate(), req.getEndDate()).stream()
+        List<Voucher> vouchers = findVoucherDateRange(factoryId, req.getStartDate(), req.getEndDate()).stream()
                 .filter(v -> v.getStatus() == VoucherStatus.POSTED)
                 .toList();
 
@@ -1705,9 +1760,19 @@ public class VoucherExportServiceImpl implements VoucherExportService {
      */
     private void appendPendingDraftFooter(List<List<Object>> rows, String factoryId,
                                           LocalDate startDate, LocalDate endDate) {
-        long pendingCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
-                factoryId, VoucherStatus.DRAFT, startDate, endDate);
+        List<Long> owners = VoucherRowScopeContext.currentCreators();
+        long pendingCount = owners == null
+                ? voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, startDate, endDate)
+                : voucherRepo.countByFactoryIdAndOwnerScopeAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherOwnershipSql.ownerIdsJson(owners), VoucherStatus.DRAFT.name(), startDate, endDate);
         rows.add(List.of("本报表仅含已过账(POSTED)凭证; 另有 " + pendingCount + " 张凭证待过账(未计入本报表)"));
+    }
+
+    private List<SubjectAggregateRow> mapSubjectRows(List<Object[]> rows) {
+        return rows.stream().map(row -> new SubjectAggregateRow(
+                (String) row[0], (String) row[1], (BigDecimal) row[2], (BigDecimal) row[3],
+                ((Number) row[4]).longValue())).toList();
     }
 
     private void saveExportRecord(String factoryId, String exportType, VoucherExportRequestDTO req,

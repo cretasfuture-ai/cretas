@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.finance.VoucherOwnershipSql;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Collection;
 
 @Repository
 public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, String> {
@@ -68,6 +70,34 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("auxiliaryType") AuxiliaryType auxiliaryType,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    @Query("SELECT new com.cretas.aims.dto.finance.AuxiliaryAggregateRow(" +
+            "e.auxiliaryType, e.auxiliaryEntityId, COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), " +
+            "COALESCE(SUM(e.debit), 0) - COALESCE(SUM(e.credit), 0), COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v WHERE v.factoryId = :factoryId " +
+            "AND v.id IN :voucherIds AND e.auxiliaryType = :auxiliaryType AND e.auxiliaryEntityId IS NOT NULL " +
+            "AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID AND v.deletedAt IS NULL " +
+            "GROUP BY e.auxiliaryType, e.auxiliaryEntityId ORDER BY COUNT(e) DESC, e.auxiliaryEntityId ASC")
+    List<com.cretas.aims.dto.finance.AuxiliaryAggregateRow> aggregateByAuxiliaryInScope(
+            @Param("factoryId") String factoryId,
+            @Param("auxiliaryType") AuxiliaryType auxiliaryType,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("voucherIds") Collection<String> voucherIds);
+
+    @Query(value = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT e.auxiliary_type, e.auxiliary_entity_id, COALESCE(SUM(e.debit),0), COALESCE(SUM(e.credit),0), "
+            + "COALESCE(SUM(e.debit),0)-COALESCE(SUM(e.credit),0), COUNT(e.id) "
+            + "FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND e.auxiliary_type=:auxiliaryType AND e.auxiliary_entity_id IS NOT NULL "
+            + "AND e.deleted_at IS NULL AND v.voucher_date BETWEEN :startDate AND :endDate AND v.status <> 'VOID' AND v.deleted_at IS NULL "
+            + "GROUP BY e.auxiliary_type,e.auxiliary_entity_id ORDER BY COUNT(e.id) DESC,e.auxiliary_entity_id ASC",
+           nativeQuery = true)
+    List<Object[]> aggregateByAuxiliaryInOwnerScopeNative(
+            @Param("factoryId") String factoryId, @Param("auxiliaryType") String auxiliaryType,
+            @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
+            @Param("ownerIdsJson") String ownerIdsJson);
 
     /**
      * Sprint 7 T3 报表三表: 按 subjectCode 聚合 voucher entries 在 [startDate, endDate].
@@ -185,6 +215,30 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
 
+    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
+            "e.subjectCode, MAX(e.subjectName), COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v WHERE v.factoryId = :factoryId AND v.id IN :voucherIds " +
+            "AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.DRAFT AND v.deletedAt IS NULL " +
+            "GROUP BY e.subjectCode ORDER BY e.subjectCode ASC")
+    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectExcludingDraftInScope(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("voucherIds") Collection<String> voucherIds);
+
+    @Query(value = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT e.subject_code, MAX(e.subject_name), COALESCE(SUM(e.debit),0), COALESCE(SUM(e.credit),0), COUNT(e.id) "
+            + "FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND v.voucher_date BETWEEN :startDate AND :endDate "
+            + "AND e.deleted_at IS NULL AND v.status <> 'VOID' AND v.status <> 'DRAFT' AND v.deleted_at IS NULL "
+            + "GROUP BY e.subject_code ORDER BY e.subject_code ASC",
+           nativeQuery = true)
+    List<Object[]> aggregateBySubjectExcludingDraftInOwnerScopeNative(
+            @Param("factoryId") String factoryId, @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate, @Param("ownerIdsJson") String ownerIdsJson);
+
     /**
      * F006 财务审计 Bug 6 (2026-07-04): 利润表 (Income Statement) 专用 — 排除 DRAFT (未财审草稿)
      * + 排除结转产物 (PL_CLOSING / COST_CARRYOVER 红冲镜像), 但<b>保留 REVERSED</b> (与
@@ -222,6 +276,33 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
 
+    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
+            "e.subjectCode, MAX(e.subjectName), COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v WHERE v.factoryId = :factoryId AND v.id IN :voucherIds " +
+            "AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.DRAFT " +
+            "AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
+            "AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER AND (v.originalVoucherId IS NOT NULL OR v.status = com.cretas.aims.entity.enums.VoucherStatus.REVERSED)) " +
+            "AND v.deletedAt IS NULL GROUP BY e.subjectCode ORDER BY e.subjectCode ASC")
+    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectExcludingDraftAndClosingInScope(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("voucherIds") Collection<String> voucherIds);
+
+    @Query(value = VoucherOwnershipSql.OWNER_SCOPE_CTE
+            + "SELECT e.subject_code, MAX(e.subject_name), COALESCE(SUM(e.debit),0), COALESCE(SUM(e.credit),0), COUNT(e.id) "
+            + "FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
+            + "WHERE v.factory_id=:factoryId AND v.voucher_date BETWEEN :startDate AND :endDate "
+            + "AND e.deleted_at IS NULL AND v.status <> 'VOID' AND v.status <> 'DRAFT' AND v.voucher_type <> 'PL_CLOSING' "
+            + "AND NOT (v.voucher_type='COST_CARRYOVER' AND (v.original_voucher_id IS NOT NULL OR v.status='REVERSED')) AND v.deleted_at IS NULL "
+            + "GROUP BY e.subject_code ORDER BY e.subject_code ASC",
+           nativeQuery = true)
+    List<Object[]> aggregateBySubjectExcludingDraftAndClosingInOwnerScopeNative(
+            @Param("factoryId") String factoryId, @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate, @Param("ownerIdsJson") String ownerIdsJson);
+
     /**
      * Sprint 7 T3 现金流量表: 找出指定现金科目在期间内的 voucher entries + 对手科目列表.
      *
@@ -241,6 +322,17 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate,
             @Param("cashCodes") List<String> cashCodes);
+
+    @Query("SELECT DISTINCT v.id FROM Voucher v JOIN v.entries e WHERE v.factoryId = :factoryId " +
+            "AND v.id IN :voucherIds AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID AND v.deletedAt IS NULL " +
+            "AND e.subjectCode IN :cashCodes")
+    List<String> findCashFlowVoucherIdsInScope(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("cashCodes") Collection<String> cashCodes,
+            @Param("voucherIds") Collection<String> voucherIds);
 
     /**
      * 资金段子账↔总账对账 (finance audit Bug 5): 某科目族 (subjectCode LIKE prefix) 在非作废凭证下的

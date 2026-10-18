@@ -13,6 +13,10 @@ import com.cretas.aims.service.finance.IncomeStatementService;
 import com.cretas.aims.service.finance.ShipmentSkuMarginService;
 import org.springframework.format.annotation.DateTimeFormat;
 import java.time.LocalDate;
+import com.cretas.aims.service.finance.VoucherRowScopeQuery;
+import com.cretas.aims.service.finance.VoucherRowScopeContext;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +27,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -65,47 +70,75 @@ public class FinanceReportController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate periodEnd) {
         return ResponseEntity.ok(ApiResponse.success(shipmentSkuMarginService.generate(factoryId, periodStart, periodEnd)));
     }
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+    @Autowired(required = false)
+    private VoucherRowScopeQuery voucherRowScopeQuery;
 
     /**
      * 资产负债表 (截至 year-month 月底余额).
      */
     @GetMapping("/balance-sheet")
+    @RowScopeSupported
     public ResponseEntity<ApiResponse<BalanceSheetDTO>> balanceSheet(
             @PathVariable String factoryId,
             @RequestParam Integer year,
             @RequestParam Integer month) {
-        BalanceSheetDTO dto = balanceSheetService.generate(factoryId, year, month);
-        return ResponseEntity.ok(ApiResponse.success(dto));
+        java.util.List<Long> creators = scopedCreators(factoryId);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+        addScopeHeader(response, creators);
+        BalanceSheetDTO dto;
+        try (VoucherRowScopeContext ignored = VoucherRowScopeContext.open(null, creators)) {
+            dto = balanceSheetService.generate(factoryId, year, month, null);
+        }
+        applyScopeMetadata(dto, creators != null);
+        return response.body(ApiResponse.success(dto));
     }
 
     /**
      * 利润表 (期间累计).
      */
     @GetMapping("/income-statement")
+    @RowScopeSupported
     public ResponseEntity<ApiResponse<IncomeStatementDTO>> incomeStatement(
             @PathVariable String factoryId,
             @RequestParam Integer startYear,
             @RequestParam Integer startMonth,
             @RequestParam Integer endYear,
             @RequestParam Integer endMonth) {
-        IncomeStatementDTO dto = incomeStatementService.generate(
-                factoryId, startYear, startMonth, endYear, endMonth);
-        return ResponseEntity.ok(ApiResponse.success(dto));
+        java.util.List<Long> creators = scopedCreators(factoryId);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+        addScopeHeader(response, creators);
+        IncomeStatementDTO dto;
+        try (VoucherRowScopeContext ignored = VoucherRowScopeContext.open(null, creators)) {
+            dto = incomeStatementService.generate(
+                    factoryId, startYear, startMonth, endYear, endMonth, null);
+        }
+        applyScopeMetadata(dto, creators != null);
+        return response.body(ApiResponse.success(dto));
     }
 
     /**
      * 现金流量表 (直接法, 期间累计).
      */
     @GetMapping("/cash-flow")
+    @RowScopeSupported
     public ResponseEntity<ApiResponse<CashFlowDTO>> cashFlow(
             @PathVariable String factoryId,
             @RequestParam Integer startYear,
             @RequestParam Integer startMonth,
             @RequestParam Integer endYear,
             @RequestParam Integer endMonth) {
-        CashFlowDTO dto = cashFlowService.generate(
-                factoryId, startYear, startMonth, endYear, endMonth);
-        return ResponseEntity.ok(ApiResponse.success(dto));
+        java.util.List<Long> creators = scopedCreators(factoryId);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+        addScopeHeader(response, creators);
+        CashFlowDTO dto;
+        try (VoucherRowScopeContext ignored = VoucherRowScopeContext.open(null, creators)) {
+            dto = cashFlowService.generate(
+                    factoryId, startYear, startMonth, endYear, endMonth, null);
+        }
+        applyScopeMetadata(dto, creators != null);
+        return response.body(ApiResponse.success(dto));
     }
 
     // -------------------------------------------------------------------------
@@ -119,13 +152,19 @@ public class FinanceReportController {
      */
     @GetMapping("/balance-sheet/export")
     @RequireModule("finance")
+    @RowScopeSupported
     public void exportBalanceSheet(
             @PathVariable String factoryId,
             @RequestParam Integer year,
             @RequestParam Integer month,
             HttpServletResponse response) throws Exception {
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = balanceSheetService.exportBalanceSheet(factoryId, year, month, response.getOutputStream());
+        java.util.List<Long> creators = scopedCreators(factoryId);
+        addScopeHeader(response, creators);
+        String fileName;
+        try (VoucherRowScopeContext ignored = VoucherRowScopeContext.open(null, creators)) {
+            fileName = balanceSheetService.exportBalanceSheet(factoryId, year, month, response.getOutputStream(), null);
+        }
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[FinanceReport] balance-sheet export: factoryId={} year={} month={} file={}",
@@ -139,6 +178,7 @@ public class FinanceReportController {
      */
     @GetMapping("/cash-flow/export")
     @RequireModule("finance")
+    @RowScopeSupported
     public void exportCashFlow(
             @PathVariable String factoryId,
             @RequestParam Integer startYear,
@@ -147,8 +187,13 @@ public class FinanceReportController {
             @RequestParam Integer endMonth,
             HttpServletResponse response) throws Exception {
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = cashFlowService.exportCashFlow(
-                factoryId, startYear, startMonth, endYear, endMonth, response.getOutputStream());
+        java.util.List<Long> creators = scopedCreators(factoryId);
+        addScopeHeader(response, creators);
+        String fileName;
+        try (VoucherRowScopeContext ignored = VoucherRowScopeContext.open(null, creators)) {
+            fileName = cashFlowService.exportCashFlow(
+                    factoryId, startYear, startMonth, endYear, endMonth, response.getOutputStream(), null);
+        }
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[FinanceReport] cash-flow export: factoryId={} range={}-{} to {}-{} file={}",
@@ -158,5 +203,53 @@ public class FinanceReportController {
     private void setAttachmentHeader(HttpServletResponse response, String fileName) {
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename*=UTF-8''" + URLEncoder.encode(fileName, StandardCharsets.UTF_8));
+    }
+
+    private void addScopeHeader(ResponseEntity.BodyBuilder response, java.util.List<Long> creators) {
+        if (creators != null) {
+            response.header("X-Finance-Row-Scope", "RESTRICTED_SOURCE_OWNER_PROJECTION");
+            response.header("X-Finance-Row-Scope-Note",
+                    "Visible source-owner vouchers only; unknown or damaged sources excluded; not a complete statutory report");
+        }
+    }
+
+    private void addScopeHeader(HttpServletResponse response, java.util.List<Long> creators) {
+        if (creators != null) {
+            response.setHeader("X-Finance-Row-Scope", "RESTRICTED_SOURCE_OWNER_PROJECTION");
+            response.setHeader("X-Finance-Row-Scope-Note",
+                    "Visible source-owner vouchers only; unknown or damaged sources excluded; not a complete statutory report");
+        }
+    }
+
+    private void applyScopeMetadata(BalanceSheetDTO dto, boolean restricted) {
+        dto.setScopeApplied(restricted);
+        dto.setScopeLabel(restricted ? "授权凭证发生额投影" : "全工厂凭证报表");
+        dto.setScopeNote(restricted
+                ? "仅统计可解析且归属当前账号的凭证；未知/损坏来源及其期初金额不计入，不等同完整法定报表"
+                : "按全工厂凭证口径生成");
+    }
+
+    private void applyScopeMetadata(IncomeStatementDTO dto, boolean restricted) {
+        dto.setScopeApplied(restricted);
+        dto.setScopeLabel(restricted ? "授权凭证发生额投影" : "全工厂凭证报表");
+        dto.setScopeNote(restricted
+                ? "仅统计可解析且归属当前账号的凭证；未知/损坏来源不计入，不等同完整法定报表"
+                : "按全工厂凭证口径生成");
+    }
+
+    private void applyScopeMetadata(CashFlowDTO dto, boolean restricted) {
+        dto.setScopeApplied(restricted);
+        dto.setScopeLabel(restricted ? "授权凭证发生额投影" : "全工厂凭证报表");
+        dto.setScopeNote(restricted
+                ? "仅统计可解析且归属当前账号的凭证；未知/损坏来源及其期初现金不计入，不等同完整法定报表"
+                : "按全工厂凭证口径生成");
+    }
+
+    private java.util.List<Long> scopedCreators(String factoryId) {
+        java.util.List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        if (creators != null && voucherRowScopeQuery == null) {
+            throw new com.cretas.aims.exception.BusinessException(503, "财务行级范围组件未就绪，访问已停止");
+        }
+        return creators;
     }
 }
