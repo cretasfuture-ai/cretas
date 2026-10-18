@@ -28,6 +28,19 @@ export interface PlatformPermission {
 /** Layer 2 factory override map shape: { role: { module: level } } */
 export type RoleModuleOverride = Record<string, Record<string, PermissionLevel>>;
 
+/** Current factory account only; server resolves L2 > L1 > backend role defaults. */
+export async function getCurrentModulePermissions(factoryId: string): Promise<Record<string, PermissionLevel>> {
+  const res = await request.get<ApiResponse<Record<string, PermissionLevel>>>(
+    `/${encodeURIComponent(factoryId)}/permissions/current`,
+  );
+  const levels = (res as unknown as ApiResponse<Record<string, PermissionLevel>>).data;
+  if (!levels || typeof levels !== 'object' || Array.isArray(levels)
+      || Object.values(levels).some(level => !['rw', 'r', 'w', '-'].includes(level))) {
+    throw new Error('当前账号权限响应无效');
+  }
+  return levels;
+}
+
 export interface UserModuleAccessView {
   moduleCode: string;
   displayName: string;

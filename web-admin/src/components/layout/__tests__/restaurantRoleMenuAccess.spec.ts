@@ -56,7 +56,7 @@ function roleAllowed(item: MenuItem | undefined, role: string): boolean {
   if (!item) return false;
   setActivePinia(createPinia());
   const store = usePermissionStore();
-  store.setRole(role, 'R001', 'RESTAURANT', '1309');
+  store.setRole(role, 'R001', 'RESTAURANT', '1309', { skipDbLoad: true });
   const canAccess = store.canAccess(item.module);
   if (item.restaurantRoles?.length && !item.restaurantRoles.includes(role)) return false;
   if (!item.roles || item.roles.length === 0) return canAccess;

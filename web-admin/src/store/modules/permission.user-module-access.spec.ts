@@ -6,6 +6,7 @@ const permissionApiMocks = vi.hoisted(() => ({
   getPlatformPermissions: vi.fn(),
   getFactoryOverride: vi.fn(),
   getUserModuleAccess: vi.fn(),
+  getCurrentModulePermissions: vi.fn(),
 }));
 
 vi.mock('@/api/permissionApi', () => permissionApiMocks);
@@ -16,6 +17,7 @@ describe('permission store user module access overrides', () => {
     permissionApiMocks.getPlatformPermissions.mockReset().mockResolvedValue([]);
     permissionApiMocks.getFactoryOverride.mockReset().mockResolvedValue({});
     permissionApiMocks.getUserModuleAccess.mockReset().mockResolvedValue([]);
+    permissionApiMocks.getCurrentModulePermissions.mockReset().mockResolvedValue({ '*': 'rw' });
   });
 
   it('DENY override blocks the exact module and its legacy route module', () => {
@@ -67,8 +69,8 @@ describe('permission store user module access overrides', () => {
   });
 
   it('deduplicates concurrent first-load requests and preserves the 30 second cache', async () => {
-    let resolvePlatformPermissions: (value: never[]) => void = () => undefined;
-    permissionApiMocks.getPlatformPermissions.mockReturnValueOnce(new Promise<never[]>((resolve) => {
+    let resolvePlatformPermissions: (value: Record<string, 'rw'>) => void = () => undefined;
+    permissionApiMocks.getCurrentModulePermissions.mockReturnValueOnce(new Promise<Record<string, 'rw'>>((resolve) => {
       resolvePlatformPermissions = resolve;
     }));
 
@@ -78,16 +80,16 @@ describe('permission store user module access overrides', () => {
     const first = store.loadFromDb();
     const second = store.loadFromDb();
 
-    expect(permissionApiMocks.getPlatformPermissions).toHaveBeenCalledTimes(1);
-    expect(permissionApiMocks.getFactoryOverride).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getCurrentModulePermissions).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getPlatformPermissions).not.toHaveBeenCalled();
 
-    resolvePlatformPermissions([]);
+    resolvePlatformPermissions({ '*': 'rw' });
     await Promise.all([first, second]);
     await store.loadFromDb();
 
     expect(store.isDbLoaded).toBe(true);
-    expect(permissionApiMocks.getPlatformPermissions).toHaveBeenCalledTimes(1);
-    expect(permissionApiMocks.getFactoryOverride).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getCurrentModulePermissions).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getFactoryOverride).not.toHaveBeenCalled();
     expect(permissionApiMocks.getUserModuleAccess).toHaveBeenCalledTimes(1);
   });
 });

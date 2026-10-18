@@ -4,20 +4,18 @@
  * 4-layer resolution (per design spec 2026-04-18-permission-matrix-ai-driven-design.md):
  * - L2 (factory override from DB) → L1 (platform default from DB) → hardcoded fallback
  *
- * Hardcoded PERMISSION_MATRIX below is kept as FALLBACK for DB-unavailable scenarios
- * (initial load race, network error, offline). Primary source is API at login:
- * GET /api/admin/role-permissions + GET /F001/canvas/role-module-override.
+ * Factory accounts read the backend effective snapshot at login/refresh.
+ * The local matrix is retained only before the first read; a failed read denies access.
  */
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import {
   getPlatformPermissions,
-  getFactoryOverride,
   getUserModuleAccess,
+  getCurrentModulePermissions,
   type PlatformPermission,
   type RoleModuleOverride,
   type UserModuleAccessView,
-  type PermissionLevel as ApiPermissionLevel,
 } from '@/api/permissionApi';
 import { PRODUCTION_MODULE_REGISTRY, resolveModuleRegistryItem } from '@/config/moduleRegistry';
 import { DEPARTMENTS, DEPARTMENT_ORDER } from '@/views/restaurant/departments/departmentConfig';
@@ -504,8 +502,8 @@ export const usePermissionStore = defineStore('permission', () => {
   }
 
   /**
-   * Load permissions from L1 + L2 API, merge for current role, fill dbPermissions.
-   * Failures set dbLoadError and leave dbPermissions null (canWrite falls back to hardcoded).
+   * Load the backend effective snapshot for the current factory account.
+   * Failures deny module access and leave the load retryable.
    */
   function loadFromDb(): Promise<void> {
     const now = Date.now();
@@ -524,12 +522,11 @@ export const usePermissionStore = defineStore('permission', () => {
 
     const request = (async () => {
       try {
-        const [l1Rows, l2Map] = await Promise.all([
-          getPlatformPermissions(),
-          factoryId
-            ? getFactoryOverride(factoryId).catch(() => ({} as RoleModuleOverride))
-            : Promise.resolve({} as RoleModuleOverride),
-        ]);
+        // Factory accounts use the authorization service's effective snapshot.
+        // Sparse L1/L2 rows cannot safely be filled by a separate frontend matrix.
+        const effective = factoryId && role !== 'platform_admin'
+          ? await getCurrentModulePermissions(factoryId)
+          : mergeLayers(await getPlatformPermissions(), {}, role);
 
         let l4Rows: UserModuleAccessView[] = [];
         let l4Loaded = false;
@@ -546,14 +543,15 @@ export const usePermissionStore = defineStore('permission', () => {
 
         // A previous identity's slower response must never overwrite a newer login.
         if (permissionIdentity() !== identity) return;
-        dbPermissions.value = mergeLayers(l1Rows, l2Map, role);
+        dbPermissions.value = effective as ModulePermissions;
         if (l4Loaded) applyUserModuleAccess(l4Rows);
         isDbLoaded.value = true;
       } catch (e) {
         if (permissionIdentity() !== identity) return;
         dbLoadError.value = (e as Error)?.message || 'Failed to load permissions';
         isDbLoaded.value = false;
-        dbPermissions.value = null;
+        // A failed authoritative read must not turn into local default grants.
+        dbPermissions.value = {} as ModulePermissions;
         userModuleAccess.value = {};
         isUserModuleAccessLoaded.value = false;
       }
@@ -606,10 +604,10 @@ export const usePermissionStore = defineStore('permission', () => {
   }
 
   // Getters
-  // Phase 3: prefer DB-driven dbPermissions, fallback to hardcoded for race/offline/error.
+  // Prefer the authoritative snapshot (including an empty fail-closed snapshot).
   const currentPermissions = computed((): ModulePermissions => {
-    // Source selection: DB (L1+L2 merged) when loaded and for current role, else hardcoded fallback.
-    const source = (isDbLoaded.value && dbPermissions.value)
+    // Identity changes clear the snapshot; stale responses cannot replace the new identity.
+    const source = dbPermissions.value !== null
       ? dbPermissions.value
       : (PERMISSION_MATRIX[currentRole.value] || PERMISSION_MATRIX['unactivated']);
     const rolePerms: ModulePermissions = { ...source };
@@ -630,9 +628,11 @@ export const usePermissionStore = defineStore('permission', () => {
     //
     // 这样两件事自动成立: 工厂类型过滤把 restaurant 打成 '-' 时四个部门一起关;
     // 没声明部门的角色(绝大多数工厂角色)跟随上限。
-    const ceiling = rolePerms.restaurant ?? '-';
+    const ceiling = rolePerms.restaurant ?? rolePerms['*'] ?? '-';
     for (const dept of RESTAURANT_DEPARTMENT_MODULES) {
-      const declared = rolePerms[dept] ?? ceiling;
+      // The server's generic restaurant ceiling may omit the existing UI department
+      // subdivisions. Keep their narrower role boundaries until explicitly configured.
+      const declared = rolePerms[dept] ?? PERMISSION_MATRIX[currentRole.value]?.[dept] ?? ceiling;
       rolePerms[dept] = weakerOf(ceiling, declared);
     }
     // 财务部门整页都是金额。不在 PRICE_VIEW_ROLES 的角色进去只会看到满屏「—」,
@@ -663,7 +663,7 @@ export const usePermissionStore = defineStore('permission', () => {
 
   function permissionLevelFor(module: string): PermissionLevel {
     const permissionModule = permissionModuleFor(module);
-    return currentPermissions.value[permissionModule] || '-';
+    return currentPermissions.value[permissionModule] ?? currentPermissions.value['*'] ?? '-';
   }
 
   function canAccess(module: ModuleName): boolean {
