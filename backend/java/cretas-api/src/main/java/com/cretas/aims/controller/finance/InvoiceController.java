@@ -13,6 +13,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
+import com.cretas.aims.security.RowScopeSupported;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 
 /**
  * Bug #4 (P1 RBAC, 2026-04-18): Added class-level @RequirePermission so finance
@@ -26,7 +28,11 @@ import com.cretas.aims.annotation.RequireModule;
 @RequestMapping("/api/mobile/{factoryId}/finance/invoices")
 @RequiredArgsConstructor
 @RequirePermission("finance:read_write")
+@RowScopeSupported
 public class InvoiceController {
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
 
     private final InvoiceService invoiceService;
     private final com.cretas.aims.repository.InvoiceRecordRepository invoiceRecordRepository;
@@ -43,7 +49,11 @@ public class InvoiceController {
         var order = salesOrderRepository.findById(record.getSalesOrderId())
                 .filter(value -> factoryId.equals(value.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "发票关联订单不存在或无权访问"));
-        dataScopeResolver.assertCanAccess(factoryId, order.getCreatedBy());
+        if (financeRowScopeQuery != null) {
+            financeRowScopeQuery.requireSalesOrderOwner(factoryId, record.getSalesOrderId());
+        } else {
+            dataScopeResolver.assertCanAccess(factoryId, order.getCreatedBy());
+        }
         if (record.getStatus() != InvoiceStatus.ISSUED || record.getInvoicePdfUrl() == null
                 || record.getInvoicePdfUrl().isBlank()) {
             throw new BusinessException(409, "发票尚未出具或缺少PDF附件")
@@ -166,8 +176,13 @@ public class InvoiceController {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
         var pageable = PageRequest.of(safePage - 1, safeSize);
+        var owners = financeRowScopeQuery != null ? financeRowScopeQuery.recordCreators(factoryId) : null;
         var scope = com.cretas.aims.security.DataScopeContext.current();
-        var p = scope != null && scope.isFiltered()
+        var p = owners != null && owners.isEmpty()
+                ? org.springframework.data.domain.Page.<com.cretas.aims.entity.finance.InvoiceRecord>empty(pageable)
+                : owners != null
+                ? invoiceRecordRepository.findCustomerInvoicesInOrderScope(factoryId, customerId, owners, pageable)
+                : scope != null && scope.isFiltered()
                 ? invoiceRecordRepository.findCustomerInvoicesInOrderScope(
                     factoryId, customerId, dataScopeResolver.resolveCreatedByChain(scope), pageable)
                 : invoiceRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(

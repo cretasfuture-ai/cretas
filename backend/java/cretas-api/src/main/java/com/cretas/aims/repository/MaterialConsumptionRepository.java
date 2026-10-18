@@ -44,6 +44,19 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
                                               @Param("startTime") LocalDateTime startTime,
                                               @Param("endTime") LocalDateTime endTime);
 
+    /** Quantity-amount ledger scope: resolve ownership through the production plan or source batch. */
+    @Query("SELECT m FROM MaterialConsumption m "
+            + "LEFT JOIN m.productionPlan p LEFT JOIN m.batch b "
+            + "WHERE m.factoryId = :factoryId "
+            + "AND m.consumptionTime BETWEEN :startTime AND :endTime "
+            + "AND ((m.productionPlanId IS NOT NULL AND p.factoryId = :factoryId AND p.createdBy IN :owners) "
+            + "OR (m.productionPlanId IS NULL AND b.factoryId = :factoryId AND b.createdBy IN :owners))")
+    List<MaterialConsumption> findByTimeRangeAndSourceOwnerIn(
+            @Param("factoryId") String factoryId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime,
+            @Param("owners") java.util.Collection<Long> owners);
+
     /**
      * 计算生产计划的总消耗成本
      */

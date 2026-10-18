@@ -33,6 +33,8 @@ public interface PurchaseReceiveRecordRepository extends JpaRepository<PurchaseR
 
     Optional<PurchaseReceiveRecord> findByFactoryIdAndReceiveNumber(String factoryId, String receiveNumber);
 
+    Optional<PurchaseReceiveRecord> findByIdAndFactoryId(String id, String factoryId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from PurchaseReceiveRecord r where r.id = :id and r.factoryId = :factoryId")
     Optional<PurchaseReceiveRecord> findByIdAndFactoryIdForUpdate(

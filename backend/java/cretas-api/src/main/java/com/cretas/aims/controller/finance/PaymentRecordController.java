@@ -14,6 +14,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
+import com.cretas.aims.security.RowScopeSupported;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 
 /**
  * Bug #4 same-cause sweep (P1 RBAC, 2026-04-18): Added class-level
@@ -25,7 +27,11 @@ import com.cretas.aims.annotation.RequireModule;
 @RequestMapping("/api/mobile/{factoryId}/finance/payments")
 @RequiredArgsConstructor
 @RequirePermission("finance:read_write")
+@RowScopeSupported
 public class PaymentRecordController {
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private FinanceRowScopeQuery financeRowScopeQuery;
 
     private final PaymentRecordService paymentRecordService;
     private final com.cretas.aims.repository.PaymentRecordRepository paymentRecordRepository;
@@ -159,8 +165,13 @@ public class PaymentRecordController {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, 200));
         var pageable = PageRequest.of(safePage - 1, safeSize);
+        var owners = financeRowScopeQuery != null ? financeRowScopeQuery.recordCreators(factoryId) : null;
         var scope = com.cretas.aims.security.DataScopeContext.current();
-        var p = scope != null && scope.isFiltered()
+        var p = owners != null && owners.isEmpty()
+                ? org.springframework.data.domain.Page.<com.cretas.aims.entity.finance.PaymentRecord>empty(pageable)
+                : owners != null
+                ? paymentRecordRepository.findCustomerPaymentsInOrderScope(factoryId, customerId, owners, pageable)
+                : scope != null && scope.isFiltered()
                 ? paymentRecordRepository.findCustomerPaymentsInOrderScope(
                     factoryId, customerId, dataScopeResolver.resolveCreatedByChain(scope), pageable)
                 : paymentRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(

@@ -65,6 +65,10 @@ public class BalanceSheetService {
      * 生成资产负债表 (截至 year-month 月底).
      */
     public BalanceSheetDTO generate(String factoryId, Integer year, Integer month) {
+        return generate(factoryId, year, month, null);
+    }
+
+    public BalanceSheetDTO generate(String factoryId, Integer year, Integer month, List<String> voucherIds) {
         if (factoryId == null || factoryId.isBlank()) {
             throw new IllegalArgumentException("factoryId is required");
         }
@@ -79,8 +83,13 @@ public class BalanceSheetService {
         // Step 1: 聚合 subjectCode → totalDebit/totalCredit
         // F006 财务审计 Bug 6 (2026-07-04): 官方报表切到 POSTED-only 口径 (人工审核制,
         // DRAFT=待财务审核不计入官方报表, 与 结转损益/COST_CARRYOVER 保持一致), 见方法 javadoc。
-        List<SubjectAggregateRow> aggregates = voucherEntryRepo.aggregateBySubjectExcludingDraft(
-                factoryId, EPOCH_START, endDate);
+        List<Long> ownerScope = VoucherRowScopeContext.currentCreators();
+        List<SubjectAggregateRow> aggregates = ownerScope != null
+                ? mapSubjectRows(voucherEntryRepo.aggregateBySubjectExcludingDraftInOwnerScopeNative(
+                        factoryId, EPOCH_START, endDate, VoucherOwnershipSql.ownerIdsJson(ownerScope)))
+                : voucherIds == null
+                ? voucherEntryRepo.aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, endDate)
+                : voucherEntryRepo.aggregateBySubjectExcludingDraftInScope(factoryId, EPOCH_START, endDate, voucherIds);
 
         // Step 2: 一次性预取 factory 全部可见 Account, 建 code → Account 索引
         List<Account> allAccounts = accountRepo.findVisibleToFactory(factoryId);
@@ -200,8 +209,14 @@ public class BalanceSheetService {
 
         // Step 8: 待过账 (DRAFT) 凭证数 — 官方报表已切 POSTED-only, 用此字段告知财务
         // "报表数字看着少/为0" 的原因 (而不是悄悄漏算不说明). 见 pendingDraftVoucherCount javadoc.
-        long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
-                factoryId, VoucherStatus.DRAFT, EPOCH_START, endDate);
+        long pendingDraftCount = ownerScope != null
+                ? voucherRepo.countByFactoryIdAndOwnerScopeAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherOwnershipSql.ownerIdsJson(ownerScope), VoucherStatus.DRAFT.name(), EPOCH_START, endDate)
+                : voucherIds == null
+                ? voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, EPOCH_START, endDate)
+                : voucherRepo.countByFactoryIdAndIdInAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, voucherIds, VoucherStatus.DRAFT, EPOCH_START, endDate);
 
         return BalanceSheetDTO.builder()
                 .factoryId(factoryId)
@@ -221,6 +236,12 @@ public class BalanceSheetService {
                 .build();
     }
 
+    private List<SubjectAggregateRow> mapSubjectRows(List<Object[]> rows) {
+        return rows.stream().map(row -> new SubjectAggregateRow(
+                (String) row[0], (String) row[1], (BigDecimal) row[2], (BigDecimal) row[3],
+                ((Number) row[4]).longValue())).toList();
+    }
+
     // -------------------------------------------------------------------------
     // Excel 导出
     // -------------------------------------------------------------------------
@@ -231,7 +252,12 @@ public class BalanceSheetService {
      * @return 文件名 (含时间戳, 用于 Content-Disposition)
      */
     public String exportBalanceSheet(String factoryId, Integer year, Integer month, OutputStream out) {
-        BalanceSheetDTO dto = generate(factoryId, year, month);
+        return exportBalanceSheet(factoryId, year, month, out, null);
+    }
+
+    public String exportBalanceSheet(String factoryId, Integer year, Integer month, OutputStream out,
+                                     List<String> voucherIds) {
+        BalanceSheetDTO dto = generate(factoryId, year, month, voucherIds);
         List<List<Object>> rows = buildBalanceSheetRows(dto);
         writeRawRows(out, rows, "资产负债表");
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));

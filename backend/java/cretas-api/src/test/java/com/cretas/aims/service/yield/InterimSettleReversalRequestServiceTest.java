@@ -11,6 +11,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.InterimSettleReversalRequestRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.security.BusinessRowScope;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.yield.impl.InterimSettleReversalRequestServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -272,6 +273,27 @@ class InterimSettleReversalRequestServiceTest {
         assertThatThrownBy(() -> service.approve(REQ_ID, FACTORY, 99L, "finance_manager"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("INTERIM_REVERSE_REQUEST_NOT_PENDING"));
+        verify(reversalService, never()).reverseInterimSettle(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("行范围外撤销申请审批 → 403 且不执行逆转")
+    void approveOutOfScopePlanRejectedBeforeMutation() {
+        BusinessRowScope rowScope = mock(BusinessRowScope.class);
+        ReflectionTestUtils.setField(service, "businessRowScope", rowScope);
+        when(rowScope.creatorIds(FACTORY)).thenReturn(List.of(11L));
+
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY);
+        plan.setCreatedBy(99L);
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(requestRepository.findByIdAndFactoryId(REQ_ID, FACTORY))
+                .thenReturn(Optional.of(pendingRequest(1, LocalDateTime.now().minusHours(2))));
+
+        assertThatThrownBy(() -> service.approve(REQ_ID, FACTORY, 99L, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(403));
         verify(reversalService, never()).reverseInterimSettle(any(), any(), any(), any());
     }
 

@@ -6,6 +6,10 @@ import com.cretas.aims.dto.finance.VoucherExportRequestDTO;
 import com.cretas.aims.entity.enums.VoucherExportFileFormat;
 import com.cretas.aims.entity.enums.VoucherTargetSystem;
 import com.cretas.aims.service.finance.VoucherExportService;
+import com.cretas.aims.service.finance.VoucherRowScopeContext;
+import com.cretas.aims.service.finance.VoucherRowScopeQuery;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -13,9 +17,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.Callable;
 
 /**
  * SP11: 凭证序时账/科目余额表导出 API.
@@ -35,6 +42,10 @@ import java.nio.charset.StandardCharsets;
 public class VoucherExportController {
 
     private final VoucherExportService voucherExportService;
+    @Autowired(required = false)
+    private BusinessRowScope businessRowScope;
+    @Autowired(required = false)
+    private VoucherRowScopeQuery voucherRowScopeQuery;
 
     /**
      * 导出凭证序时账 xlsx.
@@ -42,6 +53,7 @@ public class VoucherExportController {
      * <p>Request body: {@link VoucherExportRequestDTO} (startDate, endDate, targetSystem).
      */
     @PostMapping("/voucher-export")
+    @RowScopeSupported
     public void exportSequentialLedger(
             @PathVariable String factoryId,
             @RequestBody @Valid VoucherExportRequestDTO req,
@@ -49,11 +61,11 @@ public class VoucherExportController {
             HttpServletResponse response) throws Exception {
 
         Long userId = (Long) request.getAttribute("userId");
-        if (userId == null) userId = 0L;
+        final Long exportUserId = userId == null ? 0L : userId;
 
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportSequentialLedger(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportSequentialLedger(
+                factoryId, req, exportUserId, response.getOutputStream()));
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename*=UTF-8''" + URLEncoder.encode(fileName, StandardCharsets.UTF_8));
         response.flushBuffer();
@@ -66,6 +78,7 @@ public class VoucherExportController {
      * <p>Query params: startDate, endDate, targetSystem.
      */
     @GetMapping("/subject-balance/export")
+    @RowScopeSupported
     public void exportSubjectBalance(
             @PathVariable String factoryId,
             @RequestParam String startDate,
@@ -75,7 +88,7 @@ public class VoucherExportController {
             HttpServletResponse response) throws Exception {
 
         Long userId = (Long) request.getAttribute("userId");
-        if (userId == null) userId = 0L;
+        final Long exportUserId = userId == null ? 0L : userId;
 
         VoucherExportRequestDTO req = VoucherExportRequestDTO.builder()
                 .startDate(java.time.LocalDate.parse(startDate))
@@ -84,8 +97,8 @@ public class VoucherExportController {
                 .build();
 
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportSubjectBalance(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportSubjectBalance(
+                factoryId, req, exportUserId, response.getOutputStream()));
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename*=UTF-8''" + URLEncoder.encode(fileName, StandardCharsets.UTF_8));
         response.flushBuffer();
@@ -97,6 +110,7 @@ public class VoucherExportController {
      * 六膳门客户两套金蝶版本都要用, 前端加了格式选择器 (见 voucher-export/index.vue).
      */
     @GetMapping("/voucher-import-template")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read_write"})
     public void exportKingdeeImportTemplate(
@@ -116,8 +130,8 @@ public class VoucherExportController {
                 .exportFormat(format)
                 .build();
         response.setContentType(contentTypeFor(format));
-        String fileName = voucherExportService.exportKingdeeImportTemplate(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportKingdeeImportTemplate(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[Kingdee] import template export: factoryId={} target={} format={} file={}",
@@ -136,6 +150,7 @@ public class VoucherExportController {
     }
 
     @GetMapping("/chronological-ledger/export")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
     public void exportChronologicalLedger(
@@ -149,14 +164,15 @@ public class VoucherExportController {
         Long userId = currentUserId(request);
         VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportChronologicalLedger(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportChronologicalLedger(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[Ledger] chronological export: factoryId={} file={}", factoryId, fileName);
     }
 
     @GetMapping("/general-ledger/export")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
     public void exportGeneralLedger(
@@ -170,14 +186,15 @@ public class VoucherExportController {
         Long userId = currentUserId(request);
         VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportGeneralLedger(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportGeneralLedger(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[Ledger] general ledger export: factoryId={} file={}", factoryId, fileName);
     }
 
     @GetMapping("/subsidiary-ledger/export")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
     public void exportSubsidiaryLedger(
@@ -191,14 +208,15 @@ public class VoucherExportController {
         Long userId = currentUserId(request);
         VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportSubsidiaryLedger(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportSubsidiaryLedger(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[Ledger] subsidiary ledger export: factoryId={} file={}", factoryId, fileName);
     }
 
     @GetMapping("/trial-balance/export")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
     public void exportTrialBalance(
@@ -212,14 +230,15 @@ public class VoucherExportController {
         Long userId = currentUserId(request);
         VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportTrialBalance(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportTrialBalance(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[Ledger] trial balance export: factoryId={} file={}", factoryId, fileName);
     }
 
     @GetMapping("/income-statement/export")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
     public void exportIncomeStatement(
@@ -233,14 +252,15 @@ public class VoucherExportController {
         Long userId = currentUserId(request);
         VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportIncomeStatement(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportIncomeStatement(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[FinanceReport] income statement export: factoryId={} file={}", factoryId, fileName);
     }
 
     @GetMapping("/quantity-amount-ledger/export")
+    @RowScopeSupported
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
     public void exportQuantityAmountLedger(
@@ -254,8 +274,8 @@ public class VoucherExportController {
         Long userId = currentUserId(request);
         VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String fileName = voucherExportService.exportQuantityAmountLedger(
-                factoryId, req, userId, response.getOutputStream());
+        String fileName = runScoped(factoryId, response, () -> voucherExportService.exportQuantityAmountLedger(
+                factoryId, req, userId, response.getOutputStream()));
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
         log.info("[FinanceReport] quantity amount ledger export: factoryId={} file={}", factoryId, fileName);
@@ -277,5 +297,20 @@ public class VoucherExportController {
     private void setAttachmentHeader(HttpServletResponse response, String fileName) {
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename*=UTF-8''" + URLEncoder.encode(fileName, StandardCharsets.UTF_8));
+    }
+
+    private String runScoped(String factoryId, HttpServletResponse response, Callable<String> operation) throws Exception {
+        List<Long> creators = BusinessRowScope.creators(businessRowScope, factoryId);
+        List<String> ids = null;
+        if (creators != null) {
+            if (voucherRowScopeQuery == null)
+                throw new com.cretas.aims.exception.BusinessException(503, "财务行级范围组件未就绪，访问已停止");
+            response.setHeader("X-Finance-Row-Scope", "RESTRICTED_SOURCE_OWNER_PROJECTION");
+            response.setHeader("X-Finance-Row-Scope-Note",
+                    "Visible source-owner vouchers only; unknown or damaged sources excluded; not a complete statutory report");
+        }
+        try (VoucherRowScopeContext ignored = VoucherRowScopeContext.open(ids, creators)) {
+            return operation.call();
+        }
     }
 }

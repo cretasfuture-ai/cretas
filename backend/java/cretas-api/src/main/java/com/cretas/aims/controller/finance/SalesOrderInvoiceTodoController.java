@@ -5,6 +5,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.service.finance.impl.SalesOrderInvoiceTodoProcessor;
+import com.cretas.aims.security.RowScopeSupported;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,6 +23,7 @@ import java.util.List;
 @RequirePermission("finance:read_write")
 @RequireModule("finance_ar")
 @RequireRole({"factory_super_admin", "platform_admin", "permission_admin", "finance_manager"})
+@RowScopeSupported
 public class SalesOrderInvoiceTodoController {
 
     private final SalesOrderInvoiceTodoProcessor processor;

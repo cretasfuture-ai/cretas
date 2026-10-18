@@ -8,6 +8,8 @@ import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
+import com.cretas.aims.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -20,6 +22,7 @@ import java.util.Optional;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -28,6 +31,7 @@ class ArApServiceImplBatchTransactionContractTest {
     private final CustomerRepository customers = mock(CustomerRepository.class);
     private final SupplierRepository suppliers = mock(SupplierRepository.class);
     private final CountingTransactionManager transactionManager = new CountingTransactionManager();
+    private final FinanceRowScopeQuery financeRowScopeQuery = mock(FinanceRowScopeQuery.class);
     private ArApServiceImpl service;
 
     @BeforeEach
@@ -98,6 +102,38 @@ class ArApServiceImplBatchTransactionContractTest {
         List<Map<String, String>> failures = (List<Map<String, String>>) result.get("failures");
         assertThat(failures).extracting(failure -> failure.get("reason"))
                 .containsOnly("该调整或余额已被其他操作修改，请刷新后重试");
+    }
+
+    @Test
+    void mixedApproveBatchIsRejectedBeforeAnyItemTransactionOrSave() {
+        when(financeRowScopeQuery.creators("F-TX")).thenReturn(List.of(1L));
+        doThrow(new BusinessException(403, "该记录不在当前账号的数据范围内"))
+                .when(financeRowScopeQuery).requireTransactionAccess("F-TX", "hidden");
+        ReflectionTestUtils.setField(service, "financeRowScopeQuery", financeRowScopeQuery);
+
+        assertThatThrownBy(() -> service.batchApproveAdjustments(
+                "F-TX", List.of("visible", "hidden"), 2L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(403));
+        assertThat(transactionManager.commits).isZero();
+        assertThat(transactionManager.rollbacks).isZero();
+        verify(transactions, never()).save(any(ArApTransaction.class));
+    }
+
+    @Test
+    void mixedRejectBatchIsRejectedBeforeAnyItemTransactionOrSave() {
+        when(financeRowScopeQuery.creators("F-TX")).thenReturn(List.of(1L));
+        doThrow(new BusinessException(403, "该记录不在当前账号的数据范围内"))
+                .when(financeRowScopeQuery).requireTransactionAccess("F-TX", "hidden");
+        ReflectionTestUtils.setField(service, "financeRowScopeQuery", financeRowScopeQuery);
+
+        assertThatThrownBy(() -> service.batchRejectAdjustments(
+                "F-TX", List.of("visible", "hidden"), 2L, "不符合条件"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(403));
+        assertThat(transactionManager.commits).isZero();
+        assertThat(transactionManager.rollbacks).isZero();
+        verify(transactions, never()).save(any(ArApTransaction.class));
     }
 
     private ArApTransaction pending(String id) {

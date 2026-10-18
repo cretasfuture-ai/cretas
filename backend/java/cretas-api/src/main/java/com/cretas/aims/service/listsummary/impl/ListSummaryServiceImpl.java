@@ -7,6 +7,7 @@ import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
+import com.cretas.aims.security.BusinessRowScope;
 import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.listsummary.ListSummaryService;
@@ -55,6 +56,9 @@ public class ListSummaryServiceImpl implements ListSummaryService {
     // though both claim to show "低库存".
     private final MaterialBatchService materialBatchService;
     private final DataScopeResolver dataScopeResolver;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BusinessRowScope businessRowScope;
 
     private static final Set<String> SUPPORTED = Set.of(
             "salesOrder", "purchaseOrder", "inventory", "wastage", "attendance",
@@ -381,8 +385,18 @@ public class ListSummaryServiceImpl implements ListSummaryService {
         appendDateRange(sql, "p.planned_date", from, to);
         sql.append(" GROUP BY ").append(canonicalUnitSql).append(" ORDER BY canonical_unit");
 
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        if (creatorIds != null) {
+            if (creatorIds.isEmpty()) {
+                sql.insert(sql.indexOf(" GROUP BY"), " AND 1 = 0");
+            } else {
+                sql.insert(sql.indexOf(" GROUP BY"), " AND p.created_by IN (:creatorIds)");
+            }
+        }
+
         Query q = em.createNativeQuery(sql.toString());
         q.setParameter("fid", factoryId);
+        if (creatorIds != null && !creatorIds.isEmpty()) q.setParameter("creatorIds", creatorIds);
         if (keyword != null && !keyword.isBlank()) q.setParameter("keyword", keyword);
         if (bindStatus) q.setParameter("status", status);
         if (from != null) q.setParameter("dateFrom", from);

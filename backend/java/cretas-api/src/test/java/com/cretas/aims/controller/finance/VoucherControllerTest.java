@@ -51,6 +51,9 @@ class VoucherControllerTest {
     @Mock
     private VoucherEntryRepository voucherEntryRepo;
 
+    @Mock
+    private com.cretas.aims.security.BusinessRowScope businessRowScope;
+
     private MockMvc mockMvc;
 
     private static final String FACTORY_ID = "F006";
@@ -64,8 +67,12 @@ class VoucherControllerTest {
 
     @BeforeEach
     void setUp() {
+        // These legacy ALL-scope route tests bypass Spring injection; wire the required scope component explicitly.
+        when(businessRowScope.creatorIds(FACTORY_ID)).thenReturn(null);
+        VoucherController controller = new VoucherController(voucherService, voucherRepo, voucherEntryRepo);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "businessRowScope", businessRowScope);
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new VoucherController(voucherService, voucherRepo, voucherEntryRepo))
+                .standaloneSetup(controller)
                 .build();
     }
 

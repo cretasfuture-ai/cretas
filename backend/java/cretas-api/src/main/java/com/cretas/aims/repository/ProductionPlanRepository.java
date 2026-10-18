@@ -8,6 +8,7 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -28,7 +29,8 @@ import java.util.Optional;
  * @since 2025-01-09
  */
 @Repository
-public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, String> {
+public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, String>,
+        JpaSpecificationExecutor<ProductionPlan> {
 
     /**
      * 根据计划编号查找
@@ -70,6 +72,9 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      * 查找工厂的所有生产计划
      */
     List<ProductionPlan> findByFactoryId(String factoryId);
+
+    /** Database-level creator filter for unpaged alternate production-plan cards. */
+    List<ProductionPlan> findByFactoryIdAndCreatedByIn(String factoryId, Collection<Long> creatorIds);
 
     /**
      * 按 id 前缀查计划 (①d 复用半成品前段血缘: SFI 锚 {@code CLK-SEMI-{planId8}-...} 只留 planId 前 8 位,
@@ -625,6 +630,18 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             @Param("factoryId") String factoryId,
             @Param("salesOrderId") String salesOrderId);
 
+    /** Row-scoped variant used by the production-plan alternate lookup entry point. */
+    @Query("SELECT p FROM ProductionPlan p " +
+           "WHERE p.factoryId = :factoryId " +
+           "AND p.createdBy IN :creatorIds " +
+           "AND p.sourceOrderId = :salesOrderId " +
+           "AND p.deletedAt IS NULL " +
+           "ORDER BY p.createdAt DESC")
+    List<ProductionPlan> findByFactoryIdAndCreatedByInAndSourceOrderIdExact(
+            @Param("factoryId") String factoryId,
+            @Param("creatorIds") Collection<Long> creatorIds,
+            @Param("salesOrderId") String salesOrderId);
+
     /**
      * SP5 双向检索 — 销售单 → 合并生产单 (JSONB @> containment, 依赖 GIN 索引 V20261023_01).
      *
@@ -644,6 +661,19 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
            nativeQuery = true)
     List<ProductionPlan> findByFactoryIdAndSourceOrderIdsContaining(
             @Param("factoryId") String factoryId,
+            @Param("soIdJson") String soIdJson);   // caller passes: "[\"<soId>\"]"
+
+    /** Native row-scoped variant; callers must short-circuit an empty creator list. */
+    @Query(value = "SELECT * FROM production_plans " +
+                   "WHERE factory_id = :factoryId " +
+                   "AND created_by IN (:creatorIds) " +
+                   "AND source_order_ids @> CAST(:soIdJson AS jsonb) " +
+                   "AND deleted_at IS NULL " +
+                   "ORDER BY created_at DESC",
+           nativeQuery = true)
+    List<ProductionPlan> findByFactoryIdAndCreatedByInAndSourceOrderIdsContaining(
+            @Param("factoryId") String factoryId,
+            @Param("creatorIds") Collection<Long> creatorIds,
             @Param("soIdJson") String soIdJson);   // caller passes: "[\"<soId>\"]"
 
     /**

@@ -15,6 +15,9 @@ public interface ArApPaymentAllocationRepository extends JpaRepository<ArApPayme
     Optional<ArApPaymentAllocation> findByFactoryIdAndPaymentTransactionIdAndPayableTransactionId(
             String factoryId, String paymentTransactionId, String payableTransactionId);
 
+    List<ArApPaymentAllocation> findByFactoryIdAndPaymentTransactionIdOrderByCreatedAtAsc(
+            String factoryId, String paymentTransactionId);
+
     List<ArApPaymentAllocation> findByFactoryIdAndPayableTransactionIdOrderByCreatedAtAsc(
             String factoryId, String payableTransactionId);
 }

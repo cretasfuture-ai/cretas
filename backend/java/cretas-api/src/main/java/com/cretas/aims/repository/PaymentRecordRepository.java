@@ -15,6 +15,8 @@ import java.util.List;
 @Repository
 public interface PaymentRecordRepository extends JpaRepository<PaymentRecord, String> {
 
+    java.util.Optional<PaymentRecord> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
+
     Page<PaymentRecord> findByFactoryIdAndDeletedAtIsNull(String factoryId, Pageable pageable);
 
     Page<PaymentRecord> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, PaymentRecordStatus status, Pageable pageable);
@@ -71,4 +73,21 @@ public interface PaymentRecordRepository extends JpaRepository<PaymentRecord, St
                                         @Param("status") String status,
                                         @Param("paymentMethod") String paymentMethod,
                                         Pageable pageable);
+
+    @Query(value = "SELECT p.* FROM payment_records p LEFT JOIN sales_orders o ON o.id=p.sales_order_id "
+            + "AND o.factory_id=p.factory_id AND o.deleted_at IS NULL "
+            + "WHERE p.factory_id=:factoryId AND p.deleted_at IS NULL "
+            + "AND (CAST(:status AS text) IS NULL OR p.status=CAST(:status AS text)) "
+            + "AND (CAST(:paymentMethod AS text) IS NULL OR p.payment_method=CAST(:paymentMethod AS text)) "
+            + "AND (o.created_by IN (:owners) OR (p.sales_order_id IS NULL AND p.recorded_by IN (:owners))) "
+            + "ORDER BY p.created_at DESC",
+            countQuery = "SELECT COUNT(*) FROM payment_records p LEFT JOIN sales_orders o ON o.id=p.sales_order_id "
+            + "AND o.factory_id=p.factory_id AND o.deleted_at IS NULL "
+            + "WHERE p.factory_id=:factoryId AND p.deleted_at IS NULL "
+            + "AND (CAST(:status AS text) IS NULL OR p.status=CAST(:status AS text)) "
+            + "AND (CAST(:paymentMethod AS text) IS NULL OR p.payment_method=CAST(:paymentMethod AS text)) "
+            + "AND (o.created_by IN (:owners) OR (p.sales_order_id IS NULL AND p.recorded_by IN (:owners)))", nativeQuery = true)
+    Page<PaymentRecord> searchPaymentsInOrderScope(@Param("factoryId") String factoryId,
+            @Param("status") String status, @Param("paymentMethod") String paymentMethod,
+            @Param("owners") List<Long> owners, Pageable pageable);
 }

@@ -168,6 +168,12 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     Page<MaterialBatch> findByFactoryIdAndCreatedByIn(
             String factoryId, java.util.Collection<Long> createdByList, Pageable pageable);
 
+    /** Quantity-amount ledger scope: constrain owner and receipt window before paging. */
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    Page<MaterialBatch> findByFactoryIdAndCreatedByInAndReceiptDateBetween(
+            String factoryId, java.util.Collection<Long> createdByList,
+            LocalDate startDate, LocalDate endDate, Pageable pageable);
+
     /**
      * Sprint 6 W2-B — DataScope + keyword combo DB-side filter.
      */

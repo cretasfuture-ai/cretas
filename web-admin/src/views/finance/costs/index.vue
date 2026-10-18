@@ -136,6 +136,8 @@ function getTransactionTypeTag(type: string) {
 
 <template>
   <div class="page-wrapper" v-loading="loading" empty-text="暂无数据">
+    <el-alert v-if="canViewPrice && overview?.scopeApplied" type="info" :closable="false" show-icon
+      title="仅显示当前授权范围内的账目与金额，不代表全工厂余额。" />
     <!-- 财务概览 KPI -->
     <div class="kpi-row" v-if="overview">
       <div v-if="canViewPrice" class="kpi-card receivable">
@@ -227,7 +229,7 @@ function getTransactionTypeTag(type: string) {
             </span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canViewPrice" prop="balanceAfter" label="余额" width="130" align="right">
+        <el-table-column v-if="canViewPrice && overview && !overview.scopeApplied" prop="balanceAfter" label="余额" width="130" align="right">
           <template #default="{ row }">
             {{ formatMoney(row.balanceAfter) }}
           </template>

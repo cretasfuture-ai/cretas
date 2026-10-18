@@ -9,6 +9,7 @@ import com.cretas.aims.dto.finance.UnallocatedApPaymentDTO;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.finance.PayableSettlementService;
 import com.cretas.aims.utils.TokenUtils;
+import com.cretas.aims.security.RowScopeSupported;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -30,6 +31,7 @@ import java.util.List;
 @Tag(name = "应付核销", description = "财务专用的开放应付付款与核销")
 @RequireModule("finance_ap")
 @RequirePermission("finance:read_write")
+@RowScopeSupported
 public class PayableSettlementController {
 
     private final PayableSettlementService settlementService;

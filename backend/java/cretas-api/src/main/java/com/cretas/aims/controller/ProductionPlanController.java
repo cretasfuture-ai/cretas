@@ -27,6 +27,8 @@ import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.security.PriceMaskResolver;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.RowScopeSupported;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.production.CustomerSuppliedSettlementCoverageGuard;
@@ -49,6 +51,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -77,6 +80,7 @@ import com.cretas.aims.exception.BusinessException;
 @RequiredArgsConstructor
 @Tag(name = "生产计划管理", description = "生产计划管理相关接口")
 @RequireModule("production_plan")
+@RowScopeSupported
 public class ProductionPlanController {
 
     private final ProductionPlanService productionPlanService;
@@ -90,6 +94,9 @@ public class ProductionPlanController {
     private final ProductionTransitLedgerRepository transitLedgerRepository;
     private final ProductionSummaryService productionSummaryService;
     private final CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
+
+    @Autowired
+    private BusinessRowScope businessRowScope;
 
     /**
      * 创建生产计划
@@ -483,9 +490,32 @@ public class ProductionPlanController {
             @Parameter(description = "状态过滤: OPEN / RESOLVED / VOIDED, 不传返回全部")
             @RequestParam(required = false) String status) {
 
-        List<ProductionTransitLedger> ledgers = (status != null && !status.isBlank())
-                ? transitLedgerRepository.findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, status.toUpperCase())
-                : transitLedgerRepository.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        List<ProductionTransitLedger> ledgers;
+        if (creatorIds == null) {
+            ledgers = (status != null && !status.isBlank())
+                    ? transitLedgerRepository.findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(
+                            factoryId, status.toUpperCase())
+                    : transitLedgerRepository.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+        } else if (creatorIds.isEmpty()) {
+            ledgers = List.of();
+        } else {
+            List<String> visiblePlanIds = planRepository.findByFactoryIdAndCreatedByIn(factoryId, creatorIds).stream()
+                    .map(ProductionPlan::getId)
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+            if (visiblePlanIds.isEmpty()) {
+                ledgers = List.of();
+            } else {
+                ledgers = (status != null && !status.isBlank())
+                        ? transitLedgerRepository
+                                .findByFactoryIdAndStatusAndProductionPlanIdInAndDeletedAtIsNullOrderByCreatedAtDesc(
+                                        factoryId, status.toUpperCase(), visiblePlanIds)
+                        : transitLedgerRepository
+                                .findByFactoryIdAndProductionPlanIdInAndDeletedAtIsNullOrderByCreatedAtDesc(
+                                        factoryId, visiblePlanIds);
+            }
+        }
 
         List<ProductionTransitLedgerDTO> dtos = ledgers.stream()
                 .map(l -> ProductionTransitLedgerDTO.builder()
@@ -1158,10 +1188,10 @@ public class ProductionPlanController {
     public void exportProductionPlans(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
-            @Parameter(description = "开始日期", required = true, example = "2025-01-01")
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @Parameter(description = "结束日期", required = true, example = "2025-01-31")
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @Parameter(description = "开始日期（省略时导出授权范围）", example = "2025-01-01")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "结束日期（省略时导出授权范围）", example = "2025-01-31")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
             @RequestHeader("Authorization") String authorization,
             HttpServletResponse response) throws IOException {
 
@@ -1226,7 +1256,12 @@ public class ProductionPlanController {
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId) {
 
-        List<ProductionPlan> plans = planRepository.findByFactoryId(factoryId).stream()
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        List<ProductionPlan> scopedPlans = creatorIds == null
+                ? planRepository.findByFactoryId(factoryId)
+                : (creatorIds.isEmpty() ? List.of()
+                        : planRepository.findByFactoryIdAndCreatedByIn(factoryId, creatorIds));
+        List<ProductionPlan> plans = scopedPlans.stream()
                 .filter(p -> {
                     ProductionPlanStatus s = p.getStatus();
                     return s == ProductionPlanStatus.IN_PROGRESS
@@ -1270,10 +1305,21 @@ public class ProductionPlanController {
         // R23 audit C3+I6: was inline whitelist + findAll().stream().filter() — full table scan
         // loading ALL factories' SOs into JVM heap before filtering (multi-tenant data leak risk).
         // Now JPQL push-down + centralized SO_PLANNABLE.
-        List<SalesOrder> orders = salesOrderRepository.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
-                factoryId,
-                com.cretas.aims.domain.OrderUsageWhitelists.SO_PLANNABLE,
-                org.springframework.data.domain.PageRequest.of(0, 200));
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        List<SalesOrder> orders;
+        if (creatorIds == null) {
+            orders = salesOrderRepository.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                    factoryId,
+                    com.cretas.aims.domain.OrderUsageWhitelists.SO_PLANNABLE,
+                    org.springframework.data.domain.PageRequest.of(0, 200));
+        } else if (creatorIds.isEmpty()) {
+            orders = List.of();
+        } else {
+            orders = salesOrderRepository.findByFactoryIdAndCreatedByInAndStatusInOrderByCreatedAtDesc(
+                    factoryId, creatorIds,
+                    com.cretas.aims.domain.OrderUsageWhitelists.SO_PLANNABLE,
+                    org.springframework.data.domain.PageRequest.of(0, 200)).getContent();
+        }
 
         List<Map<String, Object>> result = orders.stream().map(so -> {
             Map<String, Object> m = new HashMap<>();
@@ -1337,7 +1383,12 @@ public class ProductionPlanController {
         java.util.Set<String> seenIds = new java.util.LinkedHashSet<>();
         List<ProductionPlanDTO> results = new java.util.ArrayList<>();
 
-        planRepository.findByFactoryIdAndSourceOrderIdExact(factoryId, salesOrderId)
+        List<Long> creatorIds = BusinessRowScope.creators(businessRowScope, factoryId);
+        (creatorIds == null
+                ? planRepository.findByFactoryIdAndSourceOrderIdExact(factoryId, salesOrderId)
+                : (creatorIds.isEmpty() ? List.<com.cretas.aims.entity.ProductionPlan>of()
+                        : planRepository.findByFactoryIdAndCreatedByInAndSourceOrderIdExact(
+                                factoryId, creatorIds, salesOrderId)))
                 .forEach(p -> {
                     if (seenIds.add(p.getId())) {
                         results.add(productionPlanService.toPlanDTO(p));
@@ -1346,7 +1397,11 @@ public class ProductionPlanController {
 
         // 路径2: source_order_ids @> ["<soId>"] JSONB 包含 (多 SO 合并场景)
         String soIdJson = "[\"" + salesOrderId.replace("\"", "\\\"") + "\"]";
-        planRepository.findByFactoryIdAndSourceOrderIdsContaining(factoryId, soIdJson)
+        (creatorIds == null
+                ? planRepository.findByFactoryIdAndSourceOrderIdsContaining(factoryId, soIdJson)
+                : (creatorIds.isEmpty() ? List.<com.cretas.aims.entity.ProductionPlan>of()
+                        : planRepository.findByFactoryIdAndCreatedByInAndSourceOrderIdsContaining(
+                                factoryId, creatorIds, soIdJson)))
                 .forEach(p -> {
                     if (seenIds.add(p.getId())) {
                         results.add(productionPlanService.toPlanDTO(p));
@@ -1386,6 +1441,7 @@ public class ProductionPlanController {
 
         ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
+        BusinessRowScope.requireOwner(businessRowScope, factoryId, plan.getCreatedBy());
 
         java.util.List<String> ids = plan.getSourceOrderIds() != null && !plan.getSourceOrderIds().isEmpty()
                 ? plan.getSourceOrderIds()

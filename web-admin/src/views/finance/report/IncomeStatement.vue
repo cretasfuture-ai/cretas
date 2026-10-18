@@ -27,6 +27,9 @@
         </div>
       </template>
 
+      <el-alert v-if="data?.scopeApplied" type="info" :closable="false" show-icon
+        :title="data.scopeLabel" :description="data.scopeNote" style="margin-bottom: 16px;" />
+
       <el-skeleton v-if="loading" :rows="10" animated />
       <div v-else-if="!data" class="empty">
         <el-empty description="暂无数据 — 请选择期间后点击刷新" />
