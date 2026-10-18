@@ -55,7 +55,7 @@ import {
   type CustomerSuppliedMaterialRequirement,
 } from './salesOrderSupplyContract';
 import { toDateString } from '@/utils/dateFormat';
-import { formatUnitPrice, salesOrderDisplayMoney, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
+import { formatUnitPrice, salesOrderDisplayMoney, salesOrderReceivableAmount, salesOrderRemainingAmount, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
 import { createAutoFullChildShipment } from './deliveryAutoChild';
 
 const route = useRoute();
@@ -1606,10 +1606,7 @@ function openPaymentDialog() {
 }
 
 function computedRemainingAmount() {
-  if (!order.value) return 0;
-  const total = Number(order.value.totalAmount || 0);
-  const paid = Number(order.value.paidAmount || 0);
-  return Math.max(0, total - paid);
+  return salesOrderRemainingAmount(order.value);
 }
 
 // fool-proof-design Rule 1 (block-not-clamp fix): 登记收款此前完全无上限 — 只显示 "待收 X"
@@ -2477,7 +2474,7 @@ async function handleQuickPayFull() {
                    Auto-fills remaining amount + BANK_TRANSFER + today; bypasses dialog form. -->
               <el-button v-if="canWrite && canWriteFinance && computedRemainingAmount() > 0" type="success"
                          :loading="submitting" @click="handleQuickPayFull">一键收款 (全额)</el-button>
-              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已收 {{ formatAmount(order.paidAmount || 0) }} / 待收 {{ formatAmount(computedRemainingAmount()) }}</span>
+              <span v-if="canViewPrice" class="tab-hint">应收总额（含税）{{ formatAmount(salesOrderReceivableAmount(order)) }} / 已收 {{ formatAmount(order.paidAmount || 0) }} / 待收 {{ formatAmount(computedRemainingAmount()) }}</span>
             </div>
 
             <!-- 🔴「查不到」不能长成「没有」: 加载失败时明确说出来 + 给下一步动作, 不再静默空表。 -->

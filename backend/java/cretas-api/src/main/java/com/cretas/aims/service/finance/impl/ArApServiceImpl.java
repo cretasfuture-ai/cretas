@@ -598,8 +598,8 @@ public class ArApServiceImpl implements ArApService {
                 BigDecimal totalPaid = transactionRepository
                         .sumArPaymentsBySalesOrderId(factoryId, salesOrderId);
                 so.setPaidAmount(totalPaid != null ? totalPaid : BigDecimal.ZERO);
-                boolean settled = so.getTotalAmount() != null
-                        && so.getPaidAmount().compareTo(so.getTotalAmount()) >= 0;
+                boolean settled = so.getPayableAmount() != null
+                        && so.getPaidAmount().compareTo(so.getPayableAmount()) >= 0;
                 so.setSettlementFlag(settled);
                 salesOrderRepository.save(so);
                 log.info("销售订单收款状态已更新: salesOrderId={}, totalPaid={}, settled={}",
