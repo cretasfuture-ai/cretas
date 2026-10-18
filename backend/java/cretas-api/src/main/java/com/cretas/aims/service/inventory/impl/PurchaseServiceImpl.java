@@ -297,6 +297,9 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.security.BusinessRowScope receivingRowScope;
+
     /**
      * Phase 4a follow-up (issue #45) — self-proxy reference for Spring AOP aspect interception.
      *
@@ -1864,27 +1867,42 @@ public class PurchaseServiceImpl implements PurchaseService {
     @Transactional(readOnly = true)
     public List<PurchaseReceivingTaskResponse> getPendingReceivingTasks(
             String factoryId, String purchaseOrderId, String orderNumber) {
+        List<Long> creators = com.cretas.aims.security.BusinessRowScope.recordCreators(receivingRowScope, factoryId);
+        if (creators != null && creators.isEmpty()) return List.of();
         LinkedHashMap<String, PurchaseOrder> candidates = new LinkedHashMap<>();
         if (purchaseOrderId != null && !purchaseOrderId.isBlank()) {
-            PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryId(purchaseOrderId, factoryId)
-                    .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
-            candidates.put(order.getId(), order);
+            if (creators == null) {
+                PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryId(purchaseOrderId, factoryId)
+                        .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+                candidates.put(order.getId(), order);
+            } else {
+                purchaseOrderRepository.findByIdAndFactoryIdAndCreatedByIn(purchaseOrderId, factoryId, creators)
+                        .ifPresent(order -> candidates.put(order.getId(), order));
+            }
         } else if (orderNumber != null && !orderNumber.isBlank()) {
-            PurchaseOrder order = purchaseOrderRepository.findByFactoryIdAndOrderNumber(factoryId, orderNumber.trim())
-                    .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
-            candidates.put(order.getId(), order);
+            if (creators == null) {
+                PurchaseOrder order = purchaseOrderRepository.findByFactoryIdAndOrderNumber(factoryId, orderNumber.trim())
+                        .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+                candidates.put(order.getId(), order);
+            } else {
+                purchaseOrderRepository.findByFactoryIdAndOrderNumberAndCreatedByIn(factoryId, orderNumber.trim(), creators)
+                        .ifPresent(order -> candidates.put(order.getId(), order));
+            }
         } else {
             PageRequest page = PageRequest.of(0, 500, Sort.by(Sort.Direction.ASC, "expectedDeliveryDate")
                     .and(Sort.by(Sort.Direction.DESC, "createdAt")));
-            purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
-                    factoryId, PurchaseOrderStatus.FINANCE_APPROVED, page)
-                    .forEach(order -> candidates.put(order.getId(), order));
-            purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
-                    factoryId, PurchaseOrderStatus.PARTIAL_RECEIVED, page)
-                    .forEach(order -> candidates.put(order.getId(), order));
+            for (PurchaseOrderStatus status : List.of(PurchaseOrderStatus.FINANCE_APPROVED,
+                    PurchaseOrderStatus.PARTIAL_RECEIVED)) {
+                var orders = creators == null
+                        ? purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, page)
+                        : purchaseOrderRepository.findByFactoryIdAndStatusAndCreatedByInOrderByCreatedAtDesc(
+                                factoryId, status, creators, page);
+                orders.forEach(order -> candidates.put(order.getId(), order));
+            }
         }
 
         return candidates.values().stream()
+                .filter(order -> creators == null || (order.getCreatedBy() != null && creators.contains(order.getCreatedBy())))
                 .filter(order -> order.getStatus() == PurchaseOrderStatus.FINANCE_APPROVED
                         || order.getStatus() == PurchaseOrderStatus.PARTIAL_RECEIVED)
                 .map(this::toReceivingTask)

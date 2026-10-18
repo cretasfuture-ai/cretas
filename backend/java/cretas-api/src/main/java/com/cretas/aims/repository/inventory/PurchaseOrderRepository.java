@@ -65,6 +65,9 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
 
     Page<PurchaseOrder> findByFactoryIdAndStatusOrderByCreatedAtDesc(String factoryId, PurchaseOrderStatus status, Pageable pageable);
 
+    Page<PurchaseOrder> findByFactoryIdAndStatusAndCreatedByInOrderByCreatedAtDesc(
+            String factoryId, PurchaseOrderStatus status, List<Long> createdByList, Pageable pageable);
+
     /**
      * 销售下单「发得出货吗」的<b>在途采购</b>一档 —— 按租户 + 一组状态取采购单.
      *
@@ -88,6 +91,10 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
      * 但以单个 SQL 完成，消除 audit 扫描的 "findById without factoryId guard" 误报。
      */
     Optional<PurchaseOrder> findByIdAndFactoryId(String id, String factoryId);
+
+    Optional<PurchaseOrder> findByIdAndFactoryIdAndCreatedByIn(String id, String factoryId, List<Long> creators);
+
+    Optional<PurchaseOrder> findByFactoryIdAndOrderNumberAndCreatedByIn(String factoryId, String orderNumber, List<Long> creators);
 
     /**
      * OA submit boundary lock.  The purchase order and its workflow instance must be
