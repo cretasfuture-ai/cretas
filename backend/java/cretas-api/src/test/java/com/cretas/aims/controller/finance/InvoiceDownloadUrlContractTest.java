@@ -70,7 +70,8 @@ class InvoiceDownloadUrlContractTest {
     @ParameterizedTest @EnumSource(value=InvoiceStatus.class, names="ISSUED", mode=EnumSource.Mode.EXCLUDE)
     void rejectsUnissuedInvoiceEvenWithStoredUrl(InvoiceStatus status) {
         invoice.setStatus(status);
-        assertThatThrownBy(() -> controller.downloadUrl("TEST-A", "INV-1")).isInstanceOf(BusinessException.class).hasMessageContaining("尚未出具");
+        assertThatThrownBy(() -> controller.downloadUrl("TEST-A", "INV-1")).isInstanceOf(BusinessException.class).hasMessageContaining("尚未出具")
+                .satisfies(error -> assertThat(((BusinessException) error).getActionHint()).contains("开票记录"));
         verifyNoInteractions(oss);
     }
     @Test void rejectsMissingPdfAndSigningFailure() {

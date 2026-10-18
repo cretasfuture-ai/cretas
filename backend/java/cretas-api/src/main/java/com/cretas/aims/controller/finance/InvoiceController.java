@@ -46,7 +46,9 @@ public class InvoiceController {
         dataScopeResolver.assertCanAccess(factoryId, order.getCreatedBy());
         if (record.getStatus() != InvoiceStatus.ISSUED || record.getInvoicePdfUrl() == null
                 || record.getInvoicePdfUrl().isBlank()) {
-            throw new BusinessException(409, "发票尚未出具或缺少PDF附件");
+            throw new BusinessException(409, "发票尚未出具或缺少PDF附件")
+                    .withHint("请到销售订单的开票记录核对审核、出具状态；已出具但缺少PDF时请联系财务核对附件")
+                    .withHintTarget("销售订单");
         }
         String url = ossService.generatePresignedUrl(record.getInvoicePdfUrl(), 300);
         if (url == null || url.isBlank()) throw new BusinessException(503, "发票下载链接生成失败，请重试");
