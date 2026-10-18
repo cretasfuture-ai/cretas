@@ -87,14 +87,14 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
         // Bug 5 fix (defense-in-depth, 2026-07): 超额收款此前只有前端 computedRemainingAmount()
         // 拦截 —— 非 UI 客户端 (直接调 API) 可绕过。镜像前端 paymentOverLimit 的上限逻辑,
         // 服务端也拒绝 amount > 待收余额 (totalAmount - paidAmount), 与 400/409 loud-fail 一致。
-        BigDecimal totalAmount = so.getTotalAmount() != null ? so.getTotalAmount() : BigDecimal.ZERO;
+        BigDecimal totalAmount = so.getPayableAmount() != null ? so.getPayableAmount() : BigDecimal.ZERO;
         BigDecimal paidAmount = so.getPaidAmount() != null ? so.getPaidAmount() : BigDecimal.ZERO;
         BigDecimal remaining = totalAmount.subtract(paidAmount).max(BigDecimal.ZERO);
         if (amount != null && amount.compareTo(remaining) > 0) {
             throw new com.cretas.aims.exception.BusinessException(409, String.format(
                     "收款金额 ¥%s 超过该订单待收余额 ¥%s, 请调低",
                     amount.stripTrailingZeros().toPlainString(), remaining.stripTrailingZeros().toPlainString()))
-                    .withHint("待收余额 = 订单总额 - 已收金额, 请核实收款金额后重试")
+                    .withHint("待收余额 = 含税应收总额（扣除折扣）- 已收金额, 请核实收款金额后重试")
                     .withHintTarget(salesOrderId);
         }
 
@@ -276,7 +276,7 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
         BigDecimal totalPaid = paymentRecordRepository.sumVerifiedAmountBySalesOrderId(salesOrderId);
         so.setPaidAmount(totalPaid);
 
-        boolean settled = so.getTotalAmount() != null && totalPaid.compareTo(so.getTotalAmount()) >= 0;
+        boolean settled = so.getPayableAmount() != null && totalPaid.compareTo(so.getPayableAmount()) >= 0;
         so.setSettlementFlag(settled);
         salesOrderRepository.save(so);
 

@@ -1,5 +1,21 @@
 import { roundMoney, type RowLike } from './salesOrderGuards';
 
+/** Server payableAmount includes tax and discount; legacy responses may omit this getter. */
+interface ReceivableOrder {
+  totalAmount?: unknown; payableAmount?: unknown; discountAmount?: unknown; taxAmount?: unknown;
+  paidAmount?: unknown;
+}
+
+export function salesOrderReceivableAmount(order: ReceivableOrder | null | undefined): number {
+  if (!order || order.totalAmount == null) return 0;
+  return Math.max(0, roundMoney(Number(order.payableAmount
+    ?? (Number(order.totalAmount) - Number(order.discountAmount ?? 0) + Number(order.taxAmount ?? 0)))));
+}
+
+export function salesOrderRemainingAmount(order: ReceivableOrder | null | undefined): number {
+  return roundMoney(Math.max(0, salesOrderReceivableAmount(order) - Number(order?.paidAmount ?? 0)));
+}
+
 export interface WarehouseIdNameLike {
   id?: string | number | null;
   name?: string | null;

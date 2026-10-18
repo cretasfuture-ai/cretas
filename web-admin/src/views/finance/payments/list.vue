@@ -12,6 +12,7 @@ import type { TableRow } from '@/types/api';
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import { enumLabel } from '@/utils/enumDisplay';
+import { salesOrderReceivableAmount, salesOrderRemainingAmount } from '@/views/sales/orders/salesOrderDisplay';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -56,7 +57,7 @@ onMounted(() => {
 // Apr 21 2026: load confirmed sales orders for dropdown in 录入收款 dialog
 // E-FP-3 (fool-proof Rule 1): SalesOrder 实体已序列化 paidAmount (entity line 223),
 // 故 dialog 可计算 + 显示 "可收余额" 并 gate input :max — 纯前端, 无需后端改动.
-interface SalesOrderOption { id: string; orderNumber: string; customerName: string; totalAmount?: number; paidAmount?: number }
+interface SalesOrderOption { id: string; orderNumber: string; customerName: string; totalAmount?: number; taxAmount?: number; discountAmount?: number; payableAmount?: number; paidAmount?: number }
 const salesOrderOptions = ref<SalesOrderOption[]>([]);
 async function loadSalesOrderOptions() {
   if (!factoryId.value) return;
@@ -160,10 +161,7 @@ const selectedSO = computed<SalesOrderOption | null>(() =>
   salesOrderOptions.value.find(o => o.id === recordForm.value.salesOrderId) || null
 );
 const remainingAmount = computed<number>(() => {
-  if (!selectedSO.value) return 0;
-  const total = Number(selectedSO.value.totalAmount || 0);
-  const paid = Number(selectedSO.value.paidAmount || 0);
-  return Math.max(0, total - paid);
+  return salesOrderRemainingAmount(selectedSO.value);
 });
 const recordOverLimit = computed<boolean>(() =>
   Number(recordForm.value.amount || 0) > remainingAmount.value + 0.001
@@ -338,7 +336,7 @@ async function handleRecordSubmit() {
               v-for="o in salesOrderOptions"
               :key="o.id"
               :value="o.id"
-              :label="`${o.orderNumber} · ${o.customerName || '-'} · ¥${(o.totalAmount || 0).toLocaleString()}`"
+              :label="`${o.orderNumber} · ${o.customerName || '-'} · ¥${salesOrderReceivableAmount(o).toLocaleString()}`"
             />
             <template #empty>
               <div style="padding:8px 12px;color:#909399">暂无已确认的销售订单</div>
@@ -355,7 +353,7 @@ async function handleRecordSubmit() {
           style="margin-bottom:12px"
         >
           <template #title>
-            订单总额 <b>¥{{ Number(selectedSO.totalAmount || 0).toFixed(2) }}</b>
+            应收总额（含税）<b>¥{{ salesOrderReceivableAmount(selectedSO).toFixed(2) }}</b>
             · 已收 <b>¥{{ Number(selectedSO.paidAmount || 0).toFixed(2) }}</b>
             · <span :style="{ color: remainingAmount > 0 ? '#67c23a' : '#f56c6c' }">可收 <b>¥{{ remainingAmount.toFixed(2) }}</b></span>
           </template>
