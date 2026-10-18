@@ -1,0 +1,6 @@
+{
+  "units": [
+    "actions.runner.cretasfuture-ai-cretas.aurora-cretas.service",
+    "actions.runner.cretasfuture-ai-cretas-factory-assembly.aurora-assembly.service"
+  ]
+}
