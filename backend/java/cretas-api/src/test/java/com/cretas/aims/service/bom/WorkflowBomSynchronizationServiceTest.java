@@ -314,6 +314,56 @@ class WorkflowBomSynchronizationServiceTest {
                 .contains("BOM_FAMILY_ADOPTION_AMBIGUOUS");
     }
 
+    @Test
+    @DisplayName("new input completed in a target-revision draft can publish without rewriting old BOM")
+    void preparedDraftResolvesNewInputEvenWhenActiveFamilyHasEveryOutput() {
+        stubMultiOutputFamily(List.of(item(1L, main.getId())));
+        BomRecipe prepared = draft("D-MAIN", MAIN_PRODUCT, "FAMILY-2");
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(prepared, draft("D-CO", CO_PRODUCT, "FAMILY-2")));
+        when(recipeService.activateRecipe(FACTORY, "D-MAIN", 9L, 10L)).thenReturn(prepared);
+
+        var preflight = service.preflight(FACTORY, OWNER, target);
+        assertThat(preflight.getClassification()).isEqualTo(WorkflowBomSyncPreflightResponse.Classification.AUTO_MIGRATABLE);
+        assertThat(preflight.getAdoptableDraftRecipeId()).isEqualTo("D-MAIN");
+        assertThat(preflight.getMissingItems()).isEmpty();
+        assertThat(service.synchronizeForPublish(FACTORY, OWNER, target, 9L)).isSameAs(prepared);
+        verify(recipeService).activateRecipe(FACTORY, "D-MAIN", 9L, 10L);
+        verify(recipeService, never()).synchronizeActiveBomToWorkflowRevision(any(), any(), any(), any());
+        assertThat(main.getWorkflowRevisionId()).isEqualTo(11L);
+        assertThat(main.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+    }
+
+    @Test
+    void incompletePreparedDraftKeepsMissingInputBlocked() {
+        stubMultiOutputFamily(List.of(item(1L, main.getId())));
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(draft("D-MAIN", MAIN_PRODUCT, "FAMILY-2"), draft("D-CO", CO_PRODUCT, "FAMILY-2")));
+        org.mockito.Mockito.doThrow(new BusinessException(409, "draft input slot missing"))
+                .when(recipeService).validateDraftForPublish(FACTORY, "D-MAIN", target);
+        var result = service.preflight(FACTORY, OWNER, target);
+        assertThat(result.isCanCompleteAutomatically()).isFalse();
+        assertThat(result.getAdoptableDraftRecipeId()).isNull();
+        assertThat(result.getMissingItems()).extracting(WorkflowBomSyncPreflightResponse.SyncIssue::getCode)
+                .contains("BOM_WORKFLOW_INPUT_ITEM_MISSING");
+        verify(recipeService, never()).activateRecipe(any(), any(), any(), any());
+    }
+
+    @Test
+    void draftWithExtraOutputIsNotSilentlyAdopted() {
+        stubMultiOutputFamily(List.of(item(1L, main.getId())));
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(draft("D-MAIN", MAIN_PRODUCT, "FAMILY-2"), draft("D-CO", CO_PRODUCT, "FAMILY-2"),
+                        draft("D-EXTRA", "UNEXPECTED", "FAMILY-2")));
+        var result = service.preflight(FACTORY, OWNER, target);
+        assertThat(result.isCanCompleteAutomatically()).isFalse();
+        assertThat(result.getAdoptableDraftRecipeId()).isNull();
+        verify(recipeService, never()).validateDraftForPublish(any(), any(), any());
+    }
+
     private BomRecipe draft(String id, String productTypeId, String familyId) {
         BomRecipe d = recipe(id, productTypeId, "terminal:new-" + productTypeId, BomRecipe.OutputRole.MAIN);
         d.setStatus(BomRecipe.Status.DRAFT);

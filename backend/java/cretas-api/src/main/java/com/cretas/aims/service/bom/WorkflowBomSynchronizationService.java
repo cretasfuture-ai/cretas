@@ -276,8 +276,12 @@ public class WorkflowBomSynchronizationService {
         String adoptableDraftRecipeId = null;
         // 只要缺的是「终端没有生效 BOM」且没有冲突, 就找可收编的草稿 family; 收编成立时旧 family 上的
         // 其它缺项(它的行怎么映射到新端口)一并作废 —— 那些行不会被迁移, 迁移结果就是这个 DRAFT family 本身。
+        // A prepared target-revision draft also resolves a newly-added input.
+        // Looking only at the old ACTIVE recipe would otherwise make an upgrade
+        // impossible even after the operator completed the new draft's BOM.
         if (conflicts.isEmpty()
-                && missing.stream().anyMatch(item -> "BOM_FAMILY_OUTPUTS_INCOMPLETE".equals(item.getCode()))) {
+                && missing.stream().anyMatch(item -> "BOM_FAMILY_OUTPUTS_INCOMPLETE".equals(item.getCode())
+                        || "BOM_WORKFLOW_INPUT_ITEM_MISSING".equals(item.getCode()))) {
             List<String> adoptable = findAdoptableDraftFamilies(
                     factoryId, target, active.getProductTypeId(), targetOutputProductIds);
             if (adoptable.size() > 1) {
@@ -387,10 +391,17 @@ public class WorkflowBomSynchronizationService {
             Set<String> products = family.stream()
                     .map(BomRecipe::getProductTypeId)
                     .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (!products.containsAll(requiredProductTypeIds)) continue;
-            hits.add(family.stream()
+            if (products.size() != family.size() || !products.equals(requiredProductTypeIds)) continue;
+            String anchorId = family.stream()
                     .filter(d -> Objects.equals(d.getProductTypeId(), anchorProductTypeId))
-                    .findFirst().orElse(family.getFirst()).getId());
+                    .findFirst().orElse(family.getFirst()).getId();
+            try {
+                recipeService.validateDraftForPublish(factoryId, anchorId, target);
+                hits.add(anchorId);
+            } catch (BusinessException invalidDraft) {
+                // Keep the original missing-input/output result. A header-only
+                // draft is not evidence that publication can complete.
+            }
         }
         return hits;
     }

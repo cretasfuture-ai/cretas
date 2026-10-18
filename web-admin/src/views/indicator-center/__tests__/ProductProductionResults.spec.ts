@@ -13,7 +13,7 @@ vi.mock('@/api/productProductionMetrics', () => ({ getProductProductionMetrics: 
 const push = vi.fn();
 vi.mock('vue-router', () => ({ useRouter: () => ({ push }) }));
 const fixture = (): ProductProductionMetrics => ({
-  periodStart: '2026-10-16', periodEnd: '2026-10-16', sourceVersion: 'actual-flow-v2', products: [
+  periodStart: '2026-10-16', periodEnd: '2026-10-16', sourceVersion: 'actual-flow-v3', products: [
     { productTypeId: 'sku-a', productName: '散装成品', batchCount: 1, batchNumbers: ['A-001'], yieldRate: 80,
       goodOutputRate: 88.8889, totalCost: 200, unitCost: 12.5, costMasked: false },
     { productTypeId: 'sku-b', productName: '盒装成品', batchCount: 1, batchNumbers: ['B-001'], yieldRate: 100,

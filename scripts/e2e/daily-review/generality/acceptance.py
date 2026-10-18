@@ -754,8 +754,16 @@ def stage_output_visibility() -> None:
         raise AssertionError(f"Product metrics did not retain four actual batches per output SKU: {selected}")
     if any(containers.intersection(row["batchNumbers"]) for row in metrics["products"]):
         raise AssertionError("A runtime container entered product metrics")
-    if any(row["totalCost"] is not None or row["yieldRate"] is not None for row in selected):
-        raise AssertionError("Unsupported multi-output metrics must remain unknown, not invented")
+    expected = {"42b3334e-3d74-401f-b809-dc85d02e499c": ("33.3333", "23.4"),
+                "2b865183-6d73-45a0-8cbb-ca6fd38cbf20": ("66.6667", "38.6")}
+    if metrics.get("sourceVersion") != "actual-flow-v3":
+        raise AssertionError("Joint metric formulas require their own source version")
+    for row in selected:
+        rate, cost = expected[row["productTypeId"]]
+        if (row["yieldRate"] is None or row["totalCost"] is not None
+                or abs(Decimal(str(row["yieldRate"])) - Decimal(rate)) > Decimal("0.0001")
+                ):
+            raise AssertionError("Formal multi-output metric lost its actual weighted output: " + str(row))
     if before != support.snapshot():
         raise AssertionError("Reading output scope changed business history")
     event("output-visibility", {"actualBatches": sorted(actual), "excludedContainers":sorted(containers),

@@ -5,7 +5,7 @@ const browser = await chromium.launch({ headless: false });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.goto('http://127.0.0.1:31772/login');
-  const source = await fs.readFile(new URL('./ui.js', import.meta.url), 'utf8');
+  const source = await fs.readFile(new URL(process.argv.includes('--joint') ? './joint-ui.js' : './ui.js', import.meta.url), 'utf8');
   const run = (0, eval)('(' + source + ')');
   console.log(JSON.stringify(await run(page)));
   if (process.argv.includes('--keep')) {

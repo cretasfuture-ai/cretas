@@ -63,11 +63,11 @@ class FactoryIndicatorApplicabilityContractTest {
     }
 
     @Test
-    void multiOutputIsBlockedWithoutAllocationRule() {
+    void multiOutputRequiresRuntimeAllocationFacts() {
         when(units.describe("F1", "kg")).thenReturn(Optional.of(unit(UnitDimension.MASS)));
         var report = service.assessPlanned("F1", List.of(new ProductSpec("p", "组合", "kg", "kg", null, true)));
-        assertThat(report.overallStatus()).isEqualTo(IndicatorApplicabilityResponse.OverallStatus.BLOCKED);
-        assertThat(report.products().getFirst().metrics().getFirst().status()).isEqualTo(Status.BLOCKED);
+        assertThat(report.overallStatus()).isEqualTo(IndicatorApplicabilityResponse.OverallStatus.COMPLETE);
+        assertThat(report.products().getFirst().metrics().getFirst().status()).isEqualTo(Status.APPLICABLE);
     }
 
     @Test void cartonCannotBorrowBoxWeightWithoutPackagingSnapshot() {
@@ -156,7 +156,7 @@ class FactoryIndicatorApplicabilityContractTest {
         when(workflows.findByIdAndFactoryId(9L, "F1")).thenReturn(Optional.of(workflow));
         var report = service.assess("F1");
         assertThat(report.products().getFirst().profile().multiOutput()).isTrue();
-        assertThat(report.products().getFirst().metrics().getFirst().status()).isEqualTo(Status.BLOCKED);
+        assertThat(report.products().getFirst().metrics().getFirst().status()).isEqualTo(Status.APPLICABLE);
     }
 
     @Test

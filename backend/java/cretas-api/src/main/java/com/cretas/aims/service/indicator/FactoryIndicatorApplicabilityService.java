@@ -160,8 +160,10 @@ public class FactoryIndicatorApplicabilityService {
 
     private MetricApplicability assessMetric(String factoryId, ProductProfile profile, String code) {
         List<String> facts = new ArrayList<>();
+        // 联产已接入正式结单输出行与共享计划投入池。配置层只判断口径是否可
+        // 换算；结算分摊、逐产出质量事实和成本完整性仍由运行时 fail-closed。
         if (Boolean.TRUE.equals(profile.multiOutput())) {
-            return metric(code, Status.BLOCKED, "当前实际流指标尚未接入多产出分摊，生产结算仍使用既有分摊规则", List.of("指标多产出分摊适配"));
+            facts.add("运行时需存在正式结单输出行、共享计划投入及逐产出质量事实");
         }
         if (profile.multiOutput() == null) {
             facts.add("确认是否存在多产物或副产品");
@@ -196,7 +198,11 @@ public class FactoryIndicatorApplicabilityService {
         if (profile.multiOutput() == null) {
             return metric(code, Status.NEEDS_CONFIRMATION, "单位口径可用，但尚未确认是否存在多产物", facts);
         }
-        return metric(code, Status.APPLICABLE, "配置口径满足质量指标换算条件；运行数据仍需实际报工完成", List.of("已完成批次与结算数据"));
+        return metric(code, Status.APPLICABLE,
+                Boolean.TRUE.equals(profile.multiOutput())
+                        ? "联产质量口径可换算；运行时需通过正式结单分摊与逐产出质量校验"
+                        : "配置口径满足质量指标换算条件；运行数据仍需实际报工完成",
+                append(facts, "已完成批次与结算数据"));
     }
 
     private static MetricApplicability metric(String code, Status status, String reason, List<String> facts) {
@@ -222,7 +228,7 @@ public class FactoryIndicatorApplicabilityService {
             List<MetricApplicability> rows = products.stream().flatMap(p -> p.metrics().stream())
                     .filter(m -> m.code().equals(code)).toList();
             if (rows.isEmpty()) return metric(code, Status.NEEDS_CONFIRMATION, "未提供产品配置", List.of("产品配置"));
-            if (rows.stream().anyMatch(m -> m.status() == Status.BLOCKED)) return metric(code, Status.BLOCKED, "至少一个产品的指标多产出分摊尚未接通", List.of("指标多产出分摊适配"));
+            if (rows.stream().anyMatch(m -> m.status() == Status.BLOCKED)) return metric(code, Status.BLOCKED, "至少一个产品的指标配置明确不支持", List.of("产品指标配置"));
             if (rows.stream().anyMatch(m -> m.status() == Status.NEEDS_CONFIRMATION)) return metric(code, Status.NEEDS_CONFIRMATION, "部分产品缺少必要配置或确认", List.of("逐产品配置完整性"));
             if (rows.stream().allMatch(m -> m.status() == Status.NOT_APPLICABLE)) return metric(code, Status.NOT_APPLICABLE, "所有产品均不满足当前质量口径", List.of("质量单位配置"));
             if (rows.stream().anyMatch(m -> m.status() == Status.NOT_APPLICABLE)) return metric(code, Status.NEEDS_CONFIRMATION, "部分产品不适用，不能宣称全工厂指标可用", List.of("逐产品质量口径"));

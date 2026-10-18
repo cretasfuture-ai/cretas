@@ -5,6 +5,10 @@ import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.service.unit.*;
 import com.cretas.aims.service.yield.OrderCostBreakdownService;
 import com.cretas.aims.service.yield.YieldReportService;
+import com.cretas.aims.service.yield.ProductionSummaryService;
+import com.cretas.aims.service.indicator.MultiOutputActualMetricsService;
+import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -153,8 +157,8 @@ class FactoryActualProductionMetricsContractTest {
         assertThat(metrics.aggregate("FA", rows, TOTAL_COST)).isEqualByComparingTo("200");
     }
     @Test void sourceAdaptersKeepDistinctCodesAndVersionedFormulaIdentity() {
-        assertThat(new FactoryLuYieldRateStrategy(metrics).getSourceVersion()).isEqualTo("actual-flow-v2");
-        assertThat(new FactoryLuUnitCostStrategy(metrics).getSourceVersion()).isEqualTo("actual-flow-v2");
+        assertThat(new FactoryLuYieldRateStrategy(metrics).getSourceVersion()).isEqualTo("actual-flow-v3");
+        assertThat(new FactoryLuUnitCostStrategy(metrics).getSourceVersion()).isEqualTo("actual-flow-v3");
         assertThat(new FactoryGoodOutputRateStrategy(metrics).getIndicatorCode()).isEqualTo("FACTORY_GOOD_OUTPUT_RATE");
     }
     @Test void completedBusinessPeriodBindsFactoryAndInclusiveEndDate() {
@@ -187,7 +191,7 @@ class FactoryActualProductionMetricsContractTest {
         LocalDate day = LocalDate.of(2026, 10, 16);
         var result = metrics.byProduct("FA", day, day, false);
         assertThat(result.getPeriodStart()).isEqualTo(day);
-        assertThat(result.getSourceVersion()).isEqualTo("actual-flow-v2");
+        assertThat(result.getSourceVersion()).isEqualTo("actual-flow-v3");
         assertThat(result.getProducts()).hasSize(2);
         var first = result.getProducts().get(0); var second = result.getProducts().get(1);
         assertThat(first.getBatchNumbers()).containsExactly("A");
@@ -226,5 +230,116 @@ class FactoryActualProductionMetricsContractTest {
         verifyNoInteractions(costing);
         when(query.getResultList()).thenReturn(List.of());
         assertThat(metrics.byProduct("FA", LocalDate.now(), LocalDate.now(), false).getProducts()).isEmpty();
+    }
+
+    private record JointFixture(FactoryActualProductionMetrics metrics, Query completed, Query lines,
+                                ProcessSheetService process, OrderCostBreakdownDTO cost,
+                                List<Object[]> batches, List<Object[]> outputLines) {}
+
+    private JointFixture jointFixture() {
+        var summaries = mock(ProductionSummaryService.class);
+        var process = mock(ProcessSheetService.class);
+        when(summaries.computeSummary("FA", "P", true)).thenReturn(
+                com.cretas.aims.dto.yield.ProductionSummaryDTO.builder()
+                        .yieldRawDenominator(n("3")).totalFinishedWeight(n("3")).totalCost(n("31")).build());
+        var cost = OrderCostBreakdownDTO.builder()
+                .hasData(true).costComplete(true).calculationStatus("COMPLETE").totalCost(n("31"))
+                .estimatedAuxItemCount(0).partiallyRecordedAuxItemCount(0).build();
+        when(costing.computeByPlan("FA", "P", false)).thenReturn(cost);
+        when(process.getInventoryYieldCard("FA", "P")).thenReturn(List.of(
+                ProcessSheetInventoryItem.builder().batchNumber("A").productTypeId("sku-a").productWeight(n("1")).produced(n("2")).unit("盒").build(),
+                ProcessSheetInventoryItem.builder().batchNumber("B").productTypeId("sku-b").productWeight(n("2")).produced(n("2")).unit("盒").build()));
+        Object[] a = java.util.Arrays.copyOf(rows.get(0), 15), b = java.util.Arrays.copyOf(rows.get(1), 15);
+        for (Object[] row : List.of(a,b)) { row[6]="S"; row[7]="NONE_CONFIRMED"; row[8]=BigDecimal.ZERO; row[9]="kg"; row[10]=2L; row[14]="P"; }
+        a[12]="sku-a"; b[12]="sku-b"; a[13]="成品A"; b[13]="成品B";
+        List<Object[]> outputLines = List.of(
+                new Object[]{"A","sku-a",n("2"),"盒",n("11.7"),"NONE_CONFIRMED",BigDecimal.ZERO,"kg"},
+                new Object[]{"B","sku-b",n("2"),"盒",n("19.3"),"NONE_CONFIRMED",BigDecimal.ZERO,"kg"});
+        EntityManager em = mock(EntityManager.class); Query completed = mock(Query.class), lines = mock(Query.class);
+        when(em.createNativeQuery(argThat(sql -> sql != null && sql.contains("SELECT b.id")))).thenReturn(completed);
+        when(em.createNativeQuery(argThat(sql -> sql != null && sql.contains("SELECT o.reported_batch_number")))).thenReturn(lines);
+        when(completed.setParameter(anyInt(), any())).thenReturn(completed);
+        when(lines.setParameter(anyInt(), any())).thenReturn(lines);
+        when(completed.getResultList()).thenReturn(List.of(a,b));
+        when(lines.getResultList()).thenReturn(outputLines);
+        var joint = new FactoryActualProductionMetrics(reporting, costing, units, summaries,
+                new MultiOutputActualMetricsService(), process);
+        ReflectionTestUtils.setField(joint, "entityManager", em);
+        return new JointFixture(joint, completed, lines, process, cost, List.of(a,b), outputLines);
+    }
+
+    @Test void jointAdapterReadsPersistedProductWeightsAndAllocatedCostPerOutput() {
+        var f = jointFixture();
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), YIELD_RATE)).isEqualByComparingTo("100");
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), TOTAL_COST)).isEqualByComparingTo("31");
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), UNIT_COST)).isEqualByComparingTo("10.3333");
+        var products = f.metrics.byProduct("FA", LocalDate.now(), LocalDate.now(), false).getProducts();
+        assertThat(products).hasSize(2);
+        assertThat(products.getFirst().getYieldRate()).isEqualByComparingTo("33.3333");
+        assertThat(products.getLast().getYieldRate()).isEqualByComparingTo("66.6667");
+        assertThat(products.getFirst().getTotalCost()).isEqualByComparingTo("11.7");
+        assertThat(products.getLast().getTotalCost()).isEqualByComparingTo("19.3");
+        assertThat(products.getFirst().getUnitCost()).isEqualByComparingTo("11.7");
+        assertThat(products.getLast().getUnitCost()).isEqualByComparingTo("9.65");
+    }
+
+    @Test void jointAdapterRejectsPartialWindowMissingSnapshotCostAndAmbiguousQuality() {
+        var f = jointFixture();
+        when(f.completed.getResultList()).thenReturn(java.util.Collections.singletonList(f.batches.getFirst()));
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), YIELD_RATE)).isNull();
+        when(f.completed.getResultList()).thenReturn(f.batches);
+        f.cost.setCostComplete(false);
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), TOTAL_COST)).isNull();
+        f.cost.setCostComplete(true);
+        when(f.process.getInventoryYieldCard("FA", "P")).thenReturn(List.of());
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), YIELD_RATE)).isNull();
+    }
+
+    @Test void jointQualityDoesNotSubtractRejectedQuantityFromQualifiedOutput() {
+        var f = jointFixture();
+        var summaries = (ProductionSummaryService) ReflectionTestUtils.getField(f.metrics, "productionSummaryService");
+        when(summaries.computeSummary("FA", "P", true)).thenReturn(
+                com.cretas.aims.dto.yield.ProductionSummaryDTO.builder().yieldRawDenominator(n("3")).totalFinishedWeight(n("1")).build());
+        when(f.completed.getResultList()).thenReturn(java.util.Collections.singletonList(f.batches.getFirst()));
+        var line = new Object[]{"A","sku-a",n("2"),"盒",n("31"),"COUNTED",n("0.1"),"kg"};
+        when(f.lines.getResultList()).thenReturn(java.util.Collections.singletonList(line));
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), GOOD_OUTPUT_RATE)).isEqualByComparingTo("90.9091");
+        line[5]="NONE_CONFIRMED";
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), GOOD_OUTPUT_RATE)).isNull();
+        line[5]="COUNTED";
+        when(f.lines.getResultList()).thenReturn(f.outputLines);
+        f.outputLines.getFirst()[5]="COUNTED"; f.outputLines.getFirst()[6]=n("0.1");
+        when(f.completed.getResultList()).thenReturn(f.batches);
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), GOOD_OUTPUT_RATE)).isNull();
+    }
+
+    @Test void jointQuantityQualityAndMaskedReadsDoNotRequireOrReadCost() {
+        var f = jointFixture();
+        f.cost.setCostComplete(false);
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), YIELD_RATE)).isEqualByComparingTo("100");
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), GOOD_OUTPUT_RATE)).isEqualByComparingTo("100");
+        var products = f.metrics.byProduct("FA", LocalDate.now(), LocalDate.now(), true).getProducts();
+        assertThat(products).allSatisfy(p -> {assertThat(p.getYieldRate()).isNotNull(); assertThat(p.getGoodOutputRate()).isNotNull(); assertThat(p.getTotalCost()).isNull();});
+        verify(costing, never()).computeByPlan(any(), any(), anyBoolean());
+    }
+
+    @Test void jointMissingReusedRawLineageDoesNotPublishPartialYield() {
+        var f = jointFixture();
+        var summaries = (ProductionSummaryService) ReflectionTestUtils.getField(f.metrics, "productionSummaryService");
+        when(summaries.computeSummary("FA", "P", true)).thenReturn(
+                com.cretas.aims.dto.yield.ProductionSummaryDTO.builder().yieldRawDenominator(n("3"))
+                        .totalFinishedWeight(n("3")).yieldNote("上游原料来源缺失").build());
+        assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), YIELD_RATE)).isNull();
+    }
+
+    @Test void jointFormalOutputsMustCoverTheFullAuthoritativeFinishedWeight() {
+        var f = jointFixture();
+        var summaries = (ProductionSummaryService) ReflectionTestUtils.getField(f.metrics, "productionSummaryService");
+        for (String weight : List.of("2", "4")) {
+            when(summaries.computeSummary("FA", "P", true)).thenReturn(
+                    com.cretas.aims.dto.yield.ProductionSummaryDTO.builder().yieldRawDenominator(n("3"))
+                            .totalFinishedWeight(n(weight)).build());
+            assertThat(f.metrics.compute("FA", LocalDate.now(), LocalDate.now(), YIELD_RATE)).isNull();
+        }
     }
 }

@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `FACTORY-JOINT-METRICS-20261019` — `review` — Owner: /root — Base: 929f314dc8b7cc311c2303429b23b2fe06192d16 — 联产四指标与老厂v1→v2本地验收完成，278项Java/78项Web通过，待用户体验；保留独立分支，不推送合并部署。证据：docs/dispatch/archive/2026-10-19-factory-joint-metrics-local.md。
+
 - `FACTORY-GENERALITY-20261018` — `review` — Owner: /root — Base: ca300ca097e1d45817ae0b3b58c0822d2628dc15 — 单位、建厂状态/指标适用性及混合单位/联产/老厂草稿升级本地通过；含成本/幂等/正式产出范围；33类467项Java，API/DB/UI回执见acceptance/factory-generality-local-20261018.md；独立分支未推送合并部署。
 
 

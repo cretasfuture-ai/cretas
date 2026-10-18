@@ -1,5 +1,27 @@
 # P37 factory generality acceptance
 
+The 2026-10-19 continuation is `joint_upgrade.py NON_PRODUCTION_ONLY --stage
+prepare|activate|business|complete-costs|metrics|history` (run the stages separately in that
+order). It reuses the existing login/checkpoint/HTTP/SQL helpers. `prepare`
+submits an old-version plan before switching; `activate` uses the existing
+publish-and-activate endpoint, and `business` finishes the old plan then creates
+and completes a new plan without manually selecting its workflow. Historical
+started/completed transactions and original formal graph/BOM content must stay
+unchanged. The existing publisher may rebind PENDING plans with no batches or
+settlements; only its returned plan numbers and exact version-pin fields are
+allowed to change, and every transition is retained in the private receipt.
+`complete-costs` reuses the accepted multi-output workflow with a new plan and
+the existing supplemental-cost endpoint. In this local simulation equipment
+and other costs are explicitly confirmed zero; positive unallocated costs must
+still fail without any business-row change. Old partial-cost samples stay
+unchanged, and remain negative controls whose cost metrics must be unknown.
+`metrics` checks four factory KPIs, per-SKU output/cost, recomputation and
+same-period history under `actual-flow-v3`. No business SQL mutation is allowed.
+The private evidence directory is `factory-data-p37/joint-upgrade-20261019`.
+Run `node ui-runner.mjs --joint --keep` for the ordinary factory account UI.
+The earlier `upgrade` stage below is the historical draft-only baseline; do not
+replay it after the continuation's formal activation.
+
 `acceptance.py` is the bounded local API harness for the P37 isolated runtime:
 
 - database: `p37_factory_generality_20261018`
@@ -54,8 +76,9 @@ raw SKU, the next run repairs that draft through a fresh normal PUT checkpoint;
 it never replays the old draft result blindly.
 `readback` captures fresh API and PostgreSQL evidence.
 `output-visibility` checks both actual API read paths: eight output batches stay
-visible, two runtime containers are excluded, and unsupported multi-output KPI
-values remain unknown. Reading those endpoints must not change business data.
+visible, two runtime containers are excluded, and supported multi-output KPIs
+use their real weight snapshots and formal allocated costs under v3. Missing
+required facts remain unknown. Reading those endpoints must not change business data.
 After both browser modes have passed, `receipt.py NON_PRODUCTION_ONLY` verifies
 the frozen product hashes and consolidates selected test reports and completed
 business evidence. It performs no login or business write.

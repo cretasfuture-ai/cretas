@@ -8693,6 +8693,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 设备/其他成本的核算读取批次级字段。只有唯一正式批次时才有明确归属，
         // 多批次禁止猜测分摊；空批次继续保留原有计划级更新行为。
         ProductionBatch officialBatch = null;
+        List<ProductionBatch> supplementalCostBatches = new ArrayList<>();
         if (equipmentCost != null || otherCost != null) {
             List<ProductionBatch> officialBatches = productionBatchRepository
                     .findByFactoryIdAndProductionPlanId(factoryId, planId);
@@ -8708,9 +8709,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
                     .count();
             if (officialBatchCount > 1) {
-                throw new BusinessException(409, "该生产计划关联多个正式批次，无法自动分摊设备/其他成本")
-                        .withHint("请按批次分别录入成本，或先保留计划级成本后再核对批次")
-                        .withHintTarget("equipmentCost");
+                // Nonnegative costs summing to an explicitly confirmed zero
+                // have one allocation only: every batch is zero. Never use
+                // this confirmation to erase a previously recorded expense.
+                boolean onlyZero = (equipmentCost == null || equipmentCost.signum() == 0)
+                        && (otherCost == null || otherCost.signum() == 0);
+                supplementalCostBatches = officialBatches.stream().filter(Objects::nonNull)
+                        .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                        .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType())).toList();
+                boolean hasRecordedExpense = (equipmentCost != null && plan.getActualEquipmentCost() != null
+                        && plan.getActualEquipmentCost().signum() > 0)
+                        || (otherCost != null && plan.getActualOtherCost() != null && plan.getActualOtherCost().signum() > 0)
+                        || supplementalCostBatches.stream().anyMatch(batch ->
+                        (equipmentCost != null && batch.getEquipmentCost() != null && batch.getEquipmentCost().signum() > 0)
+                                || (otherCost != null && batch.getOtherCost() != null && batch.getOtherCost().signum() > 0));
+                if (!onlyZero || hasRecordedExpense) {
+                    throw new BusinessException(409, "该生产计划关联多个正式批次，无法自动分摊或覆盖设备/其他成本")
+                            .withHint("多批次仅支持统一确认无费用；有实际费用时需明确各批次分摊")
+                            .withHintTarget("equipmentCost");
+                }
+                officialBatch = null;
             }
         }
 
@@ -8728,14 +8746,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             plan.setActualOtherCost(otherCost);
         }
 
-        if (officialBatch != null) {
+        if (officialBatch != null) supplementalCostBatches.add(officialBatch);
+        for (ProductionBatch costBatch : supplementalCostBatches) {
             if (equipmentCost != null) {
-                officialBatch.setEquipmentCost(equipmentCost);
+                costBatch.setEquipmentCost(equipmentCost);
             }
             if (otherCost != null) {
-                officialBatch.setOtherCost(otherCost);
+                costBatch.setOtherCost(otherCost);
             }
-            productionBatchRepository.save(officialBatch);
+            productionBatchRepository.save(costBatch);
         }
 
         plan = productionPlanRepository.save(plan);
