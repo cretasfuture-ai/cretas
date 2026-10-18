@@ -4,6 +4,8 @@ import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
@@ -243,6 +245,9 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
 
         // 4. 先清空旧分配，再写入
         allocationRepository.deleteByFactoryIdAndDeliveryItemId(factoryId, deliveryItemId);
+        // Hibernate queues INSERT before DELETE: flush the removal before reusing the unique
+        // (factory, delivery item, batch) key when the operator changes an automatic allocation.
+        allocationRepository.flush();
         allocationRepository.saveAll(toPersist);
 
         log.info("销售发货批次分配: factoryId={}, deliveryItemId={}, allocations={}, total={}",
@@ -257,6 +262,21 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     @Override
     @Transactional
     public void clearAllocations(String factoryId, String deliveryItemId) {
+        Long itemId;
+        try { itemId=Long.valueOf(deliveryItemId); }
+        catch (RuntimeException e) { throw new BusinessException(400,"发货行编号无效"); }
+        SalesDeliveryItem item=deliveryItemRepository.findByIdForUpdate(itemId)
+                .orElseThrow(()->new BusinessException(404,"发货行不存在"));
+        if (item.getDeliveryRecord()==null || !factoryId.equals(item.getDeliveryRecord().getFactoryId())) {
+            throw new BusinessException(403,"发货行不属于当前工厂");
+        }
+        SalesDeliveryRecord record=item.getDeliveryRecord();
+        if (record != null && record.getStatus() != SalesDeliveryStatus.DRAFT
+                && record.getStatus() != SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
+                && record.getStatus() != SalesDeliveryStatus.PICKED) {
+            throw new BusinessException(409,"出货后批次分配已冻结，不能清空；请走现有退货或更正流程")
+                    .withCode("BATCH_ALLOCATION_FROZEN");
+        }
         allocationRepository.deleteByFactoryIdAndDeliveryItemId(factoryId, deliveryItemId);
     }
 

@@ -36,7 +36,7 @@ final class FactoryDecisionGuidanceCatalog {
             entry("metricWatches", "只有明确指标和阈值，系统才能知道什么时候提醒管理人员。",
                     List.of("生产指标", "异常提醒"), List.of("良品率低于 95%", "单位成本超过 30 元")),
             entry("indicatorOptOut", "这里是在默认管理看板上做减法，不会删除历史数据。",
-                    List.of("管理看板", "指标可见性"), List.of("都要看", "停用本月销售总额")),
+                    List.of("管理看板", "指标可见性"), List.of("都要看", "完整生产成本")),
             entry("moduleOptOut", "关闭模块会同时影响页面和后端接口，必须按真实业务选择。",
                     List.of("功能模块", "页面可见性", "接口权限"), List.of("都要", "不用餐饮和物流")),
             entry("alerts", "提醒项决定哪些经营事件会主动通知，而不是只留在业务列表里。",

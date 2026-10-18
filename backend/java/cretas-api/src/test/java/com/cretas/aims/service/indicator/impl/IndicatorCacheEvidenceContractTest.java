@@ -62,7 +62,7 @@ class IndicatorCacheEvidenceContractTest {
         assertThat(result.value()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(result.cacheHit()).isTrue(); assertThat(result.status()).isEqualTo("AVAILABLE");
         assertThat(result.source()).isEqualTo("REAL_BUSINESS:CACHE_TEST");
-        verifyNoInteractions(python, business);
+        verifyNoInteractions(python); verify(business, never()).compute(any(), any(), any());
     }
 
     @Test void anotherPeriodIsRecomputedInsteadOfRelabelingTheOldZero() {
@@ -72,5 +72,18 @@ class IndicatorCacheEvidenceContractTest {
         assertThat(result.value()).isEqualByComparingTo(BigDecimal.TEN);
         assertThat(result.cacheHit()).isFalse(); assertThat(result.source()).isEqualTo("REAL_BUSINESS:CACHE_TEST");
         verify(versions).save(any()); verifyNoInteractions(python);
+    }
+
+    @Test void changedFormulaDoesNotRelabelAnOldCachedValueOrItsHistory() {
+        Indicator indicator = root("JPA_AGGREGATE", true); evidence(indicator, start);
+        when(business.getSourceVersion()).thenReturn("actual-flow-v2");
+        when(business.compute("F-TEST", start, end)).thenReturn(new BigDecimal("80"));
+        var result = service.computeForCode("CACHE_TEST", "F-TEST", start, end);
+        assertThat(result.cacheHit()).isFalse();
+        assertThat(result.value()).isEqualByComparingTo("80");
+        assertThat(result.source()).isEqualTo("REAL_BUSINESS:CACHE_TEST:actual-flow-v2");
+        verify(versions).save(argThat(version -> version.getValue().compareTo(new BigDecimal("80")) == 0
+                && "REAL_BUSINESS:CACHE_TEST:actual-flow-v2".equals(version.getComputeSource())));
+        verify(business).compute("F-TEST", start, end);
     }
 }

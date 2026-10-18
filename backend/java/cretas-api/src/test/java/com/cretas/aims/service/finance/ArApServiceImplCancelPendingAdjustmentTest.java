@@ -8,6 +8,8 @@ import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.impl.ArApServiceImpl;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -44,6 +46,8 @@ class ArApServiceImplCancelPendingAdjustmentTest {
     @Mock private ArApTransactionRepository transactionRepository;
     @Mock private CustomerRepository customerRepository;
     @Mock private SupplierRepository supplierRepository;
+    @Mock private EntityManager entityManager;
+    @Mock private Query query;
 
     private static final String FACTORY = "F006";
     private static final String SOURCE_TYPE = "RETURN_ORDER";
@@ -51,7 +55,9 @@ class ArApServiceImplCancelPendingAdjustmentTest {
     private static final Long FINANCE_USER = 88L;
 
     private ArApServiceImpl service() {
-        return new ArApServiceImpl(transactionRepository, customerRepository, supplierRepository);
+        ArApServiceImpl service = new ArApServiceImpl(transactionRepository, customerRepository, supplierRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "entityManager", entityManager);
+        return service;
     }
 
     private ArApTransaction pending(Long operatedBy) {
@@ -78,6 +84,10 @@ class ArApServiceImplCancelPendingAdjustmentTest {
                 FACTORY, SOURCE_TYPE, SOURCE_ID, ArApApprovalStatus.PENDING))
                 .thenReturn(List.of(txn));
         when(transactionRepository.save(txn)).thenReturn(txn);
+        when(entityManager.createNativeQuery(org.mockito.ArgumentMatchers.anyString())).thenReturn(query);
+        when(query.setParameter(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(query);
+        when(query.getResultList()).thenReturn(List.of("txn-1"));
 
         int cancelled = service().cancelPendingAdjustmentsBySource(
                 FACTORY, SOURCE_TYPE, SOURCE_ID, FINANCE_USER, "退货单财务驳回");
@@ -99,6 +109,10 @@ class ArApServiceImplCancelPendingAdjustmentTest {
         when(transactionRepository.findByFactoryIdAndSourceTypeAndSourceIdAndApprovalStatusAndDeletedAtIsNull(
                 FACTORY, SOURCE_TYPE, SOURCE_ID, ArApApprovalStatus.PENDING))
                 .thenReturn(List.of());
+        when(entityManager.createNativeQuery(org.mockito.ArgumentMatchers.anyString())).thenReturn(query);
+        when(query.setParameter(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(query);
+        when(query.getSingleResult()).thenReturn(1);
 
         int cancelled = service().cancelPendingAdjustmentsBySource(
                 FACTORY, SOURCE_TYPE, SOURCE_ID, FINANCE_USER, "x");

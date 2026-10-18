@@ -19,7 +19,7 @@ import { ApiError } from '@/types/api';
 
 // ==================== Voucher 类型 ====================
 
-export type VoucherStatus = 'DRAFT' | 'POSTED' | 'VOID';
+export type VoucherStatus = 'DRAFT' | 'POSTED' | 'VOID' | 'REVERSED';
 export type VoucherType =
   | 'SALES_RECEIPT'
   | 'PURCHASE_PAYMENT'
@@ -27,7 +27,11 @@ export type VoucherType =
   | 'EXPENSE'
   | 'WAGE'
   | 'RETURN'
-  | 'DEPRECATION';
+  | 'CASH_RECEIPT'
+  | 'CASH_PAYMENT'
+  | 'DEPRECATION'
+  | 'PL_CLOSING'
+  | 'COST_CARRYOVER';
 
 export type AuxiliaryType =
   | 'CUSTOMER'
@@ -60,6 +64,7 @@ export type SourceBusinessType =
   | 'SALES_ORDER'
   | 'PURCHASE_ORDER'
   | 'RETURN_ORDER'
+  | 'RETURN_REFUND'
   | 'INTERNAL_TRANSFER'
   | 'WASTAGE_RECORD'
   | 'PAYROLL_RECORD'
@@ -84,6 +89,8 @@ export interface Voucher {
   entries: VoucherEntry[];
   createdAt?: string;
   updatedAt?: string;
+  originalVoucherId?: string | null;
+  reversalVoucherId?: string | null;
 }
 
 // ==================== Account 类型 ====================
@@ -122,6 +129,13 @@ export async function getVoucherDetail(factoryId: string, voucherId: string): Pr
     throw new ApiError(res.message || '凭证加载失败', res.code);
   }
   return res.data;
+}
+
+/** Reuse the existing bounded business-source lookup; null means no voucher. */
+export async function getVoucherByBusiness(factoryId: string, businessType: string, businessId: string): Promise<Voucher | null> {
+  const res = await get<Voucher | null>(`/${encodeURIComponent(factoryId)}/finance/vouchers/by-business/${encodeURIComponent(businessType)}/${encodeURIComponent(businessId)}`);
+  if (!res.success) throw new ApiError(res.message || '关联凭证读取失败', res.code);
+  return res.data ?? null;
 }
 
 export async function postVoucher(factoryId: string, voucherId: string): Promise<Voucher> {
@@ -261,6 +275,7 @@ export const VOUCHER_STATUS_LABEL: Record<VoucherStatus, { text: string; type: s
   DRAFT: { text: '草稿', type: 'info' },
   POSTED: { text: '已过账', type: 'success' },
   VOID: { text: '已作废', type: 'danger' },
+  REVERSED: { text: '已冲销', type: 'warning' },
 };
 
 export const VOUCHER_TYPE_LABEL: Record<VoucherType, string> = {
@@ -270,13 +285,18 @@ export const VOUCHER_TYPE_LABEL: Record<VoucherType, string> = {
   EXPENSE: '报销',
   WAGE: '工资发放',
   RETURN: '退货',
+  CASH_RECEIPT: '现金收款',
+  CASH_PAYMENT: '现金付款',
   DEPRECATION: '折旧',
+  PL_CLOSING: '损益结转',
+  COST_CARRYOVER: '销售成本结转',
 };
 
 export const SOURCE_BUSINESS_TYPE_LABEL: Record<SourceBusinessType, string> = {
   SALES_ORDER: '销售订单',
   PURCHASE_ORDER: '采购订单',
   RETURN_ORDER: '退货单',
+  RETURN_REFUND: '客户退款',
   INTERNAL_TRANSFER: '库存调拨',
   WASTAGE_RECORD: '报废/损耗',
   PAYROLL_RECORD: '工资发放',

@@ -73,6 +73,15 @@ class ServerRegistrationConfig(StrictModel):
         for recipe in self.recipes:
             if not _IDENTIFIER.fullmatch(recipe.factory_id) or not _IDENTIFIER.fullmatch(recipe.recipe_id):
                 raise ValueError("recipe scope requires named identifiers")
+            if bool(recipe.preparation_project_id) != bool(recipe.preparation_sha256):
+                raise ValueError("photo preparation registration requires both source project and snapshot hash")
+            if recipe.preparation_sha256 and (recipe.data_version != "prep-" + recipe.preparation_sha256
+                    or "dataset" not in recipe.stage_input_hashes):
+                raise ValueError("prepared recipe must bind the frozen data version and dataset input")
+            if recipe.available and recipe.preparation_project_id and not any(
+                    recipe.factory_id in worker.factory_ids and recipe.preparation_project_id in worker.project_ids
+                    for worker in self.worker_bindings):
+                raise ValueError("prepared recipe requires a named worker with an explicit source preparation read grant")
             if not recipe.available:
                 continue
             template = catalog.for_task_family(recipe.task_family)

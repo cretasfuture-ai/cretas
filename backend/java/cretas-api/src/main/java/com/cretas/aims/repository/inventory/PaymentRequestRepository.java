@@ -55,4 +55,27 @@ public interface PaymentRequestRepository extends JpaRepository<PaymentRequest, 
     List<PaymentRequest> findByFactoryIdAndStatusOrderByApprovedAtAsc(
             String factoryId, PaymentRequestStatus status);
 
+    List<PaymentRequest> findByFactoryIdAndReturnOrderIdOrderByCreatedAtDesc(
+            String factoryId, String returnOrderId);
+
+    @Query("SELECT pr FROM PaymentRequest pr WHERE pr.factoryId = :factoryId " +
+           "AND pr.salesOrderId = :salesOrderId " +
+           "AND pr.sourceType = com.cretas.aims.entity.enums.PaymentSourceType.SALES " +
+           "AND pr.returnOrderId IS NOT NULL " +
+           "AND pr.status IN (:statuses) AND pr.deletedAt IS NULL")
+    List<PaymentRequest> findSalesRefundsBySalesOrderId(
+            @Param("factoryId") String factoryId,
+            @Param("salesOrderId") String salesOrderId,
+            @Param("statuses") List<PaymentRequestStatus> statuses);
+
+    @Query("SELECT pr FROM PaymentRequest pr WHERE pr.factoryId = :factoryId " +
+           "AND pr.salesOrderId = :salesOrderId " +
+           "AND pr.sourceType = com.cretas.aims.entity.enums.PaymentSourceType.SALES " +
+           "AND pr.returnOrderId IS NULL " +
+           "AND pr.status IN (:statuses) AND pr.deletedAt IS NULL")
+    List<PaymentRequest> findGenericSalesBySalesOrderId(
+            @Param("factoryId") String factoryId,
+            @Param("salesOrderId") String salesOrderId,
+            @Param("statuses") List<PaymentRequestStatus> statuses);
+
 }

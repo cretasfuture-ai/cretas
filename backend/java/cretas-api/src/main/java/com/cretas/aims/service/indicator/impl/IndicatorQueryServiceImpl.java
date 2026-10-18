@@ -44,6 +44,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class IndicatorQueryServiceImpl implements IndicatorQueryService {
 
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     private static final String SUPPORTED_PYTHON_INDICATOR_CODE = "RESTAURANT_DISH_MARGIN";
 
     private final IndicatorRepository indicatorRepository;
@@ -60,10 +63,18 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         if (code == null || factoryId == null) {
             throw new BusinessException("code 和 factoryId 不能为空");
         }
+        if (entityManager != null && ("FACTORY_ACTUAL_TOTAL_COST".equals(code) || "FACTORY_LU_UNIT_COST".equals(code))) {
+            com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        }
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
                 .orElseThrow(() -> new BusinessException(
                         "Indicator not found: code=" + code + ", factoryId=" + factoryId));
+        if (entityManager != null && ("FACTORY_ACTUAL_TOTAL_COST".equals(code) || "FACTORY_LU_UNIT_COST".equals(code))) {
+            // The controller can have loaded this entity before waiting for the factory lock (OSIV).
+            // Refresh after acquiring it so a pre-correction first-level cache cannot restore stale values.
+            entityManager.refresh(ind);
+        }
 
         String strategy = ind.getComputeStrategy();
         log.debug("computeForCode: code={}, factoryId={}, strategy={}", code, factoryId, strategy);
@@ -159,11 +170,12 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
             String type = configured.isEmpty() ? "" : configured.get(0).getComputeType();
             String source;
             if ("JPA_AGGREGATE".equals(type)) {
-                source = "REAL_BUSINESS:" + ind.getCode();
-                if (strategyRegistry.find(ind.getCode()).isEmpty()) {
+                Optional<IndicatorComputationStrategy> strategy = strategyRegistry.find(ind.getCode());
+                if (strategy.isEmpty()) {
                     return new IndicatorValueResult(null, null, false, "REAL_BUSINESS_MISSING:" + ind.getCode(),
                             IndicatorValueResult.FAILED);
                 }
+                source = strategySource(ind.getCode(), strategy.get());
             } else if ("PYTHON_ENDPOINT".equals(type)) {
                 source = "PYTHON_ENDPOINT:" + ind.getCode();
                 if (!SUPPORTED_PYTHON_INDICATOR_CODE.equals(ind.getCode())
@@ -256,11 +268,11 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
             }
             try {
                 BigDecimal value = strategyOpt.get().compute(factoryId, start, end);
-                return outcomeFor(value, "REAL_BUSINESS:" + ind.getCode());
+                return outcomeFor(value, strategySource(ind.getCode(), strategyOpt.get()));
             } catch (RuntimeException ex) {
                 log.warn("fetchFromPython: real business strategy failed for code={}: {}",
                         ind.getCode(), ex.getMessage());
-                return new FetchOutcome(null, "REAL_BUSINESS:" + ind.getCode(),
+                return new FetchOutcome(null, strategySource(ind.getCode(), strategyOpt.get()),
                         IndicatorValueResult.FAILED);
             }
         }
@@ -287,6 +299,11 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         log.warn("fetchFromPython: unrecognized computeType={} for code={} — returning FAILED",
                 type, ind.getCode());
         return new FetchOutcome(null, "UNKNOWN:" + ind.getCode(), IndicatorValueResult.FAILED);
+    }
+
+    private static String strategySource(String code, IndicatorComputationStrategy strategy) {
+        String version = strategy.getSourceVersion();
+        return "REAL_BUSINESS:" + code + (version == null || version.isBlank() ? "" : ":" + version);
     }
 
     private static FetchOutcome outcomeFor(BigDecimal value, String sourceLabel) {

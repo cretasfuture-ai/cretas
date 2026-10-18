@@ -57,6 +57,7 @@ import java.util.UUID;
                 @Index(name = "idx_pr_po", columnList = "purchase_order_id"),
                 @Index(name = "idx_pr_supplier", columnList = "supplier_id"),
                 @Index(name = "idx_pr_so", columnList = "sales_order_id"),
+                @Index(name = "idx_pr_return_order", columnList = "return_order_id"),
                 @Index(name = "idx_pr_customer", columnList = "customer_id"),
                 @Index(name = "idx_pr_created_by", columnList = "created_by")
         }
@@ -123,6 +124,10 @@ public class PaymentRequest extends BaseEntity {
     @Column(name = "sales_order_id", length = 191)
     private String salesOrderId;
 
+    /** 销售退货退款来源；非空时 sourceType 必须为 SALES。 */
+    @Column(name = "return_order_id", length = 191)
+    private String returnOrderId;
+
     /**
      * 销售方向交易对手客户（SALES 时必填，PURCHASE 时为 null）。#29 新增。
      */
@@ -144,6 +149,10 @@ public class PaymentRequest extends BaseEntity {
      */
     @Column(name = "payment_method", length = 50)
     private String paymentMethod;
+
+    /** 财务实际付款凭证号（银行流水号/现金收据号）。 */
+    @Column(name = "payment_reference", length = 100)
+    private String paymentReference;
 
     @Column(name = "bank_name", length = 100)
     private String bankName;

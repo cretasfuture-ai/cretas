@@ -434,6 +434,9 @@ public class SalesServiceImpl implements SalesService {
     private com.cretas.aims.service.sales.OperationalQuoteOrderGuard operationalQuoteOrderGuard;
 
     @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.finance.ProductionCostConsistency productionCostConsistency;
+
+    @org.springframework.beans.factory.annotation.Autowired
     public SalesServiceImpl(SalesOrderRepository salesOrderRepository,
                             SalesOrderItemRepository salesOrderItemRepository,
                             SalesDeliveryRecordRepository deliveryRecordRepository,
@@ -3316,7 +3319,9 @@ public class SalesServiceImpl implements SalesService {
     @Override
     @Transactional
     public SalesDeliveryRecord shipDelivery(String factoryId, String deliveryId, Long userId) {
+        if (entityManager != null) com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager,factoryId);
         SalesDeliveryRecord record = lockDeliveryHierarchyForMutation(factoryId, deliveryId);
+        if (productionCostConsistency != null) productionCostConsistency.assertShipmentPeriodOpen(factoryId,record.getDeliveryDate());
         if ("MASTER".equals(record.getRecordRole())) {
             throw new BusinessException(409, "母发货单不能直接确认发货，请先创建子发运单")
                     .withCode("DELIVERY_SHIPMENT_REQUIRED")
@@ -3739,7 +3744,9 @@ public class SalesServiceImpl implements SalesService {
     public SalesDeliveryRecord warehouseConfirmDelivery(String factoryId, String deliveryId,
                                                         java.util.Map<String, java.math.BigDecimal> actualQuantities,
                                                         Long userId) {
+        if (entityManager != null) com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager,factoryId);
         SalesDeliveryRecord record = lockDeliveryHierarchyForMutation(factoryId, deliveryId);
+        if (productionCostConsistency != null) productionCostConsistency.assertShipmentPeriodOpen(factoryId,record.getDeliveryDate());
 
         if (record.getStatus() != SalesDeliveryStatus.DRAFT
                 && record.getStatus() != SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
@@ -4508,8 +4515,16 @@ public class SalesServiceImpl implements SalesService {
         }
     }
 
+    private record ShipmentDeduction(FinishedGoodsBatch batch, BigDecimal quantity) {}
     private void deductFinishedGoodsInventory(String factoryId, String salesOrderId,
                                               SalesDeliveryItem item, Long operatorId) {
+        java.util.Map<String,ShipmentDeduction> deductions=new java.util.LinkedHashMap<>();
+        deductFinishedGoodsAmounts(factoryId,salesOrderId,item,operatorId,deductions);
+        for (ShipmentDeduction d:deductions.values()) recordShipmentLineage(item,d.batch(),d.quantity(),operatorId);
+    }
+
+    private void deductFinishedGoodsAmounts(String factoryId, String salesOrderId,
+                                              SalesDeliveryItem item, Long operatorId, java.util.Map<String,ShipmentDeduction> deductions) {
         // 🔴 2026-08-12: 物料行(原料/辅料/包材)的货在 material_batches, 不在成品批次里。
         // 在这里分叉后 return, 下面整段成品逻辑(批次分配/FEFO/客户自有库存)一个字不动。
         if (isMaterialLine(factoryId, item.getProductTypeId())) {
@@ -4547,7 +4562,7 @@ public class SalesServiceImpl implements SalesService {
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations =
                     batchAllocationService.listByDeliveryItem(factoryId, String.valueOf(item.getId()));
             if (allocations != null && !allocations.isEmpty()) {
-                deductByAllocations(factoryId, salesOrder, item, allocations, operatorId);
+                deductByAllocations(factoryId, salesOrder, item, allocations, operatorId,deductions);
                 return;
             }
         }
@@ -4624,7 +4639,7 @@ public class SalesServiceImpl implements SalesService {
             BigDecimal deductNative = toNativeDeductAmount(
                     deductInTargetUnit, item, batch, gramsPerUnit, availableNative);
             if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
-            applyShipment(item, batch, deductNative, BigDecimal.ZERO, operatorId);  // 不释放预留 (扣的是未预留部分)
+            applyShipment(item, batch, deductNative, BigDecimal.ZERO, operatorId,deductions);  // 不释放预留 (扣的是未预留部分)
             recordDeductedBatch(item, batch);
             remaining = remaining.subtract(deductInTargetUnit);
         }
@@ -4661,7 +4676,7 @@ public class SalesServiceImpl implements SalesService {
                 BigDecimal deductNative = toNativeDeductAmount(
                         deductInTargetUnit, item, batch, gramsPerUnit, fromReservedNative);
                 if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
-                applyShipment(item, batch, deductNative, deductNative, operatorId);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
+                applyShipment(item, batch, deductNative, deductNative, operatorId,deductions);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
                 // 台账镜像: applyShipment 已把 batch.reserved 减了 deductNative, 这里同步削掉本 SO
                 // 在该批的 ACTIVE 台账行 (只削台账, 不再动 reserved), 维持 reserved == Σ台账 不变式。
                 if (reservationLedgerService != null && salesOrderId != null) {
@@ -4702,7 +4717,7 @@ public class SalesServiceImpl implements SalesService {
      */
     private void deductByAllocations(String factoryId, SalesOrder salesOrder, SalesDeliveryItem item,
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations,
-            Long operatorId) {
+            Long operatorId, java.util.Map<String,ShipmentDeduction> deductions) {
         boolean prestockedCustomerStock = salesOrder != null
                 && salesOrder.getCustomerStockFulfillmentMode()
                 == CustomerStockFulfillmentMode.PRESTOCKED;
@@ -4786,7 +4801,7 @@ public class SalesServiceImpl implements SalesService {
             }
             // PRESTOCKED 发的是本订单台账预留；普通订单仍扣未预留可用量。
             applyShipment(item, batch, shipNative,
-                    prestockedCustomerStock ? shipNative : BigDecimal.ZERO, operatorId);
+                    prestockedCustomerStock ? shipNative : BigDecimal.ZERO, operatorId,deductions);
             if (prestockedCustomerStock) {
                 reservationLedgerService.syncReleaseOnShipment(
                         salesOrder.getId(), batch.getId(), shipNative);
@@ -4868,8 +4883,9 @@ public class SalesServiceImpl implements SalesService {
      * R6 #6: releaseReserved 让发货释放对应预留, 避免 available 双扣低估。
      */
     private void applyShipment(SalesDeliveryItem item, FinishedGoodsBatch batch,
-                               BigDecimal shipQty, BigDecimal releaseReserved, Long operatorId) {
-        recordShipmentLineage(item, batch, shipQty, operatorId);
+                               BigDecimal shipQty, BigDecimal releaseReserved, Long operatorId, java.util.Map<String,ShipmentDeduction> deductions) {
+        deductions.merge(batch.getId(),new ShipmentDeduction(batch,shipQty),
+                (before,added)->new ShipmentDeduction(batch,before.quantity().add(added.quantity())));
         batch.setShippedQuantity(
                 (batch.getShippedQuantity() != null ? batch.getShippedQuantity() : BigDecimal.ZERO).add(shipQty));
         if (releaseReserved.compareTo(BigDecimal.ZERO) > 0) {
@@ -4903,7 +4919,7 @@ public class SalesServiceImpl implements SalesService {
         lineageEdgeRecorder.recordFinishedToShipment(
                 batch.getFactoryId(), batch.getId(), deliveryRecordId,
                 shipQty, batch.getUnit(), operatorId,
-                "delivery:" + deliveryRecordId + ":" + batch.getId(), meta);
+                "delivery:" + deliveryRecordId + ":" + item.getId() + ":" + batch.getId(), meta);
     }
 
     /** 记录发货行首个扣减的成品批次 (用于溯源)。 */

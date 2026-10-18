@@ -36,6 +36,23 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 class DisposalControllerApproveTest {
+    @Test void accountingReadUsesFinancePermissionAndFactoryScopedService() throws Exception {
+        var annotation=DisposalController.class.getMethod("getAccountingVouchers",String.class,Long.class)
+                .getAnnotation(com.cretas.aims.annotation.RequirePermission.class);
+        assertTrue(java.util.Arrays.asList(annotation.value()).contains("finance:read"));
+        when(disposalRecordService.getAccountingHistory("F001",5L)).thenReturn(java.util.List.of());
+        assertEquals(200,controller.getAccountingVouchers("F001",5L).getStatusCode().value());
+        Mockito.verify(disposalRecordService).getAccountingHistory("F001",5L);
+    }
+
+    @Test void financeApprovalPermissionMatchesExistingFinanceRolePolicy() throws Exception {
+        var method=DisposalController.class.getMethod("approveDisposal",String.class,Long.class,
+                ApproveDisposalRequest.class,HttpServletRequest.class);
+        var permission=method.getAnnotation(com.cretas.aims.annotation.RequirePermission.class);
+        assertNotNull(permission);
+        assertTrue(java.util.Arrays.asList(permission.value()).contains("finance:read_write"));
+        assertNotNull(method.getAnnotation(com.cretas.aims.annotation.RequireModule.class));
+    }
 
     @Mock DisposalRecordService disposalRecordService;
 

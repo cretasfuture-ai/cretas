@@ -5,7 +5,7 @@
         <div class="header">
           <div class="title">
             <h3>利润表</h3>
-            <span class="subtitle">
+            <span v-if="validMonths" class="subtitle">
               期间累计: {{ startYear }}-{{ String(startMonth).padStart(2, '0') }} 至
               {{ endYear }}-{{ String(endMonth).padStart(2, '0') }}
             </span>
@@ -27,6 +27,7 @@
         </div>
       </template>
 
+      <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false" data-testid="income-error" />
       <el-skeleton v-if="loading" :rows="10" animated />
       <div v-else-if="!data" class="empty">
         <el-empty description="暂无数据 — 请选择期间后点击刷新" />
@@ -104,13 +105,13 @@
         <!-- 明细展开 -->
         <el-collapse style="margin-top: 16px;">
           <el-collapse-item title="营业收入明细" name="revenues">
-            <DetailTable :items="data.revenues" />
+            <DetailTable :items="data.revenues ?? []" />
           </el-collapse-item>
           <el-collapse-item title="营业成本明细" name="costs">
-            <DetailTable :items="data.costs" />
+            <DetailTable :items="data.costs ?? []" />
           </el-collapse-item>
           <el-collapse-item title="营业费用明细" name="expenses">
-            <DetailTable :items="data.expenses" />
+            <DetailTable :items="data.expenses ?? []" />
           </el-collapse-item>
         </el-collapse>
       </div>
@@ -119,10 +120,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, defineComponent, h } from 'vue';
+import { ref, computed, watch, onBeforeUnmount, defineComponent, h } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElTable, ElTableColumn } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { getIncomeStatement, type IncomeStatementDTO, type LineItem } from '@/api/financeReport';
+import { readIncomeMonthRange, readMonthRange } from '@/utils/financeReportPeriod';
 
 // Inline tiny detail-table component
 const DetailTable = defineComponent({
@@ -147,19 +150,27 @@ const DetailTable = defineComponent({
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
+const route = useRoute();
 
 const today = new Date();
 const defaultStart = `${today.getFullYear()}-01`;
 const defaultEnd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
-const dateRange = ref<[string, string]>([defaultStart, defaultEnd]);
+function monthsFromLink(): [string, string] | null {
+  return route.query.periodStart !== undefined || route.query.periodEnd !== undefined
+    ? readIncomeMonthRange(route.query) : [defaultStart, defaultEnd];
+}
+const dateRange = ref<[string, string] | null>(monthsFromLink());
 const data = ref<IncomeStatementDTO | null>(null);
 const loading = ref(false);
+const errorMessage = ref('');
+let requestSequence = 0;
+const validMonths = computed(() => readMonthRange(dateRange.value));
 
-const startYear = computed(() => parseInt(dateRange.value[0].split('-')[0], 10));
-const startMonth = computed(() => parseInt(dateRange.value[0].split('-')[1], 10));
-const endYear = computed(() => parseInt(dateRange.value[1].split('-')[0], 10));
-const endMonth = computed(() => parseInt(dateRange.value[1].split('-')[1], 10));
+const startYear = computed(() => validMonths.value?.[0].slice(0, 4));
+const startMonth = computed(() => validMonths.value?.[0].slice(5));
+const endYear = computed(() => validMonths.value?.[1].slice(0, 4));
+const endMonth = computed(() => validMonths.value?.[1].slice(5));
 
 function disabledFuture(d: Date) {
   return d.getTime() > today.getTime();
@@ -203,37 +214,42 @@ const netProfitClass = computed(() => {
 });
 
 async function load() {
-  if (!factoryId.value) return;
+  const current = ++requestSequence;
+  data.value = null;
+  errorMessage.value = '';
+  loading.value = false;
+  const factory = factoryId.value, months = validMonths.value;
+  if (!factory) return;
+  if (route.query.factoryId !== undefined && route.query.factoryId !== factory) {
+    errorMessage.value = '链接所属工厂与当前账号不一致，请使用正确工厂账号查看。'; return;
+  }
+  if (!months) { errorMessage.value = '请选择有效的起止月份；同期间核对必须覆盖完整会计月。'; return; }
+  const [sy, sm, ey, em] = [Number(months[0].slice(0, 4)), Number(months[0].slice(5)), Number(months[1].slice(0, 4)), Number(months[1].slice(5))];
   loading.value = true;
   try {
-    const resp = await getIncomeStatement(
-      factoryId.value,
-      startYear.value,
-      startMonth.value,
-      endYear.value,
-      endMonth.value,
-    );
-    if (resp.success && resp.data) {
-      data.value = resp.data;
-    } else {
-      ElMessage({
-        message: resp.message || '加载利润表失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
+    const resp = await getIncomeStatement(factory, sy, sm, ey, em);
+    if (current !== requestSequence) return;
+    if (!resp.success || !resp.data) throw new Error(resp.message || '加载利润表失败');
+    const result = resp.data;
+    if (result.factoryId !== factory || result.startYear !== sy || result.startMonth !== sm || result.endYear !== ey || result.endMonth !== em) {
+      throw new Error('返回的工厂或期间与本次查询不一致，请刷新后重试。');
     }
+    data.value = result;
   } catch (e: unknown) {
+    if (current !== requestSequence) return;
     const msg = e instanceof Error ? e.message : String(e);
+    errorMessage.value = msg;
     ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   } finally {
-    loading.value = false;
+    if (current === requestSequence) loading.value = false;
   }
 }
 
-onMounted(() => {
-  load();
+watch(() => [route.query.periodStart, route.query.periodEnd], () => {
+  dateRange.value = monthsFromLink();
 });
+watch(() => [factoryId.value, route.query.factoryId, ...(dateRange.value ?? [])], () => { void load(); }, { immediate: true });
+onBeforeUnmount(() => { requestSequence++; });
 </script>
 
 <style scoped>

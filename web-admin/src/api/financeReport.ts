@@ -42,16 +42,16 @@ export interface IncomeStatementDTO {
   startMonth: number;
   endYear: number;
   endMonth: number;
-  revenues: LineItem[];
-  costs: LineItem[];
-  expenses: LineItem[];
-  totalRevenue: number;
-  totalCost: number;
-  grossProfit: number;
-  totalExpense: number;
-  operatingProfit: number;
-  incomeTax: number;
-  netProfit: number;
+  revenues: LineItem[] | null;
+  costs: LineItem[] | null;
+  expenses: LineItem[] | null;
+  totalRevenue: number | null;
+  totalCost: number | null;
+  grossProfit: number | null;
+  totalExpense: number | null;
+  operatingProfit: number | null;
+  incomeTax: number | null;
+  netProfit: number | null;
   generatedAt: string;
   /** F006 财务审计 Bug 6 (2026-07-04): 期间内待过账 (DRAFT) 凭证数, 见 BalanceSheetDTO 同名字段. */
   pendingDraftVoucherCount?: number;
@@ -104,6 +104,61 @@ export function getBalanceSheet(factoryId: string, year: number, month: number) 
 /**
  * 利润表 — 期间累计.
  */
+export interface ShipmentMarginBatchSource {
+  batchNumber: string;
+  quantity: number;
+  unit: string;
+  unitCost: number | null;
+  rawCost: number | null;
+  cost: number | null;
+}
+
+export interface ShipmentMarginSourceLine {
+  shipmentLineId: number;
+  deliveryNumber: string;
+  deliveryDate: string;
+  quantity: number;
+  unit: string;
+  revenue: number | null;
+  rawCost: number | null;
+  cost: number | null;
+  batches: ShipmentMarginBatchSource[];
+}
+
+export interface ShipmentSkuMarginRow {
+  productTypeId: string;
+  productName: string;
+  unit: string;
+  quantity: number;
+  shipmentLineCount: number;
+  batchCount: number;
+  sources: ShipmentMarginSourceLine[] | null;
+  revenue: number | null;
+  rawCost: number | null;
+  cost: number | null;
+  grossProfit: number | null;
+  marginRate: number | null;
+}
+
+export interface ShipmentSkuMargin {
+  periodStart: string;
+  periodEnd: string;
+  rows: ShipmentSkuMarginRow[];
+  totalRevenue: number | null;
+  totalCost: number | null;
+  grossProfit: number | null;
+  marginRate: number | null;
+  roundingAdjustment: number | null;
+  reconciliationStatus: 'MATCH' | 'MISMATCH' | 'PENDING_VOUCHERS' | 'PARTIAL_PERIOD';
+  reconciliationMessage: string;
+  financialStatement: IncomeStatementDTO | null;
+}
+
+export function getShipmentSkuMargin(factoryId: string, periodStart: string, periodEnd: string) {
+  return get<ShipmentSkuMargin>(`/${factoryId}/finance/report/shipment-sku-margin`,
+    { params: { periodStart, periodEnd } });
+}
+
 export function getIncomeStatement(
   factoryId: string,
   startYear: number,

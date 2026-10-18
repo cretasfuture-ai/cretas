@@ -295,6 +295,126 @@ def _validate_dataset_input_snapshot(
         actual[str(manifest)] = _sha256(manifest).lower()
     if actual != expected:
         raise WorkerBlockedError("registered dataset input does not match discovered queue manifests")
+    if "preparation_sha256" in snapshot or str(snapshot.get("data_version") or "").startswith("prep-"):
+        _validate_preparation_dataset_input(snapshot, registration, actual)
+
+
+def _validate_preparation_dataset_input(
+    snapshot: Any, registration: WorkerRegistration, queue_manifests: dict[str, str],
+) -> None:
+    """Rebind a prepared export to the exact queue rows consumed by VisionLab.
+
+    The preparation export is the source of truth for every training photo and
+    box.  This check deliberately runs before ``build_dataset`` and is reused
+    by the train stage, where the dataset input must remain registered even
+    though the stage itself is train.
+    """
+    if not isinstance(snapshot, dict):
+        raise WorkerBlockedError("prepared dataset input is malformed")
+    preparation = snapshot.get("preparation_snapshot")
+    preparation_sha = str(snapshot.get("preparation_sha256") or "").lower()
+    if not isinstance(preparation, dict) or preparation.get("schema") != "factory-vision-preparation-v1":
+        raise WorkerBlockedError("prepared dataset input lacks the frozen preparation snapshot")
+    if not SHA256_RE.fullmatch(preparation_sha):
+        raise WorkerBlockedError("prepared dataset input lacks a valid preparation hash")
+    try:
+        backend_root = Path(__file__).resolve().parents[2] / "backend" / "python"
+        if str(backend_root) not in sys.path:
+            sys.path.insert(0, str(backend_root))
+        from vision_training.preparation import digest as preparation_digest
+        actual_preparation_sha = preparation_digest(preparation)
+    except Exception as exc:
+        raise WorkerBlockedError("prepared dataset input cannot load the canonical hash verifier") from exc
+    if actual_preparation_sha.lower() != preparation_sha:
+        raise WorkerBlockedError("prepared dataset preparation hash does not match its content")
+    if snapshot.get("factory_id") != registration.factory_id or preparation.get("factory_id") != registration.factory_id:
+        raise WorkerBlockedError("prepared dataset crosses factory scope")
+    if snapshot.get("project_id") != registration.project_id:
+        raise WorkerBlockedError("prepared dataset execution project does not match worker binding")
+    if snapshot.get("preparation_project_id") != preparation.get("project_id"):
+        raise WorkerBlockedError("prepared dataset source project does not match the frozen preparation")
+    if preparation.get("task_family") != "liushanmen-tray-label-detection":
+        raise WorkerBlockedError("prepared dataset has no named specialized runner")
+    if str(snapshot.get("data_version") or "") != "prep-" + preparation_sha:
+        raise WorkerBlockedError("prepared dataset data_version does not bind the preparation hash")
+    standard = preparation.get("standard")
+    if not isinstance(standard, dict) or standard.get("confirmed") is not True:
+        raise WorkerBlockedError("prepared dataset standard is not confirmed")
+    try:
+        from vision_training.preparation import digest as preparation_digest
+        expected_standard = "standard-" + preparation_digest(standard)
+        expected_acceptance = "accept-" + preparation_digest([
+            photo for photo in preparation.get("photos", [])
+            if isinstance(photo, dict) and photo.get("purpose") == "acceptance"
+        ])
+    except Exception as exc:
+        raise WorkerBlockedError("prepared dataset versions cannot be computed") from exc
+    if snapshot.get("human_standard_version") != expected_standard:
+        raise WorkerBlockedError("prepared dataset standard version does not match the frozen standard")
+    if snapshot.get("independent_acceptance_version") != expected_acceptance:
+        raise WorkerBlockedError("prepared dataset independent acceptance version does not match the frozen photos")
+
+    photos = preparation.get("photos")
+    if not isinstance(photos, list) or not photos:
+        raise WorkerBlockedError("prepared dataset snapshot contains no photos")
+    training = {
+        str(photo.get("photoId")): photo for photo in photos
+        if isinstance(photo, dict) and photo.get("purpose") == "training" and photo.get("training_eligible") is True and photo.get("verdict") != "uncertain"
+    }
+    excluded = {
+        str(photo.get("photoId")) for photo in photos
+        if isinstance(photo, dict) and not (photo.get("purpose") == "training" and photo.get("training_eligible") is True and photo.get("verdict") != "uncertain")
+    }
+    if not training:
+        raise WorkerBlockedError("prepared dataset has no eligible human training photos")
+    if len(queue_manifests) != 1:
+        raise WorkerBlockedError("prepared dataset must bind exactly one frozen queue manifest")
+    queue_manifest_path = Path(next(iter(queue_manifests)))
+    try:
+        queue_value = json.loads(queue_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise WorkerBlockedError("prepared queue manifest cannot be read") from exc
+    rows = queue_value.get("rows") if isinstance(queue_value, dict) else None
+    if not isinstance(rows, list) or {str(row.get("crop_id")) for row in rows if isinstance(row, dict)} != set(training):
+        raise WorkerBlockedError("prepared queue rows do not exactly match eligible preparation photos")
+    if any(not isinstance(row, dict) or str(row.get("crop_id")) in excluded for row in rows):
+        raise WorkerBlockedError("prepared queue includes acceptance or uncertain photos")
+    seen: set[str] = set()
+    for row in rows:
+        photo_id = str(row.get("crop_id") or "")
+        if photo_id in seen or photo_id not in training:
+            raise WorkerBlockedError("prepared queue contains an unknown or duplicate photo")
+        seen.add(photo_id)
+        photo = training[photo_id]
+        if row.get("purpose") != "training" or row.get("training_eligible") is not True or row.get("source") != "human":
+            raise WorkerBlockedError("prepared queue row is not human training evidence")
+        if row.get("source_task_id") != photo.get("captureGroup") or row.get("task_id") != photo.get("captureGroup"):
+            raise WorkerBlockedError("prepared queue row capture batch does not match the preparation")
+        image = _safe_local_path(row.get("image"), registration.project_root, "prepared queue image")
+        expected_render = str(photo.get("renderSha256") or "").lower()
+        if str(row.get("image_sha256") or "").lower() != expected_render or _sha256(image).lower() != expected_render:
+            raise WorkerBlockedError("prepared queue image hash does not match the frozen photo")
+        annotation = _safe_local_path(
+            str(queue_manifest_path.parent / "annotations-human" / f"{photo_id}.json"),
+            registration.project_root, "prepared human annotation",
+        )
+        try:
+            value = json.loads(annotation.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WorkerBlockedError("prepared human annotation cannot be read") from exc
+        annotation_sha = str(row.get("annotation_sha256") or "").lower()
+        if not SHA256_RE.fullmatch(annotation_sha) or _sha256(annotation).lower() != annotation_sha:
+            raise WorkerBlockedError("prepared annotation hash does not match the queue row")
+        try:
+            expected_boxes = [{"c": {"white_label": 0, "color_label": 1}[box["label"]], "b": [float(box["x0"]), float(box["y0"]), float(box["x1"]), float(box["y1"])]} for box in photo.get("boxes", [])]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise WorkerBlockedError("prepared snapshot boxes are malformed") from exc
+        if (
+            value.get("reviewed") is not True or value.get("unjudgeable") is True
+            or value.get("format") != "normalised_xyxy" or value.get("source") != "human" or value.get("training_eligible") is not True
+            or value.get("verdict") != photo.get("verdict") or value.get("boxes") != expected_boxes
+        ):
+            raise WorkerBlockedError("prepared annotation does not exactly match the frozen human review")
 
 
 def _validate_collect_rows(rows: Any, registration: WorkerRegistration) -> list[dict[str, Any]]:
@@ -696,7 +816,14 @@ class VisionLabSOPWorker:
             return result
         if stage == "train":
             _validate_evaluation_inputs(config, self.registration, stage="train")
+            # ``train`` consumes the registered dataset-result (data_yaml and
+            # manifest).  A prepared dataset-input is a second provenance
+            # binding and must never replace that stage result.
             dataset = _load_fixed_input(self.registration, stage)
+            if self.registration.input_refs.get("dataset"):
+                preparation_input = _load_fixed_input(self.registration, "dataset")
+                if isinstance(preparation_input, dict) and str(preparation_input.get("data_version") or "").startswith("prep-"):
+                    _validate_dataset_input_snapshot(preparation_input, config, vision_lab, self.registration)
             if not isinstance(dataset, dict):
                 raise WorkerBlockedError("registered dataset input is not an object")
             dataset_validation = _validate_dataset_result(config, dataset, self.registration)
@@ -753,6 +880,7 @@ class VisionLabSOPWorker:
             raise WorkerBlockedError("claimed job identity does not match the local worker binding")
         if identity.config_hash.lower() != self.registration.config_sha256.lower():
             raise WorkerBlockedError("claimed job config hash does not match the registered config")
+        preparation_job = str(identity.data_version or "").startswith("prep-")
         expected_input_hash = (self.registration.input_hashes or {}).get(stage)
         if not expected_input_hash or identity.input_hash.lower() != expected_input_hash.lower():
             raise WorkerBlockedError("claimed job input hash is not bound to a registered local input")
@@ -760,6 +888,21 @@ class VisionLabSOPWorker:
             raise WorkerBlockedError("claimed job lacks a version-bound predecessor asset hash")
         if stage not in {"collect", "dataset", "train", "evaluate"}:
             raise WorkerBlockedError("only collect/dataset/train/evaluate jobs can run on the local worker")
+
+        # A prepared train job must still consume and verify the registered
+        # dataset input before any stage function can run.  This prevents a
+        # train-only binding from dropping the frozen preparation snapshot.
+        if preparation_job:
+            config = _load_config(self.registration)
+            vision_lab = _load_vision_lab()
+            dataset_input = _load_fixed_input(self.registration, "dataset")
+            _validate_dataset_input_snapshot(dataset_input, config, vision_lab, self.registration)
+            if identity.factory_id != dataset_input.get("factory_id") or identity.project_id != dataset_input.get("project_id"):
+                raise WorkerBlockedError("prepared job identity does not match the registered dataset input")
+            if identity.human_standard_version != dataset_input.get("human_standard_version"):
+                raise WorkerBlockedError("prepared job standard version does not match the registered dataset input")
+            if identity.independent_acceptance_version != dataset_input.get("independent_acceptance_version"):
+                raise WorkerBlockedError("prepared job independent acceptance version does not match the registered dataset input")
 
         raw = self.execute(stage)
         if not isinstance(raw, dict):

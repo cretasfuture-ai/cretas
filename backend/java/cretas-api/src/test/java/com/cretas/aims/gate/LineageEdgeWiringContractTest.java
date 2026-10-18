@@ -35,11 +35,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ol>
  *   <li>判不出这行调用是不是在<b>死代码</b>里。缓解：recorder 单测 + 服务层单测覆盖行为本身。</li>
  *   <li>判不出注入有没有成功。缓解：下面单独断言 {@link LineageEdgeRecorder} 带
- *       {@code @Service} —— 这 7 处用的是 {@code @Autowired(required=false)}，
+ *       {@code @Service} —— 这 8 处用的是 {@code @Autowired(required=false)}，
  *       bean 不存在时会<b>静默注入 null</b>，那正是「机制在、没接上」的完美伪装。</li>
  * </ol>
  *
- * <p>⚠️ 用 {@code @Autowired(required=false)} 而不是构造器参数，是因为这 7 个类的构造器
+ * <p>⚠️ 用 {@code @Autowired(required=false)} 而不是构造器参数，是因为这 8 个类的构造器
  * 被 51 个测试文件按位置参数直接 {@code new}，加必需依赖会一次全打红；
  * 代价就是注入失败不会报错 —— 所以那条 {@code @Service} 断言不是装饰。
  */
@@ -76,10 +76,14 @@ class LineageEdgeWiringContractTest {
         REQUIRED_CALLS.put(
                 "com/cretas/aims/service/inventory/impl/SalesServiceImpl.java",
                 "recordFinishedToShipment");
+        // ── MATERIAL_TRANSFER ──
+        REQUIRED_CALLS.put(
+                "com/cretas/aims/service/inventory/impl/TransferServiceImpl.java",
+                "recordMaterialTransfer");
     }
 
     @Test
-    @DisplayName("7 个写点各自都有一行 recorder 调用")
+    @DisplayName("8 个写点各自都有一行 recorder 调用")
     void everyWritePathCallsTheRecorder() throws IOException {
         for (Map.Entry<String, String> e : REQUIRED_CALLS.entrySet()) {
             Path file = MAIN_ROOT.resolve(e.getKey());
@@ -165,11 +169,11 @@ class LineageEdgeWiringContractTest {
     @Test
     @DisplayName("LineageEdgeRecorder 必须是 @Service —— required=false 注入失败是静默的")
     void recorderIsASpringBean() {
-        // 🔴 这不是装饰性断言: 7 处写点用的都是 @Autowired(required = false)。
-        //    如果哪天 @Service 被摘掉, Spring 会把 null 注进去, 7 处 null 守卫全部静默跳过,
+        // 🔴 这不是装饰性断言: 8 处写点用的都是 @Autowired(required = false)。
+        //    如果哪天 @Service 被摘掉, Spring 会把 null 注进去, 8 处 null 守卫全部静默跳过,
         //    血缘一条都不写, 而所有测试照样绿 —— 正是「机制在、没接上」。
         assertThat(LineageEdgeRecorder.class.getAnnotation(Service.class))
-                .as("LineageEdgeRecorder 掉了 @Service ⇒ 7 处 required=false 注入全变 null, 血缘静默停写")
+                .as("LineageEdgeRecorder 掉了 @Service ⇒ 8 处 required=false 注入全变 null, 血缘静默停写")
                 .isNotNull();
     }
 }

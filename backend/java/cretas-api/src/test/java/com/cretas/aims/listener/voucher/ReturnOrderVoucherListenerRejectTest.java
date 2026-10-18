@@ -17,7 +17,6 @@ import java.util.Optional;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 /**
@@ -34,6 +33,7 @@ class ReturnOrderVoucherListenerRejectTest {
 
     private static final String FACTORY_ID = "F006";
     private static final String RO_ID = "RO-REJECT-001";
+    private static final Long ACTOR_ID = 42L;
 
     @BeforeEach
     void setUp() {
@@ -47,9 +47,9 @@ class ReturnOrderVoucherListenerRejectTest {
                 .status(VoucherStatus.DRAFT).build();
         when(voucherService.findBySourceBusiness("RETURN_ORDER", RO_ID)).thenReturn(Optional.of(v));
 
-        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID));
+        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID, ACTOR_ID));
 
-        verify(voucherService).voidVoucher(eq(FACTORY_ID), eq("RV-1"), anyString(), isNull());
+        verify(voucherService).voidVoucher(eq(FACTORY_ID), eq("RV-1"), anyString(), eq(ACTOR_ID));
     }
 
     @Test
@@ -57,7 +57,7 @@ class ReturnOrderVoucherListenerRejectTest {
     void rejectedReturn_noVoucher_noOp() {
         when(voucherService.findBySourceBusiness("RETURN_ORDER", RO_ID)).thenReturn(Optional.empty());
 
-        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID));
+        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID, ACTOR_ID));
 
         verify(voucherService, never()).voidVoucher(anyString(), anyString(), anyString(), any());
     }
@@ -69,7 +69,7 @@ class ReturnOrderVoucherListenerRejectTest {
                 .status(VoucherStatus.REVERSED).build();
         when(voucherService.findBySourceBusiness("RETURN_ORDER", RO_ID)).thenReturn(Optional.of(v));
 
-        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID));
+        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID, ACTOR_ID));
 
         verify(voucherService, never()).voidVoucher(anyString(), anyString(), anyString(), any());
     }
@@ -83,8 +83,8 @@ class ReturnOrderVoucherListenerRejectTest {
         doThrow(new IllegalStateException("boom")).when(voucherService)
                 .voidVoucher(anyString(), anyString(), anyString(), any());
 
-        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID));
+        listener.onReturnOrderRejected(new ReturnOrderRejectedEvent(this, FACTORY_ID, RO_ID, ACTOR_ID));
 
-        verify(voucherService).voidVoucher(eq(FACTORY_ID), eq("RV-3"), anyString(), isNull());
+        verify(voucherService).voidVoucher(eq(FACTORY_ID), eq("RV-3"), anyString(), eq(ACTOR_ID));
     }
 }

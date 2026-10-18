@@ -50,11 +50,14 @@ class QualityDispositionInventoryServiceTest {
     private ProductionBatchRepository productionBatchRepository;
     @Mock
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    @Mock
+    private FactoryRecallService factoryRecallService;
 
     private QualityInspection inspection;
 
     @BeforeEach
     void setUp() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "factoryRecallService", factoryRecallService);
         inspection = new QualityInspection();
         inspection.setId("qi-1");
         inspection.setFactoryId(FACTORY_ID);
@@ -65,20 +68,63 @@ class QualityDispositionInventoryServiceTest {
 
     private FinishedGoodsBatch fg(String status) {
         FinishedGoodsBatch b = new FinishedGoodsBatch();
-        // distinct id/batchNumber so Lombok @Data equals() distinguishes batches in Mockito verify()
+        // Distinct IDs, while every fixture belongs to this exact production batch.
         b.setId("fg-" + (++fgSeq));
-        b.setBatchNumber("FG-B-" + fgSeq);
+        b.setFactoryId(FACTORY_ID);
+        b.setBatchNumber("PB-100");
+        b.setProductTypeId("SKU-100");
         b.setStatus(status);
         return b;
     }
 
     private void wirePlan() {
         ProductionBatch pb = new ProductionBatch();
+        pb.setFactoryId(FACTORY_ID);
+        pb.setBatchNumber("PB-100");
+        pb.setProductTypeId("SKU-100");
         pb.setProductionPlanId(PLAN_ID);
         when(productionBatchRepository.findById(PRODUCTION_BATCH_ID)).thenReturn(Optional.of(pb));
     }
 
     // ===================== 静态纯函数守卫 =====================
+
+    @Test
+    void activeRecallBlocksReleaseBeforeAnyInventoryMutation() {
+        doThrow(new com.cretas.aims.exception.BusinessException(409, "召回尚未完成，不能解除隔离"))
+                .when(factoryRecallService).assertReleaseAllowed(FACTORY_ID, PRODUCTION_BATCH_ID);
+        assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.applyDisposition(inspection, DispositionAction.RELEASE));
+        verifyNoInteractions(finishedGoodsBatchRepository, materialBatchRepository);
+    }
+
+    @Test
+    void activeRecallAlsoBlocksConditionalRelease() {
+        doThrow(new com.cretas.aims.exception.BusinessException(409, "召回尚未完成，不能解除隔离"))
+                .when(factoryRecallService).assertReleaseAllowed(FACTORY_ID, PRODUCTION_BATCH_ID);
+        assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.applyDisposition(inspection, DispositionAction.CONDITIONAL_RELEASE));
+        verifyNoInteractions(finishedGoodsBatchRepository, materialBatchRepository);
+    }
+
+    @Test
+    void releaseDoesNotUnfreezeAnotherBatchOrSkuSharingThePlan() {
+        wirePlan();
+        FinishedGoodsBatch current = fg(FinishedGoodsBatch.Status.DEFECTIVE);
+        FinishedGoodsBatch sibling = fg(FinishedGoodsBatch.Status.DEFECTIVE);
+        sibling.setBatchNumber("OTHER-PB");
+        FinishedGoodsBatch otherSku = fg(FinishedGoodsBatch.Status.DEFECTIVE);
+        otherSku.setProductTypeId("OTHER-SKU");
+        when(finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(current, sibling, otherSku));
+
+        InventoryDispositionResult result = service.applyDisposition(inspection, DispositionAction.RELEASE);
+
+        assertEquals(1, result.getFinishedGoodsReleased());
+        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, sibling.getStatus());
+        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, otherSku.getStatus());
+        verify(finishedGoodsBatchRepository, never()).save(sibling);
+        verify(finishedGoodsBatchRepository, never()).save(otherSku);
+    }
 
     @Test
     @DisplayName("UT-DIB-00: evaluateMaterialFlip — idempotent / terminal / flip")

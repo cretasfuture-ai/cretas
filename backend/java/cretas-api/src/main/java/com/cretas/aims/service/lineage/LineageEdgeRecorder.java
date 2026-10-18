@@ -59,6 +59,7 @@ public class LineageEdgeRecorder {
     public static final String EDGE_RAW_TO_PRODUCTION = "RAW_TO_PRODUCTION";
     public static final String EDGE_PRODUCTION_TO_FINISHED = "PRODUCTION_TO_FINISHED";
     public static final String EDGE_FINISHED_TO_SHIPMENT = "FINISHED_TO_SHIPMENT";
+    public static final String EDGE_MATERIAL_TRANSFER = "MATERIAL_TRANSFER";
 
     /** meta 里存幂等键的字段名。 */
     public static final String META_REF_KEY = "refKey";
@@ -179,6 +180,26 @@ public class LineageEdgeRecorder {
                 NODE_FINISHED_BATCH, finishedBatchId,
                 NODE_SHIPMENT_RECORD, shipmentId,
                 quantity, unit, operatorId, refKey, meta);
+    }
+
+    /**
+     * 同厂调拨：原料批次 → 调入方原料批次。
+     *
+     * <p>调用方必须按实际 FEFO 扣减逐批调用；{@code refKey} 应包含调拨单、明细和来源批次，
+     * 这样同一来源批次的重放只会保留一条边，而一次调拨跨多个来源批次仍能表达多条真实边。</p>
+     */
+    public LineageRecordOutcome recordMaterialTransfer(String factoryId,
+                                                       String sourceMaterialBatchId,
+                                                       String targetMaterialBatchId,
+                                                       BigDecimal quantity,
+                                                       String unit,
+                                                       Long operatorId,
+                                                       String refKey,
+                                                       Map<String, Object> extraMeta) {
+        return record(factoryId, EDGE_MATERIAL_TRANSFER,
+                NODE_MATERIAL_BATCH, sourceMaterialBatchId,
+                NODE_MATERIAL_BATCH, targetMaterialBatchId,
+                quantity, unit, operatorId, refKey, extraMeta);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -320,6 +341,15 @@ public class LineageEdgeRecorder {
                 NODE_FINISHED_BATCH, finishedBatchId,
                 NODE_SHIPMENT_RECORD, shipmentId,
                 quantity, unit, null, refKey, null);
+    }
+
+    public LineageRecordOutcome previewFinishedToShipment(String factoryId, String finishedBatchId,
+            String shipmentId, BigDecimal quantity, String unit, String refKey, Map<String,Object> extraMeta) {
+        Map<String,Object> meta=new HashMap<>();
+        if(extraMeta!=null)meta.putAll(extraMeta);
+        meta.put(META_SHIPMENT_CARRIER,SHIPMENT_CARRIER_SALES_DELIVERY);
+        return preview(factoryId,EDGE_FINISHED_TO_SHIPMENT,NODE_FINISHED_BATCH,finishedBatchId,
+                NODE_SHIPMENT_RECORD,shipmentId,quantity,unit,null,refKey,meta);
     }
 
     /**

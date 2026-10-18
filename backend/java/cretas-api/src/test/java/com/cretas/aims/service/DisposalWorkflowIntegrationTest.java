@@ -10,6 +10,7 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.finance.DisposalCostAccountingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -66,6 +67,8 @@ class DisposalWorkflowIntegrationTest {
                 materialBatchAdjustmentRepository, productionBatchRepository,
                 finishedGoodsBatchRepository, finishedGoodsAdjustmentLogRepository);
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
+        ReflectionTestUtils.setField(service, "disposalCostAccountingService",
+                mock(DisposalCostAccountingService.class));
     }
 
     // -------------------------------------------------------

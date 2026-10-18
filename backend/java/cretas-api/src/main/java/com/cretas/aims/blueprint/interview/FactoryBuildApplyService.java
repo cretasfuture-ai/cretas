@@ -738,8 +738,8 @@ public class FactoryBuildApplyService {
 
             // 15c. indicatorOptOut → indicators.is_active=false
             //
-            // ⛔ 与模块那条成对的减法入口, 但动作不同: 那 11 行**建厂时就种好了**
-            //    (FactoryServiceImpl#seedDefaultIndicators 跑在访谈之前),
+            // ⛔ 与模块那条成对的减法入口, 但动作不同: 四项定义**建厂时就创建了**
+            //    (FactoryIndicatorProvisioner#provision 跑在访谈之前),
             //    所以这里是**停用**不是「不种」。软停用可逆 —— 客户以后想看回来
             //    在 Canvas 里打开即可, 数据不丢。
             // ⚠️ 代价比模块那条轻: 少一格看板 vs 接口 403。
@@ -1432,7 +1432,7 @@ public class FactoryBuildApplyService {
     /**
      * 把客户说「不用看」的指标置 {@code is_active=false}。
      *
-     * <p>⛔ 不删行: 那 11 行是建厂时按 {@code DefaultIndicatorCatalog} 种下的产品默认,
+     * <p>⛔ 不删行: 四项实际生产指标是建厂时由 {@code FactoryIndicatorProvisioner} 创建的默认定义,
      * 删了客户以后想看回来就得重建。软停用可逆, 而
      * {@code IndicatorRepository#findActiveByFactoryId} 正好按 {@code isActive} 过滤。
      *
@@ -1446,10 +1446,10 @@ public class FactoryBuildApplyService {
             return;
         }
         for (String code : request.getSuggestedData().getIndicatorOptOut()) {
-            if (isBlank(code)) {
+            String c = com.cretas.aims.service.indicator.FactoryIndicatorProvisioner.optOutCode(code);
+            if (c == null) {
                 continue;
             }
-            String c = code.trim();
             var found = indicatorRepository.findByFactoryIdAndCode(factoryId, c);
             if (found.isEmpty()) {
                 result.getUnknownIndicatorCodes().add(c);

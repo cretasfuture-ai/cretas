@@ -778,26 +778,13 @@ public class FactoryBuildInterviewService {
         //    这里写错一个字, 落库的行永远不生效且不报错。
         //    python 侧 ai_proxy.py#_module_configs 的标签表由
         //    tests/test_factory_init_modules.py 直接解析那个 .java 逐条比对, 防两处口径漂。
-        // ⛔ 指标侧的减法入口。与模块那道题成对 —— 加法都在产品目录里全量给,
-        //    减法只在这两道题里做(Steve 2026-08-14)。
-        //
-        // ⚠️ 与模块那道题有一个本质差别: 指标是**建厂时就种好的 11 行**
-        //    (FactoryServiceImpl#seedDefaultIndicators, 在访谈之前跑),
-        //    所以这里的减法不是「不种」而是**把选中的置 is_active=false** —— 软停用、可逆,
-        //    且 IndicatorRepository#findActiveByFactoryId 正好按它过滤。
-        //
-        // ⚠️ 代价比模块那道题**轻**: 指标停用只是看板少一格, 而模块关错是接口 403。
-        //    所以这道题不需要在预览里写「会 403」那种警告。
-        //
-        // ⛔ 选项**逐字**取自 DefaultIndicatorCatalog 的 name(11 个) ——
-        //    python 侧 ai_proxy.py#_indicator_opt_out 的标签表由
-        //    tests/test_factory_init_indicators.py 直接解析那个 .java 逐条比对, 防两处口径漂。
+        // 与正式建厂共用四项实际生产指标目录；停用只影响展示，不删除历史。
         multiChoiceParam("indicatorOptOut", "哪些指标不用看",
-                "新厂默认带 11 个指标，哪些你们不用看？不看的说出来：出品率、日均产量、单位成本、库存总价值、原料周转天数、质检不合格率、真空包装合格率、本月HACCP违规次数、本月销售总额、本月订单数、平均订单金额。都要看就说都要。",
-                List.of("出品率", "日均产量", "单位成本", "库存总价值", "原料周转天数",
-                        "质检不合格率", "真空包装合格率", "本月HACCP违规次数",
-                        "本月销售总额", "本月订单数", "平均订单金额",
-                        "都要看")),
+                "制造新厂默认提供" + String.join("、", com.cretas.aims.service.indicator.FactoryIndicatorProvisioner.defaultNames())
+                        + "。没有实际业务时显示暂无数据。哪些不用看？都要看就说都要。",
+                java.util.stream.Stream.concat(
+                        com.cretas.aims.service.indicator.FactoryIndicatorProvisioner.defaultNames().stream(),
+                        java.util.stream.Stream.of("都要看")).toList()),
         multiChoiceParam("moduleOptOut", "哪些功能用不上",
                 "这套系统有 14 块功能，哪些你们用不上？用不上的说出来，系统就不给你们开：生产、仓储、质检、调度、人事、设备、财务、智能BI、采购、销售、物流、溯源、系统、餐饮。都要就说都要。",
                 List.of("生产", "仓储", "质检", "调度", "人事", "设备", "财务",

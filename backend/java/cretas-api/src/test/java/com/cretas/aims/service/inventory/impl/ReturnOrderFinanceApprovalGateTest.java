@@ -4,27 +4,34 @@ import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.exception.BusinessException;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.voucher.VoucherService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -55,7 +62,10 @@ class ReturnOrderFinanceApprovalGateTest {
     @Mock private ReturnOrderRepository returnOrderRepository;
     @Mock private ReturnOrderItemRepository returnOrderItemRepository;
     @Mock private ArApService arApService;
+    @Mock private VoucherService voucherService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
+    @Mock private EntityManager entityManager;
+    @Mock private Query rowLockQuery;
 
     private ReturnOrderServiceImpl service;
 
@@ -70,6 +80,10 @@ class ReturnOrderFinanceApprovalGateTest {
                 returnOrderItemRepository,
                 arApService,
                 applicationEventPublisher);
+        ReflectionTestUtils.setField(service, "entityManager", entityManager);
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(rowLockQuery);
+        when(rowLockQuery.setParameter(anyString(), any())).thenReturn(rowLockQuery);
     }
 
     private ReturnOrder buildOrder(ReturnType type, ReturnOrderStatus status) {
@@ -90,6 +104,7 @@ class ReturnOrderFinanceApprovalGateTest {
     private void stub(ReturnOrder order) {
         when(returnOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
         when(returnOrderRepository.save(order)).thenReturn(order);
+        when(rowLockQuery.getResultList()).thenReturn(List.of(order.getId()));
     }
 
     @Test
@@ -104,6 +119,11 @@ class ReturnOrderFinanceApprovalGateTest {
 
         // 状态未被推进，AR/AP 不被触发
         assertThat(order.getStatus()).isEqualTo(ReturnOrderStatus.APPROVED);
+        verifyRowLock(order);
+        InOrder calls = inOrder(returnOrderRepository, entityManager);
+        calls.verify(returnOrderRepository).findById(order.getId());
+        calls.verify(entityManager).createNativeQuery(anyString());
+        calls.verify(entityManager).refresh(order);
     }
 
     @Test
@@ -117,6 +137,7 @@ class ReturnOrderFinanceApprovalGateTest {
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.FINANCE_APPROVED);
         assertThat(result.getFinanceApprovedBy()).isEqualTo(FINANCE_USER);
         assertThat(result.getFinanceApprovedAt()).isNotNull();
+        verifyRowLock(order);
     }
 
     @Test
@@ -156,6 +177,7 @@ class ReturnOrderFinanceApprovalGateTest {
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.REJECTED);
         assertThat(result.getFinanceApprovedBy()).isEqualTo(FINANCE_USER);
         assertThat(result.getFinanceApprovedAt()).isNotNull();
+        verifyRowLock(order);
     }
 
     @Test
@@ -218,5 +240,30 @@ class ReturnOrderFinanceApprovalGateTest {
         // 财务门拦截发生在 AR/AP 冲减之前
         verify(arApService, never()).recordAdjustment(
                 anyString(), any(), anyString(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("错误工厂在悲观锁前拒绝，不能 refresh 或写入")
+    void wrongFactoryRejectedBeforeLockOrWrite() {
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, ReturnOrderStatus.APPROVED);
+        stub(order);
+
+        assertThatThrownBy(() -> service.financeApproveReturnOrder("F999", order.getId(), FINANCE_USER))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("无权访问");
+
+        verify(entityManager, never()).createNativeQuery(anyString());
+        verify(entityManager, never()).refresh(any());
+        verify(returnOrderRepository, never()).save(any());
+        assertThat(order.getStatus()).isEqualTo(ReturnOrderStatus.APPROVED);
+    }
+
+    private void verifyRowLock(ReturnOrder order) {
+        verify(entityManager).createNativeQuery(
+                org.mockito.ArgumentMatchers.contains("FOR UPDATE"));
+        verify(rowLockQuery).setParameter("returnOrderId", order.getId());
+        verify(rowLockQuery).setParameter("factoryId", FACTORY);
+        verify(rowLockQuery).getResultList();
+        verify(entityManager).refresh(order);
     }
 }

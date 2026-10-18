@@ -29,6 +29,9 @@ public interface IndicatorComputationStrategy {
      */
     String getIndicatorCode();
 
+    /** Null preserves the historical source contract; changed formulas supply an explicit version. */
+    default String getSourceVersion() { return null; }
+
     /**
      * 计算指标值.
      *

@@ -273,10 +273,10 @@ public class LineageBackfillService {
             LineageRecordOutcome outcome = dryRun
                     ? recorder.previewFinishedToShipment(factoryId, a.getFinishedGoodsBatchId(),
                             record.getId(), a.getAllocatedQty(), a.getUnit(),
-                            "delivery:" + record.getId() + ":" + a.getFinishedGoodsBatchId())
+                            "backfill:delivery:" + record.getId() + ":" + item.getId() + ":" + a.getFinishedGoodsBatchId(), meta)
                     : recorder.recordFinishedToShipment(factoryId, a.getFinishedGoodsBatchId(),
                             record.getId(), a.getAllocatedQty(), a.getUnit(), record.getShippedBy(),
-                            "delivery:" + record.getId() + ":" + a.getFinishedGoodsBatchId(), meta);
+                            "backfill:delivery:" + record.getId() + ":" + item.getId() + ":" + a.getFinishedGoodsBatchId(), meta);
             counters.record(outcome);
         }
         return counters;

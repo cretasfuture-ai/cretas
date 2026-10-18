@@ -43,6 +43,14 @@ class VoucherServiceManualTest {
     @Mock PayrollRecordRepository payrollRecordRepo;
     @Mock ProductionPlanRepository productionPlanRepo;
     @Mock AccountingPeriodService accountingPeriodService;
+    @Mock jakarta.persistence.EntityManager entityManager;
+
+    @org.junit.jupiter.api.BeforeEach void factoryLock() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "entityManager", entityManager);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "accountingPeriodService", accountingPeriodService);
+        jakarta.persistence.Query query=mock(jakarta.persistence.Query.class,RETURNS_SELF);
+        lenient().when(entityManager.createNativeQuery(startsWith("SELECT pg_advisory_xact_lock"))).thenReturn(query);
+    }
 
     @InjectMocks VoucherServiceImpl service;
 
@@ -77,5 +85,20 @@ class VoucherServiceManualTest {
                 new VoucherEntrySpec("4103", "本年利润", null, new BigDecimal("900.00"), null));
         assertThrows(RuntimeException.class, () -> service.createManual("F006", VoucherType.PL_CLOSING,
                 LocalDate.of(2026, 5, 31), entries, "PL_CLOSING", "x", "d", 1L));
+    }
+    @Test void ordinaryBusinessCannotBypassClosedPeriodButSystemClosingCan() {
+        lenient().when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv->inv.getArgument(0));
+        lenient().doThrow(new com.cretas.aims.exception.PeriodClosedException("F006",2026,10))
+                .when(accountingPeriodService).assertOpen("F006",2026,10);
+        List<VoucherEntrySpec> entries=List.of(new VoucherEntrySpec("6601","费用",BigDecimal.TEN,null,null),
+                new VoucherEntrySpec("1002","银行存款",null,BigDecimal.TEN,null));
+        assertThrows(com.cretas.aims.exception.PeriodClosedException.class,()->service.createManual("F006",VoucherType.EXPENSE,
+                LocalDate.of(2026,10,18),entries,"WASTAGE","source","报损",2L));
+        assertThrows(com.cretas.aims.exception.PeriodClosedException.class,()->service.createManual("F006",VoucherType.PL_CLOSING,
+                LocalDate.of(2026,10,18),entries,"WASTAGE","source","不能冒用结转类型",2L));
+        verify(voucherRepo,never()).save(any());
+        org.mockito.InOrder order=inOrder(entityManager,accountingPeriodService);
+        order.verify(entityManager).createNativeQuery(startsWith("SELECT pg_advisory_xact_lock"));
+        order.verify(accountingPeriodService).assertOpen("F006",2026,10);
     }
 }

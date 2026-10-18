@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Set;
+import java.util.Objects;
 
 /**
  * 质检处置 → 库存桥接服务 (2026-07-05).
@@ -29,8 +30,8 @@ import java.util.Set;
  * <h3>批次解析 (只动 <b>本次质检</b> 隔离的批次, 不越权释放其他批次)</h3>
  * <ul>
  *   <li><b>成品</b> (镜像 #1229 反向): {@code QualityInspection.productionBatchId →
- *       ProductionBatch.productionPlanId → 该计划下 DEFECTIVE 的 FinishedGoodsBatch}。
- *       #1229 把该计划所有 AVAILABLE 成品置 DEFECTIVE, 放行则把该计划所有 DEFECTIVE 成品置回
+ *       ProductionBatch.productionPlanId → 该计划下同批号、同 SKU 的 DEFECTIVE FinishedGoodsBatch}。
+ *       #1229 可能按计划隔离多个批次，放行只把本次质检对应批号和 SKU 的成品置回
  *       AVAILABLE (对称)。</li>
  *   <li><b>原料</b> (仅当质检 material-scoped): {@code QualityInspection.materialBatchId →
  *       MaterialBatch}。</li>
@@ -58,10 +59,7 @@ import java.util.Set;
  *   <li>只解析<b>本次质检</b>关联的批次 (plan-scoped + material-scoped), 不越权释放兄弟批次。</li>
  * </ul>
  *
- * <p><b>已知诚实限制</b>: 成品 {@code status='DEFECTIVE'} 是「QC 隔离」与「销售退货入库」共用的单一字段
- * (见 {@link FinishedGoodsBatch.Status#DEFECTIVE})。若同一生产计划的某成品批次因<b>销售退货</b>而 DEFECTIVE,
- * 放行会把它一并翻回 AVAILABLE。这与 #1229 隔离本身的粒度一致 (#1229 也无法区分来源) —— 是共用字段的既有
- * 歧义, 非本桥接引入; 需精确区分须加来源标记列 (未来 schema 变更, 本次不扩范围)。
+ * <p>销售退货使用独立 RTN 批号，不随原生产批次放行；同计划其他批号或 SKU 也不释放。
  *
  * @since 2026-07-05 (feat/quality-disposition-inventory-bridge)
  */
@@ -104,6 +102,9 @@ public class QualityDispositionInventoryService {
 
     @Autowired(required = false)
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
+    @Autowired
+    private FactoryRecallService factoryRecallService;
 
     // ==================== 共享纯函数守卫 (ReleaseDecisionTool 复用, 防漂移) ====================
 
@@ -148,6 +149,9 @@ public class QualityDispositionInventoryService {
         switch (action) {
             case RELEASE:
             case CONDITIONAL_RELEASE: {
+                if (inspection.getProductionBatchId() != null && factoryRecallService != null) {
+                    factoryRecallService.assertReleaseAllowed(inspection.getFactoryId(), inspection.getProductionBatchId());
+                }
                 int fg = flipFinishedGoods(inspection, FinishedGoodsBatch.Status.DEFECTIVE,
                         FinishedGoodsBatch.Status.AVAILABLE);
                 FlipDecision mat = flipMaterial(inspection, MaterialBatchStatus.AVAILABLE);
@@ -194,7 +198,8 @@ public class QualityDispositionInventoryService {
             return 0;
         }
         ProductionBatch pb = productionBatchRepository.findById(productionBatchId).orElse(null);
-        if (pb == null) {
+        if (pb == null || !Objects.equals(inspection.getFactoryId(), pb.getFactoryId())
+                || pb.getBatchNumber() == null || pb.getProductTypeId() == null) {
             return 0;
         }
         String planId = pb.getProductionPlanId();
@@ -205,7 +210,10 @@ public class QualityDispositionInventoryService {
                 .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(inspection.getFactoryId(), planId);
         int flipped = 0;
         for (FinishedGoodsBatch fg : fgBatches) {
-            if (fromStatus.equals(fg.getStatus())) {
+            if (Objects.equals(inspection.getFactoryId(), fg.getFactoryId())
+                    && Objects.equals(pb.getBatchNumber(), fg.getBatchNumber())
+                    && Objects.equals(pb.getProductTypeId(), fg.getProductTypeId())
+                    && fromStatus.equals(fg.getStatus())) {
                 fg.setStatus(toStatus);
                 finishedGoodsBatchRepository.save(fg);
                 flipped++;

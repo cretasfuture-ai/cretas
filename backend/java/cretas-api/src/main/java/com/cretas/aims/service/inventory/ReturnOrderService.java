@@ -39,7 +39,7 @@ public interface ReturnOrderService {
 
     ReturnOrder financeRejectReturnOrder(String factoryId, String returnOrderId, Long financeUserId);
 
-    ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId);
+    ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId, Long actorId);
 
     ReturnOrder completeReturnOrder(String factoryId, String returnOrderId);
 

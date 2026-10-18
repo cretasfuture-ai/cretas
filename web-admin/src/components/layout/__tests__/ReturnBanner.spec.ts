@@ -4,6 +4,8 @@ import { mount } from '@vue/test-utils';
 // vue-router mock: useRoute returns query (already router-decoded, like the real router does);
 // useRouter captures push.
 const mockPush = vi.fn();
+const identity = { factoryId: 'F001', user: { id: 8 } };
+vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => identity }));
 let mockQuery: Record<string, unknown> = {};
 vi.mock('vue-router', () => ({
   useRoute: () => ({ get query() { return mockQuery; } }),
@@ -46,5 +48,30 @@ describe('ReturnBanner — no double-decode of nested _returnTo', () => {
     mockQuery = {};
     const wrapper = mount(ReturnBanner, { global: { stubs } });
     expect(wrapper.find('.return-banner').exists()).toBe(false);
+  });
+
+  it.each([['1', 'x'], '', null])('does not fall back to generic navigation for an invalid recovery marker %s', marker => {
+    mockQuery = { _periodRecovery: marker, _returnTo: '/finance/return-refunds/a?refundRequestId=RF-1&ledgerId=REV-1', sourceFactoryId: 'F001', sourceActorId: '8' };
+    const wrapper = mount(ReturnBanner, { global: { stubs } });
+    expect(wrapper.find('.return-banner').exists()).toBe(false);
+    expect(mockPush).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('reuses the banner for a bound refund and rejects a foreign factory or actor', async () => {
+    mockQuery = { _periodRecovery: '1', _returnTo: '/finance/return-refunds/a?refundRequestId=RF-1&ledgerId=REV-1', sourceFactoryId: 'F001', sourceActorId: '8' };
+    const wrapper = mount(ReturnBanner, { global: { stubs } });
+    expect(wrapper.text()).toContain('退货退款');
+    await wrapper.find('button').trigger('click');
+    expect(mockPush).toHaveBeenCalledWith(mockQuery._returnTo);
+    wrapper.unmount();
+    for (const changed of [{ sourceFactoryId: 'F002' }, { sourceActorId: '9' }]) {
+      const prior = { ...mockQuery };
+      mockQuery = { ...mockQuery, ...changed };
+      const blocked = mount(ReturnBanner, { global: { stubs } });
+      expect(blocked.find('.return-banner').exists()).toBe(false);
+      blocked.unmount();
+      mockQuery = prior;
+    }
   });
 });

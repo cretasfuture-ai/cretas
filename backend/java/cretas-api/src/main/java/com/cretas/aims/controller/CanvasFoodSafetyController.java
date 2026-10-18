@@ -70,6 +70,9 @@ public class CanvasFoodSafetyController {
     private final RecallEventRepository recallEventRepo;
     private final RecallActionRepository recallActionRepo;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.quality.FactoryRecallService factoryRecallService;
+
     /** Max length for VARCHAR columns — AUD-5 length pre-check. */
     private static final int SHORT_CODE_MAX = 50;
     private static final int NAME_MAX = 100;
@@ -454,6 +457,11 @@ public class CanvasFoodSafetyController {
         log.info("PUT /recalls/{} factoryId={} keys={}", id, factoryId, body.keySet());
 
         RecallEvent ev = loadRecall(factoryId, id);
+
+        if (factoryRecallService != null && factoryRecallService.isManagedRecall(factoryId, id)) {
+            throw new BusinessException(409, "该召回关联真实批次，请在「质量管理 → 批次召回」中核对退货与隔离库存后结案")
+                    .withCode("RECALL_USE_BUSINESS_WORKFLOW");
+        }
 
         // AUD-4 explicit version check
         ApiResponse<Map<String, Object>> verErr = checkVersion(body.get("version"), ev.getVersion());

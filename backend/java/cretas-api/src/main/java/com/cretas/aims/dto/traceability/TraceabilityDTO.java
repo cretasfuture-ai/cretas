@@ -208,6 +208,7 @@ public class TraceabilityDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class ProductionInfo {
+        private Long batchId;
         private String batchNumber;
         private String productName;
         private String productType;
@@ -216,6 +217,8 @@ public class TraceabilityDTO {
         private String supervisorName;
         private String equipmentName;
         private Double quantity;
+        private Double goodQuantity;
+        private Double defectQuantity;
         private String unit;
         private String qualityStatus;
         private String factoryName;
@@ -258,7 +261,9 @@ public class TraceabilityDTO {
         private LocalDateTime endTime;
         private Integer durationMinutes;
         private Double inputWeight;
+        private String inputUnit;
         private Double outputWeight;
+        private String outputUnit;
         private Double lossRate;
         private Double passRate;
         private Double temperature;
@@ -275,10 +280,14 @@ public class TraceabilityDTO {
     @AllArgsConstructor
     public static class QualityInfo {
         private String inspectionId;
+        private Long inspectorId;
         private LocalDateTime inspectionDate;
         private String inspectorName;
         private String result;
         private Double passRate;
+        private Double sampleSize;
+        private Double passCount;
+        private Double failCount;
         private String conclusion;
         private String remarks;
     }
@@ -292,7 +301,12 @@ public class TraceabilityDTO {
     @AllArgsConstructor
     public static class ShipmentInfo {
         private String shipmentNumber;
+        /** Actual shipment date when evidenced, never the sales plan's delivery date. */
         private LocalDate shipmentDate;
+        private LocalDate plannedDeliveryDate;
+        private LocalDateTime shippedAt;
+        /** LINEAGE_EVENT / LEGACY_DATE_ONLY / UNRECORDED. */
+        private String shipmentTimeSource;
         private String customerName;
         private String logisticsCompany;
         private String trackingNumber;

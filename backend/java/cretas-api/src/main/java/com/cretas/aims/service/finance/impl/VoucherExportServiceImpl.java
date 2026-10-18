@@ -828,8 +828,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     amountTextNullable(movement.outUnitPrice()),
                     amountTextNullable(movement.outAmount()),
                     quantityText(running.quantity),
-                    running.amountReliable ? amountText(running.unitPrice()) : HONEST_NULL_TEXT,
-                    running.amountReliable ? amountText(running.amount) : HONEST_NULL_TEXT
+                    running.amountReliable ? amountTextNullable(running.unitPrice()) : HONEST_NULL_TEXT,
+                    running.amountReliable ? amountTextNullable(running.amount) : HONEST_NULL_TEXT
             ));
         }
 
@@ -998,13 +998,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             if (!within(date, req.getStartDate(), req.getEndDate())) {
                 continue;
             }
-            String itemKey = "FG:" + firstNonBlank(batch.getProductTypeId(), batch.getBatchNumber());
+            String itemKey = "FG:" + firstNonBlank(batch.getProductTypeId(), batch.getBatchNumber()) + ":" + batch.getUnit();
             BigDecimal unitCost = batch.getUnitCost(); // 诚实 null: 不 nvl 成 0, 不回落售价
             BigDecimal produced = nvl(batch.getProducedQuantity());
             if (produced.compareTo(BigDecimal.ZERO) > 0) {
                 BigDecimal amount = unitCost == null ? null : produced.multiply(unitCost);
                 movements.add(InventoryMovement.inbound(date, batch.getBatchNumber(),
-                        "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()),
+                        "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()) + "（单位：" + batch.getUnit() + "）",
                         itemKey, produced, unitCost, amount));
             }
         }
@@ -1024,11 +1024,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             String batchNumber = (String) row[4];
             String productName = (String) row[5];
             String deliveryNumber = (String) row[6];
-            String itemKey = "FG:" + firstNonBlank(productTypeId, batchNumber);
+            String nativeUnit = row.length > 7 ? (String) row[7] : null;
+            if (nativeUnit == null || nativeUnit.isBlank()) throw new IllegalStateException("出货成本流水缺少计量单位，本次未导出");
+            String itemKey = "FG:" + firstNonBlank(productTypeId, batchNumber) + ":" + nativeUnit;
             BigDecimal amount = unitCost == null ? null : shippedQty.multiply(unitCost);
             movements.add(InventoryMovement.outbound(shipDate,
                     firstNonBlank(deliveryNumber, batchNumber),
-                    "成品发出 " + firstNonBlank(productName, productTypeId),
+                    "成品发出 " + firstNonBlank(productName, productTypeId) + "（单位：" + nativeUnit + "）",
                     itemKey, shippedQty, unitCost, amount));
         }
         return movements;
@@ -1744,9 +1746,9 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         return scale2(v).toPlainString();
     }
 
-    /** 诚实 null 版金额文本: null(成本未知) → "—"(占位), 绝不显示 0.00; 非 null 走常规 scale2。 */
+    /** Inventory ledger retains source precision; rounding every movement first would break monthly COGS reconciliation. */
     private String amountTextNullable(BigDecimal v) {
-        return v == null ? HONEST_NULL_TEXT : amountText(v);
+        return v == null ? HONEST_NULL_TEXT : v.stripTrailingZeros().toPlainString();
     }
 
     private BigDecimal scale3(BigDecimal v) {

@@ -41,11 +41,63 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class MonthCloseServiceTest {
 
+    @Test void finalReconciliationUsesFinalProfitAndRetainsRealSubledgerWarning() {
+        var closed=AccountingPeriod.builder().factoryId(FACTORY).year(Y).month(M).status(AccountingPeriod.Status.CLOSED).build();
+        when(periodService.findPeriod(FACTORY,Y,M)).thenReturn(Optional.of(closed));
+        when(closingReadinessService.countPendingAdjustments(FACTORY,Y,M)).thenReturn(0L);
+        when(arApService.getFinanceOverview(FACTORY)).thenReturn(java.util.Map.of(
+                "totalReceivable",java.math.BigDecimal.TEN,"totalPayable",java.math.BigDecimal.ZERO));
+        sampleIncomeStatement.setNetProfit(new java.math.BigDecimal("337.17"));
+        var result=service.reconcileFinalClose(FACTORY,Y,M,sampleIncomeStatement);
+        assertTrue(result.isCanClose());assertEquals("WARNING",result.getReconciliationStatus());
+        assertTrue(result.getSummary().contains("337.17"));
+        assertTrue(result.getSummary().contains("无待审批调整"));
+        assertFalse(result.getSummary().contains("不能重复结账"));
+        verify(incomeStatementService,never()).generate(anyString(),anyInt(),anyInt(),anyInt(),anyInt());
+    }
+
+    @Test void finalReconciliationDoesNotHidePendingReadFailure() {
+        when(periodService.findPeriod(FACTORY,Y,M)).thenReturn(Optional.of(AccountingPeriod.builder().status(AccountingPeriod.Status.CLOSED).build()));
+        when(closingReadinessService.countPendingAdjustments(FACTORY,Y,M)).thenThrow(new IllegalStateException("db unavailable"));
+        assertThrows(IllegalStateException.class,()->service.reconcileFinalClose(FACTORY,Y,M,sampleIncomeStatement));
+    }
+
+    @Test void finalSubledgerReadFailureIsWarningRatherThanFalsePass() {
+        when(periodService.findPeriod(FACTORY,Y,M)).thenReturn(Optional.of(AccountingPeriod.builder().status(AccountingPeriod.Status.CLOSED).build()));
+        when(closingReadinessService.countPendingAdjustments(FACTORY,Y,M)).thenReturn(0L);
+        when(arApService.getFinanceOverview(FACTORY)).thenThrow(new IllegalStateException("db unavailable"));
+        var result=service.reconcileFinalClose(FACTORY,Y,M,sampleIncomeStatement);
+        assertEquals("WARNING",result.getReconciliationStatus());
+        assertTrue(result.getChecks().stream().anyMatch(c->!c.isPassed() && "WARNING".equals(c.getSeverity()) && c.getDetail().contains("计算失败")));
+    }
+
+    @Test void finalReportMustMatchFactoryAndSingleMonth() {
+        sampleIncomeStatement.setEndMonth(M+1);
+        assertThrows(BusinessException.class,()->service.reconcileFinalClose(FACTORY,Y,M,sampleIncomeStatement));
+        sampleIncomeStatement.setEndMonth(M);sampleIncomeStatement.setFactoryId("OTHER");
+        assertThrows(BusinessException.class,()->service.reconcileFinalClose(FACTORY,Y,M,sampleIncomeStatement));
+        verifyNoInteractions(periodService,closingReadinessService);
+    }
+
+    @Test void executeCloseAcquiresTheCostFactoryLockBeforeReadingPeriod() {
+        var em=mock(jakarta.persistence.EntityManager.class);
+        var query=mock(jakarta.persistence.Query.class,RETURNS_SELF);
+        when(em.createNativeQuery(anyString())).thenReturn(query);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"entityManager",em);
+        var closed=AccountingPeriod.builder().factoryId(FACTORY).year(Y).month(M).status(AccountingPeriod.Status.CLOSED).build();
+        when(periodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY,Y,M)).thenReturn(Optional.of(closed));
+        assertThrows(BusinessException.class,()->service.executeClose(FACTORY,Y,M,2L));
+        var order=inOrder(query,periodRepo);
+        order.verify(query).setParameter("key","production-cost-finance:"+FACTORY);
+        order.verify(query).getSingleResult();order.verify(periodRepo).findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY,Y,M);
+    }
+
     @Mock private AccountingPeriodRepository periodRepo;
     @Mock private AccountingPeriodService periodService;
     @Mock private ArApService arApService;
     @Mock private IncomeStatementService incomeStatementService;
     @Mock private com.cretas.aims.repository.VoucherEntryRepository voucherEntryRepository;
+    @Mock private ClosingReadinessService closingReadinessService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -62,6 +114,7 @@ class MonthCloseServiceTest {
         // @InjectMocks can't inject the real ObjectMapper (not a mock), build manually
         service = new MonthCloseServiceImpl(periodRepo, periodService, arApService,
                 incomeStatementService, objectMapper, voucherEntryRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"closingReadinessService",closingReadinessService);
 
         // 资金段子账↔总账对账 (finance audit Bug 5): 默认零漂移 stub (lenient — 非每个 test 都到 previewClose)。
         lenient().when(arApService.getFinanceOverview(FACTORY)).thenReturn(java.util.Map.of(

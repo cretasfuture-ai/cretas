@@ -81,6 +81,8 @@ def test_main_mounts_persistent_router_outside_optional_feature_imports():
     assert isinstance(runtime, ast.Call) and runtime.func.id == "create_file_backed_runtime"
     assert {keyword.arg for keyword in runtime.keywords} >= {
         "draft_root", "job_db", "recipe_catalog", "worker_bindings", "specialized_factory_allowlist"}
+    dependency = next(keyword.value for keyword in runtime.keywords if keyword.arg == "factory_context_dependency")
+    assert isinstance(dependency, ast.Name) and dependency.id == "require_factory_bridge_context"
 
 
 def test_durable_directory_cannot_be_inside_the_deployed_tree(tmp_path):
@@ -154,4 +156,30 @@ def test_shared_runtime_enforces_real_middleware_for_platform_and_named_worker(t
     assert client.get(platform, headers={**platform_headers, "X-Actor-Type": "FACTORY_USER"}).status_code == 403
     assert client.get(platform, headers={**platform_headers, "X-Factory-Id": "FOREIGN"}).status_code == 403
     assert not list(root.glob("*.json"))
+    runtime.close()
+
+
+def test_daily_bridge_rejects_direct_jwt_and_wrong_internal_namespace(tmp_path, monkeypatch):
+    from vision_training.router import require_factory_bridge_context
+    from vision_training.runtime import create_file_backed_runtime
+    internal = "daily-bridge-transport-secret-32-bytes"
+    monkeypatch.setenv("INTERNAL_API_SECRET", internal)
+    root = tmp_path / "persistent"
+    runtime = create_file_backed_runtime(draft_root=root, job_db=root / "jobs.sqlite3",
+        factory_context_dependency=require_factory_bridge_context)
+    app = FastAPI()
+    app.add_middleware(JWTAuthMiddleware, jwt_secret=SECRET)
+    app.include_router(runtime.routers.factory)
+    client = TestClient(app)
+    path = "/api/vision-training/templates"
+    for role in ("factory_user", "quality_manager", "factory_super_admin", "super_admin"):
+        assert client.get(path, headers={"Authorization": "Bearer " + token(role=role)}).status_code == 401
+    headers = {"X-Internal-Secret": internal, "X-Factory-Id": "VT-TEST", "X-User-Id": "123",
+        "X-User-Role": "quality_manager", "X-Actor-Type": "FACTORY_USER"}
+    assert client.get(path, headers=headers).status_code == 200
+    assert client.get(path, headers={**headers, "X-Actor-Type": "PLATFORM_ADMIN"}).status_code == 403
+    assert client.get(path, headers={**headers, "X-User-Role": "factory_user"}).status_code == 403
+    assert client.get(path, headers={key: value for key, value in headers.items() if key != "X-Actor-Type"}).status_code == 403
+    assert client.get(path, headers={**headers, "X-Internal-Secret": "forged"}).status_code == 401
+    assert not root.exists()
     runtime.close()

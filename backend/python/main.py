@@ -1727,10 +1727,11 @@ if _label_qc_available:
 else:
     logger.warning("Label QC routes not registered")
 
-# Versioned, factory-scoped training drafts for conversational factory setup.
-# The router plans stages only; no request starts training or activates a model.
+# Ongoing, factory-scoped training drafts and bounded local-worker dispatch.
+# Model activation remains separate from training and independent acceptance.
 from vision_training.runtime import create_file_backed_runtime, resolve_draft_root, verify_draft_storage  # noqa: E402
 from vision_training.server_registration import load_server_registration  # noqa: E402
+from vision_training.router import require_factory_bridge_context  # noqa: E402
 
 _vision_training_draft_dir = resolve_draft_root(os.getenv("VISION_TRAINING_DRAFT_DIR"))
 _vision_training_registration = load_server_registration()
@@ -1740,6 +1741,7 @@ _vision_training_runtime = create_file_backed_runtime(
     recipe_catalog=_vision_training_registration.recipes,
     worker_bindings=_vision_training_registration.worker_bindings,
     specialized_factory_allowlist=_vision_training_registration.specialized_factory_allowlist,
+    factory_context_dependency=require_factory_bridge_context,
 )
 app.include_router(_vision_training_runtime.routers.factory)
 app.include_router(_vision_training_runtime.routers.platform)

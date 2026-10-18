@@ -397,7 +397,7 @@ public class AttachmentServiceImpl implements AttachmentService {
         if (presignedUrl == null) return null;
         try {
             URI uri = URI.create(presignedUrl);
-            return uri.getScheme() + "://" + uri.getHost() + uri.getRawPath();
+            return uri.getScheme() + "://" + uri.getRawAuthority() + uri.getRawPath();
         } catch (Exception e) {
             return presignedUrl;
         }

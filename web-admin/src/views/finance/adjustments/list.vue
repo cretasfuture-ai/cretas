@@ -20,7 +20,10 @@
  * === current userId. Bulk approve relies on backend per-id reject (4-eye
  * violations show up in failures list with reason).
  */
-import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { getReturnFinancialFollowUp, validReturnOrderId } from '@/api/returnFinancialFollowUp';
+import { getReturnRefundByRequest } from '@/api/inventory';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -39,6 +42,8 @@ interface AdjustmentRow {
   approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
   operatedBy: number;
   remark?: string;
+  sourceType?: string;
+  sourceId?: string;
   createdAt: string;
 }
 
@@ -56,6 +61,29 @@ const factoryId = computed(() => authStore.factoryId);
 const currentUserId = computed(() => authStore.user?.id);
 const canApprove = computed(() => permissionStore.canWrite('finance'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const route = useRoute();
+const router = useRouter();
+const hasReturnContext = computed(() => route?.query.returnOrderId != null);
+const sourceReturnId = computed(() => validReturnOrderId(route?.query.returnOrderId));
+const sourceReturnNumber = ref('');
+const sourceError = ref('');
+function openSourceReturn(id: unknown) {
+  const valid = validReturnOrderId(id);
+  if (valid) void router.push(`/finance/return-refunds/${encodeURIComponent(valid)}`);
+}
+function openSourceLedger() {
+  if (sourceReturnId.value) void router.push({ path: '/finance/ar-ap', query: { returnOrderId: sourceReturnId.value } });
+}
+
+function isRefundReversalRow(row: AdjustmentRow): boolean {
+  return row.sourceType === 'RETURN_REFUND_REVERSAL';
+}
+
+function validRefundRequestId(id: unknown): string | null {
+  if (Array.isArray(id)) return null;
+  const value = String(id ?? '').trim();
+  return value && value !== 'undefined' && value !== 'null' ? value : null;
+}
 
 const loading = ref(false);
 const tableData = ref<AdjustmentRow[]>([]);
@@ -72,6 +100,7 @@ const filterDateRange = ref<[string, string] | null>(null);
 // Account/factory switches and newer list requests invalidate older responses.
 let contextVersion = 0;
 let listRequestVersion = 0;
+let sourceNavigationVersion = 0;
 let active = true;
 let approvalConfirmationOpen = false;
 function requestContext() {
@@ -81,12 +110,57 @@ function isCurrentContext(context: ReturnType<typeof requestContext>) {
   return active && context.version === contextVersion && context.factoryId === factoryId.value && context.userId === currentUserId.value;
 }
 
+async function openSourceRefund(row: AdjustmentRow) {
+  const requestId = validRefundRequestId(row.sourceId);
+  const ledgerId = String(row.id || '').trim();
+  const context = requestContext();
+  const sequence = ++sourceNavigationVersion;
+  if (!requestId || !ledgerId || !context.factoryId || !isRefundReversalRow(row)) {
+    ElMessage.error('撤销退款来源无效，请从原退款详情重新进入');
+    return;
+  }
+  try {
+    const refundView = await getReturnRefundByRequest(context.factoryId, requestId);
+    if (!isCurrentContext(context) || sequence !== sourceNavigationVersion) return;
+    if (refundView.returnOrderId == null || !String(refundView.returnOrderId).trim()) {
+      throw new Error('退款申请缺少退货单，无法定位撤销详情');
+    }
+    if (refundView.request?.id !== requestId) {
+      throw new Error('退款申请与当前撤销流水不一致，请重新读取');
+    }
+    if (refundView.request.reversal?.ledger?.id !== ledgerId) {
+      throw new Error('撤销流水与当前待审记录不一致，请重新读取');
+    }
+    await router.push({
+      path: `/finance/return-refunds/${encodeURIComponent(refundView.returnOrderId)}`,
+      query: { refundRequestId: requestId, ledgerId },
+    });
+  } catch (error) {
+    if (isCurrentContext(context) && sequence === sourceNavigationVersion) {
+      ElMessage.error(error instanceof Error ? error.message : '撤销退款申请读取失败，请重试');
+    }
+  }
+}
+
 async function loadData() {
   const context = requestContext();
   const requestVersion = ++listRequestVersion;
   if (!context.factoryId) return;
   loading.value = true;
   try {
+    if (hasReturnContext.value) {
+      const returnId = sourceReturnId.value;
+      if (!returnId) throw new Error('退货单链接无效，请从原单据重新进入');
+      const followUp = await getReturnFinancialFollowUp(context.factoryId, returnId);
+      if (!isCurrentContext(context) || requestVersion !== listRequestVersion) return;
+      sourceError.value = '';
+      sourceReturnNumber.value = followUp.returnNumber;
+      const rows = followUp.adjustments.filter(row => row.approvalStatus === 'PENDING');
+      const begin = (pagination.value.page - 1) * pagination.value.size;
+      tableData.value = rows.slice(begin, begin + pagination.value.size);
+      pagination.value.total = rows.length;
+      return;
+    }
     const params: Record<string, unknown> = { page: pagination.value.page, size: pagination.value.size };
     if (filterType.value) params.counterpartyType = filterType.value;
     if (filterMinAmount.value != null) params.minAmount = filterMinAmount.value;
@@ -101,7 +175,12 @@ async function loadData() {
       tableData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
     }
-  } catch {
+  } catch (error) {
+    if (hasReturnContext.value && isCurrentContext(context) && requestVersion === listRequestVersion) {
+      sourceError.value = error instanceof Error ? error.message : '退货待审调整读取失败';
+      tableData.value = [];
+      pagination.value.total = 0;
+    }
     // Interceptor toasts; this catch silences the unhandled-promise log.
   } finally {
     if (isCurrentContext(context) && requestVersion === listRequestVersion) {
@@ -127,6 +206,10 @@ function handleApplyFilter() {
 
 async function handleApprove(row: AdjustmentRow) {
   const context = requestContext();
+  if (isRefundReversalRow(row)) {
+    ElMessage.warning('请从原退款详情审核');
+    return;
+  }
   if (!context.factoryId || row.factoryId !== context.factoryId || !canShowApproveBtn(row) || row.approvalStatus !== 'PENDING') return;
   try {
     approvalConfirmationOpen = true;
@@ -165,13 +248,20 @@ async function handleApprove(row: AdjustmentRow) {
 }
 
 async function handleReject(row: AdjustmentRow) {
-  if (!factoryId.value) return;
+  const context = requestContext();
+  if (isRefundReversalRow(row)) {
+    ElMessage.warning('请从原退款详情审核');
+    return;
+  }
+  if (!context.factoryId || row.factoryId !== context.factoryId || !canApprove.value || row.approvalStatus !== 'PENDING') return;
   try {
     const { value: reason } = await ElMessageBox.prompt('请输入驳回原因', '驳回调整', {
       confirmButtonText: '确认驳回', cancelButtonText: '取消',
       inputPattern: /.+/, inputErrorMessage: '请输入驳回原因'
     });
-    await post(`/${factoryId.value}/finance/adjustment/${row.id}/reject?reason=${encodeURIComponent(reason)}`);
+    if (!isCurrentContext(context) || isRefundReversalRow(row)) return;
+    await post(`/${context.factoryId}/finance/adjustment/${row.id}/reject?reason=${encodeURIComponent(reason)}`);
+    if (!isCurrentContext(context)) return;
     ElMessage.success('已驳回');
     loadData();
   } catch (e) {
@@ -186,10 +276,18 @@ async function handleReject(row: AdjustmentRow) {
 
 // R29 P2 bulk operations
 async function handleBatchApprove() {
-  if (!factoryId.value || selectedRows.value.length === 0) return;
+  const context = requestContext();
+  if (!context.factoryId || selectedRows.value.length === 0) return;
+  const reservedRows = selectedRows.value.filter(isRefundReversalRow);
+  if (reservedRows.length > 0) {
+    selectedRows.value = selectedRows.value.filter(row => !isRefundReversalRow(row));
+    ElMessage.warning('请从原退款详情审核');
+  }
+  if (selectedRows.value.length === 0) return;
   // Pre-filter own submissions client-side (4-eye) to avoid known-failures cluttering result
-  const ownIds = selectedRows.value.filter(r => r.operatedBy === currentUserId.value).map(r => r.id);
-  const eligibleIds = selectedRows.value.filter(r => r.operatedBy !== currentUserId.value).map(r => r.id);
+  const eligibleRows = selectedRows.value.filter(r => r.factoryId === context.factoryId && r.approvalStatus === 'PENDING');
+  const ownIds = eligibleRows.filter(r => r.operatedBy === currentUserId.value).map(r => r.id);
+  const eligibleIds = eligibleRows.filter(r => r.operatedBy !== currentUserId.value).map(r => r.id);
   if (eligibleIds.length === 0) {
     ElMessage.warning(`选中的 ${selectedRows.value.length} 条均为您本人提交,无法审批 (4 眼原则)`);
     return;
@@ -200,8 +298,9 @@ async function handleBatchApprove() {
     await ElMessageBox.confirm(confirmMsg, '批量审批', {
       type: 'warning', confirmButtonText: '确认批量审批', cancelButtonText: '取消'
     });
+    if (!isCurrentContext(context)) return;
     const res = await post<BatchOutcome>(
-      `/${factoryId.value}/finance/adjustments/batch-approve`,
+      `/${context.factoryId}/finance/adjustments/batch-approve`,
       { ids: eligibleIds }
     );
     if (res.success && res.data) {
@@ -227,8 +326,16 @@ async function handleBatchApprove() {
 }
 
 async function handleBatchReject() {
-  if (!factoryId.value || selectedRows.value.length === 0) return;
-  const ids = selectedRows.value.map(r => r.id);
+  const context = requestContext();
+  if (!context.factoryId || selectedRows.value.length === 0) return;
+  const reservedRows = selectedRows.value.filter(isRefundReversalRow);
+  if (reservedRows.length > 0) {
+    selectedRows.value = selectedRows.value.filter(row => !isRefundReversalRow(row));
+    ElMessage.warning('请从原退款详情审核');
+  }
+  const eligibleRows = selectedRows.value.filter(r => r.factoryId === context.factoryId && r.approvalStatus === 'PENDING');
+  if (eligibleRows.length === 0) return;
+  const ids = eligibleRows.map(r => r.id);
   try {
     const { value: reason } = await ElMessageBox.prompt(
       `请输入批量驳回原因 (将应用于全部 ${ids.length} 条)`,
@@ -236,8 +343,9 @@ async function handleBatchReject() {
       { confirmButtonText: '确认批量驳回', cancelButtonText: '取消',
         inputPattern: /.+/, inputErrorMessage: '请输入驳回原因' }
     );
+    if (!isCurrentContext(context)) return;
     const res = await post<BatchOutcome>(
-      `/${factoryId.value}/finance/adjustments/batch-reject`,
+      `/${context.factoryId}/finance/adjustments/batch-reject`,
       { ids, reason }
     );
     if (res.success && res.data) {
@@ -263,12 +371,18 @@ async function handleBatchReject() {
 }
 
 function handleSelectionChange(rows: AdjustmentRow[]) {
-  selectedRows.value = rows;
+  const reservedRows = rows.filter(isRefundReversalRow);
+  selectedRows.value = rows.filter(row => !isRefundReversalRow(row));
+  if (reservedRows.length > 0) ElMessage.warning('请从原退款详情审核');
+}
+
+function isSelectable(row: AdjustmentRow): boolean {
+  return !isRefundReversalRow(row);
 }
 
 // 4-eye gate: hide approve button if current user is the submitter.
 function canShowApproveBtn(row: AdjustmentRow): boolean {
-  return canApprove.value && row.operatedBy !== currentUserId.value;
+  return canApprove.value && !isRefundReversalRow(row) && row.operatedBy !== currentUserId.value;
 }
 
 function isKnownAmount(amount: unknown): amount is number {
@@ -298,7 +412,7 @@ function formatDate(s: string): string {
 function handleSizeChange(val: number) { pagination.value.size = val; pagination.value.page = 1; loadData(); }
 function handlePageChange(val: number) { pagination.value.page = val; loadData(); }
 
-watch([factoryId, currentUserId], () => {
+watch([factoryId, currentUserId, () => route?.query.returnOrderId], () => {
   ++contextVersion;
   ++listRequestVersion;
   if (approvalConfirmationOpen) ElMessageBox.close();
@@ -306,9 +420,23 @@ watch([factoryId, currentUserId], () => {
   selectedRows.value = [];
   pagination.value.page = 1;
   pagination.value.total = 0;
+  sourceReturnNumber.value = '';
+  sourceError.value = '';
   loading.value = false;
   loadData();
 }, { immediate: true, flush: 'sync' });
+
+let activations = 0;
+onActivated(() => {
+  active = true;
+  if (activations++ > 0) void loadData();
+});
+onDeactivated(() => {
+  active = false;
+  ++contextVersion;
+  ++listRequestVersion;
+  if (approvalConfirmationOpen) ElMessageBox.close();
+});
 
 onBeforeUnmount(() => {
   active = false;
@@ -338,7 +466,12 @@ onBeforeUnmount(() => {
       />
 
       <!-- R29 P1 filter bar -->
-      <div class="filter-bar">
+      <el-alert v-if="hasReturnContext" :title="sourceError || `仅显示退货单 ${sourceReturnNumber || '正在核对'} 的待审批调整`" :type="sourceError ? 'error' : 'info'" :closable="false" style="margin-bottom:12px">
+        <el-button v-if="sourceReturnId" link type="primary" @click="openSourceReturn(sourceReturnId)">返回原退货单</el-button>
+        <el-button v-if="sourceReturnId" link type="primary" @click="openSourceLedger">查看本单全部调整记录</el-button>
+        <el-button link @click="router.replace({ query: {} })">查看全部待审调整</el-button>
+      </el-alert>
+      <div v-if="!hasReturnContext" class="filter-bar">
         <el-select v-model="filterType" placeholder="对手方类型" clearable style="width:140px">
           <el-option label="客户 (AR)" value="CUSTOMER" />
           <el-option label="供应商 (AP)" value="SUPPLIER" />
@@ -385,7 +518,7 @@ onBeforeUnmount(() => {
         :data="tableData" empty-text="暂无待审批调整" stripe border style="width:100%"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="40" />
+        <el-table-column type="selection" width="40" :selectable="isSelectable" />
         <el-table-column prop="id" label="ID" width="120" show-overflow-tooltip>
           <template #default="{ row }">
             <span style="font-family:monospace;font-size:12px">{{ row.id.slice(0, 8) }}</span>
@@ -394,7 +527,7 @@ onBeforeUnmount(() => {
         <el-table-column label="类型" width="100">
           <template #default="{ row }">
             <el-tag :type="row.transactionType === 'AR_ADJUSTMENT' ? 'success' : 'warning'" size="small">
-              {{ formatType(row.transactionType) }}
+              {{ isRefundReversalRow(row) ? '退款撤销调整' : formatType(row.transactionType) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -411,6 +544,7 @@ onBeforeUnmount(() => {
         <el-table-column v-if="canViewPrice" prop="balanceAfter" label="提交时余额 (待审批)" width="170" align="right">
           <template #default="{ row }">{{ formatBalance(row.balanceAfter) }}</template>
         </el-table-column>
+        <el-table-column label="来源单据" width="130"><template #default="{ row }"><el-button v-if="row.sourceType === 'RETURN_ORDER' && validReturnOrderId(row.sourceId)" link type="primary" @click="openSourceReturn(row.sourceId)">查看原退货单</el-button><el-button v-else-if="isRefundReversalRow(row) && validRefundRequestId(row.sourceId)" link type="primary" @click="openSourceRefund(row)">查看撤销退款</el-button><span v-else>-</span></template></el-table-column>
         <el-table-column prop="remark" label="备注" min-width="200" show-overflow-tooltip />
         <el-table-column prop="operatedBy" label="提交人 ID" width="100" align="center">
           <template #default="{ row }">
@@ -431,11 +565,12 @@ onBeforeUnmount(() => {
               @click="handleApprove(row)"
             >审批</el-button>
             <el-button
-              v-if="canApprove"
+              v-if="canApprove && !isRefundReversalRow(row)"
               type="danger" size="small" :icon="Close"
               @click="handleReject(row)"
             >驳回</el-button>
-            <span v-if="!canApprove" style="color:#999;font-size:12px">无权限</span>
+            <el-text v-if="isRefundReversalRow(row)" type="warning" size="small">待审批；请从原退款详情审核</el-text>
+            <span v-if="!canApprove && !isRefundReversalRow(row)" style="color:#999;font-size:12px">无权限</span>
           </template>
         </el-table-column>
       </el-table>

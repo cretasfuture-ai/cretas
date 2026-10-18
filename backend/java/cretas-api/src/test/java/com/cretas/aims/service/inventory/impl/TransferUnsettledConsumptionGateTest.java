@@ -36,6 +36,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -111,13 +113,14 @@ class TransferUnsettledConsumptionGateTest {
                             .as("出路必须指向生产小结 —— 让人去采购是白跑一趟")
                             .contains("生产小结");
                 });
-        // ⚠️ 这里 usedQuantity 是 5 而不是 0 —— FEFO 循环会先扣掉够得着的那部分, 再因为
-        // 剩余量 > 0 抛异常。生产上整个 shipTransfer 在 @Transactional 里, 这次部分扣减
-        // 随异常一起回滚; 单测没有事务, 所以看得到这个中间态。
-        // 断言写成「必须为 0」是把事务的职责摊到本方法头上, 会得到一条永远红的假要求。
+        // 预检先汇总货架实物量 (5kg) 再进入 FEFO 写循环，因此不足时本方法本身
+        // 就不会产生部分扣减、调拨流水或库存写入。
         assertThat(b.getUsedQuantity())
-                .as("扣到货架实物为止就停 —— 没有越过 5kg 去动那 10kg 未结的量")
-                .isEqualByComparingTo("5");
+                .as("匹配单位货架实物不足时，预检阶段不得扣减批次")
+                .isEqualByComparingTo("0");
+        verify(materialBatchRepository, never()).saveAndFlush(any(MaterialBatch.class));
+        verify(materialConsumptionRepository, never()).save(any());
+        verify(transferRepository, never()).save(any(InternalTransfer.class));
     }
 
     @Test

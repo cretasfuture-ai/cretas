@@ -10,6 +10,8 @@
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowLeft, Close } from '@element-plus/icons-vue';
+import { useAuthStore } from '@/store/modules/auth';
+import { periodReturnTarget } from '@/utils/accountingPeriodRecovery';
 
 const route = useRoute();
 const router = useRouter();
@@ -22,12 +24,17 @@ const router = useRouter();
 const returnTo = computed(() => {
   const raw = route.query._returnTo;
   if (!raw || typeof raw !== 'string') return null;
+  if (Object.prototype.hasOwnProperty.call(route.query, '_periodRecovery')) {
+    const auth = useAuthStore();
+    return periodReturnTarget(route.query, auth.factoryId, auth.user?.id);
+  }
   return raw;
 });
 
 // 反查来源路由的 meta.title（用于友好显示）
 const returnTitle = computed(() => {
   if (!returnTo.value) return '';
+  if (route.query._periodRecovery === '1') return '退货退款';
   // 从路由列表中匹配 fullPath 对应的 title
   const allRoutes = router.getRoutes();
   // returnTo.value 可能含 query，先取 pathname 部分

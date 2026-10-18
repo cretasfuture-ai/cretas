@@ -1997,7 +1997,10 @@ public class YieldReportServiceImpl implements YieldReportService {
                 sourceBatchNumbers,
                 convertByproducts(req.getByproducts()),
                 req.getSampleRetainQuantity(),
-                req.getPackagingDetail());
+                req.getPackagingDetail(),
+                toProcessSheetLaborSegmentMaps(req.getLaborSegments()),
+                processSheetLaborMinutes(req.getLaborSegments()),
+                processSheetWorkerCount(req.getLaborSegments()));
     }
 
     private ProcessSheetRowRequest deserializeProcessSheetPayload(String json) {
@@ -2026,6 +2029,9 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .byproducts(row.byproducts())
                 .sampleRetainQuantity(row.sampleRetainQuantity())
                 .packagingDetail(row.packagingDetail())
+                .laborSegments(row.laborSegments())
+                .totalWorkMinutes(row.totalWorkMinutes())
+                .totalWorkers(row.totalWorkers())
                 .build();
     }
 
@@ -2033,13 +2039,25 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (reportStep == null) return quantityStep;
         quantityStep.setWorkProcessTaskId(reportStep.getWorkProcessTaskId());
         if (quantityStep.getProcessName() == null) quantityStep.setProcessName(reportStep.getProcessName());
-        quantityStep.setTotalWorkMinutes(reportStep.getTotalWorkMinutes());
-        quantityStep.setTotalWorkers(reportStep.getTotalWorkers());
-        quantityStep.setLaborCost(reportStep.getLaborCost());
-        quantityStep.setMaterialCost(reportStep.getMaterialCost());
-        quantityStep.setStepCost(reportStep.getStepCost());
+        if (reportStep.getTotalWorkMinutes() != null) {
+            quantityStep.setTotalWorkMinutes(reportStep.getTotalWorkMinutes());
+        }
+        if (reportStep.getTotalWorkers() != null) {
+            quantityStep.setTotalWorkers(reportStep.getTotalWorkers());
+        }
+        if (reportStep.getLaborCost() != null) {
+            quantityStep.setLaborCost(reportStep.getLaborCost());
+        }
+        if (reportStep.getMaterialCost() != null) {
+            quantityStep.setMaterialCost(reportStep.getMaterialCost());
+        }
+        if (reportStep.getStepCost() != null) {
+            quantityStep.setStepCost(reportStep.getStepCost());
+        }
         quantityStep.setPhotos(reportStep.getPhotos());
-        quantityStep.setLaborSegments(reportStep.getLaborSegments());
+        if (reportStep.getLaborSegments() != null) {
+            quantityStep.setLaborSegments(reportStep.getLaborSegments());
+        }
         quantityStep.setInputPhotos(reportStep.getInputPhotos());
         quantityStep.setOutputPhotos(reportStep.getOutputPhotos());
         quantityStep.setInputPhotoAnnotations(reportStep.getInputPhotoAnnotations());
@@ -2053,6 +2071,73 @@ public class YieldReportServiceImpl implements YieldReportService {
         quantityStep.setAuxAllocMethod(reportStep.getAuxAllocMethod());
         quantityStep.setPhase(reportStep.getPhase());
         return quantityStep;
+    }
+
+    /** Process-sheet labor uses workerCount; cost audit consumes the persisted headcount shape. */
+    private List<Map<String, Object>> toProcessSheetLaborSegmentMaps(
+            List<com.cretas.aims.dto.processentry.LaborSegment> segments) {
+        if (segments == null || segments.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> mappedSegments = segments.stream().filter(Objects::nonNull).map(segment -> {
+            Map<String, Object> mapped = new LinkedHashMap<>();
+            mapped.put("startTime", segment.getStartTime());
+            mapped.put("endTime", segment.getEndTime());
+            mapped.put("headcount", segment.getWorkerCount());
+            return mapped;
+        }).collect(Collectors.toList());
+        return mappedSegments.isEmpty() ? null : mappedSegments;
+    }
+
+    /** Null means no verifiable duration was persisted; a valid zero-length segment remains zero. */
+    private Integer processSheetLaborMinutes(
+            List<com.cretas.aims.dto.processentry.LaborSegment> segments) {
+        if (segments == null || segments.isEmpty()) {
+            return null;
+        }
+        int total = 0;
+        boolean anyValid = false;
+        for (com.cretas.aims.dto.processentry.LaborSegment segment : segments) {
+            if (segment == null) {
+                continue;
+            }
+            Integer minutes = processSheetSegmentMinutes(segment);
+            if (minutes != null) {
+                total += minutes;
+                anyValid = true;
+            }
+        }
+        return anyValid ? total : null;
+    }
+
+    /** Null means worker count was not supplied; explicit zero remains zero. */
+    private Integer processSheetWorkerCount(
+            List<com.cretas.aims.dto.processentry.LaborSegment> segments) {
+        if (segments == null || segments.isEmpty()) {
+            return null;
+        }
+        Integer maxWorkers = null;
+        for (com.cretas.aims.dto.processentry.LaborSegment segment : segments) {
+            if (segment != null && segment.getWorkerCount() != null) {
+                maxWorkers = maxWorkers == null
+                        ? segment.getWorkerCount()
+                        : Math.max(maxWorkers, segment.getWorkerCount());
+            }
+        }
+        return maxWorkers;
+    }
+
+    private static Integer processSheetSegmentMinutes(
+            com.cretas.aims.dto.processentry.LaborSegment segment) {
+        LocalTime start = parseHHmm(segment.getStartTime());
+        LocalTime end = parseHHmm(segment.getEndTime());
+        if (start == null || end == null) {
+            return null;
+        }
+        int startMinutes = start.getHour() * 60 + start.getMinute();
+        int endMinutes = end.getHour() * 60 + end.getMinute();
+        int duration = endMinutes - startMinutes;
+        return duration < 0 ? duration + 1440 : duration;
     }
 
     private List<Map<String, Object>> convertByproducts(
@@ -2219,7 +2304,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             List<String> sourceBatchNumbers,
             List<Map<String, Object>> byproducts,
             Integer sampleRetainQuantity,
-            List<Map<String, Object>> packagingDetail) {
+            List<Map<String, Object>> packagingDetail,
+            List<Map<String, Object>> laborSegments,
+            Integer totalWorkMinutes,
+            Integer totalWorkers) {
     }
 
     /** audit YIELD-4: 批量查 task→work_process→processName 回填 steps (避免 N+1). 查不到留 null, 前端 fallback. */

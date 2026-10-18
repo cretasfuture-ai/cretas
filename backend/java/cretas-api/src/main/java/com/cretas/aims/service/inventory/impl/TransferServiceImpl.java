@@ -33,6 +33,7 @@ import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.SelfApprovalPolicy;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.lineage.LineageEdgeRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -130,6 +131,10 @@ public class TransferServiceImpl implements TransferService {
      */
     @Autowired(required = false)
     private MaterialConsumptionRepository materialConsumptionRepository;
+
+    /** 同厂原料调拨的逐来源批次血缘；可选注入以保持既有直接 new 的测试构造器兼容。 */
+    @Autowired(required = false)
+    private LineageEdgeRecorder lineageEdgeRecorder;
 
     /**
      * 🔒 库存完整性修复 (2026-07-06): 调拨签收超收容忍率 (默认 2%)。
@@ -371,12 +376,12 @@ public class TransferServiceImpl implements TransferService {
                             .withHint("请重新选择与当前类型匹配的物料");
                 }
                 normalizeRawTransferPackaging(factoryId, item, materialTypeId);
-                String rawInventoryUnit = item.getUnit();
+                String rawInventoryUnit = canonicalTransferUnit(factoryId, item.getUnit());
                 if (transferType == TransferType.WAREHOUSE_TO_WAREHOUSE) {
                     BigDecimal available = materialBatchRepository
                             .findAvailableBatchesFEFOByWarehouse(factoryId, materialTypeId, sourceWarehouseId)
                             .stream()
-                            .filter(batch -> rawInventoryUnit.equals(canonicalTransferUnit(factoryId, batch.getQuantityUnit())))
+                            .filter(batch -> transferUnitsMatch(factoryId, rawInventoryUnit, batch.getQuantityUnit()))
                             .map(batch -> {
                                 BigDecimal receipt = batch.getReceiptQuantity() != null
                                         ? batch.getReceiptQuantity() : BigDecimal.ZERO;
@@ -611,6 +616,19 @@ public class TransferServiceImpl implements TransferService {
                         || canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.VOLUME)
                 .map(com.cretas.aims.service.unit.CanonicalUnit::code)
                 .orElseGet(() -> value.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private boolean transferUnitsMatch(String factoryId, String expectedUnit, String actualUnit) {
+        String expected = trimToNull(expectedUnit);
+        String actual = trimToNull(actualUnit);
+        return expected != null && actual != null
+                && canonicalTransferUnit(factoryId, expected)
+                .equals(canonicalTransferUnit(factoryId, actual));
+    }
+
+    private String transferNativeInventoryUnit(String factoryId, InternalTransferItem item) {
+        String snapshot = trimToNull(item.getInventoryBaseUnitSnapshot());
+        return canonicalTransferUnit(factoryId, snapshot != null ? snapshot : item.getUnit());
     }
 
     private void normalizeRawTransferPackaging(
@@ -1284,14 +1302,21 @@ public class TransferServiceImpl implements TransferService {
         assertStatus(transfer, intraFactory ? TransferStatus.APPROVED : TransferStatus.RECEIVED, "确认");
 
         LocalDateTime now = LocalDateTime.now();
+        Map<InternalTransferItem, List<TransferSourceAllocation>> sourceAllocationsByItem =
+                intraFactory ? new IdentityHashMap<>() : Collections.emptyMap();
         if (intraFactory) {
             // Same-factory warehouse moves have one responsible warehouse role.  Do
             // not manufacture a sales-like ship/receive lifecycle: confirmation
             // atomically moves the source quantity and creates the target batch.
             for (InternalTransferItem item : transfer.getItems()) {
+                List<TransferSourceAllocation> allocations = storedAsMaterialBatch(item)
+                        ? new ArrayList<>() : null;
                 deductSourceInventory(transfer.getSourceFactoryId(), transfer.getSourceWarehouseId(), item, true,
-                        userId, transfer.getTransferNumber());
+                        userId, transfer.getTransferNumber(), allocations);
                 item.setReceivedQuantity(item.getQuantity());
+                if (allocations != null) {
+                    sourceAllocationsByItem.put(item, allocations);
+                }
             }
             if (!transfer.getItems().isEmpty()) {
                 transferItemRepository.saveAll(transfer.getItems());
@@ -1303,7 +1328,11 @@ public class TransferServiceImpl implements TransferService {
         // D1: warehouse strategy per PR #310 §5 — 调拨确认在 target warehouse 创建批次.
         String targetWarehouseId = transfer.getTargetWarehouseId();
         for (InternalTransferItem item : transfer.getItems()) {
-            createTargetInventory(transfer.getTargetFactoryId(), targetWarehouseId, item, userId);
+            List<TransferSourceAllocation> allocations = sourceAllocationsByItem.get(item);
+            createTargetInventory(transfer.getTargetFactoryId(), targetWarehouseId, item, userId, allocations);
+            if (intraFactory && allocations != null && !allocations.isEmpty()) {
+                recordMaterialTransferEdges(transfer, item, allocations, userId);
+            }
         }
 
         transfer.setStatus(TransferStatus.CONFIRMED);
@@ -1530,6 +1559,12 @@ public class TransferServiceImpl implements TransferService {
      */
     private void deductSourceInventory(String factoryId, String sourceWarehouseId, InternalTransferItem item,
                                        boolean intraFactory, Long recordedBy, String transferNumber) {
+        deductSourceInventory(factoryId, sourceWarehouseId, item, intraFactory, recordedBy, transferNumber, null);
+    }
+
+    private void deductSourceInventory(String factoryId, String sourceWarehouseId, InternalTransferItem item,
+                                       boolean intraFactory, Long recordedBy, String transferNumber,
+                                       List<TransferSourceAllocation> sourceAllocations) {
         // B1: 检查用户是否预选批次 (status=APPROVED 阶段写入). 若 SHIPPED+ 后被回填则也允许走 preselected 分支.
         String preselectedBatchId = item.getSourceBatchId();
 
@@ -1540,9 +1575,18 @@ public class TransferServiceImpl implements TransferService {
                             factoryId, item.getMaterialTypeId(), sourceWarehouseId)
                     : materialBatchRepository.findAvailableBatchesFEFO(factoryId, item.getMaterialTypeId());
 
+            // The create-time gate already limits stock by the native inventory unit. Keep the
+            // same fail-closed predicate here: FEFO ordering must never make a different unit
+            // eligible merely because it appears earlier, and a preselected different-unit
+            // batch must be rejected by the same path as an unavailable batch.
+            String nativeInventoryUnit = transferNativeInventoryUnit(factoryId, item);
+            List<MaterialBatch> unitMatchedFefoBatches = fefoBatches.stream()
+                    .filter(batch -> transferUnitsMatch(factoryId, nativeInventoryUnit, batch.getQuantityUnit()))
+                    .collect(Collectors.toList());
+
             // B1: 若用户预选, 校验该批次有效 + reorder 到队首
             List<MaterialBatch> batches = reorderMaterialBatchesForPreselection(
-                    fefoBatches, preselectedBatchId, factoryId, sourceWarehouseId, item);
+                    unitMatchedFefoBatches, preselectedBatchId, factoryId, sourceWarehouseId, item);
 
             // 🔴 2026-08-15: 扣减判据从「账面可用」改成「货架实物」= 账面 − 未小结报工消耗。
             //
@@ -1560,6 +1604,30 @@ public class TransferServiceImpl implements TransferService {
             // 与批次选择器的「货架实物」完全一致, 不另起一套。
             Map<String, BigDecimal> unsettledByBatch = loadUnsettledForBatches(factoryId, batches);
             boolean unsettledBlocked = false;
+
+            // Check the full matching-unit shelf quantity before mutating any batch. This keeps
+            // an insufficient transfer atomic even when the loop could consume a partial FEFO
+            // allocation before discovering the shortage.
+            BigDecimal matchingShelfQuantity = BigDecimal.ZERO;
+            for (MaterialBatch batch : batches) {
+                BigDecimal bookAvailable = batch.getReceiptQuantity()
+                        .subtract(batch.getUsedQuantity())
+                        .subtract(batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO);
+                BigDecimal available = physicalShelf(bookAvailable, unsettledByBatch.get(batch.getId()));
+                if (available.compareTo(bookAvailable) < 0) {
+                    unsettledBlocked = true;
+                }
+                matchingShelfQuantity = matchingShelfQuantity.add(available.max(BigDecimal.ZERO));
+            }
+            if (matchingShelfQuantity.compareTo(item.getQuantity()) < 0) {
+                BigDecimal missing = item.getQuantity().subtract(matchingShelfQuantity);
+                throw new BusinessException(409, String.format(
+                        "原料库存不足: %s, 需要 %s, 缺少 %s",
+                        item.getMaterialTypeId(), item.getQuantity(), missing))
+                        .withHint(unsettledBlocked
+                                ? "该批次已有报工消耗但尚未做生产小结，货架实物少于账面。请先完成生产小结，或按货架实物量调整调拨数量"
+                                : "请先采购或从其他工厂调入该原料");
+            }
 
             BigDecimal remaining = item.getQuantity();
             String firstConsumedBatchId = null;
@@ -1589,6 +1657,10 @@ public class TransferServiceImpl implements TransferService {
                 // ⚠️ 尤其是这个 FEFO 循环会扣【多个】批次, 而下面的 item.setSourceBatchId 只记得住
                 // 第一个 —— 第二个以后的批次在全库任何地方都没有记录。逐批次写流水是唯一的补法。
                 recordTransferConsumption(factoryId, batch, deduct, item, recordedBy, transferNumber);
+                if (sourceAllocations != null) {
+                    sourceAllocations.add(new TransferSourceAllocation(
+                            batch.getId(), deduct, transferStockUnit(item, batch), batch.getSupplierId()));
+                }
                 if (batch.getUnitPrice() != null) {
                     inheritedQty = inheritedQty.add(deduct);
                     inheritedCost = inheritedCost.add(deduct.multiply(batch.getUnitPrice()));
@@ -2004,7 +2076,8 @@ public class TransferServiceImpl implements TransferService {
         return String.format("TRF-MT-%s-%s", day, unique);
     }
 
-    private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item, Long userId) {
+    private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item,
+                                       Long userId, List<TransferSourceAllocation> sourceAllocations) {
         BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : item.getQuantity();
 
         // D1: 解析 target warehouse — 显式指定优先, 否则按类型 fallback
@@ -2022,8 +2095,11 @@ public class TransferServiceImpl implements TransferService {
             batch.setReceiptQuantity(qty);
             batch.setUsedQuantity(BigDecimal.ZERO);
             batch.setReservedQuantity(BigDecimal.ZERO);
-            batch.setQuantityUnit(item.getUnit());
+            batch.setQuantityUnit(targetStockUnit(item, sourceAllocations));
             batch.setUnitPrice(item.getUnitPrice());
+            if (sourceAllocations != null) {
+                commonSupplierId(sourceAllocations).ifPresent(batch::setSupplierId);
+            }
             batch.setReceiptDate(LocalDate.now());
             batch.setStatus(MaterialBatchStatus.AVAILABLE);
             batch.setCreatedBy(userId);
@@ -2090,5 +2166,60 @@ public class TransferServiceImpl implements TransferService {
             finishedGoodsBatchRepository.save(batch);
             item.setTargetBatchId(batch.getId());
         }
+    }
+
+    private void recordMaterialTransferEdges(InternalTransfer transfer, InternalTransferItem item,
+                                             List<TransferSourceAllocation> sourceAllocations, Long operatorId) {
+        if (lineageEdgeRecorder == null || item.getTargetBatchId() == null) {
+            return;
+        }
+        for (TransferSourceAllocation allocation : sourceAllocations) {
+            String refKey = transfer.getId() + ":" + item.getId() + ":" + allocation.sourceBatchId();
+            lineageEdgeRecorder.recordMaterialTransfer(
+                    transfer.getTargetFactoryId(), allocation.sourceBatchId(), item.getTargetBatchId(),
+                    allocation.quantity(), allocation.unit(), operatorId, refKey, null);
+        }
+    }
+
+    private static String transferStockUnit(InternalTransferItem item, MaterialBatch sourceBatch) {
+        if (item != null && hasText(item.getInventoryBaseUnitSnapshot())) {
+            return item.getInventoryBaseUnitSnapshot();
+        }
+        if (sourceBatch != null && hasText(sourceBatch.getQuantityUnit())) {
+            return sourceBatch.getQuantityUnit();
+        }
+        return item != null ? item.getUnit() : null;
+    }
+
+    private static String targetStockUnit(InternalTransferItem item,
+                                          List<TransferSourceAllocation> sourceAllocations) {
+        if (item != null && hasText(item.getInventoryBaseUnitSnapshot())) {
+            return item.getInventoryBaseUnitSnapshot();
+        }
+        if (sourceAllocations != null && !sourceAllocations.isEmpty()) {
+            String first = sourceAllocations.get(0).unit();
+            if (hasText(first)) {
+                return first;
+            }
+        }
+        return item != null ? item.getUnit() : null;
+    }
+
+    private static Optional<String> commonSupplierId(List<TransferSourceAllocation> sourceAllocations) {
+        if (sourceAllocations == null || sourceAllocations.isEmpty()
+                || sourceAllocations.stream().anyMatch(a -> !hasText(a.supplierId()))) {
+            return Optional.empty();
+        }
+        String first = sourceAllocations.get(0).supplierId();
+        return sourceAllocations.stream().allMatch(a -> Objects.equals(first, a.supplierId()))
+                ? Optional.of(first) : Optional.empty();
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private record TransferSourceAllocation(String sourceBatchId, BigDecimal quantity,
+                                            String unit, String supplierId) {
     }
 }

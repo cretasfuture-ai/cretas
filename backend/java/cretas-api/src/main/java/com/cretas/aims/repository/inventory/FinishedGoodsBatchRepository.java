@@ -33,6 +33,9 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
 
     Optional<FinishedGoodsBatch> findByFactoryIdAndBatchNumber(String factoryId, String batchNumber);
 
+    List<FinishedGoodsBatch> findByFactoryIdAndReturnOrderItemId(
+            String factoryId, Long returnOrderItemId);
+
     /**
      * ①c 成品作投料来源 — 悲观写锁按 (factory, batchNumber) 取单个成品批次, 供小结时严格扣减 (loud-fail)。
      *

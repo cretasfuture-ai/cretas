@@ -62,7 +62,37 @@
           >
             强制重算
           </el-button>
-          <el-button :icon="Refresh" @click="loadAll">刷新</el-button>
+          <el-button :icon="Refresh" @click="refreshDrawer">刷新</el-button>
+        </div>
+
+        <div v-if="formulaDefinition" class="formula-panel" data-testid="formula-basis">
+          <div class="formula-panel-header">
+            <span class="section-title">业务口径</span>
+            <el-tag size="small" type="success">{{ formulaDefinition.sourceLabel }}</el-tag>
+          </div>
+          <div class="formula-line"><span class="formula-label">计算公式</span>{{ formulaDefinition.formula }}</div>
+          <div class="formula-note">{{ formulaDefinition.basisNote }}；历史表格保留所选期间的旧口径记录，图表仅使用本页当前口径记录。</div>
+        </div>
+
+        <div v-if="isActualFlowMetric" class="period-selector" data-testid="period-selector">
+          <span class="period-label">统计期间</span>
+          <el-radio-group v-model="periodPreset" size="small">
+            <el-radio-button label="today">今天</el-radio-button>
+            <el-radio-button label="month">本月</el-radio-button>
+            <el-radio-button label="custom">自定义</el-radio-button>
+          </el-radio-group>
+          <el-date-picker
+            v-if="periodPreset === 'custom'"
+            v-model="customPeriodRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            :clearable="false"
+            size="small"
+          />
+          <span class="period-hint">{{ periodLabel }}</span>
         </div>
       </div>
 
@@ -85,6 +115,7 @@
             <template v-if="currentValueData.computedAt"> · 计算于 {{ formatDateTime(currentValueData.computedAt) }}</template>
           </template>
         </p>
+        <p v-if="thresholdsError" class="muted">{{ thresholdsError }}</p>
         <p
           v-if="detail.code === 'RESTAURANT_DISH_MARGIN' && currentValueData?.source?.startsWith('PYTHON_ENDPOINT:')"
           class="muted"
@@ -97,7 +128,7 @@
       <el-card class="section-card" shadow="never">
         <template #header>
           <div class="section-header-flex">
-            <span class="section-title">历史趋势</span>
+            <span class="section-title">{{ isActualFlowMetric ? '所选期间的计算记录' : '历史趋势' }}</span>
             <el-radio-group v-model="historyView" size="small">
               <el-radio-button label="chart">图表</el-radio-button>
               <el-radio-button label="table">表格</el-radio-button>
@@ -109,25 +140,31 @@
           <el-skeleton :rows="3" animated />
         </div>
 
+        <el-alert v-else-if="versionsError" :title="versionsError" type="error" :closable="false" />
         <el-empty
           v-else-if="versions.length === 0"
           :image-size="60"
-          description="暂无历史快照"
+          :description="isActualFlowMetric ? '该统计期间暂无计算记录' : '暂无历史快照'"
         />
 
         <div v-else>
           <!-- ECharts 折线图 (>5 条用图表, ≤5 用表格) -->
           <div
-            v-show="historyView === 'chart' && versions.length > 5"
+            v-show="historyView === 'chart' && chartVersions.length > 5"
             ref="chartRef"
             class="history-chart"
           />
           <!-- U6: useChartInsight — TREND insight on historical versions -->
-          <ChartInsight :insight="versionsInsight" :loading="versionsInsightLoading" depth="detailed" />
+          <ChartInsight
+            v-if="!isActualFlowMetric"
+            :insight="versionsInsight"
+            :loading="versionsInsightLoading"
+            depth="detailed"
+          />
 
           <!-- 表格视图 (始终可切换, 数据少时默认显示) -->
           <el-table
-            v-show="historyView === 'table' || versions.length <= 5"
+            v-show="historyView === 'table' || chartVersions.length <= 5"
             :data="versions"
             size="small"
             border
@@ -152,6 +189,11 @@
             <el-table-column prop="value" label="数值" min-width="100" align="right">
               <template #default="{ row }">
                 <span class="version-value">{{ formatValue(row.value) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="isActualFlowMetric" label="计算口径" min-width="180">
+              <template #default="{ row }">
+                {{ formulaSourceText(row.computeSource) }}
               </template>
             </el-table-column>
             <el-table-column prop="alertLevel" label="告警" min-width="80" align="center">
@@ -192,7 +234,7 @@
  *
  * v-model:visible 控制开关. props.code 切换时自动 reload.
  */
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
@@ -212,11 +254,14 @@ import {
   type AlertLevel,
 } from '@/api/indicator';
 import ThresholdGauge from '@/components/indicator/ThresholdGauge.vue';
+import { isValidPeriod } from './actualFlowPeriod';
 
 interface Props {
   modelValue: boolean;
   factoryId: string;
   code: string | null;
+  initialPeriod?: [string, string] | null;
+  actorKey?: string;
 }
 
 const props = defineProps<Props>();
@@ -243,20 +288,96 @@ const loading = ref(false);
 const valueLoading = ref(false);
 const valueError = ref<string | null>(null);
 const thresholdsLoading = ref(false);
+const thresholdsError = ref<string | null>(null);
 const versionsLoading = ref(false);
+const versionsError = ref<string | null>(null);
 const recomputing = ref(false);
 const loadError = ref<string | null>(null);
 
 const page = ref(0);
 const pageSize = 10;
 const historyView = ref<'chart' | 'table'>('chart');
+type PeriodPreset = 'today' | 'month' | 'custom';
+type DateRange = [string, string];
+const periodPreset = ref<PeriodPreset>('today');
+const customPeriodRange = ref<DateRange | null>(null);
+const calendarToday = ref(formatDateOnly(new Date()));
+
+function applyInitialPeriod(period?: DateRange | null) {
+  calendarToday.value = formatDateOnly(new Date());
+  if (period === undefined) { periodPreset.value = 'today'; customPeriodRange.value = null; return; }
+  if (!isValidPeriod(period)) { periodPreset.value = 'custom'; customPeriodRange.value = null; return; }
+  const today = formatDateOnly(new Date());
+  if (period[0] === today && period[1] === today) { periodPreset.value = 'today'; customPeriodRange.value = null; return; }
+  const now = new Date();
+  const monthStart = formatDateOnly(new Date(now.getFullYear(), now.getMonth(), 1));
+  if (period[0] === monthStart && period[1] === today) { periodPreset.value = 'month'; customPeriodRange.value = null; return; }
+  periodPreset.value = 'custom'; customPeriodRange.value = [...period];
+}
+
+const FORMULA_DEFINITIONS: Record<string, { formula: string; sourceLabel: string; basisNote: string }> = {
+  FACTORY_LU_YIELD_RATE: {
+    formula: '成品合格产出量（kg）÷实际首工序投入量（kg）×100%',
+    sourceLabel: '真实业务 · 实际流',
+    basisNote: '统计已完工且已结单的生产单；旧样本缺少报工时暂无数据',
+  },
+  FACTORY_GOOD_OUTPUT_RATE: {
+    formula: '合格产出量（kg）÷（合格产出量（kg）+已确认不良量（kg））×100%',
+    sourceLabel: '真实业务 · 实际流',
+    basisNote: '统计已完工且已结单的生产单；旧样本缺少报工时暂无数据',
+  },
+  FACTORY_LU_UNIT_COST: {
+    formula: '完整实际采集成本（元）÷合格产出量（kg）',
+    sourceLabel: '真实业务 · 实际流',
+    basisNote: '统计已完工且已结单的生产单；旧样本缺少报工时暂无数据',
+  },
+  FACTORY_ACTUAL_TOTAL_COST: {
+    formula: '完整实际采集成本（元）',
+    sourceLabel: '真实业务 · 实际流',
+    basisNote: '统计已完工且已结单的生产单；旧样本缺少报工时暂无数据',
+  },
+};
+const ACTUAL_FLOW_SOURCE = (code: string) => `REAL_BUSINESS:${code}:actual-flow-v2`;
 
 const chartRef = ref<HTMLElement | null>(null);
 let chartInst: echarts.ECharts | null = null;
+let generation = 0;
 
 const drawerTitle = computed(() => {
   if (loading.value) return '指标详情';
   return detail.value ? `${detail.value.name} - 指标详情` : '指标详情';
+});
+
+const formulaDefinition = computed(() =>
+  props.code ? FORMULA_DEFINITIONS[props.code] ?? null : null,
+);
+const isActualFlowMetric = computed(() => formulaDefinition.value !== null);
+const chartVersions = computed(() => {
+  if (!isActualFlowMetric.value) return versions.value;
+  const range = selectedPeriod.value;
+  return versions.value.filter((version) => version.computeSource === ACTUAL_FLOW_SOURCE(props.code!)
+    && (!range || (version.periodStart === range[0] && version.periodEnd === range[1])));
+});
+
+function formatDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+const selectedPeriod = computed<DateRange | null>(() => {
+  const todayText = calendarToday.value;
+  if (periodPreset.value === 'today') return [todayText, todayText];
+  if (periodPreset.value === 'month') {
+    return [`${todayText.slice(0, 7)}-01`, todayText];
+  }
+  return isValidPeriod(customPeriodRange.value) ? customPeriodRange.value : null;
+});
+const periodLabel = computed(() => {
+  const range = selectedPeriod.value;
+  if (!range) return '请选择完整日期';
+  return range[0] === range[1] ? range[0] : `${range[0]} 至 ${range[1]}`;
 });
 
 // The requested current value owns this slot. Explicit null or a failed query
@@ -278,72 +399,145 @@ const valueSourceText = computed(() => {
   return '来源未提供';
 });
 
+function periodQuery(): { periodStart: string; periodEnd: string } | undefined {
+  if (!isActualFlowMetric.value) return undefined;
+  const range = selectedPeriod.value;
+  return range ? { periodStart: range[0], periodEnd: range[1] } : undefined;
+}
+
+function versionsWindowQuery(): { windowStart: string; windowEnd: string; exactPeriod: true } | undefined {
+  const range = periodQuery();
+  return range ? { windowStart: range.periodStart, windowEnd: range.periodEnd, exactPeriod: true } : undefined;
+}
+
 const currentAlertLevel = computed<AlertLevel>(() => {
   return currentValueData.value?.alertLevel ?? null;
 });
+function requestIdentity(): string {
+  const range = selectedPeriod.value;
+  return `${props.factoryId}|${props.actorKey || ''}|${props.code || ''}|${props.modelValue}|${range?.[0] || ''}|${range?.[1] || ''}`;
+}
+let alive = true;
+const requestSequences = { detail: 0, value: 0, thresholds: 0, versions: 0, recompute: 0 };
+function requestGuard(slot: keyof typeof requestSequences) {
+  const identity = requestIdentity();
+  const context = generation;
+  const sequence = ++requestSequences[slot];
+  return () => alive && props.modelValue && context === generation
+    && identity === requestIdentity() && sequence === requestSequences[slot];
+}
 
 async function loadDetail() {
   if (!props.code) return;
+  const isCurrent = requestGuard('detail');
   loadError.value = null;
   loading.value = true;
   try {
-    detail.value = await getIndicatorDetail(props.factoryId, props.code);
+    const result = await getIndicatorDetail(props.factoryId, props.code);
+    if (isCurrent()) detail.value = result;
   } catch (e) {
-    loadError.value = e instanceof Error ? e.message : '加载失败';
+    if (isCurrent()) loadError.value = e instanceof Error ? e.message : '加载失败';
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
 async function loadValue() {
   if (!props.code) return;
+  const isCurrent = requestGuard('value');
   valueLoading.value = true;
   valueError.value = null;
   currentValueData.value = null;
-  try {
-    currentValueData.value = await getIndicatorValue(props.factoryId, props.code);
-  } catch (e) {
-    valueError.value = e instanceof Error ? e.message : '指标值查询失败，请重试';
-  } finally {
+  const query = periodQuery();
+  if (isActualFlowMetric.value && !query) {
+    valueError.value = '请选择完整日期';
     valueLoading.value = false;
+    return;
+  }
+  try {
+    const result = await getIndicatorValue(props.factoryId, props.code, query);
+    if (isCurrent()) currentValueData.value = result;
+  } catch (e) {
+    if (isCurrent()) valueError.value = e instanceof Error ? e.message : '指标值查询失败，请重试';
+  } finally {
+    if (isCurrent()) valueLoading.value = false;
   }
 }
 
 async function loadThresholds() {
   if (!props.code) return;
+  const isCurrent = requestGuard('thresholds');
   thresholdsLoading.value = true;
+  thresholdsError.value = null;
   try {
-    thresholds.value = await getIndicatorThresholds(props.factoryId, props.code);
+    const result = await getIndicatorThresholds(props.factoryId, props.code);
+    if (isCurrent()) thresholds.value = result;
   } catch (e) {
     console.warn('[IndicatorDetailDrawer] thresholds load failed:', e);
-    thresholds.value = [];
+    if (isCurrent()) {
+      thresholds.value = [];
+      thresholdsError.value = '预警规则读取失败，请刷新重试';
+    }
   } finally {
-    thresholdsLoading.value = false;
+    if (isCurrent()) thresholdsLoading.value = false;
   }
 }
 
 async function loadVersions() {
   if (!props.code) return;
+  const isCurrent = requestGuard('versions');
   versionsLoading.value = true;
+  versionsError.value = null;
+  versions.value = [];
+  if (isActualFlowMetric.value && !periodQuery()) {
+    versionsError.value = '请选择完整日期后查看计算记录';
+    versionsLoading.value = false;
+    return;
+  }
   try {
+    const windowQuery = versionsWindowQuery();
     const res = await listIndicatorVersions(props.factoryId, props.code, {
-      page: page.value,
+      page: page.value + 1,
       size: pageSize,
+      ...windowQuery,
     });
-    versions.value = res.content || [];
-    versionsTotal.value = res.totalElements ?? 0;
-    nextTick(() => renderChart());
+    if (!isCurrent()) return;
+    const content = res.content || [];
+    if (windowQuery && content.some((v) =>
+      v.periodStart !== windowQuery.windowStart || v.periodEnd !== windowQuery.windowEnd)) {
+      throw new Error('返回记录与所选统计期间不一致，请刷新后重试');
+    }
+    versions.value = content;
+    versionsTotal.value = res.totalElements ?? content.length;
+    nextTick(() => { if (isCurrent()) renderChart(); });
   } catch (e) {
     console.warn('[IndicatorDetailDrawer] versions load failed:', e);
-    versions.value = [];
-    versionsTotal.value = 0;
+    if (isCurrent()) {
+      versions.value = []; versionsTotal.value = 0;
+      versionsError.value = e instanceof Error ? `计算记录读取失败：${e.message}` : '计算记录读取失败，请刷新重试';
+    }
   } finally {
-    versionsLoading.value = false;
+    if (isCurrent()) versionsLoading.value = false;
   }
 }
 
 async function loadAll() {
+  generation += 1;
+  detail.value = null;
+  currentValueData.value = null;
+  thresholds.value = [];
+  versions.value = [];
+  versionsTotal.value = 0;
   await Promise.all([loadDetail(), loadValue(), loadThresholds(), loadVersions()]);
+}
+function syncCalendarToday(): boolean {
+  const before = selectedPeriod.value?.join('|');
+  calendarToday.value = formatDateOnly(new Date());
+  return before !== selectedPeriod.value?.join('|');
+}
+async function refreshDrawer() {
+  if (syncCalendarToday()) await nextTick();
+  else await loadAll();
 }
 
 function onPageChange(newPage: number) {
@@ -352,10 +546,21 @@ function onPageChange(newPage: number) {
 }
 
 async function onRecompute() {
-  if (!props.code) return;
+  if (!props.code || !props.modelValue || !canRecompute.value || recomputing.value) return;
+  if (syncCalendarToday()) await nextTick();
+  if (!props.code || !props.modelValue || !canRecompute.value || recomputing.value) return;
+  const isCurrent = requestGuard('recompute');
+  const query = periodQuery();
+  if (isActualFlowMetric.value && !query) {
+    valueError.value = '请选择完整日期';
+    return;
+  }
+  ++requestSequences.value;
+  valueLoading.value = false;
   recomputing.value = true;
   try {
-    const result = await recomputeIndicator(props.factoryId, props.code);
+    const result = await recomputeIndicator(props.factoryId, props.code, query);
+    if (!isCurrent()) return;
     currentValueData.value = result;
     valueError.value = null;
     if (result.status === 'FAILED') {
@@ -367,20 +572,30 @@ async function onRecompute() {
       return;
     }
     ElMessage.success(`重算完成: ${result.value ?? '—'}`);
+    if (!isCurrent()) return;
     emit('recomputed', props.code);
     // 重新加载详情 + 历史 (新增了一条 version)
     await Promise.all([loadDetail(), loadVersions()]);
   } catch (e) {
-    currentValueData.value = null;
-    valueError.value = e instanceof Error ? e.message : '指标重算失败，请重试';
+    if (isCurrent()) {
+      currentValueData.value = null;
+      valueError.value = e instanceof Error ? e.message : '指标重算失败，请重试';
+    }
     // ApiError 已被 request.ts 拦截展示 toast, 此处只 console.
     console.warn('[IndicatorDetailDrawer] recompute failed:', e);
   } finally {
+    // The POST cannot be cancelled. Closing/reopening must not release its single-flight lock.
     recomputing.value = false;
   }
 }
 
 function onClose() {
+  generation += 1;
+  loading.value = false;
+  valueLoading.value = false;
+  thresholdsLoading.value = false;
+  versionsLoading.value = false;
+  versionsError.value = null;
   // reset 状态便于下次打开
   detail.value = null;
   currentValueData.value = null;
@@ -397,7 +612,7 @@ function onClose() {
 }
 
 function renderChart() {
-  if (historyView.value !== 'chart' || versions.value.length <= 5) return;
+  if (historyView.value !== 'chart' || chartVersions.value.length <= 5) return;
   if (!chartRef.value) return;
 
   if (!chartInst) {
@@ -405,7 +620,7 @@ function renderChart() {
   }
 
   // versions 后端默认 page=0 DESC; 反转给图表展示 (旧→新)
-  const sorted = [...versions.value].sort(
+  const sorted = [...chartVersions.value].sort(
     (a, b) => new Date(a.computedAt).getTime() - new Date(b.computedAt).getTime()
   );
   const xData = sorted.map(v => formatDateTime(v.computedAt));
@@ -449,8 +664,8 @@ function renderChart() {
 // LINE over time: versions (sorted asc by computedAt) → TREND family.
 // Driven off the same `versions` ref used by renderChart().
 const indicatorVersionsSource = () => {
-  if (versions.value.length < 2) return null;
-  const sorted = [...versions.value].sort(
+  if (chartVersions.value.length < 2) return null;
+  const sorted = [...chartVersions.value].sort(
     (a, b) => new Date(a.computedAt).getTime() - new Date(b.computedAt).getTime(),
   );
   return {
@@ -476,13 +691,21 @@ watch(historyView, () => {
 });
 
 watch(
-  () => [props.modelValue, props.code],
-  ([show, code]) => {
-    if (show && code) {
-      loadAll();
-    }
-  }
+  () => [props.modelValue, props.code, props.factoryId, props.actorKey, props.initialPeriod?.[0], props.initialPeriod?.[1]],
+  () => { applyInitialPeriod(props.initialPeriod); },
+  { immediate: true },
 );
+
+watch(
+  () => [props.modelValue, props.code, props.factoryId, props.actorKey, selectedPeriod.value?.[0], selectedPeriod.value?.[1]],
+  () => {
+    if (!props.modelValue || !props.code) { onClose(); return; }
+    page.value = 0;
+    void loadAll();
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => { alive = false; onClose(); });
 
 // ============ helpers ============
 
@@ -533,6 +756,13 @@ function formatValue(v: number): string {
   return v.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 }
 
+function formulaSourceText(source?: string): string {
+  if (source === ACTUAL_FLOW_SOURCE(props.code || '') && formulaDefinition.value) {
+    return `${formulaDefinition.value.sourceLabel}：${formulaDefinition.value.formula}`;
+  }
+  return '旧口径，仅供查看';
+}
+
 function formatDateTime(iso: string): string {
   try {
     return new Date(iso).toLocaleString('zh-CN', {
@@ -578,6 +808,50 @@ function formatDateTime(iso: string): string {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.formula-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-color-success-light-5);
+  border-radius: 4px;
+  background: var(--el-color-success-light-9);
+}
+
+.formula-panel-header,
+.period-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.formula-line {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.formula-label,
+.period-label {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  margin-right: 6px;
+}
+
+.formula-note,
+.period-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.period-selector {
+  flex-wrap: wrap;
+}
+
+.period-selector .el-date-editor {
+  width: 250px;
 }
 
 .section-card {

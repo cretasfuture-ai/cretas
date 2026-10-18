@@ -141,4 +141,24 @@ class ArApServiceImplGetAgingAnalysisTest {
         assertEquals(1, aging.size());
         assertEquals(0, new BigDecimal("50.00").compareTo((BigDecimal) aging.get(0).get("total")));
     }
+
+    @Test
+    void settledCustomerInvoiceDoesNotCreateAZeroBalanceAgingRow() {
+        ArApTransaction settled = partiallySettledArInvoice();
+        settled.setOutstandingAmount(BigDecimal.ZERO);
+        when(transactionRepository.findOverdueReceivables(eq(FACTORY), any(LocalDate.class)))
+                .thenReturn(List.of(settled));
+
+        assertEquals(List.of(), service().getAgingAnalysis(FACTORY, CounterpartyType.CUSTOMER));
+    }
+
+    @Test
+    void settledSupplierInvoiceDoesNotCreateAZeroBalanceAgingRow() {
+        ArApTransaction settled = partiallySettledArInvoice();
+        settled.setOutstandingAmount(BigDecimal.ZERO);
+        when(transactionRepository.findOverduePayables(eq(FACTORY), any(LocalDate.class)))
+                .thenReturn(List.of(settled));
+
+        assertEquals(List.of(), service().getAgingAnalysis(FACTORY, CounterpartyType.SUPPLIER));
+    }
 }

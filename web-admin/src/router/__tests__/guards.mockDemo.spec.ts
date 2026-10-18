@@ -36,6 +36,23 @@ vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => permSta
 import { setupRouterGuards } from '../guards';
 import realRouter from '../index';
 
+describe('factory indicator daily entry', () => {
+  it('lets finance use the real indicator route but keeps the analytics module gate', async () => {
+    authState.isAuthenticated = true;
+    authState.currentRole = 'finance_manager';
+    authState.factoryType = 'FACTORY';
+    const path = '/analytics/indicators';
+    permState.canAccess.mockReturnValue(true);
+    const allowed = makeRouter([path]);
+    await allowed.push(path);
+    expect(allowed.currentRoute.value.path).toBe(path);
+    permState.canAccess.mockReturnValue(false);
+    const denied = makeRouter([path]);
+    await denied.push(path);
+    expect(denied.currentRoute.value.path).toBe('/403');
+  });
+});
+
 const Blank = { template: '<div />' };
 
 /** 真实路由表里那条记录的 meta —— 测试不复制一份, 避免与生产表漂移。 */
@@ -47,6 +64,8 @@ function realMetaOf(path: string): Record<string, unknown> {
 
 const LOGISTICS_PAGE = '/scheduling/logistics/stores';   // hideForFactoryTypes: FACTORY / RESTAURANT
 const FACTORY_PAGE = '/scheduling/overview';             // hideForFactoryTypes: LOGISTICS
+const FINANCE_RETURN_ROUTE = '/finance/return-refunds/:id';
+const FINANCE_RETURN_PAGE = '/finance/return-refunds/return-a';
 
 function makeRouter(paths: string[]) {
   const routes: RouteRecordRaw[] = [
@@ -59,6 +78,23 @@ function makeRouter(paths: string[]) {
       component: Blank,
       meta: realMetaOf(p),
     })),
+  ];
+  const r = createRouter({ history: createMemoryHistory(), routes });
+  setupRouterGuards(r);
+  return r;
+}
+
+function makeFinanceReturnRouter() {
+  const routes: RouteRecordRaw[] = [
+    { path: '/403', name: 'Forbidden', component: Blank, meta: { requiresAuth: false } },
+    { path: '/login', name: 'Login', component: Blank, meta: { requiresAuth: false } },
+    { path: '/dashboard', name: 'Dash', component: Blank, meta: { requiresAuth: true } },
+    {
+      path: FINANCE_RETURN_PAGE,
+      name: 'FinanceReturnRefundDetail',
+      component: Blank,
+      meta: realMetaOf(FINANCE_RETURN_ROUTE),
+    },
   ];
   const r = createRouter({ history: createMemoryHistory(), routes });
   setupRouterGuards(r);
@@ -100,6 +136,26 @@ describe('mockDemo 前置条件', () => {
   it('真实路由表里带 mockDemo 的记录数没有悄悄变化', () => {
     const withFlag = realRouter.getRoutes().filter((r) => r.meta?.mockDemo === true);
     expect(withFlag.length).toBe(12);
+  });
+});
+
+describe('财务退货退款别名路由', () => {
+  it('finance_manager 可进入隐藏财务别名，但质量角色没有 finance 模块时仍被拒绝', async () => {
+    const route = realRouter.getRoutes().find((record) => record.name === 'FinanceReturnRefundDetail');
+    expect(route?.path).toBe(FINANCE_RETURN_ROUTE);
+    expect(route?.meta).toMatchObject({ module: 'finance', hidden: true, title: '退货退款详情' });
+
+    authState.currentRole = 'finance_manager';
+    permState.canAccess.mockImplementation((module: string) => module === 'finance');
+    const financeRouter = makeFinanceReturnRouter();
+    await financeRouter.push(FINANCE_RETURN_PAGE);
+    expect(financeRouter.currentRoute.value.path).toBe(FINANCE_RETURN_PAGE);
+
+    authState.currentRole = 'quality_manager';
+    permState.canAccess.mockReturnValue(false);
+    const qualityRouter = makeFinanceReturnRouter();
+    await qualityRouter.push(FINANCE_RETURN_PAGE);
+    expect(qualityRouter.currentRoute.value.path).toBe('/403');
   });
 });
 

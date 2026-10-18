@@ -319,10 +319,11 @@ public class FactoryBuildPlanService {
         //    ⛔ 但措辞与模块那条**不同**: 停用指标只是看板少一格, 不该也写「403」。
         if (sd.getIndicatorOptOut() != null) {
             for (String code : sd.getIndicatorOptOut()) {
-                if (code == null || code.isBlank()) {
+                String resolvedCode = com.cretas.aims.service.indicator.FactoryIndicatorProvisioner.optOutCode(code);
+                if (resolvedCode == null) {
                     continue;
                 }
-                var ind = indicatorRepository.findByFactoryIdAndCode(factoryId, code.trim());
+                var ind = indicatorRepository.findByFactoryIdAndCode(factoryId, resolvedCode);
                 PlannedChange ch = new PlannedChange();
                 ch.setGroup("指标");
                 ch.setKey(ind.map(com.cretas.aims.entity.indicator.Indicator::getName)

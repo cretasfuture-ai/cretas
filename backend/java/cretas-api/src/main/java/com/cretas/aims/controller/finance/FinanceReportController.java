@@ -6,9 +6,13 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.finance.report.BalanceSheetDTO;
 import com.cretas.aims.dto.finance.report.CashFlowDTO;
 import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
+import com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO;
 import com.cretas.aims.service.finance.BalanceSheetService;
 import com.cretas.aims.service.finance.CashFlowService;
 import com.cretas.aims.service.finance.IncomeStatementService;
+import com.cretas.aims.service.finance.ShipmentSkuMarginService;
+import org.springframework.format.annotation.DateTimeFormat;
+import java.time.LocalDate;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,6 +56,15 @@ public class FinanceReportController {
     private final BalanceSheetService balanceSheetService;
     private final IncomeStatementService incomeStatementService;
     private final CashFlowService cashFlowService;
+    private final ShipmentSkuMarginService shipmentSkuMarginService;
+
+    @GetMapping("/shipment-sku-margin")
+    public ResponseEntity<ApiResponse<ShipmentSkuMarginDTO>> shipmentSkuMargin(
+            @PathVariable String factoryId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate periodStart,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate periodEnd) {
+        return ResponseEntity.ok(ApiResponse.success(shipmentSkuMarginService.generate(factoryId, periodStart, periodEnd)));
+    }
 
     /**
      * 资产负债表 (截至 year-month 月底余额).

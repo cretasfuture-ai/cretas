@@ -25,6 +25,8 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -50,6 +52,32 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("🔴 销售发货兑现批次分配 (不被 FIFO 覆盖)")
 class SalesDeliveryHonorBatchAllocationTest {
+
+    @Test void fifoAvailableAndReservedPortionsProduceOneCompletePhysicalEdge() throws Exception {
+        var recorder=org.mockito.Mockito.mock(com.cretas.aims.service.lineage.LineageEdgeRecorder.class);
+        ReflectionTestUtils.setField(salesService,"lineageEdgeRecorder",recorder);
+        var batch=buildBatch("split-batch","SPLIT","盒",new BigDecimal("10"),BigDecimal.ZERO);batch.setReservedQuantity(new BigDecimal("6"));
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(eq(FACTORY_A),eq(PRODUCT_TYPE),org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of(batch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("split-batch",FACTORY_A)).thenReturn(Optional.of(batch));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A,ITEM_ID_STR)).thenReturn(List.of());
+        var item=buildItem(new BigDecimal("10"),"盒");item.setDeliveryRecordId("delivery");invokeDeduct(salesService,item);
+        assertEquals(0,new BigDecimal("10").compareTo(batch.getShippedQuantity()));
+        org.mockito.Mockito.verify(recorder).recordFinishedToShipment(eq(FACTORY_A),eq("split-batch"),eq("delivery"),eq(new BigDecimal("10")),eq("盒"),eq(OPERATOR_ID),eq("delivery:delivery:777:split-batch"),anyMap());
+        org.mockito.Mockito.verifyNoMoreInteractions(recorder);
+    }
+
+    @Test
+    void twoLinesShippingTheSameBatchKeepDistinctPhysicalCostSources() {
+        var recorder=org.mockito.Mockito.mock(com.cretas.aims.service.lineage.LineageEdgeRecorder.class);
+        ReflectionTestUtils.setField(salesService,"lineageEdgeRecorder",recorder);
+        var batch=buildBatch("batch-shared","SHARED","盒",new BigDecimal("20"),BigDecimal.ZERO);
+        var first=buildItem(new BigDecimal("4"),"盒");first.setDeliveryRecordId("delivery");
+        var second=buildItem(new BigDecimal("6"),"盒");second.setDeliveryRecordId("delivery");second.setId(778L);
+        ReflectionTestUtils.invokeMethod(salesService,"recordShipmentLineage",first,batch,new BigDecimal("4"),OPERATOR_ID);
+        ReflectionTestUtils.invokeMethod(salesService,"recordShipmentLineage",second,batch,new BigDecimal("6"),OPERATOR_ID);
+        org.mockito.Mockito.verify(recorder).recordFinishedToShipment(eq(FACTORY_A),eq("batch-shared"),eq("delivery"),eq(new BigDecimal("4")),eq("盒"),eq(OPERATOR_ID),eq("delivery:delivery:777:batch-shared"),anyMap());
+        org.mockito.Mockito.verify(recorder).recordFinishedToShipment(eq(FACTORY_A),eq("batch-shared"),eq("delivery"),eq(new BigDecimal("6")),eq("盒"),eq(OPERATOR_ID),eq("delivery:delivery:778:batch-shared"),anyMap());
+    }
 
     @Mock
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;

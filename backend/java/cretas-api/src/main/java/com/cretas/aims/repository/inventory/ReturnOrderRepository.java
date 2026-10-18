@@ -7,11 +7,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.Collection;
+import java.util.Optional;
+import java.util.List;
 
 @Repository
 public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String> {
@@ -56,6 +59,24 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String
     Page<ReturnOrder> findByFactoryIdAndCounterpartyIdAndReturnTypeAndCreatedByInOrderByCreatedAtDesc(
             String factoryId, String counterpartyId, ReturnType returnType,
             Collection<Long> createdByList, Pageable pageable);
+
+    /**
+     * Resolve one return document for historical returned-goods cost recovery.
+     * The unique key is intentionally factory-scoped; a return number from
+     * another tenant must never be usable as cost evidence.
+     */
+    Optional<ReturnOrder> findByFactoryIdAndReturnNumber(String factoryId, String returnNumber);
+
+    /**
+     * Completed physical sales returns whose original return quantities are
+     * still the accounting source for COGS recovery.  Items are fetched with
+     * the document so callers cannot accidentally aggregate only the order
+     * header or re-read a mutable inventory quantity.
+     */
+    @EntityGraph(attributePaths = "items")
+    List<ReturnOrder> findByFactoryIdAndReturnTypeAndStatusAndReturnDateBetween(
+            String factoryId, ReturnType returnType, ReturnOrderStatus status,
+            LocalDate start, LocalDate end);
 
     @Query("SELECT COUNT(r) FROM ReturnOrder r WHERE r.factoryId = :factoryId AND r.returnDate = :date")
     long countByFactoryIdAndDate(@Param("factoryId") String factoryId, @Param("date") LocalDate date);

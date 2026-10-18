@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.util.List;
+import com.cretas.aims.security.PriceSensitive;
 
 /**
  * 利润表 (Income Statement / P&L) DTO — Sprint 7 T3 报表三表.
@@ -60,34 +61,34 @@ public class IncomeStatementDTO {
     private Integer endMonth;
 
     /** 营业收入明细 (REVENUE 科目). */
-    private List<BalanceSheetDTO.LineItem> revenues;
+    @PriceSensitive private List<BalanceSheetDTO.LineItem> revenues;
 
     /** 营业成本明细 (COST 科目). */
-    private List<BalanceSheetDTO.LineItem> costs;
+    @PriceSensitive private List<BalanceSheetDTO.LineItem> costs;
 
     /** 营业费用 / 管理费用 / 财务费用 (EXPENSE 科目). */
-    private List<BalanceSheetDTO.LineItem> expenses;
+    @PriceSensitive private List<BalanceSheetDTO.LineItem> expenses;
 
     /** 营业收入合计. */
-    private BigDecimal totalRevenue;
+    @PriceSensitive private BigDecimal totalRevenue;
 
     /** 营业成本合计. */
-    private BigDecimal totalCost;
+    @PriceSensitive private BigDecimal totalCost;
 
     /** 营业毛利 = totalRevenue - totalCost. */
-    private BigDecimal grossProfit;
+    @PriceSensitive private BigDecimal grossProfit;
 
     /** 营业费用合计. */
-    private BigDecimal totalExpense;
+    @PriceSensitive private BigDecimal totalExpense;
 
     /** 营业利润 = grossProfit - totalExpense. */
-    private BigDecimal operatingProfit;
+    @PriceSensitive private BigDecimal operatingProfit;
 
     /** 所得税额 (从 expenses 中识别"所得税"科目, 默认 0). */
-    private BigDecimal incomeTax;
+    @PriceSensitive private BigDecimal incomeTax;
 
     /** 净利润 = operatingProfit - incomeTax. */
-    private BigDecimal netProfit;
+    @PriceSensitive private BigDecimal netProfit;
 
     /** 报表生成时间戳. */
     private String generatedAt;

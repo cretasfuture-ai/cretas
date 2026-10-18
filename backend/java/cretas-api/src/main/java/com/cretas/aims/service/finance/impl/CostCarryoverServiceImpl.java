@@ -7,6 +7,8 @@ import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.service.finance.CostCarryoverService;
+import com.cretas.aims.service.finance.SalesReturnCostService;
+import com.cretas.aims.service.finance.ProductionCostConsistency;
 import com.cretas.aims.service.voucher.VoucherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +34,9 @@ public class CostCarryoverServiceImpl implements CostCarryoverService {
     private final SalesDeliveryItemRepository deliveryItemRepo;
     private final VoucherService voucherService;
     private final VoucherRepository voucherRepo;
+    private final SalesReturnCostService salesReturnCosts;
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
 
     private static final String COGS_CODE = "6401";
     private static final String COGS_NAME = "主营业务成本";
@@ -42,11 +47,16 @@ public class CostCarryoverServiceImpl implements CostCarryoverService {
     @Override
     @Transactional
     public CostCarryoverSummary carryCost(String factoryId, int year, int month, Long userId) {
+        ProductionCostConsistency.lockFactory(entityManager, factoryId);
         LocalDate start = YearMonth.of(year, month).atDay(1);
         LocalDate end = YearMonth.of(year, month).atEndOfMonth();
 
         Object[] costed = deliveryItemRepo.aggregateShippedCogs(factoryId, start, end);
-        BigDecimal cogs = toDecimal(costed, 0).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal shippedCost = toDecimal(costed, 0);
+        // Restore physical returns before rounding, so a full return cancels its native
+        // cost exactly rather than introducing a second per-line rounding difference.
+        BigDecimal returnedCost = salesReturnCosts.returnedCost(factoryId, start, end);
+        BigDecimal cogs = shippedCost.subtract(returnedCost).setScale(2, RoundingMode.HALF_UP);
         long costedCount = toLong(costed, 2);
 
         Object[] missing = deliveryItemRepo.aggregateMissingCost(factoryId, start, end);
@@ -54,12 +64,13 @@ public class CostCarryoverServiceImpl implements CostCarryoverService {
         long missingCount = toLong(missing, 1);
 
         if (missingCount > 0) {
-            // 诚实 null: 绝不按 ¥0 伪造 — 暴露笔数让财务追成本传导缺口。
-            log.warn("[CostCarryover] {}-{}-{} ⚠️ {} 笔已发货成品无单位成本、未结转 COGS (数量合计={}) — honest-null 排除",
-                    factoryId, year, month, missingCount, missingQty);
+            // A partly costed multi-batch line must never produce a seemingly complete closing voucher.
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "有"+missingCount+"条已出货明细的批次成本不完整，请补齐成本后重新结转；本次未生成凭证")
+                    .withCode("SHIPMENT_COST_INCOMPLETE");
         }
 
-        if (cogs.signum() <= 0) {
+        if (cogs.signum() == 0) {
             log.info("[CostCarryover] {}-{}-{} 无成本可结转 (COGS={}), no-op (未结转笔数={})",
                     factoryId, year, month, cogs, missingCount);
             return new CostCarryoverSummary(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
@@ -67,9 +78,11 @@ public class CostCarryoverServiceImpl implements CostCarryoverService {
         }
 
         // 借 6401 主营业务成本 / 贷 1405 库存商品 (内部自平, 同一 cogs 值)。
-        List<VoucherEntrySpec> entries = List.of(
+        List<VoucherEntrySpec> entries = cogs.signum() > 0 ? List.of(
                 new VoucherEntrySpec(COGS_CODE, COGS_NAME, cogs, null, "结转销售成本"),
-                new VoucherEntrySpec(INVENTORY_CODE, INVENTORY_NAME, null, cogs, "结转销售成本-库存转出"));
+                new VoucherEntrySpec(INVENTORY_CODE, INVENTORY_NAME, null, cogs, "结转销售成本-库存转出")) : List.of(
+                new VoucherEntrySpec(INVENTORY_CODE, INVENTORY_NAME, cogs.abs(), null, "实物销售退回-恢复库存成本"),
+                new VoucherEntrySpec(COGS_CODE, COGS_NAME, null, cogs.abs(), "实物销售退回-冲回销售成本"));
 
         int revision = currentRevision(factoryId, year, month);
         String sourceId = String.format("cost-%s-%d-%d-cogs-r%d", factoryId, year, month, revision);
@@ -103,16 +116,25 @@ public class CostCarryoverServiceImpl implements CostCarryoverService {
     }
 
     private static BigDecimal toDecimal(Object[] row, int idx) {
-        if (row == null || idx >= row.length || row[idx] == null) return BigDecimal.ZERO;
+        row = aggregateRow(row);
+        if (idx >= row.length || row[idx] == null) throw new IllegalStateException("销售成本聚合金额缺失，本次未结转");
         Object v = row[idx];
         if (v instanceof BigDecimal bd) return bd;
         if (v instanceof Number n) return new BigDecimal(n.toString());
-        return BigDecimal.ZERO;
+        throw new IllegalStateException("销售成本聚合金额格式错误，本次未结转");
     }
 
     private static long toLong(Object[] row, int idx) {
-        if (row == null || idx >= row.length || row[idx] == null) return 0L;
+        row = aggregateRow(row);
+        if (idx >= row.length || row[idx] == null) throw new IllegalStateException("销售成本聚合笔数缺失，本次未结转");
         Object v = row[idx];
-        return (v instanceof Number n) ? n.longValue() : 0L;
+        if (v instanceof Number n) return n.longValue();
+        throw new IllegalStateException("销售成本聚合笔数格式错误，本次未结转");
+    }
+
+    private static Object[] aggregateRow(Object[] row) {
+        while (row != null && row.length == 1 && row[0] instanceof Object[] nested) row = nested;
+        if (row == null || row.length == 0) throw new IllegalStateException("销售成本聚合没有返回结果，本次未结转");
+        return row;
     }
 }

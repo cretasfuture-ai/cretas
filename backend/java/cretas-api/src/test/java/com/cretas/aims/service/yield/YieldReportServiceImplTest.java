@@ -727,6 +727,56 @@ class YieldReportServiceImplTest {
         assertThat(dto.getSteps().get(1).getSampleRetainQuantity()).isEqualTo(5);
     }
 
+    @Test
+    void getYield_keepsProcessSheetLaborEvidenceWhenSparseReportHasNullDetails() throws Exception {
+        ProductionReport sparseReport = ProductionReport.builder()
+                .factoryId("F006").batchId(778L).processOrder(2)
+                .laborCost(new BigDecimal("3.33"))
+                .build();
+        when(reportRepo.findYieldReportsByBatch("F006", 778L)).thenReturn(List.of(sparseReport));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+
+        ProductionBatch finalBatch = ProductionBatch.builder()
+                .id(778L).factoryId("F006").batchNumber("CLK-B-LABOR")
+                .productionPlanId("PLAN-LABOR").productTypeId("PT-LABOR")
+                .actualQuantity(new BigDecimal("40")).quantity(new BigDecimal("40"))
+                .unit("盒").status(ProductionBatchStatus.COMPLETED).build();
+        when(productionBatchRepo.findByIdAndFactoryId(778L, "F006")).thenReturn(Optional.of(finalBatch));
+        ProductionPlan pinnedPlan = plan("PLAN-LABOR");
+        pinnedPlan.setPlannedUnit("盒");
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-LABOR", "F006"))
+                .thenReturn(Optional.of(pinnedPlan));
+        ProductType productType = new ProductType();
+        productType.setId("PT-LABOR");
+        productType.setFactoryId("F006");
+        when(productTypeRepo.findByIdAndFactoryId("PT-LABOR", "F006")).thenReturn(Optional.of(productType));
+
+        ProcessSheetRow first = sheetRow(10L, 100L, "PLAN-LABOR", "PT-WIP", 1,
+                "前道", "50", "52", "kg", "kg", null);
+        ProcessSheetRow target = sheetRow(11L, 778L, "PLAN-LABOR", "PT-LABOR", 2,
+                "末道", "52", "40", "kg", "盒", "B-100");
+        ProcessSheetRowRequest targetRequest = objectMapper.readValue(
+                target.getRowPayload(), ProcessSheetRowRequest.class);
+        com.cretas.aims.dto.processentry.LaborSegment segment =
+                new com.cretas.aims.dto.processentry.LaborSegment();
+        segment.setStartTime("00:01");
+        segment.setEndTime("00:11");
+        segment.setWorkerCount(1);
+        targetRequest.setLaborSegments(List.of(segment));
+        target.setRowPayload(objectMapper.writeValueAsString(targetRequest));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId("F006", "PLAN-LABOR"))
+                .thenReturn(List.of(first, target));
+
+        BatchYieldDTO dto = svc.getYield("F006", 778L);
+
+        StepYieldDTO step = dto.getSteps().get(1);
+        assertThat(step.getLaborSegments()).singleElement()
+                .satisfies(mapped -> assertThat(mapped).containsEntry("headcount", 1));
+        assertThat(step.getTotalWorkMinutes()).isEqualTo(10);
+        assertThat(step.getTotalWorkers()).isEqualTo(1);
+        assertThat(step.getLaborCost()).isEqualByComparingTo("3.33");
+    }
+
     private ProcessSheetRow sheetRow(Long id, Long batchId, String planId, String productTypeId,
                                      int processOrder, String processName, String input,
                                      String output, String inputUnit, String outputUnit,

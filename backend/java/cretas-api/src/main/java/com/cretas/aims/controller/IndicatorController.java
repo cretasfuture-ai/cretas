@@ -283,7 +283,7 @@ public class IndicatorController {
      * </ul>
      *
      * <p>时间窗参数: 若都不传则返工厂全部 (按 computedAt 降序).
-     * 若传 windowStart + windowEnd 则返时间窗内全部 (overlap).
+     * 若传 windowStart + windowEnd 默认返回重叠期间快照；exactPeriod=true 时仅返回相同起止日期的快照。
      *
      * @param factoryId   工厂 ID
      * @param code        指标编码
@@ -310,7 +310,9 @@ public class IndicatorController {
             @Parameter(description = "页码 (从 1 开始)")
             @RequestParam(required = false, defaultValue = "1") Integer page,
             @Parameter(description = "每页大小 (上限 200)")
-            @RequestParam(required = false, defaultValue = "50") Integer size) {
+            @RequestParam(required = false, defaultValue = "50") Integer size,
+            @Parameter(description = "仅返回统计起止日期完全一致的快照")
+            @RequestParam(required = false, defaultValue = "false") Boolean exactPeriod) {
 
         log.debug("getVersions: factoryId={}, code={}, start={}, end={}, page={}, size={}",
                 factoryId, code, windowStart, windowEnd, page, size);
@@ -319,6 +321,10 @@ public class IndicatorController {
         if (size < 1) size = 50;
         if (size > 200) size = 200;
 
+        if (Boolean.TRUE.equals(exactPeriod)
+                && (windowStart == null || windowEnd == null || windowEnd.isBefore(windowStart))) {
+            throw new BusinessException(400, "请提供完整且有效的统计期间");
+        }
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
                 .orElseThrow(() -> indicatorNotFound(code, factoryId));
@@ -334,6 +340,11 @@ public class IndicatorController {
             // dedicated paged method when version table grows).
             all = indicatorVersionRepository.findRecentByFactoryId(factoryId).stream()
                     .filter(v -> ind.getId().equals(v.getIndicatorId()))
+                    .collect(Collectors.toList());
+        }
+        if (Boolean.TRUE.equals(exactPeriod)) {
+            all = all.stream()
+                    .filter(v -> windowStart.equals(v.getPeriodStart()) && windowEnd.equals(v.getPeriodEnd()))
                     .collect(Collectors.toList());
         }
         long total = all.size();

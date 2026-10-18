@@ -14,6 +14,7 @@ import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApPaymentAllocationRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.impl.PayableSettlementServiceImpl;
+import com.cretas.aims.service.finance.FinancePaymentReferenceLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -49,6 +51,7 @@ class PayableSettlementServiceImplTest {
     @Mock ArApPaymentAllocationRepository allocationRepository;
     @Mock SupplierRepository supplierRepository;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock FinancePaymentReferenceLock paymentReferenceLock;
 
     private PayableSettlementServiceImpl service;
 
@@ -56,6 +59,9 @@ class PayableSettlementServiceImplTest {
     void setUp() {
         service = new PayableSettlementServiceImpl(
                 transactionRepository, allocationRepository, supplierRepository, eventPublisher);
+        ReflectionTestUtils.setField(service, "paymentReferenceLock", paymentReferenceLock);
+        when(paymentReferenceLock.acquire(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> invocation.getArgument(1, String.class).trim());
     }
 
     @Test
@@ -91,6 +97,7 @@ class PayableSettlementServiceImplTest {
         assertEquals(PAYABLE_ID, allocationCaptor.getValue().getPayableTransactionId());
         assertMoney("40.00", allocationCaptor.getValue().getAllocatedAmount());
         verify(eventPublisher).publishEvent(any());
+        verify(paymentReferenceLock).acquire(FACTORY, "BANK-idem-1");
     }
 
     @Test

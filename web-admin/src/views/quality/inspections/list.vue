@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -20,6 +21,20 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('quality'));
 const { goCreate } = useCreateAndReturn();
+const route = useRoute();
+const router = useRouter();
+const scopedBatchId = ref('');
+const scopedBatch = ref<TableRow | null>(null);
+const contextError = ref('');
+const contextLoading = ref(false);
+const hasBatchContext = computed(() => route.query.batchId != null);
+
+function returnToTrace() {
+  const batchNumber = scopedBatch.value?.batchNumber;
+  if (typeof batchNumber === 'string') {
+    void router.push({ path: '/production/traceability', query: { batchNumber } });
+  }
+}
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -39,7 +54,9 @@ const filterResult = ref('');
 // NOTE: key is "result" (not "status") — matches computeQualityInspectionSummary,
 // which reads filter.get("result") since this entity has no generic status field.
 const summaryRequest = computed<ListSummaryRequest>(() => ({
-  filterConditions: filterResult.value ? { result: filterResult.value } : {},
+  filterConditions: {
+    ...(filterResult.value ? { result: filterResult.value } : {}),
+  },
 }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('qualityInspection', summaryRequest);
 
@@ -55,54 +72,45 @@ const dialogForm = ref({
   customFields: {} as TableRow,
 });
 
-// Issue #745: 抽样/合格/不合格 联动自动平衡 — 任何 2 个有值, 第 3 个自动算.
-// lastEdited 记录最近用户编辑哪个字段, 改其他字段时不反推它.
-const lastEdited = ref<'sample' | 'pass' | 'fail' | null>(null);
+// 已填写的抽样数是总数；编辑合格/不合格只平衡另一结果，不反改抽样数。
+// 尚未填抽样数时仍支持由两种结果计算总数；超量保留原输入并由提交校验拦截。
 
 function onSampleChange(v: number | null | undefined) {
-  lastEdited.value = 'sample';
+  if (v == null) return;
   const sample = Number(v);
   if (!isFinite(sample) || sample < 0) return;
   const pass = dialogForm.value.passCount;
   const fail = dialogForm.value.failCount;
-  if (pass != null && fail == null) {
+  if (pass != null) {
     dialogForm.value.failCount = Math.max(0, sample - Number(pass));
-  } else if (fail != null && pass == null) {
+  } else if (fail != null) {
     dialogForm.value.passCount = Math.max(0, sample - Number(fail));
   }
 }
 
 function onPassChange(v: number | null | undefined) {
-  lastEdited.value = 'pass';
+  if (v == null) return;
   const pass = Number(v);
   if (!isFinite(pass) || pass < 0) return;
   const sample = dialogForm.value.sampleSize;
   const fail = dialogForm.value.failCount;
-  if (sample != null && fail == null) {
+  if (sample != null) {
     dialogForm.value.failCount = Math.max(0, Number(sample) - pass);
   } else if (sample == null && fail != null) {
     dialogForm.value.sampleSize = pass + Number(fail);
-  } else if (sample != null && fail != null) {
-    if ((lastEdited.value as 'sample' | 'pass' | 'fail' | null) !== 'sample') {
-      dialogForm.value.sampleSize = pass + Number(fail);
-    }
   }
 }
 
 function onFailChange(v: number | null | undefined) {
-  lastEdited.value = 'fail';
+  if (v == null) return;
   const fail = Number(v);
   if (!isFinite(fail) || fail < 0) return;
   const sample = dialogForm.value.sampleSize;
   const pass = dialogForm.value.passCount;
-  if (sample != null && pass == null) {
+  if (sample != null) {
     dialogForm.value.passCount = Math.max(0, Number(sample) - fail);
   } else if (sample == null && pass != null) {
     dialogForm.value.sampleSize = Number(pass) + fail;
-  } else if (sample != null && pass != null) {
-    if ((lastEdited.value as 'sample' | 'pass' | 'fail' | null) !== 'sample') {
-      dialogForm.value.sampleSize = Number(pass) + fail;
-    }
   }
 }
 
@@ -149,7 +157,9 @@ async function loadProductionBatches() {
     if (res.success && res.data) {
       productionBatches.value = res.data.content || res.data || [];
     }
-  } catch { /* silent */ }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '生产批次读取失败，请重试');
+  }
 }
 
 // 详情抽屉
@@ -168,23 +178,63 @@ function getResultLabel(result: unknown): string {
   return String(result ?? '-');
 }
 
-onMounted(() => {
-  loadData();
-});
+let contextRequest = 0;
+watch(() => [route.query.batchId, factoryId.value], async () => {
+  const requestId = ++contextRequest;
+  scopedBatch.value = null;
+  scopedBatchId.value = '';
+  contextLoading.value = false;
+  contextError.value = '';
+  tableData.value = [];
+  pagination.value.total = 0;
+  pagination.value.page = 1;
+  searchKeyword.value = '';
+  filterResult.value = '';
+  dialogVisible.value = false;
+  if (!hasBatchContext.value) {
+    void loadData();
+    return;
+  }
+  const id = route.query.batchId;
+  if (typeof id !== 'string' || !/^[1-9]\d*$/.test(id) || !factoryId.value) {
+    contextError.value = '批次信息无效，请从批次追溯页面重新进入';
+    return;
+  }
+  contextLoading.value = true;
+  try {
+    const response = await get<TableRow>(`/${factoryId.value}/processing/batches/${encodeURIComponent(id)}`);
+    if (requestId !== contextRequest) return;
+    if (!response.success || !response.data || String(response.data.id) !== id) {
+      throw new Error(response.message || '未找到当前工厂的生产批次');
+    }
+    scopedBatchId.value = id;
+    scopedBatch.value = response.data;
+    productionBatches.value = [response.data];
+    await loadData();
+  } catch (error) {
+    if (requestId === contextRequest) contextError.value = error instanceof Error ? error.message : '批次读取失败，请重试';
+  } finally {
+    if (requestId === contextRequest) contextLoading.value = false;
+  }
+}, { immediate: true });
 
 async function loadData() {
   if (!factoryId.value) return;
+  if (hasBatchContext.value && !scopedBatch.value) return;
 
   loading.value = true;
+  const currentContext = contextRequest;
   try {
     const response = await get(`/${factoryId.value}/processing/quality/inspections`, {
       params: {
         page: pagination.value.page,
         size: pagination.value.size,
         keyword: searchKeyword.value || undefined,
+        batchId: scopedBatchId.value || undefined,
         result: filterResult.value || undefined
       }
     });
+    if (currentContext !== contextRequest) return;
     if (response.success && response.data) {
       tableData.value = response.data.content || [];
       pagination.value.total = response.data.totalElements || 0;
@@ -223,9 +273,10 @@ function handleSizeChange(size: number) {
 }
 
 function handleCreate() {
-  dialogForm.value = { batchId: '', sampleSize: null, passCount: null, failCount: null, result: '', notes: '', customFields: {} as TableRow };
+  if (hasBatchContext.value && !scopedBatch.value) return;
+  dialogForm.value = { batchId: scopedBatchId.value, sampleSize: null, passCount: null, failCount: null, result: '', notes: '', customFields: {} as TableRow };
   dialogVisible.value = true;
-  loadProductionBatches();
+  if (!hasBatchContext.value) void loadProductionBatches();
 }
 
 async function submitCreateForm() {
@@ -256,16 +307,10 @@ async function submitCreateForm() {
       passCount: dialogForm.value.passCount,
       failCount: dialogForm.value.failCount,
       result: dialogForm.value.result,
-      notes: dialogForm.value.notes || undefined
+      notes: dialogForm.value.notes || undefined,
+      customFields: dialogForm.value.customFields,
     };
-    // 从 localStorage 获取当前用户 ID 作为 inspectorId
-    try {
-      const userStr = localStorage.getItem('cretas_user');
-      if (userStr) {
-        const user = JSON.parse(userStr);
-        if (user.id) body.inspectorId = user.id;
-      }
-    } catch { /* ignore */ }
+    // Inspector identity is already supplied by the existing authenticated controller.
     const response = await post(
       `/${factoryId.value}/processing/quality/inspections?batchId=${encodeURIComponent(dialogForm.value.batchId)}`,
       body
@@ -277,8 +322,8 @@ async function submitCreateForm() {
     } else {
       ElMessage.error(response.message || '创建失败');
     }
-  } catch {
-    ElMessage.error('创建失败，请检查网络连接');
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建失败，请重试');
   } finally {
     submitting.value = false;
   }
@@ -288,11 +333,20 @@ function showDetail(row: TableRow) {
   detailData.value = row;
   detailVisible.value = true;
 }
+function reviewException(row: TableRow) {
+  if (row.productionBatchId == null) return;
+  void router.push({ path: '/quality/disposition', query: { batchId: String(row.productionBatchId), inspectionId: String(row.id) } });
+}
 </script>
 
 <template>
   <CanvasAwareWrapper module-code="quality_inspection">
   <div class="page-wrapper">
+    <el-alert v-if="contextError" :title="contextError" type="error" :closable="false" show-icon />
+    <el-alert v-else-if="scopedBatch" :title="`当前批次：${scopedBatch.batchNumber} · ${scopedBatch.productName || ''}`" type="info" :closable="false">
+      这里只显示本批次的质检记录。抽检结果不等同于生产良品率；出货后补录不能作为出货前放行证明。
+      <el-button link type="primary" @click="returnToTrace">返回批次追溯</el-button>
+    </el-alert>
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
@@ -301,7 +355,7 @@ function showDetail(row: TableRow) {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">新建质检</el-button>
+            <el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="contextLoading || !!contextError" @click="handleCreate">新建质检</el-button>
           </div>
         </div>
       </template>
@@ -353,20 +407,21 @@ function showDetail(row: TableRow) {
           </template>
         </el-table-column>
         <el-table-column prop="qualityGrade" label="等级" width="70" align="center" />
-        <el-table-column label="合格率" width="90" align="center">
+        <el-table-column label="抽检合格率" width="110" align="center">
           <template #default="{ row }">
             {{ row.passRate != null ? row.passRate.toFixed(1) + '%' : '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="inspectionDate" label="检测日期" width="130" />
-        <el-table-column label="操作" width="120" fixed="right" align="center">
+        <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="showDetail(row)">查看详情</el-button>
+            <el-button v-if="canWrite && ['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.result))" type="primary" link @click="reviewException(row)">异常复核</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <TableFooter
+      <TableFooter v-if="!hasBatchContext"
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"
@@ -390,7 +445,7 @@ function showDetail(row: TableRow) {
     <el-dialog v-model="dialogVisible" title="新建质检记录" width="480px" :close-on-click-modal="false">
       <el-form :model="dialogForm" label-width="90px">
         <el-form-item label="生产批次" required>
-          <el-select v-model="dialogForm.batchId" placeholder="选择生产批次" filterable style="width: 100%">
+          <el-select v-model="dialogForm.batchId" placeholder="选择生产批次" filterable :disabled="hasBatchContext" style="width: 100%">
             <el-option
               v-for="b in productionBatches"
               :key="String(b.id)"
@@ -400,6 +455,7 @@ function showDetail(row: TableRow) {
           </el-select>
           <UpstreamMissingHint v-if="productionBatches.length === 0" description="暂无生产批次，无法发起质检" target-module="production" require-write action-text="去生产管理" contact-text="请联系生产部门先开工生产批次" @action="goCreate('/production/plans')" />
         </el-form-item>
+        <el-alert title="请记录实际抽样结果；抽样数量与生产数量分别统计，不会改写生产良品率。" type="info" :closable="false" />
         <!-- Issue #745: 抽样/合格/不合格 联动自动平衡 - 填两个第三自动算 -->
         <el-form-item label="抽样数量" required>
           <el-input-number
@@ -472,7 +528,7 @@ function showDetail(row: TableRow) {
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="等级">{{ detailData.qualityGrade || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="合格率">{{ detailData.passRate != null ? detailData.passRate.toFixed(1) + '%' : '-' }}</el-descriptions-item>
+        <el-descriptions-item label="抽检合格率">{{ detailData.passRate != null ? detailData.passRate.toFixed(1) + '%' : '-' }}</el-descriptions-item>
         <el-descriptions-item label="检测日期">{{ detailData.inspectionDate || '-' }}</el-descriptions-item>
       </el-descriptions>
     </el-drawer>

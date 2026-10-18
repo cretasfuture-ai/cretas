@@ -17,6 +17,7 @@ import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApPaymentAllocationRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.PayableSettlementService;
+import com.cretas.aims.service.finance.FinancePaymentReferenceLock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -45,6 +46,9 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
     private final SupplierRepository supplierRepository;
     private final ApplicationEventPublisher eventPublisher;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private FinancePaymentReferenceLock paymentReferenceLock;
+
     @Override
     @Transactional
     public PayableSettlementResult settle(
@@ -70,6 +74,8 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
         if (request.getPaymentMethod() == null) {
             throw badRequest("付款方式不能为空", "paymentMethod");
         }
+
+        String paymentReference = paymentReferenceLock.acquire(factoryId, request.getPaymentReference());
 
         ArApTransaction payable = transactionRepository
                 .findPayableForSettlement(factoryId, payableTransactionId)
@@ -107,8 +113,7 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
                     .withHint("请将付款金额调整为不超过当前未付金额")
                     .withHintTarget("amount");
         }
-        if (transactionRepository.existsByFactoryIdAndPaymentReference(
-                factoryId, request.getPaymentReference().trim())) {
+        if (transactionRepository.existsByFactoryIdAndPaymentReference(factoryId, paymentReference)) {
             throw new BusinessException(409, "付款凭证号已存在")
                     .withCode("AP_PAYMENT_REFERENCE_DUPLICATE")
                     .withHint("请核对是否已完成付款，或填写正确的银行流水号")
@@ -154,7 +159,7 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
         payment.setBalanceAfter(newSupplierBalance);
         payment.setCurrencyCode(currency);
         payment.setPaymentMethod(request.getPaymentMethod());
-        payment.setPaymentReference(request.getPaymentReference().trim());
+        payment.setPaymentReference(paymentReference);
         payment.setTransactionDate(LocalDate.now());
         payment.setOperatedBy(operatedBy);
         payment.setRemark(trimToNull(request.getRemark()));

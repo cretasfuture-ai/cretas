@@ -148,6 +148,8 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE THEN t.amount " +
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT " +
             "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
+            "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND " +
+            "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
             "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT, " +
             "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE) THEN -ABS(t.amount) " +
             "  ELSE 0 END), 0) FROM ArApTransaction t " +
@@ -198,6 +200,7 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             "FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = :type " +
             "AND (t.transactionType NOT IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT, " +
+            "                                com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND, " +
             "                                com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT) " +
             "     OR t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED) " +
             "GROUP BY t.counterpartyId, t.counterpartyName " +
@@ -245,6 +248,9 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             "WHERE t.factoryId = :factoryId " +
             "AND t.counterpartyType = :type AND t.counterpartyId = :counterpartyId " +
             "AND t.transactionDate < :startDate " +
+            "AND (t.transactionType NOT IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT, " +
+            "                                com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND) " +
+            "     OR t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED) " +
             "ORDER BY t.transactionDate DESC, t.createdAt DESC")
     List<BigDecimal> findOpeningBalance(
             @Param("factoryId") String factoryId,

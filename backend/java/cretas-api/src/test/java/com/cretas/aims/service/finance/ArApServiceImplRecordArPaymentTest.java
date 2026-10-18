@@ -16,6 +16,7 @@ import com.cretas.aims.repository.finance.ArApPaymentAllocationRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.finance.impl.ArApServiceImpl;
+import com.cretas.aims.service.finance.FinancePaymentReferenceLock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -60,11 +61,17 @@ class ArApServiceImplRecordArPaymentTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private ArApPaymentAllocationRepository allocationRepository;
+    @Mock private FinancePaymentReferenceLock paymentReferenceLock;
 
     private ArApServiceImpl service() {
         ArApServiceImpl service = new ArApServiceImpl(transactionRepository, customerRepository, supplierRepository);
         ReflectionTestUtils.setField(service, "salesOrderRepository", salesOrderRepository);
         ReflectionTestUtils.setField(service, "allocationRepository", allocationRepository);
+        ReflectionTestUtils.setField(service, "paymentReferenceLock", paymentReferenceLock);
+        when(paymentReferenceLock.acquire(any(), any())).thenAnswer(invocation -> {
+            String reference = invocation.getArgument(1);
+            return reference == null || reference.isBlank() ? reference : reference.trim();
+        });
         return service;
     }
 
@@ -280,7 +287,7 @@ class ArApServiceImplRecordArPaymentTest {
 
         ArApServiceImpl svc = service();
         svc.recordArPayment(FACTORY, CUSTOMER, SO_ID, new BigDecimal("40.00"),
-                PaymentMethod.BANK_TRANSFER, "PAY-DUP", 1L, "第一次收款");
+                PaymentMethod.BANK_TRANSFER, "  PAY-DUP  ", 1L, "第一次收款");
 
         System.out.println("BEHAVIOUR (after 1st call): settled=" + invoice.getSettledAmount()
                 + " outstanding=" + invoice.getOutstandingAmount());
@@ -289,7 +296,7 @@ class ArApServiceImplRecordArPaymentTest {
 
         BusinessException error = assertThrows(BusinessException.class, () ->
                 svc.recordArPayment(FACTORY, CUSTOMER, SO_ID, new BigDecimal("40.00"),
-                        PaymentMethod.BANK_TRANSFER, "PAY-DUP", 1L, "重复提交(双击/重试)"));
+                        PaymentMethod.BANK_TRANSFER, "  PAY-DUP  ", 1L, "重复提交(双击/重试)"));
 
         System.out.println("BEHAVIOUR (after 2nd call attempt): settled=" + invoice.getSettledAmount()
                 + " outstanding=" + invoice.getOutstandingAmount() + " errorCode=" + error.getErrorCode());
@@ -299,6 +306,7 @@ class ArApServiceImplRecordArPaymentTest {
                 "outstanding 同样不能被第二次提交再次扣减");
         // Only ONE allocation row across both attempts.
         verify(allocationRepository, times(1)).save(any());
+        verify(paymentReferenceLock, times(2)).acquire(FACTORY, "  PAY-DUP  ");
     }
 
     @Test

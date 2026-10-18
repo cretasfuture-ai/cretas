@@ -16,14 +16,19 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
+import com.cretas.aims.service.inventory.ReturnedGoodsCostResolver;
+import com.cretas.aims.service.finance.DisposalCostAccountingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.List;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,6 +45,11 @@ import static org.mockito.Mockito.when;
  * 用 findById(id) 不校验 factoryId → F006 用户可操作其它工厂的报废记录 (id 可枚举)。
  */
 class DisposalRecordServiceCrossTenantTest {
+    @org.junit.jupiter.api.Test void accountingHistoryRejectsOtherFactoryBeforeReadingVouchers() {
+        when(repo.findById(5L)).thenReturn(java.util.Optional.of(record(5L,"OTHER")));
+        org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,()->service.getAccountingHistory("F006",5L));
+        org.mockito.Mockito.verifyNoInteractions(disposalCostAccountingService);
+    }
 
     private DisposalRecordRepository repo;
     private MaterialBatchRepository materialBatchRepo;
@@ -47,6 +57,8 @@ class DisposalRecordServiceCrossTenantTest {
     private ProductionBatchRepository productionBatchRepo;
     private FinishedGoodsBatchRepository fgBatchRepo;
     private FinishedGoodsAdjustmentLogRepository fgAdjustmentLogRepo;
+    private ReturnedGoodsCostResolver returnedGoodsCostResolver;
+    private DisposalCostAccountingService disposalCostAccountingService;
     private DisposalRecordService service;
 
     @BeforeEach
@@ -63,8 +75,12 @@ class DisposalRecordServiceCrossTenantTest {
                 fgBatchRepo.findById(call.getArgument(0)).filter(batch ->
                         batch.getFactoryId().equals(call.getArgument(1))));
         fgAdjustmentLogRepo = mock(FinishedGoodsAdjustmentLogRepository.class);
+        returnedGoodsCostResolver = mock(ReturnedGoodsCostResolver.class);
+        disposalCostAccountingService = mock(DisposalCostAccountingService.class);
         service = new DisposalRecordService(repo, materialBatchRepo, adjustmentRepo, productionBatchRepo,
                 fgBatchRepo, fgAdjustmentLogRepo);
+        ReflectionTestUtils.setField(service, "returnedGoodsCostResolver", returnedGoodsCostResolver);
+        ReflectionTestUtils.setField(service, "disposalCostAccountingService", disposalCostAccountingService);
     }
 
     private DisposalRecord record(long id, String factoryId) {
@@ -72,11 +88,30 @@ class DisposalRecordServiceCrossTenantTest {
         r.setId(id);
         r.setFactoryId(factoryId);
         r.setIsApproved(false);
+        // approveDisposal now only executes the explicitly supported physical
+        // disposal accounting path; cross-tenant tests must provide that policy.
+        r.setDisposalType("SCRAP");
         return r;
     }
 
     /** 财务角色 — 通过 F-BUG-5 角色守卫, 以验证后续的工厂归属守卫。 */
     private static final String FINANCE_ROLE = "finance_manager";
+
+    @Test
+    void filteredDisposalsDelegateAllPredicatesBeforePagination() {
+        DisposalRecord record = record(501L, "F006");
+        record.setFinishedGoodsBatchId("FG-9");
+        when(repo.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(record), PageRequest.of(0, 1), 1));
+
+        org.springframework.data.domain.Page<DisposalRecord> result = service.getByFactoryIdWithFilters(
+                "F006", "product", "APPROVED", "batch", "FG-9", 0, 1);
+
+        assertThat(result.getTotalElements()).isEqualTo(1);
+        assertThat(result.getContent()).containsExactly(record);
+        verify(repo).findAll(any(Specification.class), any(Pageable.class));
+        verify(repo, never()).findByFactoryId(any(), any(Pageable.class));
+    }
 
     @Test
     void approveDisposal_crossTenant_throws403_noSave() {
@@ -449,6 +484,10 @@ class DisposalRecordServiceCrossTenantTest {
         b.setShippedQuantity(shipped);
         b.setReservedQuantity(reserved);
         b.setUnitPrice(unitPrice);
+        // Unit price is the selling price; keep the fixture's known inventory
+        // cost explicit so approval tests exercise cost valuation rather than
+        // the unknown-cost guard.
+        b.setUnitCost(unitPrice);
         b.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         return b;
     }
@@ -641,6 +680,112 @@ class DisposalRecordServiceCrossTenantTest {
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(404));
         verify(fgBatchRepo, never()).save(any());
+    }
+
+    @Test
+    void approveDisposal_finishedGoodsBatch_unknownUnitCost_throws409_noDeduct() {
+        DisposalRecord r = record(740L, "F006");
+        r.setFinishedGoodsBatchId("FG-UNKNOWN-COST");
+        r.setDisposalQuantity(new BigDecimal("5.00"));
+        FinishedGoodsBatch batch = fgBatch("FG-UNKNOWN-COST", "F006",
+                new BigDecimal("10.0000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("15.0000"));
+        batch.setUnitCost(null);
+
+        when(repo.findById(740L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-UNKNOWN-COST")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.approveDisposal("F006", 740L, 7, "财务", FINANCE_ROLE))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode())
+                            .isEqualTo("FINISHED_GOODS_UNIT_COST_REQUIRED");
+                });
+        verify(fgBatchRepo, never()).save(any());
+        verify(fgAdjustmentLogRepo, never()).save(any());
+        verify(repo, never()).save(any());
+        assertThat(batch.getProducedQuantity()).isEqualByComparingTo("10.0000");
+    }
+
+    @Test
+    void approveDisposal_finishedGoodsBatch_negativeUnitCost_throws409_noDeduct() {
+        DisposalRecord r = record(7401L, "F006");
+        r.setFinishedGoodsBatchId("FG-NEGATIVE-COST");
+        r.setDisposalQuantity(new BigDecimal("5.00"));
+        FinishedGoodsBatch batch = fgBatch("FG-NEGATIVE-COST", "F006",
+                new BigDecimal("10.0000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("15.0000"));
+        batch.setUnitCost(new BigDecimal("-0.01"));
+
+        when(repo.findById(7401L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("FG-NEGATIVE-COST")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.approveDisposal("F006", 7401L, 7, "财务", FINANCE_ROLE))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo("FINISHED_GOODS_UNIT_COST_REQUIRED"));
+        verify(fgBatchRepo, never()).save(any());
+        verify(fgAdjustmentLogRepo, never()).save(any());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void approveDisposal_historicalReturnedBatch_negativeResolvedCost_throws409_noDeduct() {
+        DisposalRecord r = record(7411L, "F006");
+        r.setFinishedGoodsBatchId("RTN-RT-SAL-20261016-0006-1");
+        r.setDisposalQuantity(new BigDecimal("10.00"));
+        FinishedGoodsBatch batch = fgBatch(r.getFinishedGoodsBatchId(), "F006",
+                new BigDecimal("10.0000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("15.0000"));
+        batch.setUnit("盒");
+        batch.setUnitCost(null);
+        ReturnedGoodsCostResolver.ResolvedCost sourceCost =
+                new ReturnedGoodsCostResolver.ResolvedCost(new BigDecimal("-1"),
+                        "source-pb9", "PB-PLAN-9", "RT-SAL-20261016-0006", 1, "盒");
+
+        when(repo.findById(7411L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById(r.getFinishedGoodsBatchId())).thenReturn(Optional.of(batch));
+        when(returnedGoodsCostResolver.resolve("F006", batch)).thenReturn(Optional.of(sourceCost));
+
+        assertThatThrownBy(() -> service.approveDisposal("F006", 7411L, 7, "财务", FINANCE_ROLE))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo("FINISHED_GOODS_UNIT_COST_REQUIRED"));
+        verify(fgBatchRepo, never()).save(any());
+        verify(fgAdjustmentLogRepo, never()).save(any());
+        verify(repo, never()).save(any());
+        assertThat(batch.getUnitCost()).isNull();
+    }
+
+    @Test
+    void approveDisposal_historicalReturnedBatch_recoversExactSourceCostAndAuditsIt() {
+        DisposalRecord r = record(741L, "F006");
+        r.setFinishedGoodsBatchId("RTN-RT-SAL-20261016-0006-1");
+        r.setDisposalQuantity(new BigDecimal("10.00"));
+        FinishedGoodsBatch batch = fgBatch(r.getFinishedGoodsBatchId(), "F006",
+                new BigDecimal("10.0000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("15.0000"));
+        batch.setUnit("盒");
+        batch.setUnitCost(null);
+        ReturnedGoodsCostResolver.ResolvedCost sourceCost =
+                new ReturnedGoodsCostResolver.ResolvedCost(new BigDecimal("6.4165"),
+                        "source-pb9", "PB-PLAN-9", "RT-SAL-20261016-0006", 1, "盒");
+
+        when(repo.findById(741L)).thenReturn(Optional.of(r));
+        when(fgBatchRepo.findById("RTN-RT-SAL-20261016-0006-1")).thenReturn(Optional.of(batch));
+        when(returnedGoodsCostResolver.resolve("F006", batch)).thenReturn(Optional.of(sourceCost));
+        when(repo.save(any(DisposalRecord.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.approveDisposal("F006", 741L, 7, "财务", FINANCE_ROLE);
+
+        assertThat(batch.getUnitCost()).isEqualByComparingTo("6.4165");
+        assertThat(r.getActualLoss()).isEqualByComparingTo("64.17");
+        verify(fgAdjustmentLogRepo).save(argThat(log ->
+                log.getReason().contains("unitCostBefore=null")
+                        && log.getReason().contains("unitCostAfter=6.4165")
+                        && log.getReason().contains("costSourceBatch=PB-PLAN-9")
+                        && log.getReason().contains("returnNumber=RT-SAL-20261016-0006")));
     }
 
     @Test

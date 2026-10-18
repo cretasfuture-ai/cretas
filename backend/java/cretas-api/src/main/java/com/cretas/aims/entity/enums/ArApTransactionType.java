@@ -11,7 +11,8 @@ public enum ArApTransactionType {
     AP_PAYMENT("应付付款", "向供应商付款冲减应付"),
     AP_ADJUSTMENT("应付调整", "手工调整应付金额"),
     AP_CREDIT_NOTE("应付冲减", "采购退货冲减应付"),
-    AR_CREDIT_NOTE("应收冲减", "销售退货冲减应收");
+    AR_CREDIT_NOTE("应收冲减", "销售退货冲减应收"),
+    AR_REFUND("应收退款结清", "客户退款返还，结清先前的应收冲减");
 
     private final String displayName;
     private final String description;
@@ -25,7 +26,8 @@ public enum ArApTransactionType {
     public String getDescription() { return description; }
 
     public boolean isAR() {
-        return this == AR_INVOICE || this == AR_PAYMENT || this == AR_ADJUSTMENT || this == AR_CREDIT_NOTE;
+        return this == AR_INVOICE || this == AR_PAYMENT || this == AR_ADJUSTMENT
+                || this == AR_CREDIT_NOTE || this == AR_REFUND;
     }
 
     public boolean isAP() {
@@ -34,6 +36,6 @@ public enum ArApTransactionType {
 
     /** 是否增加余额（挂账增加，付款/调整可能减少） */
     public boolean isDebit() {
-        return this == AR_INVOICE || this == AP_PAYMENT;
+        return this == AR_INVOICE || this == AP_PAYMENT || this == AR_REFUND;
     }
 }

@@ -985,10 +985,12 @@ public class ProductionPlanController {
     /**
      * 更新实际成本
      */
-    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequirePermission({"production:read_write", "finance:read_write"})
     @RequireModule("production_plan")
     @PutMapping("/{planId}/costs")
     @Operation(summary = "更新实际成本")
+    @com.cretas.aims.annotation.Loggable(module = "PRODUCTION_PLAN", action = "UPDATE_ACTUAL_COSTS",
+            entityType = "ProductionPlan", entityIdParam = "planId")
     public ApiResponse<ProductionPlanDTO> updateActualCosts(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,

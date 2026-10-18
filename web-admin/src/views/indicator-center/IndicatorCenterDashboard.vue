@@ -27,6 +27,21 @@
       :factory-id="factoryId || ''"
     />
 
+    <el-card class="period-card" shadow="never">
+      <div class="period-toolbar">
+        <span class="period-label">实际流统计期间</span>
+        <el-radio-group v-model="periodPreset" size="small">
+          <el-radio-button label="today">今天</el-radio-button>
+          <el-radio-button label="month">本月</el-radio-button>
+          <el-radio-button label="custom">自定义</el-radio-button>
+        </el-radio-group>
+        <el-date-picker v-if="periodPreset === 'custom'" v-model="customPeriodRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" clearable size="small" />
+        <span class="period-hint">{{ periodLabel }}</span>
+      </div>
+      <p v-if="periodError" class="period-error">{{ periodError }}</p>
+      <p class="period-hint">此期间用于实际出成率、生产良品率和完整成本；其他指标沿用各自口径。</p>
+    </el-card>
+
     <!-- 头部 -->
     <div class="page-header">
       <div class="title-block">
@@ -65,8 +80,8 @@
               <el-icon :size="28"><CircleCheck /></el-icon>
             </div>
             <div class="summary-text">
-              <div class="summary-num text-success">{{ stats.green }}</div>
-              <div class="summary-label">正常</div>
+              <div class="summary-num text-success">{{ stats.available }}</div>
+              <div class="summary-label">数据可用</div>
             </div>
           </div>
         </el-card>
@@ -78,8 +93,8 @@
               <el-icon :size="28"><Warning /></el-icon>
             </div>
             <div class="summary-text">
-              <div class="summary-num text-warning">{{ stats.yellow }}</div>
-              <div class="summary-label">关注</div>
+              <div class="summary-num text-warning">{{ stats.missing }}</div>
+              <div class="summary-label">缺数</div>
             </div>
           </div>
         </el-card>
@@ -91,8 +106,8 @@
               <el-icon :size="28"><CircleClose /></el-icon>
             </div>
             <div class="summary-text">
-              <div class="summary-num text-danger">{{ stats.red }}</div>
-              <div class="summary-label">告警</div>
+              <div class="summary-num text-danger">{{ stats.failed }}</div>
+              <div class="summary-label">计算失败</div>
             </div>
           </div>
         </el-card>
@@ -193,9 +208,13 @@
     <IndicatorDetailDrawer
       v-model="drawerOpen"
       :factory-id="factoryId"
+      :actor-key="actorKey"
       :code="selectedCode"
+      :initial-period="selectedPeriod"
       @recomputed="onRecomputed"
     />
+    <ProductProductionResults :factory-id="factoryId || ''" :actor-key="actorKey" :period="selectedPeriod" />
+    <FinishedBatchEvidence :factory-id="factoryId || ''" :actor-key="actorKey" :period="selectedPeriod" />
   </div>
 </template>
 
@@ -203,11 +222,12 @@
 /**
  * IndicatorCenterDashboard — 指标中心入口页.
  *
- * 顶部 4 个汇总卡片 (总数 / GREEN / YELLOW / RED).
+ * 顶部 4 个汇总卡片 (总数 / 数据可用 / 缺数 / 计算失败).
  * 主区: el-tabs 切换 "列表" / "树".
  * 选中指标 → 打开 IndicatorDetailDrawer 显示完整信息.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
 import {
@@ -223,17 +243,26 @@ import {
 } from '@element-plus/icons-vue';
 import {
   listIndicators,
+  getIndicatorValue,
   type IndicatorListResponse,
   type IndicatorCategory,
   type AlertLevel,
+  type IndicatorValueStatus,
 } from '@/api/indicator';
 import IndicatorValueCard from '@/components/indicator/IndicatorValueCard.vue';
 import IndicatorTreeViewer from './IndicatorTreeViewer.vue';
 import IndicatorDetailDrawer from './IndicatorDetailDrawer.vue';
 import B2BRealDataSection from './B2BRealDataSection.vue';
+import FinishedBatchEvidence from './FinishedBatchEvidence.vue';
+import ProductProductionResults from './ProductProductionResults.vue';
+import { isValidPeriod } from './actualFlowPeriod';
 
 const authStore = useAuthStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
+const actorRevision = ref(0);
+const actorKey = computed(() => JSON.stringify([authStore.user?.id, actorRevision.value]));
+watch([() => authStore.user?.id, () => authStore.currentRole], () => { actorRevision.value += 1; }, { flush: 'sync' });
 
 // Sprint 11 D6 — Mock factory detection (per goal anti-goal: 必标"模拟数据")
 const isMockFactory = computed(() =>
@@ -256,34 +285,59 @@ const mirroredIndicatorsPresent = computed(() => {
 const hasMirroredIndicators = computed(() => mirroredIndicatorsPresent.value.length > 0);
 const mirroredCodeList = computed(() => mirroredIndicatorsPresent.value.join(', '));
 
-const indicators = ref<IndicatorListResponse[]>([]);
+interface DashboardIndicator extends IndicatorListResponse {
+  status?: IndicatorValueStatus;
+  periodStart?: string;
+  periodEnd?: string;
+}
+
+const ACTUAL_FLOW_CODES = new Set([
+  'FACTORY_LU_YIELD_RATE',
+  'FACTORY_GOOD_OUTPUT_RATE',
+  'FACTORY_LU_UNIT_COST',
+  'FACTORY_ACTUAL_TOTAL_COST',
+]);
+
+const indicators = ref<DashboardIndicator[]>([]);
 const loading = ref(false);
 const activeView = ref<'list' | 'tree'>('list');
 const filterCategory = ref<IndicatorCategory | ''>('');
 const searchKey = ref('');
 const selectedCode = ref<string | null>(null);
 const drawerOpen = ref(false);
+type PeriodPreset = 'today' | 'month' | 'custom';
+type DateRange = [string, string];
+const periodPreset = ref<PeriodPreset>('today');
+const customPeriodRange = ref<DateRange | null>(null);
+const periodError = ref<string | null>(null);
+function formatDateOnly(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+const calendarToday = ref(formatDateOnly(new Date()));
+const selectedPeriod = computed<DateRange | null>(() => {
+  const today = calendarToday.value;
+  if (periodPreset.value === 'today') return [today, today];
+  if (periodPreset.value === 'month') {
+    return [`${today.slice(0, 7)}-01`, today];
+  }
+  return isValidPeriod(customPeriodRange.value) ? customPeriodRange.value : null;
+});
+const periodLabel = computed(() => selectedPeriod.value ? selectedPeriod.value.join(' 至 ') : '请选择完整日期');
 const treeRef = ref<InstanceType<typeof IndicatorTreeViewer> | null>(null);
+const mounted = ref(false);
+let requestSeq = 0;
 
-// 当前列表展示的指标级 alert (用于汇总卡片)
-// 因为 list 没返回 alertLevel, 这里只能展示 GREEN/YELLOW/RED 各 0 — 真正告警状态由
-// /value 或 /tree 单独返回. 此页面汇总取自 list 推导 (lastValue null = 未计算).
-// Phase 1 简化: 用 lastValue !== null 算作"已计算", 告警分类靠 tree 视图.
 const stats = computed(() => {
-  // 由于 list response 不含 alertLevel, 我们用 lastValue !== null 作为"已计算".
-  // 实际颜色分类需要查 /value 单独或者用 /tree 接口. 这里 Phase 1 只显示总数+未计算.
   const total = indicators.value.length;
-  const computed_ = indicators.value.filter(
-    i => i.lastValue !== null && i.lastValue !== undefined
-  ).length;
-  const uncomputed = total - computed_;
-  // 简化映射: 已计算→green 占位 / 未计算→yellow / 0 红 (真值靠 tree)
-  // 用户在 tree 视图看到真实分布; dashboard 卡片是 "汇总意图" 而非精确告警计数
+  const statusOf = (indicator: DashboardIndicator): IndicatorValueStatus => {
+    if (indicator.status) return indicator.status;
+    return indicator.lastValue == null ? 'NOT_COMPUTED' : 'AVAILABLE';
+  };
   return {
     total,
-    green: computed_,
-    yellow: uncomputed,
-    red: 0,
+    available: indicators.value.filter(i => statusOf(i) === 'AVAILABLE' && i.lastValue != null).length,
+    missing: indicators.value.filter(i => ['NO_DATA', 'NOT_COMPUTED'].includes(statusOf(i))).length,
+    failed: indicators.value.filter(i => statusOf(i) === 'FAILED').length,
   };
 });
 
@@ -306,29 +360,83 @@ const filteredIndicators = computed(() => {
 });
 
 async function loadList() {
-  if (!factoryId.value) {
+  const currentFactoryId = factoryId.value;
+  const currentActor = actorKey.value;
+  const seq = ++requestSeq;
+  indicators.value = [];
+  loading.value = false;
+  if (!currentFactoryId) {
     ElMessage.warning('未识别到当前工厂, 无法加载指标');
     return;
   }
+  const range = selectedPeriod.value;
+  if (!range) {
+    indicators.value = [];
+    periodError.value = '日期为空或无效，未查询指标';
+    return;
+  }
+  periodError.value = null;
+  indicators.value = [];
   loading.value = true;
   try {
-    indicators.value = await listIndicators(
-      factoryId.value,
+    const list = await listIndicators(
+      currentFactoryId,
       filterCategory.value || undefined
     );
+    if (!mounted.value || seq !== requestSeq || factoryId.value !== currentFactoryId || actorKey.value !== currentActor) return;
+    const nextIndicators = await Promise.all(list.map(async (indicator): Promise<DashboardIndicator> => {
+      if (!ACTUAL_FLOW_CODES.has(indicator.code)) return indicator;
+      try {
+        const current = await getIndicatorValue(currentFactoryId, indicator.code, {
+          periodStart: range[0],
+          periodEnd: range[1],
+        });
+        const status = current.status || (current.value == null ? 'NO_DATA' : 'AVAILABLE');
+        return {
+          ...indicator,
+          lastValue: status === 'AVAILABLE' ? current.value : null,
+          lastComputedAt: status === 'AVAILABLE' ? current.computedAt ?? null : null,
+          status,
+          periodStart: current.periodStart || range[0],
+          periodEnd: current.periodEnd || range[1],
+        };
+      } catch (error) {
+        console.warn(`[IndicatorCenterDashboard] value load failed: ${indicator.code}`, error);
+        return {
+          ...indicator,
+          lastValue: null,
+          lastComputedAt: null,
+          status: 'FAILED',
+          periodStart: range[0],
+          periodEnd: range[1],
+        };
+      }
+    }));
+    if (mounted.value && seq === requestSeq && factoryId.value === currentFactoryId && actorKey.value === currentActor && selectedPeriod.value?.[0] === range[0] && selectedPeriod.value?.[1] === range[1]) {
+      indicators.value = nextIndicators;
+    }
   } catch (e) {
     console.warn('[IndicatorCenterDashboard] list load failed:', e);
-    indicators.value = [];
+    if (mounted.value && seq === requestSeq) {
+      indicators.value = [];
+      periodError.value = e instanceof Error ? `指标读取失败：${e.message}` : '指标读取失败，请刷新重试';
+    }
   } finally {
-    loading.value = false;
+    if (seq === requestSeq) loading.value = false;
   }
 }
 
 async function refreshAll() {
-  await loadList();
+  if (syncCalendarToday()) await nextTick();
+  else await loadList();
   if (treeRef.value) {
     await treeRef.value.loadTree();
   }
+}
+function syncCalendarToday(): boolean {
+  const before = selectedPeriod.value?.join('|');
+  calendarToday.value = formatDateOnly(new Date());
+  return before !== selectedPeriod.value?.join('|');
 }
 
 function onSelectIndicator(code: string) {
@@ -338,10 +446,10 @@ function onSelectIndicator(code: string) {
 
 function onRecomputed(_code: string) {
   // 重算成功后刷新列表 (lastValue 更新)
-  loadList();
+  void refreshAll();
 }
 
-function indicatorToCardData(ind: IndicatorListResponse) {
+function indicatorToCardData(ind: DashboardIndicator) {
   return {
     code: ind.code,
     name: ind.name,
@@ -350,6 +458,9 @@ function indicatorToCardData(ind: IndicatorListResponse) {
     unit: ind.unit,
     lastValue: ind.lastValue,
     lastComputedAt: ind.lastComputedAt,
+    status: ind.status,
+    periodStart: ind.periodStart,
+    periodEnd: ind.periodEnd,
     computeStrategy: ind.computeStrategy,
     // list 接口不返回 alertLevel; 点击详情时从 /value 获取真值
     alertLevel: null as AlertLevel,
@@ -358,9 +469,32 @@ function indicatorToCardData(ind: IndicatorListResponse) {
   };
 }
 
+function initializePeriodFromRoute() {
+  const start = typeof route.query.periodStart === 'string' ? route.query.periodStart : '';
+  const end = typeof route.query.periodEnd === 'string' ? route.query.periodEnd : '';
+  if (isValidPeriod([start, end])) {
+    periodPreset.value = 'custom';
+    customPeriodRange.value = [start, end];
+  } else if (route.query.periodStart != null || route.query.periodEnd != null) {
+    periodPreset.value = 'custom';
+    customPeriodRange.value = null;
+  }
+}
+
+initializePeriodFromRoute();
+watch([factoryId, actorKey], () => { drawerOpen.value = false; selectedCode.value = null; });
+watch([factoryId, actorKey, selectedPeriod], () => {
+  requestSeq += 1;
+  indicators.value = [];
+  if (mounted.value) void loadList();
+}, { deep: true });
 onMounted(() => {
+  mounted.value = true;
   loadList();
 });
+onDeactivated(() => { mounted.value = false; ++requestSeq; indicators.value = []; drawerOpen.value = false; });
+onActivated(() => { if (!mounted.value) { mounted.value = true; if (!syncCalendarToday()) void loadList(); } });
+onUnmounted(() => { mounted.value = false; requestSeq += 1; });
 </script>
 
 <style scoped>

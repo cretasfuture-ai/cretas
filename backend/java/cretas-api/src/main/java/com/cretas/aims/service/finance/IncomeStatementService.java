@@ -194,11 +194,14 @@ public class IncomeStatementService {
     }
 
     /**
-     * Account-less legacy entry fallback: by code prefix.
-     * 5/6xxx → REVENUE/COST/EXPENSE; cannot reliably distinguish, default 看 subjectName.
+     * Account-less entries use the same 60xx revenue convention as the existing
+     * sales/return voucher generators and financial export. Explicit factory
+     * account categories above always take precedence; retain legacy 5/6 rules.
      */
     private AccountCategory inferCategoryByCode(String code) {
         if (code == null || code.isEmpty()) return null;
+        if (code.startsWith("60")) return AccountCategory.REVENUE;
+        if (code.startsWith("66") || code.startsWith("67") || code.startsWith("68")) return AccountCategory.EXPENSE;
         char first = code.charAt(0);
         if (first == '5') return AccountCategory.REVENUE;  // 5xxx 收入类
         if (first == '6') return AccountCategory.COST;      // 6xxx 成本类 (or EXPENSE — ambiguous)

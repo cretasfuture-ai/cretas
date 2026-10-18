@@ -15,12 +15,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import BalanceSheet from './BalanceSheet.vue';
 import IncomeStatement from './IncomeStatement.vue';
 import CashFlow from './CashFlow.vue';
 
+const route = useRoute();
 const activeTab = ref('balance-sheet');
+watch(() => route.query.tab, tab => {
+  activeTab.value = typeof tab === 'string' && ['balance-sheet', 'income-statement', 'cash-flow'].includes(tab) ? tab : 'balance-sheet';
+}, { immediate: true });
 </script>
 
 <style scoped>

@@ -10,6 +10,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.DroolsRuleRepository;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.FactoryService;
+import com.cretas.aims.service.indicator.FactoryIndicatorProvisioner;
 import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowProvisioner;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -42,6 +43,7 @@ public class FactoryServiceImpl implements FactoryService {
     private final FactoryRepository factoryRepository;
     private final DroolsRuleRepository droolsRuleRepository;
     private final RestaurantAgentActionWorkflowProvisioner restaurantActionWorkflowProvisioner;
+    private final FactoryIndicatorProvisioner factoryIndicatorProvisioner;
 
     /**
      * 获取所有工厂列表（不推荐，使用分页版本）
@@ -98,6 +100,7 @@ public class FactoryServiceImpl implements FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
 
         Factory savedFactory = factoryRepository.save(factory);
+        factoryIndicatorProvisioner.provision(savedFactory.getId());
         log.info("工厂创建成功，factoryId: {}", savedFactory.getId());
 
         // R34 P2 — close R33 reviewer P0-2: @Value default 改 false 后, 新工厂 fallback false silent OFF

@@ -107,6 +107,34 @@ class LineageEdgeRecorderTest {
                 .containsExactly("consumption:1", "consumption:2");
     }
 
+    @Test
+    @DisplayName("MATERIAL_TRANSFER: 两个来源批次各写一条边且同 refKey 重放幂等")
+    void materialTransferShapeAndIdempotence() {
+        List<BatchLineageEdge> store = wireInMemoryRepo();
+        LineageEdgeRecorder recorder = newRecorder();
+
+        LineageRecordOutcome first = recorder.recordMaterialTransfer(
+                FACTORY, "mb-source-1", "mb-target", new BigDecimal("40"), "kg", 7L,
+                "transfer:t1:item:9:mb-source-1", null);
+        LineageRecordOutcome second = recorder.recordMaterialTransfer(
+                FACTORY, "mb-source-1", "mb-target", new BigDecimal("40"), "kg", 7L,
+                "transfer:t1:item:9:mb-source-1", null);
+        recorder.recordMaterialTransfer(
+                FACTORY, "mb-source-2", "mb-target", new BigDecimal("10"), "kg", 7L,
+                "transfer:t1:item:9:mb-source-2", null);
+
+        assertThat(first).isEqualTo(LineageRecordOutcome.INSERTED);
+        assertThat(second).isEqualTo(LineageRecordOutcome.ALREADY_EXISTS);
+        assertThat(store).hasSize(2);
+        assertThat(store).allSatisfy(edge -> {
+            assertThat(edge.getEdgeType()).isEqualTo(LineageEdgeRecorder.EDGE_MATERIAL_TRANSFER);
+            assertThat(edge.getSourceType()).isEqualTo(LineageEdgeRecorder.NODE_MATERIAL_BATCH);
+            assertThat(edge.getTargetType()).isEqualTo(LineageEdgeRecorder.NODE_MATERIAL_BATCH);
+            assertThat(edge.getTargetId()).isEqualTo("mb-target");
+            assertThat(edge.getUnit()).isEqualTo("kg");
+        });
+    }
+
     // ── ② 三种 edge_type 各一条正向 ────────────────────────────────────────
 
     @Test

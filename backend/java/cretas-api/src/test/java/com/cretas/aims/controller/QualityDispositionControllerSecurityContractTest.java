@@ -34,6 +34,13 @@ class QualityDispositionControllerSecurityContractTest {
 
     @InjectMocks
     private QualityDispositionController controller;
+    @Mock
+    private com.cretas.aims.service.quality.QualityDispositionDecisionGuard decisionGuard;
+
+    @org.junit.jupiter.api.BeforeEach
+    void lockedInspectionIsRefreshedByGuard() {
+        lenient().when(decisionGuard.lockInspection(anyString(), any())).thenAnswer(call -> call.getArgument(1));
+    }
 
     @Mock
     private QualityDispositionRuleService qualityDispositionRuleService;
@@ -164,14 +171,13 @@ class QualityDispositionControllerSecurityContractTest {
         request.setApproverId(1559L);
 
         when(decisionAuditLogRepository.findById("approval-1")).thenReturn(Optional.of(pending));
-        when(decisionAuditLogRepository.save(any(DecisionAuditLog.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
         when(qualityInspectionRepository.findById("missing-inspection")).thenReturn(Optional.empty());
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> controller.approveDisposition("F006", "approval-1", request, 1559L));
         assertEquals(500, error.getCode());
         assertEquals("审批执行失败，处置申请未生效", error.getMessage());
+        verify(decisionAuditLogRepository, never()).save(any());
         verify(qualityDispositionRuleService, never())
                 .executeApprovedDisposition(anyString(), any(), any(), anyLong(), anyString());
     }

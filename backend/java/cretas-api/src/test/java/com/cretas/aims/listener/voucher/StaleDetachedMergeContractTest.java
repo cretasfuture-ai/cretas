@@ -1,6 +1,7 @@
 package com.cretas.aims.listener.voucher;
 
 import com.cretas.aims.entity.enums.VoucherFlag;
+import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -13,6 +14,8 @@ import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.impl.SalesFinanceApproveVoucherListener;
 import com.cretas.aims.service.voucher.VoucherService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,6 +25,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -33,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -152,33 +159,104 @@ class StaleDetachedMergeContractTest {
     // ==================== ③ 退货单 → 凭证 (prod 冲突 24 次, 纯丢更新) ====================
 
     @Test
-    @DisplayName("ReturnOrderVoucherListener: 第二次 save 必须用 merge 返回的实例")
-    void returnOrderListenerMustReuseMergedInstance() {
+    @DisplayName("ReturnOrderVoucherListener: 锁住托管行后在同一事务内完整写出 vflag")
+    void returnOrderListenerLocksManagedRowAndWritesTerminalFlag() {
         ReturnOrderRepository repo = mock(ReturnOrderRepository.class);
+        EntityManager entityManager = mock(EntityManager.class);
 
         ReturnOrder detached = new ReturnOrder();
         detached.setId(ID);
+        detached.setFactoryId(FACTORY);
         detached.setVflag(VoucherFlag.UNCREATED);
-        ReturnOrder merged = new ReturnOrder();
-        merged.setId(ID);
-        merged.setVflag(VoucherFlag.PENDING);
 
         when(repo.findById(ID)).thenReturn(Optional.of(detached));
-        when(repo.save(any(ReturnOrder.class))).thenReturn(merged);
         when(voucherService.createFromBusiness(anyString(), anyString(), anyString()))
                 .thenReturn(new Voucher());
 
-        ReturnOrderVoucherListener listener = new ReturnOrderVoucherListener(repo, voucherService);
+        ReturnOrderVoucherListener listener = returnOrderListener(repo, entityManager);
         ReflectionTestUtils.invokeMethod(listener, "handleVoucherGeneration", FACTORY, ID);
 
-        ArgumentCaptor<ReturnOrder> cap = ArgumentCaptor.forClass(ReturnOrder.class);
-        verify(repo, times(2)).save(cap.capture());
-        assertSame(detached, cap.getAllValues().get(0));
-        assertSame(merged, cap.getAllValues().get(1),
-                "prod 实证这一处是**纯丢更新**: 凭证每次都生成成功了(内层报错 0 次), "
-                        + "丢的只是那次写状态 ⇒ return_orders 10/29 卡在 PENDING");
-        assertNotSame(cap.getAllValues().get(0), cap.getAllValues().get(1),
-                "⚠️ 阳性对照: 两个是同一对象则上条断言恒真");
+        verify(entityManager).refresh(detached);
+        verify(repo, never()).save(any(ReturnOrder.class));
+        verify(voucherService).createFromBusiness(FACTORY, "RETURN_ORDER", ID);
+        assertEquals(VoucherFlag.CREATED, detached.getVflag());
+    }
+
+    @Test
+    @DisplayName("ReturnOrderVoucherListener: 错误工厂在锁和凭证写入前拒绝")
+    void returnOrderListenerRejectsWrongFactoryBeforeSideEffects() {
+        ReturnOrderRepository repo = mock(ReturnOrderRepository.class);
+        EntityManager entityManager = mock(EntityManager.class);
+        ReturnOrder foreign = new ReturnOrder();
+        foreign.setId(ID);
+        foreign.setFactoryId("F007");
+        foreign.setVflag(VoucherFlag.UNCREATED);
+        when(repo.findById(ID)).thenReturn(Optional.of(foreign));
+
+        ReturnOrderVoucherListener listener = returnOrderListener(repo, entityManager);
+        ReflectionTestUtils.invokeMethod(listener, "handleVoucherGeneration", FACTORY, ID);
+
+        verify(entityManager, never()).refresh(any());
+        verify(repo, never()).save(any(ReturnOrder.class));
+        verify(voucherService, never()).createFromBusiness(anyString(), anyString(), anyString());
+        assertEquals(VoucherFlag.UNCREATED, foreign.getVflag());
+    }
+
+    @Test
+    @DisplayName("ReturnOrderVoucherListener: 失败回滚后独立事务重新锁行并写出 FAILED")
+    void returnOrderListenerWritesFailedFlagWithoutDetachedSave() {
+        ReturnOrderRepository repo = mock(ReturnOrderRepository.class);
+        EntityManager entityManager = mock(EntityManager.class);
+        ReturnOrder order = new ReturnOrder();
+        order.setId(ID);
+        order.setFactoryId(FACTORY);
+        order.setVflag(VoucherFlag.UNCREATED);
+        when(repo.findById(ID)).thenReturn(Optional.of(order));
+        when(voucherService.createFromBusiness(FACTORY, "RETURN_ORDER", ID))
+                .thenThrow(new IllegalStateException("voucher failed"));
+
+        ReturnOrderVoucherListener listener = returnOrderListener(repo, entityManager);
+        ReflectionTestUtils.invokeMethod(listener, "handleVoucherGeneration", FACTORY, ID);
+
+        verify(entityManager, times(2)).refresh(order);
+        verify(repo, never()).save(any(ReturnOrder.class));
+        assertEquals(VoucherFlag.FAILED, order.getVflag());
+    }
+
+    @Test
+    @DisplayName("ReturnOrderVoucherListener: reject 先完成时锁后跳过幽灵凭证")
+    void returnOrderListenerSkipsRejectedOrderAfterLock() {
+        ReturnOrderRepository repo = mock(ReturnOrderRepository.class);
+        EntityManager entityManager = mock(EntityManager.class);
+        ReturnOrder rejected = new ReturnOrder();
+        rejected.setId(ID);
+        rejected.setFactoryId(FACTORY);
+        rejected.setStatus(ReturnOrderStatus.REJECTED);
+        rejected.setVflag(VoucherFlag.UNCREATED);
+        when(repo.findById(ID)).thenReturn(Optional.of(rejected));
+
+        ReturnOrderVoucherListener listener = returnOrderListener(repo, entityManager);
+        ReflectionTestUtils.invokeMethod(listener, "handleVoucherGeneration", FACTORY, ID);
+
+        verify(entityManager).refresh(rejected);
+        verify(voucherService, never()).createFromBusiness(anyString(), anyString(), anyString());
+        verify(repo, never()).save(any(ReturnOrder.class));
+        assertEquals(VoucherFlag.UNCREATED, rejected.getVflag());
+    }
+
+    private ReturnOrderVoucherListener returnOrderListener(ReturnOrderRepository repo,
+                                                            EntityManager entityManager) {
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any(TransactionDefinition.class)))
+                .thenAnswer(invocation -> new SimpleTransactionStatus());
+        Query rowLockQuery = mock(Query.class);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(rowLockQuery);
+        when(rowLockQuery.setParameter(anyString(), any())).thenReturn(rowLockQuery);
+        when(rowLockQuery.getResultList()).thenReturn(List.of(ID));
+        ReturnOrderVoucherListener listener = new ReturnOrderVoucherListener(repo, voucherService);
+        ReflectionTestUtils.setField(listener, "entityManager", entityManager);
+        ReflectionTestUtils.setField(listener, "transactionManager", transactionManager);
+        return listener;
     }
 
     // ==================== ④ 调拨 → 凭证 (当前不炸, 因为实体没有 @Version) ====================

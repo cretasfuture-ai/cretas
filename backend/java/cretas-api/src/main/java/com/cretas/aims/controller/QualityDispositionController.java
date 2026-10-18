@@ -54,6 +54,21 @@ import org.springframework.transaction.annotation.Transactional;
 @Tag(name = "质检处置管理", description = "质检处置规则与执行管理")
 @RequireModule("quality_inspection")
 public class QualityDispositionController {
+    private final com.cretas.aims.service.quality.QualityDispositionDecisionGuard decisionGuard;
+
+    private static void validatePendingApprovalIdentity(DecisionAuditLog auditLog,
+            DispositionApproveRequest request, Long authenticatedUserId) {
+        if (!Boolean.TRUE.equals(auditLog.getRequiresApproval())
+                || auditLog.getApprovalStatus() != DecisionAuditLog.ApprovalStatus.PENDING) {
+            throw new BusinessException(409, "该处置申请已处理或不是待审批状态");
+        }
+        if (!Objects.equals(request.getApproverId(), authenticatedUserId)) {
+            throw new BusinessException(400, "审批人必须与当前登录用户一致");
+        }
+        if (Objects.equals(auditLog.getExecutorId(), authenticatedUserId)) {
+            throw new BusinessException(403, "申请人与审批人不能为同一用户");
+        }
+    }
 
     private final QualityDispositionRuleService qualityDispositionRuleService;
     private final QualityInspectionRepository qualityInspectionRepository;
@@ -516,6 +531,8 @@ public class QualityDispositionController {
         QualityInspection scopedInspection = qualityInspectionRepository.findById(request.getInspectionId())
                 .orElseThrow(() -> new EntityNotFoundException("Quality inspection", request.getInspectionId()));
         validateInspectionScope(factoryId, request.getBatchId(), scopedInspection);
+        scopedInspection = decisionGuard.lockInspection(factoryId, scopedInspection);
+        decisionGuard.assertCanStart(scopedInspection);
 
         DispositionAction requestedAction;
         try {
@@ -639,16 +656,19 @@ public class QualityDispositionController {
         if (!auditLog.getFactoryId().equals(factoryId)) {
             throw new BusinessException(400, "无权审批此处置申请");
         }
-        if (!Boolean.TRUE.equals(auditLog.getRequiresApproval())
-                || auditLog.getApprovalStatus() != DecisionAuditLog.ApprovalStatus.PENDING) {
-            throw new BusinessException(409, "该处置申请已处理或不是待审批状态");
+        validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
+        if (!"QualityInspection".equals(auditLog.getEntityType())) {
+            throw new BusinessException(400, "该申请不是质检处置申请");
         }
-        if (!Objects.equals(request.getApproverId(), authenticatedUserId)) {
-            throw new BusinessException(400, "审批人必须与当前登录用户一致");
-        }
-        if (Objects.equals(auditLog.getExecutorId(), authenticatedUserId)) {
-            throw new BusinessException(403, "申请人与审批人不能为同一用户");
-        }
+        String linkedInspectionId = auditLog.getEntityId();
+        QualityInspection currentInspection = qualityInspectionRepository.findById(linkedInspectionId)
+                .orElseThrow(() -> new BusinessException(500, "审批执行失败，处置申请未生效"));
+        currentInspection = decisionGuard.lockInspection(factoryId, currentInspection);
+        // Lock order: production batch, inspection refresh, approval row, then inventory.
+        // Reload the managed audit after waiting so a concurrent winner cannot be overwritten.
+        decisionGuard.refreshApproval(auditLog);
+        validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
+        if (request.getApproved()) decisionGuard.assertApprovalCurrent(currentInspection);
 
         // 更新审批状态
         auditLog.setApprovalStatus(request.getApproved()

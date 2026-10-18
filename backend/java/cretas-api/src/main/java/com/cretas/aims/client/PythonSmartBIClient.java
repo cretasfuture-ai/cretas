@@ -12,6 +12,7 @@ import com.cretas.aims.dto.smartbi.ExcelParseResponse;
 import com.cretas.aims.dto.smartbi.PythonForecastResponse;
 import com.cretas.aims.dto.smartbi.MetricResult;
 import com.cretas.aims.exception.PythonServiceUnavailableException;
+import com.cretas.aims.exception.BusinessException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -2994,6 +2995,141 @@ public class PythonSmartBIClient {
             log.warn("γ-2c precompute-cache IO failure for upload {}: {}",
                     uploadId, e.getMessage());
             return false;
+        }
+    }
+
+    // vision_training_platform_bridge_v1: fixed operations, never caller URLs.
+    public enum VisionTrainingAction {
+        TEMPLATES(false, false), RECIPES(false, false), PREVIEW(true, false),
+        SAVE_DRAFT(true, false), LIST_DRAFTS(false, false),
+        DRAFT(false, true), PLAN(false, true), ENQUEUE_JOB(true, true), JOBS(false, true),
+        PREPARATION(false, true), PREPARATION_PHOTOS(true, true), PREPARATION_IMAGE(true, true),
+        PREPARATION_REVIEW(true, true), PREPARATION_STANDARD(true, true), PREPARATION_SUBMIT(true, true),
+        PREPARATION_EXPORT(true, true);
+
+        private final boolean post;
+        private final boolean projectRequired;
+        VisionTrainingAction(boolean post, boolean projectRequired) {
+            this.post = post;
+            this.projectRequired = projectRequired;
+        }
+    }
+
+    /** Called only after the platform controller verifies a typed platform actor. */
+    public JsonNode callPlatformVisionTraining(String factoryId, long platformAdminId,
+                                               VisionTrainingAction action, String projectId,
+                                               JsonNode body) {
+        return callVisionTraining(factoryId, platformAdminId, "super_admin", true, action, projectId, body);
+    }
+
+    /** Daily factory access uses the existing factory SOP router and tenant context. */
+    public JsonNode callFactoryVisionTraining(String factoryId, long userId, String role,
+                                              VisionTrainingAction action, String projectId, JsonNode body) {
+        if (!Set.of("factory_super_admin", "quality_manager").contains(role == null ? "" : role)) {
+            throw new IllegalArgumentException("verified factory quality administrator is required");
+        }
+        return callVisionTraining(factoryId, userId, role, false, action, projectId, body);
+    }
+
+    private JsonNode callVisionTraining(String factoryId, long actorId, String role, boolean platform,
+                                       VisionTrainingAction action, String projectId, JsonNode body) {
+        if (!config.isEnabled()) throw new IllegalStateException("Python service is disabled");
+        if (actorId <= 0 || factoryId == null
+                || !factoryId.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,99}")) {
+            throw new IllegalArgumentException("verified actor and factory are required");
+        }
+        if (action == null || action.projectRequired && (projectId == null
+                || !projectId.matches("[A-Za-z0-9_-]{1,100}"))) {
+            throw new IllegalArgumentException("invalid vision operation or project");
+        }
+        if (action.post && (body == null || !body.isObject()) || !action.post && body != null) {
+            throw new IllegalArgumentException("invalid vision operation body");
+        }
+        boolean preparation = action.name().startsWith("PREPARATION");
+        if (platform && preparation) throw new IllegalArgumentException("photo preparation is factory daily work");
+        if (preparation && body != null && body.toString().length() > 7_100_000) {
+            throw new BusinessException(413, "照片内容过大，请选择五兆以内的照片");
+        }
+        HttpUrl.Builder url = serviceBaseUrl.newBuilder().addPathSegments("api/vision-training");
+        if (platform) url.addPathSegments("platform/factories").addPathSegment(factoryId);
+        switch (action) {
+            case TEMPLATES -> url.addPathSegment("templates");
+            case RECIPES -> url.addPathSegment("recipes");
+            case PREVIEW -> url.addPathSegment("preview");
+            case SAVE_DRAFT, LIST_DRAFTS -> url.addPathSegment("drafts");
+            case DRAFT, PLAN, ENQUEUE_JOB, JOBS -> {
+                url.addPathSegment("drafts").addPathSegment(projectId);
+                if (action == VisionTrainingAction.PLAN) url.addPathSegment("plan");
+                if (action == VisionTrainingAction.ENQUEUE_JOB || action == VisionTrainingAction.JOBS) url.addPathSegment("jobs");
+            }
+            case PREPARATION, PREPARATION_PHOTOS, PREPARATION_IMAGE, PREPARATION_REVIEW,
+                    PREPARATION_STANDARD, PREPARATION_SUBMIT, PREPARATION_EXPORT -> {
+                url.addPathSegment("drafts").addPathSegment(projectId).addPathSegment("preparation");
+                if (action != VisionTrainingAction.PREPARATION) {
+                    url.addPathSegment(action.name().substring("PREPARATION_".length()).toLowerCase(java.util.Locale.ROOT));
+                }
+            }
+        }
+        Request.Builder request = new Request.Builder().url(url.build())
+                .header("X-Factory-Id", factoryId).header("X-User-Id", Long.toString(actorId))
+                .header("X-User-Role", role).header("X-Actor-Type", platform ? "PLATFORM_ADMIN" : "FACTORY_USER");
+        try {
+            if (action.post) request.post(RequestBody.create(JSON, objectMapper.writeValueAsString(body)));
+            else request.get();
+            JsonNode response = preparation ? executeVisionPreparation(request.build())
+                    : executeWithRetry(request.build(), JsonNode.class);
+            if (preparation && !response.path("success").asBoolean(false)) {
+                int upstreamCode = response.path("code").asInt(422);
+                if (!Set.of(400, 409, 413, 422).contains(upstreamCode)) upstreamCode = 422;
+                throw new BusinessException(upstreamCode, response.path("message").asText("资料未保存，请刷新后核对"));
+            }
+            if (!response.path("success").asBoolean(false) || !response.path("data").isContainerNode()) {
+                throw new IllegalStateException("vision service returned an invalid response");
+            }
+            return response.get("data");
+        } catch (IOException exception) {
+            throw new IllegalStateException("vision service request failed", exception);
+        }
+    }
+
+    /** Validation is a business response, not an outage of the shared AI service. */
+    private JsonNode executeVisionPreparation(Request request) throws IOException {
+        if (!circuitBreaker.isCallPermitted()) {
+            throw new PythonServiceUnavailableException(circuitBreaker.getState().name(), circuitBreaker.getRemainingOpenTimeMs());
+        }
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (Set.of(400, 403, 404, 409, 413, 422).contains(response.code())) {
+                inspectErrorBodyBounded(response.body());
+                circuitBreaker.recordSuccess();
+                String message = switch (response.code()) {
+                    case 403 -> "只能访问本厂检查资料，请核对当前工厂和检查项目";
+                    case 404 -> "没有找到本厂检查资料，请刷新后重新选择";
+                    case 409 -> "资料已更新或执行条件不一致，请刷新后核对再提交";
+                    case 413 -> "照片内容过大，请选择五兆以内的照片";
+                    default -> "照片资料格式或填写内容不符合要求，请核对必填项、照片和标记后重试";
+                };
+                throw new BusinessException(response.code(), message);
+            }
+            if (!response.isSuccessful()) {
+                inspectErrorBodyBounded(response.body());
+                throw sanitizedUpstreamFailure(response.code());
+            }
+            ResponseBody body = response.body();
+            if (body == null) throw new IOException("vision preparation returned no response");
+            requireJsonResponse(body);
+            BoundedInputStream input = boundedStream(body, 64L * 1024L * 1024L);
+            try {
+                JsonNode value = objectMapper.readTree(input);
+                input.drainToEnd();
+                circuitBreaker.recordSuccess();
+                return value;
+            } finally {
+                input.closeDelegate();
+            }
+        } catch (IOException error) {
+            circuitBreaker.recordFailure();
+            serviceAvailable.set(false);
+            throw error;
         }
     }
 

@@ -34,6 +34,10 @@ public interface MonthCloseService {
      */
     MonthCloseReconciliationDTO previewClose(String factoryId, Integer year, Integer month);
 
+    /** Reconcile final posted balances without treating CLOSED as a duplicate-close request. */
+    MonthCloseReconciliationDTO reconcileFinalClose(String factoryId, Integer year, Integer month,
+            com.cretas.aims.dto.finance.report.IncomeStatementDTO finalReport);
+
     /**
      * 执行月结闭环. 编排顺序:
      * <ol>

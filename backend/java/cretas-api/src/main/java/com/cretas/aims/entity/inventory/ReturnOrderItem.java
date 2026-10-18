@@ -57,6 +57,10 @@ public class ReturnOrderItem extends BaseEntity {
     @Column(name = "batch_number", length = 100)
     private String batchNumber;
 
+    /** Stable source FG identity captured from the shipped allocation evidence. */
+    @Column(name = "source_finished_goods_batch_id", length = 191)
+    private String sourceFinishedGoodsBatchId;
+
     @Column(name = "reason", length = 500)
     private String reason;
 
