@@ -132,6 +132,9 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         DataScopeContext context=resolver.resolve(actor.id());
         if (context==null || !factory.equals(context.getFactoryId())) throw new BusinessException(403,"无有效工厂数据身份");
         if (context.getScope()==DataScope.ALL) return true;
+        if (request.getMethod().equals("GET") && path.equals("warehouse/receiving/tasks")
+                && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.warehouse.WarehouseReceivingController.class)
+                && rowScopeSupported((HandlerMethod) handler)) return true;
         // These retired endpoints only return 410 with a migration hint; they cannot create records.
         if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // The payment service checks the locked source order before its first write.
