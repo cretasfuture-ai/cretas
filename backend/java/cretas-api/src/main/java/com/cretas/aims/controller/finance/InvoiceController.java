@@ -31,6 +31,30 @@ public class InvoiceController {
     private final InvoiceService invoiceService;
     private final com.cretas.aims.repository.InvoiceRecordRepository invoiceRecordRepository;
     private final com.cretas.aims.security.DataScopeResolver dataScopeResolver;
+    private final com.cretas.aims.service.OssService ossService;
+    private final com.cretas.aims.repository.inventory.SalesOrderRepository salesOrderRepository;
+
+    /** Sign only the stored PDF after checking both tenant and source-order data scope. */
+    @GetMapping("/{invoiceId}/download-url")
+    @RequirePermission({"finance:read_write", "finance:read", "sales:read_write", "sales:read"})
+    public ResponseEntity<?> downloadUrl(@PathVariable String factoryId, @PathVariable String invoiceId) {
+        var record = invoiceService.getInvoice(factoryId, invoiceId);
+        if (record.getSalesOrderId() == null) throw new BusinessException(404, "发票缺少关联订单，无法授权下载");
+        var order = salesOrderRepository.findById(record.getSalesOrderId())
+                .filter(value -> factoryId.equals(value.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(404, "发票关联订单不存在或无权访问"));
+        dataScopeResolver.assertCanAccess(factoryId, order.getCreatedBy());
+        if (record.getStatus() != InvoiceStatus.ISSUED || record.getInvoicePdfUrl() == null
+                || record.getInvoicePdfUrl().isBlank()) {
+            throw new BusinessException(409, "发票尚未出具或缺少PDF附件")
+                    .withHint("请到销售订单的开票记录核对审核、出具状态；已出具但缺少PDF时请联系财务核对附件")
+                    .withHintTarget("销售订单");
+        }
+        String url = ossService.generatePresignedUrl(record.getInvoicePdfUrl(), 300);
+        if (url == null || url.isBlank()) throw new BusinessException(503, "发票下载链接生成失败，请重试");
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(Map.of("success", true, "data", Map.of("url", url)));
+    }
 
     @RequireModule("finance_ar")
     @PostMapping("/request")
