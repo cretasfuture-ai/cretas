@@ -139,9 +139,15 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     }
 
     private boolean canAutoReconcile(PurchaseOrder po, BigDecimal invoiceAmount) {
-        return po.getTotalAmount() != null
+        BigDecimal gross = invoiceOrderAmount(po);
+        return gross != null
                 && invoiceAmount != null
-                && po.getTotalAmount().compareTo(invoiceAmount) == 0;
+                && gross.compareTo(invoiceAmount) == 0;
+    }
+
+    private BigDecimal invoiceOrderAmount(PurchaseOrder po) {
+        return po.getTotalAmount() == null ? null
+                : po.getTotalAmount().add(po.getTaxAmount() != null ? po.getTaxAmount() : BigDecimal.ZERO);
     }
 
     // ─── listPendingReminder ──────────────────────────────────────────────────
@@ -161,7 +167,7 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
                         .purchaseOrderNumber(po.getOrderNumber())
                         .supplierId(po.getSupplierId())
                         .supplierName(po.getSupplierName())
-                        .orderAmount(po.getTotalAmount())
+                        .orderAmount(invoiceOrderAmount(po))
                         .orderDate(po.getOrderDate())
                         .invoiceStatus(po.getInvoiceStatus())
                         .build())

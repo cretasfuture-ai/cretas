@@ -68,7 +68,7 @@
         <el-table-column prop="supplierName" label="供应商" min-width="150">
           <template #default="{ row }">{{ row.supplierName || row.supplierId || '—' }}</template>
         </el-table-column>
-        <el-table-column label="订单金额" width="130" align="right">
+        <el-table-column label="订单金额（含税）" width="150" align="right">
           <template #default="{ row }">{{ row.orderAmount == null ? '—' : `¥${formatAmount(row.orderAmount)}` }}</template>
         </el-table-column>
         <el-table-column prop="orderDate" label="下单日期" width="120" />
