@@ -19,12 +19,18 @@
         <el-tag v-if="isMirrored" type="warning" size="small" class="source-tag" effect="plain">
           示例
         </el-tag>
+        <el-tag v-else-if="isFailed" type="danger" size="small" class="source-tag" effect="plain">
+          计算失败
+        </el-tag>
+        <el-tag v-else-if="isMissingData" type="warning" size="small" class="source-tag" effect="plain">
+          暂无数据
+        </el-tag>
         <el-tag v-else-if="isUnconfigured" type="info" size="small" class="source-tag" effect="plain">
           待配置
         </el-tag>
       </div>
       <el-tag
-        v-if="indicator.alertLevel"
+        v-if="indicator.alertLevel && !isFailed && !isMissingData"
         :type="alertTagType"
         size="small"
         effect="dark"
@@ -46,9 +52,10 @@
       </div>
     </div>
 
-    <div v-if="indicator.lastComputedAt" class="card-footer">
+    <div v-if="indicator.lastComputedAt && !isFailed && !isMissingData" class="card-footer">
       <el-icon><Clock /></el-icon>
       <span>{{ relativeTime(indicator.lastComputedAt) }}</span>
+      <span v-if="periodLabel" class="period-label">{{ periodLabel }}</span>
       <el-tag
         v-if="indicator.computeStrategy"
         size="small"
@@ -60,7 +67,7 @@
     </div>
     <div v-else class="card-footer card-footer-empty">
       <el-icon><InfoFilled /></el-icon>
-      <span>未计算</span>
+      <span>{{ statusText }}</span>
     </div>
 
     <!-- Sprint 12 #265: next-action button (dead-end → 跳 actionable 页, fool-proof Rule 5) -->
@@ -87,6 +94,7 @@
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { Clock, InfoFilled, ArrowRight } from '@element-plus/icons-vue';
+import type { IndicatorValueStatus } from '@/api/indicator';
 
 /** Sprint 12 #265: KPI 卡片 next-action 提示 (后端 config.actionHint extract). */
 interface ActionHint {
@@ -102,6 +110,9 @@ interface CardData {
   unit?: string;
   lastValue?: number | null;
   lastComputedAt?: string | null;
+  status?: IndicatorValueStatus;
+  periodStart?: string | null;
+  periodEnd?: string | null;
   computeStrategy?: string;
   alertLevel?: 'GREEN' | 'YELLOW' | 'RED' | null;
   actionHint?: ActionHint | null;
@@ -126,7 +137,12 @@ const MIRRORED_CODES: string[] = [];
 const isMirrored = computed(() => MIRRORED_CODES.includes(props.indicator.code));
 const isUnconfigured = computed(() =>
   !isMirrored.value &&
+  !props.indicator.status &&
   (props.indicator.lastValue === null || props.indicator.lastValue === undefined)
+);
+const isFailed = computed(() => props.indicator.status === 'FAILED');
+const isMissingData = computed(() =>
+  props.indicator.status === 'NO_DATA' || props.indicator.status === 'NOT_COMPUTED'
 );
 
 const emit = defineEmits<{
@@ -155,7 +171,7 @@ const hasValue = computed(() =>
 );
 
 const formattedValue = computed(() => {
-  if (!hasValue.value) return '—';
+  if (!hasValue.value || isFailed.value || isMissingData.value) return '—';
   const v = props.indicator.lastValue as number;
   if (Math.abs(v) < 1000) {
     return Number.isInteger(v) ? v.toString() : v.toFixed(2);
@@ -163,7 +179,22 @@ const formattedValue = computed(() => {
   return v.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 });
 
+const statusText = computed(() => {
+  if (isFailed.value) return '计算失败';
+  if (isMissingData.value) return '暂无业务数据';
+  if (isUnconfigured.value) return '未配置';
+  return '未计算';
+});
+
+const periodLabel = computed(() => {
+  const start = props.indicator.periodStart;
+  const end = props.indicator.periodEnd;
+  if (!start || !end) return '';
+  return start === end ? `期间 ${start}` : `期间 ${start} 至 ${end}`;
+});
+
 const alertLevelClass = computed(() => {
+  if (isFailed.value || isMissingData.value) return 'neutral';
   if (!props.indicator.alertLevel) return 'neutral';
   return props.indicator.alertLevel.toLowerCase();
 });

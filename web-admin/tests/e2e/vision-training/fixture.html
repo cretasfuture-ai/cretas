@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="UTF-8"><title>视觉 SOP 本地验收</title>
+<div id="app"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue';
+import { createPinia } from 'pinia';
+import ElementPlus from 'element-plus';
+import 'element-plus/dist/index.css';
+import Setup from '/src/components/vision-training/FactoryVisionTrainingSetup.vue';
+if (location.origin !== 'http://127.0.0.1:31760') throw Error('Private loopback fixture only');
+const App = { setup() {
+  const factory = ref('VISION-UI-A');
+  return () => h('main', { style: 'max-width:1100px;margin:24px auto' }, [
+    h('h1', '本地验收 · 本厂视觉训练项目'),
+    h('p', '实际 Vue 组件与 Python 主服务；平台入口、Java 代理和生产身份不在本夹具范围内。'),
+    h('button', { id: 'factory-a', onClick: () => factory.value = 'VISION-UI-A' }, '工厂A'),
+    h('button', { id: 'factory-b', onClick: () => factory.value = 'VISION-UI-B' }, '工厂B'),
+    h(Setup, { factoryId: factory.value, productOptions: ['产品A', '产品B'] }),
+  ]);
+} };
+createApp(App).use(createPinia()).use(ElementPlus).mount('#app');
+</script></html>

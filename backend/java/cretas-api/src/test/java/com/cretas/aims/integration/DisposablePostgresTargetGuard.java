@@ -6,7 +6,7 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /** Prevents the opt-in verifier from ever targeting a shared or remote database. */
-final class DisposablePostgresTargetGuard {
+public final class DisposablePostgresTargetGuard {
 
     private static final String DATABASE_PREFIX = "cretas_workflow_verify_";
     private static final Pattern SAFE_DATABASE_PATH = Pattern.compile(
@@ -15,7 +15,7 @@ final class DisposablePostgresTargetGuard {
     private DisposablePostgresTargetGuard() {
     }
 
-    static String requireSafeUrl(String jdbcUrl) {
+    public static String requireSafeUrl(String jdbcUrl) {
         if (jdbcUrl == null || jdbcUrl.isBlank() || !jdbcUrl.equals(jdbcUrl.trim())) {
             throw unsafe("URL is missing or padded with whitespace");
         }

@@ -150,6 +150,8 @@ class RecipeAvailability(StrictModel):
     config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     stage_input_hashes: dict[str, str] = Field(default_factory=dict)
     stage_source_asset_hashes: dict[str, str] = Field(default_factory=dict)
+    preparation_project_id: str | None = Field(default=None, pattern=r"^vtp-[0-9a-f]{20}$")
+    preparation_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("stage_input_hashes")
     @classmethod

@@ -66,6 +66,7 @@ export const financeManagerMenu: MenuItem[] = [
   { path: '/finance/invoices?status=REQUESTED', title: '销售开票', icon: 'Tickets', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/purchase-invoices', title: '采购收票', icon: 'DocumentChecked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/payments', title: '收款管理', icon: 'Money', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
+  { path: '/finance/accounting-period', title: '会计期间', icon: 'Calendar', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
 ];
 
 const rawMenuConfig: MenuItem[] = [
@@ -281,6 +282,11 @@ const rawMenuConfig: MenuItem[] = [
     ]
   },
   {
+    path: '/analytics/indicators', title: '经营指标', icon: 'Histogram', module: 'analytics',
+    roles: ['factory_super_admin', 'quality_manager', 'finance_manager'],
+    hideForFactoryTypes: ['RESTAURANT'],
+  },
+  {
     // P1-5: restaurants 默认不见 "仓储管理" (食材库存在 /restaurant/stocktaking)
     // UX P2-5: 合并"调拨管理" 1-item 组到这里,减少顶级菜单数
     path: '/warehouse', title: '仓储管理', icon: 'Box', module: 'warehouse',
@@ -320,12 +326,18 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/quality/inspections', title: '质检记录', icon: '', module: 'quality', groupLabel: '质量检验' },
       { path: '/quality/label-qc', title: '包装标签拍检', icon: '', module: 'quality' },
+      { path: '/quality/vision-training', title: '视觉质检训练', icon: '', module: 'quality',
+        roles: ['factory_super_admin', 'quality_manager'] },
       // Sprint4-H Q-PROCESS-1: 工序质检不良闭环
       { path: '/quality/defects', title: '工序质检不良', icon: '', module: 'quality' },
       // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 不含客户销售退货)
       { path: '/quality/returns', title: '质检退回单', icon: '', module: 'quality' },
       {
         path: '/quality/disposition', title: '不良品处置', icon: '', module: 'quality', groupLabel: '处置闭环',
+        roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
+      },
+      {
+        path: '/quality/recalls', title: '批次召回', icon: '', module: 'quality',
         roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
       },
       { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality' },
@@ -435,7 +447,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/voucher-template', title: '凭证模板', icon: '', module: 'finance', groupLabel: '会计凭证',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'] },
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
-      { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' }
+      { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' },
+      { path: '/finance/accounting-period', title: '会计期间', icon: '', module: 'finance' }
     ]
   },
   // UX P2-5 merged into 生产管理: /rd 原独立顶级组 (1 项), 研发样品并入生产
@@ -708,6 +721,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/warehouse': 70,
   '/quality': 80,
   '/smart-bi': 90,
+  '/analytics/indicators': 95,
   '/system': 100,
   '/scheduling': 110,
   '/hr': 120,

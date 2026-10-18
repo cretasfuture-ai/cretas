@@ -1,6 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick, reactive, ref } from 'vue';
 import ElementPlus from 'element-plus';
 import { ApiError } from '@/types/api';
 import {
@@ -22,7 +22,8 @@ import {
  * 另: 来源链三态分开 / 可点的行打开个体抽屉 / `?batchNumber=` 带参直开。
  */
 
-const routeMock: { query: Record<string, string> } = { query: {} };
+const routeMock = reactive<{ query: Record<string, string> }>({ query: {} });
+const identity = reactive({ factoryId: 'F006', user: { id: 7 } });
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
 vi.mock('vue-router', () => ({
@@ -31,12 +32,15 @@ vi.mock('vue-router', () => ({
 }));
 
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'F006' }),
+  useAuthStore: () => identity,
 }));
+vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canAccess: () => true }) }));
 
 vi.mock('@/api/request', () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 
 const getFullTraceMock = vi.fn();
+const getHistoryMock = vi.fn();
+vi.mock('@/api/quality-disposition', () => ({ getDispositionHistory: (...args: unknown[]) => getHistoryMock(...args) }));
 vi.mock('@/api/traceability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/traceability')>()),
   getFullTrace: (...args: unknown[]) => getFullTraceMock(...args),
@@ -54,9 +58,13 @@ function ok<T>(data: T) {
   return Promise.resolve({ success: true, data, message: '' });
 }
 
+const mounted: VueWrapper[] = [];
 function mountPage() {
-  return mount(TracePage, { global: { plugins: [ElementPlus] } });
+  const wrapper = mount(TracePage, { global: { plugins: [ElementPlus] } });
+  mounted.push(wrapper);
+  return wrapper;
 }
+afterEach(() => { mounted.splice(0).forEach(wrapper => wrapper.unmount()); });
 
 async function search(wrapper: VueWrapper, batchNumber: string) {
   await wrapper.find('input[data-testid="batch-input"]').setValue(batchNumber);
@@ -66,14 +74,89 @@ async function search(wrapper: VueWrapper, batchNumber: string) {
 }
 
 beforeEach(() => {
+  identity.factoryId = 'F006';
+  identity.user.id = 7;
   routeMock.query = {};
   pushMock.mockReset();
   replaceMock.mockReset();
   getFullTraceMock.mockReset();
   getDetailMock.mockReset();
+  getHistoryMock.mockReset();
+  getHistoryMock.mockResolvedValue([]);
 });
 
 describe('溯源查询页 — 「本批来自 N 头牛」横幅', () => {
+  it('keeps the latest SKU query when an older response arrives last', async () => {
+    let resolveOld!: (value: { success: boolean; data: ReturnType<typeof sixCattleTrace> }) => void;
+    getFullTraceMock.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    const wrapper = mountPage();
+    await wrapper.find('input[data-testid="batch-input"]').setValue('PB-OLD');
+    await wrapper.find('form.query-bar').trigger('submit');
+    const latest = sixCattleTrace();
+    latest.production.batchNumber = 'PB-NEW';
+    latest.production.productName = '盒装新品';
+    getFullTraceMock.mockResolvedValueOnce({ success: true, data: latest });
+    await search(wrapper, 'PB-NEW');
+    resolveOld({ success: true, data: sixCattleTrace() });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="production-card"]').text()).toContain('盒装新品');
+    expect(wrapper.get('[data-testid="production-card"]').text()).toContain('PB-NEW');
+  });
+
+  it('reloads a new batch deep link in the same mounted page', async () => {
+    getFullTraceMock.mockResolvedValue({ success: true, data: sixCattleTrace() });
+    const wrapper = mountPage();
+    routeMock.query = { batchNumber: 'PB-NEXT' };
+    await flushPromises();
+    expect(getFullTraceMock).toHaveBeenLastCalledWith('F006', 'PB-NEXT');
+    expect((wrapper.get('input[data-testid="batch-input"]').element as HTMLInputElement).value).toBe('PB-NEXT');
+  });
+
+  it.each(['factory', 'reviewer'])('ignores an in-flight response after the %s changes', async changed => {
+    let resolveOld!: (value: { success: boolean; data: ReturnType<typeof sixCattleTrace> }) => void;
+    getFullTraceMock.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    const wrapper = mountPage();
+    await wrapper.find('input[data-testid="batch-input"]').setValue('PB-OLD');
+    await wrapper.find('form.query-bar').trigger('submit');
+    if (changed === 'factory') identity.factoryId = 'F-OTHER';
+    else identity.user.id = 8;
+    await nextTick();
+    resolveOld({ success: true, data: sixCattleTrace() });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="production-card"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="trace-idle"]').exists()).toBe(true);
+  });
+
+  it('rejects a response belonging to another factory and offers no detail link', async () => {
+    const data = sixCattleTrace();
+    data.production.factoryId = 'F-OTHER';
+    data.production.batchId = 8;
+    getFullTraceMock.mockResolvedValue({ success: true, data });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    expect(wrapper.get('[data-testid="trace-error"]').text()).toContain('当前工厂不一致');
+    expect(wrapper.find('[data-testid="batch-evidence-link"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="production-card"]').exists()).toBe(false);
+  });
+
+  it('does not fabricate a production link for legacy traces without a numeric batch id', async () => {
+    getFullTraceMock.mockResolvedValue({ success: true, data: sixCattleTrace() });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    expect(wrapper.find('[data-testid="production-card"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="batch-evidence-link"]').exists()).toBe(false);
+  });
+
+  it('uses the returned numeric batch id for the existing input-output and cost page', async () => {
+    const data = sixCattleTrace();
+    data.production.batchId = 8;
+    getFullTraceMock.mockResolvedValue({ success: true, data });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    await wrapper.get('[data-testid="batch-evidence-link"]').trigger('click');
+    expect(pushMock).toHaveBeenCalledWith({ path: '/production/batches/8' });
+  });
+
   it('① 六头牛全带个体 ⇒ 横幅「本批来自 6 头牛」', async () => {
     getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
     const wrapper = mountPage();
@@ -160,6 +243,65 @@ describe('溯源查询页 — 批次不存在', () => {
 });
 
 describe('溯源查询页 — 加工 / 质检 / 出货', () => {
+  it('区分跨午夜实际出货时间与计划交付日，不把计划日当成实际出货', async () => {
+    const trace = sixCattleTrace();
+    trace.shipments = [{ shipmentNumber: 'DLV-CROSS-DAY', shipmentDate: '2026-10-17',
+      shippedAt: '2026-10-17T00:00:21', plannedDeliveryDate: '2026-10-16', shipmentTimeSource: 'LINEAGE_EVENT',
+      customerName: '体验客户', quantity: 10, unit: '盒', status: 'SHIPPED' }];
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage(); await search(wrapper, 'PB-CROSS-DAY');
+    const shipping = wrapper.get('[data-testid="shipment-table"]').text();
+    expect(shipping).toContain('实际出货时间');
+    expect(shipping).toContain('计划交付日期');
+    expect(shipping).toContain('2026-10-17 00:00:21');
+    expect(shipping).toContain('2026-10-16');
+  });
+
+  it('没有实际出货流水时明确未留存，历史记录只显示已有日期精度', async () => {
+    const trace = sixCattleTrace();
+    trace.shipments = [{ shipmentNumber: 'DLV-NO-TIME', shipmentDate: null,
+      shippedAt: null, plannedDeliveryDate: '2026-10-16', shipmentTimeSource: 'UNRECORDED',
+      customerName: '体验客户', quantity: 10, unit: '盒', status: 'SHIPPED' },
+      { shipmentNumber: 'LEGACY', shipmentDate: '2026-10-15', shipmentTimeSource: 'LEGACY_DATE_ONLY',
+        customerName: '体验客户', quantity: 1, unit: 'kg', status: 'SHIPPED' }];
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage(); await search(wrapper, 'PB-NO-TIME');
+    const shipping = wrapper.get('[data-testid="shipment-table"]').text();
+    expect(shipping).toContain('未留存实际时间');
+    expect(shipping).toContain('2026-10-15（仅日期）');
+  });
+
+  it('盒装产出保留盒，实际出货表显示本批次的已发数量', async () => {
+    const trace = sixCattleTrace();
+    trace.processingStages = [{ stageType: 'PROCESS_SHEET', stageName: '熟制包装', stageOrder: 1,
+      inputWeight: 10, outputWeight: 20, inputUnit: 'kg', outputUnit: '盒' }];
+    trace.shipments = [{ shipmentNumber: 'DLV-P0-01', shipmentDate: '2026-10-16',
+      customerName: '本地体验客户', quantity: 10, unit: '盒', status: 'SHIPPED' }];
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-P0-BOX');
+    const process = wrapper.find('[data-testid="processing-table"]');
+    expect(process.text()).toContain('10 kg → 20 盒');
+    expect(process.text()).not.toContain('20kg');
+    const shipping = wrapper.find('[data-testid="shipment-table"]');
+    expect(shipping.text()).toContain('DLV-P0-01');
+    expect(shipping.text()).toContain('本地体验客户');
+    expect(shipping.text()).toContain('10 盒');
+    expect(wrapper.find('[data-testid="empty-sections-line"]').exists()).toBe(false);
+  });
+
+  it('逐道单位缺失时明确未记录，不猜公斤；存量重量记录仍按公斤显示', async () => {
+    const trace = sixCattleTrace();
+    trace.processingStages = [{ stageType: 'PROCESS_SHEET', stageName: '未记单位', stageOrder: 1,
+      inputWeight: 10, outputWeight: 20 }, { stageType: 'CUTTING', stageName: '历史重量工序', stageOrder: 2,
+      inputWeight: 5, outputWeight: 4 }];
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-P0-UNKNOWN');
+    const process = wrapper.find('[data-testid="processing-table"]').text();
+    expect(process).toContain('10 （单位未记录） → 20 （单位未记录）');
+    expect(process).toContain('5 kg → 4 kg');
+  });
   it('⑤ 三个空数组 ⇒ 三张表都不渲染, 页尾一行「暂无加工/质检/出货记录」', async () => {
     getFullTraceMock.mockImplementation(() => ok(noSectionsTrace()));
     const wrapper = mountPage();
@@ -195,6 +337,15 @@ describe('溯源查询页 — 加工 / 质检 / 出货', () => {
 });
 
 describe('溯源查询页 — 来源链三态', () => {
+  it('上游数量只统计祖先，不把成品和出货后代算成上游', async () => {
+    const trace = sixCattleTrace();
+    trace.lineage = { ...trace.lineage!, ancestors: [{ depth: 1, nodes: trace.lineage!.ancestors[0].nodes.slice(0, 2) }], nodeCount: 99 };
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-P0-COUNT');
+    expect(wrapper.find('[data-testid="lineage-card"]').text()).toContain('2 个上游节点');
+    expect(wrapper.find('[data-testid="lineage-card"]').text()).not.toContain('99 个上游节点');
+  });
   it('lineage 为 null ⇒ 「来源链暂时取不到」(本次没拿到, 不是没有上游)', async () => {
     getFullTraceMock.mockImplementation(() => ok({ ...sixCattleTrace(), lineage: null }));
     const wrapper = mountPage();
@@ -427,6 +578,60 @@ describe('溯源查询页 — 投屏细节 (2026-09-15 截图取证)', () => {
 });
 
 describe('溯源查询页 — 带参直开', () => {
+  it('工作区缓存返回追溯时重新读回刚登记的质检', async () => {
+    routeMock.query = { batchNumber: 'PB-2026-001' };
+    const before = sixCattleTrace();
+    before.qualityInspections = [];
+    getFullTraceMock.mockResolvedValueOnce({ success: true, data: before }).mockResolvedValue({ success: true, data: sixCattleTrace() });
+    const visible = ref(true);
+    const parent = mount({ components: { TracePage }, setup: () => ({ visible }),
+      template: '<KeepAlive><TracePage v-if="visible" /></KeepAlive>',
+    }, { global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(parent.find('[data-testid="quality-card"]').exists()).toBe(false);
+    visible.value = false;
+    await nextTick();
+    visible.value = true;
+    await flushPromises();
+    expect(getFullTraceMock).toHaveBeenCalledTimes(2);
+    expect(parent.get('[data-testid="quality-card"]').text()).toContain('李四');
+    parent.unmount();
+  });
+  it('质检入口复用本批次ID；生产总量与抽检样本各自展示', async () => {
+    const trace = sixCattleTrace();
+    Object.assign(trace.production, { batchId: 8, quantity: 22, goodQuantity: 20, defectQuantity: 2, unit: '盒' });
+    trace.qualityInspections = [{ inspectionId: 'qc-1', inspectionDate: null, inspectorName: null,
+      inspectorId: 93001, result: 'PASS', sampleSize: 5, passCount: 5, failCount: 0, passRate: 100 }];
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    expect(wrapper.get('[data-testid="production-card"]').text()).toContain('总产量（含不良）22 盒');
+    expect(wrapper.get('[data-testid="production-card"]').text()).toContain('合格产出20 盒');
+    const table = wrapper.get('[data-testid="quality-table"]');
+    expect(table.text()).toContain('抽检合格率');
+    expect(table.text()).toContain('100%');
+    expect(table.text()).not.toContain('10000%');
+    expect(table.text()).not.toContain('PASS');
+    expect(table.text()).toContain('编号 #93001');
+    await wrapper.get('[data-testid="quality-entry"] button').trigger('click');
+    expect(pushMock).toHaveBeenCalledWith({ path: '/quality/inspections', query: { batchId: '8', batchNumber: 'PB-2026-001' } });
+    await wrapper.findAll('[data-testid="quality-entry"] button')[1].trigger('click');
+    expect(pushMock).toHaveBeenCalledWith({ path: '/quality/recalls', query: { batchId: '8' } });
+  });
+
+  it('已出货无质检明确提示缺少依据，旧接口无batchId时不造入口', async () => {
+    const trace = sixCattleTrace();
+    trace.production.batchId = 8;
+    trace.qualityInspections = [];
+    getFullTraceMock.mockImplementation(() => ok(trace));
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    expect(wrapper.get('[data-testid="quality-entry"]').text()).toContain('已出货不代表已经质检放行');
+    expect(wrapper.get('[data-testid="shipment-card"]').text()).toContain('某超市');
+    delete trace.production.batchId;
+    await search(wrapper, 'PB-2026-002');
+    expect(wrapper.find('[data-testid="quality-entry"]').exists()).toBe(false);
+  });
   it('?batchNumber= 存在 ⇒ 挂载即查询, 不用再点按钮', async () => {
     routeMock.query = { batchNumber: 'PB-2026-001' };
     getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));

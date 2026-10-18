@@ -2,7 +2,16 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.ShipmentRecord;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -14,16 +23,22 @@ import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.repository.ShipmentRecordRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
+import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.repository.LabelRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -31,6 +46,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,10 +67,31 @@ class TraceabilityServiceImplTest {
     @Mock private CustomerRepository customerRepository;
     @Mock private ProcessSheetRowRepository processSheetRowRepository;
     @Mock private LabelRepository labelRepository;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    @Mock private SalesDeliveryItemBatchAllocationRepository salesDeliveryItemBatchAllocationRepository;
+    @Mock private SalesDeliveryItemRepository salesDeliveryItemRepository;
+    @Mock private SalesDeliveryRecordRepository salesDeliveryRecordRepository;
+    @Mock private BatchLineageEdgeRepository batchLineageEdgeRepository;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private TraceabilityServiceImpl service;
+
+    @BeforeEach
+    void wireOptionalSalesRepositories() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+        // Mockito constructor injection does not subsequently wire optional Spring fields.
+        ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
+        ReflectionTestUtils.setField(service, "salesDeliveryItemBatchAllocationRepository", salesDeliveryItemBatchAllocationRepository);
+        ReflectionTestUtils.setField(service, "salesDeliveryItemRepository", salesDeliveryItemRepository);
+        ReflectionTestUtils.setField(service, "salesDeliveryRecordRepository", salesDeliveryRecordRepository);
+        ReflectionTestUtils.setField(service, "batchLineageEdgeRepository", batchLineageEdgeRepository);
+    }
 
     @Test
     @DisplayName("full trace includes process-sheet mixed lineage and filters other SKU rows")
@@ -128,7 +166,7 @@ class TraceabilityServiceImplTest {
 
         TraceabilityDTO.ProcessingStageInfo mix = response.getProcessingStages().get(0);
         assertThat(mix.getStageType()).isEqualTo("PROCESS_SHEET");
-        assertThat(mix.getOperatorName()).contains("A1(25kg)", "A2(15kg)", "B1(30kg)");
+        assertThat(mix.getOperatorName()).as("source allocations are not worker identity").isNull();
         assertThat(mix.getInputWeight()).isEqualTo(70.0);
         assertThat(mix.getOutputWeight()).isEqualTo(74.0);
 
@@ -149,6 +187,286 @@ class TraceabilityServiceImplTest {
         row.setBatchNumber(batchNumber);
         row.setRowPayload(payload);
         return row;
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"actual", "foreign", "wrong-source", "wrong-carrier", "missing-time", "no-edge"})
+    @DisplayName("full trace projects shipped sales allocations per finished batch and native unit")
+    void getFullTrace_projectsShippedSalesAllocationsWithoutMixingSkus(String timeCase) {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(9442L);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("FG-TRACE");
+        batch.setProductionPlanId("plan-sales");
+        batch.setProductTypeId("sku-final");
+        batch.setProductName("Final SKU");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "FG-TRACE"))
+                .thenReturn(Optional.of(batch));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(9442L)).thenReturn(List.of());
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(9442L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(9442L)).thenReturn(List.of());
+        ShipmentRecord legacy = new ShipmentRecord();
+        legacy.setShipmentNumber("LEGACY-1");
+        legacy.setShipmentDate(java.time.LocalDate.of(2026, 10, 15));
+        legacy.setQuantity(new BigDecimal("4"));
+        legacy.setUnit("kg");
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "FG-TRACE"))
+                .thenReturn(List.of(legacy));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-sales"))
+                .thenReturn(List.of());
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(9442L)).thenReturn(List.of());
+
+        FinishedGoodsBatch batchA = finishedGoodsBatch("fg-a", "kg");
+        FinishedGoodsBatch batchB = finishedGoodsBatch("fg-b", "盒");
+        FinishedGoodsBatch foreignBatch = finishedGoodsBatch("fg-foreign", "kg");
+        foreignBatch.setFactoryId("OTHER");
+        FinishedGoodsBatch draftBatch = finishedGoodsBatch("fg-draft", "kg");
+        FinishedGoodsBatch wrongSkuBatch = finishedGoodsBatch("fg-wrong-sku", "kg");
+        wrongSkuBatch.setProductTypeId("sku-other");
+        when(finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, "plan-sales"))
+                .thenReturn(List.of(batchA, batchB, foreignBatch, draftBatch, wrongSkuBatch));
+
+        SalesDeliveryItem itemA = deliveryItem(101L, "delivery-a", "fg-a", "sku-final", "kg");
+        // A split delivery keeps its first batch on the legacy item field;
+        // the allocation still proves that the second batch was shipped.
+        SalesDeliveryItem itemB = deliveryItem(102L, "delivery-b", "first-deducted-batch", "sku-final", "盒");
+        SalesDeliveryItem itemDraft = deliveryItem(104L, "delivery-draft", "fg-draft", "sku-final", "kg");
+        when(salesDeliveryItemRepository.findById(101L)).thenReturn(Optional.of(itemA));
+        when(salesDeliveryItemRepository.findById(102L)).thenReturn(Optional.of(itemB));
+        when(salesDeliveryItemRepository.findById(104L)).thenReturn(Optional.of(itemDraft));
+        SalesDeliveryItemBatchAllocation allocationA = allocation("alloc-a", "101", "fg-a", "4", "kg");
+        SalesDeliveryItemBatchAllocation allocationB = allocation("alloc-b", "102", "fg-b", "10", "盒");
+        SalesDeliveryItemBatchAllocation foreignAllocation = allocation("alloc-foreign", "999", "fg-b", "99", "盒");
+        foreignAllocation.setFactoryId("OTHER");
+        SalesDeliveryItemBatchAllocation mismatchedAllocation = allocation("alloc-mismatch", "998", "other-batch", "88", "盒");
+        SalesDeliveryItemBatchAllocation allocationDraft = allocation("alloc-draft", "104", "fg-draft", "6", "kg");
+        when(salesDeliveryItemBatchAllocationRepository.findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-a"))
+                .thenReturn(List.of(allocationA));
+        when(salesDeliveryItemBatchAllocationRepository.findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-b"))
+                .thenReturn(List.of(allocationB, foreignAllocation, mismatchedAllocation));
+        when(salesDeliveryItemBatchAllocationRepository.findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-draft"))
+                .thenReturn(List.of(allocationDraft));
+        SalesDeliveryRecord deliveryA = delivery("delivery-a", "SO-A", SalesDeliveryStatus.SHIPPED);
+        SalesDeliveryRecord deliveryB = delivery("delivery-b", "SO-B", SalesDeliveryStatus.DELIVERED);
+        LocalDateTime actual = LocalDateTime.of(2026, 10, 17, 0, 0, 21);
+        deliveryA.setDeliveryDate(java.time.LocalDate.of(2026, 10, 16));
+        // A later edit/signature must never become the shipment business timestamp.
+        deliveryA.setUpdatedAt(actual.plusDays(2));
+        BatchLineageEdge shipmentEdge = new BatchLineageEdge();
+        shipmentEdge.setFactoryId("foreign".equals(timeCase) ? "OTHER" : FACTORY);
+        shipmentEdge.setSourceType("FINISHED_BATCH");
+        shipmentEdge.setSourceId("wrong-source".equals(timeCase) ? "fg-other" : "fg-a");
+        shipmentEdge.setTargetType("SHIPMENT_RECORD"); shipmentEdge.setTargetId("delivery-a");
+        shipmentEdge.setEdgeType("FINISHED_TO_SHIPMENT");
+        shipmentEdge.setEventTime("missing-time".equals(timeCase) ? null : actual);
+        shipmentEdge.setMeta(java.util.Map.of("shipmentCarrier", "wrong-carrier".equals(timeCase) ? "OTHER" : "SALES_DELIVERY_RECORD"));
+        when(batchLineageEdgeRepository.findByFactoryIdAndTargetIdAndTargetType(
+                FACTORY, "delivery-a", "SHIPMENT_RECORD"))
+                .thenReturn("no-edge".equals(timeCase) ? List.of() : List.of(shipmentEdge));
+        SalesDeliveryRecord draftDelivery = delivery("delivery-draft", "SO-DRAFT", SalesDeliveryStatus.DRAFT);
+        when(salesDeliveryRecordRepository.findById("delivery-a")).thenReturn(Optional.of(deliveryA));
+        when(salesDeliveryRecordRepository.findById("delivery-b")).thenReturn(Optional.of(deliveryB));
+        when(salesDeliveryRecordRepository.findById("delivery-draft")).thenReturn(Optional.of(draftDelivery));
+
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "FG-TRACE");
+        assertThat(response.getShipments().get(0).getShipmentDate()).isEqualTo(java.time.LocalDate.of(2026, 10, 15));
+        assertThat(response.getShipments().get(1).getShipmentDate())
+                .isEqualTo("actual".equals(timeCase) ? actual.toLocalDate() : null);
+        assertThat(response.getShipments().get(0).getShipmentTimeSource()).isEqualTo("LEGACY_DATE_ONLY");
+        assertThat(response.getShipments().get(1).getPlannedDeliveryDate()).isEqualTo(java.time.LocalDate.of(2026, 10, 16));
+        assertThat(response.getShipments().get(1).getShippedAt()).isEqualTo("actual".equals(timeCase) ? actual : null);
+        assertThat(response.getShipments().get(1).getShipmentTimeSource())
+                .isEqualTo("actual".equals(timeCase) ? "LINEAGE_EVENT" : "UNRECORDED");
+
+        assertThat(response.getShipments()).hasSize(3);
+        assertThat(response.getShipments())
+                .extracting(TraceabilityDTO.ShipmentInfo::getShipmentNumber)
+                .containsExactly("LEGACY-1", "SO-A", "SO-B");
+        assertThat(response.getShipments())
+                .extracting(TraceabilityDTO.ShipmentInfo::getQuantity)
+                .containsExactly(4.0, 4.0, 10.0);
+        assertThat(response.getShipments())
+                .extracting(TraceabilityDTO.ShipmentInfo::getUnit)
+                .containsExactly("kg", "kg", "盒");
+        verify(salesDeliveryItemBatchAllocationRepository, never())
+                .findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-foreign");
+        verify(salesDeliveryItemBatchAllocationRepository, never())
+                .findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-wrong-sku");
+        verify(salesDeliveryItemBatchAllocationRepository)
+                .findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-a");
+        verify(salesDeliveryItemBatchAllocationRepository)
+                .findByFactoryIdAndFinishedGoodsBatchId(FACTORY, "fg-b");
+        verify(salesDeliveryItemRepository, never()).findById(999L);
+        verify(salesDeliveryItemRepository, never()).findById(998L);
+    }
+
+    @Test
+    @DisplayName("process-sheet trace keeps real input/output units and does not calculate cross-unit loss")
+    void getFullTrace_processSheetUnitsRemainExplicit() {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(9443L);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("UNIT-TRACE");
+        batch.setProductionPlanId("plan-units");
+        batch.setProductTypeId("sku-final");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "UNIT-TRACE"))
+                .thenReturn(Optional.of(batch));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(9443L)).thenReturn(List.of());
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(9443L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(9443L)).thenReturn(List.of());
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "UNIT-TRACE")).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-units")).thenReturn(List.of(
+                processRow(41L, 1, "pack", null, """
+                        {
+                          "processName":"pack",
+                          "processDate":"2026-10-15",
+                          "productTypeId":"sku-final",
+                          "inputQuantity":10,
+                          "outputQuantity":20,
+                          "inputUnit":"kg",
+                          "outputUnit":"盒",
+                          "submittedBy":"should-not-be-an-operator",
+                          "rawMaterialInputs":[
+                            {"materialBatchId":"raw-uuid-1","quantity":4,"unit":"kg"},
+                            {"materialBatchId":"pack-uuid-2","quantity":10,"unit":"盒","materialCategory":"PACKAGING_MATERIAL"}
+                          ]
+                        }
+                        """)));
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(9443L)).thenReturn(List.of());
+
+        TraceabilityDTO.ProcessingStageInfo stage = service.getFullTrace(FACTORY, "UNIT-TRACE")
+                .getProcessingStages().get(0);
+
+        assertThat(stage.getInputUnit()).isEqualTo("kg");
+        assertThat(stage.getOutputUnit()).isEqualTo("盒");
+        assertThat(stage.getLossRate()).isNull();
+        assertThat(stage.getOperatorName()).as("raw inputs must never be shown as an operator").isNull();
+    }
+
+    @Test
+    @DisplayName("process-sheet unit inference fails closed when any source lacks a unit")
+    void getFullTrace_processSheetUnitInferenceRequiresEverySourceUnit() {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(9444L);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("UNIT-INFER-TRACE");
+        batch.setProductionPlanId("plan-unit-infer");
+        batch.setProductTypeId("sku-final");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "UNIT-INFER-TRACE"))
+                .thenReturn(Optional.of(batch));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(9444L)).thenReturn(List.of());
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(9444L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(9444L)).thenReturn(List.of());
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "UNIT-INFER-TRACE"))
+                .thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-unit-infer")).thenReturn(List.of(
+                processRow(42L, 1, "mixed", null, """
+                        {
+                          "processName":"mixed",
+                          "productTypeId":"sku-final",
+                          "inputQuantity":10,
+                          "outputQuantity":10,
+                          "outputUnit":"kg",
+                          "rawMaterialInputs":[
+                            {"materialBatchId":"raw-uuid-1","quantity":4,"unit":"kg"},
+                            {"materialBatchId":"raw-uuid-2","quantity":2}
+                          ]
+                        }
+                        """)));
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(9444L)).thenReturn(List.of());
+
+        TraceabilityDTO.ProcessingStageInfo stage = service.getFullTrace(FACTORY, "UNIT-INFER-TRACE")
+                .getProcessingStages().get(0);
+
+        assertThat(stage.getInputUnit()).isNull();
+        assertThat(stage.getOutputUnit()).isEqualTo("kg");
+        assertThat(stage.getLossRate()).isNull();
+        assertThat(stage.getOperatorName()).isNull();
+    }
+
+    private FinishedGoodsBatch finishedGoodsBatch(String id, String unit) {
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("FG-TRACE");
+        batch.setProductTypeId("sku-final");
+        batch.setProductionPlanId("plan-sales");
+        batch.setUnit(unit);
+        return batch;
+    }
+
+    private SalesDeliveryItem deliveryItem(Long id, String deliveryId, String finishedGoodsBatchId,
+                                           String productTypeId, String unit) {
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setId(id);
+        item.setDeliveryRecordId(deliveryId);
+        item.setFinishedGoodsBatchId(finishedGoodsBatchId);
+        item.setProductTypeId(productTypeId);
+        item.setUnit(unit);
+        return item;
+    }
+
+    private SalesDeliveryItemBatchAllocation allocation(String id, String deliveryItemId,
+                                                         String finishedGoodsBatchId, String quantity, String unit) {
+        SalesDeliveryItemBatchAllocation allocation = new SalesDeliveryItemBatchAllocation();
+        allocation.setId(id);
+        allocation.setFactoryId(FACTORY);
+        allocation.setDeliveryItemId(deliveryItemId);
+        allocation.setFinishedGoodsBatchId(finishedGoodsBatchId);
+        allocation.setAllocatedQty(new BigDecimal(quantity));
+        allocation.setUnit(unit);
+        return allocation;
+    }
+
+    private SalesDeliveryRecord delivery(String id, String number, SalesDeliveryStatus status) {
+        SalesDeliveryRecord delivery = new SalesDeliveryRecord();
+        delivery.setId(id);
+        delivery.setFactoryId(FACTORY);
+        delivery.setDeliveryNumber(number);
+        delivery.setCustomerId("customer-1");
+        delivery.setDeliveryDate(java.time.LocalDate.of(2026, 10, 15));
+        delivery.setStatus(status);
+        return delivery;
+    }
+
+    @Test
+    void fullTrace_keepsProductionCountsSeparateFromInspectionSampling() {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(8L);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber("BOX-QC");
+        batch.setActualQuantity(new BigDecimal("22"));
+        batch.setGoodQuantity(new BigDecimal("20"));
+        batch.setDefectQuantity(new BigDecimal("2"));
+        batch.setUnit("盒");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "BOX-QC"))
+                .thenReturn(Optional.of(batch));
+        QualityInspection inspection = new QualityInspection();
+        inspection.setId("qc-sample");
+        inspection.setInspectorId(93001L);
+        inspection.setSampleSize(new BigDecimal("5"));
+        inspection.setPassCount(new BigDecimal("5"));
+        inspection.setFailCount(BigDecimal.ZERO);
+        inspection.setPassRate(new BigDecimal("100"));
+        inspection.setResult("PASS");
+        when(qualityInspectionRepository.findByProductionBatchId(8L)).thenReturn(List.of(inspection));
+
+        var trace = service.getFullTrace(FACTORY, "BOX-QC");
+        assertThat(trace.getProduction().getBatchId()).isEqualTo(8L);
+        assertThat(trace.getProduction().getQuantity()).isEqualTo(22);
+        assertThat(trace.getProduction().getGoodQuantity()).isEqualTo(20);
+        assertThat(trace.getProduction().getDefectQuantity()).isEqualTo(2);
+        var qi = trace.getQualityInspections().getFirst();
+        assertThat(qi.getSampleSize()).isEqualTo(5);
+        assertThat(qi.getPassCount()).isEqualTo(5);
+        assertThat(qi.getFailCount()).isZero();
+        assertThat(qi.getPassRate()).isEqualTo(100);
+        assertThat(qi.getInspectorName()).isNull();
+        assertThat(qi.getInspectorId()).isEqualTo(93001L);
+        assertThat(qi.getInspectionDate()).isNull();
     }
 
     @Test

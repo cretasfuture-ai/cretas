@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from vision_training.router import create_file_backed_router, create_router
 from vision_training.service import VisionTrainingService
+from vision_training.store import CapacityLimitError
 
 
 def app_with_context() -> FastAPI:
@@ -44,6 +45,31 @@ def test_preview_endpoint_does_not_save_and_readback_requires_explicit_save() ->
     response = client.post("/api/vision-training/preview", json={"spec": valid_spec()})
     assert response.status_code == 200
     assert "no draft was saved" in response.json()["message"]
+
+
+def test_capacity_rejection_is_a_user_visible_422_on_factory_and_platform_save(tmp_path: Path) -> None:
+    class FullService(VisionTrainingService):
+        def save_draft(self, *args, **kwargs):
+            raise CapacityLimitError("本厂检查项目已达五十个上限，请联系管理员归档或核验容量后再新增。")
+
+    def context(_request: Request):
+        from vision_training.models import FactoryContext
+        return FactoryContext(factory_id="F001", actor_id="user-1", roles=("quality",), actor_type="PLATFORM_ADMIN")
+
+    service = FullService()
+    preview = service.preview(__import__("vision_training.models", fromlist=["TaskSpec"]).TaskSpec(**valid_spec()),
+                              factory_context=context(None))
+    payload = {"preview": preview.model_dump(mode="json")}
+    app = FastAPI()
+    app.include_router(create_router(service, factory_context_dependency=context))
+    from vision_training.router import create_platform_router
+    from vision_training.queue import VisionJobStore
+    app.include_router(create_platform_router(service, VisionJobStore(tmp_path / "jobs.sqlite"), platform_context_dependency=context))
+    client = TestClient(app)
+    for path in ("/api/vision-training/drafts", "/api/vision-training/platform/factories/F001/drafts"):
+        response = client.post(path, json=payload)
+        assert response.status_code == 422
+        assert "五十个上限" in response.json()["detail"]
 
 
 def test_authenticated_templates_expose_schema_and_hide_unbound_specialized_template() -> None:

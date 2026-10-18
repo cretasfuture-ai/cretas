@@ -118,4 +118,19 @@ describe('不良品处置: 在数据源过滤, 且那个参数后端真的声明
         '于是「待处置质检」会显示**全部**质检记录(含 PASS), 这正是 2026-08-28 实拍到的。',
     ).toContain('@RequestParam');
   });
+
+  it('从质检入口带入 batchId 和 inspectionId 时，处置页按真实行预选打开', () => {
+    const screen = readFileSync(SCREEN, 'utf8');
+    expect(screen).toContain('route.query.inspectionId');
+    expect(screen).toContain('String(row.id) === inspectionId');
+    expect(screen).toContain('openDispositionDialog(target)');
+  });
+
+  it('质检请求绑定当前 context 和批次，过期响应不能回写列表', () => {
+    const screen = readFileSync(SCREEN, 'utf8');
+    expect(screen).toContain('inspectionLoadToken');
+    expect(screen).toContain('expectedBatchId');
+    expect(screen).toContain('loadToken !== inspectionLoadToken');
+    expect(screen).toContain('expectedBatchId !== scopedBatchId.value');
+  });
 });

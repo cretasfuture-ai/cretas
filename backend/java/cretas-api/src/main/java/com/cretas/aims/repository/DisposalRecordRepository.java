@@ -4,6 +4,7 @@ import com.cretas.aims.entity.DisposalRecord;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.Lock;
@@ -25,7 +26,8 @@ import java.util.Optional;
  * @since 2025-11-05
  */
 @Repository
-public interface DisposalRecordRepository extends JpaRepository<DisposalRecord, Long> {
+public interface DisposalRecordRepository extends JpaRepository<DisposalRecord, Long>,
+        JpaSpecificationExecutor<DisposalRecord> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT d FROM DisposalRecord d WHERE d.id = :id AND d.factoryId = :factoryId")

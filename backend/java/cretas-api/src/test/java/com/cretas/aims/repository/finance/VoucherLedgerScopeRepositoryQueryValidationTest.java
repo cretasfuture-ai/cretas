@@ -42,6 +42,15 @@ class VoucherLedgerScopeRepositoryQueryValidationTest {
     @Autowired private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Autowired private SalesDeliveryItemRepository salesDeliveryItemRepository;
 
+    @Autowired private jakarta.persistence.EntityManager entityManager;
+
+    @org.junit.jupiter.api.BeforeEach
+    void installPostgresJsonCompatibilityOnlyOnH2() {
+        if (entityManager.createNativeQuery("SELECT version()").getSingleResult().toString().contains("H2")) {
+            entityManager.createNativeQuery("CREATE ALIAS IF NOT EXISTS jsonb_extract_path_text FOR 'com.cretas.aims.repository.inventory.ShipmentCostRepositoryQueryValidationTest.jsonText'").executeUpdate();
+        }
+    }
+
     @Test
     void scopedQueriesExcludeOtherVoucherIdsBeforePagingAndAggregation() {
         persist("visible", "ROW-SCOPE-VOUCHER", new BigDecimal("10.00"));

@@ -19,6 +19,7 @@ import { get } from './request';
  */
 
 export interface ProductionInfo {
+  batchId?: number | null;
   batchNumber: string;
   productName: string;
   productType: string;
@@ -27,6 +28,8 @@ export interface ProductionInfo {
   supervisorName?: string;
   equipmentName?: string;
   quantity?: number;
+  goodQuantity?: number | null;
+  defectQuantity?: number | null;
   unit?: string;
   qualityStatus: string;
   factoryName: string;
@@ -49,17 +52,24 @@ export interface MaterialInfo {
 
 export interface QualityInfo {
   inspectionId: string;
-  inspectionDate: string;
-  inspectorName: string;
+  inspectorId?: number | null;
+  inspectionDate: string | null;
+  inspectorName: string | null;
   result: string;
   passRate?: number;
+  sampleSize?: number | null;
+  passCount?: number | null;
+  failCount?: number | null;
   conclusion?: string;
   remarks?: string;
 }
 
 export interface ShipmentInfo {
   shipmentNumber: string;
-  shipmentDate: string;
+  shipmentDate: string | null;
+  plannedDeliveryDate?: string | null;
+  shippedAt?: string | null;
+  shipmentTimeSource?: 'LINEAGE_EVENT' | 'LEGACY_DATE_ONLY' | 'UNRECORDED';
   customerName: string;
   logisticsCompany?: string;
   trackingNumber?: string;
@@ -77,6 +87,8 @@ export interface ProcessingStageInfo {
   durationMinutes?: number;
   inputWeight?: number;
   outputWeight?: number;
+  inputUnit?: string | null;
+  outputUnit?: string | null;
   lossRate?: number;
   passRate?: number;
   temperature?: number;

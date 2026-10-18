@@ -96,6 +96,11 @@ public interface IndicatorRepository extends JpaRepository<Indicator, String> {
      */
     Optional<Indicator> findByFactoryIdAndCode(String factoryId, String code);
 
+    /** Provisioning respects explicit deletion; the unique tenant/code index also includes deleted rows. */
+    @Query(value = "SELECT COUNT(*) > 0 FROM indicators WHERE factory_id = :factoryId AND code = :code",
+            nativeQuery = true)
+    boolean existsIncludingDeleted(@Param("factoryId") String factoryId, @Param("code") String code);
+
     /**
      * 全工厂启用指标 — Canvas admin 视角 (跨工厂概览)。
      */

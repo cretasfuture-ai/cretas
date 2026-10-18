@@ -1,16 +1,28 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.ProcessingStageType;
 import com.cretas.aims.repository.*;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
+import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
+import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.TraceabilityService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,6 +79,29 @@ public class TraceabilityServiceImpl implements TraceabilityService {
      * ⛔ 不返回一个空的 LineageSection —— 那会让「引擎没接上」长成「确实没有上游」。
      */
     private final com.cretas.aims.service.lineage.LineageGraphAssembler lineageGraphAssembler;
+
+    /**
+     * New sales-delivery tables are optional for the legacy traceability test
+     * constructor.  They are read only and deliberately field-injected so the
+     * existing constructor contract remains unchanged.
+     */
+    @Autowired(required = false)
+    private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
+    @Autowired(required = false)
+    private SalesDeliveryItemBatchAllocationRepository salesDeliveryItemBatchAllocationRepository;
+
+    @Autowired(required = false)
+    private SalesDeliveryItemRepository salesDeliveryItemRepository;
+
+    @Autowired(required = false)
+    private SalesDeliveryRecordRepository salesDeliveryRecordRepository;
+
+    @Autowired
+    private BatchLineageEdgeRepository batchLineageEdgeRepository;
+
+    @Autowired
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
 
     /** 血缘查询允许的根节点类型（与 BatchLineageEdge.sourceType 取值集一致）。 */
@@ -157,6 +192,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         List<ShipmentRecord> shipmentRecords = shipmentRecordRepository
                 .findByFactoryIdAndBatchNumber(factoryId, batchNumber);
         List<TraceabilityDTO.ShipmentInfo> shipments = buildShipmentInfoList(shipmentRecords);
+        appendAllocatedSalesDeliveryShipments(factoryId, batch, shipments);
 
         // 7. 溯源码 = 这个批次已打印标签上的码(持久化); 没打过标签就是 null, ⛔ 不现造
         String traceCode = persistedTraceCode(batch.getId());
@@ -307,6 +343,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         }
 
         return TraceabilityDTO.ProductionInfo.builder()
+                .batchId(batch.getId())
                 .batchNumber(batch.getBatchNumber())
                 .productName(batch.getProductName())
                 .productType(batch.getProductTypeId())
@@ -315,6 +352,8 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .supervisorName(batch.getSupervisorName())
                 .equipmentName(batch.getEquipmentName())
                 .quantity(batch.getActualQuantity() != null ? batch.getActualQuantity().doubleValue() : null)
+                .goodQuantity(batch.getGoodQuantity() != null ? batch.getGoodQuantity().doubleValue() : null)
+                .defectQuantity(batch.getDefectQuantity() != null ? batch.getDefectQuantity().doubleValue() : null)
                 .unit(batch.getUnit())
                 .qualityStatus(batch.getQualityStatus() != null ? batch.getQualityStatus().name() : "PENDING")
                 .factoryName(factoryName)
@@ -409,7 +448,9 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .endTime(record.getEndTime())
                 .durationMinutes(record.getDurationMinutes())
                 .inputWeight(record.getInputWeight() != null ? record.getInputWeight().doubleValue() : null)
+                .inputUnit("kg")
                 .outputWeight(record.getOutputWeight() != null ? record.getOutputWeight().doubleValue() : null)
+                .outputUnit("kg")
                 .lossRate(record.getLossRate() != null ? record.getLossRate().doubleValue() : null)
                 .passRate(record.getPassRate() != null ? record.getPassRate().doubleValue() : null)
                 .temperature(record.getProductTemperature() != null ? record.getProductTemperature().doubleValue() : null)
@@ -446,9 +487,14 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                         .startTime(parseProcessDate(s.payload.get("processDate")))
                         .inputWeight(doubleValue(s.payload.get("inputQuantity")))
                         .outputWeight(doubleValue(s.payload.get("outputQuantity")))
-                        .lossRate(calcLossRate(s.payload.get("inputQuantity"), s.payload.get("outputQuantity")))
+                        .inputUnit(processSheetInputUnit(s.payload))
+                        .outputUnit(processSheetOutputUnit(s.payload))
+                        .lossRate(calcLossRate(factoryId, s.payload.get("inputQuantity"), s.payload.get("outputQuantity"),
+                                processSheetInputUnit(s.payload), processSheetOutputUnit(s.payload)))
                         .passRate(null)
-                        .operatorName(buildSourceSummary(s.payload))
+                        // Process-sheet payloads do not carry a verified worker identity.
+                        // Source allocations are provenance, never an operator name.
+                        .operatorName(null)
                         .build())
                 .collect(Collectors.toList());
     }
@@ -498,7 +544,11 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         }
     }
 
-    private Double calcLossRate(Object inputValue, Object outputValue) {
+    private Double calcLossRate(String factoryId, Object inputValue, Object outputValue,
+                                String inputUnit, String outputUnit) {
+        if (inputUnit == null || outputUnit == null || !sameUnit(factoryId, inputUnit, outputUnit)) {
+            return null;
+        }
         Double input = doubleValue(inputValue);
         Double output = doubleValue(outputValue);
         if (input == null || input == 0 || output == null) {
@@ -507,31 +557,67 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         return (input - output) / input;
     }
 
-    @SuppressWarnings("unchecked")
-    private String buildSourceSummary(Map<String, Object> payload) {
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
+    }
+
+    private String processSheetInputUnit(Map<String, Object> payload) {
+        String explicit = firstNonBlank(stringValue(payload.get("inputUnit"), null),
+                stringValue(payload.get("inputQuantityUnit"), null));
+        if (explicit != null) {
+            return explicit;
+        }
         Object upstream = payload.get("upstreamSources");
         if (upstream instanceof List<?> list && !list.isEmpty()) {
-            return "sources: " + list.stream()
-                    .filter(Map.class::isInstance)
-                    .map(item -> {
-                        Map<String, Object> m = (Map<String, Object>) item;
-                        String batch = stringValue(m.get("sourceBatchNumber"), "?");
-                        Object qty = m.get("feedQuantityKg");
-                        return qty == null ? batch : batch + "(" + qty + "kg)";
-                    })
-                    .collect(Collectors.joining(", "));
+            return inferSourceUnit(list, true);
         }
         Object raws = payload.get("rawMaterialInputs");
         if (raws instanceof List<?> list && !list.isEmpty()) {
-            return "raw inputs: " + list.stream()
-                    .filter(Map.class::isInstance)
-                    .map(item -> {
-                        Map<String, Object> m = (Map<String, Object>) item;
-                        String batch = stringValue(m.get("materialBatchId"), "?");
-                        Object qty = m.get("quantity");
-                        return qty == null ? batch : batch + "(" + qty + "kg)";
-                    })
-                    .collect(Collectors.joining(", "));
+            return inferSourceUnit(list, false);
+        }
+        return null;
+    }
+
+    private String inferSourceUnit(List<?> sourceEntries, boolean feedQuantityKgIsLegacyUnit) {
+        Set<String> units = new LinkedHashSet<>();
+        for (Object entry : sourceEntries) {
+            if (!(entry instanceof Map<?, ?> map)) {
+                return null;
+            }
+            String unit = firstNonBlank(stringValue(map.get("unit"), null),
+                    stringValue(map.get("quantityUnit"), null));
+            if (unit == null && feedQuantityKgIsLegacyUnit && map.get("feedQuantityKg") != null) {
+                unit = "kg";
+            }
+            if (unit == null) {
+                return null;
+            }
+            units.add(unit);
+        }
+        return units.size() == 1 ? units.iterator().next() : null;
+    }
+
+    private String processSheetOutputUnit(Map<String, Object> payload) {
+        return firstNonBlank(stringValue(payload.get("outputUnit"), null),
+                stringValue(payload.get("unit"), null),
+                stringValue(payload.get("outputQuantityUnit"), null));
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
         }
         return null;
     }
@@ -568,7 +654,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         List<TraceabilityDTO.QualityInfo> qualityInfos = new ArrayList<>();
         for (QualityInspection inspection : inspections) {
             // 从 Map 获取检验员名称
-            String inspectorName = "检验员";
+            String inspectorName = null;
             if (inspection.getInspectorId() != null) {
                 User inspector = inspectorMap.get(inspection.getInspectorId());
                 if (inspector != null) {
@@ -578,10 +664,14 @@ public class TraceabilityServiceImpl implements TraceabilityService {
 
             qualityInfos.add(TraceabilityDTO.QualityInfo.builder()
                     .inspectionId(inspection.getId())
-                    .inspectionDate(inspection.getInspectionDate().atStartOfDay())
+                    .inspectorId(inspection.getInspectorId())
+                    .inspectionDate(inspection.getInspectionDate() != null ? inspection.getInspectionDate().atStartOfDay() : null)
                     .inspectorName(inspectorName)
                     .result(inspection.getResult())
                     .passRate(inspection.getPassRate() != null ? inspection.getPassRate().doubleValue() : null)
+                    .sampleSize(inspection.getSampleSize() != null ? inspection.getSampleSize().doubleValue() : null)
+                    .passCount(inspection.getPassCount() != null ? inspection.getPassCount().doubleValue() : null)
+                    .failCount(inspection.getFailCount() != null ? inspection.getFailCount().doubleValue() : null)
                     .conclusion(inspection.getResult())
                     .remarks(inspection.getNotes())
                     .build());
@@ -623,6 +713,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
             shipments.add(TraceabilityDTO.ShipmentInfo.builder()
                     .shipmentNumber(record.getShipmentNumber())
                     .shipmentDate(record.getShipmentDate())
+                    .shipmentTimeSource(record.getShipmentDate() == null ? "UNRECORDED" : "LEGACY_DATE_ONLY")
                     .customerName(customerName)
                     .logisticsCompany(record.getLogisticsCompany())
                     .trackingNumber(record.getTrackingNumber())
@@ -633,6 +724,165 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         }
 
         return shipments;
+    }
+
+    /**
+     * Append shipments recorded by the current sales-delivery flow.  The old
+     * ShipmentRecord table remains the first source for backwards compatibility;
+     * allocations are then projected one by one so split batches and units are
+     * not collapsed into a delivery-level total.
+     */
+    private void appendAllocatedSalesDeliveryShipments(String factoryId, ProductionBatch batch,
+                                                        List<TraceabilityDTO.ShipmentInfo> shipments) {
+        if (finishedGoodsBatchRepository == null
+                || salesDeliveryItemBatchAllocationRepository == null
+                || salesDeliveryItemRepository == null
+                || salesDeliveryRecordRepository == null
+                || batch.getProductionPlanId() == null
+                || batch.getProductionPlanId().isBlank()) {
+            return;
+        }
+
+        List<FinishedGoodsBatch> finishedGoodsBatches = Optional.ofNullable(
+                finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                        factoryId, batch.getProductionPlanId())).orElseGet(List::of);
+        if (finishedGoodsBatches.isEmpty()) {
+            return;
+        }
+
+        Set<String> legacyKeys = shipments.stream()
+                .map(this::shipmentKey)
+                .collect(Collectors.toSet());
+        Set<String> allocationKeys = new HashSet<>();
+        Map<String, Customer> customerMap = new HashMap<>();
+        Map<String, List<BatchLineageEdge>> shipmentEvents = new HashMap<>();
+
+        for (FinishedGoodsBatch finishedGoodsBatch : finishedGoodsBatches) {
+            if (finishedGoodsBatch == null || isBlank(finishedGoodsBatch.getId())
+                    || !Objects.equals(factoryId, finishedGoodsBatch.getFactoryId())
+                    || !Objects.equals(batch.getBatchNumber(), finishedGoodsBatch.getBatchNumber())
+                    || !Objects.equals(batch.getProductTypeId(), finishedGoodsBatch.getProductTypeId())) {
+                continue;
+            }
+            List<SalesDeliveryItemBatchAllocation> allocations = Optional.ofNullable(
+                    salesDeliveryItemBatchAllocationRepository.findByFactoryIdAndFinishedGoodsBatchId(
+                            factoryId, finishedGoodsBatch.getId())).orElseGet(List::of);
+            for (SalesDeliveryItemBatchAllocation allocation : allocations) {
+                if (allocation == null
+                        || !Objects.equals(factoryId, allocation.getFactoryId())
+                        || !Objects.equals(finishedGoodsBatch.getId(), allocation.getFinishedGoodsBatchId())
+                        || allocation.getAllocatedQty() == null
+                        || allocation.getAllocatedQty().signum() <= 0) {
+                    continue;
+                }
+                Long deliveryItemId;
+                try {
+                    deliveryItemId = Long.valueOf(allocation.getDeliveryItemId());
+                } catch (Exception e) {
+                    continue;
+                }
+                SalesDeliveryItem item = salesDeliveryItemRepository.findById(deliveryItemId).orElse(null);
+                // The legacy item field stores only the first deducted batch.
+                // Exact per-batch allocations are authoritative for split shipments.
+                if (item == null || isBlank(item.getDeliveryRecordId())
+                        || !Objects.equals(item.getProductTypeId(), finishedGoodsBatch.getProductTypeId())) {
+                    continue;
+                }
+                SalesDeliveryRecord delivery = salesDeliveryRecordRepository.findById(item.getDeliveryRecordId())
+                        .orElse(null);
+                if (delivery == null || !Objects.equals(factoryId, delivery.getFactoryId())
+                        || (delivery.getStatus() != SalesDeliveryStatus.SHIPPED
+                        && delivery.getStatus() != SalesDeliveryStatus.DELIVERED)) {
+                    continue;
+                }
+
+                String unit = firstNonBlank(allocation.getUnit(), item.getUnit(), finishedGoodsBatch.getUnit());
+                LocalDateTime shippedAt = actualShipmentTime(factoryId, delivery.getId(),
+                        finishedGoodsBatch.getId(), shipmentEvents);
+                TraceabilityDTO.ShipmentInfo shipment = TraceabilityDTO.ShipmentInfo.builder()
+                        .shipmentNumber(delivery.getDeliveryNumber())
+                        .shipmentDate(shippedAt == null ? null : shippedAt.toLocalDate())
+                        .plannedDeliveryDate(delivery.getDeliveryDate())
+                        .shippedAt(shippedAt)
+                        .shipmentTimeSource(shippedAt == null ? "UNRECORDED" : "LINEAGE_EVENT")
+                        .customerName(resolveSalesDeliveryCustomerName(factoryId, delivery, customerMap))
+                        .logisticsCompany(delivery.getLogisticsCompany())
+                        .trackingNumber(delivery.getTrackingNumber())
+                        .status(delivery.getStatus().name())
+                        // SHIPPED/DELIVERED can only follow shipDelivery's allocation
+                        // deduction.  Warehouse short-ship confirmation updates the
+                        // item quantity and requires allocations to be reworked before
+                        // shipping, so allocatedQty is the per-source actual here;
+                        // item.deliveredQuantity is not a per-batch source quantity.
+                        .quantity(allocation.getAllocatedQty().doubleValue())
+                        .unit(unit)
+                        .build();
+
+                // A legacy row may represent this same delivery allocation.  Keep the
+                // legacy row and skip only that exact projection; independent split
+                // allocations retain their item/batch identity and remain visible.
+                if (legacyKeys.contains(shipmentKey(shipment))) {
+                    continue;
+                }
+                String allocationKey = shipmentKey(shipment) + "|item=" + deliveryItemId
+                        + "|fg=" + finishedGoodsBatch.getId() + "|allocation=" + allocation.getId();
+                if (allocationKeys.add(allocationKey)) {
+                    shipments.add(shipment);
+                }
+            }
+        }
+    }
+
+    private LocalDateTime actualShipmentTime(String factoryId, String deliveryId, String finishedBatchId,
+                                              Map<String, List<BatchLineageEdge>> eventsByDelivery) {
+        if (batchLineageEdgeRepository == null) {
+            throw new IllegalStateException("出货时间来源未接通");
+        }
+        List<BatchLineageEdge> events = eventsByDelivery.computeIfAbsent(deliveryId,
+                id -> batchLineageEdgeRepository.findByFactoryIdAndTargetIdAndTargetType(factoryId, id, "SHIPMENT_RECORD"));
+        return events.stream()
+                .filter(Objects::nonNull)
+                .filter(edge -> Objects.equals(factoryId, edge.getFactoryId())
+                        && "FINISHED_TO_SHIPMENT".equals(edge.getEdgeType())
+                        && "FINISHED_BATCH".equals(edge.getSourceType())
+                        && Objects.equals(finishedBatchId, edge.getSourceId())
+                        && "SHIPMENT_RECORD".equals(edge.getTargetType())
+                        && Objects.equals(deliveryId, edge.getTargetId())
+                        && edge.getMeta() != null
+                        && "SALES_DELIVERY_RECORD".equals(edge.getMeta().get("shipmentCarrier")))
+                .map(BatchLineageEdge::getEventTime)
+                .filter(Objects::nonNull)
+                .min(LocalDateTime::compareTo).orElse(null);
+    }
+
+    private String resolveSalesDeliveryCustomerName(String factoryId, SalesDeliveryRecord delivery,
+                                                      Map<String, Customer> customerMap) {
+        if (!isBlank(delivery.getCustomerName())) {
+            return delivery.getCustomerName();
+        }
+        if (!isBlank(delivery.getCustomerId())) {
+            Customer customer = customerMap.get(delivery.getCustomerId());
+            if (customer == null) {
+                customer = customerRepository.findByIdAndFactoryId(delivery.getCustomerId(), factoryId).orElse(null);
+                if (customer != null) {
+                    customerMap.put(delivery.getCustomerId(), customer);
+                }
+            }
+            if (customer != null && !isBlank(customer.getName())) {
+                return customer.getName();
+            }
+        }
+        return null;
+    }
+
+    private String shipmentKey(TraceabilityDTO.ShipmentInfo shipment) {
+        return String.join("|", String.valueOf(shipment.getShipmentNumber()),
+                String.valueOf(shipment.getShipmentDate()),
+                String.valueOf(shipment.getQuantity()), String.valueOf(shipment.getUnit()));
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /**

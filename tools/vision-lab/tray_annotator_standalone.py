@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-contained loopback tray-box annotator for manifest-backed queues."""
+"""Loopback tray annotator sharing its editing core with the daily Web UI."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,8 @@ import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+EDITOR_CORE_PATH = (Path(__file__).resolve().parents[2] / "web-admin/src/components/vision-training/boxEditorCore.js")
 
 
 PAGE = r"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -26,21 +28,21 @@ main{max-width:1600px;margin:auto;padding:10px}.hint{padding:8px 12px;margin-bot
 <span class="warn">整张图每个可见托盘都要框完整；被画面截断的托盘也沿可见边界框</span><span id="status"></span></header>
 <main><div class="hint">鼠标滚轮以光标位置缩放；放大后用滚动条移动视野。拖空白处新增框；拖框内部移动；拖四角调整边界；Delete 删除；Ctrl+Z 撤销。</div>
 <div id="stage"><canvas id="cv"></canvas></div><p class="small" id="meta"></p></main>
-<script>
-let items=[],cur=0,boxes=[],sel=-1,img=new Image(),drag=null,history=[],drawMode=null,replaceIndex=-1,zoom=1;const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),stage=document.getElementById('stage');
-const clamp=v=>Math.max(0,Math.min(1,v)); const copy=()=>boxes.map(b=>b.slice());
+<script type="module">
+import {clamp,hitBox,moveBox,resizeBox,normaliseBox,zoomAnchor,createBoxHistory} from '/assets/box-editor-core.js';
+let items=[],cur=0,boxes=[],sel=-1,img=new Image(),drag=null,history=createBoxHistory(),drawMode=null,replaceIndex=-1,zoom=1;const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),stage=document.getElementById('stage');
+const copy=()=>boxes.map(b=>b.slice());
 function point(e){const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]}
-function cornerHit(b,x,y){const r=cv.getBoundingClientRect(),t=12/Math.max(r.width,1),c=[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]]];for(let i=0;i<4;i++)if(Math.hypot(x-c[i][0],y-c[i][1])<=t)return i;return -1}
-function hit(x,y){for(let i=boxes.length-1;i>=0;i--){const c=cornerHit(boxes[i],x,y);if(c>=0)return [i,'resize',c];const b=boxes[i];if(x>=b[0]&&x<=b[2]&&y>=b[1]&&y<=b[3])return [i,'move',-1]}return [-1,'new',-1]}
+function hit(x,y){const r=cv.getBoundingClientRect(),h=hitBox(boxes,x,y,r.width,r.height);return [h.index,h.mode,h.corner]}
 function draw(){ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(img,0,0,cv.width,cv.height);boxes.forEach((b,i)=>{const x=b[0]*cv.width,y=b[1]*cv.height,w=(b[2]-b[0])*cv.width,h=(b[3]-b[1])*cv.height;ctx.setLineDash(i===sel?[10,6]:[]);ctx.lineWidth=Math.max(1,cv.width/cv.getBoundingClientRect().width)*(i===sel?1.25:1);ctx.strokeStyle=i===sel?'#ffd23f':'#00a7c4';ctx.fillStyle=i===sel?'rgba(255,210,63,.30)':'rgba(0,167,196,.26)';ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h);ctx.setLineDash([])})}
 async function boot(){items=await (await fetch('/api/items')).json();const pending=items.findIndex(x=>!x.confirmed);cur=pending<0?0:pending;await load()}
-async function load(){const it=items[cur],ann=await (await fetch('/api/ann/'+encodeURIComponent(it.id))).json();boxes=(ann.boxes||[]).map(b=>b.slice());sel=-1;history=[];resetZoom();img.onload=()=>{cv.width=img.naturalWidth;cv.height=img.naturalHeight;draw()};img.src='/image/'+encodeURIComponent(it.id)+'?v='+Date.now();document.getElementById('meta').textContent=`${cur+1}/${items.length}  ${it.id}  task=${it.task_id||'-'}  sku=${it.sku_code||'-'}`;status()}
+async function load(){const it=items[cur],ann=await (await fetch('/api/ann/'+encodeURIComponent(it.id))).json();boxes=(ann.boxes||[]).map(b=>b.slice());sel=-1;history.clear();resetZoom();img.onload=()=>{cv.width=img.naturalWidth;cv.height=img.naturalHeight;draw()};img.src='/image/'+encodeURIComponent(it.id)+'?v='+Date.now();document.getElementById('meta').textContent=`${cur+1}/${items.length}  ${it.id}  task=${it.task_id||'-'}  sku=${it.sku_code||'-'}`;status()}
 function status(msg=''){const done=items.filter(x=>x.confirmed).length;document.getElementById('status').textContent=`${msg} 完成 ${done}/${items.length} · 当前 ${boxes.length} 框`}
 async function save(next){const it=items[cur],r=await fetch('/api/ann/'+encodeURIComponent(it.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes})});if(!r.ok){alert('保存失败：'+await r.text());return}it.confirmed=true;it.excluded=false;status('已保存');if(next)go(1)}
 async function excludeCurrent(){const it=items[cur];if(!confirm('确认此图不属于有效工作台场景？\n它会被明确排除，不会作为空框背景进入训练。'))return;const r=await fetch('/api/exclude/'+encodeURIComponent(it.id),{method:'POST'});if(!r.ok){alert('排除失败：'+await r.text());return}it.confirmed=true;it.excluded=true;go(1)}
 function go(d){cur=(cur+d+items.length)%items.length;load()}
-function snapshot(){history.push(copy());if(history.length>50)history.shift()}
-function setZoom(next,clientX,clientY){next=Math.max(1,Math.min(6,next));const sr=stage.getBoundingClientRect(),localX=(clientX??(sr.left+stage.clientWidth/2))-sr.left,localY=(clientY??(sr.top+stage.clientHeight/2))-sr.top,ratioX=(stage.scrollLeft+localX)/Math.max(cv.offsetWidth,1),ratioY=(stage.scrollTop+localY)/Math.max(cv.offsetHeight,1);zoom=next;cv.style.width=(zoom*100)+'%';document.getElementById('zoom-label').textContent=Math.round(zoom*100)+'%';requestAnimationFrame(()=>{stage.scrollLeft=ratioX*cv.offsetWidth-localX;stage.scrollTop=ratioY*cv.offsetHeight-localY})}
+function snapshot(){history.push(copy())}
+function setZoom(next,clientX,clientY){next=Math.max(1,Math.min(6,next));const sr=stage.getBoundingClientRect(),localX=(clientX??(sr.left+stage.clientWidth/2))-sr.left,localY=(clientY??(sr.top+stage.clientHeight/2))-sr.top,ratioX=zoomAnchor(stage.scrollLeft,localX,cv.offsetWidth),ratioY=zoomAnchor(stage.scrollTop,localY,cv.offsetHeight);zoom=next;cv.style.width=(zoom*100)+'%';document.getElementById('zoom-label').textContent=Math.round(zoom*100)+'%';requestAnimationFrame(()=>{stage.scrollLeft=ratioX*cv.offsetWidth-localX;stage.scrollTop=ratioY*cv.offsetHeight-localY})}
 function zoomIn(){setZoom(zoom*1.25)} function zoomOut(){setZoom(zoom/1.25)} function resetZoom(){zoom=1;cv.style.width='100%';stage.scrollLeft=0;stage.scrollTop=0;document.getElementById('zoom-label').textContent='100%'}
 function beginAdd(){drawMode='add';replaceIndex=-1;status('请在图片上拖出新框 ·')}
 function beginReplace(){if(sel<0){alert('请先点击选中需要重拉的托盘框');return}drawMode='replace';replaceIndex=sel;status('旧框会保留，画完新框后才替换 ·')}
@@ -48,10 +50,11 @@ function undo(){if(history.length){boxes=history.pop();sel=-1;draw();status()}}
 function removeSelected(){if(sel>=0){snapshot();boxes.splice(sel,1);sel=-1;draw();status()}}
 function clearAll(){if(boxes.length&&confirm('确认清空本张全部托盘框？')){snapshot();boxes=[];sel=-1;draw();status()}}
 cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);const [x,y]=point(e);if(drawMode){snapshot();const action=drawMode,target=replaceIndex;drawMode=null;replaceIndex=-1;boxes.push([x,y,x,y]);sel=boxes.length-1;drag={mode:'new',corner:-1,start:[x,y],before:copy(),action,target};draw();return}const [i,mode,corner]=hit(x,y);snapshot();sel=i;drag={mode,corner,start:[x,y],before:copy(),action:mode,target:i};if(mode==='new'){boxes.push([x,y,x,y]);sel=boxes.length-1}draw()});
-cv.addEventListener('pointermove',e=>{if(!drag)return;const [x,y]=point(e),b=boxes[sel],o=drag.before[sel],dx=x-drag.start[0],dy=y-drag.start[1];if(drag.mode==='new'){b[0]=Math.min(drag.start[0],x);b[1]=Math.min(drag.start[1],y);b[2]=Math.max(drag.start[0],x);b[3]=Math.max(drag.start[1],y)}else if(drag.mode==='move'){const w=o[2]-o[0],h=o[3]-o[1],nx=clamp(o[0]+dx),ny=clamp(o[1]+dy);b[0]=Math.min(nx,1-w);b[1]=Math.min(ny,1-h);b[2]=b[0]+w;b[3]=b[1]+h}else{const c=drag.corner;if(c===0||c===3)b[0]=clamp(x);else b[2]=clamp(x);if(c===0||c===1)b[1]=clamp(y);else b[3]=clamp(y)}draw()});
-cv.addEventListener('pointerup',()=>{if(!drag)return;const action=drag.action,target=drag.target,b=boxes[sel];if(b&&(Math.abs(b[2]-b[0])<.003||Math.abs(b[3]-b[1])<.003))boxes.splice(sel,1);else if(b){const x0=Math.min(b[0],b[2]),y0=Math.min(b[1],b[3]),x1=Math.max(b[0],b[2]),y1=Math.max(b[1],b[3]);boxes[sel]=[clamp(x0),clamp(y0),clamp(x1),clamp(y1)];if(action==='replace'&&target>=0&&target<boxes.length-1){const replacement=boxes[sel];boxes[target]=replacement;boxes.splice(sel,1);sel=target}}drag=null;draw();status(action==='replace'?'已重拉，确认无误后保存 ·':'')});
+cv.addEventListener('pointermove',e=>{if(!drag)return;const [x,y]=point(e),b=boxes[sel],o=drag.before[sel],dx=x-drag.start[0],dy=y-drag.start[1];if(drag.mode==='new'){b[0]=Math.min(drag.start[0],x);b[1]=Math.min(drag.start[1],y);b[2]=Math.max(drag.start[0],x);b[3]=Math.max(drag.start[1],y)}else if(drag.mode==='move'){boxes[sel]=moveBox(o,dx,dy)}else{boxes[sel]=resizeBox(o,drag.corner,x,y)}draw()});
+cv.addEventListener('pointerup',()=>{if(!drag)return;const action=drag.action,target=drag.target,b=boxes[sel],valid=b&&normaliseBox(b);if(b&&!valid)boxes.splice(sel,1);else if(valid){boxes[sel]=valid;if(action==='replace'&&target>=0&&target<boxes.length-1){const replacement=boxes[sel];boxes[target]=replacement;boxes.splice(sel,1);sel=target}}drag=null;draw();status(action==='replace'?'已重拉，确认无误后保存 ·':'')});
 cv.addEventListener('wheel',e=>{e.preventDefault();setZoom(e.deltaY<0?zoom*1.18:zoom/1.18,e.clientX,e.clientY)},{passive:false});
-addEventListener('keydown',e=>{if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();removeSelected()}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo()}else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)});boot();
+addEventListener('keydown',e=>{if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();removeSelected()}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo()}else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)});
+Object.assign(window,{go,zoomOut,zoomIn,resetZoom,beginAdd,beginReplace,undo,removeSelected,clearAll,save,excludeCurrent});boot();
 </script></body></html>"""
 
 
@@ -143,6 +146,8 @@ def _load_or_create_review_round(
 
 
 def serve(queue: Path, port: int, review_limit: int | None = None) -> None:
+    # Fixed first-party asset only; never serve an arbitrary filesystem path.
+    editor_core = EDITOR_CORE_PATH.read_bytes()
     manifest = json.loads((queue / "manifest.json").read_text(encoding="utf-8"))
     all_rows = manifest["rows"]
     annotations = queue / "annotations-human"
@@ -186,6 +191,8 @@ def serve(queue: Path, port: int, review_limit: int | None = None) -> None:
                 )
                 page = PAGE.replace("__QUEUE__", queue.name).replace("__SCOPE__", scope)
                 return self.send_bytes(200, page.encode("utf-8"), "text/html; charset=utf-8")
+            if path == "/assets/box-editor-core.js":
+                return self.send_bytes(200, editor_core, "text/javascript; charset=utf-8")
             if path == "/api/items":
                 return self.send_bytes(200, json.dumps(items).encode(), "application/json")
             if path == "/api/stats":

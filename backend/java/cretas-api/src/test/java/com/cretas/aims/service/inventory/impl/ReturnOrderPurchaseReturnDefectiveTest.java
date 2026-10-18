@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.exception.BusinessException;
@@ -15,6 +16,9 @@ import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.finance.AccountingPeriodService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -75,6 +79,9 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     @Mock private MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    @Mock private EntityManager entityManager;
+    @Mock private Query rowLockQuery;
+    @Mock private AccountingPeriodService accountingPeriodService;
 
     private ReturnOrderServiceImpl service;
 
@@ -96,6 +103,11 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         ReflectionTestUtils.setField(service, "materialBatchAdjustmentRepository", materialBatchAdjustmentRepository);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
+        ReflectionTestUtils.setField(service, "entityManager", entityManager);
+        ReflectionTestUtils.setField(service, "accountingPeriodService", accountingPeriodService);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(rowLockQuery);
+        when(rowLockQuery.setParameter(anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(rowLockQuery);
         // #2 fix: 采购退货从采购入库仓 (原料仓) warehouse-scoped 扣减。resolver 解析出原料仓。
         when(warehouseResolver.resolvePurchaseInboundWh(FACTORY)).thenReturn(WH_RAW);
     }
@@ -114,6 +126,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         o.setCounterpartyId("SUP-001");
         o.setTotalAmount(new BigDecimal("500.00"));
         o.setReason("质量不合格");
+        o.setReturnDate(java.time.LocalDate.of(2026, 10, 18));
         o.setApprovedBy(APPROVER);
         o.setItems(items);
         return o;
@@ -149,6 +162,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     private void stubFindAndSave(ReturnOrder order) {
         when(returnOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
         when(returnOrderRepository.save(order)).thenReturn(order);
+        when(rowLockQuery.getResultList()).thenReturn(List.of(order.getId()));
     }
 
     // ===== tests =====
@@ -262,6 +276,56 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     }
 
     @Test
+    @DisplayName("采购实物退货先过期间锁账守卫，再写应付冲减和原料出库")
+    void purchaseReturnWithGoods_periodGuardPrecedesFinanceAndInventoryWrites() {
+        MaterialBatch batch = availableBatch("B-PERIOD", MATERIAL_TYPE, new BigDecimal("100.00"));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY, MATERIAL_TYPE, WH_RAW))
+                .thenReturn(new ArrayList<>(List.of(batch)));
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true,
+                ReturnOrderStatus.FINANCE_APPROVED,
+                List.of(item(MATERIAL_TYPE, new BigDecimal("5.00"), "期间守卫")));
+        stubFindAndSave(order);
+
+        service.completeReturnOrder(FACTORY, order.getId());
+
+        org.mockito.InOrder sequence = org.mockito.Mockito.inOrder(
+                accountingPeriodService, arApService, materialBatchRepository);
+        sequence.verify(accountingPeriodService).assertOpen(FACTORY, 2026, 10);
+        sequence.verify(arApService).recordAdjustment(
+                org.mockito.ArgumentMatchers.eq(FACTORY),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(BigDecimal.class),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq("RETURN_ORDER"),
+                org.mockito.ArgumentMatchers.eq(order.getId()));
+        sequence.verify(materialBatchRepository).findAvailableBatchesFEFOByWarehouse(
+                FACTORY, MATERIAL_TYPE, WH_RAW);
+    }
+
+    @Test
+    @DisplayName("采购实物退货缺少会计日期时在原料出库和应付冲减前阻断")
+    void purchaseReturnWithGoods_requiresReturnDateBeforeWrites() {
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true,
+                ReturnOrderStatus.FINANCE_APPROVED,
+                List.of(item(MATERIAL_TYPE, new BigDecimal("5.00"), "缺日期")));
+        order.setReturnDate(null);
+        stubFindAndSave(order);
+
+        assertThatThrownBy(() -> service.completeReturnOrder(FACTORY, order.getId()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("会计日期");
+        verify(arApService, never()).recordAdjustment(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(BigDecimal.class),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFOByWarehouse(
+                anyString(), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("PURCHASE_RETURN + withGoods=false: 无库存动作 (refund-only path)")
     void purchaseReturnWithoutGoods_noInventoryAction() {
         List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("10.00"), "x"));
@@ -285,8 +349,8 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     }
 
     @Test
-    @DisplayName("SALES_RETURN regression: 仍走 FinishedGoodsBatch 加库存, 不触发 PURCHASE_RETURN 扣减")
-    void salesReturnWithGoods_addsFinishedGoods_doesNotDeductMaterial() {
+    @DisplayName("SALES_RETURN 缺源销售单证据时拒绝，不写成品或原料库存")
+    void salesReturnWithGoods_withoutSourceOrderIsRejectedBeforeInventoryWrites() {
         // 2026-08-19: 落点从 WH-LOG 物流仓改为成品仓 —— 本用例守的是「SALES_RETURN 走加库存、
         // 不走 PURCHASE_RETURN 扣减」这个方向, 与落哪个仓无关, 只需把 stub 跟上。
         // 落点本身由 ReturnOrderSalesReturnFinishedGoodsWarehouseContractTest 专门钉。
@@ -295,16 +359,24 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         it.setProductTypeId("PT-001");  // SALES_RETURN uses productTypeId, not materialTypeId
         it.setQuantity(new BigDecimal("2.0000"));
         it.setUnitPrice(new BigDecimal("100.00"));
+        it.setBatchNumber("SRC-PT-001");
         List<ReturnOrderItem> items = List.of(it);
         ReturnOrder order = buildOrder(ReturnType.SALES_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         order.setCounterpartyId("CUST-001");  // SALES_RETURN counterparty is customer
+        FinishedGoodsBatch source = new FinishedGoodsBatch();
+        source.setId("SOURCE-PT-001");
+        source.setFactoryId(FACTORY);
+        source.setBatchNumber("SRC-PT-001");
+        source.setProductTypeId("PT-001");
+        source.setUnit("kg");
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(
+                FACTORY, "SRC-PT-001")).thenReturn(Optional.of(source));
         stubFindAndSave(order);
 
-        ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
-
-        assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
-        // SALES_RETURN 加库存到 FinishedGoodsBatch, 不触发 MaterialBatch 扣减。
-        verify(finishedGoodsBatchRepository, times(1)).save(org.mockito.ArgumentMatchers.any());
+        assertThatThrownBy(() -> service.completeReturnOrder(FACTORY, order.getId()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("销售实物退货必须关联源销售订单");
+        verify(finishedGoodsBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
         verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
         verify(materialBatchRepository, never()).findAvailableBatchesFEFOByWarehouse(anyString(), anyString(), anyString());
     }

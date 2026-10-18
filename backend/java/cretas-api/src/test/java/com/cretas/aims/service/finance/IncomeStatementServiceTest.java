@@ -46,6 +46,28 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class IncomeStatementServiceTest {
 
+    @Test void disposalExpenseWithoutAccountCatalogDoesNotReduceShipmentGrossProfit() {
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY),any(LocalDate.class),any(LocalDate.class)))
+                .thenReturn(List.of(row("6001","主营业务收入","0","720"),row("6401","主营业务成本","346.12","0"),row("6711","存货报废损失","4.71","0")));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of());
+        var report=service.generate(FACTORY,2026,10,2026,10);
+        assertEquals(new BigDecimal("346.12"),report.getTotalCost());
+        assertEquals(new BigDecimal("4.71"),report.getTotalExpense());
+        assertEquals(new BigDecimal("373.88"),report.getGrossProfit());
+        assertEquals(new BigDecimal("369.17"),report.getNetProfit());
+        assertEquals("6711",report.getExpenses().getFirst().getAccountCode());
+    }
+
+    @Test void physicalReturnOnlyMonthKeepsNegativeCogsAndPositiveProfit() {
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY),any(LocalDate.class),any(LocalDate.class)))
+                .thenReturn(List.of(row("6401","主营业务成本","0","7.42")));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of());
+        var income=service.generate(FACTORY,2026,1,2026,5);
+        assertEquals(new BigDecimal("-7.42"),income.getTotalCost());
+        assertEquals(new BigDecimal("7.42"),income.getNetProfit());
+        assertTrue(income.isCostDataAvailable());
+    }
+
     @Mock
     private VoucherEntryRepository voucherEntryRepo;
 
@@ -212,6 +234,46 @@ class IncomeStatementServiceTest {
         assertEquals(new BigDecimal("-1500.00"), dto.getOperatingProfit());
         assertEquals(new BigDecimal("-1500.00"), dto.getNetProfit(), "亏损");
         assertTrue(dto.getNetProfit().signum() < 0);
+    }
+
+    @Test
+    void generate_defaultVoucherSubjectsWithoutAccountCatalog_separatesRevenueAndShippedCost() {
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(
+                eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(
+                        row("6001", "主营业务收入", "0", "720.00"),
+                        row("6401", "主营业务成本", "346.12", "0"),
+                        row("1405", "库存商品", "1050.00", "346.12"),
+                        row("2202", "应付账款", "0", "1050.00"),
+                        row("1122", "应收账款", "720.00", "0")));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of());
+
+        IncomeStatementDTO dto = service.generate(FACTORY, 2026, 10, 2026, 10);
+
+        assertEquals(new BigDecimal("720.00"), dto.getTotalRevenue());
+        assertEquals(new BigDecimal("346.12"), dto.getTotalCost());
+        assertEquals(new BigDecimal("373.88"), dto.getGrossProfit());
+        assertEquals(new BigDecimal("373.88"), dto.getNetProfit());
+        assertEquals("6001", dto.getRevenues().get(0).getAccountCode());
+        assertEquals(1, dto.getCosts().size(), "采购入库不是本期销售成本");
+        assertEquals(IncomeStatementDTO.GrossMarginStatus.CALCULABLE, dto.getGrossMarginStatus());
+    }
+
+    @Test
+    void generate_defaultRevenueSubject_netsSalesReturnAndHonorsFactoryClassification() {
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(
+                eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(row("6001", "主营业务收入", "15.00", "720.00")));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of());
+        assertEquals(new BigDecimal("705.00"),
+                service.generate(FACTORY, 2026, 10, 2026, 10).getTotalRevenue());
+
+        Account custom = Account.builder().code("6001").name("本厂自定义费用")
+                .factoryId(FACTORY).category(AccountCategory.EXPENSE).build();
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of(custom));
+        IncomeStatementDTO dto = service.generate(FACTORY, 2026, 10, 2026, 10);
+        assertTrue(dto.getRevenues().isEmpty(), "本厂明确配置优先于默认科目推断");
+        assertEquals(new BigDecimal("-705.00"), dto.getTotalExpense());
     }
 
     @Test

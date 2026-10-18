@@ -7,10 +7,8 @@
  *
  * 重要说明 (读代码后确认的真实行为, 不是假设):
  * - 本 controller 只针对 QualityInspection 记录(与 production_batch_id 关联)做处置
- *   决策评估/执行/审批, 写入 DecisionAuditLog 作审计与审批流转。它 **不会** 直接修改
- *   MaterialBatch / FinishedGoodsBatch 的库存状态 —— 那是 AI Tool
- *   `ReleaseDecisionTool` (ai/tool/impl/workdesk) 的独立职责范围, 与本 controller
- *   无代码关联。UI 文案措辞需诚实反映这一点 (只是"记录决策", 不是"自动挪库存")。
+ *   决策评估/执行/审批，并由后端按处置规则桥接库存隔离/放行状态；前端只提交
+ *   处置与审批，不手工修改库存数量。
  * - `/apply` 端点与 `/execute` 端点语义有重叠 (`/execute` 内部已按配置的审批链判断
  *   是否需要审批并自动转入 PENDING_APPROVAL) —— 本 UI 只走 `/execute` 作为唯一提交
  *   入口, 不使用 `/apply`, 避免同一决策有两条互相不清楚谁生效的提交路径。
@@ -204,5 +202,26 @@ export async function approveDisposition(
 ): Promise<DispositionApprovalResultDTO> {
   const res = await post<DispositionApprovalResultDTO>(`${basePath(factoryId)}/${id}/approve`, payload);
   if (!res.success || !res.data) throw new Error(res.message || '审批处置失败');
+  return res.data;
+}
+
+export interface DispositionHistoryRow {
+  id: string;
+  batchId: number;
+  inspectionId: string;
+  action: string;
+  actionDescription?: string;
+  requiresApproval: boolean | null;
+  approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  approverName?: string | null;
+  approvedAt?: string | null;
+  createdAt: string;
+  reason?: string | null;
+}
+
+/** Reuse the existing audit projection; absence and retrieval failure remain distinct. */
+export async function getDispositionHistory(factoryId: string, batchId: number): Promise<DispositionHistoryRow[]> {
+  const res = await get<DispositionHistoryRow[]>(`${basePath(factoryId)}/history/${batchId}`);
+  if (!res.success || !Array.isArray(res.data)) throw new Error(res.message || '复核历史读取失败');
   return res.data;
 }

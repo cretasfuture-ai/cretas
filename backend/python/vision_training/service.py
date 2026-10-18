@@ -32,7 +32,7 @@ from .models import (
     TrainingProjectDraft,
     ValidationReport,
 )
-from .store import DraftStore, InMemoryDraftStore
+from .store import CapacityLimitError, DraftStore, InMemoryDraftStore
 from .templates import SOP_VERSION, TemplateCatalog
 
 if TYPE_CHECKING:
@@ -194,6 +194,8 @@ class VisionTrainingService:
         )
         try:
             return self.store.create_if_absent(draft)
+        except CapacityLimitError:
+            raise
         except ValueError as exc:
             raise PreviewMismatchError("draft identity does not match the preview") from exc
 

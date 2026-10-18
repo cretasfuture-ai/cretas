@@ -5,10 +5,10 @@ import java.math.BigDecimal;
 /**
  * 结转成本 (期末 COGS 权责化) 小结 — carryCost 返回, 供结账流程 / 日志暴露。
  *
- * @param totalCogs        本期已结转的销售成本 (借 6401 / 贷 1405 的金额, 2 位小数)
+ * @param totalCogs        实际出货减已入库实物退回的净销售成本；负数表示退回多于本期出货，反向恢复库存，2位小数
  * @param costedItemCount  参与结转的发货明细行数 (有成本)
- * @param missingQuantity  <b>诚实 null</b>: 已发货但无单位成本、未结转的成品数量合计
- * @param missingItemCount 已发货但无单位成本、未结转的发货明细行数 ("N 笔无成本未结转")
+ * @param missingQuantity  兼容保留字段；当前成功结转必须成本完整，因此为0（不混加kg/盒）
+ * @param missingItemCount 兼容保留字段；缺成本会拒绝整次结转，因此成功时为0
  */
 public record CostCarryoverSummary(
         BigDecimal totalCogs,

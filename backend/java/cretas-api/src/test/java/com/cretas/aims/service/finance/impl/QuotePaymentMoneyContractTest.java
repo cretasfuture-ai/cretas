@@ -90,6 +90,9 @@ class QuotePaymentMoneyContractTest {
         var actualAr = new ArApServiceImpl(transactions, customers, mock(SupplierRepository.class));
         ReflectionTestUtils.setField(actualAr, "salesOrderRepository", orders);
         ReflectionTestUtils.setField(actualAr, "allocationRepository", mock(ArApPaymentAllocationRepository.class));
+        var referenceLock = mock(com.cretas.aims.service.finance.FinancePaymentReferenceLock.class);
+        when(referenceLock.acquire("TEST-A", "TEST-PART")).thenReturn("TEST-PART");
+        ReflectionTestUtils.setField(actualAr, "paymentReferenceLock", referenceLock);
         actualAr.recordArPayment("TEST-A", "C-1", "SO-1", new BigDecimal("110.00"), PaymentMethod.BANK_TRANSFER, "TEST-PART", 1L, "TEST ONLY");
         assertThat(customer.getCurrentBalance()).isEqualByComparingTo("14.00");
         assertThat(order.getSettlementFlag()).isFalse();

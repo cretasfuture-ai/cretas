@@ -416,6 +416,12 @@ class AttachmentServiceImplTest {
         }
 
         @Test
+        void stripQuery_preservesCustomStoragePortAndEncodedPath() {
+            assertEquals("http://127.0.0.1:18391/VISION-ENTRY-A/a%20b.png",
+                    AttachmentServiceImpl.stripQuery("http://127.0.0.1:18391/VISION-ENTRY-A/a%20b.png?expires=123&signature=private"));
+        }
+
+        @Test
         @DisplayName("✅ null 安全 — 返回 null")
         void stripQuery_null_safe() {
             assertNull(AttachmentServiceImpl.stripQuery(null));

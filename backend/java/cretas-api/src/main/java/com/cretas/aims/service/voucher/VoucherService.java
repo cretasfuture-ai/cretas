@@ -12,6 +12,9 @@ import java.util.Optional;
  */
 public interface VoucherService {
 
+    /** Internal cost correction only; must prove the approved disposal and its posted voucher. */
+    void reverseDisposalCostVoucher(String factoryId, Long disposalId, String voucherId, Long actorId);
+
     /**
      * 由业务单生成凭证 (idempotent). 内部:
      * 1. 检查 (businessType, businessId) 是否已有凭证 → 直接返回 existing
@@ -47,6 +50,12 @@ public interface VoucherService {
     /** 作废: → VOID, 不可逆 (从代码层; DB 仍可改). factoryId 用于跨租户校验。 */
     void voidVoucher(String factoryId, String voucherId, String reason, Long userId);
 
+    /**
+     * 撤销一笔已经付款的销售退货退款。只接受独立审批且已入账的反向应收调整，
+     * 保留原退款凭证和流水；原凭证为 DRAFT 时置 VOID，为 POSTED 时按红字冲销处理。
+     */
+    Voucher reverseReturnRefund(String factoryId, String requestId, String reason, Long actorId);
+
     /** Idempotent 查询. */
     Optional<Voucher> findBySourceBusiness(String businessType, String businessId);
 
@@ -55,7 +64,8 @@ public interface VoucherService {
 
     /**
      * 直建已过账凭证 (手工指定分录)。用于系统结转损益/红冲等无业务单来源的凭证。
-     * ⚠️ 蓄意绕过期间结账 gate (assertPeriodOpen) — 仅限系统结转 (锁定期间须能过结转凭证)。
+     * 只有PL_CLOSING/COST_CARRYOVER且来源类型匹配的系统结转可豁免期间守卫。
+     * 复用此入口的普通库存、盘点或损耗凭证仍须遵守开放期间规则。
      * 借贷必平 (validateBalanced); 直接 status=POSTED。
      */
     com.cretas.aims.entity.finance.Voucher createManual(

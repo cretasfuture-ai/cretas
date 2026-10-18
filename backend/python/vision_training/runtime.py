@@ -29,6 +29,9 @@ from .router import (
 )
 from .service import VisionTrainingService
 from .store import FileDraftStore
+from .preparation import PreparationStore
+from .preparation_router import create_preparation_router
+from .preparation_worker_router import create_preparation_worker_router
 
 
 def resolve_draft_root(configured: str | None = None) -> Path:
@@ -81,9 +84,11 @@ class VisionTrainingRuntime:
     service: VisionTrainingService
     job_store: VisionJobStore
     routers: VisionTrainingRouters
+    preparation_store: PreparationStore
 
     def startup_probe(self) -> None:
         self.job_store.probe()
+        self.preparation_store.probe()
 
     def close(self) -> None:
         self.job_store.close()
@@ -137,7 +142,12 @@ def create_file_backed_runtime(
         ),
         worker=create_worker_router(service, jobs, worker_context_dependency=worker_dependency),
     )
-    return VisionTrainingRuntime(service=service, job_store=jobs, routers=routers)
+    preparation = PreparationStore(durable_draft_root / "preparation.sqlite3")
+    routers.factory.include_router(create_preparation_router(
+        service, jobs, preparation,
+        tuple(recipe_catalog), factory_context_dependency, tuple(worker_bindings)))
+    routers.worker.include_router(create_preparation_worker_router(service, preparation, worker_dependency))
+    return VisionTrainingRuntime(service=service, job_store=jobs, routers=routers, preparation_store=preparation)
 
 
 def safe_example_registration() -> dict[str, object]:

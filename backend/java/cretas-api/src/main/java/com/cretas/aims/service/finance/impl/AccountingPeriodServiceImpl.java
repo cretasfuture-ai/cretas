@@ -37,6 +37,13 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
 
     private final AccountingPeriodRepository repo;
 
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
+    private void lockCostMutations(String factoryId) {
+        if (entityManager != null) com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
+    }
+
     /** 工作流可选 — 没配 BUDGET workflow 时 requestClose 仍能 ship, 走人工 confirm. */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngineService;
@@ -68,11 +75,17 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @org.springframework.context.annotation.Lazy
     @Autowired(required = false)
     private com.cretas.aims.service.finance.CostCarryoverService costCarryoverService;
+    @Autowired private com.cretas.aims.service.finance.ClosingReadinessService closingReadinessService;
+    @Autowired private com.cretas.aims.service.finance.IncomeStatementService incomeStatementService;
+    @Autowired @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.finance.MonthCloseService monthCloseService;
+    @Autowired private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @Override
     @Transactional
     public AccountingPeriod openPeriod(String factoryId, Integer year, Integer month, Long userId) {
         validateInput(factoryId, year, month);
+        lockCostMutations(factoryId);
 
         Optional<AccountingPeriod> existing = repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(
                 factoryId, year, month);
@@ -106,6 +119,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @Transactional
     public AccountingPeriod requestClose(String factoryId, Integer year, Integer month, Long userId) {
         validateInput(factoryId, year, month);
+        lockCostMutations(factoryId);
         AccountingPeriod p = repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month)
                 .orElseGet(() -> {
                     // 兼容: 没有 row 时也允许 requestClose, 自动创建 OPEN row 再 transition
@@ -135,6 +149,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @Transactional
     public AccountingPeriod confirmClose(String factoryId, Integer year, Integer month, Long userId) {
         validateInput(factoryId, year, month);
+        lockCostMutations(factoryId);
         AccountingPeriod p = repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month)
                 .orElseThrow(() -> new BusinessException(404,
                         String.format("%d-%02d 期间不存在", year, month)));
@@ -151,6 +166,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
                     String.format("%d-%02d 期间状态=%s, 不能 confirmClose", year, month, p.getStatus()));
         }
 
+        if (closingReadinessService != null) closingReadinessService.assertReady(factoryId,year,month);
         p.setStatus(AccountingPeriod.Status.CLOSED);
         p.setClosedAt(LocalDateTime.now());
         p.setClosedBy(userId);
@@ -168,6 +184,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     public AccountingPeriod reopenPeriod(String factoryId, Integer year, Integer month,
                                         String reason, Long userId) {
         validateInput(factoryId, year, month);
+        lockCostMutations(factoryId);
         if (reason == null || reason.trim().isEmpty()) {
             throw new BusinessException(400, "反结账必须填写原因");
         }
@@ -211,6 +228,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @Transactional
     public AccountingPeriod forceLockAndClose(String factoryId, Integer year, Integer month, Long userId) {
         validateInput(factoryId, year, month);
+        lockCostMutations(factoryId);
         AccountingPeriod p = repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month)
                 .orElseThrow(() -> new BusinessException(404,
                         String.format("%d-%02d 期间不存在", year, month)));
@@ -221,6 +239,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
         if (p.getClosingPostedAt() != null) {
             return p; // 幂等: 已结转
         }
+        if (closingReadinessService != null) closingReadinessService.assertReady(factoryId,year,month);
         p.setAdjustDeadline(LocalDateTime.now()); // 强制 LOCKED
         // createManual 直建 POSTED (绕期间 gate), 故 CLOSED 期间也能过结转凭证。
         // ⚠️ 顺序关键: 结转成本 (借 6401/贷 1405) 必须<b>先于</b>结转损益 —
@@ -231,6 +250,22 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
         }
         if (profitLossClosingService != null) {
             profitLossClosingService.closePeriod(factoryId, year, month, userId);
+        }
+        // The adjustment-window snapshot is provisional; freeze final posted
+        // P&L only after cost and profit closing have both succeeded.
+        if (incomeStatementService != null && objectMapper != null) {
+            var report=incomeStatementService.generate(factoryId,year,month,year,month);
+            try { p.setIncomeStatementSnapshot(objectMapper.writeValueAsString(report)); }
+            catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new BusinessException(500,"最终月结报表保存失败，本次结转已回滚");
+            }
+            p.setTotalRevenueSnapshot(report.getTotalRevenue());
+            p.setNetProfitSnapshot(report.getNetProfit());
+            p.setReportReadyAt(LocalDateTime.now());
+            var reconciliation=monthCloseService.reconcileFinalClose(factoryId,year,month,report);
+            p.setReconciliationStatus(reconciliation.getReconciliationStatus());
+            String summary=reconciliation.getSummary();
+            p.setReconciliationSummary(summary.length()>2000 ? summary.substring(0,2000) : summary);
         }
         p.setClosingPostedAt(LocalDateTime.now());
         AccountingPeriod saved = repo.save(p);
@@ -273,6 +308,12 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
             return;  // backwards compat: 无 row 默认 OPEN, voucher 可写
         }
         AccountingPeriod period = periodOpt.get();
+        // A caller may have loaded the old adjustment deadline before waiting for the factory lock.
+        // Flush own reopen/closing changes first; then refresh instead of trusting the first-level cache.
+        if (entityManager != null && entityManager.contains(period)) {
+            entityManager.flush();
+            entityManager.refresh(period);
+        }
         if (period.getStatus() != AccountingPeriod.Status.CLOSED) {
             // OPEN / PENDING_CLOSE — voucher 写允许 (PENDING_CLOSE 是审批中, 审批未通过仍需 voucher edit)
             return;
@@ -322,6 +363,7 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @Transactional
     public AccountingPeriod applyWorkflowAction(String factoryId, String periodId, Long actorId,
                                                 HistoryAction action, String notes) {
+        lockCostMutations(factoryId);
         AccountingPeriod period = repo.findById(periodId)
                 .filter(p -> p.getFactoryId() != null && p.getFactoryId().equals(factoryId))
                 .orElseThrow(() -> new BusinessException(404, "会计期间不存在: " + periodId));

@@ -34,6 +34,9 @@ import java.util.Map;
 @Schema(description = "生产计划信息")
 public class ProductionPlanDTO {
 
+    @Schema(description = "本次已在同一事务同步结单产出成本；旧接口未返回时由客户端兼容重算")
+    private Boolean settledCostsRecalculated;
+
     @Schema(description = "计划ID")
     private String id;
 

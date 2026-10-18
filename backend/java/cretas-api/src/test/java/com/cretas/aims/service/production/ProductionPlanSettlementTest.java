@@ -23,8 +23,10 @@ import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.DefectCountOutcome;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
@@ -89,6 +91,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -143,6 +146,7 @@ class ProductionPlanSettlementTest {
     @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
     @Mock private CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -151,6 +155,9 @@ class ProductionPlanSettlementTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
         service = new ProductionPlanServiceImpl(
                 productionPlanRepository, productionBatchRepository,
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
@@ -181,6 +188,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard",
                 customerSuppliedSettlementCoverageGuard);
         ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
+        ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
         lenient().when(workshopReservationService.releaseForPlan(any(), any()))
                 .thenReturn(BigDecimal.ZERO);
@@ -989,6 +997,232 @@ class ProductionPlanSettlementTest {
         assertEquals("server-worker", derived.getLaborSegments().get(0).getWorkerName());
         assertEquals("SERVER-FG", derived.getTerminalOutputs().get(0).getProductTypeId());
         assertEquals(349L, derived.getSemiFinishedConsumptions().get(0).getSemiFinishedInventoryId());
+    }
+
+    @Test
+    @DisplayName("confirmation-only settlement preserves explicit defect count without fabricating zero")
+    void deriveConfirmedSettlementRequest_preservesExplicitDefectConclusion() {
+        ProductionPlanServiceImpl base = service;
+
+        ProductionSettlementRequest counted = ProductionSettlementRequest.builder()
+                .idempotencyKey("defect-counted")
+                .defectCountOutcome(DefectCountOutcome.COUNTED)
+                .defectQuantity(new BigDecimal("1.2"))
+                .build();
+        ProductionSettlementRequest countedDerived = deriveQuality(base, counted);
+        assertEquals(DefectCountOutcome.COUNTED, countedDerived.getDefectCountOutcome());
+        assertEquals(new BigDecimal("1.2"), countedDerived.getDefectQuantity());
+
+        ProductionSettlementRequest noneConfirmed = ProductionSettlementRequest.builder()
+                .idempotencyKey("defect-none")
+                .defectCountOutcome(DefectCountOutcome.NONE_CONFIRMED)
+                .defectQuantity(BigDecimal.ZERO)
+                .build();
+        ProductionSettlementRequest noneDerived = deriveQuality(base, noneConfirmed);
+        assertEquals(DefectCountOutcome.NONE_CONFIRMED, noneDerived.getDefectCountOutcome());
+        assertEquals(BigDecimal.ZERO, noneDerived.getDefectQuantity());
+
+        ProductionSettlementRequest omitted = ProductionSettlementRequest.builder()
+                .idempotencyKey("defect-omitted")
+                .build();
+        ProductionSettlementRequest omittedDerived = deriveQuality(base, omitted);
+        assertNull(omittedDerived.getDefectCountOutcome());
+        assertNull(omittedDerived.getDefectQuantity());
+    }
+
+    @Test
+    @DisplayName("confirmation-only settlement rejects inconsistent defect conclusion before reading facts")
+    void deriveConfirmedSettlementRequest_rejectsInvalidDefectConclusionBeforeRead() {
+        ProductionSettlementRequest invalid = ProductionSettlementRequest.builder()
+                .idempotencyKey("defect-invalid")
+                .defectCountOutcome(DefectCountOutcome.COUNTED)
+                .build();
+        ProductionPlanServiceImpl candidate = org.mockito.Mockito.spy(service);
+
+        BusinessException error = assertThrows(BusinessException.class, () ->
+                ReflectionTestUtils.invokeMethod(candidate, "deriveConfirmedSettlementRequest",
+                        FACTORY_ID, PLAN_ID, invalid, false));
+
+        assertEquals(400, error.getCode());
+        verify(candidate, never()).getSettlementPrefill(FACTORY_ID, PLAN_ID);
+    }
+
+    @Test
+    @DisplayName("process-sheet labor derivation preserves cross-midnight duration and worker fact")
+    void deriveLaborSegmentsFromProcessSheetRows_preservesOvernightAndMissingHeadcount() throws Exception {
+        com.cretas.aims.dto.processentry.LaborSegment overnight =
+                new com.cretas.aims.dto.processentry.LaborSegment();
+        overnight.setStartTime("23:50");
+        overnight.setEndTime("00:20");
+        overnight.setWorkerCount(0);
+        com.cretas.aims.dto.processentry.LaborSegment missing =
+                new com.cretas.aims.dto.processentry.LaborSegment();
+        missing.setStartTime("08:00");
+        missing.setEndTime("08:30");
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setLaborSegments(List.of(overnight, missing));
+
+        Class<?> parsedType = Class.forName(
+                ProductionPlanServiceImpl.class.getName() + "$ParsedProcessSheetRow");
+        java.lang.reflect.Constructor<?> constructor = parsedType.getDeclaredConstructors()[0];
+        constructor.setAccessible(true);
+        Object parsed = constructor.newInstance(new ProcessSheetRow(), request);
+        @SuppressWarnings("unchecked")
+        List<ProductionSettlementRequest.LaborSegment> derived =
+                (List<ProductionSettlementRequest.LaborSegment>) ReflectionTestUtils.invokeMethod(
+                        service, "deriveLaborSegmentsFromProcessSheetRows", List.of(parsed));
+
+        assertEquals(2, derived.size());
+        assertEquals(30, derived.get(0).getMinutes());
+        assertEquals(Integer.valueOf(0), derived.get(0).getHeadcount());
+        assertEquals(30, derived.get(1).getMinutes());
+        assertNull(derived.get(1).getHeadcount());
+
+        List<com.cretas.aims.entity.ProductionSettlementLabor> persisted =
+                ReflectionTestUtils.invokeMethod(service, "toLaborLines", FACTORY_ID, PLAN_ID,
+                        "settlement-labor", derived);
+        assertEquals(1, persisted.size());
+        assertEquals(Integer.valueOf(0), persisted.get(0).getHeadcount());
+    }
+
+    @Test
+    @DisplayName("receipt completion uses confirmed defect count to derive good/actual and preserves unknown")
+    void markReceiptProductionBatchesCompleted_qualityThreeState() {
+        ProductionBatch batch = receiptBatch("BATCH-QUALITY", "10");
+        ProductionSettlement settlement = settled();
+        settlement.setQuantityUnit("kg");
+        settlement.setWarehouseReceivedQuantity(new BigDecimal("9"));
+        settlement.setDefectCountOutcome(DefectCountOutcome.COUNTED);
+        settlement.setDefectQuantity(BigDecimal.ONE);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+
+        int changed = ReflectionTestUtils.invokeMethod(service,
+                "markReceiptProductionBatchesCompleted", FACTORY_ID, PLAN_ID, settlement);
+
+        assertEquals(1, changed);
+        assertEquals(new BigDecimal("9"), batch.getGoodQuantity());
+        assertEquals(BigDecimal.ONE, batch.getDefectQuantity());
+        assertEquals(new BigDecimal("10"), batch.getActualQuantity());
+        assertEquals(new BigDecimal("90.00"), batch.getYieldRate());
+
+        ProductionBatch zeroDefectBatch = receiptBatch("BATCH-ZERO", "10");
+        ProductionSettlement zeroDefect = settled();
+        zeroDefect.setQuantityUnit("kg");
+        zeroDefect.setWarehouseReceivedQuantity(new BigDecimal("10"));
+        zeroDefect.setDefectCountOutcome(DefectCountOutcome.NONE_CONFIRMED);
+        zeroDefect.setDefectQuantity(BigDecimal.ZERO);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(zeroDefectBatch));
+
+        ReflectionTestUtils.invokeMethod(service, "markReceiptProductionBatchesCompleted",
+                FACTORY_ID, PLAN_ID, zeroDefect);
+
+        assertEquals(new BigDecimal("10"), zeroDefectBatch.getGoodQuantity());
+        assertEquals(BigDecimal.ZERO, zeroDefectBatch.getDefectQuantity());
+        assertEquals(new BigDecimal("10"), zeroDefectBatch.getActualQuantity());
+
+        ProductionBatch unknownBatch = receiptBatch("BATCH-UNKNOWN", "10");
+        unknownBatch.setGoodQuantity(new BigDecimal("10"));
+        unknownBatch.setDefectQuantity(BigDecimal.ZERO);
+        ProductionSettlement unknown = settled();
+        unknown.setQuantityUnit("kg");
+        unknown.setWarehouseReceivedQuantity(new BigDecimal("10"));
+        unknown.setDefectCountOutcome(null);
+        unknown.setDefectQuantity(null);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(unknownBatch));
+
+        ReflectionTestUtils.invokeMethod(service, "markReceiptProductionBatchesCompleted",
+                FACTORY_ID, PLAN_ID, unknown);
+
+        assertEquals(new BigDecimal("10"), unknownBatch.getActualQuantity());
+        assertNull(unknownBatch.getGoodQuantity());
+        assertNull(unknownBatch.getDefectQuantity());
+        assertNull(unknownBatch.getYieldRate());
+    }
+
+    @Test
+    @DisplayName("receipt completion does not copy one plan defect count to multiple official batches")
+    void markReceiptProductionBatchesCompleted_multipleBatchesLeavesQualityUnknown() {
+        ProductionBatch first = receiptBatch("BATCH-1", "5");
+        ProductionBatch second = receiptBatch("BATCH-2", "5");
+        first.setGoodQuantity(new BigDecimal("5"));
+        first.setDefectQuantity(BigDecimal.ZERO);
+        second.setGoodQuantity(new BigDecimal("5"));
+        second.setDefectQuantity(BigDecimal.ZERO);
+        ProductionSettlement settlement = settled();
+        settlement.setQuantityUnit("kg");
+        settlement.setWarehouseReceivedQuantity(new BigDecimal("10"));
+        settlement.setDefectCountOutcome(DefectCountOutcome.COUNTED);
+        settlement.setDefectQuantity(BigDecimal.ONE);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(first, second));
+
+        ReflectionTestUtils.invokeMethod(service, "markReceiptProductionBatchesCompleted",
+                FACTORY_ID, PLAN_ID, settlement);
+
+        assertNull(first.getGoodQuantity());
+        assertNull(first.getDefectQuantity());
+        assertNull(second.getGoodQuantity());
+        assertNull(second.getDefectQuantity());
+    }
+
+    @Test
+    @DisplayName("receipt completion requires terminal output product identity to match the official batch")
+    void markReceiptProductionBatchesCompleted_productMismatchLeavesQualityUnknown() {
+        ProductionBatch batch = receiptBatch("BATCH-PRODUCT", "10");
+        batch.setProductTypeId("PT-EXPECTED");
+        ProductionSettlement settlement = settled();
+        settlement.setQuantityUnit("kg");
+        settlement.setWarehouseReceivedQuantity(new BigDecimal("9"));
+        settlement.setDefectCountOutcome(DefectCountOutcome.COUNTED);
+        settlement.setDefectQuantity(BigDecimal.ONE);
+        ProductionSettlementOutputLine line = ProductionSettlementOutputLine.create();
+        line.setProductTypeId("PT-OTHER");
+        line.setReportedBatchNumber("BATCH-PRODUCT");
+        line.setQuantityUnit("kg");
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        when(productionSettlementOutputLineRepository
+                .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                        FACTORY_ID, settlement.getId()))
+                .thenReturn(List.of(line));
+
+        ReflectionTestUtils.invokeMethod(service, "markReceiptProductionBatchesCompleted",
+                FACTORY_ID, PLAN_ID, settlement);
+
+        assertNull(batch.getGoodQuantity());
+        assertNull(batch.getDefectQuantity());
+        assertNull(batch.getYieldRate());
+    }
+
+    private ProductionBatch receiptBatch(String batchNumber, String quantity) {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId((long) batchNumber.hashCode());
+        batch.setFactoryId(FACTORY_ID);
+        batch.setProductionPlanId(PLAN_ID);
+        batch.setBatchNumber(batchNumber);
+        batch.setQuantity(new BigDecimal(quantity));
+        batch.setUnit("kg");
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        return batch;
+    }
+
+    private ProductionSettlementRequest deriveQuality(ProductionPlanServiceImpl base,
+                                                      ProductionSettlementRequest confirmation) {
+        ProductionSettlementRequest serverFacts = ProductionSettlementRequest.builder()
+                .actualFinishedQuantity(new BigDecimal("10"))
+                .quantityUnit("box")
+                .build();
+        ProductionSettlementPrefillResponse prefill = ProductionSettlementPrefillResponse.builder()
+                .prefill(serverFacts)
+                .audit(ProductionSettlementPrefillResponse.Audit.builder().clean(true).build())
+                .build();
+        ProductionPlanServiceImpl candidate = org.mockito.Mockito.spy(base);
+        org.mockito.Mockito.doReturn(prefill).when(candidate).getSettlementPrefill(FACTORY_ID, PLAN_ID);
+        return ReflectionTestUtils.invokeMethod(candidate, "deriveConfirmedSettlementRequest",
+                FACTORY_ID, PLAN_ID, confirmation, false);
     }
 
     @Test

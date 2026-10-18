@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, nextTick } from 'vue';
+import { ref, onMounted, computed, nextTick, watch, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { sameUnit } from '@/utils/unitPricing';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -15,12 +15,14 @@ import { displayProcessUnit } from '@/utils/processSheetUnits';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
 import type { TableRow } from '@/types/api';
+import SupplementalCostsDialog from './SupplementalCostsDialog.vue';
 import {
   assignTasksWithReadback,
   taskAssignmentDisabledReason,
   type AssignmentResult,
 } from './taskAssignment';
 import { shouldFocusAssignmentSection } from './assignmentDeepLink';
+import { batchCostState, missingBatchCostLabels, readBatchCostEvidence, type BatchCostEvidence } from './batchCostEvidence';
 
 const route = useRoute();
 const router = useRouter();
@@ -30,6 +32,17 @@ const factoryId = computed(() => authStore.factoryId);
 const batchId = computed(() => route.params.id as string);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canWrite = computed(() => permissionStore.canWrite('production'));
+const canViewBatchQuality = computed(() => permissionStore.canAccess('quality')
+  && Boolean(factoryId.value) && batch.value?.factoryId === factoryId.value
+  && Number.isSafeInteger(batch.value?.id) && Number(batch.value?.id) > 0
+  && String(batch.value?.id) === batchId.value);
+
+function openBatchQuality() {
+  if (!canViewBatchQuality.value) return;
+  void router.push({ path: '/quality/inspections', query: {
+    batchId: String(batch.value!.id), batchNumber: batch.value!.batchNumber,
+  } });
+}
 
 /**
  * 🔴 2026-08-19 客户实报：「我需要的是分配工序给工人的方式」「我没找到改的入口」。
@@ -190,7 +203,16 @@ const attachmentRefreshKey = ref(0);
 // returns the consumption rows for this batch's production plan.
 const consumptions = ref<TableRow[]>([]);
 const yieldData = ref<any | null>(null);
-const batchCost = ref<any | null>(null);
+const batchCost = ref<BatchCostEvidence | null>(null);
+const batchCostLoading = ref(false);
+const batchCostError = ref('');
+let costRequestSequence = 0;
+let costPageActive = true;
+const costActorRevision = ref(0);
+watch([() => authStore.user?.id, () => authStore.currentRole, canViewPrice], () => { costActorRevision.value += 1; }, { flush: 'sync' });
+const costIdentity = () => JSON.stringify([factoryId.value, batchId.value, costActorRevision.value]);
+const costBatchMatches = computed(() => batch.value?.factoryId === factoryId.value
+  && String(batch.value?.id) === String(batchId.value));
 // G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品存量 (产出/已领/余额/状态)
 const wipRows = ref<WipRowItem[]>([]);
 
@@ -205,6 +227,8 @@ const orderYieldVisible = ref(false);
 const orderYieldLoading = ref(false);
 const orderYield = ref<OrderYieldSummary | null>(null);
 const orderYieldError = ref('');
+const supplementalCostsVisible = ref(false);
+watch([costIdentity, canWrite], () => { supplementalCostsVisible.value = false; }, { flush: 'sync' });
 
 // 缺陷 51: 生产计划列表「分配工序操作员」深链而来 (query.focusAssignment=1) 时,
 // 滚动到并短暂高亮「工序明细」卡片 —— 不是每次进本页都触发, 只在带这个 query 时。
@@ -299,18 +323,31 @@ async function loadConsumptions() {
 }
 
 async function loadBatchCost() {
-  if (!factoryId.value || !batch.value?.batchNumber) {
-    batchCost.value = null;
-    return;
-  }
+  const request = ++costRequestSequence;
+  const identity = costIdentity();
+  const expectedBatch = batch.value?.batchNumber;
+  const isCurrent = () => costPageActive && request === costRequestSequence && identity === costIdentity()
+    && costBatchMatches.value && batch.value?.batchNumber === expectedBatch;
+  batchCost.value = null; batchCostError.value = ''; batchCostLoading.value = false;
+  if (!factoryId.value || !expectedBatch || !costBatchMatches.value || !canViewPrice.value || !costPageActive) return;
+  batchCostLoading.value = true;
   try {
-    const batchNumber = encodeURIComponent(String(batch.value.batchNumber));
-    const res = await get(`/${factoryId.value}/production/batches/${batchNumber}/cost-breakdown`);
-    batchCost.value = res.success && res.data?.hasData !== false ? res.data : null;
-  } catch {
-    batchCost.value = null;
+    const batchNumber = encodeURIComponent(String(expectedBatch));
+    const res = await get<unknown>(`/${factoryId.value}/production/batches/${batchNumber}/cost-breakdown`);
+    if (!isCurrent()) return;
+    if (!res.success) throw new Error(res.message || '成本读取失败');
+    batchCost.value = readBatchCostEvidence(res.data, String(expectedBatch));
+  } catch (failure) {
+    if (isCurrent()) batchCostError.value = failure instanceof Error ? failure.message : '成本读取失败，请重试';
+  } finally {
+    if (isCurrent()) batchCostLoading.value = false;
   }
 }
+
+watch(costIdentity, () => { ++costRequestSequence; batchCost.value = null; batchCostError.value = ''; batchCostLoading.value = false; void loadBatchCost(); });
+onDeactivated(() => { costPageActive = false; ++costRequestSequence; batchCost.value = null; batchCostLoading.value = false; });
+onActivated(() => { if (!costPageActive) { costPageActive = true; void loadBatchCost(); } });
+onBeforeUnmount(() => { costPageActive = false; ++costRequestSequence; });
 
 function goBack() {
   router.push('/production/batches');
@@ -368,10 +405,15 @@ function getQualityStatusText(status: string) {
   const map: Record<string, string> = {
     PENDING_INSPECTION: '待检验',
     INSPECTING: '检验中',
+    NEEDS_REVIEW: '待审核',
     PASSED: '已通过',
+    QUALIFIED: '合格',
     FAILED: '不合格',
     PARTIAL_PASS: '部分合格',
-    REWORK_REQUIRED: '需返工'
+    REWORK_REQUIRED: '需返工',
+    REWORKING: '返工中',
+    REWORK_COMPLETED: '返工完成，待复检',
+    SCRAPPED: '已报废'
   };
   return map[status?.toUpperCase()] || status || '-';
 }
@@ -380,10 +422,15 @@ function getQualityStatusType(status: string) {
   const map: Record<string, string> = {
     PENDING_INSPECTION: 'info',
     INSPECTING: 'warning',
+    NEEDS_REVIEW: 'warning',
     PASSED: 'success',
+    QUALIFIED: 'success',
     FAILED: 'danger',
     PARTIAL_PASS: 'warning',
-    REWORK_REQUIRED: 'danger'
+    REWORK_REQUIRED: 'danger',
+    REWORKING: 'warning',
+    REWORK_COMPLETED: 'warning',
+    SCRAPPED: 'danger'
   };
   return map[status?.toUpperCase()] || 'info';
 }
@@ -479,8 +526,9 @@ async function openOrderYield() {
   }
 }
 
-// 单元3: 有 YIELD 数据时用末道产出回填"实际产量"
+// 单元3: 有 YIELD 数据时顶部展示末道合格产出；质量区仍展示批次总产量（含不良）。
 const hasYield = computed(() => !!yieldData.value?.steps?.length);
+const actualQuantityLabel = computed(() => hasYield.value ? '合格产出' : '实际产量');
 const displayActualQuantity = computed(() =>
   hasYield.value ? yieldData.value.lastStepOutput : batch.value?.actualQuantity);
 const displayActualUnit = computed(() =>
@@ -752,18 +800,32 @@ const goodRateKnown = computed(() => batch.value?.goodQuantity != null);
 
 const efficiencyDisplay = computed(() =>
   isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
-const closedLoopCost = computed(() => batchCost.value?.hasData === true ? batchCost.value : null);
-const displayMaterialCost = computed(() => closedLoopCost.value?.rawMaterialCost ?? batch.value?.materialCost);
-const displayLaborCost = computed(() => closedLoopCost.value?.laborCost ?? batch.value?.laborCost);
-const displayEquipmentCost = computed(() => closedLoopCost.value?.equipmentCost ?? batch.value?.equipmentCost);
-const displayOtherCost = computed(() => closedLoopCost.value?.otherCost ?? batch.value?.otherCost);
-const displayTotalCost = computed(() => closedLoopCost.value?.totalCost ?? batch.value?.totalCost);
-const displayUnitCost = computed(() => closedLoopCost.value?.perBoxCost ?? batch.value?.unitCost);
-const displayCostUnit = computed(() => displayProcessUnit(batch.value?.unit || displayActualUnit.value));
+const costEvidenceState = computed(() => batchCostState(costBatchMatches.value ? batchCost.value : null, batchCostLoading.value, batchCostError.value));
+const costAmountsVisible = computed(() => costEvidenceState.value === 'COMPLETE' || costEvidenceState.value === 'PARTIAL');
+const closedLoopCost = computed(() => costAmountsVisible.value ? batchCost.value : null);
+const costIsPartial = computed(() => costEvidenceState.value === 'PARTIAL');
+const missingCostLabels = computed(() => missingBatchCostLabels(closedLoopCost.value?.missingCostItems));
+const totalCostLabel = computed(() => costIsPartial.value ? '已归集成本（未完整）' : '完整成本');
+const unitCostLabel = computed(() => costIsPartial.value ? '已归集单位成本' : '单位成本');
+const sellableUnitCostLabel = computed(() => costIsPartial.value ? '已归集可售单位成本' : '可售单位成本');
+const displayMaterialCost = computed(() => closedLoopCost.value?.rawMaterialCost);
+const displayLaborCost = computed(() => closedLoopCost.value?.laborCost);
+const displayEquipmentCost = computed(() => closedLoopCost.value?.equipmentCost);
+const displayOtherCost = computed(() => closedLoopCost.value?.otherCost);
+const displayTotalCost = computed(() => costIsPartial.value ? closedLoopCost.value?.knownCostSubtotal : closedLoopCost.value?.totalCost);
+const displayUnitCost = computed(() => costIsPartial.value ? closedLoopCost.value?.knownPerBoxCost : closedLoopCost.value?.perBoxCost);
+const displayCostUnit = computed(() => displayProcessUnit(closedLoopCost.value?.costDenominatorUnit || closedLoopCost.value?.outputUnit || batch.value?.unit));
 const unitCostDisplay = computed(() => {
-  if (closedLoopCost.value) return formatCost(displayUnitCost.value);
-  return isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost);
+  if (costEvidenceState.value === 'LOADING') return '读取中';
+  if (costEvidenceState.value === 'ERROR') return '读取失败';
+  if (costEvidenceState.value === 'MASKED') return '权限隐藏';
+  if (costEvidenceState.value === 'UNVERIFIED') return '待核对';
+  return costAmountsVisible.value ? `${formatCost(displayUnitCost.value)}/${displayCostUnit.value}` : '暂无数据';
 });
+
+async function handleSupplementalCostsSaved(): Promise<void> {
+  await loadData();
+}
 
 // T140: 工序任务 helpers
 function getTaskStatusText(status: string): string {
@@ -938,7 +1000,7 @@ function goToReversalList() {
           <div class="kpi-unit">{{ displayProcessUnit(batch.unit) }}</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">实际产量</div>
+          <div class="kpi-label">{{ actualQuantityLabel }}</div>
           <div class="kpi-value" :class="{ 'text-success': Number(displayActualQuantity) > 0 }">
             {{ formatNum(displayActualQuantity) }}
           </div>
@@ -961,11 +1023,11 @@ function goToReversalList() {
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">完成效率</div>
+          <div class="kpi-label">总产量完成比例</div>
           <div class="kpi-value">{{ efficiencyDisplay }}</div>
         </div>
         <div v-if="canViewPrice" class="kpi-card">
-          <div class="kpi-label">单位成本</div>
+          <div class="kpi-label">{{ unitCostLabel }}</div>
           <div class="kpi-value">{{ unitCostDisplay }}</div>
         </div>
       </div>
@@ -986,10 +1048,14 @@ function goToReversalList() {
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="质量状态">
-              <el-tag v-if="batch.qualityStatus" :type="getQualityStatusType(batch.qualityStatus)" size="small">
-                {{ getQualityStatusText(batch.qualityStatus) }}
-              </el-tag>
-              <span v-else>-</span>
+              <div data-testid="batch-quality-evidence">
+                <el-tag v-if="batch.qualityStatus" :type="getQualityStatusType(batch.qualityStatus)" size="small">
+                  {{ getQualityStatusText(batch.qualityStatus) }}
+                </el-tag>
+                <span v-else>尚未登记质检结论</span>
+                <el-button v-if="canViewBatchQuality" link type="primary" @click="openBatchQuality">查看本批次质检</el-button>
+                <p class="quality-evidence-note">生产清点的合格数量不等于质检放行，请核对质检记录及放行依据。</p>
+              </div>
             </el-descriptions-item>
             <el-descriptions-item label="负责人">{{ batch.supervisorName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="工人数">{{ batch.workerCount || '-' }} 人</el-descriptions-item>
@@ -1010,7 +1076,7 @@ function goToReversalList() {
           </template>
           <el-descriptions :column="2" border>
             <el-descriptions-item label="计划数量">{{ formatNum(batch.plannedQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
-            <el-descriptions-item label="实际产量">{{ formatNum(batch.actualQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
+            <el-descriptions-item label="总产量（含不良）">{{ formatNum(batch.actualQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="良品数量">{{ formatNum(batch.goodQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="不良品数量">
               <span :class="{ 'text-danger': batch.defectQuantity > 0 }">
@@ -1026,32 +1092,53 @@ function goToReversalList() {
                 {{ goodRateDisplay }}
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="完成效率">{{ efficiencyDisplay }}</el-descriptions-item>
+            <el-descriptions-item label="总产量完成比例">
+              {{ efficiencyDisplay }}（含不良总产量 ÷ 计划数量）
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
 
-        <!-- Cost Breakdown -->
-        <el-card v-if="canViewPrice" shadow="never" class="detail-card">
+        <!-- Cost Breakdown: only the current authoritative batch response can supply money. -->
+        <el-card v-if="canViewPrice" shadow="never" class="detail-card" data-testid="batch-cost-evidence">
           <template #header>
-            <span class="section-title">成本明细</span>
+            <div class="cost-card-header">
+              <div class="cost-card-title">
+                <span class="section-title">成本明细</span>
+                <el-tag v-if="costIsPartial" type="warning" size="small" effect="plain">成本未完整</el-tag>
+              </div>
+              <el-button
+                v-if="canWrite && batch.productionPlanId && batch.status === 'COMPLETED'"
+                :disabled="!costAmountsVisible"
+                type="primary" plain size="small" @click="supplementalCostsVisible = true"
+              >补录设备和其他成本</el-button>
+            </div>
           </template>
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="原料成本">{{ formatCost(displayMaterialCost) }}</el-descriptions-item>
-            <el-descriptions-item label="人工成本">{{ formatCost(displayLaborCost) }}</el-descriptions-item>
-            <el-descriptions-item v-if="closedLoopCost" label="辅料/调料">{{ formatCost(closedLoopCost.seasoningCost) }}</el-descriptions-item>
-            <el-descriptions-item v-if="closedLoopCost" label="包材成本">{{ formatCost(closedLoopCost.packagingCost) }}</el-descriptions-item>
-            <el-descriptions-item label="设备成本">{{ formatCost(displayEquipmentCost) }}</el-descriptions-item>
-            <el-descriptions-item label="其他成本">{{ formatCost(displayOtherCost) }}</el-descriptions-item>
-            <el-descriptions-item label="总成本">
-              <span class="cost-total">{{ formatCost(displayTotalCost) }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="单位成本">
-              <template v-if="!closedLoopCost && isCrossUnit">跨单位不可比</template>
-              <template v-else>{{ formatCost(displayUnitCost) }}/{{ displayCostUnit }}</template>
-            </el-descriptions-item>
-            <el-descriptions-item v-if="closedLoopCost" label="副产物抵扣">{{ formatCost(closedLoopCost.byproductCredit) }}</el-descriptions-item>
-            <el-descriptions-item v-if="closedLoopCost" label="可售单位成本">{{ formatCost(closedLoopCost.sellablePerBoxCost) }}/{{ displayCostUnit }}</el-descriptions-item>
-          </el-descriptions>
+          <el-skeleton v-if="batchCostLoading" :rows="3" animated />
+          <el-alert v-else-if="batchCostError" :title="`成本读取失败：${batchCostError}`" type="error" :closable="false">
+            <el-button size="small" @click="loadBatchCost">重试读取成本</el-button>
+          </el-alert>
+          <el-alert v-else-if="costEvidenceState === 'MASKED'" title="当前账号无权查看成本金额" type="warning" :closable="false" />
+          <el-empty v-else-if="costEvidenceState === 'NO_DATA'" description="暂无可核对的成本数据，不以旧批次汇总代替">
+            <el-button size="small" @click="loadBatchCost">重试读取成本</el-button>
+          </el-empty>
+          <el-alert v-else-if="costEvidenceState === 'UNVERIFIED'" title="成本口径待核对，暂不展示合计；请检查本批次报工与成本归集" type="warning" :closable="false" />
+          <template v-else>
+            <el-descriptions :column="2" border>
+              <el-descriptions-item label="原料成本">{{ formatCost(displayMaterialCost) }}</el-descriptions-item>
+              <el-descriptions-item label="人工成本">{{ formatCost(displayLaborCost) }}</el-descriptions-item>
+              <el-descriptions-item label="辅料/调料">{{ formatCost(closedLoopCost?.seasoningCost) }}</el-descriptions-item>
+              <el-descriptions-item label="包材成本">{{ formatCost(closedLoopCost?.packagingCost) }}</el-descriptions-item>
+              <el-descriptions-item label="设备成本">{{ formatCost(displayEquipmentCost) }}</el-descriptions-item>
+              <el-descriptions-item label="其他成本">{{ formatCost(displayOtherCost) }}</el-descriptions-item>
+              <el-descriptions-item v-if="closedLoopCost?.semiFeedCost != null" label="半成品/成品投料成本">{{ formatCost(closedLoopCost.semiFeedCost) }}</el-descriptions-item>
+              <el-descriptions-item :label="totalCostLabel"><span class="cost-total">{{ formatCost(displayTotalCost) }}</span></el-descriptions-item>
+              <el-descriptions-item :label="unitCostLabel">{{ formatCost(displayUnitCost) }}/{{ displayCostUnit }}</el-descriptions-item>
+              <el-descriptions-item label="副产物抵扣">{{ formatCost(closedLoopCost?.byproductCredit) }}</el-descriptions-item>
+              <el-descriptions-item :label="sellableUnitCostLabel">{{ formatCost(closedLoopCost?.sellablePerBoxCost) }}/{{ displayCostUnit }}</el-descriptions-item>
+            </el-descriptions>
+            <div v-if="costIsPartial" class="cost-partial-note">待补成本：{{ missingCostLabels.length ? missingCostLabels.join('、') : '部分成本未归集' }}。已归集合计不作为完整成本。</div>
+            <el-text type="info" size="small">来源：本批次实际投料、逐道报工及成本归集；未记录的项目显示横线，不借用旧批次汇总。</el-text>
+          </template>
         </el-card>
 
         <!-- 单元3: 出成率·逐道报工 (audit YIELD-1/5/6, FE-VUE-6) -->
@@ -1397,9 +1484,9 @@ function goToReversalList() {
           </div>
           <!-- A.6 整批逐道成本汇总: 总人工/总材料/总成本. null (无法计算) → "—" (非 ¥0). canViewPrice 门控. -->
           <div v-if="canViewPrice" class="yield-cost-summary">
-            <span class="cost-item">总人工成本 {{ formatCostDash(yieldData.totalLaborCost) }}</span>
-            <span class="cost-item">总材料成本 {{ formatCostDash(yieldData.totalMaterialCost) }}</span>
-            <span class="cost-item cost-item-total">总成本 {{ formatCostDash(yieldData.totalCost) }}</span>
+            <span class="cost-item">报工人工成本 {{ formatCostDash(yieldData.totalLaborCost) }}</span>
+            <span class="cost-item">报工材料成本 {{ formatCostDash(yieldData.totalMaterialCost) }}</span>
+            <span class="cost-item cost-item-total">报工记录小计 {{ formatCostDash(yieldData.totalCost) }}</span>
           </div>
         </el-card>
 
@@ -1892,14 +1979,27 @@ function goToReversalList() {
               各批次单位不一致, 无法跨单位合计 (整体出成率不可比)
             </div>
             <div v-if="canViewPrice" class="order-yield-cost">
-              <span class="cost-item">总人工成本 {{ formatCostDash(orderYield.totalLaborCost) }}</span>
-              <span class="cost-item">总材料成本 {{ formatCostDash(orderYield.totalMaterialCost) }}</span>
-              <span class="cost-item cost-item-total">总成本 {{ formatCostDash(orderYield.totalCost) }}</span>
+              <span class="cost-item">报工人工成本 {{ formatCostDash(orderYield.totalLaborCost) }}</span>
+              <span class="cost-item">报工材料成本 {{ formatCostDash(orderYield.totalMaterialCost) }}</span>
+              <span class="cost-item cost-item-total">报工记录小计 {{ formatCostDash(orderYield.totalCost) }}</span>
             </div>
           </template>
         </template>
       </div>
     </el-dialog>
+
+    <SupplementalCostsDialog
+      v-if="canWrite && canViewPrice && costBatchMatches && costAmountsVisible && batch?.productionPlanId && batch.status === 'COMPLETED'"
+      v-model="supplementalCostsVisible"
+      :factory-id="factoryId || ''"
+      :production-plan-id="String(batch.productionPlanId)"
+      :batch-number="batch.batchNumber"
+      :context-key="costIdentity()"
+      :equipment-cost="displayEquipmentCost"
+      :other-cost="displayOtherCost"
+      @saved="handleSupplementalCostsSaved"
+      @costs-updated="handleSupplementalCostsSaved"
+    />
 
     <!-- ===== SP2: 整单撤回 Dialog ===== -->
     <el-dialog
@@ -2084,6 +2184,17 @@ function goToReversalList() {
   color: var(--text-color-primary, #303133);
 }
 
+.cost-card-header,
+.cost-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cost-card-header {
+  justify-content: space-between;
+}
+
 .section-meta {
   font-size: 13px;
   color: #909399;
@@ -2094,6 +2205,15 @@ function goToReversalList() {
   font-weight: 700;
   color: var(--el-color-primary);
   font-size: 15px;
+}
+
+.cost-partial-note {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  color: var(--el-color-warning-dark-2, #a86200);
+  background: var(--el-color-warning-light-9, #fdf6ec);
+  font-size: 13px;
 }
 
 .text-success { color: #67C23A; }
@@ -2589,5 +2709,10 @@ function goToReversalList() {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 140px;
+}
+.quality-evidence-note {
+  margin: 4px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

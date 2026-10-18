@@ -1528,7 +1528,7 @@ export function buildHarness(): Promise<Harness> {
       perm.setRole = (nextRole, factory, type, user) => setIdentity(nextRole, factory, type, user, { skipDbLoad: true });
       // Guards also request refresh. Keep this static-default model isolated there;
       // permission predicates and the production guard itself remain real.
-      perm.loadFromDb = async () => undefined;
+      perm.loadFromDb = async (): Promise<void> => undefined;
       principals.push({
         id: role + '@' + (factoryType || '-'),
         role,

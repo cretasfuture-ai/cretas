@@ -17,6 +17,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.inventory.ReturnedGoodsCostResolver;
+import com.cretas.aims.service.finance.DisposalCostAccountingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +26,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -77,6 +80,14 @@ public class DisposalRecordService implements IDisposalRecordService {
     /** SP12 §5.3: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
+
+    /** Optional to preserve lightweight service tests; required in the live Spring context. */
+    @Autowired(required = false)
+    private ReturnedGoodsCostResolver returnedGoodsCostResolver;
+
+    /** SCRAP/DESTROY 的库存与费用凭证边界；可选仅为保持旧单测的轻量构造兼容。 */
+    @Autowired
+    private DisposalCostAccountingService disposalCostAccountingService;
 
     /**
      * 创建报废记录
@@ -204,7 +215,7 @@ public class DisposalRecordService implements IDisposalRecordService {
      *   <li>{@code finishedGoodsBatchId} 非空 (成品报损, R12) → FinishedGoodsBatch 按可用量
      *       getAvailableQuantity() (= producedQuantity - shippedQuantity - reservedQuantity) 把关,
      *       减 producedQuantity 扣减 (镜像 SalesServiceImpl.adjustFinishedGoodsQuantity 的 SCRAP
-     *       调整语义) + 写 FinishedGoodsAdjustmentLog SCRAP 留痕, 单价取 batch.unitPrice, 扣空标 DEPLETED。</li>
+     *       调整语义) + 写 FinishedGoodsAdjustmentLog SCRAP 留痕, 成本取 batch.unitCost, 扣空标 DEPLETED。</li>
      *   <li>{@code productionBatchId} 非空但无 {@code finishedGoodsBatchId} (旧数据) → H2 安全阻止
      *       (422): ProductionBatch.quantity 是产出额定值非可售库存, 无法可靠定位 FG 批次 →
      *       不扣错表, 抛 422 明确阻止 (向后兼容)。</li>
@@ -219,8 +230,15 @@ public class DisposalRecordService implements IDisposalRecordService {
     public DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId,
             String approverName, String requestRole) {
         assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
+        disposalCostAccountingService.lockFactory(factoryId);
         DisposalRecord record = findForMutation(factoryId, id);
         assertSingleInventoryTarget(record);
+
+        if (!"SCRAP".equals(record.getDisposalType()) && !"DESTROY".equals(record.getDisposalType())) {
+            throw new BusinessException(409, "仅 SCRAP/DESTROY 支持实物扣减与费用过账；其它处置方式需先确定财务口径")
+                    .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED")
+                    .withHint("请由财务确认处置方式的过账口径，实际报废或销毁的记录可从报损审批继续");
+        }
 
         // 幂等防重 (2026-06-12, Codex Gate2): 已审批/已拒绝 (终态) 不可重复操作.
         // 审批触发库存扣减, 重复 approve 会重复扣库存. 返 409.
@@ -233,6 +251,10 @@ public class DisposalRecordService implements IDisposalRecordService {
         BigDecimal actualLoss = applyDisposalToInventory(record, approverId, requestRole);
         record.setActualLoss(actualLoss);
 
+        // 与库存扣减处于同一事务；成本/期间/凭证任一失败都会回滚前面的库存写入。
+        disposalCostAccountingService.postApprovedDisposal(record,
+                actualLoss, approverId == null ? null : approverId.longValue());
+
         record.approve(approverId, approverName);
         log.info("审批报废记录: id={}, 审批人={} ({}), 实际损失={}", id, approverName, approverId, actualLoss);
         return hydrateReadback(disposalRecordRepository.save(record));
@@ -242,7 +264,8 @@ public class DisposalRecordService implements IDisposalRecordService {
      * 按关联批次类型扣减对应库存, 返回实际损失金额 (数量 × 批次单价)。
      *
      * <p>红线: 复用现有扣减写法 (WastageReportServiceImpl.applyWastageToInventory)。
-     * 库存不足 → 409 阻止审批。无关联批次 (仅质检/返工关联, 无 material/production 批次)
+     * 库存不足 → 409 阻止审批。成品批次必须有真实 unitCost（历史销售退货只接受精确来源证据补齐），
+     * 未知成本 → 409 且不扣库存。无关联批次 (仅质检/返工关联, 无 material/production 批次)
      * → 不扣库存, actualLoss 取估损 estimatedLoss 兜底。
      */
     private BigDecimal applyDisposalToInventory(DisposalRecord record, Integer approverId,
@@ -359,15 +382,44 @@ public class DisposalRecordService implements IDisposalRecordService {
                     ? fgBatch.getProducedQuantity() : BigDecimal.ZERO;
             BigDecimal afterProduced = beforeProduced.subtract(disposalQty);
 
+            BigDecimal priorUnitCost = fgBatch.getUnitCost();
+            BigDecimal unitCost = priorUnitCost;
+            ReturnedGoodsCostResolver.ResolvedCost resolvedCost = null;
+            if (unitCost == null && returnedGoodsCostResolver != null) {
+                resolvedCost = returnedGoodsCostResolver.resolve(record.getFactoryId(), fgBatch).orElse(null);
+                if (resolvedCost != null) {
+                    unitCost = resolvedCost.unitCost();
+                }
+            }
+            if (unitCost == null || unitCost.signum() < 0) {
+                throw new BusinessException(409, "成品批次缺少真实单位成本，无法报损")
+                        .withCode("FINISHED_GOODS_UNIT_COST_REQUIRED")
+                        .withHint("请先补齐该成品批次或已完成销售退货的真实 unitCost，系统不会用售价或估价代替");
+            }
+            if (resolvedCost != null) {
+                // Persist only a validated non-negative recovered cost in the
+                // same transaction as the first disposal adjustment.
+                fgBatch.setUnitCost(unitCost);
+            }
+
             // 调整日志留痕 (referenceType=SCRAP, 负数变更, before/after 取 producedQuantity, 与扣减语义一致)
+            String reason = "报损审批 [id=" + record.getId() + "] 类型: " + record.getDisposalType()
+                    + (record.getDisposalReason() != null ? " - " + record.getDisposalReason() : "")
+                    + "; unitCostBefore=" + priorUnitCost + "; unitCostAfter=" + unitCost
+                    + "; unit=" + fgBatch.getUnit();
+            if (resolvedCost != null) {
+                reason += "; costSourceBatchId=" + resolvedCost.sourceBatchId()
+                        + "; costSourceBatch=" + resolvedCost.sourceBatchNumber()
+                        + "; returnNumber=" + resolvedCost.returnNumber()
+                        + "; returnItemIndex=" + resolvedCost.itemIndex();
+            }
             FinishedGoodsAdjustmentLog logEntry = FinishedGoodsAdjustmentLog.builder()
                     .factoryId(fgBatch.getFactoryId())
                     .batchId(fgBatch.getId())
                     .adjustmentQuantity(disposalQty.negate()) // 负数
                     .beforeProduced(beforeProduced)
                     .afterProduced(afterProduced)
-                    .reason("报损审批 [id=" + record.getId() + "] 类型: " + record.getDisposalType()
-                            + (record.getDisposalReason() != null ? " - " + record.getDisposalReason() : ""))
+                    .reason(reason)
                     .referenceType("SCRAP")
                     .operatorId(approverId != null ? approverId.longValue() : null)
                     .build();
@@ -383,7 +435,7 @@ public class DisposalRecordService implements IDisposalRecordService {
             }
             finishedGoodsBatchRepository.save(fgBatch);
 
-            return valuate(disposalQty, fgBatch.getUnitPrice(), record.getEstimatedLoss());
+            return valuateFinishedGoodsCost(disposalQty, unitCost);
         }
 
         // 成品报损 → H2 (审计 round2): 仅有 productionBatchId 无 finishedGoodsBatchId → 安全阻止, 不扣错表.
@@ -429,9 +481,15 @@ public class DisposalRecordService implements IDisposalRecordService {
      */
     private BigDecimal valuate(BigDecimal qty, BigDecimal unitPrice, BigDecimal estimatedLoss) {
         if (unitPrice == null) {
-            return estimatedLoss;
+            throw new BusinessException(409, "批次缺少真实单位成本，无法生成处置费用凭证")
+                    .withCode("DISPOSAL_COST_REQUIRED")
+                    .withHint("请通过现有批次成本更正流程补齐成品批次成本，再回到报损审批重新提交");
         }
         return qty.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal valuateFinishedGoodsCost(BigDecimal qty, BigDecimal unitCost) {
+        return qty.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
     }
 
     /**
@@ -467,6 +525,12 @@ public class DisposalRecordService implements IDisposalRecordService {
                 .map(this::hydrateReadback);
     }
 
+    @Transactional(readOnly = true)
+    public List<com.cretas.aims.entity.finance.Voucher> getAccountingHistory(String factoryId, Long id) {
+        getById(factoryId,id).orElseThrow(() -> new BusinessException(404,"报废记录不存在或不属于当前工厂"));
+        return disposalCostAccountingService.getAccountingHistory(factoryId,id);
+    }
+
     /**
      * 分页查询工厂报废记录
      */
@@ -483,6 +547,43 @@ public class DisposalRecordService implements IDisposalRecordService {
     public Page<DisposalRecord> getByFactoryIdAndType(String factoryId, String disposalType, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "disposalDate"));
         return hydrateReadback(disposalRecordRepository.findByFactoryIdAndDisposalType(factoryId, disposalType, pageable));
+    }
+
+    /**
+     * Server-side filtered disposal list.  All predicates are applied before
+     * pagination so totalElements and page boundaries remain truthful.
+     */
+    public Page<DisposalRecord> getByFactoryIdWithFilters(String factoryId, String disposalType,
+                                                            String status, String keyword,
+                                                            String finishedGoodsBatchId,
+                                                            int page, int size) {
+        Pageable pageable = PageRequest.of(page, size,
+                Sort.by(Sort.Order.desc("disposalDate"), Sort.Order.desc("id")));
+        Specification<DisposalRecord> specification = (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> predicates = new java.util.ArrayList<>();
+            predicates.add(cb.equal(root.get("factoryId"), factoryId));
+            if (disposalType != null && !disposalType.isBlank()) {
+                predicates.add(cb.equal(root.get("disposalType"), disposalType));
+            }
+            if (status != null && !status.isBlank()) {
+                predicates.add(cb.equal(root.get("approvalStatus"), status));
+            }
+            if (finishedGoodsBatchId != null && !finishedGoodsBatchId.isBlank()) {
+                predicates.add(cb.equal(root.get("finishedGoodsBatchId"), finishedGoodsBatchId));
+            }
+            if (keyword != null && !keyword.isBlank()) {
+                String pattern = "%" + keyword.trim().toLowerCase(java.util.Locale.ROOT) + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("disposalReason").as(String.class)), pattern),
+                        cb.like(cb.lower(root.get("disposalMethod").as(String.class)), pattern),
+                        cb.like(cb.lower(root.get("notes").as(String.class)), pattern),
+                        cb.like(cb.lower(root.get("finishedGoodsBatchId").as(String.class)), pattern),
+                        cb.like(cb.lower(root.get("productionBatchId").as(String.class)), pattern),
+                        cb.like(cb.lower(root.get("materialBatchId").as(String.class)), pattern)));
+            }
+            return cb.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+        return hydrateReadback(disposalRecordRepository.findAll(specification, pageable));
     }
 
     /**

@@ -45,6 +45,9 @@ export type ComputeStrategy = 'REALTIME' | 'CACHED' | 'PRECOMPUTED' | string;
  */
 export type AlertLevel = 'GREEN' | 'YELLOW' | 'RED' | null;
 
+/** 指标值计算状态；列表卡片用它区分未配置、暂无业务数据和计算失败。 */
+export type IndicatorValueStatus = 'AVAILABLE' | 'NO_DATA' | 'NOT_COMPUTED' | 'FAILED';
+
 /**
  * 阈值运算符
  *
@@ -101,7 +104,9 @@ export interface IndicatorValueResponse {
   fromCache: boolean;
   cacheHit?: boolean;
   source?: string;
-  status?: 'AVAILABLE' | 'NO_DATA' | 'NOT_COMPUTED' | 'FAILED';
+  status?: IndicatorValueStatus;
+  periodStart?: string;
+  periodEnd?: string;
 }
 
 /**
@@ -171,10 +176,17 @@ export interface IndicatorVersionResponse {
  * Versions 查询参数
  */
 export interface VersionsQuery {
-  page?: number;
+  page?: number; // 1-based, matching the history API
   size?: number;
   windowStart?: string; // ISO date "YYYY-MM-DD"
   windowEnd?: string;   // ISO date "YYYY-MM-DD"
+  exactPeriod?: boolean; // Match both period boundaries; omitted preserves overlap semantics
+}
+
+/** 指标值/重算使用的业务时间窗。 */
+export interface IndicatorPeriodQuery {
+  periodStart?: string;
+  periodEnd?: string;
 }
 
 // ==================== API 函数 (7 个) ====================
@@ -236,10 +248,15 @@ export async function getIndicatorDetail(
  */
 export async function getIndicatorValue(
   factoryId: string,
-  code: string
+  code: string,
+  query?: IndicatorPeriodQuery
 ): Promise<IndicatorValueResponse> {
+  const params: Record<string, string> = {};
+  if (query?.periodStart) params.periodStart = query.periodStart;
+  if (query?.periodEnd) params.periodEnd = query.periodEnd;
   const res = await get<IndicatorValueResponse>(
-    `/${factoryId}/indicators/${encodeURIComponent(code)}/value`
+    `/${factoryId}/indicators/${encodeURIComponent(code)}/value`,
+    { params: Object.keys(params).length ? params : undefined }
   );
   if (!res.success || !res.data) {
     throw new ApiError(res.message || '指标值加载失败', res.code);
@@ -250,18 +267,19 @@ export async function getIndicatorValue(
 /**
  * 5. 获取指标历史快照 (分页 + 时间窗筛选)
  *
- * GET /api/mobile/{factoryId}/indicators/{code}/versions?page=0&size=20&windowStart=2026-05-01&windowEnd=2026-05-31
+ * GET /api/mobile/{factoryId}/indicators/{code}/versions?page=1&size=20&windowStart=2026-05-01&windowEnd=2026-05-31
  */
 export async function listIndicatorVersions(
   factoryId: string,
   code: string,
   query?: VersionsQuery
 ): Promise<PageResponse<IndicatorVersionResponse>> {
-  const params: Record<string, string | number> = {};
+  const params: Record<string, string | number | boolean> = {};
   if (query?.page !== undefined) params.page = query.page;
   if (query?.size !== undefined) params.size = query.size;
   if (query?.windowStart) params.windowStart = query.windowStart;
   if (query?.windowEnd) params.windowEnd = query.windowEnd;
+  if (query?.exactPeriod !== undefined) params.exactPeriod = query.exactPeriod;
 
   const res = await get<PageResponse<IndicatorVersionResponse>>(
     `/${factoryId}/indicators/${encodeURIComponent(code)}/versions`,
@@ -302,10 +320,16 @@ export async function getIndicatorThresholds(
  */
 export async function recomputeIndicator(
   factoryId: string,
-  code: string
+  code: string,
+  query?: IndicatorPeriodQuery
 ): Promise<IndicatorValueResponse> {
+  const params: Record<string, string> = {};
+  if (query?.periodStart) params.periodStart = query.periodStart;
+  if (query?.periodEnd) params.periodEnd = query.periodEnd;
   const res = await post<IndicatorValueResponse>(
-    `/${factoryId}/indicators/${encodeURIComponent(code)}/recompute`
+    `/${factoryId}/indicators/${encodeURIComponent(code)}/recompute`,
+    undefined,
+    { params: Object.keys(params).length ? params : undefined }
   );
   if (!res.success || !res.data) {
     throw new ApiError(res.message || '重算失败', res.code);

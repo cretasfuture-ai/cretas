@@ -4,6 +4,7 @@ import com.cretas.aims.entity.DisposalRecord;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.finance.DisposalCostAccountingService;
 import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -37,6 +38,8 @@ class DisposalFinishedGoodsBalanceTest {
         service = new DisposalRecordService(records, mock(MaterialBatchRepository.class),
                 mock(MaterialBatchAdjustmentRepository.class), mock(ProductionBatchRepository.class),
                 batches, mock(FinishedGoodsAdjustmentLogRepository.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "disposalCostAccountingService",
+                mock(DisposalCostAccountingService.class));
     }
 
     private static FinishedGoodsBatch batch(String factoryId, String produced, String shipped, String reserved) {

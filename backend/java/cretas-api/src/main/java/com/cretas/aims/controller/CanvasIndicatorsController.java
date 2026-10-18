@@ -444,6 +444,10 @@ public class CanvasIndicatorsController {
             return ApiResponse.errorWithHint(404, "指标不存在", "请确认 id 与工厂归属", null, null);
         }
         Indicator i = opt.get();
+        if ("FACTORY_ACTUAL_TOTAL_COST".equals(i.getCode()) || "FACTORY_LU_UNIT_COST".equals(i.getCode())) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "生产成本指标请在经营指标页面按业务期间重算，不能写入画布占位值");
+        }
         // 注意: 这里 stub —— Day 4 IndicatorQueryService 落地后此处委托给 Service。
         // 当前: 写入 0 占位, 让 UI 流程可走通。
         BigDecimal value = i.getLastValue() != null ? i.getLastValue() : BigDecimal.ZERO;

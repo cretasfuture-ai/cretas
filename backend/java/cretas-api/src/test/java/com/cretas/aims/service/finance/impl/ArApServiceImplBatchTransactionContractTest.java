@@ -38,6 +38,14 @@ class ArApServiceImplBatchTransactionContractTest {
     void setUp() {
         service = new ArApServiceImpl(transactions, customers, suppliers);
         ReflectionTestUtils.setField(service, "transactionManager", transactionManager);
+        // This unit fixture measures per-item transaction boundaries; real PG lock behavior is covered by BatchAdjustmentAtomicityPostgresContractTest.
+        var entityManager=mock(jakarta.persistence.EntityManager.class);
+        var query=mock(jakarta.persistence.Query.class);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(query);
+        when(query.setParameter(anyString(),any())).thenReturn(query);
+        when(query.getResultList()).thenReturn(List.of("locked"));
+        ReflectionTestUtils.setField(service,"entityManager",entityManager);
+        ReflectionTestUtils.setField(service,"accountingPeriodService",mock(com.cretas.aims.service.finance.AccountingPeriodService.class));
     }
 
     @Test
@@ -141,6 +149,7 @@ class ArApServiceImplBatchTransactionContractTest {
         transaction.setId(id);
         transaction.setFactoryId("F-TX");
         transaction.setTransactionType(ArApTransactionType.AP_ADJUSTMENT);
+        transaction.setTransactionDate(java.time.LocalDate.now());
         transaction.setCounterpartyType(CounterpartyType.SUPPLIER);
         transaction.setCounterpartyId("SUP-1");
         transaction.setAmount(new BigDecimal("5.00"));

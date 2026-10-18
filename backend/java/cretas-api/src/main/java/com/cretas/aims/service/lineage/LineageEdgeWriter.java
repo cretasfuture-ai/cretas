@@ -66,7 +66,7 @@ public class LineageEdgeWriter {
                     edge.getFactoryId(), edge.getEdgeType(),
                     edge.getSourceType(), edge.getSourceId(),
                     edge.getTargetType(), edge.getTargetId());
-            if (alreadyRecorded(existing, refKey)) {
+            if (alreadyRecorded(existing, refKey, edge)) {
                 return LineageRecordOutcome.ALREADY_EXISTS;
             }
             // saveAndFlush: 让 INSERT 在本方法内部真的打到库里, 异常才接得住。
@@ -100,7 +100,7 @@ public class LineageEdgeWriter {
                     edge.getFactoryId(), edge.getEdgeType(),
                     edge.getSourceType(), edge.getSourceId(),
                     edge.getTargetType(), edge.getTargetId());
-            return alreadyRecorded(existing, refKey)
+            return alreadyRecorded(existing, refKey, edge)
                     ? LineageRecordOutcome.ALREADY_EXISTS
                     : LineageRecordOutcome.INSERTED;
         } catch (Exception e) {
@@ -117,12 +117,23 @@ public class LineageEdgeWriter {
      *
      * <p>没有 refKey → 退化成「同一对批次同一 edgeType 已有任何边就算写过」。
      */
-    private boolean alreadyRecorded(List<BatchLineageEdge> existing, String refKey) {
+    private boolean alreadyRecorded(List<BatchLineageEdge> existing, String refKey, BatchLineageEdge incoming) {
         if (existing == null || existing.isEmpty()) {
             return false;
         }
         if (refKey == null || refKey.isBlank()) {
             return true;
+        }
+        Map<String,Object> wanted=incoming.getMeta();
+        // Backfill has a separate key namespace and must not duplicate an already observed shipment.
+        // Conversely, a real shipment may supplement an older synthetic backfill without inheriting its cost truth.
+        if ("FINISHED_TO_SHIPMENT".equals(incoming.getEdgeType()) && wanted != null
+                && wanted.get("deliveryItemId") != null) {
+            boolean historical="BACKFILL".equals(wanted.get("origin"));
+            if (existing.stream().anyMatch(e -> e.getMeta()!=null
+                    && Objects.equals(String.valueOf(e.getMeta().get("deliveryItemId")),String.valueOf(wanted.get("deliveryItemId")))
+                    && Objects.equals(e.getMeta().get("shipmentCarrier"),wanted.get("shipmentCarrier"))
+                    && (historical || "SALES_DELIVERY_SHIPMENT".equals(e.getMeta().get("origin"))))) return true;
         }
         return existing.stream().anyMatch(e -> {
             Map<String, Object> meta = e.getMeta();

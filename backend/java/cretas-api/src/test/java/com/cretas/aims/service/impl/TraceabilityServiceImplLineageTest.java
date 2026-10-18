@@ -18,6 +18,7 @@ import com.cretas.aims.service.EncodingRuleService;
 import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -69,8 +70,16 @@ class TraceabilityServiceImplLineageTest {
     @Mock private EncodingRuleService encodingRuleService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @Mock private LineageGraphAssembler lineageGraphAssembler;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     @InjectMocks private TraceabilityServiceImpl service;
+
+    @BeforeEach
+    void wireUnitContract() {
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString())).thenAnswer(invocation ->
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .crossLanguageCode(invocation.getArgument(1)));
+    }
 
     private ProductionBatch stubBatch() {
         ProductionBatch batch = new ProductionBatch();

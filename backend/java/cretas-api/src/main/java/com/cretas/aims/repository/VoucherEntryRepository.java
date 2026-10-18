@@ -138,11 +138,11 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("endDate") LocalDate endDate);
 
     /**
-     * 结转损益专用: 仅 POSTED 业务凭证按 subjectCode 聚合 [startDate, endDate].
+     * 结转损益专用：直接复用利润表业务发生额查询，保持普通红冲和有效成本结转口径一致。
      *
      * <p>与 {@link #aggregateBySubject} 区别:
      * <ul>
-     *   <li>排除 DRAFT/REVERSED (只算已过账), 防把草稿计进结转;</li>
+     *   <li>排除草稿，保留普通业务原凭证与红冲镜像相抵；成本结转只保留当前有效主凭证。</li>
      *   <li><b>排除 PL_CLOSING 类型凭证</b> (结转凭证本身 + 其红冲镜像) —— 结转聚合的是
      *       <b>业务</b>损益发生额, 结转产物不算业务活动。</li>
      * </ul>
@@ -164,38 +164,25 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
      * 保留其主凭证。这样 first-close 时 6401 计入, reopen→reclose 时 (原→REVERSED 排 +
      * 镜像→本条排 + 新主凭证→计) 净额恒等于新一轮的真实 COGS。
      */
-    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
-            "  e.subjectCode, MAX(e.subjectName), " +
-            "  COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), " +
-            "  COUNT(e)) " +
-            "FROM VoucherEntry e JOIN e.voucher v " +
-            "WHERE v.factoryId = :factoryId " +
-            "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
-            "  AND v.status = com.cretas.aims.entity.enums.VoucherStatus.POSTED " +
-            "  AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
-            "  AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER " +
-            "           AND v.originalVoucherId IS NOT NULL) " +
-            "  AND v.deletedAt IS NULL " +
-            "GROUP BY e.subjectCode " +
-            "ORDER BY e.subjectCode ASC")
-    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectPosted(
-            @Param("factoryId") String factoryId,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate);
+    default List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectPosted(
+            String factoryId, LocalDate startDate, LocalDate endDate) {
+        // Closing and P&L must use identical ordinary-reversal and active-COGS rules.
+        return aggregateBySubjectExcludingDraftAndClosing(factoryId, startDate, endDate);
+    }
 
     /**
      * F006 财务审计 Bug 6 (2026-07-04): 官方财务报表 (资产负债表/科目余额表/总账/试算平衡表/明细账)
      * 专用 — 排除 DRAFT (未财审草稿), 但<b>保留 REVERSED</b>.
      *
      * <p>与 {@link #aggregateBySubject} 的唯一区别: 多排除 DRAFT。与 {@link #aggregateBySubjectPosted}
-     * 的关键区别: <b>不</b>排除 REVERSED, 也<b>不</b>按 voucherType 排除 PL_CLOSING/COST_CARRYOVER
+     * 的关键区别: 不按 voucherType 排除 PL_CLOSING/COST_CARRYOVER
      * 红冲镜像。
      *
      * <p><b>为什么必须保留 REVERSED</b> (红字冲销 "金蝶规范", 见 {@code VoucherServiceImpl.reversePostedVoucher}):
      * 已过账凭证不可直接抹掉, 而是原凭证标记 REVERSED (状态标记, 财务效应<b>不</b>清零) + 生成一张
      * 借贷互换的红字冲销凭证 (POSTED, 同期). 两者<b>都需计入</b>聚合才能借贷互相抵消归零
      * (原凭证 debit X 仍计 + 冲销凭证 credit X 计 → 该科目净额归零)。若像
-     * {@link #aggregateBySubjectPosted} 那样用 {@code status = POSTED} 排除 REVERSED, 则原凭证的
+     * 旧版那样用 {@code status = POSTED} 排除 REVERSED, 则原凭证的
      * 财务效应被抹掉、只剩冲销凭证的相反分录被计入 → 净额变成"倍数冲销"(双重错误), 而非正确的零。
      * 这不是假设 — {@code SalesOrderVoucherListener}/{@code ReturnOrderVoucherListener} 复用同一
      * {@code voidVoucher→reversePostedVoucher} 机制处理销售/退货凭证撤销, 是日常高频业务场景。
@@ -261,9 +248,11 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
      * 清零抵消 → 利润表对一个<b>已结账</b>的期间会显示营业收入=0/成本=0 (荒谬 —— 利润表要展示的
      * 是"本期真实发生的业务活动", 与是否已完成结账机械动作无关)。此排除逻辑与
      * {@link #aggregateBySubjectPosted} (结转损益专用) 完全一致 —— 二者本质计算同一个量
-     * ("本期业务口径损益, 不含结转噪音") —— 唯一区别是本方法<b>保留 REVERSED</b> 以支持红字冲销
+     * ("本期业务口径损益, 不含结转噪音")，现在复用本方法，均保留普通 REVERSED 以支持红字冲销
      * 正确抵消 (见上)。
      *
+     * <p>COGS 结转原凭证变为 REVERSED 后也必须排除：其红冲镜像在上面已排除，
+     * 只保留当前有效结转。普通业务的 REVERSED 原凭证及其红冲仍同时保留、互相抵消。
      * <p>用途: {@code IncomeStatementService}, {@code VoucherExportServiceImpl.exportIncomeStatement}。
      */
     @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
@@ -277,7 +266,8 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.DRAFT " +
             "  AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
             "  AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER " +
-            "           AND v.originalVoucherId IS NOT NULL) " +
+            "           AND (v.originalVoucherId IS NOT NULL " +
+            "                OR v.status = com.cretas.aims.entity.enums.VoucherStatus.REVERSED)) " +
             "  AND v.deletedAt IS NULL " +
             "GROUP BY e.subjectCode " +
             "ORDER BY e.subjectCode ASC")
@@ -293,7 +283,7 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
             "AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.DRAFT " +
             "AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
-            "AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER AND v.originalVoucherId IS NOT NULL) " +
+            "AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER AND (v.originalVoucherId IS NOT NULL OR v.status = com.cretas.aims.entity.enums.VoucherStatus.REVERSED)) " +
             "AND v.deletedAt IS NULL GROUP BY e.subjectCode ORDER BY e.subjectCode ASC")
     List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectExcludingDraftAndClosingInScope(
             @Param("factoryId") String factoryId,
@@ -306,7 +296,7 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             + "FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id JOIN scoped_vouchers sv ON sv.id=v.id AND sv.factory_id=v.factory_id "
             + "WHERE v.factory_id=:factoryId AND v.voucher_date BETWEEN :startDate AND :endDate "
             + "AND e.deleted_at IS NULL AND v.status <> 'VOID' AND v.status <> 'DRAFT' AND v.voucher_type <> 'PL_CLOSING' "
-            + "AND NOT (v.voucher_type='COST_CARRYOVER' AND v.original_voucher_id IS NOT NULL) AND v.deleted_at IS NULL "
+            + "AND NOT (v.voucher_type='COST_CARRYOVER' AND (v.original_voucher_id IS NOT NULL OR v.status='REVERSED')) AND v.deleted_at IS NULL "
             + "GROUP BY e.subject_code ORDER BY e.subject_code ASC",
            nativeQuery = true)
     List<Object[]> aggregateBySubjectExcludingDraftAndClosingInOwnerScopeNative(

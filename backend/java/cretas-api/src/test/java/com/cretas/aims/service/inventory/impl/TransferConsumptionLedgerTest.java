@@ -85,6 +85,7 @@ class TransferConsumptionLedgerTest {
         b.setReceiptQuantity(BigDecimal.valueOf(receipt));
         b.setUsedQuantity(BigDecimal.valueOf(used));
         b.setReservedQuantity(BigDecimal.ZERO);
+        b.setQuantityUnit("kg");
         b.setUnitPrice(BigDecimal.valueOf(price));
         b.setStatus(MaterialBatchStatus.AVAILABLE);
         return b;
@@ -102,6 +103,7 @@ class TransferConsumptionLedgerTest {
         item.setItemType(TransferItemType.RAW_MATERIAL);
         item.setMaterialTypeId(MATERIAL_TYPE);
         item.setQuantity(BigDecimal.valueOf(15));   // 15 = 10(B1 全部) + 5(B2 部分) → 必然跨两个批次
+        item.setUnit("kg");
         item.setSourceBatchId(null);                // 不预选 → 纯 FEFO
 
         transfer = new InternalTransfer();

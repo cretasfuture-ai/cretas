@@ -129,6 +129,7 @@ class TransferShipBatchSelectionTest {
         b.setReceiptQuantity(receipt);
         b.setUsedQuantity(used);
         b.setReservedQuantity(BigDecimal.ZERO);
+        b.setQuantityUnit("kg");
         b.setExpireDate(expire);
         b.setStatus(MaterialBatchStatus.AVAILABLE);
         return b;

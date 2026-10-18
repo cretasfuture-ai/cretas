@@ -407,7 +407,7 @@ public class WastageReportServiceImpl implements WastageReportService {
      *       需求未区分两轨的会计后果, 与半成品盘亏 / 餐饮报损同科目)。金额与分录由
      *       {@link WastageReportVoucherGenerator} 统一计算 (单一事实来源)。</li>
      *   <li><b>持久化</b>: 用 {@code voucherService.createManual} 直建 POSTED 凭证 (审批即入账),
-     *       镜像半成品盘点差异过账。createManual 借贷必平自校验 + 刻意绕过期间结账 gate
+     *       镜像半成品盘点差异过账。createManual 自校验借贷平衡，普通损耗凭证仍须遵守期间守卫
      *       (库存校准类事件须能过账)。</li>
      *   <li><b>幂等</b>: 状态机已保证 approve 仅 PENDING_APPROVAL→APPLIED 一次性迁移;
      *       再加 findBySourceBusiness 前置判重 + DB uk_voucher_source_business

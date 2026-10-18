@@ -50,8 +50,8 @@ public class OperationLog extends BaseEntity {
     @Column(name = "module", nullable = false, length = 64)
     private String module;
 
-    /** CREATE | UPDATE | DELETE | EXPORT | IMPORT | OTHER. */
-    @Column(name = "action", nullable = false, length = 20)
+    /** Stable action code, including business actions such as RECALCULATE_SETTLED_COSTS. */
+    @Column(name = "action", nullable = false, length = 64)
     private String action;
 
     @Column(name = "entity_type", length = 200)

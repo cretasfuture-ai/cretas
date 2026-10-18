@@ -156,6 +156,35 @@ class ProductionScopeContractTest {
         assertThat(service.getProductionPlanList(FACTORY, PageRequest.of(1, 20)).getTotalElements()).isEqualTo(3L);
     }
 
+    @Test
+    void settledCostRecalculationChecksOwnerBeforeLockingOrChangingCosts() {
+        Fixture fixture = fixture();
+        when(businessRowScope.creatorIds(FACTORY)).thenReturn(List.of(fixture.ownerId()));
+        var costGuard = mock(com.cretas.aims.service.finance.ProductionCostConsistency.class);
+        var settlements = mock(com.cretas.aims.repository.ProductionSettlementRepository.class);
+        var batches = mock(com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository.class);
+        ReflectionTestUtils.setField(service,"productionCostConsistency",costGuard);
+        ReflectionTestUtils.setField(service,"productionSettlementRepository",settlements);
+        ReflectionTestUtils.setField(service,"finishedGoodsBatchRepository",batches);
+        assertThatThrownBy(() -> service.recalculateSettledPlanCosts(FACTORY,"SCOPE-OUTSIDE"))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        error -> assertThat(error.getCode()).isEqualTo(403));
+        org.mockito.Mockito.verifyNoInteractions(costGuard,settlements,batches);
+        assertThatThrownBy(() -> service.updateActualCosts(FACTORY,"SCOPE-OUTSIDE",null,null,BigDecimal.ONE,null))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        error -> assertThat(error.getCode()).isEqualTo(403));
+        org.mockito.Mockito.verifyNoInteractions(costGuard,settlements,batches);
+        // Same restricted actor may reach the ordinary dependency check for their own plan.
+        assertThatThrownBy(() -> service.recalculateSettledPlanCosts(FACTORY,"SCOPE-OWN-DONE"))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        error -> assertThat(error.getCode()).isEqualTo(500))
+                .hasMessageContaining("结单成本重算依赖不可用");
+        org.mockito.Mockito.verify(costGuard).assertChangeAllowed(FACTORY,"SCOPE-OWN-DONE");
+        org.mockito.Mockito.verifyNoInteractions(settlements,batches);
+        assertThat(productionPlanRepository.findByIdAndFactoryId("SCOPE-OUTSIDE",FACTORY).orElseThrow().getActualMaterialCost())
+                .isEqualByComparingTo("100.00");
+    }
+
     private Fixture fixture() {
         Factory factory = factory(FACTORY, "scope-service-factory");
         Factory otherFactory = factory(OTHER_FACTORY, "scope-other-factory");

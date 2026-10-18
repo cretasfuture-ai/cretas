@@ -163,6 +163,10 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Column(name = "source_sales_order_item_id", length = 50)
     private String sourceSalesOrderItemId;
 
+    /** Stable return-order-line lineage for a physical sales-return child batch. */
+    @Column(name = "return_order_item_id")
+    private Long returnOrderItemId;
+
     /**
      * D1 双仓流转 (2026-05-10 spec, PR #309 A1=A).
      * FK to factory_warehouses.id. 默认 WH-WKS (车间仓) — 成品诞生于生产, 反向调拨前在车间仓.

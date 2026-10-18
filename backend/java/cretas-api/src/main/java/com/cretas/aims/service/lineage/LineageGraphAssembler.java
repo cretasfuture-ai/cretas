@@ -115,7 +115,7 @@ public class LineageGraphAssembler {
         }
 
         NodeResolver resolver = resolveNodes(factoryId, ancestorRows, descendantRows, desensitize);
-        EdgeIndex edges = loadEdges(factoryId, ancestorRows, descendantRows);
+        EdgeIndex edges = loadEdges(factoryId, rootType, rootId, ancestorRows, descendantRows);
 
         List<TraceabilityDTO.LineageDepthGroup> ancestors = groupByDepth(
                 ancestorRows, BatchLineageClosure::getAncestorType, BatchLineageClosure::getAncestorId,
@@ -307,7 +307,8 @@ public class LineageGraphAssembler {
     private record EdgeIndex(Map<String, List<BatchLineageEdge>> bySource,
                              Map<String, List<BatchLineageEdge>> byTarget) {}
 
-    private EdgeIndex loadEdges(String factoryId, List<BatchLineageClosure> ancestorRows,
+    private EdgeIndex loadEdges(String factoryId, String rootType, String rootId,
+                                List<BatchLineageClosure> ancestorRows,
                                 List<BatchLineageClosure> descendantRows) {
         Set<String> ancestorIds = ancestorRows.stream()
                 .map(BatchLineageClosure::getAncestorId).filter(Objects::nonNull)
@@ -316,14 +317,21 @@ public class LineageGraphAssembler {
                 .map(BatchLineageClosure::getDescendantId).filter(Objects::nonNull)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        Map<String, List<BatchLineageEdge>> bySource = ancestorIds.isEmpty()
-                ? Map.of()
-                : index(edgeRepository.findByFactoryIdAndSourceIdIn(factoryId, ancestorIds),
-                        e -> e.getSourceType() + "#" + e.getSourceId());
-        Map<String, List<BatchLineageEdge>> byTarget = descendantIds.isEmpty()
-                ? Map.of()
-                : index(edgeRepository.findByFactoryIdAndTargetIdIn(factoryId, descendantIds),
-                        e -> e.getTargetType() + "#" + e.getTargetId());
+        List<BatchLineageEdge> sourceEdges = ancestorIds.isEmpty()
+                ? List.of() : edgeRepository.findByFactoryIdAndSourceIdIn(factoryId, ancestorIds);
+        Map<String, List<BatchLineageEdge>> bySource = index(
+                (sourceEdges == null ? List.<BatchLineageEdge>of() : sourceEdges).stream()
+                        .filter(e -> isSameNode(e.getTargetType(), e.getTargetId(), rootType, rootId))
+                        .collect(Collectors.toList()),
+                e -> e.getSourceType() + "#" + e.getSourceId());
+
+        List<BatchLineageEdge> targetEdges = descendantIds.isEmpty()
+                ? List.of() : edgeRepository.findByFactoryIdAndTargetIdIn(factoryId, descendantIds);
+        Map<String, List<BatchLineageEdge>> byTarget = index(
+                (targetEdges == null ? List.<BatchLineageEdge>of() : targetEdges).stream()
+                        .filter(e -> isSameNode(e.getSourceType(), e.getSourceId(), rootType, rootId))
+                        .collect(Collectors.toList()),
+                e -> e.getTargetType() + "#" + e.getTargetId());
         return new EdgeIndex(bySource, byTarget);
     }
 
@@ -560,15 +568,18 @@ public class LineageGraphAssembler {
             if (adjacent == null || adjacent.isEmpty()) {
                 return;
             }
-            Set<String> units = adjacent.stream()
-                    .map(BatchLineageEdge::getUnit)
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toSet());
             adjacent.stream()
                     .map(BatchLineageEdge::getEventTime)
                     .filter(Objects::nonNull)
                     .min(Comparator.naturalOrder())
                     .ifPresent(b::eventTime);
+            if (adjacent.stream().anyMatch(e -> e.getQuantityUsed() == null
+                    || e.getUnit() == null || e.getUnit().isBlank())) {
+                return;   // 缺少数量或单位 ⇒ 不能把剩余边的部分事实冒充完整汇总
+            }
+            Set<String> units = adjacent.stream()
+                    .map(BatchLineageEdge::getUnit)
+                    .collect(Collectors.toSet());
             if (units.size() > 1) {
                 return;   // 单位不一致 ⇒ 数量不可加，诚实留 null
             }

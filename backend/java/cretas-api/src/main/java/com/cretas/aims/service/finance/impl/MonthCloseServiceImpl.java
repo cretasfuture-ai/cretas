@@ -36,6 +36,9 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class MonthCloseServiceImpl implements MonthCloseService {
 
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     private final AccountingPeriodRepository periodRepo;
     private final AccountingPeriodService periodService;
     private final ArApService arApService;
@@ -43,6 +46,8 @@ public class MonthCloseServiceImpl implements MonthCloseService {
     private final ObjectMapper objectMapper;
     /** 资金段子账↔总账对账 (finance audit Bug 5): 读 1122/2202 凭证净余额。 */
     private final com.cretas.aims.repository.VoucherEntryRepository voucherEntryRepository;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.finance.ClosingReadinessService closingReadinessService;
 
     private static final String STATUS_PASS = "PASS";
     private static final String STATUS_WARNING = "WARNING";
@@ -52,7 +57,28 @@ public class MonthCloseServiceImpl implements MonthCloseService {
 
     @Override
     public MonthCloseReconciliationDTO previewClose(String factoryId, Integer year, Integer month) {
+        return reconcile(factoryId, year, month, null);
+    }
+
+    @Override
+    public MonthCloseReconciliationDTO reconcileFinalClose(String factoryId, Integer year, Integer month,
+                                                          IncomeStatementDTO finalReport) {
+        java.util.Objects.requireNonNull(finalReport, "finalReport");
+        if (!java.util.Objects.equals(factoryId,finalReport.getFactoryId())
+                || !java.util.Objects.equals(year,finalReport.getStartYear())
+                || !java.util.Objects.equals(year,finalReport.getEndYear())
+                || !java.util.Objects.equals(month,finalReport.getStartMonth())
+                || !java.util.Objects.equals(month,finalReport.getEndMonth())) {
+            throw new BusinessException(409,"最终利润表与工厂或结账期间不一致")
+                    .withHint("请从当前工厂重新生成该期间最终利润表，再提交结账核对");
+        }
+        return reconcile(factoryId, year, month, finalReport);
+    }
+
+    private MonthCloseReconciliationDTO reconcile(String factoryId, Integer year, Integer month,
+                                                  IncomeStatementDTO finalReport) {
         validateInput(factoryId, year, month);
+        boolean finalClose = finalReport != null;
 
         List<MonthCloseReconciliationDTO.CheckItem> checks = new ArrayList<>();
         boolean canClose = true;
@@ -62,21 +88,25 @@ public class MonthCloseServiceImpl implements MonthCloseService {
         boolean alreadyClosed = existing
                 .map(p -> p.getStatus() == AccountingPeriod.Status.CLOSED)
                 .orElse(false);
+        if (finalClose && !alreadyClosed) throw new BusinessException(409, "最终对账需要已结账期间")
+                .withHint("请先完成该期间结账，再生成最终利润表并进行最终对账");
         checks.add(MonthCloseReconciliationDTO.CheckItem.builder()
                 .name("期间状态")
-                .passed(!alreadyClosed)
+                .passed(finalClose || !alreadyClosed)
                 .severity(SEV_BLOCKING)
-                .detail(alreadyClosed
+                .detail(finalClose ? "期间已结账，本次核对最终结转数据" : alreadyClosed
                         ? String.format("%d-%02d 期间已结账, 不能重复结账 (如需重做请先反结账)", year, month)
                         : String.format("%d-%02d 期间未结账, 可执行月结", year, month))
                 .value(existing.map(p -> p.getStatus().name()).orElse("OPEN"))
                 .build());
-        if (alreadyClosed) {
+        if (alreadyClosed && !finalClose) {
             canClose = false;
         }
 
         // Check 2 (WARNING): 未审批的应收/应付调整 — 非阻塞, 提示财务先处理
-        long pendingAdjustments = countPendingAdjustments(factoryId);
+        long pendingAdjustments = finalClose
+                ? closingReadinessService.countPendingAdjustments(factoryId, year, month)
+                : countPendingAdjustments(factoryId);
         boolean noPending = pendingAdjustments == 0;
         checks.add(MonthCloseReconciliationDTO.CheckItem.builder()
                 .name("未审批的应收/应付调整")
@@ -89,7 +119,7 @@ public class MonthCloseServiceImpl implements MonthCloseService {
                 .build());
 
         // Check 3 (INFO): P&L 可生成 — 是否有收入/成本数据
-        IncomeStatementDTO pl = safeGenerateIncomeStatement(factoryId, year, month);
+        IncomeStatementDTO pl = finalClose ? finalReport : safeGenerateIncomeStatement(factoryId, year, month);
         boolean hasData = pl != null
                 && (isNonZero(pl.getTotalRevenue()) || isNonZero(pl.getTotalCost()));
         checks.add(MonthCloseReconciliationDTO.CheckItem.builder()
@@ -105,7 +135,7 @@ public class MonthCloseServiceImpl implements MonthCloseService {
 
         // Check 4 (WARNING): 资金段子账↔总账对账 (finance audit Bug 5) — AR/AP 子账 vs 1122/2202 GL 余额。
         // 非阻塞: 漂移只暴露不拦结账 (历史数据/手工调整无凭证/凭证生成失败都会漂移, 财务需可见即可)。
-        checks.add(buildSubledgerGlReconcileCheck(factoryId));
+        checks.add(buildSubledgerGlReconcileCheck(factoryId, finalClose));
 
         // 综合结论: 任一 WARNING check 失败 → WARNING; 否则 PASS
         boolean anyWarning = checks.stream()
@@ -128,6 +158,7 @@ public class MonthCloseServiceImpl implements MonthCloseService {
     @Override
     @Transactional
     public MonthCloseResultDTO executeClose(String factoryId, Integer year, Integer month, Long userId) {
+        if (entityManager != null) com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
         validateInput(factoryId, year, month);
 
         // Step 1: 幂等 — 已 CLOSED → 409 (防呆 Rule 4 防重复结账)
@@ -179,8 +210,8 @@ public class MonthCloseServiceImpl implements MonthCloseService {
                 factoryId, year, month, userId, pl.getNetProfit(), adjustDeadline,
                 reconciliation.getReconciliationStatus());
 
-        String msg = String.format("%d-%02d 月结完成: 报表已生成 (净利润 %s), 调整窗口至 %s",
-                year, month, nz(pl.getNetProfit()), adjustDeadline.toLocalDate());
+        String msg = String.format("%d-%02d 已进入调整窗口，当前报表为已过账数据预览；锁定结转后刷新最终报表。调整截止 %s",
+                year, month, adjustDeadline.toLocalDate());
 
         return MonthCloseResultDTO.builder()
                 .period(saved)
@@ -218,7 +249,7 @@ public class MonthCloseServiceImpl implements MonthCloseService {
      * 偏差超容差 → WARNING (passed=false, 不阻塞结账), detail 列出两套账数字 + 差额供财务核查。
      * 常见漂移源: 手工调整无凭证 / 历史数据 / 凭证生成 fail-soft 失败。计算失败 fail-open 返 INFO。
      */
-    private MonthCloseReconciliationDTO.CheckItem buildSubledgerGlReconcileCheck(String factoryId) {
+    private MonthCloseReconciliationDTO.CheckItem buildSubledgerGlReconcileCheck(String factoryId, boolean finalClose) {
         try {
             java.util.Map<String, Object> overview = arApService.getFinanceOverview(factoryId);
             java.math.BigDecimal subAr = nzd(asDecimal(overview.get("totalReceivable")));
@@ -250,8 +281,8 @@ public class MonthCloseServiceImpl implements MonthCloseService {
             log.warn("[MonthClose] 子账↔总账对账计算失败 factory={}: {}", factoryId, e.getMessage());
             return MonthCloseReconciliationDTO.CheckItem.builder()
                     .name("子账↔总账对账 (应收/应付)")
-                    .passed(true)  // 计算失败不阻塞结账 (INFO)
-                    .severity(SEV_INFO)
+                    .passed(!finalClose)
+                    .severity(finalClose ? SEV_WARNING : SEV_INFO)
                     .detail("对账计算失败, 跳过 (不阻塞结账): " + e.getMessage())
                     .build();
         }

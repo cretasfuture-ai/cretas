@@ -359,6 +359,19 @@ class CanvasFoodSafetyControllerTest {
     // ==================== Summary endpoint ====================
 
     @Test
+    void batchRecallCannotBeClosedThroughGenericEventEditor() {
+        var recallService = org.mockito.Mockito.mock(com.cretas.aims.service.quality.FactoryRecallService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "factoryRecallService", recallService);
+        when(recallEventRepo.findById(77L)).thenReturn(Optional.of(RecallEvent.builder()
+                .id(77L).factoryId("F006").status("FROZEN").version(0L).build()));
+        when(recallService.isManagedRecall("F006", 77L)).thenReturn(true);
+        var error = org.junit.jupiter.api.Assertions.assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> controller.updateRecall("F006", 77L, Map.of("status", "COMPLETED", "version", 0L)));
+        assertEquals(409, error.getCode());
+        verify(recallEventRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
     @DisplayName("Summary: aggregates counts from all 4 mockable repos")
     void testSummaryAggregates() {
         when(haccpCheckpointRepo.findByFactoryIdAndActiveTrue("F006"))

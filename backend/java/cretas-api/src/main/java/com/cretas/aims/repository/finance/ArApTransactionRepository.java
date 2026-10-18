@@ -81,7 +81,7 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
 
     @Query(value = "SELECT COALESCE(SUM(CASE "
             + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "
-            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT') "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') "
             + "AND t.approval_status='APPROVED' THEN t.amount "
             + "WHEN t.transaction_type IN ('AR_INVOICE','AP_INVOICE') THEN t.amount "
             + "ELSE 0 END), 0) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
@@ -109,7 +109,7 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             @Param("today") LocalDate today, @Param("owners") List<Long> owners);
 
     @Query(value = "SELECT COALESCE(SUM(CASE WHEN t.transaction_type='AR_INVOICE' THEN t.amount "
-            + "WHEN t.transaction_type='AR_ADJUSTMENT' AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AR_REFUND') AND t.approval_status='APPROVED' THEN t.amount "
             + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END),0) "
             + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.counterparty_type='CUSTOMER' "
             + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
@@ -126,7 +126,7 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "
             + "ELSE t.amount END) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId "
             + "AND t.counterparty_type=:type AND t.deleted_at IS NULL "
-            + "AND (t.transaction_type NOT IN ('AR_ADJUSTMENT','AP_ADJUSTMENT') OR t.approval_status='APPROVED') "
+            + "AND (t.transaction_type NOT IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') OR t.approval_status='APPROVED') "
             + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
             + "GROUP BY t.counterparty_id,t.counterparty_name", nativeQuery = true)
     List<Object[]> sumByCounterpartyScoped(@Param("factoryId") String factoryId,
@@ -147,8 +147,8 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
 
     @Query(value = "SELECT t.transaction_type, COUNT(*), COALESCE(SUM(CASE "
             + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "
-            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT') AND t.approval_status='APPROVED' THEN t.amount "
-            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT') THEN 0 ELSE t.amount END),0) "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AP_ADJUSTMENT','AR_REFUND') THEN 0 ELSE t.amount END),0) "
             + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
             + "GROUP BY t.transaction_type", nativeQuery = true)
     List<Object[]> statisticsByTypeScoped(@Param("factoryId") String factoryId, @Param("owners") List<Long> owners);
@@ -290,6 +290,8 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE THEN t.amount " +
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT " +
             "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
+            "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND " +
+            "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
             "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT, " +
             "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE) THEN -ABS(t.amount) " +
             "  ELSE 0 END), 0) FROM ArApTransaction t " +
@@ -340,6 +342,7 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             "FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = :type " +
             "AND (t.transactionType NOT IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT, " +
+            "                                com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND, " +
             "                                com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT) " +
             "     OR t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED) " +
             "GROUP BY t.counterpartyId, t.counterpartyName " +
@@ -387,6 +390,9 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             "WHERE t.factoryId = :factoryId " +
             "AND t.counterpartyType = :type AND t.counterpartyId = :counterpartyId " +
             "AND t.transactionDate < :startDate " +
+            "AND (t.transactionType NOT IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT, " +
+            "                                com.cretas.aims.entity.enums.ArApTransactionType.AR_REFUND) " +
+            "     OR t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED) " +
             "ORDER BY t.transactionDate DESC, t.createdAt DESC")
     List<BigDecimal> findOpeningBalance(
             @Param("factoryId") String factoryId,

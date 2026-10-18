@@ -44,6 +44,13 @@ public class DisposalController {
 
     private final DisposalRecordService disposalRecordService;
 
+    @GetMapping("/{id}/vouchers")
+    @RequirePermission({"finance:read", "finance:read_write"})
+    @Operation(summary = "查看报废对应的原始、红字及成本修订凭证")
+    public ResponseEntity<?> getAccountingVouchers(@PathVariable String factoryId, @PathVariable Long id) {
+        return ResponseEntity.ok(Map.of("success",true,"data",disposalRecordService.getAccountingHistory(factoryId,id)));
+    }
+
     @GetMapping("/eligible-finished-goods")
     @RequirePermission({"warehouse:read_write", "quality:read", "quality:read_write"})
     @Operation(summary = "废弃申请可选成品批次", description = "仅返回未发货、未预留且可用量大于零的成品余额")
@@ -61,14 +68,13 @@ public class DisposalController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestParam(defaultValue = "0") @Parameter(description = "页码（0-based）", example = "0") int page,
             @RequestParam(defaultValue = "10") @Parameter(description = "每页大小", example = "10") int size,
-            @RequestParam(required = false) @Parameter(description = "报废类型过滤：material（原材料）/product（产品）/equipment（设备）", example = "material") String type) {
+            @RequestParam(required = false) @Parameter(description = "报废类型过滤：material（原材料）/product（产品）/equipment（设备）", example = "material") String type,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String finishedGoodsBatchId) {
         try {
-            Page<DisposalRecord> records;
-            if (type != null && !type.isEmpty()) {
-                records = disposalRecordService.getByFactoryIdAndType(factoryId, type, page, size);
-            } else {
-                records = disposalRecordService.getByFactoryId(factoryId, page, size);
-            }
+            Page<DisposalRecord> records = disposalRecordService.getByFactoryIdWithFilters(
+                    factoryId, type, status, keyword, finishedGoodsBatchId, page, size);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -199,7 +205,7 @@ public class DisposalController {
     //   ⇒ 质检角色(quality_manager / quality_inspector / group_leader)在质检菜单里
     //     看得见报废入口, 点下去必 403。判定不合格 -> 报废本就是质检流程的一环。
     // ⚠️ 保留 warehouse: 仓储侧盘亏报废是另一条真实入口, ⛔ 不是替换。
-    @RequirePermission({"warehouse:read_write", "quality:read_write"})
+    @RequirePermission({"warehouse:read_write", "quality:read_write", "finance:read_write"})
     @RequireModule("quality_inspection")
     @PutMapping("/{id}/approve")
     @Operation(summary = "审批报废记录(通过)", description = "审批通过指定报废记录。审批人从登录态取, 需财务/工厂管理员角色。通过后状态变更为已批准, 库存相应减少")

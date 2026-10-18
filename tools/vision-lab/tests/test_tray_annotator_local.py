@@ -93,6 +93,15 @@ async function confirmOk(){
         self.assertIn("action==='replace'", standalone.PAGE)
         self.assertIn("旧框会保留，画完新框后才替换", standalone.PAGE)
 
+    def test_standalone_reuses_the_daily_editor_core(self):
+        self.assertTrue(standalone.EDITOR_CORE_PATH.is_file())
+        self.assertIn("from '/assets/box-editor-core.js'", standalone.PAGE)
+        self.assertIn('script type="module"', standalone.PAGE)
+        self.assertIn('Object.assign(window,{go,zoomOut', standalone.PAGE)
+        self.assertIn('boxes[sel]=moveBox(o,dx,dy)', standalone.PAGE)
+        self.assertIn('boxes[sel]=resizeBox(o,drag.corner,x,y)', standalone.PAGE)
+        self.assertNotIn('function cornerHit(', standalone.PAGE)
+
     def test_standalone_page_exposes_cursor_centred_mouse_zoom(self):
         self.assertIn('onclick="zoomOut()">缩小', standalone.PAGE)
         self.assertIn('onclick="zoomIn()">放大', standalone.PAGE)

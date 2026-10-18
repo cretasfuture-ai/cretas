@@ -7,9 +7,14 @@ import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.ReturnOrderItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
@@ -17,6 +22,9 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
+import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.LinkArrayService;
@@ -24,6 +32,13 @@ import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.inventory.ReturnOrderService;
+import com.cretas.aims.service.inventory.ReturnOrderRowLock;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.voucher.VoucherService;
+import com.cretas.aims.entity.enums.VoucherStatus;
+import com.cretas.aims.entity.finance.Voucher;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -40,6 +55,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class ReturnOrderServiceImpl implements ReturnOrderService {
@@ -54,12 +70,23 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     private final ArApService arApService;
     private final ApplicationEventPublisher applicationEventPublisher;
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private EntityManager entityManager;
-
     /** Purchase-return source lock/capacity gate. Optional only for legacy unit-test construction. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PurchaseReturnCapacityService purchaseReturnCapacityService;
+    /** Synchronous rejection accounting must share the rejection transaction. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VoucherService voucherService;
+
+    /**
+     * Serialize completion side effects for one return order.  The entity @Version
+     * check protects the final status update, but AR/AP and inbound writes happen
+     * before that update, so optimistic locking alone is too late for a duplicate
+     * concurrent completion.
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.finance.AccountingPeriodService accountingPeriodService;
 
     // T-RTA Phase C (issue #571): create DEFECTIVE FinishedGoodsBatch in the factory's
     // 成品仓 (WH-FG, via WarehouseResolver#resolveFinishedGoodsId) on sales return
@@ -72,6 +99,18 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WarehouseResolver warehouseResolver;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UnitContractService unitContractService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesOrderItemRepository salesOrderItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesDeliveryRecordRepository salesDeliveryRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesDeliveryItemBatchAllocationRepository salesDeliveryItemBatchAllocationRepository;
 
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -149,6 +188,17 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                 return purchasePreparation.existingOrder();
             }
         }
+        Map<Integer, String> sourceBatchIdsByLine = Map.of();
+        boolean physicalSalesReturn = returnType == ReturnType.SALES_RETURN
+                && (request.getWithGoods() == null || Boolean.TRUE.equals(request.getWithGoods()));
+
+        if (physicalSalesReturn && (request.getSourceOrderId() == null || request.getSourceOrderId().isBlank())) {
+            throw salesReturnEvidenceError("销售实物退货必须关联源销售订单",
+                    "请提供真实销售订单号后再登记实物退货；无货退款不需要入库证据");
+        }
+        if (physicalSalesReturn) {
+            sourceBatchIdsByLine = deriveOrValidateSalesReturnBatchEvidence(factoryId, request, null);
+        }
 
         // Round 11 T2: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
@@ -198,7 +248,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         BigDecimal totalAmount = BigDecimal.ZERO;
         List<ReturnOrderItem> items = new ArrayList<>();
 
-        for (CreateReturnOrderRequest.ReturnOrderItemDTO itemDTO : request.getItems()) {
+        for (int itemIndex = 0; itemIndex < request.getItems().size(); itemIndex++) {
+            CreateReturnOrderRequest.ReturnOrderItemDTO itemDTO = request.getItems().get(itemIndex);
             ReturnOrderItem item = new ReturnOrderItem();
             item.setReturnOrderId(order.getId());
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
@@ -215,6 +266,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                         .setScale(2, BigDecimal.ROUND_HALF_UP);
             }
             item.setLineAmount(lineAmount);
+            item.setSourceFinishedGoodsBatchId(sourceBatchIdsByLine.get(itemIndex));
             items.add(item);
             totalAmount = totalAmount.add(lineAmount);
         }
@@ -270,6 +322,326 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         log.info("创建退货单: factoryId={}, returnNumber={}, type={}, items={}",
                 factoryId, returnNumber, returnType, items.size());
         return order;
+    }
+
+    /**
+     * Preserve the ordinary sales-order return入口 while keeping physical returns tied to
+     * actual shipped stock. The web client historically omitted batchNumber; only a unique
+     * allocation for one unique sales-order line may fill it. An explicitly supplied batch
+     * still has to be present in a shipped/delivered allocation for this order and line.
+     */
+    private Map<Integer, String> deriveOrValidateSalesReturnBatchEvidence(
+            String factoryId, CreateReturnOrderRequest request, String excludedReturnOrderId) {
+        if (salesOrderItemRepository == null || salesDeliveryRecordRepository == null
+                || salesDeliveryItemBatchAllocationRepository == null || finishedGoodsBatchRepository == null) {
+            throw salesReturnEvidenceError("当前销售订单缺少可核验的实际发货批次记录",
+                    "请打开销售发货批次明细后按实际批次分别登记退货");
+        }
+        List<SalesOrderItem> orderLines = salesOrderItemRepository
+                .findBySalesOrderIdAndSalesOrderFactoryId(request.getSourceOrderId(), factoryId);
+        if (orderLines == null) orderLines = List.of();
+        Map<Integer, String> sourceBatchIdsByLine = new LinkedHashMap<>();
+        Map<Integer, SalesReturnBatchEvidence> evidenceByLine = new LinkedHashMap<>();
+        Set<String> sourceBatchIdsToLock = new TreeSet<>();
+        String requestedShipmentId = shipmentIdFromRemark(request.getRemark());
+        if (containsShipmentMarker(request.getRemark()) && isBlank(requestedShipmentId)) {
+            throw salesReturnEvidenceError("销售退货发货单关联凭据无效",
+                    "请提供完整的 SHIPMENT_ID，并确保它属于当前销售订单的已发货单");
+        }
+        for (int itemIndex = 0; itemIndex < request.getItems().size(); itemIndex++) {
+            CreateReturnOrderRequest.ReturnOrderItemDTO item = request.getItems().get(itemIndex);
+            if (item == null || item.getProductTypeId() == null || item.getProductTypeId().isBlank()) {
+                continue;
+            }
+            List<SalesOrderItem> matchingLines = orderLines.stream()
+                    .filter(line -> line != null
+                            && Objects.equals(item.getProductTypeId(), line.getProductTypeId()))
+                    .toList();
+            if (matchingLines.size() != 1) {
+                throw salesReturnEvidenceError("销售退货 SKU 对应的订单行不唯一，无法安全归属批次",
+                        "请按实际发货批次分别登记退货，并先拆分相同 SKU 的订单行");
+            }
+            SalesOrderItem orderLine = matchingLines.get(0);
+            List<SalesDeliveryItem> shippedItems = shippedItemsForOrderLine(
+                    factoryId, request.getSourceOrderId(), orderLine);
+            List<SalesDeliveryItemBatchAllocation> allocations = new ArrayList<>();
+            Map<String, String> shipmentIdByDeliveryItemId = new HashMap<>();
+            for (SalesDeliveryItem deliveryItem : shippedItems) {
+                if (deliveryItem == null || deliveryItem.getId() == null) continue;
+                String deliveryItemId = String.valueOf(deliveryItem.getId());
+                shipmentIdByDeliveryItemId.put(deliveryItemId, trimToNull(deliveryItem.getDeliveryRecordId()));
+                List<SalesDeliveryItemBatchAllocation> rows =
+                        salesDeliveryItemBatchAllocationRepository.findByFactoryIdAndDeliveryItemId(
+                                factoryId, deliveryItemId);
+                if (rows != null) {
+                    rows.stream()
+                            .filter(row -> row != null
+                                    && Objects.equals(factoryId, row.getFactoryId())
+                                    && Objects.equals(deliveryItemId,
+                                            trimToNull(row.getDeliveryItemId())))
+                            .forEach(allocations::add);
+                }
+            }
+            String requestedBatch = trimToNull(item.getBatchNumber());
+            List<SalesDeliveryItemBatchAllocation> candidates = allocations.stream()
+                    .filter(allocation -> allocation != null
+                            && allocation.getAllocatedQty() != null
+                            && allocation.getAllocatedQty().signum() > 0
+                            && !isBlank(allocation.getFinishedGoodsBatchId())
+                            && !isBlank(allocation.getBatchNumber())
+                            && (requestedBatch == null
+                                || requestedBatch.equals(allocation.getBatchNumber().trim())))
+                    .toList();
+            if (candidates.isEmpty()) {
+                throw salesReturnEvidenceError("销售退货没有对应的已发货成品批次: " + item.getProductTypeId(),
+                        "请按实际发货批次分别登记退货；当前订单没有可核验的 SHIPPED/DELIVERED 批次");
+            }
+            Set<String> candidateShipmentIds = candidates.stream()
+                    .map(allocation -> shipmentIdByDeliveryItemId.get(trimToNull(allocation.getDeliveryItemId())))
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (candidateShipmentIds.stream().anyMatch(ReturnOrderServiceImpl::isBlank)
+                    || candidateShipmentIds.isEmpty()) {
+                throw salesReturnEvidenceError("销售退货缺少可核验的实际发货单据身份",
+                        "请使用真实 SHIPPED/DELIVERED 发货单后再登记退货");
+            }
+            if (!isBlank(requestedShipmentId)) {
+                if (!candidateShipmentIds.contains(requestedShipmentId)) {
+                    throw salesReturnEvidenceError("销售退货关联的 shipment 不属于当前订单或未实际发货",
+                            "请按当前销售订单实际 SHIPPED/DELIVERED 发货单登记退货");
+                }
+                candidates = candidates.stream()
+                        .filter(allocation -> Objects.equals(requestedShipmentId,
+                                shipmentIdByDeliveryItemId.get(trimToNull(allocation.getDeliveryItemId()))))
+                        .toList();
+            } else if (candidateShipmentIds.size() > 1) {
+                throw salesReturnEvidenceError("同一销售订单存在多个实际发货 shipment，不能自动猜分配",
+                        "请提供真实 SHIPMENT_ID 后按发货单分别登记退货");
+            }
+            Map<String, List<SalesDeliveryItemBatchAllocation>> byBatch = candidates.stream()
+                    .collect(Collectors.groupingBy(a -> a.getFinishedGoodsBatchId().trim(), LinkedHashMap::new,
+                            Collectors.toList()));
+            if (requestedBatch == null && byBatch.size() != 1) {
+                throw salesReturnEvidenceError("销售退货对应多个实际成品批次，不能自动猜批次",
+                        "请按实际发货批次分别登记退货，每个批次单独提交");
+            }
+            if (byBatch.size() != 1) {
+                throw salesReturnEvidenceError("销售退货批次证据不唯一，无法核验指定批次",
+                        "请按实际发货批次分别登记退货");
+            }
+            List<SalesDeliveryItemBatchAllocation> selected = byBatch.values().iterator().next();
+            String batchId = byBatch.keySet().iterator().next();
+            evidenceByLine.put(itemIndex, new SalesReturnBatchEvidence(
+                    itemIndex, item, orderLine, selected, batchId, requestedShipmentId, candidateShipmentIds));
+            sourceBatchIdsToLock.add(batchId);
+        }
+
+        // Lock every distinct source batch in stable ID order before validating any
+        // line. This keeps reverse client line order from acquiring the same locks in
+        // opposite order during concurrent create/complete requests.
+        Map<String, FinishedGoodsBatch> lockedSources = new LinkedHashMap<>();
+        for (String batchId : sourceBatchIdsToLock) {
+            FinishedGoodsBatch source = finishedGoodsBatchRepository
+                    .findByIdAndFactoryIdForUpdate(batchId, factoryId)
+                    .orElseThrow(() -> salesReturnEvidenceError("销售退货原成品批次不存在或不属于当前工厂",
+                            "请按实际发货批次分别登记退货"));
+            lockedSources.put(batchId, source);
+        }
+
+        for (SalesReturnBatchEvidence evidence : evidenceByLine.values()) {
+            int itemIndex = evidence.itemIndex();
+            CreateReturnOrderRequest.ReturnOrderItemDTO item = evidence.item();
+            SalesOrderItem orderLine = evidence.orderLine();
+            List<SalesDeliveryItemBatchAllocation> selected = evidence.selected();
+            String batchId = evidence.batchId();
+            String requestedShipmentIdForLine = evidence.requestedShipmentId();
+            Set<String> candidateShipmentIds = evidence.candidateShipmentIds();
+            FinishedGoodsBatch source = lockedSources.get(batchId);
+            String orderUnit = trimToNull(orderLine.getUnit());
+            String sourceUnit = trimToNull(source.getUnit());
+            if (!Objects.equals(batchId, source.getId())
+                    || !Objects.equals(factoryId, source.getFactoryId())
+                    || !Objects.equals(item.getProductTypeId(), trimToNull(source.getProductTypeId()))
+                    || isBlank(source.getBatchNumber())) {
+                throw salesReturnEvidenceError("销售退货实际发货批次与当前工厂或 SKU 不一致",
+                        "请按实际发货批次分别登记退货");
+            }
+            for (SalesDeliveryItemBatchAllocation allocation : selected) {
+                if (!Objects.equals(trimToNull(source.getBatchNumber()), trimToNull(allocation.getBatchNumber()))
+                        || !unitsEquivalent(factoryId, orderUnit, allocation.getUnit())
+                        || !unitsEquivalent(factoryId, orderUnit, sourceUnit)) {
+                    throw salesReturnEvidenceError("销售退货订单单位与实际发货/源批次单位不一致",
+                            "请按实际发货批次分别登记退货；系统不会把盒直接当作 kg");
+                }
+            }
+            BigDecimal shippedQuantity = selected.stream()
+                    .map(SalesDeliveryItemBatchAllocation::getAllocatedQty)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal alreadyReturned = existingSalesReturnQuantity(
+                    factoryId, request.getSourceOrderId(), item.getProductTypeId(),
+                    trimToNull(source.getBatchNumber()), excludedReturnOrderId,
+                    requestedShipmentIdForLine, candidateShipmentIds);
+            BigDecimal requestedQuantity = requestedQuantityForBatch(
+                    request, item.getProductTypeId(), trimToNull(source.getBatchNumber()));
+            if (requestedQuantity.signum() <= 0
+                    || requestedQuantity.add(alreadyReturned).compareTo(shippedQuantity) > 0) {
+                throw salesReturnEvidenceError("销售退货数量超过该实际发货批次可退上限",
+                        "请减少退货数量，或按实际发货批次分别登记退货");
+            }
+            item.setBatchNumber(trimToNull(source.getBatchNumber()));
+            sourceBatchIdsByLine.put(itemIndex, source.getId());
+        }
+        return sourceBatchIdsByLine;
+    }
+
+    private record SalesReturnBatchEvidence(
+            int itemIndex,
+            CreateReturnOrderRequest.ReturnOrderItemDTO item,
+            SalesOrderItem orderLine,
+            List<SalesDeliveryItemBatchAllocation> selected,
+            String batchId,
+            String requestedShipmentId,
+            Set<String> candidateShipmentIds) {
+    }
+
+    private BigDecimal requestedQuantityForBatch(
+            CreateReturnOrderRequest request, String productTypeId, String batchNumber) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (CreateReturnOrderRequest.ReturnOrderItemDTO line : request.getItems()) {
+            if (line == null || !Objects.equals(productTypeId, line.getProductTypeId())
+                    || line.getQuantity() == null) continue;
+            String requestedBatch = trimToNull(line.getBatchNumber());
+            if (requestedBatch == null || Objects.equals(batchNumber, requestedBatch)) {
+                total = total.add(line.getQuantity());
+            }
+        }
+        return total;
+    }
+
+    private void validateExistingSalesReturnShipmentEvidence(String factoryId, ReturnOrder order) {
+        if (isBlank(order.getSourceOrderId())) {
+            throw salesReturnEvidenceError("销售实物退货必须关联源销售订单",
+                    "历史退货单缺少真实源销售订单，不能完成入库");
+        }
+        if (order.getItems() == null) return;
+        CreateReturnOrderRequest request = new CreateReturnOrderRequest();
+        request.setReturnType(ReturnType.SALES_RETURN.name());
+        request.setSourceOrderId(order.getSourceOrderId());
+        request.setWithGoods(true);
+        request.setRemark(order.getRemark());
+        List<CreateReturnOrderRequest.ReturnOrderItemDTO> lines = new ArrayList<>();
+        for (int index = 0; index < order.getItems().size(); index++) {
+            ReturnOrderItem item = order.getItems().get(index);
+            if (item == null) continue;
+            if (isBlank(item.getProductTypeId()) || item.getQuantity() == null
+                    || item.getQuantity().compareTo(BigDecimal.ZERO) <= 0
+                    || isBlank(item.getBatchNumber())) {
+                throw new BusinessException(409, "销售实物退货第 " + (index + 1) + " 行缺少完整源批次证据")
+                        .withCode("SALES_RETURN_SOURCE_BATCH_REQUIRED")
+                        .withHint("必须提供原成品批号、产品 SKU 和大于 0 的退货数量，系统不会猜测单位或批次");
+            }
+            CreateReturnOrderRequest.ReturnOrderItemDTO line =
+                    new CreateReturnOrderRequest.ReturnOrderItemDTO();
+            line.setProductTypeId(item.getProductTypeId());
+            line.setQuantity(item.getQuantity());
+            line.setBatchNumber(item.getBatchNumber());
+            lines.add(line);
+        }
+        request.setItems(lines);
+        deriveOrValidateSalesReturnBatchEvidence(factoryId, request, order.getId());
+    }
+
+    private List<SalesDeliveryItem> shippedItemsForOrderLine(
+            String factoryId, String sourceOrderId, SalesOrderItem orderLine) {
+        List<SalesDeliveryRecord> deliveries = salesDeliveryRecordRepository.findBySalesOrderId(sourceOrderId);
+        if (deliveries == null) return List.of();
+        List<SalesDeliveryItem> result = new ArrayList<>();
+        for (SalesDeliveryRecord delivery : deliveries) {
+            if (delivery == null || !Objects.equals(factoryId, delivery.getFactoryId())
+                    || !Objects.equals(sourceOrderId, trimToNull(delivery.getSalesOrderId()))
+                    || (delivery.getStatus() != SalesDeliveryStatus.SHIPPED
+                        && delivery.getStatus() != SalesDeliveryStatus.DELIVERED)) continue;
+            List<SalesDeliveryItem> items = delivery.getItems() == null
+                    ? List.of() : delivery.getItems();
+            for (SalesDeliveryItem item : items) {
+                if (item == null || !Objects.equals(orderLine.getProductTypeId(), item.getProductTypeId())) continue;
+                if (isBlank(delivery.getId())
+                        || !Objects.equals(trimToNull(delivery.getId()), trimToNull(item.getDeliveryRecordId()))) continue;
+                if (orderLine.getId() != null && Objects.equals(orderLine.getId(), item.getSalesOrderItemId())) {
+                    result.add(item);
+                } else if (orderLine.getId() == null && item.getSalesOrderItemId() == null) {
+                    result.add(item);
+                }
+            }
+        }
+        return result;
+    }
+
+    private BigDecimal existingSalesReturnQuantity(
+            String factoryId, String sourceOrderId, String productTypeId, String batchNumber,
+            String excludedReturnOrderId, String requestedShipmentId, Set<String> candidateShipmentIds) {
+        List<ReturnOrder> existing = returnOrderRepository
+                .findByFactoryIdAndReturnTypeAndSourceOrderIdOrderByCreatedAtDesc(
+                        factoryId, ReturnType.SALES_RETURN, sourceOrderId);
+        BigDecimal total = BigDecimal.ZERO;
+        boolean shipmentAmbiguous = candidateShipmentIds != null && candidateShipmentIds.size() > 1;
+        for (ReturnOrder order : existing == null ? List.<ReturnOrder>of() : existing) {
+            if (order == null || order.getStatus() == ReturnOrderStatus.REJECTED
+                    || Objects.equals(excludedReturnOrderId, order.getId())
+                    || order.getItems() == null) continue;
+            if (Boolean.FALSE.equals(order.getWithGoods())) continue;
+            List<ReturnOrderItem> matchingItems = order.getItems().stream()
+                    .filter(item -> item != null && Objects.equals(productTypeId, item.getProductTypeId())
+                            && Objects.equals(batchNumber, trimToNull(item.getBatchNumber())))
+                    .toList();
+            if (matchingItems.isEmpty()) continue;
+            String existingShipmentId = shipmentIdFromRemark(order.getRemark());
+            if (containsShipmentMarker(order.getRemark()) && isBlank(existingShipmentId)) {
+                throw salesReturnEvidenceError("已有销售实物退货缺少可核验的发货单关联",
+                        "请先补齐每个实物退货对应的真实 SHIPMENT_ID");
+            }
+            if (!isBlank(existingShipmentId)
+                    && (candidateShipmentIds == null || !candidateShipmentIds.contains(existingShipmentId))) {
+                throw salesReturnEvidenceError("已有销售实物退货的 shipment 关联无法核验",
+                        "退货累计只能基于当前订单实际发货单计算");
+            }
+            if (shipmentAmbiguous && isBlank(existingShipmentId)) {
+                throw salesReturnEvidenceError("已有销售实物退货未关联具体 shipment，无法安全累计",
+                        "请先为历史实物退货补充真实 SHIPMENT_ID");
+            }
+            if (!isBlank(requestedShipmentId) && !isBlank(existingShipmentId)
+                    && !Objects.equals(requestedShipmentId, existingShipmentId)) continue;
+            for (ReturnOrderItem item : matchingItems) {
+                total = total.add(item.getQuantity() == null ? BigDecimal.ZERO : item.getQuantity());
+            }
+        }
+        return total;
+    }
+
+    private static boolean containsShipmentMarker(String remark) {
+        return remark != null && remark.contains("SHIPMENT_ID=");
+    }
+
+    private static String shipmentIdFromRemark(String remark) {
+        if (!containsShipmentMarker(remark)) return null;
+        int start = remark.indexOf("SHIPMENT_ID=") + "SHIPMENT_ID=".length();
+        int end = remark.indexOf(';', start);
+        if (end < 0) return null;
+        return trimToNull(remark.substring(start, end));
+    }
+
+    private boolean unitsEquivalent(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        String canonicalLeft = unitContractService == null
+                ? left : trimToNull(unitContractService.storageUnit(factoryId, left));
+        String canonicalRight = unitContractService == null
+                ? right : trimToNull(unitContractService.storageUnit(factoryId, right));
+        return canonicalLeft != null && Objects.equals(canonicalLeft, canonicalRight);
+    }
+
+    private BusinessException salesReturnEvidenceError(String message, String hint) {
+        return new BusinessException(409, message)
+                .withCode("SALES_RETURN_SHIPMENT_EVIDENCE_REQUIRED")
+                .withHint(hint);
     }
 
     @Override
@@ -481,7 +853,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @Override
     @Transactional
     public ReturnOrder submitReturnOrder(String factoryId, String returnOrderId) {
-        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        ReturnOrder order = loadReturnOrderForWrite(factoryId, returnOrderId);
         if (order.getStatus() != ReturnOrderStatus.DRAFT) {
             throw new BusinessException(409, "只有草稿状态的退货单可以提交")
                     .withHint("请刷新退货单列表查看最新状态");
@@ -494,7 +866,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @Override
     @Transactional
     public ReturnOrder approveReturnOrder(String factoryId, String returnOrderId, Long approverId) {
-        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        ReturnOrder order = loadReturnOrderForWrite(factoryId, returnOrderId);
         if (order.getStatus() != ReturnOrderStatus.SUBMITTED) {
             throw new BusinessException(409, "只有已提交状态的退货单可以审批")
                     .withHint("请刷新退货单列表查看最新状态");
@@ -551,6 +923,83 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     }
 
     /**
+     * Resolve every physical sales-return line against its immutable source FG batch
+     * before AR/AP or any new inbound batch is written.  A current product catalog
+     * unit is deliberately not consulted: the source batch is the historical unit
+     * authority for the returned goods.
+     */
+    private List<ResolvedSalesReturnLine> resolveSalesReturnSources(String factoryId, ReturnOrder order) {
+        if (finishedGoodsBatchRepository == null || warehouseResolver == null) {
+            throw new BusinessException(500, "退货完成失败: 成品源批次校验依赖未初始化")
+                    .withHint("请联系管理员检查成品批次与成品仓配置后重试");
+        }
+        String finishedGoodsWarehouseId = warehouseResolver.resolveFinishedGoodsId(factoryId);
+        if (finishedGoodsWarehouseId == null || finishedGoodsWarehouseId.isBlank()) {
+            throw new BusinessException(409, "退货成品仓不存在，不能完成实物退货")
+                    .withHint("请先配置当前工厂的成品仓");
+        }
+        List<ReturnOrderItem> items = order.getItems();
+        if (items == null || items.isEmpty()) {
+            throw new BusinessException(409, "销售实物退货缺少退货行，不能完成")
+                    .withHint("请补齐原销售成品批次、产品和数量后重试");
+        }
+        List<ResolvedSalesReturnLine> resolved = new ArrayList<>();
+        for (int index = 0; index < items.size(); index++) {
+            final int lineNumber = index + 1;
+            ReturnOrderItem item = items.get(index);
+            if (item == null || isBlank(item.getProductTypeId())
+                    || item.getQuantity() == null || item.getQuantity().compareTo(BigDecimal.ZERO) <= 0
+                    || isBlank(item.getBatchNumber())) {
+                throw new BusinessException(409, "销售实物退货第 " + lineNumber + " 行缺少完整源批次证据")
+                        .withCode("SALES_RETURN_SOURCE_BATCH_REQUIRED")
+                        .withHint("必须提供原成品批号、产品 SKU 和大于 0 的退货数量，系统不会猜测单位或批次");
+            }
+            String sourceBatchNumber = item.getBatchNumber().trim();
+            FinishedGoodsBatch source = finishedGoodsBatchRepository
+                    .findByFactoryIdAndBatchNumberForUpdate(factoryId, sourceBatchNumber)
+                    .orElseThrow(() -> new BusinessException(409,
+                            "销售实物退货第 " + lineNumber + " 行找不到原成品批次: " + sourceBatchNumber)
+                            .withCode("SALES_RETURN_SOURCE_BATCH_NOT_FOUND")
+                            .withHint("请核对原销售出库批号和当前工厂，不要改用其他批次代替"));
+            if (!Objects.equals(factoryId, source.getFactoryId())
+                    || !Objects.equals(sourceBatchNumber, trimToNull(source.getBatchNumber()))) {
+                throw new BusinessException(409, "销售实物退货原成品批次不属于当前工厂或批号不一致")
+                        .withCode("SALES_RETURN_SOURCE_BATCH_SCOPE_MISMATCH")
+                        .withHint("请核对原批次归属工厂和批号");
+            }
+            if (!Objects.equals(item.getProductTypeId().trim(), trimToNull(source.getProductTypeId()))) {
+                throw new BusinessException(409, "销售实物退货原成品批次与退货 SKU 不一致")
+                        .withCode("SALES_RETURN_SOURCE_PRODUCT_MISMATCH")
+                        .withHint("退货行必须引用同一产品的原成品批次，系统不会按当前 SKU 覆盖历史批次");
+            }
+            String sourceUnit = trimToNull(source.getUnit());
+            if (sourceUnit == null) {
+                throw new BusinessException(409, "销售实物退货原成品批次缺少不可变单位")
+                        .withCode("SALES_RETURN_SOURCE_UNIT_REQUIRED")
+                        .withHint("请先补齐原成品批次单位，再完成退货入库");
+            }
+            if (unitContractService != null
+                    && isBlank(unitContractService.storageUnit(factoryId, sourceUnit))) {
+                throw new BusinessException(409, "销售实物退货原成品批次单位无法核验")
+                        .withCode("SALES_RETURN_SOURCE_UNIT_INVALID")
+                        .withHint("请使用原批次的有效计量单位；系统不会回退为件");
+            }
+            resolved.add(new ResolvedSalesReturnLine(item, source, sourceUnit));
+            if (item.getSourceFinishedGoodsBatchId() != null
+                    && !Objects.equals(item.getSourceFinishedGoodsBatchId(), source.getId())) {
+                throw new BusinessException(409, "销售退货行的原成品批次关联已改变，不能完成")
+                        .withCode("SALES_RETURN_SOURCE_BATCH_LINK_MISMATCH")
+                        .withHint("请重新打开退货单并核对原成品批次");
+            }
+        }
+        return resolved;
+    }
+
+    private record ResolvedSalesReturnLine(ReturnOrderItem item, FinishedGoodsBatch source,
+                                           String sourceUnit) {
+    }
+
+    /**
      * 六扇门 Tier0 #16 (catalog 行2399-2416): 退货财务审批门。
      * 客户原话: "退货单发财务审批，审批后给仓管把实物拿走" / "退货跟钱有关要先财务审批确认；
      * 跟钱有关的东西都要审批"。
@@ -563,7 +1012,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @Override
     @Transactional
     public ReturnOrder financeApproveReturnOrder(String factoryId, String returnOrderId, Long financeUserId) {
-        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        ReturnOrder order = loadReturnOrderForWrite(factoryId, returnOrderId);
         if (order.getStatus() != ReturnOrderStatus.APPROVED) {
             throw new BusinessException(409, "只有已通过业务审批(已审批)的退货单可以提交财务审批")
                     .withHint("当前状态: " + order.getStatus().getDisplayName()
@@ -580,12 +1029,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @Override
     @Transactional
     public ReturnOrder financeRejectReturnOrder(String factoryId, String returnOrderId, Long financeUserId) {
-        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        ReturnOrder order = loadReturnOrderForWrite(factoryId, returnOrderId);
         if (order.getStatus() != ReturnOrderStatus.APPROVED) {
             throw new BusinessException(409, "只有已通过业务审批的退货单可以由财务驳回")
                     .withHint("当前状态: " + order.getStatus().getDisplayName()
                             + "。请刷新退货单列表查看最新状态，避免重复审批或越级处理。");
         }
+        voidReturnVoucherInTransaction(factoryId, order, financeUserId);
         order.setStatus(ReturnOrderStatus.REJECTED);
         order.setFinanceApprovedBy(financeUserId);
         order.setFinanceApprovedAt(LocalDateTime.now());
@@ -610,22 +1061,24 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         log.info("财务驳回退货单: returnOrderId={}, returnNumber={}, financeUserId={}",
                 returnOrderId, order.getReturnNumber(), financeUserId);
         ReturnOrder saved = returnOrderRepository.save(order);
-        publishReturnOrderRejected(factoryId, saved.getId());
+        publishReturnOrderRejected(factoryId, saved.getId(), financeUserId);
         return saved;
     }
 
     @Override
     @Transactional
-    public ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId) {
-        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+    public ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId, Long actorId) {
+        com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        ReturnOrder order = loadReturnOrderForWrite(factoryId, returnOrderId);
         if (order.getStatus() != ReturnOrderStatus.SUBMITTED) {
             throw new BusinessException(409, "只有已提交状态的退货单可以驳回")
                     .withHint("请刷新退货单列表查看最新状态");
         }
+        voidReturnVoucherInTransaction(factoryId, order, actorId);
         order.setStatus(ReturnOrderStatus.REJECTED);
         log.info("驳回退货单: returnOrderId={}, returnNumber={}", returnOrderId, order.getReturnNumber());
         ReturnOrder saved = returnOrderRepository.save(order);
-        publishReturnOrderRejected(factoryId, saved.getId());
+        publishReturnOrderRejected(factoryId, saved.getId(), actorId);
         return saved;
     }
 
@@ -633,19 +1086,52 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
      * Bug 9 修复 (2026-07-04): 发布退货单驳回事件 → AFTER_COMMIT listener 作废对应 RETURN 凭证。
      * fail-soft: 发布失败不影响驳回主流程。
      */
-    private void publishReturnOrderRejected(String factoryId, String returnOrderId) {
+    private void publishReturnOrderRejected(String factoryId, String returnOrderId, Long actorId) {
         try {
             applicationEventPublisher.publishEvent(
-                    new com.cretas.aims.event.ReturnOrderRejectedEvent(this, factoryId, returnOrderId));
+                    new com.cretas.aims.event.ReturnOrderRejectedEvent(this, factoryId, returnOrderId, actorId));
         } catch (Exception e) {
-            log.error("发布ReturnOrderRejectedEvent失败(不影响驳回): RO={}", returnOrderId, e);
+            log.error("发布ReturnOrderRejectedEvent失败: RO={}", returnOrderId, e);
         }
+    }
+
+    /**
+     * Rejecting a return is a financial mutation.  Keep voucher void/reversal in the
+     * same factory-lock then return-row-lock transaction so a period/ledger failure
+     * rolls the rejection back as one unit.
+     */
+    private void voidReturnVoucherInTransaction(String factoryId, ReturnOrder order, Long actorId) {
+        if (actorId == null || actorId <= 0) {
+            throw new BusinessException(401, "请先以工厂账号登录再驳回退货单");
+        }
+        if (voucherService == null) {
+            throw new IllegalStateException("退货驳回缺少凭证服务，拒绝提交财务状态");
+        }
+        Optional<Voucher> voucher = voucherService.findBySourceBusiness(ADJUSTMENT_SOURCE_TYPE, order.getId());
+        if (voucher.isEmpty()) {
+            return;
+        }
+        Voucher current = voucher.get();
+        // The source lookup is intentionally not trusted for tenant isolation.  Validate
+        // scope and identity before terminal-state idempotency, otherwise a foreign VOID/
+        // REVERSED voucher could make a local rejection appear successful.
+        if (!Objects.equals(factoryId, current.getFactoryId())
+                || !Objects.equals(ADJUSTMENT_SOURCE_TYPE, current.getSourceBusinessType())
+                || !Objects.equals(order.getId(), current.getSourceBusinessId())) {
+            throw new BusinessException(403, "退货凭证不属于当前工厂或来源单据不匹配")
+                    .withCode("RETURN_ORDER_VOUCHER_SCOPE_MISMATCH");
+        }
+        if (current.getStatus() == VoucherStatus.VOID || current.getStatus() == VoucherStatus.REVERSED) {
+            return;
+        }
+        voucherService.voidVoucher(factoryId, current.getId(), "退货单驳回自动作废", actorId);
     }
 
     @Override
     @Transactional
     public ReturnOrder completeReturnOrder(String factoryId, String returnOrderId) {
-        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        ReturnOrder order = loadReturnOrderForWrite(factoryId, returnOrderId);
         // 六扇门 Tier0 #16: 财务审批门 — 退货跟钱有关，完成/出货前必须先经财务审批。
         // 完成的前置状态从 APPROVED 收紧为 FINANCE_APPROVED。防呆: 未财务审批直接完成 → 拒绝 + hint。
         if (order.getStatus() != ReturnOrderStatus.FINANCE_APPROVED) {
@@ -660,6 +1146,16 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         // deferred AR/AP冲减 now (after physical receipt confirmed). For withGoods=false,
         // AR/AP冲减 already happened at approve time — just flip status.
         boolean withGoods = Boolean.TRUE.equals(order.getWithGoods());
+        if (withGoods) {
+            if (order.getReturnDate() == null) throw new BusinessException(409, "实物退货缺少会计日期，请核对后重试")
+                    .withHint("请停止完成退货并联系管理员核对原退货日期，确认来源完整且会计期间开放后再继续");
+            accountingPeriodService.assertOpen(factoryId, order.getReturnDate().getYear(), order.getReturnDate().getMonthValue());
+        }
+        List<ResolvedSalesReturnLine> resolvedSalesReturnLines = List.of();
+        if (withGoods && order.getReturnType() == ReturnType.SALES_RETURN) {
+            validateExistingSalesReturnShipmentEvidence(factoryId, order);
+            resolvedSalesReturnLines = resolveSalesReturnSources(factoryId, order);
+        }
         if (withGoods) {
             // Deferred AR/AP冲减 from approve.
             // #3(b): 不再吞异常。此前 catch(Exception) log.error 会让"冲减失败"却仍 COMPLETE + 移库存,
@@ -728,23 +1224,24 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                 int savedCount = 0;
                 int skippedCount = 0;
                 try {
-                    for (ReturnOrderItem item : order.getItems()) {
+                    for (ResolvedSalesReturnLine resolved : resolvedSalesReturnLines) {
+                        ReturnOrderItem item = resolved.item();
                         itemIdx++;
-                        if (item.getProductTypeId() == null || item.getQuantity() == null
-                                || item.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                            skippedCount++;
-                            continue;
-                        }
                         FinishedGoodsBatch batch = new FinishedGoodsBatch();
                         batch.setFactoryId(factoryId);
                         batch.setBatchNumber("RTN-" + order.getReturnNumber() + "-" + itemIdx);
-                        batch.setProductTypeId(item.getProductTypeId());
+                        batch.setReturnOrderItemId(item.getId());
+                        batch.setProductTypeId(resolved.source().getProductTypeId());
                         batch.setProductName(item.getItemName());
                         batch.setProducedQuantity(item.getQuantity());
                         batch.setShippedQuantity(BigDecimal.ZERO);
                         batch.setReservedQuantity(BigDecimal.ZERO);
-                        batch.setUnit("件");
+                        batch.setUnit(resolved.sourceUnit());
                         batch.setUnitPrice(item.getUnitPrice());
+                        // Preserve the source batch's native inventory cost.  The
+                        // return line price is a selling price and must not become
+                        // the cost basis for later disposal/accounting.
+                        batch.setUnitCost(resolved.source().getUnitCost());
                         batch.setProductionDate(LocalDate.now());
                         batch.setWarehouseId(fgWarehouseId);
                         batch.setStatus("DEFECTIVE");
@@ -819,6 +1316,15 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         order.setStatus(ReturnOrderStatus.COMPLETED);
         log.info("完成退货单: returnOrderId={}, returnNumber={}, withGoods={}", returnOrderId, order.getReturnNumber(), withGoods);
         return returnOrderRepository.save(order);
+    }
+
+    private ReturnOrder loadReturnOrderForWrite(String factoryId, String returnOrderId) {
+        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        if (!ReturnOrderRowLock.lockAndRefresh(entityManager, order, factoryId)) {
+            throw new BusinessException(409, "退货单不存在或不属于当前工厂")
+                    .withHint("请刷新退货单并确认当前工厂后重试");
+        }
+        return order;
     }
 
     /**
@@ -937,5 +1443,17 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         String dateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         long count = returnOrderRepository.countByFactoryIdAndDate(factoryId, LocalDate.now());
         return String.format("%s-%s-%04d", prefix, dateStr, count + 1);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

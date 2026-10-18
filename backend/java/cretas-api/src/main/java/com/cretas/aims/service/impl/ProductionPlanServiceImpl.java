@@ -142,6 +142,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.finance.ProductionCostConsistency productionCostConsistency;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.finance.ReturnedCostSynchronizationService returnedCostSynchronizationService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public ProductionPlanServiceImpl(
             ProductionPlanRepository productionPlanRepository,
@@ -3715,6 +3723,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private ProductionSettlementRequest deriveConfirmedSettlementRequest(
             String factoryId, String planId, ProductionSettlementRequest confirmation,
             boolean allowManualSemiFinishedConsumptions) {
+        // Confirmation mode re-derives production facts, but the quality-count answer is
+        // an explicit user conclusion that process-sheet rows do not contain. Validate it
+        // before reading/mutating the derived request; null stays unknown (never zero).
+        DefectCountResolver.Resolved confirmedDefectCount = DefectCountResolver.resolve(
+                confirmation.getDefectCountOutcome(), confirmation.getDefectQuantity());
         ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
         ProductionSettlementRequest derived = latest != null ? latest.getPrefill() : null;
         List<ProductionSettlementPrefillResponse.Issue> blockers = latest == null || latest.getAudit() == null
@@ -3742,6 +3755,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         derived.setMaterialVarianceNote(trimToNull(confirmation.getMaterialVarianceNote()));
         derived.setLaborDeferredReason(firstNonBlank(
                 derived.getLaborDeferredReason(), confirmation.getLaborDeferredReason()));
+        derived.setDefectCountOutcome(confirmedDefectCount.outcome());
+        derived.setDefectQuantity(confirmedDefectCount.quantity());
         // Workflow facts remain server-authoritative, but external WIP consumption is
         // intentionally a caller-entered exception: it is not present in process
         // reports and must be carried into the derived request so the normal
@@ -4776,7 +4791,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 segments.add(ProductionSettlementRequest.LaborSegment.builder()
                         .workType(firstNonBlank(parsed.request().getProcessName(), parsed.request().getProcessCode(), "逐道电子表格"))
                         .minutes(minutes)
-                        .headcount(headcount != null && headcount > 0 ? headcount : 1)
+                        .headcount(headcount)
                         .build());
             }
         }
@@ -4791,6 +4806,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             java.time.LocalTime start = java.time.LocalTime.parse(seg.getStartTime());
             java.time.LocalTime end = java.time.LocalTime.parse(seg.getEndTime());
             long minutes = java.time.Duration.between(start, end).toMinutes();
+            if (minutes < 0) {
+                minutes += 24 * 60;
+            }
             return minutes > 0 ? (int) minutes : null;
         } catch (Exception ex) {
             return null;
@@ -5076,7 +5094,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     segments.add(ProductionSettlementRequest.LaborSegment.builder()
                             .workType(firstNonBlank(workType, "逐道报工"))
                             .minutes(minutes)
-                            .headcount(headcount != null && headcount > 0 ? headcount : 1)
+                            .headcount(headcount)
                             .note(asString(seg.get("note")))
                             .build());
                     addedFromRaw = true;
@@ -5089,7 +5107,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     segments.add(ProductionSettlementRequest.LaborSegment.builder()
                             .workType(firstNonBlank(workType, "逐道报工"))
                             .minutes(minutes)
-                            .headcount(headcount != null && headcount > 0 ? headcount : 1)
+                            .headcount(headcount)
                             .build());
                 }
             }
@@ -5112,6 +5130,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             java.time.LocalTime s = java.time.LocalTime.parse(start);
             java.time.LocalTime e = java.time.LocalTime.parse(end);
             long mins = java.time.Duration.between(s, e).toMinutes();
+            if (mins < 0) {
+                mins += 24 * 60;
+            }
             return mins > 0 ? (int) mins : null;
         } catch (Exception ex) {
             return null;
@@ -6203,17 +6224,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     private int markReceiptProductionBatchesCompleted(String factoryId, String planId, ProductionSettlement settlement) {
-        List<ProductionBatch> batches = productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
-        if (batches == null || batches.isEmpty()) {
+        List<ProductionBatch> queriedBatches = productionBatchRepository
+                .findByFactoryIdAndProductionPlanId(factoryId, planId);
+        List<ProductionBatch> batches = queriedBatches == null ? List.of() : queriedBatches.stream()
+                .filter(Objects::nonNull)
+                .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
+                .toList();
+        if (batches.isEmpty()) {
             return 0;
         }
+        DefectCountResolver.Resolved resolvedDefect = DefectCountResolver.resolve(
+                settlement.getDefectCountOutcome(), settlement.getDefectQuantity());
+        boolean qualityCanBeAssigned = batches.size() == 1
+                && resolvedDefect.outcome() != null
+                && resolvedDefect.outcome() != DefectCountOutcome.NOT_COUNTED
+                && hasUniqueReceiptTerminalOutput(factoryId, settlement, batches.getFirst());
         int changed = 0;
         LocalDateTime completedAt = LocalDateTime.now();
         for (ProductionBatch batch : batches) {
             if (batch == null || batch.getId() == null) {
-                continue;
-            }
-            if ("CLERK_WIP".equals(batch.getBatchType())) {
                 continue;
             }
             if (batch.getStatus() == ProductionBatchStatus.COMPLETED
@@ -6232,17 +6262,75 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 batch.setEndTime(completedAt);
             }
             batch.setActualQuantity(actualQuantity);
-            if (batch.getGoodQuantity() == null || batch.getGoodQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                batch.setGoodQuantity(actualQuantity);
-            }
-            if (batch.getDefectQuantity() == null) {
-                batch.setDefectQuantity(BigDecimal.ZERO);
+            if (qualityCanBeAssigned && hasMatchingQualityUnit(settlement, batch)) {
+                BigDecimal confirmedGood = settlement.getWarehouseReceivedQuantity() != null
+                        ? settlement.getWarehouseReceivedQuantity()
+                        : (batch.getQuantity() != null ? batch.getQuantity() : actualQuantity);
+                if (confirmedGood != null && confirmedGood.signum() >= 0) {
+                    batch.setGoodQuantity(confirmedGood);
+                    batch.setDefectQuantity(resolvedDefect.quantity());
+                    batch.setActualQuantity(confirmedGood.add(resolvedDefect.quantity()));
+                } else {
+                    batch.setGoodQuantity(null);
+                    batch.setDefectQuantity(null);
+                }
+            } else {
+                // This receipt cannot prove a quality conclusion for this batch
+                // (unknown count, ambiguous output ownership, or unit mismatch).
+                // Clear stale defaults so an old good=quantity/defect=0 pair cannot
+                // present an unconfirmed 100% yield as a new receipt result.
+                batch.setGoodQuantity(null);
+                batch.setDefectQuantity(null);
             }
             batch.calculateMetrics();
             productionBatchRepository.save(batch);
             changed++;
         }
         return changed;
+    }
+
+    /** Quality is attributable only when receipt output identity is singular and auditable. */
+    private boolean hasUniqueReceiptTerminalOutput(String factoryId,
+                                                    ProductionSettlement settlement,
+                                                    ProductionBatch batch) {
+        if (productionSettlementOutputLineRepository == null || isBlank(settlement.getId())) {
+            return true; // normal scalar receipt path: the official batch is the terminal output.
+        }
+        List<ProductionSettlementOutputLine> lines =
+                productionSettlementOutputLineRepository
+                        .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                                factoryId, settlement.getId());
+        if (lines == null || lines.isEmpty()) {
+            return true;
+        }
+        if (lines.size() != 1 || lines.getFirst() == null) {
+            return false;
+        }
+        ProductionSettlementOutputLine line = lines.getFirst();
+        String outputProductTypeId = trimToNull(line.getProductTypeId());
+        String batchProductTypeId = trimToNull(batch.getProductTypeId());
+        return outputProductTypeId != null && batchProductTypeId != null
+                && Objects.equals(outputProductTypeId, batchProductTypeId)
+                && (isBlank(line.getReportedBatchNumber()) || isBlank(batch.getBatchNumber())
+                || Objects.equals(line.getReportedBatchNumber(), batch.getBatchNumber()))
+                && sameUnit(factoryId, line.getQuantityUnit(), batch.getUnit());
+    }
+
+    private boolean hasMatchingQualityUnit(ProductionSettlement settlement, ProductionBatch batch) {
+        return sameUnit(settlement.getFactoryId(), settlement.getQuantityUnit(), batch.getUnit());
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        String leftValue = trimToNull(left);
+        String rightValue = trimToNull(right);
+        if (leftValue == null || rightValue == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, leftValue);
+        String canonicalRight = unitContractService.storageUnit(factoryId, rightValue);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     @Override
@@ -7157,6 +7245,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         List<ProductionSettlementLabor> result = new ArrayList<>();
         for (ProductionSettlementRequest.LaborSegment requestLine : requestLines) {
+            if (requestLine == null || requestLine.getHeadcount() == null) {
+                // The process-sheet fact did not include a worker count. Do not turn
+                // that absence into one worker; the source row remains the audit fact.
+                continue;
+            }
             ProductionSettlementLabor line = new ProductionSettlementLabor();
             line.setSettlementId(settlementId);
             line.setFactoryId(factoryId);
@@ -7165,7 +7258,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setWorkerName(trimToNull(requestLine.getWorkerName()));
             line.setWorkType(trimToNull(requestLine.getWorkType()));
             line.setMinutes(requestLine.getMinutes());
-            line.setHeadcount(requestLine.getHeadcount() != null ? requestLine.getHeadcount() : 1);
+            line.setHeadcount(requestLine.getHeadcount());
             line.setHourlyRate(requestLine.getHourlyRate());
             line.setLaborCost(requestLine.getLaborCost());
             line.setNote(trimToNull(requestLine.getNote()));
@@ -7791,8 +7884,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Transactional
     public com.cretas.aims.dto.production.ProductionCostRecalculationResponse recalculateSettledPlanCosts(
             String factoryId, String planId) {
-        productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
+        if (productionCostConsistency != null) productionCostConsistency.assertChangeAllowed(factoryId, planId);
         if (productionSettlementRepository == null || productionSettlementOutputLineRepository == null
                 || orderCostBreakdownService == null) {
             throw new BusinessException(500, "结单成本重算依赖不可用, 本次未执行");
@@ -7879,8 +7974,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (!planId.equals(fg.getProductionPlanId())) {
                 throw new BusinessException(409, "成品批次不属于当前计划, 本次成本重算已回滚");
             }
+            BigDecimal previousUnitCost = fg.getUnitCost();
             fg.setUnitCost(line.getUnitCost());
             finishedGoodsBatchRepository.save(fg);
+            if (returnedCostSynchronizationService != null) returnedCostSynchronizationService.synchronize(
+                    factoryId, fg, previousUnitCost, com.cretas.aims.utils.SecurityUtils.currentUserId());
             finishedGoodsCount++;
         }
 
@@ -7894,6 +7992,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             batch.calculateMetrics();
         }
         productionBatchRepository.saveAll(productionBatches);
+
+        if (productionCostConsistency != null) productionCostConsistency.invalidateCostIndicators(factoryId);
 
         // 🔴 客供主料成本口径 (a)（2026-09-04）: 显式说出「这次重算含客供料 N 项按加工口径记 0」——
         // 见类上方 describeCustomerSuppliedNote javadoc, ⛔ 不能只报一个总成本让人猜为什么比预期低。
@@ -8551,11 +8651,41 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         requireVisiblePlan(factoryId, plan);
+        if (productionCostConsistency != null) productionCostConsistency.assertChangeAllowed(factoryId, planId);
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
+        }
+
+        validateNonNegativeCost("materialCost", materialCost);
+        validateNonNegativeCost("laborCost", laborCost);
+        validateNonNegativeCost("equipmentCost", equipmentCost);
+        validateNonNegativeCost("otherCost", otherCost);
+
+        // 设备/其他成本的核算读取批次级字段。只有唯一正式批次时才有明确归属，
+        // 多批次禁止猜测分摊；空批次继续保留原有计划级更新行为。
+        ProductionBatch officialBatch = null;
+        if (equipmentCost != null || otherCost != null) {
+            List<ProductionBatch> officialBatches = productionBatchRepository
+                    .findByFactoryIdAndProductionPlanId(factoryId, planId);
+            officialBatch = officialBatches == null ? null : officialBatches.stream()
+                    .filter(Objects::nonNull)
+                    .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                    .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
+                    .findFirst()
+                    .orElse(null);
+            long officialBatchCount = officialBatches == null ? 0 : officialBatches.stream()
+                    .filter(Objects::nonNull)
+                    .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                    .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
+                    .count();
+            if (officialBatchCount > 1) {
+                throw new BusinessException(409, "该生产计划关联多个正式批次，无法自动分摊设备/其他成本")
+                        .withHint("请按批次分别录入成本，或先保留计划级成本后再核对批次")
+                        .withHintTarget("equipmentCost");
+            }
         }
 
         // 更新实际成本
@@ -8572,10 +8702,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             plan.setActualOtherCost(otherCost);
         }
 
+        if (officialBatch != null) {
+            if (equipmentCost != null) {
+                officialBatch.setEquipmentCost(equipmentCost);
+            }
+            if (otherCost != null) {
+                officialBatch.setOtherCost(otherCost);
+            }
+            productionBatchRepository.save(officialBatch);
+        }
+
         plan = productionPlanRepository.save(plan);
 
         log.info("更新实际成本: planId={}", planId);
-        return toDTOWithConversionInfo(plan);
+        boolean recalculated = productionSettlementRepository != null && productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
+                .filter(settlement -> "POSTED".equals(settlement.getPostingStatus())).isPresent();
+        if (recalculated) {
+            // Self invocation remains inside updateActualCosts' transaction: any failure rolls back
+            // the plan, batch, settlement allocation and finished-goods cost together.
+            recalculateSettledPlanCosts(factoryId, planId);
+        }
+        ProductionPlanDTO result = toDTOWithConversionInfo(plan);
+        result.setSettledCostsRecalculated(recalculated);
+        return result;
+    }
+
+    private void validateNonNegativeCost(String fieldName, BigDecimal value) {
+        if (value != null && value.signum() < 0) {
+            throw new BusinessException(400, fieldName + " 不能为负数")
+                    .withHint("请传入大于或等于 0 的成本；省略参数表示不修改");
+        }
     }
 
     @Override

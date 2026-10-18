@@ -703,6 +703,17 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             }
           },
           {
+            path: 'recalls',
+            name: 'QualityRecalls',
+            component: () => import('@/views/quality/recalls/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '批次召回',
+              module: 'quality',
+              roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin']
+            }
+          },
+          {
             path: 'disposals',
             name: 'QualityDisposals',
             component: () => import('@/views/quality/disposals/list.vue'),
@@ -733,6 +744,17 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'QualityLabelQc',
             component: () => import('@/views/quality/label-qc/index.vue'),
             meta: { requiresAuth: true, title: '包装标签拍检', module: 'quality' }
+          },
+          {
+            path: 'vision-training',
+            name: 'QualityVisionTraining',
+            component: () => import('@/views/quality/vision-training/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '视觉质检训练',
+              module: 'quality',
+              roles: ['factory_super_admin', 'quality_manager'],
+            }
           }
         ]
       },
@@ -1351,6 +1373,12 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/finance/adjustments/list.vue'),
             meta: { requiresAuth: true, title: '调整审批', module: 'finance' }
           },
+          {
+            path: 'return-refunds/:id',
+            name: 'FinanceReturnRefundDetail',
+            component: () => import('@/views/sales/returns/detail.vue'),
+            meta: { requiresAuth: true, title: '退货退款详情', module: 'finance', hidden: true }
+          },
           // P2 凭证列表 — 浏览/搜索/过账/作废
           {
             path: 'voucher-list',
@@ -1377,7 +1405,7 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             path: 'accounting-period',
             name: 'FinanceAccountingPeriod',
             component: () => import('@/views/finance/accounting-period/index.vue'),
-            meta: { requiresAuth: true, title: '期间结账', module: 'finance' }
+            meta: { requiresAuth: true, title: '会计期间', module: 'finance' }
           },
           // Sprint 7 T3 F-3REPORT — 报表三表 (资产负债 + 利润 + 现金流, 上市公司必看)
           {
@@ -1940,6 +1968,18 @@ meta: { requiresAuth: true, title: '车间实时生产报表', module: 'analytic
             name: 'SupplyChainOverview',
             component: () => import('@/views/analytics/SupplyChainOverview.vue'),
             meta: { requiresAuth: true, title: '进销存闭环总览', module: 'analytics' }
+          },
+          {
+            path: 'indicators',
+            name: 'AnalyticsIndicators',
+            component: () => import('@/views/indicator-center/IndicatorCenterDashboard.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '经营指标',
+              module: 'analytics',
+              roles: ['factory_super_admin', 'quality_manager', 'finance_manager'],
+              hideForFactoryTypes: ['RESTAURANT'],
+            }
           }
         ]
       },

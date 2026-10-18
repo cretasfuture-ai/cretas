@@ -48,6 +48,8 @@ class QualityDispositionRuleServiceInventoryHookTest {
     private UserRepository userRepository;
     @Mock
     private QualityDispositionInventoryService dispositionInventoryService;
+    @Mock
+    private com.cretas.aims.service.quality.QualityDispositionDecisionGuard decisionGuard;
 
     private QualityInspection inspection;
 
@@ -62,6 +64,9 @@ class QualityDispositionRuleServiceInventoryHookTest {
         inspection.setId("qi-1");
         inspection.setFactoryId(FACTORY_ID);
         inspection.setProductionBatchId(100L);
+        inspection.setResult("PASS");
+        inspection.setPassRate(new java.math.BigDecimal("100"));
+        lenient().when(decisionGuard.lockInspection(anyString(), any())).thenAnswer(call -> call.getArgument(1));
 
         User executor = mock(User.class);
         lenient().when(executor.getFullName()).thenReturn("张质检");
@@ -149,5 +154,23 @@ class QualityDispositionRuleServiceInventoryHookTest {
         assertEquals("SUPERVISOR", DispositionAction.REWORK.getApprovalLevel());
         assertTrue(DispositionAction.SCRAP.requiresApproval());
         assertEquals("QUALITY_HEAD", DispositionAction.SCRAP.getApprovalLevel());
+    }
+
+    @Test
+    void failedInspectionCannotUseDirectReleaseWithoutFactoryApprovalConfiguration() {
+        inspection.setResult("FAIL");
+        inspection.setPassRate(new java.math.BigDecimal("40"));
+        var error = assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.executeDisposition(FACTORY_ID, inspection, DispositionAction.RELEASE, 9L, "不能绕过复核"));
+        assertEquals(409, error.getCode());
+        verifyNoInteractions(approvalChainService, decisionAuditService, dispositionInventoryService);
+    }
+
+    @Test
+    void passLabelWithoutQualifyingSampleRateCannotDirectRelease() {
+        inspection.setPassRate(new java.math.BigDecimal("40"));
+        assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.executeDisposition(FACTORY_ID, inspection, DispositionAction.RELEASE, 9L, "不接受矛盾的标签"));
+        verifyNoInteractions(approvalChainService, decisionAuditService, dispositionInventoryService);
     }
 }

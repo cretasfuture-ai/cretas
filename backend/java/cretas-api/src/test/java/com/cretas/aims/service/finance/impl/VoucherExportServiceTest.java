@@ -291,7 +291,7 @@ class VoucherExportServiceTest {
                 productTypeId,
                 batchNumber,
                 "成品-" + productTypeId,
-                deliveryNumber
+                deliveryNumber, "kg"
         };
     }
 
@@ -352,6 +352,23 @@ class VoucherExportServiceTest {
         assertEquals("—", in.get(4), "收入单价诚实 null(非售价25)");
         assertEquals("—", in.get(5), "收入金额诚实 null(非¥0)");
         assertEquals("—", in.get(11), "结存金额一旦有未知成本即诚实 null");
+    }
+
+    @Test void mixedNativeUnitsKeepIndependentInventoryBalancesAndExactAmounts() throws Exception {
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID),any())).thenReturn(new PageImpl<>(List.of()));
+        var kg=finishedGoodsWithCost("kg-b","KG-B","SAME-SKU","2026-05-05","5","99","12.8330");
+        var box=finishedGoodsWithCost("box-b","BOX-B","SAME-SKU","2026-05-05","20","99","6.9165");box.setUnit("盒");
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID),any())).thenReturn(new PageImpl<>(List.of(kg,box)));
+        var kgOut=shipmentRow("2026-05-20","2","12.8330","SAME-SKU","KG-B","OUT-1");
+        var boxOut=shipmentRow("2026-05-20","6","6.9165","SAME-SKU","BOX-B","OUT-1");boxOut[7]="盒";
+        when(salesDeliveryItemRepo.findShippedMovementsForLedger(eq(FACTORY_ID),any(),any())).thenReturn(List.of(kgOut,boxOut));
+        when(exportRecordRepo.save(any())).thenAnswer(inv->inv.getArgument(0));
+        var out=new ByteArrayOutputStream();service.exportQuantityAmountLedger(FACTORY_ID,buildReq(),USER_ID,out);
+        var rows=readXlsx(out.toByteArray());var kgRow=rows.stream().filter(r->r.size()>9&&r.get(2).contains("成品发出")&&r.get(2).contains("单位：kg")).findFirst().orElseThrow();
+        var boxRow=rows.stream().filter(r->r.size()>9&&r.get(2).contains("成品发出")&&r.get(2).contains("单位：盒")).findFirst().orElseThrow();
+        assertEquals(0,new BigDecimal("3").compareTo(decimalAt(kgRow,9)));assertEquals(0,new BigDecimal("14").compareTo(decimalAt(boxRow,9)));
+        assertEquals(0,new BigDecimal("25.666").compareTo(decimalAt(kgRow,8)));assertEquals(0,new BigDecimal("41.499").compareTo(decimalAt(boxRow,8)));
+        assertEquals(0,new BigDecimal("67.17").compareTo(decimalAt(kgRow,8).add(decimalAt(boxRow,8)).setScale(2,java.math.RoundingMode.HALF_UP)));
     }
 
     private List<List<String>> readXlsx(byte[] bytes) {

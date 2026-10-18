@@ -1,4 +1,4 @@
-"""Optional FastAPI router for conversational factory setup."""
+"""Factory-scoped visual training, receipts and independent acceptance routes."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from .models import (
 )
 from .queue import QueueConflictError, QueueLeaseError, VisionJobStore
 from .service import VisionTrainingService
+from .store import CapacityLimitError
 from .store import DraftStore, FileDraftStore
 from .templates import SOP_VERSION
 
@@ -139,6 +140,17 @@ def require_factory_context(request: Request) -> FactoryContext:
     )
 
 
+def require_factory_bridge_context(request: Request) -> FactoryContext:
+    """The deployed daily API is entered through Java's live membership check."""
+    if getattr(request.state, "auth_method", None) != "internal":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="internal factory bridge authentication required")
+    if request.headers.get("X-Actor-Type") != "FACTORY_USER":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="explicit factory actor is required")
+    if getattr(request.state, "role", None) not in {"factory_super_admin", "quality_manager"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="factory quality management role is required")
+    return require_factory_context(request)
+
+
 def create_router(
     service: VisionTrainingService | None = None,
     *,
@@ -170,6 +182,8 @@ def create_router(
     def save_draft(request: SaveDraftRequest, context: FactoryContext = Depends(factory_context_dependency)) -> dict[str, object]:
         try:
             result = coordinator.save_draft(request.preview, factory_context=context)
+        except CapacityLimitError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         except VisionTrainingError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         return {"success": True, "message": "draft saved explicitly; no training was executed", "data": result.model_dump(mode="json")}
@@ -426,6 +440,8 @@ def create_platform_router(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="target factory scope mismatch")
         try:
             result = service.save_draft(request.preview, factory_context=context)
+        except CapacityLimitError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         except VisionTrainingError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         return {"success": True, "message": "platform draft saved; no training was executed", "data": result.model_dump(mode="json")}

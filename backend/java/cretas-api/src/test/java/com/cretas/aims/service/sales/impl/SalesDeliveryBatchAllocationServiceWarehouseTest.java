@@ -53,6 +53,14 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
+    @Test void shippedAllocationsCannotBeClearedToHideCostSources() {
+        var item=deliveryItem("WH-WKS",new BigDecimal("10"));
+        var record=new SalesDeliveryRecord();record.setFactoryId(FID);record.setStatus(com.cretas.aims.entity.enums.SalesDeliveryStatus.SHIPPED);item.setDeliveryRecord(record);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        assertThrows(BusinessException.class,()->service.clearAllocations(FID,ITEM_ID));
+        verify(allocationRepository,never()).deleteByFactoryIdAndDeliveryItemId(any(),any());
+    }
+
     @Mock SalesDeliveryItemBatchAllocationRepository allocationRepository;
     @Mock SalesDeliveryItemRepository deliveryItemRepository;
     @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepository;
@@ -149,7 +157,10 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         dto.setAllocatedQty(new BigDecimal("10"));
 
         assertDoesNotThrow(() -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
-        verify(allocationRepository).saveAll(anyList());
+        var order = org.mockito.Mockito.inOrder(allocationRepository);
+        order.verify(allocationRepository).deleteByFactoryIdAndDeliveryItemId(FID, ITEM_ID);
+        order.verify(allocationRepository).flush();
+        order.verify(allocationRepository).saveAll(anyList());
     }
 
     // ─────────────── 缺陷 41 (2026-09-02 owner 拍板): 分配合计 <= 发货行数量 ───────────────

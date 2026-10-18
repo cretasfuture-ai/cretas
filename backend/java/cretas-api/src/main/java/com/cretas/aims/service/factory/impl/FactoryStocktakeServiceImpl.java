@@ -11,6 +11,7 @@ import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -39,6 +40,7 @@ import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.inventory.ByproductCreditService;
 import com.cretas.aims.service.production.DefectCountResolver;
 import com.cretas.aims.service.voucher.VoucherService;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -98,6 +100,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     /** 盘点补录待办要读结单时的三态结论 (2026-08-27)。 */
     private final ProductionSettlementRepository productionSettlementRepository;
     private final ProductionBatchRepository productionBatchRepository;
+
+    @Autowired
+    private UnitContractService unitContractService;
 
     @Autowired(required = false)
     private UserRepository userRepository;
@@ -340,13 +345,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         settlement.setDefectCountOutcome(resolved.outcome());
         settlement.setDefectQuantity(resolved.quantity());
 
-        List<com.cretas.aims.entity.ProductionBatch> batches =
+        List<com.cretas.aims.entity.ProductionBatch> queriedBatches =
                 productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, productionPlanId);
+        List<com.cretas.aims.entity.ProductionBatch> batches = queriedBatches == null ? List.of() : queriedBatches.stream()
+                .filter(Objects::nonNull)
+                .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
+                .toList();
         DefectCountResolver.BackfillDecision backfill = DefectCountResolver.decideBatchBackfill(
                 resolved, batches.size());
-        if (backfill.write()) {
-            batches.get(0).setDefectQuantity(backfill.quantity());
-            productionBatchRepository.save(batches.get(0));
+        boolean backfilledBatch = false;
+        if (backfill.write() && hasProvableLegacyGoodOutput(factoryId, settlement, batches.get(0))) {
+            com.cretas.aims.entity.ProductionBatch batch = batches.get(0);
+            batch.setDefectQuantity(backfill.quantity());
+            batch.setActualQuantity(batch.getGoodQuantity().add(backfill.quantity()));
+            batch.calculateMetrics();
+            productionBatchRepository.save(batch);
+            backfilledBatch = true;
         }
         productionSettlementRepository.save(settlement);
 
@@ -355,13 +370,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         result.put("outcome", resolved.outcome());
         result.put("defectQuantity", resolved.quantity());
         result.put("formalBatchCount", batches.size());
-        result.put("backfilled", backfill.write());
-        result.put("backfillSkipReason", backfill.skipReason());
+        result.put("backfilled", backfilledBatch);
+        result.put("backfillSkipReason", backfilledBatch ? null
+                : (backfill.write() ? "LEGACY_GOOD_OUTPUT_NOT_PROVABLE" : backfill.skipReason()));
         result.put("completedBy", userId);
         String message;
-        if (backfill.write() && resolved.outcome() == DefectCountOutcome.NONE_CONFIRMED) {
+        if (backfilledBatch && resolved.outcome() == DefectCountOutcome.NONE_CONFIRMED) {
             message = "已清点确认零，不良品待办已完成，关联批次已同步为 0";
-        } else if (backfill.write()) {
+        } else if (backfilledBatch) {
             message = "不良品数量已补录，关联批次已同步";
         } else if (batches.size() > 1) {
             message = "不良品结论已记录；该计划有多个正式批次，系统未猜测回填到任何批次";
@@ -370,6 +386,40 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         result.put("message", message);
         return result;
+    }
+
+    /**
+     * A stocktake correction may repair a legacy batch only when the pre-existing
+     * good output is already independently readable.  A defect count alone cannot
+     * manufacture that good quantity or its unit.
+     */
+    private boolean hasProvableLegacyGoodOutput(String factoryId, ProductionSettlement settlement,
+                                                com.cretas.aims.entity.ProductionBatch batch) {
+        if (settlement == null || batch == null
+                || settlement.getActualFinishedQuantity() == null
+                || batch.getActualQuantity() == null
+                || batch.getGoodQuantity() == null
+                || batch.getUnit() == null || settlement.getQuantityUnit() == null) {
+            return false;
+        }
+        String batchUnit = batch.getUnit().trim();
+        String settlementUnit = settlement.getQuantityUnit().trim();
+        if (batchUnit.isEmpty() || settlementUnit.isEmpty() || !sameUnit(factoryId, batchUnit, settlementUnit)) {
+            return false;
+        }
+        return batch.getActualQuantity().compareTo(settlement.getActualFinishedQuantity()) == 0
+                && batch.getGoodQuantity().compareTo(batch.getActualQuantity()) == 0;
+    }
+
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) return false;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit identity checks");
+        }
+        String canonicalLeft = unitContractService.storageUnit(factoryId, left);
+        String canonicalRight = unitContractService.storageUnit(factoryId, right);
+        return canonicalLeft != null && !canonicalLeft.isBlank()
+                && Objects.equals(canonicalLeft, canonicalRight);
     }
 
     

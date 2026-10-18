@@ -41,6 +41,7 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     '/warehouse/stocktake-query',
     '/finance',
     '/analytics/ai-reports', // factory operating reports; server projects financial text by price permission
+    '/analytics/indicators', // ongoing factory indicators, using existing analytics permission
 
     // 销售/采购审批统一在个人 OA；财务角色不再通过旧销售财审索引跨模块浏览。
     // 🔴 2026-08-22: 补上工作台。财务有 dashboard/finance 模块 ⇒ 菜单显示「工作台」,

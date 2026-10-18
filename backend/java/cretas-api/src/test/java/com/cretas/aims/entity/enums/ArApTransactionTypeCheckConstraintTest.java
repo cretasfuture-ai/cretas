@@ -6,6 +6,8 @@ import org.springframework.core.io.ClassPathResource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -22,16 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * used by SupplierMonthlyReconciliationServiceImpl / PaymentRequestServiceImpl.</p>
  *
  * <p>H2 unit tests and mocked repositories can't catch this — the CHECK constraint
- * is PG-only and only exercised against real Postgres. This test instead asserts,
- * at compile/CI time, that the widening migration
- * {@code V20261027_35__widen_ar_ap_transaction_type_check.sql} enumerates every
- * current {@link ArApTransactionType} value, so a future enum addition without a
- * matching CHECK-constraint migration fails CI instead of silently drifting.</p>
+ * is PG-only and only exercised against real Postgres. This static guard keeps
+ * the original credit-note migration checks and verifies current enum coverage
+ * against the later refund migration's actual {@code ck_aat_type} definition.
+ * Historical migrations remain immutable; future enum additions still require
+ * a matching CHECK-constraint migration.</p>
  */
 class ArApTransactionTypeCheckConstraintTest {
 
     private static final String MIGRATION_RESOURCE =
             "db/flyway/V20261027_35__widen_ar_ap_transaction_type_check.sql";
+    private static final String CURRENT_MIGRATION_RESOURCE =
+            "db/flyway/V20261103_67__return_refund_payment.sql";
 
     @Test
     void widiningMigrationExistsOnClasspath() {
@@ -43,10 +47,15 @@ class ArApTransactionTypeCheckConstraintTest {
 
     @Test
     void widiningMigrationCoversEveryArApTransactionTypeValue() throws IOException {
-        String sql = readMigration();
+        String sql = readResource(CURRENT_MIGRATION_RESOURCE);
+        Matcher constraint = Pattern.compile(
+                "ADD\\s+CONSTRAINT\\s+ck_aat_type\\s+CHECK\\s*\\(\\s*transaction_type\\s+IN\\s*\\(([^)]*)\\)",
+                Pattern.CASE_INSENSITIVE).matcher(sql);
+        assertTrue(constraint.find(), "Current widening migration must define ck_aat_type");
+        String allowed = constraint.group(1);
 
         for (ArApTransactionType type : ArApTransactionType.values()) {
-            assertTrue(sql.contains("'" + type.name() + "'"),
+            assertTrue(allowed.contains("'" + type.name() + "'"),
                     "ck_aat_type widening migration is missing enum value '" + type.name()
                             + "' — DB CHECK constraint would reject rows of this type "
                             + "even though ArApTransactionType.java allows it (same drift class "
@@ -75,7 +84,11 @@ class ArApTransactionTypeCheckConstraintTest {
     }
 
     private static String readMigration() throws IOException {
-        ClassPathResource resource = new ClassPathResource(MIGRATION_RESOURCE);
+        return readResource(MIGRATION_RESOURCE);
+    }
+
+    private static String readResource(String path) throws IOException {
+        ClassPathResource resource = new ClassPathResource(path);
         return new String(Files.readAllBytes(resource.getFile().toPath()), StandardCharsets.UTF_8);
     }
 }

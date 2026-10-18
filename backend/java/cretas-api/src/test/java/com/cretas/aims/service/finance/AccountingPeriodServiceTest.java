@@ -48,6 +48,58 @@ class AccountingPeriodServiceTest {
     private AccountingPeriod openPeriod;
     private AccountingPeriod closedPeriod;
 
+    @Test void finalLockRejectsPendingVouchersBeforeAnyClosingWrite() {
+        var readiness=mock(ClosingReadinessService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"closingReadinessService",readiness);
+        when(repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY,Y,M)).thenReturn(Optional.of(closedPeriod));
+        doThrow(new BusinessException(409,"待过账")).when(readiness).assertReady(FACTORY,Y,M);
+        assertThrows(BusinessException.class,()->service.forceLockAndClose(FACTORY,Y,M,2L));
+        assertNull(closedPeriod.getClosingPostedAt());verify(repo,never()).save(any());
+    }
+
+    @Test void finalSnapshotIsGeneratedAfterCostAndProfitClosingAndRepeatedLockIsNoop() {
+        var costs=mock(CostCarryoverService.class);var profits=mock(ProfitLossClosingService.class);
+        var income=mock(IncomeStatementService.class);var readiness=mock(ClosingReadinessService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"closingReadinessService",readiness);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"costCarryoverService",costs);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"profitLossClosingService",profits);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"incomeStatementService",income);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"objectMapper",new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+        var report=com.cretas.aims.dto.finance.report.IncomeStatementDTO.builder()
+                .totalRevenue(new java.math.BigDecimal("720")).totalCost(new java.math.BigDecimal("346.12"))
+                .netProfit(new java.math.BigDecimal("373.88")).build();
+        when(income.generate(FACTORY,Y,M,Y,M)).thenReturn(report);
+        var reconciliation=mock(MonthCloseService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"monthCloseService",reconciliation);
+        when(reconciliation.reconcileFinalClose(FACTORY,Y,M,report)).thenReturn(
+                com.cretas.aims.dto.finance.MonthCloseReconciliationDTO.builder()
+                        .reconciliationStatus("WARNING").summary("真实子账差异；最终净利润373.88").build());
+        closedPeriod.setReconciliationSummary("旧净利润720，有1笔待审批");
+        when(repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY,Y,M)).thenReturn(Optional.of(closedPeriod));
+        when(repo.save(closedPeriod)).thenReturn(closedPeriod);
+        service.forceLockAndClose(FACTORY,Y,M,2L);
+        var order=inOrder(readiness,costs,profits,income,reconciliation,repo);order.verify(readiness).assertReady(FACTORY,Y,M);
+        order.verify(costs).carryCost(FACTORY,Y,M,2L);order.verify(profits).closePeriod(FACTORY,Y,M,2L);
+        order.verify(income).generate(FACTORY,Y,M,Y,M);
+        order.verify(reconciliation).reconcileFinalClose(FACTORY,Y,M,report);order.verify(repo).save(closedPeriod);
+        assertEquals("WARNING",closedPeriod.getReconciliationStatus());
+        assertEquals("真实子账差异；最终净利润373.88",closedPeriod.getReconciliationSummary());
+        assertEquals(new java.math.BigDecimal("373.88"),closedPeriod.getNetProfitSnapshot());
+        assertTrue(closedPeriod.getIncomeStatementSnapshot().contains("346.12"));
+        service.forceLockAndClose(FACTORY,Y,M,2L);verify(income,times(1)).generate(FACTORY,Y,M,Y,M);
+    }
+
+    @org.junit.jupiter.api.Test void cachedAdjustmentWindowMustRefreshBeforeAllowingWrite() {
+        jakarta.persistence.EntityManager em=org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"entityManager",em);
+        closedPeriod.setAdjustDeadline(LocalDateTime.now().plusDays(1));
+        when(repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY,Y,M)).thenReturn(java.util.Optional.of(closedPeriod));
+        when(em.contains(closedPeriod)).thenReturn(true);
+        org.mockito.Mockito.doAnswer(inv->{closedPeriod.setAdjustDeadline(LocalDateTime.now().minusDays(1));return null;}).when(em).refresh(closedPeriod);
+        assertThrows(PeriodClosedException.class,()->service.assertOpen(FACTORY,Y,M));
+        org.mockito.InOrder order=org.mockito.Mockito.inOrder(em);order.verify(em).flush();order.verify(em).refresh(closedPeriod);
+    }
+
     @BeforeEach
     void setUp() {
         openPeriod = AccountingPeriod.builder()

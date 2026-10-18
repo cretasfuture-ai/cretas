@@ -71,6 +71,13 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/finance')).not.toContain('/procurement/finance-review');
   });
 
+  it('exposes accounting periods in the finance manager menu and the general finance menu', () => {
+    expect(financeManagerMenu.find(item => item.path === '/finance/accounting-period')).toMatchObject({
+      title: '会计期间', module: 'finance', hideForFactoryTypes: ['RESTAURANT'],
+    });
+    expect(childPaths('/finance')).toContain('/finance/accounting-period');
+  });
+
   it('exposes the manufacturing purchase-requisition flow from the procurement menu', () => {
     expect(childPaths('/procurement')).toEqual(expect.arrayContaining([
       '/procurement/requisitions/my',
@@ -448,6 +455,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/finance/voucher-template',
       '/finance/sku-margin',
       '/finance/gross-margin-redline',
+      '/finance/accounting-period',
     ]);
   });
 

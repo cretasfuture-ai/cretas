@@ -74,7 +74,9 @@ class ArApStatementScopeContractTest {
                 new BigDecimal("5.00"), ArApApprovalStatus.APPROVED, "6666.00");
         when(transactions.findScopedByCounterpartyAndDateRange("F1", "CUSTOMER", "C1",
                 LocalDate.of(2026, 10, 10), LocalDate.of(2026, 10, 20), List.of(11L)))
-                .thenReturn(List.of(invoice, payment, pending, approved));
+                .thenReturn(List.of(invoice, payment, pending, approved,
+                        row("REFUND", ArApTransactionType.AR_REFUND,new BigDecimal("15.00"),ArApApprovalStatus.APPROVED,"999.00"),
+                        row("PENDING-REFUND", ArApTransactionType.AR_REFUND,new BigDecimal("99.00"),ArApApprovalStatus.PENDING,"999.00")));
 
         Map<String, Object> statement = service.getStatement("F1", CounterpartyType.CUSTOMER, "C1",
                 LocalDate.of(2026, 10, 10), LocalDate.of(2026, 10, 20));
@@ -82,12 +84,12 @@ class ArApStatementScopeContractTest {
         assertThat(statement).containsEntry("scopeApplied", true)
                 .containsEntry("scopeLabel", "当前授权范围")
                 .containsEntry("openingBalance", new BigDecimal("100.00"))
-                .containsEntry("periodDebit", new BigDecimal("35.00"))
+                .containsEntry("periodDebit", new BigDecimal("50.00"))
                 .containsEntry("periodCredit", new BigDecimal("20.00"))
-                .containsEntry("closingBalance", new BigDecimal("115.00"));
+                .containsEntry("closingBalance", new BigDecimal("130.00"));
         @SuppressWarnings("unchecked")
         List<ArApTransaction> projections = (List<ArApTransaction>) statement.get("transactions");
-        assertThat(projections).hasSize(4).allSatisfy(row -> assertThat(row.getBalanceAfter()).isNull());
+        assertThat(projections).hasSize(6).allSatisfy(row -> assertThat(row.getBalanceAfter()).isNull());
         assertThat(invoice.getBalanceAfter()).isEqualByComparingTo("9999.00");
     }
 

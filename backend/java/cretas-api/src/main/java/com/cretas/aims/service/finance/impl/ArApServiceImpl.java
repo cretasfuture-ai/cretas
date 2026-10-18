@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApTransactionType;
+import com.cretas.aims.entity.enums.ArApApprovalStatus;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentMethod;
 import com.cretas.aims.entity.enums.PayablePaymentStatus;
@@ -17,6 +18,11 @@ import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.cretas.aims.service.finance.FinancePaymentReferenceLock;
+import com.cretas.aims.service.finance.ProductionCostConsistency;
+import com.cretas.aims.service.finance.AccountingPeriodService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -51,6 +57,16 @@ public class ArApServiceImpl implements ArApService {
     /** Batch approval/rejection must open one independent transaction per item. */
     @Autowired(required = false)
     private PlatformTransactionManager transactionManager;
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /** Lazy avoids the Voucher -> AR/AP -> period service construction cycle. */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private AccountingPeriodService accountingPeriodService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private FinancePaymentReferenceLock paymentReferenceLock;
 
     /** R20 audit Q1: PO status validation for AP invariant.
      *  R21 audit S2: required=true (was =false fail-open hole). Repo is always present. */
@@ -541,6 +557,8 @@ public class ArApServiceImpl implements ArApService {
                     .withHint("请输入大于 0 的金额").withHintTarget("amount");
         }
 
+        paymentReference = paymentReferenceLock.acquire(factoryId, paymentReference);
+
         // 幂等检查：同一 paymentReference 不能重复收款
         if (paymentReference != null && !paymentReference.isBlank()
                 && transactionRepository.existsByFactoryIdAndPaymentReference(factoryId, paymentReference)) {
@@ -789,6 +807,8 @@ public class ArApServiceImpl implements ArApService {
                     .withHint("请输入大于 0 的金额").withHintTarget("amount");
         }
 
+        paymentReference = paymentReferenceLock.acquire(factoryId, paymentReference);
+
         // 幂等检查：同一 paymentReference 不能重复付款
         if (paymentReference != null && !paymentReference.isBlank()
                 && transactionRepository.existsByFactoryIdAndPaymentReference(factoryId, paymentReference)) {
@@ -840,11 +860,16 @@ public class ArApServiceImpl implements ArApService {
                                              String counterpartyId, BigDecimal amount,
                                              Long operatedBy, String remark,
                                              String sourceType, String sourceId) {
+        requireActor(operatedBy);
+        rejectRefundReversalSource(sourceType);
         if (financeRowScopeQuery != null && sourceType != null && !sourceType.isBlank()) {
             financeRowScopeQuery.requireSourceOwner(factoryId, sourceType, sourceId);
         } else {
             requireOwner(factoryId, operatedBy);
         }
+        lockFactoryThenCounterparty(factoryId, counterpartyType, counterpartyId);
+        LocalDate transactionDate = LocalDate.now();
+        assertAdjustmentPeriodOpen(factoryId, transactionDate);
         // R23 audit C2: Pre-R23 this immediately mutated balance and saved APPROVED — bypass
         // of dual-control. R23: insert PENDING + DO NOT mutate balance. Customer/supplier
         // balance changes only on approveAdjustment() by a 2nd user with elevated permission.
@@ -875,6 +900,7 @@ public class ArApServiceImpl implements ArApService {
         // #3(a): link to originating document so a rejected parent (退货单) can cascade-cancel it.
         transaction.setSourceType(sourceType);
         transaction.setSourceId(sourceId);
+        transaction.setTransactionDate(transactionDate);
 
         log.info("手工调整 (PENDING): factoryId={}, type={}, counterpartyId={}, amount={}, currentBalance={}, operatedBy={}, source={}/{}",
                 factoryId, counterpartyType, counterpartyId, amount, currentBalance, operatedBy, sourceType, sourceId);
@@ -885,18 +911,25 @@ public class ArApServiceImpl implements ArApService {
     @Transactional
     public int cancelPendingAdjustmentsBySource(String factoryId, String sourceType, String sourceId,
                                                 Long operatedBy, String reason) {
+        requireActor(operatedBy);
+        rejectRefundReversalSource(sourceType);
         if (sourceType == null || sourceType.isBlank() || sourceId == null || sourceId.isBlank()) {
             return 0; // honest no-op — nothing to look up.
         }
+        ProductionCostConsistency.lockFactory(entityManager, factoryId);
         List<ArApTransaction> pending = transactionRepository
                 .findByFactoryIdAndSourceTypeAndSourceIdAndApprovalStatusAndDeletedAtIsNull(
                         factoryId, sourceType, sourceId,
                         com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING);
         int cancelled = 0;
         for (ArApTransaction txn : pending) {
+            lockFactoryThenTransaction(factoryId, txn);
             // Only adjustment types carry PENDING; guard anyway (belt & suspenders).
             if (txn.getTransactionType() != ArApTransactionType.AR_ADJUSTMENT
                     && txn.getTransactionType() != ArApTransactionType.AP_ADJUSTMENT) {
+                continue;
+            }
+            if (txn.getApprovalStatus() != com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING) {
                 continue;
             }
             if (financeRowScopeQuery != null) {
@@ -929,11 +962,21 @@ public class ArApServiceImpl implements ArApService {
     @Override
     @Transactional
     public ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy) {
+        requireActor(approvedBy);
         ArApTransaction txn = financeRowScopeQuery != null
                 ? financeRowScopeQuery.requireTransactionAccess(factoryId, transactionId)
                 : transactionRepository.findById(transactionId)
                 .filter(t -> factoryId.equals(t.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("调整记录不存在: " + transactionId));
+
+        // Fast source-policy rejection keeps this pure validation path usable by
+        // callers that do not have a persistence context; repeat after refresh below
+        // so a concurrent source mutation cannot bypass the policy.
+        rejectRefundReversalSource(txn.getSourceType());
+        lockFactoryThenTransaction(factoryId, txn);
+        assertAdjustmentPeriodOpen(factoryId, txn.getTransactionDate());
+
+        rejectRefundReversalSource(txn.getSourceType());
 
         if (txn.getApprovalStatus() != com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING) {
             // R25 follow-up (reviewer #15 Critical-1, qa-prompt v2.4 Rule 15.b sweep):
@@ -986,11 +1029,17 @@ public class ArApServiceImpl implements ArApService {
     @Override
     @Transactional
     public ArApTransaction rejectAdjustment(String factoryId, String transactionId, Long approvedBy, String reason) {
+        requireActor(approvedBy);
         ArApTransaction txn = financeRowScopeQuery != null
                 ? financeRowScopeQuery.requireTransactionAccess(factoryId, transactionId)
                 : transactionRepository.findById(transactionId)
                 .filter(t -> factoryId.equals(t.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("调整记录不存在: " + transactionId));
+
+        rejectRefundReversalSource(txn.getSourceType());
+        lockFactoryThenTransaction(factoryId, txn);
+
+        rejectRefundReversalSource(txn.getSourceType());
 
         if (txn.getApprovalStatus() != com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING) {
             // R25 follow-up (reviewer #15 Critical-1)
@@ -1020,6 +1069,67 @@ public class ArApServiceImpl implements ArApService {
         log.info("调整审批驳回: txnId={}, factoryId={}, rejectedBy={}, reason={}",
                 transactionId, factoryId, approvedBy, reason);
         return transactionRepository.save(txn);
+    }
+
+    private static void rejectRefundReversalSource(String sourceType) {
+        if (com.cretas.aims.service.voucher.ReturnRefundReversalEvidence.SOURCE.equals(sourceType)) {
+            throw new BusinessException(409, "退款撤销必须从原退款详情审核，确保应收、资金和凭证同步处理")
+                    .withCode("RETURN_REFUND_REVERSAL_USE_SOURCE")
+                    .withHint("请打开原退款详情，从退款撤销入口提交审核");
+        }
+    }
+
+    private void lockFactoryThenCounterparty(String factoryId, CounterpartyType type, String counterpartyId) {
+        requireText(factoryId, "factoryId");
+        requireText(counterpartyId, "counterpartyId");
+        ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        lockCounterparty(type, counterpartyId, factoryId);
+    }
+
+    private void lockCounterparty(CounterpartyType type, String counterpartyId, String factoryId) {
+        entityManager.createNativeQuery("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
+                .setParameter("key", "ar-ap-counterparty:" + factoryId + ":"
+                        + (type == null ? "UNKNOWN" : type.name()) + ":" + counterpartyId)
+                .getResultList();
+    }
+
+    private void lockFactoryThenTransaction(String factoryId, ArApTransaction txn) {
+        requireText(factoryId, "factoryId");
+        if (txn == null || !Objects.equals(factoryId, txn.getFactoryId())) {
+            throw new BusinessException(403, "调整记录不属于当前工厂").withCode("AR_AP_FACTORY_SCOPE_MISMATCH");
+        }
+        ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        List<?> locked = entityManager.createNativeQuery("SELECT id FROM ar_ap_transactions "
+                        + "WHERE id = :transactionId AND factory_id = :factoryId "
+                        + "AND deleted_at IS NULL FOR UPDATE")
+                .setParameter("transactionId", txn.getId())
+                .setParameter("factoryId", factoryId)
+                .getResultList();
+        if (locked == null || locked.isEmpty()) {
+            throw new BusinessException(409, "调整记录已失效，请刷新后重试")
+                    .withHint("请刷新应收应付调整列表后重新处理该记录");
+        }
+        entityManager.refresh(txn);
+        lockCounterparty(txn.getCounterpartyType(), txn.getCounterpartyId(), factoryId);
+    }
+
+    private void assertAdjustmentPeriodOpen(String factoryId, LocalDate date) {
+        if (date == null) {
+            throw new BusinessException(400, "调整交易日期不能为空").withCode("AR_AP_TRANSACTION_DATE_REQUIRED");
+        }
+        accountingPeriodService.assertOpen(factoryId, date.getYear(), date.getMonthValue());
+    }
+
+    private static void requireActor(Long actorId) {
+        if (actorId == null || actorId <= 0) {
+            throw new BusinessException(401, "请先以工厂账号登录再处理应收应付调整");
+        }
+    }
+
+    private static void requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(400, field + "不能为空");
+        }
     }
 
     // ==================== 查询 ====================
@@ -1246,20 +1356,6 @@ public class ArApServiceImpl implements ArApService {
         return copy;
     }
 
-    /** Restricted statements use transaction meaning, independent of stored sign. */
-    private BigDecimal scopedStatementAmount(ArApTransaction transaction) {
-        if (transaction == null || transaction.getAmount() == null
-                || transaction.getTransactionType() == null) return null;
-        return switch (transaction.getTransactionType()) {
-            case AR_PAYMENT, AR_CREDIT_NOTE, AP_PAYMENT, AP_CREDIT_NOTE ->
-                    transaction.getAmount().abs().negate();
-            case AR_ADJUSTMENT, AP_ADJUSTMENT ->
-                    transaction.getApprovalStatus() == com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED
-                            ? transaction.getAmount() : null;
-            default -> transaction.getAmount();
-        };
-    }
-
     private void requireSalesOrderOwner(String factoryId, String salesOrderId, Long operatedBy) {
         if (financeRowScopeQuery == null) return;
         if (salesOrderId == null || salesOrderId.isBlank()) {
@@ -1279,6 +1375,7 @@ public class ArApServiceImpl implements ArApService {
     }
 
     @Override
+    @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public Map<String, Object> getStatement(String factoryId, CounterpartyType counterpartyType,
                                              String counterpartyId,
                                              LocalDate startDate, LocalDate endDate) {
@@ -1302,12 +1399,29 @@ public class ArApServiceImpl implements ArApService {
             return statement;
         }
 
-        // Restricted scope uses an owner-filtered signed sum, never a global running snapshot.
-        List<BigDecimal> openingBalances = owners == null
-                ? transactionRepository.findOpeningBalance(factoryId, counterpartyType, counterpartyId, startDate)
-                : transactionRepository.findScopedOpeningBalance(factoryId, counterpartyType.name(), counterpartyId,
-                        startDate, owners);
-        BigDecimal openingBalance = openingBalances.isEmpty() ? BigDecimal.ZERO : openingBalances.get(0);
+        BigDecimal openingBalance;
+        if (owners != null) {
+            List<BigDecimal> scopedOpening = transactionRepository.findScopedOpeningBalance(
+                    factoryId, counterpartyType.name(), counterpartyId, startDate, owners);
+            openingBalance = scopedOpening.isEmpty() ? BigDecimal.ZERO : scopedOpening.get(0);
+        } else {
+        // 原期间补记的撤销按记账日期归属；收回时的余额快照不能用作历史期初。
+        // 复用租户/往来方查询分批重放，稳定排序及同一读快照避免翻页期间漏记/重复。
+        openingBalance = BigDecimal.ZERO;
+        PageRequest pageRequest = PageRequest.of(0, 500, Sort.by("id"));
+        Page<ArApTransaction> historyPage;
+        do {
+            historyPage = transactionRepository
+                    .findByFactoryIdAndCounterpartyTypeAndCounterpartyIdOrderByTransactionDateDesc(
+                            factoryId, counterpartyType, counterpartyId, pageRequest);
+            for (ArApTransaction t : historyPage.getContent()) {
+                if (t.getTransactionDate().isBefore(startDate)) {
+                    openingBalance = openingBalance.add(effectiveStatementAmount(t, counterpartyType));
+                }
+            }
+            pageRequest = pageRequest.next();
+        } while (historyPage.hasNext());
+        }
 
         // 本期交易明细
         List<ArApTransaction> transactions = owners == null
@@ -1320,12 +1434,11 @@ public class ArApServiceImpl implements ArApService {
         BigDecimal periodDebit = BigDecimal.ZERO;  // 挂账增加
         BigDecimal periodCredit = BigDecimal.ZERO;  // 付款减少
         for (ArApTransaction t : transactions) {
-            BigDecimal amount = owners == null ? t.getAmount() : scopedStatementAmount(t);
-            if (amount == null) continue;
-            if (amount.compareTo(BigDecimal.ZERO) > 0) {
-                periodDebit = periodDebit.add(amount);
+            BigDecimal effectiveAmount = effectiveStatementAmount(t, counterpartyType);
+            if (effectiveAmount.compareTo(BigDecimal.ZERO) > 0) {
+                periodDebit = periodDebit.add(effectiveAmount);
             } else {
-                periodCredit = periodCredit.add(amount.abs());
+                periodCredit = periodCredit.add(effectiveAmount.abs());
             }
         }
 
@@ -1345,6 +1458,24 @@ public class ArApServiceImpl implements ArApService {
         statement.put("transactionCount", transactions.size());
 
         return statement;
+    }
+
+    private BigDecimal effectiveStatementAmount(ArApTransaction transaction, CounterpartyType type) {
+        // 与 sumReceivables / sumPayables 同口径；未生效审批仍显示在原始明细中。
+        return switch (transaction.getTransactionType()) {
+            case AR_INVOICE -> type == CounterpartyType.CUSTOMER ? transaction.getAmount() : BigDecimal.ZERO;
+            case AP_INVOICE -> type == CounterpartyType.SUPPLIER ? transaction.getAmount() : BigDecimal.ZERO;
+            case AR_PAYMENT, AR_CREDIT_NOTE -> type == CounterpartyType.CUSTOMER
+                    ? transaction.getAmount().abs().negate() : BigDecimal.ZERO;
+            case AP_PAYMENT, AP_CREDIT_NOTE -> type == CounterpartyType.SUPPLIER
+                    ? transaction.getAmount().abs().negate() : BigDecimal.ZERO;
+            case AR_ADJUSTMENT, AR_REFUND -> type == CounterpartyType.CUSTOMER
+                    && transaction.getApprovalStatus() == ArApApprovalStatus.APPROVED
+                    ? transaction.getAmount() : BigDecimal.ZERO;
+            case AP_ADJUSTMENT -> type == CounterpartyType.SUPPLIER
+                    && transaction.getApprovalStatus() == ArApApprovalStatus.APPROVED
+                    ? transaction.getAmount() : BigDecimal.ZERO;
+        };
     }
 
     @Override
@@ -1368,6 +1499,8 @@ public class ArApServiceImpl implements ArApService {
         LocalDate today = LocalDate.now();
 
         for (ArApTransaction invoice : invoices) {
+            BigDecimal amt = effectiveOutstanding(invoice);
+            if (amt.signum() <= 0) continue;
             String cpId = invoice.getCounterpartyId();
             agingMap.computeIfAbsent(cpId, k -> {
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -1384,21 +1517,6 @@ public class ArApServiceImpl implements ArApService {
             });
 
             Map<String, Object> row = agingMap.get(cpId);
-            // 🔴🔒 follow-up to #577 (2026-09-04): 此前这里只对 SUPPLIER 用 outstandingAmount,
-            // CUSTOMER 恒用 amount(挂账原值) —— 因为当时 recordArPayment 从不回写
-            // AR_INVOICE.outstandingAmount, 消费它就是在读一个客户已经付过款但没更新的假数字
-            // (回归钉 ArApServiceImplGetAgingAnalysisTest 曾专门守住这一点)。
-            //
-            // 现在 recordArPayment 已经维护 outstandingAmount (见 applyPaymentToOpenArInvoices),
-            // 两侧统一按 outstandingAmount 优先。null 的兜底仍然保留 —— 它现在只覆盖
-            // NEEDS_RECONCILIATION 那批存量回填时无法唯一归因的历史行(数据库层面
-            // ck_ar_ap_open_item 约束保证它们的 outstandingAmount 恒为 NULL); 新挂账的发票
-            // (无论有没有配 SO) 挂账时 initializeOpenItem 恒把它设成非 NULL, 不会落进这个分支。
-            // 对未知发票落回 amount(挂账原值)是保守方向: 宁可多算「可能还欠着」, 也不假设
-            // 已结清而漏报 —— 与 V20261028_94 处理历史 AP_INVOICE 的原则一致。
-            BigDecimal amt = invoice.getOutstandingAmount() != null
-                    ? invoice.getOutstandingAmount()
-                    : invoice.getAmount();
             String bucket = getBucket(invoice.getDueDate(), today);
             row.put(bucket, ((BigDecimal) row.get(bucket)).add(amt));
             row.put("total", ((BigDecimal) row.get("total")).add(amt));
@@ -1407,9 +1525,17 @@ public class ArApServiceImpl implements ArApService {
         return new ArrayList<>(agingMap.values());
     }
 
+    private BigDecimal effectiveOutstanding(ArApTransaction invoice) {
+        // 已知发票按剩余未清金额统计。历史 NEEDS_RECONCILIATION 的 NULL 仍保守取原值，
+        // 与现有 open-item 回填政策一致，不能把未知欠款当成已结清。
+        return invoice.getOutstandingAmount() != null
+                ? invoice.getOutstandingAmount() : invoice.getAmount();
+    }
+
     @Override
     public Map<String, Object> getFinanceOverview(String factoryId) {
         Map<String, Object> overview = new LinkedHashMap<>();
+        LocalDate today = LocalDate.now();
         List<Long> owners = scopeOwners(factoryId);
         if (owners != null) {
             overview.put("scopeApplied", true);
@@ -1438,17 +1564,19 @@ public class ArApServiceImpl implements ArApService {
                 : transactionRepository.sumPayablesScoped(factoryId, owners);
 
         List<ArApTransaction> overdueAR = owners == null
-                ? transactionRepository.findOverdueReceivables(factoryId, LocalDate.now())
-                : transactionRepository.findScopedOverdueReceivables(factoryId, LocalDate.now(), owners);
+                ? transactionRepository.findOverdueReceivables(factoryId, today)
+                : transactionRepository.findScopedOverdueReceivables(factoryId, today, owners);
         List<ArApTransaction> overdueAP = owners == null
-                ? transactionRepository.findOverduePayables(factoryId, LocalDate.now())
-                : transactionRepository.findScopedOverduePayables(factoryId, LocalDate.now(), owners);
+                ? transactionRepository.findOverduePayables(factoryId, today)
+                : transactionRepository.findScopedOverduePayables(factoryId, today, owners);
+        overdueAR = overdueAR.stream().filter(t -> effectiveOutstanding(t).signum() > 0).toList();
+        overdueAP = overdueAP.stream().filter(t -> effectiveOutstanding(t).signum() > 0).toList();
 
         BigDecimal overdueARAmount = overdueAR.stream()
-                .map(ArApTransaction::getAmount)
+                .map(this::effectiveOutstanding)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal overdueAPAmount = overdueAP.stream()
-                .map(ArApTransaction::getAmount)
+                .map(this::effectiveOutstanding)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         overview.put("totalReceivable", totalReceivable);
@@ -1492,7 +1620,7 @@ public class ArApServiceImpl implements ArApService {
         //   ⇒ `undefined || 0` ⇒ 渲染成 0。那次修了两个, 这三个漏了。
         //
         // ▎`|| 0` 把「这个字段不存在」翻译成了「本月一笔交易都没有」。
-        LocalDate monthStart = LocalDate.now().withDayOfMonth(1);
+        LocalDate monthStart = today.withDayOfMonth(1);
         LocalDate monthEnd = monthStart.plusMonths(1).minusDays(1);
         overview.put("monthlyTransactionCount", owners == null
                 ? transactionRepository.countByFactoryIdAndTransactionDateBetween(factoryId, monthStart, monthEnd)

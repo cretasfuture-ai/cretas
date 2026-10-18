@@ -7,10 +7,10 @@
 //   pending   待审批处置列表
 //   {id}/approve  审批(批准/拒绝), 批准后后端自动执行
 //
-// 重要: 本页只操作 QualityInspection 记录的处置决策审计与审批流转, 不直接修改
-// MaterialBatch/FinishedGoodsBatch 库存状态 (那是 AI Tool ReleaseDecisionTool 的
-// 职责范围, 与本 controller 代码无关联) —— 顶部提示条如实说明这一点。
-import { ref, computed, onMounted } from 'vue';
+// 重要: 本页复用既有处置评估、审批和执行服务；库存隔离/放行由后端按处置规则桥接，
+// 前端不手工改库存数量，避免把审批记录误当成库存事实。
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
@@ -32,16 +32,25 @@ import {
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('quality'));
-const currentUserId = computed(() => authStore.user?.id ?? 0);
+const currentUserId = computed(() => authStore.user?.id ?? null);
 const currentUserName = computed(() => authStore.user?.fullName || authStore.user?.username || '');
+
+const scopedBatchId = ref('');
+const scopedBatch = ref<TableRow | null>(null);
+const contextError = ref('');
+const contextLoading = ref(false);
+const hasBatchContext = computed(() => route.query.batchId != null);
 
 const activeTab = ref<'inspections' | 'approvals'>('inspections');
 
 // ==================== Tab 1: 待处置质检 ====================
 const inspectionLoading = ref(false);
 const inspectionRows = ref<TableRow[]>([]);
+let openedInspectionQueryId = '';
 // 生产批次号/品名查表 (质检记录接口本身不返回 batchNumber/productName, 只有
 // production_batch_id 外键 —— 借用 inspections/list.vue 已用的同一 /processing/batches
 // 查表模式做展示映射, 不改变后端契约).
@@ -49,6 +58,10 @@ const batchLookup = ref<Map<string, TableRow>>(new Map());
 
 async function loadBatchLookup() {
   if (!factoryId.value) return;
+  if (scopedBatch.value && scopedBatchId.value) {
+    batchLookup.value = new Map([[scopedBatchId.value, scopedBatch.value]]);
+    return;
+  }
   try {
     const res = await get(`/${factoryId.value}/processing/batches`, { params: { size: 200 } });
     if (res.success && res.data) {
@@ -73,8 +86,54 @@ function batchLabel(productionBatchId: unknown): string {
   return `${b.batchNumber || '#' + productionBatchId}${b.productName ? ' - ' + b.productName : ''}`;
 }
 
-async function loadPendingInspections() {
+function returnToTrace() {
+  const batchNumber = scopedBatch.value?.batchNumber;
+  if (typeof batchNumber === 'string') {
+    void router.push({ path: '/production/traceability', query: { batchNumber } });
+  }
+}
+
+let contextRequest = 0;
+let inspectionLoadToken = 0;
+watch(() => [route.query.batchId, route.query.inspectionId, factoryId.value], async () => {
+  const requestId = ++contextRequest;
+  scopedBatch.value = null;
+  scopedBatchId.value = '';
+  contextError.value = '';
+  contextLoading.value = false;
+  inspectionRows.value = [];
+  inspectionLoading.value = false;
+  openedInspectionQueryId = '';
+  if (!hasBatchContext.value) {
+    await Promise.all([loadBatchLookup(), loadPendingInspections(contextRequest, '')]);
+    return;
+  }
+  const batchId = route.query.batchId;
+  if (typeof batchId !== 'string' || !/^[1-9]\d*$/.test(batchId) || !factoryId.value) {
+    contextError.value = '批次信息无效，请从批次追溯页面重新进入';
+    return;
+  }
+  contextLoading.value = true;
+  try {
+    const response = await get<TableRow>(`/${factoryId.value}/processing/batches/${encodeURIComponent(batchId)}`);
+    if (requestId !== contextRequest) return;
+    if (!response.success || !response.data || String(response.data.id) !== batchId) {
+      throw new Error(response.message || '未找到当前工厂的生产批次');
+    }
+    scopedBatchId.value = batchId;
+    scopedBatch.value = response.data;
+    batchLookup.value = new Map([[batchId, response.data]]);
+    await loadPendingInspections(requestId, batchId);
+  } catch (error) {
+    if (requestId === contextRequest) contextError.value = error instanceof Error ? error.message : '批次读取失败，请重试';
+  } finally {
+    if (requestId === contextRequest) contextLoading.value = false;
+  }
+}, { immediate: true });
+
+async function loadPendingInspections(expectedContextRequest = contextRequest, expectedBatchId = scopedBatchId.value) {
   if (!factoryId.value) return;
+  const loadToken = ++inspectionLoadToken;
   inspectionLoading.value = true;
   try {
     // 🔴 2026-08-28 逐屏走查: 这里原本发**两次**请求(result=FAIL / result=CONDITIONAL)
@@ -88,17 +147,37 @@ async function loadPendingInspections() {
     // ⇒ 后端已支持逗号分隔的 `result`; 这里改成**一次**调用, 由数据源过滤。
     //   ⛔ 不在前端本地过滤: 那样仍要拉全量, 且分页会失真。
     const res = await get(`/${factoryId.value}/processing/quality/inspections`, {
-      params: { page: 1, size: 100, result: 'FAIL,CONDITIONAL' },
+      params: {
+        page: 1,
+        size: 100,
+        result: 'FAIL,CONDITIONAL',
+        batchId: expectedBatchId || undefined,
+      },
     });
+    if (loadToken !== inspectionLoadToken
+      || expectedContextRequest !== contextRequest
+      || expectedBatchId !== scopedBatchId.value) return;
     const list: TableRow[] = res.success && res.data ? (res.data.content || []) : [];
     inspectionRows.value = [...list].sort((a, b) =>
       String(b.inspectionDate || '').localeCompare(String(a.inspectionDate || ''))
     );
+    const inspectionId = typeof route.query.inspectionId === 'string' ? route.query.inspectionId : '';
+    if (inspectionId && inspectionId !== openedInspectionQueryId) {
+      const target = inspectionRows.value.find((row) => String(row.id) === inspectionId);
+      if (target) {
+        openedInspectionQueryId = inspectionId;
+        openDispositionDialog(target);
+      }
+    }
   } catch (error) {
     // Interceptor 已弹出具体的 sticky 错误提示
     console.error('加载待处置质检记录失败:', error);
   } finally {
-    inspectionLoading.value = false;
+    if (loadToken === inspectionLoadToken
+      && expectedContextRequest === contextRequest
+      && expectedBatchId === scopedBatchId.value) {
+      inspectionLoading.value = false;
+    }
   }
 }
 
@@ -124,13 +203,43 @@ const ACTION_TAG_TYPE: Record<string, string> = {
   HOLD: 'info',
 };
 
+const ACTION_LABELS: Record<string, string> = {
+  RELEASE: '直接放行',
+  CONDITIONAL_RELEASE: '条件放行',
+  REWORK: '返工',
+  SCRAP: '报废',
+  SPECIAL_APPROVAL: '特批处置',
+  HOLD: '隔离待定',
+};
+
+const APPROVAL_LEVEL_LABELS: Record<string, string> = {
+  SUPERVISOR: '主管审批',
+  QUALITY_HEAD: '质量负责人审批',
+  QUALITY_MANAGER: '质量负责人审批',
+  FACTORY_MANAGER: '厂长审批',
+  MANAGER: '经理审批',
+};
+
 function actionTagType(code: string | undefined | null): string {
   return (code && ACTION_TAG_TYPE[code]) || 'info';
 }
 
 function actionDisplayName(code: string | undefined | null): string {
+  if (code && ACTION_LABELS[code]) return ACTION_LABELS[code];
   const found = actionOptions.value.find((a) => a.actionCode === code);
   return found?.actionName || String(code ?? '-');
+}
+
+function approvalLevelText(level: string | undefined | null): string {
+  if (!level) return '-';
+  return APPROVAL_LEVEL_LABELS[String(level).toUpperCase()] || '待确认审批级别';
+}
+
+function evaluationReasonText(reason: string | undefined | null, action: string | undefined | null): string {
+  const value = String(reason || '').trim();
+  if (value && /[\u4e00-\u9fff]/.test(value)) return value;
+  const actionText = actionDisplayName(action);
+  return `根据本次质检结果，系统建议${actionText}，请结合现场情况复核。`;
 }
 
 // ==================== 处置对话框 (评估 → 决策 → 执行) ====================
@@ -185,7 +294,11 @@ function pickAlternative(action: DispositionActionCode) {
 const requiresComment = computed(() => selectedAction.value !== '' && selectedAction.value !== 'RELEASE');
 
 async function submitDisposition() {
-  if (!dispositionRow.value || !factoryId.value) return;
+  if (!dispositionRow.value || !factoryId.value || currentUserId.value == null) {
+    ElMessage.error('当前登录用户身份不可用，请重新登录后再操作');
+    return;
+  }
+  const executorId = currentUserId.value;
   if (!selectedAction.value) {
     ElMessage.warning('请选择处置动作');
     return;
@@ -201,7 +314,7 @@ async function submitDisposition() {
       inspectionId: dispositionRow.value.id,
       actionCode: selectedAction.value,
       operatorComment: comment.value.trim() || undefined,
-      executorId: currentUserId.value,
+      executorId,
     });
     if (result.approvalInitiated) {
       ElMessage({
@@ -283,7 +396,11 @@ function openApproveDialog(row: PendingDispositionDTO) {
 }
 
 async function submitApprove() {
-  if (!approveRow.value || !factoryId.value) return;
+  if (!approveRow.value || !factoryId.value || currentUserId.value == null) {
+    ElMessage.error('当前登录用户身份不可用，请重新登录后再操作');
+    return;
+  }
+  const approverId = currentUserId.value;
   if (!approveForm.value.approved && !approveForm.value.comment.trim()) {
     ElMessage.warning('拒绝时请填写审批意见');
     return;
@@ -292,7 +409,7 @@ async function submitApprove() {
   try {
     const result = await approveDisposition(factoryId.value, approveRow.value.id, {
       approved: approveForm.value.approved,
-      approverId: currentUserId.value,
+      approverId,
       approverName: currentUserName.value || undefined,
       comment: approveForm.value.comment.trim() || undefined,
     });
@@ -315,14 +432,17 @@ function handleRefresh() {
 
 onMounted(() => {
   loadActionOptions();
-  loadBatchLookup();
-  loadPendingInspections();
   loadPendingApprovals();
 });
 </script>
 
 <template>
   <div class="page-wrapper">
+    <el-alert v-if="contextError" :title="contextError" type="error" :closable="false" show-icon />
+    <el-alert v-else-if="scopedBatch" :title="`当前批次：${scopedBatch.batchNumber} · ${scopedBatch.productName || ''}`" type="info" :closable="false">
+      这里只显示本批待处置质检记录。
+      <el-button link type="primary" @click="returnToTrace">返回批次追溯</el-button>
+    </el-alert>
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
@@ -342,7 +462,7 @@ onMounted(() => {
         class="scope-alert"
       >
         <template #title>
-          待审批期间不会变更库存；批准放行或条件放行后，系统会按本次质检关联批次更新库存状态。返工、待定和特批继续保持隔离，返工需人工安排；成品报废仍需进入废弃或报损流程。
+          批准放行或条件放行后，系统会按本次质检关联批次更新库存状态；本页不手工修改库存数量。返工、待定和特批继续保持隔离，返工需人工安排；成品报废仍需进入废弃或报损流程。
         </template>
       </el-alert>
 
@@ -413,7 +533,7 @@ onMounted(() => {
               <el-option
                 v-for="opt in actionOptions"
                 :key="opt.actionCode"
-                :label="opt.actionName"
+                :label="actionDisplayName(opt.actionCode)"
                 :value="opt.actionCode"
               />
             </el-select>
@@ -444,13 +564,17 @@ onMounted(() => {
             <el-table-column label="处置动作" width="130" align="center">
               <template #default="{ row }">
                 <el-tag :type="actionTagType(row.decisionMade)" size="small">
-                  {{ row.actionDescription || actionDisplayName(row.decisionMade) }}
+                  {{ actionDisplayName(row.decisionMade) }}
                 </el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="reason" label="处置原因" min-width="200" show-overflow-tooltip />
-            <el-table-column prop="executorName" label="申请人" width="100" />
-            <el-table-column prop="approvalLevel" label="审批级别" width="110" align="center" />
+            <el-table-column label="申请人" width="120">
+              <template #default="{ row }">{{ row.executorName || (row.executorId != null ? `编号 #${row.executorId}` : '未记录') }}</template>
+            </el-table-column>
+            <el-table-column label="审批级别" width="130" align="center">
+              <template #default="{ row }">{{ approvalLevelText(row.approvalLevel) }}</template>
+            </el-table-column>
             <el-table-column prop="ruleConfigName" label="触发规则" width="140" show-overflow-tooltip />
             <el-table-column prop="createdAt" label="申请时间" width="180" :formatter="formatDateTimeCell" />
             <el-table-column label="操作" width="100" fixed="right" align="center">
@@ -498,11 +622,11 @@ onMounted(() => {
           <div class="eval-row">
             <span>推荐动作：</span>
             <el-tag :type="actionTagType(evaluation.recommendedAction)" size="small">
-              {{ evaluation.recommendedActionDescription }}
+              {{ actionDisplayName(evaluation.recommendedAction) }}
             </el-tag>
             <span v-if="evaluation.confidence != null" class="eval-confidence">置信度 {{ Number(evaluation.confidence).toFixed(0) }}%</span>
           </div>
-          <div class="eval-reason">{{ evaluation.reason }}</div>
+          <div class="eval-reason">{{ evaluationReasonText(evaluation.reason, evaluation.recommendedAction) }}</div>
           <div v-if="evaluation.requiresApproval" class="eval-approval-hint">
             <el-icon><WarningFilled /></el-icon>
             此动作需要审批，提交后将进入"待审批处置"队列
@@ -516,7 +640,7 @@ onMounted(() => {
               size="small"
               effect="plain"
               @click="pickAlternative(alt.action)"
-            >{{ alt.description }}</el-tag>
+            >{{ actionDisplayName(alt.action) }}</el-tag>
           </div>
         </template>
         <template v-else-if="!evaluating">
@@ -530,7 +654,7 @@ onMounted(() => {
             <el-option
               v-for="opt in actionOptions"
               :key="opt.actionCode"
-              :label="`${opt.actionName} — ${opt.applicableCondition}`"
+              :label="`${actionDisplayName(opt.actionCode)} — ${opt.applicableCondition}`"
               :value="opt.actionCode"
             />
           </el-select>
@@ -559,12 +683,12 @@ onMounted(() => {
         </div>
         <div class="context-row">
           <el-tag :type="actionTagType(approveRow.decisionMade)" size="small">
-            {{ approveRow.actionDescription || actionDisplayName(approveRow.decisionMade) }}
+            {{ actionDisplayName(approveRow.decisionMade) }}
           </el-tag>
-          <span v-if="approveRow.approvalLevel">审批级别：{{ approveRow.approvalLevel }}</span>
+          <span v-if="approveRow.approvalLevel">审批级别：{{ approvalLevelText(approveRow.approvalLevel) }}</span>
         </div>
         <div v-if="approveRow.reason" class="context-notes">原因：{{ approveRow.reason }}</div>
-        <div v-if="approveRow.executorName" class="context-notes">申请人：{{ approveRow.executorName }}</div>
+        <div v-if="approveRow.executorName || approveRow.executorId != null" class="context-notes">申请人：{{ approveRow.executorName || `编号 #${approveRow.executorId}` }}</div>
       </div>
 
       <el-form label-width="90px" class="disposition-form">

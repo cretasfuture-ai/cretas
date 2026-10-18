@@ -6,9 +6,9 @@ import { post } from '@/api/request';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
-import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
-import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
-import { useChartInsight } from '@/composables/useChartInsight';
+import ShipmentSkuMargin from './ShipmentSkuMargin.vue';
+import { useRoute } from 'vue-router';
+import { readMarginPeriod } from './shipmentMarginNavigation';
 import {
   readSkuMarginResponse,
   fmtPct,
@@ -21,6 +21,7 @@ import {
 // ---------- auth ----------
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
@@ -28,7 +29,12 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 const loading = ref(false);
 const tableData = ref<SkuMarginRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
-const dateRange = ref<[string, string] | null>(null);
+const dateRange = ref<[string, string] | null>(readMarginPeriod(route.query));
+const shipmentRefresh = ref(0);
+watch(() => [route.query.periodStart, route.query.periodEnd], () => {
+  dateRange.value = readMarginPeriod(route.query);
+  handleSearch();
+});
 type SortKey = 'quantity' | 'realizedRevenue' | 'realizedCost' | 'realizedMargin'
   | 'catalogPrice' | 'catalogUnitCost' | 'catalogMargin';
 const sortField = ref<SortKey>('realizedMargin');
@@ -95,7 +101,7 @@ function getMarginColor(rate: number | null): string {
 
 // ---------- chart ----------
 function initChart() {
-  if (!chartRef.value) return;
+  if (!chartRef.value || chartRef.value.clientWidth === 0 || chartRef.value.clientHeight === 0) return;
 
   if (chartInstance && !chartInstance.isDisposed?.()) {
     chartInstance.dispose();
@@ -110,7 +116,7 @@ function initChart() {
 
   if (top10.length === 0) {
     chartInstance.setOption({
-      title: { text: '暂无可排名的实际销售毛利率', left: 'center', top: 'center', textStyle: { color: '#909399', fontSize: 14 } },
+      title: { text: '暂无可排名的订单毛利率', left: 'center', top: 'center', textStyle: { color: '#909399', fontSize: 14 } },
     });
     return;
   }
@@ -125,7 +131,7 @@ function initChart() {
       formatter: (params: { name: string; value: number }[]) => {
         if (!Array.isArray(params) || params.length === 0) return '';
         const p = params[0];
-        return `${p.name}<br/>实际销售毛利率: ${p.value}%`;
+        return `${p.name}<br/>订单毛利率: ${p.value}%`;
       },
     },
     grid: { left: 140, right: 40, top: 10, bottom: 30 },
@@ -165,7 +171,7 @@ function initChart() {
 }
 
 function handleResize() {
-  chartInstance?.resize();
+  if (chartRef.value?.clientWidth && chartRef.value.clientHeight) chartInstance?.resize();
 }
 
 onMounted(() => {
@@ -210,6 +216,7 @@ async function loadData() {
       context.endDate = dateRange.value[1];
     }
     const res = await post<Record<string, unknown>>(`/${factoryId.value}/ai-intents/execute`, {
+      intentCode: 'SKU_GROSS_MARGIN',
       userInput: '查询SKU毛利率排名',
       ...(Object.keys(context).length > 0 ? { context } : {}),
     });
@@ -292,41 +299,19 @@ function handleSizeChange(size: number) {
 }
 
 function handleSearch() {
+  shipmentRefresh.value++;
   pagination.value.page = 1;
   loadData();
 }
 
 function handleRefresh() {
-  dateRange.value = null;
+  shipmentRefresh.value++;
   pagination.value.page = 1;
   loadData();
 }
 
-// ==================== Chart Insight ====================
-// Horizontal BAR chart: top-10 SKUs ranked by 实际销售毛利率 (RANKING family, domain='finance').
-// Source getter mirrors what initChart() renders — rated rows only, top 10, sorted desc.
-const skuMarginSource = (): { chart: ChartWithMeta } | null => {
-  const top10 = [...ratedRows.value]
-    .sort((a, b) => (b.realized.marginRate as number) - (a.realized.marginRate as number))
-    .slice(0, 10);
-  if (top10.length < 2) return null;
-  return {
-    chart: {
-      chartType: 'BAR',
-      meta: { xDim: 'category', yMetric: 'margin', aggregation: 'sum', domain: 'finance' },
-      config: {
-        xAxis: { data: top10.map((r) => r.productName) },
-        series: [{ type: 'bar', data: top10.map((r) => r.realized.marginRate as number) }],
-      },
-    },
-  };
-};
-
-const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChartInsight(
-  skuMarginSource,
-  () => ({ canViewFinance: canViewPrice.value }),
-  { factoryId: () => factoryId.value ?? '', autoTier2: true },
-);
+// 毛利率是不可加总的比率，不送入会按合计计算“头部占比”的通用排名解读。
+// 保留逐SKU排名图、简单平均和完整数据，避免把比率之和当作业务总量。
 </script>
 
 <template>
@@ -360,6 +345,9 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
       </template>
 
       <template v-if="canViewPrice">
+      <ShipmentSkuMargin :factory-id="factoryId ?? ''" :period="dateRange" :refresh-key="shipmentRefresh" />
+      <el-collapse @change="() => nextTick(initChart)">
+      <el-collapse-item title="订单与目录参考（保留原始成本）" name="reference">
       <!-- 没有明细时的真实原因 (后端文案 / 请求失败原因) -->
       <el-alert
         v-if="emptyNotice.show"
@@ -375,10 +363,14 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
       <!-- 两种口径的定义: 分开给, 不互相顶替 -->
       <div class="definitions">
         <div class="definition realized-def">
-          <b>实际销售毛利</b>: 销售订单明细 折后未税收入 − 成本, 只算有售价且已回填成本的明细;
+          <b>订单毛利（成本快照）</b>: 销售订单明细折后未税收入减去订单保存的成本，只统计有售价且已回填成本的明细；
           <template v-if="answeredPeriod">
             统计期间 {{ answeredPeriod.startDate }} 至 {{ answeredPeriod.endDate }}{{ answeredPeriod.defaultPeriod ? ' (默认最近 30 天)' : '' }}。
           </template>
+        </div>
+        <div class="definition financial-basis-note">
+          本页使用订单成本快照。出货后的成本更正按实际批次在财务结转中体现；核对已过账收入、销售成本和利润，请
+          <a href="/finance/three-statements">查看已过账财务报表</a>。
         </div>
         <div class="definition catalog-def">
           <b>目录价理论毛利</b>: 产品目录价 vs 最近一条已算出单位成本的批次 (三价对比看板同口径)。
@@ -392,8 +384,8 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
           <div class="kpi-value kpi-avg" :style="{ color: getMarginColor(kpi.avgMargin) }">
             {{ fmtPct(kpi.avgMargin) }}
           </div>
-          <div class="kpi-label">平均实际毛利率</div>
-          <div class="kpi-sub">{{ kpi.ratedCount }} / {{ kpi.skuCount }} 个SKU有实际毛利率</div>
+          <div class="kpi-label">产品毛利率简单平均</div>
+          <div class="kpi-sub">{{ kpi.ratedCount }} / {{ kpi.skuCount }} 个SKU有订单毛利率</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card best">
           <div class="kpi-value kpi-best" :style="{ color: kpi.bestSku.rate === null ? '#909399' : '#67C23A' }">
@@ -419,10 +411,8 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
 
       <!-- Bar Chart: Top 10 SKUs by 实际销售毛利率 -->
       <div class="chart-section">
-        <h3 class="section-title">Top 10 SKU 实际销售毛利率排名</h3>
+        <h3 class="section-title">前10名产品订单毛利率</h3>
         <div ref="chartRef" class="chart-container"></div>
-        <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
-        <ChartInsight :insight="skuMarginInsight" :loading="skuMarginInsightLoading" depth="detailed" />
       </div>
 
       <!-- Main Table -->
@@ -438,22 +428,22 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
           empty-text="暂无SKU毛利率数据"
         >
           <el-table-column prop="productName" label="产品名称" min-width="150" show-overflow-tooltip />
-          <el-table-column prop="quantity" label="销量" width="100" align="right" sortable="custom">
+          <el-table-column prop="quantity" label="订单数量" width="100" align="right" sortable="custom">
             <template #default="{ row }">
               <span class="cell-quantity">{{ row.quantity === null ? NA : row.quantity.toLocaleString() }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="realizedRevenue" label="实际·收入" width="130" align="right" sortable="custom">
+          <el-table-column prop="realizedRevenue" label="订单收入" width="130" align="right" sortable="custom">
             <template #default="{ row }">
               <span class="cell-realized-revenue">{{ fmtMoney(row.realized.revenue) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="realizedCost" label="实际·成本" width="130" align="right" sortable="custom">
+          <el-table-column prop="realizedCost" label="订单成本快照" width="130" align="right" sortable="custom">
             <template #default="{ row }">
               <span class="cell-realized-cost">{{ fmtMoney(row.realized.cost) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="realizedMargin" label="实际销售毛利率" min-width="190" align="center" sortable="custom">
+          <el-table-column prop="realizedMargin" label="订单毛利率" min-width="190" align="center" sortable="custom">
             <template #default="{ row }">
               <div class="cell-realized-margin">
                 <el-tag
@@ -516,6 +506,8 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
         />
       </div>
       </template>
+      </el-collapse-item>
+      </el-collapse>
       </template>
       <el-empty v-else description="您没有查看价格/财务数据的权限" />
     </el-card>

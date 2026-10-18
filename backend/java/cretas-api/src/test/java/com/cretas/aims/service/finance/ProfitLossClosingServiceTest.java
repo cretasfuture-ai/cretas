@@ -30,6 +30,17 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ProfitLossClosingServiceTest {
 
+    @Test void physicalReturnOnlyMonthClosesCreditCogsToRetainedProfit() {
+        when(voucherEntryRepo.aggregateBySubjectPosted(eq("F006"),any(),any()))
+                .thenReturn(List.of(row("6401","主营业务成本","0","7.42")));
+        when(accountRepo.findVisibleToFactory("F006")).thenReturn(List.of());
+        service.closePeriod("F006",2026,10,2L);
+        verify(voucherService).createManual(any(),any(),any(),entriesCap.capture(),any(),any(),any(),any());
+        var entries=entriesCap.getValue();
+        assertEquals(new BigDecimal("7.42"),entries.stream().filter(e->e.subjectCode().equals("6401")).findFirst().orElseThrow().debit());
+        assertEquals(new BigDecimal("7.42"),entries.stream().filter(e->e.subjectCode().equals("4103")).findFirst().orElseThrow().credit());
+    }
+
     @Mock VoucherService voucherService;
     @Mock VoucherEntryRepository voucherEntryRepo;
     @Mock AccountRepository accountRepo;

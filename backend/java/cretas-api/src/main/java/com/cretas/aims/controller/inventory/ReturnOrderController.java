@@ -144,8 +144,10 @@ public class ReturnOrderController {
     @Operation(summary = "驳回退货单")
     public ApiResponse<ReturnOrder> rejectReturnOrder(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String returnOrderId) {
-        ReturnOrder order = returnOrderService.rejectReturnOrder(factoryId, returnOrderId);
+            @PathVariable @NotBlank String returnOrderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = extractUserId(authorization);
+        ReturnOrder order = returnOrderService.rejectReturnOrder(factoryId, returnOrderId, userId);
         return ApiResponse.success("退货单已驳回", order);
     }
 

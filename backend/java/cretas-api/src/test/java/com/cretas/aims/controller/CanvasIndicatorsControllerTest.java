@@ -49,6 +49,18 @@ import static org.mockito.Mockito.when;
 @DisplayName("CanvasIndicatorsController smoke tests")
 class CanvasIndicatorsControllerTest {
 
+    @Test
+    void realProductionCostCannotBeOverwrittenByCanvasPlaceholderRecompute() {
+        Indicator indicator = new Indicator();
+        indicator.setId("cost-17"); indicator.setFactoryId("NEW-FACTORY");
+        indicator.setCode("FACTORY_ACTUAL_TOTAL_COST");
+        when(indicatorRepository.findById("cost-17")).thenReturn(Optional.of(indicator));
+        org.junit.jupiter.api.Assertions.assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> controller.recompute("NEW-FACTORY", "cost-17"));
+        org.mockito.Mockito.verifyNoInteractions(versionRepository);
+        org.mockito.Mockito.verify(indicatorRepository,org.mockito.Mockito.never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
+    }
+
     @Mock IndicatorRepository indicatorRepository;
     @Mock IndicatorVersionRepository versionRepository;
     @Mock IndicatorThresholdRepository thresholdRepository;

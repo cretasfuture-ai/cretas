@@ -1,6 +1,8 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { reactive } from 'vue';
 import DisposalList from './list.vue';
+import { getUploadUrl, putFileWithProgress } from '@/api/attachment';
 
 type DisposalVm = {
   handleCreate: () => void;
@@ -12,19 +14,38 @@ type DisposalVm = {
   };
   currentBatches: { id: string }[];
   selectedBatchMax: number | null;
+  createDisabled: boolean;
+  handleEvidencePhotoChange: (event: Event) => Promise<void>;
+  evidenceUploading: boolean;
 };
 
 const get = vi.fn();
 const post = vi.fn();
+const put = vi.fn();
+const confirm = vi.hoisted(() => vi.fn());
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006' }) }));
-vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => true }) }));
+vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => true, canAccess: () => true }) }));
 vi.mock('@/api/request', () => ({ get: (...args: unknown[]) => get(...args),
-  post: (...args: unknown[]) => post(...args), put: vi.fn() }));
+  post: (...args: unknown[]) => post(...args), put: (...args: unknown[]) => put(...args) }));
+const routeState = reactive<{ query: Record<string, string> }>({ query: {} });
+const router = { push: vi.fn() };
+vi.mock('vue-router', () => ({ useRoute: () => routeState, useRouter: () => router }));
+vi.mock('@/api/attachment', () => ({ getUploadUrl: vi.fn(), putFileWithProgress: vi.fn() }));
+vi.mock('@/api/factoryRecall', () => ({ getFactoryRecall: vi.fn() }));
+vi.mock('element-plus', async () => {
+  const actual = await vi.importActual<typeof import('element-plus')>('element-plus');
+  return { ...actual, ElMessageBox: { ...actual.ElMessageBox, confirm } };
+});
 
 describe('disposal finished-goods selector wiring', () => {
   beforeEach(() => {
     get.mockReset();
     post.mockReset();
+    put.mockReset();
+    confirm.mockReset();
+    routeState.query = {};
+    vi.mocked(getUploadUrl).mockReset();
+    vi.mocked(putFileWithProgress).mockReset();
     get.mockImplementation(async (url: string) => url.endsWith('eligible-finished-goods')
       ? { success: true, data: [
           { id: 'PARTIAL', batchNumber: 'FG-PARTIAL', productName: '成品', unit: 'kg', availableQuantity: 30 },
@@ -32,6 +53,7 @@ describe('disposal finished-goods selector wiring', () => {
         ] }
       : { success: true, data: [] });
     post.mockResolvedValue({ success: true });
+    put.mockResolvedValue({ success: true });
   });
 
   it('loads the disposal endpoint and submits only the unshipped balance batch', async () => {
@@ -58,5 +80,109 @@ describe('disposal finished-goods selector wiring', () => {
       finishedGoodsBatchId: 'PARTIAL', disposalQuantity: 30
     }));
     expect(post.mock.calls[0][1]).not.toHaveProperty('materialBatchId');
+  });
+
+  it('passes status, keyword and exact finished-goods context without overloading type', async () => {
+    routeState.query = { finishedGoodsBatchId: 'PARTIAL', disposalId: '17', recallId: 'recall-1', batchId: '7' };
+    get.mockImplementation(async (url: string) => {
+      if (url.endsWith('eligible-finished-goods')) return { success: true, data: [{ id: 'PARTIAL', availableQuantity: 30 }] };
+      if (url.endsWith('/17')) return { success: true, data: { id: 17, finishedGoodsBatchId: 'PARTIAL' } };
+      if (url.includes('disposal-records')) return { success: true, data: [], totalElements: 0 };
+      return { success: true, data: [] };
+    });
+    const wrapper = shallowMount(DisposalList, { global: { stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } }, directives: { loading: () => {} } } });
+    const vm = wrapper.vm as unknown as DisposalVm & { searchForm: { keyword: string; status: string } };
+    await flushPromises();
+    vm.searchForm.keyword = '17';
+    vm.searchForm.status = 'PENDING';
+    await (vm as unknown as { handleSearch: () => Promise<void> }).handleSearch();
+    const listCalls = get.mock.calls.filter(([url]) => String(url) === '/F006/disposal-records');
+    const listCall = listCalls[listCalls.length - 1];
+    expect(listCall?.[1].params).toMatchObject({ status: 'PENDING', keyword: '17', finishedGoodsBatchId: 'PARTIAL' });
+    expect(listCall?.[1].params).not.toHaveProperty('type');
+    wrapper.unmount();
+  });
+
+  it('blocks creation when route-selected finished goods has no eligible balance', async () => {
+    routeState.query = { finishedGoodsBatchId: 'SHIPPED' };
+    const wrapper = shallowMount(DisposalList, { global: { stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } }, directives: { loading: () => {} } } });
+    const vm = wrapper.vm as unknown as DisposalVm;
+    await flushPromises();
+    expect(vm.createDisabled).toBe(true);
+    vm.handleCreate();
+    expect(vm.disposalForm.batchId).toBe('SHIPPED');
+    wrapper.unmount();
+  });
+
+  it('uploads a selected evidence photo through the signed URL and keeps URL compatibility', async () => {
+    const wrapper = shallowMount(DisposalList, { global: { stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } }, directives: { loading: () => {} } } });
+    const vm = wrapper.vm as unknown as DisposalVm;
+    vi.mocked(getUploadUrl).mockResolvedValue({ data: { uploadUrl: 'https://oss.test/put', fileUrl: 'https://cdn.test/photo.jpg' } });
+    vi.mocked(putFileWithProgress).mockResolvedValue();
+    const file = new File(['photo'], 'photo.jpg', { type: 'image/jpeg' });
+    await vm.handleEvidencePhotoChange({ target: { files: [file], value: 'selected' } } as unknown as Event);
+    expect(getUploadUrl).toHaveBeenCalledWith('photo.jpg', 'image/jpeg', 'F006');
+    expect(putFileWithProgress).toHaveBeenCalledWith('https://oss.test/put', file, expect.any(Function));
+    expect(vm.disposalForm.evidenceImages).toContain('https://cdn.test/photo.jpg');
+    expect(vm.evidenceUploading).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('refreshes eligible balance after approval and fails closed while it is loading', async () => {
+    routeState.query = { finishedGoodsBatchId: 'PARTIAL', recallId: '4', batchId: '10' };
+    let eligibleReads = 0;
+    get.mockImplementation(async (url: string) => {
+      if (url.endsWith('eligible-finished-goods')) {
+        eligibleReads += 1;
+        return { success: true, data: eligibleReads === 1 ? [{ id: 'PARTIAL', availableQuantity: 10 }] : [] };
+      }
+      return { success: true, data: [] };
+    });
+    confirm.mockResolvedValue(true);
+    const wrapper = shallowMount(DisposalList, { global: {
+      stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } },
+      directives: { loading: () => {} },
+    } });
+    const vm = wrapper.vm as unknown as DisposalVm & { handleApprove: (row: Record<string, unknown>) => Promise<void> };
+    await flushPromises();
+    expect(vm.createDisabled).toBe(false);
+    put.mockResolvedValue({ success: true });
+    await vm.handleApprove({ id: 3, status: 'PENDING', disposalType: 'SCRAP', disposalQuantity: 10 });
+    expect(eligibleReads).toBe(2);
+    expect(vm.createDisabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('does not approve a previous batch after route changes during confirmation', async () => {
+    routeState.query = { finishedGoodsBatchId: 'PARTIAL' };
+    let resolve!: (value: boolean) => void;
+    confirm.mockReturnValue(new Promise<boolean>(done => { resolve = done; }));
+    const wrapper = shallowMount(DisposalList, { global: {
+      stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } },
+      directives: { loading: () => {} },
+    } });
+    const vm = wrapper.vm as unknown as DisposalVm & { handleApprove: (row: Record<string, unknown>) => Promise<void> };
+    await flushPromises();
+    const approving = vm.handleApprove({ id: 3, status: 'PENDING', disposalType: 'SCRAP', disposalQuantity: 10 });
+    routeState.query = { finishedGoodsBatchId: 'SHIPPED' };
+    await flushPromises();
+    resolve(true); await approving;
+    expect(put).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('keeps evidence URLs empty after a failed photo upload and clears uploading state', async () => {
+    const wrapper = shallowMount(DisposalList, { global: {
+      stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } },
+      directives: { loading: () => {} },
+    } });
+    const vm = wrapper.vm as unknown as DisposalVm;
+    vi.mocked(getUploadUrl).mockResolvedValue({ data: { uploadUrl: 'https://oss.test/put', fileUrl: 'https://cdn.test/photo.jpg' } });
+    vi.mocked(putFileWithProgress).mockRejectedValue(new Error('OSS 上传失败'));
+    const file = new File(['photo'], 'photo.jpg', { type: 'image/jpeg' });
+    await vm.handleEvidencePhotoChange({ target: { files: [file], value: 'selected' } } as unknown as Event);
+    expect(vm.disposalForm.evidenceImages).toBe('');
+    expect(vm.evidenceUploading).toBe(false);
+    wrapper.unmount();
   });
 });

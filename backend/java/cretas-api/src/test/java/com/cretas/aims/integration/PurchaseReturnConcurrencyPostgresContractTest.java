@@ -93,6 +93,7 @@ class PurchaseReturnConcurrencyPostgresContractTest {
         registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
+        registry.add("spring.jpa.properties.hibernate.dialect", () -> "org.hibernate.dialect.PostgreSQLDialect");
         registry.add("spring.jpa.properties.hibernate.default_schema", () -> TEST_SCHEMA);
     }
 
@@ -128,6 +129,11 @@ class PurchaseReturnConcurrencyPostgresContractTest {
 
     @TestConfiguration
     static class Config {
+        @Bean
+        com.cretas.aims.service.finance.AccountingPeriodService accountingPeriodService() {
+            return org.mockito.Mockito.mock(com.cretas.aims.service.finance.AccountingPeriodService.class);
+        }
+
         @Bean
         PurchaseReturnCapacityService purchaseReturnCapacityService(PurchaseOrderRepository po,
                 PurchaseOrderItemRepository poi, ReturnOrderRepository ro, ReturnOrderItemRepository roi,

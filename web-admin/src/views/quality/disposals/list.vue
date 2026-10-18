@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, Check, Close } from '@element-plus/icons-vue';
-import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { formatAmount, formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+import { getUploadUrl, putFileWithProgress } from '@/api/attachment';
+import { getFactoryRecall, type FactoryRecallDetail } from '@/api/factoryRecall';
 import {
   getApplicantName,
   getBatchDisplayName,
@@ -14,9 +17,12 @@ import {
   getQuantityDisplay
 } from './disposalReadback';
 import { disposalAvailableQuantity, isEligibleFinishedGoods } from './eligibleFinishedGoods';
+import DisposalVoucherLinks from './DisposalVoucherLinks.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('quality'));
 
@@ -45,6 +51,27 @@ const actionLoading = ref(false);
 const batches = ref<TableRow[]>([]);           // 原料批次 (MaterialBatch)
 const fgBatches = ref<TableRow[]>([]);          // R12: 成品批次 (FinishedGoodsBatch)
 const fgLoading = ref(false);
+const contextLoading = ref(false);
+const contextError = ref('');
+const validatedRecall = ref<FactoryRecallDetail | null>(null);
+const contextRequestSequence = ref(0);
+const evidenceInput = ref<HTMLInputElement | null>(null);
+const evidenceUploading = ref(false);
+const evidenceProgress = ref(0);
+
+function routeQueryText(name: string): string {
+  const value = route.query[name];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+const scopedFinishedGoodsBatchId = computed(() => routeQueryText('finishedGoodsBatchId'));
+const scopedDisposalId = computed(() => routeQueryText('disposalId'));
+const scopedRecallId = computed(() => routeQueryText('recallId'));
+const scopedBatchId = computed(() => routeQueryText('batchId'));
+const createDisabled = computed(() => Boolean(
+  scopedFinishedGoodsBatchId.value
+  && (fgLoading.value || !fgBatches.value.some((batch) => String(batch.id) === scopedFinishedGoodsBatchId.value && isEligibleFinishedGoods(batch))),
+));
 
 // R12: 当前报损对象对应的批次下拉数据源。
 const currentBatches = computed<TableRow[]>(() =>
@@ -70,12 +97,56 @@ function handleTargetTypeChange() {
   if (disposalForm.value.targetType === 'FINISHED') loadFgBatches();
 }
 
-onMounted(() => {
-  loadData();
-  loadBatches();
-});
+onMounted(() => loadBatches());
 
-async function loadData() {
+async function validateRecallContext(expectedRequest: number, expectedRecallId: string, expectedBatchId: string) {
+  if (!expectedRecallId || !factoryId.value) {
+    validatedRecall.value = null;
+    return;
+  }
+  try {
+    const recall = await getFactoryRecall(factoryId.value, expectedRecallId);
+    if (expectedRequest !== contextRequestSequence.value || expectedRecallId !== scopedRecallId.value) return;
+    if (String(recall.id) !== expectedRecallId || (expectedBatchId && String(recall.batchId) !== expectedBatchId)) {
+      contextError.value = '召回上下文与当前批次不一致，已停止操作';
+      validatedRecall.value = null;
+      return;
+    }
+    validatedRecall.value = recall;
+  } catch (error) {
+    if (expectedRequest === contextRequestSequence.value && expectedRecallId === scopedRecallId.value) {
+      contextError.value = error instanceof Error ? error.message : '召回上下文读取失败';
+      validatedRecall.value = null;
+    }
+  }
+}
+
+async function applyRouteContext() {
+  const expectedRequest = ++contextRequestSequence.value;
+  const expectedFg = scopedFinishedGoodsBatchId.value;
+  const expectedRecall = scopedRecallId.value;
+  const expectedBatch = scopedBatchId.value;
+  contextLoading.value = true;
+  contextError.value = '';
+  validatedRecall.value = null;
+  disposalForm.value.targetType = expectedFg ? 'FINISHED' : 'MATERIAL';
+  disposalForm.value.batchId = expectedFg;
+  const tasks: Promise<void>[] = [
+    loadData(expectedRequest, expectedFg),
+    validateRecallContext(expectedRequest, expectedRecall, expectedBatch),
+  ];
+  if (expectedFg) tasks.push(loadFgBatches(expectedRequest, expectedFg));
+  await Promise.all(tasks);
+  if (expectedRequest === contextRequestSequence.value) contextLoading.value = false;
+}
+
+watch(
+  () => [factoryId.value, route.query.finishedGoodsBatchId, route.query.disposalId, route.query.recallId, route.query.batchId],
+  () => { void applyRouteContext(); },
+  { immediate: true },
+);
+
+async function loadData(expectedRequest = contextRequestSequence.value, expectedFg = scopedFinishedGoodsBatchId.value) {
   if (!factoryId.value) return;
 
   loading.value = true;
@@ -85,21 +156,65 @@ async function loadData() {
         // 后端 @RequestParam page 是 0-based; el-pagination 的 pagination.page 是 1-based → 转换 (修: 之前直传致首屏请求第2页, 列表空)
         page: Math.max(0, pagination.value.page - 1),
         size: pagination.value.size,
-        type: searchForm.value.status || undefined
+        status: searchForm.value.status || undefined,
+        keyword: searchForm.value.keyword.trim() || undefined,
+        finishedGoodsBatchId: expectedFg || undefined,
       }
     });
+    if (expectedRequest !== contextRequestSequence.value || expectedFg !== scopedFinishedGoodsBatchId.value) return;
     if (response.success && response.data !== undefined) {
       // 后端 getDisposalRecords 返回扁平 data=[数组] + 同级 totalElements (非 Spring Page 信封), 兼容两种形态
       tableData.value = Array.isArray(response.data) ? response.data : (response.data.content || []);
       pagination.value.total = (response as any).totalElements ?? response.data?.totalElements ?? tableData.value.length;
+      await openScopedDisposal(expectedRequest, expectedFg);
     } else if (response.success === false) {
+      if (expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+        contextError.value = response.message || '加载报损记录失败';
+      }
       ElMessage.error(response.message || '加载数据失败');
     }
   } catch (error: any) {
     // Interceptor already shows specific sticky toast for ApiError.
     console.error('加载失败:', error);
+    if (expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+      contextError.value = error instanceof Error ? error.message : '加载报损记录失败';
+    }
   } finally {
-    loading.value = false;
+    if (expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+      loading.value = false;
+    }
+  }
+}
+
+async function openScopedDisposal(expectedRequest: number, expectedFg: string) {
+  const recordId = scopedDisposalId.value;
+  if (!recordId || !factoryId.value) return;
+  const listed = tableData.value.find((row) => String(row.id ?? row.recordId ?? '') === recordId);
+  if (listed) {
+    if (expectedFg && String(listed.finishedGoodsBatchId ?? '') !== expectedFg) {
+      contextError.value = '报损记录与当前成品批次不一致，已停止打开';
+      return;
+    }
+    if (expectedRequest === contextRequestSequence.value && recordId === scopedDisposalId.value) handleView(listed);
+    return;
+  }
+  try {
+    const response = await get(`/${factoryId.value}/disposal-records/${encodeURIComponent(recordId)}`);
+    if (expectedRequest !== contextRequestSequence.value || recordId !== scopedDisposalId.value) return;
+    if (!response.success || !response.data || String(response.data.id ?? response.data.recordId ?? '') !== recordId) {
+      contextError.value = response.message || '报损记录读取失败';
+      return;
+    }
+    const record = response.data as TableRow;
+    if (expectedFg && String(record.finishedGoodsBatchId ?? '') !== expectedFg) {
+      contextError.value = '报损记录与当前成品批次不一致，已停止打开';
+      return;
+    }
+    handleView(record);
+  } catch (error) {
+    if (expectedRequest === contextRequestSequence.value && recordId === scopedDisposalId.value) {
+      contextError.value = error instanceof Error ? error.message : '报损记录读取失败';
+    }
   }
 }
 
@@ -119,22 +234,34 @@ async function loadBatches() {
 }
 
 // 加载可报损成品余量；接口排除已发货、预留占用和已撤回的部分。
-async function loadFgBatches() {
+async function loadFgBatches(expectedRequest = contextRequestSequence.value, expectedFg = scopedFinishedGoodsBatchId.value) {
   if (!factoryId.value) return;
   fgLoading.value = true;
   fgBatches.value = [];
   try {
     const response = await get(`/${factoryId.value}/disposal-records/eligible-finished-goods`);
+    if (expectedRequest !== contextRequestSequence.value || expectedFg !== scopedFinishedGoodsBatchId.value) return;
     if (response.success && Array.isArray(response.data)) {
       fgBatches.value = response.data.filter(isEligibleFinishedGoods);
+      if (expectedFg && !fgBatches.value.some((batch) => String(batch.id) === expectedFg)) {
+        contextError.value = '该成品批次已无可报损余量，不能新建报损申请';
+      }
     } else {
+      if (expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+        contextError.value = response.message || '加载成品批次列表失败';
+      }
       ElMessage.error(response.message || '加载成品批次列表失败');
     }
   } catch (error: any) {
     console.error('加载成品批次列表失败:', error);
+    if (expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+      contextError.value = error instanceof Error ? error.message : '加载成品批次列表失败';
+    }
     if (!error?.actionHint) ElMessage.error('加载成品批次列表失败');
   } finally {
-    fgLoading.value = false;
+    if (expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+      fgLoading.value = false;
+    }
   }
 }
 
@@ -161,15 +288,20 @@ function handleSizeChange(size: number) {
 }
 
 function handleCreate() {
+  if (createDisabled.value) {
+    ElMessage.warning(contextError.value || '该成品批次已无可报损余量，不能新建报损申请');
+    return;
+  }
   disposalForm.value = {
-    targetType: 'MATERIAL',
-    batchId: '',
+    targetType: scopedFinishedGoodsBatchId.value ? 'FINISHED' : 'MATERIAL',
+    batchId: scopedFinishedGoodsBatchId.value,
     disposalType: '',
     quantity: 0,
     reason: '',
     evidenceImages: '',
     notes: ''
   };
+  if (disposalForm.value.targetType === 'FINISHED') void loadFgBatches();
   dialogVisible.value = true;
 }
 
@@ -245,7 +377,14 @@ async function submitDisposal() {
 }
 
 async function handleApprove(row: TableRow) {
-  if (actionLoading.value) return;
+  if (actionLoading.value || !factoryId.value) return;
+  const sourceFactory = factoryId.value;
+  const sourceUser = authStore.user?.id;
+  const expectedRequest = contextRequestSequence.value;
+  const expectedFg = scopedFinishedGoodsBatchId.value;
+  const isCurrent = () => expectedRequest === contextRequestSequence.value
+    && expectedFg === scopedFinishedGoodsBatchId.value
+    && sourceFactory === factoryId.value && sourceUser === authStore.user?.id;
   // 防呆 Rule 2: confirm 带品名/批次/数量/损失 context, 不再笼统 "确定批准?"
   const ctx = approvalContextHtml(row);
   try {
@@ -256,13 +395,18 @@ async function handleApprove(row: TableRow) {
       cancelButtonText: '取消'
     });
   } catch { return; }
+  if (!isCurrent()) return;
   actionLoading.value = true;
   try {
     // F-BUG-1/F-BUG-4: 审批人从后端 token 取, 前端无需传 approverId/approverName。
-    const response = await put(`/${factoryId.value}/disposal-records/${row.id}/approve`, {});
+    const response = await put(`/${sourceFactory}/disposal-records/${row.id}/approve`, {});
     if (response.success) {
+      if (!isCurrent()) return;
       ElMessage.success('已批准');
-      loadData();
+      await loadData(expectedRequest, expectedFg);
+      if (expectedFg && expectedRequest === contextRequestSequence.value && expectedFg === scopedFinishedGoodsBatchId.value) {
+        await loadFgBatches(expectedRequest, expectedFg);
+      }
     } else {
       ElMessage.error(response.message || '操作失败');
     }
@@ -375,6 +519,42 @@ function handleView(row: TableRow) {
   viewDialogVisible.value = true;
 }
 
+function openRecallContext() {
+  if (!validatedRecall.value) return;
+  router.push({ path: '/quality/recalls', query: { batchId: String(validatedRecall.value.batchId) } });
+}
+
+function chooseEvidencePhoto() {
+  evidenceInput.value?.click();
+}
+
+async function handleEvidencePhotoChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    ElMessage.error('请选择图片文件');
+    return;
+  }
+  evidenceUploading.value = true;
+  evidenceProgress.value = 0;
+  try {
+    const response = await getUploadUrl(file.name, file.type, factoryId.value);
+    await putFileWithProgress(response.data.uploadUrl, file, (progress) => {
+      evidenceProgress.value = progress;
+    });
+    const urls = disposalForm.value.evidenceImages.split(',').map((url) => url.trim()).filter(Boolean);
+    if (!urls.includes(response.data.fileUrl)) urls.push(response.data.fileUrl);
+    disposalForm.value.evidenceImages = urls.join(',');
+    ElMessage.success('证据照片上传成功');
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '证据照片上传失败');
+  } finally {
+    evidenceUploading.value = false;
+  }
+}
+
 function getTypeText(type: string) {
   const map: Record<string, string> = {
     EXPIRED: '过期',
@@ -407,12 +587,20 @@ function getDisposalReason(row: TableRow): string {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
-            <el-button v-if="canWrite" data-activity-action="disposal.create.open" type="primary" :icon="Plus" @click="handleCreate">
+            <el-button v-if="canWrite" data-activity-action="disposal.create.open" type="primary" :icon="Plus" :disabled="createDisabled || contextLoading || actionLoading" @click="handleCreate">
               新建申请
             </el-button>
           </div>
         </div>
       </template>
+
+      <el-alert v-if="contextError" type="error" :closable="false" show-icon class="context-alert" :title="contextError" />
+      <el-alert v-if="validatedRecall" type="info" :closable="false" class="context-alert">
+        <template #title>
+          当前来自召回 {{ validatedRecall.eventCode }} · 批次 {{ validatedRecall.batchNumber }}
+          <el-button type="primary" link size="small" @click="openRecallContext">返回召回后续</el-button>
+        </template>
+      </el-alert>
 
       <div class="search-bar">
         <el-input
@@ -513,7 +701,7 @@ function getDisposalReason(row: TableRow): string {
     </el-card>
 
     <!-- 查看详情 -->
-    <el-dialog v-model="viewDialogVisible" title="废弃处理详情" width="500px" destroy-on-close>
+    <el-dialog v-model="viewDialogVisible" title="废弃处理详情" width="560px" destroy-on-close>
       <el-descriptions v-if="viewRecord" :column="1" border>
         <el-descriptions-item label="记录编号">{{ getRecordNumber(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="批次号">{{ getBatchNumber(viewRecord) }}</el-descriptions-item>
@@ -524,6 +712,12 @@ function getDisposalReason(row: TableRow): string {
         <el-descriptions-item label="状态">
           <el-tag :type="getStatusType(viewRecord.status)" size="small">{{ getStatusText(viewRecord.status) }}</el-tag>
         </el-descriptions-item>
+        <el-descriptions-item label="实际报废损失">
+          {{ formatAmount(viewRecord.actualLoss) }}
+          <div v-if="viewRecord.finishedGoodsBatchId" style="font-size:12px;color:#909399">按报废数量和真实单位成本计算</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="审批人">{{ viewRecord.approverName || viewRecord.approvedByName || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="审批时间">{{ formatDateTimeCell(null, null, viewRecord.approvedAt || viewRecord.approvalDate) }}</el-descriptions-item>
         <el-descriptions-item label="证据图片">
           <template v-if="viewRecord.evidenceImages">
             <div style="word-break:break-all">{{ viewRecord.evidenceImages }}</div>
@@ -537,6 +731,8 @@ function getDisposalReason(row: TableRow): string {
           <span v-else>-</span>
         </el-descriptions-item>
       </el-descriptions>
+      <DisposalVoucherLinks v-if="viewDialogVisible && viewRecord && factoryId && permissionStore.canAccess('finance')"
+        :factory-id="factoryId" :disposal-id="String(viewRecord.id ?? viewRecord.recordId ?? '')" />
     </el-dialog>
 
     <!-- 新建废弃申请对话框 -->
@@ -587,17 +783,17 @@ function getDisposalReason(row: TableRow): string {
         <el-form-item label="废弃原因" required>
           <el-input v-model="disposalForm.reason" type="textarea" :rows="2" placeholder="请输入废弃原因" />
         </el-form-item>
-        <!-- Gap-3 + F-FP-1 防呆: 证据留存入口 (照片 URL 逗号分隔). 报废必须留证据 (转录硬约束).
-             存入独立列 evidence_images (V20261024_15), 不再塞 notes 字段.
-             TODO(F-FP-1): 当前为 URL 文本粘贴, 后续接入 el-upload 文件上传组件 (需先确认 OSS 上传端点). -->
         <el-form-item label="证据留存" required>
+          <input ref="evidenceInput" type="file" accept="image/*" hidden @change="handleEvidencePhotoChange" />
+          <el-button type="primary" plain :loading="evidenceUploading" @click="chooseEvidencePhoto">选择照片并上传</el-button>
+          <span v-if="evidenceUploading" style="font-size:12px;color:#909399;margin-left:8px">上传中 {{ evidenceProgress }}%</span>
           <el-input
             v-model="disposalForm.evidenceImages"
             type="textarea"
             :rows="3"
-            placeholder="粘贴照片 URL（多张用逗号分隔）&#10;例: https://cdn.example.com/photo1.jpg, https://cdn.example.com/photo2.jpg"
+            placeholder="可继续粘贴照片 URL（多张用逗号分隔）"
           />
-          <div style="font-size:12px;color:#e6a23c;margin-top:4px">报废必须上传现场照片证明，便于审批和留档（必填）</div>
+          <div style="font-size:12px;color:#e6a23c;margin-top:4px">请上传现场照片证明，便于审批和留档（必填）</div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="disposalForm.notes" type="textarea" :rows="2" />
@@ -695,6 +891,10 @@ function getDisposalReason(row: TableRow): string {
   gap: 12px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+
+.context-alert {
+  margin-bottom: 12px;
 }
 
 .el-table {

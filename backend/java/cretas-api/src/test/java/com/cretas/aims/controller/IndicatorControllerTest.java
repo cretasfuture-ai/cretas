@@ -314,6 +314,49 @@ class IndicatorControllerTest {
     // Test 9: getVersions pagination clamping
     // ====================================================================
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void historyPeriodFilteringHappensBeforePaginationAndKeepsLegacyOverlapDefault(boolean exact) throws Exception {
+        Indicator ind = newIndicator("history", "FACTORY_ACTUAL_TOTAL_COST", "完整生产成本", "FACTORY");
+        LocalDate day = LocalDate.of(2026, 10, 16);
+        when(indicatorRepository.findByCodeAndFactoryIdAndDeletedAtIsNull(ind.getCode(), FACTORY_ID)).thenReturn(Optional.of(ind));
+        IndicatorVersion month = historyVersion("month", day.withDayOfMonth(1), day.plusDays(1));
+        IndicatorVersion dailyNew = historyVersion("daily-new", day, day);
+        IndicatorVersion dailyOld = historyVersion("daily-old-legacy-formula", day, day);
+        dailyOld.setComputeSource("legacy-formula");
+        when(indicatorVersionRepository.findByIndicatorIdAndFactoryIdAndPeriodOverlap(ind.getId(), FACTORY_ID, day, day))
+                .thenReturn(List.of(month, dailyNew, dailyOld));
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .get("/api/mobile/" + FACTORY_ID + "/indicators/" + ind.getCode() + "/versions")
+                .param("windowStart", day.toString()).param("windowEnd", day.toString())
+                .param("page", "2").param("size", "1");
+        if (exact) request.param("exactPeriod", "true");
+        org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build()
+                .perform(request)
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.totalElements").value(exact ? 2 : 3))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.content[0].id")
+                        .value(exact ? "daily-old-legacy-formula" : "daily-new"));
+    }
+
+    @Test
+    void exactHistoryRequiresCompleteOrderedPeriod() {
+        LocalDate day = LocalDate.of(2026, 10, 16);
+        assertEquals(400, assertThrows(BusinessException.class,
+                () -> controller.getVersions(FACTORY_ID, "KPI", null, day, 1, 10, true)).getCode());
+        assertEquals(400, assertThrows(BusinessException.class,
+                () -> controller.getVersions(FACTORY_ID, "KPI", day, null, 1, 10, true)).getCode());
+        assertEquals(400, assertThrows(BusinessException.class,
+                () -> controller.getVersions(FACTORY_ID, "KPI", day, day.minusDays(1), 1, 10, true)).getCode());
+    }
+
+    private IndicatorVersion historyVersion(String id, LocalDate start, LocalDate end) {
+        IndicatorVersion version = new IndicatorVersion(); version.setId(id); version.setFactoryId(FACTORY_ID);
+        version.setIndicatorId("history"); version.setPeriodStart(start); version.setPeriodEnd(end);
+        version.setValue(new BigDecimal("501.32")); version.setComputedAt(LocalDateTime.now());
+        return version;
+    }
+
     @Test
     @DisplayName("getVersions size>200 → clamp 200 (防 OOM)")
     void testGetVersionsSizeClamping() {
@@ -326,7 +369,7 @@ class IndicatorControllerTest {
 
         // size=500 (over 200 cap), page=0 (below 1 floor)
         ApiResponse<PageResponse<IndicatorVersion>> resp = controller.getVersions(
-                FACTORY_ID, "FACTORY_YIELD_RATE", null, null, 0, 500);
+                FACTORY_ID, "FACTORY_YIELD_RATE", null, null, 0, 500, false);
 
         assertNotNull(resp);
         assertEquals(200, resp.getCode());

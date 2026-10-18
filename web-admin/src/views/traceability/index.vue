@@ -12,11 +12,14 @@
  * ⛔ `traceCode` 为 null 说「未打印标签」, 不显示一个扫不回来的码, 也不拿批次号顶上。
  * ⛔ 「本批来自 N 头牛」的 N 由后端算 (lineage.sourceIndividualCount), 前端只显示。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Connection, Search } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { getFullTrace, isTraceNotFound, type FullTraceResponse } from '@/api/traceability';
+import { usePermissionStore } from '@/store/modules/permission';
+import { getFullTrace, isTraceNotFound, type FullTraceResponse, type ProcessingStageInfo } from '@/api/traceability';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
+import { formatDateTime } from '@/utils/dateFormat';
 import { bannerText, summarizeSourceIndividuals } from './lineageBanner';
 import {
   depthLabel,
@@ -32,8 +35,11 @@ import {
 } from './traceDisplay';
 import LineageNodeRow from './LineageNodeRow.vue';
 import IndividualDrawer from './IndividualDrawer.vue';
+import BatchDispositionEvidence from './BatchDispositionEvidence.vue';
 
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const canViewQuality = computed(() => permissionStore.canAccess('quality'));
 const route = useRoute();
 const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
@@ -49,23 +55,46 @@ const errorMessage = ref('');
 
 const drawerVisible = ref(false);
 const drawerIndividualId = ref<string | null>(null);
+let requestSequence = 0;
+let pageIsActive = true;
 
-onMounted(() => {
-  // `?batchNumber=` 直接带参打开 —— 投屏前把地址敲好, 上台只按回车。
-  const q = route?.query?.batchNumber;
-  const initial = typeof q === 'string' ? q.trim() : '';
-  if (initial) {
-    batchInput.value = initial;
-    void runQuery(initial);
+function clearTrace() {
+  ++requestSequence;
+  status.value = 'idle';
+  trace.value = null;
+  errorMessage.value = '';
+  queriedBatch.value = '';
+  drawerVisible.value = false;
+  drawerIndividualId.value = null;
+}
+
+watch(() => [factoryId.value, authStore.user?.id, route.query.batchNumber], () => {
+  clearTrace();
+  if (!pageIsActive || (route.name && route.name !== 'ProductionTraceability')) return;
+  const q = route.query.batchNumber;
+  batchInput.value = typeof q === 'string' ? q.trim() : '';
+  if (batchInput.value) void runQuery(batchInput.value);
+}, { immediate: true });
+
+// Daily workspace keeps tabs alive: read back new QC records on return.
+onActivated(() => {
+  pageIsActive = true;
+  const batchNumber = route.query.batchNumber;
+  if (typeof batchNumber === 'string' && batchNumber.trim() && status.value !== 'loading') {
+    void runQuery(batchNumber.trim());
   }
 });
+onDeactivated(() => { pageIsActive = false; clearTrace(); });
+onBeforeUnmount(() => { pageIsActive = false; clearTrace(); });
 
 async function handleSearch() {
   const batchNumber = batchInput.value.trim();
   if (!batchNumber) return;
   // 地址栏同步, 让这一条链路可以被复制/收藏。replace 而不是 push: 连查三次不该留三条历史。
   if (route?.query?.batchNumber !== batchNumber) {
-    void router.replace({ query: { ...route.query, batchNumber } });
+    await router.replace({ query: { ...route.query, batchNumber } });
+    // The route watcher owns a changed deep link. Explicit refresh of the same batch still queries.
+    if (queriedBatch.value === batchNumber && status.value !== 'idle') return;
   }
   await runQuery(batchNumber);
 }
@@ -76,13 +105,24 @@ async function runQuery(batchNumber: string) {
     errorMessage.value = '当前账号没有工厂信息，无法查询溯源';
     return;
   }
+  const request = ++requestSequence;
+  const requestedFactory = factoryId.value;
+  const requestedActor = authStore.user?.id;
+  const isCurrent = () => pageIsActive && request === requestSequence
+    && requestedFactory === factoryId.value && requestedActor === authStore.user?.id;
   status.value = 'loading';
   queriedBatch.value = batchNumber;
   trace.value = null;
   errorMessage.value = '';
   try {
-    const res = await getFullTrace(factoryId.value, batchNumber);
+    const res = await getFullTrace(requestedFactory, batchNumber);
+    if (!isCurrent()) return;
     if (res.success && res.data) {
+      if (res.data.production.factoryId !== requestedFactory) {
+        status.value = 'error';
+        errorMessage.value = '返回批次与当前工厂不一致，请重新查询';
+        return;
+      }
       trace.value = res.data;
       status.value = 'ready';
     } else {
@@ -91,6 +131,7 @@ async function runQuery(batchNumber: string) {
       errorMessage.value = res.message || '溯源查询失败';
     }
   } catch (error) {
+    if (!isCurrent()) return;
     if (isTraceNotFound(error)) {
       status.value = 'not-found';
     } else {
@@ -111,7 +152,9 @@ const productionRows = computed(() => {
     { label: '生产日期', value: p.productionDate },
     { label: '负责人', value: p.supervisorName ?? '' },
     { label: '设备', value: p.equipmentName ?? '' },
-    { label: '产量', value: p.quantity != null ? `${p.quantity} ${p.unit || ''}`.trim() : '' },
+    { label: '总产量（含不良）', value: p.quantity != null ? `${p.quantity} ${p.unit || ''}`.trim() : '' },
+    { label: '合格产出', value: p.goodQuantity != null ? `${p.goodQuantity} ${p.unit || ''}`.trim() : '' },
+    { label: '不良产出', value: p.defectQuantity != null ? `${p.defectQuantity} ${p.unit || ''}`.trim() : '' },
   ];
   return rows.filter((r) => !isBlank(r.value));
 });
@@ -126,6 +169,7 @@ const banner = computed(() => {
 const lineageGroups = computed(() =>
   [...(trace.value?.lineage?.ancestors ?? [])].sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0))
 );
+const ancestorCount = computed(() => lineageGroups.value.reduce((total, group) => total + group.nodes.length, 0));
 const lineageUnavailable = computed(() => status.value === 'ready' && trace.value?.lineage == null);
 /**
  * 多跳来源链已经包含一跳 (本批次的原料就是 depth=1 那一层), 有祖先时再列一遍「原材料」
@@ -139,6 +183,22 @@ const processingStages = computed(() =>
 );
 const qualityInspections = computed(() => trace.value?.qualityInspections ?? []);
 const shipments = computed(() => trace.value?.shipments ?? []);
+const canOpenBatchEvidence = computed(() => trace.value?.production.factoryId === factoryId.value
+  && Number.isSafeInteger(trace.value?.production.batchId) && Number(trace.value?.production.batchId) > 0);
+function openBatchEvidence() {
+  if (!canOpenBatchEvidence.value) return;
+  void router.push({ path: `/production/batches/${trace.value!.production.batchId}` });
+}
+function openBatchQuality() {
+  const p = trace.value?.production;
+  if (p?.batchId == null) return;
+  void router.push({ path: '/quality/inspections', query: { batchId: String(p.batchId), batchNumber: p.batchNumber } });
+}
+function openBatchRecall() {
+  const p = trace.value?.production;
+  if (p?.batchId == null) return;
+  void router.push({ path: '/quality/recalls', query: { batchId: String(p.batchId) } });
+}
 const emptyLine = computed(() => {
   const empties: EmptySectionKey[] = [];
   if (processingStages.value.length === 0) empties.push('processingStages');
@@ -152,6 +212,14 @@ const queryTimeText = computed(() => formatQueryTime(trace.value?.queryTime));
 
 function percent(rate?: number | null): string {
   return rate == null ? '' : `${(rate * 100).toFixed(1)}%`;
+}
+function processQuantities(stage: ProcessingStageInfo): string {
+  if (stage.inputWeight == null || stage.outputWeight == null) return '';
+  // Legacy stage weights were defined in kg; process-sheet quantities retain their native units.
+  const legacyUnit = stage.stageType === 'PROCESS_SHEET' ? '' : 'kg';
+  const inputUnit = stage.inputUnit || legacyUnit;
+  const outputUnit = stage.outputUnit || legacyUnit;
+  return `${stage.inputWeight} ${inputUnit ? displayProcessUnit(inputUnit) : '（单位未记录）'} → ${stage.outputWeight} ${outputUnit ? displayProcessUnit(outputUnit) : '（单位未记录）'}`;
 }
 function dateOnly(value?: string | null): string {
   return value ? value.split('T')[0] : '';
@@ -246,7 +314,10 @@ function openIndividual(id: string) {
         <!-- 生产信息 -->
         <el-col :xs="24" :md="16">
           <el-card shadow="never" class="content-card" data-testid="production-card">
-            <template #header><span class="card-title">生产信息</span></template>
+            <template #header>
+              <span class="card-title">生产信息</span>
+              <el-button v-if="canOpenBatchEvidence" link type="primary" data-testid="batch-evidence-link" @click="openBatchEvidence">查看投入产出与成本</el-button>
+            </template>
             <el-descriptions :column="2" size="default">
               <el-descriptions-item v-for="row in productionRows" :key="row.label" :label="row.label">
                 <span :class="{ mono: row.label === '批次号' }">{{ row.value }}</span>
@@ -271,8 +342,8 @@ function openIndividual(id: string) {
       <el-card shadow="never" class="content-card" data-testid="lineage-card">
         <template #header>
           <span class="card-title">来源链</span>
-          <span v-if="trace.lineage && trace.lineage.nodeCount > 0" class="card-title__trailing">
-            {{ trace.lineage.nodeCount }} 个上游节点
+          <span v-if="ancestorCount > 0" class="card-title__trailing">
+            {{ ancestorCount }} 个上游节点
           </span>
         </template>
 
@@ -341,7 +412,7 @@ function openIndividual(id: string) {
           </el-table-column>
           <el-table-column label="投入 / 产出" width="160">
             <template #default="{ row }">
-              {{ row.inputWeight != null && row.outputWeight != null ? `${row.inputWeight}kg → ${row.outputWeight}kg` : '' }}
+              {{ processQuantities(row) }}
             </template>
           </el-table-column>
           <el-table-column label="损耗率" width="100">
@@ -357,6 +428,15 @@ function openIndividual(id: string) {
       </el-card>
 
       <!-- 质检 -->
+      <el-card v-if="trace.production.batchId != null" shadow="never" class="content-card" data-testid="quality-entry">
+        <div class="card-title">本批次质检</div>
+        <p v-if="qualityInspections.length === 0">尚未记录抽检结果。已出货不代表已经质检放行，请核对放行依据。</p>
+        <p v-else>抽检合格率仅反映被抽取的样本，不代替生产良品率或正式放行结论。</p>
+        <el-button v-if="canViewQuality" @click="openBatchQuality">查看或登记本批次质检</el-button>
+        <el-button v-if="canViewQuality" @click="openBatchRecall">查看退货与召回</el-button>
+        <BatchDispositionEvidence v-if="canViewQuality && qualityInspections.length > 0"
+          :factory-id="trace.production.factoryId" :batch-id="trace.production.batchId" />
+      </el-card>
       <el-card v-if="qualityInspections.length > 0" shadow="never" class="content-card" data-testid="quality-card">
         <template #header>
           <span class="card-title">质检记录</span>
@@ -369,13 +449,18 @@ function openIndividual(id: string) {
           <el-table-column label="检验日期" width="120">
             <template #default="{ row }">{{ dateOnly(row.inspectionDate) }}</template>
           </el-table-column>
-          <el-table-column prop="inspectorName" label="检验员" width="120" />
+          <el-table-column label="检验员" width="120">
+            <template #default="{ row }">{{ row.inspectorName || (row.inspectorId != null ? `编号 #${row.inspectorId}` : '') }}</template>
+          </el-table-column>
           <el-table-column label="结果" width="120">
             <template #default="{ row }">
               <el-tag :type="qualityStatusTag(row.result)" size="small">{{ qualityStatusLabel(row.result) || '待定' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="合格率" width="100">
+          <el-table-column prop="sampleSize" label="抽样数" width="90" />
+          <el-table-column prop="passCount" label="抽检合格数" width="110" />
+          <el-table-column prop="failCount" label="抽检不合格数" width="120" />
+          <el-table-column label="抽检合格率" width="110">
             <template #default="{ row }">{{ row.passRate != null ? `${row.passRate}%` : '' }}</template>
           </el-table-column>
           <el-table-column prop="remarks" label="备注" min-width="160" show-overflow-tooltip />
@@ -390,7 +475,16 @@ function openIndividual(id: string) {
         </template>
         <el-table :data="shipments" size="default" data-testid="shipment-table">
           <el-table-column prop="shipmentNumber" label="出货单号" width="180" />
-          <el-table-column prop="shipmentDate" label="出货日期" width="120" />
+          <el-table-column label="实际出货时间" width="200">
+            <template #default="{ row }">
+              <span v-if="row.shipmentTimeSource === 'LINEAGE_EVENT' && row.shippedAt" data-testid="actual-shipment-time">{{ formatDateTime(row.shippedAt) }}</span>
+              <span v-else-if="row.shipmentTimeSource === 'LEGACY_DATE_ONLY' && row.shipmentDate">{{ dateOnly(row.shipmentDate) }}（仅日期）</span>
+              <span v-else>未留存实际时间</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="计划交付日期" width="140">
+            <template #default="{ row }">{{ dateOnly(row.plannedDeliveryDate) || '未记录' }}</template>
+          </el-table-column>
           <el-table-column prop="customerName" label="客户" min-width="160" />
           <el-table-column label="数量" width="120">
             <template #default="{ row }">{{ row.quantity != null ? `${row.quantity} ${row.unit || ''}` : '' }}</template>

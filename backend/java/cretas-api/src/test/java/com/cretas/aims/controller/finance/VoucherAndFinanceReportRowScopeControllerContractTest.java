@@ -46,6 +46,7 @@ class VoucherAndFinanceReportRowScopeControllerContractTest {
     @Mock private BalanceSheetService balanceSheetService;
     @Mock private IncomeStatementService incomeStatementService;
     @Mock private CashFlowService cashFlowService;
+    @Mock private com.cretas.aims.service.finance.ShipmentSkuMarginService shipmentSkuMarginService;
 
     private VoucherController voucherController;
     private FinanceReportController reportController;
@@ -55,7 +56,7 @@ class VoucherAndFinanceReportRowScopeControllerContractTest {
         voucherController = new VoucherController(voucherService, voucherRepository, voucherEntryRepository);
         ReflectionTestUtils.setField(voucherController, "businessRowScope", businessRowScope);
         ReflectionTestUtils.setField(voucherController, "voucherRowScopeQuery", voucherRowScopeQuery);
-        reportController = new FinanceReportController(balanceSheetService, incomeStatementService, cashFlowService);
+        reportController = new FinanceReportController(balanceSheetService, incomeStatementService, cashFlowService, shipmentSkuMarginService);
         ReflectionTestUtils.setField(reportController, "businessRowScope", businessRowScope);
         ReflectionTestUtils.setField(reportController, "voucherRowScopeQuery", voucherRowScopeQuery);
     }

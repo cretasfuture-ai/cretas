@@ -44,6 +44,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("material-batches","material_batches",List.of("batchId")),
         new Resource("return-orders/purchase-source","purchase_orders",List.of("purchaseOrderId")),
         new Resource("return-orders","return_orders",List.of("returnOrderId")),
+        new Resource("return-refunds","payment_requests",List.of("requestId")),
         new Resource("quality-return-orders","quality_return_orders",List.of("id")));
     private static boolean rowScopeSupported(HandlerMethod method) {
         return org.springframework.core.annotation.AnnotatedElementUtils.hasAnnotation(method.getMethod(),RowScopeSupported.class)
@@ -82,7 +83,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         }
         if (resource==null && !aggregateShortcut && unsupportedScopeDomain == null) return true;
         if (resource!=null) request.setAttribute(RESOURCE_ATTRIBUTE, switch(resource.table()) {
-            case "sales_delivery_records" -> "sales_orders";
+            case "sales_delivery_records", "payment_requests" -> "sales_orders";
             case "purchase_receive_records" -> "purchase_orders";
             default -> resource.table();
         });
@@ -153,7 +154,11 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
             String key=resource.keys().stream().filter(k->vars.get(k) instanceof String).findFirst().orElse(null);
             if (key!=null) {
                 String id=(String)vars.get(key), sql;
-                if (resource.table().equals("payment_records"))
+                if (resource.table().equals("payment_requests"))
+                    sql="SELECT " + com.cretas.aims.service.finance.FinanceOwnershipSql.REFUND_REQUEST_OWNER
+                            + " FROM payment_requests refund_request WHERE refund_request.factory_id=? "
+                            + "AND refund_request.id=? AND refund_request.deleted_at IS NULL";
+                else if (resource.table().equals("payment_records"))
                     sql="SELECT o.created_by FROM payment_records p JOIN sales_orders o ON o.id=p.sales_order_id AND o.factory_id=p.factory_id WHERE p.factory_id=? AND p.id::text=? AND p.deleted_at IS NULL AND o.deleted_at IS NULL";
                 else if (resource.table().equals("invoice_records"))
                     sql="SELECT o.created_by FROM invoice_records i JOIN sales_orders o ON o.id=i.sales_order_id AND o.factory_id=i.factory_id WHERE i.factory_id=? AND i.id::text=? AND i.deleted_at IS NULL AND o.deleted_at IS NULL";

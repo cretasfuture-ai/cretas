@@ -110,7 +110,7 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
             case "submit" -> returnOrderService.submitReturnOrder(factoryId, returnOrderId);
             case "approve" -> returnOrderService.approveReturnOrder(factoryId, returnOrderId, userId);
             case "finance-approve", "finance_approve" -> returnOrderService.financeApproveReturnOrder(factoryId, returnOrderId, userId);
-            case "reject" -> returnOrderService.rejectReturnOrder(factoryId, returnOrderId);
+            case "reject" -> returnOrderService.rejectReturnOrder(factoryId, returnOrderId, userId);
             case "complete" -> returnOrderService.completeReturnOrder(factoryId, returnOrderId);
             default -> throw new IllegalArgumentException("不支持的操作: " + action);
         };

@@ -141,6 +141,111 @@ class LineageGraphAssemblerTest {
         assertThat(near.getUnit()).isEqualTo("kg");
     }
 
+    @Test
+    @DisplayName("共享源批次供多个根时，只把当前 root 的直接边计入数量")
+    void sharedSourceDoesNotSumEdgesForAnotherRoot() {
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("ROOT-A"), eq("PRODUCTION_BATCH"), any()))
+                .thenReturn(List.of(closure(1, "MATERIAL_BATCH", "shared-source",
+                        "PRODUCTION_BATCH", "ROOT-A")));
+        when(edgeRepository.findByFactoryIdAndSourceIdIn(anyString(), any()))
+                .thenReturn(List.of(
+                        edge("MATERIAL_BATCH", "shared-source", "PRODUCTION_BATCH", "ROOT-A",
+                                new BigDecimal("10"), "kg"),
+                        edge("MATERIAL_BATCH", "shared-source", "PRODUCTION_BATCH", "ROOT-B",
+                                new BigDecimal("10"), "kg")));
+
+        TraceabilityDTO.LineageNode source = nodeAt(
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "ROOT-A", 5, false, false),
+                1, "shared-source");
+
+        assertThat(source.getQuantity()).isEqualTo(10.0);
+        assertThat(source.getUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    @DisplayName("其他根供当前后代时，不把共享目标的其他来源数量串入")
+    void sharedDescendantDoesNotSumEdgesFromAnotherRoot() {
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("ROOT-A"), eq("PRODUCTION_BATCH"), any()))
+                .thenReturn(List.of(closure(1, "PRODUCTION_BATCH", "ROOT-A",
+                        "FINISHED_BATCH", "shared-target")));
+        when(edgeRepository.findByFactoryIdAndTargetIdIn(anyString(), any()))
+                .thenReturn(List.of(
+                        edge("PRODUCTION_BATCH", "ROOT-A", "FINISHED_BATCH", "shared-target",
+                                new BigDecimal("10"), "kg"),
+                        edge("PRODUCTION_BATCH", "ROOT-B", "FINISHED_BATCH", "shared-target",
+                                new BigDecimal("20"), "kg")));
+
+        TraceabilityDTO.LineageNode target = descendantNode(
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "ROOT-A", 5, true, false),
+                "shared-target");
+
+        assertThat(target.getQuantity()).isEqualTo(10.0);
+        assertThat(target.getUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    @DisplayName("深层边不直接连接 root 时，数量与单位保持 unknown")
+    void deepEdgesDoNotPretendToBeRootAllocation() {
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("ROOT-A"), eq("PRODUCTION_BATCH"), any()))
+                .thenReturn(List.of(closure(2, "MATERIAL_BATCH", "deep-source",
+                        "PRODUCTION_BATCH", "ROOT-A")));
+        when(edgeRepository.findByFactoryIdAndSourceIdIn(anyString(), any()))
+                .thenReturn(List.of(edge("MATERIAL_BATCH", "deep-source", "PRODUCTION_BATCH", "MID",
+                        new BigDecimal("10"), "kg")));
+
+        TraceabilityDTO.LineageNode source = nodeAt(
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "ROOT-A", 5, false, false),
+                2, "deep-source");
+
+        assertThat(source.getQuantity()).isNull();
+        assertThat(source.getUnit()).isNull();
+    }
+
+    @Test
+    @DisplayName("直接边单位混用时，不把可加部分伪装成完整数量")
+    void mixedDirectEdgeUnitsStayUnknown() {
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("ROOT-A"), eq("PRODUCTION_BATCH"), any()))
+                .thenReturn(List.of(closure(1, "MATERIAL_BATCH", "mixed-source",
+                        "PRODUCTION_BATCH", "ROOT-A")));
+        when(edgeRepository.findByFactoryIdAndSourceIdIn(anyString(), any()))
+                .thenReturn(List.of(
+                        edge("MATERIAL_BATCH", "mixed-source", "PRODUCTION_BATCH", "ROOT-A",
+                                new BigDecimal("10"), "kg"),
+                        edge("MATERIAL_BATCH", "mixed-source", "PRODUCTION_BATCH", "ROOT-A",
+                                new BigDecimal("2"), "box")));
+
+        TraceabilityDTO.LineageNode source = nodeAt(
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "ROOT-A", 5, false, false),
+                1, "mixed-source");
+
+        assertThat(source.getQuantity()).isNull();
+        assertThat(source.getUnit()).isNull();
+    }
+
+    @Test
+    @DisplayName("直接边缺少单位或数量时，不把剩余边的部分事实冒充完整")
+    void incompleteDirectEdgeFactsStayUnknown() {
+        BatchLineageEdge complete = edge("MATERIAL_BATCH", "incomplete-source", "PRODUCTION_BATCH", "ROOT-A",
+                new BigDecimal("10"), "kg");
+        complete.setEventTime(java.time.LocalDateTime.of(2026, 10, 16, 10, 0));
+        BatchLineageEdge missing = edge("MATERIAL_BATCH", "incomplete-source", "PRODUCTION_BATCH", "ROOT-A",
+                null, "kg");
+        missing.setEventTime(java.time.LocalDateTime.of(2026, 10, 16, 9, 0));
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("ROOT-A"), eq("PRODUCTION_BATCH"), any()))
+                .thenReturn(List.of(closure(1, "MATERIAL_BATCH", "incomplete-source",
+                        "PRODUCTION_BATCH", "ROOT-A")));
+        when(edgeRepository.findByFactoryIdAndSourceIdIn(anyString(), any()))
+                .thenReturn(List.of(complete, missing));
+
+        TraceabilityDTO.LineageNode source = nodeAt(
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "ROOT-A", 5, false, false),
+                1, "incomplete-source");
+
+        assertThat(source.getQuantity()).isNull();
+        assertThat(source.getUnit()).isNull();
+        assertThat(source.getEventTime()).isEqualTo(missing.getEventTime());
+    }
+
     // ── ② 脱敏 + 阴性对照 ────────────────────────────────────────────────────
 
     @Test

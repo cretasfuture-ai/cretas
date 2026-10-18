@@ -28,7 +28,7 @@ public interface CostCarryoverService {
      * 期末结转本期销售成本 (借 6401/贷 1405)。幂等由调用方 (forceLockAndClose) 的期间
      * {@code closingPostedAt} 守卫 — 本方法只在该守卫内被调一次; reopen 清守卫后重结。
      *
-     * <p>诚实 null: 已发货但成品批次无 unitCost 的行不结转, 记 WARN + 在返回小结暴露笔数。
+     * <p>已发货明细缺少可信批次扣库来源或单位成本时，明确拒绝整次结转，不生成部分成本凭证。
      *
      * @return 结转小结 (含 totalCogs + 未结转笔数)
      */

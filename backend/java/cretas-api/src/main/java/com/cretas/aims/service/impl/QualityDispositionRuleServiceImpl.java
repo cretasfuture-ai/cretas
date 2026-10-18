@@ -34,6 +34,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
     private final ApprovalChainService approvalChainService;
     private final DecisionAuditService decisionAuditService;
     private final UserRepository userRepository;
+    private final com.cretas.aims.service.quality.QualityDispositionDecisionGuard decisionGuard;
 
     /**
      * 质检处置 → 库存桥接。放行 (RELEASE/CONDITIONAL_RELEASE) 时把本次质检隔离的成品/原料批次翻回
@@ -178,6 +179,15 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
 
         log.info("执行质检处置: factoryId={}, inspectionId={}, action={}, executorId={}",
                 factoryId, inspection.getId(), action, executorId);
+
+        inspection = decisionGuard.lockInspection(factoryId, inspection);
+        if (action == DispositionAction.RELEASE && (!Set.of("PASS", "PASSED", "QUALIFIED")
+                .contains(inspection.getResult() == null ? "" : inspection.getResult().toUpperCase(Locale.ROOT))
+                || inspection.getPassRate() == null || inspection.getPassRate().compareTo(PASS_RATE_THRESHOLD_RELEASE) < 0)) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "本次质检未达到直接放行条件，请提交条件放行申请并由另一人复核");
+        }
+        if (!approvalGranted) decisionGuard.assertCanStart(inspection);
 
         // 获取执行人信息
         User executor = userRepository.findById(executorId)
