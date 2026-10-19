@@ -71,6 +71,11 @@ async function mountWithRunningCount(count: number | null) {
   );
   const wrapper = shallowMount(ApprovalWorkflowEditor, {
     props: { embedded: true, initialDecisionType: 'INVENTORY_TRANSFER_APPROVAL', lockDecisionType: true },
+    global: {
+      stubs: {
+        ElButton: { props: ['disabled'], template: '<button :disabled="disabled"><slot /></button>' },
+      },
+    },
   });
   await flushPromises();
   await flushPromises();
@@ -113,6 +118,54 @@ describe('在途实例锁定：⛔ 没有「仍然直接改」这条路', () => 
     expect(text).not.toContain('仍然直接改');
   });
 
+  it('零在途的已发布版本仍可克隆为独立草稿，且不覆盖原定义', async () => {
+    const originalGraph = PUBLISHED_WORKFLOW.nodesJson;
+    const draft = { ...PUBLISHED_WORKFLOW, id: 'wf-draft-v2', version: 2, publishStatus: 'draft', enabled: false };
+    api.cloneWorkflowDraft.mockResolvedValue({ success: true, data: draft });
+    api.getWorkflowById.mockImplementation((_factoryId: string, id: string) => Promise.resolve({
+      success: true, data: id === draft.id ? draft : PUBLISHED_WORKFLOW,
+    }));
+    const wrapper = await mountWithRunningCount(0);
+    expect(api.getRunningInstanceCount).toHaveBeenCalledWith('F006', PUBLISHED_WORKFLOW.id);
+    expect(wrapper.text()).toContain('保存修改');
+    const cloneButton = wrapper.findAll('button').find(button => button.text().trim() === '克隆为新版本');
+    expect(cloneButton, '零在途时隐藏克隆会迫使用户覆盖原定义').toBeDefined();
+    if (!cloneButton) throw new Error('Expected clone button');
+
+    await cloneButton.trigger('click');
+    await flushPromises();
+    await flushPromises();
+
+    expect(api.cloneWorkflowDraft).toHaveBeenCalledExactlyOnceWith('F006', PUBLISHED_WORKFLOW.id);
+    expect(api.getWorkflowById).toHaveBeenCalledWith('F006', draft.id);
+    expect(api.updateWorkflow).not.toHaveBeenCalled();
+    expect(PUBLISHED_WORKFLOW.nodesJson).toBe(originalGraph);
+    expect(wrapper.text()).toContain('保存草稿');
+    expect(wrapper.text()).not.toContain('克隆为新版本');
+    wrapper.unmount();
+  });
+
+  it('零在途的历史归档版本同样保留克隆入口', async () => {
+    const archived = { ...PUBLISHED_WORKFLOW, publishStatus: 'archived', enabled: false };
+    api.getWorkflowsByDecisionType.mockResolvedValue({ success: true, data: [archived] });
+    api.getWorkflowById.mockResolvedValue({ success: true, data: archived });
+    const wrapper = await mountWithRunningCount(0);
+    expect(api.getRunningInstanceCount).toHaveBeenCalledWith('F006', archived.id);
+    expect(wrapper.text()).toContain('克隆为新版本');
+    wrapper.unmount();
+  });
+
+  it('未发布草稿不提供再次克隆，仍显示保存草稿', async () => {
+    const draft = { ...PUBLISHED_WORKFLOW, publishStatus: 'draft', enabled: false };
+    api.getWorkflowsByDecisionType.mockResolvedValue({ success: true, data: [draft] });
+    api.getWorkflowById.mockResolvedValue({ success: true, data: draft });
+    const wrapper = await mountWithRunningCount(0);
+    expect(wrapper.text()).toContain('保存草稿');
+    expect(wrapper.text()).not.toContain('克隆为新版本');
+    expect(api.cloneWorkflowDraft).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it('计数查不回来（null）时按锁住处理 —— 安全默认，但 ⛔ 不谎报条数', async () => {
     const wrapper = await mountWithRunningCount(null);
     const text = wrapper.text();
@@ -120,6 +173,7 @@ describe('在途实例锁定：⛔ 没有「仍然直接改」这条路', () => 
     // 未知就是未知：不显示「有 N 条在途审批」，⛔ 不编一个数出来。
     expect(text, '计数未知却显示了在途条数 —— 那是编出来的').not.toContain('在途审批，本版本已锁定');
     expect(text, '任何情况下都不该再出现解锁入口').not.toContain('仍然直接改');
+    expect(text).toContain('克隆为新版本');
   });
 });
 
