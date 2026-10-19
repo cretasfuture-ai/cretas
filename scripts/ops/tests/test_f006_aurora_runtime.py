@@ -130,6 +130,25 @@ class WarningBackpressure(unittest.TestCase):
     def test_consumed_pause_budget_never_pauses_again(self):
         with mock.patch.object(m,'signal_owned_group') as signals:
             self.assertEqual(self.rt.ease_warning(self.good,self.done,self.breach,None,0),(False,0));signals.assert_not_called()
+    def test_recheck_budget_deadline_and_abort_under_resume_lock(self):
+        for mode in ['budget','wall','breach','done','closing']:
+            self.done.clear();self.breach.clear();self.rt.closing.clear()
+            with self.subTest(mode=mode),mock.patch.object(m.time,'monotonic',return_value=0) as clock:
+                owner=self
+                class TransitionLock:
+                    calls=0
+                    def __enter__(lock):
+                        lock.calls+=1
+                        if lock.calls==2:
+                            if mode in ['budget','wall']:clock.return_value=3
+                            elif mode=='breach':owner.breach.set()
+                            elif mode=='done':owner.done.set()
+                            else:owner.rt.closing.set()
+                    def __exit__(lock,*args):return False
+                self.rt.child_lock=TransitionLock()
+                with mock.patch.object(m,'sample',return_value=self.good),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:
+                    ok,_=self.rt.ease_warning(self.good,self.done,self.breach,.1 if mode=='wall' else None,.3 if mode=='budget' else 2)
+                    self.assertFalse(ok);self.assertEqual(signals.call_args_list,[mock.call(123,m.signal.SIGSTOP)])
     def test_no_resume_when_ownership_replaced(self):
         def sample(**kwargs):self.rt.child_pgid=None;return self.good
         with mock.patch.object(m,'sample',side_effect=sample),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:

@@ -260,13 +260,16 @@ class Runtime:
                 if time.monotonic()>=until:break
                 if protected(observation,baseline):recovered=True;break
                 if observation['pressure']!=2 or not protected(dict(observation,pressure=1),baseline):break
-            return recovered,time.monotonic()-started
         finally:
-            if recovered and not done.is_set() and not breach.is_set():
+            resumed=False
+            if recovered:
                 with self.child_lock:
-                    if self.child_pgid==pgid and self.child and self.child.poll() is None:
-                        signal_owned_group(pgid,signal.SIGCONT)
-                        self.logger.info('owned_model_warning_resume')
+                    if (time.monotonic()<until and not done.is_set() and not breach.is_set()
+                            and not self.closing.is_set() and self.child_pgid==pgid
+                            and self.child and self.child.poll() is None):
+                        resumed=signal_owned_group(pgid,signal.SIGCONT)
+                        if resumed:self.logger.info('owned_model_warning_resume')
+        return resumed,time.monotonic()-started
 
     def watch(self,baseline,done,breach,deadline=None):
         paused_seconds=0
