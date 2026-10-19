@@ -139,6 +139,27 @@
       </div>
     </el-card>
 
+    <template v-if="!showNoApproval && !useStepList">
+      <el-alert
+        v-if="props.lockDecisionType && stepModeFallbackReason"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="step-fallback-alert"
+        title="这条审批流用的是高级画布"
+        :description="stepModeFallbackReason"
+      />
+      <div v-if="inForcedGraphMode && canEditDraft" class="graph-mode-back">
+        <span>正在用画布编辑。没加分支类节点的话可以切回步骤列表。</span>
+        <el-button
+          text
+          type="primary"
+          data-testid="switch-to-step-list"
+          @click="switchBackToStepList"
+        >回到步骤列表</el-button>
+      </div>
+    </template>
+
     <section v-if="showNoApproval" class="no-approval-state">
       <div class="no-approval-copy">
         <span class="no-approval-label">无需审批</span>
@@ -186,25 +207,6 @@
       </div>
 
       <div v-else class="editor-body">
-        <el-alert
-          v-if="props.lockDecisionType && stepModeFallbackReason"
-          type="warning"
-          :closable="false"
-          show-icon
-          class="step-fallback-alert"
-          title="这条审批流用的是高级画布"
-          :description="stepModeFallbackReason"
-        />
-        <!-- 用户是自己切过来的 ⇒ 给一条回去的路。图一旦不再线性, 这个按钮会说明原因。 -->
-        <div v-if="inForcedGraphMode && canEditDraft" class="graph-mode-back">
-          <span>正在用画布编辑。没加分支类节点的话可以切回步骤列表。</span>
-          <el-button
-            text
-            type="primary"
-            data-testid="switch-to-step-list"
-            @click="switchBackToStepList"
-          >回到步骤列表</el-button>
-        </div>
         <aside class="palette" aria-label="流程节点">
           <div class="panel-title-row">
             <h4>流程节点</h4>
@@ -2083,25 +2085,11 @@ onMounted(async () => {
 .step-mode-escape-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .step-mode-escape-text strong { font-size: 13px; color: var(--el-text-color-primary, #303133); }
 .step-mode-escape-text span { font-size: 12px; color: var(--el-text-color-secondary, #909399); }
-/*
- * 🔴 必须绝对定位 —— `.editor-body` 是 `display:flex` 的**横向**容器。
- *
- * 第一版把这条 bar 写成普通子元素, 于是它成了 palette / canvas / properties 的
- * flex 兄弟, **横着占掉 434px**: 实测画布从 758px 掉到 324px(1600px 视口下 20%),
- * 一个本来是「让画布更好用」的改动反而把画布压小了一半多。
- *
- * ⇒ 与旁边的 .step-fallback-alert 同一条办法: 浮在画布区上方, 不占布局宽度。
- * 偏移刻意与它一致(左让开 palette、右让开属性面板), 两条 bar 位置对齐。
- * ⚠️ 两者互斥不会打架: 这条要求 stepFlow !== null(图线性), 而那条只在
- *    stepModeFallbackReason 非空(图**不**线性)时出现。
- */
+/* Notices occupy editor rows above the horizontal palette/canvas/properties area. */
 .graph-mode-back {
-  position: absolute;
-  z-index: 10;
-  top: 8px;
-  left: 232px;
-  right: 300px;
   display: flex;
+  flex-shrink: 0;
+  margin-bottom: 8px;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
@@ -2113,11 +2101,8 @@ onMounted(async () => {
   color: var(--el-text-color-secondary, #909399);
 }
 .step-fallback-alert {
-  position: absolute;
-  z-index: 10;
-  top: 8px;
-  left: 232px;
-  right: 300px;
+  flex-shrink: 0;
+  margin-bottom: 8px;
 }
 
 .palette {
