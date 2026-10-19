@@ -2,6 +2,7 @@
 
 const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
+const { inspectCanvas, classifyCanvas, hasOnCanvasBomGuidance } = require('./bom-canvas-readonly-shared');
 
 /**
  * BOM 融入工序画布后的三条口径, 都只读可验:
@@ -87,11 +88,10 @@ module.exports = {
           }
         }
       }
-      const materialNodes = await count('.vue-flow__node-material');
-      const auxiliaryCells = await count('.vue-flow__node-bomAuxiliary');
-      const packagingCells = await count('.vue-flow__node-bomPackaging');
-      const auxDetailEntries = await count('[data-testid="aux-open-detail"]');
-      const packSubtitles = await count('[data-testid="pack-subtitle"]');
+      const currentBody = await page.locator('body').innerText();
+      const shared = await inspectCanvas(page, currentBody);
+      const inspectedBody = await page.locator('body').innerText();
+      const { materialNodes, auxiliaryCells, packagingCells, auxDetailEntries, packSubtitles } = shared;
 
       /**
        * ⛔ 2026-08-06 修正: 这里原本断言「缺 BOM 横幅出现时必须有『去 BOM 配置』入口」——
@@ -105,14 +105,15 @@ module.exports = {
        * 判据: **改了产品口径要回头看有没有闸还在断言旧口径**, 否则修好探针的同一天
        * 就会收到一条假报警。
        */
-      const bomMissingBannerVisible = body.includes('暂未读取到生效 BOM');
+      const bomMissingBannerVisible = inspectedBody.includes('暂未读取到生效 BOM') || shared.status.noActive;
       // 现在要求的是「横幅把人指回 cell」, 而不是把人支走
-      const bomEntryCopyVisible = body.includes('辅料 / 包材 / 副产 cell 上配置');
-      const legacyJumpCopyVisible = body.includes('去 BOM 配置');
+      const bomEntryCopyVisible = hasOnCanvasBomGuidance(inspectedBody);
+      const legacyJumpCopyVisible = inspectedBody.includes('去 BOM 配置');
       // 旧抽屉文案则是无条件的: 抽屉已下掉, 它在任何状态下都不该再出现。
-      const legacyDrawerCopyVisible = body.includes('在右侧配置 BOM');
+      const legacyDrawerCopyVisible = inspectedBody.includes('在右侧配置 BOM');
 
       const evidence = {
+        ...shared,
         processNodes,
         materialNodes,
         auxiliaryCells,
@@ -130,14 +131,15 @@ module.exports = {
       // 数据前提: 没有工序节点就没有可派生浮层的宿主, 不能据此判缺陷。
       // ⚠️ 走到这里意味着**试过的每一个产品**都没有工序节点(见 probedProducts),
       // 不再是「默认那个恰好是空的」—— 这时 UNVERIFIED 才是诚实的结论。
-      if (processNodes === 0) {
+      const classification = classifyCanvas(shared);
+      if (classification.result === 'UNVERIFIED' && classification.reason === 'no PROCESS node hosts BOM overlays') {
         return {
           ...evidence,
           contractFailures: [],
           precondition: probedProducts.length
             ? `probed ${probedProducts.length} products, none has a PROCESS node`
             : 'canvas has no PROCESS node and no product candidates could be listed',
-          assessment: { result: 'UNVERIFIED', rootCauseClass: 'data' },
+          assessment: classification,
         };
       }
 
@@ -154,9 +156,10 @@ module.exports = {
       return {
         ...evidence,
         contractFailures,
-        assessment: contractFailures.length === 0
-          ? { result: 'PASS', rootCauseClass: 'none' }
-          : { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' },
+        classification: contractFailures.length ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend', reason: contractFailures.join('; ') } : classification,
+        assessment: contractFailures.length
+          ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' }
+          : classification,
       };
     },
   }),
