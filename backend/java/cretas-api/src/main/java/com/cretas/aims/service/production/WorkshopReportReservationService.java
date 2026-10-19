@@ -269,7 +269,28 @@ public class WorkshopReportReservationService {
     private static BusinessException reservationError(int code, String message, String errorCode) {
         return new BusinessException(code, message)
                 .withCode(errorCode)
+                .withHint(reservationHint(errorCode))
                 .withSeverity("BLOCKING");
+    }
+
+    private static String reservationHint(String errorCode) {
+        return switch (errorCode) {
+            case "WORKSHOP_RESERVATION_BATCH_NOT_FOUND_OR_FOREIGN",
+                 "WORKSHOP_RESERVATION_BATCH_IDENTITY_MISMATCH",
+                 "WORKSHOP_RESERVATION_BATCH_NOT_AVAILABLE" ->
+                    "请重新选择当前工厂允许的可用生产仓原料批次";
+            case "WORKSHOP_RESERVATION_WAREHOUSE_MISMATCH" ->
+                    "请先正规领料入生产仓后再提交报工";
+            case "WORKSHOP_RESERVATION_CUSTOMER_OWNED_FORBIDDEN" ->
+                    "客供原料请走客供领料业务";
+            case "WORKSHOP_RESERVATION_WIP_FORBIDDEN" ->
+                    "在制半成品请走半成品流转业务";
+            case "BATCH_OVER_CONSUMED" ->
+                    "库存不足，请减少领料数量或更换批次";
+            case "WORKSHOP_RESERVATION_REFERENCE_INVALID" ->
+                    "请核对当前任务的批次引用、正数量和单位";
+            default -> "请核对当前工厂的生产仓领料信息";
+        };
     }
 
     // ─────────────────────────────────────────────────────────────

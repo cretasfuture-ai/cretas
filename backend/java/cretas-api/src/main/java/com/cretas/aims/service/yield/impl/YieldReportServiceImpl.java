@@ -235,7 +235,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
         if (!Objects.equals(batchId, t.getProductionBatchId())) {
-            throw new BusinessException(409, "工序任务不属于当前生产批次");
+            throw new BusinessException(409, "工序任务不属于当前生产批次")
+                    .withHint("请从该工序任务所属的生产批次重新打开报工，核对批次与任务后再提交");
         }
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
@@ -431,7 +432,8 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (syMax != null) {
                 YieldUnitResolver.Projection projection = unitProjection(factoryId, t, wpOpt.orElse(null),
                         req.getInputUnit(), req.getOutputUnit());
-                if (!projection.valid()) throw new BusinessException(409, projection.error());
+                if (!projection.valid()) throw new BusinessException(409, projection.error())
+                        .withHint("请核对当前任务冻结的投入/产出单位和换算依据；快照不完整时联系主管处理当前任务版本");
                 BigDecimal target = inputQty.multiply(syMax).multiply(projection.inputToOutputFactor());
                 if (target.compareTo(BigDecimal.ZERO) > 0) {
                     BigDecimal tolerance = getToleranceForFactory(factoryId);
@@ -720,14 +722,16 @@ public class YieldReportServiceImpl implements YieldReportService {
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, workProcessTaskId)
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + workProcessTaskId));
         if (!Objects.equals(batchId, t.getProductionBatchId())) {
-            throw new BusinessException(409, "工序任务不属于当前生产批次");
+            throw new BusinessException(409, "工序任务不属于当前生产批次")
+                    .withHint("请从该工序任务所属的生产批次重新打开报工，核对批次与任务后再提交");
         }
 
         String workProcessId = t.getWorkProcessId();
         Optional<WorkProcess> wpOpt = processRepo.findById(workProcessId);
         BigDecimal syMax = wpOpt.map(WorkProcess::getStandardYieldMax).orElse(null);
         YieldUnitResolver.Projection projection = unitProjection(factoryId, t, wpOpt.orElse(null), null, null);
-        if (!projection.valid()) throw new BusinessException(409, projection.error());
+        if (!projection.valid()) throw new BusinessException(409, projection.error())
+                .withHint("请核对当前任务冻结的投入/产出单位和换算依据；快照不完整时联系主管处理当前任务版本");
         String unit = projection.outputUnit();
 
         BigDecimal alreadyReported = reportRepo.findYieldReportsByTask(factoryId, t.getId()).stream()
@@ -749,7 +753,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         } else if (syMax == null) {
             message = "该工序未配置标准出成上限, 无超收告警";
         } else {
-            if (!projection.valid()) throw new BusinessException(409, projection.error());
+            if (!projection.valid()) throw new BusinessException(409, projection.error())
+                    .withHint("请核对当前任务冻结的投入/产出单位和换算依据；快照不完整时联系主管处理当前任务版本");
             targetQuantity = inputQuantity.multiply(syMax).multiply(projection.inputToOutputFactor());
             if (targetQuantity.compareTo(BigDecimal.ZERO) > 0) {
                 maxAllowed = targetQuantity.multiply(BigDecimal.ONE.add(toleranceRate))
@@ -811,7 +816,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<WorkflowTaskPort> ports = workflowTaskPortRepository
                 .findByFactoryIdAndWorkflowInstanceId(factoryId, task.getWorkflowInstanceId()).stream()
                 .filter(port -> Objects.equals(task.getId(), port.getTaskId())).toList();
-        if (ports.isEmpty()) throw new BusinessException(409, "工作流实例缺少当前任务端口快照");
+        if (ports.isEmpty()) throw new BusinessException(409, "工作流实例缺少当前任务端口快照")
+                .withHint("请联系主管核对当前任务的冻结端口快照和来源版本，确认后重新打开正确任务");
         validateQuantityUnit(ports, WorkflowTaskPort.Direction.INPUT, inputQuantity, inputUnit);
         validateQuantityUnit(ports, WorkflowTaskPort.Direction.OUTPUT, outputQuantity, outputUnit);
         if (inputQuantity != null && inputQuantity.signum() > 0
@@ -835,7 +841,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .anyMatch(port -> port.getUnit() == null || port.getUnit().isBlank()
                         || "unitless".equalsIgnoreCase(port.getUnit().trim()))) {
             throw new BusinessException(409, "报工" + (direction == WorkflowTaskPort.Direction.INPUT ? "投入" : "产出")
-                    + "单位与任务快照不一致，请重新打开当前工序核对单位");
+                    + "单位与任务快照不一致，请重新打开当前工序核对单位")
+                    .withHint("请保留本次数量，重新打开正确任务核对冻结的投入/产出单位；快照异常请联系主管处理当前任务版本");
         }
     }
 
@@ -871,7 +878,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (totalQuantity == null || totalQuantity.signum() <= 0
                 || sourceWipQuantity != null && sourceWipQuantity.signum() < 0
                 || expected.compareTo(totalQuantity) != 0) {
-            throw new BusinessException(409, "领料批次数量与本次投入/出库总量不一致，请核对单位和数量");
+            throw new BusinessException(409, "领料批次数量与本次投入/出库总量不一致，请核对单位和数量")
+                    .withHint("请核对所选原料批次、源半成品的数量和单位，使其合计与本次对应的投入或出库总量一致");
         }
     }
 
@@ -1414,7 +1422,8 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // M3: 归属鉴权 — 操作员只能投料到自己被指派的工序任务; 主管不受限制。
         if (!Objects.equals(batchId, t.getProductionBatchId())) {
-            throw new BusinessException(409, "工序任务不属于当前生产批次");
+            throw new BusinessException(409, "工序任务不属于当前生产批次")
+                    .withHint("请从该工序任务所属的生产批次重新打开报工，核对批次与任务后再提交");
         }
         ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId,
                 ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole()));

@@ -59,7 +59,7 @@ public class TaskMaterialBatchPickerService {
         }
         if (!batchId.equals(task.getProductionBatchId())) {
             throw new BusinessException(409, "工序任务不属于当前生产批次")
-                    .withHint("请从任务所属批次重新打开领料选择");
+                    .withHint("请按当前任务冻结快照所属生产批次重新打开领料选择");
         }
         assertActorCanReport(task);
 
@@ -68,7 +68,7 @@ public class TaskMaterialBatchPickerService {
         Map<String, InputUnit> materialTypes = taskMaterialTypes(factoryId, task);
         if (materialTypes.isEmpty()) {
             throw new BusinessException(409, "当前任务没有可用的原料输入端口快照")
-                    .withHint("请让主管补齐当前任务的 INPUT 原料端口后重试");
+                    .withHint("请核对当前任务冻结的 INPUT 原料端口快照；修改活工艺不会修复已开工任务");
         }
         String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
         return materialTypes.keySet().stream()
@@ -98,15 +98,18 @@ public class TaskMaterialBatchPickerService {
             throw new BusinessException(403, "工序任务不属于当前工厂");
         }
         if (!batchId.equals(task.getProductionBatchId())) {
-            throw new BusinessException(409, "工序任务不属于当前生产批次");
+            throw new BusinessException(409, "工序任务不属于当前生产批次")
+                    .withHint("请按当前任务冻结快照所属生产批次重新提交领料");
         }
         assertActorCanReport(task);
         Map<String, InputUnit> allowedTypes = taskMaterialTypes(factoryId, task);
         if (allowedTypes.isEmpty()) {
-            throw new BusinessException(409, "当前任务没有可用的原料输入端口快照");
+            throw new BusinessException(409, "当前任务没有可用的原料输入端口快照")
+                    .withHint("请核对当前任务冻结的 INPUT 原料端口快照；修改活工艺不会修复已开工任务");
         }
         if (allowedTypes.values().stream().map(InputUnit::code).distinct().count() != 1) {
-            throw new BusinessException(409, "原料输入端口量纲不同，不能合并为单一投入数量");
+            throw new BusinessException(409, "原料输入端口量纲不同，不能合并为单一投入数量")
+                    .withHint("当前任务冻结快照的原料输入端口存在不同计量单位，无法在本任务合并领料；请联系主管处理当前任务版本，修改活工艺不会修复已开工任务");
         }
         String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
         Map<String, java.math.BigDecimal> totals = new LinkedHashMap<>();
@@ -127,7 +130,8 @@ public class TaskMaterialBatchPickerService {
                     || "PRODUCTION_BATCH".equalsIgnoreCase(batch.getSourceDocType())
                     || batch.getCurrentQuantity() == null || batch.getCurrentQuantity().signum() <= 0
                     || !allowedTypes.containsKey(batch.getMaterialTypeId())) {
-                throw new BusinessException(409, "所选原料批次不属于当前任务的可用输入");
+                throw new BusinessException(409, "所选原料批次不属于当前任务的可用输入")
+                        .withHint("请重新选择当前工厂、当前任务允许的可用生产仓原料批次");
             }
             InputUnit inputPort = allowedTypes.get(batch.getMaterialTypeId());
             String portUnit = inputPort.code();
@@ -139,11 +143,13 @@ public class TaskMaterialBatchPickerService {
                     : FgQuantityUnitConverter.convert(ref.getQuantity(), refUnit, batchUnit, null);
             if (nativeQuantity == null || portUnit == null
                     || FgQuantityUnitConverter.convert(java.math.BigDecimal.ONE, batchUnit, portUnit, null) == null) {
-                throw new BusinessException(409, "领料单位与任务输入端口不一致，缺少可验证的换算依据");
+                throw new BusinessException(409, "领料单位与任务输入端口不一致，缺少可验证的换算依据")
+                        .withHint("请按当前任务冻结快照使用可验证的原料单位");
             }
             totals.merge(batch.getId(), nativeQuantity, java.math.BigDecimal::add);
             if (totals.get(batch.getId()).compareTo(batch.getCurrentQuantity()) > 0) {
-                throw new BusinessException(409, "领料数量超过批次可用量");
+                throw new BusinessException(409, "领料数量超过批次可用量")
+                        .withHint("库存不足，请减少领料数量或更换批次");
             }
             nativeRefs.add(new NativeRef(ref, nativeQuantity, batch.getQuantityUnit()));
             taskQuantity = taskQuantity.add(FgQuantityUnitConverter.convert(ref.getQuantity(), refUnit, portUnit, null));
@@ -167,17 +173,20 @@ public class TaskMaterialBatchPickerService {
                 .collect(Collectors.toMap(WorkflowTaskPort::getSkuId, port -> {
                             String unit = port.getUnit();
                             if (unit == null || unit.isBlank() || "unitless".equalsIgnoreCase(unit.trim())) {
-                                throw new BusinessException(409, "原料输入端口缺少有效单位快照，请核对当前工艺");
+                                throw new BusinessException(409, "原料输入端口缺少有效单位快照，请核对当前工艺")
+                                        .withHint("请核对当前任务冻结的单位快照；修改活工艺不会修复已开工任务");
                             }
                             String code = YieldUnitResolver.canonicalPortUnit(port);
                             if (code == null || code.isBlank() || "unitless".equalsIgnoreCase(code)) {
-                                throw new BusinessException(409, "原料输入端口缺少有效计量编码，请核对当前工艺");
+                                throw new BusinessException(409, "原料输入端口缺少有效计量编码，请核对当前工艺")
+                                        .withHint("请核对当前任务冻结的计量编码快照；修改活工艺不会修复已开工任务");
                             }
                             return new InputUnit(code, java.util.Set.of(unit.trim()));
                         },
                         (left, right) -> {
                             if (!Objects.equals(left.code(), right.code())) {
-                                throw new BusinessException(409, "同物料输入端口单位冲突，请核对当前工艺快照");
+                                throw new BusinessException(409, "同物料输入端口单位冲突，请核对当前工艺快照")
+                                        .withHint("当前任务冻结快照的同物料输入端口计量编码冲突，无法在本任务合并领料；请联系主管处理当前任务版本，修改活工艺不会修复已开工任务");
                             }
                             java.util.Set<String> displays = new java.util.HashSet<>(left.frozenDisplays());
                             displays.addAll(right.frozenDisplays());

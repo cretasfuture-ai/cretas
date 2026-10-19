@@ -57,6 +57,31 @@ class YieldUnitResolverContractTest {
         assertThat(YieldUnitResolver.resolve(task, null, List.of(first, second, output), "未知桶", "成品桶").valid()).isFalse();
     }
 
+    @Test void customCodeAcceptsOnlyItsExactFrozenDisplayAndCode() {
+        WorkflowTaskPort custom = port(7L, WorkflowTaskPort.Direction.INPUT, "BOX", "custom_pack", "1");
+        custom.setUnitCode("custom_pack");
+        assertThat(YieldUnitResolver.matchesUnit(custom, " BOX ")).isTrue();
+        assertThat(YieldUnitResolver.matchesUnit(custom, "custom_pack")).isTrue();
+        assertThat(YieldUnitResolver.matchesUnit(custom, "box")).isFalse();
+        assertThat(YieldUnitResolver.matchesUnit(custom, "盒")).isFalse();
+        assertThat(YieldUnitResolver.matchesUnit(custom, null)).isFalse();
+        assertThat(YieldUnitResolver.matchesUnit(custom, "unitless")).isFalse();
+    }
+
+    @Test void canonicalAliasesPreserveDistinctCountUnits() {
+        WorkflowTaskPort mass = port(7L, WorkflowTaskPort.Direction.INPUT, "原料公斤", "kg", "1");
+        mass.setUnitCode("kg");
+        assertThat(YieldUnitResolver.matchesUnit(mass, "公斤")).isTrue();
+        assertThat(YieldUnitResolver.matchesUnit(mass, "KG")).isTrue();
+        assertThat(YieldUnitResolver.matchesUnit(mass, "原料公斤")).isTrue();
+        assertThat(YieldUnitResolver.matchesUnit(mass, "未知公斤")).isFalse();
+        WorkflowTaskPort count = port(7L, WorkflowTaskPort.Direction.INPUT, "个", "个", "1");
+        count.setUnitCode("个");
+        assertThat(YieldUnitResolver.matchesUnit(count, "个")).isTrue();
+        assertThat(YieldUnitResolver.matchesUnit(count, "pcs")).isFalse();
+        assertThat(YieldUnitResolver.matchesUnit(count, "件")).isFalse();
+    }
+
     @Test void packageConversionRequiresVersionedConsistentOrientationAndNeverConvertsVolumeToMass() {
         WorkProcessTask task = task("case"); task.setWorkflowInstanceId(1L);
         WorkflowTaskPort input = port(7L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1");

@@ -85,7 +85,9 @@ class TaskMaterialBatchPickerServiceContractTest {
     @Test void mismatchedBatchIsRejected() {
         actor(1686L, "F006", "operator");
         when(tasks.findByFactoryIdAndId("F006", 1989L)).thenReturn(Optional.of(task(1989L, 9999L, "F006")));
-        assertThrows(BusinessException.class, () -> service().list("F006", 10944L, 1989L));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service().list("F006", 10944L, 1989L));
+        assertTrue(error.getActionHint().contains("冻结快照"));
     }
 
     @Test void missingPortsAndCrossTaskPortsFailClosed() {
@@ -94,7 +96,9 @@ class TaskMaterialBatchPickerServiceContractTest {
         when(tasks.findByFactoryIdAndId("F006", 1989L)).thenReturn(Optional.of(task));
         when(batches.findByIdAndFactoryId(10944L, "F006")).thenReturn(Optional.of(mock(ProductionBatch.class)));
         when(ports.findByFactoryIdAndWorkflowInstanceId("F006", 77L)).thenReturn(List.of(port(1990L, "RMT-2", "kg")));
-        assertThrows(BusinessException.class, () -> service().list("F006", 10944L, 1989L));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service().list("F006", 10944L, 1989L));
+        assertTrue(error.getActionHint().contains("冻结"));
         verifyNoInteractions(materials);
     }
 
@@ -105,8 +109,10 @@ class TaskMaterialBatchPickerServiceContractTest {
         prepareValidation(task, good, List.of(port(1989L, "RMT-1", "kg")));
         assertDoesNotThrow(() -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
                 List.of(ref("MB-1", "0.5", "kg"), ref("MB-1", "1.5", "kg"))));
-        assertThrows(BusinessException.class, () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
-                List.of(ref("MB-1", "1.1", "kg"), ref("MB-1", "1.0", "kg"))));
+        BusinessException overage = assertThrows(BusinessException.class,
+                () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
+                        List.of(ref("MB-1", "1.1", "kg"), ref("MB-1", "1.0", "kg"))));
+        assertTrue(overage.getActionHint().contains("减少") || overage.getActionHint().contains("更换批次"));
     }
 
     @Test void validateRejectsZeroWrongUnitWrongWarehouseOwnershipAndWip() {
@@ -115,7 +121,10 @@ class TaskMaterialBatchPickerServiceContractTest {
         MaterialBatch good = batch("MB-1", "F006", "RMT-1", "WH-WKS", InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE", "2");
         prepareValidation(task, good, List.of(port(1989L, "RMT-1", "kg")));
         assertThrows(BusinessException.class, () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L, List.of(ref("MB-1", "0", "kg"))));
-        assertThrows(BusinessException.class, () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L, List.of(ref("MB-1", "1", "件"))));
+        BusinessException wrongUnit = assertThrows(BusinessException.class,
+                () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
+                        List.of(ref("MB-1", "1", "件"))));
+        assertTrue(wrongUnit.getActionHint().contains("冻结快照"));
         for (MaterialBatch invalid : List.of(
                 batch("MB-2", "F006", "RMT-1", "WH-LOG", InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE", "1"),
                 batch("MB-3", "F006", "RMT-1", "WH-WKS", InventoryOwnership.CUSTOMER_OWNED, "PURCHASE_RECEIVE", "1"),
@@ -130,9 +139,16 @@ class TaskMaterialBatchPickerServiceContractTest {
         WorkProcessTask task = task(1989L, 10944L, "F006");
         MaterialBatch wrongSku = batch("MB-1", "F006", "RMT-2", "WH-WKS", InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE", "1");
         prepareValidation(task, wrongSku, List.of(port(1989L, "RMT-1", "kg")));
-        assertThrows(BusinessException.class, () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L, List.of(ref("MB-1", "1", "kg"))));
+        BusinessException conflictingUnits = assertThrows(BusinessException.class,
+                () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
+                        List.of(ref("MB-1", "1", "kg"))));
+        assertTrue(conflictingUnits.getActionHint().contains("重新选择当前工厂"));
         when(ports.findByFactoryIdAndWorkflowInstanceId("F006", 77L)).thenReturn(List.of(port(1989L, "RMT-1", "kg"), port(1989L, "RMT-1", "件")));
-        assertThrows(BusinessException.class, () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L, List.of(ref("MB-1", "1", "kg"))));
+        BusinessException conflictingPortUnits = assertThrows(BusinessException.class,
+                () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
+                        List.of(ref("MB-1", "1", "kg"))));
+        assertTrue(conflictingPortUnits.getActionHint().contains("冻结快照"));
+        assertTrue(conflictingPortUnits.getActionHint().contains("联系主管处理当前任务版本"));
     }
 
     @Test void missingUnitSnapshotFailsWithBusinessErrorBeforeInventoryRead() {
@@ -141,7 +157,9 @@ class TaskMaterialBatchPickerServiceContractTest {
         when(tasks.findByFactoryIdAndId("F006", 1989L)).thenReturn(Optional.of(task));
         when(batches.findByIdAndFactoryId(10944L, "F006")).thenReturn(Optional.of(mock(ProductionBatch.class)));
         when(ports.findByFactoryIdAndWorkflowInstanceId("F006", 77L)).thenReturn(List.of(port(1989L, "RMT-1", null)));
-        assertThrows(BusinessException.class, () -> service().list("F006", 10944L, 1989L));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service().list("F006", 10944L, 1989L));
+        assertTrue(error.getActionHint().contains("冻结"));
         verifyNoInteractions(materials, warehouse);
     }
 
@@ -155,8 +173,10 @@ class TaskMaterialBatchPickerServiceContractTest {
         prepareValidation(task, stock, List.of(input, alias));
         assertDoesNotThrow(() -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
                 List.of(ref("MB-1", "1000", "g"))));
-        assertThrows(BusinessException.class, () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
-                List.of(ref("MB-1", "1", "box"))));
+        BusinessException unknownUnit = assertThrows(BusinessException.class,
+                () -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
+                        List.of(ref("MB-1", "1", "box"))));
+        assertTrue(unknownUnit.getActionHint().contains("单位"));
         stock.setQuantityUnit("原料公斤");
         assertDoesNotThrow(() -> service().validateMaterialBatchRefs("F006", 10944L, 1989L,
                 List.of(ref("MB-1", "1", "原料公斤"))));

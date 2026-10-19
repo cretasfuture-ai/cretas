@@ -60,7 +60,7 @@ class ReservationGuardContractTest {
     void missingBatchIsBusinessErrorAndDoesNotSave() {
         Rig rig = new Rig();
 
-        assertGuardFails(rig, report(ref("missing", "1")),
+        assertGuardFailsWithHint(rig, report(ref("missing", "1")),
                 "WORKSHOP_RESERVATION_BATCH_NOT_FOUND_OR_FOREIGN");
 
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
@@ -84,7 +84,7 @@ class ReservationGuardContractTest {
         MaterialBatch batch = batch("batch-a", FACTORY, "WH-LOG-ID", 20);
         rig.stub("batch-a", batch);
 
-        assertGuardFails(rig, report(ref("batch-a", "1")),
+        assertGuardFailsWithHint(rig, report(ref("batch-a", "1")),
                 "WORKSHOP_RESERVATION_WAREHOUSE_MISMATCH");
 
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
@@ -97,7 +97,7 @@ class ReservationGuardContractTest {
         batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
         rig.stub("batch-a", batch);
 
-        assertGuardFails(rig, report(ref("batch-a", "1")),
+        assertGuardFailsWithHint(rig, report(ref("batch-a", "1")),
                 "WORKSHOP_RESERVATION_CUSTOMER_OWNED_FORBIDDEN");
 
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
@@ -111,7 +111,7 @@ class ReservationGuardContractTest {
             batch.setSourceDocType(sourceType);
             rig.stub("batch-a", batch);
 
-            assertGuardFails(rig, report(ref("batch-a", "1")),
+            assertGuardFailsWithHint(rig, report(ref("batch-a", "1")),
                     "WORKSHOP_RESERVATION_WIP_FORBIDDEN");
 
             verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
@@ -124,7 +124,7 @@ class ReservationGuardContractTest {
         MaterialBatch batch = batch("batch-a", FACTORY, WORKSHOP_WAREHOUSE, 0);
         rig.stub("batch-a", batch);
 
-        assertGuardFails(rig, report(ref("batch-a", "1")),
+        assertGuardFailsWithHint(rig, report(ref("batch-a", "1")),
                 "BATCH_OVER_CONSUMED");
 
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
@@ -136,7 +136,7 @@ class ReservationGuardContractTest {
         MaterialBatch batch = batch("batch-a", FACTORY, WORKSHOP_WAREHOUSE, 5);
         rig.stub("batch-a", batch);
 
-        assertGuardFails(rig, report(ref("batch-a", "6")),
+        assertGuardFailsWithHint(rig, report(ref("batch-a", "6")),
                 "BATCH_OVER_CONSUMED");
 
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
@@ -199,8 +199,34 @@ class ReservationGuardContractTest {
     private static void assertGuardFails(Rig rig, ProductionReport report, String errorCode) {
         assertThatThrownBy(() -> rig.service.reserveForReport(FACTORY, report))
                 .isInstanceOf(BusinessException.class)
-                .satisfies(thrown -> assertThat(((BusinessException) thrown).getErrorCode())
-                        .isEqualTo(errorCode));
+                .satisfies(thrown -> {
+                    BusinessException error = (BusinessException) thrown;
+                    assertThat(error.getErrorCode()).isEqualTo(errorCode);
+                    assertThat(error.getActionHint()).isNotBlank();
+                });
+    }
+
+    private static void assertGuardFailsWithHint(Rig rig, ProductionReport report,
+                                                  String errorCode) {
+        assertThatThrownBy(() -> rig.service.reserveForReport(FACTORY, report))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(thrown -> {
+                    BusinessException error = (BusinessException) thrown;
+                    assertThat(error.getErrorCode()).isEqualTo(errorCode);
+                    assertThat(error.getActionHint()).isNotBlank();
+                    String hint = error.getActionHint();
+                    if ("WORKSHOP_RESERVATION_WAREHOUSE_MISMATCH".equals(errorCode)) {
+                        assertThat(hint).contains("正规领料");
+                    } else if ("WORKSHOP_RESERVATION_CUSTOMER_OWNED_FORBIDDEN".equals(errorCode)) {
+                        assertThat(hint).contains("客供");
+                    } else if ("WORKSHOP_RESERVATION_WIP_FORBIDDEN".equals(errorCode)) {
+                        assertThat(hint).contains("半成品");
+                    } else if ("BATCH_OVER_CONSUMED".equals(errorCode)) {
+                        assertThat(hint).contains("库存不足");
+                    } else {
+                        assertThat(hint).contains("重新选择当前工厂");
+                    }
+                });
     }
 
     private static MaterialBatch batch(String id, String factoryId, String warehouseId, int receipt) {

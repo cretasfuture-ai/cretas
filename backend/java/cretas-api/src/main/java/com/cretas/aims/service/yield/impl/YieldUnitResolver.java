@@ -11,6 +11,7 @@ import java.math.MathContext;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /** Quantity projection from immutable runtime ports. No current SKU or BOM lookup. */
 public final class YieldUnitResolver {
@@ -95,8 +96,11 @@ public final class YieldUnitResolver {
     }
 
     public static boolean matchesUnit(WorkflowTaskPort port, String requestedUnit) {
-        return usable(requestedUnit) && (Objects.equals(requestedUnit.trim(), port.getUnit())
-                || Objects.equals(canonical(requestedUnit), canonicalPortUnit(port)));
+        // The exact frozen display is an explicit alias bound to this port's code.
+        // Do not infer further aliases from a custom display or a live unit catalog.
+        Set<String> frozenAliases = usable(port.getUnit()) ? Set.of(port.getUnit()) : Set.of();
+        return usable(requestedUnit) && (frozenAliases.contains(requestedUnit.trim())
+                || same(requestedUnit, canonicalPortUnit(port)));
     }
 
     private static BigDecimal commonGrams(List<WorkflowTaskPort> ports) {
