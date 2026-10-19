@@ -52,9 +52,12 @@ def active_build():
     if subprocess.run(['pgrep','-x','xcodebuild'],stdout=subprocess.DEVNULL,timeout=2).returncode==0:
         return True
     # Read-only guest query. A missing/unreachable CI guest fails closed, never starts it.
-    result=subprocess.run(['/opt/homebrew/bin/colima','ssh','-p','ci','--','pgrep','-x','Runner.Worker'],
-                          stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
-    return result.returncode!=1
+    probe=("import subprocess,sys;p=subprocess.run(['pgrep','-x','Runner.Worker'],stdout=subprocess.DEVNULL);"
+           "print('F006_CI_BUSY_v1' if p.returncode==0 else 'F006_CI_IDLE_v1' if p.returncode==1 else 'F006_CI_UNKNOWN_v1');"
+           "sys.exit(0 if p.returncode in (0,1) else 2)")
+    result=subprocess.run(['/opt/homebrew/bin/colima','ssh','-p','ci','--','python3','-c',probe],
+                          capture_output=True,text=True,timeout=3)
+    return result.returncode!=0 or result.stdout.strip()!='F006_CI_IDLE_v1'
 
 
 def admitted(s, native_build=False):

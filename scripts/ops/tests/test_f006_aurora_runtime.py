@@ -29,9 +29,14 @@ class ResourceAdmission(unittest.TestCase):
 
 class ActiveBuildGate(unittest.TestCase):
     def test_native_or_ci_busy_and_guest_errors_refuse(self):
-        for statuses,expected in [([0],True),([1,0],True),([1,1],False),([1,255],True)]:
-            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=x) for x in statuses]):
+        for native,guest,marker,expected in [(0,0,'',True),(1,0,'F006_CI_BUSY_v1',True),(1,0,'F006_CI_IDLE_v1',False),(1,255,'',True)]:
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=native),mock.Mock(returncode=guest,stdout=marker)]):
                 self.assertEqual(m.active_build(),expected)
+    def test_guest_cli_error_one_is_not_misread_as_no_worker(self):
+        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=1,stdout='')]):self.assertTrue(m.active_build())
+    def test_success_without_exact_idle_marker_is_not_idle(self):
+        for text in ['', 'F006_CI_UNKNOWN_v1', 'warning\nF006_CI_IDLE_v1']:
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=0,stdout=text)]):self.assertTrue(m.active_build())
     def test_timeout_is_not_idle(self):
         with mock.patch.object(m.subprocess,'run',side_effect=m.subprocess.TimeoutExpired('guest',3)):
             with self.assertRaises(m.subprocess.TimeoutExpired):m.active_build()
@@ -119,7 +124,7 @@ class ProxyIntegration(unittest.TestCase):
         for server in [self.upstream,self.gateway]:
             t=threading.Thread(target=server.serve_forever,kwargs=dict(poll_interval=.02),daemon=True);t.start();self.threads.append(t)
         self.good=dict(pressure=1,memory_free_percent=65,swap_mib=100,free_gib=130)
-        self.patches=[mock.patch.object(m,'MODEL_PORT',self.upstream.server_address[1]),mock.patch.object(m,'sample',return_value=self.good),mock.patch.object(m.subprocess,'run',return_value=mock.Mock(returncode=1))]
+        self.patches=[mock.patch.object(m,'MODEL_PORT',self.upstream.server_address[1]),mock.patch.object(m,'sample',return_value=self.good),mock.patch.object(m,'active_build',return_value=False)]
         for p in self.patches:p.start()
     def tearDown(self):
         for s in [self.gateway,self.upstream]:s.shutdown();s.server_close()
