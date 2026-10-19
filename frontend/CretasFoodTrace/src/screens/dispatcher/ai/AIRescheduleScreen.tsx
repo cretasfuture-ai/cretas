@@ -2,17 +2,15 @@
  * AI 重排建议页
  *
  * 功能:
- * - 选择需要重排的调度计划
- * - 选择重排策略（最小化延迟/最大化效率/平衡公平性）
+ * - 选择需要查看的调度计划
+ * - 记录调整原因入口
  * - What-If 场景分析
- * - 预览重排结果
- * - 确认执行重排
  *
  * @version 1.0.0
  * @since 2026-01-22
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -23,6 +21,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -31,7 +30,6 @@ import { useNavigation } from '@react-navigation/native';
 import { DISPATCHER_THEME, SchedulingPlan } from '../../../types/dispatcher';
 import {
   schedulingOptimizationApiClient,
-  RescheduleResult,
   WhatIfResult,
   WhatIfRequest,
 } from '../../../services/api/schedulingOptimizationApiClient';
@@ -40,31 +38,8 @@ import { formatDate } from '../../../utils/formatters';
 
 // 图标名称类型
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-
-// 重排策略类型
-type RescheduleStrategy = 'minimize_delay' | 'maximize_efficiency' | 'balance_fairness';
-
-// 策略选项
-const STRATEGY_OPTIONS: { value: RescheduleStrategy; label: string; desc: string; icon: IconName }[] = [
-  {
-    value: 'minimize_delay',
-    label: '最小化延迟',
-    desc: '优先保证交付时间，减少延误',
-    icon: 'clock-fast',
-  },
-  {
-    value: 'maximize_efficiency',
-    label: '最大化效率',
-    desc: '优化产能利用，提升整体效率',
-    icon: 'rocket-launch',
-  },
-  {
-    value: 'balance_fairness',
-    label: '平衡公平性',
-    desc: '兼顾效率与人员分配公平',
-    icon: 'scale-balance',
-  },
-];
+const REASON_PLAN_STATUSES = ['draft', 'confirmed', 'in_progress'];
+type ReasonSchedulingPlan = SchedulingPlan & { planName?: string };
 
 // What-If 场景选项
 const WHATIF_SCENARIOS: { value: WhatIfRequest['scenario']; label: string; icon: IconName }[] = [
@@ -82,23 +57,17 @@ export default function AIRescheduleScreen() {
   const [error, setError] = useState<string | null>(null);
 
   // 计划列表
-  const [plans, setPlans] = useState<SchedulingPlan[]>([]);
+  const [plans, setPlans] = useState<ReasonSchedulingPlan[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-
-  // 重排配置
-  const [strategy, setStrategy] = useState<RescheduleStrategy>('minimize_delay');
-  const [preserveAssignments, setPreserveAssignments] = useState(true);
+  const [adjustmentReason, setAdjustmentReason] = useState('');
+  const [isSavingAdjustmentReason, setIsSavingAdjustmentReason] = useState(false);
+  const savingAdjustmentReason = useRef(false);
 
   // What-If 分析
   const [showWhatIfModal, setShowWhatIfModal] = useState(false);
   const [whatIfScenario, setWhatIfScenario] = useState<WhatIfRequest['scenario'] | null>(null);
   const [whatIfResult, setWhatIfResult] = useState<WhatIfResult | null>(null);
   const [analyzingWhatIf, setAnalyzingWhatIf] = useState(false);
-
-  // 重排结果
-  const [rescheduleResult, setRescheduleResult] = useState<RescheduleResult | null>(null);
-  const [rescheduling, setRescheduling] = useState(false);
-  const [showResultModal, setShowResultModal] = useState(false);
 
   // 加载计划列表
   const loadPlans = useCallback(async () => {
@@ -107,20 +76,24 @@ export default function AIRescheduleScreen() {
       const today = formatDate(new Date());
       const response = await schedulingApiClient.getPlans({
         startDate: today,
-        status: 'confirmed,in_progress',
-        page: 1,
+        endDate: today,
+        status: 'draft,confirmed,in_progress',
+        page: 0,
         size: 20,
       });
 
-      if (response.success && response.data) {
-        setPlans(response.data.content || []);
-        // 默认选中第一个
-        const firstPlan = response.data.content?.[0];
-        if (firstPlan) {
-          setSelectedPlanId(firstPlan.id);
-        }
+      if (!response.success || !response.data || !Array.isArray(response.data.content)) {
+        throw new Error(response.message || '调度计划加载失败，请重新加载。');
       }
+      const activePlans = response.data.content.filter((plan) =>
+        REASON_PLAN_STATUSES.includes(plan.status.toLowerCase())
+      );
+      setPlans(activePlans);
+      setSelectedPlanId((current) => activePlans.some((plan) => plan.id === current)
+        ? current : activePlans[0]?.id ?? null);
     } catch (err) {
+      setPlans([]);
+      setSelectedPlanId(null);
       console.error('加载计划列表失败:', err);
       const message = err instanceof Error ? err.message : '加载失败';
       setError(message);
@@ -134,6 +107,7 @@ export default function AIRescheduleScreen() {
   }, [loadPlans]);
 
   const onRefresh = useCallback(async () => {
+    if (savingAdjustmentReason.current) return;
     setRefreshing(true);
     await loadPlans();
     setRefreshing(false);
@@ -173,50 +147,58 @@ export default function AIRescheduleScreen() {
     }
   };
 
-  // 执行重排
-  const handleReschedule = async () => {
+  // AI 自动重排暂不可用；只在当前 SchedulingPlan 上记录调整原因。
+  const handleSaveAdjustmentReason = async () => {
+    if (savingAdjustmentReason.current) return;
     if (!selectedPlanId) {
-      Alert.alert('提示', '请先选择需要重排的计划');
+      Alert.alert('提示', '请先选择需要记录调整原因的计划');
+      return;
+    }
+    if (!adjustmentReason.trim()) {
+      Alert.alert('提示', '请输入调整原因');
       return;
     }
 
-    Alert.alert(
-      '确认重排',
-      `将使用"${STRATEGY_OPTIONS.find(s => s.value === strategy)?.label}"策略对选中的计划进行重排，是否继续？`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '确认',
-          onPress: async () => {
-            setRescheduling(true);
-            try {
-              const result = await schedulingOptimizationApiClient.reschedule({
-                planId: selectedPlanId,
-                strategy,
-                preserveAssignments,
-              });
-
-              if (result.success && result.data) {
-                setRescheduleResult(result.data);
-                setShowResultModal(true);
-              } else {
-                throw new Error(result.message || '重排失败');
-              }
-            } catch (err) {
-              console.error('重排失败:', err);
-              Alert.alert('错误', err instanceof Error ? err.message : '重排失败');
-            } finally {
-              setRescheduling(false);
-            }
+    const targetPlanId = selectedPlanId;
+    const reason = adjustmentReason.trim();
+    savingAdjustmentReason.current = true;
+    setIsSavingAdjustmentReason(true);
+    try {
+      const fresh = await schedulingApiClient.getPlan(targetPlanId);
+      if (!fresh.success || !fresh.data || fresh.data.id !== targetPlanId
+          || !REASON_PLAN_STATUSES.includes(fresh.data.status.toLowerCase())) {
+        throw new Error('计划状态已变化，请刷新后重新选择。');
+      }
+      const result = await schedulingApiClient.reschedule({
+        planId: targetPlanId,
+        reason,
+      });
+      if (result.success && result.data?.id === targetPlanId) {
+        Alert.alert('成功', '调整原因已保存，排程时间和人员未变。', [
+          {
+            text: '确定',
+            onPress: () => {
+              setAdjustmentReason('');
+              onRefresh();
+            },
           },
-        },
-      ]
-    );
+        ]);
+      } else if (result.success) {
+        Alert.alert('结果待核对', '保存结果未确认。请刷新调度计划核对原因，避免重复保存。');
+      } else {
+        Alert.alert('失败', result.message || '记录调整原因失败');
+      }
+    } catch (err) {
+      Alert.alert('错误', err instanceof Error ? err.message : '记录调整原因失败');
+    } finally {
+      savingAdjustmentReason.current = false;
+      setIsSavingAdjustmentReason(false);
+    }
   };
 
   // 获取状态颜色
   const getStatusColor = (status: string) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'confirmed': return DISPATCHER_THEME.primary;
       case 'in_progress': return DISPATCHER_THEME.success;
       case 'completed': return '#52c41a';
@@ -227,7 +209,7 @@ export default function AIRescheduleScreen() {
 
   // 获取状态文本
   const getStatusText = (status: string) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'draft': return '草稿';
       case 'confirmed': return '已确认';
       case 'in_progress': return '进行中';
@@ -271,8 +253,8 @@ export default function AIRescheduleScreen() {
         <View style={styles.headerIcon}>
           <MaterialCommunityIcons name="calendar-refresh" size={32} color="#fff" />
         </View>
-        <Text style={styles.headerTitle}>AI 智能重排</Text>
-        <Text style={styles.headerSubtitle}>优化排程 + What-If分析 + 智能建议</Text>
+        <Text style={styles.headerTitle}>调整原因记录</Text>
+        <Text style={styles.headerSubtitle}>记录调整原因 + What-If 分析</Text>
       </LinearGradient>
 
       {/* Loading State */}
@@ -324,17 +306,19 @@ export default function AIRescheduleScreen() {
             {plans.length === 0 ? (
               <View style={styles.emptyState}>
                 <MaterialCommunityIcons name="calendar-blank" size={48} color="#ccc" />
-                <Text style={styles.emptyText}>暂无可重排的计划</Text>
+                <Text style={styles.emptyText}>暂无可记录调整原因的计划</Text>
               </View>
             ) : (
               plans.map((plan) => (
                 <TouchableOpacity
                   key={plan.id}
+                  testID={`scheduling-plan-${plan.id}`}
                   style={[
                     styles.planItem,
                     selectedPlanId === plan.id && styles.planItemSelected,
                   ]}
                   onPress={() => setSelectedPlanId(plan.id)}
+                  disabled={isSavingAdjustmentReason}
                 >
                   <View style={[
                     styles.radioButton,
@@ -353,74 +337,52 @@ export default function AIRescheduleScreen() {
                         </Text>
                       </View>
                     </View>
-                    <Text style={styles.planMeta}>
-                      {plan.shiftType === 'day' ? '白班' : plan.shiftType === 'night' ? '夜班' : '全天'} |
-                      工人: {plan.totalWorkers} | 预计产出: {plan.estimatedOutput}kg
-                    </Text>
+                    <Text style={styles.planMeta}>计划：{plan.planName || '名称未提供'}</Text>
                   </View>
                 </TouchableOpacity>
               ))
             )}
           </View>
 
-          {/* 重排策略 */}
+          {/* 调整原因记录 */}
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <View style={styles.cardTitleRow}>
-                <MaterialCommunityIcons name="strategy" size={20} color="#333" />
-                <Text style={styles.cardTitle}>重排策略</Text>
+                <MaterialCommunityIcons name="note-edit-outline" size={20} color="#333" />
+                <Text style={styles.cardTitle}>调整原因记录</Text>
               </View>
             </View>
-
-            {STRATEGY_OPTIONS.map((option) => (
-              <TouchableOpacity
-                key={option.value}
-                style={[
-                  styles.strategyItem,
-                  strategy === option.value && styles.strategyItemSelected,
-                ]}
-                onPress={() => setStrategy(option.value)}
-              >
-                <View style={[
-                  styles.strategyIcon,
-                  strategy === option.value && styles.strategyIconSelected,
-                ]}>
-                  <MaterialCommunityIcons
-                    name={option.icon}
-                    size={24}
-                    color={strategy === option.value ? '#fff' : DISPATCHER_THEME.primary}
-                  />
-                </View>
-                <View style={styles.strategyContent}>
-                  <Text style={[
-                    styles.strategyLabel,
-                    strategy === option.value && styles.strategyLabelSelected,
-                  ]}>
-                    {option.label}
-                  </Text>
-                  <Text style={styles.strategyDesc}>{option.desc}</Text>
-                </View>
-                <View style={[
-                  styles.radioButton,
-                  strategy === option.value && styles.radioButtonSelected,
-                ]}>
-                  {strategy === option.value && <View style={styles.radioButtonInner} />}
-                </View>
-              </TouchableOpacity>
-            ))}
-
-            {/* 保留分配选项 */}
+            <Text style={styles.adjustmentHint}>
+              AI 自动重排暂不可用。这里只记录调整原因，计划时间和人员资源不会改变。
+            </Text>
+            {plans.find((plan) => plan.id === selectedPlanId)?.notes ? (
+              <Text testID="selected-plan-notes" style={styles.adjustmentHint}>
+                备注与调整记录：{plans.find((plan) => plan.id === selectedPlanId)?.notes}
+              </Text>
+            ) : null}
+            <TextInput
+              testID="adjustment-reason-input"
+              style={styles.adjustmentReasonInput}
+              placeholder="请输入调整原因"
+              placeholderTextColor="#999"
+              value={adjustmentReason}
+              onChangeText={setAdjustmentReason}
+              multiline
+              numberOfLines={3}
+              textAlignVertical="top"
+              editable={!isSavingAdjustmentReason}
+            />
             <TouchableOpacity
-              style={styles.switchRow}
-              onPress={() => setPreserveAssignments(!preserveAssignments)}
+              testID="adjustment-reason-save"
+              style={[styles.rescheduleButton, (!selectedPlanId || !adjustmentReason.trim()) && styles.rescheduleButtonDisabled]}
+              onPress={handleSaveAdjustmentReason}
+              disabled={!selectedPlanId || !adjustmentReason.trim() || isSavingAdjustmentReason}
             >
-              <View style={styles.switchInfo}>
-                <Text style={styles.switchLabel}>保留现有工人分配</Text>
-                <Text style={styles.switchDesc}>仅调整任务时间，不改变人员分配</Text>
-              </View>
-              <View style={[styles.switchTrack, preserveAssignments && styles.switchTrackActive]}>
-                <View style={[styles.switchThumb, preserveAssignments && styles.switchThumbActive]} />
-              </View>
+              {isSavingAdjustmentReason ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.rescheduleButtonText}>保存调整原因</Text>
+              )}
             </TouchableOpacity>
           </View>
 
@@ -500,28 +462,6 @@ export default function AIRescheduleScreen() {
             )}
           </View>
 
-          {/* 执行重排按钮 */}
-          <TouchableOpacity
-            onPress={handleReschedule}
-            disabled={!selectedPlanId || rescheduling}
-          >
-            <LinearGradient
-              colors={selectedPlanId ? [DISPATCHER_THEME.primary, DISPATCHER_THEME.secondary] : ['#ccc', '#aaa']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.rescheduleButton}
-            >
-              {rescheduling ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <>
-                  <MaterialCommunityIcons name="auto-fix" size={24} color="#fff" />
-                  <Text style={styles.rescheduleButtonText}>执行 AI 重排</Text>
-                </>
-              )}
-            </LinearGradient>
-          </TouchableOpacity>
-
           <View style={{ height: 100 }} />
         </ScrollView>
       )}
@@ -595,79 +535,6 @@ export default function AIRescheduleScreen() {
         </View>
       </Modal>
 
-      {/* Result Modal */}
-      <Modal
-        visible={showResultModal}
-        transparent
-        animationType="fade"
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.resultModalContent}>
-            <View style={styles.resultHeader}>
-              {rescheduleResult?.success ? (
-                <MaterialCommunityIcons name="check-circle" size={48} color={DISPATCHER_THEME.success} />
-              ) : (
-                <MaterialCommunityIcons name="alert-circle" size={48} color={DISPATCHER_THEME.danger} />
-              )}
-              <Text style={styles.resultTitle}>
-                {rescheduleResult?.success ? '重排成功' : '重排失败'}
-              </Text>
-            </View>
-
-            {rescheduleResult?.success && (
-              <>
-                <View style={styles.resultStats}>
-                  <View style={styles.resultStatItem}>
-                    <Text style={styles.resultStatValue}>{rescheduleResult.changes.movedTasks}</Text>
-                    <Text style={styles.resultStatLabel}>移动任务</Text>
-                  </View>
-                  <View style={styles.resultStatItem}>
-                    <Text style={styles.resultStatValue}>{rescheduleResult.changes.reallocatedWorkers}</Text>
-                    <Text style={styles.resultStatLabel}>重新分配工人</Text>
-                  </View>
-                  <View style={styles.resultStatItem}>
-                    <Text style={styles.resultStatValue}>{rescheduleResult.changes.adjustedDeadlines}</Text>
-                    <Text style={styles.resultStatLabel}>调整截止时间</Text>
-                  </View>
-                </View>
-
-                <View style={styles.improvementBox}>
-                  <Text style={styles.improvementTitle}>预期改进</Text>
-                  <Text style={styles.improvementText}>
-                    完成概率 +{Math.round(rescheduleResult.improvements.completionProbability * 100)}% |
-                    效率 +{Math.round(rescheduleResult.improvements.efficiency * 100)}% |
-                    公平性 +{Math.round(rescheduleResult.improvements.fairness * 100)}
-                  </Text>
-                </View>
-
-                <Text style={styles.resultSummary}>{rescheduleResult.summary}</Text>
-
-                {rescheduleResult.warnings && rescheduleResult.warnings.length > 0 && (
-                  <View style={styles.warningsBox}>
-                    {rescheduleResult.warnings.map((warning, index) => (
-                      <Text key={index} style={styles.warningText}>- {warning}</Text>
-                    ))}
-                  </View>
-                )}
-              </>
-            )}
-
-            <TouchableOpacity
-              style={styles.resultCloseBtn}
-              onPress={() => {
-                setShowResultModal(false);
-                if (rescheduleResult?.success) {
-                  navigation.goBack();
-                }
-              }}
-            >
-              <Text style={styles.resultCloseText}>
-                {rescheduleResult?.success ? '完成' : '关闭'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -867,88 +734,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
   },
-  strategyItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#f9f9f9',
-    borderRadius: 8,
-    marginBottom: 8,
-    gap: 12,
-  },
-  strategyItemSelected: {
-    backgroundColor: DISPATCHER_THEME.primary + '10',
-    borderWidth: 1,
-    borderColor: DISPATCHER_THEME.primary,
-  },
-  strategyIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: DISPATCHER_THEME.primary + '15',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  strategyIconSelected: {
-    backgroundColor: DISPATCHER_THEME.primary,
-  },
-  strategyContent: {
-    flex: 1,
-  },
-  strategyLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-    marginBottom: 2,
-  },
-  strategyLabelSelected: {
-    color: DISPATCHER_THEME.primary,
-  },
-  strategyDesc: {
-    fontSize: 12,
-    color: '#999',
-  },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 12,
-    backgroundColor: '#f9f9f9',
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  switchInfo: {
-    flex: 1,
-  },
-  switchLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-  },
-  switchDesc: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 2,
-  },
-  switchTrack: {
-    width: 48,
-    height: 28,
-    backgroundColor: '#d9d9d9',
-    borderRadius: 12,
-    padding: 2,
-  },
-  switchTrackActive: {
-    backgroundColor: DISPATCHER_THEME.primary,
-  },
-  switchThumb: {
-    width: 24,
-    height: 24,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-  },
-  switchThumbActive: {
-    transform: [{ translateX: 20 }],
-  },
   whatIfPlaceholder: {
     alignItems: 'center',
     padding: 24,
@@ -958,6 +743,22 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     marginTop: 12,
+  },
+  adjustmentHint: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  adjustmentReasonInput: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    color: '#333',
+    minHeight: 80,
+    marginBottom: 12,
   },
   whatIfResultContainer: {
     padding: 12,
@@ -1033,7 +834,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 16,
     borderRadius: 12,
+    backgroundColor: DISPATCHER_THEME.primary,
     gap: 8,
+  },
+  rescheduleButtonDisabled: {
+    backgroundColor: '#bfbfbf',
   },
   rescheduleButtonText: {
     fontSize: 16,
@@ -1127,86 +932,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#d9d9d9',
   },
   modalConfirmText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#fff',
-  },
-  resultModalContent: {
-    backgroundColor: '#fff',
-    marginHorizontal: 20,
-    marginTop: 'auto',
-    marginBottom: 'auto',
-    borderRadius: 12,
-    padding: 24,
-  },
-  resultHeader: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  resultTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#333',
-    marginTop: 12,
-  },
-  resultStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 20,
-  },
-  resultStatItem: {
-    alignItems: 'center',
-  },
-  resultStatValue: {
-    fontSize: 28,
-    fontWeight: '600',
-    color: DISPATCHER_THEME.primary,
-  },
-  resultStatLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 4,
-  },
-  improvementBox: {
-    backgroundColor: '#f6ffed',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  improvementTitle: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#52c41a',
-    marginBottom: 4,
-  },
-  improvementText: {
-    fontSize: 13,
-    color: '#52c41a',
-  },
-  resultSummary: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  warningsBox: {
-    backgroundColor: '#fff7e6',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  warningText: {
-    fontSize: 12,
-    color: '#fa8c16',
-  },
-  resultCloseBtn: {
-    backgroundColor: DISPATCHER_THEME.primary,
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  resultCloseText: {
     fontSize: 15,
     fontWeight: '500',
     color: '#fff',
