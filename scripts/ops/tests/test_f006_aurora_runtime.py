@@ -204,9 +204,19 @@ class RealOwnedProcessCleanup(unittest.TestCase):
                 status=subprocess.run(['ps','-o','stat=','-p',str(pid)],capture_output=True,text=True)
                 self.assertTrue(status.returncode!=0 or not status.stdout.strip() or status.stdout.lstrip().startswith('Z'))
             finally:
-                try:os.killpg(proc.pid,signal.SIGKILL)
-                except ProcessLookupError:pass
+                m.signal_owned_group(proc.pid,signal.SIGKILL)
                 proc.stdout.close()
                 for h in list(rt.logger.handlers):h.close();rt.logger.removeHandler(h)
+
+class DarwinExitedGroup(unittest.TestCase):
+    def test_permission_error_requires_no_live_members(self):
+        with mock.patch.object(m.os,'killpg',side_effect=PermissionError), mock.patch.object(m.subprocess,'check_output',return_value='123 Z\n999 S\n'):
+            self.assertFalse(m.signal_owned_group(123,0))
+    def test_live_member_permission_error_is_preserved(self):
+        with mock.patch.object(m.os,'killpg',side_effect=PermissionError), mock.patch.object(m.subprocess,'check_output',return_value='123 S\n'):
+            with self.assertRaises(PermissionError):m.signal_owned_group(123,0)
+    def test_process_query_failure_is_not_ignored(self):
+        with mock.patch.object(m.os,'killpg',side_effect=PermissionError), mock.patch.object(m.subprocess,'check_output',side_effect=OSError):
+            with self.assertRaises(OSError):m.signal_owned_group(123,0)
 
 if __name__=='__main__':unittest.main()

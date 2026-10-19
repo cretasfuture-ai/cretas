@@ -70,6 +70,23 @@ def protected(s, baseline):
             s['free_gib']>=105 and s['swap_mib']<=baseline['swap_mib']+64)
 
 
+def signal_owned_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Darwin can report EPERM for a group whose final member just exited.
+        # Ignore it only after proving that no live member remains; query failures
+        # and genuinely live inaccessible processes remain cleanup errors.
+        rows=subprocess.check_output(['ps','-axo','pgid=,stat='],text=True,timeout=2)
+        if any(len(v:=line.split())>=2 and v[0]==str(pgid) and not v[1].startswith('Z')
+               for line in rows.splitlines()):
+            raise
+        return False
+
+
 def validate_request(raw):
     if len(raw)>32768: raise ValueError('request_size')
     d=json.loads(raw)
@@ -135,13 +152,12 @@ class Runtime:
     def stop_child_locked(self):
         pgid=self.child_pgid
         if pgid:
-            with contextlib.suppress(ProcessLookupError):os.killpg(pgid,signal.SIGTERM)
+            signal_owned_group(pgid,signal.SIGTERM)
             deadline=time.monotonic()+3
             while time.monotonic()<deadline:
-                try:os.killpg(pgid,0)
-                except ProcessLookupError:break
+                if not signal_owned_group(pgid,0):break
                 time.sleep(.05)
-            with contextlib.suppress(ProcessLookupError):os.killpg(pgid,signal.SIGKILL)
+            signal_owned_group(pgid,signal.SIGKILL)
         if self.child:
             with contextlib.suppress(subprocess.TimeoutExpired):self.child.wait(timeout=2)
         self.child=None;self.child_pgid=None
