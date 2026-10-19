@@ -334,19 +334,21 @@ class InventoryAuditTransactionContractTest {
         var second = new java.util.concurrent.CompletableFuture<Map<String, Object>>();
         try {
             new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                Integer holderPid = jdbc.queryForObject("select pg_backend_pid()", Integer.class);
                 em.find(MaterialBatch.class, stock.getId(), jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
                 executor.submit(() -> submitOnThread(first, task.getId(), batchId, "concurrent-001"));
                 executor.submit(() -> submitOnThread(second, task.getId(), batchId, "concurrent-002"));
                 long deadline = System.nanoTime() + java.time.Duration.ofSeconds(20).toNanos();
                 int waiting = 0;
                 while (System.nanoTime() < deadline && waiting < 2) {
+                    jdbc.execute("select pg_stat_clear_snapshot()");
                     waiting = jdbc.queryForObject("""
-                            select count(*) from pg_stat_activity
-                            where datname = current_database()
-                              and wait_event_type = 'Lock'
-                              and query ilike '%material_batches%'
-                              and pid <> pg_backend_pid()
-                            """, Integer.class);
+                            select count(*) from pg_stat_activity a
+                            where a.datname = current_database()
+                              and a.wait_event_type = 'Lock'
+                              and a.pid <> pg_backend_pid()
+                              and ? = any(pg_blocking_pids(a.pid))
+                            """, Integer.class, holderPid);
                     if (waiting < 2) {
                         try { Thread.sleep(25); } catch (InterruptedException interrupted) {
                             Thread.currentThread().interrupt();
@@ -354,7 +356,10 @@ class InventoryAuditTransactionContractTest {
                         }
                     }
                 }
-                assertThat(waiting).as("both submit transactions must wait on material_batches").isGreaterThanOrEqualTo(2);
+                assertThat(waiting)
+                        .withFailMessage("expected two material_batches waiters, got %s; first=%s second=%s",
+                                waiting, futureDescription(first), futureDescription(second))
+                        .isGreaterThanOrEqualTo(2);
             });
 
             Map<String, Object> firstResult = awaitOutcome(first);
@@ -784,6 +789,15 @@ class InventoryAuditTransactionContractTest {
             Throwable cause = failure.getCause();
             return cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null
                     ? cause.getCause() : cause;
+        }
+    }
+
+    private String futureDescription(java.util.concurrent.CompletableFuture<?> future) {
+        if (!future.isDone()) return "RUNNING";
+        try {
+            return "SUCCESS:" + future.getNow(null);
+        } catch (java.util.concurrent.CompletionException failure) {
+            return "FAILED:" + failure.getCause();
         }
     }
 
