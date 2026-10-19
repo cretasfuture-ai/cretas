@@ -1,3 +1,4 @@
+# RETIRED: Canada macOS reaper. Keep this workflow disabled_manually; no Linux replacement is enabled.
 name: Reap orphan test envs
 
 # 收割自建 runner 上的【孤儿测试环境后端】。
