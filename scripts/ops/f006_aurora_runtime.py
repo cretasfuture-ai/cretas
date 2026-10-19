@@ -24,6 +24,10 @@ MODEL = 'qwen3.8:27b'
 SYSTEM = ('你是白垩纪食品工厂助手。仅回答食品安全、生产和质量管理的通用咨询。'
           '用中文给出简洁实用的建议，不超过300字。不能声称读取了工厂实时数据，'
           '不能代用户执行业务操作。具体库存、订单或金额应引导使用系统查询。')
+LOCAL_GUIDANCE = ('补充要求：仅回答与问题有关的要点，最多4条，正文不超过200个字符（包括标点）。'
+    '温控或冷链异常应先隔离受影响产品，由质检依据时间温度记录和SOP评估，不能仅凭外观、气味或口感判断安全。'
+    '日期模糊须先隔离追溯，核实前不得擅改日期。生熟共台应优先改为物理分区；分时操作须先熟后生并彻底清洗消毒。')
+EFFECTIVE_SYSTEM = SYSTEM + '\n' + LOCAL_GUIDANCE
 HOST = '127.0.0.1'
 MODEL_PORT = 11437
 GATEWAY_PORT = 11438
@@ -104,6 +108,7 @@ def validate_request(raw):
             or opts['temperature']!=0.4 or opts['num_predict']!=(768 if d['think'] else 384)):
         raise ValueError('request_options')
     # The caller cannot choose model, context, GPU budget, cloud or persistence.
+    d['messages'][0]['content']=EFFECTIVE_SYSTEM
     d['keep_alive']=0
     d['options'].update(num_ctx=10240,num_thread=4)
     return d
