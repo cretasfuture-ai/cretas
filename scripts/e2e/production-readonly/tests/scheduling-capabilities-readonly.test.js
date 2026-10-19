@@ -9,8 +9,10 @@ const payload = { success: true, data: { contractVersion: 'scheduling-capabiliti
 
 test('capability acceptance requires the actual matching contract and mounted UI state', () => {
   assert.equal(assessCapability('aiGeneration', payload, ui).result, 'PASS');
-  for (const body of [null, { success: false, data: payload.data }, { success: true, data: {} }]) {
+  assert.deepEqual(assessCapability('aiGeneration', null, ui), { result: 'UNVERIFIED', rootCauseClass: 'tool' });
+  for (const body of [{ success: false, data: payload.data }, { success: true, data: {} }]) {
     assert.equal(assessCapability('aiGeneration', body, ui).result, 'PARTIAL_DEFECT');
+    assert.equal(assessCapability('aiGeneration', body, ui).rootCauseClass, 'backend');
   }
   for (const field of Object.keys(ui)) {
     assert.equal(assessCapability('aiGeneration', payload, { ...ui, [field]: false }).result, 'PARTIAL_DEFECT');
