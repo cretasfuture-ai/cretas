@@ -3,11 +3,18 @@ package com.cretas.aims.service.production;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
-import lombok.RequiredArgsConstructor;
+import com.cretas.aims.service.factory.WarehouseResolver;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,8 +23,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * 生产仓「报工占用 → 释放」的<b>唯一口径</b>。
@@ -58,12 +67,27 @@ import java.util.Set;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class WorkshopReportReservationService {
 
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductionBatchRepository productionBatchRepository;
     private final ProductionReportRepository productionReportRepository;
+    private final WarehouseResolver warehouseResolver;
+    private final EntityManager entityManager;
+
+    @Autowired
+    public WorkshopReportReservationService(MaterialBatchRepository materialBatchRepository,
+                                            ProductionBatchRepository productionBatchRepository,
+                                            ProductionReportRepository productionReportRepository,
+                                            WarehouseResolver warehouseResolver,
+                                            @Qualifier("primaryEntityManagerFactory")
+                                            EntityManager entityManager) {
+        this.materialBatchRepository = materialBatchRepository;
+        this.productionBatchRepository = productionBatchRepository;
+        this.productionReportRepository = productionReportRepository;
+        this.warehouseResolver = Objects.requireNonNull(warehouseResolver, "warehouseResolver");
+        this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
+    }
 
     /**
      * 🔑 <b>唯一口径</b>: 一份报工在各原料批次上占用多少。
@@ -143,19 +167,31 @@ public class WorkshopReportReservationService {
      */
     @Transactional
     public BigDecimal reserveForReport(String factoryId, ProductionReport report) {
-        BigDecimal total = BigDecimal.ZERO;
-        for (Map.Entry<String, BigDecimal> entry : reservationOf(report).entrySet()) {
+        Map<String, BigDecimal> requested = strictReservationOf(report);
+        if (requested.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+
+        String workshopWarehouseId = warehouseResolver.resolveWorkshopId(factoryId);
+        Map<String, MaterialBatch> locked = new TreeMap<>();
+        // Lock and validate every requested row before mutating or saving any row.
+        for (Map.Entry<String, BigDecimal> entry : new TreeMap<>(requested).entrySet()) {
             Optional<MaterialBatch> found =
-                    materialBatchRepository.findByIdAndFactoryIdForUpdate(entry.getKey(), factoryId);
+                    materialBatchRepository.findByIdAndFactoryId(entry.getKey(), factoryId);
             if (found.isEmpty()) {
-                // 引用了一个本厂不存在的批次 = 悬空引用。与同一份 jsonb 的既有消费方
-                // (YieldReportServiceImpl#allRefsUsedUp「找不到批次视为忽略」) 同口径跳过,
-                // ⛔ 但要留痕 —— 静默跳过会让「没占上」和「不用占」长得一样。
-                log.warn("报工领料引用了不存在的原料批次, 跳过生产仓占用: factoryId={}, reportId={}, batchId={}",
-                        factoryId, report == null ? null : report.getId(), entry.getKey());
-                continue;
+                throw reservationError(409,
+                        "报工引用的原料批次不存在或不属于当前工厂: " + entry.getKey(),
+                        "WORKSHOP_RESERVATION_BATCH_NOT_FOUND_OR_FOREIGN");
             }
             MaterialBatch batch = found.get();
+            entityManager.refresh(batch, LockModeType.PESSIMISTIC_WRITE);
+            validateLockedBatch(factoryId, workshopWarehouseId, entry.getKey(), entry.getValue(), batch);
+            locked.put(entry.getKey(), batch);
+        }
+
+        BigDecimal total = BigDecimal.ZERO;
+        for (Map.Entry<String, BigDecimal> entry : new TreeMap<>(requested).entrySet()) {
+            MaterialBatch batch = locked.get(entry.getKey());
             BigDecimal before = nz(batch.getReservedQuantity());
             batch.setReservedQuantity(before.add(entry.getValue()));
             // 🔒 增加 reserved 之后立刻断言 used+reserved≤receipt (与既有预留写入点同一守卫)。
@@ -167,6 +203,94 @@ public class WorkshopReportReservationService {
                     entry.getValue(), batch.getReservedQuantity(), batch.getCurrentQuantity());
         }
         return total;
+    }
+
+    /** Strict input shape for the write path; release paths intentionally keep reservationOf semantics. */
+    private static Map<String, BigDecimal> strictReservationOf(ProductionReport report) {
+        Map<String, BigDecimal> byBatch = new TreeMap<>();
+        if (report == null || report.getMaterialBatchRefs() == null) {
+            return byBatch;
+        }
+        for (Map<String, Object> ref : report.getMaterialBatchRefs()) {
+            if (ref == null) {
+                throw reservationError(400, "报工领料引用不能为空", "WORKSHOP_RESERVATION_REFERENCE_INVALID");
+            }
+            Object rawId = ref.get("materialBatchId");
+            String batchId = rawId == null ? null : rawId.toString().trim();
+            BigDecimal quantity = toQuantity(ref.get("quantity"));
+            if (batchId == null || batchId.isEmpty() || quantity == null || quantity.signum() <= 0) {
+                throw reservationError(400,
+                        "报工领料引用必须包含有效批次和大于 0 的数量",
+                        "WORKSHOP_RESERVATION_REFERENCE_INVALID");
+            }
+            byBatch.merge(batchId, quantity, BigDecimal::add);
+        }
+        return byBatch;
+    }
+
+    private void validateLockedBatch(String factoryId, String workshopWarehouseId,
+                                     String requestedBatchId, BigDecimal quantity,
+                                     MaterialBatch batch) {
+        if (!Objects.equals(requestedBatchId, batch.getId())
+                || !Objects.equals(factoryId, batch.getFactoryId())) {
+            throw reservationError(409,
+                    "锁定的原料批次身份或工厂不一致: " + requestedBatchId,
+                    "WORKSHOP_RESERVATION_BATCH_IDENTITY_MISMATCH");
+        }
+        if (batch.getStatus() != MaterialBatchStatus.AVAILABLE) {
+            throw reservationError(409,
+                    "原料批次当前状态不可用于报工占用: " + requestedBatchId,
+                    "WORKSHOP_RESERVATION_BATCH_NOT_AVAILABLE");
+        }
+        if (batch.getOwnership() != null && batch.getOwnership() != InventoryOwnership.COMPANY_OWNED) {
+            throw reservationError(409,
+                    "客供原料批次不能用于报工占用: " + requestedBatchId,
+                    "WORKSHOP_RESERVATION_CUSTOMER_OWNED_FORBIDDEN");
+        }
+        if ("PRODUCTION_BATCH".equalsIgnoreCase(batch.getSourceDocType())) {
+            throw reservationError(409,
+                    "在制半成品批次不能作为报工原料占用: " + requestedBatchId,
+                    "WORKSHOP_RESERVATION_WIP_FORBIDDEN");
+        }
+        if (!Objects.equals(workshopWarehouseId, batch.getWarehouseId())) {
+            throw reservationError(409,
+                    "报工原料批次不在当前工厂生产仓: " + requestedBatchId,
+                    "WORKSHOP_RESERVATION_WAREHOUSE_MISMATCH");
+        }
+        BigDecimal available = nz(batch.getCurrentQuantity());
+        if (available.compareTo(quantity) < 0) {
+            throw reservationError(409,
+                    String.format("原料批次可用量不足: %s, 可用 %s, 请求 %s",
+                            requestedBatchId, available, quantity),
+                    "BATCH_OVER_CONSUMED");
+        }
+    }
+
+    private static BusinessException reservationError(int code, String message, String errorCode) {
+        return new BusinessException(code, message)
+                .withCode(errorCode)
+                .withHint(reservationHint(errorCode))
+                .withSeverity("BLOCKING");
+    }
+
+    private static String reservationHint(String errorCode) {
+        return switch (errorCode) {
+            case "WORKSHOP_RESERVATION_BATCH_NOT_FOUND_OR_FOREIGN",
+                 "WORKSHOP_RESERVATION_BATCH_IDENTITY_MISMATCH",
+                 "WORKSHOP_RESERVATION_BATCH_NOT_AVAILABLE" ->
+                    "请重新选择当前工厂允许的可用生产仓原料批次";
+            case "WORKSHOP_RESERVATION_WAREHOUSE_MISMATCH" ->
+                    "请先正规领料入生产仓后再提交报工";
+            case "WORKSHOP_RESERVATION_CUSTOMER_OWNED_FORBIDDEN" ->
+                    "客供原料请走客供领料业务";
+            case "WORKSHOP_RESERVATION_WIP_FORBIDDEN" ->
+                    "在制半成品请走半成品流转业务";
+            case "BATCH_OVER_CONSUMED" ->
+                    "库存不足，请减少领料数量或更换批次";
+            case "WORKSHOP_RESERVATION_REFERENCE_INVALID" ->
+                    "请核对当前任务的批次引用、正数量和单位";
+            default -> "请核对当前工厂的生产仓领料信息";
+        };
     }
 
     // ─────────────────────────────────────────────────────────────

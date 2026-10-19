@@ -36,8 +36,10 @@ export interface WorkProcessTask {
   productTypeId: string;
   processOrder: number;             // 第几道 (升序)
   status: WorkProcessTaskStatus;
-  plannedQuantity: number | null;   // BigDecimal → number; 计划数量 (Rule 1 max + Rule 2)
+  plannedQuantity: number | null;   // BigDecimal → number; 任务产出计划，不作为投入上限
   plannedUnit: string | null;       // 计划单位 (非 unit)
+  /** Optional explicit input plan. plannedQuantity is the task output plan. */
+  plannedInputQuantity?: number | null;
   estimatedMinutes?: number | null;
   actualQuantity?: number | null;   // 累计产出 (Phase A 双写)
   assignedTo?: number | null;
@@ -70,6 +72,16 @@ export interface WorkProcessTask {
   completedAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface TaskMaterialBatchOption {
+  id: string;
+  batchNumber: string;
+  materialTypeId: string;
+  materialName: string | null;
+  currentQuantity: number;
+  quantityUnit: string;
+  warehouseId: string;
 }
 
 // ============ BatchYieldDTO (mirror backend dto/yield/BatchYieldDTO.java:16-28) ============
@@ -315,6 +327,10 @@ export interface YieldLimitsDTO {
   wipAvailableUnit?: string | null;   // 源 WIP 余额单位 (=上道 outputUnit); banner/:max 用它而非本道 unit; null=无源 WIP
   sourceWipNo?: string | null;        // 上道唯一可领 WIP 工序批次号 (报工 sourceWipNo 回传); null=首道/歧义
   message: string;                    // human-readable summary
+  /** Authoritative units frozen for this task; never infer input from plannedUnit. */
+  workProcessTaskId?: number | null;
+  inputUnit?: string | null;
+  outputUnit?: string | null;
 }
 
 // ============ Map 响应结果类型 (后端返 Map<String,Object>, 见 YieldReportServiceImpl.java) ============
@@ -426,6 +442,14 @@ class YieldReportApi {
     return apiClient.get<ApiResponse<WorkProcessTask[]>>(
       `/api/mobile/${fid}/production/batches/${batchId}/work-process-tasks`,
       { params },
+    );
+  }
+
+  /** Task-bound AVAILABLE material candidates; never falls back to the inventory list. */
+  async listTaskMaterialOptions(batchId: number, taskId: number, factoryId?: string): Promise<ApiResponse<TaskMaterialBatchOption[]>> {
+    const fid = requireFactoryId(factoryId);
+    return apiClient.get<ApiResponse<TaskMaterialBatchOption[]>>(
+      `/api/mobile/${fid}/production/batches/${batchId}/work-process-tasks/${taskId}/material-options`,
     );
   }
 

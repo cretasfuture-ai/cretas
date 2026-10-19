@@ -111,6 +111,7 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
 
         schedule.setAssignedWorkers((int) assignmentRepository.countByScheduleId(request.getScheduleId()));
         scheduleRepository.save(schedule);
+        refreshPlanHeadcount(factoryId, schedule);
 
         return enrichAssignmentDTOs(assignments);
     }
@@ -127,6 +128,7 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
 
         schedule.setAssignedWorkers((int) assignmentRepository.countByScheduleId(scheduleId));
         scheduleRepository.save(schedule);
+        refreshPlanHeadcount(factoryId, schedule);
     }
 
     @Override
@@ -161,6 +163,18 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
         completeLinUCBFeedback(assignment, performanceScore);
 
         return enrichSingleAssignmentDTO(assignment);
+    }
+
+    /** Persist the distinct assigned-worker summary for the affected plan. */
+    private void refreshPlanHeadcount(String factoryId, LineSchedule affectedSchedule) {
+        SchedulingPlan plan = affectedSchedule.getPlan();
+        if (plan == null || !Objects.equals(factoryId, plan.getFactoryId()) || plan.getId() == null) {
+            return;
+        }
+
+        plan.setTotalWorkers(SchedulingHeadcountHelper.countDistinctAssignedWorkers(
+                factoryId, plan.getId(), scheduleRepository, assignmentRepository));
+        planRepository.save(plan);
     }
 
     @Override

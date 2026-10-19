@@ -19,6 +19,6 @@ public class MaterialBatchRef {
     private String materialBatchId;
     /** 本次从该批次领用量 */
     private BigDecimal quantity;
-    /** 可选, 与 inputUnit 一致 */
+    /** Picker requests use the task unit; persisted refs use the stock row's native unit after validation. */
     private String unit;
 }

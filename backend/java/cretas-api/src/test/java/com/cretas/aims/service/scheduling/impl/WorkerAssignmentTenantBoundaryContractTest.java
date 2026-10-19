@@ -17,7 +17,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
@@ -57,12 +59,54 @@ class WorkerAssignmentTenantBoundaryContractTest {
         when(userRepository.findById(11L)).thenReturn(Optional.of(worker));
         when(userRepository.findAllById(any())).thenReturn(List.of(worker));
         when(lineRepository.findAllById(any())).thenReturn(List.of());
+        WorkerAssignment persisted = assignment("A1", "S1", 11L);
+        persisted.setSchedule(schedule);
+        when(scheduleRepository.findByPlanId("P1")).thenReturn(List.of(schedule));
+        when(assignmentRepository.findByScheduleIdIn(Set.of("S1"))).thenReturn(List.of(persisted));
+        when(planRepository.save(any(SchedulingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         service.assignWorkers(FACTORY, request);
 
         verify(linUCBService).recommendWorkers(eq(FACTORY), any(), eq(List.of(11L)));
         verify(assignmentRepository).saveAll(anyList());
         verify(scheduleRepository).save(schedule);
+        verify(planRepository).save(argThat(plan -> plan.getTotalWorkers() == 1));
+    }
+
+    @Test
+    void repeatedAssignmentIsIdempotentAndDoesNotCreateAnotherWorkerAssignment() {
+        LineSchedule schedule = schedule("S1", FACTORY);
+        User worker = worker(11L, FACTORY, true);
+        AssignWorkerRequest request = new AssignWorkerRequest();
+        request.setScheduleId("S1");
+        request.setWorkerIds(List.of(11L));
+
+        when(scheduleRepository.findById("S1")).thenReturn(Optional.of(schedule));
+        when(userRepository.findByIdAndFactoryId(11L, FACTORY)).thenReturn(Optional.of(worker));
+        when(featureEngineeringService.extractTaskFeatures(eq(FACTORY), anyMap())).thenReturn(new double[0]);
+        when(linUCBService.recommendWorkers(eq(FACTORY), any(), eq(List.of(11L)))).thenReturn(List.of());
+        when(assignmentRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(assignmentRepository.countByScheduleId("S1")).thenReturn(1L);
+        WorkerAssignment persisted = assignment("A1", "S1", 11L);
+        persisted.setSchedule(schedule);
+        when(assignmentRepository.findByScheduleIdAndUserId("S1", 11L))
+                .thenReturn(Optional.empty(), Optional.of(persisted));
+        when(userRepository.findById(11L)).thenReturn(Optional.of(worker));
+        when(userRepository.findAllById(any())).thenReturn(List.of(worker));
+        when(lineRepository.findAllById(any())).thenReturn(List.of());
+        when(scheduleRepository.findByPlanId("P1")).thenReturn(List.of(schedule));
+        when(assignmentRepository.findByScheduleIdIn(Set.of("S1"))).thenReturn(List.of(persisted));
+        when(planRepository.save(any(SchedulingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.assignWorkers(FACTORY, request);
+        service.assignWorkers(FACTORY, request);
+
+        org.mockito.ArgumentCaptor<List<WorkerAssignment>> saved =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(assignmentRepository, times(2)).saveAll(saved.capture());
+        assertThat(saved.getAllValues().get(0)).hasSize(1);
+        assertThat(saved.getAllValues().get(1)).isEmpty();
+        verify(planRepository, times(2)).save(argThat(plan -> plan.getTotalWorkers() == 1));
     }
 
     @Test
@@ -96,12 +140,16 @@ class WorkerAssignmentTenantBoundaryContractTest {
         when(scheduleRepository.findById("S1")).thenReturn(Optional.of(schedule));
         when(userRepository.findByIdAndFactoryId(11L, FACTORY)).thenReturn(Optional.of(worker(11L, FACTORY, true)));
         when(assignmentRepository.countByScheduleId("S1")).thenReturn(0L);
+        when(scheduleRepository.findByPlanId("P1")).thenReturn(List.of(schedule));
+        when(assignmentRepository.findByScheduleIdIn(Set.of("S1"))).thenReturn(List.of());
+        when(planRepository.save(any(SchedulingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(assignmentRepository.save(assignment)).thenReturn(assignment);
         when(userRepository.findById(11L)).thenReturn(Optional.empty());
 
         service.removeWorkerAssignment(FACTORY, "A1");
         verify(assignmentRepository).delete(assignment);
         verify(scheduleRepository).save(schedule);
+        verify(planRepository).save(argThat(plan -> plan.getTotalWorkers() == 0));
 
         service.workerCheckIn(FACTORY, "A1");
         service.workerCheckOut(FACTORY, "A1", 90);

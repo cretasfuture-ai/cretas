@@ -22,10 +22,12 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
+import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
 import com.cretas.aims.service.yield.impl.YieldReportServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -64,6 +69,7 @@ class WorkshopReportReserveOnSubmitContractTest {
     private static final Long WORKER_ID = 1310L;
     private static final Long TASK_ID = 1786L;
     private static final String MATERIAL_BATCH_ID = "0ed1830f-b5e0-4305-99f2-41f7e7a7d61a";
+    private static final String WORKSHOP_WAREHOUSE_ID = "7f3e6f4a-2d1a-4f8e-b2c4-6a9d0e1f3b5c";
     private static final BigDecimal RECEIPT = new BigDecimal("20");
     private static final BigDecimal REF_QTY = new BigDecimal("20");
 
@@ -72,6 +78,7 @@ class WorkshopReportReserveOnSubmitContractTest {
     private WorkProcessRepository processRepo;
     private MaterialBatchRepository materialBatchRepository;
     private YieldReportServiceImpl svc;
+    private EntityManager entityManager;
     private MaterialBatch batch;
 
     @BeforeEach
@@ -80,6 +87,7 @@ class WorkshopReportReserveOnSubmitContractTest {
         taskRepo = mock(WorkProcessTaskRepository.class);
         processRepo = mock(WorkProcessRepository.class);
         materialBatchRepository = mock(MaterialBatchRepository.class);
+        entityManager = mock(EntityManager.class);
         SemiFinishedInventoryRepository wipRepo = mock(SemiFinishedInventoryRepository.class);
         ProcessMaterialRecipeRepository recipeRepo = mock(ProcessMaterialRecipeRepository.class);
         ProductWorkProcessAssigneeRepository pwpAssigneeRepository =
@@ -112,6 +120,8 @@ class WorkshopReportReserveOnSubmitContractTest {
         // ⚠️ 与生产同一个 bean: 预留服务和被测 service 共用 materialBatchRepository。
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate(MATERIAL_BATCH_ID, FACTORY))
                 .thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryId(MATERIAL_BATCH_ID, FACTORY))
+                .thenReturn(Optional.of(batch));
         when(materialBatchRepository.findById(MATERIAL_BATCH_ID)).thenReturn(Optional.of(batch));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(i -> i.getArgument(0));
 
@@ -136,11 +146,15 @@ class WorkshopReportReserveOnSubmitContractTest {
     }
 
     private void wireReservation(boolean wired) {
+        WarehouseResolver warehouseResolver = mock(WarehouseResolver.class);
+        when(warehouseResolver.resolveWorkshopId(FACTORY)).thenReturn(WORKSHOP_WAREHOUSE_ID);
         ReflectionTestUtils.setField(svc, "workshopReservationService", wired
                 ? new WorkshopReportReservationService(
                         materialBatchRepository,
                         mock(ProductionBatchRepository.class),
-                        mock(ProductionReportRepository.class))
+                        mock(ProductionReportRepository.class),
+                        warehouseResolver,
+                        entityManager)
                 : null);
     }
 
@@ -174,15 +188,14 @@ class WorkshopReportReserveOnSubmitContractTest {
     }
 
     @Test
-    @DisplayName("⛔ 变异对照: 摘掉占用接线, 同一次提交后 reserved 仍是 0 —— 这正是 prod 今天的样子")
-    void withoutTheWiringSubmitLeavesTheBatchUnreserved() {
+    @DisplayName("缺少必需占用接线时拒绝报工，报告和库存均无写入")
+    void withoutTheWiringSubmitIsRejectedBeforeReportSave() {
         wireReservation(false);   // ← 变异: 唯一的占用出口被摘掉
 
-        Object result = svc.submitReport(FACTORY, PRODUCTION_BATCH_ID, WORKER_ID, inputReportOf(REF_QTY));
-
-        // 必发生的那个读数: 报工本身确实提交成功了 ⇒ 方法跑完了,
-        // 下面 reserved==0 才说明「是占用没做」, 而不是「根本没跑到」。
-        assertThat(result).as("报工提交成功 (必发生)").isNotNull();
+        assertThatThrownBy(() -> svc.submitReport(FACTORY, PRODUCTION_BATCH_ID, WORKER_ID, inputReportOf(REF_QTY)))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("原料占用服务暂不可用");
+        verify(reportRepo, never()).save(any());
         assertThat(batch.getReservedQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(batch.getCurrentQuantity()).isEqualByComparingTo(RECEIPT);
     }
@@ -209,7 +222,7 @@ class WorkshopReportReserveOnSubmitContractTest {
         b.setUsedQuantity(BigDecimal.ZERO);
         b.setReservedQuantity(BigDecimal.ZERO);
         b.setQuantityUnit("kg");
-        b.setWarehouseId("WH-WKS");
+        b.setWarehouseId(WORKSHOP_WAREHOUSE_ID);
         b.setStatus(MaterialBatchStatus.AVAILABLE);
         return b;
     }

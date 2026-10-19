@@ -360,7 +360,7 @@ function stubApis(phase: 'AWAITING_INPUT' | 'IN_PRODUCTION'): void {
     } as never,
   });
   mockedYieldApi.getYield.mockResolvedValue({ success: true, code: 200, message: 'ok', data: yieldData });
-  mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: emptyLimits });
+  mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { ...emptyLimits, workProcessTaskId: task.id, inputUnit: 'kg', outputUnit: task.outputUnit ?? 'kg' } });
   mockedYieldApi.getOutputOptions.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { items: [] } });
 }
 
@@ -586,7 +586,7 @@ describe('P7a 出口提示不许误报 —— 预填的投入量不算「工人�
       } as never,
     });
     mockedYieldApi.getYield.mockResolvedValue({ success: true, code: 200, message: 'ok', data: yieldData });
-    mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: emptyLimits });
+    mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { ...emptyLimits, workProcessTaskId: step2.id, inputUnit: 'kg', outputUnit: '盒' } });
     mockedYieldApi.getOutputOptions.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { items: [] } });
   }
 

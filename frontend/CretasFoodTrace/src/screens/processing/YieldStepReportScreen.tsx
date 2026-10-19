@@ -628,7 +628,6 @@ const YieldStepReportScreen: React.FC = () => {
   const [productTypeId, setProductTypeId] = useState<string | undefined>(undefined);
   const [productionPlanId, setProductionPlanId] = useState<string | null>(null);
   const [batchNumber, setBatchNumber] = useState<string>(route.params.batchNumber ?? '');
-  const [batchPlannedQuantity, setBatchPlannedQuantity] = useState<number | null>(null);
   const [batchStatus, setBatchStatus] = useState<string>('');  // P1-1: 完工幂等判断
   const [tasks, setTasks] = useState<WorkProcessTask[]>([]);
   const [yieldData, setYieldData] = useState<BatchYieldDTO | null>(null);
@@ -638,6 +637,14 @@ const YieldStepReportScreen: React.FC = () => {
   const [inputQty, setInputQty] = useState('');
   // A4: 投入超收预检
   const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
+  // Task-scoped authoritative units from getYieldLimits. plannedUnit is not an input fallback.
+  const [taskUnitAuthority, setTaskUnitAuthority] = useState<{
+    taskId: number;
+    inputUnit: string;
+    outputUnit: string;
+  } | null>(null);
+  const [taskUnitError, setTaskUnitError] = useState<string | null>(null);
+  const [taskUnitRetry, setTaskUnitRetry] = useState(0);
   // A4: 工厂级超收容差【比率】(0.30 = 30%), 唯一来源是后端 YieldLimitsDTO.toleranceRate。
   // ⚠️ 与 yieldLimits 分开存: 投入量清空时 yieldLimits 会被置 null (它描述的是"这个投入量下的边界"),
   //    而容差本身与投入量无关, 不该跟着丢。
@@ -703,6 +710,8 @@ const YieldStepReportScreen: React.FC = () => {
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
+  const activeTaskIdRef = useRef<number | null>(null);
+  activeTaskIdRef.current = currentTask?.id ?? null;
 
   /**
    * 多产出: `getOutputOptions(batchId)` 返回的是**整个批次所有工序**的产出项 (Critical 返工修复,
@@ -784,8 +793,6 @@ const YieldStepReportScreen: React.FC = () => {
         // BOM 过滤: 存下 productTypeId 供 MaterialBatchPicker 防呆用
         if (batchRes.data.productTypeId) setProductTypeId(batchRes.data.productTypeId);
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
-        const plannedQty = Number(batchRes.data.targetQuantity);
-        setBatchPlannedQuantity(Number.isFinite(plannedQty) && plannedQty > 0 ? plannedQty : null);
         setBatchStatus(batchRes.data.status ?? '');  // P1-1: 完工幂等判断
         // SP3: 二次加工批次类型 (SEMI_FINISHED → 首道领半成品库存)
         setBatchSourceType(batchRes.data.batchSourceType);
@@ -911,22 +918,43 @@ const YieldStepReportScreen: React.FC = () => {
   // 就出现 (防呆 Rule 1 先显示边界), 而带 inputQuantity 的那次预检要等他先输入才发得出去。
   // ⛔ 拿不到就不显示上限 —— 不许回落到写死的倍数; 后端提交时仍会校验, 少一条提示不会放行超收。
   useEffect(() => {
-    if (!currentTask) return;
+    const taskId = currentTask?.id;
+    if (!taskId) {
+      setTaskUnitAuthority(null);
+      setTaskUnitError(null);
+      return;
+    }
+    // Clear immediately on task switch/retry so a late response cannot keep the old task's units.
+    setTaskUnitAuthority(null);
+    setTaskUnitError(null);
     let cancelled = false;
     (async () => {
       try {
-        const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id);
-        if (!cancelled && res.success && res.data?.toleranceRate != null) {
+        const res = await yieldReportApi.getYieldLimits(batchId, taskId);
+        if (cancelled || currentTask?.id !== taskId) return;
+        if (!res.success || !res.data?.inputUnit || !res.data.outputUnit
+            || (res.data.workProcessTaskId != null && res.data.workProcessTaskId !== taskId)) {
+          setTaskUnitAuthority(null);
+          setTaskUnitError('当前任务的投入/产出单位尚未确认，请重试');
+          return;
+        }
+        setTaskUnitAuthority({ taskId, inputUnit: res.data.inputUnit, outputUnit: res.data.outputUnit });
+        setTaskUnitError(null);
+        setYieldLimits(res.data);
+        if (res.data.toleranceRate != null) {
           setToleranceRate(res.data.toleranceRate);
         }
       } catch {
-        // 静默忽略: 容差取不到只是少一条边界提示, 不阻断报工
+        if (!cancelled && currentTask?.id === taskId) {
+          setTaskUnitAuthority(null);
+          setTaskUnitError('无法取得当前任务单位，请重试后再提交');
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [currentTask?.id, batchId]);
+  }, [currentTask?.id, batchId, taskUnitRetry]);
 
   // A4: 投入量变化后 debounce 500ms 拉超收上限 (仅投入阶段需要)
   useEffect(() => {
@@ -941,12 +969,22 @@ const YieldStepReportScreen: React.FC = () => {
       try {
         const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, parsed);
         // P0-3: 保留 limits 即使 maxAllowed==null (诚实显示"未配置标准出成上限"灰条, 不静默空白)
+        if (activeTaskIdRef.current !== currentTask.id) return;
         if (res.success) {
           setYieldLimits(res.data);
+          if (res.data.inputUnit && res.data.outputUnit
+              && (res.data.workProcessTaskId == null || res.data.workProcessTaskId === currentTask.id)) {
+            setTaskUnitAuthority({ taskId: currentTask.id, inputUnit: res.data.inputUnit, outputUnit: res.data.outputUnit });
+            setTaskUnitError(null);
+          } else {
+            setTaskUnitError('当前任务单位响应不完整，请重试');
+          }
           if (res.data?.toleranceRate != null) setToleranceRate(res.data.toleranceRate);
+        } else {
+          setTaskUnitError('投入上限校验失败，请重试后再提交');
         }
       } catch {
-        // 预检失败不阻断报工, 静默忽略
+        if (activeTaskIdRef.current === currentTask.id) setTaskUnitError('投入上限校验失败，请重试后再提交');
       }
     }, 500);
     return () => {
@@ -962,12 +1000,22 @@ const YieldStepReportScreen: React.FC = () => {
     (async () => {
       try {
         const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, reportedInput);
+        if (activeTaskIdRef.current !== currentTask.id) return;
         if (res.success) {
           setYieldLimits(res.data);
+          if (!res.data.inputUnit || !res.data.outputUnit
+              || (res.data.workProcessTaskId != null && res.data.workProcessTaskId !== currentTask.id)) {
+            setTaskUnitError('当前任务单位响应不完整，请重试');
+          } else {
+            setTaskUnitAuthority({ taskId: currentTask.id, inputUnit: res.data.inputUnit, outputUnit: res.data.outputUnit });
+            setTaskUnitError(null);
+          }
           if (res.data?.toleranceRate != null) setToleranceRate(res.data.toleranceRate);
+        } else {
+          setTaskUnitError('产出上限校验失败，请重试后再提交');
         }
       } catch {
-        // 静默忽略
+        if (activeTaskIdRef.current === currentTask.id) setTaskUnitError('产出上限校验失败，请重试后再提交');
       }
     })();
   }, [currentTask, currentPhase, currentStepYield, batchId]);
@@ -994,10 +1042,27 @@ const YieldStepReportScreen: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSecondaryProcessing, currentStepIndex, currentPhase]);
 
-  const unit = currentTask?.plannedUnit ?? 'kg';
+  const activeTaskUnitAuthority = taskUnitAuthority?.taskId === currentTask?.id ? taskUnitAuthority : null;
+  const unit = activeTaskUnitAuthority?.inputUnit ?? '';
   // P0-2: 本道产出单位 — 工序配了 outputUnit (如末道 kg→份/盒) 则用它, 否则沿用投入单位
-  const outUnit = currentTask?.outputUnit ?? unit;
-  const planned = currentTask?.plannedQuantity ?? batchPlannedQuantity;
+  const outUnit = activeTaskUnitAuthority?.outputUnit ?? '';
+  const taskUnitsReady = currentTask != null
+    && taskUnitAuthority?.taskId === currentTask.id
+    && unit.length > 0
+    && outUnit.length > 0
+    && taskUnitError == null;
+  const retryTaskUnits = useCallback(() => setTaskUnitRetry((value) => value + 1), []);
+  const requireTaskUnits = useCallback(() => {
+    if (taskUnitsReady) return true;
+    appAlert('单位尚未确认', taskUnitError || '请先获取当前任务的投入/产出单位');
+    return false;
+  }, [taskUnitError, taskUnitsReady]);
+  // A finished batch target may be expressed in boxes while this task consumes kg.
+  // plannedQuantity/plannedUnit describe task output. Only an explicitly supplied
+  // plannedInputQuantity may constrain input; absent input planning stays unknown.
+  const plannedInput = currentTask?.plannedInputQuantity ?? null;
+  const plannedOutput = currentTask?.plannedQuantity ?? null;
+  const plannedOutputUnit = currentTask?.plannedUnit ?? outUnit;
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex >= totalSteps - 1;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
@@ -1023,7 +1088,7 @@ const YieldStepReportScreen: React.FC = () => {
   // ⛔ 容差未知 (后端还没答/取不到) → plannedMax 为 null, 即"这一刻没有软上限",
   //    不是"上限是计划量本身", 也不是回落到某个写死的倍数。
   const plannedMax =
-    planned != null && toleranceRate != null ? planned * overReceiveMultiplier(toleranceRate) : null;
+    plannedInput != null && toleranceRate != null ? plannedInput * overReceiveMultiplier(toleranceRate) : null;
   const inputMax =
     effectiveWipAvailable != null
       ? plannedMax != null
@@ -1033,10 +1098,10 @@ const YieldStepReportScreen: React.FC = () => {
   const inputMaxHint =
     effectiveWipAvailable != null
       ? `可领上道半成品余额 ${effectiveWipAvailable} ${wipUnit} (本道最多领这么多)`
-      : planned != null
+      : plannedInput != null
         ? plannedMax != null && toleranceRate != null
-          ? `计划 ${planned} ${unit}, 可投上限约 ${formatQtyHint(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
-          : `计划 ${planned} ${unit} (超收上限按工厂配置的容差, 正在读取)`
+          ? `计划 ${plannedInput} ${unit}, 可投上限约 ${formatQtyHint(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
+          : `计划 ${plannedInput} ${unit} (超收上限按工厂配置的容差, 正在读取)`
         : null;
   const inputNumeric = parseFloat(inputQty);
   const inputOverLimit =
@@ -1251,6 +1316,7 @@ const YieldStepReportScreen: React.FC = () => {
   // ========================= 阶段 1: 提交投入 (reportKind=INPUT) =========================
   const handleSubmitInput = useCallback(async () => {
     if (!currentTask) return;
+    if (!requireTaskUnits()) return;
     if (submitBlockedNoWip) {
       appAlert('请选择领用来源', '请先选择本道要领用的半成品批次, 或在原料批次中填写本次实际领用');
       return;
@@ -1429,6 +1495,7 @@ const YieldStepReportScreen: React.FC = () => {
     //    所以**必须**严格比 true, 不能写 `if (forceDuplicate)`(那样每次点按钮都会被当成"确认重复")。
     const force = forceDuplicate === true;
     if (!currentTask) return;
+    if (!requireTaskUnits()) return;
     if (evidenceUploading) {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
@@ -1580,6 +1647,7 @@ const YieldStepReportScreen: React.FC = () => {
   // 同单未完结续报: markComplete 控制本次 OUTPUT 是否完工 (true=标记完工锁出成率; false=保存留单继续产出)。
   const doSubmitOutput = useCallback(async (markComplete: boolean) => {
     if (!currentTask) return;
+    if (!requireTaskUnits()) return;
     if (evidenceUploading) {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
@@ -1902,6 +1970,7 @@ const YieldStepReportScreen: React.FC = () => {
   // 领料报工: 使用 submitReport(reportKind=INPUT) 以支持 evidenceImages
   const handleSentinelMaterialSubmit = useCallback(async () => {
     if (!currentTask) return;
+    if (!requireTaskUnits()) return;
     if (materialBatchRefs.length === 0) {
       appAlert('请先选择领料批次', '领料报工需要指定领用的原料批次，请点击"选择批次"');
       return;
@@ -1963,6 +2032,7 @@ const YieldStepReportScreen: React.FC = () => {
   // 产出报工: 使用 submitReport(reportKind=OUTPUT)
   const handleSentinelOutputSubmit = useCallback(async () => {
     if (!currentTask) return;
+    if (!requireTaskUnits()) return;
     if (evidenceUploading) {
       appAlert('照片上传中', '请等照片上传完成再提交');
       return;
@@ -2163,8 +2233,8 @@ const YieldStepReportScreen: React.FC = () => {
             <Text style={styles.batchProcess}>
               {batchNumber}  ·  领料报工
             </Text>
-            {planned != null ? (
-              <Text style={styles.planned}>计划数量  {planned} {unit}</Text>
+            {plannedOutput != null ? (
+              <Text style={styles.planned}>计划数量  {plannedOutput} {plannedOutputUnit}</Text>
             ) : null}
           </NeoCard>
 
@@ -2182,23 +2252,25 @@ const YieldStepReportScreen: React.FC = () => {
             </NeoCard>
           ) : (
             <NeoCard variant="elevated" style={styles.card}>
-              <Text style={styles.phaseHint}>📦 请选择领料批次并记录领料量</Text>
-
-              {/* 防呆 Rule 1: 显示计划量边界 */}
-              {planned != null ? (
-                <View style={styles.limitsHint}>
-                  <Text style={styles.limitsHintText}>
-                    计划领料  {planned} {unit}
-                  </Text>
+              {taskUnitError ? (
+                <View style={styles.limitsHint} testID="yield-task-unit-error">
+                  <Text style={styles.limitsHintText}>{taskUnitError}</Text>
+                  <NeoButton variant="outline" size="small" onPress={retryTaskUnits} testID="yield-task-unit-retry">
+                    重试获取单位
+                  </NeoButton>
                 </View>
               ) : null}
+              <Text style={styles.phaseHint}>📦 请选择领料批次并记录领料量</Text>
 
               {/* 领料批次选择器 */}
               {renderMaterialAdvisoryCard()}
               <MaterialBatchPicker
                 unit={unit}
                 productTypeId={productTypeId}
-                singleBatchQty={planned != null ? String(planned) : ''}
+                taskId={currentTask?.id}
+                productionBatchId={batchId}
+                singleBatchQty={inputQty}
+                forceIndependentQuantity
                 value={materialBatchRefs}
                 onChange={setMaterialBatchRefs}
                 disabled={submitting}
@@ -2223,7 +2295,7 @@ const YieldStepReportScreen: React.FC = () => {
             variant="primary"
             size="large"
             onPress={alreadySubmitted ? returnOrRefreshAssignedTask : handleSentinelMaterialSubmit}
-            disabled={submitting || evidenceUploading || (!alreadySubmitted && materialBatchRefs.length === 0)}
+            disabled={submitting || evidenceUploading || !taskUnitsReady || (!alreadySubmitted && materialBatchRefs.length === 0)}
             loading={submitting}
             style={styles.fullBtn}
             testID="sentinel-mat-submit-btn"
@@ -2351,7 +2423,7 @@ const YieldStepReportScreen: React.FC = () => {
                     />
                     <TextInput
                       style={styles.bpUnitInput}
-                      placeholder={outUnit || 'kg'}
+                      placeholder={outUnit || '单位待确认'}
                       value={bp.unit}
                       onChangeText={(v) => updateByproduct(idx, 'unit', v)}
                       editable={!submitting}
@@ -2375,7 +2447,7 @@ const YieldStepReportScreen: React.FC = () => {
                 <Text style={styles.sectionTitle}>留样数量 (可选)</Text>
                 <TextInput
                   style={[styles.segNumInput, { width: '100%', textAlign: 'left', paddingLeft: 12 }]}
-                  placeholder={`留样量 (${outUnit || 'kg'})`}
+                  placeholder={`留样量 (${outUnit || '单位待确认'})`}
                   keyboardType="numeric"
                   value={sampleRetainQty}
                   onChangeText={setSampleRetainQty}
@@ -2393,7 +2465,7 @@ const YieldStepReportScreen: React.FC = () => {
             variant="primary"
             size="large"
             onPress={alreadyCompleted ? returnOrRefreshAssignedTask : handleSentinelOutputSubmit}
-            disabled={submitting || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || evidenceUploading}
             loading={submitting}
             style={styles.fullBtn}
             testID="sentinel-output-submit-btn"
@@ -2574,8 +2646,8 @@ const YieldStepReportScreen: React.FC = () => {
         <Text style={styles.batchProcess}>
           {batchNumber}  ·  {currentTask?.processName ?? `第 ${currentTask?.processOrder} 道`}
         </Text>
-        {planned != null ? (
-          <Text style={styles.planned}>计划数量  {planned} {unit}</Text>
+        {plannedOutput != null ? (
+          <Text style={styles.planned}>计划数量  {plannedOutput} {plannedOutputUnit}</Text>
         ) : null}
         {currentTask?.standardYieldMin != null || currentTask?.standardYieldMax != null ? (
           <Text style={styles.stdRange}>
@@ -2633,6 +2705,14 @@ const YieldStepReportScreen: React.FC = () => {
         {currentPhase === 'AWAITING_INPUT' ? (
           <>
             <NeoCard variant="elevated" style={styles.card}>
+              {taskUnitError ? (
+                <View style={styles.limitsHint} testID="yield-task-unit-error">
+                  <Text style={styles.limitsHintText}>{taskUnitError}</Text>
+                  <NeoButton variant="outline" size="small" onPress={retryTaskUnits} testID="yield-task-unit-retry">
+                    重试获取单位
+                  </NeoButton>
+                </View>
+              ) : null}
               <Text style={styles.phaseHint}>第一步: 录入本道投入量, 领料/选半成品, 拍投料照</Text>
 
               {/* SP3 二次加工首道 — 选领厂内半成品 WIP (替代原料批次领料) */}
@@ -2710,6 +2790,8 @@ const YieldStepReportScreen: React.FC = () => {
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
+                  taskId={currentTask?.id}
+                  productionBatchId={batchId}
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
                   onValidationChange={setMaterialBatchValidation}
@@ -2808,7 +2890,7 @@ const YieldStepReportScreen: React.FC = () => {
               variant="primary"
               size="large"
               onPress={handleSubmitInput}
-              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit || inputOverLimit}
+              disabled={submitting || !taskUnitsReady || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit || inputOverLimit}
               loading={submitting}
               style={styles.fullBtn}
               testID="yield-submit-input-btn"
@@ -3184,7 +3266,7 @@ const YieldStepReportScreen: React.FC = () => {
                 variant="outline"
                 size="large"
                 onPress={handleSavePartialOutput}
-                disabled={submitting || outputOverHardCap || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading}
                 loading={submitting}
                 style={styles.blockBtn}
                 testID="yield-save-partial-output-btn"
@@ -3196,7 +3278,7 @@ const YieldStepReportScreen: React.FC = () => {
                 variant="primary"
                 size="large"
                 onPress={handleSubmitOutput}
-                disabled={submitting || outputOverHardCap || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading}
                 loading={submitting}
                 style={styles.blockBtn}
                 testID="yield-submit-output-btn"
@@ -3208,7 +3290,7 @@ const YieldStepReportScreen: React.FC = () => {
               variant="outline"
               size="large"
               onPress={() => switchProductionStepMode('SEGMENT')}
-              disabled={submitting || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || evidenceUploading}
               style={styles.fullBtn}
               testID="yield-back-segment-step-btn"
             >

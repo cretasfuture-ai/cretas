@@ -22,6 +22,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { materialBatchApiClient, MaterialBatch } from '../../services/api/materialBatchApiClient';
+import { yieldReportApi, TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import {
   materialLabelApiClient,
@@ -87,6 +88,8 @@ interface MaterialBatchPickerProps {
    * 若产品无 ACTIVE BOM 或 BOM 无明细, 后端回退返回全部 (不阻断操作员).
    */
   productTypeId?: string;
+  taskId?: number;
+  productionBatchId?: number;
   /** 选中的 refs (受控) */
   value: MaterialBatchRef[];
   /** 变更回调 */
@@ -179,6 +182,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   unit,
   factoryId,
   productTypeId,
+  taskId,
+  productionBatchId,
   value,
   onChange,
   singleBatchQty = '',
@@ -210,6 +215,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const autoAllocationRequestRef = useRef(0);
   const queryKeyRef = useRef<string>('');
   const rowsRef = useRef<RowState[]>([]);   // mirrors `rows` for use inside async callbacks
+  const candidateBatchIdsRef = useRef<Set<string>>(new Set());
   const validationRef = useRef(onValidationChange);
   validationRef.current = onValidationChange;
 
@@ -219,7 +225,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     .filter(({ row }) => row.selected);
   const selectedRows = selectedRowEntries.map(({ row }) => row);
   const isMultiBatch = selectedRows.length > 1;
-  const queryKey = `${factoryId ?? ''}|${productTypeId ?? ''}`;
+  const queryKey = `${factoryId ?? ''}|${productTypeId ?? ''}|${productionBatchId ?? ''}|${taskId ?? ''}`;
   queryKeyRef.current = queryKey;
 
   const rowQuantity = useCallback(
@@ -343,16 +349,48 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await materialBatchApiClient.getBatchesByStatus('AVAILABLE', factoryId, productTypeId);
+      if ((taskId == null) !== (productionBatchId == null)) {
+        setLoadError('当前报工任务上下文不完整，请返回任务列表后重试');
+        setLoadedQueryKey(requestQueryKey);
+        return;
+      }
+      const res = taskId != null && productionBatchId != null
+        ? await yieldReportApi.listTaskMaterialOptions(productionBatchId, taskId, factoryId)
+        : await materialBatchApiClient.getBatchesByStatus('AVAILABLE', factoryId, productTypeId);
       if (queryKeyRef.current !== requestQueryKey) return;
       if (res.success && Array.isArray(res.data)) {
+        const taskBound = taskId != null && productionBatchId != null;
+        const batches: MaterialBatch[] = taskBound
+          ? (res.data as TaskMaterialBatchOption[]).map((option) => ({
+              id: option.id,
+              batchNumber: option.batchNumber,
+              factoryId: factoryId ?? '',
+              materialTypeId: option.materialTypeId,
+              materialName: option.materialName ?? undefined,
+              inboundQuantity: option.currentQuantity,
+              remainingQuantity: option.currentQuantity,
+              reservedQuantity: 0,
+              usedQuantity: 0,
+              quantityUnit: option.quantityUnit,
+              unit: option.quantityUnit,
+              unitPrice: null,
+              totalCost: null,
+              supplierId: '',
+              inboundDate: '',
+              status: 'available',
+              warehouseId: option.warehouseId,
+              createdAt: '',
+            }))
+          : res.data as MaterialBatch[];
+        candidateBatchIdsRef.current = new Set(batches.map((batch) => batch.id));
         // Pass current rows snapshot so pending scan selections survive the sync
-        syncRowsFromValue(res.data, rowsRef.current);
+        syncRowsFromValue(batches, rowsRef.current);
         setLoadedQueryKey(requestQueryKey);
         // F6: 单批次自动选中 — 不让操作工还要多点一次复选框
         // 仅在 value 尚未选中（首次加载）且只有一批次时触发
-        if (res.data.length === 1 && value.length === 0) {
-          const batch = res.data[0] as MaterialBatch;
+        if (batches.length === 1 && value.length === 0) {
+          const batch = batches[0];
+          if (!batch) return;
           setRows([{ batch, selected: true, qtyStr: '' }]);
           if (forceIndependentQuantity) {
             setConfirmed(false);
@@ -378,13 +416,14 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [factoryId, forceIndependentQuantity, productTypeId, queryKey, syncRowsFromValue, value.length, unit]);
+  }, [factoryId, forceIndependentQuantity, productTypeId, productionBatchId, queryKey, syncRowsFromValue, taskId, value.length, unit]);
 
   // productTypeId comes from the batch detail request. If the operator opens the picker before
   // that request resolves, the first load is unfiltered. Reload once the BOM-filter key changes.
   useEffect(() => {
     autoAllocationRequestRef.current += 1;
     setRows([]);
+    candidateBatchIdsRef.current = new Set();
     setConfirmed(false);
     setConfirmFeedback(false);
     setLoadedQueryKey(null);
@@ -494,6 +533,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   }, [allocationMode, allocationTargetQty, singleBatchQty]);
 
   const handleAutoAllocate = useCallback(async () => {
+    if ((taskId == null) !== (productionBatchId == null)) {
+      setAutoAllocationError('当前报工任务上下文不完整，请返回任务列表后重试');
+      return;
+    }
     const selected = rows.filter((row) => row.selected);
     const seed = selected[0];
     const targetQuantity = parseFloat(singleBatchQty);
@@ -523,18 +566,28 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     setAllocationTargetQty(targetQuantity);
 
     try {
-      const response = await materialBatchApiClient.getFefoBatches(
-        seed.batch.materialTypeId,
-        targetQuantity,
-        factoryId,
-      );
       if (autoAllocationRequestRef.current !== requestId) return;
-      if (!response.success || !Array.isArray(response.data) || response.data.length === 0) {
-        setAutoAllocationError(response.message || '没有找到可自动分配的可用批次，请手动选择');
-        return;
+      const taskBound = taskId != null && productionBatchId != null;
+      // Task-bound mode must allocate from the already mounted task candidate set;
+      // generic FEFO can cross task/BOM scope and is therefore never called here.
+      // Public callers retain the historical FEFO path and its response/error semantics.
+      let rawCandidates: MaterialBatch[];
+      if (taskBound) {
+        rawCandidates = rowsRef.current.map((row) => row.batch);
+      } else {
+        const fefoResponse = await materialBatchApiClient.getFefoBatches(
+          seed.batch.materialTypeId,
+          targetQuantity,
+          factoryId,
+        );
+        if (autoAllocationRequestRef.current !== requestId) return;
+        if (!fefoResponse.success || !Array.isArray(fefoResponse.data)) {
+          setAutoAllocationError(fefoResponse.message || '自动分配失败，可改为手动选择批次');
+          return;
+        }
+        rawCandidates = fefoResponse.data as MaterialBatch[];
       }
-
-      const candidates = response.data.filter(
+      const candidates = rawCandidates.filter(
         (batch) =>
           batch.materialTypeId === seed.batch.materialTypeId &&
           Number.isFinite(Number(batch.remainingQuantity)) &&
@@ -591,7 +644,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         setAutoAllocationLoading(false);
       }
     }
-  }, [factoryId, rows, singleBatchQty, unit]);
+  }, [factoryId, productionBatchId, rows, singleBatchQty, taskId, unit]);
 
   const setQty = useCallback(
     (idx: number, raw: string) => {
@@ -629,12 +682,17 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       const label = labelRes.data;
       setScannedLabel(label);
 
-      const batchRes = await materialBatchApiClient.getBatchById(String(label.batchId), factoryId);
-      if (!batchRes.success || !batchRes.data) {
-        setLoadError(batchRes.message || '标签对应的批次不存在');
+      const taskBound = taskId != null && productionBatchId != null;
+      const existingCandidate = rowsRef.current.find((row) => row.batch.id === String(label.batchId))?.batch;
+      if (taskBound && !candidateBatchIdsRef.current.has(String(label.batchId))) {
+        setLoadError('该标签批次不属于当前任务的可选原料，请重新扫描当前任务物料');
         return;
       }
-      const batch = batchRes.data;
+      const batch = taskBound ? existingCandidate : (await materialBatchApiClient.getBatchById(String(label.batchId), factoryId)).data;
+      if (!batch) {
+        setLoadError('标签对应的批次不存在');
+        return;
+      }
       const status = String(batch.status ?? '').toUpperCase();
       if (status && status !== 'AVAILABLE') {
         setLoadError(`标签批次 ${batch.batchNumber} 当前状态为 ${batch.status}, 不能领料`);
@@ -667,7 +725,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     } finally {
       setScanLoading(false);
     }
-  }, [factoryId]);
+  }, [factoryId, productionBatchId, taskId]);
 
   // Q2: 「确定选择」按钮点击: 校验 → 折叠 + 显示确认反馈
   const handleConfirm = useCallback(() => {

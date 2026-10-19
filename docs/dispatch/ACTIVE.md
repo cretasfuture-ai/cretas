@@ -7,7 +7,10 @@
 ## 在飞任务
 
 
+
+
 - `ERP-STAGES-20261019` — `in-progress` — Owner /root — Base 6c4ecfe93ff7751066ea7323e5c6750a7eae11fe — #1033与#1035已发布；余缺陷业务复验/S0及受控执行批。归档archive/2026-10-19-erp-s0-s1-capabilities.md；唯一场景表C:/Users/Steve/Documents/cretas-optimization-20261019/final-plan/验收场景表.csv，进度以其读回为准；QA独占CSV/手机。
+
 
 
 

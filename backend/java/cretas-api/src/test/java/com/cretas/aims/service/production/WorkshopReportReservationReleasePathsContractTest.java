@@ -21,7 +21,9 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.impl.ProcessWorkReportingServiceImpl;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
+import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -78,6 +80,7 @@ class WorkshopReportReservationReleasePathsContractTest {
 
     private static final BigDecimal RECEIPT = new BigDecimal("20");
     private static final BigDecimal REF_QTY = new BigDecimal("20");
+    private static final String WORKSHOP_WAREHOUSE_ID = "7f3e6f4a-2d1a-4f8e-b2c4-6a9d0e1f3b5c";
 
     // ─────────────────────────────────────────────────────────────
     // ① 口径本身 —— 它是三条路唯一的取数处
@@ -309,12 +312,19 @@ class WorkshopReportReservationReleasePathsContractTest {
         final MaterialBatchRepository materialBatchRepository = mock(MaterialBatchRepository.class);
         final ProductionBatchRepository productionBatchRepository = mock(ProductionBatchRepository.class);
         final ProductionReportRepository productionReportRepository = mock(ProductionReportRepository.class);
+        final EntityManager entityManager = mock(EntityManager.class);
+        final WarehouseResolver warehouseResolver = mock(WarehouseResolver.class);
         final WorkshopReportReservationService reservation;
 
         Rig(MaterialBatch... batches) {
+            when(warehouseResolver.resolveWorkshopId(FACTORY)).thenReturn(WORKSHOP_WAREHOUSE_ID);
             reservation = new WorkshopReportReservationService(
-                    materialBatchRepository, productionBatchRepository, productionReportRepository);
+                    materialBatchRepository, productionBatchRepository, productionReportRepository,
+                    warehouseResolver, entityManager);
             for (MaterialBatch batch : batches) {
+                lenient().when(materialBatchRepository
+                                .findByIdAndFactoryId(batch.getId(), FACTORY))
+                        .thenReturn(Optional.of(batch));
                 lenient().when(materialBatchRepository
                                 .findByIdAndFactoryIdForUpdate(batch.getId(), FACTORY))
                         .thenReturn(Optional.of(batch));
@@ -423,7 +433,7 @@ class WorkshopReportReservationReleasePathsContractTest {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(reserved);
         batch.setQuantityUnit("kg");
-        batch.setWarehouseId("WH-WKS");
+        batch.setWarehouseId(WORKSHOP_WAREHOUSE_ID);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         return batch;
     }
