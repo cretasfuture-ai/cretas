@@ -23,6 +23,7 @@ import com.cretas.aims.service.impl.ProcessWorkReportingServiceImpl;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -311,6 +312,7 @@ class WorkshopReportReservationReleasePathsContractTest {
         final MaterialBatchRepository materialBatchRepository = mock(MaterialBatchRepository.class);
         final ProductionBatchRepository productionBatchRepository = mock(ProductionBatchRepository.class);
         final ProductionReportRepository productionReportRepository = mock(ProductionReportRepository.class);
+        final EntityManager entityManager = mock(EntityManager.class);
         final WarehouseResolver warehouseResolver = mock(WarehouseResolver.class);
         final WorkshopReportReservationService reservation;
 
@@ -318,8 +320,11 @@ class WorkshopReportReservationReleasePathsContractTest {
             when(warehouseResolver.resolveWorkshopId(FACTORY)).thenReturn(WORKSHOP_WAREHOUSE_ID);
             reservation = new WorkshopReportReservationService(
                     materialBatchRepository, productionBatchRepository, productionReportRepository,
-                    warehouseResolver);
+                    warehouseResolver, entityManager);
             for (MaterialBatch batch : batches) {
+                lenient().when(materialBatchRepository
+                                .findByIdAndFactoryId(batch.getId(), FACTORY))
+                        .thenReturn(Optional.of(batch));
                 lenient().when(materialBatchRepository
                                 .findByIdAndFactoryIdForUpdate(batch.getId(), FACTORY))
                         .thenReturn(Optional.of(batch));

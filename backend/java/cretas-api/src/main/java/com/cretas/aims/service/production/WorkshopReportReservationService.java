@@ -10,8 +10,11 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -70,16 +73,20 @@ public class WorkshopReportReservationService {
     private final ProductionBatchRepository productionBatchRepository;
     private final ProductionReportRepository productionReportRepository;
     private final WarehouseResolver warehouseResolver;
+    private final EntityManager entityManager;
 
     @Autowired
     public WorkshopReportReservationService(MaterialBatchRepository materialBatchRepository,
                                             ProductionBatchRepository productionBatchRepository,
                                             ProductionReportRepository productionReportRepository,
-                                            WarehouseResolver warehouseResolver) {
+                                            WarehouseResolver warehouseResolver,
+                                            @Qualifier("primaryEntityManagerFactory")
+                                            EntityManager entityManager) {
         this.materialBatchRepository = materialBatchRepository;
         this.productionBatchRepository = productionBatchRepository;
         this.productionReportRepository = productionReportRepository;
         this.warehouseResolver = Objects.requireNonNull(warehouseResolver, "warehouseResolver");
+        this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
     }
 
     /**
@@ -170,13 +177,14 @@ public class WorkshopReportReservationService {
         // Lock and validate every requested row before mutating or saving any row.
         for (Map.Entry<String, BigDecimal> entry : new TreeMap<>(requested).entrySet()) {
             Optional<MaterialBatch> found =
-                    materialBatchRepository.findByIdAndFactoryIdForUpdate(entry.getKey(), factoryId);
+                    materialBatchRepository.findByIdAndFactoryId(entry.getKey(), factoryId);
             if (found.isEmpty()) {
                 throw reservationError(409,
                         "报工引用的原料批次不存在或不属于当前工厂: " + entry.getKey(),
                         "WORKSHOP_RESERVATION_BATCH_NOT_FOUND_OR_FOREIGN");
             }
             MaterialBatch batch = found.get();
+            entityManager.refresh(batch, LockModeType.PESSIMISTIC_WRITE);
             validateLockedBatch(factoryId, workshopWarehouseId, entry.getKey(), entry.getValue(), batch);
             locked.put(entry.getKey(), batch);
         }

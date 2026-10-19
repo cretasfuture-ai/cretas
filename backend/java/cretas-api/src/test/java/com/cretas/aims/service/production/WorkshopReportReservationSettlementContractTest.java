@@ -41,6 +41,7 @@ import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.utils.ExcelUtil;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -151,6 +152,7 @@ class WorkshopReportReservationSettlementContractTest {
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private ProductionReportRepository productionReportRepository;
+    @Mock private EntityManager entityManager;
 
     private ProductionPlanServiceImpl service;
     private WorkshopReportReservationService reservationService;
@@ -182,7 +184,7 @@ class WorkshopReportReservationSettlementContractTest {
         //    ⛔ 不给释放侧另外配一套 (那会让「结单看到的现实」和「释放看到的现实」是两个东西)。
         reservationService = new WorkshopReportReservationService(
                 materialBatchRepository, productionBatchRepository, productionReportRepository,
-                warehouseResolver);
+                warehouseResolver, entityManager);
         wireReservationService(reservationService);
 
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());

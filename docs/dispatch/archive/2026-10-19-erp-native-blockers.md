@@ -34,6 +34,10 @@ This batch addresses two blockers found during authorized F006 S0 acceptance. It
 
 ## UX Flow Analysis
 
+### PG concurrency follow-up scope
+
+`ERP-W4-REPORT-RESERVATION-20261019` transfers to `/root/reservation_refresh` after PG attempt4 reached two actual blocked submitters and one winner, but the losing submit raised an optimistic-lock exception instead of the required business refusal. Allowed files: WorkshopReportReservationService.java and its four existing direct contract tests (ReservationGuard, ReserveOnSubmit, ReservationSettlement, ReservationReleasePaths). Inject a required primary EntityManager; retain sorted all-rows-before-write locking and refresh actual database state under PESSIMISTIC_WRITE before validating and reserving. Use a factory-scoped entity lookup before refresh and validate the refreshed identity/factory afterward; never discard pending state with a global clear or weaken the invariant. Do not alter Entity/Repository/query/Security declarations or release/settlement behavior. Root owns real PostgreSQL, Maven and final integration. Completion requires actual two-waiter one-winner/BATCH_OVER_CONSUMED plus fresh one-report/reserved7 and rollback/guard regressions. No null EntityManager fallback. This is a current bounded code task, not business acceptance.
+
 ### 用户画像
 操作员在车间手机上完成当前任务领料和报工，需直接识别物料及可领量。
 

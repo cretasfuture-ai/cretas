@@ -9,6 +9,8 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
@@ -22,6 +24,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -153,11 +157,32 @@ class ReservationGuardContractTest {
         assertThat(first.getReservedQuantity()).isZero();
         assertThat(second.getReservedQuantity()).isZero();
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
-        InOrder order = inOrder(rig.materialBatchRepository);
+        InOrder order = inOrder(rig.materialBatchRepository, rig.entityManager);
         order.verify(rig.materialBatchRepository)
-                .findByIdAndFactoryIdForUpdate("batch-a", FACTORY);
+                .findByIdAndFactoryId("batch-a", FACTORY);
+        order.verify(rig.entityManager)
+                .refresh(first, LockModeType.PESSIMISTIC_WRITE);
         order.verify(rig.materialBatchRepository)
-                .findByIdAndFactoryIdForUpdate("batch-b", FACTORY);
+                .findByIdAndFactoryId("batch-b", FACTORY);
+        order.verify(rig.entityManager)
+                .refresh(second, LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    @Test
+    void refreshesFreshDatabaseStateBeforeFinalValidation() {
+        Rig rig = new Rig();
+        MaterialBatch stale = batch("batch-a", FACTORY, WORKSHOP_WAREHOUSE, 10);
+        rig.stub("batch-a", stale);
+        doAnswer(invocation -> {
+            MaterialBatch refreshed = invocation.getArgument(0);
+            refreshed.setReservedQuantity(new BigDecimal("10"));
+            return null;
+        }).when(rig.entityManager).refresh(any(MaterialBatch.class), eq(LockModeType.PESSIMISTIC_WRITE));
+
+        assertGuardFails(rig, report(ref("batch-a", "1")), "BATCH_OVER_CONSUMED");
+
+        assertThat(stale.getReservedQuantity()).isEqualByComparingTo("10");
+        verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
     }
 
     @Test
@@ -167,7 +192,7 @@ class ReservationGuardContractTest {
         assertGuardFails(rig, report(ref("batch-a", "0")),
                 "WORKSHOP_RESERVATION_REFERENCE_INVALID");
 
-        verify(rig.materialBatchRepository, never()).findByIdAndFactoryIdForUpdate(any(), any());
+        verify(rig.materialBatchRepository, never()).findByIdAndFactoryId(any(), any());
         verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
     }
 
@@ -210,6 +235,7 @@ class ReservationGuardContractTest {
 
     private static final class Rig {
         final MaterialBatchRepository materialBatchRepository = mock(MaterialBatchRepository.class);
+        final EntityManager entityManager = mock(EntityManager.class);
         final WarehouseResolver warehouseResolver = mock(WarehouseResolver.class);
         final WorkshopReportReservationService service;
 
@@ -221,11 +247,12 @@ class ReservationGuardContractTest {
                     materialBatchRepository,
                     mock(ProductionBatchRepository.class),
                     mock(ProductionReportRepository.class),
-                    warehouseResolver);
+                    warehouseResolver,
+                    entityManager);
         }
 
         void stub(String id, MaterialBatch batch) {
-            when(materialBatchRepository.findByIdAndFactoryIdForUpdate(id, FACTORY))
+            when(materialBatchRepository.findByIdAndFactoryId(id, FACTORY))
                     .thenReturn(Optional.of(batch));
         }
     }

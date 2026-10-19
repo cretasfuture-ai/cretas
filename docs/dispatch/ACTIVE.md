@@ -11,7 +11,7 @@
 
 - `ERP-W4-OPERATOR-PICKER-20261019` — `in-progress` — Owner /root/operator_picker — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — 选料403；限task候选Service/Controller/DTO及RN选择器/调用/测试，不改库存Security/Repository。验task/tenant/actor/BOM快照正反例、真实UI。详archive/2026-10-19-erp-native-blockers.md。
 - `ERP-W4-YIELD-UNIT-20261019` — `in-progress` — Owner /root — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — 真机limits unitless；限YieldReportServiceImpl/YieldLimitsDTO、新单位解析helper及目标测试；输入/产出/WIP分离，缺转换阻断，不改Entity/Repository。验收kg/kg、kg/盒及旧单位反例；共享Maven串行。scope详同日native-blockers归档。
-- `ERP-W4-REPORT-RESERVATION-20261019` — `review` — Owner /root — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — 预留锁内重验及夹具已交回；待复验，不改释放/Repository。详同日native-blockers归档。
+- `ERP-W4-REPORT-RESERVATION-20261019` — `in-progress` — Owner /root/reservation_refresh — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — PG竞态500；限预留Service/直接测试，必需主库EM锁内刷新；Maven仅root。详同日native-blockers归档。
 - `ERP-W4-RESERVE-PG-20261019` — `in-progress` — Owner /root/s1_assignment — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — 只改InventoryAuditTransactionContractTest，补真实Spring/JPA报工预留回滚及成功对照；复用既有PG闸。Maven由root串行。详同日native-blockers归档。
 
 

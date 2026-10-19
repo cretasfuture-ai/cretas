@@ -27,6 +27,7 @@ import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
 import com.cretas.aims.service.yield.impl.YieldReportServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -77,6 +78,7 @@ class WorkshopReportReserveOnSubmitContractTest {
     private WorkProcessRepository processRepo;
     private MaterialBatchRepository materialBatchRepository;
     private YieldReportServiceImpl svc;
+    private EntityManager entityManager;
     private MaterialBatch batch;
 
     @BeforeEach
@@ -85,6 +87,7 @@ class WorkshopReportReserveOnSubmitContractTest {
         taskRepo = mock(WorkProcessTaskRepository.class);
         processRepo = mock(WorkProcessRepository.class);
         materialBatchRepository = mock(MaterialBatchRepository.class);
+        entityManager = mock(EntityManager.class);
         SemiFinishedInventoryRepository wipRepo = mock(SemiFinishedInventoryRepository.class);
         ProcessMaterialRecipeRepository recipeRepo = mock(ProcessMaterialRecipeRepository.class);
         ProductWorkProcessAssigneeRepository pwpAssigneeRepository =
@@ -150,7 +153,8 @@ class WorkshopReportReserveOnSubmitContractTest {
                         materialBatchRepository,
                         mock(ProductionBatchRepository.class),
                         mock(ProductionReportRepository.class),
-                        warehouseResolver)
+                        warehouseResolver,
+                        entityManager)
                 : null);
     }
 
