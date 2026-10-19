@@ -257,6 +257,38 @@ class BomRecipeDraftLifecycleJpaTest {
     }
 
     @Test
+    void publicationPreflightReusesRealDraftActivationGuardsWithoutWriting() {
+        ProductType product = saveProduct("PUBLISH-READONLY", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        ProductProcessWorkflowRevision target = workflowBinding(draft).revision();
+        BomRecipeItem input = itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        String originalPort = input.getWorkflowInputPortId();
+        input.setWorkflowInputPortId("missing-slot");
+        itemRepository.saveAndFlush(input);
+        assertThatThrownBy(() -> service.validateDraftForPublish(product.getFactoryId(), draft.getId(), target))
+                .isInstanceOf(BusinessException.class);
+        input.setWorkflowInputPortId(originalPort);
+        itemRepository.saveAndFlush(input);
+        completeWorkflowSkeleton(draft);
+        BomRecipe badOutput = recipeRepository.findById(draft.getId()).orElseThrow();
+        badOutput.setOutputQuantityPerUnit(new BigDecimal("2"));
+        recipeRepository.saveAndFlush(badOutput);
+        assertThatThrownBy(() -> service.validateDraftForPublish(product.getFactoryId(), draft.getId(), target))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode()).isEqualTo("BOM_OUTPUT_QUANTITY_MISMATCH"));
+        badOutput.setOutputQuantityPerUnit(BigDecimal.ONE);
+        recipeRepository.saveAndFlush(badOutput);
+        BomRecipe before = recipeRepository.findById(draft.getId()).orElseThrow();
+        var updated = before.getUpdatedAt();
+        assertThatCode(() -> service.validateDraftForPublish(product.getFactoryId(), draft.getId(), target)).doesNotThrowAnyException();
+        assertThat(recipeRepository.findById(draft.getId())).hasValueSatisfying(after -> {
+            assertThat(after.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+            assertThat(after.getIsCurrent()).isFalse();
+            assertThat(after.getUpdatedAt()).isEqualTo(updated);
+        });
+    }
+
+    @Test
     @DisplayName("volume SKU snapshots one bottle output and 500 ml net content")
     void snapshotsVolumeSkuWithoutTurningNetContentIntoOutputQuantity() {
         ProductType product = saveStructuredProduct(

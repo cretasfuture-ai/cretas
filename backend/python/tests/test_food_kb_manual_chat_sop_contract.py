@@ -183,7 +183,9 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "平台精修不覆盖工厂真值" in FACTORY_SYSTEM_PROMPT
     assert "“归属对象”只表示存放位置" in FACTORY_SYSTEM_PROMPT
     assert "“本图产出”按画布终端生产节点计算" in FACTORY_SYSTEM_PROMPT
-    assert "原料分流才把整条版本谱系自动重锚" in FACTORY_SYSTEM_PROMPT
+    assert "发布保留当前存放位置、版本谱系和历史身份，不自动重锚或搬迁" in FACTORY_SYSTEM_PROMPT
+    assert "选择成品时按真实终端产出 SKU 反查所有已启用路线" in FACTORY_SYSTEM_PROMPT
+    assert "原料分流才把整条版本谱系自动重锚到该原料" not in FACTORY_SYSTEM_PROMPT
     assert "每个工序至少保留一个产出 Cell" in FACTORY_SYSTEM_PROMPT
     assert "生效 BOM 为空配方只能说“还没配辅料/包材”" in FACTORY_SYSTEM_PROMPT
     assert "中间 WIP 批次继续携带同一生产计划身份" in FACTORY_SYSTEM_PROMPT
@@ -555,7 +557,10 @@ def test_factory_workflow_storage_and_output_directory_is_deterministic():
     assert "BOM 副产不计入" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
     assert "不能冒充“没有工艺图”" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
     assert "完全匹配或最小超集" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
-    assert "整条 Workflow 版本谱系自动重锚到该原料" in (
+    assert "发布保留当前存放位置、版本谱系和历史身份，不自动重锚或搬迁" in (
+        _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    )
+    assert "整条 Workflow 版本谱系自动重锚到该原料" not in (
         _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
     )
     assert "多原料多成品的联产没有唯一归属" in (
@@ -1536,7 +1541,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "存货生产（`BY_STOCK`） 小结形成的成品已经是有效、可用库存批次" in current_sop
     assert "调拨凭证只在收货确认后生成" in current_sop
     assert "归属读取失败时保持缺失并阻止" in current_sop
-    assert "整条 Workflow 版本谱系自动重锚到该共享原料" in current_sop
+    assert "发布保留当前存放位置、版本谱系和历史身份，不自动重锚或搬迁" in current_sop
+    assert "生产计划按真实终端产出 SKU 集合匹配" in current_sop
+    assert "整条 Workflow 版本谱系自动重锚到该共享原料" not in current_sop
     assert "每个工序至少保留一个产出 Cell" in current_sop
     assert "有生效 BOM 但明细为空时只能说“还没配辅料/包材”" in current_sop
     assert "包材 Cell 位于成品上方并连向所属成品" in current_sop
@@ -1611,7 +1618,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "生效 BOM 明细为空只显示“还没配辅料/包材”" in html
     assert "包材 Cell 位于成品上方并连向所属成品" in html
     assert "旧版本不能把重发布自身误拦" in html
-    assert "原料分流才把整条版本谱系自动重锚到该原料" in html
+    assert "发布保留当前存放位置、版本谱系和历史身份，不自动重锚或搬迁" in html
+    assert "原料分流才把整条版本谱系自动重锚到该原料" not in html
     assert "采购等来源从待收货列表进入" in html
     assert "生产结单成品从“入库 → 生产成品入库”逐行实收" in html
     assert "上架只有实际更新并回读库位后才成功" in html
@@ -1854,7 +1862,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "无订单入库与库存归属" in ai_assist
     assert "登记表与通用问答边界" not in ai_assist
     assert "营收预测与历史回测误差" not in ai_assist
-    assert "存放位置、本图产出与自动重锚" in ai_assist
+    assert "存放位置、本图产出与发布前确认" in ai_assist
+    assert "存放位置、本图产出与自动重锚" not in ai_assist
     assert "产出门禁、版本状态与包材连线" in ai_assist
     assert "标准表格与门店匹配确认" not in ai_assist
     assert "征询分析与写操作安全门" not in ai_assist

@@ -12,6 +12,7 @@
     <div class="cost-context">
       <strong>当前批次：{{ batchNumber || productionPlanId }}</strong><br>
       只补录这两项；原料、人工、包材沿用已记录实际数据。留空保持原值，确认无费用请填 0。
+      <p>本次按生产计划补录。联产多批次只可统一确认无费用（填 0），不会覆盖已记录的实际费用。</p>
     </div>
 
     <el-alert v-if="savedParamsKey !== null && !saving" type="warning" :closable="false" show-icon

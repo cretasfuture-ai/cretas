@@ -39,6 +39,43 @@ const payload = {
 function page() { return mount(Panel, { props: { factoryId: 'NEW', period: ['2026-10-01', '2026-10-31'], refreshKey: 0 }, global: { stubs, directives: { loading: {} } } }); }
 beforeEach(() => { testRoute.query = {}; api.get.mockReset(); api.get.mockResolvedValue({ success: true, data: payload }); });
 describe('实际出货SKU毛利', () => {
+  it('保留出货金额，并显示独立退货事实与利润表的整月核对', async () => {
+    api.get.mockResolvedValue({ success: true, data: { ...payload,
+      reconciliationReturnedRevenue: 75, reconciliationReturnedCost: 38.08,
+      reconciliationNetRevenue: 645, reconciliationNetCost: 308.04, reconciliationNetGrossProfit: 336.96,
+      financialStatement: { totalRevenue: 645, totalCost: 308.04, grossProfit: 336.96, netProfit: 332.25 },
+    } });
+    const wrapper = page(); await flushPromises();
+    const bridge = wrapper.get('[aria-label="整月退货与利润表核对"]');
+    for (const value of ['本期退货冲减收入', '¥75.00', '实物退货恢复成本', '¥38.08', '¥645.00', '¥308.04', '¥336.96']) expect(bridge.text()).toContain(value);
+    expect(wrapper.text()).toContain('¥720.00'); expect(wrapper.text()).toContain('¥346.12');
+    expect(wrapper.text()).toContain('净利润 ¥332.25'); wrapper.unmount();
+  });
+  it('缺少退货核对字段时不伪造零调整或由财务金额反推差额', async () => {
+    api.get.mockResolvedValue({ success: true, data: { ...payload, reconciliationReturnedRevenue: 75,
+      reconciliationReturnedCost: null, financialStatement: { totalRevenue: 645, totalCost: 308.04 } } });
+    const wrapper = page(); await flushPromises();
+    expect(wrapper.find('[aria-label="整月退货与利润表核对"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it('明示退货核对中原值统一取分与显示金额相减的一分钱差额', async () => {
+    api.get.mockResolvedValue({ success: true, data: { ...payload, totalCost: 441.62,
+      reconciliationReturnedRevenue: 75, reconciliationReturnedCost: 41.08,
+      reconciliationNetRevenue: 765, reconciliationNetCost: 400.53, reconciliationNetGrossProfit: 364.47 } });
+    const wrapper = page(); await flushPromises();
+    expect(wrapper.get('[aria-label="整月退货与利润表核对"]').text()).toContain('¥-0.01 的舍入差额');
+    wrapper.unmount();
+  });
+  it('真实零退货也展示整月核对，不用于不完整月份', async () => {
+    api.get.mockResolvedValue({ success: true, data: { ...payload, reconciliationReturnedRevenue: 0,
+      reconciliationReturnedCost: 0, reconciliationNetRevenue: 720, reconciliationNetCost: 346.12,
+      reconciliationNetGrossProfit: 373.88 } });
+    const wrapper = page(); await flushPromises();
+    expect(wrapper.get('[aria-label="整月退货与利润表核对"]').text()).toContain('¥0.00');
+    api.get.mockResolvedValue({ success: true, data: { ...payload, financialStatement: null } });
+    await wrapper.setProps({ period: ['2026-10-19', '2026-10-19'] }); await flushPromises();
+    expect(wrapper.find('[aria-label="整月退货与利润表核对"]').exists()).toBe(false); wrapper.unmount();
+  });
   it('仅完整会计月提供同厂同期间利润表链接', async () => {
     const wrapper = page(); await flushPromises();
     const link = wrapper.findAll('a').find(a => a.text() === '查看同期间利润表'); expect(link).toBeDefined();

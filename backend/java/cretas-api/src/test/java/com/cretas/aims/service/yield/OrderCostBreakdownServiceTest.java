@@ -7,19 +7,27 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.bom.BomVersion;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.bom.BomVersionRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -54,6 +62,10 @@ class OrderCostBreakdownServiceTest {
     @Mock private ProductionReportRepository productionReportRepository;
     @Mock private YieldReportService yieldReportService;
     @Mock private BomVersionRepository bomVersionRepository;
+    @Mock private BomRecipeRepository bomRecipeFallbackRepository;
+    @Mock private BomRecipeItemRepository bomRecipeItemFallbackRepository;
+    @Mock private ProcessSheetRowRepository processSheetRowRepository;
+    @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private OrderCostBreakdownService service;
 
     private ProductionPlan plan(String id) {
@@ -1057,6 +1069,124 @@ class OrderCostBreakdownServiceTest {
         assertThat(outerCase.getAmount()).isNotNull();
         assertThat(dto.getMissingCostItems())
                 .noneMatch(item -> item.startsWith("PACKAGING_PRICE:"));
+    }
+
+    @Test
+    void emptyCoProductRecipeIsAValidZeroInputSnapshotWhenOutputBasisMatches() {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "bomRecipeFallbackRepository", bomRecipeFallbackRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "bomRecipeItemFallbackRepository", bomRecipeItemFallbackRepository);
+        ProductionPlan p = plan("PLAN-MULTI");
+        p.setFactoryId(F);
+        ProductionBatch b = batch(9202L, "4");
+        b.setFactoryId(F);
+        b.setProductionPlanId(p.getId());
+        b.setProductTypeId("CO-B");
+        b.setBatchNumber("CO-B-001");
+        b.setEquipmentCost(BigDecimal.ZERO);
+        b.setOtherCost(BigDecimal.ZERO);
+        b.setSelectedBomRecipeIdsByProduct(Map.of("CO-B", "BOM-CO-B"));
+        b.setSelectedBomVersionsByProduct(Map.of("CO-B", 3));
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, p.getId())).thenReturn(List.of(b));
+        when(planRepository.findByIdAndFactoryId(p.getId(), F)).thenReturn(Optional.of(p));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), F)).thenReturn(List.of());
+        when(yieldReportService.getYield(F, b.getId())).thenReturn(BatchYieldDTO.builder()
+                .lastStepOutput(new BigDecimal("4")).lastStepOutputUnit("box")
+                .totalLaborCost(BigDecimal.ZERO).steps(List.of()).build());
+        when(bomVersionRepository.findByFactoryIdAndBomRecipeIdOrderByVersionNumberDesc(F, "BOM-CO-B"))
+                .thenReturn(List.of());
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId("BOM-CO-B");
+        recipe.setFactoryId(F);
+        recipe.setVersion(3);
+        recipe.setOutputRole(BomRecipe.OutputRole.CO_PRODUCT);
+        recipe.setOutputQuantityPerUnit(BigDecimal.ONE);
+        recipe.setOutputUnit("box");
+        when(bomRecipeFallbackRepository.findById("BOM-CO-B")).thenReturn(Optional.of(recipe));
+        when(bomRecipeItemFallbackRepository.findByRecipeIdOrderBySortOrderAsc("BOM-CO-B"))
+                .thenReturn(List.of());
+
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, p.getId(), false);
+
+        assertThat(dto.getMissingCostItems())
+                .noneMatch(item -> item.startsWith("PINNED_BOM_SNAPSHOT_MISSING:"))
+                .noneMatch(item -> item.startsWith("PINNED_BOM_OUTPUT_BASIS_UNVERIFIABLE:"));
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void submittedMultiOutputGroupSharesItsSingleActualPackagingFact() throws Exception {
+        ProductionPlan p = plan("PLAN-MULTI-PKG");
+        p.setFactoryId(F);
+        ProductionBatch a = multiOutputBatch(9301L, p.getId(), "OUT-A", "BOM-A");
+        ProductionBatch b = multiOutputBatch(9302L, p.getId(), "OUT-B", "BOM-B");
+        ProductionBatch ownerPlaceholder = multiOutputBatch(9300L, p.getId(), "RAW-OWNER", "unused");
+        ownerPlaceholder.setQuantity(new BigDecimal("2"));
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, p.getId()))
+                .thenReturn(List.of(ownerPlaceholder, a, b));
+        when(planRepository.findByIdAndFactoryId(p.getId(), F)).thenReturn(Optional.of(p));
+        MaterialConsumption packageFact = cons("PKG-1", "1", "10", "10");
+        packageFact.setSourceType("PACKAGING");
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(a.getId(), F))
+                .thenReturn(List.of(packageFact));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), F)).thenReturn(List.of());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(ownerPlaceholder.getId(), F))
+                .thenReturn(List.of());
+        when(materialBatchRepository.findByIdAndFactoryId("PKG-1", F))
+                .thenReturn(Optional.of(mb("PKG-1", "共享包装", null, null)));
+        when(yieldReportService.getYield(eq(F), any())).thenReturn(BatchYieldDTO.builder()
+                .lastStepOutput(BigDecimal.ONE).lastStepOutputUnit("box")
+                .totalLaborCost(BigDecimal.ZERO).steps(List.of()).build());
+        List<ProcessSheetRow> submittedRows = List.of(
+                submittedMultiRow(p.getId(), a, "group-1", 0),
+                submittedMultiRow(p.getId(), b, "group-1", 1));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(F, p.getId()))
+                .thenReturn(submittedRows);
+
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, p.getId(), false);
+
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("10");
+        assertThat(dto.getBoxCount()).as("正式 A/B 各一盒，运行时 owner 占位批次不进入产出分母")
+                .isEqualTo(2);
+        assertThat(dto.getMissingCostItems())
+                .noneMatch(item -> item.startsWith("PINNED_BOM_SNAPSHOT_MISSING:"));
+    }
+
+    private ProductionBatch multiOutputBatch(Long id, String planId, String productId, String recipeId) {
+        ProductionBatch batch = batch(id, "1");
+        batch.setFactoryId(F);
+        batch.setProductionPlanId(planId);
+        batch.setProductTypeId(productId);
+        batch.setBatchNumber(productId + "-001");
+        batch.setEquipmentCost(BigDecimal.ZERO);
+        batch.setOtherCost(BigDecimal.ZERO);
+        batch.setSelectedBomRecipeIdsByProduct(Map.of("OUT-A", "BOM-A", "OUT-B", "BOM-B"));
+        batch.setSelectedBomVersionsByProduct(Map.of("OUT-A", 3, "OUT-B", 3));
+        return batch;
+    }
+
+    private ProcessSheetRow submittedMultiRow(String planId, ProductionBatch batch,
+                                               String baseRowId, int memberIndex) throws Exception {
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setClientRowId(baseRowId + "#" + memberIndex);
+        request.setProcessCode("packing");
+        request.setProcessOrder(1);
+        request.setProductTypeId(batch.getProductTypeId());
+        request.setOutputQuantity(BigDecimal.ONE);
+        request.setMultiOutputMember(true);
+        request.setMultiOutputBaseRowId(baseRowId);
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(F);
+        row.setPlanId(planId);
+        row.setProcessCode("packing");
+        row.setProcessOrder(1);
+        row.setClientRowId(request.getClientRowId());
+        row.setBatchId(batch.getId());
+        row.setBatchNumber(batch.getBatchNumber());
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setRowPayload(objectMapper.writeValueAsString(request));
+        return row;
     }
 
     /** 与 {@link #pinnedBomSnapshot} 同源, 只让外箱的价可控。 */

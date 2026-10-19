@@ -67,6 +67,9 @@ public interface BomRecipeService {
      */
     BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId);
 
+    /** Read-only reuse of activation contracts before adopting an exact-revision draft family. */
+    void validateDraftForPublish(String factoryId, String recipeId, ProductProcessWorkflowRevision target);
+
     /** 克隆为新版本草稿: source ACTIVE/ARCHIVED → 新 DRAFT recipe, version+1. */
     BomRecipe cloneRecipe(String factoryId, String recipeId);
 

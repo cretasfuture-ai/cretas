@@ -1,7 +1,12 @@
 package com.cretas.aims.service.inventory;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
+import java.math.MathContext;
+import java.util.Optional;
+
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 
 /**
  * 成品(FG)批次跨单位换算 — 销售 FEFO 推荐 / 分配校验 / 发货扣减 三段共用。
@@ -12,7 +17,8 @@ import java.math.RoundingMode;
  * {@code availableQuantity} 当作与发货行单位直接可比/可加总的裸数字处理 —— kg 与 盒 数量级完全不同,
  * 直接相加/相减/比较全部算错。
  *
- * <p>换算依据 {@link com.cretas.aims.entity.ProductType#getGramsPerUnit()} (每盒/份标准克重),
+ * <p>换算依据内置 {@code CanonicalUnit} 的量纲/因子；质量与计数/包装之间另依据
+ * {@link com.cretas.aims.entity.ProductType#getGramsPerUnit()} (每盒/份标准克重),
  * 与 {@link FeedUnitConverter}（逐道投料折算）/
  * {@link com.cretas.aims.service.restock.RestockUnitConverter}（备货看板）同一口径
  * (盒 = kg × 1000 / gramsPerUnit)。
@@ -25,19 +31,18 @@ public final class FgQuantityUnitConverter {
 
     private FgQuantityUnitConverter() {}
 
-    /** kg → 计数单位 换算精度 (盒/个/件 保留 2 位小数, 与 FeedUnitConverter/RestockUnitConverter 一致)。 */
-    private static final int COUNT_SCALE = 2;
-    /** 计数单位 → kg 换算精度 (kg 保留 4 位小数, 与 FinishedGoodsBatch.producedQuantity scale 一致)。 */
-    private static final int KG_SCALE = 4;
+    /** Keep fractional native quantities without silently truncating grams or package quantities. */
+    private static final MathContext CONVERSION_CONTEXT = MathContext.DECIMAL128;
 
     /**
      * 把数量 {@code qty}（原单位 {@code fromUnit}）换算为 {@code toUnit} 计量。
      *
      * <ul>
      *   <li>{@code fromUnit} 与 {@code toUnit} 字符串相等（含都为 null）→ 原样返回，无需换算。</li>
-     *   <li>一方为计数单位 (盒/个/件/只)、另一方为非计数单位 (视为 kg) → 经 {@code gramsPerUnit} 换算。</li>
-     *   <li>双方都是计数单位但字符串不同 (如 "盒" vs "个")，或双方都非计数单位但字符串不同
-     *       (如 "kg" vs "斤") → 换算系数未知，返回 {@code null} (诚实失败，不臆造 1:1)。</li>
+ *   <li>同一科学量纲 (如 g/kg、ml/l) → 按内置 canonical factor 换算。</li>
+ *   <li>质量与计数/包装单位之间 → 经 {@code gramsPerUnit} 换算；体积与计数/包装之间拒绝换算。</li>
+ *   <li>双方都是不同的计数/包装单位，或任一单位不在内置契约中 → 返回 {@code null}
+ *       (诚实失败，不臆造 1:1)。</li>
      *   <li>需要换算但 {@code gramsPerUnit} 缺失/非正 → 返回 {@code null}。</li>
      * </ul>
      *
@@ -58,23 +63,71 @@ public final class FgQuantityUnitConverter {
             // 一方单位未知 → 无法确定是否需要换算, 诚实失败.
             return null;
         }
-        boolean fromIsCount = FeedUnitConverter.isCountUnit(fromUnit);
-        boolean toIsCount = FeedUnitConverter.isCountUnit(toUnit);
-        if (fromIsCount == toIsCount) {
-            // 同类 (都计数 或 都非计数) 但字符串不同 → 换算系数未知, 不可臆造.
+        Optional<CanonicalUnit> from = UnitContractServiceImpl.describeBuiltIn(fromUnit);
+        Optional<CanonicalUnit> to = UnitContractServiceImpl.describeBuiltIn(toUnit);
+        if (from.isEmpty() || to.isEmpty()) {
             return null;
         }
-        if (gramsPerUnit == null || gramsPerUnit.compareTo(BigDecimal.ZERO) <= 0) {
+
+        CanonicalUnit source = from.get();
+        CanonicalUnit target = to.get();
+        if (source.code().equals(target.code())) {
+            return qty;
+        }
+
+        boolean sourceCountLike = isCountLike(source);
+        boolean targetCountLike = isCountLike(target);
+        if (sourceCountLike || targetCountLike) {
+            if (sourceCountLike && targetCountLike) {
+                // Distinct count/package units have no implicit 1:1 relationship.
+                return null;
+            }
+            if ((sourceCountLike && requiresPackagingSnapshot(source)
+                    && target.dimension() == UnitDimension.MASS)
+                    || (targetCountLike && requiresPackagingSnapshot(target)
+                    && source.dimension() == UnitDimension.MASS)) {
+                // An outer case/carton has no intrinsic net weight; expand it via
+                // the recorded packaging snapshot before applying gramsPerUnit.
+                return null;
+            }
+            if (gramsPerUnit == null || gramsPerUnit.signum() <= 0) {
+                return null;
+            }
+            if (source.dimension() != UnitDimension.MASS && !sourceCountLike
+                    || target.dimension() != UnitDimension.MASS && !targetCountLike) {
+                // In particular, volume ↔ package/count must never borrow SKU mass.
+                return null;
+            }
+            if (sourceCountLike && target.dimension() == UnitDimension.MASS
+                    && target.factorToBase() != null) {
+                return qty.multiply(gramsPerUnit, CONVERSION_CONTEXT)
+                        .divide(target.factorToBase(), CONVERSION_CONTEXT);
+            }
+            if (source.dimension() == UnitDimension.MASS && source.factorToBase() != null
+                    && targetCountLike) {
+                return qty.multiply(source.factorToBase(), CONVERSION_CONTEXT)
+                        .divide(gramsPerUnit, CONVERSION_CONTEXT);
+            }
             return null;
         }
-        if (fromIsCount) {
-            // 计数(盒/个/件/只) → 重量(视为 kg): kg = 数量 × gramsPerUnit(g) / 1000
-            return qty.multiply(gramsPerUnit)
-                    .divide(BigDecimal.valueOf(1000), KG_SCALE, RoundingMode.HALF_UP);
+
+        if (source.dimension() != target.dimension()
+                || source.factorToBase() == null || target.factorToBase() == null
+                || (source.dimension() != UnitDimension.MASS
+                    && source.dimension() != UnitDimension.VOLUME
+                    && source.dimension() != UnitDimension.LENGTH)) {
+            return null;
         }
-        // 重量(视为 kg) → 计数: 盒数 = kg × 1000 / gramsPerUnit(g)
-        return qty.multiply(BigDecimal.valueOf(1000))
-                .divide(gramsPerUnit, COUNT_SCALE, RoundingMode.HALF_UP);
+        return qty.multiply(source.factorToBase(), CONVERSION_CONTEXT)
+                .divide(target.factorToBase(), CONVERSION_CONTEXT);
+    }
+
+    private static boolean isCountLike(CanonicalUnit unit) {
+        return unit.dimension() == UnitDimension.COUNT || unit.dimension() == UnitDimension.PACKAGE;
+    }
+
+    private static boolean requiresPackagingSnapshot(CanonicalUnit unit) {
+        return unit.dimension() == UnitDimension.PACKAGE && "箱".equals(unit.code());
     }
 
     /**
@@ -109,16 +162,26 @@ public final class FgQuantityUnitConverter {
         BigDecimal converted = convert(workingQty, workingFrom, workingTo, gramsPerUnit);
         if (converted == null) return null;
         if (!targetIsPackaging) return converted;
-        return converted.divide(toPackagingFactor, 4, RoundingMode.HALF_UP);
+        return converted.divide(toPackagingFactor, CONVERSION_CONTEXT);
     }
 
     private static boolean isPackagingMatch(
             String actualUnit, String packagingUnit, String baseUnit, BigDecimal factor) {
         return actualUnit != null
-                && actualUnit.equals(packagingUnit)
+                && sameBuiltInUnit(actualUnit, packagingUnit)
                 && baseUnit != null
                 && !baseUnit.isBlank()
                 && factor != null
                 && factor.signum() > 0;
+    }
+
+    private static boolean sameBuiltInUnit(String left, String right) {
+        if (left.equals(right)) {
+            return true;
+        }
+        Optional<CanonicalUnit> leftUnit = UnitContractServiceImpl.describeBuiltIn(left);
+        Optional<CanonicalUnit> rightUnit = UnitContractServiceImpl.describeBuiltIn(right);
+        return leftUnit.isPresent() && rightUnit.isPresent()
+                && leftUnit.get().code().equals(rightUnit.get().code());
     }
 }

@@ -231,6 +231,51 @@ class SalesReturnCostServiceTest {
                 .isEqualByComparingTo("10");
     }
 
+    @Test
+    void returnedRevenueIncludesNonPhysicalReturnsAndSumsPersistedAmountsWithoutRounding() {
+        ReturnOrder physical = order("RO-R1", "RTN-R1", item(21L, "SRC-1", "SKU-1", "盒", "1"));
+        physical.setTotalAmount(new BigDecimal("3.005"));
+        ReturnOrder refundOnly = order("RO-R2", "RTN-R2", item(22L, "SRC-1", "SKU-1", "盒", "1"));
+        refundOnly.setWithGoods(false);
+        refundOnly.setTotalAmount(new BigDecimal("7.005"));
+        when(returnOrderRepository.findByFactoryIdAndReturnTypeAndStatusAndReturnDateBetween(
+                eq(FACTORY), eq(ReturnType.SALES_RETURN), eq(ReturnOrderStatus.COMPLETED), any(), any()))
+                .thenReturn(List.of(physical, refundOnly));
+        when(voucherRepository.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull("RETURN_ORDER", "RO-R1"))
+                .thenReturn(Optional.of(postedVoucher("RO-R1", physical.getReturnDate())));
+        when(voucherRepository.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull("RETURN_ORDER", "RO-R2"))
+                .thenReturn(Optional.of(postedVoucher("RO-R2", refundOnly.getReturnDate())));
+
+        assertThat(service.returnedRevenue(FACTORY, physical.getReturnDate(), physical.getReturnDate()))
+                .isEqualByComparingTo("10.010");
+    }
+
+    @Test
+    void returnedRevenueRejectsForeignVoucherAndMissingAmount() {
+        ReturnOrder order = order("RO-R3", "RTN-R3", item(23L, "SRC-1", "SKU-1", "盒", "1"));
+        order.setTotalAmount(BigDecimal.ONE);
+        Voucher foreign = postedVoucher("RO-R3", order.getReturnDate());
+        foreign.setFactoryId("OTHER");
+        when(returnOrderRepository.findByFactoryIdAndReturnTypeAndStatusAndReturnDateBetween(
+                eq(FACTORY), eq(ReturnType.SALES_RETURN), eq(ReturnOrderStatus.COMPLETED), any(), any()))
+                .thenReturn(List.of(order));
+        when(voucherRepository.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull("RETURN_ORDER", "RO-R3"))
+                .thenReturn(Optional.of(foreign));
+        assertThatThrownBy(() -> service.returnedRevenue(FACTORY, order.getReturnDate(), order.getReturnDate()))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("凭证");
+
+        foreign.setFactoryId(FACTORY);
+        order.setTotalAmount(null);
+        assertThatThrownBy(() -> service.returnedRevenue(FACTORY, order.getReturnDate(), order.getReturnDate()))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("退货收入金额");
+        order.setTotalAmount(new BigDecimal("-0.01"));
+        assertThatThrownBy(() -> service.returnedRevenue(FACTORY, order.getReturnDate(), order.getReturnDate()))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("退货收入金额");
+    }
+
     private void stub(ReturnOrder order, ReturnOrderItem item, FinishedGoodsBatch source,
                       FinishedGoodsBatch returned) {
         when(returnOrderRepository.findByFactoryIdAndReturnTypeAndStatusAndReturnDateBetween(

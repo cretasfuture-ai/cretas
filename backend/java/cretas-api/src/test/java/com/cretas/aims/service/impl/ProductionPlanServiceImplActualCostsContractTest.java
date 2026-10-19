@@ -122,6 +122,40 @@ class ProductionPlanServiceImplActualCostsContractTest {
         verify(batchRepo).save(official);
     }
 
+    @Test void multipleBatchesCanConfirmOnlyUnrecordedZeroCosts() throws Exception {
+        var planRepo = mockPlanRepo(plan()); var batchRepo = mock(ProductionBatchRepository.class);
+        var first = batch(1L, FACTORY, "REGULAR"); var second = batch(2L, FACTORY, "REGULAR");
+        var clerk = batch(3L, FACTORY, "CLERK_WIP"); var foreign = batch(4L, "F007", "REGULAR");
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(first,second,clerk,foreign));
+        service(planRepo,batchRepo).updateActualCosts(FACTORY,PLAN_ID,null,null,BigDecimal.ZERO,BigDecimal.ZERO);
+        for (var batch : List.of(first,second)) {
+            assertThat(batch.getEquipmentCost()).isZero(); assertThat(batch.getOtherCost()).isZero(); verify(batchRepo).save(batch);
+        }
+        assertThat(clerk.getEquipmentCost()).isNull(); assertThat(foreign.getEquipmentCost()).isNull();
+    }
+
+    @Test void multiBatchZeroCannotEraseARecordedExpenseOrPartiallySave() throws Exception {
+        var planRepo = mockPlanRepo(plan()); var batchRepo = mock(ProductionBatchRepository.class);
+        var first = batch(1L, FACTORY, "REGULAR"); var second = batch(2L, FACTORY, "REGULAR");
+        second.setEquipmentCost(BigDecimal.TEN);
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(first,second));
+        assertThatThrownBy(() -> service(planRepo,batchRepo).updateActualCosts(FACTORY,PLAN_ID,null,null,BigDecimal.ZERO,BigDecimal.ZERO))
+                .isInstanceOf(BusinessException.class);
+        assertThat(second.getEquipmentCost()).isEqualByComparingTo(BigDecimal.TEN);
+        assertThat(first.getEquipmentCost()).isNull(); verify(batchRepo,never()).save(any()); verify(planRepo,never()).save(any());
+    }
+
+    @Test void multiBatchZeroCannotEraseAnExistingPlanLevelExpense() throws Exception {
+        var plan = plan(); plan.setActualEquipmentCost(BigDecimal.TEN);
+        var planRepo = mockPlanRepo(plan); var batchRepo = mock(ProductionBatchRepository.class);
+        var first = batch(1L, FACTORY, "REGULAR"); var second = batch(2L, FACTORY, "REGULAR");
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(first,second));
+        assertThatThrownBy(() -> service(planRepo,batchRepo).updateActualCosts(FACTORY,PLAN_ID,null,null,BigDecimal.ZERO,BigDecimal.ZERO))
+                .isInstanceOf(BusinessException.class);
+        assertThat(plan.getActualEquipmentCost()).isEqualByComparingTo(BigDecimal.TEN);
+        assertThat(first.getEquipmentCost()).isNull(); verify(batchRepo,never()).save(any()); verify(planRepo,never()).save(any());
+    }
+
     @Test
     void noOfficialBatchKeepsLegacyPlanOnlyUpdate() throws Exception {
         ProductionPlan plan = plan();

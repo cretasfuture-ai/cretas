@@ -196,7 +196,7 @@ describe('actual production metric basis and period', () => {
       alertLevel: null, fromCache: false, status: 'NO_DATA' });
     vi.mocked(listIndicatorVersions).mockResolvedValue({ content: [
       { id: 'month', indicatorId: 'i', periodStart: '2020-01-01', periodEnd: '2099-12-31', value: 501.32,
-        computedAt: '2026-10-17T09:00:00', alertLevel: null, computeSource: 'REAL_BUSINESS:FACTORY_ACTUAL_TOTAL_COST:actual-flow-v2' },
+        computedAt: '2026-10-17T09:00:00', alertLevel: null, computeSource: 'REAL_BUSINESS:FACTORY_ACTUAL_TOTAL_COST:actual-flow-v3' },
     ], totalElements: 1, totalPages: 1, number: 0, size: 10 });
     const wrapper = await open('FACTORY_ACTUAL_TOTAL_COST');
     expect((wrapper.vm as unknown as { versions: unknown[] }).versions).toHaveLength(0);
@@ -213,7 +213,7 @@ describe('actual production metric basis and period', () => {
     vi.mocked(getIndicatorDetail).mockResolvedValue({ code: 'FACTORY_LU_YIELD_RATE', name: '流转出成率', category: 'FACTORY',
       computeStrategy: 'REALTIME', isActive: true, factoryId: 'F-TEST' });
     vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'FACTORY_LU_YIELD_RATE', name: '流转出成率', value: 80,
-      alertLevel: null, fromCache: false, status: 'AVAILABLE', source: 'REAL_BUSINESS:FACTORY_LU_YIELD_RATE:actual-flow-v2' });
+      alertLevel: null, fromCache: false, status: 'AVAILABLE', source: 'REAL_BUSINESS:FACTORY_LU_YIELD_RATE:actual-flow-v3' });
     vi.mocked(listIndicatorVersions).mockResolvedValue({ content: [], totalElements: 0, totalPages: 0, number: 0, size: 200 });
 
     const wrapper = await open('FACTORY_LU_YIELD_RATE');
@@ -239,7 +239,7 @@ describe('actual production metric basis and period', () => {
     vi.mocked(getIndicatorDetail).mockResolvedValue({ code: 'FACTORY_LU_UNIT_COST', name: '流转单位成本', category: 'FACTORY',
       computeStrategy: 'REALTIME', isActive: true, factoryId: 'F-TEST' });
     vi.mocked(getIndicatorValue).mockResolvedValue({ code: 'FACTORY_LU_UNIT_COST', name: '流转单位成本', value: 12,
-      alertLevel: null, fromCache: false, status: 'AVAILABLE', source: 'REAL_BUSINESS:FACTORY_LU_UNIT_COST:actual-flow-v2' });
+      alertLevel: null, fromCache: false, status: 'AVAILABLE', source: 'REAL_BUSINESS:FACTORY_LU_UNIT_COST:actual-flow-v3' });
     vi.mocked(listIndicatorVersions).mockResolvedValue({ content: [
       { id: 'old', indicatorId: 'i', periodStart: '2026-10-01', periodEnd: '2026-10-15', value: 99, computedAt: '2026-10-14T09:00:00', alertLevel: null,
         computeSource: 'REAL_BUSINESS:FACTORY_LU_UNIT_COST:legacy' },

@@ -372,6 +372,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProcessSheetRowRepository processSheetRowRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.ReportedOutputCostAllocationService reportedOutputCostAllocationService;
+
     /**
      * 生产仓占用的释放 (释放路径 3/3: <b>结单扣减</b>) + 「这批料被谁占着」的归属查询。
      *
@@ -3729,6 +3732,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         DefectCountResolver.Resolved confirmedDefectCount = DefectCountResolver.resolve(
                 confirmation.getDefectCountOutcome(), confirmation.getDefectQuantity());
         ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
+        // Run the same one-click guard inside the locked settlement transaction,
+        // after its idempotent return. A retry must not audit already-consumed stock.
+        if (confirmation.isConfirm()) {
+            if (customerSuppliedSettlementCoverageGuard == null) {
+                throw new BusinessException(500, "结单完整性校验服务未初始化，不能结单")
+                        .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE");
+            }
+            latest = customerSuppliedSettlementCoverageGuard.audit(factoryId, planId, latest);
+            customerSuppliedSettlementCoverageGuard.requireCleanForOneClick(latest);
+        }
         ProductionSettlementRequest derived = latest != null ? latest.getPrefill() : null;
         List<ProductionSettlementPrefillResponse.Issue> blockers = latest == null || latest.getAudit() == null
                 ? List.of(issue("SETTLEMENT_FACTS_UNAVAILABLE", "无法读取当前报工事实，不能结单。", "processSheetRows"))
@@ -3894,6 +3907,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("Submit one or more terminal batches for every pinned output SKU and no other SKU");
         }
 
+        Map<String, BigDecimal> reportedRatios = null;
         List<ProductionSettlementOutputLine> lines = new ArrayList<>();
         for (ProductionSettlementRequest.OutputLine output : reportedOutputs) {
             String productTypeId = trimToNull(output.getProductTypeId());
@@ -3953,6 +3967,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             //    净效果是 NRV 被这道闸要求、被那道闸禁止 → 多成品计划结不了单。
             // ⚠️ 三态缺一不可: 只豁免 NRV 那一支的话, 占位产出下一步就会撞上
             //    OUTPUT_COST_ALLOCATION_RATIO_REQUIRED(它的 ratio 是自动置 0 的) —— 拒答只是挪了一格。
+            BigDecimal allocationRatio = recipe.getCostAllocationRatio();
             switch (bomWorkflowRevisionService.resolveOutputCostPolicy(factoryId, recipe)) {
                 case BY_PRODUCT_NRV -> {
                     if (recipe.getByproductNrvUnitPrice() == null
@@ -3966,8 +3981,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     }
                 }
                 case ALLOCATION_RATIO -> {
-                    if (recipe.getCostAllocationRatio() == null
-                            || recipe.getCostAllocationRatio().signum() <= 0) {
+                    if (allocationRatio == null && reportedOutputCostAllocationService != null) {
+                        if (reportedRatios == null) {
+                            reportedRatios = reportedOutputCostAllocationService.resolve(factoryId, plan.getId(), reportedOutputs);
+                        }
+                        allocationRatio = reportedRatios.get(productTypeId);
+                    }
+                    if (allocationRatio == null || allocationRatio.signum() <= 0) {
                         throw new BusinessException(409,
                                 "成品「" + resolveFinishedGoodLabel(productTypeId, recipe.getProductName()) + "」还没有成本分摊比例, 不能结单")
                                 .withCode("OUTPUT_COST_ALLOCATION_RATIO_REQUIRED")
@@ -4004,7 +4024,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setBomRecipeVersion(recipe.getVersion());
             line.setTargetTerminalNodeId(recipe.getTargetTerminalNodeId());
             line.setOutputRole(recipe.getOutputRole());
-            line.setCostAllocationRatio(recipe.getCostAllocationRatio());
+            line.setCostAllocationRatio(allocationRatio);
             line.setByproductNrvUnitPrice(recipe.getByproductNrvUnitPrice());
             lines.add(line);
         }
@@ -7982,7 +8002,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             finishedGoodsCount++;
         }
 
+        // Multi-output report batches retain their independently allocated source
+        // costs. The plan pool above updates settlement/FG values; copying the
+        // entire pool into every report batch would multiply production cost.
+        boolean multiOutputPool = lines.stream().map(ProductionSettlementOutputLine::getProductTypeId)
+                .distinct().limit(2).count() > 1;
         for (ProductionBatch batch : productionBatches) {
+            if (multiOutputPool) continue;
             batch.setMaterialCost(zeroIfNull(breakdown.getRawMaterialCost())
                     .add(breakdown.getSeasoningCost() == null ? BigDecimal.ZERO : breakdown.getSeasoningCost())
                     .add(breakdown.getPackagingCost() == null ? BigDecimal.ZERO : breakdown.getPackagingCost()));
@@ -7991,7 +8017,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             batch.setOtherCost(breakdown.getOtherCost());
             batch.calculateMetrics();
         }
-        productionBatchRepository.saveAll(productionBatches);
+        if (!multiOutputPool) productionBatchRepository.saveAll(productionBatches);
 
         if (productionCostConsistency != null) productionCostConsistency.invalidateCostIndicators(factoryId);
 
@@ -8667,6 +8693,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 设备/其他成本的核算读取批次级字段。只有唯一正式批次时才有明确归属，
         // 多批次禁止猜测分摊；空批次继续保留原有计划级更新行为。
         ProductionBatch officialBatch = null;
+        List<ProductionBatch> supplementalCostBatches = new ArrayList<>();
         if (equipmentCost != null || otherCost != null) {
             List<ProductionBatch> officialBatches = productionBatchRepository
                     .findByFactoryIdAndProductionPlanId(factoryId, planId);
@@ -8682,9 +8709,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
                     .count();
             if (officialBatchCount > 1) {
-                throw new BusinessException(409, "该生产计划关联多个正式批次，无法自动分摊设备/其他成本")
-                        .withHint("请按批次分别录入成本，或先保留计划级成本后再核对批次")
-                        .withHintTarget("equipmentCost");
+                // Nonnegative costs summing to an explicitly confirmed zero
+                // have one allocation only: every batch is zero. Never use
+                // this confirmation to erase a previously recorded expense.
+                boolean onlyZero = (equipmentCost == null || equipmentCost.signum() == 0)
+                        && (otherCost == null || otherCost.signum() == 0);
+                supplementalCostBatches = officialBatches.stream().filter(Objects::nonNull)
+                        .filter(batch -> Objects.equals(factoryId, batch.getFactoryId()))
+                        .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType())).toList();
+                boolean hasRecordedExpense = (equipmentCost != null && plan.getActualEquipmentCost() != null
+                        && plan.getActualEquipmentCost().signum() > 0)
+                        || (otherCost != null && plan.getActualOtherCost() != null && plan.getActualOtherCost().signum() > 0)
+                        || supplementalCostBatches.stream().anyMatch(batch ->
+                        (equipmentCost != null && batch.getEquipmentCost() != null && batch.getEquipmentCost().signum() > 0)
+                                || (otherCost != null && batch.getOtherCost() != null && batch.getOtherCost().signum() > 0));
+                if (!onlyZero || hasRecordedExpense) {
+                    throw new BusinessException(409, "该生产计划关联多个正式批次，无法自动分摊或覆盖设备/其他成本")
+                            .withHint("多批次仅支持统一确认无费用；有实际费用时需明确各批次分摊")
+                            .withHintTarget("equipmentCost");
+                }
+                officialBatch = null;
             }
         }
 
@@ -8702,14 +8746,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             plan.setActualOtherCost(otherCost);
         }
 
-        if (officialBatch != null) {
+        if (officialBatch != null) supplementalCostBatches.add(officialBatch);
+        for (ProductionBatch costBatch : supplementalCostBatches) {
             if (equipmentCost != null) {
-                officialBatch.setEquipmentCost(equipmentCost);
+                costBatch.setEquipmentCost(equipmentCost);
             }
             if (otherCost != null) {
-                officialBatch.setOtherCost(otherCost);
+                costBatch.setOtherCost(otherCost);
             }
-            productionBatchRepository.save(officialBatch);
+            productionBatchRepository.save(costBatch);
         }
 
         plan = productionPlanRepository.save(plan);

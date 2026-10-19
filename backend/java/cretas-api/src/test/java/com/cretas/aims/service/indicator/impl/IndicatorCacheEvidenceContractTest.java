@@ -76,14 +76,21 @@ class IndicatorCacheEvidenceContractTest {
 
     @Test void changedFormulaDoesNotRelabelAnOldCachedValueOrItsHistory() {
         Indicator indicator = root("JPA_AGGREGATE", true); evidence(indicator, start);
-        when(business.getSourceVersion()).thenReturn("actual-flow-v2");
+        IndicatorVersion old = new IndicatorVersion();
+        old.setFactoryId("F-TEST"); old.setPeriodStart(start); old.setPeriodEnd(end);
+        old.setComputedAt(indicator.getLastComputedAt()); old.setValue(BigDecimal.ZERO);
+        old.setComputeSource("REAL_BUSINESS:CACHE_TEST:actual-flow-v2");
+        when(versions.findFirstByIndicatorIdOrderByComputedAtDesc("cache-test")).thenReturn(Optional.of(old));
+        when(business.getSourceVersion()).thenReturn("actual-flow-v3");
         when(business.compute("F-TEST", start, end)).thenReturn(new BigDecimal("80"));
         var result = service.computeForCode("CACHE_TEST", "F-TEST", start, end);
         assertThat(result.cacheHit()).isFalse();
         assertThat(result.value()).isEqualByComparingTo("80");
-        assertThat(result.source()).isEqualTo("REAL_BUSINESS:CACHE_TEST:actual-flow-v2");
+        assertThat(result.source()).isEqualTo("REAL_BUSINESS:CACHE_TEST:actual-flow-v3");
         verify(versions).save(argThat(version -> version.getValue().compareTo(new BigDecimal("80")) == 0
-                && "REAL_BUSINESS:CACHE_TEST:actual-flow-v2".equals(version.getComputeSource())));
+                && "REAL_BUSINESS:CACHE_TEST:actual-flow-v3".equals(version.getComputeSource())));
+        assertThat(old.getValue()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(old.getComputeSource()).isEqualTo("REAL_BUSINESS:CACHE_TEST:actual-flow-v2");
         verify(business).compute("F-TEST", start, end);
     }
 }

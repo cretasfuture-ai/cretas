@@ -68,6 +68,13 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
             return false;
         }
 
+        // Numeric platform and factory ids are separate namespaces.
+        var actor = com.cretas.aims.security.AuthenticatedActor.current(request).orElse(null);
+        if (actor != null && actor.isPlatformAdmin()) {
+            if (actor.hasFactoryBypass()) return true;
+            sendPlatformDenied(response);
+            return false;
+        }
         User user = getCurrentUser(request);
         if (user == null) {
             sendUnauthorized(response, "用户未登录，无法校验账号模块访问权限");
@@ -98,7 +105,9 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
     }
 
     private User getCurrentUser(HttpServletRequest request) {
-        Object userIdObj = request.getAttribute("userId");
+        var actor = com.cretas.aims.security.AuthenticatedActor.current(request).orElse(null);
+        if (actor != null && actor.isPlatformAdmin()) return null;
+        Object userIdObj = actor == null ? request.getAttribute("userId") : actor.id();
         if (userIdObj == null) {
             return null;
         }
@@ -139,6 +148,13 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         body.put("severity", "error");
         response.getWriter().write(objectMapper.writeValueAsString(body));
         response.getWriter().flush();
+    }
+
+    private void sendPlatformDenied(HttpServletResponse response) throws Exception {
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json;charset=UTF-8");
+        objectMapper.writeValue(response.getWriter(), Map.of("success", false, "code", 403,
+                "message", "该平台角色无权访问工厂业务模块"));
     }
 
     private void sendUnauthorized(HttpServletResponse response, String message) throws Exception {

@@ -824,6 +824,10 @@
           <template v-if="pendingDecisionCount">，待人工确认 <b class="warn">{{ pendingDecisionCount }}</b> 项</template>
         </div>
 
+        <FactoryReadiness v-if="canonicalBlueprint" :factory-id="factoryId"
+          :blueprint-id="canonicalBlueprint.id" :row-version="canonicalBlueprint.rowVersion"
+          :refresh-key="readinessRefresh" />
+
         <FactoryBlueprintDraftsPanel
           v-if="canonicalBlueprint && ['VALIDATED', 'PUBLISHED', 'APPLIED'].includes(canonicalBlueprint.lifecycleState)"
           :factory-id="factoryId"
@@ -1058,6 +1062,7 @@ import FactoryConversationFactLedger from './components/FactoryConversationFactL
 import FactoryConversationRoutePreview from './components/FactoryConversationRoutePreview.vue'
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
+import FactoryReadiness from '../factory-review/components/FactoryReadiness.vue'
 import FactoryBasicsHandoff from './components/FactoryBasicsHandoff.vue'
 import type { FormalCapability, FormalExecution } from '@/api/factoryBlueprintActivationApi'
 import { formalRuntimeCounts } from './factoryBlueprintFormalState'
@@ -1161,8 +1166,10 @@ const generated = ref<AIFactoryInitResult | null>(null)
 const proposalNeedsCorrection = ref(false)
 const canonicalBlueprint = ref<CanonicalFactoryBlueprint | null>(null)
 const formalExecutions = ref<Partial<Record<FormalCapability, FormalExecution>>>({})
+const readinessRefresh = ref(0)
 const formalWorkflowReadbackCount = computed(() => formalRuntimeCounts(formalExecutions.value).workflow)
 function onFormalState(capability: FormalCapability, result: FormalExecution | null) {
+  readinessRefresh.value++
   if (result) formalExecutions.value[capability] = result
   else delete formalExecutions.value[capability]
 }

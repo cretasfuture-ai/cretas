@@ -21,7 +21,7 @@ const periodLabel = computed(() => props.period ? `${props.period[0]} 至 ${prop
 const rowKey = (row: ProductProductionResult) => row.productTypeId ?? '__unassigned__';
 
 function validate(result: ProductProductionMetrics, period: ActualFlowPeriod) {
-  if (result.periodStart !== period[0] || result.periodEnd !== period[1] || result.sourceVersion !== 'actual-flow-v2') {
+  if (result.periodStart !== period[0] || result.periodEnd !== period[1] || result.sourceVersion !== 'actual-flow-v3') {
     throw new Error('返回结果与所选期间或业务口径不一致');
   }
   if (!Array.isArray(result.products)) throw new Error('成品结果格式无效');
@@ -81,7 +81,7 @@ onBeforeUnmount(() => { alive = false; ++sequence; });
   <el-card class="product-production-results" shadow="never" data-testid="product-production-results">
     <template #header><div class="results-header"><span>按成品查看本期结果</span><el-button size="small" :loading="loading" @click="load">刷新成品结果</el-button></div></template>
     <p class="results-period">统计期间：{{ periodLabel }}</p>
-    <p class="results-note">按完工日期统计，沿用上方实际流口径；盒、袋等按生产时固定净重折算为公斤，比率按投入和产出加权，不能直接平均。缺少完整报工、质量计数或成本时显示“待补数据”。</p>
+    <p class="results-note">按完工日期统计，盒、袋等沿用生产时固定的重量。联产时，本成品产出公斤数÷同计划全部新鲜原料公斤数为贡献出成率，各成品贡献相加才是计划总出成率；共享投入只计一次，成本沿用正式结单分摊。缺少完整报工、质量计数或成本时显示“待补数据”。</p>
     <div v-if="loading" role="status">正在读取成品经营结果…</div>
     <el-alert v-else-if="error" :title="error" type="error" :closable="false"><el-button size="small" @click="load">重试</el-button></el-alert>
     <el-alert v-else-if="notice" :title="notice" type="warning" :closable="false" />

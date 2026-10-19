@@ -11,9 +11,13 @@ import com.cretas.aims.service.unit.UnitUsageScene;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.yield.OrderCostBreakdownService;
 import com.cretas.aims.service.yield.YieldReportService;
+import com.cretas.aims.service.yield.ProductionSummaryService;
+import com.cretas.aims.service.indicator.MultiOutputActualMetricsService;
+import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,9 +31,8 @@ import java.util.Map;
 
 /** Adapter to the authoritative reporting/cost services. Never uses planned quantities as actuals. */
 @Component
-@RequiredArgsConstructor
 public class FactoryActualProductionMetrics {
-    public static final String SOURCE_VERSION = "actual-flow-v2";
+    public static final String SOURCE_VERSION = "actual-flow-v3";
     public enum Metric { YIELD_RATE, GOOD_OUTPUT_RATE, UNIT_COST, TOTAL_COST }
 
     @PersistenceContext
@@ -37,6 +40,40 @@ public class FactoryActualProductionMetrics {
     private final YieldReportService yieldReportService;
     private final OrderCostBreakdownService costBreakdownService;
     private final UnitContractService units;
+    private final ProductionSummaryService productionSummaryService;
+    private final MultiOutputActualMetricsService multiOutputMetrics;
+    private final ProcessSheetService processSheetService;
+
+    /** Kept for source compatibility with strategy/unit tests that exercise the legacy path. */
+    public FactoryActualProductionMetrics(YieldReportService yieldReportService,
+                                          OrderCostBreakdownService costBreakdownService,
+                                          UnitContractService units) {
+        this(yieldReportService, costBreakdownService, units, null, new MultiOutputActualMetricsService(), null);
+    }
+
+    public FactoryActualProductionMetrics(YieldReportService yieldReportService,
+                                          OrderCostBreakdownService costBreakdownService,
+                                          UnitContractService units,
+                                          ProductionSummaryService productionSummaryService,
+                                          MultiOutputActualMetricsService multiOutputMetrics) {
+        this(yieldReportService, costBreakdownService, units, productionSummaryService,
+                multiOutputMetrics, null);
+    }
+
+    @Autowired
+    public FactoryActualProductionMetrics(YieldReportService yieldReportService,
+                                          OrderCostBreakdownService costBreakdownService,
+                                          UnitContractService units,
+                                          ProductionSummaryService productionSummaryService,
+                                          MultiOutputActualMetricsService multiOutputMetrics,
+                                          ProcessSheetService processSheetService) {
+        this.yieldReportService = yieldReportService;
+        this.costBreakdownService = costBreakdownService;
+        this.units = units;
+        this.productionSummaryService = productionSummaryService;
+        this.multiOutputMetrics = multiOutputMetrics == null ? new MultiOutputActualMetricsService() : multiOutputMetrics;
+        this.processSheetService = processSheetService;
+    }
 
     @Transactional(readOnly = true)
     public BigDecimal compute(String factoryId, LocalDate from, LocalDate through, Metric metric) {
@@ -67,10 +104,10 @@ public class FactoryActualProductionMetrics {
             products.add(ProductResult.builder().productTypeId(group.getKey())
                     .productName(name == null || name.isBlank() ? "成品资料待补全" : name)
                     .batchCount(batches.size()).batchNumbers(batches.stream().map(r -> (String) r[1]).toList())
-                    .yieldRate(aggregate(factoryId, batches, Metric.YIELD_RATE))
-                    .goodOutputRate(aggregate(factoryId, batches, Metric.GOOD_OUTPUT_RATE))
-                    .totalCost(maskCost ? null : aggregate(factoryId, batches, Metric.TOTAL_COST))
-                    .unitCost(maskCost ? null : aggregate(factoryId, batches, Metric.UNIT_COST))
+                    .yieldRate(aggregate(factoryId, batches, Metric.YIELD_RATE, rows))
+                    .goodOutputRate(aggregate(factoryId, batches, Metric.GOOD_OUTPUT_RATE, rows))
+                    .totalCost(maskCost ? null : aggregate(factoryId, batches, Metric.TOTAL_COST, rows))
+                    .unitCost(maskCost ? null : aggregate(factoryId, batches, Metric.UNIT_COST, rows))
                     .costMasked(maskCost).build());
         }
         return ProductProductionMetricsResponse.builder().periodStart(start).periodEnd(end)
@@ -87,7 +124,7 @@ public class FactoryActualProductionMetrics {
                         AND (x.batch_type IS NULL OR x.batch_type <> 'CLERK_WIP')),
                        (SELECT COUNT(*) FROM production_settlement_output_lines o
                         WHERE o.factory_id = b.factory_id AND o.settlement_id = s.id AND o.deleted_at IS NULL),
-                       b.product_type_id, pt.name
+                       b.product_type_id, pt.name, b.production_plan_id
                 FROM production_batches b
                 LEFT JOIN product_types pt ON pt.id = b.product_type_id AND pt.factory_id = b.factory_id
                 LEFT JOIN production_plans p ON p.id = b.production_plan_id AND p.factory_id = b.factory_id
@@ -97,13 +134,20 @@ public class FactoryActualProductionMetrics {
                   AND (b.batch_type IS NULL OR b.batch_type <> 'CLERK_WIP')
                   AND (b.production_plan_id IS NULL OR (p.status = 'COMPLETED' AND p.deleted_at IS NULL))
                   AND b.end_time >= ?2 AND b.end_time < ?3
-                ORDER BY b.id
-                """).setParameter(1, factoryId).setParameter(2, start.atStartOfDay())
+                """ + com.cretas.aims.service.production.FormalFinishedOutputScope.SQL_PREDICATE
+                + " ORDER BY b.id").setParameter(1, factoryId).setParameter(2, start.atStartOfDay())
                 .setParameter(3, end.plusDays(1).atStartOfDay()).getResultList();
     }
 
     BigDecimal aggregate(String factoryId, List<?> rows, Metric metric) {
+        return aggregate(factoryId, rows, metric, rows);
+    }
+
+    private BigDecimal aggregate(String factoryId, List<?> rows, Metric metric, List<?> evidenceRows) {
         if (rows.isEmpty()) return null;
+        if (rows.stream().map(r -> (Object[]) r).anyMatch(r -> ((Number) r[10]).longValue() > 1)) {
+            return aggregateJointPlans(factoryId, rows, evidenceRows, metric);
+        }
         BigDecimal inputKg = BigDecimal.ZERO, outputKg = BigDecimal.ZERO;
         BigDecimal inspectedKg = BigDecimal.ZERO, totalCost = BigDecimal.ZERO;
         for (Object raw : rows) {
@@ -170,6 +214,109 @@ public class FactoryActualProductionMetrics {
             case UNIT_COST -> divide(totalCost, outputKg);
             case TOTAL_COST -> totalCost.setScale(4, RoundingMode.HALF_UP);
         };
+    }
+
+    /** Deduplicates shared plan input/cost and uses the persisted finished weight snapshot. */
+    private BigDecimal aggregateJointPlans(String factoryId, List<?> rows, List<?> evidenceRows, Metric metric) {
+        if (productionSummaryService == null) return null;
+        boolean needsCost = metric == Metric.UNIT_COST || metric == Metric.TOTAL_COST;
+        Map<String, List<Object[]>> byPlan = new LinkedHashMap<>();
+        for (Object raw : rows) {
+            Object[] row = (Object[]) raw;
+            if (row.length <= 14 || row[14] == null || row[14].toString().isBlank()) return null;
+            byPlan.computeIfAbsent(row[14].toString(), ignored -> new ArrayList<>()).add(row);
+        }
+        List<MultiOutputActualMetricsService.Plan> plans = new ArrayList<>();
+        List<MultiOutputActualMetricsService.Output> outputs = new ArrayList<>();
+        for (Map.Entry<String, List<Object[]>> entry : byPlan.entrySet()) {
+            var summary = productionSummaryService.computeSummary(factoryId, entry.getKey(), true);
+            if (summary == null || summary.getYieldRawDenominator() == null
+                    || summary.getYieldRawDenominator().signum() <= 0
+                    || summary.getTotalFinishedWeight() == null
+                    || summary.getTotalFinishedWeight().signum() <= 0
+                    || (metric == Metric.YIELD_RATE && summary.getYieldNote() != null)) return null;
+            var cost = needsCost ? costBreakdownService.computeByPlan(factoryId, entry.getKey(), false) : null;
+            if (needsCost && (cost == null || !cost.isHasData() || !cost.isCostComplete()
+                    || cost.isPriceMasked() || !"COMPLETE".equals(cost.getCalculationStatus())
+                    || cost.getTotalCost() == null || cost.getTotalCost().signum() < 0
+                    || (cost.getEstimatedAuxItemCount() != null && cost.getEstimatedAuxItemCount() > 0)
+                    || (cost.getPartiallyRecordedAuxItemCount() != null && cost.getPartiallyRecordedAuxItemCount() > 0)
+                    || hasReferencePackagingCost(cost))) return null;
+            plans.add(new MultiOutputActualMetricsService.Plan(entry.getKey(), summary.getYieldRawDenominator(), needsCost ? cost.getTotalCost() : null));
+            List<?> lines = entityManager.createNativeQuery("""
+                    SELECT o.reported_batch_number, o.product_type_id, o.reported_quantity,
+                           o.quantity_unit, o.allocated_cost, s.defect_count_outcome,
+                           s.defect_quantity, s.quantity_unit
+                    FROM production_settlements s
+                    JOIN production_settlement_output_lines o ON o.settlement_id=s.id
+                       AND o.factory_id=s.factory_id AND o.production_plan_id=s.production_plan_id
+                       AND o.deleted_at IS NULL
+                    WHERE s.factory_id=?1 AND s.production_plan_id=?2 AND s.deleted_at IS NULL
+                      AND COALESCE(o.status,'REPORTED') <> 'CANCELLED'
+                      AND NULLIF(TRIM(o.reported_batch_number),'') IS NOT NULL
+                    ORDER BY o.id
+                    """).setParameter(1, factoryId).setParameter(2, entry.getKey()).getResultList();
+            if (lines.isEmpty()) return null;
+            List<ProcessSheetInventoryItem> card = processSheetService == null ? List.of()
+                    : processSheetService.getInventoryYieldCard(factoryId, entry.getKey());
+            BigDecimal matchedWeight = BigDecimal.ZERO;
+            for (Object raw : lines) {
+                Object[] line = (Object[]) raw;
+                boolean inWindow = evidenceRows.stream().map(r -> (Object[]) r)
+                        .anyMatch(r -> java.util.Objects.equals(r[1], line[0])
+                                && java.util.Objects.equals(r[12], line[1])
+                                && r.length > 14 && java.util.Objects.equals(r[14], entry.getKey()));
+                if (!inWindow) return null;
+                var matching = card.stream()
+                        .filter(i -> java.util.Objects.equals(i.getBatchNumber(), line[0])
+                                && java.util.Objects.equals(i.getProductTypeId(), line[1])
+                                && i.getProductWeight() != null && i.getProductWeight().signum() > 0)
+                        .toList();
+                if (matching.size() != 1) return null;
+                ProcessSheetInventoryItem snapshot = matching.getFirst();
+                BigDecimal outputKg = snapshot.getProductWeight();
+                matchedWeight = matchedWeight.add(outputKg);
+                BigDecimal allocated = decimal(line[4]);
+                if (outputKg == null || (needsCost && allocated == null) || line[0] == null || line[1] == null) return null;
+                if (metric != Metric.YIELD_RATE && line[5] == null) return null;
+                var quality = "NONE_CONFIRMED".equals(line[5])
+                        ? MultiOutputActualMetricsService.QualityStatus.NONE_CONFIRMED
+                        : "COUNTED".equals(line[5]) && lines.size() == 1 ? MultiOutputActualMetricsService.QualityStatus.COUNTED : null;
+                if (metric != Metric.YIELD_RATE && quality == null) return null;
+                BigDecimal reportedQuantity = decimal(line[2]);
+                if (reportedQuantity == null || reportedQuantity.signum() <= 0) return null;
+                if (snapshot.getProduced() == null || snapshot.getProduced().compareTo(reportedQuantity) != 0
+                        || !java.util.Objects.equals(snapshot.getUnit(), line[3])) return null;
+                if (metric != Metric.YIELD_RATE && quality == MultiOutputActualMetricsService.QualityStatus.NONE_CONFIRMED
+                        && (decimal(line[6]) == null || decimal(line[6]).signum() != 0)) return null;
+                if (quality == MultiOutputActualMetricsService.QualityStatus.COUNTED
+                        && (decimal(line[6]) == null || decimal(line[6]).signum() <= 0)) return null;
+                BigDecimal defectKg = metric == Metric.YIELD_RATE || quality == MultiOutputActualMetricsService.QualityStatus.NONE_CONFIRMED
+                        ? BigDecimal.ZERO : outputKg(factoryId, decimal(line[6]), (String) line[7],
+                        (String) line[3], snapshot.getProductWeight().divide(reportedQuantity, 10, RoundingMode.HALF_UP));
+                if (defectKg == null || defectKg.signum() < 0) return null;
+                outputs.add(new MultiOutputActualMetricsService.Output(entry.getKey(), (String) line[0],
+                        (String) line[1], outputKg, outputKg, defectKg, quality, allocated));
+            }
+            if (matchedWeight.subtract(summary.getTotalFinishedWeight()).abs()
+                    .compareTo(new BigDecimal("0.000001")) > 0) return null;
+        }
+        var productIds = rows.stream().map(r -> (String) ((Object[]) r)[12]).filter(java.util.Objects::nonNull).distinct().toList();
+        String product = productIds.size() == 1 ? productIds.getFirst() : null;
+        MultiOutputActualMetricsService.Metric adapted = MultiOutputActualMetricsService.Metric.valueOf(metric.name());
+        return product == null ? multiOutputMetrics.aggregate(plans, outputs, adapted)
+                : multiOutputMetrics.byProduct(plans, outputs, product, adapted);
+    }
+
+    private BigDecimal outputKg(String factoryId, BigDecimal quantity, String unit, String snapshotUnit, BigDecimal kgPerUnit) {
+        if (quantity == null || quantity.signum() <= 0 || unit == null || unit.isBlank()) return null;
+        var described = units.describe(factoryId, unit).orElse(null);
+        if (described != null && described.dimension() == UnitDimension.MASS) return kg(factoryId, quantity, unit);
+        // This factor belongs to the snapshot's unit only. Other count/package
+        // units cannot borrow it (e.g. one case is not one box).
+        if (kgPerUnit == null || kgPerUnit.signum() <= 0 || described == null) return null;
+        var converted = units.convert(quantity, context(factoryId, unit, snapshotUnit));
+        return converted != null && converted.succeeded() ? kgPerUnit.multiply(converted.quantity()) : null;
     }
 
 

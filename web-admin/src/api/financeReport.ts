@@ -158,6 +158,11 @@ export interface ShipmentSkuMargin {
   grossProfit: number | null;
   marginRate: number | null;
   roundingAdjustment: number | null;
+  reconciliationReturnedRevenue?: number | null;
+  reconciliationReturnedCost?: number | null;
+  reconciliationNetRevenue?: number | null;
+  reconciliationNetCost?: number | null;
+  reconciliationNetGrossProfit?: number | null;
   reconciliationStatus: 'MATCH' | 'MISMATCH' | 'PENDING_VOUCHERS' | 'PARTIAL_PERIOD';
   reconciliationMessage: string;
   financialStatement: IncomeStatementDTO | null;

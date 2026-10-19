@@ -2,6 +2,8 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.ShipmentRecord;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
@@ -34,6 +36,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -174,6 +179,204 @@ class TraceabilityServiceImplTest {
         assertThat(pack.getStartTime().toLocalDate().toString()).isEqualTo("2026-06-29");
         assertThat(pack.getOutputWeight()).isEqualTo(480.0);
         assertThat(response.getTraceCode()).as("没打过标签就没有溯源码, 不现造").isNull();
+    }
+
+    @Test
+    @DisplayName("full trace binds shared material and process row to the exact multi-output report group")
+    void getFullTrace_bindsSharedInputsAndStagesToExactMultiOutputGroup() {
+        ProductionBatch target = traceBatch(102L, "B-1", "sku-b", "plan-joint");
+        ProductionBatch sibling = traceBatch(101L, "A-1", "sku-a", "plan-joint");
+
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-1"))
+                .thenReturn(Optional.of(target));
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "A-1"))
+                .thenReturn(Optional.of(sibling));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(102L)).thenReturn(List.of());
+        when(materialConsumptionRepository.findByProductionBatchId(101L)).thenReturn(List.of(material("raw-1", 101L, "2")));
+        when(materialBatchRepository.findAllById(java.util.Set.of("raw-1")))
+                .thenReturn(List.of(materialBatch("raw-1", "RAW-1")));
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(102L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(102L)).thenReturn(List.of());
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-1")).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint"))
+                .thenReturn(List.of(
+                        groupedRow(1L, 101L, FACTORY, "plan-joint", 1, "A-1", "sku-a", "group-a", "1"),
+                        groupedRow(2L, 102L, FACTORY, "plan-joint", 1, "B-1", "sku-b", "group-a", "2"),
+                        groupedRow(3L, 103L, FACTORY, "plan-joint", 1, "B-2", "sku-b", "group-b", "9"),
+                        groupedRow(4L, 104L, FACTORY, "other-plan", 1, "B-3", "sku-b", "group-a", "7"),
+                        groupedRow(5L, 105L, "OTHER_FACTORY", "plan-joint", 1, "B-4", "sku-b", "group-a", "8")
+                ));
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(102L)).thenReturn(List.of());
+
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-1");
+
+        assertThat(response.getMaterials()).extracting(TraceabilityDTO.MaterialInfo::getBatchNumber)
+                .containsExactly("RAW-1");
+        assertThat(response.getMaterials().getFirst().getQuantity()).isEqualTo(2.0);
+        assertThat(response.getSharedInputSourceBatchNumber()).isEqualTo("A-1");
+        assertThat(response.getProcessingStages()).extracting(TraceabilityDTO.ProcessingStageInfo::getInputWeight)
+                .containsExactly(2.0);
+    }
+
+    @Test
+    @DisplayName("full trace leaves shared input unknown when multi-output association is malformed or crosses factory/plan")
+    void getFullTrace_rejectsMalformedOrCrossScopeMultiOutputAssociations() {
+        ProductionBatch target = traceBatch(202L, "B-2", "sku-b", "plan-joint");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-2"))
+                .thenReturn(Optional.of(target));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(202L)).thenReturn(List.of());
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(202L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(202L)).thenReturn(List.of());
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-2")).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint"))
+                .thenReturn(List.of(
+                        groupedRow(11L, 201L, FACTORY, "other-plan", 1, "A-2", "sku-a", "group-a", "4"),
+                        groupedRow(12L, 202L, "OTHER_FACTORY", "plan-joint", 1, "A-3", "sku-a", "group-a", "5"),
+                        groupedRow(13L, 202L, FACTORY, "plan-joint", 1, "B-2", "sku-b", "", "6")
+                ));
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(202L)).thenReturn(List.of());
+
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-2");
+
+        assertThat(response.getMaterials()).isEmpty();
+        assertThat(response.getSharedInputSourceBatchNumber()).isNull();
+        assertThat(response.getProcessingStages()).isEmpty();
+        verify(materialConsumptionRepository, never()).findByProductionBatchId(201L);
+    }
+
+    @Test
+    @DisplayName("full trace does not label a shared owner when multiple group owners have consumption")
+    void getFullTrace_ambiguousSharedOwnersDoNotSetSourceField() {
+        ProductionBatch target = traceBatch(302L, "B-3", "sku-b", "plan-joint");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-3"))
+                .thenReturn(Optional.of(target));
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "A-3"))
+                .thenReturn(Optional.of(traceBatch(301L, "A-3", "sku-a", "plan-joint")));
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "C-3"))
+                .thenReturn(Optional.of(traceBatch(303L, "C-3", "sku-c", "plan-joint")));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(302L)).thenReturn(List.of());
+        when(materialConsumptionRepository.findByProductionBatchId(301L)).thenReturn(List.of(material("raw-a", 301L, "1")));
+        when(materialConsumptionRepository.findByProductionBatchId(303L)).thenReturn(List.of(material("raw-c", 303L, "1")));
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(302L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(302L)).thenReturn(List.of());
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-3")).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint"))
+                .thenReturn(List.of(
+                        groupedRow(21L, 301L, FACTORY, "plan-joint", 1, "A-3", "sku-a", "group-c", "1"),
+                        groupedRow(22L, 302L, FACTORY, "plan-joint", 1, "B-3", "sku-b", "group-c", "1"),
+                        groupedRow(23L, 303L, FACTORY, "plan-joint", 1, "C-3", "sku-c", "group-c", "1")
+                ));
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(302L)).thenReturn(List.of());
+
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-3");
+
+        assertThat(response.getSharedInputSourceBatchNumber()).isNull();
+        assertThat(response.getMaterials()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {" ", "WRONG-NUMBER"})
+    void sharedOwnerCannotBorrowNumberFromAnotherReportGroup(String ownerNumber) {
+        ProductionBatch target = traceBatch(402L, "B-4", "sku-b", "plan-joint");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-4")).thenReturn(Optional.of(target));
+        org.mockito.Mockito.lenient().when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "A-4"))
+                .thenReturn(Optional.of(traceBatch(401L, "A-4", "sku-a", "plan-joint")));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint")).thenReturn(List.of(
+                groupedRow(31L, 401L, FACTORY, "plan-joint", 1, ownerNumber, "sku-a", "group-e", "1"),
+                groupedRow(32L, 402L, FACTORY, "plan-joint", 1, "B-4", "sku-b", "group-e", "1"),
+                groupedRow(33L, 401L, FACTORY, "plan-joint", 2, "A-4", "sku-a", "other-group", "9")));
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-4");
+        assertThat(response.getMaterials()).isEmpty();
+        assertThat(response.getSharedInputSourceBatchNumber()).isNull();
+        verify(materialConsumptionRepository, never()).findByProductionBatchId(401L);
+    }
+
+    @Test
+    void sharedOwnerRequiresMatchingPersistedBatchIdentity() {
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-5"))
+                .thenReturn(Optional.of(traceBatch(502L, "B-5", "sku-b", "plan-joint")));
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "A-5"))
+                .thenReturn(Optional.of(traceBatch(599L, "A-5", "sku-a", "plan-joint")));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint")).thenReturn(List.of(
+                groupedRow(41L, 501L, FACTORY, "plan-joint", 1, "A-5", "sku-a", "group-f", "1"),
+                groupedRow(42L, 502L, FACTORY, "plan-joint", 1, "B-5", "sku-b", "group-f", "1")));
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-5");
+        assertThat(response.getMaterials()).isEmpty();
+        assertThat(response.getSharedInputSourceBatchNumber()).isNull();
+        verify(materialConsumptionRepository, never()).findByProductionBatchId(501L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void ambiguousTargetGroupsAreUnknownRegardlessOfRepositoryOrder(boolean reverse) {
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-6"))
+                .thenReturn(Optional.of(traceBatch(602L, "B-6", "sku-b", "plan-joint")));
+        var rows = new java.util.ArrayList<>(List.of(
+                groupedRow(51L, 601L, FACTORY, "plan-joint", 1, "A-6", "sku-a", "group-g", "1"),
+                groupedRow(52L, 602L, FACTORY, "plan-joint", 1, "B-6", "sku-b", "group-g", "1"),
+                groupedRow(53L, 603L, FACTORY, "plan-joint", 1, "C-6", "sku-c", "group-h", "2"),
+                groupedRow(54L, 602L, FACTORY, "plan-joint", 1, "B-6", "sku-b", "group-h", "2")));
+        if (reverse) java.util.Collections.reverse(rows);
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint")).thenReturn(rows);
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-6");
+        assertThat(response.getMaterials()).isEmpty();
+        assertThat(response.getSharedInputSourceBatchNumber()).isNull();
+        assertThat(response.getProcessingStages()).isEmpty();
+        verify(materialConsumptionRepository, never()).findByProductionBatchId(601L);
+        verify(materialConsumptionRepository, never()).findByProductionBatchId(603L);
+    }
+
+    private ProductionBatch traceBatch(Long id, String number, String sku, String plan) {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY);
+        batch.setBatchNumber(number);
+        batch.setProductTypeId(sku);
+        batch.setProductName(sku);
+        batch.setProductionPlanId(plan);
+        return batch;
+    }
+
+    private MaterialConsumption material(String batchId, Long productionBatchId, String quantity) {
+        MaterialConsumption consumption = new MaterialConsumption();
+        consumption.setFactoryId(FACTORY);
+        consumption.setProductionPlanId("plan-joint");
+        consumption.setBatchId(batchId);
+        consumption.setProductionBatchId(productionBatchId);
+        consumption.setQuantity(new BigDecimal(quantity));
+        return consumption;
+    }
+
+    private MaterialBatch materialBatch(String id, String number) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(id);
+        batch.setBatchNumber(number);
+        batch.setMaterialTypeId("raw");
+        batch.setQuantityUnit("kg");
+        return batch;
+    }
+
+    private ProcessSheetRow groupedRow(Long id, Long batchId, String factory, String plan, Integer order,
+                                       String batchNumber, String sku, String baseRowId, String input) {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setId(id);
+        row.setFactoryId(factory);
+        row.setPlanId(plan);
+        row.setProcessCode("joint-process");
+        row.setProcessOrder(order);
+        row.setClientRowId("row-" + id);
+        row.setBatchNumber(batchNumber);
+        row.setBatchId(batchId);
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setRowPayload("{\"processName\":\"joint\",\"processDate\":\"2026-10-19\","
+                + "\"productTypeId\":\"" + sku + "\",\"inputQuantity\":" + input
+                + ",\"outputQuantity\":1,\"inputUnit\":\"kg\",\"outputUnit\":\"盒\","
+                + "\"multiOutputMember\":true,\"multiOutputBaseRowId\":\"" + baseRowId + "\"}");
+        return row;
     }
 
     private ProcessSheetRow processRow(Long id, Integer order, String processCode, String batchNumber, String payload) {
@@ -498,5 +701,6 @@ class TraceabilityServiceImplTest {
         assertThat(response.getTraceCode())
                 .as("溯源码必须是标签上印的那个(最新一张), 它才扫得回来")
                 .isEqualTo("TRACE-SL-DEMO-BATCH-V1-SEED01");
+        assertThat(response.getSharedInputSourceBatchNumber()).isNull();
     }
 }

@@ -22,6 +22,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Optional;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.never;
@@ -99,6 +102,47 @@ class ModuleEnabledInterceptorUserAccessTest {
                 .andExpect(jsonPath("$.success").value(false));
 
         verify(userModuleAccessService, never()).canAccessModule(org.mockito.Mockito.any(), org.mockito.Mockito.anyString());
+    }
+
+    @Test void typedPlatformBypassNeverLooksUpCollidingFactoryId() throws Exception {
+        when(factoryConfigService.isModuleEnabled("F006", "production_plan")).thenReturn(true);
+        for (String role : new String[]{"super_admin", "platform_admin", "developer"}) {
+            mockMvc.perform(get("/api/mobile/F006/test-protected/production-plan").requestAttr("userId", 1309L)
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(
+                            AuthenticatedActorType.PLATFORM_ADMIN, 1309L, null, role)))
+                    .andExpect(status().isOk());
+        }
+        verifyNoInteractions(userRepository, userModuleAccessService);
+    }
+
+    @Test void otherPlatformRolesCannotBorrowCollidingFactoryIdentity() throws Exception {
+        when(factoryConfigService.isModuleEnabled("F006", "production_plan")).thenReturn(true);
+        for (String role : new String[]{"auditor", "operation_admin", "system_admin"}) {
+            mockMvc.perform(get("/api/mobile/F006/test-protected/production-plan").requestAttr("userId", 1309L)
+                    .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(
+                            AuthenticatedActorType.PLATFORM_ADMIN, 1309L, null, role)))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(userRepository, userModuleAccessService);
+    }
+
+    @Test void factoryRoleNamedLikePlatformNeverGetsBypass() throws Exception {
+        User user = user(1309L, "F006", "factory-user", "super_admin");
+        when(factoryConfigService.isModuleEnabled("F006", "production_plan")).thenReturn(true);
+        when(userRepository.findById(1309L)).thenReturn(Optional.of(user));
+        when(userModuleAccessService.canAccessModule(user, "production_plan")).thenReturn(false);
+        mockMvc.perform(asUser(get("/api/mobile/F006/test-protected/production-plan"), 1309L)
+                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(
+                        AuthenticatedActorType.FACTORY_USER, 1309L, "F006", "super_admin")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test void disabledFactoryModuleStillBlocksAuthorizedPlatform() throws Exception {
+        mockMvc.perform(get("/api/mobile/F006/test-protected/production-plan")
+                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(
+                        AuthenticatedActorType.PLATFORM_ADMIN, 1309L, null, "super_admin")))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(userRepository, userModuleAccessService);
     }
 
     private static MockHttpServletRequestBuilder asUser(MockHttpServletRequestBuilder builder, long userId) {

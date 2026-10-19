@@ -1680,6 +1680,35 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public void validateDraftForPublish(String factoryId, String recipeId, ProductProcessWorkflowRevision target) {
+        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        List<BomRecipe> family = activationFamily(factoryId, recipe);
+        for (BomRecipe member : family) {
+            if (member.getStatus() != BomRecipe.Status.DRAFT
+                    || !Objects.equals(member.getWorkflowRevisionId(), target.getId())
+                    || !Objects.equals(member.getWorkflowRevisionHash(), target.getRevisionHash())
+                    || !Objects.equals(member.getWorkflowId(), target.getWorkflowId())) {
+                throw bomError(409, "发布草稿与目标工艺修订不一致", "BOM_WORKFLOW_DRAFT_IDENTITY_INVALID",
+                        "请刷新并完善目标工艺对应的配方草稿", "workflow");
+            }
+        }
+        validateFamilyContracts(factoryId, family);
+        validateByProductCreditRules(family);
+        for (BomRecipe member : family) {
+            ProductType product = productTypeRepo.findByIdAndFactoryId(member.getProductTypeId(), factoryId)
+                    .orElseThrow(() -> bomError(404, "产品不存在或不属于当前工厂", "BOM_PRODUCT_MISSING",
+                            "请先确认产出产品档案", "productTypeId"));
+            validateProductOutputMetadata(product);
+            validateRecipeOutputContract(factoryId, member, product);
+            if (BomRecipe.bearsOwnInputRows(member.getOutputRole())) {
+                validateActivatableItems(member);
+                readinessService.requireBomCompleteForActivation(factoryId, member);
+            }
+        }
+    }
+
     private void validateInputSlotCoverage(String factoryId, BomRecipe member) {
         List<BomWorkflowRevisionService.InputSlot> slots = BomWorkflowRevisionService.resolveInputSlots(
                 bomWorkflowRevisionService.resolvePinnedGraph(factoryId, member));

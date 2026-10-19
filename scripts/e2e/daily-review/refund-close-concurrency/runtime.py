@@ -5,7 +5,7 @@ import psycopg,psutil
 import argparse
 
 ROOT=Path(__file__).resolve().parents[4]
-parser=argparse.ArgumentParser();parser.add_argument('ack',choices=['NON_PRODUCTION_ONLY']);parser.add_argument('--profile',choices=['P30','P31','P34'],default='P30');options=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('ack',choices=['NON_PRODUCTION_ONLY']);parser.add_argument('--profile',choices=['P30','P31','P34','P37'],default='P30');options=parser.parse_args()
 P31=options.profile=='P31';OUT=Path.home()/('Documents/cretas-connect-20261015/factory-data-'+options.profile.lower())
 SOURCE='p30_refund_close_20261018' if P31 else 'p14_new_factory_20261016';TARGET='p31_finance_closeout_20261018' if P31 else 'p30_refund_close_20261018';OWNER='P31-FINANCE-CLOSEOUT-20261018' if P31 else 'P30-REFUND-CLOSE-RACE-20261018'
 JAVA_PORT,WEB_PORT,OBJECT_PORT=(10068,31768,18398) if P31 else (10066,31766,18396)
@@ -13,6 +13,10 @@ P34=options.profile=='P34'
 if P34:
  SOURCE,TARGET,OWNER='p31_finance_closeout_20261018','p34_disposal_guard_20261018','P34-DISPOSAL-LIFECYCLE-GUARD-20261018'
  JAVA_PORT,WEB_PORT,OBJECT_PORT=10070,31770,18400
+P37=options.profile=='P37'
+if P37:
+ SOURCE,TARGET,OWNER='p34_disposal_guard_20261018','p37_factory_generality_20261018','P37-FACTORY-GENERALITY-20261018'
+ JAVA_PORT,WEB_PORT,OBJECT_PORT=10072,31772,18402
 OUT.mkdir(exist_ok=True)
 def busy(port):
  try:
@@ -21,12 +25,12 @@ def busy(port):
 assert not (OUT/'runtime.json').exists(),'Existing runtime: inspect instead of replacing/replaying'
 assert not any(busy(p) for p in (JAVA_PORT,WEB_PORT,OBJECT_PORT)),'Dedicated ports occupied'
 assert psutil.virtual_memory().available>5*1024**3
-accepted=OUT.parent/('factory-data-p31' if P34 else 'factory-data-p30' if P31 else 'factory-data-p29');old=json.loads((accepted/'runtime.json').read_text())
-assert old['owner']==('P31-FINANCE-CLOSEOUT-20261018' if P34 else 'P30-REFUND-CLOSE-RACE-20261018' if P31 else 'P29-SKU-FINANCE-PERIOD-20261018')
+accepted=OUT.parent/('factory-data-p34' if P37 else 'factory-data-p31' if P34 else 'factory-data-p30' if P31 else 'factory-data-p29');old=json.loads((accepted/'runtime.json').read_text())
+assert old['owner']==('P34-DISPOSAL-LIFECYCLE-GUARD-20261018' if P37 else 'P31-FINANCE-CLOSEOUT-20261018' if P34 else 'P30-REFUND-CLOSE-RACE-20261018' if P31 else 'P29-SKU-FINANCE-PERIOD-20261018')
 process=psutil.Process(old['javaPid']);assert process.name().lower()=='java.exe' and '@'+old['javaArgFile'] in process.cmdline()
 fixed=json.loads((OUT/'product-final-freeze.json').read_text()) if (OUT/'product-final-freeze.json').exists() else {}
-assert not (P31 or P34) or fixed,'Dedicated profile requires its own tested product freeze'
-previous=json.loads((accepted/'product-final-freeze.json').read_text()) if P34 else {} if P31 else json.loads((accepted/'source-final-freeze.json').read_text(encoding='utf-8-sig'))
+assert not (P31 or P34 or P37) or fixed,'Dedicated profile requires its own tested product freeze'
+previous={} if P37 else json.loads((accepted/'product-final-freeze.json').read_text()) if P34 else {} if P31 else json.loads((accepted/'source-final-freeze.json').read_text(encoding='utf-8-sig'))
 for f,digest in {**previous,**fixed}.items():
  assert hashlib.sha256((ROOT/f).read_bytes()).hexdigest()==digest,'Source drift: '+f
 record=OUT/'database.json'
@@ -49,9 +53,11 @@ args=[json.loads(line) for line in Path(template['javaArgFile']).read_text(encod
 if fixed:
  assert 'BUILD SUCCESS' in (OUT/'java-final.log').read_text(encoding='utf-8',errors='replace')
  cp=args.index('-cp')+1;args[cp]=args[cp].replace('factory-data-p30','factory-data-p34') if P34 else args[cp].replace('factory-data-p30','factory-data-p31') if P31 else args[cp].replace('factory-data-p29','factory-data-p30')
+ if P37:args[cp]=str(OUT/'build/classes')+';'+str(OUT/'build/test-classes')+';'+';'.join(args[cp].split(';')[1:])
 url='jdbc:postgresql://127.0.0.1:55447/'+TARGET+'?stringtype=unspecified'
 if P34:url+='&options=-c%20lock_timeout%3D3s'
 overrides={'server.port':str(JAVA_PORT),'server.address':'127.0.0.1','spring.datasource.url':url,'smartbi.postgres.url':url,'spring.jpa.hibernate.ddl-auto':'none','spring.flyway.enabled':'false','spring.sql.init.mode':'never','logging.file.name':str(OUT/'java-application.log'),'spring.servlet.multipart.location':str(OUT/'uploads'),'p0.local-objects.root':str(OUT/'object-data'),'p0.local-objects.port':str(OBJECT_PORT),'aliyun.oss.endpoint':'127.0.0.1:'+str(OBJECT_PORT)}
+if P37:overrides['cretas.platform.factory-assembly.enabled']='true'
 for key in ('python-smartbi.url','cretas.python.base-url','cretas.ai.service.url','python-error-analysis.url','python-classifier.url'):overrides[key]='http://127.0.0.1:18098'
 args=[a for a in args if not(a.startswith('--') and a[2:].split('=',1)[0] in overrides)]
 args+=['--'+k+'='+v for k,v in overrides.items()]
@@ -71,5 +77,6 @@ with (OUT/'java.log').open('w',encoding='utf-8') as log:java=subprocess.Popen(['
 env.update(VITE_BACKEND_URL='http://127.0.0.1:'+str(JAVA_PORT),VITE_PYTHON_URL='http://127.0.0.1:18098')
 with (OUT/'web.log').open('w',encoding='utf-8') as log:web=subprocess.Popen(['node',str(ROOT/'web-admin/node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port',str(WEB_PORT),'--strictPort'],cwd=ROOT/'web-admin',env=env,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW)
 runtime={**meta,'javaPid':java.pid,'webPid':web.pid,'javaArgFile':str(argfile),'ports':[JAVA_PORT,WEB_PORT,OBJECT_PORT],'sourceRuntimeUntouched':True,'acceptedProductBase':'2f519de714a68ed1f71cc1e85972a153e8d524b7' if P34 else '716c3474e3df9361cb339cef167266cb3bfbf2fb' if P31 else '7d80003c86bd985a02f0e87847585d89fd2a2219'}
+if P37:runtime['acceptedProductBase']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
 (OUT/'runtime.json').write_text(json.dumps(runtime,indent=2),encoding='utf-8')
 print(json.dumps({'status':'STARTED_NOT_YET_ACCEPTED','database':TARGET,'javaPid':java.pid,'webPid':web.pid}))

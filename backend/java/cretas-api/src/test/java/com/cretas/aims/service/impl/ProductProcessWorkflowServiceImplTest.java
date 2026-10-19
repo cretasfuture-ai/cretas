@@ -815,6 +815,52 @@ class ProductProcessWorkflowServiceImplTest {
         verify(repository).saveAndFlush(draft);
     }
 
+    @Test void legacyPublishPreservesContentAddressedOwnerForRawSplit() throws Exception {
+        assertRawSplitPublicationPreservesIdentity(false);
+    }
+
+    @Test void atomicPublishPreservesContentAddressedOwnerForRawSplit() throws Exception {
+        assertRawSplitPublicationPreservesIdentity(true);
+    }
+
+    private void assertRawSplitPublicationPreservesIdentity(boolean atomic) throws Exception {
+        var definition = new ProductProcessWorkflowDTO(); definition.setSchemaVersion(1);
+        definition.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
+        definition.setNodes(List.of(material("raw", "RAW_MATERIAL", "共享原料", "RM-SHARED"),
+                process("split", "分装", List.of(port("in", "INPUT", "raw", "RAW_MATERIAL", 0),
+                        port("a", "OUTPUT", "fg-a", "FINISHED_GOOD", 0),
+                        port("b", "OUTPUT", "fg-b", "FINISHED_GOOD", 1))),
+                material("fg-a", "FINISHED_GOOD", "成品甲", PRODUCT_ID),
+                material("fg-b", "FINISHED_GOOD", "成品乙", "PT-B")));
+        definition.setEdges(List.of(edge("in", "raw", "output", "split", "in"),
+                edge("a", "split", "a", "fg-a", "input"), edge("b", "split", "b", "fg-b", "input")));
+        var draft = persistedDraft(definition, 3L); stubDraft(draft);
+        var revision = currentRevision(); revision.setNodesJson(draft.getNodesJson());
+        revision.setEdgesJson(draft.getEdgesJson()); revision.setViewportJson(draft.getViewportJson());
+        revision.setSchemaVersion(1);
+        var hasher = new com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService(null, null, null, new ObjectMapper());
+        String savedHash = hasher.hash(revision); revision.setRevisionHash(savedHash);
+        draft.setCurrentRevisionId(revision.getId()); draft.setCurrentRevisionHash(savedHash);
+        var raw = new RawMaterialType(); raw.setId("RM-SHARED"); raw.setFactoryId(FACTORY_ID);
+        lenient().when(rawMaterialTypeRepository.findById("RM-SHARED")).thenReturn(Optional.of(raw));
+        // Faithfully model the old bulk update: changing the revision owner invalidates its hash.
+        lenient().when(repository.reanchorLineage(FACTORY_ID, PRODUCT_ID, "RM-SHARED"))
+                .thenAnswer(invocation -> { draft.setProductTypeId("RM-SHARED"); return 1; });
+        lenient().when(revisionRepository.reanchorOwner(FACTORY_ID, PRODUCT_ID, "RM-SHARED"))
+                .thenAnswer(invocation -> { revision.setProductTypeId("RM-SHARED"); return 1; });
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        if (atomic) {
+            when(workflowBomSynchronizationService.preflight(FACTORY_ID, PRODUCT_ID, revision)).thenReturn(readyPreflight());
+            service.publishAndActivate(FACTORY_ID, PRODUCT_ID, 3L, "owner-stable", revision.getId(), savedHash, 1, 77L);
+        } else service.publish(FACTORY_ID, PRODUCT_ID, 3L, 77L);
+        assertEquals(savedHash, hasher.hash(revision), "Publication must preserve its immutable content address");
+        assertEquals(PRODUCT_ID, draft.getProductTypeId());
+        assertEquals(PRODUCT_ID, revision.getProductTypeId());
+        verify(repository, never()).reanchorLineage(anyString(), anyString(), anyString());
+        verify(revisionRepository, never()).reanchorOwner(anyString(), anyString(), anyString());
+        verify(activationRepository, never()).reanchorOwner(anyString(), anyString(), anyString());
+    }
+
     @Test
     @DisplayName("旧发布入口激活失败时异常外抛且不会绕过原子协调顺序")
     void legacyPublishPropagatesActivationFailureAfterBomSyncAndPublish() throws Exception {

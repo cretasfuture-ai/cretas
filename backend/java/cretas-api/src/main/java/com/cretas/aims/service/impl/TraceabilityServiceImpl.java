@@ -166,15 +166,16 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         TraceabilityDTO.ProductionInfo productionInfo = buildProductionInfo(batch, factoryId);
 
         // 3. 获取原材料消耗记录并构建材料信息
-        List<MaterialConsumption> consumptions = materialConsumptionRepository
-                .findByProductionBatchId(batch.getId());
-        List<TraceabilityDTO.MaterialInfo> materials = buildMaterialInfoList(consumptions);
+        List<ProcessSheetRow> processSheetRows = loadTraceProcessSheetRows(factoryId, batch);
+        TraceConsumptionResolution traceConsumptions = resolveTraceConsumptions(factoryId, batch, processSheetRows);
+        List<TraceabilityDTO.MaterialInfo> materials = buildMaterialInfoList(traceConsumptions.consumptions());
 
         // 4. 获取加工环节记录
         List<ProcessingStageRecord> stageRecords = processingStageRecordRepository
                 .findByProductionBatchIdOrderByStageOrderAsc(batch.getId());
         List<TraceabilityDTO.ProcessingStageInfo> processingStages = buildProcessingStageInfoList(stageRecords);
-        List<TraceabilityDTO.ProcessingStageInfo> sheetStages = buildProcessSheetStageInfoList(factoryId, batch);
+        List<TraceabilityDTO.ProcessingStageInfo> sheetStages = buildProcessSheetStageInfoList(
+                factoryId, batch, processSheetRows);
         if (!sheetStages.isEmpty()) {
             processingStages = new ArrayList<>(processingStages);
             processingStages.addAll(sheetStages);
@@ -205,6 +206,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         return TraceabilityDTO.FullTraceResponse.builder()
                 .production(productionInfo)
                 .materials(materials)
+                .sharedInputSourceBatchNumber(traceConsumptions.sharedOwnerBatchNumber())
                 .processingStages(processingStages)
                 .qualityInspections(qualityInfos)
                 .shipments(shipments)
@@ -464,18 +466,26 @@ public class TraceabilityServiceImpl implements TraceabilityService {
      * Legacy ProcessingStageRecord is often empty for those rows, so full trace
      * must expose the row lineage here or mixed-batch traceability looks blank.
      */
-    private List<TraceabilityDTO.ProcessingStageInfo> buildProcessSheetStageInfoList(String factoryId, ProductionBatch batch) {
-        if (batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
-            return List.of();
-        }
-        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, batch.getProductionPlanId());
+    private List<TraceabilityDTO.ProcessingStageInfo> buildProcessSheetStageInfoList(
+            String factoryId, ProductionBatch batch, List<ProcessSheetRow> rows) {
         if (rows.isEmpty()) {
             return List.of();
         }
+        Set<Long> exactGroupBatchIds = resolveExactMultiOutputGroupBatchIds(factoryId, batch, rows);
+        String exactGroupKey = resolveTargetMultiOutputGroupKey(factoryId, batch, rows);
+        boolean malformedMultiOutputAssociation = hasMalformedMultiOutputAssociation(factoryId, batch, rows);
         return rows.stream()
                 .map(this::toProcessSheetStage)
                 .filter(Objects::nonNull)
-                .filter(s -> isTargetProductStage(s.payload, batch) || Objects.equals(s.row.getBatchNumber(), batch.getBatchNumber()))
+                .filter(s -> exactGroupBatchIds.isEmpty()
+                        ? !malformedMultiOutputAssociation
+                            && (isTargetProductStage(s.payload, batch)
+                                || Objects.equals(s.row.getBatchNumber(), batch.getBatchNumber()))
+                        : Objects.equals(batch.getId(), s.row.getBatchId())
+                            && Objects.equals(factoryId, s.row.getFactoryId())
+                            && Objects.equals(batch.getProductionPlanId(), s.row.getPlanId())
+                            && Objects.equals(batch.getBatchNumber(), s.row.getBatchNumber())
+                            && Objects.equals(exactGroupKey, multiOutputGroupKey(s.row, s.payload)))
                 .sorted(Comparator.comparing(
                         s -> s.row.getProcessOrder(),
                         Comparator.nullsLast(Integer::compareTo)))
@@ -498,6 +508,163 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                         .build())
                 .collect(Collectors.toList());
     }
+
+    private List<ProcessSheetRow> loadTraceProcessSheetRows(String factoryId, ProductionBatch batch) {
+        if (processSheetRowRepository == null || batch.getProductionPlanId() == null
+                || batch.getProductionPlanId().isBlank()) {
+            return List.of();
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(
+                factoryId, batch.getProductionPlanId());
+        return rows == null ? List.of() : rows;
+    }
+
+    private TraceConsumptionResolution resolveTraceConsumptions(
+            String factoryId, ProductionBatch batch, List<ProcessSheetRow> rows) {
+        List<MaterialConsumption> direct = Optional.ofNullable(
+                materialConsumptionRepository.findByProductionBatchId(batch.getId())).orElseGet(List::of);
+        if (!direct.isEmpty() || rows.isEmpty()) {
+            return new TraceConsumptionResolution(direct, null);
+        }
+        Set<Long> groupBatchIds = resolveExactMultiOutputGroupBatchIds(factoryId, batch, rows);
+        if (groupBatchIds.isEmpty()) {
+            return new TraceConsumptionResolution(direct, null);
+        }
+        List<TraceConsumptionOwner> owners = groupBatchIds.stream()
+                .filter(id -> !Objects.equals(id, batch.getId()))
+                .map(id -> resolveTraceOwner(factoryId, batch, rows, id))
+                .filter(Objects::nonNull)
+                .filter(owner -> !owner.consumptions().isEmpty())
+                .toList();
+        // One and only one group owner is authoritative for shared input.  Multiple
+        // owners are ambiguous and must not be merged into a fabricated total.
+        if (owners.size() != 1) {
+            return new TraceConsumptionResolution(direct, null);
+        }
+        return new TraceConsumptionResolution(owners.getFirst().consumptions(),
+                owners.getFirst().batch().getBatchNumber());
+    }
+
+    private TraceConsumptionOwner resolveTraceOwner(
+            String factoryId, ProductionBatch target, List<ProcessSheetRow> rows, Long batchId) {
+        Optional<ProductionBatch> owner = verifiedGroupBatch(factoryId, target, rows, batchId);
+        if (owner.isEmpty()) {
+            return null;
+        }
+        List<MaterialConsumption> consumptions = Optional.ofNullable(
+                        materialConsumptionRepository.findByProductionBatchId(batchId))
+                .orElseGet(List::of).stream()
+                .filter(c -> Objects.equals(owner.get().getId(), c.getProductionBatchId())
+                        && c.getDeletedAt() == null
+                        && Objects.equals(factoryId, c.getFactoryId())
+                        && Objects.equals(target.getProductionPlanId(), c.getProductionPlanId()))
+                .toList();
+        return new TraceConsumptionOwner(owner.get(), consumptions);
+    }
+
+    private Set<Long> resolveExactMultiOutputGroupBatchIds(
+            String factoryId, ProductionBatch batch, List<ProcessSheetRow> rows) {
+        Set<String> targetKeys = rows.stream()
+                .map(this::toProcessSheetStage)
+                .filter(Objects::nonNull)
+                .filter(s -> Objects.equals(batch.getId(), s.row.getBatchId())
+                        && Objects.equals(factoryId, s.row.getFactoryId())
+                        && Objects.equals(batch.getProductionPlanId(), s.row.getPlanId())
+                        && Objects.equals(batch.getBatchNumber(), s.row.getBatchNumber()))
+                .filter(s -> isValidMultiOutputMember(s.payload))
+                .map(s -> multiOutputGroupKey(s.row, s.payload))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (targetKeys.size() != 1) {
+            return Set.of();
+        }
+        String key = targetKeys.iterator().next();
+        return rows.stream()
+                .map(this::toProcessSheetStage)
+                .filter(Objects::nonNull)
+                .filter(s -> Objects.equals(factoryId, s.row.getFactoryId())
+                        && Objects.equals(batch.getProductionPlanId(), s.row.getPlanId())
+                        && isValidMultiOutputMember(s.payload)
+                        && Objects.equals(key, multiOutputGroupKey(s.row, s.payload))
+                        && s.row.getBatchId() != null)
+                .map(s -> s.row.getBatchId())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private String resolveTargetMultiOutputGroupKey(
+            String factoryId, ProductionBatch batch, List<ProcessSheetRow> rows) {
+        Set<String> keys = rows.stream().map(this::toProcessSheetStage).filter(Objects::nonNull)
+                .filter(s -> Objects.equals(batch.getId(), s.row.getBatchId())
+                        && Objects.equals(factoryId, s.row.getFactoryId())
+                        && Objects.equals(batch.getProductionPlanId(), s.row.getPlanId())
+                        && Objects.equals(batch.getBatchNumber(), s.row.getBatchNumber())
+                        && isValidMultiOutputMember(s.payload))
+                .map(s -> multiOutputGroupKey(s.row, s.payload))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return keys.size() == 1 ? keys.iterator().next() : null;
+    }
+
+    private boolean hasMalformedMultiOutputAssociation(
+            String factoryId, ProductionBatch batch, List<ProcessSheetRow> rows) {
+        boolean malformed = rows.stream().map(this::toProcessSheetStage).filter(Objects::nonNull)
+                .anyMatch(s -> Objects.equals(factoryId, s.row.getFactoryId())
+                        && Objects.equals(batch.getProductionPlanId(), s.row.getPlanId())
+                        && Objects.equals(batch.getBatchNumber(), s.row.getBatchNumber())
+                        && Boolean.TRUE.equals(s.payload.get("multiOutputMember"))
+                        && (!Objects.equals(batch.getId(), s.row.getBatchId())
+                            || !isValidMultiOutputMember(s.payload)));
+        long distinctTargetKeys = rows.stream().map(this::toProcessSheetStage).filter(Objects::nonNull)
+                .filter(s -> Objects.equals(batch.getId(), s.row.getBatchId())
+                        && Objects.equals(factoryId, s.row.getFactoryId())
+                        && Objects.equals(batch.getProductionPlanId(), s.row.getPlanId())
+                        && Objects.equals(batch.getBatchNumber(), s.row.getBatchNumber())
+                        && isValidMultiOutputMember(s.payload))
+                .map(s -> multiOutputGroupKey(s.row, s.payload))
+                .distinct().count();
+        return malformed || distinctTargetKeys > 1;
+    }
+
+    private Optional<ProductionBatch> verifiedGroupBatch(
+            String factoryId, ProductionBatch target, List<ProcessSheetRow> rows, Long batchId) {
+        String groupKey = resolveTargetMultiOutputGroupKey(factoryId, target, rows);
+        if (groupKey == null) {
+            return Optional.empty();
+        }
+        Set<String> batchNumbers = rows.stream()
+                .map(this::toProcessSheetStage)
+                .filter(Objects::nonNull)
+                .filter(stage -> Objects.equals(batchId, stage.row.getBatchId())
+                        && Objects.equals(factoryId, stage.row.getFactoryId())
+                        && Objects.equals(target.getProductionPlanId(), stage.row.getPlanId())
+                        && isValidMultiOutputMember(stage.payload)
+                        && Objects.equals(groupKey, multiOutputGroupKey(stage.row, stage.payload)))
+                .map(stage -> stage.row.getBatchNumber())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (batchNumbers.size() != 1 || batchNumbers.stream().anyMatch(number -> number == null || number.isBlank())) {
+            return Optional.empty();
+        }
+        String batchNumber = batchNumbers.iterator().next();
+        return productionBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                .filter(batch -> Objects.equals(batchId, batch.getId())
+                        && Objects.equals(factoryId, batch.getFactoryId())
+                        && Objects.equals(target.getProductionPlanId(), batch.getProductionPlanId())
+                        && Objects.equals(batchNumber, batch.getBatchNumber())
+                        && batch.getDeletedAt() == null);
+    }
+
+    private boolean isValidMultiOutputMember(Map<String, Object> payload) {
+        return Boolean.TRUE.equals(payload.get("multiOutputMember"))
+                && !isBlank(stringValue(payload.get("multiOutputBaseRowId"), null));
+    }
+
+    private String multiOutputGroupKey(ProcessSheetRow row, Map<String, Object> payload) {
+        return row.getProcessCode() + "|" + row.getProcessOrder() + "|"
+                + stringValue(payload.get("multiOutputBaseRowId"), null);
+    }
+
+    private record TraceConsumptionOwner(ProductionBatch batch, List<MaterialConsumption> consumptions) {}
+
+    private record TraceConsumptionResolution(List<MaterialConsumption> consumptions,
+                                               String sharedOwnerBatchNumber) {}
 
     private ProcessSheetStage toProcessSheetStage(ProcessSheetRow row) {
         if (row.getRowPayload() == null || row.getRowPayload().isBlank()) {

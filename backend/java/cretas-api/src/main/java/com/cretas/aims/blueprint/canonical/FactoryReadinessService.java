@@ -1,0 +1,163 @@
+package com.cretas.aims.blueprint.canonical;
+
+import com.cretas.aims.blueprint.activation.FactoryFormalRuntimeReadback;
+import com.cretas.aims.blueprint.canonical.CanonicalFactoryBlueprintModels.BlueprintResponse;
+import com.cretas.aims.blueprint.canonical.CanonicalFactoryBlueprintModels.CapabilityView;
+import com.cretas.aims.controller.PlatformAssemblyInterviewController.ApplyAIInitRequest;
+import com.cretas.aims.controller.dto.indicator.IndicatorApplicabilityRequest.ProductSpec;
+import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.config.FactoryBlueprintBindingRepository;
+import com.cretas.aims.service.indicator.FactoryIndicatorApplicabilityService;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Service;
+
+@Service
+@RequiredArgsConstructor
+@ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true")
+public class FactoryReadinessService {
+    private final CanonicalFactoryBlueprintService blueprints;
+    private final FactoryFormalRuntimeReadback committed;
+    private final ProductTypeRepository products;
+    private final ProductProcessWorkflowActivationRepository activations;
+    private final ProductProcessWorkflowRepository workflows;
+    private final ProductProcessWorkflowRevisionRepository revisions;
+    private final BomRecipeRepository recipes;
+    private final FactoryBlueprintBindingRepository bindings;
+    private final FactoryIndicatorApplicabilityService indicators;
+    private final ProductWorkflowResolutionService resolution;
+
+    public FactoryReadinessReport read(String factoryId, String blueprintId) {
+        return committed.read(() -> {
+            BlueprintResponse blueprint = blueprints.current(factoryId);
+            if (blueprint == null || !Objects.equals(factoryId, blueprint.getFactoryId())
+                    || !Objects.equals(blueprintId, blueprint.getId())) {
+                throw new BusinessException(409, "蓝图版本已变化，请刷新当前工厂后再核对")
+                        .withCode("FACTORY_READINESS_BLUEPRINT_DRIFT")
+                        .withHint("请刷新当前工厂的建厂验收页面，再核对候选版本与已应用版本");
+            }
+            var applied = bindings.findByFactoryIdAndDeletedAtIsNull(factoryId);
+            var appliedView = applied.map(binding -> new FactoryReadinessReport.AppliedVersion(
+                    binding.getBlueprintId(), binding.getAppliedVersion(),
+                    !Objects.equals(binding.getBlueprintId(), blueprint.getId())
+                            || !Objects.equals(binding.getAppliedVersion(), blueprint.getVersion()),
+                    "当前候选配置与已应用版本分别记录；预览或新草稿不会替换既有工艺与历史单据"))
+                    .orElse(new FactoryReadinessReport.AppliedVersion(null, null, true,
+                            "未找到已应用版本绑定，不能把候选蓝图当作运行配置"));
+            return new FactoryReadinessReport("factory-readiness/v1", factoryId, blueprintId,
+                    blueprint.getVersion(), blueprint.getRowVersion(), blueprint.getLifecycleState(),
+                    safe(blueprint.getCapabilities()).stream().map(FactoryReadinessService::capability).toList(),
+                    runtime(factoryId), appliedView,
+                    indicators.assessPlanned(factoryId, plannedProducts(blueprint)), indicators.assess(factoryId),
+                    "UNVERIFIED", 0, LocalDateTime.now());
+        });
+    }
+
+    static FactoryReadinessReport.Capability capability(CapabilityView capability) {
+        List<Map<String, Object>> receipts = safe(capability.getConfigurationReceipts());
+        String stage;
+        if (!capability.isIncluded()) stage = "NOT_APPLICABLE";
+        else if ("REJECTED".equals(capability.getAcceptanceState())
+                || !safe(capability.getValidationIssues()).isEmpty()
+                || receipts.stream().anyMatch(row -> List.of("FAILED", "REVIEW_REQUIRED")
+                        .contains(Objects.toString(row.get("status"), "")))) stage = "BLOCKED";
+        else if (!"APPLIED".equals(capability.getConfigurationApplyState())
+                || receipts.isEmpty()) stage = "WAITING_CONFIGURATION";
+        else if (!"ACCEPTED".equals(capability.getAcceptanceState())) stage = "WAITING_REVIEW";
+        else stage = "CONFIGURATION_ACCEPTED";
+        return new FactoryReadinessReport.Capability(capability.getId(), capability.getLabel(),
+                capability.getConfigurationApplyState(), capability.getAcceptanceState(), stage,
+                capability.getNextStep(), receipts.size());
+    }
+
+    private List<FactoryReadinessReport.ProductRuntime> runtime(String factoryId) {
+        return products.findVisibleByFactoryIdAndIsActiveTrue(factoryId).stream()
+                .filter(FactoryIndicatorApplicabilityService::eligibleProduct)
+                .map(product -> {
+                    var path = resolution.resolveProcessPath(factoryId, product.getId());
+                    var activation = path.filter(row -> Objects.equals(row.terminalProductTypeId(), product.getId()))
+                            .flatMap(row -> activations.findByFactoryIdAndProductTypeId(factoryId, row.ownerId()));
+                    var workflow = activation.filter(row -> Boolean.TRUE.equals(row.getEnabled()))
+                            .flatMap(row -> workflows.findByIdAndFactoryId(row.getActiveWorkflowId(), factoryId));
+                    var recipe = recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                            factoryId, product.getId(), BomRecipe.Status.ACTIVE);
+                    var revision = workflow.filter(row -> row.getCurrentRevisionId() != null)
+                            .flatMap(row -> revisions.findByIdAndFactoryId(row.getCurrentRevisionId(), factoryId));
+                    boolean coherent = workflow.isPresent() && recipe.isPresent()
+                            && revision.isPresent()
+                            && Objects.equals(factoryId, workflow.get().getFactoryId())
+                            && path.isPresent()
+                            && Objects.equals(path.get().ownerId(), workflow.get().getProductTypeId())
+                            && path.get().workflowId() == workflow.get().getId()
+                            && path.get().definitionVersion() == workflow.get().getDefinitionVersion()
+                            && workflow.get().getStatus() == ProductProcessWorkflow.Status.PUBLISHED
+                            && Objects.equals(activation.orElseThrow().getActiveDefinitionVersion(),
+                                    workflow.get().getDefinitionVersion())
+                            && Objects.equals(recipe.get().getWorkflowId(), workflow.get().getId())
+                            && workflow.get().getCurrentRevisionId() != null
+                            && Objects.equals(recipe.get().getWorkflowRevisionId(), workflow.get().getCurrentRevisionId())
+                            && revision.get().getStatus() == ProductProcessWorkflowRevision.Status.PUBLISHED
+                            && Objects.equals(revision.get().getFactoryId(), factoryId)
+                            && Objects.equals(revision.get().getProductTypeId(), path.get().ownerId())
+                            && Objects.equals(revision.get().getWorkflowId(), workflow.get().getId())
+                            && Objects.equals(revision.get().getDefinitionVersion(), workflow.get().getDefinitionVersion())
+                            && revision.get().getRevisionHash() != null
+                            && !revision.get().getRevisionHash().isBlank()
+                            && Objects.equals(revision.get().getRevisionHash(), workflow.get().getCurrentRevisionHash())
+                            && Objects.equals(recipe.get().getWorkflowDefinitionVersion(), workflow.get().getDefinitionVersion())
+                            && Objects.equals(recipe.get().getWorkflowRevisionHash(), revision.get().getRevisionHash());
+                    return new FactoryReadinessReport.ProductRuntime(product.getId(), product.getName(),
+                            coherent ? "PUBLISHED" : "NEEDS_REVIEW",
+                            workflow.map(ProductProcessWorkflow::getId).orElse(null),
+                            workflow.map(ProductProcessWorkflow::getDefinitionVersion).orElse(null),
+                            recipe.map(BomRecipe::getId).orElse(null), recipe.map(BomRecipe::getVersion).orElse(null),
+                            coherent ? "当前工艺及BOM已生效并匹配；本次业务验收仍需单独确认"
+                                    : "工艺、启用绑定或BOM版本尚未完整匹配，请在现有工艺发布入口核对");
+                }).toList();
+    }
+
+    static List<ProductSpec> plannedProducts(BlueprintResponse blueprint) {
+        ApplyAIInitRequest payload = blueprint.getSourcePayload();
+        if (payload == null || payload.getSuggestedData() == null) return List.of();
+        var data = payload.getSuggestedData();
+        Map<String, ApplyAIInitRequest.WorkProcessItem> processes = safe(data.getWorkProcesses()).stream()
+                .filter(row -> row.getName() != null)
+                .collect(Collectors.toMap(ApplyAIInitRequest.WorkProcessItem::getName,
+                        Function.identity(), (left, right) -> left));
+        return safe(data.getProductTypes()).stream().map(product -> {
+            var route = safe(blueprint.getRouteGraphs()).stream()
+                    .filter(row -> Objects.equals(row.productCode(), product.getCode())).findFirst();
+            String inputUnit = route.filter(row -> row.validation() != null && row.validation().valid()
+                            && row.entryNodeIds().size() == 1)
+                    .flatMap(row -> row.nodes().stream().filter(node -> row.entryNodeIds().contains(node.id())).findFirst())
+                    .map(node -> processes.get(node.label())).map(ApplyAIInitRequest.WorkProcessItem::getUnit).orElse(null);
+            Boolean multiOutput = route.filter(row -> row.validation() != null && row.validation().valid())
+                    .map(row -> {
+                        if (row.terminalNodeIds().size() > 1) return Boolean.TRUE;
+                        var steps = row.nodes().stream().map(node -> processes.get(node.label())).toList();
+                        if (steps.stream().anyMatch(Objects::isNull)) return null;
+                        if (steps.stream().anyMatch(step -> step.getByproducts() != null && !step.getByproducts().isEmpty())) return Boolean.TRUE;
+                        // Omitted by-product facts remain unknown, rather than an implicit "none".
+                        return steps.stream().allMatch(step -> step.getByproducts() != null) ? Boolean.FALSE : null;
+                    }).orElse(null);
+            return new ProductSpec(product.getCode(), product.getName(), product.getUnit(), inputUnit, null, multiOutput);
+        }).toList();
+    }
+
+    private static <T> List<T> safe(List<T> rows) { return rows == null ? List.of() : rows; }
+}

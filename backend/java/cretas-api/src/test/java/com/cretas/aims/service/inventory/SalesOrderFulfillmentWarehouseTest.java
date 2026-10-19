@@ -742,8 +742,10 @@ class SalesOrderFulfillmentWarehouseTest {
         m.setAccessible(true);
         m.invoke(mixedUnitService, FACTORY_A, (String) null, item, 7L);
 
-        // 10kg 目标量换算回批次原生单位(盒): 10 × 1000 / 15 = 666.6666... → HALF_UP scale2 → 666.67盒
-        assertEquals(0, new BigDecimal("666.67").compareTo(boxBatch.getShippedQuantity()));
+        // Match the existing native inventory numeric(15,4) boundary, preserving sub-cent quantities.
+        assertEquals(4, FinishedGoodsBatch.class.getDeclaredField("shippedQuantity")
+                .getAnnotation(jakarta.persistence.Column.class).scale());
+        assertEquals(0, new BigDecimal("666.6667").compareTo(boxBatch.getShippedQuantity()));
         // 66.8175kg 可用 >> 10kg 需求 → 一批即够, 未误报库存不足.
         verify(finishedGoodsBatchRepository, times(1)).save(eq(boxBatch));
     }

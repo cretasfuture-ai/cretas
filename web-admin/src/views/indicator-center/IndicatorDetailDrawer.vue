@@ -337,7 +337,7 @@ const FORMULA_DEFINITIONS: Record<string, { formula: string; sourceLabel: string
     basisNote: '统计已完工且已结单的生产单；旧样本缺少报工时暂无数据',
   },
 };
-const ACTUAL_FLOW_SOURCE = (code: string) => `REAL_BUSINESS:${code}:actual-flow-v2`;
+const ACTUAL_FLOW_SOURCE = (code: string) => `REAL_BUSINESS:${code}:actual-flow-v3`;
 
 const chartRef = ref<HTMLElement | null>(null);
 let chartInst: echarts.ECharts | null = null;

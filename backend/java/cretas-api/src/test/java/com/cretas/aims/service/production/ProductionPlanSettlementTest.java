@@ -153,6 +153,8 @@ class ProductionPlanSettlementTest {
 
     private ProductionPlanServiceImpl service;
 
+    @Mock private com.cretas.aims.service.production.ReportedOutputCostAllocationService reportedOutputCosts;
+
     @BeforeEach
     void setUp() {
         org.mockito.Mockito.lenient().when(unitContractService.storageUnit(anyString(), anyString())).thenAnswer(invocation ->
@@ -192,6 +194,75 @@ class ProductionPlanSettlementTest {
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
         lenient().when(workshopReservationService.releaseForPlan(any(), any()))
                 .thenReturn(BigDecimal.ZERO);
+        lenient().when(customerSuppliedSettlementCoverageGuard.audit(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+    }
+
+    @Test void workflowSettlementReusesVerifiedReportedAllocationWhenBomHasNoRatio() {
+        ProductionPlan plan = plan();
+        var request = reportedAllocationRequest(plan);
+        ReflectionTestUtils.setField(service, "reportedOutputCostAllocationService", reportedOutputCosts);
+        when(reportedOutputCosts.resolve(FACTORY_ID, PLAN_ID, request.getTerminalOutputs()))
+                .thenReturn(Map.of("FG-A", new BigDecimal("33.333333"), "FG-B", new BigDecimal("66.666667")));
+        var settlement = new ProductionSettlement(); settlement.setId("SETTLEMENT-COST-REPORTED");
+        ReflectionTestUtils.invokeMethod(service, "persistWorkflowSettlementOutputs", FACTORY_ID, plan, settlement, request);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProductionSettlementOutputLine>> captured = ArgumentCaptor.forClass(List.class);
+        verify(productionSettlementOutputLineRepository).saveAll(captured.capture());
+        var lines = captured.getValue();
+        assertEquals(2, lines.size());
+        assertEquals(new BigDecimal("33.333333"), lines.get(0).getCostAllocationRatio());
+        assertEquals(new BigDecimal("66.666667"), lines.get(1).getCostAllocationRatio());
+        lines.forEach(line -> line.setReceivedQuantity(BigDecimal.ONE));
+        ReflectionTestUtils.invokeMethod(service, "allocateWorkflowOutputCostsFromTotal", new BigDecimal("12"), lines);
+        assertEquals(0, new BigDecimal("4").compareTo(lines.get(0).getAllocatedCost()));
+        assertEquals(0, new BigDecimal("8").compareTo(lines.get(1).getAllocatedCost()));
+        assertEquals(0, new BigDecimal("12").compareTo(lines.stream().map(ProductionSettlementOutputLine::getAllocatedCost)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)));
+    }
+
+    @Test void authoredBomRatiosRemainAuthoritativeWithoutReportedBridge() {
+        ProductionPlan plan = plan(); var request = reportedAllocationRequest(plan);
+        ReflectionTestUtils.setField(service, "reportedOutputCostAllocationService", reportedOutputCosts);
+        bomRecipeRepository.findById("bom-reported-a").orElseThrow().setCostAllocationRatio(new BigDecimal("40"));
+        bomRecipeRepository.findById("bom-reported-b").orElseThrow().setCostAllocationRatio(new BigDecimal("60"));
+        var settlement = new ProductionSettlement(); settlement.setId("authored");
+        ReflectionTestUtils.invokeMethod(service, "persistWorkflowSettlementOutputs", FACTORY_ID, plan, settlement, request);
+        org.mockito.Mockito.verifyNoInteractions(reportedOutputCosts);
+    }
+
+    @Test void unverifiedReportedAllocationStopsSettlementBeforeOutputWrites() {
+        ProductionPlan plan = plan(); var request = reportedAllocationRequest(plan);
+        ReflectionTestUtils.setField(service, "reportedOutputCostAllocationService", reportedOutputCosts);
+        when(reportedOutputCosts.resolve(FACTORY_ID, PLAN_ID, request.getTerminalOutputs()))
+                .thenThrow(new BusinessException(409, "正式报工分摊事实无法核实"));
+        assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
+                "persistWorkflowSettlementOutputs", FACTORY_ID, plan, new ProductionSettlement(), request));
+        verify(productionSettlementOutputLineRepository, never()).saveAll(anyList());
+    }
+
+    private ProductionSettlementRequest reportedAllocationRequest(ProductionPlan plan) {
+        ReflectionTestUtils.setField(service, "bomWorkflowRevisionService", bomWorkflowRevisionService);
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowRevisionId(4403L); plan.setSelectedWorkflowRevisionHash("reported-hash");
+        plan.setSelectedBomFamilyId("reported-family");
+        plan.setSelectedBomRecipeIdsByProduct(Map.of("FG-A","bom-reported-a","FG-B","bom-reported-b"));
+        plan.setSelectedBomVersionsByProduct(Map.of("FG-A",1,"FG-B",1));
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-A","盒","FG-B","盒"));
+        List<ProductionSettlementRequest.OutputLine> outputs = new java.util.ArrayList<>();
+        for (String suffix : List.of("A", "B")) {
+            String sku = "FG-"+suffix, recipeId = "bom-reported-"+suffix.toLowerCase();
+            var recipe = BomRecipe.builder().id(recipeId).factoryId(FACTORY_ID).productTypeId(sku).version(1)
+                    .bomFamilyId("reported-family").workflowRevisionId(4403L).workflowRevisionHash("reported-hash")
+                    .targetTerminalNodeId("terminal-"+suffix).outputRole(suffix.equals("A") ? BomRecipe.OutputRole.MAIN : BomRecipe.OutputRole.CO_PRODUCT)
+                    .outputUnit("盒").build();
+            org.mockito.Mockito.lenient().when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
+            org.mockito.Mockito.lenient().when(bomWorkflowRevisionService.resolveOutputCostPolicy(FACTORY_ID, recipe))
+                    .thenReturn(com.cretas.aims.service.bom.BomWorkflowRevisionService.OutputCostPolicy.ALLOCATION_RATIO);
+            outputs.add(ProductionSettlementRequest.OutputLine.builder().productTypeId(sku).batchNumber("BATCH-"+suffix)
+                    .quantity(BigDecimal.ONE).unit("盒").materialNodeId("terminal-"+suffix).workflowPortId("port-"+suffix).build());
+        }
+        return ProductionSettlementRequest.builder().terminalOutputs(outputs).build();
     }
 
     @Test
@@ -888,6 +959,7 @@ class ProductionPlanSettlementTest {
     @DisplayName("同一幂等键重复提交返回原结单")
     void settleProduction_sameIdempotency_returnsExistingSettlement() {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan()));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan()));
         ProductionSettlement existing = new ProductionSettlement();
         existing.setId("settlement-1");
         existing.setFactoryId(FACTORY_ID);
@@ -905,6 +977,11 @@ class ProductionPlanSettlementTest {
 
         assertEquals("settlement-1", response.getSettlementId());
         assertTrue(response.getWarnings().get(0).contains("已提交过"));
+        var confirmedRetry = baseRequest(); confirmedRetry.setConfirm(true);
+        assertEquals("settlement-1", service.settleProduction(FACTORY_ID, PLAN_ID, confirmedRetry, 10L).getSettlementId());
+        org.mockito.Mockito.verifyNoInteractions(customerSuppliedSettlementCoverageGuard);
+        verify(materialBatchRepository, never()).save(any());
+        verify(productionSettlementConsumptionRepository, never()).saveAll(any());
         verify(productionSettlementRepository, never()).save(any());
     }
 
@@ -2242,6 +2319,37 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    void recalculateMultiOutput_doesNotCopyPlanPoolIntoEachReportedBatch() {
+        ProductionPlan plan = plan(); plan.setStatus(ProductionPlanStatus.COMPLETED);
+        ProductionSettlement settlement = settled(); settlement.setPostingStatus("POSTED");
+        var a = workflowOutputLine(settlement, "PT-A", "A", "盒", "bom-a", BigDecimal.ONE);
+        var b = workflowOutputLine(settlement, "PT-B", "B", "盒", "bom-b", BigDecimal.ONE);
+        a.setCostAllocationRatio(new BigDecimal("40")); b.setCostAllocationRatio(new BigDecimal("60"));
+        a.setReceivedQuantity(BigDecimal.ONE); b.setReceivedQuantity(BigDecimal.ONE);
+        a.setFinishedGoodsBatchId("fg-a"); b.setFinishedGoodsBatchId("fg-b");
+        var ba = new ProductionBatch(); ba.setId(300L); ba.setTotalCost(new BigDecimal("12.4"));
+        var bb = new ProductionBatch(); bb.setId(301L); bb.setTotalCost(new BigDecimal("18.6"));
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(FACTORY_ID, settlement.getId()))
+                .thenReturn(List.of(a,b));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(ba,bb));
+        for (var id : List.of("fg-a","fg-b")) {
+            var fg = new FinishedGoodsBatch(); fg.setId(id); fg.setFactoryId(FACTORY_ID); fg.setProductionPlanId(PLAN_ID);
+            when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate(id, FACTORY_ID)).thenReturn(Optional.of(fg));
+        }
+        when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
+                .thenReturn(OrderCostBreakdownDTO.builder().hasData(true).totalCost(new BigDecimal("31"))
+                        .rawMaterialCost(new BigDecimal("30")).packagingCost(BigDecimal.ONE).build());
+        service.recalculateSettledPlanCosts(FACTORY_ID, PLAN_ID);
+        assertEquals(0, new BigDecimal("31").compareTo(a.getAllocatedCost().add(b.getAllocatedCost())));
+        assertEquals(0, new BigDecimal("12.4").compareTo(ba.getTotalCost()));
+        assertEquals(0, new BigDecimal("18.6").compareTo(bb.getTotalCost()));
+        verify(productionBatchRepository, never()).saveAll(any());
+    }
+
+    @Test
     @DisplayName("仓库实收短少超过10kg容差时生成中转挂账")
     void confirmWarehouseReceipt_shortBeyondTolerance_createsTransitLedger() {
         ProductionPlan plan = plan();
@@ -2540,7 +2648,7 @@ class ProductionPlanSettlementTest {
                 .standardQuantity(BigDecimal.ONE)
                 .unit("kg")
                 .build();
-        when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
+        org.mockito.Mockito.lenient().when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
         when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId))
                 .thenReturn(List.of(item));
     }
@@ -2628,7 +2736,7 @@ class ProductionPlanSettlementTest {
                 .standardQuantity(BigDecimal.ONE)
                 .unit("kg")
                 .build();
-        when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
+        org.mockito.Mockito.lenient().when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
         when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId))
                 .thenReturn(List.of(item));
     }

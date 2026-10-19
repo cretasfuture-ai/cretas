@@ -26,6 +26,20 @@ class ShipmentCostRowsTest {
         var b=row("6","6.9165","b");
         assertEquals(new BigDecimal("67.1650"),ShipmentCostRows.aggregate(ShipmentCostRows.movements(List.of(a,b)),false)[0]);
     }
+
+    @Test void nativeGramQuantityReconcilesToBoxUsingTheMassUnit() {
+        var a=row("500","0.012833","a");
+        a[9]="box";
+        a[10]="g";
+        a[11]=new BigDecimal("500");
+        a[20]="g";
+        a[8]=new BigDecimal("1");
+        var rows=ShipmentCostRows.movements(java.util.Collections.singletonList(a));
+        assertEquals(0, new BigDecimal("6.4165").compareTo((BigDecimal) ShipmentCostRows.aggregate(rows,false)[0]));
+        assertEquals(new BigDecimal("500"), rows.get(0)[1]);
+        a[20]="box";
+        assertThrows(RuntimeException.class, () -> ShipmentCostRows.movements(java.util.Collections.singletonList(a)));
+    }
     @Test void incompleteOrDuplicateActualSourcesCannotCloseAtTheFirstBatchCost() {
         assertThrows(RuntimeException.class,()->ShipmentCostRows.movements(java.util.Collections.singletonList(row("4","6.4165","a"))));
         var a=row("10","6.4165","a");a[18]=null;

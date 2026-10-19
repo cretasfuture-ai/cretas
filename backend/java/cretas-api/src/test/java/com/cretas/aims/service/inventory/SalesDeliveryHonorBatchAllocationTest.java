@@ -333,8 +333,10 @@ class SalesDeliveryHonorBatchAllocationTest {
         SalesDeliveryItem item = buildItem(new BigDecimal("10"), "kg");  // 发 10kg
         invokeDeduct(svc, item);
 
-        // 10kg → 盒: 10×1000/15 = 666.6666... HALF_UP scale2 → 666.67 盒 写库
-        assertEquals(0, new BigDecimal("666.67").compareTo(boxBatch.getShippedQuantity()));
+        // 10kg → 盒: keep precision through conversion, then match numeric(15,4) storage.
+        assertEquals(4, FinishedGoodsBatch.class.getDeclaredField("shippedQuantity")
+                .getAnnotation(jakarta.persistence.Column.class).scale());
+        assertEquals(0, new BigDecimal("666.6667").compareTo(boxBatch.getShippedQuantity()));
         verify(finishedGoodsBatchRepository, times(1)).save(boxBatch);
     }
 
@@ -360,5 +362,55 @@ class SalesDeliveryHonorBatchAllocationTest {
         assertEquals(true, ex.getMessage().contains("不可换算") || ex.getMessage().contains("无法换算"));
         // 未误扣
         assertEquals(0, BigDecimal.ZERO.compareTo(boxBatch.getShippedQuantity()));
+    }
+
+    @Test
+    void fractionalGramShipmentKeepsFourDecimalNativeInventoryAndLineage() throws Exception {
+        var recorder = org.mockito.Mockito.mock(com.cretas.aims.service.lineage.LineageEdgeRecorder.class);
+        ReflectionTestUtils.setField(salesService, "lineageEdgeRecorder", recorder);
+        var batch = buildBatch("fine-mass", "FINE-MASS", "kg", BigDecimal.ONE, BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("fine-mass", FACTORY_A))
+                .thenReturn(Optional.of(batch));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
+                .thenReturn(List.of(alloc("fine-mass", "FINE-MASS", new BigDecimal("0.1"), "g")));
+        var item = buildItem(new BigDecimal("0.1"), "g");
+        item.setDeliveryRecordId("fine-delivery");
+
+        invokeDeduct(salesService, item);
+
+        assertEquals(0, new BigDecimal("0.0001").compareTo(batch.getShippedQuantity()));
+        verify(recorder).recordFinishedToShipment(eq(FACTORY_A), eq("fine-mass"), eq("fine-delivery"),
+                eq(batch.getShippedQuantity()), eq("kg"), eq(OPERATOR_ID),
+                eq("delivery:fine-delivery:777:fine-mass"), anyMap());
+    }
+
+    @Test
+    void shipmentBelowNativeStoragePrecisionRejectsBeforeStockOrLineageChanges() throws Exception {
+        var recorder = org.mockito.Mockito.mock(com.cretas.aims.service.lineage.LineageEdgeRecorder.class);
+        ReflectionTestUtils.setField(salesService, "lineageEdgeRecorder", recorder);
+        var batch = buildBatch("too-fine", "TOO-FINE", "kg", BigDecimal.ONE, BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("too-fine", FACTORY_A))
+                .thenReturn(Optional.of(batch));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
+                .thenReturn(List.of(alloc("too-fine", "TOO-FINE", new BigDecimal("0.01"), "g")));
+        var item = buildItem(new BigDecimal("0.01"), "g");
+        item.setDeliveryRecordId("too-fine-delivery");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> invokeDeduct(salesService, item));
+
+        assertEquals("SHIPMENT_QUANTITY_BELOW_STORAGE_PRECISION", ex.getErrorCode());
+        assertEquals(0, BigDecimal.ZERO.compareTo(batch.getShippedQuantity()));
+        verify(finishedGoodsBatchRepository, never()).save(batch);
+        org.mockito.Mockito.verifyNoInteractions(recorder);
+    }
+
+    @Test
+    void roundedNativeDeductionCannotExceedPhysicalRemainder() {
+        var batch = buildBatch("native-cap", "NATIVE-CAP", "盒", new BigDecimal("666.6666"), BigDecimal.ZERO);
+        var item = buildItem(new BigDecimal("10"), "kg");
+        BigDecimal actual = ReflectionTestUtils.invokeMethod(salesService, "toNativeDeductAmount",
+                new BigDecimal("10"), item, batch, new BigDecimal("15"), batch.getAvailableQuantity());
+        assertNotNull(actual);
+        assertEquals(0, new BigDecimal("666.6666").compareTo(actual));
     }
 }
