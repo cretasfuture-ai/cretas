@@ -1013,12 +1013,23 @@ function hasPath(from: string, to: string): boolean {
 }
 
 function isValidConnection(connection: Connection): boolean {
-  if (!canEditDraft.value || !connection.source || !connection.target) return false
+  if (!connection.source || !connection.target) return false
+  // VueFlow re-validates edges while normalizing the model. Existing edges
+  // must remain structurally valid in read-only mode; canEditDraft still
+  // gates every new user connection in onConnect and this hook.
+  const connectionId = 'id' in connection ? String(connection.id ?? '') : ''
+  const existingEdge = connectionId
+    ? edges.value.find((edge) => edge.id === connectionId)
+    : undefined
+  if (!canEditDraft.value) {
+    return Boolean(existingEdge
+      && existingEdge.source === connection.source
+      && existingEdge.target === connection.target)
+  }
   if (connection.source === connection.target) return false
   // VueFlow also calls this hook while normalizing an existing batch of
   // edges. Ignore that edge itself, while continuing to reject a second
   // manual connection between the same pair of cells.
-  const connectionId = 'id' in connection ? String(connection.id ?? '') : ''
   if (edges.value.some((edge) => (
     edge.id !== connectionId
     && edge.source === connection.source
@@ -1078,6 +1089,7 @@ function deleteSelectedElements() {
 async function createDefaultDraft() {
   nodes.value = []
   edges.value = []
+  loadedEdgeCount.value = 0
   stepFlow.value = []
   forceGraphMode.value = false   // 新建的草稿一律从步骤列表起步
   stepModeFallbackReason.value = ''
@@ -1834,6 +1846,7 @@ async function handleValidate() {
 function resetEditor() {
   nodes.value = []
   edges.value = []
+  loadedEdgeCount.value = 0
   // ⚠️ 与 createDefaultDraft / deserializeGraph 是同一份"当前已载入定义"状态的
   // 三个复位点 —— 少这一个, 切换 decisionType 后 stepFlow 停在上一个业务类型的
   // 步骤数组上, useStepList 读到"非 null"而误判为步骤列表模式仍然有效。

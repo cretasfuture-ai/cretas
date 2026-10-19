@@ -1,9 +1,12 @@
 package com.cretas.aims.service.scheduling.impl;
 
 import com.cretas.aims.dto.scheduling.CreateSchedulingPlanRequest;
+import com.cretas.aims.dto.scheduling.SchedulingPlanDTO;
+import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.WorkerAssignment;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.*;
@@ -21,8 +24,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -92,6 +97,62 @@ class SchedulingPlanCrudExplicitInputContractTest {
         when(planRepository.save(any(SchedulingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
         service.createPlan("F-MANUAL", request, 7L);
         verify(scheduleRepository).saveAll(anyList());
+    }
+
+    @Test
+    void enrichPlanDerivesDistinctWorkersAcrossValidSameFactorySchedules() {
+        SchedulingPlan localPlan = plan("P-HEADCOUNT", "F-MANUAL");
+        LineSchedule first = schedule("S-1", localPlan);
+        LineSchedule second = schedule("S-2", localPlan);
+        LineSchedule cancelled = schedule("S-CANCELLED", localPlan);
+        cancelled.setStatus(LineSchedule.ScheduleStatus.cancelled);
+        SchedulingPlan foreignPlan = plan("P-FOREIGN", "F-OTHER");
+        LineSchedule foreign = schedule("S-FOREIGN", foreignPlan);
+
+        WorkerAssignment firstWorker = assignment("A-1", first, 42L);
+        WorkerAssignment secondWorker = assignment("A-2", second, 43L);
+        WorkerAssignment cancelledWorker = assignment("A-CANCELLED", cancelled, 99L);
+        WorkerAssignment foreignWorker = assignment("A-3", foreign, 99L);
+        SchedulingPlanDTO dto = new SchedulingPlanDTO();
+        dto.setId(localPlan.getId());
+        dto.setFactoryId(localPlan.getFactoryId());
+
+        when(scheduleRepository.findByPlanId(localPlan.getId()))
+                .thenReturn(List.of(first, second, cancelled, foreign));
+        when(assignmentRepository.findByScheduleIdIn(anySet()))
+                .thenReturn(List.of(firstWorker, secondWorker, cancelledWorker, foreignWorker));
+
+        SchedulingPlanDTO enriched = service.enrichPlanDTO(dto);
+
+        assertThat(enriched.getTotalWorkers()).isEqualTo(2);
+        verify(assignmentRepository).findByScheduleIdIn(eq(Set.of("S-1", "S-2")));
+        secondWorker.setUserId(42L);
+        assertThat(service.enrichPlanDTO(dto).getTotalWorkers()).isEqualTo(1);
+    }
+
+    private static SchedulingPlan plan(String id, String factoryId) {
+        SchedulingPlan plan = new SchedulingPlan();
+        plan.setId(id);
+        plan.setFactoryId(factoryId);
+        plan.setPlanDate(LocalDate.of(2026, 10, 19));
+        return plan;
+    }
+
+    private static LineSchedule schedule(String id, SchedulingPlan plan) {
+        LineSchedule schedule = new LineSchedule();
+        schedule.setId(id);
+        schedule.setPlan(plan);
+        schedule.setStatus(LineSchedule.ScheduleStatus.pending);
+        return schedule;
+    }
+
+    private static WorkerAssignment assignment(String id, LineSchedule schedule, Long userId) {
+        WorkerAssignment assignment = new WorkerAssignment();
+        assignment.setId(id);
+        assignment.setSchedule(schedule);
+        assignment.setUserId(userId);
+        assignment.setStatus(WorkerAssignment.AssignmentStatus.assigned);
+        return assignment;
     }
 
     private static CreateSchedulingPlanRequest validRequest() {

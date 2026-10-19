@@ -18,6 +18,7 @@ public class SchedulingPlanDTO {
     private String planName;
     private String status;
     private Integer totalBatches;
+    /** Distinct user IDs actually assigned across this plan's valid schedules; not required staffing. */
     private Integer totalWorkers;
     private Long createdBy;
     private String createdByName;

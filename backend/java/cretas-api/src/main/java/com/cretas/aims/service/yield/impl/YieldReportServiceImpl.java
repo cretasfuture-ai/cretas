@@ -39,6 +39,8 @@ import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
+import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.CostReconcileService;
@@ -114,6 +116,12 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final ProcessSheetRowRepository processSheetRowRepository;
 
     @Autowired
+    private WorkflowTaskPortRepository workflowTaskPortRepository;
+
+    @Autowired
+    private com.cretas.aims.service.production.TaskMaterialBatchPickerService taskMaterialBatchPickerService;
+
+    @Autowired
     private SemiFinishedInventoryTransactionRepository wipTransactionRepository;
 
     /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
@@ -126,11 +134,10 @@ public class YieldReportServiceImpl implements YieldReportService {
      * <p>本类<b>两处</b>建带 {@code materialBatchRefs} 的报工 ({@code submitReport} /
      * {@code recordMaterialInput}), 两处都要占, 否则「谁占了料」这件事在两条提交路径上不一致。
      *
-     * <p>field-inject (required=false): 不改 {@code @RequiredArgsConstructor} 生成的构造器,
-     * 不破坏既有 6 个测试类的显式构造调用 (与 {@code ReportReversalServiceImpl} 同一惯例)。
-     * 未注入 ⇒ 既不占也不放, 两侧同时缺席, 不会留下「占了没放」的半吊子状态。
+     * <p>Required wiring: a report carrying raw-material references may never
+     * bypass reservation. Missing manual wiring is rejected before cost/save.
      */
-    @Autowired(required = false)
+    @Autowired
     private com.cretas.aims.service.production.WorkshopReportReservationService workshopReservationService;
 
     /**
@@ -227,6 +234,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
+        if (!Objects.equals(batchId, t.getProductionBatchId())) {
+            throw new BusinessException(409, "工序任务不属于当前生产批次");
+        }
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
         // (防呆: 操作员不手填会计类别/包装明细; 生产铺开一次性配置, 真实报工自动带出)。req 显式传值优先。
@@ -274,6 +284,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         String effOutputUnit = (isInput || isSegment) ? null : req.getOutputUnit();
         List<YieldReportRequest.LaborSegment> effSegs = (isInput || isOutput) ? null : req.getLaborSegments();
         List<MaterialBatchRef> effMaterialRefs = (isSegment || isOutput) ? null : req.getMaterialBatchRefs();
+        validateWorkflowRequestUnits(factoryId, t, effInput, effInputUnit, effOutput, effOutputUnit, effMaterialRefs);
+        validateReportMaterialRefs(factoryId, batchId, t, effMaterialRefs);
         BigDecimal effSourceWipQuantity = (isSegment || isOutput || !hasSourceWip) ? null : sourceWipQuantity(req, effInput);
         List<YieldReportRequest.Byproduct> effByproducts = (isInput || isSegment) ? null : req.getByproducts();
         BigDecimal effWaste = (isInput || isSegment) ? null : req.getWasteQuantity();
@@ -416,7 +428,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             Optional<WorkProcess> wpOpt = processRepo.findById(t.getWorkProcessId());
             BigDecimal syMax = wpOpt.map(WorkProcess::getStandardYieldMax).orElse(null);
             if (syMax != null) {
-                BigDecimal target = inputQty.multiply(syMax);
+                YieldUnitResolver.Projection projection = unitProjection(factoryId, t, wpOpt.orElse(null),
+                        req.getInputUnit(), req.getOutputUnit());
+                if (!projection.valid()) throw new BusinessException(409, projection.error());
+                BigDecimal target = inputQty.multiply(syMax).multiply(projection.inputToOutputFactor());
                 if (target.compareTo(BigDecimal.ZERO) > 0) {
                     BigDecimal tolerance = getToleranceForFactory(factoryId);
                     BigDecimal maxAllowed = target.multiply(BigDecimal.ONE.add(tolerance));
@@ -430,7 +445,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                     if (cumulative.compareTo(maxAllowed) > 0) {
                         boolean force = Boolean.TRUE.equals(req.getForceSubmit());
                         if (!force) {
-                            String unit = wpOpt.map(WorkProcess::getUnit).orElse("");
+                            String unit = projection.outputUnit();
                             String actionHint = String.format(
                                     "已报 %.2f %s, 目标 %.2f %s (投入 %.2f × 标准上限 %.0f%%), 含 %.0f%% 超收容差最多可报 %.2f %s",
                                     alreadyReported, unit,
@@ -456,7 +471,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 🔴 生产仓占用 (占用点 1/2): 提交即把引用量记进 material_batches.reserved_quantity,
         //    让「可用 = 在手 − 已提交报工引用量」在同一事务内成立 —— 否则同一批料能被别的计划再领一次。
         //    释放由同一个 service 的三条路负责 (驳回 / 冲销 / 结单扣减), ⛔ 不许在这里各写各的。
-        if (workshopReservationService != null) {
+        if (saved.getMaterialBatchRefs() != null && !saved.getMaterialBatchRefs().isEmpty()) {
             workshopReservationService.reserveForReport(factoryId, saved);
         }
 
@@ -703,11 +718,16 @@ public class YieldReportServiceImpl implements YieldReportService {
     public YieldLimitsDTO getLimits(String factoryId, Long batchId, Long workProcessTaskId, BigDecimal inputQuantity) {
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, workProcessTaskId)
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + workProcessTaskId));
+        if (!Objects.equals(batchId, t.getProductionBatchId())) {
+            throw new BusinessException(409, "工序任务不属于当前生产批次");
+        }
 
         String workProcessId = t.getWorkProcessId();
         Optional<WorkProcess> wpOpt = processRepo.findById(workProcessId);
         BigDecimal syMax = wpOpt.map(WorkProcess::getStandardYieldMax).orElse(null);
-        String unit = wpOpt.map(WorkProcess::getUnit).orElse("");
+        YieldUnitResolver.Projection projection = unitProjection(factoryId, t, wpOpt.orElse(null), null, null);
+        if (!projection.valid()) throw new BusinessException(409, projection.error());
+        String unit = projection.outputUnit();
 
         BigDecimal alreadyReported = reportRepo.findYieldReportsByTask(factoryId, t.getId()).stream()
                 .map(ProductionReport::getOutputQuantity)
@@ -728,7 +748,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         } else if (syMax == null) {
             message = "该工序未配置标准出成上限, 无超收告警";
         } else {
-            targetQuantity = inputQuantity.multiply(syMax);
+            if (!projection.valid()) throw new BusinessException(409, projection.error());
+            targetQuantity = inputQuantity.multiply(syMax).multiply(projection.inputToOutputFactor());
             if (targetQuantity.compareTo(BigDecimal.ZERO) > 0) {
                 maxAllowed = targetQuantity.multiply(BigDecimal.ONE.add(toleranceRate))
                         .setScale(4, RoundingMode.HALF_UP);
@@ -756,6 +777,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .targetQuantity(targetQuantity)
                 .standardYieldMax(syMax)
                 .unit(unit)
+                .inputUnit(projection.inputUnit())
+                .outputUnit(projection.outputUnit())
                 .alreadyReported(alreadyReported)
                 .toleranceRate(toleranceRate)
                 .maxAllowed(maxAllowed)
@@ -765,6 +788,79 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .sourceWipNo(sourceWipNo)
                 .message(message)
                 .build();
+    }
+
+    private YieldUnitResolver.Projection unitProjection(String factoryId, WorkProcessTask task,
+                                                         WorkProcess legacy, String input, String output) {
+        List<WorkflowTaskPort> ports = task.getWorkflowInstanceId() == null || workflowTaskPortRepository == null
+                ? List.of()
+                : workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId(factoryId, task.getWorkflowInstanceId());
+        if (task.getWorkflowInstanceId() != null && ports.stream().noneMatch(p -> task.getId().equals(p.getTaskId()))) {
+            return new YieldUnitResolver.Projection(null, null, null, "工作流实例缺少当前任务端口快照");
+        }
+        return YieldUnitResolver.resolve(task, legacy, ports, input, output);
+    }
+
+    private void validateWorkflowRequestUnits(String factoryId, WorkProcessTask task,
+                                              BigDecimal inputQuantity, String inputUnit,
+                                              BigDecimal outputQuantity, String outputUnit,
+                                              List<MaterialBatchRef> materialRefs) {
+        if (task.getWorkflowInstanceId() == null) return;
+        if (workflowTaskPortRepository == null) throw new BusinessException(503, "工艺快照读取暂不可用，请稍后重试");
+        List<WorkflowTaskPort> ports = workflowTaskPortRepository
+                .findByFactoryIdAndWorkflowInstanceId(factoryId, task.getWorkflowInstanceId()).stream()
+                .filter(port -> Objects.equals(task.getId(), port.getTaskId())).toList();
+        if (ports.isEmpty()) throw new BusinessException(409, "工作流实例缺少当前任务端口快照");
+        validateQuantityUnit(ports, WorkflowTaskPort.Direction.INPUT, inputQuantity, inputUnit);
+        validateQuantityUnit(ports, WorkflowTaskPort.Direction.OUTPUT, outputQuantity, outputUnit);
+        if (inputQuantity != null && inputQuantity.signum() > 0
+                && ports.stream().anyMatch(port -> port.getDirection() == WorkflowTaskPort.Direction.INPUT
+                        && "RAW_MATERIAL".equals(port.getMaterialKind()) && !Boolean.FALSE.equals(port.getRequired()))
+                && (materialRefs == null || materialRefs.isEmpty())) {
+            throw new BusinessException(400, "当前工序需要选择实际领料批次，请选择后再提交");
+        }
+    }
+
+    private void validateQuantityUnit(List<WorkflowTaskPort> ports, WorkflowTaskPort.Direction direction,
+                                      BigDecimal quantity, String unit) {
+        if (quantity == null) return;
+        List<WorkflowTaskPort> directionPorts = ports.stream()
+                .filter(port -> port.getDirection() == direction).toList();
+        if (unit == null || unit.isBlank() || "unitless".equalsIgnoreCase(unit.trim())
+                || directionPorts.isEmpty()
+                || directionPorts.stream().map(YieldUnitResolver::canonicalPortUnit).distinct().count() != 1
+                || directionPorts.stream().noneMatch(port -> YieldUnitResolver.matchesUnit(port, unit))
+                || directionPorts.stream()
+                .anyMatch(port -> port.getUnit() == null || port.getUnit().isBlank()
+                        || "unitless".equalsIgnoreCase(port.getUnit().trim()))) {
+            throw new BusinessException(409, "报工" + (direction == WorkflowTaskPort.Direction.INPUT ? "投入" : "产出")
+                    + "单位与任务快照不一致，请重新打开当前工序核对单位");
+        }
+    }
+
+    private void validateReportMaterialRefs(String factoryId, Long batchId, WorkProcessTask task,
+                                            List<MaterialBatchRef> refs) {
+        if (refs == null || refs.isEmpty()) return;
+        if (workshopReservationService == null) {
+            throw new BusinessException(503, "原料占用服务暂不可用，请稍后重试");
+        }
+        if (task.getWorkflowInstanceId() != null) {
+            if (taskMaterialBatchPickerService == null) {
+                throw new BusinessException(503, "任务原料校验暂不可用，请稍后重试");
+            }
+            taskMaterialBatchPickerService.validateMaterialBatchRefs(factoryId, batchId, task.getId(), refs);
+            return;
+        }
+        // Old tasks have no immutable material ports. Preserve that legacy scope,
+        // but never allow a foreign/dangling batch to reach cost calculation/save.
+        for (MaterialBatchRef ref : refs) {
+            if (ref == null || ref.getMaterialBatchId() == null || ref.getMaterialBatchId().isBlank()
+                    || ref.getQuantity() == null || ref.getQuantity().signum() <= 0) {
+                throw new BusinessException(400, "领料引用必须包含有效批次和正数数量");
+            }
+            materialBatchRepository.findByIdAndFactoryId(ref.getMaterialBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(403, "所选原料批次不属于当前工厂或已不可用"));
+        }
     }
 
     /**
@@ -1243,7 +1339,7 @@ public class YieldReportServiceImpl implements YieldReportService {
             for (MaterialBatchRef ref : refs) {
                 if (ref == null || ref.getMaterialBatchId() == null || ref.getQuantity() == null) continue;
                 if (ref.getQuantity().compareTo(BigDecimal.ZERO) <= 0) continue;
-                MaterialBatch mb = materialBatchRepository.findById(ref.getMaterialBatchId()).orElse(null);
+                MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(ref.getMaterialBatchId(), factoryId).orElse(null);
                 if (mb == null || mb.getUnitPrice() == null) {
                     unknownCost = true;
                     continue;
@@ -1305,8 +1401,13 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
 
         // M3: 归属鉴权 — 操作员只能投料到自己被指派的工序任务; 主管不受限制。
+        if (!Objects.equals(batchId, t.getProductionBatchId())) {
+            throw new BusinessException(409, "工序任务不属于当前生产批次");
+        }
         ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId,
                 ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole()));
+        validateReportMaterialRefs(factoryId, batchId, t, req.getMaterialBatchRefs());
+        validateWorkflowRequestUnits(factoryId, t, req.getFeedInQuantity(), req.getInputUnit(), null, null, req.getMaterialBatchRefs());
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
@@ -1324,7 +1425,7 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // 🔴 生产仓占用 (占用点 2/2): 与 submitReport 同一口径, 见那一处的说明。
         //    这条路 (recordMaterialInput) 是纯领料单, materialBatchRefs 恒来自请求。
-        if (workshopReservationService != null) {
+        if (saved.getMaterialBatchRefs() != null && !saved.getMaterialBatchRefs().isEmpty()) {
             workshopReservationService.reserveForReport(factoryId, saved);
         }
 

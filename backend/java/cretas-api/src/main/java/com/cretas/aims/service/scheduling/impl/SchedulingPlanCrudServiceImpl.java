@@ -621,6 +621,8 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 dto.setConfirmedByName(user.getFullName()));
         }
         if (dto.getId() != null) {
+            dto.setTotalWorkers(SchedulingHeadcountHelper.countDistinctAssignedWorkers(
+                    dto.getFactoryId(), dto.getId(), scheduleRepository, assignmentRepository));
             dto.setPendingSchedules((int) scheduleRepository.countByPlanIdAndStatus(
                 dto.getId(), LineSchedule.ScheduleStatus.pending));
             dto.setInProgressSchedules((int) scheduleRepository.countByPlanIdAndStatus(

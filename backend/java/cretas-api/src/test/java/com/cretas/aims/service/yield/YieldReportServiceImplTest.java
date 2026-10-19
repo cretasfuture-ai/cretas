@@ -19,6 +19,7 @@ import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
@@ -85,6 +86,7 @@ class YieldReportServiceImplTest {
     private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
     private ProcessSheetRowRepository processSheetRowRepository;
     private SemiFinishedInventoryTransactionRepository wipTransactionRepository;
+    private com.cretas.aims.repository.workflow.WorkflowTaskPortRepository workflowTaskPortRepository;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -108,6 +110,7 @@ class YieldReportServiceImplTest {
         productWorkProcessRepository = mock(com.cretas.aims.repository.ProductWorkProcessRepository.class);
         processSheetRowRepository = mock(ProcessSheetRowRepository.class);
         wipTransactionRepository = mock(SemiFinishedInventoryTransactionRepository.class);
+        workflowTaskPortRepository = mock(com.cretas.aims.repository.workflow.WorkflowTaskPortRepository.class);
         // default: 任务无 productWorkProcessId → 不查; 显式测继承的用例单独 stub
         when(productWorkProcessRepository.findByFactoryIdAndId(anyString(), any())).thenReturn(Optional.empty());
         // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
@@ -128,6 +131,9 @@ class YieldReportServiceImplTest {
                 pwpAssigneeRepository, productWorkProcessRepository, new com.cretas.aims.service.yield.CostReconcileService(),
                 processSheetRowRepository);
         ReflectionTestUtils.setField(svc, "wipTransactionRepository", wipTransactionRepository);
+        ReflectionTestUtils.setField(svc, "workflowTaskPortRepository", workflowTaskPortRepository);
+        ReflectionTestUtils.setField(svc, "workshopReservationService",
+                mock(com.cretas.aims.service.production.WorkshopReportReservationService.class));
     }
 
     @Test
@@ -636,6 +642,250 @@ class YieldReportServiceImplTest {
     }
 
     @Test
+    void getLimits_usesTaskUnitWhenLegacyWorkProcessUnitIsUnitless() {
+        WorkProcessTask t = task(22L, 1, "WP-TASK-UNIT");
+        t.setPlannedUnit("kg");
+        t.setWorkflowInstanceId(87L);
+        when(taskRepo.findByFactoryIdAndId("F006", 22L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-TASK-UNIT")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-TASK-UNIT").unit("unitless").standardYieldMax(new BigDecimal("0.85")).build()));
+        when(reportRepo.findYieldReportsByTask("F006", 22L)).thenReturn(List.of());
+        WorkflowTaskPort input = port(22L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1");
+        input.setMaterialKind("RAW_MATERIAL");
+        WorkflowTaskPort output = port(22L, WorkflowTaskPort.Direction.OUTPUT, "kg", "kg", "1");
+        output.setMaterialKind("SEMI_FINISHED");
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 87L))
+                .thenReturn(List.of(input, output));
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 22L, new BigDecimal("100"));
+        assertThat(dto.getUnit()).isEqualTo("kg");
+        assertThat(dto.getTargetQuantity()).isEqualByComparingTo("85");
+    }
+
+    @Test
+    void getLimits_rejectsTaskFromAnotherBatchBeforeArithmetic() {
+        WorkProcessTask t = task(23L, 1, "WP-ROUTE");
+        t.setProductionBatchId(2L);
+        when(taskRepo.findByFactoryIdAndId("F006", 23L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> svc.getLimits("F006", 1L, 23L, new BigDecimal("1")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不属于当前生产批次");
+        verify(processRepo, never()).findById(anyString());
+    }
+
+    @Test
+    void getLimits_aggregatesEquivalentRawAndOutputPortUnitsAcrossWorkflow201() {
+        WorkProcessTask t = task(25L, 1, "WF201");
+        t.setPlannedUnit("kg"); t.setWorkflowInstanceId(201L);
+        when(taskRepo.findByFactoryIdAndId("F006", 25L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WF201")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WF201").unit("unitless").standardYieldMax(new BigDecimal("0.90")).build()));
+        List<WorkflowTaskPort> ports = List.of(
+                port(25L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"),
+                port(25L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1.0"),
+                port(25L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"),
+                port(25L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1.0"),
+                port(25L, WorkflowTaskPort.Direction.OUTPUT, "kg", "kg", "1"),
+                port(25L, WorkflowTaskPort.Direction.OUTPUT, "kg", "kg", "1.0"));
+        ports.get(0).setMaterialKind("RAW_MATERIAL"); ports.get(1).setMaterialKind("RAW_MATERIAL");
+        ports.get(2).setMaterialKind("RAW_MATERIAL"); ports.get(3).setMaterialKind("RAW_MATERIAL");
+        ports.get(4).setMaterialKind("SEMI_FINISHED"); ports.get(5).setMaterialKind("BYPRODUCT");
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 201L)).thenReturn(ports);
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 25L, new BigDecimal("100"));
+        assertThat(dto.getTargetQuantity()).isEqualByComparingTo("90");
+    }
+
+    @Test
+    void getLimits_rejectsDifferentPrimaryUnitsInsteadOfDividingFactors() {
+        WorkProcessTask t = task(24L, 1, "WP-CROSS");
+        t.setPlannedUnit("盒");
+        t.setWorkflowInstanceId(88L);
+        when(taskRepo.findByFactoryIdAndId("F006", 24L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-CROSS")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-CROSS").unit("unitless").standardYieldMax(new BigDecimal("0.85")).build()));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 88L))
+                .thenReturn(List.of(port(24L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"),
+                        port(24L, WorkflowTaskPort.Direction.OUTPUT, "盒", "盒", "1")));
+        assertThatThrownBy(() -> svc.getLimits("F006", 1L, 24L, new BigDecimal("1")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("缺少一致且可追溯的质量/包装换算快照");
+    }
+
+    @Test
+    void getLimits_allowsExplicitConversionWithinSamePrimaryUnit() {
+        WorkProcessTask t = task(26L, 1, "WP-SAME-PRIMARY");
+        t.setPlannedUnit("盒");
+        t.setWorkflowInstanceId(89L);
+        when(taskRepo.findByFactoryIdAndId("F006", 26L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-SAME-PRIMARY")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-SAME-PRIMARY").unit("unitless").standardYieldMax(new BigDecimal("0.85")).build()));
+        WorkflowTaskPort convertedOutput = port(26L, WorkflowTaskPort.Direction.OUTPUT, "盒", "kg", "0.5");
+        convertedOutput.setConversionRefId("CONVERSION-BOX-500G");
+        convertedOutput.setConversionVersion(1L);
+        convertedOutput.setConversionFromUnitCode("盒");
+        convertedOutput.setConversionToUnitCode("kg");
+        convertedOutput.setConversionFactorSnapshot(new BigDecimal("0.5"));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 89L))
+                .thenReturn(List.of(port(26L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"), convertedOutput));
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 26L, BigDecimal.ONE);
+        assertThat(dto.getUnit()).isEqualTo("盒");
+        assertThat(dto.getTargetQuantity()).isEqualByComparingTo("1.70");
+    }
+
+    @Test
+    void getLimits_allowsFrozenFinishedGoodWeightConversion() {
+        WorkProcessTask t = task(29L, 1, "WP-PACKAGE");
+        t.setPlannedUnit("盒"); t.setWorkflowInstanceId(91L);
+        when(taskRepo.findByFactoryIdAndId("F006", 29L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-PACKAGE")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-PACKAGE").unit("unitless").standardYieldMax(new BigDecimal("0.921")).build()));
+        WorkflowTaskPort input = port(29L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1");
+        WorkflowTaskPort output = port(29L, WorkflowTaskPort.Direction.OUTPUT, "盒", "盒", "1");
+        output.setMaterialKind("FINISHED_GOOD"); output.setNetWeightGramsSnapshot(new BigDecimal("800"));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 91L))
+                .thenReturn(List.of(input, output));
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 29L, new BigDecimal("0.1"));
+        assertThat(dto.getTargetQuantity()).isEqualByComparingTo("0.115125");
+        assertThat(dto.getInputUnit()).isEqualTo("kg");
+        assertThat(dto.getOutputUnit()).isEqualTo("盒");
+        assertThat(dto.getUnit()).isEqualTo("盒");
+        YieldLimitsDTO initial = svc.getLimits("F006", 1L, 29L, null);
+        assertThat(initial.getInputUnit()).isEqualTo("kg");
+        assertThat(initial.getOutputUnit()).isEqualTo("盒");
+        assertThat(initial.getTargetQuantity()).isNull();
+    }
+
+    @Test
+    void submitInput_rejectsMixedQuantityDimensionsWithoutYieldLimitBeforeSave() {
+        WorkProcessTask task = task(33L, 1, "WP-MIXED");
+        task.setWorkflowInstanceId(95L);
+        when(taskRepo.findByFactoryIdAndId("F006", 33L)).thenReturn(Optional.of(task));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 95L))
+                .thenReturn(List.of(port(33L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"),
+                        port(33L, WorkflowTaskPort.Direction.INPUT, "件", "件", "1")));
+        YieldReportRequest request = new YieldReportRequest();
+        request.setWorkProcessTaskId(33L); request.setReportKind("INPUT");
+        request.setInputQuantity(BigDecimal.ONE); request.setInputUnit("kg");
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, request))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("投入单位");
+        verify(reportRepo, never()).save(any());
+        verifyNoInteractions(materialBatchRepo);
+    }
+
+    @Test
+    void rawMaterialCostReadsOnlyFactoryScopedPricesAndNeverBorrowsForeignPrice() {
+        MaterialBatch local = new MaterialBatch(); local.setId("LOCAL"); local.setFactoryId("F006");
+        local.setUnitPrice(new BigDecimal("7.5"));
+        MaterialBatch foreign = new MaterialBatch(); foreign.setId("FOREIGN"); foreign.setFactoryId("F007");
+        foreign.setUnitPrice(new BigDecimal("999"));
+        when(materialBatchRepo.findByIdAndFactoryId("LOCAL", "F006")).thenReturn(Optional.of(local));
+        when(materialBatchRepo.findByIdAndFactoryId("FOREIGN", "F006")).thenReturn(Optional.empty());
+        when(materialBatchRepo.findById("FOREIGN")).thenReturn(Optional.of(foreign));
+
+        BigDecimal localCost = ReflectionTestUtils.invokeMethod(svc, "computeMaterialCost",
+                List.of(new MaterialBatchRef("LOCAL", new BigDecimal("2"), "kg")), null, null,
+                null, "F006", null, null);
+        assertThat(localCost).isEqualByComparingTo("15.0");
+        BigDecimal missingCost = ReflectionTestUtils.invokeMethod(svc, "computeMaterialCost",
+                List.of(new MaterialBatchRef("FOREIGN", BigDecimal.ONE, "kg")), null, null,
+                null, "F006", null, null);
+        assertThat(missingCost).isNull();
+        verify(materialBatchRepo).findByIdAndFactoryId("LOCAL", "F006");
+        verify(materialBatchRepo).findByIdAndFactoryId("FOREIGN", "F006");
+        verify(materialBatchRepo, never()).findById(anyString());
+    }
+
+    @Test
+    void getLimits_rejectsFinishedGoodConversionWhenWeightIsMissingOrAmbiguous() {
+        WorkProcessTask t = task(30L, 1, "WP-PACKAGE-BAD");
+        t.setPlannedUnit("盒"); t.setWorkflowInstanceId(92L);
+        when(taskRepo.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-PACKAGE-BAD")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-PACKAGE-BAD").unit("unitless").standardYieldMax(new BigDecimal("0.85")).build()));
+        WorkflowTaskPort input = port(30L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1");
+        WorkflowTaskPort output1 = port(30L, WorkflowTaskPort.Direction.OUTPUT, "盒", "盒", "1");
+        output1.setMaterialKind("FINISHED_GOOD");
+        WorkflowTaskPort output2 = port(30L, WorkflowTaskPort.Direction.OUTPUT, "盒", "盒", "1");
+        output2.setMaterialKind("FINISHED_GOOD"); output2.setNetWeightGramsSnapshot(new BigDecimal("800"));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 92L))
+                .thenReturn(List.of(input, output1, output2));
+        assertThatThrownBy(() -> svc.getLimits("F006", 1L, 30L, BigDecimal.ONE))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void getLimits_rejectsWorkflowInstanceWithoutCurrentTaskPorts() {
+        WorkProcessTask t = task(31L, 1, "WP-NO-PORTS");
+        t.setWorkflowInstanceId(93L);
+        when(taskRepo.findByFactoryIdAndId("F006", 31L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-NO-PORTS")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-NO-PORTS").unit("kg").standardYieldMax(new BigDecimal("0.85")).build()));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 93L)).thenReturn(List.of());
+        assertThatThrownBy(() -> svc.getLimits("F006", 1L, 31L, BigDecimal.ONE))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("缺少当前任务端口");
+    }
+
+    @Test
+    void submitReport_rejectsTaskFromAnotherBatchBeforeWriting() {
+        WorkProcessTask t = task(27L, 1, "WP-SUBMIT-ROUTE");
+        t.setProductionBatchId(2L);
+        when(taskRepo.findByFactoryIdAndId("F006", 27L)).thenReturn(Optional.of(t));
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(27L); req.setOutputQuantity(BigDecimal.ONE); req.setOutputUnit("kg");
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不属于当前生产批次");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_rejectsDifferentPrimaryBeforeWriting() {
+        WorkProcessTask t = task(28L, 1, "WP-SUBMIT-CROSS");
+        t.setPlannedUnit("盒"); t.setWorkflowInstanceId(90L);
+        when(taskRepo.findByFactoryIdAndId("F006", 28L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-SUBMIT-CROSS")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-SUBMIT-CROSS").unit("unitless").standardYieldMax(new BigDecimal("0.85")).build()));
+        when(reportRepo.findYieldReportsByTask("F006", 28L)).thenReturn(List.of());
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 90L))
+                .thenReturn(List.of(port(28L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"),
+                        port(28L, WorkflowTaskPort.Direction.OUTPUT, "盒", "盒", "1")));
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(28L); req.setInputQuantity(BigDecimal.ONE); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("0.85")); req.setOutputUnit("盒");
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("缺少一致且可追溯的质量/包装换算快照");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_rejectsRequestedInputUnitThatDiffersFromFrozenInputPort() {
+        WorkProcessTask t = task(32L, 1, "WP-INPUT-UNIT");
+        t.setPlannedUnit("kg"); t.setWorkflowInstanceId(94L);
+        when(taskRepo.findByFactoryIdAndId("F006", 32L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-INPUT-UNIT")).thenReturn(Optional.of(WorkProcess.builder()
+                .id("WP-INPUT-UNIT").unit("unitless").standardYieldMax(new BigDecimal("0.85")).build()));
+        when(reportRepo.findYieldReportsByTask("F006", 32L)).thenReturn(List.of());
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 94L))
+                .thenReturn(List.of(port(32L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1"),
+                        port(32L, WorkflowTaskPort.Direction.OUTPUT, "kg", "kg", "1")));
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(32L); req.setInputQuantity(BigDecimal.ONE); req.setInputUnit("盒");
+        req.setOutputQuantity(new BigDecimal("0.85")); req.setOutputUnit("kg");
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("投入单位");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    private WorkflowTaskPort port(Long taskId, WorkflowTaskPort.Direction direction, String unit,
+                                   String primary, String factor) {
+        WorkflowTaskPort p = new WorkflowTaskPort();
+        p.setTaskId(taskId); p.setDirection(direction); p.setUnit(unit);
+        p.setMaterialPrimaryUnitCode(primary);
+        p.setPortToPrimaryFactorSnapshot(new BigDecimal(factor));
+        p.setConversionFromUnitCode(unit); p.setConversionToUnitCode(primary);
+        return p;
+    }
+
+    @Test
     void getYield_enrichesProcessNamesFromWorkProcess() {
         // 真实 calcSvc 从 reports 派生出 2 步 (task 24/25), processName 初始为 null
         ProductionReport r1 = ProductionReport.builder()
@@ -837,6 +1087,36 @@ class YieldReportServiceImplTest {
     }
 
     @Test
+    void recordMaterialInput_rejectsForeignOrDanglingRefBeforeAnyReportOrPriceLookup() {
+        setupMaterialInputTask();
+        MaterialInputRequest request = new MaterialInputRequest();
+        request.setWorkProcessTaskId(30L);
+        request.setWarehouseOutQuantity(BigDecimal.ONE);
+        request.setFeedInQuantity(BigDecimal.ONE);
+        request.setInputUnit("kg");
+        request.setMaterialBatchRefs(List.of(new MaterialBatchRef("FOREIGN-BATCH", BigDecimal.ONE, "kg")));
+        when(materialBatchRepo.findByIdAndFactoryId("FOREIGN-BATCH", "F006")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> svc.recordMaterialInput("F006", 1L, 5L, request))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不属于当前工厂");
+        verify(reportRepo, never()).save(any());
+        verify(materialBatchRepo, never()).findById(anyString());
+    }
+
+    @Test
+    void recordMaterialInput_rejectsMismatchedRouteBatchBeforeAnyReportWrite() {
+        setupMaterialInputTask();
+        MaterialInputRequest request = new MaterialInputRequest();
+        request.setWorkProcessTaskId(30L);
+        request.setFeedInQuantity(BigDecimal.ONE);
+        request.setInputUnit("kg");
+        assertThatThrownBy(() -> svc.recordMaterialInput("F006", 2L, 5L, request))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不属于当前生产批次");
+        verify(reportRepo, never()).save(any());
+        verifyNoInteractions(materialBatchRepo);
+    }
+
+    @Test
     void recordMaterialInput_writesMaterialBatchRefs_single() {
         setupMaterialInputTask();
         ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
@@ -847,7 +1127,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-uuid-aaa"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setReceiptQuantity(new BigDecimal("820")); mb.setUsedQuantity(new BigDecimal("520")); // remaining=300
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-aaa", "F006")).thenReturn(Optional.of(mb));
 
         MaterialInputRequest req = new MaterialInputRequest();
         req.setWorkProcessTaskId(30L);
@@ -882,8 +1164,12 @@ class YieldReportServiceImplTest {
         MaterialBatch mb2 = new MaterialBatch();
         mb2.setId("mb-uuid-bbb"); mb2.setStatus(MaterialBatchStatus.AVAILABLE);
         mb2.setReceiptQuantity(new BigDecimal("400")); mb2.setUsedQuantity(new BigDecimal("200")); // remaining=200
+        mb1.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mb1));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-aaa", "F006")).thenReturn(Optional.of(mb1));
+        mb2.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-bbb")).thenReturn(Optional.of(mb2));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-bbb", "F006")).thenReturn(Optional.of(mb2));
 
         MaterialInputRequest req = new MaterialInputRequest();
         req.setWorkProcessTaskId(30L);
@@ -927,7 +1213,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-uuid-aaa"); mb.setStatus(MaterialBatchStatus.USED_UP);
         mb.setReceiptQuantity(new BigDecimal("520")); mb.setUsedQuantity(new BigDecimal("520")); // remaining=0
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-aaa", "F006")).thenReturn(Optional.of(mb));
 
         // candidate report has refs=[{materialBatchId:"mb-uuid-aaa"}] — String value quoted in JSON
         ProductionReport candidate = reportWithBatchRefs(List.of(
@@ -973,8 +1261,12 @@ class YieldReportServiceImplTest {
         MaterialBatch mbBbb = new MaterialBatch();
         mbBbb.setId("mb-uuid-bbb"); mbBbb.setStatus(MaterialBatchStatus.AVAILABLE);
         mbBbb.setReceiptQuantity(new BigDecimal("400")); mbBbb.setUsedQuantity(new BigDecimal("200")); // remaining=200
+        mbAaa.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mbAaa));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-aaa", "F006")).thenReturn(Optional.of(mbAaa));
+        mbBbb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-bbb")).thenReturn(Optional.of(mbBbb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-bbb", "F006")).thenReturn(Optional.of(mbBbb));
 
         // candidate report refs BOTH batches; mb-uuid-bbb has remaining → allRefsUsedUp=false → not settled
         ProductionReport candidate = reportWithBatchRefs(List.of(
@@ -1019,8 +1311,12 @@ class YieldReportServiceImplTest {
         MaterialBatch mbBbb = new MaterialBatch();
         mbBbb.setId("mb-uuid-bbb"); mbBbb.setStatus(MaterialBatchStatus.USED_UP);
         mbBbb.setReceiptQuantity(new BigDecimal("200")); mbBbb.setUsedQuantity(new BigDecimal("200")); // remaining=0
+        mbAaa.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mbAaa));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-aaa", "F006")).thenReturn(Optional.of(mbAaa));
+        mbBbb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-bbb")).thenReturn(Optional.of(mbBbb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-bbb", "F006")).thenReturn(Optional.of(mbBbb));
 
         ProductionReport candidate = reportWithBatchRefs(List.of(
                 Map.of("materialBatchId", "mb-uuid-aaa", "quantity", new BigDecimal("300")),
@@ -1083,7 +1379,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-uuid-ccc"); mb.setStatus(MaterialBatchStatus.USED_UP);
         mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("300"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-ccc")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-ccc", "F006")).thenReturn(Optional.of(mb));
 
         ProductionReport candidate = reportWithBatchRefs(List.of(
                 Map.of("materialBatchId", "mb-uuid-ccc", "quantity", new BigDecimal("300"), "unit", "kg")
@@ -1106,7 +1404,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-uuid-ddd"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("100"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-ddd")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-ddd", "F006")).thenReturn(Optional.of(mb));
 
         Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, "mb-uuid-ddd");
 
@@ -1136,7 +1436,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-uuid-x"); mb.setStatus(MaterialBatchStatus.USED_UP);
         mb.setReceiptQuantity(new BigDecimal("500")); mb.setUsedQuantity(new BigDecimal("500"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-x")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-x", "F006")).thenReturn(Optional.of(mb));
 
         // candidate report that was previously created (e.g. older submit)
         ProductionReport candidate = reportWithBatchRefs(List.of(
@@ -1204,7 +1506,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-ph"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setUnitPrice(new BigDecimal("2.00"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-ph")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-ph", "F006")).thenReturn(Optional.of(mb));
 
         YieldReportRequest req = new YieldReportRequest();
         req.setWorkProcessTaskId(60L);
@@ -1507,7 +1811,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-leg"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setUnitPrice(new BigDecimal("2.00"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-leg")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-leg", "F006")).thenReturn(Optional.of(mb));
         ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
         when(reportRepo.save(cap.capture())).thenAnswer(i -> {
             ProductionReport r = i.getArgument(0); r.setId(604L); return r;
@@ -1946,7 +2252,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-uuid-exp"); mb.setStatus(MaterialBatchStatus.EXPIRED);
         mb.setReceiptQuantity(new BigDecimal("100")); mb.setUsedQuantity(new BigDecimal("100")); // remaining=0
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-uuid-exp")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-uuid-exp", "F006")).thenReturn(Optional.of(mb));
 
         MaterialInputRequest req = new MaterialInputRequest();
         req.setWorkProcessTaskId(30L);
@@ -2881,7 +3189,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-raw-1"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setUnitPrice(new BigDecimal("10"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-raw-1")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-raw-1", "F006")).thenReturn(Optional.of(mb));
 
         YieldReportRequest req = new YieldReportRequest();
         req.setWorkProcessTaskId(70L);
@@ -2902,7 +3212,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-noprice"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setUnitPrice(null);  // 无单价 (e.g. 仓管员脱敏 或 未录入)
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-noprice")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-noprice", "F006")).thenReturn(Optional.of(mb));
 
         YieldReportRequest req = new YieldReportRequest();
         req.setWorkProcessTaskId(70L);
@@ -2924,8 +3236,12 @@ class YieldReportServiceImplTest {
         mbA.setId("mb-a"); mbA.setStatus(MaterialBatchStatus.AVAILABLE); mbA.setUnitPrice(new BigDecimal("10"));
         MaterialBatch mbB = new MaterialBatch();
         mbB.setId("mb-b"); mbB.setStatus(MaterialBatchStatus.AVAILABLE); mbB.setUnitPrice(null);
+        mbA.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-a")).thenReturn(Optional.of(mbA));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-a", "F006")).thenReturn(Optional.of(mbA));
+        mbB.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-b")).thenReturn(Optional.of(mbB));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-b", "F006")).thenReturn(Optional.of(mbB));
 
         YieldReportRequest req = new YieldReportRequest();
         req.setWorkProcessTaskId(70L);
@@ -3002,7 +3318,9 @@ class YieldReportServiceImplTest {
         raw.setId("mb-raw-1");
         raw.setStatus(MaterialBatchStatus.AVAILABLE);
         raw.setUnitPrice(new BigDecimal("10"));
+        raw.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-raw-1")).thenReturn(Optional.of(raw));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-raw-1", "F006")).thenReturn(Optional.of(raw));
 
         SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
                 .intermediateBatchNo("WIP-SRC-1").batchId(1L).factoryId("F006")
@@ -3055,7 +3373,9 @@ class YieldReportServiceImplTest {
         raw.setId("mb-raw-pretax");
         raw.setStatus(MaterialBatchStatus.AVAILABLE);
         raw.setUnitPrice(new BigDecimal("20.0000"));
+        raw.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-raw-pretax")).thenReturn(Optional.of(raw));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-raw-pretax", "F006")).thenReturn(Optional.of(raw));
 
         SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
                 .intermediateBatchNo("WIP-SRC-PRETAX").batchId(1L).factoryId("F006")
@@ -3103,7 +3423,9 @@ class YieldReportServiceImplTest {
         raw.setId("mb-raw-null-cost");
         raw.setStatus(MaterialBatchStatus.AVAILABLE);
         raw.setUnitPrice(null);
+        raw.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-raw-null-cost")).thenReturn(Optional.of(raw));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-raw-null-cost", "F006")).thenReturn(Optional.of(raw));
 
         SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
                 .intermediateBatchNo("WIP-SRC-KNOWN").batchId(1L).factoryId("F006")
@@ -3149,7 +3471,9 @@ class YieldReportServiceImplTest {
         raw.setId("mb-raw-known");
         raw.setStatus(MaterialBatchStatus.AVAILABLE);
         raw.setUnitPrice(new BigDecimal("20.0000"));
+        raw.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-raw-known")).thenReturn(Optional.of(raw));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-raw-known", "F006")).thenReturn(Optional.of(raw));
 
         SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
                 .intermediateBatchNo("WIP-SRC-NULL").batchId(1L).factoryId("F006")
@@ -3203,7 +3527,9 @@ class YieldReportServiceImplTest {
         ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-r"); mb.setStatus(MaterialBatchStatus.AVAILABLE); mb.setUnitPrice(new BigDecimal("10"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-r")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-r", "F006")).thenReturn(Optional.of(mb));
 
         YieldReportRequest req = new YieldReportRequest();
         req.setWorkProcessTaskId(70L);
@@ -3239,7 +3565,9 @@ class YieldReportServiceImplTest {
         });
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-r"); mb.setStatus(MaterialBatchStatus.AVAILABLE); mb.setUnitPrice(new BigDecimal("10"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-r")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-r", "F006")).thenReturn(Optional.of(mb));
 
         YieldReportRequest req = new YieldReportRequest();
         req.setWorkProcessTaskId(70L);
@@ -3656,7 +3984,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-zs-01"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setUnitPrice(new BigDecimal("9.00"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-zs-01")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-zs-01", "F006")).thenReturn(Optional.of(mb));
 
         // 调料配方: 1.5049 元/kg投入
         when(recipeRepo.findActiveByFactoryIdAndWorkProcessId("F006", "WP-F006-ZS-02"))
@@ -3790,7 +4120,9 @@ class YieldReportServiceImplTest {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("mb-nr"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setUnitPrice(new BigDecimal("5.00"));
+        mb.setFactoryId("F006");
         when(materialBatchRepo.findById("mb-nr")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findByIdAndFactoryId("mb-nr", "F006")).thenReturn(Optional.of(mb));
 
         ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
         when(reportRepo.save(cap.capture())).thenAnswer(i -> {

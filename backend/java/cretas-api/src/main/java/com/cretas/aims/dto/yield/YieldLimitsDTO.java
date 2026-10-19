@@ -28,8 +28,14 @@ public class YieldLimitsDTO {
     /** WorkProcess.standardYieldMax, null=该工序未配置. */
     private BigDecimal standardYieldMax;
 
-    /** WorkProcess.unit — 产出单位, 用于前端提示文字. */
+    /** Compatibility alias of the authoritative output unit. */
     private String unit;
+
+    /** Authoritative task input unit; never derived from finished planned quantity. */
+    private String inputUnit;
+
+    /** Authoritative task output unit, including frozen packaging conversion. */
+    private String outputUnit;
 
     /** Σ 该工序任务已提交 YIELD 报工的 outputQuantity. */
     private BigDecimal alreadyReported;

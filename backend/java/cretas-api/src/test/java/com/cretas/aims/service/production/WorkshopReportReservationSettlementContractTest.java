@@ -11,6 +11,8 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
@@ -29,6 +31,8 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseDefaultRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BomService;
@@ -114,6 +118,8 @@ class WorkshopReportReservationSettlementContractTest {
     private static final String MATERIAL_TYPE_ID = "RM-1";
     private static final Long PRODUCTION_BATCH_ID = 10761L;
     private static final Long REPORT_ID = 23836L;
+    private static final String WORKSHOP_WAREHOUSE_ID = "7f3e6f4a-2d1a-4f8e-b2c4-6a9d0e1f3b5c";
+    private static final String LOGISTICS_WAREHOUSE_ID = "9a4d2f81-6c7e-4b30-a915-2e8f6d1c4b72";
 
     /** prod 实测形状: 领料按报工所需量整批建仓, 收货量 == 报工引用量 == 20kg。 */
     private static final BigDecimal RECEIPT = new BigDecimal("20");
@@ -138,7 +144,8 @@ class WorkshopReportReservationSettlementContractTest {
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
     @Mock private ProductionSettlementLaborRepository productionSettlementLaborRepository;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepository;
-    @Mock private WarehouseResolver warehouseResolver;
+    @Mock private FactoryWarehouseRepository factoryWarehouseRepository;
+    @Mock private FactoryWarehouseDefaultRepository factoryWarehouseDefaultRepository;
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
@@ -147,6 +154,7 @@ class WorkshopReportReservationSettlementContractTest {
 
     private ProductionPlanServiceImpl service;
     private WorkshopReportReservationService reservationService;
+    private WarehouseResolver warehouseResolver;
 
     @BeforeEach
     void setUp() {
@@ -162,21 +170,52 @@ class WorkshopReportReservationSettlementContractTest {
         ReflectionTestUtils.setField(service, "productionSettlementLaborRepository",
                 productionSettlementLaborRepository);
         ReflectionTestUtils.setField(service, "semiFinishedInventoryRepository", semiFinishedInventoryRepository);
+        warehouseResolver = warehouseResolver();
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "bomRecipeRepository", bomRecipeRepository);
         ReflectionTestUtils.setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
-
         // ⚠️ 与生产同一个 bean: 释放服务和被测 service 共用 materialBatchRepository /
         //    productionBatchRepository / productionReportRepository —— 三个 mock 只有一份,
         //    ⛔ 不给释放侧另外配一套 (那会让「结单看到的现实」和「释放看到的现实」是两个东西)。
         reservationService = new WorkshopReportReservationService(
-                materialBatchRepository, productionBatchRepository, productionReportRepository);
+                materialBatchRepository, productionBatchRepository, productionReportRepository,
+                warehouseResolver);
         wireReservationService(reservationService);
 
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
+    }
+
+    private WarehouseResolver warehouseResolver() {
+        FactoryWarehouse workshop = warehouse(
+                WORKSHOP_WAREHOUSE_ID, WarehouseCodes.WH_WKS,
+                FactoryWarehouse.WarehouseType.WORKSHOP, "鲜棉仓");
+        FactoryWarehouse logistics = warehouse(
+                LOGISTICS_WAREHOUSE_ID, WarehouseCodes.WH_LOG,
+                FactoryWarehouse.WarehouseType.LOGISTICS, "物流仓");
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(
+                FACTORY_ID, WarehouseCodes.WH_WKS)).thenReturn(Optional.of(workshop));
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(
+                FACTORY_ID, WarehouseCodes.WH_LOG)).thenReturn(Optional.of(logistics));
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(
+                WORKSHOP_WAREHOUSE_ID, FACTORY_ID)).thenReturn(Optional.of(workshop));
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(
+                LOGISTICS_WAREHOUSE_ID, FACTORY_ID)).thenReturn(Optional.of(logistics));
+        return new WarehouseResolver(factoryWarehouseRepository, factoryWarehouseDefaultRepository);
+    }
+
+    private static FactoryWarehouse warehouse(
+            String id, String code, FactoryWarehouse.WarehouseType type, String name) {
+        FactoryWarehouse warehouse = new FactoryWarehouse();
+        warehouse.setId(id);
+        warehouse.setFactoryId(FACTORY_ID);
+        warehouse.setCode(code);
+        warehouse.setName(name);
+        warehouse.setType(type);
+        warehouse.setIsActive(true);
+        return warehouse;
     }
 
     private void wireReservationService(WorkshopReportReservationService candidate) {
@@ -400,7 +439,7 @@ class WorkshopReportReservationSettlementContractTest {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(reserved);
         batch.setQuantityUnit("kg");
-        batch.setWarehouseId("WH-LOG-ID");
+        batch.setWarehouseId(WORKSHOP_WAREHOUSE_ID);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         return batch;
     }
@@ -482,7 +521,6 @@ class WorkshopReportReservationSettlementContractTest {
         when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID))
                 .thenReturn(Optional.of(batch));
-        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
         stubCurrentBom();
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(new ArrayList<>());
