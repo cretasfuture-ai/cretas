@@ -239,7 +239,7 @@ public class WorkshopReportReservationService {
                     "客供原料批次不能用于报工占用: " + requestedBatchId,
                     "WORKSHOP_RESERVATION_CUSTOMER_OWNED_FORBIDDEN");
         }
-        if ("PRODUCTION_BATCH".equals(batch.getSourceDocType())) {
+        if ("PRODUCTION_BATCH".equalsIgnoreCase(batch.getSourceDocType())) {
             throw reservationError(409,
                     "在制半成品批次不能作为报工原料占用: " + requestedBatchId,
                     "WORKSHOP_RESERVATION_WIP_FORBIDDEN");

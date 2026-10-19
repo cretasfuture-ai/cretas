@@ -247,7 +247,7 @@ class InventoryAuditTransactionContractTest {
         MaterialBatch grams = reservationBatch("G-001", new BigDecimal("500"));
         grams.setMaterialTypeId(sku);
         grams.setQuantityUnit("g");
-        grams.setUnitPrice(new BigDecimal("0.002"));
+        grams.setUnitPrice(new BigDecimal("0.02"));
         MaterialBatch kilos = reservationBatch("K-002", new BigDecimal("0.5"));
         kilos.setMaterialTypeId(sku);
         kilos.setQuantityUnit("kg");
@@ -294,7 +294,7 @@ class InventoryAuditTransactionContractTest {
                     .isEqualByComparingTo("0.5");
             assertThat(report.getMaterialBatchRefs()).extracting(ref -> ref.get("unit"))
                     .containsExactly("g", "kg");
-            assertThat(report.getMaterialCost()).isEqualByComparingTo("3.00");
+            assertThat(report.getMaterialCost()).isEqualByComparingTo("12.00");
             assertThat(materialBatches.findById(grams.getId()).orElseThrow().getReservedQuantity())
                     .isEqualByComparingTo("500");
             assertThat(materialBatches.findById(kilos.getId()).orElseThrow().getReservedQuantity())
@@ -311,8 +311,10 @@ class InventoryAuditTransactionContractTest {
         long batchId = 10946L;
         WorkProcessTask task = task(batchId, actor);
         tx(manager -> workProcessTasks.save(task));
+        String sku = "RAW-" + UUID.randomUUID();
+        tx(manager -> manager.persist(rawMaterial(sku)));
         MaterialBatch stock = reservationBatch("CONCURRENT-001", BigDecimal.TEN);
-        stock.setMaterialTypeId("RAW-001");
+        stock.setMaterialTypeId(sku);
         stock.setQuantityUnit("kg");
         stock.setUnitPrice(new BigDecimal("2.00"));
         tx(manager -> materialBatches.save(stock));

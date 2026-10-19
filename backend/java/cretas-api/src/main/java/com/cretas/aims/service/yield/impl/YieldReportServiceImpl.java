@@ -1418,9 +1418,13 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId,
                 ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole()));
+        // Warehouse withdrawal and actual feed-in are separate facts, but both use the task input unit.
+        validateWorkflowRequestUnits(factoryId, t, req.getWarehouseOutQuantity(),
+                req.getInputUnit(), null, null, req.getMaterialBatchRefs());
+        validateWorkflowRequestUnits(factoryId, t, req.getFeedInQuantity(),
+                req.getInputUnit(), null, null, req.getMaterialBatchRefs());
         BigDecimal rawTaskQuantity = validateReportMaterialRefs(factoryId, batchId, t, req.getMaterialBatchRefs());
         validateMaterialQuantityBasis(t, rawTaskQuantity, req.getWarehouseOutQuantity(), null);
-        validateWorkflowRequestUnits(factoryId, t, req.getFeedInQuantity(), req.getInputUnit(), null, null, req.getMaterialBatchRefs());
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)

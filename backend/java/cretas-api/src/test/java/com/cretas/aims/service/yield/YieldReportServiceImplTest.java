@@ -798,8 +798,10 @@ class YieldReportServiceImplTest {
     void workflowRawInputMustMatchTheDeclaredPhysicalTotalBeforeCostOrSave() {
         WorkProcessTask task = task(34L, 1, "WP-RAW-TOTAL"); task.setWorkflowInstanceId(96L);
         when(taskRepo.findByFactoryIdAndId("F006", 34L)).thenReturn(Optional.of(task));
+        WorkflowTaskPort rawInput = port(34L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1");
+        rawInput.setMaterialKind("RAW_MATERIAL"); rawInput.setRequired(true);
         when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 96L))
-                .thenReturn(List.of(port(34L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1")));
+                .thenReturn(List.of(rawInput));
         var validator = mock(com.cretas.aims.service.production.TaskMaterialBatchPickerService.class);
         ReflectionTestUtils.setField(svc, "taskMaterialBatchPickerService", validator);
         when(validator.validateMaterialBatchRefs(eq("F006"), eq(1L), eq(34L), anyList())).thenReturn(BigDecimal.ONE);
@@ -816,8 +818,22 @@ class YieldReportServiceImplTest {
         MaterialInputRequest separateQuantities = new MaterialInputRequest();
         separateQuantities.setWorkProcessTaskId(34L); separateQuantities.setInputUnit("kg");
         separateQuantities.setWarehouseOutQuantity(BigDecimal.ONE);
-        separateQuantities.setFeedInQuantity(new BigDecimal("0.9"));
         separateQuantities.setMaterialBatchRefs(List.of(new MaterialBatchRef("MB", BigDecimal.ONE, "kg")));
+        for (String invalidUnit : java.util.Arrays.asList(null, "盒")) {
+            separateQuantities.setInputUnit(invalidUnit);
+            assertThatThrownBy(() -> svc.recordMaterialInput("F006", 1L, 5L, separateQuantities))
+                    .isInstanceOf(BusinessException.class).hasMessageContaining("投入单位");
+        }
+        verify(reportRepo, never()).save(any());
+        verifyNoInteractions(ReflectionTestUtils.getField(svc, "workshopReservationService"));
+        separateQuantities.setInputUnit("kg");
+        separateQuantities.setMaterialBatchRefs(List.of());
+        assertThatThrownBy(() -> svc.recordMaterialInput("F006", 1L, 5L, separateQuantities))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("实际领料批次");
+        verify(reportRepo, never()).save(any());
+        verifyNoInteractions(ReflectionTestUtils.getField(svc, "workshopReservationService"));
+        separateQuantities.setMaterialBatchRefs(List.of(new MaterialBatchRef("MB", BigDecimal.ONE, "kg")));
+        separateQuantities.setFeedInQuantity(new BigDecimal("0.9"));
         when(reportRepo.save(any(ProductionReport.class))).thenAnswer(invocation -> {
             ProductionReport report = invocation.getArgument(0); report.setId(900L); return report;
         });

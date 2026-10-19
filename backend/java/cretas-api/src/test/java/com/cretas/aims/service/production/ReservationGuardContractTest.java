@@ -101,15 +101,17 @@ class ReservationGuardContractTest {
 
     @Test
     void pseudoWipBatchIsBusinessErrorAndDoesNotSave() {
-        Rig rig = new Rig();
-        MaterialBatch batch = batch("batch-a", FACTORY, WORKSHOP_WAREHOUSE, 20);
-        batch.setSourceDocType("PRODUCTION_BATCH");
-        rig.stub("batch-a", batch);
+        for (String sourceType : List.of("PRODUCTION_BATCH", "production_batch", "Production_Batch")) {
+            Rig rig = new Rig();
+            MaterialBatch batch = batch("batch-a", FACTORY, WORKSHOP_WAREHOUSE, 20);
+            batch.setSourceDocType(sourceType);
+            rig.stub("batch-a", batch);
 
-        assertGuardFails(rig, report(ref("batch-a", "1")),
-                "WORKSHOP_RESERVATION_WIP_FORBIDDEN");
+            assertGuardFails(rig, report(ref("batch-a", "1")),
+                    "WORKSHOP_RESERVATION_WIP_FORBIDDEN");
 
-        verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
+            verify(rig.materialBatchRepository, never()).save(any(MaterialBatch.class));
+        }
     }
 
     @Test

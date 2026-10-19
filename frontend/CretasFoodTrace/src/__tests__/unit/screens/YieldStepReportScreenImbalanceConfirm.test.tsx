@@ -161,6 +161,7 @@ jest.mock('../../../services/api/yieldReportApi', () => {
       settleDay: jest.fn(),
       listReports: jest.fn(),
       listAssignedWorkProcessTasks: jest.fn(),
+      listTaskMaterialOptions: jest.fn(),
       listWip: jest.fn(),
       postBatchReversal: jest.fn(),
       listAvailableWip: jest.fn(),
@@ -409,6 +410,30 @@ describe('YieldStepReportScreen 完工出成确认弹窗 — 不平衡前置提�
     await waitFor(() => expect(screen.getByTestId('yield-task-unit-error')).toBeTruthy());
     expect(screen.getByTestId('yield-submit-input-btn').props.disabled).toBe(true);
     expect(screen.getByTestId('yield-task-unit-retry')).toBeTruthy();
+  });
+
+  it('planned output boxes do not become a kg input cap, and the task picker accepts independent 0.1kg', async () => {
+    const task = buildTask({ plannedQuantity: 10, plannedUnit: '盒', outputUnit: '盒' });
+    mockedYieldApi.listTaskMaterialOptions.mockResolvedValue({
+      success: true, code: 200, message: 'ok',
+      data: [{ id: 'MB-1', batchNumber: 'B-1', materialTypeId: 'MAT-1', materialName: '原料', currentQuantity: 2, quantityUnit: 'kg', warehouseId: 'WH-1' }],
+    });
+    let resolveLimits!: (value: any) => void;
+    const limitsPromise = new Promise((resolve) => { resolveLimits = resolve; });
+    await renderForUnitAuthority(task, limitsPromise);
+    resolveLimits({ success: true, code: 200, message: 'ok', data: { ...emptyLimits, workProcessTaskId: task.id, inputUnit: 'kg', outputUnit: '盒' } });
+    await waitFor(() => expect(screen.getByText('计划数量  10 盒')).toBeTruthy());
+    expect(screen.queryByText('计划领料  10 kg')).toBeNull();
+    expect(screen.queryByText(/可投上限约 10/)).toBeNull();
+
+    fireEvent.press(screen.getByLabelText('展开/折叠领料批次选择'));
+    await waitFor(() => expect(mockedYieldApi.listTaskMaterialOptions).toHaveBeenCalledWith(501, task.id, undefined));
+    fireEvent.press(screen.getByLabelText('修改领料批次'));
+    fireEvent.press(screen.getByTestId('yield-input-qty-tap-to-edit'));
+    fireEvent.changeText(screen.getByTestId('yield-input-qty-modal-input'), '0.1');
+    fireEvent.press(screen.getByTestId('yield-input-qty-modal-confirm'));
+    await waitFor(() => expect(screen.getByLabelText('投入量 0.1 kg，点击直接填写')).toBeTruthy());
+    expect(mockedYieldApi.listTaskMaterialOptions).toHaveBeenCalledWith(501, task.id, undefined);
   });
 
   it('①不平衡时(同单位, 偏差>15%): 确认弹窗里出现投入/产出/偏差提示', async () => {

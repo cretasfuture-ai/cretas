@@ -36,8 +36,10 @@ export interface WorkProcessTask {
   productTypeId: string;
   processOrder: number;             // 第几道 (升序)
   status: WorkProcessTaskStatus;
-  plannedQuantity: number | null;   // BigDecimal → number; 计划数量 (Rule 1 max + Rule 2)
+  plannedQuantity: number | null;   // BigDecimal → number; 任务产出计划，不作为投入上限
   plannedUnit: string | null;       // 计划单位 (非 unit)
+  /** Optional explicit input plan. plannedQuantity is the task output plan. */
+  plannedInputQuantity?: number | null;
   estimatedMinutes?: number | null;
   actualQuantity?: number | null;   // 累计产出 (Phase A 双写)
   assignedTo?: number | null;

@@ -1058,8 +1058,11 @@ const YieldStepReportScreen: React.FC = () => {
     return false;
   }, [taskUnitError, taskUnitsReady]);
   // A finished batch target may be expressed in boxes while this task consumes kg.
-  // Only the task's own planned input quantity is a valid picker bound; unknown stays unknown.
-  const planned = currentTask?.plannedQuantity ?? null;
+  // plannedQuantity/plannedUnit describe task output. Only an explicitly supplied
+  // plannedInputQuantity may constrain input; absent input planning stays unknown.
+  const plannedInput = currentTask?.plannedInputQuantity ?? null;
+  const plannedOutput = currentTask?.plannedQuantity ?? null;
+  const plannedOutputUnit = currentTask?.plannedUnit ?? outUnit;
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex >= totalSteps - 1;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
@@ -1085,7 +1088,7 @@ const YieldStepReportScreen: React.FC = () => {
   // ⛔ 容差未知 (后端还没答/取不到) → plannedMax 为 null, 即"这一刻没有软上限",
   //    不是"上限是计划量本身", 也不是回落到某个写死的倍数。
   const plannedMax =
-    planned != null && toleranceRate != null ? planned * overReceiveMultiplier(toleranceRate) : null;
+    plannedInput != null && toleranceRate != null ? plannedInput * overReceiveMultiplier(toleranceRate) : null;
   const inputMax =
     effectiveWipAvailable != null
       ? plannedMax != null
@@ -1095,10 +1098,10 @@ const YieldStepReportScreen: React.FC = () => {
   const inputMaxHint =
     effectiveWipAvailable != null
       ? `可领上道半成品余额 ${effectiveWipAvailable} ${wipUnit} (本道最多领这么多)`
-      : planned != null
+      : plannedInput != null
         ? plannedMax != null && toleranceRate != null
-          ? `计划 ${planned} ${unit}, 可投上限约 ${formatQtyHint(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
-          : `计划 ${planned} ${unit} (超收上限按工厂配置的容差, 正在读取)`
+          ? `计划 ${plannedInput} ${unit}, 可投上限约 ${formatQtyHint(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
+          : `计划 ${plannedInput} ${unit} (超收上限按工厂配置的容差, 正在读取)`
         : null;
   const inputNumeric = parseFloat(inputQty);
   const inputOverLimit =
@@ -2230,8 +2233,8 @@ const YieldStepReportScreen: React.FC = () => {
             <Text style={styles.batchProcess}>
               {batchNumber}  ·  领料报工
             </Text>
-            {planned != null ? (
-              <Text style={styles.planned}>计划数量  {planned} {unit}</Text>
+            {plannedOutput != null ? (
+              <Text style={styles.planned}>计划数量  {plannedOutput} {plannedOutputUnit}</Text>
             ) : null}
           </NeoCard>
 
@@ -2259,15 +2262,6 @@ const YieldStepReportScreen: React.FC = () => {
               ) : null}
               <Text style={styles.phaseHint}>📦 请选择领料批次并记录领料量</Text>
 
-              {/* 防呆 Rule 1: 显示计划量边界 */}
-              {planned != null ? (
-                <View style={styles.limitsHint}>
-                  <Text style={styles.limitsHintText}>
-                    计划领料  {planned} {unit}
-                  </Text>
-                </View>
-              ) : null}
-
               {/* 领料批次选择器 */}
               {renderMaterialAdvisoryCard()}
               <MaterialBatchPicker
@@ -2276,7 +2270,7 @@ const YieldStepReportScreen: React.FC = () => {
                 taskId={currentTask?.id}
                 productionBatchId={batchId}
                 singleBatchQty={inputQty}
-                forceIndependentQuantity={planned == null}
+                forceIndependentQuantity
                 value={materialBatchRefs}
                 onChange={setMaterialBatchRefs}
                 disabled={submitting}
@@ -2652,8 +2646,8 @@ const YieldStepReportScreen: React.FC = () => {
         <Text style={styles.batchProcess}>
           {batchNumber}  ·  {currentTask?.processName ?? `第 ${currentTask?.processOrder} 道`}
         </Text>
-        {planned != null ? (
-          <Text style={styles.planned}>计划数量  {planned} {unit}</Text>
+        {plannedOutput != null ? (
+          <Text style={styles.planned}>计划数量  {plannedOutput} {plannedOutputUnit}</Text>
         ) : null}
         {currentTask?.standardYieldMin != null || currentTask?.standardYieldMax != null ? (
           <Text style={styles.stdRange}>
