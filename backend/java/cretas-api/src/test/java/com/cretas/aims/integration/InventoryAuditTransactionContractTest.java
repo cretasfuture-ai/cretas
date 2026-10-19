@@ -29,6 +29,7 @@ import com.cretas.aims.service.production.TaskMaterialBatchPickerService;
 import com.cretas.aims.service.production.WorkshopReportReservationService;
 import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
 import com.cretas.aims.service.yield.impl.YieldReportServiceImpl;
+import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.CostReconcileService;
@@ -259,7 +260,7 @@ class InventoryAuditTransactionContractTest {
     @Autowired MaterialBatchRepository materialBatches;
     @SpyBean ProductionReportRepository productionReports;
     @Autowired WorkProcessTaskRepository workProcessTasks;
-    @Autowired YieldReportServiceImpl yieldReports;
+    @Autowired YieldReportService yieldReports;
     @Autowired WorkshopReportReservationService reservations;
 
     @MockBean WarehouseResolver warehouseResolver;
