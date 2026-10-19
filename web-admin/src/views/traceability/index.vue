@@ -347,11 +347,23 @@ function openIndividual(id: string) {
           </span>
         </template>
 
+        <el-alert v-if="trace.sharedInputSourceBatchNumber" type="info" :closable="false" show-icon
+          title="本批次与主产品共用原料" data-testid="shared-input-notice">
+          <p>以下原料及工序投入量为同组生产共用投入，不代表本产品单独耗用，也不重复计算成本。</p>
+          <el-button link type="primary" data-testid="shared-input-source-link"
+            @click="router.push({ path: '/production/traceability', query: { batchNumber: trace.sharedInputSourceBatchNumber } })">
+            查看主批次 {{ trace.sharedInputSourceBatchNumber }} 的来源链
+          </el-button>
+        </el-alert>
+
         <!-- ① 本次没拿到 —— 与「没有上游」是两句话 -->
         <p v-if="lineageUnavailable" class="muted" data-testid="lineage-unavailable">
           来源链暂时取不到，请稍后重试
         </p>
         <!-- ② 确实没有上游 -->
+        <p v-else-if="lineageGroups.length === 0 && trace.sharedInputSourceBatchNumber" class="muted" data-testid="lineage-shared">
+          原料消费及上游血缘保留在同组主批次，可通过上方入口查看。
+        </p>
         <p v-else-if="lineageGroups.length === 0" class="muted" data-testid="lineage-empty">
           无上游血缘记录
         </p>
@@ -388,7 +400,7 @@ function openIndividual(id: string) {
         >
           <el-table-column prop="batchNumber" label="原料批次" width="180" />
           <el-table-column prop="materialName" label="原料" min-width="140" />
-          <el-table-column label="消耗量" width="120">
+          <el-table-column :label="trace.sharedInputSourceBatchNumber ? '同组投入量' : '消耗量'" width="120">
             <template #default="{ row }">{{ row.quantity != null ? `${row.quantity} ${row.unit || ''}` : '' }}</template>
           </el-table-column>
           <el-table-column prop="receiptDate" label="入库日期" width="120" />

@@ -173,6 +173,8 @@ export interface LineageSection {
 export interface FullTraceResponse {
   production: ProductionInfo;
   materials: MaterialInfo[];
+  /** 同组主批次记录共用投入；材料数量不得当作本产品独占耗用。 */
+  sharedInputSourceBatchNumber?: string | null;
   processingStages?: ProcessingStageInfo[];
   qualityInspections: QualityInfo[];
   shipments: ShipmentInfo[];

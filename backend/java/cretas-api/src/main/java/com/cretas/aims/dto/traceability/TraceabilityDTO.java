@@ -31,6 +31,8 @@ public class TraceabilityDTO {
     public static class FullTraceResponse {
         private ProductionInfo production;
         private List<MaterialInfo> materials;
+        /** Exact same-report-group input owner; quantities are shared group inputs, not this SKU's exclusive consumption. */
+        private String sharedInputSourceBatchNumber;
         private List<ProcessingStageInfo> processingStages;
         private List<QualityInfo> qualityInspections;
         private List<ShipmentInfo> shipments;

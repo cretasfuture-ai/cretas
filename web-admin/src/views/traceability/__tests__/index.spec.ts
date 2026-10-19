@@ -86,6 +86,35 @@ beforeEach(() => {
 });
 
 describe('溯源查询页 — 「本批来自 N 头牛」横幅', () => {
+  it('explains shared group inputs and links to the actual owner without inventing direct lineage', async () => {
+    const trace = noSectionsTrace();
+    trace.lineage = { rootType: 'PRODUCTION_BATCH', rootId: '32', ancestors: [], maxDepth: 0, nodeCount: 1 };
+    trace.sharedInputSourceBatchNumber = 'PB-SHARED-OWNER';
+    trace.materials = [{ batchNumber: 'RAW-GROUP-1', materialName: '同组原料', materialType: '肉类',
+      supplierName: '供应商', receiptDate: '2026-10-19', quantity: 1, unit: 'kg', status: 'USED_UP' }];
+    getFullTraceMock.mockResolvedValue({ success: true, data: trace });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-CO-PRODUCT');
+    expect(wrapper.get('[data-testid="shared-input-notice"]').text()).toContain('不代表本产品单独耗用');
+    expect(wrapper.get('[data-testid="materials-table"]').text()).toContain('同组投入量');
+    expect(wrapper.get('[data-testid="materials-table"]').text()).toContain('RAW-GROUP-1');
+    expect(wrapper.find('[data-testid="lineage-empty"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="lineage-timeline"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="shared-input-source-link"]').trigger('click');
+    expect(pushMock).toHaveBeenCalledWith({ path: '/production/traceability', query: { batchNumber: 'PB-SHARED-OWNER' } });
+  });
+
+  it('keeps a batch without shared input proof in its original empty-source state', async () => {
+    const trace = noSectionsTrace();
+    trace.lineage = { rootType: 'PRODUCTION_BATCH', rootId: '32', ancestors: [], maxDepth: 0, nodeCount: 1 };
+    getFullTraceMock.mockResolvedValue({ success: true, data: trace });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-NO-SOURCE');
+    expect(wrapper.find('[data-testid="shared-input-notice"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="shared-input-source-link"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="lineage-empty"]').text()).toContain('无上游血缘记录');
+  });
+
   it('keeps the latest SKU query when an older response arrives last', async () => {
     let resolveOld!: (value: { success: boolean; data: ReturnType<typeof sixCattleTrace> }) => void;
     getFullTraceMock.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
