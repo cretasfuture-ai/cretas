@@ -533,6 +533,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   }, [allocationMode, allocationTargetQty, singleBatchQty]);
 
   const handleAutoAllocate = useCallback(async () => {
+    if ((taskId == null) !== (productionBatchId == null)) {
+      setAutoAllocationError('当前报工任务上下文不完整，请返回任务列表后重试');
+      return;
+    }
     const selected = rows.filter((row) => row.selected);
     const seed = selected[0];
     const targetQuantity = parseFloat(singleBatchQty);
@@ -563,9 +567,27 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
     try {
       if (autoAllocationRequestRef.current !== requestId) return;
+      const taskBound = taskId != null && productionBatchId != null;
       // Task-bound mode must allocate from the already mounted task candidate set;
       // generic FEFO can cross task/BOM scope and is therefore never called here.
-      const candidates = rowsRef.current.map((row) => row.batch).filter(
+      // Public callers retain the historical FEFO path and its response/error semantics.
+      let rawCandidates: MaterialBatch[];
+      if (taskBound) {
+        rawCandidates = rowsRef.current.map((row) => row.batch);
+      } else {
+        const fefoResponse = await materialBatchApiClient.getFefoBatches(
+          seed.batch.materialTypeId,
+          targetQuantity,
+          factoryId,
+        );
+        if (autoAllocationRequestRef.current !== requestId) return;
+        if (!fefoResponse.success || !Array.isArray(fefoResponse.data)) {
+          setAutoAllocationError(fefoResponse.message || '自动分配失败，可改为手动选择批次');
+          return;
+        }
+        rawCandidates = fefoResponse.data as MaterialBatch[];
+      }
+      const candidates = rawCandidates.filter(
         (batch) =>
           batch.materialTypeId === seed.batch.materialTypeId &&
           Number.isFinite(Number(batch.remainingQuantity)) &&
@@ -622,7 +644,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         setAutoAllocationLoading(false);
       }
     }
-  }, [rows, singleBatchQty, unit]);
+  }, [factoryId, productionBatchId, rows, singleBatchQty, taskId, unit]);
 
   const setQty = useCallback(
     (idx: number, raw: string) => {
