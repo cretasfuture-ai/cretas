@@ -73,7 +73,7 @@
             @change="markDraftChanged"
           />
           <el-button
-            v-if="readOnlyWorkflow"
+            v-if="isPublishedOrArchived"
             type="primary"
             :loading="saving"
             @click="cloneCurrentAsDraft"
