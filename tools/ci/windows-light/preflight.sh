@@ -3,6 +3,7 @@
 set -euo pipefail
 [[ $(id -u) == 0 && ! -e /opt/cretas-ci-light/.runner ]] || exit 2
 [[ -f /etc/systemd/system/cretas-ci-light.service ]] || exit 2
+! systemctl is-active --quiet cretas-ci-light.service || { echo 'Active listener; refuse preflight changes'; exit 1; }
 override_dir=/run/systemd/system/cretas-ci-light.service.d
 [[ ! -e "$override_dir" ]] || { echo 'Existing runtime override; refuse overwrite'; exit 1; }
 install -d -m 0755 "$override_dir"

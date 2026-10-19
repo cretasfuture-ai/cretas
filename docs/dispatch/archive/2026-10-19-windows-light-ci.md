@@ -31,11 +31,16 @@ Registration token was piped from memory, not saved in source/evidence.
   https://github.com/cretasfuture-ai/cretas/actions/runs/39254183900/job/118065205001
 - Real secret regression job118065205221 on runner25 passed,13:47:51–13:48:29UTC:
   https://github.com/cretasfuture-ai/cretas/actions/runs/39254183739/job/118065205221
-- RN job118065205149 started on runner25 at13:48:34UTC; final result pending at this source checkpoint. Web full validation also remains pending until its actual queued job completes.
-- Aurora Java full job118073192810 was independently observed still running during these Windows jobs; it was not cancelled or restarted.
+- RN job118065205149 passed on runner25,13:48:34–13:54:46UTC: all311 suites and3302 tests passed, with TypeScript check passed.
+  https://github.com/cretasfuture-ai/cretas/actions/runs/39254183733/job/118065205149
+- Web job118065205544 passed on runner25,13:54:50–14:06:21UTC:774 files passed/1 skipped,6123 tests passed/5 skipped, with vue-tsc passed. Skips remain skips.
+  https://github.com/cretasfuture-ai/cretas/actions/runs/39254183972/job/118065205544
+- Aurora Java full job118073192810 continued concurrently, then failed at14:06:11UTC in its new-failure decision step (`rc=1`). This independent parent-PR1037 failure is not a runner-capacity pass or business acceptance; the main Chat retains its diagnosis/fix ownership. It was not cancelled or restarted.
 - Existing Maven routing guard7 assertions and self-hosted timeout guard3 assertions passed, including their own negative controls.
 - Job hook actual heavy-job negative control: `full-suite` refused with75.
 - Re-running preflight after registration refuses with2 before unit changes.
+- Re-running installation refuses an existing target with1; all installation paths and symlinks are guarded. Preflight/registration refuse an active listener before modifications.
+- Outside-sandbox positive controls confirmed root can read Windows win.ini and old runner metadata, while the actual sandbox preflight refused both.
 - Shared agent rule equality, dispatch limits, shell syntax and diff checks passed.
 - Observed cgroup peak~5GiB, zero OOM/kill/max events and zero VM swap; runtime metrics continue separately. Enabled service is verified; full Windows reboot recovery is untested.
 

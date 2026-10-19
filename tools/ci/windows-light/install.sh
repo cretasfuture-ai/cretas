@@ -6,7 +6,9 @@ set -euo pipefail
 runner_archive=$1; runner_sha=$2; node_archive=$3; node_sha=$4
 [[ "$runner_sha" =~ ^[a-f0-9]{64}$ && "$node_sha" =~ ^[a-f0-9]{64}$ ]] || exit 2
 [[ $(uname -m) == x86_64 ]] || { echo 'Unsupported architecture'; exit 2; }
-[[ ! -e /opt/cretas-ci-light && ! -e /etc/cretas-ci-light && ! -e /var/lib/cretas-ci-light ]] || { echo 'Existing installation; refuse overwrite'; exit 1; }
+for target in /opt/cretas-ci-light /opt/cretas-ci-light-tools /etc/cretas-ci-light /var/lib/cretas-ci-light /etc/systemd/system/cretas-ci-light.service; do
+  [[ ! -e "$target" && ! -L "$target" ]] || { echo "Existing target; refuse overwrite: $target"; exit 1; }
+done
 ! getent passwd cretas-ci-light >/dev/null || { echo 'Existing identity; refuse reuse'; exit 1; }
 ! systemctl is-active --quiet cretas-ci.service || { echo 'Old CI is active; ownership conflict'; exit 1; }
 printf '%s  %s\n' "$runner_sha" "$runner_archive" | sha256sum --check --status

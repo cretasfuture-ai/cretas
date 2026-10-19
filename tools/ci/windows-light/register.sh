@@ -3,6 +3,7 @@
 set -euo pipefail
 [[ $(id -u) == 0 ]] || exit 2
 [[ ! -e /opt/cretas-ci-light/.runner ]] || { echo 'Already registered; refuse replacement'; exit 1; }
+! systemctl is-active --quiet cretas-ci-light.service || { echo 'Active listener; refuse registration'; exit 1; }
 IFS= read -r registration_token
 registration_token=${registration_token%$'\r'}
 [[ -n "$registration_token" && ${#registration_token} -lt 512 ]] || exit 2
