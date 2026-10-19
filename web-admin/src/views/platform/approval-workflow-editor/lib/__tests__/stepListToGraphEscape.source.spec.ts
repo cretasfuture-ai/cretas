@@ -90,19 +90,20 @@ describe('步骤列表 → 画布的逃生门', () => {
    * **横着占掉 434px**: 实测画布 758px → **324px**(1600px 视口下 20%)。
    * 一个本意是「让画布更好用」的改动, 反而把画布压小了一半多。
    *
-   * 旁边的 .step-fallback-alert 早就用 `position: absolute` 解决过同一个问题 ——
-   * 我没看它就先写了一版(形态 D: 同一个坑, 两份各自踩)。
-   *
-   * ⇒ 任何加进 .editor-body 的横幅都必须脱离文档流。
+   * 旧版用 absolute 避免横向挤宽，真实验收又发现它盖住画布工具栏。
+   * 现在提示移到纵向编辑器的独立行；mounted 用例同时确认它们不是横排子项。
    */
-  it('🔴 加进 .editor-body 的横幅必须绝对定位, 否则会吃掉画布宽度', () => {
+  it('提示在编辑器独立行正常布局，不横向挤宽也不绝对覆盖工具栏', () => {
     const rule = editor.slice(editor.indexOf('.graph-mode-back {'));
     const block = rule.slice(0, rule.indexOf('}'));
-    expect(block, '.graph-mode-back 必须 position:absolute').toContain('position: absolute');
-
-    // 阳性对照: 既有那条横幅确实也是这么做的 —— 证明这不是我临时发明的写法。
+    expect(block).not.toContain('position: absolute');
+    expect(block).toContain('flex-shrink: 0');
     const alertRule = editor.slice(editor.indexOf('.step-fallback-alert {'));
-    expect(alertRule.slice(0, alertRule.indexOf('}'))).toContain('position: absolute');
+    const alertBlock = alertRule.slice(0, alertRule.indexOf('}'));
+    expect(alertBlock).not.toContain('position: absolute');
+    expect(alertBlock).toContain('flex-shrink: 0');
+    const editorRule = editor.slice(editor.indexOf('.approval-workflow-editor {'));
+    expect(editorRule.slice(0, editorRule.indexOf('}'))).toContain('flex-direction: column');
   });
 
   it('两个方向都要有真实入口 —— 光有函数没按钮等于没做', () => {

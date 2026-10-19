@@ -151,6 +151,25 @@ jobs:
           # ⛔ 只断言下限, 不钉死 21 —— 装了更新的版本不该把这一步弄红。
           [ "$major" -ge 21 ]
 
+      - name: Install isolated script-test Python dependencies
+        run: |
+          set -euo pipefail
+          # Same relocated-CPython handling as python-gate.yml: venv must use
+          # the real executable, not its /usr/local/bin compatibility symlink.
+          python_bin=''
+          for candidate in python3.11 python3.12 python3; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              python_bin=$("$candidate" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+              break
+            fi
+          done
+          [ -n "$python_bin" ] || { echo 'No Python interpreter available' >&2; exit 1; }
+          echo "PYTHON_USED=$python_bin"
+          "$python_bin" -m venv "$RUNNER_TEMP/ops-script-python"
+          "$RUNNER_TEMP/ops-script-python/bin/python" -m pip install 'PyYAML>=6.0,<7.0.0'
+          "$RUNNER_TEMP/ops-script-python/bin/python" -c 'import importlib.metadata, yaml; print("PyYAML=" + importlib.metadata.version("PyYAML")); print("PYTHON_YAML_MODULE=" + yaml.__file__)'
+          echo "$RUNNER_TEMP/ops-script-python/bin" >> "$GITHUB_PATH"
+
       # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), 不编译。
       - name: Show interpreter versions
         run: |

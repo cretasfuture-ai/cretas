@@ -1,4 +1,5 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
+import { ElMessageBox } from 'element-plus';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STEP_LIST_FALLBACK_TEXT } from '../../lib/stepGraph';
 
@@ -119,6 +120,24 @@ describe('退回画布的横幅文案 —— 每种原因都必须精确匹配�
     ]);
     const wrapper = await mountWithDto(makeDto(nodes, edges));
     expect(bannerDescription(wrapper)).toBe(STEP_LIST_FALLBACK_TEXT['branching-node']);
+    expect(wrapper.get('.step-fallback-alert').element.parentElement,
+      '提示必须占编辑器独立一行，不能浮在画布工具栏上或占横向画布宽度').toBe(wrapper.element);
+    expect(wrapper.find('.editor-body .step-fallback-alert').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('主动切换画布后的返回提示同样独占一行，不遮挡画布操作', async () => {
+    const confirmation = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const wrapper = await mountWithDto(makeDto(LINEAR_NODES, LINEAR_EDGES));
+    await wrapper.get('[data-testid="switch-to-graph"]').trigger('click');
+    await flushPromises();
+    await flushPromises();
+    const returnBar = wrapper.get('.graph-mode-back');
+    expect(returnBar.element.parentElement).toBe(wrapper.element);
+    expect(wrapper.find('.editor-body .graph-mode-back').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="switch-to-step-list"]').exists()).toBe(true);
+    wrapper.unmount();
+    confirmation.mockRestore();
   });
 
   it('unknown-node（悬空连线，端点不存在）：横幅精确等于该原因的文案，⛔ 不是静默丢配置', async () => {
