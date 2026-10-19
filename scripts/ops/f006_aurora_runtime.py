@@ -38,8 +38,9 @@ PARSE_SECONDS = 5
 REQUEST_SECONDS = 50
 MODEL_SHA256 = 'b0d5696b72a61363c5fd3495c0c7034e8adc42020f65436175b6b57425c2be6d'
 MODEL_BYTES = 9779561824
-NATIVE_PROFILE = dict(load_mode='mmap',gpu_layers=48,parallel=1,batch=64,ubatch=64,
-    ctx=10240,cache_type='q8_0',lazy='on',reasoning_budget=64)
+NATIVE_PROFILE = dict(load_mode='mmap',gpu_layers=24,parallel=1,batch=64,ubatch=64,
+    ctx=10240,cache_type='q8_0',lazy='on',reasoning_budget=32,
+    threads=8,warmup=False,repack=False)
 
 
 def identity():
@@ -72,7 +73,7 @@ def active_build():
 
 
 def admitted(s, native_build=False):
-    return (s['pressure']==1 and s['memory_free_percent']>=60 and
+    return (s['pressure']==1 and s['memory_free_percent']>=50 and
             s['free_gib']>=110 and not native_build)
 
 
@@ -91,11 +92,16 @@ def signal_owned_group(pgid, sig):
         # Darwin can report EPERM for a group whose final member just exited.
         # Ignore it only after proving that no live member remains; query failures
         # and genuinely live inaccessible processes remain cleanup errors.
-        rows=subprocess.check_output(['ps','-axo','pgid=,stat='],text=True,timeout=2)
-        if any(len(v:=line.split())>=2 and v[0]==str(pgid) and not v[1].startswith('Z')
-               for line in rows.splitlines()):
-            raise
-        return False
+        # Darwin may retain a dying member briefly after denying all signals.
+        # Wait only for disappearance; an actually live inaccessible group still
+        # raises, and no other group is signalled during the grace period.
+        deadline=time.monotonic()+.5
+        while True:
+            rows=subprocess.check_output(['ps','-axo','pgid=,stat='],text=True,timeout=.5)
+            if not any(len(v:=line.split())>=2 and v[0]==str(pgid) and not v[1].startswith('Z')
+                       for line in rows.splitlines()):return False
+            if time.monotonic()>=deadline:raise
+            time.sleep(.05)
 
 
 def validate_request(raw):
@@ -201,12 +207,12 @@ class Runtime:
                 raise RuntimeError('fixed_model_missing')
             command=[str(self.root/'runtime-0.40.6/llama-server'),'-m',str(blob),
                 '--alias',MODEL,'--host',HOST,'--port',str(MODEL_PORT),'--parallel',str(NATIVE_PROFILE['parallel']),
-                '-c',str(NATIVE_PROFILE['ctx']),'-t','4','-b',str(NATIVE_PROFILE['batch']),
+                '-c',str(NATIVE_PROFILE['ctx']),'-t',str(NATIVE_PROFILE['threads']),'-b',str(NATIVE_PROFILE['batch']),
                 '-ub',str(NATIVE_PROFILE['ubatch']),'--load-mode',NATIVE_PROFILE['load_mode'],
                 '-ngl',str(NATIVE_PROFILE['gpu_layers']),'-fa','on','-ctk',NATIVE_PROFILE['cache_type'],
                 '-ctv',NATIVE_PROFILE['cache_type'],'--lazy-mode',NATIVE_PROFILE['lazy'],
                 '--cache-ram','0','--ctx-checkpoints','0',
-                '--reasoning-budget',str(NATIVE_PROFILE['reasoning_budget']),'--reasoning-format','deepseek','--no-webui','--jinja']
+                '--reasoning-budget',str(NATIVE_PROFILE['reasoning_budget']),'--reasoning-format','deepseek','--no-webui','--jinja','--no-warmup','--no-repack']
             self.child=subprocess.Popen(command,stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             proc=self.child;self.child_pgid=proc.pid
@@ -239,10 +245,15 @@ class Runtime:
         with self.child_lock:self.stop_child_locked()
     def watch(self,baseline,done,breach,deadline=None):
         while not done.wait(.5):
-            try:ok=(deadline is None or time.monotonic()<deadline) and protected(sample(),baseline)
-            except Exception:ok=False
+            observation=None;reason='bounds'
+            try:
+                if deadline is not None and time.monotonic()>=deadline:ok=False;reason='deadline'
+                else:observation=sample();ok=protected(observation,baseline)
+            except subprocess.TimeoutExpired as exc:
+                ok=False;reason='probe_timeout_'+Path(exc.cmd[0] if isinstance(exc.cmd,(list,tuple)) else exc.cmd).name
+            except Exception as exc:ok=False;reason='probe_error_'+type(exc).__name__
             if not ok:
-                breach.set();self.logger.warning('resource_guard_stop');self.stop_child();return
+                breach.set();self.logger.warning('resource_guard_stop reason=%s observation=%s baseline=%s',reason,observation,baseline);self.stop_child();return
 
     def watch_jobs(self,done,breach):
         # Guest/CLI latency must never delay the independent memory watchdog.

@@ -14,7 +14,7 @@ class ResourceAdmission(unittest.TestCase):
     def setUp(self):self.good=dict(pressure=1,memory_free_percent=65,swap_mib=100,free_gib=130)
     def test_admission_and_active_build(self):
         self.assertTrue(m.admitted(self.good));self.assertFalse(m.admitted(self.good,True))
-        for key,value in [('pressure',2),('pressure',4),('memory_free_percent',59),('free_gib',109)]:
+        for key,value in [('pressure',2),('pressure',4),('memory_free_percent',49),('free_gib',109)]:
             self.assertFalse(m.admitted(dict(self.good,**{key:value})))
     def test_protection_bounds(self):
         self.assertTrue(m.protected(self.good,self.good))
@@ -82,6 +82,12 @@ class OwnershipAndReports(unittest.TestCase):
             rt=self.runtime(td);done=mock.Mock();done.wait.return_value=False;breach=mock.Mock()
             with mock.patch.object(m,'sample',return_value=dict(pressure=2)),mock.patch.object(rt,'stop_child') as stop:
                 rt.watch(dict(swap_mib=0),done,breach);breach.set.assert_called_once();stop.assert_called_once()
+    def test_probe_timeout_is_reported_and_still_stops_owned_child(self):
+        with tempfile.TemporaryDirectory() as td:
+            rt=self.runtime(td);done=mock.Mock();done.wait.return_value=False;breach=mock.Mock()
+            with mock.patch.object(m,'sample',side_effect=m.subprocess.TimeoutExpired(['memory_pressure','-Q'],2)),mock.patch.object(rt,'stop_child') as stop,mock.patch.object(rt.logger,'warning') as warning:
+                rt.watch({},done,breach);stop.assert_called_once();breach.set.assert_called_once()
+                self.assertEqual(warning.call_args.args[1],'probe_timeout_memory_pressure')
     def test_ci_watch_fails_closed_without_blocking_memory_watch(self):
         with tempfile.TemporaryDirectory() as td:
             rt=self.runtime(td);done=mock.Mock();done.wait.return_value=False;breach=mock.Mock()
@@ -244,6 +250,9 @@ class DarwinExitedGroup(unittest.TestCase):
     def test_permission_error_requires_no_live_members(self):
         with mock.patch.object(m.os,'killpg',side_effect=PermissionError), mock.patch.object(m.subprocess,'check_output',return_value='123 Z\n999 S\n'):
             self.assertFalse(m.signal_owned_group(123,0))
+    def test_dying_member_disappears_during_bounded_grace(self):
+        with mock.patch.object(m.os,'killpg',side_effect=PermissionError),mock.patch.object(m.subprocess,'check_output',side_effect=['123 S\n','']),mock.patch.object(m.time,'sleep'):
+            self.assertFalse(m.signal_owned_group(123,m.signal.SIGTERM))
     def test_live_member_permission_error_is_preserved(self):
         with mock.patch.object(m.os,'killpg',side_effect=PermissionError), mock.patch.object(m.subprocess,'check_output',return_value='123 S\n'):
             with self.assertRaises(PermissionError):m.signal_owned_group(123,0)
