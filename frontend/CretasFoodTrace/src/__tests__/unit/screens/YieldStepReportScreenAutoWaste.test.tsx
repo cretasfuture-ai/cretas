@@ -348,7 +348,7 @@ async function renderAtOutputStep(params: {
     } as any,
   });
   mockedYieldApi.getYield.mockResolvedValue({ success: true, code: 200, message: 'ok', data: yieldData });
-  mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: emptyLimits });
+  mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { ...emptyLimits, workProcessTaskId: task.id, inputUnit: stepInputUnit, outputUnit: task.outputUnit ?? 'kg' } });
   mockedYieldApi.getOutputOptions.mockResolvedValue({
     success: true, code: 200, message: 'ok', data: { items: [] },
   });

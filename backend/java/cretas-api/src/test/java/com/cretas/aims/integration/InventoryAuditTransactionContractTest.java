@@ -5,7 +5,10 @@ import com.cretas.aims.config.datasource.PrimaryDataSourceConfig;
 import com.cretas.aims.controller.datacenter.OperationLogController;
 import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.TransferItemType;
 import com.cretas.aims.entity.enums.TransferType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
@@ -13,7 +16,33 @@ import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.dto.yield.MaterialBatchRef;
+import com.cretas.aims.dto.yield.YieldReportRequest;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.filter.CorrelationIdFilter;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.production.TaskMaterialBatchPickerService;
+import com.cretas.aims.service.production.WorkshopReportReservationService;
+import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
+import com.cretas.aims.service.yield.impl.YieldReportServiceImpl;
+import com.cretas.aims.service.ProcessingService;
+import com.cretas.aims.service.wip.WipInventoryService;
+import com.cretas.aims.service.yield.CostReconcileService;
+import com.cretas.aims.repository.FactorySettingsRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
+import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -23,6 +52,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,6 +61,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,7 +87,9 @@ import static org.assertj.core.api.Assertions.*;
         "spring.flyway.enabled=false", "spring.sql.init.mode=never"})
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ContextConfiguration(classes = InventoryAuditTransactionContractTest.Config.class)
-@Import({InventoryAuditConfiguration.class, PrimaryDataSourceConfig.class})
+@Import({InventoryAuditConfiguration.class, PrimaryDataSourceConfig.class,
+        WorkshopReportReservationService.class, YieldReportServiceImpl.class,
+        YieldCalculationServiceImpl.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class InventoryAuditTransactionContractTest {
     private static final String H2_URL = "jdbc:h2:mem:inventory_audit_" + UUID.randomUUID()
@@ -77,6 +112,11 @@ class InventoryAuditTransactionContractTest {
                     };
                 }
             };
+        }
+
+        @org.springframework.context.annotation.Bean
+        static ObjectMapper objectMapper() {
+            return new ObjectMapper();
         }
     }
 
@@ -122,6 +162,69 @@ class InventoryAuditTransactionContractTest {
         for (MaterialBatch batch : batches) assertThat(logs(batch.getId())).hasSize(1);
     }
 
+    @Test
+    void inputReportReservationFailureRollsBackSavedReportAndEveryBatch() {
+        Object yieldTarget = AopTestUtils.getTargetObject(yieldReports);
+        assertThat(ReflectionTestUtils.getField(yieldTarget, "workshopReservationService"))
+                .isSameAs(reservations);
+        assertThat(ReflectionTestUtils.getField(yieldTarget, "workflowTaskPortRepository")).isNotNull();
+
+        String taskFactory = factory;
+        long batchId = 10944L;
+        long workerId = actor;
+        WorkProcessTask task = task(batchId, workerId);
+        tx(manager -> workProcessTasks.save(task));
+
+        MaterialBatch first = reservationBatch("A-001", BigDecimal.TEN);
+        MaterialBatch second = reservationBatch("B-002", BigDecimal.ONE);
+        tx(manager -> {
+            materialBatches.save(first);
+            materialBatches.save(second);
+        });
+        ProductionBatch productionBatch = new ProductionBatch();
+        productionBatch.setId(batchId);
+        productionBatch.setFactoryId(taskFactory);
+        productionBatch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        org.mockito.Mockito.when(productionBatchRepository.findByIdAndFactoryId(batchId, taskFactory))
+                .thenReturn(java.util.Optional.of(productionBatch));
+        org.mockito.Mockito.when(warehouseResolver.resolveWorkshopId(taskFactory)).thenReturn("WH-WORK");
+
+        YieldReportRequest request = inputRequest(task.getId(), "reserve-failure-001");
+        request.setMaterialBatchRefs(List.of(ref(first.getId(), "5"), ref(second.getId(), "5")));
+
+        Throwable failure = catchThrowable(() -> yieldReports.submitReport(taskFactory, batchId, workerId, request));
+        assertThat(failure).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) failure).getErrorCode()).isEqualTo("BATCH_OVER_CONSUMED");
+        org.mockito.Mockito.verify(productionReports).save(org.mockito.ArgumentMatchers.any(ProductionReport.class));
+
+        tx(manager -> {
+            manager.clear();
+            assertThat(productionReports.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(
+                    taskFactory, task.getId(), request.getClientRequestId())).isEmpty();
+            assertThat(materialBatches.findById(first.getId()).orElseThrow().getReservedQuantity())
+                    .isEqualByComparingTo("0");
+            assertThat(materialBatches.findById(second.getId()).orElseThrow().getReservedQuantity())
+                    .isEqualByComparingTo("0");
+        });
+
+        tx(manager -> materialBatches.findById(second.getId()).orElseThrow()
+                .setReceiptQuantity(BigDecimal.TEN));
+        request.setClientRequestId("reserve-success-001");
+        Map<String, Object> success = yieldReports.submitReport(taskFactory, batchId, workerId, request);
+        assertThat(success.get("reportId")).isNotNull();
+        org.mockito.Mockito.verify(productionReports, org.mockito.Mockito.times(2))
+                .save(org.mockito.ArgumentMatchers.any(ProductionReport.class));
+        tx(manager -> {
+            manager.clear();
+            assertThat(productionReports.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(
+                    taskFactory, task.getId(), request.getClientRequestId())).isPresent();
+            assertThat(materialBatches.findById(first.getId()).orElseThrow().getReservedQuantity())
+                    .isEqualByComparingTo("5");
+            assertThat(materialBatches.findById(second.getId()).orElseThrow().getReservedQuantity())
+                    .isEqualByComparingTo("5");
+        });
+    }
+
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) throws Exception {
         if ("true".equals(System.getenv("CRETAS_WORKFLOW_PG_VERIFY"))) {
@@ -153,6 +256,28 @@ class InventoryAuditTransactionContractTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactions;
     @Autowired OperationLogRepository operationLogs;
+    @Autowired MaterialBatchRepository materialBatches;
+    @SpyBean ProductionReportRepository productionReports;
+    @Autowired WorkProcessTaskRepository workProcessTasks;
+    @Autowired YieldReportServiceImpl yieldReports;
+    @Autowired WorkshopReportReservationService reservations;
+
+    @MockBean WarehouseResolver warehouseResolver;
+    @MockBean ProcessingService processingService;
+    @MockBean FactorySettingsRepository factorySettingsRepository;
+    @MockBean ProductTypeRepository productTypeRepository;
+    @MockBean ProductionBatchRepository productionBatchRepository;
+    @MockBean ProductionPlanRepository productionPlanRepository;
+    @MockBean WorkProcessRepository workProcessRepository;
+    @MockBean SemiFinishedInventoryRepository wipRepository;
+    @MockBean BatchLineageEdgeRepository lineageEdgeRepository;
+    @MockBean ProcessMaterialRecipeRepository recipeRepository;
+    @MockBean WipInventoryService wipInventoryService;
+    @MockBean ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
+    @MockBean ProductWorkProcessRepository productWorkProcessRepository;
+    @MockBean CostReconcileService costReconcileService;
+    @MockBean ProcessSheetRowRepository processSheetRowRepository;
+    @MockBean TaskMaterialBatchPickerService taskMaterialBatchPickerService;
     private final ObjectMapper json = new ObjectMapper();
     private String factory;
     private String otherFactory;
@@ -398,6 +523,46 @@ class InventoryAuditTransactionContractTest {
         MaterialBatch batch = batch(); tx(manager -> manager.persist(batch));
         assertThat(logs(batch.getId()).get(0).get("user_id")).isNull();
         assertThat(logs(batch.getId()).get(0).get("summary").toString()).contains("origin=unattributed_request");
+    }
+
+    private WorkProcessTask task(long productionBatchId, long workerId) {
+        WorkProcessTask task = new WorkProcessTask();
+        task.setFactoryId(factory);
+        task.setProductionBatchId(productionBatchId);
+        task.setWorkProcessId("legacy-process");
+        task.setProductTypeId("legacy-product");
+        task.setProcessOrder(1);
+        task.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+        task.setAssignedTo(workerId);
+        task.setPlannedUnit("kg");
+        return task;
+    }
+
+    private MaterialBatch reservationBatch(String id, BigDecimal receiptQuantity) {
+        MaterialBatch batch = batch();
+        batch.setId(id);
+        batch.setBatchNumber("RES-" + id);
+        batch.setReceiptQuantity(receiptQuantity);
+        batch.setWarehouseId("WH-WORK");
+        return batch;
+    }
+
+    private YieldReportRequest inputRequest(Long taskId, String clientRequestId) {
+        YieldReportRequest request = new YieldReportRequest();
+        request.setWorkProcessTaskId(taskId);
+        request.setClientRequestId(clientRequestId);
+        request.setReportKind("INPUT");
+        request.setInputQuantity(BigDecimal.TEN);
+        request.setInputUnit("kg");
+        return request;
+    }
+
+    private MaterialBatchRef ref(String batchId, String quantity) {
+        MaterialBatchRef ref = new MaterialBatchRef();
+        ref.setMaterialBatchId(batchId);
+        ref.setQuantity(new BigDecimal(quantity));
+        ref.setUnit("kg");
+        return ref;
     }
 
     private MaterialBatch batch() {
