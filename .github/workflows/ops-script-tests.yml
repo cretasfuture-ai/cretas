@@ -151,6 +151,14 @@ jobs:
           # ⛔ 只断言下限, 不钉死 21 —— 装了更新的版本不该把这一步弄红。
           [ "$major" -ge 21 ]
 
+      - name: Install isolated script-test Python dependencies
+        run: |
+          set -euo pipefail
+          script_python_path="$RUNNER_TEMP/ops-script-python${PYTHONPATH:+:$PYTHONPATH}"
+          python3 -m pip install --target "$RUNNER_TEMP/ops-script-python" 'PyYAML>=6.0,<7.0.0'
+          PYTHONPATH="$script_python_path" python3 -c 'import importlib.metadata, yaml; print("PyYAML=" + importlib.metadata.version("PyYAML"))'
+          echo "PYTHONPATH=$script_python_path" >> "$GITHUB_ENV"
+
       # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), 不编译。
       - name: Show interpreter versions
         run: |
