@@ -53,7 +53,15 @@ jobs:
 
       - name: Build
         working-directory: web-admin
-        run: npm run build
+        env:
+          # Vite exceeded the default ~2 GiB heap on the same production tree.
+          # Keep the full build within the verified 6/8 GiB runner envelopes.
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          set -euo pipefail
+          node -e 'const os = require("node:os"), v8 = require("node:v8"); console.log("WEB_BUILD_RESOURCES=" + JSON.stringify({ node: process.version, arch: process.arch, heapLimitBytes: v8.getHeapStatistics().heap_size_limit, visibleCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem(), freeMemoryBytes: os.freemem() }))'
+          # GNU time retains the build exit code and reports wall/CPU/peak RSS.
+          /usr/bin/time -v npm run build
 
       # 与 web_release_write 完全一致的打包与字段。刻意不复用那个 shell 函数: 它同时要做
       # 本地缓存目录的 staging/promote, 在 CI 里没有意义, 硬套反而要传一堆无用路径。

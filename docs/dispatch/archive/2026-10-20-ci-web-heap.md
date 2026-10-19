@@ -1,0 +1,23 @@
+# Web artifact heap boundary and measurement
+
+Task `ERP-CI-WEB-HEAP-20261020`, `in-progress`, Owner `/root` DIRECT. Base `6629f8e25c43075184f588216199667b30287c12`; clean reused root-only worktree `C:/Users/Steve/cretas-erp-w3-acceptance-20261019`, new branch `codex/ci-web-heap-20261020`. Other worktrees and QA/runtime Owners retained.
+
+Scope: `.github/workflows/web-dist.yml`, only Build-step environment and command. Initial blob `4e032925f1393a641f4cc3d70d13f1006b132689`. No runner label, registration/service, trigger, dependency, product source, packaging, manifest, provenance or deployment changes. Root alone writes dispatch.
+
+Actual failure: main6629 run39288446516/job118182520480 on aurora-cretas queued2s, executed40s; successful npmci, then Vite Build15s, V8 GC reached2086.8MB and exit134 heap OOM. Same product tree already passed official local build and Web tests. Existing Web typecheck explicitly uses4096MB, but artifact Build uses Node's roughly2GB default.
+
+Live envelopes checked separately: Windowslight3CPU/6GiB memorymax,5GiB high,swap0 and no java label; host WSL available17+GiB, GNUtime installed. Aurora verified through actual Tailscale/config chain to Auroras-Mac-mini.local/aurora: Colimaci4CPU/8GiB, available7.1GiB, no Java/Maven process at sampling. No runner restart or second heavy workload is part of this change.
+
+Change sets the Build process ceiling to4096MB and reports configured V8 heap/visible resources plus GNUtime wall/CPU/maximum RSS. This is a ceiling, not a reserved allocation. Child failure must propagate; packaging/upload only run after successful build. Original failed job remains evidence; no blind reruns.
+
+Acceptance: YAML parse and semantic diff limited to Build-step env/run; `git diff --check`; dispatch checker; expected-failure propagation probe for GNUtime; actual final-candidate workflow_dispatch with complete Build/package/provenance-status/upload outcome and retained resource/timing evidence. Product tests for unchanged frozen product source are reused. PR applicable checks and manual merge remain distinct; no production deploy needed for CI-only changes. Java splitting and Windows maintenance remain separately owned and require measured evidence.
+
+## Bounded runtime prerequisite
+
+`ERP-CI-AURORA-TIME-20261020`, Owner `/root/native_ci_watch`, same Base. Read-only actual Aurora guest preflight found `/usr/bin/time` absent; Windows GNUtime is present. Before the candidate build, install only the missing Ubuntu `time` package in the already-verified Aurora Colima `ci` guest, after fresh GitHub busy=false for both actual runners and no Runner.Worker/heavy process/dpkg maintenance. Require host identity Auroras-Mac-mini.local/aurora and guest identity/profile revalidation. Use existing configured SSH/Tailscale chain and normal host-key checks. No apt upgrade, default Colima/PomeloX, VM/resource/runner/service/network changes or restart; no token/key output. Any occupancy/lock/scope uncertainty is HOLD rather than takeover. Retain package status/version, exact requested package transaction, commands and before/after idle evidence privately. Verify GNUtime executable and child exit42 propagation; this is tooling readiness, not a real artifact-build pass. Root alone owns tracked source/dispatch and decides final candidate CI dispatch.
+
+## Frozen candidate / runtime readback
+
+Runtime task accepted: only Ubuntu time1.9-0.2build1 installed in Colima ci after both real runner APIs were online/busy=false, no Worker/Java/Web process and no apt/dpkg lock holder. Apt preview and actual transaction both had one new package,0upgrades/0removals; no update/upgrade/restart. GNUtime positive exit0 and negative exit42 both propagated correctly. Evidence: private ci-efficiency-20261020/java-timing/aurora-time-install/.
+
+Candidate source frozen for review; no assertion of CI success or merge yet. Five existing related release/timeout/trigger contracts passed, workflow YAML semantic comparison confirmed only Build env/run changed, diff check passed, Windows GNUtime child exit42 proof passed. Existing product source tree and product tests are unchanged and reused. Actual candidate artifact workflow, applicable PR checks, resource/timing readback and manual merge remain pending in private ci-efficiency-20261020/CURRENT.md. Root retains sole candidate Owner; microtask rows archived in this final candidate commit to avoid a documentation-only retest cycle. Parent ERP stage remains in-progress; S0/S1 acceptance is not promoted by this CI slice.
