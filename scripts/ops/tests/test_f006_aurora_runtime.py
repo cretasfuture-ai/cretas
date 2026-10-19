@@ -103,6 +103,39 @@ class OwnershipAndReports(unittest.TestCase):
             for _ in range(800):rt.logger.info('x'*2048)
             logs=list((Path(td)/'state').glob('runtime.log*'));self.assertLessEqual(len(logs),3);self.assertTrue(all(p.stat().st_size<=524288 for p in logs))
 
+class WarningBackpressure(unittest.TestCase):
+    def setUp(self):
+        import threading
+        self.tmp=tempfile.TemporaryDirectory();self.rt=m.Runtime(self.tmp.name);self.rt.child=mock.Mock();self.rt.child.poll.return_value=None;self.rt.child_pgid=123
+        self.done=threading.Event();self.breach=threading.Event();self.good=dict(pressure=1,memory_free_percent=55,free_gib=140,swap_mib=100)
+    def tearDown(self):
+        for h in list(self.rt.logger.handlers):h.close();self.rt.logger.removeHandler(h)
+        self.tmp.cleanup()
+    def test_only_owned_group_paused_then_resumed_after_normal_pressure(self):
+        with mock.patch.object(m,'sample',return_value=self.good),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:
+            ok,spent=self.rt.ease_warning(self.good,self.done,self.breach,m.time.monotonic()+1,.3)
+            self.assertTrue(ok);self.assertLess(spent,.3);self.assertEqual(signals.call_args_list,[mock.call(123,m.signal.SIGSTOP),mock.call(123,m.signal.SIGCONT)])
+    def test_critical_swap_and_space_do_not_resume(self):
+        for bad in [dict(self.good,pressure=4),dict(self.good,pressure=2,swap_mib=165),dict(self.good,pressure=2,free_gib=104)]:
+            with mock.patch.object(m,'sample',return_value=bad),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:
+                self.assertFalse(self.rt.ease_warning(self.good,self.done,self.breach,None,.3)[0]);self.assertEqual(signals.call_args_list,[mock.call(123,m.signal.SIGSTOP)])
+    def test_persistent_warning_is_bounded_and_stays_paused_for_cleanup(self):
+        with mock.patch.object(m,'sample',return_value=dict(self.good,pressure=2)),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:
+            start=m.time.monotonic();self.assertFalse(self.rt.ease_warning(self.good,self.done,self.breach,None,.12)[0]);self.assertLess(m.time.monotonic()-start,.25)
+            self.assertEqual(signals.call_args_list,[mock.call(123,m.signal.SIGSTOP)])
+    def test_probe_failure_leaves_group_paused_and_propagates_for_cleanup(self):
+        with mock.patch.object(m,'sample',side_effect=OSError),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:
+            with self.assertRaises(OSError):self.rt.ease_warning(self.good,self.done,self.breach,None,.3)
+            self.assertEqual(signals.call_args_list,[mock.call(123,m.signal.SIGSTOP)])
+    def test_consumed_pause_budget_never_pauses_again(self):
+        with mock.patch.object(m,'signal_owned_group') as signals:
+            self.assertEqual(self.rt.ease_warning(self.good,self.done,self.breach,None,0),(False,0));signals.assert_not_called()
+    def test_no_resume_when_ownership_replaced(self):
+        def sample(**kwargs):self.rt.child_pgid=None;return self.good
+        with mock.patch.object(m,'sample',side_effect=sample),mock.patch.object(m,'signal_owned_group',return_value=True) as signals:
+            self.rt.ease_warning(self.good,self.done,self.breach,None,.3)
+            self.assertEqual(signals.call_args_list,[mock.call(123,m.signal.SIGSTOP)])
+
 class ProxyIntegration(unittest.TestCase):
     def setUp(self):
         import http.server,threading

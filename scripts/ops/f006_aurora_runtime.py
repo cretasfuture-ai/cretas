@@ -50,10 +50,10 @@ def identity():
         raise RuntimeError('Aurora identity required')
 
 
-def sample():
-    pressure = int(subprocess.check_output(['sysctl','-n','kern.memorystatus_vm_pressure_level'],text=True,timeout=2))
-    memory = subprocess.check_output(['memory_pressure','-Q'],text=True,timeout=2)
-    swap = subprocess.check_output(['sysctl','vm.swapusage'],text=True,timeout=2)
+def sample(timeout=2):
+    pressure = int(subprocess.check_output(['sysctl','-n','kern.memorystatus_vm_pressure_level'],text=True,timeout=timeout))
+    memory = subprocess.check_output(['memory_pressure','-Q'],text=True,timeout=timeout)
+    swap = subprocess.check_output(['sysctl','vm.swapusage'],text=True,timeout=timeout)
     return dict(pressure=pressure,
         memory_free_percent=int(re.search(r'free percentage: (\d+)%',memory).group(1)),
         swap_mib=float(re.search(r'used = ([\d.]+)M',swap).group(1)),
@@ -243,12 +243,44 @@ class Runtime:
         self.child=None;self.child_pgid=None
     def stop_child(self):
         with self.child_lock:self.stop_child_locked()
+    def ease_warning(self,baseline,done,breach,deadline,remaining):
+        # Pause only this request's process group while the OS reclaims pages.
+        # Never run through warning pressure, extend the wall deadline, or pause a VM.
+        if remaining<=0:return False,0
+        with self.child_lock:
+            pgid=self.child_pgid
+            if not pgid or not self.child or self.child.poll() is not None:return False,0
+            if not signal_owned_group(pgid,signal.SIGSTOP):return False,0
+        started=time.monotonic();recovered=False
+        self.logger.info('owned_model_warning_pause')
+        try:
+            until=min(started+remaining,deadline if deadline is not None else float('inf'))
+            while not done.wait(.05) and not breach.is_set() and time.monotonic()<until:
+                observation=sample(timeout=min(.5,max(.01,(until-time.monotonic())/3)))
+                if time.monotonic()>=until:break
+                if protected(observation,baseline):recovered=True;break
+                if observation['pressure']!=2 or not protected(dict(observation,pressure=1),baseline):break
+            return recovered,time.monotonic()-started
+        finally:
+            if recovered and not done.is_set() and not breach.is_set():
+                with self.child_lock:
+                    if self.child_pgid==pgid and self.child and self.child.poll() is None:
+                        signal_owned_group(pgid,signal.SIGCONT)
+                        self.logger.info('owned_model_warning_resume')
+
     def watch(self,baseline,done,breach,deadline=None):
+        paused_seconds=0
         while not done.wait(.5):
             observation=None;reason='bounds'
             try:
                 if deadline is not None and time.monotonic()>=deadline:ok=False;reason='deadline'
-                else:observation=sample();ok=protected(observation,baseline)
+                else:
+                    observation=sample();ok=protected(observation,baseline)
+                    if not ok and observation['pressure']==2 and protected(dict(observation,pressure=1),baseline):
+                        ok,spent=self.ease_warning(baseline,done,breach,deadline,2-paused_seconds)
+                        paused_seconds+=spent
+                        if done.is_set():return
+                        reason='warning_not_recovered'
             except subprocess.TimeoutExpired as exc:
                 ok=False;reason='probe_timeout_'+Path(exc.cmd[0] if isinstance(exc.cmd,(list,tuple)) else exc.cmd).name
             except Exception as exc:ok=False;reason='probe_error_'+type(exc).__name__
