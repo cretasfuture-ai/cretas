@@ -11,8 +11,10 @@ import request from '../../api/request';
 
 describe('client error telemetry', () => {
   const fetchMock = vi.fn<typeof fetch>();
+  const readonlyWindow = window as Window & { __CRETAS_READONLY_HARNESS__?: unknown };
 
   beforeEach(() => {
+    delete readonlyWindow.__CRETAS_READONLY_HARNESS__;
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockClear();
     fetchMock.mockResolvedValue(new Response('{}', { status: 202 }));
@@ -163,6 +165,62 @@ describe('client error telemetry', () => {
     configureClientErrorReporter(() => ({ factoryId: 'F006', isAuthenticated: false }));
     await reportClientError({ category: 'window_error', route: '/orders/list' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('suppresses pending microtask reports after the strict read-only marker activates', async () => {
+    configureClientErrorReporter(() => ({ factoryId: 'F006', isAuthenticated: true }));
+    const pending = Promise.resolve().then(() => reportClientError({
+      category: 'window_error',
+      route: '/orders/list',
+    }));
+    readonlyWindow.__CRETAS_READONLY_HARNESS__ = true;
+    await pending;
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('suppresses installed hooks in readonly mode while retaining the existing Vue handler', async () => {
+    const previous = vi.fn();
+    const app = { config: { errorHandler: previous } } as Parameters<typeof installClientErrorReporter>[0];
+    installClientErrorReporter(app, () => ({ factoryId: 'F006', isAuthenticated: true }));
+    readonlyWindow.__CRETAS_READONLY_HARNESS__ = true;
+    const error = new Error('local diagnostic');
+    app.config.errorHandler?.(error, null, 'render function');
+    window.dispatchEvent(new ErrorEvent('error', { error }));
+    reportRequestFailure({ config: { url: '/F006/customers', method: 'get' }, response: { status: 403 } });
+    await Promise.resolve();
+    expect(previous).toHaveBeenCalledWith(error, null, 'render function');
+    expect(fetchMock).not.toHaveBeenCalled();
+    readonlyWindow.__CRETAS_READONLY_HARNESS__ = false;
+    await reportClientError({ category: 'request_failure', route: '/F006/customers', method: 'GET', status: 403 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the marker immediately before sending if authentication activates readonly mode', async () => {
+    configureClientErrorReporter(() => {
+      readonlyWindow.__CRETAS_READONLY_HARNESS__ = true;
+      return { factoryId: 'F006', isAuthenticated: true };
+    });
+    await reportClientError({ category: 'window_error', route: '/production/plans' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    readonlyWindow.__CRETAS_READONLY_HARNESS__ = false;
+    configureClientErrorReporter(() => ({ factoryId: 'F006', isAuthenticated: true }));
+    await reportClientError({ category: 'window_error', route: '/production/plans' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['false', false],
+    ['string', 'true'],
+  ])('keeps normal reporting enabled when the read-only marker is %s', async (_label, marker) => {
+    if (marker === undefined) {
+      delete readonlyWindow.__CRETAS_READONLY_HARNESS__;
+    } else {
+      readonlyWindow.__CRETAS_READONLY_HARNESS__ = marker;
+    }
+    configureClientErrorReporter(() => ({ factoryId: 'F006', isAuthenticated: true }));
+    await reportClientError({ category: 'window_error', route: `/orders/${String(marker)}` });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps cancelled Axios requests out of telemetry', async () => {

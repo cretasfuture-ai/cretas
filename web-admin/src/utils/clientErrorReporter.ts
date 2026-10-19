@@ -39,6 +39,10 @@ let windowCount = 0;
 const seen = new Map<string, number>();
 let reportedErrors = new WeakSet<object>();
 
+function isReadonlyHarness(): boolean {
+  return (window as Window & { __CRETAS_READONLY_HARNESS__?: unknown }).__CRETAS_READONLY_HARNESS__ === true;
+}
+
 export function configureClientErrorReporter(getAuth: ClientErrorAuthGetter): void {
   authGetter = getAuth;
 }
@@ -91,7 +95,10 @@ export function installClientErrorReporter(
 
 /** Report only safe technical metadata; error objects and messages never enter the body. */
 export async function reportClientError(metadata: ClientErrorMetadata): Promise<void> {
+  if (isReadonlyHarness()) return;
+
   const auth = readAuth();
+  if (isReadonlyHarness()) return;
   if (!auth || !auth.factoryId || typeof fetch !== 'function') return;
 
   const normalized = normalizeMetadata(metadata);
@@ -106,8 +113,6 @@ export async function reportClientError(metadata: ClientErrorMetadata): Promise<
     windowCount = 0;
   }
   if (windowCount >= GLOBAL_MAX) return;
-  seen.set(dedupKey, now);
-  windowCount += 1;
 
   const eventId = newEventId();
   const correlationId = isSafeCorrelation(normalized.parentCorrelationId)
@@ -126,6 +131,10 @@ export async function reportClientError(metadata: ClientErrorMetadata): Promise<
     line: normalized.line,
     column: normalized.column,
   };
+
+  if (isReadonlyHarness()) return;
+  seen.set(dedupKey, now);
+  windowCount += 1;
 
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 3_000);

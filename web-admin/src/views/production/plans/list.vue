@@ -7,6 +7,8 @@ import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
+import { useProductionPlanCustomerReadAccess } from './productionPlanCustomerReadAccess';
+import type { ProductionPlanCustomerOption } from './productionPlanCustomerSelection';
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
 import { Plus, Search, Refresh, VideoPause, CircleCheck, Download, ChatDotRound, Printer, Warning, ArrowDown } from '@element-plus/icons-vue';
@@ -902,7 +904,17 @@ const hasActiveWorkflow = ref(false);
 //   - 其余(未选产品 / 有 legacy 工序)可自由切换 (防呆 Rule 5: 不制造 dead-end)
 const reportModeLocked = computed(() =>
   !!planForm.value.productTypeId && (hasActiveWorkflow.value || !hasProcesses.value));
-const customers = ref<TableRow[]>([]);
+const { customers, customerReadStatus, customerReadHint, canRetryCustomers, loadCustomers } = useProductionPlanCustomerReadAccess(
+  factoryId, permissionStore, async (factory) => {
+    const res = await get<ProductionPlanCustomerOption[] | { content: ProductionPlanCustomerOption[] }>(
+      `/${factory}/customers`, { params: { size: 200 } },
+    );
+    if (!res.success) throw new Error(res.message || '客户列表加载失败');
+    const rows = Array.isArray(res.data) ? res.data : res.data?.content;
+    if (!Array.isArray(rows)) throw new Error('客户列表响应无效，请重试');
+    return rows;
+  },
+);
 
 const resolvedWorkflowCandidate = computed<WorkflowResolutionCandidate | undefined>(() =>
   planForm.value.resolvedCandidates.find(
@@ -1033,7 +1045,6 @@ onMounted(() => {
   loadProductTypes();
   loadRawMaterialTypesForNames();
   loadReferenceData();
-  loadCustomers();
   loadReportModeDefault();
   void maybeReopenFromQuery();
   void maybeOpenProcessEntryFromQuery();
@@ -1193,23 +1204,6 @@ async function loadRawMaterialTypesForNames() {
   } catch (error) {
     console.error('加载原料类型(用于终端产出命名)失败:', error);
   }
-}
-
-async function loadCustomers() {
-  if (!factoryId.value) return;
-  try {
-    // _silent: 本页 module='production', 而 owner 2026-09-06 裁定「客户名单只有
-    // 销售/财务/工厂管理员/运营 能看」⇒ production_manager (L1 sales/finance 均为 '-')
-    // 打开本页时这一路**必然** 403。下面的 `catch {}` 只吞掉 promise, ⛔ 吞不掉
-    // request.ts 的全局 403 分支 —— 那里会弹一个 duration=0 的 sticky 通知,
-    // 于是生产经理每次打开生产计划都被糊一张「权限不足」。
-    // 客户下拉在本页是**可选增强**(挂客户的计划才用得上), 失败就留空即可,
-    // 与 RN 侧 ProductionPlanManagementScreen 的行为一致(那边只 logger.warn, 不弹窗)。
-    const res = await get(`/${factoryId.value}/customers`, { params: { size: 200 }, _silent: true });
-    if (res.success && res.data) {
-      customers.value = Array.isArray(res.data) ? res.data : res.data.content || [];
-    }
-  } catch { /* optional, ignore */ }
 }
 
 const selectablePlanCustomers = computed(() => selectableProductionPlanCustomers(customers.value));
@@ -5351,6 +5345,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <div style="width: 100%;">
             <el-select
               v-model="planForm.customerId"
+              :disabled="customerReadStatus !== 'ready'"
+              :loading="customerReadStatus === 'loading'"
               clearable
               filterable
               placeholder="可关联客户，供料方式单独选择"
@@ -5365,6 +5361,10 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :value="String(customer.id)"
               />
             </el-select>
+            <div v-if="customerReadHint" role="status" data-testid="plan-customer-read-status">
+              {{ customerReadHint }}
+              <el-button v-if="canRetryCustomers" link type="primary" @click="loadCustomers">重试</el-button>
+            </div>
             <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
               选择客户不会自动改为客户供料。工厂供料的成品归公司库存；客户供料的成品归该客户。
             </div>
