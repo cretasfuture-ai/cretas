@@ -1,0 +1,41 @@
+[Unit]
+Description=Cretas Windows lightweight CI (one non-Java slot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cretas-ci-light
+Group=cretas-ci-light
+WorkingDirectory=/opt/cretas-ci-light
+Environment=HOME=/var/lib/cretas-ci-light
+Environment=RUNNER_TOOL_CACHE=/var/lib/cretas-ci-light/toolcache
+Environment=PATH=/opt/cretas-ci-light-tools/node/bin:/opt/cretas-ci-light-tools/bin:/usr/lib/postgresql/17/bin:/usr/local/bin:/usr/bin:/bin
+Environment=GIT_CONFIG_NOSYSTEM=1
+Environment=NODE_OPTIONS=--max-old-space-size=2048
+Environment=JEST_MAX_WORKERS=2
+Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/etc/cretas-ci-light/job-started.sh
+ExecStart=/opt/cretas-ci-light/run.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=120
+KillMode=mixed
+Nice=10
+CPUWeight=20
+CPUQuota=300%
+IOWeight=20
+MemoryHigh=5G
+MemoryMax=6G
+MemorySwapMax=0
+TasksMax=512
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+ReadWritePaths=/opt/cretas-ci-light /var/lib/cretas-ci-light
+PrivateTmp=yes
+PrivateDevices=yes
+InaccessiblePaths=-/mnt/c -/mnt/b -/mnt/d -/mnt/wsl/docker-desktop -/root -/opt/cretas-ci -/run/docker.sock -/var/run/docker.sock
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

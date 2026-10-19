@@ -1,8 +1,14 @@
-# CI runner 路由：Aurora 本机 Linux CI，WSL 保持停用
+# CI runner 路由：Aurora 重任务 + Windows 受限轻任务
 
 **当前运行说明：2026-10-19。** 下面的旧机型、加拿大主备与历史内存数字属于迁移前记录，不作为现行启停入口。
+**最后更新**：2026-10-19。
 
-- 自建 CI 使用 Aurora 既有 Colima `ci` Linux ARM64 VM（4 CPU / 8 GiB）。主仓 runner 为 `aurora-cretas`；Assembly 为独立注册的 `aurora-assembly`。默认 `colima` profile 继续服务 PomeloX，不切换 Docker context 或停止它。
+- Windows 轻任务入口为既有 `Ubuntu-22.04` 中的独立 `windows-light-cretas`（Linux x64），仓库标签只有 `cretas,windows-light` 加系统默认标签，**禁止添加 `java`**。现有 `[self-hosted, cretas]` 队列可直接分流；Java 工作流、选择器、基线和 Aurora 配置保持不变。用户在本轮明确授权 Aurora + Windows 高效分工。
+- 本机仅启用新 `cretas-ci-light.service`：独立用户 `cretas-ci-light`，单任务、CPUQuota=300%、MemoryHigh=5G、MemoryMax=6G、MemorySwapMax=0、Nice=10。旧 `cretas-ci.service` 保持 inactive/disabled；不重启 WSL/Docker，不修改全局内存配置、不恢复旧重任务或加拿大 runner。
+- 安装/预检源在 `tools/ci/windows-light/`。应用 `/opt/cretas-ci-light`、工具 `/opt/cretas-ci-light-tools`、home/work/cache `/var/lib/cretas-ci-light`、hook `/etc/cretas-ci-light/job-started.sh`；Windows 用户盘、旧 runner、Docker socket和GPU对服务不可访问。只允许官方校验和验证的 runner/Node 包；注册令牌经 stdin 传入，不落 tracked 文件。
+- 轻任务验收看实际 job 的 `runner_name`、步骤和结论，不能用 online 代替通过。仅在 idle/busy=false 的安全点维护新服务；回滚只停止/禁用这个新服务并移除它自己的注册，不动 Aurora、旧服务、业务进程和其他容器。已启用 Linux 启动自启；整机重启恢复未实测时须单列未知。
+
+- 重任务使用 Aurora 既有 Colima `ci` Linux ARM64 VM（4 CPU / 8 GiB）。主仓 runner 为 `aurora-cretas`；Assembly 为独立注册的 `aurora-assembly`。默认 `colima` profile 继续服务 PomeloX，不切换 Docker context 或停止它。
 - SSH 使用 `morrowward-us-mini`，每次连接先确认 `Auroras-Mac-mini.local / aurora`。本机 LaunchAgent `com.cretas.ci-primary` 每 60 秒检查本机 VM 和两个白名单 runner，不查询加拿大。旧 `~/cretas-ci-failover.sh` 只转发到本机 primary，原 failover plist 已退役。
 - 监督脚本 `~/.local/lib/cretas-ci-primary/cretas_ci_primary.py`；配置 `~/.config/cretas/ci-primary.json`；状态 `~/.local/state/cretas-ci-primary/latest.json`；本次回执 `~/.local/state/ci-build-migration-20261018/`。VM/服务启动前检查 110 GiB；每个新 job 的只读 hook 要求宿主机至少 125 GiB，以保护 100 GiB 保留空间。
 - 两个 runner 共用 Maven 串行锁，等锁最多 5 分钟（退出码 75）；单次 Maven 生命周期最多 90 分钟（退出码 124），为 120 分钟 job 的报告与棘轮步骤留出时间。Maven 默认 1 GiB、独立 javac 上限 2 GiB、测试 JVM 默认 3 GiB；工作流显式堆参数保持优先。用 `reuseForks=false` 在测试类间启动独立 JVM，避免跨类累积 Spring 上下文。测试选择器、断言、PostgreSQL 真实验证与既有棘轮基线保持原样。
