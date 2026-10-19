@@ -81,13 +81,15 @@ public class FactoryIndicatorApplicabilityService {
                     if (workflow.getNodesJson() == null) {
                         throw new com.cretas.aims.exception.BusinessException(409,
                                 "产品已启用的生产流程节点结构无效，请修复流程后重试")
-                                .withCode("INDICATOR_APPLICABILITY_CONFIG_MALFORMED");
+                                .withCode("INDICATOR_APPLICABILITY_CONFIG_MALFORMED")
+                                .withHint("请由工厂管理员核对该产品当前启用的生产流程节点，修复配置并发布有效版本后，再刷新指标适用性");
                     }
                     JsonNode nodes = objectMapper.readTree(workflow.getNodesJson());
                     if (nodes == null || !nodes.isArray()) {
                         throw new com.cretas.aims.exception.BusinessException(409,
                                 "产品已启用的生产流程节点结构无效，请修复流程后重试")
-                                .withCode("INDICATOR_APPLICABILITY_CONFIG_MALFORMED");
+                                .withCode("INDICATOR_APPLICABILITY_CONFIG_MALFORMED")
+                                .withHint("请由工厂管理员核对该产品当前启用的生产流程节点，修复配置并发布有效版本后，再刷新指标适用性");
                     }
                     int terminalOutputs = 0; boolean hasByproduct = false;
                     Set<String> rawUnits = new LinkedHashSet<>();
@@ -123,7 +125,8 @@ public class FactoryIndicatorApplicabilityService {
                 } catch (JsonProcessingException e) {
                     throw new com.cretas.aims.exception.BusinessException(409,
                             "产品已启用的生产流程配置无法解析，请修复流程后重试")
-                            .withCode("INDICATOR_APPLICABILITY_CONFIG_MALFORMED");
+                            .withCode("INDICATOR_APPLICABILITY_CONFIG_MALFORMED")
+                            .withHint("请由工厂管理员核对该产品当前启用的生产流程节点，修复配置并发布有效版本后，再刷新指标适用性");
                 }
             }
         }

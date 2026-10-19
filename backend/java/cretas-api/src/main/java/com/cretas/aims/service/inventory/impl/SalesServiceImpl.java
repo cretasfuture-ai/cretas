@@ -4857,7 +4857,18 @@ public class SalesServiceImpl implements SalesService {
         if (deductNative == null) {
             return null;
         }
-        return deductNative.min(nativeCap);
+        // Conversion retains full precision; round only at the finished-goods storage boundary
+        // (produced/shipped/reserved_quantity are numeric(15,4)), then cap in native units.
+        // The inventory value used for lineage and cost must equal the value the database stores.
+        BigDecimal storedNative = (deductNative.scale() > 4
+                ? deductNative.setScale(4, java.math.RoundingMode.HALF_UP) : deductNative).min(nativeCap);
+        if (deductInTargetUnit.signum() > 0 && storedNative.signum() == 0) {
+            throw new BusinessException(409, "实发数量换算后小于成品库存可记录的最小数量")
+                    .withCode("SHIPMENT_QUANTITY_BELOW_STORAGE_PRECISION")
+                    .withHint("请按该成品批次的原生单位核对实发数量，至少应为 0.0001；不要将非零出货记为零库存扣减")
+                    .withHintTarget("发货记录 Tab");
+        }
+        return storedNative;
     }
 
     private BigDecimal convertBatchToDeliveryUnit(

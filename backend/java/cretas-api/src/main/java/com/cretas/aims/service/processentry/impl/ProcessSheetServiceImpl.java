@@ -3296,7 +3296,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             CanonicalUnit mass = UnitContractServiceImpl.describeBuiltIn(unit)
                     .filter(u -> u.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS)
                     .orElseThrow(() -> new BusinessException(409, "原料投入单位无法换算为千克，不能计算重量出成率")
-                            .withCode("YIELD_RAW_MASS_UNIT_REQUIRED"));
+                            .withCode("YIELD_RAW_MASS_UNIT_REQUIRED")
+                            .withHint("请核对当前报工行的原料数量和单位，按真实重量使用克或千克填写；不要把包装数量当作重量"));
             total = total.add(nz(raw.getQuantity()).multiply(mass.factorToBase())
                     .divide(BigDecimal.valueOf(1000), java.math.MathContext.DECIMAL128));
         }

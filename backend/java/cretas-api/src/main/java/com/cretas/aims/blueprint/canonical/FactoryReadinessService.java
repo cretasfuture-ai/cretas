@@ -48,7 +48,8 @@ public class FactoryReadinessService {
             if (blueprint == null || !Objects.equals(factoryId, blueprint.getFactoryId())
                     || !Objects.equals(blueprintId, blueprint.getId())) {
                 throw new BusinessException(409, "蓝图版本已变化，请刷新当前工厂后再核对")
-                        .withCode("FACTORY_READINESS_BLUEPRINT_DRIFT");
+                        .withCode("FACTORY_READINESS_BLUEPRINT_DRIFT")
+                        .withHint("请刷新当前工厂的建厂验收页面，再核对候选版本与已应用版本");
             }
             var applied = bindings.findByFactoryIdAndDeletedAtIsNull(factoryId);
             var appliedView = applied.map(binding -> new FactoryReadinessReport.AppliedVersion(

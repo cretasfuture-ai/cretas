@@ -218,6 +218,8 @@ public class ReportedOutputCostAllocationService {
     }
 
     private static BusinessException unavailable(String message) {
-        return new BusinessException(409, message).withCode("REPORTED_OUTPUT_COST_ALLOCATION_UNAVAILABLE");
+        return new BusinessException(409, message)
+                .withCode("REPORTED_OUTPUT_COST_ALLOCATION_UNAVAILABLE")
+                .withHint("请由管理员核对该计划的报工组、全部产出和成本分摊凭据，确认记录完整且相互对应后再结单；不要把未知成本填写为零");
     }
 }
