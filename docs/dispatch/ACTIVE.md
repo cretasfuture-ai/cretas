@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `ERP-STAGES-20261019` — `in-progress` — Owner: /root — Base: 6c4ecfe93ff7751066ea7323e5c6750a7eae11fe — Scope: S0/S1首批归档见archive/2026-10-19-erp-s0-s1-capabilities.md；待发布/业务验收/后续任务授权批。唯一场景表 C:/Users/Steve/Documents/cretas-optimization-20261019/final-plan/验收场景表.csv；证据同级execution；禁止将工程通过计作业务通过。
+
 
 
 

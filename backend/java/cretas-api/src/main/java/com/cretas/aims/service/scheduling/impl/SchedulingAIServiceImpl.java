@@ -82,159 +82,8 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
     @Override
     @Transactional
     public SchedulingPlanDTO generateSchedule(String factoryId, GenerateScheduleRequest request, Long userId) {
-        log.info("开始 AI 智能排产: factoryId={}, planDate={}, batchIds={}",
-            factoryId, request.getPlanDate(), request.getBatchIds());
+        throw new BusinessException("AI自动排程暂不可用，本次未创建或调整排程，请使用手动创建并明确产线和起止时间");
 
-        // 1. 获取需要排产的批次
-        List<ProductionBatch> batches;
-        if (request.getBatchIds() != null && !request.getBatchIds().isEmpty()) {
-            batches = batchRepository.findAllById(request.getBatchIds());
-        } else {
-            batches = batchRepository.findByFactoryIdAndStatus(
-                factoryId,
-                com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNED,
-                org.springframework.data.domain.Pageable.unpaged()
-            ).getContent();
-            if (batches.isEmpty()) {
-                batches = batchRepository.findByFactoryIdAndStatus(
-                    factoryId,
-                    com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNING,
-                    org.springframework.data.domain.Pageable.unpaged()
-                ).getContent();
-            }
-        }
-
-        if (batches.isEmpty()) {
-            log.warn("没有找到需要排产的批次，请在请求中指定 batchIds");
-            throw new RuntimeException("没有找到需要排产的批次，请指定 batchIds 参数");
-        }
-
-        log.info("找到 {} 个批次需要排产", batches.size());
-
-        // 2. 获取可用产线
-        List<ProductionLine> productionLines = lineRepository.findByFactoryIdAndStatusAndDeletedAtIsNull(
-            factoryId, ProductionLine.LineStatus.active);
-
-        if (productionLines.isEmpty()) {
-            log.warn("没有可用的产线，创建默认产线");
-            ProductionLine defaultLine = new ProductionLine();
-            defaultLine.setFactoryId(factoryId);
-            defaultLine.setName("默认产线");
-            defaultLine.setLineCode("LINE-001");
-            defaultLine.setMinWorkers(2);
-            defaultLine.setMaxWorkers(10);
-            defaultLine.setHourlyCapacity(BigDecimal.valueOf(50));
-            defaultLine.setStatus(ProductionLine.LineStatus.active);
-            defaultLine = lineRepository.save(defaultLine);
-            productionLines = List.of(defaultLine);
-        }
-
-        // 3. 创建或获取调度计划
-        SchedulingPlan plan;
-        Optional<SchedulingPlan> existingPlan = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
-            factoryId, request.getPlanDate());
-
-        if (existingPlan.isPresent()) {
-            plan = existingPlan.get();
-            if (plan.getStatus() == SchedulingPlan.PlanStatus.in_progress) {
-                log.warn("该日期排程计划正在执行中，无法重新生成: factoryId={}, planDate={}, status={}",
-                    factoryId, request.getPlanDate(), plan.getStatus());
-                throw new RuntimeException("该日期排程计划正在执行中，无法重新生成。");
-            }
-            log.info("该日期已有计划(status={})，将覆盖重新生成: planId={}", plan.getStatus(), plan.getId());
-            scheduleRepository.deleteByPlanId(plan.getId());
-            plan.setPlanName("AI生成-" + request.getPlanDate());
-            plan.setCreatedBy(userId);
-            plan.setStatus(SchedulingPlan.PlanStatus.draft);
-            plan.setTotalBatches(0);
-            plan.setTotalWorkers(0);
-            plan.setConfirmedBy(null);
-            plan.setConfirmedAt(null);
-            plan = planRepository.save(plan);
-        } else {
-            plan = new SchedulingPlan();
-            plan.setFactoryId(factoryId);
-            plan.setPlanDate(request.getPlanDate());
-            plan.setPlanName("AI生成-" + request.getPlanDate());
-            plan.setCreatedBy(userId);
-            plan.setStatus(SchedulingPlan.PlanStatus.draft);
-            plan = planRepository.save(plan);
-        }
-
-        // 4. 调用 AI 服务获取优化的排程建议
-        List<Map<String, Object>> aiScheduleResult = null;
-        try {
-            aiScheduleResult = callAISchedulingService(factoryId, batches, productionLines, request);
-        } catch (Exception e) {
-            log.warn("AI 调度服务调用失败，使用本地算法: {}", e.getMessage());
-        }
-
-        // 5. 创建产线排程
-        List<LineSchedule> schedules = new ArrayList<>();
-        int sequenceOrder = 0;
-
-        if (aiScheduleResult != null && !aiScheduleResult.isEmpty()) {
-            for (Map<String, Object> suggestion : aiScheduleResult) {
-                LineSchedule schedule = createScheduleFromAISuggestion(plan, suggestion, productionLines);
-                if (schedule != null) {
-                    schedule.setSequenceOrder(sequenceOrder++);
-                    schedules.add(schedule);
-                }
-            }
-        } else {
-            int lineIndex = 0;
-            LocalDateTime startTime = request.getPlanDate().atTime(8, 0);
-
-            for (ProductionBatch batch : batches) {
-                ProductionLine line = productionLines.get(lineIndex % productionLines.size());
-
-                LineSchedule schedule = new LineSchedule();
-                schedule.setPlan(plan);
-                schedule.setProductionLineId(line.getId());
-                schedule.setBatchId(batch.getId());
-                schedule.setSequenceOrder(sequenceOrder++);
-                schedule.setPlannedStartTime(startTime);
-
-                int quantity = batch.getPlannedQuantity() != null ?
-                    batch.getPlannedQuantity().intValue() : 100;
-                double hourlyCapacity = line.getHourlyCapacity() != null ?
-                    line.getHourlyCapacity().doubleValue() : 50;
-                double hoursNeeded = quantity / hourlyCapacity;
-                LocalDateTime endTime = startTime.plusMinutes((long)(hoursNeeded * 60));
-
-                schedule.setPlannedEndTime(endTime);
-                schedule.setPlannedQuantity(quantity);
-                schedule.setStatus(LineSchedule.ScheduleStatus.pending);
-
-                try {
-                    Map<String, Object> prediction = getPredictionForSchedule(factoryId, batch, line);
-                    if (prediction != null) {
-                        if (prediction.get("predicted_efficiency") != null) {
-                            schedule.setPredictedEfficiency(toBigDecimal(prediction.get("predicted_efficiency")));
-                        }
-                        if (prediction.get("probability") != null) {
-                            schedule.setPredictedCompletionProb(toBigDecimal(prediction.get("probability")));
-                        }
-                    }
-                } catch (Exception e) {
-                    log.debug("获取预测失败: {}", e.getMessage());
-                }
-
-                schedules.add(schedule);
-                startTime = endTime.plusMinutes(15);
-                lineIndex++;
-            }
-        }
-
-        if (!schedules.isEmpty()) {
-            scheduleRepository.saveAll(schedules);
-            plan.setTotalBatches(schedules.size());
-            planRepository.save(plan);
-        }
-
-        log.info("AI 排产完成: planId={}, schedules={}", plan.getId(), schedules.size());
-
-        return schedulingPlanCrudService.getPlan(factoryId, plan.getId());
     }
 
     @Override
@@ -248,8 +97,7 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
 
     @Override
     public CompletionProbabilityResponse calculateCompletionProbability(String factoryId, String scheduleId) {
-        LineSchedule schedule = scheduleRepository.findById(scheduleId)
-            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
 
         CompletionProbabilityResponse response = new CompletionProbabilityResponse();
         response.setScheduleId(scheduleId);
@@ -294,10 +142,24 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
 
     @Override
     public List<CompletionProbabilityResponse> calculateBatchProbabilities(String factoryId, String planId) {
+        planRepository.findByIdAndFactoryIdAndDeletedAtIsNull(planId, factoryId)
+            .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
         List<LineSchedule> schedules = scheduleRepository.findByPlanId(planId);
         return schedules.stream()
             .map(s -> calculateCompletionProbability(factoryId, s.getId()))
             .collect(Collectors.toList());
+    }
+
+    private LineSchedule findScopedSchedule(String factoryId, String scheduleId) {
+        LineSchedule schedule = scheduleRepository.findById(scheduleId)
+            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        String planId = schedule.getPlanId();
+        if (planId == null || planId.isBlank()) {
+            throw new EntityNotFoundException("ProductionPlan", planId);
+        }
+        planRepository.findByIdAndFactoryIdAndDeletedAtIsNull(planId, factoryId)
+            .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
+        return schedule;
     }
 
     @Override

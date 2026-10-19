@@ -33,6 +33,12 @@ let flushing = false;
 let installed = false;
 let activeRouter: Router | null = null;
 
+// Set by the canonical read-only harness before application scripts execute.
+// This controls optional client telemetry only; server business audit stays enabled.
+function isReadonlyHarness(): boolean {
+  return (window as Window & { __CRETAS_READONLY_HARNESS__?: unknown }).__CRETAS_READONLY_HARNESS__ === true;
+}
+
 function uuid(): string {
   return globalThis.crypto?.randomUUID?.() || `action-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -44,6 +50,13 @@ function route(): string {
 }
 
 function auth(): Auth | null {
+  if (isReadonlyHarness()) {
+    queue.length = 0;
+    actionId = '';
+    actionAt = 0;
+    activeActor = '';
+    return null;
+  }
   const value = authGetter?.();
   const actor = value?.isAuthenticated && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(value.factoryId)
     && /^\d+$/.test(String(value.userId)) ? `${value.factoryId}:${value.userId}` : '';
@@ -177,6 +190,7 @@ async function flush(): Promise<void> {
 }
 
 export function installActivityTracker(router: Router, getAuth: () => Auth): void {
+  if (isReadonlyHarness()) return;
   authGetter = getAuth;
   activeRouter = router;
   if (installed) return;

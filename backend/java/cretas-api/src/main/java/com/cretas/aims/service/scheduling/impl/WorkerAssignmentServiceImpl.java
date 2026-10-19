@@ -43,6 +43,10 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
     public List<WorkerAssignmentDTO> assignWorkers(String factoryId, AssignWorkerRequest request) {
         LineSchedule schedule = scheduleRepository.findById(request.getScheduleId())
             .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", request.getScheduleId()));
+        validateScheduleTenant(factoryId, schedule);
+        for (Long workerId : request.getWorkerIds()) {
+            validateActiveWorkerTenant(factoryId, workerId);
+        }
 
         // === Phase 5B: LinUCB 集成 ===
         double[] taskFeatures = extractTaskFeaturesFromSchedule(factoryId, schedule);
@@ -117,14 +121,12 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
         WorkerAssignment assignment = assignmentRepository.findById(assignmentId)
             .orElseThrow(() -> new EntityNotFoundException("WorkerAssignment", assignmentId));
 
-        String scheduleId = assignment.getScheduleId();
+        LineSchedule schedule = validateAssignmentTenant(factoryId, assignment, false);
+        String scheduleId = schedule.getId();
         assignmentRepository.delete(assignment);
 
-        LineSchedule schedule = scheduleRepository.findById(scheduleId).orElse(null);
-        if (schedule != null) {
-            schedule.setAssignedWorkers((int) assignmentRepository.countByScheduleId(scheduleId));
-            scheduleRepository.save(schedule);
-        }
+        schedule.setAssignedWorkers((int) assignmentRepository.countByScheduleId(scheduleId));
+        scheduleRepository.save(schedule);
     }
 
     @Override
@@ -132,6 +134,7 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
     public WorkerAssignmentDTO workerCheckIn(String factoryId, String assignmentId) {
         WorkerAssignment assignment = assignmentRepository.findById(assignmentId)
             .orElseThrow(() -> new EntityNotFoundException("WorkerAssignment", assignmentId));
+        validateAssignmentTenant(factoryId, assignment, true);
 
         assignment.setStatus(WorkerAssignment.AssignmentStatus.checked_in);
         assignment.setActualStartTime(LocalDateTime.now());
@@ -145,6 +148,7 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
     public WorkerAssignmentDTO workerCheckOut(String factoryId, String assignmentId, Integer performanceScore) {
         WorkerAssignment assignment = assignmentRepository.findById(assignmentId)
             .orElseThrow(() -> new EntityNotFoundException("WorkerAssignment", assignmentId));
+        validateAssignmentTenant(factoryId, assignment, false);
 
         assignment.setStatus(WorkerAssignment.AssignmentStatus.checked_out);
         assignment.setActualEndTime(LocalDateTime.now());
@@ -161,8 +165,14 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
 
     @Override
     public List<WorkerAssignmentDTO> getWorkerAssignments(String factoryId, Long userId, LocalDate date) {
+        if (!isWorkerInFactory(factoryId, userId)) {
+            return Collections.emptyList();
+        }
         List<WorkerAssignment> assignments = assignmentRepository.findByUserIdAndDate(userId, date);
-        return enrichAssignmentDTOs(assignments);
+        List<WorkerAssignment> scopedAssignments = assignments.stream()
+            .filter(assignment -> isAssignmentInFactory(factoryId, assignment))
+            .collect(Collectors.toList());
+        return enrichAssignmentDTOs(scopedAssignments);
     }
 
     @Override
@@ -177,10 +187,17 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
         }
 
         Set<Long> assignedWorkerIds = new HashSet<>();
+        if (scheduleId != null) {
+            LineSchedule requestedSchedule = scheduleRepository.findById(scheduleId).orElse(null);
+            if (!isScheduleInFactory(factoryId, requestedSchedule)) {
+                return new ArrayList<>();
+            }
+        }
         if (date != null && scheduleId != null) {
             List<WorkerAssignment> existingAssignments = assignmentRepository
                 .findByScheduleId(scheduleId);
             assignedWorkerIds = existingAssignments.stream()
+                .filter(assignment -> isAssignmentInFactory(factoryId, assignment))
                 .map(WorkerAssignment::getUserId)
                 .collect(Collectors.toSet());
         } else if (date != null) {
@@ -453,6 +470,70 @@ public class WorkerAssignmentServiceImpl implements WorkerAssignmentService {
         } catch (Exception e) {
             log.warn("LinUCB 反馈失败: feedbackId={}, error={}", feedbackId, e.getMessage());
         }
+    }
+
+    private void validateScheduleTenant(String factoryId, LineSchedule schedule) {
+        if (!isScheduleInFactory(factoryId, schedule)) {
+            throw new EntityNotFoundException("ProductionSchedule", schedule == null ? "null" : schedule.getId());
+        }
+    }
+
+    private void validateActiveWorkerTenant(String factoryId, Long workerId) {
+        User worker = userRepository.findByIdAndFactoryId(workerId, factoryId)
+            .orElseThrow(() -> new EntityNotFoundException("User", workerId));
+        if (!Boolean.TRUE.equals(worker.getIsActive())) {
+            throw new EntityNotFoundException("User", workerId);
+        }
+    }
+
+    private LineSchedule validateAssignmentTenant(String factoryId, WorkerAssignment assignment,
+                                                   boolean requireActiveWorker) {
+        LineSchedule schedule = assignment == null || assignment.getScheduleId() == null
+            ? null : scheduleRepository.findById(assignment.getScheduleId()).orElse(null);
+        if (!isScheduleInFactory(factoryId, schedule)) {
+            throw new EntityNotFoundException("ProductionSchedule",
+                assignment == null ? "null" : assignment.getScheduleId());
+        }
+        if (requireActiveWorker) {
+            validateActiveWorkerTenant(factoryId, assignment.getUserId());
+        } else {
+            validateWorkerTenant(factoryId, assignment.getUserId());
+        }
+        return schedule;
+    }
+
+    private void validateWorkerTenant(String factoryId, Long workerId) {
+        userRepository.findByIdAndFactoryId(workerId, factoryId)
+            .orElseThrow(() -> new EntityNotFoundException("User", workerId));
+    }
+
+    private boolean isWorkerInFactory(String factoryId, Long userId) {
+        return userRepository.findByIdAndFactoryId(userId, factoryId).isPresent();
+    }
+
+    private boolean isActiveWorkerInFactory(String factoryId, Long userId) {
+        return userRepository.findByIdAndFactoryId(userId, factoryId)
+            .map(user -> Boolean.TRUE.equals(user.getIsActive()))
+            .orElse(false);
+    }
+
+    private boolean isAssignmentInFactory(String factoryId, WorkerAssignment assignment) {
+        if (assignment == null || assignment.getScheduleId() == null || assignment.getUserId() == null) {
+            return false;
+        }
+        LineSchedule schedule = scheduleRepository.findById(assignment.getScheduleId()).orElse(null);
+        if (!isScheduleInFactory(factoryId, schedule)) {
+            return false;
+        }
+        return isWorkerInFactory(factoryId, assignment.getUserId());
+    }
+
+    private boolean isScheduleInFactory(String factoryId, LineSchedule schedule) {
+        SchedulingPlan plan = schedule == null ? null : schedule.getPlan();
+        return plan != null
+            && factoryId != null
+            && factoryId.equals(plan.getFactoryId())
+            && plan.getDeletedAt() == null;
     }
 
     private String mapAssignmentStatus(WorkerAssignment.AssignmentStatus status) {

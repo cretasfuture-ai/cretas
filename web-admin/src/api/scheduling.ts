@@ -35,32 +35,32 @@ export interface LineSchedule {
   plannedEndTime: string;
   actualStartTime?: string;
   actualEndTime?: string;
-  assignedWorkerCount: number;
-  completedQuantity: number;
-  targetQuantity: number;
-  predictedEfficiency: number;
-  predictedCompletionProb: number;
+  assignedWorkerCount?: number;
+  completedQuantity?: number;
+  targetQuantity?: number;
+  predictedEfficiency?: number;
+  predictedCompletionProb?: number;
   status: 'pending' | 'in_progress' | 'completed' | 'delayed';
   workerAssignments: WorkerAssignment[];
-  completionRate: number;
-  isDelayed: boolean;
+  completionRate?: number;
+  isDelayed?: boolean;
 }
 
 export interface WorkerAssignment {
   id: string;
   scheduleId: string;
   userId: number;
-  userName: string;
-  role: string;
-  skillLevel: number;
-  isTemporary: boolean;
+  userName?: string;
+  role?: string;
+  skillLevel?: number;
+  isTemporary?: boolean;
   assignedAt: string;
   checkedInAt?: string;
   checkedOutAt?: string;
   workedHours?: number;
   performanceScore?: number;
   laborCost?: number;
-  status: 'assigned' | 'checked_in' | 'checked_out';
+  status?: 'assigned' | 'checked_in' | 'checked_out';
 }
 
 export interface ProductionLine {
@@ -130,6 +130,116 @@ export interface SchedulingDashboard {
   todaySchedules: LineSchedule[];
 }
 
+interface SchedulingWireWorkerAssignment {
+  id: string;
+  scheduleId: string;
+  userId: number;
+  userName?: string;
+  assignedAt?: string;
+  actualStartTime?: string;
+  actualEndTime?: string;
+  isTemporary?: boolean;
+  laborCost?: number;
+  performanceScore?: number;
+  status?: WorkerAssignment['status'];
+}
+
+interface SchedulingWireLineSchedule {
+  id: string;
+  planId: string;
+  productionLineId: string;
+  productionLineName: string;
+  batchId: number;
+  batchNumber: string;
+  sequenceOrder: number;
+  plannedStartTime: string;
+  plannedEndTime: string;
+  actualStartTime?: string;
+  actualEndTime?: string;
+  assignedWorkers?: number;
+  plannedQuantity?: number;
+  completedQuantity?: number;
+  predictedEfficiency?: number;
+  predictedCompletionProb?: number;
+  status: LineSchedule['status'];
+  workerAssignments?: SchedulingWireWorkerAssignment[];
+  completionRate?: number;
+  isDelayed?: boolean;
+}
+
+function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
+  return {
+    id: wire.id,
+    scheduleId: wire.scheduleId,
+    userId: wire.userId,
+    userName: wire.userName,
+    assignedAt: wire.assignedAt,
+    checkedInAt: wire.actualStartTime,
+    checkedOutAt: wire.actualEndTime,
+    isTemporary: wire.isTemporary,
+    laborCost: wire.laborCost,
+    performanceScore: wire.performanceScore,
+    status: wire.status,
+  };
+}
+
+export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): LineSchedule {
+  return {
+    id: wire.id,
+    planId: wire.planId,
+    productionLineId: wire.productionLineId,
+    productionLineName: wire.productionLineName,
+    batchId: wire.batchId,
+    batchNumber: wire.batchNumber,
+    sequenceOrder: wire.sequenceOrder,
+    plannedStartTime: wire.plannedStartTime,
+    plannedEndTime: wire.plannedEndTime,
+    actualStartTime: wire.actualStartTime,
+    actualEndTime: wire.actualEndTime,
+    assignedWorkerCount: wire.assignedWorkers,
+    completedQuantity: wire.completedQuantity,
+    targetQuantity: wire.plannedQuantity,
+    predictedEfficiency: wire.predictedEfficiency,
+    predictedCompletionProb: wire.predictedCompletionProb,
+    status: wire.status,
+    workerAssignments: (wire.workerAssignments || []).map(mapWorkerAssignment),
+    completionRate: wire.completionRate,
+    isDelayed: wire.isDelayed,
+  };
+}
+
+interface SchedulingWirePlan extends Omit<SchedulingPlan, 'lineSchedules'> {
+  lineSchedules?: SchedulingWireLineSchedule[];
+}
+
+function mapSchedulingPlan(wire: SchedulingWirePlan): SchedulingPlan {
+  return { ...wire, lineSchedules: (wire.lineSchedules || []).map(mapSchedulingLineSchedule) };
+}
+
+interface SchedulingWireDashboard extends Omit<SchedulingDashboard, 'todaySchedules'> {
+  todaySchedules?: SchedulingWireLineSchedule[];
+}
+
+function mapSchedulingDashboard(wire: SchedulingWireDashboard): SchedulingDashboard {
+  return { ...wire, todaySchedules: (wire.todaySchedules || []).map(mapSchedulingLineSchedule) };
+}
+
+export type SchedulingCapabilityStatus = 'AVAILABLE' | 'UNAVAILABLE';
+
+export interface SchedulingCapability {
+  status: SchedulingCapabilityStatus;
+  mode: string;
+  reason: string;
+}
+
+export interface SchedulingCapabilities {
+  contractVersion: 'scheduling-capabilities/v1' | string;
+  aiGeneration: SchedulingCapability;
+  workerOptimization: SchedulingCapability;
+  reschedule: SchedulingCapability;
+  manualCreation: SchedulingCapability;
+}
+
 function ok<T>(data: T, message = 'OK'): Promise<ApiResponse<T>> {
   return Promise.resolve({ success: true, data, message });
 }
@@ -138,6 +248,11 @@ export function isDemoSchedulingFactory(factoryId?: string): boolean {
   // 2026-08-07: `F001` 随 V20261029_68 的租户收敛一起物理删除了, 这个 disjunct 已是死分支。
   // 保留 /^DEMO_/ —— DEMO_REST 等演示租户仍在。
   return /^DEMO_/.test(factoryId || '');
+}
+
+/** Read the server-owned scheduling capability contract. */
+export function getSchedulingCapabilities(factoryId: string) {
+  return get<SchedulingCapabilities>(`/${factoryId}/scheduling/capabilities`);
 }
 
 function todayDate(): string {
@@ -370,10 +485,13 @@ export function getSchedulingPlans(
     });
   }
   return get<{
-    content: SchedulingPlan[];
+    content: SchedulingWirePlan[];
     totalElements: number;
     totalPages: number;
-  }>(`/${factoryId}/scheduling/plans`, { params });
+  }>(`/${factoryId}/scheduling/plans`, { params }).then(response => ({
+    ...response,
+    data: { ...response.data, content: (response.data?.content || []).map(mapSchedulingPlan) }
+  }));
 }
 
 /**
@@ -384,7 +502,8 @@ export function getSchedulingPlan(factoryId: string, planId: string) {
     const plan = demoPlans(factoryId).find(item => item.id === planId) || demoPlans(factoryId)[0];
     return ok(plan);
   }
-  return get<SchedulingPlan>(`/${factoryId}/scheduling/plans/${planId}`);
+  return get<SchedulingWirePlan>(`/${factoryId}/scheduling/plans/${planId}`)
+    .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
 }
 
 /**
@@ -394,12 +513,21 @@ export function createSchedulingPlan(
   factoryId: string,
   data: {
     planDate: string;
-    batchIds: number[];
-    autoAssignWorkers?: boolean;
+    planName?: string;
+    schedules: Array<{
+      productionLineId: string;
+      batchId: number;
+      sequenceOrder?: number;
+      plannedStartTime: string;
+      plannedEndTime: string;
+      plannedQuantity: number;
+      workerIds?: number[];
+    }>;
     notes?: string;
   }
 ) {
-  return post<SchedulingPlan>(`/${factoryId}/scheduling/plans`, data);
+  return post<SchedulingWirePlan>(`/${factoryId}/scheduling/plans`, data)
+    .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
 }
 
 /**
@@ -410,11 +538,21 @@ export function updateSchedulingPlan(
   planId: string,
   data: {
     planDate?: string;
-    batchIds?: number[];
+    planName?: string;
+    schedules?: Array<{
+      productionLineId: string;
+      batchId: number;
+      sequenceOrder?: number;
+      plannedStartTime?: string;
+      plannedEndTime?: string;
+      plannedQuantity?: number;
+      workerIds?: number[];
+    }>;
     notes?: string;
   }
 ) {
-  return put<SchedulingPlan>(`/${factoryId}/scheduling/plans/${planId}`, data);
+  return put<SchedulingWirePlan>(`/${factoryId}/scheduling/plans/${planId}`, data)
+    .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
 }
 
 /**
@@ -425,7 +563,8 @@ export function confirmSchedulingPlan(factoryId: string, planId: string) {
     const plan = demoPlans(factoryId).find(item => item.id === planId) || demoPlans(factoryId)[0];
     return ok({ ...plan, status: 'confirmed' as const, confirmedAt: new Date().toISOString() });
   }
-  return post<SchedulingPlan>(`/${factoryId}/scheduling/plans/${planId}/confirm`);
+  return post<SchedulingWirePlan>(`/${factoryId}/scheduling/plans/${planId}/confirm`)
+    .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
 }
 
 /**
@@ -455,7 +594,8 @@ export function generateSchedule(
     minCompletionProbability?: number;
   }
 ) {
-  return post<SchedulingPlan>(`/${factoryId}/scheduling/generate`, data);
+  return post<SchedulingWirePlan>(`/${factoryId}/scheduling/generate`, data)
+    .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
 }
 
 /**
@@ -467,7 +607,8 @@ export function getSchedule(factoryId: string, scheduleId: string) {
     const schedule = dashboard.todaySchedules.find(item => item.id === scheduleId) || dashboard.todaySchedules[0];
     return ok(schedule);
   }
-  return get<LineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`);
+  return get<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`)
+    .then(response => ({ ...response, data: mapSchedulingLineSchedule(response.data) }));
 }
 
 /**
@@ -482,32 +623,34 @@ export function updateSchedule(
     sequenceOrder?: number;
   }
 ) {
-  return put<LineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`, data);
+  return put<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`, data)
+    .then(response => ({ ...response, data: mapSchedulingLineSchedule(response.data) }));
 }
 
 /**
  * 开始排程生产
  */
 export function startSchedule(factoryId: string, scheduleId: string) {
-  return post<LineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}/start`);
+  return post<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}/start`)
+    .then(response => ({ ...response, data: mapSchedulingLineSchedule(response.data) }));
 }
 
 /**
  * 完成排程
  */
 export function completeSchedule(factoryId: string, scheduleId: string, completedQuantity: number) {
-  return post<LineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}/complete`, null, {
+  return post<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}/complete`, null, {
     params: { completedQuantity }
-  });
+  }).then(response => ({ ...response, data: mapSchedulingLineSchedule(response.data) }));
 }
 
 /**
  * 更新排程进度
  */
 export function updateScheduleProgress(factoryId: string, scheduleId: string, completedQuantity: number) {
-  return post<LineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}/progress`, null, {
+  return post<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}/progress`, null, {
     params: { completedQuantity }
-  });
+  }).then(response => ({ ...response, data: mapSchedulingLineSchedule(response.data) }));
 }
 
 /**
@@ -531,11 +674,11 @@ export function assignWorkers(
   factoryId: string,
   data: {
     scheduleId: string;
-    userIds: number[];
+    workerIds: number[];
   }
 ) {
   if (isDemoSchedulingFactory(factoryId)) {
-    const assignments = data.userIds.map((userId, index) => ({
+    const assignments = data.workerIds.map((userId, index) => ({
       id: `${data.scheduleId}-assigned-${userId}`,
       scheduleId: data.scheduleId,
       userId,
@@ -548,7 +691,8 @@ export function assignWorkers(
     }));
     return ok(assignments);
   }
-  return post<WorkerAssignment[]>(`/${factoryId}/scheduling/workers/assign`, data);
+  return post<SchedulingWireWorkerAssignment[]>(`/${factoryId}/scheduling/workers/assign`, data)
+    .then(response => ({ ...response, data: (response.data || []).map(mapWorkerAssignment) }));
 }
 
 /**
@@ -580,7 +724,8 @@ export function workerCheckIn(factoryId: string, assignmentId: string) {
       status: 'checked_in' as const,
     });
   }
-  return post<WorkerAssignment>(`/${factoryId}/scheduling/workers/assignments/${assignmentId}/check-in`);
+  return post<SchedulingWireWorkerAssignment>(`/${factoryId}/scheduling/workers/assignments/${assignmentId}/check-in`)
+    .then(response => ({ ...response, data: mapWorkerAssignment(response.data) }));
 }
 
 /**
@@ -604,18 +749,18 @@ export function workerCheckOut(factoryId: string, assignmentId: string, performa
       status: 'checked_out' as const,
     });
   }
-  return post<WorkerAssignment>(`/${factoryId}/scheduling/workers/assignments/${assignmentId}/check-out`, null, {
+  return post<SchedulingWireWorkerAssignment>(`/${factoryId}/scheduling/workers/assignments/${assignmentId}/check-out`, null, {
     params: { performanceScore }
-  });
+  }).then(response => ({ ...response, data: mapWorkerAssignment(response.data) }));
 }
 
 /**
  * 获取工人分配
  */
 export function getWorkerAssignments(factoryId: string, userId: number, date?: string) {
-  return get<WorkerAssignment[]>(`/${factoryId}/scheduling/workers/${userId}/assignments`, {
+  return get<SchedulingWireWorkerAssignment[]>(`/${factoryId}/scheduling/workers/${userId}/assignments`, {
     params: { date }
-  });
+  }).then(response => ({ ...response, data: (response.data || []).map(mapWorkerAssignment) }));
 }
 
 /**
@@ -634,7 +779,8 @@ export function optimizeWorkers(
     const assignments = data.scheduleIds.flatMap(scheduleId => demoAssignments(scheduleId));
     return ok(assignments);
   }
-  return post<WorkerAssignment[]>(`/${factoryId}/scheduling/optimize-workers`, data);
+  return post<SchedulingWireWorkerAssignment[]>(`/${factoryId}/scheduling/optimize-workers`, data)
+    .then(response => ({ ...response, data: (response.data || []).map(mapWorkerAssignment) }));
 }
 
 /**
@@ -653,7 +799,8 @@ export function reschedule(
     }>;
   }
 ) {
-  return post<SchedulingPlan>(`/${factoryId}/scheduling/reschedule`, data);
+  return post<SchedulingWirePlan>(`/${factoryId}/scheduling/reschedule`, data)
+    .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
 }
 
 /**
@@ -795,9 +942,9 @@ export function getSchedulingDashboard(factoryId: string, date?: string) {
     void date;
     return ok(demoDashboard(factoryId));
   }
-  return get<SchedulingDashboard>(`/${factoryId}/scheduling/dashboard`, {
+  return get<SchedulingDashboard & { todaySchedules?: SchedulingWireLineSchedule[] }>(`/${factoryId}/scheduling/dashboard`, {
     params: { date }
-  });
+  }).then(response => ({ ...response, data: mapSchedulingDashboard(response.data) }));
 }
 
 /**
@@ -808,7 +955,8 @@ export function getRealtimeMonitor(factoryId: string, planId: string) {
     void planId;
     return ok(demoDashboard(factoryId));
   }
-  return get<SchedulingDashboard>(`/${factoryId}/scheduling/realtime/${planId}`);
+  return get<SchedulingDashboard & { todaySchedules?: SchedulingWireLineSchedule[] }>(`/${factoryId}/scheduling/realtime/${planId}`)
+    .then(response => ({ ...response, data: mapSchedulingDashboard(response.data) }));
 }
 
 // ==================== 排产自动化设置 (R31) ====================

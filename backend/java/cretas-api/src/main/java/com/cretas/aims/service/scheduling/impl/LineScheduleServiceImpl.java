@@ -43,18 +43,26 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Lazy
     private final SchedulingPlanCrudService schedulingPlanCrudService;
 
+    private LineSchedule findScopedSchedule(String factoryId, String scheduleId) {
+        LineSchedule schedule = scheduleRepository.findById(scheduleId)
+                .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        SchedulingPlan plan = schedule.getPlan();
+        if (plan == null || plan.getDeletedAt() != null || !factoryId.equals(plan.getFactoryId())) {
+            throw new EntityNotFoundException("ProductionSchedule", scheduleId);
+        }
+        return schedule;
+    }
+
     @Override
     public LineScheduleDTO getSchedule(String factoryId, String scheduleId) {
-        LineSchedule schedule = scheduleRepository.findById(scheduleId)
-            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
         return enrichScheduleDTO(schedule);
     }
 
     @Override
     @Transactional
     public LineScheduleDTO updateSchedule(String factoryId, String scheduleId, UpdateScheduleRequest request) {
-        LineSchedule schedule = scheduleRepository.findById(scheduleId)
-            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
 
         if (request.getSequenceOrder() != null) {
             schedule.setSequenceOrder(request.getSequenceOrder());
@@ -79,8 +87,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Override
     @Transactional
     public LineScheduleDTO startSchedule(String factoryId, String scheduleId) {
-        LineSchedule schedule = scheduleRepository.findById(scheduleId)
-            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
 
         schedule.setStatus(LineSchedule.ScheduleStatus.in_progress);
         schedule.setActualStartTime(LocalDateTime.now());
@@ -99,8 +106,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Override
     @Transactional
     public LineScheduleDTO completeSchedule(String factoryId, String scheduleId, Integer completedQuantity) {
-        LineSchedule schedule = scheduleRepository.findById(scheduleId)
-            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
 
         schedule.setStatus(LineSchedule.ScheduleStatus.completed);
         schedule.setActualEndTime(LocalDateTime.now());
@@ -126,8 +132,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Override
     @Transactional
     public LineScheduleDTO updateProgress(String factoryId, String scheduleId, Integer completedQuantity) {
-        LineSchedule schedule = scheduleRepository.findById(scheduleId)
-            .orElseThrow(() -> new EntityNotFoundException("ProductionSchedule", scheduleId));
+        LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
 
         schedule.setCompletedQuantity(completedQuantity);
 

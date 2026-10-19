@@ -11,7 +11,7 @@ import {
   getSchedulingPlan,
   assignWorkers,
   removeWorkerAssignment,
-  optimizeWorkers,
+  getSchedulingCapabilities,
   workerCheckIn,
   workerCheckOut,
   isDemoSchedulingFactory,
@@ -19,6 +19,7 @@ import {
   LineSchedule,
   WorkerAssignment
 } from '@/api/scheduling';
+import type { SchedulingCapabilities } from '@/api/scheduling';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   User,
@@ -39,24 +40,30 @@ const plans = ref<SchedulingPlan[]>([]);
 const selectedPlanId = ref<string | null>(null);
 const selectedPlan = ref<SchedulingPlan | null>(null);
 const availableWorkers = ref<TableRow[]>([]);
+const capabilities = ref<SchedulingCapabilities | null>(null);
+const workerOptimizationReason = computed(() => capabilities.value?.workerOptimization.reason
+  || '能力状态加载失败，自动人员优化保持不可用；请检查网络后重试，或手动指派。');
 
 // 分配对话框
 const assignDialogVisible = ref(false);
 const selectedScheduleId = ref<string | null>(null);
 const selectedWorkerIds = ref<number[]>([]);
 
-// AI优化对话框
-const optimizeDialogVisible = ref(false);
-const optimizeOptions = ref({
-  objective: 'balanced' as 'minimize_cost' | 'maximize_efficiency' | 'balanced',
-  maxTemporaryRatio: 0.3,
-  minSkillMatch: 0.6
-});
-
 onMounted(() => {
   loadPlans();
   loadWorkers();
+  loadCapabilities();
 });
+
+async function loadCapabilities() {
+  if (!factoryId.value) return;
+  try {
+    const response = await getSchedulingCapabilities(factoryId.value);
+    if (response.success && response.data) capabilities.value = response.data;
+  } catch (error) {
+    console.error('加载排程能力失败:', error);
+  }
+}
 
 async function loadPlans() {
   if (!factoryId.value) return;
@@ -90,11 +97,11 @@ async function loadWorkers() {
 
   if (isDemoSchedulingFactory(factoryId.value)) {
     availableWorkers.value = [
-      { id: 3101, name: '赵明', position: '卤制主操' },
-      { id: 3102, name: '李蓉', position: '包装线长' },
-      { id: 3103, name: '王磊', position: '包装操作' },
-      { id: 3104, name: '周敏', position: '质检员' },
-      { id: 4101, name: '顺达人力 / 陈师傅', position: '临时包装' },
+      { id: 3101, fullName: '赵明', department: '卤制主操' },
+      { id: 3102, fullName: '李蓉', department: '包装线长' },
+      { id: 3103, fullName: '王磊', department: '包装操作' },
+      { id: 3104, fullName: '周敏', department: '质检员' },
+      { id: 4101, fullName: '顺达人力 / 陈师傅', department: '临时包装' },
     ];
     return;
   }
@@ -155,7 +162,7 @@ async function handleAssign() {
     loading.value = true;
     const response = await assignWorkers(factoryId.value, {
       scheduleId: selectedScheduleId.value,
-      userIds: selectedWorkerIds.value
+      workerIds: selectedWorkerIds.value
     });
 
     if (response.success) {
@@ -250,43 +257,11 @@ async function handleCheckOut(assignment: WorkerAssignment) {
 }
 
 function openOptimizeDialog() {
-  optimizeDialogVisible.value = true;
+  ElMessage.warning(workerOptimizationReason.value);
 }
 
 async function handleOptimize() {
-  if (!selectedPlan.value || !factoryId.value) return;
-
-  const scheduleIds = selectedPlan.value.lineSchedules
-    .filter(s => s.status === 'pending' || s.status === 'in_progress')
-    .map(s => s.id);
-
-  if (scheduleIds.length === 0) {
-    ElMessage.warning('没有可优化的排程');
-    return;
-  }
-
-  try {
-    loading.value = true;
-    const response = await optimizeWorkers(factoryId.value, {
-      scheduleIds,
-      objective: optimizeOptions.value.objective,
-      maxTemporaryRatio: optimizeOptions.value.maxTemporaryRatio,
-      minSkillMatch: optimizeOptions.value.minSkillMatch
-    });
-
-    if (response.success) {
-      ElMessage.success('AI优化完成');
-      optimizeDialogVisible.value = false;
-      handlePlanChange();
-    } else {
-      ElMessage.error(response.message || '优化失败');
-    }
-  } catch (error: any) {
-    console.error('优化失败:', error);
-    if (!error?.actionHint) ElMessage.error('优化失败');
-  } finally {
-    loading.value = false;
-  }
+  ElMessage.warning(workerOptimizationReason.value);
 }
 
 function getStatusType(status: string) {
@@ -332,13 +307,22 @@ function getStatusText(status: string) {
         <el-button
           type="primary"
           :icon="MagicStick"
-          :disabled="!selectedPlan"
+          :disabled="!selectedPlan || capabilities?.workerOptimization.status !== 'AVAILABLE'"
+          :title="workerOptimizationReason"
           @click="openOptimizeDialog"
         >
-          AI 优化分配
+          AI 优化分配（暂不可用）
         </el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="capabilities?.workerOptimization.status !== 'AVAILABLE'"
+      type="info"
+      :closable="false"
+      :title="workerOptimizationReason"
+      description="请使用每个排程卡片上的“添加工人”进行人工指派。"
+    />
 
     <!-- 排程工人分配 -->
     <div class="schedules-container" v-if="selectedPlan">
@@ -352,6 +336,9 @@ function getStatusText(status: string) {
             <div class="header-info">
               <span class="schedule-batch">{{ schedule.batchNumber }}</span>
               <span class="schedule-line">{{ schedule.productionLineName }}</span>
+              <span class="schedule-metrics">
+                目标数量：{{ schedule.targetQuantity ?? '未知' }}；已分配人数：{{ schedule.assignedWorkerCount ?? '未知' }}
+              </span>
             </div>
             <el-button
               type="primary"
@@ -375,11 +362,11 @@ function getStatusText(status: string) {
             </div>
             <div class="worker-info">
               <div class="worker-name">
-                {{ assignment.userName }}
+                {{ assignment.userName || '姓名未知' }}
                 <el-tag v-if="assignment.isTemporary" type="warning" size="small">临时工</el-tag>
               </div>
               <div class="worker-meta">
-                <span>技能等级: {{ assignment.skillLevel }}</span>
+                <span v-if="assignment.skillLevel !== undefined">技能等级: {{ assignment.skillLevel }}</span>
                 <span v-if="assignment.workedHours">工时: {{ assignment.workedHours.toFixed(1) }}h</span>
               </div>
             </div>
@@ -421,8 +408,8 @@ function getStatusText(status: string) {
           >
             <el-checkbox :value="worker.id">
               <div class="worker-select-info">
-                <span class="worker-name">{{ worker.name }}</span>
-                <span class="worker-role">{{ worker.position || '操作员' }}</span>
+                <span class="worker-name">{{ worker.fullName || worker.name || '姓名未知' }}</span>
+                <span v-if="worker.department || worker.roleCode" class="worker-role">{{ worker.department || worker.roleCode }}</span>
               </div>
             </el-checkbox>
           </div>
@@ -434,42 +421,6 @@ function getStatusText(status: string) {
       </template>
     </el-dialog>
 
-    <!-- AI优化对话框 -->
-    <el-dialog v-model="optimizeDialogVisible" title="AI 优化人员分配" width="500px">
-      <el-form label-width="120px">
-        <el-form-item label="优化目标">
-          <el-radio-group v-model="optimizeOptions.objective">
-            <el-radio value="minimize_cost">最小化成本</el-radio>
-            <el-radio value="maximize_efficiency">最大化效率</el-radio>
-            <el-radio value="balanced">平衡模式</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="临时工比例上限">
-          <el-slider
-            v-model="optimizeOptions.maxTemporaryRatio"
-            :min="0"
-            :max="0.5"
-            :step="0.05"
-            :format-tooltip="(val: number) => (val * 100).toFixed(0) + '%'"
-          />
-        </el-form-item>
-        <el-form-item label="最低技能匹配度">
-          <el-slider
-            v-model="optimizeOptions.minSkillMatch"
-            :min="0.4"
-            :max="1"
-            :step="0.05"
-            :format-tooltip="(val: number) => (val * 100).toFixed(0) + '%'"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="optimizeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :icon="MagicStick" @click="handleOptimize" :loading="loading">
-          开始优化
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 

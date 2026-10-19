@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.crm;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.supplier.SupplierDTO;
 import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -23,8 +24,8 @@ public class SupplierPriceComparisonTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "供应商价格对比。获取所有活跃供应商并按价格维度进行比较分析。" +
-                "适用场景：供应商比价、价格对比、采购价格分析、供应商竞价。";
+        return "供应商资料查询。当前未接入真实报价，不能进行价格对比或排序。" +
+                "适用场景：查看活跃供应商资料；价格比较暂不可用。";
     }
 
     @Override
@@ -51,16 +52,8 @@ public class SupplierPriceComparisonTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        log.info("执行供应商价格对比 - 工厂ID: {}, 参数: {}", factoryId, params);
-
-        List<SupplierDTO> suppliers = supplierService.getActiveSuppliers(factoryId);
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("suppliers", suppliers);
-        result.put("comparisonType", "price");
-        result.put("count", suppliers.size());
-        result.put("message", "供应商价格对比获取成功，共" + suppliers.size() + "家供应商");
-        return result;
+        throw new BusinessException("供应商价格比较暂不可用：未接入真实报价，本次未读取、比较或排序供应商价格")
+                .withCode("SUPPLIER_PRICE_COMPARISON_UNAVAILABLE");
     }
 
     /** spec §8.2 只读查询, 无副作用 */

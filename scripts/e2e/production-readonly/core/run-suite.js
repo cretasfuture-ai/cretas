@@ -12,6 +12,8 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/scheduling-capabilities-readonly').create,
+  require('../scenarios/scheduling-capabilities-readonly').workers,
   require('../scenarios/table-top-scroll-readonly').sales,
   require('../scenarios/table-top-scroll-readonly').purchase,
   require('../scenarios/table-top-scroll-readonly').transfer,
@@ -92,6 +94,11 @@ async function runSuiteWithPage(page, options = {}) {
 
   // The guard is installed before any target-origin navigation or login.
   const mutationGuard = await installMutationGuard(context, { scenarioRef });
+  // Opt out of optional UI telemetry at its source. Its POST remains a guarded
+  // mutation, and older deployed applications that ignore this marker still fail.
+  await context.addInitScript(() => {
+    window.__CRETAS_READONLY_HARNESS__ = true;
+  });
   const network = installNetworkRecorder(context, options.network || {});
   const consoleRecorder = installConsoleRecorder(context, options.console || {});
   const screenshot = createScreenshotWriter(page, evidenceDir, { sensitiveTexts: [expectedUsername] });
