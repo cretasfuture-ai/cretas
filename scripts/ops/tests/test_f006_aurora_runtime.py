@@ -45,7 +45,7 @@ class RequestContract(unittest.TestCase):
     def payload(self,think=False):return dict(model=m.MODEL,messages=[dict(role='system',content=m.SYSTEM),dict(role='user',content='如何检查冷链？')],stream=True,think=think,options=dict(temperature=.4,num_predict=768 if think else 384))
     def test_original_caller_shape_gets_bounded_profile(self):
         for thinking in (False,True):
-            d=m.validate_request(json.dumps(self.payload(thinking)).encode());self.assertEqual(d['keep_alive'],0);self.assertEqual(d['options']['num_ctx'],10240);self.assertEqual(d['options']['num_thread'],4)
+            d=m.validate_request(json.dumps(self.payload(thinking)).encode());self.assertFalse(d['cache_prompt']);self.assertEqual(d['max_tokens'],768 if thinking else 384);self.assertEqual(d['chat_template_kwargs']['enable_thinking'],thinking)
     def test_cannot_select_egress_model_tools_or_parameters(self):
         for key,value in [('url','https://outside.invalid'),('model','qwen3:8b'),('tools',[]),('images',[]),('keep_alive',-1),('stream',False),('think','false')]:
             d=self.payload();d[key]=value
@@ -116,7 +116,16 @@ class ProxyIntegration(unittest.TestCase):
                         for _ in range(100):self.wfile.write(b'{');self.wfile.flush();time.sleep(.02)
                     except OSError:pass
                     return
-                body=b''.join((json.dumps(x)+'\n').encode() for x in owner.frames)
+                parts=[]
+                for x in owner.frames:
+                    if x.get('done'):
+                        parts.append(dict(model=x['model'],choices=[dict(index=0,delta={},finish_reason=x.get('done_reason'))]))
+                        a=x.get('prompt_eval_count');b=x.get('eval_count')
+                        parts.append(dict(model=x['model'],choices=[],usage=dict(prompt_tokens=a,completion_tokens=b,total_tokens=a+b)))
+                    else:
+                        parts.append(dict(model=x['model'],choices=[dict(index=0,delta=x.get('message',{}),finish_reason=None)]))
+                body=b''.join(('data: '+json.dumps(x)+'\n\n').encode() for x in parts)
+                if any(x.get('done') for x in owner.frames):body+=b'data: [DONE]\n\n'
                 self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         self.upstream=http.server.ThreadingHTTPServer(('127.0.0.1',0),Upstream)
         self.gateway=http.server.ThreadingHTTPServer(('127.0.0.1',0),m.Handler);self.gateway.runtime=self.rt
@@ -139,7 +148,7 @@ class ProxyIntegration(unittest.TestCase):
     def test_valid_stream_is_not_relabelled_and_only_own_child_is_used(self):
         status,body=self.call();self.assertEqual(status,200);rows=[json.loads(x) for x in body.splitlines()]
         self.assertTrue(rows[-1]['done']);self.assertEqual(rows[-1]['model'],m.MODEL)
-        self.assertEqual(self.upstream_payload['keep_alive'],0);self.assertEqual(self.upstream_payload['options']['num_ctx'],10240)
+        self.assertFalse(self.upstream_payload['cache_prompt']);self.assertEqual(self.upstream_payload['max_tokens'],384)
         self.rt.start_child.assert_called_once();self.rt.stop_child.assert_called_once()
     def test_resource_refusal_before_start(self):
         self.good['pressure']=2;status,_=self.call();self.assertEqual(status,503);self.rt.start_child.assert_not_called()
@@ -168,6 +177,21 @@ class CleanupFailures(ProxyIntegration):
         with mock.patch.object(m,'REQUEST_SECONDS',.15):
             start=time.monotonic();status,body=self.call();self.assertLess(time.monotonic()-start,1)
         self.assertEqual(status,200);self.assertIn(b'"error"',body);self.assertNotIn(b'"done": true',body);self.assertFalse(self.rt.request_lock.locked())
+    def test_resource_watch_covers_initial_model_loading(self):
+        import threading,time
+        stopped=threading.Event()
+        def load():
+            self.good['pressure']=2
+            if not stopped.wait(1.5):raise AssertionError('Initial load was outside watchdog')
+            raise RuntimeError('Initial load stopped safely')
+        self.rt.start_child.side_effect=load
+        self.rt.stop_child.side_effect=stopped.set
+        t=time.monotonic();status,body=self.call()
+        self.assertLess(time.monotonic()-t,1.3);self.assertEqual(status,503)
+        for _ in range(50):
+            if not self.rt.request_lock.locked():break
+            time.sleep(.01)
+        self.assertTrue(stopped.is_set());self.assertFalse(self.rt.request_lock.locked())
     def test_shutdown_refuses_new_child(self):
         self.rt.closing.set();self.assertEqual(self.call()[0],503);self.rt.start_child.assert_not_called()
     def test_report_failure_releases_lock(self):
@@ -218,5 +242,39 @@ class DarwinExitedGroup(unittest.TestCase):
     def test_process_query_failure_is_not_ignored(self):
         with mock.patch.object(m.os,'killpg',side_effect=PermissionError), mock.patch.object(m.subprocess,'check_output',side_effect=OSError):
             with self.assertRaises(OSError):m.signal_owned_group(123,0)
+
+class NativeSSEValidation(unittest.TestCase):
+    def frames(self):
+        return [dict(model=m.MODEL,choices=[dict(index=0,delta=dict(content='检查记录。'),finish_reason=None)]),
+            dict(model=m.MODEL,choices=[dict(index=0,delta={},finish_reason='stop')]),
+            dict(model=m.MODEL,choices=[],usage=dict(prompt_tokens=12,completion_tokens=5,total_tokens=17))]
+    def run_stream(self,frames,terminal=True,thinking=False):
+        import io
+        data=b''.join(('data: '+json.dumps(x)+'\n\n').encode() for x in frames)
+        if terminal:data+=b'data: [DONE]\n\n'
+        return list(m.translated_stream(io.BytesIO(data),lambda:None,thinking))
+    def test_done_requires_real_summed_usage_and_upstream_terminal(self):
+        self.assertTrue(self.run_stream(self.frames())[-1]['done'])
+        for change in ['missing_done','missing_usage','bad_sum','bool_usage','extra_choice','tools','bad_model','after_stop']:
+            with self.subTest(change=change):
+                frames=self.frames();terminal=True
+                if change=='missing_done':terminal=False
+                if change=='missing_usage':frames.pop()
+                if change=='bad_sum':frames[-1]['usage']['total_tokens']=99
+                if change=='bool_usage':frames[-1]['usage']['completion_tokens']=True
+                if change=='extra_choice':frames[0]['choices']*=2
+                if change=='tools':frames[0]['choices'][0]['delta']['tool_calls']=[{}]
+                if change=='bad_model':frames[0]['model']='qwen3:8b'
+                if change=='after_stop':frames.insert(2,frames[0])
+                with self.assertRaises(RuntimeError):self.run_stream(frames,terminal)
+    def test_genuine_reasoning_is_required_only_for_thinking(self):
+        with self.assertRaises(RuntimeError):self.run_stream(self.frames(),thinking=True)
+        frames=self.frames();frames[0]['choices'][0]['delta']['reasoning_content']='思考'
+        self.assertTrue(self.run_stream(frames,thinking=True)[-1]['done'])
+        with self.assertRaises(RuntimeError):self.run_stream(frames,thinking=False)
+    def test_oversized_or_foreign_protocol_refused(self):
+        import io
+        for data in [b'x'*131073,b'{"model":"qwen3.8:27b"}\n',b'data: [DONE]\n']:
+            with self.assertRaises(RuntimeError):list(m.translated_stream(io.BytesIO(data),lambda:None,False))
 
 if __name__=='__main__':unittest.main()

@@ -1,28 +1,31 @@
 # F006 Aurora runtime
 
-The loopback supervisor provides only the existing F006 text-only Ollama contract. It starts a separate Ollama process on demand, uses a private model store and Ollama 0.40.6 directory, and unloads/terminates its own process group after each request. Existing port 11434, CI services and other applications are untouched. Model tag `qwen3.8:27b` is reserved for an independently verified quantization of the original 27B checkpoint; it must never alias an 8B model.
+F006's existing text-only Ollama caller is served by an isolated loopback protocol adapter. Each admitted request starts the official llama-server 0.40.6 executable against a fixed independently verified quantization of the original 27.3B checkpoint. The `qwen3.8:27b` tag never aliases a smaller model. The gateway converts native OpenAI SSE to the original Ollama NDJSON without changing or restarting shared Java/Python.
 
-## Gates
+## Fixed native profile
 
-Before admission: normal memory pressure, memory_pressure free percentage >=60, disk >=110 GiB, no xcodebuild or CI Runner.Worker. Guest query errors refuse admission and do not start a guest. During inference: normal pressure, free percentage >=15, disk >=105 GiB and swap growth <=64 MiB. Every five seconds the build gate is checked again. A new build or resource breach stops only the private model process group. A separate 50-second wall timer works even when the upstream sends no newline. The original caller retains its 55-second timeout and no cloud fallback.
+Model blob SHA256 `b0d5696b72a61363c5fd3495c0c7034e8adc42020f65436175b6b57425c2be6d`, 9779561824 bytes. mmap loading, 48 GPU layers, lazy embedding reads, flash attention, q8_0 K/V caches, one slot, context10240, threads4, batch/microbatch64. Prompt RAM cache and context checkpoints are disabled. Native reasoning budget64 preserves genuine optional thinking; caller prediction budgets remain384/768. The native server and all descendants occupy a private process group and terminate after each request. Existing Ollama11434, VMs and other applications are untouched.
 
-Only fixed text messages, model, thinking mode and original prediction budgets are accepted. Context is explicitly 10240, thread count4, keep_alive0, one concurrent request. llama.cpp prompt RAM cache and context checkpoints are disabled to prevent hidden checkpoint growth. The incoming system prompt must exactly match the production provider; the private runtime adds fixed concise-answer, isolation/traceability and cross-contamination guidance before inference. User questions keep the original2000-character limit. This does not change the production caller file or invent live data. Terminal frames require nonempty text, stop reason, consistent model and integer usage. Runtime logs exclude prompts and answers: 512 KiB with two backups; latest.json replaces its predecessor atomically. Child logs go to /dev/null. launchd stdout/stderr go to /dev/null.
+## Admission and protection
+
+Production admission remains normal memory pressure, memory_pressure free percentage >=60, disk >=110 GiB, and no xcodebuild or CI Runner.Worker. Guest-query failures refuse admission without starting a guest. During initial loading and inference, independent watchdogs require normal pressure, free percentage >=15, disk >=105 GiB and swap growth <=64 MiB. New CI/native work refuses or interrupts only the owned model request. A separate50-second wall timer handles a slow upstream without newlines. The original caller keeps its55-second deadline and no cloud fallback. Cleanup never kills an unknown listener or process group; Darwin EPERM is ignored only after ps proves the owned group has no live member.
+
+The original system prompt must match exactly. Fixed additional guidance keeps incident responses concise, prioritizes isolation and traceability, and distinguishes physical from temporal separation. The original2000-character user limit is retained without truncation. Native SSE must carry the correct model, a single text-only choice, genuine optional reasoning, stop finish reason, consistent integer usage and `[DONE]`; only then can a terminal NDJSON frame be published. Invalid, truncated or incomplete streams fail closed.
 
 ## Installed layout
 
-- ~/.local/lib/cretas-f006-aurora/f006_aurora_runtime.py
-- ~/.local/share/cretas-f006-aurora/{models,runtime-0.40.6,state}
-- ~/Library/LaunchAgents/com.cretas.f006-aurora-runtime.plist
-- gateway 127.0.0.1:11438, isolated model127.0.0.1:11437
+- `~/.local/lib/cretas-f006-aurora/f006_aurora_runtime.py`
+- `~/.local/share/cretas-f006-aurora/{models,runtime-0.40.6,state}`
+- `~/Library/LaunchAgents/com.cretas.f006-aurora-runtime.plist`
+- `~/Library/LaunchAgents/com.cretas.f006-aurora-tunnel.plist`
+- Gateway127.0.0.1:11438; private engine127.0.0.1:11437
 
-The plist may be loaded only after the chosen model passes resource, response quality and actual caller protocol acceptance. Loading an idle gateway is separate from production tunnel cutover. Inspect existing labels/ports and active request state before any replacement. Shutdown refuses new admission and waits for the active bounded request; do not kill a running business request.
+Logs exclude prompts and answers: runtime.log512KiB with two backups. latest.json is atomically replaced. Child and launchd stdout/stderr go to /dev/null. Shutdown refuses new admission and drains the active bounded request. Plist loading, model acceptance, original-provider integration and production transport cutover are separate gates.
 
-## Cutover boundary
+## Verification and cutover
 
-No Java/Python application restart is needed when the truthful 27B tag remains compatible. Hold the existing production f006_mini_lease.acquire_host_lease() in the same private /tmp namespace before changing port11435; acquisition waits for in-flight completion and temporarily makes new requests MINI_BUSY. Keep the gate held through the tunnel switch and listener checks, then release. Canada source jobs and original credentials stay recoverable. SSH authorization changes and Canada root LaunchDaemon stop require the user's separately bounded approval. Never copy the old root private key.
+`bash scripts/tests/test-f006-aurora-runtime.sh` runs isolated unit/HTTP/SSE/resource/owned-process fixtures, including resource failure during initial loading, slow streams, lock conflict, malformed model/usage/terminal, disk/report failures and bounded logs. Fixtures do not call a real model, SSH, VM management or production databases.
 
-A green unit suite is not model quality, production cutover or whole-host retirement acceptance. Keep their receipts separate. No real withdrawals, user prompts, payment operations or real auth submissions belong in tests.
+The chosen native profile additionally requires real Aurora resource and response testing, then the unchanged production provider through the final gateway and a temporary server-loopback transport. An engine-only experiment at warm-cache59% (experimental admission55%) is retained separately: it does not lower production admission60%, prove the final adapter, or permit cutover by itself.
 
-## Verification
-
-`bash scripts/tests/test-f006-aurora-runtime.sh` runs isolated fixtures, including slow no-newline streams, failure cleanup and actual owned child process cleanup. No real model, SSH, VM changes or production database is used by this suite.
+After normal PR checks and exact-main installation, hold the existing production F006 SQLite host lease in the same private/tmp namespace to wait for an active answer and make new requests temporarily MINI_BUSY. With the lease held, stop only the authorized Canada F006 tunnel, bind the Aurora restricted identity to server loopback11435, and verify health/ownership before releasing. A failed switch restores the original Canada tunnel and verifies the original model identity before release. Preserve source credentials and recovery archives. Do not restart shared Java/Python or test real withdrawals, payments, OTP, uploads or business writes. Whole-host shutdown remains separately prohibited.

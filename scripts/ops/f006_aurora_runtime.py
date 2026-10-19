@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F006-only loopback Ollama supervisor; never stops a VM or another model service."""
+"""F006-only loopback protocol adapter and native model supervisor; never stops a VM or another model service."""
 from __future__ import annotations
 import argparse
 import contextlib
@@ -33,6 +33,10 @@ MODEL_PORT = 11437
 GATEWAY_PORT = 11438
 GIB = 2**30
 REQUEST_SECONDS = 50
+MODEL_SHA256 = 'b0d5696b72a61363c5fd3495c0c7034e8adc42020f65436175b6b57425c2be6d'
+MODEL_BYTES = 9779561824
+NATIVE_PROFILE = dict(load_mode='mmap',gpu_layers=48,parallel=1,batch=64,ubatch=64,
+    ctx=10240,cache_type='q8_0',lazy='on',reasoning_budget=64)
 
 
 def identity():
@@ -107,11 +111,64 @@ def validate_request(raw):
     if (not isinstance(opts,dict) or set(opts)!={'temperature','num_predict'}
             or opts['temperature']!=0.4 or opts['num_predict']!=(768 if d['think'] else 384)):
         raise ValueError('request_options')
-    # The caller cannot choose model, context, GPU budget, cloud or persistence.
-    d['messages'][0]['content']=EFFECTIVE_SYSTEM
-    d['keep_alive']=0
-    d['options'].update(num_ctx=10240,num_thread=4)
-    return d
+    # The caller cannot choose an engine, model path, context, tools or egress.
+    return dict(model=MODEL,messages=[dict(role='system',content=EFFECTIVE_SYSTEM),m[1]],
+        stream=True,stream_options={'include_usage':True},temperature=.4,top_k=20,
+        top_p=.95,min_p=0,repeat_penalty=1,presence_penalty=0,
+        max_tokens=768 if d['think'] else 384,cache_prompt=False,
+        chat_template_kwargs={'enable_thinking':d['think']})
+
+
+def translated_stream(response, guard, thinking):
+    """Accept bounded native SSE and publish a terminal only after real usage + DONE."""
+    content='';reasoning='';finish=None;usage=None
+    while True:
+        line=response.readline(131073)
+        guard()
+        if not line:raise RuntimeError('missing_native_terminal')
+        if len(line)>131072:raise RuntimeError('native_line_size')
+        if not line.strip():continue
+        if not line.startswith(b'data:'):raise RuntimeError('native_sse_format')
+        raw=line[5:].strip()
+        if raw==b'[DONE]':
+            if finish!='stop' or not content.strip() or usage is None:
+                raise RuntimeError('native_incomplete')
+            if thinking!=bool(reasoning):raise RuntimeError('native_thinking_contract')
+            yield dict(model=MODEL,message=dict(role='assistant',content=''),done=True,
+                done_reason='stop',prompt_eval_count=usage['prompt_tokens'],eval_count=usage['completion_tokens'])
+            return
+        frame=json.loads(raw)
+        if not isinstance(frame,dict) or frame.get('model')!=MODEL or frame.get('error'):
+            raise RuntimeError('native_frame_guard')
+        choices=frame.get('choices')
+        if not isinstance(choices,list) or len(choices)>1:raise RuntimeError('native_choices')
+        if frame.get('usage') is not None:
+            if usage is not None:raise RuntimeError('duplicate_native_usage')
+            usage=frame['usage']
+            if (not isinstance(usage,dict) or any(type(usage.get(k)) is not int or usage[k]<0
+                    for k in ('prompt_tokens','completion_tokens','total_tokens'))
+                    or usage['total_tokens']!=usage['prompt_tokens']+usage['completion_tokens']):
+                raise RuntimeError('native_usage')
+        for choice in choices:
+            if not isinstance(choice,dict) or choice.get('index')!=0:raise RuntimeError('native_choice')
+            delta=choice.get('delta')
+            if (not isinstance(delta,dict) or set(delta)-{'role','content','reasoning_content'}
+                    or delta.get('role','assistant')!='assistant'):
+                raise RuntimeError('native_text_only')
+            text=delta.get('content','');reason=delta.get('reasoning_content','')
+            if text is None:text=''
+            if reason is None:reason=''
+            if not isinstance(text,str) or not isinstance(reason,str):raise RuntimeError('native_text_type')
+            if finish is not None:raise RuntimeError('native_after_finish')
+            content+=text;reasoning+=reason
+            if len(content)>12000 or len(reasoning)>12000:raise RuntimeError('native_text_size')
+            end=choice.get('finish_reason')
+            if end is not None:
+                if end!='stop':raise RuntimeError('native_truncated')
+                finish=end
+            if text or reason:
+                yield dict(model=MODEL,message=dict(role='assistant',content=text,thinking=reason),done=False)
+
 
 
 class Runtime:
@@ -123,7 +180,7 @@ class Runtime:
         h.setFormatter(logging.Formatter('%(asctime)s %(message)s'));self.logger.addHandler(h)
         self.report('ready')
     def report(self,status,**fields):
-        data=dict(status=status,model=MODEL,request_active=self.active,updated_at=int(time.time()),**fields)
+        data=dict(status=status,model=MODEL,native_profile=NATIVE_PROFILE,request_active=self.active,updated_at=int(time.time()),**fields)
         fd,name=tempfile.mkstemp(prefix='.latest-',dir=self.state)
         try:
             with os.fdopen(fd,'w') as f:json.dump(data,f);f.flush();os.fsync(f.fileno())
@@ -133,27 +190,36 @@ class Runtime:
     def start_child(self):
         with self.child_lock:
             if self.child and self.child.poll() is None:return
-            # Unknown listeners are never killed or adopted.
-            with socket.socket() as s:
-                s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((HOST,MODEL_PORT))
-            runtime_home=self.root/'runtime-home';runtime_home.mkdir(mode=0o700,exist_ok=True)
-            env=dict(os.environ,HOME=str(runtime_home),OLLAMA_AUTH='0',OLLAMA_HOST=f'{HOST}:{MODEL_PORT}',OLLAMA_MODELS=str(self.root/'models'),
-                OLLAMA_MAX_LOADED_MODELS='1',OLLAMA_NUM_PARALLEL='1',OLLAMA_MAX_QUEUE='1',
-                OLLAMA_KEEP_ALIVE='0',OLLAMA_CONTEXT_LENGTH='10240',OLLAMA_FLASH_ATTENTION='1',
-                OLLAMA_KV_CACHE_TYPE='q8_0',OLLAMA_NO_CLOUD='1',OLLAMA_NOPRUNE='1',OLLAMA_DEBUG='0',LLAMA_ARG_CACHE_RAM='0',LLAMA_ARG_CTX_CHECKPOINTS='0')
-            # A private session makes cleanup include only this server and its runners.
-            self.child=subprocess.Popen([str(self.root/'runtime-0.40.6/ollama'),'serve'],env=env,
-                stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
-            self.child_pgid=self.child.pid
-            deadline=time.monotonic()+5
-            while time.monotonic()<deadline:
-                if self.child.poll() is not None:raise RuntimeError('model_server_start_failed')
+            with socket.socket() as sock:
+                sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                sock.bind((HOST,MODEL_PORT))
+            blob=self.root/'models/blobs'/('sha256-'+MODEL_SHA256)
+            if blob.is_symlink() or not blob.is_file() or blob.stat().st_size!=MODEL_BYTES:
+                raise RuntimeError('fixed_model_missing')
+            command=[str(self.root/'runtime-0.40.6/llama-server'),'-m',str(blob),
+                '--alias',MODEL,'--host',HOST,'--port',str(MODEL_PORT),'--parallel',str(NATIVE_PROFILE['parallel']),
+                '-c',str(NATIVE_PROFILE['ctx']),'-t','4','-b',str(NATIVE_PROFILE['batch']),
+                '-ub',str(NATIVE_PROFILE['ubatch']),'--load-mode',NATIVE_PROFILE['load_mode'],
+                '-ngl',str(NATIVE_PROFILE['gpu_layers']),'-fa','on','-ctk',NATIVE_PROFILE['cache_type'],
+                '-ctv',NATIVE_PROFILE['cache_type'],'--lazy-mode',NATIVE_PROFILE['lazy'],
+                '--cache-ram','0','--ctx-checkpoints','0',
+                '--reasoning-budget',str(NATIVE_PROFILE['reasoning_budget']),'--reasoning-format','deepseek','--no-webui','--jinja']
+            self.child=subprocess.Popen(command,stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+            proc=self.child;self.child_pgid=proc.pid
+        # Do not hold the cleanup mutex while the model loads: the independent
+        # resource and wall watchdogs must be able to terminate this initial peak.
+        deadline=time.monotonic()+15
+        while time.monotonic()<deadline:
+            if proc.poll() is not None:raise RuntimeError('model_server_start_failed')
+            try:
+                c=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=.25)
                 try:
-                    c=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=.25);c.request('GET','/api/version')
-                    r=c.getresponse();r.read();c.close()
+                    c.request('GET','/health');r=c.getresponse();r.read()
                     if r.status==200:return
-                except OSError:time.sleep(.1)
-            self.stop_child_locked();raise RuntimeError('model_server_start_timeout')
+                finally:c.close()
+            except OSError:time.sleep(.1)
+        self.stop_child();raise RuntimeError('model_server_start_timeout')
     def stop_child_locked(self):
         pgid=self.child_pgid
         if pgid:
@@ -211,34 +277,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             baseline=sample()
             native=active_build()
             if not admitted(baseline,native):self.reply(503,'resources_busy');return
-            rt.active=True;rt.report('running',baseline=baseline);rt.start_child()
+            rt.active=True;rt.report('running',baseline=baseline)
             def expire():
                 breach.set();rt.stop_child()
             timer=threading.Timer(max(0,started+REQUEST_SECONDS-time.monotonic()),expire);timer.daemon=True;timer.start()
             watcher=threading.Thread(target=rt.watch,args=(baseline,done,breach,started+REQUEST_SECONDS),daemon=True);watcher.start()
             job_watcher=threading.Thread(target=rt.watch_jobs,args=(done,breach),daemon=True);job_watcher.start()
+            rt.start_child()
+            if breach.is_set():raise RuntimeError('startup_guard')
             conn=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=25)
-            conn.request('POST','/api/chat',json.dumps(payload).encode(),{'Content-Type':'application/json'})
+            conn.request('POST','/v1/chat/completions',json.dumps(payload).encode(),{'Content-Type':'application/json'})
             response=conn.getresponse()
             if response.status!=200:raise RuntimeError('upstream_status')
             self.send_response(200);self.send_header('Content-Type','application/x-ndjson');self.send_header('Connection','close');self.end_headers();sent=True
             deadline=started+REQUEST_SECONDS
-            while True:
-                line=response.readline(131073)
-                if not line:break
-                if len(line)>131072 or time.monotonic()>deadline or breach.is_set():raise RuntimeError('stream_guard')
-                frame=json.loads(line)
-                if (not isinstance(frame,dict) or frame.get('model')!=MODEL or frame.get('error')):raise RuntimeError('frame_guard')
-                msg=frame.get('message',{})
-                if not isinstance(msg,dict) or msg.get('tool_calls') or msg.get('images') or not isinstance(msg.get('content',''),str) or not isinstance(msg.get('thinking',''),str):raise RuntimeError('text_guard')
-                content+=msg.get('content','')
-                if len(content)>12000:raise RuntimeError('answer_size')
-                if frame.get('done') is True:
-                    if frame.get('done_reason')!='stop' or not content.strip():raise RuntimeError('incomplete')
-                    if any(type(frame.get(k)) is not int or frame[k]<0 for k in ['prompt_eval_count','eval_count']):raise RuntimeError('usage_guard')
-                    complete=True
-                self.wfile.write(line);self.wfile.flush()
-                if complete:break
+            def guard():
+                if time.monotonic()>deadline or breach.is_set():raise RuntimeError('stream_guard')
+            for frame in translated_stream(response,guard,payload['chat_template_kwargs']['enable_thinking']):
+                guard()
+                self.wfile.write((json.dumps(frame,ensure_ascii=False)+'\n').encode());self.wfile.flush()
+                if frame.get('done') is True:complete=True
             if not complete:raise RuntimeError('incomplete')
             rt.logger.info('request_completed')
         except (OSError,ValueError,RuntimeError,http.client.HTTPException,subprocess.SubprocessError):
