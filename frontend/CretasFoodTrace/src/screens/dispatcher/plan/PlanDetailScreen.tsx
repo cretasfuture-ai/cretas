@@ -22,9 +22,6 @@ import {
   TouchableOpacity,
   RefreshControl,
   Alert,
-  Modal,
-  TextInput,
-  Switch,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -34,10 +31,9 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { isAxiosError } from 'axios';
-import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { safePrint } from '../../../services/api/printApiClient';
-import type { DispatcherStackParamList } from '../../../types/dispatcher';
+import type { DispatcherStackParamList } from '../../../navigation/DispatcherNavigator';
 
 type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanDetail'>;
 
@@ -82,8 +78,8 @@ interface PlanDetail {
   suggestedProductionLineName: string;
 }
 
-// 可重排状态列表
-const RESCHEDULABLE_STATUSES = ['draft', 'pending', 'confirmed', 'paused'];
+// 生产计划的非终态；此处只导航，不向调度接口发送生产计划编号。
+const REASON_NAVIGATION_STATUSES = ['PREPARED', 'PENDING', 'IN_PROGRESS', 'PAUSED'];
 
 // 原料匹配类型
 interface MaterialMatch {
@@ -221,12 +217,6 @@ export default function PlanDetailScreen() {
   const [workers, setWorkers] = useState<AssignedWorker[]>([]);
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
 
-  // 重排相关状态
-  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
-  const [rescheduleReason, setRescheduleReason] = useState('');
-  const [keepAssignments, setKeepAssignments] = useState(true);
-  const [isRescheduling, setIsRescheduling] = useState(false);
-
   // Load plan data from API
   const loadPlanData = useCallback(async () => {
     if (!planId) {
@@ -293,8 +283,7 @@ export default function PlanDetailScreen() {
     loadPlanData();
   }, [loadPlanData]);
 
-  // 判断是否可以重排
-  const canReschedule = plan ? RESCHEDULABLE_STATUSES.includes(plan.status) : false;
+  const canRecordAdjustmentReason = plan ? REASON_NAVIGATION_STATUSES.includes(plan.status.toUpperCase()) : false;
 
   // 下拉刷新
   const onRefresh = useCallback(async () => {
@@ -389,71 +378,6 @@ export default function PlanDetailScreen() {
         },
       ]
     );
-  };
-
-  // 打开重排弹窗
-  const openRescheduleModal = () => {
-    setRescheduleReason('');
-    setKeepAssignments(true);
-    setShowRescheduleModal(true);
-  };
-
-  // 关闭重排弹窗
-  const closeRescheduleModal = () => {
-    setShowRescheduleModal(false);
-    setRescheduleReason('');
-  };
-
-  // 重新排程
-  const handleReschedule = async () => {
-    if (!plan) {
-      Alert.alert('错误', '计划信息不存在');
-      return;
-    }
-    if (!rescheduleReason.trim()) {
-      Alert.alert('提示', '请输入重排原因');
-      return;
-    }
-
-    setIsRescheduling(true);
-    try {
-      const result = await schedulingApiClient.reschedule({
-        planId: plan.id,
-        reason: rescheduleReason.trim(),
-        keepAssignments,
-      });
-
-      if (result.success) {
-        Alert.alert('成功', '排程已重新生成', [
-          {
-            text: '确定',
-            onPress: () => {
-              closeRescheduleModal();
-              onRefresh(); // 刷新页面数据
-            },
-          },
-        ]);
-      } else {
-        Alert.alert('失败', result.message || '重新排程失败');
-      }
-    } catch (error) {
-      if (isAxiosError(error)) {
-        const status = error.response?.status;
-        if (status === 401) {
-          Alert.alert('错误', '登录已过期，请重新登录');
-        } else if (status === 403) {
-          Alert.alert('权限不足', '您没有权限执行此操作');
-        } else {
-          Alert.alert('失败', error.response?.data?.message || '重新排程失败');
-        }
-      } else if (error instanceof Error) {
-        Alert.alert('错误', error.message);
-      } else {
-        Alert.alert('失败', '重新排程失败，请稍后重试');
-      }
-    } finally {
-      setIsRescheduling(false);
-    }
   };
 
   // 渲染原料匹配卡片
@@ -738,13 +662,14 @@ export default function PlanDetailScreen() {
             <Text style={[styles.rescheduleButtonText, { color: DISPATCHER_THEME.primary }]}>打印工单</Text>
           </TouchableOpacity>
         ) : null}
-        {canReschedule && (
+        {canRecordAdjustmentReason && (
           <TouchableOpacity
+            testID="record-adjustment-reason-button"
             style={styles.rescheduleButton}
-            onPress={openRescheduleModal}
+            onPress={() => navigation.navigate('AIReschedule')}
           >
             <Ionicons name="refresh" size={16} color={DISPATCHER_THEME.info} />
-            <Text style={styles.rescheduleButtonText}>重新排程</Text>
+            <Text style={styles.rescheduleButtonText}>记录原因</Text>
           </TouchableOpacity>
         )}
         {plan?.status?.toUpperCase() !== 'CANCELLED' && plan?.status?.toUpperCase() !== 'COMPLETED' && (
@@ -757,87 +682,6 @@ export default function PlanDetailScreen() {
         )}
       </View>
 
-      {/* 重排确认弹窗 */}
-      <Modal
-        visible={showRescheduleModal}
-        transparent
-        animationType="fade"
-        onRequestClose={closeRescheduleModal}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            {/* 弹窗标题 */}
-            <View style={styles.modalHeader}>
-              <View style={styles.modalTitleRow}>
-                <Ionicons name="refresh" size={20} color={DISPATCHER_THEME.primary} />
-                <Text style={styles.modalTitle}>重新排程</Text>
-              </View>
-              <TouchableOpacity onPress={closeRescheduleModal} disabled={isRescheduling}>
-                <Ionicons name="close" size={24} color="#999" />
-              </TouchableOpacity>
-            </View>
-
-            {/* 提示信息 */}
-            <Text style={styles.modalHint}>
-              重新排程将重新计算生产安排，请说明原因以便追溯。
-            </Text>
-
-            {/* 原因输入 */}
-            <Text style={styles.inputLabel}>重排原因 <Text style={styles.required}>*</Text></Text>
-            <TextInput
-              style={styles.reasonInput}
-              placeholder="请输入重排原因（如：紧急订单插入、工人变动等）"
-              placeholderTextColor="#999"
-              value={rescheduleReason}
-              onChangeText={setRescheduleReason}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-              editable={!isRescheduling}
-            />
-
-            {/* 保留分配选项 */}
-            <View style={styles.switchRow}>
-              <View style={styles.switchLabel}>
-                <Text style={styles.switchTitle}>保留现有工人分配</Text>
-                <Text style={styles.switchDesc}>关闭后将重新分配所有工人</Text>
-              </View>
-              <Switch
-                value={keepAssignments}
-                onValueChange={setKeepAssignments}
-                trackColor={{ false: '#e0e0e0', true: DISPATCHER_THEME.secondary }}
-                thumbColor={keepAssignments ? DISPATCHER_THEME.primary : '#f4f3f4'}
-                disabled={isRescheduling}
-              />
-            </View>
-
-            {/* 操作按钮 */}
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalCancelButton}
-                onPress={closeRescheduleModal}
-                disabled={isRescheduling}
-              >
-                <Text style={styles.modalCancelText}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalConfirmButton,
-                  !rescheduleReason.trim() && styles.modalConfirmButtonDisabled,
-                ]}
-                onPress={handleReschedule}
-                disabled={!rescheduleReason.trim() || isRescheduling}
-              >
-                {isRescheduling ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.modalConfirmText}>确认重排</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -1170,7 +1014,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#fff',
   },
-  // 重排按钮样式
+  // 调整原因按钮样式
   rescheduleButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1190,114 +1034,5 @@ const styles = StyleSheet.create({
   },
   smallerButton: {
     flex: 0.8,
-  },
-  // 弹窗样式
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '90%',
-    maxWidth: 400,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  modalTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-  },
-  modalHint: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-    marginBottom: 8,
-  },
-  required: {
-    color: DISPATCHER_THEME.danger,
-  },
-  reasonInput: {
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-    color: '#333',
-    minHeight: 80,
-    marginBottom: 16,
-  },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#f0f0f0',
-    marginBottom: 16,
-  },
-  switchLabel: {
-    flex: 1,
-    marginRight: 12,
-  },
-  switchTitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-    marginBottom: 2,
-  },
-  switchDesc: {
-    fontSize: 12,
-    color: '#999',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  modalCancelButton: {
-    flex: 1,
-    paddingVertical: 12,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  modalCancelText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#666',
-  },
-  modalConfirmButton: {
-    flex: 1,
-    paddingVertical: 12,
-    backgroundColor: DISPATCHER_THEME.primary,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  modalConfirmButtonDisabled: {
-    backgroundColor: '#d9d9d9',
-  },
-  modalConfirmText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#fff',
   },
 });
