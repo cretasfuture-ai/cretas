@@ -2,6 +2,7 @@
 
 const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
+const { inspectCanvas, classifyCanvas } = require('./bom-canvas-readonly-shared');
 
 /**
  * BOM 页的成本口径: 人工成本与均摊费用已从配置期整体下掉 —— 它们是报工之后
@@ -19,10 +20,11 @@ module.exports = {
   id: 'bom-cost-caliber-readonly',
   run: (ctx) => runReadOnlyPageScenario(ctx, {
     id: 'bom-cost-caliber-readonly',
-    path: ROUTES.bom,
-    landmarks: ['BOM'],
+    path: `${ROUTES.workflow}?tab=product-processes`,
+    landmarks: ['Workflow'],
     screenshot: true,
-    inspect: async (_page, body) => {
+    inspect: async (page, body) => {
+      const canvas = await inspectCanvas(page, body);
       const aggregatedCostCardVisible = body.includes('当前归集成本');
       const retiredBlocksPresent = RETIRED_COST_BLOCKS.filter((label) => body.includes(label));
 
@@ -36,12 +38,22 @@ module.exports = {
       };
 
       // 数据前提: BOM 页要先落到产品上下文才会渲染成本卡组。
-      if (!body.includes('配方管理')) {
+      const classification = classifyCanvas(canvas);
+      if (classification.result !== 'PASS' || !body.includes('Workflow')) {
         return {
           ...evidence,
           contractFailures: [],
-          precondition: 'BOM page did not reach a product context; cost cards are not rendered',
-          assessment: { result: 'UNVERIFIED', rootCauseClass: 'data' },
+          precondition: 'Canonical canvas did not reach a product context; cost cards are not rendered',
+          assessment: classification.result === 'PASS' ? { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'cost carrier not present on modern canvas' } : classification,
+        };
+      }
+
+      if (!aggregatedCostCardVisible) {
+        return {
+          ...evidence,
+          contractFailures: [],
+          applicability: { result: 'UNVERIFIED', reason: 'retired BOM cost cards have no current canvas carrier' },
+          assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' },
         };
       }
 
