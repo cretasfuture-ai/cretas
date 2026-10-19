@@ -369,6 +369,51 @@ beforeEach(() => {
   useAuthStore.setState({ user: mockOperator, isAuthenticated: true, tokens: null, isLoading: false });
 });
 
+describe('投入定额缺失信息与计划产出语义', () => {
+  function stubPlan(task: WorkProcessTask): void {
+    stubApis('AWAITING_INPUT');
+    mockedYieldApi.listWorkProcessTasks.mockResolvedValue({
+      success: true, code: 200, message: 'ok', data: [task],
+    });
+    mockedProcessingApi.getBatchById.mockResolvedValue({
+      success: true, code: 200, message: 'ok',
+      data: { id: 501, productType: '卤猪蹄', productTypeId: 'PT-1',
+        batchNumber: 'B-20260826-501', targetQuantity: 1, unit: '盒', status: 'IN_PROGRESS' } as never,
+    });
+  }
+
+  it('任务未设投入定额时明确提示，不从一盒成品目标推成kg计划或上限', async () => {
+    stubPlan(buildTask({ plannedQuantity: null, plannedUnit: 'kg' }));
+    render(<YieldStepReportScreen />);
+
+    await waitFor(() => expect(screen.getByTestId('yield-input-plan-missing')).toHaveTextContent(
+      '投入定额未设置。请按实际领料量填写，并联系生产主管确认。',
+    ));
+    expect(screen.queryByText(/计划数量\s+1\s+kg/)).toBeNull();
+    expect(screen.queryByText(/计划产出\s+1\s+kg/)).toBeNull();
+    expect(screen.queryByText(/可投上限约\s+1\.3/)).toBeNull();
+  });
+
+  it('即使投入产出同为kg，任务计划量仍明确为产出而非投入定额', async () => {
+    stubPlan(buildTask({ plannedQuantity: 99, plannedUnit: 'kg' }));
+    render(<YieldStepReportScreen />);
+
+    await waitFor(() => expect(screen.getByTestId('yield-output-plan')).toHaveTextContent('计划产出 99 kg'));
+    expect(screen.getByTestId('yield-input-plan-missing')).toBeTruthy();
+    expect(screen.queryByText(/可投上限约\s+128\.7/)).toBeNull();
+  });
+
+  it('已有明确投入计划时保留原计划分支，不误报未设置', async () => {
+    stubPlan(buildTask({ plannedInputQuantity: 10 }));
+    render(<YieldStepReportScreen />);
+
+    await waitFor(() => expect(screen.getByTestId('yield-input-qty')).toBeTruthy());
+    expect(screen.queryByTestId('yield-input-plan-missing')).toBeNull();
+    fireEvent.press(screen.getByTestId('yield-input-qty-tap-to-edit'));
+    expect(screen.getByText(/计划 10 kg/)).toBeTruthy();
+  });
+});
+
 describe('P5b 时段默认值必须来自真实时钟, 不许是硬编码班次', () => {
   it('currentClockHHMM 跟着传入的时刻走 (对齐到滑轨自己的 15 分步长)', () => {
     expect(currentClockHHMM(new Date(2026, 7, 26, 10, 7))).toBe('10:00');

@@ -422,7 +422,7 @@ describe('YieldStepReportScreen 完工出成确认弹窗 — 不平衡前置提�
     const limitsPromise = new Promise((resolve) => { resolveLimits = resolve; });
     await renderForUnitAuthority(task, limitsPromise);
     resolveLimits({ success: true, code: 200, message: 'ok', data: { ...emptyLimits, workProcessTaskId: task.id, inputUnit: 'kg', outputUnit: '盒' } });
-    await waitFor(() => expect(screen.getByText('计划数量  10 盒')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('计划产出  10 盒')).toBeTruthy());
     expect(screen.queryByText('计划领料  10 kg')).toBeNull();
     expect(screen.queryByText(/可投上限约 10/)).toBeNull();
 
