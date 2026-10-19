@@ -2,6 +2,7 @@
 """F006-only loopback protocol adapter and native model supervisor; never stops a VM or another model service."""
 from __future__ import annotations
 import argparse
+import hashlib
 import contextlib
 import fcntl
 import http.client
@@ -20,6 +21,7 @@ import threading
 import tempfile
 import time
 
+RUNTIME_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 MODEL = 'qwen3.8:27b'
 SYSTEM = ('你是白垩纪食品工厂助手。仅回答食品安全、生产和质量管理的通用咨询。'
           '用中文给出简洁实用的建议，不超过300字。不能声称读取了工厂实时数据，'
@@ -32,6 +34,7 @@ HOST = '127.0.0.1'
 MODEL_PORT = 11437
 GATEWAY_PORT = 11438
 GIB = 2**30
+PARSE_SECONDS = 5
 REQUEST_SECONDS = 50
 MODEL_SHA256 = 'b0d5696b72a61363c5fd3495c0c7034e8adc42020f65436175b6b57425c2be6d'
 MODEL_BYTES = 9779561824
@@ -150,7 +153,7 @@ def translated_stream(response, guard, thinking):
                     or usage['total_tokens']!=usage['prompt_tokens']+usage['completion_tokens']):
                 raise RuntimeError('native_usage')
         for choice in choices:
-            if not isinstance(choice,dict) or choice.get('index')!=0:raise RuntimeError('native_choice')
+            if not isinstance(choice,dict) or (type(choice.get('index')) is not int or choice['index']!=0):raise RuntimeError('native_choice')
             delta=choice.get('delta')
             if (not isinstance(delta,dict) or set(delta)-{'role','content','reasoning_content'}
                     or delta.get('role','assistant')!='assistant'):
@@ -180,7 +183,7 @@ class Runtime:
         h.setFormatter(logging.Formatter('%(asctime)s %(message)s'));self.logger.addHandler(h)
         self.report('ready')
     def report(self,status,**fields):
-        data=dict(status=status,model=MODEL,native_profile=NATIVE_PROFILE,request_active=self.active,updated_at=int(time.time()),**fields)
+        data=dict(status=status,model=MODEL,runtime_sha256=RUNTIME_SOURCE_SHA256,native_profile=NATIVE_PROFILE,request_active=self.active,updated_at=int(time.time()),**fields)
         fd,name=tempfile.mkstemp(prefix='.latest-',dir=self.state)
         try:
             with os.fdopen(fd,'w') as f:json.dump(data,f);f.flush();os.fsync(f.fileno())
@@ -252,13 +255,26 @@ class Runtime:
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version='HTTP/1.0'
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(PARSE_SECONDS)
+        def expire_parse():
+            with contextlib.suppress(OSError):self.connection.shutdown(socket.SHUT_RDWR)
+        self.parse_timer=threading.Timer(PARSE_SECONDS,expire_parse)
+        self.parse_timer.daemon=True;self.parse_timer.start()
+    def finish(self):
+        self.parse_timer.cancel()
+        super().finish()
+    def parsed(self):
+        self.parse_timer.cancel()
     def log_message(self,*args):pass # No user question, answer, headers or remote identifiers in logs.
     def reply(self,status,code):
         b=json.dumps({'error':code}).encode();self.send_response(status);self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
     def do_GET(self):
+        self.parsed()
         if self.path!='/health':self.reply(404,'not_found');return
-        b=b'{"status":"ready"}';self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
+        b=json.dumps(dict(status='ready',model=MODEL,model_blob_sha256=MODEL_SHA256,runtime_sha256=RUNTIME_SOURCE_SHA256,native_profile=NATIVE_PROFILE)).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
     def do_POST(self):
         rt=self.server.runtime
         if self.path!='/api/chat':self.reply(404,'not_found');return
@@ -269,6 +285,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not 0<n<=32768:raise ValueError('request_size')
             self.connection.settimeout(5);payload=validate_request(self.rfile.read(n))
         except (ValueError,TypeError,KeyError,OSError):self.reply(400,'invalid_request');return
+        self.parsed()
         if rt.closing.is_set():self.reply(503,'shutting_down');return
         if not rt.request_lock.acquire(False):self.reply(429,'busy');return
         started=time.monotonic();content='';baseline=None;done=threading.Event();breach=threading.Event();watcher=None;job_watcher=None;timer=None;conn=None;sent=False;complete=False

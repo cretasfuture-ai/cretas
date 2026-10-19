@@ -150,6 +150,14 @@ class ProxyIntegration(unittest.TestCase):
         self.assertTrue(rows[-1]['done']);self.assertEqual(rows[-1]['model'],m.MODEL)
         self.assertFalse(self.upstream_payload['cache_prompt']);self.assertEqual(self.upstream_payload['max_tokens'],384)
         self.rt.start_child.assert_called_once();self.rt.stop_child.assert_called_once()
+    def test_health_reports_the_loaded_code_and_fixed_model_profile(self):
+        import http.client,hashlib
+        c=http.client.HTTPConnection('127.0.0.1',self.gateway.server_address[1],timeout=2)
+        c.request('GET','/health');r=c.getresponse();data=json.loads(r.read());c.close()
+        self.assertEqual(data['runtime_sha256'],hashlib.sha256(runtime_path.read_bytes()).hexdigest())
+        self.assertEqual(data['native_profile'],m.NATIVE_PROFILE)
+        self.assertEqual(data['model_blob_sha256'],m.MODEL_SHA256)
+        self.rt.start_child.assert_not_called()
     def test_resource_refusal_before_start(self):
         self.good['pressure']=2;status,_=self.call();self.assertEqual(status,503);self.rt.start_child.assert_not_called()
     def test_concurrent_request_rejected(self):
@@ -276,5 +284,26 @@ class NativeSSEValidation(unittest.TestCase):
         import io
         for data in [b'x'*131073,b'{"model":"qwen3.8:27b"}\n',b'data: [DONE]\n']:
             with self.assertRaises(RuntimeError):list(m.translated_stream(io.BytesIO(data),lambda:None,False))
+
+class IncompleteConnectionShutdown(unittest.TestCase):
+    def test_empty_partial_line_and_slow_headers_have_absolute_deadline(self):
+        import socket,threading,time,http.server
+        for request in [b'',b'POST /api/chat HT',b'POST /api/chat HTTP/1.1\r\nContent-Length: 10\r\n']:
+            with self.subTest(request=request),mock.patch.object(m,'PARSE_SECONDS',.15):
+                server=http.server.ThreadingHTTPServer(('127.0.0.1',0),m.Handler)
+                server.runtime=mock.Mock();errors=[]
+                def unexpected_error(*args):
+                    import sys
+                    error=sys.exception()
+                    if not isinstance(error,OSError):errors.append(error)
+                server.handle_error=unexpected_error
+                t=threading.Thread(target=server.serve_forever,kwargs=dict(poll_interval=.01),daemon=True);t.start()
+                sock=socket.create_connection(server.server_address,timeout=1)
+                if request:sock.sendall(request)
+                time.sleep(.04);started=time.monotonic()
+                server.shutdown();server.server_close();t.join(1)
+                self.assertLess(time.monotonic()-started,.6)
+                self.assertEqual(errors,[])
+                sock.close()
 
 if __name__=='__main__':unittest.main()

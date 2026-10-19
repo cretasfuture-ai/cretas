@@ -20,7 +20,7 @@ The original system prompt must match exactly. Fixed additional guidance keeps i
 - `~/Library/LaunchAgents/com.cretas.f006-aurora-tunnel.plist`
 - Gateway127.0.0.1:11438; private engine127.0.0.1:11437
 
-Logs exclude prompts and answers: runtime.log512KiB with two backups. latest.json is atomically replaced. Child and launchd stdout/stderr go to /dev/null. Shutdown refuses new admission and drains the active bounded request. Plist loading, model acceptance, original-provider integration and production transport cutover are separate gates.
+Logs exclude prompts and answers: runtime.log512KiB with two backups. latest.json is atomically replaced. Child and launchd stdout/stderr go to /dev/null. Accepted HTTP connections have a separate absolute5-second parsing deadline, including incomplete headers and slow request bodies. Shutdown refuses new admission and drains the active bounded request. Plist loading, model acceptance, original-provider integration and production transport cutover are separate gates.
 
 ## Verification and cutover
 
