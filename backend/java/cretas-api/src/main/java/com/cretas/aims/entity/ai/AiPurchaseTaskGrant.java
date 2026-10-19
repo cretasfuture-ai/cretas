@@ -103,7 +103,8 @@ public class AiPurchaseTaskGrant {
 
     /** Business binding version. It advances on revoke and consume. */
     @Column(name = "version", nullable = false)
-    private Long version;
+    @Builder.Default
+    private Long version = 1L;
 
     @Column(name = "consumed_at")
     private LocalDateTime consumedAt;

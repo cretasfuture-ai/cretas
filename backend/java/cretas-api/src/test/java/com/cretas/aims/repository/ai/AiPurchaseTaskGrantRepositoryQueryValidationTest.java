@@ -90,6 +90,29 @@ class AiPurchaseTaskGrantRepositoryQueryValidationTest {
     }
 
     @Test
+    void constructorsBuildersAndPersistenceUseTheSchemaVersionDefault() {
+        AiPurchaseTaskGrant noArg = new AiPurchaseTaskGrant();
+        assertThat(noArg.getVersion()).isEqualTo(1L);
+
+        AiPurchaseTaskGrant built = AiPurchaseTaskGrant.builder()
+                .id("grant-default")
+                .factoryId("F-1").userId(42L)
+                .toolName("purchase_order_create").descriptorVersion("1.0.0")
+                .supplierId("SUP-1").materialTypeId("MAT-1")
+                .quantityCap(new BigDecimal("5.0000")).quantityUnit("kg")
+                .unitPrice(new BigDecimal("10.0000")).amountCap(new BigDecimal("50.00"))
+                .currency("CNY").taxRate(BigDecimal.ZERO).inputDigest("digest-default")
+                .approvedInputSnapshot("approved-input")
+                .expiresAt(LocalDateTime.now().plusMinutes(15))
+                .build();
+        assertThat(built.getVersion()).isEqualTo(1L);
+
+        repository.saveAndFlush(built);
+        assertThat(repository.findById("grant-default")).get()
+                .satisfies(saved -> assertThat(saved.getVersion()).isEqualTo(1L));
+    }
+
+    @Test
     void migrationPinsTheFixedCurrencyUnitTaxAndTerminalStateContract() throws Exception {
         String sql = Files.readString(Path.of(
                 "src/main/resources/db/flyway/V20261103_69__ai_purchase_task_grants.sql"));
