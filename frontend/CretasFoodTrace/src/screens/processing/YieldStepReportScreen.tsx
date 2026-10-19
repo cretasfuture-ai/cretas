@@ -2234,7 +2234,12 @@ const YieldStepReportScreen: React.FC = () => {
               {batchNumber}  ·  领料报工
             </Text>
             {plannedOutput != null ? (
-              <Text style={styles.planned}>计划数量  {plannedOutput} {plannedOutputUnit}</Text>
+              <Text testID="yield-output-plan" style={styles.planned}>计划产出  {plannedOutput} {plannedOutputUnit}</Text>
+            ) : null}
+            {currentTask != null && plannedInput == null ? (
+              <Text testID="yield-input-plan-missing" style={styles.planned}>
+                投入定额未设置。请按实际领料量填写，并联系生产主管确认。
+              </Text>
             ) : null}
           </NeoCard>
 
@@ -2647,7 +2652,12 @@ const YieldStepReportScreen: React.FC = () => {
           {batchNumber}  ·  {currentTask?.processName ?? `第 ${currentTask?.processOrder} 道`}
         </Text>
         {plannedOutput != null ? (
-          <Text style={styles.planned}>计划数量  {plannedOutput} {plannedOutputUnit}</Text>
+          <Text testID="yield-output-plan" style={styles.planned}>计划产出  {plannedOutput} {plannedOutputUnit}</Text>
+        ) : null}
+        {currentTask != null && plannedInput == null ? (
+          <Text testID="yield-input-plan-missing" style={styles.planned}>
+            投入定额未设置。请按实际领料量填写，并联系生产主管确认。
+          </Text>
         ) : null}
         {currentTask?.standardYieldMin != null || currentTask?.standardYieldMax != null ? (
           <Text style={styles.stdRange}>
