@@ -2603,9 +2603,11 @@ module.exports = {
       await page.getByRole('button', { name: '新建计划', exact: true }).click();
       const planDialog = page.getByRole('dialog', { name: '新建生产计划' });
       await planDialog.waitFor({ state: 'visible', timeout: 10_000 });
-      const manualSource = planDialog.getByRole('radio', { name: '手动', exact: true });
-      await manualSource.check({ force: true });
-      if (!await manualSource.isChecked()) throw new Error('Manual production source radio did not become checked');
+      const stockSource = planDialog.getByRole('radio', { name: '存货生产', exact: true });
+      await stockSource.check({ force: true });
+      if (!await stockSource.isChecked() || await stockSource.inputValue() !== 'SAFETY_STOCK') {
+        throw new Error('Stock production source radio did not match SAFETY_STOCK');
+      }
       const productionField = planDialog.locator('.el-form-item').filter({ hasText: '生产成品' }).first();
       await productionField.waitFor({ state: 'visible', timeout: 10_000 });
       await productionField.locator('.el-select__wrapper').waitFor({ state: 'visible', timeout: 10_000 });
