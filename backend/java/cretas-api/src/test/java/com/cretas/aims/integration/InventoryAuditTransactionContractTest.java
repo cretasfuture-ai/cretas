@@ -343,11 +343,20 @@ class InventoryAuditTransactionContractTest {
                 while (System.nanoTime() < deadline && waiting < 2) {
                     jdbc.execute("select pg_stat_clear_snapshot()");
                     waiting = jdbc.queryForObject("""
-                            select count(*) from pg_stat_activity a
-                            where a.datname = current_database()
-                              and a.wait_event_type = 'Lock'
-                              and a.pid <> pg_backend_pid()
-                              and ? = any(pg_blocking_pids(a.pid))
+                            with recursive blocked(pid) as (
+                                select a.pid
+                                from pg_stat_activity a
+                                where a.datname = current_database()
+                                  and a.wait_event_type = 'Lock'
+                                  and ? = any(pg_blocking_pids(a.pid))
+                                union
+                                select a.pid
+                                from pg_stat_activity a
+                                join blocked b on b.pid = any(pg_blocking_pids(a.pid))
+                                where a.datname = current_database()
+                                  and a.wait_event_type = 'Lock'
+                            )
+                            select count(*) from blocked
                             """, Integer.class, holderPid);
                     if (waiting < 2) {
                         try { Thread.sleep(25); } catch (InterruptedException interrupted) {
