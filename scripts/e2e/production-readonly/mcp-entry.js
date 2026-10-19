@@ -1599,6 +1599,7 @@ module.exports = {
 
 const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
+const { inspectCanvas, classifyCanvas, hasOnCanvasBomGuidance } = require('./bom-canvas-readonly-shared');
 
 /**
  * BOM 融入工序画布后的三条口径, 都只读可验:
@@ -1684,11 +1685,10 @@ module.exports = {
           }
         }
       }
-      const materialNodes = await count('.vue-flow__node-material');
-      const auxiliaryCells = await count('.vue-flow__node-bomAuxiliary');
-      const packagingCells = await count('.vue-flow__node-bomPackaging');
-      const auxDetailEntries = await count('[data-testid="aux-open-detail"]');
-      const packSubtitles = await count('[data-testid="pack-subtitle"]');
+      const currentBody = await page.locator('body').innerText();
+      const shared = await inspectCanvas(page, currentBody);
+      const inspectedBody = await page.locator('body').innerText();
+      const { materialNodes, auxiliaryCells, packagingCells, auxDetailEntries, packSubtitles } = shared;
 
       /**
        * ⛔ 2026-08-06 修正: 这里原本断言「缺 BOM 横幅出现时必须有『去 BOM 配置』入口」——
@@ -1702,14 +1702,15 @@ module.exports = {
        * 判据: **改了产品口径要回头看有没有闸还在断言旧口径**, 否则修好探针的同一天
        * 就会收到一条假报警。
        */
-      const bomMissingBannerVisible = body.includes('暂未读取到生效 BOM');
+      const bomMissingBannerVisible = inspectedBody.includes('暂未读取到生效 BOM') || shared.status.noActive;
       // 现在要求的是「横幅把人指回 cell」, 而不是把人支走
-      const bomEntryCopyVisible = body.includes('辅料 / 包材 / 副产 cell 上配置');
-      const legacyJumpCopyVisible = body.includes('去 BOM 配置');
+      const bomEntryCopyVisible = hasOnCanvasBomGuidance(inspectedBody);
+      const legacyJumpCopyVisible = inspectedBody.includes('去 BOM 配置');
       // 旧抽屉文案则是无条件的: 抽屉已下掉, 它在任何状态下都不该再出现。
-      const legacyDrawerCopyVisible = body.includes('在右侧配置 BOM');
+      const legacyDrawerCopyVisible = inspectedBody.includes('在右侧配置 BOM');
 
       const evidence = {
+        ...shared,
         processNodes,
         materialNodes,
         auxiliaryCells,
@@ -1727,14 +1728,15 @@ module.exports = {
       // 数据前提: 没有工序节点就没有可派生浮层的宿主, 不能据此判缺陷。
       // ⚠️ 走到这里意味着**试过的每一个产品**都没有工序节点(见 probedProducts),
       // 不再是「默认那个恰好是空的」—— 这时 UNVERIFIED 才是诚实的结论。
-      if (processNodes === 0) {
+      const classification = classifyCanvas(shared);
+      if (classification.result === 'UNVERIFIED' && classification.reason === 'no PROCESS node hosts BOM overlays') {
         return {
           ...evidence,
           contractFailures: [],
           precondition: probedProducts.length
             ? `probed ${probedProducts.length} products, none has a PROCESS node`
             : 'canvas has no PROCESS node and no product candidates could be listed',
-          assessment: { result: 'UNVERIFIED', rootCauseClass: 'data' },
+          assessment: classification,
         };
       }
 
@@ -1751,13 +1753,160 @@ module.exports = {
       return {
         ...evidence,
         contractFailures,
-        assessment: contractFailures.length === 0
-          ? { result: 'PASS', rootCauseClass: 'none' }
-          : { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' },
+        classification: contractFailures.length ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend', reason: contractFailures.join('; ') } : classification,
+        assessment: contractFailures.length
+          ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' }
+          : classification,
       };
     },
   }),
 };
+
+},
+    "scenarios/bom-canvas-readonly-shared.js": function(module, exports, require) {
+'use strict';
+
+const STATUS_MARKERS = Object.freeze({
+  active: /BOM\s*生效\s*v\d+/,
+  draft: /草稿\s*v\d+\s*未生效/,
+  noActive: /未建\s*BOM|还没有生效\s*BOM/,
+  mismatch: /与已启用工艺不一致/,
+});
+
+function hasOnCanvasBomGuidance(text) {
+  return /辅料\s*\/\s*包材(?:\s*\/\s*副产)?\s*cell\s*上配置/.test(text);
+}
+
+function stateFromRows(rows) {
+  const rowStates = rows.map((text) => ({
+    text,
+    active: STATUS_MARKERS.active.test(text),
+    draft: STATUS_MARKERS.draft.test(text),
+    noActive: STATUS_MARKERS.noActive.test(text),
+    mismatch: STATUS_MARKERS.mismatch.test(text),
+  }));
+  return {
+    active: rowStates.some((row) => row.active),
+    draft: rowStates.some((row) => row.draft),
+    noActive: rowStates.some((row) => row.noActive),
+    mismatch: rowStates.some((row) => row.mismatch),
+    conflictingProductRows: rowStates.filter((row) => row.active && row.noActive).length,
+    rowStates,
+  };
+}
+
+async function count(locator) {
+  return locator.count();
+}
+
+async function selectCanvasProduct(page) {
+  const selector = page.locator('.toolbar-left .el-select').first();
+  if (!(await selector.isVisible().catch(() => false))) {
+    return { selected: false, selectionMode: null, failure: 'canonical top product selector missing', probedProducts: [] };
+  }
+  const selectedText = () => selector.locator('.el-select__selected-item').innerText().catch(() => '');
+  const probedProducts = [];
+  const startedAt = Date.now();
+  const MAX_TRIES = 6;
+  const DEADLINE_MS = 90_000;
+  for (let index = 0; index < MAX_TRIES && Date.now() - startedAt <= DEADLINE_MS; index += 1) {
+    const processNodes = await count(page.locator('.vue-flow__node-process'));
+    const label = (await selectedText()).trim();
+    if (processNodes > 0 && label && !/选择本条工艺|选择产品/.test(label)) {
+      return { selected: true, selectedLabel: label, selectionMode: 'current-top-selector', probedProducts };
+    }
+    try {
+      await selector.click({ timeout: 5_000 });
+      const options = page.locator('.el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)');
+      await options.first().waitFor({ state: 'visible', timeout: 5_000 });
+      if (index >= await options.count()) break;
+      const optionLabel = (await options.nth(index).innerText().catch(() => '')).trim();
+      await options.nth(index).click({ timeout: 5_000 });
+      await page.waitForLoadState('networkidle', { timeout: 6_000 }).catch(() => {});
+      await page.locator('.vue-flow__node-process').first().waitFor({ state: 'attached', timeout: 20_000 }).catch(() => {});
+      probedProducts.push({ index, option: optionLabel.slice(0, 80), processNodes: await count(page.locator('.vue-flow__node-process')) });
+    } catch (error) {
+      probedProducts.push({ index, error: String(error?.message || error).slice(0, 120) });
+      await page.keyboard.press('Escape').catch(() => {});
+      break;
+    }
+  }
+  return { selected: false, selectionMode: 'bounded-top-selector-probe', probedProducts, failure: 'no selected product with PROCESS context' };
+}
+
+async function inspectCanvas(page, body) {
+  const processNodes = await count(page.locator('.vue-flow__node-process'));
+  const materialNodes = await count(page.locator('.vue-flow__node-material'));
+  const auxiliaryCells = await count(page.locator('.vue-flow__node-bomAuxiliary'));
+  const packagingCells = await count(page.locator('.vue-flow__node-bomPackaging'));
+  const byproductCells = await count(page.locator('[data-testid="byproduct-cell"]'));
+  let rowTexts = [];
+  let versionStatusVisible = await page.getByTestId('workflow-version-status').isVisible().catch(() => false);
+  let versionRows = await count(page.getByTestId('workflow-version-status-row'));
+  if (versionStatusVisible && versionRows === 0) {
+    await page.getByTestId('workflow-version-status-toggle').click().catch(() => {});
+    await page.getByTestId('workflow-version-status-row').first().waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {});
+    versionRows = await count(page.getByTestId('workflow-version-status-row'));
+    body = await page.locator('body').innerText().catch(() => body);
+  }
+  rowTexts = await page.getByTestId('workflow-version-status-row').allInnerTexts().catch(() => []);
+  const status = stateFromRows(rowTexts.length ? rowTexts : [body]);
+  const packSubtitleTexts = await page.getByTestId('pack-subtitle').allInnerTexts().catch(() => []);
+  const packagingUnitEvidence = packSubtitleTexts.length > 0
+    && packSubtitleTexts.every((text) => /(?:\d+\s*种|分\s*\d+\s*层).*每\s*1\s*\S+成品/.test(text));
+  return {
+    processNodes,
+    materialNodes,
+    auxiliaryCells,
+    packagingCells,
+    byproductCells,
+    versionStatusVisible,
+    versionRows,
+    bomBubbles: await count(page.getByTestId('bom-status-bubble')),
+    auxDetailEntries: await count(page.getByTestId('aux-open-detail')),
+    packSubtitles: await count(page.getByTestId('pack-subtitle')),
+    packSubtitleTexts,
+    packagingUnitEvidence,
+    status,
+    versionRowTexts: rowTexts,
+    basicUnitVisible: packagingUnitEvidence || (packagingCells === 0 && /基本单位|投入基准单位/.test(body)),
+    legacyVersionTableVisible: body.includes('BOM 配方版本'),
+    legacyDrawerCopyVisible: body.includes('在右侧配置 BOM'),
+    legacyJumpCopyVisible: body.includes('去 BOM 配置'),
+  };
+}
+
+function classifyCanvas(evidence, productSelection = { selected: true }) {
+  if (!productSelection.selected) {
+    return { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'real product context was not selected' };
+  }
+  if (evidence.processNodes === 0) {
+    return { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'no PROCESS node hosts BOM overlays' };
+  }
+  if (!evidence.versionStatusVisible || evidence.versionRows === 0) {
+    return { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'formal BOM version status is absent' };
+  }
+  const { active, draft, noActive, mismatch } = evidence.status;
+  if (!active && !draft && !noActive && !mismatch) {
+    return { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'formal BOM state is not classifiable' };
+  }
+  if (evidence.status.conflictingProductRows > 0) {
+    return { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend', reason: 'same product asserts both active and no-active BOM state' };
+  }
+  if (evidence.packagingCells > 0 && evidence.packSubtitles === 0) {
+    return { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend', reason: 'packaging cell has no role/unit/quantity evidence' };
+  }
+  if (!evidence.basicUnitVisible || (evidence.packagingCells > 0 && !evidence.packagingUnitEvidence)) {
+    return { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'basic-unit semantics are absent' };
+  }
+  if (evidence.packagingCells === 0) {
+    return { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'no packaging fixture is present to verify packaging semantics' };
+  }
+  return { result: 'PASS', rootCauseClass: 'none', reason: 'canonical canvas has a classifiable BOM state and unit/packaging evidence' };
+}
+
+module.exports = { STATUS_MARKERS, selectCanvasProduct, inspectCanvas, classifyCanvas, stateFromRows, hasOnCanvasBomGuidance };
+
 
 },
     "scenarios/bom-cost-caliber-readonly.js": function(module, exports, require) {
@@ -1765,6 +1914,7 @@ module.exports = {
 
 const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
+const { inspectCanvas, classifyCanvas } = require('./bom-canvas-readonly-shared');
 
 /**
  * BOM 页的成本口径: 人工成本与均摊费用已从配置期整体下掉 —— 它们是报工之后
@@ -1782,10 +1932,11 @@ module.exports = {
   id: 'bom-cost-caliber-readonly',
   run: (ctx) => runReadOnlyPageScenario(ctx, {
     id: 'bom-cost-caliber-readonly',
-    path: ROUTES.bom,
-    landmarks: ['BOM'],
+    path: `${ROUTES.workflow}?tab=product-processes`,
+    landmarks: ['Workflow'],
     screenshot: true,
-    inspect: async (_page, body) => {
+    inspect: async (page, body) => {
+      const canvas = await inspectCanvas(page, body);
       const aggregatedCostCardVisible = body.includes('当前归集成本');
       const retiredBlocksPresent = RETIRED_COST_BLOCKS.filter((label) => body.includes(label));
 
@@ -1799,12 +1950,22 @@ module.exports = {
       };
 
       // 数据前提: BOM 页要先落到产品上下文才会渲染成本卡组。
-      if (!body.includes('配方管理')) {
+      const classification = classifyCanvas(canvas);
+      if (classification.result !== 'PASS' || !body.includes('Workflow')) {
         return {
           ...evidence,
           contractFailures: [],
-          precondition: 'BOM page did not reach a product context; cost cards are not rendered',
-          assessment: { result: 'UNVERIFIED', rootCauseClass: 'data' },
+          precondition: 'Canonical canvas did not reach a product context; cost cards are not rendered',
+          assessment: classification.result === 'PASS' ? { result: 'UNVERIFIED', rootCauseClass: 'data', reason: 'cost carrier not present on modern canvas' } : classification,
+        };
+      }
+
+      if (!aggregatedCostCardVisible) {
+        return {
+          ...evidence,
+          contractFailures: [],
+          applicability: { result: 'UNVERIFIED', reason: 'retired BOM cost cards have no current canvas carrier' },
+          assessment: { result: 'UNVERIFIED', rootCauseClass: 'tool' },
         };
       }
 
@@ -1831,142 +1992,48 @@ module.exports = {
 
 const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
+const { inspectCanvas, classifyCanvas, selectCanvasProduct } = require('./bom-canvas-readonly-shared');
 
 async function selectTargetProduct(page) {
-  if (await page.getByText('BOM 配方版本', { exact: true }).isVisible().catch(() => false)) {
-    return { selected: true, selectedLabel: null, failure: null };
-  }
-
-  const productSelect = page.locator('.bom-hero-card .el-select, .header-card .el-select').first();
-  const productInput = productSelect.locator('input').first();
-  if (!(await productSelect.isVisible().catch(() => false))
-      || !(await productInput.isVisible().catch(() => false))) {
-    return { selected: false, selectedLabel: null, failure: 'product selector missing' };
-  }
-
-  await productSelect.click();
-  await productInput.fill('干式熟成鸡 400g');
-  const options = page.locator('.el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)');
-  let targetOption = options.filter({ hasText: '干式熟成鸡 400g' }).first();
-  await targetOption.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
-
-  if (!(await targetOption.isVisible().catch(() => false))) {
-    await productInput.fill('干式熟成鸡');
-    targetOption = options.filter({ hasText: /干式熟成鸡.*400g/ }).first();
-    await targetOption.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
-  }
-  if (!(await targetOption.isVisible().catch(() => false))) {
-    await page.keyboard.press('Escape');
-    const selectedBomLoaded = await page.locator(
-      '[data-testid="bom-version-lifecycle"], .bom-summary-grid, .recipe-status-card',
-    ).first().isVisible().catch(() => false);
-    if (selectedBomLoaded) {
-      const selectedLabel = (
-        await page.locator('.bom-hero__sku').first().innerText().catch(() => '')
-        || await productInput.inputValue().catch(() => '')
-      ).trim() || null;
-      return {
-        selected: true,
-        selectedLabel,
-        selectionMode: 'deterministic-page-selection',
-        failure: null,
-      };
-    }
-    return { selected: false, selectedLabel: null, selectionMode: null, failure: 'target product option missing' };
-  }
-
-  const selectedLabel = (await targetOption.innerText()).trim();
-  await targetOption.click();
-  await page.getByText('BOM 配方版本', { exact: true })
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .catch(() => {});
-  return {
-    selected: await page.getByText('BOM 配方版本', { exact: true }).isVisible().catch(() => false),
-    selectedLabel,
-    selectionMode: 'target-search',
-    failure: null,
-  };
+  return selectCanvasProduct(page);
 }
 
 module.exports = {
   id: 'bom-readonly',
   run: (ctx) => runReadOnlyPageScenario(ctx, {
     id: 'bom-readonly',
-    path: ROUTES.bom,
-    landmarks: ['BOM'],
+    path: `${ROUTES.workflow}?tab=product-processes`,
+    landmarks: ['Workflow'],
     screenshot: true,
     inspect: async (page, body, ctx) => {
       const productSelection = await selectTargetProduct(page);
-      const versionHistoryButton = page.getByRole('button', { name: '版本历史', exact: true }).first();
-      if (await versionHistoryButton.isVisible().catch(() => false)) {
-        await versionHistoryButton.click();
-        await page.getByText('BOM 配方版本', { exact: true })
-          .waitFor({ state: 'visible', timeout: 10_000 })
-          .catch(() => {});
-      }
-      const activeRow = page.locator('.recipe-status-card .el-table__row')
-        .filter({ hasText: '已生效' })
-        .first();
-      const lifecycle = page.locator('[data-testid="bom-version-lifecycle"]');
-      let activeViewOpened = await lifecycle.filter({ hasText: /当前生效.*内容已锁定/ })
-        .isVisible()
-        .catch(() => false);
-      if (!activeViewOpened && await activeRow.isVisible().catch(() => false)) {
-        const viewActive = activeRow.getByRole('button', { name: '查看', exact: true }).first();
-        if (await viewActive.isVisible().catch(() => false)) {
-          await viewActive.click();
-          await lifecycle.filter({ hasText: /当前生效.*内容已锁定/ })
-            .waitFor({ state: 'visible', timeout: 10_000 })
-            .catch(() => {});
-          activeViewOpened = await lifecycle.filter({ hasText: /当前生效.*内容已锁定/ })
-            .isVisible()
-            .catch(() => false);
-        }
-      }
       const currentBody = await page.locator('body').innerText();
-      const obsoleteControls = ['对话微调', 'Excel 导入', '一键重算出成率', 'kg/份']
-        .filter((label) => currentBody.includes(label));
-      const contract = {
-        productSelection,
-        hasVersionTable: currentBody.includes('BOM 配方版本'),
-        hasHistoricalYield: currentBody.includes('系统历史出成率'),
-        obsoleteControls,
-        hasPricingUnit: /元\/(?:kg|g|袋|盒|箱)/.test(currentBody),
-        hasSkuCostBasis: /元\/(?:袋|盒|箱|件|只|份)/.test(currentBody),
-        tableCount: await page.locator('.el-table').count(),
-        activeViewOpened,
-        activeVersionVisible: /已生效/.test(currentBody),
-        readOnlyGuidanceVisible: /当前生效.*内容已锁定|历史版本.*仅供查看/.test(currentBody),
-        cloneActionVisible: false,
-        addRawButtonVisible: false,
+      const contract = await inspectCanvas(page, currentBody);
+      const assessment = classifyCanvas(contract, productSelection);
+      const unsupportedLegacyContracts = {
+        result: 'UNVERIFIED',
+        reason: 'retired BOM page carrier has no current equivalent selector',
+        checks: ['system historical yield', 'price-unit card', 'finished-good cost denominator', 'active immutable view', 'new-version/clone entry'],
       };
-
-      const rawTab = page.locator('.el-tabs__item').filter({ hasText: /^原料/ }).first();
-      if (await rawTab.isVisible().catch(() => false)) await rawTab.click();
-      const addRaw = page.getByRole('button', { name: /添加原料/ }).first();
-      contract.addRawButtonVisible = await addRaw.isVisible().catch(() => false);
-      contract.cloneActionVisible = await page.getByRole('button', {
-        name: /克隆为新版本.*修改|前往 v\d+ 草稿.*修改|继续修改 v\d+ 草稿|新建版本/,
-      }).first().isVisible().catch(() => false);
       const screenshots = [await ctx.screenshot('bom-active-readonly')];
-
+      if (assessment.result !== 'PASS') return { ...contract, productSelection, modernCarrierAssessment: assessment, unsupportedLegacyContracts, contractFailures: [], screenshots, assessment };
       const failures = [];
-      if (!productSelection.selected) failures.push(productSelection.failure || 'product selection failed');
-      if (!contract.hasVersionTable) failures.push('BOM version table missing');
-      if (!contract.hasHistoricalYield) failures.push('system historical yield missing');
-      if (contract.obsoleteControls.length) failures.push('obsolete BOM controls visible');
-      if (!contract.activeVersionVisible) failures.push('active BOM version missing');
-      if (!contract.activeViewOpened) failures.push('active BOM view did not open');
-      if (!contract.readOnlyGuidanceVisible) failures.push('active BOM read-only guidance missing');
-      if (!contract.cloneActionVisible) failures.push('clone-to-new-version action missing');
-      if (contract.addRawButtonVisible) failures.push('active BOM exposes raw material mutation action');
+      if (!productSelection.selected) failures.push(productSelection.failure);
+      if (contract.legacyVersionTableVisible) failures.push('retired BOM version table still rendered');
+      if (contract.legacyDrawerCopyVisible) failures.push('retired drawer copy still rendered');
+      if (contract.legacyJumpCopyVisible) failures.push('retired jump-away copy still rendered');
+      if (contract.auxiliaryCells > 0 && contract.auxDetailEntries === 0) failures.push('auxiliary cell lacks detail entry');
+      if (contract.packagingCells > 0 && contract.packSubtitles === 0) failures.push('packaging cell lacks unit/role subtitle');
       return {
         ...contract,
+        productSelection,
+        unsupportedLegacyContracts,
         contractFailures: failures,
         screenshots,
+        modernCarrierAssessment: failures.length ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend', reason: failures.join('; ') } : assessment,
         assessment: failures.length
           ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' }
-          : { result: 'PASS', rootCauseClass: 'none' },
+          : { result: 'UNVERIFIED', rootCauseClass: 'tool', reason: unsupportedLegacyContracts.reason },
       };
     },
   }),

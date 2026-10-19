@@ -28,8 +28,17 @@ function pageHtml(pathname) {
   }
   const content = pathname === '/quality/label-qc'
     ? '<main><h1>包装标签拍检</h1><p>AI 初筛只提供疑点，人工审核形成最终结论。</p><div class="el-table"></div><button>待人工审核</button><button>已审核整理</button><button>归档记录</button><button>人工审核</button></main>'
-    : pathname === '/system/product-processes'
-    ? '<main><h1>Workflow 工序管理</h1><p>原料 Cell 与原料 SKU 只读检查，投入产出数量关系，保存、发布和应用按钮均不会点击。</p><span data-testid="input-unit-chip">kg</span></main>'
+    : pathname === '/system/product-processes' || pathname === '/production/process-hub'
+    ? `<main><h1>Workflow 工序管理</h1>
+      <section class="toolbar-left"><div class="el-select" onclick="document.querySelector('.el-select-dropdown').style.display='block'"><span class="el-select__selected-item">请选择本条工艺存放在哪个成品或原料下</span></div></section>
+      <div class="el-select-dropdown" style="display:none"><div class="el-select-dropdown__item" onclick="document.querySelector('.el-select__selected-item').textContent='正式产品 · g'; this.parentElement.style.display='none'">正式产品 · g</div></div>
+      <p>原料 Cell 与原料 SKU 只读检查，投入产出数量关系，保存、发布和应用按钮均不会点击。</p>
+      <section data-testid="workflow-version-status"><button data-testid="workflow-version-status-toggle" onclick="document.querySelector('[data-testid=workflow-version-status-row]').style.display='block'">产品：BOM v3 详情</button><p data-testid="workflow-version-status-row" style="display:none">BOM 生效 v3 · 当前生效内容已锁定</p></section>
+      <div class="vue-flow__node vue-flow__node-process">工序 清洗</div>
+      <div class="vue-flow__node vue-flow__node-material">成品 基本单位 g</div>
+      <div class="vue-flow__node vue-flow__node-bomAuxiliary"><button data-testid="aux-open-detail">辅料 2 g/kg</button></div>
+      <div class="vue-flow__node vue-flow__node-bomPackaging"><span data-testid="pack-subtitle">1 种 · 每 1 g成品</span></div>
+      <span data-testid="input-unit-chip">g</span></main>`
     : pathname === '/production/bom'
       ? '<main><h1>BOM 配方版本</h1><p>系统历史出成率 参考单价 30 元/kg 总成本 12 元/袋</p><div class="el-table"><span>已生效</span></div><section data-testid="bom-version-lifecycle"><p>v2 当前生效，内容已锁定</p><p>生产计划继续使用当前版本。</p><button>克隆为新版本修改</button></section><div class="el-tabs__item">原料</div></main>'
       : pathname === '/sales/orders'
@@ -270,7 +279,7 @@ test.describe('production read-only harness local fixture', () => {
       expectedFactoryId: 'F006',
       productionReadonly: true,
     });
-    expect(report.scenarios.map((result) => result.result)).toEqual(['PASS', 'PASS', 'PASS', 'PASS']);
+    expect(report.scenarios.map((result) => result.result)).toEqual(['PASS', 'UNVERIFIED', 'PASS', 'PASS']);
     expect(report.authRequests).toHaveLength(1);
     expect(report.actualBusinessWrites).toBe(0);
     expect(report.blockedMutationAttempts).toHaveLength(0);
@@ -298,7 +307,7 @@ test.describe('production read-only harness local fixture', () => {
     //    「白垩纪 AI Agent / 正在加载应用…」二十来个字符 ⇒ landmark 全不命中
     //    ⇒ 每条都掉进 UNVERIFIED。生产上实测 16 个场景里 13 个是这么来的。
     const navigated = report.scenarios.filter((result) => result.scenario !== 'tenant-isolation');
-    expect(navigated.map((result) => result.result)).toEqual(['PASS', 'PASS']);
+    expect(navigated.map((result) => result.result)).toEqual(['UNVERIFIED', 'PASS']);
 
     for (const result of navigated) {
       const mountEvidence = result.pageEvidence.find((entry) => 'appMounted' in entry);

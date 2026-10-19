@@ -16,6 +16,8 @@ import com.cretas.aims.service.scheduling.core.SchedulingAIService;
 import com.cretas.aims.service.scheduling.core.WorkerAssignmentService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -153,6 +155,62 @@ class SchedulingPlanCrudExplicitInputContractTest {
         assignment.setUserId(userId);
         assignment.setStatus(WorkerAssignment.AssignmentStatus.assigned);
         return assignment;
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ProductionBatchStatus.class, names = {"PLANNED", "PLANNING"})
+    void everyPlannableBatchStatusCreatesAnExplicitSchedule(ProductionBatchStatus status) {
+        CreateSchedulingPlanRequest request = requestWithBatch();
+        when(lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-001", "F-MANUAL"))
+                .thenReturn(Optional.of(activeLine()));
+        when(batchRepository.findByIdAndFactoryId(99L, "F-MANUAL"))
+                .thenReturn(Optional.of(batchWithStatus(status)));
+        when(planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull("F-MANUAL", request.getPlanDate()))
+                .thenReturn(Optional.empty());
+        when(planRepository.save(any(SchedulingPlan.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createPlan("F-MANUAL", request, 7L);
+
+        verify(planRepository, atLeastOnce()).save(any(SchedulingPlan.class));
+        verify(scheduleRepository).saveAll(anyList());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ProductionBatchStatus.class, names = {"PLANNED", "PLANNING"}, mode = EnumSource.Mode.EXCLUDE)
+    void everyNonPlannableBatchStatusIsRejectedBeforeAnyPlanOrScheduleWrite(ProductionBatchStatus status) {
+        CreateSchedulingPlanRequest request = requestWithBatch();
+        when(lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-001", "F-MANUAL"))
+                .thenReturn(Optional.of(activeLine()));
+        when(batchRepository.findByIdAndFactoryId(99L, "F-MANUAL"))
+                .thenReturn(Optional.of(batchWithStatus(status)));
+
+        assertThatThrownBy(() -> service.createPlan("F-MANUAL", request, 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不可排程");
+        verifyNoInteractions(planRepository, scheduleRepository, notificationService, pushNotificationService);
+    }
+
+    private static CreateSchedulingPlanRequest requestWithBatch() {
+        CreateSchedulingPlanRequest request = validRequest();
+        request.getSchedules().get(0).setBatchId(99L);
+        return request;
+    }
+
+    private static ProductionLine activeLine() {
+        ProductionLine line = new ProductionLine();
+        line.setId("LINE-001");
+        line.setFactoryId("F-MANUAL");
+        line.setStatus(ProductionLine.LineStatus.active);
+        return line;
+    }
+
+    private static ProductionBatch batchWithStatus(ProductionBatchStatus status) {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(99L);
+        batch.setFactoryId("F-MANUAL");
+        batch.setStatus(status);
+        return batch;
     }
 
     private static CreateSchedulingPlanRequest validRequest() {

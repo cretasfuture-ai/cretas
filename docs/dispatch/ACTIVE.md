@@ -14,7 +14,8 @@
 - `ERP-W4-REPORT-RESERVATION-20261019` — `review` — Owner /root — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — 预留锁内重验及夹具已交回；待复验，不改释放/Repository。详同日native-blockers归档。
 - `ERP-W4-RESERVE-PG-20261019` — `in-progress` — Owner /root/s1_assignment — Base 76f4e456e3a874bcb00d055dc19f8e4d627f2497 — 只改InventoryAuditTransactionContractTest，补真实Spring/JPA报工预留回滚及成功对照；复用既有PG闸。Maven由root串行。详同日native-blockers归档。
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner /root — Base 6c4ecfe93ff7751066ea7323e5c6750a7eae11fe — Scope 首批#1033已发布；余业务验收/任务授权批。归档archive/2026-10-19-erp-s0-s1-capabilities.md。场景表C:/Users/Steve/Documents/cretas-optimization-20261019/final-plan/验收场景表.csv；证据同级execution；业务仍1/75。
+
+- `ERP-STAGES-20261019` — `in-progress` — Owner /root — Base 6c4ecfe93ff7751066ea7323e5c6750a7eae11fe — #1033与#1035已发布；余缺陷业务复验/S0及受控执行批。归档archive/2026-10-19-erp-s0-s1-capabilities.md；唯一场景表C:/Users/Steve/Documents/cretas-optimization-20261019/final-plan/验收场景表.csv，进度以其读回为准；QA独占CSV/手机。
 
 
 
