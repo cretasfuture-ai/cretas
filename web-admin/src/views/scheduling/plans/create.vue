@@ -9,9 +9,15 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
   createSchedulingPlan,
-  generateSchedule,
-  getProductionLines
+  getProductionLines,
+  getSchedulingCapabilities,
+  type SchedulingCapabilities
 } from '@/api/scheduling';
+import {
+  buildManualSchedulePayload,
+  validateManualSchedules,
+  type ManualScheduleDraft
+} from './manualSchedulingForm';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ArrowLeft,
@@ -29,29 +35,39 @@ const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const batches = ref<TableRow[]>([]);
 const productionLines = ref<TableRow[]>([]);
+const capabilities = ref<SchedulingCapabilities | null>(null);
+const capabilityLoadFailed = ref(false);
 
 // 表单数据
 const form = ref({
   planDate: toDateString(new Date()),
   selectedBatchIds: [] as number[],
-  autoAssignWorkers: true,
   notes: ''
 });
-
-// AI生成选项
-const aiOptions = ref({
-  optimizationGoal: 'balanced' as 'minimize_cost' | 'maximize_efficiency' | 'balanced',
-  considerTemporaryWorkers: true,
-  minCompletionProbability: 0.7
-});
-
+const manualDrafts = ref<ManualScheduleDraft[]>([]);
 const useAI = ref(false);
-const AI_GENERATION_UNAVAILABLE = 'AI 排产暂不可用。当前优化选项无法可靠执行，请使用手动创建。';
+const aiUnavailableReason = computed(() => capabilities.value?.aiGeneration?.reason
+  || '能力状态加载失败，自动排程保持不可用；请检查网络后重试，或使用人工确认的排程草稿。');
+const manualUnavailableReason = computed(() => capabilities.value?.manualCreation?.status === 'UNAVAILABLE'
+  ? capabilities.value.manualCreation.reason : '');
 
 onMounted(() => {
   loadBatches();
   loadProductionLines();
+  loadCapabilities();
 });
+
+async function loadCapabilities() {
+  if (!factoryId.value) return;
+  try {
+    const response = await getSchedulingCapabilities(factoryId.value);
+    if (response.success && response.data) capabilities.value = response.data;
+    else capabilityLoadFailed.value = true;
+  } catch (error) {
+    capabilityLoadFailed.value = true;
+    console.error('加载排程能力失败:', error);
+  }
+}
 
 // 尚未开工、可被排入调度计划的批次状态。ProductionBatchStatus 枚举没有 PENDING
 // (旧代码传 status=PENDING 触发 IllegalArgumentException → 400, 批次列表恒为空,
@@ -102,8 +118,19 @@ function toggleBatchSelection(batchId: number) {
   const index = form.value.selectedBatchIds.indexOf(batchId);
   if (index > -1) {
     form.value.selectedBatchIds.splice(index, 1);
+    manualDrafts.value = manualDrafts.value.filter(draft => draft.batchId !== batchId);
   } else {
     form.value.selectedBatchIds.push(batchId);
+    const batch = batches.value.find(item => Number(item.id) === batchId);
+    manualDrafts.value.push({
+      batchId,
+      productionLineId: '',
+      plannedQuantity: Number(batch?.plannedQuantity) || '',
+      plannedStartTime: '',
+      plannedEndTime: '',
+      sourceQuantity: Number(batch?.plannedQuantity) || undefined,
+      sourceUnit: String(batch?.quantityUnit || batch?.unit || batch?.baseUnit || '').trim() || undefined,
+    });
   }
 }
 
@@ -112,49 +139,38 @@ function isBatchSelected(batchId: number) {
 }
 
 function selectAllBatches() {
-  form.value.selectedBatchIds = batches.value.map(b => b.id);
+  clearSelection();
+  batches.value.forEach(batch => toggleBatchSelection(Number(batch.id)));
 }
 
 function clearSelection() {
   form.value.selectedBatchIds = [];
+  manualDrafts.value = [];
 }
 
 async function handleSubmit() {
   if (useAI.value) {
-    ElMessage.warning(AI_GENERATION_UNAVAILABLE);
+    ElMessage.warning(aiUnavailableReason.value);
     return;
   }
-
-  if (form.value.selectedBatchIds.length === 0) {
-    ElMessage.warning('请选择至少一个生产批次');
+  const validationErrors = validateManualSchedules(manualDrafts.value);
+  if (validationErrors.length > 0) {
+    ElMessage.warning(validationErrors[0]);
+    return;
+  }
+  if (manualUnavailableReason.value) {
+    ElMessage.warning(manualUnavailableReason.value);
     return;
   }
 
   try {
     loading.value = true;
-
-    let response;
-    if (useAI.value) {
-      // AI 生成
-      response = await generateSchedule(factoryId.value!, {
-        planDate: form.value.planDate,
-        batchIds: form.value.selectedBatchIds,
-        optimizationGoal: aiOptions.value.optimizationGoal,
-        considerTemporaryWorkers: aiOptions.value.considerTemporaryWorkers,
-        minCompletionProbability: aiOptions.value.minCompletionProbability
-      });
-    } else {
-      // 手动创建
-      response = await createSchedulingPlan(factoryId.value!, {
-        planDate: form.value.planDate,
-        batchIds: form.value.selectedBatchIds,
-        autoAssignWorkers: form.value.autoAssignWorkers,
-        notes: form.value.notes
-      });
-    }
+    const response = await createSchedulingPlan(factoryId.value!, buildManualSchedulePayload(
+      form.value.planDate, manualDrafts.value, form.value.notes,
+    ));
 
     if (response.success && response.data) {
-      ElMessage.success(useAI.value ? 'AI调度计划生成成功' : '调度计划创建成功');
+      ElMessage.success('人工确认的排程草稿已创建');
       router.push(`/scheduling/plans/${response.data.id}`);
     }
   } catch (error) {
@@ -165,14 +181,6 @@ async function handleSubmit() {
   }
 }
 
-function getOptimizationLabel(goal: string) {
-  const map: Record<string, string> = {
-    minimize_cost: '最小化成本',
-    maximize_efficiency: '最大化效率',
-    balanced: '平衡模式'
-  };
-  return map[goal] || goal;
-}
 </script>
 
 <template>
@@ -226,7 +234,7 @@ function getOptimizationLabel(goal: string) {
             <el-icon class="mode-icon"><Plus /></el-icon>
             <div class="mode-info">
               <div class="mode-title">手动创建</div>
-              <div class="mode-desc">选择批次后系统按顺序排程</div>
+              <div class="mode-desc">人工填写每个批次的产线、数量和起止时间</div>
             </div>
           </div>
           <button
@@ -239,44 +247,16 @@ function getOptimizationLabel(goal: string) {
             <el-icon class="mode-icon ai"><MagicStick /></el-icon>
             <div class="mode-info">
               <div class="mode-title">AI 智能生成（暂不可用）</div>
-              <div id="ai-generation-unavailable-reason" class="mode-desc">{{ AI_GENERATION_UNAVAILABLE }}</div>
+              <div id="ai-generation-unavailable-reason" class="mode-desc">{{ aiUnavailableReason }}</div>
             </div>
           </button>
         </div>
 
-        <!-- AI 选项 -->
-        <div v-if="useAI" class="ai-options">
-          <el-form label-width="140px">
-            <el-form-item label="优化目标">
-              <el-radio-group v-model="aiOptions.optimizationGoal">
-                <el-radio-button value="minimize_cost">最小化成本</el-radio-button>
-                <el-radio-button value="maximize_efficiency">最大化效率</el-radio-button>
-                <el-radio-button value="balanced">平衡模式</el-radio-button>
-              </el-radio-group>
-            </el-form-item>
-            <el-form-item label="考虑临时工">
-              <el-switch v-model="aiOptions.considerTemporaryWorkers" />
-            </el-form-item>
-            <el-form-item label="最低完成概率">
-              <el-slider
-                v-model="aiOptions.minCompletionProbability"
-                :min="0.5"
-                :max="0.95"
-                :step="0.05"
-                :format-tooltip="(val: number) => (val * 100).toFixed(0) + '%'"
-              />
-            </el-form-item>
-          </el-form>
-        </div>
-
-        <!-- 手动选项 -->
-        <div v-else class="manual-options">
-          <el-form label-width="140px">
-            <el-form-item label="自动分配工人">
-              <el-switch v-model="form.autoAssignWorkers" />
-              <span class="option-hint">开启后系统将自动分配可用工人</span>
-            </el-form-item>
-          </el-form>
+        <div class="capability-notice" role="status">
+          <strong>人工确认的排程草稿</strong>
+          <span>{{ capabilityLoadFailed ? '能力状态暂不可读，自动化保持不可用；请使用人工确认的排程草稿，网络恢复后可重试。' : aiUnavailableReason }}</span>
+          <span v-if="manualUnavailableReason">{{ manualUnavailableReason }}</span>
+          <span>请逐项填写产线、基本单位整数数量和起止时间；系统不会自动分配工人，也不会替你确认工艺、物料或换产可行性。</span>
         </div>
       </el-card>
 
@@ -307,7 +287,7 @@ function getOptimizationLabel(goal: string) {
             </div>
             <div class="batch-quantity">
               <span class="qty-value">{{ batch.plannedQuantity }}</span>
-              <span class="qty-label">计划数量</span>
+              <span class="qty-label">计划数量 {{ batch.quantityUnit || batch.unit || batch.baseUnit || '基本单位未标明' }}</span>
             </div>
           </div>
           <el-empty v-if="batches.length === 0" description="暂无待调度的生产批次" />
@@ -318,16 +298,41 @@ function getOptimizationLabel(goal: string) {
         </div>
       </el-card>
 
+      <el-card v-if="manualDrafts.length" class="manual-schedule-card">
+        <template #header><span>明确排程信息（每个批次必填）</span></template>
+        <div v-for="draft in manualDrafts" :key="draft.batchId" class="manual-schedule-row">
+          <div class="manual-schedule-context">
+            <strong>{{ batches.find(batch => Number(batch.id) === draft.batchId)?.batchNumber || `批次 ${draft.batchId}` }}</strong>
+            <span>预填来源：生产批次计划数量 {{ draft.sourceQuantity ?? '未知' }} {{ draft.sourceUnit || '基本单位未标明' }}，请人工确认后提交</span>
+          </div>
+          <label>生产线
+            <select v-model="draft.productionLineId">
+              <option value="">请选择生产线</option>
+              <option v-for="line in productionLines" :key="line.id" :value="line.id">{{ line.name }}</option>
+            </select>
+          </label>
+          <label>基本单位数量
+            <input v-model.number="draft.plannedQuantity" type="number" min="1" step="1" inputmode="numeric" />
+          </label>
+          <label>开始时间
+            <input v-model="draft.plannedStartTime" type="datetime-local" />
+          </label>
+          <label>结束时间
+            <input v-model="draft.plannedEndTime" type="datetime-local" />
+          </label>
+        </div>
+      </el-card>
+
       <!-- 提交按钮 -->
       <div class="submit-area">
         <el-button @click="goBack">取消</el-button>
         <el-button
           type="primary"
           :loading="loading"
-          :icon="useAI ? MagicStick : Plus"
+          :icon="Plus"
           @click="handleSubmit"
         >
-          {{ useAI ? 'AI 生成调度计划' : '创建调度计划' }}
+          创建人工排程草稿
         </el-button>
       </div>
     </div>
@@ -436,6 +441,60 @@ function getOptimizationLabel(goal: string) {
 .manual-options {
   padding-top: 20px;
   border-top: 1px solid #ebeef5;
+}
+
+.capability-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  margin-top: 16px;
+  color: #606266;
+  background: #fdf6ec;
+  border-left: 4px solid #e6a23c;
+  font-size: 13px;
+}
+
+.manual-schedule-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: end;
+  padding: 14px 0;
+  border-bottom: 1px solid #ebeef5;
+
+  &:last-child { border-bottom: 0; }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #606266;
+    font-size: 12px;
+  }
+
+  select,
+  input {
+    width: 100%;
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    color: #303133;
+    background: #fff;
+  }
+}
+
+.manual-schedule-context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  span {
+    color: #909399;
+    font-size: 12px;
+    line-height: 1.4;
+  }
 }
 
 .option-hint {

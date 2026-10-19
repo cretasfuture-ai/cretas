@@ -15,6 +15,7 @@ function pageHtml(pathname) {
     return `<!doctype html><html><body>
       <form><input type="text" placeholder="用户名"><input type="password" placeholder="密码"><button type="submit">登录</button></form>
       <script>
+        localStorage.setItem('fixture-readonly-at-login', String(window.__CRETAS_READONLY_HARNESS__ === true));
         document.querySelector('form').addEventListener('submit', async (event) => {
           event.preventDefault();
           const response = await fetch('/api/mobile/auth/unified-login', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ username: 'f006_admin', password: 'fixture-only' }) });
@@ -172,6 +173,19 @@ test.describe('production read-only harness local fixture', () => {
   test.afterEach(async () => {
     server.closeAllConnections?.();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  });
+
+  test('sets the read-only application marker before the first login script executes', async ({ page }) => {
+    const report = await runSuiteWithPage(page, {
+      baseUrl, evidenceDir: path.resolve('test-results', 'production-readonly-init-fixture'),
+      scenarios: ['tenant-isolation'], username: 'f006_admin', password: 'fixture-only',
+      expectedUsername: 'f006_admin', expectedFactoryId: 'F006',
+    });
+    expect(report.scenarios.map(result => result.result)).toEqual(['PASS']);
+    expect(await page.evaluate(() => localStorage.getItem('fixture-readonly-at-login'))).toBe('true');
+    expect(report.actualBusinessWrites).toBe(0);
+    expect(report.blockedMutationAttempts).toHaveLength(0);
+    expect(businessWriteCount).toBe(0);
   });
 
   test('visual census records every bounded page without activating business controls', async ({ page }) => {

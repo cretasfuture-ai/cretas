@@ -43,6 +43,37 @@ public class SchedulingController {
     // ==================== 调度计划 CRUD ====================
 
     /**
+     * Returns the server capability contract. Automation is unavailable until a verified engine is wired.
+     */
+    @RequirePermission({"scheduling:read", "production:read"})
+    @RequireModule("scheduling")
+    @GetMapping("/capabilities")
+    @Operation(summary = "获取调度能力", description = "返回当前可用的调度能力及明确的不可用原因")
+    public ApiResponse<SchedulingCapabilitiesDTO> getCapabilities(
+            @PathVariable String factoryId) {
+        SchedulingCapabilitiesDTO.Capability unavailableAi = SchedulingCapabilitiesDTO.Capability.builder()
+                .status("UNAVAILABLE").mode("UNAVAILABLE")
+                .reason("AI自动排程暂不可用；本次不创建或调整排程，请使用手动创建并明确产线和起止时间。")
+                .build();
+        SchedulingCapabilitiesDTO.Capability unavailableWorkers = SchedulingCapabilitiesDTO.Capability.builder()
+                .status("UNAVAILABLE").mode("UNAVAILABLE")
+                .reason("自动人员优化暂不可用，请手动指派。")
+                .build();
+        SchedulingCapabilitiesDTO capabilities = SchedulingCapabilitiesDTO.builder()
+                .contractVersion("scheduling-capabilities/v1")
+                .aiGeneration(unavailableAi)
+                .workerOptimization(unavailableWorkers)
+                .reschedule(SchedulingCapabilitiesDTO.Capability.builder()
+                        .status("AVAILABLE").mode("RECORD_REASON_ONLY")
+                        .reason("当前仅记录调整原因，不修改时间或资源。").build())
+                .manualCreation(SchedulingCapabilitiesDTO.Capability.builder()
+                        .status("AVAILABLE").mode("EXPLICIT_SCHEDULES")
+                        .reason("只保存用户明确提供的产线、批次、数量和起止时间；不自动分配工人。").build())
+                .build();
+        return ApiResponse.success("获取成功", capabilities);
+    }
+
+    /**
      * 创建调度计划
      */
     @RequirePermission({"scheduling:read_write", "production:read_write"})
@@ -441,6 +472,7 @@ public class SchedulingController {
     /**
      * 计算排程完成概率
      */
+    @RequirePermission({"scheduling:read", "production:read"})
     @RequireModule("scheduling")
     @GetMapping("/schedules/{scheduleId}/probability")
     @Operation(summary = "计算完成概率", description = "AI预测排程按时完成的概率，用于风险预警")
@@ -457,6 +489,7 @@ public class SchedulingController {
     /**
      * 批量计算计划内所有排程的完成概率
      */
+    @RequirePermission({"scheduling:read", "production:read"})
     @RequireModule("scheduling")
     @GetMapping("/plans/{planId}/probabilities")
     @Operation(summary = "批量计算完成概率", description = "批量预测计划内所有排程的完成概率")
@@ -485,7 +518,7 @@ public class SchedulingController {
         Long userId = getUserId(httpRequest);
         log.info("重新调度: factoryId={}, planId={}", factoryId, request.getPlanId());
         SchedulingPlanDTO plan = schedulingService.reschedule(factoryId, request, userId);
-        return ApiResponse.success("重新调度完成", plan);
+        return ApiResponse.success("已记录调整原因，排程未改变", plan);
     }
 
     // ==================== 告警管理 ====================

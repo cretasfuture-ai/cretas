@@ -3,6 +3,7 @@ package com.cretas.aims.service.scheduling.impl;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.*;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.rules.DroolsRule;
 import com.cretas.aims.exception.BusinessException;
@@ -60,6 +61,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Override
     @Transactional
     public SchedulingPlanDTO createPlan(String factoryId, CreateSchedulingPlanRequest request, Long userId) {
+        validateExplicitSchedules(factoryId, request);
         // 检查是否已存在同日计划
         Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
             factoryId, request.getPlanDate());
@@ -96,9 +98,8 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 schedule.setStatus(LineSchedule.ScheduleStatus.pending);
                 schedules.add(schedule);
 
-                if (item.getWorkerIds() != null) {
-                    totalWorkers += item.getWorkerIds().size();
-                }
+                // Worker identities are persisted only by the existing manual assignment service.
+                // Counting IDs here would falsely report that workers were assigned.
             }
             scheduleRepository.saveAll(schedules);
             plan.setTotalBatches(schedules.size());
@@ -138,6 +139,44 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         }
 
         return enrichPlanDTO(SchedulingPlanDTO.fromEntity(plan));
+    }
+
+    private void validateExplicitSchedules(String factoryId, CreateSchedulingPlanRequest request) {
+        if (request.getSchedules() == null || request.getSchedules().isEmpty()) {
+            return; // Preserve the existing empty draft compatibility path.
+        }
+        for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
+            if (item == null) {
+                throw new BusinessException("排程明细不能为空");
+            }
+            if (item.getWorkerIds() != null && !item.getWorkerIds().isEmpty()) {
+                throw new BusinessException("请通过手动指派服务分配工人；创建计划不支持自动或隐式派工");
+            }
+            if (item.getProductionLineId() == null || item.getProductionLineId().isBlank()) {
+                throw new BusinessException("每条排程必须提供产线");
+            }
+            if (item.getPlannedStartTime() == null || item.getPlannedEndTime() == null
+                    || !item.getPlannedEndTime().isAfter(item.getPlannedStartTime())) {
+                throw new BusinessException("每条排程必须提供有效的起止时间，结束时间必须晚于开始时间");
+            }
+            if (item.getPlannedQuantity() == null || item.getPlannedQuantity() <= 0) {
+                throw new BusinessException("每条排程数量必须大于0");
+            }
+            ProductionLine line = lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(item.getProductionLineId(), factoryId)
+                    .orElseThrow(() -> new BusinessException("产线不存在或不属于当前工厂: " + item.getProductionLineId()));
+            if (line.getStatus() != ProductionLine.LineStatus.active) {
+                throw new BusinessException("产线当前不可排程: " + item.getProductionLineId());
+            }
+            if (item.getBatchId() == null) {
+                throw new BusinessException("每条排程必须明确批次");
+            }
+            ProductionBatch batch = batchRepository.findByIdAndFactoryId(item.getBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException("批次不存在或不属于当前工厂: " + item.getBatchId()));
+            if (batch.getStatus() != ProductionBatchStatus.PLANNED
+                    && batch.getStatus() != ProductionBatchStatus.PLANNING) {
+                throw new BusinessException("批次当前状态不可排程: " + batch.getStatus());
+            }
+        }
     }
 
     @Override

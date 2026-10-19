@@ -507,10 +507,12 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
               :percentage="row.completionRate || 0"
               :stroke-width="10"
             />
-            <span class="progress-text">{{ row.completedQuantity || 0 }}/{{ row.targetQuantity }}</span>
+            <span class="progress-text">{{ row.completedQuantity ?? '未知' }}/{{ row.targetQuantity ?? '未知' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="assignedWorkerCount" label="工人" width="80" align="center" />
+        <el-table-column label="工人" width="80" align="center">
+          <template #default="{ row }">{{ row.assignedWorkerCount ?? '未知' }}</template>
+        </el-table-column>
         <el-table-column prop="predictedCompletionProb" label="完成概率" width="100" align="center">
           <template #default="{ row }">
             <span :style="{ color: getProbabilityColor(row.predictedCompletionProb), fontWeight: 600 }">

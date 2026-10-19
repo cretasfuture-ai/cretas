@@ -4,6 +4,7 @@ import com.cretas.aims.config.ModuleEnabledInterceptor;
 import com.cretas.aims.config.PermissionInterceptor;
 import com.cretas.aims.controller.SchedulingController;
 import com.cretas.aims.dto.scheduling.OptimizeWorkersRequest;
+import com.cretas.aims.dto.scheduling.GenerateScheduleRequest;
 import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
@@ -107,6 +108,20 @@ class SchedulingWorkerOptimizationUnavailableContractTest {
         assertThat(error.getCode()).isEqualTo(400);
         assertThat(error.getMessage()).isEqualTo(MESSAGE);
         onlyScopedPlanLookup(FACTORY, PLAN);
+    }
+
+    @Test
+    void generationFailsClosedBeforeReadingOrWritingSchedulingResources() {
+        GenerateScheduleRequest request = new GenerateScheduleRequest();
+        request.setPlanDate(java.time.LocalDate.of(2026, 10, 19));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> optimizer.generateSchedule(FACTORY, request, user.getId()));
+
+        assertThat(error.getMessage()).contains("AI自动排程暂不可用");
+        verifyNoInteractions(planRepository, scheduleRepository, assignmentRepository, lineRepository,
+                alertRepository, predictionRepository, userRepository, batchRepository,
+                productionPlanRepository, droolsRuleRepository, planCrudService, workerAssignmentService);
     }
 
     @ParameterizedTest
