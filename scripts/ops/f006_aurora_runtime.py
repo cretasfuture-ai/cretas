@@ -145,16 +145,19 @@ class Runtime:
     def stop_child(self):
         with self.child_lock:self.stop_child_locked()
     def watch(self,baseline,done,breach,deadline=None):
-        next_job_check=time.monotonic()+5
         while not done.wait(.5):
             try:ok=(deadline is None or time.monotonic()<deadline) and protected(sample(),baseline)
             except Exception:ok=False
-            if ok and time.monotonic()>=next_job_check:
-                try:ok=not active_build()
-                except (OSError,subprocess.SubprocessError):ok=False
-                next_job_check=time.monotonic()+5
             if not ok:
                 breach.set();self.logger.warning('resource_guard_stop');self.stop_child();return
+
+    def watch_jobs(self,done,breach):
+        # Guest/CLI latency must never delay the independent memory watchdog.
+        while not done.wait(5):
+            try:ok=not active_build()
+            except (OSError,subprocess.SubprocessError):ok=False
+            if not ok:
+                breach.set();self.logger.warning('build_guard_stop');self.stop_child();return
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -178,7 +181,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError,TypeError,KeyError,OSError):self.reply(400,'invalid_request');return
         if rt.closing.is_set():self.reply(503,'shutting_down');return
         if not rt.request_lock.acquire(False):self.reply(429,'busy');return
-        started=time.monotonic();content='';baseline=None;done=threading.Event();breach=threading.Event();watcher=None;timer=None;conn=None;sent=False;complete=False
+        started=time.monotonic();content='';baseline=None;done=threading.Event();breach=threading.Event();watcher=None;job_watcher=None;timer=None;conn=None;sent=False;complete=False
         try:
             if rt.closing.is_set():self.reply(503,'shutting_down');return
             baseline=sample()
@@ -189,6 +192,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 breach.set();rt.stop_child()
             timer=threading.Timer(max(0,started+REQUEST_SECONDS-time.monotonic()),expire);timer.daemon=True;timer.start()
             watcher=threading.Thread(target=rt.watch,args=(baseline,done,breach,started+REQUEST_SECONDS),daemon=True);watcher.start()
+            job_watcher=threading.Thread(target=rt.watch_jobs,args=(done,breach),daemon=True);job_watcher.start()
             conn=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=25)
             conn.request('POST','/api/chat',json.dumps(payload).encode(),{'Content-Type':'application/json'})
             response=conn.getresponse()
@@ -223,6 +227,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if timer:timer.cancel();timer.join(timeout=6)
             if conn:conn.close()
             if watcher:watcher.join(timeout=6)
+            if job_watcher:job_watcher.join(timeout=6)
             # Lock release must survive ENOSPC, failed telemetry or child cleanup.
             try:
                 with contextlib.suppress(OSError,subprocess.SubprocessError):rt.stop_child()

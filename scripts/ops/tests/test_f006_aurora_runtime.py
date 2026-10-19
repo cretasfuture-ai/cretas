@@ -77,6 +77,12 @@ class OwnershipAndReports(unittest.TestCase):
             rt=self.runtime(td);done=mock.Mock();done.wait.return_value=False;breach=mock.Mock()
             with mock.patch.object(m,'sample',return_value=dict(pressure=2)),mock.patch.object(rt,'stop_child') as stop:
                 rt.watch(dict(swap_mib=0),done,breach);breach.set.assert_called_once();stop.assert_called_once()
+    def test_ci_watch_fails_closed_without_blocking_memory_watch(self):
+        with tempfile.TemporaryDirectory() as td:
+            rt=self.runtime(td);done=mock.Mock();done.wait.return_value=False;breach=mock.Mock()
+            for behavior in [True,m.subprocess.TimeoutExpired('ci-query',3)]:
+                with mock.patch.object(m,'active_build',side_effect=behavior if isinstance(behavior,Exception) else None,return_value=True),mock.patch.object(rt,'stop_child') as stop:
+                    rt.watch_jobs(done,breach);stop.assert_called_once()
     def test_atomic_bounded_report_and_log_rotation(self):
         with tempfile.TemporaryDirectory() as td:
             rt=self.runtime(td)
