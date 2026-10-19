@@ -41,6 +41,8 @@ public class TaskMaterialBatchPickerService {
         }
     }
 
+    private record NativeRef(MaterialBatchRef target, java.math.BigDecimal quantity, String unit) {}
+
     private final WorkProcessTaskRepository taskRepository;
     private final ProductionBatchRepository batchRepository;
     private final MaterialBatchRepository materialBatchRepository;
@@ -81,14 +83,15 @@ public class TaskMaterialBatchPickerService {
                 .collect(Collectors.toMap(MaterialBatch::getId, b -> b, (left, right) -> left,
                         java.util.LinkedHashMap::new))
                 .values().stream()
-                .map(this::toOption)
+                .map(batch -> toOption(batch, materialTypes.get(batch.getMaterialTypeId())))
+                .filter(Objects::nonNull)
                 .toList();
     }
 
     /** Reusable write-side guard for the report worker; it performs no inventory mutation. */
-    public void validateMaterialBatchRefs(String factoryId, Long batchId, Long taskId,
+    public java.math.BigDecimal validateMaterialBatchRefs(String factoryId, Long batchId, Long taskId,
                                           List<MaterialBatchRef> refs) {
-        if (refs == null || refs.isEmpty()) return;
+        if (refs == null || refs.isEmpty()) return null;
         WorkProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, taskId)
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在"));
         if (!factoryId.equals(task.getFactoryId())) {
@@ -102,8 +105,13 @@ public class TaskMaterialBatchPickerService {
         if (allowedTypes.isEmpty()) {
             throw new BusinessException(409, "当前任务没有可用的原料输入端口快照");
         }
+        if (allowedTypes.values().stream().map(InputUnit::code).distinct().count() != 1) {
+            throw new BusinessException(409, "原料输入端口量纲不同，不能合并为单一投入数量");
+        }
         String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
         Map<String, java.math.BigDecimal> totals = new LinkedHashMap<>();
+        List<NativeRef> nativeRefs = new java.util.ArrayList<>();
+        java.math.BigDecimal taskQuantity = java.math.BigDecimal.ZERO;
         for (MaterialBatchRef ref : refs) {
             if (ref == null || ref.getMaterialBatchId() == null || ref.getMaterialBatchId().isBlank()
                     || ref.getQuantity() == null || ref.getQuantity().signum() <= 0
@@ -127,17 +135,26 @@ public class TaskMaterialBatchPickerService {
                     : UnitContractServiceImpl.crossLanguageCode(ref.getUnit());
             String batchUnit = inputPort.matches(batch.getQuantityUnit()) ? portUnit
                     : UnitContractServiceImpl.crossLanguageCode(batch.getQuantityUnit());
-            if (refUnit == null || batchUnit == null || portUnit == null
-                    || !Objects.equals(refUnit, batchUnit)
-                    || !Objects.equals(refUnit, portUnit) && FgQuantityUnitConverter.convert(
-                            java.math.BigDecimal.ONE, refUnit, portUnit, null) == null) {
+            java.math.BigDecimal nativeQuantity = refUnit == null || batchUnit == null ? null
+                    : FgQuantityUnitConverter.convert(ref.getQuantity(), refUnit, batchUnit, null);
+            if (nativeQuantity == null || portUnit == null
+                    || FgQuantityUnitConverter.convert(java.math.BigDecimal.ONE, batchUnit, portUnit, null) == null) {
                 throw new BusinessException(409, "领料单位与任务输入端口不一致，缺少可验证的换算依据");
             }
-            totals.merge(batch.getId(), ref.getQuantity(), java.math.BigDecimal::add);
+            totals.merge(batch.getId(), nativeQuantity, java.math.BigDecimal::add);
             if (totals.get(batch.getId()).compareTo(batch.getCurrentQuantity()) > 0) {
                 throw new BusinessException(409, "领料数量超过批次可用量");
             }
+            nativeRefs.add(new NativeRef(ref, nativeQuantity, batch.getQuantityUnit()));
+            taskQuantity = taskQuantity.add(FgQuantityUnitConverter.convert(ref.getQuantity(), refUnit, portUnit, null));
         }
+        // The picker speaks task units; cost and reservation must consume each
+        // stock row's native units. Mutate only after every reference validates.
+        nativeRefs.forEach(ref -> {
+            ref.target().setQuantity(ref.quantity());
+            ref.target().setUnit(ref.unit());
+        });
+        return taskQuantity;
     }
 
     private Map<String, InputUnit> taskMaterialTypes(String factoryId, WorkProcessTask task) {
@@ -152,7 +169,11 @@ public class TaskMaterialBatchPickerService {
                             if (unit == null || unit.isBlank() || "unitless".equalsIgnoreCase(unit.trim())) {
                                 throw new BusinessException(409, "原料输入端口缺少有效单位快照，请核对当前工艺");
                             }
-                            return new InputUnit(YieldUnitResolver.canonicalPortUnit(port), java.util.Set.of(unit.trim()));
+                            String code = YieldUnitResolver.canonicalPortUnit(port);
+                            if (code == null || code.isBlank() || "unitless".equalsIgnoreCase(code)) {
+                                throw new BusinessException(409, "原料输入端口缺少有效计量编码，请核对当前工艺");
+                            }
+                            return new InputUnit(code, java.util.Set.of(unit.trim()));
                         },
                         (left, right) -> {
                             if (!Objects.equals(left.code(), right.code())) {
@@ -180,14 +201,20 @@ public class TaskMaterialBatchPickerService {
         ReportAuthGuard.assertCanReport(task.getAssignedTo(), assignees, workerId, supervisor);
     }
 
-    private TaskMaterialBatchOptionDTO toOption(MaterialBatch batch) {
+    private TaskMaterialBatchOptionDTO toOption(MaterialBatch batch, InputUnit input) {
+        String nativeUnit = input.matches(batch.getQuantityUnit()) ? input.code()
+                : UnitContractServiceImpl.crossLanguageCode(batch.getQuantityUnit());
+        java.math.BigDecimal available = FgQuantityUnitConverter.convert(
+                batch.getCurrentQuantity(), nativeUnit, input.code(), null);
+        // Unknown package conversions are not offered as selectable material.
+        if (available == null) return null;
         return TaskMaterialBatchOptionDTO.builder()
                 .id(batch.getId())
                 .batchNumber(batch.getBatchNumber())
                 .materialTypeId(batch.getMaterialTypeId())
                 .materialName(batch.getMaterialType() == null ? null : batch.getMaterialType().getName())
-                .currentQuantity(batch.getCurrentQuantity())
-                .quantityUnit(batch.getQuantityUnit())
+                .currentQuantity(available)
+                .quantityUnit(input.code())
                 .warehouseId(batch.getWarehouseId())
                 .build();
     }

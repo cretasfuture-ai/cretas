@@ -162,6 +162,29 @@ class TaskMaterialBatchPickerServiceContractTest {
                 List.of(ref("MB-1", "1", "原料公斤"))));
     }
 
+    @Test void mixedGramAndKilogramCandidatesUseTaskUnitsAndNormalizeWritesToStockUnits() {
+        actor(1686L, "F006", "operator");
+        WorkProcessTask task = task(1989L, 10944L, "F006");
+        MaterialBatch grams = batch("MB-G", "F006", "RMT-1", "WH-WKS", InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE", "500");
+        grams.setQuantityUnit("g");
+        MaterialBatch kilograms = batch("MB-KG", "F006", "RMT-1", "WH-WKS", InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE", "0.5");
+        MaterialBatch box = batch("MB-BOX", "F006", "RMT-1", "WH-WKS", InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE", "1");
+        box.setQuantityUnit("box");
+        prepareList(task, List.of(port(1989L, "RMT-1", "kg")), List.of(grams, kilograms, box));
+        var choices = service().list("F006", 10944L, 1989L);
+        assertEquals(List.of("MB-G", "MB-KG"), choices.stream().map(x -> x.getId()).toList());
+        assertTrue(choices.stream().allMatch(x -> "kg".equals(x.getQuantityUnit())
+                && x.getCurrentQuantity().compareTo(new BigDecimal("0.5")) == 0));
+        when(materials.findByIdAndFactoryId("MB-G", "F006")).thenReturn(Optional.of(grams));
+        when(materials.findByIdAndFactoryId("MB-KG", "F006")).thenReturn(Optional.of(kilograms));
+        List<MaterialBatchRef> refs = List.of(ref("MB-G", "0.5", "kg"), ref("MB-KG", "0.5", "kg"));
+        assertEquals(0, service().validateMaterialBatchRefs("F006", 10944L, 1989L, refs).compareTo(BigDecimal.ONE));
+        assertEquals(0, refs.get(0).getQuantity().compareTo(new BigDecimal("500")));
+        assertEquals("g", refs.get(0).getUnit());
+        assertEquals(0, refs.get(1).getQuantity().compareTo(new BigDecimal("0.5")));
+        assertEquals("kg", refs.get(1).getUnit());
+    }
+
     private TaskMaterialBatchPickerService service() { return new TaskMaterialBatchPickerService(tasks, batches, materials, assignees, ports, warehouse); }
 
     private void prepareList(WorkProcessTask task, List<WorkflowTaskPort> taskPorts, List<MaterialBatch> returned) {

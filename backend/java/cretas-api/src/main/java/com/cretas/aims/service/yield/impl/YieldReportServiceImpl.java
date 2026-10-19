@@ -285,8 +285,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<YieldReportRequest.LaborSegment> effSegs = (isInput || isOutput) ? null : req.getLaborSegments();
         List<MaterialBatchRef> effMaterialRefs = (isSegment || isOutput) ? null : req.getMaterialBatchRefs();
         validateWorkflowRequestUnits(factoryId, t, effInput, effInputUnit, effOutput, effOutputUnit, effMaterialRefs);
-        validateReportMaterialRefs(factoryId, batchId, t, effMaterialRefs);
+        BigDecimal rawTaskQuantity = validateReportMaterialRefs(factoryId, batchId, t, effMaterialRefs);
         BigDecimal effSourceWipQuantity = (isSegment || isOutput || !hasSourceWip) ? null : sourceWipQuantity(req, effInput);
+        validateMaterialQuantityBasis(t, rawTaskQuantity, effInput, effSourceWipQuantity);
         List<YieldReportRequest.Byproduct> effByproducts = (isInput || isSegment) ? null : req.getByproducts();
         BigDecimal effWaste = (isInput || isSegment) ? null : req.getWasteQuantity();
         Integer effSampleRetain = (isInput || isSegment) ? null : req.getSampleRetainQuantity();
@@ -838,9 +839,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
     }
 
-    private void validateReportMaterialRefs(String factoryId, Long batchId, WorkProcessTask task,
+    private BigDecimal validateReportMaterialRefs(String factoryId, Long batchId, WorkProcessTask task,
                                             List<MaterialBatchRef> refs) {
-        if (refs == null || refs.isEmpty()) return;
+        if (refs == null || refs.isEmpty()) return null;
         if (workshopReservationService == null) {
             throw new BusinessException(503, "原料占用服务暂不可用，请稍后重试");
         }
@@ -848,8 +849,7 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (taskMaterialBatchPickerService == null) {
                 throw new BusinessException(503, "任务原料校验暂不可用，请稍后重试");
             }
-            taskMaterialBatchPickerService.validateMaterialBatchRefs(factoryId, batchId, task.getId(), refs);
-            return;
+            return taskMaterialBatchPickerService.validateMaterialBatchRefs(factoryId, batchId, task.getId(), refs);
         }
         // Old tasks have no immutable material ports. Preserve that legacy scope,
         // but never allow a foreign/dangling batch to reach cost calculation/save.
@@ -860,6 +860,18 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
             materialBatchRepository.findByIdAndFactoryId(ref.getMaterialBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(403, "所选原料批次不属于当前工厂或已不可用"));
+        }
+        return null;
+    }
+
+    private void validateMaterialQuantityBasis(WorkProcessTask task, BigDecimal rawTaskQuantity,
+                                                BigDecimal totalQuantity, BigDecimal sourceWipQuantity) {
+        if (task.getWorkflowInstanceId() == null || rawTaskQuantity == null) return;
+        BigDecimal expected = rawTaskQuantity.add(sourceWipQuantity == null ? BigDecimal.ZERO : sourceWipQuantity);
+        if (totalQuantity == null || totalQuantity.signum() <= 0
+                || sourceWipQuantity != null && sourceWipQuantity.signum() < 0
+                || expected.compareTo(totalQuantity) != 0) {
+            throw new BusinessException(409, "领料批次数量与本次投入/出库总量不一致，请核对单位和数量");
         }
     }
 
@@ -1406,7 +1418,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId,
                 ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole()));
-        validateReportMaterialRefs(factoryId, batchId, t, req.getMaterialBatchRefs());
+        BigDecimal rawTaskQuantity = validateReportMaterialRefs(factoryId, batchId, t, req.getMaterialBatchRefs());
+        validateMaterialQuantityBasis(t, rawTaskQuantity, req.getWarehouseOutQuantity(), null);
         validateWorkflowRequestUnits(factoryId, t, req.getFeedInQuantity(), req.getInputUnit(), null, null, req.getMaterialBatchRefs());
 
         ProductionReport r = ProductionReport.builder()

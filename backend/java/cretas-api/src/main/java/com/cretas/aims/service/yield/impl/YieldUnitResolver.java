@@ -41,7 +41,7 @@ public final class YieldUnitResolver {
                 .filter(port -> port.getDirection() == WorkflowTaskPort.Direction.INPUT).toList();
         List<WorkflowTaskPort> outputs = own.stream()
                 .filter(port -> port.getDirection() == WorkflowTaskPort.Direction.OUTPUT).toList();
-        String input = commonUnit(inputs);
+        String input = commonUnit(inputs) == null ? null : canonicalPortUnit(inputs.getFirst());
         String output = commonUnit(outputs);
         if (!usable(input) || !usable(output)) {
             return invalid("任务存在缺失或多个不一致的投入/产出端口单位快照");

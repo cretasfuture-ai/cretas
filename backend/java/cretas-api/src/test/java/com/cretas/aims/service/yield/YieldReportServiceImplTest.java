@@ -795,6 +795,36 @@ class YieldReportServiceImplTest {
     }
 
     @Test
+    void workflowRawInputMustMatchTheDeclaredPhysicalTotalBeforeCostOrSave() {
+        WorkProcessTask task = task(34L, 1, "WP-RAW-TOTAL"); task.setWorkflowInstanceId(96L);
+        when(taskRepo.findByFactoryIdAndId("F006", 34L)).thenReturn(Optional.of(task));
+        when(workflowTaskPortRepository.findByFactoryIdAndWorkflowInstanceId("F006", 96L))
+                .thenReturn(List.of(port(34L, WorkflowTaskPort.Direction.INPUT, "kg", "kg", "1")));
+        var validator = mock(com.cretas.aims.service.production.TaskMaterialBatchPickerService.class);
+        ReflectionTestUtils.setField(svc, "taskMaterialBatchPickerService", validator);
+        when(validator.validateMaterialBatchRefs(eq("F006"), eq(1L), eq(34L), anyList())).thenReturn(BigDecimal.ONE);
+        YieldReportRequest request = new YieldReportRequest();
+        request.setWorkProcessTaskId(34L); request.setReportKind("INPUT"); request.setInputUnit("kg");
+        request.setMaterialBatchRefs(List.of(new MaterialBatchRef("MB", BigDecimal.ONE, "kg")));
+        for (BigDecimal declared : java.util.Arrays.asList(null, new BigDecimal("2"))) {
+            request.setInputQuantity(declared);
+            assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, request))
+                    .isInstanceOf(BusinessException.class).hasMessageContaining("总量不一致");
+        }
+        verify(reportRepo, never()).save(any());
+        verifyNoInteractions(materialBatchRepo);
+        MaterialInputRequest separateQuantities = new MaterialInputRequest();
+        separateQuantities.setWorkProcessTaskId(34L); separateQuantities.setInputUnit("kg");
+        separateQuantities.setWarehouseOutQuantity(BigDecimal.ONE);
+        separateQuantities.setFeedInQuantity(new BigDecimal("0.9"));
+        separateQuantities.setMaterialBatchRefs(List.of(new MaterialBatchRef("MB", BigDecimal.ONE, "kg")));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(invocation -> {
+            ProductionReport report = invocation.getArgument(0); report.setId(900L); return report;
+        });
+        assertThatCode(() -> svc.recordMaterialInput("F006", 1L, 5L, separateQuantities)).doesNotThrowAnyException();
+    }
+
+    @Test
     void getLimits_rejectsFinishedGoodConversionWhenWeightIsMissingOrAmbiguous() {
         WorkProcessTask t = task(30L, 1, "WP-PACKAGE-BAD");
         t.setPlannedUnit("盒"); t.setWorkflowInstanceId(92L);
