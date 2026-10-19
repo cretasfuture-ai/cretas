@@ -20,6 +20,7 @@ public class ShipmentSkuMarginService {
     private final JdbcTemplate jdbc;
     private final IncomeStatementService incomeStatements;
     private final EntityManager entityManager;
+    private final SalesReturnCostService salesReturnCosts;
 
     // Delivery unitPrice is the saved untaxed shipment price (same basis as netShippedValue).
     static final String LINES_SQL = """
@@ -109,14 +110,26 @@ public class ShipmentSkuMarginService {
         if (start.getDayOfMonth() == 1 && end.getDayOfMonth() == end.lengthOfMonth()) {
             var financial = incomeStatements.generate(factoryId, start.getYear(), start.getMonthValue(), end.getYear(), end.getMonthValue());
             result.setFinancialStatement(financial);
-            boolean equal = revenue.compareTo(financial.getTotalRevenue()) == 0
-                    && cost.compareTo(financial.getTotalCost()) == 0
-                    && profit.compareTo(financial.getGrossProfit()) == 0;
-            result.setReconciliationStatus(financial.getPendingDraftVoucherCount() > 0 ? "PENDING_VOUCHERS"
-                    : equal ? "MATCH" : "MISMATCH");
-            result.setReconciliationMessage(financial.getPendingDraftVoucherCount() > 0
-                    ? "仍有凭证待过账，请完成过账后核对。"
-                    : equal ? "实际出货收入、销售成本和毛利与同期间已过账利润表一致。"
+            if (financial.getPendingDraftVoucherCount() > 0) {
+                result.setReconciliationStatus("PENDING_VOUCHERS");
+                result.setReconciliationMessage("仍有凭证待过账，请完成过账后核对。");
+                return result;
+            }
+            BigDecimal returnedRevenue = salesReturnCosts.returnedRevenue(factoryId, start, end);
+            BigDecimal returnedCost = salesReturnCosts.returnedCost(factoryId, start, end);
+            BigDecimal netRevenue = money(revenue.subtract(returnedRevenue));
+            BigDecimal netCost = money(rawCost.subtract(returnedCost));
+            BigDecimal netGrossProfit = netRevenue.subtract(netCost);
+            result.setReconciliationReturnedRevenue(money(returnedRevenue));
+            result.setReconciliationReturnedCost(money(returnedCost));
+            result.setReconciliationNetRevenue(netRevenue);
+            result.setReconciliationNetCost(netCost);
+            result.setReconciliationNetGrossProfit(netGrossProfit);
+            boolean equal = netRevenue.compareTo(financial.getTotalRevenue()) == 0
+                    && netCost.compareTo(financial.getTotalCost()) == 0
+                    && netGrossProfit.compareTo(financial.getGrossProfit()) == 0;
+            result.setReconciliationStatus(equal ? "MATCH" : "MISMATCH");
+            result.setReconciliationMessage(equal ? "实际出货扣除本期退货后，净收入、净销售成本和毛利与同期间已过账利润表一致。"
                     : "与同期间已过账利润表存在差异，请核对未过账业务、退货折让及结转记录。");
         }
         return result;

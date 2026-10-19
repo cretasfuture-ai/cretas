@@ -16,6 +16,11 @@ public class ShipmentSkuMarginDTO {
     @PriceSensitive private BigDecimal grossProfit;
     @PriceSensitive private BigDecimal marginRate;
     @PriceSensitive private BigDecimal roundingAdjustment;
+    @PriceSensitive private BigDecimal reconciliationReturnedRevenue;
+    @PriceSensitive private BigDecimal reconciliationReturnedCost;
+    @PriceSensitive private BigDecimal reconciliationNetRevenue;
+    @PriceSensitive private BigDecimal reconciliationNetCost;
+    @PriceSensitive private BigDecimal reconciliationNetGrossProfit;
     private String reconciliationStatus;
     private String reconciliationMessage;
     @PriceSensitive private IncomeStatementDTO financialStatement;

@@ -18,7 +18,7 @@ class ShipmentSkuMarginServiceTest {
     static final String F="TEST-FACTORY";
     static final LocalDate START=LocalDate.of(2026,10,1), END=LocalDate.of(2026,10,31);
     EmbeddedDatabase db; JdbcTemplate jdbc; SalesDeliveryItemRepository repo;
-    IncomeStatementService financial; ShipmentSkuMarginService service;
+    IncomeStatementService financial; SalesReturnCostService salesReturnCosts; ShipmentSkuMarginService service;
     @BeforeEach void setup() {
         db=new EmbeddedDatabaseBuilder().generateUniqueName(true).setType(EmbeddedDatabaseType.H2).build();
         jdbc=new JdbcTemplate(db);
@@ -26,9 +26,12 @@ class ShipmentSkuMarginServiceTest {
         jdbc.execute("CREATE TABLE sales_delivery_items(id bigint PRIMARY KEY,delivery_record_id varchar,product_type_id varchar,product_name varchar,unit varchar,delivered_quantity decimal(20,4),unit_price decimal(20,4),deleted_at timestamp)");
         jdbc.execute("CREATE TABLE product_types(id varchar,factory_id varchar,name varchar,deleted_at timestamp)");
         repo=mock(SalesDeliveryItemRepository.class); financial=mock(IncomeStatementService.class);
+        salesReturnCosts=mock(SalesReturnCostService.class);
         EntityManager em=mock(EntityManager.class); Query lock=mock(Query.class,RETURNS_SELF);
         when(em.createNativeQuery(anyString())).thenReturn(lock);
-        service=new ShipmentSkuMarginService(repo,jdbc,financial,em);
+        service=new ShipmentSkuMarginService(repo,jdbc,financial,em,salesReturnCosts);
+        lenient().when(salesReturnCosts.returnedRevenue(anyString(),any(),any())).thenReturn(BigDecimal.ZERO);
+        lenient().when(salesReturnCosts.returnedCost(anyString(),any(),any())).thenReturn(BigDecimal.ZERO);
         when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("720","346.12",0));
     }
     @AfterEach void close(){db.shutdown();}
@@ -85,12 +88,54 @@ class ShipmentSkuMarginServiceTest {
     }
     @Test void partialMonthDoesNotPretendToReconcileMonthlyLedger() {
         movements();var result=service.generate(F,START,START.plusDays(1));
-        assertEquals("PARTIAL_PERIOD",result.getReconciliationStatus());assertNull(result.getFinancialStatement());verifyNoInteractions(financial);
+        assertEquals("PARTIAL_PERIOD",result.getReconciliationStatus());assertNull(result.getFinancialStatement());verifyNoInteractions(financial,salesReturnCosts);
     }
     @Test void pendingVouchersPreventGreenEvenWhenAmountsMatch() {
         record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","720");movements(m(1,"A","a","1","346.12"));
         when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("720","346.12",1));
-        assertEquals("PENDING_VOUCHERS",service.generate(F,START,END).getReconciliationStatus());
+        when(salesReturnCosts.returnedRevenue(F,START,END)).thenThrow(new AssertionError("pending period must not read return evidence"));
+        when(salesReturnCosts.returnedCost(F,START,END)).thenThrow(new AssertionError("pending period must not read return evidence"));
+        var result=service.generate(F,START,END);
+        assertEquals("PENDING_VOUCHERS",result.getReconciliationStatus());
+        assertNull(result.getReconciliationReturnedRevenue());assertNull(result.getReconciliationReturnedCost());
+        assertNull(result.getReconciliationNetRevenue());assertNull(result.getReconciliationNetCost());
+        assertNull(result.getReconciliationNetGrossProfit());verifyNoInteractions(salesReturnCosts);
+    }
+    @Test void fullMonthReconcilesNetFactsAfterPhysicalReturnWithRawCostRounding() {
+        record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","100");
+        movements(m(1,"A","a","1","60"));
+        when(salesReturnCosts.returnedRevenue(F,START,END)).thenReturn(new BigDecimal("20"));
+        when(salesReturnCosts.returnedCost(F,START,END)).thenReturn(new BigDecimal("12.345"));
+        when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("80","47.66",0));
+        var result=service.generate(F,START,END);
+        assertEquals("MATCH",result.getReconciliationStatus());
+        assertEquals("实际出货扣除本期退货后，净收入、净销售成本和毛利与同期间已过账利润表一致。",result.getReconciliationMessage());
+        money("100",result.getTotalRevenue());money("60",result.getTotalCost());money("40",result.getGrossProfit());
+        money("20",result.getReconciliationReturnedRevenue());money("12.35",result.getReconciliationReturnedCost());
+        money("80",result.getReconciliationNetRevenue());money("47.66",result.getReconciliationNetCost());
+        money("32.34",result.getReconciliationNetGrossProfit());
+    }
+    @Test void noPhysicalReturnCostStillSubtractsReturnedRevenue() {
+        record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","100");
+        movements(m(1,"A","a","1","60"));
+        when(salesReturnCosts.returnedRevenue(F,START,END)).thenReturn(new BigDecimal("20"));
+        when(salesReturnCosts.returnedCost(F,START,END)).thenReturn(BigDecimal.ZERO);
+        when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("80","60",0));
+        var result=service.generate(F,START,END);
+        assertEquals("MATCH",result.getReconciliationStatus());
+        money("20",result.getReconciliationReturnedRevenue());money("0",result.getReconciliationReturnedCost());
+        money("80",result.getReconciliationNetRevenue());money("60",result.getReconciliationNetCost());
+        money("20",result.getReconciliationNetGrossProfit());
+    }
+    @Test void committedLedgerPropagatesMissingReturnEvidence() {
+        record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","100");
+        movements(m(1,"A","a","1","60"));
+        when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("80","47.66",0));
+        when(salesReturnCosts.returnedRevenue(F,START,END))
+                .thenThrow(new BusinessException(409,"缺少已过账退货凭证"));
+        var error=assertThrows(BusinessException.class,()->service.generate(F,START,END));
+        assertEquals(409,error.getCode());
+        verify(salesReturnCosts).returnedRevenue(F,START,END);
     }
     @Test void moneyRoundsAtPeriodLevelAndDisclosesDisplayDifference() {
         record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","1");line(2,"s","B","盒","1","1");
@@ -110,13 +155,29 @@ class ShipmentSkuMarginServiceTest {
                     .revenue(BigDecimal.TEN).rawCost(BigDecimal.ONE).batches(List.of(
                         com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO.BatchSource.builder().unitCost(BigDecimal.ONE).build())).build())).build();
         var response=com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO.builder()
-                .rows(List.of(row)).totalRevenue(BigDecimal.TEN).financialStatement(statement("720","346.12",0)).build();
+                .rows(List.of(row)).totalRevenue(BigDecimal.TEN).financialStatement(statement("720","346.12",0))
+                .reconciliationReturnedRevenue(BigDecimal.ONE).reconciliationReturnedCost(BigDecimal.ONE)
+                .reconciliationNetRevenue(BigDecimal.ONE).reconciliationNetCost(BigDecimal.ONE)
+                .reconciliationNetGrossProfit(BigDecimal.ONE).build();
         var strip=org.springframework.util.ReflectionUtils.findMethod(advice.getClass(),"stripPriceFields",Object.class,IdentityHashMap.class,Deque.class,boolean.class,boolean.class);
         assertNotNull(strip);org.springframework.util.ReflectionUtils.makeAccessible(strip);
         org.springframework.util.ReflectionUtils.invokeMethod(strip,advice,response,new IdentityHashMap<>(),new ArrayDeque<>(),false,true);
         assertNull(response.getTotalRevenue());assertNull(row.getRevenue());assertNull(row.getCost());assertNull(response.getFinancialStatement());
+        assertNull(response.getReconciliationReturnedRevenue());assertNull(response.getReconciliationReturnedCost());
+        assertNull(response.getReconciliationNetRevenue());assertNull(response.getReconciliationNetCost());
+        assertNull(response.getReconciliationNetGrossProfit());
         assertNull(row.getSources());
         assertEquals(BigDecimal.ONE,row.getQuantity());
+    }
+    @Test void netCostRoundsAfterRawReturnDeductionAndResidualMismatchRemainsVisible() {
+        record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","1");
+        movements(m(1,"A","a","1","0.006"));
+        when(salesReturnCosts.returnedRevenue(F,START,END)).thenReturn(BigDecimal.ZERO);
+        when(salesReturnCosts.returnedCost(F,START,END)).thenReturn(new BigDecimal("0.004"));
+        when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("1","0.01",0));
+        var result=service.generate(F,START,END);
+        money("0.01",result.getTotalCost());money("0",result.getReconciliationNetCost());
+        assertEquals("MISMATCH",result.getReconciliationStatus());
     }
     @Test void multipleLinesShareBatchButKeepDistinctRevenueAndExactCosts() {
         record("s",F,"SHIPMENT","SHIPPED");line(1,"s","A","盒","1","10");line(2,"s","A","盒","2","10");

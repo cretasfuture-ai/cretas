@@ -23,6 +23,7 @@ if options.profile=='P37':names+=['FormalFinishedOutputScopeContractTest','Produ
 if options.profile=='P37':names+=['MultiOutputActualMetricsServiceContractTest','WorkflowBomSynchronizationServiceTest']
 if options.profile=='P37':names+=['IndicatorCacheEvidenceContractTest','BomRecipeFamilyCostAllocationTest']
 if options.profile=='P37':names+=['ProductionPlanServiceImplActualCostsContractTest','ProductionCostConsistencyContractTest']
+if options.profile=='P37':names+=['ShipmentSkuMarginServiceTest','SalesReturnCostServiceTest','CostCarryoverServiceTest','IncomeStatementServiceTest','ProfitLossClosingServiceTest','MonthCloseServiceTest','AccountingPeriodServiceTest','ClosingReadinessServiceTest']
 if options.tests:
  selected=options.tests.split(',');assert all(name in names for name in selected);names=selected
 files=set(subprocess.check_output(['git','diff','--name-only'],cwd=ROOT,text=True).splitlines()+subprocess.check_output(['git','ls-files','--others','--exclude-standard'],cwd=ROOT,text=True).splitlines())

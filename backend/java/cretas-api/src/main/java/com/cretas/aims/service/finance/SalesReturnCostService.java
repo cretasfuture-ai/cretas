@@ -90,6 +90,35 @@ public class SalesReturnCostService {
         return total;
     }
 
+    /** Returns the unrounded persisted revenue of all completed sales returns in the date range. */
+    public BigDecimal returnedRevenue(String factoryId, LocalDate start, LocalDate end) {
+        if (factoryId == null || factoryId.isBlank() || start == null || end == null || start.isAfter(end)) {
+            throw conflict("退货收入汇总日期或工厂参数无效");
+        }
+        List<ReturnOrder> orders = returnOrderRepository
+                .findByFactoryIdAndReturnTypeAndStatusAndReturnDateBetween(
+                        factoryId, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, start, end);
+        BigDecimal total = BigDecimal.ZERO;
+        for (ReturnOrder order : orders) {
+            validateCompletedSalesReturn(factoryId, order);
+            validatePostedReturnVoucher(factoryId, order);
+            BigDecimal amount = order.getTotalAmount();
+            if (amount == null || amount.signum() < 0) {
+                throw conflict("退货单 " + order.getReturnNumber() + " 缺少合法退货收入金额，无法核对收入");
+            }
+            total = total.add(amount);
+        }
+        return total;
+    }
+
+    private void validateCompletedSalesReturn(String factoryId, ReturnOrder order) {
+        if (order == null || !factoryId.equals(order.getFactoryId())
+                || order.getReturnType() != ReturnType.SALES_RETURN
+                || order.getStatus() != ReturnOrderStatus.COMPLETED) {
+            throw conflict("已完成销售退货证据的工厂、类型或状态不匹配");
+        }
+    }
+
     private void validatePostedReturnVoucher(String factoryId, ReturnOrder order) {
         if (isBlank(order.getId())) {
             throw conflict("已完成退货单缺少单据ID，无法核对收入凭证");

@@ -1,5 +1,20 @@
 # P37 factory generality acceptance
 
+The three-item financial continuation is `finance_close.py NON_PRODUCTION_ONLY
+init|prepare-posting|post-readback|close|verify|receipt`. Reuse the same P37
+runtime and completed checkpoints. The existing UI performs invoice posting,
+voiding the unshipped invalid-unit negative fixture, and requesting period
+closure; the existing finance reviewer confirms closure. Do not replay
+completed operations or post an unshipped negative fixture merely to clear a
+draft count. `close` uses the existing monthly cost and profit closing, with
+independent source readback; `verify` preserves gross shipments and reconciles
+completed returns to net financial statements. The private scenario table and
+evidence are under `factory-data-p37/finance-acceptance-20261019`. The optional
+`prepare-scope-schema` only fills the historical clone's missing existing V64
+DDL, writes no role overrides or business rows, and is not Flyway migration
+acceptance. Never enable Flyway against that manually prepared clone; use a
+proper independently migrated environment for that separate gate.
+
 The 2026-10-19 continuation is `joint_upgrade.py NON_PRODUCTION_ONLY --stage
 prepare|activate|business|complete-costs|metrics|history` (run the stages separately in that
 order). It reuses the existing login/checkpoint/HTTP/SQL helpers. `prepare`

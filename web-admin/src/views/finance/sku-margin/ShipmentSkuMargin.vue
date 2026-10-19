@@ -30,6 +30,18 @@ const period = computed<[string, string]>(() => {
   return [`${prefix}-01`, `${prefix}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`];
 });
 const incomeUrl = computed(() => samePeriodIncomeUrl(props.factoryId, period.value));
+const hasReturnReconciliation = computed(() => {
+  const current = data.value;
+  return current?.financialStatement && [current.reconciliationReturnedRevenue, current.reconciliationReturnedCost,
+    current.reconciliationNetRevenue, current.reconciliationNetCost, current.reconciliationNetGrossProfit]
+    .every(value => typeof value === 'number' && Number.isFinite(value));
+});
+const reconciliationRoundingDifference = computed(() => {
+  const current = data.value;
+  if (current?.totalCost == null || current.reconciliationReturnedCost == null || current.reconciliationNetCost == null) return null;
+  return (Math.round(current.reconciliationNetCost * 100) - Math.round(current.totalCost * 100)
+    + Math.round(current.reconciliationReturnedCost * 100)) / 100;
+});
 watch(() => [props.factoryId, ...period.value, props.refreshKey], async () => {
   const current = ++sequence;
   selected.value = null;
@@ -140,6 +152,20 @@ function traceUrl(batchNumber: string): string {
       <p v-if="data.roundingAdjustment !== null && data.roundingAdjustment !== 0" class="basis">
         逐产品显示金额与成本合计的舍入差额为 {{ fmtMoney(data.roundingAdjustment) }}；合计按实际出货成本统一取整。
       </p>
+      <section v-if="hasReturnReconciliation" aria-label="整月退货与利润表核对">
+        <h4>整月退货与利润表核对</h4>
+        <p class="basis">上方保留原始出货金额；下方按本期已完成销售退货冲减收入，实物退货恢复成本后，与利润表核对。</p>
+        <el-descriptions :column="3" border>
+          <el-descriptions-item label="本期退货冲减收入">{{ fmtMoney(data.reconciliationReturnedRevenue) }}</el-descriptions-item>
+          <el-descriptions-item label="实物退货恢复成本">{{ fmtMoney(data.reconciliationReturnedCost) }}</el-descriptions-item>
+          <el-descriptions-item label="扣除退货后收入">{{ fmtMoney(data.reconciliationNetRevenue) }}</el-descriptions-item>
+          <el-descriptions-item label="净销售成本">{{ fmtMoney(data.reconciliationNetCost) }}</el-descriptions-item>
+          <el-descriptions-item label="扣除退货后毛利">{{ fmtMoney(data.reconciliationNetGrossProfit) }}</el-descriptions-item>
+        </el-descriptions>
+        <p v-if="reconciliationRoundingDifference !== null && reconciliationRoundingDifference !== 0" class="basis">
+          成本按未舍入原值相减后统一取分，与显示金额相减有 {{ fmtMoney(reconciliationRoundingDifference) }} 的舍入差额。
+        </p>
+      </section>
       <el-alert :title="data.reconciliationMessage" :type="data.reconciliationStatus === 'MATCH' ? 'success' : 'warning'"
         show-icon :closable="false" class="reconciliation" />
       <p v-if="data.financialStatement" class="financial-values">
