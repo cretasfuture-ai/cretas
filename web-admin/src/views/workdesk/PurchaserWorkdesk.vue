@@ -48,13 +48,13 @@
           type="textarea"
           :rows="2"
           placeholder="例如: 下周采购什么? / 价格历史 / 供应商交期"
-          @keydown.enter.ctrl="sendQuery"
+          @keydown.enter.ctrl="sendQuery(false)"
         />
         <el-button
           type="primary"
           :loading="loading"
           :disabled="!userInput.trim()"
-          @click="sendQuery">
+          @click="sendQuery(false)">
           发送 (Ctrl+Enter)
         </el-button>
       </div>
