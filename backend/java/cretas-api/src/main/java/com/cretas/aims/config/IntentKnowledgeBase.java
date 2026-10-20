@@ -882,7 +882,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("客户审核", "QUALITY_CHECK_QUERY");
 
         // 供应商相关
-        phraseToIntentMapping.put("供应商的原料价格", "SUPPLIER_EVALUATE");
+        phraseToIntentMapping.put("供应商的原料价格", "SUPPLIER_PRICE_COMPARISON");
         phraseToIntentMapping.put("历史交货表现", "SUPPLIER_EVALUATE");
         phraseToIntentMapping.put("对比供应商", "SUPPLIER_EVALUATE");
         phraseToIntentMapping.put("不同供应商", "SUPPLIER_EVALUATE");

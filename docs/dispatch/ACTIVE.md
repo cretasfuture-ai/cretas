@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner supplier_dispatch — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07独立显式待执行授权；隔离WT/精确scope见archive/2026-10-20-s1-deferred-grant.md。保留原one-shot，不造fixture；目标Maven由协调者串行。
+- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07独立显式待执行授权；隔离WT/精确scope见archive/2026-10-20-s1-deferred-grant.md。保留原one-shot，不造fixture；目标Maven由协调者串行。
 
 - `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10独立只读就绪检查与预测来源/故障契约；精确scope及验收见archive/2026-10-20-s1-scheduling-truth.md。保留generate不可用，不造产能，不动生产依赖；Maven由协调者串行。
 

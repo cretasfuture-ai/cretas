@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,15 +43,25 @@ class SupplierComparisonReadIntentContractTest {
 
     @Test
     void explicitInactiveConfigCannotBecomeAbsentRowDefault() {
-        when(configs.findByIntentCodeAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
-                .thenReturn(Optional.of(config("F006", false)));
+        configured(config("F006", false));
         assertThat(SupplierComparisonReadIntent.resolve("F006", tools, configs)).isEmpty();
     }
 
     @Test
+    void tombstoneProjectionCannotFallThroughToAbsentRowMetadata() {
+        AIIntentConfigRepository.SupplierComparisonAuthority authority = mock(AIIntentConfigRepository.SupplierComparisonAuthority.class);
+        when(authority.getId()).thenReturn("deleted-tenant");
+        when(authority.getFactoryId()).thenReturn("F006");
+        when(authority.getActive()).thenReturn(true);
+        when(authority.getDeleted()).thenReturn(true);
+        when(configs.findSupplierComparisonAuthority(SupplierComparisonReadIntent.CODE)).thenReturn(List.of(authority));
+        assertThat(SupplierComparisonReadIntent.resolve("F006", tools, configs)).isEmpty();
+        verify(configs, never()).findByFactoryIdAndIntentCode(any(), any());
+    }
+
+    @Test
     void explicitOtherFactoryConfigCannotBecomePlatformDefault() {
-        when(configs.findByIntentCodeAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
-                .thenReturn(Optional.of(config("F-OTHER", true)));
+        configured(config("F-OTHER", true));
         assertThat(SupplierComparisonReadIntent.resolve("F006", tools, configs)).isEmpty();
     }
 
@@ -60,8 +71,7 @@ class SupplierComparisonReadIntentContractTest {
         row.setRequiredRoles("[\"factory_super_admin\"]");
         row.setRequiredPermission("restricted:read");
         row.setRequiresApproval(true);
-        when(configs.findByIntentCodeAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
-                .thenReturn(Optional.of(row));
+        configured(row);
         assertThat(SupplierComparisonReadIntent.resolve("F006", tools, configs)).containsSame(row);
         assertThat(row.getRequiredPermission()).isEqualTo("restricted:read");
         assertThat(row.getRequiredRoles()).isEqualTo("[\"factory_super_admin\"]");
@@ -70,7 +80,7 @@ class SupplierComparisonReadIntentContractTest {
 
     @Test
     void repositoryFailureIsNotTreatedAsMissingConfiguration() {
-        when(configs.findByIntentCodeAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
+        when(configs.findSupplierComparisonAuthority(SupplierComparisonReadIntent.CODE))
                 .thenThrow(new IllegalStateException("database unavailable"));
         assertThat(SupplierComparisonReadIntent.resolve("F006", tools, configs)).isEmpty();
     }
@@ -121,8 +131,18 @@ class SupplierComparisonReadIntentContractTest {
     }
 
     private static AIIntentConfig config(String factory, boolean active) {
-        return AIIntentConfig.builder().intentCode(SupplierComparisonReadIntent.CODE)
+        return AIIntentConfig.builder().id("configured-row").intentCode(SupplierComparisonReadIntent.CODE)
                 .intentName("comparison").toolName(SupplierComparisonReadIntent.TOOL)
                 .factoryId(factory).isActive(active).build();
+    }
+
+    private void configured(AIIntentConfig row) {
+        var authority = mock(AIIntentConfigRepository.SupplierComparisonAuthority.class);
+        when(authority.getId()).thenReturn(row.getId());
+        when(authority.getFactoryId()).thenReturn(row.getFactoryId());
+        when(authority.getActive()).thenReturn(row.getIsActive());
+        when(authority.getDeleted()).thenReturn(false);
+        when(configs.findSupplierComparisonAuthority(SupplierComparisonReadIntent.CODE)).thenReturn(List.of(authority));
+        when(configs.findByFactoryIdAndIntentCode(row.getFactoryId(), SupplierComparisonReadIntent.CODE)).thenReturn(Optional.of(row));
     }
 }

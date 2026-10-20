@@ -54,6 +54,18 @@ class SupplierComparisonIntentRepositoryQueryValidationTest {
 
     @BeforeEach
     void bindActualDatabaseEvidence() {
+        // Reproduce the deployed composite uniqueness instead of the Entity's older global key.
+        var constraints = entityManager.createNativeQuery("SELECT tc.constraint_name FROM information_schema.table_constraints tc "
+                + "JOIN information_schema.key_column_usage kc ON tc.constraint_name=kc.constraint_name "
+                + "AND tc.table_schema=kc.table_schema AND tc.table_name=kc.table_name "
+                + "WHERE LOWER(tc.table_name)='ai_intent_configs' AND tc.constraint_type='UNIQUE' "
+                + "GROUP BY tc.constraint_name HAVING COUNT(*)=1 AND LOWER(MAX(kc.column_name))='intent_code'").getResultList();
+        for (Object constraint : constraints) {
+            String name = constraint.toString();
+            if (!name.matches("[A-Za-z0-9_]+")) throw new IllegalStateException("Unexpected test constraint identifier");
+            entityManager.createNativeQuery("ALTER TABLE ai_intent_configs DROP CONSTRAINT \"" + name + "\"").executeUpdate();
+        }
+        entityManager.createNativeQuery("CREATE UNIQUE INDEX IF NOT EXISTS comparison_tenant_unique ON ai_intent_configs(intent_code,factory_id)").executeUpdate();
         entityManager.unwrap(org.hibernate.Session.class).doWork(connection -> {
             var metadata = connection.getMetaData();
             System.out.printf("[SUPPLIER_COMPARISON_DB] product=%s version=%s driver=%s%n",
@@ -101,6 +113,58 @@ class SupplierComparisonIntentRepositoryQueryValidationTest {
         });
     }
 
+    @Test
+    void deletedTenantOverridesActivePlatformWithoutReactivation() {
+        save(null, true);
+        AIIntentConfig tenant = save("F006", true);
+        delete(tenant);
+        assertThat(repository.findSupplierComparisonAuthority(SupplierComparisonReadIntent.CODE)).hasSize(2);
+        assertThat(resolve()).isEmpty();
+    }
+
+    @Test
+    void deletedOnlyRowCannotBecomeAbsentDefault() {
+        delete(save("F006", true));
+        assertThat(repository.count()).isZero(); // Entity filter hides it, authority reader must not.
+        assertThat(resolve()).isEmpty();
+    }
+
+    @Test
+    void inactiveTenantOverridesActivePlatform() {
+        save(null, true);
+        save("F006", false);
+        assertThat(resolve()).isEmpty();
+    }
+
+    @Test
+    void activeTenantOverridesPlatformAndOtherFactory() {
+        save(null, true);
+        save("OTHER", true);
+        AIIntentConfig tenant = save("F006", true);
+        assertThat(resolve()).hasValueSatisfying(row -> assertThat(row.getId()).isEqualTo(tenant.getId()));
+    }
+
+    @Test
+    void inactiveOrDeletedPlatformDoesNotBecomeDefault() {
+        AIIntentConfig platform = save(null, false);
+        assertThat(resolve()).isEmpty();
+        delete(platform);
+        assertThat(resolve()).isEmpty();
+    }
+
+    @Test
+    void duplicatePlatformAuthorityIsRejectedRatherThanArbitrarilyChosen() {
+        save(null, true);
+        save(null, true);
+        assertThat(resolve()).isEmpty();
+    }
+
+    private void delete(AIIntentConfig row) {
+        entityManager.createNativeQuery("UPDATE ai_intent_configs SET deleted_at=CURRENT_TIMESTAMP WHERE id=:id")
+                .setParameter("id", row.getId()).executeUpdate();
+        entityManager.clear();
+    }
+
     private Optional<AIIntentConfig> resolve() {
         ToolRegistry registry = mock(ToolRegistry.class);
         when(registry.getExecutor(SupplierComparisonReadIntent.TOOL))
@@ -111,14 +175,15 @@ class SupplierComparisonIntentRepositoryQueryValidationTest {
     private AIIntentConfig save(String factoryId, boolean active) {
         // This lane only reads existing metadata. Seed minimal real database columns directly:
         // This does not claim to verify legacy String/jsonb entity write compatibility.
+        String id = java.util.UUID.randomUUID().toString();
         entityManager.createNativeQuery("INSERT INTO ai_intent_configs "
                 + "(id,intent_code,intent_name,tool_name,factory_id,is_active,required_permission,requires_approval,created_at,updated_at) "
                 + "VALUES (:id,:code,'comparison',:tool,:factory,:active,'restricted:read',true,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
-                .setParameter("id", java.util.UUID.randomUUID().toString())
+                .setParameter("id", id)
                 .setParameter("code", SupplierComparisonReadIntent.CODE)
                 .setParameter("tool", SupplierComparisonReadIntent.TOOL)
                 .setParameter("factory", factoryId).setParameter("active", active).executeUpdate();
         entityManager.clear();
-        return repository.findByIntentCodeAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE).orElseThrow();
+        return repository.findById(id).orElseThrow();
     }
 }

@@ -134,6 +134,7 @@ class SupplierComparisonDispatchContractTest {
     @ParameterizedTest
     @ValueSource(strings = {
             "请比较现有供应商的报价；没有物料报价时说明不能比价",
+            "请对比供应商的原料价格",
             "供应商价格比较：黄油鸡原料哪家供应商最低价？请注明报价来源；没有真实报价请明确不可比价。"
     })
     void originalManualQueriesReachRealReadToolThroughPublicExecute(String input) {
@@ -199,6 +200,58 @@ class SupplierComparisonDispatchContractTest {
                 .userInput("供应商报价比较").context(new HashMap<>()).build();
     }
 
+    @Test
+    void actualPermissionGateRejectsMissingActorBeforePublicDispatch() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var fixture = newOrchestrator(tool, dispatch, IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", new IntentPermissionGate());
+        var response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), null, "purchaser");
+        assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+        assertThat(dispatch.records).isEmpty();
+        verify(tool, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void configuredPlatformLegacyRoleRestrictionStillRejectsBuyer() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var configured = intent(tool);
+        configured.setFactoryId(null);
+        configured.setRequiredPermission(null);
+        configured.setRequiredRoles("[\"factory_super_admin\"]");
+        var fixture = newOrchestrator(tool, dispatch, IntentPermissionGate.PermissionCheck.legacy(), Optional.of(configured));
+        ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", new IntentPermissionGate());
+        var recognition = mock(com.cretas.aims.service.AIIntentService.class);
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognition);
+        var response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
+        assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+        verify(recognition).hasPermission(SupplierComparisonReadIntent.CODE, "purchaser");
+        verify(tool, never()).execute(any(), anyMap());
+        assertThat(dispatch.records).isEmpty();
+    }
+
+    @Test
+    void configuredPermissionRetainsEstablishedPriorityOverLegacyRoles() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var configured = intent(tool);
+        configured.setRequiredPermission("procurement:read_write");
+        configured.setRequiredRoles("[\"factory_super_admin\"]");
+        var fixture = newOrchestrator(tool, dispatch, IntentPermissionGate.PermissionCheck.allowed(), Optional.of(configured));
+        var guard = mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        when(guard.hasAnyPermission(anyMap(), org.mockito.ArgumentMatchers.eq("procurement:read_write"))).thenReturn(true);
+        var gate = new IntentPermissionGate();
+        ReflectionTestUtils.setField(gate, "rbacGuard", guard);
+        ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", gate);
+        var recognition = mock(com.cretas.aims.service.AIIntentService.class);
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognition);
+        var response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
+        assertUnavailable(response);
+        verify(recognition, never()).hasPermission(anyString(), anyString());
+        verify(tool).execute(any(), anyMap());
+    }
+
     private OrchestratorFixture newOrchestrator(SupplierPriceComparisonTool tool,
                                                 DispatchFixture dispatch,
                                                 IntentPermissionGate.PermissionCheck permission,
@@ -208,8 +261,16 @@ class SupplierComparisonDispatchContractTest {
         ToolRegistry tools = mock(ToolRegistry.class);
         when(tools.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
         AIIntentConfigRepository repository = mock(AIIntentConfigRepository.class);
-        when(repository.findByIntentCodeAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
-                .thenReturn(configured);
+        configured.ifPresent(row -> {
+            row.setId("configured-comparison");
+            var authority = mock(AIIntentConfigRepository.SupplierComparisonAuthority.class);
+            when(authority.getId()).thenReturn(row.getId());
+            when(authority.getFactoryId()).thenReturn(row.getFactoryId());
+            when(authority.getActive()).thenReturn(row.getIsActive());
+            when(authority.getDeleted()).thenReturn(false);
+            when(repository.findSupplierComparisonAuthority(SupplierComparisonReadIntent.CODE)).thenReturn(List.of(authority));
+            when(repository.findByFactoryIdAndIntentCode(row.getFactoryId(), SupplierComparisonReadIntent.CODE)).thenReturn(configured);
+        });
         IntentPermissionGate permissionGate = mock(IntentPermissionGate.class);
         when(permissionGate.check(any(), any(), anyString())).thenReturn(permission);
         ReflectionTestUtils.setField(orchestrator, "toolRegistry", tools);

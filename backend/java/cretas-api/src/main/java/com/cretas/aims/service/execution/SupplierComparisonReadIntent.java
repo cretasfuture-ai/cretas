@@ -32,16 +32,29 @@ public final class SupplierComparisonReadIntent {
                     || !tool.requiresPermission() || !PERMISSIONS.equals(tool.getRequiredPermissions())) {
                 return Optional.empty();
             }
-            // Include inactive rows: an explicit restriction cannot become an absent-row default.
-            Optional<AIIntentConfig> configured = repository.findByIntentCodeAndDeletedAtIsNull(CODE);
-            if (configured.isPresent()) {
+            // Native scalar authority includes tombstones hidden by the Entity's @Where.
+            // Current tenant controls before platform; foreign-only presence is never absence.
+            var authority = repository.findSupplierComparisonAuthority(CODE);
+            if (authority == null) return Optional.empty();
+            if (!authority.isEmpty()) {
+                var selected = authority.stream().filter(row -> factoryId.equals(row.getFactoryId())).toList();
+                if (selected.isEmpty()) {
+                    selected = authority.stream().filter(row -> row.getFactoryId() == null).toList();
+                }
+                if (selected.size() != 1) return Optional.empty();
+                var owner = selected.get(0);
+                if (!Boolean.TRUE.equals(owner.getActive()) || !Boolean.FALSE.equals(owner.getDeleted())
+                        || owner.getId() == null) return Optional.empty();
+                var configured = repository.findByFactoryIdAndIntentCode(owner.getFactoryId(), CODE);
+                if (configured.isEmpty()) return Optional.empty();
                 AIIntentConfig row = configured.get();
-                if (!Boolean.TRUE.equals(row.getIsActive()) || !CODE.equals(row.getIntentCode())
+                if (!owner.getId().equals(row.getId()) || !Boolean.TRUE.equals(row.getIsActive())
+                        || row.getDeletedAt() != null || !CODE.equals(row.getIntentCode())
                         || !TOOL.equals(row.getToolName())
-                        || (row.getFactoryId() != null && !factoryId.equals(row.getFactoryId()))) {
+                        || !java.util.Objects.equals(owner.getFactoryId(), row.getFactoryId())) {
                     return Optional.empty();
                 }
-                // Keep all configured role/permission/approval restrictions verbatim.
+                // Return the current configured restrictions verbatim, never code defaults.
                 return configured;
             }
             return Optional.of(AIIntentConfig.builder()

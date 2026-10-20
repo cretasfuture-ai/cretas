@@ -22,6 +22,7 @@ class SupplierComparisonPhraseContractTest {
             "供应商价格比较：测试原料哪家供应商最低价？请注明报价来源；没有真实报价请明确不可比价。",
             "各供应商价格对比",
             "供应商报价比较",
+            "请对比供应商的原料价格",
             "请比较现有供应商的报价；没有物料报价时说明不能比价"
     })
     void priceQuestionsSelectComparisonRatherThanAdministratorRanking(String input) {
