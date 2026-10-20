@@ -219,7 +219,7 @@ export function chatAnalysisStream(
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: getPythonAuthHeaders(),
+        headers: await getPythonAuthHeaders(),
         body,
         signal: controller.signal,
       });
@@ -1913,7 +1913,7 @@ export async function logFeedback(
     const res = await fetch(url, {
       method: 'POST',
       headers: {
-        ...getPythonAuthHeaders(),
+        ...await getPythonAuthHeaders(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ value, comment: comment ?? null }),

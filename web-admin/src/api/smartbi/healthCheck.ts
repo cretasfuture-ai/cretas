@@ -106,7 +106,7 @@ export async function fetchHealthCheckReport(
       method: 'GET',
       credentials: 'include',
       signal: controller.signal,
-      headers: { ...getPythonAuthHeaders() },
+      headers: { ...await getPythonAuthHeaders() },
     });
 
     let body: any = null;

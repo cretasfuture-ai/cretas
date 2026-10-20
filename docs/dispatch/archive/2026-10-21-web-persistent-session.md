@@ -12,6 +12,9 @@ MobileAuthServiceImpl rejects bound Web access JWTs in the legacy refresh body,
 without changing legacy mobile token issuance;
 FactorySettingsController/SecuritySettings DTO and Web system settings removal;
 Web login retires the unused rememberMe checkbox for an accurate persistence caption;
+SmartBI common auth headers and their direct-fetch consumers await renewal of an
+expired bound Web JWT through Java before Python requests (including SSE/exports);
+new frontend renewal tests and existing common caller tests are included;
 own dispatch/archive. No change to S1 services, gateways, QA CSV/browser/phone,
 App token TTL, legacy JWT signing/expiry checks or existing role/tenant permission policy.
 

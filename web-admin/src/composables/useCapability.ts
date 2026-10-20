@@ -97,7 +97,7 @@ export function useCapability() {
           `${PYTHON_SMARTBI_URL}/api/smartbi/capability/${factoryId}`,
           {
             credentials: 'include',
-            headers: { ...getPythonAuthHeaders() },
+            headers: { ...await getPythonAuthHeaders() },
           },
         );
         // 503 = 该工厂尚未开通 capability 层 (gradual rollout), 服务端明说
