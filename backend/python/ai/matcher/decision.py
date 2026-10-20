@@ -8,8 +8,9 @@
 输出是**概率分布**, 不是一个答案: 置信够高才自动执行, 不够就把前几名交给第③层
 (按钮澄清)。⛔ 拿不到概率时返回 None, 由编排器回落旧路径 —— 不猜「默认第一个」。
 
-提示词与 2026-10 离线评测逐字一致 (scripts/jev-oss-eval/sim/mine_eval.py 的 Shortlist /
-Chooser), 改这里要同步重跑评测。
+提示词起点是 2026-10-02 的离线评测 (scripts/jev-oss-eval/sim/mine_eval.py 的 Shortlist /
+Chooser)。粗选 system 提示至今逐字相同; 之后线上加了最近对话 (#875) 和「以上都不是 /
+需要先问清楚」出口 (#880), 评测脚本没有跟进, 两边已不再逐字一致。改这里要同步重跑评测。
 """
 from __future__ import annotations
 
