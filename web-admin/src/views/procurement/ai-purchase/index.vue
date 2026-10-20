@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
@@ -19,6 +19,11 @@ interface Option { id: string; name: string; code?: string | null }
 const router = useRouter();
 const auth = useAuthStore();
 const factoryId = computed(() => String(auth.factoryId || ''));
+const userId = computed(() => String(auth.user?.id || ''));
+const scopeKey = computed(() => `${factoryId.value}:${userId.value}`);
+let generation = 0;
+let mounted = true;
+const isCurrent = (scope: string, run: number) => mounted && scopeKey.value === scope && generation === run;
 const suppliers = ref<Option[]>([]);
 const materials = ref<Option[]>([]);
 const loading = ref(false);
@@ -40,6 +45,9 @@ const previewed = computed(() => Boolean(previewResponse.value));
 const supplierName = computed(() => suppliers.value.find((x) => x.id === form.value.supplierId)?.name || form.value.supplierId);
 const materialName = computed(() => materials.value.find((x) => x.id === form.value.materialTypeId)?.name || form.value.materialTypeId);
 const amountText = computed(() => {
+  if (!form.value.quantity || !form.value.unitPrice || !form.value.taxRate) {
+    return { net: '--', tax: '--', gross: '--' };
+  }
   const quantity = Number(form.value.quantity);
   const price = Number(form.value.unitPrice);
   const rate = Number(form.value.taxRate);
@@ -58,8 +66,10 @@ const canonicalRows = computed(() => {
   const item = Array.isArray(request?.items) ? request.items[0] as Record<string, unknown> | undefined : undefined;
   const canonicalSupplierId = String(request?.supplierId || '');
   const canonicalMaterialId = String(item?.materialTypeId || '');
-  const canonicalSupplierName = suppliers.value.find((x) => x.id === canonicalSupplierId)?.name || canonicalSupplierId;
-  const canonicalMaterialName = materials.value.find((x) => x.id === canonicalMaterialId)?.name || canonicalMaterialId;
+  const canonicalSupplierName = suppliers.value.find((x) => x.id === canonicalSupplierId)?.name
+    ? `${suppliers.value.find((x) => x.id === canonicalSupplierId)?.name} (ID: ${canonicalSupplierId})` : canonicalSupplierId;
+  const canonicalMaterialName = materials.value.find((x) => x.id === canonicalMaterialId)?.name
+    ? `${materials.value.find((x) => x.id === canonicalMaterialId)?.name} (ID: ${canonicalMaterialId})` : canonicalMaterialId;
   const format = (value: unknown) => value == null || value === '' ? '--' : String(value);
   return [
     ['供应商', canonicalSupplierName || format(request?.supplierId)],
@@ -74,22 +84,18 @@ const canonicalRows = computed(() => {
     ['含税预算上限', `${format(source.amountCap)} CNY`],
   ];
 });
-const storageKey = computed(() => `cretas:controlled-purchase:${factoryId.value}`);
-
-function extractGrantId(response: IntentExecuteResponse): string {
-  const result = response.resultData as Record<string, unknown> | null | undefined;
-  const action = response.confirmableAction;
-  const preview = action?.previewData as Record<string, unknown> | null | undefined;
-  return String(result?.grantId || preview?.grantId || '').trim();
-}
+const storageKey = computed(() => `cretas:controlled-purchase:${scopeKey.value}`);
 
 async function loadReferences(): Promise<void> {
   if (!factoryId.value) return;
+  const scope = scopeKey.value;
+  const run = generation;
   const [supplierResponse, materialResponse] = await Promise.all([
     get<Option[]>(`/${factoryId.value}/suppliers/active`),
     get<Option[]>(`/${factoryId.value}/raw-material-types/active`),
   ]);
   if (!supplierResponse.success || !materialResponse.success) throw new Error('供应商或原料读取失败，页面已锁定');
+  if (!isCurrent(scope, run)) return;
   suppliers.value = supplierResponse.data ?? [];
   materials.value = materialResponse.data ?? [];
 }
@@ -98,17 +104,30 @@ async function recover(): Promise<void> {
   if (!factoryId.value) { recoveryReady.value = true; return; }
   const saved = localStorage.getItem(storageKey.value);
   if (!saved) { recoveryReady.value = true; return; }
+  const scope = scopeKey.value;
+  const run = generation;
   try {
     const parsed = JSON.parse(saved) as { grantId?: string };
     if (!parsed.grantId) return;
     recoveryLoading.value = true;
     grantId.value = parsed.grantId;
     const outcome = await getControlledPurchaseStatus(factoryId.value, parsed.grantId);
+    if (!isCurrent(scope, run)) return;
     recoveryState.value = outcome.state;
     recoveryVersion.value = outcome.version ?? null;
     if (outcome.state === 'DRAFT' && outcome.purchaseOrderId) {
       draftOrderId.value = outcome.purchaseOrderId;
       blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
+      return;
+    }
+    if (outcome.state === 'DRAFT' && !outcome.purchaseOrderId) {
+      recoveryState.value = 'UNKNOWN';
+      blockedReason.value = '采购草稿状态缺少订单号，请刷新授权状态后再继续。';
+      return;
+    }
+    if (outcome.state === 'FAILED') {
+      previewResponse.value = null;
+      blockedReason.value = '服务器已确认本次采购失败。核对失败原因后，可明确开始一笔新采购。';
       return;
     }
     if (outcome.state !== 'REVOKED' && outcome.state !== 'EXPIRED') {
@@ -119,11 +138,18 @@ async function recover(): Promise<void> {
       localStorage.removeItem(storageKey.value);
       grantId.value = '';
       recoveryState.value = '';
+      recoveryVersion.value = null;
+      previewResponse.value = null;
+      blockedReason.value = '';
+      draftOrderId.value = '';
     }
   } catch (error) {
+    if (!isCurrent(scope, run)) return;
     blockedReason.value = error instanceof Error ? error.message : '无法读取采购恢复状态，请联系管理员。';
     recoveryState.value = 'RECOVERY_ERROR';
-  } finally { recoveryLoading.value = false; recoveryReady.value = true; }
+  } finally {
+    if (isCurrent(scope, run)) { recoveryLoading.value = false; recoveryReady.value = true; }
+  }
 }
 
 async function refreshRecovery(): Promise<void> {
@@ -143,16 +169,23 @@ function acknowledgeDraft(): void {
 }
 
 async function submitPreview(): Promise<void> {
-  if (previewed.value || blockedReason.value || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
+  if (loading.value || previewed.value || blockedReason.value || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
   if (!form.value.supplierId || !form.value.materialTypeId || !form.value.quantity || !form.value.unitPrice || !form.value.amountCap) {
     ElMessage.warning('请完整填写供应商、物料、数量、未税单价和含税预算');
     return;
   }
   loading.value = true;
+  const scope = scopeKey.value;
+  const run = generation;
   try {
     const response = await previewControlledPurchase(factoryId.value, { ...form.value });
-    const id = extractGrantId(response);
-    if (String(response.status).toUpperCase() !== 'PREVIEW' || !id || !response.confirmableAction) {
+    if (!isCurrent(scope, run)) return;
+    const resultId = String((response.resultData as Record<string, unknown> | null | undefined)?.grantId || '').trim();
+    const previewId = String((response.confirmableAction?.previewData as Record<string, unknown> | null | undefined)?.grantId || '').trim();
+    const id = resultId && resultId === previewId ? resultId : '';
+    if (String(response.status).toUpperCase() !== 'PREVIEW'
+      || String(response.intentCode || '').toUpperCase() !== 'PURCHASE_ORDER_CREATE'
+      || !/^preview-[1-9][0-9]*$/.test(id) || !response.confirmableAction) {
       throw new Error(response.message || '采购预览未通过，未生成确认凭据');
     }
     grantId.value = id;
@@ -160,15 +193,18 @@ async function submitPreview(): Promise<void> {
     recoveryVersion.value = null;
     previewResponse.value = response;
     localStorage.setItem(storageKey.value, JSON.stringify({ grantId: id }));
-  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '采购预览失败'); }
-  finally { loading.value = false; }
+  } catch (error) { if (isCurrent(scope, run)) ElMessage.error(error instanceof Error ? error.message : '采购预览失败'); }
+  finally { if (isCurrent(scope, run)) loading.value = false; }
 }
 
 async function cancelPreview(): Promise<boolean> {
   if (!grantId.value || cancelInFlight.value) return false;
   cancelInFlight.value = true;
+  const scope = scopeKey.value;
+  const run = generation;
   try {
     const outcome = await revokeControlledPurchase(factoryId.value, grantId.value, recoveryVersion.value, '用户取消受控采购预览');
+    if (!isCurrent(scope, run)) return false;
     if (outcome.state !== 'REVOKED') throw new Error('服务器未确认撤销，当前采购仍被锁定');
     localStorage.removeItem(storageKey.value);
     grantId.value = '';
@@ -177,8 +213,8 @@ async function cancelPreview(): Promise<boolean> {
     draftOrderId.value = '';
     previewResponse.value = null;
     return true;
-  } catch (error) { blockedReason.value = error instanceof Error ? error.message : '撤销失败，请先核对授权状态'; }
-  finally { cancelInFlight.value = false; }
+  } catch (error) { if (isCurrent(scope, run)) blockedReason.value = error instanceof Error ? error.message : '撤销失败，请先核对授权状态'; }
+  finally { if (isCurrent(scope, run)) cancelInFlight.value = false; }
   return false;
 }
 
@@ -186,14 +222,21 @@ function handleConfirmed(result: IntentExecuteResponse): void {
   const status = String(result.status || '').toUpperCase();
   if (status === 'SUCCESS') {
     const outcome = result.resultData as unknown as ControlledPurchaseOutcome | null;
-    if (outcome?.purchaseOrderId) {
+    const resultGrantId = String((result.resultData as Record<string, unknown> | null | undefined)?.grantId || '').trim();
+    if (resultGrantId === grantId.value && outcome?.purchaseOrderId) {
       draftOrderId.value = outcome.purchaseOrderId;
       recoveryState.value = 'DRAFT';
       blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
-    } else blockedReason.value = '采购草稿已创建，请到采购订单中查看，审批仍按独立OA流程进行。';
+    } else {
+      recoveryState.value = 'UNKNOWN';
+      blockedReason.value = '采购确认结果缺少匹配订单凭据，请刷新授权状态后再继续。';
+    }
   } else if (status === 'OUTCOME_UNKNOWN') {
     recoveryState.value = 'UNKNOWN';
     blockedReason.value = '采购结果待核对，请查看授权状态；禁止重新下单。';
+  } else {
+    recoveryState.value = 'UNKNOWN';
+    blockedReason.value = '采购确认未完成，请刷新授权状态后再继续。';
   }
 }
 
@@ -203,10 +246,40 @@ function handleUncertain(): void {
 }
 
 onMounted(async () => {
-  await recover();
-  try { await loadReferences(); }
-  catch (error) { blockedReason.value = error instanceof Error ? error.message : '基础数据读取失败，页面已锁定'; }
+  await initialize();
 });
+async function initialize(): Promise<void> {
+  const scope = scopeKey.value;
+  const run = generation;
+  recoveryReady.value = false;
+  await recover();
+  if (!isCurrent(scope, run)) return;
+  try { await loadReferences(); }
+  catch (error) {
+    if (isCurrent(scope, run) && !blockedReason.value) blockedReason.value = error instanceof Error ? error.message : '基础数据读取失败，页面已锁定';
+  }
+  if (isCurrent(scope, run)) recoveryReady.value = true;
+}
+watch(scopeKey, () => {
+  generation += 1;
+  grantId.value = '';
+  previewResponse.value = null;
+  blockedReason.value = '';
+  recoveryState.value = '';
+  draftOrderId.value = '';
+  recoveryVersion.value = null;
+  suppliers.value = [];
+  materials.value = [];
+  loading.value = false;
+  recoveryLoading.value = false;
+  cancelInFlight.value = false;
+  form.value = {
+    supplierId: '', materialTypeId: '', quantity: '', unit: 'kg', unitPrice: '',
+    currency: 'CNY', taxRate: '13', amountCap: '', expectedDeliveryDate: '', remark: '',
+  };
+  void initialize();
+});
+onBeforeUnmount(() => { mounted = false; generation += 1; });
 </script>
 
 <template>
@@ -215,8 +288,9 @@ onMounted(async () => {
     <el-alert v-if="recoveryLoading" title="正在读取上次采购状态…" type="info" :closable="false" />
     <el-alert v-if="blockedReason" :title="blockedReason" type="warning" :closable="false" class="state-alert" />
     <div v-if="draftOrderId" class="recovery-actions"><el-button link type="primary" @click="router.push(`/procurement/orders/${encodeURIComponent(draftOrderId)}`)">查看采购订单</el-button><el-button type="success" @click="acknowledgeDraft">已核对，开始新采购</el-button></div>
+    <div v-else-if="recoveryState === 'FAILED'" class="recovery-actions"><el-button @click="acknowledgeDraft">已核对失败，开始新采购</el-button></div>
     <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions"><el-button type="danger" @click="cancelPreview">撤销当前授权</el-button></div>
-    <div v-else-if="grantId && ['UNKNOWN', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><el-button type="warning" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button></div>
+    <div v-else-if="grantId && ['UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><el-button type="warning" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button></div>
     <el-card shadow="never" class="content-card">
       <el-form label-position="top" class="purchase-form">
       <el-form-item label="供应商"><el-select v-model="form.supplierId" filterable :disabled="!recoveryReady || previewed || Boolean(blockedReason)" placeholder="选择供应商"><el-option v-for="item in suppliers" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>

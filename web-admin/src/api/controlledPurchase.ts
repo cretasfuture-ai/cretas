@@ -1,5 +1,5 @@
-import request, { get, post } from '@/api/request';
-import type { IntentExecuteResponse } from '@/api/smartbi/intent-chat';
+import request, { post } from '@/api/request';
+import { getPurchaseTaskGrantStatus, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 
 export interface ControlledPurchaseOutcome {
   grantId: string;
@@ -46,14 +46,7 @@ export async function getControlledPurchaseStatus(
   factoryId: string,
   grantId: string,
 ): Promise<ControlledPurchaseOutcome> {
-  const response = await get<ControlledPurchaseOutcome>(
-    `/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}`,
-  );
-  if (!response.success || !response.data) throw new Error(response.message || '读取采购授权状态失败');
-  if (response.data.grantId !== grantId || !response.data.state) {
-    throw new Error('采购处理状态无法核对，请到采购模块查看。');
-  }
-  return response.data;
+  return getPurchaseTaskGrantStatus(factoryId, grantId);
 }
 
 export async function revokeControlledPurchase(
@@ -67,5 +60,8 @@ export async function revokeControlledPurchase(
     { expectedVersion, reason: reason.trim() },
   );
   if (!response.success || !response.data) throw new Error(response.message || '撤销采购授权失败');
+  if (response.data.grantId !== grantId || typeof response.data.state !== 'string') {
+    throw new Error('撤销结果与当前采购参考不匹配，请查询授权状态');
+  }
   return response.data;
 }

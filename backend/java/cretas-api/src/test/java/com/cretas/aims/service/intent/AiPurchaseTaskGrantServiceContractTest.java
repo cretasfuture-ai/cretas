@@ -180,7 +180,24 @@ class AiPurchaseTaskGrantServiceContractTest {
         } finally { cleanupConfirmed(second.getToken().getId()); }
     }
 
-    private com.cretas.aims.service.PreviewTokenService.ClaimResult confirmedPurchase() throws Exception {
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void pendingPreviewRevokeSurvivesLostResponseWithoutPurchaseOrBudgetWrite() throws Exception {
+        var token = pendingPurchase();
+        String id = ControlledPurchaseTaskExecutionService.grantId(token.getId());
+        long orders = purchaseOrderRepository.count();
+        long grants = repository.count();
+        try {
+            assertThat(controlled.status("F-1", id).state()).isEqualTo("PENDING");
+            assertThat(controlled.revoke("F-1", id, null, "user cancelled").state()).isEqualTo("REVOKED");
+            assertThat(controlled.status("F-1", id).state()).isEqualTo("REVOKED");
+            assertThat(previewTokens.claimToken(token.getToken(), "F-1", 42L, token.getCommandDigest()).isSuccess()).isFalse();
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.count()).isEqualTo(grants);
+        } finally { cleanupConfirmed(token.getId()); }
+    }
+
+    private com.cretas.aims.entity.intent.IntentPreviewToken pendingPurchase() throws Exception {
         seedPurchaseReferences();
         var http = new org.springframework.mock.web.MockHttpServletRequest();
         http.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
@@ -199,6 +216,11 @@ class AiPurchaseTaskGrantServiceContractTest {
         var token = previewTokens.createBoundToken(new com.cretas.aims.service.PreviewTokenService.BoundTokenRequest(
                 "F-1",42L,null,"PURCHASE_ORDER_CREATE","purchase","purchase_order_create","2.0.0",
                 com.cretas.aims.ai.tool.gateway.ToolExecutionMode.EXECUTE,null,null,null,parameters,java.util.Map.of(),parameters,300));
+        return token;
+    }
+
+    private com.cretas.aims.service.PreviewTokenService.ClaimResult confirmedPurchase() throws Exception {
+        var token = pendingPurchase();
         var claim = previewTokens.claimToken(token.getToken(),"F-1",42L,token.getCommandDigest());
         assertThat(claim.isSuccess()).isTrue();
         PurchaseServiceImpl real = realPurchaseService();

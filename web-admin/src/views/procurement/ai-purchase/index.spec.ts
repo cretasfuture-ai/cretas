@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+const authFixture = vi.hoisted(() => ({ current: undefined as { factoryId: string; user: { id: number } } | undefined }));
 
 const previewMock = vi.fn();
 const statusMock = vi.fn();
@@ -15,7 +16,12 @@ vi.mock('@/api/controlledPurchase', () => ({
 vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => getMock(...args),
 }));
-vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F001' }) }));
+vi.mock('@/store/modules/auth', async () => {
+  const { reactive } = await import('vue');
+  const state = reactive({ factoryId: 'F001', user: { id: 1553 } });
+  authFixture.current = state;
+  return { useAuthStore: () => state };
+});
 vi.mock('vue-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-router')>()),
   useRouter: () => ({ push: pushMock }),
@@ -51,6 +57,7 @@ function response(grantId = 'preview-7') {
 
 describe('AI controlled purchase page', () => {
   beforeEach(() => {
+    Object.assign(authFixture.current!, { factoryId: 'F001', user: { id: 1553 } });
     localStorage.clear(); previewMock.mockReset(); statusMock.mockReset(); revokeMock.mockReset(); pushMock.mockReset(); getMock.mockReset();
     getMock.mockImplementation((url: string) => url.includes('suppliers')
       ? Promise.resolve({ success: true, data: [{ id: 's1', name: '供应商甲' }] })
@@ -68,13 +75,13 @@ describe('AI controlled purchase page', () => {
     await vm.submitPreview();
     await flushPromises();
     expect(previewMock).toHaveBeenCalledWith('F001', expect.objectContaining({ supplierId: 's1', materialTypeId: 'm1', unit: 'kg', currency: 'CNY', taxRate: '13' }));
-    expect(localStorage.getItem('cretas:controlled-purchase:F001')).toContain('preview-7');
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toContain('preview-7');
     expect(wrapper.text()).toContain('AI 受控采购');
     expect((wrapper.findAll('button').find((b) => b.text().includes('生成预览'))?.element as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('recovery checks persisted status and links a durable draft without creating a new preview', async () => {
-    localStorage.setItem('cretas:controlled-purchase:F001', JSON.stringify({ grantId: 'preview-9' }));
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-9' }));
     statusMock.mockResolvedValue({ grantId: 'preview-9', state: 'DRAFT', purchaseOrderId: 'PO-9', version: 2 });
     const wrapper = mount(AiPurchasePage, { global: { stubs } });
     await flushPromises();
@@ -85,7 +92,7 @@ describe('AI controlled purchase page', () => {
   });
 
   it('recovery UNKNOWN blocks a new preview and cancel revokes server state first', async () => {
-    localStorage.setItem('cretas:controlled-purchase:F001', JSON.stringify({ grantId: 'preview-10' }));
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-10' }));
     statusMock.mockResolvedValue({ grantId: 'preview-10', state: 'UNKNOWN', version: 5 });
     const wrapper = mount(AiPurchasePage, { global: { stubs } });
     await flushPromises();
@@ -94,13 +101,29 @@ describe('AI controlled purchase page', () => {
     expect(wrapper.text()).toContain('刷新授权状态');
   });
 
+  it('refreshes UNKNOWN through the actual status button and keeps the grant locked until PENDING is acknowledged', async () => {
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-13' }));
+    statusMock
+      .mockResolvedValueOnce({ grantId: 'preview-13', state: 'UNKNOWN', version: 8 })
+      .mockResolvedValueOnce({ grantId: 'preview-13', state: 'PENDING', version: 9 });
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    const refresh = wrapper.findAll('button').find((button) => button.text().includes('刷新授权状态'));
+    expect(refresh).toBeDefined();
+    await refresh!.trigger('click');
+    await flushPromises();
+    expect(statusMock).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain('撤销当前授权');
+    expect(wrapper.text()).not.toContain('刷新授权状态');
+  });
+
   it('failed references keep a saved recovery blocked and never allow a new preview', async () => {
-    localStorage.setItem('cretas:controlled-purchase:F001', JSON.stringify({ grantId: 'preview-11' }));
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-11' }));
     statusMock.mockRejectedValue(new Error('状态服务不可用'));
     getMock.mockRejectedValue(new Error('供应商服务不可用'));
     const wrapper = mount(AiPurchasePage, { global: { stubs } });
     await flushPromises();
-    expect(wrapper.text()).toContain('供应商服务不可用');
+    expect(wrapper.text()).toContain('状态服务不可用');
     expect(previewMock).not.toHaveBeenCalled();
     expect((wrapper.vm as any).recoveryReady).toBe(true);
   });
@@ -108,7 +131,7 @@ describe('AI controlled purchase page', () => {
   it('does not allow preview while recovery is still pending, and restored PENDING can be revoked', async () => {
     let resolveStatus!: (value: unknown) => void;
     statusMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
-    localStorage.setItem('cretas:controlled-purchase:F001', JSON.stringify({ grantId: 'preview-12' }));
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-12' }));
     const wrapper = mount(AiPurchasePage, { global: { stubs } });
     await Promise.resolve();
     const previewButton = wrapper.findAll('button').find((button) => button.text().includes('生成预览'));
@@ -118,6 +141,94 @@ describe('AI controlled purchase page', () => {
     expect(wrapper.text()).toContain('撤销当前授权');
     await wrapper.findAll('button').find((button) => button.text().includes('撤销当前授权'))!.trigger('click');
     expect(revokeMock).toHaveBeenCalledWith('F001', 'preview-12', 7, expect.any(String));
+  });
+
+  it.each(['REVOKED', 'EXPIRED'])('clears %s recovery before allowing a fresh preview', async (state) => {
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-14' }));
+    statusMock.mockResolvedValue({ grantId: 'preview-14', state, version: 10 });
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toBeNull();
+    expect((wrapper.vm as any).grantId).toBe('');
+    expect((wrapper.vm as any).recoveryVersion).toBeNull();
+    expect((wrapper.vm as any).previewResponse).toBeNull();
+    expect((wrapper.vm as any).blockedReason).toBe('');
+    const previewButton = wrapper.findAll('button').find((button) => button.text().includes('生成预览'));
+    expect((previewButton?.element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('rejects a non-canonical preview grant when result and preview references do not match', async () => {
+    previewMock.mockResolvedValue({
+      ...response('preview-15'),
+      resultData: { grantId: 'preview-15' },
+      confirmableAction: { ...response('preview-15').confirmableAction, previewData: { grantId: 'preview-16' } },
+    });
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    Object.assign(vm.form, { supplierId: 's1', materialTypeId: 'm1', quantity: '2', unitPrice: '10', amountCap: '22.60' });
+    await vm.submitPreview();
+    expect(vm.previewResponse).toBeNull();
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toBeNull();
+  });
+
+  it('locks a matching-grant FAILED confirmation into status-only recovery', async () => {
+    previewMock.mockResolvedValue(response('preview-18'));
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    Object.assign(vm.form, { supplierId: 's1', materialTypeId: 'm1', quantity: '2', unitPrice: '10', amountCap: '22.60' });
+    await vm.submitPreview();
+    vm.handleConfirmed({ status: 'FAILED', resultData: { grantId: 'preview-18' } });
+    expect(vm.recoveryState).toBe('UNKNOWN');
+    expect(vm.blockedReason).toContain('刷新授权状态');
+    expect(previewMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a late recovery response after unmount and does not recreate scoped state', async () => {
+    let resolveStatus!: (value: unknown) => void;
+    statusMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-17' }));
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await Promise.resolve();
+    wrapper.unmount();
+    resolveStatus({ grantId: 'preview-17', state: 'DRAFT', purchaseOrderId: 'PO-17', version: 11 });
+    await flushPromises();
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toContain('preview-17');
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('requires an explicit new-task action after a durable FAILED status readback', async () => {
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-19' }));
+    statusMock.mockResolvedValue({ grantId: 'preview-19', state: 'FAILED' });
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    expect(previewMock).not.toHaveBeenCalled();
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toContain('preview-19');
+    await wrapper.findAll('button').find((b) => b.text() === '已核对失败，开始新采购')!.trigger('click');
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toBeNull();
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it('discards a rejected revoke after a user/factory switch and resets old form data', async () => {
+    localStorage.setItem('cretas:controlled-purchase:F001:1553', JSON.stringify({ grantId: 'preview-20' }));
+    let rejectRevoke!: (error: Error) => void;
+    revokeMock.mockReturnValue(new Promise((_, reject) => { rejectRevoke = reject; }));
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.remark = 'old private remark';
+    await wrapper.findAll('button').find((b) => b.text() === '撤销当前授权')!.trigger('click');
+    Object.assign(authFixture.current!, { factoryId: 'F002', user: { id: 1554 } });
+    await flushPromises();
+    rejectRevoke(new Error('old tenant revoke error'));
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('old tenant revoke error');
+    expect(vm.form.remark).toBe('');
+    expect(vm.grantId).toBe('');
+    expect(vm.recoveryLoading).toBe(false);
+    expect(vm.cancelInFlight).toBe(false);
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toContain('preview-20');
   });
 
   it('exposes the procurement scoped route and menu child without analytics permission', () => {

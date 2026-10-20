@@ -175,6 +175,7 @@ public class ControlledPurchaseTaskExecutionService {
         IntentPreviewToken token = tokenRepository.findById(preview).orElseThrow(() -> denied("未找到当前用户的预览"));
         requireToken(token, factoryId, actor.id());
         String state = token.getStatus() == IntentPreviewToken.TokenStatus.EXECUTING ? "UNKNOWN" : token.getStatus().name();
+        if (token.getStatus() == IntentPreviewToken.TokenStatus.CANCELLED) state = "REVOKED";
         if (token.getStatus() == IntentPreviewToken.TokenStatus.PENDING && !LocalDateTime.now().isBefore(token.getExpiresAt())) state = "EXPIRED";
         return new Outcome(id, state, null, null, null, null, false);
     }

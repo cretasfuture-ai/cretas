@@ -16,17 +16,20 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Loading, WarningFilled, InfoFilled, Lock, Clock, CircleCheckFilled } from '@element-plus/icons-vue';
 import { confirmIntentAction, getPurchaseTaskGrantStatus, type IntentExecuteResponse, type PurchaseTaskOutcome } from '@/api/smartbi/intent-chat';
+import { revokeControlledPurchase } from '@/api/controlledPurchase';
 import { permissionDisplayName } from './permissionNames';
 import { previewRows, isDiffPreview, type PreviewRow } from './aiWriteConfirmRows';
 
 const props = defineProps<{
   response: IntentExecuteResponse;
   factoryId: string;
+  cancelHandler?: (grantId: string) => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
   (e: 'confirmed', result: IntentExecuteResponse): void;
   (e: 'cancelled'): void;
+  (e: 'uncertain'): void;
 }>();
 
 const status = computed(() => String(props.response.status || '').toUpperCase());
@@ -96,6 +99,8 @@ function responseReference(response: IntentExecuteResponse): { id: string; incon
 }
 const recoveryGrantId = computed(() => resultGrantId.value || responseReference(props.response).id);
 const isUnknown = computed(() => phase.value === 'unknown' || status.value === 'OUTCOME_UNKNOWN');
+const isCanonicalPurchase = computed(() => props.response.intentCode === 'PURCHASE_ORDER_CREATE' || Boolean(recoveryGrantId.value));
+watch(isUnknown, (unknown) => { if (unknown && isCanonicalPurchase.value) emit('uncertain'); });
 const recoveryMessage = computed(() => {
   const state = recovery.value?.state.toUpperCase();
   if (!state) return '提交结果待核对，请先查询处理结果，避免重复下单。';
@@ -146,6 +151,7 @@ function startCountdown() {
   const seconds = confirmable.value?.expiresInSeconds;
   if (typeof seconds !== 'number' || seconds <= 0) {
     remainingSeconds.value = typeof seconds === 'number' ? 0 : null;
+    if (seconds === 0 && isCanonicalPurchase.value && phase.value === 'idle') phase.value = 'unknown';
     return;
   }
   remainingSeconds.value = Math.floor(seconds);
@@ -155,6 +161,7 @@ function startCountdown() {
     }
     if (remainingSeconds.value !== null && remainingSeconds.value <= 0) {
       stopCountdown();
+      if (isCanonicalPurchase.value && phase.value === 'idle') phase.value = 'unknown';
     }
   }, 1000);
 }
@@ -181,7 +188,7 @@ watch(
   { immediate: true },
 );
 
-onBeforeUnmount(stopCountdown);
+onBeforeUnmount(() => { responseGeneration += 1; stopCountdown(); });
 
 async function handleConfirm() {
   const action = confirmable.value;
@@ -229,7 +236,8 @@ async function handleConfirm() {
     }
     resultStatus.value = String(result.status || '').toUpperCase();
     resultGrantId.value = frozenGrantId || returnedReference.id;
-    phase.value = resultStatus.value === 'OUTCOME_UNKNOWN' ? 'unknown' : 'done';
+    phase.value = resultStatus.value === 'OUTCOME_UNKNOWN'
+      || (isCanonicalPurchase.value && resultStatus.value !== 'SUCCESS') ? 'unknown' : 'done';
     resultMessage.value = result.message || result.formattedText
       || (resultStatus.value === 'SUCCESS' ? '操作已执行。' : '操作未完成。');
     emit('confirmed', result);
@@ -251,7 +259,28 @@ async function handleConfirm() {
   }
 }
 
-function handleCancel() {
+async function handleCancel() {
+  if (phase.value !== 'idle') return;
+  if (isCanonicalPurchase.value) {
+    const grantId = recoveryGrantId.value;
+    if (!grantId || responseReference(props.response).inconsistent) {
+      phase.value = 'unknown';
+      return;
+    }
+    const generation = responseGeneration;
+    const factoryId = props.factoryId;
+    phase.value = 'pending';
+    let acknowledged = false;
+    try {
+      if (props.cancelHandler) acknowledged = await props.cancelHandler(grantId);
+      else {
+        const result = await revokeControlledPurchase(factoryId, grantId, null, '用户取消采购预览');
+        acknowledged = result.grantId === grantId && result.state === 'REVOKED';
+      }
+    } catch { acknowledged = false; }
+    if (generation !== responseGeneration || factoryId !== props.factoryId) return;
+    if (!acknowledged) { phase.value = 'unknown'; return; }
+  }
   stopCountdown();
   phase.value = 'cancelled';
   emit('cancelled');
