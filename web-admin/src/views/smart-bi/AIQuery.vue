@@ -1284,7 +1284,7 @@ function isRestaurantAnalysisContinuation(query: string): boolean {
 // 操作卡状态集合 (除 READ_MODE_WRITE_BLOCKED, 它渲染咨询 tab 拦截卡)
 const OPERATION_CARD_STATUSES = new Set([
   'WRITE_CONFIRM_REQUIRED', 'PREVIEW', 'DEMO_WRITE_BLOCKED',
-  'PENDING_APPROVAL', 'NO_PERMISSION', 'PERMISSION_DENIED',
+  'PENDING_APPROVAL', 'NO_PERMISSION', 'PERMISSION_DENIED', 'OUTCOME_UNKNOWN',
 ]);
 
 function isReadBlockedMessage(message: ChatMessage): boolean {

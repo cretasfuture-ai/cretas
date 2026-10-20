@@ -15,22 +15,18 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Loading, WarningFilled, InfoFilled, Lock, Clock, CircleCheckFilled } from '@element-plus/icons-vue';
-import { confirmIntentAction, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
+import { confirmIntentAction, getPurchaseTaskGrantStatus, type IntentExecuteResponse, type PurchaseTaskOutcome } from '@/api/smartbi/intent-chat';
 import { permissionDisplayName } from './permissionNames';
 import { previewRows, isDiffPreview, type PreviewRow } from './aiWriteConfirmRows';
 
 const props = defineProps<{
   response: IntentExecuteResponse;
   factoryId: string;
-  /** Canonical purchase cancellation must be acknowledged by the server first. */
-  cancelHandler?: (grantId: string) => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
   (e: 'confirmed', result: IntentExecuteResponse): void;
   (e: 'cancelled'): void;
-  /** Canonical purchase outcomes require status reconciliation before any retry. */
-  (e: 'uncertain'): void;
 }>();
 
 const status = computed(() => String(props.response.status || '').toUpperCase());
@@ -48,7 +44,14 @@ const confirmable = computed(() => props.response.confirmableAction ?? null);
 
 // ── 预览行: 与 RN aiWriteConfirm.previewRows 同一套规则 (H3 / V3) ───────────
 // 有 label 的键 + 中文键显示, 无 label 的英文键不显示; 对象值按「键：值」逐项, 不 JSON.stringify。
-const rows = computed<PreviewRow[]>(() => previewRows(confirmable.value));
+const rows = computed<PreviewRow[]>(() => {
+  const action = confirmable.value;
+  if (!action?.previewData) return previewRows(action);
+  return previewRows({
+    ...action,
+    previewData: Object.fromEntries(Object.entries(action.previewData).filter(([key]) => key !== 'grantId')),
+  });
+});
 const isDiff = computed(() => isDiffPreview(confirmable.value));
 
 // ── 写操作影响契约 (2026-07-24): 改前/改后对比 + 影响说明 + 双重确认 ──────
@@ -70,10 +73,62 @@ const isDestructive = computed(() => {
 });
 
 // ── 确认/取消 状态机 ────────────────────────────────────────────────────
-type Phase = 'idle' | 'pending' | 'done' | 'uncertain' | 'cancelled';
+type Phase = 'idle' | 'pending' | 'done' | 'unknown' | 'cancelled';
 const phase = ref<Phase>('idle');
 const resultMessage = ref('');
 const resultStatus = ref('');
+const resultGrantId = ref('');
+const checkingStatus = ref(false);
+const recovery = ref<PurchaseTaskOutcome | null>(null);
+const recoveryError = ref('');
+const referenceError = ref('');
+const confirmationError = ref('');
+let responseGeneration = 0;
+
+function responseReference(response: IntentExecuteResponse): { id: string; inconsistent: boolean } {
+  const result = response.resultData?.grantId;
+  const preview = response.confirmableAction?.previewData?.grantId;
+  const invalid = (value: unknown) => value != null && (typeof value !== 'string' || !value.trim());
+  if (invalid(result) || invalid(preview) || (result && preview && result !== preview)) {
+    return { id: '', inconsistent: true };
+  }
+  return { id: typeof result === 'string' ? result : typeof preview === 'string' ? preview : '', inconsistent: false };
+}
+const recoveryGrantId = computed(() => resultGrantId.value || responseReference(props.response).id);
+const isUnknown = computed(() => phase.value === 'unknown' || status.value === 'OUTCOME_UNKNOWN');
+const recoveryMessage = computed(() => {
+  const state = recovery.value?.state.toUpperCase();
+  if (!state) return '提交结果待核对，请先查询处理结果，避免重复下单。';
+  if (state === 'DRAFT' && recovery.value?.purchaseOrderId) {
+    return '采购草稿已创建，请在采购模块查看并按原流程提交审批。';
+  }
+  if (state === 'REVOKED') return '本次处理已撤销，请先到采购模块核对单据。';
+  if (state === 'EXPIRED') return '本次确认已过期，请先到采购模块核对单据。';
+  if (state === 'FAILED') return '本次处理未完成，请先到采购模块核对单据。';
+  if (state === 'PENDING') return '本次处理尚待确认，请先核对采购模块，勿重复提交。';
+  return '处理结果仍待核对，请稍后查询，勿重复提交。';
+});
+
+async function handleCheckStatus() {
+  if (checkingStatus.value || !recoveryGrantId.value) return;
+  const factoryId = props.factoryId;
+  const grantId = recoveryGrantId.value;
+  const generation = responseGeneration;
+  checkingStatus.value = true;
+  recoveryError.value = '';
+  try {
+    const outcome = await getPurchaseTaskGrantStatus(factoryId, grantId);
+    if (generation !== responseGeneration || factoryId !== props.factoryId || grantId !== recoveryGrantId.value) return;
+    if (outcome.grantId !== grantId) throw new Error('处理参考不一致');
+    recovery.value = outcome;
+  } catch {
+    if (generation === responseGeneration) {
+      recoveryError.value = '暂时无法查询，请稍后重试或到采购模块核对。请勿重复提交。';
+    }
+  } finally {
+    if (generation === responseGeneration) checkingStatus.value = false;
+  }
+}
 
 // ── 过期倒计时 (Rule 1: 预先显示边界) ───────────────────────────────────
 const remainingSeconds = ref<number | null>(null);
@@ -100,29 +155,26 @@ function startCountdown() {
     }
     if (remainingSeconds.value !== null && remainingSeconds.value <= 0) {
       stopCountdown();
-      if (isCanonicalPurchase.value) {
-        phase.value = 'uncertain';
-        resultStatus.value = 'OUTCOME_UNKNOWN';
-        resultMessage.value = '确认凭据已超时，结果待核对；请先查看授权状态，禁止重新下单。';
-        emit('uncertain');
-      }
     }
   }, 1000);
 }
 
 const isExpired = computed(() => remainingSeconds.value !== null && remainingSeconds.value <= 0);
-const isCanonicalPurchase = computed(() => (
-  String(props.response.intentCode || '').toUpperCase() === 'PURCHASE_ORDER_CREATE'
-  || Boolean((confirmable.value?.previewData as Record<string, unknown> | null | undefined)?.grantId)
-));
 
 watch(
-  () => props.response,
+  () => [props.response, props.factoryId],
   () => {
+    responseGeneration += 1;
     // 父组件把 WRITE_CONFIRM_REQUIRED 换成 PREVIEW 响应时重置本卡状态。
     phase.value = 'idle';
     resultMessage.value = '';
     resultStatus.value = '';
+    resultGrantId.value = '';
+    checkingStatus.value = false;
+    recovery.value = null;
+    recoveryError.value = '';
+    referenceError.value = '';
+    confirmationError.value = '';
     if (status.value === 'PREVIEW' && confirmable.value) startCountdown();
     else stopCountdown();
   },
@@ -133,7 +185,16 @@ onBeforeUnmount(stopCountdown);
 
 async function handleConfirm() {
   const action = confirmable.value;
-  if (!action || phase.value === 'pending' || isExpired.value) return;
+  if (!action || phase.value !== 'idle' || isExpired.value || confirmationError.value) return;
+  const previewReference = responseReference(props.response);
+  if (previewReference.inconsistent || (props.response.intentCode === 'PURCHASE_ORDER_CREATE' && !previewReference.id)) {
+    confirmationError.value = '确认请求未发送：处理参考无法核对，请重新生成预览或到采购模块查看。';
+    return;
+  }
+  const frozenGrantId = previewReference.id;
+  const generation = responseGeneration;
+  const factoryId = props.factoryId;
+  phase.value = 'pending';
   // 双重确认 (2026-07-24 写操作契约): 预览卡按钮是第一道, 这里弹含影响
   // 摘要的二次确认是第二道 — 用户在看过对比和影响后再点一次才执行。
   try {
@@ -147,50 +208,50 @@ async function handleConfirm() {
       },
     );
   } catch {
+    if (generation === responseGeneration) phase.value = 'idle';
     return; // 用户在二次确认处取消 — 卡片保持可再次确认
   }
-  phase.value = 'pending';
+  if (generation !== responseGeneration || factoryId !== props.factoryId) return;
   try {
-    const result = await confirmIntentAction(props.factoryId, action.confirmToken, {
+    const result = await confirmIntentAction(factoryId, action.confirmToken, {
       commandDigest: action.commandDigest,
       expiresAt: action.expiresAt,
     });
+    if (generation !== responseGeneration || factoryId !== props.factoryId) return;
     stopCountdown();
+    const returnedReference = responseReference(result);
+    if (returnedReference.inconsistent || (frozenGrantId && returnedReference.id !== frozenGrantId)) {
+      resultGrantId.value = frozenGrantId;
+      referenceError.value = '返回的处理参考无法与本次预览核对，请查询本次处理结果，勿重复提交。';
+      resultStatus.value = 'OUTCOME_UNKNOWN';
+      phase.value = 'unknown';
+      return;
+    }
     resultStatus.value = String(result.status || '').toUpperCase();
+    resultGrantId.value = frozenGrantId || returnedReference.id;
+    phase.value = resultStatus.value === 'OUTCOME_UNKNOWN' ? 'unknown' : 'done';
     resultMessage.value = result.message || result.formattedText
       || (resultStatus.value === 'SUCCESS' ? '操作已执行。' : '操作未完成。');
-    phase.value = resultStatus.value === 'OUTCOME_UNKNOWN' && isCanonicalPurchase.value ? 'uncertain' : 'done';
     emit('confirmed', result);
-    if (phase.value === 'uncertain') emit('uncertain');
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (isCanonicalPurchase.value) {
-      stopCountdown();
-      phase.value = 'uncertain';
-      resultStatus.value = 'OUTCOME_UNKNOWN';
-      resultMessage.value = `确认请求未能确定结果：${msg}。请先查看授权状态，禁止重新下单。`;
-      emit('uncertain');
-    } else {
+    if (generation !== responseGeneration || factoryId !== props.factoryId) return;
+    if (e instanceof Error && 'confirmationNotSent' in e && e.confirmationNotSent === true) {
+      confirmationError.value = e.message;
       phase.value = 'idle';
-      ElMessage({ message: `确认执行失败: ${msg}`, type: 'error', duration: 0, showClose: true });
+      return;
     }
+    if (recoveryGrantId.value || props.response.intentCode === 'PURCHASE_ORDER_CREATE') {
+      stopCountdown();
+      phase.value = 'unknown';
+      return;
+    }
+    phase.value = 'idle';
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: `确认执行失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   }
 }
 
-async function handleCancel() {
-  if (isCanonicalPurchase.value && props.cancelHandler) {
-    const grantId = String((confirmable.value?.previewData as Record<string, unknown> | null | undefined)?.grantId || '');
-    if (!grantId || phase.value === 'pending') return;
-    phase.value = 'pending';
-    const acknowledged = await props.cancelHandler(grantId);
-    if (!acknowledged) {
-      phase.value = 'uncertain';
-      resultStatus.value = 'OUTCOME_UNKNOWN';
-      resultMessage.value = '撤销尚未得到服务器确认，当前采购仍被锁定；请查询授权状态。';
-      emit('uncertain');
-      return;
-    }
-  }
+function handleCancel() {
   stopCountdown();
   phase.value = 'cancelled';
   emit('cancelled');
@@ -202,6 +263,22 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
 <template>
   <!-- 已取消 → 收起成一行 -->
   <div v-if="phase === 'cancelled'" class="op-card-cancelled">已取消</div>
+
+  <div v-else-if="isUnknown" class="op-card op-card--confirm" data-testid="purchase-outcome-recovery" aria-live="polite">
+    <div class="op-card-header">
+      <el-icon><WarningFilled /></el-icon>
+      <span>{{ recovery?.state === 'DRAFT' && recovery.purchaseOrderId ? '采购草稿已创建' : '采购处理结果待核对' }}</span>
+    </div>
+    <div class="op-card-body">
+      <p>{{ recoveryMessage }}</p>
+      <p v-if="referenceError" role="alert">{{ referenceError }}</p>
+      <p v-if="recoveryError" role="alert">{{ recoveryError }}</p>
+      <p v-if="!recoveryGrantId">缺少处理参考，请到采购模块核对，勿重复提交。</p>
+    </div>
+    <div v-if="recoveryGrantId" class="op-card-footer">
+      <el-button :loading="checkingStatus" :disabled="checkingStatus" @click="handleCheckStatus">查询处理结果</el-button>
+    </div>
+  </div>
 
   <!-- WRITE_CONFIRM_REQUIRED: 过渡态, 父组件正在自动生成预览 -->
   <div v-else-if="status === 'WRITE_CONFIRM_REQUIRED'" class="op-card op-card--confirm">
@@ -222,7 +299,7 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
       <span>{{ intentName }} — 操作预览</span>
     </div>
     <!-- 确认成功后卡体替换为结果 -->
-    <div v-if="phase === 'done' || phase === 'uncertain'" class="op-card-body">
+    <div v-if="phase === 'done'" class="op-card-body">
       <div class="op-card-result">
         <el-icon v-if="resultStatus === 'SUCCESS'" class="op-result-icon-success"><CircleCheckFilled /></el-icon>
         <el-icon v-else><InfoFilled /></el-icon>
@@ -230,8 +307,9 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
         <el-tag v-if="resultStatus === 'DEMO_WRITE_BLOCKED'" type="info" size="small" effect="plain">演示环境</el-tag>
       </div>
     </div>
-    <template v-else-if="phase !== 'uncertain'">
+    <template v-else>
       <div class="op-card-body">
+        <p v-if="confirmationError" role="alert">{{ confirmationError }}</p>
         <div v-if="confirmable.description" class="op-card-description">{{ confirmable.description }}</div>
         <!-- 影响说明 (写操作契约: 修改后的影响解释) -->
         <el-alert
@@ -268,7 +346,7 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
           type="primary"
           size="default"
           :loading="phase === 'pending'"
-          :disabled="phase === 'pending' || isExpired"
+          :disabled="phase === 'pending' || isExpired || !!confirmationError"
           @click="handleConfirm"
         >确认执行</el-button>
         <el-button size="default" :disabled="phase === 'pending'" @click="handleCancel">取消</el-button>
