@@ -213,6 +213,7 @@ jobs:
           NIGHTLY_XMX="${CRETAS_JAVA_NIGHTLY_XMX:-${CRETAS_JAVA_FORK_XMX:-3g}}"
           echo "READING: JAVA_NIGHTLY_XMX=$NIGHTLY_XMX runner=${RUNNER_NAME:-?}"
           export MVN NIGHTLY_XMX
+          /usr/bin/time -v -o "$RUNNER_TEMP/java-full-resources.txt" \
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash -c '
             set -euo pipefail
             env -u CRETAS_WORKFLOW_PG_VERIFY \
@@ -318,6 +319,41 @@ jobs:
           echo "RATCHET_RC=$rc"
           exit 0
 
+      - name: Record normalized testcase inventory
+        if: always()
+        working-directory: backend/java/cretas-api
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import collections, hashlib, json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+          reports = sorted(pathlib.Path('target/surefire-reports').glob('TEST-*.xml'))
+          if not reports:
+              raise SystemExit('No testcase reports available for inventory')
+          cases, totals = [], collections.Counter()
+          for path in reports:
+              root = ET.parse(path).getroot()
+              for field in ('tests', 'failures', 'errors', 'skipped'):
+                  totals[field] += int(root.get(field, '0'))
+              for case in root.iter('testcase'):
+                  classname, name = case.get('classname', ''), case.get('name', '')
+                  if not classname or not name:
+                      raise SystemExit('Testcase identity missing')
+                  identity = hashlib.sha256((classname + '\0' + name).encode()).hexdigest()
+                  state = ('error' if case.find('error') is not None else 'failed' if case.find('failure') is not None
+                           else 'skipped' if case.find('skipped') is not None else 'passed')
+                  cases.append({'id': identity, 'class': classname, 'state': state, 'report': path.name})
+          if not cases:
+              raise SystemExit('No testcases available for inventory')
+          result = {'schemaVersion': 1, 'actualHead': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'actualTree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+                    'reportCount': len(reports), 'caseObservations': len(cases), 'uniqueCaseCount': len({c['id'] for c in cases}),
+                    'statusObservations': dict(collections.Counter(c['state'] for c in cases)),
+                    'suiteReportedTotals': dict(totals), 'cases': cases}
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'java-case-inventory.json'
+          output.write_text(json.dumps(result, sort_keys=True, separators=(',', ':')), encoding='utf-8')
+          print('JAVA_CASE_INVENTORY=' + json.dumps({k: v for k, v in result.items() if k != 'cases'}, sort_keys=True))
+          PY
+
       - name: 上传本次的失败名单（便于重新落基线）
         if: always()
         # ⛔ 诊断制品上传失败不许判死这道闸 —— 它是给人事后查的, 不是判据本身。
@@ -333,6 +369,8 @@ jobs:
           path: |
             /tmp/ratchet.log
             backend/java/cretas-api/known-failing-tests.txt
+            ${{ runner.temp }}/java-full-resources.txt
+            ${{ runner.temp }}/java-case-inventory.json
           if-no-files-found: warn
 
       # 🔴 2026-08-27 补的洞: 三态判定**只列了 0/1/2**, 于是任何**第四种**退出码
