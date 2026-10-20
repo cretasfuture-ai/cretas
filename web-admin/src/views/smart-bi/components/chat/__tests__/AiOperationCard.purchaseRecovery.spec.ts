@@ -68,6 +68,7 @@ describe('AiOperationCard canonical purchase recovery', () => {
     await flushPromises();
     expect(grantStatusMock).toHaveBeenCalledWith('F001', 'preview-1');
     expect(wrapper.text()).toContain('尚待确认');
+    expect(wrapper.emitted('recovered')).toEqual([[expect.objectContaining({ grantId: 'preview-1', state: 'PENDING', version: 4 })]]);
   });
 
   it('accepts a canonical SUCCESS only when the returned grant reference matches the preview', async () => {

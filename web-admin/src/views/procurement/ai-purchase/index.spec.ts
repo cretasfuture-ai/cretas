@@ -5,6 +5,9 @@ const authFixture = vi.hoisted(() => ({ current: undefined as { factoryId: strin
 const previewMock = vi.fn();
 const statusMock = vi.fn();
 const revokeMock = vi.fn();
+const confirmMock = vi.fn();
+const grantStatusMock = vi.fn();
+const boxMock = vi.fn(async () => 'confirm');
 const pushMock = vi.fn();
 const getMock = vi.fn();
 
@@ -16,6 +19,10 @@ vi.mock('@/api/controlledPurchase', () => ({
 vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => getMock(...args),
 }));
+vi.mock('@/api/smartbi/intent-chat', () => ({
+  confirmIntentAction: (...args: unknown[]) => confirmMock(...args),
+  getPurchaseTaskGrantStatus: (...args: unknown[]) => grantStatusMock(...args),
+}));
 vi.mock('@/store/modules/auth', async () => {
   const { reactive } = await import('vue');
   const state = reactive({ factoryId: 'F001', user: { id: 1553 } });
@@ -26,10 +33,14 @@ vi.mock('vue-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-router')>()),
   useRouter: () => ({ push: pushMock }),
 }));
-vi.mock('element-plus', () => ({ ElMessage: { warning: vi.fn(), error: vi.fn() } }));
-vi.mock('@/views/smart-bi/components/chat/AiOperationCard.vue', () => ({
-  default: { name: 'AiOperationCard', props: ['response', 'factoryId'], template: '<div data-testid="operation-card" />' },
-}));
+vi.mock('element-plus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('element-plus')>();
+  return {
+    ...actual,
+    ElMessage: { ...actual.ElMessage, warning: vi.fn(), error: vi.fn() },
+    ElMessageBox: { ...actual.ElMessageBox, confirm: (...args: unknown[]) => boxMock(...args) },
+  };
+});
 
 import AiPurchasePage from './index.vue';
 import { menuConfig } from '@/components/layout/menuConfig';
@@ -39,12 +50,14 @@ const stubs = {
   'el-card': { template: '<div><slot /></div>' },
   'el-form': { template: '<form><slot /></form>' },
   'el-form-item': { template: '<label><slot /></label>' },
-  'el-select': { template: '<select><slot /></select>' },
+  'el-select': { props: ['modelValue'], emits: ['update:modelValue'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>' },
   'el-option': { template: '<option><slot /></option>' },
-  'el-input': { template: '<input />' },
-  'el-date-picker': { template: '<input />' },
+  'el-input': { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
+  'el-date-picker': { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
   'el-button': { props: ['disabled', 'loading'], emits: ['click'], template: '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>' },
   'el-alert': { props: ['title'], template: '<div class="alert">{{ title }}</div>' },
+  'el-icon': { template: '<i><slot /></i>' },
+  'el-tag': { template: '<span><slot /></span>' },
 };
 
 function response(grantId = 'preview-7') {
@@ -58,12 +71,59 @@ function response(grantId = 'preview-7') {
 describe('AI controlled purchase page', () => {
   beforeEach(() => {
     Object.assign(authFixture.current!, { factoryId: 'F001', user: { id: 1553 } });
-    localStorage.clear(); previewMock.mockReset(); statusMock.mockReset(); revokeMock.mockReset(); pushMock.mockReset(); getMock.mockReset();
+    localStorage.clear(); previewMock.mockReset(); statusMock.mockReset(); revokeMock.mockReset(); confirmMock.mockReset(); grantStatusMock.mockReset(); boxMock.mockClear(); pushMock.mockReset(); getMock.mockReset();
     getMock.mockImplementation((url: string) => url.includes('suppliers')
       ? Promise.resolve({ success: true, data: [{ id: 's1', name: '供应商甲' }] })
       : Promise.resolve({ success: true, data: [{ id: 'm1', name: '五花肉' }] }));
     statusMock.mockResolvedValue({ grantId: 'preview-7', state: 'PENDING', version: 3 });
     revokeMock.mockResolvedValue({ grantId: 'preview-7', state: 'REVOKED', version: 4 });
+  });
+
+  it.each([
+    { path: 'card query', statusSource: 'card' as const },
+    { path: 'parent refresh', statusSource: 'parent' as const },
+  ])('real parent and operation card expose one revoke after uncertain confirmation then authoritative PENDING query via $path', async ({ statusSource }) => {
+    previewMock.mockResolvedValue(response('preview-21'));
+    confirmMock.mockRejectedValue(new Error('transport failure'));
+    if (statusSource === 'card') grantStatusMock.mockResolvedValue({ grantId: 'preview-21', state: 'PENDING', version: 11 });
+    else statusMock.mockResolvedValue({ grantId: 'preview-21', state: 'PENDING', version: 11 });
+    revokeMock.mockResolvedValue({ grantId: 'preview-21', state: 'REVOKED', version: 12 });
+    const wrapper = mount(AiPurchasePage, { global: { stubs } });
+    await flushPromises();
+    const selects = wrapper.findAll('select');
+    await selects[0].setValue('s1');
+    await selects[1].setValue('m1');
+    const inputs = wrapper.findAll('input');
+    await inputs[0].setValue('2');
+    await inputs[1].setValue('10');
+    await inputs[2].setValue('22.60');
+    await wrapper.findAll('button').find((button) => button.text().includes('生成预览'))!.trigger('click');
+    await flushPromises();
+
+    await wrapper.findAll('button').find((button) => button.text().includes('确认执行'))!.trigger('click');
+    await flushPromises();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(previewMock).toHaveBeenCalledTimes(1);
+    const recoveryButton = wrapper.findAll('button').find((button) => button.text().includes(statusSource === 'card' ? '查询处理结果' : '刷新授权状态'));
+    expect(recoveryButton).toBeDefined();
+    await recoveryButton!.trigger('click');
+    await flushPromises();
+
+    if (statusSource === 'card') expect(grantStatusMock).toHaveBeenCalledWith('F001', 'preview-21');
+    else expect(statusMock).toHaveBeenCalledWith('F001', 'preview-21');
+    const revokeButton = wrapper.findAll('button').find((button) => button.text().includes('撤销当前授权'));
+    expect(revokeButton).toBeDefined();
+    if (revokeButton) await revokeButton.trigger('click');
+    await flushPromises();
+    expect(revokeMock).toHaveBeenCalledTimes(1);
+    expect(revokeMock).toHaveBeenCalledWith('F001', 'preview-21', 11, expect.any(String));
+    expect(localStorage.getItem('cretas:controlled-purchase:F001:1553')).toBeNull();
+    const previewButton = wrapper.findAll('button').find((button) => button.text().includes('生成预览'));
+    expect(previewButton).toBeDefined();
+    expect((previewButton!.element as HTMLButtonElement).disabled).toBe(false);
+    expect(previewMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(revokeMock).toHaveBeenCalledTimes(1);
   });
 
   it('submits canonical flat preview and freezes the form after a server grant', async () => {

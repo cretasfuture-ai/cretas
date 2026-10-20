@@ -115,6 +115,7 @@ async function recover(): Promise<void> {
     if (!isCurrent(scope, run)) return;
     recoveryState.value = outcome.state;
     recoveryVersion.value = outcome.version ?? null;
+    if (String(outcome.state).toUpperCase() === 'PENDING') previewResponse.value = null;
     if (outcome.state === 'DRAFT' && outcome.purchaseOrderId) {
       draftOrderId.value = outcome.purchaseOrderId;
       blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
@@ -245,6 +246,19 @@ function handleUncertain(): void {
   blockedReason.value = '确认凭据已超时，结果待核对；请刷新授权状态后再继续。';
 }
 
+function handleRecovered(outcome: ControlledPurchaseOutcome): void {
+  if (outcome.grantId !== grantId.value) {
+    recoveryState.value = 'UNKNOWN';
+    blockedReason.value = '处理参考无法与当前采购核对，请勿重复提交。';
+    return;
+  }
+  if (String(outcome.state).toUpperCase() !== 'PENDING') return;
+  recoveryState.value = 'PENDING';
+  recoveryVersion.value = outcome.version ?? null;
+  blockedReason.value = '采购处理仍待确认，请先撤销当前授权后再继续。';
+  previewResponse.value = null;
+}
+
 onMounted(async () => {
   await initialize();
 });
@@ -305,7 +319,7 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
       <div class="snapshot" aria-label="金额预览"><span>供应商：{{ supplierName }}</span><span>原料：{{ materialName }}</span><span>未税：{{ amountText.net }} CNY</span><span>税额：{{ amountText.tax }} CNY</span><strong>含税合计：{{ amountText.gross }} CNY</strong></div>
       <div class="actions"><el-button type="primary" :loading="loading" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" @click="submitPreview">生成预览</el-button></div>
     </el-card>
-    <AiOperationCard v-if="previewResponse" :response="previewResponse" :factory-id="factoryId" :cancel-handler="cancelPreview" @confirmed="handleConfirmed" @uncertain="handleUncertain" />
+    <AiOperationCard v-if="previewResponse" :response="previewResponse" :factory-id="factoryId" :cancel-handler="cancelPreview" @confirmed="handleConfirmed" @uncertain="handleUncertain" @recovered="handleRecovered" />
     <el-card v-if="previewResponse && canonicalRows.length" shadow="never" class="snapshot-card">
       <h3>已锁定的服务器采购快照</h3>
       <div class="canonical-grid"><template v-for="row in canonicalRows" :key="row[0]"><span>{{ row[0] }}</span><strong>{{ row[1] }}</strong></template></div>
