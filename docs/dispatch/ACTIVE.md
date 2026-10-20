@@ -9,7 +9,8 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15712-62f2-7313-a46b-2d02972e77eb — Base 28d02b70af193b87597cc9d67687fa62f8b13324 — #1041授权核心已部署、#1044双机CI已验；S0与S1入口继续，详archive/2026-10-20-erp-s1-controlled-exec.md；QA仍独占CSV/手机/浏览器。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a1523e-881c-7a92-b7ab-f4b8c5a552df — Base 635b61c800b0d2ba8f10a9678d431a57f6c22920 — #1050已合入/正式Web发布/真实撤销与丢响应恢复通过；75场景7通过1失败67未测，S0未过；QA独占CSV/手机/浏览器。
+- `ERP-S1-SCOPE-NEGATIVES-20261020` — `review` — Owner 01a158bb-e435-7313-82bd-081cd155b18c — Base 635b61c800b0d2ba8f10a9678d431a57f6c22920 — Scope单一新BoundaryContractTest；补S1-05数量/实体/动作越界与真实PG读回；详archive/2026-10-20-s1-scope-negatives.md；目标47与PG13/17各26通过；待最终全量CI/普通PR。
 
 
 
