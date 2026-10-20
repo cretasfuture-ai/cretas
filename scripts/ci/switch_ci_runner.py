@@ -88,6 +88,10 @@ HOSTED_JAVA = "    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G r
 SELF_JAVA_ANY = "    runs-on: [self-hosted, java]"
 HOSTED_JAVA_ANY = "    runs-on: ubuntu-latest  # java-heavy-any: self-hosted 时要 8G runner, 可溢到 canada-mini"
 PAIRS = ((SELF, HOSTED), (SELF_JAVA, HOSTED_JAVA), (SELF_JAVA_ANY, HOSTED_JAVA_ANY))
+# Generic cretas also matches Aurora. Keep Web on the bounded Windows worker,
+# without changing any existing Java-heavy return markers or other workflows.
+WEB_WORKFLOWS = frozenset({"web-admin-gate.yml", "web-dist.yml"})
+SELF_WEB = "    runs-on: [self-hosted, Linux, cretas, X64, windows-light]"
 
 
 def read(p):
@@ -116,7 +120,7 @@ def current(text):
     「共享结构只改一处」那种坏法**藏起来**。而多 job 的文件正是最容易半转换的
     (ci.yml 有 4 个 job)。⇒ 两种都数, 同时存在就是显式的坏状态 `mixed`。
     """
-    n_self = sum(_count_lines(text, s) for s, _ in PAIRS)
+    n_self = sum(_count_lines(text, s) for s, _ in PAIRS) + _count_lines(text, SELF_WEB)
     n_hosted = sum(_count_lines(text, h) for _, h in PAIRS)
     if n_self and n_hosted:
         return "mixed"
@@ -157,12 +161,32 @@ def main() -> int:
         return 2
 
     states = {}
+    contents = {}
+    issues = []
     for name in WORKFLOWS:
         p = REPO / ".github" / "workflows" / name
         if not p.exists():
             print("  ✗ 找不到 %s" % name)
             return 1
-        states[name] = current(read(p))
+        contents[name] = read(p)
+        states[name] = current(contents[name])
+        allowed = {HOSTED, SELF_WEB} if name in WEB_WORKFLOWS else {
+            literal for pair in PAIRS for literal in pair
+        }
+        # Only explicit adoption may migrate the previously ambiguous Web label.
+        if adopt and not check_only and name in WEB_WORKFLOWS:
+            allowed.add(SELF)
+        routes = [line.rstrip("\r") for line in contents[name].split("\n")
+                  if line.startswith("    runs-on:")]
+        if (not routes or any(line not in allowed for line in routes)
+                or states[name] in ("mixed", "unknown")):
+            issues.append(name)
+
+    # Validate the whole batch before writing any file, including --adopt.
+    if issues:
+        print("ci-runner: FAIL — invalid routing literal or mixed/unknown state: %s" % ", ".join(issues))
+        print("  Legacy generic Web routes require explicit self-hosted --adopt migration.")
+        return 1
 
     # 各处必须一致 —— 改共享结构最容易的坏法就是只改一处
     distinct = set(states.values())
@@ -193,17 +217,21 @@ def main() -> int:
         _remind_if_quota_reset(now)
         return 0 if now != "unknown" else 1
 
-    if len(distinct) == 1 and distinct.copy().pop() == target:
+    needs_web_migration = any(_count_lines(contents[name], SELF) for name in WEB_WORKFLOWS)
+    if len(distinct) == 1 and distinct.copy().pop() == target and not needs_web_migration:
         print("ci-runner: 已经是 %s, 无需改动" % target)
         return 0
 
     # 两对形态各自往返(普通 job / java-heavy job), 方向由 target 决定。
-    pairs = [(h, s) for s, h in PAIRS] if target == "self-hosted" else list(PAIRS)
     changed = 0
     for name in WORKFLOWS:
         p = REPO / ".github" / "workflows" / name
-        s = read(p)
-        if states[name] == target:
+        s = contents[name]
+        route_pairs = ((SELF_WEB, HOSTED),) if name in WEB_WORKFLOWS else PAIRS
+        pairs = [(h, own) for own, h in route_pairs] if target == "self-hosted" else list(route_pairs)
+        if adopt and name in WEB_WORKFLOWS:
+            pairs.append((SELF, SELF_WEB if target == "self-hosted" else HOSTED))
+        if states[name] == target and not (name in WEB_WORKFLOWS and _count_lines(s, SELF)):
             # --adopt 下会出现「一部分已经是目标态」, 这不是错误, 但要**说出来**,
             # ⛔ 不能让「没改」和「改了」在输出里长得一样。
             print("  %-26s 已经是 %s, 跳过" % (name, target))
@@ -231,9 +259,7 @@ def main() -> int:
     print("ci-runner: 改动 %d 个文件, 跳过 %d 个。" % (changed, len(WORKFLOWS) - changed))
     print("ci-runner: 已切到 %s。⚠️ 要 commit + push 才生效。" % target)
     if target == "self-hosted":
-        print("  自建 runner: 组织级 runner，标签 [self-hosted, cretas]；当前使用隔离 Windows WSL Linux")
-        print("  ⚠️ Maven job 要求额外的 `java` 标签 —— 只有 8G 的 windows-wsl-ci 有; 4G 的 extra runner 上 JVM 默认堆 1G 必 OOM")
-        print("  可溢出的 Java job([self-hosted, java]) 本机满了会派到加拿大 Mac mini 的 canada-mini-cretas(仓级 runner)")
+        print("  Web: Windows light literal; existing Java and other workflow mappings preserved.")
         print("  在线检查: gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+\" \"+.status'")
     return 0
 
