@@ -9,8 +9,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-05#1057/#1062合入且原QA通过，06原OA通过；75场景9通过2失败64未测，18缺陷16关闭；07/02/10不完整，S0未过。QA仍独占CSV/设备；交接见archive/2026-10-20-erp-s1-stage-checkpoint.md。
-- `ERP-S1-SUPPLIER-ENTRY-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — 两个人工绑定已显式manual；真实挂载2红/2绿→4绿→旧绑定2红→还原4绿。等待Web CI/发布/原QA S1-04复验；scope见archive/2026-10-20-s1-supplier-entry.md。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-05/06原QA通过；04人工事件#1064已合入发布，原QA仍FAIL：SUPPLIER_RANKING权限拒绝、未到比较工具。75场景9通过2失败64未测，18缺陷16关闭；S0未过。QA独占CSV/设备；见archive/2026-10-20-s1-supplier-entry.md。
 
 
 
