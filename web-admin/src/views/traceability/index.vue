@@ -183,7 +183,10 @@ const processingStages = computed(() =>
 );
 const qualityInspections = computed(() => trace.value?.qualityInspections ?? []);
 const shipments = computed(() => trace.value?.shipments ?? []);
-const canOpenBatchEvidence = computed(() => trace.value?.production.factoryId === factoryId.value
+// 目标路由 /production/batches/:id 的 meta.module 是 production, 守卫会把没权限的人送去 /403;
+// 不能「看得见点进去 403」, 所以入口和路由用同一个判据。
+const canOpenBatchEvidence = computed(() => permissionStore.canAccess('production')
+  && trace.value?.production.factoryId === factoryId.value
   && Number.isSafeInteger(trace.value?.production.batchId) && Number(trace.value?.production.batchId) > 0);
 function openBatchEvidence() {
   if (!canOpenBatchEvidence.value) return;

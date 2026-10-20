@@ -34,7 +34,8 @@ vi.mock('vue-router', () => ({
 vi.mock('@/store/modules/auth', () => ({
   useAuthStore: () => identity,
 }));
-vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canAccess: () => true }) }));
+const deniedModules = new Set<string>();
+vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canAccess: (m: string) => !deniedModules.has(m) }) }));
 
 vi.mock('@/api/request', () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 
@@ -83,6 +84,7 @@ beforeEach(() => {
   getDetailMock.mockReset();
   getHistoryMock.mockReset();
   getHistoryMock.mockResolvedValue([]);
+  deniedModules.clear();
 });
 
 describe('溯源查询页 — 「本批来自 N 头牛」横幅', () => {
@@ -184,6 +186,17 @@ describe('溯源查询页 — 「本批来自 N 头牛」横幅', () => {
     await search(wrapper, 'PB-2026-001');
     await wrapper.get('[data-testid="batch-evidence-link"]').trigger('click');
     expect(pushMock).toHaveBeenCalledWith({ path: '/production/batches/8' });
+  });
+
+  it('hides the input-output and cost link from users who cannot open production pages', async () => {
+    deniedModules.add('production');
+    const data = sixCattleTrace();
+    data.production.batchId = 8;
+    getFullTraceMock.mockResolvedValue({ success: true, data });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    expect(wrapper.find('[data-testid="production-card"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="batch-evidence-link"]').exists()).toBe(false);
   });
 
   it('① 六头牛全带个体 ⇒ 横幅「本批来自 6 头牛」', async () => {
