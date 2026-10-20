@@ -6,6 +6,12 @@
 
 ## 在飞任务
 
+- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner supplier_dispatch — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07独立显式待执行授权；隔离WT/精确scope见archive/2026-10-20-s1-deferred-grant.md。保留原one-shot，不造fixture；目标Maven由协调者串行。
+
+- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10独立只读就绪检查与预测来源/故障契约；精确scope及验收见archive/2026-10-20-s1-scheduling-truth.md。保留generate不可用，不造产能，不动生产依赖；Maven由协调者串行。
+
+- `ERP-S1-SUPPLIER-ROUTE-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 供应商比较语义误路由与缺READ映射；首锁IntentKnowledgeBase及新真实方法回归，后续精确scope/接口记录见archive/2026-10-20-s1-supplier-route.md。不放宽排名权限，不改生产配置。
+
 
 
 
@@ -118,4 +124,3 @@
 - organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
-

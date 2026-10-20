@@ -444,7 +444,7 @@ public class ToolDispatchService {
                     String parsedMsg = parsed.getMessage() != null ? parsed.getMessage() : "操作已完成。";
                     Map<String, Object> cachedMetadata = new HashMap<>();
                     cachedMetadata.put("cached", true);
-                    // 冗余缓存复用的也是一次成功执行 (同参数), 一样产出 lastAction
+                    cachedMetadata.put("toolName", tool.getToolName());
                     putLastAction(cachedMetadata, parsed.getStatus(), parsed.getResultData(),
                             intent, tool.getToolName(), params);
                     return IntentExecuteResponse.builder()
@@ -452,7 +452,7 @@ public class ToolDispatchService {
                             .intentCode(intent.getIntentCode())
                             .intentName(intent.getIntentName())
                             .intentCategory(intent.getIntentCategory())
-                            .status("SUCCESS")
+                            .status(parsed.getStatus())
                             .message(parsedMsg)
                             .resultData(parsed.getResultData())
                             .formattedText(parsed.getFormattedText())
@@ -486,8 +486,10 @@ public class ToolDispatchService {
                     resultJson = tool.execute(toolCall, context);
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
+                    boolean toolSucceeded = !isToolResultExplicitlyFailed(resultJson);
+                    String toolFailureMessage = toolSucceeded ? null : extractToolFailureMessage(resultJson);
 
-                    // 执行成功，记录
+                    // 正常返回的 success=false 也是一次失败审计，不得伪装成成功或进入缓存。
                     try {
                         ToolCallRecord record = ToolCallRecord.builder()
                                 .sessionId(sessionId)
@@ -495,13 +497,16 @@ public class ToolDispatchService {
                                 .toolName(tool.getToolName())
                                 .toolParameters(argumentsJson)
                                 .parametersHash(redundancyService.computeParametersHash(params))
-                                .executionStatus(ToolCallRecord.ExecutionStatus.SUCCESS)
+                                .executionStatus(toolSucceeded
+                                        ? ToolCallRecord.ExecutionStatus.SUCCESS
+                                        : ToolCallRecord.ExecutionStatus.FAILED)
+                                .errorMessage(toolFailureMessage)
                                 .executionTimeMs((int) executionTime)
                                 .retryCount(attempt - 1)
                                 .recovered(attempt > 1)
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
-                        if (savedRecord != null && resultJson != null) {
+                        if (toolSucceeded && savedRecord != null && resultJson != null) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
                             // Don't substring-truncate — that splits tokens and produces
                             // invalid JSON like `{..."previous` which PG rejects at INSERT.
@@ -524,7 +529,7 @@ public class ToolDispatchService {
                     }
 
                     // D7: 快速规则验证
-                    if (resultJson != null && attempt < MAX_RETRIES) {
+                    if (toolSucceeded && resultJson != null && attempt < MAX_RETRIES) {
                         if (isResultClearlyValid(resultJson)) {
                             log.info("[D7-FastValidation] Result clearly valid ({}B), skipping LLM validation for tool={}",
                                     resultJson.length(), tool.getToolName());
@@ -1297,6 +1302,36 @@ public class ToolDispatchService {
     }
 
     // ==================== 内部方法 ====================
+
+    /**
+     * A tool can complete normally at the Java call boundary while returning
+     * a structured business failure.  Keep that failure out of the success
+     * audit/cache path and out of result-correction retries.
+     */
+    private boolean isToolResultExplicitlyFailed(String resultJson) {
+        try {
+            Map<?, ?> result = objectMapper.readValue(resultJson, Map.class);
+            return Boolean.FALSE.equals(result.get("success"));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String extractToolFailureMessage(String resultJson) {
+        try {
+            Map<?, ?> result = objectMapper.readValue(resultJson, Map.class);
+            Object error = result.get("error");
+            if (error != null) return String.valueOf(error);
+            Object data = result.get("data");
+            if (data instanceof Map<?, ?> dataMap) {
+                Object code = dataMap.get("code");
+                if (code != null) return String.valueOf(code);
+            }
+        } catch (Exception ignored) {
+            // parseToolResultToResponse remains the source of the user-facing fallback.
+        }
+        return "工具返回 success=false";
+    }
 
     /**
      * 使用 LLM Tool Calling 从用户输入中提取参数

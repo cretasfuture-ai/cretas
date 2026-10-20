@@ -1770,6 +1770,9 @@ public class IntentExecutionOrchestrator {
     }
 
     private Optional<AIIntentConfig> getIntentByCodeWithPlatformFallback(String factoryId, String intentCode) {
+        if (SupplierComparisonReadIntent.CODE.equals(intentCode)) {
+            return SupplierComparisonReadIntent.resolve(factoryId, toolRegistry, intentConfigRepository);
+        }
         if ("PURCHASE_ORDER_CREATE".equals(intentCode)) {
             return controlledPurchaseIntent(factoryId);
         }

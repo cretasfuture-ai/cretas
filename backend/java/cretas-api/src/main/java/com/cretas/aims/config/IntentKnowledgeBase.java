@@ -4704,7 +4704,13 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("交货准时", "SUPPLIER_RANKING");
         phraseToIntentMapping.put("交货最准时", "SUPPLIER_RANKING");
         phraseToIntentMapping.put("价格对比", "SUPPLIER_RANKING");        // SUPPLIER_PRICE_COMPARISON may not exist in DB
-        phraseToIntentMapping.put("供应商价格", "SUPPLIER_RANKING");
+        phraseToIntentMapping.put("供应商价格", "SUPPLIER_PRICE_COMPARISON");
+        phraseToIntentMapping.put("供应商价格比较", "SUPPLIER_PRICE_COMPARISON");
+        phraseToIntentMapping.put("供应商价格对比", "SUPPLIER_PRICE_COMPARISON");
+        phraseToIntentMapping.put("供应商报价", "SUPPLIER_PRICE_COMPARISON");
+        phraseToIntentMapping.put("供应商报价比较", "SUPPLIER_PRICE_COMPARISON");
+        phraseToIntentMapping.put("供应商的报价", "SUPPLIER_PRICE_COMPARISON");
+        phraseToIntentMapping.put("供应商报价对比", "SUPPLIER_PRICE_COMPARISON");
         phraseToIntentMapping.put("供应商对比", "SUPPLIER_RANKING");
         phraseToIntentMapping.put("供应商表现", "SUPPLIER_RANKING");
 

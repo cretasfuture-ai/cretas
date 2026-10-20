@@ -28,7 +28,17 @@ class SupplierPriceComparisonContractTest {
 
         assertThat(result).contains("\"success\":false")
                 .contains("供应商价格比较暂不可用")
-                .contains("未接入真实报价");
+                .contains("未接入真实报价")
+                .contains("SUPPLIER_PRICE_COMPARISON_UNAVAILABLE")
+                .contains("NO_QUOTE_SERVICE")
+                .contains("supplier_price_comparison");
         verifyNoInteractions(supplierService);
+    }
+
+    @Test
+    void readCapabilityStillRequiresTheExistingProcurementOrFinancePermission() {
+        assertThat(tool.getAccessMode()).isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.AccessMode.READ);
+        assertThat(tool.requiresPermission()).isTrue();
+        assertThat(tool.getRequiredPermissions()).containsExactlyInAnyOrder("procurement:read_write", "finance:read_write");
     }
 }

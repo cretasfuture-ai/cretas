@@ -195,10 +195,11 @@ class ToolDescriptorInventoryDriftTest {
         // 2026-10-20: canonical purchase_order_create adds preview/permission/version (+1 each).
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(53);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(54);
+        // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(55);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(14);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(10);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(15);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(11);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
