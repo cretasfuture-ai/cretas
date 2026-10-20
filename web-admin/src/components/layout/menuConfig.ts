@@ -358,7 +358,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/procurement/requisitions', title: '全部请购单', icon: '', module: 'procurement',
         roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'permission_admin'] },
       { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement', groupLabel: '采购执行' },
-      { path: '/procurement/ai-purchase', title: 'AI受控采购', icon: '', module: 'procurement', groupLabel: '采购执行' },
+      { path: '/procurement/ai-purchase', title: 'AI受控采购', icon: '', module: 'procurement' },
       { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement', groupLabel: '供应商与价格' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }
     ]
