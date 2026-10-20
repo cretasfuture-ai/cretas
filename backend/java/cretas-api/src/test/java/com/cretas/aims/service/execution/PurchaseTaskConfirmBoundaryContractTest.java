@@ -25,6 +25,8 @@ import com.cretas.aims.service.calibration.ToolResultValidatorService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
@@ -53,6 +55,8 @@ class PurchaseTaskConfirmBoundaryContractTest {
     private ControlledPurchaseTaskExecutionService controlled;
     private IntentExecutionOrchestrator orchestrator;
     private ToolExecutor canonicalTool;
+    private com.cretas.aims.repository.config.AIIntentConfigRepository intentRepository;
+    private IntentPermissionGate permissionGate;
 
     @BeforeEach
     void setUp() {
@@ -71,6 +75,15 @@ class PurchaseTaskConfirmBoundaryContractTest {
         ReflectionTestUtils.setField(orchestrator, "previewTokenService", tokenService);
         ReflectionTestUtils.setField(orchestrator, "controlledPurchase", controlled);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
+        intentRepository = mock(com.cretas.aims.repository.config.AIIntentConfigRepository.class);
+        ReflectionTestUtils.setField(orchestrator, "intentConfigRepository", intentRepository);
+        permissionGate = mock(IntentPermissionGate.class);
+        ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", permissionGate);
+        when(permissionGate.check(any(), eq(USER), anyString())).thenReturn(IntentPermissionGate.PermissionCheck.allowed());
+        com.cretas.aims.service.intent.IntentConfigManagementService domainConfig =
+                mock(com.cretas.aims.service.intent.IntentConfigManagementService.class);
+        when(domainConfig.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
+        ReflectionTestUtils.setField(orchestrator, "businessTypeGate", new BusinessTypeGate(domainConfig));
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
         AIIntentConfig config = new AIIntentConfig();
         config.setIntentCode("PURCHASE_ORDER_CREATE");
@@ -80,6 +93,12 @@ class PurchaseTaskConfirmBoundaryContractTest {
         when(controlled.replay(eq(FACTORY), any())).thenReturn(Optional.empty());
         when(registry.getExecutor("purchase_order_create")).thenReturn(Optional.of(canonicalTool));
         when(canonicalTool.getVersion()).thenReturn(ControlledPurchaseTaskExecutionService.VERSION);
+        when(canonicalTool.getActionType()).thenReturn(ToolExecutor.ActionType.WRITE);
+        when(canonicalTool.getToolName()).thenReturn("purchase_order_create");
+        when(canonicalTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+        when(canonicalTool.supportsPreview()).thenReturn(true);
+        when(canonicalTool.requiresPermission()).thenReturn(true);
+        when(canonicalTool.getRequiredPermissions()).thenReturn(java.util.Set.of("procurement:read_write"));
     }
 
     @Test
@@ -108,7 +127,8 @@ class PurchaseTaskConfirmBoundaryContractTest {
 
     @Test
     void currentPermissionDenialResolvesClaimAndNeverCallsControlledFacade() {
-        when(aiIntentService.hasPermission("PURCHASE_ORDER_CREATE", "FACTORY_ADMIN")).thenReturn(false);
+        when(permissionGate.check(any(), eq(USER), anyString()))
+                .thenReturn(IntentPermissionGate.PermissionCheck.denied("procurement:read_write"));
 
         IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, "FACTORY_ADMIN");
 
@@ -171,6 +191,8 @@ class PurchaseTaskConfirmBoundaryContractTest {
         ToolDispatchService actualDispatch = actualDispatch();
         PurchaseOrderCreateTool tool = new PurchaseOrderCreateTool(controlled);
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper().findAndRegisterModules());
+        ReflectionTestUtils.setField(orchestrator, "toolDispatchService", actualDispatch);
+        when(registry.getExecutor("purchase_order_create")).thenReturn(Optional.of(tool));
         Map<String, Object> flat = new java.util.LinkedHashMap<>(Map.of(
                 "supplierId", "SUP-1", "materialTypeId", "MAT-1", "quantity", 2,
                 "unit", "kg", "unitPrice", 10, "currency", "CNY", "taxRate", 13,
@@ -183,13 +205,10 @@ class PurchaseTaskConfirmBoundaryContractTest {
         IntentPreviewToken bound = IntentPreviewToken.builder().id(91L).token(TOKEN).commandDigest(DIGEST)
                 .expiresAt(LocalDateTime.now().plusMinutes(5)).build();
         when(tokenService.createBoundToken(any(BoundTokenRequest.class))).thenReturn(bound);
-        AIIntentConfig purchaseIntent = AIIntentConfig.builder().intentCode("PURCHASE_ORDER_CREATE")
-                .intentName("创建采购单").intentCategory("PROCUREMENT").toolName("purchase_order_create").build();
-
-        IntentExecuteResponse response = actualDispatch.executeToolPreview(tool, FACTORY,
+        IntentExecuteResponse response = orchestrator.execute(FACTORY,
                 IntentExecuteRequest.builder().intentCode("PURCHASE_ORDER_CREATE")
                         .userInput("创建采购单").context(flat).previewOnly(true).build(),
-                purchaseIntent, USER, "FACTORY_ADMIN");
+                USER, "FACTORY_ADMIN");
 
         assertThat(response.getStatus()).isEqualTo("PREVIEW");
         assertThat(response.getConfirmableAction()).isNotNull();
@@ -201,6 +220,84 @@ class PurchaseTaskConfirmBoundaryContractTest {
         verify(controlled).previewParameters(eq(FACTORY), argThat(values ->
                 "SUP-1".equals(values.get("supplierId")) && "MAT-1".equals(values.get("materialTypeId"))));
         verify(controlled).preview(FACTORY, canonical);
+        verify(intentRepository).findByIntentCodeAndDeletedAtIsNull("PURCHASE_ORDER_CREATE");
+        ArgumentCaptor<AIIntentConfig> metadata = ArgumentCaptor.forClass(AIIntentConfig.class);
+        verify(permissionGate).check(metadata.capture(), eq(USER), eq("FACTORY_ADMIN"));
+        assertThat(metadata.getValue().getRequiredPermission()).isEqualTo("procurement:read_write");
+        assertThat(metadata.getValue().getBusinessType()).isEqualTo("FACTORY");
+        assertThat(metadata.getValue().getSensitivityLevel()).isEqualTo("HIGH");
+        assertThat(metadata.getValue().getIntentCategory()).isEqualTo("DATA_OP");
+        assertThat(metadata.getValue().getRequiresApproval()).isFalse();
+        assertThat(metadata.getValue().getId()).isNull();
+        verify(aiIntentService, never()).getIntentByCode(FACTORY, "PURCHASE_ORDER_CREATE");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"inactive", "foreign", "tool", "permission", "category", "business", "sensitivity", "approval", "query-error"})
+    void configuredRestrictionsCannotBecomeNativeFallback(String drift) {
+        AIIntentConfig row = AIIntentConfig.builder().intentCode("PURCHASE_ORDER_CREATE")
+                .toolName("purchase_order_create").requiredPermission("procurement:read_write")
+                .intentCategory("DATA_OP").businessType("FACTORY").sensitivityLevel("HIGH")
+                .isActive(true).requiresApproval(false).factoryId(FACTORY).build();
+        switch (drift) {
+            case "inactive" -> row.setIsActive(false);
+            case "foreign" -> row.setFactoryId("F999");
+            case "tool" -> row.setToolName("procurement_order_create");
+            case "permission" -> row.setRequiredPermission("procurement:read");
+            case "category" -> row.setIntentCategory("QUERY");
+            case "business" -> row.setBusinessType("COMMON");
+            case "sensitivity" -> row.setSensitivityLevel("LOW");
+            case "approval" -> row.setRequiresApproval(true);
+        }
+        when(intentRepository.findByIntentCodeAndDeletedAtIsNull("PURCHASE_ORDER_CREATE"))
+                .thenReturn(Optional.of(row));
+        if ("query-error".equals(drift)) {
+            when(intentRepository.findByIntentCodeAndDeletedAtIsNull("PURCHASE_ORDER_CREATE"))
+                    .thenThrow(new IllegalStateException("database unavailable"));
+        }
+        assertEntryAndConfirmationRefused();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"version", "action", "access-mode", "tool-name", "preview", "permission-flag", "permission-code", "absent"})
+    void nativeToolDeclarationDriftCannotMintPreviewOrConfirmation(String drift) {
+        switch (drift) {
+            case "version" -> when(canonicalTool.getVersion()).thenReturn("1.0.0");
+            case "action" -> when(canonicalTool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+            case "access-mode" -> when(canonicalTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+            case "tool-name" -> when(canonicalTool.getToolName()).thenReturn("procurement_order_create");
+            case "preview" -> when(canonicalTool.supportsPreview()).thenReturn(false);
+            case "permission-flag" -> when(canonicalTool.requiresPermission()).thenReturn(false);
+            case "permission-code" -> when(canonicalTool.getRequiredPermissions()).thenReturn(java.util.Set.of("procurement:read"));
+            case "absent" -> when(registry.getExecutor("purchase_order_create")).thenReturn(Optional.empty());
+        }
+        assertEntryAndConfirmationRefused();
+    }
+
+    @Test
+    void missingPermissionGateCannotFallBackToClientRoleOrLegacyPermission() {
+        ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", null);
+        IntentExecuteResponse response = orchestrator.execute(FACTORY,
+                IntentExecuteRequest.builder().intentCode("PURCHASE_ORDER_CREATE").userInput("创建采购单")
+                        .previewOnly(true).build(), USER, "FACTORY_ADMIN");
+        assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+        assertThat(orchestrator.confirm(FACTORY, proof(), USER, "FACTORY_ADMIN").getStatus()).isEqualTo("NO_PERMISSION");
+        verifyNoInteractions(dispatch);
+        verify(tokenService, never()).createBoundToken(any());
+        verify(controlled, never()).executeConfirmed(anyString(), anyLong(), anyString());
+        verify(aiIntentService, never()).hasPermission(anyString(), anyString());
+    }
+
+    private void assertEntryAndConfirmationRefused() {
+        IntentExecuteResponse preview = orchestrator.execute(FACTORY,
+                IntentExecuteRequest.builder().intentCode("PURCHASE_ORDER_CREATE").userInput("创建采购单")
+                        .previewOnly(true).context(Map.of()).build(), USER, "FACTORY_ADMIN");
+        assertThat(preview.getStatus()).isEqualTo("FAILED");
+        assertThat(preview.getConfirmableAction()).isNull();
+        assertThat(orchestrator.confirm(FACTORY, proof(), USER, "FACTORY_ADMIN").getStatus()).isEqualTo("FAILED");
+        verifyNoInteractions(dispatch);
+        verify(tokenService, never()).createBoundToken(any());
+        verify(controlled, never()).executeConfirmed(anyString(), anyLong(), anyString());
     }
 
     @Test
