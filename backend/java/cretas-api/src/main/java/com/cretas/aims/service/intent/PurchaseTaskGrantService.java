@@ -51,6 +51,15 @@ public class PurchaseTaskGrantService {
 
     @Transactional
     public AiPurchaseTaskGrant issueGrant(GrantSpec spec) {
+        return issueGrantInternal(spec, null);
+    }
+
+    /** Only the confirmed adapter supplies a deterministic persisted-preview identity. */
+    AiPurchaseTaskGrant issueConfirmedGrant(GrantSpec spec, String id) {
+        return issueGrantInternal(spec, id);
+    }
+
+    private AiPurchaseTaskGrant issueGrantInternal(GrantSpec spec, String id) {
         Objects.requireNonNull(spec, "grant spec");
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = spec.expiresAt() == null ? now.plus(DEFAULT_TTL) : spec.expiresAt();
@@ -66,11 +75,12 @@ public class PurchaseTaskGrantService {
         ValidatedInput input = validateAndCanonicalize(spec.supplierId(), spec.materialTypeId(), spec.quantityCap(), spec.unitPrice(), spec.taxRate(), approved);
         String snapshot = canonicalSnapshot(approved);
         AiPurchaseTaskGrant grant = AiPurchaseTaskGrant.builder()
+                .id(id)
                 .factoryId(spec.factoryId()).userId(spec.userId()).toolName(CANONICAL_TOOL)
                 .descriptorVersion(spec.descriptorVersion()).supplierId(spec.supplierId()).materialTypeId(spec.materialTypeId())
                 .quantityCap(normalize(spec.quantityCap(), 15, 4, "quantityCap")).quantityUnit(KG)
                 .unitPrice(normalize(spec.unitPrice(), 15, 4, "unitPrice")).amountCap(normalize(spec.amountCap(), 18, 2, "amountCap"))
-                .currency(CNY).taxRate(BigDecimal.ZERO.setScale(2)).inputDigest(sha256(snapshot))
+                .currency(CNY).taxRate(normalize(spec.taxRate(), 5, 2, "taxRate")).inputDigest(sha256(snapshot))
                 .approvedInputSnapshot(snapshot).previewTokenId(spec.previewTokenId()).expiresAt(expiresAt).version(1L).build();
         if (input.amount().compareTo(grant.getAmountCap()) > 0) throw reject("approved amount exceeds grant cap");
         return grantRepository.saveAndFlush(grant);
@@ -119,7 +129,8 @@ public class PurchaseTaskGrantService {
         PurchaseOrder returned = purchaseService.createPurchaseOrder(request.factoryId(), actual, request.userId());
         PersistedDraft persisted = readBackDraft(request.factoryId(), returned);
         verifyPersistedDraft(grant, request, input, persisted.order(), persisted.items());
-        if (grantRepository.consumeIfCurrent(grant.getId(), request.factoryId(), request.userId(), grant.getVersion(), now, now, request.requestIdempotencyKey(), digest, persisted.order().getId(), input.quantity(), input.amount()) != 1) throw reject("grant consume lost the execution race");
+        LocalDateTime commitTime = LocalDateTime.now();
+        if (grantRepository.consumeIfCurrent(grant.getId(), request.factoryId(), request.userId(), grant.getVersion(), commitTime, commitTime, request.requestIdempotencyKey(), digest, persisted.order().getId(), input.quantity(), input.amount()) != 1) throw reject("grant consume lost the execution race or expired");
         return new ExecutionResult(persisted.order().getId(), input.amount(), input.quantity(), grant.getVersion() + 1, false);
     }
 
@@ -137,10 +148,10 @@ public class PurchaseTaskGrantService {
     }
 
     private static void verifyPersistedDraft(AiPurchaseTaskGrant grant, ExecutionRequest request, ValidatedInput input, PurchaseOrder order, List<PurchaseOrderItem> items) {
-        if (!Objects.equals(order.getFactoryId(), request.factoryId()) || !Objects.equals(order.getCreatedBy(), request.userId()) || !Objects.equals(order.getSupplierId(), grant.getSupplierId()) || order.getStatus() != PurchaseOrderStatus.DRAFT || order.getTotalAmount() == null || order.getTotalAmount().compareTo(input.amount()) != 0 || order.getTaxAmount() == null || order.getTaxAmount().signum() != 0) throw reject("persisted purchase draft is outside grant scope");
+        if (!Objects.equals(order.getFactoryId(), request.factoryId()) || !Objects.equals(order.getCreatedBy(), request.userId()) || !Objects.equals(order.getSupplierId(), grant.getSupplierId()) || order.getStatus() != PurchaseOrderStatus.DRAFT || order.getTotalAmount() == null || order.getTotalAmount().compareTo(input.net()) != 0 || order.getTaxAmount() == null || order.getTaxAmount().compareTo(input.tax()) != 0 || input.amount().compareTo(grant.getAmountCap()) > 0) throw reject("persisted purchase draft is outside grant scope");
         if (items == null || items.size() != 1) throw reject("persisted purchase row shape mismatch");
         PurchaseOrderItem item = items.get(0);
-        if (!Objects.equals(item.getMaterialTypeId(), grant.getMaterialTypeId()) || item.getQuantity() == null || item.getQuantity().compareTo(input.quantity()) != 0 || !KG.equals(item.getUnit()) || !KG.equals(item.getPriceUnit()) || item.getQuantityToPriceFactor() == null || item.getQuantityToPriceFactor().compareTo(BigDecimal.ONE) != 0 || item.getUnitPrice() == null || item.getUnitPrice().compareTo(input.unitPrice()) != 0 || item.getTaxRate() == null || item.getTaxRate().signum() != 0) throw reject("persisted purchase row does not match approved input");
+        if (!Objects.equals(item.getMaterialTypeId(), grant.getMaterialTypeId()) || item.getQuantity() == null || item.getQuantity().compareTo(input.quantity()) != 0 || !KG.equals(item.getUnit()) || !KG.equals(item.getPriceUnit()) || item.getQuantityToPriceFactor() == null || item.getQuantityToPriceFactor().compareTo(BigDecimal.ONE) != 0 || item.getUnitPrice() == null || item.getUnitPrice().compareTo(input.unitPrice()) != 0 || item.getTaxRate() == null || item.getTaxRate().compareTo(grant.getTaxRate()) != 0 || item.getLineAmount().compareTo(input.net()) != 0 || item.getLineAmountWithTax().compareTo(input.amount()) != 0) throw reject("persisted purchase row does not match approved input");
     }
 
     private static ValidatedInput validateAndCanonicalize(String supplierId, String materialTypeId, BigDecimal quantityCap, BigDecimal unitPriceCap, BigDecimal taxRate, CreatePurchaseOrderRequest request) {
@@ -153,14 +164,10 @@ public class PurchaseTaskGrantService {
         BigDecimal grantedPrice = normalize(unitPriceCap, 15, 4, "unitPriceCap");
         BigDecimal actualTax = normalize(item.getTaxRate(), 5, 2, "taxRate");
         BigDecimal grantedTax = normalize(taxRate, 5, 2, "grantTaxRate");
-        if (quantity.signum() <= 0 || quantity.compareTo(cap) > 0 || price.signum() <= 0 || price.compareTo(grantedPrice) != 0 || actualTax.signum() != 0 || grantedTax.signum() != 0) throw reject("quantity, positive price, cap and explicit zero tax mismatch");
-        BigDecimal amount;
-        try {
-            amount = quantity.multiply(price).setScale(2, RoundingMode.HALF_UP);
-            if (amount.precision() - amount.scale() > 18 - 2) throw reject("amount exceeds database precision");
-        } catch (ArithmeticException ex) { throw reject("amount cannot be represented at database scale 2"); }
-        item.setQuantity(quantity); item.setUnitPrice(price); item.setTaxRate(BigDecimal.ZERO.setScale(2));
-        return new ValidatedInput(quantity, price, amount);
+        if (quantity.signum() <= 0 || quantity.compareTo(cap) > 0 || price.signum() <= 0 || price.compareTo(grantedPrice) != 0 || actualTax.compareTo(grantedTax) != 0) throw reject("quantity, positive price, cap and explicit tax mismatch");
+        PurchaseTaskMoneyContract.Amounts amounts = PurchaseTaskMoneyContract.calculate(quantity, price, actualTax);
+        item.setQuantity(quantity); item.setUnitPrice(price); item.setTaxRate(actualTax);
+        return new ValidatedInput(quantity, price, amounts.gross(), amounts.net(), amounts.tax());
     }
 
     private static CreatePurchaseOrderRequest defensiveCopy(CreatePurchaseOrderRequest source) {
@@ -195,7 +202,8 @@ public class PurchaseTaskGrantService {
 
     private static void validateMoneyScope(BigDecimal quantityCap, String quantityUnit, BigDecimal unitPrice, BigDecimal amountCap, String currency, BigDecimal taxRate) {
         BigDecimal quantity = normalize(quantityCap, 15, 4, "quantityCap"); BigDecimal price = normalize(unitPrice, 15, 4, "unitPrice"); BigDecimal amount = normalize(amountCap, 18, 2, "amountCap"); BigDecimal tax = normalize(taxRate, 5, 2, "taxRate");
-        if (!KG.equals(quantityUnit) || quantity.signum() <= 0 || price.signum() <= 0 || amount.signum() <= 0 || !CNY.equals(currency) || tax.signum() != 0) throw reject("grant requires positive kg quantity/price, explicit CNY and zero tax");
+        PurchaseTaskMoneyContract.calculate(quantity, price, tax);
+        if (!KG.equals(quantityUnit) || amount.signum() <= 0 || !CNY.equals(currency)) throw reject("grant requires positive kg quantity/price, explicit CNY and supported tax");
     }
 
     private static String sha256(String value) {
@@ -205,7 +213,7 @@ public class PurchaseTaskGrantService {
 
     private static void requireText(String value, String name) { if (value == null || value.isBlank()) throw reject(name + " is required"); }
     private static GrantRejectedException reject(String message) { return new GrantRejectedException(message); }
-    private record ValidatedInput(BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) { }
+    private record ValidatedInput(BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount, BigDecimal net, BigDecimal tax) { }
     private record PersistedDraft(PurchaseOrder order, List<PurchaseOrderItem> items) { }
 
     public record GrantSpec(String factoryId, Long userId, String descriptorVersion, String supplierId, String materialTypeId, BigDecimal quantityCap, String quantityUnit, BigDecimal unitPrice, BigDecimal amountCap, String currency, BigDecimal taxRate, LocalDateTime expiresAt, Long previewTokenId, CreatePurchaseOrderRequest approvedPurchaseOrderRequest) { }

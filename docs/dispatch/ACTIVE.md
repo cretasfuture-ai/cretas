@@ -9,7 +9,9 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner /root — Base 6c4ecfe93ff7751066ea7323e5c6750a7eae11fe — #1033/#1035/#1037已发布；S0真机/业务复验及S1受控执行批。归档archive/2026-10-19-erp-s0-s1-capabilities.md；唯一场景表C:/Users/Steve/Documents/cretas-optimization-20261019/final-plan/验收场景表.csv；QA独占CSV/手机。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15712-62f2-7313-a46b-2d02972e77eb — Base 28d02b70af193b87597cc9d67687fa62f8b13324 — #1041授权核心已部署、#1044双机CI已验；S0与S1入口继续，详archive/2026-10-20-erp-s1-controlled-exec.md；QA仍独占CSV/手机/浏览器。
+
+- `ERP-S1-CONTROLLED-EXEC-20261020` — `in-progress` — Owner 01a15712-62f2-7313-a46b-2d02972e77eb — Base 28d02b70af193b87597cc9d67687fa62f8b13324 — 13%含税预算/可信主体→Chat确认/草稿/状态恢复，A后B串行；17文件锁与验收见archive/2026-10-20-erp-s1-controlled-exec.md；OA/手工采购不改。
 
 
 
@@ -88,6 +90,7 @@
 
 ## Scope 锁地图
 
+- `ERP-S1-CONTROLLED-EXEC-20261020`：仅archive/2026-10-20-erp-s1-controlled-exec.md列明17个Java/SQL/测试文件及本批dispatch；V20261103_70已查无占用。排除Supplier/采购门禁/需求与Workdesk/全局权限/旧迁移/CI发布脚本；唯一Owner顺序实施A/B，QA保留设备与CSV。
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915`：仅新建 `scripts/e2e/shenglong-demo/**`；⛔ 不改后端/前端代码、不 SQL 直插、凭证不入库。
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不改 `permission.ts` 权限矩阵；若需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者。

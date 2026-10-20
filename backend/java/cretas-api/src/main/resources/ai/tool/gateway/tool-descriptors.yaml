@@ -9681,19 +9681,19 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: WRITE
     riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
+    supportsPreview: true
+    requiresPermission: true
+    requiredPermissions: ["procurement:read_write"]
+    version: "2.0.0"
     domainTags: ["purchase"]
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
+      supportsPreview: true
+      requiresPermission: true
       hasPermission: false
-      requiredPermissions: false
-      version: false
+      requiredPermissions: true
+      version: true
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
   - toolName: "purchase_order_approve"

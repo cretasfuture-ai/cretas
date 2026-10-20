@@ -61,6 +61,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ToolDispatchService {
+    @Autowired
+    private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
 
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
@@ -284,6 +286,11 @@ public class ToolDispatchService {
             }
 
             // 2. 构建 ToolCall
+            if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
+                return IntentExecuteResponse.builder().status("WRITE_CONFIRM_REQUIRED")
+                        .message("采购草稿必须通过预览卡的服务端确认入口执行，未创建采购单")
+                        .intentCode(intent.getIntentCode()).aiMode("WRITE").build();
+            }
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);
 
@@ -836,6 +843,9 @@ public class ToolDispatchService {
 
             // Preview must expose the same principal-bound arguments as real execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+            if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
+                params = controlledPurchase.previewParameters(factoryId, params);
+            }
 
             String argumentsJson = objectMapper.writeValueAsString(params);
             ToolCall toolCall = ToolCall.of(
@@ -904,6 +914,11 @@ public class ToolDispatchService {
                                             tokenCurrentValues != null ? tokenCurrentValues : java.util.Map.of(),
                                             tokenNewValues != null ? tokenNewValues : java.util.Map.of(),
                                             300));
+                    if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
+                        previewData.put("grantId", com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.grantId(boundToken.getId()));
+                        previewResponse.setResultData(java.util.Map.of("grantId",
+                                com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.grantId(boundToken.getId())));
+                    }
                     // 写操作影响契约 (2026-07-24): 改前/改后 + 确定性影响说明 —
                     // 前端对比表 + 二次确认弹窗的数据源。
                     String actionType = String.valueOf(tool.getActionType());

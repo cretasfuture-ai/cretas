@@ -192,12 +192,13 @@ class ToolDescriptorInventoryDriftTest {
         // 2026-10-06: 44 → 52 (+8): 一线默认开放的 8 个日常写工具补只读预览 (clock_in / clock_out / material_batch_create /
         // material_batch_use / reusable_container_ship_out / reusable_container_return_in / quality_check_create /
         // quality_defect_record)。此前它们 supportsPreview=false, 一线点了只会看到「预览模式暂不支持此意图类型」。
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(52);
+        // 2026-10-20: canonical purchase_order_create adds preview/permission/version (+1 each).
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(53);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(53);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(54);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(13);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(9);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(14);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(10);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
