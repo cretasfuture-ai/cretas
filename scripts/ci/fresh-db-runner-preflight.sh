@@ -29,6 +29,35 @@ require_major_at_least() {
     [ "$major" -ge "$minimum" ] || fail "$label major version $major is below required $minimum"
 }
 
+maven_major_from_banner() {
+    awk '
+        /^Apache Maven / {
+            seen=1
+            if ($0 !~ /^Apache Maven [0-9]+(\.[0-9]+)*([[:space:]]|$)/) {
+                bad=1
+                next
+            }
+            split($3, parts, ".")
+            if (parts[1] !~ /^[0-9]+$/) {
+                bad=1
+                next
+            }
+            major=parts[1]
+        }
+        END {
+            if (!seen || bad || major == "") exit 1
+            print major
+        }
+    '
+}
+
+require_maven_major_at_least() {
+    local raw="$1" minimum="$2" major
+    major="$(printf '%s\n' "$raw" | maven_major_from_banner)" \
+        || fail "could not read Maven version from an anchored Apache Maven banner"
+    [ "$major" -ge "$minimum" ] || fail "Maven major version $major is below required $minimum"
+}
+
 require_route() {
     [ "$(uname -s)" = Linux ] || fail "runner OS must be Linux"
     [ "$(uname -m)" = aarch64 ] || fail "runner machine must be aarch64/ARM64"
@@ -87,7 +116,7 @@ require_docker() {
 }
 
 require_java_maven() {
-    local java_version javac_version maven_version java_major
+    local java_version javac_version maven_version java_major maven_banner
     require_command java
     require_command javac
     require_command mvn
@@ -97,9 +126,10 @@ require_java_maven() {
         || fail "JDK 21+ is required, got ${java_version:-<unknown>}"
     javac_version="$(javac -version 2>&1 | head -1)" || fail "javac is unavailable"
     maven_version="$(mvn -version 2>&1)" || fail "Maven is unavailable"
-    require_major_at_least Maven "$maven_version" 3
+    require_maven_major_at_least "$maven_version" 3
+    maven_banner="$(printf '%s\n' "$maven_version" | awk '/^Apache Maven / {print; exit}')"
     printf '[fresh-db-preflight] toolchain: %s; %s; %s\n' \
-        "$java_version" "$javac_version" "$(printf '%s\n' "$maven_version" | head -1)"
+        "$java_version" "$javac_version" "$maven_banner"
 }
 
 port_is_free() {

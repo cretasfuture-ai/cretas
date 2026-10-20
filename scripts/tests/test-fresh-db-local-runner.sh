@@ -154,7 +154,15 @@ fixture_script docker \
     'esac'
 fixture_script java 'echo '\''openjdk version "21.0.8" fixture'\'' >&2'
 fixture_script javac 'echo '\''javac 21.0.8'\'''
-printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "Apache Maven 3.9.9 (fixture)" "Java version: 21.0.8, vendor: Eclipse Adoptium"' > "$FIXTURE_BIN/mvn"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'case "${FIXTURE_MVN_MODE:-positive}" in' \
+    '  positive) printf "%s\\n" "Picked up JAVA_TOOL_OPTIONS: -Xmx3g" "Apache Maven 3.9.9 (fixture)" "Java version: 21.0.8, vendor: Eclipse Adoptium" ;;' \
+    '  missing) printf "%s\\n" "Picked up JAVA_TOOL_OPTIONS: -Xmx3g" "Maven launcher output without a banner" ;;' \
+    '  old) printf "%s\\n" "Picked up JAVA_TOOL_OPTIONS: -Xmx3g" "Apache Maven 2.9.9 (fixture)" ;;' \
+    '  unreadable) printf "%s\\n" "Picked up JAVA_TOOL_OPTIONS: -Xmx3g" "Apache Maven unknown (fixture)" ;;' \
+    '  *) exit 1 ;;' \
+    'esac' > "$FIXTURE_BIN/mvn"
 chmod +x "$FIXTURE_BIN/mvn"
 fixture_script ss \
     'if [ "${FIXTURE_SS_FAILURE:-0}" = 1 ]; then' \
@@ -178,6 +186,12 @@ run_fixture() (
         export FIXTURE_DOCKER_NAME=wrong-daemon
     elif [ "$mode" = ports-negative ]; then
         export FIXTURE_SS_FAILURE=1
+    elif [ "$mode" = maven-missing-negative ]; then
+        export FIXTURE_MVN_MODE=missing
+    elif [ "$mode" = maven-old-negative ]; then
+        export FIXTURE_MVN_MODE=old
+    elif [ "$mode" = maven-unreadable-negative ]; then
+        export FIXTURE_MVN_MODE=unreadable
     fi
     bash "$PREFLIGHT"
 )
@@ -194,6 +208,8 @@ output_path="$(sed -n 's/^FRESH_DB_OUTPUT=//p' "$positive_env")"
 [ "$app_port" -eq $((db_port + 1)) ] || fail 'Fresh DB ports are not a unique adjacent pair'
 [[ "$output_path" == "$TMP/runner-7/cretas-fresh-db/cretas-fresh-db-424242-7/progress.log" ]] \
     || fail "Fresh DB output is not run-scoped: $output_path"
+[[ "$positive_output" == *'Apache Maven 3.9.9 (fixture)'* ]] \
+    || fail "positive Maven fixture did not parse the anchored banner after noise: $positive_output"
 ok 'positive Aurora route fixture passes and emits unique project/ports/output'
 
 set +e
@@ -203,6 +219,12 @@ daemon_output="$(run_fixture 9 daemon-negative 2>&1)"
 daemon_rc=$?
 ports_output="$(run_fixture 10 ports-negative 2>&1)"
 ports_rc=$?
+maven_missing_output="$(run_fixture 11 maven-missing-negative 2>&1)"
+maven_missing_rc=$?
+maven_old_output="$(run_fixture 12 maven-old-negative 2>&1)"
+maven_old_rc=$?
+maven_unreadable_output="$(run_fixture 13 maven-unreadable-negative 2>&1)"
+maven_unreadable_rc=$?
 set -e
 [ "$route_rc" -ne 0 ] || fail 'wrong OS fixture was accepted'
 [[ "$route_output" == *'RUNNER_OS must be Linux'* ]] || fail "wrong OS fixture failed without route reason: $route_output"
@@ -210,6 +232,15 @@ set -e
 [[ "$daemon_output" == *'Docker daemon must be colima-ci'* ]] || fail "wrong daemon fixture failed without daemon reason: $daemon_output"
 [ "$ports_rc" -ne 0 ] || fail 'ss failure fixture was accepted as an available port'
 [[ "$ports_output" == *'cannot verify port'* ]] || fail "ss failure fixture failed without port reason: $ports_output"
-ok 'negative route, daemon, and port fixtures fail closed with actionable reasons'
+[ "$maven_missing_rc" -ne 0 ] || fail 'missing Maven banner fixture was accepted'
+[[ "$maven_missing_output" == *'anchored Apache Maven banner'* ]] \
+    || fail "missing Maven banner fixture failed without banner reason: $maven_missing_output"
+[ "$maven_old_rc" -ne 0 ] || fail 'old Maven fixture was accepted'
+[[ "$maven_old_output" == *'Maven major version 2 is below required 3'* ]] \
+    || fail "old Maven fixture failed without version reason: $maven_old_output"
+[ "$maven_unreadable_rc" -ne 0 ] || fail 'unreadable Maven fixture was accepted'
+[[ "$maven_unreadable_output" == *'anchored Apache Maven banner'* ]] \
+    || fail "unreadable Maven fixture failed without banner reason: $maven_unreadable_output"
+ok 'negative route, daemon, port, and Maven banner fixtures fail closed with actionable reasons'
 echo "PASS: Aurora Fresh DB local runner contract"
 echo "Evidence: $LOG"
