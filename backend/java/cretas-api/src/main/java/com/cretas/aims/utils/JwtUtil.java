@@ -107,6 +107,19 @@ public class JwtUtil {
         return createToken(claims, source.getSubject());
     }
 
+    /** Transport hint only: an expired signed Web JWT still needs a separately verified session cookie. */
+    public boolean hasWebSessionMarker(String token) {
+        if (token == null || token.isBlank()) return false;
+        try {
+            return Jwts.parserBuilder().setSigningKey(getSigningKey()).build()
+                    .parseClaimsJws(token).getBody().containsKey("webSessionHash");
+        } catch (ExpiredJwtException expired) {
+            return expired.getClaims().containsKey("webSessionHash");
+        } catch (io.jsonwebtoken.JwtException | IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
     public String getWebSessionHash(String token) {
         Claims claims = getClaimsFromToken(token);
         if (claims == null || !claims.containsKey("webSessionHash")) return null;

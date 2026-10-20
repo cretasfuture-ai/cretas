@@ -42,7 +42,8 @@ public class WebLoginSessionFilter extends OncePerRequestFilter {
         String clientType = request.getHeader(CookieAuthHelper.CLIENT_TYPE_HEADER);
         String authorization = request.getHeader("Authorization");
         boolean explicitBearer = authorization != null && authorization.startsWith("Bearer ");
-        boolean nativeClient = !cookies.isWebClient(request) && (clientType != null || explicitBearer);
+        boolean nativeClient = !cookies.isWebClient(request) && (clientType != null
+                || (explicitBearer && !jwt.hasWebSessionMarker(authorization.substring(7).trim())));
         return "OPTIONS".equalsIgnoreCase(request.getMethod())
                 || nativeClient
                 || !(path.startsWith("/api/mobile/") || path.startsWith("/api/platform/"))

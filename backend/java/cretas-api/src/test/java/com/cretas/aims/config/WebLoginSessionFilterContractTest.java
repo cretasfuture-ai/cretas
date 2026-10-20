@@ -140,6 +140,17 @@ class WebLoginSessionFilterContractTest {
         assertThat(response.getStatus()).isEqualTo(401);
     }
 
+    @Test void rawWebFetchCanRecoverWithoutClientTypeHeader() throws Exception {
+        var request = new MockHttpServletRequest("GET", "/api/mobile/F006/products");
+        request.addHeader("Authorization", "Bearer expired-bound-web-token");
+        request.setCookies(new Cookie(CookieAuthHelper.WEB_SESSION_COOKIE, "fixture-session"));
+        when(jwt.hasWebSessionMarker("expired-bound-web-token")).thenReturn(true);
+        when(sessions.resolve("fixture-session")).thenReturn("fresh-token");
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) ->
+                assertThat(((HttpServletRequest) req).getHeader("Authorization")).isEqualTo("Bearer fresh-token"));
+        verify(sessions).resolve("fixture-session");
+    }
+
     @Test void nativeBearerCannotBeReplacedByAnotherWebAccountCookie() throws Exception {
         for (String type : new String[]{"mobile", ""}) {
             var request = new MockHttpServletRequest("GET", "/api/mobile/F007/products");
