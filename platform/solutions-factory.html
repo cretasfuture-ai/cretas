@@ -208,6 +208,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   color:rgba(0,226,138,.6);font-size:16px;z-index:2}
 .pipe-note{margin-top:26px;display:inline-flex;gap:10px;align-items:center;font-family:var(--v6-mono);
   font-size:13px;color:#c8f5e3;background:rgba(0,226,138,.07);border:1px solid rgba(0,226,138,.2);padding:11px 18px;border-radius:12px}
+/* 只淡入不位移: 它是 .pipe(overflow:hidden) 的最后一个元素, 进场的 translateY(130px) 会把它整块推出
+   区块底边, IntersectionObserver 按祖先裁剪判定「不可见」, .in 永远不加, 手机上留下一块空白 */
+.pipe .pipe-note.v6-reveal{transform:none}
 
 
 /* 案例段: 客户教我们的（引用叙事体） */
