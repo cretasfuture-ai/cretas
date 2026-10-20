@@ -7,6 +7,7 @@ E2E_WORKFLOW="$ROOT_DIR/.github/workflows/e2e-pr.yml"
 MIGRATION="$ROOT_DIR/backend/java/cretas-api/src/main/resources/db/flyway/V20261028_68_1__bom_items_standard_quantity_compat.sql"
 WAIT_FOR_HEALTH="$ROOT_DIR/tests/v1-e2e/scripts/wait-for-health.sh"
 AGENTS_FILE="$ROOT_DIR/AGENTS.md"
+EXECUTION_RULE_FILE="$ROOT_DIR/.claude/rules/execution-and-verification.md"
 DEPLOY_SKILL="$ROOT_DIR/.agents/skills/deploy-backend/SKILL.md"
 L1_SMOKE="$ROOT_DIR/tests/v1-e2e/web/l1-smoke.spec.ts"
 RELEASE_PREFLIGHT="$ROOT_DIR/scripts/deploy/release-preflight.sh"
@@ -29,6 +30,17 @@ assert_not_contains() {
         echo "FAIL: forbidden '$forbidden' still present in $file" >&2
         exit 1
     fi
+}
+
+# AGENTS routes to the shared execution rule. Check both the route and the
+# current review/verification contracts rather than an old sentence's location.
+assert_execution_review_contract() {
+    assert_contains "$AGENTS_FILE" '.claude/rules/execution-and-verification.md'
+    assert_contains "$EXECUTION_RULE_FILE" '权限/安全、迁移、生产、金额/库存一致性、跨模块契约保留独立终审'
+    assert_contains "$EXECUTION_RULE_FILE" '审查绑定 reviewed diff/HEAD/scope'
+    assert_contains "$EXECUTION_RULE_FILE" '后续源码、测试、迁移或权限契约改动影响结论时补审'
+    assert_contains "$EXECUTION_RULE_FILE" '源码/测试冻结后，做一次必要最终验证/构建'
+    assert_contains "$EXECUTION_RULE_FILE" '只读审查、仅文档/台账/PR 描述变化不重跑产品测试'
 }
 
 # ⚠️ 找不到时必须**出声**。原版是 `grep -Fnm1 ... | cut -d: -f1` —— 命中不了就返回
@@ -123,7 +135,7 @@ fi
 assert_contains "$MIGRATION" 'ADD COLUMN IF NOT EXISTS standard_quantity DECIMAL(15, 4);'
 assert_contains "$E2E_WORKFLOW" '240 "$backend_pid"'
 assert_contains "$WAIT_FOR_HEALTH" 'kill -0 "$WATCH_PID"'
-assert_contains "$AGENTS_FILE" '最终只读代码审查应安排在最后一次目标构建/测试之前'
+assert_execution_review_contract
 assert_contains "$DEPLOY_SKILL" 'feature-head=$(git rev-parse HEAD)'
 assert_contains "$DEPLOY_SKILL" 'feature-head == <pr-head>'
 assert_contains "$DEPLOY_SKILL" 'git merge-base --is-ancestor <merge-commit> origin/main'
