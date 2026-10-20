@@ -123,7 +123,15 @@ fi
 assert_contains "$MIGRATION" 'ADD COLUMN IF NOT EXISTS standard_quantity DECIMAL(15, 4);'
 assert_contains "$E2E_WORKFLOW" '240 "$backend_pid"'
 assert_contains "$WAIT_FOR_HEALTH" 'kill -0 "$WATCH_PID"'
-assert_contains "$AGENTS_FILE" '最终只读代码审查应安排在最后一次目标构建/测试之前'
+# ⚠️ 原文钉的是 AGENTS.md 里那句 '最终只读代码审查应安排在最后一次目标构建/测试之前'。
+#    #1055 (执行规则精简) 有意把它改写成指向共享正文 execution-and-verification.md 的一句,
+#    断言从此钉在一句不存在的话上。守的性质没变: **源码/测试冻结后只做一次最终验证,
+#    只读审查不触发产品重测**。AGENTS.md(Codex 固定上下文) 钉指针那句, 规则正文钉在
+#    共享文件里 (.codex/rules/ 同名文件只是指针, 不另钉)。
+SHARED_EXEC_RULE="$ROOT_DIR/.claude/rules/execution-and-verification.md"
+assert_contains "$AGENTS_FILE" '`execution-and-verification.md` 统一冻结后最终验证'
+assert_contains "$SHARED_EXEC_RULE" '源码/测试冻结后，做一次必要最终验证/构建'
+assert_contains "$SHARED_EXEC_RULE" '只读审查、仅文档/台账/PR 描述变化不重跑产品测试'
 assert_contains "$DEPLOY_SKILL" 'feature-head=$(git rev-parse HEAD)'
 assert_contains "$DEPLOY_SKILL" 'feature-head == <pr-head>'
 assert_contains "$DEPLOY_SKILL" 'git merge-base --is-ancestor <merge-commit> origin/main'
