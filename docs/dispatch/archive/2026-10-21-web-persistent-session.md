@@ -42,3 +42,10 @@ Private logs/receipts: C:/Users/Steve/Documents/cretas-claude-handoff-20261021/
 persistent-web-*. Initial target validation preceded the final mixed-header
 identity guard; final source requires its own current-head checks. Typecheck
 and existing Web auth-failure regression evidence are separately recorded.
+
+The production profile's legacy cookie.secure=false was independently found.
+New persistent cookies therefore force Secure=true without changing legacy
+App/access/refresh cookie configuration. The actual Web login controller test
+first failed under the old flag (1 failure, 0 errors); HTTPS-only enforcement
+requires final rebuilt artifacts and new-head CI. Initial cf7 candidate build
+74/74 and local 39/39 (13 actual PG) remain historical, not final-build proof.

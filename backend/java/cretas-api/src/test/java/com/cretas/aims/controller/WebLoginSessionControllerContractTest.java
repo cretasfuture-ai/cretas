@@ -32,7 +32,7 @@ class WebLoginSessionControllerContractTest {
         when(sessions.issue("access")).thenReturn("new-session");
         controller.unifiedLogin(input, request, response);
         var order = inOrder(sessions); order.verify(sessions).issue("access"); order.verify(sessions).revoke("previous");
-        assertThat(response.getHeaders("Set-Cookie")).anySatisfy(cookie -> assertThat(cookie).contains("cretas_web_session=new-session", "HttpOnly"));
+        assertThat(response.getHeaders("Set-Cookie")).anySatisfy(cookie -> assertThat(cookie).contains("cretas_web_session=new-session", "HttpOnly", "; Secure"));
     }
 
     @Test void mobileLoginDoesNotGainPersistentSession() {

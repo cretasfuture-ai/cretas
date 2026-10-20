@@ -107,7 +107,7 @@ public class CookieAuthHelper {
 
     private ResponseCookie webSessionCookie(String value, long maxAge) {
         return ResponseCookie.from(WEB_SESSION_COOKIE, value).httpOnly(true)
-                .secure(secureCookie).sameSite(sameSite).path("/").maxAge(maxAge).build();
+                .secure(true).sameSite(sameSite).path("/").maxAge(maxAge).build();
     }
 
     /**
