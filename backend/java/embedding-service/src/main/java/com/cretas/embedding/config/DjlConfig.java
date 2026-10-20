@@ -40,6 +40,12 @@ public class DjlConfig {
     @Value("${embedding.use-token-type-ids:true}")
     private boolean useTokenTypeIds;
 
+    @Value("${embedding.intra-op-threads:0}")
+    private int intraOpThreads;
+
+    @Value("${embedding.inter-op-threads:0}")
+    private int interOpThreads;
+
     @Getter
     private ZooModel<String, float[]> model;
 
@@ -61,6 +67,9 @@ public class DjlConfig {
     @PostConstruct
     public void init() {
         try {
+            if (intraOpThreads < 0 || interOpThreads < 0) {
+                throw new IllegalArgumentException("Embedding thread counts must be nonnegative");
+            }
             log.info("Initializing DJL Embedding Model...");
             long startTime = System.currentTimeMillis();
 
@@ -85,6 +94,8 @@ public class DjlConfig {
                     .optModelPath(modelDir)
                     .optModelName("model")
                     .optEngine("OnnxRuntime")
+                    .optOption("intraOpNumThreads", Integer.toString(intraOpThreads))
+                    .optOption("interOpNumThreads", Integer.toString(interOpThreads))
                     .optTranslator(translator)
                     .build();
 
