@@ -10,15 +10,16 @@ import urllib.request
 # Assets precede pages that reference their new cache-busting version.
 # NEW_FILES do not exist on the server yet: they must be absent (or already
 # identical) before publication, and rollback deletes them.
-NEW_FILES = ['assets/img/factory-line-480.webp', 'assets/img/factory-line-768.webp',
-             'assets/img/factory-line-1200.webp', 'assets/img/factory-line-1440.webp',
-             'assets/img/factory-line.jpg', 'assets/img/factory-ppe-480.webp',
-             'assets/img/factory-ppe-768.webp', 'assets/img/factory-ppe-1200.webp',
-             'assets/img/factory-ppe-1440.webp', 'assets/img/factory-ppe.jpg']
-FILES = ['css/cretas-site.css', 'css/v6.css', 'css/v6-motion.css', 'js/v6-motion.js',
-         'js/v6-premium.js', 'index.html', 'demo.html', 'solutions-factory.html',
+NEW_FILES = ['assets/brand/cretas-mark.svg', 'assets/brand/cretas-touch.png',
+             'assets/onboarding/conversation.webp', 'assets/onboarding/cost.webp',
+             'assets/onboarding/indicators.webp', 'assets/onboarding/traceability.webp',
+             'css/factory-onboarding.css', 'js/factory-onboarding.js',
+             'downloads/cretas-factory-onboarding.pdf', 'factory-onboarding.html']
+FILES = ['favicon.ico', 'sitemap.xml', 'index.html', 'solutions-factory.html',
          'solutions-logistics.html', 'solutions-ai.html', 'solutions-custom.html',
-         'smartbi.html', 'cockpit.html']
+         'smartbi.html', 'cockpit.html', 'demo.html', 'privacy.html',
+         'app-manual/index.html', 'client-request/index.html',
+         'client-request-example/index.html', 'factorybi-example/index.html']
 HOST = 'root@139.196.165.140'
 ROOT = '/www/wwwroot/showcase/cretaceousfuture'
 REPO = Path(__file__).resolve().parents[2]
@@ -76,7 +77,9 @@ for row in data['files']:
         old=p.read_bytes() if p.exists() else None
         if old is not None and old!=new:
             raise RuntimeError('new file already exists with other content: '+row['path'])
-        stat=p.parent.stat()
+        anc=p.parent
+        while not anc.exists(): anc=anc.parent   # read-only: new dirs are made at write time
+        stat=anc.stat()
         meta={'path':row['path'],'mode':0o644,'uid':stat.st_uid,'gid':stat.st_gid,
               'old':None,'new':sha(new)}
     else:
@@ -103,6 +106,7 @@ changed=[]
 try:
     for p,old,new,meta in paths:
         if (p.read_bytes() if p.exists() else None)!=old: raise RuntimeError('concurrent change before replacement')
+        if old is None: p.parent.mkdir(parents=True,exist_ok=True)
         replace(p,new,meta);changed.append((p,old,new,meta))
     for p,old,new,meta in paths:
         if p.read_bytes()!=new: raise RuntimeError('readback mismatch')
