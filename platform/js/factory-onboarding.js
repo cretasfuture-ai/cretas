@@ -89,13 +89,44 @@
     });
   }
 
-  const menu = document.querySelector('.fb-mobile-menu');
-  if (menu) {
-    menu.querySelectorAll('a[href^="#"]').forEach(link => link.addEventListener('click', () => { menu.open = false; }));
-    menu.addEventListener('keydown', event => {
-      if (event.key !== 'Escape') return;
-      menu.open = false;
-      menu.querySelector('summary').focus();
-    });
+  // In-page sub-nav: sticks below the site nav (which is only sticky on desktop),
+  // highlights the section being read, and scrolls smoothly (through Lenis when it runs).
+  const subnav = document.querySelector('.fb-subnav');
+  const siteNav = document.querySelector('.v6-nav');
+  if (subnav && siteNav) {
+    const links = [...subnav.querySelectorAll('a[href^="#"]')];
+    const targets = links.map(link => document.getElementById(link.hash.slice(1)));
+    const root = document.documentElement;
+    const navHeight = () => (getComputedStyle(siteNav).position === 'sticky' ? siteNav.offsetHeight : 0);
+    const measure = () => root.style.setProperty('--fb-nav-h', navHeight() + 'px');
+    let current = null;
+    const mark = () => {
+      const line = navHeight() + subnav.offsetHeight + 24;
+      let active = null;
+      targets.forEach((target, i) => { if (target && target.getBoundingClientRect().top <= line) active = links[i]; });
+      if (active === current) return;
+      if (current) current.removeAttribute('aria-current');
+      current = active;
+      if (!active) return;
+      active.setAttribute('aria-current', 'true');
+      const row = active.parentElement;
+      // Keep the active pill in view on narrow screens (instant: it follows the page scroll anyway)
+      if (row.scrollWidth > row.clientWidth) row.scrollLeft = active.offsetLeft - (row.clientWidth - active.offsetWidth) / 2;
+    };
+    let queued = false;
+    const onScroll = () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; mark(); }); };
+    measure(); mark();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', () => { measure(); onScroll(); });
+    links.forEach((link, i) => link.addEventListener('click', event => {
+      const target = targets[i];
+      if (!target || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      // Absolute target from the real scrollY: Lenis' own position can lag a native scroll that just happened
+      const top = target.getBoundingClientRect().top + scrollY - (navHeight() + subnav.offsetHeight + 16);
+      if (window.__v6lenis) window.__v6lenis.scrollTo(top);
+      else window.scrollTo({ top, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      history.pushState(null, '', link.hash);
+    }));
   }
 })();

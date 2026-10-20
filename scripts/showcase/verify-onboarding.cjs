@@ -29,7 +29,7 @@ const out=process.env.SHOWCASE_VERIFY_DIR;assert(out,'SHOWCASE_VERIFY_DIR requir
      pdfLinks:document.querySelectorAll('a[download], a[href$=".pdf"]').length,
      brokenImages:[...document.images].filter(i=>i.hasAttribute('src')&&(!i.complete||!i.naturalWidth)).map(i=>i.getAttribute('src')),
      title:document.title,
-     scopeOverflow:[...document.querySelectorAll('.fb-module *, .fb-page main *, .fb-page nav *')].filter(el=>{const box=el.getBoundingClientRect();return box.right>innerWidth+1||box.left< -1;}).slice(0,8).map(el=>({tag:el.tagName,cls:el.className})),
+     scopeOverflow:[...document.querySelectorAll('.fb-module *, .fb-page main *, .fb-page nav *')].filter(el=>{const box=el.getBoundingClientRect();if(!(box.right>innerWidth+1||box.left< -1))return false;/* 手机菜单与本页导航是横向滚动行: 行本身在屏内时, 滚出去的项是被裁掉的, 不算溢出 */const row=el.parentElement&&el.parentElement.closest('.nav-links, .fb-subnav-inner');if(!row)return true;const rb=row.getBoundingClientRect();return rb.right>innerWidth+1||rb.left< -1;}).slice(0,8).map(el=>({tag:el.tagName,cls:el.className})),
     }));
     if(route==='/factory-onboarding.html'){
      assert.equal(await page.locator('.fb-hero-copy').evaluate(el=>getComputedStyle(el).animationName),'none','Reduced motion must suppress the entrance');
@@ -50,10 +50,14 @@ const out=process.env.SHOWCASE_VERIFY_DIR;assert(out,'SHOWCASE_VERIFY_DIR requir
      assert(await viewer.locator('img').evaluate(image=>image.clientWidth===image.naturalWidth));
      assert(await viewer.evaluate(el=>el.getBoundingClientRect().left>=0&&el.getBoundingClientRect().right<=innerWidth));
      await page.keyboard.press('Escape');assert.equal(await page.getByRole('dialog').count(),0);assert(await opener.evaluate(el=>el===document.activeElement));
-     if(width<=900){
-      const menu=page.locator('.fb-mobile-menu');await menu.locator('summary').click();assert(await menu.locator('a[href="#cooperate"]').isVisible());
-      await menu.locator('a[href="#cooperate"]').click();assert.equal(await menu.getAttribute('open'),null);
-     }
+     // 全站菜单统一 (2026-10-20): 本页在全站菜单里是「如何上线」; 页内跳转只走吸顶的本页导航
+     assert.equal(await page.locator('.v6-nav .nav-links a[href="/factory-onboarding.html"]').getAttribute('aria-current'),'page');
+     assert.equal(await page.locator('.v6-nav .nav-links a[href^="#"]').count(),0);
+     assert(await page.locator('.v6-nav .nav-links [aria-current="page"]').evaluate(el=>{const b=el.getBoundingClientRect();return b.left>=0&&b.right<=innerWidth;}),'Current menu item visible');
+     const sub=page.locator('.fb-subnav');await sub.locator('a[href="#cooperate"]').click();
+     await page.waitForFunction(()=>document.querySelector('.fb-subnav a[href="#cooperate"]').getAttribute('aria-current')==='true',null,{timeout:5000});
+     assert.equal(new URL(page.url()).hash,'#cooperate');
+     assert(await page.evaluate(()=>{const s=document.querySelector('.fb-subnav').getBoundingClientRect(),t=document.getElementById('cooperate').getBoundingClientRect();return s.top>=-1&&s.top<=120&&t.top>=s.bottom-1&&t.top<innerHeight/2;}),'Sub-nav stays on screen and does not cover the section it jumped to');
      await page.locator('.fb-hero a[href="#cooperate"]').click();assert.equal(new URL(page.url()).hash,'#cooperate');
      // 能力介绍 PDF 已下线 (2026-10-20): 页面上不能再有下载入口或 .pdf 链接
      assert.equal(await page.locator('a[download], a[href$=".pdf"]').count(),0);
@@ -70,7 +74,7 @@ const out=process.env.SHOWCASE_VERIFY_DIR;assert(out,'SHOWCASE_VERIFY_DIR requir
   const fallback=await browser.newContext({viewport:{width:390,height:900},javaScriptEnabled:false});
   const fallbackPage=await fallback.newPage();await fallbackPage.goto(origin+'/factory-onboarding.html',{waitUntil:'networkidle'});
   assert.equal(await fallbackPage.locator('.fb-proof:visible').count(),3,'All demonstrations must remain visible without JavaScript');
-  await fallbackPage.locator('.fb-mobile-menu summary').click();assert(await fallbackPage.locator('.fb-mobile-menu a[href="#cooperate"]').isVisible());
+  assert(await fallbackPage.locator('.fb-subnav a[href="#cooperate"]').isVisible());assert(await fallbackPage.locator('.v6-nav a[href="/factory-onboarding.html"]').isVisible());
   const imageLink=fallbackPage.locator('.fb-proof a[data-image-title]').first();const imageUrl=await imageLink.getAttribute('href');
   assert.equal((await fallbackPage.request.get(origin+imageUrl)).status(),200);
   results.push({route:'/factory-onboarding.html',width:390,javaScript:false,status:'PASS',description:'All three demonstrations, native navigation and image fallback usable'});
