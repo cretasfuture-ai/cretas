@@ -30,6 +30,7 @@ const emit = defineEmits<{
   (e: 'confirmed', result: IntentExecuteResponse): void;
   (e: 'cancelled'): void;
   (e: 'uncertain'): void;
+  (e: 'recovered', outcome: PurchaseTaskOutcome): void;
 }>();
 
 const status = computed(() => String(props.response.status || '').toUpperCase());
@@ -126,6 +127,7 @@ async function handleCheckStatus() {
     if (generation !== responseGeneration || factoryId !== props.factoryId || grantId !== recoveryGrantId.value) return;
     if (outcome.grantId !== grantId) throw new Error('处理参考不一致');
     recovery.value = outcome;
+    if (isCanonicalPurchase.value) emit('recovered', outcome);
   } catch {
     if (generation === responseGeneration) {
       recoveryError.value = '暂时无法查询，请稍后重试或到采购模块核对。请勿重复提交。';
