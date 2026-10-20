@@ -22,11 +22,15 @@ import { previewRows, isDiffPreview, type PreviewRow } from './aiWriteConfirmRow
 const props = defineProps<{
   response: IntentExecuteResponse;
   factoryId: string;
+  /** Canonical purchase cancellation must be acknowledged by the server first. */
+  cancelHandler?: (grantId: string) => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
   (e: 'confirmed', result: IntentExecuteResponse): void;
   (e: 'cancelled'): void;
+  /** Canonical purchase outcomes require status reconciliation before any retry. */
+  (e: 'uncertain'): void;
 }>();
 
 const status = computed(() => String(props.response.status || '').toUpperCase());
@@ -66,7 +70,7 @@ const isDestructive = computed(() => {
 });
 
 // ── 确认/取消 状态机 ────────────────────────────────────────────────────
-type Phase = 'idle' | 'pending' | 'done' | 'cancelled';
+type Phase = 'idle' | 'pending' | 'done' | 'uncertain' | 'cancelled';
 const phase = ref<Phase>('idle');
 const resultMessage = ref('');
 const resultStatus = ref('');
@@ -96,11 +100,21 @@ function startCountdown() {
     }
     if (remainingSeconds.value !== null && remainingSeconds.value <= 0) {
       stopCountdown();
+      if (isCanonicalPurchase.value) {
+        phase.value = 'uncertain';
+        resultStatus.value = 'OUTCOME_UNKNOWN';
+        resultMessage.value = '确认凭据已超时，结果待核对；请先查看授权状态，禁止重新下单。';
+        emit('uncertain');
+      }
     }
   }, 1000);
 }
 
 const isExpired = computed(() => remainingSeconds.value !== null && remainingSeconds.value <= 0);
+const isCanonicalPurchase = computed(() => (
+  String(props.response.intentCode || '').toUpperCase() === 'PURCHASE_ORDER_CREATE'
+  || Boolean((confirmable.value?.previewData as Record<string, unknown> | null | undefined)?.grantId)
+));
 
 watch(
   () => props.response,
@@ -142,19 +156,41 @@ async function handleConfirm() {
       expiresAt: action.expiresAt,
     });
     stopCountdown();
-    phase.value = 'done';
     resultStatus.value = String(result.status || '').toUpperCase();
     resultMessage.value = result.message || result.formattedText
       || (resultStatus.value === 'SUCCESS' ? '操作已执行。' : '操作未完成。');
+    phase.value = resultStatus.value === 'OUTCOME_UNKNOWN' && isCanonicalPurchase.value ? 'uncertain' : 'done';
     emit('confirmed', result);
+    if (phase.value === 'uncertain') emit('uncertain');
   } catch (e) {
-    phase.value = 'idle';
     const msg = e instanceof Error ? e.message : String(e);
-    ElMessage({ message: `确认执行失败: ${msg}`, type: 'error', duration: 0, showClose: true });
+    if (isCanonicalPurchase.value) {
+      stopCountdown();
+      phase.value = 'uncertain';
+      resultStatus.value = 'OUTCOME_UNKNOWN';
+      resultMessage.value = `确认请求未能确定结果：${msg}。请先查看授权状态，禁止重新下单。`;
+      emit('uncertain');
+    } else {
+      phase.value = 'idle';
+      ElMessage({ message: `确认执行失败: ${msg}`, type: 'error', duration: 0, showClose: true });
+    }
   }
 }
 
-function handleCancel() {
+async function handleCancel() {
+  if (isCanonicalPurchase.value && props.cancelHandler) {
+    const grantId = String((confirmable.value?.previewData as Record<string, unknown> | null | undefined)?.grantId || '');
+    if (!grantId || phase.value === 'pending') return;
+    phase.value = 'pending';
+    const acknowledged = await props.cancelHandler(grantId);
+    if (!acknowledged) {
+      phase.value = 'uncertain';
+      resultStatus.value = 'OUTCOME_UNKNOWN';
+      resultMessage.value = '撤销尚未得到服务器确认，当前采购仍被锁定；请查询授权状态。';
+      emit('uncertain');
+      return;
+    }
+  }
   stopCountdown();
   phase.value = 'cancelled';
   emit('cancelled');
@@ -186,7 +222,7 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
       <span>{{ intentName }} — 操作预览</span>
     </div>
     <!-- 确认成功后卡体替换为结果 -->
-    <div v-if="phase === 'done'" class="op-card-body">
+    <div v-if="phase === 'done' || phase === 'uncertain'" class="op-card-body">
       <div class="op-card-result">
         <el-icon v-if="resultStatus === 'SUCCESS'" class="op-result-icon-success"><CircleCheckFilled /></el-icon>
         <el-icon v-else><InfoFilled /></el-icon>
@@ -194,7 +230,7 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
         <el-tag v-if="resultStatus === 'DEMO_WRITE_BLOCKED'" type="info" size="small" effect="plain">演示环境</el-tag>
       </div>
     </div>
-    <template v-else>
+    <template v-else-if="phase !== 'uncertain'">
       <div class="op-card-body">
         <div v-if="confirmable.description" class="op-card-description">{{ confirmable.description }}</div>
         <!-- 影响说明 (写操作契约: 修改后的影响解释) -->

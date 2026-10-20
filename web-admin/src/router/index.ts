@@ -773,6 +773,12 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: { requiresAuth: true, title: '采购订单', module: 'procurement' }
           },
           {
+            path: 'ai-purchase',
+            name: 'ControlledAiPurchase',
+            component: () => import('@/views/procurement/ai-purchase/index.vue'),
+            meta: { requiresAuth: true, title: 'AI受控采购', module: 'procurement' }
+          },
+          {
             path: 'orders/:id',
             name: 'ProcurementOrderDetail',
             component: () => import('@/views/procurement/orders/detail.vue'),
