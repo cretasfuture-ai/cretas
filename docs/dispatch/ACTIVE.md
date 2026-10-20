@@ -89,7 +89,6 @@
 
 ## Scope 锁地图
 
-- `ERP-S1-CONTROLLED-ENTRY-20261020` — `in-progress` — Owner: Chat01a15712；Base cc20efaa。仅 canonical orchestrator/确认边界测试及本任务归档，修复真实UI缺少意图配置；权限/确认/事务不放宽。精确scope与验收见 archive/2026-10-20-erp-s1-controlled-exec.md。
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915`：仅新建 `scripts/e2e/shenglong-demo/**`；⛔ 不改后端/前端代码、不 SQL 直插、凭证不入库。
