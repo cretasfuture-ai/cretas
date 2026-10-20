@@ -140,11 +140,42 @@ class AiPurchaseTaskGrantRepositoryQueryValidationTest {
             Path migrationRootPath = Files.createTempDirectory("grant-v69-flyway-");
             Files.copy(Path.of("src/main/resources/db/flyway/V20261103_69__ai_purchase_task_grants.sql"),
                     migrationRootPath.resolve("V20261103_69__ai_purchase_task_grants.sql"));
+            Files.copy(Path.of("src/main/resources/db/flyway/V20261103_70__ai_purchase_task_grant_tax_scope.sql"),
+                    migrationRootPath.resolve("V20261103_70__ai_purchase_task_grant_tax_scope.sql"));
             Flyway.configure().dataSource(url, user, password)
                     .schemas(schema).defaultSchema(schema)
                     .locations("filesystem:" + migrationRootPath.toAbsolutePath())
                     .placeholderReplacement(false)
+                    .target("20261103.69")
                     .load().migrate();
+
+            String insert = "INSERT INTO " + schema + ".ai_purchase_task_grants "
+                    + "(id,factory_id,user_id,tool_name,descriptor_version,supplier_id,material_type_id,quantity_cap,quantity_unit,unit_price,amount_cap,currency,tax_rate,input_digest,approved_input_snapshot,expires_at) "
+                    + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP + INTERVAL '5 minutes')";
+            try (Connection connection = DriverManager.getConnection(url, user, password);
+                 var statement = connection.prepareStatement(insert)) {
+                setMigrationGrant(statement, "legacy0", BigDecimal.ZERO);
+                assertThat(statement.executeUpdate()).isEqualTo(1);
+                setMigrationGrant(statement, "tooEarly13", new BigDecimal("13"));
+                org.junit.jupiter.api.Assertions.assertThrows(java.sql.SQLException.class, statement::executeUpdate);
+            }
+            Flyway.configure().dataSource(url, user, password)
+                    .schemas(schema).defaultSchema(schema)
+                    .locations("filesystem:" + migrationRootPath.toAbsolutePath())
+                    .placeholderReplacement(false).load().migrate();
+            try (Connection connection = DriverManager.getConnection(url, user, password);
+                 var statement = connection.prepareStatement(insert);
+                 var read = connection.createStatement()) {
+                setMigrationGrant(statement, "supported13", new BigDecimal("13.00"));
+                assertThat(statement.executeUpdate()).isEqualTo(1);
+                for (String rate : java.util.List.of("9", "0.13", "100")) {
+                    setMigrationGrant(statement, "unsupported" + rate, new BigDecimal(rate));
+                    org.junit.jupiter.api.Assertions.assertThrows(java.sql.SQLException.class, statement::executeUpdate);
+                }
+                try (var rows = read.executeQuery("SELECT COUNT(*) FROM " + schema + ".ai_purchase_task_grants WHERE id='legacy0' AND tax_rate=0 AND version=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getInt(1)).isEqualTo(1);
+                }
+            }
 
             try (Connection connection = DriverManager.getConnection(url, user, password);
                  java.sql.PreparedStatement columns = connection.prepareStatement(
@@ -199,5 +230,10 @@ class AiPurchaseTaskGrantRepositoryQueryValidationTest {
                 .currency("CNY").taxRate(BigDecimal.ZERO).inputDigest("digest-1")
                 .approvedInputSnapshot("approved-input")
                 .expiresAt(LocalDateTime.now().plusMinutes(15)).version(1L).build();
+    }
+
+    private static void setMigrationGrant(java.sql.PreparedStatement statement, String id, BigDecimal rate) throws java.sql.SQLException {
+        Object[] values = {id,"F-PG",42L,"purchase_order_create","2.0.0","SUP-PG","MAT-PG",new BigDecimal("2"),"kg",new BigDecimal("10"),new BigDecimal("22.60"),"CNY",rate,"digest","snapshot"};
+        for (int i=0;i<values.length;i++) statement.setObject(i+1,values[i]);
     }
 }

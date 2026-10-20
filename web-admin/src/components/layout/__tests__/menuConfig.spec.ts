@@ -404,6 +404,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/procurement/requisitions/pending-approval',
       '/procurement/requisitions',
       '/procurement/orders',
+      '/procurement/ai-purchase',
       '/procurement/suppliers',
       '/procurement/price-lists',
     ]);

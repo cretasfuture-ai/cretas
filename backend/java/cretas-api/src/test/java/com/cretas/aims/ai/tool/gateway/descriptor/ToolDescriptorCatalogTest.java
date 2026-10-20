@@ -65,10 +65,11 @@ class ToolDescriptorCatalogTest {
         // doPreview() (报工在 AI 对话里走「预览 → 确认」), 同 ToolDescriptorInventoryDriftTest 42 → 44。
         // 2026-10-06: 39 → 47 (+8): 一线默认开放的 8 个日常写工具补只读 doPreview() (打卡 2 / 原料入库 + 领用 /
         // 周转框发出 + 归还 / 质检任务 + 不良登记), 同 ToolDescriptorInventoryDriftTest 的 override supportsPreview 44 → 52。
-        assertThat(statistics.previewSupported()).isEqualTo(47);
+        // Controlled purchase now requires a real preview and current procurement permission.
+        assertThat(statistics.previewSupported()).isEqualTo(48);
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
-        assertThat(statistics.requiresPermission()).isEqualTo(45);
+        assertThat(statistics.requiresPermission()).isEqualTo(46);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -90,8 +91,13 @@ class ToolDescriptorCatalogTest {
         assertThat(catalog.inventory().descriptors())
                 .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
-                    assertThat(entry.version()).isEqualTo("1.0.0");
-                    if (legacyToolsWithKnownRequiredPermissions.contains(entry.toolName())) {
+                    boolean controlledPurchase = "purchase_order_create".equals(entry.toolName());
+                    assertThat(entry.version()).isEqualTo(controlledPurchase ? "2.0.0" : "1.0.0");
+                    if (controlledPurchase) {
+                        assertThat(entry.requiredPermissions()).containsExactly("procurement:read_write");
+                        assertThat(entry.supportsPreview()).isTrue();
+                        assertThat(entry.requiresPermission()).isTrue();
+                    } else if (legacyToolsWithKnownRequiredPermissions.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
                     } else if (legacyToolsWithPriceViewPermission.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("procurement:price:view");

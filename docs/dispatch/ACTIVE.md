@@ -9,7 +9,8 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner /root — Base 6c4ecfe93ff7751066ea7323e5c6750a7eae11fe — #1033/#1035/#1037已发布；S0真机/业务复验及S1受控执行批。归档archive/2026-10-19-erp-s0-s1-capabilities.md；唯一场景表C:/Users/Steve/Documents/cretas-optimization-20261019/final-plan/验收场景表.csv；QA独占CSV/手机。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15712-62f2-7313-a46b-2d02972e77eb — Base 28d02b70af193b87597cc9d67687fa62f8b13324 — #1041授权核心已部署、#1044双机CI已验；S0与S1入口继续，详archive/2026-10-20-erp-s1-controlled-exec.md；QA仍独占CSV/手机/浏览器。
+
 
 
 

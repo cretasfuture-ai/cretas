@@ -73,6 +73,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class IntentExecutionOrchestrator {
+    @Autowired
+    private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
     private FactoryFollowUpService factoryFollowUpService;
 
@@ -1186,6 +1188,18 @@ public class IntentExecutionOrchestrator {
 
         String confirmToken = confirmationProof.proofToken();
 
+        // A completed canonical purchase is recovered by its persisted preview identity, never a new key.
+        try {
+            if (controlledPurchase != null) {
+                var replay = controlledPurchase.replay(factoryId, confirmationProof);
+                if (replay.isPresent()) return controlledPurchaseResponse(replay.get(), "SUCCESS", "原采购草稿已创建，返回持久化结果");
+            }
+        } catch (RuntimeException recoveryFailure) {
+            return IntentExecuteResponse.builder().status("OUTCOME_UNKNOWN")
+                    .message("无法核对采购确认状态，请查看授权状态；禁止重新下单")
+                    .aiMode("WRITE").build();
+        }
+
         PreviewTokenService.ClaimResult claimResult =
                 previewTokenService.claimToken(
                         confirmToken,
@@ -1264,6 +1278,10 @@ public class IntentExecutionOrchestrator {
                         .message("工具版本已变化，请重新发起预览")
                         .executedAt(LocalDateTime.now())
                         .build();
+            }
+
+            if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(boundToolName)) {
+                return confirmControlledPurchase(factoryId, token, claimId, confirmationProof, intentConfig, userId, userRole);
             }
 
             Map<String, Object> context = claimResult.getParameters() != null
@@ -1350,6 +1368,43 @@ public class IntentExecutionOrchestrator {
     }
 
     // ==================== 内部路由方法 ====================
+
+    private IntentExecuteResponse confirmControlledPurchase(String factoryId,
+            com.cretas.aims.entity.intent.IntentPreviewToken token, String claimId,
+            ConfirmationProof proof, AIIntentConfig intent, Long userId, String userRole) {
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        if (permissionDenied != null) {
+            previewTokenService.resolveClaim(proof.proofToken(), claimId, false, "当前意图权限不足");
+            return permissionDenied;
+        }
+        try {
+            var outcome = controlledPurchase.executeConfirmed(factoryId, token.getId(), claimId);
+            if (!previewTokenService.resolveClaim(proof.proofToken(), claimId, true, "采购草稿已创建:" + outcome.purchaseOrderId())) {
+                return controlledPurchaseResponse(outcome, "OUTCOME_UNKNOWN", "采购结果已记录，确认状态待核对；请查看授权状态，禁止重新下单");
+            }
+            return controlledPurchaseResponse(outcome, "SUCCESS", "采购草稿已创建；请在采购模块按独立OA流程提交审批");
+        } catch (com.cretas.aims.exception.BusinessException | IllegalArgumentException
+                 | com.cretas.aims.service.intent.PurchaseTaskGrantService.GrantRejectedException rejected) {
+            previewTokenService.resolveClaim(proof.proofToken(), claimId, false, "受控采购被拒绝");
+            return IntentExecuteResponse.builder().status("FAILED").aiMode("WRITE")
+                    .message("受控采购已拒绝，事务未提交：" + rejected.getMessage())
+                    .resultData(java.util.Map.of("grantId", com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.grantId(token.getId())))
+                    .build();
+        } catch (RuntimeException uncertain) {
+            // Do not mark a potentially committed purchase as failed or re-enter legacy retries.
+            return IntentExecuteResponse.builder().status("OUTCOME_UNKNOWN").aiMode("WRITE")
+                    .message("采购提交结果待核对，请查看授权状态；禁止重新下单")
+                    .resultData(java.util.Map.of("grantId", com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.grantId(token.getId())))
+                    .build();
+        }
+    }
+
+    private IntentExecuteResponse controlledPurchaseResponse(
+            com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.Outcome outcome, String status, String message) {
+        return IntentExecuteResponse.builder().status(status).aiMode("WRITE")
+                .intentCode("PURCHASE_ORDER_CREATE").message(message).formattedText(message)
+                .resultData(outcome).executedAt(LocalDateTime.now()).build();
+    }
 
     private IntentExecuteResponse handleConversationContinuation(String factoryId, IntentExecuteRequest request,
                                                                    Long userId, String userRole) {

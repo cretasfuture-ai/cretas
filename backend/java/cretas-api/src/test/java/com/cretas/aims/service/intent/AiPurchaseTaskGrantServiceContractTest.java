@@ -59,8 +59,10 @@ import static org.mockito.Mockito.*;
 @EntityScan(basePackageClasses = {AiPurchaseTaskGrant.class, PurchaseOrder.class, PurchaseOrderItem.class,
         Factory.class, Supplier.class, User.class, RawMaterialType.class, PurchaseReceiveRecord.class})
 @EnableJpaRepositories(basePackageClasses = {AiPurchaseTaskGrantRepository.class,
-        PurchaseOrderRepository.class, PurchaseOrderItemRepository.class})
-@Import(PurchaseTaskGrantService.class)
+        PurchaseOrderRepository.class, PurchaseOrderItemRepository.class,
+        com.cretas.aims.repository.intent.IntentPreviewTokenRepository.class})
+@Import({PurchaseTaskGrantService.class, ControlledPurchaseTaskExecutionService.class,
+        com.cretas.aims.service.impl.PreviewTokenServiceImpl.class, AiPurchaseTaskGrantServiceContractTest.JsonConfiguration.class})
 class AiPurchaseTaskGrantServiceContractTest {
 
     @DynamicPropertySource
@@ -89,12 +91,219 @@ class AiPurchaseTaskGrantServiceContractTest {
     @MockBean PurchaseService purchaseService;
     @Autowired PurchaseOrderRepository purchaseOrderRepository;
     @Autowired PurchaseOrderItemRepository purchaseOrderItemRepository;
+    @Autowired ControlledPurchaseTaskExecutionService controlled;
+    @Autowired com.cretas.aims.service.PreviewTokenService previewTokens;
+    @Autowired com.cretas.aims.repository.intent.IntentPreviewTokenRepository previewRepository;
+    @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
+    @MockBean com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy principalPolicy;
+    @MockBean com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory principalFactory;
+    @MockBean com.cretas.aims.ai.tool.ToolRegistry toolRegistry;
+    @MockBean RawMaterialTypeRepository controlledMaterials;
+    @MockBean SupplierRepository controlledSuppliers;
+    @MockBean com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository frontlineGrants;
+
+    @org.springframework.boot.test.context.TestConfiguration
+    static class JsonConfiguration {
+        @org.springframework.context.annotation.Bean
+        com.fasterxml.jackson.databind.ObjectMapper testObjectMapper() {
+            return new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        }
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void releaseHttpIdentity() { org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes(); }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void confirmedAdapterCommitsOneRealDraftAndRecoverySurvivesWritePermissionLoss() throws Exception {
+        var claim = confirmedPurchase();
+        long before = purchaseOrderRepository.count();
+        try {
+            var first = controlled.executeConfirmed("F-1", claim.getToken().getId(), claim.getClaimId());
+            assertThat(first.grossAmount()).isEqualByComparingTo("22.60");
+            assertThat(purchaseOrderRepository.count()).isEqualTo(before+1);
+            assertThat(controlled.executeConfirmed("F-1", claim.getToken().getId(), claim.getClaimId()).purchaseOrderId()).isEqualTo(first.purchaseOrderId());
+            assertThat(purchaseOrderRepository.count()).isEqualTo(before+1);
+            var current = new com.cretas.aims.ai.tool.gateway.ExecutionPrincipal("F-1","FACTORY","42",
+                    com.cretas.aims.ai.tool.gateway.PrincipalType.USER,java.util.Set.of("purchaser"),java.util.Set.of(),java.util.Set.of());
+            when(principalPolicy.rehydrate(any())).thenReturn(Optional.of(new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(current,java.util.Map.of("canViewPrices",false))));
+            var read = controlled.status("F-1", first.grantId());
+            assertThat(read.state()).isEqualTo("DRAFT"); assertThat(read.purchaseOrderId()).isEqualTo(first.purchaseOrderId());
+            assertThat(read.grossAmount()).isNull();
+            var replay = controlled.replay("F-1", new com.cretas.aims.ai.tool.gateway.ConfirmationProof(
+                    claim.getToken().getToken(), claim.getToken().getCommandDigest(), java.time.Instant.now().plusSeconds(60)));
+            assertThat(replay).get().satisfies(r -> { assertThat(r.purchaseOrderId()).isEqualTo(first.purchaseOrderId()); assertThat(r.grossAmount()).isNull(); });
+        } finally { cleanupConfirmed(claim.getToken().getId()); }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void disabledToolInBeforeCommitRollsBackRealDraftAndGrantButKeepsClaimReconcilable() throws Exception {
+        var claim = confirmedPurchase(); long orders = purchaseOrderRepository.count();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(toolRegistry.isToolEnabledForFactory("F-1","purchase_order_create"))
+                .thenAnswer(invocation -> calls.incrementAndGet() < 3);
+        try {
+            assertThatThrownBy(() -> controlled.executeConfirmed("F-1",claim.getToken().getId(),claim.getClaimId())).hasMessageContaining("已停用");
+            assertThat(calls.get()).isGreaterThanOrEqualTo(3);
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.findById(ControlledPurchaseTaskExecutionService.grantId(claim.getToken().getId()))).isEmpty();
+            assertThat(controlled.status("F-1",ControlledPurchaseTaskExecutionService.grantId(claim.getToken().getId())).state()).isEqualTo("UNKNOWN");
+        } finally { cleanupConfirmed(claim.getToken().getId()); }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void materialDisabledAtCommitAndPostWriteFailureBothRollbackBudgetAndPurchase() throws Exception {
+        var claim = confirmedPurchase(); long orders = purchaseOrderRepository.count();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(invocation -> {
+            if (calls.incrementAndGet() == 3) jdbcTemplate.update("UPDATE raw_material_types SET is_active=FALSE WHERE id='MAT-1' AND factory_id='F-1'");
+            return Optional.of(entityManager.getEntityManager().find(RawMaterialType.class,"MAT-1"));
+        }).when(controlledMaterials).findByIdAndFactoryId("MAT-1","F-1");
+        try {
+            assertThatThrownBy(() -> controlled.executeConfirmed("F-1",claim.getToken().getId(),claim.getClaimId())).hasMessageContaining("已停用");
+            assertThat(calls.get()).isGreaterThanOrEqualTo(3);
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.findById(ControlledPurchaseTaskExecutionService.grantId(claim.getToken().getId()))).isEmpty();
+        } finally { cleanupConfirmed(claim.getToken().getId()); }
+        var second = confirmedPurchase();
+        PurchaseServiceImpl real = realPurchaseService();
+        when(purchaseService.createPurchaseOrder(eq("F-1"),any(),eq(42L))).thenAnswer(invocation -> {
+            real.createPurchaseOrder(invocation.getArgument(0),invocation.getArgument(1),invocation.getArgument(2));
+            throw new IllegalStateException("injected-after-real-purchase-write");
+        });
+        try {
+            assertThatThrownBy(() -> controlled.executeConfirmed("F-1",second.getToken().getId(),second.getClaimId())).hasMessageContaining("after-real-purchase-write");
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.findById(ControlledPurchaseTaskExecutionService.grantId(second.getToken().getId()))).isEmpty();
+        } finally { cleanupConfirmed(second.getToken().getId()); }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void pendingPreviewRevokeSurvivesLostResponseWithoutPurchaseOrBudgetWrite() throws Exception {
+        var token = pendingPurchase();
+        String id = ControlledPurchaseTaskExecutionService.grantId(token.getId());
+        long orders = purchaseOrderRepository.count();
+        long grants = repository.count();
+        try {
+            assertThat(controlled.status("F-1", id).state()).isEqualTo("PENDING");
+            assertThat(controlled.revoke("F-1", id, null, "user cancelled").state()).isEqualTo("REVOKED");
+            assertThat(controlled.status("F-1", id).state()).isEqualTo("REVOKED");
+            assertThat(previewTokens.claimToken(token.getToken(), "F-1", 42L, token.getCommandDigest()).isSuccess()).isFalse();
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.count()).isEqualTo(grants);
+        } finally { cleanupConfirmed(token.getId()); }
+    }
+
+    private com.cretas.aims.entity.intent.IntentPreviewToken pendingPurchase() throws Exception {
+        seedPurchaseReferences();
+        var http = new org.springframework.mock.web.MockHttpServletRequest();
+        http.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER,42L,"F-1","purchaser"));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(new org.springframework.web.context.request.ServletRequestAttributes(http));
+        var principal = new com.cretas.aims.ai.tool.gateway.ExecutionPrincipal("F-1","FACTORY","42",
+                com.cretas.aims.ai.tool.gateway.PrincipalType.USER,java.util.Set.of("purchaser"),java.util.Set.of("procurement:read_write"),java.util.Set.of());
+        when(principalFactory.create("F-1",42L,"purchaser")).thenReturn(principal);
+        when(principalPolicy.rehydrate(principal)).thenReturn(Optional.of(new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(principal,java.util.Map.of("canViewPrices",true))));
+        when(toolRegistry.isToolEnabledForFactory("F-1","purchase_order_create")).thenReturn(true);
+        doAnswer(invocation -> Optional.of(entityManager.getEntityManager().find(Supplier.class,"SUP-1"))).when(controlledSuppliers).findByIdAndFactoryId("SUP-1","F-1");
+        doAnswer(invocation -> Optional.of(entityManager.getEntityManager().find(RawMaterialType.class,"MAT-1"))).when(controlledMaterials).findByIdAndFactoryId("MAT-1","F-1");
+        var input = new java.util.HashMap<String,Object>(java.util.Map.of("supplierId","SUP-1","materialTypeId","MAT-1","quantity","2","unitPrice","10","taxRate","13.00","unit","kg","currency","CNY","amountCap","22.60"));
+        input.put("remark","controlled-"+java.util.UUID.randomUUID());
+        var parameters = controlled.previewParameters("F-1",input);
+        var token = previewTokens.createBoundToken(new com.cretas.aims.service.PreviewTokenService.BoundTokenRequest(
+                "F-1",42L,null,"PURCHASE_ORDER_CREATE","purchase","purchase_order_create","2.0.0",
+                com.cretas.aims.ai.tool.gateway.ToolExecutionMode.EXECUTE,null,null,null,parameters,java.util.Map.of(),parameters,300));
+        return token;
+    }
+
+    private com.cretas.aims.service.PreviewTokenService.ClaimResult confirmedPurchase() throws Exception {
+        var token = pendingPurchase();
+        var claim = previewTokens.claimToken(token.getToken(),"F-1",42L,token.getCommandDigest());
+        assertThat(claim.isSuccess()).isTrue();
+        PurchaseServiceImpl real = realPurchaseService();
+        when(purchaseService.createPurchaseOrder(eq("F-1"),any(),eq(42L))).thenAnswer(invocation ->
+                real.createPurchaseOrder(invocation.getArgument(0),invocation.getArgument(1),invocation.getArgument(2)));
+        return claim;
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void permissionRevocationAndTokenExpiryAtCommitCannotSpendOrPersistPurchase() throws Exception {
+        var claim = confirmedPurchase(); long orders = purchaseOrderRepository.count();
+        var principal = principalFactory.create("F-1",42L,"purchaser");
+        var allowed = principalPolicy.rehydrate(principal);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(principalPolicy.rehydrate(principal)).thenAnswer(invocation -> calls.incrementAndGet() < 3 ? allowed : Optional.empty());
+        try {
+            assertThatThrownBy(() -> controlled.executeConfirmed("F-1",claim.getToken().getId(),claim.getClaimId())).hasMessageContaining("授权不可用");
+            assertThat(calls.get()).isGreaterThanOrEqualTo(3);
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.findById(ControlledPurchaseTaskExecutionService.grantId(claim.getToken().getId()))).isEmpty();
+        } finally { cleanupConfirmed(claim.getToken().getId()); }
+        var expired = confirmedPurchase(); PurchaseServiceImpl real = realPurchaseService();
+        when(purchaseService.createPurchaseOrder(eq("F-1"),any(),eq(42L))).thenAnswer(invocation -> {
+            var order = real.createPurchaseOrder(invocation.getArgument(0),invocation.getArgument(1),invocation.getArgument(2));
+            jdbcTemplate.update("UPDATE intent_preview_tokens SET expires_at=? WHERE id=? AND factory_id='F-1'",LocalDateTime.now().minusSeconds(1),expired.getToken().getId());
+            return order;
+        });
+        try {
+            assertThatThrownBy(() -> controlled.executeConfirmed("F-1",expired.getToken().getId(),expired.getClaimId())).hasMessageContaining("提交前失效");
+            assertThat(purchaseOrderRepository.count()).isEqualTo(orders);
+            assertThat(repository.findById(ControlledPurchaseTaskExecutionService.grantId(expired.getToken().getId()))).isEmpty();
+        } finally { cleanupConfirmed(expired.getToken().getId()); }
+    }
+
+    private void cleanupConfirmed(Long previewId) {
+        var grant = repository.findById(ControlledPurchaseTaskExecutionService.grantId(previewId));
+        String order = grant.map(AiPurchaseTaskGrant::getResultPurchaseOrderId).orElse(null);
+        grant.ifPresent(repository::delete);
+        if (order != null) {
+            jdbcTemplate.update("DELETE FROM purchase_order_items WHERE purchase_order_id=?",order);
+            jdbcTemplate.update("DELETE FROM purchase_orders WHERE id=? AND factory_id='F-1'",order);
+        }
+        previewRepository.deleteById(previewId);
+    }
 
     /**
      * Failure-first source contract: the real implementation currently returns the order
      * before attaching the separately persisted item list. The grant boundary must therefore
      * read the item rows back by order id before it verifies or consumes a grant.
      */
+    @Test
+    void thirteenPercentConsumesGrossButPersistsNetAndSeparateTaxThroughRealPurchaseService() {
+        var request = purchaseRequest("SUP-1", "MAT-1", "2.00", "10.00");
+        request.getItems().get(0).setTaxRate(new BigDecimal("13.00"));
+        var specification = new PurchaseTaskGrantService.GrantSpec("F-1", 42L, "2.0.0", "SUP-1", "MAT-1",
+                new BigDecimal("2"), "kg", new BigDecimal("10"), new BigDecimal("22.60"), "CNY",
+                new BigDecimal("13.00"), null, 1234L, request);
+        AiPurchaseTaskGrant grant = service.issueGrant(specification);
+        seedPurchaseReferences();
+        PurchaseServiceImpl realService = realPurchaseService();
+        when(purchaseService.createPurchaseOrder(eq("F-1"), any(CreatePurchaseOrderRequest.class), eq(42L)))
+                .thenAnswer(invocation -> realService.createPurchaseOrder(invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2)));
+        var result = service.executeGrant(execution(grant, request, "tax13"));
+        assertThat(result.amount()).isEqualByComparingTo("22.60");
+        var order = purchaseOrderRepository.findById(result.purchaseOrderId()).orElseThrow();
+        assertThat(order.getTotalAmount()).isEqualByComparingTo("20.00");
+        assertThat(order.getTaxAmount()).isEqualByComparingTo("2.60");
+        assertThat(order.getStatus()).isEqualTo(PurchaseOrderStatus.DRAFT);
+        assertThat(repository.findById(grant.getId()).orElseThrow().getResultAmount()).isEqualByComparingTo("22.60");
+    }
+
+    @Test
+    void thirteenPercentCannotSpendOnlyTheUntaxedBudget() {
+        var request = purchaseRequest("SUP-1", "MAT-1", "2", "10");
+        request.getItems().get(0).setTaxRate(new BigDecimal("13.00"));
+        assertThatThrownBy(() -> service.issueGrant(new PurchaseTaskGrantService.GrantSpec("F-1", 42L,
+                "2.0.0", "SUP-1", "MAT-1", new BigDecimal("2"), "kg", new BigDecimal("10"),
+                new BigDecimal("20.00"), "CNY", new BigDecimal("13"), null, 1234L, request)))
+                .isInstanceOf(PurchaseTaskGrantService.GrantRejectedException.class);
+        verifyNoInteractions(purchaseService);
+    }
+
     @Test
     void realPurchaseServiceCreateMustReturnOrReadBackPersistedItems() {
         seedPurchaseReferences();
