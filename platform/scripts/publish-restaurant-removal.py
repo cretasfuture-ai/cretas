@@ -10,16 +10,8 @@ import urllib.request
 # Assets precede pages that reference their new cache-busting version.
 # NEW_FILES do not exist on the server yet: they must be absent (or already
 # identical) before publication, and rollback deletes them.
-NEW_FILES = ['assets/brand/cretas-mark.svg', 'assets/brand/cretas-touch.png',
-             'assets/onboarding/conversation.webp', 'assets/onboarding/cost.webp',
-             'assets/onboarding/indicators.webp', 'assets/onboarding/traceability.webp',
-             'css/factory-onboarding.css', 'js/factory-onboarding.js',
-             'factory-onboarding.html']
-FILES = ['favicon.ico', 'sitemap.xml', 'index.html', 'solutions-factory.html',
-         'solutions-logistics.html', 'solutions-ai.html', 'solutions-custom.html',
-         'smartbi.html', 'cockpit.html', 'demo.html', 'privacy.html',
-         'app-manual/index.html', 'client-request/index.html',
-         'client-request-example/index.html', 'factorybi-example/index.html']
+NEW_FILES = []
+FILES = ['solutions-factory.html']
 HOST = 'root@139.196.165.140'
 ROOT = '/www/wwwroot/showcase/cretaceousfuture'
 REPO = Path(__file__).resolve().parents[2]
