@@ -118,6 +118,17 @@ class PublishTransactionTest(unittest.TestCase):
         self.assertFalse(new.exists())
         self.assertEqual((self.root/'index.html').read_bytes(), b'old index.html')
 
+    def test_new_file_in_missing_directory_is_created_only_on_publish(self):
+        self.rows.insert(0,{'path':'downloads/guide/new.pdf','baseline':None,
+                            'content':base64.b64encode(b'pdf bytes').decode()})
+        target=self.root/'downloads'/'guide'/'new.pdf'
+        self.assertEqual(self.run_transaction(True)['status'], 'baseline_verified')
+        self.assertFalse((self.root/'downloads').exists())   # check stays read-only
+        self.assertEqual(self.run_transaction()['status'], 'published')
+        self.assertEqual(target.read_bytes(), b'pdf bytes')
+        self.assertEqual(self.run_transaction(action='rollback')['status'], 'rolled_back')
+        self.assertFalse(target.exists())
+
     def test_new_file_with_other_content_rejects_entire_batch(self):
         new=self.add_new_file()
         new.write_bytes(b'someone else')
