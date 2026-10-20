@@ -1,0 +1,87 @@
+/* 对话建厂页动效层。只作用于 .fb-page；需要 JS 的部分挂在 html.fbm 下
+   (factory-onboarding-motion.js 在允许动效时才加这个类)，无脚本 / 减少动态时页面与原版一致。 */
+
+/* ---- 液态玻璃导航：桌面端吸顶，滚动后变成带流动亮边的毛玻璃 -------------------------- */
+@media (min-width: 901px) {
+  .fb-page .v6-nav { position: sticky; top: 0; z-index: 30; }
+  .fb-page .v6-nav::before {
+    content: ""; position: absolute; z-index: -1; top: 0; bottom: 0;
+    left: calc(50% - 50vw); right: calc(50% - 50vw);
+    background: rgba(253, 252, 250, .64);
+    -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6);
+    box-shadow: 0 10px 30px -22px rgba(16, 44, 35, .45);
+    opacity: 0; transition: opacity .4s var(--fb-ease);
+  }
+  .fb-page .v6-nav::after {
+    content: ""; position: absolute; z-index: -1; bottom: 0; height: 1px;
+    left: calc(50% - 50vw); right: calc(50% - 50vw);
+    background: linear-gradient(90deg, transparent 0%, rgba(0, 179, 119, .0) 30%, rgba(0, 179, 119, .7) 50%, rgba(0, 179, 119, 0) 70%, transparent 100%);
+    background-size: 200% 100%; opacity: 0; transition: opacity .4s var(--fb-ease);
+  }
+  .fb-page .v6-nav.is-glass::before, .fb-page .v6-nav.is-glass::after { opacity: 1; }
+  html.fbm .fb-page .v6-nav.is-glass::after { animation: fbm-edge 7s linear infinite; }
+}
+@keyframes fbm-edge { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* ---- 首屏：逐字入场 ----------------------------------------------------------------- */
+.fbm-ch { display: inline-block; white-space: pre; will-change: transform, opacity; }
+
+/* ---- 首屏：3D 截图 + 光标聚光 + 呼吸氛围光 ----------------------------------------- */
+html.fbm .fb-hero-visual { position: relative; perspective: 1400px; }
+html.fbm .fb-hero-visual::before {
+  content: ""; position: absolute; inset: 8% 6% 14%; z-index: -1; border-radius: 40%;
+  background: radial-gradient(closest-side, rgba(0, 179, 119, .28), rgba(0, 179, 119, 0));
+  filter: blur(36px); animation: fbm-breathe 6s ease-in-out infinite alternate;
+}
+@keyframes fbm-breathe { from { opacity: .55; transform: scale(.94); } to { opacity: 1; transform: scale(1.04); } }
+html.fbm .fb-hero-visual .fb-image-link { display: block; position: relative; transform-style: preserve-3d; border-radius: 12px; }
+html.fbm .fb-hero-visual .fb-image-link img { box-shadow: 0 40px 80px -40px rgba(16, 44, 35, .45); }
+.fbm-spot {
+  position: absolute; inset: 0; border-radius: 12px; pointer-events: none; opacity: 0;
+  background: radial-gradient(420px circle at var(--fbm-x, 50%) var(--fbm-y, 50%), rgba(255, 255, 255, .32), rgba(0, 226, 138, .10) 40%, transparent 65%);
+  mix-blend-mode: soft-light; transition: opacity .35s var(--fb-ease);
+}
+.fb-hero-visual:hover .fbm-spot { opacity: 1; }
+
+/* ---- 四步：滚动联动进度线 ----------------------------------------------------------- */
+html.fbm .fb-method ol { position: relative; }
+.fbm-rail {
+  position: absolute; left: clamp(20px, 4vw, 48px); right: clamp(20px, 4vw, 48px); top: -22px; height: 2px;
+  background: rgba(114, 227, 178, .16); border-radius: 2px; overflow: hidden;
+}
+.fbm-rail i { position: absolute; inset: 0; background: linear-gradient(90deg, #00b377, #72e3b2); transform-origin: 0 50%; transform: scaleX(0); }
+html.fbm .fb-method li b { transition: color .35s var(--fb-ease); }
+html.fbm .fb-method li h2, html.fbm .fb-method li p { transition: opacity .45s var(--fb-ease); }
+html.fbm .fb-method li:not(.is-lit) h2, html.fbm .fb-method li:not(.is-lit) p { opacity: .45; }
+html.fbm .fb-method li.is-lit b { color: #b9f5d9; }
+html.fbm .fb-method li::before {
+  content: ""; position: absolute; top: -26px; left: 0; width: 10px; height: 10px; border-radius: 50%;
+  background: #17392e; border: 2px solid rgba(114, 227, 178, .35); transition: background .35s, border-color .35s, box-shadow .35s;
+}
+html.fbm .fb-method li.is-lit::before { background: #00e28a; border-color: #00e28a; box-shadow: 0 0 0 6px rgba(0, 226, 138, .15); }
+@media (max-width: 900px) { .fbm-rail, html.fbm .fb-method li::before { display: none; } html.fbm .fb-method li:not(.is-lit) h2, html.fbm .fb-method li:not(.is-lit) p { opacity: 1; } }
+
+/* ---- 三层卡：从叠在一起展开 -------------------------------------------------------- */
+html.fbm .fb-layers { perspective: 1200px; }
+html.fbm .fb-layer { background: var(--fb-soft); will-change: transform; }
+
+/* ---- 工厂配合：桌面端标题吸顶 + 当前步骤高亮 --------------------------------------- */
+@media (min-width: 1001px) {
+  #cooperate .fb-section { display: grid; grid-template-columns: minmax(260px, .8fr) 1.6fr; gap: 56px; align-items: start; }
+  #cooperate .fb-section-head { position: sticky; top: 112px; display: block; margin: 0; }
+  #cooperate .fb-section-head p { margin-top: 12px; }
+}
+html.fbm .fb-cooperate li { border-radius: 10px; padding-left: 14px; padding-right: 14px; transition: background-color .4s var(--fb-ease); }
+html.fbm .fb-cooperate li:before { transition: color .35s, background-color .35s; border-radius: 6px; height: 1.6em; display: inline-grid; place-items: center; padding-top: 0; }
+html.fbm .fb-cooperate li.is-current { background: rgba(0, 179, 119, .08); }
+html.fbm .fb-cooperate li.is-current:before { background: var(--fb-green); color: #fff; }
+
+/* ---- 演示标签：同元素过渡 (View Transitions) ---------------------------------------- */
+html.fbm .fb-proof:not([hidden]) .fb-proof-media img { view-transition-name: fbm-proof-shot; }
+html.fbm .fb-proof:not([hidden]) .fb-proof-copy { view-transition-name: fbm-proof-copy; }
+::view-transition-group(fbm-proof-shot), ::view-transition-group(fbm-proof-copy) { animation-duration: .5s; animation-timing-function: cubic-bezier(.22, 1, .36, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fb-page .v6-nav.is-glass::after { animation: none; }
+  html.fbm .fb-hero-visual::before { animation: none; }
+}
