@@ -31,3 +31,4 @@ test-java-heavy-jobs-need-8g-runner.sh
 test-selfhosted-jobs-have-timeouts.sh
 test-reap-orphan-testenvs-retired.sh
 test-f006-aurora-runtime.sh
+test-web-light-runner-routing.sh
