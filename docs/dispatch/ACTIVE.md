@@ -6,11 +6,17 @@
 
 ## 在飞任务
 
-- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07独立显式待执行授权；隔离WT/精确scope见archive/2026-10-20-s1-deferred-grant.md。保留原one-shot，不造fixture；目标Maven由协调者串行。
+- `ERP-S2-READINESS-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S2-04/07只读权威就绪扩展；精确7文件及命令见archive/2026-10-21-claude-s2-s6-registration.md。分支/Owner ACK后可本地实施；不占采购与QA。
 
-- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10独立只读就绪检查与预测来源/故障契约；精确scope及验收见archive/2026-10-20-s1-scheduling-truth.md。保留generate不可用，不造产能，不动生产依赖；Maven由协调者串行。
+- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 仅只读架构追踪，writeScope=[]；精确接口/文件/代码命令待审，未迁移采购/定时；见archive/2026-10-21-claude-s2-s6-registration.md。
 
-- `ERP-S1-SUPPLIER-ROUTE-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 供应商比较语义误路由与缺READ映射；首锁IntentKnowledgeBase及新真实方法回归，后续精确scope/接口记录见archive/2026-10-20-s1-supplier-route.md。不放宽排名权限，不改生产配置。
+- `ERP-S1-RESULT-VERDICT-20261021` — `queued` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 仅正常结果success正向判定及契约；两文件见archive/2026-10-21-s1-result-verdict.md。待S104释放ToolDispatch后实施，不阻断81cd。
+
+- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07可选待执行授权；8文件/命令见archive/2026-10-20-s1-deferred-grant.md；原one-shot不变，Java串行。
+
+- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10只读就绪与预测来源；12文件/命令见archive/2026-10-20-s1-scheduling-truth.md；不造产能，Java串行。
+
+- `ERP-S1-SUPPLIER-ROUTE-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 源码锁释放；CI/发布/QA待验，原FAIL保留。见archive/2026-10-20-s1-supplier-route.md。
 
 
 

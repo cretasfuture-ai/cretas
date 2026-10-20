@@ -69,7 +69,8 @@ class ToolDescriptorCatalogTest {
         assertThat(statistics.previewSupported()).isEqualTo(48);
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
-        assertThat(statistics.requiresPermission()).isEqualTo(46);
+        // Supplier comparison v2 declares the existing procurement/finance read permission policy.
+        assertThat(statistics.requiresPermission()).isEqualTo(47);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -92,10 +93,14 @@ class ToolDescriptorCatalogTest {
                 .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
                     boolean controlledPurchase = "purchase_order_create".equals(entry.toolName());
-                    assertThat(entry.version()).isEqualTo(controlledPurchase ? "2.0.0" : "1.0.0");
+                    boolean supplierComparison = "supplier_price_comparison".equals(entry.toolName());
+                    assertThat(entry.version()).isEqualTo(controlledPurchase || supplierComparison ? "2.0.0" : "1.0.0");
                     if (controlledPurchase) {
                         assertThat(entry.requiredPermissions()).containsExactly("procurement:read_write");
                         assertThat(entry.supportsPreview()).isTrue();
+                        assertThat(entry.requiresPermission()).isTrue();
+                    } else if (supplierComparison) {
+                        assertThat(entry.requiredPermissions()).containsExactlyInAnyOrder("procurement:read_write", "finance:read_write");
                         assertThat(entry.requiresPermission()).isTrue();
                     } else if (legacyToolsWithKnownRequiredPermissions.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
