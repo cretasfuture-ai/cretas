@@ -161,7 +161,7 @@ export async function exportPPT(data: PPTExportRequest): Promise<Blob | null> {
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/financial-dashboard/export-ppt`, {
       method: 'POST',
       headers: {
-        ...getPythonAuthHeaders(),
+        ...await getPythonAuthHeaders(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(data),
@@ -217,7 +217,7 @@ export async function exportExcel(data: ExcelExportRequest): Promise<Blob | null
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/financial-dashboard/export-excel`, {
       method: 'POST',
       headers: {
-        ...getPythonAuthHeaders(),
+        ...await getPythonAuthHeaders(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(data),
@@ -252,7 +252,7 @@ export async function exportPDF(data: PDFExportRequest): Promise<Blob | null> {
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/financial-dashboard/export-pdf`, {
       method: 'POST',
       headers: {
-        ...getPythonAuthHeaders(),
+        ...await getPythonAuthHeaders(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(data),

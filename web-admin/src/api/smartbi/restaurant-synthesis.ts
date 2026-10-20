@@ -364,7 +364,7 @@ export async function askRestaurantSynthesisStream(
         method: 'POST',
         credentials: 'include',
         signal: controller.signal,
-        headers: getPythonAuthHeaders(),
+        headers: await getPythonAuthHeaders(),
         body: JSON.stringify(body),
       });
     } catch (error) {

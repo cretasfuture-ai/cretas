@@ -35,6 +35,19 @@ class JwtUtilMultiSessionTest {
     }
 
     @Test
+    void expiredSignedWebMarkerOnlyClassifiesTransportAndNeverAuthenticates() {
+        String legacy = jwtUtil.generateToken(101L, "F006", "test", "viewer");
+        assertThat(jwtUtil.hasWebSessionMarker(legacy)).isFalse();
+        ReflectionTestUtils.setField(jwtUtil, "expiration", -60_000L);
+        String expiredWeb = jwtUtil.bindWebSession(legacy, "a".repeat(64));
+        assertThat(jwtUtil.hasWebSessionMarker(expiredWeb)).isTrue();
+        assertThat(jwtUtil.validateToken(expiredWeb)).isFalse();
+        assertThat(jwtUtil.hasWebSessionMarker("malformed.webSessionHash.token")).isFalse();
+        assertThat(jwtUtil.hasWebSessionMarker(null)).isFalse();
+        assertThat(jwtUtil.hasWebSessionMarker(expiredWeb.substring(0, expiredWeb.lastIndexOf('.') + 1) + "A".repeat(43))).isFalse();
+    }
+
+    @Test
     @DisplayName("同一账号连续登录会获得两个相互独立的刷新令牌")
     void refreshTokensHaveDistinctSessionIds() {
         String first = jwtUtil.generateRefreshToken("101");

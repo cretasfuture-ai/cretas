@@ -20,6 +20,7 @@ public class CookieAuthHelper {
 
     public static final String ACCESS_TOKEN_COOKIE = "cretas_access_token";
     public static final String REFRESH_TOKEN_COOKIE = "cretas_refresh_token";
+    public static final String WEB_SESSION_COOKIE = "cretas_web_session";
     public static final String CLIENT_TYPE_HEADER = "X-Client-Type";
     public static final String CLIENT_TYPE_WEB = "web";
 
@@ -51,7 +52,7 @@ public class CookieAuthHelper {
      */
     public void setAuthCookies(HttpServletResponse response, String accessToken, String refreshToken) {
         long accessMaxAge = accessTokenExpirationMs / 1000; // convert ms to seconds
-        long refreshMaxAge = refreshTokenExpirationMs / 1000;
+        long refreshMaxAge = refreshToken == null || refreshToken.isBlank() ? 0 : refreshTokenExpirationMs / 1000;
 
         ResponseCookie accessCookie = ResponseCookie.from(ACCESS_TOKEN_COOKIE, accessToken)
                 .httpOnly(true)
@@ -78,6 +79,7 @@ public class CookieAuthHelper {
      * Clear authentication cookies (for logout).
      */
     public void clearAuthCookies(HttpServletResponse response) {
+        clearWebSessionCookie(response);
         ResponseCookie accessCookie = ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(secureCookie)
@@ -96,6 +98,20 @@ public class CookieAuthHelper {
 
         response.addHeader("Set-Cookie", accessCookie.toString());
         response.addHeader("Set-Cookie", refreshCookie.toString());
+    }
+
+    public void setWebSessionCookie(HttpServletResponse response, String secret) {
+        // Browser retention is capped; renew on use. The server has no session TTL.
+        response.addHeader("Set-Cookie", webSessionCookie(secret, 400L * 24 * 60 * 60).toString());
+    }
+
+    public void clearWebSessionCookie(HttpServletResponse response) {
+        response.addHeader("Set-Cookie", webSessionCookie("", 0).toString());
+    }
+
+    private ResponseCookie webSessionCookie(String value, long maxAge) {
+        return ResponseCookie.from(WEB_SESSION_COOKIE, value).httpOnly(true)
+                .secure(true).sameSite(sameSite).path("/").maxAge(maxAge).build();
     }
 
     /**

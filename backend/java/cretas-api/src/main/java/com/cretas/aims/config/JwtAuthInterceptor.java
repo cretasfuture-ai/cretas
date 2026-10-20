@@ -85,6 +85,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     private TokenBlacklistService tokenBlacklistService;
 
     @Autowired
+    private com.cretas.aims.service.mobile.WebLoginSessionService webLoginSessions;
+
+    @Autowired
     private FactoryRepository factoryRepository;
 
     @Autowired
@@ -125,6 +128,24 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             try {
                 // 验证token
                 if (jwtUtil.validateToken(token)) {
+                    if (jwtUtil.getWebSessionHash(token) != null && !isWebCredentialExchange(request.getRequestURI())) {
+                        try {
+                            Object proof = request.getAttribute(WebLoginSessionFilter.VERIFIED_SESSION);
+                            if (!(proof instanceof com.cretas.aims.dto.MobileDTO.LoginResponse verified)
+                                    || !token.equals(verified.getToken())) {
+                                webLoginSessions.assertBoundAccessToken(token);
+                            }
+                            request.setAttribute(WebLoginSessionFilter.VERIFIED_BOUND_ACCESS, Boolean.TRUE);
+                        } catch (com.cretas.aims.exception.BusinessException denied) {
+                            sendUnauthorizedResponse(response, "登录已撤销或账号信息已变更，请重新登录");
+                            return false;
+                        } catch (RuntimeException unavailable) {
+                            response.setStatus(503);
+                            response.setContentType("application/json;charset=UTF-8");
+                            response.getWriter().write("{\"success\":false,\"code\":503,\"message\":\"登录状态暂时无法核验，请稍后重试\"}");
+                            return false;
+                        }
+                    }
                     // 检查token是否已被撤销（登出后的黑名单检查）
                     if (tokenBlacklistService.isBlacklisted(token)) {
                         log.warn("Token已被撤销（用户已登出）");
@@ -369,6 +390,12 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                // public-endpoint carve-outs allowed any unauthenticated client to trigger
                // schema-level recompute / re-link survey company — that gap is now closed.
                uri.startsWith("/api/public/");  // 公开溯源查询接口（SmartBI分享等）
+    }
+
+    /** These handlers authenticate their own password/refresh credential, not an old access JWT. */
+    boolean isWebCredentialExchange(String uri) {
+        return Set.of("/api/mobile/auth/login", "/api/mobile/auth/unified-login", "/api/mobile/auth/demo-login",
+                "/api/mobile/auth/register", "/api/mobile/auth/refresh", "/api/mobile/auth/refresh-token").contains(uri);
     }
 
     /**

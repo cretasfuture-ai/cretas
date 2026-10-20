@@ -304,7 +304,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         log.debug("收到刷新令牌请求");
 
         // 验证刷新令牌
-        if (!jwtUtil.validateToken(refreshToken)) {
+        if (!jwtUtil.validateToken(refreshToken) || jwtUtil.getWebSessionHash(refreshToken) != null) {
             throw new BusinessException(401, "无效的刷新令牌")
                     .withHint("请重新登录").withHintTarget("refreshToken");
         }
