@@ -208,3 +208,14 @@ function v6Roam(sel){
     chips[cur].classList.add('v6-roam');
   }, 2100);
 }
+
+/* Phone menu is a horizontal scroll row: bring the current page's item into view,
+   otherwise e.g. 「如何上线」/「在线演示」 sit past the right edge and the visitor can't see where they are. */
+(function v6NavShowCurrent(){
+  var row = document.querySelector('.v6-nav .nav-links');
+  var cur = row && row.querySelector('[aria-current="page"]');
+  if(!cur || row.scrollWidth <= row.clientWidth) return;
+  var r = row.getBoundingClientRect(), c = cur.getBoundingClientRect();
+  if(c.left >= r.left && c.right <= r.right - row.clientWidth * .12) return;
+  row.scrollLeft += (c.left - r.left) - (row.clientWidth - c.width) / 2;
+})();
