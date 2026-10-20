@@ -195,12 +195,60 @@ grep -qF '[ "$startup_state" = "HEALTHY" ] || unmeasured "progress: 形状无倒
 echo "READING: UNMEASURED_RC=$um_rc"
 ok "闸 source 并调用分类器; unmeasured 真 exit 2; 超时不会落进绿"
 
-# 工作流: rc=2 与 rc=1 分开报, 且 tee 之后 rc 真的透出来
+# 工作流: 执行真实 progress run block, 证明 pipefail、rc 传播和输出目的地都有效。
 [ -s "$WF" ] || fail "⑥: 找不到 $WF"
-grep -qF 'tee /tmp/fresh-db-progress.log || rc=$?' "$WF" || fail "⑥: 工作流没在 tee 之后取脚本 rc"
-grep -qE '^\s+2\) echo "::error title=Fresh DB 没量到\(rc=2\)' "$WF" || fail "⑥: 工作流没有单独的 rc=2 分支"
-grep -qF 'exit "$rc"' "$WF" || fail "⑥: 工作流没把脚本 rc 原样退出 —— rc=2 会被吞成绿"
+PROGRESS_RUN="$FIX/progress-run.sh"
+awk '
+    /FRESH_DB_PROGRESS_RUN_BEGIN/ { inside=1; next }
+    /FRESH_DB_PROGRESS_RUN_END/ { inside=0 }
+    inside { sub(/^          /, ""); print }
+' "$WF" > "$PROGRESS_RUN"
+[ -s "$PROGRESS_RUN" ] || fail "⑥: 没有抽出真实 progress run block"
+bash -n "$PROGRESS_RUN" || fail "⑥: 抽出的 progress run block 语法错误"
+NONCOMMENT_PROGRESS="$FIX/noncomment-progress.sh"
+sed '/^[[:space:]]*#/d' "$PROGRESS_RUN" > "$NONCOMMENT_PROGRESS"
+grep -qF 'set -euo pipefail' "$NONCOMMENT_PROGRESS" || fail "⑥: progress run 的非注释代码没有 pipefail"
+grep -qF 'bash scripts/testing/fresh-db-gate.sh --progress 2>&1 | tee -a "$FRESH_DB_OUTPUT" || rc=$?' "$NONCOMMENT_PROGRESS" \
+    || fail "⑥: progress run 的非注释代码没有在真实输出变量上捕获 gate rc"
+grep -qF '[ -n "${FRESH_DB_OUTPUT:-}" ]' "$NONCOMMENT_PROGRESS" || fail "⑥: progress run 的非注释代码没有校验真实输出目的地"
+grep -qE '^\s+2\) echo "::error title=Fresh DB 没量到\(rc=2\)' "$NONCOMMENT_PROGRESS" || fail "⑥: 工作流没有单独的 rc=2 分支"
+grep -qF 'exit "$rc"' "$NONCOMMENT_PROGRESS" || fail "⑥: 工作流没把脚本 rc 原样退出 —— rc=2 会被吞成绿"
 grep -qF "scripts/testing/fresh-db-startup-outcome.sh" "$WF" || fail "⑥: 改分类库的 PR 触发不到 fresh-db-progress"
-ok "工作流分开报 rc=2 / rc=1, 原样透出 rc, 且分类库在触发面里"
+
+mkdir -p "$FIX/runner/scripts/testing"
+cat > "$FIX/runner/scripts/testing/fresh-db-gate.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'MOCK_FRESH_DB_GATE rc=%s\n' "$FRESH_DB_MOCK_RC"
+exit "$FRESH_DB_MOCK_RC"
+SH
+chmod +x "$FIX/runner/scripts/testing/fresh-db-gate.sh"
+
+run_progress_fixture() {
+    local label="$1" expected="$2" output="$FIX/output-$1.log" console="$FIX/console-$1.log" actual
+    (
+        cd "$FIX/runner"
+        FRESH_DB_OUTPUT="$output" \
+        FRESH_DB_MOCK_RC="$expected" \
+        FRESH_DB_WORKFLOW_SOURCE_SHA='1111111111111111111111111111111111111111' \
+        FRESH_DB_CANDIDATE_SOURCE_SHA='2222222222222222222222222222222222222222' \
+        FRESH_DB_BACKEND_TREE='3333333333333333333333333333333333333333' \
+        bash "$PROGRESS_RUN"
+    ) > "$console" 2>&1
+    actual=$?
+    [ "$actual" -eq "$expected" ] || fail "⑥: $label fixture rc=$actual, expected $expected"
+    grep -qF "MOCK_FRESH_DB_GATE rc=$expected" "$output" || fail "⑥: $label fixture 没写入真实 FRESH_DB_OUTPUT"
+    grep -qF 'SOURCE workflow=1111111111111111111111111111111111111111 candidate=2222222222222222222222222222222222222222 backend_tree=3333333333333333333333333333333333333333' "$output" \
+        || fail "⑥: $label fixture 没写入 provenance"
+    case "$expected" in
+        0) ! grep -qF '::error title=Fresh DB 闸红' "$console" || fail "⑥: positive fixture 被报成失败" ;;
+        1) grep -qF '::error title=Fresh DB 闸红(rc=1)' "$console" || fail "⑥: rc=1 fixture 没有失败分类" ;;
+        2) grep -qF '::error title=Fresh DB 没量到(rc=2)' "$console" || fail "⑥: rc=2 fixture 没有未量到分类" ;;
+    esac
+}
+
+run_progress_fixture positive 0
+run_progress_fixture gate_failure 1
+run_progress_fixture unmeasured 2
+ok "工作流真实 progress run block 通过 0/1/2 可执行夹具, rc 传播与 FRESH_DB_OUTPUT 均受守"
 
 echo "PASS: $pass 项断言全部通过"

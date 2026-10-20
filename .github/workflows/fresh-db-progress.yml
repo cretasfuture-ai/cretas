@@ -12,15 +12,13 @@ name: Fresh DB progress ratchet
 # · nightly 无条件: 防「没人改 db/ 但环境变了」(镜像升级、依赖漂移)。
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 🔴 ⛔ 这个 workflow **不许被 `switch_ci_runner.py --adopt` 接进自建集合**
+# Aurora-only local lane
 # ═══════════════════════════════════════════════════════════════════════════
-# `fresh-db-gate.sh` 用 `docker compose` 起 pg17, 而那台自建 Mac mini **没有 Docker**
-# —— 实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`, job 在
-# **Set up job 阶段**就死, 一个 step 都执行不到(见 .claude/rules/ci-runner-routing.md)。
-# ⚠️ 那个失败长得像「这个闸没跑」而不是「这台机器不支持」。
-# ⇒ `runs-on: ubuntu-latest` 是**硬约束**, 不是默认值。真要上自建, 得先把这个脚本从
-#   docker compose 改成原生 psql(`createdb`/`dropdb`, 抄 java-gate-pr.yml 的
-#   `postgres-reversal-concurrency`), ⛔ 不是改一行 runs-on。
+# `fresh-db-gate.sh` uses Docker Compose for pgvector/PG17.  The route is
+# deliberately pinned to the verified Aurora Linux ARM64 runner with Docker;
+# it must not be broadened to Windows, the retired Canada runner, or a generic
+# self-hosted label.  `fresh-db-runner-preflight.sh` repeats the machine and
+# daemon checks at job start and creates run-scoped project/ports/output.
 
 on:
   pull_request:
@@ -33,12 +31,21 @@ on:
       - 'scripts/testing/fresh-db-above-baseline-floor.txt'
       - 'ops/db-baseline/**'
       - 'docker-compose.fresh-db.yml'
+      - 'scripts/ci/fresh-db-runner-preflight.sh'
+      - 'scripts/tests/test-fresh-db-local-runner.sh'
       # 自指: 改本文件的 PR 也要跑一次(否则触发面改坏了没人知道)
       - '.github/workflows/fresh-db-progress.yml'
   schedule:
     # UTC 19:17 = 北京时间次日 03:17(错开 java-full-nightly 的 02:37)
     - cron: '17 19 * * *'
   workflow_dispatch:
+    inputs:
+      # This input is for an exact, reviewed commit in this repository. It is
+      # not a fork or untrusted source execution path.
+      candidate_sha:
+        description: 'Optional exact 40-hex commit to run from an isolated candidate checkout'
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,11 +56,99 @@ permissions:
 
 jobs:
   progress:
-    # ⛔ 字面量, 且见文件头那条禁令: 自建 runner 没有 Docker。
-    runs-on: ubuntu-latest
+    # Keep the verified Aurora label set literal.
+    runs-on: [self-hosted, Linux, ARM64, java, cretas, aurora]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: workflow-source
+          persist-credentials: false
+
+      - name: Verify workflow source and candidate selector
+        id: source
+        working-directory: workflow-source
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha || '' }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          workflow_source_sha=$(git rev-parse HEAD)
+          [[ "$workflow_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] \
+            || fail "workflow checkout HEAD is not a 40-hex commit: $workflow_source_sha"
+          [ "$workflow_source_sha" = "$EXPECTED_CHECKOUT_SHA" ] \
+            || fail "workflow checkout HEAD $workflow_source_sha != github.sha $EXPECTED_CHECKOUT_SHA"
+
+          candidate_path="candidate-source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          candidate_requested=false
+          # FRESH_DB_RESOLVE_BEGIN
+          if [ -n "$CANDIDATE_SHA" ]; then
+            [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] \
+              || fail "candidate_sha must be exactly 40 hexadecimal characters"
+            candidate_requested=true
+          fi
+          echo "workflow_source_sha=$workflow_source_sha" >> "$GITHUB_OUTPUT"
+          echo "candidate_source_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          echo "candidate_requested=$candidate_requested" >> "$GITHUB_OUTPUT"
+          echo "candidate_path=$candidate_path" >> "$GITHUB_OUTPUT"
+          # FRESH_DB_RESOLVE_END
+
+      - name: Checkout isolated candidate source
+        if: ${{ steps.source.outputs.candidate_requested == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.candidate_source_sha }}
+          fetch-depth: 0
+          path: ${{ steps.source.outputs.candidate_path }}
+          persist-credentials: false
+
+      - name: Verify actual source HEADs and record provenance
+        id: source_readback
+        env:
+          WORKFLOW_SOURCE_SHA: ${{ steps.source.outputs.workflow_source_sha }}
+          CANDIDATE_SHA: ${{ steps.source.outputs.candidate_source_sha }}
+          CANDIDATE_REQUESTED: ${{ steps.source.outputs.candidate_requested }}
+          CANDIDATE_PATH: ${{ steps.source.outputs.candidate_path }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          # FRESH_DB_READBACK_BEGIN
+          workflow_actual=$(git -C "$GITHUB_WORKSPACE/workflow-source" rev-parse HEAD)
+          [ "$workflow_actual" = "$WORKFLOW_SOURCE_SHA" ] \
+            || fail "workflow checkout HEAD changed: $workflow_actual != $WORKFLOW_SOURCE_SHA"
+          gate_dir="$GITHUB_WORKSPACE/workflow-source"
+          candidate_actual=""
+          if [ "$CANDIDATE_REQUESTED" = true ]; then
+            candidate_dir="$GITHUB_WORKSPACE/$CANDIDATE_PATH"
+            [ -d "$candidate_dir" ] || fail "candidate checkout is missing: $candidate_dir"
+            candidate_actual=$(git -C "$candidate_dir" rev-parse HEAD)
+            [ "$candidate_actual" = "$CANDIDATE_SHA" ] \
+              || fail "candidate checkout HEAD $candidate_actual != requested $CANDIDATE_SHA"
+            gate_dir="$candidate_dir"
+          fi
+          gate_head=$(git -C "$gate_dir" rev-parse HEAD)
+          backend_tree=$(git -C "$gate_dir" rev-parse "$gate_head:backend/java/cretas-api" 2>/dev/null || true)
+          [ -n "$backend_tree" ] || fail "backend/java/cretas-api tree could not be read"
+          metadata="$RUNNER_TEMP/fresh-db-source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          {
+            echo "workflow_source_sha=$WORKFLOW_SOURCE_SHA"
+            echo "candidate_source_sha=${candidate_actual:-<none>}"
+            echo "actual_gate_head=$(git -C "$gate_dir" rev-parse HEAD)"
+            echo "backend_java_cretas_api_tree=$backend_tree"
+            echo "gate_dir=$gate_dir"
+          } | tee "$metadata" >> "$GITHUB_STEP_SUMMARY"
+          echo "candidate_source_sha=$candidate_actual" >> "$GITHUB_OUTPUT"
+          echo "backend_tree=$backend_tree" >> "$GITHUB_OUTPUT"
+          echo "gate_dir=$gate_dir" >> "$GITHUB_OUTPUT"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
+          # FRESH_DB_READBACK_END
+
+      - name: Aurora Fresh DB runner preflight
+        id: preflight
+        working-directory: workflow-source
+        run: bash scripts/ci/fresh-db-runner-preflight.sh
 
       - uses: actions/setup-java@v4
         with:
@@ -63,23 +158,33 @@ jobs:
           # ⛔ 不缓存 target/: jpa-gate-main.yml 记着 2026-07-29 四轮实测净收益为负
           #    (maven-compiler 增量名不副实, 任何改动全量重编)。效果看 FRESH_DB_COMPILE 的 elapsed_s。
           cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
+          cache-dependency-path: workflow-source/backend/java/cretas-api/pom.xml
 
       - name: Show what this runner actually has
         run: |
           set -euo pipefail
-          # ⚠️ 这三样缺任何一样, 下面那步的失败都会长得像「迁移坏了」而不是「机器不对」。
+          # Keep this original visibility step after setup-java as a second readback.
           docker --version
           docker compose version
           "$JAVA_HOME/bin/java" -version 2>&1 | head -1
 
       - name: Fresh DB progress ratchet
+        working-directory: ${{ steps.source_readback.outputs.gate_dir }}
+        env:
+          FRESH_DB_WORKFLOW_SOURCE_SHA: ${{ steps.source.outputs.workflow_source_sha }}
+          FRESH_DB_CANDIDATE_SOURCE_SHA: ${{ steps.source_readback.outputs.candidate_source_sha }}
+          FRESH_DB_BACKEND_TREE: ${{ steps.source_readback.outputs.backend_tree }}
         run: |
+          # FRESH_DB_PROGRESS_RUN_BEGIN
           set -euo pipefail
+          [ -n "${FRESH_DB_OUTPUT:-}" ] || { echo '::error::preflight did not provide FRESH_DB_OUTPUT'; exit 1; }
+          : > "$FRESH_DB_OUTPUT"
+          printf '[fresh-db] SOURCE workflow=%s candidate=%s backend_tree=%s\n' \
+            "$FRESH_DB_WORKFLOW_SOURCE_SHA" "${FRESH_DB_CANDIDATE_SOURCE_SHA:-<none>}" "$FRESH_DB_BACKEND_TREE" >> "$FRESH_DB_OUTPUT"
           # ⚠️ `| tee` 会把退出码换成 tee 的 —— pipefail 才让脚本自己的 rc 透出来。
           #    (本仓栽过: `cmd | tail` 的退出码是 tail 的, 失败被读成成功且无声。)
           rc=0
-          bash scripts/testing/fresh-db-gate.sh --progress 2>&1 | tee /tmp/fresh-db-progress.log || rc=$?
+          bash scripts/testing/fresh-db-gate.sh --progress 2>&1 | tee -a "$FRESH_DB_OUTPUT" || rc=$?
           # 🔴 rc=2(没量到: 启动超时 / 读数读不出)与 rc=1(真失败)**分开报** ——
           #    2026-10-01 ~ 10-03 四趟启动超时被报成「没跑到 Flyway」, 与迁移失败同一个红。
           #    ⛔ 不枚举失败码: 0 以外一律红, 只是 2 的措辞不同。
@@ -89,6 +194,7 @@ jobs:
             *) echo "::error title=Fresh DB 闸红(rc=$rc)::编译失败 / 迁移失败 / 启动崩溃 / 形状倒退 —— 看日志里 [fresh-db] ERROR 那一行" ;;
           esac
           exit "$rc"
+          # FRESH_DB_PROGRESS_RUN_END
 
       - name: Prove the readings landed
         # 🔴 always(): 上一步红了**也要**核读数 —— 「跑批失败」与「跑批根本没产出读数」
@@ -96,7 +202,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          if [ ! -s /tmp/fresh-db-progress.log ]; then
+          if [ ! -s "${FRESH_DB_OUTPUT:-}" ]; then
             echo "::error title=Fresh DB 形状闸没量到::日志文件为空 —— 跑批根本没开始"
             exit 1
           fi
@@ -104,24 +210,49 @@ jobs:
           #    指向错的方向: 2026-09-07 读数改名(FRESH_DB_PROGRESS→FRESH_DB_SHAPE)之后
           #    这一步报的是「跑批没产出读数」, 而跑批其实完全成功。
           #    ▎**同一个红, 成因不同, 而只看红绿分不出。**
-          n_any=$(grep -c 'READING: FRESH_DB_' /tmp/fresh-db-progress.log || true)
+          n_any=$(grep -c 'READING: FRESH_DB_' "$FRESH_DB_OUTPUT" || true)
           if [ "$n_any" -eq 0 ]; then
             echo "::error title=Fresh DB 形状闸没量到::日志里**一条** READING: FRESH_DB_* 都没有。"
             echo "::error::⇒ 成因是**跑批没产出读数**(没跑到 / 起不来 / 提前挂掉), ⛔ 不是改名。"
             echo "::error::一趟产不出读数的跑批, 在调用方看来可以和成功同形 —— 所以这里硬性要求它出现。"
-            tail -40 /tmp/fresh-db-progress.log
+            tail -40 "$FRESH_DB_OUTPUT"
             exit 1
           fi
-          if ! grep -q 'READING: FRESH_DB_SHAPE ' /tmp/fresh-db-progress.log; then
+          if ! grep -q 'READING: FRESH_DB_SHAPE ' "$FRESH_DB_OUTPUT"; then
             echo "::error title=Fresh DB 读数改名了?::有 $n_any 条 READING: FRESH_DB_*, 但**没有** FRESH_DB_SHAPE。"
             echo "::error::⇒ 跑批**是在产出读数的** ⇒ 成因几乎一定是**读数改了名而这一步没跟**。"
             echo "::error::⇒ 请把本步与下面展示行里的 key 同步过来, ⛔ 不要去查「跑批为什么没起来」。"
             echo "::error::⚠️ 同类还要找: scripts/tests/test-fresh-db-progress-ratchet.sh 的 6e、文档、其它脚本。"
-            grep -o 'READING: FRESH_DB_[A-Z_]*' /tmp/fresh-db-progress.log | sort -u
+            grep -o 'READING: FRESH_DB_[A-Z_]*' "$FRESH_DB_OUTPUT" | sort -u
             exit 1
           fi
           echo "--- 本趟读数 ---"
           # ⚠️ 这里**写全名**, ⛔ 不用 FRESH_DB_(A|B) 这种嵌套交替 ——
           #    嵌套之后「消费方要哪些读数」就不是机械可解析的了,
           #    而下面那道 6e 闸(核对消费方的名字闸是否真会产出)正是靠解析它。
-          grep -E 'READING: (FRESH_DB_SHAPE|FRESH_DB_SHAPE_FLOOR|FRESH_DB_FAILURE|FRESH_DB_STARTUP|FRESH_DB_COMPILE|FRESH_DB_ENV|BASELINE_BOOTSTRAP|BASELINE_LOAD_SHAPE) ' /tmp/fresh-db-progress.log
+          grep -E 'READING: (FRESH_DB_SHAPE|FRESH_DB_SHAPE_FLOOR|FRESH_DB_FAILURE|FRESH_DB_STARTUP|FRESH_DB_COMPILE|FRESH_DB_ENV|BASELINE_BOOTSTRAP|BASELINE_LOAD_SHAPE) ' "$FRESH_DB_OUTPUT"
+
+      - name: Upload Fresh DB provenance and progress evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-db-progress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.source_readback.outputs.metadata }}
+            ${{ steps.preflight.outputs.output }}
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Cleanup owned candidate checkout
+        if: ${{ always() && steps.source.outputs.candidate_requested == 'true' }}
+        env:
+          CANDIDATE_PATH: ${{ steps.source.outputs.candidate_path }}
+        run: |
+          set -euo pipefail
+          candidate_dir="$GITHUB_WORKSPACE/$CANDIDATE_PATH"
+          expected="$GITHUB_WORKSPACE/candidate-source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [ "$candidate_dir" = "$expected" ] || { echo "::error::candidate cleanup path escaped its run scope"; exit 1; }
+          if [ -e "$candidate_dir" ]; then
+            rm -rf -- "$candidate_dir"
+          fi
