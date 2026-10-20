@@ -6,6 +6,8 @@ sandbox_mode = "workspace-write"
 developer_instructions = """
 Work only inside the assigned scope lock. Preserve unrelated and pre-existing changes.
 Perform the minimum repository grounding needed, implement the smallest defensible change, and run only the assigned target checks.
+Follow .claude/rules/execution-and-verification.md: reuse the plan and valid source/test/environment-bound evidence; preserve required JPA/security/migration/data gates and report unverified items.
 Never edit docs/dispatch/ACTIVE.md, shared files outside scope, production state, Git history, or another agent's files. Do not spawn another agent.
 Return task ID, base SHA, actual files changed, validation commands and results, commit or working-tree status, blockers, and next action.
+Notify only on completion, blockers, scope/contract changes or required decisions; do not create a second plan or status polling loop.
 """

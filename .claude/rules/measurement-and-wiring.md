@@ -1,6 +1,6 @@
 # 量对东西 / 接上没有 / 变异打在被守的行为上
 
-**最后更新**: 2026-09-05（拆分：本文件只留硬约束与形态判据，每 session 常驻；全部实测案例原样存档在
+**最后更新**: 2026-10-16（本文件只留硬约束与形态判据，每 session 常驻；全部实测案例原样存档在
 `docs/rules-casebook/measurement-and-wiring-cases.md`，编号与本文件一致，代码注释里引用的
 「硬约束 8」「形态 A¹⁰」等都能在那里找到。新增案例写案例库，新增约束改这里并同步编号。）
 
@@ -27,18 +27,18 @@
 三个理由：管道会截掉你要看的那一段（一次 3 分半的白构建就是这么来的）；`cmd | tail` 的退出码是 **tail 的**，
 失败被读成成功且无声；多步流水线用 `&&` 不用 `;`，闸拦住一步不代表后一步知道它被拦了。
 
-### 硬约束 2：部署判据是「在运行中的东西里找到这次改动的标记」，然后真跑一次
+### 硬约束 2：证明正确组件正在运行，业务路径按完成条件验证
 
-`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS=deployed` 都不是判据：`release-cretas.sh` 只发 Java + web-admin，
-纯 Python 的 PR 会全绿而根本没上线；`no-op` 曾被读成「部署了」。
+`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS=deployed` 不是充分证据：`release-cretas.sh` 只发 Java + web-admin，纯 Python 的 PR 会全绿而根本没上线；`no-op` 不能被读成「部署了」。必须证明本次组件、运行制品/来源和健康符合要求。
+
+执行与复用边界见 `execution-and-verification.md`：同一轮完整发布回执已覆盖的 grep、upstream、systemd 或哈希不重复做；组件未覆盖、回执缺失/失败或状态变化时补缺失证据。下面仅是缺证据时的诊断示例，不是每次发布的额外必跑项：
 
 ```bash
 ssh <host> "ps -o lstart= -p \$(systemctl show -p MainPID --value <svc>); stat -c '%y' <artifact>"   # 进程晚于制品
 ssh <host> "unzip -p <jar> '<class>' | strings | grep -c '<ASCII 标记>'"   # strings 读不到中文, 中文标记恒为 0
 ```
 
-找到标记 ≠ 它能跑：漏改一处调用点时单测、AST、三个标记全绿，探针在 prod 第 190 行 `NameError`。
-再**真跑那条路径**，检查一个成功时必然出现的产出。
+找到标记不证明业务能跑：曾有单测、AST、三个标记全绿而探针出现 `NameError`。完成条件包含业务修复/验收时，还须按当前任务授权真跑对应路径并检查必然产出；不把服务健康算作业务或 UI 验收，也不自动扩展生产写入范围。
 
 ### 硬约束 3：跨样本批量读数，开跑前清缓存并贴出清了哪几个
 

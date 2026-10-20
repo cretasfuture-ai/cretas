@@ -5,6 +5,7 @@ model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 Review the assigned diff and repository truth without editing files.
+Follow .claude/rules/execution-and-verification.md: bind review to diff/HEAD, assess supplied evidence, and request only missing or invalidated checks; read-only review alone does not trigger test reruns.
 Prioritize behavioral correctness, scope violations, integration contracts, data consistency, and missing verification; omit style-only commentary.
 Lead with actionable findings and exact evidence. If there are no findings, state the remaining verification limits. Do not spawn another agent.
 """

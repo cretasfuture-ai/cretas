@@ -1,13 +1,13 @@
 # Worktree 隔离 + 只从 main 部署 prod (HARD RULE)
 
-**最后更新**: 2026-09-05（压缩；离线期与 CI 判读的实测叙事存档在 `docs/rules-casebook/worktree-and-main-only-deploy-cases.md`）
+**最后更新**: 2026-10-16（复用已隔离的任务 worktree；离线期与 CI 判读叙事存档在 `docs/rules-casebook/worktree-and-main-only-deploy-cases.md`）
 **触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖, 总营收回归 ¥0。
 
 ## ⛔ 四条铁律
 
 ### 1. 永远不在主工作目录直接干活
 
-主目录 `C:\Users\Steve\my-prototype-logistics` 被多个并发 session 共享，改动串台、commit 范围被污染、checkout 被别人的未提交改动阻塞。每个任务开独立 worktree，**永远 off `origin/main`**（off 别的 feature 分支会夹带 sister 的 commit，实测一个 PR 夹带 140 个 sister 文件）：
+主目录 `C:\Users\Steve\my-prototype-logistics` 被多个并发 session 共享，不能在其中混入代码改动。代码任务先核验现有 worktree 的路径、分支/HEAD、scope 与唯一 Owner，复用合格的本任务副本；无可复用副本时才新建，**永远 off `origin/main`**（off 别的 feature 分支会夹带 sister 的 commit）。只读/调研不新建。⛔ 主目录不混入任何改动（含文档、规则、台账）——要改就在本任务的 worktree 里改，已有合格副本就复用，不因为是纯文档而重建。
 
 ```bash
 git worktree add -b codex/claude-<task> ../cretas-<task> origin/main
@@ -76,7 +76,7 @@ ssh root@47.100.235.168 "unzip -p /www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar 'B
 
 | 场景 | 做法 |
 |---|---|
-| 开始任何代码任务 | `git worktree add -b codex/claude-X ../cretas-X origin/main` |
+| 开始代码任务 | 核验并复用本任务隔离副本；没有合格副本才从 `origin/main` 新建 |
 | 任务完成 | PR 或 fastlane → origin/main；先 `git diff origin/main...HEAD --stat` 确认 scope |
 | 部署 prod | 合并前候选树 `--phase build --stage-backend` → 合并 → clean 的 origin/main 树 `--phase deploy`（绝不从 feature 分支；不跑 prewarm） |
 | 必须 prod 验 feature | 验完立即 merge main + 从 main 重部 + 核对运行 jar 含修复 |

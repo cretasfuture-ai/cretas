@@ -34,7 +34,7 @@ prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不�
 - 被 exact-main 闸拒绝是静默的：BUILD SUCCESS、测试全绿，然后戛然而止，回执 `deploy_mode=none`。处理是 `git fetch && git checkout --detach origin/main` 后重跑。
 - 回执里 `build="reused"` / `java_build=0` / `build_count=0` 是正常成功。deploy 阶段的 validate 不比对测试选择器，要审计选择器看 manifest 的 `target_tests`。
 
-部署后：入口已调用 `verify-release.sh`（真实 upstream / systemd / 直连健康 / Web 四方哈希）并写进回执，回执完整且成功时不必重复手工检查；单独验证用 `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod`。然后按 measurement-and-wiring 硬约束 2，在运行中的制品里 grep 这次改动的 ASCII 标记，并真跑一次那条路径。
+部署后按 `.claude/rules/execution-and-verification.md` 与 measurement-and-wiring 硬约束 2：入口已运行 `verify-release.sh` 并记录真实 upstream / systemd / 直连健康 / Web 四方哈希，完整成功回执覆盖的项不重复手查或 grep。组件未覆盖、回执缺失/失败或状态改变时，用 `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod` 补缺失证据。业务路径仅在当前任务授权和完成条件要求时真跑，不能用服务健康代替业务/UI 验收；纯 Python 仍需其专用发布与验证入口。
 
 ## 蓝绿 / 锁 / 并行
 
