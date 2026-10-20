@@ -66,7 +66,6 @@ public class FactorySettingsController {
                 .passwordMinLength(8)
                 .passwordRequireUppercase(true)
                 .passwordRequireNumber(true)
-                .sessionTimeout(30)
                 .maxLoginAttempts(5)
                 .build();
 

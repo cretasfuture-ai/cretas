@@ -48,6 +48,7 @@ public class MobileController {
     private final MobileService mobileService;
     private final EquipmentAlertRepository equipmentAlertRepository;
     private final CookieAuthHelper cookieAuthHelper;
+    private final com.cretas.aims.service.mobile.WebLoginSessionService webLoginSessions;
 
     @Value("${cretas.app.min-version:1.0.0}")
     private String appMinVersion;
@@ -78,6 +79,9 @@ public class MobileController {
 
         // For web clients, set HttpOnly cookies in addition to the JSON response
         if (cookieAuthHelper.isWebClient(httpRequest) && response.getToken() != null) {
+            String session = webLoginSessions.issue(response.getToken());
+            webLoginSessions.revoke(CookieAuthHelper.extractCookieValue(httpRequest, CookieAuthHelper.WEB_SESSION_COOKIE));
+            cookieAuthHelper.setWebSessionCookie(httpResponse, session);
             cookieAuthHelper.setAuthCookies(httpResponse, response.getToken(), response.getRefreshToken());
             log.debug("Web client detected, auth cookies set for user={}", request.getUsername());
         }
@@ -151,10 +155,13 @@ public class MobileController {
         }
 
         log.info("用户登出: userId={}, deviceId={}", userId, deviceId);
-        mobileService.logout(userId, deviceId, token);
+        Object original = request.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.ORIGINAL_ACCESS_TOKEN);
+        mobileService.logout(userId, deviceId, original instanceof String originalToken ? originalToken : token);
+        webLoginSessions.revoke(CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE));
 
         // Clear cookies for web clients (always safe to clear, even for mobile)
-        if (cookieAuthHelper.isWebClient(request)) {
+        if (cookieAuthHelper.isWebClient(request)
+                || CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE) != null) {
             cookieAuthHelper.clearAuthCookies(httpResponse);
         }
 
