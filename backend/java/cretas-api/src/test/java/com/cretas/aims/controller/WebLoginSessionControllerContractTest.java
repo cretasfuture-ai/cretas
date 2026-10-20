@@ -61,6 +61,7 @@ class WebLoginSessionControllerContractTest {
         var request = new MockHttpServletRequest(); request.setAttribute("userId", 7L);
         request.addHeader("Authorization", "Bearer transient-access");
         request.setAttribute(WebLoginSessionFilter.ORIGINAL_ACCESS_TOKEN, "original-access");
+        request.setAttribute(WebLoginSessionFilter.VERIFIED_SESSION, MobileDTO.LoginResponse.builder().token("transient-access").build());
         request.setCookies(new Cookie(CookieAuthHelper.WEB_SESSION_COOKIE, "owned-session"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         var response = new MockHttpServletResponse(); controller.logout(null, request, response);
@@ -109,5 +110,17 @@ class WebLoginSessionControllerContractTest {
             assertThat(refreshed.getFactoryId()).isEqualTo("F006");
         });
         verify(mobile, never()).refreshToken(any());
+    }
+
+    @Test void nativeLogoutDoesNotRevokeOrClearAnotherWebBrowserCredential() {
+        var request = new MockHttpServletRequest(); request.setAttribute("userId", 7L);
+        request.addHeader("X-Client-Type", "mobile"); request.addHeader("Authorization", "Bearer native-token");
+        request.setCookies(new Cookie(CookieAuthHelper.WEB_SESSION_COOKIE, "other-web-user"));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        var response = new MockHttpServletResponse(); controller.logout(null, request, response);
+        verify(mobile).logout(7L, null, "native-token");
+        verify(sessions).revokeBoundAccessToken("native-token");
+        verify(sessions, never()).revoke(any());
+        assertThat(response.getHeaders("Set-Cookie")).isEmpty();
     }
 }

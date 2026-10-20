@@ -171,13 +171,14 @@ public class MobileController {
         log.info("用户登出: userId={}, deviceId={}", userId, deviceId);
         Object original = request.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.ORIGINAL_ACCESS_TOKEN);
         mobileService.logout(userId, deviceId, original instanceof String originalToken ? originalToken : token);
-        String webSession = CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE);
+        Object proof = request.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.VERIFIED_SESSION);
+        boolean cookieBacked = proof instanceof MobileDTO.LoginResponse verified && token != null && token.equals(verified.getToken());
+        String webSession = cookieBacked ? CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE) : null;
         if (webSession != null) webLoginSessions.revoke(webSession);
         else webLoginSessions.revokeBoundAccessToken(token);
 
         // Clear cookies for web clients (always safe to clear, even for mobile)
-        if (cookieAuthHelper.isWebClient(request)
-                || CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE) != null) {
+        if (cookieAuthHelper.isWebClient(request) || cookieBacked) {
             cookieAuthHelper.clearAuthCookies(httpResponse);
         }
 

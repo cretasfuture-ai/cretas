@@ -24,6 +24,7 @@ class WebLoginSessionFilterContractTest {
 
     MockHttpServletRequest request(String path) {
         var request = new MockHttpServletRequest("GET", path);
+        request.addHeader("X-Client-Type", "web");
         request.setCookies(new Cookie(CookieAuthHelper.WEB_SESSION_COOKIE, "fixture-session"));
         return request;
     }
@@ -137,5 +138,17 @@ class WebLoginSessionFilterContractTest {
         var response = new MockHttpServletResponse();
         assertThat(auth.preHandle(request, response, new Object())).isFalse();
         assertThat(response.getStatus()).isEqualTo(401);
+    }
+
+    @Test void nativeBearerCannotBeReplacedByAnotherWebAccountCookie() throws Exception {
+        for (String type : new String[]{"mobile", ""}) {
+            var request = new MockHttpServletRequest("GET", "/api/mobile/F007/products");
+            if (!type.isEmpty()) request.addHeader("X-Client-Type", type);
+            request.addHeader("Authorization", "Bearer native-user-B");
+            request.setCookies(new Cookie(CookieAuthHelper.WEB_SESSION_COOKIE, "web-user-A"));
+            filter.doFilter(request, new MockHttpServletResponse(), (req, res) ->
+                    assertThat(((HttpServletRequest) req).getHeader("Authorization")).isEqualTo("Bearer native-user-B"));
+        }
+        verifyNoInteractions(sessions);
     }
 }

@@ -70,3 +70,10 @@ durable access revocation, actor collision, public voice authentication and
 legacy-refresh-body escape refusal. The temporary cluster is task-owned only.
 Final official package/CI/release receipts must still bind the final commit;
 the Web caption-only change does not change the validated Java source bytes.
+
+Final client-boundary review: explicit non-Web/Bearer clients retain original
+Bearer precedence even when a shared cookie jar carries another Web account.
+Cookie logout/clearing requires the filter's matching verified Cookie identity;
+native logout cannot revoke/clear that other browser. Added actual filter and
+controller negatives; final package must include them. The 59-case PG snapshot
+above precedes only this transport/handler correction (SQL/service unchanged).

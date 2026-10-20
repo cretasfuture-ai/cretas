@@ -39,7 +39,12 @@ public class WebLoginSessionFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
         boolean hasSession = CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE) != null;
+        String clientType = request.getHeader(CookieAuthHelper.CLIENT_TYPE_HEADER);
+        String authorization = request.getHeader("Authorization");
+        boolean explicitBearer = authorization != null && authorization.startsWith("Bearer ");
+        boolean nativeClient = !cookies.isWebClient(request) && (clientType != null || explicitBearer);
         return "OPTIONS".equalsIgnoreCase(request.getMethod())
+                || nativeClient
                 || !(path.startsWith("/api/mobile/") || path.startsWith("/api/platform/"))
                 || (auth.isPublicEndpoint(path) && (!hasSession || path.endsWith("/health")
                     || path.startsWith("/api/mobile/activation/") || path.equals("/api/mobile/version/check")
