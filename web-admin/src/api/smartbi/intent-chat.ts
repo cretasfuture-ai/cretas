@@ -74,6 +74,17 @@ export interface IntentFeedbackPayload {
   userFeedback?: string;
 }
 
+/** Same-user purchase readback. A draft is not a business approval. */
+export interface PurchaseTaskOutcome {
+  grantId: string;
+  state: string;
+  purchaseOrderId: string | null;
+  grossAmount: number | string | null;
+  quantity: number | string | null;
+  version: number | null;
+  replay: boolean;
+}
+
 export async function executeIntent(
   factoryId: string,
   userInput: string,
@@ -96,11 +107,26 @@ export async function executeIntent(
   return (envelope.data ?? envelope) as IntentExecuteResponse;
 }
 
-/** Client-generated id for confirm requestId/idempotencyKey (8-128 chars, ^[A-Za-z0-9][A-Za-z0-9._:-]*$). */
-function createConfirmRequestId(): string {
-  return (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-    ? crypto.randomUUID()
-    : `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+class ConfirmationNotSentError extends Error {
+  readonly confirmationNotSent = true;
+  constructor() {
+    super('确认请求未发送：当前浏览器无法安全确认，请使用安全连接后重试。');
+    this.name = 'ConfirmationNotSentError';
+  }
+}
+
+/** Reusing a proof/snapshot preserves its opaque attempt identity after response loss. */
+async function confirmationIdentity(
+  factoryId: string, token: string, payload: { commandDigest: string; expiresAt: string },
+): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('当前浏览器无法安全确认，请使用安全连接后重试。');
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify([
+    factoryId, token, payload.commandDigest, payload.expiresAt,
+  ]));
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `confirm-${Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
 /**
@@ -114,11 +140,18 @@ export async function confirmIntentAction(
   confirmToken: string,
   payload: { commandDigest: string; expiresAt: string },
 ): Promise<IntentExecuteResponse> {
+  let identity: string;
+  try {
+    identity = await confirmationIdentity(factoryId, confirmToken, payload);
+  } catch {
+    // Only preparation errors get this marker. A POST failure can have committed.
+    throw new ConfirmationNotSentError();
+  }
   const body = {
     commandDigest: payload.commandDigest,
     expiresAt: payload.expiresAt,
-    requestId: createConfirmRequestId(),
-    idempotencyKey: createConfirmRequestId(),
+    requestId: identity,
+    idempotencyKey: identity,
   };
   const res = await request.post(
     `/${factoryId}/ai-intents/confirm`,
@@ -131,6 +164,34 @@ export async function confirmIntentAction(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const envelope = res as any;
   return (envelope.data ?? envelope) as IntentExecuteResponse;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Query only; an unknown result must never trigger another confirmation. */
+export async function getPurchaseTaskGrantStatus(
+  factoryId: string, grantId: string,
+): Promise<PurchaseTaskOutcome> {
+  if (!factoryId || !grantId) throw new Error('缺少采购处理参考，无法查询。');
+  const response: unknown = await request.get(
+    `/${encodeURIComponent(factoryId)}/ai-purchase-task-grants/${encodeURIComponent(grantId)}`,
+  );
+  if (record(response) && response.success === false) throw new Error('采购处理状态查询失败。');
+  const data = record(response) && 'data' in response ? response.data : response;
+  if (!record(data) || data.grantId !== grantId || typeof data.state !== 'string' || !data.state) {
+    throw new Error('采购处理状态无法核对，请到采购模块查看。');
+  }
+  return {
+    grantId,
+    state: data.state,
+    purchaseOrderId: typeof data.purchaseOrderId === 'string' ? data.purchaseOrderId : null,
+    grossAmount: typeof data.grossAmount === 'number' || typeof data.grossAmount === 'string' ? data.grossAmount : null,
+    quantity: typeof data.quantity === 'number' || typeof data.quantity === 'string' ? data.quantity : null,
+    version: typeof data.version === 'number' ? data.version : null,
+    replay: data.replay === true,
+  };
 }
 
 export async function submitIntentFeedback(

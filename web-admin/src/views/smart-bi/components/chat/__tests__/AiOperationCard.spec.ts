@@ -11,6 +11,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 
 const confirmIntentActionMock = vi.fn();
+const grantStatusMock = vi.fn();
+const actualClientPostMock = vi.fn();
+vi.mock('@/api/request', () => ({
+  default: { post: (...args: unknown[]) => actualClientPostMock(...args), get: vi.fn() },
+}));
 // 双重确认 (2026-07-24 写操作契约): ElMessageBox.confirm 默认放行;
 // 单测里可改 mockRejectedValueOnce 模拟用户在二次确认处取消。
 const messageBoxConfirmMock = vi.fn(async () => 'confirm');
@@ -24,6 +29,7 @@ vi.mock('element-plus', async (importOriginal) => {
 
 vi.mock('@/api/smartbi/intent-chat', () => ({
   confirmIntentAction: (...args: unknown[]) => confirmIntentActionMock(...args),
+  getPurchaseTaskGrantStatus: (...args: unknown[]) => grantStatusMock(...args),
   executeIntent: vi.fn(),
   fetchCachedXlsx: vi.fn(),
   submitIntentFeedback: vi.fn(async () => true),
@@ -85,6 +91,9 @@ const previewResponse = {
 describe('AiOperationCard', () => {
   beforeEach(() => {
     confirmIntentActionMock.mockReset();
+    grantStatusMock.mockReset();
+    actualClientPostMock.mockReset();
+    messageBoxConfirmMock.mockReset().mockResolvedValue('confirm');
   });
 
   it('renders the preview grid (skipping internal keys) with confirm/cancel footer', () => {
@@ -140,6 +149,169 @@ describe('AiOperationCard', () => {
 
     expect(wrapper.text()).toContain('演示环境不落库');
     expect(wrapper.text()).toContain('演示环境');
+  });
+
+  const purchasePreview = {
+    ...previewResponse,
+    intentCode: 'PURCHASE_ORDER_CREATE',
+    intentName: '创建采购草稿',
+    resultData: { grantId: 'preview-123' },
+    confirmableAction: {
+      ...previewResponse.confirmableAction,
+      previewData: { 数量: '2kg', 含税金额: '22.60元', grantId: 'preview-123' },
+    },
+  };
+  const draftResult = {
+    grantId: 'preview-123', state: 'DRAFT', purchaseOrderId: 'PO-ONE',
+    grossAmount: 22.6, quantity: 2, version: 2, replay: true,
+  };
+  const button = (wrapper: ReturnType<typeof mountCard>, text: string) =>
+    wrapper.findAll('button').find((entry) => entry.text().includes(text))!;
+
+  it('mounts an unknown outcome and queries the same reference only on an explicit click', async () => {
+    grantStatusMock.mockResolvedValue(draftResult);
+    const wrapper = mountCard({ ...purchasePreview, status: 'OUTCOME_UNKNOWN', confirmableAction: null });
+    expect(wrapper.find('[data-testid="purchase-outcome-recovery"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('避免重复下单');
+    expect(grantStatusMock).not.toHaveBeenCalled();
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    expect(grantStatusMock).toHaveBeenCalledWith('F001', 'preview-123');
+    expect(wrapper.text()).toContain('采购草稿已创建');
+    expect(wrapper.text()).toContain('按原流程提交审批');
+    expect(wrapper.text()).not.toContain('确认执行');
+    expect(confirmIntentActionMock).not.toHaveBeenCalled();
+  });
+
+  it('uses preview recovery metadata after a lost response and never returns to a confirm button', async () => {
+    confirmIntentActionMock.mockRejectedValueOnce(new Error('response lost'));
+    grantStatusMock.mockResolvedValue({ ...draftResult, state: 'UNKNOWN', purchaseOrderId: null });
+    const wrapper = mountCard(purchasePreview);
+    expect(wrapper.find('[data-testid="aiop-rows"]').text()).not.toContain('grantId');
+    await button(wrapper, '确认执行').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('确认执行');
+    expect(wrapper.text()).toContain('待核对');
+    expect(grantStatusMock).not.toHaveBeenCalled();
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    expect(grantStatusMock).toHaveBeenCalledTimes(2);
+    expect(confirmIntentActionMock).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain('勿重复提交');
+  });
+
+  it('keeps the explicit unknown confirmation result recoverable without another write', async () => {
+    confirmIntentActionMock.mockResolvedValue({
+      status: 'OUTCOME_UNKNOWN', message: '请核对', resultData: { grantId: 'preview-123' },
+    });
+    const wrapper = mountCard(purchasePreview);
+    await button(wrapper, '确认执行').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="purchase-outcome-recovery"]').exists()).toBe(true);
+    expect(button(wrapper, '查询处理结果').exists()).toBe(true);
+    expect(confirmIntentActionMock).toHaveBeenCalledTimes(1);
+    expect(grantStatusMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects inconsistent preview references before confirmation or status lookup', async () => {
+    const wrapper = mountCard({ ...purchasePreview, resultData: { grantId: 'preview-other' } });
+    await button(wrapper, '确认执行').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('确认请求未发送');
+    expect(wrapper.text()).toContain('处理参考无法核对');
+    expect(wrapper.find('[data-testid="purchase-outcome-recovery"]').exists()).toBe(false);
+    expect(confirmIntentActionMock).not.toHaveBeenCalled();
+    expect(grantStatusMock).not.toHaveBeenCalled();
+    expect(button(wrapper, '确认执行').attributes('disabled')).toBeDefined();
+  });
+
+  it.each(['OUTCOME_UNKNOWN', 'SUCCESS'])('keeps the original reference when confirmation returns another grant with %s', async (status) => {
+    confirmIntentActionMock.mockResolvedValue({ status, message: '采购草稿已创建', resultData: { grantId: 'preview-other' } });
+    grantStatusMock.mockResolvedValue({ ...draftResult, state: 'UNKNOWN', purchaseOrderId: null });
+    const wrapper = mountCard(purchasePreview);
+    await button(wrapper, '确认执行').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('采购草稿已创建');
+    expect(wrapper.text()).toContain('返回的处理参考无法');
+    expect(wrapper.emitted('confirmed')).toBeUndefined();
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    expect(grantStatusMock).toHaveBeenCalledWith('F001', 'preview-123');
+    expect(confirmIntentActionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('composes with the real API pre-send failure and does not report an unknown submission', async () => {
+    const previousCrypto = globalThis.crypto;
+    vi.stubGlobal('crypto', {});
+    try {
+      const realClient = await vi.importActual<typeof import('@/api/smartbi/intent-chat')>('@/api/smartbi/intent-chat');
+      confirmIntentActionMock.mockImplementationOnce(realClient.confirmIntentAction);
+      const wrapper = mountCard(purchasePreview);
+      await button(wrapper, '确认执行').trigger('click');
+      await flushPromises();
+      expect(actualClientPostMock).not.toHaveBeenCalled();
+      expect(wrapper.text()).toContain('确认请求未发送');
+      expect(wrapper.text()).toContain('安全连接');
+      expect(wrapper.find('[data-testid="purchase-outcome-recovery"]').exists()).toBe(false);
+      expect(grantStatusMock).not.toHaveBeenCalled();
+      expect(button(wrapper, '确认执行').attributes('disabled')).toBeDefined();
+    } finally {
+      vi.stubGlobal('crypto', previousCrypto);
+    }
+  });
+
+  it('keeps query errors visible and retryable without a confirm/revoke action', async () => {
+    grantStatusMock.mockRejectedValueOnce(new Error('403')).mockResolvedValueOnce(draftResult);
+    const wrapper = mountCard({ ...purchasePreview, status: 'OUTCOME_UNKNOWN' });
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[role="alert"]').text()).toContain('暂时无法查询');
+    expect(wrapper.text()).not.toContain('确认执行');
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('采购草稿已创建');
+    expect(confirmIntentActionMock).not.toHaveBeenCalled();
+  });
+
+  it('does not invent a reference or claim draft success from incomplete status', async () => {
+    const missing = mountCard({ ...purchasePreview, status: 'OUTCOME_UNKNOWN', resultData: null, confirmableAction: null });
+    expect(missing.text()).toContain('缺少处理参考');
+    expect(missing.findAll('button')).toHaveLength(0);
+    expect(grantStatusMock).not.toHaveBeenCalled();
+    grantStatusMock.mockResolvedValue({ ...draftResult, purchaseOrderId: null });
+    const wrapper = mountCard({ ...purchasePreview, status: 'OUTCOME_UNKNOWN' });
+    await button(wrapper, '查询处理结果').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('采购草稿已创建');
+  });
+
+  it('ignores an old-factory query response and prevents concurrent queries', async () => {
+    let resolveStatus!: (value: typeof draftResult) => void;
+    grantStatusMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+    const wrapper = mountCard({ ...purchasePreview, status: 'OUTCOME_UNKNOWN' });
+    await button(wrapper, '查询处理结果').trigger('click');
+    await button(wrapper, '查询处理结果').trigger('click');
+    expect(grantStatusMock).toHaveBeenCalledTimes(1);
+    await wrapper.setProps({ factoryId: 'F002' });
+    resolveStatus(draftResult);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('采购草稿已创建');
+    expect(confirmIntentActionMock).not.toHaveBeenCalled();
+  });
+
+  it('locks before the second-confirmation dialog and ignores approval after factory switch', async () => {
+    let resolveDialog!: (value: string) => void;
+    messageBoxConfirmMock.mockReturnValueOnce(new Promise((resolve) => { resolveDialog = resolve; }));
+    const wrapper = mountCard(purchasePreview);
+    await button(wrapper, '确认执行').trigger('click');
+    await button(wrapper, '确认执行').trigger('click');
+    expect(messageBoxConfirmMock).toHaveBeenCalledTimes(1);
+    await wrapper.setProps({ factoryId: 'F002' });
+    resolveDialog('confirm');
+    await flushPromises();
+    expect(confirmIntentActionMock).not.toHaveBeenCalled();
   });
 
   it('disables confirm and shows the expiry hint when the preview is already expired', () => {

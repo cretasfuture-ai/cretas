@@ -30,6 +30,7 @@ const listFactoryTemplatesMock = vi.fn(async () => ({ success: true, templates: 
 vi.mock('@/api/smartbi/intent-chat', () => ({
   executeIntent: (...a: unknown[]) => executeIntentMock(...a),
   confirmIntentAction: vi.fn(),
+  getPurchaseTaskGrantStatus: vi.fn(),
   fetchCachedXlsx: vi.fn(),
   submitIntentFeedback: vi.fn(async () => true),
 }));
@@ -567,6 +568,22 @@ describe('N2: 悬停复制', () => {
 });
 
 describe('AiOperationCard 仍由 AIQuery 挂载, 确认接口不会被 AIQuery 自己触发 (H2)', () => {
+  it('mounts OUTCOME_UNKNOWN as the real recovery card without automatically querying or confirming', async () => {
+    const api = await import('@/api/smartbi/intent-chat');
+    vi.mocked(api.confirmIntentAction).mockClear();
+    vi.mocked(api.getPurchaseTaskGrantStatus).mockClear();
+    executeIntentMock.mockResolvedValue({
+      status: 'OUTCOME_UNKNOWN', intentCode: 'PURCHASE_ORDER_CREATE',
+      intentName: '创建采购草稿', message: '提交结果待核对',
+      resultData: { grantId: 'preview-123' },
+    });
+    const wrapper = await mountPage('FACTORY');
+    await send(wrapper, '创建采购草稿');
+    expect(wrapper.find('[data-testid="purchase-outcome-recovery"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('查询处理结果');
+    expect(api.confirmIntentAction).not.toHaveBeenCalled();
+    expect(api.getPurchaseTaskGrantStatus).not.toHaveBeenCalled();
+  });
   it('操作 tab 返回 PREVIEW: 卡片渲染, 在用户点确认之前 confirmIntentAction 0 次', async () => {
     const confirmMod = await import('@/api/smartbi/intent-chat');
     const confirmSpy = confirmMod.confirmIntentAction as unknown as ReturnType<typeof vi.fn>;
