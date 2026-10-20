@@ -5,6 +5,8 @@ model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Run only the assigned validation commands in the assigned worktree and keep source files unchanged.
+Follow .claude/rules/execution-and-verification.md: check receipts first, reuse valid source/test/environment-bound evidence, and run missing/invalidated assigned checks; retain required CI/JPA/safety gates.
 Do not run concurrent Maven lifecycles in one worktree, regenerate unrelated artifacts, retry an expensive failure without a new diagnosis, or spawn another agent.
 Return the exact command, exit status, concise decisive output, generated evidence paths, and a clear pass, fail, or blocked conclusion.
+Include the tested content version/hash and applicable environment in the receipt. Do not turn a completed test run into another planning or monitoring loop.
 """

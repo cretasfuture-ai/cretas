@@ -55,7 +55,7 @@ Success criterion: `DEPLOY_EXIT=0` and `RELEASE_FINAL_STATUS` appears exactly on
 - `no-op` versus `deployed` comes from the Java/Web child receipts, never from the source diff.
 - Once a production release starts, do not merge unrelated PRs until its receipt is complete.
 
-After deploy: the entry already ran `verify-release.sh` (real upstream, systemd, direct slot health, Web four-way hash) and recorded it in the receipt. When the receipt is complete and successful, do not repeat those probes by hand; run `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod` only when the receipt is missing or failed. Then find an ASCII marker of this change inside the running artifact (`strings` cannot read Chinese, so a Chinese marker always counts 0) and exercise that path once for real. `release-cretas.sh` ships only Java and web-admin; a Python-only change is not deployed by it.
+After deploy, follow `.claude/rules/execution-and-verification.md` and measurement-and-wiring constraint 2. Reuse the complete successful `verify-release.sh` receipt for the correct component; do not repeat covered probes or marker searches. For an uncovered component, missing/failed receipt or changed runtime state, use `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod` to fill missing evidence. Exercise business paths only within the current task authorization and completion criteria; service health is not business/UI acceptance. `release-cretas.sh` ships only Java and web-admin, so Python needs its own deployment and verification.
 
 ## Release Preflight
 

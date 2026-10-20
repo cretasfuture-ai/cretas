@@ -49,14 +49,15 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 
 ## 编排/运维 skill（按需加载，`.claude/skills/`）
 
-- `organizer` - Organizer 多模型编排（顶层入口，核心；路由 / effort / 分发卡在其 references/dispatch.md）
+- `organizer` - 仅用于确需多会话分工、scope 仲裁或统一合并/发布排程；普通任务直接完成，真正委派才读 references/dispatch.md
 - `server-operations` - 服务器运维（服务器目录结构/systemd/日志/凭证/部署）
 - `contract-drafting` - 对外合同/保密协议/合作方案/排他协议的起草、审计与出包（拍板流程 + 中文合同文字标准 + audit/build 工具）
 
 ## 规则（`.claude/rules/`）
 
 **常驻**（每 session 加载）：
-- `standing-authorization-and-visual-acceptance.md` - 🔴 **默认直接做完，不设人肉闸门**。Owner 给了方向就是授权（含生产写入、非-F006 租户、删除、合并、部署），⛔ 不要再问「要不要 / 可不可以」；不可逆动作**宣告而非请示**。「不问」≠「不验」——判据一条不省，且能用界面跑一遍证明的就用视觉验收（截图 + 阴性对照）
+- `execution-and-verification.md` - Claude Code / Codex 共用的 DIRECT 默认、按风险验证、证据复用与简短交接；先按此规则确定执行方式
+- `standing-authorization-and-visual-acceptance.md` - 🔴 已授权范围内直接做完，⛔ 不要再问「要不要 / 可不可以」，不可逆动作**宣告而非请示**；保留安全与验证门禁；涉及 UI 行为的完成条件须有真实界面、截图和必要对照，验收范围及证据复用见 execution-and-verification.md
 - `concurrent-edit-safety.md` - 并发编辑安全（共享文件修改前必读）
 - `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署
 - `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量
@@ -64,7 +65,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `ci-runner-routing.md` - CI 自建 runner 在加拿大 Mac mini 的 colima Linux arm64 VM（3 实例，标签 `cretas,java`），美国 aurora 由看门狗自动故障切换做备用；⛔ 本机 WSL 已停用（owner 2026-10-04：内存）。路由靠 runner 端标签，⛔ 别用组织变量 `${{ vars.X }}`（`runs-on` 里读到空）；`switch_ci_runner.py hosted` 已过时。与 `.codex/rules/` 同名文件**逐字相同**，有闸钉着
 - `windows-shell-and-paths.md` - Windows 上 **空格才是根因，中文不是**（实测对照：纯 ASCII 带空格不加引号失败 / 纯中文无空格成功）。新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉，PATH 上 26/61 条带空格）；命令发给对的 shell；精确字符不经过 shell
 
-`.codex/rules/` 是 Codex 侧副本，Claude 以本目录为准（`ci-runner-routing.md` 两侧由 `scripts/ci/check_shared_agent_rules.py` 钉逐字相同）。superpowers 插件在本仓库已关闭（`.claude/settings.json`），规划/调试/评审只用本仓库自己的 skill 与 rules。
+规则正文统一在 `.claude/rules/`；`.codex/rules/` 同名文件是指针，只有 `ci-runner-routing.md` 保留由脚本钉住的逐字副本。Claude-only organizer 不复制到 Codex；Codex 的执行与子代理边界见 `AGENTS.md`，共同执行/验证原则见 `execution-and-verification.md`。superpowers 插件在本仓库已关闭（`.claude/settings.json`），按本仓库规则执行。
 
 **按路径加载**（`paths:` frontmatter，涉及对应文件时自动加载）：
 - `ai-intent-tool-skill-architecture.md` - AI Tool-Skill 架构（backend/java）
