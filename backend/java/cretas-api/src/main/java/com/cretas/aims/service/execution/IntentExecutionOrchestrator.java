@@ -247,6 +247,9 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private IntentPermissionGate intentPermissionGate;
 
+    @Autowired
+    private com.cretas.aims.repository.config.AIIntentConfigRepository intentConfigRepository;
+
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
     private final AtomicLong branchSkill = new AtomicLong();
@@ -1236,7 +1239,9 @@ public class IntentExecutionOrchestrator {
                         .build();
             }
 
-            Optional<AIIntentConfig> intentConfigOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
+            Optional<AIIntentConfig> intentConfigOpt = "PURCHASE_ORDER_CREATE".equals(intentCode)
+                    ? controlledPurchaseIntent(factoryId)
+                    : aiIntentService.getIntentByCode(factoryId, intentCode);
             if (intentConfigOpt.isEmpty()) {
                 previewTokenService.resolveClaim(
                         confirmToken, claimId, false, "意图配置不存在: " + intentCode);
@@ -1765,11 +1770,61 @@ public class IntentExecutionOrchestrator {
     }
 
     private Optional<AIIntentConfig> getIntentByCodeWithPlatformFallback(String factoryId, String intentCode) {
+        if ("PURCHASE_ORDER_CREATE".equals(intentCode)) {
+            return controlledPurchaseIntent(factoryId);
+        }
         Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
         if (intentOpt.isPresent() || factoryId == null || factoryId.isBlank()) {
             return intentOpt;
         }
         return aiIntentService.getIntentByCode(intentCode);
+    }
+
+    /** Server-owned metadata, not an authorization grant or a persisted intent seed. */
+    private Optional<AIIntentConfig> controlledPurchaseIntent(String factoryId) {
+        if (factoryId == null || factoryId.isBlank() || intentConfigRepository == null) {
+            return Optional.empty();
+        }
+        try {
+            Optional<ToolExecutor> registered = toolRegistry.getExecutor("purchase_order_create");
+            if (registered.isEmpty()) {
+                return Optional.empty();
+            }
+            ToolExecutor tool = registered.get();
+            if (!com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.VERSION.equals(tool.getVersion())
+                    || !"purchase_order_create".equals(tool.getToolName())
+                    || tool.getActionType() != ToolExecutor.ActionType.WRITE
+                    || tool.getAccessMode() != ToolExecutor.AccessMode.WRITE
+                    || !tool.supportsPreview() || !tool.requiresPermission()
+                    || !java.util.Set.of("procurement:read_write").equals(tool.getRequiredPermissions())) {
+                return Optional.empty();
+            }
+            // Query includes inactive rows: an explicit restriction must never become an absent-row fallback.
+            Optional<AIIntentConfig> configured = intentConfigRepository
+                    .findByIntentCodeAndDeletedAtIsNull("PURCHASE_ORDER_CREATE");
+            if (configured.isPresent()) {
+                AIIntentConfig row = configured.get();
+                if (!Boolean.TRUE.equals(row.getIsActive())
+                        || (row.getFactoryId() != null && !factoryId.equals(row.getFactoryId()))
+                        || !"purchase_order_create".equals(row.getToolName())
+                        || !"procurement:read_write".equals(row.getRequiredPermission())
+                        || !"DATA_OP".equals(row.getIntentCategory())
+                        || !"FACTORY".equals(row.getBusinessType())
+                        || !"HIGH".equals(row.getSensitivityLevel())
+                        || Boolean.TRUE.equals(row.getRequiresApproval())) {
+                    return Optional.empty();
+                }
+            }
+            return Optional.of(AIIntentConfig.builder()
+                    .intentCode("PURCHASE_ORDER_CREATE").intentName("创建受控采购草稿")
+                    .toolName("purchase_order_create").intentCategory("DATA_OP")
+                    .businessType("FACTORY").sensitivityLevel("HIGH")
+                    .requiredPermission("procurement:read_write").requiresApproval(false)
+                    .factoryId(factoryId).isActive(true).build());
+        } catch (Exception e) {
+            log.warn("受控采购入口元数据不可用，拒绝执行: {}", e.getClass().getSimpleName());
+            return Optional.empty();
+        }
     }
 
     Optional<String> matchRestaurantOpsIntent(String normalizedInput, String businessDomain) {
@@ -2620,6 +2675,9 @@ public class IntentExecutionOrchestrator {
      * @return null=放行; 非 null=拒绝响应
      */
     private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, Long userId, String userRole) {
+        if ("PURCHASE_ORDER_CREATE".equals(intent.getIntentCode()) && intentPermissionGate == null) {
+            return buildNoPermissionResponse(intent);
+        }
         String requiredPermission = intent.getRequiredPermission();
         // intentPermissionGate 为 Spring 常驻 @Component; null 仅出现在裸构造的单测, 回落旧逻辑
         if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
