@@ -1,6 +1,7 @@
 package com.cretas.aims.config;
 
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.service.mobile.WebLoginSessionService;
 import com.cretas.aims.utils.CookieAuthHelper;
 import com.cretas.aims.utils.JwtUtil;
@@ -27,18 +28,23 @@ import java.util.LinkedHashSet;
 @RequiredArgsConstructor
 public class WebLoginSessionFilter extends OncePerRequestFilter {
     public static final String ORIGINAL_ACCESS_TOKEN = WebLoginSessionFilter.class.getName() + ".originalAccessToken";
+    public static final String VERIFIED_SESSION = WebLoginSessionFilter.class.getName() + ".verifiedSession";
+    public static final String VERIFIED_BOUND_ACCESS = WebLoginSessionFilter.class.getName() + ".verifiedBoundAccess";
     private final WebLoginSessionService sessions;
     private final CookieAuthHelper cookies;
     private final JwtUtil jwt;
+    private final JwtAuthInterceptor auth;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
+        boolean hasSession = CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE) != null;
         return "OPTIONS".equalsIgnoreCase(request.getMethod())
                 || !(path.startsWith("/api/mobile/") || path.startsWith("/api/platform/"))
-                || path.equals("/api/mobile/auth/unified-login")
-                || path.equals("/api/mobile/auth/demo-login")
-                || path.equals("/api/mobile/health");
+                || (auth.isPublicEndpoint(path) && (!hasSession || path.endsWith("/health")
+                    || path.startsWith("/api/mobile/activation/") || path.equals("/api/mobile/version/check")
+                    || (auth.isWebCredentialExchange(path)
+                        && !path.equals("/api/mobile/auth/refresh") && !path.equals("/api/mobile/auth/refresh-token"))));
     }
 
     @Override
@@ -65,6 +71,14 @@ public class WebLoginSessionFilter extends OncePerRequestFilter {
             return;
         }
         String original = request.getHeader("Authorization");
+        boolean platform = jwt.isExplicitPlatformToken(access);
+        var expiresAt = jwt.getExpirationDateFromToken(access);
+        request.setAttribute(VERIFIED_SESSION, MobileDTO.LoginResponse.builder()
+                .token(access).actorType(platform ? "PLATFORM_ADMIN" : "FACTORY_USER")
+                .userId(jwt.getUserIdFromToken(access)).username(jwt.getUsernameFromToken(access))
+                .factoryId(platform ? null : jwt.getFactoryIdFromToken(access))
+                .expiresIn(expiresAt == null ? null : Math.max(0L, (expiresAt.getTime() - System.currentTimeMillis()) / 1000))
+                .role(jwt.getRoleFromToken(access)).build());
         String originalToken = original != null && original.startsWith("Bearer ")
                 ? original.substring(7).trim()
                 : CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.ACCESS_TOKEN_COOKIE);
@@ -72,6 +86,7 @@ public class WebLoginSessionFilter extends OncePerRequestFilter {
         if (jwt.validateToken(originalToken)
                 && java.util.Objects.equals(jwt.getUserIdFromToken(originalToken), jwt.getUserIdFromToken(access))
                 && java.util.Objects.equals(jwt.getFactoryIdFromToken(originalToken), jwt.getFactoryIdFromToken(access))
+                && java.util.Objects.equals(jwt.getWebSessionHash(originalToken), jwt.getWebSessionHash(access))
                 && jwt.isExplicitPlatformToken(originalToken) == jwt.isExplicitPlatformToken(access)) {
             request.setAttribute(ORIGINAL_ACCESS_TOKEN, originalToken);
         }

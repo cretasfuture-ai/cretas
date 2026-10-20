@@ -6,9 +6,14 @@ User explicitly requested removing session timeout and merge/deploy on 2026-10-2
 Scope: new WebLoginSessionService and its contract/actual-PostgreSQL tests;
 V20261103_71 web_login_sessions migration; CookieAuthHelper, MobileController,
 WebLoginSessionFilter persistent-session wiring plus associated tests;
+JwtUtil bounded Web-session claim and JwtAuthInterceptor's durable bound-access
+revocation validation (no competing scope found in live main ACTIVE);
+MobileAuthServiceImpl rejects bound Web access JWTs in the legacy refresh body,
+without changing legacy mobile token issuance;
 FactorySettingsController/SecuritySettings DTO and Web system settings removal;
+Web login retires the unused rememberMe checkbox for an accurate persistence caption;
 own dispatch/archive. No change to S1 services, gateways, QA CSV/browser/phone,
-App token TTL, JWT signing/validation or existing role/tenant permission policy.
+App token TTL, legacy JWT signing/expiry checks or existing role/tenant permission policy.
 
 Design: opaque random Web cookie, SHA-256-only persisted credential, no server
 fixed/idle expiry, explicit revoke, live principal/factory/password/role checks.
@@ -49,3 +54,19 @@ App/access/refresh cookie configuration. The actual Web login controller test
 first failed under the old flag (1 failure, 0 errors); HTTPS-only enforcement
 requires final rebuilt artifacts and new-head CI. Initial cf7 candidate build
 74/74 and local 39/39 (13 actual PG) remain historical, not final-build proof.
+
+Compatibility closeout includes normal validate/refresh endpoints and explicit
+real-to-demo switching. All Web-issued access JWTs are bounded and bound to the
+durable session hash, including initial JSON/cookie credentials; Web login does
+not expose its legacy refresh credential. Cookie-less bound JWT access must
+still pass durable revocation/live identity checks, cannot borrow another actor
+or browser, and cannot mint refresh authority. Cookie and bearer-only logout
+both revoke the durable browser session. Legacy mobile/demo JWT generation is
+unchanged. Any new final source supersedes earlier candidate build receipts.
+
+Sealed local target run: 59 PASS/0skip/fail/error, including 20 cases on actual
+disposable PG17; same real service, JWT and interceptor test methods exercise
+durable access revocation, actor collision, public voice authentication and
+legacy-refresh-body escape refusal. The temporary cluster is task-owned only.
+Final official package/CI/release receipts must still bind the final commit;
+the Web caption-only change does not change the validated Java source bytes.

@@ -6,6 +6,10 @@ import com.cretas.aims.entity.enums.Status;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.utils.JwtUtil;
+import com.cretas.aims.config.JwtAuthInterceptor;
+import com.cretas.aims.service.TokenBlacklistService;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -144,5 +148,69 @@ class WebLoginSessionContractTest {
         String expired = jwt.generateToken(7L, "F006", user.getUsername(), user.getRoleCode());
         assertThatThrownBy(() -> service.issue(expired)).isInstanceOf(BusinessException.class);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM web_login_sessions", Long.class)).isZero();
+    }
+
+    @Test void boundedAccessCannotReplayAfterPersistentSessionRevocationEvenWithoutCookie() throws Exception {
+        String secret = login(); String access = service.resolve(secret);
+        assertThat(jwt.getWebSessionHash(access)).isEqualTo(WebLoginSessionService.hash(secret));
+        assertThat(jwt.getExpirationDateFromToken(access)).isNotNull();
+        assertThat(intercept(access, "/api/mobile/auth/me").getStatus()).isEqualTo(200);
+        service.revoke(secret);
+        assertThat(jwt.validateToken(access)).isTrue(); // Rejection must be revocation, not JWT expiry.
+        assertThat(intercept(access, "/api/mobile/auth/me").getStatus()).isEqualTo(401);
+    }
+
+    @Test void bearerOnlyLogoutRevokesAllAccessFromOnlyItsOwnBrowser() {
+        String a = login(), b = login(); String access = service.resolve(a);
+        service.revokeBoundAccessToken(access);
+        assertThatThrownBy(() -> service.assertBoundAccessToken(access)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.resolve(a)).isInstanceOf(BusinessException.class);
+        assertThat(jwt.validateToken(service.resolve(b))).isTrue();
+    }
+
+    @Test void bareBoundAccessCannotKeepOldRoleButCookieCanRehydrateNewRole() {
+        String secret = login(), access = service.resolve(secret); user.setRoleCode("viewer");
+        assertThatThrownBy(() -> service.assertBoundAccessToken(access)).isInstanceOf(BusinessException.class);
+        String fresh = service.resolve(secret);
+        service.assertBoundAccessToken(fresh);
+        assertThat(jwt.getRoleFromToken(fresh)).isEqualTo("viewer");
+    }
+
+    @Test void boundAccessDatabaseFailureIs503BeforeAuthMeCanReadUser() throws Exception {
+        String access = service.resolve(login()); jdbc.execute("DROP TABLE web_login_sessions");
+        assertThat(intercept(access, "/api/mobile/auth/me").getStatus()).isEqualTo(503);
+    }
+
+    @Test void publicLoginCanReauthenticateDespiteOldRevokedBoundJwt() throws Exception {
+        String secret = login(), access = service.resolve(secret); service.revoke(secret);
+        assertThat(intercept(access, "/api/mobile/auth/unified-login").getStatus()).isEqualTo(200);
+    }
+
+    @Test void signedAccessCannotBorrowAnotherActorSessionHash() {
+        String secret = login();
+        String other = jwt.bindWebSession(jwt.generatePlatformToken(7L, admin.getUsername(), "super_admin"), WebLoginSessionService.hash(secret));
+        assertThatThrownBy(() -> service.assertBoundAccessToken(other)).isInstanceOf(BusinessException.class);
+    }
+
+    @Test void boundAccessCannotEscapeRevocationThroughLegacyRefreshBody() {
+        String access = service.resolve(login());
+        var authService = mock(com.cretas.aims.service.mobile.impl.MobileAuthServiceImpl.class, CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(authService, "jwtUtil", jwt);
+        assertThatThrownBy(() -> authService.refreshToken(access)).isInstanceOfSatisfying(BusinessException.class,
+                error -> assertThat(error.getCode()).isEqualTo(401));
+    }
+
+    private MockHttpServletResponse intercept(String access, String path) throws Exception {
+        var interceptor = new JwtAuthInterceptor();
+        ReflectionTestUtils.setField(interceptor, "jwtUtil", jwt);
+        ReflectionTestUtils.setField(interceptor, "tokenBlacklistService", mock(TokenBlacklistService.class));
+        ReflectionTestUtils.setField(interceptor, "userRepository", users);
+        ReflectionTestUtils.setField(interceptor, "factoryRepository", factories);
+        ReflectionTestUtils.setField(interceptor, "webLoginSessions", service);
+        var request = new MockHttpServletRequest("GET", path); request.addHeader("Authorization", "Bearer " + access);
+        var response = new MockHttpServletResponse();
+        boolean allowed = interceptor.preHandle(request, response, new Object());
+        assertThat(allowed).isEqualTo(response.getStatus() == 200);
+        return response;
     }
 }

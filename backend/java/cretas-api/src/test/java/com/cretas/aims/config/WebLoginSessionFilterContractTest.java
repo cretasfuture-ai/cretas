@@ -11,6 +11,7 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
+import com.cretas.aims.service.TokenBlacklistService;
 import java.util.Collections;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -19,7 +20,7 @@ class WebLoginSessionFilterContractTest {
     final WebLoginSessionService sessions = mock(WebLoginSessionService.class);
     final CookieAuthHelper cookies = new CookieAuthHelper();
     final JwtUtil jwt = mock(JwtUtil.class);
-    final WebLoginSessionFilter filter = new WebLoginSessionFilter(sessions, cookies, jwt);
+    final WebLoginSessionFilter filter = new WebLoginSessionFilter(sessions, cookies, jwt, new JwtAuthInterceptor());
 
     MockHttpServletRequest request(String path) {
         var request = new MockHttpServletRequest("GET", path);
@@ -69,7 +70,7 @@ class WebLoginSessionFilterContractTest {
     }
 
     @Test void loginAndPreflightDoNotGetBlockedByOldCookie() throws Exception {
-        for (String path : new String[]{"/api/mobile/auth/unified-login", "/api/mobile/auth/demo-login", "/api/mobile/health"}) {
+        for (String path : new String[]{"/api/mobile/auth/unified-login", "/api/mobile/auth/demo-login", "/api/mobile/health", "/api/mobile/auth/register", "/api/mobile/activation/status", "/api/mobile/version/check"}) {
             filter.doFilter(request(path), new MockHttpServletResponse(), (req, res) -> {});
         }
         var options = request("/api/mobile/F006/products"); options.setMethod("OPTIONS");
@@ -102,5 +103,39 @@ class WebLoginSessionFilterContractTest {
         var request = request("/api/mobile/auth/logout"); request.addHeader("Authorization", "Bearer original-token");
         filter.doFilter(request, new MockHttpServletResponse(), (req, res) ->
                 assertThat(req.getAttribute(WebLoginSessionFilter.ORIGINAL_ACCESS_TOKEN)).isEqualTo("original-token"));
+    }
+
+    @Test void logoutDoesNotBlacklistOtherBrowserOfSameActor() throws Exception {
+        when(sessions.resolve(anyString())).thenReturn("fresh-token");
+        when(jwt.validateToken("other-token")).thenReturn(true);
+        when(jwt.getUserIdFromToken(anyString())).thenReturn(7L);
+        when(jwt.getFactoryIdFromToken(anyString())).thenReturn("F006");
+        when(jwt.getWebSessionHash("other-token")).thenReturn("a".repeat(64));
+        when(jwt.getWebSessionHash("fresh-token")).thenReturn("b".repeat(64));
+        var request = request("/api/mobile/auth/logout"); request.addHeader("Authorization", "Bearer other-token");
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) ->
+                assertThat(req.getAttribute(WebLoginSessionFilter.ORIGINAL_ACCESS_TOKEN)).isNull());
+    }
+
+    @Test void publicVoiceStillUsesLivePersistentIdentityAfterLegacyJwtExpires() throws Exception {
+        when(sessions.resolve("fixture-session")).thenReturn("fresh-token");
+        filter.doFilter(request("/api/mobile/voice/transcribe"), new MockHttpServletResponse(), (req, res) ->
+                assertThat(((HttpServletRequest) req).getHeader("Authorization")).isEqualTo("Bearer fresh-token"));
+        verify(sessions).resolve("fixture-session");
+    }
+
+    @Test void publicVoiceCannotTrustRevokedBoundBearerIdentity() throws Exception {
+        var auth = new JwtAuthInterceptor();
+        ReflectionTestUtils.setField(auth, "jwtUtil", jwt);
+        ReflectionTestUtils.setField(auth, "tokenBlacklistService", mock(TokenBlacklistService.class));
+        ReflectionTestUtils.setField(auth, "webLoginSessions", sessions);
+        when(jwt.validateToken("revoked-token")).thenReturn(true);
+        when(jwt.getWebSessionHash("revoked-token")).thenReturn("a".repeat(64));
+        doThrow(new BusinessException(401, "revoked")).when(sessions).assertBoundAccessToken("revoked-token");
+        var request = new MockHttpServletRequest("GET", "/api/mobile/voice/transcribe");
+        request.addHeader("Authorization", "Bearer revoked-token");
+        var response = new MockHttpServletResponse();
+        assertThat(auth.preHandle(request, response, new Object())).isFalse();
+        assertThat(response.getStatus()).isEqualTo(401);
     }
 }

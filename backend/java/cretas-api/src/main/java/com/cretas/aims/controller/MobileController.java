@@ -80,6 +80,8 @@ public class MobileController {
         // For web clients, set HttpOnly cookies in addition to the JSON response
         if (cookieAuthHelper.isWebClient(httpRequest) && response.getToken() != null) {
             String session = webLoginSessions.issue(response.getToken());
+            response.setToken(webLoginSessions.resolve(session));
+            response.setRefreshToken(null); // Web refresh authority remains only in the HttpOnly session cookie.
             webLoginSessions.revoke(CookieAuthHelper.extractCookieValue(httpRequest, CookieAuthHelper.WEB_SESSION_COOKIE));
             cookieAuthHelper.setWebSessionCookie(httpResponse, session);
             cookieAuthHelper.setAuthCookies(httpResponse, response.getToken(), response.getRefreshToken());
@@ -100,6 +102,13 @@ public class MobileController {
                 httpRequest.getHeader(CookieAuthHelper.CLIENT_TYPE_HEADER));
         MobileDTO.LoginResponse response = mobileService.demoLogin(tenant);
 
+        // Switching into a demo must never retain a real user's persistent identity.
+        String previousWebSession = CookieAuthHelper.extractCookieValue(httpRequest, CookieAuthHelper.WEB_SESSION_COOKIE);
+        if (previousWebSession != null) {
+            webLoginSessions.revoke(previousWebSession);
+            cookieAuthHelper.clearWebSessionCookie(httpResponse);
+        }
+
         // For web clients, set HttpOnly cookies in addition to the JSON response
         if (cookieAuthHelper.isWebClient(httpRequest) && response.getToken() != null) {
             cookieAuthHelper.setAuthCookies(httpResponse, response.getToken(), response.getRefreshToken());
@@ -116,6 +125,11 @@ public class MobileController {
             @RequestParam(required = false) @Parameter(description = "刷新令牌（query param，兼容旧调用方）", example = "eyJhbGciOiJIUzI1NiJ9...") String refreshToken,
             HttpServletRequest httpRequest,
             HttpServletResponse httpResponse) {
+        Object verified = httpRequest.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.VERIFIED_SESSION);
+        if (verified instanceof MobileDTO.LoginResponse session && session.getToken() != null) {
+            // The filter already revalidated durable Web authorization and renewed its cookie.
+            return ApiResponse.success(session);
+        }
         // Priority: JSON body > query param > cookie
         String tokenToUse = null;
         if (body != null && body.getRefreshToken() != null && !body.getRefreshToken().isEmpty()) {
@@ -157,7 +171,9 @@ public class MobileController {
         log.info("用户登出: userId={}, deviceId={}", userId, deviceId);
         Object original = request.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.ORIGINAL_ACCESS_TOKEN);
         mobileService.logout(userId, deviceId, original instanceof String originalToken ? originalToken : token);
-        webLoginSessions.revoke(CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE));
+        String webSession = CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.WEB_SESSION_COOKIE);
+        if (webSession != null) webLoginSessions.revoke(webSession);
+        else webLoginSessions.revokeBoundAccessToken(token);
 
         // Clear cookies for web clients (always safe to clear, even for mobile)
         if (cookieAuthHelper.isWebClient(request)
@@ -396,6 +412,13 @@ public class MobileController {
             @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
             @RequestHeader(value = "Authorization", required = false) String authorization,
             HttpServletRequest httpRequest) {
+        Object verified = httpRequest.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.VERIFIED_SESSION);
+        if (verified instanceof MobileDTO.LoginResponse session && session.getToken() != null) {
+            return ApiResponse.success(true);
+        }
+        if (Boolean.TRUE.equals(httpRequest.getAttribute(com.cretas.aims.config.WebLoginSessionFilter.VERIFIED_BOUND_ACCESS))) {
+            return ApiResponse.success(true);
+        }
         String token = resolveToken(authorization, httpRequest);
         boolean isValid = mobileService.validateToken(token);
         return ApiResponse.success(isValid);

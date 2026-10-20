@@ -52,7 +52,7 @@ public class CookieAuthHelper {
      */
     public void setAuthCookies(HttpServletResponse response, String accessToken, String refreshToken) {
         long accessMaxAge = accessTokenExpirationMs / 1000; // convert ms to seconds
-        long refreshMaxAge = refreshTokenExpirationMs / 1000;
+        long refreshMaxAge = refreshToken == null || refreshToken.isBlank() ? 0 : refreshTokenExpirationMs / 1000;
 
         ResponseCookie accessCookie = ResponseCookie.from(ACCESS_TOKEN_COOKIE, accessToken)
                 .httpOnly(true)
@@ -79,7 +79,7 @@ public class CookieAuthHelper {
      * Clear authentication cookies (for logout).
      */
     public void clearAuthCookies(HttpServletResponse response) {
-        response.addHeader("Set-Cookie", webSessionCookie("", 0).toString());
+        clearWebSessionCookie(response);
         ResponseCookie accessCookie = ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(secureCookie)
@@ -103,6 +103,10 @@ public class CookieAuthHelper {
     public void setWebSessionCookie(HttpServletResponse response, String secret) {
         // Browser retention is capped; renew on use. The server has no session TTL.
         response.addHeader("Set-Cookie", webSessionCookie(secret, 400L * 24 * 60 * 60).toString());
+    }
+
+    public void clearWebSessionCookie(HttpServletResponse response) {
+        response.addHeader("Set-Cookie", webSessionCookie("", 0).toString());
     }
 
     private ResponseCookie webSessionCookie(String value, long maxAge) {

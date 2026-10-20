@@ -14,8 +14,7 @@ const loading = ref(false);
 
 const loginForm = reactive({
   username: '',
-  password: '',
-  rememberMe: false
+  password: ''
 });
 
 const rules = {
@@ -104,7 +103,7 @@ async function handleLogin() {
         </el-form-item>
 
         <el-form-item>
-          <el-checkbox v-model="loginForm.rememberMe">记住我</el-checkbox>
+          <span>登录状态将保留，可随时退出登录</span>
         </el-form-item>
 
         <el-button

@@ -51,15 +51,40 @@ public class WebLoginSessionService {
     @Transactional(readOnly = true)
     public String resolve(String secret) {
         if (secret == null || !secret.matches("[A-Za-z0-9_-]{43}")) throw unauthorized();
+        String sessionHash = hash(secret);
+        return jwt.bindWebSession(checkedPrincipal(sessionHash).accessToken(), sessionHash);
+    }
+
+    /** Access JWTs stay bounded and cannot outlive explicit Web-session revocation. */
+    @Transactional(readOnly = true)
+    public void assertBoundAccessToken(String token) {
+        if (!jwt.validateToken(token) || jwt.getExpirationDateFromToken(token) == null) throw unauthorized();
+        Principal current = checkedPrincipal(jwt.getWebSessionHash(token));
+        String expected = current.accessToken();
+        if (!Objects.equals(jwt.getUserIdFromToken(token), jwt.getUserIdFromToken(expected))
+                || !Objects.equals(jwt.getFactoryIdFromToken(token), jwt.getFactoryIdFromToken(expected))
+                || !Objects.equals(jwt.getRoleFromToken(token), jwt.getRoleFromToken(expected))
+                || jwt.isExplicitPlatformToken(token) != jwt.isExplicitPlatformToken(expected)) throw unauthorized();
+    }
+
+    @Transactional
+    public void revokeBoundAccessToken(String token) {
+        if (jwt.getWebSessionHash(token) == null) return; // Legacy mobile authentication is unchanged.
+        assertBoundAccessToken(token);
+        jdbc.update("UPDATE web_login_sessions SET revoked=TRUE WHERE session_hash=?", jwt.getWebSessionHash(token));
+    }
+
+    private Principal checkedPrincipal(String sessionHash) {
+        if (sessionHash == null || !sessionHash.matches("[a-f0-9]{64}")) throw unauthorized();
         var rows = jdbc.query("SELECT actor_type,user_id,factory_id,password_fingerprint FROM web_login_sessions WHERE session_hash=? AND revoked=FALSE",
-                (rs, row) -> new Stored(rs.getString(1), rs.getLong(2), rs.getString(3), rs.getString(4)), hash(secret));
+                (rs, row) -> new Stored(rs.getString(1), rs.getLong(2), rs.getString(3), rs.getString(4)), sessionHash);
         if (rows.size() != 1) throw unauthorized();
         Stored stored = rows.get(0);
         Principal current = principal(stored.actor(), stored.id());
         if (!Objects.equals(stored.factory(), current.factory())
                 || !MessageDigest.isEqual(stored.password().getBytes(StandardCharsets.US_ASCII),
                         hash(current.password()).getBytes(StandardCharsets.US_ASCII))) throw unauthorized();
-        return current.accessToken();
+        return current;
     }
 
     @Transactional

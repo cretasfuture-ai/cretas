@@ -96,6 +96,24 @@ public class JwtUtil {
                 && "PLATFORM".equals(claims.get("factoryId", String.class));
     }
 
+    /** Bind a bounded access JWT to a revocable Web session; the hash is not a credential. */
+    public String bindWebSession(String accessToken, String sessionHash) {
+        if (sessionHash == null || !sessionHash.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("Invalid session hash");
+        Claims source = getClaimsFromToken(accessToken);
+        if (source == null) throw new IllegalArgumentException("Invalid access token");
+        Map<String, Object> claims = new HashMap<>(source);
+        claims.remove("exp"); claims.remove("iat"); claims.remove("jti");
+        claims.put("webSessionHash", sessionHash);
+        return createToken(claims, source.getSubject());
+    }
+
+    public String getWebSessionHash(String token) {
+        Claims claims = getClaimsFromToken(token);
+        if (claims == null || !claims.containsKey("webSessionHash")) return null;
+        Object value = claims.get("webSessionHash");
+        return value instanceof String hash ? hash : "";
+    }
+
     private String createToken(Map<String, Object> claims, String subject) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expiration);
