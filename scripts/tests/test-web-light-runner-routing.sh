@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # GUARDS=.github/workflows/web-admin-gate.yml,.github/workflows/web-dist.yml,scripts/ci/switch_ci_runner.py
+# GUARDS=.github/workflows/secret-regression.yml,.github/workflows/rn-gate.yml,.github/workflows/python-gate.yml
+# GUARDS=.github/workflows/jpa-gate-main.yml,.github/workflows/java-artifact.yml,.github/workflows/java-full-nightly.yml,.github/workflows/tool-inventory-gate.yml
+# GUARDS=.github/workflows/scheduler-canary.yml,.github/workflows/ops-script-tests.yml,.github/workflows/soft-delete-scan-surface.yml
 # Fixture-only: no real workflow writes, dispatches, network or services.
 set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
