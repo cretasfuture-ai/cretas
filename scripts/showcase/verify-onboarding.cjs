@@ -26,6 +26,7 @@ const out=process.env.SHOWCASE_VERIFY_DIR;assert(out,'SHOWCASE_VERIFY_DIR requir
     await page.evaluate(async()=>{await document.fonts.ready;for(const image of document.images){image.loading='eager';await image.decode().catch(()=>{});}});
     const metrics=await page.evaluate(()=>({
      horizontalOverflow:document.documentElement.scrollWidth>innerWidth+1,
+     pdfLinks:document.querySelectorAll('a[download], a[href$=".pdf"]').length,
      brokenImages:[...document.images].filter(i=>i.hasAttribute('src')&&(!i.complete||!i.naturalWidth)).map(i=>i.getAttribute('src')),
      title:document.title,
      scopeOverflow:[...document.querySelectorAll('.fb-module *, .fb-page main *, .fb-page nav *')].filter(el=>{const box=el.getBoundingClientRect();return box.right>innerWidth+1||box.left< -1;}).slice(0,8).map(el=>({tag:el.tagName,cls:el.className})),
@@ -54,16 +55,13 @@ const out=process.env.SHOWCASE_VERIFY_DIR;assert(out,'SHOWCASE_VERIFY_DIR requir
       await menu.locator('a[href="#cooperate"]').click();assert.equal(await menu.getAttribute('open'),null);
      }
      await page.locator('.fb-hero a[href="#cooperate"]').click();assert.equal(new URL(page.url()).hash,'#cooperate');
-     const [download]=await Promise.all([page.waitForEvent('download'),page.locator('a[download]').first().click()]);
-     const destination=path.join(out,`download-${width}.pdf`);await download.saveAs(destination);
-     const actual=await fs.readFile(destination);assert(actual.subarray(0,5).toString()==='%PDF-');
-     const expected=await fs.readFile(path.resolve(__dirname,'../../platform/downloads/cretas-factory-onboarding.pdf'));
-     assert.equal(createHash('sha256').update(actual).digest('hex'),createHash('sha256').update(expected).digest('hex'));
+     // 能力介绍 PDF 已下线 (2026-10-20): 页面上不能再有下载入口或 .pdf 链接
+     assert.equal(await page.locator('a[download], a[href$=".pdf"]').count(),0);
      await page.evaluate(()=>scrollTo(0,0));
     }
     const name=route==='/'?'home':route.replace(/\W+/g,'-');
     await page.screenshot({path:path.join(out,`${width}${name}.png`),fullPage:true});
-    const pass=!metrics.horizontalOverflow&&!metrics.brokenImages.length&&!metrics.scopeOverflow.length&&!errors.length&&!badResponses.length;
+    const pass=!metrics.horizontalOverflow&&!metrics.pdfLinks&&!metrics.brokenImages.length&&!metrics.scopeOverflow.length&&!errors.length&&!badResponses.length;
     const result={width,route,status:pass?'PASS':'FAIL',...metrics,errors,badResponses};results.push(result);
     if(!pass)failures.push(result);await page.close();
    }

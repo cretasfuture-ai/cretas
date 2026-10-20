@@ -20,6 +20,9 @@
           panel.tabIndex = 0;
           panel.hidden = !selected;
         });
+        // A panel that was hidden has stale scroll positions; re-measure so the
+        // site's section motion (v6-premium) does not leave it faded out.
+        if (window.ScrollTrigger) window.ScrollTrigger.refresh();
       };
       pairs.forEach(({ button }, index) => {
         button.addEventListener('click', () => select(button));
@@ -61,6 +64,7 @@
         scale.setAttribute('aria-pressed', 'false');
         scale.textContent = '原图大小';
         document.body.classList.add('fb-image-open');
+        if (window.__v6lenis) window.__v6lenis.stop();   // smooth scroll would swallow the viewer's own scrolling
         viewer.showModal();
         body.scrollTo(0, 0);
         close.focus({ preventScroll: true });
@@ -79,6 +83,7 @@
     });
     viewer.addEventListener('close', () => {
       document.body.classList.remove('fb-image-open');
+      if (window.__v6lenis) window.__v6lenis.start();
       image.removeAttribute('src');
       opener?.focus({ preventScroll: true });
     });

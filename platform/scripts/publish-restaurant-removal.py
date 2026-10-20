@@ -14,7 +14,7 @@ NEW_FILES = ['assets/brand/cretas-mark.svg', 'assets/brand/cretas-touch.png',
              'assets/onboarding/conversation.webp', 'assets/onboarding/cost.webp',
              'assets/onboarding/indicators.webp', 'assets/onboarding/traceability.webp',
              'css/factory-onboarding.css', 'js/factory-onboarding.js',
-             'downloads/cretas-factory-onboarding.pdf', 'factory-onboarding.html']
+             'factory-onboarding.html']
 FILES = ['favicon.ico', 'sitemap.xml', 'index.html', 'solutions-factory.html',
          'solutions-logistics.html', 'solutions-ai.html', 'solutions-custom.html',
          'smartbi.html', 'cockpit.html', 'demo.html', 'privacy.html',
