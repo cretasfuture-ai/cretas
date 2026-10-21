@@ -81,6 +81,8 @@ const inputLabels: Record<string, string> = {
   'scheduleId:diagnostic_inputs': '已有排程的可验证输入',
   'productionLineId:tenant_mismatch_or_missing': '当前工厂可用产线',
   'batchId:tenant_mismatch_or_missing': '当前工厂可用批次',
+  'productionLineId:not_schedulable': '启用状态的产线',
+  'batchId:not_schedulable': '计划中批次',
 };
 const inputLabel = (field: string) => inputLabels[field] || '待核对输入';
 </script>

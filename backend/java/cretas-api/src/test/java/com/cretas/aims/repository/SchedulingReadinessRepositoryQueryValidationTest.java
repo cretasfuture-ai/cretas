@@ -106,6 +106,16 @@ class SchedulingReadinessRepositoryQueryValidationTest {
         schedule.setBatchId(batchId); schedule.setPlannedQuantity(10); schedule.setCompletedQuantity(0); schedule.setAssignedWorkers(1);
         schedule.setPlannedEndTime(LocalDateTime.of(2030, 1, 1, 10, 0));
         entityManager.persist(schedule);
+        entityManager.createNativeQuery("INSERT INTO production_lines(id,factory_id,name,status,created_at,updated_at) VALUES ('READINESS-FOREIGN-LINE','READINESS-OTHER','SECRET FOREIGN LINE','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)").executeUpdate();
+        entityManager.createNativeQuery("INSERT INTO production_batches(factory_id,batch_number,product_type_id,quantity,unit,status,batch_type,created_at,updated_at) VALUES ('READINESS-OTHER','SECRET FOREIGN BATCH','SECRET-FOREIGN-PRODUCT',10,'kg','PLANNED','REGULAR',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)").executeUpdate();
+        Long foreignBatchId = ((Number) entityManager.createNativeQuery("SELECT id FROM production_batches WHERE factory_id='READINESS-OTHER' AND batch_number='SECRET FOREIGN BATCH'").getSingleResult()).longValue();
+        for (String reference : java.util.List.of("LINE", "BATCH", "BOTH")) {
+            var damaged = new LineSchedule(); damaged.setId("READINESS-CROSS-" + reference); damaged.setPlan(plan);
+            damaged.setProductionLineId(reference.equals("BATCH") ? "READINESS-LINE" : "READINESS-FOREIGN-LINE");
+            damaged.setBatchId(reference.equals("LINE") ? batchId : foreignBatchId);
+            damaged.setPlannedQuantity(10); damaged.setCompletedQuantity(0); damaged.setAssignedWorkers(1);
+            damaged.setPlannedEndTime(LocalDateTime.of(2030, 1, 1, 10, 0)); entityManager.persist(damaged);
+        }
         entityManager.flush(); entityManager.clear();
         Map<String, Long> before = counts();
         Map<String, java.util.List<String>> beforeRows = snapshot();
@@ -118,6 +128,24 @@ class SchedulingReadinessRepositoryQueryValidationTest {
         assertThat(own.getProductionLine().isSelected()).isTrue();
         assertThat(own.getProductionLine().isConfirmed()).isFalse();
         assertThat(own.isReadyForAutomation()).isFalse();
+        var eligible = service.check("READINESS-OWNER", "READINESS-LINE", batchId,
+                LocalDateTime.of(2030, 1, 1, 9, 0), LocalDateTime.of(2030, 1, 1, 10, 0));
+        assertThat(eligible.getStatus()).isEqualTo("INPUTS_VALID_UNCONFIRMED");
+        assertThat(eligible.isReadyForAutomation()).isFalse();
+        for (String reference : java.util.List.of("LINE", "BATCH", "BOTH")) {
+            var blocked = predictions.calculateCompletionProbability("READINESS-OWNER", "READINESS-CROSS-" + reference);
+            assertThat(blocked.getScheduleId()).isEqualTo("READINESS-CROSS-" + reference);
+            assertThat(blocked.getPredictionOrigin()).isEqualTo("BUSINESS_INPUT");
+            assertThat(blocked.getPredictionReason()).isEqualTo("TENANT_SCOPED_RESOURCE_MISSING");
+            assertThat(blocked).hasAllNullFieldsOrPropertiesExcept("scheduleId", "predictionOrigin", "predictionReason");
+        }
+        org.springframework.test.util.ReflectionTestUtils.setField(predictions, "hybridPredictEnabled", false);
+        try {
+            var legacyOwn = predictions.calculateCompletionProbability("READINESS-OWNER", "READINESS-SCHEDULE");
+            assertThat(legacyOwn.getPredictionOrigin()).isEqualTo("LOCAL_ESTIMATE");
+            assertThat(legacyOwn.getProductionLineName()).isEqualTo("Fixture line");
+            assertThat(legacyOwn.getBatchNumber()).isEqualTo("READINESS-BATCH");
+        } finally { org.springframework.test.util.ReflectionTestUtils.setField(predictions, "hybridPredictEnabled", true); }
         var diagnostic = predictions.diagnoseCompletionProbability("READINESS-OWNER", "READINESS-SCHEDULE");
         assertThat(diagnostic.getPredictionOrigin()).isEqualTo("BUSINESS_INPUT");
         assertThat(diagnostic.getPredictionReason()).isEqualTo("VERIFIED_MODEL_FEATURES_UNAVAILABLE");

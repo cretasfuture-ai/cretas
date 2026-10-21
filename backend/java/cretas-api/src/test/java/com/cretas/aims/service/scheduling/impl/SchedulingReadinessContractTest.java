@@ -36,13 +36,56 @@ class SchedulingReadinessContractTest {
         verifyNoInteractions(lines, batches);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = com.cretas.aims.entity.enums.ProductionBatchStatus.class,
+            names = {"PLANNED", "PLANNING"}, mode = org.junit.jupiter.params.provider.EnumSource.Mode.EXCLUDE)
+    void newDraftReadinessRejectsEveryUnschedulableBatchStatus(com.cretas.aims.entity.enums.ProductionBatchStatus state) {
+        var line = new ProductionLine(); line.setStatus(ProductionLine.LineStatus.active);
+        var batch = new ProductionBatch(); batch.setStatus(state);
+        when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE", "F-READINESS")).thenReturn(Optional.of(line));
+        when(batches.findByIdAndFactoryId(8L, "F-READINESS")).thenReturn(Optional.of(batch));
+        var result = new SchedulingReadinessService(lines, batches).check("F-READINESS", "LINE", 8L,
+                LocalDateTime.of(2030, 1, 1, 9, 0), LocalDateTime.of(2030, 1, 1, 10, 0));
+        assertThat(result.getStatus()).isEqualTo("INCOMPLETE");
+        assertThat(result.getMissingInputs()).contains("batchId:not_schedulable");
+        assertThat(result.getBatch().getReason()).contains("状态不允许"); assertThat(result.isReadyForAutomation()).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ProductionLine.LineStatus.class,
+            names = "active", mode = org.junit.jupiter.params.provider.EnumSource.Mode.EXCLUDE)
+    void newDraftReadinessRejectsEveryInactiveLine(ProductionLine.LineStatus state) {
+        var line = new ProductionLine(); line.setStatus(state);
+        var batch = new ProductionBatch(); batch.setStatus(com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNED);
+        when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE", "F-READINESS")).thenReturn(Optional.of(line));
+        when(batches.findByIdAndFactoryId(8L, "F-READINESS")).thenReturn(Optional.of(batch));
+        var result = new SchedulingReadinessService(lines, batches).check("F-READINESS", "LINE", 8L,
+                LocalDateTime.of(2030, 1, 1, 9, 0), LocalDateTime.of(2030, 1, 1, 10, 0));
+        assertThat(result.getStatus()).isEqualTo("INCOMPLETE"); assertThat(result.getMissingInputs()).contains("productionLineId:not_schedulable");
+        assertThat(result.isReadyForAutomation()).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = com.cretas.aims.entity.enums.ProductionBatchStatus.class, names = {"PLANNED", "PLANNING"})
+    void eligibleNewDraftStillRequiresPhysicalConfirmation(com.cretas.aims.entity.enums.ProductionBatchStatus state) {
+        var line = new ProductionLine(); line.setStatus(ProductionLine.LineStatus.active);
+        var batch = new ProductionBatch(); batch.setStatus(state);
+        when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE", "F-READINESS")).thenReturn(Optional.of(line));
+        when(batches.findByIdAndFactoryId(8L, "F-READINESS")).thenReturn(Optional.of(batch));
+        var result = new SchedulingReadinessService(lines, batches).check("F-READINESS", "LINE", 8L,
+                LocalDateTime.of(2030, 1, 1, 9, 0), LocalDateTime.of(2030, 1, 1, 10, 0));
+        assertThat(result.getStatus()).isEqualTo("INPUTS_VALID_UNCONFIRMED"); assertThat(result.getMissingInputs()).isEmpty();
+        assertThat(result.getProductionLine().isConfirmed()).isFalse(); assertThat(result.getBatch().isConfirmed()).isFalse();
+        assertThat(result.isReadyForAutomation()).isFalse();
+    }
+
     @Test
     void referencesAreValidatedWithinTenantAndImpossibleWindowIsNotProviderFailure() {
-        ProductionLine line = new ProductionLine();
+        ProductionLine line = new ProductionLine(); line.setStatus(ProductionLine.LineStatus.active);
         lenient().when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-9", "F-READINESS"))
                 .thenReturn(Optional.of(line));
         lenient().when(batches.findByIdAndFactoryId(9L, "F-READINESS"))
-                .thenReturn(Optional.of(new ProductionBatch()));
+                .thenReturn(Optional.of(eligibleBatch()));
         var result = new SchedulingReadinessService(lines, batches).check("F-READINESS", "LINE-9", 9L,
                 LocalDateTime.of(2026, 10, 20, 10, 0), LocalDateTime.of(2026, 10, 20, 9, 0));
         assertThat(result.getStatus()).isEqualTo("INFEASIBLE");
@@ -120,9 +163,9 @@ class SchedulingReadinessContractTest {
     @Test
     void completeTenantReferencesRemainUnconfirmedAndForeignReferencesAreRejected() {
         when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-9", "F-READINESS"))
-                .thenReturn(Optional.of(new ProductionLine()));
+                .thenReturn(Optional.of(eligibleLine()));
         when(batches.findByIdAndFactoryId(9L, "F-READINESS"))
-                .thenReturn(Optional.of(new ProductionBatch()));
+                .thenReturn(Optional.of(eligibleBatch()));
         var complete = new SchedulingReadinessService(lines, batches).check("F-READINESS", "LINE-9", 9L,
                 LocalDateTime.of(2026, 10, 20, 9, 0), LocalDateTime.of(2026, 10, 20, 10, 0));
         assertThat(complete.getStatus()).isEqualTo("INPUTS_VALID_UNCONFIRMED");
@@ -170,6 +213,13 @@ class SchedulingReadinessContractTest {
         assertThat(result.getReason()).doesNotContain(reason);
         assertThat(result.isReadyForAutomation()).isFalse();
         verifyNoInteractions(lines, batches);
+    }
+
+    private static ProductionLine eligibleLine() {
+        var line = new ProductionLine(); line.setStatus(ProductionLine.LineStatus.active); return line;
+    }
+    private static ProductionBatch eligibleBatch() {
+        var batch = new ProductionBatch(); batch.setStatus(com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNED); return batch;
     }
 
     private static final class SchedulingReadinessResponseAssertions {

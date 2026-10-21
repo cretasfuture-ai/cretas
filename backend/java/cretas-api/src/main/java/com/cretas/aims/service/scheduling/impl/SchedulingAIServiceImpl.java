@@ -103,13 +103,17 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
         CompletionProbabilityResponse response = new CompletionProbabilityResponse();
         response.setScheduleId(scheduleId);
 
-        lineRepository.findById(schedule.getProductionLineId()).ifPresent(line ->
-            response.setProductionLineName(line.getName()));
-
-        if (schedule.getBatchId() != null) {
-            batchRepository.findById(schedule.getBatchId()).ifPresent(batch ->
-                response.setBatchNumber(batch.getBatchNumber()));
+        var scopedLine = schedule.getProductionLineId() == null ? Optional.<ProductionLine>empty()
+                : lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(schedule.getProductionLineId(), factoryId);
+        var scopedBatch = schedule.getBatchId() == null ? Optional.<ProductionBatch>empty()
+                : batchRepository.findByIdAndFactoryId(schedule.getBatchId(), factoryId);
+        if (scopedLine.isEmpty() || (schedule.getBatchId() != null && scopedBatch.isEmpty())) {
+            response.setPredictionOrigin("BUSINESS_INPUT");
+            response.setPredictionReason("TENANT_SCOPED_RESOURCE_MISSING");
+            return response;
         }
+        response.setProductionLineName(scopedLine.get().getName());
+        scopedBatch.ifPresent(batch -> response.setBatchNumber(batch.getBatchNumber()));
 
         int planned = schedule.getPlannedQuantity() != null ? schedule.getPlannedQuantity() : 0;
         int completed = schedule.getCompletedQuantity() != null ? schedule.getCompletedQuantity() : 0;
@@ -133,25 +137,29 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
         if (hybridPredictEnabled && remaining > 0) {
             try {
                 return callHybridPredictService(factoryId, schedule, response, remaining, deadlineHours, workers, true);
+            } catch (AdapterReportedProviderFailure e) {
+                response.setPredictionOrigin("LOCAL_ESTIMATE");
+                response.setPredictionReason("PYTHON_ADAPTER_REPORTED_" + e.getMessage());
             } catch (RestClientResponseException e) {
                 response.setPredictionOrigin("LOCAL_ESTIMATE");
                 response.setPredictionReason(e.getStatusCode().value() == 404
                         ? "REMOTE_ADAPTER_ROUTE_MISSING"
-                        : "REMOTE_MODEL_PROVIDER_ERROR_" + e.getStatusCode().value());
+                        : "PYTHON_ADAPTER_HTTP_ERROR_" + e.getStatusCode().value());
                 log.warn("混合预测服务响应失败，使用本地估算: status={}, message={}", e.getStatusCode(), e.getMessage());
             } catch (IllegalStateException e) {
                 response.setPredictionOrigin("LOCAL_ESTIMATE");
                 response.setPredictionReason(e.getMessage() != null && e.getMessage().startsWith("FEATURES_")
-                        ? "FEATURE_READ_FAILURE" : "REMOTE_RESPONSE_INVALID");
+                        ? "JAVA_FEATURE_READ_FAILURE" : e.getMessage() != null && e.getMessage().startsWith("REMOTE_RESPONSE_INVALID")
+                        ? "REMOTE_RESPONSE_INVALID" : "JAVA_EXECUTION_FAILURE_UNKNOWN");
                 log.warn("混合预测服务返回无效响应，使用本地估算: {}", e.getMessage());
             } catch (org.springframework.web.client.RestClientException e) {
                 response.setPredictionOrigin("LOCAL_ESTIMATE");
                 response.setPredictionReason(e instanceof org.springframework.web.client.ResourceAccessException
-                        ? "REMOTE_MODEL_PROVIDER_ERROR" : "REMOTE_RESPONSE_INVALID");
+                        ? "PYTHON_ADAPTER_TRANSPORT_ERROR" : "REMOTE_RESPONSE_INVALID");
                 log.warn("混合预测服务不可读取，使用本地估算: {}", e.getMessage());
             } catch (Exception e) {
                 response.setPredictionOrigin("LOCAL_ESTIMATE");
-                response.setPredictionReason("REMOTE_MODEL_PROVIDER_ERROR");
+                response.setPredictionReason("JAVA_EXECUTION_FAILURE_UNKNOWN");
                 log.warn("混合预测服务调用失败，使用本地计算: {}", e.getMessage());
             }
         }
@@ -688,8 +696,17 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
 
     @SuppressWarnings("unchecked")
     private CompletionProbabilityResponse callHybridPredictService(
-            String factoryId, LineSchedule schedule, CompletionProbabilityResponse response,
+            String factoryId, LineSchedule schedule, CompletionProbabilityResponse context,
             int remaining, double deadlineHours, int workers, boolean persist) {
+
+        // Commit no remote fields to the caller's DTO until every field has passed validation.
+        CompletionProbabilityResponse response = new CompletionProbabilityResponse();
+        response.setScheduleId(context.getScheduleId());
+        response.setProductionLineName(context.getProductionLineName());
+        response.setBatchNumber(context.getBatchNumber());
+        response.setRemainingQuantity(context.getRemainingQuantity());
+        response.setCurrentWorkers(context.getCurrentWorkers());
+        response.setDeadlineHours(context.getDeadlineHours());
 
         Map<String, Object> request = new HashMap<>();
         request.put("factory_id", factoryId);
@@ -712,6 +729,14 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
 
         if (result == null) {
             throw new IllegalStateException("REMOTE_RESPONSE_INVALID_EMPTY");
+        }
+        if (result.containsKey("success") && !Boolean.TRUE.equals(result.get("success"))) {
+            if (Boolean.FALSE.equals(result.get("success")) && result.get("error") instanceof Map<?, ?> error
+                    && "MODEL_PROVIDER".equals(error.get("source")) && error.get("code") instanceof String code
+                    && Set.of("PROVIDER_UNAVAILABLE", "PROVIDER_TIMEOUT", "PROVIDER_ERROR").contains(code)) {
+                throw new AdapterReportedProviderFailure(code);
+            }
+            throw new IllegalStateException("REMOTE_RESPONSE_INVALID_ERROR_ENVELOPE");
         }
         if (result != null) {
             for (String numericField : List.of("probability", "mean_hours", "std_hours", "percentile_90")) {
@@ -833,7 +858,8 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
 
         String productTypeId = null;
         if (schedule.getBatchId() != null) {
-            Optional<ProductionBatch> batchOpt = batchRepository.findById(schedule.getBatchId());
+            Optional<ProductionBatch> batchOpt = batchRepository.findByIdAndFactoryId(schedule.getBatchId(), factoryId);
+            if (batchOpt.isEmpty()) throw new IllegalStateException("FEATURES_TENANT_SCOPED_BATCH_MISSING");
             if (batchOpt.isPresent()) {
                 ProductionBatch batch = batchOpt.get();
                 productTypeId = batch.getProductTypeId();
@@ -864,6 +890,10 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
         }
 
         return features;
+    }
+
+    private static final class AdapterReportedProviderFailure extends RuntimeException {
+        private AdapterReportedProviderFailure(String code) { super(code); }
     }
 
     private List<Long> getWorkerIdsForSchedule(LineSchedule schedule) {

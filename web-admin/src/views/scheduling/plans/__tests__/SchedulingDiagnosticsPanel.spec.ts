@@ -7,6 +7,23 @@ vi.mock('@/api/request', () => ({ get }));
 
 describe('SchedulingDiagnosticsPanel', () => {
   beforeEach(() => get.mockReset());
+  it('renders actionable inactive-line and unschedulable-batch reasons without claiming confirmed inputs', async () => {
+    const base = payload('缺少或无法验证明确输入');
+    get.mockResolvedValue({ success: true, data: { ...base.data,
+      productionLine: { ...base.data.productionLine, reason: '产线当前不可创建新排程，请选择启用产线' },
+      batch: { ...base.data.batch, reason: '批次状态不允许创建新排程，请选择计划中批次' },
+      missingInputs: ['productionLineId:not_schedulable', 'batchId:not_schedulable'],
+    } });
+    const wrapper = mountPanel({ factoryId: 'F-READINESS' });
+    try {
+      await flushPromises();
+      expect(wrapper.text()).toContain('启用状态的产线');
+      expect(wrapper.text()).toContain('计划中批次');
+      expect(wrapper.text()).toContain('批次状态不允许创建新排程');
+      expect(wrapper.text()).not.toContain('输入完整，等待现场确认');
+      expect(get.mock.calls.every(([url]) => url === '/F-READINESS/scheduling/readiness')).toBe(true);
+    } finally { wrapper.unmount(); }
+  });
   it('mounts the read-only readiness contract and shows missing input provenance', async () => {
     get.mockResolvedValue({ success: true, data: {
       status: 'INCOMPLETE', readyForAutomation: false, reason: '缺少或无法验证明确输入',

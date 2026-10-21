@@ -3,6 +3,10 @@ package com.cretas.aims.service.scheduling;
 import com.cretas.aims.dto.scheduling.SchedulingReadinessResponse;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
+import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import java.util.Optional;
 import com.cretas.aims.service.scheduling.impl.SchedulingAIServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -73,25 +77,36 @@ public class SchedulingReadinessService {
         }
         SchedulingReadinessResponse.ResourceReference line = resource(productionLineId, "产线");
         SchedulingReadinessResponse.ResourceReference batch = resource(batchId == null ? null : String.valueOf(batchId), "批次");
+        var scopedLine = productionLineId == null || productionLineId.isBlank() ? Optional.<ProductionLine>empty()
+                : lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(productionLineId, factoryId);
+        var scopedBatch = batchId == null ? Optional.<ProductionBatch>empty()
+                : batchRepository.findByIdAndFactoryId(batchId, factoryId);
 
         if (productionLineId == null || productionLineId.isBlank()) {
             missing.add("productionLineId");
-        } else if (lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(productionLineId, factoryId).isEmpty()) {
+        } else if (scopedLine.isEmpty()) {
             line = SchedulingReadinessResponse.ResourceReference.builder().id(productionLineId).selected(true)
                     .confirmed(false).source("TENANT_VALIDATION").reason("产线不存在或不属于当前工厂").build();
             missing.add("productionLineId:tenant_mismatch_or_missing");
+        } else if (scopedLine.get().getStatus() != ProductionLine.LineStatus.active) {
+            line = selected(productionLineId, "产线当前不可创建新排程，请选择启用产线");
+            missing.add("productionLineId:not_schedulable");
         } else {
-            line = selected(productionLineId, "产线引用已按当前工厂校验");
+            line = selected(productionLineId, "产线引用及启用状态已按当前工厂校验");
         }
 
         if (batchId == null) {
             missing.add("batchId");
-        } else if (batchRepository.findByIdAndFactoryId(batchId, factoryId).isEmpty()) {
+        } else if (scopedBatch.isEmpty()) {
             batch = SchedulingReadinessResponse.ResourceReference.builder().id(String.valueOf(batchId)).selected(true)
                     .confirmed(false).source("TENANT_VALIDATION").reason("批次不存在或不属于当前工厂").build();
             missing.add("batchId:tenant_mismatch_or_missing");
+        } else if (scopedBatch.get().getStatus() != ProductionBatchStatus.PLANNED
+                && scopedBatch.get().getStatus() != ProductionBatchStatus.PLANNING) {
+            batch = selected(String.valueOf(batchId), "批次状态不允许创建新排程，请选择计划中批次");
+            missing.add("batchId:not_schedulable");
         } else {
-            batch = selected(String.valueOf(batchId), "批次引用已按当前工厂校验");
+            batch = selected(String.valueOf(batchId), "批次引用及计划状态已按当前工厂校验");
         }
 
 
