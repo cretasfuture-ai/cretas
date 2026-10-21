@@ -36,6 +36,8 @@ import com.cretas.aims.exception.LlmSchemaValidationException;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
 import com.cretas.aims.repository.IntentMatchRecordRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
 import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
@@ -741,6 +743,16 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        if (matchResult != null && matchResult.hasMatch()
+                && SupplierComparisonReadIntent.CODE.equals(matchResult.getBestMatch().getIntentCode())) {
+            Optional<AIIntentConfig> canonical = SupplierComparisonReadIntent.resolve(
+                    factoryId, toolRegistry, intentConfigRepository);
+            if (canonical.isEmpty()) return buildNoPermissionResponse(matchResult.getBestMatch());
+            matchResult.setBestMatch(canonical.get());
+            IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
+            if (denied != null) return denied;
+        }
+
         if (factoryPackConstrained
                 && (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION
                 || matchResult.getQuestionType() == QuestionType.CONVERSATIONAL)) {
@@ -792,7 +804,7 @@ public class IntentExecutionOrchestrator {
         }
 
         if (factoryPackConstrained) {
-            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
             if (permissionDenied != null) {
                 return permissionDenied;
             }
@@ -818,7 +830,7 @@ public class IntentExecutionOrchestrator {
 
         // 权限检查 (P1: required_permission 权限码优先, 空回落 requiredRoles 旧逻辑)
         if (!factoryPackConstrained) {
-            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
             if (permissionDenied != null) {
                 return permissionDenied;
             }
@@ -988,14 +1000,17 @@ public class IntentExecutionOrchestrator {
         // path (executeWithExplicitIntent → persistConversationMemoryForExplicitIntent)
         // already calls getOrCreateContext first; mirror that guarantee here so DISH /
         // STORE slots written by extractAndUpdateEntitySlots are actually persisted.
-        if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+        if (hasBoundSupplierFactoryActor(factoryId, userId)
+                && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             try {
-                conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+                ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+                if (ownsConversationMemory(owner, factoryId, userId, request.getSessionId())) {
+                    updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
+                }
             } catch (Exception e) {
                 log.warn("对话记忆 getOrCreateContext 失败 (非阻断): sessionId={}, error={}",
                         request.getSessionId(), e.getMessage());
             }
-            updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
         }
 
         return response;
@@ -1046,7 +1061,7 @@ public class IntentExecutionOrchestrator {
 
         AIIntentConfig intent = intentOpt.get();
 
-        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
         if (permissionDenied != null) {
             return permissionDenied;
         }
@@ -1377,7 +1392,7 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse confirmControlledPurchase(String factoryId,
             com.cretas.aims.entity.intent.IntentPreviewToken token, String claimId,
             ConfirmationProof proof, AIIntentConfig intent, Long userId, String userRole) {
-        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
         if (permissionDenied != null) {
             previewTokenService.resolveClaim(proof.proofToken(), claimId, false, "当前意图权限不足");
             return permissionDenied;
@@ -1414,7 +1429,25 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse handleConversationContinuation(String factoryId, IntentExecuteRequest request,
                                                                    Long userId, String userRole) {
         log.info("检测到会话延续: sessionId={}", request.getSessionId());
+        // Session rows are keyed by factory-user numeric IDs, never by platform identity.
+        if (!hasBoundSupplierFactoryActor(factoryId, userId)) {
+            return buildNoPermissionResponse(AIIntentConfig.builder()
+                    .intentCode(SupplierComparisonReadIntent.CODE).intentName("工厂用户会话").build());
+        }
         try {
+            Optional<ConversationSession> pending = conversationService.getSession(
+                    factoryId, userId, request.getSessionId());
+            if (pending.isPresent()
+                    && SupplierComparisonReadIntent.CODE.equals(pending.get().getKnownIntentCode())) {
+                AIIntentConfig supplier = AIIntentConfig.builder()
+                        .intentCode(SupplierComparisonReadIntent.CODE).intentName("供应商报价比较").build();
+                if (!hasBoundSupplierFactoryActor(factoryId, userId)) return buildNoPermissionResponse(supplier);
+                Optional<AIIntentConfig> canonical = SupplierComparisonReadIntent.resolve(
+                        factoryId, toolRegistry, intentConfigRepository);
+                if (canonical.isEmpty()) return buildNoPermissionResponse(supplier);
+                IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
+                if (denied != null) return denied;
+            }
             ConversationService.ConversationResponse conversationResp =
                     conversationService.continueConversation(
                             factoryId, userId, request.getSessionId(), request.getUserInput());
@@ -2677,7 +2710,12 @@ public class IntentExecutionOrchestrator {
      *
      * @return null=放行; 非 null=拒绝响应
      */
-    private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, Long userId, String userRole) {
+    private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, String factoryId,
+                                                        Long userId, String userRole) {
+        if (SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                && !hasBoundSupplierFactoryActor(factoryId, userId)) {
+            return buildNoPermissionResponse(intent);
+        }
         if ("PURCHASE_ORDER_CREATE".equals(intent.getIntentCode()) && intentPermissionGate == null) {
             return buildNoPermissionResponse(intent);
         }
@@ -2703,6 +2741,14 @@ public class IntentExecutionOrchestrator {
             return buildNoPermissionResponse(intent);
         }
         return null;
+    }
+
+    private boolean hasBoundSupplierFactoryActor(String factoryId, Long userId) {
+        return AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER)
+                .filter(actor -> Objects.equals(actor.id(), userId))
+                .filter(actor -> Objects.equals(actor.factoryId(), factoryId))
+                .isPresent();
     }
 
     /**
@@ -2900,7 +2946,8 @@ public class IntentExecutionOrchestrator {
 
     void hydrateRestaurantComparisonContext(
             String factoryId, Long userId, IntentExecuteRequest request) {
-        if (request == null || request.getSessionId() == null || request.getSessionId().isBlank()
+        if (!hasBoundSupplierFactoryActor(factoryId, userId)
+                || request == null || request.getSessionId() == null || request.getSessionId().isBlank()
                 || request.getUserInput() == null
                 || !RESTAURANT_COMPARISON_REFERENCE_PATTERN.matcher(request.getUserInput()).find()
                 || RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN.matcher(request.getUserInput()).find()) {
@@ -2909,9 +2956,7 @@ public class IntentExecutionOrchestrator {
         String sessionId = request.getSessionId();
         try {
             ConversationContext owner = conversationMemoryService.getContext(sessionId);
-            if (owner != null
-                    && (!Objects.equals(factoryId, owner.getFactoryId())
-                    || !Objects.equals(userId, owner.getUserId()))) {
+            if (!ownsConversationMemory(owner, factoryId, userId, sessionId)) {
                 log.warn("[restaurant-context] rejected foreign session: sessionId={}, factoryId={}, userId={}",
                         sessionId, factoryId, userId);
                 request.setSessionId(null);
@@ -4328,14 +4373,21 @@ public class IntentExecutionOrchestrator {
      * 仅当 sessionId 非空时生效(无 session 的独立查询 parity/golden 完全不受影响)。fail-soft。
      * 包级可见便于单测。
      */
+    private boolean ownsConversationMemory(ConversationContext owner, String factoryId, Long userId, String sessionId) {
+        return owner != null && Objects.equals(factoryId, owner.getFactoryId())
+                && Objects.equals(userId, owner.getUserId()) && Objects.equals(sessionId, owner.getSessionId());
+    }
+
     void persistConversationMemoryForExplicitIntent(String factoryId, IntentExecuteRequest request,
                                                     IntentExecuteResponse response,
                                                     AIIntentConfig intent, Long userId) {
-        if (request.getSessionId() == null || request.getSessionId().isEmpty()) {
+        if (!hasBoundSupplierFactoryActor(factoryId, userId)
+                || request.getSessionId() == null || request.getSessionId().isEmpty()) {
             return;
         }
         try {
-            conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+            ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+            if (!ownsConversationMemory(owner, factoryId, userId, request.getSessionId())) return;
             IntentMatchResult syntheticMatch = IntentMatchResult.builder()
                     .bestMatch(intent)
                     .build();
@@ -4571,7 +4623,7 @@ public class IntentExecutionOrchestrator {
                     .collect(Collectors.toList());
 
             String sessionId = null;
-            if (userId != null) {
+            if (hasBoundSupplierFactoryActor(factoryId, userId)) {
                 try {
                     var conversationResp = conversationService.startParameterCollection(
                             factoryId, userId, intent.getIntentCode(), intent.getIntentName(),

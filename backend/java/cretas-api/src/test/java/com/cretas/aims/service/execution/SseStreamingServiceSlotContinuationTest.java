@@ -22,6 +22,8 @@ import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
@@ -887,7 +889,11 @@ class SseStreamingServiceSlotContinuationTest {
         }
 
         IntentExecuteResponse executeAs(IntentExecuteRequest request, String role) throws Exception {
-            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, F, request, USER, role);
+            AuthenticatedActor actor = new AuthenticatedActor(
+                    AuthenticatedActorType.FACTORY_USER, USER, F, ROLE);
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor)) {
+                ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, F, request, USER, role);
+            }
             ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
             verify(service, org.mockito.Mockito.atLeastOnce()).sendSseEvent(eq(emitter), eq("result"), result.capture());
             List<Object> all = result.getAllValues();

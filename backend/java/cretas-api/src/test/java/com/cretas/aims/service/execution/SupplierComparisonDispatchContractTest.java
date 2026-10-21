@@ -8,32 +8,45 @@ import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.crm.SupplierPriceComparisonTool;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.calibration.ToolCallRecord;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.ParameterExtractionLearningService;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.SupplierService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
 import com.cretas.aims.service.calibration.SelfCorrectionService;
 import com.cretas.aims.service.calibration.ToolCallRedundancyService;
 import com.cretas.aims.service.calibration.ToolResultValidatorService;
+import com.cretas.aims.service.impl.AIIntentServiceImpl;
+import com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.service.execution.IntentExecutionOrchestrator;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -43,6 +56,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -65,8 +79,12 @@ class SupplierComparisonDispatchContractTest {
         DispatchFixture fixture = newDispatch(false, Optional.empty());
         AIIntentConfig intent = intent(tool);
 
-        IntentExecuteResponse first = execute(fixture.dispatch, tool, intent, "supplier first");
-        IntentExecuteResponse second = execute(fixture.dispatch, tool, intent, "supplier first");
+        IntentExecuteResponse first;
+        IntentExecuteResponse second;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            first = execute(fixture.dispatch, tool, intent, "supplier first");
+            second = execute(fixture.dispatch, tool, intent, "supplier first");
+        }
 
         assertUnavailable(first);
         assertUnavailable(second);
@@ -85,10 +103,14 @@ class SupplierComparisonDispatchContractTest {
 
     @Test
     void cachedUnavailableResultRemainsFailedAndRetainsToolAndSourceMetadata() throws Exception {
-        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        // Generic cache parsing remains supported; supplier results themselves opt out.
+        ScriptedReadTool tool = new ScriptedReadTool();
         DispatchFixture fixture = newDispatch(true, Optional.of(UNAVAILABLE));
 
-        IntentExecuteResponse response = execute(fixture.dispatch, tool, intent(tool), "supplier cached");
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = execute(fixture.dispatch, tool, intent(tool), "supplier cached");
+        }
 
         assertUnavailable(response);
         assertThat(response.getMetadata()).containsEntry("cached", true).containsEntry("toolName", tool.getToolName());
@@ -121,8 +143,11 @@ class SupplierComparisonDispatchContractTest {
         OrchestratorFixture fixture = newOrchestrator(tool, dispatch,
                 IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
 
-        IntentExecuteResponse response = fixture.orchestrator.executeWithExplicitIntent(
-                "F006", request(), 42L, "procurement_manager");
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
 
         assertThat(response.getIntentCode()).isEqualTo("SUPPLIER_PRICE_COMPARISON");
         assertThat(response.getStatus()).isEqualTo("FAILED");
@@ -144,7 +169,10 @@ class SupplierComparisonDispatchContractTest {
                 IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
         var request = IntentExecuteRequest.builder().userInput(input).context(new HashMap<>()).build();
         assertThat(request.getIntentCode()).isNull();
-        IntentExecuteResponse response = fixture.orchestrator.execute("F006", request, 42L, "purchaser");
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.execute("F006", request, 42L, "purchaser");
+        }
         assertThat(response.getIntentCode()).isEqualTo(SupplierComparisonReadIntent.CODE);
         assertUnavailable(response);
         assertThat(response.getMetadata()).containsEntry("toolName", SupplierComparisonReadIntent.TOOL);
@@ -179,18 +207,24 @@ class SupplierComparisonDispatchContractTest {
         OrchestratorFixture fixture = newOrchestrator(tool, dispatch,
                 IntentPermissionGate.PermissionCheck.allowed(), Optional.of(critical));
 
-        IntentExecuteResponse response = fixture.orchestrator.executeWithExplicitIntent(
-                "F006", request(), 42L, "procurement_manager");
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
 
         assertThat(response.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
         assertThat(response.getRequiresApproval()).isTrue();
         assertThat(dispatch.records).isEmpty();
         verify(tool, never()).execute(any(), anyMap());
 
-        IntentExecuteRequest serverConfirmed = request();
-        serverConfirmed.setContext(writeGuard.withServerConfirmation(new HashMap<>()));
-        IntentExecuteResponse approval = fixture.orchestrator.executeWithExplicitIntent(
-                "F006", serverConfirmed, 42L, "procurement_manager");
+        IntentExecuteResponse approval;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            IntentExecuteRequest serverConfirmed = request();
+            serverConfirmed.setContext(writeGuard.withServerConfirmation(new HashMap<>()));
+            approval = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", serverConfirmed, 42L, "procurement_manager");
+        }
         assertThat(approval.getStatus()).isEqualTo("PENDING_APPROVAL");
         verify(tool, never()).execute(any(), anyMap());
     }
@@ -222,9 +256,17 @@ class SupplierComparisonDispatchContractTest {
         configured.setRequiredRoles("[\"factory_super_admin\"]");
         var fixture = newOrchestrator(tool, dispatch, IntentPermissionGate.PermissionCheck.legacy(), Optional.of(configured));
         ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", new IntentPermissionGate());
-        var recognition = mock(com.cretas.aims.service.AIIntentService.class);
+        AIIntentConfigRepository roleRepository = mock(AIIntentConfigRepository.class);
+        when(roleRepository.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(
+                SupplierComparisonReadIntent.CODE)).thenReturn(Optional.of(configured));
+        IntentConfigManagementServiceImpl roleConfigService =
+                new IntentConfigManagementServiceImpl(roleRepository);
+        AIIntentServiceImpl recognition = spy(new AIIntentServiceImpl(null, roleConfigService, null));
         ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognition);
-        var response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
+        }
         assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
         verify(recognition).hasPermission(SupplierComparisonReadIntent.CODE, "purchaser");
         verify(tool, never()).execute(any(), anyMap());
@@ -236,20 +278,450 @@ class SupplierComparisonDispatchContractTest {
         var tool = spy(realSupplierTool());
         var dispatch = newDispatch(false, Optional.empty());
         var configured = intent(tool);
+        configured.setFactoryId("F006");
         configured.setRequiredPermission("procurement:read_write");
         configured.setRequiredRoles("[\"factory_super_admin\"]");
-        var fixture = newOrchestrator(tool, dispatch, IntentPermissionGate.PermissionCheck.allowed(), Optional.of(configured));
-        var guard = mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
-        when(guard.hasAnyPermission(anyMap(), org.mockito.ArgumentMatchers.eq("procurement:read_write"))).thenReturn(true);
-        var gate = new IntentPermissionGate();
-        ReflectionTestUtils.setField(gate, "rbacGuard", guard);
-        ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", gate);
+        var fixture = securedOrchestrator(tool, dispatch, Optional.of(configured), true);
         var recognition = mock(com.cretas.aims.service.AIIntentService.class);
         ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognition);
-        var response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
+        }
         assertUnavailable(response);
         verify(recognition, never()).hasPermission(anyString(), anyString());
         verify(tool).execute(any(), anyMap());
+        assertThat(dispatch.records).singleElement().extracting(ToolCallRecord::getExecutionStatus)
+                .isEqualTo(ToolCallRecord.ExecutionStatus.FAILED);
+    }
+
+    @Test
+    void configuredInactiveSupplierIntentCannotFallThroughToNativeDefault() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var configured = intent(tool);
+        configured.setFactoryId("F006");
+        configured.setIsActive(false);
+        var fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.of(configured));
+
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getMessage()).contains("未找到意图配置");
+        assertThat(dispatch.records).isEmpty();
+        verify(tool, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void configuredForeignTenantSupplierIntentCannotBecomePlatformDefault() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var configured = intent(tool);
+        configured.setFactoryId("F-OTHER");
+        var fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.of(configured));
+
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getMessage()).contains("未找到意图配置");
+        assertThat(dispatch.records).isEmpty();
+        verify(tool, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void actualPermissionGateDenialCannotReachSupplierTool() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var configured = intent(tool);
+        configured.setFactoryId("F006");
+        configured.setRequiredPermission("procurement:read_write");
+        var fixture = securedOrchestrator(tool, dispatch, Optional.of(configured), false);
+
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
+
+        assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+        assertThat(response.getRequiredPermission()).isEqualTo("procurement:read_write");
+        assertThat(dispatch.records).isEmpty();
+        verify(tool, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void disabledSupplierToolCannotReachRealToolExecution() throws Exception {
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        ToolRegistry registry = (ToolRegistry) ReflectionTestUtils.getField(dispatch.dispatch, "toolRegistry");
+        when(registry.isToolEnabledForFactory("F006", tool.getToolName())).thenReturn(false);
+        var fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
+
+        assertThat(response.getStatus()).isEqualTo("TOOL_DISABLED");
+        assertThat(response.getMessage()).contains("当前在工厂 F006 不可用");
+        assertThat(dispatch.records).isEmpty();
+        verify(tool, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void supplierExplicitIntentRejectsPlatformActorWithSameNumericId() throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = securedOrchestrator(tool, dispatch);
+
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(new AuthenticatedActor(
+                AuthenticatedActorType.PLATFORM_ADMIN, 42L, null, "platform_admin"))) {
+            response = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request(), 42L, "procurement_manager");
+        }
+
+        assertActorDenied(response, dispatch, tool);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"platform-collision", "platform-scoped-collision", "foreign-factory", "different-id", "missing-actor", "client-spoof"})
+    void supplierPublicPathsRejectUntrustedOrMismatchedFactoryActor(String mutation) throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = securedOrchestrator(tool, dispatch);
+        AuthenticatedActor currentActor = switch (mutation) {
+            case "platform-collision" -> new AuthenticatedActor(
+                    AuthenticatedActorType.PLATFORM_ADMIN, 42L, null, "platform_admin");
+            case "platform-scoped-collision" -> new AuthenticatedActor(
+                    AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+            case "foreign-factory" -> new AuthenticatedActor(
+                    AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+            case "different-id" -> new AuthenticatedActor(
+                    AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+            default -> null;
+        };
+
+        IntentExecuteRequest explicitRequest = request();
+        if ("client-spoof".equals(mutation) || "missing-actor".equals(mutation)) {
+            explicitRequest.setContext(new HashMap<>(Map.of(
+                    "userId", 42L, "userRole", "factory_super_admin", "factoryId", "F006")));
+        }
+        IntentExecuteResponse explicit;
+        try (ActorRequest ignored = actor(currentActor)) {
+            explicit = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", explicitRequest, 42L, "procurement_manager");
+        }
+        assertActorDenied(explicit, dispatch, tool);
+
+        dispatch = newDispatch(false, Optional.empty());
+        fixture = securedOrchestrator(tool, dispatch);
+        IntentExecuteRequest natural = IntentExecuteRequest.builder()
+                .userInput("请对比供应商的原料价格")
+                .context(new HashMap<>(Map.of(
+                        "userId", 42L, "userRole", "factory_super_admin", "factoryId", "F006")))
+                .build();
+        IntentExecuteResponse naturalResponse;
+        try (ActorRequest ignored = actor(currentActor)) {
+            naturalResponse = fixture.orchestrator.execute("F006", natural, 42L, "procurement_manager");
+        }
+        assertActorDenied(naturalResponse, dispatch, tool);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing-actor", "platform-collision", "platform-scoped-collision",
+            "foreign-factory", "different-id", "wrongtype", "client-spoof"})
+    void supplierCacheCannotBypassTrustedActor(String kind) throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture fixture = newDispatch(true, Optional.of(
+                "{\"success\":true,\"data\":{\"secret\":\"LEGACY_SUPPLIER_PRICE\"}}"));
+        AuthenticatedActor current = switch (kind) {
+            case "platform-collision" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, null, "platform_admin");
+            case "platform-scoped-collision" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+            case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+            case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+            default -> null;
+        };
+        IntentExecuteRequest request = IntentExecuteRequest.builder().userInput("supplier cached")
+                .context(new HashMap<>(Map.of("userId", 42L, "factoryId", "F006", "userRole", "factory_super_admin"))).build();
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(current)) {
+            if ("wrongtype".equals(kind)) {
+                ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest()
+                        .setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
+            }
+            response = fixture.dispatch.executeWithTool(tool, "F006", request, intent(tool), 42L, "procurement_manager", null);
+        }
+        assertThat(response.getStatus()).isEqualTo("FORBIDDEN");
+        assertThat(response.getResultData().toString()).doesNotContain("LEGACY_SUPPLIER_PRICE", "NO_QUOTE_SERVICE");
+        assertThat(response.getMetadata() == null || !Boolean.TRUE.equals(response.getMetadata().get("cached"))).isTrue();
+        verify(fixture.redundancy, never()).isRedundant(anyString(), anyString(), anyMap());
+        verify(fixture.redundancy, never()).getCachedResult(anyString(), anyString(), anyMap());
+        verify(tool, never()).execute(any(), anyMap());
+        verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
+    }
+
+    @Test
+    void supplierCodeCannotDispatchDifferentReadToolEvenWithValidActor() throws Exception {
+        ScriptedReadTool other = spy(new ScriptedReadTool());
+        DispatchFixture fixture = newDispatch(true, Optional.of("{\"success\":true,\"data\":{\"secret\":\"WRONG_TOOL\"}}"));
+        AIIntentConfig spoof = intent(other);
+        spoof.setIntentCode(SupplierComparisonReadIntent.CODE);
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = execute(fixture.dispatch, other, spoof, "misbound supplier");
+        }
+        assertThat(response.getStatus()).isEqualTo("FORBIDDEN");
+        verify(other, never()).execute(any(), anyMap());
+        verify(fixture.redundancy, never()).getCachedResult(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void validSupplierActorIgnoresLegacySuccessCacheAndCallsActualTool() throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture fixture = newDispatch(true, Optional.of(
+                "{\"success\":true,\"data\":{\"secret\":\"LEGACY_SUPPLIER_PRICE\"}}"));
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = execute(fixture.dispatch, tool, intent(tool), "warm supplier cache");
+        }
+        assertUnavailable(response);
+        assertThat(response.getResultData().toString()).doesNotContain("LEGACY_SUPPLIER_PRICE");
+        verify(tool).execute(any(), anyMap());
+        verify(fixture.redundancy, never()).isRedundant(anyString(), anyString(), anyMap());
+        verify(fixture.redundancy, never()).getCachedResult(anyString(), anyString(), anyMap());
+        verify(fixture.redundancy, never()).cacheResult(anyString(), anyString(), anyMap(), anyString(), any());
+        verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.NullAndEmptySource
+    @ValueSource(strings = {"OTHER_READ"})
+    void supplierToolCannotUseAnUnrelatedOrMissingIntentCode(String code) throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture fixture = newDispatch(true, Optional.of(UNAVAILABLE));
+        AIIntentConfig wrong = intent(tool);
+        wrong.setIntentCode(code);
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = execute(fixture.dispatch, tool, wrong, "supplier mismatched code");
+        }
+        assertThat(response.getStatus()).isEqualTo("FORBIDDEN");
+        verify(tool, never()).execute(any(), anyMap());
+        verify(fixture.redundancy, never()).getCachedResult(anyString(), anyString(), anyMap());
+        verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"valid", "inactive", "foreign", "permission-denied", "legacy-role-denied"})
+    void recognizerSupplierBestMatchRejoinsCanonicalAuthority(String state) throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        AIIntentConfig configured = intent(tool);
+        configured.setFactoryId("foreign".equals(state) ? "OTHER" : "F006");
+        configured.setIsActive(!"inactive".equals(state));
+        configured.setRequiredPermission("procurement:read_write");
+        if ("legacy-role-denied".equals(state)) {
+            configured.setRequiredPermission(null);
+            configured.setRequiredRoles("platform_admin");
+        }
+        OrchestratorFixture fixture = securedOrchestrator(tool, dispatch, Optional.of(configured), !"permission-denied".equals(state));
+        com.cretas.aims.service.AIIntentService recognizer = mock(com.cretas.aims.service.AIIntentService.class);
+        AIIntentConfig untrusted = intent(tool);
+        untrusted.setToolName("unrelated_read_tool");
+        untrusted.setRequiredPermission("procurement:read_write");
+        var match = com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(untrusted).confidence(1.0)
+                .matchMethod(com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod.EXACT)
+                .requiresConfirmation(false).questionType(com.cretas.aims.config.IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build();
+        when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any()))
+                .thenReturn(match);
+        when(recognizer.hasPermission(anyString(), anyString())).thenReturn(!"legacy-role-denied".equals(state));
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+        ToolRegistry registry = (ToolRegistry) ReflectionTestUtils.getField(fixture.orchestrator, "toolRegistry");
+        ToolExecutor other = spy(new ScriptedReadTool());
+        when(registry.getExecutor("unrelated_read_tool")).thenReturn(Optional.of(other));
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(factoryActor())) {
+            response = fixture.orchestrator.execute("F006", IntentExecuteRequest.builder()
+                    .userInput("核对本次往来资料凭据ZQ781").context(new HashMap<>()).build(), 42L, "procurement_manager");
+        }
+        verify(recognizer).recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any());
+        verify(other, never()).execute(any(), anyMap());
+        if ("valid".equals(state)) {
+            assertUnavailable(response);
+            verify(tool).execute(any(), anyMap());
+        } else {
+            assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+            verify(tool, never()).execute(any(), anyMap());
+        }
+        verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"valid", "missing", "platform", "platform-scoped", "foreign", "different-id", "spoof", "inactive", "permission-denied"})
+    void supplierContinuationIsAdmittedBeforeAnySessionMutation(String kind) throws Exception {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        AIIntentConfig configured = intent(tool);
+        configured.setFactoryId("F006");
+        configured.setIsActive(!"inactive".equals(kind));
+        configured.setRequiredPermission("procurement:read_write");
+        OrchestratorFixture fixture = securedOrchestrator(tool, dispatch, Optional.of(configured), !"permission-denied".equals(kind));
+        com.cretas.aims.service.ConversationService conversation = mock(com.cretas.aims.service.ConversationService.class);
+        var session = com.cretas.aims.entity.conversation.ConversationSession.createForParameterCollection(
+                "F006", 42L, SupplierComparisonReadIntent.CODE, List.of(), "补充资料");
+        when(conversation.getSession("F006", 42L, "SUPPLIER-SESSION")).thenReturn(Optional.of(session));
+        when(conversation.continueConversation(anyString(), any(), anyString(), anyString())).thenReturn(
+                com.cretas.aims.service.ConversationService.ConversationResponse.builder()
+                        .completed(true).intentCode(SupplierComparisonReadIntent.CODE)
+                        .status(com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.COMPLETED).build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationService", conversation);
+        var memory = mock(com.cretas.aims.service.ConversationMemoryService.class);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationMemoryService", memory);
+        AuthenticatedActor current = switch (kind) {
+            case "missing", "spoof" -> null;
+            case "platform" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, null, "platform_admin");
+            case "platform-scoped" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+            case "foreign" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+            case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+            default -> factoryActor();
+        };
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(current)) {
+            response = fixture.orchestrator.execute("F006", IntentExecuteRequest.builder()
+                    .userInput("补充资料ZQ781").sessionId("SUPPLIER-SESSION")
+                    .context("spoof".equals(kind) ? new HashMap<>(Map.of("userId", 42L, "factoryId", "F006", "role", "platform_admin")) : new HashMap<>())
+                    .build(), 42L, "procurement_manager");
+        }
+        if ("valid".equals(kind)) {
+            assertUnavailable(response);
+            verify(conversation).continueConversation(anyString(), any(), anyString(), anyString());
+            verify(conversation).endConversation(anyString(), any(), anyString(), anyString());
+        } else {
+            assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+            verify(conversation, never()).continueConversation(anyString(), any(), anyString(), anyString());
+            verify(conversation, never()).endConversation(anyString(), any(), anyString(), anyString());
+            verify(conversation, never()).cancelConversation(anyString(), any(), anyString());
+            if (!List.of("inactive", "permission-denied").contains(kind)) verifyNoInteractions(conversation, memory);
+            verify(tool, never()).execute(any(), anyMap());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"owned", "null", "foreign-user", "foreign-tenant", "wrong-session"})
+    void explicitMemoryPersistenceRequiresSuccessfulExactOwnershipReadback(String kind) {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = securedOrchestrator(tool, dispatch);
+        var memory = mock(com.cretas.aims.service.ConversationMemoryService.class);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationMemoryService", memory);
+        var owner = "null".equals(kind) ? null : com.cretas.aims.dto.conversation.ConversationContext.builder()
+                .factoryId("foreign-tenant".equals(kind) ? "OTHER" : "F006")
+                .userId("foreign-user".equals(kind) ? 99L : 42L)
+                .sessionId("wrong-session".equals(kind) ? "OTHER-SESSION" : "MEMORY-SESSION").build();
+        when(memory.getOrCreateContext("F006",42L,"MEMORY-SESSION")).thenReturn(owner);
+        var request = IntentExecuteRequest.builder().userInput("供应商报价").sessionId("MEMORY-SESSION").build();
+        try (ActorRequest ignored = actor(factoryActor())) {
+            fixture.orchestrator.persistConversationMemoryForExplicitIntent("F006",request,
+                    IntentExecuteResponse.builder().message("未接入真实报价").build(),intent(tool),42L);
+        }
+        verify(memory).getOrCreateContext("F006",42L,"MEMORY-SESSION");
+        if ("owned".equals(kind)) {
+            verify(memory, times(2)).addMessage(eq("MEMORY-SESSION"),any());
+            verify(memory).updateLastIntent("MEMORY-SESSION",SupplierComparisonReadIntent.CODE);
+        } else verifyNoMoreInteractions(memory);
+    }
+
+    private void assertActorDenied(IntentExecuteResponse response, DispatchFixture dispatch,
+                                   SupplierPriceComparisonTool tool) throws Exception {
+        assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+        assertThat(response.getMessage()).contains("没有权限");
+        assertThat(dispatch.records).isEmpty();
+        verify(tool, never()).execute(any(), anyMap());
+    }
+
+    private OrchestratorFixture securedOrchestrator(SupplierPriceComparisonTool tool,
+                                                     DispatchFixture dispatch) {
+        return securedOrchestrator(tool, dispatch, Optional.empty(), true);
+    }
+
+    private OrchestratorFixture securedOrchestrator(SupplierPriceComparisonTool tool,
+                                                     DispatchFixture dispatch,
+                                                     Optional<AIIntentConfig> configured,
+                                                     boolean grantSupplierPermission) {
+        SecurityFixture security = securityFixture(grantSupplierPermission);
+        OrchestratorFixture fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), configured);
+        bindSecurity(fixture, dispatch, security);
+        return fixture;
+    }
+
+    private void bindSecurity(OrchestratorFixture fixture, DispatchFixture dispatch,
+                              SecurityFixture security) {
+        IntentPermissionGate gate = new IntentPermissionGate();
+        ReflectionTestUtils.setField(gate, "rbacGuard", security.guard);
+        ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", gate);
+        ToolRbacEnforcer enforcer = new ToolRbacEnforcer();
+        ReflectionTestUtils.setField(enforcer, "rbacGuard", security.guard);
+        ReflectionTestUtils.setField(dispatch.dispatch, "toolRbacEnforcer", enforcer);
+    }
+
+    private SecurityFixture securityFixture(boolean grantSupplierPermission) {
+        UserRepository users = mock(UserRepository.class);
+        PermissionService permissions = mock(PermissionService.class);
+        User user = new User();
+        user.setId(42L);
+        user.setFactoryId("F006");
+        user.setRoleCode("procurement_manager");
+        user.setIsActive(true);
+        when(users.findById(42L)).thenReturn(Optional.of(user));
+        when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenAnswer(invocation -> {
+            String[] requested = (String[]) invocation.getRawArguments()[1];
+            return grantSupplierPermission && java.util.Arrays.stream(requested)
+                    .anyMatch(Set.of("procurement:read_write", "finance:read_write")::contains);
+        });
+        com.cretas.aims.ai.tool.ToolRbacGuard guard = new com.cretas.aims.ai.tool.ToolRbacGuard();
+        ReflectionTestUtils.setField(guard, "userRepository", users);
+        ReflectionTestUtils.setField(guard, "permissionService", permissions);
+        return new SecurityFixture(guard);
+    }
+
+    private AuthenticatedActor factoryActor() {
+        return new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,
+                42L, "F006", "procurement_manager");
+    }
+
+    private ActorRequest actor(AuthenticatedActor actor) {
+        RequestAttributes previous = RequestContextHolder.getRequestAttributes();
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        if (actor != null) {
+            request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, actor);
+        }
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        return new ActorRequest(previous);
+    }
+
+    private record SecurityFixture(com.cretas.aims.ai.tool.ToolRbacGuard guard) {}
+
+    private static final class ActorRequest implements AutoCloseable {
+        private final RequestAttributes previous;
+        private ActorRequest(RequestAttributes previous) { this.previous = previous; }
+        @Override public void close() {
+            if (previous == null) RequestContextHolder.resetRequestAttributes();
+            else RequestContextHolder.setRequestAttributes(previous);
+        }
     }
 
     private OrchestratorFixture newOrchestrator(SupplierPriceComparisonTool tool,
@@ -278,6 +750,10 @@ class SupplierComparisonDispatchContractTest {
         ReflectionTestUtils.setField(orchestrator, "intentConfigRepository", repository);
         ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", permissionGate);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuard);
+        ReflectionTestUtils.setField(orchestrator, "dynamicToolSelectionService", mock(DynamicToolSelectionService.class));
+        for (String counter : List.of("branchToolDirect", "branchSkill", "branchDynamic", "branchNoMatch")) {
+            ReflectionTestUtils.setField(orchestrator, counter, new java.util.concurrent.atomic.AtomicLong());
+        }
         com.cretas.aims.config.IntentKnowledgeBase knowledge = new com.cretas.aims.config.IntentKnowledgeBase();
         knowledge.initDefaults();
         ReflectionTestUtils.setField(orchestrator, "knowledgeBase", knowledge);
@@ -319,7 +795,8 @@ class SupplierComparisonDispatchContractTest {
     }
 
     private AIIntentConfig intent(ToolExecutor tool) {
-        return AIIntentConfig.builder().intentCode("SUPPLIER_PRICE_COMPARISON")
+        return AIIntentConfig.builder().intentCode(tool instanceof SupplierPriceComparisonTool
+                        ? SupplierComparisonReadIntent.CODE : "READ_CONTROL")
                 .intentName("供应商价格比较").intentCategory("PROCUREMENT")
                 .toolName(tool.getToolName()).build();
     }

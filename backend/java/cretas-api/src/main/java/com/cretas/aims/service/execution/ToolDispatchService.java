@@ -49,6 +49,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -134,6 +135,24 @@ public class ToolDispatchService {
                                                   Long userId, String userRole,
                                                   IntentMatchResult matchResult) {
         try {
+            // Request identity must be checked before parameter extraction or cache lookup.
+            // A cached supplier result is subject to the same boundary as a fresh Tool call.
+            if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    || (intent != null && SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())))
+                    && (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    || intent == null || !SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                    || com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                    .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                    .filter(actor -> Objects.equals(actor.id(), userId))
+                    .filter(actor -> Objects.equals(actor.factoryId(), factoryId)).isEmpty())) {
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent == null ? null : intent.getIntentCode())
+                        .status("FORBIDDEN").aiMode("READ")
+                        .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
+                        .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
+                        .executedAt(LocalDateTime.now()).build();
+            }
             // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
             // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
             // ToolRegistry.isToolEnabledForFactory() was never called on the execution
@@ -435,7 +454,8 @@ public class ToolDispatchService {
 
             // 4. 冗余检查 (ET-Agent 行为校准)
             String sessionId = request.getSessionId() != null ? request.getSessionId() : "default";
-            if (redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
+            if (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    && redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
                 if (cachedResult.isPresent()) {
@@ -486,10 +506,10 @@ public class ToolDispatchService {
                     resultJson = tool.execute(toolCall, context);
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
-                    boolean toolSucceeded = !isToolResultExplicitlyFailed(resultJson);
+                    boolean toolSucceeded = isToolResultSuccessful(resultJson);
                     String toolFailureMessage = toolSucceeded ? null : extractToolFailureMessage(resultJson);
 
-                    // 正常返回的 success=false 也是一次失败审计，不得伪装成成功或进入缓存。
+                    // 只有显式 Boolean true 才能审计为成功；无法确认的结果不得进入成功缓存。
                     try {
                         ToolCallRecord record = ToolCallRecord.builder()
                                 .sessionId(sessionId)
@@ -506,7 +526,8 @@ public class ToolDispatchService {
                                 .recovered(attempt > 1)
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
-                        if (toolSucceeded && savedRecord != null && resultJson != null) {
+                        if (toolSucceeded && savedRecord != null && resultJson != null
+                                && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
                             // Don't substring-truncate — that splits tokens and produces
                             // invalid JSON like `{..."previous` which PG rejects at INSERT.
@@ -1304,14 +1325,14 @@ public class ToolDispatchService {
     // ==================== 内部方法 ====================
 
     /**
-     * A tool can complete normally at the Java call boundary while returning
-     * a structured business failure.  Keep that failure out of the success
-     * audit/cache path and out of result-correction retries.
+     * Normal return is not a success verdict. Require explicit Boolean true,
+     * matching the public response parser; absent, malformed and negative
+     * verdicts must not enter success audit/cache or result-correction retries.
      */
-    private boolean isToolResultExplicitlyFailed(String resultJson) {
+    private boolean isToolResultSuccessful(String resultJson) {
         try {
             Map<?, ?> result = objectMapper.readValue(resultJson, Map.class);
-            return Boolean.FALSE.equals(result.get("success"));
+            return result != null && Boolean.TRUE.equals(result.get("success"));
         } catch (Exception ignored) {
             return false;
         }
@@ -1330,7 +1351,7 @@ public class ToolDispatchService {
         } catch (Exception ignored) {
             // parseToolResultToResponse remains the source of the user-facing fallback.
         }
-        return "工具返回 success=false";
+        return "工具结果未明确返回 success=true，无法确认执行成功";
     }
 
     /**

@@ -6,22 +6,25 @@
 
 ## 在飞任务
 
-- `ERP-S2-READINESS-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S2-04/07只读权威就绪扩展；精确7文件及命令见archive/2026-10-21-claude-s2-s6-registration.md。分支/Owner ACK后可本地实施；不占采购与QA。
 
-- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 仅只读架构追踪，writeScope=[]；精确接口/文件/代码命令待审，未迁移采购/定时；见archive/2026-10-21-claude-s2-s6-registration.md。
+- `ERP-S1-SUPPLIER-ACTOR-BINDING-20261021` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 79abceca97c089029a8bf6074e7a8ca1f16099b6 — 原生隔离目标；见archive/2026-10-21-s1-supplier-actor-binding.md。
 
-- `ERP-S1-RESULT-VERDICT-20261021` — `queued` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 仅正常结果success正向判定及契约；两文件见archive/2026-10-21-s1-result-verdict.md。待S104释放ToolDispatch后实施，不阻断81cd。
+- `ERP-S2-READINESS-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 47059a443e2b41218578c03a4cd8b293f2de1914 — PR1069九文件；3缺陷/ACK待补，见archive/2026-10-21-claude-s2-s6-registration.md。
 
-- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07可选待执行授权；8文件/命令见archive/2026-10-20-s1-deferred-grant.md；原one-shot不变，Java串行。
+- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — writeScope=[]；见archive/2026-10-21-claude-s2-s6-registration.md。
 
-- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10只读就绪与预测来源；12文件/命令见archive/2026-10-20-s1-scheduling-truth.md；不造产能，Java串行。
+- `ERP-S1-RESULT-VERDICT-20261021` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 两文件，详见archive/2026-10-21-s1-result-verdict.md。
 
-- `ERP-S1-SUPPLIER-ROUTE-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 源码锁释放；CI/发布/QA待验，原FAIL保留。见archive/2026-10-20-s1-supplier-route.md。
+- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07八文件；见archive/2026-10-20-s1-deferred-grant.md。
+
+- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10十四文件；见archive/2026-10-20-s1-scheduling-truth.md。
+
+- `ERP-S1-SUPPLIER-ROUTE-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 79ab绿；actor阻塞另锁，见archive/2026-10-20-s1-supplier-route.md。
 
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-05/06原QA通过；04人工事件#1064已合入发布，原QA仍FAIL：SUPPLIER_RANKING权限拒绝、未到比较工具。75场景9通过2失败64未测，18缺陷16关闭；S0未过。QA独占CSV/设备；见archive/2026-10-20-s1-supplier-entry.md。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S0/S1未通过；QA独占；见archive/2026-10-20-s1-supplier-entry.md。
 
 
 
@@ -100,6 +103,11 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `ERP-S2-READINESS-CLAUDE-20261021`：Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；九文件及门禁见archive/2026-10-21-claude-s2-s6-registration.md；ACK待补/HOLD。
+
+
+- `ERP-S1-SUPPLIER-ACTOR-BINDING-20261021`：Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1；十七文件见archive/2026-10-21-s1-supplier-actor-binding.md。
 
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。

@@ -395,8 +395,13 @@ class ToolDispatchServiceParameterGroundingTest {
     void validationRetryRebindsCallerIdentity() throws Exception {
         List<Map<String, Object>> args = new ArrayList<>();
         List<Map<String, Object>> contexts = new ArrayList<>();
-        // 第一次返回一个「看不出有效」的结果 → 走 LLM 结果校验 → 判无效 → 纠错重试
-        ToolExecutor tool = recordingTool(args, contexts, "{\"rows\":null,\"hint\":1}");
+        // Conditional-defense branch test: strict Boolean success:true normally satisfies the
+        // fast heuristic, so production currently skips D7. Stub only this first fast decision
+        // to exercise real validation/correction/rebinding; this is NOT public D7 reachability.
+        String firstResult = "{\"success\":true,\"rows\":null,\"hint\":1}";
+        ToolExecutor tool = recordingTool(args, contexts, firstResult);
+        ToolDispatchService validationDispatch = org.mockito.Mockito.spy(dispatch);
+        org.mockito.Mockito.doReturn(false).when(validationDispatch).isResultClearlyValid(firstResult);
         when(validator.validate(anyString(), anyString(), anyMap(), anyString()))
                 .thenReturn(new ToolResultValidatorService.ValidationResult(false,
                         ToolResultValidatorService.ValidationIssue.NO_MATCH, "不匹配", 0.1, Map.of(), Map.of(), "x"));
@@ -404,12 +409,14 @@ class ToolDispatchServiceParameterGroundingTest {
                 .thenReturn(new CorrectionAgentService.CorrectionResult(
                         true, "x", hijackedCorrection(), "RETRY", null, 0.9));
 
-        dispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
+        validationDispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
                 .userInput("查 MB-7 的 30 公斤").context(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30)))
                 .build(), queryIntent, 42L, "operator", null);
 
         assertThat(args).as("校验触发的重试真的走到").hasSize(2);
         assertCallerIdentity(args.get(1));
+        verify(validator).validate(anyString(), anyString(), anyMap(), eq(firstResult));
+        verify(correctionAgent).analyzeAndCorrect(anyString(), anyString(), anyMap(), anyString(), any(), eq(1));
     }
 
     @Test

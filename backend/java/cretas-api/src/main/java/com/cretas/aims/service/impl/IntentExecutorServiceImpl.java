@@ -9,6 +9,8 @@ import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.execution.IntentExecutionOrchestrator;
 import com.cretas.aims.service.execution.MultiIntentExecutionService;
 import com.cretas.aims.service.execution.SseStreamingService;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,7 +46,7 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     public IntentExecuteResponse execute(String factoryId, IntentExecuteRequest request,
                                          Long userId, String userRole) {
         IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
-        populateConversationRound(request, response);
+        populateConversationRound(factoryId, userId, request, response);
         return response;
     }
 
@@ -53,7 +55,7 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
                                          Long userId, String userRole) {
         request.setPreviewOnly(true);
         IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
-        populateConversationRound(request, response);
+        populateConversationRound(factoryId, userId, request, response);
         return response;
     }
 
@@ -74,7 +76,8 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
      * <p>Fail-open: never crashes the response if the memory store is unavailable; the round simply
      * stays null. An explicit non-null round already set upstream is preserved.
      */
-    private void populateConversationRound(IntentExecuteRequest request, IntentExecuteResponse response) {
+    private void populateConversationRound(String factoryId, Long userId,
+                                            IntentExecuteRequest request, IntentExecuteResponse response) {
         if (response == null || request == null) {
             return;
         }
@@ -85,9 +88,19 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
         if (sessionId == null || sessionId.isEmpty()) {
             return; // standalone (sessionless) query — no round to report
         }
+        if (AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER)
+                .filter(actor -> java.util.Objects.equals(actor.id(), userId))
+                .filter(actor -> java.util.Objects.equals(actor.factoryId(), factoryId))
+                .isEmpty()) {
+            return; // only a trusted factory actor may read a session round
+        }
         try {
             ConversationContext context = conversationMemoryService.getContext(sessionId);
-            if (context == null) {
+            if (context == null
+                    || !java.util.Objects.equals(context.getSessionId(), sessionId)
+                    || !java.util.Objects.equals(context.getFactoryId(), factoryId)
+                    || !java.util.Objects.equals(context.getUserId(), userId)) {
                 return;
             }
             int messageCount = context.getMessageCount();
