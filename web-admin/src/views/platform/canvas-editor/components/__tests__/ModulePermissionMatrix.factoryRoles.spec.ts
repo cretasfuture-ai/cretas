@@ -11,7 +11,11 @@ beforeEach(()=>{
   api.getPlatformPermissions.mockResolvedValue([]);api.getFactoryOverride.mockResolvedValue({});api.updateFactoryOverride.mockResolvedValue(undefined);
 });
 afterEach(()=>{wrappers.splice(0).forEach(w=>w.unmount());document.body.innerHTML='';});
-async function open(){const w=mount(Matrix,{props:{factoryId:'F1'},attachTo:document.body,global:{plugins:[ElementPlus]}});wrappers.push(w);await flushPromises();return w;}
+// Every ElSelect mounts its dropdown popper eagerly (persistent tooltip): 2 roles x 18 modules = 36 poppers
+// cost ~2.3s of render in jsdom and pushed cases past the 5s timeout on CI. No case opens a dropdown, so stub
+// only the tooltip; ElSelect itself stays real (props/change are what the cases drive and assert).
+const TooltipStub={template:'<div><slot /></div>'};
+async function open(){const w=mount(Matrix,{props:{factoryId:'F1'},attachTo:document.body,global:{plugins:[ElementPlus],stubs:{ElTooltip:TooltipStub}}});wrappers.push(w);await flushPromises();return w;}
 describe('factory-local role permission configuration',()=>{
   it('shows authoritative factory roles with empty L1 and saves only an explicit local change',async()=>{
     const w=await open();const row=w.findAll('.el-table__row').find(row=>row.text().includes('sales_manager'))!;
