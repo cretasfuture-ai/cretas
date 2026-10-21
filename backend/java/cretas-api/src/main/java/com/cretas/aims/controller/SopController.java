@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.config.OssConfig;
+import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.sop.SopAnalysisResult;
@@ -161,7 +162,7 @@ public class SopController {
             try {
                 log.info("触发自动分析: factoryId={}, fileUrl={}, skuCode={}", factoryId, fileUrl, skuCode);
                 Map<String, Object> analysisResultMap = sopAgentOrchestrator.analyzeSopAndUpdateComplexity(
-                        factoryId, fileUrl, skuCode);
+                        factoryId, fileUrl, skuCode, AutonomousToolPolicy.requireRunAsUser(factoryId));
                 response.setAnalysisResultMap(analysisResultMap);
                 // 同时转换为 SopAnalysisResult 对象
                 response.setAnalysisResult(convertToAnalysisResult(analysisResultMap, fileUrl, skuCode));
@@ -215,7 +216,7 @@ public class SopController {
 
         try {
             Map<String, Object> result = sopAgentOrchestrator.analyzeSopAndUpdateComplexity(
-                    factoryId, fileUrl, skuCode);
+                    factoryId, fileUrl, skuCode, AutonomousToolPolicy.requireRunAsUser(factoryId));
 
             // 转换为 SopAnalysisResult
             SopAnalysisResult analysisResult = convertToAnalysisResult(result, fileUrl, skuCode);

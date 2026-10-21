@@ -1,6 +1,7 @@
 package com.cretas.aims.service.impl;
 
-import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.engine.AutonomousToolRunner;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.entity.smartbi.AiAgentRule;
@@ -47,6 +48,10 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
     private ObjectMapper objectMapper;
 
     @Autowired
+    @Lazy
+    private AutonomousToolRunner autonomousToolRunner;
+
+    @Autowired
     private SandboxedSpelEvaluator spelEvaluator;
 
     /**
@@ -60,6 +65,10 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
 
         String factoryId = event.getFactoryId();
         Map<String, Object> context = event.toContext();
+        // An async event carries only a numeric uploader id (it may be a platform admin's), so it
+        // has no verified run-as user: its tool steps are refused (RUN_AS_MISSING). The upload
+        // endpoint's autoAnalyze runs the same analysis synchronously as the uploading factory user.
+        context.put("userId", null);
 
         try {
             // 查找匹配的规则
@@ -128,12 +137,12 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
     }
 
     @Override
-    public Map<String, Object> analyzeSopAndUpdateComplexity(String factoryId, String fileUrl, String skuCode) {
+    public Map<String, Object> analyzeSopAndUpdateComplexity(String factoryId, String fileUrl, String skuCode, Long runAsUserId) {
         Map<String, Object> context = new HashMap<>();
         context.put("factoryId", factoryId);
         context.put("fileUrl", fileUrl);
         context.put("skuCode", skuCode);
-        context.put("userId", 0L); // 系统调用
+        context.put("userId", runAsUserId); // the requesting factory user; null = refused, never "system" 0
 
         // 构建默认工具链配置
         String toolChainConfig = """
@@ -185,7 +194,8 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
         Map<String, Object> result = analyzeSopAndUpdateComplexity(
                 event.getFactoryId(),
                 event.getFileUrl(),
-                event.getSkuCode()
+                event.getSkuCode(),
+                null
         );
 
         log.info("默认 SOP 流程执行完成: {}", result);
@@ -262,21 +272,24 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
                 return Map.of("success", false, "error", "工具不存在: " + toolName);
             }
 
-            ToolExecutor executor = executorOpt.get();
-
             // 解析参数
             Map<String, Object> params = resolveParams(step.getParamsMapping(), context, outputs);
 
-            // 构建 ToolCall
-            ToolCall toolCall = buildToolCall(toolName, params);
-
             try {
-                // 执行工具
-                String resultJson = executor.execute(toolCall, context);
-
-                // 解析结果
-                Map<String, Object> result = objectMapper.readValue(resultJson,
-                        new TypeReference<Map<String, Object>>() {});
+                // Never executed directly: through the gateway as the requesting factory user (source SOP).
+                AutonomousToolRunner.Outcome outcome = autonomousToolRunner.run(
+                        (String) context.get("factoryId"), runAsUser(context), toolName, params,
+                        ToolExecutionSource.SOP, "sop-" + UUID.randomUUID());
+                if (!outcome.succeeded()) {
+                    log.warn("SOP 工具未执行: toolName={}, status={}, error={}", toolName, outcome.status(), outcome.error());
+                    return Map.of(
+                            "success", false,
+                            "error", "工具未执行: " + toolName + " - " + outcome.status() + ": " + outcome.error(),
+                            "failedStep", toolName
+                    );
+                }
+                Map<String, Object> result = outcome.payload() == null ? Map.of()
+                        : objectMapper.convertValue(outcome.payload(), new TypeReference<Map<String, Object>>() {});
 
                 // 保存输出
                 if (step.getOutputKey() != null) {
@@ -311,6 +324,10 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
         }
 
         return finalResult;
+    }
+
+    private static Long runAsUser(Map<String, Object> context) {
+        return context.get("userId") instanceof Number n && n.longValue() > 0 ? n.longValue() : null;
     }
 
     /**
@@ -395,27 +412,6 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
         }
 
         return current;
-    }
-
-    /**
-     * 构建 ToolCall 对象
-     */
-    private ToolCall buildToolCall(String toolName, Map<String, Object> params) {
-        ToolCall toolCall = new ToolCall();
-        toolCall.setId(UUID.randomUUID().toString());
-        toolCall.setType("function");
-
-        ToolCall.FunctionCall function = new ToolCall.FunctionCall();
-        function.setName(toolName);
-
-        try {
-            function.setArguments(objectMapper.writeValueAsString(params));
-        } catch (Exception e) {
-            function.setArguments("{}");
-        }
-
-        toolCall.setFunction(function);
-        return toolCall;
     }
 
     /**

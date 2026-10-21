@@ -52,7 +52,8 @@ public interface SopAgentOrchestrator {
      * @param factoryId 工厂ID
      * @param fileUrl 文件URL
      * @param skuCode SKU编码
+     * @param runAsUserId 发起分析的本厂用户；工具链经网关以此身份运行，null 则拒绝执行
      * @return 分析结果
      */
-    Map<String, Object> analyzeSopAndUpdateComplexity(String factoryId, String fileUrl, String skuCode);
+    Map<String, Object> analyzeSopAndUpdateComplexity(String factoryId, String fileUrl, String skuCode, Long runAsUserId);
 }
