@@ -170,14 +170,8 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "itemStyle": {"color": self._gradient_color(COLORS['budget']), "borderRadius": [2, 2, 0, 0]},
                     "barGap": "10%",
                     "barMaxWidth": 28,
-                    "label": {
-                        "show": True,
-                        "position": "top",
-                        "formatter": "{c}",
-                        "fontSize": 9,
-                        "color": "#2D8B57",
-                        "fontWeight": "bold",
-                    },
+                    # 柱顶数值默认不显示 (与达成率标签、季度标注叠在一起读不清); 悬停与数据表里看数值
+                    "label": {"show": False},
                     "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.2)"}},
                 },
                 {
@@ -186,14 +180,7 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "data": actual_scaled,
                     "itemStyle": {"color": self._gradient_color(COLORS['actual']), "borderRadius": [2, 2, 0, 0]},
                     "barMaxWidth": 28,
-                    "label": {
-                        "show": True,
-                        "position": "top",
-                        "formatter": "{c}",
-                        "fontSize": 9,
-                        "color": "#B37700",
-                        "fontWeight": "bold",
-                    },
+                    "label": {"show": False},
                     "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.2)"}},
                 },
                 {

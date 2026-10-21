@@ -228,6 +228,24 @@ class TestSheetSemantics:
         assert to_yuan(kpi(card, '实际总额')['value']) == 2_700_000
 
 
+class TestDisplayConsistency:
+    """设计评审 (2026-10-21) 发现: 同一个数在两张图里一张显示元、一张显示万; 月份筛选排成 10月…9月。"""
+
+    def test_same_total_has_same_unit_across_charts(self):
+        rows = [{'月份': f'{m}月', '预算': 7000, '实际': 7050, '上年': 6000} for m in range(1, 7)]
+        r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)
+        charts = {c['chartType']: c for c in r['charts']}
+        budget_actual = kpi(charts['budget_achievement'], '年度实际')['value']
+        variance_actual = kpi(charts['variance_analysis'], '总实际')['value']
+        assert budget_actual == variance_actual == '4.23万', (budget_actual, variance_actual)
+
+    def test_month_filter_values_are_in_calendar_order(self, monkeypatch):
+        client, _ = _tenant_client(monkeypatch, 'F006')
+        body = client.post('/batch', json={'upload_id': 5247, 'period_type': 'all'}).json()
+        months = next(d['values'] for d in body['availableDimensions'] if d['name'] == '月份')
+        assert months == [f'{m}月' for m in range(1, 13)]
+
+
 class TestExpenseChart:
     def test_expense_total_excludes_revenue(self):
         r = build('expense_yoy_budget', [
@@ -418,6 +436,9 @@ UPLOADED_ROWS = {
     (5245, 'F006'): ('预算完成', [
         {'月份': '1月', '预算': 200, '实际': 180, '上年': 150},
         {'月份': '2月', '预算': 220, '实际': 240, '上年': 160},
+    ]),
+    (5247, 'F006'): ('全年业绩', [
+        {'月份': f'{m}月', '项目': f'品类{m % 3}', '实际': 100 * m} for m in range(1, 13)
     ]),
     (5246, 'F006'): ('费用预算', [
         {'月份': '1月', '预算': 100, '实际': 90, '上年': 80},

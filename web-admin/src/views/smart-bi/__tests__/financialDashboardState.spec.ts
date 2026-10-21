@@ -4,7 +4,9 @@ import {
   chartGapReason,
   chartNotes,
   createDataVersion,
+  buildChartNav,
 } from '../financialDashboardState';
+import type { ChartStateLike as ChartLike } from '../financialDashboardState';
 import type { PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 
 const sel = (s: Partial<PeriodSelection>): PeriodSelection =>
@@ -80,6 +82,35 @@ describe('chartGapReason / chartNotes (数据不足与口径说明要显示给�
       metadata: { reconciliation: ['净利润：表内 3,300，按明细计算 3,308，差额 -8'], note: '合计为各月简单平均' },
     };
     expect(chartNotes(chart)).toEqual(['净利润：表内 3,300，按明细计算 3,308，差额 -8', '合计为各月简单平均']);
+  });
+});
+
+describe('buildChartNav (图表切换条只放能出图的图表)', () => {
+  const entries = [
+    { key: 'budget_achievement', label: '预算达成分析', group: '核心财务' },
+    { key: 'yoy_mom_comparison', label: '同环比分析', group: '核心财务' },
+    { key: 'channel_analysis', label: '渠道分析', group: '品类与渠道' },
+    { key: 'bullet_chart', label: '目标达成进度', group: '运营专项' },
+  ];
+  const charts: Record<string, ChartLike> = {
+    budget_achievement: { echartsOption: { series: [] }, metadata: { dataQuality: 'good' } },
+    channel_analysis: { echartsOption: {}, metadata: { dataQuality: 'insufficient', reason: '上传的数据里没有「渠道」列' } },
+    bullet_chart: { echartsOption: { series: [] }, metadata: { dataQuality: 'good' } },
+  };
+  const nav = buildChartNav(entries, k => charts[k]);
+
+  it('能出图的按分组列出, 保持原顺序, 空分组不出现', () => {
+    expect(nav.groups.map(g => [g.name, g.items.map(i => i.key)])).toEqual([
+      ['核心财务', ['budget_achievement']],
+      ['运营专项', ['bullet_chart']],
+    ]);
+  });
+
+  it('出不了的图收进缺数据, 带原因 (后端没返回的也算)', () => {
+    expect(nav.missing.map(m => [m.key, m.reason])).toEqual([
+      ['yoy_mom_comparison', '这份数据缺少这张图需要的列'],
+      ['channel_analysis', '上传的数据里没有「渠道」列'],
+    ]);
   });
 });
 

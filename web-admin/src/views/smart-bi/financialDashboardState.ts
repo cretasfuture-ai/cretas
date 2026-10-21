@@ -110,6 +110,48 @@ export function chartNotes(chart: ChartStateLike | null | undefined): string[] {
   return notes;
 }
 
+export interface ChartNavEntry {
+  key: string;
+  label: string;
+  group: string;
+}
+
+export interface ChartNavModel<T extends ChartNavEntry> {
+  /** 有图可看的图表, 按分组保持原顺序 */
+  groups: { name: string; items: T[] }[];
+  /** 这份数据出不了的图表, 带给用户看的原因 */
+  missing: (T & { reason: string })[];
+}
+
+const NOT_BUILT_REASON = '这份数据缺少这张图需要的列';
+
+/**
+ * 看板图表切换条的数据: 只把能出图的图表放进切换条, 出不了的收进「还缺数据」并写明原因。
+ * 后端没有返回的图 (列不满足、比率表等) 也算缺数据。
+ */
+export function buildChartNav<T extends ChartNavEntry>(
+  entries: readonly T[],
+  getChart: (key: string) => ChartStateLike | null | undefined,
+): ChartNavModel<T> {
+  const groups: { name: string; items: T[] }[] = [];
+  const missing: (T & { reason: string })[] = [];
+  for (const entry of entries) {
+    const chart = getChart(entry.key);
+    const gap = chart ? chartGapReason(chart) : NOT_BUILT_REASON;
+    if (gap) {
+      missing.push({ ...entry, reason: gap });
+      continue;
+    }
+    let group = groups.find(g => g.name === entry.group);
+    if (!group) {
+      group = { name: entry.group, items: [] };
+      groups.push(group);
+    }
+    group.items.push(entry);
+  }
+  return { groups, missing };
+}
+
 /**
  * 看板数据版本: 每次重新生成 +1。AI 分析 / 总结论 / 追问在请求前记下版本,
  * 回来时版本已变就丢弃, 避免「新图表配旧结论」。

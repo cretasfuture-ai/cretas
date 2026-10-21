@@ -192,13 +192,19 @@ class AbstractFinancialChartBuilder(ABC):
             ])
         return areas
 
-    def _format_value(self, val, scale: dict, precision: int = 2) -> str:
-        """Format value with scale suffix."""
+    def _format_value(self, val, scale: dict = None, precision: int = 2) -> str:
+        """KPI 数值格式化: 单位按数值本身决定 (万元为主, 百亿以上用亿), 带千分位。
+
+        不跟随图表各自按月度值推断的 scale, 这样同一个数在不同图里显示同一个单位
+        (曾出现同一份数据一张图 42,300.00元、另一张 4.24万元)。scale 参数保留以兼容调用方。
+        """
         if val is None:
             return '-'
-        scaled = val / scale['divisor']
-        if scale['suffix']:
-            return f"{scaled:,.{precision}f}{scale['suffix']}"
+        magnitude = abs(val)
+        if magnitude >= 1e10:
+            return f"{val / 1e8:,.{precision}f}亿"
+        if magnitude >= 1e4:
+            return f"{val / 1e4:,.{precision}f}万"
         return f"{val:,.{precision}f}"
 
     def _calc_growth_rate(self, current, previous) -> Optional[float]:

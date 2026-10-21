@@ -34,6 +34,8 @@ interface Props {
   disabled?: boolean;
   /** 显示「全部历史」快捷选项 (默认 false — 只有 PBI 看板等需要时开启)。 */
   showAllHistory?: boolean;
+  /** 显示「启用同期对比」勾选 (默认 true); 消费方不使用 compareValue 时应关闭。 */
+  showCompare?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -44,7 +46,8 @@ const props = withDefaults(defineProps<Props>(), {
   minYear: 2020,
   maxYear: () => new Date().getFullYear() + 1,
   disabled: false,
-  showAllHistory: false
+  showAllHistory: false,
+  showCompare: true
 });
 
 const emit = defineEmits<{
@@ -683,8 +686,8 @@ defineExpose({
         </template>
       </div>
 
-      <!-- Compare Toggle -->
-      <div class="selector-row compare-row">
+      <!-- Compare Toggle (消费方不读 compareValue 时用 show-compare=false 隐藏, 避免一个勾了没用的选项) -->
+      <div v-if="showCompare" class="selector-row compare-row">
         <el-checkbox v-model="compareEnabled" :disabled="disabled">
           启用同期对比（自动计算去年同期）
         </el-checkbox>
