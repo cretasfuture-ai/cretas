@@ -35,8 +35,7 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
-const canRecordReasonNow = () => permissionStore.canWrite('scheduling') || permissionStore.canWrite('production');
-const canRecordReason = computed(canRecordReasonNow);
+const canRecordReason = computed(() => permissionStore.canWrite('scheduling') || permissionStore.canWrite('production'));
 const factoryId = computed(() => authStore.factoryId);
 const planId = computed(() => route.params.id as string);
 
@@ -56,7 +55,8 @@ const recordingReason = ref(false);
 async function recordAdjustmentReason() {
   const targetFactory = factoryId.value;
   const targetPlan = planId.value;
-  if (!targetFactory || !targetPlan || plan.value?.id !== targetPlan || !canRecordReasonNow() || recordingReason.value) return;
+  if (!canRecordReason.value) return;
+  if (!targetFactory || !targetPlan || plan.value?.id !== targetPlan || recordingReason.value) return;
   recordingReason.value = true;
   try {
     const { value } = await ElMessageBox.prompt(
@@ -66,7 +66,8 @@ async function recordAdjustmentReason() {
         inputValidator: (input: string) => !!input.trim() || '请输入调整原因' }
     );
     const reason = value.trim();
-    if (!reason || !canRecordReasonNow() || targetFactory !== factoryId.value || targetPlan !== planId.value) return;
+    if (!canRecordReason.value) return;
+    if (!reason || targetFactory !== factoryId.value || targetPlan !== planId.value) return;
     const response = await reschedule(targetFactory, { planId: targetPlan, reason });
     if (!response.success) {
       ElMessage.error(response.message || '调整原因未保存');

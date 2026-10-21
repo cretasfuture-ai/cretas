@@ -5,9 +5,13 @@ import { ElTable, ElTableColumn, ElButton, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { useRoute } from 'vue-router';
 
-const { get, post, access } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), access: { writable: true } }));
+const { get, post, access } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), access: { state: { writable: true } } }));
 vi.mock('@/api/request', () => ({ get, post, put: vi.fn(), del: vi.fn() }));
-vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => access.writable }) }));
+vi.mock('@/store/modules/permission', async () => {
+  const { reactive } = await import('vue');
+  access.state = reactive(access.state);
+  return { usePermissionStore: () => ({ canWrite: () => access.state.writable }) };
+});
 vi.mock('@/store/modules/auth', async () => {
   const { reactive } = await import('vue');
   const auth = reactive({ factoryId: 'F-REAL' });
@@ -23,7 +27,7 @@ vi.mock('@/utils/echarts', () => ({ default: { init: vi.fn(() => ({ setOption: v
 describe('scheduling detail real wire mount', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    access.writable = true;
+    access.state.writable = true;
     useAuthStore().factoryId = 'F-REAL';
     useRoute().params.id = 'PLAN-1';
     get.mockImplementation((url: string) => url.includes('/scheduling/readiness')
@@ -96,7 +100,7 @@ describe('scheduling detail real wire mount', () => {
   });
 
   it('does not expose the reason action without current module write permission', async () => {
-    access.writable = false;
+    access.state.writable = false;
     const wrapper = mountReasonPage();
     try {
       await flushPromises();
@@ -114,7 +118,7 @@ describe('scheduling detail real wire mount', () => {
       await wrapper.get('[data-testid="record-adjustment-reason"]').trigger('click');
       if (field === 'factory') useAuthStore().factoryId = 'OTHER';
       if (field === 'plan') useRoute().params.id = 'OTHER-PLAN';
-      if (field === 'permission') access.writable = false;
+      if (field === 'permission') access.state.writable = false;
       confirm({ value: '设备检修', action: 'confirm' });
       await flushPromises();
       expect(post).not.toHaveBeenCalled();
