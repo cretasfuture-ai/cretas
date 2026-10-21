@@ -436,4 +436,3 @@ class DemoConversationAdmissionContractTest {
         @Override public ActionType getActionType() { return ActionType.WRITE; }
     }
 }
-
