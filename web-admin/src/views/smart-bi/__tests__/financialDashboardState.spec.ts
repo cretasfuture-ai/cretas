@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   periodSelectionToRequest,
+  periodRequestLabel,
   chartGapReason,
   chartNotes,
   createDataVersion,
@@ -58,6 +59,23 @@ describe('periodSelectionToRequest (期间选择 → 后端参数)', () => {
   it('跨年自定义区间 → 明确报错, 不静默截断', () => {
     const r = periodSelectionToRequest(sel({ type: 'custom', value: ['2025-11', '2026-02'] }));
     expect('error' in r && r.error).toContain('跨年');
+  });
+});
+
+describe('periodRequestLabel (期间按钮上的文字)', () => {
+  const label = (s: Partial<PeriodSelection>) => periodRequestLabel(periodSelectionToRequest(sel(s)));
+
+  it('各种期间各有一句人话', () => {
+    expect(label({ allHistory: true })).toBe('全部历史');
+    expect(label({ type: 'year', year: 2025, value: '2025' })).toBe('2025年');
+    expect(label({ type: 'month', value: '2026-03' })).toBe('2026年3月');
+    expect(label({ type: 'quarter', value: '2026-Q3' })).toBe('2026年Q3');
+    expect(label({ type: 'month_range', value: ['2026-01', '2026-07'] })).toBe('2026年1–7月');
+    expect(label({ type: 'quarter_range', value: ['2026-Q1', '2026-Q2'] })).toBe('2026年1–6月');
+  });
+
+  it('无效选择显示原因, 不显示一个看起来正常的期间', () => {
+    expect(label({ type: 'custom', value: ['2025-11', '2026-02'] })).toContain('跨年');
   });
 });
 

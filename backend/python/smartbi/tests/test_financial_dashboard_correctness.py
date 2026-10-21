@@ -246,6 +246,36 @@ class TestDisplayConsistency:
         assert months == [f'{m}月' for m in range(1, 13)]
 
 
+class TestHeadline:
+    """页首一句话结论: 规则生成 (不靠 AI), 口径与图表同一份指标库。"""
+
+    BUDGET = [{'月份': f'{m}月', '预算（万元）': t, '实际（万元）': a} for m, t, a in [
+        (1, 1000, 200), (2, 1000, 300), (3, 1000, 400), (4, 1000, 1100), (5, 1000, 900), (6, 1000, 950)]]
+
+    def test_budget_sheet_states_achievement_and_weakest_quarter(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.BUDGET), 2026, 'all', 1, 12)
+        h = r['headline']
+        assert h['tone'] == 'bad'
+        assert '实际 3,850.00万' in h['text'] and '目标 6,000.00万' in h['text']
+        assert '达成 64.2%' in h['text'] and '未达' in h['text']
+        assert 'Q1 30.0%' in h['text'] and '4月 110.0%' in h['text']
+
+    def test_pnl_sheet_states_revenue_and_net_profit(self):
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v} for k, v in PNL_REFERENCE]
+        h = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['headline']
+        assert '营业收入 8,333.00万' in h['text'] and '净利润 3,308.00万' in h['text'] and '净利率 39.7%' in h['text']
+
+    def test_expense_sheet_calls_overrun_an_overrun(self):
+        rows = [{'月份': f'{m}月', '预算': 100, '实际': 120, '上年': 110} for m in range(1, 4)]
+        h = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, sheet_name='费用预算')['headline']
+        assert '费用' in h['text'] and '超支' in h['text'] and h['tone'] == 'bad'
+
+    def test_ratio_sheet_has_no_amount_headline(self):
+        rows = [{'月份': '1月', '本年毛利率': '25%', '上年毛利率': '20%'}]
+        h = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['headline']
+        assert h is None or '万' not in h['text']
+
+
 class TestExpenseChart:
     def test_expense_total_excludes_revenue(self):
         r = build('expense_yoy_budget', [
