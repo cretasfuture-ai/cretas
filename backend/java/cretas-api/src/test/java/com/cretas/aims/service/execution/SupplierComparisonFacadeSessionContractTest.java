@@ -131,6 +131,58 @@ class SupplierComparisonFacadeSessionContractTest {
     }
 
     @Test
+    void serverCreatedDemoScopeReadsOnlyItsExactConversationOwner() {
+        IntentExecutionOrchestrator orchestrator = mock(IntentExecutionOrchestrator.class);
+        ConversationMemoryService memory = mock(ConversationMemoryService.class);
+        IntentExecutorServiceImpl facade = facade(orchestrator, memory);
+        when(orchestrator.execute(anyString(), any(), anyLong(), anyString()))
+                .thenReturn(IntentExecuteResponse.builder().status("FAILED").build());
+        when(memory.getContext("demo-session")).thenReturn(
+                context(DemoConversationScope.FACTORY_ID, -1001L, "demo-session", 6));
+
+        IntentExecuteRequest demoRequest = IntentExecuteRequest.builder()
+                .userInput("演示查询")
+                .sessionId("demo-session")
+                .context(new java.util.HashMap<>())
+                .build();
+        try (DemoConversationScope ignored = DemoConversationScope.openTrusted(-1001L, "demo-session")) {
+            IntentExecuteResponse response = facade.execute(
+                    DemoConversationScope.FACTORY_ID, demoRequest, -1001L, "viewer");
+            assertThat(response.getConversationRound()).isEqualTo(3);
+            assertThat(DemoConversationScope.allows(
+                    DemoConversationScope.FACTORY_ID, -1001L, "demo-session")).isTrue();
+            assertThat(DemoConversationScope.allows("OTHER", -1001L, "demo-session")).isFalse();
+            assertThat(DemoConversationScope.allows(
+                    DemoConversationScope.FACTORY_ID, -1002L, "demo-session")).isFalse();
+            assertThat(DemoConversationScope.allows(
+                    DemoConversationScope.FACTORY_ID, -1001L, "other-session")).isFalse();
+        }
+        verify(memory).getContext("demo-session");
+    }
+
+    @Test
+    void unscopedDemoTupleAndClientSourceCannotReadConversationForAnyCallerNamespace() {
+        for (AuthenticatedActor current : new AuthenticatedActor[] { null,
+                new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F_DEMO", "platform_admin"),
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "F006", "procurement_manager") }) {
+            ConversationMemoryService memory = mock(ConversationMemoryService.class);
+            IntentExecutionOrchestrator orchestrator = mock(IntentExecutionOrchestrator.class);
+            when(orchestrator.execute(anyString(), any(), anyLong(), anyString()))
+                    .thenAnswer(call -> IntentExecuteResponse.builder().status("FAILED").build());
+            var facade = facade(orchestrator, memory);
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(current)) {
+                var request = IntentExecuteRequest.builder().userInput("演示查询")
+                        .sessionId("demo-forged-session").context(new java.util.HashMap<>(Map.of(
+                                "source", "DEMO", "factoryId", "F_DEMO", "userId", -1001L, "userRole", "viewer"))).build();
+                assertThat(DemoConversationScope.allows("F_DEMO", -1001L, request.getSessionId())).isFalse();
+                assertThat(facade.execute("F_DEMO", request, -1001L, "viewer").getConversationRound()).isNull();
+                assertThat(facade.preview("F_DEMO", request, -1001L, "viewer").getConversationRound()).isNull();
+            }
+            verifyNoInteractions(memory);
+        }
+    }
+
+    @Test
     void signedJwtRunsActualInterceptorControllerFacadeOrchestratorAndSupplierTool() throws Exception {
         SupplierComparisonDispatchContractTest dispatchTest = new SupplierComparisonDispatchContractTest();
         SupplierPriceComparisonTool tool = ReflectionTestUtils.invokeMethod(dispatchTest, "realSupplierTool");

@@ -354,6 +354,11 @@ public class IntentExecutionOrchestrator {
         }
         boolean factoryPackConstrained = factoryPackRoute.isConstrained();
 
+        if (hasNamedSession(request) && !hasTrustedConversationIdentity(
+                factoryId, userId, request.getSessionId())) {
+            return sessionAdmissionDeniedResponse();
+        }
+
         if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             hydrateRestaurantComparisonContext(factoryId, userId, request);
         }
@@ -734,8 +739,11 @@ public class IntentExecutionOrchestrator {
                 // spec §8.2 洞②: 把 tab 模式带进识别层, 让写意图在咨询 tab 根本不进候选集,
                 // 而不是靠下面 #4.4 的"识别后拦"。bestMatch 仍会保留写意图, 那是有意的 ——
                 // 拦截卡需要它来渲染"请切换到【操作】页"的导航。
+                Long recognizerUserId = hasTrustedConversationIdentity(
+                        factoryId, userId, request.getSessionId()) ? userId : null;
+                String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId(),
+                        request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                         request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
@@ -916,7 +924,8 @@ public class IntentExecutionOrchestrator {
         }
 
         // 3.6. Slot Filling
-        if (userId != null && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
+        if (canUseStatefulConversation(factoryId, userId, request)
+                && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
             IntentExecuteResponse slotFillingResponse = slotFillingService.checkAndStartSlotFilling(
                     factoryId, userId, intent, request, matchResult);
             if (slotFillingResponse != null) {
@@ -1021,6 +1030,10 @@ public class IntentExecutionOrchestrator {
      */
     public IntentExecuteResponse executeWithExplicitIntent(String factoryId, IntentExecuteRequest request,
                                                              Long userId, String userRole) {
+        if (hasNamedSession(request) && !hasTrustedConversationIdentity(
+                factoryId, userId, request.getSessionId())) {
+            return sessionAdmissionDeniedResponse();
+        }
         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
                 evaluateFactoryPackRoute(factoryId, request, userRole);
         if (factoryPackRoute.shouldBlock()) {
@@ -1430,9 +1443,8 @@ public class IntentExecutionOrchestrator {
                                                                    Long userId, String userRole) {
         log.info("检测到会话延续: sessionId={}", request.getSessionId());
         // Session rows are keyed by factory-user numeric IDs, never by platform identity.
-        if (!hasBoundSupplierFactoryActor(factoryId, userId)) {
-            return buildNoPermissionResponse(AIIntentConfig.builder()
-                    .intentCode(SupplierComparisonReadIntent.CODE).intentName("工厂用户会话").build());
+        if (!hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())) {
+            return sessionAdmissionDeniedResponse();
         }
         try {
             Optional<ConversationSession> pending = conversationService.getSession(
@@ -2749,6 +2761,29 @@ public class IntentExecutionOrchestrator {
                 .filter(actor -> Objects.equals(actor.id(), userId))
                 .filter(actor -> Objects.equals(actor.factoryId(), factoryId))
                 .isPresent();
+    }
+
+    private boolean hasNamedSession(IntentExecuteRequest request) {
+        return request != null && request.getSessionId() != null && !request.getSessionId().isBlank();
+    }
+
+    private boolean hasTrustedConversationIdentity(String factoryId, Long userId, String sessionId) {
+        return hasBoundSupplierFactoryActor(factoryId, userId)
+                || DemoConversationScope.allows(factoryId, userId, sessionId);
+    }
+
+    private boolean canUseStatefulConversation(String factoryId, Long userId, IntentExecuteRequest request) {
+        return hasBoundSupplierFactoryActor(factoryId, userId)
+                || (request != null && DemoConversationScope.allows(
+                        factoryId, userId, request.getSessionId()));
+    }
+
+    private IntentExecuteResponse sessionAdmissionDeniedResponse() {
+        String message = "当前会话身份未通过工厂/演示会话绑定校验，未执行操作。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false).status("NO_PERMISSION")
+                .message(message).formattedText(message)
+                .executedAt(java.time.LocalDateTime.now()).build();
     }
 
     /**
@@ -4381,7 +4416,7 @@ public class IntentExecutionOrchestrator {
     void persistConversationMemoryForExplicitIntent(String factoryId, IntentExecuteRequest request,
                                                     IntentExecuteResponse response,
                                                     AIIntentConfig intent, Long userId) {
-        if (!hasBoundSupplierFactoryActor(factoryId, userId)
+        if (request == null || !hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())
                 || request.getSessionId() == null || request.getSessionId().isEmpty()) {
             return;
         }

@@ -1091,6 +1091,9 @@ public class ToolDispatchService {
         if (conversationService == null || userId == null || factoryId == null || previewData == null) {
             return;
         }
+        if (!hasBoundFactoryActor(factoryId, userId)) {
+            return;
+        }
         List<String> missing = new ArrayList<>();
         if (previewData.get("missingParameters") instanceof List<?> names) {
             for (Object n : names) {
@@ -1132,6 +1135,14 @@ public class ToolDispatchService {
         } catch (Exception e) {
             log.warn("预览追问开会话失败 (追问照常返回): intent={}, error={}", intent.getIntentCode(), e.getMessage());
         }
+    }
+
+    private boolean hasBoundFactoryActor(String factoryId, Long userId) {
+        return com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .filter(actor -> Objects.equals(actor.id(), userId))
+                .filter(actor -> Objects.equals(actor.factoryId(), factoryId))
+                .isPresent();
     }
 
     private static String slotTypeOf(String jsonType) {

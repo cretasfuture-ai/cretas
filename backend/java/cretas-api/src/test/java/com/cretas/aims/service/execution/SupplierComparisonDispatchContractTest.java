@@ -9,18 +9,24 @@ import com.cretas.aims.ai.tool.impl.crm.SupplierPriceComparisonTool;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.entity.calibration.ToolCallRecord;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.config.IntentSlotConfiguration;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
 import com.cretas.aims.service.calibration.SelfCorrectionService;
 import com.cretas.aims.service.calibration.ToolCallRedundancyService;
 import com.cretas.aims.service.calibration.ToolResultValidatorService;
 import com.cretas.aims.service.impl.AIIntentServiceImpl;
+import com.cretas.aims.service.impl.ConversationServiceImpl;
+import com.cretas.aims.service.impl.SlotFillingServiceImpl;
 import com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.ai.tool.ToolExecutor;
@@ -43,10 +49,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.time.LocalDateTime;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -193,6 +203,344 @@ class SupplierComparisonDispatchContractTest {
         assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
         assertThat(dispatch.records).isEmpty();
         verify(tool, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void untrustedFreshRecognizerReceivesStatelessIdentityAndSession() {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        com.cretas.aims.service.AIIntentService recognizer = mock(com.cretas.aims.service.AIIntentService.class);
+        when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                any(), eq("platform_admin"), any(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+
+        try (ActorRequest ignored = actor(new AuthenticatedActor(
+                AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin"))) {
+            IntentExecuteResponse response = fixture.orchestrator.execute("F006",
+                    IntentExecuteRequest.builder().userInput("未知查询").build(),
+                    42L, "platform_admin");
+            assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+            assertThat(response.getIntentRecognized()).isFalse();
+        }
+        verify(recognizer).recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                isNull(), eq("platform_admin"), isNull(), any(), any());
+        assertThat(dispatch.records).isEmpty();
+    }
+
+    @Test
+    void syncFreshUsesRealSlotFillingOnlyForBoundFactoryActor() throws Exception {
+        for (String kind : List.of("missing", "platform", "wrongtype", "different-id", "foreign-factory", "client-spoof")) {
+            SupplierPriceComparisonTool supplier = spy(realSupplierTool());
+            DispatchFixture dispatch = newDispatch(false, Optional.empty());
+            OrchestratorFixture fixture = newOrchestrator(supplier, dispatch,
+                    IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+            AIIntentConfig slotIntent = AIIntentConfig.builder().intentCode("OTHER_SLOT")
+                    .intentName("other slot").intentCategory("CRM").businessType("FACTORY")
+                    .factoryId("F006").toolName("other_slot_tool").sensitivityLevel("LOW")
+                    .requiresApproval(false).build();
+            ToolExecutor slotTool = mock(ToolExecutor.class);
+            when(slotTool.getToolName()).thenReturn("other_slot_tool");
+            when(slotTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+            when(slotTool.getParametersSchema()).thenReturn(Map.of(
+                    "type", "object", "properties", Map.of("batchId", Map.of("type", "string")),
+                    "required", List.of("batchId")));
+            ToolRegistry registry = (ToolRegistry) ReflectionTestUtils.getField(fixture.orchestrator, "toolRegistry");
+            when(registry.getExecutor("other_slot_tool")).thenReturn(Optional.of(slotTool));
+            ConversationSessionRepository sessions = attachRealSlotFilling(fixture.orchestrator, registry);
+            com.cretas.aims.service.AIIntentService recognizer = mock(com.cretas.aims.service.AIIntentService.class);
+            when(recognizer.hasPermission("OTHER_SLOT", "procurement_manager")).thenReturn(true);
+            when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                    any(), eq("procurement_manager"), any(), any(), any()))
+                    .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(slotIntent)
+                            .confidence(0.99d).matchMethod(com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod.KEYWORD)
+                            .questionType(com.cretas.aims.config.IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                            .build());
+            ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+            ToolDispatchService terminalDispatch = mock(ToolDispatchService.class);
+            when(terminalDispatch.executeWithTool(any(), anyString(), any(), any(), any(), anyString(), any()))
+                    .thenReturn(IntentExecuteResponse.builder().status("UNEXPECTED_DISPATCH").build());
+            ReflectionTestUtils.setField(fixture.orchestrator, "toolDispatchService", terminalDispatch);
+            AuthenticatedActor current = switch (kind) {
+                case "platform" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+                case "wrongtype" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+                case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+                case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+                default -> null;
+            };
+            try (ActorRequest ignored = actor(current)) {
+                if ("wrongtype".equals(kind)) {
+                    ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest()
+                            .setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                                    Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
+                }
+                IntentExecuteResponse response = fixture.orchestrator.execute("F006",
+                        IntentExecuteRequest.builder().userInput("查询缺少批次").context("client-spoof".equals(kind) ? new HashMap<>(Map.of("userId", 42L, "factoryId", "F006", "userRole", "procurement_manager")) : new HashMap<>()).build(),
+                        42L, "procurement_manager");
+                assertThat(response.getStatus()).isEqualTo("UNEXPECTED_DISPATCH");
+            }
+            verifyNoInteractions(sessions);
+            verify(slotTool, never()).execute(any(), anyMap());
+        }
+
+        SupplierPriceComparisonTool supplier = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = newOrchestrator(supplier, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        AIIntentConfig slotIntent = AIIntentConfig.builder().intentCode("OTHER_SLOT")
+                .intentName("other slot").intentCategory("CRM").businessType("FACTORY")
+                .factoryId("F006").toolName("other_slot_tool").sensitivityLevel("LOW")
+                .requiresApproval(false).build();
+        ToolExecutor slotTool = mock(ToolExecutor.class);
+        when(slotTool.getToolName()).thenReturn("other_slot_tool");
+        when(slotTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+        when(slotTool.getParametersSchema()).thenReturn(Map.of(
+                "type", "object", "properties", Map.of("batchId", Map.of("type", "string")),
+                "required", List.of("batchId")));
+        ToolRegistry registry = (ToolRegistry) ReflectionTestUtils.getField(fixture.orchestrator, "toolRegistry");
+        when(registry.getExecutor("other_slot_tool")).thenReturn(Optional.of(slotTool));
+        ConversationSessionRepository sessions = attachRealSlotFilling(fixture.orchestrator, registry);
+        com.cretas.aims.service.AIIntentService recognizer = mock(com.cretas.aims.service.AIIntentService.class);
+        when(recognizer.hasPermission("OTHER_SLOT", "procurement_manager")).thenReturn(true);
+        when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                any(), eq("procurement_manager"), any(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(slotIntent)
+                        .confidence(0.99d).matchMethod(com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(com.cretas.aims.config.IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+        try (ActorRequest ignored = actor(factoryActor())) {
+            IntentExecuteResponse response = fixture.orchestrator.execute("F006",
+                    IntentExecuteRequest.builder().userInput("查询缺少批次").build(),
+                    42L, "procurement_manager");
+            assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
+        }
+        org.mockito.ArgumentCaptor<ConversationSession> saved =
+                org.mockito.ArgumentCaptor.forClass(ConversationSession.class);
+        verify(sessions).save(saved.capture());
+        assertThat(saved.getValue().getFactoryId()).isEqualTo("F006");
+        assertThat(saved.getValue().getUserId()).isEqualTo(42L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "platform", "wrongtype", "different-id", "foreign-factory", "client-spoof"})
+    void recognizerReceivesNoStateIdentityForEveryUntrustedActor(String kind) {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        com.cretas.aims.service.AIIntentService recognizer = mock(com.cretas.aims.service.AIIntentService.class);
+        when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                any(), eq("platform_admin"), any(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+        AuthenticatedActor current = switch (kind) {
+            case "platform" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+            case "wrongtype" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+            case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+            case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+            default -> null;
+        };
+        try (ActorRequest ignored = actor(current)) {
+            if ("wrongtype".equals(kind)) {
+                ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest()
+                        .setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                                Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
+            }
+            fixture.orchestrator.execute("F006",
+                    IntentExecuteRequest.builder().userInput("未知查询").context(
+                            "client-spoof".equals(kind)
+                                    ? new HashMap<>(Map.of("userId", 42L, "factoryId", "F006"))
+                                    : new HashMap<>()).build(),
+                    42L, "platform_admin");
+        }
+        verify(recognizer).recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                isNull(), eq("platform_admin"), isNull(), any(), any());
+    }
+
+    @Test
+    void recognizerRetainsExactFactoryUserAndSessionIdentity() {
+        SupplierPriceComparisonTool tool = spy(realSupplierTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = newOrchestrator(tool, dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        com.cretas.aims.service.AIIntentService recognizer = mock(com.cretas.aims.service.AIIntentService.class);
+        when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                any(), eq("procurement_manager"), any(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+        try (ActorRequest ignored = actor(factoryActor())) {
+            fixture.orchestrator.execute("F006", IntentExecuteRequest.builder().userInput("未知查询").sessionId("supplier-session-1").context(new HashMap<>()).build(), 42L, "procurement_manager");
+        }
+        verify(recognizer).recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                eq(42L), eq("procurement_manager"), eq("supplier-session-1"), any(), any());
+    }
+
+    @Test
+    void platformFreshUnrelatedReadKeepsStatelessRecognizerButReachesRealReadTool() {
+        ScriptedReadTool read = spy(new ScriptedReadTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = newOrchestrator(realSupplierTool(), dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        AIIntentConfig unrelated = AIIntentConfig.builder().intentCode("OTHER_READ")
+                .intentName("other read").intentCategory("CRM").businessType("FACTORY")
+                .sensitivityLevel("LOW").requiresApproval(false).toolName(read.getToolName())
+                .factoryId("F006").build();
+        ToolRegistry registry = (ToolRegistry) ReflectionTestUtils.getField(fixture.orchestrator, "toolRegistry");
+        when(registry.getExecutor(read.getToolName())).thenReturn(Optional.of(read));
+        AIIntentService recognizer = mock(AIIntentService.class);
+        when(recognizer.hasPermission("OTHER_READ", "platform_admin")).thenReturn(true);
+        when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                any(), eq("platform_admin"), any(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(unrelated)
+                        .confidence(0.99d)
+                        .matchMethod(com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(com.cretas.aims.config.IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                        .build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+
+        com.cretas.aims.service.ConversationMemoryService observedMemory = mock(com.cretas.aims.service.ConversationMemoryService.class);
+        com.cretas.aims.service.ConversationService observedSessions = mock(com.cretas.aims.service.ConversationService.class);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationMemoryService", observedMemory);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationService", observedSessions);
+        IntentExecuteResponse response;
+        try (ActorRequest ignored = actor(new AuthenticatedActor(
+                AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin"))) {
+            response = fixture.orchestrator.execute("F006",
+                    IntentExecuteRequest.builder().userInput("读取公开工厂资料").build(),
+                    42L, "platform_admin");
+        }
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        verify(recognizer).recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                isNull(), eq("platform_admin"), isNull(), any(), any());
+        verify(read).execute(any(), org.mockito.ArgumentMatchers.argThat(context ->
+                Long.valueOf(42L).equals(((Number) context.get("userId")).longValue()) && "F006".equals(context.get("factoryId"))));
+        verifyNoInteractions(observedMemory, observedSessions);
+    }
+
+    @Test
+    void nonSupplierNamedSessionRequiresBoundActorOnBothPublicEntrances() throws Exception {
+        ScriptedReadTool read = spy(new ScriptedReadTool());
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        OrchestratorFixture fixture = newOrchestrator(realSupplierTool(), dispatch,
+                IntentPermissionGate.PermissionCheck.allowed(), Optional.empty());
+        AIIntentConfig unrelated = AIIntentConfig.builder().intentCode("OTHER_READ")
+                .intentName("other read").intentCategory("CRM").businessType("FACTORY")
+                .sensitivityLevel("LOW").requiresApproval(false).toolName(read.getToolName())
+                .factoryId("F006").build();
+        ToolRegistry registry = (ToolRegistry) ReflectionTestUtils.getField(fixture.orchestrator, "toolRegistry");
+        when(registry.getExecutor(read.getToolName())).thenReturn(Optional.of(read));
+        AIIntentService recognizer = mock(AIIntentService.class);
+        when(recognizer.getIntentByCode(anyString(), eq("OTHER_READ"))).thenReturn(Optional.of(unrelated));
+        when(recognizer.hasPermission("OTHER_READ", "procurement_manager")).thenReturn(true);
+        when(recognizer.recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
+                any(), eq("procurement_manager"), any(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(unrelated)
+                        .confidence(0.99d)
+                        .matchMethod(com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(com.cretas.aims.config.IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                        .build());
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
+        IntentExecuteRequest request = IntentExecuteRequest.builder().intentCode("OTHER_READ")
+                .userInput("读取会话资料").sessionId("OTHER-SESSION").build();
+
+        com.cretas.aims.service.ConversationMemoryService memory = mock(com.cretas.aims.service.ConversationMemoryService.class);
+        com.cretas.aims.service.ConversationService sessions = mock(com.cretas.aims.service.ConversationService.class);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationMemoryService", memory);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationService", sessions);
+        for (String kind : List.of("missing", "platform", "wrongtype", "different-id", "foreign-factory", "client-spoof")) {
+            AuthenticatedActor current = switch (kind) {
+                case "platform", "wrongtype" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+                case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+                case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+                default -> null;
+            };
+            for (String mode : List.of("explicit-api", "explicit-request", "natural", "preview")) {
+                IntentExecuteRequest deniedRequest = IntentExecuteRequest.builder()
+                        .intentCode("natural".equals(mode) ? null : "OTHER_READ")
+                        .userInput("读取会话资料").sessionId("OTHER-SESSION")
+                        .previewOnly("preview".equals(mode))
+                        .context("client-spoof".equals(kind) ? new HashMap<>(Map.of(
+                                "userId",42L,"factoryId","F006","userRole","procurement_manager")) : new HashMap<>())
+                        .build();
+                try (ActorRequest ignored = actor(current)) {
+                    if ("wrongtype".equals(kind)) ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes())
+                            .getRequest().setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                                    Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
+                    IntentExecuteResponse denied = "explicit-api".equals(mode)
+                            ? fixture.orchestrator.executeWithExplicitIntent("F006", deniedRequest, 42L, "procurement_manager")
+                            : fixture.orchestrator.execute("F006", deniedRequest, 42L, "procurement_manager");
+                    assertThat(denied.getStatus()).as("%s / %s", kind, mode).isEqualTo("NO_PERMISSION");
+                }
+                verifyNoInteractions(memory, sessions, recognizer);
+                verify(read, never()).execute(any(), anyMap());
+            }
+        }
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationMemoryService", null);
+        ReflectionTestUtils.setField(fixture.orchestrator, "conversationService", null);
+
+        try (ActorRequest ignored = actor(factoryActor())) {
+            IntentExecuteResponse allowed = fixture.orchestrator.executeWithExplicitIntent(
+                    "F006", request, 42L, "procurement_manager");
+            assertThat(allowed.getStatus()).isEqualTo("SUCCESS");
+        }
+        verify(read).execute(any(), anyMap());
+    }
+
+    @Test
+    void previewMissingParametersCannotOpenSessionForUntrustedIdentity() throws Exception {
+        DispatchFixture dispatch = newDispatch(false, Optional.empty());
+        ToolExecutor tool = mock(ToolExecutor.class);
+        when(tool.getToolName()).thenReturn("preview_read");
+        when(tool.isEnabled()).thenReturn(true);
+        when(tool.supportsPreview()).thenReturn(true);
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+        when(tool.getActionType()).thenReturn(ToolExecutor.ActionType.WRITE);
+        when(tool.getParametersSchema()).thenReturn(Map.of(
+                "type", "object", "properties", Map.of("batchId", Map.of("type", "string")),
+                "required", List.of("batchId")));
+        when(tool.preview(any(), anyMap())).thenReturn(
+                "{\"success\":false,\"status\":\"NEED_MORE_INFO\","
+                        + "\"needMoreInfo\":true,\"missingParameters\":[\"batchId\"]}");
+        AIIntentConfig intent = AIIntentConfig.builder().intentCode("PREVIEW_READ")
+                .intentName("preview").toolName(tool.getToolName()).sensitivityLevel("HIGH").build();
+        com.cretas.aims.service.ConversationService conversation = mock(
+                com.cretas.aims.service.ConversationService.class);
+        ReflectionTestUtils.setField(dispatch.dispatch, "conversationService", conversation);
+
+        for (String kind : List.of("missing", "platform", "wrongtype", "different-id", "foreign-factory", "client-spoof")) {
+            AuthenticatedActor current = switch (kind) {
+                case "platform", "wrongtype" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin");
+                case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, "F006", "procurement_manager");
+                case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "OTHER", "procurement_manager");
+                default -> null;
+            };
+            try (ActorRequest ignored = actor(current)) {
+                if ("wrongtype".equals(kind)) ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes())
+                        .getRequest().setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                                Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
+                IntentExecuteResponse response = dispatch.dispatch.executeToolPreview(tool, "F006",
+                        IntentExecuteRequest.builder().userInput("查询批次").context("client-spoof".equals(kind)
+                                ? new HashMap<>(Map.of("userId",42L,"factoryId","F006","userRole","procurement_manager")) : new HashMap<>()).build(), intent,
+                        42L, "platform_admin");
+                assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
+            }
+            verifyNoInteractions(conversation);
+        }
+
+        when(conversation.startParameterCollection(anyString(), anyLong(), anyString(), anyString(),
+                any(), any(), any())).thenReturn(
+                com.cretas.aims.service.ConversationService.ConversationResponse.builder()
+                        .sessionId("owned-preview-session").build());
+        try (ActorRequest ignored = actor(factoryActor())) {
+            dispatch.dispatch.executeToolPreview(tool, "F006",
+                    IntentExecuteRequest.builder().userInput("查询批次").build(), intent,
+                    42L, "procurement_manager");
+        }
+        verify(conversation).startParameterCollection(anyString(), eq(42L), anyString(), anyString(),
+                any(), any(), any());
     }
 
     @Test
@@ -829,6 +1177,33 @@ class SupplierComparisonDispatchContractTest {
         when(rbac.isAllowed(any(), anyMap())).thenReturn(true);
         ReflectionTestUtils.setField(dispatch, "toolRbacEnforcer", rbac);
         return new DispatchFixture(dispatch, redundancy, validator, externalVerifier, correctionAgent, records);
+    }
+
+    private ConversationSessionRepository attachRealSlotFilling(IntentExecutionOrchestrator orchestrator,
+                                                                 ToolRegistry registry) {
+        ConversationSessionRepository sessions = mock(ConversationSessionRepository.class);
+        Map<String, com.cretas.aims.entity.conversation.ConversationSession> stored = new HashMap<>();
+        when(sessions.save(any(com.cretas.aims.entity.conversation.ConversationSession.class)))
+                .thenAnswer(invocation -> {
+                    var session = invocation.getArgument(0, com.cretas.aims.entity.conversation.ConversationSession.class);
+                    if (session.getSessionId() == null) session.setSessionId(UUID.randomUUID().toString());
+                    if (session.getLastActiveAt() == null) session.setLastActiveAt(LocalDateTime.now());
+                    stored.put(session.getSessionId(), session);
+                    return session;
+                });
+        when(sessions.findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong()))
+                .thenAnswer(invocation -> Optional.ofNullable(stored.get(invocation.getArgument(0)))
+                        .filter(session -> invocation.getArgument(1, String.class).equals(session.getFactoryId()))
+                        .filter(session -> invocation.getArgument(2, Long.class).equals(session.getUserId())));
+        ConversationServiceImpl conversations = new ConversationServiceImpl(
+                sessions, mock(AIIntentConfigRepository.class), null, mock(com.cretas.aims.ai.client.DashScopeClient.class));
+        ReflectionTestUtils.setField(conversations, "maxRounds", 5);
+        ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
+        IntentSlotConfiguration slotConfiguration = new IntentSlotConfiguration();
+        slotConfiguration.init();
+        ReflectionTestUtils.setField(orchestrator, "slotFillingService", new SlotFillingServiceImpl(
+                slotConfiguration, registry, conversations, mock(ParameterExtractionLearningService.class)));
+        return sessions;
     }
 
     private record DispatchFixture(ToolDispatchService dispatch, ToolCallRedundancyService redundancy,

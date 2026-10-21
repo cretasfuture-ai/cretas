@@ -9,6 +9,7 @@ import com.cretas.aims.ai.tool.impl.crm.SupplierPriceComparisonTool;
 import com.cretas.aims.client.PythonAiMatcherClient;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
+import com.cretas.aims.config.IntentSlotConfiguration;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.cache.SemanticCacheHit;
@@ -18,6 +19,7 @@ import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
@@ -26,6 +28,9 @@ import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.service.SlotFillingService;
+import com.cretas.aims.service.impl.ConversationServiceImpl;
+import com.cretas.aims.service.impl.SlotFillingServiceImpl;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
 import com.cretas.aims.service.calibration.SelfCorrectionService;
@@ -42,16 +47,20 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.HashMap;
 import java.util.ArrayList;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -241,6 +250,160 @@ class SupplierComparisonStreamingContractTest {
         } finally {
             fixture.close();
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "platform", "wrongtype", "different-id", "foreign-factory", "client-spoof"})
+    void untrustedFreshSseSkipsRealSlotFillingAdmission(String kind) throws Exception {
+        StreamingFixture fixture = StreamingFixture.mockDispatch();
+        AIIntentConfig unrelated = AIIntentConfig.builder().id("slot-other")
+                .intentCode("OTHER_SLOT").intentName("other slot").intentCategory("CRM")
+                .businessType("FACTORY").sensitivityLevel("LOW").requiresApproval(false)
+                .toolName("other_slot_tool").factoryId(FACTORY).build();
+        ToolExecutor slotTool = mock(ToolExecutor.class);
+        when(slotTool.getToolName()).thenReturn("other_slot_tool");
+        when(slotTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+        when(slotTool.getParametersSchema()).thenReturn(Map.of(
+                "type", "object", "properties", Map.of("batchId", Map.of("type", "string")),
+                "required", List.of("batchId")));
+        when(fixture.toolRegistry.getExecutor("other_slot_tool")).thenReturn(Optional.of(slotTool));
+        fixture.attachRealSlotFilling();
+        fixture.recognizedIntent = unrelated;
+        when(fixture.aiIntentService.hasPermission("OTHER_SLOT", ROLE)).thenReturn(true);
+        when(fixture.aiIntentService.recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3),
+                any(), eq(ROLE), any(), any(), any(), any()))
+                .thenReturn(IntentMatchResult.builder().bestMatch(unrelated).confidence(0.99d)
+                        .matchMethod(IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
+        AuthenticatedActor current = switch (kind) {
+            case "platform", "wrongtype" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, USER_ID, FACTORY, "platform_admin");
+            case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, FACTORY, ROLE);
+            case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER_ID, "OTHER", ROLE);
+            default -> null;
+        };
+        try (ActorRequest ignored = actor(current)) {
+            if ("wrongtype".equals(kind)) ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes())
+                    .getRequest().setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                            Map.of("type", "FACTORY_USER", "id", USER_ID, "factoryId", FACTORY));
+            IntentExecuteResponse response = fixture.execute("natural", null, "client-spoof".equals(kind));
+            assertThat(response.getStatus()).isEqualTo("UNEXPECTED_DISPATCH");
+            assertThat(response.getResultData()).isEqualTo(Map.of("source", "UNEXPECTED_DISPATCH"));
+        } finally {
+            fixture.close();
+        }
+        verify(fixture.aiIntentService).recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3), isNull(), eq(ROLE), isNull(), any(), any(), any());
+        verifyNoInteractions(fixture.conversationMemoryService, fixture.conversationService);
+        verifyNoInteractions(fixture.realSessionRepository);
+    }
+
+    @Test
+    void trustedFreshSseUsesRealSlotFillingAndCreatesOwnedParameterSession() throws Exception {
+        StreamingFixture fixture = StreamingFixture.actualDispatch();
+        ToolDispatchService observedDispatch = spy(fixture.toolDispatch);
+        ReflectionTestUtils.setField(fixture.service, "toolDispatchService", observedDispatch);
+        AIIntentConfig unrelated = AIIntentConfig.builder().id("slot-real")
+                .intentCode("OTHER_SLOT").intentName("other slot").intentCategory("CRM")
+                .businessType("FACTORY").sensitivityLevel("LOW").requiresApproval(false)
+                .toolName("other_slot_tool").factoryId(FACTORY).build();
+        ToolExecutor slotTool = mock(ToolExecutor.class);
+        when(slotTool.getToolName()).thenReturn("other_slot_tool");
+        when(slotTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+        when(slotTool.getParametersSchema()).thenReturn(Map.of(
+                "type", "object", "properties", Map.of("batchId", Map.of("type", "string")),
+                "required", List.of("batchId")));
+        when(fixture.toolRegistry.getExecutor("other_slot_tool")).thenReturn(Optional.of(slotTool));
+        fixture.attachRealSlotFilling();
+        fixture.recognizedIntent = unrelated;
+        when(fixture.aiIntentService.hasPermission("OTHER_SLOT", ROLE)).thenReturn(true);
+        when(fixture.aiIntentService.recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3), eq(USER_ID), eq(ROLE), any(), any(), any(), any()))
+                .thenReturn(IntentMatchResult.builder().bestMatch(unrelated).confidence(0.99d)
+                        .matchMethod(IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
+        try (ActorRequest ignored = actor(factoryActor())) {
+            IntentExecuteResponse response = fixture.execute("natural", null, false);
+            assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
+        } finally {
+            fixture.close();
+        }
+        ArgumentCaptor<ConversationSession> savedCaptor = ArgumentCaptor.forClass(ConversationSession.class);
+        verify(fixture.realSessionRepository).save(savedCaptor.capture());
+        ConversationSession saved = savedCaptor.getValue();
+        assertThat(saved.getFactoryId()).isEqualTo(FACTORY);
+        assertThat(saved.getUserId()).isEqualTo(USER_ID);
+        verify(observedDispatch, never()).executeWithTool(any(), anyString(), any(), any(), any(), anyString(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "platform", "wrongtype", "different-id", "foreign-factory", "client-spoof"})
+    void sseRecognizerReceivesNoStateIdentityForEveryUntrustedActor(String kind) throws Exception {
+        StreamingFixture fixture = StreamingFixture.mockDispatch();
+        fixture.attachUnrelatedReadTool();
+        AIIntentConfig unrelated = AIIntentConfig.builder().id("sse-other")
+                .intentCode("OTHER_READ").intentName("other read").intentCategory("CRM")
+                .businessType("FACTORY").sensitivityLevel("LOW").requiresApproval(false)
+                .toolName("other_read_tool").factoryId(FACTORY).build();
+        fixture.recognizedIntent = unrelated;
+        when(fixture.aiIntentService.hasPermission("OTHER_READ", ROLE)).thenReturn(true);
+        when(fixture.aiIntentService.recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
+                .thenReturn(IntentMatchResult.builder().bestMatch(unrelated).confidence(0.99d)
+                        .matchMethod(IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
+        AuthenticatedActor current = switch (kind) {
+            case "platform" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, USER_ID, FACTORY, "platform_admin");
+            case "wrongtype" -> new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, USER_ID, FACTORY, "platform_admin");
+            case "different-id" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 99L, FACTORY, ROLE);
+            case "foreign-factory" -> new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER_ID, "OTHER", ROLE);
+            default -> null;
+        };
+        IntentExecuteRequest request = IntentExecuteRequest.builder().userInput(INPUT)
+                .context("client-spoof".equals(kind)
+                        ? new HashMap<>(Map.of("userId", USER_ID, "factoryId", FACTORY, "userRole", ROLE))
+                        : new HashMap<>()).build();
+        try (ActorRequest ignored = actor(current)) {
+            if ("wrongtype".equals(kind)) {
+                ((org.springframework.web.context.request.ServletRequestAttributes)
+                        RequestContextHolder.currentRequestAttributes()).getRequest()
+                        .setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                                Map.of("type", "FACTORY_USER", "id", USER_ID, "factoryId", FACTORY));
+            }
+            IntentExecuteResponse response = fixture.executeRequest(request);
+            assertThat(response.getStatus()).isEqualTo("UNEXPECTED_DISPATCH");
+        } finally {
+            fixture.close();
+        }
+        verify(fixture.aiIntentService).recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3), isNull(), eq(ROLE), isNull(), any(), any(), any());
+        verifyNoInteractions(fixture.conversationMemoryService, fixture.conversationService);
+    }
+
+    @Test
+    void sseRecognizerRetainsExactFactoryUserSessionIdentity() throws Exception {
+        StreamingFixture fixture = StreamingFixture.mockDispatch();
+        fixture.attachUnrelatedReadTool();
+        AIIntentConfig unrelated = AIIntentConfig.builder().id("sse-factory")
+                .intentCode("OTHER_READ").intentName("other read").intentCategory("CRM")
+                .businessType("FACTORY").sensitivityLevel("LOW").requiresApproval(false)
+                .toolName("other_read_tool").factoryId(FACTORY).build();
+        fixture.recognizedIntent = unrelated;
+        when(fixture.aiIntentService.hasPermission("OTHER_READ", ROLE)).thenReturn(true);
+        when(fixture.aiIntentService.recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
+                .thenReturn(IntentMatchResult.builder().bestMatch(unrelated).confidence(0.99d)
+                        .matchMethod(IntentMatchResult.MatchMethod.KEYWORD)
+                        .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
+        try (ActorRequest ignored = actor(factoryActor())) {
+            IntentExecuteResponse response = fixture.executeRequest(IntentExecuteRequest.builder()
+                    .userInput(INPUT).sessionId(StreamingFixture.SESSION).context(new HashMap<>()).build());
+            assertThat(response.getStatus()).isEqualTo("UNEXPECTED_DISPATCH");
+        } finally {
+            fixture.close();
+        }
+        verify(fixture.aiIntentService).recognizeIntentWithConfidence(
+                eq(INPUT), eq(FACTORY), eq(3), eq(USER_ID), eq(ROLE), eq(StreamingFixture.SESSION), any(), any(), any());
     }
 
     @Test
@@ -509,6 +672,7 @@ class SupplierComparisonStreamingContractTest {
         private final BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
         private final ConversationMemoryService conversationMemoryService = mock(ConversationMemoryService.class);
         private final ConversationService conversationService = mock(ConversationService.class);
+        private ConversationSessionRepository realSessionRepository;
         private final DynamicToolSelectionService dynamicToolSelectionService = mock(DynamicToolSelectionService.class);
         private final PythonAiMatcherClient pythonAiMatcherClient = mock(PythonAiMatcherClient.class);
         private final SupplierService supplierService = mock(SupplierService.class);
@@ -546,7 +710,7 @@ class SupplierComparisonStreamingContractTest {
                     .thenReturn(defaultOwner);
             when(conversationMemoryService.getContext(SESSION)).thenReturn(defaultOwner);
             when(aiIntentService.recognizeIntentWithConfidence(
-                    eq(INPUT), eq(FACTORY), eq(3), eq(USER_ID), eq(ROLE), any(), any(), any(), any()))
+                    eq(INPUT), eq(FACTORY), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
                     .thenAnswer(invocation -> IntentMatchResult.builder()
                             .bestMatch(recognizedIntent).confidence(0.99d)
                             .matchMethod(IntentMatchResult.MatchMethod.KEYWORD)
@@ -683,9 +847,43 @@ class SupplierComparisonStreamingContractTest {
             ReflectionTestUtils.setField(service, "conversationService", conversationService);
         }
 
+        void attachUnrelatedReadTool() {
+            ToolExecutor read = mock(ToolExecutor.class);
+            when(read.getToolName()).thenReturn("other_read_tool");
+            when(read.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+            when(read.getParametersSchema()).thenReturn(Map.of("type", "object", "properties", Map.of(), "required", List.of()));
+            when(toolRegistry.getExecutor("other_read_tool")).thenReturn(Optional.of(read));
+        }
+
+        void attachRealSlotFilling() {
+            realSessionRepository = mock(ConversationSessionRepository.class);
+            Map<String, ConversationSession> stored = new HashMap<>();
+            when(realSessionRepository.save(any(ConversationSession.class))).thenAnswer(invocation -> {
+                ConversationSession session = invocation.getArgument(0);
+                if (session.getSessionId() == null) session.setSessionId(UUID.randomUUID().toString());
+                if (session.getLastActiveAt() == null) session.setLastActiveAt(LocalDateTime.now());
+                stored.put(session.getSessionId(), session);
+                return session;
+            });
+            when(realSessionRepository.findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong()))
+                    .thenAnswer(invocation -> Optional.ofNullable(stored.get(invocation.getArgument(0)))
+                            .filter(session -> invocation.getArgument(1, String.class).equals(session.getFactoryId()))
+                            .filter(session -> invocation.getArgument(2, Long.class).equals(session.getUserId())));
+            ConversationServiceImpl conversations = new ConversationServiceImpl(
+                    realSessionRepository, mock(AIIntentConfigRepository.class), null, mock(DashScopeClient.class));
+            ReflectionTestUtils.setField(conversations, "maxRounds", 5);
+            ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
+            IntentSlotConfiguration slotConfiguration = new IntentSlotConfiguration();
+            slotConfiguration.init();
+            SlotFillingServiceImpl slotFilling = new SlotFillingServiceImpl(slotConfiguration, toolRegistry,
+                    conversations, mock(com.cretas.aims.service.ParameterExtractionLearningService.class));
+            ReflectionTestUtils.setField(service, "slotFillingService", slotFilling);
+            ReflectionTestUtils.setField(service, "conversationService", conversations);
+        }
+
         void disableNaturalRecognition() {
             when(aiIntentService.recognizeIntentWithConfidence(
-                    anyString(), eq(FACTORY), eq(3), eq(USER_ID), eq(ROLE), any(), any(), any(), any()))
+                    anyString(), eq(FACTORY), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
                     .thenReturn(IntentMatchResult.builder().userInput("猪肉").confidence(0.0d)
                             .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         }

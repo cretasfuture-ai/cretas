@@ -136,7 +136,17 @@ class SseStreamingServiceSlotContinuationTest {
                     return IntentMatchResult.builder().userInput("x").confidence(0.0).build();
                 });
 
-        h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").build(), USER, ROLE);
+        var previousRequest = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        var servletRequest = new org.springframework.mock.web.MockHttpServletRequest();
+        servletRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(servletRequest));
+        try {
+            h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").build(), USER, ROLE);
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(previousRequest);
+        }
 
         assertThat(done.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("工作线程真的跑到了识别 (必发生的读数)").isTrue();
         assertThat(workerThread.get()).as("确实是切到了工作线程").isEqualTo("intent-sse");
@@ -437,9 +447,9 @@ class SseStreamingServiceSlotContinuationTest {
                         + "\"clarificationQuestions\":[\"请再说清楚一点\"],\"message\":\"请再说清楚一点\"}");
         PreviewLeg preview = new PreviewLeg(h);
 
-        IntentExecuteResponse asked = preview.dispatch.executeWithTool(vague, F,
+        IntentExecuteResponse asked = asFactory(PreviewLeg.PREVIEW_ROLE, () -> preview.dispatch.executeWithTool(vague, F,
                 IntentExecuteRequest.builder().intentCode("MATERIAL_BATCH_USE").userInput("领用").previewOnly(true)
-                        .context(new HashMap<>()).build(), preview.useIntent, USER, PreviewLeg.PREVIEW_ROLE, null);
+                        .context(new HashMap<>()).build(), preview.useIntent, USER, PreviewLeg.PREVIEW_ROLE, null));
 
         assertThat(asked.getStatus()).as("必发生: 追问照常发出").isEqualTo("NEED_MORE_INFO");
         assertThat(asked.getSessionId()).isNull();
@@ -534,10 +544,10 @@ class SseStreamingServiceSlotContinuationTest {
         assertThat(refused.getMessage()).contains("还没有对操作员开放");
         assertThat(h.sessions).isEmpty();
         // 直接预览同样守入场闸，不能绕过 stream 铸出确认票。
-        IntentExecuteResponse previewRefused = preview.dispatch.executeWithTool(preview.tool, F,
+        IntentExecuteResponse previewRefused = asFactory(ROLE, () -> preview.dispatch.executeWithTool(preview.tool, F,
                 IntentExecuteRequest.builder().intentCode("QUALITY_DEFECT_RECORD").userInput("登记外观不良2个")
                         .previewOnly(true).context(new HashMap<>(Map.of("qualityInspectionId", "B20261006-01",
-                                "defectType", "外观不良", "quantity", 2))).build(), preview.intent, USER, ROLE, null);
+                                "defectType", "外观不良", "quantity", 2))).build(), preview.intent, USER, ROLE, null));
         assertThat(previewRefused.getStatus()).isEqualTo("PERMISSION_DENIED");
         assertThat(previewRefused.getMessage()).contains("还没有对操作员开放");
         verify(preview.tokens, never()).createBoundToken(any());
@@ -655,9 +665,9 @@ class SseStreamingServiceSlotContinuationTest {
 
         /** App 请求 POST /preview 的样子: 原话 + 被拦的意图码 + 流式那一轮定下的参数 (context), previewOnly。 */
         IntentExecuteResponse preview(String userInput, Map<String, Object> context) {
-            return dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder()
+            return asFactory(PREVIEW_ROLE, () -> dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder()
                     .intentCode("MATERIAL_BATCH_USE").userInput(userInput).context(new HashMap<>(context))
-                    .previewOnly(true).build(), useIntent, USER, PREVIEW_ROLE, null);
+                    .previewOnly(true).build(), useIntent, USER, PREVIEW_ROLE, null));
         }
     }
 
@@ -739,9 +749,16 @@ class SseStreamingServiceSlotContinuationTest {
         }
 
         IntentExecuteResponse preview(String userInput, Map<String, Object> context) {
-            return dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder()
+            return asFactory(ROLE, () -> dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder()
                     .intentCode("QUALITY_DEFECT_RECORD").userInput(userInput)
-                    .context(new HashMap<>(context)).previewOnly(true).build(), intent, USER, ROLE, null);
+                    .context(new HashMap<>(context)).previewOnly(true).build(), intent, USER, ROLE, null));
+        }
+    }
+
+    private static <T> T asFactory(String role, java.util.function.Supplier<T> operation) {
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, role))) {
+            return operation.get();
         }
     }
 
@@ -890,7 +907,7 @@ class SseStreamingServiceSlotContinuationTest {
 
         IntentExecuteResponse executeAs(IntentExecuteRequest request, String role) throws Exception {
             AuthenticatedActor actor = new AuthenticatedActor(
-                    AuthenticatedActorType.FACTORY_USER, USER, F, ROLE);
+                    AuthenticatedActorType.FACTORY_USER, USER, F, role);
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor)) {
                 ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, F, request, USER, role);
             }

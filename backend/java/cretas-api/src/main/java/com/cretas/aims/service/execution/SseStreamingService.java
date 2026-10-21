@@ -535,8 +535,10 @@ public class SseStreamingService {
             try {
                 // spec §8.2 洞②: 流式路径同样把 tab 模式带进识别层, 否则咨询 tab 走 SSE 时
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
+                Long recognizerUserId = trustedFactoryActor ? userId : null;
+                String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        userInput, factoryId, 3, userId, userRole, request.getSessionId(),
+                        userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                         request.getMode(), null, recentTurns(request));
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
@@ -682,7 +684,7 @@ public class SseStreamingService {
             prefillWriteToolParameters(request, intent);
 
             // 7b. Slot Filling
-            if (userId != null && !Boolean.TRUE.equals(request.getSkipSlotFilling())
+            if (trustedFactoryActor && !Boolean.TRUE.equals(request.getSkipSlotFilling())
                     && slotFillingService != null) {
                 try {
                     IntentExecuteResponse slotFillingResponse = slotFillingService.checkAndStartSlotFilling(

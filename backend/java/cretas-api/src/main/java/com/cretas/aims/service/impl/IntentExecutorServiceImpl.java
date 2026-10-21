@@ -9,6 +9,7 @@ import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.execution.IntentExecutionOrchestrator;
 import com.cretas.aims.service.execution.MultiIntentExecutionService;
 import com.cretas.aims.service.execution.SseStreamingService;
+import com.cretas.aims.service.execution.DemoConversationScope;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import lombok.RequiredArgsConstructor;
@@ -92,7 +93,8 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
                 .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER)
                 .filter(actor -> java.util.Objects.equals(actor.id(), userId))
                 .filter(actor -> java.util.Objects.equals(actor.factoryId(), factoryId))
-                .isEmpty()) {
+                .isEmpty()
+                && !DemoConversationScope.allows(factoryId, userId, sessionId)) {
             return; // only a trusted factory actor may read a session round
         }
         try {
