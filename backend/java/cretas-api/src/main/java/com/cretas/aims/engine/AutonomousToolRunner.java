@@ -10,15 +10,19 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.security.DataScopeContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Deque;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * Runs one tool for a cron schedule or an event trigger chain through {@link ToolExecutionGateway}
@@ -84,8 +88,24 @@ public class AutonomousToolRunner {
                 Optional.empty(),
                 Optional.empty(),
                 Instant.now().plus(DEADLINE));
-        ToolExecutionResult result = gateway.execute(command);
-        return outcome(result);
+        return outcome(executeDetached(command));
+    }
+
+    /**
+     * Event chains run on the publisher's (often HTTP) thread. Detach that request and its
+     * data-scope stack so the gateway binds the run-as user and every tool computes its row scope
+     * from that user, not from whoever triggered the event. Both are restored afterwards.
+     */
+    private ToolExecutionResult executeDetached(ToolExecutionCommand command) {
+        RequestAttributes request = RequestContextHolder.getRequestAttributes();
+        Deque<DataScopeContext> scopes = DataScopeContext.detach();
+        RequestContextHolder.resetRequestAttributes();
+        try {
+            return gateway.execute(command);
+        } finally {
+            RequestContextHolder.setRequestAttributes(request);
+            DataScopeContext.restore(scopes);
+        }
     }
 
     static Outcome outcome(ToolExecutionResult result) {

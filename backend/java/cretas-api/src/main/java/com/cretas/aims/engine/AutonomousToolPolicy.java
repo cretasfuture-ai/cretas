@@ -2,6 +2,8 @@ package com.cretas.aims.engine;
 
 import com.cretas.aims.ai.tool.ToolAccessModes;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.descriptor.RuntimeToolDescriptorRegistry;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
@@ -47,6 +49,28 @@ public final class AutonomousToolPolicy {
 
     public static boolean isWriteDenial(String reason) {
         return reason != null && reason.startsWith(WRITE_PREFIX);
+    }
+
+    /**
+     * Config-time mirror of the gateway's source check: a schedule/chain step is only accepted
+     * when the tool's runtime policy lists this source; otherwise every run would just be
+     * GATEWAY_DENIED. The gateway still enforces it at run time.
+     */
+    public static void requireSourceAllowed(String toolName, ToolExecutionSource source) {
+        boolean allowed = RuntimePolicies.REGISTRY.findApproved(toolName)
+                .map(descriptor -> descriptor.allowedSources().contains(source))
+                .orElse(false);
+        if (!allowed) {
+            String entry = source == ToolExecutionSource.SCHEDULER ? "定时任务" : "事件链";
+            throw new BusinessException(400, "工具「" + toolName + "」还没有开放给" + entry + "使用")
+                    .withCode("AUTONOMOUS_SOURCE_NOT_ALLOWED")
+                    .withHint("目前只开放了经过审核的只读工具（如 material_expired_query）；需要其他工具请先申请审核其运行策略");
+        }
+    }
+
+    /** Loaded once; the same runtime-tool-policies.yaml the gateway resolves against. */
+    private static final class RuntimePolicies {
+        static final RuntimeToolDescriptorRegistry REGISTRY = RuntimeToolDescriptorRegistry.loadDefault();
     }
 
     /**

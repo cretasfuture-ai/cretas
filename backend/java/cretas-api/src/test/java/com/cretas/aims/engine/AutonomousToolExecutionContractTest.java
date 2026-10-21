@@ -224,6 +224,57 @@ class AutonomousToolExecutionContractTest {
         verify(self).persistExecutionMetadata(eq(malformed), any(LocalDateTime.class), eq("PARTIAL"), contains("must be an object"));
     }
 
+    @Test void chainOnARequestThreadRunsWithoutTheTriggeringRequestOrItsDataScope() throws Exception {
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN,
+                        7L, null, "super_admin"));
+        request.setAttribute("userId", 7L);
+        var attributes = new org.springframework.web.context.request.ServletRequestAttributes(request);
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(attributes);
+        com.cretas.aims.security.DataScopeContext triggerScope = com.cretas.aims.security.DataScopeContext.builder()
+                .userId(7L).factoryId("F001").scope(com.cretas.aims.entity.enums.DataScope.ALL).build();
+        com.cretas.aims.security.DataScopeContext.push(triggerScope);
+        java.util.List<Object> seenDuringGateway = new java.util.ArrayList<>();
+        doAnswer(call -> {
+            seenDuringGateway.add(String.valueOf(org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()));
+            seenDuringGateway.add(String.valueOf(com.cretas.aims.security.DataScopeContext.current()));
+            return result(call.getArgument(0), ToolExecutionStatus.SUCCEEDED);
+        }).when(gateway).execute(any());
+        try {
+            TriggerChainExecutor executor = chainExecutor();
+            setSelf(executor, mock(TriggerChainExecutor.class));
+            runChain(executor, chain("CONTINUE", 42L, List.of(step(1, "material_expired_query", Map.of()))));
+
+            assertThat(seenDuringGateway).containsExactly("null", "null");
+            assertThat(org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()).isSameAs(attributes);
+            assertThat(com.cretas.aims.security.DataScopeContext.current()).isSameAs(triggerScope);
+        } finally {
+            com.cretas.aims.security.DataScopeContext.pop();
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    /** Simple name matches a handled event type; carries a factory id like the real events. */
+    static class MaterialReceivedEvent extends ApplicationEvent {
+        MaterialReceivedEvent() { super("test"); }
+        public String getFactoryId() { return "F001"; }
+    }
+
+    @Test void globalChainsAreNotRunBecauseTheyCannotHaveARunAsUser() {
+        FactoryTriggerChainRepository chains = mock(FactoryTriggerChainRepository.class);
+        FactoryTriggerChain global = chain("CONTINUE", null, List.of(step(1, "material_expired_query", Map.of())));
+        global.setFactoryId(null);
+        when(chains.findByFactoryIdAndEventTypeAndEnabledTrue("F001", "MaterialReceivedEvent")).thenReturn(List.of());
+        when(chains.findGlobalByEventType("MaterialReceivedEvent")).thenReturn(List.of(global));
+        TriggerChainExecutor executor = new TriggerChainExecutor(chains, registry, runner);
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        try { setSelf(executor, self); } catch (Exception e) { throw new IllegalStateException(e); }
+        executor.onApplicationEvent(new MaterialReceivedEvent());
+        verifyNoInteractions(gateway, self);
+        verify(chains, never()).save(any());
+    }
+
     private void runScheduled(FactorySchedulerConfig config) throws Exception {
         Method run = DynamicSchedulerService.class.getDeclaredMethod("executeTask", FactorySchedulerConfig.class);
         run.setAccessible(true);

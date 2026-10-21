@@ -158,7 +158,15 @@ public class TriggerChainExecutor {
                 .findByFactoryIdAndEventTypeAndEnabledTrue(factoryId, eventType);
 
         if (chains.isEmpty()) {
-            chains = triggerChainRepository.findGlobalByEventType(eventType);
+            // A global chain (factory_id NULL) can never carry a run-as user: the PUT always saves a
+            // factory copy. Running it would fail every event and write FAILED onto the shared row,
+            // so it is skipped until a factory user enables this factory's own copy.
+            List<FactoryTriggerChain> globals = triggerChainRepository.findGlobalByEventType(eventType);
+            if (!globals.isEmpty()) {
+                log.info("TriggerChain: global chain(s) {} for event {} not run for factory {}: "
+                                + "a factory user must enable this factory's copy (run-as user required)",
+                        globals.stream().map(FactoryTriggerChain::getChainCode).toList(), eventType, factoryId);
+            }
         }
 
         if (chains.isEmpty()) {

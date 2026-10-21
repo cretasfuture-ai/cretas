@@ -168,6 +168,7 @@ public class DynamicSchedulerService {
         if (tool.isEmpty()) return;
         String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), params);
         if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
+        AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.SCHEDULER);
     }
 
     private void executeTask(FactorySchedulerConfig config) {

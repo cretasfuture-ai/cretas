@@ -98,11 +98,13 @@ public class CanvasUpdateTriggerChainTool extends AbstractBusinessTool {
                 throw new IllegalArgumentException("指定 stepOrder 时必须同时提供 stepEnabled 参数");
             }
             updateStepEnabled(chain, stepOrder, stepEnabled);
+            boolean needsRunAs = Boolean.TRUE.equals(stepEnabled) && clearRunAsUser(chain);
             factoryTriggerChainRepo.save(chain);
 
             log.info("Canvas 触发链步骤更新完成 - 链: {}, 步骤: {}, 启用: {}", chainCode, stepOrder, stepEnabled);
             return buildSimpleResult(
-                    "触发链 " + chainCode + " 第 " + stepOrder + " 步已" + (stepEnabled ? "启用" : "禁用"),
+                    "触发链 " + chainCode + " 第 " + stepOrder + " 步已" + (stepEnabled ? "启用" : "禁用")
+                            + (needsRunAs ? RUN_AS_NOTE : ""),
                     Map.of("chainCode", chainCode, "stepOrder", stepOrder, "stepEnabled", stepEnabled)
             );
         } else {
@@ -111,15 +113,30 @@ public class CanvasUpdateTriggerChainTool extends AbstractBusinessTool {
                 throw new IllegalArgumentException("未指定 stepOrder 时必须提供 enabled 参数");
             }
             chain.setEnabled(enabled);
+            boolean needsRunAs = Boolean.TRUE.equals(enabled) && clearRunAsUser(chain);
             factoryTriggerChainRepo.save(chain);
 
             String action = Boolean.TRUE.equals(enabled) ? "启用" : "禁用";
             log.info("Canvas 触发链整链更新完成 - 链: {}, 操作: {}", chainCode, action);
             return buildSimpleResult(
-                    "触发链 " + chainCode + " 已" + action,
+                    "触发链 " + chainCode + " 已" + action + (needsRunAs ? RUN_AS_NOTE : ""),
                     Map.of("chainCode", chainCode, "enabled", enabled)
             );
         }
+    }
+
+    static final String RUN_AS_NOTE = "；这条链需由本厂账号在「触发链配置」保存一次后才会以其身份运行";
+
+    /**
+     * Canvas has no run-as user of its own and skips the trigger-chain PUT checks, so turning
+     * anything on here must not keep running as whoever enabled the chain before: the chain stays
+     * refused (RUN_AS_MISSING) until a factory user saves it through the PUT.
+     *
+     * @return true when the chain had or now needs a run-as user to be set again
+     */
+    static boolean clearRunAsUser(FactoryTriggerChain chain) {
+        chain.setRunAsUserId(null);
+        return true;
     }
 
     /**

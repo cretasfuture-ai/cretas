@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.config.RequireRole;
@@ -205,6 +206,7 @@ public class TriggerChainController {
             }
             String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), (Map<String, Object>) map);
             if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
+            AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.TRIGGER);
         }
     }
 
