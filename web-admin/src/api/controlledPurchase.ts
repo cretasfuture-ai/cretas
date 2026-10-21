@@ -49,6 +49,31 @@ export async function getControlledPurchaseStatus(
   return getPurchaseTaskGrantStatus(factoryId, grantId);
 }
 
+export async function authorizeControlledPurchaseForLater(
+  factoryId: string,
+  proofToken: string,
+  commandDigest: string,
+  expiresAt: string,
+): Promise<ControlledPurchaseOutcome> {
+  const response = await post<ControlledPurchaseOutcome>(
+    `/${factoryId}/ai-purchase-task-grants/authorize-later`, { proofToken, commandDigest, expiresAt },
+  );
+  if (!response.success || !response.data) throw new Error(response.message || '稍后执行授权失败');
+  return response.data;
+}
+
+export async function executeDeferredControlledPurchase(
+  factoryId: string,
+  grantId: string,
+  expectedVersion: number,
+): Promise<ControlledPurchaseOutcome> {
+  const response = await post<ControlledPurchaseOutcome>(
+    `/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}/execute`, { expectedVersion },
+  );
+  if (!response.success || !response.data) throw new Error(response.message || '稍后执行采购失败');
+  return response.data;
+}
+
 export async function revokeControlledPurchase(
   factoryId: string,
   grantId: string,

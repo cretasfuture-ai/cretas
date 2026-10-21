@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -144,6 +145,105 @@ public class ControlledPurchaseTaskExecutionService {
             }
         });
         return new Outcome(id, "DRAFT", result.purchaseOrderId(), result.amount(), result.quantity(), result.grantVersion(), result.replay());
+    }
+
+    /**
+     * Confirm an immutable preview for later execution.  This path deliberately does
+     * not call PurchaseService; it only creates the durable grant after the persisted
+     * opaque proof has been claimed and the current actor/references are rechecked.
+     */
+    @Transactional
+    public Outcome authorizeForLater(String factoryId, ConfirmationProof proof) {
+        AuthenticatedActor actor = authorize(factoryId);
+        if (proof == null || proof.proofToken() == null || proof.proofToken().isBlank()
+                || proof.commandDigest() == null || proof.commandDigest().isBlank()) {
+            throw denied("缺少服务端确认凭据");
+        }
+        var claim = previewTokens.claimToken(proof.proofToken(), factoryId, actor.id(), proof.commandDigest());
+        if (claim == null || !claim.isSuccess() || claim.getToken() == null || claim.getClaimId() == null) {
+            throw denied(claim == null ? "确认凭据不可用" : claim.getMessage());
+        }
+        IntentPreviewToken token = claim.getToken();
+        requireToken(token, factoryId, actor.id());
+        if (!Objects.equals(proof.commandDigest(), token.getCommandDigest())) throw denied("确认摘要不匹配");
+        if (!LocalDateTime.now().isBefore(token.getExpiresAt())) throw denied("确认授权已过期");
+        Map<String, Object> parameters = parameters(token);
+        CreatePurchaseOrderRequest request = purchase(parameters);
+        var row = request.getItems().get(0);
+        requireReferences(factoryId, request.getSupplierId(), row.getMaterialTypeId());
+        String id = grantId(token.getId());
+        AiPurchaseTaskGrant grant = grants.issueConfirmedGrant(new PurchaseTaskGrantService.GrantSpec(
+                factoryId, actor.id(), VERSION, request.getSupplierId(), row.getMaterialTypeId(), row.getQuantity(),
+                "kg", row.getUnitPrice(), decimal(parameters, "amountCap"), text(parameters, "currency"),
+                row.getTaxRate(), token.getExpiresAt(), token.getId(), request), id);
+        requireGrantBinding(grant, token.getId(), factoryId, actor.id());
+        if (!previewTokens.resolveClaim(proof.proofToken(), claim.getClaimId(), true, "采购授权已确认，等待稍后执行")) {
+            throw denied("确认授权状态写入失败");
+        }
+        entityManager.flush();
+        registerDeferredGrantAdmission(factoryId, actor.id(), token.getId(), id, request, false);
+        return outcome(grant);
+    }
+
+    /** Execute a previously confirmed deferred grant. The request body carries only CAS state. */
+    @Transactional
+    public Outcome executeLater(String factoryId, String id, Long expectedVersion) {
+        AuthenticatedActor actor = identity(factoryId).actor();
+        if (expectedVersion == null || expectedVersion <= 0) throw denied("缺少授权版本");
+        long previewId = previewId(id);
+        IntentPreviewToken token = entityManager.find(IntentPreviewToken.class, previewId, LockModeType.PESSIMISTIC_WRITE);
+        requireToken(token, factoryId, actor.id());
+        AiPurchaseTaskGrant grant = grantRepository.findForUpdate(id, factoryId, actor.id())
+                .orElseThrow(() -> denied("未找到当前用户的采购授权"));
+        requireGrantBinding(grant, token.getId(), factoryId, actor.id());
+        if (grant.isConsumed()) {
+            if (grant.getVersion() == null || !Objects.equals(grant.getVersion(), expectedVersion + 1L)) {
+                throw denied("授权版本冲突");
+            }
+            return replay(factoryId, new ConfirmationProof(token.getToken(), token.getCommandDigest(),
+                    Instant.now())).orElseThrow(() -> denied("已消费授权结果不可读"));
+        }
+        authorize(factoryId);
+        if (token.getStatus() != IntentPreviewToken.TokenStatus.CONFIRMED) throw denied("授权尚未确认或结果未知");
+        if (!LocalDateTime.now().isBefore(token.getExpiresAt())) throw denied("确认授权已过期");
+        Map<String, Object> parameters = parameters(token);
+        CreatePurchaseOrderRequest request = purchase(parameters);
+        var row = request.getItems().get(0);
+        requireReferences(factoryId, request.getSupplierId(), row.getMaterialTypeId());
+        if (!Objects.equals(grant.getVersion(), expectedVersion)) {
+            throw denied("授权版本冲突");
+        }
+        var result = grants.executeGrant(new PurchaseTaskGrantService.ExecutionRequest(
+                id, expectedVersion, factoryId, actor.id(), VERSION,
+                "deferred:" + id, request));
+        entityManager.flush();
+        registerDeferredGrantAdmission(factoryId, actor.id(), token.getId(), id, request, true);
+        return new Outcome(id, "DRAFT", result.purchaseOrderId(), result.amount(), result.quantity(), result.grantVersion(), result.replay());
+    }
+
+    private void registerDeferredGrantAdmission(String factoryId, Long userId, Long previewId,
+                                                String grantId, CreatePurchaseOrderRequest request,
+                                                boolean consumedRequired) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void beforeCommit(boolean readOnly) {
+                entityManager.flush();
+                entityManager.clear();
+                AuthenticatedActor actor = authorize(factoryId);
+                if (!Objects.equals(actor.id(), userId)) throw denied("授权主体在提交前发生变化");
+                IntentPreviewToken current = entityManager.find(IntentPreviewToken.class, previewId,
+                        LockModeType.PESSIMISTIC_WRITE);
+                requireToken(current, factoryId, userId);
+                if (current.getStatus() != IntentPreviewToken.TokenStatus.CONFIRMED) {
+                    throw denied("授权状态在提交前发生变化");
+                }
+                if (!LocalDateTime.now().isBefore(current.getExpiresAt())) throw denied("确认授权已过期");
+                AiPurchaseTaskGrant currentGrant = grantRepository.findForUpdate(grantId, factoryId, userId)
+                        .orElseThrow(() -> denied("授权在提交前消失"));
+                requireGrantBinding(currentGrant, previewId, factoryId, userId);
+                if (consumedRequired != currentGrant.isConsumed()) throw denied("授权消费状态在提交前发生变化");
+                requireReferences(factoryId, request.getSupplierId(), request.getItems().get(0).getMaterialTypeId());
+            }
+        });
     }
 
     @Transactional(readOnly = true)

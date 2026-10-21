@@ -16,7 +16,6 @@
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1精确8文件仅修订收口；1073/7ce；见archive/2026-10-21-claude-s6-actual-intake.md。
 
 
-- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07八文件；见archive/2026-10-20-s1-deferred-grant.md。
 
 
 
