@@ -9,7 +9,8 @@ describe('建厂写后复核的同厂权限与移动端布局', () => {
   const acceptance = readFileSync(resolve(here, '..', 'components', 'FactoryBlueprintAcceptance.vue'), 'utf8')
 
   it('只有平台超管加载跨工厂选择器，工厂超管沿用 token 所属工厂', () => {
-    expect(page).toContain("authStore.hasRole('super_admin')")
+    // Behaviour with the real platform user shape is mounted in factoryReviewSelector.mount.spec.ts.
+    expect(page).toContain("authStore.hasRole('platform_admin')")
     expect(page).toContain('v-if="canSelectFactory"')
     expect(page).toContain('if (canSelectFactory.value)')
     expect(page).toContain('else if (!factoryId.value && authStore.factoryId)')
