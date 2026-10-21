@@ -31,7 +31,7 @@
  * 后的图表数字不一定完全一致 —— 已在 UI 上诚实标注，不伪装成对应 tab 的实时口径。
  * ============================================================
  */
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import FinancialDashboardPBI from './FinancialDashboardPBI.vue';
@@ -42,6 +42,7 @@ import IndicatorCenterDashboard from '@/views/indicator-center/IndicatorCenterDa
 import { resolveBusinessAnalysisTab, type BusinessAnalysisTab } from './businessAnalysisTab';
 import ChartInsights from './components/analysis/ChartInsights.vue';
 import AnalysisChatPanel from './components/analysis/AnalysisChatPanel.vue';
+import { ChatDotRound, Close } from '@element-plus/icons-vue';
 import { vReveal } from '@/composables/useReveal';
 import {
   financeOverviewBullets,
@@ -248,8 +249,14 @@ const analysisContexts = computed<AnalysisChartContext[]>(() => [
   },
 ]);
 
+// AI 分析面板放在右侧抽屉里, 默认收起: 看板占满宽度, 要问再打开 (不遮罩, 打开时仍可操作图表)。
+// 抽屉首次打开才渲染面板, 之后保留 (对话不丢)。
+const aiPanelOpen = ref(false);
 const analysisChatPanelRef = ref<InstanceType<typeof AnalysisChatPanel> | null>(null);
-function focusChart(key: string) {
+async function focusChart(key: string) {
+  aiPanelOpen.value = true;
+  await nextTick();
+  if (!analysisChatPanelRef.value) await nextTick();
   analysisChatPanelRef.value?.setFocus(key);
 }
 </script>
@@ -260,8 +267,20 @@ function focusChart(key: string) {
       <div class="bah-main">
         <!-- 财务/销售/趋势/KPI 全历史概览卡 (Hub 独立请求, 与下方各 tab 内部
              可自定义时间范围的图表相互独立 — 见 <script> 顶部说明) -->
-        <div class="bah-overview-note">
-          以下概览为全部历史数据的简要口径，独立于下方各标签页内的时间范围筛选，仅供 AI 分析面板参考。
+        <div class="bah-topbar">
+          <div class="bah-overview-note">
+            以下概览为全部历史数据的简要口径，独立于下方各标签页内的时间范围筛选，仅供 AI 分析面板参考。
+          </div>
+          <el-button
+            :type="aiPanelOpen ? 'primary' : 'default'"
+            :plain="aiPanelOpen"
+            :icon="ChatDotRound"
+            :aria-expanded="aiPanelOpen"
+            data-testid="bah-ai-toggle"
+            @click="aiPanelOpen = !aiPanelOpen"
+          >
+            AI 分析
+          </el-button>
         </div>
         <div class="bah-overview-grid">
           <el-card v-reveal="0" shadow="never" class="bah-overview-card">
@@ -341,10 +360,36 @@ function focusChart(key: string) {
         </el-tabs>
       </div>
 
-      <div class="bah-side">
-        <AnalysisChatPanel ref="analysisChatPanelRef" :factory-id="factoryId" :contexts="analysisContexts" page-title="经营分析" />
-      </div>
     </div>
+
+    <el-drawer
+      v-model="aiPanelOpen"
+      direction="rtl"
+      size="min(440px, 100vw)"
+      :with-header="false"
+      :modal="false"
+      modal-penetrable
+      :lock-scroll="false"
+      resizable
+      class="bah-ai-drawer"
+      data-testid="bah-ai-drawer"
+    >
+      <!-- 面板是共享组件 (餐饮页有逐字节版式对照), 关闭按钮放在抽屉这一层, 不改面板 -->
+      <el-button
+        class="bah-ai-close"
+        :icon="Close"
+        link
+        aria-label="关闭 AI 分析"
+        data-testid="bah-ai-close"
+        @click="aiPanelOpen = false"
+      />
+      <AnalysisChatPanel
+        ref="analysisChatPanelRef"
+        :factory-id="factoryId"
+        :contexts="analysisContexts"
+        page-title="经营分析"
+      />
+    </el-drawer>
   </div>
 </template>
 
@@ -363,30 +408,20 @@ function focusChart(key: string) {
   }
 }
 
-/* 主列(概览卡 + 原有 tabs) + 侧列(AI 分析面板) 响应式布局
-   (mirrors CRM member-analysis / 运营分析 / 平台分析) */
-.bah-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
-  gap: 16px;
-  align-items: start;
-}
-@media (max-width: 1280px) {
-  .bah-layout { grid-template-columns: 1fr; }
-}
+/* 看板占满宽度; AI 分析面板在右侧抽屉 (见 <el-drawer>), 不再固定占一列 */
 .bah-main { min-width: 0; }
-.bah-side {
-  position: sticky;
-  top: 16px;
-}
-@media (max-width: 1280px) {
-  .bah-side { position: static; }
+
+.bah-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
 }
 
 .bah-overview-note {
   font-size: 12px;
   color: var(--el-text-color-secondary, #909399);
-  margin-bottom: 10px;
   line-height: 1.5;
 }
 .bah-overview-grid {
@@ -418,5 +453,32 @@ function focusChart(key: string) {
   color: #f56c6c;
   font-size: 12px;
   padding: 4px 0;
+}
+</style>
+
+<style lang="scss">
+/* 抽屉挂在 body 上, scoped 样式够不着; 面板自己有边框和标题, 抽屉只给高度 */
+.bah-ai-drawer {
+  .el-drawer__body {
+    position: relative;
+    padding: 0;
+    display: flex;
+  }
+  .acp-panel {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+  }
+  /* 给右上角的关闭按钮让出位置 */
+  .acp-header {
+    padding-right: 52px;
+  }
+  .bah-ai-close {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    z-index: 1;
+    font-size: 18px;
+  }
 }
 </style>
