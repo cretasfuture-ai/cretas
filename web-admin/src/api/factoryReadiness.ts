@@ -24,6 +24,34 @@ export interface FactoryReadinessReport {
   businessAcceptanceState: 'UNVERIFIED'
   businessWriteCount: 0
   readAt: string
+  /** Added to v1 without a version bump; an older backend omits them, which the UI shows as unknown. */
+  stages?: FactoryReadinessStage[]
+  businessReadiness?: FactoryBusinessDomain[]
+}
+
+export type FactoryStageState = 'DONE' | 'PENDING' | 'UNKNOWN' | 'NOT_APPLICABLE'
+
+export interface FactoryReadinessStage {
+  key: 'CONFIRMATION' | 'BLUEPRINT_PUBLISHED' | 'CONFIGURATION_APPLIED' | 'FORMAL_RUNTIME' | 'BUSINESS_READY' | 'FIRST_BUSINESS'
+  label: string
+  state: FactoryStageState
+  evidence: string
+}
+
+export type FactoryRemedyKey = 'SUPPLIERS' | 'CUSTOMERS' | 'MATERIAL_TYPES' | 'PRODUCTS' | 'PRODUCT_PROCESSES' | 'WAREHOUSE_DEFAULTS'
+
+export interface FactoryBusinessDomain {
+  domain: 'PURCHASE' | 'PRODUCTION' | 'SHIPPING'
+  label: string
+  applicability: 'APPLICABLE' | 'NOT_APPLICABLE' | 'UNKNOWN'
+  applicabilityBasis: string
+  state: 'READY' | 'MISSING' | 'UNKNOWN' | 'NOT_APPLICABLE'
+  checks: Array<{
+    code: string; label: string; state: 'MET' | 'MISSING' | 'UNKNOWN'; detail: string
+    remedyKey: FactoryRemedyKey; remedyLabel: string
+  }>
+  notChecked: string[]
+  firstRecord: { state: 'RECORDED' | 'NONE' | 'UNKNOWN'; count: number | null; detail: string }
 }
 
 export async function getFactoryReadiness(factoryId: string, blueprintId: string): Promise<FactoryReadinessReport> {

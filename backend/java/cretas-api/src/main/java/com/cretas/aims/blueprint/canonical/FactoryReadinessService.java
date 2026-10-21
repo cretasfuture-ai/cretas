@@ -41,6 +41,7 @@ public class FactoryReadinessService {
     private final FactoryBlueprintBindingRepository bindings;
     private final FactoryIndicatorApplicabilityService indicators;
     private final ProductWorkflowResolutionService resolution;
+    private final FactoryBusinessReadinessReader business;
 
     public FactoryReadinessReport read(String factoryId, String blueprintId) {
         return committed.read(() -> {
@@ -59,13 +60,59 @@ public class FactoryReadinessService {
                     "当前候选配置与已应用版本分别记录；预览或新草稿不会替换既有工艺与历史单据"))
                     .orElse(new FactoryReadinessReport.AppliedVersion(null, null, true,
                             "未找到已应用版本绑定，不能把候选蓝图当作运行配置"));
+            var runtime = runtime(factoryId);
+            var domains = business.read(factoryId, blueprint.getCapabilities(), runtime);
             return new FactoryReadinessReport("factory-readiness/v1", factoryId, blueprintId,
                     blueprint.getVersion(), blueprint.getRowVersion(), blueprint.getLifecycleState(),
                     safe(blueprint.getCapabilities()).stream().map(FactoryReadinessService::capability).toList(),
-                    runtime(factoryId), appliedView,
+                    runtime, appliedView,
                     indicators.assessPlanned(factoryId, plannedProducts(blueprint)), indicators.assess(factoryId),
-                    "UNVERIFIED", 0, LocalDateTime.now());
+                    "UNVERIFIED", 0, LocalDateTime.now(),
+                    stages(blueprint, appliedView, runtime, domains), domains);
         });
+    }
+
+    /**
+     * Five separately evidenced stages. Each reads its own fact; none is inferred from another
+     * (a READY catalog, an applied blueprint or an HTTP 200 never marks a later stage done).
+     */
+    static List<FactoryReadinessReport.Stage> stages(BlueprintResponse blueprint,
+            FactoryReadinessReport.AppliedVersion applied, List<FactoryReadinessReport.ProductRuntime> runtime,
+            List<FactoryReadinessReport.BusinessDomain> domains) {
+        var capabilities = safe(blueprint.getCapabilities());
+        String confirmation = capabilities.isEmpty() ? "UNKNOWN"
+                : capabilities.stream().allMatch(row -> "CONFIRMED".equals(row.getConfirmationState())) ? "DONE"
+                : "PENDING";
+        String lifecycle = blueprint.getLifecycleState();
+        String published = List.of("PUBLISHED", "APPLIED", "SUPERSEDED").contains(lifecycle) ? "DONE"
+                : List.of("DRAFT", "VALIDATED").contains(lifecycle) ? "PENDING" : "UNKNOWN";
+        boolean appliedThis = applied.version() != null && !applied.candidateDiffers();
+        long live = runtime.stream().filter(row -> "PUBLISHED".equals(row.state())).count();
+        String formal = !runtime.isEmpty() && live == runtime.size() ? "DONE" : "PENDING";
+        var applicable = domains.stream().filter(row -> !"NOT_APPLICABLE".equals(row.applicability())).toList();
+        String ready = applicable.isEmpty() ? "NOT_APPLICABLE"
+                : applicable.stream().anyMatch(row -> "UNKNOWN".equals(row.state())) ? "UNKNOWN"
+                : applicable.stream().allMatch(row -> "READY".equals(row.state())) ? "DONE" : "PENDING";
+        String first = applicable.isEmpty() ? "NOT_APPLICABLE"
+                : applicable.stream().anyMatch(row -> "UNKNOWN".equals(row.firstRecord().state())) ? "UNKNOWN"
+                : applicable.stream().allMatch(row -> "RECORDED".equals(row.firstRecord().state())) ? "DONE"
+                : "PENDING";
+        return List.of(
+                new FactoryReadinessReport.Stage("CONFIRMATION", "资料确认", confirmation,
+                        capabilities.isEmpty() ? "蓝图没有能力清单" : "蓝图确认记录"),
+                new FactoryReadinessReport.Stage("BLUEPRINT_PUBLISHED", "蓝图发布", published,
+                        "蓝图状态 " + Objects.toString(lifecycle, "未知")),
+                new FactoryReadinessReport.Stage("CONFIGURATION_APPLIED", "配置应用到本厂", appliedThis ? "DONE" : "PENDING",
+                        applied.version() == null ? "没有已应用版本绑定"
+                                : appliedThis ? "已应用第" + applied.version() + "版"
+                                : "已应用的是第" + applied.version() + "版，不是当前候选"),
+                new FactoryReadinessReport.Stage("FORMAL_RUNTIME", "工艺与BOM正式生效", formal,
+                        runtime.isEmpty() ? "尚无在用成品" : live + "/" + runtime.size() + " 个在用成品已生效并匹配"),
+                new FactoryReadinessReport.Stage("BUSINESS_READY", "采购/生产/发货就绪", ready,
+                        applicable.stream().map(row -> row.label() + "：" + row.state()).collect(Collectors.joining("；"))),
+                new FactoryReadinessReport.Stage("FIRST_BUSINESS", "首笔业务", first,
+                        applicable.stream().map(row -> row.label() + "：" + row.firstRecord().state())
+                                .collect(Collectors.joining("；"))));
     }
 
     static FactoryReadinessReport.Capability capability(CapabilityView capability) {
