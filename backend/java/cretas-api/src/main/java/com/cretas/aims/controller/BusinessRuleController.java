@@ -182,6 +182,7 @@ public class BusinessRuleController {
         if (body.getEnabled() != null) config.setEnabled(body.getEnabled());
         if (body.getToolOrMethod() != null) config.setToolOrMethod(body.getToolOrMethod());
         if (body.getParams() != null) config.setParams(body.getParams());
+        dynamicSchedulerService.requireSchedulable(config.getToolOrMethod(), config.getParams());
         FactorySchedulerConfig saved = schedulerRepo.save(config);
         dynamicSchedulerService.reloadSchedule(factoryId, taskCode);
         return ApiResponse.success(saved);

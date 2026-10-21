@@ -225,10 +225,24 @@ public class TriggerChainExecutor {
                 continue;
             }
 
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) step.getOrDefault("params", Map.of());
             stepAttempts++;
+            // An event chain runs with no user: refused steps count as failures, never as silent skips.
+            String refusal = AutonomousToolPolicy.rejection(toolName, executor.get(), params);
+            if (refusal != null) {
+                stepFailures++;
+                if (errorSummary.length() > 0) errorSummary.append("; ");
+                errorSummary.append(toolName).append(": ").append(refusal);
+                chainContext.put("step" + order, Map.of("success", false, "error", refusal));
+                log.warn("Chain {} step {} refused: {}", chain.getChainCode(), toolName, refusal);
+                if ("STOP".equals(chain.getErrorStrategy())) {
+                    self.persistExecutionMetadata(chain, startedAt, "FAILED", errorSummary.toString());
+                    return;
+                }
+                continue;
+            }
             try {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> params = (Map<String, Object>) step.getOrDefault("params", Map.of());
 
                 // Build proper ToolCall with JSON-serialized arguments
                 String argsJson = objectMapper.writeValueAsString(params);
