@@ -168,6 +168,82 @@ class AutonomousToolExecutionContractTest {
         verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"), contains("dictionary_add"));
     }
 
+    @Test void missingBlankOrUnregisteredToolIsAFailureNeverASilentSuccess() throws Exception {
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        FactoryTriggerChain unregistered = chain("CONTINUE", List.of(step(1, "no_such_tool", Map.of())));
+        FactoryTriggerChain blank = chain("CONTINUE", List.of(step(1, " ", Map.of())));
+        FactoryTriggerChain missing = chain("CONTINUE", List.of(Map.of("order", 1, "params", Map.of())));
+        FactoryTriggerChain mixed = chain("CONTINUE", List.of(step(1, "no_such_tool", Map.of()), step(2, "stock_summary", Map.of())));
+
+        for (FactoryTriggerChain chain : List.of(unregistered, blank, missing, mixed)) runChain(executor, chain);
+
+        verify(self).persistExecutionMetadata(eq(unregistered), any(LocalDateTime.class), eq("FAILED"),
+                contains("tool not registered: no_such_tool"));
+        verify(self).persistExecutionMetadata(eq(blank), any(LocalDateTime.class), eq("FAILED"), contains("step has no tool"));
+        verify(self).persistExecutionMetadata(eq(missing), any(LocalDateTime.class), eq("FAILED"), contains("step has no tool"));
+        verify(self).persistExecutionMetadata(eq(mixed), any(LocalDateTime.class), eq("PARTIAL"), contains("no_such_tool"));
+        verify(readTool, times(1)).execute(any(), any());
+    }
+
+    @Test void stopHaltsAtAnUnregisteredToolWhileContinueRunsTheNextStep() throws Exception {
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        List<Map<String, Object>> steps = List.of(step(1, "no_such_tool", Map.of()), step(2, "stock_summary", Map.of()));
+        FactoryTriggerChain stop = chain("STOP", steps);
+        runChain(executor, stop);
+        verify(readTool, never()).execute(any(), any());
+        verify(self).persistExecutionMetadata(eq(stop), any(LocalDateTime.class), eq("FAILED"), contains("no_such_tool"));
+
+        FactoryTriggerChain proceed = chain("CONTINUE", steps);
+        runChain(executor, proceed);
+        verify(readTool, times(1)).execute(any(), any());
+    }
+
+    @Test void toolDisabledForTheFactoryIsReportedNotRunAndNotSuccess() throws Exception {
+        when(registry.isToolEnabledForFactory("F001", "stock_summary")).thenReturn(false);
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        FactoryTriggerChain chain = chain("CONTINUE", List.of(step(1, "stock_summary", Map.of())));
+        runChain(executor, chain);
+        verify(readTool, never()).execute(any(), any());
+        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"),
+                contains("tool disabled for this factory: stock_summary"));
+    }
+
+    @Test void malformedStepFieldsAreCountedFailuresInsteadOfAbortingTheChain() throws Exception {
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        FactoryTriggerChain chain = chain("CONTINUE", List.of(
+                Map.of("order", 1, "tool", "stock_summary", "enabled", "yes"),
+                Map.of("order", "two", "tool", "stock_summary"),
+                Map.of("order", 3, "tool", 42),
+                Map.of("order", 4, "tool", "stock_summary", "condition", 7),
+                step(5, "stock_summary", Map.of())));
+        runChain(executor, chain);
+        verify(readTool, times(1)).execute(any(), any());
+        ArgumentCaptor<String> error = ArgumentCaptor.forClass(String.class);
+        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("PARTIAL"), error.capture());
+        assertThat(error.getValue()).contains("step enabled must be true or false", "step order must be a number",
+                "step has no tool", "step condition must be text");
+    }
+
+    @Test void chainWithNoDueStepIsSkippedNotSuccess() throws Exception {
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        FactoryTriggerChain chain = chain("CONTINUE", List.of(
+                Map.of("order", 1, "tool", "stock_summary", "enabled", false),
+                Map.of("order", 2, "tool", "no_such_tool", "enabled", false)));
+        runChain(executor, chain);
+        verify(readTool, never()).execute(any(), any());
+        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("SKIPPED"), isNull());
+    }
+
     private void runScheduled(FactorySchedulerConfig config) throws Exception {
         Method run = DynamicSchedulerService.class.getDeclaredMethod("executeTask", FactorySchedulerConfig.class);
         run.setAccessible(true);
