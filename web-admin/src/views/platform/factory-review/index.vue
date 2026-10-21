@@ -412,7 +412,8 @@ const REVIEW_CLASSES: ReviewClass[] = [
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const canSelectFactory = computed(() => authStore.hasRole('super_admin'))
+// currentRole normalizes a platform super_admin to platform_admin (store/modules/auth.ts).
+const canSelectFactory = computed(() => authStore.hasRole('platform_admin'))
 
 /**
  * 「你登录的厂」与「你在复核的厂」是不是同一家。
