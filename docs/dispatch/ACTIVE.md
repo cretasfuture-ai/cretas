@@ -1,16 +1,18 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-10-03（#855 经营报告界面验收完成，ACCEPT-OPERATING-REPORTS-855-20261003 移入 archive；其余未动）
+**最后更新**：2026-10-21（S1-04原QA通过、Claude S6小批登记；S0/S1仍未通过）
 **上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
 
 ## 在飞任务
 
+- `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 7ceacffafd5d34de536dd19862cf5eb3232a1d58 — PR1075/84a实际21文件交付HOLD；未来writeScope=[]；见archive/2026-10-21-claude-s6-actual-intake.md。
+
 
 
 - `ERP-S2-READINESS-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 47059a443e2b41218578c03a4cd8b293f2de1914 — PR1069已合405d；3缺陷/ACK待补，见archive/2026-10-21-claude-s2-s6-registration.md。
 
-- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — writeScope=[]；见archive/2026-10-21-claude-s2-s6-registration.md。
+- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1精确8文件仅修订收口；1073/7ce；见archive/2026-10-21-claude-s6-actual-intake.md。
 
 
 - `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07八文件；见archive/2026-10-20-s1-deferred-grant.md。
@@ -21,7 +23,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S0/S1未通过；QA独占；见archive/2026-10-20-s1-supplier-entry.md。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-04已原QA通过；75=10/1/64，S0/S1未完；见archive/2026-10-21-s1-supplier-acceptance.md。
 
 
 
@@ -100,6 +102,10 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `ERP-S6-B2-CLAUDE-20261021`：实际21文件只接收review/HOLD；writeScope=[]，Entity/V72/JPA及共享DataScope/runtime policy分别列档，不放开采购/供应商/Gateway目录。
+
+- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021`：仅archive/2026-10-21-claude-s6-actual-intake.md列B1精确8文件修订；Owner不变，不回溯批准先写后登记。
 
 - `ERP-S2-READINESS-CLAUDE-20261021`：Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；九文件及门禁见archive/2026-10-21-claude-s2-s6-registration.md；ACK待补/HOLD。
 
