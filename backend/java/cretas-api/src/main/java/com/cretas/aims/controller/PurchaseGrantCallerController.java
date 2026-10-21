@@ -17,12 +17,12 @@ public class PurchaseGrantCallerController {
     @PostMapping("/execute-tool")
     public ApiResponse<ControlledPurchaseTaskExecutionService.Outcome> tool(@PathVariable String factoryId,
             @PathVariable String grantId, @Valid @RequestBody AiPurchaseTaskGrantController.ExecuteLaterRequest request) {
-        return ApiResponse.success(callers.execute(factoryId, grantId, request.expectedVersion(), PurchaseGrantCallerService.Channel.TOOL));
+        return ApiResponse.success(callers.executeGrant(factoryId, grantId, request.expectedVersion(), PurchaseGrantCallerService.Channel.TOOL));
     }
 
     @PostMapping("/execute-skill")
     public ApiResponse<ControlledPurchaseTaskExecutionService.Outcome> skill(@PathVariable String factoryId,
             @PathVariable String grantId, @Valid @RequestBody AiPurchaseTaskGrantController.ExecuteLaterRequest request) {
-        return ApiResponse.success(callers.execute(factoryId, grantId, request.expectedVersion(), PurchaseGrantCallerService.Channel.SKILL));
+        return ApiResponse.success(callers.executeGrant(factoryId, grantId, request.expectedVersion(), PurchaseGrantCallerService.Channel.SKILL));
     }
 }

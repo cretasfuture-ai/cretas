@@ -235,10 +235,10 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
         var token = authorize();
         replacePurchaseBoundaryWithRealService();
         String id = "preview-" + token.getId();
-        var first = callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.TOOL);
+        var first = callers.executeGrant(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.TOOL);
         assertThat(first.state()).isEqualTo("DRAFT");
         assertThat(first.replay()).isFalse();
-        var replay = callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.SKILL);
+        var replay = callers.executeGrant(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.SKILL);
         assertThat(replay.replay()).isTrue();
         assertThat(replay.purchaseOrderId()).isEqualTo(first.purchaseOrderId());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders WHERE factory_id=?", Long.class, FACTORY)).isEqualTo(1L);
@@ -255,7 +255,7 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
     @Test void actualSkillCreatesOnlyTheConfirmedDraftAndKeepsOriginalTaskCaps() {
         var token = authorize();
         replacePurchaseBoundaryWithRealService();
-        var result = callers.execute(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL);
+        var result = callers.executeGrant(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL);
         assertThat(result.state()).isEqualTo("DRAFT");
         assertThat(result.quantity()).isEqualByComparingTo("2");
         assertThat(result.grossAmount()).isEqualByComparingTo("22.6");
@@ -269,7 +269,7 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
         var token = authorize();
         String id = "preview-" + token.getId();
         service.revoke(FACTORY, id, 1L, "isolated caller contract");
-        assertThatThrownBy(() -> callers.execute(FACTORY, id, 2L, PurchaseGrantCallerService.Channel.TOOL))
+        assertThatThrownBy(() -> callers.executeGrant(FACTORY, id, 2L, PurchaseGrantCallerService.Channel.TOOL))
                 .hasMessageContaining("revoked");
         assertThat(grants.findById(id).orElseThrow().isConsumed()).isFalse();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal' AND is_success=FALSE", Long.class, FACTORY)).isEqualTo(1L);
@@ -284,7 +284,7 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
             persisted.setExpiresAt(java.time.LocalDateTime.now().minusSeconds(1));
             em.flush();
         });
-        assertThatThrownBy(() -> callers.execute(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL))
+        assertThatThrownBy(() -> callers.executeGrant(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL))
                 .hasMessageContaining("过期");
         assertThat(grants.findById("preview-" + token.getId()).orElseThrow().isConsumed()).isFalse();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal'", Long.class, FACTORY)).isEqualTo(1L);
@@ -295,7 +295,7 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
     @Test void actualSkillRechecksCurrentAuthorizationDespiteOldConfirmedGrant() {
         var token = authorize();
         when(policy.rehydrate(any())).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> callers.execute(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL))
+        assertThatThrownBy(() -> callers.executeGrant(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL))
                 .hasMessageContaining("当前授权不可用");
         assertThat(grants.findById("preview-" + token.getId()).orElseThrow().isConsumed()).isFalse();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal'", Long.class, FACTORY)).isEqualTo(1L);
@@ -310,12 +310,12 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
         request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, OTHER_USER, FACTORY, "purchaser"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-        assertThatThrownBy(() -> callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.SKILL))
+        assertThatThrownBy(() -> callers.executeGrant(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.SKILL))
                 .hasMessageContaining("不属于当前采购范围");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND user_id=? AND question_type='grant_refusal'", Long.class, FACTORY, OTHER_USER)).isEqualTo(1L);
         request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
                 new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, USER, FACTORY, "platform_admin"));
-        assertThatThrownBy(() -> callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.TOOL))
+        assertThatThrownBy(() -> callers.executeGrant(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.TOOL))
                 .hasMessageContaining("可信采购登录主体");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal'", Long.class, FACTORY)).isEqualTo(1L);
         assertThat(grants.findById(id).orElseThrow().isConsumed()).isFalse();

@@ -38,3 +38,8 @@ Architecture completion within same11: both fixed server adapters use the existi
 - No Entity/Repository/schema/global policy change. Existing one-shot and all canonical expiry/revoke/current authorization/ownership/reference/caps/CAS/UNKNOWN/idempotency/beforeCommit guards remain in the unchanged controlled service. No scheduler/TriggerChain/Gateway/ToolDispatch/Claude source touched.
 - Source locked/frozen for this candidate; this commit archives its in-flight row and scope map so scope release becomes effective only when the reviewed candidate is merged. Same private Source ownership/reservation retained until merge; no other writer or task transfer.
 - Final CI, ordinary exact-head merge, official exact-main Java/Web release, original QA real UI/SQL are still pending at source freeze. Production remains78e; original QA D completed separately on that runtime. Whole07 stays UNTESTED and parent75 stays13PASS/1FAIL/61UNTESTED.
+
+
+## Frozen-candidate fast-gate delta
+
+PR1090/394ef fast run39691053284 retained 4485 cases/2 assertion failures/0errors/74skips. New execute/4 Long version caused the existing actor-scanner ambiguity rule to hide its unchanged SmartBI frozen station. Rename only the new service method to executeGrant and synchronize controller/caller/lifecycle calls within the same scope. No scanner, frozen baseline, permission or business assertion edits. Prior official artifact is staged history only until a new matching backend tree is built. Add unchanged HardcodedActorIdContractTest to the release selector and validate the final delta; existing Web tree and unchanged security controls reuse exact-content evidence.

@@ -92,7 +92,7 @@ class PurchaseGrantCallerContractTest {
         }
     }
     @Test void realToolReachesCanonicalControlledExecutionWithOnlyTaskAndCas() throws Exception {
-        assertThat(service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL).purchaseOrderId()).isEqualTo("PO-ONLY-DRAFT");
+        assertThat(service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL).purchaseOrderId()).isEqualTo("PO-ONLY-DRAFT");
         var call = org.mockito.ArgumentCaptor.forClass(ToolCall.class);
         verify(tool).execute(call.capture(), anyMap());
         var args = mapper.readTree(call.getValue().getFunction().getArguments());
@@ -110,7 +110,7 @@ class PurchaseGrantCallerContractTest {
     }
     @Test void realSkillReachesRealToolAndMarkerNeverEntersArgumentsOrBusinessContext() throws Exception {
         var result = new java.util.concurrent.atomic.AtomicReference<ControlledPurchaseTaskExecutionService.Outcome>();
-        assertThatCode(() -> result.set(service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL))).doesNotThrowAnyException();
+        assertThatCode(() -> result.set(service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL))).doesNotThrowAnyException();
         assertThat(result.get().state()).isEqualTo("DRAFT");
         var call = org.mockito.ArgumentCaptor.forClass(ToolCall.class);
         @SuppressWarnings("unchecked") var context = org.mockito.ArgumentCaptor.forClass(Map.class);
@@ -124,16 +124,16 @@ class PurchaseGrantCallerContractTest {
     @Test void missingRequestAndAsyncOnlyIdentityCannotBecomeScheduledPurchasingAuthority() {
         RequestContextHolder.resetRequestAttributes();
         try (var scope = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1698L, "F006", "procurement_manager"))) {
-            assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("可信采购登录主体");
+            assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("可信采购登录主体");
         }
         assertThat(AuthenticatedActor.fromCurrentExecution()).isEmpty();
         verifyNoInteractions(controlled, tool);
     }
     @Test void platformNumericCollisionAndForeignTenantAreRefusedBeforeTaskLookup() {
         actor(AuthenticatedActorType.PLATFORM_ADMIN, 1698L, "F006");
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL)).hasMessageContaining("可信采购登录主体");
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL)).hasMessageContaining("可信采购登录主体");
         actor(AuthenticatedActorType.FACTORY_USER, 1698L, "F007");
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("可信采购登录主体");
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("可信采购登录主体");
         verifyNoInteractions(controlled, tool);
     }
     @Test void ownerAndFactoryAreReadFromRealRequestRatherThanPayloadAliases() throws Exception {
@@ -146,24 +146,24 @@ class PurchaseGrantCallerContractTest {
     }
     @Test void disabledToolAndPermissionDenialCannotReachExecution() throws Exception {
         when(registry.isToolEnabledForFactory("F006", PurchaseGrantExecuteTool.NAME)).thenReturn(false);
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL)).hasMessageContaining("停用");
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL)).hasMessageContaining("停用");
         when(registry.isToolEnabledForFactory("F006", PurchaseGrantExecuteTool.NAME)).thenReturn(true);
         when(permissions.denyReason(any(), any(), any(), any(), any())).thenReturn(Optional.of("当前采购权限已撤销"));
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("权限已撤销");
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("权限已撤销");
         verify(controlled, never()).executeLater(any(), any(), any());
         verify(tool, never()).execute(any(), any());
         verify(audit, times(2)).record(eq("F006"), eq(GRANT), any());
     }
     @Test void skillWrapperSuccessCannotHideInnerRefusalAndAuditIsOnce() {
         when(controlled.executeLater("F006", GRANT, 1L)).thenThrow(new BusinessException(403, "确认授权已过期"));
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL))
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("已过期").hasMessageContaining("grant-refusal:test");
         verify(controlled, times(1)).executeLater("F006", GRANT, 1L);
         verify(audit, times(1)).record(eq("F006"), eq(GRANT), any());
     }
     @Test void unknownCommitOutcomeIsNotAuditedAsConfirmedRefusalOrAutomaticallyRetried() {
         when(controlled.executeLater("F006", GRANT, 1L)).thenThrow(new IllegalStateException("connection lost after commit"));
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL))
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
         verify(controlled, times(1)).executeLater("F006", GRANT, 1L);
         verifyNoInteractions(audit);
@@ -171,13 +171,13 @@ class PurchaseGrantCallerContractTest {
     @Test void auditUnavailableCannotBeReportedAsConfirmedAuditSuccess() {
         when(controlled.executeLater("F006", GRANT, 1L)).thenThrow(new BusinessException(403, "授权已撤销"));
         when(audit.record(any(), any(), any())).thenThrow(new IllegalStateException("audit unavailable"));
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL))
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
         verify(controlled, times(1)).executeLater("F006", GRANT, 1L);
     }
     @Test void invalidTaskAndVersionCannotReachTaskLookup() {
-        assertThatThrownBy(() -> service.execute("F006", "arbitrary-task", 1L, PurchaseGrantCallerService.Channel.TOOL)).hasMessageContaining("参考或版本");
-        assertThatThrownBy(() -> service.execute("F006", GRANT, 0L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("参考或版本");
+        assertThatThrownBy(() -> service.executeGrant("F006", "arbitrary-task", 1L, PurchaseGrantCallerService.Channel.TOOL)).hasMessageContaining("参考或版本");
+        assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 0L, PurchaseGrantCallerService.Channel.SKILL)).hasMessageContaining("参考或版本");
         verifyNoInteractions(controlled, tool);
     }
     @Test void actualControllerStrictBodyRejectsCallerAuthorityAndCommandBeforeAnyTaskLookup() throws Exception {
@@ -220,16 +220,16 @@ class PurchaseGrantCallerContractTest {
         var request = new MockHttpServletRequest();
         request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER,1698L,"F006","operator"));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-        assertThatCode(() -> assertThat(actual.execute("F006", GRANT, 1L, channel).state()).isEqualTo("DRAFT")).doesNotThrowAnyException();
+        assertThatCode(() -> assertThat(actual.executeGrant("F006", GRANT, 1L, channel).state()).isEqualTo("DRAFT")).doesNotThrowAnyException();
         verify(controlled, times(1)).executeLater("F006", GRANT, 1L);
         verify(matrix, atLeastOnce()).hasAnyPermission(eq(user), eq("procurement:read_write"));
         when(matrix.hasAnyPermission(eq(user), any(String[].class))).thenReturn(false);
-        assertThatThrownBy(() -> actual.execute("F006", GRANT, 1L, channel)).hasMessageContaining("没有权限");
+        assertThatThrownBy(() -> actual.executeGrant("F006", GRANT, 1L, channel)).hasMessageContaining("没有权限");
         when(matrix.hasAnyPermission(eq(user), any(String[].class))).thenReturn(true);
         when(grants.findByFactoryIdAndRevokedAtIsNull("F006")).thenReturn(java.util.List.of());
         when(grants.findByFactoryIdAndRevokedAtIsNull("F007")).thenReturn(java.util.List.of(row));
         frontline.evict("F006");
-        assertThatThrownBy(() -> actual.execute("F006", GRANT, 1L, channel)).hasMessageContaining("还没有对");
+        assertThatThrownBy(() -> actual.executeGrant("F006", GRANT, 1L, channel)).hasMessageContaining("还没有对");
         verify(controlled, times(1)).executeLater("F006", GRANT, 1L);
         verify(audit, times(2)).record(eq("F006"), eq(GRANT), any());
     }

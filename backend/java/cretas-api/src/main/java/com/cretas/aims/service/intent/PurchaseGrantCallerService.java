@@ -34,7 +34,7 @@ public class PurchaseGrantCallerService {
     private final WriteGuardService writeGuard;
     private final ObjectMapper mapper;
 
-    public ControlledPurchaseTaskExecutionService.Outcome execute(String factory, String grant, Long version, Channel channel) {
+    public ControlledPurchaseTaskExecutionService.Outcome executeGrant(String factory, String grant, Long version, Channel channel) {
         AuthenticatedActor actor;
         var registry = tools.getObject();
         com.cretas.aims.ai.tool.ToolExecutor tool;
