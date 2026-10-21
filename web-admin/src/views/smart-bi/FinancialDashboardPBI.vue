@@ -989,10 +989,13 @@ watch(() => charts.value.length, async () => {
           renderGenericChart(chartType, domEl);
         }
       }
-      // Fallback: render any charts whose cards are in DOM but observer hasn't fired yet
+      // Fallback: render any chart container that is laid out but still has no ECharts instance.
+      // ⚠️ 判据是「画布有没有初始化」而不是 visibleCharts: revealAllCharts() 在这 500ms 内
+      // 就把所有类型标成可见, 旧判据会跳过 Tab 视图的画布 (它没有 IntersectionObserver 兜底),
+      // 结果首次加载 Tab 视图一张图都不画, 切一次标签才出现。
       setTimeout(() => {
         for (const [chartType, domEl] of chartDomRefs.value.entries()) {
-          if (!visibleCharts.has(chartType) && domEl.clientHeight > 0) {
+          if (domEl.clientHeight > 0 && !echarts.getInstanceByDom(domEl)) {
             visibleCharts.add(chartType);
             renderGenericChart(chartType, domEl);
           }
