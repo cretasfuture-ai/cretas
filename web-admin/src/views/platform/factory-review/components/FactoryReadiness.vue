@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
-import { getFactoryReadiness, type FactoryReadinessReport } from '@/api/factoryReadiness'
+import { getFactoryReadiness, type FactoryReadinessReport, type FactoryRemedyKey } from '@/api/factoryReadiness'
 import IndicatorApplicability from '@/components/indicators/IndicatorApplicability.vue'
+import { useAuthStore } from '@/store/modules/auth'
 
 const props = defineProps<{ factoryId: string; blueprintId: string; rowVersion: number; actorKey?: string; refreshKey?: number }>()
 const report = ref<FactoryReadinessReport | null>(null)
@@ -14,6 +15,20 @@ const context = () => JSON.stringify([props.factoryId, props.blueprintId, props.
 const visible = computed(() => report.value?.capabilities.filter(row => showAll.value || row.stage !== 'NOT_APPLICABLE') ?? [])
 const stageLabel = { NOT_APPLICABLE: '本次不适用', BLOCKED: '需要调整', WAITING_CONFIGURATION: '待配置接通', WAITING_REVIEW: '待配置验收', CONFIGURATION_ACCEPTED: '配置已验收' }
 const accepted = computed(() => report.value?.capabilities.filter(row => row.stage === 'CONFIGURATION_ACCEPTED').length ?? 0)
+const stageState = { DONE: '已完成', PENDING: '未完成', UNKNOWN: '无法判断', NOT_APPLICABLE: '本次不适用' }
+const domainState = { READY: '可以开展', MISSING: '还差资料', UNKNOWN: '无法判断', NOT_APPLICABLE: '本次不适用' }
+const firstState = { RECORDED: '已有单据', NONE: '尚无单据', UNKNOWN: '无法判断' }
+const tagType = (state: string) => ['DONE', 'READY', 'MET', 'RECORDED'].includes(state) ? 'success'
+  : ['PENDING', 'MISSING'].includes(state) ? 'warning' : 'info'
+// Existing maintenance pages; they read the signed-in account's own factory, not the reviewed one.
+const remedyPath: Record<FactoryRemedyKey, string> = {
+  SUPPLIERS: '/procurement/suppliers', CUSTOMERS: '/sales/customers', MATERIAL_TYPES: '/warehouse/material-types',
+  PRODUCTS: '/system/products', PRODUCT_PROCESSES: '/system/product-processes', WAREHOUSE_DEFAULTS: '/canvas-editor',
+}
+const authStore = useAuthStore()
+const ownFactory = computed(() => Boolean(props.factoryId) && authStore.factoryId === props.factoryId)
+const missingChecks = (domain: NonNullable<FactoryReadinessReport['businessReadiness']>[number]) =>
+  domain.checks.filter(check => check.state !== 'MET')
 
 async function load() {
   const own = ++sequence; const identity = context()
@@ -55,6 +70,45 @@ onBeforeUnmount(() => { alive = false; ++sequence })
         <el-tag v-if="report.appliedVersion.candidateDiffers" type="warning">候选与运行版本分开保留</el-tag>
         <span>配置已验收 {{ accepted }} 项；日常业务签署待确认</span>
       </div>
+      <h4>建厂阶段</h4>
+      <p>每一段读各自的记录，前一段完成不代表后一段完成。</p>
+      <el-alert v-if="!report.stages?.length" type="info" :closable="false" data-testid="stages-unavailable"
+        title="服务端没有返回阶段状态，无法判断资料确认、发布与业务就绪" />
+      <ol v-else class="stage-list" data-testid="readiness-stages">
+        <li v-for="stage in report.stages" :key="stage.key">
+          <span class="stage-label">{{ stage.label }}</span>
+          <el-tag size="small" :type="tagType(stage.state)">{{ stageState[stage.state] }}</el-tag>
+          <span class="stage-evidence">{{ stage.evidence }}</span>
+        </li>
+      </ol>
+      <h4>能否开展采购、生产、发货</h4>
+      <el-alert v-if="!report.businessReadiness?.length" type="info" :closable="false" data-testid="business-unavailable"
+        title="服务端没有返回业务就绪状态，不能据此判断可以开工" />
+      <template v-else>
+        <el-alert v-if="!ownFactory" type="warning" :closable="false" show-icon class="cross-factory"
+          title="补齐页面只显示登录账号所属工厂的数据"
+          description="请由这家工厂的管理员登录后，在下面列出的页面补齐，保存后回到这里点「刷新核对」。" />
+        <div v-for="domain in report.businessReadiness" :key="domain.domain" class="domain" :data-testid="`domain-${domain.domain}`">
+          <div class="domain-head">
+            <strong>{{ domain.label }}</strong>
+            <el-tag size="small" :type="tagType(domain.state)">{{ domainState[domain.state] }}</el-tag>
+            <span class="domain-basis">{{ domain.applicabilityBasis }}</span>
+          </div>
+          <ul v-if="domain.applicability === 'APPLICABLE' && missingChecks(domain).length" class="missing">
+            <li v-for="check in missingChecks(domain)" :key="check.code">
+              <span>{{ check.label }}：{{ check.state === 'UNKNOWN' ? '无法判断' : '缺少' }}（{{ check.detail }}）</span>
+              <router-link v-if="ownFactory" :to="{ path: remedyPath[check.remedyKey] }" class="remedy">去「{{ check.remedyLabel }}」补齐</router-link>
+              <span v-else class="remedy">由工厂管理员在「{{ check.remedyLabel }}」补齐</span>
+            </li>
+          </ul>
+          <p v-if="domain.applicability !== 'NOT_APPLICABLE'" class="domain-note">
+            首笔业务：{{ firstState[domain.firstRecord.state] }}，{{ domain.firstRecord.detail }}
+          </p>
+          <p v-if="domain.applicability !== 'NOT_APPLICABLE' && domain.notChecked.length" class="domain-note">
+            未检查：{{ domain.notChecked.join('；') }}
+          </p>
+        </div>
+      </template>
       <el-switch v-model="showAll" active-text="同时显示本次不适用项" />
       <el-table :data="visible" size="small" empty-text="本次尚未选择配置能力">
         <el-table-column prop="label" label="能力" min-width="150" />
@@ -84,5 +138,16 @@ onBeforeUnmount(() => { alive = false; ++sequence })
 .version-summary { margin: 16px 0; font-size: 13px; }
 p { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
 h4 { margin: 20px 0 8px; }
+.stage-list { margin: 0; padding-left: 20px; font-size: 13px; }
+.stage-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0; }
+.stage-label { min-width: 110px; }
+.stage-evidence, .domain-basis, .domain-note { color: var(--el-text-color-secondary); font-size: 12px; }
+.cross-factory { margin-bottom: 12px; }
+.domain { padding: 10px 0; border-top: 1px solid var(--el-border-color-lighter); }
+.domain-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.missing { margin: 8px 0; padding-left: 20px; font-size: 13px; }
+.missing li { margin: 4px 0; }
+.remedy { margin-left: 8px; font-size: 13px; }
+.domain-note { margin: 4px 0; }
 @media (max-width: 600px) { .readiness-header { align-items: stretch; flex-direction: column; } }
 </style>

@@ -54,7 +54,9 @@ class FactoryBusinessReadinessRepositoryQueryValidationTest {
     static void database(DynamicPropertyRegistry registry) {
         String url = System.getenv("CRETAS_WORKFLOW_PG_URL");
         if (url != null && !url.isBlank()) {
-            registry.add("spring.datasource.url", () -> url);
+            // Production binds jsonb columns (e.g. factories.inference_data) with stringtype=unspecified.
+            String bound = url.contains("stringtype=") ? url : url + (url.contains("?") ? "&" : "?") + "stringtype=unspecified";
+            registry.add("spring.datasource.url", () -> bound);
             registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
             registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci"));
             registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));

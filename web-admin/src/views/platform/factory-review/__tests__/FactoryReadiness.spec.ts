@@ -3,6 +3,8 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import FactoryReadiness from '../components/FactoryReadiness.vue'
 import { getFactoryReadiness, type FactoryReadinessReport } from '@/api/factoryReadiness'
+import { createPinia, setActivePinia } from 'pinia'
+import { useAuthStore } from '@/store/modules/auth'
 
 vi.mock('@/api/factoryReadiness', () => ({ getFactoryReadiness: vi.fn() }))
 const fixture = (): FactoryReadinessReport => ({
@@ -16,14 +18,36 @@ const fixture = (): FactoryReadinessReport => ({
   plannedIndicators: { factoryId: 'FA', basis: 'PROPOSED_CONFIGURATION', overallStatus: 'PARTIAL', products: [], metrics: [] },
   currentIndicators: { factoryId: 'FA', basis: 'CONFIGURATION_ONLY', overallStatus: 'PARTIAL', products: [], metrics: [] },
   businessAcceptanceState: 'UNVERIFIED', businessWriteCount: 0, readAt: '2026-10-18T12:00:00',
+  stages: [
+    { key: 'CONFIRMATION', label: '资料确认', state: 'DONE', evidence: '蓝图确认记录' },
+    { key: 'BLUEPRINT_PUBLISHED', label: '蓝图发布', state: 'PENDING', evidence: '蓝图状态 VALIDATED' },
+    { key: 'CONFIGURATION_APPLIED', label: '配置应用到本厂', state: 'PENDING', evidence: '已应用的是第1版，不是当前候选' },
+    { key: 'FORMAL_RUNTIME', label: '工艺与BOM正式生效', state: 'DONE', evidence: '1/1 个在用成品已生效并匹配' },
+    { key: 'BUSINESS_READY', label: '采购/生产/发货就绪', state: 'PENDING', evidence: '采购：MISSING' },
+    { key: 'FIRST_BUSINESS', label: '首笔业务', state: 'PENDING', evidence: '采购：NONE' },
+  ],
+  businessReadiness: [
+    { domain: 'PURCHASE', label: '采购', applicability: 'APPLICABLE', applicabilityBasis: '蓝图已选择 materials', state: 'MISSING',
+      checks: [
+        { code: 'ACTIVE_SUPPLIER', label: '至少一个启用的供应商', state: 'MISSING', detail: '当前 0 个', remedyKey: 'SUPPLIERS', remedyLabel: '供应商管理' },
+        { code: 'PURCHASE_INBOUND_WAREHOUSE', label: '采购入库仓可用', state: 'MET', detail: '使用「主仓」', remedyKey: 'WAREHOUSE_DEFAULTS', remedyLabel: '仓库默认用途' },
+      ],
+      notChecked: ['按基本单位采购无需包装换算，此处不要求'], firstRecord: { state: 'NONE', count: 0, detail: '尚无采购单' } },
+    { domain: 'PRODUCTION', label: '生产', applicability: 'NOT_APPLICABLE', applicabilityBasis: '本次蓝图未选择 bom/processes', state: 'NOT_APPLICABLE',
+      checks: [{ code: 'WORKSHOP_WAREHOUSE', label: '生产成品/报工仓可用', state: 'MISSING', detail: '未配置', remedyKey: 'WAREHOUSE_DEFAULTS', remedyLabel: '仓库默认用途' }],
+      notChecked: ['不要求研发仓'], firstRecord: { state: 'NONE', count: 0, detail: '尚无生产计划' } },
+    { domain: 'SHIPPING', label: '发货', applicability: 'APPLICABLE', applicabilityBasis: '蓝图已选择 products', state: 'READY',
+      checks: [{ code: 'ACTIVE_CUSTOMER', label: '至少一个启用的客户', state: 'MET', detail: '当前 2 个', remedyKey: 'CUSTOMERS', remedyLabel: '客户管理' }],
+      notChecked: [], firstRecord: { state: 'RECORDED', count: 3, detail: '已有 3 张出货记录，完成情况以原单为准' } },
+  ],
 })
 const wrappers: VueWrapper[] = []
 function render() {
   const wrapper = mount(FactoryReadiness, { props: { factoryId: 'FA', blueprintId: 'candidate', rowVersion: 5 },
-    global: { plugins: [ElementPlus], stubs: { IndicatorApplicability: true } } })
+    global: { plugins: [ElementPlus], stubs: { IndicatorApplicability: true, RouterLink: { props: ['to'], template: '<a class="router-link" :data-to="to.path"><slot /></a>' } } } })
   wrappers.push(wrapper); return wrapper
 }
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(getFactoryReadiness).mockResolvedValue(fixture()) })
+beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks(); vi.mocked(getFactoryReadiness).mockResolvedValue(fixture()) })
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 
 describe('建厂交付核对', () => {
@@ -65,5 +89,63 @@ describe('建厂交付核对', () => {
     await wrapper.findAll('button').find(button => button.text() === '重试')!.trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('在用盒装')
     expect(wrapper.text()).not.toContain('数据库不可用')
+  })
+  it('keeps each stage on its own fact: a confirmed candidate is not shown as published or ready', async () => {
+    const wrapper = render(); await flushPromises()
+    const stages = wrapper.find('[data-testid="readiness-stages"]').text()
+    expect(stages).toMatch(/资料确认\s*已完成/)
+    expect(stages).toMatch(/蓝图发布\s*未完成/)
+    expect(stages).toMatch(/采购\/生产\/发货就绪\s*未完成/)
+  })
+  it('names the missing purchase fact and, for a platform reviewer, who fills it where — without a dead link', async () => {
+    const wrapper = render(); await flushPromises()
+    const purchase = wrapper.find('[data-testid="domain-PURCHASE"]').text()
+    expect(purchase).toContain('还差资料')
+    expect(purchase).toContain('至少一个启用的供应商：缺少（当前 0 个）')
+    expect(purchase).toContain('由工厂管理员在「供应商管理」补齐')
+    expect(purchase).not.toContain('采购入库仓可用')
+    expect(wrapper.find('.router-link').exists()).toBe(false)
+    expect(wrapper.text()).toContain('补齐页面只显示登录账号所属工厂的数据')
+  })
+  it('links the factory\'s own admin straight to the existing remedy page', async () => {
+    useAuthStore().setUser({ id: 9, username: 'fa_admin', email: 'fa@example.test', isActive: true,
+      createdAt: '2026-01-01T00:00:00', updatedAt: '2026-01-01T00:00:00', userType: 'factory',
+      factoryUser: { role: 'factory_super_admin', factoryId: 'FA', permissions: [] } })
+    const wrapper = render(); await flushPromises()
+    const link = wrapper.find('[data-testid="domain-PURCHASE"] .router-link')
+    expect(link.attributes('data-to')).toBe('/procurement/suppliers')
+    expect(link.text()).toContain('去「供应商管理」补齐')
+    expect(wrapper.text()).not.toContain('补齐页面只显示登录账号所属工厂的数据')
+  })
+  it('does not demand anything for an unselected business and keeps first records separate from readiness', async () => {
+    const wrapper = render(); await flushPromises()
+    const production = wrapper.find('[data-testid="domain-PRODUCTION"]').text()
+    expect(production).toContain('本次不适用')
+    expect(production).not.toContain('生产成品/报工仓可用')
+    expect(production).not.toContain('首笔业务')
+    const shipping = wrapper.find('[data-testid="domain-SHIPPING"]').text()
+    expect(shipping).toContain('可以开展')
+    expect(shipping).toContain('首笔业务：已有单据，已有 3 张出货记录，完成情况以原单为准')
+  })
+  it('shows unknown rather than ready when the backend omits stage and business facts', async () => {
+    const response = fixture(); delete response.stages; delete response.businessReadiness
+    vi.mocked(getFactoryReadiness).mockResolvedValue(response)
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.find('[data-testid="stages-unavailable"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="business-unavailable"]').text()).toContain('不能据此判断可以开工')
+    expect(wrapper.text()).not.toContain('可以开展')
+  })
+  it('re-reads the server after a fix instead of turning the row green locally', async () => {
+    const fixed = fixture()
+    fixed.businessReadiness![0] = { ...fixed.businessReadiness![0], state: 'READY',
+      checks: fixed.businessReadiness![0].checks.map(check => ({ ...check, state: 'MET', detail: '当前 1 个' })) }
+    vi.mocked(getFactoryReadiness).mockResolvedValueOnce(fixture()).mockResolvedValueOnce(fixed)
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.find('[data-testid="domain-PURCHASE"]').text()).toContain('还差资料')
+    await wrapper.findAll('button').find(button => button.text() === '刷新核对')!.trigger('click'); await flushPromises()
+    expect(getFactoryReadiness).toHaveBeenCalledTimes(2)
+    const purchase = wrapper.find('[data-testid="domain-PURCHASE"]').text()
+    expect(purchase).toContain('可以开展')
+    expect(purchase).not.toContain('补齐')
   })
 })
