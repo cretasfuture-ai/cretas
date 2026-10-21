@@ -62,6 +62,8 @@
       </div>
     </div>
 
+    <FactoryInterviewArchive v-if="progress && factoryId" :progress="progress" />
+
     <!-- Rule 5: 没有工厂时不是死路 —— 页面自带选择器。
          ⚠️ web-admin 目前没有工厂列表页, 若这里只写「去列表选择」就会跳到 404,
             那是把死路换了个地方, 不是解决。 -->
@@ -531,15 +533,12 @@
           <!-- 已答事实与来源逐条来自服务端 typed receipts；pending/skipped 继续留在清单。 -->
           <FactoryConversationFactLedger :facts="progress.factEvidence ?? []" />
           <div class="checklist">
-            <div v-for="it in (progress.pendingItems ?? []).slice(0, 6)" :key="it.name" class="ck">
+            <div v-for="it in (progress.pendingItems ?? [])" :key="it.name" class="ck">
               <el-icon class="pending"><Clock /></el-icon>
               <div class="ck-body">
                 <div class="ck-label">{{ it.label }}</div>
-                <div class="ck-empty">还没问到</div>
+                <div class="ck-empty">待确认</div>
               </div>
-            </div>
-            <div v-if="(progress.pendingItems?.length ?? 0) > 6" class="ck-more">
-              …另外还有 {{ (progress.pendingItems?.length ?? 0) - 6 }} 项
             </div>
             <!-- 问过没拿到、已经放弃的 —— ⛔ 不许静默消失, 那是「被系统悄悄放弃」 -->
             <div v-for="it in (progress.skippedItems ?? [])" :key="'sk-' + it.name" class="ck">
@@ -1059,6 +1058,7 @@ import FactoryConversationDomainCard from './components/FactoryConversationDomai
 import FactoryConversationReceipt from './components/FactoryConversationReceipt.vue'
 import FactoryConversationDecisionPacket from './components/FactoryConversationDecisionPacket.vue'
 import FactoryConversationFactLedger from './components/FactoryConversationFactLedger.vue'
+import FactoryInterviewArchive from './components/FactoryInterviewArchive.vue'
 import FactoryConversationRoutePreview from './components/FactoryConversationRoutePreview.vue'
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
