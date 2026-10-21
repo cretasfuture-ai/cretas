@@ -18,7 +18,6 @@
 
 - `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07八文件；见archive/2026-10-20-s1-deferred-grant.md。
 
-- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base fe1eb117c68e1a4efc4b9ca571570478172c94b0 — 02/10十四文件fresh-main集成；既有PG17/H2/HTTP复用，见archive/2026-10-22-s1-diagnostics-delivery.md。
 
 
 
