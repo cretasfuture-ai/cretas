@@ -18,8 +18,8 @@ export interface PeriodSelection {
   compareValue?: string | [string, string];
   /**
    * 「全部历史」标记 (financial PBI 看板用)。设为 true 时表示不按月份/年份过滤,
-   * 消费方应映射为后端 period_type='year' (normalizer 对 'year' 不做任何 month 过滤,
-   * 即返回全部上传数据)。type 仍是 'year' 以兼容所有现有 switch 分支。
+   * 消费方映射为后端 period_type='all' (见 views/smart-bi/financialDashboardState.ts);
+   * 后端 'year' 只保留选中那一年。type 仍是 'year' 以兼容所有现有 switch 分支。
    */
   allHistory?: boolean;
 }

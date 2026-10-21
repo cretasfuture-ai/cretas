@@ -11,6 +11,13 @@ import { usePermissionStore } from '@/store/modules/permission';
 import FinanceAnalysis from './FinanceAnalysis.vue';
 import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
 import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
+import {
+  periodSelectionToRequest,
+  chartGapReason,
+  chartNotes,
+  createDataVersion,
+} from './financialDashboardState';
+import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
 import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
@@ -153,8 +160,8 @@ function clearAllAnnotations(chartType: string) {
 
 const uploadId = ref<number | null>(null);
 const uploadIdInput = ref<string>('');
-// 默认「全部历史」: type='year' + allHistory 标记 → 后端 period_type='year'
-// (normalizer 对 'year' 不做任何月份过滤, 即返回该数据源全部数据)。
+// 默认「全部历史」: type='year' + allHistory 标记 → 后端 period_type='all'
+// (不按年也不按月过滤, 即该数据源全部数据)。
 const periodSelection = ref<PeriodSelection>({
   type: 'year',
   year: new Date().getFullYear(),
@@ -169,6 +176,8 @@ const dashboardResponse = ref<DashboardResponse | null>(null);
 // Per-chart AI analysis state
 const analysisByType = ref<Record<string, string>>({});
 const analysisLoadingByType = ref<Record<string, boolean>>({});
+// 看板数据版本: AI 分析请求回来时版本已变 (期间/数据源已换) 就丢弃结果
+const dataVersion = createDataVersion();
 const analysisExpandedByType = ref<Record<string, boolean>>({});
 
 // PPT export
@@ -275,24 +284,16 @@ function teardownLazyObserver(): void {
 }
 
 // ---- Computed ----
-const currentYear = computed(() => periodSelection.value.year);
-// 「全部历史」与「单年」都映射 period_type='year' (normalizer 对 'year' 不做月份过滤 → 返回全部数据)。
-const periodType = computed(() =>
-  periodSelection.value.allHistory || periodSelection.value.type === 'year' ? 'year' : 'month_range');
-const startMonth = computed(() => {
-  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 1;
-  if (Array.isArray(periodSelection.value.value)) {
-    return parseInt(String(periodSelection.value.value[0]).split('-')[1] || '1', 10);
-  }
-  return 1;
-});
-const endMonth = computed(() => {
-  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 12;
-  if (Array.isArray(periodSelection.value.value)) {
-    return parseInt(String(periodSelection.value.value[1]).split('-')[1] || '12', 10);
-  }
-  return 12;
-});
+// 期间选择 → 后端参数 (全部历史=all / 单年=year / 其余=month_range), 规则与单测见 financialDashboardState.ts
+const periodRequest = computed(() => periodSelectionToRequest(periodSelection.value));
+const periodRequestError = computed(() => ('error' in periodRequest.value ? periodRequest.value.error : null));
+const resolvedPeriod = computed<PeriodRequest>(() => ('error' in periodRequest.value
+  ? { periodType: 'year', year: periodSelection.value.year, startMonth: 1, endMonth: 12 }
+  : periodRequest.value));
+const currentYear = computed(() => resolvedPeriod.value.year);
+const periodType = computed(() => resolvedPeriod.value.periodType);
+const startMonth = computed(() => resolvedPeriod.value.startMonth);
+const endMonth = computed(() => resolvedPeriod.value.endMonth);
 
 const charts = computed(() => dashboardResponse.value?.charts ?? []);
 
@@ -531,9 +532,19 @@ async function generate(useDemo?: boolean) {
     return;
   }
 
+  if (periodRequestError.value) {
+    ElMessage.warning(periodRequestError.value);
+    return;
+  }
+
   isGenerating.value = true;
+  // 新一轮数据: 旧的单图分析、总结论、追问一律作废, 迟到的旧响应按版本号丢弃
+  dataVersion.bump();
   analysisByType.value = {};
   analysisExpandedByType.value = {};
+  analysisLoadingByType.value = {};
+  conclusionsText.value = '';
+  followUpsByType.value = {};
 
   const payload: FinancialDashboardRequest = {
     year: currentYear.value,
@@ -582,11 +593,13 @@ async function generate(useDemo?: boolean) {
       // Auto-trigger AI analysis for all charts
       nextTick(() => autoAnalyzeAllCharts());
     } else {
-      ElMessage.error('图表生成失败，请检查数据源');
+      ElMessage({ message: resp.error || resp.message || '图表生成失败，请检查数据源', type: 'error', duration: 0, showClose: true });
     }
   } catch (err) {
     console.error('generate failed:', err);
-    ElMessage.error('请求失败，请稍后重试');
+    // 后端给的原因 (如「未找到数据源 / 无权访问其他工厂的数据」) 原样显示, 错误提示不自动消失
+    const serverMessage = (err as { serverMessage?: string } | null)?.serverMessage;
+    ElMessage({ message: serverMessage || '请求失败，请稍后重试', type: 'error', duration: 0, showClose: true });
   } finally {
     isGenerating.value = false;
   }
@@ -637,6 +650,7 @@ async function requestAnalysis(chartType: string) {
   if (analysisLoadingByType.value[chartType]) return;
 
   analysisLoadingByType.value[chartType] = true;
+  const version = dataVersion.current();
 
   try {
     const resp = await analyzeChart({
@@ -645,6 +659,7 @@ async function requestAnalysis(chartType: string) {
     });
     // After await, re-check unmounted — state updates would be wasted + throw
     if (isComponentUnmounted) return;
+    if (!dataVersion.isCurrent(version)) return; // 期间/数据已换, 这条分析属于旧图表
     if (resp.success) {
       analysisByType.value[chartType] = resp.analysis || '暂无分析结果';
     } else {
@@ -660,9 +675,9 @@ async function requestAnalysis(chartType: string) {
       return;
     }
     console.error('analyzeChart failed:', err);
-    analysisByType.value[chartType] = '分析请求失败，请重试';
+    if (dataVersion.isCurrent(version)) analysisByType.value[chartType] = '分析请求失败，请重试';
   } finally {
-    if (!isComponentUnmounted) {
+    if (!isComponentUnmounted && dataVersion.isCurrent(version)) {
       analysisLoadingByType.value[chartType] = false;
     }
   }
@@ -1055,6 +1070,7 @@ function toggleGroup(groupName: string) {
 async function generateConclusions() {
   if (isComponentUnmounted) return;
   conclusionsLoading.value = true;
+  const version = dataVersion.current();
   try {
     const allAnalysis = Object.entries(analysisByType.value)
       .filter(([, text]) => text)
@@ -1074,6 +1090,7 @@ async function generateConclusions() {
       analysis_context: allAnalysis,
     });
     if (isComponentUnmounted) return;
+    if (!dataVersion.isCurrent(version)) return; // 期间/数据已换, 这份结论属于旧图表
     if (resp.success) {
       conclusionsText.value = resp.analysis || '暂无分析结论';
     } else {
@@ -1084,7 +1101,7 @@ async function generateConclusions() {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || (err instanceof TypeError && String(err).includes('fetch'))) return;
     console.error('generateConclusions failed:', err);
-    conclusionsText.value = '生成结论失败，请重试';
+    if (dataVersion.isCurrent(version)) conclusionsText.value = '生成结论失败，请重试';
   } finally {
     if (!isComponentUnmounted) conclusionsLoading.value = false;
   }
@@ -1107,6 +1124,7 @@ async function submitFollowUp(chartType: string) {
   if (isComponentUnmounted) return;
   followUpLoading.value = true;
   followUpInput.value = '';
+  const version = dataVersion.current();
 
   try {
     const resp = await analyzeChart({
@@ -1116,6 +1134,7 @@ async function submitFollowUp(chartType: string) {
       previous_analysis: fullAnalysis,
     });
     if (isComponentUnmounted) return;
+    if (!dataVersion.isCurrent(version)) return; // 期间/数据已换, 追问属于旧图表
 
     if (!followUpsByType.value[chartType]) followUpsByType.value[chartType] = [];
     followUpsByType.value[chartType].push({
@@ -1127,6 +1146,7 @@ async function submitFollowUp(chartType: string) {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || (err instanceof TypeError && String(err).includes('fetch'))) return;
     console.error('followUp failed:', err);
+    if (!dataVersion.isCurrent(version)) return;
     if (!followUpsByType.value[chartType]) followUpsByType.value[chartType] = [];
     followUpsByType.value[chartType].push({ question, answer: '请求失败，请重试' });
   } finally {
@@ -1674,7 +1694,7 @@ onBeforeUnmount(() => {
 
     <!-- Interaction tips -->
     <div v-if="dashboardResponse && !isGenerating" class="interaction-tips">
- <span> <b>单击</b>交叉过滤 | <b>双击</b>添加标注 | <b>方向键</b>卡片导航 | <b>Shift+滚轮</b>缩放 | 图表间<b>Tooltip联动</b></span>
+ <span> <b>单击</b>高亮同名数据 | <b>双击</b>添加标注 | <b>方向键</b>卡片导航 | <b>Shift+滚轮</b>缩放 | 图表间<b>Tooltip联动</b></span>
     </div>
 
     <!-- Fix 72: Global Slicer / Filter bar (Power BI style) -->
@@ -1718,8 +1738,8 @@ onBeforeUnmount(() => {
 
     <!-- B1: Active cross-filter indicator -->
     <div v-if="activeFilter" class="cross-filter-bar">
-      <span>过滤中: <b>{{ activeFilter.value }}</b></span>
-      <el-button size="small" text type="primary" @click="activeFilter = null; applyCrossFilter()">清除过滤</el-button>
+      <span>高亮中: <b>{{ activeFilter.value }}</b>（仅高亮图形，KPI 与 AI 分析仍为全部数据）</span>
+      <el-button size="small" text type="primary" @click="activeFilter = null; applyCrossFilter()">取消高亮</el-button>
     </div>
 
     <!-- Empty state -->
@@ -1888,23 +1908,35 @@ onBeforeUnmount(() => {
           >
             <span class="q-label">{{ qp.quarter }}</span>
             <el-progress
-              :percentage="Math.min(qp.rate, 100)"
-              :color="qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
+              :percentage="Math.min(qp.rate ?? 0, 100)"
+              :color="qp.rate == null ? '#C0C4CC' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
               :stroke-width="10"
               :text-inside="true"
             />
-            <span class="q-rate" :style="{ color: qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate }}%</span>
+            <span class="q-rate" :style="{ color: qp.rate == null ? '#909399' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate == null ? '—' : `${qp.rate}%` }}</span>
           </div>
         </div>
 
+        <!-- 数据不足: 不出图, 原样告诉用户缺什么 -->
+        <SmartBIEmptyState
+          v-if="chartGapReason(getChart(ct.key))"
+          type="no-data"
+          :message="chartGapReason(getChart(ct.key)) ?? ''"
+          class="chart-gap-notice"
+          data-testid="chart-gap-notice"
+        />
         <!-- ECharts canvas rendered via DOM ref -->
         <div
+          v-else
           :ref="(el) => setChartDomRef(ct.key, el as Element | null)"
           class="generic-chart-canvas"
           role="img"
           :aria-label="`${ct.label}图表`"
-          title="单击: 交叉过滤 | 双击: 添加标注"
+          title="单击: 高亮同名数据 | 双击: 添加标注"
         />
+        <ul v-if="chartNotes(getChart(ct.key)).length" class="chart-data-notes" data-testid="chart-data-notes">
+          <li v-for="note in chartNotes(getChart(ct.key))" :key="note">{{ note }}</li>
+        </ul>
 
         <!-- Phase B Moderate: ChartInsightProvider for bar/line/pie slots (exotic slots render nothing) -->
         <!-- Wired: budget_achievement(comparison) yoy_mom_comparison(comparison) category_yoy_comparison(comparison)
@@ -2081,12 +2113,12 @@ onBeforeUnmount(() => {
             <div v-for="qp in getChart(activeTab)!.quarterlyProgress" :key="qp.quarter" class="q-progress-item">
               <span class="q-label">{{ qp.quarter }}</span>
               <el-progress
-                :percentage="Math.min(qp.rate, 100)"
-                :color="qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
+                :percentage="Math.min(qp.rate ?? 0, 100)"
+                :color="qp.rate == null ? '#C0C4CC' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
                 :stroke-width="10"
                 :text-inside="true"
               />
-              <span class="q-rate" :style="{ color: qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate }}%</span>
+              <span class="q-rate" :style="{ color: qp.rate == null ? '#909399' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate == null ? '—' : `${qp.rate}%` }}</span>
             </div>
           </div>
 
@@ -2140,14 +2172,25 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </template>
+            <SmartBIEmptyState
+              v-if="chartGapReason(getChart(activeTab))"
+              type="no-data"
+              :message="chartGapReason(getChart(activeTab)) ?? ''"
+              class="chart-gap-notice"
+              data-testid="chart-gap-notice"
+            />
             <div
+              v-else
               :ref="(el) => setChartDomRef(activeTab, el as Element | null)"
               class="generic-chart-canvas"
               style="height: 480px"
               role="img"
               :aria-label="`${chartTypes.find(c => c.key === activeTab)?.label}图表`"
-              title="单击: 交叉过滤 | 双击: 添加标注"
+              title="单击: 高亮同名数据 | 双击: 添加标注"
             />
+            <ul v-if="chartNotes(getChart(activeTab)).length" class="chart-data-notes" data-testid="chart-data-notes">
+              <li v-for="note in chartNotes(getChart(activeTab))" :key="note">{{ note }}</li>
+            </ul>
           </el-card>
 
           <!-- Monthly data rows (yoy_mom_comparison) -->
@@ -2454,6 +2497,16 @@ onBeforeUnmount(() => {
 }
 
 /* Empty state */
+.chart-data-notes {
+  margin: 8px 0 0;
+  padding: 8px 12px 8px 28px;
+  background: #fdf6ec;
+  border-radius: 4px;
+  color: #b88230;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .empty-state {
   display: flex;
   justify-content: center;
