@@ -33,6 +33,13 @@ public final class AutonomousToolPolicy {
     private AutonomousToolPolicy() {
     }
 
+    /** Identity keys only: a write tool may be configured, its runs then need a delegated grant. */
+    public static String identityRejection(Map<String, Object> params) {
+        if (params == null) return null;
+        return params.keySet().stream().filter(IDENTITY_KEYS::contains).sorted().findFirst()
+                .map(key -> IDENTITY_PREFIX + key).orElse(null);
+    }
+
     /** @return null when allowed; otherwise a reason that names the tool or the offending key. */
     public static String rejection(String toolName, ToolExecutor tool, Map<String, Object> params) {
         if (params != null) {

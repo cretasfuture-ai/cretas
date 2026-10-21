@@ -139,12 +139,10 @@ class DynamicSchedulerServiceTest {
         config.setParams(Map.of("limit", 10));
         config.setRunAsUserId(7L);
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
-        // report_tool is read-only; undeclared tools are refused for cron runs (AutonomousToolPolicy).
-        when(toolExecutor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         org.mockito.Mockito.doReturn(scheduledFuture).when(taskScheduler)
                 .schedule(any(Runnable.class), any(Trigger.class));
         when(runner.run(eq("F001"), eq(7L), eq("report_tool"), eq(Map.of("limit", 10)),
-                eq(ToolExecutionSource.SCHEDULER), any()))
+                eq(ToolExecutionSource.SCHEDULER), any(), eq("51"), any()))
                 .thenReturn(new AutonomousToolRunner.Outcome("SUCCESS", null,
                         new ObjectMapper().readTree("{\"success\":true,\"data\":[]}")));
         when(schedulerRepo.findById(51L)).thenReturn(Optional.of(config));
@@ -158,7 +156,7 @@ class DynamicSchedulerServiceTest {
 
         // Never executed directly: only through the gateway runner, as the run-as user.
         verify(runner).run(eq("F001"), eq(7L), eq("report_tool"), eq(Map.of("limit", 10)),
-                eq(ToolExecutionSource.SCHEDULER), any());
+                eq(ToolExecutionSource.SCHEDULER), any(), eq("51"), any());
         verify(toolExecutor, never()).execute(any(), any());
         verify(schedulerRepo).findById(51L);
         verify(schedulerRepo, never()).findByFactoryIdAndTaskCode(any(), any());
@@ -172,9 +170,7 @@ class DynamicSchedulerServiceTest {
     void validSchedule_businessFailure_isRecorded() throws Exception {
         FactorySchedulerConfig config = config(61L, "F001", "daily", "report_tool");
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
-        // report_tool is read-only; undeclared tools are refused for cron runs (AutonomousToolPolicy).
-        when(toolExecutor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
-        when(runner.run(eq("F001"), any(), eq("report_tool"), any(), eq(ToolExecutionSource.SCHEDULER), any()))
+        when(runner.run(eq("F001"), any(), eq("report_tool"), any(), eq(ToolExecutionSource.SCHEDULER), any(), any(), any()))
                 .thenReturn(new AutonomousToolRunner.Outcome("SUCCESS", null, new ObjectMapper().readTree(
                         "{\"success\":false,\"error\":\"access_token=secret password=abc\"}")));
         when(schedulerRepo.findById(61L)).thenReturn(Optional.of(config));

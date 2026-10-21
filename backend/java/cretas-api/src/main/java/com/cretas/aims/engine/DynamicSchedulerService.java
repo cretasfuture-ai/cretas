@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -166,7 +167,7 @@ public class DynamicSchedulerService {
         if (toolName == null || toolName.isBlank()) return;
         Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
         if (tool.isEmpty()) return;
-        String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), params);
+        String refusal = AutonomousToolPolicy.identityRejection(params);
         if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
         AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.SCHEDULER);
     }
@@ -203,7 +204,8 @@ public class DynamicSchedulerService {
                 // Never executed directly: the gateway runs it as the run-as user and audits it.
                 AutonomousToolRunner.Outcome outcome = runner.run(config.getFactoryId(), config.getRunAsUserId(),
                         toolOrMethod, config.getParams(), ToolExecutionSource.SCHEDULER,
-                        "sched-" + config.getId() + "-" + config.getTaskCode());
+                        "sched-" + config.getId() + "-" + config.getTaskCode(),
+                        String.valueOf(config.getId()), "fire:" + startedAt.truncatedTo(ChronoUnit.MINUTES));
                 String businessError = outcome.succeeded() && outcome.payload() != null
                         ? businessFailure(outcome.payload().toString()) : null;
                 if (!outcome.succeeded()) {
@@ -295,8 +297,9 @@ public class DynamicSchedulerService {
         if (tool.isEmpty()) {
             return "tool not registered: " + config.getToolOrMethod();
         }
-        // Checked at schedule time and again before every run: there is no user behind a cron run.
-        return AutonomousToolPolicy.rejection(config.getToolOrMethod(), tool.get(), config.getParams());
+        // Identity parameters are refused at schedule time and before every run. A write tool is
+        // scheduled, but each run needs a delegated grant (checked by the runner per run).
+        return AutonomousToolPolicy.identityRejection(config.getParams());
     }
 
     private void markConfigStatus(FactorySchedulerConfig config, String status, String error) {

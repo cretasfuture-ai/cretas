@@ -204,7 +204,8 @@ public class TriggerChainController {
                 throw new BusinessException(400, "事件链步骤「" + toolName + "」的参数必须是对象")
                         .withHint("把 params 改成键值形式，例如 {\"limit\": 10}");
             }
-            String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), (Map<String, Object>) map);
+            // A write step may be configured; each run needs a delegated grant for "chainId:order".
+            String refusal = AutonomousToolPolicy.identityRejection((Map<String, Object>) map);
             if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
             AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.TRIGGER);
         }
