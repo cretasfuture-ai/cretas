@@ -27,6 +27,7 @@ import {
 } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 import { toDateString } from '@/utils/dateFormat';
+import SchedulingDiagnosticsPanel from './SchedulingDiagnosticsPanel.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -322,6 +323,20 @@ async function handleSubmit() {
           </label>
         </div>
       </el-card>
+
+      <SchedulingDiagnosticsPanel
+        v-if="manualDrafts.length === 0"
+        :factory-id="factoryId"
+      />
+      <SchedulingDiagnosticsPanel
+        v-for="diagnosticDraft in manualDrafts"
+        :key="diagnosticDraft.batchId"
+        :factory-id="factoryId"
+        :production-line-id="diagnosticDraft.productionLineId || undefined"
+        :batch-id="diagnosticDraft.batchId"
+        :start-time="diagnosticDraft.plannedStartTime || undefined"
+        :end-time="diagnosticDraft.plannedEndTime || undefined"
+      />
 
       <!-- 提交按钮 -->
       <div class="submit-area">

@@ -138,4 +138,24 @@ describe('scheduling detail real wire mount', () => {
     wrapper.unmount();
   });
 
+  it('passes an existing line schedule context through the real diagnostics Panel and API', async () => {
+    const box = { template: '<div><slot name="header"/><slot/></div>' };
+    const wrapper = mount(Detail, { global: {
+      directives: { loading: () => undefined },
+      stubs: { ElCard: box, ElTable, ElTableColumn, ElProgress: box, ElTag: box, ElButton: box,
+        ElDialog: box, ElForm: box, ElFormItem: box, ElInputNumber: box, ElEmpty: box, ElIcon: box,
+        ElAlert: { props: ['title'], template: '<div>{{ title }}</div>' } },
+    } });
+    try {
+      await flushPromises();
+      expect(get).toHaveBeenCalledWith('/F-REAL/scheduling/readiness', { params: {
+        scheduleId: 'S-1', productionLineId: undefined, batchId: undefined,
+        startTime: undefined, endTime: undefined,
+      } });
+      expect(wrapper.text()).toContain('尚未生成概率');
+      expect(wrapper.text()).toContain('缺少已确认的人员、设备或产品特征');
+    } finally {
+      wrapper.unmount();
+    }
+  });
 });
