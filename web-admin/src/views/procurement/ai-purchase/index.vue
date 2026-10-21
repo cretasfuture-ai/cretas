@@ -6,6 +6,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
   getControlledPurchaseStatus,
+  authorizeControlledPurchaseForLater,
+  executeDeferredControlledPurchase,
   previewControlledPurchase,
   revokeControlledPurchase,
   type ControlledPurchaseParams,
@@ -32,6 +34,7 @@ const recoveryReady = ref(false);
 const recoveryState = ref('');
 const draftOrderId = ref('');
 const cancelInFlight = ref(false);
+const deferredInFlight = ref(false);
 const blockedReason = ref('');
 const grantId = ref('');
 const recoveryVersion = ref<number | null>(null);
@@ -115,7 +118,10 @@ async function recover(): Promise<void> {
     if (!isCurrent(scope, run)) return;
     recoveryState.value = outcome.state;
     recoveryVersion.value = outcome.version ?? null;
-    if (String(outcome.state).toUpperCase() === 'PENDING') previewResponse.value = null;
+    if (String(outcome.state).toUpperCase() === 'PENDING') {
+      previewResponse.value = null;
+      blockedReason.value = '已有一笔采购已授权稍后执行，请先执行或撤销当前授权。';
+    }
     if (outcome.state === 'DRAFT' && outcome.purchaseOrderId) {
       draftOrderId.value = outcome.purchaseOrderId;
       blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
@@ -170,7 +176,9 @@ function acknowledgeDraft(): void {
 }
 
 async function submitPreview(): Promise<void> {
-  if (loading.value || previewed.value || blockedReason.value || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
+  if (loading.value || previewed.value || blockedReason.value
+    || (grantId.value && ['PENDING', 'UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState.value))
+    || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
   if (!form.value.supplierId || !form.value.materialTypeId || !form.value.quantity || !form.value.unitPrice || !form.value.amountCap) {
     ElMessage.warning('请完整填写供应商、物料、数量、未税单价和含税预算');
     return;
@@ -217,6 +225,48 @@ async function cancelPreview(): Promise<boolean> {
   } catch (error) { if (isCurrent(scope, run)) blockedReason.value = error instanceof Error ? error.message : '撤销失败，请先核对授权状态'; }
   finally { if (isCurrent(scope, run)) cancelInFlight.value = false; }
   return false;
+}
+
+async function authorizeLater(): Promise<void> {
+  const proof = previewResponse.value?.confirmableAction;
+  if (!grantId.value || !proof || deferredInFlight.value) return;
+  const scope = scopeKey.value;
+  const run = generation;
+  deferredInFlight.value = true;
+  try {
+    const outcome = await authorizeControlledPurchaseForLater(factoryId.value, proof.confirmToken, proof.commandDigest, proof.expiresAt);
+    if (!isCurrent(scope, run)) return;
+    if (outcome.grantId !== grantId.value || outcome.state !== 'PENDING') throw new Error('服务器未确认稍后执行授权');
+    recoveryState.value = outcome.state;
+    recoveryVersion.value = outcome.version ?? null;
+    previewResponse.value = null;
+    blockedReason.value = '已授权稍后执行，请先执行或撤销当前授权。';
+    ElMessage.success('已授权稍后执行，授权有效期内可从本页恢复');
+  } catch (error) {
+    if (!isCurrent(scope, run)) return;
+    recoveryState.value = 'UNKNOWN';
+    previewResponse.value = null;
+    blockedReason.value = error instanceof Error ? error.message : '授权状态未知，请刷新后再处理';
+  } finally { if (isCurrent(scope, run)) deferredInFlight.value = false; }
+}
+
+async function executeLater(): Promise<void> {
+  if (!grantId.value || recoveryVersion.value == null || deferredInFlight.value) return;
+  const scope = scopeKey.value;
+  const run = generation;
+  deferredInFlight.value = true;
+  try {
+    const outcome = await executeDeferredControlledPurchase(factoryId.value, grantId.value, recoveryVersion.value);
+    if (!isCurrent(scope, run)) return;
+    if (outcome.grantId !== grantId.value || outcome.state !== 'DRAFT' || !outcome.purchaseOrderId) throw new Error('采购结果凭据不匹配，请刷新状态');
+    draftOrderId.value = outcome.purchaseOrderId;
+    recoveryState.value = 'DRAFT';
+    blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
+  } catch (error) {
+    if (!isCurrent(scope, run)) return;
+    recoveryState.value = 'UNKNOWN';
+    blockedReason.value = error instanceof Error ? error.message : '执行结果未知，请刷新授权状态后再继续';
+  } finally { if (isCurrent(scope, run)) deferredInFlight.value = false; }
 }
 
 function handleConfirmed(result: IntentExecuteResponse): void {
@@ -287,6 +337,7 @@ watch(scopeKey, () => {
   loading.value = false;
   recoveryLoading.value = false;
   cancelInFlight.value = false;
+  deferredInFlight.value = false;
   form.value = {
     supplierId: '', materialTypeId: '', quantity: '', unit: 'kg', unitPrice: '',
     currency: 'CNY', taxRate: '13', amountCap: '', expectedDeliveryDate: '', remark: '',
@@ -303,7 +354,7 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
     <el-alert v-if="blockedReason" :title="blockedReason" type="warning" :closable="false" class="state-alert" />
     <div v-if="draftOrderId" class="recovery-actions"><el-button link type="primary" @click="router.push(`/procurement/orders/${encodeURIComponent(draftOrderId)}`)">查看采购订单</el-button><el-button type="success" @click="acknowledgeDraft">已核对，开始新采购</el-button></div>
     <div v-else-if="recoveryState === 'FAILED'" class="recovery-actions"><el-button @click="acknowledgeDraft">已核对失败，开始新采购</el-button></div>
-    <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions"><el-button type="danger" @click="cancelPreview">撤销当前授权</el-button></div>
+    <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions"><el-button type="primary" :disabled="recoveryVersion == null" :loading="deferredInFlight" @click="executeLater">执行已授权采购</el-button><el-button type="danger" :loading="cancelInFlight" @click="cancelPreview">撤销当前授权</el-button><el-button v-if="recoveryVersion == null" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button><span v-if="recoveryVersion == null" class="state-hint">授权版本尚未恢复，暂不能执行；可尝试撤销并由服务器核对状态</span></div>
     <div v-else-if="grantId && ['UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><el-button type="warning" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button></div>
     <el-card shadow="never" class="content-card">
       <el-form label-position="top" class="purchase-form">
@@ -320,6 +371,7 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
       <div class="actions"><el-button type="primary" :loading="loading" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" @click="submitPreview">生成预览</el-button></div>
     </el-card>
     <AiOperationCard v-if="previewResponse" :response="previewResponse" :factory-id="factoryId" :cancel-handler="cancelPreview" @confirmed="handleConfirmed" @uncertain="handleUncertain" @recovered="handleRecovered" />
+    <div v-if="previewResponse" class="deferred-actions"><el-button type="warning" :loading="deferredInFlight" @click="authorizeLater">仅授权，稍后执行</el-button></div>
     <el-card v-if="previewResponse && canonicalRows.length" shadow="never" class="snapshot-card">
       <h3>已锁定的服务器采购快照</h3>
       <div class="canonical-grid"><template v-for="row in canonicalRows" :key="row[0]"><span>{{ row[0] }}</span><strong>{{ row[1] }}</strong></template></div>
