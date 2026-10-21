@@ -16,11 +16,12 @@ import {
   chartGapReason,
   chartNotes,
   createDataVersion,
+  buildChartNav,
 } from './financialDashboardState';
 import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
 import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
-import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
+import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, Delete } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
 import { sparklinePath, sparklineSVG } from '@/utils/sparkline';
@@ -103,7 +104,6 @@ const goldFinanceMode = computed(() =>
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');
 const activeTab = ref('budget_achievement');
-const collapsedGroups = reactive(new Set<string>());
 const conclusionsText = ref('');
 const conclusionsLoading = ref(false);
 
@@ -435,13 +435,14 @@ const chartTypes = [
  { key: 'small_multiples', label: '多维度对比矩阵', icon: '', group: '运营专项', order: 12 },
 ];
 
-const chartsByGroup = computed(() => {
-  const groups = new Map<string, typeof chartTypes>();
-  for (const ct of chartTypes) {
-    if (!groups.has(ct.group)) groups.set(ct.group, []);
-    groups.get(ct.group)!.push(ct);
-  }
-  return groups;
+// 图表切换条: 只列这份数据能出图的图表; 出不了的收进「还缺数据」并带原因
+const chartNav = computed(() => buildChartNav(chartTypes, getChart));
+
+// 当前选中的图这份数据出不了时, 自动切到第一张能出图的 (避免一打开就是空态)
+watch(chartNav, (nav) => {
+  if (activeTab.value === 'conclusions') return;
+  const available = nav.groups.flatMap(g => g.items.map(i => i.key));
+  if (available.length && !available.includes(activeTab.value)) activeTab.value = available[0];
 });
 
 const presentationSlides = computed<Slide[]>(() => {
@@ -1065,10 +1066,6 @@ function onFormattingRulesChange(_rules: unknown[]) {
 }
 
 // ---- Tab navigation ----
-function toggleGroup(groupName: string) {
-  if (collapsedGroups.has(groupName)) collapsedGroups.delete(groupName);
-  else collapsedGroups.add(groupName);
-}
 
 async function generateConclusions() {
   if (isComponentUnmounted) return;
@@ -2018,11 +2015,9 @@ onBeforeUnmount(() => {
 
     <!-- Tab mode: Loading -->
     <div v-if="isGenerating && viewMode === 'tab'" class="dashboard-layout">
-      <aside class="dash-sidebar">
-        <div v-for="[groupName] in chartsByGroup" :key="groupName" class="nav-group">
-          <div class="nav-group-title">{{ groupName }}</div>
-        </div>
-      </aside>
+      <div class="chart-switcher chart-switcher--loading" aria-hidden="true">
+        <span v-for="n in 5" :key="n" class="chart-switcher__placeholder" />
+      </div>
       <main class="dash-content">
         <el-card shadow="hover">
           <ChartSkeleton type="kpi" />
@@ -2031,41 +2026,58 @@ onBeforeUnmount(() => {
       </main>
     </div>
 
-    <!-- Tab mode: Dashboard layout with sidebar -->
+    <!-- Tab mode: 图表切换条 (横向, 只列能出图的图表; 出不了的收进「还缺数据」并写明原因) -->
     <div v-if="dashboardResponse && !isGenerating && viewMode === 'tab'" class="dashboard-layout">
-      <!-- Sidebar navigation -->
-      <aside class="dash-sidebar">
-        <div v-for="[groupName, items] in chartsByGroup" :key="groupName" class="nav-group">
-          <div class="nav-group-title" @click="toggleGroup(groupName)">
-            <span>{{ groupName }}</span>
-            <el-icon :size="12"><component :is="collapsedGroups.has(groupName) ? ArrowRight : ArrowDown" /></el-icon>
-          </div>
-          <div v-show="!collapsedGroups.has(groupName)" class="nav-group-items">
-            <div
-              v-for="ct in items"
+      <nav class="chart-switcher" aria-label="切换图表" data-testid="chart-switcher">
+        <div class="chart-switcher__groups">
+          <div v-for="group in chartNav.groups" :key="group.name" class="chart-switcher__group" role="group" :aria-label="group.name">
+            <span class="chart-switcher__group-name">{{ group.name }}</span>
+            <button
+              v-for="ct in group.items"
               :key="ct.key"
-              class="nav-tab-item"
-              :class="{ active: activeTab === ct.key, available: !!getChart(ct.key) }"
+              type="button"
+              class="chart-switcher__item"
+              :class="{ 'is-active': activeTab === ct.key }"
+              :aria-pressed="activeTab === ct.key"
               @click="activeTab = ct.key"
             >
-              <span class="nav-icon">{{ ct.icon }}</span>
-              <span class="nav-label">{{ ct.label }}</span>
-              <span class="nav-order">{{ String(ct.order).padStart(2, '0') }}</span>
-            </div>
+              {{ ct.label }}
+            </button>
           </div>
         </div>
-        <div class="nav-group">
-          <div
-            class="nav-tab-item"
-            :class="{ active: activeTab === 'conclusions' }"
+        <div class="chart-switcher__aside">
+          <el-popover
+            v-if="chartNav.missing.length"
+            placement="bottom-end"
+            :width="360"
+            trigger="click"
+          >
+            <template #reference>
+              <button type="button" class="chart-switcher__item chart-switcher__item--muted" data-testid="chart-switcher-missing">
+                还缺数据（{{ chartNav.missing.length }}）
+              </button>
+            </template>
+            <div class="missing-charts">
+              <p class="missing-charts__hint">下面这些图这份数据出不了，补上对应的列后重新上传即可：</p>
+              <ul>
+                <li v-for="m in chartNav.missing" :key="m.key">
+                  <button type="button" class="missing-charts__name" @click="activeTab = m.key">{{ m.label }}</button>
+                  <span class="missing-charts__reason">{{ m.reason }}</span>
+                </li>
+              </ul>
+            </div>
+          </el-popover>
+          <button
+            type="button"
+            class="chart-switcher__item chart-switcher__item--primary"
+            :class="{ 'is-active': activeTab === 'conclusions' }"
+            :aria-pressed="activeTab === 'conclusions'"
             @click="activeTab = 'conclusions'"
           >
- <span class="nav-icon"></span>
-            <span class="nav-label">分析结论与建议</span>
-            <span class="nav-order">19</span>
-          </div>
+            分析结论与建议
+          </button>
         </div>
-      </aside>
+      </nav>
 
       <!-- Content area -->
       <main class="dash-content">
@@ -3133,107 +3145,143 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* ---- Tab mode: Sidebar + Content layout ---- */
+/* ---- Tab mode: 图表切换条 + 内容 (原深色内嵌侧栏与应用主侧栏叠成两层, 改为内容上方的浅色横向切换条) ---- */
 .dashboard-layout {
   display: flex;
-  gap: 16px;
-  min-height: calc(100vh - 120px);
-}
-
-.dash-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  background: #1a2332;
-  border-radius: 12px;
-  color: #c8d0da;
-  padding: 12px 0;
-  overflow-y: auto;
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 120px);
-}
-
-.nav-group {
-  margin-bottom: 4px;
-}
-
-.nav-group-title {
-  padding: 10px 16px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #5a6778;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  user-select: none;
-  transition: color 0.2s;
-}
-
-.nav-group-title:hover {
-  color: #8899aa;
-}
-
-.nav-group-items {
-  display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
-.nav-tab-item {
-  padding: 9px 16px;
-  font-size: 13px;
-  cursor: pointer;
+.chart-switcher {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
-  gap: 8px;
-  border-left: 3px solid transparent;
-  color: #9aa5b4;
-  transition: all 0.2s ease;
-  user-select: none;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--el-bg-color, #fff);
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
 }
 
-.nav-tab-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #c8d0da;
-}
-
-.nav-tab-item.active {
-  background: rgba(45, 139, 87, 0.15);
-  color: #5ede9a;
-  border-left-color: #2D8B57;
-  font-weight: 500;
-}
-
-.nav-tab-item.available {
-  color: #c8d0da;
-}
-
-.nav-tab-item:not(.available):not(.active) {
-  opacity: 0.5;
-}
-
-.nav-icon {
-  font-size: 14px;
-  flex-shrink: 0;
-  width: 20px;
-  text-align: center;
-}
-
-.nav-label {
+.chart-switcher__groups {
+  display: flex;
+  align-items: center;
+  gap: 4px 20px;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-wrap: wrap;
+}
+
+.chart-switcher__group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-switcher__group-name {
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #606266);
   white-space: nowrap;
 }
 
-.nav-order {
-  margin-left: auto;
-  font-size: 11px;
-  opacity: 0.4;
+.chart-switcher__aside {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.chart-switcher__item {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--el-text-color-regular, #303133);
+  font: inherit;
+  font-size: 13px;
+  line-height: 30px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease-out, color 0.15s ease-out;
+}
+
+.chart-switcher__item:hover {
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.chart-switcher__item:focus-visible {
+  outline: 2px solid var(--el-color-primary, #409eff);
+  outline-offset: 1px;
+}
+
+.chart-switcher__item.is-active {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary, #409eff);
+  font-weight: 600;
+}
+
+.chart-switcher__item--muted {
+  color: var(--el-text-color-secondary, #606266);
+  border-color: var(--el-border-color, #dcdfe6);
+}
+
+.chart-switcher__item--primary {
+  border-color: var(--el-color-primary-light-5, #a0cfff);
+  color: var(--el-color-primary, #409eff);
+}
+
+.chart-switcher--loading {
+  gap: 8px;
+}
+
+.chart-switcher__placeholder {
+  width: 88px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.missing-charts__hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular, #303133);
+}
+
+.missing-charts ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.missing-charts li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.missing-charts__name {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--el-color-primary, #409eff);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.missing-charts__reason {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary, #606266);
 }
 
 .dash-content {
@@ -3252,48 +3300,31 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 
-/* Dark mode sidebar */
-.financial-dashboard-pbi[data-theme="dark"] .dash-sidebar {
-  background: #111827;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+/* 窄屏: 切换条横向滚动, 不换成多行堆叠 */
+@media (max-width: 1024px) {
+  .chart-switcher {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .chart-switcher__groups {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .chart-switcher__aside {
+    justify-content: flex-end;
+  }
 }
 
-/* Responsive: collapse sidebar on small screens */
-@media (max-width: 1024px) {
-  .dashboard-layout {
-    flex-direction: column;
-  }
-  .dash-sidebar {
-    width: 100%;
-    max-height: none;
-    position: static;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 8px;
-  }
-  .nav-group {
-    flex: 1;
-    min-width: 200px;
-  }
-  .nav-group-items {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .nav-tab-item {
-    padding: 6px 12px;
-    border-left: none;
-    border-bottom: 2px solid transparent;
-    font-size: 12px;
-  }
-  .nav-tab-item.active {
-    border-bottom-color: #2D8B57;
-    border-left-color: transparent;
+@media (prefers-reduced-motion: reduce) {
+  .chart-switcher__item {
+    transition: none;
   }
 }
 
 @media print {
-  .dash-sidebar {
+  .chart-switcher {
     display: none !important;
   }
   .dashboard-layout {
