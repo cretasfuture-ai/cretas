@@ -95,6 +95,10 @@ class RuntimeToolPolicyLoaderTest {
             if (policy.toolName().equals("material_stock_summary")) {
                 assertThat(policy.allowedSources()).containsExactlyInAnyOrder(
                         ToolExecutionSource.SKILL_WORKFLOW, ToolExecutionSource.AI_INTENT_DISPATCH);
+            } else if (policy.toolName().equals("material_expired_query")) {
+                // S6 pilot: the only tool cron schedules / event chains may run (as their run-as user).
+                assertThat(policy.allowedSources()).containsExactlyInAnyOrder(ToolExecutionSource.SKILL_WORKFLOW,
+                        ToolExecutionSource.SCHEDULER, ToolExecutionSource.TRIGGER);
             } else {
                 assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.SKILL_WORKFLOW);
             }

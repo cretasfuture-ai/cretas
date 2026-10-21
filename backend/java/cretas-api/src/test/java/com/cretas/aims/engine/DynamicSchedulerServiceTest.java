@@ -1,6 +1,6 @@
 package com.cretas.aims.engine;
 
-import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
@@ -45,6 +45,8 @@ class DynamicSchedulerServiceTest {
     @Mock
     private ToolExecutor toolExecutor;
     @Mock
+    private AutonomousToolRunner runner;
+    @Mock
     private TaskScheduler taskScheduler;
     @Mock
     private ScheduledFuture<?> scheduledFuture;
@@ -53,7 +55,7 @@ class DynamicSchedulerServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        service = new DynamicSchedulerService(schedulerRepo, toolRegistry, new ObjectMapper());
+        service = new DynamicSchedulerService(schedulerRepo, toolRegistry, runner, new ObjectMapper());
         Field schedulerField = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
         schedulerField.setAccessible(true);
         schedulerField.set(service, taskScheduler);
@@ -135,12 +137,16 @@ class DynamicSchedulerServiceTest {
     void validSchedule_executesAndPersistsByConfigId() throws Exception {
         FactorySchedulerConfig config = config(51L, "F001", "daily", "report_tool");
         config.setParams(Map.of("limit", 10));
+        config.setRunAsUserId(7L);
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
         // report_tool is read-only; undeclared tools are refused for cron runs (AutonomousToolPolicy).
         when(toolExecutor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         org.mockito.Mockito.doReturn(scheduledFuture).when(taskScheduler)
                 .schedule(any(Runnable.class), any(Trigger.class));
-        when(toolExecutor.execute(any(ToolCall.class), any())).thenReturn("{\"success\":true,\"data\":[]}");
+        when(runner.run(eq("F001"), eq(7L), eq("report_tool"), eq(Map.of("limit", 10)),
+                eq(ToolExecutionSource.SCHEDULER), any()))
+                .thenReturn(new AutonomousToolRunner.Outcome("SUCCESS", null,
+                        new ObjectMapper().readTree("{\"success\":true,\"data\":[]}")));
         when(schedulerRepo.findById(51L)).thenReturn(Optional.of(config));
 
         service.scheduleTask(config);
@@ -150,9 +156,10 @@ class DynamicSchedulerServiceTest {
         verify(taskScheduler).schedule(runnable.capture(), any(Trigger.class));
         runnable.getValue().run();
 
-        ArgumentCaptor<ToolCall> call = ArgumentCaptor.forClass(ToolCall.class);
-        verify(toolExecutor).execute(call.capture(), eq(Map.of("factoryId", "F001")));
-        assertEquals("report_tool", call.getValue().getFunction().getName());
+        // Never executed directly: only through the gateway runner, as the run-as user.
+        verify(runner).run(eq("F001"), eq(7L), eq("report_tool"), eq(Map.of("limit", 10)),
+                eq(ToolExecutionSource.SCHEDULER), any());
+        verify(toolExecutor, never()).execute(any(), any());
         verify(schedulerRepo).findById(51L);
         verify(schedulerRepo, never()).findByFactoryIdAndTaskCode(any(), any());
         assertEquals("SUCCESS", config.getLastExecutionStatus());
@@ -167,8 +174,9 @@ class DynamicSchedulerServiceTest {
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
         // report_tool is read-only; undeclared tools are refused for cron runs (AutonomousToolPolicy).
         when(toolExecutor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
-        when(toolExecutor.execute(any(ToolCall.class), any())).thenReturn(
-                "{\"success\":false,\"error\":\"access_token=secret password=abc\"}");
+        when(runner.run(eq("F001"), any(), eq("report_tool"), any(), eq(ToolExecutionSource.SCHEDULER), any()))
+                .thenReturn(new AutonomousToolRunner.Outcome("SUCCESS", null, new ObjectMapper().readTree(
+                        "{\"success\":false,\"error\":\"access_token=secret password=abc\"}")));
         when(schedulerRepo.findById(61L)).thenReturn(Optional.of(config));
 
         Method executeTask = DynamicSchedulerService.class.getDeclaredMethod("executeTask", FactorySchedulerConfig.class);

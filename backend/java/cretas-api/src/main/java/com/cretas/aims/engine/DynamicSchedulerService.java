@@ -2,7 +2,7 @@ package com.cretas.aims.engine;
 
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
-import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.audit.RequestAuditSupport;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
@@ -21,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,6 +36,7 @@ public class DynamicSchedulerService {
 
     private final FactorySchedulerConfigRepository schedulerRepo;
     private final ToolRegistry toolRegistry;
+    private final AutonomousToolRunner runner;
 
     // Self-reference for proxy-aware @Transactional dispatch (R7 G2 persistExecutionMetadata
     // needs REQUIRES_NEW, which Spring AOP only honors through the proxy). @Lazy breaks
@@ -199,13 +199,18 @@ public class DynamicSchedulerService {
             errorHolder[0] = safeError("tool not registered: " + toolOrMethod);
         } else {
             try {
-                String argsJson = objectMapper.writeValueAsString(config.getParams());
-                ToolCall toolCall = ToolCall.of("sched-" + config.getTaskCode(), toolOrMethod, argsJson);
-                Map<String, Object> context = new HashMap<>();
-                context.put("factoryId", config.getFactoryId());
-                String result = executor.get().execute(toolCall, context);
-                String businessError = businessFailure(result);
-                if (businessError != null) {
+                // Never executed directly: the gateway runs it as the run-as user and audits it.
+                AutonomousToolRunner.Outcome outcome = runner.run(config.getFactoryId(), config.getRunAsUserId(),
+                        toolOrMethod, config.getParams(), ToolExecutionSource.SCHEDULER,
+                        "sched-" + config.getId() + "-" + config.getTaskCode());
+                String businessError = outcome.succeeded() && outcome.payload() != null
+                        ? businessFailure(outcome.payload().toString()) : null;
+                if (!outcome.succeeded()) {
+                    statusHolder[0] = outcome.status();
+                    errorHolder[0] = safeError(outcome.error());
+                    log.warn("Scheduled task id={} not completed: status={} error={}",
+                            config.getId(), statusHolder[0], errorHolder[0]);
+                } else if (businessError != null) {
                     statusHolder[0] = "FAILED";
                     errorHolder[0] = safeError(businessError);
                     log.warn("Scheduled task id={} returned business failure: {}",

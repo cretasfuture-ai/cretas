@@ -1,11 +1,10 @@
 package com.cretas.aims.engine;
 
-import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,7 +33,7 @@ public class TriggerChainExecutor {
 
     private final FactoryTriggerChainRepository triggerChainRepository;
     private final ToolRegistry toolRegistry;
-    private final ObjectMapper objectMapper;
+    private final AutonomousToolRunner runner;
 
     // Self-reference for proxy-aware @Transactional dispatch.
     // R7 G3: persistExecutionMetadata needs REQUIRES_NEW tx propagation, which
@@ -229,9 +228,28 @@ public class TriggerChainExecutor {
             Object rawParams = step.getOrDefault("params", Map.of());
             @SuppressWarnings("unchecked")
             Map<String, Object> params = rawParams instanceof Map<?, ?> map ? (Map<String, Object>) map : null;
-            // An event chain runs with no user: refused steps count as failures, never as silent skips.
-            String refusal = params == null ? "step params must be an object"
-                    : AutonomousToolPolicy.rejection(toolName, executor.get(), params);
+            // Steps run as the chain's run-as user through the gateway (policy, identity and audit
+            // live there); anything other than success counts as a failure, never a silent skip.
+            String refusal;
+            if (params == null) {
+                refusal = "step params must be an object";
+            } else {
+                AutonomousToolRunner.Outcome outcome;
+                try {
+                    outcome = runner.run(factoryId, chain.getRunAsUserId(), toolName, params,
+                            ToolExecutionSource.TRIGGER, "chain-" + chain.getId() + "-" + chain.getChainCode() + "-" + order);
+                } catch (RuntimeException gatewayFailure) {
+                    outcome = new AutonomousToolRunner.Outcome("FAILED",
+                            gatewayFailure.getClass().getSimpleName() + ": " + gatewayFailure.getMessage(), null);
+                }
+                refusal = outcome.succeeded() ? null : outcome.status() + ": " + outcome.error();
+                if (refusal == null) {
+                    chainContext.put("step" + order, Map.of("result",
+                            outcome.payload() == null ? "" : outcome.payload().toString(), "success", true));
+                    log.info("Chain {} step {} executed OK", chain.getChainCode(), toolName);
+                    continue;
+                }
+            }
             if (refusal != null) {
                 stepFailures++;
                 if (errorSummary.length() > 0) errorSummary.append("; ");
@@ -243,31 +261,6 @@ public class TriggerChainExecutor {
                     return;
                 }
                 continue;
-            }
-            try {
-
-                // Build proper ToolCall with JSON-serialized arguments
-                String argsJson = objectMapper.writeValueAsString(params);
-                ToolCall toolCall = ToolCall.of(
-                        "chain-" + chain.getChainCode() + "-" + order,
-                        toolName, argsJson);
-
-                Map<String, Object> execContext = new HashMap<>(chainContext);
-
-                String result = executor.get().execute(toolCall, execContext);
-                chainContext.put("step" + order, Map.of("result", result, "success", true));
-                log.info("Chain {} step {} executed OK", chain.getChainCode(), toolName);
-            } catch (Exception e) {
-                stepFailures++;
-                if (errorSummary.length() > 0) errorSummary.append("; ");
-                errorSummary.append(toolName).append(": ").append(e.getClass().getSimpleName()).append(": ").append(e.getMessage());
-                chainContext.put("step" + order, Map.of("success", false, "error", e.getMessage()));
-                log.error("Chain {} step {} failed: {}", chain.getChainCode(), toolName, e.getMessage());
-
-                if ("STOP".equals(chain.getErrorStrategy())) {
-                    self.persistExecutionMetadata(chain, startedAt, "FAILED", errorSummary.toString());
-                    throw new RuntimeException("Trigger chain stopped at step " + toolName, e);
-                }
             }
         }
 

@@ -3,6 +3,8 @@ package com.cretas.aims.engine;
 import com.cretas.aims.ai.tool.ToolAccessModes;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import java.util.Map;
 import java.util.Set;
 
@@ -45,6 +47,23 @@ public final class AutonomousToolPolicy {
 
     public static boolean isWriteDenial(String reason) {
         return reason != null && reason.startsWith(WRITE_PREFIX);
+    }
+
+    /**
+     * The factory user saving an enabled schedule/chain becomes its run-as user. A platform
+     * admin or a user of another factory cannot: there is no factory account to run as, and the
+     * gateway only accepts this factory's users.
+     */
+    public static Long requireRunAsUser(String factoryId) {
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest()
+                .orElseThrow(() -> new BusinessException(401, "无法确认是谁启用了这项自动任务，请重新登录"));
+        if (actor.type() != AuthenticatedActorType.FACTORY_USER || actor.id() == null
+                || factoryId == null || !factoryId.equals(actor.factoryId())) {
+            throw new BusinessException(403, "自动任务会以启用人的身份运行，只能由本厂账号启用")
+                    .withCode("AUTONOMOUS_RUN_AS_FACTORY_USER_REQUIRED")
+                    .withHint("请用这家工厂自己的管理员账号登录后再启用；平台账号不能作为执行人");
+        }
+        return actor.id();
     }
 
     /** Config-time refusal with the reason in words a factory admin can act on. */

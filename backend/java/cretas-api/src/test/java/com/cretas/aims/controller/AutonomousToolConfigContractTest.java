@@ -14,7 +14,13 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,7 +35,7 @@ class AutonomousToolConfigContractTest {
     private final FactoryTriggerChainRepository chainRepo = mock(FactoryTriggerChainRepository.class);
     private final BusinessRuleController rules = new BusinessRuleController(mock(FactoryValidationRuleRepository.class),
             mock(FactoryDefaultValueRepository.class), mock(FactoryFormulaRepository.class), schedulerRepo,
-            new DynamicSchedulerService(schedulerRepo, registry, new ObjectMapper()), new SandboxedSpelEvaluator());
+            new DynamicSchedulerService(schedulerRepo, registry, mock(com.cretas.aims.engine.AutonomousToolRunner.class), new ObjectMapper()), new SandboxedSpelEvaluator());
     private final TriggerChainController chains = new TriggerChainController(mock(FactoryToolConfigRepository.class),
             mock(FactorySkillConfigRepository.class), chainRepo);
 
@@ -45,6 +51,35 @@ class AutonomousToolConfigContractTest {
         when(chainRepo.findByFactoryIdAndChainCode(any(), any())).thenReturn(Optional.empty());
         when(chainRepo.save(any())).thenAnswer(call -> call.getArgument(0));
         registry(chains, registry);
+        actor(AuthenticatedActorType.FACTORY_USER, 42L, "F001");
+    }
+
+    @AfterEach void clearActor() { RequestContextHolder.resetRequestAttributes(); }
+
+    @Test void enablingRecordsTheFactoryUserAsRunAsAndDisablingKeepsIt() {
+        FactorySchedulerConfig saved = rules.setSchedulerConfig("F001", "nightly", schedule("stock_summary", Map.of())).getData();
+        assertThat(saved.getRunAsUserId()).isEqualTo(42L);
+        when(schedulerRepo.findByFactoryIdAndTaskCode("F001", "nightly")).thenReturn(Optional.of(saved));
+        actor(AuthenticatedActorType.FACTORY_USER, 43L, "F001");
+        FactorySchedulerConfig disable = new FactorySchedulerConfig();
+        disable.setEnabled(false);
+        assertThat(rules.setSchedulerConfig("F001", "nightly", disable).getData().getRunAsUserId()).isEqualTo(42L);
+        FactoryTriggerChain chain = chains.setTriggerChain("F001", "C", chain(true, List.of(Map.of("tool", "stock_summary")))).getData();
+        assertThat(chain.getRunAsUserId()).isEqualTo(43L);
+    }
+
+    @Test void platformAdminOrAnotherFactorysUserCannotBecomeTheRunAsUser() {
+        actor(AuthenticatedActorType.PLATFORM_ADMIN, 42L, null);
+        assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", schedule("stock_summary", Map.of())))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("本厂账号");
+        actor(AuthenticatedActorType.FACTORY_USER, 42L, "F002");
+        assertThatThrownBy(() -> chains.setTriggerChain("F001", "C", chain(true, List.of(Map.of("tool", "stock_summary")))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("本厂账号");
+        RequestContextHolder.resetRequestAttributes();
+        assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", schedule("stock_summary", Map.of())))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("重新登录");
+        verify(schedulerRepo, never()).save(any());
+        verify(chainRepo, never()).save(any());
     }
 
     @Test void schedulerPutRefusesWriteToolAndForeignFactoryParamWithoutSaving() {
@@ -101,6 +136,12 @@ class AutonomousToolConfigContractTest {
         assertThatThrownBy(() -> chains.setTriggerChain("F001", "SO_APPROVED", chain(true, List.of(Map.of("tool", "stock_summary")))))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("工具注册表不可用");
         verify(chainRepo, never()).save(any());
+    }
+
+    private static void actor(AuthenticatedActorType type, Long id, String factoryId) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, new AuthenticatedActor(type, id, factoryId, "factory_super_admin"));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     }
 
     private static FactorySchedulerConfig schedule(String tool, Map<String, Object> params) {

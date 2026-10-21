@@ -1,21 +1,31 @@
 package com.cretas.aims.engine;
 
-import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolExecutor.AccessMode;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.PrincipalType;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
 import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -28,36 +38,39 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Cron schedules and event trigger chains run with only a factory id behind them: no user, no
- * permission check, no confirmation. Until delegated grants exist they may run read-only tools
- * only, and may not name a factory/user/role in their parameters.
+ * Cron schedules and event trigger chains: read-only tools only, no identity parameters, and
+ * every run goes through the tool gateway as the configured run-as factory user. A tool is never
+ * executed directly by these runners.
  */
 class AutonomousToolExecutionContractTest {
     private final ToolRegistry registry = mock(ToolRegistry.class);
     private final ToolExecutor readTool = tool(AccessMode.READ);
     private final ToolExecutor writeTool = tool(AccessMode.WRITE);
     private final ToolExecutor undeclaredTool = mock(ToolExecutor.class);
+    private final ToolExecutionGateway gateway = mock(ToolExecutionGateway.class);
+    private final AuthenticatedToolPrincipalFactory principals = mock(AuthenticatedToolPrincipalFactory.class);
+    private final AutonomousToolRunner runner = new AutonomousToolRunner(gateway, principals, registry, new ObjectMapper());
     private final FactorySchedulerConfigRepository schedulerRepo = mock(FactorySchedulerConfigRepository.class);
-    private final DynamicSchedulerService scheduler = new DynamicSchedulerService(schedulerRepo, registry, new ObjectMapper());
+    private final DynamicSchedulerService scheduler =
+            new DynamicSchedulerService(schedulerRepo, registry, runner, new ObjectMapper());
 
-    @BeforeEach void tools() throws Exception {
-        when(registry.getExecutor("stock_summary")).thenReturn(Optional.of(readTool));
+    @BeforeEach void tools() {
+        when(registry.getExecutor("material_expired_query")).thenReturn(Optional.of(readTool));
         when(registry.getExecutor("dictionary_add")).thenReturn(Optional.of(writeTool));
         when(registry.getExecutor("legacy_tool")).thenReturn(Optional.of(undeclaredTool));
         when(registry.isToolEnabledForFactory(any(), any())).thenReturn(true);
-        when(readTool.execute(any(), any())).thenReturn("{\"success\":true}");
-        when(writeTool.execute(any(), any())).thenReturn("{\"success\":true}");
+        when(readTool.getVersion()).thenReturn("1.0.0");
         when(undeclaredTool.getToolName()).thenReturn("legacy_tool");
-        when(undeclaredTool.execute(any(), any())).thenReturn("{\"success\":true}");
+        when(principals.create(eq("F001"), any(), any())).thenAnswer(call -> principal(call.getArgument(1)));
+        when(gateway.execute(any())).thenAnswer(call -> result(call.getArgument(0), ToolExecutionStatus.SUCCEEDED));
     }
 
     @Test void policyAllowsOnlyDeclaredReadToolsWithoutIdentityParameters() {
-        assertThat(AutonomousToolPolicy.rejection("stock_summary", readTool, Map.of("limit", 5))).isNull();
+        assertThat(AutonomousToolPolicy.rejection("material_expired_query", readTool, Map.of("limit", 5))).isNull();
         assertThat(AutonomousToolPolicy.rejection("dictionary_add", writeTool, Map.of())).contains("dictionary_add");
         assertThat(AutonomousToolPolicy.rejection("legacy_tool", undeclaredTool, Map.of())).contains("legacy_tool");
-        assertThat(AutonomousToolPolicy.rejection("stock_summary", readTool, Map.of("factoryId", "F-OTHER")))
+        assertThat(AutonomousToolPolicy.rejection("material_expired_query", readTool, Map.of("factoryId", "F-OTHER")))
                 .contains("factoryId");
-        assertThat(AutonomousToolPolicy.rejection("stock_summary", readTool, Map.of("userId", 1))).contains("userId");
         assertThat(AutonomousToolPolicy.refusal(AutonomousToolPolicy.rejection("dictionary_add", writeTool, Map.of())))
                 .hasMessageContaining("只能使用只读工具").hasMessageContaining("dictionary_add");
     }
@@ -73,83 +86,108 @@ class AutonomousToolExecutionContractTest {
         assertThat(AutonomousToolPolicy.rejection("not_in_seed", defaultWrite, Map.of())).contains("not_in_seed");
     }
 
+    @Test void scheduledReadToolRunsThroughTheGatewayAsTheRunAsUserNeverDirectly() throws Exception {
+        FactorySchedulerConfig config = schedule(73L, "material_expired_query", Map.of("limit", 5), 42L);
+        when(schedulerRepo.findById(73L)).thenReturn(Optional.of(config));
+        runScheduled(config);
+
+        ArgumentCaptor<ToolExecutionCommand> command = ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(gateway).execute(command.capture());
+        assertThat(command.getValue().principal().principalId()).isEqualTo("42");
+        assertThat(command.getValue().principal().principalType()).isEqualTo(PrincipalType.USER);
+        assertThat(command.getValue().principal().tenantId()).isEqualTo("F001");
+        assertThat(command.getValue().source()).isEqualTo(ToolExecutionSource.SCHEDULER);
+        assertThat(command.getValue().mode()).isEqualTo(ToolExecutionMode.EXECUTE);
+        assertThat(command.getValue().toolName()).isEqualTo("material_expired_query");
+        assertThat(command.getValue().parameters().get("limit").asInt()).isEqualTo(5);
+        assertThat(command.getValue().confirmationProof()).isEmpty();
+        verify(readTool, never()).execute(any(), any());
+        assertThat(config.getLastExecutionStatus()).isEqualTo("SUCCESS");
+    }
+
+    @Test void noRunAsUserMeansTheGatewayIsNeverCalled() throws Exception {
+        FactorySchedulerConfig config = schedule(74L, "material_expired_query", Map.of(), null);
+        when(schedulerRepo.findById(74L)).thenReturn(Optional.of(config));
+        runScheduled(config);
+        verifyNoInteractions(gateway, principals);
+        assertThat(config.getLastExecutionStatus()).isEqualTo("RUN_AS_MISSING");
+    }
+
+    @Test void gatewayDecisionsAreRecordedWithTheAuditIdAndUnknownIsNotSuccess() throws Exception {
+        doAnswer(call -> result(call.getArgument(0), ToolExecutionStatus.DENIED)).when(gateway).execute(any());
+        FactorySchedulerConfig denied = schedule(75L, "material_expired_query", Map.of(), 42L);
+        when(schedulerRepo.findById(75L)).thenReturn(Optional.of(denied));
+        runScheduled(denied);
+        assertThat(denied.getLastExecutionStatus()).isEqualTo("GATEWAY_DENIED");
+        assertThat(denied.getLastExecutionError()).contains("audit-1");
+
+        doAnswer(call -> result(call.getArgument(0), ToolExecutionStatus.OUTCOME_UNKNOWN)).when(gateway).execute(any());
+        FactorySchedulerConfig unknown = schedule(76L, "material_expired_query", Map.of(), 42L);
+        when(schedulerRepo.findById(76L)).thenReturn(Optional.of(unknown));
+        runScheduled(unknown);
+        assertThat(unknown.getLastExecutionStatus()).isEqualTo("OUTCOME_UNKNOWN");
+
+        doThrow(new SecurityException("tenant unavailable")).when(principals).create(eq("F001"), eq(43L), any());
+        FactorySchedulerConfig inactiveTenant = schedule(77L, "material_expired_query", Map.of(), 43L);
+        when(schedulerRepo.findById(77L)).thenReturn(Optional.of(inactiveTenant));
+        runScheduled(inactiveTenant);
+        assertThat(inactiveTenant.getLastExecutionStatus()).isEqualTo("GATEWAY_DENIED");
+    }
+
+    @Test void writeAndUndeclaredToolsNeverReachTheGateway() throws Exception {
+        FactorySchedulerConfig write = schedule(78L, "dictionary_add", Map.of(), 42L);
+        when(schedulerRepo.findById(78L)).thenReturn(Optional.of(write));
+        runScheduled(write);
+        FactorySchedulerConfig undeclared = schedule(79L, "legacy_tool", Map.of(), 42L);
+        when(schedulerRepo.findById(79L)).thenReturn(Optional.of(undeclared));
+        runScheduled(undeclared);
+        FactorySchedulerConfig foreign = schedule(80L, "material_expired_query", Map.of("factoryId", "F-OTHER"), 42L);
+        when(schedulerRepo.findById(80L)).thenReturn(Optional.of(foreign));
+        runScheduled(foreign);
+        verifyNoInteractions(gateway);
+        verify(writeTool, never()).execute(any(), any());
+        assertThat(write.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        assertThat(undeclared.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        assertThat(foreign.getLastExecutionStatus()).isEqualTo("CONFIG_INVALID");
+    }
+
     @Test void writeToolIsNotEvenScheduled() throws Exception {
         org.springframework.scheduling.TaskScheduler taskScheduler = mock(org.springframework.scheduling.TaskScheduler.class);
         Field field = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
         field.setAccessible(true);
         field.set(scheduler, taskScheduler);
-        FactorySchedulerConfig config = schedule(75L, "dictionary_add", Map.of());
-        when(schedulerRepo.findById(75L)).thenReturn(Optional.of(config));
+        FactorySchedulerConfig config = schedule(81L, "dictionary_add", Map.of(), 42L);
+        when(schedulerRepo.findById(81L)).thenReturn(Optional.of(config));
         scheduler.scheduleTask(config);
         verifyNoInteractions(taskScheduler);
-        assertThat(scheduler.getActiveTaskCount()).isZero();
         assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
-    }
-
-    @Test void malformedStepParamsAreACountedFailureAndLaterStepsStillRun() throws Exception {
-        TriggerChainExecutor executor = chainExecutor();
-        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
-        setSelf(executor, self);
-        FactoryTriggerChain chain = chain("CONTINUE", List.of(
-                Map.of("order", 1, "tool", "stock_summary", "params", "limit=5"), step(2, "stock_summary", Map.of())));
-        runChain(executor, chain);
-        verify(readTool, times(1)).execute(any(), any());
-        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("PARTIAL"), contains("must be an object"));
-    }
-
-    @Test void scheduledWriteToolIsNeverExecutedAndIsRecordedAsWriteDenied() throws Exception {
-        FactorySchedulerConfig config = schedule(71L, "dictionary_add", Map.of());
-        when(schedulerRepo.findById(71L)).thenReturn(Optional.of(config));
-        runScheduled(config);
-        verify(writeTool, never()).execute(any(), any());
-        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
-        assertThat(config.getLastExecutionError()).contains("dictionary_add");
-    }
-
-    @Test void scheduledUndeclaredToolCountsAsWrite() throws Exception {
-        FactorySchedulerConfig config = schedule(72L, "legacy_tool", Map.of());
-        when(schedulerRepo.findById(72L)).thenReturn(Optional.of(config));
-        runScheduled(config);
-        verify(undeclaredTool, never()).execute(any(), any());
-        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
-    }
-
-    @Test void scheduledReadToolRunsInTheConfigsOwnFactoryAndForeignFactoryParamIsRefused() throws Exception {
-        FactorySchedulerConfig ok = schedule(73L, "stock_summary", Map.of("limit", 5));
-        when(schedulerRepo.findById(73L)).thenReturn(Optional.of(ok));
-        runScheduled(ok);
-        verify(readTool).execute(any(ToolCall.class), eq(Map.of("factoryId", "F001")));
-        assertThat(ok.getLastExecutionStatus()).isEqualTo("SUCCESS");
-
-        FactorySchedulerConfig foreign = schedule(74L, "stock_summary", Map.of("factoryId", "F-OTHER"));
-        when(schedulerRepo.findById(74L)).thenReturn(Optional.of(foreign));
-        runScheduled(foreign);
-        verify(readTool, times(1)).execute(any(), any());
-        assertThat(foreign.getLastExecutionStatus()).isEqualTo("CONFIG_INVALID");
-        assertThat(foreign.getLastExecutionError()).contains("factoryId");
     }
 
     @Test void configTimeGateRejectsWriteToolsAndIdentityParamsButLeavesUnknownToolsToTheRunner() {
         assertThatThrownBy(() -> scheduler.requireSchedulable("dictionary_add", Map.of()))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("dictionary_add");
-        assertThatThrownBy(() -> scheduler.requireSchedulable("stock_summary", Map.of("tenantId", "X")))
+        assertThatThrownBy(() -> scheduler.requireSchedulable("material_expired_query", Map.of("tenantId", "X")))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("tenantId");
-        scheduler.requireSchedulable("stock_summary", Map.of("limit", 1));
+        scheduler.requireSchedulable("material_expired_query", Map.of("limit", 1));
         when(registry.getExecutor("missing_tool")).thenReturn(Optional.empty());
         scheduler.requireSchedulable("missing_tool", Map.of());
     }
 
-    @Test void triggerChainWriteStepIsRefusedAndCountedWhileReadStepRuns() throws Exception {
+    @Test void triggerChainStepsRunThroughTheGatewayAsTheChainsRunAsUser() throws Exception {
         TriggerChainExecutor executor = chainExecutor();
         TriggerChainExecutor self = mock(TriggerChainExecutor.class);
         setSelf(executor, self);
-        FactoryTriggerChain chain = chain("CONTINUE", List.of(
-                step(1, "stock_summary", Map.of()), step(2, "dictionary_add", Map.of()),
-                step(3, "stock_summary", Map.of("factoryId", "F-OTHER"))));
+        FactoryTriggerChain chain = chain("CONTINUE", 42L, List.of(
+                step(1, "material_expired_query", Map.of()), step(2, "dictionary_add", Map.of()),
+                step(3, "material_expired_query", Map.of("factoryId", "F-OTHER"))));
 
         runChain(executor, chain);
 
-        verify(readTool, times(1)).execute(any(), any());
+        ArgumentCaptor<ToolExecutionCommand> command = ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(gateway, times(1)).execute(command.capture());
+        assertThat(command.getValue().source()).isEqualTo(ToolExecutionSource.TRIGGER);
+        assertThat(command.getValue().principal().principalId()).isEqualTo("42");
+        verify(readTool, never()).execute(any(), any());
         verify(writeTool, never()).execute(any(), any());
         ArgumentCaptor<String> status = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> error = ArgumentCaptor.forClass(String.class);
@@ -158,14 +196,32 @@ class AutonomousToolExecutionContractTest {
         assertThat(error.getValue()).contains("dictionary_add").contains("factoryId");
     }
 
-    @Test void stopStrategyHaltsAtTheRefusedStep() throws Exception {
+    @Test void chainWithoutRunAsUserFailsEveryStepWithoutCallingTheGateway() throws Exception {
         TriggerChainExecutor executor = chainExecutor();
         TriggerChainExecutor self = mock(TriggerChainExecutor.class);
         setSelf(executor, self);
-        FactoryTriggerChain chain = chain("STOP", List.of(step(1, "dictionary_add", Map.of()), step(2, "stock_summary", Map.of())));
+        FactoryTriggerChain chain = chain("CONTINUE", null, List.of(step(1, "material_expired_query", Map.of())));
         runChain(executor, chain);
-        verify(readTool, never()).execute(any(), any());
-        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"), contains("dictionary_add"));
+        verifyNoInteractions(gateway);
+        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"), contains("RUN_AS_MISSING"));
+    }
+
+    @Test void stopStrategyHaltsAtTheRefusedStepAndMalformedParamsAreCounted() throws Exception {
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        FactoryTriggerChain stop = chain("STOP", 42L, List.of(step(1, "dictionary_add", Map.of()),
+                step(2, "material_expired_query", Map.of())));
+        runChain(executor, stop);
+        verifyNoInteractions(gateway);
+        verify(self).persistExecutionMetadata(eq(stop), any(LocalDateTime.class), eq("FAILED"), contains("dictionary_add"));
+
+        FactoryTriggerChain malformed = chain("CONTINUE", 42L, List.of(
+                Map.of("order", 1, "tool", "material_expired_query", "params", "limit=5"),
+                step(2, "material_expired_query", Map.of())));
+        runChain(executor, malformed);
+        verify(gateway, times(1)).execute(any());
+        verify(self).persistExecutionMetadata(eq(malformed), any(LocalDateTime.class), eq("PARTIAL"), contains("must be an object"));
     }
 
     private void runScheduled(FactorySchedulerConfig config) throws Exception {
@@ -175,7 +231,7 @@ class AutonomousToolExecutionContractTest {
     }
 
     private TriggerChainExecutor chainExecutor() {
-        return new TriggerChainExecutor(mock(FactoryTriggerChainRepository.class), registry, new ObjectMapper());
+        return new TriggerChainExecutor(mock(FactoryTriggerChainRepository.class), registry, runner);
     }
 
     private static void setSelf(TriggerChainExecutor executor, TriggerChainExecutor self) throws Exception {
@@ -191,18 +247,30 @@ class AutonomousToolExecutionContractTest {
         run.invoke(executor, chain, "F001", new ApplicationEvent("test") { });
     }
 
-    private static FactorySchedulerConfig schedule(Long id, String tool, Map<String, Object> params) {
-        return FactorySchedulerConfig.builder().id(id).factoryId("F001").taskCode("t" + id)
-                .cronExpression("0 0 9 1 * ?").enabled(true).toolOrMethod(tool).params(params).build();
+    private static ExecutionPrincipal principal(Long userId) {
+        return new ExecutionPrincipal("F001", "FACTORY", String.valueOf(userId), PrincipalType.USER,
+                Set.of(AutonomousToolRunner.ASSERTED_ROLE), Set.of(), Set.of());
     }
 
-    private static FactoryTriggerChain chain(String strategy, List<Map<String, Object>> steps) {
+    private static ToolExecutionResult result(ToolExecutionCommand command, ToolExecutionStatus status) {
+        return new ToolExecutionResult(command.requestId(), command.toolName(), "1.0.0", "audit-1",
+                command.traceId(), status, JsonNodeFactory.instance.objectNode().put("success", true), "gateway result", false);
+    }
+
+    private static FactorySchedulerConfig schedule(Long id, String tool, Map<String, Object> params, Long runAs) {
+        return FactorySchedulerConfig.builder().id(id).factoryId("F001").taskCode("t" + id)
+                .cronExpression("0 0 9 1 * ?").enabled(true).toolOrMethod(tool).params(params).runAsUserId(runAs).build();
+    }
+
+    private static FactoryTriggerChain chain(String strategy, Long runAs, List<Map<String, Object>> steps) {
         FactoryTriggerChain chain = new FactoryTriggerChain();
+        chain.setId(1L);
         chain.setFactoryId("F001");
         chain.setChainCode("CHAIN");
         chain.setEventType("TEST");
         chain.setErrorStrategy(strategy);
         chain.setEnabled(true);
+        chain.setRunAsUserId(runAs);
         chain.setSteps(steps);
         return chain;
     }

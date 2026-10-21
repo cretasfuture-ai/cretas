@@ -176,7 +176,10 @@ public class TriggerChainController {
         if (body.getErrorStrategy() != null) chain.setErrorStrategy(body.getErrorStrategy());
         if (body.getEventType() != null) chain.setEventType(body.getEventType());
         if (body.getDescription() != null) chain.setDescription(body.getDescription());
-        if (Boolean.TRUE.equals(chain.getEnabled())) requireAutonomousSteps(chain.getSteps());
+        if (Boolean.TRUE.equals(chain.getEnabled())) {
+            requireAutonomousSteps(chain.getSteps());
+            chain.setRunAsUserId(AutonomousToolPolicy.requireRunAsUser(factoryId));
+        }
         return ApiResponse.success(triggerChainRepo.save(chain));
     }
 

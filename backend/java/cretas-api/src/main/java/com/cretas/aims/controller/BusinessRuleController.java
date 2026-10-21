@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.engine.DynamicSchedulerService;
 import com.cretas.aims.entity.config.*;
 import com.cretas.aims.repository.config.*;
@@ -185,6 +186,7 @@ public class BusinessRuleController {
         // Only an enabled config runs; disabling an existing write-tool schedule must stay possible.
         if (Boolean.TRUE.equals(config.getEnabled())) {
             dynamicSchedulerService.requireSchedulable(config.getToolOrMethod(), config.getParams());
+            config.setRunAsUserId(AutonomousToolPolicy.requireRunAsUser(factoryId));
         }
         FactorySchedulerConfig saved = schedulerRepo.save(config);
         dynamicSchedulerService.reloadSchedule(factoryId, taskCode);
