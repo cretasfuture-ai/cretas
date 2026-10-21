@@ -5,6 +5,7 @@ import pandas as pd
 from .financial.registry import registry, chart_succeeded
 from .financial_data_normalizer import FinancialDataNormalizer, ColumnMapping
 from .financial_subjects import classify_sheet_name
+from .financial_headline import build_headline
 from .financial.base import _sanitize_for_json
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,8 @@ class FinancialDashboardService:
 
         return _sanitize_for_json({
             "success": True,
+            # 页首一句话结论 (规则生成, 与图表同一指标库; 没有可说的事实时为 None)
+            "headline": build_headline(df, column_mapping.value_kind, period["label"]),
             "charts": charts,
             "availableTypes": available,
             "period": period,

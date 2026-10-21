@@ -54,6 +54,18 @@ def _detect_value_scale(values: list) -> dict:
         return {"divisor": 1, "suffix": "", "name_suffix": ""}
 
 
+def format_amount(val, precision: int = 2) -> str:
+    """金额显示: 1 万以上用「万」, 百亿以上用「亿」, 带千分位; None 显示 '-'。KPI 与页首结论共用。"""
+    if val is None:
+        return '-'
+    magnitude = abs(val)
+    if magnitude >= 1e10:
+        return f"{val / 1e8:,.{precision}f}亿"
+    if magnitude >= 1e4:
+        return f"{val / 1e4:,.{precision}f}万"
+    return f"{val:,.{precision}f}"
+
+
 # Theme colors — aligned with Steven's Power BI green/yellow design language
 COLORS = {
     "primary": "#2D8B57",        # Green — primary color (was blue #1B65A8)
@@ -198,14 +210,7 @@ class AbstractFinancialChartBuilder(ABC):
         不跟随图表各自按月度值推断的 scale, 这样同一个数在不同图里显示同一个单位
         (曾出现同一份数据一张图 42,300.00元、另一张 4.24万元)。scale 参数保留以兼容调用方。
         """
-        if val is None:
-            return '-'
-        magnitude = abs(val)
-        if magnitude >= 1e10:
-            return f"{val / 1e8:,.{precision}f}亿"
-        if magnitude >= 1e4:
-            return f"{val / 1e4:,.{precision}f}万"
-        return f"{val:,.{precision}f}"
+        return format_amount(val, precision)
 
     def _calc_growth_rate(self, current, previous) -> Optional[float]:
         """Calculate YoY/MoM growth rate as percentage."""

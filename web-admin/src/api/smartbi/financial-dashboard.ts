@@ -63,8 +63,16 @@ export interface PeriodInfo {
   label: string;
 }
 
+/** 页首一句话结论 (后端按规则生成, 与图表同一指标库) */
+export interface DashboardHeadline {
+  text: string;
+  tone: 'good' | 'warn' | 'bad' | 'neutral';
+  facts: string[];
+}
+
 export interface DashboardResponse {
   success: boolean;
+  headline?: DashboardHeadline | null;
   charts: ChartResult[];
   availableTypes: AvailableChartType[];
   period: PeriodInfo;

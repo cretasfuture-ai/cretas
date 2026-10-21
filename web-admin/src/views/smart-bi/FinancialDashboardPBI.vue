@@ -17,11 +17,12 @@ import {
   chartNotes,
   createDataVersion,
   buildChartNav,
+  periodRequestLabel,
 } from './financialDashboardState';
 import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
 import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
-import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, Delete } from '@element-plus/icons-vue';
+import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, Delete, Calendar } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
 import { marked } from 'marked';
@@ -173,6 +174,8 @@ const periodSelection = ref<PeriodSelection>({
 });
 
 const isGenerating = ref(false);
+// 期间选择收进一个按钮; 弹层受控 (内部下拉框挂在 body 上, 点它们不能把弹层关掉)
+const periodPopoverOpen = ref(false);
 const dashboardResponse = ref<DashboardResponse | null>(null);
 
 // Per-chart AI analysis state
@@ -292,6 +295,15 @@ const periodRequestError = computed(() => ('error' in periodRequest.value ? peri
 const resolvedPeriod = computed<PeriodRequest>(() => ('error' in periodRequest.value
   ? { periodType: 'year', year: periodSelection.value.year, startMonth: 1, endMonth: 12 }
   : periodRequest.value));
+const periodButtonLabel = computed(() => periodRequestLabel(periodRequest.value));
+const headline = computed(() => dashboardResponse.value?.headline ?? null);
+
+function applyPeriod() {
+  periodPopoverOpen.value = false;
+  // 已经出过看板就按新期间重出, 免得按钮上的期间和图表不是同一期
+  if (dashboardResponse.value && !periodRequestError.value) generate();
+}
+
 const currentYear = computed(() => resolvedPeriod.value.year);
 const periodType = computed(() => resolvedPeriod.value.periodType);
 const startMonth = computed(() => resolvedPeriod.value.startMonth);
@@ -1534,16 +1546,36 @@ onBeforeUnmount(() => {
             clearable
             @change="(v: string) => { uploadId = v ? parseInt(v, 10) : null }"
           />
-          <PeriodSelector
-            v-model="periodSelection"
-            :show-quick-select="true"
-            :show-custom-tab="false"
-            :show-all-history="true"
-            :show-compare="false"
-            default-type="year"
-            size="small"
-            style="margin-left: 8px"
-          />
+          <el-popover :visible="periodPopoverOpen" placement="bottom-start" :width="440" popper-class="period-popover">
+            <template #reference>
+              <el-button
+                size="small"
+                class="period-trigger"
+                :class="{ 'is-invalid': periodRequestError }"
+                data-testid="period-trigger"
+                :aria-expanded="periodPopoverOpen"
+                @click="periodPopoverOpen = !periodPopoverOpen"
+              >
+                <el-icon><Calendar /></el-icon>
+                <span>{{ periodButtonLabel }}</span>
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+            </template>
+            <PeriodSelector
+              v-model="periodSelection"
+              :show-quick-select="true"
+              :show-custom-tab="false"
+              :show-all-history="true"
+              :show-compare="false"
+              default-type="year"
+              size="small"
+            />
+            <div class="period-popover__footer">
+              <span v-if="periodRequestError" class="period-popover__error">{{ periodRequestError }}</span>
+              <el-button size="small" @click="periodPopoverOpen = false">取消</el-button>
+              <el-button size="small" type="primary" :disabled="!!periodRequestError" data-testid="period-apply" @click="applyPeriod">确定</el-button>
+            </div>
+          </el-popover>
           <el-button
             type="primary"
             size="small"
@@ -1564,9 +1596,6 @@ onBeforeUnmount(() => {
           </el-button>
         </div>
         <div class="toolbar-right">
-          <el-tag v-if="periodLabel" type="info" size="small" style="margin-right: 8px">
-            {{ periodLabel }}
-          </el-tag>
           <el-segmented
             v-model="viewMode"
             :options="[{ label: 'Tab', value: 'tab' }, { label: 'Grid', value: 'grid' }]"
@@ -1644,6 +1673,17 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </el-card>
+
+    <!-- 页首一句话结论: 后端按规则从同一指标库算出, 不经过 AI -->
+    <p
+      v-if="headline && !isGenerating"
+      class="dashboard-headline"
+      :class="`dashboard-headline--${headline.tone}`"
+      data-testid="dashboard-headline"
+    >
+      <span class="dashboard-headline__dot" aria-hidden="true" />
+      <span>{{ headline.text }}</span>
+    </p>
 
     <!-- Interaction tips -->
     <div v-if="dashboardResponse && !isGenerating" class="interaction-tips">
@@ -2660,6 +2700,58 @@ onBeforeUnmount(() => {
 }
 
 /* Interaction tips */
+.dashboard-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: var(--el-bg-color, #fff);
+  color: var(--el-text-color-primary, #303133);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.dashboard-headline__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+  background: var(--el-text-color-secondary, #909399);
+}
+
+.dashboard-headline--good .dashboard-headline__dot { background: #1B7A4A; }
+.dashboard-headline--warn .dashboard-headline__dot { background: #9A6700; }
+.dashboard-headline--bad .dashboard-headline__dot { background: #C0362C; }
+
+.period-trigger {
+  margin-left: 8px;
+  min-width: 128px;
+  justify-content: space-between;
+}
+
+.period-trigger.is-invalid {
+  color: #C0362C;
+  border-color: #C0362C;
+}
+
+.period-popover__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.period-popover__error {
+  margin-right: auto;
+  color: #C0362C;
+  font-size: 12px;
+}
+
 .interaction-tips {
   font-size: 12px;
   color: var(--el-text-color-regular, #606266);

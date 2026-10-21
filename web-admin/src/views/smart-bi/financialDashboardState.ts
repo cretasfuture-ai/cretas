@@ -82,6 +82,17 @@ export function periodSelectionToRequest(selection: PeriodSelection): PeriodRequ
   }
 }
 
+/** 期间按钮上的文字: 全部历史 / 2026年 / 2026年3月 / 2026年Q2 / 2026年1–7月。无效选择显示原因。 */
+export function periodRequestLabel(request: PeriodRequestResult): string {
+  if ('error' in request) return request.error;
+  const { periodType, year, startMonth, endMonth } = request;
+  if (periodType === 'all') return '全部历史';
+  if (periodType === 'year' || (startMonth === 1 && endMonth === 12)) return `${year}年`;
+  if (startMonth === endMonth) return `${year}年${startMonth}月`;
+  if (startMonth % 3 === 1 && endMonth === startMonth + 2) return `${year}年Q${(startMonth + 2) / 3}`;
+  return `${year}年${startMonth}–${endMonth}月`;
+}
+
 /** 看板图表结果中本模块用到的字段 */
 export interface ChartStateLike {
   echartsOption?: Record<string, unknown> | null;
