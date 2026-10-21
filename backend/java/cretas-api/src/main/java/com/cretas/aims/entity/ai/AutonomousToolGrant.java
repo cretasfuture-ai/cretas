@@ -52,7 +52,7 @@ public class AutonomousToolGrant {
     private Integer maxRuns;
 
     @Column(name = "used_runs", nullable = false)
-    private Integer usedRuns;
+    private Integer usedRuns = 0;
 
     @Column(name = "expires_at", nullable = false, updatable = false)
     private LocalDateTime expiresAt;
