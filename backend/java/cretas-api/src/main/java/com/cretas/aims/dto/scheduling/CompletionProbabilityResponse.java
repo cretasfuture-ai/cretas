@@ -31,4 +31,8 @@ public class CompletionProbabilityResponse {
     private BigDecimal predictedEfficiency; // 预测效率
     private String explanation;         // AI 解释
     private String riskAnalysis;        // 风险分析
+
+    /** 可审计地说明概率来自哪里；local 只表示本地估算，不代表 APS 优化。 */
+    private String predictionOrigin;
+    private String predictionReason;
 }

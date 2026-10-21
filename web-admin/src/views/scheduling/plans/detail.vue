@@ -30,6 +30,7 @@ import {
   Loading
 } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
+import SchedulingDiagnosticsPanel from './SchedulingDiagnosticsPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -607,6 +608,15 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
         </el-table-column>
       </el-table>
     </el-card>
+
+    <template v-if="factoryId && plan">
+      <SchedulingDiagnosticsPanel
+        v-for="schedule in plan.lineSchedules"
+        :key="schedule.id"
+        :factory-id="factoryId"
+        :schedule-id="schedule.id"
+      />
+    </template>
 
     <!-- 进度更新对话框 -->
     <el-dialog v-model="progressDialogVisible" title="更新进度" width="400px">
