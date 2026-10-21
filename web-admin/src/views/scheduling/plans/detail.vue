@@ -6,12 +6,14 @@
 import { ref, onMounted, computed, watch, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import {
   getSchedulingPlan,
   calculateBatchProbabilities,
   startSchedule,
   completeSchedule,
   updateScheduleProgress,
+  reschedule,
   SchedulingPlan,
   LineSchedule,
   CompletionProbability
@@ -32,6 +34,9 @@ import echarts from '@/utils/echarts';
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const canRecordReasonNow = () => permissionStore.canWrite('scheduling') || permissionStore.canWrite('production');
+const canRecordReason = computed(canRecordReasonNow);
 const factoryId = computed(() => authStore.factoryId);
 const planId = computed(() => route.params.id as string);
 
@@ -46,6 +51,36 @@ const refreshInterval = ref<number | null>(null);
 const selectedSchedule = ref<LineSchedule | null>(null);
 const progressDialogVisible = ref(false);
 const progressValue = ref(0);
+const recordingReason = ref(false);
+
+async function recordAdjustmentReason() {
+  const targetFactory = factoryId.value;
+  const targetPlan = planId.value;
+  if (!targetFactory || !targetPlan || plan.value?.id !== targetPlan || !canRecordReasonNow() || recordingReason.value) return;
+  recordingReason.value = true;
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '仅保存调整原因，不修改时间或资源，也不会重算排程或恢复交期。',
+      '记录调整原因',
+      { confirmButtonText: '保存原因', cancelButtonText: '取消', inputType: 'textarea',
+        inputValidator: (input: string) => !!input.trim() || '请输入调整原因' }
+    );
+    const reason = value.trim();
+    if (!reason || !canRecordReasonNow() || targetFactory !== factoryId.value || targetPlan !== planId.value) return;
+    const response = await reschedule(targetFactory, { planId: targetPlan, reason });
+    if (!response.success) {
+      ElMessage.error(response.message || '调整原因未保存');
+      return;
+    }
+    if (targetFactory !== factoryId.value || targetPlan !== planId.value) return;
+    await loadData();
+    ElMessage.success('已记录调整原因，排程时间和资源未改变');
+  } catch (error: unknown) {
+    if (error !== 'cancel' && error !== 'close') console.error('记录调整原因失败:', error);
+  } finally {
+    recordingReason.value = false;
+  }
+}
 
 onMounted(async () => {
   await loadData();
@@ -419,9 +454,17 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
         </el-tag>
       </div>
       <div class="header-right">
+        <el-button v-if="canRecordReason && plan" data-testid="record-adjustment-reason"
+          :disabled="loading || recordingReason" @click="recordAdjustmentReason">记录调整原因</el-button>
         <el-button :icon="Refresh" @click="loadData(false)">刷新</el-button>
       </div>
     </div>
+
+    <el-card v-if="plan" data-testid="plan-notes">
+      <template #header>计划备注与调整原因</template>
+      <p>这里只记录原因，排程时间和资源未改变。</p>
+      <p style="white-space: pre-wrap">{{ plan.notes || '暂无备注' }}</p>
+    </el-card>
 
     <!-- 计划概览 -->
     <div class="plan-overview" v-if="plan">

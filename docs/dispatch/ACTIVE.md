@@ -6,11 +6,13 @@
 
 ## 在飞任务
 
+- `ERP-S1-VALIDATION-FIRST-20261021` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 9613198dc1eff089243d0470903bb6e15934f307 — 02/10 runtime、07 grant只读Owner不变；03原QA独占；见archive/2026-10-21-s1-validation-first.md。
+
 - `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 7ceacffafd5d34de536dd19862cf5eb3232a1d58 — PR1075/84a实际21文件交付HOLD；未来writeScope=[]；见archive/2026-10-21-claude-s6-actual-intake.md。
 
 
 
-- `ERP-S2-READINESS-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 47059a443e2b41218578c03a4cd8b293f2de1914 — PR1069已合405d；3缺陷/ACK待补，见archive/2026-10-21-claude-s2-s6-registration.md。
+- `ERP-S2-READINESS-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 5a0c01ff671857ff56fdba03ed27d46808a2fa76 — PR1079/bbe7实际9文件/ACK已读；三问题修复待集成验收，原1079回执见archive/2026-10-21-s1-validation-first.md。
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1精确8文件仅修订收口；1073/7ce；见archive/2026-10-21-claude-s6-actual-intake.md。
 
