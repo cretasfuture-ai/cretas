@@ -136,6 +136,13 @@ def _apply_filters(df: pd.DataFrame, filters: Optional[Dict[str, List[str]]]) ->
     return df
 
 
+def _natural_sort_key(value: Any):
+    """「1月 2月 … 10月」按数字顺序排, 不按字符串排成「10月 11月 12月 1月」。"""
+    import re
+    text = str(value)
+    return [(0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"(\d+)", text) if part]
+
+
 def _extract_dimensions(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Fix 72: Extract available filter dimensions from DataFrame."""
     dims = []
@@ -143,7 +150,7 @@ def _extract_dimensions(df: pd.DataFrame) -> List[Dict[str, Any]]:
         if df[col].dtype == 'object':
             unique_vals = df[col].dropna().unique().tolist()
             if 2 <= len(unique_vals) <= 20:
-                dims.append({"name": col, "values": sorted(unique_vals)})
+                dims.append({"name": col, "values": sorted(unique_vals, key=_natural_sort_key)})
     return dims
 
 

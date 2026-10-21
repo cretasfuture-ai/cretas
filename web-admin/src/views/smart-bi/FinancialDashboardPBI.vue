@@ -24,6 +24,8 @@ import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysi
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, Delete } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { sparklinePath, sparklineSVG } from '@/utils/sparkline';
 
 /** Deep clone that handles ECharts options with functions (structuredClone can't clone functions) */
@@ -424,6 +426,8 @@ const chartTypes = [
  { key: 'budget_achievement', label: '预算达成分析', icon: '', group: '核心财务', order: 1 },
  { key: 'yoy_mom_comparison', label: '同环比分析', icon: '', group: '核心财务', order: 2 },
  { key: 'pnl_waterfall', label: '损益表瀑布图', icon: '', group: '核心财务', order: 3 },
+ { key: 'expense_yoy_budget', label: '费用同比及预算达成', icon: '', group: '核心财务', order: 4 },
+ { key: 'gross_margin_trend', label: '各月毛利率', icon: '', group: '核心财务', order: 5 },
  { key: 'category_yoy_comparison', label: '品类同期对比', icon: '', group: '品类与渠道', order: 4 },
  { key: 'category_structure_donut',label: '产品结构', icon: '', group: '品类与渠道', order: 5 },
  { key: 'channel_analysis', label: '渠道分析', icon: '', group: '品类与渠道', order: 6 },
@@ -591,8 +595,8 @@ async function generate(useDemo?: boolean) {
       // Reveal all chart cards with staggered fade-in
       nextTick(() => revealAllCharts());
       ElMessage.success(`成功生成 ${resp.successCount} 个图表`);
-      // Auto-trigger AI analysis for all charts
-      nextTick(() => autoAnalyzeAllCharts());
+      // 只给当前查看的图自动生成 AI 分析 (其余图点「AI分析」再生成), 避免一次触发几十个请求
+      if (viewMode.value === 'tab') nextTick(() => requestAnalysis(activeTab.value));
     } else {
       ElMessage({ message: resp.error || resp.message || '图表生成失败，请检查数据源', type: 'error', duration: 0, showClose: true });
     }
@@ -604,30 +608,6 @@ async function generate(useDemo?: boolean) {
   } finally {
     isGenerating.value = false;
   }
-}
-
-/**
- * Auto-analyze all charts after dashboard generation.
- * Requests run with concurrency limit of 3 to avoid API overload.
- * Bug #2: stop iterating if the component unmounts — prevents request cancel noise.
- */
-async function autoAnalyzeAllCharts() {
-  const allChartTypes = charts.value.map(c => c.chartType);
-  if (!allChartTypes.length) return;
-
-  const CONCURRENCY = 3;
-  let idx = 0;
-
-  async function next(): Promise<void> {
-    while (idx < allChartTypes.length && !isComponentUnmounted) {
-      const ct = allChartTypes[idx++];
-      if (analysisByType.value[ct]) continue; // already loaded
-      await requestAnalysis(ct);
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(CONCURRENCY, allChartTypes.length) }, () => next());
-  await Promise.allSettled(workers);
 }
 
 function forceRequestAnalysis(chartType: string) {
@@ -643,6 +623,8 @@ async function requestAnalysis(chartType: string) {
 
   const chart = getChart(chartType);
   if (!chart) return;
+  // 出不了图的不做 AI 分析 (缺数据的原因已经显示在图的位置)
+  if (chartGapReason(chart)) return;
 
   // Skip if already loaded
   if (analysisByType.value[chartType]) return;
@@ -1004,8 +986,6 @@ watch(() => charts.value.length, async () => {
       }, 500);
       // E1: Connect charts for synchronized crosshair
       connectCharts();
-      // E2: Start KPI counter animations
-      startKpiAnimations();
     });
   });
 });
@@ -1404,57 +1384,29 @@ function connectCharts() {
 
 // ---- E2: Animated KPI counter ----
 const kpiRafIds: number[] = [];
-const animatedKpiValues = ref<Record<string, string>>({});
-
-function animateKpiValue(key: string, targetStr: string, duration = 800) {
-  // Parse numeric portion
-  const match = targetStr.match(/^([+-]?)([0-9,.]+)(.*)/);
-  if (!match) {
-    animatedKpiValues.value[key] = targetStr;
-    return;
-  }
-  const sign = match[1];
-  const numStr = match[2].replace(/,/g, '');
-  const suffix = match[3];
-  const target = parseFloat(numStr);
-  if (isNaN(target)) {
-    animatedKpiValues.value[key] = targetStr;
-    return;
-  }
-
-  const decimals = numStr.includes('.') ? numStr.split('.')[1].length : 0;
-  const startTime = performance.now();
-  animatedKpiValues.value[key] = `${sign}0${suffix}`;
-
-  function tick(now: number) {
-    const elapsed = now - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    // Ease out cubic
-    const eased = 1 - Math.pow(1 - progress, 3);
-    const current = target * eased;
-    const formatted = decimals > 0 ? current.toFixed(decimals) : Math.round(current).toLocaleString('zh-CN');
-    animatedKpiValues.value[key] = `${sign}${formatted}${suffix}`;
-    if (progress < 1) {
-      kpiRafIds.push(requestAnimationFrame(tick));
-    }
-  }
-  kpiRafIds.push(requestAnimationFrame(tick));
+// 预算达成状态: 颜色用加深色保证对比度, 同时给出文字 (不只靠颜色区分好坏)
+function achievementColor(rate: number | null | undefined): string {
+  if (rate == null) return 'var(--el-text-color-secondary)';
+  if (rate >= 100) return '#1B7A4A';
+  if (rate >= 80) return '#9A6700';
+  return '#C0362C';
+}
+function achievementStatus(rate: number | null | undefined): string {
+  if (rate == null) return '';
+  if (rate >= 100) return '达成';
+  if (rate >= 80) return '接近';
+  return '未达';
 }
 
-function startKpiAnimations() {
-  for (const chart of charts.value) {
-    if (!chart.kpis?.length) continue;
-    for (const kpi of chart.kpis) {
-      const key = `${chart.chartType}_${kpi.label}`;
-      const val = typeof kpi.value === 'number' ? kpi.value.toFixed(1) : String(kpi.value);
-      animateKpiValue(key, val);
-    }
-  }
+// AI 分析文本是 markdown: 渲染后再消毒 (与 ProductionAnalysis 同一做法)
+function renderAnalysis(text: string | null | undefined): string {
+  if (!text) return '';
+  return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 }
 
-function getAnimatedKpi(chartType: string, label: string, original: string | number): string {
-  const key = `${chartType}_${label}`;
-  return animatedKpiValues.value[key] ?? (typeof original === 'number' ? original.toFixed(1) : String(original));
+// KPI 原样显示后端格式化好的值 (千分位、单位由后端统一), 不做计数动画
+function kpiText(original: string | number): string {
+  return typeof original === 'number' ? original.toLocaleString('zh-CN') : String(original);
 }
 
 // ---- Fix 64: Spotlight / Focus mode (Power BI) ----
@@ -1587,6 +1539,7 @@ onBeforeUnmount(() => {
             :show-quick-select="true"
             :show-custom-tab="false"
             :show-all-history="true"
+            :show-compare="false"
             default-type="year"
             size="small"
             style="margin-left: 8px"
@@ -1694,7 +1647,7 @@ onBeforeUnmount(() => {
 
     <!-- Interaction tips -->
     <div v-if="dashboardResponse && !isGenerating" class="interaction-tips">
- <span> <b>单击</b>高亮同名数据 | <b>双击</b>添加标注 | <b>方向键</b>卡片导航 | <b>Shift+滚轮</b>缩放 | 图表间<b>Tooltip联动</b></span>
+      <span><b>单击</b>图形高亮同名数据 · <b>双击</b>添加标注</span>
     </div>
 
     <!-- Fix 72: Global Slicer / Filter bar (Power BI style) -->
@@ -1795,9 +1748,7 @@ onBeforeUnmount(() => {
         />
         <div v-if="analysisLoadingByType['cost_flow_sankey'] || analysisByType['cost_flow_sankey']" class="analysis-panel">
           <ChartSkeleton v-if="analysisLoadingByType['cost_flow_sankey']" type="ai" />
-          <div v-else class="analysis-text">
-            {{ analysisByType['cost_flow_sankey'] }}
-          </div>
+          <div v-else class="analysis-text" v-html="renderAnalysis(analysisByType['cost_flow_sankey'])" />
         </div>
       </el-card>
 
@@ -1813,7 +1764,7 @@ onBeforeUnmount(() => {
         role="region"
         :aria-label="ct.label"
         tabindex="0"
-        @keydown="(e: KeyboardEvent) => handleCardKeydown(e, chartTypes.filter(c => !['expense_yoy_budget', 'gross_margin_trend'].includes(c.key)).indexOf(ct))"
+        @keydown="(e: KeyboardEvent) => handleCardKeydown(e, chartTypes.indexOf(ct))"
       >
         <template #header>
           <div class="chart-card-header">
@@ -1887,11 +1838,11 @@ onBeforeUnmount(() => {
             tabindex="0"
             :aria-label="`${kpi.label}: ${kpi.value}${kpi.unit || ''}`"
           >
-            <span class="kpi-val">{{ getAnimatedKpi(ct.key, kpi.label, kpi.value) }}{{ kpi.unit }}</span>
+            <span class="kpi-val">{{ kpiText(kpi.value) }}{{ kpi.unit }}</span>
             <span class="kpi-lbl">{{ kpi.label }}</span>
             <!-- A3: KPI sparkline -->
             <svg v-if="kpi.sparkline?.length >= 2" class="kpi-sparkline" viewBox="0 0 60 20" preserveAspectRatio="none">
-              <path :d="sparklinePath(kpi.sparkline)" fill="none" :stroke="kpi.trend === 'down' ? '#FF5630' : '#36B37E'" stroke-width="1.5" />
+              <path :d="sparklinePath(kpi.sparkline)" fill="none" stroke="currentColor" stroke-width="1.5" />
             </svg>
           </div>
         </div>
@@ -1909,11 +1860,11 @@ onBeforeUnmount(() => {
             <span class="q-label">{{ qp.quarter }}</span>
             <el-progress
               :percentage="Math.min(qp.rate ?? 0, 100)"
-              :color="qp.rate == null ? '#C0C4CC' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
+              :color="achievementColor(qp.rate)"
               :stroke-width="10"
               :text-inside="true"
             />
-            <span class="q-rate" :style="{ color: qp.rate == null ? '#909399' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate == null ? '—' : `${qp.rate}%` }}</span>
+            <span class="q-rate" :style="{ color: achievementColor(qp.rate) }">{{ qp.rate == null ? '—' : `${qp.rate}% ${achievementStatus(qp.rate)}` }}</span>
           </div>
         </div>
 
@@ -1921,7 +1872,9 @@ onBeforeUnmount(() => {
         <SmartBIEmptyState
           v-if="chartGapReason(getChart(ct.key))"
           type="no-data"
-          :message="chartGapReason(getChart(ct.key)) ?? ''"
+          title="这份数据出不了这张图"
+          :description="chartGapReason(getChart(ct.key)) ?? ''"
+          :show-action="false"
           class="chart-gap-notice"
           data-testid="chart-gap-notice"
         />
@@ -1976,9 +1929,7 @@ onBeforeUnmount(() => {
         <!-- AI Analysis panel — always visible after auto-analysis -->
         <div v-if="analysisLoadingByType[ct.key] || analysisByType[ct.key]" class="analysis-panel">
           <ChartSkeleton v-if="analysisLoadingByType[ct.key]" type="ai" />
-          <div v-else class="analysis-text">
-            {{ analysisByType[ct.key] }}
-          </div>
+          <div v-else class="analysis-text" v-html="renderAnalysis(analysisByType[ct.key])" />
         </div>
 
         <!-- E4: Data table drawer (Fix 71: with inline sparklines) -->
@@ -2093,7 +2044,7 @@ onBeforeUnmount(() => {
               </div>
             </template>
             <ChartSkeleton v-if="conclusionsLoading" type="ai" />
-            <div v-else-if="conclusionsText" class="analysis-text">{{ conclusionsText }}</div>
+            <div v-else-if="conclusionsText" class="analysis-text" v-html="renderAnalysis(conclusionsText)" />
             <div v-else style="text-align: center; padding: 40px; color: #909399">
               <p>汇总所有图表的分析结果，生成整体结论与建议</p>
               <el-button type="primary" style="margin-top: 16px" @click="generateConclusions">生成分析结论</el-button>
@@ -2111,10 +2062,10 @@ onBeforeUnmount(() => {
               class="generic-kpi-chip"
               :class="{ 'kpi-up': kpi.trend === 'up', 'kpi-down': kpi.trend === 'down' }"
             >
-              <span class="kpi-val">{{ getAnimatedKpi(activeTab, kpi.label, kpi.value) }}{{ kpi.unit }}</span>
+              <span class="kpi-val">{{ kpiText(kpi.value) }}{{ kpi.unit }}</span>
               <span class="kpi-lbl">{{ kpi.label }}</span>
               <svg v-if="kpi.sparkline?.length >= 2" class="kpi-sparkline" viewBox="0 0 60 20" preserveAspectRatio="none">
-                <path :d="sparklinePath(kpi.sparkline)" fill="none" :stroke="kpi.trend === 'down' ? '#FF5630' : '#36B37E'" stroke-width="1.5" />
+                <path :d="sparklinePath(kpi.sparkline)" fill="none" stroke="currentColor" stroke-width="1.5" />
               </svg>
             </div>
           </div>
@@ -2129,11 +2080,11 @@ onBeforeUnmount(() => {
               <span class="q-label">{{ qp.quarter }}</span>
               <el-progress
                 :percentage="Math.min(qp.rate ?? 0, 100)"
-                :color="qp.rate == null ? '#C0C4CC' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
+                :color="achievementColor(qp.rate)"
                 :stroke-width="10"
                 :text-inside="true"
               />
-              <span class="q-rate" :style="{ color: qp.rate == null ? '#909399' : qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate == null ? '—' : `${qp.rate}%` }}</span>
+              <span class="q-rate" :style="{ color: achievementColor(qp.rate) }">{{ qp.rate == null ? '—' : `${qp.rate}% ${achievementStatus(qp.rate)}` }}</span>
             </div>
           </div>
 
@@ -2190,7 +2141,9 @@ onBeforeUnmount(() => {
             <SmartBIEmptyState
               v-if="chartGapReason(getChart(activeTab))"
               type="no-data"
-              :message="chartGapReason(getChart(activeTab)) ?? ''"
+              title="这份数据出不了这张图"
+              :description="chartGapReason(getChart(activeTab)) ?? ''"
+              :show-action="false"
               class="chart-gap-notice"
               data-testid="chart-gap-notice"
             />
@@ -2288,7 +2241,7 @@ onBeforeUnmount(() => {
 
             <!-- Initial analysis -->
             <ChartSkeleton v-if="analysisLoadingByType[activeTab]" type="ai" />
-            <div v-else-if="analysisByType[activeTab]" class="analysis-text">{{ analysisByType[activeTab] }}</div>
+            <div v-else-if="analysisByType[activeTab]" class="analysis-text" v-html="renderAnalysis(analysisByType[activeTab])" />
             <div v-else style="text-align: center; padding: 24px; color: #909399">
               <p style="margin-bottom: 12px">点击下方按钮获取该图表的 AI 分析</p>
               <el-button type="primary" size="small" @click="requestAnalysis(activeTab)">生成 AI 分析</el-button>
@@ -2301,7 +2254,7 @@ onBeforeUnmount(() => {
                   <span class="follow-up-role">追问</span>
                   <span>{{ item.question }}</span>
                 </div>
-                <div class="follow-up-answer analysis-text">{{ item.answer }}</div>
+                <div class="follow-up-answer analysis-text" v-html="renderAnalysis(item.answer)" />
               </div>
             </div>
 
@@ -2334,7 +2287,12 @@ onBeforeUnmount(() => {
 
         <!-- No data -->
         <template v-else>
-          <SmartBIEmptyState type="no-data" message="该图表暂无数据，请检查数据源" />
+          <SmartBIEmptyState
+            type="no-data"
+            title="这份数据出不了这张图"
+            :description="chartNav.missing.find(m => m.key === activeTab)?.reason ?? '这份数据缺少这张图需要的列'"
+            :show-action="false"
+          />
         </template>
       </main>
     </div>
@@ -2579,65 +2537,40 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+/* KPI 卡: 中性底, 不按红绿着色 (红绿在不同图里含义不同); 标签在上、数值在下, 数值用正文主色保证对比度 */
 .generic-kpi-chip {
   flex: 1;
-  min-width: 100px;
-  background: rgba(45, 139, 87, 0.06);
+  min-width: 140px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--el-text-color-secondary, #606266);
 }
 
-.generic-kpi-chip.kpi-up {
-  background: rgba(54, 179, 126, 0.08);
-}
-
-.generic-kpi-chip.kpi-down {
-  background: rgba(255, 86, 48, 0.08);
-}
-
-/* A6: KPI typography upgrade — Power BI scale */
 .kpi-val {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
-  color: var(--el-color-primary, #2D8B57);
+  color: var(--el-text-color-primary, #303133);
   font-feature-settings: "tnum";
-  letter-spacing: -0.5px;
-  line-height: 1.2;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .kpi-lbl {
-  font-size: 11px;
-  color: var(--el-text-color-secondary, #909399);
-  margin-top: 4px;
+  font-size: 13px;
+  color: var(--el-text-color-regular, #606266);
 }
 
-/* A3: Sparkline */
+/* A3: Sparkline (颜色跟随文字色, 不表示好坏) */
 .kpi-sparkline {
-  width: 60px;
+  width: 72px;
   height: 20px;
-  margin-top: 4px;
-}
-
-/* A6: Trend border accent */
-.generic-kpi-chip.kpi-up {
-  border-left: 3px solid var(--el-color-success, #36B37E);
-}
-
-.generic-kpi-chip.kpi-down {
-  border-left: 3px solid var(--el-color-danger, #FF5630);
-}
-
-.generic-kpi-chip {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.generic-kpi-chip:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  order: -1;
 }
 
 /* Quarterly progress bars (budget_achievement) */
@@ -2668,7 +2601,7 @@ onBeforeUnmount(() => {
 }
 
 .q-rate {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -2729,7 +2662,7 @@ onBeforeUnmount(() => {
 /* Interaction tips */
 .interaction-tips {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-regular, #606266);
   text-align: center;
   margin-bottom: 8px;
 }
@@ -2759,13 +2692,37 @@ onBeforeUnmount(() => {
 }
 
 .analysis-text {
-  font-size: 13px;
-  color: var(--el-text-color-regular, #606266);
-  line-height: 1.7;
-  white-space: pre-wrap;
-  background: rgba(45, 139, 87, 0.04);
+  font-size: 14px;
+  color: var(--el-text-color-primary, #303133);
+  line-height: 1.75;
+  background: var(--el-fill-color-lighter, #fafafa);
   border-radius: 6px;
-  padding: 12px;
+  padding: 12px 16px;
+  max-width: 72em;
+}
+
+.analysis-text :deep(p),
+.analysis-text :deep(ul),
+.analysis-text :deep(ol) {
+  margin: 0 0 8px;
+}
+
+.analysis-text :deep(ul),
+.analysis-text :deep(ol) {
+  padding-left: 1.4em;
+}
+
+.analysis-text :deep(h1),
+.analysis-text :deep(h2),
+.analysis-text :deep(h3),
+.analysis-text :deep(h4) {
+  margin: 12px 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.analysis-text :deep(> :last-child) {
+  margin-bottom: 0;
 }
 
 /* ---- B3: Dark mode ---- */
