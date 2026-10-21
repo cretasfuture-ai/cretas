@@ -107,7 +107,7 @@
 - `ERP-S2-READINESS-CLAUDE-20261021`：Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；九文件及门禁见archive/2026-10-21-claude-s2-s6-registration.md；ACK待补/HOLD。
 
 
-- `ERP-S1-SUPPLIER-ACTOR-BINDING-20261021`：Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1；二十九文件见archive/2026-10-21-s1-supplier-actor-binding.md。
+- `ERP-S1-SUPPLIER-ACTOR-BINDING-20261021`：Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1；三十一文件见archive/2026-10-21-s1-supplier-actor-binding.md。
 
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
