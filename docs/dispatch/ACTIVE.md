@@ -22,7 +22,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — 02/03/04/10原QA通过；07HTTP/UI子例已发布复验、整行未测；75=13/1/61，S0/S1未完；见archive/2026-10-21-s1-validation-first.md。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — 02/03/04/10原QA通过；07HTTP/UI子例已验、Tool/Skill桥接推进中，整行未测；75=13/1/61，S0/S1未完；见archive/2026-10-22-s1-grant-callers.md。
 
 
 

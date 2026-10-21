@@ -4,6 +4,8 @@ import com.cretas.aims.controller.AiPurchaseTaskGrantController;
 import com.cretas.aims.security.DataScopeRouteInterceptor;
 import com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService;
 import com.cretas.aims.service.intent.PurchaseGrantRefusalAuditService;
+import com.cretas.aims.service.intent.PurchaseGrantCallerService;
+import com.cretas.aims.controller.PurchaseGrantCallerController;
 import java.math.BigDecimal;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
@@ -33,6 +35,7 @@ class DeferredPurchaseGrantDemoBoundaryContractTest {
     private MockMvc mvc;
     private ControlledPurchaseTaskExecutionService service;
     private PurchaseGrantRefusalAuditService audit;
+    private PurchaseGrantCallerService callers;
 
     @BeforeEach void setup() throws Exception {
         context = new AnnotationConfigWebApplicationContext();
@@ -42,13 +45,14 @@ class DeferredPurchaseGrantDemoBoundaryContractTest {
         // Externally provided boundary mocks must not be autowired as production interceptor implementations.
         service = mock(ControlledPurchaseTaskExecutionService.class);
         audit = mock(PurchaseGrantRefusalAuditService.class);
+        callers = mock(PurchaseGrantCallerService.class);
         var auth = mock(JwtAuthInterceptor.class);
         when(auth.preHandle(any(), any(), any())).thenAnswer(call -> {
             jakarta.servlet.http.HttpServletRequest request = call.getArgument(0);
             request.setAttribute("factoryId", request.getRequestURI().split("/")[3]);
             return true;
         });
-        Map<String, Object> boundaries = Map.of("service", service, "audit", audit, "auth", auth,
+        Map<String, Object> boundaries = Map.of("service", service, "audit", audit, "callers", callers, "auth", auth,
                 "permission", allow(PermissionInterceptor.class), "role", allow(RequireRoleInterceptor.class),
                 "module", allow(ModuleEnabledInterceptor.class), "dataScope", allow(DataScopeRouteInterceptor.class));
         context.addBeanFactoryPostProcessor(factory -> boundaries.forEach(factory::registerSingleton));
@@ -73,6 +77,25 @@ class DeferredPurchaseGrantDemoBoundaryContractTest {
                 .contentType("application/json").content("{\"expectedVersion\":1,\"reason\":\"QA\"}"))
                 .andExpect(status().isForbidden());
         verifyNoInteractions(service, audit);
+    }
+    @Test void demoGrantToolAndSkillAdaptersAreBlockedBeforeAnyControllerLookup() throws Exception {
+        for (String route : java.util.List.of("execute-tool", "execute-skill")) {
+            mvc.perform(post("/api/mobile/F_DEMO/ai-purchase-task-grants/preview-175/" + route)
+                    .contentType("application/json").content("{\"expectedVersion\":1}"))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.success").value(false));
+        }
+        verifyNoInteractions(service, audit, callers);
+    }
+    @Test void ordinaryFactoryStillReachesBothFixedCallerControllers() throws Exception {
+        when(callers.execute(anyString(), anyString(), anyLong(), any())).thenReturn(
+                new ControlledPurchaseTaskExecutionService.Outcome("preview-175", "DRAFT", "QA-ORDER", BigDecimal.ONE, BigDecimal.ONE, 2L, false));
+        for (String route : java.util.List.of("execute-tool", "execute-skill")) {
+            mvc.perform(post("/api/mobile/F006/ai-purchase-task-grants/preview-175/" + route)
+                    .contentType("application/json").content("{\"expectedVersion\":1}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.data.state").value("DRAFT"));
+        }
+        verify(callers).execute("F006", "preview-175", 1L, PurchaseGrantCallerService.Channel.TOOL);
+        verify(callers).execute("F006", "preview-175", 1L, PurchaseGrantCallerService.Channel.SKILL);
     }
     @Test void demoAuthorizationIsStillBlockedBeforeControllerAndBodyValidation() throws Exception {
         mvc.perform(post("/api/mobile/F_DEMO/ai-purchase-task-grants/authorize-later")
@@ -107,7 +130,7 @@ class DeferredPurchaseGrantDemoBoundaryContractTest {
     }
 
     @Configuration @EnableWebMvc
-    @Import({WebMvcConfig.class, AiPurchaseTaskGrantController.class, ReadProbe.class})
+    @Import({WebMvcConfig.class, AiPurchaseTaskGrantController.class, PurchaseGrantCallerController.class, ReadProbe.class})
     static class Mvc {
         @Bean DemoReadOnlyInterceptor demo() { return new DemoReadOnlyInterceptor(); }
     }

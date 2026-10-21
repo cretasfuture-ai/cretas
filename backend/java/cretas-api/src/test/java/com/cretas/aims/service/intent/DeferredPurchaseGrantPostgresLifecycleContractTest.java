@@ -72,6 +72,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @EnableJpaRepositories(basePackageClasses = {AiPurchaseTaskGrantRepository.class, IntentPreviewTokenRepository.class,
         PurchaseOrderRepository.class, PurchaseOrderItemRepository.class})
 @Import({PurchaseTaskGrantService.class, ControlledPurchaseTaskExecutionService.class,
+        PurchaseGrantCallerService.class, com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool.class,
+        com.cretas.aims.controller.PurchaseGrantCallerController.class,
+        com.cretas.aims.service.skill.impl.SkillExecutorImpl.class,
+        com.cretas.aims.ai.tool.WriteGuardService.class,
         PurchaseGrantRefusalAuditService.class, com.cretas.aims.controller.AiPurchaseTaskGrantController.class,
         com.cretas.aims.service.impl.PreviewTokenServiceImpl.class,
         DeferredPurchaseGrantPostgresLifecycleContractTest.JsonConfiguration.class})
@@ -100,6 +104,10 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
         p.add("spring.jpa.hibernate.ddl-auto", () -> "create"); p.add("spring.flyway.enabled", () -> "false");
     }
     @Autowired ControlledPurchaseTaskExecutionService service;
+    @Autowired PurchaseGrantCallerService callers;
+    @Autowired com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool callerTool;
+    @MockBean com.cretas.aims.ai.client.DashScopeClient callerLlm;
+    @MockBean com.cretas.aims.service.execution.ToolPermissionChain callerPermissionChain;
     @Autowired PurchaseTaskGrantService grantService;
     @Autowired PreviewTokenService previewTokens;
     @SpyBean PreviewTokenService previewTokenServiceSpy;
@@ -152,6 +160,10 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
         when(principalFactory.create(FACTORY, OTHER_USER, "purchaser")).thenReturn(otherPrincipal);
         when(policy.rehydrate(otherPrincipal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(otherPrincipal, Map.of("canViewPrices", true))));
         when(toolRegistry.isToolEnabledForFactory(FACTORY, "purchase_order_create")).thenReturn(true);
+        when(toolRegistry.isToolEnabledForFactory(FACTORY, "purchase_grant_execute")).thenReturn(true);
+        when(toolRegistry.getExecutor("purchase_grant_execute")).thenReturn(Optional.of(callerTool));
+        when(toolRegistry.hasExecutor("purchase_grant_execute")).thenReturn(true);
+        when(callerPermissionChain.denyReason(any(), any(), any(), any(), any())).thenReturn(Optional.empty());
         var supplier = new com.cretas.aims.entity.Supplier(); supplier.setId("SUP"); supplier.setFactoryId(FACTORY); supplier.setCode("SUP"); supplier.setSupplierCode("SUP"); supplier.setName("deferred supplier"); supplier.setIsActive(true); supplier.setCreatedBy(USER); em.persist(supplier);
         var material = new com.cretas.aims.entity.RawMaterialType(); material.setId("MAT"); material.setFactoryId(FACTORY); material.setCode("MAT"); material.setName("deferred material"); material.setUnit("kg"); material.setIsActive(true); material.setCreatedBy(USER); em.persist(material);
         when(suppliers.findByIdAndFactoryId("SUP", FACTORY)).thenAnswer(inv -> Optional.ofNullable(em.find(com.cretas.aims.entity.Supplier.class, "SUP")));
@@ -217,6 +229,98 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
                 FACTORY, USER, "purchase_order_create", "2.0.0", ToolExecutionMode.EXECUTE, parameters));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders", Long.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_order_items", Long.class)).isZero();
+    }
+
+    @Test void actualToolCreatesOneBoundDraftAndActualSkillReplaysWithoutASecondOrder() {
+        var token = authorize();
+        replacePurchaseBoundaryWithRealService();
+        String id = "preview-" + token.getId();
+        var first = callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.TOOL);
+        assertThat(first.state()).isEqualTo("DRAFT");
+        assertThat(first.replay()).isFalse();
+        var replay = callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.SKILL);
+        assertThat(replay.replay()).isTrue();
+        assertThat(replay.purchaseOrderId()).isEqualTo(first.purchaseOrderId());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders WHERE factory_id=?", Long.class, FACTORY)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_order_items", Long.class)).isEqualTo(1L);
+        var persisted = grants.findById(id).orElseThrow();
+        assertThat(persisted.isConsumed()).isTrue();
+        assertThat(persisted.getUserId()).isEqualTo(USER);
+        assertThat(persisted.getFactoryId()).isEqualTo(FACTORY);
+        assertThat(persisted.getToolName()).isEqualTo("purchase_order_create");
+        assertThat(persisted.getPreviewTokenId()).isEqualTo(token.getId());
+        verifyNoInteractions(callerLlm);
+    }
+
+    @Test void actualSkillCreatesOnlyTheConfirmedDraftAndKeepsOriginalTaskCaps() {
+        var token = authorize();
+        replacePurchaseBoundaryWithRealService();
+        var result = callers.execute(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL);
+        assertThat(result.state()).isEqualTo("DRAFT");
+        assertThat(result.quantity()).isEqualByComparingTo("2");
+        assertThat(result.grossAmount()).isEqualByComparingTo("22.6");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders WHERE factory_id=?", Long.class, FACTORY)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders WHERE factory_id<>?", Long.class, FACTORY)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_order_items", Long.class)).isEqualTo(1L);
+        verifyNoInteractions(callerLlm);
+    }
+
+    @Test void realRevokedGrantCannotExecuteViaToolAndDurableRefusalSurvivesRollback() {
+        var token = authorize();
+        String id = "preview-" + token.getId();
+        service.revoke(FACTORY, id, 1L, "isolated caller contract");
+        assertThatThrownBy(() -> callers.execute(FACTORY, id, 2L, PurchaseGrantCallerService.Channel.TOOL))
+                .hasMessageContaining("revoked");
+        assertThat(grants.findById(id).orElseThrow().isConsumed()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal' AND is_success=FALSE", Long.class, FACTORY)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders", Long.class)).isZero();
+        verifyNoInteractions(purchaseService);
+    }
+
+    @Test void realExpiredConfirmedGrantCannotExecuteViaSkillAndNoToolSuccessMasking() {
+        var token = authorize();
+        tx.executeWithoutResult(status -> {
+            var persisted = em.find(IntentPreviewToken.class, token.getId());
+            persisted.setExpiresAt(java.time.LocalDateTime.now().minusSeconds(1));
+            em.flush();
+        });
+        assertThatThrownBy(() -> callers.execute(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL))
+                .hasMessageContaining("过期");
+        assertThat(grants.findById("preview-" + token.getId()).orElseThrow().isConsumed()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal'", Long.class, FACTORY)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders", Long.class)).isZero();
+        verifyNoInteractions(purchaseService);
+    }
+
+    @Test void actualSkillRechecksCurrentAuthorizationDespiteOldConfirmedGrant() {
+        var token = authorize();
+        when(policy.rehydrate(any())).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> callers.execute(FACTORY, "preview-" + token.getId(), 1L, PurchaseGrantCallerService.Channel.SKILL))
+                .hasMessageContaining("当前授权不可用");
+        assertThat(grants.findById("preview-" + token.getId()).orElseThrow().isConsumed()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal'", Long.class, FACTORY)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders", Long.class)).isZero();
+        verifyNoInteractions(purchaseService);
+    }
+
+    @Test void actualCallerRejectsOtherOwnerAndPlatformNumericCollisionWithoutConsumingTask() {
+        var token = authorize();
+        String id = "preview-" + token.getId();
+        var request = new MockHttpServletRequest();
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, OTHER_USER, FACTORY, "purchaser"));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        assertThatThrownBy(() -> callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.SKILL))
+                .hasMessageContaining("不属于当前采购范围");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND user_id=? AND question_type='grant_refusal'", Long.class, FACTORY, OTHER_USER)).isEqualTo(1L);
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, USER, FACTORY, "platform_admin"));
+        assertThatThrownBy(() -> callers.execute(FACTORY, id, 1L, PurchaseGrantCallerService.Channel.TOOL))
+                .hasMessageContaining("可信采购登录主体");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM ai_audit_logs WHERE factory_id=? AND question_type='grant_refusal'", Long.class, FACTORY)).isEqualTo(1L);
+        assertThat(grants.findById(id).orElseThrow().isConsumed()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM purchase_orders", Long.class)).isZero();
+        verifyNoInteractions(purchaseService);
     }
 
     @Test void authorizationCommitPermissionWithdrawalRollsBackIssuedGrantAndResolvedClaim() {
