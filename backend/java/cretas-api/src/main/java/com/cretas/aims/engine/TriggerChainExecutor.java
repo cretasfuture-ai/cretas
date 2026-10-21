@@ -245,8 +245,7 @@ public class TriggerChainExecutor {
                 AutonomousToolRunner.Outcome outcome;
                 try {
                     outcome = runner.run(factoryId, chain.getRunAsUserId(), toolName, params,
-                            ToolExecutionSource.TRIGGER, "chain-" + chain.getId() + "-" + chain.getChainCode() + "-" + order,
-                            chain.getId() + ":" + order, eventRunKey(event));
+                            ToolExecutionSource.TRIGGER, "chain-" + chain.getId() + "-" + chain.getChainCode() + "-" + order);
                 } catch (RuntimeException gatewayFailure) {
                     outcome = new AutonomousToolRunner.Outcome("FAILED",
                             gatewayFailure.getClass().getSimpleName() + ": " + gatewayFailure.getMessage(), null);
@@ -347,12 +346,6 @@ public class TriggerChainExecutor {
             }
         }
         return current;
-    }
-
-    /** One event delivery = one run: a re-delivered event object replays instead of writing again. */
-    static String eventRunKey(ApplicationEvent event) {
-        return "event:" + event.getClass().getSimpleName() + ":" + event.getTimestamp() + ":"
-                + Integer.toHexString(System.identityHashCode(event));
     }
 
     private String extractFactoryId(ApplicationEvent event) {

@@ -14,8 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261103_73 on real PostgreSQL: the database itself refuses a budget overrun, an unknown source
- * type, a run for an unknown grant and a second consumption of the same run key.
+ * V20261103_73 on real PostgreSQL: the database itself refuses a budget overrun, any source other
+ * than SCHEDULER, a run for an unknown grant and a second consumption of the same run key.
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class AutonomousGrantMigrationPostgresContractTest {
@@ -50,11 +50,13 @@ class AutonomousGrantMigrationPostgresContractTest {
             assertThrows(SQLException.class, () -> statement.execute(GRANT.formatted("g3", "SCHEDULER", 0, 0)),
                     "zero budget");
             assertThrows(SQLException.class, () -> statement.execute(GRANT.formatted("g4", "AI_CHAT", 1, 0)),
-                    "source other than SCHEDULER / TRIGGER");
+                    "source other than SCHEDULER");
+            assertThrows(SQLException.class, () -> statement.execute(GRANT.formatted("g6", "TRIGGER", 1, 0)),
+                    "event chains get no grants yet");
             assertThrows(SQLException.class,
                     () -> statement.execute("UPDATE autonomous_tool_grants SET used_runs = 3 WHERE id = 'g1'"),
                     "consumption past the budget");
-            assertDoesNotThrow(() -> statement.execute(GRANT.formatted("g5", "TRIGGER", 1, 1)));
+            assertDoesNotThrow(() -> statement.execute(GRANT.formatted("g5", "SCHEDULER", 1, 1)));
         } finally {
             try (Connection connection = DriverManager.getConnection(url, user, password);
                  Statement statement = connection.createStatement()) {

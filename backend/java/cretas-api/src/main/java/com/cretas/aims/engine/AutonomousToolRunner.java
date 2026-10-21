@@ -61,15 +61,15 @@ public class AutonomousToolRunner {
         public boolean succeeded() { return "SUCCESS".equals(status); }
     }
 
-    /** A run with no delegated-grant context (SOP, ad hoc): writes are always refused. */
+    /** A run with no delegated-grant context (event chain, SOP, ad hoc): writes are always refused. */
     public Outcome run(String factoryId, Long runAsUserId, String toolName, Map<String, Object> params,
             ToolExecutionSource source, String correlationId) {
         return run(factoryId, runAsUserId, toolName, params, source, correlationId, null, null);
     }
 
     /**
-     * @param sourceRef the scheduler config id or "chainId:stepOrder" a delegated grant is bound to
-     * @param runKey    identifies this run (fire slot / event); the same key replays, never re-executes
+     * @param sourceRef the scheduler config id a delegated grant is bound to
+     * @param runKey    identifies this run (fire slot); the same key replays, never re-executes
      */
     public Outcome run(String factoryId, Long runAsUserId, String toolName, Map<String, Object> params,
             ToolExecutionSource source, String correlationId, String sourceRef, String runKey) {
@@ -82,7 +82,10 @@ public class AutonomousToolRunner {
         if (refusal != null && !write) {
             return new Outcome("CONFIG_INVALID", refusal, null);
         }
-        if (write && (sourceRef == null || runKey == null)) {
+        // Delegated writes are cron-only for now: an event chain runs all steps in one transaction
+        // (a later step's rollback would undo an audited write) and has no durable event id to
+        // key replays on, so chain writes stay refused whatever arguments are passed.
+        if (write && (source != ToolExecutionSource.SCHEDULER || sourceRef == null || runKey == null)) {
             return new Outcome(AutonomousToolPolicy.WRITE_DENIED, refusal, null);
         }
         if (runAsUserId == null) {

@@ -205,6 +205,14 @@ class AutonomousToolExecutionContractTest {
                 .doesNotHaveDuplicates().allMatch(code -> code.startsWith("AUTONOMOUS_TOOL_RUN:"));
     }
 
+    @Test void eventChainWritesAreRefusedEvenWithAGrantContext() {
+        when(grants.consume(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(Optional.of(
+                new AutonomousGrantService.Consumption("g1", "autonomous:g1:event", false)));
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.TRIGGER, "c", "5:1",
+                "event:1").status()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        verifyNoInteractions(gateway, grants, previewTokens);
+    }
+
     @Test void replayedRunKeyNeverReachesTheGatewayAndReportsTheRecordedOutcome() {
         when(grants.consume(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(Optional.of(
                 new AutonomousGrantService.Consumption("g1", "autonomous:g1:fire:1", true)));

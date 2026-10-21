@@ -12,10 +12,8 @@ import com.cretas.aims.engine.AutonomousGrantService;
 import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.entity.ai.AutonomousToolGrant;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
-import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
-import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -32,10 +30,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Delegated grants that let one cron config or trigger-chain step run one write tool as its
- * run-as user. The grantor must be that factory's user who is the source's run-as user; the
- * parameters are taken from the stored config (never from the request), the tool must be a write
- * tool whose runtime policy admits the source, and budget/expiry are bounded.
+ * Delegated grants that let one cron config run one write tool as its run-as user. The grantor
+ * must be that factory's user who is the config's run-as user; the parameters are taken from the
+ * stored config (never from the request), the tool must be a write tool whose runtime policy
+ * admits SCHEDULER, and budget/expiry are bounded. Event chains get no grants (see
+ * {@link com.cretas.aims.engine.AutonomousToolRunner}).
  */
 @RestController
 @RequiredArgsConstructor
@@ -45,11 +44,10 @@ public class AutonomousGrantController {
 
     private final AutonomousGrantService grants;
     private final FactorySchedulerConfigRepository schedules;
-    private final FactoryTriggerChainRepository chains;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
 
-    /** sourceType SCHEDULER (sourceRef = config id) or TRIGGER (sourceRef = chainId:stepOrder). */
+    /** sourceType SCHEDULER, sourceRef = the scheduler config id. */
     public record GrantRequest(String sourceType, String sourceRef, String toolName, Integer maxRuns,
             LocalDateTime expiresAt) { }
 
@@ -83,13 +81,11 @@ public class AutonomousGrantController {
                 || body.maxRuns() == null || body.expiresAt() == null) {
             throw bad("sourceType、sourceRef、toolName、maxRuns、expiresAt 都必须填写");
         }
-        ToolExecutionSource source = switch (body.sourceType()) {
-            case "SCHEDULER" -> ToolExecutionSource.SCHEDULER;
-            case "TRIGGER" -> ToolExecutionSource.TRIGGER;
-            default -> throw bad("sourceType 只能是 SCHEDULER 或 TRIGGER");
-        };
-        Bound bound = source == ToolExecutionSource.SCHEDULER
-                ? scheduled(factoryId, body.sourceRef()) : chainStep(factoryId, body.sourceRef());
+        if (!"SCHEDULER".equals(body.sourceType())) {
+            throw bad("目前只有定时任务可以签发写操作授权（sourceType 只能是 SCHEDULER）");
+        }
+        ToolExecutionSource source = ToolExecutionSource.SCHEDULER;
+        Bound bound = scheduled(factoryId, body.sourceRef());
         if (!body.toolName().equals(bound.toolName())) {
             throw bad("授权的工具与该任务配置的工具不一致：" + bound.toolName());
         }
@@ -106,7 +102,7 @@ public class AutonomousGrantController {
         String digest = ToolCommandDigest.parametersHash(objectMapper.valueToTree(bound.params()));
         LocalDateTime now = LocalDateTime.now();
         try {
-            return ApiResponse.success(GrantView.of(grants.issue(factoryId, source.name(), body.sourceRef(),
+            return ApiResponse.success(GrantView.of(grants.issue(factoryId, source.name(), bound.sourceRef(),
                     body.toolName(), grantor, digest, body.maxRuns(), body.expiresAt(), grantor, now), now));
         } catch (IllegalArgumentException invalid) {
             throw bad(invalid.getMessage());
@@ -125,7 +121,8 @@ public class AutonomousGrantController {
                 .orElseThrow(() -> new BusinessException(404, "授权不存在或不属于本厂")));
     }
 
-    private record Bound(String toolName, Long runAsUserId, Map<String, Object> params) { }
+    /** sourceRef normalized to what the scheduler passes at run time (String.valueOf(config id)). */
+    private record Bound(String sourceRef, String toolName, Long runAsUserId, Map<String, Object> params) { }
 
     private Bound scheduled(String factoryId, String sourceRef) {
         long id;
@@ -137,31 +134,8 @@ public class AutonomousGrantController {
         FactorySchedulerConfig config = schedules.findById(id)
                 .filter(row -> factoryId.equals(row.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "定时任务不存在或不属于本厂"));
-        return new Bound(config.getToolOrMethod(), config.getRunAsUserId(),
+        return new Bound(String.valueOf(config.getId()), config.getToolOrMethod(), config.getRunAsUserId(),
                 config.getParams() == null ? Map.of() : config.getParams());
-    }
-
-    @SuppressWarnings("unchecked")
-    private Bound chainStep(String factoryId, String sourceRef) {
-        String[] parts = sourceRef.split(":");
-        if (parts.length != 2) throw bad("事件链的 sourceRef 应为 链id:步骤序号");
-        long chainId;
-        int order;
-        try {
-            chainId = Long.parseLong(parts[0]);
-            order = Integer.parseInt(parts[1]);
-        } catch (NumberFormatException e) {
-            throw bad("事件链的 sourceRef 应为 链id:步骤序号");
-        }
-        FactoryTriggerChain chain = chains.findById(chainId)
-                .filter(row -> factoryId.equals(row.getFactoryId()))
-                .orElseThrow(() -> new BusinessException(404, "事件链不存在或不属于本厂"));
-        Map<String, Object> step = (chain.getSteps() == null ? List.<Map<String, Object>>of() : chain.getSteps()).stream()
-                .filter(row -> row.get("order") instanceof Number n && n.intValue() == order)
-                .findFirst().orElseThrow(() -> new BusinessException(404, "事件链中没有第 " + order + " 步"));
-        Object params = step.getOrDefault("params", Map.of());
-        if (!(params instanceof Map<?, ?> map)) throw bad("该步骤的参数不是对象");
-        return new Bound((String) step.get("tool"), chain.getRunAsUserId(), (Map<String, Object>) map);
     }
 
     private static BusinessException bad(String message) {

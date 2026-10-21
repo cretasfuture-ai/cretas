@@ -1,12 +1,13 @@
--- Delegated grants for writes made by cron schedules / event trigger chains (S6).
--- A grant binds one factory, one source (scheduler config or chain step), one tool, one run-as
+-- Delegated grants for writes made by cron schedules (S6). Event chains get none yet (they run
+-- all steps in one transaction and have no durable event id); widening needs its own migration.
+-- A grant binds one factory, one source (scheduler config id), one tool, one run-as
 -- user and one exact parameter digest, with a run budget and an expiry. It is consumed at most
 -- once per run key; a repeated run key replays the same gateway idempotency key instead of
 -- consuming again. Revocation is a state, rows are never deleted.
 CREATE TABLE autonomous_tool_grants (
     id                 VARCHAR(36)  PRIMARY KEY,
     factory_id         VARCHAR(50)  NOT NULL,
-    source_type        VARCHAR(16)  NOT NULL CHECK (source_type IN ('SCHEDULER', 'TRIGGER')),
+    source_type        VARCHAR(16)  NOT NULL CHECK (source_type IN ('SCHEDULER')),
     source_ref         VARCHAR(100) NOT NULL,
     tool_name          VARCHAR(100) NOT NULL,
     run_as_user_id     BIGINT       NOT NULL,

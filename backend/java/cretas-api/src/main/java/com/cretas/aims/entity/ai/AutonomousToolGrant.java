@@ -12,7 +12,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * Delegated authority for one autonomous source (cron config or trigger-chain step) to run one
+ * Delegated authority for one autonomous source (a cron config) to run one
  * write tool as one factory user with one exact parameter digest, a run budget and an expiry.
  * Revocation is recorded, never deleted.
  */
@@ -31,11 +31,11 @@ public class AutonomousToolGrant {
     @Column(name = "factory_id", length = 50, nullable = false, updatable = false)
     private String factoryId;
 
-    /** SCHEDULER or TRIGGER. */
+    /** SCHEDULER (the only source with grants for now). */
     @Column(name = "source_type", length = 16, nullable = false, updatable = false)
     private String sourceType;
 
-    /** Scheduler config id, or trigger chain id + ":" + step order. */
+    /** Scheduler config id. */
     @Column(name = "source_ref", length = 100, nullable = false, updatable = false)
     private String sourceRef;
 

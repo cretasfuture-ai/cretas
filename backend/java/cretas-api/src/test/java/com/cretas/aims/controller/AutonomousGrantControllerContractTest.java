@@ -9,10 +9,8 @@ import com.cretas.aims.engine.AutonomousGrantService;
 import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.entity.ai.AutonomousToolGrant;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
-import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
-import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,11 +41,10 @@ import static org.mockito.Mockito.*;
 class AutonomousGrantControllerContractTest {
     private final AutonomousGrantService grants = mock(AutonomousGrantService.class);
     private final FactorySchedulerConfigRepository schedules = mock(FactorySchedulerConfigRepository.class);
-    private final FactoryTriggerChainRepository chains = mock(FactoryTriggerChainRepository.class);
     private final ToolRegistry registry = mock(ToolRegistry.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AutonomousGrantController controller =
-            new AutonomousGrantController(grants, schedules, chains, registry, objectMapper);
+            new AutonomousGrantController(grants, schedules, registry, objectMapper);
     private final LocalDateTime expires = LocalDateTime.now().plusDays(7);
 
     @BeforeEach void setup() {
@@ -81,7 +78,8 @@ class AutonomousGrantControllerContractTest {
         assertRefused(request("SCHEDULER", "404", "user_disable"), "不属于本厂");
         assertRefused(request("SCHEDULER", "abc", "user_disable"), "配置 id");
         assertRefused(request("SCHEDULER", "78", "product_create"), "不一致");
-        assertRefused(request("AI_CHAT", "78", "user_disable"), "SCHEDULER 或 TRIGGER");
+        assertRefused(request("AI_CHAT", "78", "user_disable"), "sourceType 只能是 SCHEDULER");
+        assertRefused(request("TRIGGER", "5:1", "user_disable"), "sourceType 只能是 SCHEDULER");
         assertRefused(new AutonomousGrantController.GrantRequest("SCHEDULER", "78", "user_disable", null, expires),
                 "都必须填写");
         verifyNoInteractions(grants);
@@ -101,20 +99,6 @@ class AutonomousGrantControllerContractTest {
         verifyNoInteractions(grants);
     }
 
-    @Test void chainStepRefMustNameAnExistingStepOfThisFactorysChain() {
-        FactoryTriggerChain chain = new FactoryTriggerChain();
-        chain.setFactoryId("F001");
-        chain.setRunAsUserId(42L);
-        chain.setSteps(List.of(Map.of("order", 1, "tool", "user_disable", "params", Map.of("username", "a"))));
-        when(chains.findById(5L)).thenReturn(Optional.of(chain));
-        assertRefused(request("TRIGGER", "5", "user_disable"), "链id:步骤序号");
-        assertRefused(request("TRIGGER", "5:x", "user_disable"), "链id:步骤序号");
-        assertRefused(request("TRIGGER", "6:1", "user_disable"), "不属于本厂");
-        assertRefused(request("TRIGGER", "5:2", "user_disable"), "没有第 2 步");
-        assertRefused(request("TRIGGER", "5:1", "user_disable"), "还没有开放给事件链");
-        verifyNoInteractions(grants);
-    }
-
     @Test void admittedWriteIsIssuedForTheStoredParametersNotTheRequest() {
         AutonomousToolGrant issued = AutonomousToolGrant.issue("g1", "F001", "SCHEDULER", "78", "user_disable", 42L,
                 "d", 3, expires, 42L, LocalDateTime.now());
@@ -123,7 +107,9 @@ class AutonomousGrantControllerContractTest {
         try (MockedStatic<AutonomousToolPolicy> policy = mockStatic(AutonomousToolPolicy.class, CALLS_REAL_METHODS)) {
             policy.when(() -> AutonomousToolPolicy.requireSourceAllowed("user_disable", ToolExecutionSource.SCHEDULER))
                     .then(call -> null);
-            var view = controller.issue("F001", request("SCHEDULER", "78", "user_disable")).getData();
+            // "078" names config 78; the grant is stored as "78", the ref the scheduler passes at run time.
+            when(schedules.findById(78L)).thenReturn(Optional.of(schedule("F001", "user_disable", 42L)));
+            var view = controller.issue("F001", request("SCHEDULER", "078", "user_disable")).getData();
             assertThat(view.state()).isEqualTo("ACTIVE");
         }
         String storedDigest = ToolCommandDigest.parametersHash(objectMapper.valueToTree(Map.of("username", "e2e-target")));
@@ -151,7 +137,7 @@ class AutonomousGrantControllerContractTest {
     }
 
     private static FactorySchedulerConfig schedule(String factoryId, String tool, Long runAs) {
-        return FactorySchedulerConfig.builder().factoryId(factoryId).taskCode("t-" + tool).enabled(true)
+        return FactorySchedulerConfig.builder().id(78L).factoryId(factoryId).taskCode("t-" + tool).enabled(true)
                 .cronExpression("0 0 7 * * ?").toolOrMethod(tool).params(Map.of("username", "e2e-target"))
                 .runAsUserId(runAs).build();
     }
