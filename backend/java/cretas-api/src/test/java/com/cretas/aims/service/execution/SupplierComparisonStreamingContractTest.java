@@ -622,6 +622,74 @@ class SupplierComparisonStreamingContractTest {
         }
     }
 
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tenant-allow", "tenant-deny", "platform-allow", "platform-deny"})
+    void rolesOnlySseSelectsFactoryConfigBeforeRealSupplierTool(String state) throws Exception {
+        boolean allowed = state.endsWith("allow");
+        boolean tenantOverride = state.startsWith("tenant");
+        StreamingFixture fixture = StreamingFixture.actualDispatch();
+        var actualTool = spy(fixture.supplierTool);
+        when(fixture.toolRegistry.getExecutor(SupplierComparisonReadIntent.TOOL)).thenReturn(Optional.of(actualTool));
+        var tenant = config("tenant-role", true, SupplierComparisonReadIntent.TOOL);
+        tenant.setRequiredPermission(null);
+        tenant.setRequiredRoles(allowed ? "[\"" + ROLE + "\"]" : "[\"factory_super_admin\"]");
+        var platform = config("platform-role", true, SupplierComparisonReadIntent.TOOL);
+        platform.setFactoryId(null); platform.setRequiredPermission(null);
+        platform.setRequiredRoles(tenantOverride
+                ? (allowed ? "[\"factory_super_admin\"]" : "[\"" + ROLE + "\"]") : tenant.getRequiredRoles());
+        var selected = tenantOverride ? tenant : platform;
+        var authority = mock(AIIntentConfigRepository.SupplierComparisonAuthority.class);
+        when(authority.getId()).thenReturn(selected.getId());
+        when(authority.getFactoryId()).thenReturn(selected.getFactoryId());
+        when(authority.getActive()).thenReturn(true); when(authority.getDeleted()).thenReturn(false);
+        when(fixture.intentConfigs.findSupplierComparisonAuthority(SupplierComparisonReadIntent.CODE)).thenReturn(List.of(authority));
+        when(fixture.intentConfigs.findByFactoryIdAndIntentCode(selected.getFactoryId(), SupplierComparisonReadIntent.CODE))
+                .thenReturn(Optional.of(selected));
+        fixture.recognizedIntent = selected;
+        AIIntentConfigRepository roles = mock(AIIntentConfigRepository.class);
+        when(roles.findByIntentCodeAndFactoryIdOrPlatform(SupplierComparisonReadIntent.CODE, FACTORY))
+                .thenReturn(tenantOverride ? List.of(tenant, platform) : List.of(platform));
+        if (tenantOverride) {
+            when(roles.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
+                    .thenThrow(new org.springframework.dao.IncorrectResultSizeDataAccessException(1, 2));
+        } else {
+            when(roles.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
+                    .thenReturn(Optional.of(platform));
+        }
+        var realConfigs = spy(new com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl(roles));
+        when(fixture.aiIntentService.hasPermission(FACTORY, SupplierComparisonReadIntent.CODE, ROLE))
+                .thenAnswer(invocation -> realConfigs.hasPermission(FACTORY, SupplierComparisonReadIntent.CODE, ROLE));
+        when(fixture.aiIntentService.hasPermission(SupplierComparisonReadIntent.CODE, ROLE))
+                .thenAnswer(invocation -> realConfigs.hasPermission(SupplierComparisonReadIntent.CODE, ROLE));
+        try (ActorRequest ignored = actor(factoryActor())) {
+            var outcome = new java.util.concurrent.atomic.AtomicReference<IntentExecuteResponse>();
+            org.assertj.core.api.Assertions.assertThatCode(() -> outcome.set(fixture.executeRequest(
+                    IntentExecuteRequest.builder().userInput(INPUT).build()))).doesNotThrowAnyException();
+            var response = outcome.get();
+            if (allowed) {
+                assertThat(response.getStatus()).isEqualTo("FAILED");
+                assertThat(response.getResultData()).isInstanceOf(Map.class);
+                Map<?, ?> data = (Map<?, ?>) response.getResultData();
+                assertThat(data.get("source")).isEqualTo("NO_QUOTE_SERVICE");
+                assertThat(data.get("code")).isEqualTo("SUPPLIER_PRICE_COMPARISON_UNAVAILABLE");
+                verify(actualTool).execute(any(), anyMap());
+            } else {
+                assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+                verify(actualTool, never()).execute(any(), anyMap());
+            }
+            verify(fixture.aiIntentService, org.mockito.Mockito.times(allowed ? 2 : 1))
+                    .hasPermission(FACTORY, SupplierComparisonReadIntent.CODE, ROLE);
+            verify(fixture.aiIntentService, never()).hasPermission(SupplierComparisonReadIntent.CODE, ROLE);
+            verify(realConfigs, org.mockito.Mockito.times(allowed ? 2 : 1))
+                    .getIntentByCode(FACTORY, SupplierComparisonReadIntent.CODE);
+            verify(roles, org.mockito.Mockito.times(allowed ? 2 : 1))
+                    .findByIntentCodeAndFactoryIdOrPlatform(SupplierComparisonReadIntent.CODE, FACTORY);
+            verify(roles, never()).findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(anyString());
+            verifyNoInteractions(fixture.supplierService);
+        } finally { fixture.close(); }
+    }
+
     private static AIIntentConfig config(String id, boolean active, String toolName) {
         return AIIntentConfig.builder().id(id).intentCode(SupplierComparisonReadIntent.CODE)
                 .intentName("supplier comparison").intentCategory("CRM").businessType("FACTORY")

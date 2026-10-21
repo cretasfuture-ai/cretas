@@ -605,8 +605,8 @@ class SupplierComparisonDispatchContractTest {
         var fixture = newOrchestrator(tool, dispatch, IntentPermissionGate.PermissionCheck.legacy(), Optional.of(configured));
         ReflectionTestUtils.setField(fixture.orchestrator, "intentPermissionGate", new IntentPermissionGate());
         AIIntentConfigRepository roleRepository = mock(AIIntentConfigRepository.class);
-        when(roleRepository.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(
-                SupplierComparisonReadIntent.CODE)).thenReturn(Optional.of(configured));
+        when(roleRepository.findByIntentCodeAndFactoryIdOrPlatform(
+                SupplierComparisonReadIntent.CODE, "F006")).thenReturn(List.of(configured));
         IntentConfigManagementServiceImpl roleConfigService =
                 new IntentConfigManagementServiceImpl(roleRepository);
         AIIntentServiceImpl recognition = spy(new AIIntentServiceImpl(null, roleConfigService, null));
@@ -616,9 +616,65 @@ class SupplierComparisonDispatchContractTest {
             response = fixture.orchestrator.executeWithExplicitIntent("F006", request(), 42L, "purchaser");
         }
         assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
-        verify(recognition).hasPermission(SupplierComparisonReadIntent.CODE, "purchaser");
+        verify(recognition).hasPermission("F006", SupplierComparisonReadIntent.CODE, "purchaser");
         verify(tool, never()).execute(any(), anyMap());
         assertThat(dispatch.records).isEmpty();
+    }
+
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tenant-allow", "tenant-deny", "platform-allow", "platform-deny"})
+    void rolesOnlyUsesCurrentFactoryThroughRealConfigServiceAndSupplierTool(String state) throws Exception {
+        boolean allowed = state.endsWith("allow");
+        boolean tenantOverride = state.startsWith("tenant");
+        var tool = spy(realSupplierTool());
+        var dispatch = newDispatch(false, Optional.empty());
+        var tenant = intent(tool);
+        tenant.setId("tenant-role"); tenant.setFactoryId("F006"); tenant.setRequiredPermission(null);
+        tenant.setRequiredRoles(allowed ? "[\"procurement_manager\"]" : "[\"factory_super_admin\"]");
+        var platform = intent(tool);
+        platform.setId("platform-role"); platform.setFactoryId(null); platform.setRequiredPermission(null);
+        platform.setRequiredRoles(tenantOverride
+                ? (allowed ? "[\"factory_super_admin\"]" : "[\"procurement_manager\"]") : tenant.getRequiredRoles());
+        var selected = tenantOverride ? tenant : platform;
+        var fixture = securedOrchestrator(tool, dispatch, Optional.of(selected), true);
+        AIIntentConfigRepository roles = mock(AIIntentConfigRepository.class);
+        when(roles.findByIntentCodeAndFactoryIdOrPlatform(SupplierComparisonReadIntent.CODE, "F006"))
+                .thenReturn(tenantOverride ? List.of(tenant, platform) : List.of(platform));
+        // A real global Optional cannot select between the coexisting active tenant/platform rows.
+        if (tenantOverride) {
+            when(roles.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
+                    .thenThrow(new org.springframework.dao.IncorrectResultSizeDataAccessException(1, 2));
+        } else {
+            when(roles.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(SupplierComparisonReadIntent.CODE))
+                    .thenReturn(Optional.of(platform));
+        }
+        var realConfigs = spy(new IntentConfigManagementServiceImpl(roles));
+        AIIntentServiceImpl service = spy(new AIIntentServiceImpl(null, realConfigs, null));
+        ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", service);
+        var outcome = new java.util.concurrent.atomic.AtomicReference<IntentExecuteResponse>();
+        try (ActorRequest ignored = actor(factoryActor())) {
+            org.assertj.core.api.Assertions.assertThatCode(() -> outcome.set(fixture.orchestrator
+                    .executeWithExplicitIntent("F006", request(), 42L, "procurement_manager")))
+                    .doesNotThrowAnyException();
+        }
+        IntentExecuteResponse response = outcome.get();
+        if (allowed) {
+            assertUnavailable(response);
+            verify(tool).execute(any(), anyMap());
+            assertThat(dispatch.records).singleElement().extracting(ToolCallRecord::getExecutionStatus)
+                    .isEqualTo(ToolCallRecord.ExecutionStatus.FAILED);
+        } else {
+            assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+            verify(tool, never()).execute(any(), anyMap());
+            assertThat(dispatch.records).isEmpty();
+        }
+        verify(service).hasPermission("F006", SupplierComparisonReadIntent.CODE, "procurement_manager");
+        verify(service, never()).hasPermission(anyString(), anyString());
+        verify(realConfigs).getIntentByCode("F006", SupplierComparisonReadIntent.CODE);
+        verify(roles).findByIntentCodeAndFactoryIdOrPlatform(SupplierComparisonReadIntent.CODE, "F006");
+        verify(roles, never()).findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(anyString());
+        verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
     }
 
     @Test

@@ -2749,7 +2749,9 @@ public class IntentExecutionOrchestrator {
             }
             return null;
         }
-        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+        if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
+                : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
             return buildNoPermissionResponse(intent);
         }
         return null;

@@ -7,19 +7,16 @@
 ## 在飞任务
 
 
-- `ERP-S1-SUPPLIER-ACTOR-BINDING-20261021` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 79abceca97c089029a8bf6074e7a8ca1f16099b6 — 原生隔离目标；见archive/2026-10-21-s1-supplier-actor-binding.md。
 
-- `ERP-S2-READINESS-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 47059a443e2b41218578c03a4cd8b293f2de1914 — PR1069九文件；3缺陷/ACK待补，见archive/2026-10-21-claude-s2-s6-registration.md。
+- `ERP-S2-READINESS-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 47059a443e2b41218578c03a4cd8b293f2de1914 — PR1069已合405d；3缺陷/ACK待补，见archive/2026-10-21-claude-s2-s6-registration.md。
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — writeScope=[]；见archive/2026-10-21-claude-s2-s6-registration.md。
 
-- `ERP-S1-RESULT-VERDICT-20261021` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 两文件，详见archive/2026-10-21-s1-result-verdict.md。
 
 - `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07八文件；见archive/2026-10-20-s1-deferred-grant.md。
 
 - `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10十四文件；见archive/2026-10-20-s1-scheduling-truth.md。
 
-- `ERP-S1-SUPPLIER-ROUTE-20261020` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — 79ab绿；actor阻塞另锁，见archive/2026-10-20-s1-supplier-route.md。
 
 
 
@@ -107,7 +104,6 @@
 - `ERP-S2-READINESS-CLAUDE-20261021`：Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；九文件及门禁见archive/2026-10-21-claude-s2-s6-registration.md；ACK待补/HOLD。
 
 
-- `ERP-S1-SUPPLIER-ACTOR-BINDING-20261021`：Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1；三十一文件见archive/2026-10-21-s1-supplier-actor-binding.md。
 
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。

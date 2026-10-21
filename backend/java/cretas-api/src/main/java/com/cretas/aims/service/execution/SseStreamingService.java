@@ -1300,7 +1300,9 @@ public class SseStreamingService {
                 return "您没有权限执行此操作。需要权限: " + check.requiredPermission()
                         + "，请联系工厂管理员开通。";
             }
-        } else if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+        } else if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
+                : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
             return "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
         }
         return null;
