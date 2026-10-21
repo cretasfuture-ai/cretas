@@ -62,6 +62,41 @@ class AutonomousToolExecutionContractTest {
                 .hasMessageContaining("只能使用只读工具").hasMessageContaining("dictionary_add");
     }
 
+    @Test void accessModeComesFromTheFailClosedResolverIncludingTheMigrationSeed() {
+        ToolExecutor seededRead = mock(ToolExecutor.class);
+        when(seededRead.getAccessMode()).thenReturn(AccessMode.WRITE);
+        when(seededRead.getToolName()).thenReturn("restaurant_avg_ticket");
+        assertThat(AutonomousToolPolicy.rejection("restaurant_avg_ticket", seededRead, Map.of())).isNull();
+        ToolExecutor defaultWrite = mock(ToolExecutor.class);
+        when(defaultWrite.getAccessMode()).thenReturn(AccessMode.WRITE);
+        when(defaultWrite.getToolName()).thenReturn("not_in_seed");
+        assertThat(AutonomousToolPolicy.rejection("not_in_seed", defaultWrite, Map.of())).contains("not_in_seed");
+    }
+
+    @Test void writeToolIsNotEvenScheduled() throws Exception {
+        org.springframework.scheduling.TaskScheduler taskScheduler = mock(org.springframework.scheduling.TaskScheduler.class);
+        Field field = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
+        field.setAccessible(true);
+        field.set(scheduler, taskScheduler);
+        FactorySchedulerConfig config = schedule(75L, "dictionary_add", Map.of());
+        when(schedulerRepo.findById(75L)).thenReturn(Optional.of(config));
+        scheduler.scheduleTask(config);
+        verifyNoInteractions(taskScheduler);
+        assertThat(scheduler.getActiveTaskCount()).isZero();
+        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+    }
+
+    @Test void malformedStepParamsAreACountedFailureAndLaterStepsStillRun() throws Exception {
+        TriggerChainExecutor executor = chainExecutor();
+        TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+        setSelf(executor, self);
+        FactoryTriggerChain chain = chain("CONTINUE", List.of(
+                Map.of("order", 1, "tool", "stock_summary", "params", "limit=5"), step(2, "stock_summary", Map.of())));
+        runChain(executor, chain);
+        verify(readTool, times(1)).execute(any(), any());
+        verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("PARTIAL"), contains("must be an object"));
+    }
+
     @Test void scheduledWriteToolIsNeverExecutedAndIsRecordedAsWriteDenied() throws Exception {
         FactorySchedulerConfig config = schedule(71L, "dictionary_add", Map.of());
         when(schedulerRepo.findById(71L)).thenReturn(Optional.of(config));

@@ -225,11 +225,13 @@ public class TriggerChainExecutor {
                 continue;
             }
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> params = (Map<String, Object>) step.getOrDefault("params", Map.of());
             stepAttempts++;
+            Object rawParams = step.getOrDefault("params", Map.of());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = rawParams instanceof Map<?, ?> map ? (Map<String, Object>) map : null;
             // An event chain runs with no user: refused steps count as failures, never as silent skips.
-            String refusal = AutonomousToolPolicy.rejection(toolName, executor.get(), params);
+            String refusal = params == null ? "step params must be an object"
+                    : AutonomousToolPolicy.rejection(toolName, executor.get(), params);
             if (refusal != null) {
                 stepFailures++;
                 if (errorSummary.length() > 0) errorSummary.append("; ");

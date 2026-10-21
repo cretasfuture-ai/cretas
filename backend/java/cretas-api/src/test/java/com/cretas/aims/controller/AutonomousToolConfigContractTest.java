@@ -69,6 +69,33 @@ class AutonomousToolConfigContractTest {
         assertThat(chains.setTriggerChain("F001", "SO_APPROVED", readOnly).getData().getEnabled()).isTrue();
     }
 
+    @Test void anExistingWriteToolScheduleCanStillBeDisabled() {
+        FactorySchedulerConfig existing = schedule("inventory_reserve_stock", Map.of());
+        existing.setFactoryId("F001");
+        existing.setTaskCode("nightly");
+        when(schedulerRepo.findByFactoryIdAndTaskCode("F001", "nightly")).thenReturn(Optional.of(existing));
+        FactorySchedulerConfig disable = new FactorySchedulerConfig();
+        disable.setEnabled(false);
+        assertThat(rules.setSchedulerConfig("F001", "nightly", disable).getData().getEnabled()).isFalse();
+        verify(schedulerRepo).save(existing);
+        FactorySchedulerConfig enable = new FactorySchedulerConfig();
+        enable.setEnabled(true);
+        assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", enable))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("inventory_reserve_stock");
+    }
+
+    @Test void enabledChainRefusesIdentityParamsAndMalformedParamsButIgnoresDisabledWriteSteps() {
+        assertThatThrownBy(() -> chains.setTriggerChain("F001", "C", chain(true,
+                List.of(Map.of("tool", "stock_summary", "params", Map.of("factoryId", "F-OTHER"))))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("factoryId");
+        assertThatThrownBy(() -> chains.setTriggerChain("F001", "C", chain(true,
+                List.of(Map.of("tool", "stock_summary", "params", "limit=5")))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("参数必须是对象");
+        verify(chainRepo, never()).save(any());
+        assertThat(chains.setTriggerChain("F001", "C", chain(true, List.of(Map.of("tool", "stock_summary"),
+                Map.of("tool", "inventory_reserve_stock", "enabled", false)))).getData().getEnabled()).isTrue();
+    }
+
     @Test void chainValidationFailsClosedWithoutARegistry() throws Exception {
         registry(chains, null);
         assertThatThrownBy(() -> chains.setTriggerChain("F001", "SO_APPROVED", chain(true, List.of(Map.of("tool", "stock_summary")))))
