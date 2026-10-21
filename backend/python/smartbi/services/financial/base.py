@@ -112,9 +112,13 @@ class AbstractFinancialChartBuilder(ABC):
     description: str = ""          # Description for AI/UI
     required_columns: List[str] = []  # Required column roles: budget, actual, last_year, category, item
     display_order: int = 0         # Order in dashboard
+    # 数值是比率 (如各月毛利率) 的表只能进声明了能处理比率的图表; 金额类图表把百分比相加没有意义
+    accepts_ratio_values: bool = False
 
     def can_build(self, column_mapping) -> bool:
         """Check if this chart can be built with available columns."""
+        if getattr(column_mapping, 'value_kind', 'amount') == 'ratio' and not self.accepts_ratio_values:
+            return False
         available = set()
         if column_mapping.budget_cols:
             available.add('budget')
@@ -122,7 +126,7 @@ class AbstractFinancialChartBuilder(ABC):
             available.add('actual')
         if column_mapping.last_year_cols:
             available.add('last_year')
-        if column_mapping.category_col:
+        if column_mapping.category_col or getattr(column_mapping, 'product_col', None):
             available.add('category')
         if column_mapping.item_col or column_mapping.label_col:
             available.add('item')
@@ -145,6 +149,18 @@ class AbstractFinancialChartBuilder(ABC):
                 "metadata": {"period", "dataQuality"}
             }
         """
+
+    def _insufficient(self, period: Dict, year: int, reason: str) -> Dict[str, Any]:
+        """数据不足时的统一结果: 不出图, 把缺什么原样告诉用户。"""
+        return {
+            "chartType": self.chart_type,
+            "title": f"{year}年{self.display_name}",
+            "kpis": [],
+            "echartsOption": {},
+            "tableData": None,
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
+        }
 
     def get_analysis_context(self, result: Dict) -> str:
         """Generate analysis context string from build result for AI analysis."""

@@ -1,13 +1,14 @@
 """Cost Flow Sankey Chart Builder — 成本流向桑基图."""
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 import pandas as pd
 
 from .base import (
     AbstractFinancialChartBuilder, COLORS,
     _sanitize_for_json, _detect_value_scale,
 )
-from ..financial_data_normalizer import FinancialDataNormalizer
+from . import metrics as M
+from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
 
@@ -32,50 +33,35 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
     }
 
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
-        normalizer = FinancialDataNormalizer()
+        # 收入、成本、各项费用、其他收益、营业外收支、所得税与净利润全部来自指标库, 与损益表瀑布图同一口径
+        pnl = M.pnl(df)
+        revenue_total = pnl.revenue
+        if revenue_total is None or revenue_total <= 0:
+            return self._insufficient(period, year, "营业收入为零，无法生成成本流向桑基图")
 
-        # Group by item and sum actuals
-        if 'actual' in df.columns:
-            item_totals = df.groupby('item')['actual'].sum()
-        else:
-            numeric_cols = df.select_dtypes(include='number').columns
-            if len(numeric_cols) > 0:
-                item_totals = df.groupby('item')[numeric_cols[0]].sum()
-            else:
-                item_totals = pd.Series(dtype=float)
+        def items_of(classes) -> List[Tuple[str, float]]:
+            part = M.select(df, classes)
+            out: List[Tuple[str, float]] = []
+            for item, grp in part.groupby('item', sort=False):
+                v = M.total(grp['actual'].tolist())
+                if v:
+                    out.append((S.strip_subject(item), v))
+            return out
 
-        # Classify items by P&L type
-        classified = {}  # type -> {name: value}
-        for item_name, value in item_totals.items():
-            if value is None or pd.isna(value) or value == 0:
-                continue
-            pnl_type = normalizer.classify_pnl_item(str(item_name))
-            if pnl_type not in classified:
-                classified[pnl_type] = {}
-            classified[pnl_type][str(item_name)] = abs(float(value))
+        cost_items = items_of([S.COST])
+        expense_items = items_of(list(S.EXPENSE_CLASSES) + [S.SURCHARGE])
+        gain_items = items_of([S.OTHER_GAIN])
+        non_op_income = pnl.non_op_income or 0.0
+        non_op_expense = pnl.non_op_expense or 0.0
+        income_tax = pnl.income_tax or 0.0
 
-        # Calculate summary figures
-        revenue_total = sum(classified.get('revenue', {}).values())
-        cost_total = sum(classified.get('cost', {}).values())
-        expense_total = sum(classified.get('expense', {}).values())
-        tax_total = sum(classified.get('tax', {}).values())
+        cost_total = pnl.cost or 0.0
+        expense_total = sum(v for _, v in expense_items)
+        gross_profit = pnl.gross_profit
+        operating_profit = pnl.operating_profit
+        net_profit = pnl.net_profit
 
-        if revenue_total == 0:
-            return {
-                "chartType": self.chart_type,
-                "title": f"{year}年{self.display_name}",
-                "kpis": [],
-                "echartsOption": {},
-                "tableData": None,
-                "analysisContext": "营业收入为零，无法生成成本流向桑基图",
-                "metadata": {"period": period, "dataQuality": "insufficient"},
-            }
-
-        gross_profit = revenue_total - cost_total
-        operating_profit = gross_profit - expense_total
-        net_profit = operating_profit - tax_total
-
-        # --- Build nodes and links ---
+        # --- Build nodes and links (桑基图只能画正向流量; 负数费用 = 净收益, 画成流入营业利润) ---
         nodes = []
         links = []
         node_set = set()
@@ -88,61 +74,61 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
                     "itemStyle": {"color": self.NODE_COLORS.get(pnl_type, '#FFAB00')},
                 })
 
-        # Level 0: Revenue
+        def _link(source, target, value):
+            if value and value > 0:
+                links.append({"source": source, "target": target, "value": round(value, 2)})
+
+        # Level 0 → 1: 营业收入 → 成本项 + 毛利润
         _add_node("营业收入", 'revenue')
+        for name, val in sorted(cost_items, key=lambda x: -x[1]):
+            if val > 0:
+                _add_node(name, 'cost')
+                _link("营业收入", name, val)
 
-        # Level 1: Revenue -> Cost items + Gross Profit
-        for item_name, val in sorted(classified.get('cost', {}).items(), key=lambda x: -x[1]):
-            _add_node(item_name, 'cost')
-            links.append({"source": "营业收入", "target": item_name, "value": round(val, 2)})
-
-        if gross_profit > 0:
+        if gross_profit is not None and gross_profit > 0:
             _add_node("毛利润", 'profit')
-            links.append({"source": "营业收入", "target": "毛利润", "value": round(gross_profit, 2)})
+            _link("营业收入", "毛利润", gross_profit)
 
-            # Level 2: Gross Profit -> Expense items + Operating Profit
-            for item_name, val in sorted(classified.get('expense', {}).items(), key=lambda x: -x[1]):
-                _add_node(item_name, 'expense')
-                links.append({"source": "毛利润", "target": item_name, "value": round(val, 2)})
-
-            # Other items
-            for item_name, val in sorted(classified.get('other', {}).items(), key=lambda x: -x[1]):
-                _add_node(item_name, 'other')
-                links.append({"source": "毛利润", "target": item_name, "value": round(val, 2)})
-
-            if operating_profit > 0:
+            # Level 1 → 2: 毛利润 → 各项费用 + 营业利润; 其他收益 / 负数费用 流入营业利润
+            positive_expenses = 0.0
+            for name, val in sorted(expense_items, key=lambda x: -x[1]):
+                if val > 0:
+                    _add_node(name, 'expense')
+                    _link("毛利润", name, val)
+                    positive_expenses += val
+            remaining = gross_profit - positive_expenses
+            inflows = [(n, v) for n, v in gain_items if v > 0] + \
+                [(f"{n}（净收益）", -v) for n, v in expense_items if v < 0]
+            if operating_profit is not None and operating_profit > 0:
                 _add_node("营业利润", 'profit')
-                links.append({"source": "毛利润", "target": "营业利润", "value": round(operating_profit, 2)})
+                _link("毛利润", "营业利润", remaining)
+                for name, val in inflows:
+                    _add_node(name, 'other')
+                    _link(name, "营业利润", val)
 
-                # Level 3: Operating Profit -> Tax + Net Profit
-                for item_name, val in sorted(classified.get('tax', {}).items(), key=lambda x: -x[1]):
-                    _add_node(item_name, 'tax')
-                    links.append({"source": "营业利润", "target": item_name, "value": round(val, 2)})
-
-                if net_profit > 0:
+                # Level 2 → 3: 营业利润 → 营业外支出 / 所得税 / 净利润; 营业外收入 流入净利润
+                if non_op_expense > 0:
+                    _add_node("营业外支出", 'expense')
+                    _link("营业利润", "营业外支出", non_op_expense)
+                if income_tax > 0:
+                    _add_node("所得税", 'tax')
+                    _link("营业利润", "所得税", income_tax)
+                to_net = operating_profit - non_op_expense - income_tax
+                if net_profit is not None and net_profit > 0 and to_net > 0:
                     _add_node("净利润", 'profit')
-                    links.append({"source": "营业利润", "target": "净利润", "value": round(net_profit, 2)})
-                elif net_profit < 0:
+                    _link("营业利润", "净利润", to_net)
+                    if non_op_income > 0:
+                        _add_node("营业外收入", 'other')
+                        _link("营业外收入", "净利润", non_op_income)
+                elif net_profit is not None and net_profit < 0:
                     _add_node("净亏损", 'revenue')
-                    links.append({"source": "营业利润", "target": "净亏损", "value": round(abs(net_profit), 2)})
-                else:
-                    # net_profit == 0: add a zero-value node to avoid dangling edge
-                    _add_node("净利润", 'profit')
-                    links.append({"source": "营业利润", "target": "净利润", "value": 0.01})
+                    _link("营业利润", "净亏损", abs(net_profit))
 
         if not links:
-            return {
-                "chartType": self.chart_type,
-                "title": f"{year}年{self.display_name}",
-                "kpis": [],
-                "echartsOption": {},
-                "tableData": None,
-                "analysisContext": "数据不足以构建成本流向图",
-                "metadata": {"period": period, "dataQuality": "insufficient"},
-            }
+            return self._insufficient(period, year, "数据不足以构建成本流向图")
 
         # Scale
-        scale = _detect_value_scale([revenue_total, cost_total, expense_total, abs(net_profit)])
+        scale = _detect_value_scale([revenue_total, cost_total, expense_total, abs(net_profit or 0)])
 
         # Pre-scale link values so labels display consistently (e.g. "0.35万" not "3,515")
         divisor = scale['divisor']
@@ -151,13 +137,16 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
                 lk['value'] = round(lk['value'] / divisor, 2)
 
         # KPIs
-        expense_ratio = round((cost_total + expense_total + tax_total) / revenue_total * 100, 1) if revenue_total else 0
-        net_margin = round(net_profit / revenue_total * 100, 1) if revenue_total else 0
+        outgo = cost_total + expense_total + income_tax
+        expense_ratio = round(outgo / revenue_total * 100, 1)
+        net_margin = pnl.net_margin().value
+        gross_margin = pnl.gross_margin().value
 
         kpis = [
             {"label": "营业收入", "value": self._format_value(revenue_total, scale), "unit": "元", "trend": "flat"},
             {"label": "费用占比", "value": f"{expense_ratio}%", "unit": "", "trend": self._trend_from_value(-expense_ratio + 70)},  # noqa: E501
-            {"label": "净利率", "value": f"{net_margin}%", "unit": "", "trend": self._trend_from_value(net_margin)},
+            {"label": "净利率", "value": f"{net_margin}%" if net_margin is not None else "-", "unit": "",
+             "trend": self._trend_from_value(net_margin)},
         ]
 
         # ECharts option
@@ -235,7 +224,8 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
             "right": "5%",
             "top": "3%",
             "style": {
-                "text": f"毛利率: {round(gross_profit / revenue_total * 100, 1)}%  |  净利率: {net_margin}%",
+                "text": f"毛利率: {gross_margin if gross_margin is not None else '-'}%  |  "
+                        f"净利率: {net_margin if net_margin is not None else '-'}%",
                 "fontSize": 12,
                 "fill": COLORS['primary'],
                 "fontWeight": "bold",
@@ -249,7 +239,7 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
             f"营业收入{self._format_value(revenue_total, scale)}元",
             f"营业成本占收入{round(cost_total / revenue_total * 100, 1)}%",
             f"费用合计占收入{round(expense_total / revenue_total * 100, 1)}%",
-            f"净利率{net_margin}%",
+            f"净利率{net_margin if net_margin is not None else '-'}%",
         ]
 
         result = {
@@ -268,7 +258,7 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
             "metadata": {
                 "period": period,
                 "scale": scale,
-                "grossMargin": round(gross_profit / revenue_total * 100, 1),
+                "grossMargin": gross_margin,
                 "netMargin": net_margin,
                 "expenseRatio": expense_ratio,
                 "dataQuality": "good",
