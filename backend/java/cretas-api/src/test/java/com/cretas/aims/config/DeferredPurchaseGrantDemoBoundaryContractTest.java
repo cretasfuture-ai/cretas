@@ -87,15 +87,15 @@ class DeferredPurchaseGrantDemoBoundaryContractTest {
         verifyNoInteractions(service, audit, callers);
     }
     @Test void ordinaryFactoryStillReachesBothFixedCallerControllers() throws Exception {
-        when(callers.execute(anyString(), anyString(), anyLong(), any())).thenReturn(
+        when(callers.executeGrant(anyString(), anyString(), anyLong(), any())).thenReturn(
                 new ControlledPurchaseTaskExecutionService.Outcome("preview-175", "DRAFT", "QA-ORDER", BigDecimal.ONE, BigDecimal.ONE, 2L, false));
         for (String route : java.util.List.of("execute-tool", "execute-skill")) {
             mvc.perform(post("/api/mobile/F006/ai-purchase-task-grants/preview-175/" + route)
                     .contentType("application/json").content("{\"expectedVersion\":1}"))
                     .andExpect(status().isOk()).andExpect(jsonPath("$.data.state").value("DRAFT"));
         }
-        verify(callers).execute("F006", "preview-175", 1L, PurchaseGrantCallerService.Channel.TOOL);
-        verify(callers).execute("F006", "preview-175", 1L, PurchaseGrantCallerService.Channel.SKILL);
+        verify(callers).executeGrant("F006", "preview-175", 1L, PurchaseGrantCallerService.Channel.TOOL);
+        verify(callers).executeGrant("F006", "preview-175", 1L, PurchaseGrantCallerService.Channel.SKILL);
     }
     @Test void demoAuthorizationIsStillBlockedBeforeControllerAndBodyValidation() throws Exception {
         mvc.perform(post("/api/mobile/F_DEMO/ai-purchase-task-grants/authorize-later")
