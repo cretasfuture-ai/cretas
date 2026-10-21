@@ -497,7 +497,7 @@ class RestaurantOpsGoldRouteTest {
                 .userInput("不要套餐，今天排班和备货怎么调？")
                 .build();
 
-        IntentExecuteResponse response = orchestrator.execute("DEMO_REST", request, 7L, "admin");
+        IntentExecuteResponse response = executeAsFactory("DEMO_REST", request, 7L, "admin");
 
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OWNER_ACTION_CHAT");
@@ -527,7 +527,7 @@ class RestaurantOpsGoldRouteTest {
                 .userInput("不想打折，那今天还有什么办法提升营收？")
                 .build();
 
-        IntentExecuteResponse response = orchestrator.execute("DEMO_REST", request, 7L, "admin");
+        IntentExecuteResponse response = executeAsFactory("DEMO_REST", request, 7L, "admin");
 
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OWNER_ACTION_CHAT");
@@ -858,7 +858,7 @@ class RestaurantOpsGoldRouteTest {
                 .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
                 .build();
 
-        IntentExecuteResponse response = orchestrator.executeWithExplicitIntent("DEMO_REST", request, 7L, "admin");
+        IntentExecuteResponse response = executeExplicitAsFactory("DEMO_REST", request, 7L, "admin");
 
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
@@ -898,7 +898,7 @@ class RestaurantOpsGoldRouteTest {
                         "executedResolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
                         "suggestedFollowups", followups));
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput("哪个菜卖得好").build(),
                 7L,
@@ -1017,7 +1017,7 @@ class RestaurantOpsGoldRouteTest {
                         .message("慢销/滞销菜品（销量垫底）：1. 酸梅汤 63368 份")
                         .build());
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput(query).build(),
                 7L,
@@ -1054,7 +1054,7 @@ class RestaurantOpsGoldRouteTest {
         when(aiIntentService.hasPermission(eq("RESTAURANT_DISH_DELETE"), eq("admin")))
                 .thenReturn(true);
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput(query).build(),
                 7L,
@@ -1140,7 +1140,7 @@ class RestaurantOpsGoldRouteTest {
                 .thenReturn(true);
         when(writeGuardService.isWriteIntent(dishDelete)).thenReturn(true);
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("把卤炸牛肉串下架")
@@ -1159,7 +1159,7 @@ class RestaurantOpsGoldRouteTest {
     @Test
     @DisplayName("operation mode data-derived batch removal asks for a ranked list before any preview")
     void derivedBatchDishRemovalRequiresConcreteDishSelection() {
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("把最近7天全部门店销量最低的5道菜下架")
@@ -1185,7 +1185,7 @@ class RestaurantOpsGoldRouteTest {
     @Test
     @DisplayName("consultation mode data-derived batch removal stays on the write-mode gate")
     void derivedBatchDishRemovalInReadModeOffersOperationPage() {
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("下架最近7天销量最低的5道菜")
@@ -1243,7 +1243,7 @@ class RestaurantOpsGoldRouteTest {
                         .message("确认后将下架菜品「卤炸牛肉串」")
                         .build());
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("把卤炸牛肉串下架")
@@ -1296,7 +1296,7 @@ class RestaurantOpsGoldRouteTest {
                 "这周营收怎么提高",
                 "本月毛利下降，仓管、厨师长和前台分别要做什么"
         }) {
-            IntentExecuteResponse response = orchestrator.execute(
+            IntentExecuteResponse response = executeAsFactory(
                     "DEMO_REST",
                     IntentExecuteRequest.builder().userInput(query).mode("READ").build(),
                     7L,
@@ -1331,7 +1331,7 @@ class RestaurantOpsGoldRouteTest {
         when(queryPreprocessorService.detectNegationVeto(any(), any()))
                 .thenReturn(QueryPreprocessorService.NegationKind.VETO_READ);
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput("别看订单").mode("READ").build(),
                 7L,
@@ -1368,7 +1368,7 @@ class RestaurantOpsGoldRouteTest {
                         "contractPass", true,
                         "queryPlanHash", "plan-domain"));
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "QHJ01",
                 IntentExecuteRequest.builder().userInput("哪个菜卖得好").build(),
                 7L,
@@ -1423,7 +1423,7 @@ class RestaurantOpsGoldRouteTest {
                 .userInput("查询本周营收")
                 .build();
 
-        IntentExecuteResponse response = orchestrator.execute("DEMO_REST", request, 7L, "admin");
+        IntentExecuteResponse response = executeAsFactory("DEMO_REST", request, 7L, "admin");
 
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
@@ -1477,7 +1477,7 @@ class RestaurantOpsGoldRouteTest {
                         .resultData(Map.of("source", "restaurant_ops_gold_analysis"))
                         .build());
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput("查询本周营收").build(),
                 7L,
@@ -1618,7 +1618,7 @@ class RestaurantOpsGoldRouteTest {
         ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
         ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
 
-        IntentExecuteResponse response = orchestrator.execute(
+        IntentExecuteResponse response = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("那它的毛利率也是第一吗？")
@@ -1641,31 +1641,31 @@ class RestaurantOpsGoldRouteTest {
         ReflectionTestUtils.setField(orchestrator, "configService", configService);
         when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
 
-        IntentExecuteResponse turnover = orchestrator.execute(
+        IntentExecuteResponse turnover = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("最近翻台拉胯，先判断是翻台率还是翻台次数，不要拿营业额替代")
                         .build(),
                 7L,
                 "admin");
-        IntentExecuteResponse netProfit = orchestrator.execute(
+        IntentExecuteResponse netProfit = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder()
                         .userInput("昨天和前天各门店净利润，不要用营业额或毛利替代")
                         .build(),
                 7L,
                 "admin");
-        IntentExecuteResponse elasticity = orchestrator.execute(
+        IntentExecuteResponse elasticity = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput("菜品价格弹性和95%置信区间").build(),
                 7L,
                 "admin");
-        IntentExecuteResponse costMargin = orchestrator.execute(
+        IntentExecuteResponse costMargin = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput("成本毛利先查哪几项？").build(),
                 7L,
                 "admin");
-        IntentExecuteResponse prohibited = orchestrator.execute(
+        IntentExecuteResponse prohibited = executeAsFactory(
                 "DEMO_REST",
                 IntentExecuteRequest.builder().userInput("要提升毛利率，哪些事情今天先不要做？").build(),
                 7L,
@@ -1722,5 +1722,25 @@ class RestaurantOpsGoldRouteTest {
                 payload,
                 "Gateway result",
                 false);
+    }
+
+    // These route fixtures represent authenticated tenant callers. Keep the caller's
+    // own role and tenant, and restore any outer identity after the real invocation.
+    private IntentExecuteResponse executeAsFactory(String factoryId, IntentExecuteRequest request,
+                                                   Long userId, String role) {
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, factoryId, role))) {
+            return orchestrator.execute(factoryId, request, userId, role);
+        }
+    }
+
+    private IntentExecuteResponse executeExplicitAsFactory(String factoryId, IntentExecuteRequest request,
+                                                           Long userId, String role) {
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, factoryId, role))) {
+            return orchestrator.executeWithExplicitIntent(factoryId, request, userId, role);
+        }
     }
 }

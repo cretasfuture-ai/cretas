@@ -6458,18 +6458,18 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
+    requiresPermission: true
+    requiredPermissions: ["finance:read_write", "procurement:read_write"]
+    version: "2.0.0"
     domainTags: ["supplier"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: false
+      requiresPermission: true
       hasPermission: false
-      requiredPermissions: false
-      version: false
+      requiredPermissions: true
+      version: true
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
   - toolName: "supplier_delete"

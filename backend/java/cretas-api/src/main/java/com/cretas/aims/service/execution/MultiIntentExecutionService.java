@@ -4,6 +4,7 @@ import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.intent.MultiIntentResult;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.AIIntentService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -51,6 +52,7 @@ public class MultiIntentExecutionService {
      */
     public IntentExecuteResponse executeMultiIntent(String factoryId, IntentExecuteRequest request,
                                                      Long userId, String userRole) {
+        AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         log.info("执行多意图识别: factoryId={}, userInput='{}'",
                 factoryId,
                 request.getUserInput() != null && request.getUserInput().length() > 50 ?
@@ -105,9 +107,9 @@ public class MultiIntentExecutionService {
 
         try {
             if (strategy == MultiIntentResult.ExecutionStrategy.PARALLEL) {
-                results = executeMultiIntentParallel(multiResult, request, factoryId, userId, userRole);
+                results = executeMultiIntentParallel(multiResult, request, factoryId, userId, userRole, trustedActor);
             } else {
-                results = executeMultiIntentSequential(multiResult, request, factoryId, userId, userRole);
+                results = executeMultiIntentSequential(multiResult, request, factoryId, userId, userRole, trustedActor);
             }
         } catch (Exception e) {
             log.error("多意图执行失败: strategy={}, error={}", strategy, e.getMessage(), e);
@@ -133,6 +135,7 @@ public class MultiIntentExecutionService {
                                                                     Long userId,
                                                                     String userRole) {
         List<IntentMatchResult.IntentMatch> intents = intentResult.getAdditionalIntents();
+        AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         if (intents == null || intents.isEmpty()) {
             return executeSingleIntent(request, intentResult, factoryId, userId, userRole);
         }
@@ -148,14 +151,14 @@ public class MultiIntentExecutionService {
         if (strategy == MultiIntentResult.ExecutionStrategy.PARALLEL) {
             results = intents.parallelStream()
                 .map(intent -> executeSingleIntentByCode(request, intent.getIntentCode(),
-                        intent.getExtractedParams(), factoryId, userId, userRole))
+                        intent.getExtractedParams(), factoryId, userId, userRole, trustedActor))
                 .collect(Collectors.toList());
         } else {
             results = new ArrayList<>();
             for (IntentMatchResult.IntentMatch intent : intents) {
                 IntentExecuteResponse result = executeSingleIntentByCode(
                     request, intent.getIntentCode(), intent.getExtractedParams(),
-                    factoryId, userId, userRole);
+                    factoryId, userId, userRole, trustedActor);
                 results.add(result);
             }
         }
@@ -186,7 +189,8 @@ public class MultiIntentExecutionService {
                                                              Map<String, Object> extractedParams,
                                                              String factoryId,
                                                              Long userId,
-                                                             String userRole) {
+                                                             String userRole,
+                                                             AuthenticatedActor trustedActor) {
         IntentExecuteRequest subRequest = IntentExecuteRequest.builder()
                 .userInput(request.getUserInput())
                 .intentCode(intentCode)
@@ -196,20 +200,22 @@ public class MultiIntentExecutionService {
                 .forceExecute(true)
                 .build();
 
-        return orchestrator.executeWithExplicitIntent(factoryId, subRequest, userId, userRole);
+        return executeWithTrustedActor(trustedActor,
+                () -> orchestrator.executeWithExplicitIntent(factoryId, subRequest, userId, userRole));
     }
 
     private List<IntentExecuteResponse> executeMultiIntentParallel(MultiIntentResult multiResult,
                                                                      IntentExecuteRequest originalRequest,
                                                                      String factoryId,
                                                                      Long userId,
-                                                                     String userRole) {
+                                                                     String userRole,
+                                                                     AuthenticatedActor trustedActor) {
         log.info("并行执行 {} 个意图", multiResult.getIntents().size());
         ExecutorService executor = sseStreamingService.getSseExecutor();
 
         List<CompletableFuture<IntentExecuteResponse>> futures = multiResult.getIntents().stream()
                 .map(intent -> CompletableFuture.supplyAsync(() ->
-                        executeSingleIntentFromMultiResult(intent, originalRequest, factoryId, userId, userRole),
+                        executeSingleIntentFromMultiResult(intent, originalRequest, factoryId, userId, userRole, trustedActor),
                         executor
                 ))
                 .collect(Collectors.toList());
@@ -225,7 +231,8 @@ public class MultiIntentExecutionService {
                                                                        IntentExecuteRequest originalRequest,
                                                                        String factoryId,
                                                                        Long userId,
-                                                                       String userRole) {
+                                                                       String userRole,
+                                                                       AuthenticatedActor trustedActor) {
         log.info("串行执行 {} 个意图", multiResult.getIntents().size());
 
         List<MultiIntentResult.SingleIntentMatch> sortedIntents = multiResult.getIntents().stream()
@@ -235,7 +242,7 @@ public class MultiIntentExecutionService {
         List<IntentExecuteResponse> results = new ArrayList<>();
         for (MultiIntentResult.SingleIntentMatch intent : sortedIntents) {
             IntentExecuteResponse result = executeSingleIntentFromMultiResult(
-                    intent, originalRequest, factoryId, userId, userRole);
+                    intent, originalRequest, factoryId, userId, userRole, trustedActor);
             results.add(result);
 
             if ("FAILED".equals(result.getStatus())) {
@@ -249,7 +256,8 @@ public class MultiIntentExecutionService {
                                                                        IntentExecuteRequest originalRequest,
                                                                        String factoryId,
                                                                        Long userId,
-                                                                       String userRole) {
+                                                                       String userRole,
+                                                                       AuthenticatedActor trustedActor) {
         log.debug("执行单个意图: intentCode={}, order={}", intent.getIntentCode(), intent.getExecutionOrder());
 
         Map<String, Object> context = new HashMap<>();
@@ -269,7 +277,15 @@ public class MultiIntentExecutionService {
                 .forceExecute(true)
                 .build();
 
-        return orchestrator.executeWithExplicitIntent(factoryId, subRequest, userId, userRole);
+        return executeWithTrustedActor(trustedActor,
+                () -> orchestrator.executeWithExplicitIntent(factoryId, subRequest, userId, userRole));
+    }
+
+    private <T> T executeWithTrustedActor(AuthenticatedActor trustedActor,
+                                           java.util.function.Supplier<T> operation) {
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(trustedActor)) {
+            return operation.get();
+        }
     }
 
     // ==================== 响应构建 ====================

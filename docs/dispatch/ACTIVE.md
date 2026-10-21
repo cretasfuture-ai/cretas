@@ -8,8 +8,20 @@
 
 
 
+- `ERP-S2-READINESS-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 47059a443e2b41218578c03a4cd8b293f2de1914 — PR1069已合405d；3缺陷/ACK待补，见archive/2026-10-21-claude-s2-s6-registration.md。
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-05/06原QA通过；04人工事件#1064已合入发布，原QA仍FAIL：SUPPLIER_RANKING权限拒绝、未到比较工具。75场景9通过2失败64未测，18缺陷16关闭；S0未过。QA独占CSV/设备；见archive/2026-10-20-s1-supplier-entry.md。
+- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — writeScope=[]；见archive/2026-10-21-claude-s2-s6-registration.md。
+
+
+- `ERP-S1-DEFERRED-GRANT-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-07八文件；见archive/2026-10-20-s1-deferred-grant.md。
+
+- `ERP-S1-SCHEDULING-TRUTH-20261020` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 1b9f712ecf275fe7f784e58174f90e8e1b9c68bf — S1-02/10十四文件；见archive/2026-10-20-s1-scheduling-truth.md。
+
+
+
+
+
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S0/S1未通过；QA独占；见archive/2026-10-20-s1-supplier-entry.md。
 
 
 
@@ -89,6 +101,10 @@
 
 ## Scope 锁地图
 
+- `ERP-S2-READINESS-CLAUDE-20261021`：Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；九文件及门禁见archive/2026-10-21-claude-s2-s6-registration.md；ACK待补/HOLD。
+
+
+
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915`：仅新建 `scripts/e2e/shenglong-demo/**`；⛔ 不改后端/前端代码、不 SQL 直插、凭证不入库。
@@ -118,4 +134,3 @@
 - organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
 - 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
 - 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
-

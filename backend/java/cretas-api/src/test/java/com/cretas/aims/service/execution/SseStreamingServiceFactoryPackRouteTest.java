@@ -16,6 +16,8 @@ import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.SemanticCacheService;
@@ -344,8 +346,11 @@ class SseStreamingServiceFactoryPackRouteTest {
 
         private IntentExecuteResponse execute(
                 String factoryId, IntentExecuteRequest request, String role) throws Exception {
-            ReflectionTestUtils.invokeMethod(
-                    service, "executeStreamAsync", emitter, factoryId, request, 7L, role);
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                    new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 7L, factoryId, role))) {
+                ReflectionTestUtils.invokeMethod(
+                        service, "executeStreamAsync", emitter, factoryId, request, 7L, role);
+            }
             ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
             verify(service).sendSseEvent(eq(emitter), eq("result"), result.capture());
             verify(emitter).complete();

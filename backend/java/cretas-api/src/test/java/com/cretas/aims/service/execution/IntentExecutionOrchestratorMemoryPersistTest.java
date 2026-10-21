@@ -10,6 +10,8 @@ import com.cretas.aims.dto.conversation.ConversationContext;
 import com.cretas.aims.dto.conversation.EntitySlot;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AgentOrchestrator;
 import com.cretas.aims.service.AgenticRAGRouterService;
@@ -89,8 +91,12 @@ class IntentExecutionOrchestratorMemoryPersistTest {
         IntentExecuteResponse resp = IntentExecuteResponse.builder()
                 .status("COMPLETED").build();
 
-        orchestrator.persistConversationMemoryForExplicitIntent(
-                "RES_3101_009", req, resp, intent, 9L);
+        when(memory.getOrCreateContext("RES_3101_009", 9L, "sess-mt-1"))
+                .thenReturn(owner("RES_3101_009", 9L, "sess-mt-1"));
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("RES_3101_009", 9L)) {
+            orchestrator.persistConversationMemoryForExplicitIntent(
+                    "RES_3101_009", req, resp, intent, 9L);
+        }
 
         verify(memory).getOrCreateContext("RES_3101_009", 9L, "sess-mt-1");
         verify(memory).updateLastIntent("sess-mt-1", "RESTAURANT_REVENUE_TREND");
@@ -115,8 +121,12 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                                 "单数", 20)))
                 .build();
 
-        orchestrator.persistConversationMemoryForExplicitIntent(
-                "RES_3101_009", req, resp, intent, 9L);
+        when(memory.getOrCreateContext("RES_3101_009", 9L, "sess-store"))
+                .thenReturn(owner("RES_3101_009", 9L, "sess-store"));
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("RES_3101_009", 9L)) {
+            orchestrator.persistConversationMemoryForExplicitIntent(
+                    "RES_3101_009", req, resp, intent, 9L);
+        }
 
         ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
         verify(memory).updateEntitySlot(
@@ -143,8 +153,12 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                                 "销量", 1500.0)))
                 .build();
 
-        orchestrator.persistConversationMemoryForExplicitIntent(
-                "RES_3101_009", req, resp, intent, 9L);
+        when(memory.getOrCreateContext("RES_3101_009", 9L, "sess-dish"))
+                .thenReturn(owner("RES_3101_009", 9L, "sess-dish"));
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("RES_3101_009", 9L)) {
+            orchestrator.persistConversationMemoryForExplicitIntent(
+                    "RES_3101_009", req, resp, intent, 9L);
+        }
 
         ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
         verify(memory).updateEntitySlot(
@@ -191,8 +205,10 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 .build();
 
         // Call private updateConversationMemory directly (mirrors what execute() does after D1-fix)
-        ReflectionTestUtils.invokeMethod(orchestrator, "updateConversationMemory",
-                "sess-d1-fix", req, resp, matchResult, "RES_3101_009", 9L);
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("RES_3101_009", 9L)) {
+            ReflectionTestUtils.invokeMethod(orchestrator, "updateConversationMemory",
+                    "sess-d1-fix", req, resp, matchResult, "RES_3101_009", 9L);
+        }
 
         ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
         verify(memory).updateEntitySlot(
@@ -219,8 +235,12 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 .message("比较完成")
                 .build();
 
-        orchestrator.persistConversationMemoryForExplicitIntent(
-                "DEMO_REST", req, resp, intent, 9L);
+        when(memory.getOrCreateContext("DEMO_REST", 9L, "sess-date-persist"))
+                .thenReturn(owner("DEMO_REST", 9L, "sess-date-persist"));
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("DEMO_REST", 9L)) {
+            orchestrator.persistConversationMemoryForExplicitIntent(
+                    "DEMO_REST", req, resp, intent, 9L);
+        }
 
         ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
         verify(memory).updateEntitySlot(
@@ -260,7 +280,9 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 .context(Map.of("store_name", "鲜行者打浦桥日月光店"))
                 .build();
 
-        orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("DEMO_REST", 9L)) {
+            orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        }
 
         assertThat(req.getContext())
                 .containsEntry("store_name", "鲜行者打浦桥日月光店")
@@ -285,7 +307,9 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 .userInput("那毛利呢？请沿用刚才比较的两个日期。")
                 .build();
 
-        orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("DEMO_REST", 9L)) {
+            orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        }
 
         assertThat(req.getSessionId()).isNull();
         assertThat(req.getContext()).isNull();
@@ -300,7 +324,9 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 .userInput("那毛利呢？今天重新看，但不要沿用刚才比较的两个日期。")
                 .build();
 
-        orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("DEMO_REST", 9L)) {
+            orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        }
 
         assertThat(req.getContext()).isNull();
         verifyNoInteractions(memory);
@@ -330,7 +356,9 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 .userInput("那毛利呢？请沿用刚才比较的两个日期。")
                 .build();
 
-        orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("DEMO_REST", 9L)) {
+            orchestrator.hydrateRestaurantComparisonContext("DEMO_REST", 9L, req);
+        }
 
         assertThat(req.getContext()).isNull();
         assertThat(req.getSessionId()).isEqualTo("sess-invalid-date");
@@ -345,9 +373,21 @@ class IntentExecutionOrchestratorMemoryPersistTest {
         IntentExecuteResponse resp = IntentExecuteResponse.builder()
                 .status("COMPLETED").build();
 
-        orchestrator.persistConversationMemoryForExplicitIntent(
-                "RES_3101_009", req, resp, intent, 9L);
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor("RES_3101_009", 9L)) {
+            orchestrator.persistConversationMemoryForExplicitIntent(
+                    "RES_3101_009", req, resp, intent, 9L);
+        }
 
         verifyNoInteractions(memory);
+    }
+
+    private static ConversationContext owner(String factoryId, long userId, String sessionId) {
+        return ConversationContext.builder()
+                .factoryId(factoryId).userId(userId).sessionId(sessionId).build();
+    }
+
+    private static AuthenticatedActor.ActorScope trustedFactoryActor(String factoryId, long userId) {
+        return AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, factoryId, "operator"));
     }
 }
