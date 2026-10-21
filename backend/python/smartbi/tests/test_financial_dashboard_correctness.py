@@ -178,6 +178,56 @@ class TestPerformanceChartsUseRevenueOnly:
         assert to_yuan(kpi(r, '总实际')['value']) == 2200
 
 
+class TestSheetSemantics:
+    """客户样图验收中暴露: 比率表进了金额图、费用表被当成业绩、记分卡把收入显示成 0。"""
+
+    MARGIN_SHEET = [{'月份': f'{m}月', '本年毛利率': f'{25 + m}%', '上年毛利率': f'{24 + m}%'} for m in range(1, 4)]
+    EXPENSE_SHEET = [{'月份': f'{m}月', '预算（万元）': 100, '实际（万元）': 90, '上年（万元）': 80} for m in range(1, 4)]
+
+    def test_ratio_sheet_only_feeds_ratio_charts(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.MARGIN_SHEET), 2026, 'all', 1, 12)
+        built = {c['chartType'] for c in r['charts']}
+        assert built == {'gross_margin_trend'}, f'毛利率百分比被当成金额进了这些图: {built - {"gross_margin_trend"}}'
+
+    def test_expense_sheet_name_marks_rows_as_expense(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.EXPENSE_SHEET), 2026, 'all', 1, 12, sheet_name='费用预算')
+        charts = {c['chartType']: c for c in r['charts']}
+        assert charts['expense_yoy_budget']['success'] is True
+        assert to_yuan(kpi(charts['expense_yoy_budget'], '本年费用合计')['value']) == 2_700_000
+        # 费用表不能出现在「业绩」预算完成 / 同比里
+        assert charts['budget_achievement']['success'] is False
+        assert charts['yoy_mom_comparison']['success'] is False
+
+    def test_margin_without_cost_line_is_not_100_percent(self):
+        rows = [{'月份': f'{m}月', '本年（万元）': 100 * m, '上年（万元）': 80 * m} for m in range(1, 4)]
+        r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, sheet_name='业绩同比')
+        card = next(c for c in r['charts'] if c['chartType'] == 'kpi_scorecard')
+        labels = {k['label'] for k in card['kpis']}
+        assert not labels & {'毛利率', '净利率'}, f'没有成本科目却给出了利润率: {card["kpis"]}'
+
+    def test_sankey_and_waterfall_agree_on_net_margin(self):
+        rows = [{'月份': '1月', '项目': k, '实际': v} for k, v in PNL_REFERENCE]
+        r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)
+        charts = {c['chartType']: c for c in r['charts']}
+        waterfall_margin = charts['pnl_waterfall']['metadata']['netMargin']
+        sankey_margin = charts['cost_flow_sankey']['metadata']['netMargin']
+        assert waterfall_margin == pytest.approx(3308 / 8333 * 100, abs=0.01)
+        assert sankey_margin == pytest.approx(waterfall_margin, abs=0.01)
+
+    def test_scorecard_counts_annual_rows_without_months(self):
+        rows = [{'品类': '酱料', '本年（万元）': 30, '上年（万元）': 20}, {'品类': '汤料', '本年（万元）': 70, '上年（万元）': 60}]
+        r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)
+        card = next(c for c in r['charts'] if c['chartType'] == 'kpi_scorecard')
+        assert to_yuan(kpi(card, '实际总额')['value']) == 1_000_000
+
+    def test_scorecard_on_plain_sheet_shows_actual_total_not_zero_revenue(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.EXPENSE_SHEET), 2026, 'all', 1, 12)
+        card = next(c for c in r['charts'] if c['chartType'] == 'kpi_scorecard')
+        labels = [k['label'] for k in card['kpis']]
+        assert '营业收入' not in labels, card['kpis']
+        assert to_yuan(kpi(card, '实际总额')['value']) == 2_700_000
+
+
 class TestExpenseChart:
     def test_expense_total_excludes_revenue(self):
         r = build('expense_yoy_budget', [
@@ -364,11 +414,15 @@ class TestExcelExport:
 # 上传读取 + 租户
 # ---------------------------------------------------------------------------
 UPLOADED_ROWS = {
-    # (upload_id, factory_id) -> rows as stored by the uploader (one row_data per Excel row)
-    (5245, 'F006'): [
+    # (upload_id, factory_id) -> (sheet_name, rows as stored by the uploader: one row_data per Excel row)
+    (5245, 'F006'): ('预算完成', [
         {'月份': '1月', '预算': 200, '实际': 180, '上年': 150},
         {'月份': '2月', '预算': 220, '实际': 240, '上年': 160},
-    ],
+    ]),
+    (5246, 'F006'): ('费用预算', [
+        {'月份': '1月', '预算': 100, '实际': 90, '上年': 80},
+        {'月份': '2月', '预算': 100, '实际': 95, '上年': 85},
+    ]),
 }
 
 
@@ -380,7 +434,8 @@ class _FakeConn:
         self.calls.append((sql, args))
         assert 'row_data' in sql and 'upload_id' in sql, sql
         upload_id, factory_id = args[0], args[1]
-        return [{'row_data': r} for r in UPLOADED_ROWS.get((upload_id, factory_id), [])]
+        sheet, rows = UPLOADED_ROWS.get((upload_id, factory_id), ('', []))
+        return [{'row_data': r, 'sheet_name': sheet} for r in rows]
 
 
 class _FakePool:
@@ -434,6 +489,14 @@ class TestUploadLoading:
         budget = next(c for c in body['charts'] if c['chartType'] == 'budget_achievement')
         assert to_yuan(kpi(budget, '年度实际')['value']) == 420
         assert pool.calls and pool.calls[0][1][:2] == (5245, 'F006')
+
+    def test_uploaded_sheet_name_reaches_the_charts(self, monkeypatch):
+        # 「费用预算」表没有科目列: 靠库里记录的工作表名才知道它是费用, 不能出现在业绩图里
+        client, _ = _tenant_client(monkeypatch, 'F006')
+        body = client.post('/batch', json={'upload_id': 5246, 'period_type': 'all'}).json()
+        charts = {c['chartType']: c for c in body['charts']}
+        assert charts['expense_yoy_budget']['success'] is True
+        assert charts['budget_achievement']['success'] is False
 
     def test_other_factory_cannot_read_the_upload(self, monkeypatch):
         client, _ = _tenant_client(monkeypatch, 'F001')

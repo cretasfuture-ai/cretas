@@ -28,6 +28,7 @@ class GrossMarginTrendBuilder(AbstractFinancialChartBuilder):
     description = "展示毛利率月度走势，对比本年与上年差异，含趋势标注"
     required_columns = ['actual', 'last_year', 'period']
     display_order = 6
+    accepts_ratio_values = True  # 表里直接给各月毛利率时走百分比口径
 
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
         start_month = period.get('start_month', 1)

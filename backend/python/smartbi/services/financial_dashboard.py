@@ -1,9 +1,10 @@
 """Financial Dashboard Service — Orchestrates chart generation and AI analysis."""
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from .financial.registry import registry, chart_succeeded
 from .financial_data_normalizer import FinancialDataNormalizer, ColumnMapping
+from .financial_subjects import classify_sheet_name
 from .financial.base import _sanitize_for_json
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,8 @@ class FinancialDashboardService:
         self.registry = registry
 
     def _prepare(self, raw_data: pd.DataFrame, year: int, period_type: str,
-                 start_month: int, end_month: int) -> Tuple[pd.DataFrame, ColumnMapping, Dict]:
+                 start_month: int, end_month: int,
+                 sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, ColumnMapping, Dict]:
         """原始表格 → (参与汇总的标准明细, 列映射, 期间)。
 
         小计 / 合计 / 表内利润行不进明细, 挂在 column_mapping.reported_rows 上只用来对账,
@@ -31,7 +33,7 @@ class FinancialDashboardService:
             "year": year,
             "start_month": start_month,
             "end_month": end_month,
-        })
+        }, subject_hint=classify_sheet_name(sheet_name))
         detail, reported = self.normalizer.split_detail(df)
         column_mapping.reported_rows = reported
         column_mapping.raw_frame = raw_data
@@ -53,12 +55,14 @@ class FinancialDashboardService:
 
     def generate_chart(self, chart_type: str, raw_data: pd.DataFrame,
                        year: int = 2026, period_type: str = "year",
-                       start_month: int = 1, end_month: int = 12) -> Dict:
+                       start_month: int = 1, end_month: int = 12,
+                       sheet_name: Optional[str] = None) -> Dict:
         """Generate a single chart."""
         if chart_type == "all":
-            return self.generate_dashboard(raw_data, year, period_type, start_month, end_month)
+            return self.generate_dashboard(raw_data, year, period_type, start_month, end_month, sheet_name)
 
-        df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month)
+        df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month,
+                                                   sheet_name)
 
         builder = self.registry.get(chart_type)
         if not builder:
@@ -88,9 +92,11 @@ class FinancialDashboardService:
 
     def generate_dashboard(self, raw_data: pd.DataFrame,
                            year: int = 2026, period_type: str = "year",
-                           start_month: int = 1, end_month: int = 12) -> Dict:
+                           start_month: int = 1, end_month: int = 12,
+                           sheet_name: Optional[str] = None) -> Dict:
         """Generate all available charts."""
-        df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month)
+        df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month,
+                                                   sheet_name)
 
         charts = self.registry.build_all_available(df, column_mapping, period, year)
         available = self.registry.list_available(column_mapping)

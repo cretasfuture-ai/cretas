@@ -61,6 +61,8 @@ class ColumnMapping:
     year: int = 2026
     data_layout: str = "wide"  # "wide" (months as columns) or "long" (month as row values)
     unit_multipliers: Dict[str, float] = field(default_factory=dict)  # 列 -> 换算成元的倍率
+    # 数值列是金额 (amount) 还是比率 (ratio, 如「本年毛利率」「25%」); 比率不能进金额类图表
+    value_kind: str = "amount"
     # 不参与汇总、只用来对账的行 (小计/合计/表内利润), 由 FinancialDashboardService 填入
     reported_rows: Optional[pd.DataFrame] = None
     # 原始表格: 只给需要读标准明细之外的原始列的图表用 (如账龄分段列)
@@ -199,6 +201,8 @@ class FinancialDataNormalizer:
                 mapping.year = int(m.group(1))
                 break
 
+        mapping.value_kind = self._value_kind(mapping, sample_data)
+
         logger.info(f"Column mapping detected: periods={len(mapping.period_cols)}, "
                     f"budget={len(mapping.budget_cols)}, actual={len(mapping.actual_cols)}, "
                     f"lastYear={len(mapping.last_year_cols)}, layout={mapping.data_layout}, "
@@ -207,8 +211,12 @@ class FinancialDataNormalizer:
 
     # --------------------------------------------------------------- normalize
     def normalize(self, raw_data: pd.DataFrame, column_mapping: ColumnMapping,
-                  period_filter: Optional[Dict] = None) -> pd.DataFrame:
-        """Normalize raw data to the standard detail format (see module docstring)."""
+                  period_filter: Optional[Dict] = None, subject_hint: Optional[str] = None) -> pd.DataFrame:
+        """Normalize raw data to the standard detail format (see module docstring).
+
+        subject_hint: 工作表名暗示的科目 (financial_subjects.classify_sheet_name); 只有表内各行都
+        认不出科目时才套用, 例如没有「项目」列的「费用预算」表整表按费用处理。
+        """
         if column_mapping.data_layout == "wide":
             rows = self._normalize_wide(raw_data, column_mapping)
         else:
@@ -216,6 +224,8 @@ class FinancialDataNormalizer:
 
         df = pd.DataFrame(rows, columns=[c for c in STANDARD_COLUMNS if c not in ('subject_class', 'subject_level')])
         df = self._classify_subjects(df)
+        if subject_hint and not df.empty and (df['subject_class'] == S.UNKNOWN).all():
+            df.loc[df['subject_level'] == S.DETAIL, 'subject_class'] = subject_hint
 
         # Apply period filter
         if period_filter:
@@ -410,6 +420,26 @@ class FinancialDataNormalizer:
             e = period_filter.get('end_month', 12)
             return df[(df['month'] >= s) & (df['month'] <= e)]
         return df
+
+    RATIO_HEADER_KEYWORDS = ('率', '%', '％', '占比', '比重')
+
+    def _value_kind(self, mapping: ColumnMapping, sample_data: Optional[pd.DataFrame]) -> str:
+        """所有数值角色列都是比率 (表头带「率/%/占比」或单元格是百分比文本) 时为 ratio。"""
+        value_cols = [c for c in (mapping.actual_cols + mapping.last_year_cols + mapping.budget_cols)
+                      if not str(c).startswith('__row_role__')]
+        if not value_cols:
+            return "amount"
+
+        def is_ratio(col: str) -> bool:
+            base, _ = header_unit(col)
+            if any(kw in base for kw in self.RATIO_HEADER_KEYWORDS):
+                return True
+            if sample_data is None or col not in sample_data.columns:
+                return False
+            texts = [str(v).strip() for v in sample_data[col].dropna().tolist() if str(v).strip()]
+            return bool(texts) and sum(t.endswith(('%', '％')) for t in texts) >= max(1, int(len(texts) * 0.8))
+
+        return "ratio" if all(is_ratio(c) for c in value_cols) else "amount"
 
     # ------------------------------------------------------------ primitives
     def _row_role(self, label: str) -> str:

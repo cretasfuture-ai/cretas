@@ -173,9 +173,14 @@ class PnL:
         return tp - (self.income_tax or 0)
 
     def gross_margin(self) -> Metric:
+        # 没有成本科目时毛利率算不出 (不是 100%)
+        if self.cost is None:
+            return Metric(None, NO_DATA, '表内没有营业成本科目，无法计算毛利率')
         return ratio(self.gross_profit, self.revenue)
 
     def net_margin(self) -> Metric:
+        if self.cost is None:
+            return Metric(None, NO_DATA, '表内没有营业成本科目，无法计算净利率')
         return ratio(self.net_profit, self.revenue)
 
     def derived(self) -> Dict[str, Optional[float]]:

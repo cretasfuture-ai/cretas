@@ -112,9 +112,13 @@ class AbstractFinancialChartBuilder(ABC):
     description: str = ""          # Description for AI/UI
     required_columns: List[str] = []  # Required column roles: budget, actual, last_year, category, item
     display_order: int = 0         # Order in dashboard
+    # 数值是比率 (如各月毛利率) 的表只能进声明了能处理比率的图表; 金额类图表把百分比相加没有意义
+    accepts_ratio_values: bool = False
 
     def can_build(self, column_mapping) -> bool:
         """Check if this chart can be built with available columns."""
+        if getattr(column_mapping, 'value_kind', 'amount') == 'ratio' and not self.accepts_ratio_values:
+            return False
         available = set()
         if column_mapping.budget_cols:
             available.add('budget')

@@ -28,6 +28,8 @@ class FinancialDashboardRequest(BaseModel):
     # 租户以登录身份为准; 只有不带工厂的身份 (平台管理员) 才需要显式传。
     factory_id: Optional[str] = None
     filters: Optional[Dict[str, List[str]]] = None  # Fix 72: Global slicer filters {col: [values]}
+    # raw_data 调用方可以传工作表名; upload_id 时以库里记录的工作表名为准
+    sheet_name: Optional[str] = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -79,7 +81,10 @@ def _resolve_factory_id(http_request: Request, requested: Optional[str]) -> str:
 
 
 async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[str]) -> pd.DataFrame:
-    """Load data from raw_data, or from the uploaded rows of upload_id (one row_data per Excel row)."""
+    """Load data from raw_data, or from the uploaded rows of upload_id (one row_data per Excel row).
+
+    upload_id 时把库里的工作表名写回 request.sheet_name (工作表名用于推断无科目表的口径)。
+    """
     if request.raw_data:
         return pd.DataFrame(request.raw_data)
 
@@ -95,7 +100,7 @@ async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[st
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT d.row_data
+                SELECT d.row_data, d.sheet_name
                 FROM smart_bi_dynamic_data d
                 JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
                 WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
@@ -115,6 +120,9 @@ async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[st
 
     import json
     records = [json.loads(r["row_data"]) if isinstance(r["row_data"], str) else r["row_data"] for r in rows]
+    sheet_names = {r["sheet_name"] for r in rows if r["sheet_name"]}
+    if len(sheet_names) == 1:
+        request.sheet_name = sheet_names.pop()
     return pd.DataFrame(records)
 
 
@@ -153,6 +161,7 @@ async def generate_chart(request: FinancialDashboardRequest, http_request: Reque
             period_type=request.period_type,
             start_month=request.start_month,
             end_month=request.end_month,
+            sheet_name=request.sheet_name,
         )
         return _sanitize_for_json(result)
     except DataSourceError as e:
@@ -181,6 +190,7 @@ async def batch_generate(request: FinancialDashboardRequest, http_request: Reque
             period_type=request.period_type,
             start_month=request.start_month,
             end_month=request.end_month,
+            sheet_name=request.sheet_name,
         )
         # Fix 72: Attach available dimensions to response
         if isinstance(result, dict):

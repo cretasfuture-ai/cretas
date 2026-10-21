@@ -170,6 +170,22 @@ def classify_items(names: Iterable[str]) -> Dict[str, SubjectInfo]:
     return result
 
 
+def classify_sheet_name(name: Optional[str]) -> Optional[str]:
+    """工作表名暗示的科目 (只在表内各行都认不出科目时使用)。
+
+    「费用预算」「销售费用明细」→ 其他费用; 「收入」「业绩」「销售额」→ 收入; 其余 → None。
+    """
+    if not name:
+        return None
+    s = str(name)
+    if '费用' in s:
+        cls = classify_subject(s)
+        return cls if cls in EXPENSE_CLASSES else EXPENSE_OTHER
+    if any(kw in s for kw in ('收入', '营收', '业绩', '销售额', '销售')):
+        return REVENUE
+    return None
+
+
 def subtotal_children(name: str) -> Optional[Tuple[str, ...]]:
     return _PARENTS.get(_strip(name))
 
