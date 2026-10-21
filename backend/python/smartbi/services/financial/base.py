@@ -146,6 +146,18 @@ class AbstractFinancialChartBuilder(ABC):
             }
         """
 
+    def _insufficient(self, period: Dict, year: int, reason: str) -> Dict[str, Any]:
+        """数据不足时的统一结果: 不出图, 把缺什么原样告诉用户。"""
+        return {
+            "chartType": self.chart_type,
+            "title": f"{year}年{self.display_name}",
+            "kpis": [],
+            "echartsOption": {},
+            "tableData": None,
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
+        }
+
     def get_analysis_context(self, result: Dict) -> str:
         """Generate analysis context string from build result for AI analysis."""
         kpis = result.get('kpis', [])

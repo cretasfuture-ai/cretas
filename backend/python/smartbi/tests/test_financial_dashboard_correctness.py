@@ -151,6 +151,33 @@ class TestPnlWaterfall:
         assert to_yuan(kpi(r, '净利润')['value']) == pytest.approx(520)
 
 
+class TestPerformanceChartsUseRevenueOnly:
+    """业绩类图表 (预算完成 / 方差 / 目标达成): 损益表里只取收入, 不把成本费用一起加进「实际」。"""
+
+    PNL_MONTHLY = [
+        {'月份': '1月', '项目': '营业收入', '预算': 1000, '实际': 900, '上年': 800},
+        {'月份': '1月', '项目': '营业成本', '预算': 600, '实际': 550, '上年': 500},
+        {'月份': '1月', '项目': '销售费用', '预算': 100, '实际': 120, '上年': 90},
+        {'月份': '3月', '项目': '营业收入', '预算': 1200, '实际': 1300, '上年': 1000},
+        {'月份': '3月', '项目': '营业成本', '预算': 700, '实际': 760, '上年': 600},
+    ]
+
+    def test_budget_achievement_counts_revenue_only(self):
+        r = build('budget_achievement', self.PNL_MONTHLY, 1, 3)
+        assert to_yuan(kpi(r, '年度实际')['value']) == 2200
+        assert to_yuan(kpi(r, '年度目标')['value']) == 2200
+        assert float(kpi(r, '年度达成率')['value']) == pytest.approx(100.0)
+
+    def test_budget_achievement_missing_month_is_empty(self):
+        r = build('budget_achievement', self.PNL_MONTHLY, 1, 3)
+        assert table_row(r, '实际')[1] is None
+        assert table_row(r, '达成率(%)')[1] is None
+
+    def test_variance_analysis_counts_revenue_only(self):
+        r = build('variance_analysis', self.PNL_MONTHLY, 1, 3)
+        assert to_yuan(kpi(r, '总实际')['value']) == 2200
+
+
 class TestExpenseChart:
     def test_expense_total_excludes_revenue(self):
         r = build('expense_yoy_budget', [

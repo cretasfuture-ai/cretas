@@ -97,6 +97,28 @@ def select(df: pd.DataFrame, classes: Iterable[str]) -> pd.DataFrame:
     return df[df['subject_class'].isin(classes)]
 
 
+def performance_view(df: pd.DataFrame) -> pd.DataFrame:
+    """业绩类图表的取数口径: 表里有科目 (损益表) 时只取收入行; 普通销售表整表就是业绩。
+
+    损益表里没有收入科目时返回空表, 调用方应提示「表内没有收入科目」, ⛔ 不要退回整表求和。
+    """
+    if has_subjects(df):
+        return select(df, [S.REVENUE])
+    return df
+
+
+NO_REVENUE_MESSAGE = "表内有科目但没有收入科目（营业收入 / 主营业务收入），无法计算业绩指标"
+NO_PERIOD_DATA_MESSAGE = "所选期间没有数据"
+
+
+def performance_rows(df: pd.DataFrame):
+    """(业绩口径的明细, 为空时给用户看的原因; 不为空时原因为 None)。"""
+    view = performance_view(df)
+    if view is not None and not view.empty:
+        return view, None
+    return view, (NO_REVENUE_MESSAGE if has_subjects(df) else NO_PERIOD_DATA_MESSAGE)
+
+
 def sum_class(df: pd.DataFrame, classes: Iterable[str], field_name: str = 'actual') -> Optional[float]:
     part = select(df, classes)
     if part.empty or field_name not in part.columns:

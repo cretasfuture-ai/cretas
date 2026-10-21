@@ -6,6 +6,7 @@ import pandas as pd
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,10 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
     display_order = 5
 
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
+        # 业绩口径: 损益表只取收入科目, 不把成本费用一起算进品类/目标
+        df, reason = M.performance_rows(df)
+        if reason:
+            return self._insufficient(period, year, reason)
         start_month = period.get('start_month', 1)
         end_month = period.get('end_month', 12)
         labels = self._month_labels(start_month, end_month)

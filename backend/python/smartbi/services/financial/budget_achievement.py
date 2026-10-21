@@ -6,6 +6,7 @@ import pandas as pd
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -42,68 +43,78 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
         end_month = period.get('end_month', 12)
         labels = self._month_labels(start_month, end_month)
 
-        # Aggregate by month
-        monthly = df.groupby('month').agg(
-            budget=('budget', 'sum'),
-            actual=('actual', 'sum'),
-        ).reindex(range(start_month, end_month + 1)).fillna(0)
+        months = list(range(start_month, end_month + 1))
+        # 业绩口径: 损益表只取收入科目, 不把成本费用一起加进「实际」
+        source = M.performance_view(df)
+        if source.empty:
+            return {
+                "chartType": self.chart_type,
+                "title": f"{year}年{self.display_name}",
+                "kpis": [],
+                "echartsOption": {},
+                "tableData": None,
+                "analysisContext": M.NO_REVENUE_MESSAGE,
+                "metadata": {"period": period, "dataQuality": "insufficient", "reason": M.NO_REVENUE_MESSAGE},
+            }
 
-        budget_vals = monthly['budget'].tolist()
-        actual_vals = monthly['actual'].tolist()
-
-        # Achievement rate per month
-        achievement_rates = []
-        for b, a in zip(budget_vals, actual_vals):
-            rate = self._calc_achievement_rate(a, b)
-            achievement_rates.append(rate if rate is not None else 0)
+        # 按月汇总; 没上传的月份为空, 达成率随之为空 (不显示成 0%)
+        budget_vals = M.monthly(source, 'budget', months)
+        actual_vals = M.monthly(source, 'actual', months)
+        achievement_rates = [M.ratio(a, b).value for a, b in zip(actual_vals, budget_vals)]
 
         # Cumulative achievement
-        cum_budget = []
-        cum_actual = []
-        cum_b, cum_a = 0, 0
-        for b, a in zip(budget_vals, actual_vals):
-            cum_b += (b or 0)
-            cum_a += (a or 0)
-            cum_budget.append(cum_b)
-            cum_actual.append(cum_a)
-        cum_achievement = [
-            self._calc_achievement_rate(a, b) or 0
-            for a, b in zip(cum_actual, cum_budget)
-        ]
+        cum_budget = M.cumulative(budget_vals)
+        cum_actual = M.cumulative(actual_vals)
+        cum_achievement = [M.ratio(a, b).value for a, b in zip(cum_actual, cum_budget)]
 
         # KPIs — first 3 are primary (larger in Vue), 4th is secondary
-        total_budget = sum(v or 0 for v in budget_vals)
-        total_actual = sum(v or 0 for v in actual_vals)
-        total_rate = self._calc_achievement_rate(total_actual, total_budget)
-        scale = _detect_value_scale(budget_vals + actual_vals)
+        total_budget = M.total(budget_vals)
+        total_actual = M.total(actual_vals)
+        total_rate = M.ratio(total_actual, total_budget).value
+        scale = _detect_value_scale([v for v in budget_vals + actual_vals if v is not None])
+        divisor = scale['divisor']
+
+        def scaled(v):
+            return None if v is None else round(v / divisor, 2)
+
+        def r1(v):
+            return None if v is None else round(v, 1)
 
         # Best month
-        best_month_idx = max(range(len(achievement_rates)), key=lambda i: achievement_rates[i]) if achievement_rates else 0  # noqa: E501
-        best_month_label = labels[best_month_idx] if best_month_idx < len(labels) else '-'
-        best_month_rate = achievement_rates[best_month_idx] if best_month_idx < len(achievement_rates) else 0
+        rated = [(i, r) for i, r in enumerate(achievement_rates) if r is not None]
+        if rated:
+            best_month_idx, best_month_rate = max(rated, key=lambda x: x[1])
+            best_month_value = f"{labels[best_month_idx]} ({best_month_rate:.1f}%)"
+        else:
+            best_month_value = '-'
 
         kpis = [
             {"label": "年度目标", "value": self._format_value(total_budget, scale), "unit": "元", "trend": "flat",
              "primary": True,
-             "sparkline": [round(v / scale['divisor'], 2) if v else 0 for v in budget_vals]},
+             "sparkline": [scaled(v) for v in budget_vals]},
             {"label": "年度实际", "value": self._format_value(total_actual, scale), "unit": "元",
              "trend": self._trend_from_value((total_actual or 0) - (total_budget or 0)),
              "primary": True,
-             "sparkline": [round(v / scale['divisor'], 2) if v else 0 for v in actual_vals]},
-            {"label": "年度达成率", "value": f"{total_rate:.1f}" if total_rate else '-', "unit": "%",
+             "sparkline": [scaled(v) for v in actual_vals]},
+            {"label": "年度达成率", "value": f"{total_rate:.1f}" if total_rate is not None else '-', "unit": "%",
              "trend": 'up' if total_rate and total_rate >= 100 else 'down',
              "primary": True,
-             "sparkline": [round(r, 1) for r in achievement_rates]},
-            {"label": "最佳月份", "value": f"{best_month_label} ({best_month_rate:.1f}%)", "unit": "", "trend": "up",
+             "sparkline": [r1(r) for r in achievement_rates]},
+            {"label": "最佳月份", "value": best_month_value, "unit": "", "trend": "up",
              "primary": False},
         ]
 
         # Scale values for display
-        divisor = scale['divisor']
-        budget_scaled = [round(v / divisor, 2) if v else 0 for v in budget_vals]
-        actual_scaled = [round(v / divisor, 2) if v else 0 for v in actual_vals]
-        cum_budget_scaled = [round(v / divisor, 2) for v in cum_budget]
-        cum_actual_scaled = [round(v / divisor, 2) for v in cum_actual]
+        budget_scaled = [scaled(v) for v in budget_vals]
+        actual_scaled = [scaled(v) for v in actual_vals]
+        cum_budget_scaled = [scaled(v) for v in cum_budget]
+        cum_actual_scaled = [scaled(v) for v in cum_actual]
+
+        def quarter_totals(q: int):
+            q_months = [m for m in range(q * 3 + 1, q * 3 + 4) if start_month <= m <= end_month]
+            q_actual = M.total(actual_vals[m - start_month] for m in q_months)
+            q_budget = M.total(budget_vals[m - start_month] for m in q_months)
+            return q_actual, q_budget
 
         # --- Compute quarterly totals for markLine annotations ---
         quarterly_actuals_scaled = {}  # q_index -> scaled actual total
@@ -113,18 +124,12 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
             q_end_m = q * 3 + 3
             if q_start_m < start_month or q_end_m > end_month:
                 continue
-            q_actual = sum(
-                actual_vals[m - start_month]
-                for m in range(q_start_m, q_end_m + 1)
-                if start_month <= m <= end_month
-            )
-            q_budget = sum(
-                budget_vals[m - start_month]
-                for m in range(q_start_m, q_end_m + 1)
-                if start_month <= m <= end_month
-            )
+            q_actual, q_budget = quarter_totals(q)
+            q_rate = M.ratio(q_actual, q_budget).value
+            if q_actual is None or q_rate is None:
+                continue
             quarterly_actuals_scaled[q] = round(q_actual / divisor, 2)
-            quarterly_rates[q] = round((self._calc_achievement_rate(q_actual, q_budget) or 0), 1)
+            quarterly_rates[q] = round(q_rate, 1)
 
         # ECharts option
         option = self._base_echarts_option()
@@ -154,7 +159,6 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "nameTextStyle": {"fontSize": 11},
                     "axisLabel": {"formatter": "{value}%", "fontSize": 10},
                     "min": 0,
-                    "max": 150,
                     "splitLine": {"show": False},
                 },
             ],
@@ -196,7 +200,7 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "name": "达成率",
                     "type": "line",
                     "yAxisIndex": 1,
-                    "data": [round(r, 1) for r in achievement_rates],
+                    "data": [r1(r) for r in achievement_rates],
                     "itemStyle": {"color": COLORS['achievement']},
                     "lineStyle": {"width": 2, "type": "solid"},
                     "symbol": "circle",
@@ -218,7 +222,7 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "name": "累计达成率",
                     "type": "line",
                     "yAxisIndex": 1,
-                    "data": [round(r, 1) for r in cum_achievement],
+                    "data": [r1(r) for r in cum_achievement],
                     "itemStyle": {"color": COLORS['danger']},
                     "lineStyle": {"width": 2, "type": "dashed"},
                     "symbol": "diamond",
@@ -252,6 +256,8 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
         num_months = len(labels)
         timeline_graphics = []
         for i, rate in enumerate(achievement_rates):
+            if rate is None:
+                continue
             x_pct = 8 + i * (84 / max(num_months - 1, 1)) if num_months > 1 else 50
             if rate >= 100:
                 dot_color = COLORS['success']
@@ -292,22 +298,15 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
             q_end_m = q * 3 + 3
             if q_start_m < start_month or q_end_m > end_month:
                 continue
-            q_budget = sum(
-                budget_vals[m - start_month]
-                for m in range(q_start_m, q_end_m + 1)
-                if start_month <= m <= end_month
-            )
-            q_actual = sum(
-                actual_vals[m - start_month]
-                for m in range(q_start_m, q_end_m + 1)
-                if start_month <= m <= end_month
-            )
-            q_rate = self._calc_achievement_rate(q_actual, q_budget) or 0
+            q_actual, q_budget = quarter_totals(q)
+            q_rate = M.ratio(q_actual, q_budget).value
+            if q_actual is None or q_budget is None:
+                continue
             quarterly_progress.append({
                 "quarter": f"Q{q + 1}",
                 "budget": round(q_budget / divisor, 2),
                 "actual": round(q_actual / divisor, 2),
-                "rate": round(q_rate, 1),
+                "rate": r1(q_rate),
             })
 
         # Table data
@@ -316,10 +315,10 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
             "rows": [
                 {"label": "预算", "values": budget_scaled},
                 {"label": "实际", "values": actual_scaled},
-                {"label": "达成率(%)", "values": [round(r, 1) for r in achievement_rates]},
+                {"label": "达成率(%)", "values": [r1(r) for r in achievement_rates]},
                 {"label": "累计预算", "values": cum_budget_scaled},
                 {"label": "累计实际", "values": cum_actual_scaled},
-                {"label": "累计达成率(%)", "values": [round(r, 1) for r in cum_achievement]},
+                {"label": "累计达成率(%)", "values": [r1(r) for r in cum_achievement]},
             ],
         }
 
