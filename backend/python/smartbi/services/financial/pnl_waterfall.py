@@ -1,15 +1,25 @@
 """P&L Waterfall Chart Builder — 损益表瀑布图."""
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 import pandas as pd
 
 from .base import (
     AbstractFinancialChartBuilder, COLORS,
     _sanitize_for_json, _detect_value_scale,
 )
-from ..financial_data_normalizer import FinancialDataNormalizer
+from . import metrics as M
+from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
+
+# 瀑布图里各类科目的出场顺序与方向 (+1 抬高, -1 压低)。金额按原值带符号计算:
+# 财务费用为 -20 (利息收入) 时柱子向上, 不取绝对值。
+_STEPS: Tuple[Tuple[str, int], ...] = (
+    (S.COST, -1),
+    (S.EXPENSE_SALES, -1), (S.EXPENSE_ADMIN, -1), (S.EXPENSE_RD, -1), (S.EXPENSE_FINANCE, -1),
+    (S.EXPENSE_OTHER, -1), (S.SURCHARGE, -1),
+    (S.OTHER_GAIN, 1), (S.NON_OP_INCOME, 1), (S.NON_OP_EXPENSE, -1), (S.INCOME_TAX, -1),
+)
 
 
 class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
@@ -22,100 +32,51 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
     display_order = 3
 
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
-        normalizer = FinancialDataNormalizer()
+        pnl = M.pnl(df)
+        revenue_total = pnl.revenue
 
-        # Group by item and sum actuals
-        if 'actual' in df.columns:
-            item_totals = df.groupby('item')['actual'].sum()
-        else:
-            # Try to find any numeric column
-            numeric_cols = df.select_dtypes(include='number').columns
-            if len(numeric_cols) > 0:
-                item_totals = df.groupby('item')[numeric_cols[0]].sum()
-            else:
-                item_totals = pd.Series(dtype=float)
-
-        # Classify items and build waterfall entries
-        entries = []
-        for item_name, value in item_totals.items():
-            if value is None or pd.isna(value) or value == 0:
-                continue
-            pnl_type = normalizer.classify_pnl_item(str(item_name))
-            entries.append({
-                "name": str(item_name),
-                "value": float(value),
-                "type": pnl_type,
-            })
-
-        # Sort by P&L order: revenue -> cost -> expense -> tax -> profit
-        type_order = {'revenue': 0, 'cost': 1, 'expense': 2, 'tax': 3, 'profit': 4, 'other': 5}
-        entries.sort(key=lambda e: (type_order.get(e['type'], 5), -abs(e['value'])))
-
-        if not entries:
+        if revenue_total is None or revenue_total == 0:
+            reason = "营业收入为零，无法生成损益表瀑布图" if revenue_total == 0 else "无可用的损益表数据"
             return {
                 "chartType": self.chart_type,
                 "title": f"{year}年{self.display_name}",
                 "kpis": [],
                 "echartsOption": {},
                 "tableData": None,
-                "analysisContext": "无可用的损益表数据",
-                "metadata": {"period": period, "dataQuality": "insufficient"},
+                "analysisContext": reason,
+                "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
             }
 
-        # Build waterfall data
-        # Waterfall uses stacked bars: transparent helper + colored value
+        # 明细科目按表内出现顺序汇总 (同名科目跨月相加)
+        item_totals: List[Tuple[str, str, float]] = []
+        classified = df[df['subject_class'] != S.UNKNOWN] if 'subject_class' in df.columns else df.iloc[0:0]
+        for (item, cls), grp in classified.groupby(['item', 'subject_class'], sort=False):
+            v = M.total(grp['actual'].tolist())
+            if v is not None and v != 0:
+                item_totals.append((str(item), str(cls), v))
+
+        # Build waterfall items
+        waterfall_items: List[Dict[str, Any]] = [
+            {"name": "营业收入", "value": revenue_total, "type": "revenue", "is_total": True},
+        ]
+        for cls, direction in _STEPS:
+            for name, item_cls, v in item_totals:
+                if item_cls == cls:
+                    waterfall_items.append({"name": S.strip_subject(name), "value": direction * v,
+                                            "type": cls, "is_total": False})
+            if cls == S.COST and pnl.gross_profit is not None:
+                waterfall_items.append({"name": "毛利润", "value": pnl.gross_profit, "type": "profit", "is_total": True})
+        net_profit = pnl.net_profit
+        waterfall_items.append({"name": "净利润", "value": net_profit, "type": "profit", "is_total": True})
+
+        # Compute stacked bar positions
         categories = []
         helper_data = []      # Transparent base
         value_data = []       # Visible bar
         colors = []
-        running_total = 0
+        running_total = 0.0
         running_totals = []
-
-        # Revenue items first (positive, build up)
-        revenue_total = sum(e['value'] for e in entries if e['type'] == 'revenue')
-        cost_total = sum(abs(e['value']) for e in entries if e['type'] == 'cost')
-        expense_total = sum(abs(e['value']) for e in entries if e['type'] == 'expense')
-        tax_total = sum(abs(e['value']) for e in entries if e['type'] == 'tax')
-
-        # Early return if no revenue data
-        if revenue_total == 0:
-            return {
-                "chartType": self.chart_type,
-                "title": f"{year}年{self.display_name}",
-                "kpis": [],
-                "echartsOption": {},
-                "tableData": None,
-                "analysisContext": "营业收入为零，无法生成损益表瀑布图",
-                "metadata": {"period": period, "dataQuality": "insufficient"},
-            }
-
-        # Calculate derived values
-        gross_profit = revenue_total - cost_total
-        operating_profit = gross_profit - expense_total
-        net_profit = operating_profit - tax_total
-
-        # Build waterfall items
-        waterfall_items = [
-            {"name": "营业收入", "value": revenue_total, "type": "revenue", "is_total": True},
-        ]
-        # Add individual cost items
-        for e in entries:
-            if e['type'] == 'cost':
-                waterfall_items.append({"name": e['name'], "value": -abs(e['value']), "type": "cost", "is_total": False})  # noqa: E501
-
-        waterfall_items.append({"name": "毛利润", "value": gross_profit, "type": "profit", "is_total": True})
-
-        for e in entries:
-            if e['type'] == 'expense':
-                waterfall_items.append({"name": e['name'], "value": -abs(e['value']), "type": "expense", "is_total": False})  # noqa: E501
-
-        if tax_total > 0:
-            waterfall_items.append({"name": "税金及附加", "value": -tax_total, "type": "tax", "is_total": False})
-
-        waterfall_items.append({"name": "净利润", "value": net_profit, "type": "profit", "is_total": True})
-
-        # Compute stacked bar positions
-        for i, item in enumerate(waterfall_items):
+        for item in waterfall_items:
             categories.append(item['name'])
             val = item['value']
 
@@ -130,37 +91,36 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
                     # Deduction: bar goes down from running_total
                     helper_data.append(running_total + val)
                     value_data.append(abs(val))
-                    running_total += val
                 else:
                     # Addition: bar goes up from running_total
                     helper_data.append(running_total)
                     value_data.append(val)
-                    running_total += val
+                running_total += val
 
             running_totals.append(running_total)
 
-            # Assign color based on type
-            color_map = {
-                'revenue': COLORS['revenue'],
-                'cost': COLORS['cost'],
-                'expense': COLORS['expense'],
-                'profit': COLORS['profit'],
-                'tax': COLORS['tax'],
-            }
-            colors.append(color_map.get(item['type'], COLORS['muted']))
+            # 客户样图口径: 增加红 / 减少绿 / 汇总蓝; 营业收入是起点, 按「增加」着色
+            if item['type'] == 'revenue':
+                colors.append(COLORS['revenue'])
+            elif item['is_total']:
+                colors.append(COLORS['profit'])
+            else:
+                colors.append(COLORS['revenue'] if val >= 0 else COLORS['cost'])
 
         # Scale
-        all_values = [abs(v) for v in [revenue_total, cost_total, expense_total, net_profit] if v]
+        cost_total = pnl.cost or 0.0
+        expense_total = pnl.expense_total
+        all_values = [abs(v) for v in [revenue_total, cost_total, expense_total or 0, net_profit] if v]
         scale = _detect_value_scale(all_values)
         divisor = scale['divisor']
 
         # KPIs
-        gross_margin = round(gross_profit / revenue_total * 100, 1) if revenue_total else 0
-        net_margin = round(net_profit / revenue_total * 100, 1) if revenue_total else 0
+        gross_margin = pnl.gross_margin().value
+        net_margin = pnl.net_margin().value
 
         kpis = [
             {"label": "营业收入", "value": self._format_value(revenue_total, scale), "unit": "元", "trend": "flat"},
-            {"label": "营业成本", "value": self._format_value(cost_total, scale), "unit": "元", "trend": "flat"},
+            {"label": "营业成本", "value": self._format_value(pnl.cost, scale), "unit": "元", "trend": "flat"},
             {"label": "费用合计", "value": self._format_value(expense_total, scale), "unit": "元", "trend": "flat"},
             {"label": "净利润", "value": self._format_value(net_profit, scale), "unit": "元",
              "trend": self._trend_from_value(net_profit)},
@@ -220,6 +180,10 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
                                 "color": self._gradient_color(colors[i]),
                                 "borderRadius": [3, 3, 0, 0] if waterfall_items[i]['value'] >= 0 else [0, 0, 3, 3],
                             },
+                            # 标签显示带符号的金额 (减少项为负), 与客户原表一致
+                            "label": {"formatter": f"{waterfall_items[i]['value'] / divisor:,.0f}"
+                                      if abs(waterfall_items[i]['value'] / divisor) >= 100
+                                      else f"{waterfall_items[i]['value'] / divisor:,.2f}"},
                         }
                         for i in range(len(value_scaled))
                     ],
@@ -227,7 +191,6 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
                     "label": {
                         "show": True,
                         "position": "top",
-                        "formatter": "{c}",
                         "fontSize": 10,
                         "color": "#333",
                         "fontWeight": "bold",
@@ -237,25 +200,15 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
             ],
         })
 
-        # Connection markLines between waterfall bars
-        mark_lines = []
-        for i in range(len(waterfall_items) - 1):
-            if not waterfall_items[i]['is_total'] or not waterfall_items[i + 1].get('is_total', False):
-                top_val = (helper_scaled[i] + value_scaled[i])
-                mark_lines.append({
-                    "0": {"xAxis": i, "yAxis": top_val, "symbol": "none"},
-                    "1": {"xAxis": i + 1, "yAxis": top_val, "symbol": "none"},
-                })
-
-        if mark_lines:
-            # Use series-level markLine for connections
-            conn_data = []
-            for i in range(len(running_totals) - 1):
-                rt = round(running_totals[i] / divisor, 2)
-                conn_data.append([
-                    {"xAxis": categories[i], "yAxis": rt, "symbol": "none"},
-                    {"xAxis": categories[i + 1], "yAxis": rt, "symbol": "none"},
-                ])
+        # Connection lines between waterfall bars
+        conn_data = []
+        for i in range(len(running_totals) - 1):
+            rt = round(running_totals[i] / divisor, 2)
+            conn_data.append([
+                {"xAxis": categories[i], "yAxis": rt, "symbol": "none"},
+                {"xAxis": categories[i + 1], "yAxis": rt, "symbol": "none"},
+            ])
+        if conn_data:
             option["series"][1]["markLine"] = {
                 "silent": True,
                 "symbol": ["none", "none"],
@@ -264,13 +217,16 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
             }
 
         # Graphic annotations for margins
-        graphic_elements = [
+        def pct(v):
+            return '-' if v is None else f"{v:.1f}%"
+
+        option["graphic"] = [
             {
                 "type": "text",
                 "right": "6%",
                 "top": "14%",
                 "style": {
-                    "text": f"毛利率: {gross_margin}%  |  净利率: {net_margin}%",
+                    "text": f"毛利率: {pct(gross_margin)}  |  净利率: {pct(net_margin)}",
                     "fontSize": 12,
                     "fill": COLORS['primary'],
                     "fontWeight": "bold",
@@ -278,19 +234,23 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
                 "silent": True,
             },
         ]
-        option["graphic"] = graphic_elements
 
         # Table data
         table_data = {
-            "headers": ["项目", "金额", "占收入比"],
+            "headers": ["项目", f"金额{scale['name_suffix']}", "占收入比"],
             "rows": [
                 {"label": item['name'], "values": [
                     round(item['value'] / divisor, 2),
-                    f"{round(item['value'] / revenue_total * 100, 1)}%" if revenue_total else '-'
+                    f"{round(item['value'] / revenue_total * 100, 1)}%",
                 ]}
                 for item in waterfall_items
             ],
         }
+
+        reconciliation = M.reconcile(pnl, getattr(column_mapping, 'reported_rows', None))
+        reconciliation += [f"表内没有{line}科目，按 0 计算" for line in pnl.missing_lines()]
+        unclassified = sorted({str(v) for v in df.loc[df['subject_class'] == S.UNKNOWN, 'item']
+                               if str(v).strip()}) if 'subject_class' in df.columns else []
 
         result = {
             "chartType": self.chart_type,
@@ -305,6 +265,8 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
                 "grossMargin": gross_margin,
                 "netMargin": net_margin,
                 "dataQuality": "good",
+                "reconciliation": reconciliation,
+                "unclassifiedItems": unclassified,
             },
         }
         return _sanitize_for_json(result)

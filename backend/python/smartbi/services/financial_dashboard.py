@@ -1,9 +1,9 @@
 """Financial Dashboard Service — Orchestrates chart generation and AI analysis."""
 import logging
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import pandas as pd
-from .financial.registry import registry
-from .financial_data_normalizer import FinancialDataNormalizer
+from .financial.registry import registry, chart_succeeded
+from .financial_data_normalizer import FinancialDataNormalizer, ColumnMapping
 from .financial.base import _sanitize_for_json
 
 logger = logging.getLogger(__name__)
@@ -14,10 +14,13 @@ class FinancialDashboardService:
         self.normalizer = FinancialDataNormalizer()
         self.registry = registry
 
-    def generate_chart(self, chart_type: str, raw_data: pd.DataFrame,
-                       year: int = 2026, period_type: str = "year",
-                       start_month: int = 1, end_month: int = 12) -> Dict:
-        """Generate a single chart."""
+    def _prepare(self, raw_data: pd.DataFrame, year: int, period_type: str,
+                 start_month: int, end_month: int) -> Tuple[pd.DataFrame, ColumnMapping, Dict]:
+        """原始表格 → (参与汇总的标准明细, 列映射, 期间)。
+
+        小计 / 合计 / 表内利润行不进明细, 挂在 column_mapping.reported_rows 上只用来对账,
+        这样任何图表按明细求和都不会重复计算。
+        """
         column_mapping = self.normalizer.detect_columns(
             raw_data.columns.tolist(), raw_data
         )
@@ -25,20 +28,37 @@ class FinancialDashboardService:
 
         df = self.normalizer.normalize(raw_data, column_mapping, {
             "period_type": period_type,
+            "year": year,
             "start_month": start_month,
             "end_month": end_month,
         })
+        detail, reported = self.normalizer.split_detail(df)
+        column_mapping.reported_rows = reported
+        column_mapping.raw_frame = raw_data
 
+        if period_type == 'all':
+            label = "全部历史"
+        else:
+            label = self.normalizer.get_months_label(start_month, end_month, year)
+            if period_type == 'year':
+                label = f"{year}年全年"
         period = {
             "year": year,
             "period_type": period_type,
             "start_month": start_month,
             "end_month": end_month,
-            "label": self.normalizer.get_months_label(start_month, end_month, year),
+            "label": label,
         }
+        return detail, column_mapping, period
 
+    def generate_chart(self, chart_type: str, raw_data: pd.DataFrame,
+                       year: int = 2026, period_type: str = "year",
+                       start_month: int = 1, end_month: int = 12) -> Dict:
+        """Generate a single chart."""
         if chart_type == "all":
             return self.generate_dashboard(raw_data, year, period_type, start_month, end_month)
+
+        df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month)
 
         builder = self.registry.get(chart_type)
         if not builder:
@@ -63,31 +83,14 @@ class FinancialDashboardService:
             }
 
         result = builder.build(df, column_mapping, period, year)
-        result['success'] = True
+        result['success'] = chart_succeeded(result)
         return _sanitize_for_json(result)
 
     def generate_dashboard(self, raw_data: pd.DataFrame,
                            year: int = 2026, period_type: str = "year",
                            start_month: int = 1, end_month: int = 12) -> Dict:
         """Generate all available charts."""
-        column_mapping = self.normalizer.detect_columns(
-            raw_data.columns.tolist(), raw_data
-        )
-        column_mapping.year = year
-
-        df = self.normalizer.normalize(raw_data, column_mapping, {
-            "period_type": period_type,
-            "start_month": start_month,
-            "end_month": end_month,
-        })
-
-        period = {
-            "year": year,
-            "period_type": period_type,
-            "start_month": start_month,
-            "end_month": end_month,
-            "label": self.normalizer.get_months_label(start_month, end_month, year),
-        }
+        df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month)
 
         charts = self.registry.build_all_available(df, column_mapping, period, year)
         available = self.registry.list_available(column_mapping)

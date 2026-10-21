@@ -2,7 +2,6 @@
 import logging
 from typing import Dict, Any
 import pandas as pd
-import numpy as np
 
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
@@ -12,11 +11,11 @@ logger = logging.getLogger(__name__)
 
 # Aging bucket definitions
 AGING_BUCKETS = [
-    {"label": "0-30天", "key": "0_30", "ratio": 0.45, "risk": "low"},
-    {"label": "31-60天", "key": "31_60", "ratio": 0.25, "risk": "low"},
-    {"label": "61-90天", "key": "61_90", "ratio": 0.15, "risk": "medium"},
-    {"label": "91-180天", "key": "91_180", "ratio": 0.10, "risk": "high"},
-    {"label": "180天以上", "key": "180_plus", "ratio": 0.05, "risk": "critical"},
+    {"label": "0-30天", "key": "0_30", "risk": "low"},
+    {"label": "31-60天", "key": "31_60", "risk": "low"},
+    {"label": "61-90天", "key": "61_90", "risk": "medium"},
+    {"label": "91-180天", "key": "91_180", "risk": "high"},
+    {"label": "180天以上", "key": "180_plus", "risk": "critical"},
 ]
 
 # Severity gradient: green → yellow → orange → red → dark red
@@ -56,22 +55,21 @@ class ArAgingAnalysisBuilder(AbstractFinancialChartBuilder):
             }
 
     def _do_build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int) -> Dict[str, Any]:
-        total_ar = df['actual'].sum()
-        if pd.isna(total_ar) or total_ar == 0:
-            return self._empty_result(period, year)
-
-        total_ar = abs(float(total_ar))
-
-        # --- Detect explicit aging columns ---
-        aging_data = self._detect_aging_columns(df)
-
+        # 账龄分段只能来自表里真实的账龄列 (0-30天 / 31-60天 …); 标准明细不保留这些列, 读原表。
+        # ⛔ 不按预设比例把应收总额拆成账龄段
+        raw = getattr(column_mapping, 'raw_frame', None)
+        aging_data = self._detect_aging_columns(raw) if raw is not None else None
         if aging_data is None:
-            # Synthesize aging buckets from total AR
-            aging_data = self._synthesize_aging(total_ar)
+            return self._empty_result(
+                period, year,
+                "上传的数据里没有账龄分段列（如 0-30天、31-60天、61-90天），无法做账龄分析。")
 
         bucket_labels = [b["label"] for b in AGING_BUCKETS]
         bucket_values = [aging_data.get(b["key"], 0) for b in AGING_BUCKETS]
         bucket_total = sum(bucket_values)
+        total_ar = float(bucket_total)
+        if total_ar == 0:
+            return self._empty_result(period, year, "账龄分段金额合计为 0")
 
         # Recalculate total from actual bucket values
         if bucket_total > 0:
@@ -266,7 +264,7 @@ class ArAgingAnalysisBuilder(AbstractFinancialChartBuilder):
             "analysisContext": analysis_context,
             "metadata": {
                 "period": period,
-                "dataQuality": "synthesized",
+                "dataQuality": "good",
                 "totalAR": total_ar,
                 "overduePct": overdue_pct,
                 "avgAgingDays": int(avg_aging),
@@ -305,23 +303,13 @@ class ArAgingAnalysisBuilder(AbstractFinancialChartBuilder):
 
         return None
 
-    def _synthesize_aging(self, total_ar: float) -> dict:
-        """Synthesize aging distribution from total AR amount."""
-        result = {}
-        # Add slight randomness for realism
-        for bucket in AGING_BUCKETS:
-            variance = np.random.uniform(-0.03, 0.03)
-            ratio = max(0.01, bucket["ratio"] + variance)
-            result[bucket["key"]] = round(total_ar * ratio, 2)
-        return result
-
-    def _empty_result(self, period: Dict, year: int) -> Dict:
+    def _empty_result(self, period: Dict, year: int, reason: str = "无应收账款数据") -> Dict:
         return {
             "chartType": self.chart_type,
             "title": f"{year}年{self.display_name}",
             "kpis": [],
             "echartsOption": {},
             "tableData": None,
-            "analysisContext": "无应收账款数据",
-            "metadata": {"period": period, "dataQuality": "insufficient"},
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
         }

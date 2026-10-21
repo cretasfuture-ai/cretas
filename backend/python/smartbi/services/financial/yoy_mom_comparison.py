@@ -14,6 +14,8 @@ import pandas as pd
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
+from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
 
@@ -33,55 +35,67 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
         end_month = period.get('end_month', 12)
         labels = self._month_labels(start_month, end_month)
 
-        # Aggregate by month
-        monthly = df.groupby('month').agg(
-            actual=('actual', 'sum'),
-            last_year=('last_year', 'sum'),
-        ).reindex(range(start_month, end_month + 1)).fillna(0)
+        months = list(range(start_month, end_month + 1))
+        # 业绩口径 = 收入: 有科目时只取收入行; 没有科目列的表整表就是业绩
+        if M.has_subjects(df):
+            source = M.select(df, [S.REVENUE])
+            if source.empty:
+                reason = "表内没有收入科目，无法做业绩同比环比"
+                return {
+                    "chartType": self.chart_type,
+                    "title": f"{year}年{self.display_name}",
+                    "kpis": [],
+                    "echartsOption": {},
+                    "tableData": None,
+                    "analysisContext": reason,
+                    "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
+                }
+        else:
+            source = df
 
-        actual_vals = monthly['actual'].tolist()
-        last_year_vals = monthly['last_year'].tolist()
-
-        # YoY growth rate per month
-        yoy_rates = []
-        for a, ly in zip(actual_vals, last_year_vals):
-            rate = self._calc_growth_rate(a, ly)
-            yoy_rates.append(rate if rate is not None else 0)
-
-        # MoM growth rate
-        mom_rates = [0]  # First month has no previous
-        for i in range(1, len(actual_vals)):
-            rate = self._calc_growth_rate(actual_vals[i], actual_vals[i - 1])
-            mom_rates.append(rate if rate is not None else 0)
+        # 按月汇总; 没上传的月份为空 (不是 0), 同比/环比随之为空
+        actual_vals = M.monthly(source, 'actual', months)
+        last_year_vals = M.monthly(source, 'last_year', months)
+        yoy_rates = [M.growth(a, ly).value for a, ly in zip(actual_vals, last_year_vals)]
+        mom_rates = M.month_over_month(actual_vals)
 
         # KPIs
-        total_actual = sum(v or 0 for v in actual_vals)
-        total_last_year = sum(v or 0 for v in last_year_vals)
-        total_yoy_amount = total_actual - total_last_year
-        total_yoy_rate = self._calc_growth_rate(total_actual, total_last_year)
-        scale = _detect_value_scale(actual_vals + last_year_vals)
+        total_actual = M.total(actual_vals)
+        total_last_year = M.total(last_year_vals)
+        total_yoy_amount = (None if total_actual is None or total_last_year is None
+                            else total_actual - total_last_year)
+        total_yoy_rate = M.growth(total_actual, total_last_year).value
+        scale = _detect_value_scale([v for v in actual_vals + last_year_vals if v is not None])
+        divisor = scale['divisor']
+
+        def scaled(v):
+            return None if v is None else round(v / divisor, 2)
+
+        def r1(v):
+            return None if v is None else round(v, 1)
 
         kpis = [
             {"label": "上年累计", "value": self._format_value(total_last_year, scale), "unit": "元", "trend": "flat",
-             "sparkline": [round(v / scale['divisor'], 2) if v else 0 for v in last_year_vals]},
+             "sparkline": [scaled(v) for v in last_year_vals]},
             {"label": "本年累计", "value": self._format_value(total_actual, scale), "unit": "元",
              "trend": self._trend_from_value(total_yoy_amount),
-             "sparkline": [round(v / scale['divisor'], 2) if v else 0 for v in actual_vals]},
+             "sparkline": [scaled(v) for v in actual_vals]},
             {"label": "同比增长额", "value": self._format_value(total_yoy_amount, scale), "unit": "元",
              "trend": self._trend_from_value(total_yoy_amount)},
             {"label": "同比增长率", "value": f"{total_yoy_rate:.1f}" if total_yoy_rate is not None else '-',
              "unit": "%", "trend": self._trend_from_value(total_yoy_rate),
-             "sparkline": [round(r, 1) for r in yoy_rates]},
+             "sparkline": [r1(r) for r in yoy_rates]},
         ]
 
         # Scale values
-        divisor = scale['divisor']
-        actual_scaled = [round(v / divisor, 2) if v else 0 for v in actual_vals]
-        ly_scaled = [round(v / divisor, 2) if v else 0 for v in last_year_vals]
+        actual_scaled = [scaled(v) for v in actual_vals]
+        ly_scaled = [scaled(v) for v in last_year_vals]
 
         # --- Build YoY scatter bubble data (colored circles with rate labels) ---
         yoy_scatter_data = []
         for i, rate in enumerate(yoy_rates):
+            if rate is None:
+                continue
             yoy_scatter_data.append({
                 "value": [i, round(rate, 1)],
                 "itemStyle": {
@@ -105,7 +119,10 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             q_end = q * 3 + 3
             if q_start_m < start_month or q_end > end_month:
                 continue
-            q_actual = sum(actual_vals[m - start_month] for m in range(q_start_m, q_end + 1) if start_month <= m <= end_month)  # noqa: E501
+            q_actual = M.total(actual_vals[m - start_month] for m in range(q_start_m, q_end + 1)
+                               if start_month <= m <= end_month)
+            if q_actual is None:
+                continue
             q_formatted = f"{round(q_actual / divisor):,}" if divisor > 1 else f"{round(q_actual):,}"
             # Position above the middle month of the quarter
             q_mid_idx = month_range.index(q_start_m + 1) if (q_start_m + 1) in month_range else month_range.index(q_end)
@@ -208,7 +225,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
                 "name": "环比增长率",
                 "type": "line",
                 "yAxisIndex": 1,
-                "data": [round(r, 1) for r in mom_rates],
+                "data": [r1(r) for r in mom_rates],
                 "itemStyle": {"color": COLORS['accent']},
                 "lineStyle": {"width": 1.5, "type": "dashed"},
                 "symbol": "triangle",
@@ -227,7 +244,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
         mom_row_graphics = []
         for i, mom_rate in enumerate(mom_rates):
             x_pct = 8 + i * (84 / max(len(labels) - 1, 1)) if len(labels) > 1 else 50
-            if i == 0:
+            if mom_rate is None:
                 text = "—"
                 color = "#999"
             else:
@@ -250,6 +267,8 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
         # Difference arrows as graphic elements
         graphic_elements = []
         for i, (a, ly) in enumerate(zip(actual_scaled, ly_scaled)):
+            if a is None or ly is None:
+                continue
             diff = a - ly
             if abs(diff) > 0:
                 color = COLORS['yoy_up'] if diff > 0 else COLORS['yoy_down']
@@ -304,7 +323,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             data_row_graphics.append({
                 "type": "text",
                 "style": {
-                    "text": f"{actual_scaled[i]:,.1f}" if actual_scaled[i] else "0",
+                    "text": f"{actual_scaled[i]:,.1f}" if actual_scaled[i] is not None else "—",
                     "fontSize": 9,
                     "fill": "#333",
                     "textAlign": "center",
@@ -317,7 +336,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             data_row_graphics.append({
                 "type": "text",
                 "style": {
-                    "text": f"{ly_scaled[i]:,.1f}" if ly_scaled[i] else "0",
+                    "text": f"{ly_scaled[i]:,.1f}" if ly_scaled[i] is not None else "—",
                     "fontSize": 9,
                     "fill": "#999",
                     "textAlign": "center",
@@ -335,17 +354,19 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             if q_end not in month_range or q_start_m not in month_range:
                 continue
             q_idx = month_range.index(q_end)
-            q_actual_total = sum(
+            q_actual_total = M.total(
                 actual_vals[m - start_month]
                 for m in range(q_start_m, q_end + 1)
                 if start_month <= m <= end_month
             )
-            q_ly_total = sum(
+            q_ly_total = M.total(
                 last_year_vals[m - start_month]
                 for m in range(q_start_m, q_end + 1)
                 if start_month <= m <= end_month
             )
-            q_yoy_rate = self._calc_growth_rate(q_actual_total, q_ly_total)
+            if q_actual_total is None:
+                continue
+            q_yoy_rate = M.growth(q_actual_total, q_ly_total).value
             q_formatted = f"{round(q_actual_total / divisor):,}" if divisor > 1 else f"{round(q_actual_total):,}"
             q_rate_str = f"{q_yoy_rate:.0f}%" if q_yoy_rate is not None else "—"
             x_pct = 8 + q_idx * (84 / max(len(labels) - 1, 1)) if len(labels) > 1 else 50
@@ -390,13 +411,14 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             "rows": [
                 {"label": "本年", "values": actual_scaled},
                 {"label": "上年", "values": ly_scaled},
-                {"label": "同比(%)", "values": [round(r, 1) for r in yoy_rates]},
-                {"label": "环比(%)", "values": [round(r, 1) for r in mom_rates]},
+                {"label": "同比(%)", "values": [r1(r) for r in yoy_rates]},
+                {"label": "环比(%)", "values": [r1(r) for r in mom_rates]},
             ],
         }
 
         # Fix 69: CAGR annotation (Think-Cell / McKinsey style)
-        if len(actual_vals) >= 2 and actual_vals[0] > 0 and actual_vals[-1] > 0:
+        if (len(actual_vals) >= 2 and actual_vals[0] is not None and actual_vals[-1] is not None
+                and actual_vals[0] > 0 and actual_vals[-1] > 0):
             self._add_cagr_annotation(option, actual_vals[0], actual_vals[-1], len(actual_vals) - 1)
 
         result = {

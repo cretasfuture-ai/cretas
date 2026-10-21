@@ -183,8 +183,9 @@ class TestMissingVersusZero:
 class TestSuccessReflectsChartState:
     def test_caught_builder_error_is_not_counted_as_success(self):
         from smartbi.services.financial_data_normalizer import ColumnMapping
-        r = registry._safe_build(registry.get('channel_analysis'), pd.DataFrame({'category': ['A']}),
-                                 ColumnMapping(category_col='品类'), {'start_month': 1, 'end_month': 1}, 2026)
+        # 有渠道列但缺「实际」列: 构建器内部报错并自己捕获, 返回 dataQuality=error
+        r = registry._safe_build(registry.get('channel_analysis'), pd.DataFrame({'channel': ['商超']}),
+                                 ColumnMapping(channel_col='渠道'), {'start_month': 1, 'end_month': 1}, 2026)
         assert r['metadata']['dataQuality'] == 'error'
         assert r['success'] is False
 
@@ -233,6 +234,50 @@ class TestProductRanking:
         names = [row['label'] if isinstance(row, dict) else row[1] for row in rows]
         assert '产品C' in names, '退货产品不能从排名里消失'
         assert r['metadata']['netRevenue'] == pytest.approx(250)
+
+
+class TestNoSynthesizedCharts:
+    """同因扫描: 缺数据时按预设比例拆分 / 随机波动「造」出来的图, 一律改为明确提示缺什么。"""
+
+    SALES_ONLY = [
+        {'月份': f'{m}月', '预算': 100 * m, '实际': 90 * m, '上年': 80 * m} for m in range(1, 7)
+    ]
+    SYNTH_PRONE = ('ar_aging', 'cashflow_trend', 'cash_flow_waterfall', 'hr_cost_analysis')
+
+    def test_sales_sheet_does_not_produce_invented_cash_ar_or_hr_charts(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.SALES_ONLY), 2026, 'month_range', 1, 6)
+        for c in r['charts']:
+            if c['chartType'] in self.SYNTH_PRONE:
+                assert c['success'] is False, f"{c['chartType']} 在没有对应数据时生成了图表: {c.get('kpis')}"
+                assert c['metadata'].get('dataQuality') in ('insufficient', 'error')
+                assert c.get('analysisContext'), '必须告诉用户缺什么'
+
+    def test_same_input_gives_same_numbers(self):
+        a = svc.generate_dashboard(pd.DataFrame(self.SALES_ONLY), 2026, 'month_range', 1, 6)
+        b = svc.generate_dashboard(pd.DataFrame(self.SALES_ONLY), 2026, 'month_range', 1, 6)
+        ka = {c['chartType']: c.get('kpis') for c in a['charts']}
+        kb = {c['chartType']: c.get('kpis') for c in b['charts']}
+        assert ka == kb, '同一份数据两次生成的数字不同 (含随机数)'
+
+    def test_real_aging_columns_are_used(self):
+        r = build('ar_aging', [
+            {'客户': '甲', '实际': 600, '0-30天': 300, '31-60天': 200, '61-90天': 100},
+        ])
+        assert r['success'] is True
+        assert r['metadata']['totalAR'] == pytest.approx(600)
+
+    def test_real_cash_flow_items_are_used(self):
+        r = build('cashflow_trend', [
+            {'月份': '1月', '项目': '经营活动现金流量净额', '实际': 500},
+            {'月份': '1月', '项目': '投资活动现金流量净额', '实际': -200},
+            {'月份': '1月', '项目': '筹资活动现金流量净额', '实际': 50},
+        ])
+        assert r['success'] is True
+        assert r['metadata']['dataQuality'] == 'good'
+        headers = r['tableData']['headers']
+        net_col = next(i for i, h in enumerate(headers) if str(h).startswith('净'))
+        january = r['tableData']['rows'][0]
+        assert to_yuan(january[net_col]) == pytest.approx(350)
 
 
 # ---------------------------------------------------------------------------

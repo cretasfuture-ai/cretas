@@ -11,6 +11,19 @@ from ..financial_data_normalizer import ColumnMapping
 
 logger = logging.getLogger(__name__)
 
+# 构建器自己捕获异常后返回的、或判定数据不足的结果, 都不是「生成成功」的图表
+FAILED_DATA_QUALITY = frozenset({'error', 'insufficient'})
+
+
+def chart_succeeded(result: Dict) -> bool:
+    """图表是否真的生成成功: 看构建结果本身的数据状态, 而不是「没抛异常」。"""
+    if not isinstance(result, dict) or result.get('error'):
+        return False
+    quality = (result.get('metadata') or {}).get('dataQuality')
+    if quality in FAILED_DATA_QUALITY:
+        return False
+    return bool(result.get('echartsOption'))
+
 
 class ChartBuilderRegistry:
     """Registry for financial chart builders. Auto-discovers builder subclasses."""
@@ -94,7 +107,7 @@ class ChartBuilderRegistry:
     def _safe_build(builder, df, column_mapping, period, year):
         try:
             result = builder.build(df, column_mapping, period, year)
-            result['success'] = True
+            result['success'] = chart_succeeded(result)
             return result
         except Exception as e:
             logger.error(f"Builder {builder.chart_type} failed: {e}", exc_info=True)

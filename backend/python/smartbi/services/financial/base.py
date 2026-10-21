@@ -122,7 +122,7 @@ class AbstractFinancialChartBuilder(ABC):
             available.add('actual')
         if column_mapping.last_year_cols:
             available.add('last_year')
-        if column_mapping.category_col:
+        if column_mapping.category_col or getattr(column_mapping, 'product_col', None):
             available.add('category')
         if column_mapping.item_col or column_mapping.label_col:
             available.add('item')
