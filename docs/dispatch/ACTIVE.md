@@ -6,7 +6,6 @@
 
 ## 在飞任务
 
-- `ERP-S1-VALIDATION-FIRST-20261021` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 9613198dc1eff089243d0470903bb6e15934f307 — 02/10 runtime、07 grant只读Owner不变；03原QA独占；见archive/2026-10-21-s1-validation-first.md。
 
 - `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 7ceacffafd5d34de536dd19862cf5eb3232a1d58 — PR1075/84a实际21文件交付HOLD；未来writeScope=[]；见archive/2026-10-21-claude-s6-actual-intake.md。
 
@@ -25,7 +24,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-04已原QA通过；75=10/1/64，S0/S1未完；见archive/2026-10-21-s1-supplier-acceptance.md。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — S1-03/04原QA通过；75=11/1/63，S0/S1未完；见archive/2026-10-21-s1-validation-first.md。
 
 
 
