@@ -1008,7 +1008,7 @@ export async function fetchTier2Insight(
     };
 
     // Auth header — same pattern as getPythonAuthHeaders() in common.ts
-    const headers = getPythonAuthHeaders();
+    const headers = await getPythonAuthHeaders();
 
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/chart-insight`, {
       method: 'POST',
@@ -1059,7 +1059,7 @@ export async function submitInsightFeedback(
   factoryId: string,
 ): Promise<boolean> {
   try {
-    const headers = getPythonAuthHeaders();
+    const headers = await getPythonAuthHeaders();
 
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/insight/feedback`, {
       method: 'POST',

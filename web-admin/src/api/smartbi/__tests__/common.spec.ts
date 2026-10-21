@@ -128,7 +128,7 @@ describe('pythonFetch', () => {
     try {
       expect(import.meta.env.VITE_PYTHON_SECRET).toBe('must-not-leak');
       const { getPythonAuthHeaders: freshGetPythonAuthHeaders } = await import('../common');
-      const headers = freshGetPythonAuthHeaders();
+      const headers = await freshGetPythonAuthHeaders();
 
       expect(headers).toMatchObject({
         'Content-Type': 'application/json',

@@ -121,7 +121,39 @@ export const PYTHON_HEADERS: Record<string, string> = {
  * For cross-origin calls through nginx proxy, also include Bearer token
  * from localStorage fallback (set by auth store alongside the cookie).
  */
-export function getPythonAuthHeaders(): Record<string, string> {
+let persistentWebRefresh: Promise<void> | null = null;
+
+function webTokenClaims(token: string | null): { webSessionHash?: string; exp?: number } | null {
+  if (!token) return null;
+  try {
+    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+  } catch {
+    return null;
+  }
+}
+
+export async function getPythonAuthHeaders(): Promise<Record<string, string>> {
+  const originalToken = localStorage.getItem('cretas_access_token');
+  const originalClaims = webTokenClaims(originalToken);
+  // Python validates bounded JWTs directly. Renew through the Java cookie authority
+  // before sending one that has expired during a long browser idle period.
+  if (originalClaims?.webSessionHash && (!originalClaims.exp || originalClaims.exp * 1000 <= Date.now() + 60_000)) {
+    if (!persistentWebRefresh) {
+      persistentWebRefresh = post<{ token?: string; accessToken?: string }>('/auth/refresh', {})
+        .then(response => {
+          const token = response.data?.token || response.data?.accessToken;
+          if (!response.success || !token || webTokenClaims(token)?.webSessionHash !== originalClaims.webSessionHash) {
+            throw new Error('Unable to renew the current Web login');
+          }
+          if (localStorage.getItem('cretas_access_token') !== originalToken) {
+            throw new Error('Login changed while renewing Web access');
+          }
+          localStorage.setItem('cretas_access_token', token);
+        })
+        .finally(() => { persistentWebRefresh = null; });
+    }
+    await persistentWebRefresh;
+  }
   const headers = { ...PYTHON_HEADERS };
   const token = localStorage.getItem('cretas_access_token');
   if (token) {
@@ -181,7 +213,7 @@ export async function pythonFetch<T = any>(path: string, options: RequestInit & 
       signal: controller.signal,
       credentials: 'include', // Send cookies through proxy
       headers: {
-        ...getPythonAuthHeaders(),
+        ...await getPythonAuthHeaders(),
         ...fetchOptions.headers,
       },
     });

@@ -420,7 +420,7 @@ export async function generateInsightsStream(params: {
   try {
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/insight/generate-stream`, {
       method: 'POST',
-      headers: getPythonAuthHeaders(),
+      headers: await getPythonAuthHeaders(),
       body: JSON.stringify({
         data: params.data,
         analysisContext: params.analysisContext,
@@ -581,7 +581,7 @@ export interface FoodIndustryDetection {
 export async function fetchFoodBenchmarks(): Promise<{ success: boolean; data?: FoodBenchmarkData }> {
   try {
     const res = await fetch(`${PYTHON_SMARTBI_URL}/smartbi/benchmark/food-processing`, {
-      headers: getPythonAuthHeaders(),
+      headers: await getPythonAuthHeaders(),
     });
     if (!res.ok) return { success: false };
     const json = await res.json();
@@ -599,7 +599,7 @@ export async function compareBenchmarks(
   try {
     const res = await fetch(`${PYTHON_SMARTBI_URL}/smartbi/benchmark/compare`, {
       method: 'POST',
-      headers: getPythonAuthHeaders(),
+      headers: await getPythonAuthHeaders(),
       body: JSON.stringify({ metrics, sub_sector: subSector }),
     });
     if (!res.ok) return { success: false };

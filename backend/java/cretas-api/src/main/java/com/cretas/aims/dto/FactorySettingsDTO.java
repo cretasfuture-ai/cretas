@@ -400,9 +400,6 @@ public class FactorySettingsDTO {
         @Schema(description = "要求包含数字", example = "true")
         private Boolean passwordRequireNumber;
 
-        @Schema(description = "会话超时时间(分钟)", example = "30")
-        private Integer sessionTimeout;
-
         @Schema(description = "最大登录尝试次数", example = "5")
         private Integer maxLoginAttempts;
     }

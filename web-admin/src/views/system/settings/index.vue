@@ -39,7 +39,6 @@ const securitySettings = ref({
   passwordMinLength: 8,
   passwordRequireUppercase: true,
   passwordRequireNumber: true,
-  sessionTimeout: 30,
   maxLoginAttempts: 5
 });
 
@@ -388,10 +387,6 @@ async function saveCostSettings() {
               </el-form-item>
               <el-form-item label="要求包含数字">
                 <el-switch v-model="securitySettings.passwordRequireNumber" />
-              </el-form-item>
-              <el-form-item label="会话超时时间">
-                <el-input-number v-model="securitySettings.sessionTimeout" :min="5" :max="120" />
-                <span class="form-tip">分钟，无操作后自动登出</span>
               </el-form-item>
               <el-form-item label="最大登录尝试次数">
                 <el-input-number v-model="securitySettings.maxLoginAttempts" :min="3" :max="10" />
