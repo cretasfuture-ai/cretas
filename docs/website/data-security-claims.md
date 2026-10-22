@@ -17,7 +17,7 @@
 | C4-llm-egress | 阿里云通义千问、境内处理、发送前替换名称、替换失败就不发 | pending | Python `llm_redactor` 已上线（只替换名称）；Java `WorkdeskOutputSummarizer` 还没脱敏；fail-closed 在「方案审计与执行」分支上。另外要 Steve 确认通义千问的数据条款和处理地域 |
 | C5-hosting | 阿里云中国境内服务器，用户到系统全程 HTTPS | live | nginx TLS 1.2/1.3（`ops/nginx-vhosts-139/admin.cretaceousfuture.com.conf`）；服务器 IP 属于阿里云。注意：网关到应用服务器（139 → 47:8083）是明文，所以只写「你和系统之间」 |
 | C5-daily-backup | 每天凌晨自动备份，保留 7 天 | live | 2026-10-22 线上只读核查：crontab 03:00 `backup-db.sh` ＋ `/etc/cron.d/pg_backup`，`/etc/cron.d/cretas-backup-retention` 保留 7 天；当天三个库的备份文件都在 |
-| C5-offsite-encrypted | 备份加密，并在独立存储里另存一份 | pending | 现在和数据在同一台机器上，而且没有加密；钥匙保管方式等 Steve 定（第 5 项） |
+| C5-offsite-encrypted | 备份加密，并在独立存储里另存一份 | pending | 现在和数据在同一台机器上，而且没有加密。2026-10-22 Steve 定了钥匙保管：服务器放一份，Steve 自己离线存一份。实施由「方案审计与执行」负责（第 5 项），要求做一次从异地副本恢复的演练 |
 | C6-rights | 可以导出全部数据、彻底删除、查看访问记录 | pending | 还没有整厂导出和删除功能（停用只是标记 inactive）；访问记录依赖第 3 项 |
 
 ## 隐私政策里同样要核对的说法（`platform/privacy.html`，2026-03-03 版）
