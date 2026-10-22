@@ -7,7 +7,8 @@
 ## 在飞任务
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — 两草稿已取消；S3-06原QA通过；S0缺口、S3-08续修，原FAIL保留；见archive/2026-10-23-s0-s3-acceptance.md。
-- `ERP-S308-WAREHOUSE-DELIVERY-20261023` — `in-progress` — Owner /root/s308_backend — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — 同厂独立发运/累计分收，保留旧原子确认；精确12文件及JPA/PG门禁见archive/2026-10-23-s308-warehouse-delivery-scope.md；QA资源不移交。
+- `ERP-S308-UI-20261023` — `in-progress` — Owner /root/s308_ui — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — Web/RN精确8文件/目标验收见archive/2026-10-23-s308-warehouse-delivery-scope.md。
+- `ERP-S308-WAREHOUSE-DELIVERY-20261023` — `in-progress` — Owner /root/s308_backend — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — 后端12文件/JPA/PG：archive/2026-10-23-s308-warehouse-delivery-scope.md。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
 
@@ -32,7 +33,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — 协调Owner 01a1523e-881c-7a92-b7ab-f4b8c5a552df，原QA不变 — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — S1原判据10/10通过，S0-05/06仍未收口；S2独立，S3前提成立者续验；见archive/2026-10-23-s0-s3-acceptance.md。
+- `ERP-STAGES-20261019` — `in-progress` — Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — S1 10/10；S0/S3续行，见archive/2026-10-23-s0-s3-acceptance.md。
 
 
 

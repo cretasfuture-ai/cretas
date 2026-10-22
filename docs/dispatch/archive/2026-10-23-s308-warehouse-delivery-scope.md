@@ -24,3 +24,18 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/impl/War
 
 
 测试资源切片 `ERP-S308-PG13-RESOURCE-20261023`：唯一资源 Owner `/root/native_ci_queue_live`，仅允许在 `C:/Users/Steve/Documents/cretas-optimization-20261019/execution/coordination/s308-portable-pg13-20261023/` 新建私有 PG13 data/log/随机凭证，复用原 portable PG13.23 二进制只读；候选 loopback 端口55327现场证明空闲后启用。shared_buffers≤128MB/max_connections≤20，源码Owner单Maven2CPU/3GB。禁止碰原S107集群、其他容器/数据库/runner/WSL/Docker；无测试客户端后正常停自有集群，数据/证据保留，不递归清理。验收：真实server_version/数据库名/端口/进程归属及实际启动退出，凭证只在私有文件，不能入tracked或输出。该资源准备不算产品/JPA/PG门禁已通过。
+
+## ERP-S308-UI-20261023
+Base eb299396dc7c0a27ca22f24efe73112c2e130289；唯一UI Owner `/root/s308_ui`，worktree `C:/Users/Steve/cretas-s308-delivery-ui-20261023`/branch `codex/s308-delivery-ui-20261023`，与后端12文件不重叠。Root固定warehouse-delivery接口v1：supported/staged/stage、每行shipped/received/pending及receipts(requestKey/operationId/targetBatchId/quantity/unit/actorId/createdAt)、inTransitByUnit；收货请求为UUID requestKey与本次增量itemQuantities，未知响应先GET恢复。
+
+精确写scope：
+- web-admin/src/api/warehouseTransferDelivery.ts（新）
+- web-admin/src/views/transfer/detail.vue
+- web-admin/src/views/transfer/WarehouseDeliveryPanel.vue（新）
+- web-admin/src/views/transfer/__tests__/warehouseDeliveryPanel.spec.ts（新）
+- frontend/CretasFoodTrace/src/services/api/transferApiClient.ts
+- frontend/CretasFoodTrace/src/screens/factory-admin/inventory/TransferDetailScreen.tsx
+- frontend/CretasFoodTrace/src/utils/warehouseTransferDelivery.ts（新）
+- frontend/CretasFoodTrace/src/__tests__/unit/screens/warehouseTransferDelivery.contract.test.ts（新）
+
+验收：Web `npm exec -- vitest run src/views/transfer/__tests__/warehouseDeliveryPanel.spec.ts src/views/transfer/__tests__/transferDetailUnit.spec.ts src/views/transfer/__tests__/transferAwaitingConfirm.source.spec.ts --maxWorkers=2 --minWorkers=1`；RN `npm exec -- jest --runInBand src/__tests__/unit/screens/warehouseTransferDelivery.contract.test.ts src/__tests__/unit/screens/transferEnumLabels.contract.test.ts`；正常hook和diff检查。只目标测试，依赖独立安装、禁止junction/锁文件改动、Node≤2GB；不构建/发布/合并/生产写。原QA独占验收资源，源码实现不冒称APK/OTA或真机通过。细节/UX门控与反例见私有coordination/s308-ui-workpack-20261023.md。
