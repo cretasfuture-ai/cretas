@@ -72,7 +72,8 @@ PUBLIC_PREFIXES = (
     "/api/statistical/",  # Statistical analysis
     "/api/analysis/",  # Analysis endpoints
     "/api/forecast/",  # Forecast endpoints
-    "/api/efficiency/",  # Efficiency recognition — called by Java backend internally
+    # "/api/efficiency/" — moved to INTERNAL_ONLY_PREFIXES 2026-10-22: camera tracking / scene / stream
+    #   state is global (not per factory) and was readable anonymously through the gateway.
     "/api/food-kb/manual-chat",  # Operation manual chat — public (HTML page)
     # "/api/smartbi/financial-dashboard/" — removed: requires JWT auth (IDOR fix)
     "/api/llm/",              # LLM router — called by Java backend internally (no JWT forwarded)
@@ -101,6 +102,9 @@ INTERNAL_ONLY_PATHS = frozenset({
 INTERNAL_ONLY_PREFIXES = (
     "/api/internal/smartbi/agent/runs",
     "/api/label-qc",
+    # 效率识别 (摄像头轨迹/场景/录像/视频流): 数据不分工厂, 只允许 Java 带 X-Internal-Secret 调用;
+    # 普通登录用户也不行 (任何一家工厂的用户都会看到全部工厂的轨迹)。2026-10-22 工厂隔离。
+    "/api/efficiency",
 )
 _INTERNAL_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 

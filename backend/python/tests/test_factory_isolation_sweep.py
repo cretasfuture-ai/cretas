@@ -226,3 +226,42 @@ def test_rfm_without_factory_no_longer_aggregates_every_factory(monkeypatch):
     monkeypatch.setattr(rfm, "_compute_rfm_from_db", lambda conn, factory_id: seen.setdefault("f", factory_id))
     asyncio.run(rfm.get_rfm_analysis(_req(OWN), None))
     assert seen["f"] == OWN
+
+
+# ---------------------------------------------------------------- efficiency: internal only
+
+
+def _efficiency(monkeypatch, headers, path="/api/efficiency/tracking/all"):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-secret")
+    mw = JWTAuthMiddleware(_Echo(), jwt_secret="test-secret-only", enabled=True)
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        sent.append(msg)
+
+    scope = {"type": "http", "path": path, "method": "GET", "query_string": b"",
+             "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()]}
+    asyncio.run(mw(scope, receive, send))
+    status = next((m["status"] for m in sent if m["type"] == "http.response.start"), None)
+    return status, mw.app.reached
+
+
+@pytest.mark.parametrize("path", ["/api/efficiency/tracking/all", "/api/efficiency/streams/add",
+                                  "/api/efficiency/health"])
+def test_efficiency_is_internal_only(monkeypatch, path):
+    # 匿名: 401 (上线前经网关是 200 —— 全局摄像头轨迹)
+    assert _efficiency(monkeypatch, {}, path) == (401, False)
+    # 错误密钥: 仍然拒绝
+    assert _efficiency(monkeypatch, {"x-internal-secret": "wrong"}, path)[1] is False
+    # 阳性对照: Java 带正确密钥照常可达
+    status, reached = _efficiency(monkeypatch, {"x-internal-secret": "real-secret"}, path)
+    assert reached is True and status == 200
+
+
+def test_efficiency_prefix_left_the_public_list():
+    from auth_middleware import INTERNAL_ONLY_PREFIXES
+    assert "/api/efficiency" in INTERNAL_ONLY_PREFIXES
+    assert not any("/api/efficiency/tracking/all".startswith(p) for p in PUBLIC_PREFIXES)
