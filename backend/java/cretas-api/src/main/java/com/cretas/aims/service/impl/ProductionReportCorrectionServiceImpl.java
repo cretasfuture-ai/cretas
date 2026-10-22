@@ -19,6 +19,7 @@ import com.cretas.aims.service.ProductionReportCorrectionService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,6 +53,7 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                                                 ProductionReportCorrectionRequest request, Long userId) {
         ProductionReport report = reportRepository.findByIdAndFactoryIdForUpdate(reportId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "报工记录不存在"));
+        assertCorrectionableReport(report);
         if (Boolean.TRUE.equals(report.getSettled())) {
             throw new BusinessException(409, "该报工已经结单，不能发起日常修正")
                     .withCode("PRODUCTION_REPORT_ALREADY_SETTLED");
@@ -122,6 +124,12 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             throw new BusinessException(409, "审批实例与报工修正记录不匹配")
                     .withCode("PRODUCTION_REPORT_CORRECTION_WORKFLOW_MISMATCH");
         }
+        if (action == HistoryAction.APPROVE) {
+            ProductionReport report = reportRepository.findByIdAndFactoryIdForUpdate(
+                            correction.getProductionReportId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(404, "原报工记录不存在"));
+            assertCorrectionableReport(report);
+        }
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
                 workflowInstanceId, actorId, actorRole, action, notes);
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
@@ -161,7 +169,11 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                         List<ProductionReport> taskReports = reportRepository
                                 .findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull(
                                         report.getFactoryId(), report.getWorkProcessTaskId());
-                        BigDecimal taskOutput = taskReports.stream()
+                        List<ProductionReport> outputReports = taskReports.stream()
+                                .filter(this::isOutputOrLegacy)
+                                .toList();
+                        assertSingleOutputUnit(outputReports);
+                        BigDecimal taskOutput = outputReports.stream()
                                 .map(ProductionReport::getOutputQuantity).filter(Objects::nonNull)
                                 .reduce(BigDecimal.ZERO, BigDecimal::add);
                         int taskMinutes = taskReports.stream()
@@ -192,14 +204,17 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         Page<ProductionReport> reports = reportRepository
                 .findByFactoryIdAndSettledFalseAndStatusInAndDeletedAtIsNull(
                         factoryId, EnumSet.of(ProductionReport.Status.SUBMITTED, ProductionReport.Status.APPROVED), pageable);
-        List<Long> ids = reports.getContent().stream().map(ProductionReport::getId).toList();
-        if (ids.isEmpty()) return reports.map(report -> correctableRow(report, List.of()));
+        List<ProductionReport> eligibleReports = reports.getContent().stream()
+                .filter(this::isCorrectionableKind).toList();
+        List<Long> ids = eligibleReports.stream().map(ProductionReport::getId).toList();
+        if (ids.isEmpty()) return new PageImpl<>(List.of(), pageable, 0);
         Map<Long, List<ProductionReportCorrection>> correctionsByReport = correctionRepository
                 .findByFactoryIdAndProductionReportIdInOrderBySubmittedAtDesc(factoryId, ids).stream()
                 .collect(Collectors.groupingBy(ProductionReportCorrection::getProductionReportId,
                         LinkedHashMap::new, Collectors.toList()));
-        return reports.map(report -> correctableRow(report,
-                correctionsByReport.getOrDefault(report.getId(), List.of())));
+        return new PageImpl<>(eligibleReports.stream().map(report -> correctableRow(report,
+                correctionsByReport.getOrDefault(report.getId(), List.of())))
+                .toList(), pageable, eligibleReports.size());
     }
 
     private Map<String, Object> correctableRow(ProductionReport report,
@@ -214,6 +229,8 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         row.put("reportDate", report.getReportDate());
         row.put("approvalStatus", report.getApprovalStatus());
         row.put("outputQuantity", report.getOutputQuantity());
+        row.put("reportKind", reportKind(report));
+        row.put("outputUnit", trustedOutputUnit(report));
         row.put("goodQuantity", report.getGoodQuantity());
         row.put("defectQuantity", report.getDefectQuantity());
         row.put("totalWorkers", report.getTotalWorkers());
@@ -277,6 +294,11 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         context.put("planId", c.getProductionPlanId());
         context.put("batchId", c.getProductionBatchId());
         context.put("processCategory", c.getProcessCategory());
+        reportRepository.findByIdAndFactoryIdForUpdate(c.getProductionReportId(), c.getFactoryId())
+                .ifPresent(report -> {
+                    context.put("reportKind", reportKind(report));
+                    context.put("outputUnit", trustedOutputUnit(report));
+                });
         context.put("reason", c.getCorrectionReason());
         context.put("before", diffValues(c, true));
         context.put("after", diffValues(c, false));
@@ -328,5 +350,48 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
     private String trimToNull(String value) {
         if (value == null || value.trim().isEmpty()) return null;
         return value.trim();
+    }
+
+    private void assertCorrectionableReport(ProductionReport report) {
+        String kind = reportKind(report);
+        if ("INPUT".equals(kind) || "SEGMENT".equals(kind)) {
+            throw new BusinessException(409, "投入或过程报工不能作为产出修正")
+                    .withCode("PRODUCTION_REPORT_CORRECTION_OUTPUT_ONLY");
+        }
+        if (kind != null && !"OUTPUT".equals(kind)) {
+            throw new BusinessException(409, "报工阶段无法确认，不能作为产出修正")
+                    .withCode("PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND");
+        }
+    }
+
+    private boolean isCorrectionableKind(ProductionReport report) {
+        String kind = reportKind(report);
+        return kind == null || "OUTPUT".equals(kind);
+    }
+
+    private boolean isOutputOrLegacy(ProductionReport report) {
+        String kind = reportKind(report);
+        return kind == null || "OUTPUT".equals(kind);
+    }
+
+    private String reportKind(ProductionReport report) {
+        String kind = report.getReportKind();
+        return kind == null || kind.isBlank() ? null : kind.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private String trustedOutputUnit(ProductionReport report) {
+        String unit = report.getOutputUnit();
+        return unit == null || unit.isBlank() ? null : unit.trim();
+    }
+
+    private void assertSingleOutputUnit(List<ProductionReport> reports) {
+        java.util.Set<String> units = reports.stream()
+                .map(this::trustedOutputUnit)
+                .map(unit -> unit == null ? "__UNKNOWN__" : unit)
+                .collect(java.util.stream.Collectors.toSet());
+        if (units.size() > 1) {
+            throw new BusinessException(409, "同一工序报工的产出单位不一致，不能汇总")
+                    .withCode("PRODUCTION_REPORT_CORRECTION_MIXED_OUTPUT_UNITS");
+        }
     }
 }

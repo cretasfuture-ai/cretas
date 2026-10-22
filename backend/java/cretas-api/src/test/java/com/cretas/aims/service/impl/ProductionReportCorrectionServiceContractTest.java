@@ -81,6 +81,20 @@ class ProductionReportCorrectionServiceContractTest {
     }
 
     @Test
+    void inputReportCannotBeSubmittedForOutputCorrection() {
+        ProductionReport report = report();
+        report.setReportKind("INPUT");
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+
+        assertThatThrownBy(() -> service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9"), new BigDecimal("8"),
+                        BigDecimal.ONE, 3, 90, "修正备注", "现场复核"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("投入或过程报工不能作为产出修正");
+        verify(correctionRepository, never()).save(any());
+    }
+
+    @Test
     void missingWorkflowFailsClosedWithoutChangingEffectiveReport() {
         ProductionReport report = report();
         when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
@@ -158,6 +172,59 @@ class ProductionReportCorrectionServiceContractTest {
         assertThat(task.getActualQuantity()).isEqualByComparingTo("13");
         assertThat(task.getActualMinutes()).isEqualTo(100);
         assertThat(task.getStatus()).isEqualTo(WorkProcessTask.Status.COMPLETED);
+    }
+
+    @Test
+    void taskAggregationIgnoresInputReports() {
+        ProductionReport report = report();
+        ProductionReportCorrection correction = correction();
+        ProductionReport input = report();
+        input.setId(11L);
+        input.setReportKind("INPUT");
+        input.setOutputQuantity(new BigDecimal("100"));
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(30L); task.setFactoryId("F006"); task.setStatus(WorkProcessTask.Status.COMPLETED);
+        when(correctionRepository.findByIdAndFactoryId("COR-1", "F006")).thenReturn(Optional.of(correction));
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(taskRepository.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(task));
+        when(reportRepository.findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull("F006", 30L))
+                .thenReturn(List.of(input, report));
+        when(correctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ApprovalWorkflowInstance updated = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
+        when(updated.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(workflowEngine.transitionNode("WF-1", 99L, "configured_role", HistoryAction.APPROVE, "同意"))
+                .thenReturn(updated);
+
+        service.applyWorkflowAction("F006", "COR-1", "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "同意");
+
+        assertThat(task.getActualQuantity()).isEqualByComparingTo("9");
+    }
+
+    @Test
+    void taskAggregationRejectsMixedTrustedOutputUnits() {
+        ProductionReport report = report();
+        report.setOutputUnit("kg");
+        ProductionReportCorrection correction = correction();
+        ProductionReport earlier = report();
+        earlier.setId(9L); earlier.setOutputQuantity(new BigDecimal("4")); earlier.setOutputUnit("box");
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(30L); task.setFactoryId("F006"); task.setStatus(WorkProcessTask.Status.COMPLETED);
+        when(correctionRepository.findByIdAndFactoryId("COR-1", "F006")).thenReturn(Optional.of(correction));
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(taskRepository.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(task));
+        when(reportRepository.findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull("F006", 30L))
+                .thenReturn(List.of(earlier, report));
+        ApprovalWorkflowInstance updated = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
+        when(updated.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(workflowEngine.transitionNode("WF-1", 99L, "configured_role", HistoryAction.APPROVE, "同意"))
+                .thenReturn(updated);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", "COR-1", "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "同意"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("产出单位不一致");
+        assertThat(task.getActualQuantity()).isNull();
     }
 
     @Test

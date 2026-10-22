@@ -45,4 +45,16 @@ class ProductionReportCorrectionFlowContractTest {
         assertThat(stocktake).contains("本批次存在经审批修正的报工数据，请重点核对实物数量",
                 "approvedForProducts");
     }
+
+    @Test
+    void correctionBoundaryKeepsInputSegmentOutOfOutputPathAndExposesTrustedMetadata() throws IOException {
+        String correction = source("service/impl/ProductionReportCorrectionServiceImpl.java");
+        assertThat(correction).contains("PRODUCTION_REPORT_CORRECTION_OUTPUT_ONLY",
+                "PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND",
+                "isOutputOrLegacy",
+                "PRODUCTION_REPORT_CORRECTION_MIXED_OUTPUT_UNITS",
+                "reportKind",
+                "outputUnit");
+        assertThat(correction).contains("filter(this::isCorrectionableKind)");
+    }
 }
