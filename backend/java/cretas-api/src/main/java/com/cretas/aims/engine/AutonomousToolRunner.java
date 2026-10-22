@@ -51,6 +51,7 @@ public class AutonomousToolRunner {
     private final ObjectMapper objectMapper;
     private final AutonomousGrantService grants;
     private final PreviewTokenService previewTokens;
+    private final AutonomousGrantIssuer issuer;
 
     /**
      * @param status persisted status, at most 20 characters
@@ -120,11 +121,12 @@ public class AutonomousToolRunner {
             // Consumption is the authorization commit point: a grant matching this config revision,
             // tool version, parameters and user is used once for this run key, under a row lock.
             Optional<AutonomousGrantService.Consumption> consumed =
-                    grants.consume(grantBinding, runKey, LocalDateTime.now());
+                    issuer.consumeForScheduledFire(grantBinding, runKey, LocalDateTime.now());
             if (consumed.isEmpty()) {
                 return new Outcome(GRANT_DENIED, "no usable grant for " + toolName + " (scheduler config "
                         + grantBinding.sourceRef() + "): missing, revoked, expired, exhausted, or issued for another"
-                        + " config revision, tool version, user or parameters", null);
+                        + " config revision, tool version, user or parameters, or the config was disabled or"
+                        + " changed after this fire read it", null);
             }
             if (consumed.get().replay()) {
                 // The same slot again (second instance, duplicate fire): never execute a second time,

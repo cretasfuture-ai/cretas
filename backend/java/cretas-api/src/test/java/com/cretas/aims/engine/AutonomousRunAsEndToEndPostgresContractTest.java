@@ -68,7 +68,7 @@ import static org.mockito.Mockito.*;
 @Import({DefaultToolExecutionGateway.class, ToolPrincipalPolicy.class, ToolRuntimeRegistry.class,
         ToolExecutionLedgerService.class, ToolConfirmationLease.class, LegacyToolMigrationRegistry.class,
         AuthenticatedToolPrincipalFactory.class, ToolRegistry.class, MaterialExpiredQueryTool.class,
-        AutonomousToolRunner.class, AutonomousGrantService.class, DynamicSchedulerService.class,
+        AutonomousToolRunner.class, AutonomousGrantService.class, AutonomousGrantIssuer.class, DynamicSchedulerService.class,
         AutonomousRunAsEndToEndPostgresContractTest.Json.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AutonomousRunAsEndToEndPostgresContractTest {

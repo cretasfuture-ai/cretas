@@ -36,7 +36,8 @@ class AutonomousRunAsGatewayPolicyContractTest {
     private final ToolExecutionGateway gateway = mock(ToolExecutionGateway.class);
     private final AuthenticatedToolPrincipalFactory principals = mock(AuthenticatedToolPrincipalFactory.class);
     private final AutonomousToolRunner runner = new AutonomousToolRunner(gateway, principals, registry, new ObjectMapper(),
-            mock(AutonomousGrantService.class), mock(com.cretas.aims.service.PreviewTokenService.class));
+            mock(AutonomousGrantService.class), mock(com.cretas.aims.service.PreviewTokenService.class),
+            mock(AutonomousGrantIssuer.class));
 
     @Test void onlyThePilotToolResolvesForAutonomousSourcesAndOnlyWithCurrentPermission() {
         for (String name : new String[]{"material_expired_query", "material_batch_query", "material_stock_summary"}) {

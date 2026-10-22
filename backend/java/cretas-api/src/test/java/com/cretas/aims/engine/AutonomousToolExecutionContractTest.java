@@ -53,13 +53,18 @@ class AutonomousToolExecutionContractTest {
     private final AutonomousGrantService grants = mock(AutonomousGrantService.class);
     private final com.cretas.aims.service.PreviewTokenService previewTokens =
             mock(com.cretas.aims.service.PreviewTokenService.class);
+    // The scheduled-fire consumption (config lock + binding re-check) is covered on PostgreSQL; here it
+    // hands straight through to the grant service so the grant stubs below decide.
+    private final AutonomousGrantIssuer issuer = mock(AutonomousGrantIssuer.class);
     private final AutonomousToolRunner runner = new AutonomousToolRunner(gateway, principals, registry, new ObjectMapper(),
-            grants, previewTokens);
+            grants, previewTokens, issuer);
     private final FactorySchedulerConfigRepository schedulerRepo = mock(FactorySchedulerConfigRepository.class);
     private final DynamicSchedulerService scheduler =
             new DynamicSchedulerService(schedulerRepo, registry, runner, new ObjectMapper());
 
     @BeforeEach void tools() {
+        when(issuer.consumeForScheduledFire(any(), any(), any())).thenAnswer(call ->
+                grants.consume(call.getArgument(0), call.getArgument(1), call.getArgument(2)));
         when(registry.getExecutor("material_expired_query")).thenReturn(Optional.of(readTool));
         when(registry.getExecutor("dictionary_add")).thenReturn(Optional.of(writeTool));
         when(registry.getExecutor("legacy_tool")).thenReturn(Optional.of(undeclaredTool));

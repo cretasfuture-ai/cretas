@@ -74,7 +74,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         ToolConfirmationLease.class, LegacyToolMigrationRegistry.class, AuthenticatedToolPrincipalFactory.class,
         ToolRegistry.class, UserDisableTool.class, UserServiceImpl.class, UserMapper.class, ExcelUtil.class,
         PermissionServiceImpl.class, PreviewTokenServiceImpl.class, AutonomousToolRunner.class,
-        AutonomousGrantService.class, DynamicSchedulerService.class,
+        AutonomousGrantService.class, AutonomousGrantIssuer.class, DynamicSchedulerService.class,
         AutonomousScheduledWriteIsolatedPostgresContractTest.Config.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AutonomousScheduledWriteIsolatedPostgresContractTest {
@@ -205,6 +205,60 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(count("tool_execution_idempotency")).isEqualTo(2);
         assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isEqualTo(2);
         assertThat(count("autonomous_tool_grants WHERE used_runs = 2")).isEqualTo(1);
+    }
+
+    @Test void aConfigEditedOrDisabledAfterTheFireReadItIsNotConsumed() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        // The fire read the config; then, before consumption, someone edits it.
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE factory_scheduler_configs SET params = '{\"username\":\"iso-bystander\"}' WHERE id = :id")
+                .setParameter("id", configId).executeUpdate());
+        assertThat(runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c2-edit",
+                fireBinding, "slot:2026-10-22T01:00:00Z").status()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        // Restored, but now disabled before consumption.
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE factory_scheduler_configs SET params = '{\"username\":\"iso-target\"}', enabled = false"
+                        + " WHERE id = :id").setParameter("id", configId).executeUpdate());
+        assertThat(runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c2-disable",
+                fireBinding, "slot:2026-10-22T01:01:00Z").status()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(active(target)).isTrue();
+        assertThat(active(bystander)).isTrue();
+    }
+
+    @Test void anEditHoldingTheConfigRowMakesConsumptionWaitAndThenRefuse() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        String url = System.getenv("CRETAS_WORKFLOW_PG_URL");
+        String user = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci");
+        String password = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", "");
+        try (java.sql.Connection edit = java.sql.DriverManager.getConnection(url, user, password)) {
+            edit.setAutoCommit(false);
+            try (java.sql.Statement statement = edit.createStatement()) {
+                statement.executeUpdate("UPDATE factory_scheduler_configs SET cron_expression = '0 0 3 * * ?' WHERE id = "
+                        + configId);
+            }
+            java.util.concurrent.CompletableFuture<String> run = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER,
+                            "c2-latch", fireBinding, "slot:2026-10-22T02:00:00Z").status());
+            try {
+                run.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                throw new AssertionError("consumption should wait on the config row the edit holds");
+            } catch (java.util.concurrent.TimeoutException expected) {
+                // waiting on the edit's row lock
+            }
+            edit.commit();
+            assertThat(run.get(30, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        }
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(active(target)).isTrue();
     }
 
     @Test void revokedGrantAtFireTimeIsRefusedWithZeroBusinessWrites() throws Exception {

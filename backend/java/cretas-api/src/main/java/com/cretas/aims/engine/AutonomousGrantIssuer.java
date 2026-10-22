@@ -11,8 +11,10 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.Objects;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -86,6 +88,37 @@ public class AutonomousGrantIssuer {
         User by = checkedAdmin(factoryId, entityManager.find(User.class, actorId, LockModeType.PESSIMISTIC_READ));
         return grants.revoke(factoryId, grantId, by.getId(), now)
                 .orElseThrow(() -> new BusinessException(404, "授权不存在或不属于本厂"));
+    }
+
+    /**
+     * Consumes a grant for one scheduled fire against the config as it is now, atomically: the config
+     * row is read FOR SHARE, so an edit, disable or delete (an UPDATE/DELETE on that row) either
+     * committed before (and is seen here) or waits until this consumption committed. The fire's
+     * binding, computed from the config the scheduler read at fire time, must equal the binding of
+     * the locked row; otherwise (config gone, disabled, edited, run-as changed) nothing is consumed.
+     * The tool runs outside this transaction.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<AutonomousGrantService.Consumption> consumeForScheduledFire(
+            AutonomousGrantService.Binding fireBinding, String runKey, LocalDateTime now) {
+        long configId;
+        try {
+            configId = Long.parseLong(fireBinding.sourceRef());
+        } catch (NumberFormatException notAConfig) {
+            return Optional.empty();
+        }
+        FactorySchedulerConfig config = entityManager.find(FactorySchedulerConfig.class, configId,
+                LockModeType.PESSIMISTIC_READ);
+        if (config == null || !Boolean.TRUE.equals(config.getEnabled())
+                || !Objects.equals(fireBinding.factoryId(), config.getFactoryId())) {
+            return Optional.empty();
+        }
+        AutonomousGrantService.Binding current =
+                SchedulerGrantBinding.of(config, fireBinding.descriptorVersion(), objectMapper);
+        if (!current.equals(fireBinding)) {
+            return Optional.empty();
+        }
+        return grants.consume(current, runKey, now);
     }
 
     /**
