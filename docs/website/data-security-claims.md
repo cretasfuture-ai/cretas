@@ -2,7 +2,10 @@
 
 页面：`platform/data-security.html`。页面上每一句承诺都带 `data-claim="<ID>"` 和 `data-claim-status`。
 
-**规则：只有 `live` 的承诺能出现在线上。** 发布前，把所有 `pending` 块删掉（不能只是隐藏：HTML 源码是公开的）。
+**2026-10-22 Steve 改了口径**：页面直接按「承诺」写全，不等每一项都落地；他接受文案比现状超前。页面上原来 `pending` 的条目现在标为 `commitment`（不再显示「待上线」标记）。
+下表照样维护，作用是让团队知道哪些承诺**还欠着实现**：`commitment` 状态的行就是待兑现的清单，由「方案审计与执行」逐项落地。
+
+原来的规则（已被上面的口径取代）：只有 `live` 的承诺能出现在线上。 发布前，把所有 `pending` 块删掉（不能只是隐藏：HTML 源码是公开的）。
 某条变成 `live` 的条件是：代码已经合并、已经部署，而且线上验证过；证据要写进下表。
 预览时，`pending` 块会显示橙色虚线框和「待上线」标签（样式只在本页里，删掉块之后就不会出现）。
 
@@ -12,7 +15,7 @@
 | C1-api-scope | 每个读写工厂数据的接口都只按登录身份取数 | pending | 2026-10-22 已修复 `analysis-cache`（#1094，线上：不带凭证 401，读本厂 200，读他厂 404）。还缺 Python `PUBLIC_PREFIXES` 下其余路径、信任客户端 factory_id 的端点做同类排查（交给「方案审计与执行」第 7 项） |
 | C1-no-cross-learning | AI 学到的说法不跨工厂 | pending | 要关掉 KeywordPromotion / CrossFactoryKnowledge 的跨厂共享，并清理线上已经提升过的行（第 1 项） |
 | C1-headline | 「看不到。」 | pending | 依赖 C1-api-scope 和 C1-no-cross-learning 都变成 live |
-| C1-headline-ai | 「用 AI 问不出来。」（过渡用的标题） | live | 依据同 C1-ai-scope。C1-headline 变成 live 时删掉这一句 |
+| C1-headline-ai | 「用 AI 问不出来。」（过渡用的标题） | 已删除 | 改为直接写 C1-headline「看不到。」 |
 | C2-platform-access | 配方代号显示、授权查看、平台访问留痕、工厂可查访问记录 | pending | 工艺保密（ProcessSecret，「方案审计与执行」在做）＋ 平台读取审计（第 3 项） |
 | C3-core-data | 未经书面授权，不用配方、工艺参数、成本和经营数字训练模型（Steve 2026-10-22 定的口径） | live | 2026-10-22 线上只读核查：`training_consent` 表 0 行，也就是没有任何工厂授权过；导出脚本 `export_distillation_dataset.py` 默认拒绝（V20261001_01）。注意：这是从现在起的承诺，没有核查 6 月至 9 月授权闸上线之前是否导出过样本 |
 | C3-consent-gate | 默认关闭；两档授权；没有授权就拒绝导出 | live | 同上 |
