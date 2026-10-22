@@ -150,6 +150,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <h3>别的工厂能看到我的数据吗？包括用 AI 问出来。</h3>
     <div>
       <p class="ans" data-claim="C1-headline" data-claim-status="pending">看不到。</p>
+      <p class="ans" data-claim="C1-headline-ai" data-claim-status="live">用 AI 问不出来。</p>
       <div class="how"><ul>
         <li data-claim="C1-ai-scope" data-claim-status="live">AI 助手查数据时，工厂身份取自提问人的登录凭证，模型自己不能指定去查哪个工厂。</li>
         <li data-claim="C1-api-scope" data-claim-status="pending">系统里每个读写工厂数据的接口，都只按登录身份所属的工厂取数。</li>
@@ -171,28 +172,28 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     </div>
   </div>
 
-  <div class="qrow v6-reveal" data-claim="C3-training-consent" data-claim-status="pending">
+  <div class="qrow v6-reveal">
     <h3>我的数据会被拿去训练模型吗？</h3>
     <div>
-      <p class="ans">没有你的书面授权，不会。</p>
+      <p class="ans" data-claim="C3-core-data" data-claim-status="live">核心数据不会。没有你的书面授权，我们不用你的配方、工艺参数、成本和经营数字训练模型。</p>
       <div class="how"><ul>
-        <li>默认不授权：你工厂的问答和业务数据不会被记录为训练素材，也不会进入任何训练、评测数据。</li>
-        <li>授权分两档，由你选择：只用于你自己工厂的模型；或者匿名化之后才可共享。</li>
-        <li>我们改进模型，用的是通用的业务流程和公开的行业知识，不是某一家工厂的具体数字和配方。</li>
+        <li data-claim="C3-consent-gate" data-claim-status="live">训练授权默认关闭。授权分两档，由你选择：只用于你自己工厂的模型；或者匿名化之后才能共享。没有授权，系统拒绝把你工厂的数据导出成训练数据。</li>
+        <li data-claim="C3-no-capture" data-claim-status="pending">默认不授权时，你工厂的 AI 问答连训练素材都不会记录。</li>
+        <li data-claim="C3-general-knowledge" data-claim-status="live">我们改进模型，靠的是通用的业务流程和公开的行业知识，不是某一家工厂的具体数字和配方。</li>
       </ul></div>
-      <span class="tagline">默认不授权 · 两档授权可选</span>
+      <span class="tagline">默认不授权 · 两档授权可选 · 可随时撤回</span>
     </div>
   </div>
 
-  <div class="qrow v6-reveal" data-claim="C4-llm-egress" data-claim-status="pending">
-    <h3>AI 用的是谁的模型？数据会出境吗？</h3>
+  <div class="qrow v6-reveal">
+    <h3>AI 用的是谁的模型？会被模型厂商拿去训练吗？</h3>
     <div>
-      <p class="ans">使用阿里云通义千问，在中国境内处理。</p>
+      <p class="ans" data-claim="C4-provider" data-claim-status="live">用的是阿里云百炼的通义千问。阿里云公开说明，按量付费 API 的调用数据不会用于模型训练。</p>
       <div class="how"><ul>
-        <li>交给模型分析之前，客户、门店、产品等名称会先替换成代号。</li>
-        <li>替换不成功时，这次就不发送，而不是带着原文发出去。</li>
+        <li data-claim="C4-redact" data-claim-status="pending">交给模型分析之前，客户、门店、产品等名称会先替换成代号。</li>
+        <li data-claim="C4-fail-closed" data-claim-status="pending">替换不成功时，这次就不发送，而不是带着原文发出去。</li>
       </ul></div>
-      <span class="tagline">境内模型 · 名称先替换 · 失败不发送</span>
+      <span class="tagline">阿里云百炼 · 按量付费 API 不用于训练</span>
     </div>
   </div>
 
