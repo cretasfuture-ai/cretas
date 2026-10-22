@@ -23,6 +23,7 @@ import {
   Modal,
   TextInput,
 } from 'react-native';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -58,6 +59,8 @@ export default function AIRescheduleScreen() {
 
   // 计划列表
   const [plans, setPlans] = useState<ReasonSchedulingPlan[]>([]);
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [adjustmentReason, setAdjustmentReason] = useState('');
   const [isSavingAdjustmentReason, setIsSavingAdjustmentReason] = useState(false);
@@ -68,15 +71,18 @@ export default function AIRescheduleScreen() {
   const [whatIfScenario, setWhatIfScenario] = useState<WhatIfRequest['scenario'] | null>(null);
   const [whatIfResult, setWhatIfResult] = useState<WhatIfResult | null>(null);
   const [analyzingWhatIf, setAnalyzingWhatIf] = useState(false);
+  const plansRequestId = useRef(0);
 
   // 加载计划列表
   const loadPlans = useCallback(async () => {
+    const requestId = ++plansRequestId.current;
+    const queryDate = formatDate(selectedDate);
+    setLoading(true);
     try {
       setError(null);
-      const today = formatDate(new Date());
       const response = await schedulingApiClient.getPlans({
-        startDate: today,
-        endDate: today,
+        startDate: queryDate,
+        endDate: queryDate,
         status: 'draft,confirmed,in_progress',
         page: 0,
         size: 20,
@@ -85,6 +91,7 @@ export default function AIRescheduleScreen() {
       if (!response.success || !response.data || !Array.isArray(response.data.content)) {
         throw new Error(response.message || '调度计划加载失败，请重新加载。');
       }
+      if (requestId !== plansRequestId.current) return;
       const activePlans = response.data.content.filter((plan) =>
         REASON_PLAN_STATUSES.includes(plan.status.toLowerCase())
       );
@@ -92,15 +99,16 @@ export default function AIRescheduleScreen() {
       setSelectedPlanId((current) => activePlans.some((plan) => plan.id === current)
         ? current : activePlans[0]?.id ?? null);
     } catch (err) {
+      if (requestId !== plansRequestId.current) return;
       setPlans([]);
       setSelectedPlanId(null);
       console.error('加载计划列表失败:', err);
       const message = err instanceof Error ? err.message : '加载失败';
       setError(message);
     } finally {
-      setLoading(false);
+      if (requestId === plansRequestId.current) setLoading(false);
     }
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
     loadPlans();
@@ -112,6 +120,12 @@ export default function AIRescheduleScreen() {
     await loadPlans();
     setRefreshing(false);
   }, [loadPlans]);
+
+  const handleDateChange = useCallback((event: DateTimePickerEvent, date?: Date) => {
+    setShowDatePicker(false);
+    if (event.type === 'dismissed' || !date || savingAdjustmentReason.current) return;
+    setSelectedDate(date);
+  }, []);
 
   // 执行 What-If 分析
   const handleWhatIfAnalysis = async () => {
@@ -303,6 +317,23 @@ export default function AIRescheduleScreen() {
               </View>
             </View>
 
+            <View style={styles.dateSelectorRow}>
+              <Text style={styles.dateSelectorLabel}>计划日期</Text>
+              <TouchableOpacity
+                testID="schedule-date-selector"
+                accessibilityRole="button"
+                accessibilityLabel="选择计划日期"
+                style={styles.dateSelector}
+                onPress={() => setShowDatePicker(true)}
+                disabled={isSavingAdjustmentReason}
+              >
+                <Text testID="selected-plan-date" style={styles.dateSelectorValue}>
+                  已选日期：{formatDate(selectedDate)}
+                </Text>
+                <MaterialCommunityIcons name="calendar-month" size={20} color={DISPATCHER_THEME.primary} />
+              </TouchableOpacity>
+            </View>
+
             {plans.length === 0 ? (
               <View style={styles.emptyState}>
                 <MaterialCommunityIcons name="calendar-blank" size={48} color="#ccc" />
@@ -464,6 +495,16 @@ export default function AIRescheduleScreen() {
 
           <View style={{ height: 100 }} />
         </ScrollView>
+      )}
+
+      {showDatePicker && (
+        <DateTimePicker
+          testID="schedule-date-picker"
+          value={selectedDate}
+          mode="date"
+          display="default"
+          onChange={handleDateChange}
+        />
       )}
 
       {/* What-If Modal */}
@@ -630,6 +671,32 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
+  },
+  dateSelectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  dateSelectorLabel: {
+    fontSize: 14,
+    color: '#666',
+  },
+  dateSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: DISPATCHER_THEME.primary,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+  },
+  dateSelectorValue: {
+    fontSize: 14,
+    color: DISPATCHER_THEME.primary,
+    fontWeight: '500',
   },
   cardTitleRow: {
     flexDirection: 'row',
