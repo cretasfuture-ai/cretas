@@ -13,7 +13,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from common.tenant_identity import scoped_factory
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
@@ -61,6 +62,7 @@ def _status(value: Optional[float], benchmark: float, higher_is_better: bool = T
 
 @router.get("/financial-ratios")
 async def get_financial_ratios(
+    request: Request,
     factory_id: Optional[str] = Query(None, alias="factoryId"),
     start_date: Optional[str] = Query(None, alias="startDate"),
     end_date: Optional[str] = Query(None, alias="endDate"),
@@ -69,6 +71,8 @@ async def get_financial_ratios(
     Compute financial ratios from finance data.
     Missing source metrics stay unavailable; demo values are never substituted.
     """
+    # 工厂隔离: 只算登录身份的工厂 (平台角色必须点名)
+    factory_id = scoped_factory(request, factory_id)
     if not factory_id:
         return JSONResponse(
             status_code=400,
