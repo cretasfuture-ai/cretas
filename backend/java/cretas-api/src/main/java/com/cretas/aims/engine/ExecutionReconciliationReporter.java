@@ -39,7 +39,8 @@ public class ExecutionReconciliationReporter {
 
     /** status: CLEAN / FOUND / UNMEASURED. Counts are null when UNMEASURED. */
     public record Snapshot(String status, LocalDateTime cutoff, Long executingTokens, Long inDoubtRecords,
-            Long staleInProgressRecords, Long unfinishedAudits, List<String> samples, String error) { }
+            Long staleInProgressRecords, Long unfinishedAudits, Long unresolvedGrantRuns, List<String> samples,
+            String error) { }
 
     @Scheduled(initialDelayString = "${cretas.execution-reconciliation.initial-delay-ms:300000}",
             fixedDelayString = "${cretas.execution-reconciliation.interval-ms:900000}")
@@ -49,9 +50,9 @@ public class ExecutionReconciliationReporter {
         switch (snapshot.status()) {
             case "CLEAN" -> log.info("EXECUTION_RECONCILIATION status=CLEAN cutoff={}", snapshot.cutoff());
             case "FOUND" -> log.warn("EXECUTION_RECONCILIATION status=FOUND cutoff={} executingTokens={} inDoubt={} "
-                            + "staleInProgress={} unfinishedAudits={} samples={}", snapshot.cutoff(),
+                            + "staleInProgress={} unfinishedAudits={} unresolvedGrantRuns={} samples={}", snapshot.cutoff(),
                     snapshot.executingTokens(), snapshot.inDoubtRecords(), snapshot.staleInProgressRecords(),
-                    snapshot.unfinishedAudits(), snapshot.samples());
+                    snapshot.unfinishedAudits(), snapshot.unresolvedGrantRuns(), snapshot.samples());
             default -> log.error("EXECUTION_RECONCILIATION status=UNMEASURED cutoff={} error={}",
                     snapshot.cutoff(), snapshot.error());
         }
@@ -82,13 +83,18 @@ public class ExecutionReconciliationReporter {
                             + " where e.state = :state and e.startedAt < :cutoff order by e.id", String.class)
                     .setParameter("state", ToolExecutionAuditEvent.State.STARTED)
                     .setParameter("cutoff", cutoff).getResultList();
-            long total = tokens.size() + inDoubt.size() + inProgress.size() + audits.size();
-            List<String> samples = java.util.stream.Stream.of(tokens, inDoubt, inProgress, audits)
+            // A delegated scheduled run that consumed its grant but never recorded an outcome.
+            List<String> grantRuns = entityManager.createQuery(
+                    "select concat(r.grantId, ':grant-run:', r.runKey) from AutonomousToolGrantRun r"
+                            + " where r.outcome is null and r.consumedAt < :cutoff order by r.consumedAt", String.class)
+                    .setParameter("cutoff", cutoff).getResultList();
+            long total = tokens.size() + inDoubt.size() + inProgress.size() + audits.size() + grantRuns.size();
+            List<String> samples = java.util.stream.Stream.of(tokens, inDoubt, inProgress, audits, grantRuns)
                     .flatMap(List::stream).limit(SAMPLE_LIMIT).toList();
             return new Snapshot(total == 0 ? "CLEAN" : "FOUND", cutoff, (long) tokens.size(), (long) inDoubt.size(),
-                    (long) inProgress.size(), (long) audits.size(), samples, null);
+                    (long) inProgress.size(), (long) audits.size(), (long) grantRuns.size(), samples, null);
         } catch (RuntimeException unmeasured) {
-            return new Snapshot("UNMEASURED", cutoff, null, null, null, null, List.of(),
+            return new Snapshot("UNMEASURED", cutoff, null, null, null, null, null, List.of(),
                     unmeasured.getClass().getSimpleName() + ": " + unmeasured.getMessage());
         }
     }

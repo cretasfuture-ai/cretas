@@ -117,6 +117,7 @@ public class AutonomousToolRunner {
         }
         Optional<String> idempotencyKey = Optional.empty();
         Optional<ConfirmationProof> proof = Optional.empty();
+        AutonomousGrantService.Consumption consumption = null;
         if (write) {
             // Consumption is the authorization commit point: a grant matching this config revision,
             // tool version, parameters and user is used once for this run key, under a row lock.
@@ -130,9 +131,11 @@ public class AutonomousToolRunner {
             }
             if (consumed.get().replay()) {
                 // The same slot again (second instance, duplicate fire): never execute a second time,
-                // report what the gateway recorded for the first attempt.
-                return replayed(factoryId, runAsUserId, toolName, consumed.get());
+                // report what the first attempt recorded.
+                return replayed(factoryId, runAsUserId, toolName, consumed.get(), runKey);
             }
+            consumption = consumed.get();
+            issuer.markRunning(Long.parseLong(grantBinding.sourceRef()), LocalDateTime.now());
             IntentPreviewToken token = previewTokens.createBoundToken(new PreviewTokenService.BoundTokenRequest(
                     // Per-run intent code: creating a token cancels the user's pending tokens with the same
                     // code, so a shared code would let two runs of the same user void each other's proof.
@@ -159,7 +162,22 @@ public class AutonomousToolRunner {
                 proof,
                 Optional.empty(),
                 Instant.now().plus(DEADLINE));
-        return outcome(executeDetached(command));
+        ToolExecutionResult result = executeDetached(command);
+        if (consumption != null) {
+            issuer.recordOutcome(consumption.grantId(), runKey, recordedOutcomeOf(result.status()),
+                    result.auditEventId(), LocalDateTime.now());
+        }
+        return outcome(result);
+    }
+
+    /** What a consumed run's record keeps of the gateway's answer. */
+    static String recordedOutcomeOf(ToolExecutionStatus status) {
+        return switch (status) {
+            case SUCCEEDED, IDEMPOTENT_REPLAY -> "SUCCEEDED";
+            case FAILED -> "FAILED";
+            case TIMEOUT, OUTCOME_UNKNOWN -> "OUTCOME_UNKNOWN";
+            default -> "DENIED";
+        };
     }
 
     /** Persisted status when no usable delegated grant covers a write (VARCHAR(20)). */
@@ -182,7 +200,17 @@ public class AutonomousToolRunner {
     }
 
     private Outcome replayed(String factoryId, Long runAsUserId, String toolName,
-            AutonomousGrantService.Consumption consumed) {
+            AutonomousGrantService.Consumption consumed, String runKey) {
+        Optional<String> recorded = issuer.recordedOutcome(consumed.grantId(), runKey);
+        if (recorded.isPresent()) {
+            String detail = "replay of grant " + consumed.grantId() + " run: recorded " + recorded.get();
+            return switch (recorded.get()) {
+                case "SUCCEEDED" -> new Outcome("SUCCESS", null, null, true);
+                case "FAILED" -> new Outcome("FAILED", detail, null, true);
+                case "DENIED" -> new Outcome("GATEWAY_DENIED", detail, null, true);
+                default -> new Outcome("OUTCOME_UNKNOWN", detail, null, true);
+            };
+        }
         Optional<ToolExecutionIdempotencyRecord> record = grants.gatewayRecord(factoryId, runAsUserId, toolName, consumed);
         if (record.isEmpty()) {
             // Consumed but no gateway record: still in flight on another instance, or the first attempt

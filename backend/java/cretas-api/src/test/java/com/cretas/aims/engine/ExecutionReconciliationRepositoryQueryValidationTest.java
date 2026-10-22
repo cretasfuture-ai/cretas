@@ -70,6 +70,9 @@ class ExecutionReconciliationRepositoryQueryValidationTest {
         audit("open-old", "STARTED", old);
         audit("open-new", "STARTED", now);
         audit("closed", "COMPLETED", old);
+        grantRun("lost", null, old);
+        grantRun("in-flight", null, now);
+        grantRun("resolved", "SUCCEEDED", old);
         testEntityManager.flush();
         testEntityManager.clear();
 
@@ -80,8 +83,14 @@ class ExecutionReconciliationRepositoryQueryValidationTest {
         assertThat(snapshot.inDoubtRecords()).isEqualTo(1L);
         assertThat(snapshot.staleInProgressRecords()).isEqualTo(1L);
         assertThat(snapshot.unfinishedAudits()).isEqualTo(1L);
+        // A consumed delegated run that never recorded an outcome, past the cutoff.
+        assertThat(snapshot.unresolvedGrantRuns()).isEqualTo(1L);
         assertThat(snapshot.samples()).containsExactlyInAnyOrder("F-RC:token:" + staleToken,
-                "F-RC:idempotency:doubt", "F-RC:idempotency:stuck", "F-RC:audit:open-old");
+                "F-RC:idempotency:doubt", "F-RC:idempotency:stuck", "F-RC:audit:open-old",
+                "grant-lost:grant-run:slot:lost");
+        assertThat(entityManager.createNativeQuery(
+                "SELECT count(*) FROM autonomous_tool_grant_runs WHERE outcome IS NULL").getSingleResult())
+                .extracting(value -> ((Number) value).longValue()).isEqualTo(2L);
         // Read-only: nothing it reported was resolved or rewritten.
         assertThat(entityManager.createNativeQuery("SELECT status FROM intent_preview_tokens WHERE id = :id")
                 .setParameter("id", staleToken).getSingleResult()).isEqualTo("EXECUTING");
@@ -130,6 +139,16 @@ class ExecutionReconciliationRepositoryQueryValidationTest {
         testEntityManager.flush();
         entityManager.createNativeQuery("UPDATE tool_execution_idempotency SET state = :state, updated_at = :at WHERE id = :id")
                 .setParameter("state", state).setParameter("at", updatedAt).setParameter("id", id).executeUpdate();
+    }
+
+    private void grantRun(String id, String outcome, LocalDateTime consumedAt) {
+        testEntityManager.persist(com.cretas.aims.entity.ai.AutonomousToolGrantRun.record("run-" + id, "grant-" + id,
+                "slot:" + id, "1.0.0", consumedAt));
+        testEntityManager.flush();
+        if (outcome != null) {
+            entityManager.createNativeQuery("UPDATE autonomous_tool_grant_runs SET outcome = :outcome WHERE id = :id")
+                    .setParameter("outcome", outcome).setParameter("id", "run-" + id).executeUpdate();
+        }
     }
 
     private void audit(String id, String state, LocalDateTime startedAt) {

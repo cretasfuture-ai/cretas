@@ -110,6 +110,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
     @Autowired DynamicSchedulerService instanceA;
     @Autowired AutonomousToolRunner runner;
     @Autowired AutonomousGrantService grants;
+    @Autowired AutonomousGrantIssuer issuer;
     @Autowired ToolRegistry toolRegistry;
     @Autowired FactorySchedulerConfigRepository schedules;
     @Autowired ObjectMapper objectMapper;
@@ -179,6 +180,14 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(text("SELECT status FROM intent_preview_tokens")).isEqualTo("CONFIRMED");
         // The instance that only replayed the slot did not overwrite the executing instance's record.
         assertThat(status()).isEqualTo("SUCCESS");
+        // The run keeps its outcome and the gateway audit it came from.
+        assertThat(text("SELECT outcome FROM autonomous_tool_grant_runs")).isEqualTo("SUCCEEDED");
+        assertThat(text("SELECT audit_event_id FROM autonomous_tool_grant_runs")).isEqualTo(
+                text("SELECT id FROM tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'"));
+        // Written once: a later record for the same run (a replay, a late duplicate) changes nothing.
+        assertThat(issuer.recordOutcome(text("SELECT grant_id FROM autonomous_tool_grant_runs"),
+                text("SELECT run_key FROM autonomous_tool_grant_runs"), "FAILED", null, LocalDateTime.now())).isZero();
+        assertThat(text("SELECT outcome FROM autonomous_tool_grant_runs")).isEqualTo("SUCCEEDED");
         assertThat(count("factory_scheduler_configs WHERE execution_count = 1")).isEqualTo(1);
     }
 
@@ -259,6 +268,26 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         }
         assertThat(count("autonomous_tool_grant_runs")).isZero();
         assertThat(active(target)).isTrue();
+    }
+
+    @Test void aRunConsumedButNeverResolvedIsReportedAndNotRetried() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        // The first attempt consumed the grant and stopped before the gateway (crash in between).
+        assertThat(issuer.consumeForScheduledFire(fireBinding, "slot:2026-10-22T03:00:00Z", LocalDateTime.now()))
+                .isPresent();
+
+        var report = new ExecutionReconciliationReporter(entityManager, 0).report(LocalDateTime.now().plusMinutes(1));
+        assertThat(report.status()).isEqualTo("FOUND");
+        assertThat(report.unresolvedGrantRuns()).isEqualTo(1L);
+        // Replaying the same slot never executes; the run stays unresolved for a person to look up.
+        assertThat(runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c3",
+                fireBinding, "slot:2026-10-22T03:00:00Z").status()).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(active(target)).isTrue();
+        assertThat(count("autonomous_tool_grant_runs WHERE outcome IS NULL")).isEqualTo(1);
     }
 
     @Test void revokedGrantAtFireTimeIsRefusedWithZeroBusinessWrites() throws Exception {

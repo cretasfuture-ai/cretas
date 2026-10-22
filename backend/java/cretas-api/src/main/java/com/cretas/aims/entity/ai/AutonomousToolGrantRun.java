@@ -43,6 +43,19 @@ public class AutonomousToolGrantRun {
     @Column(name = "consumed_at", nullable = false, updatable = false)
     private LocalDateTime consumedAt;
 
+    /**
+     * SUCCEEDED / FAILED / DENIED / OUTCOME_UNKNOWN once the gateway answered (written once, never
+     * overwritten); null while unresolved, which reconciliation reports after a cutoff.
+     */
+    @Column(name = "outcome", length = 20)
+    private String outcome;
+
+    @Column(name = "audit_event_id", length = 36)
+    private String auditEventId;
+
+    @Column(name = "resolved_at")
+    private LocalDateTime resolvedAt;
+
     public static AutonomousToolGrantRun record(String id, String grantId, String runKey, String descriptorVersion,
             LocalDateTime now) {
         AutonomousToolGrantRun run = new AutonomousToolGrantRun();

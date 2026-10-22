@@ -265,6 +265,10 @@ class AutonomousToolExecutionContractTest {
         // Each run gets its own intent code: issuing a token cancels pending tokens with the same code.
         assertThat(tokens.getAllValues()).extracting(com.cretas.aims.service.PreviewTokenService.BoundTokenRequest::intentCode)
                 .doesNotHaveDuplicates().allMatch(code -> code.startsWith("AUTONOMOUS_TOOL_RUN:"));
+        // The executing instance marks the config RUNNING, then records each run's outcome once.
+        verify(issuer, times(2)).markRunning(eq(78L), any());
+        verify(issuer).recordOutcome(eq("g1"), eq("slot:1"), eq("SUCCEEDED"), any(), any());
+        verify(issuer).recordOutcome(eq("g1"), eq("slot:2"), eq("SUCCEEDED"), any(), any());
     }
 
     @Test void aBindingThatDoesNotDescribeThisRunOrAnEventChainWriteIsRefusedBeforeAnyGrant() {
@@ -306,6 +310,31 @@ class AutonomousToolExecutionContractTest {
         assertThat(done.status()).isEqualTo("SUCCESS");
         assertThat(List.of(inFlight, done)).allMatch(AutonomousToolRunner.Outcome::replay);
         verifyNoInteractions(gateway, previewTokens);
+        verify(issuer, never()).markRunning(anyLong(), any());
+        verify(issuer, never()).recordOutcome(any(), any(), any(), any(), any());
+    }
+
+    @Test void aReplayReportsTheOutcomeTheFirstRunRecordedBeforeAskingTheLedger() {
+        when(writeTool.getVersion()).thenReturn("1.0.0");
+        when(grants.consume(any(), any(), any())).thenReturn(Optional.of(
+                new AutonomousGrantService.Consumption("g1", "autonomous:g1:slot:1", "1.0.0", true)));
+        when(issuer.recordedOutcome("g1", "slot:1")).thenReturn(Optional.of("DENIED"));
+        var binding = SchedulerGrantBinding.of(schedule(78L, "dictionary_add", Map.of(), 42L), "1.0.0", new ObjectMapper());
+        var replay = runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
+                "slot:1");
+        assertThat(replay.status()).isEqualTo("GATEWAY_DENIED");
+        assertThat(replay.replay()).isTrue();
+        verify(grants, never()).gatewayRecord(any(), any(), any(), any());
+        verifyNoInteractions(gateway, previewTokens);
+    }
+
+    @Test void recordedOutcomesNeverCallAnUnknownASuccess() {
+        assertThat(AutonomousToolRunner.recordedOutcomeOf(ToolExecutionStatus.SUCCEEDED)).isEqualTo("SUCCEEDED");
+        assertThat(AutonomousToolRunner.recordedOutcomeOf(ToolExecutionStatus.FAILED)).isEqualTo("FAILED");
+        assertThat(AutonomousToolRunner.recordedOutcomeOf(ToolExecutionStatus.OUTCOME_UNKNOWN)).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(AutonomousToolRunner.recordedOutcomeOf(ToolExecutionStatus.TIMEOUT)).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(AutonomousToolRunner.recordedOutcomeOf(ToolExecutionStatus.DENIED)).isEqualTo("DENIED");
+        assertThat(AutonomousToolRunner.recordedOutcomeOf(ToolExecutionStatus.CONFIRMATION_REQUIRED)).isEqualTo("DENIED");
     }
 
     @Test void aReplayedSlotDoesNotOverwriteTheStatusTheExecutingInstanceRecorded() throws Exception {

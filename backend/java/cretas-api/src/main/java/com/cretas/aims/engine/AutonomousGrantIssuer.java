@@ -122,6 +122,38 @@ public class AutonomousGrantIssuer {
     }
 
     /**
+     * Records the gateway outcome of a consumed run, once: a later call (a replay, a duplicate) never
+     * overwrites it. Outcome is SUCCEEDED / FAILED / DENIED / OUTCOME_UNKNOWN.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int recordOutcome(String grantId, String runKey, String outcome, String auditEventId, LocalDateTime now) {
+        return entityManager.createQuery("update AutonomousToolGrantRun r set r.outcome = :outcome,"
+                        + " r.auditEventId = :audit, r.resolvedAt = :now"
+                        + " where r.grantId = :grantId and r.runKey = :runKey and r.outcome is null")
+                .setParameter("outcome", outcome).setParameter("audit", auditEventId).setParameter("now", now)
+                .setParameter("grantId", grantId).setParameter("runKey", runKey).executeUpdate();
+    }
+
+    /** The outcome recorded for a consumed run, if it was resolved. */
+    @Transactional(readOnly = true)
+    public Optional<String> recordedOutcome(String grantId, String runKey) {
+        return entityManager.createQuery("select r.outcome from AutonomousToolGrantRun r"
+                        + " where r.grantId = :grantId and r.runKey = :runKey and r.outcome is not null", String.class)
+                .setParameter("grantId", grantId).setParameter("runKey", runKey).getResultStream().findFirst();
+    }
+
+    /**
+     * Marks a config RUNNING once this instance consumed a grant for it, so a crash before the outcome
+     * leaves RUNNING (not the previous slot's SUCCESS) and the unresolved run for reconciliation.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markRunning(long configId, LocalDateTime now) {
+        entityManager.createQuery("update FactorySchedulerConfig c set c.lastExecutionStatus = 'RUNNING',"
+                        + " c.lastExecutedAt = :now, c.lastExecutionError = null where c.id = :id")
+                .setParameter("now", now).setParameter("id", configId).executeUpdate();
+    }
+
+    /**
      * Saves a scheduler config and, when what it runs changed or it is now disabled, revokes its
      * active grants in the same transaction.
      *
