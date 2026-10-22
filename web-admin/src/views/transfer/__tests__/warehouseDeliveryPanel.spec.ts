@@ -25,7 +25,8 @@ describe('warehouse delivery panel wiring', () => {
   });
   it('refreshes delivery after dispatch and rotates key only after success', () => {
     expect(panel).toContain('await load()');
-    expect(panel).toContain('requestKey.value = crypto.randomUUID()');
+    expect(panel).toContain('persistResolved(envelope)');
+    expect(panel).toContain('submittedIds');
     expect(panel).toContain('targetBatchId');
     expect(panel).toContain('待核请求不可修改');
     expect(detail).toContain('@changed="loadTransfer"');

@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { createWarehouseDeliveryRequestKey, getOrCreateWarehouseDeliveryRequestKey, validateWarehouseReceipt } from '../../../utils/warehouseTransferDelivery';
+import { createWarehouseDeliveryRequestKey, getOrCreateWarehouseDeliveryRequestKey, validateWarehouseReceipt, warehouseDeliveryMatchesPending, type WarehouseDeliveryPending, type WarehouseTransferDelivery } from '../../../utils/warehouseTransferDelivery';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const screen = readFileSync(resolve(__dirname, '../../../screens/factory-admin/inventory/TransferDetailScreen.tsx'), 'utf8');
@@ -30,11 +30,24 @@ describe('warehouse delivery contract', () => {
   it('keeps the old same-factory confirm and cross-factory wiring', () => {
     expect(screen).toContain("handleAction('confirm')");
     expect(screen).toContain('sourceFactoryId !== transfer.targetFactoryId');
-    expect(screen).toContain('rotateWarehouseDeliveryRequestKey');
+    expect(screen).toContain('persistResolvedWarehouseDelivery');
     expect(screen).toContain('targetBatchId');
     expect(screen).toContain("hasModulePermission(user, 'warehouse', 'write')");
     expect(screen).toContain('res.message ||');
     expect(screen).toContain('onPress={refreshAll}');
+  });
+  it('rejects empty, omitted, malformed, and extra receipts for a pending quantity', () => {
+    const pending: WarehouseDeliveryPending = { factoryId: 'F1', userId: '7', transferId: 'T1', requestKey: 'key-1', itemQuantities: { 1: 0.04 }, state: 'unknown' };
+    const item = (overrides = {}) => ({ id: 1, itemName: '原料', unit: 'kg', sourceBatchId: 'SRC', shippedQuantity: 0.1, receivedQuantity: 0.04, pendingQuantity: 0.06, receipts: [{ requestKey: 'key-1', operationId: 'op-1', targetBatchId: 'B1', quantity: 0.04, unit: 'kg', actorId: 7, createdAt: '' }], ...overrides });
+    const delivery = (items: unknown[]): WarehouseTransferDelivery => ({ supported: true, staged: true, stage: 'PARTIAL', transferId: 'T1', transferNumber: 'TRF-1', inTransitByUnit: {}, items: items as WarehouseTransferDelivery['items'] });
+    expect(warehouseDeliveryMatchesPending(delivery([]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item({ id: 2 })]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item({ receipts: [{ ...item().receipts[0], unit: 'box' }] })]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item({ receipts: [{ ...item().receipts[0], operationId: '' }] })]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item({ receipts: [{ ...item().receipts[0], targetBatchId: '' }] })]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item({ receipts: [{ ...item().receipts[0], quantity: 0.06 }] })]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item(), { ...item({ id: 2 }), receipts: [{ ...item().receipts[0] }] }]), pending)).toBe(false);
+    expect(warehouseDeliveryMatchesPending(delivery([item()]), pending)).toBe(true);
   });
   it('mounts RN screen and refreshes delivery after the first delivery GET fails', async () => {
     mockGetTransfer.mockResolvedValue({ success: true, data: { id: 'T1', transferNumber: 'TRF-1', transferType: 'WAREHOUSE_TO_WAREHOUSE', sourceFactoryId: 'F1', targetFactoryId: 'F1', status: 'APPROVED', totalAmount: 0, transferDate: '', items: [] } });
