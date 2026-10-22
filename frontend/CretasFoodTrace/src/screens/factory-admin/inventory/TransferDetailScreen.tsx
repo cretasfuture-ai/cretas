@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import { Text, Appbar, Card, Chip, Button, ActivityIndicator, DataTable, Divider, TextInput } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,6 +8,7 @@ import { transferApiClient, InternalTransfer } from '../../../services/api/trans
 import { useAuthStore } from '../../../store/authStore';
 import { formatNumberWithCommas } from '../../../utils/formatters';
 import { createWarehouseDeliveryUuid, getOrCreateWarehouseDeliveryRequestKey, loadWarehouseDeliveryPending, persistResolvedWarehouseDelivery, saveWarehouseDeliveryPending, validateWarehouseReceipt, warehouseDeliveryMatchesPending, type DeliveryQuantity, type WarehouseDeliveryPending } from '../../../utils/warehouseTransferDelivery';
+import { AppDialogHost, appAlert } from '../../../components/ui';
 import { hasModulePermission } from '../../../utils/permissionHelper';
 import type { WarehouseTransferDelivery } from '../../../utils/warehouseTransferDelivery';
 
@@ -46,33 +47,33 @@ export default function TransferDetailScreen() {
   const canWriteWarehouse = hasModulePermission(user, 'warehouse', 'write');
 
   useEffect(() => { loadTransfer(); }, [transferId]);
-  useEffect(() => { (async () => { try { const uid = String(user?.id || 'unknown'); const pending = await loadWarehouseDeliveryPending(factoryId, uid, transferId); if (pending) { setRequestKey(pending.requestKey); if (pending.state !== 'resolved') { setPendingDelivery(pending); setReceiptQuantities(pending.itemQuantities); setDeliveryUnknown(pending.state === 'unknown'); } } else { const next = await getOrCreateWarehouseDeliveryRequestKey(factoryId, uid, transferId); if (next) setRequestKey(next); else Alert.alert('无法保存收货请求', '本机存储不可用，已阻止仓内收货。'); } } catch (error) { Alert.alert('无法恢复收货请求', error instanceof Error ? error.message : '本机存储不可用，已阻止仓内收货。'); } })(); }, [factoryId, transferId, user?.id]);
+  useEffect(() => { (async () => { try { const uid = String(user?.id || 'unknown'); const pending = await loadWarehouseDeliveryPending(factoryId, uid, transferId); if (pending) { setRequestKey(pending.requestKey); if (pending.state !== 'resolved') { setPendingDelivery(pending); setReceiptQuantities(pending.itemQuantities); setDeliveryUnknown(pending.state === 'unknown'); } } else { const next = await getOrCreateWarehouseDeliveryRequestKey(factoryId, uid, transferId); if (next) setRequestKey(next); else appAlert('无法保存收货请求', '本机存储不可用，已阻止仓内收货。'); } } catch (error) { appAlert('无法恢复收货请求', error instanceof Error ? error.message : '本机存储不可用，已阻止仓内收货。'); } })(); }, [factoryId, transferId, user?.id]);
 
   const loadTransfer = async () => {
     try {
       setLoading(true);
       const res = await transferApiClient.getTransfer(transferId);
       if (res.success) setTransfer(res.data);
-    } catch { Alert.alert('错误', '加载失败'); }
+    } catch { appAlert('错误', '加载失败'); }
     finally { setLoading(false); }
   };
 
   const loadDelivery = async () => {
-    try { setDeliveryLoading(true); const res = await transferApiClient.getWarehouseDelivery(transferId, factoryId); if (res.success) { setDelivery(res.data); if (pendingDelivery && requestKey && warehouseDeliveryMatchesPending(res.data, pendingDelivery)) { const next = createWarehouseDeliveryUuid(); if (await persistResolvedWarehouseDelivery(pendingDelivery, next)) { setPendingDelivery(null); setDeliveryUnknown(false); setReceiptQuantities({}); setRequestKey(next); } else { setDeliveryUnknown(true); Alert.alert('收货结果已核对但本机未完成安全轮换', '请保持原请求号并重试刷新。'); } } } }
-    catch (error) { setDeliveryUnknown(true); Alert.alert('仓内交付状态读取失败', `${error instanceof Error ? error.message : '请刷新重试'}\n请刷新页面查看真实状态。`); }
+    try { setDeliveryLoading(true); const res = await transferApiClient.getWarehouseDelivery(transferId, factoryId); if (res.success) { setDelivery(res.data); if (pendingDelivery && requestKey && warehouseDeliveryMatchesPending(res.data, pendingDelivery)) { const next = createWarehouseDeliveryUuid(); if (await persistResolvedWarehouseDelivery(pendingDelivery, next)) { setPendingDelivery(null); setDeliveryUnknown(false); setReceiptQuantities({}); setRequestKey(next); } else { setDeliveryUnknown(true); appAlert('收货结果已核对但本机未完成安全轮换', '请保持原请求号并重试刷新。'); } } } }
+    catch (error) { setDeliveryUnknown(true); appAlert('仓内交付状态读取失败', `${error instanceof Error ? error.message : '请刷新重试'}\n请刷新页面查看真实状态。`); }
     finally { setDeliveryLoading(false); }
   };
   useEffect(() => { loadDelivery(); }, [transferId, factoryId, pendingDelivery, requestKey]);
   const refreshAll = async () => { await Promise.all([loadTransfer(), loadDelivery()]); };
-  const dispatchWarehouse = async () => { if (!canWriteWarehouse || submittingDelivery) return; setSubmittingDelivery(true); try { const res = await transferApiClient.dispatchWarehouseTransfer(transferId, factoryId); if (res.success) { await refreshAll(); Alert.alert('成功', '仓内发运已记录'); } else Alert.alert('仓内发运未完成', res.message || '后端拒绝了仓内发运，请检查权限和批次。'); } catch (error) { Alert.alert('仓内发运失败', error instanceof Error ? error.message : '请刷新后重试'); } finally { setSubmittingDelivery(false); } };
-  const receiveWarehouse = async () => { if (!canWriteWarehouse || !delivery || !requestKey || submittingDelivery) return; const rows: DeliveryQuantity[] = delivery.items.map(item => ({ itemId: item.id, unit: item.unit, pendingQuantity: item.pendingQuantity, quantity: receiptQuantities[item.id] || 0 })); const checked = validateWarehouseReceipt(rows); if (!checked.valid) { Alert.alert('请检查收货数量', checked.reason || '至少填写一行本次收货数量'); return; } if (pendingDelivery && JSON.stringify(pendingDelivery.itemQuantities) !== JSON.stringify(checked.quantities)) { Alert.alert('待核请求不可修改', '请保持原数量和请求号，先刷新核对结果。'); return; } const envelope: WarehouseDeliveryPending = { factoryId, userId: String(user?.id || 'unknown'), transferId, requestKey, itemQuantities: checked.quantities, state: 'pending' }; if (!(await saveWarehouseDeliveryPending(envelope))) { Alert.alert('无法保存收货请求', '本机存储不可用，已阻止发送以避免重复收货。'); return; } setPendingDelivery(envelope); setSubmittingDelivery(true); try { const res = await transferApiClient.receiveWarehouseTransfer(transferId, { requestKey, itemQuantities: checked.quantities }, factoryId); if (!res.success) { await saveWarehouseDeliveryPending({ ...envelope, state: 'unknown' }); setDeliveryUnknown(true); Alert.alert('收货未完成', res.message || '后端拒绝了收货，请刷新查看真实状态。'); return; } setDelivery(res.data); if (!warehouseDeliveryMatchesPending(res.data, envelope)) { await saveWarehouseDeliveryPending({ ...envelope, state: 'unknown' }); setDeliveryUnknown(true); Alert.alert('收货结果未知', '请刷新核对相同请求，确认前不会更换请求号。'); return; } const next = createWarehouseDeliveryUuid(); if (!(await persistResolvedWarehouseDelivery(envelope, next))) { setDeliveryUnknown(true); Alert.alert('收货已提交但本机未完成安全轮换', '请刷新核对结果后再继续。'); return; } setPendingDelivery(null); setReceiptQuantities({}); setDeliveryUnknown(false); setRequestKey(next); Alert.alert('成功', '本次收货已记录'); } catch (error) { await saveWarehouseDeliveryPending({ ...envelope, state: 'unknown' }); setPendingDelivery(envelope); setDeliveryUnknown(true); await loadDelivery(); Alert.alert('收货结果未知', `${error instanceof Error ? error.message : '网络请求失败'}\n请刷新查看真实状态。`); } finally { setSubmittingDelivery(false); } };
+  const dispatchWarehouse = async () => { if (!canWriteWarehouse) return; if (submittingDelivery) return; setSubmittingDelivery(true); try { const res = await transferApiClient.dispatchWarehouseTransfer(transferId, factoryId); if (res.success) { await refreshAll(); appAlert('成功', '仓内发运已记录'); } else appAlert('仓内发运未完成', res.message || '后端拒绝了仓内发运，请检查权限和批次。'); } catch (error) { appAlert('仓内发运失败', error instanceof Error ? error.message : '请刷新后重试'); } finally { setSubmittingDelivery(false); } };
+  const receiveWarehouse = async () => { if (!canWriteWarehouse) return; if (!delivery || !requestKey || submittingDelivery) return; const rows: DeliveryQuantity[] = delivery.items.map(item => ({ itemId: item.id, unit: item.unit, pendingQuantity: item.pendingQuantity, quantity: receiptQuantities[item.id] || 0 })); const checked = validateWarehouseReceipt(rows); if (!checked.valid) { appAlert('请检查收货数量', checked.reason || '至少填写一行本次收货数量'); return; } if (pendingDelivery && JSON.stringify(pendingDelivery.itemQuantities) !== JSON.stringify(checked.quantities)) { appAlert('待核请求不可修改', '请保持原数量和请求号，先刷新核对结果。'); return; } const envelope: WarehouseDeliveryPending = { factoryId, userId: String(user?.id || 'unknown'), transferId, requestKey, itemQuantities: checked.quantities, state: 'pending' }; if (!(await saveWarehouseDeliveryPending(envelope))) { appAlert('无法保存收货请求', '本机存储不可用，已阻止发送以避免重复收货。'); return; } setPendingDelivery(envelope); setSubmittingDelivery(true); try { const res = await transferApiClient.receiveWarehouseTransfer(transferId, { requestKey, itemQuantities: checked.quantities }, factoryId); if (!res.success) { await saveWarehouseDeliveryPending({ ...envelope, state: 'unknown' }); setDeliveryUnknown(true); appAlert('收货未完成', res.message || '后端拒绝了收货，请刷新查看真实状态。'); return; } setDelivery(res.data); if (!warehouseDeliveryMatchesPending(res.data, envelope)) { await saveWarehouseDeliveryPending({ ...envelope, state: 'unknown' }); setDeliveryUnknown(true); appAlert('收货结果未知', '请刷新核对相同请求，确认前不会更换请求号。'); return; } const next = createWarehouseDeliveryUuid(); if (!(await persistResolvedWarehouseDelivery(envelope, next))) { setDeliveryUnknown(true); appAlert('收货已提交但本机未完成安全轮换', '请刷新核对结果后再继续。'); return; } setPendingDelivery(null); setReceiptQuantities({}); setDeliveryUnknown(false); setRequestKey(next); appAlert('成功', '本次收货已记录'); } catch (error) { await saveWarehouseDeliveryPending({ ...envelope, state: 'unknown' }); setPendingDelivery(envelope); setDeliveryUnknown(true); await loadDelivery(); appAlert('收货结果未知', `${error instanceof Error ? error.message : '网络请求失败'}\n请刷新查看真实状态。`); } finally { setSubmittingDelivery(false); } };
 
   const handleAction = async (action: string) => {
     const labels: Record<string, string> = {
       request: '提交申请', approve: '审批通过', reject: '驳回',
       ship: '确认发运', receive: '确认签收', confirm: '确认入库', cancel: '取消',
     };
-    Alert.alert('确认', `确认${labels[action]}？`, [
+    appAlert('确认', `确认${labels[action]}？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
         try {
@@ -88,9 +89,9 @@ export default function TransferDetailScreen() {
           const fn = actionMap[action];
           if (fn) {
             const res = await fn(transferId);
-            if (res?.success) { Alert.alert('成功', '操作成功'); loadTransfer(); }
+            if (res?.success) { appAlert('成功', '操作成功'); loadTransfer(); }
           }
-        } catch { Alert.alert('错误', '操作失败'); }
+        } catch { appAlert('错误', '操作失败'); }
       }},
     ]);
   };
@@ -215,7 +216,7 @@ export default function TransferDetailScreen() {
               {deliveryLoading ? <ActivityIndicator /> : !delivery ? <Text>交付状态读取失败，请点击刷新重试。</Text> : !delivery.supported ? <Text>此单暂不支持分步交付，请使用原一次确认流程或完善批次。</Text> : <>
                 {deliveryUnknown ? <Text style={styles.unknownText}>上次收货结果未知，请刷新核对相同请求；未核实前不会更换请求号。</Text> : null}<Text style={styles.contextText}>单号：{delivery.transferNumber}　阶段：{delivery.staged ? (delivery.stage === 'CONFIRMED' ? '已收齐' : '部分待收') : '待发运'}</Text>
                     {delivery.items.map(item => <View key={item.id} style={styles.deliveryRow}><Text style={styles.deliveryName}>{item.itemName} · 批次 {item.sourceBatchId}</Text><Text>已发 {item.shippedQuantity} / 已收 {item.receivedQuantity} / 待收 {item.pendingQuantity} {item.unit}</Text>{item.receipts.map(receipt => <Text key={`${receipt.operationId}-${receipt.requestKey}`}>收货批次 {receipt.targetBatchId}：{receipt.quantity} {receipt.unit}</Text>)}{delivery.staged && item.pendingQuantity > 0 ? <TextInput testID={`warehouse-delivery-qty-${item.id}`} label="本次收货" value={String(receiptQuantities[item.id] ?? '')} onChangeText={value => setReceiptQuantities(current => ({ ...current, [item.id]: Number(value) || 0 }))} keyboardType="numeric" mode="outlined" disabled={submittingDelivery} style={styles.receiptInput} /> : null}</View>)}
-                    <View style={styles.actionBar}>{!delivery.staged && transfer.status === 'APPROVED' && canWriteWarehouse ? <Button mode="contained" onPress={dispatchWarehouse} loading={submittingDelivery} disabled={submittingDelivery} style={styles.actionBtn}>确认仓内发运</Button> : null}{delivery.staged && delivery.items.some(item => item.pendingQuantity > 0) && canWriteWarehouse ? <Button testID="warehouse-delivery-submit" mode="contained" onPress={receiveWarehouse} loading={submittingDelivery} disabled={submittingDelivery} style={styles.actionBtn}>提交本次收货</Button> : null}</View>
+                    {canWriteWarehouse ? <View style={styles.actionBar}>{!delivery.staged && transfer.status === 'APPROVED' ? <Button mode="contained" onPress={dispatchWarehouse} loading={submittingDelivery} disabled={submittingDelivery} style={styles.actionBtn}>确认仓内发运</Button> : null}{delivery.staged && delivery.items.some(item => item.pendingQuantity > 0) ? <Button testID="warehouse-delivery-submit" mode="contained" onPress={receiveWarehouse} loading={submittingDelivery} disabled={submittingDelivery} style={styles.actionBtn}>提交本次收货</Button> : null}</View> : null}
               </>}
             </Card.Content>
           </Card>
@@ -223,6 +224,7 @@ export default function TransferDetailScreen() {
 
         <View style={{ height: 30 }} />
       </ScrollView>
+      <AppDialogHost />
     </View>
   );
 }
