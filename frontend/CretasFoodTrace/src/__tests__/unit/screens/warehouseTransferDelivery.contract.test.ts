@@ -1,17 +1,20 @@
 // @ts-nocheck
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createWarehouseDeliveryRequestKey, getOrCreateWarehouseDeliveryRequestKey, validateWarehouseReceipt, warehouseDeliveryMatchesPending, type WarehouseDeliveryPending, type WarehouseTransferDelivery } from '../../../utils/warehouseTransferDelivery';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const screen = readFileSync(resolve(__dirname, '../../../screens/factory-admin/inventory/TransferDetailScreen.tsx'), 'utf8');
-const mockGetTransfer = jest.fn(); const mockGetDelivery = jest.fn();
-jest.mock('../../../services/api/transferApiClient', () => ({ transferApiClient: { getTransfer: (...args: unknown[]) => mockGetTransfer(...args), getWarehouseDelivery: (...args: unknown[]) => mockGetDelivery(...args), dispatchWarehouseTransfer: jest.fn(), receiveWarehouseTransfer: jest.fn() } }));
+const mockGetTransfer = jest.fn(); const mockGetDelivery = jest.fn(); const mockReceive = jest.fn();
+jest.mock('../../../services/api/transferApiClient', () => ({ transferApiClient: { getTransfer: (...args: unknown[]) => mockGetTransfer(...args), getWarehouseDelivery: (...args: unknown[]) => mockGetDelivery(...args), dispatchWarehouseTransfer: jest.fn(), receiveWarehouseTransfer: (...args: unknown[]) => mockReceive(...args) } }));
 jest.mock('../../../store/authStore', () => ({ useAuthStore: () => ({ user: { id: 7, factoryId: 'F1', factoryUser: { factoryId: 'F1' } } }) }));
+jest.mock('../../../utils/permissionHelper', () => ({ hasModulePermission: () => true }));
 jest.mock('@react-navigation/native', () => ({ useNavigation: () => ({ goBack: jest.fn() }), useRoute: () => ({ params: { transferId: 'T1' } }) }));
 const TransferDetailScreen = require('../../../screens/factory-admin/inventory/TransferDetailScreen').default;
 
 describe('warehouse delivery contract', () => {
+  beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); });
   it('uses incremental quantities and prevents over-receipt', () => {
     expect(validateWarehouseReceipt([{ itemId: 1, unit: 'kg', pendingQuantity: 0.1, quantity: 0.04 }])).toMatchObject({ valid: true, quantities: { 1: 0.04 } });
     expect(validateWarehouseReceipt([{ itemId: 1, unit: 'kg', pendingQuantity: 0.06, quantity: 0.07 }]).valid).toBe(false);
@@ -56,5 +59,50 @@ describe('warehouse delivery contract', () => {
     await waitFor(() => expect(mockGetDelivery).toHaveBeenCalledTimes(1));
     fireEvent.press(view.getByTestId('transfer-detail-refresh'));
     await waitFor(() => expect(mockGetDelivery.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+  it('mounts 0.04 success, remounts, then submits 0.06 with a fresh UUID', async () => {
+    const base = { supported: true, staged: true, stage: '部分待收', transferId: 'T1', transferNumber: 'TRF-1', inTransitByUnit: {} };
+    const delivery = (pendingQuantity: number, requestKey?: string) => ({ ...base, items: [{ id: 1, itemName: '原料', unit: 'kg', sourceBatchId: 'SRC', shippedQuantity: 0.1, receivedQuantity: 0.1 - pendingQuantity, pendingQuantity, receipts: requestKey ? [{ requestKey, operationId: `op-${requestKey}`, targetBatchId: 'B1', quantity: 0.1 - pendingQuantity, unit: 'kg', actorId: 7, createdAt: '' }] : [] }] });
+    mockGetTransfer.mockResolvedValue({ success: true, data: { id: 'T1', transferNumber: 'TRF-1', transferType: 'WAREHOUSE_TO_WAREHOUSE', sourceFactoryId: 'F1', targetFactoryId: 'F1', status: 'APPROVED', totalAmount: 0, transferDate: '', items: [] } });
+    mockGetDelivery.mockResolvedValue({ success: true, data: delivery(0.1) });
+    mockReceive.mockImplementation(async (_id: string, payload: { requestKey: string; itemQuantities: Record<number, number> }) => ({ success: true, data: delivery(0.1 - payload.itemQuantities[1], payload.requestKey) }));
+    const first = render(React.createElement(TransferDetailScreen));
+    await waitFor(() => expect(first.getByTestId('warehouse-delivery-qty-1')).toBeTruthy());
+    fireEvent.changeText(first.getByTestId('warehouse-delivery-qty-1'), '0.04');
+    fireEvent.press(first.getByTestId('warehouse-delivery-submit'));
+    await waitFor(() => expect(mockReceive).toHaveBeenCalledTimes(1));
+    const firstKey = mockReceive.mock.calls[0][1].requestKey;
+    first.unmount();
+    const second = render(React.createElement(TransferDetailScreen));
+    await waitFor(() => expect(second.getByTestId('warehouse-delivery-qty-1')).toBeTruthy());
+    fireEvent.changeText(second.getByTestId('warehouse-delivery-qty-1'), '0.06');
+    fireEvent.press(second.getByTestId('warehouse-delivery-submit'));
+    await waitFor(() => expect(mockReceive).toHaveBeenCalledTimes(2));
+    expect(mockReceive.mock.calls[1][1].itemQuantities).toEqual({ 1: 0.06 });
+    expect(mockReceive.mock.calls[1][1].requestKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4/);
+    expect(mockReceive.mock.calls[1][1].requestKey).not.toBe(firstKey);
+    second.unmount();
+  });
+  it('keeps the original pending envelope locked after resolved persistence fails and remounts', async () => {
+    const base = { supported: true, staged: true, stage: '部分待收', transferId: 'T1', transferNumber: 'TRF-1', inTransitByUnit: {} };
+    const delivery = (requestKey?: string) => ({ ...base, items: [{ id: 1, itemName: '原料', unit: 'kg', sourceBatchId: 'SRC', shippedQuantity: 0.1, receivedQuantity: requestKey ? 0.04 : 0, pendingQuantity: requestKey ? 0.06 : 0.1, receipts: requestKey ? [{ requestKey, operationId: 'op-1', targetBatchId: 'B1', quantity: 0.04, unit: 'kg', actorId: 7, createdAt: '' }] : [] }] });
+    mockGetTransfer.mockResolvedValue({ success: true, data: { id: 'T1', transferNumber: 'TRF-1', transferType: 'WAREHOUSE_TO_WAREHOUSE', sourceFactoryId: 'F1', targetFactoryId: 'F1', status: 'APPROVED', totalAmount: 0, transferDate: '', items: [] } });
+    mockGetDelivery.mockResolvedValue({ success: true, data: delivery() });
+    mockReceive.mockImplementation(async (_id: string, payload: { requestKey: string }) => ({ success: true, data: delivery(payload.requestKey) }));
+    const defaultSetItem = (AsyncStorage.setItem as jest.Mock).getMockImplementation()!;
+    (AsyncStorage.setItem as jest.Mock).mockImplementation(async (key: string, value: string) => { if (key.includes('warehouse-delivery-pending') && value.includes('"state":"resolved"')) throw new Error('storage full'); return defaultSetItem(key, value); });
+    const first = render(React.createElement(TransferDetailScreen));
+    await waitFor(() => expect(first.getByTestId('warehouse-delivery-qty-1')).toBeTruthy());
+    fireEvent.changeText(first.getByTestId('warehouse-delivery-qty-1'), '0.04');
+    fireEvent.press(first.getByTestId('warehouse-delivery-submit'));
+    await waitFor(() => expect(mockReceive).toHaveBeenCalledTimes(1));
+    first.unmount();
+    const second = render(React.createElement(TransferDetailScreen));
+    await waitFor(() => expect(second.getByTestId('warehouse-delivery-qty-1')).toBeTruthy());
+    fireEvent.changeText(second.getByTestId('warehouse-delivery-qty-1'), '0.06');
+    fireEvent.press(second.getByTestId('warehouse-delivery-submit'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mockReceive).toHaveBeenCalledTimes(1);
+    second.unmount();
   });
 });

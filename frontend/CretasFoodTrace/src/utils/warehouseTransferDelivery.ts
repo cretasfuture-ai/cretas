@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import 'react-native-get-random-values';
-function uuidv4(): string { const bytes = new Uint8Array(16); globalThis.crypto.getRandomValues(bytes); bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40; bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80; const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; }
+export function createWarehouseDeliveryUuid(): string { const bytes = new Uint8Array(16); globalThis.crypto.getRandomValues(bytes); bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40; bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80; const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; }
 export interface DeliveryQuantity { itemId: number; unit: string; pendingQuantity: number; quantity: number; }
 export interface WarehouseDeliveryReceipt { requestKey: string; operationId: string; targetBatchId: string; quantity: number; unit: string; actorId: number; createdAt: string; }
 export interface WarehouseDeliveryItem { id: number; itemName: string; unit: string; sourceBatchId: string; shippedQuantity: number; receivedQuantity: number; pendingQuantity: number; receipts: WarehouseDeliveryReceipt[]; }
@@ -11,7 +11,7 @@ export function createWarehouseDeliveryRequestKey(factoryId: string, userId: str
   const key = `warehouse-delivery:${factoryId}:${userId}:${transferId}`;
   const existing = globalThis.localStorage?.getItem(key) || requestKeys.get(key);
   if (existing) return existing;
-  const generated = uuidv4();
+  const generated = createWarehouseDeliveryUuid();
   try { globalThis.localStorage?.setItem(key, generated); } catch { /* native uses AsyncStorage helper below */ }
   requestKeys.set(key, generated);
   return generated;
@@ -19,7 +19,7 @@ export function createWarehouseDeliveryRequestKey(factoryId: string, userId: str
 export async function getOrCreateWarehouseDeliveryRequestKey(factoryId: string, userId: string, transferId: string): Promise<string | null> {
   const key = `warehouse-delivery:${factoryId}:${userId}:${transferId}`;
   try { const persisted = await AsyncStorage.getItem(key); if (persisted) { requestKeys.set(key, persisted); return persisted; } } catch { return null; }
-  const generated = requestKeys.get(key) || uuidv4(); requestKeys.set(key, generated);
+  const generated = requestKeys.get(key) || createWarehouseDeliveryUuid(); requestKeys.set(key, generated);
   try { await AsyncStorage.setItem(key, generated); } catch { requestKeys.delete(key); return null; }
   return generated;
 }
@@ -38,7 +38,7 @@ export async function persistResolvedWarehouseDelivery(pending: WarehouseDeliver
   } catch { return false; }
 }
 export async function rotateWarehouseDeliveryRequestKey(factoryId: string, userId: string, transferId: string): Promise<string | null> {
-  const key = `warehouse-delivery:${factoryId}:${userId}:${transferId}`; const generated = uuidv4(); requestKeys.set(key, generated);
+  const key = `warehouse-delivery:${factoryId}:${userId}:${transferId}`; const generated = createWarehouseDeliveryUuid(); requestKeys.set(key, generated);
   try { await AsyncStorage.setItem(key, generated); } catch { requestKeys.delete(key); return null; }
   return generated;
 }

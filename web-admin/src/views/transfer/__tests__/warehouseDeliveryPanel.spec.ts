@@ -38,5 +38,6 @@ describe('warehouse delivery panel wiring', () => {
     await flushPromises();
     expect(dispatch).toHaveBeenCalledWith('F1', 'T1');
     expect(getDelivery).toHaveBeenCalledTimes(2);
+    expect(wrapper.emitted('changed')).toHaveLength(1);
   });
 });
