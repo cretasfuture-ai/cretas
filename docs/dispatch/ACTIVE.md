@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `ERP-S6-B3C-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a844845c4b63ba0baabdd23a05bc18ba18dce432 — PR1099/a2be406精确11文件事实接收、集成HOLD；C1仅4文件修slot，见archive/2026-10-22-s6-b3c-review.md。
+
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
 - `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — V72被动5文件；待原Owner回传独立WT后claim；无runtime scope，见archive/2026-10-22-native-date-v72-registration.md。
@@ -105,6 +107,9 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `ERP-S6-B3C-CLAUDE-20261022` — 原Claude唯一Owner；仅C1 slot四文件可续修，其余B3C/新共享文件HOLD；精确路径/命令见archive/2026-10-22-s6-b3c-review.md。
+
 
 
 - `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：仅FactorySchedulerConfig/FactoryTriggerChain Entity、V72及2个RunAs PG/JPA测试；queued待原Owner独立WT确认，runtime/Gateway/Skill/Orchestrator无scope，详细全路径与门禁见登记归档。
