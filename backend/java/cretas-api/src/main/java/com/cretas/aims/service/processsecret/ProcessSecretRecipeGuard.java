@@ -70,25 +70,32 @@ public class ProcessSecretRecipeGuard {
         AuthenticatedActor actor = currentActor();
         java.util.List<BomRecipe> allowed = new java.util.ArrayList<>();
         java.util.Map<String, String> skipped = new java.util.LinkedHashMap<>();
-        java.util.Map<String, ProcessSecretAccessService.Decision> byProduct = new java.util.HashMap<>();
+        // 先逐产品判定并写审计; 放行但审计写不进去的, 与 require() 一致按拒绝处理
+        java.util.Map<String, Boolean> editable = new java.util.HashMap<>();
         for (BomRecipe recipe : recipes) {
             String product = recipe.getProductTypeId();
-            ProcessSecretAccessService.Decision decision = product == null ? null : byProduct.computeIfAbsent(
-                    product, p -> accessService.decide(actor, factoryId, p, ProcessSecretAction.EDIT));
-            if (decision != null && !decision.permitted()) {
+            if (product == null || editable.containsKey(product)) continue;
+            ProcessSecretAccessService.Decision decision = accessService.decide(actor, factoryId, product,
+                    ProcessSecretAction.EDIT);
+            if (!decision.isProtected()) {
+                editable.put(product, true);
+            } else if (decision.permitted()) {
+                editable.put(product, accessService.audit(factoryId, product, actor, ProcessSecretAction.EDIT,
+                        "ALLOW", decision.reason(), resourceRef));
+            } else {
+                accessService.audit(factoryId, product, actor, ProcessSecretAction.EDIT, "DENY",
+                        decision.reason() + "（全厂批量已跳过）", resourceRef);
+                editable.put(product, false);
+            }
+        }
+        for (BomRecipe recipe : recipes) {
+            String product = recipe.getProductTypeId();
+            if (product != null && !editable.getOrDefault(product, true)) {
                 skipped.put(recipe.getId(), "工艺保密：无编辑授权，已跳过");
                 continue;
             }
             allowed.add(recipe);
         }
-        byProduct.forEach((product, decision) -> {
-            if (decision.isProtected()) {
-                accessService.audit(factoryId, product, actor, ProcessSecretAction.EDIT,
-                        decision.permitted() ? "ALLOW" : "DENY",
-                        decision.permitted() ? decision.reason() : decision.reason() + "（全厂批量已跳过）",
-                        resourceRef);
-            }
-        });
         return new Partition(allowed, skipped);
     }
 

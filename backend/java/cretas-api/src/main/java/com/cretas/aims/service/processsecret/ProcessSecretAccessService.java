@@ -88,7 +88,18 @@ public class ProcessSecretAccessService {
     }
 
     public void invalidate(String factoryId) {
-        if (factoryId != null) protectedByFactory.remove(factoryId);
+        if (factoryId == null) return;
+        protectedByFactory.remove(factoryId);
+        // 写策略的事务提交前, 并发读可能把旧名单重新载入缓存; 提交后再清一次 (复审第三轮)
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            protectedByFactory.remove(factoryId);
+                        }
+                    });
+        }
     }
 
     public Decision decide(AuthenticatedActor actor, String factoryId, String productTypeId, ProcessSecretAction action) {

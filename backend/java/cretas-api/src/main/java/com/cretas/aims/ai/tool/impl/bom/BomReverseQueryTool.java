@@ -115,8 +115,17 @@ public class BomReverseQueryTool extends AbstractBusinessTool {
                     impact.getRecipeBreakdown().removeIf(ri -> !processSecretGuard.permitsFullContent(
                             factoryId, ri.getRecipeId(), "AI tool bom_reverse_query"));
                     int hidden = before - impact.getRecipeBreakdown().size();
-                    if (hidden > 0 && impact.getWarnings() != null) {
-                        impact.getWarnings().add(hidden + " 个保密配方的明细未展示");
+                    if (hidden > 0) {
+                        // 总量只汇总可见配方: 否则「总差额 − 可见之和」就是隐藏配方的差额, 再除价差即用量
+                        impact.setTotalCostDelta(impact.getRecipeBreakdown().stream()
+                                .map(MaterialReplacementImpact.RecipeImpact::getCostDelta)
+                                .filter(java.util.Objects::nonNull)
+                                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add));
+                        impact.setAffectedRecipeCount(impact.getRecipeBreakdown().size());
+                        impact.setAffectedItemCount(0);
+                        if (impact.getWarnings() != null) {
+                            impact.getWarnings().add(hidden + " 个保密配方未计入，合计只含可见配方");
+                        }
                     }
                 }
                 return buildSimpleResult("替换影响: " + impact.getAffectedRecipeCount() + " BOM 受影响, "

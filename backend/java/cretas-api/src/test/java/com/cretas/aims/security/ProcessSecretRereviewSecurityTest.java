@@ -322,4 +322,104 @@ class ProcessSecretRereviewSecurityTest {
         verify(users).updateUser(F, OWNER, samePhone);
         verify(users).updateUser(F, 30L, changePhone);
     }
+
+    // ------------------------------------------------------------- third review follow-ups
+
+    @Test
+    void requisitionWhosePlanWasDeletedIsRestrictedButManualOneIsNot() {
+        ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
+        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, json);
+        FactoryMaterialRequisition orphan = new FactoryMaterialRequisition();
+        orphan.setId("mr-9");
+        orphan.setFactoryId(F);
+        orphan.setProductionPlanId("plan-deleted");
+        orphan.setRemarks("香料 3.25kg");
+        Object out = advice.beforeBodyWrite(Map.of("success", true, "data", orphan), null,
+                MediaType.APPLICATION_JSON, null, apiRequest(user(77)), null);
+        assertThat(json.valueToTree(out).toString()).contains("RESTRICTED").doesNotContain("3.25");
+
+        FactoryMaterialRequisitionRepository requisitions = mock(FactoryMaterialRequisitionRepository.class);
+        when(requisitions.findById("mr-9")).thenReturn(Optional.of(orphan));
+        ProcessSecretGuardInterceptor guard = interceptor(mock(ProductionBatchRepository.class), requisitions);
+        assertCode(403, () -> guard.resolveProducts(guardOf(com.cretas.aims.controller.PrintController.class,
+                "printMaterialRequisition"), F, Map.of("factoryId", F, "id", "mr-9"), new MockHttpServletRequest()));
+
+        // 阳性对照: 手工领料单 (无计划) 照常可打印、可读
+        FactoryMaterialRequisition manual = new FactoryMaterialRequisition();
+        manual.setId("mr-10");
+        manual.setFactoryId(F);
+        when(requisitions.findById("mr-10")).thenReturn(Optional.of(manual));
+        assertThat(guard.resolveProducts(guardOf(com.cretas.aims.controller.PrintController.class,
+                "printMaterialRequisition"), F, Map.of("factoryId", F, "id", "mr-10"), new MockHttpServletRequest()))
+                .isEmpty();
+    }
+
+    @Test
+    void factoryWideBatchSkipsProtectedRecipeWhenAllowCannotBeAudited() {
+        ProcessSecretAuditRecorder failing = mock(ProcessSecretAuditRecorder.class);
+        org.mockito.Mockito.doThrow(new IllegalStateException("audit down")).when(failing)
+                .record(any(), any(), any(), any(), any(), any(), any());
+        ProcessSecretGrantRepository grants = mock(ProcessSecretGrantRepository.class);
+        when(grants.findActive(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
+        ProcessSecretAccessService strict = new ProcessSecretAccessService(policies, grants, failing);
+        ProcessSecretRecipeGuard guard = new ProcessSecretRecipeGuard(recipes, strict);
+        actAs(user(OWNER));
+        ProcessSecretRecipeGuard.Partition p = guard.partitionForEdit(F,
+                List.of(recipes.findById("r1").orElseThrow()), false, "batch");
+        assertThat(p.allowed()).isEmpty();
+        assertThat(p.skipped()).containsOnlyKeys("r1");
+    }
+
+    @Test
+    void emptyPhoneOnOwnerWithoutPhoneIsNotTreatedAsAChange() {
+        com.cretas.aims.service.UserService users = mock(com.cretas.aims.service.UserService.class);
+        com.cretas.aims.controller.UserController controller = new com.cretas.aims.controller.UserController(users,
+                mock(com.cretas.aims.service.MobileService.class),
+                mock(com.cretas.aims.repository.inventory.PurchaseOrderRepository.class));
+        UserRepository userRepo = mock(UserRepository.class);
+        User owner = new User();
+        owner.setId(OWNER);
+        owner.setFactoryId(F);
+        owner.setPhone(null);
+        when(userRepo.findByIdAndFactoryId(OWNER, F)).thenReturn(Optional.of(owner));
+        ReflectionTestUtils.setField(controller, "processSecretAccessService", access);
+        ReflectionTestUtils.setField(controller, "userRepository", userRepo);
+        actAs(user(11));
+        CreateUserRequest blank = new CreateUserRequest();
+        blank.setPhone("");
+        controller.updateUser(F, OWNER, blank);
+        verify(users).updateUser(F, OWNER, blank);
+    }
+
+    @Test
+    void replaceAnalysisTotalsOnlyCoverVisibleRecipes() throws Exception {
+        com.cretas.aims.service.bom.BomReverseQueryService reverse =
+                mock(com.cretas.aims.service.bom.BomReverseQueryService.class);
+        com.cretas.aims.dto.bom.MaterialReplacementImpact impact = new com.cretas.aims.dto.bom.MaterialReplacementImpact();
+        com.cretas.aims.dto.bom.MaterialReplacementImpact.RecipeImpact hidden =
+                new com.cretas.aims.dto.bom.MaterialReplacementImpact.RecipeImpact();
+        hidden.setRecipeId("r1");
+        hidden.setCostDelta(new BigDecimal("6.50"));
+        com.cretas.aims.dto.bom.MaterialReplacementImpact.RecipeImpact visible =
+                new com.cretas.aims.dto.bom.MaterialReplacementImpact.RecipeImpact();
+        visible.setRecipeId("r-plain");
+        visible.setCostDelta(new BigDecimal("1.25"));
+        impact.setRecipeBreakdown(new ArrayList<>(List.of(hidden, visible)));
+        impact.setTotalCostDelta(new BigDecimal("7.75"));
+        impact.setAffectedRecipeCount(2);
+        when(reverse.analyzeReplacement(F, "SPICE", "SPICE-2")).thenReturn(impact);
+        com.cretas.aims.ai.tool.impl.bom.BomReverseQueryTool tool = new com.cretas.aims.ai.tool.impl.bom.BomReverseQueryTool();
+        ReflectionTestUtils.setField(tool, "reverseQueryService", reverse);
+        ReflectionTestUtils.setField(tool, "processSecretGuard", new ProcessSecretRecipeGuard(recipes, access));
+        Method exec = tool.getClass().getDeclaredMethod("doExecute", String.class, Map.class, Map.class);
+        exec.setAccessible(true);
+        actAs(user(77));
+        exec.invoke(tool, F, Map.of("mode", "REPLACE_ANALYSIS", "materialId", "SPICE", "newMaterialId", "SPICE-2"),
+                Map.of());
+        // 「总差额 − 可见之和」不能再推出隐藏配方的 6.50
+        assertThat(impact.getTotalCostDelta()).isEqualByComparingTo("1.25");
+        assertThat(impact.getAffectedRecipeCount()).isEqualTo(1);
+        assertThat(impact.getRecipeBreakdown()).extracting(
+                com.cretas.aims.dto.bom.MaterialReplacementImpact.RecipeImpact::getRecipeId).containsExactly("r-plain");
+    }
 }

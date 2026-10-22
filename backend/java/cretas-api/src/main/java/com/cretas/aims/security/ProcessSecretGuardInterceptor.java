@@ -105,7 +105,16 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
                 if (raw != null) {
                     requisitionRepository.findById(raw)
                             .filter(r -> factoryId.equals(r.getFactoryId()))
-                            .ifPresent(r -> products.addAll(planProducts(factoryId, r.getProductionPlanId())));
+                            .ifPresent(r -> {
+                                Set<String> planProducts = planProducts(factoryId, r.getProductionPlanId());
+                                if (planProducts.isEmpty() && r.getProductionPlanId() != null
+                                        && !r.getProductionPlanId().isBlank()) {
+                                    // 计划已删而领料单还在: 无法确认产品, 本厂又有保密策略 → 拦 (不放行)
+                                    throw new com.cretas.aims.exception.BusinessException(403,
+                                            "无法确认该领料单所属产品，已按工艺保密拦截");
+                                }
+                                products.addAll(planProducts);
+                            });
                 }
             }
             case BATCH_PATH -> parseLong(vars.get(guard.name()))

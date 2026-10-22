@@ -233,9 +233,16 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                     (v, s) -> {
                         com.cretas.aims.entity.factory.FactoryMaterialRequisition r =
                                 (com.cretas.aims.entity.factory.FactoryMaterialRequisition) v;
-                        return s.productsOfPlan(r.getFactoryId(), r.getProductionPlanId()).stream()
-                                .map(p -> new ProductKey(r.getFactoryId(), p)).toList();
-                    }, false,
+                        if (r.getProductionPlanId() == null || r.getProductionPlanId().isBlank()) {
+                            return java.util.List.<ProductKey>of();   // 手工领料单: 与工艺无关, 不判
+                        }
+                        java.util.Set<String> products = s.productsOfPlan(r.getFactoryId(), r.getProductionPlanId());
+                        if (products.isEmpty()) {
+                            // 关联的计划查不到 (已软删): 当作无法确认所属产品, 交给 fail-closed (复审第三轮)
+                            return java.util.Collections.singletonList(new ProductKey(r.getFactoryId(), null));
+                        }
+                        return products.stream().map(p -> new ProductKey(r.getFactoryId(), p)).toList();
+                    }, true,
                     (v, g) -> {
                         com.cretas.aims.entity.factory.FactoryMaterialRequisition r =
                                 (com.cretas.aims.entity.factory.FactoryMaterialRequisition) v;
