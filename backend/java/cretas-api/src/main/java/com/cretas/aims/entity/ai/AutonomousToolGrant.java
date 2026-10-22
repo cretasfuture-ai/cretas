@@ -48,6 +48,14 @@ public class AutonomousToolGrant {
     @Column(name = "parameters_digest", length = 128, nullable = false, updatable = false)
     private String parametersDigest;
 
+    /** Revision of the source config when issued; a different revision cannot consume. */
+    @Column(name = "config_revision", length = 64, nullable = false, updatable = false)
+    private String configRevision;
+
+    /** Tool descriptor version when issued; an upgraded tool cannot consume this grant. */
+    @Column(name = "descriptor_version", length = 64, nullable = false, updatable = false)
+    private String descriptorVersion;
+
     @Column(name = "max_runs", nullable = false, updatable = false)
     private Integer maxRuns;
 
@@ -74,8 +82,8 @@ public class AutonomousToolGrant {
     private Long version;
 
     public static AutonomousToolGrant issue(String id, String factoryId, String sourceType, String sourceRef,
-            String toolName, Long runAsUserId, String parametersDigest, int maxRuns, LocalDateTime expiresAt,
-            Long grantedBy, LocalDateTime now) {
+            String toolName, Long runAsUserId, String parametersDigest, String configRevision,
+            String descriptorVersion, int maxRuns, LocalDateTime expiresAt, Long grantedBy, LocalDateTime now) {
         AutonomousToolGrant grant = new AutonomousToolGrant();
         grant.id = id;
         grant.factoryId = factoryId;
@@ -84,6 +92,8 @@ public class AutonomousToolGrant {
         grant.toolName = toolName;
         grant.runAsUserId = runAsUserId;
         grant.parametersDigest = parametersDigest;
+        grant.configRevision = configRevision;
+        grant.descriptorVersion = descriptorVersion;
         grant.maxRuns = maxRuns;
         grant.usedRuns = 0;
         grant.expiresAt = expiresAt;
@@ -95,6 +105,12 @@ public class AutonomousToolGrant {
     /** Usable now: not revoked, not expired, budget left. */
     public boolean usableAt(LocalDateTime now) {
         return revokedAt == null && now.isBefore(expiresAt) && usedRuns < maxRuns;
+    }
+
+    /** Usable now for a run of this config revision and tool version. */
+    public boolean usableFor(String currentConfigRevision, String currentDescriptorVersion, LocalDateTime now) {
+        return usableAt(now) && configRevision.equals(currentConfigRevision)
+                && descriptorVersion.equals(currentDescriptorVersion);
     }
 
     public void consumeOne() {

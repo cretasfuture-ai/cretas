@@ -8,7 +8,11 @@ import com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord;
 import com.cretas.aims.repository.ai.AutonomousToolGrantRepository;
 import com.cretas.aims.repository.ai.AutonomousToolGrantRunRepository;
 import com.cretas.aims.repository.ai.ToolExecutionIdempotencyRepository;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,11 +45,34 @@ public class AutonomousGrantService {
      */
     public record Consumption(String grantId, String idempotencyKey, String descriptorVersion, boolean replay) { }
 
+    /**
+     * What a grant is bound to. A new run consumes only a grant matching all of it; a replay of an
+     * already consumed run key is found whatever the current config revision or tool version.
+     */
+    public record Binding(String factoryId, String sourceType, String sourceRef, String toolName, Long runAsUserId,
+            String parametersDigest, String configRevision, String descriptorVersion) { }
+
+    /**
+     * Revision of a scheduler config as far as a grant is concerned: any change to what runs, when,
+     * with which parameters or as whom gives a different revision. Execution metadata is not part of
+     * it (updated_at moves on every fire and cannot serve).
+     */
+    public static String configRevision(String taskCode, String cronExpression, String toolName,
+            String parametersDigest, Long runAsUserId) {
+        String canonical = String.join("\u001f", String.valueOf(taskCode), String.valueOf(cronExpression),
+                String.valueOf(toolName), String.valueOf(parametersDigest), String.valueOf(runAsUserId));
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Optional<Consumption> consume(String factoryId, String sourceType, String sourceRef, String toolName,
-            Long runAsUserId, String parametersDigest, String descriptorVersion, String runKey, LocalDateTime now) {
-        List<AutonomousToolGrant> bound = grants.lockBoundGrants(
-                factoryId, sourceType, sourceRef, toolName, runAsUserId, parametersDigest);
+    public Optional<Consumption> consume(Binding binding, String runKey, LocalDateTime now) {
+        List<AutonomousToolGrant> bound = grants.lockBoundGrants(binding.factoryId(), binding.sourceType(),
+                binding.sourceRef(), binding.toolName(), binding.runAsUserId(), binding.parametersDigest());
         for (AutonomousToolGrant grant : bound) {
             Optional<AutonomousToolGrantRun> seen = runs.findByGrantIdAndRunKey(grant.getId(), runKey);
             if (seen.isPresent()) {
@@ -55,11 +82,11 @@ public class AutonomousGrantService {
             }
         }
         for (AutonomousToolGrant grant : bound) {
-            if (grant.usableAt(now)) {
+            if (grant.usableFor(binding.configRevision(), binding.descriptorVersion(), now)) {
                 grant.consumeOne();
                 AutonomousToolGrantRun run = runs.save(
                         AutonomousToolGrantRun.record(UUID.randomUUID().toString(), grant.getId(), runKey,
-                                descriptorVersion, now));
+                                binding.descriptorVersion(), now));
                 grants.save(grant);
                 return Optional.of(new Consumption(grant.getId(), run.getIdempotencyKey(),
                         run.getDescriptorVersion(), false));
@@ -82,8 +109,7 @@ public class AutonomousGrantService {
     }
 
     @Transactional
-    public AutonomousToolGrant issue(String factoryId, String sourceType, String sourceRef, String toolName,
-            Long runAsUserId, String parametersDigest, int maxRuns, LocalDateTime expiresAt, Long grantedBy,
+    public AutonomousToolGrant issue(Binding binding, int maxRuns, LocalDateTime expiresAt, Long grantedBy,
             LocalDateTime now) {
         if (maxRuns < 1 || maxRuns > MAX_RUNS_LIMIT) {
             throw new IllegalArgumentException("maxRuns must be between 1 and " + MAX_RUNS_LIMIT);
@@ -91,8 +117,10 @@ public class AutonomousGrantService {
         if (!expiresAt.isAfter(now) || expiresAt.isAfter(now.plusDays(MAX_DAYS))) {
             throw new IllegalArgumentException("expiresAt must be in the future and within " + MAX_DAYS + " days");
         }
-        return grants.save(AutonomousToolGrant.issue(UUID.randomUUID().toString(), factoryId, sourceType, sourceRef,
-                toolName, runAsUserId, parametersDigest, maxRuns, expiresAt, grantedBy, now));
+        return grants.save(AutonomousToolGrant.issue(UUID.randomUUID().toString(), binding.factoryId(),
+                binding.sourceType(), binding.sourceRef(), binding.toolName(), binding.runAsUserId(),
+                binding.parametersDigest(), binding.configRevision(), binding.descriptorVersion(), maxRuns,
+                expiresAt, grantedBy, now));
     }
 
     @Transactional

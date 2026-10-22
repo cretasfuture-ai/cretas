@@ -1,8 +1,10 @@
 package com.cretas.aims.engine;
 
+import com.cretas.aims.engine.AutonomousGrantService.Binding;
 import com.cretas.aims.entity.ai.AutonomousToolGrant;
 import com.cretas.aims.repository.ai.AutonomousToolGrantRepository;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,8 @@ class AutonomousGrantRepositoryQueryValidationTest {
 
     private static final String DIGEST = "digest-a";
     private static final String V1 = "2.0.0";
+    private static final String REV = "rev-a";
+    private static final Binding BOUND = new Binding("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, REV, V1);
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
@@ -70,9 +74,9 @@ class AutonomousGrantRepositoryQueryValidationTest {
     }
 
     @Test void oneRunKeyConsumesOnceAndThenReplaysTheSameIdempotencyKey() {
-        AutonomousToolGrant grant = issue("F1", 5);
-        var first = consume("F1", 7L, DIGEST, "fire:1").orElseThrow();
-        var again = consume("F1", 7L, DIGEST, "fire:1").orElseThrow();
+        AutonomousToolGrant grant = issue(BOUND, 5);
+        var first = grants.consume(BOUND, "fire:1", now).orElseThrow();
+        var again = grants.consume(BOUND, "fire:1", now).orElseThrow();
 
         assertThat(first.replay()).isFalse();
         assertThat(again.replay()).isTrue();
@@ -81,12 +85,17 @@ class AutonomousGrantRepositoryQueryValidationTest {
         assertThat(repository.findById(grant.getId()).orElseThrow().getUsedRuns()).isEqualTo(1);
     }
 
-    @Test void replayKeepsTheDescriptorVersionOfTheFirstConsumptionAfterAToolUpgrade() {
-        issue("F1", 5);
-        var first = consume("F1", 7L, DIGEST, "fire:1").orElseThrow();
-        // The tool was upgraded before the replay: the replay still names the version the first run used.
-        var replay = grants.consume("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, "3.0.0", "fire:1", now)
-                .orElseThrow();
+    @Test void toolUpgradeOrConfigEditStopsNewRunsButAConsumedRunStillReplaysWithItsVersion() {
+        issue(BOUND, 5);
+        var first = grants.consume(BOUND, "fire:1", now).orElseThrow();
+        Binding upgraded = with(BOUND, null, "3.0.0");
+        Binding edited = with(BOUND, "rev-b", null);
+
+        // New runs under an upgraded tool or an edited config find no usable grant.
+        assertThat(grants.consume(upgraded, "fire:2", now)).isEmpty();
+        assertThat(grants.consume(edited, "fire:2", now)).isEmpty();
+        // The run already consumed replays, naming the version the first attempt used.
+        var replay = grants.consume(upgraded, "fire:1", now).orElseThrow();
         assertThat(first.descriptorVersion()).isEqualTo(V1);
         assertThat(replay.replay()).isTrue();
         assertThat(replay.descriptorVersion()).isEqualTo(V1);
@@ -95,42 +104,56 @@ class AutonomousGrantRepositoryQueryValidationTest {
                 .getSingleResult()).longValue()).isEqualTo(1);
     }
 
+    @Test void configRevisionChangesWithEveryRunDefiningFieldAndOnlyThose() {
+        String base = AutonomousGrantService.configRevision("expiry", "0 0 7 * * ?", "user_disable", DIGEST, 7L);
+        assertThat(AutonomousGrantService.configRevision("expiry", "0 0 7 * * ?", "user_disable", DIGEST, 7L))
+                .isEqualTo(base).hasSize(64);
+        assertThat(List.of(
+                AutonomousGrantService.configRevision("other", "0 0 7 * * ?", "user_disable", DIGEST, 7L),
+                AutonomousGrantService.configRevision("expiry", "0 0 8 * * ?", "user_disable", DIGEST, 7L),
+                AutonomousGrantService.configRevision("expiry", "0 0 7 * * ?", "product_create", DIGEST, 7L),
+                AutonomousGrantService.configRevision("expiry", "0 0 7 * * ?", "user_disable", "digest-b", 7L),
+                AutonomousGrantService.configRevision("expiry", "0 0 7 * * ?", "user_disable", DIGEST, 8L)))
+                .doesNotContain(base).doesNotHaveDuplicates();
+    }
+
     @Test void distinctRunKeysStopAtTheBudget() {
-        AutonomousToolGrant grant = issue("F1", 2);
-        assertThat(consume("F1", 7L, DIGEST, "fire:1")).isPresent();
-        assertThat(consume("F1", 7L, DIGEST, "fire:2")).isPresent();
-        assertThat(consume("F1", 7L, DIGEST, "fire:3")).isEmpty();
+        AutonomousToolGrant grant = issue(BOUND, 2);
+        assertThat(grants.consume(BOUND, "fire:1", now)).isPresent();
+        assertThat(grants.consume(BOUND, "fire:2", now)).isPresent();
+        assertThat(grants.consume(BOUND, "fire:3", now)).isEmpty();
         // An already consumed run key still replays after the budget is used up.
-        assertThat(consume("F1", 7L, DIGEST, "fire:2")).hasValueSatisfying(c -> assertThat(c.replay()).isTrue());
+        assertThat(grants.consume(BOUND, "fire:2", now)).hasValueSatisfying(c -> assertThat(c.replay()).isTrue());
         assertThat(repository.findById(grant.getId()).orElseThrow().getUsedRuns()).isEqualTo(2);
     }
 
     @Test void revokedOrExpiredGrantsAreNotConsumed() {
-        AutonomousToolGrant revoked = issue("F1", 5);
+        AutonomousToolGrant revoked = issue(BOUND, 5);
         assertThat(grants.revoke("F1", revoked.getId(), 7L, now)).isPresent();
-        assertThat(consume("F1", 7L, DIGEST, "fire:1")).isEmpty();
+        assertThat(grants.consume(BOUND, "fire:1", now)).isEmpty();
 
         clean();
-        AutonomousToolGrant live = issue("F1", 5);
-        assertThat(grants.consume("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, V1, "fire:1",
-                live.getExpiresAt())).isEmpty();
-        assertThat(grants.consume("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, V1, "fire:1",
-                live.getExpiresAt().minusNanos(1000))).isPresent();
+        AutonomousToolGrant live = issue(BOUND, 5);
+        assertThat(grants.consume(BOUND, "fire:1", live.getExpiresAt())).isEmpty();
+        assertThat(grants.consume(BOUND, "fire:1", live.getExpiresAt().minusNanos(1000))).isPresent();
     }
 
     @Test void grantOnlyAppliesToItsExactFactorySourceToolUserAndParameters() {
-        issue("F1", 5);
-        assertThat(consume("F2", 7L, DIGEST, "fire:1")).isEmpty();
-        assertThat(consume("F1", 8L, DIGEST, "fire:1")).isEmpty();
-        assertThat(consume("F1", 7L, "digest-b", "fire:1")).isEmpty();
-        assertThat(grants.consume("F1", "TRIGGER", "78", "user_disable", 7L, DIGEST, V1, "fire:1", now)).isEmpty();
-        assertThat(grants.consume("F1", "SCHEDULER", "79", "user_disable", 7L, DIGEST, V1, "fire:1", now)).isEmpty();
-        assertThat(grants.consume("F1", "SCHEDULER", "78", "product_create", 7L, DIGEST, V1, "fire:1", now)).isEmpty();
-        assertThat(consume("F1", 7L, DIGEST, "fire:1")).isPresent();
+        issue(BOUND, 5);
+        for (Binding other : List.of(
+                new Binding("F2", "SCHEDULER", "78", "user_disable", 7L, DIGEST, REV, V1),
+                new Binding("F1", "TRIGGER", "78", "user_disable", 7L, DIGEST, REV, V1),
+                new Binding("F1", "SCHEDULER", "79", "user_disable", 7L, DIGEST, REV, V1),
+                new Binding("F1", "SCHEDULER", "78", "product_create", 7L, DIGEST, REV, V1),
+                new Binding("F1", "SCHEDULER", "78", "user_disable", 8L, DIGEST, REV, V1),
+                new Binding("F1", "SCHEDULER", "78", "user_disable", 7L, "digest-b", REV, V1))) {
+            assertThat(grants.consume(other, "fire:1", now)).as(other.toString()).isEmpty();
+        }
+        assertThat(grants.consume(BOUND, "fire:1", now)).isPresent();
     }
 
     @Test void revokeAndListAreScopedToTheFactory() {
-        AutonomousToolGrant grant = issue("F1", 5);
+        AutonomousToolGrant grant = issue(BOUND, 5);
         assertThat(grants.revoke("F2", grant.getId(), 9L, now)).isEmpty();
         assertThat(grants.list("F2")).isEmpty();
         assertThat(grants.list("F1")).extracting(AutonomousToolGrant::getId).containsExactly(grant.getId());
@@ -138,26 +161,23 @@ class AutonomousGrantRepositoryQueryValidationTest {
     }
 
     @Test void issueBoundsBudgetAndExpiry() {
-        assertThatThrownBy(() -> grants.issue("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, 0,
-                now.plusDays(1), 7L, now)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> grants.issue("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST,
-                AutonomousGrantService.MAX_RUNS_LIMIT + 1, now.plusDays(1), 7L, now))
+        assertThatThrownBy(() -> grants.issue(BOUND, 0, now.plusDays(1), 7L, now))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> grants.issue("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, 1,
-                now, 7L, now)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> grants.issue("F1", "SCHEDULER", "78", "user_disable", 7L, DIGEST, 1,
-                now.plusDays(AutonomousGrantService.MAX_DAYS).plusMinutes(1), 7L, now))
+        assertThatThrownBy(() -> grants.issue(BOUND, AutonomousGrantService.MAX_RUNS_LIMIT + 1, now.plusDays(1), 7L, now))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> grants.issue(BOUND, 1, now, 7L, now)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> grants.issue(BOUND, 1, now.plusDays(AutonomousGrantService.MAX_DAYS).plusMinutes(1),
+                7L, now)).isInstanceOf(IllegalArgumentException.class);
         assertThat(grants.list("F1")).isEmpty();
     }
 
-    private AutonomousToolGrant issue(String factoryId, int maxRuns) {
-        return grants.issue(factoryId, "SCHEDULER", "78", "user_disable", 7L, DIGEST, maxRuns,
-                now.plusDays(1), 7L, now);
+    private AutonomousToolGrant issue(Binding binding, int maxRuns) {
+        return grants.issue(binding, maxRuns, now.plusDays(1), 7L, now);
     }
 
-    private Optional<AutonomousGrantService.Consumption> consume(String factoryId, Long user, String digest,
-            String runKey) {
-        return grants.consume(factoryId, "SCHEDULER", "78", "user_disable", user, digest, V1, runKey, now);
+    private static Binding with(Binding b, String revision, String version) {
+        return new Binding(b.factoryId(), b.sourceType(), b.sourceRef(), b.toolName(), b.runAsUserId(),
+                b.parametersDigest(), revision == null ? b.configRevision() : revision,
+                version == null ? b.descriptorVersion() : version);
     }
 }
