@@ -19,7 +19,8 @@
 | C3-general-knowledge | 改进模型靠通用流程和公开行业知识 | live | 意图标注、评测用的是说法文本，不是业务数字和配方；跨厂共享说法的问题记在 C1-no-cross-learning |
 | C3-no-capture | 默认不授权时，连训练素材都不记录 | pending | 线上 `smart_bi_distillation_samples` 仍在按工厂记录（2026-10-22：MOCK_REST 263、SEED_R 87、SEED_F 80、F006 73、LIUSHANMEN 49、CATTLE_3701_001 7、factory 为空 272）。要改成按授权才记录，并清理已存的样本（第 2 项） |
 | C4-provider | 阿里云百炼（通义千问）；按量付费 API 的调用数据不用于训练 | live | 阿里云官方页面 https://help.aliyun.com/zh/model-studio/ 的 FAQ「阿里云百炼会用我的数据进行训练吗？」写的是「使用百炼按量付费 API 和 Token Plan 团队版时，不会将您的数据用于模型训练」。Coding Plan 和 Token Plan 个人版不在这个承诺内，Steve 2026-10-22 确认账号都是按量付费。官方没写数据在哪里处理，所以页面上不写「境内处理」 |
-| C4-redact / C4-fail-closed | 发送前替换名称；替换失败就不发 | pending | Python `llm_redactor` 已上线（只替换名称）；Java `WorkdeskOutputSummarizer` 还没脱敏；fail-closed 在「方案审计与执行」分支上 |
+| C4-smartbi-redact | 智能报表分析发给模型前替换客户、门店、产品名称；替换失败就不发送 | live | #1096 上线（方案审计与执行，2026-10-22）。我独立核对：线上 8083 进程 17:37 启动，`common/llm_client.py` 里有 fail-closed（`EgressRedactionError`，失败时不发送）。名称替换只在 SmartBI insights 注册了 `RedactionScope` 的路径上生效，其余 Python 调用只用正则兜底 PII；**数字照常发送**，所以页面上不写「数字也脱敏」 |
+| C4-assistant-redact | 工厂 AI 助手（Java）发给模型前同样替换名称、失败不发 | pending | origin/main 0407cf7c85：`WorkdeskOutputSummarizer` 没有脱敏，Java 侧也没有脱敏类，查询结果原样发给 DashScope。已转告「方案审计与执行」 |
 | C5-hosting | 阿里云中国境内服务器，用户到系统全程 HTTPS | live | nginx TLS 1.2/1.3（`ops/nginx-vhosts-139/admin.cretaceousfuture.com.conf`）；服务器 IP 属于阿里云。注意：网关到应用服务器（139 → 47:8083）是明文，所以只写「你和系统之间」 |
 | C5-daily-backup | 每天凌晨自动备份，保留 7 天 | live | 2026-10-22 线上只读核查：crontab 03:00 `backup-db.sh` ＋ `/etc/cron.d/pg_backup`，`/etc/cron.d/cretas-backup-retention` 保留 7 天；当天三个库的备份文件都在 |
 | C5-offsite-encrypted | 备份加密，并在独立存储里另存一份 | pending | 现在和数据在同一台机器上，而且没有加密。2026-10-22 Steve 定了钥匙保管：服务器放一份，Steve 自己离线存一份。实施由「方案审计与执行」负责（第 5 项），要求做一次从异地副本恢复的演练 |

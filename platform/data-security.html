@@ -190,8 +190,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <div>
       <p class="ans" data-claim="C4-provider" data-claim-status="live">用的是阿里云百炼的通义千问。阿里云公开说明，按量付费 API 的调用数据不会用于模型训练。</p>
       <div class="how"><ul>
-        <li data-claim="C4-redact" data-claim-status="pending">交给模型分析之前，客户、门店、产品等名称会先替换成代号。</li>
-        <li data-claim="C4-fail-closed" data-claim-status="pending">替换不成功时，这次就不发送，而不是带着原文发出去。</li>
+        <li data-claim="C4-smartbi-redact" data-claim-status="live">智能报表分析把数据交给模型之前，会先把客户、门店、产品名称换成代号；换不成功，这次就不发送，不会带着原文发出去。</li>
+        <li data-claim="C4-assistant-redact" data-claim-status="pending">工厂 AI 助手把查询结果交给模型总结之前，同样先把名称换成代号，换不成功就不发送。</li>
       </ul></div>
       <span class="tagline">阿里云百炼 · 按量付费 API 不用于训练</span>
     </div>
