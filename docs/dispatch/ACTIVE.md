@@ -6,7 +6,9 @@
 
 ## 在飞任务
 
-- `ERP-S6-B3C-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a844845c4b63ba0baabdd23a05bc18ba18dce432 — PR1099/a2be406精确11文件事实接收、集成HOLD；C1仅4文件修slot，见archive/2026-10-22-s6-b3c-review.md。
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
+
+- `ERP-S6-B3C-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a844845c4b63ba0baabdd23a05bc18ba18dce432 — 1099/7f62471的C1增量5文件已审接收；新增测试先写后补审事实保留；C2/C3/集成/生产仍HOLD，详见archive/2026-10-22-s6-b3c-review.md。
 
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
@@ -27,7 +29,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — 02/03/04/10原QA通过；07HTTP/UI子例已验、Tool/Skill桥接推进中，整行未测；75=13/1/61，S0/S1未完；见archive/2026-10-22-s1-grant-callers.md。
+- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — 02/03/04/10原QA通过；07HTTP/UI/Tool/Skill子例已验、timer未闭合，整行未测；75=13/1/61，S0/S1未完；见archive/2026-10-22-s1-grant-callers.md。
 
 
 
@@ -107,7 +109,9 @@
 
 ## Scope 锁地图
 
-- `ERP-S6-B3C-CLAUDE-20261022` — 原Claude唯一Owner；仅C1 slot四文件可续修，其余B3C/新共享文件HOLD；精确路径/命令见archive/2026-10-22-s6-b3c-review.md。
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：原Claude Owner保留；当前只读追踪，writeScope=[]；禁止放宽平台角色、造蓝图、自动发布或修改既有采购/S6；原QA独占设备/浏览器/CSV。
+
+- `ERP-S6-B3C-CLAUDE-20261022` — 原Claude唯一Owner；C1实际5文件已接收后不重复修改/测试；新C2/C3写scope=[]待精确包审阅，Gateway/采购/供应商/Orchestrator未释放；路径/命令见archive/2026-10-22-s6-b3c-review.md。
 
 
 
