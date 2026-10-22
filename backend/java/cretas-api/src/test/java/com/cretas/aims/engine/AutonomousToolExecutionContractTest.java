@@ -287,11 +287,27 @@ class AutonomousToolExecutionContractTest {
                 .thenReturn(Optional.empty(), Optional.of(succeeded));
         var binding = SchedulerGrantBinding.of(schedule(78L, "dictionary_add", Map.of(), 42L), "1.0.0", new ObjectMapper());
 
-        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
-                "slot:1").status()).isEqualTo("OUTCOME_UNKNOWN");
-        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
-                "slot:1").status()).isEqualTo("SUCCESS");
+        var inFlight = runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
+                "slot:1");
+        var done = runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
+                "slot:1");
+        assertThat(inFlight.status()).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(done.status()).isEqualTo("SUCCESS");
+        assertThat(List.of(inFlight, done)).allMatch(AutonomousToolRunner.Outcome::replay);
         verifyNoInteractions(gateway, previewTokens);
+    }
+
+    @Test void aReplayedSlotDoesNotOverwriteTheStatusTheExecutingInstanceRecorded() throws Exception {
+        when(writeTool.getVersion()).thenReturn("1.0.0");
+        when(grants.consume(any(), any(), any())).thenReturn(Optional.of(
+                new AutonomousGrantService.Consumption("g1", "autonomous:g1:slot:1", "1.0.0", true)));
+        when(grants.gatewayRecord(any(), any(), any(), any())).thenReturn(Optional.empty());
+        FactorySchedulerConfig config = schedule(83L, "dictionary_add", Map.of(), 42L);
+        config.setLastExecutionStatus("SUCCESS");
+        when(schedulerRepo.findById(83L)).thenReturn(Optional.of(config));
+        runScheduled(config);
+        assertThat(config.getLastExecutionStatus()).isEqualTo("SUCCESS");
+        verify(schedulerRepo, never()).save(any());
     }
 
     @Test void configTimeGateRejectsWriteToolsAndIdentityParamsButLeavesUnknownToolsToTheRunner() {

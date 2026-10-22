@@ -255,6 +255,13 @@ public class DynamicSchedulerService {
                         "sched-" + config.getId() + "-" + config.getTaskCode(),
                         SchedulerGrantBinding.of(config, executor.get().getVersion(), objectMapper),
                         slotKey(config.getCronExpression(), startedAt));
+                if (outcome.replay()) {
+                    // Another fire of the same slot (second instance) consumed it: that fire records the
+                    // outcome. Writing ours would overwrite its SUCCESS with this instance's view.
+                    log.info("Scheduled task id={} slot already run elsewhere: {} {}", config.getId(),
+                            outcome.status(), safeError(outcome.error()));
+                    return;
+                }
                 String businessError = outcome.succeeded() && outcome.payload() != null
                         ? businessFailure(outcome.payload().toString()) : null;
                 if (!outcome.succeeded()) {

@@ -56,8 +56,14 @@ public class AutonomousToolRunner {
      * @param status persisted status, at most 20 characters
      * @param error  null on success; otherwise the reason, without parameters or payload
      * @param payload the gateway payload on success (may be null)
+     * @param replay  true when this run key was already consumed: nothing executed here, the status
+     *                is what the first attempt left (or OUTCOME_UNKNOWN while it is still in flight)
      */
-    public record Outcome(String status, String error, JsonNode payload) {
+    public record Outcome(String status, String error, JsonNode payload, boolean replay) {
+        public Outcome(String status, String error, JsonNode payload) {
+            this(status, error, payload, false);
+        }
+
         public boolean succeeded() { return "SUCCESS".equals(status); }
     }
 
@@ -170,14 +176,14 @@ public class AutonomousToolRunner {
             // Consumed but no gateway record: still in flight on another instance, or the first attempt
             // stopped before the gateway. Left for reconciliation, never retried here.
             return new Outcome("OUTCOME_UNKNOWN", "run already consumed grant " + consumed.grantId()
-                    + " but no gateway record exists (in flight elsewhere or interrupted); not retried", null);
+                    + " but no gateway record exists (in flight elsewhere or interrupted); not retried", null, true);
         }
         String detail = "replay of grant " + consumed.grantId() + " run (audit "
                 + record.get().getOriginalAuditEventId() + "): " + record.get().getState();
         return switch (record.get().getState()) {
-            case SUCCEEDED -> new Outcome("SUCCESS", null, null);
-            case FAILED -> new Outcome("FAILED", detail, null);
-            default -> new Outcome("OUTCOME_UNKNOWN", detail, null);
+            case SUCCEEDED -> new Outcome("SUCCESS", null, null, true);
+            case FAILED -> new Outcome("FAILED", detail, null, true);
+            default -> new Outcome("OUTCOME_UNKNOWN", detail, null, true);
         };
     }
 
