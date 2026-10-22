@@ -46,3 +46,15 @@ Source完成后SAFE零在途并回传精确版本/官方回执。原QA仍独占�
 Root 从 ACTIVE 归档本代码任务与 scope。最终必需完整检查/真实JPA证据、可信候选 Java/Web、精确依赖树/选择器和退出码见私有 `execution/source-s2-readiness-integration-20261022/`。候选 backend tree `07aa49351b85f788bd6fad4d6f708d470b5b349e`、Web tree `94a6e4cd530eb2243dc5e8fd0fb395a3a1972c2f`；本次仅归档文档，不重复产品测试或构建。
 
 本归档不声称正式发布或业务验收完成。发布仍由原Source从clean exact origin/main走官方入口；Root在官方回执完成后组织原QA真实S2-04/07及独立SQL。实际F006目录READY/蓝图绑定与包装换算资料尚有前置缺口，按原判据记录，不能用代码合并/制品/部署代替业务PASS。S0原FAIL/未测、S1-07采购timer和S6未交付项保持。
+
+## 官方发布与原 QA 实际结果（2026-10-22）
+
+本段接续前述“业务验收待执行”，历史记录保留。官方 clean exact-main `a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7` Java/Web 发布已实际完成：DEPLOY_EXIT=0、RELEASE_FINAL_STATUS 恰好一次，Java/Web build_count 均0，169秒。真实 upstream/active服务/健康和Web四方哈希来自完整统一回执，不重复探测。原Source actual CLI exit0/SAFE，产品源码零改。
+
+同一原QA actual CLI exit0/SAFE，实际正常工厂岗位菜单、Canvas仓库、供应原料和原料资料入口操作、截图、真实请求及独立数据库 before/after 已完成。Root独立解析24项/14控制、44账号保护和488权限保护：业务零变化，仅正常认证时间元数据变化。没有把后台200、源码或发布当UI通过。
+
+结果：S2-04仍未测，缺合格实施岗位证明及目录READY/正式蓝图样本；S2-07仍未测，部分目标页面可达，但工厂正常入口无法到达就绪报告，恢复保存正例与适用条件尚未完成。原QA登记 `ERP-S2-FACTORY-READINESS-ENTRY-001` OPEN/P2；没有伪造后端403或据无蓝图推断状态算法错误。原始判据、所有旧FAIL/未测和其他73场景原字节保留，旧18缺陷原字节保留，新增此一缺陷。canonical当前75场景13通过/1失败/61未测；全S0/S1/S2均未签收。
+
+实际证据：私有 `execution/s2-readiness-original-qa-runtime-20261022/receipt.json`、`source-gap.json`、`canonical-diff.json`、`exit.json`；`execution/s2-readiness-original-qa-db-20261022/`；`execution/coordination/root-s2-independent-after-accepted-20261022.json`。原始raw声明hash为LF文本，Windows落盘CRLF的字节hash另列，原文件未修改。
+
+续修任务 `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` queued，Owner保留原Claude `local_f6b118ce-f036-4ece-9a0b-322073b20c74`；Base a1e9fb8，等待原Owner独立WT/branch/精确文件包/验收命令确认，writeScope=[]，不得推定已领取或交接。仅正常工厂就绪入口与恢复再读问题；平台角色矩阵不全局放宽，不自动造/应用/发布蓝图，不改真实配方、产能、岗位权限或采购/S6链。Root保留接口/登记/集成/发布责任，原QA仍独占手机、浏览器、canonical。独立只读调查可并行，不释放代码写范围。
