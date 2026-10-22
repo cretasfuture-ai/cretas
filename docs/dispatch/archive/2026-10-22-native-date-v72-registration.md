@@ -88,3 +88,11 @@ ACK文件时间17:11:23，提交17:12:06，均早于本次Root claimed登记。�
 实测限制另列：应用曾向本机共享8083 efficiency发出健康探测并尝试embedding，未见业务写，但不能称完全外部服务隔离。保留原日志；后续隔离验证显式关闭非必需后台集成，不停止共享服务。候选启动健康与Owner主动停止导致的Maven退出分开记录，不把停止exit1吞成整段成功。
 
 隔离验证只写任务私有harness、target和独占一次性数据库，不扩大tracked源码scope；需补其他测试或公共脚本先申请文件。不复用别人的target/库/端口，不在Windows叠加第二重任务，不以资源点时快照当受保护并行窗口；两台既有机器按实际队列和Owner安排。生产数据库、迁移、部署、Runner/Gateway/Policy/DynamicScheduler/Skill/身份/Orchestrator及采购/供应商均无新增scope，生产cron不启动。S2正常入口另列queued待原Owner精确包，不作为本切片已领取或已交付。
+
+## 当前主线迁移撞号与后续保留（2026-10-22）
+
+Root现场复核：main0407cf7c（PR1096）新增V20261103_72__process_secret_access.sql，旧候选0ed的V20261103_72__autonomous_run_as_user.sql与其撞号。此前五路径零漂移结论仍为真，但不足以证明版本无冲突。旧0ed禁止原样合入、部署或触发新最终全量/构建；不改已入main的process-secret迁移。当前Owner旧应用冷回滚实际detached SHA为e4896543，保留在途结果，不能当0407集成通过。
+
+Root保留新顺序：run-as使用V20261103_73__autonomous_run_as_user.sql；后续B3A grant改为V20261103_74__autonomous_tool_grants.sql。原draft grant73保留撤销，不得独立合并。这里是编号/接口裁定，尚未收到原Owner对新Base/精确rename及断言/helper路径的ACK，新增源码writeScope=[]。旧exact5历史登记不自动授权新文件；Owner回包后再登记释放修订范围，任务ID中的V72仅为历史切片名。C2/C3/Gateway/生产任务未因此获得scope。
+
+明确不重复无关测试；新版本和新main实际受影响迁移/JPA/应用冷启动仍须验证。生产PG13不可用PG13导出文件或PG17代替，旧行真实Flyway前后读回与ScriptUtils证据分列。原日志与共享本机Python/embedding探测事实保留。Root已实际发送精确碰撞裁决至原Owner handoff文件及PR1075/1093评论；送达不等于已确认新scope或已实施。
