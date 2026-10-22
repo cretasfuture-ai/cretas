@@ -33,9 +33,11 @@ class AutonomousToolConfigContractTest {
     private final ToolRegistry registry = mock(ToolRegistry.class);
     private final FactorySchedulerConfigRepository schedulerRepo = mock(FactorySchedulerConfigRepository.class);
     private final FactoryTriggerChainRepository chainRepo = mock(FactoryTriggerChainRepository.class);
+    private final com.cretas.aims.engine.AutonomousGrantIssuer grantIssuer = mock(com.cretas.aims.engine.AutonomousGrantIssuer.class);
     private final BusinessRuleController rules = new BusinessRuleController(mock(FactoryValidationRuleRepository.class),
             mock(FactoryDefaultValueRepository.class), mock(FactoryFormulaRepository.class), schedulerRepo,
-            new DynamicSchedulerService(schedulerRepo, registry, mock(com.cretas.aims.engine.AutonomousToolRunner.class), new ObjectMapper()), new SandboxedSpelEvaluator());
+            new DynamicSchedulerService(schedulerRepo, registry, mock(com.cretas.aims.engine.AutonomousToolRunner.class), new ObjectMapper()), new SandboxedSpelEvaluator(),
+            grantIssuer);
     private final TriggerChainController chains = new TriggerChainController(mock(FactoryToolConfigRepository.class),
             mock(FactorySkillConfigRepository.class), chainRepo);
 
@@ -48,6 +50,11 @@ class AutonomousToolConfigContractTest {
         when(registry.getExecutor("inventory_reserve_stock")).thenReturn(Optional.of(write));
         when(schedulerRepo.findByFactoryIdAndTaskCode(any(), any())).thenReturn(Optional.empty());
         when(schedulerRepo.save(any())).thenAnswer(call -> call.getArgument(0));
+        // The issuer saves the config (and revokes grants on an edit) in one transaction.
+        when(grantIssuer.saveConfig(any(), any(), any(), any()))
+                .thenAnswer(call -> schedulerRepo.save(call.getArgument(0)));
+        when(grantIssuer.revisionOf(any())).thenAnswer(call -> "rev-" + ((FactorySchedulerConfig) call.getArgument(0))
+                .getCronExpression());
         when(chainRepo.findByFactoryIdAndChainCode(any(), any())).thenReturn(Optional.empty());
         when(chainRepo.save(any())).thenAnswer(call -> call.getArgument(0));
         registry(chains, registry);
@@ -80,6 +87,21 @@ class AutonomousToolConfigContractTest {
                 .isInstanceOf(BusinessException.class).hasMessageContaining("重新登录");
         verify(schedulerRepo, never()).save(any());
         verify(chainRepo, never()).save(any());
+    }
+
+    @Test void anEditHandsTheConfigsPriorRevisionAndTheEditorToTheGrantRevocation() {
+        FactorySchedulerConfig existing = schedule("material_expired_query", Map.of());
+        existing.setId(9L);
+        existing.setFactoryId("F001");
+        existing.setTaskCode("nightly");
+        existing.setCronExpression("0 0 7 * * ?");
+        when(schedulerRepo.findByFactoryIdAndTaskCode("F001", "nightly")).thenReturn(Optional.of(existing));
+        FactorySchedulerConfig edit = new FactorySchedulerConfig();
+        edit.setCronExpression("0 0 8 * * ?");
+        rules.setSchedulerConfig("F001", "nightly", edit);
+        // The revision is taken before the request's change, the save goes through the issuer.
+        verify(grantIssuer).saveConfig(eq(existing), eq("rev-0 0 7 * * ?"), eq(42L), any());
+        verify(schedulerRepo, never()).save(org.mockito.ArgumentMatchers.argThat(c -> c != existing));
     }
 
     @Test void schedulerPutRefusesWriteToolAndForeignFactoryParamWithoutSaving() {

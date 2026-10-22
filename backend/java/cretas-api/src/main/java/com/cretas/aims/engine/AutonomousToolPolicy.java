@@ -78,6 +78,11 @@ public final class AutonomousToolPolicy {
      * admin or a user of another factory cannot: there is no factory account to run as, and the
      * gateway only accepts this factory's users.
      */
+    /** The request's actor id when there is one (recorded as who revoked grants on a config edit). */
+    public static Long currentActorIdOrNull() {
+        return AuthenticatedActor.fromCurrentRequest().map(AuthenticatedActor::id).orElse(null);
+    }
+
     public static Long requireRunAsUser(String factoryId) {
         AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest()
                 .orElseThrow(() -> new BusinessException(401, "无法确认是谁启用了这项自动任务，请重新登录"));
