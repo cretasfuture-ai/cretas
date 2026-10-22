@@ -39,3 +39,5 @@ Base eb299396dc7c0a27ca22f24efe73112c2e130289；唯一UI Owner `/root/s308_ui`�
 - frontend/CretasFoodTrace/src/__tests__/unit/screens/warehouseTransferDelivery.contract.test.ts（新）
 
 验收：Web `npm exec -- vitest run src/views/transfer/__tests__/warehouseDeliveryPanel.spec.ts src/views/transfer/__tests__/transferDetailUnit.spec.ts src/views/transfer/__tests__/transferAwaitingConfirm.source.spec.ts --maxWorkers=2 --minWorkers=1`；RN `npm exec -- jest --runInBand src/__tests__/unit/screens/warehouseTransferDelivery.contract.test.ts src/__tests__/unit/screens/transferEnumLabels.contract.test.ts`；正常hook和diff检查。只目标测试，依赖独立安装、禁止junction/锁文件改动、Node≤2GB；不构建/发布/合并/生产写。原QA独占验收资源，源码实现不冒称APK/OTA或真机通过。细节/UX门控与反例见私有coordination/s308-ui-workpack-20261023.md。
+
+后端写Owner续行：原 `/root/s308_backend` 在 HEAD c87f4988d4bf05a6bce9781fc69684c6e31427e0 明确回传 SAFE_CODE_OWNER_RELEASED=true、activeTests=0、clean、无未收取session；Root自本安全点接管相同12文件继续DIRECT修复/目标验证。原WIP与失败保留，不并行写同scope。真实PG首个DDL仍是MySQL drop foreign key语法；未完成migration/PG守恒/rollback门禁，不能算通过。

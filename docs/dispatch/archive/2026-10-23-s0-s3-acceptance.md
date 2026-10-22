@@ -40,3 +40,5 @@ S3-08 实际入口检查发现产品缺口：同厂现有生命周期只有审�
 Claude 新 C2 回执已只读审阅，仍未获精确 scope ACK 且两层 REQUIRES_NEW 存在扣减提交、外层失败的漏执行窗口，集成 HOLD。具体裁决落交接目录 `Root-C2回执裁决与S308迁移协调-20261023.md`；未推定对方收到/领取。候选迁移77与Claude75/76合入前再核顺序。该审阅不阻塞 S3 源码修复。
 
 原 QA 已最终将 S3-08 签 FAIL，缺陷 `ERP-S3-TRANSFER-STAGES-001` OPEN；证据 `execution/s308-original-qa-final-signoff-20261023/receipt.json`。当前 canonical：15 通过/2 失败/58 未测；缺陷 18 closed/2 open。其他 74 行、原判据及 S3-06/S1通过证据不变。三项未执行阴性保留 NOT_EXECUTED；实际新业务写 0、浏览器/手机安全退出。首个源码 WIP 尚未通过交付审查，新增回归/JPA/PG仍必需，不能据旧测试绿或WIP commit称修复完成。
+
+S0 手机正常启动入口已由原 QA 补测，外层会话退出0且资源安全释放，证据 `execution/s0-native-current-launcher-20261023/receipt.json`。安装版本code16/1.0.5；个人页页脚显示v1.0.0，关于入口仅“功能开发中…”。本次未重启App进程、更新或改登录/业务数据；实际生效OTA/runtime/source仍UNKNOWN，不能用页脚或“无可用更新”替代版本来源。S0原失败及未测不变。S308前后端候选仍在修复，尚未合并/发布/原QA复验。
