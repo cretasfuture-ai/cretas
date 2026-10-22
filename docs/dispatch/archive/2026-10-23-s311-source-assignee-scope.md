@@ -1,5 +1,7 @@
 # ERP-S311-SOURCE-ASSIGNEE-20261023
 
+Root DIRECT supplementary CI scope: frontend/CretasFoodTrace/jest.config.js only; Base da5b4ce9003eaae1a597493a3c435c535a0b7f2c. Actual RN job120109438087 reached ~2GB V8 heap and failed without assertion failure. Recycle idle CI workers at768MB without changing tests, worker count, heap/resource limits or selection. Acceptance: existing TimeClockLocationRecovery targeted tests, Jest resolved config, then current full RN CI. Java/Web product trees unchanged; valid same-tree evidence remains reusable. No runner/process changes or production writes. Original failure retained in private s311-rn-ci-failure-20261023.
+
 Base e754b5e37006d13d0046a9f50f0e23df0b86344d。唯一写Owner /root/s311_source_assignee，Root协调/接口/正式检查/集成发布，原QA独占手机/浏览器/canonical CSV。WT C:/Users/Steve/cretas-s311-source-assignee-20261023，branch codex/s311-source-assignee-20261023。你不是唯一在代码库工作的人，不覆盖/回滚其他Owner改动，不生成孙代理。
 
 原QA真实1557/F006 normal Web已证明缺来源带入、检验ID与处理人数值手填，S3-11 FAIL，缺陷 ERP-S3-QUALITY-SOURCE-ASSIGNEE-001。原件私有execution/s311-source-original-qa-credential-verified-20261023/receipt.json及六张截图，业务写0；保存刷新/后端阴性未执行。Root单次只读核对现有文档化F006凭据与1557当前bcrypt一致，无密码/密文输出或落盘，无改角色/重置。
