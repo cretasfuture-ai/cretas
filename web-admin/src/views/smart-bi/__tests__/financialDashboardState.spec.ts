@@ -5,6 +5,7 @@ import {
   periodSelectionToRequest,
   periodRequestLabel,
   dashboardRenderKey,
+  createQueryHistory,
   chartGapReason,
   chartNotes,
   createDataVersion,
@@ -169,5 +170,65 @@ describe('dashboardRenderKey (每次生成完成都要重画图)', () => {
     const watcher = src.slice(src.lastIndexOf('watch(', body), body);
     expect(watcher.startsWith('watch(() => dashboardRenderKey(dashboardResponse.value, isGenerating.value)')).toBe(true);
     expect(watcher).not.toContain('charts.value.length');
+  });
+});
+
+describe('buildChartNav + 后端给的缺数据原因 (设计复评 2026-10-23)', () => {
+  const entries = [
+    { key: 'budget_achievement', label: '预算达成分析', group: '核心财务' },
+    { key: 'yoy_mom_comparison', label: '同环比分析', group: '核心财务' },
+    { key: 'pnl_waterfall', label: '损益表瀑布图', group: '核心财务' },
+    { key: 'channel_analysis', label: '渠道分析', group: '品类与渠道' },
+    { key: 'hr_cost_analysis', label: '人力成本分析', group: '运营专项' },
+  ];
+  const charts: Record<string, ChartLike> = {
+    budget_achievement: { echartsOption: { series: [] }, metadata: { dataQuality: 'good' } },
+    channel_analysis: { echartsOption: {}, metadata: { dataQuality: 'insufficient', reason: '没有「渠道」列', gapKind: 'column' } },
+    hr_cost_analysis: { echartsOption: {}, metadata: { dataQuality: 'insufficient', reason: '需要人工成本明细', gapKind: 'statement' } },
+  };
+  const unavailable = [
+    { chartType: 'yoy_mom_comparison', reason: '缺少「上年」列（如 上年、去年同期），在表里补上后重新上传。', gapKind: 'column' as const },
+    { chartType: 'pnl_waterfall', reason: '需要损益表：一列「项目」写科目…', gapKind: 'statement' as const },
+  ];
+
+  it('后端没出的图用后端写的原因, 不再是同一句通用话', () => {
+    const nav = buildChartNav(entries, k => charts[k], unavailable);
+    const byKey = Object.fromEntries(nav.missing.map(m => [m.key, m]));
+    expect(byKey.yoy_mom_comparison.reason).toContain('「上年」');
+    expect(byKey.pnl_waterfall.reason).toContain('损益表');
+    expect(nav.missing.every(m => m.reason !== '这份数据缺少这张图需要的列')).toBe(true);
+  });
+
+  it('按「补一列」和「需要另一张表」分组', () => {
+    const nav = buildChartNav(entries, k => charts[k], unavailable);
+    expect(nav.missingByKind.column.map(m => m.key)).toEqual(['yoy_mom_comparison', 'channel_analysis']);
+    expect(nav.missingByKind.statement.map(m => m.key)).toEqual(['pnl_waterfall', 'hr_cost_analysis']);
+  });
+
+  it('后端什么都没说时才退回通用说明 (旧后端兼容)', () => {
+    const nav = buildChartNav(entries, k => charts[k]);
+    const yoy = nav.missing.find(m => m.key === 'yoy_mom_comparison')!;
+    expect(yoy.reason).toBe('这份数据缺少这张图需要的列');
+    expect(yoy.kind).toBe('column');
+  });
+});
+
+describe('createQueryHistory (刷新失败时把筛选/期间退回到页面上正显示的那一次)', () => {
+  type Q = { slicers: Record<string, string[]>; period: { type: string; value: string } };
+
+  it('没成功过时没有可退回的', () => {
+    expect(createQueryHistory<Q>().lastApplied()).toBeNull();
+  });
+
+  it('退回的是成功那一次的值, 之后改动不影响它 (深拷贝)', () => {
+    const h = createQueryHistory<Q>();
+    const live: Q = { slicers: { 月份: [] }, period: { type: 'year', value: '2026' } };
+    h.commit(live);
+    live.slicers.月份.push('3月');
+    live.period.value = '2026-Q3';
+    const back = h.lastApplied()!;
+    expect(back).toEqual({ slicers: { 月份: [] }, period: { type: 'year', value: '2026' } });
+    back.slicers.月份.push('x');
+    expect(h.lastApplied()!.slicers.月份).toEqual([]);
   });
 });

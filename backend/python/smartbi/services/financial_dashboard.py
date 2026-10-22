@@ -127,6 +127,8 @@ class FinancialDashboardService:
             "headline": build_headline(df, column_mapping.value_kind, period["label"]),
             "charts": charts,
             "availableTypes": available,
+            # 出不了的图: 缺哪一列 / 要哪张表 (「还缺数据」)
+            "unavailableCharts": self.registry.list_unavailable(column_mapping),
             "period": period,
             "totalCharts": len(charts),
             "successCount": sum(1 for c in charts if c.get('success', False)),

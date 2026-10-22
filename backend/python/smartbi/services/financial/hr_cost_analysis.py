@@ -45,6 +45,8 @@ class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "hr_cost_analysis"
     display_name = "人力成本分析"
+    gap_kind = 'statement'
+    statement_hint = "需要人工成本明细：一列「项目」写工资、社保、福利、培训等，按月填金额。"
     description = "展示人力成本构成(薪资/福利/培训)的月度趋势及同比对比"
     required_columns = ['actual', 'period']
     display_order = 15
