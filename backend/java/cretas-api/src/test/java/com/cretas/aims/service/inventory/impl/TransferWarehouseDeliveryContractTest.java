@@ -122,6 +122,21 @@ class TransferWarehouseDeliveryContractTest {
         verify(batches, never()).save(any()); verifyNoInteractions(events);
     }
 
+    @Test void packagingAndFinishedGoodsRemainOutsideStagedDeliveryWithoutWrites() {
+        var dispatched = history.get(0);
+        for (TransferItemType type : List.of(TransferItemType.PACKAGING_MATERIAL, TransferItemType.FINISHED_GOODS)) {
+            history.clear(); history.add(dispatched); transfer.setStatus(TransferStatus.SHIPPED);
+            item.setItemType(type);
+            assertFalse(service.getWarehouseDelivery("F1", "T1").isSupported());
+            assertThrows(RuntimeException.class, () -> service.receiveWarehouseTransfer("F1", "T1", 9L, request("0.04")));
+            history.clear(); transfer.setStatus(TransferStatus.APPROVED);
+            assertThrows(RuntimeException.class, () -> service.dispatchWarehouseTransfer("F1", "T1", 9L));
+        }
+        verify(batches, never()).save(any()); verify(batches, never()).saveAndFlush(any());
+        verify(consumptions, never()).save(any()); verify(movements, never()).save(any());
+        assertEquals(BigDecimal.ZERO, source.getUsedQuantity());
+        assertEquals(BigDecimal.ZERO, item.getReceivedQuantity());
+    }
     @Test void dispatchRejectsCombinedDemandBeforeAnyWrite() {
         history.clear(); transfer.setStatus(TransferStatus.APPROVED);
         var second = new InternalTransferItem(); second.setId(8L); second.setItemType(TransferItemType.RAW_MATERIAL);

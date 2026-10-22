@@ -1385,7 +1385,7 @@ public class TransferServiceImpl implements TransferService {
         Map<String, MaterialBatch> sourceBatches = new TreeMap<>();
         Map<String, BigDecimal> requiredByBatch = new HashMap<>();
         for (InternalTransferItem item : transfer.getItems()) {
-            if (item.getItemType() != TransferItemType.RAW_MATERIAL || item.getSourceBatchId() == null
+            if (!supportsWarehouseDeliveryItem(item) || item.getSourceBatchId() == null
                     || item.getSourceBatchId().isBlank() || item.getQuantity() == null
                     || item.getQuantity().signum() <= 0 || item.getQuantity().stripTrailingZeros().scale() > 4
                     || !hasText(item.getUnit())) {
@@ -1489,7 +1489,7 @@ public class TransferServiceImpl implements TransferService {
             BigDecimal recordedReceived = history.stream().filter(m -> m.getKind() == WarehouseTransferMovement.Kind.RECEIPT
                     && Objects.equals(m.getTransferItemId(), item.getId())).map(WarehouseTransferMovement::getQuantity)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            if (dispatch.size() != 1 || item.getItemType() != TransferItemType.RAW_MATERIAL
+            if (dispatch.size() != 1 || !supportsWarehouseDeliveryItem(item)
                     || shipped.compareTo(item.getQuantity()) != 0
                     || !Objects.equals(dispatch.get(0).getSourceBatchId(), item.getSourceBatchId())
                     || !Objects.equals(dispatch.get(0).getUnit(), item.getUnit())
@@ -1582,11 +1582,16 @@ public class TransferServiceImpl implements TransferService {
         if (live.size() != 2) throw new BusinessException(409, "调出仓或调入仓不存在、已停用或不属于当前工厂");
     }
 
+    // Material-batch classification remains centralized. Staged delivery currently
+    // excludes packaging; its existing atomic material-batch path remains intact.
+    private static boolean supportsWarehouseDeliveryItem(InternalTransferItem item) {
+        return storedAsMaterialBatch(item) && item.getItemType() != TransferItemType.PACKAGING_MATERIAL;
+    }
     private WarehouseTransferDeliveryDTO toWarehouseDelivery(InternalTransfer transfer) {
         List<WarehouseTransferMovement> movements = warehouseMovementRepository.findTransferHistoryIncludingDeleted(transfer.getId());
         boolean supported = isIntraFactory(transfer) && transfer.getSourceWarehouseId() != null
                 && transfer.getTargetWarehouseId() != null && transfer.getItems().stream().allMatch(i ->
-                i.getItemType() == TransferItemType.RAW_MATERIAL && i.getSourceBatchId() != null);
+                supportsWarehouseDeliveryItem(i) && i.getSourceBatchId() != null);
         boolean staged = movements.stream().anyMatch(m -> m.getKind() == WarehouseTransferMovement.Kind.DISPATCH);
         WarehouseTransferDeliveryDTO dto = new WarehouseTransferDeliveryDTO();
         dto.setSupported(supported); dto.setStaged(staged); dto.setStage(transfer.getStatus().name());
