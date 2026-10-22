@@ -51,3 +51,5 @@ PR1115门禁失败补件（Root DIRECT、独立现有WT `cretas-s107-timer-deliv
 回滚边界：Java先Web，正式发布回执前不发运；首次分步发运后禁止回旧binary遗留同厂SHIPPED。故障冻结新发运并向前修复，或当前安全版本先合法收齐所有开放分步单后评估回滚，V77表/事实不删。main/生产现74且out-of-order=false，本批V77先交付时，S6未合入75/76须由原Owner在fresh-main重编号后另验，不启用乱序。
 
 既有独立边界 `ERP-INV-DELAYED-CONSUMPTION-LOCK-20261023`：Clerk/ProcessSheet延迟消耗与旧调拨的同批并发协议在Base已同样存在，不是本次新增。原QA源夹具独占隔离，未宣称全局生产并发已解决；后续精确scope尚未释放，禁止顺带改共享报工/采购/Orchestrator。源码终审、局部PG、共享CI、正式部署与原QA签收分别记录，S3-08原FAIL保留。
+
+最终9a完整检查唯一新增红为SoftDeleteEntityDeclaredUniqueContractTest的永久唯一键未登记。Root DIRECT额外精确scope仅src/test/java/com/cretas/aims/contract/SoftDeleteEntityDeclaredUniqueContractTest.java（位于backend/java/cretas-api），只按原全等清单规范登记WarehouseTransferMovement#uq_wtm_request_item的永久请求身份，不改扫描器、断言、known-red、Entity、迁移或业务权限。已独立原样执行V77于owned PostgreSQL13临时schema，catalog证实无partial predicate的全量UNIQUE(request_key,transfer_item_id)，软删重用真实23505、新key成功、历史保留，rollback后schema不存在。生产V77尚未发布，不伪称查过生产索引。验收为该原契约目标测试、既有真实JPA/PG永久键测试及冻结后必要完整检查；旧9a的16688通过/1失败/148跳过与原始证据保留，跳过不算通过。Web/RN产品内容不变，不重复其本地构建/安装。
