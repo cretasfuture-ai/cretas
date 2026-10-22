@@ -1,20 +1,23 @@
 # Dispatch 台账 — ACTIVE
 **最后更新**：2026-10-22（S1-02/03/04/10原QA通过，07生命周期子例交付；S0/S1仍未通过）
-**上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
+**历史**：旧版背景保留在 archive/2026-10-22-native-date-v72-registration.md 的旧页眉记录；本页只保留在飞任务。
 
-**当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
+**当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
 
+- `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
+
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — V72被动5文件；待原Owner回传独立WT后claim；无runtime scope，见archive/2026-10-22-native-date-v72-registration.md。
 
 
-- `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 7ceacffafd5d34de536dd19862cf5eb3232a1d58 — PR1075/84a实际21文件交付HOLD；未来writeScope=[]；见archive/2026-10-21-claude-s6-actual-intake.md。
+- `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — PR1075/41eda实际28文件整体HOLD；未来runtime writeScope=[]；V72另列被动5文件队列。
 
 
 
 - `ERP-S2-READINESS-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 5a0c01ff671857ff56fdba03ed27d46808a2fa76 — PR1079/bbe7实际9文件/ACK已读；三问题修复待集成验收，原1079回执见archive/2026-10-21-s1-validation-first.md。
 
-- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1精确8文件仅修订收口；1073/7ce；见archive/2026-10-21-claude-s6-actual-intake.md。
+- `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1/1073/3029151精确8已接收待集成，非部署或业务验收；正式裁决已交原Owner。
 
 
 
@@ -104,7 +107,9 @@
 ## Scope 锁地图
 
 
-- `ERP-S6-B2-CLAUDE-20261021`：实际21文件只接收review/HOLD；writeScope=[]，Entity/V72/JPA及共享DataScope/runtime policy分别列档，不放开采购/供应商/Gateway目录。
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：仅FactorySchedulerConfig/FactoryTriggerChain Entity、V72及2个RunAs PG/JPA测试；queued待原Owner独立WT确认，runtime/Gateway/Skill/Orchestrator无scope，详细全路径与门禁见登记归档。
+
+- `ERP-S6-B2-CLAUDE-20261021`：实际28文件整体review/HOLD；runtime writeScope=[]；V72被动5另列队列待独立WT确认；不放开采购/供应商/Gateway/共享DataScope/runtime policy。
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021`：仅archive/2026-10-21-claude-s6-actual-intake.md列B1精确8文件修订；Owner不变，不回溯批准先写后登记。
 
@@ -135,9 +140,6 @@
 
 ## 维护规则
 
-- 只记当前在飞（`queued`/`claimed`/`in-progress`/`review`/`blocked`）；`merged`/`done` 立即移入带日期的 `archive/`，同一 commit 释放 scope 锁。
-- **每条 ≤ 300 字**（含缩进续行）：ID、状态、Owner、Base SHA、一句话目标与阻塞点。判据读数、终审记录、增量日志一律写 `archive/<日期>-*.md` 并链接，⛔ 不在本文件开 `###` 小节。全文 ≤ 30,000 bytes。
-- 上述规则由 `scripts/ci/check_dispatch_active.py` 钉住：PR 与 push main 的 Source Hygiene 里跑；fastlane 推送碰到本文件时先跑。本地：`python scripts/ci/check_dispatch_active.py`。
-- organizer 只在派活时读本表；创建 worktree、派发或合并前，先核对本表与 `git worktree list`。
-- 本文件只有当前协调者可修改；子代理按 `AGENTS.md` 的结构化回执格式报告。
-- 同一仓库默认并发最多 2 个代码执行代理和 2 个只读/测试代理；无独立价值的工作保持 DIRECT。
+- 按 AGENTS.md 的唯一协调者、结构化回执与弹性并发规则执行；创建 worktree、派工和合并前核对本表及 `git worktree list`。
+- 仅在飞状态；merged 当次归档释放 scope。每条≤300字、全文≤30000 bytes，不开三级增量段；详细证据进 archive/。PR/push/fastlane 保留 `python scripts/ci/check_dispatch_active.py` 门禁。
+- 原维护规则全文保留在 archive/2026-10-22-s6-b3b-review.md。
