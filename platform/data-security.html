@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fdfcfa">
+<title>数据安全 · 白垩纪 Cretas</title>
+<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看需授权并留痕，未经授权不用于训练。每一条都写明是怎么做到的。">
+<link rel="canonical" href="https://cretaceousfuture.com/data-security/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="数据安全 · 白垩纪 Cretas">
+<meta property="og:description" content="AI 越懂你的工厂，越要守住你的配方。每一条承诺都写明是怎么做到的。">
+<meta property="og:image" content="https://cretaceousfuture.com/assets/img/og-card.jpg">
+<meta property="og:url" content="https://cretaceousfuture.com/data-security/">
+<link rel="stylesheet" href="/css/v6.css?v=20261020">
+<script>document.documentElement.classList.add('v6-js')</script>
+<style>
+html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
+.v6-nav a:hover{color:var(--v6-ink)}
+.v6-nav .nav-links{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+
+/* HERO */
+.s-hero{max-width:1000px;margin:0 auto;text-align:center;position:relative;
+  padding:clamp(48px,7.5vw,108px) clamp(16px,4vw,48px) clamp(30px,4.5vw,60px)}
+.s-hero .v6-glow{top:0;height:100%;background:radial-gradient(ellipse 70% 50% at 50% 30%,rgba(0,179,119,.08),transparent 70%)}
+.s-kicker{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--v6-cta-ink);margin:0 0 18px;position:relative}
+.s-kicker::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--v6-cta-ink)}
+.s-hero h1{font-size:clamp(30px,4.6vw,54px);font-weight:900;line-height:1.42;letter-spacing:-0.02em;margin:0 0 22px;text-wrap:balance;position:relative}
+.s-hero h1 span{color:var(--v6-cta-ink)}
+.s-hero p{font-size:clamp(15px,1.65vw,19px);color:var(--v6-ink-2);line-height:1.85;max-width:50ch;margin:0 auto;text-wrap:pretty;position:relative}
+
+/* 边界图: 两家工厂各自一圈, AI 只在本厂圈内取数 */
+.s-map{max-width:880px;margin:0 auto;padding:0 clamp(16px,4vw,48px) clamp(44px,6vw,84px)}
+.s-map svg{display:block;width:100%;height:auto}
+.s-map figcaption{text-align:center;font-size:13.5px;color:var(--v6-ink-3);margin-top:12px;line-height:1.7}
+
+/* 问答台账 */
+.s-qa{max-width:980px;margin:0 auto;padding:0 clamp(16px,4vw,48px) clamp(52px,7vw,100px)}
+.s-qa h2,.s-rights h2{font-size:clamp(22px,3vw,34px);font-weight:900;letter-spacing:-0.015em;margin:0 0 6px}
+.s-qa .sub,.s-rights .sub{font-size:clamp(13.5px,1.4vw,16px);color:var(--v6-ink-2);margin:0 0 26px;line-height:1.7}
+.qrow{display:grid;grid-template-columns:minmax(180px,300px) 1fr;gap:clamp(14px,3vw,44px);
+  padding:clamp(20px,2.4vw,30px) 4px;border-top:1px solid rgba(0,0,0,.09);align-items:baseline}
+.qrow:last-of-type{border-bottom:1px solid rgba(0,0,0,.09)}
+.qrow h3{font-size:clamp(16px,1.8vw,20px);font-weight:900;letter-spacing:-0.01em;line-height:1.5;margin:0}
+.qrow .ans{margin:0 0 10px;font-size:clamp(15px,1.6vw,17.5px);font-weight:700;color:var(--v6-ink);line-height:1.7}
+.qrow .how{margin:0;font-size:clamp(13.5px,1.4vw,15.5px);color:var(--v6-ink-2);line-height:1.8}
+.qrow .how li{margin:0 0 6px}
+.qrow .how ul{margin:0;padding-left:1.1em}
+.qrow .tagline{font-family:var(--v6-mono);font-size:11px;color:var(--v6-cta-ink);display:block;margin-top:10px;letter-spacing:.4px}
+
+/* 你随时可以要求 */
+.s-rights{max-width:980px;margin:0 auto;padding:0 clamp(16px,4vw,48px) clamp(52px,7vw,100px)}
+.rgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(12px,2vw,22px)}
+.rcard{border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:clamp(18px,2.2vw,26px);background:rgba(255,255,255,.6)}
+.rcard b{display:block;font-size:17px;font-weight:900;margin:0 0 8px}
+.rcard p{margin:0;font-size:14.5px;color:var(--v6-ink-2);line-height:1.75}
+
+/* 预览专用: 尚未上线的承诺 (发布前删除这些块, 见 docs/website/data-security-claims.md) */
+[data-claim-status="pending"]{position:relative;outline:2px dashed #d97706;outline-offset:6px;border-radius:4px}
+[data-claim-status="pending"]::before{content:'待上线 · ' attr(data-claim);position:absolute;top:-14px;right:0;font:700 11px/1 var(--v6-mono);
+  background:#d97706;color:#fff;padding:4px 7px;border-radius:999px;z-index:2}
+
+/* CTA */
+.c-cta{background:linear-gradient(160deg,#0d1210 0%,#0a1a13 100%);text-align:center;padding:clamp(52px,8vw,108px) clamp(16px,4vw,48px)}
+.c-cta h2{font-size:clamp(24px,3.6vw,42px);font-weight:900;color:#fff;line-height:1.45;letter-spacing:-0.015em;margin:0 0 14px;text-wrap:balance}
+.c-cta p{color:rgba(255,255,255,.72);font-size:clamp(14px,1.5vw,17px);line-height:1.8;max-width:44ch;margin:0 auto 28px}
+.c-cta .v6-btn{box-shadow:0 8px 26px rgba(0,179,119,.4)}
+
+/* footer */
+.v6-foot{border-top:1px solid rgba(0,0,0,.07);padding:clamp(28px,4vw,44px) clamp(16px,4vw,48px);
+  max-width:1320px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;color:#6d6862;font-size:13px}
+.v6-foot a{color:#57534e;text-decoration:none;margin-left:20px}
+.v6-foot a:hover{color:var(--v6-ink)}
+.v6-foot .foot-links{display:flex;flex-wrap:wrap}
+
+@media (max-width:860px){.rgrid{grid-template-columns:1fr}}
+@media (max-width:768px){
+  .v6-nav{flex-direction:column;gap:12px;align-items:flex-start}
+  .v6-nav .nav-links{justify-content:flex-start}
+  .v6-nav a{margin-left:0;margin-right:18px}
+  .qrow{grid-template-columns:1fr;gap:8px}
+}
+</style>
+<link rel="icon" type="image/x-icon" href="/favicon.ico?v=20261017" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/svg+xml" href="/assets/brand/cretas-mark.svg?v=20261017">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/brand/cretas-touch.png?v=20261017">
+</head>
+<body>
+
+<nav class="v6-nav">
+  <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
+    <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><image href="/assets/brand/cretas-mark.svg?v=20261017" width="15" height="15"/></svg>
+    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:var(--v6-ink-3);letter-spacing:2px;font-size:11px">CRETAS</small>
+  </a>
+  <div class="nav-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/factory-onboarding.html">如何上线</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a class="v6-btn-ghost" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+  </div>
+</nav>
+
+<main>
+<section class="s-hero">
+  <div class="v6-glow"></div>
+  <p class="s-kicker v6-reveal">数据安全</p>
+  <h1 class="v6-reveal">AI 越懂你的工厂，<br><span>越要守住你的配方。</span></h1>
+  <p class="v6-reveal">把生产、配方和经营数据交给一套系统，最担心的通常是三件事：别的工厂会不会看到，我们自己会不会看到，会不会被拿去训练模型、间接帮了同行。下面逐条回答，每一条都写明是怎么做到的。</p>
+</section>
+
+<figure class="s-map v6-reveal" aria-labelledby="s-map-cap">
+  <svg viewBox="0 0 800 300" role="img" aria-label="两家工厂各自在独立的边界内，AI 助手只在提问人所属工厂的边界内取数">
+    <defs>
+      <marker id="s-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#00875a"/></marker>
+    </defs>
+    <rect x="24" y="24" width="330" height="252" rx="22" fill="#f1f8f4" stroke="#00875a" stroke-width="2"/>
+    <text x="48" y="60" font-size="16" font-weight="800" fill="#0f2a1f">A 工厂</text>
+    <rect x="48" y="84" width="128" height="52" rx="10" fill="#fff" stroke="#cfe6da"/><text x="112" y="116" text-anchor="middle" font-size="14" fill="#333">配方 · 工艺</text>
+    <rect x="200" y="84" width="128" height="52" rx="10" fill="#fff" stroke="#cfe6da"/><text x="264" y="116" text-anchor="middle" font-size="14" fill="#333">生产 · 库存</text>
+    <rect x="48" y="156" width="128" height="52" rx="10" fill="#fff" stroke="#cfe6da"/><text x="112" y="188" text-anchor="middle" font-size="14" fill="#333">成本 · 经营</text>
+    <rect x="200" y="156" width="128" height="52" rx="10" fill="#0f2a1f"/><text x="264" y="188" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">AI 助手</text>
+    <path d="M232 156 L170 132" stroke="#00875a" stroke-width="2" fill="none" marker-end="url(#s-arrow)"/>
+    <path d="M264 156 L264 140" stroke="#00875a" stroke-width="2" fill="none" marker-end="url(#s-arrow)"/>
+    <path d="M200 182 L180 182" stroke="#00875a" stroke-width="2" fill="none" marker-end="url(#s-arrow)"/>
+    <text x="48" y="250" font-size="13" fill="#4d5a54">工厂身份来自登录凭证，AI 只能在这一圈里取数</text>
+
+    <rect x="446" y="24" width="330" height="252" rx="22" fill="#f6f6f4" stroke="#b9b6b0" stroke-width="2"/>
+    <text x="470" y="60" font-size="16" font-weight="800" fill="#2b2b2b">B 工厂</text>
+    <rect x="470" y="84" width="128" height="52" rx="10" fill="#fff" stroke="#e2e0dc"/><text x="534" y="116" text-anchor="middle" font-size="14" fill="#555">配方 · 工艺</text>
+    <rect x="622" y="84" width="128" height="52" rx="10" fill="#fff" stroke="#e2e0dc"/><text x="686" y="116" text-anchor="middle" font-size="14" fill="#555">生产 · 库存</text>
+    <rect x="470" y="156" width="128" height="52" rx="10" fill="#fff" stroke="#e2e0dc"/><text x="534" y="188" text-anchor="middle" font-size="14" fill="#555">成本 · 经营</text>
+    <rect x="622" y="156" width="128" height="52" rx="10" fill="#2b2b2b"/><text x="686" y="188" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">AI 助手</text>
+
+    <line x1="400" y1="40" x2="400" y2="260" stroke="#b42318" stroke-width="2" stroke-dasharray="6 6"/>
+    <circle cx="400" cy="150" r="17" fill="#fff" stroke="#b42318" stroke-width="2"/>
+    <path d="M392 142 L408 158 M408 142 L392 158" stroke="#b42318" stroke-width="2.4" stroke-linecap="round"/>
+  </svg>
+  <figcaption id="s-map-cap">每家工厂一圈边界。B 工厂的人、B 工厂的 AI 助手，都进不了 A 工厂这一圈。</figcaption>
+</figure>
+
+<section class="s-qa" aria-labelledby="s-qa-title">
+  <h2 id="s-qa-title" class="v6-reveal">你可能最担心的问题</h2>
+  <p class="sub v6-reveal">答案只写已经做到的事。</p>
+
+  <div class="qrow v6-reveal">
+    <h3>别的工厂能看到我的数据吗？包括用 AI 问出来。</h3>
+    <div>
+      <p class="ans" data-claim="C1-headline" data-claim-status="pending">看不到。</p>
+      <div class="how"><ul>
+        <li data-claim="C1-ai-scope" data-claim-status="live">AI 助手查数据时，工厂身份取自提问人的登录凭证，模型自己不能指定去查哪个工厂。</li>
+        <li data-claim="C1-api-scope" data-claim-status="pending">系统里每个读写工厂数据的接口，都只按登录身份所属的工厂取数。</li>
+        <li data-claim="C1-no-cross-learning" data-claim-status="pending">AI 在你工厂学到的说法和用词，只在你的工厂里用，不会带到别的工厂。</li>
+      </ul></div>
+      <span class="tagline">工厂身份来自登录凭证 · 不接受模型或页面指定</span>
+    </div>
+  </div>
+
+  <div class="qrow v6-reveal" data-claim="C2-platform-access" data-claim-status="pending">
+    <h3>你们（平台方）能看到我的配方吗？</h3>
+    <div>
+      <p class="ans">默认看不到明细，要看必须经你授权，而且每次都留记录。</p>
+      <div class="how"><ul>
+        <li>配方和工艺参数默认以代号显示；查看明细需要你方授权。</li>
+        <li>平台人员每一次查看你工厂的数据，都会记下是谁、什么时间、看了什么，你可以随时查看这份记录。</li>
+      </ul></div>
+      <span class="tagline">代号显示 · 授权查看 · 访问留痕</span>
+    </div>
+  </div>
+
+  <div class="qrow v6-reveal" data-claim="C3-training-consent" data-claim-status="pending">
+    <h3>我的数据会被拿去训练模型吗？</h3>
+    <div>
+      <p class="ans">没有你的书面授权，不会。</p>
+      <div class="how"><ul>
+        <li>默认不授权：你工厂的问答和业务数据不会被记录为训练素材，也不会进入任何训练、评测数据。</li>
+        <li>授权分两档，由你选择：只用于你自己工厂的模型；或者匿名化之后才可共享。</li>
+        <li>我们改进模型，用的是通用的业务流程和公开的行业知识，不是某一家工厂的具体数字和配方。</li>
+      </ul></div>
+      <span class="tagline">默认不授权 · 两档授权可选</span>
+    </div>
+  </div>
+
+  <div class="qrow v6-reveal" data-claim="C4-llm-egress" data-claim-status="pending">
+    <h3>AI 用的是谁的模型？数据会出境吗？</h3>
+    <div>
+      <p class="ans">使用阿里云通义千问，在中国境内处理。</p>
+      <div class="how"><ul>
+        <li>交给模型分析之前，客户、门店、产品等名称会先替换成代号。</li>
+        <li>替换不成功时，这次就不发送，而不是带着原文发出去。</li>
+      </ul></div>
+      <span class="tagline">境内模型 · 名称先替换 · 失败不发送</span>
+    </div>
+  </div>
+
+  <div class="qrow v6-reveal">
+    <h3>数据存在哪？丢了怎么办？</h3>
+    <div>
+      <p class="ans">存在中国境内的阿里云服务器上，每天自动备份。</p>
+      <div class="how"><ul>
+        <li data-claim="C5-hosting" data-claim-status="live">服务器位于中国境内（阿里云）；你和系统之间的通信全程 HTTPS 加密。</li>
+        <li data-claim="C5-daily-backup" data-claim-status="live">数据库每天凌晨自动备份，保留最近 7 天。</li>
+        <li data-claim="C5-offsite-encrypted" data-claim-status="pending">备份加密后另存一份在独立的存储里，服务器出问题也能恢复。</li>
+      </ul></div>
+      <span class="tagline">境内服务器 · HTTPS · 每日备份</span>
+    </div>
+  </div>
+</section>
+
+<section class="s-rights" aria-labelledby="s-rights-title" data-claim="C6-rights" data-claim-status="pending">
+  <h2 id="s-rights-title" class="v6-reveal">你随时可以要求</h2>
+  <p class="sub v6-reveal">数据是你的，我们只是替你保管和计算。</p>
+  <div class="rgrid">
+    <div class="rcard v6-reveal"><b>导出全部数据</b><p>你工厂在系统里的业务数据，可以完整导出带走。</p></div>
+    <div class="rcard v6-reveal"><b>彻底删除</b><p>不再使用时，可以要求删除你工厂的全部数据，而不只是停用账号。</p></div>
+    <div class="rcard v6-reveal"><b>查看访问记录</b><p>平台人员什么时候、看过你工厂的哪些数据，一条条列给你看。</p></div>
+  </div>
+</section>
+</main>
+
+<section class="c-cta">
+  <h2 class="v6-reveal">还有顾虑？<br>把你最担心的问题发给我们。</h2>
+  <p class="v6-reveal">数据怎么存、谁能看、怎么用，我们可以当面讲清楚，也可以写进合同。</p>
+  <a class="v6-btn v6-reveal" href="mailto:stevenj4xie@gmail.com?subject=数据安全咨询">问问数据安全</a>
+</section>
+
+<footer class="v6-foot">
+  <div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div>
+  <div class="foot-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/factory-onboarding.html">如何上线</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a href="/data-security.html" aria-current="page">数据安全</a>
+    <a href="mailto:stevenj4xie@gmail.com">联系我们</a>
+  </div>
+</footer>
+
+<script src="/js/v6.js?v=20261020"></script>
+<script src="/js/gsap.min.js"></script>
+<script src="/js/ScrollTrigger.min.js"></script>
+<script src="/js/lenis.min.js"></script>
+<script src="/js/v6-premium.js?v=20261012c"></script>
+<script>
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    var vb = window.innerHeight + 40;
+    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){
+      if (e.getBoundingClientRect().top < vb) e.classList.add('in');
+    });
+  }, 1200);
+});
+</script>
+</body>
+</html>
