@@ -3,6 +3,7 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 
@@ -13,6 +14,7 @@ import java.math.BigDecimal;
         @Index(name = "idx_wtm_request", columnList = "request_key")
 }, uniqueConstraints = @UniqueConstraint(name = "uq_wtm_request_item", columnNames = {"request_key", "transfer_item_id"}))
 @Where(clause = "deleted_at IS NULL")
+@SQLDelete(sql = "UPDATE warehouse_transfer_movements SET deleted_at = NOW() WHERE id = ?")
 @Data @NoArgsConstructor @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class WarehouseTransferMovement extends BaseEntity {
