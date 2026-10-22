@@ -11,7 +11,8 @@
  *
  * RBAC: 显示需 quality:read (路由 module: 'quality'), 写操作后端 @RequirePermission("quality:read_write").
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Plus } from '@element-plus/icons-vue';
@@ -22,13 +23,19 @@ import {
   closeDefect,
   DEFECT_STATUS_LABELS,
   DEFECT_TYPE_LABELS,
+  listQualityInspectionSources,
+  getQualityInspectionSource,
+  listQualityAssigneeDirectory,
   type QualityDefect,
   type DefectStatus,
   type DefectType,
+  type QualityInspectionSource,
+  type QualityAssigneeDirectoryUser,
 } from '@/api/qualityDefect';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
+const route = useRoute();
 
 const loading = ref(false);
 const rows = ref<QualityDefect[]>([]);
@@ -55,6 +62,20 @@ const actionForm = ref({
   assignedTo: null as number | null,
   closeNotes: '',
 });
+
+const inspectionSources = ref<QualityInspectionSource[]>([]);
+const assigneeDirectory = ref<QualityAssigneeDirectoryUser[]>([]);
+const sourceLoading = ref(false);
+const directoryLoading = ref(false);
+const sourceError = ref('');
+const directoryError = ref('');
+const selectedSource = computed(() => inspectionSources.value.find(
+  source => source.id === recordForm.value.qualityInspectionId,
+));
+const selectedAssigneeIsValid = computed(() =>
+  actionForm.value.assignedTo == null
+  || assigneeDirectory.value.some(user => user.id === actionForm.value.assignedTo),
+);
 
 const STATUS_OPTIONS: DefectStatus[] = ['OPEN', 'IN_PROGRESS', 'CLOSED'];
 const TYPE_OPTIONS: DefectType[] = [
@@ -100,15 +121,82 @@ function handleFilterChange() {
   load();
 }
 
-function openRecordDialog() {
+function inspectionLabel(source: QualityInspectionSource): string {
+  const sourceName = source.batchNumber || source.productName || `质检 ${source.id.slice(0, 8)}`;
+  const date = source.inspectionDate ? ` · ${source.inspectionDate}` : '';
+  const result = source.result ? ` · ${source.result}` : '';
+  return `${sourceName}${date}${result}`;
+}
+
+function assigneeLabel(user: QualityAssigneeDirectoryUser): string {
+  const name = user.fullName || user.username || `用户 #${user.id}`;
+  const department = user.department || user.roleCode;
+  return department ? `${name} · ${department}` : name;
+}
+
+async function loadInspectionSources(initialInspectionId?: string) {
+  inspectionSources.value = [];
+  sourceError.value = '';
+  if (!factoryId.value) return;
+  sourceLoading.value = true;
+  try {
+    const [listResponse, initialResponse] = await Promise.all([
+      listQualityInspectionSources(factoryId.value),
+      initialInspectionId
+        ? getQualityInspectionSource(factoryId.value, initialInspectionId)
+        : Promise.resolve(null),
+    ]);
+    if (!listResponse.success || !listResponse.data?.content) {
+      sourceError.value = listResponse.message || '质检来源读取失败，请重试';
+    }
+    const sources = listResponse.success && listResponse.data?.content
+      ? listResponse.data.content
+      : [];
+    const initial = initialResponse?.success ? initialResponse.data : null;
+    inspectionSources.value = initial && !sources.some(source => source.id === initial.id)
+      ? [initial, ...sources]
+      : sources;
+    if (initialInspectionId && !inspectionSources.value.some(source => source.id === initialInspectionId)) {
+      sourceError.value = '该质检来源不存在或不属于当前工厂，无法登记不良';
+    }
+  } catch (error) {
+    sourceError.value = error instanceof Error ? error.message : '质检来源读取失败，请重试';
+  } finally {
+    sourceLoading.value = false;
+  }
+}
+
+async function loadAssigneeDirectory() {
+  assigneeDirectory.value = [];
+  directoryError.value = '';
+  if (!factoryId.value) return;
+  directoryLoading.value = true;
+  try {
+    const response = await listQualityAssigneeDirectory(factoryId.value);
+    if (!response.success || !Array.isArray(response.data)) {
+      directoryError.value = response.message || '处理人员工厂名录读取失败，请重试';
+      return;
+    }
+    assigneeDirectory.value = response.data.filter(user => user.isActive !== false);
+  } catch (error) {
+    directoryError.value = error instanceof Error ? error.message : '处理人员工厂名录读取失败，请重试';
+  } finally {
+    directoryLoading.value = false;
+  }
+}
+
+function openRecordDialog(initialInspectionId = typeof route.query.inspectionId === 'string'
+  ? route.query.inspectionId
+  : '') {
   recordForm.value = {
-    qualityInspectionId: '',
+    qualityInspectionId: initialInspectionId,
     materialId: '',
     defectType: 'OTHER',
     quantity: 1,
     cause: '',
   };
   showRecordDialog.value = true;
+  void loadInspectionSources(initialInspectionId || undefined);
 }
 
 async function handleRecordSubmit() {
@@ -118,6 +206,10 @@ async function handleRecordSubmit() {
   }
   if (recordForm.value.quantity <= 0) {
     ElMessage.warning('不良数量必须 > 0');
+    return;
+  }
+  if (sourceError.value || !selectedSource.value) {
+    ElMessage.warning('请选择当前工厂可用的真实质检来源');
     return;
   }
   submitting.value = true;
@@ -132,7 +224,7 @@ async function handleRecordSubmit() {
     if (res.success) {
       ElMessage.success('已登记不良');
       showRecordDialog.value = false;
-      load();
+      await load();
     }
   } finally {
     submitting.value = false;
@@ -148,6 +240,7 @@ function openAssignDialog(row: QualityDefect) {
     closeNotes: '',
   };
   showActionDialog.value = true;
+  void loadAssigneeDirectory();
 }
 
 function openCloseDialog(row: QualityDefect) {
@@ -171,6 +264,16 @@ async function handleActionSubmit() {
         submitting.value = false;
         return;
       }
+      if (!selectedAssigneeIsValid.value) {
+        ElMessage.warning('处理人已失效或不属于当前工厂，请重新选择');
+        submitting.value = false;
+        return;
+      }
+      if (directoryError.value && actionForm.value.assignedTo != null) {
+        ElMessage.warning('处理人员工厂名录不可用，请刷新后重新选择');
+        submitting.value = false;
+        return;
+      }
       const res = await assignDefect(factoryId.value, currentDefect.value.id, {
         handlingAction: actionForm.value.handlingAction.trim(),
         assignedTo: actionForm.value.assignedTo,
@@ -178,7 +281,7 @@ async function handleActionSubmit() {
       if (res.success) {
         ElMessage.success('已分派处理');
         showActionDialog.value = false;
-        load();
+        await load();
       }
     } else {
       const res = await closeDefect(factoryId.value, currentDefect.value.id, {
@@ -187,13 +290,22 @@ async function handleActionSubmit() {
       if (res.success) {
         ElMessage.success('已闭环');
         showActionDialog.value = false;
-        load();
+        await load();
       }
     }
   } finally {
     submitting.value = false;
   }
 }
+
+watch(factoryId, () => {
+  inspectionSources.value = [];
+  assigneeDirectory.value = [];
+  sourceError.value = '';
+  directoryError.value = '';
+  showRecordDialog.value = false;
+  showActionDialog.value = false;
+});
 
 onMounted(load);
 </script>
@@ -207,7 +319,7 @@ onMounted(load);
       </div>
       <div class="actions">
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openRecordDialog">登记不良</el-button>
+        <el-button type="primary" :icon="Plus" @click="openRecordDialog()">登记不良</el-button>
       </div>
     </div>
 
@@ -296,8 +408,31 @@ onMounted(load);
     <!-- 登记不良 dialog -->
     <el-dialog v-model="showRecordDialog" title="登记质检不良" width="500px">
       <el-form label-position="top">
-        <el-form-item label="关联质检记录 ID" required>
-          <el-input v-model="recordForm.qualityInspectionId" placeholder="quality_inspections.id" />
+        <el-form-item label="质检来源" required>
+          <el-select
+            v-model="recordForm.qualityInspectionId"
+            filterable
+            clearable
+            :loading="sourceLoading"
+            :disabled="!!sourceError"
+            placeholder="选择真实质检来源"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="source in inspectionSources"
+              :key="source.id"
+              :label="inspectionLabel(source)"
+              :value="source.id"
+            />
+          </el-select>
+          <el-alert v-if="sourceError" :title="sourceError" type="error" :closable="false" show-icon />
+          <el-alert
+            v-else-if="selectedSource"
+            :title="`来源：${inspectionLabel(selectedSource)}`"
+            :description="selectedSource.productName ? `品名：${selectedSource.productName}` : undefined"
+            type="info"
+            :closable="false"
+          />
         </el-form-item>
         <el-form-item label="物料 ID (可选)">
           <el-input v-model="recordForm.materialId" placeholder="raw_material_types.id" />
@@ -343,8 +478,37 @@ onMounted(load);
               show-word-limit
             />
           </el-form-item>
-          <el-form-item label="处理人 user_id (可选)">
-            <el-input-number v-model="actionForm.assignedTo" :min="0" style="width: 200px" />
+          <el-form-item label="处理人（可选）">
+            <el-select
+              v-model="actionForm.assignedTo"
+              clearable
+              filterable
+              :loading="directoryLoading"
+              :disabled="!!directoryError && actionForm.assignedTo == null"
+              placeholder="选择本厂活跃人员"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="user in assigneeDirectory"
+                :key="user.id"
+                :label="assigneeLabel(user)"
+                :value="user.id"
+              />
+            </el-select>
+            <el-alert
+              v-if="actionForm.assignedTo != null && !selectedAssigneeIsValid"
+              title="当前处理人已失效或不属于当前工厂，请重新选择"
+              type="error"
+              :closable="false"
+              show-icon
+            />
+            <el-alert
+              v-else-if="directoryError"
+              :title="directoryError"
+              type="error"
+              :closable="false"
+              show-icon
+            />
           </el-form-item>
         </template>
         <template v-else>

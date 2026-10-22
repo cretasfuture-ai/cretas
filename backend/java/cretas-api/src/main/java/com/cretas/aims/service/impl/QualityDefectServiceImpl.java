@@ -3,12 +3,14 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.QualityDefect;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.DefectStatus;
 import com.cretas.aims.entity.enums.DefectType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.QualityDefectRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.QualityDefectService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -42,6 +45,13 @@ public class QualityDefectServiceImpl implements QualityDefectService {
 
     private final QualityDefectRepository defectRepository;
     private final QualityInspectionRepository inspectionRepository;
+
+    /**
+     * 处理人是可选字段，保持旧调用方的构造方式不变；实际分派时仍必须通过
+     * 同厂名录校验，避免把串厂、停用或软删除用户写进不良记录。
+     */
+    @Autowired
+    private UserRepository userRepository;
 
     @Override
     @Transactional
@@ -88,6 +98,16 @@ public class QualityDefectServiceImpl implements QualityDefectService {
         }
         if (handlingAction == null || handlingAction.trim().isEmpty()) {
             throw new BusinessException(400, "处置动作 handlingAction 必填");
+        }
+        if (assignedTo != null) {
+            if (userRepository == null) {
+                throw new BusinessException(503, "处理人名录暂不可用，请稍后重试");
+            }
+            User assignee = userRepository.findByIdAndFactoryId(assignedTo, factoryId)
+                    .orElseThrow(() -> new BusinessException(400, "处理人不存在或不属于当前工厂"));
+            if (!Boolean.TRUE.equals(assignee.getIsActive()) || assignee.getDeletedAt() != null) {
+                throw new BusinessException(400, "处理人已停用或已删除，请重新选择");
+            }
         }
         defect.setHandlingAction(handlingAction);
         defect.setAssignedTo(assignedTo);
