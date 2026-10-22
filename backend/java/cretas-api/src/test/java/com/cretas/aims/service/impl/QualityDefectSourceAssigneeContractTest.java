@@ -1,16 +1,22 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.entity.QualityDefect;
+import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.DefectStatus;
 import com.cretas.aims.entity.enums.DefectType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.QualityDefectRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -39,6 +45,7 @@ class QualityDefectSourceAssigneeContractTest {
 
     @Mock private QualityDefectRepository defectRepository;
     @Mock private QualityInspectionRepository inspectionRepository;
+    @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock private UserRepository userRepository;
 
     @InjectMocks
@@ -47,6 +54,7 @@ class QualityDefectSourceAssigneeContractTest {
     @BeforeEach
     void wireOptionalUserRepository() {
         ReflectionTestUtils.setField(service, "userRepository", userRepository);
+        ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
     }
 
     @Test
@@ -75,6 +83,90 @@ class QualityDefectSourceAssigneeContractTest {
         assertThat(defect.getAssignedTo()).isNull();
         verify(userRepository, never()).findByIdAndFactoryId(any(Long.class), any(String.class));
         verify(defectRepository).save(defect);
+    }
+
+    @Test
+    void activeSameFactoryMaterialIsSavedAfterTrimming() {
+        stubInspection();
+        RawMaterialType material = material("material-1", true);
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("material-1", FACTORY))
+                .thenReturn(Optional.of(material));
+        when(defectRepository.save(any(QualityDefect.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        QualityDefect saved = service.recordDefect(FACTORY, "inspection-1", "  material-1  ",
+                DefectType.OTHER, BigDecimal.ONE, "包装破损", 1L);
+
+        assertThat(saved.getMaterialId()).isEqualTo("material-1");
+        verify(defectRepository).save(saved);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", "  ", "\t"})
+    void nullOrBlankMaterialRemainsOptionalAndIsCleaned(String materialId) {
+        stubInspection();
+        when(defectRepository.save(any(QualityDefect.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        QualityDefect saved = service.recordDefect(FACTORY, "inspection-1", materialId,
+                DefectType.OTHER, BigDecimal.ONE, null, 1L);
+
+        assertThat(saved.getMaterialId()).isNull();
+        verify(rawMaterialTypeRepository, never()).findByIdAndFactoryId(any(String.class), any(String.class));
+        verify(defectRepository).save(saved);
+    }
+
+    @Test
+    void foreignFactoryMaterialIsRejectedBeforeSave() {
+        stubInspection();
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("foreign-material", FACTORY))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.recordDefect(FACTORY, "inspection-1", "foreign-material",
+                DefectType.OTHER, BigDecimal.ONE, null, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("物料不存在或不属于当前工厂");
+        verify(defectRepository, never()).save(any(QualityDefect.class));
+    }
+
+    @Test
+    void nonexistentMaterialIsRejectedBeforeSave() {
+        stubInspection();
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("missing-material", FACTORY))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.recordDefect(FACTORY, "inspection-1", "missing-material",
+                DefectType.OTHER, BigDecimal.ONE, null, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("物料不存在或不属于当前工厂");
+        verify(defectRepository, never()).save(any(QualityDefect.class));
+    }
+
+    @Test
+    void inactiveMaterialIsRejectedBeforeSave() {
+        stubInspection();
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("material-inactive", FACTORY))
+                .thenReturn(Optional.of(material("material-inactive", false)));
+
+        assertThatThrownBy(() -> service.recordDefect(FACTORY, "inspection-1", "material-inactive",
+                DefectType.OTHER, BigDecimal.ONE, null, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("停用");
+        verify(defectRepository, never()).save(any(QualityDefect.class));
+    }
+
+    @Test
+    void softDeletedMaterialIsRejectedBeforeSave() {
+        stubInspection();
+        RawMaterialType material = material("material-deleted", true);
+        material.setDeletedAt(LocalDateTime.now());
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("material-deleted", FACTORY))
+                .thenReturn(Optional.of(material));
+
+        assertThatThrownBy(() -> service.recordDefect(FACTORY, "inspection-1", "material-deleted",
+                DefectType.OTHER, BigDecimal.ONE, null, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("删除");
+        verify(defectRepository, never()).save(any(QualityDefect.class));
     }
 
     @Test
@@ -124,6 +216,21 @@ class QualityDefectSourceAssigneeContractTest {
                 .quantity(BigDecimal.ONE)
                 .status(DefectStatus.OPEN)
                 .build();
+    }
+
+    private void stubInspection() {
+        QualityInspection inspection = new QualityInspection();
+        inspection.setId("inspection-1");
+        inspection.setFactoryId(FACTORY);
+        when(inspectionRepository.findById("inspection-1")).thenReturn(Optional.of(inspection));
+    }
+
+    private RawMaterialType material(String id, boolean active) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId(FACTORY);
+        material.setIsActive(active);
+        return material;
     }
 
     private User user(Long id, String factoryId, boolean active) {

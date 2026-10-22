@@ -122,6 +122,7 @@ describe('S3-11 source and assignee workflow', () => {
       defectType: 'OTHER',
       quantity: 1,
     }));
+    expect(state.post.mock.calls[0][1]).not.toHaveProperty('materialId');
     expect(state.get.mock.calls.filter(call => call[0] === '/F006/quality-defects')).toHaveLength(2);
     wrapper.unmount();
   });

@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.QualityDefect;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.DefectStatus;
 import com.cretas.aims.entity.enums.DefectType;
@@ -10,6 +11,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.QualityDefectRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.QualityDefectService;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +55,9 @@ public class QualityDefectServiceImpl implements QualityDefectService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
     @Override
     @Transactional
     public QualityDefect recordDefect(String factoryId, String qualityInspectionId,
@@ -71,10 +76,24 @@ public class QualityDefectServiceImpl implements QualityDefectService {
             throw new ResourceNotFoundException("质检记录不属于当前工厂");
         }
 
+        String normalizedMaterialId = materialId == null || materialId.trim().isEmpty()
+                ? null : materialId.trim();
+        if (normalizedMaterialId != null) {
+            if (rawMaterialTypeRepository == null) {
+                throw new BusinessException(503, "物料名录暂不可用，请稍后重试");
+            }
+            RawMaterialType material = rawMaterialTypeRepository
+                    .findByIdAndFactoryId(normalizedMaterialId, factoryId)
+                    .orElseThrow(() -> new BusinessException(400, "物料不存在或不属于当前工厂"));
+            if (!Boolean.TRUE.equals(material.getIsActive()) || material.getDeletedAt() != null) {
+                throw new BusinessException(400, "物料已停用或已删除，请重新选择");
+            }
+        }
+
         QualityDefect defect = QualityDefect.builder()
                 .factoryId(factoryId)
                 .qualityInspectionId(qualityInspectionId)
-                .materialId(materialId)
+                .materialId(normalizedMaterialId)
                 .defectType(defectType)
                 .quantity(quantity)
                 .cause(cause)

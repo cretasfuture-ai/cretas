@@ -49,7 +49,6 @@ const submitting = ref(false);
 
 const recordForm = ref({
   qualityInspectionId: '',
-  materialId: '',
   defectType: 'OTHER' as DefectType,
   quantity: 1,
   cause: '',
@@ -204,7 +203,6 @@ function openRecordDialog(initialInspectionId = typeof route.query.inspectionId 
   : '') {
   recordForm.value = {
     qualityInspectionId: initialInspectionId,
-    materialId: '',
     defectType: 'OTHER',
     quantity: 1,
     cause: '',
@@ -215,7 +213,7 @@ function openRecordDialog(initialInspectionId = typeof route.query.inspectionId 
 
 async function handleRecordSubmit() {
   if (!recordForm.value.qualityInspectionId.trim()) {
-    ElMessage.warning('请填写关联质检记录 ID');
+    ElMessage.warning('请选择质检来源');
     return;
   }
   if (recordForm.value.quantity <= 0) {
@@ -230,7 +228,6 @@ async function handleRecordSubmit() {
   try {
     const res = await recordDefect(factoryId.value, {
       qualityInspectionId: recordForm.value.qualityInspectionId.trim(),
-      materialId: recordForm.value.materialId.trim() || null,
       defectType: recordForm.value.defectType,
       quantity: recordForm.value.quantity,
       cause: recordForm.value.cause.trim() || null,
@@ -325,7 +322,6 @@ watch(factoryId, () => {
   showActionDialog.value = false;
   recordForm.value = {
     qualityInspectionId: '',
-    materialId: '',
     defectType: 'OTHER',
     quantity: 1,
     cause: '',
@@ -460,9 +456,6 @@ onMounted(load);
             type="info"
             :closable="false"
           />
-        </el-form-item>
-        <el-form-item label="物料 ID (可选)">
-          <el-input v-model="recordForm.materialId" placeholder="raw_material_types.id" />
         </el-form-item>
         <el-form-item label="缺陷类型" required>
           <el-select v-model="recordForm.defectType" style="width: 100%">
