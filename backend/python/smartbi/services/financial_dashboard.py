@@ -11,6 +11,19 @@ from .financial.base import _sanitize_for_json
 logger = logging.getLogger(__name__)
 
 
+def scope_label(label: str, filters: Optional[Dict[str, List[str]]], columns) -> str:
+    """期间标签 + 实际生效的筛选器, 如「全部历史 · 月份 3月」。
+
+    只写真正筛掉了行的那些: 接口层 (_apply_filters) 会忽略数据里没有的列和空选择, 标签不能说筛过。
+    """
+    if not filters:
+        return label
+    present = set(columns)
+    parts = [f"{col} {'、'.join(str(v) for v in values)}"
+             for col, values in filters.items() if values and col in present]
+    return f"{label} · {'；'.join(parts)}" if parts else label
+
+
 class FinancialDashboardService:
     def __init__(self):
         self.normalizer = FinancialDataNormalizer()
@@ -18,7 +31,8 @@ class FinancialDashboardService:
 
     def _prepare(self, raw_data: pd.DataFrame, year: int, period_type: str,
                  start_month: int, end_month: int,
-                 sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, ColumnMapping, Dict]:
+                 sheet_name: Optional[str] = None,
+                 filters: Optional[Dict[str, List[str]]] = None) -> Tuple[pd.DataFrame, ColumnMapping, Dict]:
         """原始表格 → (参与汇总的标准明细, 列映射, 期间)。
 
         小计 / 合计 / 表内利润行不进明细, 挂在 column_mapping.reported_rows 上只用来对账,
@@ -45,6 +59,8 @@ class FinancialDashboardService:
             label = self.normalizer.get_months_label(start_month, end_month, year)
             if period_type == 'year':
                 label = f"{year}年全年"
+        # 筛选器 (接口层已按它筛掉了行) 也是口径的一部分: 不写进标签, 3 月的数字会顶着「全部历史」显示
+        label = scope_label(label, filters, raw_data.columns)
         period = {
             "year": year,
             "period_type": period_type,
@@ -57,13 +73,15 @@ class FinancialDashboardService:
     def generate_chart(self, chart_type: str, raw_data: pd.DataFrame,
                        year: int = 2026, period_type: str = "year",
                        start_month: int = 1, end_month: int = 12,
-                       sheet_name: Optional[str] = None) -> Dict:
+                       sheet_name: Optional[str] = None,
+                       filters: Optional[Dict[str, List[str]]] = None) -> Dict:
         """Generate a single chart."""
         if chart_type == "all":
-            return self.generate_dashboard(raw_data, year, period_type, start_month, end_month, sheet_name)
+            return self.generate_dashboard(raw_data, year, period_type, start_month, end_month, sheet_name,
+                                           filters)
 
         df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month,
-                                                   sheet_name)
+                                                   sheet_name, filters)
 
         builder = self.registry.get(chart_type)
         if not builder:
@@ -94,10 +112,11 @@ class FinancialDashboardService:
     def generate_dashboard(self, raw_data: pd.DataFrame,
                            year: int = 2026, period_type: str = "year",
                            start_month: int = 1, end_month: int = 12,
-                           sheet_name: Optional[str] = None) -> Dict:
+                           sheet_name: Optional[str] = None,
+                           filters: Optional[Dict[str, List[str]]] = None) -> Dict:
         """Generate all available charts."""
         df, column_mapping, period = self._prepare(raw_data, year, period_type, start_month, end_month,
-                                                   sheet_name)
+                                                   sheet_name, filters)
 
         charts = self.registry.build_all_available(df, column_mapping, period, year)
         available = self.registry.list_available(column_mapping)

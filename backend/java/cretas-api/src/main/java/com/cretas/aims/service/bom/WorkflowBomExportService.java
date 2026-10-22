@@ -70,7 +70,17 @@ public class WorkflowBomExportService {
      * @param productTypeIds 为空 ⇒ 导出该工厂全部有工艺的成品
      */
     public byte[] export(String factoryId, List<String> productTypeIds) {
-        List<WorkflowBomExportRowDTO> rows = buildRows(factoryId, productTypeIds);
+        return exportResolved(factoryId, resolveTargets(factoryId, productTypeIds));
+    }
+
+    /**
+     * 按已经确定的成品清单导出 (调用方已做过工艺保密过滤)。清单为空 ⇒ 只有表头, ⛔ 不回退成全厂。
+     */
+    public byte[] exportResolved(String factoryId, List<String> targets) {
+        List<WorkflowBomExportRowDTO> rows = new ArrayList<>();
+        for (String productTypeId : targets) {
+            rows.addAll(buildRowsForProduct(factoryId, productTypeId));
+        }
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             EasyExcel.write(out, WorkflowBomExportRowDTO.class)
                     .sheet("工艺与BOM")
@@ -90,7 +100,7 @@ public class WorkflowBomExportService {
         return rows;
     }
 
-    private List<String> resolveTargets(String factoryId, List<String> productTypeIds) {
+    public List<String> resolveTargets(String factoryId, List<String> productTypeIds) {
         if (productTypeIds != null && !productTypeIds.isEmpty()) {
             return productTypeIds;
         }

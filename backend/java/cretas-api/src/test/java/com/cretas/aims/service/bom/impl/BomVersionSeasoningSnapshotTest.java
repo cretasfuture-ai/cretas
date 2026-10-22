@@ -26,6 +26,9 @@ class BomVersionSeasoningSnapshotTest {
     @Mock private BomSeasoningItemRepository seasoningItemRepo;
     @Mock private BomProcessInjectionConfigRepository processInjectionConfigRepo;
     @Mock private ObjectMapper objectMapper;
+    @Mock
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @InjectMocks private BomVersionServiceImpl service;
 
     @Test

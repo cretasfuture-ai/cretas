@@ -21,7 +21,9 @@ class BomRecipeCostCorrectionControllerTest {
         BomRecipeService service = mock(BomRecipeService.class);
         BomRecipeController controller = new BomRecipeController(service, mock(BomCopyService.class),
                 mock(BomSeasoningWorkspaceService.class), mock(BomItemSubstituteService.class),
-                mock(ProductTypeRepository.class));
+                mock(ProductTypeRepository.class),
+                mock(com.cretas.aims.service.processsecret.ProcessSecretAccessService.class),
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class));
         CorrectBomItemCostRequest request = new CorrectBomItemCostRequest();
         request.setReason("验收参考价更正");
         MockHttpServletRequest http = new MockHttpServletRequest();

@@ -43,6 +43,10 @@ public record FactoryReadinessReport(
     public record Check(String code, String label, String state, String detail,
             String remedyKey, String remedyLabel) { }
 
-    /** state: RECORDED / NONE / UNKNOWN. A record existing is not a claim that it completed. */
-    public record FirstRecord(String state, Long count, String detail) { }
+    /**
+     * state: COMPLETED (at least one document reached the domain's terminal status) / RECORDED
+     * (documents exist, drafts included, none completed) / NONE / UNKNOWN (unreadable). count is
+     * all documents, completedCount the terminal ones; both null when UNKNOWN.
+     */
+    public record FirstRecord(String state, Long count, Long completedCount, String detail) { }
 }

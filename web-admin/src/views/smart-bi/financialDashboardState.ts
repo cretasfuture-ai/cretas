@@ -93,6 +93,15 @@ export function periodRequestLabel(request: PeriodRequestResult): string {
   return `${year}年${startMonth}–${endMonth}月`;
 }
 
+/**
+ * 重新画图的触发值: 每次生成完成 (拿到结果且不在生成中) 都是一个新值, 生成中为 null。
+ * 旧触发只看「图表数量」: 点月份筛选 / 换期间后数量不变, 看板在生成中整块卸载又重新挂上,
+ * 新画布从没被画过, 图表区一直是空的 (2026-10-22 线上验收)。
+ */
+export function dashboardRenderKey<T extends object>(response: T | null | undefined, generating: boolean): T | null {
+  return generating || !response ? null : response;
+}
+
 /** 看板图表结果中本模块用到的字段 */
 export interface ChartStateLike {
   echartsOption?: Record<string, unknown> | null;

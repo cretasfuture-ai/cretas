@@ -1,5 +1,6 @@
 package com.cretas.aims.service.bom.impl;
 
+import static com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
@@ -42,10 +43,12 @@ public class BomVersionServiceImpl implements BomVersionService {
     private final BomSeasoningItemRepository seasoningItemRepo;
     private final BomProcessInjectionConfigRepository processInjectionConfigRepo;
     private final ObjectMapper objectMapper;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
     @Override
     @Transactional
     public BomVersion createDraft(String factoryId, String bomRecipeId, Long createdBy) {
+        processSecretGuard.requireRecipe(factoryId, bomRecipeId, EDIT, "BomVersion.createDraft");
         BomRecipe recipe = recipeRepo.findById(bomRecipeId)
                 .filter(r -> factoryId.equals(r.getFactoryId()))
                 .orElseThrow(() -> new EntityNotFoundException("BomRecipe", bomRecipeId));
@@ -71,6 +74,7 @@ public class BomVersionServiceImpl implements BomVersionService {
     @Transactional
     public BomVersion createDraftWithSnapshot(String factoryId, String bomRecipeId,
                                                Map<String, Object> snapshot, Long createdBy) {
+        processSecretGuard.requireRecipe(factoryId, bomRecipeId, EDIT, "BomVersion.createDraftWithSnapshot");
         // Validate parent recipe exists for the given factory (catches stale FK at write time).
         recipeRepo.findById(bomRecipeId)
                 .filter(r -> factoryId.equals(r.getFactoryId()))
@@ -95,6 +99,7 @@ public class BomVersionServiceImpl implements BomVersionService {
     @Transactional
     public BomVersion submitForApproval(String factoryId, String versionId, String ecnId) {
         BomVersion version = getById(factoryId, versionId);
+        processSecretGuard.requireRecipe(factoryId, version.getBomRecipeId(), EDIT, "BomVersion.submit");
         requireStatus(version, VersionStatus.DRAFT, "submitForApproval");
 
         version.setStatus(VersionStatus.PENDING_APPROVAL);
@@ -108,6 +113,8 @@ public class BomVersionServiceImpl implements BomVersionService {
     @Transactional
     public BomVersion approve(String factoryId, String versionId, Long approverId) {
         BomVersion version = getById(factoryId, versionId);
+        // 工艺保密: 版本审批会把快照落成生效 BOM (ECN 审批也走这里), 必须对该产品有编辑权
+        processSecretGuard.requireRecipe(factoryId, version.getBomRecipeId(), EDIT, "BomVersion.approve");
         // Allow approving directly from DRAFT for manual / no-ECN fast path.
         if (version.getStatus() != VersionStatus.DRAFT
                 && version.getStatus() != VersionStatus.PENDING_APPROVAL) {
@@ -157,6 +164,7 @@ public class BomVersionServiceImpl implements BomVersionService {
     @Transactional
     public BomVersion reject(String factoryId, String versionId, Long approverId, String reason) {
         BomVersion version = getById(factoryId, versionId);
+        processSecretGuard.requireRecipe(factoryId, version.getBomRecipeId(), EDIT, "BomVersion.reject");
         requireStatus(version, VersionStatus.PENDING_APPROVAL, "reject");
 
         version.setStatus(VersionStatus.REJECTED);

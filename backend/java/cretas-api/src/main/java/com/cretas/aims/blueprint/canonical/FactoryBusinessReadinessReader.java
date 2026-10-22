@@ -5,18 +5,24 @@ import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.BusinessDomain
 import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.Check;
 import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.FirstRecord;
 import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.ProductRuntime;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.repository.ShipmentRecordRepository;
+import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -51,7 +57,8 @@ public class FactoryBusinessReadinessReader {
     private final RawMaterialTypeRepository rawMaterials;
     private final PurchaseOrderRepository purchaseOrders;
     private final ProductionPlanRepository productionPlans;
-    private final ShipmentRecordRepository shipments;
+    private final SalesDeliveryRecordRepository deliveries;
+    private final SupplierMaterialRepository supplierMaterials;
 
     public List<BusinessDomain> read(String factoryId, List<CapabilityView> capabilities,
             List<ProductRuntime> runtime) {
@@ -61,19 +68,20 @@ public class FactoryBusinessReadinessReader {
 
     private BusinessDomain purchase(String factoryId, List<CapabilityView> capabilities) {
         List<Check> checks = List.of(
-                atLeastOne("ACTIVE_SUPPLIER", "至少一个启用的供应商",
-                        () -> suppliers.countByFactoryIdAndIsActive(factoryId, true),
-                        "SUPPLIERS", "供应商管理"),
-                atLeastOne("ACTIVE_RAW_MATERIAL", "至少一种启用的原料/包材类型",
-                        () -> rawMaterials.countByFactoryIdAndIsActive(factoryId, true),
-                        "MATERIAL_TYPES", "原料类型字典"),
+                atLeastOne("ACTIVE_SUPPLIER_MATERIAL", "至少一个可下单的供应商-物料关系",
+                        () -> activeSupplyRelationships(factoryId),
+                        "SUPPLIERS", "供应商管理（供应原料）"),
                 warehouse("PURCHASE_INBOUND_WAREHOUSE", "采购入库仓可用", factoryId,
                         warehouses::resolvePurchaseInboundWh));
         return domain("PURCHASE", "采购", PURCHASE_CAPABILITIES, capabilities, checks,
-                List.of("按包装采购的换算按采购明细与供应商规格核对；按基本单位采购无需包装换算，此处不要求",
-                        "采购岗位账号与权限另行交付，此处不检查"),
+                List.of("采购价格（供应商规格价、含税参考价）在下单时校验，此处不检查",
+                        "按包装采购的换算按采购明细与供应商规格核对；按基本单位采购无需包装换算，此处不要求",
+                        "采购岗位账号与当前权限另行交付，此处不检查"),
                 firstRecord(() -> purchaseOrders.findByFactoryIdOrderByCreatedAtDesc(
-                        factoryId, PageRequest.of(0, 1)).getTotalElements(), "采购单"));
+                                factoryId, PageRequest.of(0, 1)).getTotalElements(),
+                        () -> purchaseOrders.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                                factoryId, PurchaseOrderStatus.COMPLETED, PageRequest.of(0, 1)).getTotalElements(),
+                        "采购单", "全部到货"));
     }
 
     private BusinessDomain production(String factoryId, List<CapabilityView> capabilities,
@@ -93,7 +101,9 @@ public class FactoryBusinessReadinessReader {
         return domain("PRODUCTION", "生产", PRODUCTION_CAPABILITIES, capabilities, checks,
                 List.of("建厂能力目录不含研发业务，不要求研发仓",
                         "操作员与班组账号、岗位权限另行交付，此处不检查"),
-                firstRecord(() -> productionPlans.countByFactoryId(factoryId), "生产计划"));
+                firstRecord(() -> productionPlans.countByFactoryId(factoryId),
+                        () -> productionPlans.countByFactoryIdAndStatus(factoryId, ProductionPlanStatus.COMPLETED),
+                        "生产计划", "已完工"));
     }
 
     private BusinessDomain shipping(String factoryId, List<CapabilityView> capabilities,
@@ -109,7 +119,11 @@ public class FactoryBusinessReadinessReader {
         return domain("SHIPPING", "发货", SHIPPING_CAPABILITIES, capabilities, checks,
                 List.of("按箱销售的箱规在下单时明确选择，此处不要求每个成品都有箱规",
                         "销售与仓管岗位账号、权限另行交付，此处不检查"),
-                firstRecord(() -> shipments.countByFactoryId(factoryId), "出货记录"));
+                firstRecord(() -> deliveries.findByFactoryIdOrderByCreatedAtDesc(
+                                factoryId, PageRequest.of(0, 1)).getTotalElements(),
+                        () -> deliveries.findByFactoryIdAndStatusIn(factoryId, List.of(SalesDeliveryStatus.DELIVERED),
+                                PageRequest.of(0, 1)).getTotalElements(),
+                        "发货单", "客户已签收"));
     }
 
     static BusinessDomain domain(String domain, String label, Set<String> capabilityIds,
@@ -169,15 +183,46 @@ public class FactoryBusinessReadinessReader {
         }
     }
 
-    private static FirstRecord firstRecord(Supplier<Long> count, String noun) {
+    /**
+     * A document existing (any status, drafts included) is not a completed first business: only
+     * the domain's own terminal status counts (purchase COMPLETED = fully received, production
+     * plan COMPLETED, delivery DELIVERED = signed by the customer).
+     */
+    private static FirstRecord firstRecord(Supplier<Long> count, Supplier<Long> completed, String noun,
+            String terminal) {
         try {
-            long value = count.get();
-            return value > 0
-                    ? new FirstRecord("RECORDED", value, "已有 " + value + " 张" + noun + "，完成情况以原单为准")
-                    : new FirstRecord("NONE", 0L, "尚无" + noun);
+            long total = count.get();
+            long done = completed.get();
+            if (done > 0) {
+                return new FirstRecord("COMPLETED", total, done,
+                        done + " 张" + noun + terminal + "（共 " + total + " 张）");
+            }
+            return total > 0
+                    ? new FirstRecord("RECORDED", total, 0L,
+                            "已有 " + total + " 张" + noun + "，没有一张" + terminal + "，首笔业务未完成")
+                    : new FirstRecord("NONE", 0L, 0L, "尚无" + noun);
         } catch (RuntimeException failure) {
             log.warn("factory readiness first {} unreadable: {}", noun, failure.getMessage());
-            return new FirstRecord("UNKNOWN", null, "读取失败，不能判断");
+            return new FirstRecord("UNKNOWN", null, null, "读取失败，不能判断");
         }
+    }
+
+    /**
+     * Same-factory supply relationships the purchase-order guard would accept: an active
+     * relationship whose supplier is active and whose material is an active material of this
+     * factory (soft-deleted rows are filtered by the entities' @Where).
+     */
+    private long activeSupplyRelationships(String factoryId) {
+        Set<String> activeMaterials = rawMaterials.findByFactoryIdAndIsActive(factoryId, true).stream()
+                .map(RawMaterialType::getId).collect(Collectors.toSet());
+        if (activeMaterials.isEmpty()) return 0;
+        return suppliers.findByFactoryIdAndIsActive(factoryId, true).stream()
+                .flatMap(supplier -> supplierMaterials
+                        .findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc(factoryId, supplier.getId())
+                        .stream())
+                .filter(relation -> Boolean.TRUE.equals(relation.getActive())
+                        && factoryId.equals(relation.getFactoryId())
+                        && activeMaterials.contains(relation.getMaterialTypeId()))
+                .count();
     }
 }

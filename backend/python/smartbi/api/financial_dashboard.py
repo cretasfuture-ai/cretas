@@ -169,6 +169,7 @@ async def generate_chart(request: FinancialDashboardRequest, http_request: Reque
             start_month=request.start_month,
             end_month=request.end_month,
             sheet_name=request.sheet_name,
+            filters=request.filters,
         )
         return _sanitize_for_json(result)
     except DataSourceError as e:
@@ -198,6 +199,7 @@ async def batch_generate(request: FinancialDashboardRequest, http_request: Reque
             start_month=request.start_month,
             end_month=request.end_month,
             sheet_name=request.sheet_name,
+            filters=request.filters,
         )
         # Fix 72: Attach available dimensions to response
         if isinstance(result, dict):

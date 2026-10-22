@@ -21,6 +21,9 @@ public class BomRecipeQueryTool extends AbstractBusinessTool {
     @Autowired
     private BomRecipeService recipeService;
 
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
+
     @Override
     public String getToolName() {
         return "bom_recipe_query";
@@ -80,6 +83,28 @@ public class BomRecipeQueryTool extends AbstractBusinessTool {
                         Map.of("found", false, "productTypeId", productTypeId));
             }
             recipe = opt.get();
+        }
+
+        // 工艺保密: AI 工具结果不能比人直接调接口更宽; 识别不出调用者也按无权处理 (fail-closed)
+        com.cretas.aims.security.AuthenticatedActor actor =
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null);
+        com.cretas.aims.service.processsecret.ProcessSecretAccessService.Decision decision =
+                processSecretAccessService.decide(actor, factoryId, recipe.getProductTypeId(),
+                        com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL);
+        if (decision.isProtected()) {
+            boolean recorded = processSecretAccessService.audit(factoryId, recipe.getProductTypeId(), actor,
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+                    decision.permitted() ? "ALLOW" : "DENY", decision.reason(), "AI tool bom_recipe_query");
+            if (!decision.permitted() || !recorded) {
+                Map<String, Object> summary = new java.util.LinkedHashMap<>();
+                summary.put("found", true);
+                summary.put("recipeId", recipe.getId());
+                summary.put("productTypeId", recipe.getProductTypeId());
+                summary.put("productName", recipe.getProductName());
+                summary.put("processSecret", Map.of("visibility", "RESTRICTED"));
+                return buildSimpleResult(
+                        com.cretas.aims.security.ProcessSecretResponseAdvice.RESTRICTED_MESSAGE, summary);
+            }
         }
 
         log.info("BOM 查询: factoryId={}, recipeId={}, productTypeId={}",

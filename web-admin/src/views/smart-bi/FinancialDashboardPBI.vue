@@ -18,6 +18,7 @@ import {
   createDataVersion,
   buildChartNav,
   periodRequestLabel,
+  dashboardRenderKey,
 } from './financialDashboardState';
 import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
@@ -966,7 +967,9 @@ function renderGenericChart(chartType: string, domEl: Element | null, retries = 
   });
 }
 
-watch(() => charts.value.length, async () => {
+// 每次生成完成都重画 (见 dashboardRenderKey): 只看图表数量时, 月份筛选 / 换期间后图表区一直空着
+watch(() => dashboardRenderKey(dashboardResponse.value, isGenerating.value), async (key) => {
+  if (!key) return;
   await nextTick();
   setupLazyObserver();
   // Double rAF: first rAF schedules after v-if DOM insertion, second after layout
