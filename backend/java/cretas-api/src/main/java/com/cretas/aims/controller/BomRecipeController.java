@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
@@ -67,6 +69,8 @@ public class BomRecipeController {
     private final BomItemSubstituteService substituteService;
     // 只为把「产品无生效 BOM」的报错里那串 UUID 换成产品名 —— 见 getCurrentByProduct
     private final ProductTypeRepository productTypeRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
+    private final com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository;
 
     // ========== List / detail ==========
 
@@ -90,6 +94,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.getRecipe(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @GetMapping("/{recipeId}/family-output-costing")
     @Operation(summary = "读取 BOM Family 的产出分摊与副产品净值")
     public ApiResponse<BomFamilyOutputCostingResponse> getFamilyOutputCosting(
@@ -98,6 +103,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.getFamilyOutputCosting(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/{recipeId}/family-output-costing")
     @Operation(summary = "保存草稿 BOM Family 的副产品可变现净值")
@@ -109,6 +115,7 @@ public class BomRecipeController {
                 recipeService.updateFamilyOutputCosting(factoryId, recipeId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @GetMapping("/{recipeId}/substitutes")
     @Operation(summary = "读取 BOM 主项的结构化替代关系")
     public ApiResponse<List<BomItemSubstituteDTO>> listSubstitutes(
@@ -160,7 +167,16 @@ public class BomRecipeController {
     @Operation(summary = "逐条复制同源成品 BOM 规则为目标产品可编辑草稿")
     public ApiResponse<BomRecipe> copyToDraft(
             @PathVariable String factoryId,
-            @Valid @RequestBody BomCopyToDraftRequest request) {
+            @Valid @RequestBody BomCopyToDraftRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // 工艺保密: 复制要能看源配方的完整工艺, 并能编辑目标产品
+        com.cretas.aims.security.AuthenticatedActor actor =
+                com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null);
+        recipeProduct(factoryId, request.getSourceRecipeId()).ifPresent(source ->
+                processSecretAccessService.require(actor, factoryId, source, ProcessSecretAction.VIEW_FULL,
+                        "POST /bom/recipes/copy-to-draft source"));
+        processSecretAccessService.require(actor, factoryId, request.getTargetProductTypeId(),
+                ProcessSecretAction.EDIT, "POST /bom/recipes/copy-to-draft target");
         return ApiResponse.success(bomCopyService.copySelectedRulesToDraft(factoryId, request));
     }
 
@@ -171,7 +187,11 @@ public class BomRecipeController {
     @Operation(summary = "确保产品存在唯一可编辑 BOM 草稿")
     public ApiResponse<BomRecipe> ensureDraft(
             @PathVariable String factoryId,
-            @Valid @RequestBody EnsureBomDraftRequest request) {
+            @Valid @RequestBody EnsureBomDraftRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        processSecretAccessService.require(
+                com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null), factoryId,
+                request.getProductTypeId(), ProcessSecretAction.EDIT, "POST /bom/recipes/ensure-draft");
         return ApiResponse.success(recipeService.ensureDraft(
                 factoryId, request.getProductTypeId(), request.getWorkflowRevisionId(),
                 Boolean.TRUE.equals(request.getDropObsoleteInputs())));
@@ -182,12 +202,17 @@ public class BomRecipeController {
     @Operation(summary = "创建 BOM 配方草稿 (DRAFT)")
     public ApiResponse<BomRecipe> createRecipe(
             @PathVariable String factoryId,
-            @Valid @RequestBody CreateBomRecipeRequest request) {
+            @Valid @RequestBody CreateBomRecipeRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        processSecretAccessService.require(
+                com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null), factoryId,
+                request.getProductTypeId(), ProcessSecretAction.EDIT, "POST /bom/recipes");
         log.info("Create recipe: factory={}, product={}, items={}",
                 factoryId, request.getProductTypeId(), request.getItems().size());
         return ApiResponse.success(recipeService.createRecipe(factoryId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/{recipeId}")
     @Operation(summary = "更新 BOM 配方 (仅 DRAFT)")
@@ -198,6 +223,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.updateRecipe(factoryId, recipeId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PostMapping("/{recipeId}/activate")
     @Operation(summary = "激活 BOM 配方 (DRAFT → ACTIVE)")
@@ -208,6 +234,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.activateRecipe(factoryId, recipeId, operatorId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PostMapping("/{recipeId}/clone")
     @Operation(summary = "克隆 BOM 配方为新版本 (version+1, status=DRAFT)")
@@ -217,6 +244,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.cloneRecipe(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PostMapping("/{recipeId}/archive")
     @Operation(summary = "归档 BOM 配方 (→ ARCHIVED)")
@@ -226,6 +254,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.archiveRecipe(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @PostMapping("/{recipeId}/calculate-cost")
     @Operation(summary = "重算 BOM 成本 (返回更新后的 recipe)")
     public ApiResponse<BomRecipe> calculateCost(
@@ -234,6 +263,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.calculateCost(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @DeleteMapping("/{recipeId}")
     @Operation(summary = "软删 BOM 配方 (仅 DRAFT; ACTIVE/ARCHIVED 用 archive)")
@@ -246,6 +276,7 @@ public class BomRecipeController {
 
     // ========== Item-level CRUD ==========
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PostMapping("/{recipeId}/items")
     @Operation(summary = "添加配方项 (仅 DRAFT)")
@@ -256,6 +287,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.addItem(factoryId, recipeId, dto));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_ITEM_PATH, name = "itemId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/items/{itemId}")
     @Operation(summary = "更新配方项 (仅 DRAFT)")
@@ -266,6 +298,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.updateItem(factoryId, itemId, dto));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_ITEM_PATH, name = "itemId")
     @RequirePermission({"production:read_write", "finance:read_write"})
     @PostMapping("/items/{itemId}/packaging-cost-correction")
     @Operation(summary = "更正当前生效 BOM 包材成本 (从物料主数据取价并写审计台账)")
@@ -284,6 +317,7 @@ public class BomRecipeController {
         return ApiResponse.success("已按物料主数据更正包材成本并记录审计", item);
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_ITEM_PATH, name = "itemId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @DeleteMapping("/items/{itemId}")
     @Operation(summary = "删除配方项 (仅 DRAFT)")
@@ -296,6 +330,7 @@ public class BomRecipeController {
 
     // ========== U5: 调料配方 CRUD ==========
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @GetMapping("/{recipeId}/seasoning")
     @Operation(summary = "取 BOM 调料配方 (锅序参数 + 注射/熟制段明细)")
     public ApiResponse<BomSeasoningResponse> getSeasoning(
@@ -304,6 +339,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.getSeasoning(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @GetMapping("/by-product/{productTypeId}/seasoning")
     @Operation(summary = "按产品取当前 BOM 调料配方 (is_current=TRUE)")
     public ApiResponse<BomSeasoningResponse> getSeasoningByProduct(
@@ -314,6 +350,7 @@ public class BomRecipeController {
                 .orElseGet(() -> ApiResponse.error(404, "产品未建 BOM 配方: " + productTypeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/{recipeId}/seasoning")
     @Operation(summary = "全量替换 BOM 调料配方 (仅 DRAFT)")
@@ -324,6 +361,7 @@ public class BomRecipeController {
         return ApiResponse.success(recipeService.saveSeasoning(factoryId, recipeId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @GetMapping("/{recipeId}/seasoning/workspace")
     @Operation(summary = "获取工序优先的调料配置工作区")
     public ApiResponse<BomSeasoningWorkspaceResponse> getSeasoningWorkspace(
@@ -332,6 +370,7 @@ public class BomRecipeController {
         return ApiResponse.success(seasoningWorkspaceService.getWorkspace(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PostMapping("/{recipeId}/seasoning/processes/{workProcessId}/bindings")
     @Operation(summary = "向指定工序新增调料绑定")
@@ -344,6 +383,7 @@ public class BomRecipeController {
                 factoryId, recipeId, workProcessId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/{recipeId}/seasoning/bindings/{bindingId}")
     @Operation(summary = "修改单条工序调料绑定")
@@ -356,6 +396,7 @@ public class BomRecipeController {
                 factoryId, recipeId, bindingId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @DeleteMapping("/{recipeId}/seasoning/bindings/{bindingId}")
     @Operation(summary = "删除单条工序调料绑定")
@@ -368,4 +409,11 @@ public class BomRecipeController {
                 factoryId, recipeId, bindingId, expectedRevision));
     }
 
+    /** 同厂配方的产品 ID; 配方不存在时为空 (由业务服务自己报 404)。 */
+    private java.util.Optional<String> recipeProduct(String factoryId, String recipeId) {
+        if (recipeId == null) return java.util.Optional.empty();
+        return bomRecipeRepository.findById(recipeId)
+                .filter(r -> factoryId.equals(r.getFactoryId()))
+                .map(com.cretas.aims.entity.bom.BomRecipe::getProductTypeId);
+    }
 }

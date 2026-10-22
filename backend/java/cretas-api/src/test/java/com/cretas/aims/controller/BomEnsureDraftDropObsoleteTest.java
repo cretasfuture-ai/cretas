@@ -51,7 +51,9 @@ class BomEnsureDraftDropObsoleteTest {
     void setUp() {
         controller = new BomRecipeController(
                 recipeService, bomCopyService, seasoningWorkspaceService,
-                substituteService, productTypeRepository);
+                substituteService, productTypeRepository,
+                org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretAccessService.class),
+                org.mockito.Mockito.mock(com.cretas.aims.repository.bom.BomRecipeRepository.class));
         when(recipeService.ensureDraft(anyString(), anyString(), any(), any(Boolean.class)))
                 .thenReturn(new BomRecipe());
     }
@@ -67,7 +69,7 @@ class BomEnsureDraftDropObsoleteTest {
     @Test
     @DisplayName("确认后 true 传到服务层 —— 否则用户点了确认还是同一个 409")
     void confirmedFlagReachesTheService() {
-        controller.ensureDraft("F006", req(Boolean.TRUE));
+        controller.ensureDraft("F006", req(Boolean.TRUE), new org.springframework.mock.web.MockHttpServletRequest());
 
         verify(recipeService).ensureDraft(eq("F006"), eq("PT-1"), eq(7L), eq(true));
     }
@@ -75,7 +77,7 @@ class BomEnsureDraftDropObsoleteTest {
     @Test
     @DisplayName("没传时按 false —— 默认仍然拦, 不因为加了这个字段就变成默默丢弃")
     void absentFlagDefaultsToFalse() {
-        controller.ensureDraft("F006", req(null));
+        controller.ensureDraft("F006", req(null), new org.springframework.mock.web.MockHttpServletRequest());
 
         verify(recipeService).ensureDraft(eq("F006"), eq("PT-1"), eq(7L), eq(false));
     }
@@ -83,7 +85,7 @@ class BomEnsureDraftDropObsoleteTest {
     @Test
     @DisplayName("显式 false 也是 false")
     void explicitFalseStaysFalse() {
-        controller.ensureDraft("F006", req(Boolean.FALSE));
+        controller.ensureDraft("F006", req(Boolean.FALSE), new org.springframework.mock.web.MockHttpServletRequest());
 
         verify(recipeService).ensureDraft(eq("F006"), eq("PT-1"), eq(7L), eq(false));
     }
