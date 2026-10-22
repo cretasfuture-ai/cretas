@@ -75,6 +75,8 @@ export interface DashboardResponse {
   headline?: DashboardHeadline | null;
   charts: ChartResult[];
   availableTypes: AvailableChartType[];
+  /** 这份数据出不了的图: 缺哪一列 (column) / 要另一张表 (statement) */
+  unavailableCharts?: { chartType: string; displayName: string; reason: string; gapKind: 'column' | 'statement' }[];
   period: PeriodInfo;
   totalCharts: number;
   successCount: number;
