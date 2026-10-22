@@ -57,3 +57,27 @@ Web目标（web-admin）：`npm test -- src/views/procurement/ai-purchase/index.
 最终窄修复关注：定时绑定已提交但响应丢失后，直接撤销仍须保留任务引用直到真实终态核对；未确认无绑定前不得清除恢复线索。只有相关Web目标复验，不因纯前端变化重复Java。最终完整门禁、提交/PR、合并、官方发布和原QA真实界面/独立SQL验收均各以对应实际回执为准，本文不预签任何尚未完成项。
 
 生产只读19:50确认最新迁移20261103.72且72.1未应用；正式发布仍重新受Flyway顺序门禁约束。共享权限、角色、配置、S6迁移73/74及其他Owner范围未释放。原QA只对本批独立F006授权和一次DRAFT进行有限实测，独立SQL为只读；其他已通过场景复用证据。
+
+## 2026-10-22 正式交付与原判据签收
+
+任务状态：`merged`；原18文件源码scope已释放。原源码Owner实际退出且声明无后续写入，Root完成集成与交付；原QA仍唯一持有canonical CSV、手机和浏览器，其他任务Owner不变。
+
+- 源码：PR #1111，最终候选`0efa71c242af1fbed93253231fd85a4666429ee2`；13:52:57 UTC手动合并为`e9d5fdc1657ae47048a349de4f6dcee66ba16985`。
+- 检查：完整Java run39779262852/job119826173725、真实PostgreSQL并发job119826173410、Fresh DB run39779262729/job119826004758、Web run39779262679及其余必需检查实际通过。完整Java为16660通过、139既有跳过、0失败/错误；新增定时29项均执行通过。既有跳过及条件未运行项不计通过，未删断言或增加known-red。真实PG13.23目标门禁单列通过证据。
+- 发布：clean exact-main `e9d5fd`统一官方发布成功；`DEPLOY_EXIT=0`、唯一`RELEASE_FINAL_STATUS=deployed`，迁移72.1应用成功，Java/Web可信制品复用、build_count=0。统一回执已覆盖真实upstream、健康及Web四方哈希；未重复构建、发布或同内容验证。
+- 业务：原QA实际正常工作台授权/定时绑定、真实Canvas-Cron撤销拒绝及自然过期拒绝，配有界面截图、持久拒绝审计和独立数据库读回。数量/对象/动作严格请求体拒绝明确标作API辅证，不冒称UI操作或已到达grant执行层。已有Tool/Skill、旧会话撤权和管理员错主体证据复用，未重做其他九场景。
+- 最终过期子例：一次自有token短暂行竞争，持有上界1.984秒，跨过原到期时间后ROLLBACK，精确PID事务/锁为0；真实cron返回授权过期拒绝，持久审计、无采购结果/消费。独立最终读回exit0，14组业务控制零变化、旧单据及角色投影不变，任务禁用且run终结。该控制条件不称自发调度延迟，未声称采得产品连接等待trace。
+
+原QA于23:21签收S1-07，canonical仅这一行从未测改为通过，原判据及其他74行保持原字节；S1为10/10通过，全表14通过/1失败/60未测。canonical SHA256：`8ea09ed24f76536d4bf5422be172fcb637981428f656d31031f90e1f953cd955`。原QA实际CLI退出0、SAFE；本次最终裁决无新增浏览器、登录、API、SQL或业务写入。
+
+**必须保留的试验失败**：前两次expiry测试工具分别因数字PK被脱敏、过时PENDING状态谓词而未取得预期行竞争；两次真实cron均在原到期时间前合法生成测试草稿。原定一份、实际两份DRAFT/明细，原聚合AFTER仍exit2/FAILED；不删除、作废、改绿或追认合规。修复私有工具后才取得最终真实expiry拒绝，新增业务单据0。两份草稿及失败范围记录保留，库存、收货、审批、资金、权限配置及非F006业务未变化。S1-07签收的是原表受控采购试点当前授权能力，不代表这次旧试验符合单草稿范围，也不代表通用Gateway或全自主采购已验收。
+
+私有证据根：`C:/Users/Steve/Documents/cretas-optimization-20261019/execution/`。
+
+- 源码/检查：`source-s107-timer-delivery-20261022/`、`coordination/s107-full-gh-artifact-20261022/`。
+- 合并/官方发布：`coordination/s107-manual-merge-20261022/`、`coordination/s107-official-release-20261022/reports/cretas-1792677866-1901.json`。
+- 实际UI/触发/历史失败：`s107-timer-original-qa-runtime-20261022/`、`s107-timer-original-qa-expiry-retry-20261022/`、`s107-timer-original-qa-expiry-predicate-repair-20261022/`。
+- 独立SQL：`s107-timer-independent-db-20261022/timer-after-ready.json`保留原FAILED；`final-e-after-ready.json`是最终过期子例实际通过。
+- 原QA正式签收：`s107-timer-original-qa-final-signoff-20261022/receipt.json`、`criterion-review.json`、`canonical-diff.json`、`scope-incident.json`、`safe.json`与实际`exit.json`。
+
+S0真实配方/产能/物理基线未补齐项保持原状态；S2工厂管理员就绪入口仍由原Claude Owner独立接续，最新有界回执检查没有新增精确范围包。S6/C2/C3不因此释放共享scope，也不成为本次S1收口条件。本归档只改两份调度文档，不触发新的产品测试、构建或生产发布。
