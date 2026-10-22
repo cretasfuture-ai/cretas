@@ -51,7 +51,11 @@ export interface FactoryBusinessDomain {
     remedyKey: FactoryRemedyKey; remedyLabel: string
   }>
   notChecked: string[]
-  firstRecord: { state: 'RECORDED' | 'NONE' | 'UNKNOWN'; count: number | null; detail: string }
+  /** COMPLETED needs a document in its terminal status; RECORDED = documents exist (drafts too), none completed. */
+  firstRecord: {
+    state: 'COMPLETED' | 'RECORDED' | 'NONE' | 'UNKNOWN'
+    count: number | null; completedCount?: number | null; detail: string
+  }
 }
 
 export async function getFactoryReadiness(factoryId: string, blueprintId: string): Promise<FactoryReadinessReport> {
