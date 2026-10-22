@@ -21,8 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class AutonomousGrantMigrationPostgresContractTest {
 
     private static final String GRANT = "INSERT INTO autonomous_tool_grants (id, factory_id, source_type, source_ref,"
-            + " tool_name, run_as_user_id, parameters_digest, max_runs, used_runs, expires_at, granted_by, granted_at)"
-            + " VALUES ('%s', 'F1', '%s', '78', 'user_disable', 7, 'd', %d, %d, now() + interval '1 day', 7, now())";
+            + " tool_name, run_as_user_id, parameters_digest, config_revision, descriptor_version, max_runs, used_runs,"
+            + " expires_at, granted_by, granted_at)"
+            + " VALUES ('%s', 'F1', '%s', '78', 'user_disable', 7, 'd', 'r', '2.0.0', %d, %d, now() + interval '1 day',"
+            + " 7, now())";
     private static final String RUN = "INSERT INTO autonomous_tool_grant_runs (id, grant_id, run_key, idempotency_key,"
             + " descriptor_version, consumed_at) VALUES ('%s', '%s', '%s', 'k', '2.0.0', now())";
 

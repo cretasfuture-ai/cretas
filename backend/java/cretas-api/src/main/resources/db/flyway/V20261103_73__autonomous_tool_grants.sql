@@ -12,6 +12,10 @@ CREATE TABLE autonomous_tool_grants (
     tool_name          VARCHAR(100) NOT NULL,
     run_as_user_id     BIGINT       NOT NULL,
     parameters_digest  VARCHAR(128) NOT NULL,
+    -- Digest of the source config as issued (task code, cron, tool, parameters, run-as user) and the
+    -- tool descriptor version: editing the config or upgrading the tool stops new consumptions.
+    config_revision    VARCHAR(64)  NOT NULL,
+    descriptor_version VARCHAR(64)  NOT NULL,
     max_runs           INTEGER      NOT NULL CHECK (max_runs > 0),
     used_runs          INTEGER      NOT NULL DEFAULT 0 CHECK (used_runs >= 0 AND used_runs <= max_runs),
     expires_at         TIMESTAMP    NOT NULL,
