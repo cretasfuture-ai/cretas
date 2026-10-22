@@ -15,6 +15,7 @@ vi.mock('@/api/request', () => ({ default: { get: (...args: unknown[]) => harnes
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }))
 
 import PurchasePage from '../index.vue'
+import { executeDeferredControlledPurchase } from '@/api/controlledPurchase'
 
 const ElButtonStub = defineComponent({ name: 'ElButton', props: { disabled: Boolean, loading: Boolean }, emits: ['click'], setup(props, { slots, emit }) {
   return () => h('button', { disabled: props.disabled, onClick: () => emit('click') }, slots.default?.())
@@ -27,9 +28,10 @@ const ElSelectStub = defineComponent({ name: 'ElSelect', props: { modelValue: { 
 } })
 const ElDateStub = defineComponent({ name: 'ElDatePicker', props: { modelValue: String, disabled: Boolean }, emits: ['update:modelValue'], setup(props, { emit }) { return () => h('input', { value: props.modelValue, disabled: props.disabled, onInput: (e: Event) => emit('update:modelValue', (e.target as HTMLInputElement).value) }) } })
 const Pass = (name: string) => defineComponent({ name, setup(_p, { slots }) { return () => h('div', slots.default?.()) } })
+const ElAlertStub = defineComponent({ name: 'ElAlert', props: { title: String }, setup(props) { return () => h('div', { role: 'alert' }, props.title) } })
 const AiCardStub = defineComponent({ name: 'AiOperationCard', setup() { return () => h('div', { 'data-ai-card': 'true' }) } })
 
-const stubs = { ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElDatePicker: ElDateStub, ElOption: Pass('ElOption'), ElForm: Pass('ElForm'), ElFormItem: Pass('ElFormItem'), ElCard: Pass('ElCard'), ElAlert: Pass('ElAlert'), AiOperationCard: AiCardStub }
+const stubs = { ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElDatePicker: ElDateStub, ElOption: Pass('ElOption'), ElForm: Pass('ElForm'), ElFormItem: Pass('ElFormItem'), ElCard: Pass('ElCard'), ElAlert: ElAlertStub, AiOperationCard: AiCardStub }
 
 const preview = { status: 'PREVIEW', intentCode: 'PURCHASE_ORDER_CREATE', resultData: { grantId: 'preview-7' }, confirmableAction: { confirmToken: 'proof', commandDigest: 'digest', expiresAt: '2026-10-20T23:59:00Z', previewData: { grantId: 'preview-7' } } }
 
@@ -118,7 +120,30 @@ describe('deferred purchase grant page', () => {
     await buttonWithText(wrapper, '仅授权，稍后执行').trigger('click'); await flushPromises()
     harness.post.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'DRAFT', version: 2, purchaseOrderId: 'PO-7' } })
     await wrapper.get('button').trigger('click'); await flushPromises()
+    expect(harness.post).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/execute-skill', { expectedVersion: 1 })
+  })
+
+  it('retains the existing explicit HTTP adapter and fixed Tool adapter without accepting identity or command payload', async () => {
+    harness.post.mockResolvedValue({ success: true, data: { grantId: 'preview-7', state: 'DRAFT', version: 2, purchaseOrderId: 'PO-7' } })
+    await executeDeferredControlledPurchase('F006', 'preview-7', 1)
     expect(harness.post).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/execute', { expectedVersion: 1 })
+    await executeDeferredControlledPurchase('F006', 'preview-7', 1, 'tool')
+    expect(harness.post).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/execute-tool', { expectedVersion: 1 })
+  })
+
+  it('does not retry an uncertain Skill execution or fall back to direct HTTP', async () => {
+    const wrapper = await mountPage(); await wrapper.get('button').trigger('click'); await flushPromises()
+    harness.post.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'PENDING', version: 1 } })
+    await buttonWithText(wrapper, '仅授权，稍后执行').trigger('click'); await flushPromises()
+    harness.post.mockRejectedValueOnce(new Error('采购执行结果未知，请查询原授权状态'))
+    const before = harness.post.mock.calls.length
+    await buttonWithText(wrapper, '执行已授权采购').trigger('click'); await flushPromises()
+    expect(harness.post.mock.calls.length).toBe(before + 1)
+    expect(harness.post).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/execute-skill', { expectedVersion: 1 })
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    expect(wrapper.text()).toContain('刷新授权状态')
+    expect(wrapper.text()).toContain('结果未知')
+    wrapper.unmount()
   })
 
   it('drops stale preview responses after the authenticated factory scope changes', async () => {

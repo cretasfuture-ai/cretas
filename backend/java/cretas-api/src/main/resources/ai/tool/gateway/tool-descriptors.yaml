@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 585
+expectedToolCount: 586
 expectedLegacyCount: 569
 descriptors:
   - toolName: "unsupported_capability"
@@ -11718,6 +11718,27 @@ descriptors:
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "purchase_grant_execute"
+    implementationClass: "com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool"
+    provenance: EXPLICIT
+    actionType: WRITE
+    riskLevel: HIGH
+    supportsPreview: false
+    requiresPermission: true
+    requiredPermissions: ["procurement:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["purchase"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: false
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

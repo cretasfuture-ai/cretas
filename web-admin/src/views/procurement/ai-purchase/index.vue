@@ -256,7 +256,7 @@ async function executeLater(): Promise<void> {
   const run = generation;
   deferredInFlight.value = true;
   try {
-    const outcome = await executeDeferredControlledPurchase(factoryId.value, grantId.value, recoveryVersion.value);
+    const outcome = await executeDeferredControlledPurchase(factoryId.value, grantId.value, recoveryVersion.value, 'skill');
     if (!isCurrent(scope, run)) return;
     if (outcome.grantId !== grantId.value || outcome.state !== 'DRAFT' || !outcome.purchaseOrderId) throw new Error('采购结果凭据不匹配，请刷新状态');
     draftOrderId.value = outcome.purchaseOrderId;
@@ -354,7 +354,9 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
     <el-alert v-if="blockedReason" :title="blockedReason" type="warning" :closable="false" class="state-alert" />
     <div v-if="draftOrderId" class="recovery-actions"><el-button link type="primary" @click="router.push(`/procurement/orders/${encodeURIComponent(draftOrderId)}`)">查看采购订单</el-button><el-button type="success" @click="acknowledgeDraft">已核对，开始新采购</el-button></div>
     <div v-else-if="recoveryState === 'FAILED'" class="recovery-actions"><el-button @click="acknowledgeDraft">已核对失败，开始新采购</el-button></div>
-    <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions"><el-button type="primary" :disabled="recoveryVersion == null" :loading="deferredInFlight" @click="executeLater">执行已授权采购</el-button><el-button type="danger" :loading="cancelInFlight" @click="cancelPreview">撤销当前授权</el-button><el-button v-if="recoveryVersion == null" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button><span v-if="recoveryVersion == null" class="state-hint">授权版本尚未恢复，暂不能执行；可尝试撤销并由服务器核对状态</span></div>
+    <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions">
+      <el-button type="primary" :disabled="recoveryVersion == null" :loading="deferredInFlight" @click="executeLater">执行已授权采购</el-button><el-button type="danger" :loading="cancelInFlight" @click="cancelPreview">撤销当前授权</el-button><el-button v-if="recoveryVersion == null" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button><span v-if="recoveryVersion == null" class="state-hint">授权版本尚未恢复，暂不能执行；可尝试撤销并由服务器核对状态</span>
+    </div>
     <div v-else-if="grantId && ['UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><el-button type="warning" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button></div>
     <el-card shadow="never" class="content-card">
       <el-form label-position="top" class="purchase-form">

@@ -66,9 +66,11 @@ export async function executeDeferredControlledPurchase(
   factoryId: string,
   grantId: string,
   expectedVersion: number,
+  channel: 'http' | 'tool' | 'skill' = 'http',
 ): Promise<ControlledPurchaseOutcome> {
+  const operation = channel === 'http' ? 'execute' : `execute-${channel}`;
   const response = await post<ControlledPurchaseOutcome>(
-    `/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}/execute`, { expectedVersion },
+    `/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}/${operation}`, { expectedVersion },
   );
   if (!response.success || !response.data) throw new Error(response.message || '稍后执行采购失败');
   return response.data;
