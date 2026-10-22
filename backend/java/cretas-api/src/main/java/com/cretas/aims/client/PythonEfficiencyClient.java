@@ -56,12 +56,19 @@ public class PythonEfficiencyClient {
 
     public PythonEfficiencyClient(PythonEfficiencyConfig config,
                                    @Qualifier("aiServiceHttpClient") OkHttpClient baseHttpClient,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   @Qualifier("pythonAiInternalSecret") String internalSecret) {
         this.config = config;
         this.objectMapper = objectMapper;
 
-        // 为效率分析服务创建专用的 HttpClient（较长超时）
+        // 为效率分析服务创建专用的 HttpClient（较长超时）。
+        // 2026-10-22 工厂隔离: Python /api/efficiency/* 改为仅内部可调 (摄像头轨迹等是全局数据, 不分工厂,
+        // 之前匿名即可经网关读到)。所有请求统一带 X-Internal-Secret; 密钥为空时 Python 会拒绝 —— 那是配置错误,
+        // 应当显式失败而不是退回匿名。
         this.httpClient = baseHttpClient.newBuilder()
+                .addInterceptor(chain -> chain.proceed(chain.request().newBuilder()
+                        .header("X-Internal-Secret", internalSecret == null ? "" : internalSecret)
+                        .build()))
                 .connectTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS)
                 .readTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
                 .writeTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
