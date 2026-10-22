@@ -19,6 +19,23 @@ public class PurchaseGrantRefusalAuditService {
     @PersistenceContext
     private EntityManager entityManager;
 
+    /** Reload delegation identity in this independent audit transaction; never accept scheduler-supplied actor fields. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordTimer(com.cretas.aims.entity.ai.PurchaseGrantTimerBinding attempted, RuntimeException refusal) {
+        if (!(refusal instanceof BusinessException) && !(refusal instanceof PurchaseTaskGrantService.GrantRejectedException))
+            throw new IllegalArgumentException("未知执行结果不能记录为已确认拒绝");
+        var persisted=entityManager.find(com.cretas.aims.entity.ai.PurchaseGrantTimerBinding.class,attempted.getId());
+        if(persisted==null || !Objects.equals(persisted.getFactoryId(),attempted.getFactoryId())
+                || !Objects.equals(persisted.getUserId(),attempted.getUserId())) throw new SecurityException("定时审计身份绑定不匹配");
+        String message=refusal.getMessage()==null?"定时采购拒绝":refusal.getMessage();
+        var event=AIAuditLog.builder().factoryId(persisted.getFactoryId()).userId(persisted.getUserId())
+                .questionType("grant_refusal").question("operation=TIMER_EXECUTE;attemptedGrant="+persisted.getGrantId())
+                .sessionId("timer-refusal:"+persisted.getId()).isSuccess(false)
+                .errorMessage(message.substring(0,Math.min(500,message.length())))
+                .consumedQuota(false).quotaCost(0).cacheHit(false).build();
+        entityManager.persist(event);entityManager.flush();
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<String> record(String requestedFactory, String attemptedGrantId, RuntimeException refusal) {
         if (!(refusal instanceof BusinessException)

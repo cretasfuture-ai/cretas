@@ -1,4 +1,4 @@
-import request, { post } from '@/api/request';
+import request, { get, post } from '@/api/request';
 import { getPurchaseTaskGrantStatus, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 
 export interface ControlledPurchaseOutcome {
@@ -9,6 +9,40 @@ export interface ControlledPurchaseOutcome {
   quantity?: string | number | null;
   version?: number | null;
   replay?: boolean;
+}
+
+export interface PurchaseTimerBinding {
+  bindingId: string;
+  grantId: string;
+  taskId: string;
+  executeAt: string;
+  expiresAt: string;
+  state: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'REFUSED' | 'UNKNOWN';
+  purchaseOrderId?: string | null;
+  failureReason?: string | null;
+  approvedSnapshot?: string | null;
+  serverNow?: string;
+  serverZone?: string;
+}
+
+export async function getPurchaseTimer(factoryId: string, grantId: string): Promise<PurchaseTimerBinding | null> {
+  const response = await get<PurchaseTimerBinding | null>(`/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}/timer`);
+  if (!response.success) throw new Error(response.message || '定时绑定读取失败');
+  if (response.data == null) return null;
+  if (response.data.grantId !== grantId || !response.data.bindingId || !response.data.state) throw new Error('定时绑定与当前授权不匹配');
+  return response.data;
+}
+
+export async function bindPurchaseTimer(factoryId: string, grantId: string, expectedVersion: number, executeAt: string): Promise<PurchaseTimerBinding> {
+  const response = await post<PurchaseTimerBinding>(`/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}/timer`, { expectedVersion, executeAt });
+  if (!response.success || !response.data || response.data.grantId !== grantId || !response.data.bindingId) throw new Error(response.message || '定时绑定未确认，请读取原状态，禁止重复提交');
+  return response.data;
+}
+
+export async function reconcilePurchaseTimer(factoryId: string, grantId: string): Promise<PurchaseTimerBinding> {
+  const response = await post<PurchaseTimerBinding>(`/${factoryId}/ai-purchase-task-grants/${encodeURIComponent(grantId)}/timer/reconcile`, {});
+  if (!response.success || !response.data || response.data.grantId !== grantId) throw new Error(response.message || '持久定时结果无法核对');
+  return response.data;
 }
 
 export interface ControlledPurchaseParams {
